@@ -135,6 +135,14 @@ opt.signcolumn = "no"
 opt.ruler = false
 opt.showcmd = false
 opt.laststatus = 0
+-- Neovim's own tabline, which the default of 1 turns on the moment a SECOND
+-- tabpage exists. Neither front-end paints grid 1 -- both attach with
+-- ext_messages, which forces cmdheight = 0 and leaves that grid empty -- so the
+-- line is invisible while still costing the pane grid a real row (measured: 80x24
+-- became 80x23 on the second tabpage) and leaving every WinInfo start_row stale
+-- until the front-end's own resize won the row back. Both front-ends draw their
+-- own tab chrome.
+opt.showtabline = 0
 
 -- Forward mouse to Neovim; the front-end translates OS mouse events to input.
 opt.mouse = "a"
@@ -436,8 +444,10 @@ end
 
 -- Per-window buffer tracking: wolf-core invokes this over RPC after ui_attach (and
 -- right after the current-file setup), passing its own RPC channel id. It registers
--- autocmds that notify core, via wolf_buffers, of what EVERY window of the current
--- tabpage is showing -- a list of five-element tuples
+-- autocmds that notify core, via wolf_buffers, of what EVERY window of the whole
+-- nvim INSTANCE is showing -- the scan below is nvim_list_wins(), which is global
+-- across tabpages, so with two tabpages open both tabpages' windows are in one
+-- payload -- a list of five-element tuples
 --   { win, nvim_buf_get_name(buf), buf, is_terminal, is_drawer }
 -- -- so the front-end can render a per-pane statusbar keyed by window handle AND
 -- core can derive a per-pane navigation-history target. It emits once immediately so
@@ -1412,9 +1422,12 @@ end
 -- front-end reopens those files after a crash restart.
 --
 -- The payload is a list of { tp_handle, active_path, files } triples, one per
--- tabpage. `files` are the non-empty buffer names of the tabpage's windows,
--- EXCLUDING preview scratch buffers (b:wolf_preview_source) and unnamed buffers.
--- `active_path` is the tabpage's active window's buffer name (empty for unnamed).
+-- tabpage. `files` is the WHOLE INSTANCE's buflisted file-backed buffer set, not
+-- the tabpage's windows: listed_files() below sweeps getbufinfo({ buflisted = 1 }),
+-- which is global in nvim, so every triple carries the SAME `files` no matter how
+-- many tabpages are open. Preview scratch buffers (b:wolf_preview_source) and
+-- unnamed buffers are excluded. Only `active_path` -- the tabpage's active window's
+-- buffer name, empty for unnamed -- is genuinely per-tabpage.
 function _G.wolf_setup_open_files(chan)
 	local group = vim.api.nvim_create_augroup("WolfOpenFiles", { clear = true })
 

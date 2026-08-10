@@ -144,7 +144,11 @@ The remaining facets arrive out-of-band, each from its own `wolf_*` notification
 - `tab_cwds: HashMap<i64, PathBuf>`, `open_files: HashMap<i64, TabFiles>` — per tabpage handle.
 - `theme: ThemeColors` — the optional `WolfCursor` / `WolfTitlebar` colors (see "Theming"); every channel is `Option`.
 
-Two rules bind a consumer of those maps. Each is replaced wholesale on its notification — `markdown_ticks` alone upserts — so a closed window or tabpage vanishes rather than going stale. Neovim renders only its current tabpage, so `windows` and every per-window map describe that tabpage alone; a non-current view's working directory comes from `tab_cwds` through `cwd_for_tabpage`.
+Two rules bind a consumer of those maps. The first is that each is replaced wholesale on its notification — `markdown_ticks` alone upserts — so a closed window or tabpage vanishes rather than going stale.
+
+The second is that tabpage scope varies from map to map, and assuming it uniform is how a consumer reads a background tabpage wrongly. `windows`, `grid_for_win`, `active_win` and `cursor` describe the current tabpage alone; `win_buffers`, `buffers`, `full_width` and `previews` are global across every tabpage, because `runtime/nvim/init.lua` builds them by sweeping `nvim_list_wins()`. `open_files` is keyed per tabpage, but its `files` are the instance's whole `buflisted` set and only its `active` is per-tab.
+
+The consequence is worth stating outright: `pane_status` joins a grid to `windows`, so asking it about a background tabpage's grid answers `[No Name]` with an empty `abs_path` rather than failing. A non-current view's working directory comes from `tab_cwds` through `cwd_for_tabpage`.
 
 Field-level detail — why `Grid::resize` preserves rather than clears, why `WinInfo.hidden` is inert, why a toast keeps its colors while the command line does not — is in [`render.rs`](crates/wolf-core/src/README.md#renderrs).
 
@@ -246,4 +250,4 @@ These are scoped deliberately, and each has a clear direction.
 - **Only windows opened through the overridden split commands become panes.** Panes come from `Split` intents, which only the rebound chords and Ex-commands emit. A window created another way — `:help`, quickfix, a location list, `:pedit`, `:diffsplit` — still gets a grid and a `WinInfo` but no pane, so its content is not shown. The direction is to auto-pane any unbound window grid.
 - **Floating and external windows are ignored**, so they never appear as panes.
 
-The macOS project-and-tabpage model adds two more, both detailed in [`crates/wolf-macos/DECISIONS.md`](crates/wolf-macos/DECISIONS.md): the lockout on Neovim-internal tabpage navigation is best-effort and a determined user can still desync a view from its tabpage, and a visible non-current window of a project can blank during a live resize until refocused.
+A tabpage-per-view model adds two more, both detailed in [`crates/wolf-macos/DECISIONS.md`](crates/wolf-macos/DECISIONS.md). The lockout on Neovim-internal tabpage navigation is best-effort in either front-end, because it lives in the shared `runtime/nvim/init.lua`, so a determined user can still desync a view from its tabpage. The other is macOS-only: a visible non-current window of a project can blank during a live resize until refocused.

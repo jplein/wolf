@@ -194,9 +194,9 @@ pub const ACTION_TABLE: &[ActionBinding] = &[
         accel: Some("<Control><Shift>t"),
         ctrl_fold: None,
         command: Some(Command::NewTab),
-        status: BindingStatus::Reserved,
-        note: "macOS Cmd+T; reserved for GTK native tabs, and gives up only the Ctrl+Shift alias \
-               for <C-t>",
+        status: BindingStatus::Bound,
+        note: "macOS Cmd+T; opens a native tab over this window's core, and gives up only the \
+               Ctrl+Shift alias for <C-t>",
     },
     ActionBinding {
         action: "win.close-pane",
@@ -402,6 +402,10 @@ pub const MENU_SECTIONS: &[MenuSection] = &[
             MenuItemSpec {
                 label: "New Window",
                 action: "app.new-window",
+            },
+            MenuItemSpec {
+                label: "New Tab",
+                action: "win.new-tab",
             },
             MenuItemSpec {
                 label: "Open Folder…",
@@ -848,7 +852,7 @@ mod tests {
 
     /// The actions whose accelerators are actually registered — the
     /// [`BindingStatus::Bound`] rows of [`ACTION_TABLE`] — sorted.
-    const EXPECTED_BOUND_ACTIONS: [&str; 13] = [
+    const EXPECTED_BOUND_ACTIONS: [&str; 14] = [
         "app.quit",
         "win.buffer-picker",
         "win.close-pane",
@@ -858,6 +862,7 @@ mod tests {
         "win.history-back",
         "win.history-forward",
         "win.new-buffer",
+        "win.new-tab",
         "win.paste",
         "win.search-in-project",
         "win.terminal",
@@ -1367,7 +1372,7 @@ mod tests {
     /// `win.terminal` is a row that moves all three:
     ///
     /// - `action_for_key_table` — for EVERY Bound row, because that table asserts
-    ///   each of the thirteen chords resolves to its action and [`action_for_key`]
+    ///   each of the fourteen chords resolves to its action and [`action_for_key`]
     ///   scans `Bound` rows only, so a demoted row's chord answers `None`. The
     ///   `Ctrl+grave -> win.terminal` row is what makes that true of this one
     ///   (measured).
@@ -1379,6 +1384,15 @@ mod tests {
     /// The pairing is signal rather than noise — a demotion that reddened only this
     /// test would mean the chord was already unmatched or the menu had already lost
     /// its item.
+    ///
+    /// `win.new-tab` is the OTHER row that moves all three, and it is this unit's.
+    /// Reverting its status to `Reserved` reddens `action_for_key_table` on BOTH its
+    /// `Ctrl+Shift+T` rows — [`action_for_key`] scans `Bound` rows only, so each
+    /// letter case answers `None` — and `menu_never_lists_a_reserved_action` on the
+    /// "New Tab" item, which stays in [`MENU_SECTIONS`] through the demotion.
+    /// PREDICTED, not yet measured: the pass that runs the revert is the one that
+    /// confirms the triple moves together, and should replace this word with
+    /// `measured` and the failure text it saw.
     #[test]
     fn bound_set_is_exactly_this_unit() {
         let mut bound: Vec<&'static str> = bound_bindings().map(|b| b.action).collect();
@@ -1389,9 +1403,10 @@ mod tests {
 
         assert_eq!(
             bound, expected,
-            "the set of BOUND accelerators changed. wolf-gnome registers exactly thirteen \
-             (Ctrl+Shift+O go-to-file, Ctrl+Shift+N new-buffer, Ctrl+Shift+P command-palette, \
-             Ctrl+Shift+E buffer-picker, Ctrl+Shift+F search-in-project, Ctrl+Shift+W close-pane, \
+            "the set of BOUND accelerators changed. wolf-gnome registers exactly fourteen \
+             (Ctrl+Shift+O go-to-file, Ctrl+Shift+N new-buffer, Ctrl+Shift+T new-tab, \
+             Ctrl+Shift+P command-palette, Ctrl+Shift+E buffer-picker, \
+             Ctrl+Shift+F search-in-project, Ctrl+Shift+W close-pane, \
              Ctrl+Shift+Q quit, Alt+Left history-back, Alt+Right history-forward, Ctrl+Shift+B \
              toggle-sidebar, Ctrl+Shift+C copy, Ctrl+Shift+V paste, Ctrl+grave terminal); every \
              other \
@@ -1400,6 +1415,15 @@ mod tests {
              which case `action_for_key` stops scanning the row and Ctrl+backtick falls through to \
              Neovim as <C-@> — the drawer is then reachable only from the primary menu, and \
              `command_action::ui_action_for` is left dispatching a command no chord reaches. \
+             A one-element diff naming \"win.new-tab\" \
+             means the native-tabs chord was demoted back to Reserved, in which case \
+             `action_for_key` stops scanning the row and Ctrl+Shift+T falls through to Neovim as \
+             <C-t> (the tag-stack jump in normal mode, one shiftwidth of indent in insert mode) — \
+             a new tab is then reachable only from the primary menu, the palette row and \
+             :WolfNewTab, and the menu item advertises a chord that cannot fire. That demotion is \
+             NOT isolated: `action_for_key_table`'s two Ctrl+Shift+T rows report None and \
+             `menu_never_lists_a_reserved_action` rejects the \"New Tab\" item, and those three \
+             moving TOGETHER is what says the row's STATUS changed rather than this list. \
              Binding a reserved chord \
              early means shipping a menu/accelerator that does nothing — and DEMOTING one back to \
              Reserved silently unbinds a chord the menu still advertises. The two ALT rows are the \
@@ -1428,7 +1452,7 @@ mod tests {
     /// GTK's own keymap-aware matching does not fire under `wtype` (see the module
     /// docs) — so every row below is a user-visible behaviour:
     ///
-    /// * **The thirteen Bound chords must fire, in BOTH letter cases where they
+    /// * **The fourteen Bound chords must fire, in BOTH letter cases where they
     ///   have one.** A real keymap delivers the SHIFTED glyph for Ctrl+Shift+O —
     ///   keyval `O`, not `o` (`input::gdk_key`'s shift contract, and what
     ///   `tests/gdk_key.rs` pins) — so a case-SENSITIVE comparison would mean the
@@ -1451,8 +1475,9 @@ mod tests {
     ///   returning `Propagation::Stop`, so a match here is a Neovim key made
     ///   UNREACHABLE. `<C-o>`, `<C-n>`, `<C-p>`, `<C-e>` (scroll down one line),
     ///   `<C-f>` (page forward), `<C-b>` (page backward), `<C-w>` (the
-    ///   window-command prefix), `<C-q>`, `<C-c>` and `<C-v>` must all still reach
-    ///   Neovim.
+    ///   window-command prefix), `<C-t>` (jump to the older tag-stack entry in
+    ///   normal mode, insert one shiftwidth of indent in insert mode), `<C-q>`,
+    ///   `<C-c>` and `<C-v>` must all still reach Neovim.
     ///
     ///   `<C-c>` and `<C-v>` are named separately because they are the two rows
     ///   where "it is only an alias" is not a good enough answer, and where the
@@ -1497,7 +1522,7 @@ mod tests {
 
         // (description, delivered keyval, modifier state, expected action)
         let cases: Vec<(&str, gdk::Key, gdk::ModifierType, Option<&'static str>)> = vec![
-            // --- The thirteen BOUND chords, in both letter cases where they have one
+            // --- The fourteen BOUND chords, in both letter cases where they have one
             (
                 "Ctrl+Shift+o -> win.go-to-file",
                 key_from_char('o'),
@@ -1521,6 +1546,18 @@ mod tests {
                 key_from_char('N'),
                 ctrl | shift,
                 Some("win.new-buffer"),
+            ),
+            (
+                "Ctrl+Shift+t -> win.new-tab",
+                key_from_char('t'),
+                ctrl | shift,
+                Some("win.new-tab"),
+            ),
+            (
+                "Ctrl+Shift+T (the SHIFTED glyph a real keymap delivers) -> win.new-tab",
+                key_from_char('T'),
+                ctrl | shift,
+                Some("win.new-tab"),
             ),
             (
                 "Ctrl+Shift+w -> win.close-pane",
@@ -1713,6 +1750,13 @@ mod tests {
             (
                 "Ctrl+b (no Shift) -> None, so <C-b> (page backward) still reaches Neovim",
                 key_from_char('b'),
+                ctrl,
+                None,
+            ),
+            (
+                "Ctrl+t (no Shift) -> None, so <C-t> (jump to the older tag-stack entry in normal \
+                 mode, insert one shiftwidth of indent in insert mode) still reaches Neovim",
+                key_from_char('t'),
                 ctrl,
                 None,
             ),

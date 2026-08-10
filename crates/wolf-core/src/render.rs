@@ -527,21 +527,23 @@ pub struct WinBuffer {
     pub is_drawer: bool,
 }
 
-/// The Tier-1 open-file mirror for one tabpage: the set of file-backed buffers
-/// open in that tabpage, plus its active buffer's path.
+/// The Tier-1 open-file mirror entry for one tabpage: the instance's file-backed
+/// buffers, plus THAT tabpage's active buffer path.
 ///
 /// Maintained out-of-band via the `wolf_open_files` notification (the
 /// `WolfOpenFiles` autocmds in `runtime/nvim/init.lua`), wholesale-replaced per
 /// tabpage in [`Snapshot::open_files`]. Read (per tabpage handle) by
 /// [`crate::api::WolfCore::open_files_for_tabpage`] BEFORE a restart, so the
-/// front-end can reopen the files a crashed nvim had open. `files` are the
-/// non-empty, non-preview buffer names; `active` is the tabpage's active buffer's
-/// path (`None` when unnamed). Paths are canonicalized (raw fallback).
+/// front-end can reopen the files a crashed nvim had open. Paths are
+/// canonicalized (raw fallback).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TabFiles {
-    /// The tabpage's active buffer's path, or `None` for an unnamed buffer.
+    /// The tabpage's active buffer's path, or `None` for an unnamed buffer. The
+    /// one genuinely per-tabpage field.
     pub active: Option<PathBuf>,
-    /// The file-backed (non-empty, non-preview) buffer paths open in the tabpage.
+    /// The file-backed (non-empty, non-preview) `buflisted` buffer paths of the
+    /// whole nvim instance, which is what nvim keeps global — IDENTICAL in every
+    /// tabpage's entry, not that tabpage's windows.
     pub files: Vec<PathBuf>,
 }
 
@@ -851,8 +853,8 @@ pub struct Snapshot {
     /// empty.
     pub tab_cwds: HashMap<i64, PathBuf>,
     /// The Tier-1 open-file mirror, keyed by TABPAGE handle (an `i64`). Each entry
-    /// is that tabpage's file-backed open buffers + its active buffer, per
-    /// [`TabFiles`]. Updated out-of-band from the redraw stream via the
+    /// is the instance's file-backed open buffers + that tabpage's active buffer,
+    /// per [`TabFiles`]. Updated out-of-band from the redraw stream via the
     /// `wolf_open_files` notification (see [`crate::redraw`]): the whole map is
     /// WHOLESALE-REPLACED on each emit, so closed tabpages vanish. Because it is not
     /// a redraw frame, updating it does NOT bump `seq`. Read (per handle) by

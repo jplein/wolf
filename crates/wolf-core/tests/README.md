@@ -563,9 +563,9 @@ Spawns a real Neovim (staged runfiles, wired `WOLF_NVIM_BIN`, `no-sandbox`). One
 
 Spawns a real Neovim (staged runfiles, wired `WOLF_NVIM_BIN`, `no-sandbox`).
 
-**Covers** — the tabpage lifecycle: `create_tabpage` / `set_current_tabpage` / `close_tabpage` / `cwd_for_tabpage` / `current_tabpage` plus `Snapshot.current_tabpage`, per-tabpage `:tcd` cwd including a non-current read, the shared buffer list, handle stability across a renumber, and the keystone that window handles survive a tabpage switch.
+**Covers** — the tabpage lifecycle: `create_tabpage` / `set_current_tabpage` / `close_tabpage` / `cwd_for_tabpage` / `current_tabpage` plus `Snapshot.current_tabpage`, per-tabpage `:tcd` cwd including a non-current read, the shared buffer list, handle stability across a renumber, and the keystone that window handles survive a tabpage switch. Also that the shared captive config holds `showtabline` at `0` — at one tabpage, and across the creation of a second, where Neovim's own default would otherwise draw a tabline neither front-end paints and spend a row of the window grid on it.
 
-**Gotchas** — A switch churns grid ids while window handles stay stable, so assert on handle membership and `grid_for_win` round-trips, never literal grid ids or map order. `win_hide` removes the window from `Snapshot.windows` but keeps its grid in `Snapshot.grids`. Changes land across several flushes, so poll.
+**Gotchas** — A switch does not churn grid ids: nvim emits `win_hide` for the leaving tabpage's windows rather than `win_close` / `grid_destroy`, and reuses both the grid id and the window handle on the way back. That is an observation about nvim rather than a contract, so assert on window-handle membership and `grid_for_win` round-trips, never on literal grid ids or map order. `win_hide` removes the window from `Snapshot.windows` but keeps its grid in `Snapshot.grids`. Changes land across several flushes, so poll.
 
 #### `theme.rs`
 

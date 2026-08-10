@@ -106,10 +106,10 @@
 //! `WolfCore::live_cwd` is a `parking_lot` read of a tracked cell, taken once per
 //! wake in [`AppShell::on_render_wake`] and passed to both consumers.
 //!
-//! Exactly NINE blocking core calls are reachable from this crate, and the restart
+//! Exactly TEN blocking core calls are reachable from this crate, and the restart
 //! path issues none of them. `WolfCore::history_back` and `history_forward` count
 //! as the ONE navigation move they are, one per direction; nothing else is folded
-//! together, and [`crate::window`] and `DECISIONS.md` carry the same nine.
+//! together, and [`crate::window`] and `DECISIONS.md` carry the same ten.
 //!
 //! The first is `WolfCore::rebuild_layout`, called at most once per launch from
 //! `pane_view::apply_layout_rebuild`, before the window
@@ -136,18 +136,26 @@
 //! `WolfCore::copy_visual_selection` into `block_on_rpc`, so a Ctrl+Shift+C against
 //! a wedged Neovim costs a full RPC timeout budget of frozen main loop.
 //! [`crate::clipboard_ui::copy_decision`] guards it with the buffer picker's
-//! argument and its limits. PASTE adds no fifth: `gdk::Clipboard::read_text_async`
+//! argument and its limits. PASTE adds none: `gdk::Clipboard::read_text_async`
 //! resolves on a later main-loop turn and `WolfCore::paste` is fire-and-forget on
 //! the ordered input channel, so nothing on that path can time out and nothing on
 //! it can mark the core `NotResponding`. [`crate::clipboard_ui::paste_decision`]
 //! gates it anyway, for a reason that is not about blocking — see that module's
 //! docs.
 //!
+//! The fifth is NEW TAB. [`AppShell::new_tab`] funnels through
+//! `WolfCore::create_tabpage` into `block_on_rpc`, so a Ctrl+Shift+T against a
+//! wedged Neovim costs a full RPC timeout budget of frozen main loop and then hands
+//! back the `0` handle an error produces. [`crate::tabs_ui::new_tab_press`] guards
+//! it with the buffer picker's argument and its limits. Switching and closing a tab
+//! add none: `WolfCore::set_current_tabpage` and `close_tabpage` are
+//! fire-and-forget on the ordered input channel.
+//!
 //! The last five are the MARKDOWN PREVIEW's. [`AppShell::open_preview`] and
 //! [`AppShell::edit_source`] funnel through `WolfCore::open_preview` /
 //! `WolfCore::edit_source`, and `pane_view::refresh_previews` issues
 //! `WolfCore::render_preview` once per changed source per wake — the only one of the
-//! nine that can repeat while the user simply types. All three are gated through
+//! ten that can repeat while the user simply types. All three are gated through
 //! [`crate::preview_ui`] ([`preview_ui::preview_press`], [`preview_ui::edit_press`],
 //! `preview_ui::may_render`) with the buffer picker's argument and its limits.
 //! Neither press has an [`crate::actions`] accelerator row, so their only routes are
@@ -203,14 +211,15 @@ use crate::liveness_ui::{
 };
 use crate::nav_ui::{self, NavAvailability, NavPress};
 use crate::palette::{PaletteAction, PaletteHandle};
-use crate::pane_view::{self, PaneHandle};
-use crate::persistence::StateHandle;
+use crate::pane_view;
 use crate::picker::PickerHandle;
 use crate::preview_ui::{
     self, BrowserPress, EditPlacement, EditPress, PreviewPlacement, PreviewPress,
 };
 use crate::search_overlay::SearchHandle;
 use crate::state_seam;
+use crate::tab_view::{TabParts, TabsHandle};
+use crate::tabs_ui::{self, NewTabPress};
 use crate::title;
 use crate::tree_view::TreeHandle;
 use crate::window::TREE_PANE_WIDTH;
@@ -326,8 +335,6 @@ pub struct ShellParts<'a> {
     pub sidebar: &'a gtk::Widget,
     /// The window's outer `gtk::Paned` (sidebar | editor).
     pub paned: &'a gtk::Paned,
-    /// The empty-state overlay from [`build_empty_state`].
-    pub empty_state: &'a gtk::Widget,
     /// The header bar's Open button, desensitized in the empty state.
     pub open_button: &'a gtk::Button,
     /// The header bar's Back button, desensitized by
@@ -347,12 +354,11 @@ pub struct ShellParts<'a> {
     pub launch_cwd: PathBuf,
     /// The crash/stall overlay + banner, driven by the liveness read.
     pub crash_overlay: &'a CrashOverlay,
-    /// The pane view, reset after a successful in-place Neovim restart. No cycle:
-    /// [`crate::pane_view`] does not reference the shell.
-    pub panes: &'a PaneHandle,
-    /// The application-state persistence glue, kept in step with the empty-state
-    /// flag. The render wake drives it through the coordinator, never directly.
-    pub state: &'a StateHandle,
+    /// This window's TABS. Every fan-out this module performs per tab — the empty
+    /// state, the sidebar preference, the focus return, the restart collapse — goes
+    /// through here, and so does the New Tab press. No cycle:
+    /// [`crate::tab_view`] does not reference the shell.
+    pub tabs: &'a TabsHandle,
     /// The process-scoped coordinator, as a `Weak`: it owns this window's handle,
     /// and this shell is owned by that window. See [`mod@crate::coordinator`].
     pub coordinator: Weak<CoordinatorInner>,
@@ -382,8 +388,6 @@ struct ShellInner {
     sidebar: gtk::Widget,
     /// The outer `gtk::Paned` whose divider collapses in the empty state.
     paned: gtk::Paned,
-    /// The empty-state overlay; visible only when no project is open.
-    empty_state: gtk::Widget,
     /// The header bar's Open button; insensitive in the empty state.
     open_button: gtk::Button,
     /// The header bar's Back button; its sensitivity is recomputed on every wake
@@ -428,10 +432,17 @@ struct ShellInner {
     rooted_cwd: RefCell<Option<PathBuf>>,
     /// The crash/stall overlay + banner, driven by [`AppShell::on_liveness_wake`].
     crash_overlay: CrashOverlay,
-    /// The pane view, reset after a successful in-place restart.
-    panes: PaneHandle,
-    /// The application-state persistence glue.
-    state: StateHandle,
+    /// This window's tabs; see [`ShellParts::tabs`].
+    tabs: TabsHandle,
+    /// The cwd the captive nvim was LAUNCHED in, retained beside
+    /// [`ShellInner::rooted_cwd`] rather than consumed into it.
+    ///
+    /// Both are needed and they are not the same value: `rooted_cwd` is canonical
+    /// and follows every re-root, while this one never moves and is the fallback
+    /// [`crate::tabs_ui::new_tab_cwd`] uses when Neovim has not reported a live cwd
+    /// yet — the same seed [`crate::state_seam::snapshot_cwd`] persists, so a new
+    /// tab cannot be rooted somewhere the window would not have saved.
+    launch_cwd: PathBuf,
     /// The process-scoped coordinator, upgraded per use.
     coordinator: Weak<CoordinatorInner>,
     /// This window's identity, passed to every coordinator call.
@@ -552,7 +563,6 @@ pub fn build(parts: ShellParts<'_>) -> AppShell {
         tree: parts.tree.clone(),
         sidebar: parts.sidebar.clone(),
         paned: parts.paned.clone(),
-        empty_state: parts.empty_state.clone(),
         open_button: parts.open_button.clone(),
         nav_back_button: parts.nav_back_button.clone(),
         nav_forward_button: parts.nav_forward_button.clone(),
@@ -568,11 +578,11 @@ pub fn build(parts: ShellParts<'_>) -> AppShell {
         // Canonicalized so the comparison against the core's already-canonical
         // `live_cwd` means what it says; see the field's docs.
         rooted_cwd: RefCell::new(Some(
-            std::fs::canonicalize(&parts.launch_cwd).unwrap_or(parts.launch_cwd),
+            std::fs::canonicalize(&parts.launch_cwd).unwrap_or_else(|_| parts.launch_cwd.clone()),
         )),
+        launch_cwd: parts.launch_cwd,
         crash_overlay: parts.crash_overlay.clone(),
-        panes: parts.panes.clone(),
-        state: parts.state.clone(),
+        tabs: parts.tabs.clone(),
         coordinator: parts.coordinator,
         window_id: parts.window_id,
         home: workspace::home_dir()
@@ -608,6 +618,17 @@ pub fn build(parts: ShellParts<'_>) -> AppShell {
         if let Some(shell) = upgrade(&weak) {
             shell.inner.restart_attempts.set(0);
             shell.restart_nvim();
+        }
+    });
+
+    // A tab switch closes all four transient overlays. An overlay opened over one
+    // tab and left hanging over the next would keep `window::wire_keys`' guard
+    // suppressing every key to Neovim, and its focus-return would land in whichever
+    // strip it was opened from.
+    let weak_tabs = Rc::downgrade(&shell.inner);
+    shell.inner.tabs.connect_selected(move || {
+        if let Some(shell) = upgrade(&weak_tabs) {
+            shell.on_tab_selected();
         }
     });
 
@@ -824,7 +845,12 @@ impl AppShell {
     /// window too, and a drawer there is a working shell rather than a dead
     /// surface.
     pub fn set_empty_state(&self, empty: bool) {
-        self.inner.empty_state.set_visible(empty);
+        // PER TAB: the status page is opaque and full-bleed over ONE tab's panes,
+        // and each tab's persisted `cwd` follows the same flag. Everything below is
+        // per window and is applied once.
+        for tab in self.inner.tabs.entries() {
+            tab.set_empty(empty);
+        }
         self.inner.empty.set(empty);
         // Never `sidebar.set_visible` directly: a user toggle and the empty state
         // are two inputs to ONE rule, and applying either on its own is how the
@@ -843,12 +869,6 @@ impl AppShell {
             action.set_enabled(!empty);
         }
         self.inner.search.set_project_open(!empty);
-        // The persisted `cwd` follows the LIVE empty-state flag, so an Open Folder
-        // into an empty-state window starts persisting that folder from the very
-        // next wake. `sidebar_visible` does NOT: it persists the user's
-        // preference, so an empty-state session cannot come back with the tree
-        // hidden.
-        self.inner.state.set_empty(empty);
     }
 
     /// Applies the sidebar-visibility rule to the widgets. The ONE site that calls
@@ -880,7 +900,13 @@ impl AppShell {
         let shown = !self.inner.sidebar_shown.get();
         self.inner.sidebar_shown.set(shown);
         self.apply_sidebar_visibility();
-        self.inner.state.set_sidebar_shown(shown);
+        // The WIDGET is per window (see `window::build` on why the sidebar stays
+        // outside the tab view), but the persisted preference is per tab, so every
+        // tab records it — including the ones that are not selected, whose subtree
+        // this unit does not write.
+        for tab in self.inner.tabs.entries() {
+            tab.set_sidebar_shown(shown);
+        }
     }
 
     /// Yanks the focused Neovim's visual-mode selection and writes it to the
@@ -1307,7 +1333,12 @@ impl AppShell {
         }
         if mode == OverlayMode::Hidden {
             if had_focus {
-                self.inner.panes.cmdline_widget().grab_focus();
+                // The SELECTED tab's strip: a background tab's is unmapped, and
+                // grabbing focus into an unmapped widget leaves the toplevel with no
+                // focus widget at all.
+                if let Some(tab) = self.inner.tabs.selected() {
+                    tab.focus_area().grab_focus();
+                }
             }
         } else {
             self.inner.picker.close();
@@ -1382,14 +1413,19 @@ impl AppShell {
             RestartOutcome::Refresh(ui) => self.apply_overlay(ui.overlay),
             RestartOutcome::Respawned => {
                 self.inner.restart_attempts.set(0);
-                self.inner.panes.reset_after_restart();
+                // Collapses to the SELECTED tab and clears its stale handle. A
+                // respawned Neovim owns exactly ONE tabpage, so leaving N tabs bound
+                // to the dead one's handles would make `tabs_ui::tab_wake` answer
+                // `Hold` for every one of them — a window frozen forever over a
+                // healthy Neovim.
+                self.inner.tabs.reset_after_restart();
                 self.reopen_captured(captured.as_ref());
                 self.apply_overlay(OverlayMode::Hidden);
                 self.inner.crash_overlay.flash_banner();
                 // Belt and braces, mirroring `app.rs`'s "react to whatever is
                 // already there" call: a harmless no-op if the fresh nvim has not
                 // reported `win_pos` yet.
-                self.inner.panes.on_render_wake();
+                self.inner.tabs.on_render_wake();
             }
         }
     }
@@ -1643,6 +1679,7 @@ impl AppShell {
             UiAction::OpenFileDialog => self.open_file_dialog(),
             UiAction::OpenFolderDialog => self.open_folder_dialog(),
             UiAction::NewUntitledBuffer => self.send_input(InputEvent::NewBuffer),
+            UiAction::NewTab => self.new_tab(),
             UiAction::NewWindow => self.new_window(),
             UiAction::ClosePane => self.send_input(InputEvent::ClosePane),
             // Over the shared ordered input channel and not `WolfCore::toggle_full_width`,
@@ -1676,6 +1713,96 @@ impl AppShell {
     /// exits once its last window closes.
     fn close_window(&self) {
         self.inner.window.close();
+    }
+
+    /// Opens a new TAB in this window, over this window's EXISTING core, rooted at
+    /// this window's folder — or prints why it did not.
+    ///
+    /// **`WolfCore::create_tabpage` is a BLOCKING RPC on the GTK main thread**, so
+    /// it is gated by [`tabs_ui::new_tab_press`] exactly as the buffer picker's
+    /// candidate snapshot and a navigation move are; see the module docs. It is the
+    /// TENTH such call this crate can reach and the NINTH a running window can
+    /// issue.
+    ///
+    /// The exact opposite of [`AppShell::new_window`] in what it inherits, and the
+    /// pair is easy to confuse: a tab shares this window's Neovim, its project, its
+    /// sidebar and its overlays; a window shares nothing at all. The directory is
+    /// [`tabs_ui::new_tab_cwd`]'s answer, which is `None` in the empty state — a
+    /// `:tcd` there would silently declare the user's home directory a project.
+    ///
+    /// [`AppShell::copy_selection`]'s borrow shape: the two reads happen first, each
+    /// in its own short borrow, and the borrow for the RPC is taken and dropped in a
+    /// statement of its own — `open_tab` builds a whole pane view and a persistence
+    /// handle, both of which borrow the core again.
+    ///
+    /// **The tabpage handle is passed INTO `open_tab` rather than adopted.**
+    /// `Snapshot::current_tabpage` still reports the tabpage this one was opened
+    /// FROM until Neovim's `wolf_tabpage` notification lands, so a new page left to
+    /// adopt would bind itself to its parent's handle and two pages would claim one
+    /// tabpage.
+    fn new_tab(&self) {
+        let liveness = self.read_liveness();
+
+        match tabs_ui::new_tab_press(liveness) {
+            NewTabPress::Refuse(reason) => {
+                eprintln!("wolf-gnome: new tab not opened: {reason}");
+            }
+            NewTabPress::Open => {
+                let empty = self.inner.empty.get();
+                let live = {
+                    let core_ref = self.inner.core.borrow();
+                    core_ref.as_ref().and_then(WolfCore::live_cwd)
+                };
+                let cwd = tabs_ui::new_tab_cwd(empty, &self.inner.launch_cwd, live.as_deref());
+
+                let Some(tabpage) = ({
+                    let core_ref = self.inner.core.borrow();
+                    core_ref
+                        .as_ref()
+                        .map(|core| core.create_tabpage(cwd.as_deref()))
+                }) else {
+                    return;
+                };
+
+                // The persisted seed, which is a real directory even where the
+                // `:tcd` was deliberately skipped: `state_seam::snapshot_cwd`
+                // answers `""` for an empty-state window regardless of it.
+                let seed = cwd.unwrap_or_else(|| self.inner.launch_cwd.clone());
+                if !self.inner.tabs.open_tab(
+                    &self.inner.window,
+                    TabParts {
+                        tabpage,
+                        cwd: seed,
+                        empty,
+                        sidebar_shown: self.inner.sidebar_shown.get(),
+                        layout: None,
+                    },
+                ) {
+                    eprintln!(
+                        "wolf-gnome: New Tab not completed: the tabpage was created inside Neovim \
+                         but no page could be opened for it, so that tabpage is now unreachable \
+                         from the tab bar"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Closes all four transient overlays after a tab switch.
+    ///
+    /// Wired through [`crate::tab_view::TabsHandle::connect_selected`], which fires
+    /// only on a REAL selection change. Every `close()` is idempotent, and each
+    /// returns focus through the resolved-at-close-time target — the newly selected
+    /// tab's strip, never the one the overlay was opened over.
+    ///
+    /// The buffer picker is the one this cannot skip, for
+    /// [`AppShell::apply_overlay`]'s recorded reason: an overlay left flagged open
+    /// keeps `window::wire_keys`' guard suppressing every key to Neovim.
+    fn on_tab_selected(&self) {
+        self.inner.picker.close();
+        self.inner.palette.close();
+        self.inner.buffers.close();
+        self.inner.search.close();
     }
 
     /// Opens a fresh, empty window through

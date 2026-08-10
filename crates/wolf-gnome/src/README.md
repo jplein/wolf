@@ -84,7 +84,7 @@ Purpose: the buffer-picker overlay — a search entry over the captive Neovim's 
 
 **Public API**
 
-- `build(overlay, area, core) -> BufferPickerHandle` — starts hidden; `area` is the focus-return widget.
+- `build(overlay, area, core) -> BufferPickerHandle` — starts hidden; `area` is a [`picker.rs`](#pickerrs) `FocusTarget`.
 - `BufferPickerHandle::open`, `close` (both idempotent), and `is_open`.
 - `open_decision`, `initial_selection`, `switch_target` and `row_label` — the pure seams.
 
@@ -426,7 +426,7 @@ Purpose: the command-palette overlay — registry commands, one Open Recent row 
 
 **Public API**
 
-- `build(overlay, area, core, windows) -> PaletteHandle` — starts hidden; `area` is the focus-return widget, `windows` a `WindowSource`.
+- `build(overlay, area, core, windows) -> PaletteHandle` — starts hidden; `area` is a [`picker.rs`](#pickerrs) `FocusTarget`, `windows` a `WindowSource`.
 - `PaletteHandle::open`, `close` (both idempotent), `is_open`, and `connect_activate`.
 - `open_recent_candidates`, `palette_rows` and `palette_action_for` — the pure seams — and `PaletteAction`, whose `SwitchWindow` payload is the coordinator's own window id.
 
@@ -478,7 +478,7 @@ Purpose: the GTK glue turning `layout`'s pane tree into nested `gtk::Paned`, one
 
 #### `persistence.rs`
 
-Purpose: the glue that gathers one window's contribution to `state.json`. It is thin by construction: every decision lives in [`state_seam.rs`](#state_seamrs) and [`pane_layout.rs`](#pane_layoutrs), so this module gathers live values and caches them.
+Purpose: the glue that gathers one tab's contribution to `state.json`. It is thin by construction: every decision lives in [`state_seam.rs`](#state_seamrs) and [`pane_layout.rs`](#pane_layoutrs), so this module gathers live values and caches them.
 
 **Public API**
 
@@ -501,7 +501,7 @@ Purpose: the file-picker overlay — a search entry over a ranked results list. 
 
 **Public API**
 
-- `build(overlay, area, core) -> PickerHandle` — starts hidden. `area` is the focus-return widget, not the results host.
+- `build(overlay, area, core) -> PickerHandle` — starts hidden. `area` is a `FocusTarget`, not the results host.
 - `PickerHandle::open`, `close` (both idempotent), and `is_open`, which the app reads to suppress key forwarding.
 
 **Decisions**
@@ -515,6 +515,7 @@ Purpose: the file-picker overlay — a search entry over a ranked results list. 
 
 - Closing drops the `FileSearch`, which cancels the background traversal.
 - `next_selection`, `restored_index` and `activation_index` are `pub(crate)` and shared with [`palette.rs`](#paletters), [`buffer_picker.rs`](#buffer_pickerrs) and [`search_overlay.rs`](#search_overlayrs), so all four overlays navigate and activate identically. They stay here because the macOS `PickerSeam` port names this file as its counterpart.
+- `FocusTarget` is `pub(crate)` and shared the same way, by all four overlays and the sidebar; [DECISIONS.md](../DECISIONS.md#window-structure) owns why it is a closure rather than a captured widget.
 
 #### `preview_link.rs`
 
@@ -619,7 +620,7 @@ Purpose: the project-search overlay — a `Ctrl+Shift+F` entry over a flat, stre
 
 **Public API**
 
-- `build(overlay, area, core) -> SearchHandle` — starts hidden; `area` is the focus-return widget.
+- `build(overlay, area, core) -> SearchHandle` — starts hidden; `area` is a [`picker.rs`](#pickerrs) `FocusTarget`.
 - `SearchHandle::open`, `close` (both idempotent), `is_open`, and `set_project_open`, mirrored from the shell's empty-state flag.
 - `open_decision`, `search_options_for`, `result_rows`, `activation_target`, `enter_action` and `search_status` — the pure seams.
 
@@ -648,12 +649,13 @@ Purpose: the glue for the action namespace — `gio` actions, the primary menu, 
 
 **Decisions**
 
-- The chord controller matches keys itself, not through GTK's keymap-aware matching, which does not fire under the smokes' keystroke injector. Accelerators are registered only so the menu renders their labels, `app.` rows included ([`coordinator.rs`](#coordinatorrs)).
+- The chord controller matches keys itself: GTK's keymap-aware matching does not fire under the smokes' keystroke injector. Accelerators are registered only so the menu renders their labels, `app.` rows included ([`coordinator.rs`](#coordinatorrs)).
 - The controller lives on the window, so it runs ahead of any overlay's and needs no open-overlay guard: no overlay's keys are bound chords.
-- One settle point moves the sidebar's root, over [`workspace.rs`](#workspacers)'s `reroot_decision`, so a front-end `chdir_to` and a typed `:cd` cannot diverge. Neither re-roots synchronously: the live cwd updates only after Neovim reports it.
-- The nav-button refresh caches nothing, unlike the title refresh: `set_sensitive` early-returns on an unchanged value.
-- The three Markdown-preview presses read one `preview_shape` pass each: two snapshot reads would describe no window that existed. Each is a blocking RPC gated through [`preview_ui.rs`](#preview_uirs), and each refusal is worded so a stderr log separates the gate declining from core failing.
-- One private applier is the only caller of `sidebar.set_visible`, over [`state_seam.rs`](#state_seamrs)'s `sidebar_is_shown`, or the next `set_empty_state(false)` would undo a user toggle.
+- One settle point moves the sidebar's root, over [`workspace.rs`](#workspacers)'s `reroot_decision`, so `chdir_to` and a typed `:cd` cannot diverge. Neither is synchronous: the live cwd updates only after Neovim reports it.
+- The nav-button refresh caches nothing: `set_sensitive` already early-returns on an unchanged value.
+- The three Markdown-preview presses read one `preview_shape` pass each: two snapshot reads would describe no window that existed. Each is a blocking RPC gated through [`preview_ui.rs`](#preview_uirs).
+- `sidebar.set_visible` has one caller, over [`state_seam.rs`](#state_seamrs)'s `sidebar_is_shown`, or `set_empty_state(false)` would undo a user toggle.
+- The per-tab fan-outs go through [`tab_view.rs`](#tab_viewrs): the empty state, the sidebar preference, the focus return and the restart collapse. New Tab is gated by [`tabs_ui.rs`](#tabs_uirs)'s `new_tab_press`; [DECISIONS.md](../DECISIONS.md) owns the boundary.
 
 #### `state_seam.rs`
 
@@ -673,8 +675,8 @@ Purpose: the pure application-state seam — what to restore at launch, and what
 - `restored_window_size` collapses the whole result on any unusable dimension: a usable width with a garbage height is not half a window size.
 - `persistable_layout` suppresses by content, never by arity; see [`pane_layout.rs`](#pane_layoutrs) and [DECISIONS.md](../DECISIONS.md).
 - The empty state persists an empty cwd always, or every launcher start would become a project at home.
-- `may_snapshot`'s match over `Liveness` is total, and the gate is read once per window against its own core.
-- `window_subtree` is the one place the single-tab shape lives, pinned by a test so a tabs unit changes it deliberately.
+- `may_snapshot`'s match over `Liveness` is total, with no catch-all arm.
+- `window_subtree` writes one `TabState`; which tab that is, and why it is one, belong to [DECISIONS.md](../DECISIONS.md#application-state).
 - `RestorePlan::sidebar_visible` is independent of the empty state; `sidebar_is_shown` applies it.
 
 #### `statusbar_layout.rs`
@@ -696,6 +698,41 @@ Purpose: the per-pane statusbar's rulebook, decidable from values. The vertical 
 **Gotchas**
 
 - `blend` is `pub(crate)` for a second consumer, [`scrollbar.rs`](#scrollbarrs)'s thumb colour. Reimplementing it there would give two colours on one scale two rounding rules, which is how they drift apart.
+
+#### `tab_view.rs`
+
+Purpose: the GTK glue for native tabs — an `adw::TabBar` over an `adw::TabView`, carrying one [`pane_view.rs`](#pane_viewrs) handle, one empty state and one [`persistence.rs`](#persistencers) handle per tab, over the window's single core. Every decision it acts on is [`tabs_ui.rs`](#tabs_uirs)'s.
+
+**Public API**
+
+- `build(TabsParts) -> TabsHandle` — the widget pair with both signals connected. No page exists yet: `open_tab` needs a window the caller has not built.
+- `TabsHandle::open_tab(&window, TabParts) -> bool`, `view_widget`, `bar_widget`, `selected`, `entries`, `len`, `on_render_wake`, `reset_after_restart`, `focus_target`, `connect_selected`, plus `TabHandle`'s per-tab relays.
+
+**Decisions**
+
+- `TabParts::tabpage` is `0` for tab 0 and `create_tabpage`'s answer for every later one. `Snapshot::current_tabpage` still reports the preceding tabpage until Neovim's notification lands, so a new page left to adopt one would bind itself to the tab it was opened from.
+- `close-page` is a veto: every arm answers it with `close_page_finish` and returns `Propagation::Stop`, or the page stays on screen forever with no error. The last page's close is answered with a refusal and routed into the toplevel's own close, never into `close_tabpage`.
+- Both signal handlers hold a `Weak`; a strong reference from a handler the view owns closes a cycle over every tab's pane view.
+
+**Gotchas**
+
+- `selected` is the whole of what a window persists; read [DECISIONS.md](../DECISIONS.md#application-state) before widening it.
+
+#### `tabs_ui.rs`
+
+Purpose: the pure, GTK-free rulebook for the N tabs one window's captive Neovim serves — which tab a render wake may touch, what closing one does, whether a New Tab press may issue its blocking RPC, the directory a new tab inherits, and the string a tab draws. The tabs counterpart of [`nav_ui.rs`](#nav_uirs); [`tab_view.rs`](#tab_viewrs) carries the answers out.
+
+**Public API**
+
+- `tab_wake(current_tabpage, my_tabpage, selected) -> TabWake` — `Adopt(handle)`, `Refresh` or `Hold`, total over all three inputs.
+- `switch_target`, `close_outcome`, `new_tab_press`, `new_tab_cwd`, `tab_title` and `TAB_TITLE_FALLBACK`.
+
+**Decisions**
+
+- `Hold` does nothing at all — no pane refresh, no title, no status read, no resize — and that is the whole gate. `Snapshot::windows` describes the current tabpage alone, so refreshing a background tab asks `WolfCore::pane_status` about a grid whose Neovim window is absent from that map, and gets `[No Name]` with an empty absolute path back.
+- The authority is Neovim, not GTK's selection: a tab Neovim considers current refreshes while the widget lags, and a tab GTK has selected holds until Neovim catches up. `selected` decides only for a tab carrying no handle yet.
+- `switch_target` and `close_outcome` refuse the two inputs that fail silently: Neovim reads a handle of `0` as "the current tabpage", and `close_tabpage` on the last tabpage does nothing.
+- `new_tab_cwd` answers `None` in the empty state always, so a new tab is never `:tcd`'d into `$HOME`. It mirrors [`state_seam.rs`](#state_seamrs)'s `snapshot_cwd`, and the two must agree.
 
 #### `title.rs`
 
@@ -740,7 +777,7 @@ Purpose: the GTK glue for the file-tree sidebar — a `gtk::ListView` over a `gt
 
 **Public API**
 
-- `build(core, area, start, root_label) -> TreeHandle` — `area` is the focus-return widget; `start` is false in the empty state, where nothing is walked.
+- `build(core, area, start, root_label) -> TreeHandle` — `area` is a [`picker.rs`](#pickerrs) `FocusTarget`; `start` is false in the empty state, where nothing is walked.
 - `widget()`, `on_render_wake()`, `close()`, `set_sidebar_visible(shown)` and `reroot(root_label)`, the last two relayed from [`shell.rs`](#shellrs)'s one visibility site and one settle point; this module reads no cwd.
 
 **Decisions**
@@ -756,11 +793,11 @@ Purpose: the GTK glue for the file-tree sidebar — a `gtk::ListView` over a `gt
 
 #### `window.rs`
 
-Purpose: one window and everything scoped to it — an `adw::ApplicationWindow` over a live `WolfCore`, with its own wake channel, pane view, overlays, `win.` actions and state subtree. Its widget structure and overlay stacking are [DECISIONS.md](../DECISIONS.md#window-structure)'s.
+Purpose: one window and everything scoped to it — an `adw::ApplicationWindow` over a live `WolfCore`, with its own wake channel, tab layer, window-level overlays, `win.` actions and state subtree. Its widget structure and overlay stacking are [DECISIONS.md](../DECISIONS.md#window-structure)'s.
 
 **Public API**
 
-- `build(parts) -> Option<WindowHandle>` — `None`, after one message, when the core fails to start; a launch whose only window fails then exits.
+- `build(parts) -> Option<WindowHandle>` — `None`, after one message, when the core fails to start; a launch whose only window fails exits.
 - `WindowParts` — the six construction inputs as a struct, because `clippy::too_many_arguments` bites at seven.
 - `WindowHandle::id`, `present`, `refresh_subtree`, `cached_subtree` and `display_cwd`.
 
@@ -768,13 +805,13 @@ Purpose: one window and everything scoped to it — an `adw::ApplicationWindow` 
 
 - Telling the coordinator is the first statement of the close handler, while the core and panes are still alive: a subtree gathered after the core is taken out sees none, the gate refuses it, and the session is silently lost.
 - The window registers with the coordinator before its first command drain, so nothing the drain reaches acts on a coordinator that does not know the window exists.
-- `display_cwd` reads the cached subtree rather than recomputing, so the palette and `state.json` cannot disagree about where a window is.
+- `refresh_subtree` and `cached_subtree` answer for the selected tab alone ([DECISIONS.md](../DECISIONS.md#application-state)), on unchanged signatures, so [`coordinator.rs`](#coordinatorrs) never learns tabs exist.
+- `display_cwd` reads the cached subtree, so the palette and `state.json` cannot disagree about where a window is.
 - `WindowInner` does not hold the shell: the wake-drain future already owns it for exactly the window's lifetime, and a second owner would add a lifetime nothing reads.
 
 **Gotchas**
 
 - The key controller carries no propagation phase, so it runs after [`shell.rs`](#shellrs)'s capture-phase chord controller — which is what stops a bound chord also reaching Neovim.
-- The wake-channel capacity stays private; its tests live here and read the production constant, not a literal.
 
 #### `workspace.rs`
 

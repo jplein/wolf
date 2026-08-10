@@ -89,6 +89,7 @@ use gtk::{gio, glib};
 use wolf_core::tree::TreeIndexCache;
 use wolf_core::{FileEntry, FileSearch, InputEvent, WakeFn, WolfCore};
 
+use crate::picker::FocusTarget;
 use crate::refresh_coalescer::{RefreshCoalescer, REFRESH_INTERVAL};
 use crate::tree::{self, TreeNode};
 use crate::tree_gate::TreeRefreshGate;
@@ -165,8 +166,9 @@ struct TreeInner {
     list_view: gtk::ListView,
     /// The live core, shared with the rest of the app.
     core: Rc<RefCell<Option<WolfCore>>>,
-    /// The editor drawing area, re-focused after a single-click open.
-    area: gtk::DrawingArea,
+    /// Where focus returns after a single-click open: the SELECTED tab's cmdline
+    /// strip, resolved at call time. See [`crate::picker::FocusTarget`].
+    area: FocusTarget,
     /// The wake closure handed to `start_file_search`; firing it queues a refresh.
     wake: WakeFn,
     /// A reveal target that could not yet be resolved (the file had not streamed in
@@ -430,7 +432,9 @@ impl TreeInner {
                 if let Some(core) = self.core.borrow().as_ref() {
                     core.send_input(InputEvent::Open { path });
                 }
-                self.area.grab_focus();
+                if let Some(area) = (self.area)() {
+                    area.grab_focus();
+                }
             }
             None => {
                 let expanded = row.is_expanded();
@@ -786,10 +790,15 @@ fn build_factory(
 /// `root_label` is the text the synthetic root row draws — the launch working
 /// directory's basename, from [`crate::workspace::root_label`]. This module reads no
 /// cwd; the shell passes it in here and again on each [`TreeHandle::reroot`].
+///
+/// `area` resolves the focus-return widget at CALL time — the SELECTED tab's
+/// cmdline strip. The sidebar is per WINDOW while the strip is per TAB, so the two
+/// cannot be bound to each other once and for all; see
+/// [`crate::picker::FocusTarget`].
 #[must_use]
 pub fn build(
     core: &Rc<RefCell<Option<WolfCore>>>,
-    area: &gtk::DrawingArea,
+    area: FocusTarget,
     start: bool,
     root_label: &str,
 ) -> TreeHandle {
@@ -836,7 +845,7 @@ pub fn build(
         scroller,
         list_view: list_view.clone(),
         core: core.clone(),
-        area: area.clone(),
+        area,
         wake,
         pending_reveal: RefCell::new(None),
         last_current: RefCell::new(None),

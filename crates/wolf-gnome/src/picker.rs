@@ -66,6 +66,25 @@ const PICKER_MAX_ROWS: usize = 200;
 /// just means a refresh is already pending), mirroring the app's main wake channel.
 const PICKER_WAKE_CHANNEL_CAP: usize = 1;
 
+/// Where an overlay returns focus when it closes, resolved AT CLOSE TIME rather
+/// than captured at build time.
+///
+/// Every one of the four transient overlays — and the file-tree sidebar — parks
+/// focus back on the persistent cmdline strip when it closes, because a toplevel
+/// left with no focus widget loses window-level key dispatch entirely while Neovim
+/// stays alive and silent (`DECISIONS.md`, the focus regime). That strip belongs to
+/// a [`crate::pane_view::PaneHandle`], and a pane view is PER TAB: an overlay
+/// holding tab 0's strip would, after a tab switch, grab focus into a widget GTK
+/// has unmapped.
+///
+/// Resolving from the live authority — the [`adw::TabView`]'s selected page —
+/// cannot be forgotten, which is why this is a closure rather than a
+/// `set_focus_area` setter called on every switch. A setter keeps the signatures
+/// but makes "nobody called it for the tab that was just created" a silent wedge,
+/// the same argument [`crate::shell`]'s one settle point makes for the sidebar's
+/// root. `None` — no page selected at all — means grab nothing.
+pub(crate) type FocusTarget = Rc<dyn Fn() -> Option<gtk::DrawingArea>>;
+
 /// Computes the next list selection index after moving by `delta` rows from
 /// `current`, clamped into `[0, n_rows - 1]` with NO wrap. Returns `None` when the
 /// list is empty (`n_rows <= 0`).
@@ -141,8 +160,9 @@ struct PickerInner {
     entry: gtk::SearchEntry,
     /// The results list, rebuilt on each refresh.
     list: gtk::ListBox,
-    /// The editor drawing area, re-focused when the picker closes.
-    area: gtk::DrawingArea,
+    /// Where focus returns when the picker closes: the SELECTED tab's cmdline
+    /// strip, resolved at close time. See [`FocusTarget`].
+    area: FocusTarget,
     /// The live core, shared with the rest of the app.
     core: Rc<RefCell<Option<WolfCore>>>,
     /// The wake closure handed to `start_file_search`; firing it queues a refresh.
@@ -190,7 +210,9 @@ impl PickerInner {
         // Take + drop the FileSearch to cancel the background traversal.
         let _ = self.search.borrow_mut().take();
         self.picker_box.set_visible(false);
-        self.area.grab_focus();
+        if let Some(area) = (self.area)() {
+            area.grab_focus();
+        }
     }
 
     /// Rebuilds the results list for the current query from the latest search
@@ -315,14 +337,17 @@ impl PickerHandle {
     }
 }
 
-/// Builds the picker widgets as an overlay child over `area` (the overlay's main
-/// child), wires all signals, and returns a [`PickerHandle`]. The picker starts
-/// hidden; call [`PickerHandle::open`] (which the `win.go-to-file` action does) to
-/// show it.
+/// Builds the picker widgets as an overlay child of `overlay`, wires all signals,
+/// and returns a [`PickerHandle`]. The picker starts hidden; call
+/// [`PickerHandle::open`] (which the `win.go-to-file` action does) to show it.
+///
+/// `area` resolves the focus-return widget at CLOSE time — the SELECTED tab's
+/// cmdline strip, never a pane drawing area (`DECISIONS.md`, "Window structure").
+/// See [`FocusTarget`] for why it is a closure.
 #[must_use]
 pub fn build(
     overlay: &gtk::Overlay,
-    area: &gtk::DrawingArea,
+    area: FocusTarget,
     core: &Rc<RefCell<Option<WolfCore>>>,
 ) -> PickerHandle {
     let entry = gtk::SearchEntry::new();
@@ -366,7 +391,7 @@ pub fn build(
         picker_box,
         entry: entry.clone(),
         list: list.clone(),
-        area: area.clone(),
+        area,
         core: core.clone(),
         wake,
         last_query: RefCell::new(None),

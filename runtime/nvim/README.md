@@ -234,6 +234,8 @@ Two criteria, either sufficient. The first stats the `%`-mangled name nvim's own
 
 **The grid is deterministic and chrome-free** — `number`, `signcolumn`, `ruler`, `showcmd`, and `laststatus` are all off, the intro message is suppressed, and `termguicolors` is on so `hl_attr_define` carries RGB the front-ends paint directly. The front-end draws its own chrome.
 
+**`showtabline` is 0 because the default of 1 draws a tabline the instant a second tabpage exists.** Neither front-end paints grid 1, so that line is invisible yet still costs the pane grid a row — measured as 80x24 dropping to 80x23 — and leaves every `WinInfo` `start_row` stale until the front-end's own resize wins the row back. Both front-ends draw their own tab chrome.
+
 **`wildoptions` gains `pum`** so command-line completion presents as the native vertical `popupmenu_show` popup rather than the horizontal wildmenu. Wolf attaches with `ext_popupmenu` and `ext_messages`, and the latter implicitly enables `ext_cmdline` and forces `cmdheight = 0`, so the popup must anchor above a command line the grid does not draw.
 
 **Soft wrap is on with `linebreak` and `smoothscroll`.** Wolf edits Markdown, where prose lines routinely exceed the pane width; `linebreak` wraps at spaces and punctuation instead of mid-word, and `smoothscroll` scrolls by screen line so scrolling never skips a wrapped fragment of a long line.
