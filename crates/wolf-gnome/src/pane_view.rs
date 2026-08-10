@@ -73,7 +73,7 @@
 //!   launch; the first wake at which a window grid exists consumes it
 //!   ([`PaneInner::consume_pending_layout`]) and realizes it
 //!   ([`PaneInner::apply_layout_rebuild`]) through `WolfCore::rebuild_layout`, one
-//!   of the nine blocking RPCs this front-end issues, documented there.
+//!   of the ten blocking RPCs this front-end issues, documented there.
 //!
 //! A user's DIVIDER DRAG feeds the save half. [`install_paned_position`] writes the
 //! dragged `gtk::Paned` position back into the tree's weights through
@@ -209,7 +209,7 @@ const ACTIVE_PANE_CSS: &str = "wolf-active-pane";
 
 /// CSS defining [`ACTIVE_PANE_CSS`]. An `outline` (not a `border`) so the ring does
 /// NOT consume layout space (no resize churn on focus changes). Loaded into the
-/// default display by [`install_pane_css`], once per window.
+/// default display by [`install_pane_css`], once per TAB.
 const ACTIVE_PANE_CSS_DATA: &str =
     ".wolf-active-pane { outline: 2px solid #3584e4; outline-offset: -2px; }";
 
@@ -3912,12 +3912,12 @@ fn pick_initial_window(snap: &Snapshot) -> Option<(i64, u64)> {
 
 /// Adds a display-global provider carrying the [`ACTIVE_PANE_CSS`] definition.
 ///
-/// [`build`] calls this, so a second window adds a SECOND identical provider to
-/// the same default display. Two identical providers are inert — the rule
-/// resolves the same either way — and the call is deliberately NOT hoisted into
-/// [`crate::coordinator`]: no smoke observes this outline (the OCR smokes read
-/// text, not chrome), so the hoist would be an unverifiable edit to the startup
-/// path.
+/// [`build`] calls this, and a pane view is built per TAB, so every tab of every
+/// window adds another identical provider to the same default display. Identical
+/// providers are inert — the rule resolves the same either way — and the call is
+/// deliberately NOT hoisted into [`crate::coordinator`]: no smoke observes this
+/// outline (the OCR smokes read text, not chrome), so the hoist would be an
+/// unverifiable edit to the startup path.
 fn install_pane_css() {
     if let Some(display) = gdk::Display::default() {
         let provider = gtk::CssProvider::new();

@@ -2222,11 +2222,13 @@ impl WolfCoreHandle {
         }
     }
 
-    /// The Tier-1 open-file mirror for tabpage `tab` (its file-backed open buffers
-    /// and active buffer), a cheap snapshot read (no RPC). An empty-backed
-    /// [`FfiOpenFiles`] when the core is gone or the tab is unknown. The front-end
-    /// captures this per view BEFORE a restart (a respawn wipes the mirror) and
-    /// reopens the files afterward.
+    /// The Tier-1 open-file mirror entry KEYED BY tabpage `tab`, a cheap snapshot
+    /// read (no RPC). An empty-backed [`FfiOpenFiles`] when the core is gone or the
+    /// tab is unknown. The front-end captures this per view BEFORE a restart (a
+    /// respawn wipes the mirror) and reopens the files afterward.
+    ///
+    /// Only `active_path` is per-tabpage; `files` is the whole instance's buflisted
+    /// set (see [`FfiOpenFiles`]), so a multi-view project over-reopens.
     #[must_use]
     pub fn open_files_for_tabpage(&self, tab: i64) -> FfiOpenFiles {
         let borrow = self.core.borrow();
@@ -3588,12 +3590,12 @@ impl FfiHistoryEntry {
 /// One pane's statusbar strings — the base `filename` and the `display_path`
 /// beneath it (opaque to Swift, so its Strings are read back via accessor
 /// methods). A projection of [`wolf_core::PaneStatus`].
-/// The Tier-1 open-file mirror for one tabpage, opaque to Swift.
+/// The Tier-1 open-file mirror entry for one tabpage, opaque to Swift.
 ///
 /// Built by [`WolfCoreHandle::open_files_for_tabpage`] from
-/// [`wolf_core::TabFiles`]: the tabpage's file-backed open buffers + its active
-/// buffer's path, as owned Strings. The front-end captures this per view BEFORE a
-/// restart and reopens `files` afterward (ACTIVE last so it lands focused).
+/// [`wolf_core::TabFiles`], as owned Strings. The front-end captures this per view
+/// BEFORE a restart and reopens `files` afterward (ACTIVE last so it lands
+/// focused).
 pub struct FfiOpenFiles {
     active: String,
     files: Vec<String>,
@@ -3606,7 +3608,8 @@ impl FfiOpenFiles {
         self.active.clone()
     }
 
-    /// The file-backed buffer paths open in the tabpage (absolute).
+    /// The instance-global buflisted file-backed buffer paths (absolute) — the
+    /// same list in every tabpage's entry, not the tabpage's own windows.
     #[must_use]
     pub fn files(&self) -> Vec<String> {
         self.files.clone()

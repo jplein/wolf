@@ -53,7 +53,7 @@ use gtk::glib;
 
 use wolf_core::{rank_buffers, BufInfo, BufferRow, Liveness, WolfCore};
 
-use crate::picker::{activation_index, next_selection, restored_index};
+use crate::picker::{activation_index, next_selection, restored_index, FocusTarget};
 
 /// The maximum number of ranked rows shown in the buffer list.
 const BUFFER_MAX_ROWS: usize = 200;
@@ -199,8 +199,9 @@ struct BufferPickerInner {
     entry: gtk::SearchEntry,
     /// The results list, rebuilt on each refresh.
     list: gtk::ListBox,
-    /// The editor drawing area, re-focused when the picker closes.
-    area: gtk::DrawingArea,
+    /// Where focus returns when the picker closes: the SELECTED tab's cmdline
+    /// strip, resolved at close time. See [`crate::picker::FocusTarget`].
+    area: FocusTarget,
     /// The live core, shared with the rest of the app.
     core: Rc<RefCell<Option<WolfCore>>>,
     /// The query string used by the previous [`BufferPickerInner::refresh`]. It
@@ -283,7 +284,9 @@ impl BufferPickerInner {
         }
         self.open.set(false);
         self.buffer_box.set_visible(false);
-        self.area.grab_focus();
+        if let Some(area) = (self.area)() {
+            area.grab_focus();
+        }
     }
 
     /// Rebuilds the results list for the current query from the snapshot taken at
@@ -425,17 +428,18 @@ impl BufferPickerHandle {
     }
 }
 
-/// Builds the buffer-picker widgets as an overlay child over `area` (the overlay's
-/// main child), wires all signals, and returns a [`BufferPickerHandle`]. The picker
-/// starts hidden; call [`BufferPickerHandle::open`] (which the `win.buffer-picker`
-/// action does) to show it.
+/// Builds the buffer-picker widgets as an overlay child of `overlay`, wires all
+/// signals, and returns a [`BufferPickerHandle`]. The picker starts hidden; call
+/// [`BufferPickerHandle::open`] (which the `win.buffer-picker` action does) to show
+/// it.
 ///
-/// `area` is the focus-return widget — the persistent cmdline strip, never a pane
-/// drawing area (`DECISIONS.md`, "Window structure").
+/// `area` resolves the focus-return widget at CLOSE time — the SELECTED tab's
+/// cmdline strip, never a pane drawing area (`DECISIONS.md`, "Window structure").
+/// See [`crate::picker::FocusTarget`] for why it is a closure.
 #[must_use]
 pub fn build(
     overlay: &gtk::Overlay,
-    area: &gtk::DrawingArea,
+    area: FocusTarget,
     core: &Rc<RefCell<Option<WolfCore>>>,
 ) -> BufferPickerHandle {
     let entry = gtk::SearchEntry::new();
@@ -471,7 +475,7 @@ pub fn build(
         buffer_box,
         entry: entry.clone(),
         list: list.clone(),
-        area: area.clone(),
+        area,
         core: core.clone(),
         last_query: RefCell::new(None),
         initial_open: Cell::new(false),

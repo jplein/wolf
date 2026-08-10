@@ -84,7 +84,7 @@ use gtk::glib;
 use wolf_core::{rank_palette, Command, PaletteRow, PaletteRowKind, PaletteWindow, WolfCore};
 
 use crate::command_action::{ui_action_for, UiAction};
-use crate::picker::{activation_index, next_selection, restored_index};
+use crate::picker::{activation_index, next_selection, restored_index, FocusTarget};
 
 /// The maximum number of ranked rows shown in the palette list. Applied AFTER the
 /// classification filter — see [`palette_rows`].
@@ -319,8 +319,9 @@ struct PaletteInner {
     entry: gtk::SearchEntry,
     /// The results list, rebuilt on each refresh.
     list: gtk::ListBox,
-    /// The editor drawing area, re-focused when the palette closes.
-    area: gtk::DrawingArea,
+    /// Where focus returns when the palette closes: the SELECTED tab's cmdline
+    /// strip, resolved at close time. See [`crate::picker::FocusTarget`].
+    area: FocusTarget,
     /// The live core, shared with the rest of the app. Read for the command MRU.
     core: Rc<RefCell<Option<WolfCore>>>,
     /// The query string used by the previous [`PaletteInner::refresh`]. It decides
@@ -403,7 +404,9 @@ impl PaletteInner {
         }
         self.open.set(false);
         self.palette_box.set_visible(false);
-        self.area.grab_focus();
+        if let Some(area) = (self.area)() {
+            area.grab_focus();
+        }
     }
 
     /// Rebuilds the results list for the current query from the two snapshots taken
@@ -584,13 +587,13 @@ impl PaletteHandle {
     }
 }
 
-/// Builds the palette widgets as an overlay child over `area` (the overlay's main
-/// child), wires all signals, and returns a [`PaletteHandle`]. The palette starts
-/// hidden; call [`PaletteHandle::open`] (which the `win.command-palette` action
-/// does) to show it.
+/// Builds the palette widgets as an overlay child of `overlay`, wires all signals,
+/// and returns a [`PaletteHandle`]. The palette starts hidden; call
+/// [`PaletteHandle::open`] (which the `win.command-palette` action does) to show it.
 ///
-/// `area` is the focus-return widget — the persistent cmdline strip, never a pane
-/// drawing area (`DECISIONS.md`, "Window structure").
+/// `area` resolves the focus-return widget at CLOSE time — the SELECTED tab's
+/// cmdline strip, never a pane drawing area (`DECISIONS.md`, "Window structure").
+/// See [`crate::picker::FocusTarget`] for why it is a closure.
 ///
 /// `windows` is asked for the OTHER live windows on each open. It is a closure
 /// rather than a value because this palette outlives any particular set of
@@ -600,7 +603,7 @@ impl PaletteHandle {
 #[must_use]
 pub fn build(
     overlay: &gtk::Overlay,
-    area: &gtk::DrawingArea,
+    area: FocusTarget,
     core: &Rc<RefCell<Option<WolfCore>>>,
     windows: WindowSource,
 ) -> PaletteHandle {
@@ -639,7 +642,7 @@ pub fn build(
         palette_box,
         entry: entry.clone(),
         list: list.clone(),
-        area: area.clone(),
+        area,
         core: core.clone(),
         last_query: RefCell::new(None),
         on_activate: RefCell::new(None),
@@ -734,6 +737,20 @@ mod tests {
     /// The MRU key that same smoke asserts the activation recorded (its
     /// `PALETTE_MRU_KEY`). Checked against the registry rather than trusted.
     const SMOKE_MRU_KEY: &str = "new_buffer";
+
+    /// Every registry title [`SMOKE_QUERY`] matches, in the order `rank_matches`
+    /// ranks them.
+    ///
+    /// THREE of them, and all three are actionable: `Command::NewTab` is dispatched,
+    /// so this crate's classification filter removes none of them and
+    /// [`rank_palette`]'s candidates and [`palette_rows`]' rows are the same three
+    /// strings in the same order. They tie on `mru_group`, `mru_rank`, `score`,
+    /// `match_start` and `span`, and separate at `len` — 3, 7 and 10 characters — so
+    /// the shortest title takes the row Enter is pressed on.
+    ///
+    /// A LITERAL list rather than a count, so a red names the title that moved and a
+    /// reordering is caught as well as an addition.
+    const SMOKE_QUERY_TITLES: [&str; 3] = ["New", "New Tab", "New Window"];
 
     /// The query the cage smoke
     /// `two_windows_two_neovims_and_two_saved_sessions_under_cage` types into the
@@ -1756,19 +1773,35 @@ mod tests {
     ///
     /// "Exactly one row" is not available for this query, and the mechanism is what
     /// says so: `score_entry` matches a term as a case-insensitive SUBSEQUENCE of
-    /// `display`, and `New` is a PREFIX of `New Window`, so every query that matches
-    /// one matches the other. No query separates them, exactly as no query separates
-    /// `Preview` from `Preview in Browser` (see
+    /// `display`, and `New` is a PREFIX of both `New Tab` and `New Window`, so every
+    /// query that matches one matches all three. No query separates them, exactly as
+    /// no query separates `Preview` from `Preview in Browser` (see
     /// [`palette_rows_for_the_preview_smoke_rank_the_named_command_first`], which
     /// this test is shaped like). Chasing uniqueness here is therefore work that
     /// cannot succeed.
     ///
     /// What makes the smoke deterministic is therefore the TIE-BREAK. `rank_matches`
     /// sorts on `(mru_group, mru_rank, Reverse(score), match_start, span, len,
-    /// display)`, and for the term `new` the two rows tie on the first five: both
-    /// score 124 (component start + word start + contiguous), both match from index
-    /// 0, and both span 2. They separate at `len` — 3 characters against 10 — so the
-    /// shorter title wins. That is the whole of why Enter runs New.
+    /// display)`, and for the term `new` the three rows tie on the first five: each
+    /// scores 124 (component start + word start + contiguous), each matches from
+    /// index 0, and each spans 2. They separate at `len` — 3, 7 and 10 characters —
+    /// so the shortest title wins. That is the whole of why Enter runs New.
+    ///
+    /// ## Why THREE, and why that is this unit's business
+    ///
+    /// `Command::NewTab` was classified `Deferred` while `wolf-gnome` had no native
+    /// tabs, so [`palette_rows`]' filter removed its row and only two titles reached
+    /// the list. Dispatching it puts a THIRD `New…` row in front of the same smoke,
+    /// and this test is where that is checked rather than discovered: the smoke's own
+    /// capture cannot tell a new tab from a new buffer, because the freshly selected
+    /// `adw::TabPage` shows an empty pane exactly where the base file's heading was.
+    /// The value of this test is its GREEN — it is the tripwire that keeps
+    /// `command_palette_chord_runs_the_selected_command_under_cage` activating the
+    /// command it names — and its red is only ever the news that the tie-break moved.
+    ///
+    /// The third row does not touch the MRU premise below: `new_tab` in the command
+    /// MRU would invert the list exactly as `new_window` does, by the same leading
+    /// `mru_group` field, and the smoke is safe from both for the same reason.
     ///
     /// ## The MRU premise is load-bearing, so it is asserted
     ///
@@ -1808,36 +1841,41 @@ mod tests {
              or that smoke's MRU assertion becomes unfalsifiable."
         );
 
-        // Precondition: the query COLLIDES, so everything below is a statement about
-        // ranking rather than about a query that happens to be rare. Unfiltered it
-        // matches `New`, `New Window` and `New Tab`; the filter removes `New Tab`
-        // alone.
+        // Precondition: the query COLLIDES — three ways, not two — so everything
+        // below is a statement about a tie-break rather than about a query that
+        // happens to be rare.
         let unfiltered = rank_palette(&[], &[], &[], SMOKE_QUERY, usize::MAX);
-        assert!(
-            unfiltered.len() > 1,
-            "`rank_palette` matches only {} candidate(s) for {SMOKE_QUERY:?} before the \
-             classification filter runs, so the ranking assertions below would be about a query \
-             that selects one title and would stop being statements about ranking at all. Titles \
-             matching {SMOKE_QUERY:?} were: {:?}",
-            unfiltered.len(),
-            unfiltered
-                .iter()
-                .map(|row| &row.display)
-                .collect::<Vec<_>>()
+        let candidates: Vec<&str> = unfiltered.iter().map(|row| row.display.as_str()).collect();
+        assert_eq!(
+            candidates.as_slice(),
+            SMOKE_QUERY_TITLES.as_slice(),
+            "`rank_palette`'s candidates for {SMOKE_QUERY:?}, BEFORE this crate's classification \
+             filter runs, are not the three titles the query is known to collide with. FEWER means \
+             the ranking assertions below would be about a query that selects one or two titles \
+             and would stop being statements about the `len` tie-break they name. MORE means a \
+             registry title has started matching {SMOKE_QUERY:?} and is now competing for row 0 — \
+             a title SHORTER than \"New\" would take the row the smoke presses Enter on, so \
+             re-derive the tie-break before trusting that smoke. A different ORDER, with the same \
+             three titles, means `rank_matches`' key order itself moved."
         );
 
         let mrus: [Vec<String>; 2] = [Vec::new(), vec![Command::ClosePane.spec().id.to_string()]];
         for recent in &mrus {
             let rows = palette_rows(&[], &[], recent, SMOKE_QUERY, PALETTE_MAX_ROWS);
-            assert!(
-                rows.len() > 1,
-                "`palette_rows` returned {} actionable row(s) for {SMOKE_QUERY:?} with command \
-                 MRU {recent:?}. The collision survives the classification filter — `New Window` \
-                 is dispatched — so one row here means it was demoted back to Deferred, and the \
-                 top-row assertion below would be about uniqueness again rather than about the \
-                 `len` tie-break it names. Rows were: {:?}",
-                rows.len(),
-                rows.iter().map(|row| &row.display).collect::<Vec<_>>()
+            let actionable: Vec<&str> = rows.iter().map(|row| row.display.as_str()).collect();
+            assert_eq!(
+                actionable.as_slice(),
+                SMOKE_QUERY_TITLES.as_slice(),
+                "`palette_rows`' ACTIONABLE rows for {SMOKE_QUERY:?} with command MRU {recent:?} \
+                 are not the three titles above, which the candidate assertion has just shown \
+                 `rank_palette` still produces — so what differs is this crate's classification \
+                 filter, not the ranking. TWO rows with \"New Tab\" missing means \
+                 `Command::NewTab` was classified back to `Deferred`: the palette then offers no \
+                 way to open a tab at all, and `command_action::tests::ui_action_table`'s case 17 \
+                 and `dispatched_commands_are_the_expected_set` are red beside this. TWO rows with \
+                 \"New Window\" missing means New Window was demoted instead. ONE row means both \
+                 were, and the top-row assertion below would be about uniqueness rather than about \
+                 the `len` tie-break it names."
             );
 
             let row = rows.first().unwrap_or_else(|| {
@@ -1854,8 +1892,11 @@ mod tests {
                  Command::NewBuffer. The smoke presses Enter on the preselected first row and \
                  asserts the base file's heading is GONE from the capture — which a second \
                  WINDOW satisfies just as well as a new buffer, since `cage` keeps the newest \
-                 toplevel on top, so this is the guard and the capture is not. The two rows tie \
-                 down to `len`, so a title rename is all it takes to invert them. Rows were: {:?}",
+                 toplevel on top, and which a new TAB satisfies too, since the freshly selected \
+                 adw::TabPage draws an empty pane exactly where that heading was. Neither wrong \
+                 command is distinguishable from the right one at a pixel, so this assertion is \
+                 the guard and the capture is not. THREE titles now tie down to `len` (3, 7 and 10 \
+                 characters), so a title rename is all it takes to invert them. Rows were: {:?}",
                 row.command,
                 rows.iter().map(|r| &r.display).collect::<Vec<_>>()
             );
@@ -1911,11 +1952,11 @@ mod tests {
     /// [`palette_rows_query_new_ranks_the_new_buffer_row_first`] and the measurement
     /// [`NEW_WINDOW_PALETTE_QUERY`] comes from, so the two are read together. They
     /// look like they disagree and do not: `new` ranks New (`new_buffer`) first
-    /// because `New` is the SHORTER of two titles that tie down to `len`, while
-    /// `new window` drops that row entirely, because `rank_matches` requires EVERY
-    /// whitespace-separated term to be a subsequence of the label and `window` is not
-    /// a subsequence of `New`. One query cannot serve both smokes, and the second
-    /// term is exactly what makes this one unambiguous.
+    /// because `New` is the SHORTEST of three titles that tie down to `len`, while
+    /// `new window` drops the other two entirely, because `rank_matches` requires
+    /// EVERY whitespace-separated term to be a subsequence of the label and `window`
+    /// is a subsequence of neither `New` nor `New Tab`. One query cannot serve both
+    /// smokes, and the second term is exactly what makes this one unambiguous.
     ///
     /// Uniqueness here is a property of the QUERY, not of the classification filter,
     /// which is why the count is asserted on `rank_palette`'s output as well: no
@@ -1941,8 +1982,9 @@ mod tests {
     ///
     /// FALSIFYING EDIT: set [`NEW_WINDOW_PALETTE_QUERY`] to `"new"`. PREDICTED: the
     /// UNFILTERED count reddens first, reporting 3 candidates and printing `New`,
-    /// `New Window` and `New Tab`; relaxing it, the actionable count reports 2; and
-    /// relaxing that, the command assertion names `New` / `Command::NewBuffer` as
+    /// `New Tab` and `New Window`; relaxing it, the actionable count reports 3 too,
+    /// since all three are dispatched; and relaxing that, the command assertion names
+    /// `New` / `Command::NewBuffer` as
     /// the row that would run instead — the smoke would replace the buffer in the
     /// window it already had and never open a second one, so its `nvim`-child count
     /// would stay at 1. PREDICTED ISOLATED: yes — no other test reads this constant.

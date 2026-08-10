@@ -15,9 +15,11 @@
 //!   [`window_subtree`] writes `x`/`y` as `0.0` unconditionally and
 //!   [`restored_window_size`] returns SIZE only.
 //! - **Tabs.** Windows are the tree: [`restore_plans`] walks every saved window
-//!   and [`snapshot_state`] assembles every live one. TABS are still exactly one
-//!   per window, written by [`window_subtree`], and that shape lives in ONE place
-//!   so a later unit has to change it deliberately.
+//!   and [`snapshot_state`] assembles every live one. A window carries N LIVE tabs
+//!   and persists its SELECTED tab's subtree alone: [`window_subtree`] writes
+//!   exactly one [`TabState`] and [`restore_plans`] reads the first saved tab and
+//!   drops the rest. That freeze lives in ONE place so a later unit has to lift it
+//!   deliberately.
 
 use std::path::{Path, PathBuf};
 
@@ -260,13 +262,20 @@ pub fn snapshot_cwd(empty: bool, launch_cwd: &Path, live_cwd: Option<&Path>) -> 
 /// DESTROY the user's saved layout. Gated, a crash instead preserves the last
 /// good save.
 ///
-/// **The gate is read ONCE PER WINDOW, against that window's own core**, and a
+/// **The gate is read ONCE PER GATHER, against that window's own core**, and a
 /// refusal means "contribute the cached subtree", not "vanish from the tree" — a
-/// window whose panes have not bound yet keeps whatever it last persisted. The
-/// prediction that this gate would refuse a BACKGROUND view describes a different
-/// shape, and a tabs problem: a tabpage that is not current reports no
-/// `win_buffers` at all. Every window here owns one core and is always that core's
-/// current tabpage, so the gate is only ever asked about the view it can see.
+/// window whose panes have not bound yet keeps whatever it last persisted.
+///
+/// **This gate cannot protect a BACKGROUND tab, and must not be asked to.** A
+/// window owns one core and N tabs, and it persists its SELECTED tab's subtree
+/// alone ([`crate::tab_view::TabsHandle::selected`]), so the gate is only ever
+/// asked about the tab whose pixels the user is looking at. Widening the gather
+/// would not be caught here: `reported_windows` is `Snapshot::win_buffers.len()`,
+/// which `runtime/nvim/init.lua` fills from `nvim_list_wins()` — GLOBAL across
+/// tabpages — so it never drops for a background tab and this gate never shuts.
+/// The empty leaf paths a background gather would write come from
+/// `WolfCore::pane_status`, one layer down, and no liveness/readiness triple can
+/// see them.
 ///
 /// The match over [`Liveness`] is TOTAL with no `_` arm, so a new variant is an
 /// `E0004` here rather than a silent "not alive" — matching
@@ -289,8 +298,11 @@ pub fn may_snapshot(liveness: Liveness, bound_panes: usize, reported_windows: us
 /// later reader might trust.
 ///
 /// The single TAB is equally deliberate and equally located here: a `wolf-gnome`
-/// window carries one tab, so the vec carries one entry, and a later tabs unit has
-/// to change that here rather than discover it spread across the crate.
+/// window carries N tabs but persists its SELECTED tab's subtree alone, so the vec
+/// carries one entry, and the unit that lifts that freeze has to change it here
+/// rather than discover it spread across the crate. See
+/// [`crate::tab_view::TabsHandle::selected`] for what a background tab would write
+/// instead.
 #[must_use]
 pub fn window_subtree(
     width: i32,

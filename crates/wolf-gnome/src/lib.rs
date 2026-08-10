@@ -236,6 +236,20 @@
 //!   ([`preview_ui::browser_url`], whose `None` means launch NOTHING); and a preview
 //!   pane's two statusbar lines, which come from its own source path rather than
 //!   from `WolfCore::pane_status` ([`preview_ui::preview_status`]).
+//! - [`mod@tabs_ui`]: the NATIVE TABS rulebook, for the N tabs one window's single
+//!   captive Neovim serves — which tab a render wake may touch
+//!   ([`tabs_ui::tab_wake`]), which is the whole selection gate: a tab whose handle
+//!   is not the one Neovim reports as current is never refreshed, so it is never
+//!   asked for a `pane_status` that would answer `[No Name]` over an EMPTY path,
+//!   which is what `Snapshot::windows` gives for a background tabpage. Plus the
+//!   handle a switch may be aimed at, which refuses `0` because Neovim reads it as
+//!   "the current tabpage" ([`tabs_ui::switch_target`]); what closing one page does,
+//!   whose last-page arm is the WINDOW closing because `close_tabpage` on the final
+//!   tabpage is a measured no-op ([`tabs_ui::close_outcome`]); the TOTAL
+//!   `Option<`[`wolf_core::Liveness`]`>` guard over `create_tabpage`'s blocking RPC
+//!   ([`tabs_ui::new_tab_press`]); the directory a new tab inherits, which is the
+//!   window's and is `None` in the empty state ([`tabs_ui::new_tab_cwd`]); and the
+//!   file NAME a tab draws in the bar ([`tabs_ui::tab_title`]).
 //! - [`actions`]: the action namespace as data — [`actions::ACTION_TABLE`],
 //!   [`actions::MENU_SECTIONS`], and the [`actions::parse_accel`] /
 //!   [`actions::forbidden_reason`] checker that mechanically enforces "no Neovim
@@ -319,6 +333,8 @@ pub mod search_overlay;
 pub mod shell;
 pub mod state_seam;
 pub mod statusbar_layout;
+pub mod tab_view;
+pub mod tabs_ui;
 pub mod title;
 pub mod tree;
 pub mod tree_gate;

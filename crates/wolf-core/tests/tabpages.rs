@@ -10,9 +10,15 @@
 //!
 //!   * `WolfCore::create_tabpage(cwd: Option<&Path>) -> i64` — blocking; `tabnew`
 //!     (+ `:tcd cwd` when `Some`); returns the new tabpage HANDLE (0 on error).
-//!   * `WolfCore::cwd_for_tabpage(handle: i64) -> Option<PathBuf>` — blocking;
-//!     CANONICALIZED per-tabpage cwd (`getcwd(-1, <number>)`); `None` on error / a
-//!     closed handle. Authoritative for a NON-current view's cwd.
+//!   * `WolfCore::cwd_for_tabpage(handle: i64) -> Option<PathBuf>` — a cheap
+//!     SNAPSHOT read of `Snapshot.tab_cwds`, NOT a blocking RPC: the map is fed out
+//!     of band by the `wolf_tab_cwds` notification and wholesale-replaced on every
+//!     `DirChanged` / `TabNewEntered` / `TabClosed`. CANONICALIZED per-tabpage cwd;
+//!     `None` for a closed handle or one no notification has covered yet.
+//!     Authoritative for a NON-current view's cwd. `tabpage_cwd.rs` is the test
+//!     that pins the no-RPC half, by resolving both a current and a non-current
+//!     tabpage while nvim is wedged. Because the map arrives asynchronously, a
+//!     test here POLLS for a value rather than reading once.
 //!   * `WolfCore::current_tabpage() -> i64` — blocking; the current tabpage handle.
 //!   * `WolfCore::set_current_tabpage(handle: i64)` — fire-and-forget (ordered).
 //!   * `WolfCore::close_tabpage(handle: i64)` — fire-and-forget (ordered).
@@ -21,11 +27,16 @@
 //!
 //! ## Testing conventions (mirroring `redraw_multigrid.rs`)
 //!
-//!   * A tabpage switch churns GRID ids (nvim destroys the old tabpage's grids and
-//!     creates fresh ones) but nvim WINDOW handles are STABLE — the load-bearing
-//!     assumption OD2 rests on (see `window_handles_survive_a_tabpage_switch`). We
-//!     assert on window-HANDLE membership + `grid_for_win` round-trips, never on
-//!     literal grid-id values or HashMap order.
+//!   * A tabpage switch does NOT churn GRID ids. nvim emits `win_hide` for the
+//!     LEAVING tabpage's windows rather than `win_close`/`grid_destroy`, and reuses
+//!     the same grid id AND the same window handle on the way back —
+//!     `win_hide_removes_window_but_keeps_grid_on_tabpage_switch` pins exactly that,
+//!     and a round trip was measured to return `grid_for_win(w1)` unchanged. Window
+//!     HANDLES being stable is the load-bearing assumption OD2 rests on (see
+//!     `window_handles_survive_a_tabpage_switch`). We nevertheless assert on
+//!     window-HANDLE membership + `grid_for_win` round-trips and never on literal
+//!     grid-id values or HashMap order, because id REUSE is an observation about
+//!     nvim rather than a contract this crate is entitled to lean on.
 //!   * `Snapshot.current_tabpage` and the window/grid churn arrive across several
 //!     flushes (and out-of-band notifications), so we POLL with a generous timeout,
 //!     draining wakes, rather than waiting for a single flush.
@@ -52,6 +63,39 @@ const POLL_INTERVAL: Duration = Duration::from_millis(25);
 const ONE_WINDOW: usize = 1;
 /// Expected live window count after a `:vsplit` (the keystone test).
 const TWO_WINDOWS: usize = 2;
+
+/// Tabpage count on a freshly attached core, which is the whole subject of
+/// [`the_captive_config_turns_showtabline_off_at_one_tabpage`] and the baseline
+/// [`a_second_tabpage_draws_no_neovim_tabline`] compares against. Named separately
+/// from [`ONE_WINDOW`] because it counts a different thing: the two happen to be
+/// equal on a freshly attached core and would stop being so the moment a case split
+/// a window.
+const ONE_TABPAGE: usize = 1;
+/// Tabpage count after one `create_tabpage` — the only count at which Neovim's
+/// default `showtabline` draws anything at all.
+const TWO_TABPAGES: usize = 2;
+
+/// The value `&showtabline` must hold, as a LITERAL rather than as a reference to
+/// anything in `runtime/nvim/init.lua`.
+///
+/// Re-typed on purpose, the `markdown_render.rs` convention: an assertion must state
+/// its expectation independently, so changing the captive config's value fails this
+/// test rather than moving with it.
+const SHOWTABLINE_OFF: i64 = 0;
+
+/// Marker word the ONE-tabpage `showtabline` probe echoes — the whole reading of
+/// [`the_captive_config_turns_showtabline_off_at_one_tabpage`], and the baseline
+/// round trip of [`a_second_tabpage_draws_no_neovim_tabline`].
+///
+/// Unique per probe so each poll waits for ITS OWN message rather than for a value.
+/// That is what keeps every red below an assertion failure carrying the text Neovim
+/// actually produced, instead of a bare `poll_until` timeout that says only that
+/// something never arrived.
+const TABLINE_PROBE_ONE: &str = "WOLFTABPROBEONE";
+
+/// Marker word the SECOND probe echoes, once the second tabpage is current. See
+/// [`TABLINE_PROBE_ONE`].
+const TABLINE_PROBE_TWO: &str = "WOLFTABPROBETWO";
 
 /// Polls `pred` until it returns `true`, draining wakes each iteration, or panics
 /// after [`FLUSH_TIMEOUT`]. `desc` describes the awaited condition for the panic
@@ -118,6 +162,77 @@ fn attach_and_first_tabpage(core: &WolfCore, waiter: &FlushWaiter) -> i64 {
         "current_tabpage() should be a nonzero handle after attach"
     );
     t1
+}
+
+/// Flattens the current toast into one string: each line's chunk texts concatenated,
+/// lines joined with `\n`. `messages.rs`'s helper, re-typed here because each
+/// `tests/*.rs` is its own crate.
+fn toast_text(core: &WolfCore) -> String {
+    let snap = core.read_snapshot();
+    snap.toast
+        .lines()
+        .iter()
+        .map(|line| line.iter().map(|c| c.text.as_str()).collect::<String>())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Asks the captive nvim, in ONE `:echo`, how many tabpages it has and what
+/// `&showtabline` is, and returns the toast text carrying the answer.
+///
+/// `ext_messages` is what makes this readable at all: an `:echo` lands in
+/// `Snapshot.toast` (see `messages.rs`), and core exposes no option-read API. It is
+/// deliberately ONE message rather than two, so both numbers describe one instant —
+/// a `showtabline` of `0` reported while only one tabpage exists proves nothing.
+///
+/// `len(gettabinfo())` rather than the idiomatic `tabpagenr('$')`: identical value,
+/// and it keeps the typed command free of a `$` for the twin of this probe in
+/// `crates/wolf-gnome/tests/smoke_headless.rs`, which types the same shape through a
+/// double-quoted shell word.
+fn tabline_probe(core: &WolfCore, waiter: &FlushWaiter, marker: &str) -> String {
+    ex_command(
+        core,
+        &format!("echo printf('{marker} tabs=%d showtabline=%d', len(gettabinfo()), &showtabline)"),
+    );
+    poll_until(
+        waiter,
+        &format!("the {marker} :echo to surface in Snapshot.toast"),
+        || toast_text(core).contains(marker),
+    );
+    toast_text(core)
+}
+
+/// Row counts of the GLOBAL grid and of `win`'s own window grid, read from ONE
+/// snapshot so the pair describes a single instant.
+fn grid_rows(core: &WolfCore, win: i64) -> (usize, usize) {
+    let snap = core.read_snapshot();
+    let global = snap
+        .grids
+        .get(&GLOBAL_GRID)
+        .unwrap_or_else(|| {
+            panic!(
+                "the global grid {GLOBAL_GRID} must always be present; live grids are {:?}",
+                snap.grids.keys().collect::<HashSet<_>>()
+            )
+        })
+        .rows;
+    let grid = snap.grid_for_win(win).unwrap_or_else(|| {
+        panic!(
+            "window {win} must resolve to a live grid to have a row count; window handles are {:?}",
+            window_handles(&snap)
+        )
+    });
+    let window = snap
+        .grids
+        .get(&grid)
+        .unwrap_or_else(|| {
+            panic!(
+                "grid_for_win({win}) = {grid} must name a live grid; live grids are {:?}",
+                snap.grids.keys().collect::<HashSet<_>>()
+            )
+        })
+        .rows;
+    (global, window)
 }
 
 /// 1. Creating a second tabpage adds a fresh window grid and moves
@@ -553,6 +668,236 @@ fn win_hide_removes_window_but_keeps_grid_on_tabpage_switch() {
         "win_hide must KEEP T1's grid {g1} in Snapshot.grids (nvim reuses it on the way \
          back); live grids are {:?}",
         snap.grids.keys().collect::<HashSet<_>>()
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// 8. **The captive config turns Neovim's own tabline off**, read at ONE tabpage —
+///    where the setting draws nothing, so the reading is about the config alone.
+///
+/// ## Why this is a test of its own rather than test 9's first assertion
+///
+/// It was exactly that, and the arrangement hid the thing worth seeing. The only
+/// falsifying edit that exists — deleting `opt.showtabline = 0` from
+/// `runtime/nvim/init.lua` — makes this reading panic, which stopped test 9 before
+/// it had created a second tabpage, so the ROW COST that same edit produces was
+/// observed by no test at all and had to be reproduced with a probe outside the
+/// tree. Split, one revert yields two independent reds: this test names the OPTION,
+/// test 9 names what it COSTS.
+///
+/// ## Why this lives in `wolf-core` rather than in a front-end smoke
+///
+/// `showtabline` is a property of the SHARED captive config both front-ends
+/// inherit — `runtime/nvim/init.lua` ships inside the macOS `.app` as
+/// `Contents/Resources/init.lua` and is the same file this crate launches nvim
+/// with. A `wolf-gnome` cage smoke could only ever observe the Linux half, and it
+/// would spend compositor seconds to do it. This file is already enumerated as
+/// `rust_test(name = "tabpages")` in `crates/wolf-core/BUILD.bazel`, and Bazel
+/// enumerates FILES rather than test functions, so both cases cost no `BUILD.bazel`
+/// edit and no cage time.
+///
+/// ## The captured red
+///
+/// With `opt.showtabline = 0` deleted the probe reads `tabs=1 showtabline=1`; with
+/// the line present, `tabs=1 showtabline=0`.
+#[test]
+fn the_captive_config_turns_showtabline_off_at_one_tabpage() {
+    let (core, waiter) = common::start_core_sized(common::DEFAULT_COLS, common::DEFAULT_ROWS);
+    let _t1 = attach_and_first_tabpage(&core, &waiter);
+
+    let want = format!("{TABLINE_PROBE_ONE} tabs={ONE_TABPAGE} showtabline={SHOWTABLINE_OFF}");
+    let probe = tabline_probe(&core, &waiter, TABLINE_PROBE_ONE);
+    assert!(
+        probe.contains(&want),
+        "the captive nvim answered {probe:?}, which does not carry {want:?}. Two readings can be \
+         wrong here and they mean different things. A `showtabline=1` is Neovim's DEFAULT, i.e. \
+         `opt.showtabline = 0` is missing from `runtime/nvim/init.lua`: at ONE tabpage that draws \
+         nothing, so nothing is broken on screen yet — `a_second_tabpage_draws_no_neovim_tabline` \
+         is where the same edit costs the editor a real row. Both front-ends inherit that file, so \
+         the fix is to restore the line; never a relaxation here. A `tabs=` other than \
+         {ONE_TABPAGE} means this core did not start on a single tabpage, in which case the \
+         reading is not about a fresh session at all."
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// 9. **A second tabpage draws NO Neovim tabline**, and therefore costs the editor
+///    no row — M8's artifact, and the whole reason test 8's option is set.
+///
+/// ## The artifact, measured
+///
+/// Neovim's default `showtabline` is `1`: draw the tabline as soon as there is
+/// more than one tabpage. Neither front-end paints grid 1 — both drive
+/// `ext_messages` — so the line is INVISIBLE and still real: it costs the pane
+/// grid a whole row (measured 80x24 dropping to 80x23) and leaves every `WinInfo`
+/// `start_row` stale until the front-end's own resize wins the row back.
+///
+/// ## Assertion ORDER is load-bearing
+///
+/// The artifact is asserted BEFORE the option is read back, which is the reverse of
+/// the order the two are observed in. An option assertion placed first panics under
+/// the only revert that exists and takes the row assertion down with it — the exact
+/// defect test 8's split repairs, in miniature. Ordered this way, this test's red IS
+/// the row cost, and test 8's red beside it is the option.
+///
+/// ## Assertions, classified
+///
+/// | # | assertion | kind | falsifying edit |
+/// | --- | --- | --- | --- |
+/// | 1 | probe ONE reports ONE tabpage | PREMISE — the baseline row count must be a one-tabpage reading | none |
+/// | 2 | probe TWO reports TWO tabpages | PREMISE — the artifact exists only at two, so the comparison is vacuous without it | none |
+/// | 3 | grid 1's row count is unchanged | PREMISE, no revert | none — see below |
+/// | 4 | the WINDOW grid's row count is unchanged | **discriminator** (the artifact itself) | delete `opt.showtabline = 0` from `runtime/nvim/init.lua` |
+/// | 5 | probe TWO reads `showtabline=0` | premise-guard for assertion 4 | the same edit, but **no red of its own**: assertion 4 is ordered ahead of it and that edit reddens there first. What it catches ALONE is `showtabline` back on with the rows NOT moving — a future nvim paying for the tabline somewhere else, which would leave assertion 4 green while the line was drawn |
+///
+/// Assertion 3 is stated as a premise rather than sold as a discriminator, and the
+/// reason is worth writing down: grid 1 is sized by the UI attach and nvim does not
+/// resize it to make room for a tabline — the tabline is drawn INSIDE it and the
+/// row is taken from the window grids instead. So assertion 3 holds under BOTH
+/// settings. It is asserted because it is exactly the premise assertion 4 rests on:
+/// if a future nvim ever paid for the tabline out of the global grid, assertion 4
+/// would go green while the artifact was still there, and this row is what would
+/// name that.
+///
+/// ## The captured red
+///
+/// With `opt.showtabline = 0` deleted, the probes read `tabs=1 showtabline=1` and
+/// `tabs=2 showtabline=1`, the global grid holds 24 rows on both sides, and the
+/// WINDOW grid goes 24 -> 23: this test fails at assertion 4 naming that row, and
+/// test 8 fails beside it naming the option. With the line present, `showtabline=0`
+/// at both probes and the window grid flat at 24.
+///
+/// ## What depends on this elsewhere
+///
+/// `crates/wolf-gnome/tests/smoke_headless.rs`'s
+/// `native_tabs_open_switch_and_close_under_cage` asserts `H2 < H1` — that opening
+/// a second GTK tab costs the editor a row — and attributes that row to the
+/// `adw::TabBar`. That attribution is only sound while nvim draws no tabline of its
+/// own, or the row would be lost for the wrong reason and the smoke would stay
+/// green with the bar never appended. That smoke reads `&showtabline` back for
+/// itself as a precondition; this test and test 8 are what make the value it reads
+/// correct.
+#[test]
+fn a_second_tabpage_draws_no_neovim_tabline() {
+    let (core, waiter) = common::start_core_sized(common::DEFAULT_COLS, common::DEFAULT_ROWS);
+    let _t1 = attach_and_first_tabpage(&core, &waiter);
+    let w1 = only_window_handle(&core);
+
+    // Probe ONE is an ORDERING DEVICE first and a premise second. Its `showtabline`
+    // VALUE is deliberately not asserted here: that reading belongs to
+    // `the_captive_config_turns_showtabline_off_at_one_tabpage`, and asserting it
+    // here would put a panic back in front of assertion 4 — the masking this pair of
+    // tests exists to undo. The text is carried into every message below instead.
+    let probe_one = tabline_probe(&core, &waiter, TABLINE_PROBE_ONE);
+
+    // --- Assertion 1 (PREMISE): the baseline really is ONE tabpage --------
+    //
+    // The expectation stops at `showtabline=` on purpose: it pins the COUNT and
+    // leaves the option's value to assertion 5. The trailing text is what keeps
+    // `tabs=1` from also matching a `tabs=10`.
+    let want_one_tab = format!("{TABLINE_PROBE_ONE} tabs={ONE_TABPAGE} showtabline=");
+    assert!(
+        probe_one.contains(&want_one_tab),
+        "the captive nvim answered {probe_one:?}, which does not carry {want_one_tab:?}. This test \
+         compares a row count taken on ONE tabpage with one taken on two, so a core that started \
+         on more than one makes the comparison meaningless: the baseline would ALREADY be a \
+         tabline-reduced reading and assertion 4 would pass with the tabline on. Read this red as \
+         \"nothing below is about `showtabline`\", not as a `showtabline` failure."
+    );
+
+    // Read BOTH row counts after the probe's round trip, so this reading and the one
+    // after the second tabpage are taken at the same phase: a cmdline round trip has
+    // completed and nvim has flushed.
+    let (global_rows_before, window_rows_before) = grid_rows(&core, w1);
+
+    let t2 = core.create_tabpage(None);
+    assert_ne!(
+        t2, 0,
+        "create_tabpage should return a nonzero new tabpage handle"
+    );
+    poll_until(
+        &waiter,
+        "current_tabpage to become T2 with its own (fresh) window present",
+        || {
+            let snap = core.read_snapshot();
+            snap.current_tabpage == t2
+                && !snap.windows.is_empty()
+                && !window_handles(&snap).contains(&w1)
+        },
+    );
+
+    // Probe TWO, the same ordering device on the far side: a full keystroke -> Ex
+    // execution -> `msg_show` -> flush round trip, so by the time it returns nvim has
+    // finished whatever redraw the new tabpage provoked. Reading the row counts before
+    // it would race the resize a tabline causes, and a race that usually loses would
+    // make assertion 4 pass most of the time.
+    let probe_two = tabline_probe(&core, &waiter, TABLINE_PROBE_TWO);
+
+    let w2 = only_window_handle(&core);
+    let (global_rows_after, window_rows_after) = grid_rows(&core, w2);
+
+    // --- Assertion 2 (PREMISE): a second tabpage really exists ------------
+    let want_two_tabs = format!("{TABLINE_PROBE_TWO} tabs={TWO_TABPAGES} showtabline=");
+    assert!(
+        probe_two.contains(&want_two_tabs),
+        "the captive nvim answered {probe_two:?}, which does not carry {want_two_tabs:?} (probe \
+         ONE answered {probe_one:?}). `create_tabpage` returned the nonzero handle {t2} and the \
+         poll above saw a fresh window, so a count other than {TWO_TABPAGES} says the tabpage went \
+         away again. The artifact below appears only AT two tabpages, so assertion 4 would be \
+         comparing two one-tabpage readings and could not go red at all — read this as \"assertion \
+         4 cannot be trusted this run\"."
+    );
+
+    // --- Assertion 3 (PREMISE, no revert) ---------------------------------
+    assert_eq!(
+        global_rows_after, global_rows_before,
+        "the global grid {GLOBAL_GRID} went from {global_rows_before} rows to {global_rows_after} \
+         across the creation of a second tabpage. This is a PREMISE and not a feature claim: nvim \
+         sizes grid 1 from the UI attach and draws a tabline INSIDE it, taking the row from the \
+         WINDOW grids instead — which is why assertion 4 below looks at those. A change here means \
+         that model no longer holds, so read this red as `assertion 4 cannot be trusted this run` \
+         rather than as a `showtabline` failure."
+    );
+
+    // --- Assertion 4 (THE DISCRIMINATOR): the artifact itself -------------
+    //
+    // Ordered ahead of the option read below, and that is the point of the ordering:
+    // this is the row the front-end pays for, so this is the red a future revert must
+    // show.
+    assert_eq!(
+        window_rows_after, window_rows_before,
+        "the editor's window grid went from {window_rows_before} rows on the first tabpage to \
+         {window_rows_after} on the second. The probes answered {probe_one:?} and {probe_two:?}, \
+         which is where the cause is legible. A DROP of exactly one row is M8's measured artifact: \
+         Neovim's default `showtabline = 1` turned its own tabline on the moment a second tabpage \
+         existed, and since neither front-end paints grid 1 that line is invisible while still \
+         costing the editor a real row and leaving every `WinInfo` `start_row` stale until the \
+         front-end's next resize — a `showtabline=1` in either probe confirms it. The fix is \
+         `opt.showtabline = 0` in `runtime/nvim/init.lua`; never a wider comparison here, and \
+         never a front-end resize that papers over the row. A row count that GREW is a different \
+         finding: nothing in this test asks nvim for a resize, so read that as the attach geometry \
+         having moved under the second tabpage rather than as a tabline."
+    );
+
+    // --- Assertion 5 (premise-guard, deliberately LAST) -------------------
+    //
+    // Under the one revert that exists this is never reached, because assertion 4
+    // reddens first — recorded in the doc table rather than papered over. What it
+    // catches on its own is the option back on with the rows NOT moving, which would
+    // mean assertion 4 had stopped being the artifact's detector.
+    let want_off = format!("{TABLINE_PROBE_TWO} tabs={TWO_TABPAGES} showtabline={SHOWTABLINE_OFF}");
+    assert!(
+        probe_two.contains(&want_off),
+        "with a SECOND tabpage live the captive nvim answered {probe_two:?}, which does not carry \
+         {want_off:?}. Assertion 4 is GREEN, so the editor's window grid did NOT lose a row — and \
+         that pairing is the surprising part, because M8 measured Neovim's default \
+         `showtabline = 1` costing the window grid exactly one row the instant a second tabpage \
+         exists. Together the two readings say the tabline is drawn AND is being paid for \
+         somewhere this test does not look, so assertion 4 can no longer be trusted as its \
+         detector. Restore `opt.showtabline = 0` in `runtime/nvim/init.lua` and re-measure where \
+         the row now comes from; do NOT relax assertion 4 to match."
     );
 
     core.shutdown().expect("shutdown should be Ok");

@@ -91,7 +91,7 @@ use wolf_core::{
     context_window, project, Liveness, SearchMatch, SearchOptions, SearchSession, WakeFn, WolfCore,
 };
 
-use crate::picker::{activation_index, next_selection, restored_index};
+use crate::picker::{activation_index, next_selection, restored_index, FocusTarget};
 
 /// The maximum number of result rows materialized into the `ListBox` on each
 /// refresh ([`crate::picker`]'s `PICKER_MAX_ROWS` precedent).
@@ -463,8 +463,9 @@ struct SearchInner {
     status: gtk::Label,
     /// The results list, rebuilt on each refresh.
     list: gtk::ListBox,
-    /// The editor drawing area (the persistent cmdline strip), re-focused on close.
-    area: gtk::DrawingArea,
+    /// Where focus returns when the overlay closes: the SELECTED tab's cmdline
+    /// strip, resolved at close time. See [`crate::picker::FocusTarget`].
+    area: FocusTarget,
     /// The live core, shared with the rest of the app.
     core: Rc<RefCell<Option<WolfCore>>>,
     /// The wake closure handed to `start_search`; firing it queues a refresh.
@@ -528,7 +529,9 @@ impl SearchInner {
         // Take + drop the session to cancel the search and kill the rg subprocess.
         let _ = self.search.borrow_mut().take();
         self.search_box.set_visible(false);
-        self.area.grab_focus();
+        if let Some(area) = (self.area)() {
+            area.grab_focus();
+        }
     }
 
     /// Removes every row widget currently in the list.
@@ -717,17 +720,18 @@ impl SearchHandle {
     }
 }
 
-/// Builds the project-search widgets as an overlay child over `area` (the overlay's
-/// main child), wires all signals, and returns a [`SearchHandle`]. The overlay
-/// starts hidden; call [`SearchHandle::open`] (which the `win.search-in-project`
-/// action does) to show it.
+/// Builds the project-search widgets as an overlay child of `overlay`, wires all
+/// signals, and returns a [`SearchHandle`]. The overlay starts hidden; call
+/// [`SearchHandle::open`] (which the `win.search-in-project` action does) to show
+/// it.
 ///
-/// `area` is the focus-return widget — the persistent cmdline strip, never a pane
-/// drawing area (`DECISIONS.md`, "Window structure").
+/// `area` resolves the focus-return widget at CLOSE time — the SELECTED tab's
+/// cmdline strip, never a pane drawing area (`DECISIONS.md`, "Window structure").
+/// See [`crate::picker::FocusTarget`] for why it is a closure.
 #[must_use]
 pub fn build(
     overlay: &gtk::Overlay,
-    area: &gtk::DrawingArea,
+    area: FocusTarget,
     core: &Rc<RefCell<Option<WolfCore>>>,
 ) -> SearchHandle {
     let entry = gtk::SearchEntry::new();
@@ -785,7 +789,7 @@ pub fn build(
         entry: entry.clone(),
         status,
         list: list.clone(),
-        area: area.clone(),
+        area,
         core: core.clone(),
         wake,
     });

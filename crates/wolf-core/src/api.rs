@@ -1367,8 +1367,14 @@ impl WolfCore {
         liveness::get(&self.liveness)
     }
 
-    /// The Tier-1 open-file mirror for tabpage `handle` (its file-backed open
-    /// buffers + active buffer), or `None` for an unknown/closed tabpage.
+    /// The Tier-1 open-file mirror entry KEYED BY tabpage `handle`, or `None` for
+    /// an unknown/closed tabpage.
+    ///
+    /// **Only [`TabFiles::active`] is per-tabpage.** [`TabFiles::files`] is the
+    /// whole instance's `buflisted` file-backed buffer set — buffers are global in
+    /// nvim and `wolf_setup_open_files` sweeps `getbufinfo({ buflisted = 1 })`
+    /// (`runtime/nvim/init.lua`) — so every tabpage's entry carries the SAME list.
+    /// A project with several views therefore over-reopens after a restart.
     ///
     /// A cheap, lock-free SNAPSHOT READ with NO nvim RPC. [`Snapshot::open_files`]
     /// is maintained out-of-band by the `wolf_open_files` notification. The

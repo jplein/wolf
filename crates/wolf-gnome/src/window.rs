@@ -17,8 +17,10 @@
 //!   bounded `async-channel` (capacity 1, coalescing a burst of flushes), and a
 //!   [`glib::spawn_future_local`] task on the GTK main thread drains it and calls
 //!   `shell::AppShell::on_liveness_wake` (the LIVENESS read, FIRST),
-//!   `pane_view::PaneHandle::on_render_wake` (per-pane redraw + split/close/focus
-//!   intent consumption), `tree_view::TreeHandle::on_render_wake`, and finally
+//!   `tab_view::TabsHandle::on_render_wake` (every tab through
+//!   [`crate::tabs_ui::tab_wake`], which decides per tab whether its pane view
+//!   redraws and consumes split/close/focus intent),
+//!   `tree_view::TreeHandle::on_render_wake`, and finally
 //!   `shell::AppShell::on_render_wake` (the window title, the application-state
 //!   contribution, then the command drain). The shell runs LAST: a drained
 //!   `close_window` tears the core down. One core per window means one wake
@@ -29,7 +31,7 @@
 //!   made once, above. The layout is queued on the pane view
 //!   ([`crate::pane_view::PaneHandle::request_layout_rebuild`]) and realized on
 //!   the first wake with a window grid, through `WolfCore::rebuild_layout`. That
-//!   is ONE of the NINE blocking RPCs this front-end issues — at most once per
+//!   is ONE of the TEN blocking RPCs this front-end issues — at most once per
 //!   window, before that window is interactive, never on the crash path.
 //!
 //!   The second is the buffer picker's candidate snapshot
@@ -37,27 +39,30 @@
 //!   behind [`crate::buffer_picker::open_decision`]'s guard that it be issued only
 //!   while the core reads `Alive`. The third is a per-pane navigation move
 //!   (`WolfCore::history_back` / `history_forward`, one call per direction and
-//!   counted once) on Alt+Left / Alt+Right and the
-//!   fourth the Copy yank (`WolfCore::copy_visual_selection`) on Ctrl+Shift+C, each
+//!   counted once) on Alt+Left / Alt+Right, the
+//!   fourth the Copy yank (`WolfCore::copy_visual_selection`) on Ctrl+Shift+C, and
+//!   the fifth New Tab's `WolfCore::create_tabpage` on Ctrl+Shift+T, each
 //!   behind a guard of exactly that shape ([`crate::nav_ui::nav_press`],
-//!   [`crate::clipboard_ui::copy_decision`]).
+//!   [`crate::clipboard_ui::copy_decision`], [`crate::tabs_ui::new_tab_press`]).
+//!   `set_current_tabpage` and `close_tabpage` add none: both are fire-and-forget
+//!   on the ordered input channel.
 //!
 //!   The last five are the MARKDOWN PREVIEW's: `WolfCore::open_preview`,
 //!   `WolfCore::edit_source`, and the `WolfCore::render_preview` that
 //!   `pane_view::refresh_previews` issues once per changed source per wake — the
-//!   only one of the nine that can repeat while the user simply types — plus two
+//!   only one of the ten that can repeat while the user simply types — plus two
 //!   that need a preview already on screen: `WolfCore::preview_file`, which
 //!   repoints a bound preview at a file linked from the rendered document, and
 //!   `WolfCore::open_in_browser`, which renders that document for the loopback
 //!   server behind Preview in Browser. All five
 //!   are gated through [`mod@crate::preview_ui`] with the buffer picker's argument
-//!   and its limits. Any of the nine can mark the core `Liveness::NotResponding`
+//!   and its limits. Any of the ten can mark the core `Liveness::NotResponding`
 //!   and raise the stall overlay.
 //!
 //!   PASTE adds none: `gdk::Clipboard::read_text_async` resolves on a later
 //!   main-loop turn and `WolfCore::paste` is fire-and-forget on the ordered input
 //!   channel, so nothing on that path can time out. The project-search overlay adds
-//!   NEITHER a tenth blocking call nor a further stall path: `start_search`
+//!   NEITHER a blocking call nor a further stall path: `start_search`
 //!   `spawn_blocking`s onto the tokio runtime, `open_at` is fire-and-forget, and the
 //!   one blocking call it could have made — `WolfCore::ignorecase()` — is
 //!   deliberately not made.
@@ -67,6 +72,15 @@
 //!   [`crate::coordinator::Coordinator`] assembles the tree and commits it. The
 //!   tab's `sidebar_visible` is written from the user's PREFERENCE and read back
 //!   at launch through [`crate::state_seam::RestorePlan::sidebar_visible`].
+//!
+//!   **A window carries N tabs and persists its SELECTED tab's subtree; every
+//!   other tab contributes nothing, and that freeze is deliberate.** Widening it
+//!   is not a matter of walking the registry: a background tab's
+//!   `WolfCore::pane_status` joins against `Snapshot::windows`, which is
+//!   current-tabpage-only, so a refresh there answers `[No Name]` with empty
+//!   paths and would write a well-formed `state.json` that has silently lost its
+//!   files. [`crate::tab_view::TabsHandle::selected`] owns the rule and
+//!   `DECISIONS.md` records what lifting it costs.
 //! - **Liveness / crash recovery:** the liveness read is UNCONDITIONAL and at the
 //!   TOP of the drain-loop body, and it GATES the two paint handlers (see
 //!   [`mod@crate::liveness_ui`] for the mapping and [`crate::crash_overlay`] for the
@@ -146,8 +160,6 @@ use crate::buffer_picker::{self, BufferPickerHandle};
 use crate::coordinator::{self, Coordinator, CoordinatorInner, WindowId};
 use crate::crash_overlay;
 use crate::palette::{self, PaletteHandle};
-use crate::pane_view;
-use crate::persistence::{self, StateHandle, StateParts};
 use crate::picker::{self, PickerHandle};
 use crate::search_overlay::{self, SearchHandle};
 use crate::shell::{
@@ -155,6 +167,7 @@ use crate::shell::{
     TOGGLE_SIDEBAR_ACTION,
 };
 use crate::state_seam::RestorePlan;
+use crate::tab_view::{self, TabParts, TabsHandle, TabsParts};
 use crate::title::WINDOW_TITLE_FALLBACK;
 use crate::tree_view::{self, TreeHandle};
 use crate::workspace;
@@ -230,8 +243,10 @@ struct WindowInner {
     id: WindowId,
     /// The toplevel.
     window: adw::ApplicationWindow,
-    /// The persistence glue, which owns this window's cached subtree.
-    state: StateHandle,
+    /// This window's tabs. The persistence glue is per TAB and lives inside them;
+    /// what this window contributes to `state.json` is the SELECTED tab's subtree
+    /// and nothing else — see [`crate::tab_view::TabsHandle::selected`].
+    tabs: TabsHandle,
 }
 
 /// A cloneable handle to one live window, held STRONGLY by the coordinator.
@@ -255,15 +270,25 @@ impl WindowHandle {
 
     /// Re-gathers this window's persisted subtree; see
     /// [`crate::persistence::StateHandle::refresh_subtree`].
+    ///
+    /// **The SELECTED tab's, and no other tab's.** Persistence is deliberately
+    /// frozen at one tab per window; [`crate::tab_view::TabsHandle::selected`] owns
+    /// that rule and says what walking every tab here would cost.
     pub fn refresh_subtree(&self) {
-        self.inner.state.refresh_subtree();
+        if let Some(tab) = self.inner.tabs.selected() {
+            tab.refresh_subtree();
+        }
     }
 
     /// This window's last successfully gathered subtree, or `None` when it has
-    /// never had one.
+    /// never had one — the SELECTED tab's, per
+    /// [`WindowHandle::refresh_subtree`].
     #[must_use]
     pub fn cached_subtree(&self) -> Option<WindowState> {
-        self.inner.state.cached_subtree()
+        self.inner
+            .tabs
+            .selected()
+            .and_then(|tab| tab.cached_subtree())
     }
 
     /// Where this window IS, for another window's palette: the very string this one
@@ -337,29 +362,33 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
     // is realized under the resolved scheme with no visible flash.
     appearance::apply_at_launch(config, &core);
 
-    // The native pane tree (one DrawingArea per pane + a cmdline strip), replacing
-    // the former single editor DrawingArea. Its container is the overlay's main
-    // child; the picker floats over it.
-    let panes = pane_view::build(&core, metrics);
-    // Queue the saved pane tree, if any. It is realized on the first wake at
-    // which a window grid exists — see `pane_view::consume_pending_layout`. NOTE
-    // there is deliberately NO arity guard here: a single-leaf layout is rebuilt
-    // exactly like a multi-leaf one, which is half of the single-pane fix (the
-    // other half is `state_seam::persistable_layout`'s content predicate).
-    if let Some(layout) = plan.layout.clone() {
-        panes.request_layout_rebuild(layout);
-    }
-    let editor = panes.widget();
-    // The cmdline strip is a focusable widget in the editor region used as the
-    // focus-return target for the picker/tree (so keys keep bubbling to the
-    // window-level controller after they close).
-    let focus_area = panes.cmdline_widget();
+    // The TAB LAYER. Every tab carries its own pane view (one DrawingArea per pane
+    // plus a cmdline strip, a message toast and a completion popup) and its own
+    // empty state and persistence glue, over this window's ONE core. No page exists
+    // yet: the persistence glue reads the window's size, so `open_tab` waits until
+    // the window is built.
+    let tabs = tab_view::build(TabsParts {
+        core: &core,
+        metrics,
+    });
 
-    // The editor area is the overlay's main child. Overlay children stack in the
-    // order they are added, and this order is a decision:
+    // The tab VIEW is the window overlay's main child, so that overlay keeps its
+    // identity and its allocation — the pane area, not the whole window. That is
+    // load-bearing rather than incidental: `OVERLAY_ORIGIN_X_EXPECTED` /
+    // `OVERLAY_ORIGIN_Y_EXPECTED` in the cage smokes are this overlay's own measured
+    // origin, and the crash overlay's button click and the picker/preview overlap
+    // band are both derived from it. Putting the tab view ABOVE the `gtk::Paned`
+    // would widen this overlay to the full window and move all three.
     //
-    //   empty_state -> message toast -> completion popup -> picker -> command palette
-    //   -> buffer picker -> project search -> crash overlay -> restart banner
+    // Overlay children stack in the order they are added, and this order is a
+    // decision. Per PAGE, in `tab_view::open_tab`:
+    //
+    //   empty_state -> message toast -> completion popup
+    //
+    // then per WINDOW, here, above every page:
+    //
+    //   picker -> command palette -> buffer picker -> project search
+    //   -> crash overlay -> restart banner
     //
     // The toast and the popup sit just above the empty state and below all four
     // transient overlays. Above the empty state because the captive nvim runs in a
@@ -367,29 +396,39 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
     // overlays because a picker the user just opened must not have a message drawn
     // over its rows. They are sized to their own content and hidden when there is
     // nothing to show, so neither takes layout space or a pointer event at rest.
+    // Those three are per PAGE because the toast belongs to a pane view, so the
+    // empty state has to move with it — otherwise a message in a project-less
+    // window would draw underneath the status page.
     //
     // All four transient overlays sit ABOVE the empty state, which is opaque and
     // full-bleed: below it, opening any one of them in a project-less window would
-    // draw it behind the status page with no visible effect. Their order RELATIVE
+    // draw it behind the status page with no visible effect. Being overlay children
+    // of an ANCESTOR overlay is what keeps that true across the tab boundary — the
+    // same GTK stacking rule the preview relies on. Their order RELATIVE
     // TO EACH OTHER is not observable, because `shell::perform` keeps at most one
     // of the four open (it closes the other three when it opens one).
     //
     // The crash overlay covers all five (the picker's Open, a palette row, a
     // buffer-picker row and a search row would all send into a dead nvim; the empty
     // state's Open Folder would `Chdir` one — the captive nvim runs in the empty
-    // state too, so it can crash there). The banner is topmost and click-through, so
-    // it confirms a restart without ever swallowing a click meant for the editor.
+    // state too, so it can crash there). It stays per WINDOW because it is a
+    // property of the CORE, and one core serves every tab. The banner is topmost and
+    // click-through, so it confirms a restart without ever swallowing a click meant
+    // for the editor.
     let overlay = gtk::Overlay::new();
-    overlay.set_child(Some(&editor));
-
-    let empty_state = shell::build_empty_state();
-    overlay.add_overlay(&empty_state);
-    overlay.add_overlay(&panes.toast_widget());
-    overlay.add_overlay(&panes.pum_widget());
+    overlay.set_child(Some(&tabs.view_widget()));
 
     let crash = crash_overlay::build();
 
-    let picker = picker::build(&overlay, &focus_area, &core);
+    // Where the four transient overlays and the sidebar return focus when they
+    // close: the SELECTED tab's cmdline strip, resolved at close time. It cannot be
+    // a captured widget, because that strip is per TAB — an overlay holding tab 0's
+    // would, after a switch, grab focus into a widget GTK has unmapped, leaving the
+    // toplevel with no focus widget and killing window-level key dispatch outright.
+    // See `picker::FocusTarget`.
+    let focus_target = tabs.focus_target();
+
+    let picker = picker::build(&overlay, focus_target.clone(), &core);
     // The palette's Switch to Window rows come from the coordinator on each open,
     // minus this window. Weak, and upgraded per call: the coordinator owns this
     // window's handle, this window owns the palette, and a strong reference here
@@ -403,21 +442,28 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
                 .unwrap_or_default()
         })
     };
-    let palette = palette::build(&overlay, &focus_area, &core, palette_windows);
-    let buffers = buffer_picker::build(&overlay, &focus_area, &core);
-    let search = search_overlay::build(&overlay, &focus_area, &core);
+    let palette = palette::build(&overlay, focus_target.clone(), &core, palette_windows);
+    let buffers = buffer_picker::build(&overlay, focus_target.clone(), &core);
+    let search = search_overlay::build(&overlay, focus_target.clone(), &core);
 
     overlay.add_overlay(&crash.widget());
     overlay.add_overlay(&crash.banner_widget());
 
-    // The file-tree sidebar on the left; the editor (overlay) on the right. In the
-    // empty state there is no project to walk, so no FileSearch starts. The tree
-    // reads no cwd of its own: the synthetic root row's LABEL is passed in here and
-    // again on each `TreeHandle::reroot`, so the shell stays the one place that
-    // knows where the sidebar is rooted.
+    // The file-tree sidebar on the left; the tab view (inside the overlay) on the
+    // right. In the empty state there is no project to walk, so no FileSearch
+    // starts. The tree reads no cwd of its own: the synthetic root row's LABEL is
+    // passed in here and again on each `TreeHandle::reroot`, so the shell stays the
+    // one place that knows where the sidebar is rooted.
+    //
+    // The sidebar is per WINDOW, not per tab, and it stays outside the tab view for
+    // the measured reason the overlay comment above gives — plus two more: N tabs
+    // would run N `FileSearch` traversals of ONE project, because a new tab inherits
+    // the window's folder, and `shell::settle_reroot` would re-root N sidebars per
+    // settle. It moves into the page in the unit that gives tabs independent working
+    // directories; `DECISIONS.md` carries that follow-up.
     let tree = tree_view::build(
         &core,
-        &focus_area,
+        focus_target.clone(),
         !empty,
         &workspace::root_label(&plan.core_cwd),
     );
@@ -480,8 +526,13 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
         .build();
     header.pack_end(&menu_button);
 
+    // Header bar, then the TAB BAR, then the sidebar/editor split. The bar
+    // AUTOHIDES at one page, so a one-tab window's geometry is byte-identical to a
+    // window with no tab layer — which is what keeps `PANE_ORIGIN_Y_EXPECTED` and
+    // the eight pointer smokes' derived click targets where they were measured.
     let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
     content.append(&header);
+    content.append(&tabs.bar_widget());
     content.append(&paned);
 
     // The restored size, or the defaults. Window POSITION is never restored:
@@ -497,16 +548,24 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
         .content(&content)
         .build();
 
-    // The application-state persistence glue. Built after the window (it reads
-    // the window size) and before the shell (which drives it from the wake).
-    let state = persistence::build(StateParts {
-        core: &core,
-        window: &window,
-        panes: &panes,
-        launch_cwd: plan.core_cwd.clone(),
-        empty,
-        sidebar_shown: plan.sidebar_visible,
-    });
+    // TAB 0, built after the window because each tab's persistence glue reads the
+    // window's size. It carries the restored pane tree; every later tab carries
+    // none. Its tabpage handle is 0 — it ADOPTS the real one on the first wake
+    // through `tabs_ui::tab_wake`, which is a snapshot read rather than
+    // `WolfCore::current_tabpage()`'s blocking RPC.
+    if !tabs.open_tab(
+        &window,
+        TabParts {
+            tabpage: 0,
+            cwd: plan.core_cwd.clone(),
+            empty,
+            sidebar_shown: plan.sidebar_visible,
+            layout: plan.layout.clone(),
+        },
+    ) {
+        eprintln!("wolf-gnome: failed to open the window's first tab");
+        return None;
+    }
 
     // The `win.*` action namespace, the accelerators, and the command drain.
     // Actions must exist before `present()` so the menu and the header button
@@ -522,7 +581,6 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
         tree: &tree,
         sidebar: &sidebar,
         paned: &paned,
-        empty_state: &empty_state,
         open_button: &open_button,
         nav_back_button: &nav_back_button,
         nav_forward_button: &nav_forward_button,
@@ -530,8 +588,7 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
         sidebar_shown: plan.sidebar_visible,
         launch_cwd: plan.core_cwd.clone(),
         crash_overlay: &crash,
-        panes: &panes,
-        state: &state,
+        tabs: &tabs,
         coordinator: coordinator.weak(),
         window_id: id,
     });
@@ -597,21 +654,23 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
     // to read the captive nvim's LIVENESS (`on_liveness_wake`), which drives the
     // crash/stall overlay, schedules an automatic restart for a dead core, and
     // reports whether painting this wake is worth anything at all. Only then does
-    // the pane view react (create/split/close panes, consume layout intents,
-    // redraw) and the tree react to a current-file change carried by the same
+    // the TAB LAYER react — every tab is driven and `tabs_ui::tab_wake` decides
+    // which of them may create/split/close panes, consume layout intents and
+    // redraw, so a tab Neovim is not currently on is never touched at all — and the
+    // tree react to a current-file change carried by the same
     // wake. The shell's command drain runs LAST and UNGATED: a drained
     // `close_window` shuts the core down, the other two must have had their turn
     // first, and a `close_window` queued just before a crash must not be stranded
     // behind the overlay.
     {
-        let panes = panes.clone();
+        let tabs = tabs.clone();
         let tree = tree.clone();
         let shell = shell.clone();
         glib::spawn_future_local(async move {
             while wake_rx.recv().await.is_ok() {
                 let paint = shell.on_liveness_wake();
                 if paint {
-                    panes.on_render_wake();
+                    tabs.on_render_wake();
                     tree.on_render_wake();
                 }
                 shell.on_render_wake();
@@ -621,7 +680,7 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
     // React to whatever is already there (the initial attached frame), through the
     // same liveness gate as every later wake.
     if shell.on_liveness_wake() {
-        panes.on_render_wake();
+        tabs.on_render_wake();
     }
 
     wire_keys(&window, &core, &picker, &palette, &buffers, &search);
@@ -644,7 +703,7 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
         inner: Rc::new(WindowInner {
             id,
             window: window.clone(),
-            state,
+            tabs: tabs.clone(),
         }),
     };
     coordinator.register(&handle);
@@ -659,9 +718,11 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
     shell.on_render_wake();
 
     window.present();
-    // Focus the cmdline strip so key events have a focused target in the editor
-    // region to bubble from to the window-level key controller.
-    focus_area.grab_focus();
+    // Focus the SELECTED tab's cmdline strip so key events have a focused target in
+    // the editor region to bubble from to the window-level key controller.
+    if let Some(area) = (focus_target)() {
+        area.grab_focus();
+    }
 
     Some(handle)
 }

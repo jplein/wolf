@@ -123,9 +123,13 @@ The GTK sidebar re-roots from one settle point, on the working directory Neovim 
 | `:q` / `:qa` mapped to close pane / window   | `feat/colon-q-remapping`                                  | [x]   | [x]   |
 | ⌘N opens a new untitled Markdown buffer      | `feat/colon-q-remapping` (`0266b96`)                      | [x]   | [x]   |
 
-`wolf-gnome` calls `WolfCore::drain_commands()` on every render wake, behind a total `Command` to `UiAction` mapping in `command_action.rs` with no catch-all arm, so a new core command fails to compile until it is classified. Of the 26 commands, 20 dispatch, 1 has no GNOME equivalent (`HideApplication`, since the shell owns window visibility), and 5 are deferred with a distinct printed reason.
+`wolf-gnome` calls `WolfCore::drain_commands()` on every render wake, behind a total `Command` to `UiAction` mapping in `command_action.rs` with no catch-all arm, so a new core command fails to compile until it is classified. Of the 26 commands, 21 dispatch, 1 has no GNOME equivalent (`HideApplication`, since the shell owns window visibility), and 4 are deferred with a distinct printed reason.
 
-The Linux multiple-windows box means N windows in one process: a coordinator owns the single state store, the one config read and the one cell measurement, while each window carries its own captive Neovim, its own wake and its own subtree of `state.json`. New Window opens a fresh empty window and inherits nothing from the window it was asked from — not the working directory, not the layout, not the size — which is macOS's behaviour for the same row. Native tabs stay unticked because a tab is a second view of one Neovim, a different mechanism with its own row.
+The Linux multiple-windows box means N windows in one process: a coordinator owns the single state store, the one config read and the one cell measurement, while each window carries its own captive Neovim, its own wake and its own subtree of `state.json`. New Window opens a fresh empty window and inherits nothing from the window it was asked from — not the working directory, not the layout, not the size — which is macOS's behaviour for the same row.
+
+The tabs row stays unticked while part of it ships. A GTK window carries an `adw::TabBar` over N live `adw::TabPage`s sharing that window's one captive Neovim: `Ctrl+Shift+T`, the New Tab menu item and `:WolfNewTab` open a tab rooted at the window's folder, clicking the bar switches Neovim's tabpage, and closing the last tab closes the window, because Neovim refuses to close its final tabpage.
+
+What the row waits on is persistence: a window saves its selected tab and no other, so a session with several tabs open comes back as one. [`crates/wolf-gnome/DECISIONS.md`](crates/wolf-gnome/DECISIONS.md) owns why widening that is not a loop over the tabs.
 
 The GNOME counterpart to the macOS menu bar is a header-bar primary menu driven by the same `gio` action namespace as the accelerators, so menu, chords and drained commands cannot drift apart. The accelerator scheme is documented in [`crates/wolf-gnome/DECISIONS.md`](crates/wolf-gnome/DECISIONS.md), "The accelerator namespace".
 

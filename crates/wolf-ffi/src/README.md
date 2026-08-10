@@ -28,7 +28,7 @@ The four `extern "C"` wake registrations (`wolf_ffi_set_wake`, `wolf_ffi_set_fil
 
 - `liveness(&self) -> u8` — `mod liveness`. A lock-free snapshot read, no RPC, so the front-end can call it on every wake to drive the crash and stall overlay.
 - `restart(&self) -> bool` — Force-kills and respawns the captive nvim in place, re-running the setup chain. Capture each view's `open_files_for_tabpage` before calling: a respawn wipes the mirror.
-- `open_files_for_tabpage(&self, tab: i64) -> FfiOpenFiles` — The Tier-1 open-file mirror for one tabpage; a snapshot read, no RPC.
+- `open_files_for_tabpage(&self, tab: i64) -> FfiOpenFiles` — The Tier-1 open-file mirror; a snapshot read, no RPC. Only `active_path` is per-tabpage; `files` is not (below).
 - `FfiOpenFiles::active_path(&self) -> String` — `""` for an unnamed buffer.
 - `FfiOpenFiles::files(&self) -> Vec<String>` — Absolute paths. Reopen the active one last so it lands focused. This is the instance-global buflisted set, so a multi-view project over-reopens.
 

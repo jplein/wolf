@@ -24,7 +24,7 @@
 //!
 //! ## The three classes
 //!
-//! - **Dispatched** — the twenty commands `wolf-gnome` performs today.
+//! - **Dispatched** — the twenty-one commands `wolf-gnome` performs today.
 //! - [`UiAction::Deferred`] — implemented on macOS and planned on GTK; the string
 //!   names the concrete blocker so the deferral is auditable rather than a shrug.
 //! - [`UiAction::NoGnomeEquivalent`] — has no GNOME counterpart and will never be
@@ -59,12 +59,22 @@ pub enum UiAction {
     NewUntitledBuffer,
     /// Close the focused editor pane (Neovim performs the `:close`).
     ClosePane,
+    /// Open a new TAB in this window, over the window's EXISTING core, rooted at
+    /// the window's own folder.
+    ///
+    /// The exact opposite of [`UiAction::NewWindow`] in what it inherits, and the
+    /// pair is easy to confuse: a tab shares the window's captive Neovim, its
+    /// project and its sidebar, while a window shares nothing at all. The
+    /// directory is [`crate::tabs_ui::new_tab_cwd`]'s answer, and the press is
+    /// gated by [`crate::tabs_ui::new_tab_press`] because `create_tabpage` is a
+    /// blocking RPC.
+    NewTab,
     /// Open a FRESH, EMPTY application window with its own core, at `$HOME`.
     ///
     /// It inherits nothing from the window it was asked from — not its working
     /// directory, not its layout, not its size — because that is what macOS's
     /// `makeNewWindow` does and parity is this row's whole subject. Inheriting a
-    /// project is New TAB's behaviour, and belongs to the tabs unit.
+    /// project is [`UiAction::NewTab`]'s behaviour.
     NewWindow,
     /// Close the application window (via `close-request`, never `destroy`).
     CloseWindow,
@@ -149,9 +159,7 @@ pub fn ui_action_for(command: Command) -> UiAction {
         Command::Copy => UiAction::CopySelection,
         Command::Paste => UiAction::PasteClipboard,
         Command::BufferPicker => UiAction::OpenBufferPicker,
-        Command::NewTab => UiAction::Deferred(
-            "GTK native tabs are not built; wolf-gnome binds exactly one nvim tabpage",
-        ),
+        Command::NewTab => UiAction::NewTab,
         Command::Preview => UiAction::OpenPreview,
         Command::Edit => UiAction::EditSource,
         Command::Terminal => UiAction::ToggleTerminal,
@@ -203,7 +211,7 @@ mod tests {
     /// The commands `wolf-gnome` DISPATCHES, by canonical `CommandSpec::id`,
     /// sorted. Ids (not variants) so the failure message names the registry row a
     /// reader can grep for.
-    const EXPECTED_DISPATCHED_IDS: [&str; 20] = [
+    const EXPECTED_DISPATCHED_IDS: [&str; 21] = [
         "buffer_picker",
         "close_pane",
         "close_window",
@@ -214,6 +222,7 @@ mod tests {
         "go_to_file",
         "minimize_window",
         "new_buffer",
+        "new_tab",
         "new_window",
         "open_file",
         "open_folder",
@@ -345,9 +354,10 @@ mod tests {
             want: Want::Exact(UiAction::OpenBufferPicker),
         },
         Case {
-            desc: "17 NewTab: no GTK native tabs",
+            desc: "17 NewTab: appends a native tab to THIS window, over the one core it already \
+                   has, rooted at the window's own folder",
             command: Command::NewTab,
-            want: Want::Deferred,
+            want: Want::Exact(UiAction::NewTab),
         },
         Case {
             desc: "18 Preview: opens the Markdown preview pane",
@@ -510,7 +520,7 @@ mod tests {
 
         assert_eq!(
             dispatched, expected,
-            "the set of DISPATCHED commands changed. wolf-gnome dispatches exactly twenty \
+            "the set of DISPATCHED commands changed. wolf-gnome dispatches exactly twenty-one \
              commands; everything else must be Deferred(reason) or NoGnomeEquivalent(reason) so \
              the drain is never silent. If a command was genuinely implemented, tick its feat-list \
              row and update this list with it. A one-element diff naming \"new_window\" \
@@ -521,6 +531,21 @@ mod tests {
              module: `ui_action_table`'s case 0 reddens beside this test, since one \
              reclassification falsifies both, and the pair moving together is what says the \
              classification changed rather than the registry. A one-element diff naming \
+             \"new_tab\" \
+             means the native-tabs command was demoted back to Deferred, in which case \
+             Ctrl+Shift+T, the primary menu's New Tab item, the palette's New Tab row and \
+             `:WolfNewTab` all stop opening a tab — the window is single-tab again however many \
+             pages its TabView can hold, and `shell::AppShell::new_tab` is reachable from nowhere. \
+             That demotion is NOT isolated in this module: `ui_action_table`'s case 17 reddens \
+             beside this test, since one reclassification falsifies both, and the pair moving \
+             together is what says the classification changed rather than the registry. It also \
+             reddens `palette::tests::palette_rows_query_new_ranks_the_new_buffer_row_first`, \
+             whose actionable-row count for the query \"new\" drops from three rows to two while \
+             its TOP row is unchanged — that third red is what tells this demotion apart from a \
+             registry rename, which would move the top row instead. \
+             `actions::bound_set_is_exactly_this_unit` stays GREEN through it, because the \
+             accelerator row is a separate switch from this classification. A one-element diff \
+             naming \
              \"terminal\" \
              means the terminal drawer was demoted back to Deferred, in which case the drawer is \
              unreachable from the Ctrl+backtick chord, from the primary menu's Terminal item and \
