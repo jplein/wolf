@@ -88,7 +88,7 @@ Two divergences from macOS are deliberate. The popup accepts no input at all, ma
 | Sidebar synthetic cwd root node             | `feat/mac-file-tree` / `linux-feat/sidebar`                                  | [x]   | [x]   |
 | Sidebar re-roots on Neovim's live cwd       | `feat/macos-ui` (`075c91f`) / `linux-feat/sidebar`                           | [x]   | [x]   |
 | Sidebar in the leading position             | `feat/sidebar-ui` (`ebc7300`)                                                | [x]   | [x]   |
-| Pickers hosted in a separate floating panel | `feat/markdown-preview` (`d763b3b`)                                          | [x]   | [ ]   |
+| Pickers hosted in a separate floating panel | `feat/markdown-preview` (`d763b3b`)                                          | [x]   | [x]   |
 | Buffer picker (⌘E)                          | `feat/buffer-list` / `linux-feat/buffer-picker`                              | [x]   | [x]   |
 | Command palette (⌘P)                        | `feat/commands` (`4b3b53e`)                                                  | [x]   | [x]   |
 | Open Recent (global recent-directories MRU) | `feat/commands` / `linux-feat/open-recent`                                   | [x]   | [x]   |
@@ -170,7 +170,11 @@ The pinned Neovim supplies seven of those — `c`, `lua`, `markdown`, `markdown_
 
 The Linux tick rests on raw pixels out of the running GTK application. A smoke renders one `go` fence and one unknown-language fence carrying byte-identical text and counts chromatic pixels in each: an unhighlighted block is neutral grey on grey, so the control counts zero, and the shared text holds every rendering variable except the highlighter's answer constant. `crates/wolf-ffi/tests/code_block_highlight.rs`, which asserts on the emitted HTML, corroborates it.
 
-Two limits of the pane itself are recorded in [`crates/wolf-gnome/DECISIONS.md`](crates/wolf-gnome/DECISIONS.md) — a click inside a preview cannot focus it, because the web view must take pointer input to be scrollable at all, and nothing has captured a picker composited over a preview, which is why the floating-panel row above stays unticked too.
+One limit of the pane itself is recorded in [`crates/wolf-gnome/DECISIONS.md`](crates/wolf-gnome/DECISIONS.md): a click inside a preview cannot focus it, because the web view must take pointer input to be scrollable at all.
+
+What the pane does not limit is what draws over it, and the floating-panel row above is ticked on that. A smoke captures one window twice with nothing between the frames but the chord that opens the file picker, then reads the rectangle where the box meets the web view: 94 % of the document's background plus its heading ink with no overlay, and none of either — 100 % of the box's own fill — with the picker open.
+
+The file picker is the subject because it is the only one of the three overlays that row covers whose box has a fixed height; the palette's grows with its command list. macOS reaches the same result with a child window the window server composites in front of its parent's content; a Wayland client cannot place a child surface that way, and this front-end needs none.
 
 ## Appearance, typography, theming
 
@@ -240,5 +244,4 @@ The second limit is that a stall does not clear itself on the GTK side. All eigh
 Work already carried is recorded in the tables above. What remains, in order:
 
 1. **Native tabs.** A tab is a second view of one Neovim, so it needs grid rebinding, a per-view open-file capture, per-view wake fan-out and an `adw::TabView` this crate has never used. It is the largest single item left.
-2. **The floating-panel picker row.** The GTK answer is built — the overlays are children of the window-level overlay, which GTK 4 paints after the main child and its descendants — and what is missing is a capture of a picker composited over a preview. It depends on nothing else in this list.
-3. **The remaining Markdown-preview row.** Preview in browser is written and dispatched and needs only a host where a human can watch the hand-off land, per the Markdown-preview table above.
+2. **The remaining Markdown-preview row.** Preview in browser is written and dispatched and needs only a host where a human can watch the hand-off land, per the Markdown-preview table above.

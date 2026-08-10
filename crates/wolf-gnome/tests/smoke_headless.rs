@@ -11,7 +11,7 @@
 //!
 //! ## What this file contains
 //!
-//! **Fifty-two cage smokes** — one window-render smoke, two file-picker smokes,
+//! **Fifty-three cage smokes** — one window-render smoke, two file-picker smokes,
 //! one file-tree-sidebar smoke, five split-pane smokes, one empty-state smoke, one
 //! new-untitled-buffer smoke, one command-palette smoke, one OPEN RECENT smoke
 //! (Ctrl+Shift+P, a typed folder query, then Enter — the activated row re-roots the
@@ -97,7 +97,13 @@
 //! inline code element above a full-width rule, whose evidence is the pixel distance
 //! from the document's own top edge down to that rule, and the count of exact chip
 //! pixels inside the first paragraph — two assertions with two DIFFERENT
-//! falsifiers), one COMPLETION-POPUP smoke, one MULTI-LINE MESSAGE smoke (a two-line
+//! falsifiers), one PICKER-OVER-PREVIEW smoke (the file picker's floating box opened
+//! over a LIVE Markdown preview and photographed while it is still up — the only
+//! capture in this file taken with a transient overlay open on purpose — whose
+//! evidence is the same self-located overlap rectangle read on TWO frames of ONE
+//! launch: the preview's background and its heading's ink in the control, and zero of
+//! either plus the box's own fill in the sample), one COMPLETION-POPUP smoke, one
+//! MULTI-LINE MESSAGE smoke (a two-line
 //! `:echo`, whose LAST line is the control and whose FIRST line is the assertion),
 //! one CONFIRM-PROMPT smoke (a `:confirm` question drawn and then cleared once
 //! answered) and three TERMINAL-DRAWER smokes (Ctrl+` opening a full-width shell
@@ -133,7 +139,7 @@
 //! and no `:e` toast can satisfy, and OCR is structurally incapable of answering
 //! "did the cursor land at exactly row 12, column 25".
 //!
-//! Thirty-six of the fifty-two OCR a screenshot of the live window, and exactly one
+//! Thirty-six of the fifty-three OCR a screenshot of the live window, and exactly one
 //! of those OCRs a CROP of it rather than the whole file: the terminal-drawer smoke
 //! samples a band inside the drawer strip, because the statusbar directly above it
 //! draws a `term://…//<pid>:…` string that differs on every run. Eight
@@ -160,7 +166,7 @@
 //! readback and a `state.json` frozen mid-run — because in both cases the surface
 //! under test cannot be read any other way.
 //!
-//! Four of the fifty-two read RAW PIXELS out of their own captures, which is the
+//! Five of the fifty-three read RAW PIXELS out of their own captures, which is the
 //! only route this harness has to a claim OCR cannot make — it reads no colour, and
 //! it cannot answer "where on the page is this".
 //! [`preview_document_follows_the_configured_appearance_under_cage`] captures two
@@ -176,6 +182,11 @@
 //! and locates the rendered link's ink in it, purely to re-assert that its measured
 //! click constant still names the link before it uses it; its own evidence is a Neovim
 //! readback.
+//! [`file_picker_covers_the_live_preview_under_cage`] decodes BOTH of its captures and
+//! reads one self-located rectangle in each: it is the only smoke here whose two
+//! frames differ solely by an overlay, and the only one that reads a widget's fill
+//! colour out of the capture rather than naming it — which is what lets it locate a
+//! private box's geometry without pinning it.
 //!
 //! **Seven pure guards**, which mechanically enforce invariants the cage smokes
 //! depend on but cannot check themselves:
@@ -262,7 +273,7 @@
 //! a run outside the devShell fails it for that reason rather than for the reason
 //! its message names.
 //!
-//! So this target's summary line reads **`59 passed`**, not `52`: fifty-two cage
+//! So this target's summary line reads **`60 passed`**, not `53`: fifty-three cage
 //! smokes plus those seven guards.
 //!
 //! ## A vacuously-passing check recorded here: the `wtype ""` window-map poll
@@ -305,7 +316,7 @@
 //!
 //! ## When it runs
 //!
-//! The fifty-two cage smokes run as part of the STANDARD suite — `cargo test -p
+//! The fifty-three cage smokes run as part of the STANDARD suite — `cargo test -p
 //! wolf-gnome` and `cargo test --workspace` — inside the flake devShell. They are
 //! the Linux verification gate's only end-to-end proof that the GTK front-end draws
 //! a window a human could see (see `build.md`, "The Linux verification gate").
@@ -315,13 +326,13 @@
 //! suite command does not run is a silently-skipped test.
 //!
 //! They are, however, the slowest part of the suite: each drives a real
-//! compositor, and all fifty-two serialize behind `CAGE_LOCK` (see below).
+//! compositor, and all fifty-three serialize behind `CAGE_LOCK` (see below).
 //!
 //! ```text
 //! nix develop --command cargo test -p wolf-gnome --test smoke_headless
 //! ```
 //!
-//! ## Requirements of the fifty-two cage smokes (from the devShell's smoke toolchain)
+//! ## Requirements of the fifty-three cage smokes (from the devShell's smoke toolchain)
 //!
 //! - `cage` (headless wlroots compositor), `wtype`, `grim`, `tesseract` and
 //!   `wolf-pointer-inject` on `PATH`. The last one is NOT an upstream package: it is
@@ -338,7 +349,7 @@
 //!   empty result list.
 //! - `XDG_RUNTIME_DIR` set and writable (the Wayland socket lives there).
 //!
-//! Per project policy every one of the fifty-two FAILS LOUD if any of the above is
+//! Per project policy every one of the fifty-three FAILS LOUD if any of the above is
 //! missing rather than silently skipping, mirroring `common::require_nvim_bin` — a
 //! missing precondition means the smoke toolchain was not provisioned, which is a
 //! setup bug we want surfaced, not hidden. Now that these tests run by default, that
@@ -365,7 +376,7 @@ use wolf_gnome::{CellMetrics, WINDOW_TITLE_FALLBACK};
 /// so the full word — not just a prefix — can be asserted against OCR.
 const OCR_WORD: &str = "hello";
 
-/// Serializes the fifty-two cage smoke tests. Each launches its own
+/// Serializes the fifty-three cage smoke tests. Each launches its own
 /// `cage` compositor, and two compositors started concurrently contend for the
 /// same Wayland socket under `XDG_RUNTIME_DIR` (lockfile error), failing both.
 /// Under the default multi-threaded test harness these tests would otherwise run
@@ -10659,7 +10670,7 @@ const HOME_CONFIG_DIR_FALLBACK: &str = ".config/wolf";
 /// the "Note (OCR width)" / "Note (OCR height)" paragraphs above their own consts,
 /// because if two or three panes are ever too narrow or too short for 28 pt OCR the
 /// fix is per-test (widen the window, or lower the font for THAT test) and must not
-/// be applied here to all fifty-two.
+/// be applied here to all fifty-three.
 ///
 /// [`cage_is_only_spawned_through_the_isolating_helper`] enforces the "single place"
 /// property mechanically, because a smoke that spawned the compositor directly would
@@ -11800,7 +11811,7 @@ fn assert_button_rect_fits(smoke: &str, rect: (f64, f64, f64, f64), overlay: (f6
 /// [`SIDEBARTOGGLE_OCR_KEEP`] is an ordinary content term and follows the ordinary
 /// rule.
 ///
-/// Thirty-six of the fifty-two smokes appear here. SIXTEEN contribute no rows at
+/// Thirty-six of the fifty-three smokes appear here. SEVENTEEN contribute no rows at
 /// all, on purpose, and it is worth being explicit about which and why:
 ///
 /// * [`colon_qa_closes_the_window_under_cage`] captures no PNG and asserts only that
@@ -11843,7 +11854,7 @@ fn assert_button_rect_fits(smoke: &str, rect: (f64, f64, f64, f64), overlay: (f6
 ///   writes about its own lines, and the assertion is an exact OCCURRENCE COUNT of
 ///   a marker that smoke seeds itself — which no sidebar row and no `:e` toast can
 ///   move in either direction.
-/// * [`preview_document_follows_the_configured_appearance_under_cage`] is one of four
+/// * [`preview_document_follows_the_configured_appearance_under_cage`] is one of five
 ///   entries here that DO capture — two PNGs — and still contribute nothing,
 ///   because it runs `tesseract` over neither. Its observables are pixel COUNTS at
 ///   a derived rectangle inside one pane, so no rendered word can satisfy or break
@@ -11863,6 +11874,14 @@ fn assert_button_rect_fits(smoke: &str, rect: (f64, f64, f64, f64), overlay: (f6
 ///   same way: one capture, no OCR, and its observables are a DISTANCE in pixel rows
 ///   between two self-located landmarks and a count of exact chip pixels. A filename
 ///   can put text on the page; it cannot move a rule.
+/// * [`file_picker_covers_the_live_preview_under_cage`] is the fifth: two captures,
+///   OCRed neither. Its observables are pixel counts inside one self-located
+///   rectangle, read once with the picker closed and once with it open, and the
+///   discriminating half is a pair of EXACT ZEROS. Its rows in
+///   [`RELAUNCH_FIXTURE_NAMES`] exist for the generic loop's sake alone: the picker
+///   draws its candidates as filenames and so does the tree sidebar, which is exactly
+///   why "the picker's rows are on screen" is not an assertion this smoke could make
+///   — that sentence is true with the picker CLOSED.
 /// * [`terminal_drawer_defaults_to_full_width_under_cage`] and
 ///   [`terminal_drawer_reopens_after_a_neovim_restart_under_cage`] capture no image
 ///   at all: the first reads four geometry integers out of one `writefile`, the
@@ -12550,6 +12569,33 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
         "UNSAVED_READBACK_NAME",
         "preview_of_an_unsaved_buffer_renders_under_cage",
     ),
+    // The picker-over-preview smoke's two fixtures and its readback. It asserts no OCR
+    // term at all — its observables are raw pixel counts inside one rectangle of two
+    // captures — so nothing it writes could satisfy an assertion of ITS own. All three
+    // are registered for the generic loop's sake, the LINK_SOURCE_FILE precedent: the
+    // loop forbids a fixture name from carrying ANY asserted term, which is what stops
+    // a later rename turning one of these into page text that breaks somebody else's
+    // smoke. `preview` is in that table, so the `pv`/`pickover` prefixes are not an
+    // aesthetic choice. The readback lands under XDG_RUNTIME_DIR rather than in the
+    // temp cwd — deliberately, so no new sidebar row and no new picker candidate
+    // appears between that smoke's two captures — and is registered anyway for
+    // CD_READBACK_NAME's reason: its ABSOLUTE path is echoed in the typed
+    // `:call writefile(...)` command line the cmdline strip draws.
+    (
+        PICKOVER_SOURCE_FILE,
+        "PICKOVER_SOURCE_FILE",
+        "file_picker_covers_the_live_preview_under_cage",
+    ),
+    (
+        PICKOVER_OTHER_FILE,
+        "PICKOVER_OTHER_FILE",
+        "file_picker_covers_the_live_preview_under_cage",
+    ),
+    (
+        PICKOVER_WINS_NAME,
+        "PICKOVER_WINS_NAME",
+        "file_picker_covers_the_live_preview_under_cage",
+    ),
     // The terminal-drawer smoke's fixture, plus its six readbacks. The readbacks
     // land under XDG_RUNTIME_DIR rather than in the temp cwd, so no tree row ever
     // bears their names — they are registered for CD_READBACK_NAME's reason instead:
@@ -12722,7 +12768,7 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
 ///
 /// This test is PURE: no compositor, no `require_smoke_env`, no `CAGE_LOCK`, no
 /// subprocess. It reads two const tables and finishes in microseconds, so it adds
-/// nothing to the smoke suite's runtime and — unlike the fifty-two smokes — still
+/// nothing to the smoke suite's runtime and — unlike the fifty-three smokes — still
 /// guards the fixture on a machine where the smoke toolchain is unavailable.
 #[test]
 fn sidebar_filler_names_cannot_satisfy_any_smoke_assertion() {
@@ -21672,6 +21718,24 @@ impl Capture {
         let (y0, y1) = rows;
         (y0..y1).find(|&y| (x0..x1).all(|x| self.pixel(x, y) == colour))
     }
+
+    /// The first COLUMN inside `rect` every one of whose sampled rows is exactly
+    /// `colour`, or `None` if there is none.
+    ///
+    /// [`Self::first_uniform_row`]'s transpose, and it exists for the same reason:
+    /// [`file_picker_covers_the_live_preview_under_cage`] has to locate a VERTICAL
+    /// edge — the web view's own left edge, and the right edge of the box painted over
+    /// it — without modelling the chrome to either side of it. EVERY row has to match,
+    /// so a column of statusbar or list-row text can never be mistaken for the first
+    /// column of a background.
+    ///
+    /// It takes a [`SampleRect`] rather than the two tuples its row-wise sibling
+    /// takes, per the rule on that struct: `x0..x1` is the range scanned and `y0..y1`
+    /// the span sampled, and a transposed pair of tuples would compile and search the
+    /// wrong axis.
+    fn first_uniform_column(&self, rect: SampleRect, colour: Rgb8) -> Option<usize> {
+        (rect.x0..rect.x1).find(|&x| (rect.y0..rect.y1).all(|y| self.pixel(x, y) == colour))
+    }
 }
 
 /// Whether `pixel` is the rendered LINK's ink rather than body text or background.
@@ -24272,6 +24336,1037 @@ fn preview_inline_code_keeps_the_baseline_grid_under_cage() {
     );
 }
 
+// --- A PICKER over a LIVE PREVIEW --------------------------------------------
+//
+// One smoke, [`file_picker_covers_the_live_preview_under_cage`], plus the fixtures,
+// thresholds and scenario it alone reads. It reuses the preview-appearance smoke's
+// derived pane geometry verbatim ([`preview_theme_pane_area`],
+// [`preview_theme_preview_columns`], [`preview_theme_scan_rows`],
+// [`preview_theme_band_rows`]) rather than restating it, and it OCRs nothing.
+//
+// ## Why this section pins no geometry of its own
+//
+// `picker.rs`'s `PICKER_BOX_MARGIN`, `PICKER_BOX_WIDTH` and `PICKER_BOX_HEIGHT` are
+// private, and an integration test is an external crate. Making them `pub` so this
+// file could import them would pin the very geometry the smoke then asserts on, which
+// is circular: the box would be "where the constants say", and a box that moved
+// together with its constants would keep every assertion green. So the box is LOCATED
+// FROM THE PIXELS on both axes, its surface colour is READ OUT OF the capture rather
+// than named, and NOTHING in `src/` changes for this smoke to exist.
+//
+// ## The one thing it does pin, and why that is safe
+//
+// [`pickover_fill_reference_band`] is four absolute pixel literals. They are inside a
+// region whose extent this file may not import, so there is nowhere honest to derive
+// them from — and the smoke asserts the two properties they exist for (uniform with
+// the picker open, ABSENT with it closed) rather than trusting them, so a band that
+// stopped being inside the box fails loudly instead of quietly reading some other
+// widget's colour.
+
+/// Picker-over-preview smoke: the file opened in the SPLIT pane and then replaced by
+/// its own preview.
+///
+/// A fixture of its own rather than [`PREVIEW_SOURCE_FILE`], deliberately. The
+/// markdown-preview smoke chooses its heading for `tesseract`'s sake; this smoke's
+/// control half counts that heading's WHITE PIXELS. The two answer to different
+/// constraints, and sharing one file would let a change made for OCR legibility move
+/// a pixel floor a thousand lines away with nothing naming the connection.
+///
+/// Registered in [`RELAUNCH_FIXTURE_NAMES`] — not because a sidebar row could satisfy
+/// an assertion here (this smoke asserts no OCR term at all) but because that table's
+/// generic loop is what stops a later rename turning this name into page text that
+/// breaks somebody ELSE's smoke. [`LINK_SOURCE_FILE`] is registered for exactly that
+/// reason.
+const PICKOVER_SOURCE_FILE: &str = "pvovsrc.md";
+
+/// Heading written into [`PICKOVER_SOURCE_FILE`], and the ONLY source of white pixels
+/// anywhere in this smoke's overlap rectangle.
+///
+/// An `h1`, and that is load-bearing rather than stylistic: `wolf_core`'s
+/// `markdown/themes/default.css` gives `h1` the pure white [`PICKOVER_HEADING_INK`] in
+/// dark while `body` text is `#d4d4d4`, so a count of exactly white pixels is a count
+/// of rendered heading glyphs and of nothing else on the page.
+///
+/// ELEVEN capital letters, and the count is part of the measurement: the MEASURED 1,976
+/// white pixels inside the overlap rectangle is a reading of that many glyphs at the
+/// stylesheet's 32 px. A shorter heading puts fewer pixels there; a longer one runs past
+/// the rectangle's right edge and adds none.
+const PICKOVER_SOURCE_HEADING: &str = "# ZZOVERROMEO";
+
+/// The paragraph under [`PICKOVER_SOURCE_HEADING`].
+///
+/// It is `#d4d4d4` body text, so it contributes no white pixel and cannot help the
+/// control's ink floor. What it does is keep the rendered document from being a lone
+/// heading on an otherwise blank page, and it is deliberately SHORT so that every row
+/// of the overlap rectangle below it is pure background — which is what the 94.42 %
+/// dark reading rests on. Lengthen it and that fraction falls; the fix would be a
+/// shorter paragraph, never a lower floor.
+const PICKOVER_SOURCE_PARAGRAPH: &str = "victor whiskey juliett mike, papa quebec.";
+
+/// Picker-over-preview smoke: the file left in the STARTING pane, which the editor
+/// grid draws throughout both captures.
+///
+/// Nothing asserts on it. It exists so the window holds TWO panes when Preview is
+/// driven — which is what puts the preview in the right half, see the smoke's doc
+/// comment for that chain — and so [`pickover_fill_reference_band`] has an EDITOR pane
+/// under it rather than a second preview.
+const PICKOVER_OTHER_FILE: &str = "pvovoth.md";
+
+/// Heading written into [`PICKOVER_OTHER_FILE`]. Drawn by the editor grid, which no
+/// rectangle in this smoke samples, so it is asserted on in neither capture.
+const PICKOVER_OTHER_HEADING: &str = "# ZZOVERUNIFORM";
+
+/// Typed into the file picker's search entry once Ctrl+Shift+O has opened it.
+///
+/// A prefix of [`PICKOVER_SOURCE_FILE`] and of nothing else in the temp cwd — not the
+/// other fixture, not any [`SIDEBAR_FILLER_FILES`] entry — so the ranked list narrows
+/// to exactly ONE row. That is the state the 100 % fill reading was taken in: one row
+/// leaves the rest of the box's body empty, while a query matching several files would
+/// push row text down it and could put glyphs inside the overlap rectangle, lowering
+/// the fill fraction on a perfectly good render.
+///
+/// **No Enter is ever pressed.** Both `picker_*_under_cage` smokes activate a row and
+/// screenshot what Neovim then loaded; this one photographs the picker itself, which
+/// is what makes it the first smoke in this file to capture a transient overlay while
+/// it is still up.
+const PICKOVER_QUERY: &str = "pvovsrc";
+
+/// File the captive Neovim writes its window/buffer list into, BEFORE either capture.
+///
+/// Under `XDG_RUNTIME_DIR` rather than in the temp cwd, so the app's own `FileSearch`
+/// never lists it: a new sidebar row and a new picker candidate appearing between the
+/// two captures would change the page both are read from, and the picker's row count
+/// is exactly what [`PICKOVER_QUERY`] is chosen to control.
+///
+/// Registered in [`RELAUNCH_FIXTURE_NAMES`] all the same, for the reason the terminal
+/// drawer's runtime-dir readbacks are: its ABSOLUTE path is echoed in the typed
+/// `:call writefile(...)` command line, which the cmdline strip draws in the very
+/// capture below. That strip sits outside every rectangle this smoke reads, so the
+/// registration is a tripwire rather than a live hazard.
+const PICKOVER_WINS_NAME: &str = "wolf_gnome_pickover_wins.txt";
+
+/// The CONTROL capture — the preview live, no overlay open.
+///
+/// Under `XDG_RUNTIME_DIR` for [`PICKOVER_WINS_NAME`]'s reason. Retained after the
+/// run: every threshold below is a reading of these two files, so a failure is
+/// diagnosed by looking at them rather than by re-running.
+const PICKOVER_CONTROL_PNG_NAME: &str = "wolf_gnome_pickover_control.png";
+
+/// The SAMPLE capture — the same window with the file picker open over it. See
+/// [`PICKOVER_CONTROL_PNG_NAME`].
+const PICKOVER_SAMPLE_PNG_NAME: &str = "wolf_gnome_pickover_sample.png";
+
+/// Name suffix of this smoke's config directory sibling.
+const PICKOVER_SUFFIX: &str = "-pickover";
+
+/// The `color` `wolf_core`'s `markdown/themes/default.css` gives
+/// `body.wolf-markdown h1` in DARK, as `(r, g, b)`.
+///
+/// RE-TYPED here as a literal, never imported, for the reason [`PREVIEW_DARK_BG`]'s
+/// doc comment gives at length: reading the value out of the crate that produced the
+/// pixels would make the assertion a comparison with itself, and would hold for
+/// whatever the stylesheet became.
+///
+/// It is pure white, and nothing else these captures can contain is: the document's
+/// background is [`PREVIEW_DARK_BG`], its body text `#d4d4d4`, the editor pane's
+/// background `(20, 22, 27)` and the picker's own surface the colour
+/// [`pickover_fill_reference_band`] reads back. MEASURED inside the overlap rectangle:
+/// 1,976 of these pixels on the control capture and 0 on the sample.
+const PICKOVER_HEADING_INK: Rgb8 = (0xff, 0xff, 0xff);
+
+/// The least of the overlap rectangle that must be [`PREVIEW_DARK_BG`] in the CONTROL
+/// capture.
+///
+/// MEASURED 0.9442 — 81,897 of the rectangle's 86,736 pixels, the remaining 5.58 %
+/// being the heading's and the paragraph's ink. This floor leaves fourteen points of
+/// headroom, which is more than a fixture whose paragraph grew by a line could
+/// consume and far above anything a rectangle aimed at the wrong region could reach:
+/// the editor pane's background reads `(20, 22, 27)` and the picker's fill
+/// `(29, 29, 32)`, so neither contributes a single pixel to this count.
+const PICKOVER_CONTROL_MIN_DARK_FRACTION: f64 = 0.80;
+
+/// The fewest [`PICKOVER_HEADING_INK`] pixels the overlap rectangle must carry in the
+/// CONTROL capture.
+///
+/// An ACCEPTANCE CRITERION rather than a tuned number. What it separates is "the web
+/// view rendered the document" from "the web view is there and blank", and a blank
+/// view reads 0 rather than a smaller positive number — the same shape the code-block
+/// smoke's control has.
+///
+/// MEASURED 1,976 for [`PICKOVER_SOURCE_HEADING`]'s eleven-letter `h1` at the
+/// stylesheet's 32 px, so this floor leaves 3.95x.
+const PICKOVER_CONTROL_MIN_INK_PX: usize = 500;
+
+/// The least of the overlap rectangle that must be the picker box's own fill colour in
+/// the SAMPLE capture.
+///
+/// MEASURED 1.0000 — all 86,736 pixels of it. The two points of slack are for a list
+/// row that renders taller than it did, NOT a tolerance for partial occlusion: that is
+/// what the two exact-zero assertions beside this one answer, and neither of them may
+/// be softened into a fraction to make a run pass.
+const PICKOVER_SAMPLE_MIN_FILL_FRACTION: f64 = 0.98;
+
+/// The fewest columns the picker box's visible surface must span INSIDE the web view.
+///
+/// MEASURED 278 (the web view's left edge at 787, the box's right edge one past 1064),
+/// so this floor leaves 1.4x. It is a discriminator and not a sanity check: a box that
+/// is on screen but not over the preview reads 0 here, because the only thing that
+/// bounds its visible right edge is then the web view's own left edge.
+///
+/// The P1b red capture carries exactly that 0. Read off the retained red PNG:
+/// `web_top` 159, `web_left` 787 and `box_right` 787, so R is degenerate at zero area
+/// and this width reads 0 against the floor. That run reddened assertion 4 first and
+/// never reached here, which is why the 0 is quoted from the PNG rather than from a
+/// failure message — and why this floor is a discriminator rather than decoration.
+const PICKOVER_MIN_OVERLAP_W_PX: usize = 200;
+
+/// The fewest rows the picker box's visible surface must span inside the web view.
+///
+/// MEASURED 312 (the web view's top edge at 159, the box's bottom edge at 471), so
+/// this floor leaves 1.6x. See [`PICKOVER_MIN_OVERLAP_W_PX`]; the two are separate
+/// constants so a failure names the axis that collapsed.
+const PICKOVER_MIN_OVERLAP_H_PX: usize = 200;
+
+/// The band the picker box's own fill colour is READ OUT OF, in absolute output
+/// pixels.
+///
+/// ## Why the colour is read rather than named
+///
+/// The box paints Adwaita's `.background`, a theme value this crate does not own, and
+/// its geometry lives in three private `picker.rs` constants this file may not import
+/// (see this section's header). Both problems have one answer: take the colour out of
+/// the SAMPLE capture at a band that is inside the box, and prove in the CONTROL
+/// capture that the same colour is not there when the box is closed. The pair is what
+/// makes the reading mean "the picker's surface" rather than "whatever is at (500,
+/// 300)".
+///
+/// ## Where the four numbers come from
+///
+/// MEASURED on this host at the pinned 1280x720 output: **32,000 of 32,000** pixels
+/// are one colour with the picker open, and **0 of 32,000** are that colour with it
+/// closed. Each edge answers to a constraint rather than to a preference. The band is
+/// inside the box on both axes. It is LEFT of the pane area's horizontal midpoint, so
+/// the EDITOR pane is what lies under it — which is what makes the closed reading 0
+/// and, under a build that hid the box, makes this the assertion that fires rather
+/// than one about the preview. And it starts well below the box's search entry and its
+/// first list row, so no widget text falls inside it.
+///
+/// The smoke checks the two structural halves it can check — that the band is inside
+/// the capture, and left of that midpoint — so a change to the output size or the
+/// overlay origin is a named failure rather than a silently relocated band.
+fn pickover_fill_reference_band() -> SampleRect {
+    SampleRect {
+        x0: 500,
+        x1: 700,
+        y0: 300,
+        y1: 460,
+    }
+}
+
+/// The PICKER-OVER-PREVIEW scenario, run as a single `sh -c` string inside ONE `cage`:
+/// [`PREVIEW_SCENARIO`]'s split-and-preview opening, then [`PICKER_SCENARIO`]'s
+/// Ctrl+Shift+O chord and typed query, with a `grim` on EITHER side of that chord.
+///
+/// ## One launch, two captures, and why the order is fixed
+///
+/// The control must be taken while the same process, the same web view and the same
+/// rendered document are on screen as the sample — otherwise the two readings describe
+/// two different windows and the pair proves nothing. So there is one launch, and the
+/// only thing that happens between the two `grim` calls is the chord and the query.
+///
+/// ## The readback comes BEFORE both captures, which is the opposite of every sibling
+///
+/// [`PREVIEW_SCENARIO`] and [`PREVIEW_THEME_SCENARIO`] both take their
+/// `tabpagebuflist()` readback AFTER `grim`, because the typed `:call writefile(...)`
+/// is drawn by the cmdline strip and their assertions read OCR terms off the whole
+/// page. Here nothing is OCRed and every sampled rectangle sits inside the preview
+/// pane, far above the strip — so the readback is taken FIRST, where it belongs: it is
+/// the precondition that stops both captures being a statement about an empty pane,
+/// and a precondition established after the evidence is not a precondition.
+///
+/// ## The two settles around the chord, and what they measured
+///
+/// No other smoke in this file captures a transient overlay while it is open, so there
+/// was no sibling whose timing could be copied. The reconnaissance drove this recipe by
+/// hand and found one `SETTLE` after the chord (for the box to map and its entry to
+/// take focus) and one after the query (for the streamed traversal to rank and the
+/// list to settle) sufficient — which is also what [`PICKER_SCENARIO`] spends before
+/// its Enter. MEASURED: that budget held first time and across four executions with no
+/// flake, and the symptom a short settle would produce never appeared once — the sample
+/// capture's overlap rectangle read EXACTLY zero [`PREVIEW_DARK_BG`] every time. The
+/// whole smoke costs 12.25 s, reproducible to the centisecond across three green runs.
+///
+/// That symptom is still the one to look for if the budget ever does go short, and it
+/// is specific rather than a mystery: the sample's overlap rectangle reads
+/// [`PREVIEW_DARK_BG`] rather than the picker's fill — which is also exactly what a
+/// paint-order regression reads like, so the two are told apart by re-running rather
+/// than by the numbers.
+///
+/// ## Exit codes
+///
+/// * `11` — the app died before its window ever mapped (the shared convention).
+/// * `14` — the window-list readback never appeared, so the precondition that makes
+///   both captures mean anything cannot be checked at all.
+///
+/// `12` and `13` do not exist here, for [`CODEHL_SCENARIO`]'s stated reason: nothing
+/// in this smoke depends on a clean exit, so it ends with [`PREVIEW_SCENARIO`]'s
+/// best-effort `kill` + `wait` rather than a `:qa!` handshake. Adding them would mean
+/// asserting on a shutdown this smoke makes no claim about — and the picker is still
+/// open at that point, which is a state no other smoke quits from.
+const PICKOVER_SCENARIO: &str = r#"
+set -eu
+
+# Poll knobs: WAIT_TRIES * WAIT_INTERVAL for CAGE to come up -- NOT for the window
+# to map, which this poll cannot observe (see the module doc comment). SETTLE is the
+# only real budget between spawning the app and the first keystroke.
+WAIT_TRIES=75
+WAIT_INTERVAL=0.2
+SETTLE=1.0
+FILE_TRIES=100
+# PREVIEW_SETTLE -- budgeted FROM THE CALL, not from the web view's Started event;
+# PREVIEW_SCENARIO's doc comment carries the measurement behind it (~255 ms for a
+# cold open, about 110 ms of that spent spawning the WebProcess before Started
+# fires). This spend is a cold open. Do not trim it.
+PREVIEW_SETTLE=2.0
+
+"$WOLF_BIN" &
+app_pid=$!
+
+tries=0
+while [ "$tries" -lt "$WAIT_TRIES" ]; do
+    if ! kill -0 "$app_pid" 2>/dev/null; then
+        echo "wolf-gnome picker-over-preview smoke: app process exited early (pid $app_pid)" >&2
+        exit 11
+    fi
+    if wtype "" >/dev/null 2>&1; then
+        break
+    fi
+    tries=$((tries + 1))
+    sleep "$WAIT_INTERVAL"
+done
+
+sleep "$SETTLE"
+
+wait_file() {
+    f=$1
+    t=0
+    while [ "$t" -lt "$FILE_TRIES" ]; do
+        if [ -s "$f" ]; then
+            return 0
+        fi
+        t=$((t + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    echo "wolf-gnome picker-over-preview smoke: readback file $f never appeared (or stayed empty)." >&2
+    return 1
+}
+
+# --- Step 1: the OTHER file in the starting pane -----------------------------
+#
+# It stays there for the whole run, so the LEFT half of the pane area is an editor
+# pane in both captures -- which is what the fill-colour reference band is read over.
+#
+# The block cursor is deliberately NOT parked. The usual `o` + Escape park exists so
+# an inverted block does not corrupt an OCR'd row; nothing here is OCRed, and every
+# rectangle this smoke samples is inside the PREVIEW pane, where `draw_pane` skips
+# the grid, the scrollbar and the cursor entirely.
+wtype -- ":e $OTHER_FILE"
+wtype -k Return
+sleep "$SETTLE"
+
+# --- Step 2: split, and open the SOURCE in the new pane ----------------------
+#
+# The `<C-w>v` CHORD, never a typed `:vsplit`: the init.lua keymap is what emits the
+# wolf_layout Split intent the front-end binds a new pane from, and `apply_split`
+# puts the NEW pane second, i.e. on the right, whatever nvim's 'splitright' says.
+wtype -M ctrl -k w -m ctrl
+wtype -k v
+sleep "$SETTLE"
+
+wtype -- ":e $SRC_FILE"
+wtype -k Return
+sleep "$SETTLE"
+
+# --- Step 3: drive PREVIEW through the command palette -----------------------
+#
+# Ctrl+Shift+P, the query, Enter. With two panes and no preview yet,
+# `preview_placement` answers `active`: the preview replaces the pane the source is
+# in, which is the RIGHT one. See the smoke's doc comment for the whole chain.
+wtype -M ctrl -M shift -k p -m shift -m ctrl
+sleep "$SETTLE"
+wtype -- "$PREVIEW_QUERY"
+sleep "$SETTLE"
+wtype -k Return
+
+# The COLD open budget: the blocking open_preview RPC, the wake that carries the
+# wolf_preview notification, the lazily-created WebView's WebProcess spawn, the
+# blocking render_preview and the full load_html.
+sleep "$PREVIEW_SETTLE"
+
+# --- Step 4: NEOVIM's own answer, BEFORE either capture ----------------------
+#
+# Taken first on purpose, unlike every sibling preview scenario: it is the
+# precondition that stops both captures being a statement about an empty pane. The
+# typed line is drawn by the cmdline strip, which sits below every rectangle read
+# here. Joined with a COMMA rather than a space because a preview scratch's own name
+# contains one.
+wtype -- ":call writefile([join(map(tabpagebuflist(), {_, b -> fnamemodify(bufname(b), ':t')}), ',')], '$WINS')"
+wtype -k Return
+wait_file "$WINS" || exit 14
+
+# Let the cmdline strip clear before the control capture, so the two captures differ
+# in the overlay and in nothing else.
+sleep "$SETTLE"
+
+# --- Step 5: the CONTROL capture, with NO overlay open -----------------------
+grim "$OUT_PNG_CONTROL"
+
+# --- Step 6: open the FILE PICKER over it ------------------------------------
+#
+# Ctrl+Shift+O is the `win.go-to-file` accelerator (Ctrl+Shift+P is the palette).
+# `-M <mod>` / `-m <mod>` press and release a modifier and `-k <key>` taps a key
+# while they are held, so this is "hold ctrl, hold shift, tap o, release, release".
+wtype -M ctrl -M shift -k o -m shift -m ctrl
+
+# One settle for the box to map and its search entry to take focus. MEASURED
+# sufficient across four executions with no flake; see the doc comment above.
+sleep "$SETTLE"
+
+# The query, so the streamed results rank down to a single row.
+wtype -- "$PICKER_QUERY"
+
+# One settle for that ranking to land. MEASURED sufficient, as above.
+sleep "$SETTLE"
+
+# --- Step 7: the SAMPLE capture, with the picker STILL OPEN ------------------
+#
+# No Enter, deliberately: activating a row would close the box, and the box is the
+# subject. This is the only `grim` in this file taken while a transient overlay is
+# up on purpose.
+grim "$OUT_PNG_SAMPLE"
+
+# Best-effort teardown: the app may already be gone.
+set +e
+kill "$app_pid" 2>/dev/null
+wait "$app_pid" 2>/dev/null
+exit 0
+"#;
+
+/// The file picker's floating box composites OVER a live Markdown preview: the pixels
+/// where the two regions overlap are the picker's, and the preview's are gone.
+///
+/// ## What it proves that nothing else does
+///
+/// The four transient overlays are children of the WINDOW-level `gtk::Overlay`
+/// (`picker.rs`, `palette.rs`, `buffer_picker.rs`, `search_overlay.rs`), while a
+/// preview pane's `webkit6::WebView` is added to that PANE's own overlay
+/// (`pane_view.rs`). The claim that the first therefore paints above the second was an
+/// argument from construction with no test behind it, and `DECISIONS.md` named a
+/// residual risk beside it — a WebKit rendering through a Wayland subsurface, which
+/// would sit outside GTK's ordering entirely. This smoke is the observation: the same
+/// window, photographed twice, with nothing between the two frames but the chord that
+/// opens the box.
+///
+/// MEASURED against that residual risk before this smoke was written, on a fixture
+/// that forced an accelerated-compositing layer (`transform: translateZ(0)`,
+/// `will-change: transform` and a running `@keyframes` rotation — visibly animating,
+/// so unquestionably promoted): the overlap rectangle read 74.99 % of the layer's own
+/// red with no overlay and **0.00 % red / 100.00 % picker fill** with the box open. A
+/// promoted compositing layer is inside the GTK scene and is occluded by the sibling
+/// overlay child, so the risk does not fire on this stack.
+///
+/// ## Why the FILE PICKER, and not the palette or the buffer picker
+///
+/// All three are the same feat-list row and all three are added to the same overlay in
+/// the same way, but only the file picker has a deterministic box: `picker.rs` sets a
+/// height request as well as a width, while `palette.rs` and `buffer_picker.rs` set
+/// width and margin only, so their boxes grow with their row count. The palette's
+/// bottom edge measured y 465 with today's twenty commands and MOVES whenever a
+/// command is added — which would make a band derived from it silently wrong rather
+/// than loudly wrong. The other two are recorded as sharing the structure rather than
+/// asserted separately.
+///
+/// The macOS half of the same row covers three pickers and not four: `PickerPanel`'s
+/// own header gives the reason (the window server always composites a child window in
+/// front of its parent's content, including the Markdown-preview `WKWebView`), and
+/// `WolfWindowController` holds exactly three hosts. Project search is a sidebar panel
+/// there, so this front-end's project-search overlay is outside the row.
+///
+/// ## No OCR, and the trap that rules it out
+///
+/// "The picker's rows are on screen" looks like the cheap version of this test and is
+/// worthless here. The rows are FILENAMES, and the tree sidebar renders every one of
+/// them by name on every capture — so that assertion is satisfied with the picker
+/// CLOSED, which is precisely the vacuity `tests/README.md`'s fixture-naming rule
+/// exists to prevent. And OCR cannot say WHERE a word is, so no OCR assertion can
+/// distinguish a box drawn over the preview from one drawn beside it. Pixels are the
+/// only instrument that answers the question, which is why this smoke asserts no OCR
+/// term and contributes no [`ASSERTED_OCR_TERMS`] row.
+///
+/// ## The rectangle, and why every edge of it is located from the pixels
+///
+/// The subject is R, the intersection of the web view with the picker box. Its four
+/// edges come from two captures, each edge read where that boundary is actually
+/// visible — which is not the same capture for all four, and that asymmetry is the
+/// point:
+///
+/// * `web_top` and `web_left` can only be read from the CONTROL capture, because the
+///   box covers both of those boundaries in the sample.
+/// * `box_right` and `box_bottom` can only be read from the SAMPLE capture, because
+///   there is no box in the control.
+///
+/// All four are located as a transition to [`PREVIEW_DARK_BG`]: the first fully-dark
+/// row below the pane's chrome, the first fully-dark column right of the pane
+/// midpoint, the first fully-dark column right of the web view's left edge with the
+/// box open, and the first fully-dark row below the reference band with the box open.
+/// Derived at the pinned output size and MEASURED off this smoke's own retained
+/// captures: **R = x 787..1065, y 159..471, 86,736 pixels**.
+///
+/// Nothing in `picker.rs` is read to get there, and nothing in `src/` changes for this
+/// smoke to exist. That property is worth keeping: a test that imported the box's
+/// geometry would assert that the box is where its own constants put it.
+///
+/// ## The pair is what discriminates, and neither capture may be dropped
+///
+/// The property under test is GTK's composition rather than a line of this crate's
+/// code, so no small edit disables it cleanly and there is no clever falsifier to
+/// build the smoke around. What there is instead is a control: the SAME rectangle,
+/// read on a frame with no overlay open, must be the preview — a floor of the
+/// document's background AND a floor of its heading's ink. Without it the sample half
+/// is satisfied by any box drawn anywhere over anything, including over a web view
+/// that never rendered, which is the same shape
+/// [`preview_document_follows_the_configured_appearance_under_cage`]'s control band
+/// has and documents.
+///
+/// ## Assertions, classified
+///
+/// A precondition gets NO revert: inventing one would manufacture a discriminator this
+/// smoke does not have. Every cell of the `measured` column is a reading of this
+/// smoke's own retained captures at the pinned 1280x720 output, re-derived
+/// independently of the reconnaissance's by-hand figures, which were taken against a
+/// different fixture heading and read differently.
+///
+/// | # | assertion | kind | falsifying edit | measured |
+/// | --- | --- | --- | --- | --- |
+/// | 1 | `status.success()` | precondition — the cage scenario ran to completion | none; do not invent one | n/a |
+/// | 2 | both PNGs present, each decoding at exactly `CAGE_OUTPUT_W_EXPECTED` x `CAGE_OUTPUT_H_EXPECTED` | precondition — and what makes every derived rectangle below mean what it says | none; do not invent one | n/a |
+/// | 3 | `tabpagebuflist()`, sorted, is the preview scratch plus the other file | precondition — a preview pane exists and exactly two panes do, established BEFORE either capture | none; do not invent one | green: the preview scratch for [`PICKOVER_SOURCE_FILE`] plus [`PICKOVER_OTHER_FILE`], and nothing else |
+/// | 4 | the reference band is ONE colour in the sample, and that colour appears ZERO times in the same band in the control | precondition — it is what makes the fill colour EMPIRICAL rather than a pinned theme value, and its second half is what says the colour belongs to the box rather than to the pane under it | none of its own — but it is where a build that hid the box ENTIRELY reddens, and P1b below is exactly that build: **this is the assertion P1b's red fired on**, second half | green: 32,000 / 32,000 open, 0 / 32,000 closed. red (P1b): the band is uniform in BOTH captures and the colour is the same `(20, 22, 27)` in both, so the absence half read 32,000 |
+/// | 5 | all four edges of R are locatable | precondition — the web view's top and left in the control, the box's right and bottom in the sample | none; do not invent one | green: 787..1065 x 159..471 |
+/// | 6 | R spans at least [`PICKOVER_MIN_OVERLAP_W_PX`] columns and [`PICKOVER_MIN_OVERLAP_H_PX`] rows | **discriminator, geometrical** — the box's VISIBLE surface reaches into the web view's own columns and rows at all | P1b, below — NOT reached, because assertion 4 fired first. Carried through by hand off the red PNG it would have read `overlap_w` = 0 against the 200 floor | green: 278 x 312 |
+/// | 7 | in the CONTROL, R is at least [`PICKOVER_CONTROL_MIN_DARK_FRACTION`] `PREVIEW_DARK_BG` and carries at least [`PICKOVER_CONTROL_MIN_INK_PX`] [`PICKOVER_HEADING_INK`] pixels | **paired control** — R really is inside a web view that really rendered the document. Without it the sample half holds over a blank pane. | drop the Preview leg from the scenario, or blank the render (`WolfCore::render_preview` answering the empty string it returns on an RPC failure). The first was TAKEN and reddens assertion 3, the louder and more correct answer — so the ink floor here has **no captured red**. The only edit that reaches it is the second, and that is a `src/` change this unit forbids. A known gap, recorded rather than implied. | green: 81,897 / 86,736 = 94.42 % dark, 1,976 white |
+/// | 8 | in the SAMPLE, R holds EXACTLY zero `PREVIEW_DARK_BG`, EXACTLY zero [`PICKOVER_HEADING_INK`], and at least [`PICKOVER_SAMPLE_MIN_FILL_FRACTION`] of the fill colour assertion 4 read back | **discriminator** — the overlap is the picker's surface and nothing of the preview survives in it | P1b, below — NOT reached, and it would have been vacuous if it had been: the red's R is degenerate at zero area | green: 0, 0, and 86,736 / 86,736 = 100.00 % |
+///
+/// ## The falsifiers
+///
+/// **P1b, the one taken.** After `overlay.add_overlay(&picker_box)` in `picker::build`,
+/// add `picker_box.insert_before(overlay, overlay.first_child().as_ref());`. A pure
+/// paint-order change and nothing else. Note the ABSENT `&` on `overlay`: that
+/// parameter is already a `&gtk::Overlay`, so passing `&overlay` does not compile at
+/// all — it fails `E0277` on the doubly-borrowed widget and reddens nothing. The line
+/// written above is the one that builds, and it is written out here so the next person
+/// applying this falsifier does not spend ten minutes on the borrow.
+///
+/// **Say plainly what it cannot do: it cannot separate "over the preview" from "on
+/// screen at all".** It moves the box below the window overlay's MAIN child, and that
+/// child paints across the whole window, so the box is hidden everywhere rather than
+/// only where the web view is.
+///
+/// **Assertion 4 is what fired, and the honest reading of that is not softened.** The
+/// colour read back out of the reference band was `(20, 22, 27)` — the EDITOR pane's
+/// own background — and it was IDENTICAL in both captures, so the absence half of
+/// assertion 4 fired. The box was therefore not on screen ANYWHERE, not merely absent
+/// from over the preview. **The red says "no box", not "box below the web view"**,
+/// which is exactly the limitation stated above rather than a targeted result.
+///
+/// What would have fired next is worth recording, because it is what says assertion 6
+/// is not decoration. Carried through by hand off the same red PNG: `web_top` 159,
+/// `web_left` 787, `box_right` 787 — so `overlap_w` = 0 against its 200 floor, and R is
+/// degenerate at zero area. Assertion 8 was never reached, and on a zero-area rectangle
+/// it would have been vacuous if it had been.
+///
+/// **P1a, recorded and NOT taken.** Move the `webkit6::WebView` from the pane's own
+/// overlay to the WINDOW-level one — `DECISIONS.md`'s explicitly rejected alternative.
+/// That inverts exactly the relation under test, which is what P1b cannot do. It also
+/// changes the view's GEOMETRY, since a window-level overlay child is laid out against
+/// the window rather than against the pane, so its red is not isolated: R would move as
+/// well as invert and the reading would not be attributable. It is written down here,
+/// with that cost stated, so a later unit takes it deliberately rather than
+/// rediscovering it.
+///
+/// **P1c, rejected.** Making `PickerHandle::open` a no-op reddens assertions 4 and 6
+/// while proving nothing about z-order — it says only that a box that was never shown
+/// is not on screen.
+///
+/// **The control's own falsifier is dropping the Preview leg**, and TAKEN it reddens
+/// assertion 3 — the readback — rather than assertion 7, which is the louder and more
+/// correct answer and the predicted one: without a preview pane the rectangle is not a
+/// statement about a preview at all, and the readback says so in one line before a
+/// pixel is counted.
+///
+/// The consequence is a gap, and it is written down rather than left implied:
+/// **assertion 7's ink floor has no captured red.** The only edit that reaches it is
+/// blanking `WolfCore::render_preview` with the pane still bound, which is a `src/`
+/// change this unit is forbidden to make. A later unit that touches `src/` can convert
+/// it; until then the ink floor rests on its green reading and on the dark-fraction
+/// half beside it.
+///
+/// ## The conventions it obeys
+///
+/// A fresh temp working directory ([`make_temp_cwd`], mandatory — the captive Neovim's
+/// swap directory is keyed on it); [`CAGE_LOCK`] for the whole body; one `sh -c`
+/// string through [`cage_command`], the single environment helper and the only place
+/// the compositor is spawned; a config directory of its own pinning the appearance the
+/// two theme colours are measured at; and two exit codes naming two causes.
+///
+/// It asserts no OCR term, so it contributes no row to [`ASSERTED_OCR_TERMS`]. Its
+/// three files ARE registered in [`RELAUNCH_FIXTURE_NAMES`], which is the
+/// [`LINK_SOURCE_FILE`] precedent rather than the [`PREVIEW_THEME_SOURCE_FILE`] one:
+/// nothing here can be satisfied by a sidebar row, but the generic loop is what stops
+/// a later rename turning one of these names into page text that breaks somebody
+/// else's smoke.
+#[test]
+fn file_picker_covers_the_live_preview_under_cage() {
+    const SMOKE: &str = "file_picker_covers_the_live_preview_under_cage";
+    const CONTROL_LABEL: &str = "the control capture (preview live, no overlay)";
+    const SAMPLE_LABEL: &str = "the sample capture (file picker open)";
+
+    // Serialize against the other cage tests (shared Wayland socket); recover from
+    // poisoning so a failure in a sibling test does not cascade here.
+    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let runtime_dir = require_smoke_env();
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+
+    // A fresh temp cwd, mandatory: the captive Neovim's swap directory is keyed on it.
+    let cwd = make_temp_cwd();
+    let source_body = format!("{PICKOVER_SOURCE_HEADING}\n\n{PICKOVER_SOURCE_PARAGRAPH}");
+    write_relaunch_fixtures(
+        SMOKE,
+        &cwd,
+        &[
+            (PICKOVER_SOURCE_FILE, source_body.as_str()),
+            (PICKOVER_OTHER_FILE, PICKOVER_OTHER_HEADING),
+        ],
+    );
+
+    // Its own config directory, at a FORCED dark appearance. `cage_command` seeds a
+    // shared one that happens to pin the same value today, and this smoke must not
+    // depend on that: `PREVIEW_DARK_BG` and `PICKOVER_HEADING_INK` are the DARK
+    // palette's colours, so a re-pin of the shared value would leave every rectangle
+    // here sampling a light document while still finding edges.
+    let config = smoke_config_dir_at(&cwd, PICKOVER_SUFFIX, SMOKE_FONT_PT, APPEARANCE_FORCED_DARK);
+
+    let control_png = runtime_dir.join(PICKOVER_CONTROL_PNG_NAME);
+    let sample_png = runtime_dir.join(PICKOVER_SAMPLE_PNG_NAME);
+    let wins = runtime_dir.join(PICKOVER_WINS_NAME);
+    for path in [&control_png, &sample_png, &wins] {
+        clear_evidence(path, SMOKE);
+    }
+
+    let mut cmd = cage_command(PICKOVER_SCENARIO, &cwd);
+    cmd.env("WOLF_BIN", bin)
+        // Chained AFTER `cage_command`, deliberately winning over the shared config
+        // directory it set — the code-highlight smoke's precedent.
+        .env("WOLF_CONFIG_DIR", &config)
+        .env("SRC_FILE", PICKOVER_SOURCE_FILE)
+        .env("OTHER_FILE", PICKOVER_OTHER_FILE)
+        .env("PREVIEW_QUERY", PREVIEW_QUERY)
+        .env("PICKER_QUERY", PICKOVER_QUERY)
+        .env("OUT_PNG_CONTROL", &control_png)
+        .env("OUT_PNG_SAMPLE", &sample_png)
+        .env("WINS", &wins);
+
+    let status = cmd
+        .status()
+        .expect("failed to spawn `cage` for the headless picker-over-preview scenario");
+
+    // --- Assertion 1 (precondition): the scenario ran to completion -----------
+    assert!(
+        status.success(),
+        "{SMOKE}: the cage picker-over-preview scenario exited unsuccessfully ({status}). Exit 11: \
+         the app died before its window ever mapped, which is a LAUNCH failure and says nothing \
+         about the picker or the preview. Exit 14: the window-list readback never appeared at {} — \
+         keys are not reaching Neovim, or the typed Ex command did not execute, so this is a \
+         keyboard failure rather than a compositing one and the keyboard-only smokes are where to \
+         look first. Codes 12 and 13 do not exist here on purpose: nothing in this smoke depends on \
+         a clean exit, and the picker is still open when the scenario kills the app. Any OTHER \
+         status is `grim` or `wtype` failing under `set -eu`. Note this assertion says nothing \
+         about whether a preview ever opened or whether the picker ever appeared — the scenario \
+         exits 0 whatever either of them did.",
+        wins.display()
+    );
+
+    // --- Assertion 2 (precondition): both captures decode at the pinned size --
+    //
+    // Presence first, through the shared helper, so "grim wrote nothing" reads as that
+    // rather than as a decode error. `decode_capture` carries the size check, the
+    // format check and the two PNG gotchas.
+    assert_png_present(SMOKE, &control_png);
+    assert_png_present(SMOKE, &sample_png);
+    let control = decode_capture(&control_png, SMOKE, CONTROL_LABEL);
+    let sample = decode_capture(&sample_png, SMOKE, SAMPLE_LABEL);
+
+    // --- Assertion 3 (precondition): a preview pane exists, in BOTH captures --
+    //
+    // Pixel-independent: the buffer NAMES the captive Neovim reports for its own
+    // windows, written BEFORE either `grim`. Read before any pixel, because a
+    // rectangle sampled inside a pane that never became a preview would fail assertion
+    // 7 while saying nothing about what covers what.
+    let want_windows = {
+        let mut want = vec![
+            format!("{PREVIEW_READBACK_PREFIX}{PICKOVER_SOURCE_FILE}"),
+            PICKOVER_OTHER_FILE.to_string(),
+        ];
+        want.sort();
+        want
+    };
+    let got_windows = read_window_buffer_names(&wins, SMOKE);
+    assert_eq!(
+        got_windows, want_windows,
+        "{SMOKE}: after the Preview leg the captive Neovim's windows hold {got_windows:?}, not \
+         {want_windows:?} (both sorted, so window order is not the subject). Entries naming \
+         {PICKOVER_SOURCE_FILE:?} and {PICKOVER_OTHER_FILE:?} with NO preview scratch mean no \
+         preview was bound at all — the palette dispatched nothing, `shell::perform` has no \
+         `OpenPreview` arm, or the {PREVIEW_QUERY:?} query matched no row. A SINGLE entry means the \
+         `<C-w>v` split never happened, so there is one pane, `preview_placement` answered \
+         `split_right` instead of `active`, and the preview is not where every rectangle below \
+         assumes it is. THREE entries mean it split twice. The whole geometry below is derived on \
+         the assumption of exactly two side-by-side panes with the preview in the RIGHT one, so \
+         none of it means anything until this holds."
+    );
+
+    // --- Assertion 4 (precondition): the picker's fill colour, read EMPIRICALLY
+    //
+    // Two halves, and both are load-bearing. Uniformity says the band is inside one
+    // flat surface rather than straddling an edge, which is what licenses reading the
+    // colour off a single pixel. ABSENCE from the same band in the control says that
+    // surface belongs to the picker rather than to the editor pane underneath it —
+    // without it, a run in which the box never appeared would read the editor's own
+    // background as "the fill colour" and sail through assertion 8.
+    let reference = pickover_fill_reference_band();
+    let (area_x, _, area_w, _) = preview_theme_pane_area();
+    let pane_left = pixel_index(area_x, "the pane area's left edge");
+    let pane_mid_x = pixel_index(area_x + area_w / 2.0, "the pane area's horizontal midpoint");
+    assert!(
+        reference.x0 >= pane_left
+            && reference.x1 <= pane_mid_x
+            && reference.x0 < reference.x1
+            && reference.y0 < reference.y1
+            && reference.x1 <= control.width
+            && reference.y1 <= control.height,
+        "{SMOKE}: the fill-colour reference band {reference:?} is degenerate, or is no longer \
+         inside the EDITOR half of the pane area (columns {pane_left}..{pane_mid_x}, derived from \
+         CAGE_OUTPUT_*_EXPECTED and OVERLAY_ORIGIN_*_EXPECTED), or falls outside the {}x{} capture. \
+         The band must sit over the editor pane: that is what makes its CLOSED reading zero, and a \
+         band that drifted into the preview half would read the document's background as the \
+         picker's fill. Re-derive it against a retained capture; do not nudge the literals to make \
+         a run pass.",
+        control.width,
+        control.height
+    );
+
+    let fill = sample.pixel(reference.x0, reference.y0);
+    let fill_hits = sample.count_exactly(reference, fill);
+    assert_eq!(
+        fill_hits,
+        reference.pixels(),
+        "{SMOKE}: in {SAMPLE_LABEL}, only {fill_hits} of the reference band {reference:?}'s {} \
+         pixels are {fill:?} — the colour at its own top-left corner — so the band is not one flat \
+         surface and no single pixel of it can stand for the picker's fill. A count near zero means \
+         the picker box is not covering this band at all: either the chord never opened it, or the \
+         box moved. A count that is a large FRACTION of the band means the band straddles an edge \
+         — the box's own boundary, or a list row's highlight reaching further down than it did — \
+         and the band is what to re-derive, not this assertion. Captures kept at {} and {}.",
+        reference.pixels(),
+        control_png.display(),
+        sample_png.display()
+    );
+
+    let control_fill_hits = control.count_exactly(reference, fill);
+    assert_eq!(
+        control_fill_hits,
+        0,
+        "{SMOKE}: the colour {fill:?} read out of {SAMPLE_LABEL} also appears {control_fill_hits} \
+         times inside the SAME band {reference:?} of {CONTROL_LABEL}, where no overlay is open. It \
+         is therefore not the picker's surface but something the window draws either way, and \
+         assertion 8 below would be satisfied by a frame in which the picker never appeared. Two \
+         causes read IDENTICALLY here, and only the retained PNGs separate them. Either the chord \
+         did not open the box in the sample run, so both captures show the editor pane — check \
+         that Ctrl+Shift+O still reaches `win.go-to-file`. Or the box opened and is painted under \
+         something that hides it everywhere: that is what the P1b paint-order falsifier did, and \
+         the colour it produced here was the editor pane's own `(20, 22, 27)` in BOTH captures, \
+         indistinguishable from a chord that never arrived except by looking for the box in the \
+         sample PNG. Captures kept at {} and {}.",
+        control_png.display(),
+        sample_png.display()
+    );
+
+    assert_ne!(
+        fill, PREVIEW_DARK_BG,
+        "{SMOKE}: the picker's fill colour read back as {fill:?}, which is exactly PREVIEW_DARK_BG \
+         — the previewed document's own background. The two colours must differ or assertion 8's \
+         'zero PREVIEW_DARK_BG' and 'a floor of fill' halves are the same statement negated, and \
+         the smoke could not distinguish a box that covers the preview from one that does not."
+    );
+    assert_ne!(
+        fill, PICKOVER_HEADING_INK,
+        "{SMOKE}: the picker's fill colour read back as {fill:?}, which is exactly \
+         PICKOVER_HEADING_INK — the rendered heading's own colour. Assertion 8 counts both inside \
+         one rectangle, so they must differ for its zero-ink half to mean anything."
+    );
+
+    // --- Assertion 5 (precondition): locate all four edges of R ---------------
+    //
+    // Each edge is read from the capture in which that boundary is VISIBLE, which is
+    // not the same capture for all four: the box covers the web view's top and left in
+    // the sample, and there is no box at all in the control.
+    let preview_columns = preview_theme_preview_columns();
+    let scan_rows = preview_theme_scan_rows();
+    let (band_y0, band_y1) = preview_theme_band_rows();
+
+    let web_top = control
+        .first_uniform_row(preview_columns, scan_rows, PREVIEW_DARK_BG)
+        .unwrap_or_else(|| {
+            panic!(
+                "{SMOKE}: in {CONTROL_LABEL}, no row between {} and {} is entirely PREVIEW_DARK_BG \
+                 = {PREVIEW_DARK_BG:?} across columns {}..{}, so the web view's own top edge could \
+                 not be located and R has no top. Two causes: the document is not rendering at all \
+                 (an empty `render_preview`, or `about:blank`), or its FIRST block is not a \
+                 paragraph — a document opening with a full-width `hr` or table has no run of pure \
+                 background at its top. Assertion 3 already passed, so a preview pane DOES exist. \
+                 Capture kept at {}.",
+                scan_rows.0,
+                scan_rows.1,
+                preview_columns.0,
+                preview_columns.1,
+                control_png.display()
+            )
+        });
+
+    let web_left = control
+        .first_uniform_column(
+            SampleRect {
+                x0: pane_mid_x,
+                x1: control.width,
+                y0: band_y0,
+                y1: band_y1,
+            },
+            PREVIEW_DARK_BG,
+        )
+        .unwrap_or_else(|| {
+            panic!(
+                "{SMOKE}: in {CONTROL_LABEL}, no column between the pane midpoint ({pane_mid_x}) \
+                 and the right edge of the {}-wide capture is entirely PREVIEW_DARK_BG = \
+                 {PREVIEW_DARK_BG:?} across rows {band_y0}..{band_y1}, so the web view's own left \
+                 edge could not be located and R has no left. Those rows are the lower half of the \
+                 pane, which the fixture is deliberately too short to reach, so ink there means the \
+                 document grew — shorten PICKOVER_SOURCE_PARAGRAPH. A preview that is in the LEFT \
+                 half instead would also read this way; assertion 3 cannot see which half. Capture \
+                 kept at {}.",
+                control.width,
+                control_png.display()
+            )
+        });
+
+    let box_right = sample
+        .first_uniform_column(
+            SampleRect {
+                x0: web_left,
+                x1: sample.width,
+                y0: reference.y0,
+                y1: reference.y1,
+            },
+            PREVIEW_DARK_BG,
+        )
+        .unwrap_or_else(|| {
+            panic!(
+                "{SMOKE}: in {SAMPLE_LABEL}, no column between the web view's left edge \
+                 ({web_left}) and the right edge of the {}-wide capture is entirely \
+                 PREVIEW_DARK_BG = {PREVIEW_DARK_BG:?} across rows {}..{}, so the picker box's own \
+                 right edge could not be located. What that means is that the preview's background \
+                 is nowhere to the RIGHT of the box on those rows — the box would have to be wider \
+                 than the web view, or the web view would have to have stopped painting while the \
+                 picker is up. Capture kept at {}.",
+                sample.width,
+                reference.y0,
+                reference.y1,
+                sample_png.display()
+            )
+        });
+
+    // --- Assertion 6 (discriminator, geometrical): the box REACHES the view ---
+    //
+    // Read before the box's bottom edge is located, because that scan samples the
+    // columns between these two and an empty column range would make every row match
+    // trivially. This is also the assertion that speaks first when the box is on
+    // screen but not over the preview: its visible right edge is then bounded by the
+    // web view's own left edge, and this width reads 0.
+    let overlap_w = box_right.saturating_sub(web_left);
+    assert!(
+        overlap_w >= PICKOVER_MIN_OVERLAP_W_PX,
+        "{SMOKE}: the picker box's visible surface spans only {overlap_w} column(s) inside the web \
+         view (its right edge located at {box_right}, the view's left edge at {web_left}), fewer \
+         than the {PICKOVER_MIN_OVERLAP_W_PX} floor; the measurement is 278. A reading of ZERO is \
+         the named one and it means the box's visible right edge coincides with the web view's \
+         left edge — the preview is painted OVER the box rather than under it, so the box stops \
+         being visible exactly where the view begins. A box that is on screen NOWHERE reads 0 here \
+         too — P1b's red PNG carries exactly that — which is why assertion 4 above, where such a \
+         build reddens first, is what tells the two apart. A small non-zero reading means the box \
+         moved left, or the view moved right, and the two now barely meet. Both are z-order or \
+         layout findings; neither is answered by lowering this floor. Captures kept at {} and {}.",
+        control_png.display(),
+        sample_png.display()
+    );
+
+    let box_bottom = sample
+        .first_uniform_row(
+            (web_left, box_right),
+            (reference.y1, band_y1),
+            PREVIEW_DARK_BG,
+        )
+        .unwrap_or_else(|| {
+            panic!(
+                "{SMOKE}: in {SAMPLE_LABEL}, no row between {} and {band_y1} is entirely \
+                 PREVIEW_DARK_BG = {PREVIEW_DARK_BG:?} across columns {web_left}..{box_right}, so \
+                 the picker box's own bottom edge could not be located and R has no bottom. The \
+                 box would have to extend past row {band_y1} — well beyond the measured 471 — or \
+                 the web view would have to have stopped painting below it. Capture kept at {}.",
+                reference.y1,
+                sample_png.display()
+            )
+        });
+
+    let overlap_h = box_bottom.saturating_sub(web_top);
+    assert!(
+        overlap_h >= PICKOVER_MIN_OVERLAP_H_PX,
+        "{SMOKE}: the picker box's visible surface spans only {overlap_h} row(s) inside the web \
+         view (its bottom edge located at {box_bottom}, the view's top edge at {web_top}), fewer \
+         than the {PICKOVER_MIN_OVERLAP_H_PX} floor; the measurement is 312. ZERO means the box \
+         ends at or above where the view begins, so the two do not overlap vertically at all. A \
+         small non-zero reading means the box got shorter, or the web view starts lower down the \
+         pane than it did. Captures kept at {} and {}.",
+        control_png.display(),
+        sample_png.display()
+    );
+
+    let overlap = SampleRect {
+        x0: web_left,
+        x1: box_right,
+        y0: web_top,
+        y1: box_bottom,
+    };
+    assert!(
+        overlap.x1 <= control.width
+            && overlap.y1 <= control.height
+            && overlap.x1 <= sample.width
+            && overlap.y1 <= sample.height,
+        "{SMOKE}: the overlap rectangle {overlap:?} runs off the edge of a capture (control {}x{}, \
+         sample {}x{}). Every edge of it is located from the pixels of one of the two, so this \
+         means a located edge is past the far side of the other — which cannot happen while both \
+         decode at the same pinned size, and assertion 2 has already checked that.",
+        control.width,
+        control.height,
+        sample.width,
+        sample.height
+    );
+
+    // --- Assertion 7 (paired control): R IS the live preview ------------------
+    //
+    // Read before the sample half, because it is what stops that half passing
+    // vacuously: a box drawn over a web view that never rendered would satisfy every
+    // reading below while proving nothing. Two floors, because "the background is
+    // dark" and "the document is on screen" are different claims and a blank view
+    // satisfies the first.
+    let control_dark = control.count_exactly(overlap, PREVIEW_DARK_BG);
+    let control_dark_fraction = band_fraction(
+        control_dark,
+        overlap.pixels(),
+        "the control capture's dark-background fraction",
+    );
+    assert!(
+        control_dark_fraction >= PICKOVER_CONTROL_MIN_DARK_FRACTION,
+        "{SMOKE}: in {CONTROL_LABEL}, only {control_dark_fraction:.4} of the overlap rectangle \
+         {overlap:?} ({} pixels) is PREVIEW_DARK_BG = {PREVIEW_DARK_BG:?}, below the \
+         {PICKOVER_CONTROL_MIN_DARK_FRACTION} floor; the measurement is 0.9442. This is the CONTROL \
+         half of the pair, and its failure means the rectangle is not inside a live web view — so \
+         the sample half below, which was not evaluated, would have proved nothing whatever it \
+         read. Three readings, told apart by the size of the number. Near ZERO: the rectangle is \
+         over the editor pane (background `(20, 22, 27)`) rather than the preview, so the two panes \
+         are the wrong way round or the located edges are wrong. Somewhat below the floor: the \
+         document grew and its ink now fills rows this rectangle spans — shorten \
+         PICKOVER_SOURCE_PARAGRAPH rather than lowering the floor. Near zero with the ink floor \
+         below ALSO failing: the web view is showing something that is not the document at all. \
+         Captures kept at {} and {}.",
+        overlap.pixels(),
+        control_png.display(),
+        sample_png.display()
+    );
+
+    let control_ink = control.count_exactly(overlap, PICKOVER_HEADING_INK);
+    assert!(
+        control_ink >= PICKOVER_CONTROL_MIN_INK_PX,
+        "{SMOKE}: in {CONTROL_LABEL}, the overlap rectangle {overlap:?} carries only {control_ink} \
+         pixels that are exactly PICKOVER_HEADING_INK = {PICKOVER_HEADING_INK:?}, below the \
+         {PICKOVER_CONTROL_MIN_INK_PX} floor; the measurement is 1,976. The dark-background floor \
+         above just passed, so the rectangle IS the web view — which leaves a view that is showing \
+         a BLANK document. A count of ZERO is the named reading and means exactly that: \
+         `WolfCore::render_preview` answered the empty string it returns on an RPC failure, or the \
+         document rendered without its heading. That is the state this control exists to rule out, \
+         because a picker box drawn over a blank view satisfies every sample-side reading below. A \
+         SMALL non-zero count instead means the heading rendered but is narrower or shorter than \
+         measured — a fixture change, and the answer is to restore an eleven-letter `h1`, never to \
+         lower this floor. Captures kept at {} and {}.",
+        control_png.display(),
+        sample_png.display()
+    );
+
+    // --- Assertion 8 (discriminator): the picker OWNS those pixels ------------
+    //
+    // Three readings of one rectangle. The two zeros are exact and stay exact: the
+    // measurement is 0 of 86,736 for each, so a single pixel of the preview surviving
+    // inside R is a real finding about the compositing rather than sampling noise.
+    let sample_dark = sample.count_exactly(overlap, PREVIEW_DARK_BG);
+    let sample_ink = sample.count_exactly(overlap, PICKOVER_HEADING_INK);
+    let sample_fill = sample.count_exactly(overlap, fill);
+    let sample_fill_fraction = band_fraction(
+        sample_fill,
+        overlap.pixels(),
+        "the sample capture's picker-fill fraction",
+    );
+    assert!(
+        sample_dark == 0
+            && sample_ink == 0
+            && sample_fill_fraction >= PICKOVER_SAMPLE_MIN_FILL_FRACTION,
+        "{SMOKE}: in {SAMPLE_LABEL}, the overlap rectangle {overlap:?} ({} pixels) reads \
+         {sample_dark} pixels of PREVIEW_DARK_BG = {PREVIEW_DARK_BG:?} (needs exactly 0), \
+         {sample_ink} pixels of PICKOVER_HEADING_INK = {PICKOVER_HEADING_INK:?} (needs exactly 0), \
+         and {sample_fill_fraction:.4} of the picker's own fill {fill:?} (needs >= \
+         {PICKOVER_SAMPLE_MIN_FILL_FRACTION}). The measurements are 0, 0 and 1.0000. Assertion 7 \
+         above passed, so this rectangle IS a live preview with the document rendered in it, and \
+         the only question left is what covers it.\n\
+         The named cause is the picker box no longer painting above the preview pane's web view. \
+         Its four transient overlays are children of the WINDOW-level `gtk::Overlay` while a \
+         preview's `webkit6::WebView` is a child of the PANE's own overlay, and it is the ordering \
+         between those two that this reading is about — check `picker::build`'s \
+         `overlay.add_overlay(&picker_box)` and `pane_view`'s `p.host.add_overlay(&view)` before \
+         anything else.\n\
+         Three readings, told apart by which of the three numbers moved. Dark near the rectangle's \
+         full size with the fill near zero: the preview is painted over the box entirely. A partial \
+         dark count with a partial fill fraction: the box is above the view for part of the \
+         rectangle only, which is what a WebKit rendering through its own Wayland SUBSURFACE would \
+         look like — that is `DECISIONS.md`'s named residual risk, measured NOT to fire on this \
+         stack even against a deliberately promoted compositing layer, so a reading of this shape \
+         is a finding worth recording rather than a threshold to retune. Both zeros holding with \
+         the fill fraction low: the box is on top but is drawing something other than its flat \
+         surface across the rectangle — a list row taller than measured is the benign version, and \
+         PICKOVER_QUERY is what controls the row count. Captures kept at {} and {}.",
+        overlap.pixels(),
+        control_png.display(),
+        sample_png.display()
+    );
+}
+
 // --- The column cap, and the per-buffer override that lifts it ---------------
 
 /// The font size THIS smoke launches at, in points, overriding [`SMOKE_FONT_PT`].
@@ -25393,7 +26488,7 @@ fn divider_drag_survives_a_pane_relayout_under_cage() {
 /// | the active-pane FOCUS RING's top edge — a long thin high-contrast line immediately above the heading | six ablations on one PNG; the top edge alone accounted for it | [`DIVIDER_RELAUNCH_SCENARIO`]'s closing `<C-w>h`, which moves the ring to the WIDE pane |
 /// | a single misclassified GLYPH at 15 columns | the same pixels read through both segmentation modes, twice over | the second reader, [`ocr_uniform_block_to_lowercase`] |
 ///
-/// The third is why this smoke, alone of the fifty-two, reads its capture twice.
+/// The third is why this smoke, alone of the fifty-three, reads its capture twice.
 /// With the first two answered, on one retained PNG:
 ///
 /// | command | verbatim output |
