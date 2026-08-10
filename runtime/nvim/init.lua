@@ -1386,6 +1386,65 @@ function _G.wolf_setup_open_files(chan)
 	emit()
 end
 
+-- Filesystem-change events for the file-search rescan: wolf-core invokes this
+-- over RPC after the open-file mirror setup, passing its own RPC channel id. It
+-- notifies core via wolf_fs_changed whenever the set of files on disk may have
+-- changed, so core can re-walk its live file-search sessions (the tree sidebar
+-- / picker). The payload is { event_name, abs_path } — core treats BufWritePost
+-- as conditional (rescan only for a not-yet-listed path) and every other event
+-- as unconditional.
+--
+-- Two trigger classes, two autocmds:
+--
+-- 1. Buffer events (BufWritePost/BufFilePost/BufDelete): the event names the
+--    file that changed, so the payload carries its absolute path and the
+--    callback skips non-file buffers.
+-- 2. Refocus-edge events (ShellCmdPost/FocusGained/TermLeave): force catch-ups
+--    for mutations nvim never saw as buffer events — a `:!mv`/`:!rm` shell
+--    command, an external terminal or Finder while the app was unfocused, a
+--    command run in the drawer's shell. The event names no file, so the
+--    payload carries an explicit "" (no path semantics).
+--
+-- TermLeave rather than WinLeave: the drawer auto-startinserts on WinEnter
+-- (WolfTerminalInsert augroup), so every drawer-exit path passes a t -> n
+-- mode change and TermLeave covers all of them without a buftype guard.
+--
+-- This is a DEDICATED event rather than a reuse of wolf_open_files because that
+-- augroup also fires on BufEnter/WinEnter/TabEnter, which would turn every
+-- focus change into a rescan.
+function _G.wolf_setup_fs_events(chan)
+	local group = vim.api.nvim_create_augroup("WolfFsEvents", { clear = true })
+	vim.api.nvim_create_autocmd({ "BufWritePost", "BufFilePost", "BufDelete" }, {
+		group = group,
+		callback = function(args)
+			-- Skip non-file buffers (terminals, help, prompt, scratch). The
+			-- buftype read is pcall-guarded because args.buf can already be
+			-- invalid on BufDelete; an unreadable buftype fails OPEN (notify
+			-- anyway — an extra rescan is harmless, a missed one is the bug).
+			local ok, buftype = pcall(function()
+				return vim.bo[args.buf].buftype
+			end)
+			if ok and buftype ~= "" then
+				return
+			end
+			pcall(vim.rpcnotify, chan, "wolf_fs_changed", { args.event, vim.fn.fnamemodify(args.file, ":p") })
+		end,
+	})
+	-- Separate callback, NOT a reuse of the buffer-event one: its buftype guard
+	-- would swallow TermLeave (the current buffer IS the terminal) and
+	-- FocusGained while the drawer is focused. No per-event guards. The path is
+	-- an explicit "" — for these events args.file is only the incidental current
+	-- buffer, and fnamemodify("", ":p") would fabricate the cwd; "" states "no
+	-- path semantics". The element must still be present: core's decode drops a
+	-- 1-element payload.
+	vim.api.nvim_create_autocmd({ "ShellCmdPost", "FocusGained", "TermLeave" }, {
+		group = group,
+		callback = function(args)
+			pcall(vim.rpcnotify, chan, "wolf_fs_changed", { args.event, "" })
+		end,
+	})
+end
+
 -- Per-pane view tracking for the buffer picker: wolf-core invokes this over RPC
 -- after the command setup. Unlike the other setups it takes NO channel id and
 -- emits NO rpcnotify — it only maintains an in-nvim (winid, bufnr) -> winsaveview

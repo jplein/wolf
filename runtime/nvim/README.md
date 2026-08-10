@@ -20,9 +20,9 @@ Everything wolf-core reaches is a global on `_G`. Channel ids and arguments are 
 
 ### Setup helpers
 
-wolf-core invokes these once after `ui_attach`, in the order listed by [`api.rs`](../../crates/wolf-core/src/api.rs): current-file, buffers, full-width, layout, dir, theme, commands, tabs, open-files, view, preview. Each takes core's own RPC channel id, creates a `clear = true` augroup so re-invoking is idempotent, and emits once immediately so startup state is reflected without an event.
+wolf-core invokes these once after `ui_attach`, in the order listed by [`api.rs`](../../crates/wolf-core/src/api.rs): current-file, buffers, full-width, layout, dir, theme, commands, tabs, open-files, fs-events, view, preview. Each takes core's own RPC channel id, creates a `clear = true` augroup so re-invoking is idempotent, and emits once immediately so startup state is reflected without an event.
 
-None of the notifications below is a redraw frame, so none bumps the snapshot `seq`; each wakes the front-end. [`redraw.rs`](../../crates/wolf-core/src/redraw.rs) holds the decoding rules, including the defensive tolerance for a msgpack-`Ext`-wrapped handle where a plain integer is expected.
+None of the notifications below is a redraw frame, so none bumps the snapshot `seq`. Most wake the front-end; `wolf_cwd` and `wolf_fs_changed` do not — the first rides the redraw flush its `:cd` already produces, and the second wakes only the file-search sessions whose rescan swaps. [`redraw.rs`](../../crates/wolf-core/src/redraw.rs) holds the decoding rules, including the defensive tolerance for a msgpack-`Ext`-wrapped handle where a plain integer is expected.
 
 #### `wolf_setup_current_file_tracking(chan)`
 
@@ -83,6 +83,14 @@ Core wholesale-replaces `Snapshot.tab_cwds`, which makes `cwd_for_tabpage` a che
 Backs the crash-restart file restore. Notifies **`wolf_open_files`** with a list of `{ tabpage_handle, active_path, files }` triples, one per tabpage, on `BufEnter`/`BufWinEnter`/`BufWritePost`/`BufFilePost`/`BufDelete`/`WinEnter`/`TabEnter`/`TabNewEntered`/`TabClosed`. Core wholesale-replaces `Snapshot.open_files`, which the front-end reads before a restart and replays after.
 
 `files` is the whole instance's file-backed buflisted buffer set, with preview scratch and unnamed buffers excluded. `active_path` is the tabpage's active window's buffer name, empty for an unnamed buffer. See Limitations for what the global file set costs.
+
+#### `wolf_setup_fs_events(chan)`
+
+Feeds the file-search rescan. Notifies **`wolf_fs_changed`** with `{ event_name, abs_path }` from two trigger classes in one augroup: the buffer events `BufWritePost`/`BufFilePost`/`BufDelete` (file buffers only) carry the changed file's absolute path, while the refocus-edge events `ShellCmdPost`/`FocusGained`/`TermLeave` carry an explicit `""` — they name no file, and the empty element must still be present or core's pair decode drops the event. Core routes both into the rescan of every live file-search session (see [`files.rs`](../../crates/wolf-core/src/README.md#filesrs)); only `BufWritePost` is conditional — rescan only for a path not already listed — and every other event forces one.
+
+It is a dedicated event rather than a reuse of `wolf_open_files` because that augroup also fires on `BufEnter`/`WinEnter`/`TabEnter`, which would turn every focus change into a rescan. The refocus-edge autocmd has its own callback because the buffer-event callback's buftype guard would swallow `TermLeave`, whose current buffer is the terminal; that guard is `pcall`-guarded and fails open, since `args.buf` can already be invalid on `BufDelete` and an extra rescan is harmless where a missed one is the bug. `TermLeave` rather than `WinLeave`: the drawer auto-`startinsert`s on `WinEnter`, so every drawer-exit path passes a terminal-to-normal mode change and the one unguarded event covers them all. There is no initial emit: with no event there is nothing to rescan.
+
+`FocusGained` depends on the front-end forwarding OS focus — the same asymmetry as `:checktime` under Limitations — so on GNOME, external changes wait for another trigger.
 
 #### `wolf_setup_view_tracking()`
 

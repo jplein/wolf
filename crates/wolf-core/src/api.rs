@@ -204,6 +204,13 @@ pub struct WolfCore {
     /// Reentrancy guard for [`restart_nvim`](WolfCore::restart_nvim): a concurrent
     /// or nested restart request is a no-op while one is in flight.
     restarting: AtomicBool,
+    /// The live file-search session registry (see [`files::SearchRegistry`]).
+    /// Created once at [`WolfCore::start`] and cloned into the redraw handler,
+    /// which routes each `wolf_fs_changed` notification into it;
+    /// [`start_file_search`](WolfCore::start_file_search) registers every new
+    /// session so the debounced rescan keeps long-lived sessions (the tree
+    /// sidebar) tracking writes/renames/deletes made through the captive nvim.
+    search_registry: Arc<files::SearchRegistry>,
 }
 
 /// The process's canonicalized home directory, resolved at most once.
@@ -274,6 +281,13 @@ impl WolfCore {
             .map(|d| MruStore::open(&d))
             .unwrap_or_else(MruStore::disabled);
 
+        // The file-search session registry: `start_file_search` registers each
+        // live session; the redraw handler routes `wolf_fs_changed` events into
+        // it, and it debounces + re-walks the registered sessions (see
+        // `files::SearchRegistry`). Built on this runtime's handle so rescan
+        // walks share the traversal's blocking pool.
+        let search_registry = Arc::new(files::SearchRegistry::new(runtime.handle().clone()));
+
         let handler = RedrawHandler::new(
             snapshot.clone_handle(),
             intents.clone(),
@@ -281,6 +295,7 @@ impl WolfCore {
             tracked_cwd.clone(),
             recent_dirs.clone(),
             nav_history.clone(),
+            search_registry.clone(),
             wake.clone(),
         );
 
@@ -314,6 +329,7 @@ impl WolfCore {
             proc.setup_commands().await?;
             proc.setup_tabs().await?;
             proc.setup_open_files().await?;
+            proc.setup_fs_events().await?;
             proc.setup_view_tracking().await?;
             proc.setup_preview().await?;
             Ok::<NvimProcess, NvimError>(proc)
@@ -406,6 +422,7 @@ impl WolfCore {
             handler,
             nvim_cfg,
             restarting: AtomicBool::new(false),
+            search_registry,
         })
     }
 
@@ -1323,6 +1340,20 @@ impl WolfCore {
             bounds.skip_dirs.insert(home.join(".cache"));
         }
 
+        // Register the session with the fs-event rescan registry BEFORE the
+        // traversal spawns, so no `wolf_fs_changed` event can slip between the
+        // walk and the registration. The entry shares the session's `state` /
+        // `cancel` handles; dropping the returned `FileSearch` sets `cancel`,
+        // which is the registry's cue to prune the entry.
+        self.search_registry.register(files::SessionEntry::new(
+            state.clone(),
+            cancel.clone(),
+            root.clone(),
+            bounds.clone(),
+            wake.clone(),
+            self.mru.clone(),
+        ));
+
         files::spawn_traversal(
             root,
             state.clone(),
@@ -1521,6 +1552,7 @@ impl WolfCore {
             proc.setup_commands().await?;
             proc.setup_tabs().await?;
             proc.setup_open_files().await?;
+            proc.setup_fs_events().await?;
             proc.setup_view_tracking().await?;
             proc.setup_preview().await?;
             Ok::<NvimProcess, NvimError>(proc)

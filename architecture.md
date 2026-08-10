@@ -112,7 +112,7 @@ The boundary is narrow and FFI-shaped (decision 1): only plain data crosses it, 
 - **A drainable queue.** Core enqueues discrete requests — layout intents, commands — in arrival order, and the front-end drains them on each wake.
 - **A blocking query.** A few calls need an answer from Neovim before the front-end can act. Each returns a neutral fallback (`""`, `0`, `None`, an empty `Vec`) on any error or timeout, so no error channel crosses the boundary and a wedged nvim is indistinguishable from an empty answer.
 
-One rule governs every wake: only a redraw `flush` bumps `Snapshot.seq`. The out-of-band `wolf_*` notifications fire the same wake without bumping it, so a front-end that gates its repaint on `seq` alone misses every cwd, buffer, theme and preview update ([`redraw.rs`](crates/wolf-core/src/README.md#redrawrs)).
+One rule governs every wake: only a redraw `flush` bumps `Snapshot.seq`. The snapshot-facing out-of-band `wolf_*` notifications fire the same wake without bumping it, so a front-end that gates its repaint on `seq` alone misses every buffer, theme and preview update ([`redraw.rs`](crates/wolf-core/src/README.md#redrawrs)). Two notifications fire no handler wake at all: `wolf_cwd`, whose triggering `:cd` already produces its own redraw flush, and `wolf_fs_changed`, which only feeds the file-search rescan — each affected session fires its own wake when a rescan swaps its list.
 
 The FFI-level shape of each contract — the Swift-facing signatures, the opaque handle types, and the discriminant tables that are the ABI — is in [`crates/wolf-ffi/src/README.md`](crates/wolf-ffi/src/README.md). What follows is the language-neutral form both front-ends consume.
 
@@ -149,6 +149,8 @@ Field-level detail — why `Grid::resize` preserves rather than clears, why `Win
 ### Output: file-search session (core → front-end)
 
 `start_file_search(wake)` returns a `FileSearch` whose `read()` yields an owned guard over `entries: Vec<FileEntry>`, `complete`, `truncated`, and a monotonic `version`. The recent-files seed is present synchronously; a background walk streams the rest in, bumping `version` and firing the same wake after each batch. Dropping or cancelling the handle stops the traversal. A `FileEntry` carries an absolute `path`, a root-relative `display`, and an optional `mru_rank`.
+
+A live session also tracks the filesystem: a change performed through the captive Neovim re-walks the session and swaps its entry list, bumping `version` and firing the same wake, so a long-lived session — the tree sidebar — follows the project. Changes made outside nvim surface at the next trigger edge, such as the app regaining focus, rather than immediately ([`wolf-core`'s DECISIONS.md](crates/wolf-core/DECISIONS.md)).
 
 Ranking belongs to core, not the front-end: `rank_matches` decides which entries match a query and in what order ([`rank.rs`](crates/wolf-core/src/README.md#rankrs)), so both front-ends and the tests agree on the result. Selection feeds back as an `Open` input event, which core also records in the per-project recent-files cache.
 

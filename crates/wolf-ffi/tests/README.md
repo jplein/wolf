@@ -371,6 +371,12 @@ Also `preview_buffer(win, bufnr)` — markdown binds and returns the source bufn
 
 **Gotchas** — the seeded cwd carries a dotfile and a `.gitignore` plus the file it ignores on purpose; directories-before-files case-insensitive ordering, dotfile inclusion, and gitignore exclusion are all asserted against that exact layout. Path comparisons canonicalize, so the macOS `/var` to `/private/var` symlink does not break them.
 
+#### `tree_search_rescan.rs`
+
+**Covers** — the fs-event rescan reaching the tree bridge end to end: a long-lived `start_tree_search()` session gains a root node for a file created through typed keystrokes (`:e` / insert / `:w`), loses it after `remove_file` plus `:bdelete!`, advances `version()` on each swap, and keeps the directories-before-files ordering across the swaps. Real nvim; target `//crates/wolf-ffi:tree_search_rescan` (staged nvim runfiles or `WOLF_NVIM_BIN`, `tags = ["no-sandbox"]`).
+
+**Gotchas** — the write assertion requires both the new node and a `version()` advance before declaring the rescan landed, because the version is what wakes the Swift side into `scheduleRefresh()`; a node without a bump is an invisible update in the real UI. Keystrokes go through `send_key` / `FfiKeyEvent` — the same path the generated Swift glue drives — never a convenience method.
+
 #### `treesitter_highlight.rs`
 
 **Covers** — the captive `init.lua` treesitter block: markdown highlighting is genuinely active on the buffer, and a fenced `go` code block yields an injected `go` langtree. Real nvim plus two staged trees; target `//crates/wolf-ffi:treesitter_highlight` adds `//bazel/nvim-treesitter:nvim_treesitter_tree` and `//bazel/treesitter-parsers:parsers_tree` to the nvim runfiles (`tags = ["no-sandbox"]`), and skips loudly when any is absent.

@@ -200,6 +200,19 @@ const TAB_CWDS_EVENT: &str = "wolf_tab_cwds";
 /// separately from `redraw` in [`RedrawHandler::handle_notify`].
 const OPEN_FILES_EVENT: &str = "wolf_open_files";
 
+/// Name of the out-of-band notification carrying one filesystem-changing buffer
+/// event, emitted by the `WolfFsEvents` autocmds (`BufWritePost`/`BufFilePost`/
+/// `BufDelete`, file buffers only) in `runtime/nvim/init.lua`. The same augroup
+/// also emits the path-less refocus-edge force events (`ShellCmdPost`/
+/// `FocusGained`/`TermLeave`), which arrive as `[event_name, ""]`. The payload
+/// is `[event_name, abs_path]`. Routed separately from `redraw` in
+/// [`RedrawHandler::handle_notify`] into the sibling
+/// [`SearchRegistry`](crate::files::SearchRegistry), which debounces and
+/// re-walks every live file-search session. It touches NO snapshot state: no
+/// snapshot lock, no `seq` bump, and no handler-level wake (each session's own
+/// wake fires when its rescan swaps).
+const FS_CHANGED_EVENT: &str = "wolf_fs_changed";
+
 /// `nvim-rs` [`Handler`] that applies redraw batches to a [`SharedSnapshot`].
 #[derive(Clone)]
 pub struct RedrawHandler {
@@ -209,6 +222,7 @@ pub struct RedrawHandler {
     cwd: TrackedCwd,
     recent_dirs: RecentDirs,
     nav_history: NavHistoryCell,
+    search_registry: Arc<crate::files::SearchRegistry>,
     wake: WakeFn,
 }
 
@@ -216,8 +230,11 @@ impl RedrawHandler {
     /// Creates a handler writing into `snapshot`, pushing layout intents onto
     /// `intents`, pushing user-triggered commands onto `commands`, tracking nvim's
     /// cwd into `cwd` (recording it into the always-on global `recent_dirs` MRU),
-    /// folding per-pane navigation targets into `nav_history`, and waking via
-    /// `wake`.
+    /// folding per-pane navigation targets into `nav_history`, routing
+    /// `wolf_fs_changed` events into `search_registry`, and waking via `wake`.
+    // One parameter per sibling cell the handler folds into; bundling them into a
+    // struct would just rename the same eight things.
+    #[allow(clippy::too_many_arguments)]
     #[must_use]
     pub fn new(
         snapshot: SharedSnapshot,
@@ -226,6 +243,7 @@ impl RedrawHandler {
         cwd: TrackedCwd,
         recent_dirs: RecentDirs,
         nav_history: NavHistoryCell,
+        search_registry: Arc<crate::files::SearchRegistry>,
         wake: WakeFn,
     ) -> Self {
         Self {
@@ -235,6 +253,7 @@ impl RedrawHandler {
             cwd,
             recent_dirs,
             nav_history,
+            search_registry,
             wake,
         }
     }
@@ -366,6 +385,33 @@ impl Handler for RedrawHandler {
                 // `seq` is left unchanged.
                 self.apply_markdown_cursor(args).await;
                 (self.wake)();
+            }
+            FS_CHANGED_EVENT => {
+                // An fs change is NOT render state: no snapshot lock, no `seq`
+                // bump, and NO handler-level wake — the registry's debounced
+                // rescan fires each session's own wake when (and only when) a
+                // swap lands. The path is canonicalized to match the canonical
+                // paths a session's `seen` set holds, with a raw fallback
+                // because canonicalize FAILS for a just-deleted path (and a
+                // mismatch only fails open to an extra walk). `force` marks the
+                // unconditional events; only `BufWritePost` is conditional on
+                // the path being new to a session, so the path-less refocus
+                // events (`ShellCmdPost`/`FocusGained`/`TermLeave`, arriving as
+                // `[event, ""]`) are covered with no extra decode logic — force
+                // short-circuits before the path matters.
+                // The single argument is the `[event_name, abs_path]` pair (one
+                // msgpack array, like the other single-payload wolf_* events).
+                if let Some(pair) = args.first().and_then(Value::as_array) {
+                    let force = pair
+                        .first()
+                        .and_then(Value::as_str)
+                        .is_some_and(|event| event != "BufWritePost");
+                    if let Some(path) = pair.get(1).and_then(Value::as_str) {
+                        let path =
+                            std::fs::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path));
+                        self.search_registry.notify_fs_changed(path, force);
+                    }
+                }
             }
             CWD_EVENT => {
                 // nvim's cwd is NOT render state, so there is intentionally NO

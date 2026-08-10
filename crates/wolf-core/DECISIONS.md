@@ -74,6 +74,16 @@ The file picker, the content search, and the redraw stream all share one shape, 
 
 Both search sessions resolve their root from the tracked live working directory cell rather than an RPC, so opening a picker never blocks on a wedged nvim. Dropping or cancelling a session stops its traversal, and for content search kills the `rg` subprocess, so no zombie lingers.
 
+## The file-search rescan: nvim events, walk-then-swap
+
+A live `FileSearch` session rescans on the `wolf_fs_changed` notification rather than on a filesystem watcher: a watcher crate (`notify`) would add a dependency, Bazel lockfile churn, and a watcher thread — see the external-edit limitation below. The `SearchRegistry` is the seam such a watcher plugs into without touching the sessions, and it supersedes both the refocus-edge dependency and the per-refocus walk cost with targeted invalidation.
+
+The triggers are two classes. Path-carrying buffer events (`BufWritePost` conditional, `BufFilePost`/`BufDelete` force) cover changes nvim makes itself; path-less refocus-edge force events (`ShellCmdPost`/`FocusGained`/`TermLeave`) catch mutations that fire no buffer event — a `:!git mv`, an external terminal or Finder while the app is unfocused, a command run in the drawer's shell. The edges are human-paced, and the debounce plus the equality skip bound each to at most one no-op walk. `TermLeave` is chosen over `WinLeave` or `TermClose` because the drawer auto-`startinsert`s on `WinEnter`, so every drawer-exit path passes a terminal-to-normal mode change and the one unguarded event covers them all.
+
+A rescan is walk-then-swap, never streaming: a delete can only be expressed by wholesale replacement, so the re-walk collects into a local vec and replaces the session's list under one short write lock, bumping `version`. A result equal to the current listing skips both the swap and the version bump, so a no-op event — a `:bdelete` of a still-existing file — causes no UI churn.
+
+The registry holds strong handles to each session's state; its liveness signal is the session's existing `cancel` flag, which `Drop` sets. Dead entries are pruned on every register and every notify, so a closed picker or sidebar stops costing walks after at most one more event. Do not add a separate unregister handshake — the flag is already the single cancellation truth, and a second signal could disagree with it.
+
 ## Browser preview security
 
 Two hard requirements in the `browser_preview` server, both of which look removable and are not:
@@ -105,6 +115,7 @@ What the markers cost the stylesheet is in [`src/markdown/README.md`](src/markdo
 - Content search skips a non-UTF-8 path or line, because `rg --json` sends those as a `bytes` payload and decoding it would add a base64 dependency.
 - Linked Markdown pages in the browser preview are static snapshots rendered from disk. The tick endpoint tracks only the pinned buffer, so only that one page live-reloads.
 - The Tier-1 open-file mirror reports the instance-global buflisted file set per tabpage rather than a genuinely per-tabpage set, which over-reopens on restore. The active path is genuinely per-tabpage.
+- A file created, renamed, or deleted by an external process is invisible to a live file-search session until a refocus edge or another trigger fires; there is no immediate watcher-driven update, and GNOME forwards no OS focus, so `FocusGained` never fires there.
 
 ## Deferred
 
