@@ -115,7 +115,7 @@ The GTK sidebar re-roots from one settle point, on the working directory Neovim 
 | Empty state ("Open folder…" button)          | `feat/commands` (`2a1eb94`)                               | [x]   | [x]   |
 | Working directory in the window title        | `feat/status-bar` (`6fd2427`)                             | [x]   | [x]   |
 | Unified toolbar (sidebar toggle, nav, title) | `feat/nav-buttons` (`96d2c97`) / `linux-feat/nav-history` | [x]   | [x]   |
-| Native tabs, one Neovim per project          | `feat/window-tabs`                                        | [x]   | [ ]   |
+| Native tabs, one Neovim per project          | `feat/window-tabs`                                        | [x]   | [x]   |
 | Application state persistence (`state.json`) | `feat/remember-working-directory`                         | [x]   | [x]   |
 | Pane-layout persistence across relaunch      | `feat/macos-pane-dividers` (`5f8becb`)                    | [x]   | [x]   |
 | Single-pane state-persistence fix            | `fix/state-persistence-single-pane-bug`                   | [x]   | [x]   |
@@ -127,19 +127,19 @@ The GTK sidebar re-roots from one settle point, on the working directory Neovim 
 
 The Linux multiple-windows box means N windows in one process: a coordinator owns the single state store, the one config read and the one cell measurement, while each window carries its own captive Neovim, its own wake and its own subtree of `state.json`. New Window opens a fresh empty window and inherits nothing from the window it was asked from — not the working directory, not the layout, not the size — which is macOS's behaviour for the same row.
 
-The tabs row stays unticked while part of it ships. A GTK window carries an `adw::TabBar` over N live `adw::TabPage`s sharing that window's one captive Neovim: `Ctrl+Shift+T`, the New Tab menu item and `:WolfNewTab` open a tab rooted at the window's folder, clicking the bar switches Neovim's tabpage, and closing the last tab closes the window, because Neovim refuses to close its final tabpage.
+A GTK window carries an `adw::TabBar` over N live `adw::TabPage`s sharing that window's one captive Neovim: `Ctrl+Shift+T`, the New Tab menu item and `:WolfNewTab` open a tab rooted at the window's folder, clicking the bar switches Neovim's tabpage, and closing the last tab closes the window, because Neovim refuses to close its final tabpage.
 
-What the row waits on is persistence: a window saves its selected tab and no other, so a session with several tabs open comes back as one. [`crates/wolf-gnome/DECISIONS.md`](crates/wolf-gnome/DECISIONS.md) owns why widening that is not a loop over the tabs.
+A window persists every tab, in tab order, and a launch restores each saved window's tabs with their layouts. A background tab's leaves are resolved from the window-keyed snapshot maps by each pane's own Neovim window handle, at no RPC cost, which is what lets a tab nobody has selected save what it actually holds. [`crates/wolf-gnome/DECISIONS.md`](crates/wolf-gnome/DECISIONS.md) owns the two refusal rules and what a Neovim restart still collapses.
 
 The GNOME counterpart to the macOS menu bar is a header-bar primary menu driven by the same `gio` action namespace as the accelerators, so menu, chords and drained commands cannot drift apart. The accelerator scheme is documented in [`crates/wolf-gnome/DECISIONS.md`](crates/wolf-gnome/DECISIONS.md), "The accelerator namespace".
 
 That header bar is also the unified toolbar: the sidebar toggle, Back and Forward, and Open at the start, the primary menu at the end, and the window title between them.
 
-The `state` module is read and written. `wolf-gnome` snapshots on every wake without a timer or debounce, which is affordable because `StateStore::set_snapshot` ignores an unchanged tree and the writer thread coalesces; the tree carries every open window, and a launch restores each saved window's working directory, size and pane layout in saved order.
+The `state` module is read and written. `wolf-gnome` snapshots on every wake without a timer or debounce, which is affordable because `StateStore::set_snapshot` ignores an unchanged tree and the writer thread coalesces; the tree carries every open window and every tab of it, and a launch restores each saved window's working directory, size, sidebar preference and per-tab pane layouts in saved order.
 
 The single-pane fix is structural: the layout is suppressed by a content predicate, never by leaf arity, which is what made the original bug swallow the commonest shape of all — one window, one tab, one pane, one file.
 
-One thing is deliberately not persisted on Linux: the window position, which Wayland gives a client no way to learn or to validate, so only the size is restored. The working directory, the pane layout and the sidebar preference all come back at launch.
+One thing is deliberately not persisted on Linux: the window position, which Wayland gives a client no way to learn or to validate, so only the size is restored. The working directory, every tab's pane layout and the sidebar preference all come back at launch.
 
 ## Markdown preview
 
@@ -239,13 +239,12 @@ The sidebar full-tree load row records a guarantee rather than a repair: the mac
 
 Two limits are worth stating. The pane topology does not survive a restart — only the Tier-1 file set does, so a crash while the window was split returns one pane. macOS restores no more than that, so it is a shared limit rather than a Linux gap.
 
-`NotResponding` is reachable from `wolf-gnome` at nine points. `wolf-core` marks a stall only from `block_on_rpc`'s timeout arm, and the GTK side issues nine such calls, counting Back and Forward as one navigation move: the layout rebuild at launch, plus eight a running window issues, which [`crates/wolf-gnome/DECISIONS.md`](crates/wolf-gnome/DECISIONS.md) enumerates and keeps current. Only the preview render repeats while the user simply types. The overlay's presentation has end-to-end coverage — a cage smoke `SIGSTOP`s the captive Neovim and presses the chord. Paste adds none, because the clipboard read is asynchronous and the insert is fire-and-forget.
+`NotResponding` is reachable from `wolf-gnome` at ten points. `wolf-core` marks a stall only from `block_on_rpc`'s timeout arm, and the GTK side issues ten such calls, counting Back and Forward as one navigation move: the layout rebuild the launch path issues, plus nine a running window issues, which [`crates/wolf-gnome/DECISIONS.md`](crates/wolf-gnome/DECISIONS.md) enumerates and keeps current. Only the preview render repeats while the user simply types. The overlay's presentation has end-to-end coverage — a cage smoke `SIGSTOP`s the captive Neovim and presses the chord. Paste adds none, because the clipboard read is asynchronous and the insert is fire-and-forget.
 
-The second limit is that a stall does not clear itself on the GTK side. All eight calls a running window issues refuse to run unless the core reads `Alive`, so a wedged Neovim is never re-probed, and core's own auto-clear rides the success of a later synchronous call while a timed-out one is detached. The route back is the overlay's Restart button, which force-kills.
+The second limit is that a stall does not clear itself on the GTK side. All nine calls a running window issues refuse to run unless the core reads `Alive`, so a wedged Neovim is never re-probed, and core's own auto-clear rides the success of a later synchronous call while a timed-out one is detached. The route back is the overlay's Restart button, which force-kills.
 
 ## Suggested order of work for Linux
 
-Work already carried is recorded in the tables above. What remains, in order:
+Work already carried is recorded in the tables above. What remains:
 
-1. **Native tabs.** A tab is a second view of one Neovim, so it needs grid rebinding, a per-view open-file capture, per-view wake fan-out and an `adw::TabView` this crate has never used. It is the largest single item left.
-2. **The remaining Markdown-preview row.** Preview in browser is written and dispatched and needs only a host where a human can watch the hand-off land, per the Markdown-preview table above.
+1. **The remaining Markdown-preview row.** Preview in browser is written and dispatched and needs only a host where a human can watch the hand-off land, per the Markdown-preview table above.

@@ -445,17 +445,18 @@ Purpose: the pure codec between the live pane tree, whose leaves are pane ids, a
 
 **Public API**
 
-- `encode(layout, contents) -> PaneNode` — `contents` maps each leaf id to its `LeafContent` (raw path plus preview flag); a missing id becomes an empty, non-preview leaf.
-- `decode(node, first_leaf_id) -> Option<(PaneTree, Vec<PaneId>)>` — ids allocated sequentially in depth-first order, so leaf `i` is the pane for handle `i`.
-- `is_empty_leaf(node)`, `leaf_count(node)`, `leaf_paths_dfs(node)`.
-- `MAX_RESTORE_LEAVES` and `MAX_RESTORE_DEPTH`.
+- `resolve_leaves(&[(PaneId, WinContent)]) -> Option<HashMap<PaneId, LeafContent>>` — the step ahead of `encode`. `WinContent` is `Preview(source)`, `Buffer(path)` or `Unknown`, the last for a window in neither snapshot map.
+- `LayoutGather` — one tab's gather answer: `Ready(Option<PaneNode>)`, whose `None` is content suppression, or `Refuse`.
+- `encode(layout, contents) -> PaneNode` — `contents` maps each leaf id to its `LeafContent`, a raw path plus a preview flag; a missing id becomes an empty, non-preview leaf.
+- `decode(node, first_leaf_id) -> Option<(PaneTree, Vec<PaneId>)>` — leaf `i` is the pane for handle `i`, ids allocated in depth-first order.
+- `is_empty_leaf(node)`, `leaf_count(node)`, `leaf_paths_dfs(node)`, `MAX_RESTORE_LEAVES`, `MAX_RESTORE_DEPTH`.
 
 **Decisions**
 
-- `is_empty_leaf` is the content predicate the save path gates on: true only for an unnamed, non-preview lone leaf. `leaf_count` exists solely to validate the handle count a rebuild returns, and gating persistence on it reintroduces the macOS bug described in [DECISIONS.md](../DECISIONS.md). A named test states that rule on its own so a regression names it.
-- `decode` validates before anything is rendered, so Neovim is never asked to realize a malformed tree. The two caps are restore policy against a hand-edited file, not a limit on the tree type.
-- The orientation mapping lives here in both directions, so an inversion is one edit to make and one test to catch rather than two half-inversions that cancel.
-- `LeafContent` carries the path and the preview flag together, because `is_empty_leaf` reads both and the encode site does not hold the pane a caller would re-derive the flag from.
+- `resolve_leaves` is all-or-nothing: an empty path is a resolved answer and an absent window is not, so one `Unknown` refuses the whole tab's gather. Mapping absence onto `""` writes a well-formed `state.json` over the user's files, which no arity guard catches.
+- `is_empty_leaf` is the content predicate the save path gates on, and `leaf_count` must never be it; [DECISIONS.md](../DECISIONS.md) owns why.
+- `decode` validates before anything is rendered, so Neovim is never asked to realize a malformed tree. The two caps are restore policy, not a limit on the tree type.
+- The orientation mapping lives here in both directions, so an inversion is one edit and one test rather than two half-inversions that cancel.
 
 #### `pane_view.rs`
 
@@ -465,35 +466,36 @@ Purpose: the GTK glue turning `layout`'s pane tree into nested `gtk::Paned`, one
 
 - `build(core, metrics) -> PaneHandle` — panes appear with the first grid.
 - `cmdline_widget()` — the focus-return target for overlays and sidebar; plus `toast_widget()` and `pum_widget()`.
-- `reset_after_restart()`, `request_layout_rebuild(saved)`, `layout_snapshot()`, `snapshot_readiness()`.
+- `reset_after_restart()`, `request_layout_rebuild(saved)`, `realize_layout(saved)`, `layout_snapshot() -> LayoutGather`, `snapshot_readiness()`.
 
 **Decisions**
 
-- Divider positions re-apply from the live tree on every `max-position` notify, since nested allocation reports intermediate values before settling; an unchanged maximum and span marks a `notify::position` as a user drag, written back because a rebuild destroys the paned.
-- Pointer input is one `gtk::GestureDrag`, not a click controller: a gesture keeps delivering after the pointer leaves the widget. Grid and button pin at press, so a wandering drag edits its starting pane.
-- Each pane's status and `b:wolf_full_width` cache once per wake: reading at use time re-enters the guard `draw_pane` holds, and paint, pointer and resize must agree inside one frame.
-- One funnel produces every grid resize, compared against the size the pane last asked for rather than the lagging snapshot grid, and it runs on every wake since a lifted content cap re-divides a still allocation.
-- The preview link path is [DECISIONS.md](../DECISIONS.md#following-a-link-in-the-preview)'s in full, including which loads [`preview_ui.rs`](#preview_uirs)'s `document_update` forces.
-- The drawer strip's height re-applies on every wake, so a toplevel resize converges over two frames; `reset_after_restart` clears the drawer, because a restart leaves its dead grid in the snapshot where `detect_closes` can never reach it.
+- A dragged divider position is written back into the tree's weights, because a rebuild destroys the paned; positions re-apply from the tree on every `max-position` notify, since nested allocation reports intermediate values before settling.
+- `realize_layout` rebuilds into whichever tabpage Neovim is current on, so the restore materialization is its only legal caller; it drops the queued copy, so a restored tab costs one rebuild. `request_layout_rebuild` defers, which is tab 0's route.
+- Pointer input is one `gtk::GestureDrag`: a gesture keeps delivering after the pointer leaves the widget. Grid and button pin at press, so a wandering drag edits its starting pane.
+- Each pane's status and `b:wolf_full_width` cache once per wake: reading at use time re-enters `draw_pane`'s guard, and paint, pointer and resize must agree inside one frame.
+- One funnel produces every grid resize, compared against the size the pane last asked for rather than the lagging snapshot grid; it runs every wake, since a lifted content cap re-divides a still allocation.
+- The drawer strip's height re-applies on every wake, so a toplevel resize converges over two frames; `reset_after_restart` clears the drawer, whose dead grid `detect_closes` can never reach after a restart.
 
 #### `persistence.rs`
 
-Purpose: the glue that gathers one tab's contribution to `state.json`. It is thin by construction: every decision lives in [`state_seam.rs`](#state_seamrs) and [`pane_layout.rs`](#pane_layoutrs), so this module gathers live values and caches them.
+Purpose: the glue that gathers one tab's contribution to `state.json`, one instance per tab. It is thin by construction: every decision lives in [`state_seam.rs`](#state_seamrs) and [`pane_layout.rs`](#pane_layoutrs), so this module gathers live values and caches them.
 
 **Public API**
 
-- `build(parts) -> StateHandle` — a value constructor that installs no closures and gathers nothing of its own.
-- `set_empty(empty)`, `set_sidebar_shown(shown)`, `refresh_subtree()`, `cached_subtree() -> Option<WindowState>`.
+- `build(parts) -> StateHandle` — a value constructor that installs no closures and gathers nothing of its own; `StateParts::restored_layout` is held for the seed, not for the rebuild.
+- `set_empty(empty)`, `set_sidebar_shown(shown)`, `refresh_tab()`, `cached_tab() -> Option<TabState>`.
 
 **Decisions**
 
-- A refused gate leaves the cache untouched rather than clearing it, so a window whose panes have not bound — or whose Neovim has just died — keeps what it last persisted instead of vanishing from the tree.
-- The size comes from the window's default size and the position is never written, per [DECISIONS.md](../DECISIONS.md). The persisted `sidebar_visible` is the user's preference, tracked through `set_sidebar_shown`, and never the live visibility.
-- This module holds no store and submits nothing: [`coordinator.rs`](#coordinatorrs) assembles the tree from every window's cache and commits it.
+- A refused gather leaves the cache untouched rather than clearing it, so a tab whose panes have not bound — or whose Neovim has just died — keeps what it last persisted instead of vanishing. Two refusals compose: [`state_seam.rs`](#state_seamrs)'s gate, and a `LayoutGather::Refuse` from the pane view.
+- `cached_tab` derives the seed at read time rather than storing it, so a sidebar toggle or an Open Folder reaches a tab whose gate never opened, and the seed stops being consulted the instant a real gather succeeds.
+- The persisted `sidebar_visible` is the user's preference, tracked through `set_sidebar_shown`, and never the live visibility.
+- This module holds no store and submits nothing: [`window.rs`](#windowrs) assembles a window's tabs and [`coordinator.rs`](#coordinatorrs) commits the tree.
 
 **Gotchas**
 
-- `refresh_subtree` runs inside the close handler, which goes on to take the core out, so every core borrow is taken and dropped in its own statement.
+- `refresh_tab` runs inside the close handler, which goes on to take the core out, so every core borrow is taken and dropped in its own statement.
 
 #### `picker.rs`
 
@@ -655,29 +657,26 @@ Purpose: the glue for the action namespace — `gio` actions, the primary menu, 
 - The nav-button refresh caches nothing: `set_sensitive` already early-returns on an unchanged value.
 - The three Markdown-preview presses read one `preview_shape` pass each: two snapshot reads would describe no window that existed. Each is a blocking RPC gated through [`preview_ui.rs`](#preview_uirs).
 - `sidebar.set_visible` has one caller, over [`state_seam.rs`](#state_seamrs)'s `sidebar_is_shown`, or `set_empty_state(false)` would undo a user toggle.
-- The per-tab fan-outs go through [`tab_view.rs`](#tab_viewrs): the empty state, the sidebar preference, the focus return and the restart collapse. New Tab is gated by [`tabs_ui.rs`](#tabs_uirs)'s `new_tab_press`; [DECISIONS.md](../DECISIONS.md) owns the boundary.
+- The per-tab fan-outs go through [`tab_view.rs`](#tab_viewrs): the empty state, the sidebar preference — which also reaches the tabs a restore has queued — the focus return and the restart collapse. New Tab is gated by [`tabs_ui.rs`](#tabs_uirs)'s `new_tab_press`; [DECISIONS.md](../DECISIONS.md) owns the boundary.
 
 #### `state_seam.rs`
 
-Purpose: the pure application-state seam — what to restore at launch, and what each window persists per wake. GTK-free, IO-free, every input injected.
+Purpose: the pure application-state seam — what to restore at launch, and what each tab persists per wake. GTK-free, IO-free, every input injected. [DECISIONS.md](../DECISIONS.md#application-state) owns the rules.
 
 **Public API**
 
-- `restore_plans(saved, process_cwd, home, is_dir) -> Vec<RestorePlan>` — one plan per saved window in saved order, capped at `MAX_RESTORE_WINDOWS`.
-- `window_subtree(..) -> WindowState`, `snapshot_state(windows) -> Option<WolfState>`, `close_commit(shutting_down, other_live_windows) -> CloseCommit`.
+- `restore_plans(saved, process_cwd, home, is_dir) -> Vec<RestorePlan>` — one plan per saved window in saved order, capped at `MAX_RESTORE_WINDOWS`, each carrying one `TabPlan` per saved tab, capped at `MAX_RESTORE_TABS` and never empty.
+- `tab_subtree`, `window_subtree`, `seeded_tab_state`, `pending_tab_states`, `ordered_tab_states`, `window_contribution` — the write side, one tab's `TabState` up to a window's whole contribution.
+- `snapshot_state(windows) -> Option<WolfState>`, `close_commit(shutting_down, other_live_windows) -> CloseCommit`.
 - `restored_window_size`, `persistable_layout`, `sidebar_is_shown`, `snapshot_cwd`, `may_snapshot`.
 
 **Decisions**
 
-- A saved layout is attached only when the chosen directory is the one it saved from: its leaves are absolute paths belonging to one project.
-- Offering the process cwd past the first saved window merges every window onto one project, drops every layout, and the next gather writes the merge back over the save.
-- `restore_plans` never answers an empty vec and `snapshot_state(vec![])` is `None`: a launch with no window exits at once, and an empty tree overwrites a saved session.
-- `restored_window_size` collapses the whole result on any unusable dimension: a usable width with a garbage height is not half a window size.
-- `persistable_layout` suppresses by content, never by arity; see [`pane_layout.rs`](#pane_layoutrs) and [DECISIONS.md](../DECISIONS.md).
+- A saved layout attaches only to the directory it saved from, and the process cwd is offered to the first saved window alone: offering it further merges every window onto one project and drops every layout.
+- Four answers mean "commit nothing" rather than "commit an empty thing": `seeded_tab_state` with no layout, `window_subtree` with no tabs, `snapshot_state` with no windows, and `restored_window_size` on any unusable dimension. `restore_plans` is the inverse and never answers an empty vec.
+- `window_contribution` puts live tabs' caches before queued tabs' seeds, which is the order they materialize in and restore replays. `ordered_tab_states` stably sorts the live half into page order first, because the user can rearrange the bar.
 - The empty state persists an empty cwd always, or every launcher start would become a project at home.
-- `may_snapshot`'s match over `Liveness` is total, with no catch-all arm.
-- `window_subtree` writes one `TabState`; which tab that is, and why it is one, belong to [DECISIONS.md](../DECISIONS.md#application-state).
-- `RestorePlan::sidebar_visible` is independent of the empty state; `sidebar_is_shown` applies it.
+- `sidebar_visible` is per window and reaches the seeds alone; a live tab's cache passes through verbatim.
 
 #### `statusbar_layout.rs`
 
@@ -701,38 +700,42 @@ Purpose: the per-pane statusbar's rulebook, decidable from values. The vertical 
 
 #### `tab_view.rs`
 
-Purpose: the GTK glue for native tabs — an `adw::TabBar` over an `adw::TabView`, carrying one [`pane_view.rs`](#pane_viewrs) handle, one empty state and one [`persistence.rs`](#persistencers) handle per tab, over the window's single core. Every decision it acts on is [`tabs_ui.rs`](#tabs_uirs)'s.
+Purpose: the GTK glue for native tabs — an `adw::TabBar` over an `adw::TabView`, one [`pane_view.rs`](#pane_viewrs) and one [`persistence.rs`](#persistencers) handle per tab. Every decision it acts on is [`tabs_ui.rs`](#tabs_uirs)'s.
 
 **Public API**
 
-- `build(TabsParts) -> TabsHandle` — the widget pair with both signals connected. No page exists yet: `open_tab` needs a window the caller has not built.
-- `TabsHandle::open_tab(&window, TabParts) -> bool`, `view_widget`, `bar_widget`, `selected`, `entries`, `len`, `on_render_wake`, `reset_after_restart`, `focus_target`, `connect_selected`, plus `TabHandle`'s per-tab relays.
+- `build(TabsParts) -> TabsHandle` — no page exists until `open_tab`.
+- `TabsHandle::open_tab(TabParts) -> bool`, `view_widget`, `bar_widget`, `selected`, `entries`, `len`, `on_render_wake`, `reset_after_restart`, `focus_target`, `connect_selected`, plus `TabHandle`'s per-tab relays.
+- `queue_restore(RestoreTabs)`, `pending_restore()` and `set_pending_sidebar_shown(shown)` — the tabs a launch still owes a page, which [`window.rs`](#windowrs) seeds.
 
 **Decisions**
 
-- `TabParts::tabpage` is `0` for tab 0 and `create_tabpage`'s answer for every later one. `Snapshot::current_tabpage` still reports the preceding tabpage until Neovim's notification lands, so a new page left to adopt one would bind itself to the tab it was opened from.
-- `close-page` is a veto: every arm answers it with `close_page_finish` and returns `Propagation::Stop`, or the page stays on screen forever with no error. The last page's close is answered with a refusal and routed into the toplevel's own close, never into `close_tabpage`.
-- Both signal handlers hold a `Weak`; a strong reference from a handler the view owns closes a cycle over every tab's pane view.
+- `TabParts::tabpage` is `0` for tab 0 and `create_tabpage`'s answer for every later one: `Snapshot::current_tabpage` lags, so a page left to adopt binds to the tab it was opened from.
+- The restore materialization realizes each queued tab's layout before leaving its tabpage, because `rebuild_layout` acts on whichever tabpage is current. An abort retains the layouts it never reached as a seed source with creation disabled, so those tabs keep their place in `state.json`.
+- `close-page` is a veto: every arm must answer `close_page_finish` and return `Propagation::Stop`, or the page stays on screen forever with no error. Closing the last page closes the window ([DECISIONS.md](../DECISIONS.md)). Both handlers hold a `Weak`; a strong reference from a handler the view owns leaks every tab's pane view.
 
 **Gotchas**
 
-- `selected` is the whole of what a window persists; read [DECISIONS.md](../DECISIONS.md#application-state) before widening it.
+- `selected` answers the focus, overlay and empty state; persistence reads every tab, through `entries`.
+- `entries` is insertion order, not page order — nothing reconciles it with the `adw::TabView`. The one caller that needs the user's arrangement pairs each entry with `TabHandle::page_position`.
 
 #### `tabs_ui.rs`
 
-Purpose: the pure, GTK-free rulebook for the N tabs one window's captive Neovim serves — which tab a render wake may touch, what closing one does, whether a New Tab press may issue its blocking RPC, the directory a new tab inherits, and the string a tab draws. The tabs counterpart of [`nav_ui.rs`](#nav_uirs); [`tab_view.rs`](#tab_viewrs) carries the answers out.
+Purpose: the pure, GTK-free rulebook for the N tabs one window's captive Neovim serves: which tab a render wake may touch, whether a New Tab press or a queued restore may issue its blocking RPC, what closing one does, and what a new tab inherits. [`tab_view.rs`](#tab_viewrs) carries the answers out.
 
 **Public API**
 
 - `tab_wake(current_tabpage, my_tabpage, selected) -> TabWake` — `Adopt(handle)`, `Refresh` or `Hold`, total over all three inputs.
+- `restore_press(first_tabpage, liveness, pending, may_create) -> RestorePress` — `Create`, `Wait` or `Idle`, total.
 - `switch_target`, `close_outcome`, `new_tab_press`, `new_tab_cwd`, `tab_title` and `TAB_TITLE_FALLBACK`.
 
 **Decisions**
 
-- `Hold` does nothing at all — no pane refresh, no title, no status read, no resize — and that is the whole gate. `Snapshot::windows` describes the current tabpage alone, so refreshing a background tab asks `WolfCore::pane_status` about a grid whose Neovim window is absent from that map, and gets `[No Name]` with an empty absolute path back.
-- The authority is Neovim, not GTK's selection: a tab Neovim considers current refreshes while the widget lags, and a tab GTK has selected holds until Neovim catches up. `selected` decides only for a tab carrying no handle yet.
+- `Hold` does nothing at all, and that is the whole gate: what it protects is a background tab's statusbar text, title and grid resize, each of which reads `pane_status`. Persistence is safe by another route, [`pane_layout.rs`](#pane_layoutrs)'s window-keyed leaf resolution.
+- The authority is Neovim, not GTK's selection: a tab Neovim considers current refreshes while the widget lags, and a selected one holds until Neovim catches up.
+- `restore_press` refuses until tab 0 has adopted and the core reads `Alive`. A refusal answers `Wait`, not `Idle`: a queued tab has no page and no cache, so declaring the queue empty is tabs that never open. `Idle` is the abandoned queue.
 - `switch_target` and `close_outcome` refuse the two inputs that fail silently: Neovim reads a handle of `0` as "the current tabpage", and `close_tabpage` on the last tabpage does nothing.
-- `new_tab_cwd` answers `None` in the empty state always, so a new tab is never `:tcd`'d into `$HOME`. It mirrors [`state_seam.rs`](#state_seamrs)'s `snapshot_cwd`, and the two must agree.
+- `new_tab_cwd` answers `None` in the empty state always, so a new tab is never `:tcd`'d into `$HOME`; it must agree with [`state_seam.rs`](#state_seamrs)'s `snapshot_cwd`.
 
 #### `title.rs`
 
@@ -793,25 +796,25 @@ Purpose: the GTK glue for the file-tree sidebar — a `gtk::ListView` over a `gt
 
 #### `window.rs`
 
-Purpose: one window and everything scoped to it — an `adw::ApplicationWindow` over a live `WolfCore`, with its own wake channel, tab layer, window-level overlays, `win.` actions and state subtree. Its widget structure and overlay stacking are [DECISIONS.md](../DECISIONS.md#window-structure)'s.
+Purpose: one window and everything scoped to it — an `adw::ApplicationWindow` over a live `WolfCore`, with its own wake channel, tab layer, overlays and state subtree. Its widget structure and overlay stacking are [DECISIONS.md](../DECISIONS.md#window-structure)'s.
 
 **Public API**
 
-- `build(parts) -> Option<WindowHandle>` — `None`, after one message, when the core fails to start; a launch whose only window fails exits.
-- `WindowParts` — the six construction inputs as a struct, because `clippy::too_many_arguments` bites at seven.
+- `build(parts) -> Option<WindowHandle>` — `None` when the core fails to start; a launch whose only window fails exits.
+- `WindowParts` — the construction inputs as a struct, under `clippy::too_many_arguments`.
 - `WindowHandle::id`, `present`, `refresh_subtree`, `cached_subtree` and `display_cwd`.
 
 **Decisions**
 
-- Telling the coordinator is the first statement of the close handler, while the core and panes are still alive: a subtree gathered after the core is taken out sees none, the gate refuses it, and the session is silently lost.
-- The window registers with the coordinator before its first command drain, so nothing the drain reaches acts on a coordinator that does not know the window exists.
-- `refresh_subtree` and `cached_subtree` answer for the selected tab alone ([DECISIONS.md](../DECISIONS.md#application-state)), on unchanged signatures, so [`coordinator.rs`](#coordinatorrs) never learns tabs exist.
+- Telling the coordinator is the close handler's first statement, while the core and panes are still alive: a subtree gathered after the core is taken out sees nothing, the gate refuses it, and the session is silently lost.
+- The window registers with the coordinator before its first command drain, or the drain reaches a coordinator that does not know the window exists.
+- `refresh_subtree` and `cached_subtree` answer for every tab; `cached_subtree` pairs each live cache with its page position and appends the queued tabs' seeds, over [`state_seam.rs`](#state_seamrs)'s ordering rules. Both keep their one-window signatures, so [`coordinator.rs`](#coordinatorrs) never learns tabs exist.
 - `display_cwd` reads the cached subtree, so the palette and `state.json` cannot disagree about where a window is.
-- `WindowInner` does not hold the shell: the wake-drain future already owns it for exactly the window's lifetime, and a second owner would add a lifetime nothing reads.
+- `WindowInner` does not hold the shell: the wake-drain future owns it for exactly the window's lifetime, and a second owner adds a lifetime nothing reads.
 
 **Gotchas**
 
-- The key controller carries no propagation phase, so it runs after [`shell.rs`](#shellrs)'s capture-phase chord controller — which is what stops a bound chord also reaching Neovim.
+- The key controller carries no propagation phase, so it runs after [`shell.rs`](#shellrs)'s capture-phase chord controller, which stops a bound chord also reaching Neovim.
 
 #### `workspace.rs`
 

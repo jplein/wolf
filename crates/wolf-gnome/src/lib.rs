@@ -174,12 +174,19 @@
 //!   [`pane_layout::LeafContent`] — a RAW absolute path plus the flag saying the pane
 //!   shows a Markdown preview of it. Includes [`pane_layout::is_empty_leaf`] — the
 //!   CONTENT predicate that decides whether a layout is persisted at all, and which
-//!   must never be an arity test.
-//! - [`restore_plans`]: ONE launch plan per saved window (cwd, empty state, saved
-//!   pane tree, window size), in saved order and never an empty vec, plus the
-//!   write-side rules — which snapshots may be committed, what cwd is persisted,
-//!   one window's one-tab subtree, the tree assembled from every window's, and
-//!   what closing one window does to it ([`state_seam`]).
+//!   must never be an arity test — and [`pane_layout::resolve_leaves`], whose
+//!   ALL-OR-NOTHING rule refuses a whole tab's gather rather than writing an
+//!   unresolvable window's leaf as `""`.
+//! - [`restore_plans`]: ONE launch plan per saved window (cwd, empty state, one
+//!   [`state_seam::TabPlan`] per saved tab, window size), in saved order and never
+//!   an empty vec, plus the write-side rules — which snapshots may be committed,
+//!   what cwd is persisted, what a restored tab contributes before it has ever
+//!   gathered ([`state_seam::seeded_tab_state`], mapped over the tabs a launch has
+//!   queued but not yet created by [`state_seam::pending_tab_states`]), one window's
+//!   subtree over its tabs, that window's WHOLE contribution — its live tabs' caches
+//!   followed by its queued tabs' seeds, in the order they will materialize
+//!   ([`state_seam::window_contribution`]) — the tree assembled from every window's,
+//!   and what closing one window does to it ([`state_seam`]).
 //! - [`mod@liveness_ui`]: the CRASH/STALL recovery rulebook — the TOTAL
 //!   [`wolf_core::Liveness`] → `(overlay mode, auto_restart, paint)` mapping the
 //!   wake drain gates on ([`liveness_ui()`]), the message each overlay mode
@@ -247,7 +254,10 @@
 //!   whose last-page arm is the WINDOW closing because `close_tabpage` on the final
 //!   tabpage is a measured no-op ([`tabs_ui::close_outcome`]); the TOTAL
 //!   `Option<`[`wolf_core::Liveness`]`>` guard over `create_tabpage`'s blocking RPC
-//!   ([`tabs_ui::new_tab_press`]); the directory a new tab inherits, which is the
+//!   ([`tabs_ui::new_tab_press`]); whether a launch's QUEUED restore tabs may be
+//!   materialized on this wake, which needs tab 0 already bound and a core reading
+//!   `Alive` and whose refusal must never discard the queue
+//!   ([`tabs_ui::restore_press`]); the directory a new tab inherits, which is the
 //!   window's and is `None` in the empty state ([`tabs_ui::new_tab_cwd`]); and the
 //!   file NAME a tab draws in the bar ([`tabs_ui::tab_title`]).
 //! - [`actions`]: the action namespace as data — [`actions::ACTION_TABLE`],
@@ -259,10 +269,13 @@
 //! runs: [`app::run`] activates a [`mod@coordinator`], which opens the ONE
 //! `wolf_core::StateStore` over `state.json` before any widget exists and turns
 //! the loaded tree into one [`RestorePlan`] per saved window (working directory,
-//! window size, the tab's saved pane-split tree). Each [`mod@window`] realizes its
-//! saved layout through `WolfCore::rebuild_layout` and — via [`persistence`] —
-//! contributes its own subtree on every render wake and at `close-request`; the
-//! coordinator assembles those subtrees into the tree and commits it.
+//! window size, and one [`state_seam::TabPlan`] per saved tab). Each
+//! [`mod@window`] realizes its first tab's saved layout through
+//! `WolfCore::rebuild_layout`, materializes the rest on a later render wake — one
+//! `WolfCore::create_tabpage` and one rebuild each — and, via [`persistence`],
+//! gathers EVERY tab on every render wake and at `close-request`; the window
+//! assembles its tabs into a subtree and the coordinator assembles those subtrees
+//! into the tree and commits it.
 //!
 //! [`window::build`] builds an `adw::ApplicationWindow` with a
 //! header bar whose editor area is a **native pane view** ([`pane_view`]) — a tree

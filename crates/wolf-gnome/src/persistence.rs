@@ -8,16 +8,20 @@
 //! mutability via `Cell`, and short borrows that are never held across a
 //! [`WolfCore`] call.
 //!
-//! ## When a subtree is gathered
+//! One instance per TAB. A window's subtree is assembled from its tabs' caches by
+//! `window::WindowHandle::cached_subtree`, so what lives here is one tab's
+//! [`TabState`] and the rules that decide when it may be replaced.
 //!
-//! On **every render wake**, with no timer and no debounce. That is affordable
-//! because two coalescers already exist beneath us: `StateStore::set_snapshot` is
-//! a no-op when the submitted tree is identical to the current one, and the
-//! `wolf-state-writer` thread coalesces at 100 ms. Rebuilding one window's
-//! one-tab subtree costs a `leaves()` walk plus one RPC-free `pane_status` per
-//! pane, so a resize drag produces at most ~10 disk writes per second. This
-//! preserves the crate's documented zero-polling property (no `glib::timeout` is
-//! added).
+//! ## When a tab is gathered
+//!
+//! On **every render wake**, for every tab, with no timer and no debounce. That is
+//! affordable because two coalescers already exist beneath us:
+//! `StateStore::set_snapshot` is a no-op when the submitted tree is identical to
+//! the current one, and the `wolf-state-writer` thread coalesces at 100 ms.
+//! Rebuilding one tab costs a `leaves()` walk and one snapshot read — no RPC and no
+//! `pane_status` — so a resize drag produces at most ~10 disk writes per second.
+//! This preserves the crate's documented zero-polling property (no `glib::timeout`
+//! is added).
 //!
 //! It is also strictly better than macOS, whose snapshot is trigger-driven
 //! (window move / resize-end / sidebar KVO) and therefore does NOT capture a file
@@ -29,33 +33,44 @@
 //! subtree built while nvim is dead or before the first pane binds would persist
 //! an empty layout and destroy the user's saved one.
 //!
-//! **A refused gate contributes the CACHE, and never nothing.** This window keeps
-//! its last good subtree and hands that over when the gate is shut, so a window
-//! whose panes have not bound yet — or whose Neovim has just died — keeps
-//! whatever it last persisted instead of vanishing from the tree the coordinator
-//! commits. That is what makes the refusal mechanically identical to the
-//! single-window behaviour it replaces, where a refused gate simply meant no call
-//! to `set_snapshot`.
+//! **A refused gather contributes the CACHE, and never nothing.** There are two
+//! refusal routes and they compose: the gate above, and
+//! [`crate::pane_layout::LayoutGather::Refuse`] — a leaf whose Neovim window is in
+//! neither snapshot map, which the pane view answers rather than writing an empty
+//! path. Either one leaves this tab's last good [`TabState`] standing, so a tab
+//! whose panes have not bound yet, or whose Neovim has just died, keeps whatever it
+//! last persisted instead of vanishing from the tree the coordinator commits.
+//!
+//! **A tab restored with a layout it has never gathered contributes the SEED.**
+//! [`StateHandle::cached_tab`] derives it at read time through
+//! [`crate::state_seam::seeded_tab_state`], so a tab with no bound pane — one whose
+//! `realize_layout` bound none, so whose gate never opens — is not erased by the
+//! next commit. The seed stops being consulted the instant a real gather succeeds,
+//! which for a materialized restored tab is its first wake: its panes were created
+//! synchronously, and its leaves resolve from the window-keyed maps while Neovim is
+//! on another tabpage, so being unselected costs it nothing. The tab that has no
+//! glue here at all — one still QUEUED for materialization — is seeded a level up,
+//! by `window::WindowHandle::cached_subtree` through
+//! [`crate::state_seam::pending_tab_states`].
 //!
 //! This module submits nothing itself: [`crate::coordinator::Coordinator`] walks
-//! every window, assembles the tree from these caches, and commits it.
+//! every window, which walks every tab, and commits the assembled tree.
 //!
 //! ## Borrow discipline (load-bearing)
 //!
-//! [`StateHandle::refresh_subtree`] runs INSIDE `window::wire_close`'s
+//! [`StateHandle::refresh_tab`] runs INSIDE `window::wire_close`'s
 //! `close-request` handler, which goes on to do `core.borrow_mut().take()`. Every
 //! `core.borrow()` below is therefore taken and dropped in its OWN statement, and
-//! none is live when [`StateHandle::refresh_subtree`] returns. An outstanding
+//! none is live when [`StateHandle::refresh_tab`] returns. An outstanding
 //! `borrow()` there is a `RefCell` panic, not a warning.
 
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use adw::prelude::*;
+use wolf_core::{PaneNode, TabState, WolfCore};
 
-use wolf_core::{WindowState, WolfCore};
-
+use crate::pane_layout::LayoutGather;
 use crate::pane_view::PaneHandle;
 use crate::state_seam;
 
@@ -64,8 +79,6 @@ use crate::state_seam;
 pub struct StateParts<'a> {
     /// The live core, shared with the rest of the app.
     pub core: &'a Rc<RefCell<Option<WolfCore>>>,
-    /// The application window, read for its size.
-    pub window: &'a adw::ApplicationWindow,
     /// The pane view, which supplies the layout and the readiness counts.
     pub panes: &'a PaneHandle,
     /// The cwd the core was launched with, persisted until nvim reports a live
@@ -77,6 +90,11 @@ pub struct StateParts<'a> {
     /// ([`crate::state_seam::RestorePlan::sidebar_visible`]), which is what is
     /// persisted — never what is on screen.
     pub sidebar_shown: bool,
+    /// The layout this tab was RESTORED with, or `None` for a tab the user opened.
+    ///
+    /// Held for [`crate::state_seam::seeded_tab_state`], not for the rebuild — the
+    /// rebuild is the pane view's, and it has already been asked for it.
+    pub restored_layout: Option<PaneNode>,
 }
 
 /// The persistence glue's shared state. Single GTK main thread, so `Cell` /
@@ -84,16 +102,17 @@ pub struct StateParts<'a> {
 struct PersistInner {
     /// The live core (liveness + live cwd reads).
     core: Rc<RefCell<Option<WolfCore>>>,
-    /// The application window (size only — position is never persisted).
-    window: adw::ApplicationWindow,
     /// The pane view (layout snapshot + readiness counts).
     panes: PaneHandle,
-    /// The last subtree the gate allowed, and this window's contribution to the
-    /// tree whenever the gate is shut. `None` only before the first gather ever
-    /// succeeds.
-    subtree: RefCell<Option<WindowState>>,
+    /// The last [`TabState`] a successful gather produced, and this tab's
+    /// contribution whenever a later one refuses. `None` until the first gather
+    /// succeeds, which for a restored tab whose `realize_layout` bound no pane is
+    /// forever — see [`StateHandle::cached_tab`].
+    tab: RefCell<Option<TabState>>,
     /// The launch cwd, persisted until nvim reports a live one.
     launch_cwd: PathBuf,
+    /// The layout this tab was restored with, for the seed.
+    restored_layout: Option<PaneNode>,
     /// The LIVE empty-state flag, kept in step by [`StateHandle::set_empty`].
     empty: Cell<bool>,
     /// The user's LIVE sidebar preference, kept in step by
@@ -114,10 +133,10 @@ pub fn build(parts: StateParts<'_>) -> StateHandle {
     StateHandle {
         inner: Rc::new(PersistInner {
             core: parts.core.clone(),
-            window: parts.window.clone(),
             panes: parts.panes.clone(),
-            subtree: RefCell::new(None),
+            tab: RefCell::new(None),
             launch_cwd: parts.launch_cwd,
+            restored_layout: parts.restored_layout,
             empty: Cell::new(parts.empty),
             sidebar_shown: Cell::new(parts.sidebar_shown),
         }),
@@ -145,32 +164,49 @@ impl StateHandle {
         self.inner.sidebar_shown.set(shown);
     }
 
-    /// This window's contribution to the persisted tree: the last subtree the
-    /// gate allowed, or `None` before the first one ever succeeds.
+    /// This tab's contribution to its window's subtree: the last [`TabState`] a
+    /// gather produced, or — for a tab restored with a layout it has never gathered
+    /// — [`state_seam::seeded_tab_state`]'s answer.
     ///
-    /// Read by [`crate::coordinator::Coordinator`] when it assembles the tree. A
-    /// `None` from EVERY window is what makes
-    /// [`crate::state_seam::snapshot_state`] answer `None` and the coordinator
-    /// commit nothing at all.
+    /// The seed is derived HERE, at read time, rather than written into the cache
+    /// at build time, for two reasons. It follows live preference changes, so a
+    /// sidebar toggle or an Open Folder reaches a tab whose gate never opened; and
+    /// it stops being consulted the instant a real gather succeeds, so a seeded
+    /// value can never outlive the fact it was standing in for.
+    ///
+    /// `None` from EVERY tab of a window is what makes
+    /// [`crate::state_seam::window_subtree`] answer `None`, and a `None` from every
+    /// window is what makes [`crate::state_seam::snapshot_state`] answer `None` and
+    /// the coordinator commit nothing at all.
     #[must_use]
-    pub fn cached_subtree(&self) -> Option<WindowState> {
-        self.inner.subtree.borrow().clone()
+    pub fn cached_tab(&self) -> Option<TabState> {
+        // Bound in its own statement so the seed below is not derived under a live
+        // borrow of the cache it may replace.
+        let cached = self.inner.tab.borrow().clone();
+        cached.or_else(|| {
+            state_seam::seeded_tab_state(
+                self.inner.restored_layout.as_ref(),
+                self.inner.empty.get(),
+                &self.inner.launch_cwd,
+                self.inner.sidebar_shown.get(),
+            )
+        })
     }
 
-    /// Gathers the live values into this window's cached subtree, gated by
-    /// [`state_seam::may_snapshot`].
+    /// Gathers the live values into this tab's cache, gated by
+    /// [`state_seam::may_snapshot`] and by the pane view's own refusal.
     ///
     /// Called from [`crate::shell::AppShell::on_render_wake`] via the
-    /// coordinator, and as the FIRST thing `window::wire_close`'s
+    /// coordinator, for every tab, and as the FIRST thing `window::wire_close`'s
     /// `close-request` handler does — while the core and the panes are still
     /// alive. After that handler runs `core.borrow_mut().take()` there is no core
     /// to gather from, so this ordering is what makes a clean quit persist the
     /// session at all.
     ///
-    /// A refused gate leaves the cache untouched rather than clearing it; see the
+    /// Either refusal leaves the cache untouched rather than clearing it; see the
     /// module docs. Each core borrow is taken and dropped in its own statement,
     /// which is load-bearing for the same reason.
-    pub fn refresh_subtree(&self) {
+    pub fn refresh_tab(&self) {
         // `Liveness` is `Copy` and `WolfCore::liveness` is a lock-free atomic
         // read, never an RPC.
         let liveness = {
@@ -186,7 +222,13 @@ impl StateHandle {
             return;
         }
 
-        let layout = self.inner.panes.layout_snapshot();
+        // The SECOND refusal route: a leaf whose Neovim window is in neither
+        // snapshot map. Returning here contributes the cache, exactly as a shut
+        // gate does.
+        let LayoutGather::Ready(layout) = self.inner.panes.layout_snapshot() else {
+            return;
+        };
+
         let live = {
             let core_ref = self.inner.core.borrow();
             core_ref.as_ref().and_then(WolfCore::live_cwd)
@@ -194,13 +236,11 @@ impl StateHandle {
 
         let empty = self.inner.empty.get();
         let cwd = state_seam::snapshot_cwd(empty, &self.inner.launch_cwd, live.as_deref());
-        let (width, height) = self.inner.window.default_size();
         // The user's PREFERENCE, never the live empty-state flag. `restore_plans`
         // reads this field back, so writing `!empty` would make any session that
         // ended in the empty state hide the sidebar on the next launch into a real
         // project.
-        let subtree =
-            state_seam::window_subtree(width, height, cwd, self.inner.sidebar_shown.get(), layout);
-        *self.inner.subtree.borrow_mut() = Some(subtree);
+        let tab = state_seam::tab_subtree(cwd, self.inner.sidebar_shown.get(), layout);
+        *self.inner.tab.borrow_mut() = Some(tab);
     }
 }

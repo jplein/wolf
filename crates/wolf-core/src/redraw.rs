@@ -1419,10 +1419,20 @@ fn win_close(snap: &mut Snapshot, params: &[Value], closed_wins: &mut Vec<i64>) 
     // every window of a tabpage being LEFT — already removes the `windows` entry,
     // so a later `win_close` for such a grid cannot recover the handle and that
     // pane's history is orphaned. nvim never reuses window handles, so an orphan is
-    // only memory (bounded per pane per nvim-process lifetime). An "absent from
-    // `wolf_buffers` for N emits" reaper would be WRONG: a window in a non-current
-    // tabpage is absent from both maps by construction, and pruning it would
-    // violate the locked no-prune rule.
+    // only memory, bounded per pane per nvim-process lifetime, and that bound is
+    // the whole reason this is left alone: `nav_history` is deliberately free of
+    // timers, epochs and reapers, and reclaiming a bounded leak is not worth a
+    // second authority over it.
+    //
+    // The reason that used to sit here — that a window in a non-current tabpage is
+    // absent from `win_buffers` and `buffers` by construction — is MEASURED FALSE.
+    // `runtime/nvim/init.lua` fills both by sweeping `nvim_list_wins()`, which is
+    // global across tabpages, so a background tabpage's windows are PRESENT in both;
+    // `per_window_buffers_are_global_across_tabpages` in `tests/tabpages.rs`
+    // measures it and `architecture.md` states it as the cross-crate contract. An
+    // "absent from `wolf_buffers` for N emits" reaper would therefore not mistake a
+    // background window for a closed one. Do not read that correction as licence to
+    // build one.
     if let Some(win) = snap.windows.get(&grid).map(|w| w.win) {
         if win != 0 {
             closed_wins.push(win);
