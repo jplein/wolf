@@ -700,8 +700,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
   ///
   /// For tagged Wolf commands it then disables the Close (`.closePane`) command
   /// when the key window is on its LAST split (`:close` would error, E444),
-  /// disables the Copy (`.copy`) command unless the key window is in visual mode
-  /// (there is no selection to copy otherwise), and disables the Preview
+  /// disables the Copy (`.copy`) command unless the key window has something to
+  /// copy from EITHER source — its active pane is a preview holding a non-empty
+  /// selection, or the window is in visual mode — and disables the Preview
   /// (`.preview`) command unless the key window's active buffer is Markdown.
   /// Every other item stays enabled.
   func validateMenuItem(_ item: NSMenuItem) -> Bool {
@@ -746,7 +747,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     case .closePane:
       return (keyController?.paneCount ?? 0) > 1
     case .copy:
-      return keyController?.isVisualMode ?? false
+      // BOTH Copy sources, resolved by the one pure decision `copy()` also switches
+      // over — never `isVisualMode` alone, which would grey the item out over a live
+      // preview selection.
+      return keyController?.canCopy ?? false
     case .preview:
       return keyController?.isMarkdownActive ?? false
     case .previewInBrowser:

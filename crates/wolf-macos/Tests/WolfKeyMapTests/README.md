@@ -247,6 +247,20 @@ The three pure file-picker seams, each as a table of cases: `isPickerTrigger` (t
 - `isPickerTrigger` matches Command+O and deliberately diverges from wolf-gnome's Ctrl+Shift+P seam, because Command+O is the platform convention for "open". A case asserts that Command+"p" is false, so a later parity pass cannot quietly reintroduce the gnome letter.
 - `nextSelection` and `restoredIndex` are exact ports of `crates/wolf-gnome/src/picker.rs` and are meant to stay case-for-case in step with it.
 
+#### `PreviewCopySeamTests.swift`
+
+**Covers**
+
+- `PreviewCopySeam.decodeSelectionMessage` as a table: copyable text, whitespace preserved verbatim, the empty and whitespace-only clears, and the four malformed shapes (wrong value type, missing key, non-dictionary, `nil`) that must leave the cache alone.
+- The `copySource` matrix and `Selection.isCopyable`, including that a copyable preview selection beats visual mode while a non-copyable one does not mask it, plus a sweep asserting `isCopyEnabled(…) == (copySource(…) != .none)` over the whole matrix.
+- The emitted JavaScript: the handler it posts to, the `t` key the decoder requires, the `selectionchange` / capture-phase `mouseup` / `keyup` listeners, the rAF throttle, the collapsed early-out, the `try` / `catch` wrapper, the document-start push, and a custom handler name.
+
+**Gotchas**
+
+- Scalar and string inputs only. A live selection, the `NSPasteboard` write and a real ⌘C cannot be automated and stay manual-smoke.
+- The handler name is asserted to differ from `PreviewSeam.clickFocusHandlerName` and `PreviewScrollSeam.stateHandlerName`, because all three share one `WKUserContentController` and a duplicate silently replaces a handler.
+- Assertions on the generated source pin the argument text, not just a substring: `contains("true")` alone is satisfied by the script's own `pending = true`.
+
 #### `PreviewLinkSeamTests.swift`
 
 **Covers**

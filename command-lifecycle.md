@@ -125,6 +125,6 @@ Everything in (a); the dispatcher arm opens a Swift overlay (`openCommandPalette
 - Add the `command_kind` constant and extend `FfiCommand::from_command`.
 - Extend the Swift `CommandKind` and its `init?(ffi:)`, plus `CommandSeamTests`.
 - Extend the contiguous-`0..=N` guard array in `crates/wolf-ffi/tests/commands.rs` and add a `:Wolf<Pascal>` drain step.
-- If the command needs a tagged menu item, add an `AppMenu` `Tag` value and the item itself, with any accelerator. To enable it only in some states, add a case to `AppDelegate.validateMenuItem` backed by a `Snapshot` predicate bridged onto `WolfCoreHandle` — the `is_visual_mode` / `is_markdown_active` / `is_preview_active` precedent. A command with no such case, `Terminal` among them, is always enabled.
+- If the command needs a tagged menu item, add an `AppMenu` `Tag` value and the item itself, with any accelerator. To enable it only in some states, add a case to `AppDelegate.validateMenuItem` backed by a `Snapshot` predicate bridged onto `WolfCoreHandle` — the `is_visual_mode` / `is_markdown_active` / `is_preview_active` precedent. A case may also fold in view-local state the core cannot see, as Copy's does with a preview pane's cached selection. A command with no such case, `Terminal` among them, is always enabled.
 - Every command except `CommandPalette` becomes a palette candidate, so bump `STATIC_COMMAND_COUNT` in `crates/wolf-core/tests/palette_rank.rs`.
 - Update the affected directory READMEs and this document, then run `prettier --write` on every edited Markdown file.

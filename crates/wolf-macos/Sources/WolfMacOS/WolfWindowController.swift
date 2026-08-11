@@ -656,13 +656,36 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
 
   // MARK: - Edit commands
 
-  /// Copies the current visual-mode selection to the system clipboard. Yanks
-  /// the selection out of the captive Neovim (blocking briefly) and, only when
-  /// the returned text is non-empty, writes it to `NSPasteboard.general`. A
-  /// no-op outside visual mode (the Edit > Copy item is additionally disabled
-  /// there via `AppDelegate.validateMenuItem`).
+  /// Copies the current selection to the system clipboard, from whichever of the TWO
+  /// sources the pure `PreviewCopySeam.copySource` picks — the active pane's preview
+  /// page, or the captive Neovim's visual-mode selection. This is a mechanical switch
+  /// over that decision, and `canCopy` (which `AppDelegate.validateMenuItem` reads)
+  /// is the same decision, so the menu can never claim enabled while Copy yields
+  /// nothing.
+  ///
+  /// The preview branch is fully SYNCHRONOUS: the text was already pushed out of the
+  /// page and cached, so nothing is evaluated or awaited here. It deliberately does
+  /// NOT call `copy_selection()` — that is a blocking RPC that yanks INSIDE Neovim,
+  /// and it would touch registers for a selection that is not Neovim's.
   func copy() {
-    guard let text = handle?.copy_selection().toString(), !text.isEmpty else { return }
+    switch PreviewCopySeam.copySource(
+      previewSelection: activePreviewSelection, isVisualMode: isVisualMode)
+    {
+    case .previewSelection(let text):
+      writeToPasteboard(text)
+    case .neovimVisual:
+      // Yanks out of the captive Neovim (blocking briefly), and writes only when the
+      // returned text is non-empty.
+      guard let text = handle?.copy_selection().toString(), !text.isEmpty else { return }
+      writeToPasteboard(text)
+    case .none:
+      return
+    }
+  }
+
+  /// Replaces `NSPasteboard.general`'s contents with `text`. Shared by both Copy
+  /// sources so the two can never write the pasteboard differently.
+  private func writeToPasteboard(_ text: String) {
     let pasteboard = NSPasteboard.general
     pasteboard.clearContents()
     pasteboard.setString(text, forType: .string)
@@ -792,9 +815,24 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
   func layoutSnapshot() -> SavedPaneNode? { paneContainer?.layoutSnapshot() }
 
   /// Whether this window's active document is in Neovim visual mode
-  /// (`v`/`V`/`<C-v>`). Read by the coordinator's menu validation to enable
-  /// the Edit > Copy command only when there is a selection to copy.
+  /// (`v`/`V`/`<C-v>`). One of the two inputs to `canCopy`; it gates only the
+  /// NEOVIM source of Edit > Copy.
   var isVisualMode: Bool { handle?.is_visual_mode() ?? false }
+
+  /// The selection this window's ACTIVE pane's preview page last pushed, or `nil`
+  /// when the active pane is not a preview or reported no selection. The other input
+  /// to `canCopy`, and one dictionary read (see
+  /// `PaneContainerView.activePaneSelection` for why it keys on the per-view active
+  /// pane).
+  var activePreviewSelection: PreviewCopySeam.Selection? { paneContainer?.activePaneSelection }
+
+  /// Whether Edit > Copy has anything to copy, from EITHER source. Read by the
+  /// coordinator's menu validation; `copy()` switches over the same pure decision
+  /// with the same two inputs, so enablement and action cannot drift apart.
+  var canCopy: Bool {
+    PreviewCopySeam.isCopyEnabled(
+      previewSelection: activePreviewSelection, isVisualMode: isVisualMode)
+  }
 
   /// Whether this window's active buffer is a Markdown file. Read by the
   /// coordinator's menu validation to enable the View > Preview command only on

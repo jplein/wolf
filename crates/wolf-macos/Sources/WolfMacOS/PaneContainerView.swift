@@ -251,10 +251,17 @@ final class PaneContainerView: NSView {
   private var previewFocusHandlers: [Int64: PreviewClickFocusHandler] = [:]
   /// The scroll-state script-message handler for each preview web view — retained
   /// for the same reason as `previewFocusHandlers` (the `WKUserContentController`
-  /// holds it STRONGLY; the proxy holds this container WEAKLY). Both handlers are
-  /// registered on the SAME content controller under DIFFERENT names, and BOTH must
-  /// be removed in `removePreviewWebView` or the controller leaks the proxy.
+  /// holds it STRONGLY; the proxy holds this container WEAKLY). All three preview
+  /// handlers are registered on the SAME content controller under DIFFERENT names,
+  /// and every one must be removed in `removePreviewWebView` or the controller leaks
+  /// the proxy.
   private var previewScrollHandlers: [Int64: PreviewScrollStateHandler] = [:]
+  /// The SELECTION script-message handler for each preview web view — retained for
+  /// the same reason as `previewScrollHandlers` (the `WKUserContentController` holds
+  /// it STRONGLY; the proxy holds this container WEAKLY). It is the THIRD handler on
+  /// that one content controller, so its name must differ from the other two and it
+  /// must be removed in `removePreviewWebView` or the controller leaks the proxy.
+  private var previewSelectionHandlers: [Int64: PreviewSelectionHandler] = [:]
   /// The last cursor a `PreviewScrollSeam.followJS` was evaluated for, per preview
   /// window — the `winsNeedingScroll` gate's `applied` side. Deliberately SEPARATE
   /// from `lastPreviewLoads`: a cursor move must arm only the cheap scroll pass,
@@ -269,6 +276,18 @@ final class PaneContainerView: NSView {
   /// anchor offset can be neither stashed in the page nor pulled synchronously.
   /// Reading a dictionary entry immediately before the reload is instead free.
   private var previewScrollStates: [Int64: PreviewScrollSeam.ScrollState] = [:]
+  /// The live COPYABLE selection of each preview page, PUSHED out by the injected
+  /// document-start selection script (via `PreviewSelectionHandler`) on every
+  /// selection change, mouse-up and key-up, and once at document start.
+  ///
+  /// A cache for the same reason `previewScrollStates` is one: its only reader is the
+  /// SYNCHRONOUS menu-validation / Copy path (`activePaneSelection`), and menu
+  /// validation cannot await an `evaluateJavaScript` round trip. The text itself
+  /// rides in the entry so the enable decision and the copied bytes come from ONE
+  /// snapshot; after ⌘A that is the whole document's text, which is bounded and
+  /// dropped on document replacement (`reloadDirtyPreviews`) and on pane close
+  /// (`removePreviewWebView`).
+  private var previewSelections: [Int64: PreviewCopySeam.Selection] = [:]
   /// The scroll restore awaiting the next `didFinish` for each preview window,
   /// captured synchronously immediately BEFORE `loadHTMLString` replaces the
   /// document. Consumed (and cleared) in `previewDidFinishLoad` — this is what keeps
@@ -666,6 +685,22 @@ final class PaneContainerView: NSView {
       previewWins.insert(preview.win())
     }
     return PaneModeSeam.mode(activeWin: activeWin, previewWins: previewWins) == .preview
+  }
+
+  /// The copyable selection the ACTIVE pane's preview page last pushed, or `nil` when
+  /// the active pane is not a preview (no entry exists for a non-preview window) or
+  /// its page reported no selection.
+  ///
+  /// Identity is `activeWin` — the PER-VIEW active pane — and deliberately never
+  /// `handle.active_win()`. The handle is shared across a project's tabpages, so the
+  /// core's notion of the active window can name a preview in a BACKGROUND tab, whose
+  /// selection would then enable Edit > Copy in this window. Unlike
+  /// `WolfWindowController.historyWin` there is therefore NO `active_win()` fallback
+  /// here; a `0` (unbound) active pane simply has nothing to copy.
+  var activePaneSelection: PreviewCopySeam.Selection? {
+    let win = activeWin
+    guard win != 0 else { return nil }
+    return previewSelections[win]
   }
 
   /// Re-measures against `newMetrics` (a per-window font-size change): swaps the
@@ -1391,6 +1426,20 @@ final class PaneContainerView: NSView {
       // offset while typing. Everything that genuinely needs a navigation still gets
       // one; the whole ordered decision lives in the pure seam and this is a
       // mechanical switch over it.
+      //
+      // The cached selection dies with the document it was made in, on BOTH branches
+      // below: a body swap and a full load each destroy the DOM selection. Clearing
+      // it HERE, synchronously, buys exactly one thing — independence from a late
+      // CLEAR. Trusting the page to report the collapse would leave Edit > Copy
+      // enabled over text that is no longer on screen for as long as that push takes
+      // to arrive, which is easily long enough to open the Edit menu. It does NOT
+      // make a stale entry impossible: the outgoing document stays live until WebKit
+      // commits the replacement (and the body swap is a separate task), so a
+      // `mouseup`, `keyup` or already-pending rAF push landing in that frame or two
+      // re-populates the entry. That residual is benign — those pushes read the live
+      // selection at call time, so the worst case is text the user genuinely had
+      // selected a moment earlier, the same direction the design already accepts.
+      previewSelections[win] = nil
       switch PreviewScrollSeam.updateStrategy(
         html: html,
         currentLoad: load,
@@ -1547,13 +1596,30 @@ final class PaneContainerView: NSView {
     // (`PreviewScrollSeam.stateHandlerName`). The document-start script defines
     // `__wolfFollow` / `__wolfRestore` and PUSHES the page's scroll state out to the
     // proxy, which caches it in `previewScrollStates` — the race-free source for the
-    // pre-reload capture. Both handlers must be removed in `removePreviewWebView`.
+    // pre-reload capture. ALL THREE handlers must be removed in
+    // `removePreviewWebView`.
     let scrollProxy = PreviewScrollStateHandler(win: win, container: self)
     previewScrollHandlers[win] = scrollProxy
     config.userContentController.add(scrollProxy, name: PreviewScrollSeam.stateHandlerName)
     config.userContentController.addUserScript(
       WKUserScript(
         source: PreviewScrollSeam.stateScriptJS(),
+        injectionTime: .atDocumentStart,
+        forMainFrameOnly: true))
+
+    // The SELECTION pair — the third channel on this one content controller, again
+    // under its own name (`PreviewCopySeam.selectionHandlerName`). The document-start
+    // script PUSHES the page's selected text out to the proxy, which caches it in
+    // `previewSelections`. It has to be a push for the same reason the scroll state
+    // does: Edit > Copy's enablement is decided in `validateMenuItem`, which is
+    // synchronous and cannot await an `evaluateJavaScript` round trip.
+    let selectionProxy = PreviewSelectionHandler(win: win, container: self)
+    previewSelectionHandlers[win] = selectionProxy
+    config.userContentController.add(
+      selectionProxy, name: PreviewCopySeam.selectionHandlerName)
+    config.userContentController.addUserScript(
+      WKUserScript(
+        source: PreviewCopySeam.selectionScriptJS(),
         injectionTime: .atDocumentStart,
         forMainFrameOnly: true))
 
@@ -1592,6 +1658,26 @@ final class PaneContainerView: NSView {
   /// `syncPreviewWebViews` prune drops; that is benign.
   func recordPreviewScrollState(win: Int64, state: PreviewScrollSeam.ScrollState) {
     previewScrollStates[win] = state
+  }
+
+  /// Caches — or, with a `nil` selection, CLEARS — the selection a preview page
+  /// pushed out (invoked by that pane's `PreviewSelectionHandler` on every selection
+  /// change, mouse-up and key-up, and once at document start).
+  ///
+  /// Deliberately does NOTHING else — no repaint, no wake, no reload. It is a pure
+  /// cache write on the main thread, at most once per animation frame per preview,
+  /// whose only reader is the synchronous `activePaneSelection`.
+  ///
+  /// A message that arrives AFTER `removePreviewWebView` is DROPPED rather than
+  /// cached, and that guard is load-bearing: nothing prunes a late entry later. The
+  /// `syncPreviewWebViews` prune iterates `previewWebViews.keys`, and teardown has
+  /// already removed this win's key, so the win is never revisited and an entry
+  /// written here would live as long as the container. That is what would break the
+  /// bound `previewSelections` documents — a whole document's text after ⌘A, dropped
+  /// on pane close.
+  func recordPreviewSelection(win: Int64, selection: PreviewCopySeam.Selection?) {
+    guard previewWebViews[win] != nil else { return }
+    previewSelections[win] = selection
   }
 
   /// The coalesced cursor-follow pass (the `previewScrollCoalescer`'s `perform`, run
@@ -1635,13 +1721,21 @@ final class PaneContainerView: NSView {
     // the scroll proxy (the controller retains its handlers strongly).
     previewWebViews[win]?.configuration.userContentController
       .removeScriptMessageHandler(forName: PreviewScrollSeam.stateHandlerName)
+    // And the THIRD, for the same reason: the controller retains the selection proxy
+    // strongly too.
+    previewWebViews[win]?.configuration.userContentController
+      .removeScriptMessageHandler(forName: PreviewCopySeam.selectionHandlerName)
     previewWebViews[win]?.removeFromSuperview()
     previewWebViews[win] = nil
     lastPreviewLoads[win] = nil
     previewNavDelegates[win] = nil
     previewFocusHandlers[win] = nil
     previewScrollHandlers[win] = nil
+    previewSelectionHandlers[win] = nil
     previewScrollStates[win] = nil
+    // A surviving entry would keep Edit > Copy enabled — and copying stale text — for
+    // a window that no longer has a preview at all.
+    previewSelections[win] = nil
     lastPreviewCursors[win] = nil
     pendingPreviewRestores[win] = nil
     previewSourcePaths[win] = nil

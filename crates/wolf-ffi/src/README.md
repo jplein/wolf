@@ -71,7 +71,7 @@ The four `extern "C"` wake registrations (`wolf_ffi_set_wake`, `wolf_ffi_set_fil
 - `FfiScrollEvent { direction, grid, row, col }` — Transparent. Same grid-local convention.
 - `copy_selection(&self) -> String` — The visual selection yanked to text. Blocks briefly; `""` when not in visual mode or the selection is empty, and Swift writes the pasteboard only for a non-empty result.
 - `paste(&self, text: String)` — `nvim_paste`.
-- `is_visual_mode(&self) -> bool` — Gates the Edit > Copy menu item.
+- `is_visual_mode(&self) -> bool` — Gates the Neovim source of Edit > Copy; a selection in a Markdown preview enables that item without core's involvement.
 
 ### Panes and windows
 

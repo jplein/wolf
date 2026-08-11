@@ -229,8 +229,10 @@ enum AppMenu {
   }
 
   /// The Edit menu (Copy `⌘c` / Paste `⌘v`). Both titles mirror
-  /// `wolf_core::COMMAND_SPECS`. Copy is enabled only in visual mode (gated by
-  /// `AppDelegate.validateMenuItem`); Paste is always enabled.
+  /// `wolf_core::COMMAND_SPECS`. Copy is enabled whenever either of its sources has
+  /// something to copy — a preview-pane selection or a Neovim visual-mode selection —
+  /// gated by `AppDelegate.validateMenuItem` through
+  /// `WolfWindowController.canCopy`; Paste is always enabled.
   private static func editMenuItem(target: AppDelegate) -> NSMenuItem {
     let item = NSMenuItem()
     let menu = NSMenu(title: "Edit")

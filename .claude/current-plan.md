@@ -1,111 +1,343 @@
-# Bug fix: sidebar file tree does not reflect writes, renames, or deletes
-
-## Problem statement
-
-On macOS, the sidebar file tree never updates after the initial traversal:
-
-- `:e new-file.md`, insert text, `:w` — `new-file.md` never appears in the sidebar.
-- Renames (`:saveas`, anything firing `BufFilePost`) never appear.
-- Deletes never disappear.
-
-## Root cause (from initial investigation)
-
-- The tree sidebar is driven by a long-lived `FfiFileSearch` session:
-  `FileTreeView.swift` → `wolf_ffi` `start_tree_search` (`crates/wolf-ffi/src/lib.rs:2323`) → `WolfCore::start_file_search` (`crates/wolf-core/src/api.rs:1307`).
-- That session's traversal is one-shot: a synchronous MRU seed, then one background `ignore`-crate walk (`crates/wolf-core/src/files.rs`) that streams batches and ends `complete`. Nothing ever re-walks.
-- Neovim already notifies core when files are written/renamed/deleted: `runtime/nvim/init.lua` registers `BufWritePost` / `BufFilePost` / `BufDelete` autocmds feeding the `wolf_open_files` and `wolf_buffers` notifications, folded in `crates/wolf-core/src/redraw.rs` (`apply_open_files` / `apply_buffers`). But nothing routes those events into a re-traversal of any live file-search session.
-- The macOS picker (`PickerView.swift`) opens a fresh session per open, so it self-heals; the tree session lives as long as the sidebar and goes permanently stale.
-
-## Requirements
-
-- After a write of a new file, a rename, or a delete performed through the captive Neovim, the sidebar tree must update to reflect the filesystem.
-- The tree view's expansion state must be preserved across the update (`FileTreeView` keys expansion on cached `TreeItem` identity per relPath).
-- Coalesced-refresh behavior must be preserved (streaming batches collapse to ~one reload per frame; refresh work deferred while the sidebar is collapsed).
-- Tests: prefer end-to-end/integration tests that start a real Neovim process (per CLAUDE.md). New Rust test files must be wired into `BUILD.bazel` `rust_test` targets (Bazel does not auto-discover), mirroring a sibling real-nvim test's runfiles/env/tags.
-
-## Plan (architect)
-
-### Chosen design
-
-Core-driven rescan (option 1). A new dedicated Neovim notification `wolf_fs_changed` (autocmds `BufWritePost` / `BufFilePost` / `BufDelete` in `runtime/nvim/init.lua`) is routed by `RedrawHandler` into a new session registry inside `wolf-core`, which debounces and re-walks every live `FileSearch` session, atomically swapping the entry list and bumping `version` so the existing wake → `scheduleRefresh()` → `TreeIndexCache` pipeline redraws the tree. The fix lives entirely below `start_file_search`, so both front-ends benefit with zero Swift and zero GTK changes.
-
-Rejected: `notify` fs-watcher (new dep, Bazel lockfile churn, watcher-thread complexity — external-change support is out of scope, and the registry is the seam a watcher could later plug into); front-end-driven restart (implemented twice, no reliable front-end signal, discards streaming/MRU continuity).
-
-A dedicated event (not piggybacking `wolf_open_files`) is required because `wolf_open_files` also fires on `BufEnter`/`WinEnter`/`TabEnter`, which would trigger walks on every focus change.
-
-### Key mechanics
-
-- Trigger payload `[event_name, abs_path]`. `BufWritePost` is conditional (rescan only if path not already in the session's `seen` set and under the session root — a `:w` of an existing file costs nothing); `BufFilePost` / `BufDelete` are unconditional (`force`).
-- Rescan = walk-then-swap, not streaming: collect into a local `Vec` (re-seeded from `MruStore::recent(&root)`, which prunes rows for deleted files), then under one short write lock replace `entries`/`seen`/`truncated`, bump `version`, keep `complete = true`; fire the session wake once after unlock. If the new list equals the old, skip swap and version bump (no UI churn on `:bdelete` of a still-existing file).
-- Debounce: registry-level, default 200 ms (`WOLF_RESCAN_DEBOUNCE_MS`, `> 0` guard). Per-session `rescan_running` + `rescan_dirty` atomics prevent overlapping walks; a request during a walk re-runs once at the end.
-- If the initial traversal has not yet completed, the rescan waits in a bounded poll loop (~25 ms cadence, bounded by `bounds.budget`) so a swap never races `append_batch`.
-- Sessions register in the registry from `start_file_search`; an entry whose `cancel` flag is set (Drop sets it) is dead and pruned on every notify. Picker sessions register too but prune themselves.
-- `needs_rescan(force, paths, root, seen) -> bool` is a pure, headlessly unit-testable helper; canonicalization mismatches fail open to an extra walk.
-
-### Files to modify
-
-1. `crates/wolf-core/src/files.rs` — `SearchBounds: Clone`; extract shared `walk_files` helper from `spawn_traversal` (one set of traversal rules for initial walk and rescan); add `SearchRegistry` + `SessionEntry` + `needs_rescan` + `rescan`; headless unit tests in `#[cfg(test)]`.
-2. `crates/wolf-core/src/nvim.rs` — `setup_fs_events()`, structural mirror of `setup_open_files` (line 1009).
-3. `crates/wolf-core/src/redraw.rs` — `FS_CHANGED_EVENT` const; `RedrawHandler` gains `search_registry` field + `new` param; new `handle_notify` arm: decode, canonicalize with raw fallback (canonicalize fails for deleted paths), call `notify_fs_changed(path, force)` with `force = event != "BufWritePost"`. No snapshot lock, no `seq` bump, no handler-level wake.
-4. `crates/wolf-core/src/api.rs` — `search_registry: Arc<SearchRegistry>` field created in `start()` (handle + debounce from env) before `RedrawHandler::new` (line 277); registration in `start_file_search` (line 1307); `setup_fs_events().await?` in both the start chain (~304–320) and `restart_nvim_inner` (~1512–1527).
-5. `runtime/nvim/init.lua` — `_G.wolf_setup_fs_events(chan)` next to `wolf_setup_open_files`: augroup `WolfFsEvents`, one autocmd for the three events, emits `vim.rpcnotify(chan, "wolf_fs_changed", { args.event, vim.fn.fnamemodify(args.file, ":p") })`; pcall-guarded, skips non-file buffers (`buftype ~= ""`, pcall since `args.buf` can be invalid on `BufDelete`).
-
-No changes: wolf-ffi, FileTreeView.swift, TreeWakeBridge.swift, Project.swift, wolf-gnome (verify only).
-
-### Test plan
-
-- New `crates/wolf-core/tests/file_search_rescan.rs` (modeled on `tests/file_search.rs`, real nvim via `tests/common/mod.rs`):
-  1. New file appears after `:e fresh.md` / insert / `:w`; version advanced; still `complete`; no dupes.
-  2. Deleted file disappears (`remove_file` + `:bdelete!`); MRU seed does not resurrect it.
-  3. `:saveas renamed.md` lists new name; old name still listed (old file really remains on disk — pin semantic in comment).
-  4. `:w` of an existing listed file does not bump version (sleep past debounce, assert unchanged).
-  5. Burst of three new files: all appear, deduped (no strict rescan-count assertion).
-- Headless `needs_rescan` unit tests in `src/files.rs` `#[cfg(test)]` (existing lib test target, no new wiring).
-- New `crates/wolf-ffi/tests/tree_search_rescan.rs` (modeled on `tests/tree_search.rs`): end-to-end `start_tree_search()` → baseline `children_of("")` → drive `:e`/`:w` via `send_key` → poll until `fresh.md` node appears and `tree.version()` advanced; then delete flow; assert dirs-before-files ordering holds.
-- Bazel wiring (mandatory): new `rust_test` targets `//crates/wolf-core:file_search_rescan` (mirror `file_search` target verbatim) and `//crates/wolf-ffi:tree_search_rescan` (mirror `tree_search` target, line 204). Confirm both run under `bazelisk test`.
-
-### Documentation impact
-
-- `crates/wolf-core/src/README.md`: `files.rs`, `redraw.rs`, `nvim.rs` entries (edit in place); `api.rs` only if it enumerates chains.
-- `crates/wolf-core/DECISIONS.md`: one decision entry (rescan-on-nvim-events vs watcher; walk-then-swap; cancel flag as registry liveness).
-- `runtime/nvim/README.md`: `wolf_setup_fs_events` / `wolf_fs_changed` entry.
-- `crates/wolf-core/tests/README.md` + `crates/wolf-ffi/tests/README.md`: one entry each.
-- `architecture.md`: only if the `wolf_*` notification list is exhaustive.
-
-### Lint notes
-
-- `RedrawHandler::new` grows to 8 params — targeted `#[allow(clippy::too_many_arguments)]` with one-line reason.
-- Build replacement vec before taking the write lock; never hold state lock across the wake; bind guards to locals.
-
-### Risks / edge cases
-
-Rename window shows old name until swap; `:saveas` correctly leaves both; `:bdelete` of existing file → equality check suppresses churn; external changes remain invisible (documented limitation; registry is the future watcher seam); N views ⇒ N debounced bounded walks; sidebar collapsed → `TreeRefreshGate` defers as today; nvim restart re-arms via `setup_fs_events` in restart chain; wedged nvim → no events, no rescans, no RPC on rescan path; truncated flag replaced truthfully on swap.
-
-### Implementation order
-
-files.rs → nvim.rs → redraw.rs → api.rs → init.lua → tests + Bazel → docs (`prettier --write`, `./tools/lint/markdown_check.sh`).
-
-## Stage 1 addendum: non-buffer-event triggers (user feedback 2026-08-09)
-
-User verification found the fix partial: new-file writes update the sidebar, but renames/deletes performed as `git mv` in an external terminal or in the Wolf terminal drawer do not — those flows fire no `BufWritePost`/`BufFilePost`/`BufDelete`. User decision: staged fix. Stage 1 (now): broaden the nvim-side trigger set — `ShellCmdPost` (catches `:!mv`/`:!rm`/`:!git mv`), `FocusGained` (catches external-terminal/Finder changes when Wolf regains focus; the app already pushes both UI focus edges to nvim), `TermLeave` (catches drawer-terminal changes when focus leaves the drawer). All are force triggers; the 200 ms debounce plus the equality-check no-op suppression bound the cost (a rescan walk costs the same as one picker open). Stage 2 (follow-up): a filesystem watcher plugged into the `SearchRegistry` seam for immediate updates without a refocus edge.
-
-### Stage 1 spec (architect)
-
-- Adopt all three as force triggers. `ShellCmdPost` (fires on `:!…` incl. `:silent !…`); `FocusGained` (delivery chain verified end to end: `AppDelegate.pushUiFocusToAllProjects` → `set_ui_focus` → `nvim_ui_set_focus` → autocmd; already load-bearing for `WolfAutoRead :checktime`; GNOME doesn't forward focus — pre-existing asymmetry, document only); `TermLeave` unguarded (drawer auto-`startinsert`s on WinEnter per `init.lua:886–897`, so every drawer-exit path passes a t→n mode change). No `TermClose`, no `WinLeave`. Contingency: if the real-drawer test shows `TermLeave` not firing, replace with `WinLeave` + `buftype == "terminal"` guard — do not stack both.
-- `init.lua` only: second `nvim_create_autocmd` in `WolfFsEvents` for the three events with its own callback (the existing `buftype ~= ""` guard would swallow `TermLeave`); emit `pcall(vim.rpcnotify, chan, "wolf_fs_changed", { args.event, "" })` — explicit empty path (not `fnamemodify`, which fabricates the cwd from ""). The empty string is required: omitting the element would hit the pair-decode guard and drop the event.
-- Zero Rust logic changes: `force = event != "BufWritePost"` already covers the new events; canonicalize-fallback handles `""`; `needs_rescan` short-circuits on force. Only comment touch-ups in `redraw.rs` (`FS_CHANGED_EVENT` doc + arm).
-- Cost: human-paced edges; 200 ms debounce collapses each (incl. autoread-induced writes riding the same FocusGained); per-fire cost = one bounded walk per session, same as a picker open; equality check keeps unchanged trees at zero UI cost. No cooldown gate.
-- Tests: extend `crates/wolf-core/tests/file_search_rescan.rs` (no new files, no Bazel changes): `shell_cmd_post_rescans` (`:silent !rm <abs>`), `focus_gained_rescans` (`set_ui_focus(false)` then `(true)` mirroring `tests/autoread.rs` — nvim de-dupes, both edges required), `term_leave_rescans` (real drawer flow via `InputEvent::ToggleTerminal` twice, mirroring `wolf-ffi/tests/terminal.rs`; `doautocmd` only as dev diagnostic, never the committed assertion).
-- Docs: `runtime/nvim/README.md` entry extended in place (two trigger classes + GNOME caveat link); `crates/wolf-core/src/README.md` `files.rs`/`redraw.rs` entries compressed under budget in the same edit (link to module docs, don't transcribe); DECISIONS.md rescan entry extended (not a second entry) with the TermLeave-not-WinLeave reason and the Stage 2 watcher note; tests README one sentence; `architecture.md:115` wake-claim scoped.
+# Plan: Copy from a Markdown preview pane
 
 ## Status
 
-- [x] Problem statement written
-- [x] Architect plan
-- [x] Tests written — `crates/wolf-core/tests/file_search_rescan.rs` (5 tests), `crates/wolf-ffi/tests/tree_search_rescan.rs` (1 e2e test), `rescan_decision_tests` module appended to `crates/wolf-core/src/files.rs` (6 headless tests pinning `needs_rescan(force: bool, paths: &[PathBuf], root: &Path, seen: &HashSet<PathBuf>) -> bool`), Bazel targets `//crates/wolf-core:file_search_rescan` and `//crates/wolf-ffi:tree_search_rescan` added. Note: lib tests will not compile until the coder implements `needs_rescan` with the pinned signature.
-- [x] Implementation + tests passing — all targets green on macOS/Bazel: new `//crates/wolf-core:file_search_rescan` (5) + `//crates/wolf-ffi:tree_search_rescan` (1); regressions `file_search`, `file_search_bounds`, `tree_search`, `wolf_core_lib_test` (230 incl. 6 `rescan_decision_tests` + `append_batch_seen_tests`); full `//crates/wolf-core/... //crates/wolf-ffi/...` 85/85; `//tools/lint:check` all 5. Deviation from plan (documented in code): `append_batch` now folds streamed paths into `FileSearchState::seen` so `needs_rescan` knows walk-discovered files. Linux `cargo test` not exercised (no Cargo toolchain on this host); change touches no GTK code.
-- [x] Review — verdict: implementation correct and plan-conformant. Three fixes applied: (1) `deleted_file_disappears` now opens via `InputEvent::Open` + MRU-record wait so the MRU-resurrect guard is genuinely exercised; (2) stale "expected to FAIL" comment blocks removed from both new test files; (3) `SearchRegistry::register` prunes dead sessions so browse-only sessions don't accumulate dead picker entries. All targets re-run green (85/85 + lint). Known pre-existing flake noted: `file_search::mru_seed_follows_nvim_cd` (shared `WOLF_STATE_DIR` sqlite contention across concurrent tests; passes 3/3 rerun; out of scope). Reviewer doc note: `architecture.md:115` "out-of-band `wolf_*` notifications fire the same wake" is now over-general — `wolf_fs_changed` fires no handler wake (session wakes fire on swap).
-- [x] Documentation — all planned docs updated across both passes; over-budget entries compressed (`files.rs` 376→~214 words, `redraw.rs` 297→~214); long-line finding split; `prettier` clean and `//tools/lint:markdown` passes with zero findings.
-- [x] Stage 1 (refocus-edge triggers) — implemented (`init.lua` second autocmd for `ShellCmdPost`/`FocusGained`/`TermLeave`, comment-only `redraw.rs` touch-up), 3 new real-nvim tests green (TermLeave fired on the real drawer flow; WinLeave contingency not needed), reviewer approved with no issues, docs updated.
-- [ ] Stage 2 (filesystem watcher on the `SearchRegistry` seam) — agreed with user as follow-up; supersedes the refocus-edge dependency and per-refocus walk cost with targeted invalidation. Requires the `notify` crate (Cargo + Bazel crate-universe repin) and watcher lifecycle per session root.
-- Note: Linux `cargo test` path unexercised on this macOS host (no Cargo toolchain); change touches no GTK code. Pre-existing flake noted in `file_search::mru_seed_follows_nvim_cd` (shared `WOLF_STATE_DIR` sqlite contention; out of scope).
+Complete, pending the manual smoke list in §4. Every lint green (`//tools/lint:check`, 5/5), `//crates/wolf-macos:WolfKeyMapTests` 428 cases with 30 in `PreviewCopySeamTests`, `//crates/... //bazel/...` 96/96, `//crates/wolf-macos:Wolf` builds, docs written and under budget.
+
+Earlier detail, kept for the record:
+
+Implemented and green: `//crates/wolf-macos:WolfKeyMapTests` runs 28 `PreviewCopySeamTests` cases, all passing; `//crates/wolf-macos:Wolf` builds; `//crates/... //bazel/...` 96/96 pass; swift-format clean.
+
+Second test pass done — two accepted gaps from the coder's review, both added and passing with no seam change:
+
+1. `testSelectionScriptJSPostsUnderTheKeyTheDecoderAccepts` pins the payload key `"t"` across the JS/Swift boundary (`selectionScriptJS` emits it, `decodeSelectionMessage` requires it; nothing tied them, so a JS-side rename would leave the suite green and the feature dead).
+2. `testSelectionScriptJSFiresOnePushAtDocumentStart` pins the document-start `post()` that re-seeds the cache to cleared on a full load.
+
+`PreviewCopySeamTests` is 30 cases; the `WolfKeyMapTests` binary is 428, 0 failures, run with `--cache_test_results=no`.
+
+Declined nothing. The coder's third item is the documentation sweep, queued for the technical writer.
+
+Reviewer: **approved with minor notes**. All eight plan-conformance checks pass, with file:line evidence — teardown removes all three handlers by name and prunes both dictionaries; the cache clear sits above the `updateStrategy` switch so both replacement branches pass through it; `activePaneSelection` keys on `activeWin` with no fallback; the `.neovimVisual` branch is byte-for-byte today's behavior; both hand-maintained `srcs` lists are edited.
+
+Orchestrator decisions on the review findings:
+
+- **F6 (accepted, test-writer)** — the capture-phase assertion `js.contains("true")` is vacuous (`pending = true` satisfies it), so dropping the capture argument would leave the suite green while breaking §7 defense 2. Pinned to `'mouseup', post, true)` / `'keyup', post, true)`. Plus a `toString()` pin: without it, a `text` function returning `''` unconditionally satisfies every other JS assertion.
+- **F3 (accepted, coder — fix the code)** — a late message after teardown wrote a permanent entry: the prune iterates `previewWebViews.keys`, which `removePreviewWebView` has already nil'd, so the inherited "the next prune drops it" comment is false. Harmless for two `Double`s of scroll state, not for a document's text. `recordPreviewSelection` now ignores a `win` absent from `previewWebViews`.
+- **F4 (accepted, coder — comment)** — the synchronous clear is authoritative against a late *clear*, not a late *set*: a `mouseup` / `keyup` / pending rAF push can re-populate the entry in the frame or two before WebKit commits the replacement. Benign (`post()` reads live state at call time), but the comment claimed more than it delivers.
+- **F2 (out of scope, reported not fixed)** — while a preview selection is cached, the main menu's ⌘C wins over a focused Wolf text field (sidebar Search, file-tree rename), so the preview text is copied instead of the field's. A live Neovim visual-mode selection already does this by the identical mechanism, so this change widens a pre-existing defect rather than introducing one; fixing it means changing who wins ⌘C for the editor path too, which is beyond this bug. Added to the smoke list; report to the user.
+- **F5 (accepted, plan)** — the two-preview-pane smoke step could not pass as written; corrected above.
+- **F1 and the doc list** — technical writer.
+
+Also noted by the reviewer, deliberately NOT fixed here: `PreviewSeamTests.testClickFocusJSCaptureMousedownPostsToHandler` has the same vacuous `contains("true")` hole, and `recordPreviewScrollState` carries the same false "next prune drops it" sentence. Both are pre-existing and outside this change.
+
+Then: technical writer.
+
+Deviations from the plan: none reported by the coder. One incidental fix — the `previewScrollHandlers` doc comment said "Both handlers" and was made wrong by this change, so it names all three.
+
+## Problem statement
+
+When text is selected in a Markdown preview pane, ⌘C does nothing and Edit > Copy is greyed out.
+
+Copy must work for a selection in a preview pane — both the ⌘C key equivalent and the Edit > Copy menu item — copying the preview web view's selected text to `NSPasteboard`. The existing editor-pane behavior (Neovim visual-mode yank) must be unchanged.
+
+## Root cause (verified by the architect)
+
+- `Sources/WolfMacOS/AppMenu.swift:234-247` `editMenuItem()` builds Copy via `commandItem(title: "Copy", tag: Tag.copy, keyEquivalent: "c", target: target)` — an explicitly targeted item, so the main menu's `performKeyEquivalent` matches ⌘C and validation decides everything. The target is `AppDelegate`, not `nil`, so the responder chain is never consulted: the fix must live inside the menu-item path, and making the web view first responder cannot help.
+- `Sources/WolfMacOS/AppDelegate.swift:748-749` `validateMenuItem` returns `keyController?.isVisualMode ?? false` for `.copy` — why the item greys out and ⌘C is inert.
+- `Sources/WolfMacOS/WolfWindowController.swift:664-669` `copy()` yanks via `handle.copy_selection()`.
+
+The existence of the bug proves the menu wins the key-equivalent race against the `WKWebView`; if WebKit ever won it, it would copy the same bytes, so the fix is robust either way.
+
+**No core change is needed.** `wolf_core::COMMAND_SPECS` (`crates/wolf-core/src/command.rs:257-263`) carries only `command / id / ex_command / title / menu` — no availability predicate — and `palette.rs` does no enablement filtering. Availability is entirely a front-end concern. The only core-side touch is a stale one-line doc comment (§9.7).
+
+## Design constraints
+
+- Menu validation is synchronous, so "does the preview have a selection" cannot be an async `evaluateJavaScript` round trip. Use the existing push-based pattern: a document-start user script plus a `WKScriptMessageHandler` pushing state into a Swift-side cache on `PaneContainerView` — parallel to click-to-focus (`PreviewSeam.clickFocusJS` / `PreviewClickFocusHandler`) and scroll state (`PreviewScrollSeam` / `PreviewScrollStateHandler`).
+- Any new script-message handler on a preview web view's `WKUserContentController` must be removed in `PaneContainerView.removePreviewWebView`, or the controller leaks the handler and keeps the container alive.
+- All pure logic lives in a headless `WolfKeyMap` seam with unit tests.
+- New Swift test files must be added explicitly to the `srcs` of `//crates/wolf-macos:WolfKeyMapTests`, or they never run.
+- Real `WKWebView` selection and a live ⌘C cannot be automated: manual smoke steps.
+
+---
+
+## 1. Summary
+
+Add a third push channel to the Markdown preview web view — a document-start user script that pushes the page's current selection text out to Swift over a `WKScriptMessageHandler`, cached per preview window on `PaneContainerView`. All rules (handler name, JS source, message decoding, and the "is Copy enabled / which source does Copy use" decision) live in a new headless `WolfKeyMap.PreviewCopySeam`. `AppDelegate.validateMenuItem` and `WolfWindowController.copy()` both consult that one seam decision with the same two inputs, so the menu can never claim enabled while Copy yields nothing, and the Neovim visual-mode yank path is reached by exactly the same branch as today.
+
+## 2. Files to create
+
+### `crates/wolf-macos/Sources/WolfKeyMap/PreviewCopySeam.swift`
+
+A new seam file rather than an addition to `PreviewSeam`. Reason to state in its header: `PreviewSeam` owns reload arithmetic plus the click-to-focus channel and `PreviewScrollSeam` owns the scroll channel; a third channel is a third file, which is also what the one-entry-per-file README rule expects. Imports **Foundation only**.
+
+```swift
+public enum PreviewCopySeam {
+
+  public struct Selection: Equatable {
+    public let text: String
+    public init(text: String)
+    /// `true` when `text` is non-empty after trimming `.whitespacesAndNewlines`.
+    public var isCopyable: Bool { get }
+  }
+
+  public enum SelectionMessage: Equatable {
+    case selection(Selection)   // a well-formed push carrying copyable text
+    case cleared                // a well-formed push with no (or whitespace-only) selection
+  }
+
+  public enum CopySource: Equatable {
+    case previewSelection(String)   // the payload is the RAW selected text
+    case neovimVisual
+    case none
+  }
+
+  /// Must differ from `PreviewSeam.clickFocusHandlerName` and
+  /// `PreviewScrollSeam.stateHandlerName` — all three ride one
+  /// `WKUserContentController`.
+  public static let selectionHandlerName = "wolfPreviewSelection"
+
+  public static func selectionScriptJS(handlerName: String = selectionHandlerName) -> String
+
+  /// `nil` means malformed — ignore the message and leave the cache alone.
+  public static func decodeSelectionMessage(_ body: Any?) -> SelectionMessage?
+
+  public static func copySource(
+    previewSelection: Selection?, isVisualMode: Bool) -> CopySource
+
+  /// Defined as `copySource(...) != .none`, so the two can never disagree.
+  public static func isCopyEnabled(
+    previewSelection: Selection?, isVisualMode: Bool) -> Bool
+}
+```
+
+Rules to encode and document on the declarations:
+
+- `copySource` precedence, ordered: a non-`nil` `previewSelection` whose `isCopyable` is true wins over `isVisualMode`; otherwise `isVisualMode` gives `.neovimVisual`; otherwise `.none`. Preview wins because the caller passes a non-`nil` selection only when the **active pane is that preview**, so a stale global nvim mode must not override what the user is looking at. A cached-but-non-copyable entry must **not** mask visual mode — a named test case.
+- `.previewSelection` carries the **raw, untrimmed** text. Trimming decides *whether* to copy; it must never change *what* is copied.
+- Whitespace-only counts as empty: a stray click-drag across a margin selects whitespace, and clobbering `NSPasteboard` with `" "` is worse than doing nothing. Note that `CharacterSet.whitespaces` includes U+00A0, so a non-breaking-space-only selection is also "empty".
+- `decodeSelectionMessage` accepts only `[String: Any]` with a `String` under key `"t"`. Anything else (non-dictionary, missing key, wrong value type, `nil`) returns `nil`. Extra keys are ignored. An empty or whitespace-only `"t"` returns `.cleared` — a positive clear, distinct from the malformed `nil`, because a collapsed selection must actively drop the cached entry.
+
+**The JS contract** produced by `selectionScriptJS(handlerName:)`:
+
+- One self-invoking function wrapped entirely in `try { … } catch (e) {}`, mirroring `PreviewScrollSeam.stateScriptJS`, so a missing message handler can never throw into the page.
+- A single internal `post` closure: read `window.getSelection()`; if absent, `rangeCount === 0`, or `isCollapsed`, the text is the empty string (an **O(1) early-out** — `toString()` is never called for a collapsed selection); otherwise `selection.toString()`. Post `{ t: <string> }` to `window.webkit.messageHandlers.<handlerName>`, guarded by the same existence check the scroll script uses.
+- Payload shape is exactly one key, always present. Empty string is the "cleared" signal; deliberately no separate boolean, so the Swift decoder has one thing to validate.
+- Listeners:
+  1. `document.addEventListener('selectionchange', …)` — **rAF-throttled** with the same `pending` flag idiom as the scroll script's `scroll` listener. Primary trigger and the one needing throttling: during a drag-select it fires per pointer move and `toString()` is O(selection length).
+  2. `mouseup` in the **capture phase**, unthrottled. The "settled" push, and what makes §7's ordering safe: it runs after WebKit collapses the selection at a click point, capture-phase for the same reason `clickFocusJS` is.
+  3. `keyup` in the capture phase, unthrottled. Covers ⌘A (Wolf's menu has no Select All item, so ⌘A reaches the web view) without depending on `selectionchange` firing for a programmatic Select All.
+  4. One `post()` at document start, so a full `loadHTMLString` resets the cache with no Swift involvement.
+- `keydown` is deliberately absent: the selection is not yet updated at keydown, so a push there would be stale.
+
+### `crates/wolf-macos/Sources/WolfMacOS/PreviewSelectionHandler.swift`
+
+The thin `WKScriptMessageHandler` adapter, structurally identical to `PreviewScrollStateHandler.swift` — copy its header shape (why the push direction, why `container` is weak, main-thread callback).
+
+- `final class PreviewSelectionHandler: NSObject, WKScriptMessageHandler`
+- `let win: Int64`, `weak var container: PaneContainerView?`, `init(win:container:)`
+- `userContentController(_:didReceive:)` calls `PreviewCopySeam.decodeSelectionMessage(message.body)` and switches: `.selection(let sel)` → `container?.recordPreviewSelection(win: win, selection: sel)`; `.cleared` → `container?.recordPreviewSelection(win: win, selection: nil)`; `nil` → return without touching the cache.
+- No logic beyond that switch. Imports `WebKit` and `WolfKeyMap`.
+- No BUILD edit needed: `wolf_macos_lib` globs `Sources/WolfMacOS/*.swift`.
+
+### `crates/wolf-macos/Tests/WolfKeyMapTests/PreviewCopySeamTests.swift`
+
+See §4. Header comment in the house style of `PreviewSeamTests.swift`: a "CONTRACT UNDER TEST" block restating the seam's signatures and the decision matrix.
+
+## 3. Files to modify
+
+### `crates/wolf-macos/BUILD.bazel` — two srcs lists
+
+Both hand-maintained; missing either is a silent gap.
+
+1. `swift_library(name = "wolf_key_map")` `srcs`: add `"Sources/WolfKeyMap/PreviewCopySeam.swift"` immediately before line 91's `"Sources/WolfKeyMap/PreviewLinkSeam.swift"`, keeping alphabetical order. **Without this the seam does not compile into the module at all.**
+2. `swift_test(name = "WolfKeyMapTests")` `srcs`: add `"Tests/WolfKeyMapTests/PreviewCopySeamTests.swift"` immediately before line 290's `"Tests/WolfKeyMapTests/PreviewLinkSeamTests.swift"`.
+
+No change to `wolf_macos_lib` (globbed) or to `swift_format_srcs` / `markdown_srcs` (globbed).
+
+### `crates/wolf-macos/Sources/WolfMacOS/PaneContainerView.swift`
+
+**Add two stored properties** in the per-window map block (after `previewScrollStates`, around line 271):
+
+- `private var previewSelectionHandlers: [Int64: PreviewSelectionHandler] = [:]` — the retained proxy, documented with the same reason as `previewScrollHandlers`.
+- `private var previewSelections: [Int64: PreviewCopySeam.Selection] = [:]` — the live copyable selection each preview page pushed. Document that its only reader is the synchronous menu-validation / copy path, and that it may hold the whole document's text after ⌘A (bounded, dropped on document replacement and on pane close).
+
+**`ensurePreviewWebView(for:)` (line 1523)** — after the scroll-sync block (line 1558), add a third parallel block: construct `PreviewSelectionHandler(win: win, container: self)`, store it in `previewSelectionHandlers[win]`, `config.userContentController.add(proxy, name: PreviewCopySeam.selectionHandlerName)`, and `addUserScript` a `WKUserScript(source: PreviewCopySeam.selectionScriptJS(), injectionTime: .atDocumentStart, forMainFrameOnly: true)`. Update the existing comment that says "Both handlers must be removed in `removePreviewWebView`" to say all three.
+
+**`removePreviewWebView(_:)` (line 1627)** — add `removeScriptMessageHandler(forName: PreviewCopySeam.selectionHandlerName)` alongside the two existing removals, then `previewSelectionHandlers[win] = nil` and `previewSelections[win] = nil`.
+
+**`syncPreviewWebViews()` prune path (line 1297)** — no edit needed; it already routes dead wins through `removePreviewWebView`. Verify only.
+
+**`reloadDirtyPreviews()` (line 1340)** — add one synchronous clear, `previewSelections[win] = nil`, immediately before the `switch PreviewScrollSeam.updateStrategy(…)` at line 1394, so it covers **both** the `.inPlace` and `.fullLoad` branches. Comment why: both paths destroy the DOM selection, and the Swift-side clear is authoritative because it is synchronous — it does not depend on the page getting a `selectionchange` out before the user opens the Edit menu. The `captureDecision` `.drop` branch needs no separate clear: a source switch always takes `.fullLoad` and passes through the same line.
+
+**New internal accessor** next to `activeWin` / `activePaneIsPreview` (around line 652-669):
+
+```swift
+/// The copyable selection the ACTIVE pane's preview page last pushed, or `nil`
+/// when the active pane is not a preview / has no selection.
+var activePaneSelection: PreviewCopySeam.Selection? { get }
+```
+
+Implementation: `let win = activeWin; guard win != 0 else { return nil }; return previewSelections[win]`. Document that identity is `activeWin` — the **per-view** active pane — and never `handle.active_win()`, which is shared across a project's tabpages and would let a background tab's preview selection enable Copy in this window. Unlike `WolfWindowController.historyWin`, there is deliberately **no** `active_win()` fallback, for that exact reason.
+
+**New method** next to `recordPreviewScrollState(win:state:)` (line 1593):
+
+```swift
+/// Caches (or clears) the selection a preview page pushed out.
+func recordPreviewSelection(win: Int64, selection: PreviewCopySeam.Selection?)
+```
+
+Pure cache write, no repaint, no wake — same doc shape as `recordPreviewScrollState`, including the note that a late message for a removed window writes a dead entry the next prune drops.
+
+### `crates/wolf-macos/Sources/WolfMacOS/WolfWindowController.swift`
+
+**Two new read-only properties**, placed with `isVisualMode` (line 797):
+
+```swift
+/// The active pane's pushed preview selection, or `nil`.
+var activePreviewSelection: PreviewCopySeam.Selection? { paneContainer?.activePaneSelection }
+
+/// Whether Edit > Copy has anything to copy, from either source.
+var canCopy: Bool  // PreviewCopySeam.isCopyEnabled(previewSelection:isVisualMode:)
+```
+
+`canCopy` resolves both inputs in one place so validation and the action cannot drift. Both are cheap: one dictionary read plus the existing snapshot read behind `is_visual_mode()`.
+
+**Rewrite `copy()` (line 664)** as a mechanical switch over `PreviewCopySeam.copySource(previewSelection: activePreviewSelection, isVisualMode: isVisualMode)`:
+
+- `.previewSelection(let text)` → write `text` to `NSPasteboard.general`. It must **not** call `handle.copy_selection()`: that is a blocking RPC that yanks inside Neovim and would touch registers for a selection that is not Neovim's.
+- `.neovimVisual` → today's body verbatim: `handle?.copy_selection().toString()`, guarded by `!text.isEmpty`, then write.
+- `.none` → return.
+
+Factor the two-line pasteboard write into a `private func writeToPasteboard(_ text: String)` so both branches share it. Rewrite the doc comment: Copy has two sources, chosen by the pure seam; the preview branch is fully synchronous because the text was already pushed.
+
+### `crates/wolf-macos/Sources/WolfMacOS/AppDelegate.swift`
+
+- `validateMenuItem` `.copy` case (line 748-749): `return keyController?.canCopy ?? false`. The `keyController` resolution is unchanged (no `?? controllers.first` fallback for tagged commands).
+- Update the function's doc comment (lines 701-706), which says Copy is disabled "unless the key window is in visual mode": it is enabled when the active pane is a preview with a non-empty selection **or** the key window is in visual mode.
+
+### `crates/wolf-macos/Sources/WolfMacOS/AppMenu.swift`
+
+Comment-only: the `editMenuItem` doc (line 231-233) says "Copy is enabled only in visual mode". Restate: Copy is enabled when either source has something to copy (gated by `AppDelegate.validateMenuItem` → `WolfWindowController.canCopy`); Paste is always enabled. No structural change — Copy stays a tagged Wolf command item.
+
+### `crates/wolf-macos/Sources/WolfMacOS/CommandDispatcher.swift`
+
+**No change.** `.copy` → `controller?.copy()` is already source-agnostic. Consequence for the record: the command-palette row and a drained `:WolfCopy` both reach the same `copy()`, so they copy a preview selection when the originating window's active pane is a preview — consistent, and a no-op when neither source has content, exactly as today.
+
+## 4. Test plan
+
+### New headless file: `Tests/WolfKeyMapTests/PreviewCopySeamTests.swift`
+
+Scalar and string inputs only — no AppKit, no `WKWebView`, no Neovim.
+
+**Handler-name cases**
+
+1. `selectionHandlerName == "wolfPreviewSelection"`.
+2. It differs from **both** `PreviewSeam.clickFocusHandlerName` and `PreviewScrollSeam.stateHandlerName`. Load-bearing: all three ride one `WKUserContentController`, where a duplicate name silently replaces a handler.
+
+**JS-synthesis cases** (string containment, in the style of `PreviewScrollSeamTests`)
+
+3. The generated source posts to `window.webkit.messageHandlers.wolfPreviewSelection`.
+4. It registers `selectionchange`.
+5. It registers `mouseup` and `keyup`.
+6. It contains `requestAnimationFrame` (the throttle) and `isCollapsed` (the O(1) early-out).
+7. It is wrapped in `try` / `catch`.
+8. A custom `handlerName:` argument is interpolated instead of the default.
+
+**Decoding cases**
+
+9. `["t": "hello"]` → `.selection` with `text == "hello"`.
+10. `["t": "  hi  "]` → `.selection` with the text preserved **verbatim**, leading/trailing whitespace included.
+11. `["t": ""]` → `.cleared`.
+12. `["t": "   \n\t "]` → `.cleared` (whitespace-only).
+13. `["t": 42]` → `nil` (wrong value type).
+14. `[:]` → `nil` (missing key).
+15. `"hello"` (not a dictionary) → `nil`.
+16. `nil` body → `nil`.
+17. `["t": "x", "junk": 1]` → `.selection` (extra keys ignored).
+18. Multi-line and non-ASCII text round-trips unchanged.
+
+**Decision-matrix cases**
+
+19. `(nil, isVisualMode: false)` → `.none`.
+20. `(nil, true)` → `.neovimVisual`.
+21. `(copyable, false)` → `.previewSelection` carrying the raw text.
+22. `(copyable, true)` → `.previewSelection` — preview wins over visual mode.
+23. `(Selection(text: ""), false)` → `.none`.
+24. `(Selection(text: ""), true)` → `.neovimVisual` — a non-copyable cached entry must not mask visual mode.
+25. `(Selection(text: " \n "), true)` → `.neovimVisual`; `(same, false)` → `.none`.
+26. `Selection.isCopyable` directly: `""`, `" "`, `"\n"`, `"\t"`, U+00A0-only are all false; `"a"` and `" a "` are true.
+27. **Equivalence sweep**: loop the whole matrix asserting `isCopyEnabled(...) == (copySource(...) != .none)`.
+
+### BUILD wiring and proof it runs
+
+Add the file to `swift_test(name = "WolfKeyMapTests")` `srcs` as in §3, then run `bazelisk test //crates/wolf-macos:WolfKeyMapTests --test_output=all` and confirm the `PreviewCopySeamTests` case names appear. A file absent from `srcs` never compiles into the binary and never runs, with no error.
+
+### Manual smoke steps (report at the end; not automatable)
+
+- Drag-select text in a preview pane → Edit > Copy becomes enabled; ⌘C then pastes exactly the selected text into another app.
+- Choosing Edit > Copy with the mouse copies the same bytes as ⌘C.
+- Click once in the preview to collapse the selection → Copy greys out again (exercises §7).
+- With a preview selection live, type in the source file (body-swap path) → Copy greys out.
+- Editor pane unchanged: visual-mode ⌘C still yanks from Neovim; Copy is greyed in normal mode.
+- ⌘A in the preview enables Copy and copies the whole document.
+- Two preview panes, selection in one: focusing the other greys Copy out. Focusing back does NOT re-enable it, and that is correct: a preview pane regains focus only by a click inside its web view, and that same `mousedown` collapses the selection (§7 defense 2). Verify the re-enable half with ⌘A after refocusing instead.
+- With a paragraph selected in a preview pane, click into the sidebar Search field, select the query text, press ⌘C and paste elsewhere: confirm which text lands. Copy is now enabled while a preview selection is cached, so the main menu's ⌘C wins over the focused field. Check whether a live Neovim visual-mode selection already does the same — it should, which makes this a pre-existing defect this change widens rather than a regression it introduces.
+- Close a preview pane, then open a new one and repeat — no crash, no stale enablement (proves handler removal and cache prune).
+- Copy in a background tab's preview does not enable Copy in the key window.
+
+## 5. Implementation order
+
+1. `Sources/WolfKeyMap/PreviewCopySeam.swift` + its `wolf_key_map` `srcs` entry.
+2. `Tests/WolfKeyMapTests/PreviewCopySeamTests.swift` + its `WolfKeyMapTests` `srcs` entry. Run the suite and confirm the new cases execute before touching any AppKit file.
+3. `PaneContainerView.swift`: the two dictionaries, `recordPreviewSelection(win:selection:)`, `activePaneSelection`, the `ensurePreviewWebView` registration, the `removePreviewWebView` teardown, the `reloadDirtyPreviews` clear.
+4. `PreviewSelectionHandler.swift`.
+5. `WolfWindowController.swift`: `activePreviewSelection`, `canCopy`, the `copy()` rewrite, `writeToPasteboard`.
+6. `AppDelegate.swift`: the `.copy` validation case and its doc comment.
+7. `AppMenu.swift`: the `editMenuItem` comment.
+8. Build the app (`bazelisk build //crates/wolf-macos:Wolf`), re-run `//crates/wolf-macos:WolfKeyMapTests`, then the manual smoke list.
+9. Documentation (§9), then `prettier --write` on every touched Markdown file and `./tools/lint/markdown_check.sh` on them.
+
+## 6. Dependencies
+
+None. No new external packages, no new Bazel external repos, no FFI surface change, no Rust change.
+
+## 7. Interaction with the click-to-focus script
+
+A `mousedown` in the preview posts to `wolfPaneFocus` (focusing the pane) and, in WebKit, also collapses the selection at the click point. The hazard is a stale `previewSelections[win]` left true after a click that cleared the selection. Three independent defenses, in the order they fire:
+
+1. The collapse fires `selectionchange`, whose rAF-throttled push runs on the next frame and posts `{ t: "" }` → `.cleared` → the entry is removed.
+2. The unthrottled capture-phase `mouseup` push runs after the collapse in the same gesture, so the cache is correct by the time the button is released — well before any menu can open or a ⌘C can be typed.
+3. The two handlers are independent and neither reads the other's state, so no ordering between `wolfPaneFocus` and `wolfPreviewSelection` can produce a wrong answer. Both are posted from the page on the same IPC path and delivered on the main thread in post order; `focusPreviewPane(win:)` deliberately does not touch `previewSelections`.
+
+The remaining theoretical failure — `selectionchange` never firing *and* no `mouseup` arriving — leaves at worst a stale enabled Copy that copies the text the user had genuinely selected a moment earlier. That is the benign direction.
+
+## 8. Payload decision: text is carried in the push
+
+**Chosen: carry the text.** `copy()` is then fully synchronous, exactly like the Neovim branch beside it.
+
+- **For:** menu validation is synchronous and cannot await `evaluateJavaScript`, so a cache is required for the enable decision regardless. Deriving both the enable decision and the copied bytes from the *same* cached snapshot makes "enabled but copies nothing" structurally impossible. It also avoids an asynchronous `NSPasteboard` write, which would let a ⌘C immediately followed by ⌘V read the previous clipboard, and avoids copying an empty string when the document is replaced between ⌘C and the JS callback.
+- **Against:** `selection.toString()` is O(selection length) and runs on every throttled push. Mitigated by the rAF throttle, by the O(1) collapsed early-out (the common case never calls `toString()`), and by selection changes being user-gesture-driven — typing in the editor pane produces no selection pushes.
+- **Staleness:** the two document-replacement paths are covered by the single synchronous `previewSelections[win] = nil` before the `updateStrategy` switch in `reloadDirtyPreviews`, authoritative precisely because it does not depend on the page delivering a `selectionchange` in time. The page's document-start `post()` then re-seeds the cache to cleared on the full-load path.
+- **Memory:** worst case one document's text per preview window, dropped on document replacement and on `removePreviewWebView`.
+
+## 9. Documentation updates required
+
+Per CLAUDE.md ownership. Edit existing entries in place; do not append.
+
+1. **`crates/wolf-macos/Sources/WolfKeyMap/README.md`** — new `#### PreviewCopySeam.swift` entry before the `PreviewLinkSeam.swift` entry (line 457). Purpose: the pure rules behind Copy from a preview pane — the selection push channel and the "which source does Copy use" decision. Public API: the four symbols plus `selectionHandlerName`. Decisions: the text rides in the payload so `copy()` is synchronous and the enable decision and the copied bytes come from one snapshot; whitespace-only counts as empty (with the U+00A0 note); a copyable preview selection outranks Neovim visual mode because the caller only supplies one for the active pane. Gotchas: the handler name shares a `WKUserContentController` with `PreviewSeam.clickFocusHandlerName` and `PreviewScrollSeam.stateHandlerName`, so all three must differ; teardown is in DECISIONS.md (link, do not restate). Budget ~200 words.
+2. **`crates/wolf-macos/Sources/WolfMacOS/README.md`**
+   - New `#### PreviewSelectionHandler.swift` entry after the `PreviewScrollStateHandler.swift` entry (line 454): purpose, `init(win:container:)`, the weak-container reason, the malformed-body-is-ignored-versus-empty-body-clears distinction, and a link to DECISIONS.md.
+   - `#### PaneContainerView.swift` (line 315): one Public API bullet for `activePaneSelection`, stating it keys on `activeWin` (per-view) with no `active_win()` fallback so a background tab's selection cannot enable Copy here. Adjust the closing "four-file model" bullet if the DECISIONS section's file count changes.
+   - `#### WolfWindowController.swift` (line 632): one Public API bullet for `canCopy`.
+   - `AppMenu.swift` / `AppDelegate.swift` / `CommandDispatcher.swift` entries: no change.
+3. **`crates/wolf-macos/DECISIONS.md`**, "How a preview reaches its web view" (line 66). Correct the sentence at line 74 — "Two script-message handlers ride on one preview web view's content controller… and both must be removed at teardown" — to name **three** channels (click-to-focus, scroll state, selection), keeping the distinct-names and teardown requirements. Add at most three sentences: Copy reads the same pushed cache for the same reason scroll state does — menu validation is synchronous and `evaluateJavaScript` is not — and the cache is cleared synchronously on both document-replacement paths rather than trusting the page to report the collapse. Link, do not restate the seam's rules.
+4. **`crates/wolf-macos/Tests/WolfKeyMapTests/README.md`** — new `#### PreviewCopySeamTests.swift` entry before `PreviewLinkSeamTests.swift` (line 250): the decode table, the `copySource` / `isCopyEnabled` matrix including the equivalence sweep, the JS-containment assertions. Gotchas: the handler-name-distinctness case exists because all three names share one content controller; live selection and a real ⌘C are manual-smoke.
+5. **`crates/wolf-ffi/src/README.md`** line 74 — "`is_visual_mode(&self) -> bool` — Gates the Edit > Copy menu item." Inaccurate: it gates only the Neovim branch of Copy. One-line correction. Line 72's `copy_selection` entry stays accurate.
+6. **`architecture.md`** line 101 — "Copy yanks the visual-mode selection over a blocking RPC so the shell can write it out". Amend: Copy has two sources, and a selection in a Markdown preview is copied from the web view without any RPC. One clause; it is a genuine cross-crate contract statement.
+7. **`crates/wolf-core/src/command.rs`** line 69 — the `Command::Copy` doc comment "Copy the visual-mode selection to the system clipboard." Reword to "Copy the current selection to the system clipboard" so core does not assert a front-end rule it no longer owns. No `COMMAND_SPECS`, palette, or FFI change accompanies it.
+
+## 10. Lint considerations
+
+- No linter ignore directives expected.
+- swift-format: both new Swift files are covered by the `swift_format_srcs` glob. Run `bazel run //tools/lint:swift_format.fix`, verify with `bazel test //tools/lint:swift_format`. The generated JS is a multi-line string literal like `PreviewScrollSeam.stateScriptJS` — keep the indentation shape swift-format already accepts there.
+- Markdown: after editing docs run `prettier --write` (`.prettierrc` sets `proseWrap: never`), then `./tools/lint/markdown_check.sh <files>` or `bazel test //tools/lint:markdown`. New entries must be present tense with no "now", "no longer", or "previously"; the DECISIONS.md edit is a rewrite of the existing sentence, not a sentence added beside it.

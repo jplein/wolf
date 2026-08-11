@@ -454,6 +454,28 @@ Purpose: The pure decision functions behind the macOS file picker — trigger de
 
 - `nextSelection` and `restoredIndex` also drive the command palette and the buffer picker, so a change here is not confined to the file picker.
 
+#### `PreviewCopySeam.swift`
+
+Purpose: The pure rules behind Copy from a Markdown preview pane — the selection push channel, its payload decoding, and which of Copy's two sources supplies the bytes. Foundation only.
+
+**Public API**
+
+- `Selection` — the raw, untrimmed selected text; `isCopyable` is false when it is whitespace-only.
+- `decodeSelectionMessage(_:) -> SelectionMessage?` — `.selection` or `.cleared`; `nil` means malformed, and must leave the cache alone rather than read as a clear.
+- `CopySource` — `.previewSelection(String)` carrying the raw text, `.neovimVisual`, `.none`.
+- `selectionHandlerName`, `selectionScriptJS(handlerName:)` — the document-start script posting `{ t: <text> }` on selection change, mouse-up, key-up and once at load.
+- `copySource(previewSelection:isVisualMode:)`, with `isCopyEnabled(…)` defined as `copySource(…) != .none` so validation and the action cannot disagree.
+
+**Decisions**
+
+- The text rides in the push: menu validation is synchronous and needs a cache anyway, and one snapshot behind both the enable decision and the copied bytes makes enabled-but-nothing-to-copy impossible.
+- A copyable preview selection outranks visual mode, because the caller supplies one only when the active pane is that preview; a non-copyable entry does not mask visual mode.
+- Whitespace-only counts as empty, and `CharacterSet.whitespaces` covers U+00A0, so `text != ""` is not equivalent. Trimming decides whether to copy, never what.
+
+**Gotchas**
+
+- `selectionHandlerName` rides the same `WKUserContentController` as the other preview channels, so every name must differ; teardown is in [DECISIONS.md](../../DECISIONS.md).
+
 #### `PreviewLinkSeam.swift`
 
 Purpose: Classifies a link clicked in the Markdown preview web view into one of three actions, and synthesizes the JavaScript that scrolls a fragment into view.
@@ -493,7 +515,7 @@ Purpose: Every decision behind Markdown-preview scroll-sync — which marker a c
 **Gotchas**
 
 - The fallback sweep filters on `data-col="0"` and must never be widened — see [the position-marker contract](../../../wolf-core/DECISIONS.md).
-- `stateHandlerName` and `PreviewSeam.clickFocusHandlerName` share one `WKUserContentController`, so they must differ; teardown is in [DECISIONS.md](../../DECISIONS.md).
+- `stateHandlerName` shares one `WKUserContentController` with the other preview channels' handler names, so all of them must differ; teardown is in [DECISIONS.md](../../DECISIONS.md).
 
 #### `PreviewSeam.swift`
 

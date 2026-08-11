@@ -66,7 +66,7 @@ pub enum Command {
     /// Open the command-palette overlay (its own invoking command; EXCLUDED from
     /// the palette's candidate list).
     CommandPalette,
-    /// Copy the visual-mode selection to the system clipboard.
+    /// Copy the current selection to the system clipboard.
     Copy,
     /// Paste from the system clipboard into the active document.
     Paste,
