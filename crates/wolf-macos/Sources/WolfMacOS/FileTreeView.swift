@@ -256,8 +256,11 @@ final class FileTreeView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate
     }
   }
 
-  /// Single-click activation: a file opens (then focus returns to the editor); a
-  /// directory toggles its expansion.
+  /// Single-click activation: a directory toggles its expansion; a file opens in
+  /// the active pane, routed by that pane's mode — a PREVIEW pane previews the
+  /// file (`WolfCoreHandle.preview_file`, falling back to `open` when the file is
+  /// not previewable, which converts the pane to edit mode), an EDIT pane edits it
+  /// (`WolfCoreHandle.open`). Then focus returns to the editor.
   func activate(item: TreeItem) {
     if item.isDir {
       if outlineView.isItemExpanded(item) {
@@ -266,7 +269,13 @@ final class FileTreeView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate
         outlineView.expandItem(item)
       }
     } else {
-      handle.open(item.absPath)
+      if let paneContainer, paneContainer.activePaneIsPreview,
+        handle.preview_file(paneContainer.activeWin, item.absPath) != 0
+      {
+        paneContainer.onRenderWake()
+      } else {
+        handle.open(item.absPath)
+      }
       if let paneContainer {
         window?.makeFirstResponder(paneContainer)
       }

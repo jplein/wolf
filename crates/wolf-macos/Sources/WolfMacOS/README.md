@@ -202,21 +202,22 @@ Purpose: The "no folder open" overlay — a full-bleed subview of `PaneContainer
 
 #### `FileTreeView.swift`
 
-Purpose: The file-tree sidebar: an `NSOutlineView` driven by a long-lived `FfiFileSearch`. The cwd appears as a single synthetic root node; a single click opens a file (returning focus to the editor) or toggles a directory, and the current buffer's row is bolded and revealed.
+Purpose: The file-tree sidebar: an `NSOutlineView` driven by a long-lived `FfiFileSearch`. The cwd is a synthetic root; a click opens a file in the active pane or toggles a directory, and the current buffer's row is bolded and revealed.
 
 **Public API**
 
 - `start()` / `close()` — open and drop the tree-search session; `close()` cancels the background traversal.
-- `refresh()` is immediate, `scheduleRefresh()` coalesces to about one reload per frame; `TreeWakeBridge` uses the latter for streaming traversal batches.
+- `refresh()` is immediate, `scheduleRefresh()` coalesces to about one reload per frame; `TreeWakeBridge` uses the latter for traversal batches.
 - `onRenderWake()` — re-roots on a cwd change, then reveals and bolds the current buffer.
 - `setSidebarVisible(_:)` — relays the split item's `isCollapsed` KVO; refresh work is deferred while collapsed.
 
 **Decisions**
 
-- `NSOutlineView` keys expansion and selection on object identity, so one `TreeItem` per `relPath` is cached and the same instance handed back across reloads, its fields refreshed in place. Fresh instances per reload would collapse the tree.
+- `NSOutlineView` keys expansion and selection on object identity, so one `TreeItem` per `relPath` is cached and handed back across reloads, its fields refreshed in place. Fresh instances would collapse the tree.
 - The outline draws a clear background and adds no `NSVisualEffectView`: the enclosing `.sidebar` split item supplies the vibrancy, which would otherwise double up.
-- `reveal(abs:)` expands ancestors top-down before locating the row, because a row exists only once its parent is expanded. An empty `rel_path_for` means the file has not streamed in yet, so the reveal stays pending for the next refresh.
+- `reveal(abs:)` expands ancestors top-down before locating the row, because a row exists only once its parent is expanded. An empty `rel_path_for` means the file has not streamed in yet, so the reveal stays pending.
 - `reroot(to:)` cancels the pending coalesced refresh first — a stale fire would run against the discarded tree.
+- Activating a file routes on the active pane's mode, as the pickers do: a preview pane gets `preview_file`, falling back to `open` on `0`. A bare `open` drops the pane to edit mode.
 
 #### `FontRegistration.swift`
 
@@ -511,6 +512,7 @@ Purpose: The sidebar content-search panel — a query field and three toggles ab
 - `focusSearchField()` defers `makeFirstResponder` by one runloop tick. Invoked from the Command Palette, the palette's `close()` runs afterwards and ends in `makeFirstResponder(paneContainer)`, clobbering a synchronous focus. Other entry points have no competing refocus, so the one deferral serves every path.
 - `refresh()` rebuilds only when the snapshot version or the char budget has advanced, so repeated batches and idle wakes cost nothing. The budget is part of the gate so a sidebar resize re-windows the lines.
 - Collapsed files are tracked by path so a rebuild preserves them; every other file row expands.
+- Activating a line row routes on the active pane's mode, as the pickers do: a preview pane gets `preview_file`, falling back to `open_at` on `0`. A preview has no cursor, so the match's line and column reach nvim only on the edit path.
 
 #### `SearchWakeBridge.swift`
 
