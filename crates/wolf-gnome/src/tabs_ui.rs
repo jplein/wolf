@@ -16,18 +16,21 @@
 //! joins a grid to `Snapshot::windows`, and `windows` describes the CURRENT tabpage
 //! alone: ask it about a background tab's grid and it answers a filename of
 //! `[No Name]` with an EMPTY absolute path, because that tab's Neovim windows are
-//! not in the map at all. The per-window maps that ARE global across tabpages —
-//! `win_buffers`, `buffers`, `full_width`, `previews` — cannot catch that, so no
-//! gate built on them helps; the defect sits one layer below them.
+//! not in the map at all. What that damages is the background tab's **statusbar
+//! text, its title and its grid resize** — everything [`TabWake::Refresh`] drives.
+//! It does not reach `state.json`: the persistence gather reads
+//! `Snapshot::previews` and `Snapshot::win_buffers`, which ARE global across
+//! tabpages, keyed by each pane's own Neovim window handle
+//! ([`crate::pane_layout::resolve_leaves`]).
 //!
 //! [`tab_wake`] answers by REFUSING. A tab whose handle is not the one Neovim
-//! reports as current is never refreshed, so it is never asked for a pane status,
-//! so it never receives the wrong answer and never carries one into a saved
-//! layout. That is a hazard made UNREACHABLE rather than handled, and it is why
-//! [`TabWake::Hold`] does nothing at all — no pane refresh, no title, no status
-//! read, no resize. A held tab keeps its last paint, which costs nothing: GTK never
-//! asks an unmapped background page's `DrawingArea` to draw, and the background
-//! grid it would have drawn is frozen rather than pruned.
+//! reports as current is never refreshed, so it is never asked for a pane status
+//! and never receives the wrong answer. That is a hazard made UNREACHABLE rather
+//! than handled, and it is why [`TabWake::Hold`] does nothing at all — no pane
+//! refresh, no title, no status read, no resize. A held tab keeps its last paint,
+//! which costs nothing: GTK never asks an unmapped background page's
+//! `DrawingArea` to draw, and the background grid it would have drawn is frozen
+//! rather than pruned.
 //!
 //! **The authority is Neovim, not the widget.** Both directions of the
 //! one-wake-behind window are classified: a tab GTK has already selected while
@@ -127,6 +130,20 @@ pub enum TabClose {
     /// Close the whole WINDOW, which shuts the core down. See the module docs:
     /// `close_tabpage` on the last tabpage is a no-op.
     CloseWindow,
+}
+
+/// What one render wake does to a window's QUEUED restore tabs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RestorePress {
+    /// Materialize every queued tab now: one blocking `create_tabpage` and one
+    /// blocking `rebuild_layout` each.
+    Create,
+    /// Not yet. Leave the queue where it is; a later wake asks again.
+    Wait,
+    /// Nothing left to materialize: nothing is queued, or the restore was ABANDONED
+    /// by an abort and what remains queued is a seed source rather than work. The
+    /// steady state, on every wake for the rest of the session.
+    Idle,
 }
 
 /// What pressing New Tab does.
@@ -234,6 +251,65 @@ pub fn new_tab_press(liveness: Option<Liveness>) -> NewTabPress {
              handler, so there is nothing left to open a tab over",
         ),
     }
+}
+
+/// Whether a window's QUEUED restore tabs may be materialized on this wake, given
+/// the FIRST tab's tabpage handle, the core's liveness reading (or `None` when
+/// there is no core), how many tabs are still queued and whether creation may be
+/// attempted for them at all.
+///
+/// Total, and the three answers are not interchangeable:
+///
+/// | `pending` | `may_create` | `first_tabpage` | `liveness` | answer |
+/// | --- | --- | --- | --- | --- |
+/// | `0` | any | any | any | [`RestorePress::Idle`] |
+/// | `> 0` | `false` | any | any | [`RestorePress::Idle`] |
+/// | `> 0` | `true` | `0` | any | [`RestorePress::Wait`] |
+/// | `> 0` | `true` | `!= 0` | not `Alive` | [`RestorePress::Wait`] |
+/// | `> 0` | `true` | `!= 0` | `Alive` | [`RestorePress::Create`] |
+///
+/// Each conjunct answers a different failure:
+///
+/// - **`may_create`.** A restore whose `create_tabpage` has already answered `0` is
+///   ABANDONED: `tab_view::TabsInner::materialize_restore` re-seats the
+///   layouts it never reached as a seed source and clears this flag, so the queue
+///   goes on speaking for those tabs in `state.json` while no further RPC is ever
+///   issued for them. Without it, a retained queue would be retried on the very next
+///   wake and on every wake after it — a blocking `create_tabpage` per frame against
+///   a Neovim that has just failed to answer one.
+/// - **`first_tabpage != 0`.** Creating before tab 0 has adopted leaves tab 0 to
+///   adopt the LAST tabpage created on a later wake, because
+///   `Snapshot::current_tabpage` follows Neovim into each new page — two pages
+///   claiming one tabpage, which is [`crate::tab_view::TabParts::tabpage`]'s
+///   recorded hazard, and from which every later switch and close aims at the wrong
+///   tab.
+/// - **`Alive`.** Materialization is `T - 1` blocking `create_tabpage` calls plus
+///   up to `T` blocking `rebuild_layout` calls on the GTK main thread; issuing them
+///   against a Neovim already known not to answer freezes the window for a multiple
+///   of the timeout budget at the one moment the user is watching it start.
+/// - **`Wait` rather than `Idle` on a refusal.** `Idle` asserts there is nothing
+///   left to materialize. For a queue that may still be created that is false —
+///   those tabs have no pages, so a queue declared empty is tabs that never open,
+///   and nothing re-queues them. For an ABANDONED queue it is true, which is why
+///   that row answers `Idle`: `Wait` promises a later wake will finish the restore,
+///   and after an abort none ever will. What survives either refusal is the SAVE,
+///   because the queue itself is what speaks for those tabs —
+///   `window::WindowHandle::cached_subtree` contributes a seed per queued layout
+///   ([`crate::state_seam::pending_tab_states`]) for as long as one is held.
+#[must_use]
+pub fn restore_press(
+    first_tabpage: i64,
+    liveness: Option<Liveness>,
+    pending: usize,
+    may_create: bool,
+) -> RestorePress {
+    if pending == 0 || !may_create {
+        return RestorePress::Idle;
+    }
+    if first_tabpage == UNBOUND_TABPAGE || liveness != Some(Liveness::Alive) {
+        return RestorePress::Wait;
+    }
+    RestorePress::Create
 }
 
 /// The directory to hand `WolfCore::create_tabpage`, or `None` to create the
@@ -590,11 +666,15 @@ mod tests {
                 "tab_wake(current_tabpage = {}, my_tabpage = {}, selected = {}) must be {:?}, got \
                  {got:?} — {}. A REFRESH that should have been a Hold asks WolfCore::pane_status \
                  about a grid whose Neovim window is not in Snapshot::windows at all, and gets a \
-                 filename of \"[No Name]\" with an empty absolute path back — the tab's statuses \
-                 are cleared and, once persistence follows the panes, that empty path is what gets \
-                 saved. A HOLD that should have been a Refresh freezes the tab at its last paint \
-                 with a live Neovim behind it, and nothing on screen says so. An ADOPT that should \
-                 not have happened binds a second page to a tabpage another page already owns.",
+                 filename of \"[No Name]\" with an empty absolute path back: that background tab's \
+                 statusbar text goes blank, its title follows the same read, and its grid is \
+                 resized against a window list that is not its own. It does not reach state.json — \
+                 the persistence gather resolves each leaf from Snapshot::previews and \
+                 Snapshot::win_buffers, keyed by the pane's own Neovim window, and those maps are \
+                 global across tabpages. A HOLD that should have been a Refresh freezes the tab at \
+                 its last paint with a live Neovim behind it, and nothing on screen says so. An \
+                 ADOPT that should not have happened binds a second page to a tabpage another page \
+                 already owns.",
                 case.current_tabpage, case.my_tabpage, case.selected, case.want, case.desc
             );
         }
@@ -636,9 +716,12 @@ mod tests {
              background tab still holds through the FIRST arm, so the row loop above is what goes \
              there. With no Hold arm at all, every background tab is refreshed against the CURRENT \
              tabpage's Snapshot::windows, which does not contain that tab's Neovim windows: \
-             pane_status answers \"[No Name]\" with an empty absolute path, the background tab's \
-             statuses are cleared, and the hazard stops being unreachable and becomes something \
-             every later layer has to handle."
+             pane_status answers \"[No Name]\" with an empty absolute path, so every background \
+             tab's statusbar text goes blank, its title follows that same read, and its grid takes \
+             a resize computed against another tabpage's windows. What that costs is the \
+             background tab's PAINT — its statuses, its title and its geometry — and not \
+             state.json: the persistence gather resolves each leaf from the window-keyed maps by \
+             the pane's own Neovim window, and those are global across tabpages."
         );
     }
 
@@ -1117,6 +1200,445 @@ mod tests {
              message above for which pair collapsed.",
             seen.len(),
             probes.len()
+        );
+    }
+
+    // =========================================================================
+    // restore_press — the launch-path gate on the queued tabs
+    // =========================================================================
+
+    /// Both readings of the FIRST tab's handle: not yet adopted, and adopted.
+    ///
+    /// Only two, and that is the whole domain: what the rule reads is whether tab 0
+    /// has a handle at all, never WHICH handle, so a second real value would be a
+    /// duplicate row rather than a new input.
+    const ALL_FIRST_TABPAGE_INPUTS: [i64; 2] = [UNBOUND, TABPAGE_A];
+
+    /// The queue depths probed: nothing queued, and a real queue.
+    ///
+    /// `2` rather than `1` so a rule that keyed on "exactly one" — or that consumed
+    /// the queue one entry at a time — is visible.
+    const ALL_PENDING_INPUTS: [usize; 2] = [0, 2];
+
+    /// How many inputs [`restore_press`] is total over ONCE CREATION IS STILL
+    /// PERMITTED: two handles for tab 0, times the four readings a core can produce,
+    /// times two queue depths.
+    ///
+    /// The other half of the domain — the same sixteen inputs against a restore that
+    /// has been ABANDONED — is swept by
+    /// [`an_abandoned_restore_never_attempts_creation_again`], which is a rule of its
+    /// own rather than a variation on these rows: it answers `Idle` for all sixteen.
+    ///
+    /// Written as LITERALS rather than as the product of the arrays' lengths, for the
+    /// reason [`NAMED_WAKE_CASES`] gives: comparing a sweep's count to the product of
+    /// the arrays it walked is a tautology.
+    const NAMED_RESTORE_PRESS_CASES: usize = 2 * 4 * 2;
+
+    /// One [`restore_press`] table row. The expectation is DATA, deliberately not
+    /// re-derived from the same conjunction the function under test uses.
+    ///
+    /// There is no `may_create` field: every row here is a restore that may still be
+    /// created, which is every launch that has not aborted. The abandoned half is
+    /// [`an_abandoned_restore_never_attempts_creation_again`].
+    struct RestorePressCase {
+        desc: &'static str,
+        first_tabpage: i64,
+        liveness: Option<Liveness>,
+        pending: usize,
+        want: RestorePress,
+    }
+
+    /// A hashable key for one `Option<Liveness>`, matched TOTALLY with no `_` arm so
+    /// a new [`Liveness`] variant is an `E0004` here rather than a silently
+    /// uncovered input. `Option<Liveness>` is not `Hash`, and the duplicate-row check
+    /// below needs one.
+    fn liveness_key(liveness: Option<Liveness>) -> u8 {
+        match liveness {
+            Some(Liveness::Alive) => 0,
+            Some(Liveness::NotResponding) => 1,
+            Some(Liveness::Dead) => 2,
+            None => 3,
+        }
+    }
+
+    /// The sixteen rows of the restore gate, one per `(first_tabpage, liveness,
+    /// pending)` input, against a restore that may still be created.
+    ///
+    /// A `const` item rather than a local so the sweeps below walk the same rows the
+    /// assertions do — the [`WAKE_CASES`] convention.
+    const RESTORE_PRESS_CASES: &[RestorePressCase] = &[
+        // --- Nothing queued: the steady state, on every wake, forever -----------
+        RestorePressCase {
+            desc: "no queue and a healthy core: the steady state, and it must cost one \
+                   Option::is_none() per wake",
+            first_tabpage: TABPAGE_A,
+            liveness: Some(Liveness::Alive),
+            pending: 0,
+            want: RestorePress::Idle,
+        },
+        RestorePressCase {
+            desc: "no queue, tab 0 not yet adopted",
+            first_tabpage: UNBOUND,
+            liveness: Some(Liveness::Alive),
+            pending: 0,
+            want: RestorePress::Idle,
+        },
+        RestorePressCase {
+            desc: "no queue, wedged core: nothing to wait FOR, so Idle rather than Wait",
+            first_tabpage: TABPAGE_A,
+            liveness: Some(Liveness::NotResponding),
+            pending: 0,
+            want: RestorePress::Idle,
+        },
+        RestorePressCase {
+            desc: "no queue, wedged core, tab 0 unbound",
+            first_tabpage: UNBOUND,
+            liveness: Some(Liveness::NotResponding),
+            pending: 0,
+            want: RestorePress::Idle,
+        },
+        RestorePressCase {
+            desc: "no queue, dead core",
+            first_tabpage: TABPAGE_A,
+            liveness: Some(Liveness::Dead),
+            pending: 0,
+            want: RestorePress::Idle,
+        },
+        RestorePressCase {
+            desc: "no queue, dead core, tab 0 unbound",
+            first_tabpage: UNBOUND,
+            liveness: Some(Liveness::Dead),
+            pending: 0,
+            want: RestorePress::Idle,
+        },
+        RestorePressCase {
+            desc: "no queue and no core at all (the close handler took it out)",
+            first_tabpage: TABPAGE_A,
+            liveness: None,
+            pending: 0,
+            want: RestorePress::Idle,
+        },
+        RestorePressCase {
+            desc: "no queue, no core, tab 0 unbound — the post-restart shape, where the queue has \
+                   already been cleared",
+            first_tabpage: UNBOUND,
+            liveness: None,
+            pending: 0,
+            want: RestorePress::Idle,
+        },
+        // --- A real queue, and tab 0 has NOT adopted yet ------------------------
+        RestorePressCase {
+            desc: "THE ROW THE FIRST CONJUNCT EXISTS FOR — a queue and a healthy core, but tab 0 \
+                   has no handle yet, so creating now would leave tab 0 to adopt the LAST tabpage \
+                   created",
+            first_tabpage: UNBOUND,
+            liveness: Some(Liveness::Alive),
+            pending: 2,
+            want: RestorePress::Wait,
+        },
+        RestorePressCase {
+            desc: "a queue, an unbound tab 0 and a wedged core: both reasons at once",
+            first_tabpage: UNBOUND,
+            liveness: Some(Liveness::NotResponding),
+            pending: 2,
+            want: RestorePress::Wait,
+        },
+        RestorePressCase {
+            desc: "a queue, an unbound tab 0 and a dead core",
+            first_tabpage: UNBOUND,
+            liveness: Some(Liveness::Dead),
+            pending: 2,
+            want: RestorePress::Wait,
+        },
+        RestorePressCase {
+            desc: "a queue, an unbound tab 0 and no core at all",
+            first_tabpage: UNBOUND,
+            liveness: None,
+            pending: 2,
+            want: RestorePress::Wait,
+        },
+        // --- A real queue, tab 0 adopted ----------------------------------------
+        RestorePressCase {
+            desc: "THE ONE ROW THAT MAY CREATE: a queue, tab 0 bound, and a core reading Alive",
+            first_tabpage: TABPAGE_A,
+            liveness: Some(Liveness::Alive),
+            pending: 2,
+            want: RestorePress::Create,
+        },
+        RestorePressCase {
+            desc: "THE ROW THE SECOND CONJUNCT EXISTS FOR — a wedged core must not be handed N \
+                   blocking create_tabpage calls",
+            first_tabpage: TABPAGE_A,
+            liveness: Some(Liveness::NotResponding),
+            pending: 2,
+            want: RestorePress::Wait,
+        },
+        RestorePressCase {
+            desc: "a dead core: there is no Neovim to create a tabpage in",
+            first_tabpage: TABPAGE_A,
+            liveness: Some(Liveness::Dead),
+            pending: 2,
+            want: RestorePress::Wait,
+        },
+        RestorePressCase {
+            desc: "no core at all, with tabs still queued — the window is tearing down and the \
+                   queue must survive rather than be discarded",
+            first_tabpage: TABPAGE_A,
+            liveness: None,
+            pending: 2,
+            want: RestorePress::Wait,
+        },
+    ];
+
+    /// Pins the restore decision for EVERY `(first_tabpage, liveness, pending)`
+    /// input of a restore that MAY STILL BE CREATED, and asserts the table is neither
+    /// short nor made of duplicates. The abandoned half of the domain is
+    /// [`an_abandoned_restore_never_attempts_creation_again`].
+    ///
+    /// ## What it discriminates, and the edits that redden it
+    ///
+    /// FALSIFYING EDIT 1 — drop the `first_tabpage != 0` conjunct. The four unbound
+    /// rows with a queue report `Create` (or, for the non-Alive ones, still `Wait`),
+    /// and the Alive one is the damaging case: the queued tabpages are created before
+    /// tab 0 has adopted, so tab 0's next wake adopts the LAST created tabpage and
+    /// two pages own one tabpage — `TabParts::tabpage`'s recorded hazard, from which
+    /// every later switch and close aims at the wrong tab.
+    ///
+    /// FALSIFYING EDIT 2 — drop the liveness conjunct. The three non-Alive rows with
+    /// a bound tab 0 report `Create`, putting `T - 1` blocking `create_tabpage` RPCs
+    /// and up to `T` blocking `rebuild_layout` RPCs on the GTK main thread behind a
+    /// Neovim already known not to answer — the window freezes for a multiple of the
+    /// timeout budget at the one moment the user is watching it start.
+    ///
+    /// FALSIFYING EDIT 3 — answer `Idle` where `Wait` belongs. The seven `Wait` rows
+    /// fail, and what they protect is the seam's MEANING rather than a behaviour of
+    /// today's caller: `materialize_restore` matches `Idle | Wait` in one arm, so the
+    /// queue is retained either way, and the SAVE survives either way too —
+    /// `window::WindowHandle::cached_subtree` contributes a seed per queued layout
+    /// ([`crate::state_seam::pending_tab_states`]) for as long as a queue is held.
+    /// What `Idle` asserts is that there is nothing to materialize, which for a queue
+    /// that may still be created is false, and any caller acting on that assertion —
+    /// dropping the queue, or not asking again on a later wake — loses those tabs for
+    /// the whole session, because a tab with no page has no cache to fall back on.
+    #[test]
+    fn restore_press_table() {
+        assert_eq!(
+            RESTORE_PRESS_CASES.len(),
+            NAMED_RESTORE_PRESS_CASES,
+            "the restore_press table must carry exactly one row per input the gate is total over \
+             for a restore that may still be created: two handles for tab 0, times four liveness \
+             readings, times two queue depths, is {NAMED_RESTORE_PRESS_CASES} rows, not {}. A \
+             missing row means an input nothing checks, and the row most likely to go missing is \
+             the one that must WAIT while tab 0 is still unbound — the only moment at which \
+             creating would put two pages on one tabpage.",
+            RESTORE_PRESS_CASES.len()
+        );
+
+        // Every row of the domain really is present, so the count above cannot be
+        // satisfied by sixteen copies of one row.
+        let mut seen: HashSet<(i64, u8, usize)> = HashSet::new();
+        for case in RESTORE_PRESS_CASES {
+            assert!(
+                seen.insert((
+                    case.first_tabpage,
+                    liveness_key(case.liveness),
+                    case.pending
+                )),
+                "two restore_press rows carry the same (first_tabpage = {}, liveness = {:?}, \
+                 pending = {}) input, so the table is shorter than its length suggests and some \
+                 other input is unmeasured — {}",
+                case.first_tabpage,
+                case.liveness,
+                case.pending,
+                case.desc
+            );
+        }
+        for first_tabpage in ALL_FIRST_TABPAGE_INPUTS {
+            for liveness in ALL_LIVENESS_INPUTS {
+                for pending in ALL_PENDING_INPUTS {
+                    assert!(
+                        seen.contains(&(first_tabpage, liveness_key(liveness), pending)),
+                        "no restore_press row covers (first_tabpage = {first_tabpage}, liveness = \
+                         {liveness:?}, pending = {pending}), so that input's answer is whatever \
+                         the seam happens to do. Every one of these is reachable at a real launch: \
+                         tab 0 carries 0 until the first wake at which Neovim has reported a \
+                         tabpage, the queue is non-empty from `window::build` until \
+                         materialization, and a core can be wedged, dead or already taken out \
+                         while a restore is still pending."
+                    );
+                }
+            }
+        }
+
+        // Every row is a restore whose creation may still be attempted, which is every
+        // launch that has not aborted; the abandoned half is
+        // `an_abandoned_restore_never_attempts_creation_again`.
+        for case in RESTORE_PRESS_CASES {
+            let got = restore_press(case.first_tabpage, case.liveness, case.pending, true);
+            assert_eq!(
+                got, case.want,
+                "restore_press(first_tabpage = {}, liveness = {:?}, pending = {}, may_create = \
+                 true) must be {:?}, got {got:?} — {}. Each wrong answer costs something \
+                 different. A CREATE where a Wait is due either binds the queued tabpages before \
+                 tab 0 has adopted one — so tab 0 later adopts the LAST tabpage created and two \
+                 pages own one, which is `TabParts::tabpage`'s recorded hazard — or issues N \
+                 blocking RPCs against a Neovim already known not to answer, freezing the window \
+                 at launch. An IDLE where a Wait is due declares a queue that is merely not ready \
+                 yet to be one with nothing left to do: the SAVE survives that, because the \
+                 retained queue is what speaks for those tabs (`state_seam::pending_tab_states`), \
+                 but nothing else does — a tab with no page has no cache — so any caller acting on \
+                 the declaration, by dropping the queue or by not asking again, loses them for the \
+                 whole session. A WAIT where Create is due leaves the tabs queued forever, which \
+                 looks identical to a restore that never ran. An IDLE or a WAIT where the queue is \
+                 empty is the steady state and must cost nothing.",
+                case.first_tabpage, case.liveness, case.pending, case.want, case.desc
+            );
+        }
+
+        // --- Exactly one input may CREATE -------------------------------------
+        //
+        // The rule stated over the whole domain rather than row by row, so a failure
+        // names the rule instead of quoting an index — the `new_tab_press_table`
+        // convention. This is also what catches a table whose sixteen rows became
+        // sixteen copies of one.
+        let mut creating: Vec<(i64, Option<Liveness>, usize)> = Vec::new();
+        for first_tabpage in ALL_FIRST_TABPAGE_INPUTS {
+            for liveness in ALL_LIVENESS_INPUTS {
+                for pending in ALL_PENDING_INPUTS {
+                    let press = restore_press(first_tabpage, liveness, pending, true);
+                    if press == RestorePress::Create {
+                        creating.push((first_tabpage, liveness, pending));
+                    }
+                }
+            }
+        }
+        let only_ready = [(TABPAGE_A, Some(Liveness::Alive), 2_usize)];
+        assert_eq!(
+            creating.as_slice(),
+            only_ready.as_slice(),
+            "exactly ONE of the {NAMED_RESTORE_PRESS_CASES} inputs may materialize the queued \
+             tabs: a real queue, a tab 0 that has already adopted its handle, and a core reading \
+             Alive. An EXTRA entry is one of the two hazards above — a second page bound to a \
+             tabpage tab 0 will later claim, or a burst of blocking RPCs against a Neovim that is \
+             not answering. An entry MISSING means the queue is never materialized at all, so \
+             every relaunch shows one tab while `state.json` still promises the rest — the queue \
+             is never drained, so it keeps seeding those tabs, and the session silently shrinks on \
+             every launch while the file never explains why."
+        );
+
+        // --- Non-vacuity: all three answers are produced -----------------------
+        //
+        // BACKSTOPS rather than the red a source edit produces: the row loop above
+        // dominates all three for every single-arm edit. What they catch is the table
+        // and the seam moving TOGETHER — a rewrite that made `restore_press` a
+        // constant function and rewrote every `want` to agree would satisfy the length
+        // check, the coverage sweep and every row.
+        let answers: Vec<RestorePress> = RESTORE_PRESS_CASES
+            .iter()
+            .map(|case| restore_press(case.first_tabpage, case.liveness, case.pending, true))
+            .collect();
+        for (want, consequence) in [
+            (
+                RestorePress::Create,
+                "the queued tabs would never be materialized, so every relaunch opens the first \
+                 tab alone while the save still promises the rest — the session shrinks to one tab \
+                 on every launch and nothing in the file says why",
+            ),
+            (
+                RestorePress::Wait,
+                "a launch that is not ready yet would either create against an unbound tab 0 or a \
+                 non-answering core, or be told there is nothing left to do — and the queue is the \
+                 only record of those tabs, so nothing else would ask again",
+            ),
+            (
+                RestorePress::Idle,
+                "every steady-state wake would keep re-examining a queue that is empty, and the \
+                 gate would no longer distinguish \"nothing to do\" from \"not yet\"",
+            ),
+        ] {
+            assert!(
+                answers.contains(&want),
+                "NOT ONE of the {NAMED_RESTORE_PRESS_CASES} inputs answered {want:?}, so that arm \
+                 is not stated at all: {consequence}."
+            );
+        }
+    }
+
+    /// A restore that has been ABANDONED never attempts creation again, whatever else
+    /// is true of the window: `Idle` for every one of the
+    /// [`NAMED_RESTORE_PRESS_CASES`] inputs [`restore_press_table`] walks.
+    ///
+    /// ## The split this measures
+    ///
+    /// The restore queue does two jobs, and an abort separates them. "Layouts still
+    /// owed a page" goes on seeding the window's contribution, so an abandoned restore
+    /// keeps speaking for its tabs in `state.json` forever — that half is
+    /// `state_seam::tests::an_abandoned_restore_keeps_seeding_its_un_created_tabs`.
+    /// "Creation may still be attempted" is this input, and it is false from the abort
+    /// onwards, because `WolfCore::create_tabpage` has already answered `0` for this
+    /// window once.
+    ///
+    /// FALSIFYING EDIT — ignore `may_create`. Eight of the sixteen inputs stop
+    /// answering `Idle`: seven answer `Wait`, and the `(TABPAGE_A, Alive, 2)` one
+    /// answers `Create`, which is the damaging one. The retained remainder is then
+    /// retried on the very next wake and on every wake after it — one blocking
+    /// `create_tabpage`, plus up to one blocking `rebuild_layout` per tab, on the GTK
+    /// main thread PER FRAME, against a Neovim that has just failed to answer one.
+    /// That is the freeze the liveness conjunct exists to prevent, arriving through a
+    /// different door.
+    ///
+    /// `Idle` rather than `Wait` because `Wait` promises that a later wake will finish
+    /// the restore, and after an abort none ever will. Those two are interchangeable
+    /// at the only call site, which matches `Idle | Wait` in one arm; `Create` is not,
+    /// and that is what this test is really holding shut.
+    #[test]
+    fn an_abandoned_restore_never_attempts_creation_again() {
+        let mut swept = 0_usize;
+        for first_tabpage in ALL_FIRST_TABPAGE_INPUTS {
+            for liveness in ALL_LIVENESS_INPUTS {
+                for pending in ALL_PENDING_INPUTS {
+                    swept += 1;
+                    let got = restore_press(first_tabpage, liveness, pending, false);
+                    assert_eq!(
+                        got,
+                        RestorePress::Idle,
+                        "restore_press(first_tabpage = {first_tabpage}, liveness = \
+                         {liveness:?}, pending = {pending}, may_create = false) must be \
+                         Idle, got {got:?}. A CREATE here re-attempts a restore that has \
+                         already failed: `create_tabpage` answered 0 once for this \
+                         window, and every later wake would put another blocking \
+                         create_tabpage — and up to one blocking rebuild_layout per tab \
+                         — on the GTK main thread behind a Neovim that is not \
+                         answering. A WAIT is the milder wrong answer, and today's only \
+                         call site cannot tell it from Idle, but it promises a later \
+                         wake will finish the restore when none ever will. Neither \
+                         answer may take the queue AWAY: the un-created layouts stay as \
+                         the seed source, so an abandoned restore is a session that \
+                         lost tabs rather than a save that did."
+                    );
+                }
+            }
+        }
+        assert_eq!(
+            swept, NAMED_RESTORE_PRESS_CASES,
+            "the abandoned sweep must reach all {NAMED_RESTORE_PRESS_CASES} inputs the gate is \
+             total over, not {swept}. A domain array that lost an entry shrinks this sweep \
+             silently, and the entry most likely to go missing is the one with a real queue and a \
+             healthy core — the only input that would otherwise answer Create."
+        );
+
+        // Non-vacuity, and the premise the rule above rests on: `may_create` is the
+        // ONLY thing that changed. Without this, a gate that refused everything would
+        // satisfy every assertion above — and no restore would ever materialize, so
+        // every relaunch would open one tab while the save promised the rest.
+        assert_eq!(
+            restore_press(TABPAGE_A, Some(Liveness::Alive), 2, true),
+            RestorePress::Create,
+            "premise: the very same window — a real queue, a tab 0 that has adopted, a core \
+             reading Alive — must answer Create while creation is still permitted. If it does \
+             not, the abandoned rule above holds because nothing is ever created rather than \
+             because the abort stopped this restore, and every launch would silently open one \
+             tab."
         );
     }
 

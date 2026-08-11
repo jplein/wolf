@@ -52,28 +52,35 @@
 //!
 //! This module is both halves of the pane-layout persistence path:
 //!
-//! - **Save.** [`PaneHandle::layout_snapshot`] walks the live tree, reads each
-//!   leaf's RAW buffer path out of the per-pane status cache
-//!   [`PaneInner::refresh_pane_state`] fills once per wake from the RPC-free
-//!   `WolfCore::pane_status(grid)`, encodes it via [`crate::pane_layout::encode`],
-//!   and applies [`crate::state_seam::persistable_layout`]'s CONTENT suppression
-//!   rule. It is called from [`crate::persistence`] on every render wake and at
+//! - **Save.** [`PaneHandle::layout_snapshot`] walks the live tree and resolves
+//!   each leaf out of the snapshot's WINDOW-KEYED maps — `Snapshot::previews`, then
+//!   `Snapshot::win_buffers` — by the pane's own Neovim window handle
+//!   ([`PaneInner::leaf_contents`]), encodes the result via
+//!   [`crate::pane_layout::encode`], and applies
+//!   [`crate::state_seam::persistable_layout`]'s CONTENT suppression rule. It is
+//!   called from [`crate::persistence`] for EVERY tab on every render wake and at
 //!   `close-request`. [`PaneHandle::snapshot_readiness`] supplies the two counts
 //!   `state_seam::may_snapshot` gates on, so a snapshot taken before the first
 //!   pane binds can never wipe a good save.
 //!
-//!   The cache is refreshed inside `panes.on_render_wake()`, which runs strictly
-//!   before `shell.on_render_wake()` drives the persistence path, so the wake path
-//!   always reads the current wake's values. `close-request` is the one bounded
-//!   exception: [`crate::persistence`]'s final flush reads the cache as of the LAST
-//!   wake, so a buffer change made in the window between that wake and the close
-//!   request is not persisted. Every `:e` produces a redraw flush and therefore a
-//!   wake, so the gap is one frame.
-//! - **Restore.** [`PaneHandle::request_layout_rebuild`] queues the saved tree at
-//!   launch; the first wake at which a window grid exists consumes it
-//!   ([`PaneInner::consume_pending_layout`]) and realizes it
-//!   ([`PaneInner::apply_layout_rebuild`]) through `WolfCore::rebuild_layout`, one
-//!   of the ten blocking RPCs this front-end issues, documented there.
+//!   Those two maps are global across tabpages, so this reads no per-pane cache and
+//!   makes no core call beyond one snapshot read — which is what lets a BACKGROUND
+//!   tab be gathered at all, and it reads live rather than last-known-good. A leaf
+//!   whose window is in neither map refuses the whole tab's gather
+//!   ([`crate::pane_layout::LayoutGather::Refuse`]), and the tab then contributes
+//!   its cached subtree.
+//! - **Restore.** Two routes, and which one applies is decided by whether the tab
+//!   has any panes yet. Tab 0 takes [`PaneHandle::request_layout_rebuild`], which
+//!   queues the saved tree at launch for the first wake at which a window grid
+//!   exists ([`PaneInner::consume_pending_layout`]). A tab created by the restore
+//!   materialization takes [`PaneHandle::realize_layout`], which realizes
+//!   immediately, because the tabpage its `create_tabpage` just returned is current
+//!   only at that instant — and which DROPS the queued copy first, since
+//!   `tab_view::TabsInner::open_tab` queues one for every tab it builds and a
+//!   rebuild left queued would fire a SECOND time on that tab's first unheld wake.
+//!   Both end in [`PaneInner::apply_layout_rebuild`] and
+//!   `WolfCore::rebuild_layout`, one of the ten blocking RPCs this front-end
+//!   issues, documented there; each restored tab costs exactly one.
 //!
 //! A user's DIVIDER DRAG feeds the save half. [`install_paned_position`] writes the
 //! dragged `gtk::Paned` position back into the tree's weights through
@@ -677,16 +684,16 @@ impl PaneInner {
     /// 2. Render the spec via `wolf_core::state::rebuild_layout_spec`.
     /// 3. Call `rebuild_layout` under a SHORT borrow in its own statement.
     ///
-    ///    **This is a BLOCKING RPC**, one of the three `wolf-gnome` issues: this
-    ///    layout rebuild, the buffer picker's candidate snapshot, and a per-pane
-    ///    navigation move (`crates/wolf-gnome/DECISIONS.md`, "Crash and stall
-    ///    recovery"). Every other core call this crate makes is a snapshot read or
-    ///    a queued input. It is acceptable HERE for a reason the other two do not
-    ///    share: it happens at most once per launch, before the window is
-    ///    interactive, and never on the crash/restart path — see `shell.rs`'s
-    ///    "never call a `block_on_rpc` on the restart path" rule, which stands
-    ///    unchanged. A wedged nvim at launch marks the core `NotResponding`, and
-    ///    the crash overlay presents it.
+    ///    **This is a BLOCKING RPC**, one of the ten this crate issues
+    ///    (`crates/wolf-gnome/DECISIONS.md`, "Crash and stall recovery"). Every
+    ///    other core call this crate makes is a snapshot read or a queued input. It
+    ///    is acceptable HERE for a reason the others do not share: it happens on
+    ///    the LAUNCH path only — at most once per restored tab, bounded by
+    ///    `state_seam::MAX_RESTORE_TABS`, before the window is interactive — and
+    ///    never on the crash/restart path, see `shell.rs`'s "never call a
+    ///    `block_on_rpc` on the restart path" rule, which stands unchanged. A
+    ///    wedged nvim at launch marks the core `NotResponding`, and the crash
+    ///    overlay presents it.
     /// 4. A handle count that does not match the decoded leaf count aborts,
     ///    leaving the single already-bound pane intact (macOS parity).
     fn apply_layout_rebuild(self: &Rc<Self>, saved: &PaneNode) {
@@ -733,11 +740,13 @@ impl PaneInner {
         // and the drawer is never one of the restored leaves, because it is excluded
         // from the saved layout by construction (see `Self::layout_snapshot`).
         //
-        // This call is DEFENSIVE, not dead, and it can never actually fire: the only
-        // caller is `consume_pending_layout`, which runs at launch and only while
-        // exactly one pane exists, so no chord has had a window to open a drawer in
-        // yet. It stays because the alternative is a `panes` replacement that leaves
-        // `DrawerState` pointing at a pane id nothing holds.
+        // This call is DEFENSIVE, not dead, and it can never actually fire: both
+        // callers run on the LAUNCH path — `consume_pending_layout` while exactly
+        // one pane exists, and `PaneHandle::realize_layout` on a page created
+        // moments earlier by the restore materialization — so no chord has had a
+        // window to open a drawer in yet. It stays because the alternative is a
+        // `panes` replacement that leaves `DrawerState` pointing at a pane id
+        // nothing holds.
         self.clear_drawer();
 
         // The guarded path: it samples `focus_inside_pane_area()` BEFORE tearing
@@ -883,23 +892,77 @@ impl PaneInner {
         }
     }
 
-    /// The tab's persistable pane tree, or `None` for an unnamed lone pane.
+    /// Each leaf's persisted content, resolved from the snapshot's WINDOW-KEYED
+    /// maps by the pane's own Neovim window handle — or `None` if any leaf is
+    /// unresolvable.
     ///
-    /// Reads each leaf's buffer path out of the per-pane status cache
-    /// [`Self::refresh_pane_state`] fills — the RAW absolute path, NOT
-    /// `display_path` (which is relativized for the statusbar and would be useless
-    /// to restore from). No core call happens here at all.
+    /// `Snapshot::previews` and `Snapshot::win_buffers` are GLOBAL across tabpages
+    /// (`runtime/nvim/init.lua` sweeps `nvim_list_wins()`), so this answers the same
+    /// values for a background tab as for the selected one, with no RPC and no
+    /// refresh. That is the whole reason a window may persist every tab: the
+    /// `[No Name]` reading is a property of `WolfCore::pane_status`, which joins
+    /// through the current-tabpage-only `Snapshot::windows`, and which this does not
+    /// call.
     ///
-    /// The cache is refreshed inside `panes.on_render_wake()`, which runs strictly
-    /// before `shell.on_render_wake()` and therefore before `crate::persistence`
-    /// reads this, so the values are always the current wake's. The one bounded
-    /// staleness is `flush_on_close`: it reads the cache as of the LAST wake, so a
-    /// buffer change in the window between that wake and the close request is not
-    /// persisted. Every `:e` produces a redraw flush and therefore a wake, so the
-    /// gap is one frame.
+    /// **There is no grid filter here, deliberately.** The grid is irrelevant to a
+    /// window-keyed read, and a leaf whose grid has not resolved is now covered by
+    /// the map lookup — it answers [`pane_layout::WinContent::Unknown`] and refuses
+    /// the tab, rather than being silently dropped into an empty leaf.
     ///
-    /// The `None` suppression is [`state_seam::persistable_layout`]'s CONTENT rule,
-    /// never an arity test.
+    /// The `""` a leaf may carry comes only from `win_buffers[win].path` being
+    /// genuinely `None` — a real unnamed buffer. Absence is never mapped onto it;
+    /// see [`pane_layout::resolve_leaves`].
+    fn leaf_contents(&self) -> Option<HashMap<PaneId, pane_layout::LeafContent>> {
+        let leaves: Vec<(PaneId, pane_layout::WinContent)> = {
+            let core_ref = self.core.borrow();
+            let core = core_ref.as_ref()?;
+            // ONE guard, bound to a local, dropped with the tree and panes borrows
+            // at the end of this block and before any other call.
+            let snap = core.read_snapshot();
+            let tree = self.tree.borrow();
+            let panes = self.panes.borrow();
+            tree.leaves()
+                .into_iter()
+                .map(|id| {
+                    let content = panes
+                        .get(&id)
+                        .map_or(pane_layout::WinContent::Unknown, |p| {
+                            match snap.previews.get(&p.win) {
+                                Some(info) => pane_layout::WinContent::Preview(
+                                    info.source_path.to_string_lossy().into_owned(),
+                                ),
+                                None => match snap.win_buffers.get(&p.win) {
+                                    Some(buf) => pane_layout::WinContent::Buffer(
+                                        buf.path
+                                            .as_ref()
+                                            // `None` is a real UNNAMED buffer, which is
+                                            // a resolved answer of `""` — never the
+                                            // absent-window case above.
+                                            .map(|path| path.to_string_lossy().into_owned())
+                                            .unwrap_or_default(),
+                                    ),
+                                    None => pane_layout::WinContent::Unknown,
+                                },
+                            }
+                        });
+                    (id, content)
+                })
+                .collect()
+        };
+        pane_layout::resolve_leaves(&leaves)
+    }
+
+    /// The tab's gather answer for `state.json`.
+    ///
+    /// [`pane_layout::LayoutGather::Refuse`] when [`Self::leaf_contents`] could not
+    /// resolve every leaf, which means "contribute the CACHE" one layer up rather
+    /// than "contribute nothing"; otherwise
+    /// [`pane_layout::LayoutGather::Ready`] carrying
+    /// [`state_seam::persistable_layout`]'s answer, whose `None` is the CONTENT
+    /// suppression rule and never an arity test.
+    ///
+    /// No core call beyond the one snapshot read [`Self::leaf_contents`] takes, so
+    /// this is affordable for every tab on every render wake.
     ///
     /// **The terminal drawer is excluded BY CONSTRUCTION and needs no branch here.**
     /// This walks `tree.leaves()`, and the drawer is not a leaf, so its
@@ -907,29 +970,14 @@ impl PaneInner {
     /// restore path would hand it to `:edit` at the next launch and Neovim would
     /// spawn a shell for it. Putting the drawer in the tree is what would break
     /// this, not editing this function.
-    fn layout_snapshot(&self) -> Option<PaneNode> {
-        let contents: HashMap<PaneId, pane_layout::LeafContent> = {
-            let tree = self.tree.borrow();
-            let panes = self.panes.borrow();
-            tree.leaves()
-                .into_iter()
-                .filter_map(|id| {
-                    let p = panes.get(&id)?;
-                    // A pane with no bound grid has no status to have been read,
-                    // and contributes no path.
-                    p.grid.get()?;
-                    Some((
-                        id,
-                        pane_layout::LeafContent {
-                            path: p.status.borrow().abs_path.clone(),
-                            preview: p.preview.borrow().is_some(),
-                        },
-                    ))
-                })
-                .collect()
+    fn layout_snapshot(&self) -> pane_layout::LayoutGather {
+        let Some(contents) = self.leaf_contents() else {
+            return pane_layout::LayoutGather::Refuse;
         };
         let layout = self.tree.borrow().layout();
-        state_seam::persistable_layout(pane_layout::encode(&layout, &contents))
+        pane_layout::LayoutGather::Ready(state_seam::persistable_layout(pane_layout::encode(
+            &layout, &contents,
+        )))
     }
 
     /// `(panes with a RESOLVED grid, windows nvim has reported a buffer or a preview
@@ -3217,10 +3265,39 @@ impl PaneHandle {
         *self.inner.pending_layout.borrow_mut() = Some(saved);
     }
 
-    /// The tab's persistable pane tree for `state.json`, or `None` for an
-    /// unnamed lone pane (see [`PaneInner::layout_snapshot`]).
+    /// Realizes a saved pane tree IMMEDIATELY, with no pending step and no
+    /// one-pane precondition.
+    ///
+    /// **The tabpage this rebuilds into is whichever one Neovim is current on right
+    /// now.** `WolfCore::rebuild_layout` acts on the current tabpage, so the only
+    /// legal caller is the restore materialization
+    /// ([`crate::tab_view::TabsHandle::queue_restore`]), immediately after that
+    /// tab's `create_tabpage` returned — the one instant at which this front-end
+    /// knows for certain which tabpage that is. Calling it from anywhere else
+    /// rebuilds some other tab's windows.
+    ///
+    /// [`PaneHandle::request_layout_rebuild`] is the OTHER route and the one tab 0
+    /// takes: it defers to the first wake at which a window grid exists, which is
+    /// what a tab that has no panes yet needs.
+    ///
+    /// This is a BLOCKING RPC; see [`PaneInner::apply_layout_rebuild`] for the
+    /// budget it belongs to. Exactly ONE per restored tab, which is why the queued
+    /// copy is dropped below.
+    pub fn realize_layout(&self, saved: &PaneNode) {
+        // `open_tab` stays single-pathed and queues the same layout for every tab
+        // it builds. Dropping that copy here is what keeps this ONE rebuild: left
+        // queued, the first wake this tab is not held for would consume it and
+        // rebuild a second time — a blocking RPC on the SELECTION path, which is
+        // neither the launch path nor anywhere in the blocking-call inventory.
+        self.inner.pending_layout.borrow_mut().take();
+        self.inner.apply_layout_rebuild(saved);
+    }
+
+    /// The tab's gather answer for `state.json` (see
+    /// [`PaneInner::layout_snapshot`]): `Refuse` means "contribute the cache", and
+    /// `Ready(None)` is the content suppression of an unnamed lone pane.
     #[must_use]
-    pub fn layout_snapshot(&self) -> Option<PaneNode> {
+    pub fn layout_snapshot(&self) -> pane_layout::LayoutGather {
         self.inner.layout_snapshot()
     }
 

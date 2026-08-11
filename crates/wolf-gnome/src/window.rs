@@ -26,13 +26,25 @@
 //!   `close_window` tears the core down. One core per window means one wake
 //!   closure per core, carrying no window token.
 //! - **Application state (`state.json`):** the [`RestorePlan`] arrives already
-//!   built — the working directory, the window size, and the tab's saved
-//!   pane-split tree — because a launch restores a SESSION and the plans are
-//!   made once, above. The layout is queued on the pane view
-//!   ([`crate::pane_view::PaneHandle::request_layout_rebuild`]) and realized on
-//!   the first wake with a window grid, through `WolfCore::rebuild_layout`. That
-//!   is ONE of the TEN blocking RPCs this front-end issues — at most once per
-//!   window, before that window is interactive, never on the crash path.
+//!   built — the working directory, the window size, and one
+//!   [`crate::state_seam::TabPlan`] per saved tab — because a launch restores a
+//!   SESSION and the plans are made once, above. Tab 0's layout is queued on its
+//!   pane view ([`crate::pane_view::PaneHandle::request_layout_rebuild`]) and
+//!   realized on the first wake with a window grid; every later tab is handed to
+//!   [`crate::tab_view::TabsHandle::queue_restore`] and materialized on a later
+//!   wake, one blocking `WolfCore::create_tabpage` and one blocking
+//!   `WolfCore::rebuild_layout` each.
+//!
+//!   Those rebuilds are ONE of the TEN blocking RPCs this front-end issues, and
+//!   `create_tabpage` is another. A materialized tab costs exactly one rebuild:
+//!   [`crate::pane_view::PaneHandle::realize_layout`] drops the copy `open_tab`
+//!   queued on the same pane view, so no second one lands on the SELECTION path,
+//!   which this inventory does not cover. A restored window's launch therefore
+//!   carries up to `2T - 1` of them, `T` being the restored tab count bounded by
+//!   [`crate::state_seam::MAX_RESTORE_TABS`] — all before that window is
+//!   interactive, and none on the crash path, which
+//!   [`crate::tab_view::TabsHandle::reset_after_restart`] guarantees by discarding
+//!   the queue.
 //!
 //!   The second is the buffer picker's candidate snapshot
 //!   (`WolfCore::list_buffers`), which a RUNNING window can issue on Ctrl+Shift+E,
@@ -41,9 +53,11 @@
 //!   (`WolfCore::history_back` / `history_forward`, one call per direction and
 //!   counted once) on Alt+Left / Alt+Right, the
 //!   fourth the Copy yank (`WolfCore::copy_visual_selection`) on Ctrl+Shift+C, and
-//!   the fifth New Tab's `WolfCore::create_tabpage` on Ctrl+Shift+T, each
+//!   the fifth `WolfCore::create_tabpage`, which has TWO triggers — New Tab on
+//!   Ctrl+Shift+T and the restore materialization above — each
 //!   behind a guard of exactly that shape ([`crate::nav_ui::nav_press`],
-//!   [`crate::clipboard_ui::copy_decision`], [`crate::tabs_ui::new_tab_press`]).
+//!   [`crate::clipboard_ui::copy_decision`], [`crate::tabs_ui::new_tab_press`],
+//!   [`crate::tabs_ui::restore_press`]).
 //!   `set_current_tabpage` and `close_tabpage` add none: both are fire-and-forget
 //!   on the ordered input channel.
 //!
@@ -67,20 +81,24 @@
 //!   one blocking call it could have made — `WolfCore::ignorecase()` — is
 //!   deliberately not made.
 //!
-//!   Writing back is [`crate::persistence`]: this window's subtree is re-gathered
-//!   on every wake and as the FIRST thing [`wire_close`] does, and
-//!   [`crate::coordinator::Coordinator`] assembles the tree and commits it. The
-//!   tab's `sidebar_visible` is written from the user's PREFERENCE and read back
-//!   at launch through [`crate::state_seam::RestorePlan::sidebar_visible`].
+//!   Writing back is [`crate::persistence`], one instance per TAB: every tab is
+//!   re-gathered on every wake and as the FIRST thing [`wire_close`] does,
+//!   [`WindowHandle::cached_subtree`] assembles them — plus the seeds of any tab
+//!   still sitting in the restore queue, which has no page and therefore nothing
+//!   else that can speak for it — into this window's subtree in
+//!   tab order, and [`crate::coordinator::Coordinator`] assembles the tree and
+//!   commits it. The `sidebar_visible` field is written into every tab from the
+//!   user's PREFERENCE — it is per WINDOW — and read back at launch off the first
+//!   tab through [`crate::state_seam::RestorePlan::sidebar_visible`].
 //!
-//!   **A window carries N tabs and persists its SELECTED tab's subtree; every
-//!   other tab contributes nothing, and that freeze is deliberate.** Widening it
-//!   is not a matter of walking the registry: a background tab's
-//!   `WolfCore::pane_status` joins against `Snapshot::windows`, which is
-//!   current-tabpage-only, so a refresh there answers `[No Name]` with empty
-//!   paths and would write a well-formed `state.json` that has silently lost its
-//!   files. [`crate::tab_view::TabsHandle::selected`] owns the rule and
-//!   `DECISIONS.md` records what lifting it costs.
+//!   **A window persists EVERY tab, in tab order, and a background tab's is as
+//!   trustworthy as the selected one's.** Each leaf is resolved from
+//!   `Snapshot::previews` and `Snapshot::win_buffers`, keyed by the pane's own
+//!   Neovim window handle, and both maps are global across tabpages; the
+//!   `[No Name]` reading belongs to `WolfCore::pane_status`, which joins through
+//!   the current-tabpage-only `Snapshot::windows` and which the gather does not
+//!   call. A leaf whose window is in neither map refuses that tab's whole gather
+//!   ([`crate::pane_layout::resolve_leaves`]) and the tab contributes its cache.
 //! - **Liveness / crash recovery:** the liveness read is UNCONDITIONAL and at the
 //!   TOP of the drain-loop body, and it GATES the two paint handlers (see
 //!   [`mod@crate::liveness_ui`] for the mapping and [`crate::crash_overlay`] for the
@@ -148,12 +166,13 @@
 //! than one line costs the pane area no height and scrolls under a pointer gesture.
 
 use std::cell::RefCell;
+use std::path::Path;
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
 
 use adw::prelude::*;
 use gtk::glib;
-use wolf_core::{CoreConfig, InputEvent, WakeFn, WindowState, WolfConfig, WolfCore};
+use wolf_core::{CoreConfig, InputEvent, TabState, WakeFn, WindowState, WolfConfig, WolfCore};
 
 use crate::appearance;
 use crate::buffer_picker::{self, BufferPickerHandle};
@@ -166,8 +185,8 @@ use crate::shell::{
     self, ShellParts, GO_TO_FILE_ACTION, HISTORY_BACK_ACTION, HISTORY_FORWARD_ACTION,
     TOGGLE_SIDEBAR_ACTION,
 };
-use crate::state_seam::RestorePlan;
-use crate::tab_view::{self, TabParts, TabsHandle, TabsParts};
+use crate::state_seam::{self, RestorePlan};
+use crate::tab_view::{self, RestoreTabs, TabParts, TabsHandle, TabsParts};
 use crate::title::WINDOW_TITLE_FALLBACK;
 use crate::tree_view::{self, TreeHandle};
 use crate::workspace;
@@ -209,7 +228,7 @@ const HISTORY_FORWARD_ICON: &str = "go-next-symbolic";
 
 /// Everything [`build`] needs, as one struct rather than six positional
 /// parameters (`clippy::too_many_arguments` bites at seven), following the
-/// [`ShellParts`] / [`StateParts`] / [`CloseParts`] precedent.
+/// [`ShellParts`] / [`crate::persistence::StateParts`] / [`CloseParts`] precedent.
 pub struct WindowParts<'a> {
     /// The application this window belongs to. The plain [`gtk::Application`]
     /// rather than [`adw::Application`], because that is what
@@ -221,8 +240,9 @@ pub struct WindowParts<'a> {
     pub coordinator: &'a Coordinator,
     /// This window's identity, minted by the coordinator.
     pub id: WindowId,
-    /// The launch plan: working directory, empty state, saved layout, saved size
-    /// and the sidebar preference.
+    /// The launch plan: working directory, empty state, one
+    /// [`crate::state_seam::TabPlan`] per tab to restore with that tab's saved
+    /// layout, the saved window size and the sidebar preference.
     pub plan: &'a RestorePlan,
     /// The user configuration, read once for the process.
     pub config: &'a WolfConfig,
@@ -243,9 +263,9 @@ struct WindowInner {
     id: WindowId,
     /// The toplevel.
     window: adw::ApplicationWindow,
-    /// This window's tabs. The persistence glue is per TAB and lives inside them;
-    /// what this window contributes to `state.json` is the SELECTED tab's subtree
-    /// and nothing else — see [`crate::tab_view::TabsHandle::selected`].
+    /// This window's tabs, live and queued. The persistence glue is per TAB and
+    /// lives inside them; what this window contributes to `state.json` is EVERY
+    /// tab's state in tab order — see [`WindowHandle::cached_subtree`].
     tabs: TabsHandle,
 }
 
@@ -268,27 +288,81 @@ impl WindowHandle {
         self.inner.window.present();
     }
 
-    /// Re-gathers this window's persisted subtree; see
-    /// [`crate::persistence::StateHandle::refresh_subtree`].
+    /// Re-gathers EVERY tab's persisted state; see
+    /// [`crate::persistence::StateHandle::refresh_tab`].
     ///
-    /// **The SELECTED tab's, and no other tab's.** Persistence is deliberately
-    /// frozen at one tab per window; [`crate::tab_view::TabsHandle::selected`] owns
-    /// that rule and says what walking every tab here would cost.
+    /// Every tab, not the selected one, and it costs no RPC: a tab's leaves are
+    /// resolved from the snapshot's window-keyed maps, which are global across
+    /// tabpages ([`crate::pane_layout::resolve_leaves`]).
     pub fn refresh_subtree(&self) {
-        if let Some(tab) = self.inner.tabs.selected() {
-            tab.refresh_subtree();
+        for tab in self.inner.tabs.entries() {
+            tab.refresh_tab();
         }
     }
 
-    /// This window's last successfully gathered subtree, or `None` when it has
-    /// never had one — the SELECTED tab's, per
-    /// [`WindowHandle::refresh_subtree`].
+    /// This window's contribution to the persisted tree: every LIVE tab that has
+    /// something to contribute, in PAGE order, followed by the seeds of the tabs its
+    /// launch has QUEUED but not yet materialized, under this window's size — or
+    /// `None` when nothing contributed at all.
+    ///
+    /// The composition, the order and the commit-nothing rule are
+    /// [`crate::state_seam::window_contribution`]'s; this reads the three live inputs
+    /// and calls it once, so no rule sits inside widget glue no headless test can
+    /// execute.
+    ///
+    /// **PAGE order, not the order the tabs were opened in.**
+    /// [`crate::tab_view::TabsHandle::entries`] is insertion order and libadwaita
+    /// lets the user rearrange the bar, so each cache is paired with its
+    /// [`crate::tab_view::TabHandle::page_position`] and sorted by
+    /// [`crate::state_seam::ordered_tab_states`] before it becomes the `live`
+    /// argument. That seam carries the reason.
+    ///
+    /// **The queued tabs are contributed because nothing else can speak for them.**
+    /// They have no page, so they have neither a cache nor a live gather, and the
+    /// commit does not wait for the wake that materializes them — [`build`] drives
+    /// one before this window is presented. Behind a wedged or dead Neovim that is
+    /// the only commit there will ever be, because
+    /// [`crate::tabs_ui::restore_press`] answers `Wait` forever, so the one-tab tree
+    /// it would otherwise write is what the next launch reads. A restore that
+    /// ABORTED part-way leaves the same queue in place for the tabs it never created;
+    /// see [`crate::tab_view::RestoreTabs`].
     #[must_use]
     pub fn cached_subtree(&self) -> Option<WindowState> {
-        self.inner
+        let positioned: Vec<(i32, TabState)> = self
+            .inner
             .tabs
-            .selected()
-            .and_then(|tab| tab.cached_subtree())
+            .entries()
+            .iter()
+            .filter_map(|tab| Some((tab.page_position(), tab.cached_tab()?)))
+            .collect();
+        let live = state_seam::ordered_tab_states(positioned);
+        // Read in a statement of its own, so no borrow of the tab layer's queue is
+        // live while the seeds are derived from it.
+        let pending = self.inner.tabs.pending_restore();
+        // With no queue there is nothing to seed, so the three window-level values
+        // below are never read; the empty slice is what says so.
+        let (layouts, empty, launch_cwd, sidebar_shown) =
+            pending
+                .as_ref()
+                .map_or(([].as_slice(), false, Path::new(""), false), |restore| {
+                    (
+                        restore.layouts.as_slice(),
+                        restore.empty,
+                        restore.launch_cwd.as_path(),
+                        restore.sidebar_shown,
+                    )
+                });
+        // Position is never persisted on Wayland, so this is the whole geometry.
+        let (width, height) = self.inner.window.default_size();
+        state_seam::window_contribution(
+            width,
+            height,
+            live,
+            layouts,
+            empty,
+            launch_cwd,
+            sidebar_shown,
+        )
     }
 
     /// Where this window IS, for another window's palette: the very string this one
@@ -297,7 +371,7 @@ impl WindowHandle {
     /// Read out of the cached subtree rather than recomputed, so the palette and
     /// the persisted tree cannot disagree about a window's directory — the rule is
     /// [`crate::state_seam::snapshot_cwd`]'s, applied once, in
-    /// [`crate::persistence::StateHandle::refresh_subtree`]. An empty-state window
+    /// [`crate::persistence::StateHandle::refresh_tab`]. An empty-state window
     /// yields `""`, which `wolf_core::rank_palette` renders as "Untitled"; so does
     /// a window whose gate has not opened yet, which has by definition persisted
     /// nothing to be offered under.
@@ -365,8 +439,9 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
     // The TAB LAYER. Every tab carries its own pane view (one DrawingArea per pane
     // plus a cmdline strip, a message toast and a completion popup) and its own
     // empty state and persistence glue, over this window's ONE core. No page exists
-    // yet: the persistence glue reads the window's size, so `open_tab` waits until
-    // the window is built.
+    // yet: tab 0 is opened below, once the toplevel is built. The persistence glue
+    // needs no window — `StateParts` carries none, and the size that reaches
+    // `state.json` is read at commit time by `WindowHandle::cached_subtree`.
     let tabs = tab_view::build(TabsParts {
         core: &core,
         metrics,
@@ -548,21 +623,18 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
         .content(&content)
         .build();
 
-    // TAB 0, built after the window because each tab's persistence glue reads the
-    // window's size. It carries the restored pane tree; every later tab carries
-    // none. Its tabpage handle is 0 — it ADOPTS the real one on the first wake
-    // through `tabs_ui::tab_wake`, which is a snapshot read rather than
-    // `WolfCore::current_tabpage()`'s blocking RPC.
-    if !tabs.open_tab(
-        &window,
-        TabParts {
-            tabpage: 0,
-            cwd: plan.core_cwd.clone(),
-            empty,
-            sidebar_shown: plan.sidebar_visible,
-            layout: plan.layout.clone(),
-        },
-    ) {
+    // TAB 0, carrying the FIRST saved tab's layout. Its tabpage handle is 0 — it
+    // ADOPTS the real one on the first wake through `tabs_ui::tab_wake`, which is a
+    // snapshot read rather than `WolfCore::current_tabpage()`'s blocking RPC. The
+    // plan's `tabs` is never empty, so `first()` is a real tab rather than a
+    // fallback.
+    if !tabs.open_tab(TabParts {
+        tabpage: 0,
+        cwd: plan.core_cwd.clone(),
+        empty,
+        sidebar_shown: plan.sidebar_visible,
+        layout: plan.tabs.first().and_then(|tab| tab.layout.clone()),
+    }) {
         eprintln!("wolf-gnome: failed to open the window's first tab");
         return None;
     }
@@ -677,6 +749,26 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
             }
         });
     }
+    // Every SAVED TAB PAST THE FIRST, queued rather than created: materializing
+    // needs tab 0 to have adopted its tabpage handle, which has not happened yet
+    // (see `tabs_ui::restore_press`). The queue is drained on a later render wake,
+    // with no timer and no polling. Placed BEFORE the synchronous wake pair below
+    // so the earliest wake that may materialize already sees it.
+    if plan.tabs.len() > 1 {
+        tabs.queue_restore(RestoreTabs {
+            launch_cwd: plan.core_cwd.clone(),
+            empty,
+            sidebar_shown: plan.sidebar_visible,
+            layouts: plan.tabs[1..]
+                .iter()
+                .map(|tab| tab.layout.clone())
+                .collect(),
+            // Normalized by `queue_restore` regardless; only the remainder an abort
+            // re-seats is ever queued with creation withdrawn.
+            may_create: true,
+        });
+    }
+
     // React to whatever is already there (the initial attached frame), through the
     // same liveness gate as every later wake.
     if shell.on_liveness_wake() {
@@ -775,7 +867,7 @@ fn wire_keys(
 
 /// The handles [`wire_close`] needs, as one struct rather than nine positional
 /// parameters (`clippy::too_many_arguments` bites at seven), following the
-/// [`ShellParts`] / [`StateParts`] precedent.
+/// [`ShellParts`] / [`crate::persistence::StateParts`] precedent.
 struct CloseParts<'a> {
     /// The window whose `close-request` is being handled.
     window: &'a adw::ApplicationWindow,

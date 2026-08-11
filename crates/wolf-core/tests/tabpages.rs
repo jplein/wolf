@@ -97,6 +97,26 @@ const TABLINE_PROBE_ONE: &str = "WOLFTABPROBEONE";
 /// [`TABLINE_PROBE_ONE`].
 const TABLINE_PROBE_TWO: &str = "WOLFTABPROBETWO";
 
+/// The number of live windows the WHOLE nvim INSTANCE holds in
+/// [`per_window_buffers_are_global_across_tabpages`]: one on each of its two
+/// tabpages, which is the count the window-keyed maps must report if they are
+/// global.
+///
+/// Named separately from [`TWO_WINDOWS`], which counts two windows on ONE tabpage:
+/// the two are equal here and would stop being so the moment a case split a window,
+/// and the whole point of this test is that the two counts are measured against
+/// different maps. Follows the [`ONE_WINDOW`] / [`ONE_TABPAGE`] precedent above.
+const TWO_WINDOWS_ACROSS_TWO_TABPAGES: usize = 2;
+
+/// Basename of the fixture opened on the FIRST tabpage — the one that becomes a
+/// BACKGROUND tabpage's window and whose entry in the window-keyed maps is the
+/// subject of [`per_window_buffers_are_global_across_tabpages`].
+const T1_FILE: &str = "a.md";
+
+/// Basename of the fixture opened on the SECOND tabpage, which is the CURRENT one
+/// while the assertions above are taken. See [`T1_FILE`].
+const T2_FILE: &str = "b.md";
+
 /// Polls `pred` until it returns `true`, draining wakes each iteration, or panics
 /// after [`FLUSH_TIMEOUT`]. `desc` describes the awaited condition for the panic
 /// message. A general-purpose variant of `redraw_multigrid.rs`'s `poll_until`: the
@@ -133,6 +153,29 @@ fn only_window_handle(core: &WolfCore) -> i64 {
         "expected exactly one live window; got handles {handles:?}"
     );
     *handles.iter().next().expect("one window handle")
+}
+
+/// The BASENAME of the buffer `Snapshot.win_buffers` reports for the nvim WINDOW
+/// handle `win`, or `None` when the window is absent from the map (or is present
+/// holding an UNNAMED buffer, which `WinBuffer.path` reports as `None`).
+///
+/// A tail rather than the whole path on purpose: the assertions built on it say
+/// WHICH window carries WHICH file, and the containing temp directory's absolute
+/// prefix differs per run and per platform (macOS `/var` and `/tmp` are symlinks).
+/// The full canonical-path claim is made exactly once, against `Snapshot.buffers`,
+/// where the canonical form is the documented contract.
+///
+/// The two absent cases collapse to one `None` deliberately: neither is a legal
+/// answer anywhere this is used, and the assertion messages name the map's whole
+/// key set, which is what distinguishes them.
+fn win_buffer_tail(snap: &Snapshot, win: i64) -> Option<String> {
+    snap.win_buffers
+        .get(&win)?
+        .path
+        .as_deref()
+        .and_then(|p| p.file_name())
+        .and_then(|f| f.to_str())
+        .map(str::to_owned)
 }
 
 /// Types an Ex command `:<cmd><CR>` one key at a time. Used here for `:vsplit` and
@@ -901,4 +944,250 @@ fn a_second_tabpage_draws_no_neovim_tabline() {
     );
 
     core.shutdown().expect("shutdown should be Ok");
+}
+
+/// 10. **The window-keyed buffer maps are GLOBAL across tabpages**, while
+///     `Snapshot.windows` is per-CURRENT-tabpage. Open `a.md` on T1, `b.md` on a
+///     fresh T2, and read one snapshot from each side of a switch.
+///
+/// ## What this measures, and what rests on it
+///
+/// `Snapshot.win_buffers` and `Snapshot.buffers` are both keyed by the nvim WINDOW
+/// handle (`WinInfo.win`), and both are filled from ONE `wolf_buffers` payload whose
+/// producer — `wolf_setup_buffer_tracking`'s `emit_now` in `runtime/nvim/init.lua` —
+/// sweeps `nvim_list_wins()`. That call is global across tabpages, so the maps
+/// describe every window of the whole INSTANCE rather than the current tabpage's.
+/// `Snapshot.windows` is the opposite: nvim emits `win_hide` for the leaving
+/// tabpage's windows and the redraw fold REMOVES them (test 7 pins exactly that), so
+/// it holds the current tabpage alone.
+///
+/// That is a PREMISE about Neovim plus the captive `init.lua`, not a property of any
+/// Rust type, which is why it is measured against a real nvim rather than reasoned
+/// about. Per-tab persistence resolves each pane's saved content by looking that
+/// pane's own window handle up in these maps, INCLUDING for a tab the user is not
+/// looking at. If that lookup cannot answer, a background tab's leaf path is
+/// reachable only by an RPC into another tabpage, and the design has to fall back to
+/// caching each tab's last-known-good subtree — correct until a `:tabdo`, a plugin or
+/// a buffer switch changes a background tab's files, after which it silently persists
+/// an answer that was true minutes ago.
+///
+/// `crates/wolf-core/src/redraw.rs`'s `win_close` comment asserts the OPPOSITE ("a
+/// window in a non-current tabpage is absent from both maps by construction"). One of
+/// the two is wrong; this test is what says which.
+///
+/// ## Assertions, classified
+///
+/// | # | assertion | kind | falsifying edit |
+/// | --- | --- | --- | --- |
+/// | 1 | `win_buffers[w1]` names the T1 fixture while T2 is current | **discriminator** — a BACKGROUND tabpage's window is in the map | `nvim_tabpage_list_wins(0)` for `nvim_list_wins()` in `emit_now` |
+/// | 2 | `win_buffers[w2]` names the T2 fixture | premise — a map FROZEN after T1's open would satisfy assertion 1 while describing nothing live | none |
+/// | 3 | `buffers[w1]` is the canonical T1 fixture path | the legacy map, which `pane_status` joins through, is keyed and scoped identically | the same edit; assertion 1 reddens first |
+/// | 4 | `windows` holds `w2` ALONE | **control** — without it assertions 1-3 are green on a build where nothing is tabpage-scoped, including one where the switch never happened | none |
+/// | 5 | `win_buffers`' key set is exactly `{w1, w2}` | the "every window of the instance" half, and the no-accumulation half | none for a MISSING key (assertion 1 owns it); an emit that MERGED rather than wholesale-replaced, for an EXTRA one |
+/// | 6-8 | the same three, mirrored after switching back to T1 | assertion 6 is the discriminator in the direction the gather reads most often (`w2` is the background window) | the same edit as assertion 1 |
+///
+/// Assertion ORDER is deliberate: the discriminator is stated before its premise and
+/// its control, because the one falsifying edit that exists reddens assertion 1 and
+/// leaves 2, 4 and 5 untouched — so the red a future revert produces is the finding
+/// itself, carrying the map's whole key set in its message. This follows the ordering
+/// argument recorded on test 9.
+///
+/// ## Fixtures
+///
+/// The two files are necessarily named after what is asserted, because the assertion
+/// IS a path. What makes each one discriminating is therefore the KEY and not the
+/// name: every lookup goes through a specific window handle, never a search of the
+/// map for a filename, so a build that answered the T1 fixture for the wrong window
+/// fails here.
+#[test]
+fn per_window_buffers_are_global_across_tabpages() {
+    let (core, waiter) = common::start_core_sized(common::DEFAULT_COLS, common::DEFAULT_ROWS);
+    let t1 = attach_and_first_tabpage(&core, &waiter);
+    let w1 = only_window_handle(&core);
+
+    let dir = tempfile::tempdir().expect("failed to create temp dir for the two fixtures");
+    let a_md = dir.path().join(T1_FILE);
+    let b_md = dir.path().join(T2_FILE);
+    std::fs::write(&a_md, "# first\n").expect("write the T1 fixture");
+    std::fs::write(&b_md, "# second\n").expect("write the T2 fixture");
+    let canon_a = canon(&a_md);
+
+    // --- T1: open the first fixture into w1, the startup window -----------
+    core.send_input(InputEvent::Open { path: a_md.clone() });
+    poll_until(
+        &waiter,
+        "win_buffers[w1] to report the T1 fixture while T1 is still current",
+        || win_buffer_tail(&core.read_snapshot(), w1).as_deref() == Some(T1_FILE),
+    );
+
+    // --- T2: a fresh tabpage, its own window, its own fixture -------------
+    let t2 = core.create_tabpage(None);
+    assert_ne!(t2, 0, "create_tabpage should return a nonzero handle");
+    poll_until(
+        &waiter,
+        "current_tabpage to become T2 with its own (fresh) window present",
+        || {
+            let snap = core.read_snapshot();
+            snap.current_tabpage == t2
+                && !snap.windows.is_empty()
+                && !window_handles(&snap).contains(&w1)
+        },
+    );
+    let w2 = only_window_handle(&core);
+    assert_ne!(
+        w2, w1,
+        "T2's window handle must differ from T1's, or every lookup below is ambiguous"
+    );
+
+    core.send_input(InputEvent::Open { path: b_md.clone() });
+    poll_until(
+        &waiter,
+        "win_buffers[w2] to report the T2 fixture while T2 is current",
+        || win_buffer_tail(&core.read_snapshot(), w2).as_deref() == Some(T2_FILE),
+    );
+
+    // Everything below comes from ONE snapshot read, so the two maps' disagreement
+    // about scope describes a single instant rather than two.
+    let snap = core.read_snapshot();
+    let keys: HashSet<i64> = snap.win_buffers.keys().copied().collect();
+    let tail_1 = win_buffer_tail(&snap, w1);
+    let tail_2 = win_buffer_tail(&snap, w2);
+    let live = window_handles(&snap);
+    let legacy_1 = snap.buffers.get(&w1).cloned();
+    drop(snap);
+
+    // --- Assertion 1 (THE DISCRIMINATOR) ----------------------------------
+    assert_eq!(
+        tail_1.as_deref(),
+        Some(T1_FILE),
+        "Snapshot.win_buffers answered {tail_1:?} for T1's window {w1} while T2 ({w2}) is the \
+         current tabpage; expected {T1_FILE:?}. The map's live keys are {keys:?}. The window-keyed \
+         buffer maps are therefore NOT global across tabpages — they describe the current tabpage \
+         alone, exactly like Snapshot.windows. The consequences, in order: a background tab's leaf \
+         buffer path is not resolvable from a snapshot at all, so it cannot be resolved without an \
+         RPC into another tabpage; per-tab persistence must fall back to caching each tab's \
+         last-known-good subtree, which goes stale the moment a `:tabdo`, a plugin or a buffer \
+         switch changes a background tab's files, with nothing able to tell the user; and \
+         `crates/wolf-core/src/redraw.rs`'s `win_close` comment (\"a window in a non-current \
+         tabpage is absent from both maps by construction\") turns out to be the accurate one. \
+         This is a MEASUREMENT of the pinned Neovim plus `runtime/nvim/init.lua`, whose \
+         `wolf_setup_buffer_tracking` sweeps `nvim_list_wins()` (global) rather than \
+         `nvim_tabpage_list_wins(0)` (current tabpage) — so never relax this assertion to match a \
+         build. If it is red, STOP and report."
+    );
+
+    // --- Assertion 2 (PREMISE): the map tracks the LIVE window set --------
+    assert_eq!(
+        tail_2.as_deref(),
+        Some(T2_FILE),
+        "Snapshot.win_buffers answered {tail_2:?} for T2's window {w2}, the window on the CURRENT \
+         tabpage; expected {T2_FILE:?} (live keys {keys:?}). This is a premise for the assertion \
+         above rather than a claim about tabpages: a `win_buffers` that stopped being replaced \
+         after T1's open — frozen, or swept once and never again — would still carry {T1_FILE:?} \
+         for {w1} and satisfy assertion 1 while describing nothing live at all. Read this red as \
+         \"assertion 1 cannot be trusted this run\", and look at the wholesale replacement in \
+         `crates/wolf-core/src/render.rs` before looking at tabpages."
+    );
+
+    // --- Assertion 3: the legacy map is scoped identically ----------------
+    assert_eq!(
+        legacy_1.as_deref(),
+        Some(canon_a.as_path()),
+        "Snapshot.buffers answered {legacy_1:?} for T1's window {w1} while T2 is current; expected \
+         the canonical {canon_a:?}. `buffers` is the map `WolfCore::pane_status` joins a grid \
+         through, and it is filled from the SAME `wolf_buffers` payload as `win_buffers` — whose \
+         entry for {w1} assertion 1 already found — so a failure here is about the fold in \
+         `crates/wolf-core/src/render.rs` splitting one payload into two maps, not about \
+         `init.lua`'s sweep. A DIFFERENT path, rather than an absent entry, means T1's window is \
+         showing something other than the fixture this test opened into it, in which case nothing \
+         above is about tabpages either."
+    );
+
+    // --- Assertion 4 (THE CONTROL) ----------------------------------------
+    let want_live: HashSet<i64> = [w2].into_iter().collect();
+    assert_eq!(
+        live, want_live,
+        "Snapshot.windows holds {live:?} while T2 is current; expected T2's window {w2} ALONE, and \
+         in particular NOT T1's {w1}. This is the CONTROL for the three assertions above and not a \
+         claim of its own: `windows` is per-current-tabpage because nvim emits `win_hide` for the \
+         leaving tabpage's windows and the redraw fold removes them (pinned by \
+         `win_hide_removes_window_but_keeps_grid_on_tabpage_switch`). Its holding {w2} alone is \
+         what makes \"win_buffers still holds {w1}\" a statement about tabpage SCOPE. If `windows` \
+         also carried {w1}, every assertion above would be green on a build where nothing is \
+         tabpage-scoped at all — including one where the switch to T2 never actually took effect. \
+         Read this red as \"assertions 1-3 cannot be trusted this run\"."
+    );
+
+    // --- Assertion 5: every window of the INSTANCE, and no more -----------
+    let want_keys: HashSet<i64> = [w1, w2].into_iter().collect();
+    assert_eq!(
+        keys, want_keys,
+        "Snapshot.win_buffers holds the keys {keys:?}; expected exactly T1's window {w1} and T2's \
+         {w2}, i.e. {TWO_WINDOWS_ACROSS_TWO_TABPAGES} entries for the \
+         {TWO_WINDOWS_ACROSS_TWO_TABPAGES} windows this nvim has, one per tabpage. The two \
+         directions read differently. A key MISSING is the tabpage-scoped sweep assertion 1 names, \
+         and reddens there first. An EXTRA key is what this assertion exists for: the map is \
+         wholesale-replaced per emit, so a key that is neither of these two means either the emit \
+         is ACCUMULATING across sweeps — in which case a background tab's path stays readable but \
+         goes STALE, the precise property the design chooses these maps over a per-tab cache to \
+         avoid — or this nvim holds a window that neither this test nor `init.lua`'s preview-skip \
+         accounts for."
+    );
+
+    // --- The mirror: switch back to T1, so w2 is the BACKGROUND window ----
+    core.set_current_tabpage(t1);
+    poll_until(
+        &waiter,
+        "current_tabpage to return to T1 with T2's window hidden",
+        || {
+            let snap = core.read_snapshot();
+            snap.current_tabpage == t1 && !window_handles(&snap).contains(&w2)
+        },
+    );
+
+    let snap = core.read_snapshot();
+    let keys_back: HashSet<i64> = snap.win_buffers.keys().copied().collect();
+    let tail_1_back = win_buffer_tail(&snap, w1);
+    let tail_2_back = win_buffer_tail(&snap, w2);
+    let live_back = window_handles(&snap);
+    drop(snap);
+
+    // --- Assertion 6 (THE MIRROR DISCRIMINATOR) ---------------------------
+    assert_eq!(
+        tail_2_back.as_deref(),
+        Some(T2_FILE),
+        "after switching back to T1, Snapshot.win_buffers answered {tail_2_back:?} for T2's window \
+         {w2} — now a BACKGROUND tabpage's window — where {T2_FILE:?} was expected (live keys \
+         {keys_back:?}). This is assertion 1 in the direction per-tab persistence reads most \
+         often: the tab the user has just left, gathered while another tab is on screen. A red \
+         here with assertion 1 GREEN is the more interesting pairing of the two, because it says \
+         the map is global only for windows swept BEFORE the switch — an entry survives being \
+         backgrounded but a re-sweep drops it, so what a gather answers would depend on when it \
+         ran. Either way the fallback is the same: a per-tab last-known-good cache, stale under \
+         `:tabdo`."
+    );
+
+    // --- Assertion 7 (PREMISE): the newly-current window still reports ----
+    assert_eq!(
+        tail_1_back.as_deref(),
+        Some(T1_FILE),
+        "after switching back to T1, Snapshot.win_buffers answered {tail_1_back:?} for T1's own \
+         window {w1}, which is CURRENT again; expected {T1_FILE:?} (live keys {keys_back:?}). Like \
+         assertion 2 this is a liveness premise rather than a tabpage claim — a map frozen at the \
+         instant of the switch would satisfy assertion 6 by accident — so read this red as \
+         \"assertion 6 cannot be trusted this run\"."
+    );
+
+    // --- Assertion 8 (THE MIRROR CONTROL) ---------------------------------
+    let want_live_back: HashSet<i64> = [w1].into_iter().collect();
+    assert_eq!(
+        live_back, want_live_back,
+        "after switching back to T1, Snapshot.windows holds {live_back:?}; expected T1's window \
+         {w1} ALONE, and in particular NOT T2's {w2}. The mirror of assertion 4, with the same \
+         reading: it is what makes assertion 6 a statement about scope rather than about a switch \
+         that never took effect. Read this red as \"assertion 6 cannot be trusted this run\"."
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
+    drop(dir);
 }

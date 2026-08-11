@@ -22,6 +22,15 @@
 //! on [`leaf_count`]** — it exists solely to check the handle count
 //! `wolf_core::WolfCore::rebuild_layout` returns.
 //!
+//! ## The all-or-nothing resolution rule
+//!
+//! [`resolve_leaves`] sits one step ahead of [`encode`] and answers the other
+//! half of the same question: an empty PATH is a resolved answer (a genuinely
+//! unnamed buffer), while an absent WINDOW is not, so a single unresolvable leaf
+//! refuses the whole tab's gather rather than being written as `""`. That refusal
+//! is what makes the silent-loss shape — a well-formed multi-leaf tree whose paths
+//! are all empty, which [`is_empty_leaf`] never suppresses — unreachable.
+//!
 //! ## Orientation, in one place
 //!
 //! [`crate::layout::Orientation::Vertical`] ↔ [`PaneOrientation::Vertical`] (side
@@ -64,13 +73,95 @@ pub struct LeafContent {
     pub preview: bool,
 }
 
+/// What ONE leaf's Neovim window resolves to in the live snapshot.
+///
+/// The input half of [`resolve_leaves`], and the reason a background tab's gather
+/// is trustworthy: every variant is read from a map that is GLOBAL across
+/// tabpages, keyed by the pane's own `PaneWidgets::win`, so a tab Neovim is not
+/// currently on answers exactly what a foreground one would.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WinContent {
+    /// The window is a Markdown PREVIEW of the carried source path
+    /// (`Snapshot::previews[win]`).
+    Preview(String),
+    /// The window holds an ordinary buffer at the carried path
+    /// (`Snapshot::win_buffers[win]`), `""` for a genuinely unnamed one.
+    Buffer(String),
+    /// The window is in NEITHER map, or the leaf has no live pane at all.
+    Unknown,
+}
+
+/// One tab's gather answer, as [`crate::pane_view::PaneHandle::layout_snapshot`]
+/// reports it.
+///
+/// Two refusals with different meanings would be one `Option` too few:
+/// [`LayoutGather::Ready`]`(None)` is [`crate::state_seam::persistable_layout`]'s
+/// CONTENT suppression, a real answer that says "this tab holds an empty-state lone
+/// pane"; [`LayoutGather::Refuse`] says the tab could not be read at all and its
+/// caller must contribute the CACHE.
+#[derive(Clone, Debug, PartialEq)]
+pub enum LayoutGather {
+    /// The tab was read. The payload is [`crate::state_seam::persistable_layout`]'s
+    /// answer, so `None` is content suppression rather than failure.
+    Ready(Option<PaneNode>),
+    /// At least one leaf was unresolvable, so the whole tab's gather is refused and
+    /// the caller contributes its last good subtree instead.
+    Refuse,
+}
+
+/// Resolves every leaf's [`WinContent`] into the [`LeafContent`] [`encode`] reads,
+/// or `None` if ANY leaf is unresolvable.
+///
+/// Pure, and the whole of the all-or-nothing rule:
+///
+/// - [`WinContent::Preview`]`(p)` → `{path: p, preview: true}`;
+/// - [`WinContent::Buffer`]`(p)` → `{path: p, preview: false}`;
+/// - **any** [`WinContent::Unknown`] collapses the WHOLE answer to `None`.
+///
+/// **An empty path is a RESOLVED answer and an absent window is not.** A `""` from
+/// the buffer arm is a real unnamed buffer — `:enew`, the empty-state pane — and
+/// refusing on it would stop persisting every tab holding a scratch buffer.
+/// Mapping the absent window onto that same `""` is the opposite error and a far
+/// worse one: it is the exact shape that writes a well-formed `state.json` over the
+/// user's files, because [`is_empty_leaf`] suppresses only a LONE empty leaf, so a
+/// multi-leaf tree of empty leaves is persisted verbatim and read back on the next
+/// launch as a genuine topology of blank panes. No arity guard anywhere can catch
+/// that; the refusal here, at the only point where "empty" and "absent" are still
+/// distinguishable, is what makes it unreachable.
+///
+/// An empty `leaves` slice resolves to an empty map: nothing is unresolvable, so
+/// there is nothing to refuse. [`encode`] then answers its missing-id fallback for
+/// every leaf, which the caller's own suppression rule handles as before.
+#[must_use]
+pub fn resolve_leaves(leaves: &[(PaneId, WinContent)]) -> Option<HashMap<PaneId, LeafContent>> {
+    leaves
+        .iter()
+        .map(|(id, content)| {
+            let content = match content {
+                WinContent::Preview(path) => LeafContent {
+                    path: path.clone(),
+                    preview: true,
+                },
+                WinContent::Buffer(path) => LeafContent {
+                    path: path.clone(),
+                    preview: false,
+                },
+                WinContent::Unknown => return None,
+            };
+            Some((*id, content))
+        })
+        .collect()
+}
+
 /// Maps a live [`PaneLayout`] (leaf IDs) into a persistable [`PaneNode`] (leaf
 /// PATHS), looking each leaf id up in `contents`.
 ///
 /// A leaf id MISSING from `contents` becomes `Leaf { path: "", preview: false }`
 /// (macOS parity: an unbound or unnamed pane persists as an empty leaf) rather than
 /// being dropped, because dropping it would change the topology and desynchronise
-/// the DFS zip the restore path depends on.
+/// the DFS zip the restore path depends on. That fallback is DEFENSIVE: the gather
+/// path builds `contents` from [`resolve_leaves`], which answers one entry per leaf
+/// or refuses outright, so a missing id cannot reach here from it.
 ///
 /// Weights and orientation are copied VERBATIM.
 #[must_use]
@@ -455,6 +546,323 @@ mod tests {
              preview: false }}`. `LeafContent::default()` is that value, which is why the lookup \
              needs no second branch — but a missing id that came back as a PREVIEW leaf would \
              survive `is_empty_leaf` and persist an empty pane the restore path then rebuilds."
+        );
+    }
+
+    // =====================================================================
+    // resolve_leaves — the ALL-OR-NOTHING rule the whole gather rests on
+    // =====================================================================
+
+    /// One [`resolve_leaves`] table row.
+    ///
+    /// `want` is an association LIST so a row can be written without building a
+    /// `HashMap` at the site; the comparison itself is against a MAP built from it,
+    /// which is what puts the KEYS inside the expectation — a seam that resolved the
+    /// right contents under the wrong pane ids would paint each pane with another
+    /// pane's file after a restore.
+    struct ResolveCase {
+        desc: &'static str,
+        leaves: Vec<(PaneId, WinContent)>,
+        want: Option<Vec<(PaneId, LeafContent)>>,
+    }
+
+    /// The variant NAME of one leaf's answer, matched TOTALLY with no `_` arm.
+    ///
+    /// A new [`WinContent`] variant is an `E0004` here rather than an input the table
+    /// below silently stops covering — the `may_snapshot_table` / `new_tab_press`
+    /// convention, applied to an enum this module owns.
+    fn win_content_kind(content: &WinContent) -> &'static str {
+        match content {
+            WinContent::Preview(_) => "Preview",
+            WinContent::Buffer(_) => "Buffer",
+            WinContent::Unknown => "Unknown",
+        }
+    }
+
+    /// Every shape [`resolve_leaves`] is total over, as LITERALS.
+    ///
+    /// Deliberately not derived from the enum (Rust offers no such derivation) and
+    /// deliberately not derived from the table, which would make the coverage sweep a
+    /// tautology: a table that lost its `Unknown` rows would shrink both sides
+    /// together. [`win_content_kind`]'s total match is what ties these strings back to
+    /// the enum.
+    const ALL_WIN_CONTENT_KINDS: [&str; 3] = ["Preview", "Buffer", "Unknown"];
+
+    /// A leaf whose Neovim window resolves to an ordinary editable buffer at `path`.
+    fn buffer_win(path: &str) -> WinContent {
+        WinContent::Buffer(path.to_string())
+    }
+
+    /// A leaf whose Neovim window resolves to a Markdown PREVIEW of `path`.
+    fn preview_win(path: &str) -> WinContent {
+        WinContent::Preview(path.to_string())
+    }
+
+    /// The association list a row expects, as the map [`resolve_leaves`] returns.
+    fn contents_map(entries: &[(PaneId, LeafContent)]) -> HashMap<PaneId, LeafContent> {
+        entries.iter().cloned().collect()
+    }
+
+    /// The rows of the resolution rule, in one place so the coverage sweep in
+    /// [`resolve_leaves_table`] can walk the same data the assertions do.
+    fn resolve_cases() -> Vec<ResolveCase> {
+        vec![
+            ResolveCase {
+                // THE ROW T1 EXISTS FOR. Two leaves, two DIFFERENT kinds, two
+                // DIFFERENT paths: one comparison discriminates the preview flag, the
+                // per-id mapping and the path pass-through at once.
+                desc: "a preview leaf and a buffer leaf resolve side by side, each keeping its \
+                       OWN path and its own preview flag",
+                leaves: vec![(P0, preview_win(PATH_A)), (P1, buffer_win(PATH_B))],
+                want: Some(vec![(P0, preview_pane(PATH_A)), (P1, editor_pane(PATH_B))]),
+            },
+            ResolveCase {
+                // Two leaves of the SAME kind with different paths. Without this, a
+                // seam that answered `leaves[0]`'s content for every id would still
+                // fail the row above only because the two kinds differ, and the
+                // failure would read as a preview-flag bug.
+                desc: "two buffer leaves keep their own paths — each id is resolved from its own \
+                       window, never from the first leaf's",
+                leaves: vec![(P0, buffer_win(PATH_A)), (P1, buffer_win(PATH_B))],
+                want: Some(vec![(P0, editor_pane(PATH_A)), (P1, editor_pane(PATH_B))]),
+            },
+            ResolveCase {
+                // T3's row. An UNNAMED buffer is a resolved answer, not an absent one.
+                desc: "an unnamed buffer resolves to an EMPTY path beside a named leaf, rather \
+                       than refusing",
+                leaves: vec![(P0, buffer_win("")), (P1, buffer_win(PATH_B))],
+                want: Some(vec![(P0, editor_pane("")), (P1, editor_pane(PATH_B))]),
+            },
+            ResolveCase {
+                // The preview arm's twin of the row above, and the only place the
+                // empty-path rule is stated for a PREVIEW. `is_empty_leaf` reads the
+                // flag as well as the path, so an empty-sourced preview is still
+                // persistable state.
+                desc: "a preview whose source path is empty resolves too, and keeps `preview: \
+                       true`",
+                leaves: vec![(P0, preview_win("")), (P1, buffer_win(PATH_B))],
+                want: Some(vec![(P0, preview_pane("")), (P1, editor_pane(PATH_B))]),
+            },
+            ResolveCase {
+                // T2's row, and the keystone of the whole design.
+                desc: "ONE Unknown among two resolved leaves refuses the WHOLE gather",
+                leaves: vec![
+                    (P0, buffer_win(PATH_A)),
+                    (P1, WinContent::Unknown),
+                    (P2, buffer_win(PATH_C)),
+                ],
+                want: None,
+            },
+            ResolveCase {
+                desc: "an Unknown beside a PREVIEW refuses too — the refusal is a property of the \
+                       unresolvable leaf, not of what the others hold",
+                leaves: vec![(P0, preview_win(PATH_A)), (P1, WinContent::Unknown)],
+                want: None,
+            },
+            ResolveCase {
+                desc: "an Unknown ALONE refuses: a one-pane tab whose window is in neither map is \
+                       exactly the shape a naive gather would write as an empty leaf",
+                leaves: vec![(P0, WinContent::Unknown)],
+                want: None,
+            },
+        ]
+    }
+
+    /// Every leaf's content is carried onto its own [`LeafContent`], and any
+    /// unresolvable leaf collapses the whole answer.
+    ///
+    /// FALSIFYING EDIT 1 — swap the two resolved arms' `preview` flag. Rows 1 and 4
+    /// fail: a preview pane would persist as an ordinary editor leaf, so the next
+    /// launch `:edit`s the source file into what was a preview, and an unnamed
+    /// preview leaf starts being suppressed by `is_empty_leaf` — the one thing that
+    /// predicate exists not to do.
+    ///
+    /// FALSIFYING EDIT 2 — route `Preview(p)` through the buffer arm. Same rows, same
+    /// cost.
+    ///
+    /// FALSIFYING EDIT 3 — map `Unknown` to `LeafContent::default()`. The three
+    /// refusal rows fail; [`an_unresolved_leaf_refuses_the_whole_gather`] is where
+    /// that cost is spelled out.
+    #[test]
+    fn resolve_leaves_table() {
+        let cases = resolve_cases();
+
+        for case in &cases {
+            let got = resolve_leaves(&case.leaves);
+            let want = case.want.as_deref().map(contents_map);
+            assert_eq!(
+                got, want,
+                "case: {} — resolve_leaves({:?}) must be {want:?}, got {got:?}. Each wrong answer \
+                 is its own data loss. A leaf carrying ANOTHER leaf's path binds the wrong file to \
+                 the wrong pane on the next launch. A lost `preview: true` reopens the source in \
+                 an editor pane and makes an unnamed preview leaf suppressible. A `Some` where a \
+                 `None` is due is the silent-loss shape this seam exists to make unreachable — see \
+                 `an_unresolved_leaf_refuses_the_whole_gather`. A `None` where a `Some` is due \
+                 refuses every gather, so the tab contributes only its cache and the user's edits \
+                 stop being persisted at all.",
+                case.desc, case.leaves
+            );
+        }
+
+        // --- The table really covers the domain -------------------------------
+        //
+        // Every WinContent shape must appear as an INPUT somewhere, or an arm of the
+        // seam is whatever it happens to be. The kinds are literals crossed against
+        // `win_content_kind`'s total match, so a new variant is a compile error there
+        // and a missing row is a failure here.
+        for kind in ALL_WIN_CONTENT_KINDS {
+            assert!(
+                cases.iter().any(|case| case
+                    .leaves
+                    .iter()
+                    .any(|(_, content)| win_content_kind(content) == kind)),
+                "no resolve_leaves row carries a {kind} leaf, so that arm's answer is untested. \
+                 Every one of the three is reachable from a real snapshot: a converted pane is a \
+                 Preview, an ordinary pane is a Buffer, and a pane whose Neovim window is in \
+                 neither `previews` nor `win_buffers` is Unknown."
+            );
+        }
+
+        // --- Non-vacuity, in both directions ----------------------------------
+        assert!(
+            cases.iter().any(|case| case.want.is_some()),
+            "no resolve_leaves row expects a resolved map, so a seam that answered None for \
+             everything would satisfy every row above while NO tab ever gathered a layout again — \
+             every window would persist only its cache, forever."
+        );
+        assert!(
+            cases.iter().any(|case| case.want.is_none()),
+            "no resolve_leaves row expects a refusal, so the all-or-nothing rule is unstated and a \
+             seam that resolved everything would pass. That seam is the one that writes a \
+             well-formed `state.json` whose leaf paths are all empty."
+        );
+    }
+
+    /// **THE KEYSTONE.** One leaf whose Neovim window is in neither snapshot map
+    /// refuses the WHOLE tab's gather, and an unnamed buffer beside it does not.
+    ///
+    /// The pair is the point. `""` and "absent" are the two answers a naive gather
+    /// cannot tell apart, and mapping the second onto the first is precisely what
+    /// writes a well-formed layout over the user's files: `is_empty_leaf` suppresses
+    /// only a LONE empty leaf, so a multi-leaf tree of empty leaves is persisted
+    /// verbatim, `load_state` reads it back as a real topology, and the next launch
+    /// rebuilds a tab of blank panes where the files were. Nothing on screen says so
+    /// and no arity guard can catch it — which is why the refusal lives here, at the
+    /// only point where the difference is still visible.
+    ///
+    /// FALSIFYING EDIT: in [`resolve_leaves`], map `WinContent::Unknown` to
+    /// `LeafContent { path: String::new(), preview: false }` instead of collapsing to
+    /// `None`.
+    #[test]
+    fn an_unresolved_leaf_refuses_the_whole_gather() {
+        let with_unknown = [
+            (P0, buffer_win(PATH_A)),
+            (P1, WinContent::Unknown),
+            (P2, buffer_win(PATH_C)),
+        ];
+        let got = resolve_leaves(&with_unknown);
+        assert_eq!(
+            got, None,
+            "one leaf whose window is in NEITHER `Snapshot::previews` nor \
+             `Snapshot::win_buffers` must refuse the whole tab's gather, got {got:?}. The `Some` \
+             here is the SILENT-LOSS SHAPE: two real files and one `\"\"`, encoded into a \
+             well-formed `PaneNode::Split` that `is_empty_leaf` never suppresses (it suppresses \
+             only a LONE empty leaf), committed over the saved tree, and read back on the next \
+             launch as a genuine three-pane topology with one pane blank. There is no arity guard \
+             anywhere that could catch it and nothing on screen that could report it. The refusal \
+             means `contribute the CACHE`, which is last-known-good rather than wrong."
+        );
+
+        // The discriminating negative, and the reason the whole design is buildable:
+        // the refusal is about the ABSENT window, never about the empty PATH. Same
+        // leaves, same ids, `Unknown` swapped for a genuinely unnamed buffer.
+        let with_unnamed = [
+            (P0, buffer_win(PATH_A)),
+            (P1, buffer_win("")),
+            (P2, buffer_win(PATH_C)),
+        ];
+        let resolved = resolve_leaves(&with_unnamed);
+        assert_eq!(
+            resolved,
+            Some(contents_map(&[
+                (P0, editor_pane(PATH_A)),
+                (P1, editor_pane("")),
+                (P2, editor_pane(PATH_C)),
+            ])),
+            "the SAME three leaves with the unresolvable one replaced by a genuinely UNNAMED \
+             buffer must RESOLVE, got {resolved:?}. Without this the refusal above is satisfied by \
+             a seam that refuses whenever any path is empty — which would refuse every gather of \
+             every tab holding an unnamed buffer, so a user who opened a scratch buffer beside a \
+             file would silently stop persisting that tab. An empty path is an ANSWER; an absent \
+             window is not."
+        );
+
+        // A lone Unknown refuses too, stated separately because it is the ONE shape
+        // where the wrong answer looks harmless: a single empty leaf IS suppressed by
+        // `is_empty_leaf`, so the tab would persist `layout: None` and simply forget
+        // its file rather than persisting a visible blank.
+        let alone = [(P0, WinContent::Unknown)];
+        assert_eq!(
+            resolve_leaves(&alone),
+            None,
+            "a LONE unresolvable leaf must refuse as well. Mapped to an empty leaf it would take \
+             the other route to the same loss: `persistable_layout` suppresses a lone empty \
+             non-preview leaf, so the tab would persist `layout: None`, and a tab's open buffer \
+             paths ride ONLY inside `TabState::layout` — the file would not be reopened at all. \
+             That is the macOS single-pane bug arriving by a new road."
+        );
+    }
+
+    /// An unnamed buffer is a RESOLVED answer whose path is `""`.
+    ///
+    /// The positive half of the rule above, on the smallest input there is, so a
+    /// failure names the confusion directly rather than through a three-leaf fixture.
+    ///
+    /// FALSIFYING EDIT: treat an empty path as [`WinContent::Unknown`] — i.e. refuse
+    /// when `path.is_empty()`.
+    #[test]
+    fn an_unnamed_buffer_resolves_rather_than_refusing() {
+        let Some(contents) = resolve_leaves(&[(P0, WinContent::Buffer(String::new()))]) else {
+            panic!(
+                "resolve_leaves REFUSED a single unnamed buffer. A `[No Name]` buffer is a real \
+                 thing a user opens — the empty-state pane is one, and so is every `:enew` — so a \
+                 seam that treats `\"\"` as unresolvable refuses the gather for the whole tab \
+                 holding it, and that tab silently stops persisting anything but its cache. The \
+                 refusal exists for a window that is in NEITHER snapshot map, which is a different \
+                 fact about a different thing."
+            );
+        };
+
+        let content = contents.get(&P0).unwrap_or_else(|| {
+            panic!(
+                "resolve_leaves resolved, but produced no entry for pane {P0} — the only id it was \
+                 given. `encode` looks each leaf id up in this map and turns a MISSING id into \
+                 `Leaf {{ path: \"\", preview: false }}`, so a dropped key reaches the same empty \
+                 leaf by a route no assertion downstream can distinguish. Map was {contents:?}"
+            )
+        });
+        assert_eq!(
+            content,
+            &LeafContent {
+                path: String::new(),
+                preview: false,
+            },
+            "an unnamed buffer must resolve to an EMPTY, non-preview leaf — the value \
+             `is_empty_leaf` suppresses when it is alone, which is the pre-existing empty-state \
+             invariant. A `preview: true` here would make the empty-state pane persist as a \
+             preview leaf that `persistable_layout` no longer suppresses, so every project-less \
+             launch would start writing a layout it never had."
+        );
+
+        // Non-vacuity: the assertions above are satisfied by a seam that answers the
+        // empty leaf for EVERYTHING, which is falsifying edit 3 of `resolve_leaves_table`
+        // wearing a different hat.
+        assert_eq!(
+            resolve_leaves(&[(P0, WinContent::Buffer(PATH_A.to_string()))]),
+            Some(contents_map(&[(P0, editor_pane(PATH_A))])),
+            "a NAMED buffer must resolve to its own path. Without this the empty-path assertions \
+             above would hold for a seam that wrote `LeafContent::default()` for every leaf — the \
+             exact silent-loss shape, passing a test written to forbid it."
         );
     }
 

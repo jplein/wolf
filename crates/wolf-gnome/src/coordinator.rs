@@ -35,11 +35,17 @@
 //!
 //! ## The state protocol
 //!
-//! Each window CONTRIBUTES a `WindowState` subtree
-//! ([`crate::persistence::StateHandle::refresh_subtree`]) and the coordinator
-//! assembles the tree and commits it. A window whose
-//! [`crate::state_seam::may_snapshot`] gate is shut contributes the subtree it
-//! last cached rather than vanishing from the tree, and a contribution set that
+//! Each window CONTRIBUTES a `WindowState` subtree assembled from its own tabs'
+//! contributions ([`crate::persistence::StateHandle::refresh_tab`], gathered per
+//! tab), and the coordinator assembles the tree and commits it.
+//!
+//! **"An empty contribution set commits nothing" holds at TWO levels**, and
+//! for the same reason at each. A tab whose [`crate::state_seam::may_snapshot`]
+//! gate is shut — or whose leaves would not resolve — contributes what it last
+//! cached rather than vanishing; a window none of whose tabs contributed
+//! contributes nothing at all rather than a `tabs: []` window, which restore reads
+//! back as the empty state
+//! ([`crate::state_seam::window_subtree`]); and a contribution set of windows that
 //! is empty commits NOTHING — see [`crate::state_seam::snapshot_state`], whose
 //! `None` is what stops a launch that never bound a pane from overwriting a good
 //! save with an empty file.

@@ -902,11 +902,16 @@ impl AppShell {
         self.apply_sidebar_visibility();
         // The WIDGET is per window (see `window::build` on why the sidebar stays
         // outside the tab view), but the persisted preference is per tab, so every
-        // tab records it — including the ones that are not selected, whose subtree
-        // this unit does not write.
+        // tab records it — including the ones that are not selected, each of which
+        // writes its own subtree.
         for tab in self.inner.tabs.entries() {
             tab.set_sidebar_shown(shown);
         }
+        // ...and the tabs a launch has QUEUED but not yet created, which `entries`
+        // does not reach. Theirs is the same preference twice over: the seed each
+        // contributes until it has a page, and the value its own persistence is
+        // opened with when it gets one.
+        self.inner.tabs.set_pending_sidebar_shown(shown);
     }
 
     /// Yanks the focused Neovim's visual-mode selection and writes it to the
@@ -1768,16 +1773,13 @@ impl AppShell {
                 // `:tcd` was deliberately skipped: `state_seam::snapshot_cwd`
                 // answers `""` for an empty-state window regardless of it.
                 let seed = cwd.unwrap_or_else(|| self.inner.launch_cwd.clone());
-                if !self.inner.tabs.open_tab(
-                    &self.inner.window,
-                    TabParts {
-                        tabpage,
-                        cwd: seed,
-                        empty,
-                        sidebar_shown: self.inner.sidebar_shown.get(),
-                        layout: None,
-                    },
-                ) {
+                if !self.inner.tabs.open_tab(TabParts {
+                    tabpage,
+                    cwd: seed,
+                    empty,
+                    sidebar_shown: self.inner.sidebar_shown.get(),
+                    layout: None,
+                }) {
                     eprintln!(
                         "wolf-gnome: New Tab not completed: the tabpage was created inside Neovim \
                          but no page could be opened for it, so that tabpage is now unreachable \
