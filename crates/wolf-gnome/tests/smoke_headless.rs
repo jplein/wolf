@@ -165,7 +165,7 @@
 //! Thirty-seven of the fifty-six OCR a screenshot of the live window, and exactly one
 //! of those OCRs a CROP of it rather than the whole file: the terminal-drawer smoke
 //! samples a band inside the drawer strip, because the statusbar directly above it
-//! draws a `term://…//<pid>:…` string that differs on every run. Nine
+//! draws a `term://…//<pid>:…` string that differs on every run. Ten
 //! deliberately capture no image at all: the `:qa` smoke asserts on the cage exit
 //! status alone, while the configured-font-size and column-cap smokes add two
 //! integers each, the configured-appearance smoke two exact strings, the
@@ -174,8 +174,11 @@
 //! loop makes a process vanish just as a clean shutdown does), the drawer
 //! full-width and drawer restart smokes read `&buftype` and four geometry integers,
 //! the frame-stats smoke reads the report file the running application appended to,
+//! the tab-restore smoke reads run 1's frozen `state.json` and a three-line tabpage
+//! readback, because every tab draws the same chrome and no OCR term could
+//! discriminate one,
 //! and the two-window smoke counts live `nvim` children and reads a frozen
-//! `state.json` — the only one of the nine for which a capture is not merely
+//! `state.json` — the only one of the ten for which a capture is not merely
 //! unnecessary but IMPOSSIBLE, since `cage` shows a single toplevel and declines a
 //! `present()` on any other, so no image could show two windows and none could
 //! bring the first one back;
