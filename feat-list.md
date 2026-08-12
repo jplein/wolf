@@ -245,6 +245,16 @@ The second limit is that a stall does not clear itself on the GTK side. All nine
 
 ## Suggested order of work for Linux
 
-Work already carried is recorded in the tables above. What remains:
+Work already carried is recorded in the tables above. What remains, in order, covering every unticked Linux box:
 
-1. **The remaining Markdown-preview row.** Preview in browser is written and dispatched and needs only a host where a human can watch the hand-off land, per the Markdown-preview table above.
+1. **Optimized release build target.** Linux builds the default `cargo` profiles alone, so every binary a human runs and every number anyone measures carries debug codegen. It leads because the two items under it rest on it: latency measured against a debug build measures the profile, and a derivation has nothing worth installing until an optimized artifact exists. [`build.md`](build.md) documents the macOS counterpart, `//crates/wolf-macos:WolfRelease`, and why it is a configuration transition.
+
+2. **Typing-latency instrumentation and the draw fixes it exposes.** The macOS work is instrumentation first and repairs second, and only the instrumentation ports directly: the GTK draw path is its own, so which repairs it needs is a measurement rather than an assumption.
+
+3. **The NixOS derivation.** NixOS is the only Linux distribution target, so one packaging unit carries four rows. Neovim, the `orlando` rendering plugin and the `lighthouse` colorscheme each enter as a flake input pinned to a version, live in the Nix store, and are referenced from the derivation that builds Wolf rather than tracked against whatever nixpkgs carries. The same derivation installs the `.desktop` entry and the GNOME icons that already sit in [`resources/icons`](resources/icons/README.md), under the `org.wolf.Wolf` application id. The captive `init.lua` self-locates the plugin and the colorscheme and is a no-op when they are absent, so what the derivation supplies is two paths, not new Lua.
+
+4. **Save and Save As dialogs.** `wolf-gnome` has native Open File and Open Folder, and the file-dialog row stays partial while saving is reachable only as `:w` from inside Neovim.
+
+5. **Composed and input-method text entry.** The macOS row is Option-as-option composing accents; the Linux counterpart is wider, because this front-end attaches no `gtk::IMContext` at all, so a dead key, a compose sequence and every input method reach Neovim as nothing.
+
+6. **Preview in browser.** Written and dispatched, and deliberately last: it needs a host where a human can watch the hand-off land, and a hand-off found broken there is repaired as its own effort, per the Markdown-preview table above.
