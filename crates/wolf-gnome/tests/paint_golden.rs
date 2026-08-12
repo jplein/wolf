@@ -568,8 +568,9 @@ fn the_natural_line_height_clamps_a_face_whose_recommended_height_is_short() {
 // first fixture.
 
 /// Columns in the decoration fixture — control, underline, undercurl,
-/// strikethrough, undercurl-without-special.
-const DECORATION_COLS: usize = 5;
+/// strikethrough, undercurl-without-special, the leak source, and the trailing
+/// control.
+const DECORATION_COLS: usize = 7;
 /// Rows in the decoration fixture.
 const DECORATION_ROWS: usize = 1;
 /// The single row the decoration fixture paints into.
@@ -598,6 +599,24 @@ const STRIKETHROUGH_COL: usize = 3;
 /// An undercurl with `special` UNSET, so its decoration must fall back to the
 /// layout foreground.
 const UNDERCURL_NO_SPECIAL_COL: usize = 4;
+/// A second plain underline with `special` set, carrying [`UNDERLINE_HL_ID`]
+/// again.
+///
+/// Its only job is to be the LAST decorated cell of the row, so that whatever
+/// [`TRAILING_CONTROL_COL`] could inherit is drawn in `special` and can be told
+/// from glyph ink by colour alone. Without it the last decorated cell would be
+/// [`UNDERCURL_NO_SPECIAL_COL`], whose decoration takes the layout foreground —
+/// the same white as the glyph — leaving [`reddish_count`] with nothing to say and
+/// the case resting on an ink count alone.
+const LEAK_SOURCE_COL: usize = 5;
+/// An undecorated cell painted AFTER every decorated one.
+///
+/// [`CONTROL_COL`] is at column 0, before every decoration, and that is why it
+/// cannot stand in for this cell: `paint` walks a row left to right through ONE
+/// `GlyphPainter`, so a decoration that leaks forward lands only on cells that are
+/// decorated anyway. Measured by the coder: with the layout's attribute clear
+/// deleted, every case in this file stayed green.
+const TRAILING_CONTROL_COL: usize = 6;
 
 /// Highlight id for [`UNDERLINE_COL`].
 const UNDERLINE_HL_ID: u64 = 11;
@@ -694,8 +713,13 @@ const MIN_WAVE_SPREAD_PX: usize = 2;
 /// A spread over two or three columns would be a statement about antialiasing.
 const MIN_WAVE_SAMPLED_COLUMNS: usize = 8;
 
-/// Builds the decoration fixture: one row of five cells, all carrying
+/// Builds the decoration fixture: one row of seven cells, all carrying
 /// [`DECORATION_GLYPH`] on white-on-black, differing only in their decoration.
+///
+/// The row ends decorated-then-undecorated ([`LEAK_SOURCE_COL`] then
+/// [`TRAILING_CONTROL_COL`]) because the painter carries state between cells: that
+/// pair is the only place in this fixture where an undecorated cell is drawn
+/// through a layout a decorated one has already configured.
 ///
 /// The editor defaults set `special: None` on purpose. `HighlightTable::resolve`
 /// folds the default `special` into EVERY resolved style, so a default red would
@@ -747,6 +771,8 @@ fn decoration_fixture_snapshot() -> Snapshot {
         (UNDERCURL_COL, UNDERCURL_HL_ID),
         (STRIKETHROUGH_COL, STRIKETHROUGH_HL_ID),
         (UNDERCURL_NO_SPECIAL_COL, UNDERCURL_NO_SPECIAL_HL_ID),
+        (LEAK_SOURCE_COL, UNDERLINE_HL_ID),
+        (TRAILING_CONTROL_COL, 0),
     ];
     for (col, hl_id) in ids {
         snap.grid_mut(1).set_cell(
@@ -1213,6 +1239,580 @@ fn the_undercurl_is_wavy_rather_than_straight() {
          is far likelier to mean the band is clipping the wave's upper half than that the wave \
          went shallow: RE-MEASURE the band before touching this threshold, and never lower it to \
          match what was observed."
+    );
+}
+
+/// A decorated cell's Pango attributes reach that cell and stop there.
+///
+/// `paint` builds ONE `GlyphPainter` per call and re-texts a single layout for
+/// every cell of the grid, so the layout REMEMBERS the attribute list the last
+/// decorated cell installed. The `set_attributes(None)` clear in
+/// `render::GlyphPainter::draw` is the only thing between that memory and an
+/// underline drawn beneath every ordinary cell painted after a decorated one —
+/// which, on a real buffer, is most of the frame.
+///
+/// [`CONTROL_COL`] is structurally unable to see this: it is painted BEFORE every
+/// decorated cell, so a decoration leaking FORWARD only ever reaches cells that
+/// are decorated anyway. It is used here as the reference for what an undecorated
+/// cell's band holds, not as the detector.
+///
+/// The two assertions fail for different reasons and both are reachable. Reddish
+/// pixels name a leak of a decoration drawn in `special`, and that readout cannot
+/// be confused with glyph ink whatever the band contains, since the fixture's ink
+/// is white and no blend of white over black is reddish. Inked pixels name a leak
+/// of any decoration at all, including one drawn in the layout foreground — the
+/// shape [`UNDERCURL_NO_SPECIAL_COL`] would produce — and that readout rests on
+/// the control band being empty, which is asserted rather than assumed.
+///
+/// Falsifier: delete the `self.layout.set_attributes(None);` line in
+/// `render::GlyphPainter::draw`. [`LEAK_SOURCE_COL`]'s red underline then survives
+/// onto [`TRAILING_CONTROL_COL`] and both assertions redden.
+#[test]
+fn a_decoration_does_not_leak_onto_the_cell_after_it() {
+    let (mut surface, metrics) = render_decoration_fixture();
+
+    let height = surface.height() as usize;
+    let stride = surface.stride() as usize;
+    let data = surface.data().expect("surface data");
+
+    let rows = sub_baseline_rows(&metrics, height);
+    let (y0, y1) = rows;
+
+    // PREMISE: there is something to leak. A source that drew nothing would make
+    // a clean trailing cell prove nothing at all, and both assertions below would
+    // then be green against a build with no clear in it.
+    let source = column_pixels(&data, stride, &metrics, LEAK_SOURCE_COL, rows);
+    let source_red = reddish_count(&source);
+    assert!(
+        source_red > 0,
+        "fixture premise: the last decorated cell of the row (column {LEAK_SOURCE_COL}) holds {} \
+         inked pixels and {source_red} reddish ones in its own band (rows {y0}..{y1}). It carries \
+         the same red underline as column {UNDERLINE_COL}, so an empty or colourless band here \
+         means the decoration is not being drawn at all — `undercurl_draws_ink_below_the_glyph_box\
+         _in_the_special_colour` says which half — and nothing after it could inherit anything.",
+        ink_count(&source)
+    );
+
+    // The reference: what an undecorated cell's band holds when nothing has
+    // leaked into it. Asserted, because the ink assertion below is stated as an
+    // absolute zero and would be reading a band full of glyph antialiasing if the
+    // guard, the baseline or the cell height moved.
+    let control = column_pixels(&data, stride, &metrics, CONTROL_COL, rows);
+    let control_ink = ink_count(&control);
+    assert_eq!(
+        control_ink, 0,
+        "fixture premise: the undecorated control at column {CONTROL_COL} — painted before every \
+         decoration, so nothing can have leaked into it — holds {control_ink} inked pixels in the \
+         band below the baseline (rows {y0}..{y1}). That band is supposed to contain decoration \
+         and nothing else: `{DECORATION_GLYPH}` has no descender, and SUB_BASELINE_GUARD_PX keeps \
+         the baseline's own antialiased row out of it. Ink here means the band has moved up into \
+         the glyph box, and the assertion below would then redden for a build with a perfectly \
+         good attribute clear."
+    );
+
+    let trailing = column_pixels(&data, stride, &metrics, TRAILING_CONTROL_COL, rows);
+    let trailing_red = reddish_count(&trailing);
+    let trailing_ink = ink_count(&trailing);
+
+    assert_eq!(
+        trailing_red, 0,
+        "the undecorated cell painted AFTER every decorated one (column {TRAILING_CONTROL_COL}) \
+         holds {trailing_red} reddish pixels in its sub-baseline band, where the control at column \
+         {CONTROL_COL} holds none. This cell carries hl 0, and nothing in this fixture is red \
+         except `special` on the decorated ids, so red beneath it is the AttrList column \
+         {LEAK_SOURCE_COL} installed on the SHARED layout still being attached: \
+         `GlyphPainter::draw`'s `set_attributes(None)` did not run, and every ordinary cell drawn \
+         after a decorated one is underlined in the previous cell's colour. The control cannot \
+         report this — it is painted first — which is the whole reason this cell exists."
+    );
+
+    assert_eq!(
+        trailing_ink, 0,
+        "the undecorated cell painted AFTER every decorated one (column {TRAILING_CONTROL_COL}) \
+         holds {trailing_ink} inked pixels in its sub-baseline band, where the control at column \
+         {CONTROL_COL} holds {control_ink}. Ink with no red among it ({trailing_red} reddish) is a \
+         leaked decoration drawn in the LAYOUT foreground rather than in `special` — an undercurl \
+         whose highlight set no `special`, the shape column {UNDERCURL_NO_SPECIAL_COL} carries — \
+         so the attribute clear is missing for that case even if the coloured one above passed. \
+         Ink accompanied by red is the same failure the assertion above already named."
+    );
+}
+
+// --- The face: bold and italic, switched on and back off inside one paint ----
+//
+// A THIRD fixture and a third render helper, for the reason the decoration
+// fixture gives for being a second one, plus one of its own. The cases above are
+// calibrated against a band below the baseline of a row carrying `x`, and the
+// face question is asked with whole-cell ink counts and a left edge — a different
+// glyph and a different band. Keeping the two fixtures apart also keeps the two
+// falsifiers' evidence apart: a decoration leaking forward through the decoration
+// fixture would reach face cells appended to it, so one red run would indict two
+// independent pieces of painter state at once.
+//
+// Everything else is shared: the pixel reader, the band helpers, `ink_count` and
+// the colours, which is why this fixture must keep DEFAULT_FG on DEFAULT_BG —
+// `ink_count` measures against exactly that background.
+
+/// Columns in the face fixture — plain, bold, plain, italic, plain.
+const FACE_COLS: usize = 5;
+/// Rows in the face fixture.
+const FACE_ROWS: usize = 1;
+/// The single row the face fixture paints into.
+const FACE_ROW: usize = 0;
+
+/// The glyph every face cell carries.
+///
+/// Chosen for two measurable properties and not for its name, which no assertion
+/// here reads. Its left stem is a plain vertical rectangle, so the leftmost inked
+/// pixel of every row an upright cell draws sits at the same x and any drift is
+/// the slant; and it is two stems plus a crossbar, so bold thickens three strokes
+/// at once and the ink count moves by far more than a rounding.
+const FACE_GLYPH: &str = "H";
+
+/// The plain reference cell, painted FIRST — before the layout has been told
+/// anything about a face.
+const PLAIN_BEFORE_COL: usize = 0;
+/// The bold cell, painted immediately after a plain one.
+const BOLD_COL: usize = 1;
+/// The plain cell painted immediately AFTER the bold one: the restore.
+const PLAIN_AFTER_BOLD_COL: usize = 2;
+/// The italic cell, painted immediately after a plain one.
+const ITALIC_COL: usize = 3;
+/// The plain cell painted immediately AFTER the italic one: the restore.
+const PLAIN_AFTER_ITALIC_COL: usize = 4;
+
+/// Highlight id for [`BOLD_COL`].
+const BOLD_HL_ID: u64 = 21;
+/// Highlight id for [`ITALIC_COL`].
+const ITALIC_HL_ID: u64 = 22;
+
+/// The fewest pixels of ink a bold cell must add over a plain one.
+///
+/// A margin rather than a bare `greater than`, for the reason
+/// [`MIN_STRIKE_INK_PX`] records: a cell origin is `col * cell_w` with a
+/// fractional `cell_w` and Cairo rounds a glyph's origin to a whole device pixel,
+/// so two columns drawing the SAME face can differ by a pixel or two at the edges
+/// of the sampled band. Bold thickens both stems and the crossbar of
+/// [`FACE_GLYPH`] over the full cap height, which is a difference in the hundreds
+/// at [`SMOKE_PROBE_SIZE_PT`]; twenty sits an order of magnitude above the noise
+/// and an order of magnitude below the signal.
+const MIN_BOLD_INK_PX: usize = 20;
+
+/// The smallest share of [`PLAIN_BEFORE_COL`]'s ink, in percent, that
+/// [`PLAIN_AFTER_BOLD_COL`] may hold and still count as having drawn its glyph.
+///
+/// The restore assertion is an upper bound, and a cell that drew NOTHING sits
+/// comfortably under any upper bound: this is the floor that closes it, and the
+/// only thing it is here to exclude is an empty or near-empty cell.
+///
+/// Half, and deliberately nowhere near tight. The two plain cells draw the same
+/// glyph in the same face and measure 288 and 260 inked pixels on this host — a
+/// 28 px gap that is sub-pixel phase alone, since a cell origin is `col * cell_w`
+/// with a fractional `cell_w` and Cairo rounds a glyph's origin to a whole device
+/// pixel (see [`leftmost_ink_columns`]). Fifty percent leaves room for several
+/// times that difference; every count between the floor and the upper bound is a
+/// question about the rasterizer rather than about the painter's state, and this
+/// case is not the place to ask it.
+const MIN_RESTORED_INK_PERCENT: usize = 50;
+
+/// The fewest device pixels the leftmost inked pixel must drift down an italic
+/// cell before the face counts as slanted.
+///
+/// MEASURED under the devShell's pinned `FONTCONFIG_FILE`, not derived: the
+/// oblique face this stack resolves for [`FACE_GLYPH`] at [`SMOKE_PROBE_SIZE_PT`]
+/// drifts 3 px in [`ITALIC_COL`], and 4 px in [`PLAIN_AFTER_ITALIC_COL`] when the
+/// restore falsifier named below leaves that column oblique too. The same face at
+/// a different sub-pixel phase, so what the pinned stack produces is a 3–4 px
+/// RANGE rather than a single number.
+///
+/// Two, one pixel under the low end of that range. A floor sitting ON the
+/// measurement reddens a correct build on any fontconfig or rasterizer nudge that
+/// costs a pixel, and it buys nothing: two is still strictly above
+/// [`MAX_UPRIGHT_SLANT_PX`], so an upright stem can never satisfy it, and the
+/// falsifier that deletes `set_style` drives the drift to 0 rather than to 2. The
+/// margin costs this constant no discrimination at all.
+///
+/// A drift of 0 on the italic cell while the bold case is green is a reading about
+/// the FONT STACK rather than about the painter: fontconfig resolved no oblique
+/// face for this family and Pango synthesized no slant. The answer to that is to
+/// record it and drop the italic direction — never to lower this floor to whatever
+/// a stack carrying no oblique face happens to produce.
+const MIN_SLANT_SPREAD_PX: usize = 2;
+
+/// The most drift an UPRIGHT face may show down the same stem.
+///
+/// A vertical edge puts the same partially-covered pixel in every row, so the
+/// measured drift is 0; one pixel of headroom is left for a rasterizer that snaps
+/// the top or bottom row of the stem differently.
+const MAX_UPRIGHT_SLANT_PX: usize = 1;
+
+/// The fewest rows of a cell that must carry ink before a drift measured over
+/// them describes a stem rather than an antialiased corner.
+///
+/// Low on purpose. [`FACE_GLYPH`] at [`SMOKE_PROBE_SIZE_PT`] spans some 27 rows,
+/// so this floor is not a fit to the fixture; what it has to survive is the
+/// falsifier that deletes the base-description restore, which also leaves the
+/// FIRST cell with no description and draws it in Pango's own default face —
+/// smaller, and so fewer rows. A floor tight enough to trip on that would make
+/// this case report a thin premise where the assertion three lines down has the
+/// real answer.
+const MIN_SLANT_SAMPLED_ROWS: usize = 6;
+
+/// Builds the face fixture: one row of five cells, all carrying [`FACE_GLYPH`] on
+/// white-on-black, differing only in their `(bold, italic)` pair.
+///
+/// The order is the fixture: plain, bold, plain, italic, plain. `paint` walks a
+/// row left to right through one `GlyphPainter`, so each emphasized cell is
+/// preceded by a plain one and followed by a plain one, and both directions of
+/// every face change happen inside a single call.
+///
+/// The two emphasized ids set no colour, so `HighlightTable::resolve` gives them
+/// the editor defaults and all five cells are white on black — which is what lets
+/// [`ink_count`] measure them.
+fn face_fixture_snapshot() -> Snapshot {
+    let mut snap = Snapshot::new(FACE_COLS, FACE_ROWS);
+
+    snap.highlights.set_defaults(DefaultColors {
+        fg: Some(DEFAULT_FG),
+        bg: Some(DEFAULT_BG),
+        special: None,
+    });
+    snap.highlights.define(
+        BOLD_HL_ID,
+        HlAttr {
+            bold: true,
+            ..HlAttr::default()
+        },
+    );
+    snap.highlights.define(
+        ITALIC_HL_ID,
+        HlAttr {
+            italic: true,
+            ..HlAttr::default()
+        },
+    );
+
+    let ids = [
+        (PLAIN_BEFORE_COL, 0),
+        (BOLD_COL, BOLD_HL_ID),
+        (PLAIN_AFTER_BOLD_COL, 0),
+        (ITALIC_COL, ITALIC_HL_ID),
+        (PLAIN_AFTER_ITALIC_COL, 0),
+    ];
+    for (col, hl_id) in ids {
+        snap.grid_mut(1).set_cell(
+            FACE_ROW,
+            col,
+            Cell {
+                text: FACE_GLYPH.to_string(),
+                hl_id,
+            },
+        );
+    }
+
+    snap
+}
+
+/// Measures metrics at [`SMOKE_PROBE_SIZE_PT`] and [`LINE_HEIGHT_PERCENT`], sizes
+/// a surface to exactly `FACE_COLS x FACE_ROWS` cells, and paints the face fixture
+/// onto it in ONE `paint` call.
+///
+/// The single call is the point rather than an economy: the state these cases read
+/// lives between the cells of one `GlyphPainter`, and five separate paints would
+/// build five painters and pin nothing.
+///
+/// The smokes' 28 pt for the same reason the decoration fixture uses it — a stem
+/// wide enough that bold and a slant are several device pixels rather than one.
+fn render_face_fixture() -> (ImageSurface, CellMetrics) {
+    let metrics = probe_metrics(FONT_FAMILY, SMOKE_PROBE_SIZE_PT, LINE_HEIGHT_PERCENT);
+
+    let width = (metrics.cell_w * FACE_COLS as f64).ceil() as i32;
+    let height = (metrics.cell_h * FACE_ROWS as f64).ceil() as i32;
+    assert!(
+        width > 0 && height > 0,
+        "CellMetrics produced a non-positive cell size for the face fixture: cell_w={}, cell_h={}",
+        metrics.cell_w,
+        metrics.cell_h
+    );
+
+    let surface = ImageSurface::create(Format::ARgb32, width, height).expect("face render surface");
+    let cr = Context::new(&surface).expect("face render context");
+
+    let snap = face_fixture_snapshot();
+    paint(&cr, snap.active_grid(), &snap.highlights, &metrics);
+
+    // Drop the context before any caller reads pixels, exactly as the other two
+    // render helpers do.
+    drop(cr);
+    surface.flush();
+
+    assert!(
+        band_width(&metrics) >= MIN_BAND_WIDTH_PX,
+        "fixture precondition: a sampled band is {} px wide, under the {MIN_BAND_WIDTH_PX} px \
+         these cases need. The cell advance is {} px and {BAND_SIDE_INSET_PX} px are inset from \
+         each side; a band this narrow means the measured advance collapsed.",
+        band_width(&metrics),
+        metrics.cell_w
+    );
+
+    (surface, metrics)
+}
+
+/// For each row of `rows` in `col` that carries any ink, how far right of the
+/// band's first sampled pixel that row's LEFTMOST ink sits; rows with none
+/// contribute nothing.
+///
+/// Offsets from the band rather than absolute device columns, so the numbers a
+/// failure prints mean the same thing in every column. Only the spread of the
+/// returned values is ever read, and every value comes from one column, so this
+/// measurement is immune to the sub-pixel phase that stops two columns being
+/// compared pixel for pixel: `col * cell_w` is fractional and Cairo rounds a
+/// glyph's origin to a whole device pixel, so the SAME glyph in two columns lands
+/// at a different offset inside its band.
+///
+/// Ink rather than colour, unlike [`topmost_reddish_rows`]: this fixture draws no
+/// decoration at all, so the only thing in a cell is its glyph.
+fn leftmost_ink_columns(
+    data: &[u8],
+    stride: usize,
+    metrics: &CellMetrics,
+    col: usize,
+    rows: (usize, usize),
+) -> Vec<usize> {
+    let (y0, y1) = rows;
+    let x0 = band_x0(metrics, col);
+    let width = band_width(metrics);
+    let bg = decoration_background();
+
+    let mut lefts = Vec::new();
+    for y in y0..y1 {
+        for dx in 0..width {
+            if pixel_at(data, stride, x0 + dx, y) != bg {
+                lefts.push(dx);
+                break;
+            }
+        }
+    }
+    lefts
+}
+
+/// The distance between the extremes of a [`leftmost_ink_columns`] sample, or
+/// `None` when it is empty.
+fn left_edge_drift(lefts: &[usize]) -> Option<usize> {
+    let min = lefts.iter().min()?;
+    let max = lefts.iter().max()?;
+    Some(max - min)
+}
+
+/// Bold is applied to a bold cell and taken back off for the ordinary cell after
+/// it, inside one `paint`.
+///
+/// `GlyphPainter` sets a font description only when the `(bold, italic)` pair
+/// CHANGES, so that pair is state carried from one cell to the next and the arm
+/// that re-applies the base description is the only thing that ever ends a bold
+/// run. Both directions are read from a single paint: [`BOLD_COL`] follows a plain
+/// cell, [`PLAIN_AFTER_BOLD_COL`] follows the bold one.
+///
+/// An ink COUNT, deliberately, where
+/// [`undercurl_and_underline_do_not_draw_the_same_thing`] compares bands
+/// elementwise: that comparison is sound only in the direction it is used, since
+/// two columns drawing the same face at different sub-pixel phases also compare
+/// unequal (see [`leftmost_ink_columns`]). A count is blind to a one-pixel shift
+/// and not to three thickened strokes.
+///
+/// Falsifiers, three, each one line of `render::GlyphPainter::draw`:
+/// (a) delete the `else` arm of `if face == (false, false)` — the arm that clones
+/// the base description and sets the weight — and no cell is ever bold, which
+/// reddens the first assertion; (b) delete the
+/// `self.layout.set_font_description(Some(&metrics.font));` inside the
+/// `face == (false, false)` arm and nothing restores the base face, which reddens
+/// the second. Falsifier (b) also leaves the FIRST cell with no description at
+/// all, so its count drops to whatever Pango's own default face draws — visible in
+/// the printed numbers, and not a second defect. (c) Hand that same arm `None`
+/// instead of the base description when `self.face.is_some()`, so the restored cell
+/// draws in Pango's own tiny context default rather than in the base face: the
+/// third assertion reddens, where the second — an upper bound — accepts it.
+#[test]
+fn bold_is_applied_and_then_restored_within_one_paint() {
+    let (mut surface, metrics) = render_face_fixture();
+
+    let height = surface.height() as usize;
+    let stride = surface.stride() as usize;
+    let data = surface.data().expect("surface data");
+
+    let rows = cell_interior_rows(&metrics, height);
+    let plain_before = ink_count(&column_pixels(
+        &data,
+        stride,
+        &metrics,
+        PLAIN_BEFORE_COL,
+        rows,
+    ));
+    let bold = ink_count(&column_pixels(&data, stride, &metrics, BOLD_COL, rows));
+    let plain_after = ink_count(&column_pixels(
+        &data,
+        stride,
+        &metrics,
+        PLAIN_AFTER_BOLD_COL,
+        rows,
+    ));
+
+    // PREMISE: the plain reference drew a glyph at all. Three empty cells would
+    // satisfy the restore assertion below without anything having been restored.
+    assert!(
+        plain_before > 0,
+        "fixture premise: the plain cell at column {PLAIN_BEFORE_COL} holds no ink at all over the \
+         cell interior (rows {}..{}). Every count below is a difference against this one, so an \
+         empty cell means the fixture painted nothing — a glyph that resolved to nothing, or a \
+         band aimed outside the surface — and the two assertions would be comparing zeroes.",
+        rows.0,
+        rows.1
+    );
+
+    // Direction one: plain, then bold.
+    assert!(
+        bold >= plain_before + MIN_BOLD_INK_PX,
+        "the bold cell at column {BOLD_COL} holds {bold} inked pixels against the plain cell \
+         before it at column {PLAIN_BEFORE_COL} with {plain_before} — a difference of {}, under \
+         the {MIN_BOLD_INK_PX} px margin. Both cells draw `{FACE_GLYPH}` at the same size, so the \
+         whole difference is the weight: bold thickens two stems and a crossbar over the full cap \
+         height, which is a difference in the hundreds here. A difference near zero means the \
+         painter never set a bold description — the `(bold, italic)` arm was skipped, or the pair \
+         was resolved as (false, false) — and every bold highlight Neovim sends is drawn at the \
+         regular weight.",
+        bold as i64 - plain_before as i64
+    );
+
+    // Direction two: bold, then plain. This is the state, and the reason the
+    // painter is not stateless.
+    assert!(
+        plain_after < plain_before + MIN_BOLD_INK_PX,
+        "the plain cell painted immediately AFTER the bold one (column {PLAIN_AFTER_BOLD_COL}) \
+         holds {plain_after} inked pixels, against {plain_before} for the identical plain cell \
+         painted BEFORE it (column {PLAIN_BEFORE_COL}) and {bold} for the bold one. A count up \
+         near the bold cell's means the layout is still carrying the bold description: \
+         `GlyphPainter` re-applies the base face only when the `(bold, italic)` pair changes back, \
+         and with that arm gone one bold cell turns the whole rest of the paint bold. Nothing \
+         painted before a bold cell can report this, which is why the fixture puts a plain cell on \
+         both sides."
+    );
+
+    // The floor under direction two. The bound above is one-sided: a cell that
+    // drew NOTHING is under it too, and would report a restore that never
+    // happened.
+    let restored_floor = plain_before * MIN_RESTORED_INK_PERCENT / 100;
+    assert!(
+        plain_after >= restored_floor,
+        "the plain cell painted immediately AFTER the bold one (column {PLAIN_AFTER_BOLD_COL}) \
+         holds {plain_after} inked pixels, under the floor of {restored_floor} — \
+         {MIN_RESTORED_INK_PERCENT}% of the {plain_before} the identical plain cell before it \
+         holds. This bound excludes exactly one thing, and it is the thing the assertion above \
+         cannot see: a cell that drew nothing, or nearly nothing. That is not bold being taken \
+         back off — it is the restore arm handing the layout a description that resolves to no \
+         glyph, a cleared description falling back to Pango's context default or a collapsed \
+         size — and it would otherwise read as a successful restore. The floor is loose on \
+         purpose: two identical plain cells already differ by tens of pixels of sub-pixel phase, \
+         so nothing between it and the bound above is a statement about the painter's state."
+    );
+}
+
+/// Italic is applied to an italic cell and taken back off for the ordinary cell
+/// after it, inside one `paint`.
+///
+/// The bold half's argument, for the other bit of the pair
+/// ([`bold_is_applied_and_then_restored_within_one_paint`] carries it), measured
+/// as a shape rather than a quantity: an upright stem's leftmost inked pixel is
+/// the same in every row and a slanted one's walks across the cell.
+///
+/// The upright cell at [`PLAIN_BEFORE_COL`] is the DETECTOR for the measurement
+/// itself. It is painted before any face has been set, so a drift there means
+/// [`leftmost_ink_columns`] is reading something other than a stem — clipping at
+/// the band edge, or a glyph whose left edge is not vertical — and the italic
+/// threshold below would then be describing the sampler rather than the face.
+///
+/// Falsifiers: (a) delete `font.set_style(pango::Style::Italic);` in
+/// `render::GlyphPainter::draw` and the italic cell draws upright, which reddens
+/// the second assertion alone; (b) delete the
+/// `self.layout.set_font_description(Some(&metrics.font));` inside the
+/// `face == (false, false)` arm and the cell after the italic one stays slanted,
+/// which reddens the third — the same one-line revert the bold case's direction
+/// two names, so the two cases redden together under it and separately under
+/// everything else.
+#[test]
+fn italic_is_applied_and_then_restored_within_one_paint() {
+    let (mut surface, metrics) = render_face_fixture();
+
+    let height = surface.height() as usize;
+    let stride = surface.stride() as usize;
+    let data = surface.data().expect("surface data");
+
+    let rows = cell_interior_rows(&metrics, height);
+    let upright = leftmost_ink_columns(&data, stride, &metrics, PLAIN_BEFORE_COL, rows);
+    let slanted = leftmost_ink_columns(&data, stride, &metrics, ITALIC_COL, rows);
+    let restored = leftmost_ink_columns(&data, stride, &metrics, PLAIN_AFTER_ITALIC_COL, rows);
+
+    // PREMISE: each cell drew a stem tall enough for a drift to mean anything. A
+    // sample of one row has a drift of 0 whatever face drew it, which would make
+    // both of the upright assertions below pass vacuously.
+    for (col, sample) in [
+        (PLAIN_BEFORE_COL, &upright),
+        (ITALIC_COL, &slanted),
+        (PLAIN_AFTER_ITALIC_COL, &restored),
+    ] {
+        assert!(
+            sample.len() >= MIN_SLANT_SAMPLED_ROWS,
+            "fixture premise: only {} of the {} sampled rows of column {col} carry any ink, under \
+             the {MIN_SLANT_SAMPLED_ROWS} rows a left edge needs to be an edge. `{FACE_GLYPH}` \
+             spans the cap height, so this few means the cell drew nothing or the band is aimed \
+             outside the glyph, and a drift measured over what is left describes an antialiased \
+             corner rather than a stem.",
+            sample.len(),
+            rows.1 - rows.0
+        );
+    }
+
+    let upright_drift = left_edge_drift(&upright).expect("a non-empty upright left-edge sample");
+    let slanted_drift = left_edge_drift(&slanted).expect("a non-empty italic left-edge sample");
+    let restored_drift = left_edge_drift(&restored).expect("a non-empty restored left-edge sample");
+
+    // The detector, not the feature: with an upright stem drifting, the two
+    // assertions after it would be measuring the sampler.
+    assert!(
+        upright_drift <= MAX_UPRIGHT_SLANT_PX,
+        "the leftmost inked pixel of the plain cell at column {PLAIN_BEFORE_COL} — painted before \
+         any face was set — drifts {upright_drift} px down the cell, over the \
+         {MAX_UPRIGHT_SLANT_PX} px an upright stem is allowed. `{FACE_GLYPH}`'s left stem is a \
+         vertical rectangle, so every row's leftmost ink belongs at the same offset. A drift here \
+         means the sample is not reading that stem: the glyph is clipped at the band's left edge, \
+         or the substituted face is not the pinned one. Fix that before reading the two \
+         assertions below, which are both differences against this number."
+    );
+
+    // Direction one: plain, then italic.
+    assert!(
+        slanted_drift >= MIN_SLANT_SPREAD_PX,
+        "the italic cell at column {ITALIC_COL} shows a left-edge drift of {slanted_drift} px, \
+         under the {MIN_SLANT_SPREAD_PX} px floor, against {upright_drift} px for the plain cell \
+         beside it. Two outcomes are distinguishable and they need different answers. A drift \
+         equal to the upright cell's means the italic bit reached no font description at all — \
+         `set_style` skipped, or the `(bold, italic)` pair resolved without it — and every italic \
+         highlight is drawn upright. A drift equal to the upright cell's WITH the bold case green \
+         may instead be a fact about the pinned font stack: no oblique face resolved for this \
+         family and no synthetic slant. That is to be recorded, not accommodated by lowering the \
+         floor."
+    );
+
+    // Direction two: italic, then plain.
+    assert!(
+        restored_drift <= MAX_UPRIGHT_SLANT_PX,
+        "the plain cell painted immediately AFTER the italic one (column \
+         {PLAIN_AFTER_ITALIC_COL}) shows a left-edge drift of {restored_drift} px, over the \
+         {MAX_UPRIGHT_SLANT_PX} px an upright stem is allowed and against {upright_drift} px for \
+         the identical plain cell painted BEFORE the italic one. It is still being drawn in the \
+         oblique face: `GlyphPainter` re-applies the base description only when the \
+         `(bold, italic)` pair changes back, and with that arm gone one italic cell slants the \
+         whole rest of the paint. The plain cell at column {PLAIN_BEFORE_COL} cannot report this — \
+         it is painted first — which is why there is a plain cell on both sides."
     );
 }
 

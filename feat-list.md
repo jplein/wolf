@@ -230,7 +230,7 @@ Full width costs neither front-end any code: `b:wolf_full_width` is seeded on th
 | Large-repo sidebar performance (memo + refresh gate) | `feat/commands` (`e0d3933`) / `linux-feat/sidebar`                             | [x]   | [x]   |
 | Streaming-refresh coalescing (~30 fps)               | `feat/commands` / `linux-feat/sidebar`                                         | [x]   | [x]   |
 | Sidebar full-tree load fix                           | `c649491` / `linux-feat/sidebar`                                               | [x]   | [x]   |
-| Typing-latency instrumentation + draw fixes          | `feat/slow-typing-latency`                                                     | [x]   | [ ]   |
+| Typing-latency instrumentation + draw fixes          | `feat/slow-typing-latency` / `linux-feat/typing-latency`                       | [x]   | [x]   |
 | Optimized release build target                       | `feat/slow-typing-latency` (`8ba033c`, `296954c`) / `linux-feat/release-build` | [x]   | [x]   |
 
 Liveness, swap recovery, auto-reload and the hang fixes live in `wolf-core` or `init.lua`, so they reach Linux without front-end work. The GTK side reads `liveness()` at the top of every wake and drives `restart_nvim()`: a dead captive Neovim raises a full-bleed opaque overlay with a "Restart Neovim" button, one automatic in-place restart is attempted, and on success the pane view resets, the captured Tier-1 files reopen with the active one last, and a transient banner reports the restart.
@@ -243,18 +243,22 @@ Two limits are worth stating. The pane topology does not survive a restart — o
 
 The second limit is that a stall does not clear itself on the GTK side. All nine calls a running window issues refuse to run unless the core reads `Alive`, so a wedged Neovim is never re-probed, and core's own auto-clear rides the success of a later synchronous call while a timed-out one is detached. The route back is the overlay's Restart button, which force-kills.
 
+The Linux typing-latency row is an instrument plus one repair. `WOLF_FRAME_STATS` times fifteen regions of the keystroke-to-pixel path in two top-level families: the `wake.*` buckets inside the drain-loop body, and the `draw.*` buckets beside them rather than inside them, because `queue_draw` only marks a widget dirty and GTK runs the draw funcs from the frame clock after the wake handler has returned. The buckets are derived from the GTK path rather than transliterated from the macOS list, so the two tables share a format and not a shape.
+
+What it does not measure is worth as much. The report rides the render wake rather than a timer, since nothing in this front-end polls, so the last interval before the application goes idle waits for the next wake. The launch path's own first pass through the pane layer is deliberately uninstrumented, and `wakes/key` is a ratio of two counters — an upper bound on the wakes attributable to typing rather than an attribution, since scroll, resize and out-of-band core notifications all inflate it.
+
+The measurement indicted two buckets and one was repaired. `draw.grid` came down about 17 % in both measured scenarios, on a `render::paint` that builds one Pango layout per paint rather than one per cell. `prev.render` is deliberately left alone: typing beside a live Markdown preview spends 15.6 % of wall clock in a blocking preview-render call, whose only repair is temporal coalescing with a user-visible latency budget, so it is carried onward as a unit of its own. [`crates/wolf-gnome/DECISIONS.md`](crates/wolf-gnome/DECISIONS.md#frame-time-instrumentation) holds the conditions and the numbers.
+
 The two front-ends differ in what an optimized build hands over: `WolfRelease` produces a self-contained `.app`, while the Linux binary runs from the tree it was built in, because the captive `init.lua` is resolved through a compile-time absolute path. That constraint is [`crates/wolf-gnome/DECISIONS.md`](crates/wolf-gnome/DECISIONS.md)'s; the commands are [`build.md`](build.md)'s.
 
 ## Suggested order of work for Linux
 
 Work already carried is recorded in the tables above. What remains, in order, covering every unticked Linux box:
 
-1. **Typing-latency instrumentation and the draw fixes it exposes.** The macOS work is instrumentation first and repairs second, and only the instrumentation ports directly: the GTK draw path is its own, so which repairs it needs is a measurement rather than an assumption.
+1. **The NixOS derivation.** NixOS is the only Linux distribution target, so one packaging unit carries four rows. Neovim, the `orlando` rendering plugin and the `lighthouse` colorscheme each enter as a flake input pinned to a version, live in the Nix store, and are referenced from the derivation that builds Wolf rather than tracked against whatever nixpkgs carries. The same derivation installs the `.desktop` entry and the GNOME icons that already sit in [`resources/icons`](resources/icons/README.md), under the `org.wolf.Wolf` application id. The captive `init.lua` self-locates the plugin and the colorscheme and is a no-op when they are absent, so what the derivation supplies is two paths, not new Lua.
 
-2. **The NixOS derivation.** NixOS is the only Linux distribution target, so one packaging unit carries four rows. Neovim, the `orlando` rendering plugin and the `lighthouse` colorscheme each enter as a flake input pinned to a version, live in the Nix store, and are referenced from the derivation that builds Wolf rather than tracked against whatever nixpkgs carries. The same derivation installs the `.desktop` entry and the GNOME icons that already sit in [`resources/icons`](resources/icons/README.md), under the `org.wolf.Wolf` application id. The captive `init.lua` self-locates the plugin and the colorscheme and is a no-op when they are absent, so what the derivation supplies is two paths, not new Lua.
+2. **Save and Save As dialogs.** `wolf-gnome` has native Open File and Open Folder, and the file-dialog row stays partial while saving is reachable only as `:w` from inside Neovim.
 
-3. **Save and Save As dialogs.** `wolf-gnome` has native Open File and Open Folder, and the file-dialog row stays partial while saving is reachable only as `:w` from inside Neovim.
+3. **Composed and input-method text entry.** The macOS row is Option-as-option composing accents; the Linux counterpart is wider, because this front-end attaches no `gtk::IMContext` at all, so a dead key, a compose sequence and every input method reach Neovim as nothing.
 
-4. **Composed and input-method text entry.** The macOS row is Option-as-option composing accents; the Linux counterpart is wider, because this front-end attaches no `gtk::IMContext` at all, so a dead key, a compose sequence and every input method reach Neovim as nothing.
-
-5. **Preview in browser.** Written and dispatched, and deliberately last: it needs a host where a human can watch the hand-off land, and a hand-off found broken there is repaired as its own effort, per the Markdown-preview table above.
+4. **Preview in browser.** Written and dispatched, and deliberately last: it needs a host where a human can watch the hand-off land, and a hand-off found broken there is repaired as its own effort, per the Markdown-preview table above.

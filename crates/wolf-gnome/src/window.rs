@@ -178,6 +178,8 @@ use crate::appearance;
 use crate::buffer_picker::{self, BufferPickerHandle};
 use crate::coordinator::{self, Coordinator, CoordinatorInner, WindowId};
 use crate::crash_overlay;
+use crate::frame_metrics;
+use crate::frame_stats::Bucket;
 use crate::palette::{self, PaletteHandle};
 use crate::picker::{self, PickerHandle};
 use crate::search_overlay::{self, SearchHandle};
@@ -740,12 +742,33 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
         let shell = shell.clone();
         glib::spawn_future_local(async move {
             while wake_rx.recv().await.is_ok() {
-                let paint = shell.on_liveness_wake();
-                if paint {
-                    tabs.on_render_wake();
-                    tree.on_render_wake();
+                // `count(wake) == wakes` exactly, by construction: this counter and
+                // the region below are incremented by the same pass, with nothing
+                // conditional between them.
+                frame_metrics::note_wake();
+                {
+                    let _wake_guard = frame_metrics::scope(Bucket::Wake);
+                    let paint = shell.on_liveness_wake();
+                    if paint {
+                        {
+                            let _guard = frame_metrics::scope(Bucket::WakeTabs);
+                            tabs.on_render_wake();
+                        }
+                        {
+                            let _guard = frame_metrics::scope(Bucket::WakeTree);
+                            tree.on_render_wake();
+                        }
+                    }
+                    {
+                        let _guard = frame_metrics::scope(Bucket::WakeShell);
+                        shell.on_render_wake();
+                    }
                 }
-                shell.on_render_wake();
+                // AFTER the `wake` region closes, so the emit's own cost — a
+                // format and two writes, once per interval — is never inside a
+                // measured region. This is the whole report cadence: nothing here
+                // arms a timer (`crates/wolf-gnome/DECISIONS.md`).
+                frame_metrics::maybe_emit();
             }
         });
     }
@@ -770,7 +793,10 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
     }
 
     // React to whatever is already there (the initial attached frame), through the
-    // same liveness gate as every later wake.
+    // same liveness gate as every later wake. Deliberately UNINSTRUMENTED, here and
+    // at the `shell.on_render_wake()` below: this is the launch path rather than a
+    // wake, so timing it would put a first-frame cost into a `wake` bucket whose
+    // count is meant to equal the wake counter.
     if shell.on_liveness_wake() {
         tabs.on_render_wake();
     }
@@ -856,6 +882,11 @@ fn wire_keys(
             Some(event) => {
                 if let Some(core) = core.borrow().as_ref() {
                     core.send_input(InputEvent::Key(event));
+                    // Counted where the key is actually DELIVERED, so a key the
+                    // overlay guard above swallowed and a key typed at a window with
+                    // no core are both correctly absent from the denominator of the
+                    // report's `wakes/key`.
+                    frame_metrics::note_keystroke();
                 }
                 glib::Propagation::Stop
             }

@@ -13,8 +13,10 @@
 //!
 //! The coordinator is held in an `Rc<RefCell<Option<_>>>` captured by the
 //! `connect_activate` closure rather than in a `static`: this crate has no
-//! process-global state of its own, and keeping it that way is what makes two
-//! `WolfCore`s in one process independent.
+//! process-global APPLICATION state, and keeping it that way is what makes two
+//! `WolfCore`s in one process independent. The one carve-out is
+//! [`mod@crate::frame_metrics`], whose diagnostic counters no application
+//! behaviour reads.
 
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -26,6 +28,7 @@ use wolf_core::{StateStore, WolfConfig};
 
 use crate::config_seam;
 use crate::coordinator::{self, Coordinator};
+use crate::frame_metrics;
 use crate::CellMetrics;
 
 /// The GApplication id. Adwaita uses it for resource paths, the default window
@@ -40,6 +43,10 @@ const FONT_PT_ENV: &str = "WOLF_FONT_PT";
 /// Runs the windowed `wolf-gnome` application, returning the process exit code.
 #[must_use]
 pub fn run() -> glib::ExitCode {
+    // FIRST, because every other `frame_metrics` entry point branches on the
+    // once-only read this forces. A no-op beyond one environment read when
+    // `WOLF_FRAME_STATS` is unset.
+    frame_metrics::install();
     let app = adw::Application::builder().application_id(APP_ID).build();
     // Built on the first activate, not here: `load_config` and `measure_metrics`
     // both need a running GTK, and `open_state_store` must not run in a process
@@ -48,7 +55,12 @@ pub fn run() -> glib::ExitCode {
     app.connect_activate(move |app| activate(app, &coordinator));
     // The app takes no CLI args; pass an empty list so GTK does not try to parse
     // (and reject) anything from the real argv.
-    app.run_with_args::<&str>(&[])
+    let code = app.run_with_args::<&str>(&[]);
+    // The one non-periodic flush, covering the final interval of a CLEAN quit. A
+    // process killed by a signal never reaches it, which is why every report is
+    // appended to the file as it is emitted.
+    frame_metrics::flush_final();
+    code
 }
 
 /// One `activate`: build the coordinator and restore the session the first time,

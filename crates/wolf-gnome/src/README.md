@@ -51,7 +51,7 @@ Purpose: the entry point — activate, and delegate. `run` builds the `adw::Appl
 
 **Decisions**
 
-- The coordinator is held in an `Rc<RefCell<Option<_>>>` captured by the activate closure rather than in a `static`. This crate has no process-global state of its own, and keeping it that way is what makes two cores in one process independent.
+- The coordinator is held in an `Rc<RefCell<Option<_>>>` captured by the activate closure rather than in a `static`. This crate has no process-global _application_ state, and keeping it that way is what makes two cores in one process independent. [`frame_metrics.rs`](#frame_metricsrs) is the one carve-out: diagnostic counters no application behaviour reads.
 - Nothing is built before the first activate: the config read and the cell measurement both need a running GTK, and the state store must not be opened in a process that turns out to be a remote instance.
 - An unresolvable preferences or state directory degrades with one message — the built-in config defaults, or a store whose every operation is a no-op — never a per-wake stream.
 
@@ -276,6 +276,48 @@ Purpose: a pane's chrome as arithmetic — the rectangle its grid paints into, t
 - The cap is a `min` on the width here and on the column count in `grid_size_for_pane`, which divides the uncapped rectangle: flooring a capped width to whole pixels costs the last column at a non-integral cell width.
 - The centring offset is floored to whole device pixels, unlike macOS: a half-pixel `cr.translate` resamples every glyph and this crate has no HiDPI story.
 - No `StatusbarTextSpan` counterpart and no `text_left_inset`: `grid_rect`'s `x` carries the centring offset and every consumer reads that one field, so strip and grid share an origin by construction. macOS needs the seam only because inset and cap live in two structs.
+
+#### `frame_metrics.rs`
+
+Purpose: the process-global glue behind [`frame_stats.rs`](#frame_statsrs) — the once-only environment read, the monotonic clock, the accumulator and the writes. [DECISIONS.md](../DECISIONS.md#frame-time-instrumentation) owns the cadence and the process-global carve-out.
+
+**Public API**
+
+- `install()` — arms the instrument, and is the first statement of [`app.rs`](#apprs)'s `run` because every other function here branches on `enabled()`. A `WOLF_FRAME_STATS_FILE` that cannot be opened degrades to stderr-only rather than refusing to run.
+- `enabled()`, `begin()`, `end(bucket, start)`, `scope(bucket) -> Scope`, `note_keystroke()`, `note_wake()`.
+- `maybe_emit()` — the last statement of [`window.rs`](#windowrs)'s drain-loop body, outside every measured region — and `flush_final()`, after `Application::run_with_args` returns.
+
+**Decisions**
+
+- Bind every `Scope` to a named guard. `let _ = scope(..)` drops it at once and measures a region of zero length.
+- Never `eprintln!` a report: it panics when the stderr write fails. Every write goes through `write_all` with the `Result` discarded — a diagnostic that can take the application down is worse than a lost one.
+- The accumulator is a `thread_local!`, so nothing needs a lock or `Send` — and a record from another thread lands in a slot nothing reports. The tripwire is a `debug_assert!` against the thread `install()` stamped.
+
+**Gotchas**
+
+- Which values name a report file, and what path they name, are [`frame_stats.rs`](#frame_statsrs)'s `report_file_path`; `install()` opens whatever it answers and decides nothing itself.
+
+#### `frame_stats.rs`
+
+Purpose: the pure frame-time seam — bucket identity, accumulation, percentiles, report formatting, the `WOLF_FRAME_STATS*` parsers and the interval-elapsed decision. It reads no clock, touches no environment and holds nothing process-global, which is what keeps it testable in a parallel `cargo test` process; [`frame_metrics.rs`](#frame_metricsrs) owns all three.
+
+**Public API**
+
+- `Bucket`, with `ALL`, `index()` and `label()`. `index()` is the storage index into `FrameStats`'s accumulator array and the only numbering there is.
+- `FrameStats::{record, record_keystroke, record_wake, reset, is_empty, retained_sample_count, summarize}`, and the `Report` / `BucketSummary` values `summarize` answers.
+- `percentile`, `format_report`, `is_enabled`, `report_interval`, `report_file_path`, `interval_elapsed`.
+
+**Decisions**
+
+- Every parser takes the raw `Option<&str>` rather than an environment map, per [`config_seam.rs`](#config_seamrs): a parallel test suite must not mutate the process environment.
+- `report_interval` guards before `Duration::from_secs_f64`, which panics on the negative, non-finite and overflowing values an environment can supply.
+- `report_file_path` trims the value it returns and not only the one it tests, so the path opened is the path approved.
+- `percentile` is nearest-rank, never interpolating: the p95 column must name a frame time some frame actually took.
+- `summarize` omits every zero-count bucket, so an absent row means "never entered" rather than "entered and cost nothing".
+
+**Gotchas**
+
+- A child bucket's time is already inside its parent's, so a child reads as a share of its parent and never as an addend beside it. The module docs carry the nesting, the disjointness contract and the count identities.
 
 #### `geometry.rs`
 
@@ -579,20 +621,21 @@ Purpose: the Cairo/Pango paint seam — one grid and its highlight table onto an
 
 **Public API**
 
-- `CellMetrics::for_font(cr, family, size_pt, line_height_percent)` — uses `cr` only for a Pango context, so the surface's size is irrelevant; the cell height and baseline come from [`cell_metrics_math`](#cell_metrics_mathrs).
-- `paint(cr, grid, highlights, metrics)` — takes one grid rather than a whole `Snapshot`, because under `ext_multigrid` a front-end paints a single grid per surface.
-- `draw_text_line(cr, font, x, y, text, fg)` — one line of free text with its top at `y`, for the statusbar strip.
+- `CellMetrics::for_font(cr, family, size_pt, line_height_percent)` — `cr` supplies a Pango context only; its surface size is irrelevant.
+- `paint(cr, grid, highlights, metrics)` — one grid rather than a `Snapshot`, since under `ext_multigrid` a front-end paints one grid per surface.
+- `draw_text_line(cr, font, x, y, text, fg)` — one line of free text, its top at `y`, for the statusbar strip.
 
 **Decisions**
 
-- `draw_glyph` moves to `y + baseline - ascent`, not the cell top: Pango puts the layout's top at the move-to point, so a taller cell would hang its glyphs from the top edge.
-- The three decorations arrive as Pango attributes out of [`glyph_style.rs`](#glyph_stylers).
-- The 96 dpi fallback in the point-to-pixel conversion is the live path on every headless run, not a guard: `context_get_resolution` returns `-1.0` over an `ImageSurface`.
-- Every cell's background rectangle is filled, including empty ones, which keeps wide-character trailing placeholders and never-painted cells aligned.
+- `paint` builds one `GlyphPainter` and re-texts its layout per cell: `pangocairo::create_layout` builds a `PangoContext` and a font-map lookup behind every layout. One string per run is faster still and refused: Pango would then advance by the face's hinted advance, not `metrics.cell_w`, walking glyphs off the grid.
+- Both values the painter remembers must be undone: it clears the attribute list ahead of an undecorated cell and re-sets the face when `(bold, italic)` changes, or one cell's underline or weight runs on across the frame.
+- A glyph's move-to is `y + baseline - ascent`, not the cell top, where Pango would hang a taller cell's glyphs.
+- Every cell's background rectangle is filled, empty ones included, keeping wide-character trailing placeholders aligned.
 
 **Gotchas**
 
-- `FALLBACK_FG`, `FALLBACK_BG`, `draw_glyph` and `draw_text_line` are `pub(crate)` so `cursor.rs` and `pane_view.rs` reuse them; reimplementing one lets cursor colors, glyph placement or the strip's text drift from the grid paint.
+- `GlyphPainter::new(cr)` and `draw(cr, …)` take the context twice with nothing binding them; both call sites pass the same one.
+- `FALLBACK_FG`, `FALLBACK_BG`, `draw_glyph` and `draw_text_line` are `pub(crate)` for [`cursor.rs`](#cursorrs) and [`pane_view.rs`](#pane_viewrs); reimplementing one lets cursor colors, glyph placement or the strip's text drift from the grid paint.
 
 #### `scrollbar.rs`
 

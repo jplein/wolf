@@ -81,7 +81,7 @@ Measured on the 32-core dev host with `cargo 1.96.0` and `rustc 1.96.0`. A cold 
 
 The binary is 45,656,208 bytes from a whole-workspace build, of which about 31.3 MiB is the debug info `debug = "line-tables-only"` retains — every `.debug*` section it emits rather than the line table alone: the same profile with `debug = false` yields 12,791,936 bytes. A `-p wolf-gnome` build differs by 7,424 bytes through feature unification, so quote a size only together with the build scope it came from.
 
-No runtime measurement exists on this platform. This front-end carries no frame-time instrumentation, so nothing here claims a speed-up.
+Runtime measurement belongs to this profile as well: [Frame-time instrumentation](#frame-time-instrumentation) is off by default and measures the keystroke-to-pixel path, and a `dev` build's numbers are comparable to nothing a user experiences.
 
 Outside the devShell the binary still resolves every library it links: `ldd` reports no missing entry, all 188 of them resolving through store RPATHs written by nixpkgs' linker wrapper. What is missing is the environment, and it fails along two different paths.
 
@@ -279,11 +279,15 @@ Two of them move together. `//bazel/nvim-treesitter` and `//bazel/treesitter-par
 WOLF_LOG=wolf_core=debug bazel run //crates/wolf-macos:Wolf
 ```
 
-The default `warn` level surfaces the RPC-timeout warning naming the wedged call. `wolf_core=debug` adds per-RPC timing and file-search root resolution; `trace` adds the file-traversal batch markers. See [`crates/wolf-core/src/README.md`](crates/wolf-core/src/README.md) for what the subscriber carries. This is unrelated to `WOLF_FRAME_STATS` below, which is Swift instrumentation rather than `tracing`.
+The default `warn` level surfaces the RPC-timeout warning naming the wedged call. `wolf_core=debug` adds per-RPC timing and file-search root resolution; `trace` adds the file-traversal batch markers. See [`crates/wolf-core/src/README.md`](crates/wolf-core/src/README.md) for what the subscriber carries. This is unrelated to `WOLF_FRAME_STATS` below, which is each front-end's own instrumentation rather than `tracing`.
 
-## Frame-time instrumentation (macOS)
+## Frame-time instrumentation
 
-The macOS front-end carries an off-by-default frame-time measurement surface, enabled with `WOLF_FRAME_STATS=1`, which reports periodic aggregates to stderr. `WOLF_FRAME_STATS_INTERVAL` sets the report period in seconds and `WOLF_FRAME_STATS_FILE` also appends each report to a file. The bucket set, the report format and the per-bucket caveats are documented in [`Sources/WolfKeyMap/README.md`](crates/wolf-macos/Sources/WolfKeyMap/README.md); the caveat that applies to a report as a whole, and the pointer to the rest, are in [`wolf-macos/DECISIONS.md`](crates/wolf-macos/DECISIONS.md).
+Both front-ends carry an off-by-default measurement of the keystroke-to-pixel path, over the same three variables: `WOLF_FRAME_STATS=1` arms it, `WOLF_FRAME_STATS_INTERVAL` sets the report period in seconds, and `WOLF_FRAME_STATS_FILE` appends every report to a file as well as writing it to stderr. The line prefix and the column layout are identical on both, so two reports `diff` as text. Reports are activity-gated, so an idle application prints the enabled header and nothing more.
+
+### macOS
+
+The bucket set, the report format and the per-bucket caveats are documented in [`Sources/WolfKeyMap/README.md`](crates/wolf-macos/Sources/WolfKeyMap/README.md); the caveat that applies to a report as a whole, and the pointer to the rest, are in [`wolf-macos/DECISIONS.md`](crates/wolf-macos/DECISIONS.md).
 
 **Double-clicking `Wolf.app` shows nothing.** A bundle launched from the Finder is started by `launchd`, so it inherits `launchd`'s stderr, which reaches no terminal, and it does not inherit the shell environment either — so the flag would not even be set.
 
@@ -298,7 +302,7 @@ APP="${ZIP%.zip}_archive-root/Wolf.app"
 WOLF_FRAME_STATS=1 "$APP/Contents/MacOS/Wolf"
 ```
 
-`bazel run //crates/wolf-macos:WolfRelease` also launches the app and does pass the environment through, since the rules_apple runner invokes the inner binary as a direct child rather than opening the bundle. It is a convenient launch but a poor measurement: it unzips a temporary copy to a path that changes every launch, which macOS treats as a different app for TCC prompts and saved window state, and its output interleaves with Bazel's client output. Reports are activity-gated, so an idle app prints the enabled header and nothing more.
+`bazel run //crates/wolf-macos:WolfRelease` also launches the app and does pass the environment through, since the rules_apple runner invokes the inner binary as a direct child rather than opening the bundle. It is a convenient launch but a poor measurement: it unzips a temporary copy to a path that changes every launch, which macOS treats as a different app for TCC prompts and saved window state, and its output interleaves with Bazel's client output.
 
 For an app that is genuinely double-clicked, or for a persistent log to `diff` between runs, write to a file and tail it:
 
@@ -307,6 +311,30 @@ WOLF_FRAME_STATS=1 WOLF_FRAME_STATS_FILE=/tmp/wolf-frame-stats.txt \
   "$APP/Contents/MacOS/Wolf" &
 tail -f /tmp/wolf-frame-stats.txt
 ```
+
+### Linux
+
+The bucket set is [`wolf-gnome/src/README.md`](crates/wolf-gnome/src/README.md#frame_statsrs)'s; the cadence, the `wakes/key` caveat and the measured reading are [`wolf-gnome/DECISIONS.md`](crates/wolf-gnome/DECISIONS.md#frame-time-instrumentation)'s.
+
+**Measure the release binary, and run it from the tree it was built in.** A `dev` build's numbers mean nothing, and `app.rs`'s `init_lua_path` bakes `env!("CARGO_MANIFEST_DIR")`, so a relocated binary finds no `init.lua` at all.
+
+```sh
+nix develop --command cargo build --release
+nix develop --command env WOLF_FRAME_STATS=1 ./target/release/wolf-gnome
+```
+
+For a log to `diff` between runs, write to a file and tail it:
+
+```sh
+nix develop --command env WOLF_FRAME_STATS=1 WOLF_FRAME_STATS_INTERVAL=2 \
+  WOLF_FRAME_STATS_FILE=/tmp/wolf-frame-stats.txt \
+  ./target/release/wolf-gnome &
+tail -f /tmp/wolf-frame-stats.txt
+```
+
+**On a host with no display session, drive it under `cage` and `wtype`** — the recipe the measured reading came from. Give `cage` a fixture project directory outside the checkout holding one large prose file, with `HOME` set to that directory's parent and `DBUS_SESSION_BUS_ADDRESS` removed, so the run cannot touch the real `~/.local/state/wolf` or `~/.config/wolf`. The scenario then settles, opens the file, jumps to its end, and types several `wtype -d 30` bursts over roughly thirty seconds.
+
+**Do not set `WOLF_FONT_PT`** in that scenario. The smokes' 28 pt exists for OCR and would understate every per-cell cost. Record the grid size, the font size, the pane count and whether a preview was open beside any number taken this way, and run each scenario twice: only a difference larger than the spread between two runs of the same scenario is a signal.
 
 ## Linting and formatting
 
