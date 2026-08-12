@@ -257,8 +257,10 @@ Work already carried is recorded in the tables above. What remains, in order, co
 
 1. **The NixOS derivation.** NixOS is the only Linux distribution target, so one packaging unit carries four rows. Neovim, the `orlando` rendering plugin and the `lighthouse` colorscheme each enter as a flake input pinned to a version, live in the Nix store, and are referenced from the derivation that builds Wolf rather than tracked against whatever nixpkgs carries. The same derivation installs the `.desktop` entry and the GNOME icons that already sit in [`resources/icons`](resources/icons/README.md), under the `org.wolf.Wolf` application id. The captive `init.lua` self-locates the plugin and the colorscheme and is a no-op when they are absent, so what the derivation supplies is two paths, not new Lua.
 
-2. **Save and Save As dialogs.** `wolf-gnome` has native Open File and Open Folder, and the file-dialog row stays partial while saving is reachable only as `:w` from inside Neovim.
+2. **Coalescing the preview render.** Typing beside a live Markdown preview spends 15.6 % of wall clock in a blocking render call, which the frame-stats instrument measured rather than inferred. It is not a draw fix, which is why it is a unit rather than part of the row above: its only repair is temporal coalescing, whose trailing edge needs a one-shot event-armed timer and a preview-latency budget nobody has set. That budget is a user-visible decision, so this unit opens with a question rather than an implementation.
 
-3. **Composed and input-method text entry.** The macOS row is Option-as-option composing accents; the Linux counterpart is wider, because this front-end attaches no `gtk::IMContext` at all, so a dead key, a compose sequence and every input method reach Neovim as nothing.
+3. **Save and Save As dialogs.** `wolf-gnome` has native Open File and Open Folder, and the file-dialog row stays partial while saving is reachable only as `:w` from inside Neovim.
 
-4. **Preview in browser.** Written and dispatched, and deliberately last: it needs a host where a human can watch the hand-off land, and a hand-off found broken there is repaired as its own effort, per the Markdown-preview table above.
+4. **Composed and input-method text entry.** The macOS row is Option-as-option composing accents; the Linux counterpart is wider, because this front-end attaches no `gtk::IMContext` at all, so a dead key, a compose sequence and every input method reach Neovim as nothing.
+
+5. **Preview in browser.** Written and dispatched, and deliberately last: it needs a host where a human can watch the hand-off land, and a hand-off found broken there is repaired as its own effort, per the Markdown-preview table above.
