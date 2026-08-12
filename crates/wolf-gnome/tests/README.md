@@ -8,7 +8,7 @@ nix develop --command cargo test -p wolf-gnome
 
 The devShell is not optional: it supplies GTK, exports `WOLF_NVIM_BIN` and `WOLF_RG_BIN`, and pins the font stack, which is what makes Pango measurement and Cairo rasterization reproducible enough to assert on pixels.
 
-Rules that are decidable from their arguments are pinned in each seam's own `#[cfg(test)] mod tests` rather than here, which is the point of the seam split in [DECISIONS.md](../DECISIONS.md). The files below cover what a seam cannot reach: a real Neovim, and a real window.
+Rules that are decidable from their arguments are pinned in each seam's own `#[cfg(test)] mod tests` rather than here, which is the point of the seam split in [DECISIONS.md](../DECISIONS.md). The files below cover what a seam cannot reach: a real Neovim, a real window, and the built binary together with the manifest that shaped it.
 
 ## Files
 
@@ -47,6 +47,20 @@ Rules that are decidable from their arguments are pinned in each seam's own `#[c
 
 - Deliberately not a whole-image hash, which is too brittle across freetype/fontconfig versions. Pixel reads assume little-endian ARGB32, in-memory byte order `B, G, R, A`.
 - The PNG golden is a dev aid nothing asserts against; regenerate it with `cargo test -p wolf-gnome --test paint_golden -- --ignored regenerate_png_golden`, which needs the `png` feature on the `cairo` dependency.
+
+#### `release_profile.rs`
+
+**Covers**
+
+- The workspace `Cargo.toml`'s two `[profile.release]` promises: that `panic` is `unwind`, and that debug info is emitted and not stripped. The reader is a line scanner, not a parser: the manifest must keep one key per line, with no inline comment after a value.
+- The artifact those promises are meant to produce: `CARGO_BIN_EXE_wolf-gnome` carries a non-empty `.debug_line`, and this workspace's own source paths appear in the binary's debug strings — found through a section-header walk, because both needles also sit in `.rodata` of a binary carrying no debug info of ours.
+
+**Gotchas**
+
+- The artifact half discriminates the release profile only under `--release`: a plain `cargo test` hands it the dev binary, whose debug info is on by default. `cargo test --release -p wolf-gnome --test release_profile -- --nocapture` prints the path it read.
+- The manifest half is a tripwire on a promise, the same shape as `the_shared_smoke_config_pins_the_appearance_every_ocr_smoke_assumes`: its falsifiers are `Cargo.toml` edits, not `src/` ones.
+- `opt-level`, `lto` and `codegen-units` are deliberately unpinned, so a measured retune stays a manifest change rather than a test edit.
+- It lives in this crate rather than `wolf-core` because this crate has no `BUILD.bazel` to wire it into, and the workspace manifest it reads is not a Bazel runfile.
 
 #### `roundtrip_nvim.rs`
 

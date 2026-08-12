@@ -6,3 +6,51 @@ members = ["crates/wolf-core", "crates/wolf-ffi", "crates/wolf-gnome"]
 edition = "2021"
 version = "0.1.0"
 license = "MIT OR Apache-2.0"
+
+# The optimized build a human runs and any future measurement is taken against.
+# No ordinary command selects it: `cargo build`, `cargo test`, `cargo clippy` and
+# every step of the Linux verification gate use `dev`/`test`, so nothing here
+# sweeps into the gate. Only `--release` (and `cargo test --release`, via `bench`)
+# inherits it.
+#
+# opt-level = 3          full LLVM optimization, and it reaches rusqlite's bundled
+#                        SQLite too because `cc` reads OPT_LEVEL. Stated rather
+#                        than defaulted so the manifest carries the contract.
+# lto = "thin"           cross-crate inlining along the wolf-gnome -> wolf-core
+#                        paint/snapshot path. Parallel and bounded, unlike fat LTO;
+#                        it costs link wall clock and peak RSS, and `bench` inherits
+#                        it so `cargo test --release` pays as well.
+# panic = "unwind"       cargo's default, declared here at the point of temptation.
+#                        Cargo SILENTLY IGNORES `panic` for the `test` and `bench`
+#                        profiles, so "abort" cannot be honoured for test binaries:
+#                        cargo builds a second set of std artifacts instead, forking
+#                        target/release/ between `cargo build --release` and
+#                        `cargo test --release` and rebuilding the whole package
+#                        graph on every alternation, with no warning. "abort" would
+#                        also turn an app panic into SIGABRT, destroying the
+#                        exit-code evidence the cage smokes rest on.
+# debug = "line-tables-only"
+#                        function names and file:line for perf and for release panic
+#                        backtraces. Not enough for gdb variable inspection, which
+#                        nothing here needs; `debug = true` costs size for nobody.
+# strip = "none"         explicit because cargo's `strip` default is version
+#                        dependent. The contract is that symbols survive.
+#
+# Deliberately unset, and each for a reason: `codegen-units` (release default 16 —
+# thin LTO recovers most of what CGU splitting gives up, and 1 would serialize
+# final codegen on a host whose parallelism is the point); `incremental`,
+# `overflow-checks` and `debug-assertions` (release defaults are right, and stating
+# them would invite retuning them); `split-debuginfo` (the embedded default keeps a
+# COPIED binary's symbols, a trap the packaging work would otherwise inherit);
+# `[profile.release.package."*"]` and `[profile.release.build-override]` (no
+# measurement asks for either).
+#
+# Guarded by `crates/wolf-gnome/tests/release_profile.rs`, whose scanner is a line
+# reader and not a TOML parser: keep ONE KEY PER LINE and put NO INLINE COMMENT
+# after a key's value, or it reads the comment as part of the value.
+[profile.release]
+opt-level = 3
+lto = "thin"
+panic = "unwind"
+debug = "line-tables-only"
+strip = "none"

@@ -20,7 +20,9 @@ The repo ships an `.envrc` that runs `use flake` on both Linux and macOS. Activa
 direnv allow
 ```
 
-The Linux shell supplies the pinned Rust toolchain (`rust-src`, `rust-analyzer`, `clippy`, `rustfmt`), a pinned hermetic Neovim exported as `WOLF_NVIM_BIN`, a pinned ripgrep exported as `WOLF_RG_BIN`, the GTK4, libadwaita and WebKitGTK stack `wolf-gnome` needs, and a generated `FONTCONFIG_FILE` that pins the font stack to three vendored families — DejaVu plus the two the shared `wolf-config.yaml` can name — with no host font directory, so the offscreen golden render is reproducible. Do not reach for a system `cargo`, `rustc`, `nvim` or `rg` — `flake.nix` pins all four, and builds and tests must run inside the shell.
+The Linux shell supplies the pinned Rust toolchain (`rust-src`, `rust-analyzer`, `clippy`, `rustfmt`), a pinned hermetic Neovim exported as `WOLF_NVIM_BIN`, a pinned ripgrep exported as `WOLF_RG_BIN`, the GTK4, libadwaita and WebKitGTK stack `wolf-gnome` needs, and a generated `FONTCONFIG_FILE` that pins the font stack to three vendored families — DejaVu plus the two the shared `wolf-config.yaml` can name — with no host font directory, so the offscreen golden render is reproducible.
+
+The `shellHook` generates that file by substituting store paths into `$PWD/crates/wolf-gnome/testdata/fonts.conf`, a repo-relative template, so every `nix develop` command in this document is run from the repository root. Started anywhere else the substitution has no template to read, and the font pinning every golden render rests on is gone. Do not reach for a system `cargo`, `rustc`, `nvim` or `rg` — `flake.nix` pins all four, and builds and tests must run inside the shell.
 
 `WOLF_NVIM_BIN` is the only way core and its tests locate Neovim: never `PATH`, never a scan of `/nix/store`. Unset, `WolfCore::start` fails with `NvimError::BinNotSet` and the wolf-core integration tests panic loudly rather than skip. `WOLF_RG_BIN` locates ripgrep the same way; unset, content search degrades to an empty session carrying an error.
 
@@ -37,14 +39,53 @@ cargo build                                   # the whole workspace
 cargo test                                    # every crate
 cargo test -p wolf-core                       # one crate
 cargo run -p wolf-core --example grid_dump    # headless dump of the rendered grid
-nix develop --command cargo run -p wolf-gnome # the GTK application
+nix develop --command cargo run -p wolf-gnome # the GTK application, unoptimized
 ```
+
+These select cargo's default profiles — `dev` for a build or a run, `test` for a test target — and write into `target/debug`; [the optimized build](#the-optimized-build) is a separate command and a separate output directory.
 
 Most tests spawn the pinned Neovim as a real child process rather than a mock, and they stay headless: `nvim --embed` speaks msgpack-RPC over stdio and needs no TTY, so the suite is safe to run unattended. Cargo discovers every `tests/*.rs`, so nothing needs wiring on this path.
 
 `cargo test` also runs the rustdoc doctests in `src/**`, which `rust_test` does not. A doctest is therefore Linux-only coverage, the exact mirror of the Bazel wiring gap under [Running the tests](#running-the-tests): a fenced or indented block in a `//!` or `///` comment compiles as Rust unless it is tagged `text` or `ignore`, and a prose list that only looks like code fails there and nowhere else.
 
 What each target covers lives with the tests: [`wolf-core/tests`](crates/wolf-core/tests/README.md), [`wolf-ffi/tests`](crates/wolf-ffi/tests/README.md), [`wolf-gnome/tests`](crates/wolf-gnome/tests/README.md). The GTK end-to-end smokes run in that suite rather than opting in: they launch the real window under `cage`, a headless Wayland compositor, and drive it with `wtype`, `grim`, `tesseract` and [`wolf-pointer-inject`](tools/wolf-pointer-inject/README.md). All four come from the devShell, and the smokes fail loudly rather than skipping when one is missing, since absence means the suite is running outside `nix develop`. They also need a set and writable `XDG_RUNTIME_DIR`, which is where `cage` puts its Wayland socket.
+
+### The optimized build
+
+From the repository root, for the reason [Activating the dev environment](#activating-the-dev-environment) gives, and because the binary resolves the captive `init.lua` through a compile-time path into its own build tree ([`wolf-gnome/DECISIONS.md`](crates/wolf-gnome/DECISIONS.md)):
+
+```sh
+nix develop --command cargo build --release
+nix develop --command cargo run --release -p wolf-gnome
+nix develop --command ./target/release/wolf-gnome  # no cargo in the process tree; what a profiling session wants
+```
+
+The profile is optimized, unwinding, and carries the line tables a profiler and a release panic backtrace need to resolve a `file:line`. The per-key reasons, and the list of keys deliberately left unset, belong to the comment above `[profile.release]` in the workspace [`Cargo.toml`](Cargo.toml), which owns that rationale — read it before retuning anything.
+
+No step of [the verification gate](#the-verification-gate) builds this profile. `cargo test`, `cargo clippy --workspace --all-targets` and `cargo build --workspace --all-targets` all select `dev` and `test`, so an optimized build never sweeps into an ordinary run — the Linux counterpart of `WolfRelease`'s `manual` tag, by a different mechanism to the same end. Measured across a full gate run: every `Finished` line reads `dev` or `test`, and `target/release/wolf-gnome` keeps its timestamp.
+
+`cargo test --release` reuses those same `target/release` artifacts, because the `bench` profile inherits `release`. That reuse is what `panic = "unwind"` buys, for the reason the manifest comment gives.
+
+Two commands are the release evidence:
+
+```sh
+nix develop --command cargo test --release -p wolf-gnome --test release_profile -- --nocapture
+nix develop --command cargo test --release -p wolf-gnome --test smoke_headless -- \
+  --exact window_renders_typed_text_under_cage \
+          preview_pane_renders_and_edit_source_returns_under_cage
+```
+
+What each of them covers belongs with the tests, in [`wolf-gnome/tests`](crates/wolf-gnome/tests/README.md).
+
+Measured on the 32-core dev host with `cargo 1.96.0` and `rustc 1.96.0`. A cold `cargo build --release` — `target/release` absent, 167 crates — took `real 0m52.610s` and `user 6m19.665s`, and `target/release` came to 1.4 GB.
+
+The binary is 45,656,208 bytes from a whole-workspace build, of which about 31.3 MiB is the debug info `debug = "line-tables-only"` retains — every `.debug*` section it emits rather than the line table alone: the same profile with `debug = false` yields 12,791,936 bytes. A `-p wolf-gnome` build differs by 7,424 bytes through feature unification, so quote a size only together with the build scope it came from.
+
+No runtime measurement exists on this platform. This front-end carries no frame-time instrumentation, so nothing here claims a speed-up.
+
+Outside the devShell the binary still resolves every library it links: `ldd` reports no missing entry, all 188 of them resolving through store RPATHs written by nixpkgs' linker wrapper. What is missing is the environment, and it fails along two different paths.
+
+With no display it prints `Gtk-WARNING: Failed to open display` and exits 1. With a display but none of the devShell's exports it prints host fontconfig warnings, then a `GLib-GIO-CRITICAL` about `g_settings_schema_source_lookup` which is a warning rather than an abort, then `failed to start core: WOLF_NVIM_BIN is not set`, then `no window could be opened…` — and exits 0 having opened no window. That zero belongs to the second path alone.
 
 ### The verification gate
 

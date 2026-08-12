@@ -218,20 +218,20 @@ Full width costs neither front-end any code: `b:wolf_full_width` is seeded on th
 
 ## Reliability and performance
 
-| Feature                                              | Branch or commit                                   | macOS | Linux |
-| ---------------------------------------------------- | -------------------------------------------------- | ----- | ----- |
-| Crash/stall detection (three-state liveness)         | `feat/neovim-crash-handling`                       | [x]   | [x]   |
-| Crash/stall overlay + "Restart Neovim" button        | `feat/neovim-crash-handling`                       | [x]   | [x]   |
-| In-place Neovim restart with open-file restore       | `feat/neovim-crash-handling`                       | [x]   | [x]   |
-| Swap-file recovery of unsaved edits                  | `feat/neovim-crash-handling`                       | [x]   | [x]   |
-| Auto-reload of externally changed files              | `feat/auto-refresh`                                | [x]   | [x]   |
-| Sporadic hang / beach-ball fixes                     | `fix/sporadic-crash`                               | [x]   | [x]   |
-| Large-repo traversal performance (core `TreeIndex`)  | `feat/commands` (`e31f521`, `e0d3933`)             | [x]   | [x]   |
-| Large-repo sidebar performance (memo + refresh gate) | `feat/commands` (`e0d3933`) / `linux-feat/sidebar` | [x]   | [x]   |
-| Streaming-refresh coalescing (~30 fps)               | `feat/commands` / `linux-feat/sidebar`             | [x]   | [x]   |
-| Sidebar full-tree load fix                           | `c649491` / `linux-feat/sidebar`                   | [x]   | [x]   |
-| Typing-latency instrumentation + draw fixes          | `feat/slow-typing-latency`                         | [x]   | [ ]   |
-| Optimized release build target                       | `feat/slow-typing-latency` (`8ba033c`, `296954c`)  | [x]   | [ ]   |
+| Feature                                              | Branch or commit                                                               | macOS | Linux |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------ | ----- | ----- |
+| Crash/stall detection (three-state liveness)         | `feat/neovim-crash-handling`                                                   | [x]   | [x]   |
+| Crash/stall overlay + "Restart Neovim" button        | `feat/neovim-crash-handling`                                                   | [x]   | [x]   |
+| In-place Neovim restart with open-file restore       | `feat/neovim-crash-handling`                                                   | [x]   | [x]   |
+| Swap-file recovery of unsaved edits                  | `feat/neovim-crash-handling`                                                   | [x]   | [x]   |
+| Auto-reload of externally changed files              | `feat/auto-refresh`                                                            | [x]   | [x]   |
+| Sporadic hang / beach-ball fixes                     | `fix/sporadic-crash`                                                           | [x]   | [x]   |
+| Large-repo traversal performance (core `TreeIndex`)  | `feat/commands` (`e31f521`, `e0d3933`)                                         | [x]   | [x]   |
+| Large-repo sidebar performance (memo + refresh gate) | `feat/commands` (`e0d3933`) / `linux-feat/sidebar`                             | [x]   | [x]   |
+| Streaming-refresh coalescing (~30 fps)               | `feat/commands` / `linux-feat/sidebar`                                         | [x]   | [x]   |
+| Sidebar full-tree load fix                           | `c649491` / `linux-feat/sidebar`                                               | [x]   | [x]   |
+| Typing-latency instrumentation + draw fixes          | `feat/slow-typing-latency`                                                     | [x]   | [ ]   |
+| Optimized release build target                       | `feat/slow-typing-latency` (`8ba033c`, `296954c`) / `linux-feat/release-build` | [x]   | [x]   |
 
 Liveness, swap recovery, auto-reload and the hang fixes live in `wolf-core` or `init.lua`, so they reach Linux without front-end work. The GTK side reads `liveness()` at the top of every wake and drives `restart_nvim()`: a dead captive Neovim raises a full-bleed opaque overlay with a "Restart Neovim" button, one automatic in-place restart is attempted, and on success the pane view resets, the captured Tier-1 files reopen with the active one last, and a transient banner reports the restart.
 
@@ -243,18 +243,18 @@ Two limits are worth stating. The pane topology does not survive a restart — o
 
 The second limit is that a stall does not clear itself on the GTK side. All nine calls a running window issues refuse to run unless the core reads `Alive`, so a wedged Neovim is never re-probed, and core's own auto-clear rides the success of a later synchronous call while a timed-out one is detached. The route back is the overlay's Restart button, which force-kills.
 
+The two front-ends differ in what an optimized build hands over: `WolfRelease` produces a self-contained `.app`, while the Linux binary runs from the tree it was built in, because the captive `init.lua` is resolved through a compile-time absolute path. That constraint is [`crates/wolf-gnome/DECISIONS.md`](crates/wolf-gnome/DECISIONS.md)'s; the commands are [`build.md`](build.md)'s.
+
 ## Suggested order of work for Linux
 
 Work already carried is recorded in the tables above. What remains, in order, covering every unticked Linux box:
 
-1. **Optimized release build target.** Linux builds the default `cargo` profiles alone, so every binary a human runs and every number anyone measures carries debug codegen. It leads because the two items under it rest on it: latency measured against a debug build measures the profile, and a derivation has nothing worth installing until an optimized artifact exists. [`build.md`](build.md) documents the macOS counterpart, `//crates/wolf-macos:WolfRelease`, and why it is a configuration transition.
+1. **Typing-latency instrumentation and the draw fixes it exposes.** The macOS work is instrumentation first and repairs second, and only the instrumentation ports directly: the GTK draw path is its own, so which repairs it needs is a measurement rather than an assumption.
 
-2. **Typing-latency instrumentation and the draw fixes it exposes.** The macOS work is instrumentation first and repairs second, and only the instrumentation ports directly: the GTK draw path is its own, so which repairs it needs is a measurement rather than an assumption.
+2. **The NixOS derivation.** NixOS is the only Linux distribution target, so one packaging unit carries four rows. Neovim, the `orlando` rendering plugin and the `lighthouse` colorscheme each enter as a flake input pinned to a version, live in the Nix store, and are referenced from the derivation that builds Wolf rather than tracked against whatever nixpkgs carries. The same derivation installs the `.desktop` entry and the GNOME icons that already sit in [`resources/icons`](resources/icons/README.md), under the `org.wolf.Wolf` application id. The captive `init.lua` self-locates the plugin and the colorscheme and is a no-op when they are absent, so what the derivation supplies is two paths, not new Lua.
 
-3. **The NixOS derivation.** NixOS is the only Linux distribution target, so one packaging unit carries four rows. Neovim, the `orlando` rendering plugin and the `lighthouse` colorscheme each enter as a flake input pinned to a version, live in the Nix store, and are referenced from the derivation that builds Wolf rather than tracked against whatever nixpkgs carries. The same derivation installs the `.desktop` entry and the GNOME icons that already sit in [`resources/icons`](resources/icons/README.md), under the `org.wolf.Wolf` application id. The captive `init.lua` self-locates the plugin and the colorscheme and is a no-op when they are absent, so what the derivation supplies is two paths, not new Lua.
+3. **Save and Save As dialogs.** `wolf-gnome` has native Open File and Open Folder, and the file-dialog row stays partial while saving is reachable only as `:w` from inside Neovim.
 
-4. **Save and Save As dialogs.** `wolf-gnome` has native Open File and Open Folder, and the file-dialog row stays partial while saving is reachable only as `:w` from inside Neovim.
+4. **Composed and input-method text entry.** The macOS row is Option-as-option composing accents; the Linux counterpart is wider, because this front-end attaches no `gtk::IMContext` at all, so a dead key, a compose sequence and every input method reach Neovim as nothing.
 
-5. **Composed and input-method text entry.** The macOS row is Option-as-option composing accents; the Linux counterpart is wider, because this front-end attaches no `gtk::IMContext` at all, so a dead key, a compose sequence and every input method reach Neovim as nothing.
-
-6. **Preview in browser.** Written and dispatched, and deliberately last: it needs a host where a human can watch the hand-off land, and a hand-off found broken there is repaired as its own effort, per the Markdown-preview table above.
+5. **Preview in browser.** Written and dispatched, and deliberately last: it needs a host where a human can watch the hand-off land, and a hand-off found broken there is repaired as its own effort, per the Markdown-preview table above.
