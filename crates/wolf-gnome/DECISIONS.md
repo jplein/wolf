@@ -54,7 +54,7 @@ The drain order is fixed and every position is load-bearing. The liveness read r
 
 `WolfCore` is not `Send`. It lives only on the main thread in an `Rc<RefCell<Option<_>>>` shared by the widget closures, and the wake closure is the only thing that crosses a thread boundary. Every core borrow is taken and dropped in its own statement, because the close-request handler does `borrow_mut().take()` and an outstanding borrow on that path is a panic rather than a warning.
 
-Nothing polls. No timer is periodic and no timer drives a read: neither a redraw, a liveness read, nor a state snapshot is scheduled by the clock. A periodic liveness poll in particular is rejected — it would let a lossy wake transport still raise the crash overlay eventually, buying insurance by destroying the evidence the crash smoke exists to gather.
+Nothing polls. No timer is periodic and no timer drives a read: neither a redraw, a liveness read, nor a state snapshot is scheduled by the clock. A periodic liveness poll in particular is rejected — it would let a lossy wake transport still raise the crash overlay eventually, buying insurance by destroying the evidence the crash smoke exists to gather. The frame-time instrument holds to the same property with its flag set, which is what shapes its cadence ([Frame-time instrumentation](#frame-time-instrumentation)).
 
 Two one-shot timers exist and neither is a poll. Each is armed by an arriving event, fires once, and disarms: the deferred restart, which exists because the overlay must be presented before a synchronous respawn blocks the main loop, and the sidebar's trailing refresh, which collapses a burst of traversal batches into one rebuild. Neither re-arms itself, so no timer exists while the application is idle.
 
@@ -301,6 +301,40 @@ The GTK glue is covered by end-to-end smokes that launch the real binary under `
 A missing precondition fails loud rather than skipping quietly, because absence means the smoke toolchain was not provisioned; the environment they need is [`build.md`](../../build.md)'s.
 
 Three details are load-bearing. Every smoke holds a shared mutex for its whole body, because two `cage` compositors started concurrently contend for the same Wayland socket and both fail. Each scenario runs inside `cage` as a single shell command, since `cage` exports its `WAYLAND_DISPLAY` only to its own child process tree. And every smoke's environment comes from one helper, which is the only thing keeping a smoke run out of the developer's real state and configuration directories.
+
+## Frame-time instrumentation
+
+`WOLF_FRAME_STATS` arms an off-by-default measurement of the keystroke-to-pixel path, split the way everything here is split: a pure seam and a process-global glue module, both described in [`src/README.md`](src/README.md#frame_statsrs). [`build.md`](../../build.md) owns how to run one.
+
+**The bucket set is derived from the GTK draw path rather than transliterated from macOS, and it has two top-level families rather than one tree.** `queue_draw` only marks a widget dirty; GTK invokes the draw funcs from the frame clock after the wake handler has returned, so the `draw.*` buckets sit beside `wake` and not inside it. Summing the two families double-counts nothing; summing a parent with its own children counts those children twice.
+
+**No timer, and one flush at exit.** "Threading and the wake" says nothing polls, and a periodic report would break that whenever the flag was set. The emit check is the last statement of the drain-loop body, after the `wake` region closes so the emit's own cost is never inside a measured region, plus one non-periodic flush after `Application::run_with_args` returns.
+
+Two consequences, stated rather than hidden. A report covering the final interval before the application goes idle waits for the next wake. And a process killed by a signal — which is what every `cage` smoke's teardown does — never reaches the exit flush, which is why `WOLF_FRAME_STATS_FILE` is appended to per report rather than buffered. With N windows there are N drain loops over one accumulator, and whichever wakes first after the interval elapses emits the process-wide report.
+
+**Variable names, accepted values, the line prefix and the column layout are the macOS ones exactly.** One documented surface serves both front-ends, and the two reports then `diff` as text, which is the only cheap way to compare where each spends a frame.
+
+**The `wakes/key` footer is an upper bound on the wakes attributable to typing, never an attribution.** Mouse, scroll, resize and out-of-band core notifications all inflate it. Under the headless recipe there is no pointer and the toplevel cannot be resized, so only the notifications are left — closer to attribution, and still not attribution.
+
+**Diagnostic counters are the one carve-out from this crate's no-process-global-state rule.** That rule exists so two `WolfCore`s in one process are independent, which counters no application behaviour reads cannot threaten. With the flag unset the whole instrument is one acquire load and a branch per call site, and the accumulator is never allocated.
+
+**A report may never take the application down.** `eprintln!` panics when the write to stderr fails, so every write goes through `write_all` with the `Result` discarded; a lost diagnostic beats a diagnostic that aborts. Nothing on the emit path touches Cairo, a widget or the core.
+
+### The measured reading
+
+Measured on an `AMD Ryzen AI MAX+ 395` under NixOS: release profile, headless `cage` at 1280x720, iA Writer Mono S at 10 pt over a 2068-line prose buffer, about 1230 keystrokes a run at a two-second report interval. Scenario A is one pane on a 90x34 grid with no preview; scenario B is two panes on 59x34 with a live Markdown preview. Two runs each, and the run-to-run spread is 0.6 % (A) and 2.2 % (B), so nothing under about 2 % is a signal.
+
+**`draw.grid` was indicted, and the repair is [`render.rs`](src/README.md#renderrs)'s one layout per paint.** `draw.pane`'s p95 median sat at 11.51 ms (A) and 12.16 ms (B) against an 8 ms frame-budget threshold, with 99.2 % of that parent inside `draw.grid`.
+
+Over the identical recipe with the two binaries alternated in one session, `draw.grid`'s count × mean fell from 496.8 to 412.6 ms/s in A (−17.0 %) and from 176.6 to 147.2 in B (−16.7 %), and `draw.pane`'s p95 median by 19.7 % and 15.4 %.
+
+**`draw.pane` sits over that 8 ms threshold even so**, at a 9.50 ms p95 median in A, and the remainder is glyph rasterization at about 1.8 µs a glyph. Getting under the threshold needs damage tracking or a shaped-glyph cache, each a unit of its own.
+
+**The preview render is the largest single cost on the typing path, and coalescing it is a design decision rather than a draw fix.** The suspicion "Crash and stall recovery" records — that it is the only blocking RPC repeating while the user simply types — is confirmed: 988 blocking render calls at a 6.93 ms mean against 1238 keystrokes, 15.6 % of wall clock, pushing `wake`'s p95 to 9.1 ms and its worst interval to 34 ms.
+
+The only repair is temporal coalescing, whose trailing edge needs a one-shot event-armed timer and a user-visible preview-latency budget nothing has set. That is carried by a unit of its own, with these numbers as its evidence; until it lands, typing beside a live preview costs what the paragraph above measures.
+
+**Nothing else is indicted.** `wake` in scenario A reads a 0.11 ms p95, and `wake.tree`, `wake.shell`, `wake.state`, `pane.state`, `draw.status`, `draw.cmdline` and `prev.load` all sit below the threshold at which a repair could pay for itself. `draw.read` reads 0.00 ms, which is the measurement behind the claim that `read_snapshot` copies nothing and contends with no tokio writer.
 
 ## Present limitations
 

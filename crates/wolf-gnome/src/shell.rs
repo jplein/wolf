@@ -205,6 +205,8 @@ use crate::clipboard_ui::{self, CopyPress, PastePress};
 use crate::command_action::{ui_action_for, ui_action_for_front_end_action, UiAction};
 use crate::coordinator::{self, CoordinatorInner, WindowId};
 use crate::crash_overlay::CrashOverlay;
+use crate::frame_metrics;
+use crate::frame_stats::Bucket;
 use crate::liveness_ui::{
     liveness_ui, reopen_order, restart_outcome, OverlayMode, RestartOutcome,
     MAX_AUTO_RESTART_ATTEMPTS,
@@ -1526,6 +1528,7 @@ impl AppShell {
         // by the coordinator: one window's wake must not commit a tree that has
         // forgotten the others.
         if let Some(coordinator) = coordinator::upgrade(&self.inner.coordinator) {
+            let _guard = frame_metrics::scope(Bucket::WakeState);
             coordinator.commit(self.inner.window_id);
         }
         // LAST: a drained `close_window` tears the core down, so the state

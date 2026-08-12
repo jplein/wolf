@@ -176,6 +176,8 @@ use wolf_core::{
 use crate::cmdline_ui::{self, PumView, ToastView};
 use crate::drawer::{self, DrawerState};
 use crate::editor_inset::{self, ColumnCap, GridRect, EDITOR_PADDING_PX};
+use crate::frame_metrics;
+use crate::frame_stats::Bucket;
 use crate::geometry;
 use crate::layout::{Orientation, PaneId, PaneLayout, PaneTree};
 use crate::mouse::{self, PaneScroll, ScrollAccumulator};
@@ -590,12 +592,16 @@ impl PaneInner {
         // in a pane that just changed buffers. Placing it ahead of
         // `update_active_pane` keeps "read core state" before "decide the active
         // pane and paint", mirroring the order already here.
+        let state_start = frame_metrics::begin();
         self.refresh_pane_state();
+        frame_metrics::end(Bucket::PaneState, state_start);
         // AFTER `refresh_pane_state`, which is what fills the per-pane `preview` and
         // `current_load` this reads, and BEFORE `sync_pane_grids`, so a pane that
         // just became (or stopped being) a preview has its web view attached or gone
         // before any resize is issued against the frame it shares.
+        let prev_start = frame_metrics::begin();
         self.refresh_previews();
+        frame_metrics::end(Bucket::PanePrev, prev_start);
         // BEFORE `sync_pane_grids`, which is what turns an allocation into a
         // `resize_grid`: re-stating the strip's height request here is what makes a
         // toplevel resize reach the drawer at all, since a content height set on a
@@ -1618,9 +1624,15 @@ impl PaneInner {
                 let Some(core) = core_ref.as_ref() else {
                     return;
                 };
-                core.render_preview(load.source_bufnr)
+                // The blocking RPC alone, with neither borrow nor load inside it.
+                let render_start = frame_metrics::begin();
+                let html = core.render_preview(load.source_bufnr);
+                frame_metrics::end(Bucket::PrevRender, render_start);
+                html
             };
+            let load_start = frame_metrics::begin();
             self.load_preview_document(id, &html, &source_path, update);
+            frame_metrics::end(Bucket::PrevLoad, load_start);
             // Recorded WHATEVER the HTML was, the empty string included: an RPC
             // failure answers empty, and leaving `loaded` behind on that would
             // re-arm the reload and re-issue the blocking render on every wake for
@@ -2251,11 +2263,19 @@ impl PaneInner {
     /// layout builder in the widget layer, which is exactly what `render.rs`'s
     /// one-glyph-path rule exists to prevent.
     fn draw_pane(&self, cr: &cairo::Context, pane_id: PaneId, width: f64, height: f64) {
+        // TOP LEVEL of the draw family, and NOT nested inside `wake`: `queue_draw`
+        // only marks the widget dirty, and GTK calls this from the frame clock after
+        // the wake handler has returned (`frame_stats`'s module docs).
+        let _guard = frame_metrics::scope(Bucket::DrawPane);
         let core_ref = self.core.borrow();
         let Some(core) = core_ref.as_ref() else {
             return;
         };
+        // `read_snapshot` is a `parking_lot` `read_arc()` that copies nothing, so a
+        // large `draw.read` is lock contention with the tokio writer, never copying.
+        let read_start = frame_metrics::begin();
         let snap = core.read_snapshot();
+        frame_metrics::end(Bucket::DrawRead, read_start);
 
         // The editor defaults — the same source `draw_cmdline` resolves for its own
         // band, and the only colour channel this front-end has (it takes no colour
@@ -2298,6 +2318,9 @@ impl PaneInner {
         let text =
             statusbar_layout::statusbar_text(fg, bg, self.active_pane.get() == Some(pane_id));
 
+        // The whole strip, save to restore. Recorded for a PREVIEW pane too, which
+        // is why `count(draw.status) >= count(draw.grid)`.
+        let status_start = frame_metrics::begin();
         cr.save().expect("cairo save failed before the statusbar");
         cr.rectangle(0.0, 0.0, width, self.statusbar.height);
         cr.clip();
@@ -2330,6 +2353,7 @@ impl PaneInner {
         }
         cr.restore()
             .expect("cairo restore failed after the statusbar");
+        frame_metrics::end(Bucket::DrawStatus, status_start);
 
         // A preview pane skips EXACTLY the grid block and the scrollbar thumb, and
         // nothing else: the whole-allocation background fill above and the entire
@@ -2351,7 +2375,12 @@ impl PaneInner {
             let grid = grid_id
                 .and_then(|g| snap.grid(g))
                 .unwrap_or_else(|| snap.active_grid());
+            // The grid paint alone. Skipped, and so never recorded, for a preview
+            // pane; there is deliberately no per-cell bucket inside `render::paint`,
+            // where two clock reads per cell would cost more than the thing measured.
+            let grid_start = frame_metrics::begin();
             paint(cr, grid, &snap.highlights, &self.metrics);
+            frame_metrics::end(Bucket::DrawGrid, grid_start);
             if let Some(g) = grid_id {
                 if snap.cursor.grid == g {
                     draw_cursor(cr, &snap, &self.metrics);
@@ -2722,6 +2751,9 @@ impl PaneInner {
     ///
     /// [`draw_toast`]: PaneInner::draw_toast
     fn draw_cmdline(&self, cr: &cairo::Context, width: f64) {
+        // A SIBLING of `draw.pane` in the draw family, never a child of it: the
+        // strip is its own widget with its own draw func.
+        let _guard = frame_metrics::scope(Bucket::DrawCmdline);
         let core_ref = self.core.borrow();
         let Some(core) = core_ref.as_ref() else {
             return;
@@ -3251,6 +3283,10 @@ impl PaneHandle {
 
     /// Reacts to a render wake (see [`PaneInner::on_render_wake`]).
     pub fn on_render_wake(&self) {
+        // `pane.wake`: once per REFRESHED tab, and reachable from outside the drain
+        // loop by both the launch path and the restart path, so its count may exceed
+        // `wake.tabs`'s. See `frame_stats`'s count identities.
+        let _guard = frame_metrics::scope(Bucket::PaneWake);
         self.inner.on_render_wake();
     }
 

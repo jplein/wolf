@@ -52,6 +52,19 @@
 //!   `b:wolf_full_width` flag in the one place that flag becomes geometry
 //!   ([`editor_inset::column_cap`]). The centring offset the cap produces rides in
 //!   the rectangle's `x`, so every consumer reads one origin.
+//! - [`mod@frame_stats`]: the FRAME-TIME rulebook behind the off-by-default
+//!   keystroke-to-pixel measurement — the bucket set and its two families, which
+//!   are `wake` and `draw` rather than one tree ([`frame_stats::Bucket`]); the
+//!   exact counters and the bounded percentile window one report is built from
+//!   ([`frame_stats::FrameStats`]); the nearest-rank percentile, which always
+//!   answers a value some frame actually took ([`frame_stats::percentile`]); the
+//!   byte-exact table the two front-ends are meant to be `diff`ed on
+//!   ([`frame_stats::format_report`]); the three `WOLF_FRAME_STATS*` parsers, which
+//!   take the RAW value rather than an environment map
+//!   ([`frame_stats::is_enabled`], [`frame_stats::report_interval`]); and the emit
+//!   gate ([`frame_stats::interval_elapsed`]). It reads no clock and holds no
+//!   state: the process-global glue that does both is [`mod@frame_metrics`], which
+//!   is deliberately not a seam.
 //! - [`mod@scrollbar`]: the projection of a Neovim window's `win_viewport` onto a
 //!   pane-local thumb rectangle ([`scrollbar::scrollbar_thumb`]) and that thumb's
 //!   colour over the editor's own background
@@ -325,6 +338,8 @@ pub mod crash_overlay;
 pub mod cursor;
 pub mod drawer;
 pub mod editor_inset;
+pub mod frame_metrics;
+pub mod frame_stats;
 pub mod geometry;
 pub mod glyph_style;
 pub mod input;

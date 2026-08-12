@@ -12,6 +12,19 @@ Rules that are decidable from their arguments are pinned in each seam's own `#[c
 
 ## Files
 
+#### `frame_metrics_gate.rs`
+
+**Covers**
+
+- The disabled half of `frame_metrics`, in a process nothing armed: `enabled()` answers false rather than defaulting true or panicking on an unwritten `OnceLock`, and `begin()` answers `None`, which is the whole "an unset flag costs one boolean test and no clock read" claim.
+- That `end`, `scope`, `note_keystroke`, `note_wake`, `maybe_emit` and `flush_final` are total against an absent recorder — called over every bucket, and more than once each, since a second call is what would find state the first left behind.
+
+**Gotchas**
+
+- It needs a test binary of its own, and nothing in it may call `install()`. `enabled()` reads a process-wide `OnceLock`, so whichever test reaches `install()` first fixes the answer for every test after it in that binary, in any order and on any thread. Folded into an existing file these cases would stay green while proving nothing.
+- The armed half belongs to a different process and is the frame-stats smoke's. Arming it here would mean an `unsafe` `std::env::set_var` racing the harness's other threads, and would burn the `OnceLock` for the rest of the binary.
+- It cannot say that nothing reached stderr: capturing file descriptor 2 needs a dev-dependency this crate declines, for the lock-file reason [`release_profile.rs`](#release_profilers) records.
+
 #### `gdk_key.rs`
 
 **Covers**
@@ -39,9 +52,10 @@ Rules that are decidable from their arguments are pinned in each seam's own `#[c
 
 **Covers**
 
-- `paint` onto an offscreen ARGB32 `ImageSurface` from a hand-built 4x2 `Snapshot`: exact equality on known background fills, background-only interiors for a wide-trailing empty cell (the skip-glyph path), and ink in a glyph cell.
-- The line-height argument to `CellMetrics::for_font`, at the shipped 130 % default rather than a value chosen to reproduce anything: a larger percentage gives a taller cell, the advance width does not move with it, and the baseline centres the glyph box. An unresolvable family still measures, matches a resolvable one's cell height, and keeps the name the caller asked for — this crate substitutes nothing of its own.
-- The three decorations, over a fixture of their own so the tests above are untouched: undercurl draws ink below the glyph box, in `special` when set and in the foreground when not; undercurl and a plain underline draw different marks; strikethrough adds foreground ink and no `special` pixel. `the_undercurl_is_wavy_rather_than_straight` is what separates a wave from a thicker straight line; its own `MEASURED:` note carries the geometry.
+- `paint` onto an offscreen ARGB32 `ImageSurface` from a hand-built 4x2 `Snapshot`: exact equality on known background fills, background-only interiors for a wide-trailing empty cell, and ink in a glyph cell.
+- The line-height argument to `CellMetrics::for_font` at the shipped 130 % default: a larger percentage gives a taller cell, the advance width does not move with it, and the baseline centres the glyph box. An unresolvable family still measures, matches a resolvable one's cell height, and keeps the name the caller asked for.
+- The three decorations, over a fixture of their own: undercurl draws ink below the glyph box, in `special` when set and in the foreground when not; undercurl and a plain underline draw different marks; strikethrough adds foreground ink and no `special` pixel.
+- The two values `render::GlyphPainter` keeps across the cells of one paint, over a third fixture: an undecorated cell painted after every decorated one carries no leaked underline, and bold and italic each restore the plain face for the cell after them. That trailing cell is required: the control column is painted before every decorated one, so a forward leak is invisible to it.
 
 **Gotchas**
 
@@ -77,16 +91,17 @@ Rules that are decidable from their arguments are pinned in each seam's own `#[c
 
 **Covers**
 
-- Fifty-five end-to-end smokes launch the built binary under `cage` and read the live window back — thirty-seven by OCR of a `grim` screenshot, eight across two launches in one `cage`.
-- The scenarios span text rendering, the sidebar, the four overlays, splits, pointer input, crash and stall recovery, relaunch and per-tab state, navigation, the clipboard, the appearance, the command line, the terminal drawer, the preview pane, native tabs, and a second window.
-- Three rest on Neovim readbacks and frozen files rather than pixels: the two-window smoke, whose evidence is the live `nvim` children plus a two-window `state.json` and which is this suite's only coverage of `app.quit`; the native-tabs smoke, four readbacks over one `adw::TabPage` opened, switched and closed, with three captures for the one claim no readback can make; and the per-tab persistence smoke, three tabs saved and restored in tab order and still all three after a quit in which two were never selected. The first two are measured at 16.73 s and 16.9 s.
-- Seventeen turn on a value the captive Neovim writes back and call no OCR helper; nine capture no image at all. Five read raw pixels rather than text.
-- Seven compositor-free guards on the smokes' fixtures, constants and harness run in microseconds, so the target reports `62 passed`, not `55`.
+- Fifty-six end-to-end smokes launch the built binary under `cage` — thirty-seven by OCR of a `grim` screenshot, eight across two launches in one `cage`.
+- The scenarios span text rendering, the sidebar, the four overlays, splits, pointer input, crash and stall recovery, relaunch and per-tab state, navigation, the clipboard, the appearance, the command line, the terminal drawer, the preview pane, native tabs, the frame-time instrument, and a second window.
+- Three rest on Neovim readbacks and frozen files rather than pixels: the two-window smoke, whose evidence is the live `nvim` children plus a two-window `state.json` and this suite's only coverage of `app.quit`; the native-tabs smoke, four readbacks over one `adw::TabPage` opened, switched and closed; and the per-tab persistence smoke, three tabs saved and restored in tab order after a quit in which two were never selected.
+- Nineteen call no OCR helper: five read raw pixels, one reads the frame-time report file, one turns on the process exit status alone, and the rest on values the captive Neovim writes back.
+- Seven compositor-free guards on the smokes' fixtures, constants and harness run in microseconds, so the target reports `63 passed`, not `56`.
 
 **Gotchas**
 
 - Run only these with `cargo test -p wolf-gnome --test smoke_headless`, inside the devShell.
 - Read [Smoke conventions](#smoke-conventions) first; several of those rules exist because a smoke passed while proving nothing.
+- The frame-time report is appended to a file, so a stale copy would read as this run's evidence; that smoke clears it first.
 
 #### `common/mod.rs`
 
@@ -267,6 +282,10 @@ Being scrupulous about this is the point of the section.
 - **The native-tabs smoke's inherited-cwd assertion has no isolated red.** Measured: with `create_tabpage(None)` in place of `create_tabpage(Some(cwd))` the smoke stays green, because `:tabnew` copies the current window's effective directory, so the new tab inherits the typed `:tcd` either way — and a new tab inheriting the window's folder makes the two arguments name the same directory in any case. `haslocaldir(-1, 0)` and a window-local `:lcd` were both measured and separate them no better. The assertion stays because a tab rooted somewhere unrelated has no other observer here.
 - **The native-tabs smoke's capture-B must-not-contain has no isolated red.** What it catches is two tabs' pane views drawn at once, reachable only by a structural edit that appends both to one visible container. The same shape as the drawer smoke's leg f above.
 - **`the_shared_smoke_config_pins_the_appearance_every_ocr_smoke_assumes` has no falsifier in `src/` by construction.** It guards a constant in the test file, so both its red runs are edits to that file rather than to production code — a tripwire on the pin, not coverage of anything the application does.
+- **`frame_metrics::flush_final`'s armed path runs in no test.** Every `cage` scenario's teardown signals the application, and the exit flush runs only after a clean return from `Application::run_with_args`, so the final interval's samples are discarded by design and nothing observes the flush at all. `maybe_emit`'s other branch goes the same way: an elapsed interval that recorded nothing is re-baselined without being summarized, and no assertion distinguishes that from a report that was never due.
+- **Four rules of the armed glue have no observer.** That an unopenable `WOLF_FRAME_STATS_FILE` degrades to stderr-only rather than refusing to run; that `install()` resolves the path through `frame_stats::report_file_path` rather than filtering inline, pinned as a value function and unchecked on the glue side; that a `Scope`'s `Drop` records what an explicit `end` would; and that the `debug_assert!` in `with_stats` catches a record from another thread, which no call site can reach. [`frame_metrics_gate.rs`](#frame_metrics_gaters) reaches none of them: nothing in it may call `install()`, and its `Scope` drops against an absent recorder.
+- **The multi-window merge of one accumulator.** N windows run N drain loops over one process-global accumulator, and whichever wakes first after the interval elapses emits the process-wide report. The frame-stats smoke launches one window, and nothing counts a report against the windows that contributed to it.
+- **`wakes/key` is an upper bound no assertion can tighten.** It is a ratio of two counters, and mouse, scroll, resize and out-of-band core notifications all inflate it, so there is no value a smoke could assert it against — that smoke deliberately asserts none.
 
 ## Deliberate test gaps
 

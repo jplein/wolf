@@ -1,435 +1,395 @@
-# Unit: the Linux optimized release build target
+# Implementation plan — typing-latency instrumentation for `wolf-gnome` (`linux-feat/typing-latency`)
 
-Branch: `linux-feat/release-build` (cut from `linux` in the main working directory
-`/home/jplein/dev/jplein/wolf`). The `linux` branch itself is checked out in the worktree
-`/home/jplein/dev/jplein/wolf/.worktrees/linux`, so never `git checkout linux` here.
+## 0. Orchestrator status
 
-## Problem statement
+- [x] Branch `linux-feat/typing-latency` created from `linux` in the MAIN working directory (`/home/jplein/dev/jplein/wolf`).
+- [x] Architect plan (below)
+- [x] Tests written — `src/frame_stats.rs` (22 in-file unit tests, implementation stubbed out behind a marker comment) and `tests/smoke_headless.rs` (`frame_stats_report_covers_the_live_typing_path_under_cage`)
 
-Item 1 of "Suggested order of work for Linux" in `feat-list.md`. Linux builds only the
-default `cargo` profiles today — the workspace `Cargo.toml` declares no `[profile]` block
-at all — so every binary a human runs and every number anyone measures carries debug
-codegen. The row to tick is "Optimized release build target" in the "Reliability and
-performance" table (`feat-list.md:234`), Linux column.
+### Orchestrator rulings on the test-writer's ambiguities
 
-The macOS counterpart is `//crates/wolf-macos:WolfRelease`, a Bazel configuration
-transition documented in `build.md`. Linux builds with `cargo` inside the Nix devShell, so
-the mechanism does not transfer. The reasoning does: an optimized build must not sweep into
-ordinary test runs, and the artifact's honest evidence is that it *runs*, not that it
-compiles.
+1. `report_interval`'s one-hour cap is **inclusive**: `"3600"` → 3600 s, `"3600.5"` → default.
+2. `is_empty` is **count-based**: `record(bucket, 0)` makes the accumulator non-empty.
+3. `Report` and `BucketSummary` keep all fields public with no `#[non_exhaustive]`, so tests build them with struct literals.
+4. `summarize(index: u64)` and `Report.index: u64` stand.
+5. The smoke may pass the burst text through a `FRAME_STATS_BURST` environment variable alongside the four listed ones.
 
-## Orchestrator decisions on the architect's open questions
+The coder must not change any assertion in either test body. If an assertion is wrong, report it to the orchestrator instead.
 
-1. **`lto = "thin"`** — adopt. Coder measures the cold build wall clock; if it exceeds
-   roughly 25 minutes on this 32-core host, stop and report rather than proceeding.
-2. **`debug = "line-tables-only"`** — adopt. The named downstream consumer is item 2's
-   `perf`-style profiling, which needs line tables, not variable inspection. `debug = true`
-   costs size for nobody named.
-3. **Run both cage smokes** as release evidence. The preview smoke additionally proves the
-   WebKit helper processes spawn from the optimized binary, which is the heaviest runtime
-   dependency in the tree.
-4. **No new prose sentence** in `feat-list.md`'s "Reliability and performance" section.
-   `build.md` owns the mechanism; restating it there would create a second owner.
-5. **Ship all three guards** in `release_profile.rs`. The `panic = "abort"` failure is
-   silent, expensive and has no other observer; the ELF check is not a tautology because it
-   reads the artifact rather than the promise.
+### Orchestrator rulings on the coder's Part-A recommendations
 
-Verified by the orchestrator before adopting the plan: `tools/wolf-pointer-inject` is a C
-derivation with `src = ./tools/wolf-pointer-inject`, so editing the workspace `Cargo.toml`
-does not move its hash and forces no devShell rebuild.
+Accepted, for a second test-writer pass:
 
-## The profile block
+1. `percentile_p95_never_exceeds_max` is currently unfalsifiable — its stated falsifier (removing the upper clamp) leaves it green, because `ceil(p·n) ≤ n` for every `p ≤ 1.0`. Add a case pinning the clamp against a caller passing `p > 1.0` (`percentile(&[1,2,3], 1.5) == 3`) and correct the docstring so it no longer claims coverage it does not have.
+2. Add a `format_report` case whose count and millisecond values overflow their columns (count `123456`, max `12345.67` ms), so a change from "overflow the field" to "truncate" cannot pass unnoticed.
+3. Add `crates/wolf-gnome/tests/frame_metrics_gate.rs`: a headless test binary that, with `WOLF_FRAME_STATS` unset, pins the two properties the "costs nothing when off" claim rests on — `enabled()` is false and `begin()` answers `None` — and that `end`, `note_keystroke`, `note_wake`, `maybe_emit` and `flush_final` are no-ops that neither panic nor write. It needs its own test binary because `enabled()` is a process-wide `OnceLock`.
 
-Goes in `/home/jplein/dev/jplein/wolf/Cargo.toml`, after `[workspace.package]`, with a
-comment block carrying the rationale below plus the deliberately-unset list.
+Declined:
 
-```toml
-[profile.release]
-opt-level = 3
-lto = "thin"
-panic = "unwind"
-debug = "line-tables-only"
-strip = "none"
+4. `summarize_is_total_over_a_zero_count_bucket` — already covered. The coder's red run 4 shows that removing the zero-count skip panics eight of the existing unit tests with a divide-by-zero, which is a test failure, not a silent pass.
+
+Deferred to the technical-writer: the `flush_final` / file-open-failure / multi-window gaps belong in `tests/README.md`'s "What is still unproven", not in a new test.
+
+Housekeeping for the next coder pass: `cargo fmt --all` (two pure reflow hunks in the test module leave the gate red).
+
+- [x] Implementation (Part A, the instrument)
+- [x] Failure evidence captured — 4 smoke reds, 13 seam falsifiers, 6 second-pass reds; no test resisted falsification except `percentile_p95_never_exceeds_max`, which was then repaired
+- [x] Measurement run — release binary under `cage` + `wtype`, two scenarios x two runs each, before and after
+- [x] Repairs — `draw.grid` repaired; `prev.render` indicted and deliberately routed onward
+
+### The measured verdict
+
+Conditions: AMD Ryzen AI MAX+ 395, NixOS, release profile, `cage` 1280x720, iA Writer Mono S 10 pt, a 2068-line prose buffer. Scenario A: one pane, grid 90x34, no preview. Scenario B: two panes, grid 59x34, live Markdown preview. ~1230 keys per run, `WOLF_FRAME_STATS_INTERVAL=2`. Run-to-run spread 0.6 % (A) and 2.2 % (B), so nothing under ~2 % is a signal.
+
+**Indicted, and repaired: `draw.grid`.** R1 fired through `draw.pane` (p95 median 11.51 / 12.16 ms > 8 ms); R2 put 99.2 % of the parent inside `draw.grid`. `render::paint` built a fresh `PangoLayout` — and with it a fresh `PangoContext` font-map lookup — for every cell. It now builds one `GlyphPainter` per paint and re-texts a single layout. Before/after over the identical recipe with the two binaries alternated in one session: A `draw.grid` `count x mean` 496.8 → 412.6 ms/s (−17.0 %), B 176.6 → 147.2 ms/s (−16.7 %); `draw.pane` p95 median −19.7 % (A) and −15.4 % (B). Laying a whole run out as one string is faster still (−28 %) and was rejected: Pango would advance by the face's hinted advance instead of `metrics.cell_w`.
+
+**Indicted, not repaired: `prev.render`.** R3 fired outright — 988 blocking preview-render RPCs at 6.93 ms mean against 1238 keystrokes, 15.6 % of wall clock, pushing `wake` p95 to 9.1 ms and its worst interval to 34 ms. This confirms `DECISIONS.md`'s pre-registered suspicion that the preview render is the only blocking RPC repeating while the user simply types. The only repair is temporal coalescing, whose trailing edge needs a one-shot event-armed timer and a new user-visible preview-latency budget — a design decision this unit does not pre-authorize, and not a draw fix. **Routed onward as its own unit, with these numbers as its evidence.**
+
+**Not indicted:** `wake` in scenario A (p95 0.11 ms), `wake.tree`, `wake.shell`, `wake.state`, `pane.state`, `draw.read` (0.00 ms — `read_arc()` really does copy nothing and there is no contention with the tokio writer), `draw.status`, `draw.cmdline`, `prev.load` (17.1 %, below R2's paying threshold). R4 never fired in either scenario, so the per-wake full-grid repaint is not indicted by the pre-registered rules even though every frame repaints every cell. `draw.pane` remains over R1's 8 ms after the repair (A p95 median 9.50 ms); the remainder is glyph rasterization at ~1.8 µs per glyph, which needs damage tracking or a shaped-glyph cache — each a unit of its own.
+
+**R5 on `pane.wake` in scenario A** is met arithmetically (residual 0.01 of 0.01 ms) and is ruled a non-finding: every term is at or below the report's two-decimal print resolution, so another bucket would print `0.00` too and cannot supply the resolution R5 asks for. Eliminating the entire residual would return 0.1 % of the frame budget.
+
+### Orchestrator rulings on the measurement pass
+
+Accepted, for a third test-writer pass — `GlyphPainter` retains two pieces of state across cells, and neither is pinned:
+
+1. `crates/wolf-gnome/tests/paint_golden.rs`: an undecorated cell placed **after** the decorated columns, pinning that a decoration does not leak forward. The coder demonstrated the gap — removing `set_attributes(None)` leaves all 13 golden tests green, because `CONTROL_COL = 0` sits before every decorated column.
+2. The same file: a bold/italic face switch in both directions within one `paint`, pinning that the face is restored when `(bold, italic)` changes back.
+
+Deferred to the technical-writer: the `flush_final` / file-open-failure / multi-window / `Scope`-drop-enabled gaps belong in `tests/README.md`'s "What is still unproven".
+
+### Orchestrator rulings on the golden-case pass
+
+All three golden cases passed first time against the shipped `GlyphPainter`, and all four falsifying edits reddened exactly the intended cases while the 13 pre-existing golden tests stayed green. Two hardening items accepted for a fourth test-writer pass:
+
+1. `MIN_SLANT_SPREAD_PX` sits exactly on the measured value (floor 3 against a measured 3–4 drift, zero margin), so one rasterizer nudge reddens a correct build. Lower it to 2 — still strictly above `MAX_UPRIGHT_SLANT_PX = 1`, and the falsifier drives the drift to 0 — and put the measured range in its doc comment in place of the derived estimate.
+2. `bold_is_applied_and_then_restored_within_one_paint`'s restore assertion is one-sided and would pass over a cell that drew nothing. Add a lower bound tolerant of the ~28 px sub-pixel-phase difference between two identical plain cells.
+
+Declined: a bold-first fixture to pin `face`'s `None`-vs-`(false, false)` initial state. That is a "set the description once rather than twice" performance claim, not a pixel property, and no assertion could see it.
+
+### Orchestrator rulings on the review
+
+The reviewer approved the implementation, verified both count identities and both `GlyphPainter` state-clearing paths against the source, and found no correctness defect. Four items to clear:
+
+1. **`install()`'s `WOLF_FRAME_STATS_FILE` emptiness filter** is a decidable rule sitting in glue, untested, and internally inconsistent (it trims to test emptiness but hands the untrimmed string to `open`). Move it into `frame_stats.rs` as a seam function with a table test, trimming consistently. The seam, not deletion, because macOS filters an empty path too and parity is the point.
+2. **`Bucket`'s explicit discriminants** duplicate `index()` with only one of the two pinned. Drop the discriminants; `index()` is the storage index and the test pins it.
+3. **`pane_view::PaneHandle::on_render_wake` is reachable from the restart path** (`shell.rs`'s `restart_nvim`, via the deferred one-shot timer and the overlay's Restart button), outside every `wake` region — so a crash-restart lands a `pane.wake` sample with no parent. The seam's module-doc count-identity bullet names only the launch path; it must name this too.
+4. **The `#[allow(clippy::too_many_arguments)]` on `draw_glyph`** corresponds to no firing rule (seven arguments; the default threshold fires above seven). Delete it and confirm clippy stays green. The sibling allow on `GlyphPainter::draw` is justified and stays.
+
+Handed to the technical-writer, beyond plan §8: `src/README.md`'s `render.rs` entry needs the `GlyphPainter` decision; `tests/README.md` needs a `#### frame_metrics_gate.rs` entry and the three new `paint_golden.rs` cases; and the "What is still unproven" list gains the `debug_assert!` thread tripwire, the `WOLF_FRAME_STATS_FILE` filter, and `maybe_emit`'s `is_empty()` re-baseline branch.
+
+Worth noting, no action: `GlyphPainter::new(cr)` and `draw(cr, …)` take the context twice with nothing tying them together — both call sites are correct, and the invariant belongs in the doc comment.
+
+- [x] Review — approved with minor notes; all four cleared
+- [ ] Docs
+- [ ] Merge into `linux`
+
+## 1. Summary
+
+`wolf-gnome` gets an off-by-default frame-time measurement surface for the keystroke-to-pixel path, split the way this crate splits everything: a pure, GTK-free seam (`src/frame_stats.rs`) that owns bucket identity, accumulation, percentiles, report formatting, environment parsing and the interval-elapsed decision, unit-tested in an in-file `#[cfg(test)] mod tests`; and a thin process-global glue module (`src/frame_metrics.rs`) that owns the once-only enabled read, the clock, the accumulator, and the writes to stderr and an optional file. The report cadence rides the existing render wake plus one flush at process exit, so the crate's no-polling property holds with the flag set and unset. The bucket set is derived from the GTK path and is deliberately not a transliteration of the macOS list. Once the instrument exists it is used, under `cage`, against the release binary; repairs are decided from the numbers by a pre-registered procedure, and "nothing is indicted, ship the instrument alone" is an authorized outcome.
+
+## 2. Design decisions (these go into `DECISIONS.md`)
+
+### 2.1 No timer; the emit rides the wake, plus one exit flush
+
+`crates/wolf-gnome/DECISIONS.md` "Threading and the wake" states that nothing polls and that the only two timers are one-shot and event-armed. A `glib::timeout_add` report period would break that property with the flag set.
+
+**Decision.** The emit check is the last statement of the drain-loop body in `src/window.rs` (the `while wake_rx.recv().await.is_ok() { … }` future at ~line 741), _after_ the `wake` bucket's timing region closes, so the emit's own cost is never inside a measured region. One additional, non-periodic flush runs in `app::run` after `adw::Application::run_with_args` returns.
+
+**Consequences, stated honestly.** A report covering the final interval before the application goes idle is not emitted until the next wake. The exit flush covers a clean quit; a process killed with a signal (which is what every `cage` smoke's teardown does) never runs it. That is why `WOLF_FRAME_STATS_FILE` is appended **per report** rather than buffered to exit. The instrument arms no timer and no idle source in either state.
+
+With N windows there are N drain loops sharing one process-global accumulator; whichever window wakes first after the interval elapses emits the process-wide report. This matches macOS, where `FrameMetrics` is process-scoped.
+
+### 2.2 Environment names: parity, not divergence
+
+**Decision.** Reuse the macOS spellings exactly: `WOLF_FRAME_STATS`, `WOLF_FRAME_STATS_INTERVAL`, `WOLF_FRAME_STATS_FILE`, with the same accepted values (`1`/`true`/`yes`/`on`, case-insensitive after trimming), the same 5.0 s default interval, the same `wolf-frame-stats ` line prefix and the same byte-exact table layout.
+
+**Reason.** One documented surface serves both front-ends, and the two report tables become directly `diff`-able as text, which is the only cheap way to compare where the two front-ends spend a frame.
+
+**One deliberate divergence, at the seam boundary rather than the surface.** The seam's parsers take the raw value (`Option<&str>`), not an environment map — the crate's existing rule (`config_seam::resolve_font_pt` takes the override as an argument, so a parallel `cargo test` suite never touches the process environment).
+
+### 2.3 The bucket set — derived from the GTK path
+
+**Two families, and this is the single most important thing about the table.** `queue_draw` only marks a widget dirty. GTK invokes the draw funcs from the frame clock _after_ the wake handler has returned, so the `draw.*` buckets are **not** nested inside `wake`. They are a second top-level family.
+
+| idx | label         | wraps exactly                                                                                  | nesting                                                                              |
+| --- | ------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| 0   | `wake`        | the whole drain-loop body in `window::build`'s `spawn_future_local` future                     | parent of 1–3; residual = `shell.on_liveness_wake()` plus loop overhead               |
+| 1   | `wake.tabs`   | `tabs.on_render_wake()` in that body                                                           | in `wake`; disjoint from 2, 3                                                        |
+| 2   | `wake.tree`   | `tree.on_render_wake()` in that body                                                           | in `wake`                                                                            |
+| 3   | `wake.shell`  | `shell.on_render_wake()` in that body                                                          | in `wake`; parent of 4                                                               |
+| 4   | `wake.state`  | `coordinator.commit(self.inner.window_id)` in `shell::AppShell::on_render_wake` (~line 1529)   | in `wake.shell`                                                                      |
+| 5   | `pane.wake`   | the body of `pane_view::PaneHandle::on_render_wake` (~line 3253)                               | in `wake.tabs`, once per refreshed tab; parent of 6, 7                               |
+| 6   | `pane.state`  | `self.refresh_pane_state()` in `PaneInner::on_render_wake` (line 593)                          | in `pane.wake`; disjoint from 7                                                      |
+| 7   | `pane.prev`   | `self.refresh_previews()` (line 598)                                                           | in `pane.wake`; parent of 8, 9                                                       |
+| 8   | `prev.render` | the `core.render_preview(load.source_bufnr)` expression alone (line 1621)                      | in `pane.prev`; disjoint from 9                                                      |
+| 9   | `prev.load`   | the `self.load_preview_document(id, &html, &source_path, update)` call (line 1623)             | in `pane.prev`                                                                       |
+| 10  | `draw.pane`   | the whole body of `PaneInner::draw_pane` (line 2253)                                           | top-level of the draw family; parent of 11, 12, 13                                   |
+| 11  | `draw.read`   | the `core.read_snapshot()` expression alone (line 2258)                                        | in `draw.pane`                                                                       |
+| 12  | `draw.grid`   | the `paint(cr, grid, &snap.highlights, &self.metrics)` expression (line 2354)                  | in `draw.pane`; recorded only for a non-preview pane                                 |
+| 13  | `draw.status` | the statusbar block from `cr.save()` to `cr.restore()` (lines 2301–2332)                       | in `draw.pane`; recorded for preview panes too                                       |
+| 14  | `draw.cmdline`| the whole body of `PaneInner::draw_cmdline` (line 2724)                                        | top-level of the draw family, sibling of `draw.pane`                                 |
+
+Disjointness and count relations (these belong in the seam's docs):
+
+- `{wake.tabs, wake.tree, wake.shell}` are mutually disjoint; sum bounded above by `wake`.
+- `{pane.state, pane.prev}` are mutually disjoint inside `pane.wake`, with a residual that is `apply_intents`, `detect_closes`, `resolve_pending_grids`, `apply_drawer_frame`, `sync_pane_grids`, `update_active_pane`, `refresh_message_surfaces` and `queue_redraw`. **A residual over half of `pane.wake` is itself a reading**: the table lacks resolution there, and the answer is another bucket and another run, not a repair.
+- `{draw.read, draw.grid, draw.status}` are mutually disjoint inside `draw.pane`, with a residual that is the whole-allocation background fill, the geometry, the cursor and the scrollbar thumb.
+- `count(draw.status) ≥ count(draw.grid)`: the strip is never skipped and the grid is skipped for a preview pane.
+- `count(wake) == wakes` **exactly**, by construction.
+- `count(wake.tabs) ≤ count(wake)`: the tab layer runs only when liveness says painting is worth anything.
+- `count(pane.wake)` may exceed `count(wake.tabs)` by the launch path's own synchronous first pass (`window.rs` lines 774–776), which is deliberately **not** instrumented.
+- `count(draw.pane)` is not `count(wake) × panes`: GTK coalesces frames.
+
+**Deliberately omitted, with reasons**: no bucket for `shell.on_liveness_wake` (an atomic read plus a bool compare), none for the cursor draw (one glyph), none for `refresh_message_surfaces`, and **no per-cell bucket inside `render::paint`** — two clock reads per cell would cost more than the thing measured.
+
+**No instrumentation is placed inside a pure seam.** `render.rs`, `cursor.rs`, `glyph_style.rs` stay glue-free, because `paint_golden.rs` drives `render::paint` directly.
+
+**`draw.read` is not the macOS `pane.read`.** macOS's bucket times a deep clone across FFI; here `WolfCore::read_snapshot` is a `parking_lot` `read_arc()` that copies nothing. A large `draw.read` means lock contention with the tokio writer, never copying.
+
+### 2.4 The `wakes/key` ratio
+
+Emitted in the footer, in the macOS spelling, carrying the macOS caveat: a counter ratio and therefore an **upper bound** on wakes attributable to typing, since mouse, scroll, resize and out-of-band core notifications inflate it. One Linux-specific note for the measurement docs: under the headless recipe there is no pointer and the toplevel cannot be resized, so the only inflation left is out-of-band core notifications — closer to attribution there, and still not attribution.
+
+### 2.5 Cost when disabled, and where the accumulator lives
+
+- `frame_metrics::enabled()` reads a `static ENABLED: OnceLock<bool>`: one atomic acquire load and a branch. Every hot-path function is `#[inline]` and tests it first.
+- The once-only environment read is forced by `frame_metrics::install()`, called as the **first statement of `app::run`**.
+- The accumulator lives in a `thread_local!` `RefCell<Option<Recorder>>`; no lock, nothing needs `Send`. The slot is `None` unless `install()` found the flag set, so a disabled process allocates nothing.
+- **`thread_local!` means a `record` from a non-main thread accumulates into its own slot that nothing reports — silent data loss.** No current call site can reach a non-main thread. The tripwire is a `debug_assert!` comparing `std::thread::current().id()` against a `static REPORTER_THREAD: OnceLock<ThreadId>` stamped by `install()`. Accepted rather than prevented, and documented.
+- This collides with an existing crate rule that must be resolved in writing: `coordinator.rs`'s doc comment says "there is deliberately no `static`, no `OnceLock` and no `thread_local!` in this crate", and `app.rs` plus `src/README.md` say the crate has no process-global state. **The rule's purpose is that two `WolfCore`s in one process are independent**, and diagnostic counters no application behaviour reads do not threaten that. Narrow all three statements to _application_ state and point them at the new section; do not delete them.
+
+### 2.6 Recording must never change what is painted, nor take the process down
+
+- `begin`/`end`/`scope` touch no Cairo context, no widget and no core.
+- **Do not use `eprintln!` for report output** — it panics if writing to stderr fails, the Rust equivalent of the `NSException`-on-`EPIPE` hazard. Write with `std::io::stderr().write_all(bytes)` and discard the `Result` with `let _ = …`; same for the file handle.
+- The emit performs a synchronous main-thread write, once per interval, outside every measured region, adding no `block_on_rpc`.
+
+## 3. Files to create
+
+### 3.1 `crates/wolf-gnome/src/frame_stats.rs` — the pure seam
+
+GTK-free, Cairo-free, Pango-free, environment-free. `std` only. Module doc states the two families, the double-count trap, the count identities from §2.3, and that the seam never reads a clock.
+
+```rust
+pub const LINE_PREFIX: &str;                 // "wolf-frame-stats "
+pub const DEFAULT_INTERVAL_SECS: f64;        // 5.0
+pub const SAMPLE_CAPACITY: usize;            // 4096
+pub const MAX_LABEL_WIDTH: usize;            // 13
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Bucket { Wake, WakeTabs, WakeTree, WakeShell, WakeState,
+                  PaneWake, PaneState, PanePrev, PrevRender, PrevLoad,
+                  DrawPane, DrawRead, DrawGrid, DrawStatus, DrawCmdline }
+
+impl Bucket {
+    pub const ALL: [Bucket; 15];
+    #[must_use] pub fn index(self) -> usize;        // dense, ascending, storage index
+    #[must_use] pub fn label(self) -> &'static str; // report-table name
+}
+
+pub struct FrameStats { /* [Accumulator; Bucket::ALL.len()], keystrokes, wakes */ }
+impl Default for FrameStats { … }               // clippy::new_without_default
+impl FrameStats {
+    #[must_use] pub fn new() -> Self;            // reserves SAMPLE_CAPACITY per bucket
+    pub fn record(&mut self, bucket: Bucket, nanos: u64);
+    pub fn record_keystroke(&mut self);
+    pub fn record_wake(&mut self);
+    pub fn reset(&mut self);                     // zeroes counters, keeps allocations
+    #[must_use] pub fn is_empty(&self) -> bool;  // no sample and both counters zero
+    #[must_use] pub fn retained_sample_count(&self, bucket: Bucket) -> usize;
+    #[must_use] pub fn summarize(&self, index: u64, elapsed_secs: f64) -> Report;
+}
+
+pub struct BucketSummary { pub bucket: Bucket, pub count: u64, pub mean_nanos: u64,
+                           pub p50_nanos: u64, pub p95_nanos: u64, pub max_nanos: u64,
+                           pub truncated: bool }
+pub struct Report { pub index: u64, pub elapsed_secs: f64, pub buckets: Vec<BucketSummary>,
+                    pub keystrokes: u64, pub wakes: u64, pub wakes_per_keystroke: Option<f64> }
+
+#[must_use] pub fn percentile(sorted: &[u64], p: f64) -> u64;
+#[must_use] pub fn format_report(report: &Report) -> String;
+#[must_use] pub fn is_enabled(raw: Option<&str>) -> bool;
+#[must_use] pub fn report_interval(raw: Option<&str>) -> Duration;
+#[must_use] pub fn interval_elapsed(since_last: Duration, interval: Duration) -> bool;
 ```
 
-| key       | buys                                                                                                                | costs                                                       |
-| --------- | ------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
-| `opt-level = 3` | Full LLVM optimization; also reaches `rusqlite`'s bundled SQLite, since `cc` reads `OPT_LEVEL`. Explicit so the manifest states the contract. | Compile time. |
-| `lto = "thin"` | Cross-crate inlining across the `wolf-gnome` → `wolf-core` paint/snapshot path; parallel and bounded, unlike fat LTO. | Link wall clock and peak RSS; `bench` inherits it, so `cargo test --release` pays too. |
-| `panic = "unwind"` | Declared at the point of temptation. Cargo silently ignores `panic` for `test`/`bench`, so `"abort"` forks `target/release/` between `cargo build --release` and `cargo test --release` and rebuilds the whole graph on every alternation. `"abort"` would also turn app panics into `SIGABRT`, changing the exit-code evidence the smokes rest on. | Nothing; it is the default. |
-| `debug = "line-tables-only"` | Function names and file:line for `perf` and for release panic backtraces — what item 2 needs. | Binary size and link time; not enough for `gdb` variable inspection. |
-| `strip = "none"` | Explicit because cargo's `strip` default is version-dependent; the contract is that symbols survive. | A larger artifact. |
+Rules the implementation must satisfy:
 
-Deliberately unset, and the manifest comment says so: `codegen-units` (release default 16;
-thin LTO recovers most of what CGU splitting gives up, and `1` serializes final codegen on
-a host whose parallelism is the point), `incremental`, `overflow-checks`,
-`debug-assertions`, `split-debuginfo` (embedded default keeps a copied binary's symbols —
-a trap the packaging unit would otherwise inherit), `[profile.release.package."*"]` and
-`[profile.release.build-override]`.
+- `count`, sum and `max` exact and unbounded; only the percentile window bounded to the last `SAMPLE_CAPACITY` samples per bucket, via a ring with a write index. `truncated == (count > SAMPLE_CAPACITY)` — strictly greater.
+- `mean_nanos` is truncating integer division `sum / count`; `summarize` omits every zero-count bucket.
+- `percentile` is nearest-rank over an already-sorted slice: `idx = clamp(ceil(p * n) as isize - 1, 0, n - 1)`, `0` for an empty slice.
+- `summarize` is the only place anything is sorted, once per report.
+- `wakes_per_keystroke` is `None` when `keystrokes == 0`.
+- `format_report` reproduces the macOS layout byte for byte: prefix on every line including the last; header `#{index}  window={elapsed:.1}s`; a column row `bucket        count     mean      p50      p95      max`; one row per bucket sorted by `index()` regardless of `Report.buckets` order, label left-14, count right-5 with a `*` suffix inside the field when truncated, then mean/p50/p95/max right-9 each as milliseconds with two decimals; footer `keys=… wakes=… wakes/key=…` with `n/a` for `None`. Every line ends in `\n`.
+- `report_interval` guards before `Duration::from_secs_f64`, which **panics** on a non-finite, negative or overflowing value: accept only finite, strictly positive, at most one hour; anything else gives the 5 s default. Trim whitespace first.
+- `interval_elapsed(since, interval)` is `since >= interval` — inclusive at the boundary.
+- **No `delta` function.** `std::time::Instant::saturating_duration_since` already is one. Record this as a non-port.
+- Nanoseconds via `u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX)`, never an `as` cast.
 
-### What the block does and does not change
+### 3.2 `crates/wolf-gnome/src/frame_metrics.rs` — the process-global glue
 
-| command                                     | profile                                | inherits `[profile.release]`? | output      |
-| --------------------------------------------- | ---------------------------------------- | ------------------------------- | ------------- |
-| `cargo build`                               | `dev`                                  | no                            | `debug/`    |
-| `cargo build --release`                     | `release`                              | yes                           | `release/`  |
-| `cargo run --release -p wolf-gnome`         | `release`                              | yes                           | `release/`  |
-| `cargo test`                                | `test` (targets) / `dev` (lib and bin) | **no**                        | `debug/`    |
-| `cargo test --release`                      | `bench` (targets) / `release`          | yes                           | `release/`  |
-| `cargo clippy --workspace --all-targets`    | `dev` / `test`                         | no                            | `debug/`    |
-| `cargo build --workspace --all-targets`     | `dev` / `test`                         | no                            | `debug/`    |
+`std` only; no GTK.
 
-No step of the Linux verification gate selects `release` or `bench`, so the gate is
-untouched. That is the Linux analogue of `WolfRelease`'s `manual` tag: the optimized build
-never sweeps in because no ordinary command asks for it.
-
-## How a human builds and runs it — documented commands, no wrapper script
-
-`build.md` owns build and run commands per `CLAUDE.md`; a committed script would either
-duplicate them or force `build.md` to point at a second owner. The macOS side sets the
-precedent — `:WolfRelease` needs a genuinely awkward `cquery` dance and `build.md` still
-documents commands rather than shipping a script.
-
-From the repository root, which is not optional (the shellHook generates `FONTCONFIG_FILE`
-from `$PWD/crates/wolf-gnome/testdata/fonts.conf`):
-
-```sh
-nix develop --command cargo build --release
-nix develop --command cargo run --release -p wolf-gnome
-nix develop --command ./target/release/wolf-gnome   # no cargo in the process tree
+```rust
+pub fn install();                                     // first statement of app::run
+#[must_use] pub fn enabled() -> bool;                 // OnceLock<bool>, #[inline]
+#[inline] #[must_use] pub fn begin() -> Option<Instant>;
+#[inline] pub fn end(bucket: Bucket, start: Option<Instant>);
+#[inline] #[must_use] pub fn scope(bucket: Bucket) -> Scope;
+#[inline] pub fn note_keystroke();
+#[inline] pub fn note_wake();
+pub fn maybe_emit();                                  // last statement of the drain body
+pub fn flush_final();                                 // after Application::run returns
+pub struct Scope { /* bucket + Option<Instant> */ }   // impl Drop records
 ```
 
-Outside the devShell it fails in a known order: `WOLF_NVIM_BIN` unset makes
-`WolfCore::start` return `NvimError::BinNotSet` and the process exits after one stderr
-line; then `GSETTINGS_SCHEMA_DIR`/`XDG_DATA_DIRS` (`adw::Application` aborts on activate);
-then `FONTCONFIG_FILE` (substituted fonts, so cell metrics differ from every golden); then
-`WOLF_RG_BIN` and the two treesitter dirs.
-
-## Files
-
-Create:
-
-- `crates/wolf-gnome/tests/release_profile.rs` — this crate because it has no
-  `BUILD.bazel` (deliberate, see `crates/wolf-gnome/DECISIONS.md`), so the file needs no
-  `rust_test` wiring and cannot become a silent macOS-only gap; and because the manifest
-  half reads `<CARGO_MANIFEST_DIR>/../../Cargo.toml`, which is not a Bazel runfile, while
-  the artifact half needs `CARGO_BIN_EXE_wolf-gnome`, which only this crate exports.
-
-Modify:
-
-- `Cargo.toml` — the profile block plus its comment.
-- `build.md` — four edits, two of them rewrites of existing sentences (see doc plan).
-- `crates/wolf-gnome/tests/README.md` — rewrite line 11's "three kinds of file" framing,
-  add a `#### release_profile.rs` entry.
-- `feat-list.md` — tick line 234's Linux box and extend its Branch column to the
-  two-platform form neighbouring rows use; delete ordered-list item 1 and renumber 2→1 …
-  6→5 **without rewording any survivor**.
-- `macos-followups.md` — one ledger row: `//:Cargo.toml` is one of `crate_universe`'s
-  `manifests` in `MODULE.bazel`, so the repository rule re-runs; profiles resolve no
-  dependency and do not appear in `cargo metadata`, so no repin is expected and neither
-  lockfile should move — unconfirmable from Linux, so macOS runs
-  `bazel build //crates/wolf-core:wolf_core` and checks `Cargo.Bazel.lock` is unmoved.
-
-Explicitly unchanged — do not invent work: `crates/wolf-gnome/README.md`,
-`crates/wolf-gnome/DECISIONS.md` (the profile is workspace-scoped and survives deleting
-the crate, so by `CLAUDE.md`'s test it is not a crate document's business),
-`architecture.md`, `flake.nix`, the `wolf-core`/`wolf-ffi` test READMEs, every
-`BUILD.bazel`, `MODULE.bazel`, `Cargo.lock`, `Cargo.Bazel.lock`.
-
-## Test plan
-
-`crates/wolf-gnome/tests/release_profile.rs`, no new dependency. The ELF walk is
-hand-rolled specifically so no `object`/`toml` dev-dependency enters `Cargo.lock`, which
-**is** a `crate_universe` input and would create a repin obligation undischargeable from
-Linux. Shelling out to `readelf` is rejected: it is not in the devShell `packages`, so it
-would mean a `flake.nix` edit and a stale direnv for every developer.
-
-Helpers: `workspace_manifest_path()`; `release_profile_keys(&str) -> BTreeMap` (a small
-line scanner, not a TOML parser — track the current `[section]`, collect `key = value`
-only under exactly `[profile.release]`, stop at the next `[` so a future
-`[profile.release.package."*"]` is not folded in, trim quotes); `dwarf_line_section_size()`
-(minimal ELF64 section-header walk; assert `\x7fELF`, `EI_CLASS == 2`, `EI_DATA == 1`,
-`e_shentsize == 64`, refuse `e_shnum == 0` or `e_shstrndx >= 0xFF00`, walk with
-`chunks_exact(64)` not an index loop, resolve names via `e_shstrndx`).
-
-**A substring scan for `.debug_line` is unsound and must not be substituted.** Every Rust
-binary links std's backtrace machinery (`object`/`gimli`), which carries DWARF section
-names as string literals in `.rodata`, so a fully stripped binary still contains the bytes.
-
-| # | Test                                             | Asserts                                                                                | Falsifying edit                                                             | Command                                                                            |
-| - | -------------------------------------------------- | ---------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| 1 | `the_release_profile_never_aborts_on_panic`      | `[profile.release]` exists and `panic` is exactly `unwind`                             | `panic = "unwind"` → `"abort"`                                              | `cargo test -p wolf-gnome --test release_profile`                                  |
-| 2 | `the_release_profile_keeps_its_debug_info`       | `debug` present and not `0`/`false`/`none`; `strip` is `none` or absent                | `strip = "none"` → `"symbols"`                                             | same as 1                                                                          |
-| 3 | `the_binary_under_test_carries_line_tables`      | `CARGO_BIN_EXE_wolf-gnome` has a non-empty `.debug_line`; prints path and size          | dev: add `[profile.dev] debug = false`. release: `debug = false` in release  | 1's command, and `cargo test --release -p wolf-gnome --test release_profile -- --nocapture` |
-
-Assert nothing about `opt-level`, `lto` or `codegen-units`: those have no silent failure
-mode, and pinning them turns a future measured retune into a test edit.
-
-### Defect found in test 3 by the failure-evidence step
-
-Test 3 as written **does not detect `debug = false`**, the setting it is named and
-documented for. Measured: with `debug = false` the binary still carries a 271,586-byte
-`.debug_line`, because Rust's precompiled standard-library rlibs (`std::backtrace_rs`,
-`addr2line`, `gimli`, `alloc`, `core`) ship debug info that `[profile.release] debug` does
-not govern. With `debug = "line-tables-only"` the section is 5,980,598 bytes. The only
-falsifier found is `strip = "debuginfo"`, which removes the section entirely — so the test
-is attached to the `strip` contract, not the `debug` contract, and its rustdoc "Falsifiers"
-paragraph is factually wrong.
-
-The ELF walk itself is sound: its 271,586 matched `readelf`'s `0x424e2` exactly.
-
-### The repair, chosen from measurement
-
-**Decision: a semantic source-path check inside `.debug_str`, read by section header**, in
-addition to the existing `.debug_line` size check. Not a size floor — a threshold is a
-magic number that ages with std and the dependency graph, and the semantic check attaches
-the test to the `debug` contract directly rather than by proxy.
-
-Measured cross-product on this host (`rustc 1.96.0`, DWARF version 4 uniformly, so
-`.debug_line_str` does not exist — it is a DWARF 5 section):
-
-| variant                     | `.debug_line`   | `.debug_str` contains `crates/wolf-gnome/src` | whole-file scan finds `crates/wolf-gnome` |
-| ----------------------------- | ----------------- | ----------------------------------------------- | ------------------------------------------- |
-| `debug = "line-tables-only"` | 5,981,172 bytes | yes — 17 hits                                 | yes                                       |
-| `debug = false`              | 271,586 bytes   | **no** — only `/rustc/<hash>/library/` and `/rust/deps/` | yes — **18 hits**             |
-| `strip = "debuginfo"`        | absent          | absent (every `.debug*` gone but a 34-byte `.debug_gdb_scripts`) | yes — 18 hits          |
-
-Full `.debug*` inventory, `readelf -S -W`, whole-workspace `cargo build --release`:
-
-| section          | `line-tables-only` | `debug = false` |
-| ------------------ | -------------------- | ----------------- |
-| `.debug_info`    | 12,623,398         | 738,640         |
-| `.debug_str`     | 5,477,789          | 1,326,607       |
-| `.debug_line`    | 5,981,172          | 271,586         |
-| `.debug_loc`     | 6,104,795          | absent          |
-| `.debug_line_str` | absent             | absent          |
-
-`.debug_str` is populated in both — the discriminator is the needle, not the section's
-presence. `.debug_line_str` is absent because rustc emits **DWARF 4** uniformly here
-(`rustc 1.96.0`, LLVM 22.1.2, `x86_64-unknown-linux-gnu`); it is a DWARF 5 section.
-
-The test therefore searches `.debug_str`, then `.debug_line_str`, then `.debug_line`, and
-passes if any present section carries the needle. Not `.debug_line` alone: LLVM emits
-DWARF 5 file and directory names as `DW_FORM_line_strp` into `.debug_line_str`, so a rustc
-default bump to DWARF 5 would move the strings and produce a false red.
-
-**Do not formulate the check as "some `.debug*` section exists".** Under
-`strip = "debuginfo"` every `.debug*` section vanishes except `.debug_gdb_scripts`, which
-survives at 34 bytes.
-
-Binary sizes for the two variants: 45,656,208 vs 12,791,936. Note also that a
-`-p wolf-gnome` build differs from a whole-workspace one by 7,424 bytes of feature
-unification, so quote which build a size came from.
-
-The 18 `.rodata` hits in the `debug = false` binary come from `init_lua_path`'s
-`env!("CARGO_MANIFEST_DIR")` and from `panic!` location strings. **This is the second and
-sharper proof that a whole-file substring scan is unsound**: it would pass on exactly the
-binary the test must reject. Only a section-scoped read discriminates.
-
-So the repaired test carries two assertions with two distinct falsifiers: `.debug_line`
-non-empty (falsified by `strip = "debuginfo"`) and a workspace source path in `.debug_str`
-(falsified by `debug = false`). Its rustdoc must claim only these two verified falsifiers.
-
-End-to-end evidence, existing smokes, no new smoke (so `flake.nix`'s `GATE-REQUIRED` count
-and `tests/README.md`'s pass count are untouched):
-
-```sh
-nix develop --command cargo test --release -p wolf-gnome --test smoke_headless -- \
-  --exact window_renders_typed_text_under_cage \
-          preview_pane_renders_and_edit_source_returns_under_cage
-```
-
-The first proves the window maps, the captive Neovim is alive and receiving keys, and
-Cairo/Pango really drew glyphs. The second proves the WebKit helpers spawn and render.
-`CAGE_LOCK` serializes them, so one invocation is safe; check no stray `cage` holds the
-Wayland socket first.
-
-## Measurement — the honesty rule
-
-**No honest runtime measurement exists on this host.** The GTK front-end carries no
-frame-time instrumentation (that is item 2), and every proxy is dominated by something
-else: `grid_dump` and the `wolf-core` suite by Neovim startup and RPC waits, a cage smoke's
-wall clock by fixed settle sleeps. So this unit makes **no speed claim**, and `build.md`
-says that in as many words.
-
-### What was actually measured
-
-Toolchain: `cargo 1.96.0 (30a34c682 2026-05-25)`, `rustc 1.96.0 (ac68faa20 2026-05-25)`.
-
-Cold `cargo build --release` (`target/release` did not exist; 167 crates from scratch):
-`real 0m52.610s`, `user 6m19.665s`, `sys 0m26.134s` on the 32-core dev host. `target/release`
-came to 1.4 GB. Far under the 25-minute threshold, so the `lto = "thin"` decision stands
-without revisiting.
-
-Binary sizes for `target/release/wolf-gnome`:
-
-| build                                          | bytes      |
-| ------------------------------------------------ | ------------ |
-| `debug = "line-tables-only"`, `strip = "none"` | 45,656,208 |
-| `debug = false`                                | 12,791,936 |
-| `strip = "debuginfo"`                          | 10,165,744 |
-
-Retained line tables cost 32,864,272 bytes (~31.3 MiB). Not comparable to macOS's
-documented 8.26 MB — different linker, different debug policy, dynamically linked GTK
-against a bundled `.app`.
-
-Gate: exit 0, 1036 tests passed. `cargo test --workspace` took `real 10m8.964s`,
-`user 1m17.190s` — the ratio confirms it is dominated by waiting on Neovim and the
-compositor, not compilation, and sits at the low end of `build.md`'s documented 10-25
-minutes. **Every `Finished` line in the gate log reads `dev` or `test`, never `release` or
-`bench`**, `release_profile.rs` ran from `target/debug/deps/`, and `target/release/wolf-gnome`
-kept its pre-gate timestamp. The named hazard did not materialise.
-
-Both cage smokes passed under `--release` in 21.31 s, first try, no flake.
-
-### Corrections to this plan, measured rather than predicted
-
-The "Outside the devShell it fails in a known order" paragraph above was **wrong** and must
-not be copied into `build.md`. Measured under `env -i` with `LD_LIBRARY_PATH`,
-`IN_NIX_SHELL` and `WOLF_NVIM_BIN` all confirmed unset:
-
-- `ldd target/release/wolf-gnome | grep 'not found'` produces no output; all 188 entries
-  resolve through store RPATHs written by nixpkgs' linker wrapper.
-- With no display at all: `Gtk-WARNING: Failed to open display`, exit 1.
-- With a display but no devShell exports, in this order: about 40 `Fontconfig warning`
-  lines from the host fontconfig; then
-  `GLib-GIO-CRITICAL: g_settings_schema_source_lookup: assertion 'source != NULL' failed`,
-  which is a warning and **does not abort** — the plan's "`adw::Application` aborts on
-  activate" claim is false; then
-  `wolf-gnome: failed to start core: WOLF_NVIM_BIN is not set; the pinned nvim binary must
-  be provided by the flake devShell`; then
-  `wolf-gnome: no window could be opened for any of the 1 restored plans; exiting` — and
-  **exit code 0** despite opening no window.
-
-The exit-0-with-no-window behaviour is pre-existing `wolf-gnome` behaviour, unrelated to
-this unit. Record it; do not fix it here. Confirmed three times.
-
-**Whatever `build.md` says about the exit code must name which path it describes**: the
-zero is specific to the has-display, no-devShell path. With no display at all it fails
-earlier and differently — `Gtk-WARNING: Failed to open display`, exit 1.
-
-## Doc plan
-
-`build.md`, Linux section only:
-
-1. Line 23, **rewrite in place**: the `FONTCONFIG_FILE` sentence gains that it is generated
-   from a repo-relative template, so `nix develop` commands run from the repository root.
-2. Lines 35-41, edit the code block's last comment to mark it unoptimized, and one sentence
-   after the block saying these select cargo's default profiles, linking to the new
-   subsection. Do not repeat the release commands here.
-3. New `### The optimized build` between `### Building and testing` and
-   `### The verification gate`, carrying: the commands and the repo-root requirement; the
-   profile by contract (optimized, unwinding, line-table-bearing) with a pointer to the
-   manifest comment as the single owner of the per-key reasons; that no gate step builds
-   this profile, so alternating costs a second full graph; that `cargo test --release`
-   reuses those artifacts and that this is what `panic = "unwind"` buys; the guard
-   commands; the measured build time and size with provenance; and one flat sentence that
-   no runtime measurement exists on this platform. **No table modelled on "The measured
-   penalty" — there is no number to put in it.**
-4. **No change to `### The verification gate`.**
-
-`crates/wolf-gnome/tests/README.md`: rewrite line 11's framing to admit a fourth kind of
-file (the built artifact and its manifest) rather than appending beside the stale sentence;
-add a `#### release_profile.rs` entry, ~200 words, whose Gotchas cover that the artifact
-half only discriminates under `--release`, that the manifest half is a tripwire of the same
-shape as `the_shared_smoke_config_pins_the_appearance_every_ocr_smoke_assumes`, that
-`opt-level`/`lto`/`codegen-units` are deliberately unpinned, why the file lives in this
-crate, and that `.symtab` is not asserted because no revert isolates it.
-
-Then `prettier --write` every edited Markdown file and run `./tools/lint/markdown_check.sh`
-on them (the workspace documents are outside the Bazel filegroup, so the script is their
-only check).
-
-## Deferred to the packaging unit (item 3) — record, do not act
-
-1. `crates/wolf-gnome/src/app.rs::init_lua_path` bakes `env!("CARGO_MANIFEST_DIR")`, so a
-   Nix-built binary would carry an absolute path into an ephemeral build sandbox. The
-   derivation needs a real resolution path (a `WOLF_INIT_LUA`-style override, which
-   `wolf-gnome` does not read today, or a store path baked at build time) — that is a
-   **source change in `wolf-gnome`**, not packaging-only.
-2. The whole runtime environment is shellHook-supplied and must be re-supplied by a wrapper
-   (`wrapGAppsHook4`/`makeWrapper`), plus whatever WebKit needs to find its helper
-   processes.
-3. `FONTCONFIG_FILE` is a render-determinism device pointing at a per-shell `mktemp` file,
-   not a shipping strategy.
-4. `buildRustPackage` defaults to `--release`, so the derivation inherits
-   `debug = "line-tables-only"` and must decide whether to split it into a `debug` output
-   or drop it. `split-debuginfo` stays embedded here specifically to keep that open.
-5. The `ldd` result above.
-
-## Implementation order
-
-1. `df -h`; confirm room beside the existing 28 GB `target/`.
-2. Edit `Cargo.toml`.
-3. Add `crates/wolf-gnome/tests/release_profile.rs`.
-4. `cargo fmt --all`; `cargo clippy --workspace --all-targets -- -D warnings`.
-5. `cargo test -p wolf-gnome --test release_profile` — green in the default suite.
-6. Failure evidence for tests 1 and 2 (two one-line manifest reverts, captured, reverted).
-7. `time cargo build --release`; record wall clock and `ls -l`.
-8. `cargo test --release -p wolf-gnome --test release_profile -- --nocapture` — the printed
-   path is the evidence `--release` retargeted the binary.
-9. Failure evidence for test 3 under `--release` (`debug = false`, rebuild, capture, second
-   `ls -l`, restore, rebuild).
-10. The two smokes under `--release`.
-11. `ldd` from a plain shell.
-12. Docs; `prettier --write`; `markdown_check.sh`.
-13. The full Linux verification gate, verbatim from `build.md`.
-
-## Verified evidence
-
-Toolchain `cargo`/`rustc 1.96.0`, LLVM 22.1.2, `x86_64-unknown-linux-gnu`.
-
-| claim                                    | command                                                                | result                                                                       |
-| ------------------------------------------ | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------ |
-| Tests 1 and 2 fail with no profile block | `cargo test -p wolf-gnome --test release_profile`                      | 2 FAILED, test 3 ok (pre-implementation red)                                 |
-| Test 1 falsifier                         | `panic = "abort"`                                                      | FAILED, `left: Some("abort")`                                                |
-| Test 2 falsifier                         | `strip = "symbols"`                                                    | FAILED                                                                       |
-| Test 3 falsifier A                       | `debug = false`, release                                               | assertion 1 green (271,586), assertion 2 FAILED at the needle                 |
-| Test 3 falsifier B                       | `strip = "debuginfo"`, release                                         | assertion 1 FAILED first (`.debug_line` absent)                              |
-| Optimized artifact is the one tested     | `cargo test --release … --nocapture`                                   | path `…/target/release/wolf-gnome`, needle hit in `.debug_str`               |
-| **The optimized binary actually runs**   | `cargo test --release … --test smoke_headless` (2 cage smokes)         | both ok, 21.31 s, first try, no flake                                        |
-| Gate unaffected                          | the full verification gate                                             | exit 0, 1036 passed; every `Finished` reads `dev`/`test`; 10m9.048s vs 10m8.964s |
-| Docs formatted                           | `prettier --check "**/*.md"`                                           | exit 0                                                                       |
-
-The smoke row is the load-bearing one: it launches the optimized binary under `cage`,
-types into the live captive Neovim, screenshots and OCRs the text back, and the second
-smoke additionally spawns the WebKit helper processes. That is the artifact demonstrably
-working, not merely compiling.
-
-**What stays unproven.** No runtime measurement exists on this platform — the GTK
-front-end carries no frame-time instrumentation, so no speed claim is made anywhere. The
-macOS half is unverifiable from this host: `//:Cargo.toml` is a `crate_universe` manifest
-input, so the repository rule re-runs, and `macos-followups.md` carries the row asking a
-macOS pass to confirm `Cargo.Bazel.lock` does not move.
-
-## Status
-
-- [x] Branch cut
-- [x] Architect plan
-- [x] Tests written, then repaired after the failure-evidence step exposed a hollow test
-- [x] Implementation + tests green
-- [x] Failure evidence captured for all three tests, both falsifiers per test where two exist
-- [x] Docs
-- [x] Review — approved with minor notes, all four acted on
-- [x] feat-list row ticked
-
-## What the review changed
-
-The reviewer caught one real accuracy defect and three smaller ones, all fixed:
-
-- `build.md` labelled 31.3 MiB as the line tables. It is the whole retained debug-info
-  delta; the line tables are about 5.7 MiB. Relabelled, paragraph split to stay inside the
-  length ceilings.
-- `build.md` asserted that a profiler and a release backtrace "resolve to a `file:line`",
-  which nobody observed. It states the requirement instead.
-- `build.md` called the two release commands "guards"; the cage smokes guard nothing, they
-  are the evidence the binary runs.
-- `build.md` restated the `panic` mechanism four lines after naming `Cargo.toml` its owner.
-  The mechanism is cut; the workflow fact stays.
-- `release_profile.rs` claimed `strip = "symbols"` as a falsifier where `"debuginfo"` was
-  measured, and `DEBUG_OFF_VALUES` omitted `"line-directives-only"`, which cargo accepts
-  and which would have passed test 2. Both fixed, the latter with its own captured red.
-
-Two durability additions the review prompted: `crates/wolf-gnome/DECISIONS.md` records that
-`init_lua_path` bakes `env!("CARGO_MANIFEST_DIR")`, and `feat-list.md` states the resulting
-limit so the ticked row cannot be read as a shippable artifact.
+- `install()` reads `WOLF_FRAME_STATS` once through `frame_stats::is_enabled`, returns immediately when false. When true it reads `WOLF_FRAME_STATS_INTERVAL` and `WOLF_FRAME_STATS_FILE`, stamps the reporting thread id, opens the file create/append (a file that cannot be opened degrades silently to stderr-only), builds the `Recorder`, and writes the header line `wolf-frame-stats enabled interval=<x.x>s`.
+- `Scope`'s `Drop` calls `end`. **Bind it to a named `_guard`, never `let _ = scope(..)`**, which drops instantly and measures nothing — put that warning in the module doc.
+- `maybe_emit()`: return unless enabled; take `Instant::now()`; borrow the recorder; if `!interval_elapsed(now - interval_start, interval)` return; if `stats.is_empty()` re-baseline and return **without** summarizing; otherwise bump `report_index`, `summarize`, `reset`, re-baseline, **drop the borrow**, then format and write.
+- `flush_final()` is `maybe_emit()` with the interval check skipped; still silent when nothing was recorded.
+- Writes go to `stderr().write_all` and the optional `File::write_all`, both with the `Result` discarded. Never `eprintln!`.
+
+## 4. Files to modify
+
+| File                                       | Change                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `crates/wolf-gnome/src/lib.rs`              | Declare `pub mod frame_metrics;` and `pub mod frame_stats;` in the alphabetical module list (between `editor_inset` and `geometry`). Add one bullet for `frame_stats` to the module-doc seam list; no re-exports.                                                                            |
+| `crates/wolf-gnome/src/app.rs`              | `run()`: `frame_metrics::install();` as the first statement; bind the exit code from `app.run_with_args::<&str>(&[])` to a local, call `frame_metrics::flush_final()`, return the code. Narrow the module doc's "no process-global state" claim to application state.                        |
+| `crates/wolf-gnome/src/window.rs`           | Drain future (~741): `note_wake()` first, then a block holding `scope(Bucket::Wake)` around the existing four statements, with `scope(WakeTabs)` / `scope(WakeTree)` / `scope(WakeShell)` blocks around the three calls, then `maybe_emit()` **after** the `wake` block closes. Leave the launch-path calls at 774–776 and 810 uninstrumented with a one-line comment. `wire_keys` (~857): `frame_metrics::note_keystroke();` immediately after `core.send_input(InputEvent::Key(event));`. |
+| `crates/wolf-gnome/src/shell.rs`            | `AppShell::on_render_wake` (~1528): `let _guard = frame_metrics::scope(Bucket::WakeState);` as the first statement inside the `if let Some(coordinator) = …` block.                                                                                                                         |
+| `crates/wolf-gnome/src/pane_view.rs`        | Ten call sites exactly as tabulated in §2.3.                                                                                                                                                                                                                                                |
+| `crates/wolf-gnome/src/coordinator.rs`      | Narrow the `CoordinatorInner` doc comment claiming the crate contains no `static`/`OnceLock`/`thread_local!` to application state; link to the new `DECISIONS.md` section.                                                                                                                   |
+| `crates/wolf-gnome/tests/smoke_headless.rs` | Add `FRAME_STATS_SCENARIO` and one `#[test]` (§6.2).                                                                                                                                                                                                                                        |
+
+Use `begin`/`end` where the region produces a value (`read_snapshot`, `paint`, `render_preview`); use `scope` where the region is a statement list with early returns.
+
+## 5. Dependencies
+
+None. `std` only. No lock-file movement.
+
+## 6. Test plan
+
+Both new suites run under `nix develop --command cargo test -p wolf-gnome`. **There is no Bazel wiring to add and none may be added**: `crates/wolf-gnome/tests/README.md` and `DECISIONS.md` "Platform and build" both state this crate deliberately has no Bazel target.
+
+### 6.1 `src/frame_stats.rs` — `#[cfg(test)] mod tests`
+
+| Test                                                | Behaviour pinned                                                                                                                     | Falsifying edit                                        |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------ |
+| `bucket_indices_and_labels_table`                    | each variant's `index()` and `label()`; `Bucket::ALL` is `0..15` ascending with no gaps                                               | change `DrawGrid`'s label to `"draw.cells"`            |
+| `bucket_labels_are_unique_and_fit_the_report_column` | no two labels equal; every label ≤ `MAX_LABEL_WIDTH`                                                                                  | make `WakeTree` return `"wake.tabs"`                   |
+| `is_enabled_table`                                   | `None`, `""`, `"   "`, `"1"`, `"true"`, `"TRUE"`, `"Yes"`, `"on"`, `" on "`, `"0"`, `"false"`, `"no"`, `"off"`, `"maybe"`             | drop the `trim()` or the lowercase                     |
+| `report_interval_table`                              | `None`→5 s; `""`→default; `"2.5"`→2.5; `"10"`→10; `"0"`, `"-1"`, `"abc"`, `"inf"`, `"NaN"`→default                                    | delete the `v > 0.0` guard                             |
+| `interval_elapsed_table`                             | below → false, exactly equal → **true**, above → true                                                                                 | change `>=` to `>`                                     |
+| `basic_accumulation_pins_integer_mean`               | 10+20+31 over 3 → mean 20, max 31, not truncated                                                                                      | round instead of truncating                            |
+| `single_sample_collapses_to_one_value`               | mean = p50 = p95 = max = the sample                                                                                                   | as above                                               |
+| `percentile_nearest_rank_table`                      | empty→0; `[7]`; `[10,20]` p50→10, p95→20; `[10,20,30]`; all-equal; `1..=100` p50→50, p95→95, p100→100, p0→1                            | change `ceil` to `floor`, or drop the `- 1`            |
+| `percentile_p95_never_exceeds_max`                   | sweep n=1..50: min ≤ p50 ≤ p95 ≤ max                                                                                                  | remove the upper clamp                                 |
+| `recording_one_bucket_leaves_others_empty`           | zero-count buckets omitted from `summarize`                                                                                           | delete the `count == 0` skip                           |
+| `every_bucket_round_trips_through_record_and_summarize` | one distinct sample per bucket, no cross-bleed, one row each                                                                       | make two variants return the same `index()`            |
+| `ring_bound_keeps_exact_count_and_windowed_percentiles` | 100 tiny then 4096 large: count and max exact, `truncated`, p50/p95 from the last 4096 only, mean over the exact sum               | keep the _first_ capacity samples instead of the last  |
+| `exactly_capacity_samples_is_not_truncated`          | `truncated` is `count > CAPACITY`, not `>=`                                                                                           | change `>` to `>=`                                     |
+| `retained_sample_count_below_capacity`               | retained == count below capacity; 0 for an untouched bucket                                                                           | as above                                               |
+| `wakes_per_keystroke_table`                          | 0 keys → `None` (with and without wakes); 30/10 → 3.0; 0/5 → 0.0; 142/48                                                              | relax the `keystrokes > 0` guard                       |
+| `reset_zeroes_everything`                            | after every mutator, `reset` empties buckets and both counters                                                                        | drop `samples.clear()`                                 |
+| `reset_starts_a_fresh_window_with_no_leakage`        | large pre-reset samples never reach the post-reset window                                                                             | drop the write-index reset                             |
+| `is_empty_tracks_all_three_mutators`                 | fresh → empty; after each mutator → not empty; after `reset` → empty. The emit gate's contract                                        | make `is_empty` ignore the keystroke counter           |
+| `format_produces_the_exact_pinned_table`             | byte-exact table from a `Report` whose buckets are supplied **out of order**                                                          | change any width by one, drop the `*`, or drop the sort |
+| `format_emits_header_and_footer_with_no_buckets`     | header + column row + footer with `wakes/key=n/a`                                                                                     | print `0.00` for the `None` ratio                      |
+| `every_formatted_line_carries_the_grep_prefix`       | every line prefixed, trailing newline, line count == buckets + 3                                                                      | drop the prefix from the footer                        |
+| `formatted_bucket_rows_are_in_index_order`           | recorded in reverse, emitted ascending                                                                                                | remove the sort in `format_report`                     |
+
+### 6.2 The `cage` smoke — `frame_stats_report_covers_the_live_typing_path_under_cage`
+
+**Why it exists.** `WOLF_FRAME_STATS_FILE` is the one seam a test can actually read, and reading it is the only honest evidence that the buckets are wired into the live keystroke-to-pixel path.
+
+**Modelled on** `window_renders_typed_text_under_cage` for the scenario skeleton, minus `grim` and OCR; and on `pane_layout_survives_relaunch_under_cage` for asserting on a file the running application wrote.
+
+**Helpers used**, all existing: `CAGE_LOCK` (held for the whole body), `require_smoke_env()`, `make_temp_cwd()`, `env!("CARGO_BIN_EXE_wolf-gnome")`, and `cage_command(FRAME_STATS_SCENARIO, &cwd)` — the only permitted spawn point — with `.env("WOLF_BIN", bin)`, `.env("WOLF_FRAME_STATS", "1")`, `.env("WOLF_FRAME_STATS_INTERVAL", "1")`, `.env("WOLF_FRAME_STATS_FILE", &stats_path)`. The report file goes under the resolved `XDG_RUNTIME_DIR` with a name unique to this smoke; a stale copy is removed before the run.
+
+**Scenario** (`FRAME_STATS_SCENARIO`, carrying the standard `WAIT_TRIES`/`WAIT_INTERVAL`/`SETTLE=1.0` block and the canonical pointer back to `SCENARIO`'s measured margin table): launch, poll, settle, then four bursts of `wtype -- "i<~20 chars>"` + `wtype -k Escape` separated by `sleep 1.2`, so at least two report intervals close with keystrokes inside them; a final `sleep`; then the usual `set +e` teardown. No `grim`, no `tesseract`, no fixture files, no pointer helper.
+
+**Asserts**, in this order, each with a message naming the likely cause:
+
+1. The scenario exited 0.
+2. The report file exists and is non-empty.
+3. It contains a line beginning `wolf-frame-stats enabled interval=`.
+4. It contains at least one report header line matching `wolf-frame-stats #1  window=`.
+5. Every line begins with `wolf-frame-stats `.
+6. Summed over every footer, `keys=` is at least 20.
+7. Summed over every footer, `wakes=` is greater than zero.
+8. Every one of these labels appears as a bucket row in at least one report: `wake`, `wake.tabs`, `wake.tree`, `wake.shell`, `wake.state`, `pane.wake`, `pane.state`, `pane.prev`, `draw.pane`, `draw.read`, `draw.grid`, `draw.status`, `draw.cmdline`.
+9. Neither `prev.render` nor `prev.load` appears anywhere in the file — the non-vacuity half of assertion 8.
+10. Every bucket row parses: a positive integer count and four millisecond fields that parse as `f64` and are `>= 0.0`.
+11. Within each report block, `count("wake") == wakes`.
+
+**Must not assert**: any wall-clock magnitude, any particular count, the ratio's value, the number of reports beyond "at least one", or bucket ordering across reports.
+
+**Red runs to capture** (each a one-line source edit):
+
+- Delete `frame_metrics::note_keystroke()` in `wire_keys` → assertion 6 fails with `keys=0`.
+- Make `frame_metrics::enabled()` return `false` → assertions 2 and 3 fail.
+- Delete the `end(Bucket::DrawGrid, …)` at the `paint` call → assertion 8 fails on `draw.grid`.
+- Delete the zero-count skip in `summarize` → assertion 9 fails.
+
+## 7. Implementation order
+
+1. `src/frame_stats.rs` with its `#[cfg(test)] mod tests`; declare it in `lib.rs`. `cargo test -p wolf-gnome --lib` green before any glue.
+2. `src/frame_metrics.rs`; declare it in `lib.rs`.
+3. `src/app.rs`: `install()` and `flush_final()`.
+4. `src/window.rs`: `note_wake`, the four wake regions, `maybe_emit`, `note_keystroke`.
+5. `src/shell.rs`: `wake.state`.
+6. `src/pane_view.rs`: the ten call sites.
+7. `cargo build --workspace --all-targets` and `cargo clippy --workspace --all-targets -- -D warnings`.
+8. Add the smoke; run it; confirm green.
+9. Capture the four red runs of §6.2 and the per-test falsifiers of §6.1.
+10. Instrument-side docs.
+11. **Measurement** (§9). Then the repair decision.
+12. If anything is indicted: repair, re-measure with the identical recipe, re-run the gate, then write the measured reading into `DECISIONS.md` and the prose into `feat-list.md`.
+13. `feat-list.md`: tick, branch, prose, renumber.
+14. `prettier --write` every edited Markdown file, then `./tools/lint/markdown_check.sh <files>`.
+15. Full gate: `cargo fmt --all -- --check`, `prettier --check "**/*.md"`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo build --workspace --all-targets`, `cargo test --workspace` — all through `nix develop --command`.
+
+## 8. Documentation — exactly which file says what
+
+| Document                             | What it gains, and nothing else                                                                                                                                                                                                                                                                                                                                                                    |
+| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `build.md`                            | Restructure `## Frame-time instrumentation (macOS)` into `## Frame-time instrumentation` with a shared preamble naming the three variables, then `### macOS` (existing body unchanged) and `### Linux`: the release build and run commands, the `WOLF_FRAME_STATS_FILE` + `tail -f` form, and the `cage` recipe of §9. Link to `crates/wolf-gnome/src/README.md` for the bucket set and to `DECISIONS.md` for the cadence. **Two stale sentences must be fixed**: line 84 ("This front-end carries no frame-time instrumentation, so nothing here claims a speed-up") and line 282 ("`WOLF_FRAME_STATS` … is Swift instrumentation rather than `tracing`"). |
+| `crates/wolf-gnome/DECISIONS.md`      | A new `## Frame-time instrumentation` section: the no-timer cadence and its consequence (§2.1), the environment-name parity decision (§2.2), the process-global carve-out (§2.5), the `wakes/key` upper-bound caveat (§2.4), the `eprintln!`-panics rule (§2.6), the one-boolean-test disabled cost, and — after the measurement — a short measured reading naming what was indicted or that nothing was. Add **one** cross-reference clause to "Threading and the wake". |
+| `crates/wolf-gnome/src/README.md`     | Two new `####` entries in alphabetical position (between `editor_inset.rs` and `geometry.rs`), each within the ~200-word budget. Edit the existing `coordinator.rs` and `app.rs` entries in place to narrow the "no process-global state" claim.                                                                                                                                                     |
+| `crates/wolf-gnome/tests/README.md`   | Extend the `smoke_headless.rs` entry with the new smoke's coverage and gotchas. **Recount the four numbers in that entry from the file itself.** Add to "What is still unproven": the exit-time flush, the file-open failure degradation, the multi-window merge of one accumulator, and that `wakes/key` is an upper bound no assertion can tighten.                                                  |
+| `feat-list.md`                        | Tick Linux on the row and set the Branch cell to `feat/slow-typing-latency` / `linux-feat/typing-latency`. One prose paragraph on what the Linux instrument measures and what it does not. If no repair ships, say plainly that the row is ticked on the instrument plus a measurement that indicted nothing. Remove item 1 from "Suggested order of work for Linux" and renumber 2–5 to 1–4.          |
+| Not changed                           | `architecture.md`, `crates/wolf-gnome/README.md`, `crates/wolf-macos/*`.                                                                                                                                                                                                                                                                                                                            |
+
+## 9. The measurement (Part B) — run it, then decide
+
+**Binary.** The release profile: `nix develop --command cargo build --release`, run as `./target/release/wolf-gnome`. **Not relocatable** — `app.rs`'s `init_lua_path` bakes `env!("CARGO_MANIFEST_DIR")`. Never measure a `dev` build.
+
+**Driving it headlessly.** No display session on this host, so `cage` plus `wtype`, from the repository root inside `nix develop`:
+
+1. Create a fixture project directory outside the checkout containing one large text file (~2000 lines of realistic prose, so the grid is full) and sibling state/config directories, mirroring `cage_command`, so the run cannot touch the developer's real `~/.local/state/wolf` or `~/.config/wolf`.
+2. Launch `cage` with that directory as its working directory, with `HOME` set to the fixture's parent, `DBUS_SESSION_BUS_ADDRESS` removed, and `WOLF_FRAME_STATS=1`, `WOLF_FRAME_STATS_INTERVAL=2`, `WOLF_FRAME_STATS_FILE=/tmp/wolf-frame-stats-<run>.txt`.
+3. **Do not set `WOLF_FONT_PT`.** The smokes' 28 pt exists for OCR and would understate every per-cell cost.
+4. In the scenario: settle, `wtype -- ":e big.txt"` + Enter, `wtype -- "G"`, then several bursts of `wtype -d 30 -- "<200 characters>"` + Escape over roughly 30 s, then kill.
+5. Record, beside the numbers, the grid size (`winwidth(0)` / `winheight(0)`), the font size, the pane count, and whether a preview was open.
+6. Run a **second scenario** with a Markdown preview open, because `DECISIONS.md` already records that the preview render is the only blocking RPC that repeats while the user simply types — a pre-registered suspicion.
+7. Run each scenario twice. Only a difference larger than the spread between two runs of the same scenario counts as a signal.
+
+**What counts as an indictment** — pre-registered. The budget is one 60 Hz frame, 16.7 ms.
+
+- **R1 (frame budget).** Any top-level bucket — `wake`, `draw.pane`, `draw.cmdline` — with p95 above 8 ms is indicted; above 16.7 ms it is dropping frames on its own.
+- **R2 (share).** Inside an indicted parent, the child whose `count × mean` is at least 40 % of the parent's is where the time is. A child below 20 % cannot pay for a repair.
+- **R3 (blocking RPC on the typing path).** `prev.render` with a non-zero count in a keystroke-only interval and a mean above 1 ms is an RPC per keystroke, indicted regardless of R1.
+- **R4 (redundant work).** `count(draw.pane) ≥ 0.9 × count(wake) × panes` together with a `draw.grid` mean at or above 4 ms indicts the per-wake full-grid repaint.
+- **R5 (insufficient resolution).** `pane.wake` minus `pane.state` minus `pane.prev` at or above 50 % of `pane.wake`, or the same shape inside `draw.pane`, is not an indictment: add a bucket, re-measure, do not repair.
+- **Ranking.** Rank by `count × mean`; p95 decides whether a frame is dropped, the product decides whether fixing it is worth anything.
+- **Non-indictment is a legitimate outcome and is explicitly authorized.** If every top-level p95 is under 8 ms and no rule fires, ship the instrument alone, record the measured table and the conditions, say so in `feat-list.md`'s prose. **Do not port a macOS repair because it exists there.**
+
+**If something is indicted**, the procedure is fixed: design the repair against the named bucket; re-run the identical recipe; the "after" report must show that bucket's `count × mean` down by the claimed factor with no other bucket up; both reports go into the branch's evidence.
+
+## 10. Lint considerations
+
+- `impl Default for FrameStats` alongside `new()` (`clippy::new_without_default`).
+- `u64::try_from(d.as_nanos()).unwrap_or(u64::MAX)` rather than `as u64`; inline format arguments.
+- Discard write results with `let _ = …`.
+- Prefer restructuring to an `#[allow]`.

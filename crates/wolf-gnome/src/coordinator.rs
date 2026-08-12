@@ -83,8 +83,11 @@ const STATE_FLUSH_TIMEOUT: Duration = Duration::from_secs(2);
 pub type WindowId = u16;
 
 /// The coordinator's shared state. Single GTK main thread, so `Cell` / `RefCell`
-/// suffice; there is deliberately no `static`, no `OnceLock` and no
-/// `thread_local!` in this crate.
+/// suffice; no APPLICATION state in this crate lives in a `static`, an `OnceLock`
+/// or a `thread_local!`, which is what makes two `WolfCore`s in one process
+/// independent. [`mod@crate::frame_metrics`] is the one carve-out — diagnostic
+/// counters no application behaviour reads; see
+/// `crates/wolf-gnome/DECISIONS.md`, "Frame-time instrumentation".
 pub struct CoordinatorInner {
     /// The ONE state store, or `None` when no state directory could be resolved
     /// (state is then neither saved nor restored).

@@ -161,6 +161,9 @@ impl CellMetrics {
 /// Widget-free: `cr` may be backed by an offscreen `ImageSurface` (tests) or a
 /// `DrawingArea` (production). See the module docs for the per-cell algorithm.
 pub fn paint(cr: &cairo::Context, grid: &Grid, highlights: &HighlightTable, metrics: &CellMetrics) {
+    // ONE layout for the whole grid, re-texted per cell. See `GlyphPainter` for
+    // the measurement that put it here rather than inside the loop.
+    let mut painter = GlyphPainter::new(cr);
     for row in 0..grid.rows {
         for col in 0..grid.cols {
             let Some(cell) = grid.cell(row, col) else {
@@ -185,7 +188,7 @@ pub fn paint(cr: &cairo::Context, grid: &Grid, highlights: &HighlightTable, metr
                 continue;
             }
 
-            draw_glyph(cr, metrics, x, y, &cell.text, fg, &style);
+            painter.draw(cr, metrics, x, y, &cell.text, fg, &style);
         }
     }
 }
@@ -199,13 +202,141 @@ fn set_source(cr: &cairo::Context, color: Rgb) {
     );
 }
 
-/// Lays out and draws one cell's text in `fg`, toggling bold and italic on the
-/// cloned face and asking Pango for the decorations [`glyph_style`] resolves.
+/// One Pango layout, reused across the cells of a single paint.
 ///
-/// The undecorated cell — nearly every cell of nearly every frame — builds no
-/// `AttrList` at all, which is what
-/// [`glyph_style::GlyphDecoration::is_empty`]'s early skip is for.
-#[allow(clippy::too_many_arguments)]
+/// **`pangocairo::create_layout` is not cheap and it is not just an allocation**:
+/// it builds a fresh `PangoContext` behind the layout, and that context is where
+/// the font map lookup and the cairo font options live. Measured against the
+/// 90x34 grid of the frame-time run — `iA Writer Mono S` at 10 pt, an offscreen
+/// image surface — one layout per cell costs 9.30 ms a frame and one layout for
+/// the whole grid costs 7.39 ms, so this type is worth about a fifth of the grid
+/// paint. That is also why it holds the layout rather than taking one per call.
+///
+/// It draws each cell at its own origin with its own text: the glyph positions
+/// are byte-identical to a per-cell layout's. Laying a whole RUN of cells out as
+/// one string would be faster still and is deliberately not done — Pango would
+/// then advance by the face's own hinted advance instead of `metrics.cell_w`, and
+/// the glyphs would walk off the grid whenever the two differ.
+///
+/// Two pieces of state exist because a reused layout REMEMBERS what it was last
+/// told, which a fresh one cannot: the face, so a run of ordinary cells sets no
+/// font description at all, and whether an attribute list is live, so a decorated
+/// cell's underline cannot leak onto the cells after it.
+pub(crate) struct GlyphPainter {
+    /// The layout every cell is drawn through.
+    layout: pango::Layout,
+    /// The `(bold, italic)` pair the layout's font description currently carries,
+    /// or `None` before the first cell has set one. `None` rather than a
+    /// `(false, false)` default so that a painter drawing ONE bold string sets the
+    /// description once rather than twice.
+    face: Option<(bool, bool)>,
+    /// Whether the layout currently carries an attribute list.
+    decorated: bool,
+}
+
+impl GlyphPainter {
+    /// Builds a painter over `cr`.
+    ///
+    /// The layout is bound to the Cairo context it is created from, so build one
+    /// per paint and never cache it across frames.
+    ///
+    /// Every [`draw`](Self::draw) must be handed that same context: the layout's
+    /// Pango context took its font options and its transform from `cr` here, so a
+    /// painter drawn into a different context lays out for one surface and paints
+    /// onto another.
+    pub(crate) fn new(cr: &cairo::Context) -> Self {
+        Self {
+            layout: pangocairo::functions::create_layout(cr),
+            face: None,
+            decorated: false,
+        }
+    }
+
+    /// Lays out and draws one cell's text in `fg`, toggling bold and italic on a
+    /// clone of the base face and asking Pango for the decorations
+    /// [`glyph_style`] resolves.
+    ///
+    /// The undecorated cell — nearly every cell of nearly every frame — builds no
+    /// `AttrList` at all, which is what
+    /// [`glyph_style::GlyphDecoration::is_empty`]'s early skip is for.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn draw(
+        &mut self,
+        cr: &cairo::Context,
+        metrics: &CellMetrics,
+        x: f64,
+        y: f64,
+        text: &str,
+        fg: Rgb,
+        style: &ResolvedStyle,
+    ) {
+        let face = (style.bold, style.italic);
+        if self.face != Some(face) {
+            if face == (false, false) {
+                // The ordinary cell, and the reason the base description is not
+                // cloned on this path at all.
+                self.layout.set_font_description(Some(&metrics.font));
+            } else {
+                let mut font = metrics.font.clone();
+                if style.bold {
+                    font.set_weight(pango::Weight::Bold);
+                }
+                if style.italic {
+                    font.set_style(pango::Style::Italic);
+                }
+                self.layout.set_font_description(Some(&font));
+            }
+            self.face = Some(face);
+        }
+
+        self.layout.set_text(text);
+
+        let decoration = glyph_style::glyph_decoration(style);
+        if decoration.is_empty() {
+            // A fresh layout carries no attributes; a reused one carries whatever
+            // the last decorated cell left on it, and Pango would apply that list
+            // to this cell's text too.
+            if self.decorated {
+                self.layout.set_attributes(None);
+                self.decorated = false;
+            }
+        } else {
+            let attrs = pango::AttrList::new();
+            if decoration.underline != pango::Underline::None {
+                attrs.insert(pango::AttrInt::new_underline(decoration.underline));
+            }
+            if decoration.strikethrough {
+                // Deliberately no `AttrColor::new_strikethrough_color`: with no
+                // such attribute Pango strikes in the layout's foreground, which
+                // is the macOS behaviour. See `glyph_style`'s module docs.
+                attrs.insert(pango::AttrInt::new_strikethrough(true));
+            }
+            if let Some(color) = decoration.underline_color {
+                let (r, g, b) = glyph_style::pango_channels(color);
+                attrs.insert(pango::AttrColor::new_underline_color(r, g, b));
+            }
+            self.layout.set_attributes(Some(&attrs));
+            self.decorated = true;
+        }
+
+        set_source(cr, fg);
+        // Pango places the LAYOUT'S TOP at the move-to point, so moving to the
+        // cell origin would hang the glyphs from the cell's top edge.
+        // `baseline - ascent` is the leftover space above the glyph box, so this
+        // is what puts the glyph's baseline at `metrics.baseline` inside a cell
+        // the configured line-height made taller than the glyphs. When the cell is
+        // exactly the glyph box the offset is exactly 0.0 and nothing moves.
+        cr.move_to(x, y + metrics.baseline - metrics.ascent);
+        pangocairo::functions::show_layout(cr, &self.layout);
+    }
+}
+
+/// Lays out and draws one cell's text in `fg` through a painter of its own.
+///
+/// The one-shot form, for the callers that draw a single piece of text per frame
+/// — the cursor's inverted glyph, the cmdline strip, the drawer. [`paint`] uses
+/// [`GlyphPainter`] directly instead, because the layout is the expensive part
+/// and the grid has thousands of cells.
 pub(crate) fn draw_glyph(
     cr: &cairo::Context,
     metrics: &CellMetrics,
@@ -215,46 +346,7 @@ pub(crate) fn draw_glyph(
     fg: Rgb,
     style: &ResolvedStyle,
 ) {
-    let mut font = metrics.font.clone();
-    if style.bold {
-        font.set_weight(pango::Weight::Bold);
-    }
-    if style.italic {
-        font.set_style(pango::Style::Italic);
-    }
-
-    let layout = pangocairo::functions::create_layout(cr);
-    layout.set_font_description(Some(&font));
-    layout.set_text(text);
-
-    let decoration = glyph_style::glyph_decoration(style);
-    if !decoration.is_empty() {
-        let attrs = pango::AttrList::new();
-        if decoration.underline != pango::Underline::None {
-            attrs.insert(pango::AttrInt::new_underline(decoration.underline));
-        }
-        if decoration.strikethrough {
-            // Deliberately no `AttrColor::new_strikethrough_color`: with no such
-            // attribute Pango strikes in the layout's foreground, which is the
-            // macOS behaviour. See `glyph_style`'s module docs.
-            attrs.insert(pango::AttrInt::new_strikethrough(true));
-        }
-        if let Some(color) = decoration.underline_color {
-            let (r, g, b) = glyph_style::pango_channels(color);
-            attrs.insert(pango::AttrColor::new_underline_color(r, g, b));
-        }
-        layout.set_attributes(Some(&attrs));
-    }
-
-    set_source(cr, fg);
-    // Pango places the LAYOUT'S TOP at the move-to point, so moving to the cell
-    // origin would hang the glyphs from the cell's top edge. `baseline - ascent`
-    // is the leftover space above the glyph box, so this is what puts the glyph's
-    // baseline at `metrics.baseline` inside a cell the configured line-height made
-    // taller than the glyphs. When the cell is exactly the glyph box the offset is
-    // exactly 0.0 and nothing moves.
-    cr.move_to(x, y + metrics.baseline - metrics.ascent);
-    pangocairo::functions::show_layout(cr, &layout);
+    GlyphPainter::new(cr).draw(cr, metrics, x, y, text, fg, style);
 }
 
 /// Lays out and draws ONE line of free text in `fg`, with the layout's TOP at `y`.
