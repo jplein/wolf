@@ -18,6 +18,8 @@ This crate deliberately has no Bazel target at all. That absence is what keeps t
 
 The devShell supplies the toolchain that the gtk-rs and `webkit6` `-sys` crates probe for (gtk4, cairo, pango, glib, gdk-pixbuf, graphene, harfbuzz, webkitgtk and libsoup), exports `WOLF_NVIM_BIN` so the pinned Neovim is never taken from `PATH`, and pins the font stack through a generated `FONTCONFIG_FILE`; [`tests/README.md`](tests/README.md) owns what that file exposes and why it omits every host font directory.
 
+The binary locates the captive `init.lua` through `env!("CARGO_MANIFEST_DIR")` in `app.rs`'s `init_lua_path`, an absolute path into the checkout it was compiled in, so a binary run from anywhere other than this working tree finds no `init.lua`. Giving it a real resolution path — an environment override this crate reads, or a store path fixed at build time — is a change to this crate's source rather than something a packaging derivation can supply from outside.
+
 ## The GUI denylist does not apply here
 
 `wolf-core`'s "no GUI toolkit in the dependency tree" rule constrains core, not this crate. GTK is allowed here because the dependency runs `wolf-gnome` to `wolf-core` and never the reverse, so nothing this crate adds can enter core's tree.
