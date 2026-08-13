@@ -8,7 +8,7 @@ nix develop --command cargo test -p wolf-gnome
 
 The devShell is not optional: it supplies GTK, exports `WOLF_NVIM_BIN` and `WOLF_RG_BIN`, and pins the font stack, which is what makes Pango measurement and Cairo rasterization reproducible enough to assert on pixels.
 
-Rules that are decidable from their arguments are pinned in each seam's own `#[cfg(test)] mod tests` rather than here, which is the point of the seam split in [DECISIONS.md](../DECISIONS.md). The files below cover what a seam cannot reach: a real Neovim, a real window, and the built binary together with the manifest that shaped it.
+Rules that are decidable from their arguments are pinned in each seam's own `#[cfg(test)] mod tests` rather than here, which is the point of the seam split in [DECISIONS.md](../DECISIONS.md). The files below cover what a seam cannot reach: a real Neovim, a real window, the built binary together with the manifest that shaped it, and the store output `nix build .#wolf-gnome` installs — a different artifact from the checkout build, making different claims.
 
 ## Files
 
@@ -47,6 +47,19 @@ Rules that are decidable from their arguments are pinned in each seam's own `#[c
 - No GTK controller is involved, so this file cannot say whether a controller ever fires. That is the smokes' question, and the two deliberately do not overlap.
 - Cell sizes are locally declared rather than measured, because the seams are pure arithmetic and need no font.
 - The buffer fixture's lines must stay five characters wide, or a click at column 2 clamps to end-of-line and the exact-column assertion means nothing. A literal double quote cannot appear inside a `:put =` expression, which is why the format string is quoted with doubled single quotes.
+
+#### `packaged_layout.rs`
+
+**Covers**
+
+- The tree `nix build .#wolf-gnome` installs, read out of the store path `WOLF_PACKAGE_OUT` names. The captive `init.lua` is byte-identical to the checkout's and sits at `<out>/bin` joined with the resolver's own `INSTALLED_INIT_LUA_RELATIVE`; both vendored Lua trees are non-empty beside it, carrying what the Bazel filegroups keep and none of what they exclude.
+- The desktop entry's `Exec` as the absolute wrapped path, with no field code and no `MimeType`; each icon decoding to the pixel size its hicolor directory names; the wrapper naming every variable it must supply and never `WOLF_INIT_LUA`; both editor font families beside an additive `fonts.conf`.
+
+**Gotchas**
+
+- Every test is `#[ignore]`d, its precondition panics rather than skipping, and one command satisfies it: `./tools/wolf-package-smoke.sh`. Every falsifier here is a `flake.nix` edit.
+- An empty sibling tree is worse than an absent one, and is asserted apart from a missing file. `init.lua` gates each tree on an `fs_stat` of the directory, which an empty one satisfies, so `:colorscheme lighthouse` errors, the file aborts mid-way and the application dies naming a function nobody wrote.
+- The icons are decoded rather than opened, because the defect worth catching — an export installed into a directory naming a different size — passes every existence check.
 
 #### `paint_golden.rs`
 
@@ -91,17 +104,30 @@ Rules that are decidable from their arguments are pinned in each seam's own `#[c
 
 **Covers**
 
-- Fifty-six end-to-end smokes launch the built binary under `cage` — thirty-seven by OCR of a `grim` screenshot, eight across two launches in one `cage`.
+- Fifty-six end-to-end smokes launch the built binary under `cage`: thirty-seven OCR a `grim` screenshot and nineteen call no OCR helper at all — five of those reading raw pixels out of their own captures, the rest asserting on values the captive Neovim writes back, a frozen `state.json`, the frame-time report file, or the exit status alone.
 - The scenarios span text rendering, the sidebar, the four overlays, splits, pointer input, crash and stall recovery, relaunch and per-tab state, navigation, the clipboard, the appearance, the command line, the terminal drawer, the preview pane, native tabs, the frame-time instrument, and a second window.
-- Three rest on Neovim readbacks and frozen files rather than pixels: the two-window smoke, whose evidence is the live `nvim` children plus a two-window `state.json` and this suite's only coverage of `app.quit`; the native-tabs smoke, four readbacks over one `adw::TabPage` opened, switched and closed; and the per-tab persistence smoke, three tabs saved and restored in tab order after a quit in which two were never selected.
-- Nineteen call no OCR helper: five read raw pixels, one reads the frame-time report file, one turns on the process exit status alone, and the rest on values the captive Neovim writes back.
-- Seven compositor-free guards on the smokes' fixtures, constants and harness run in microseconds, so the target reports `63 passed`, not `56`.
+- Nine compositor-free guards over the fixtures, constants and harness, so the target reports `65 passed`, not `56`. Two read `flake.nix`: every `shellHook` export must be scrubbed from the packaged runs or keep-listed, and both vendored-tree exports must exist.
+- Three `#[ignore]`d packaged smokes outside that count drive the store binary, scrubbing every devShell export the artifact supplies for itself: a clean launch read by OCR, an A/B against the checkout binary over the two vendored Lua trees, and a preview pane.
 
 **Gotchas**
 
-- Run only these with `cargo test -p wolf-gnome --test smoke_headless`, inside the devShell.
+- Run only these with `cargo test -p wolf-gnome --test smoke_headless`, inside the devShell; the packaged three run only through `./tools/wolf-package-smoke.sh`.
 - Read [Smoke conventions](#smoke-conventions) first; several of those rules exist because a smoke passed while proving nothing.
 - The frame-time report is appended to a file, so a stale copy would read as this run's evidence; that smoke clears it first.
+
+#### `vendored_pins.rs`
+
+**Covers**
+
+- That `flake.nix`'s `wolfVendoredPins` block and the three `bazel/<asset>/extensions.bzl` files name the same commit and the same sha256 for iA Writer Mono S, `orlando` and `lighthouse`. A one-sided bump is otherwise silent: each side verifies its own download against its own hash and neither reads the other's, so both platforms build green while shipping different revisions of a vendored plugin.
+- Both scanners' non-vacuity: exactly three Nix entries under exactly those names, exactly one `_COMMIT` and one `_SHA256` line per Bazel file, and every value forty or sixty-four lowercase hex characters.
+
+**Gotchas**
+
+- Pure and not `#[ignore]`d — no environment, no subprocess, four file reads — so it runs on every `cargo test`. It lives here for [`release_profile.rs`](#release_profilers)'s reason: neither file it reads is a Bazel runfile.
+- Each side is a line scanner rather than a parser, so each imposes a formatting contract the file it reads carries a reciprocal comment about. Reformat the file; do not teach the scanner a second shape.
+- Mismatches are collected and reported together, since bumping two assets at once is the ordinary shape and a loop of assertions reports only the first.
+- It fetches nothing, so it cannot say either hash is the hash of the tarball at that commit — only that the two sides agree.
 
 #### `common/mod.rs`
 
@@ -286,6 +312,12 @@ Being scrupulous about this is the point of the section.
 - **Four rules of the armed glue have no observer.** That an unopenable `WOLF_FRAME_STATS_FILE` degrades to stderr-only rather than refusing to run; that `install()` resolves the path through `frame_stats::report_file_path` rather than filtering inline, pinned as a value function and unchecked on the glue side; that a `Scope`'s `Drop` records what an explicit `end` would; and that the `debug_assert!` in `with_stats` catches a record from another thread, which no call site can reach. [`frame_metrics_gate.rs`](#frame_metrics_gaters) reaches none of them: nothing in it may call `install()`, and its `Scope` drops against an absent recorder.
 - **The multi-window merge of one accumulator.** N windows run N drain loops over one process-global accumulator, and whichever wakes first after the interval elapses emits the process-wide report. The frame-stats smoke launches one window, and nothing counts a report against the windows that contributed to it.
 - **`wakes/key` is an upper bound no assertion can tighten.** It is a ratio of two counters, and mouse, scroll, resize and out-of-band core notifications all inflate it, so there is no value a smoke could assert it against — that smoke deliberately asserts none.
+- **Nothing observes a desktop shell using the installed icon or the desktop entry.** The packaged smokes run under `cage`, which has no shell, no launcher and no session bus. What is shown is that the icons install at the sizes their directories name, that `desktop-file-validate` accepts the entry inside the derivation, and that `Exec` is the absolute wrapped binary carrying no field code and no `MimeType`. That a launcher draws the icon, or associates a running window with the entry, is unobserved.
+- **`StartupWMClass` is tied to nothing.** `app.rs`'s `APP_ID` is a private const, and the desktop entry repeats its value as a literal no test reads — `packaged_layout.rs` retypes the same string for the `Icon` key and the icon filenames and never looks at the class. A renamed application id would break the window-to-entry association with nothing failing anywhere. Closing it needs the id exported from the crate, or an assertion against the built binary's own bytes.
+- **The bundled-face half of the packaged fontconfig is unexercised.** `packaged_binary_renders_typed_text_under_cage` runs with `FONTCONFIG_FILE` scrubbed and reads glyphs back, but the face it renders is `DejaVu Sans Mono`, which the packaged fragment resolves through its `<include>` of the host configuration rather than through its own `<dir>`. `packaged_layout.rs` pins the installed files and the fragment's text; that a packaged launch resolves a bundled face through that directory is not shown.
+- **The lighthouse pixel band has no taken red run.** The isolating edit — leave the tree installed and activatable and change what it paints in the installed copy, so `vim.g.colors_name` still reads `lighthouse` — is written down in the smoke and was not executed, and deleting the tree falsifies the readback four assertions earlier without reaching the band. The orlando band's equivalent recipe was taken, by turning `code_block` off in the installed copy, and reddens that band alone.
+- **The `v:progpath` equality has no red run either.** Making the two Neovim inputs differ means bumping the main `nixpkgs`, which re-gates the whole Linux suite. The assertion is live on real data — both launches read the same unwrapped store path — and is recorded as unfalsified rather than claimed.
+- **What that equality does not say is that both platforms run one Neovim.** The Nix runtime input carries 0.12.2 where Bazel stages 0.12.3, a divergence that predates the packaging work and is not closed by it: closing it means either building Neovim from source, off the binary cache and taxing every `nix develop`, or bumping Linux and re-running the gate. The Linux side is rev-pinned so it cannot drift further, and [`macos-followups.md`](../../../macos-followups.md) carries the row.
 
 ## Deliberate test gaps
 

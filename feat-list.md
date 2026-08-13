@@ -21,10 +21,12 @@ Sources of truth for the assessments below: [`architecture.md`](architecture.md)
 | Native paint backend (cells, fg/bg, cursor)     | `feat/wolf-core-initial-implementation` / `feat/macos-ui` | [x]   | [x]   |
 | Key translation seam + Shift contract           | `feat/wolf-core-initial-implementation` / `feat/macos-ui` | [x]   | [x]   |
 | Hermetic, pinned captive Neovim                 | `feat/macos-ui` (`f9fe4b3`)                               | [x]   | [x]   |
-| Neovim bundled into the shipped application     | `feat/macos-ui` (`f9fe4b3`)                               | [x]   | [ ]   |
+| Neovim bundled into the shipped application     | `feat/macos-ui` (`f9fe4b3`) / `linux-feat/nixos-package`  | [x]   | [x]   |
 | Word wrap / editor defaults in `init.lua`       | `f4e104d`                                                 | [x]   | [x]   |
 
-Linux gets the pinned Neovim from the flake devShell via `WOLF_NVIM_BIN`; there is no packaged Linux application that carries its own Neovim the way `Wolf.app` does.
+Linux reaches the pinned Neovim two ways. Inside the devShell it comes from `WOLF_NVIM_BIN`; the Nix package's wrapper sets the same variable as a default, pointing at a Neovim held in a second, rev-locked flake input so a `nix flake update` for GTK cannot move what the Linux suite tested.
+
+A packaged smoke launches the store binary under `cage` with every devShell export scrubbed but the three the compositor itself needs, and reads the typed word back by OCR, which is what says the artifact finds its own Neovim and its own `init.lua`. A second smoke reads `v:progpath` from a packaged launch and a checkout launch in one compositor and requires them equal, so the package ships the Neovim the Linux evidence was taken against. The two platforms' Neovim differs at the patch level, which [`macos-followups.md`](macos-followups.md) records.
 
 ## Editor surface
 
@@ -182,20 +184,22 @@ The file picker is the subject because it is the only one of the three overlays 
 
 ## Appearance, typography, theming
 
-| Feature                                          | Branch or commit                                      | macOS | Linux |
-| ------------------------------------------------ | ----------------------------------------------------- | ----- | ----- |
-| User config file (`wolf-config.yaml`)            | `feat/neovim-plugin-vendoring` (`129aa8f`, `be2e86c`) | [x]   | [x]   |
-| Config-driven font family / size / line height   | `feat/neovim-plugin-vendoring` (`129aa8f`, `be2e86c`) | [x]   | [x]   |
-| Bundled fonts (iA Writer Mono S, JetBrains Mono) | `feat/neovim-plugin-vendoring` (`129aa8f`, `be2e86c`) | [x]   | [x]   |
-| Baseline-grid typography                         | `feat/typography` (`2735a6d`)                         | [x]   | [x]   |
-| Status bar aligned to the content edge           | `feat/typography` (`460692d`)                         | [x]   | [x]   |
-| Follows the OS dark/light appearance             | `fix/dark-mode` (`c81f7a2`)                           | [x]   | [x]   |
-| Application icon                                 | `feat/mac-application-icon`                           | [x]   | [ ]   |
-| Vendored `orlando` rendering plugin              | `jplein/lua-changes` (`6ee5c16`)                      | [x]   | [ ]   |
-| Vendored `lighthouse` colorscheme                | `jplein/lua-changes` (`0603937`)                      | [x]   | [ ]   |
-| Vendored treesitter plugins and parsers          | `feat/neovim-plugin-vendoring`                        | [x]   | [x]   |
+| Feature                                          | Branch or commit                                              | macOS | Linux |
+| ------------------------------------------------ | ------------------------------------------------------------- | ----- | ----- |
+| User config file (`wolf-config.yaml`)            | `feat/neovim-plugin-vendoring` (`129aa8f`, `be2e86c`)         | [x]   | [x]   |
+| Config-driven font family / size / line height   | `feat/neovim-plugin-vendoring` (`129aa8f`, `be2e86c`)         | [x]   | [x]   |
+| Bundled fonts (iA Writer Mono S, JetBrains Mono) | `feat/neovim-plugin-vendoring` (`129aa8f`, `be2e86c`)         | [x]   | [x]   |
+| Baseline-grid typography                         | `feat/typography` (`2735a6d`)                                 | [x]   | [x]   |
+| Status bar aligned to the content edge           | `feat/typography` (`460692d`)                                 | [x]   | [x]   |
+| Follows the OS dark/light appearance             | `fix/dark-mode` (`c81f7a2`)                                   | [x]   | [x]   |
+| Application icon                                 | `feat/mac-application-icon` / `linux-feat/nixos-package`      | [x]   | [x]   |
+| Vendored `orlando` rendering plugin              | `jplein/lua-changes` (`6ee5c16`) / `linux-feat/nixos-package` | [x]   | [x]   |
+| Vendored `lighthouse` colorscheme                | `jplein/lua-changes` (`0603937`) / `linux-feat/nixos-package` | [x]   | [x]   |
+| Vendored treesitter plugins and parsers          | `feat/neovim-plugin-vendoring`                                | [x]   | [x]   |
 
 `wolf-gnome` reads the shared `wolf-config.yaml` through `wolf_core::config` and drives its cell geometry from the configured font family, size and line height; `WOLF_FONT_PT` overrides the configured size, as it does on macOS. Both editor families are vendored into the Nix devShell and exposed through the repo-controlled fontconfig, so a configured `iA Writer Mono S` resolves on Linux.
+
+The package carries both families under `share/fonts/` beside a fontconfig fragment of its own, and that fragment is additive where the devShell's is exclusionary: it includes the host configuration and appends its own directory, so a user's fonts, aliases and rendering settings still apply to the GTK chrome. That a packaged launch resolves a bundled face through the fragment's own directory is unproven, and [`crates/wolf-gnome/tests/README.md`](crates/wolf-gnome/tests/README.md) says why.
 
 The `appearance` key resolves on both front-ends, and on Linux it reaches two places: the captive Neovim, as `:set background=dark|light`, and the GTK chrome, as an `adw::ColorScheme` — `auto` following libadwaita's own live reading and a forced value overriding it. What has no Linux counterpart is the other direction: macOS reads live OS colours and pushes them into Neovim's highlight groups with `nvim_set_hl`, and `wolf-gnome` reads no OS colour at all.
 
@@ -203,7 +207,15 @@ Baseline-grid typography is the 24px CSS grid inside the rendered preview docume
 
 Both front-ends align a status bar's text with the grid text below it, out of one inset; the macOS `StatusbarTextSpan` seam has no Linux counterpart, because `editor_inset::grid_rect` carries the centring offset in its own `x` and the painter, the pointer translation and the strip's text all read that one origin by construction.
 
-Two of the three vendored plugin assets are bundled by Bazel into `Wolf.app` only: the captive `init.lua` self-locates `orlando` and `lighthouse` and is a strict no-op when absent, so on Linux they are simply not there. The treesitter trees are the exception — the same gate falls back to two paths the flake devShell exports, so both platforms reach the queries and the grammars. Its Linux evidence is `crates/wolf-ffi/tests/treesitter_highlight.rs`, where a fenced `go` block yields an injected `go` langtree, and `treesitter_parser_abi.rs`, where a nix-built grammar loads and parses under the pinned Neovim.
+All three vendored plugin assets reach both platforms, each built its own way. Bazel bundles `orlando` and `lighthouse` into `Wolf.app`; the Nix package installs them as siblings of the captive `init.lua` under `share/wolf/nvim/`, which is the whole activation mechanism — that file self-locates each tree from its own directory and gates it on an `fs_stat`, so the derivation supplies two paths and no Lua. `crates/wolf-gnome/tests/vendored_pins.rs` keeps the Nix and Bazel commits and hashes equal, because each side fetches against its own sha256 and a one-sided bump reddens nothing anywhere.
+
+The Linux evidence is an A/B inside one compositor: the store binary against the checkout binary, which has no sibling trees. `vim.g.colors_name`, `vim.g.loaded_orlando` and `pcall(require, "orlando")` all answer in the packaged launch and none of them in the control, and two pixel bands agree — lighthouse's `#1b1b1b` over the prose band, and orlando's code-block fill over the fence's right margin, both absent from the control. `crates/wolf-ffi/tests/orlando_load.rs` and `lighthouse_load.rs` corroborate it against a reconstructed layout, and assert on Linux inside the devShell rather than skipping.
+
+The application-icon row is ticked on what a store output can be read for, which does not include a desktop. The package installs the light hicolor set at 48, 64, 128 and 256 px plus a scalable SVG under `org.wolf.Wolf`; `desktop-file-validate` runs in the derivation, and a layout test decodes each PNG and requires the pixel size its directory names, then pins `Exec` to the absolute wrapped binary with no field code and no `MimeType`.
+
+Two limits belong with that tick. Nothing observes a shell associating the icon or the entry with a running window — the smokes run under `cage`, which has no shell, no launcher and no session bus — and `StartupWMClass` matches `app.rs`'s `APP_ID` by inspection rather than by a test, so a rename would break the association silently. The dark export is deliberately not installed, so the Linux icon does not follow the desktop's light/dark preference where macOS gets that from `Assets.car`; [`resources/icons/README.md`](resources/icons/README.md) owns the reason.
+
+The treesitter trees arrive by a third route: the same gate falls back to two paths the devShell exports and the package's wrapper supplies as defaults, so neither platform installs a sibling for them. Its Linux evidence is `crates/wolf-ffi/tests/treesitter_highlight.rs`, where a fenced `go` block yields an injected `go` langtree, and `treesitter_parser_abi.rs`, where a nix-built grammar loads and parses under the pinned Neovim.
 
 ## Terminal
 
@@ -249,18 +261,16 @@ What it does not measure is worth as much. The report rides the render wake rath
 
 The measurement indicted two buckets and one was repaired. `draw.grid` came down about 17 % in both measured scenarios, on a `render::paint` that builds one Pango layout per paint rather than one per cell. `prev.render` is deliberately left alone: typing beside a live Markdown preview spends 15.6 % of wall clock in a blocking preview-render call, whose only repair is temporal coalescing with a user-visible latency budget, so it is carried onward as a unit of its own. [`crates/wolf-gnome/DECISIONS.md`](crates/wolf-gnome/DECISIONS.md#frame-time-instrumentation) holds the conditions and the numbers.
 
-The two front-ends differ in what an optimized build hands over: `WolfRelease` produces a self-contained `.app`, while the Linux binary runs from the tree it was built in, because the captive `init.lua` is resolved through a compile-time absolute path. That constraint is [`crates/wolf-gnome/DECISIONS.md`](crates/wolf-gnome/DECISIONS.md)'s; the commands are [`build.md`](build.md)'s.
+Both front-ends' optimized builds hand over a self-contained artifact: `WolfRelease` produces the `.app`, and `nix build .#wolf-gnome` produces a store output carrying its own Neovim, captive `init.lua`, vendored Lua trees, fonts, icons and desktop entry. A `cargo build --release` binary is a third thing and resolves its `init.lua` from the checkout it was compiled in, which is what keeps a development run and every compositor smoke working. The resolution rule is [`crates/wolf-gnome/DECISIONS.md`](crates/wolf-gnome/DECISIONS.md)'s; the commands are [`build.md`](build.md)'s.
 
 ## Suggested order of work for Linux
 
 Work already carried is recorded in the tables above. What remains, in order, covering every unticked Linux box:
 
-1. **The NixOS derivation.** NixOS is the only Linux distribution target, so one packaging unit carries four rows. Neovim, the `orlando` rendering plugin and the `lighthouse` colorscheme each enter as a flake input pinned to a version, live in the Nix store, and are referenced from the derivation that builds Wolf rather than tracked against whatever nixpkgs carries. The same derivation installs the `.desktop` entry and the GNOME icons that already sit in [`resources/icons`](resources/icons/README.md), under the `org.wolf.Wolf` application id. The captive `init.lua` self-locates the plugin and the colorscheme and is a no-op when they are absent, so what the derivation supplies is two paths, not new Lua.
+1. **Coalescing the preview render.** Typing beside a live Markdown preview spends 15.6 % of wall clock in a blocking render call, which the frame-stats instrument measured rather than inferred. It is not a draw fix, which is why it is a unit rather than part of the row above: its only repair is temporal coalescing, whose trailing edge needs a one-shot event-armed timer and a preview-latency budget nobody has set. That budget is a user-visible decision, so this unit opens with a question rather than an implementation.
 
-2. **Coalescing the preview render.** Typing beside a live Markdown preview spends 15.6 % of wall clock in a blocking render call, which the frame-stats instrument measured rather than inferred. It is not a draw fix, which is why it is a unit rather than part of the row above: its only repair is temporal coalescing, whose trailing edge needs a one-shot event-armed timer and a preview-latency budget nobody has set. That budget is a user-visible decision, so this unit opens with a question rather than an implementation.
+2. **Save and Save As dialogs.** `wolf-gnome` has native Open File and Open Folder, and the file-dialog row stays partial while saving is reachable only as `:w` from inside Neovim.
 
-3. **Save and Save As dialogs.** `wolf-gnome` has native Open File and Open Folder, and the file-dialog row stays partial while saving is reachable only as `:w` from inside Neovim.
+3. **Composed and input-method text entry.** The macOS row is Option-as-option composing accents; the Linux counterpart is wider, because this front-end attaches no `gtk::IMContext` at all, so a dead key, a compose sequence and every input method reach Neovim as nothing.
 
-4. **Composed and input-method text entry.** The macOS row is Option-as-option composing accents; the Linux counterpart is wider, because this front-end attaches no `gtk::IMContext` at all, so a dead key, a compose sequence and every input method reach Neovim as nothing.
-
-5. **Preview in browser.** Written and dispatched, and deliberately last: it needs a host where a human can watch the hand-off land, and a hand-off found broken there is repaired as its own effort, per the Markdown-preview table above.
+4. **Preview in browser.** Written and dispatched, and deliberately last: it needs a host where a human can watch the hand-off land, and a hand-off found broken there is repaired as its own effort, per the Markdown-preview table above.

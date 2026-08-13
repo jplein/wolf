@@ -24,7 +24,8 @@ The shared harness for every `wolf-ffi` bridge test. It mirrors `crates/wolf-cor
 - Publishing the resolved path back into `WOLF_NVIM_BIN` is part of that helper's contract, not a side effect to tidy away: under Bazel the binary comes from the staged tree while `wolf_ffi_start` reads only that variable, so without the publish the whole Bazel path launches nothing. The write is conditional, so the devShell path performs none at all, and it happens once per test binary behind a `OnceLock` that every reader is ordered after — `setenv` is not synchronised against a C-side `getenv`, and `cargo test` runs a binary's tests in parallel.
 - Because the helper publishes, a test body needs no `std::env::set_var("WOLF_NVIM_BIN", …)` of its own — do not copy one from a sibling. Most real-nvim binaries here still carry that redundant write at the top of each test body, which the helper makes a no-op and which races its neighbours' environment reads in any binary holding more than one test. Removing them is pure plumbing that touches no assertion, and nobody has done it.
 - `init_lua_path()` — resolves the captive `runtime/nvim/init.lua`, preferring the staged runfile over the `CARGO_MANIFEST_DIR` fallback. Under Bazel that manifest path is an ephemeral sandbox directory absent at test runtime, and nvim launched with a missing `-u` file blocks forever on its `Press ENTER` prompt, hanging startup.
-- `orlando_dir_or_none()`, `lighthouse_dir_or_none()`, `parsers_dir_or_none()`, `nvim_treesitter_dir_or_none()` — staged vendored-tree resolvers that return `None` off Bazel so the dependent test skips instead of failing.
+- `orlando_dir_or_none()`, `lighthouse_dir_or_none()`, `parsers_dir_or_none()`, `nvim_treesitter_dir_or_none()` — staged vendored-tree resolvers, each over its own `WOLF_TEST_*_DIR`. Bazel wires all four from runfiles; the Linux devShell exports the orlando and lighthouse ones from the same derivations the Nix package installs, so both trees resolve on both platforms and only a `cargo test` run outside the shell reaches the `None` arm, which returns the dependent test as a loud skip rather than a failure.
+- Deleting either `shellHook` export reddens nothing in this suite — three tests would skip and pass — so `crates/wolf-gnome/tests/smoke_headless.rs` carries a guard asserting both lines are still in `flake.nix`.
 - `copy_dir_recursive()` — stages a sibling tree next to a temp `init.lua` for the tests whose Lua self-locates its siblings. It classifies entries with `std::fs::metadata`, which follows symlinks, because Bazel runfiles entries are symlinks that `DirEntry::file_type` would skip.
 - `fresh_cwd()` — a unique temp dir that is deliberately not auto-deleted: it is nvim's working directory and file-search root, so it must outlive `wolf_ffi_start`.
 - `DEFAULT_COLS` / `DEFAULT_ROWS` — the starting grid size the smoke-style tests attach with.
@@ -231,7 +232,7 @@ Real-nvim coverage of the per-pane navigation-history bridge — the six `WolfCo
 
 #### `lighthouse_load.rs`
 
-Real-nvim proof that the captive `runtime/nvim/init.lua` both finds and activates a sibling vendored `lighthouse/` colorscheme. Target `//crates/wolf-ffi:lighthouse_load` stages the nvim runfiles plus `//bazel/lighthouse:lighthouse_tree` (`WOLF_TEST_LIGHTHOUSE_DIR`) and runs unsandboxed; it loud-skips when either the pinned nvim or the lighthouse tree is missing, the normal cargo/Linux case.
+Real-nvim proof that the captive `runtime/nvim/init.lua` both finds and activates a sibling vendored `lighthouse/` colorscheme. Target `//crates/wolf-ffi:lighthouse_load` stages the nvim runfiles plus `//bazel/lighthouse:lighthouse_tree` (`WOLF_TEST_LIGHTHOUSE_DIR`) and runs unsandboxed; the Linux devShell exports the same variable from its own lighthouse derivation, so the test asserts on both platforms and loud-skips only where the pinned nvim or the tree is absent.
 
 **Covers**
 
@@ -272,7 +273,7 @@ Real-nvim coverage of multi-core identity and wake routing, running two cores at
 
 #### `orlando_bg_stress.rs`
 
-Real-nvim regression test for cells drawing with the wrong background inside an orlando code block: it stages the vendored plugin like `orlando_load` and hammers a fenced-code document with seeded-random scrolling, motion, edit+undo, and fence churn. Target `//crates/wolf-ffi:orlando_bg_stress` stages the nvim runfiles, `//bazel/orlando:orlando_tree`, and `//bazel/lighthouse:lighthouse_tree`, runs unsandboxed, and is `size = "medium"`; it skips without a pinned nvim or the orlando tree, but lighthouse is optional.
+Real-nvim regression test for cells drawing with the wrong background inside an orlando code block: it stages the vendored plugin like `orlando_load` and hammers a fenced-code document with seeded-random scrolling, motion, edit+undo, and fence churn. Target `//crates/wolf-ffi:orlando_bg_stress` stages the nvim runfiles, `//bazel/orlando:orlando_tree`, and `//bazel/lighthouse:lighthouse_tree`, runs unsandboxed, and is `size = "medium"`; it skips without a pinned nvim or the orlando tree, and lighthouse is optional. Inside the Linux devShell both trees are exported, so it runs there against the vendored colorscheme rather than Neovim's defaults.
 
 **Covers**
 
@@ -286,7 +287,7 @@ Real-nvim regression test for cells drawing with the wrong background inside an 
 
 #### `orlando_load.rs`
 
-Real-nvim proof that the captive `runtime/nvim/init.lua` finds a sibling vendored `orlando/` tree, puts it on `runtimepath`, and sources it — the only automated coverage of the plugin-present branch. Target `//crates/wolf-ffi:orlando_load` stages the nvim runfiles plus `//bazel/orlando:orlando_tree` (`WOLF_TEST_ORLANDO_DIR`) and runs unsandboxed; it loud-skips when either the pinned nvim or the orlando tree is missing.
+Real-nvim proof that the captive `runtime/nvim/init.lua` finds a sibling vendored `orlando/` tree, puts it on `runtimepath`, and sources it. Target `//crates/wolf-ffi:orlando_load` stages the nvim runfiles plus `//bazel/orlando:orlando_tree` (`WOLF_TEST_ORLANDO_DIR`) and runs unsandboxed; the Linux devShell exports the same variable from its own orlando derivation, so the test asserts on both platforms and loud-skips only where the pinned nvim or the tree is absent.
 
 **Gotchas**
 

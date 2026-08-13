@@ -28,7 +28,11 @@ nix develop --command cargo test -p wolf-gnome
 
 After editing `flake.nix`, use `nix develop --command` explicitly: an already-loaded direnv environment is stale and has no GTK.
 
-Running needs a Wayland or X11 session, or the headless compositor the smoke tests launch. Three environment variables matter. `WOLF_FONT_PT` overrides the configured `font-size` and wins over it, as it does on macOS; `WOLF_CONFIG_DIR` overrides where `wolf-config.yaml` is read and created, and belongs to [`config.rs`](../wolf-core/src/README.md#configrs); `WOLF_STATE_DIR` overrides where `state.json`, the MRU databases and the per-project swap directories are kept.
+Running needs a Wayland or X11 session, or the headless compositor the smoke tests launch. Four environment variables matter. `WOLF_FONT_PT` overrides the configured `font-size` and wins over it, as it does on macOS; `WOLF_CONFIG_DIR` overrides where `wolf-config.yaml` is read and created, and belongs to [`config.rs`](../wolf-core/src/README.md#configrs); `WOLF_STATE_DIR` overrides where `state.json`, the MRU databases and the per-project swap directories are kept; `WOLF_INIT_LUA` names the captive `runtime/nvim/init.lua` outright, ahead of both paths the binary would otherwise resolve, and is deliberately not checked for existence, so a typo fails loudly instead of falling through to another file.
+
+## Packaging
+
+`nix build .#wolf-gnome` produces the installed Linux application: the release binary, wrapped so it supplies its own Neovim, ripgrep, treesitter trees and font configuration, beside a captive `init.lua` with the vendored `orlando` and `lighthouse` trees as siblings, a desktop entry, the hicolor icon set and both editor font families. The commands, the output's layout, how a NixOS configuration consumes the flake and the one script that produces evidence about the artifact are all [`build.md`](../../build.md)'s.
 
 ## Testing
 

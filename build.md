@@ -52,7 +52,7 @@ What each target covers lives with the tests: [`wolf-core/tests`](crates/wolf-co
 
 ### The optimized build
 
-From the repository root, for the reason [Activating the dev environment](#activating-the-dev-environment) gives, and because the binary resolves the captive `init.lua` through a compile-time path into its own build tree ([`wolf-gnome/DECISIONS.md`](crates/wolf-gnome/DECISIONS.md)):
+From the repository root, for the reason [Activating the dev environment](#activating-the-dev-environment) gives, and because a checkout binary resolves the captive `init.lua` out of the checkout it was compiled in — the last of the three branches [`wolf-gnome/DECISIONS.md`](crates/wolf-gnome/DECISIONS.md) states, and the one [the Nix package](#the-nix-package) does not take:
 
 ```sh
 nix develop --command cargo build --release
@@ -86,6 +86,48 @@ Runtime measurement belongs to this profile as well: [Frame-time instrumentation
 Outside the devShell the binary still resolves every library it links: `ldd` reports no missing entry, all 188 of them resolving through store RPATHs written by nixpkgs' linker wrapper. What is missing is the environment, and it fails along two different paths.
 
 With no display it prints `Gtk-WARNING: Failed to open display` and exits 1. With a display but none of the devShell's exports it prints host fontconfig warnings, then a `GLib-GIO-CRITICAL` about `g_settings_schema_source_lookup` which is a warning rather than an abort, then `failed to start core: WOLF_NVIM_BIN is not set`, then `no window could be opened…` — and exits 0 having opened no window. That zero belongs to the second path alone.
+
+### The Nix package
+
+`packages.wolf-gnome`, and `packages.default` as the same derivation, is the installed Linux application. It exists on Linux systems only, behind an `optionalAttrs` guard that keeps a Wayland GTK derivation off the Darwin evaluation path.
+
+```sh
+nix build .#wolf-gnome --no-link --print-out-paths
+```
+
+`--no-link` keeps a `result` symlink out of the working tree and prints the store path on stdout instead. Do not record that path as a fact: the derivation is input-addressed over everything under `crates/`, so editing a comment in a test file gives a different output. A cold build is a full release compile of the workspace with no `target/` reuse, so budget minutes rather than seconds.
+
+| Path                    | Contents                                                                |
+| ----------------------- | ----------------------------------------------------------------------- |
+| `bin/`                  | the wrapper and the binary it execs                                     |
+| `share/wolf/nvim/`      | the captive `init.lua`, with sibling `orlando/` and `lighthouse/` trees |
+| `share/wolf/fonts.conf` | the additive fontconfig fragment `FONTCONFIG_FILE` defaults to          |
+| `share/applications/`   | `org.wolf.Wolf.desktop`                                                 |
+| `share/icons/hicolor/`  | `org.wolf.Wolf` at 48, 64, 128 and 256 px, plus a scalable SVG          |
+| `share/fonts/truetype/` | iA Writer Mono S and JetBrains Mono                                     |
+| `share/licenses/`       | iA Writer Mono S's licence                                              |
+
+The wrapper sets `WOLF_NVIM_BIN`, `WOLF_RG_BIN`, `WOLF_NVIM_TREESITTER_DIR`, `WOLF_PARSERS_DIR` and `FONTCONFIG_FILE` as defaults, so an exported value of any of them still wins — the rule `Project.swift` follows on macOS with `setenv(…, 0)`, and what keeps the devShell's pinned font stack winning inside `nix develop`. It never sets `WOLF_INIT_LUA`, which would make the installed runtime unreachable and the development override useless on the packaged binary.
+
+A NixOS configuration consumes the flake as an input:
+
+```nix
+{
+  inputs.wolf.url = "github:jplein/wolf";
+  # then, from a module that has the flake in scope:
+  environment.systemPackages = [ wolf.packages.${pkgs.system}.wolf-gnome ];
+}
+```
+
+Listing it in `fonts.packages` as well makes the two editor families available system-wide, because they are installed at the layout fontconfig scans. That is a convenience and not a requirement: the application resolves them through its own `FONTCONFIG_FILE` either way.
+
+Nothing about the artifact is checked inside the build sandbox. `doCheck` is off, because the suite needs a compositor, a writable `XDG_RUNTIME_DIR` and a session bus a Nix builder has none of, so one command builds the package and runs every test that reads or launches it:
+
+```sh
+./tools/wolf-package-smoke.sh
+```
+
+It prints the store path it resolved before it starts, since that path is the subject of everything the run reports, and it must not overlap another `cargo test`: two compositors contend for one Wayland socket. What those tests assert belongs with them, in [`wolf-gnome/tests`](crates/wolf-gnome/tests/README.md).
 
 ### The verification gate
 
@@ -316,7 +358,7 @@ tail -f /tmp/wolf-frame-stats.txt
 
 The bucket set is [`wolf-gnome/src/README.md`](crates/wolf-gnome/src/README.md#frame_statsrs)'s; the cadence, the `wakes/key` caveat and the measured reading are [`wolf-gnome/DECISIONS.md`](crates/wolf-gnome/DECISIONS.md#frame-time-instrumentation)'s.
 
-**Measure the release binary, and run it from the tree it was built in.** A `dev` build's numbers mean nothing, and `app.rs`'s `init_lua_path` bakes `env!("CARGO_MANIFEST_DIR")`, so a relocated binary finds no `init.lua` at all.
+**Measure the release binary, and leave it where cargo put it.** A `dev` build's numbers mean nothing, and a checkout binary reaches its captive `init.lua` through the `CARGO_MANIFEST_DIR` branch, so a copy moved elsewhere — with no installed `share/wolf/nvim/` beside it and no `WOLF_INIT_LUA` naming one — is launched against a path to nothing.
 
 ```sh
 nix develop --command cargo build --release

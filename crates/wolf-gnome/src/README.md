@@ -47,7 +47,7 @@ Purpose: the entry point — activate, and delegate. `run` builds the `adw::Appl
 **Public API**
 
 - `run() -> glib::ExitCode` — hands GTK an empty argv, so the process command line is never parsed or rejected.
-- `load_config`, `measure_metrics`, `open_state_store` and `init_lua_path` are `pub(crate)`, called once each by [`coordinator.rs`](#coordinatorrs).
+- `load_config`, `measure_metrics`, `open_state_store` and `init_lua_path` are `pub(crate)`, called once each by [`coordinator.rs`](#coordinatorrs). `init_lua_path` is glue alone: it makes the `WOLF_INIT_LUA` and `current_exe()` reads, passes `Path::exists` as the probe, and leaves the ordering rule to [`init_lua.rs`](#init_luars).
 
 **Decisions**
 
@@ -372,6 +372,25 @@ Purpose: translates a GDK keyval plus modifier state into a `wolf_core::KeyEvent
 **Gotchas**
 
 - `SUPER_MASK` maps to `meta`, so an unmapped Super chord is forwarded for Neovim to mangle ([DECISIONS.md](../DECISIONS.md)); the chord controller intercepts only the ones this crate binds.
+
+#### `init_lua.rs`
+
+Purpose: where the captive `runtime/nvim/init.lua` lives, as a function of values. A pure seam in [`config_seam.rs`](#config_seamrs)'s shape: the environment read, the `current_exe()` read and the existence probe are all injected, so every branch is decidable with no process environment and no filesystem.
+
+**Public API**
+
+- `INIT_LUA_ENV` and `INSTALLED_INIT_LUA_RELATIVE` — the override's variable name, and the installed file's path relative to the directory holding the executable.
+- `resolve_init_lua(env_override, exe_dir, manifest_fallback, exists) -> PathBuf` — total and never panicking: the override, then the executable-relative candidate, then the caller's fallback.
+
+**Decisions**
+
+- The override is returned unchecked while the executable-relative candidate is probed. An override the user typed is an instruction, so checking it would let a typo fall silently through to a different `init.lua`; the candidate is a guess, and must fall through in a checkout build.
+- `INSTALLED_INIT_LUA_RELATIVE` is the contract with the Nix install layout — [`packaged_layout.rs`](../tests/README.md#packaged_layoutrs) joins on it rather than retyping the path.
+- The candidate keeps its `bin/..` step: Neovim is handed that string as `-u` and reports it back through `debug.getinfo`, which is how the captive `init.lua` finds its sibling trees.
+
+**Gotchas**
+
+- Under `wrapGAppsHook4` the installed executable execs a wrapped sibling, and `current_exe()` reads `/proc/self/exe`, so the parent directory is still `bin/` and the join still resolves.
 
 #### `layout.rs`
 
