@@ -206,6 +206,15 @@ pub enum InputEvent {
     SaveAs {
         /// Destination path.
         path: PathBuf,
+        /// Whether to apply the FORCING `saveas!` rather than plain `saveas`.
+        ///
+        /// `true` is for a caller whose OWN dialog has already confirmed the
+        /// overwrite — a native save panel asks the question and then expects the
+        /// write to happen. `false` applies plain `saveas`, which fails
+        /// `E13: File exists` on a path that is already on disk; `apply_batch`
+        /// degrades that error to a `tracing::warn!` the user never sees, so a
+        /// confirming caller that passes `false` loses the write silently.
+        force: bool,
     },
     /// Change the current view's working directory (delegated to `:tcd`, the
     /// tab-local cwd).
@@ -443,8 +452,9 @@ pub(crate) async fn apply(nvim: &Nvim, event: &InputEvent) -> Result<(), Box<Cal
         InputEvent::Open { path } => command(nvim, &format!("edit {}", fnameescape(path))).await,
         InputEvent::OpenAt { path, line, col } => open_at(nvim, path, *line, *col).await,
         InputEvent::Save => command(nvim, "write").await,
-        InputEvent::SaveAs { path } => {
-            command(nvim, &format!("saveas {}", fnameescape(path))).await
+        InputEvent::SaveAs { path, force } => {
+            let bang = if *force { "!" } else { "" };
+            command(nvim, &format!("saveas{bang} {}", fnameescape(path))).await
         }
         InputEvent::Chdir { path } => {
             command(nvim, &format!("tcd {}", fnameescape(path))).await?;

@@ -13263,6 +13263,44 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
         "TABS_READ_F_NAME",
         "native_tabs_open_switch_and_close_under_cage",
     ),
+    // The two SAVE smokes. Neither captures an image and neither runs `tesseract`, so
+    // nothing they write can satisfy an OCR assertion of their OWN — their observables
+    // are files on disk read by the Rust side. The names are registered for the generic
+    // loop's sake, which forbids ANY fixture name from carrying ANY asserted term and
+    // so stops a later rename turning one of these into page text that breaks somebody
+    // else's smoke.
+    //
+    // Three of the four land in the temp cwd, where the tree sidebar draws them by
+    // name: the fixture Ctrl+Shift+S writes, and the file the save DIALOG creates under
+    // the name typed into it. The two readbacks land under XDG_RUNTIME_DIR instead, so
+    // no new sidebar row and no new picker candidate appears mid-run; they are
+    // registered anyway for CD_READBACK_NAME's reason, since their ABSOLUTE paths are
+    // echoed in the typed `:call writefile(...)` command lines.
+    //
+    // SAVEAS_PROPOSED_NAME is deliberately ABSENT from this table: it is not a fixture
+    // this file writes but the name `save_ui::UNTITLED_SAVE_NAME` proposes, asserted
+    // NOT to exist on disk. Registering a name whose whole point is that nothing
+    // creates it would say the opposite of what the assertion does.
+    (
+        SAVE_FIXTURE_FILE,
+        "SAVE_FIXTURE_FILE",
+        "ctrl_shift_s_saves_the_focused_buffer_to_disk_under_cage",
+    ),
+    (
+        SAVE_READBACK_BEFORE_NAME,
+        "SAVE_READBACK_BEFORE_NAME",
+        "ctrl_shift_s_saves_the_focused_buffer_to_disk_under_cage",
+    ),
+    (
+        SAVEAS_TYPED_NAME,
+        "SAVEAS_TYPED_NAME",
+        "the_save_dialog_writes_a_named_file_under_cage",
+    ),
+    (
+        SAVEAS_READBACK_NAMELESS_NAME,
+        "SAVEAS_READBACK_NAMELESS_NAME",
+        "the_save_dialog_writes_a_named_file_under_cage",
+    ),
 ];
 
 /// Mechanically enforces the naming invariant documented on [`SIDEBAR_FILLER_FILES`]:
@@ -32832,6 +32870,786 @@ fn ocr_band_to_lowercase(png: &Path, band: SampleRect, band_png: &Path, smoke: &
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8_lossy(&output.stdout).to_lowercase()
+}
+
+// ===========================================================================
+// The SAVE smokes
+// ===========================================================================
+//
+// Both are NON-OCR READBACK smokes: the observable is a file on disk, read by the
+// Rust side, which is why neither invokes `grim` or `tesseract` and neither parks the
+// block cursor. That keeps them clear of the block-cursor, page-density and
+// fixture-name-vs-OCR-term rules entirely — but NOT of the fixture rule underneath
+// them, which applies to a readback just as it does to a capture: a fixture whose
+// CONTENT already carried the asserted sentinel would satisfy the assertion whether or
+// not anything saved. Each smoke therefore reads its target back BEFORE launching and
+// asserts the sentinel is absent, which is the on-disk form of the same guard.
+
+/// SAVE smoke: the file the chord must write. Its NAME is deliberately unlike
+/// [`SAVE_SENTINEL`], which lives only in the buffer the user types into — the
+/// `NAVBACK_FILE_FIRST` convention, applied to a file rather than to a page.
+const SAVE_FIXTURE_FILE: &str = "svromeo.md";
+
+/// Heading written into [`SAVE_FIXTURE_FILE`] before the launch. It is the file's
+/// WHOLE content going in, which is what makes the sentinel's later presence
+/// attributable to the save and to nothing else.
+const SAVE_FIXTURE_HEADING: &str = "# SVFIXTUREHEAD";
+
+/// The string typed into the buffer and asserted ON DISK afterwards. Nothing else in
+/// the scenario writes it, and the scenario contains no `:w` anywhere, so its presence
+/// in the file is the chord's doing.
+const SAVE_SENTINEL: &str = "zzsavedelta";
+
+/// SAVE smoke: the file the captive Neovim writes `bufname('%')` into BEFORE the
+/// chord fires. A PRECONDITION — it proves the `:e` took effect and the typed text
+/// landed in the intended buffer, so a failure of the discriminator is attributable to
+/// the chord rather than to a lost keystroke.
+///
+/// It lands under `XDG_RUNTIME_DIR` rather than in the temp cwd, so no new sidebar row
+/// and no new picker candidate appears mid-run. Registered in
+/// [`RELAUNCH_FIXTURE_NAMES`] anyway, for [`CD_READBACK_NAME`]'s reason: its ABSOLUTE
+/// path is echoed in the typed `:call writefile(...)` command line.
+const SAVE_READBACK_BEFORE_NAME: &str = "wolf_gnome_save_before.txt";
+
+/// The SAVE scenario, run as a single `sh -c` string inside `cage` (the
+/// [`NAVBACK_SCENARIO`] shape): launch, poll until `cage` is up, settle, `:e` the
+/// fixture, type the sentinel into it, read `bufname('%')` back, fire Ctrl+Shift+S,
+/// settle, tear down.
+///
+/// ## What it must NOT contain, and why that is load-bearing
+///
+/// **No `:w`, no `:x`, no `:wq`, and no quit path that saves.** The whole
+/// discriminator is that [`SAVE_SENTINEL`] reaches the disk, so any other route from
+/// the buffer to the file would satisfy it with the chord doing nothing. The teardown
+/// signals the app rather than typing at it, and `WolfCore::shutdown` writes no buffer.
+///
+/// **No `grim` and no OCR.** Nothing here is a claim about pixels.
+///
+/// ## The premise this rests on, stated rather than assumed
+///
+/// If the chord does NOT fire, the key falls through to Neovim as `<C-s>` in NORMAL
+/// mode, which neither Neovim nor `runtime/nvim/init.lua` maps to anything (the built-in
+/// `<C-s>` signature-help mapping is insert/visual/select mode only, and init.lua's
+/// only `<C-s>`-bearing map is the two-key `<C-w><C-s>`). So a fall-through writes
+/// nothing, which is exactly what makes the disk readback discriminating. The Escape
+/// before the chord is what puts the editor in normal mode and is therefore part of
+/// that premise, not tidiness.
+///
+/// ## Exit codes
+///
+/// * `11` — the app died before its window mapped (the shared convention).
+/// * `24` — the `bufname('%')` readback never appeared, so keys were not reaching
+///   Neovim at all and nothing below is diagnosable.
+const SAVE_SCENARIO: &str = r#"
+set -eu
+
+# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
+# for the window to map, which this poll cannot observe (see the poll below).
+WAIT_TRIES=75
+WAIT_INTERVAL=0.2
+SETTLE=1.0
+# How many WAIT_INTERVAL polls to allow for a readback file.
+FILE_TRIES=100
+
+cleanup() {
+    set +e
+    if [ -n "${app_pid:-}" ]; then
+        kill "$app_pid" 2>/dev/null
+        wait "$app_pid" 2>/dev/null
+    fi
+}
+trap cleanup EXIT INT TERM HUP
+
+"$WOLF_BIN" &
+app_pid=$!
+
+tries=0
+while [ "$tries" -lt "$WAIT_TRIES" ]; do
+    if ! kill -0 "$app_pid" 2>/dev/null; then
+        echo "wolf-gnome save smoke: app process exited early (pid $app_pid)" >&2
+        exit 11
+    fi
+    if wtype "" >/dev/null 2>&1; then
+        break
+    fi
+    tries=$((tries + 1))
+    sleep "$WAIT_INTERVAL"
+done
+
+# Final settle for nvim's initial redraw before driving the editor.
+sleep "$SETTLE"
+
+# Poll for a readback file the captive Neovim writes. Nothing downstream may read a
+# file we merely hope is there. (The NAVBACK_SCENARIO body, verbatim.)
+wait_file() {
+    f=$1
+    t=0
+    while [ "$t" -lt "$FILE_TRIES" ]; do
+        if [ -s "$f" ]; then
+            return 0
+        fi
+        t=$((t + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    echo "wolf-gnome save smoke: readback file $f never appeared (or stayed empty)." >&2
+    return 1
+}
+
+# --- Step 1: open the fixture, so the buffer has a NAME to be written to ------
+#
+# A named buffer is the whole point: `save_ui::save_press` answers Write for one and
+# opens a dialog only for a buffer with no file name at all.
+wtype -- ":e $SAVE_FILE"
+wtype -k Return
+sleep "$SETTLE"
+
+# --- Step 2: make the buffer differ from the file on disk ---------------------
+#
+# `i` enters insert mode at the top of the buffer, the sentinel is typed, Escape
+# returns to NORMAL mode -- which is also what makes an un-fired chord a no-op, since
+# Neovim maps <C-s> in insert/visual/select mode only. Nothing writes yet.
+wtype -- i
+wtype -- "$SAVE_SENTINEL"
+wtype -k Escape
+sleep "$SETTLE"
+
+# --- Step 3: the PRECONDITION readback ----------------------------------------
+#
+# Proves the `:e` took effect, so a failure of the disk assertion can be attributed to
+# the chord rather than to a keystroke that never landed.
+wtype -- ":call writefile([bufname('%')], '$BEFORE')"
+wtype -k Return
+wait_file "$BEFORE" || exit 24
+
+# --- Step 4: THE CHORD UNDER TEST ---------------------------------------------
+#
+# `-M <mod>` / `-m <mod>` press / release a modifier and `-k <key>` presses+releases a
+# key while the held modifiers apply, exactly as in the other Ctrl+Shift scenarios.
+# Chord delivery is isolated to this single line.
+#
+# If the action were NOT installed, `AppShell::install_chord_controller` returns
+# Propagation::Proceed and this reaches Neovim as <C-s>, which is unmapped in normal
+# mode -- so a broken build writes nothing at all, which is what the disk readback
+# distinguishes.
+wtype -M ctrl -M shift -k s -m shift -m ctrl
+
+# Let the ordered input channel carry `InputEvent::Save` and nvim's `write` land.
+sleep "$SETTLE"
+
+exit 0
+"#;
+
+/// **Ctrl+Shift+S writes the focused buffer to its own file, with no dialog.**
+///
+/// ## What it covers that nothing else does
+///
+/// The whole Save path, end to end and in the only place all of it is joined:
+///
+/// * the capture-phase chord controller resolving `<Control><Shift>s` through
+///   `actions::action_for_key` — GTK's own keymap-aware matching does not fire under
+///   `wtype`, so this is the real matcher;
+/// * `win.save` being INSTALLED at all. It carries no `wolf_core::Command`, so
+///   `shell::install_actions` reaches it only through
+///   `command_action::ui_action_for_front_end_action`; a row that resolves in neither
+///   place is skipped with a printed reason while its accelerator is still registered,
+///   which swallows the chord and does nothing;
+/// * `shell::perform`'s `UiAction::SaveBuffer` arm and `AppShell::save_buffer`;
+/// * `save_ui::save_press` answering `Write` against a live core over a NAMED buffer —
+///   the seam's tables cover every other input, and nothing but this smoke covers the
+///   acceptance reaching a real `WolfCore`;
+/// * `InputEvent::Save` riding the ordered input channel into nvim's `write`.
+///
+/// ## Why the observable is a file rather than a pixel
+///
+/// "The buffer was saved" has no rendering. A screenshot after a correct save and one
+/// after a save that never happened are the same image, since the buffer's text is on
+/// screen either way. The disk is the only place the two differ.
+///
+/// ## A warning about the WRONG failure mode
+///
+/// This smoke sets [`SAVE_AS_GDK_DEBUG`] even though its green path opens NO dialog,
+/// and the reason is the red path rather than the green one. Should an edit ever make
+/// `save_press` answer `Choose` for a NAMED buffer, `AppShell::open_save_dialog` runs;
+/// without the variable GTK takes the portal route to the developer's real session bus
+/// and a modal file dialog opens on the developer's DESKTOP while this smoke hangs
+/// holding the Wayland socket, wedging every other cage smoke. With it, that same wrong
+/// answer merely opens an in-process dialog inside `cage` that nothing answers, and the
+/// smoke fails on its own assertion instead. If that happens, the finding is in
+/// `save_ui::save_press`. See [`the_save_dialog_writes_a_named_file_under_cage`].
+///
+/// ## Assertions, classified
+///
+/// A precondition gets NO revert: inventing one would manufacture a discriminator this
+/// smoke does not have. The `measured` column carries an actual red run, per
+/// `tests/README.md`'s "A red-run demonstration is a deliverable".
+///
+/// | # | assertion | kind | revert | measured |
+/// | --- | --- | --- | --- | --- |
+/// | 0 | the fixture on disk lacks [`SAVE_SENTINEL`] before the launch | precondition — the evidence is not pre-satisfied by the fixture | none | n/a |
+/// | 1 | `status.success()` | precondition — the cage scenario ran to completion | none; do not invent one | green under row 3's revert, as predicted: the scenario exits 0 whether or not anything saved, so the red arrives at row 3 |
+/// | 2 | `$BEFORE` names [`SAVE_FIXTURE_FILE`] | precondition — the `:e` took effect, so a failure of row 3 is the chord's | none | green under row 3's revert |
+/// | 3 | the fixture on disk CONTAINS [`SAVE_SENTINEL`] | **the discriminator** | replace `shell::perform`'s `UiAction::SaveBuffer` arm body with `{}`. The chord still resolves and the action still activates; nothing writes; the file still holds only its heading. | red: `after Ctrl+Shift+S the file …/svromeo.md does not contain "zzsavedelta", so the buffer was never written`, with `File contents were "# SVFIXTUREHEAD\n"` — the heading alone. NOT isolated: [`the_save_dialog_writes_a_named_file_under_cage`] reddens with it, since that smoke reaches the dialog through this same arm, and the run reads `test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 68 filtered out; finished in 13.69s`. The pair reddening together says the ARM was lost; this one alone would say the `Write` branch was |
+/// | 4 | the saved file still contains [`SAVE_FIXTURE_HEADING`] | corroboration — the file was written FROM THE BUFFER rather than replaced by something carrying only the sentinel | none | not reached under row 3's revert, which fires first. Green on every passing run, and its `File contents were` dump in row 3's red is what shows the heading surviving |
+#[test]
+fn ctrl_shift_s_saves_the_focused_buffer_to_disk_under_cage() {
+    const SMOKE: &str = "ctrl_shift_s_saves_the_focused_buffer_to_disk_under_cage";
+
+    // Serialize against the other cage tests (shared Wayland socket); recover from
+    // poisoning so a failure in a sibling test does not cascade here.
+    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let runtime_dir = require_smoke_env();
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+
+    // A fresh temp cwd holding the fixture plus the sidebar fillers. See
+    // `make_temp_cwd` for why the isolation is mandatory rather than tidy.
+    let cwd = make_temp_cwd();
+    write_relaunch_fixtures(SMOKE, &cwd, &[(SAVE_FIXTURE_FILE, SAVE_FIXTURE_HEADING)]);
+
+    let fixture = cwd.join(SAVE_FIXTURE_FILE);
+    let before = runtime_dir.join(SAVE_READBACK_BEFORE_NAME);
+    clear_evidence(&before, SMOKE);
+
+    // --- Assertion 0 (precondition): the evidence is not pre-satisfied --------
+    //
+    // The on-disk form of this file's fixture rule. A fixture whose own bytes carried
+    // the sentinel would satisfy assertion 3 with nothing having saved — the same
+    // permanent silent pass a fixture NAMED after an OCR term produces, reached through
+    // content instead. Read from the file rather than from the const, because what
+    // assertion 3 reads is the file.
+    let seeded = std::fs::read_to_string(&fixture).unwrap_or_else(|e| {
+        panic!(
+            "{SMOKE}: could not read the fixture {} that `write_relaunch_fixtures` just wrote: {e}",
+            fixture.display()
+        )
+    });
+    assert!(
+        !seeded.contains(SAVE_SENTINEL),
+        "{SMOKE}: the fixture {} already contains {SAVE_SENTINEL:?} BEFORE the app runs, so \
+         assertion 3 would be satisfied by the fixture rather than by the save — a permanent \
+         silent pass, not a flake. Its contents were {seeded:?}. Change SAVE_FIXTURE_HEADING; do \
+         NOT change SAVE_SENTINEL and do NOT weaken the assertion.",
+        fixture.display()
+    );
+    assert!(
+        !SAVE_FIXTURE_FILE.to_lowercase().contains(SAVE_SENTINEL),
+        "{SMOKE}: the fixture NAME {SAVE_FIXTURE_FILE:?} contains {SAVE_SENTINEL:?}. It is not a \
+         hazard to this smoke's own disk assertion, but it is one to every OCR smoke that runs \
+         after a later change makes this sentinel an asserted term — keep the two deliberately \
+         unlike, as the sibling smokes do."
+    );
+
+    let status = cage_command(SAVE_SCENARIO, &cwd)
+        .env("WOLF_BIN", bin)
+        .env("SAVE_FILE", SAVE_FIXTURE_FILE)
+        .env("SAVE_SENTINEL", SAVE_SENTINEL)
+        .env("BEFORE", &before)
+        // Set even though the green path opens no dialog: see this test's "A warning
+        // about the WRONG failure mode" and [`SAVE_AS_GDK_DEBUG`]. It costs nothing on
+        // a green run and keeps a falsifying edit's dialog inside `cage`.
+        .env("GDK_DEBUG", SAVE_AS_GDK_DEBUG)
+        .status()
+        .expect("failed to spawn `cage` for the headless save smoke scenario");
+
+    // --- Assertion 1 (precondition): the scenario ran to completion -----------
+    assert!(
+        status.success(),
+        "{SMOKE}: the cage save scenario exited unsuccessfully ({status}). Read the exit code \
+         FIRST.\n\
+         Exit 11: the app died before its window ever mapped — a LAUNCH failure, and nothing below \
+         is about saving.\n\
+         Exit 24: the `bufname('%')` readback never appeared, so keys were not reaching Neovim at \
+         all. Check the keyboard-only smokes first; nothing here is diagnosable.\n\
+         Any other status means wtype failed or the `:e` did not load. Note this assertion says \
+         nothing about whether the chord did anything: the scenario exits 0 either way. Readback \
+         expected at {}.",
+        before.display()
+    );
+
+    // --- Assertion 2 (PRECONDITION, not a discriminator) ----------------------
+    let before_name = read_trimmed(&before, SMOKE);
+    assert_eq!(
+        before_name,
+        SAVE_FIXTURE_FILE,
+        "{SMOKE}: before the chord Neovim reported its current buffer as {before_name:?}, not \
+         {SAVE_FIXTURE_FILE:?}. This is a PRECONDITION failure, not a save one: the `:e` never took \
+         effect, so the sentinel was typed into some OTHER buffer and assertion 3 would be reading \
+         a file nothing was ever going to write. Keys reaching the buffer instead of the cmdline is \
+         the usual cause. Readback kept at {}.",
+        before.display()
+    );
+
+    // --- Assertion 3 (THE DISCRIMINATOR): the buffer reached the disk ---------
+    let saved = std::fs::read_to_string(&fixture).unwrap_or_else(|e| {
+        panic!(
+            "{SMOKE}: could not read {} after the run: {e}. The file existed before the launch \
+             (assertion 0 read it), so this means the run DELETED it, which no path in this \
+             application does.",
+            fixture.display()
+        )
+    });
+    assert!(
+        saved.contains(SAVE_SENTINEL),
+        "{SMOKE}: after Ctrl+Shift+S the file {} does not contain {SAVE_SENTINEL:?}, so the buffer \
+         was never written. Assertion 2 passed, so the sentinel really was typed into THAT buffer. \
+         The likely causes, in order:\n\
+         (a) THE CHORD NEVER FIRED. `actions::action_for_key` scans BOUND rows only, so check that \
+         `win.save`'s BindingStatus is Bound rather than Reserved. If the chord fell through to \
+         Neovim it arrived as <C-s>, which is unmapped in normal mode — so look for nothing at all \
+         having happened rather than for a stray edit.\n\
+         (b) THE ACTION WAS NOT INSTALLED. `win.save` carries no `wolf_core::Command`, so \
+         `shell::install_actions` can only reach it through \
+         `command_action::ui_action_for_front_end_action`. A row that resolves in NEITHER place is \
+         skipped with a printed reason while its accelerator IS registered: the chord is then \
+         swallowed in the capture phase and activates nothing. The app's stderr names it.\n\
+         (c) `save_ui::save_press` REFUSED or answered Choose. It prints \"save not performed: \
+         <reason>\" to stderr on a refusal; a `Choose` prints nothing and opens a native dialog \
+         instead — and because this scenario exports SAVE_AS_GDK_DEBUG, that dialog is GTK's \
+         in-process fallback inside `cage` rather than a portal request on the developer's \
+         desktop. Nothing answers it, so a stray `Choose` surfaces HERE, as this assertion \
+         failing, rather than as a hang.\n\
+         (d) `AppShell::save_buffer` sent nothing, or `InputEvent::Save` never reached nvim's \
+         `write`. `crates/wolf-core/tests/save_open.rs::save_writes_file` covers that half \
+         headlessly; if it is green, the finding is in this crate.\n\
+         File contents were {saved:?}; it is kept at {} for inspection.",
+        fixture.display(),
+        fixture.display()
+    );
+
+    // --- Assertion 4 (corroboration): it was the BUFFER that was written ------
+    //
+    // Not merely "the sentinel is on disk". A file holding the sentinel ALONE would
+    // mean something other than the buffer wrote it, and the pair rules that out: the
+    // buffer holds the typed sentinel and the fixture's original heading, so a correct
+    // `write` puts both there.
+    assert!(
+        saved.contains(SAVE_FIXTURE_HEADING),
+        "{SMOKE}: the saved file no longer contains its original heading \
+         {SAVE_FIXTURE_HEADING:?}, so what landed on disk is not the buffer the user was editing — \
+         nvim's `write` writes the WHOLE buffer, and that buffer opened on this file. Contents were \
+         {saved:?}; kept at {}.",
+        fixture.display()
+    );
+}
+
+/// SAVE AS smoke: the name TYPED into the dialog's entry, and the file the save must
+/// therefore create in the temp cwd.
+///
+/// Deliberately unlike [`SAVEAS_SENTINEL`], which lives only in the buffer, and
+/// deliberately NOT the name the dialog proposes — see [`SAVEAS_PROPOSED_NAME`].
+///
+/// The name is asserted EXACTLY, and that exactness is what carries the whole
+/// select-all measurement: a run in which the typed characters were appended to the
+/// pre-filled `Untitled.md` — or prepended to it — produces a third name and no file
+/// under this one, so assertion 3 reddens. Measured on this host, assertion 3 green:
+/// `wtype -M ctrl -k a -m ctrl` in the dialog's pre-filled name entry REPLACES the
+/// proposal, and the path handed back to the callback is the typed name alone.
+const SAVEAS_TYPED_NAME: &str = "svmike.md";
+
+/// The string typed into the NAMELESS buffer and asserted on disk afterwards.
+const SAVEAS_SENTINEL: &str = "zzsaveasfoxtrot";
+
+/// The name the dialog PRE-FILLS, read from the production constant rather than
+/// retyped so it cannot drift.
+///
+/// It is the look-alike assertion 4 asserts against: it says the buffer did not ALSO
+/// reach disk under the name nobody typed.
+///
+/// **What it cannot see, and why the note matters here rather than in a report.** A run
+/// in which the entry was never edited writes NO file at all, so assertion 4 passes
+/// vacuously on it. The proposal is `<cwd>/Untitled.md`, which is the name
+/// `runtime/nvim/init.lua` has already given the startup buffer, and `saveas!` against a
+/// name another loaded buffer holds raises `E139: File is loaded in another buffer` —
+/// the bang overrides "file exists", not a buffer-name collision. Measured directly
+/// against the pinned Neovim: a named buffer, a typed `:enew`, then `saveas!` back at
+/// the first name errors E139 and leaves the directory empty, with and without
+/// `hidden`. That case, and a concatenated name, both redden assertion 3 instead.
+const SAVEAS_PROPOSED_NAME: &str = wolf_gnome::save_ui::UNTITLED_SAVE_NAME;
+
+/// SAVE AS smoke: the file the captive Neovim writes `bufname('%')` into after the
+/// typed `:enew`. A PRECONDITION, and the sharpest one this smoke has — the entire
+/// route depends on the buffer being genuinely NAMELESS, which is what makes
+/// `save_ui::save_press` answer `Choose` and open the dialog.
+///
+/// Under `XDG_RUNTIME_DIR` for [`SAVE_READBACK_BEFORE_NAME`]'s reason.
+const SAVEAS_READBACK_NAMELESS_NAME: &str = "wolf_gnome_saveas_nameless.txt";
+
+/// The value of `GDK_DEBUG` **both** save smokes export, and **the only thing standing
+/// between a later "simplification" and a wedged suite.**
+///
+/// Measured, and not negotiable: `gdk_display_should_use_portal` answers true because
+/// GDBus reaches the developer's REAL session bus at `$XDG_RUNTIME_DIR/bus` even though
+/// the harness removes `DBUS_SESSION_BUS_ADDRESS`. GTK then exports a window handle
+/// through `zxdg_exporter_v2`, which `cage` does not implement, and proceeds to
+/// `show_portal_file_chooser(self, NULL)` anyway — so the request goes to the HOST's
+/// `org.freedesktop.portal.Desktop`. The consequence is not an invisible dialog: **a
+/// modal file dialog opens on the developer's desktop and this smoke hangs** until it
+/// is answered or the app is killed, holding the Wayland socket the whole time and
+/// failing every other cage smoke with `unable to lock lockfile`.
+///
+/// `no-portals` forces GTK's in-process fallback, which was measured under `cage` to
+/// present (`visible=true mapped=true realized=true`, 881x326) and to return
+/// `Ok(<cwd>/typedname.md)` to the callback after a typed name plus Return.
+///
+/// ## Why [`ctrl_shift_s_saves_the_focused_buffer_to_disk_under_cage`] exports it too,
+/// though it opens no dialog
+///
+/// Because the hazard belongs to that smoke's RED path, not its green one. On a green
+/// run Ctrl+Shift+S over a NAMED buffer answers `Write` and no dialog is ever
+/// constructed, so the variable does nothing. But any falsifying edit that makes
+/// `save_press` answer `Choose` for a named buffer — including the obvious one, dropping
+/// the `save_name` check — reaches `AppShell::open_save_dialog`, and without this
+/// variable that opens a modal on the developer's DESKTOP and hangs the smoke while it
+/// holds the Wayland lock, failing every other cage smoke in the suite with `unable to
+/// lock lockfile`. With it, the same wrong answer opens an unanswered in-process dialog
+/// inside `cage` and the smoke fails on its own assertion. It costs nothing green and
+/// removes a hazard that would otherwise read as a mass regression.
+///
+/// This is PER-SMOKE SCENARIO ENVIRONMENT and never production behaviour.
+const SAVE_AS_GDK_DEBUG: &str = "no-portals";
+
+/// The SAVE AS scenario, run as a single `sh -c` string inside `cage`.
+///
+/// ## The route, stated plainly
+///
+/// Save As has NO chord and its menu item is unreachable (the primary-menu popover is
+/// a documented deliberate test gap), so this smoke reaches the dialog through the
+/// OTHER door: `Ctrl+Shift+S` on a NAMELESS buffer, which `save_ui::save_press`
+/// answers `Choose`. That is a genuine end-to-end path through `save_press`'s `Choose`
+/// arm, `save_dialog_proposal`'s unnamed branch, `AppShell::open_save_dialog`, the
+/// callback, `save_as_target` and `InputEvent::SaveAs`.
+///
+/// ## Why a TYPED `:enew`
+///
+/// It is the only way to reach a genuinely nameless buffer. `runtime/nvim/init.lua`
+/// names an anonymous buffer only at `VimEnter` (the startup buffer) and inside
+/// `wolf_new_untitled` (the front-end's own New Buffer), so a typed `:enew` leaves the
+/// new buffer with an EMPTY `bufname('%')` — which the readback below measures rather
+/// than assumes, because the whole route depends on it.
+///
+/// The other half of that premise is on the core side and is read out of the source
+/// rather than assumed: `:enew` fires `BufEnter`, init.lua's current-file autocmd emits
+/// `expand('%:p')` — the empty string for an unnamed buffer — and
+/// `redraw::apply_current_file` maps an EMPTY path to `None` rather than leaving the
+/// previous value in place. So `Snapshot::current_file` really does become `None` here,
+/// which is what makes `save_ui::save_press` answer `Choose`. Were it to keep the
+/// startup buffer's `<cwd>/Untitled.md`, the chord would answer `Write` and this
+/// scenario would silently save the wrong buffer instead of opening a dialog.
+///
+/// ## Exit codes
+///
+/// * `11` — the app died before its window mapped (the shared convention).
+/// * `26` — the nameless-buffer readback never appeared, so keys were not reaching
+///   Neovim at all and nothing below is diagnosable.
+const SAVEAS_SCENARIO: &str = r#"
+set -eu
+
+WAIT_TRIES=75
+WAIT_INTERVAL=0.2
+SETTLE=1.0
+# The native dialog is a separate toplevel: it has to map, realize and take keyboard
+# focus before a keystroke can reach its name entry, and it has to close and run its
+# callback before the save is issued. Both budgets are this one.
+DIALOG_SETTLE=2.0
+FILE_TRIES=100
+
+cleanup() {
+    set +e
+    if [ -n "${app_pid:-}" ]; then
+        kill "$app_pid" 2>/dev/null
+        wait "$app_pid" 2>/dev/null
+    fi
+}
+trap cleanup EXIT INT TERM HUP
+
+"$WOLF_BIN" &
+app_pid=$!
+
+tries=0
+while [ "$tries" -lt "$WAIT_TRIES" ]; do
+    if ! kill -0 "$app_pid" 2>/dev/null; then
+        echo "wolf-gnome save-as smoke: app process exited early (pid $app_pid)" >&2
+        exit 11
+    fi
+    if wtype "" >/dev/null 2>&1; then
+        break
+    fi
+    tries=$((tries + 1))
+    sleep "$WAIT_INTERVAL"
+done
+
+sleep "$SETTLE"
+
+wait_file() {
+    f=$1
+    t=0
+    while [ "$t" -lt "$FILE_TRIES" ]; do
+        if [ -s "$f" ]; then
+            return 0
+        fi
+        t=$((t + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    echo "wolf-gnome save-as smoke: readback file $f never appeared (or stayed empty)." >&2
+    return 1
+}
+
+# --- Step 1: a genuinely NAMELESS buffer --------------------------------------
+#
+# A TYPED :enew, deliberately. The front-end's own New Buffer runs
+# `wolf_new_untitled`, which NAMES the buffer <cwd>/Untitled.md -- and a named buffer
+# is answered Write, so it would never reach the dialog at all.
+wtype -- ":enew"
+wtype -k Return
+sleep "$SETTLE"
+
+# --- Step 2: the PRECONDITION readback ----------------------------------------
+#
+# `bufname('%')` must be EMPTY here. writefile of an empty string still writes one
+# newline, so `wait_file`'s `-s` test is satisfied either way and the Rust side reads
+# the answer rather than inferring it from a timeout.
+wtype -- ":call writefile([bufname('%')], '$NAMELESS')"
+wtype -k Return
+wait_file "$NAMELESS" || exit 26
+
+# --- Step 3: make the buffer worth saving -------------------------------------
+wtype -- i
+wtype -- "$SAVEAS_SENTINEL"
+wtype -k Escape
+sleep "$SETTLE"
+
+# --- Step 4: THE CHORD, which on a nameless buffer opens the DIALOG -----------
+wtype -M ctrl -M shift -k s -m shift -m ctrl
+
+# Let the native dialog map, realize and take keyboard focus.
+sleep "$DIALOG_SETTLE"
+
+# --- Step 5: replace the pre-filled name, then accept -------------------------
+#
+# Ctrl+A selects the whole of the GtkEntry's text so the typed name REPLACES the
+# proposed `Untitled.md` rather than being appended to it. MEASURED, not assumed: with
+# these three lines the callback receives <cwd>/$SAVEAS_TYPED_NAME and the file appears
+# under exactly that name. The Rust side asserts the name exactly, so a concatenation in
+# either order lands under a third name and reddens assertion 3.
+wtype -M ctrl -k a -m ctrl
+wtype -- "$SAVEAS_TYPED_NAME"
+sleep "$SETTLE"
+wtype -k Return
+
+# Let the dialog close, its callback run, and `InputEvent::SaveAs` reach nvim.
+sleep "$DIALOG_SETTLE"
+
+exit 0
+"#;
+
+/// **The native save dialog names a file, and the buffer is written to it.**
+///
+/// ## What it covers that nothing else does
+///
+/// The only end-to-end drive of a native `gtk::FileDialog` in this repository:
+/// `save_ui::save_press`'s `Choose` arm reaching a real dialog,
+/// `save_dialog_proposal`'s unnamed branch supplying its initial name and folder, the
+/// dialog's `Ok(GFile)` reaching the callback, `save_as_target` accepting the chosen
+/// path, and the resulting `InputEvent::SaveAs` writing the file.
+///
+/// ## What it proves and does NOT prove
+///
+/// * Proves: the action is installed, the seam's `Choose` answer reaches a real
+///   `gtk::FileDialog`, the dialog's `Ok(GFile)` reaches the callback, and the
+///   resulting `InputEvent::SaveAs` writes the file — against **GTK's in-process
+///   fallback**.
+/// * Does NOT prove anything about the PORTAL route, which is the route a real desktop
+///   session takes (`gdk_display_should_use_portal` answers true wherever GDBus reaches
+///   a session bus). That is a different widget, a different overwrite confirmation and
+///   a different `GFile` producer.
+/// * Does NOT prove the overwrite confirmation, since the target does not exist, nor
+///   the front end's `force: true` end to end. Driving GTK's confirmation alert from
+///   the keyboard is fragile; `crates/wolf-core/tests/save_open.rs`'s pair covers the
+///   EFFECT of `force` against a real Neovim instead.
+///
+/// ## The select-all, MEASURED rather than assumed
+///
+/// The measurement behind [`SAVE_AS_GDK_DEBUG`] covered a typed name plus Return
+/// returning `Ok(<cwd>/typedname.md)`, but not against a PRE-FILLED entry, where the
+/// typed characters could as easily have been appended to the proposal. Measured by
+/// running this smoke: `wtype -M ctrl -k a -m ctrl` selects the whole of the entry, the
+/// typed name REPLACES the proposed `Untitled.md`, and the path handed back to the
+/// callback is `<cwd>/`[`SAVEAS_TYPED_NAME`] alone. Assertion 3 is what carries that
+/// measurement — it names the file exactly, so a concatenation in either order is a
+/// third name and a red. **Do not weaken it to a glob** if the keystrokes ever need
+/// adjusting.
+///
+/// ## Assertions, classified
+///
+/// | # | assertion | kind | revert | measured |
+/// | --- | --- | --- | --- | --- |
+/// | 0 | [`SAVE_AS_GDK_DEBUG`] is `"no-portals"` | tripwire on a PIN — no falsifier in `src/` by construction, the `the_shared_smoke_config_pins_the_appearance_every_ocr_smoke_assumes` shape | edit the const | n/a |
+/// | 1 | `status.success()` | precondition — the cage scenario ran to completion | none; do not invent one | green under row 3's revert: the scenario exits 0 whether or not a dialog ever opened |
+/// | 2 | the `:enew` buffer's `bufname('%')` is EMPTY | precondition, and the sharpest one — a NAMED buffer is answered `Write`, so the dialog would never open and rows 3 and 4 would be about a route that was never taken | none | green under row 3's revert, which is what makes that red attributable to the dialog rather than to the buffer having a name |
+/// | 3 | `<cwd>/`[`SAVEAS_TYPED_NAME`] exists and contains [`SAVEAS_SENTINEL`] | **the discriminator** | replace the `SavePress::Choose` branch of `shell::perform`'s `UiAction::SaveBuffer` arm with `{}`. No dialog opens, the typed name lands in the Neovim buffer instead, and no file appears. | red: `the save dialog did not produce …/svmike.md: No such file or directory (os error 2)`. ISOLATED: [`ctrl_shift_s_saves_the_focused_buffer_to_disk_under_cage`] stays green under it, because that smoke takes the `Write` branch — the two branches of one arm, told apart — and the run reads `test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 68 filtered out; finished in 13.68s` |
+/// | 4 | no file under [`SAVEAS_PROPOSED_NAME`] carries the sentinel | corroborating negative — the buffer did not ALSO reach disk under the name nobody typed. It is NOT what tells the select-all from an unedited entry; see [`SAVEAS_PROPOSED_NAME`] for why that case is vacuous here and row 3 for what does measure it | none of its own; it is reached only when row 3 passes | not reached under row 3's revert. Green on every passing run |
+#[test]
+fn the_save_dialog_writes_a_named_file_under_cage() {
+    const SMOKE: &str = "the_save_dialog_writes_a_named_file_under_cage";
+
+    // --- Assertion 0: the pin, asserted BEFORE anything is spawned ------------
+    //
+    // Loud and first, because getting it wrong does not fail this test — it opens a
+    // modal file dialog on the developer's desktop and hangs the whole suite behind the
+    // Wayland lock. The literal is deliberately RE-TYPED rather than read from the
+    // const, since comparing a const against itself would pin nothing.
+    assert_eq!(
+        SAVE_AS_GDK_DEBUG, "no-portals",
+        "SAVE_AS_GDK_DEBUG is no longer \"no-portals\". DO NOT RUN THIS SMOKE until it is. \
+         Measured: `gdk_display_should_use_portal` answers true because GDBus reaches the \
+         developer's REAL session bus at $XDG_RUNTIME_DIR/bus even with DBUS_SESSION_BUS_ADDRESS \
+         removed; GTK then tries to export a window handle through `zxdg_exporter_v2`, which \
+         `cage` does not implement, and calls `show_portal_file_chooser(self, NULL)` anyway. The \
+         request therefore goes to the HOST's org.freedesktop.portal.Desktop, so a MODAL FILE \
+         DIALOG OPENS ON THE DEVELOPER'S DESKTOP and this smoke hangs until it is answered — \
+         holding the Wayland socket the whole time, which fails every other cage smoke with \
+         `unable to lock lockfile … maybe another compositor is running` and reads as a mass \
+         regression in whatever change is in flight. `no-portals` forces GTK's in-process \
+         fallback, which was measured under `cage` to present at 881x326 and to hand \
+         `Ok(<cwd>/typedname.md)` back to the callback. This is per-smoke scenario environment and \
+         never production behaviour."
+    );
+
+    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    let runtime_dir = require_smoke_env();
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+
+    let cwd = make_temp_cwd();
+    write_relaunch_fixtures(SMOKE, &cwd, &[]);
+
+    let nameless = runtime_dir.join(SAVEAS_READBACK_NAMELESS_NAME);
+    let typed = cwd.join(SAVEAS_TYPED_NAME);
+    let proposed = cwd.join(SAVEAS_PROPOSED_NAME);
+    for path in [&nameless, &typed, &proposed] {
+        clear_evidence(path, SMOKE);
+    }
+
+    // The fixture rule, applied to two names that must stay distinguishable: the file
+    // the dialog is TOLD to write and the file it PROPOSED are the whole of assertion
+    // 4's discrimination, so they may not be the same name.
+    assert_ne!(
+        SAVEAS_TYPED_NAME, SAVEAS_PROPOSED_NAME,
+        "the name typed into the dialog and the name the dialog proposes are identical, so \
+         assertions 3 and 4 are about the SAME file and contradict each other outright — 3 \
+         requires it to carry the sentinel and 4 requires it not to, so no run can pass. Keeping \
+         the two distinct is also the whole of what lets assertion 3 measure the select-all: only \
+         a name unlike the proposal can tell a REPLACED entry from an appended one."
+    );
+
+    let mut cmd = cage_command(SAVEAS_SCENARIO, &cwd);
+    cmd.env("WOLF_BIN", bin)
+        .env("NAMELESS", &nameless)
+        .env("SAVEAS_SENTINEL", SAVEAS_SENTINEL)
+        .env("SAVEAS_TYPED_NAME", SAVEAS_TYPED_NAME);
+
+    // THE line that makes this smoke possible rather than a desktop-wedging hazard,
+    // chained after `cage_command` so it joins the isolated environment rather than
+    // replacing it. See SAVE_AS_GDK_DEBUG and assertion 0.
+    cmd.env("GDK_DEBUG", SAVE_AS_GDK_DEBUG);
+
+    let status = cmd
+        .status()
+        .expect("failed to spawn `cage` for the headless save-as scenario");
+
+    // --- Assertion 1 (precondition): the scenario ran to completion -----------
+    assert!(
+        status.success(),
+        "{SMOKE}: the cage save-as scenario exited unsuccessfully ({status}). Read the exit code \
+         FIRST.\n\
+         Exit 11: the app died before its window ever mapped — a LAUNCH failure, and nothing below \
+         is about the dialog.\n\
+         Exit 26: the `bufname('%')` readback after the typed `:enew` never appeared, so keys were \
+         not reaching Neovim at all. Check the keyboard-only smokes first.\n\
+         Any other status means wtype failed. If instead this run HUNG, read \
+         `SAVE_AS_GDK_DEBUG`: a portal-routed dialog opens on the developer's desktop and waits \
+         there. Readback expected at {}.",
+        nameless.display()
+    );
+
+    // --- Assertion 2 (PRECONDITION, and the sharpest one) ---------------------
+    //
+    // The route this smoke takes exists only for a buffer with NO file name: a named
+    // one is answered `Write` and never sees a dialog. Measuring it rather than
+    // assuming it is the difference between "the dialog wrote the file" and "a plain
+    // Save wrote a file that happened to have the right name".
+    let nameless_answer = read_trimmed(&nameless, SMOKE);
+    assert!(
+        nameless_answer.is_empty(),
+        "{SMOKE}: after the typed `:enew` Neovim reported its current buffer as \
+         {nameless_answer:?}, not the empty string. The buffer is NAMED, so \
+         `save_ui::save_press` answers Write for it and Ctrl+Shift+S saves it silently instead of \
+         opening a dialog — every assertion below would then be about a route that was never \
+         taken. The usual cause is that something NAMED the buffer: `runtime/nvim/init.lua` names \
+         an anonymous buffer at VimEnter and inside `wolf_new_untitled`, so check that this \
+         scenario really typed `:enew` rather than firing the front end's own New Buffer. Readback \
+         kept at {}.",
+        nameless.display()
+    );
+
+    // --- Assertion 3 (THE DISCRIMINATOR) --------------------------------------
+    let saved = std::fs::read_to_string(&typed).unwrap_or_else(|e| {
+        panic!(
+            "{SMOKE}: the save dialog did not produce {}: {e}. Assertion 2 passed, so the buffer \
+             really was nameless and `save_ui::save_press` should have answered Choose. The likely \
+             causes, in order:\n\
+             (a) THE DIALOG NEVER PRESENTED. Under GDK_DEBUG={SAVE_AS_GDK_DEBUG:?} it should use \
+             GTK's in-process fallback; if the variable is not reaching the app, the dialog went to \
+             the desktop portal and this run would normally HANG rather than reach here.\n\
+             (b) `shell::perform`'s `UiAction::SaveBuffer` arm never took its `Choose` branch, or \
+             `AppShell::open_save_dialog` was not called.\n\
+             (c) THE CALLBACK DROPPED THE RESULT. An `Err` is treated as \"the user dismissed the \
+             dialog\", so a keystroke that closed it the wrong way looks identical to a cancel.\n\
+             (d) `save_ui::save_as_target` REFUSED the chosen path — it answers None for a \
+             relative path, an empty one, or one with no file name.\n\
+             (e) THE TYPED NAME WAS APPENDED TO THE PROPOSED ONE rather than replacing it, in \
+             which case a file exists under some THIRD name in {} — list that directory before \
+             changing anything, and see this test's \"select-all, MEASURED\" note.\n\
+             (f) THE ENTRY WAS NEVER EDITED AT ALL, in which case the directory is EMPTY rather \
+             than holding a stray file: the dialog then returns the proposed \
+             {SAVEAS_PROPOSED_NAME:?}, which is the name init.lua has already given the startup \
+             buffer, and `saveas!` against a name another loaded buffer holds raises `E139: File \
+             is loaded in another buffer` — the bang overrides \"file exists\", not a buffer-name \
+             collision. So an empty directory points HERE and not at (a)-(d), and assertion 4 \
+             stays green through it.",
+            typed.display(),
+            cwd.display()
+        )
+    });
+    assert!(
+        saved.contains(SAVEAS_SENTINEL),
+        "{SMOKE}: {} exists but does not contain {SAVEAS_SENTINEL:?}, so the file was created \
+         from something other than the buffer the sentinel was typed into. Contents were \
+         {saved:?}.",
+        typed.display()
+    );
+
+    // --- Assertion 4 (a CORROBORATING negative) -------------------------------
+    //
+    // Narrowly: the buffer did not ALSO reach disk under the name nobody typed. That is
+    // the whole of what it discriminates, and the claim is kept that small on purpose.
+    // It does NOT separate "the entry was never edited" from a pass, for two reasons
+    // that compound: assertion 3 reddens first on that run, and even reached it would
+    // pass vacuously, because the proposal is the startup buffer's own name and
+    // `saveas!` against a name another loaded buffer holds raises E139 rather than
+    // writing (see SAVEAS_PROPOSED_NAME for the measurement). An ABSENT file is
+    // therefore a pass here, and deliberately so.
+    let proposed_contents = std::fs::read_to_string(&proposed).unwrap_or_default();
+    assert!(
+        !proposed_contents.contains(SAVEAS_SENTINEL),
+        "{SMOKE}: the file {} — the name the dialog PROPOSED, not the one that was typed — carries \
+         {SAVEAS_SENTINEL:?}. Assertion 3 passed, so the typed name was written too: the buffer \
+         reached disk TWICE, under two names, and only one of them was asked for. Something \
+         issued a second save — check for a second dialog answer or a stray Ctrl+Shift+S in the \
+         scenario. Fix the keystrokes; do NOT relax assertion 3 to a glob. Contents were \
+         {proposed_contents:?}.",
+        proposed.display()
+    );
 }
 
 // ===========================================================================

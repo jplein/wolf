@@ -176,7 +176,7 @@ Weights sitting in a user's `state.json` were written as fractions of a paned's 
 
 ## The accelerator namespace
 
-Every action name, its accelerator, its `Command` correspondence, and its menu placement live in one table, so the menu, the accelerators, and the command dispatch cannot drift apart. Chords spoken for by a later unit are declared and marked reserved rather than omitted, which is what lets the invariant below be checked before anything binds them.
+Every action name, its accelerator, its `Command` correspondence, and its menu placement live in one table, so the menu, the accelerators, and the command dispatch cannot drift apart. Chords spoken for by a later unit are declared and marked reserved rather than omitted, which is what lets the invariant below be checked before anything binds them. A reserved row exists to hold a chord, so one whose chord a bound row takes is deleted rather than kept declaring nothing.
 
 **The invariant is that no Neovim key becomes unreachable.** A `Ctrl+Shift+<letter>` accelerator gives up only the terminal-style Ctrl+Shift alias for `<C-letter>`. This crate's key encoder forces `shift: false` on printables, so `Ctrl+Shift+P` encodes to `<C-p>` and `<C-S-p>` cannot be emitted at all; `<C-p>` itself is still delivered by plain `Ctrl+P`, which is never bound. `parse_accel` and `forbidden_reason` enforce that mechanically over every row, reserved ones included, so a shadowing chord fails while it is reserved rather than months later.
 
@@ -187,6 +187,8 @@ Every action name, its accelerator, its `Command` correspondence, and its menu p
 Single-letter rows declare no fold, and the reason is the modifier mask rather than the character class. The rule above already refuses a bare `Ctrl+<letter>`, so every surviving letter row carries Shift, and `action_for_key` matches masks exactly: plain `Ctrl+I` and `Ctrl+M` still reach Neovim as `<C-I>` and `<C-M>` while `Ctrl+Shift+I` and `Ctrl+Shift+M` are bound. `<Control>grave` carries no Shift, which is precisely why it does consume the byte it folds to.
 
 `Ctrl+Shift+<letter>` is the namespace because nothing else is available. There is effectively no free `Ctrl+<letter>` across all Neovim modes, and a terminal buffer forwards every key but five: the terminal-mode escape and the four `<C-w>` chords `runtime/nvim/init.lua` maps for the drawer. New Window is where that scarcity bites: `Ctrl+Shift+N` is spent on the new-buffer row (macOS Cmd+N) and no `Ctrl+Shift+<letter>` is free, so the row carries no chord at all and declares no fold, reaching the user through the primary menu, the command palette and `:WolfNewWindow`.
+
+Save As is the second instance of that rule: macOS spells it Shift+Cmd+S, which transliterates onto the `Ctrl+Shift+S` that Save holds (macOS Cmd+S), so Save As spends no chord and the primary menu is its only route. Save takes the chord because it is the one a user presses reflexively, where Save As is a deliberate act.
 
 A forwarded, unmapped Alt chord splits into `<Esc>` plus the base key, and a forwarded, unmapped Super chord drops the modifier in normal mode and inserts literal text in insert mode, so neither is a namespace Neovim can be given. The genuinely free keys are too few and too unidiomatic to carry a menu. The rule is memorable: take the macOS chord and replace the command key with Ctrl+Shift.
 
@@ -296,6 +298,8 @@ The palette's Open Recent rows add none: reading the candidates is a SQLite read
 
 The project search adds none either. `start_search` resolves its root from the tracked-cwd cell and hands `rg` to a worker, `open_at` is fire-and-forget on the ordered input channel, and `liveness` is an atomic read. `WolfCore::ignorecase()` is a blocking call and is deliberately never issued: its entire product would be the seed for a case-sensitivity toggle this front-end does not ship, bought with a further route into the state the paragraph below describes.
 
+Save and Save As add none either, so the inventory above stands at ten. Both ride the ordered input channel and the native dialog resolves on a later main-loop turn, so neither can time out. They are gated on `Alive` all the same, for the paste path's reason rather than the blocking one, and Save As carries a second reason of its own: a native modal over the opaque overlay covers the Restart button, which the paragraph below records as the only route out of a stall.
+
 **Nothing in this crate clears `NotResponding`.** Core's auto-clear rides the `Ok` arm of a later synchronous call, and a timed-out one is detached, so its eventual success is never observed — while all nine blocking calls a running window issues refuse to run in that state. The route back is the stall overlay's Restart button, which force-kills. The honest fix, if that ever becomes a user problem, is a non-blocking liveness probe in core; there is none.
 
 ## The headless smoke test
@@ -344,7 +348,7 @@ The only repair is temporal coalescing, whose trailing edge needs a one-shot eve
 
 ## Present limitations
 
-- No save or save-as dialog; saving is done from within Neovim. Open File and Open Folder are native dialogs.
+- Save and Save As are front-end-only action rows carrying no registry command, so neither appears in the command palette, whose rows come from `COMMAND_SPECS`; why the registry has no Save command is [`feat-list.md`](../../feat-list.md)'s. Save carries `Ctrl+Shift+S` and a menu item, Save As the menu item alone. The overwrite confirmation belongs to GTK or to the desktop portal, so this front-end never observes it and cannot report a clobber it did not perform.
 - Theming is one-directional: the configured `appearance` is resolved against libadwaita's light/dark reading, pushed into Neovim as `background=dark|light`, matched on the chrome's colour scheme, and carried by that scheme into a preview document's `prefers-color-scheme` ([The preview's light and dark](#the-previews-light-and-dark)). No OS colour is read into Neovim's highlight groups, so macOS's `nvim_set_hl` push has no counterpart; Neovim's own colorscheme reaches the grid paint and the `WolfCursor` group reaches the cursor. `macos-option-as-alt` is the one configured key this front-end ignores, silently and with nothing reported at launch, because its own name says which platform it is for and one config file is shared across both.
 - Pointer input covers the primary button and vertical scroll. There is no context menu, no middle-click paste, no horizontal scroll, and no kinetic scrolling, all matching macOS. The scrollbar is a projection with no thumb drag: it shows where the viewport sits and accepts no input at all, which macOS defers too.
 - A per-pane status bar's text is clipped to its own pane rather than tail-truncated with an ellipsis, so a path too long for its pane ends mid-glyph. macOS ellipsizes; reproducing that here means a second Pango layout builder in the widget layer, which is the thing `render.rs`'s one-glyph-path rule exists to prevent.

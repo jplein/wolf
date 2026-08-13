@@ -476,6 +476,7 @@ Real Neovim: needs `WOLF_NVIM_BIN`, the staged nvim runfiles, and `tags = ["no-s
 **Covers**
 
 - File semantics delegated to nvim: opening an existing Markdown file (with a heading-versus-body `hl_id` smoke check), `InputEvent::Save` writing the current buffer, and `InputEvent::SaveAs` creating a path that did not exist.
+- Both arms of `SaveAs`'s `force` flag against an existing file: without it, the file's contents and the buffer's own name are both left alone — the positive readback is what keeps the negative from being a timing artefact — and with it, both are replaced. Each case discriminates the other.
 
 **Gotchas**
 

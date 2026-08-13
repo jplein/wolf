@@ -200,7 +200,7 @@ The front-end pushes `InputEvent`s onto an ordered FIFO channel that a single co
 
 - Input proper — `Key`, `Mouse`, `Scroll`. A mouse or scroll event carries its target grid with grid-local row and column, because under `ext_multigrid` each pane has its own window grid.
 - Geometry — `Resize { cols, rows }` for the outer UI, `ResizeGrid { grid, cols, rows }` per pane, and `FocusWin { win }` for click-to-focus and resolved focus moves.
-- Documents — `Open { path }`, `OpenAt { path, line, col }`, `Save`, `SaveAs { path }`, `NewBuffer`, `Paste { text }`, `SwitchBuffer { win, bufnr }`, `ClosePane`.
+- Documents — `Open { path }`, `OpenAt { path, line, col }`, `Save`, `SaveAs { path, force }`, `NewBuffer`, `Paste { text }`, `SwitchBuffer { win, bufnr }`, `ClosePane`.
 - Views — `Chdir { path }`, `SetTabpage { handle }`, `CloseTabpage { handle }`. Each view is one nvim tabpage owning its own working directory, so `Chdir` applies `:tcd`; a global `:cd` would move every view of the shared nvim.
 - Toggles — `SetBackground { dark }`, `ToggleTerminal`, `ToggleFullWidth`, `SetUiFocus { gained }`.
 

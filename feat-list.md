@@ -96,13 +96,15 @@ Two divergences from macOS are deliberate. The popup accepts no input at all, ma
 | Open Recent (global recent-directories MRU) | `feat/commands` / `linux-feat/open-recent`                                   | [x]   | [x]   |
 | Per-pane back/forward navigation history    | `feat/nav-buttons` (`597175b`) / `linux-feat/nav-history`                    | [x]   | [x]   |
 | Project search UI (ripgrep-backed)          | `feat/search-ui` / `linux-feat/project-search`                               | [x]   | [x]   |
-| Native file dialogs (open / save / save-as) | —                                                                            | [x]   | [ ]   |
+| Native file dialogs (open / save / save-as) | `linux-feat/save-dialogs`                                                    | [x]   | [x]   |
 
 Both front-ends surface the per-pane navigation history as two toolbar buttons and as menu items — `⌘[` / `⌘]` on macOS, `Alt+Left` / `Alt+Right` on Linux. The one difference left is the jump list: the macOS History menu also lists the active pane's recently visited files, where the GTK menu carries Back and Forward alone, for the reason recorded in [`crates/wolf-gnome/DECISIONS.md`](crates/wolf-gnome/DECISIONS.md).
 
 The GTK command palette lists the registry commands `wolf-gnome` performs, one Open Recent row per usable recent directory, and one Switch to Window row per other open window. An Open Recent row re-roots the invoking window through the same path the Open Folder dialog takes; a Switch to Window row leaves that window alone and raises the other one, so a single directory can honestly appear as both. Raising is best-effort on Wayland: a client cannot raise itself, and the headless compositor the smokes run under declines it.
 
-One row stays unticked for partial coverage: the file-dialog row covers all three dialogs, and `wolf-gnome` has native Open File and Open Folder but no save or save-as, so saving remains `:w` from within Neovim.
+On Linux all three dialogs are native. Save and Save As are front-end-only action rows carrying no registry command, so they reach the user from the primary menu and — Save alone — `Ctrl+Shift+S`, and not from the command palette, whose rows come from the registry.
+
+On macOS the native dialogs are Open File and Open Folder: there is no save panel, no Save or Save As menu item, and ⌘S reaches Neovim as an unmapped `<D-s>`, so saving is `:w` typed inside Neovim. Adding `Command::Save` and `Command::SaveAs` is a cross-platform change: the Swift `CommandKind` port and `CommandDispatcher`'s `default`-free switch would both need arms, and macOS has no save UI to point them at.
 
 The GTK sidebar re-roots from one settle point, on the working directory Neovim reports, so a `:cd` typed into Neovim moves it exactly as the Open Folder dialog and an Open Recent row do, and none of the three can move it twice.
 
@@ -269,8 +271,6 @@ Work already carried is recorded in the tables above. What remains, in order, co
 
 1. **Coalescing the preview render.** Typing beside a live Markdown preview spends 15.6 % of wall clock in a blocking render call, which the frame-stats instrument measured rather than inferred. It is not a draw fix, which is why it is a unit rather than part of the row above: its only repair is temporal coalescing, whose trailing edge needs a one-shot event-armed timer and a preview-latency budget nobody has set. That budget is a user-visible decision, so this unit opens with a question rather than an implementation.
 
-2. **Save and Save As dialogs.** `wolf-gnome` has native Open File and Open Folder, and the file-dialog row stays partial while saving is reachable only as `:w` from inside Neovim.
+2. **Composed and input-method text entry.** The macOS row is Option-as-option composing accents; the Linux counterpart is wider, because this front-end attaches no `gtk::IMContext` at all, so a dead key, a compose sequence and every input method reach Neovim as nothing.
 
-3. **Composed and input-method text entry.** The macOS row is Option-as-option composing accents; the Linux counterpart is wider, because this front-end attaches no `gtk::IMContext` at all, so a dead key, a compose sequence and every input method reach Neovim as nothing.
-
-4. **Preview in browser.** Written and dispatched, and deliberately last: it needs a host where a human can watch the hand-off land, and a hand-off found broken there is repaired as its own effort, per the Markdown-preview table above.
+3. **Preview in browser.** Written and dispatched, and deliberately last: it needs a host where a human can watch the hand-off land, and a hand-off found broken there is repaired as its own effort, per the Markdown-preview table above.

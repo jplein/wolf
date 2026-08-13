@@ -556,9 +556,9 @@
             pkgs.jetbrains-mono
             iaWriterMono
 
-            # GATE-REQUIRED: the fifty-six headless end-to-end smoke tests in
-            # crates/wolf-gnome/tests/smoke_headless.rs (of the sixty-four that
-            # file's default suite runs; the other eight are pure guards that
+            # GATE-REQUIRED: the fifty-eight headless end-to-end smoke tests in
+            # crates/wolf-gnome/tests/smoke_headless.rs (of the sixty-seven that
+            # file's default suite runs; the other nine are pure guards that
             # need no compositor) run as part of a plain `cargo test` (no
             # `--ignored`). They launch the real
             # window under a headless Wayland compositor and OCR a screenshot,

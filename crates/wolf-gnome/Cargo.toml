@@ -1,6 +1,6 @@
 [package]
 name = "wolf-gnome"
-description = "GTK4/Adwaita front-end for Wolf: a single windowed application (adw::ApplicationWindow + DrawingArea) that wires the headlessly-testable seams (gdk_key input translation + Cairo/Pango paint + pure pixel->grid geometry) onto a live WolfCore. Files are opened from Neovim (:e), the built-in file picker, the file-tree sidebar, or the native Open File / Open Folder dialogs; saving is still from within Neovim."
+description = "GTK4/Adwaita front-end for Wolf: a single windowed application (adw::ApplicationWindow + DrawingArea) that wires the headlessly-testable seams (gdk_key input translation + Cairo/Pango paint + pure pixel->grid geometry) onto a live WolfCore. Files are opened from Neovim (:e), the built-in file picker, the file-tree sidebar, or the native Open File / Open Folder dialogs, and saved from Neovim (:w, :saveas), the primary menu's native Save / Save As dialogs, or Ctrl+Shift+S."
 edition.workspace = true
 version.workspace = true
 license.workspace = true

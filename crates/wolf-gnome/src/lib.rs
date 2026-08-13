@@ -281,6 +281,17 @@
 //!   ([`tabs_ui::restore_press`]); the directory a new tab inherits, which is the
 //!   window's and is `None` in the empty state ([`tabs_ui::new_tab_cwd`]); and the
 //!   file NAME a tab draws in the bar ([`tabs_ui::tab_title`]).
+//! - [`mod@save_ui`]: the SAVE and SAVE AS rulebook — whether a press may act at
+//!   all and whether it writes or prompts ([`save_ui::save_press`], whose named
+//!   buffer is WRITTEN even when it has never reached disk, because
+//!   `runtime/nvim/init.lua` has already given a fresh buffer a concrete
+//!   `Untitled N.md` name, and whose genuinely NAMELESS buffer is the one case that
+//!   falls through to the dialog); the same guard for Save As, which always prompts
+//!   ([`save_ui::save_as_press`]); what that dialog opens with, folder and name
+//!   ([`save_ui::save_dialog_proposal`]); and what a chosen path becomes, verbatim
+//!   and with no extension appended ([`save_ui::save_as_target`]). Neither press
+//!   blocks — both ride the ordered input channel — so the gate is
+//!   [`clipboard_ui::paste_decision`]'s reason, not [`nav_ui::nav_press`]'s.
 //! - [`actions`]: the action namespace as data — [`actions::ACTION_TABLE`],
 //!   [`actions::MENU_SECTIONS`], and the [`actions::parse_accel`] /
 //!   [`actions::forbidden_reason`] checker that mechanically enforces "no Neovim
@@ -314,8 +325,11 @@
 //! installs a `gio` action namespace shared by the GNOME primary menu and the
 //! accelerator table, shows an empty state when no project is open, and drains
 //! `WolfCore::drain_commands()` on every wake. Files are opened via Neovim commands
-//! (`:e`), the picker/tree, or the menu's native Open File / Open Folder dialogs;
-//! there are no save / save-as dialogs. Click-to-position, drag-to-select and
+//! (`:e`), the picker/tree, or the menu's native Open File / Open Folder dialogs, and
+//! saved through `wolf_core::InputEvent::Save` / `InputEvent::SaveAs` — the primary
+//! menu's Save and Save As items and `Ctrl+Shift+S`, with Save As (and Save on a
+//! nameless buffer) presenting a native dialog of its own
+//! ([`mod@save_ui`]). Click-to-position, drag-to-select and
 //! vertical scroll ARE wired (per-pane, in [`pane_view`]); horizontal scroll, the
 //! non-primary buttons and kinetic scrolling are not, matching macOS. Theming is
 //! ONE-DIRECTIONAL: the configured `appearance` is resolved against the desktop's
@@ -365,6 +379,7 @@ pub mod preview_link;
 pub mod preview_ui;
 pub mod refresh_coalescer;
 pub mod render;
+pub mod save_ui;
 pub mod scrollbar;
 pub mod search_overlay;
 pub mod shell;

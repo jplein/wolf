@@ -1,552 +1,539 @@
-# Implementation plan — the NixOS derivation (`linux-feat/nixos-package`)
+# Unit: Save and Save As for `wolf-gnome`
 
-## 0. Orchestrator status
+Branch: `linux-feat/save-dialogs` (cut from `linux`). Merge target: the `linux`
+worktree at `.worktrees/linux`, via `--no-ff`. Do not push.
 
-- [x] Branch `linux-feat/nixos-package` created from `linux` in the MAIN working directory (`/home/jplein/dev/jplein/wolf`).
-- [x] Architect plan (§ below, from "Verdicts" onward — adopted in full unless a ruling here overrides it)
-- [ ] Tests written
-- [ ] Implementation
-- [ ] Failure evidence
-- [ ] Review
-- [ ] Docs
+## Problem statement
 
-## 0.1 Orchestrator rulings — these override the architect where they conflict
+`feat-list.md`'s "Navigation and file access" table carries one unticked Linux row,
+`Native file dialogs (open / save / save-as)`. `wolf-gnome` has native Open File and
+Open Folder; saving is reachable only as `:w` typed inside Neovim. This unit adds
+Save and Save As so all three dialogs are genuinely reachable, then ticks that row,
+rewrites the paragraph that explains the partial coverage, and removes the unit from
+the "Suggested order of work for Linux" list (renumbering the survivors; item 1, the
+preview-render coalesce, stays).
 
-1. **The plan is adopted in full.** The architect's verdicts on B (the "two paths, not new Lua" claim is TRUE), C (Neovim need not match Bazel's patch version), E (the drift check lives in `wolf-gnome`), F (no dark icon, no field code, no `MimeType`) and G (an additive `FONTCONFIG_FILE`) all stand.
+## Facts established before planning (orchestrator, measured on this host)
 
-2. **`pkgsRuntime` supplies Neovim, ripgrep AND `vimPlugins.nvim-treesitter`** — the architect's "recommended, scoped extension" in §3.1, not the minimal variant. Today these resolve to the identical store paths, so nothing observable changes; what it buys is that the treesitter parity claim stops being falsifiable by an unrelated `nixpkgs` bump. Confirm the store paths are unchanged after the swap and say so.
+These are measurements, not assumptions. Do not re-derive them; do not contradict
+them without a new measurement.
 
-3. **New, and not in the architect's plan: make two existing tests stop being vacuous on Linux.** `crates/wolf-ffi/tests/orlando_load.rs` and `crates/wolf-ffi/tests/lighthouse_load.rs` already drive a real Neovim against a reconstructed sibling layout and prove the load branch — and both are "a loud no-op pass" on Linux today, because no orlando or lighthouse tree is staged there. Once `wolfOrlando` and `wolfLighthouse` exist, export `WOLF_TEST_ORLANDO_DIR` and `WOLF_TEST_LIGHTHOUSE_DIR` from `linuxShell.shellHook` pointing at them, so those two files assert on Linux instead of passing vacuously.
-   - **Read both test files first** and make the derivations' output shape match exactly what each expects (`orlando_load.rs` copies `<WOLF_TEST_ORLANDO_DIR>/orlando` — an inner directory, matching the Bazel TreeArtifact — so the exported value may need to be a directory *containing* `orlando/`, not the tree itself).
-   - This does **not** endanger P2's control leg: those tests reconstruct the layout in a temp dir and never place a sibling next to the checkout's `runtime/nvim/init.lua`.
-   - Report the before/after: the exact line each test prints as a no-op today, and the assertions it runs afterwards.
-   - If this turns out to cost more than a small fix, revert the two exports, say so plainly, and carry on — it is an addition, not the unit.
+1. **`wolf-core` already carries the save primitives.** `InputEvent::Save` applies
+   `write`; `InputEvent::SaveAs { path }` applies `saveas <fnameescape(path)>`
+   (`crates/wolf-core/src/input.rs:445-448`). Both are fire-and-forget on the ordered
+   input channel — **no blocking RPC**. `crates/wolf-core/tests/save_open.rs` already
+   drives both against a real Neovim. No front-end has ever constructed either.
 
-4. **P3 (the packaged preview smoke) is IN**, as the experiment that settles the `WEBKIT_EXEC_PATH` question by measurement. Follow the architect's decision rule exactly. If it cannot be made green in reasonable time, drop the smoke, do **not** add the variable on speculation, and record the gap in `tests/README.md`.
+2. **There is no `Command::Save` / `Command::SaveAs` in the core registry, and this
+   unit does not add one.** Adding a variant is a cross-platform change: the Swift
+   `CommandKind` port (`crates/wolf-macos/Sources/WolfKeyMap/CommandSeam.swift`) and
+   `CommandDispatcher.swift`'s `default`-free switch would both have to grow arms, and
+   macOS has no save UI at all to point them at (measured: no `NSSavePanel` anywhere in
+   the repo; the macOS File menu has no Save item; ⌘S reaches Neovim as an unmapped
+   `<D-s>`). None of that can be compiled or verified on this Linux host. The
+   consequence is that Save and Save As are **front-end-only rows** —
+   `command: None`, resolved through `command_action::ui_action_for_front_end_action`,
+   exactly as `win.about`, `win.history-back` and `win.history-forward` are — so they
+   reach the user from the primary menu and an accelerator, and **not** from the command
+   palette, whose rows come from `wolf_core::COMMAND_SPECS`. That gap is a documented
+   present limitation and a decision for the human user; adding the core commands later
+   is purely additive over this unit's work.
 
-5. **The `v:progpath` red run is best-effort.** If making the two Neovims differ is not cheap, record the assertion as unfalsified in `tests/README.md`'s "What is still unproven" rather than claiming a red run nobody took.
+3. **An `Untitled N.md` buffer has a real path.** `runtime/nvim/init.lua`'s
+   `wolf_name_untitled` names a fresh anonymous buffer `<cwd>/Untitled.md` (or
+   `Untitled N.md`) without writing it, so `:w` on such a buffer succeeds and creates
+   that file. "Never saved" therefore means "named but not on disk", not "unnamed".
 
-6. **No agent may change or weaken an assertion.** The test-writer owns the assertions; if the coder believes one is wrong it reports to the orchestrator instead of editing it.
+4. **`gtk::FileDialog` cannot present under `cage` while the portal route is live, and
+   the failure is worse than invisible.** Measured with a throwaway GTK probe:
+   - `FileDialog::save()`/`open()` construct a `GtkFileChooserDialog` that stays
+     `visible=false mapped=false realized=false` forever, and the callback never fires.
+   - Root cause, read out of the GTK 4.22.4 source: `gdk_display_should_use_portal`
+     answers true because GDBus reaches the developer's **real** session bus at
+     `$XDG_RUNTIME_DIR/bus` even though the harness removes
+     `DBUS_SESSION_BUS_ADDRESS`; `gtk_file_chooser_native_portal_show` then exports a
+     window handle, `cage` implements no `zxdg_exporter_v2`, and GTK proceeds to
+     `show_portal_file_chooser(self, NULL)`. The request goes to the host's real
+     `org.freedesktop.portal.Desktop`, i.e. **a smoke that triggers a native dialog
+     opens a modal file dialog on the developer's desktop** and hangs until it is
+     answered or the app is killed.
+   - `GDK_DEBUG=no-portals` forces GTK's in-process fallback. Measured under `cage`:
+     the dialog presents (`visible=true mapped=true realized=true`, 881x326), `wtype`
+     of a name plus `Return` returns `Ok(<cwd>/typedname.md)` to the callback. This is
+     the lever that makes a Save As smoke possible, and it is per-smoke scenario
+     environment, never production behaviour.
+   - The existing Open File / Open Folder dialogs have exactly the same property, which
+     is why no smoke drives them today.
 
-7. **Report failures faithfully.** If `nix build` cannot fetch, if `cage` will not start, if a pixel band does not discriminate — say so plainly with the command and its output. Do not smooth anything over, and do not tick a `feat-list.md` row on what a mechanism implies rather than on what was shown.
+5. **Accelerator namespace.** `Ctrl+Shift+S` is currently held, unbound, by the
+   `win.sidebar-show-project` reserved row, whose command `wolf-gnome` classifies
+   `Deferred` ("no panel switcher"). macOS spells Save ⌘S and Save As ⇧⌘S, which both
+   translate to the same `Ctrl+Shift+S`, so at most one of the two can carry a chord —
+   the `app.new-window` precedent (macOS ⇧⌘N, menu-only because `Ctrl+Shift+N` is
+   spent).
 
----
+6. **Verification commands available here:** `nix develop --command cargo test -p
+   wolf-gnome`, `... -p wolf-core`, `cargo clippy --workspace --all-targets`. The
+   `wolf-gnome` crate has **no** `BUILD.bazel` by design, so a new test file needs no
+   Bazel wiring — but a new `wolf-core` test file would.
 
-# Implementation plan — the NixOS derivation (`linux-feat/nixos-package`)
+## Plan (architect, accepted by the orchestrator)
 
-## Verdicts on the questions you asked me to answer
-
-**B — the "two paths, not new Lua" claim is TRUE.** `runtime/nvim/init.lua` self-locates both trees from the `init.lua` file's own directory and gates each on an `fs_stat`:
-
-```lua
-local this_file = debug.getinfo(1, "S").source:sub(2) -- strip the leading '@'
-local this_dir = vim.fn.fnamemodify(this_file, ":p:h")
-local orlando_dir = this_dir .. "/orlando"
-local uv = vim.uv or vim.loop
-if uv and uv.fs_stat(orlando_dir) then
-	vim.opt.runtimepath:prepend(orlando_dir)
-	vim.cmd.runtime("plugin/orlando.lua")
-end
-```
-
-and, forty lines later, `local lighthouse_dir = this_dir .. "/lighthouse"` with `prepend` + `vim.o.background = "dark"` + `vim.cmd.colorscheme("lighthouse")`. Installing `init.lua` at `$out/share/wolf/nvim/init.lua` with sibling `orlando/` and `lighthouse/` directories fires both blocks with **zero** Lua edits. `feat-list.md` needs no correction on this point.
-
-Two things the coder must not disturb, both in the same file: the treesitter gate at line 305 probes `this_dir .. "/nvim-treesitter"` and `this_dir .. "/parsers"` **before** reading `WOLF_NVIM_TREESITTER_DIR` / `WOLF_PARSERS_DIR`. We ship no sibling for those, so the environment branch — the branch Linux already tests — stays live. Adding those two as siblings later would silently flip precedence; do not.
-
-**C — no, the derivation's Neovim need not match Bazel's 0.12.3.** I adopt your answer. The property a packaging unit owes is *the artifact's Neovim is the one the Linux evidence was taken against*: with `pkgs.neovim` from a floating `nixpkgs`, a green Linux suite would be evidence about 0.12.2 while the shipped app ran whatever the last `nix flake update` fetched — the evidence would not be about the artifact at all. A dedicated, rev-pinned input closes exactly that. Patch parity with Bazel is a different property: it is about the *shared* `runtime/nvim/init.lua`, whose measured claims are stated per version (`vim.uv on nvim 0.12.3`, `nvim 0.12.2 starts treesitter on a markdown buffer by ITSELF`). A minor-series match preserves the API surface those claims rest on; nothing has shown a 0.12.x patch step changes any of them. Closing the gap costs either building Neovim from source on Linux — off the binary cache, a local compile taxing every `nix develop` — or bumping Linux to 0.12.4 and re-running the whole gate plus re-measuring the treesitter readbacks. Neither belongs here. Recorded in two places: a comment beside the new input in `flake.nix`, and a row in `macos-followups.md`.
-
-**E — the drift check belongs in `wolf-gnome`,** for `release_profile.rs`'s exact reason: this crate has no `BUILD.bazel` to wire a test into, and neither `flake.nix` nor `bazel/*/extensions.bzl` is a Bazel runfile. Putting it in `wolf-core` would mean a `rust_test` plus `data` deps on three files outside that package and a Bazel-side check about a Nix-side fact; putting it in `tools/lint` would make it `manual`-tagged and advisory, so it would never run in the Linux gate. In `wolf-gnome/tests` it runs on every `cargo test`, in microseconds, with no environment.
-
-**F — the dark icon export is not installed** because hicolor has no appearance axis: the icon-theme spec indexes by size, scale and context, not by light/dark. Both exports are full-bleed, self-contained round icons with their own background plate (`#F6F5F4` / `#242424`), so they are not a symbolic/recolourable pair either. Installing the dark set under any name would either shadow the light set or add an icon nothing ever looks up. The honest consequence — the app icon does not follow the desktop's light/dark preference, where macOS gets that from `Assets.car` — is a present-tense limitation to record, not a gap to paper over.
-
-**F — no field code, no `MimeType`.** `app::run` calls `app.run_with_args::<&str>(&[])`, so the process ignores its real argv entirely. A `%f`/`%U` would make the desktop hand Wolf a path it silently drops, and a `MimeType=text/markdown` would put Wolf in the "Open With" list for every `.md` file and then open an empty window — a control that visibly refuses input, the shape `DECISIONS.md` rejects for the scrollbar and the drawer divider. Both stay out; opening a file from the desktop is a unit of its own (it needs `HANDLES_OPEN`, a real argv parse and an `open` handler).
-
-**G — `<dir prefix="xdg">fonts</dir>` covers `XDG_DATA_HOME` only; `XDG_DATA_DIRS` is never scanned by fontconfig.** Verified against this host's `/etc/fonts/fonts.conf`, whose entire directory list is:
-
-```xml
-<include ignore_missing="yes">/etc/fonts/conf.d</include>
-<dir prefix="xdg">fonts</dir>
-<dir>/nix/store/ang6yzsv32vnkdq7bqr41dgna2knkz8w-dejavu-fonts-minimal-2.37</dir>
-```
-
-So `--prefix XDG_DATA_DIRS : $out/share` will not make bundled faces resolvable, and fontconfig's whole environment surface is `FONTCONFIG_FILE`, `FONTCONFIG_PATH`, `FONTCONFIG_SYSROOT` — none of them additive. The mechanism specified below is an **additive** `FONTCONFIG_FILE` that `<include>`s the system config and appends the app's own font directory, which is a different thing from the devShell's *exclusionary* pin and does not inherit its objection.
-
----
+# Plan: Save and Save As for `wolf-gnome` (`linux-feat/save-dialogs`)
 
 ## 1. Summary
 
-Add a `packages.<linux-system>.{wolf-gnome,default}` output to `flake.nix` that builds `wolf-gnome` with the workspace release profile, wraps it with `wrapGAppsHook4`, and installs a self-contained Neovim runtime tree at `$out/share/wolf/nvim/` (a copy of `runtime/nvim/init.lua` plus sibling `orlando/` and `lighthouse/` trees pinned to the same commits and hashes Bazel pins), an `org.wolf.Wolf.desktop` entry, the GNOME light hicolor icon set, and the two vendored editor font families. Make the app able to find that tree by replacing `app.rs::init_lua_path`'s compile-time-only resolution with a three-branch resolver in a new pure seam, `init_lua.rs`. Pin Neovim, its treesitter trees and ripgrep to a second, rev-locked `nixpkgs` input so a `nix flake update nixpkgs` for GTK cannot move what the Linux suite tested. Add a Cargo-only drift check tying the three Nix vendored pins to the Bazel ones, and produce evidence about the **installed store artifact** rather than the checkout build, through ignored compositor smokes plus a store-layout test that one committed script always runs with the store path set.
+`wolf-gnome` gains **Save** (`Ctrl+Shift+S`, primary menu) and **Save As** (primary menu only), built as a new pure decision seam `crates/wolf-gnome/src/save_ui.rs` plus thin `gtk::FileDialog` glue in `shell.rs` shaped exactly like `open_file_dialog` / `open_folder_dialog`. Both are **front-end-only action rows** (`command: None`) resolved through `command_action::ui_action_for_front_end_action`, per fact 2, so they reach the user from the menu and one accelerator and not from the command palette. `Ctrl+Shift+S` is taken from the `win.sidebar-show-project` reserved row, which is deleted. One `wolf-core` change is required: `InputEvent::SaveAs` gains a `force: bool` field, because the dialog has already confirmed an overwrite while `saveas` without `!` fails `E13` and core degrades that to an invisible `tracing::warn!`.
+
+**Findings that touch the six measured facts:** none contradicts them. Two supporting measurements I made from the source and record here because the plan leans on them:
+
+- `Snapshot::current_file` is `expand('%:p')`, canonicalized with **a raw-path fallback** (`crates/wolf-core/src/redraw.rs:481-486`). So a never-written `Untitled N.md` reaches the front-end as `Some(<cwd>/Untitled N.md)` — fact 3, visible from the snapshot, with no RPC.
+- `actions::action_for_command` has **no production caller** (only `command_action_round_trip`), which is what makes deleting a table row safe.
+
+**Two pre-existing doc defects found**, to be fixed as part of this unit because it makes them worse: `crates/wolf-gnome/Cargo.toml:3` ends "saving is still from within Neovim"; `crates/wolf-gnome/src/lib.rs:318` says "there are no save / save-as dialogs"; `crates/wolf-gnome/README.md:18` says "Saving is `:w` or `:saveas` from inside Neovim."; and `tests/README.md`'s "Deliberate test gaps" claims "no dialog can be driven at all", which this unit falsifies. Separately, `flake.nix:559-561` and `crates/wolf-gnome/tests/README.md:109` **already disagree** about the guard count (eight vs nine, sixty-four vs sixty-five); flag and reconcile by counting rather than guessing.
 
 ---
 
-## 2. Phase 1 — the `init.lua` seam (Rust, no packaging yet)
+## 2. The decisions, with their reasons
 
-### 2.1 Create `/home/jplein/dev/jplein/wolf/crates/wolf-gnome/src/init_lua.rs`
+### 2.1 The accelerator rows
 
-A pure seam. GTK-free, environment-free, filesystem-free — everything injected, mirroring `config_seam.rs`'s discipline and `palette::open_recent_candidates`' precedent for taking a predicate as an argument.
+**Save takes `Ctrl+Shift+S`; Save As takes no chord and is menu-only.**
 
-Public items:
+Reason: fact 5 says both macOS spellings (⌘S, ⇧⌘S) transliterate to the same `Ctrl+Shift+S`, so at most one can hold it. This table already answers that collision the same way twice — `win.new-buffer` (macOS ⌘N) holds `Ctrl+Shift+N` while `app.new-window` (⇧⌘N) is `MenuOnly`; `win.go-to-file` (⌘O) holds `Ctrl+Shift+O` while `win.open-folder` (⇧⌘O) is `MenuOnly`. The plain-⌘ row takes the chord; the ⇧⌘ sibling goes to the menu. Save is also the chord a user presses reflexively and constantly, where Save As is a deliberate act.
 
-- `pub const INIT_LUA_ENV: &str = "WOLF_INIT_LUA";` — the development override's name, so `app.rs` and the docs read one spelling.
-- `pub const INSTALLED_INIT_LUA_RELATIVE: &str = "../share/wolf/nvim/init.lua";` — the executable-relative install path. This constant is the **contract between the Rust resolver and the Nix install layout**, and `packaged_layout.rs` reads it rather than retyping the path, so the two cannot drift silently.
-- `pub fn resolve_init_lua(env_override: Option<&str>, exe_dir: Option<&Path>, manifest_fallback: &Path, exists: impl Fn(&Path) -> bool) -> PathBuf`
+**What each row gives up, one line each:**
+- `win.save` / `<Control><Shift>s` — gives up only the Ctrl+Shift alias for `<C-s>` (LSP signature help in insert/visual/select mode); plain `Ctrl+S` is never bound and still reaches Neovim as `<C-s>`.
+- `win.save-as` / no accel — gives up nothing; it spends no chord at all.
 
-Behaviour, in order, total, never panicking:
+**Mechanical check.** `<Control><Shift>s` parses under `parse_accel` (two known modifier tokens plus a one-char alphanumeric key). `forbidden_reason` accepts it: `single_letter` is true, `p.ctrl && !p.shift` is false (Shift is present), `p.alt` is false, `ctrl_fold` answers `Byte(0x13)` which is not in `CTRL_FOLD_FORBIDDEN`, and the `if single_letter { return None; }` gate exempts it from the declaration rule — so `ctrl_fold: None` is correct and required, exactly as the twelve existing letter rows have it. `action_for_key` matches modifiers exactly, so plain `Ctrl+S` never matches.
 
-1. `env_override` — if `Some(s)` and `s.trim()` is non-empty, return `PathBuf::from(s)` **without checking that it exists**. macOS's `Project.swift::initLuaPath()` does not check either, and the reason is not merely parity: an override the user typed is an instruction, not a candidate. Existence-checking it would make a typo fall silently through to the installed file, so the app would look fine while ignoring the override — and the failure that replaces it is loud (Neovim launched with a missing `-u` never attaches, core's start fails, and the app prints `failed to start core` and opens no window). Loud over silent is this repo's rule.
-2. `exe_dir` — if `Some(dir)`, form `dir.join(INSTALLED_INIT_LUA_RELATIVE)` and return it **only if `exists(&candidate)`**. This branch *is* a guess the binary makes about its own surroundings, so it must fall through in a `cargo run` build where no such tree exists. That asymmetry with branch 1 is the point and belongs in the doc comment.
-3. Otherwise return `manifest_fallback.to_path_buf()` unchanged.
+**What happens to `win.sidebar-show-project`: delete the row.**
 
-Do **not** canonicalize or normalize the joined path. `<store>/bin/../share/wolf/nvim/init.lua` is handed to Neovim as `-u`; `debug.getinfo(1,"S").source` reports exactly that string and `fnamemodify(..., ":p:h")` yields `<store>/bin/../share/wolf/nvim`, whose `/orlando` and `/lighthouse` children resolve correctly through the kernel. Normalizing is harmless but unnecessary; state that it is not required so nobody adds a fallible `canonicalize` on a startup path.
+I checked the alternatives against the tests before choosing:
 
-Add a `#[cfg(test)] mod tests` covering the table in §6.
+- **May a row be `Reserved` with `accel: None`?** Yes, mechanically. Every accelerator invariant (`every_accel_parses`, `accels_use_key_names_not_symbols`, `no_accel_makes_a_neovim_key_unreachable`, `accels_are_unique`) opens with `let Some(accel) = binding.accel else { continue; }`; `bound_bindings()` and `action_for_key` filter on `Bound`; `menu_never_lists_a_reserved_action` bites only if a menu item names it, and none does. So it compiles and passes. It is nevertheless **wrong**: `BindingStatus::Reserved`'s own doc comment says "The chord is spoken for by a later unit", and a row with no chord speaks for nothing. Keeping it would make `Reserved` mean two things.
+- **Is a `MenuOnly` row required to appear in `MENU_SECTIONS`?** No — no test loops over MenuOnly rows; `the_about_row_carries_no_chord` and `the_new_window_row_is_menu_only_and_listed` each assert `listed` for their own named row only. So `MenuOnly` with no menu item also passes — and is also wrong, for the mirror reason: `Command::SidebarShowProject` classifies `Deferred`, so `install_actions` skips it and a menu item would render insensitive.
+- **Give the reserved row a different chord?** Rejected: it would spend one of the scarce free `Ctrl+Shift` letters on a feature that does not exist and whose future author cannot review the choice.
 
-### 2.2 Modify `/home/jplein/dev/jplein/wolf/crates/wolf-gnome/src/lib.rs`
+Deletion is safe and loses nothing: the command survives in `COMMAND_SPECS`, `command_action::ui_action_for`'s `Command::SidebarShowProject => Deferred(...)` arm is untouched (it matches on `Command`, not on the table), the palette already filters `Deferred` rows out, `:WolfSidebarShowProject` still drains and prints its reason, and `action_for_command` has no production caller. The macOS reason for the row (⇧⌘E, which collides with `win.buffer-picker`'s `Ctrl+Shift+E` anyway) already lives where it belongs — in that `Deferred` reason string. Three Reserved rows remain (the font-size ones), so `action_for_key_table`'s "a Reserved row must not match" case (`Ctrl+minus`) and `ctrl_fold_table`'s three `NoFold` rows stay non-vacuous.
 
-- Add `pub mod init_lua;` in alphabetical position (between `input` and `layout`).
-- Add a bullet to the `//!` seam inventory naming `mod@init_lua` — the captive `init.lua`'s three-branch resolution as a function of values, with the environment read and the `current_exe` read done by `app.rs`.
+### 2.2 What Save does on a buffer that is named but not on disk
 
-### 2.3 Modify `/home/jplein/dev/jplein/wolf/crates/wolf-gnome/src/app.rs`
+**Rule: Save writes it. A dialog is offered only when the buffer has no file name at all.**
 
-Rewrite `init_lua_path` (line 133-137) as glue only:
+Fact 3 is the whole argument, and it cuts against the reflex answer. In every other editor an unnamed buffer has *no* name, so prompting is the only thing possible. Here `runtime/nvim/init.lua`'s `wolf_name_untitled` has already chosen a concrete, collision-checked name in the project folder — checked against files on disk, against every other buffer, and against stale swap files — and has eagerly created the swap file to claim it. That name is on screen from the moment the buffer exists: in the tab title, the pane statusbar, and the window's file row. Saving to the name the user is already looking at is the least surprising outcome available.
 
-- Read `std::env::var(init_lua::INIT_LUA_ENV).ok()`.
-- Read `std::env::current_exe().ok()` and take `.parent()` from it. Note in the doc comment, so nobody "fixes" it later: under `wrapGAppsHook4` the installed `$out/bin/wolf-gnome` is a wrapper that `exec`s `$out/bin/.wolf-gnome-wrapped`, and `current_exe()` reads `/proc/self/exe`, so the parent is still `$out/bin` and the `../share/...` join still resolves. A wrapper does not break this branch.
-- Pass `Path::new(env!("CARGO_MANIFEST_DIR")).join("../../runtime/nvim/init.lua")` as `manifest_fallback` — unchanged, and it is what keeps `cargo run` and every existing smoke working.
-- Pass `|p: &Path| p.exists()` as the predicate.
-- Keep the function `pub(crate)` and `#[must_use]`; `window.rs:419` and the coordinator call sites are untouched.
+Three further reasons, in order of weight:
 
-Keep `FONT_PT_ENV`'s neighbourhood convention: the environment read lives here, the rule lives in the seam.
+1. **Ctrl+S and `:w` must not disagree.** Both surfaces sit in one window over one buffer. If the chord popped a dialog where `:w` wrote silently, the user gets two behaviours for one act and cannot predict which.
+2. **A redirect would need a fact the front-end does not have, and can get wrong.** "Not on disk" is a filesystem probe, and its answer drifts: a file deleted out from under a buffer that has been saved all session would suddenly start popping a modal on every Ctrl+S. Injecting an `exists` predicate is an established pattern here (`init_lua::resolve_init_lua`), so it is *possible* — it is simply the wrong rule.
+3. **Save is the safety-critical chord.** Making it conditional on a modal means that when the dialog fails to present — which fact 4 shows is a live failure mode — the buffer is not saved while the user believes it is. Writing an unwanted `Untitled.md` is trivially undone; a silent non-save is not.
+
+**The unnamed case is different and takes the dialog.** `Snapshot::current_file` is `None` for a genuinely nameless buffer (a typed `:enew`), and `write` there raises `E32: No file name`, which core degrades to an invisible warning. There is no working behaviour to diverge from, so Save falls through to the Save As dialog. This is the rule the seam states, and it is decidable from `Option<&Path>` alone — no probe, no RPC.
+
+**What the dialog contributes over `:w` / `:saveas`.** For Save As: native folder browsing, name completion, and the overwrite confirmation, none of which a typed `:saveas` offers — and the user does not have to know the Ex command or type a path by hand. For Save: **nothing**, and that is exactly why Save never opens one on a named buffer.
+
+**Two more shapes the seam refuses**, both readable from the same snapshot pass and both otherwise silent:
+- **A preview scratch is active.** `Snapshot::is_preview_active()`; its `current_file` is `""` (the emit sends the empty string deliberately, `init.lua:387`), so without this arm Save would fall to `Choose` and open a modal over a pane that cannot be written.
+- **A terminal buffer is active** (`win_buffers[active_win].is_terminal`). `term://…` is a name Neovim will not `write`.
+
+### 2.3 Where the buffer path comes from (no new blocking RPC)
+
+**`WolfCore::read_snapshot()` → `Snapshot::current_file`**, plus `Snapshot::is_preview_active()` and `Snapshot::active_win` joined into `Snapshot::win_buffers`. All are field reads under one `SnapshotReadGuard`; `read_snapshot` copies nothing (`draw.read` measures 0.00 ms, per DECISIONS "The measured reading"). **The enumerated ten blocking calls are unchanged.**
+
+`WolfCore::pane_status(grid)` is deliberately **not** used, even though it is also RPC-free: it joins through the current-tabpage-only `Snapshot::windows` map and answers a *display* string with `NO_NAME` for an unnamed buffer — the exact trap `tabs_ui.rs`'s module docs record. Save needs "is there a path" as a value, not a label.
+
+The shell reads it in one pass, the `preview_shape()` idiom: one `self.inner.core.borrow()`, one `read_snapshot()` bound to a local, an owned value built, the guard dropped before anything else touches the core. One value rather than three reads, because the three must describe the same instant.
+
+### 2.4 The liveness gate
+
+**Both presses are gated on `Some(Liveness::Alive)`, and neither is a blocking call.** The wording in every doc must be careful here, because it is the one place a reader could conclude the inventory grew.
+
+- Neither issues an RPC. `InputEvent::Save` and `InputEvent::SaveAs` are fire-and-forget on the ordered input channel (fact 1); the dialog resolves on a later main-loop turn. **The inventory in DECISIONS "Crash and stall recovery" stays at ten, nine of them running-window.**
+- The gate exists for `clipboard_ui::paste_decision`'s reason, not `nav_ui::nav_press`'s: a save queued behind an opaque crash overlay would reach a *restarted* Neovim minutes later and be applied to whatever buffer that fresh instance happens to be on.
+- Save As adds a second, sharper reason: a **native modal dialog opening over the opaque crash overlay** invites the user to name a file that will never be written, and the modal covers the overlay's Restart button, which is the only route out of a stall (DECISIONS: "Nothing in this crate clears `NotResponding`").
+
+The two reasons must not be collapsed, exactly as `clipboard_ui.rs`'s entry says of Copy and Paste.
+
+**Save and Save As stay enabled in the empty state**, matching the buffer picker and the clipboard rather than `win.go-to-file` / `win.search-in-project` / `win.toggle-sidebar`. Those three are disabled because their *root* would be wrong; Save has no root to be wrong, and the captive Neovim in a project-less window is a working editor with a real `Untitled.md`. No change to `set_empty_state`.
+
+### 2.5 Overwrite
+
+**Add a `force: bool` field to `InputEvent::SaveAs`, applied as `saveas!` when true and `saveas` when false. The GTK glue always passes `true`, and that value comes out of the seam rather than being spelled at the call site.**
+
+The problem: the save dialog confirms the overwrite itself, and then `saveas` (no `!`) fails `E13: File exists`, which `input::apply_batch` degrades to `tracing::warn!`. The user answers a confirmation and nothing is written, with nothing on screen.
+
+Rejected alternatives:
+- **Burn `!` into the only spelling.** Blast radius is nominally zero (`crates/wolf-core/tests/save_open.rs` is the sole construction site; `wolf-ffi` never builds the variant, and macOS has no save UI — measured by grep, matching fact 1). But it means the day macOS grows an `NSSavePanel` it inherits force-overwrite whether or not its panel confirmed, silently, in a crate shared by both front-ends. A destructive default with no opt-out is the wrong shape for a public API.
+- **Front-end existence check.** Wrong: the buffer must be *renamed*, which only `saveas` does, and a check would race the write.
+- **Leave it.** Unacceptable — it is a silent data loss of the user's stated intent.
+
+**Blast radius of the chosen change.** `crates/wolf-core/tests/save_open.rs` (one construction site, `save_as_new_path`, which becomes `force: false` and keeps its meaning). `architecture.md:203`, which spells the variant. `crates/wolf-core/src/README.md`'s `input.rs` entry gains one Decisions bullet. macOS: zero producers, so nothing compiles differently, but the `wolf-ffi`-consumed public API changed and `macos-followups.md`'s standing rule (line 5) makes a ledger row mandatory.
+
+**Evidence the change needs** (§4.C): a real-Neovim pair in `save_open.rs` proving both arms, each discriminating the other.
 
 ---
 
-## 3. Phase 2 — the flake
+## 3. Files to create
 
-All edits are to `/home/jplein/dev/jplein/wolf/flake.nix`. The derivation lives **inline**, per your lean: it shares `wolfVendoredPins` and `pkgsRuntime` with `linuxShell`, matches `wolfPointerInject` / `iaWriterMono` precedent, and a separate directory would oblige a new `README.md` under CLAUDE.md's rule for a single derivation that has exactly one consumer.
+### `crates/wolf-gnome/src/save_ui.rs`
 
-### 3.1 The second input
+The pure, GTK-free rulebook for Save and Save As. Modelled on `nav_ui.rs` / `tabs_ui.rs`: `wolf_core::Liveness` in, plain paths and bools in, values out. No widget type, no `WolfCore`, no filesystem.
 
-```
-inputs.nixpkgs-runtime.url = "github:NixOS/nixpkgs/9ae611a455b90cf061d8f332b977e387bda8e1ca";
-```
+**Module docs must carry** (following `nav_ui.rs`'s section shape): why the "named but not on disk" case writes rather than prompts (§2.2, including that fact 3 is the reason and that a reader must not "fix" it into a redirect); that neither press blocks and the gate is the paste reason plus the modal-over-overlay reason, with an explicit "the blocking inventory in DECISIONS.md is unchanged"; totality over `Option<Liveness>` with no `_` arm; and that the target is read from `Snapshot::current_file` and never from `pane_status`.
 
-Same rev the main `nixpkgs` input is locked at today, so nothing about the currently-tested Neovim changes and the closure is shared (zero extra download today). Add it to the `outputs` argument list. Bind `pkgsRuntime = import nixpkgs-runtime { inherit system; };` inside the existing `let`.
+**Public API:**
 
-**Comment beside it must state**, in prose: what it pins and why (the runtime assets the shipped application carries — Neovim, its treesitter trees, ripgrep — held apart from the GTK/toolchain nixpkgs so a `nix flake update nixpkgs` cannot move what the Linux suite tested); the version it carries (Neovim 0.12.2); the Bazel pin it diverges from (0.12.3, `bazel/nvim/extensions.bzl`); that the divergence predates this unit; and the two-sentence version of the §C verdict — same minor series is what the shared `init.lua`'s per-version claims need, and closing the patch gap means either an off-cache source build or a full Linux re-gate.
+```rust
+pub const UNTITLED_SAVE_NAME: &str = "Untitled.md";
 
-**Recommended, scoped extension:** take `neovim`, `ripgrep` **and** `vimPlugins.nvim-treesitter` (both the plugin and its `.parsers.<lang>` attributes) from `pkgsRuntime`. Today they are identical store paths, so this changes nothing observable and carries no risk; what it buys is that the `wolfTreesitterQueries` comment's parity claim — "the same upstream revision `bazel/nvim-treesitter/extensions.bzl` pins for macOS (4916d659…), so the two platforms get byte-identical queries" — stops being falsifiable by an unrelated `nixpkgs` bump. If the orchestrator wants minimal scope, take Neovim alone and record the other two as an open drift in `macos-followups.md`; say which was chosen.
-
-**Darwin laziness:** `pkgsRuntime` and everything derived from it must be referenced only from `linuxShell` and the package. Extend the existing `NOTE:` block (flake.nix lines 48-62) to name `pkgsRuntime`, `wolfOrlando`, `wolfLighthouse` and `wolfGnomePackage` alongside the others, and to state the *one* deliberate exception below.
-
-### 3.2 `wolfVendoredPins` — one place for the three pins
-
-Add, near the top of the `let`, ahead of `iaWriterMono`:
-
-```nix
-wolfVendoredPins = {
-  ia-writer-mono = { commit = "f32c04c3058a75d7ce28919ce70fe8800817491b"; sha256 = "826767eaea4ce43ccb7ca71327a5c63ac31206b99df400699e6744df6104e1b5"; };
-  orlando = { commit = "c960cf3e1c24fbdd2e6fb30ab9c8022cdc7b2bf9"; sha256 = "794911361108eb509ab00ec64ed03c229418be32f45ad7a385b6d2d6b057f3c5"; };
-  lighthouse = { commit = "514dec2c79701b74082defc19090bd1dae57765b"; sha256 = "a452624fee9ce7b82e11877b013f578aa1c3befda6b6564536c3264a40b8e0d2"; };
-};
-```
-
-Formatting is load-bearing and must be stated in the comment above it: **one attribute per line, `commit` then `sha256`, both double-quoted, closing `};` on the same line**, because `crates/wolf-gnome/tests/vendored_pins.rs` is a line scanner and not a Nix parser — the same contract the workspace `Cargo.toml` carries for `release_profile.rs`. Also carry the "BUMP BOTH TOGETHER" note that `iaWriterMono` has today, generalized to all three, plus a pointer to the drift check.
-
-Refactor `iaWriterMono` to read `wolfVendoredPins.ia-writer-mono.commit` / `.sha256` instead of its local `commit` binding and inline hash. Its existing prose comment stays but loses the sentences the new block now owns.
-
-### 3.3 `wolfOrlando` and `wolfLighthouse`
-
-Two `pkgs.stdenv.mkDerivation`s shaped exactly like `iaWriterMono` — `fetchurl` from the same GitHub tarball URL with the same hex sha256, `sourceRoot` set to the archive root, `dontConfigure`/`dontBuild`, an explicit `installPhase`.
-
-`wolfOrlando`:
-- `pname = "wolf-orlando"`, `version = "0-unstable-2025"` (the pin is a commit, not a release — mirror `iaWriterMono`'s comment).
-- `url = "https://github.com/jplein/orlando/archive/${commit}.tar.gz"`.
-- `sourceRoot = "orlando-${commit}"`.
-- Install exactly the subtrees `//bazel/orlando`'s `runtime_files` filegroup keeps, and nothing else: `plugin/`, `lua/`, `doc/`, `LICENSE*` → `$out/plugin`, `$out/lua`, `$out/doc`, `$out/LICENSE*`. `test/`, `flake.nix`, `flake.lock`, `.luarc.json` and `README.md` are deliberately excluded — a comment must say the exclusion list mirrors the Bazel filegroup so the two platforms ship the same files.
-- The output root **is** the tree that becomes the `orlando/` sibling (i.e. `$out/plugin/orlando.lua`, not `$out/orlando/plugin/orlando.lua`). Bazel needs the extra inner directory because `rules_apple` strips a TreeArtifact's top-level name; Nix has no such rule and the `postInstall` below names the destination explicitly. State that difference in the comment, because a reader comparing the two will otherwise think one is wrong.
-
-`wolfLighthouse`:
-- `pname = "wolf-lighthouse"`.
-- `url = "https://github.com/jplein/lighthouse.nvim/archive/${commit}.tar.gz"`.
-- **`sourceRoot = "lighthouse.nvim-${commit}"`** — the upstream repo name includes `.nvim`; getting this wrong makes the install phase find nothing. Carry the Bazel file's own warning.
-- Install `colors/` and `LICENSE*` only. No `plugin/`, no `lua/`, no `doc/` — a colorscheme has none.
-
-Neither goes into `linuxShell.packages`, and that is not an oversight: **the devShell must keep running the smokes without orlando and lighthouse**, because the checkout binary with no sibling trees is the control leg of the packaged-artifact A/B in §6.4. Say so in the comment.
-
-### 3.4 `wolfGnomePackage`
-
-```nix
-wolfGnomePackage = (pkgs.makeRustPlatform { cargo = rustToolchain; rustc = rustToolchain; }).buildRustPackage { … };
-```
-
-Using the flake's own pinned toolchain rather than `rustPlatform`'s nixpkgs default, so the artifact is built with the 1.96.0 the Linux evidence was taken with.
-
-- `pname = "wolf-gnome"`, `version = "0.1.0"` (the workspace `[workspace.package] version`).
-- `src` — a filtered source: keep `Cargo.toml`, `Cargo.lock` and `crates/`; drop `target/`, `.direnv/`, `result*`, `.git/`, `resources/`, `runtime/`, `tools/`, `bazel/`, `*.md`. Use `lib.cleanSourceWith` over `lib.cleanSource ./.` with an explicit `filter`. **`lib.cleanSource` alone does not exclude `target/`**, which on this host is over a gigabyte; a missing filter turns every `nix build` into a multi-GB copy into the store. Say so.
-- `cargoLock.lockFile = ./Cargo.lock;` — no `outputHashes` needed; verified there are zero `source = "git+…"` entries in `Cargo.lock`.
-- `cargoBuildFlags = [ "--package" "wolf-gnome" "--bin" "wolf-gnome" ];` so `wolf-ffi` (the swift-bridge crate, which the shipped Linux app does not use) is not built.
-- `buildType` is left at its default `"release"`, which is what selects the workspace `[profile.release]` — `opt-level = 3`, `lto = "thin"`, `panic = "unwind"`, `debug = "line-tables-only"`, `strip = "none"`. State that no extra flag is needed and that `strip` must not be overridden by `dontStrip = false` sloppiness, since the release contract is that symbols survive.
-- `nativeBuildInputs = [ pkgs.pkg-config pkgs.wrapGAppsHook4 pkgs.desktop-file-utils ];`
-- `buildInputs = [ pkgs.gtk4 pkgs.libadwaita pkgs.webkitgtk_6_0 pkgs.libsoup_3 pkgs.cairo pkgs.pango pkgs.glib pkgs.gdk-pixbuf pkgs.graphene pkgs.harfbuzz pkgs.librsvg pkgs.gsettings-desktop-schemas pkgs.adwaita-icon-theme pkgs.hicolor-icon-theme pkgs.shared-mime-info ];`
-  - The first eight are the `.pc` files the gtk-rs and `webkit6` `-sys` crates probe, taken straight from `linuxShell`'s list, plus `libsoup_3` for the reason that list already records (`webkitgtk-6.0.pc` declares `Requires: … libsoup-3.0`, so `soup3-sys` does not configure without it).
-  - The last five are runtime, and they are in `buildInputs` rather than anywhere else because that is how `wrapGAppsHook4` and the `glib` / `hicolor-icon-theme` setup hooks discover them: they accumulate `GSETTINGS_SCHEMAS_PATH` and `XDG_ICON_DIRS` from `buildInputs` and write the corresponding `--prefix` flags into the wrapper. `librsvg` is what puts the SVG loader in the pixbuf module cache, without which the scalable icon and Adwaita's own SVGs do not decode.
-  - `wolf-core`'s only C dependency is `rusqlite`'s bundled SQLite, compiled by `cc` from stdenv — no system `sqlite` is needed and none must be added.
-- **`doCheck = false;`**, with the reason spelled out in the comment: the suite `cargo test -p wolf-gnome` runs is not a headless unit suite. Fifty-six of its tests launch `cage`, a wlroots compositor needing a writable `XDG_RUNTIME_DIR` at mode 0700, alongside `wtype`, `grim`, `tesseract` and this repo's own `wolf-pointer-inject`; every real-nvim test additionally needs `WOLF_NVIM_BIN`; and `wolf-core`'s swap-recovery test needs a writable `$HOME`. A Nix build sandbox provides no `/run/user/<uid>`, no `/dev/dri` (so GTK's GL renderer has no device and would have to fall back), and no session bus. Running a curated subset would execute only the pure seams the checkout `cargo test` already covers, adding nothing about the artifact. **The consequence is stated, not hidden: all evidence about the packaged artifact comes from outside the build sandbox** — §6.4 and §6.5.
-- `postInstall` — see §3.5.
-- `preFixup` — see §3.6.
-- `installCheckPhase` (or a `postInstall` tail): run `desktop-file-validate "$out/share/applications/org.wolf.Wolf.desktop"`. Cheap, and it catches a malformed entry at build time rather than at a user's session.
-- `meta` — `description`, `homepage`, `license = lib.licenses.mit` (the workspace is `MIT OR Apache-2.0`; use `[ mit asl20 ]`), `mainProgram = "wolf-gnome"`, `platforms = lib.platforms.linux`.
-
-### 3.5 `postInstall` — the install layout
-
-Everything below is written with `install -Dm644` / `install -Dm755` (never a bare `cp` from the store, whose read-only mode would carry over).
-
-**The Neovim runtime tree.** Note the Nix path-literal gotcha: `./resources/icons/Wolf application icon GNOME light/...` is **not** a valid path literal, because a space terminates one. Use path-plus-string concatenation, e.g. `gnomeIconDir = ./resources/icons + "/Wolf application icon GNOME light";` and then `gnomeIconDir + "/icon-silhouette_48x48.png"`. Reference the four PNGs and the SVG individually rather than the directory, so the macOS masters in the sibling directories are not dragged into the store.
-
-- `$out/share/wolf/nvim/init.lua` ← `${./runtime/nvim/init.lua}`, a real copy (mode 644).
-- `$out/share/wolf/nvim/orlando/` ← recursive copy of `${wolfOrlando}` (`plugin/`, `lua/`, `doc/`, `LICENSE*`).
-- `$out/share/wolf/nvim/lighthouse/` ← recursive copy of `${wolfLighthouse}` (`colors/`, `LICENSE*`).
-
-**The desktop entry**, written with a heredoc so `$out` is available:
-
-```
-$out/share/applications/org.wolf.Wolf.desktop
-```
-
-Keys, exactly: `[Desktop Entry]`, `Type=Application`, `Version=1.0`, `Name=Wolf`, `GenericName=Markdown Editor`, `Comment=A Markdown editor that embeds Neovim as its editing engine`, `Exec=$out/bin/wolf-gnome`, `Icon=org.wolf.Wolf`, `Terminal=false`, `Categories=Utility;TextEditor;Development;`, `StartupNotify=true`, `StartupWMClass=org.wolf.Wolf`.
-
-`Exec` is the **absolute store path**, not a bare `wolf-gnome`, and the comment must give the reason: the entry and the binary are outputs of the same derivation, so the path cannot dangle while the entry is visible, and an absolute path removes any dependence on `PATH` ordering. A bare name would be resolved by the session's `PATH`, where a developer's `target/release` directory ahead of the profile would launch an **unwrapped** binary carrying no `WOLF_NVIM_BIN` and no `init.lua` — a silent wrong-artifact launch from the application menu, which is exactly the failure class this repo spends its guards on. `StartupWMClass` matches `APP_ID` so the shell associates the window with the entry.
-
-No `%f`, no `%U`, no `MimeType` — §F above.
-
-**The icons.** From `Wolf application icon GNOME light/`:
-
-| source | destination |
-| --- | --- |
-| `icon-silhouette_48x48.png` | `$out/share/icons/hicolor/48x48/apps/org.wolf.Wolf.png` |
-| `icon-silhouette_64x64.png` | `$out/share/icons/hicolor/64x64/apps/org.wolf.Wolf.png` |
-| `icon-silhouette_128x128.png` | `$out/share/icons/hicolor/128x128/apps/org.wolf.Wolf.png` |
-| `icon-silhouette_256x256.png` | `$out/share/icons/hicolor/256x256/apps/org.wolf.Wolf.png` |
-| `icon-silhouette_scalable.svg` | `$out/share/icons/hicolor/scalable/apps/org.wolf.Wolf.svg` |
-
-**The fonts.** Copy the four iA Writer Mono S faces from `${iaWriterMono}/share/fonts/truetype/` and the JetBrains Mono faces from `${pkgs.jetbrains-mono}/share/fonts/truetype/` into `$out/share/fonts/truetype/`, plus `${iaWriterMono}/share/licenses/ia-writer-mono/LICENSE.md` into `$out/share/licenses/`. The two file sets are disjoint, which is the same argument `crates/wolf-macos/README.md` makes for its single bundled `fonts/` directory. This also means a NixOS user can put the package in `fonts.packages` and get the families system-wide.
-
-**The fontconfig fragment**, written with a heredoc into `$out/share/wolf/fonts.conf`:
-
-```xml
-<?xml version="1.0"?>
-<!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
-<fontconfig>
-  <include ignore_missing="yes">/etc/fonts/fonts.conf</include>
-  <dir>OUT/share/fonts</dir>
-</fontconfig>
-```
-
-The comment above it must state three things, because every one of them is a thing a later reader would undo. (1) It is **additive**, not the devShell's exclusionary pin: the include is what keeps the host's own fonts, aliases and rendering settings — the devShell's `testdata/fonts.conf` omits every host directory deliberately, for golden-render determinism, and shipping that to a user would leave the GTK chrome rendering in a monospace editor face. (2) `FONTCONFIG_FILE` replaces the *root* config rather than extending it, which is why the include is written out explicitly and why `--prefix XDG_DATA_DIRS` cannot substitute for any of this — fontconfig's `<dir prefix="xdg">fonts</dir>` covers `XDG_DATA_HOME` alone, verified against `/etc/fonts/fonts.conf` on this host. (3) The `<dir>` comes after the include so system fonts win ties.
-
-### 3.6 `preFixup` — the wrapper environment
-
-`wrapGAppsHook4` wraps during `fixupPhase` and consumes the `gappsWrapperArgs` array, so the flags are appended in `preFixup` rather than through a second `wrapProgram` call — a hand-rolled wrap here would double-wrap and shadow the hook's own `--prefix XDG_DATA_DIRS` / `GSETTINGS_SCHEMA_DIR` / `GIO_EXTRA_MODULES` / `GDK_PIXBUF_MODULE_FILE`.
-
-```
-gappsWrapperArgs+=(
-  --set-default WOLF_NVIM_BIN "${lib.getExe wolfNeovim}"
-  --set-default WOLF_RG_BIN "${lib.getExe wolfRipgrep}"
-  --set-default WOLF_NVIM_TREESITTER_DIR "${wolfTreesitterQueries}"
-  --set-default WOLF_PARSERS_DIR "${wolfTreesitterParsers}"
-  --set-default FONTCONFIG_FILE "$out/share/wolf/fonts.conf"
-)
-```
-
-`--set-default` for every one, and the reason must be written down per group:
-
-- `WOLF_NVIM_BIN` / `WOLF_RG_BIN` — direct macOS parity. `Project.swift:83,88` use `setenv(name, value, 0)`, overwrite `0`, so a developer's export wins there; `--set-default` is the same rule. Reading `crates/wolf-macos/Sources/WolfMacOS/README.md` will confirm it in one line.
-- `WOLF_NVIM_TREESITTER_DIR` / `WOLF_PARSERS_DIR` — same rule for consistency, and because a developer testing a work-in-progress query tree must be able to point the packaged binary at it. The values are the same store paths the devShell exports today, so inside `nix develop` the two agree.
-- `FONTCONFIG_FILE` — `--set-default` is what keeps the devShell's exclusionary pin winning inside `nix develop`, which is what keeps `paint_golden.rs` and every OCR smoke reproducible; outside the shell the packaged additive config applies.
-- `WOLF_INIT_LUA` is **never** set by the wrapper. Setting it would make the executable-relative branch dead code and would make the development override unusable on the packaged binary. Write that down beside the list.
-- `WEBKIT_EXEC_PATH` is **not** set, pending §6.4's preview leg — see Open Questions.
-
-### 3.7 The outputs attrset
-
-```nix
-{
-  devShells.default = if isDarwin then darwinShell else linuxShell;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SaveTarget<'a> {
+    pub path: Option<&'a Path>,   // Snapshot::current_file
+    pub is_preview: bool,         // Snapshot::is_preview_active()
+    pub is_terminal: bool,        // win_buffers[active_win].is_terminal, false when absent
 }
-// pkgs.lib.optionalAttrs (!isDarwin) {
-  packages.wolf-gnome = wolfGnomePackage;
-  packages.default = wolfGnomePackage;
-}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SavePress { Write, Choose, Refuse(&'static str) }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SaveAsPress { Choose, Refuse(&'static str) }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SaveProposal { pub folder: Option<PathBuf>, pub name: String }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SaveAsRequest { pub path: PathBuf, pub force: bool }
+
+#[must_use] pub fn save_press(liveness: Option<Liveness>, target: SaveTarget<'_>) -> SavePress;
+#[must_use] pub fn save_as_press(liveness: Option<Liveness>, target: SaveTarget<'_>) -> SaveAsPress;
+#[must_use] pub fn save_dialog_proposal(path: Option<&Path>, cwd: Option<&Path>) -> SaveProposal;
+#[must_use] pub fn save_as_target(chosen: &Path) -> Option<SaveAsRequest>;
 ```
 
-`optionalAttrs` forces only its condition, not the value, so the Darwin eval path never touches `wolfGnomePackage`. This guard **is** required, and it is a different thing from the `lib.optional` guard the existing `NOTE:` block forbids: that prohibition is about guarding a Linux derivation *inside* `linuxShell.packages`, where a guard would imply the laziness argument is unsound. Here the guard is on the *output attribute set* — without it `packages.aarch64-darwin.default` would be a Wayland GTK application that cannot build on Darwin at all and that `nix flake show` and `nix flake check` would try to evaluate. Add a comment making that distinction explicit, next to the existing `NOTE:`.
+**Rules, in evaluation order.**
 
-### 3.8 Also modify
+`save_press` — a `match` over `Option<Liveness>` with no `_` arm. Liveness is checked **first**, so a wedged Neovim is reported as wedged rather than as a preview pane (`preview_ui`'s recorded ordering rule). Inside the `Some(Alive)` arm: `is_preview` refuses, then `is_terminal` refuses, then a private `save_name(path) -> Option<&OsStr>` decides — `Some` gives `Write`, `None` gives `Choose`. `save_name` is `path.filter(|p| !p.as_os_str().is_empty()).and_then(Path::file_name)`, which is what makes "named" mean "has a usable file name" rather than "is `Some`".
 
-- `linuxShell.packages`: `pkgs.neovim` → `wolfNeovim`, `pkgs.ripgrep` → `wolfRipgrep`.
-- `linuxShell.shellHook`: the two `getExe` interpolations follow.
-- `wolfTreesitterParsers` / `wolfTreesitterQueries`: source `nvim-treesitter` from `pkgsRuntime` if the recommended extension is adopted; update the two comment blocks to say the revision is now pinned by the runtime input rather than tracking `nixpkgs`.
-- The file-header comment (lines 1-20) gains a sentence naming the package output.
+`save_as_press` — identical, except the accepted arm is always `Choose`. Two enums rather than one so the shell's Save As match has no dead `Write` branch.
 
----
+Six distinct refusal reasons, each a lowercase mid-sentence clause (the `command_action` / `nav_ui` convention), shared by both functions where the cause is the same: `NotResponding`, `Dead`, `None` (core taken out by the close handler), preview, terminal.
 
-## 4. Phase 3 — the drift check
+`save_dialog_proposal`:
+- `name` = the path's `file_name()` when there is one, else `UNTITLED_SAVE_NAME`.
+- `folder` = the path's own `parent()` when it is non-empty and the path had a file name; else `cwd`; else `None` (leave GTK its default).
+- **Why the buffer's own parent, not the cwd:** Save As on `src/deep/thing.md` must open where the user is working, or "save a copy beside it" becomes a navigation task. For a `Untitled.md` in the project root the two rules coincide, so nothing is lost.
+- **Why the cwd passed in is not `tabs_ui::new_tab_cwd`'s answer:** that one refuses the empty state on purpose, so a tab is never `:tcd`'d into `$HOME`. A save dialog's folder is a starting point the user can change, not a declaration that a directory is a project, so the empty state's `$HOME` is a correct default here. The divergence is deliberate and must be stated.
 
-### 4.1 Create `/home/jplein/dev/jplein/wolf/crates/wolf-gnome/tests/vendored_pins.rs`
-
-Not `#[ignore]`d. Pure: no environment, no subprocess, no compositor, microseconds. Runs on every `cargo test`.
-
-**Paths.** All three rooted at `Path::new(env!("CARGO_MANIFEST_DIR")).join("../../…")`, exactly as `release_profile.rs::workspace_manifest_path` does: `flake.nix`, `bazel/orlando/extensions.bzl`, `bazel/lighthouse/extensions.bzl`, `bazel/ia-writer-mono/extensions.bzl`. A read failure panics naming the path and saying that an error here means this crate moved relative to the workspace root, not that a pin drifted.
-
-**Bazel-side extraction rule, stated exactly so nobody invents a parser.** For a given `.bzl` text and a key `K` in `{"_COMMIT", "_SHA256"}`: consider every line whose `trim_start()` begins with `K`, with the remainder after `K` matching `\s*=\s*"` — collect the double-quoted contents. Assert **exactly one** match per key per file; zero means the file was reworded and the check has gone vacuous (fail with that word in the message, the `cage_is_only_spawned_through_the_isolating_helper` precedent), more than one means the file grew a second pin and the check no longer knows which is authoritative. Verified against all three files today: each has exactly one `_COMMIT = "` line and one `_SHA256 = "` line, and the prose mentions of `` `_COMMIT` `` in docstrings carry backticks and no `= "`, so they cannot match.
-
-**Nix-side extraction rule.** Locate the single line whose trimmed form is `wolfVendoredPins = {`; take lines until the first subsequent line whose trimmed form is `};`; for each line between, match `^\s*(?P<name>[a-z-]+)\s*=\s*\{\s*commit\s*=\s*"(?P<commit>[0-9a-f]{40})"\s*;\s*sha256\s*=\s*"(?P<sha>[0-9a-f]{64})"\s*;\s*\};?\s*$` (do this with `str` splitting rather than a regex crate — this crate takes no new dependency for a test, the reason `release_profile.rs` records). Assert the block exists, that it holds **exactly three** entries, and that the three names are exactly `ia-writer-mono`, `orlando`, `lighthouse` — an extra unmatched entry means a fourth asset was pinned on the Nix side with no Bazel counterpart, which is itself the drift this check exists for.
-
-**Assertions.** Three cases, one per asset, each asserting commit equality and sha256 equality. Assert in a way that a broken second row is still reported: collect mismatches into a `Vec` and assert the vec is empty at the end, rather than a `for` loop of `assert_eq!` — `crates/wolf-gnome/tests/README.md` records that a loop with an assertion inside produced one observed failure where a revert broke two rows.
-
-**The failure message must name**, per mismatch: the asset; the Nix value and the Bazel value side by side, labelled with which file each came from; both absolute-relative paths; the fact that a one-sided bump is **silent**, because each side fetches successfully against its own sha256 and neither reads the other's — so Linux would ship one revision of a plugin while macOS bundled another with nothing failing anywhere; and the instruction to bump both together rather than "fixing" the test.
-
-**Do not** edit `bazel/orlando/extensions.bzl` or `bazel/lighthouse/extensions.bzl` to add the reciprocal "BUMP BOTH TOGETHER" docstring that `ia-writer-mono` carries. That is a macOS-side edit and the constraint forbids it; log the obligation in `macos-followups.md` instead.
+`save_as_target`:
+- `None` for an empty path, a path with no `file_name()`, or a **relative** path — `chdir_to`'s recorded reason: core would resolve it against the *process* cwd rather than Neovim's, so the file would land somewhere the user did not choose. `gio::File::path()` is absolute in practice; the rule is stated so a later change of source cannot smuggle one in.
+- Otherwise `Some(SaveAsRequest { path: chosen.to_path_buf(), force: true })`.
+- **The path is passed through verbatim — no extension is ever appended.** Proposing `.md` is the dialog's job. Rewriting the user's typed name would mean GTK's overwrite confirmation was asked about a *different* file than the one written, which turns a confirmed save into an unconfirmed clobber.
+- `force` is always `true`, and the reason belongs on this function: the dialog has already confirmed. The shell copies the value out and decides nothing.
 
 ---
 
-## 5. Phase 4 — the packaging evidence
+## 4. Files to modify
 
-This is the part that decides whether the unit is honest. A green `cargo test` on the checkout says nothing about `$out/bin/wolf-gnome`; they are different artifacts and different claims.
+### A. `crates/wolf-core/src/input.rs`
 
-### 5.1 Shape chosen, and why the other two lose
+- `InputEvent::SaveAs` gains `force: bool`, with a doc comment stating: `true` applies `saveas!`, for a caller whose own dialog has already confirmed the overwrite; `false` applies plain `saveas`, which fails `E13: File exists` on an existing path — an error the input pump degrades to a `tracing::warn!` the user never sees.
+- The apply arm becomes `saveas!` / `saveas` on that flag, keeping the `fnameescape(path)` interpolation unchanged.
 
-I considered your three shapes and choose **(ii) plus (iii) together**: a committed script that always sets the precondition, driving `#[ignore]`d Cargo tests that carry the assertions.
+### B. `crates/wolf-gnome/src/lib.rs`
 
-- **(i), a `checks.<system>` derivation, is rejected** and I want to be plain that it is rejected on lack of confidence rather than on taste. The scenario needs `cage` on wlroots headless, which needs a writable `XDG_RUNTIME_DIR` at mode 0700 (arrangeable under `$TMPDIR`) but also a working GTK render path: the sandbox has no `/dev/dri`, so GSK's GL renderer has no device and the run depends on an untested cairo-renderer fallback. It has no `/dev/shm`, no session bus and no user-namespace guarantees for WebKit's mandatory bubblewrap sandbox. Any one of those turns the unit's evidence into a debugging project inside a build sandbox where the only instrument is a build log. I am not confident it works, so it is not where the evidence goes.
-- **(iii) alone is rejected** for the reason you name: an env-gated test either skips quietly, which `crates/wolf-gnome/tests/README.md` and CLAUDE.md both forbid, or fails for everyone who has not run `nix build`. `#[ignore]` resolves that cleanly and has precedent in this crate (`paint_golden.rs`'s `regenerate_png_golden`): an ignored test is *not part of the default suite*, which is different from *silently skipped*, and the precondition inside it still fails loud. What makes it honest is that exactly one command runs it and that command always sets the variable.
+- `pub mod save_ui;` in alphabetical position (between `render` and `scrollbar`). **No `pub use` re-export** — no external consumer reaches for it.
+- Add one crate-doc seam bullet for `mod@save_ui` in the same voice as the others, naming the four functions and the "named but not on disk writes; nameless prompts" rule.
+- **Rewrite line 318 in place**: "…the menu's native Open File / Open Folder dialogs; there are no save / save-as dialogs." That clause is false after this unit. Replace with a present-tense statement that Save and Save As are native dialogs too and that saving goes through `InputEvent::Save` / `InputEvent::SaveAs`.
 
-### 5.2 Where the compositor smokes live — inside `smoke_headless.rs`, not a new file
+### C. `crates/wolf-gnome/src/actions.rs`
 
-This is not a stylistic call. A second test binary that spawns `cage` can run **concurrently** with `smoke_headless` under `cargo test -p wolf-gnome`, and `CAGE_LOCK` is a per-process mutex that cannot serialize across processes; the tests README already records the signature (`unable to lock lockfile … maybe another compositor is running`, plus a hang that reads as a mass regression). A second file would also need its own `Command::new("cage")` — a second spawn site outside `cage_command`, carrying none of its five isolations, which is precisely what `cage_is_only_spawned_through_the_isolating_helper` exists to prevent, and that guard reads only its own file's source so it would not catch it. Putting the packaged smokes in `smoke_headless.rs` reuses `CAGE_LOCK`, `cage_command`, `decode_capture`, `Capture`, `Rgb8`, `pixel_index`, `band_fraction`, the `ocr_*` helpers, `cell_metrics_for_smoke` and the settle constants, and keeps the single-spawn-site invariant intact.
+**Production data.**
 
-The store-**layout** assertions need no compositor and go in a small new file of their own.
+1. **Delete** the `win.sidebar-show-project` `ActionBinding` in its entirety (currently lines 296-304), and the `// --- Reserved for later units …` comment stays with the three font-size rows that follow it.
+2. **Insert two rows** immediately after `win.new-tab` and before `win.close-pane`, matching macOS File-menu order (New / Open / Save / Close):
 
-### 5.3 New file: `/home/jplein/dev/jplein/wolf/crates/wolf-gnome/tests/packaged_layout.rs`
+```rust
+    ActionBinding {
+        action: "win.save",
+        accel: Some("<Control><Shift>s"),
+        ctrl_fold: None,
+        command: None,
+        status: BindingStatus::Bound,
+        note: "macOS Cmd+S; front-end-only, since the registry carries no Save command, and gives \
+               up only the Ctrl+Shift alias for <C-s> (LSP signature help in i/v/s), which is \
+               still typed as plain Ctrl+S",
+    },
+    ActionBinding {
+        action: "win.save-as",
+        accel: None,
+        ctrl_fold: None,
+        command: None,
+        status: BindingStatus::MenuOnly,
+        note: "macOS Shift+Cmd+S; menu-only because Ctrl+Shift+S is spent on win.save and no \
+               Ctrl+Shift+<letter> is free, the app.new-window precedent, so the primary menu is \
+               its only route",
+    },
+```
 
-Every test `#[ignore]`d. One shared helper `packaged_out() -> PathBuf` reading **one** environment variable, `WOLF_PACKAGE_OUT` (the store path root; the binary is derived as `<out>/bin/wolf-gnome`). It panics — loud, never a skip — when unset, empty, not a directory, or missing `bin/wolf-gnome`, and the message names `./tools/wolf-package-smoke.sh` as the command that sets it and `nix build .#wolf-gnome` as what produces it.
+3. **Insert a new `MenuSection`** between the current section 0 (New … Search in project) and section 1 (Back / Forward / Toggle sidebar / Terminal), holding `MenuItemSpec { label: "Save", action: "win.save" }` and `MenuItemSpec { label: "Save As…", action: "win.save-as" }`. Both rows carry `command: None`, so `menu_labels_match_the_registry` skips them and the labels are free — which they must be, since the registry has no Save titles. Note that in the section's comment, so nobody later adds a command without noticing the label constraint appears.
 
-Tests, each named for its claim:
+**Test constants that move** (this is the exact list):
 
-1. `the_packaged_output_carries_the_captive_init_lua_at_the_resolvers_own_path` — join `<out>/bin` with `wolf_gnome::init_lua::INSTALLED_INIT_LUA_RELATIVE` (**read the constant, do not retype the path**) and assert the file exists and is **byte-identical** to `runtime/nvim/init.lua` in the checkout. This is the join that makes the Rust resolver and the Nix install layout one contract rather than two.
-2. `the_packaged_output_carries_the_two_vendored_lua_trees_as_siblings` — `<nvim dir>/orlando/plugin/orlando.lua`, `<nvim dir>/orlando/lua/orlando/init.lua`, a `LICENSE*` under `orlando/`, `<nvim dir>/lighthouse/colors/lighthouse.lua`, a `LICENSE*` under `lighthouse/`. Also assert the exclusions actually took: no `orlando/test`, no `orlando/flake.nix`, no `orlando/README.md`, no `lighthouse/flake.nix`.
-3. `the_packaged_desktop_entry_launches_the_wrapped_binary_and_claims_no_files` — parse `share/applications/org.wolf.Wolf.desktop` as `key=value` lines under `[Desktop Entry]`; assert `Type=Application`, `Icon=org.wolf.Wolf`, `Terminal=false`, `Exec` equal to `<out>/bin/wolf-gnome` exactly, `Exec` containing no `%`, and **no `MimeType` key at all**. The last two are the ones that would rot: a later "helpful" edit adding `%U` would make the launcher hand Wolf a path `run_with_args::<&str>(&[])` discards.
-4. `the_packaged_icons_are_installed_at_the_sizes_their_directories_name` — for each of 48/64/128/256, the file exists and decodes with `cairo::ImageSurface::create_from_png` (already a dependency, for the `png` feature the appearance smoke needs) to exactly that width and height. That catches the real defect — the 48 px export installed into the 256 directory — which an existence check cannot see. Plus the scalable SVG exists, is non-empty, and its first bytes are `<?xml` or `<svg`.
-5. `the_packaged_wrapper_carries_every_variable_the_running_app_needs` — read `<out>/bin/wolf-gnome` as **bytes** and assert each of `WOLF_NVIM_BIN`, `WOLF_RG_BIN`, `WOLF_NVIM_TREESITTER_DIR`, `WOLF_PARSERS_DIR`, `FONTCONFIG_FILE`, `XDG_DATA_DIRS`, `GSETTINGS_SCHEMA_DIR` appears as a substring. Bytes and not `read_to_string`, because `wrapGAppsHook4` may produce either a shell wrapper or a `makeBinaryWrapper` binary, and the names are present either way; the test must not encode which. Also assert `WOLF_INIT_LUA` does **not** appear — setting it would make the exe-relative branch dead code.
-6. `the_packaged_output_carries_both_editor_font_families` — the four `iAWriterMonoS-*.ttf` and at least one `JetBrainsMono*` under `share/fonts/`, plus `share/wolf/fonts.conf` existing and containing both `<include` and the `<dir>` naming `<out>/share/fonts`.
+| Site | Change |
+| --- | --- |
+| `EXPECTED_BOUND_ACTIONS: [&str; 14]` | → `[&str; 15]`, gaining `"win.save"` in sorted position between `"win.paste"` and `"win.search-in-project"` |
+| `bound_set_is_exactly_this_unit` assertion message | "exactly fourteen" → "exactly fifteen"; add `Ctrl+Shift+S save` to the parenthetical chord list; add a one-element-diff paragraph for `"win.save"` in the established shape (demotion unbinds the chord, `action_for_key` stops scanning the row, `Ctrl+Shift+S` falls through to Neovim as `<C-s>`, Save becomes menu-only while the menu item advertises a chord that cannot fire; **not isolated** — `action_for_key_table`'s two `Ctrl+Shift+S` rows report `None` and `menu_never_lists_a_reserved_action` rejects the "Save" item) |
+| `bound_set_is_exactly_this_unit` doc comment | no structural change |
+| `action_for_key_table` doc comment | "the fourteen Bound chords" → "fifteen", in all three places (≈ lines 1375, 1455, 1525) |
+| `action_for_key_table` cases | **+3 rows**: `("Ctrl+Shift+s -> win.save", key_from_char('s'), ctrl \| shift, Some("win.save"))`; the shifted-glyph twin with `key_from_char('S')`; and `("Ctrl+s (no Shift) -> None, so <C-s> (LSP signature help in i/v/s) still reaches Neovim", key_from_char('s'), ctrl, None)` |
+| `ctrl_fold_table` | **no change** — its three `NoFold` rows are the font-size rows, which stay Reserved |
+| `key_name_matches_table` | **no change** |
+| `EXPECTED_APP_SCOPED_ACTIONS` | **no change** — both new rows are `win.` |
 
-### 5.4 New tests inside `/home/jplein/dev/jplein/wolf/crates/wolf-gnome/tests/smoke_headless.rs`
+**New test** `the_save_as_row_is_menu_only_and_listed`, a sibling of `the_new_window_row_is_menu_only_and_listed`, asserting `accel == None`, `ctrl_fold == None`, `status == MenuOnly`, `command == None`, and `listed` in `MENU_SECTIONS`, each with the reason spelled out in the message (see §5 for its falsifiers). `win.save` needs no counterpart: it carries a chord, so all four accelerator invariants evaluate it.
 
-**Shared helper** `packaged_cage_command(scenario, cwd) -> Command`: calls `cage_command(scenario, cwd)` — so the five isolations and the `DBUS_SESSION_BUS_ADDRESS` removal all still apply — then chains `.env_remove(...)` for every variable `flake.nix`'s `shellHook` exports that the packaged artifact must supply for itself: `WOLF_NVIM_BIN`, `WOLF_RG_BIN`, `WOLF_NVIM_TREESITTER_DIR`, `WOLF_PARSERS_DIR`, `WOLF_INIT_LUA`, `FONTCONFIG_FILE`, `RUST_SRC_PATH`, and — for the clean-launch smoke only — `XDG_DATA_DIRS` and `GSETTINGS_SCHEMA_DIR`. `XDG_RUNTIME_DIR`, `WLR_BACKENDS` and `WLR_LIBINPUT_NO_DEVICES` are **kept**: they belong to `cage`, not to the application under test.
+### D. `crates/wolf-gnome/src/command_action.rs`
 
-**Smoke P1 — `packaged_binary_renders_typed_text_under_cage`** (`#[ignore]`). Reuse `SCENARIO` verbatim with `WOLF_BIN` = `<out>/bin/wolf-gnome` and the **full** scrub including the two GTK-runtime variables. Assert cage exit 0, the capture exists, and OCR contains `OCR_WORD`. What it proves: the store binary launches under a compositor carrying none of the devShell's exports; finds its Neovim through the wrapper's `WOLF_NVIM_BIN`; finds its `init.lua` through the executable-relative branch; gets its GSettings schemas, icon theme and mime data from `wrapGAppsHook4` rather than from `shellHook`; and draws glyphs a human could read with the packaged fontconfig rather than the devShell's pin.
+- Two new `UiAction` variants, doc-commented:
+  - `SaveBuffer` — "Write the focused buffer to its own path; a buffer with no file name at all falls through to the save dialog instead, per `save_ui::save_press`."
+  - `SaveBufferAs` — "Open a native `gtk::FileDialog` to choose a new path for the focused buffer."
+- Two arms in `ui_action_for_front_end_action`: `"win.save" => Some(UiAction::SaveBuffer)`, `"win.save-as" => Some(UiAction::SaveBufferAs)`.
+- **Module doc, "The three classes"**: rewrite the "Front-end-only rows" bullet in place to enumerate the two navigation rows, About, **and Save and Save As**, with fact 2's reason: adding `Command::Save` / `Command::SaveAs` is a cross-platform change (the Swift `CommandKind` port and `CommandDispatcher`'s `default`-free switch would both need arms) that cannot be compiled or verified on this host, and macOS has no save UI to point them at.
+- **`front_end_action_rows_are_classified`'s non-vacuity message** enumerates the front-end rows by name — update it to include `win.save` and `win.save-as`.
+- **No change** to `EXPECTED_DISPATCHED_IDS`, `CASES`, `ui_action_table`, `dispatched_commands_are_the_expected_set`, `APP_SCOPED_UI_ACTIONS`, or `unimplemented_reasons_are_distinct_and_non_empty` — this unit adds no `Command`.
 
-**Smoke P2 — `the_packaged_binary_loads_the_vendored_lighthouse_and_orlando_under_cage`** (`#[ignore]`). Two launches in **one** `cage`, on the `APPEARANCE_SCENARIO` / `PREVIEW_THEME_SCENARIO` shape — a shell function invoked twice with different parameters, never two copies of the leg. Launch A is the **control**: `CARGO_BIN_EXE_wolf-gnome`, the checkout binary, which has no sibling `orlando/` or `lighthouse/` at all. Launch B is `<out>/bin/wolf-gnome`. This smoke keeps `XDG_DATA_DIRS` / `GSETTINGS_SCHEMA_DIR` in the environment, because launch A's unwrapped binary needs them to reach `activate` — say so in the doc comment, and say that P1 is where the wrapped-GTK-runtime claim is made. `WOLF_NVIM_BIN` is removed at the `Command` level and re-exported **inside the scenario for launch A only**, from a scenario variable passed under a different name (`CONTROL_NVIM_BIN`), so the packaged launch demonstrably never sees it.
+### E. `crates/wolf-gnome/src/shell.rs`
 
-Each launch types one `:lua vim.fn.writefile({…}, "<readback>")` — the same instrument `crates/wolf-ffi/tests/orlando_load.rs` and `lighthouse_load.rs` use — writing these lines:
+- `use crate::save_ui::{self, SavePress, SaveAsPress, SaveTarget};`
+- New const beside `OPEN_FILE_DIALOG_TITLE`: `const SAVE_DIALOG_TITLE: &str = "Save As";`
+- New private struct `SaveShape` (owned, so no guard is held), the `PreviewShape` precedent: `path: Option<PathBuf>`, `is_preview: bool`, `is_terminal: bool`, with a doc comment saying the three must describe the same instant.
+- `fn save_shape(&self) -> Option<SaveShape>` — `read_active_win`'s idiom exactly: one core borrow, one `read_snapshot()` bound to a local, `snapshot.current_file.clone()`, `snapshot.is_preview_active()`, and `snapshot.active_win.and_then(|w| snapshot.win_buffers.get(&w)).is_some_and(|b| b.is_terminal)`; the guard drops at function end, before any caller takes another core lock.
+- `fn save_buffer(&self)` — reads liveness, then the shape, in two separate short borrows (`open_preview`'s shape). Matches `save_ui::save_press`, exhaustively:
+  - `Write` → `self.send_input(InputEvent::Save)`
+  - `Choose` → `self.open_save_dialog()`
+  - `Refuse(reason)` → `eprintln!("wolf-gnome: save not performed: {reason}")`
+- `fn save_buffer_as(&self)` — same shape over `save_ui::save_as_press`, with `eprintln!("wolf-gnome: save as not performed: {reason}")`.
+- `fn open_save_dialog(&self)` — builds the proposal from the shape's path and `self.inner.rooted_cwd.borrow().clone()` (cloned out in its own statement, per the borrow discipline; it needs no core borrow at all and follows every re-root), then follows `open_file_dialog` **exactly**: `gtk::FileDialog::builder().title(SAVE_DIALOG_TITLE).modal(true)` plus `initial_name` and, when the proposal carries a folder, `initial_folder(&gio::File::for_path(dir))`; `let weak = Rc::downgrade(&self.inner);`; `dialog.save(Some(&self.inner.window), gio::Cancellable::NONE, move |result| …)`; inside, `upgrade(&weak)`, the same `// An Err here is overwhelmingly "the user dismissed the dialog"` comment, `if let Ok(file) = result { if let Some(path) = file.path() { if let Some(req) = save_ui::save_as_target(&path) { shell.send_input(InputEvent::SaveAs { path: req.path, force: req.force }) } } }`.
+  - *Verify against gtk4-rs 0.11:* if `FileDialogBuilder` lacks `initial_name` / `initial_folder`, call `set_initial_name(Some(&name))` / `set_initial_folder(Some(&file))` on the built dialog instead.
+- Two `perform` arms: `UiAction::SaveBuffer => self.save_buffer()`, `UiAction::SaveBufferAs => self.save_buffer_as()`.
+- **Module doc**: extend the blocking-call section with one sentence in the shape of the existing "Paste adds none" / "The project-search overlay adds NO blocking call either" sentences: Save and Save As add none, both send on the ordered input channel and the dialog is asynchronous, and the ten stand. Then state the gate's reason as the paste reason plus the modal-over-crash-overlay reason, explicitly *not* the blocking one.
 
-1. `vim.g.colors_name == "lighthouse"` → `OK`/`NO`
-2. `vim.g.loaded_orlando` truthy → `OK`/`NO`
-3. `pcall(require, "orlando")` → `OK`/`NO`
-4. `string.format("%06x", vim.api.nvim_get_hl(0, {name="Normal"}).bg or 0)`
-5. `vim.v.progpath`
-6. `vim.o.background`
+### F. `crates/wolf-core/tests/save_open.rs` — see §5.C.
 
-Assertions:
+### G. `crates/wolf-gnome/tests/smoke_headless.rs` — see §5.B.
 
-- Lines 1-3 are `OK` for launch B and `NO` for launch A. The A side is what makes the B side mean something.
-- Line 4 is `1b1b1b` for launch B — lighthouse's dark `Normal` background at the pinned commit — and something else for launch A.
-- **Line 5 is equal between the two launches.** This is property (C) measured rather than argued: launch A's captive Neovim came from the devShell's `WOLF_NVIM_BIN`, launch B's came from the packaged wrapper, and `v:progpath` reports the resolved executable in both. Equality says the package ships exactly the Neovim the Linux suite tests against. Comparing against the test process's own `WOLF_NVIM_BIN` string would **not** work and must not be substituted: `pkgs.neovim` is a wrapper and `v:progpath` resolves through `/proc/self/exe` to the unwrapped store path, so the two strings legitimately differ. Two `v:progpath` readings are comparable; a `v:progpath` and a `getExe` are not.
-- Line 6 is `dark` in both — the seeded `SMOKE_APPEARANCE`.
+### H. `crates/wolf-gnome/Cargo.toml`
 
-Plus a `grim` capture per launch and two pixel bands, decoded with the existing `decode_capture`:
+Line 3 `description` ends "; saving is still from within Neovim." — **false**. Rewrite the clause to name the native Save / Save As dialogs. Per the `macos-followups.md` row-23 precedent this is not a `CARGO_BAZEL_REPIN`: `crates/wolf-gnome/Cargo.toml` is not in `crate_universe`'s `manifests`, and a `description` string resolves no dependency.
 
-- **The lighthouse band.** A rectangle inside the pane area, below the fixture's text and derived from `OVERLAY_ORIGIN_*_EXPECTED` / `CAGE_OUTPUT_*_EXPECTED` in the manner `preview_theme_pane_area()` already establishes — never hardcoded. Assert a high fraction of it is exactly `#1b1b1b` in launch B and essentially none of it is `#1b1b1b` in launch A. Both directions, because a coincidence between lighthouse's background and the default colorscheme's would otherwise satisfy the assertion; the tests README makes the control band mandatory for exactly this.
-- **The orlando band.** The fixture is a Markdown file carrying a fenced code block whose lines are short. Orlando's `code_block` feature fills the block's rows to the grid edge — `crates/wolf-ffi/tests/orlando_bg_stress.rs`'s own doc comment states it as "(fences inclusive, `hl_eol` fill to the grid edge)", so this is established rather than hoped. Sample a rectangle in the **right margin** of a code-block row, past the longest code line and inside the grid, and assert: in launch B it is a single uniform colour **different** from the prose band's colour; in launch A it is the **same** as the prose band's. Deliberately relational rather than pinned to `#252525`, so the assertion does not encode lighthouse's `CursorLine` value or orlando's link target and survives a pin bump that changes either.
+### I. `flake.nix`
 
-Fixture rules that apply and must not be forgotten: a fresh temp cwd; a fixture name lexically unlike every asserted term (and added to the three mechanical fixture guards' tables if it enters their scope); the cursor parked off the sampled rows with a normal-mode `o` then Escape; the sparse-text page segmentation the helpers pass.
-
-**If the orlando pixel band proves not to discriminate** — measure it, do not assume — the readbacks at lines 2-3 remain the evidence and the row is ticked on those. Say so in `tests/README.md`'s "What is still unproven" in that case, in the form "the plugin is proved loaded inside the packaged app's captive Neovim; that its code-block fill reaches a pixel is not". Do not tick a row on what the mechanism implies.
-
-**Smoke P3 — `the_packaged_binary_opens_a_preview_under_cage`** (`#[ignore]`, recommended). One launch of the store binary with the full scrub, driving the existing preview leg, asserting the document's background on a pixel band the way `preview_document_follows_the_configured_appearance_under_cage` already does. Its purpose is narrow and specific: it is the only thing that would catch a packaged app whose `WebKitWebProcess` / `WebKitNetworkProcess` helpers do not resolve, which `flake.nix`'s current comment claims depends on `PATH` and which the wrapper does not reproduce. **Decision rule for the coder:** run it with no `WEBKIT_EXEC_PATH`; if it passes, do not add the variable and correct the `flake.nix` comment that claims the helpers come from `PATH`; if it fails, add `--set-default WEBKIT_EXEC_PATH "${pkgs.webkitgtk_6_0}/libexec/webkitgtk-6.0"` to `gappsWrapperArgs` and re-run. Setting a variable nothing verified is the thing to avoid in either direction.
-
-**Guard G1 — `every_shellhook_export_is_scrubbed_or_deliberately_kept`** (pure, **not** ignored, runs in the ordinary suite). Read `flake.nix` with a path rooted at `CARGO_MANIFEST_DIR`, collect every `export <NAME>=` inside the `shellHook`, and assert each name appears either in the packaged smokes' removal list or in a short, explicitly-named `KEPT_FOR_THE_COMPOSITOR` allowlist (`XDG_RUNTIME_DIR`, `WLR_BACKENDS`, `WLR_LIBINPUT_NO_DEVICES`). Without it, the next `flake.nix` export silently leaks into the packaged runs and every packaged claim quietly becomes an inherited-environment claim — the same distance-between-fixture-and-assertion problem the three fixture-name guards exist for. Assert from both sides: at least one export found (non-vacuous) and no unclassified name.
-
-### 5.5 New file: `/home/jplein/dev/jplein/wolf/tools/wolf-package-smoke.sh`
-
-Executable, `set -euo pipefail`, run from the repository root. Roughly: `nix build .#wolf-gnome --print-out-paths` (or `nix build` then `readlink -f result`) into `WOLF_PACKAGE_OUT`; then `nix develop --command cargo test -p wolf-gnome --test packaged_layout -- --ignored --nocapture` and `nix develop --command cargo test -p wolf-gnome --test smoke_headless -- --ignored --nocapture packaged_`, both with `WOLF_PACKAGE_OUT` exported. It prints the resolved store path before it starts, because that path is the evidence's subject and a recorded run must name it.
-
-This is the "one command that always sets the variable" that makes the ignore honest. It is also the command `build.md` records as the packaged-artifact evidence.
+The `# GATE-REQUIRED:` comment at 559-561: bump the smoke count for the two new scenarios, and reconcile the "sixty-four … the other eight are pure guards" phrasing against `tests/README.md`'s "nine guards … `65 passed`" — **these already disagree**. Count the `#[test]` functions in `smoke_headless.rs` that do not take `CAGE_LOCK`, and make both documents state the counted number. Comment-only edit; no package, derivation or attribute.
 
 ---
 
-## 6. Test plan
+## 5. Test plan
 
-Each behavior names the smallest source edit that falsifies it.
+Every behaviour below names the smallest source edit that would falsify it — the revert the coder applies to prove the test can go red.
 
-### 6.1 `init_lua.rs` unit table (in-module `#[cfg(test)] mod tests`, no environment)
+### A. Seam tables, in `save_ui.rs`'s `#[cfg(test)] mod tests`
 
-| Behavior | Falsifying revert |
-| --- | --- |
-| A non-empty `env_override` wins over an existing exe-relative candidate | delete the `env_override` branch |
-| A non-empty `env_override` wins even when the path does **not** exist (the predicate answers `false` for everything) | add an `exists` check to the `env_override` branch — this is the case that pins the deliberate asymmetry |
-| An all-whitespace or empty `env_override` is ignored and the next branch runs | drop the `.trim().is_empty()` test |
-| `exe_dir` + a predicate answering `true` yields `<exe_dir>/../share/wolf/nvim/init.lua` | change `INSTALLED_INIT_LUA_RELATIVE` |
-| `exe_dir` + a predicate answering `false` falls through to `manifest_fallback` | delete the `exists` guard on branch 2 — this is the case that keeps `cargo run` and all 63 existing smokes working |
-| `exe_dir == None` falls through to `manifest_fallback` | make branch 2 unwrap |
-| The joined candidate is passed to the predicate **verbatim** (record the exact path the predicate saw) | insert a `canonicalize` |
-| Branch order: env beats exe-relative beats fallback, asserted with all three available at once | swap any two branches |
+Follow `nav_ui.rs`'s structure: domain consts at the top (`ALL_LIVENESS_INPUTS: [Option<Liveness>; 4]`, `ALL_TARGETS: [SaveTarget; 7]` — `NAMED`, `NAMED_NESTED`, `UNNAMED`, `EMPTY_PATH`, `PREVIEW`, `PREVIEW_WITH_PATH`, `TERMINAL_WITH_PATH`), counts written as independent literals (the `SWEEP_INPUTS` / `NAMED_BUTTON_CASES` precedent — never as the product of the arrays' own lengths, which is a tautology), and a copied `is_sentence_cased` helper.
 
-### 6.2 `vendored_pins.rs`
+| # | Behaviour | Test | Falsifying edit |
+| --- | --- | --- | --- |
+| 1 | Save writes a named buffer and prompts only for a nameless one | `save_press_table`, 4 × 7 rows with a literal count assertion | In `save_press`, change the `save_name(..) == None` arm from `Choose` to `Write`. Red on the `UNNAMED` and `EMPTY_PATH` rows under `Alive`; that is the arm that turns Save on a nameless buffer into a silent `E32`. |
+| 2 | A named-but-not-on-disk buffer still writes | the `NAMED` row of the same table, whose path is `/home/u/proj/Untitled.md` with a comment naming fact 3 | Add an `exists` probe and redirect to `Choose` — i.e. the rejected design. Red on `NAMED` alone. (Documented as the deliberate non-behaviour, so a later agent reading the table sees the choice.) |
+| 3 | Only a live core may act | `only_a_live_core_may_save`, whole-domain sweep collecting every non-`Refuse` input, asserted against a literal expected set, plus a non-vacuity assertion that at least one accepts | Change the `Some(Liveness::Dead)` arm to fall through to the live behaviour. Red here and in `save_press_table`; the pair moving together is what says the classification changed. |
+| 4 | Save As never writes without a dialog | `save_as_press_table` + `only_a_live_core_may_open_the_save_dialog`, same shape | Make `save_as_press` accept on `Dead`. Red on the modal-over-crash-overlay row. |
+| 5 | A preview scratch and a terminal are refused, and liveness is read first | rows in both tables: `PREVIEW_WITH_PATH` under `NotResponding` must give the *wedged* reason, not the preview one | Move the `is_preview` check above the liveness match. Red on that row only. |
+| 6 | The six refusal reasons are non-empty, lowercase and distinct | `save_press_reasons_are_distinct_and_non_empty` and its `save_as_press` twin, six probes each | Give the `Dead` and `NotResponding` arms the same string. |
+| 7 | The dialog opens in the buffer's own folder | `save_dialog_proposal_table`, seven rows (§3) | Replace `path.parent()` with `cwd` in the named branch. Red on the `NAMED_NESTED` row alone — isolated. |
+| 8 | A nameless buffer proposes `Untitled.md` in the window's cwd | rows 3–5 and 7 of the same table | Change the fallback name. Red on four rows plus behaviour 9. |
+| 9 | The proposed name is the spelling the rest of the app produces | `the_untitled_save_name_is_the_new_buffer_spelling`, comparing `UNTITLED_SAVE_NAME` against a **re-typed literal** with the reason (it must match `runtime/nvim/init.lua`'s `wolf_next_untitled` at `i == 1`, or Save As proposes a name the app never makes and the buffer stops being markdown-typed) | Re-pin the const. **This one has no `src/` falsifier by construction** — it is a tripwire on a pin, the `the_shared_smoke_config_pins_the_appearance_every_ocr_smoke_assumes` shape. Say so in the doc comment. |
+| 10 | The chosen path is passed through verbatim | `save_as_target_table`, including a `/home/u/proj/notes` row with no extension | Append `.md` when `extension()` is `None`. Red on that row alone — and its real cost is that GTK's overwrite confirmation was about a different file. |
+| 11 | A relative or nameless choice is refused | rows in the same table | Drop the `is_absolute()` filter. Red on the relative row alone. |
+| 12 | The front-end always requests a forcing `saveas` | every accepting row of `save_as_target_table` asserts `force == true`, with the reason in the message | Change `force` to `false`. Red on every accepting row. **State honestly in the doc comment**: this pins what the front-end *requests*; that the request has the effect it claims is `crates/wolf-core/tests/save_open.rs`'s. |
 
-| Behavior | Falsifying revert |
-| --- | --- |
-| A Nix/Bazel commit mismatch fails, per asset | change one hex digit of `wolfVendoredPins.orlando.commit` in `flake.nix` |
-| A Nix/Bazel sha256 mismatch fails, per asset | change one hex digit of `wolfVendoredPins.lighthouse.sha256` |
-| All three assets are checked, not just the first | change `ia-writer-mono`'s commit and confirm the failure names *that* asset |
-| Two broken rows produce two named mismatches, not one | change two assets at once (this is why mismatches are collected rather than asserted in a loop) |
-| The check is non-vacuous on the Bazel side | reword `_COMMIT = "…"` in one `.bzl` to `_COMMIT= "…"` with no space and confirm the zero-match arm fires with its own message rather than the check passing |
-| The Nix block's arity is pinned | add a fourth entry to `wolfVendoredPins` |
+### B. Compositor smokes, in `crates/wolf-gnome/tests/smoke_headless.rs`
 
-### 6.3 `packaged_layout.rs` (all `#[ignore]`d; falsifiers are `flake.nix` edits)
+Both are **non-OCR readback smokes** — the observable is a file on disk, read by the Rust side. That avoids the block-cursor, page-density and fixture-name-vs-OCR-term rules entirely. Both route through `cage_command(SCENARIO, &cwd)` (never a second `Command::new("cage")`), take `CAGE_LOCK`, call `require_smoke_env()`, use `make_temp_cwd()` + `write_relaunch_fixtures`, `clear_evidence` on every readback path first, and register their fixture, readback and target file names in `RELAUNCH_FIXTURE_NAMES` so the generic loop keeps them clear of every other smoke's asserted terms.
 
-| Behavior | Falsifying revert |
-| --- | --- |
-| `init.lua` sits where the resolver looks and is byte-identical to the checkout's | change the `postInstall` destination to `share/wolf/init.lua` |
-| Both vendored trees are siblings of it | delete the `wolfLighthouse` copy from `postInstall` |
-| The Bazel exclusion list took | add `test/` to `wolfOrlando`'s `installPhase` and watch the "no `orlando/test`" assertion fire |
-| `Exec` is the absolute wrapped path and carries no field code | change `Exec=` to `wolf-gnome`, and separately to `$out/bin/wolf-gnome %U` |
-| No `MimeType` | add `MimeType=text/markdown;` |
-| Each icon's pixel size matches its directory | install the 48 px export into the 256 directory |
-| The wrapper carries every promised variable | delete one `--set-default` line from `gappsWrapperArgs` |
-| `WOLF_INIT_LUA` is never wrapped in | add `--set-default WOLF_INIT_LUA …` |
-| Both font families ship and the additive config names them | delete the JetBrains Mono copy; separately, delete the `<include>` line from the generated `fonts.conf` |
+**Smoke 1 — `ctrl_shift_s_saves_the_focused_buffer_to_disk_under_cage`** (mandatory).
 
-### 6.4 Packaged compositor smokes (all `#[ignore]`d)
+Scenario, in the `NAVBACK_SCENARIO` shape (poll knobs, `wait_file`, exit codes `11` / `24` / `25`): launch; `:e $SAVE_FILE`; `i`, type `$SAVE_SENTINEL`, Escape; write `$BEFORE` from `bufname('%')` (precondition, so a failure below is attributable to the chord and not to a lost keystroke); fire `wtype -M ctrl -M shift -k s -m shift -m ctrl`; settle; teardown. **The scenario must contain no `:w` anywhere** and must not quit through a path that saves.
 
-| Behavior | Falsifying revert |
-| --- | --- |
-| P1: the store binary launches and renders with none of the devShell's exports | delete `--set-default WOLF_NVIM_BIN` from `gappsWrapperArgs` (the app prints `failed to start core: WOLF_NVIM_BIN is not set`, opens no window, and the scenario exits 11) |
-| P1: it finds `init.lua` by its own path | delete branch 2 from `init_lua::resolve_init_lua` (Neovim gets a `-u` naming the build-tree path, which does not exist in the packaged run; core never attaches) |
-| P1: the GTK runtime comes from the wrapper, not the shell | drop `pkgs.gsettings-desktop-schemas` from `buildInputs` |
-| P2: lighthouse is active in the packaged app | delete the `wolfLighthouse` copy from `postInstall` — readback line 1 and the pixel band both fire |
-| P2: the control leg is discriminating | add the lighthouse tree next to the checkout's `runtime/nvim/init.lua` and confirm launch A's assertions fire, then remove it. This is the check that the A/B is an A/B |
-| P2: orlando is loaded in the packaged app | delete the `wolfOrlando` copy from `postInstall` — readback lines 2-3 fire |
-| P2: the packaged Neovim is the tested Neovim | point `wolfNeovim` at `pkgs.neovim` from the main `nixpkgs` input while temporarily bumping that input, and confirm the `v:progpath` equality fires. If the two inputs cannot be made to differ cheaply, record that this assertion has no executed red run and say so in `tests/README.md`'s "What is still unproven" — do not claim a red run that was not taken |
-| G1: the scrub list tracks the shellHook | add a new `export WOLF_ANYTHING=…` to `flake.nix`'s `shellHook` and confirm G1 fires |
+Rust assertions:
+1. `status.success()` — precondition, no revert.
+2. `$BEFORE` names `SAVE_FILE` — precondition.
+3. **The discriminator**: the fixture file on disk contains `SAVE_SENTINEL`. Nothing else in the scenario writes it, so its presence is the chord's doing.
 
-### 6.5 Existing tests that must keep passing unchanged
+*Falsifying edit:* replace `shell::perform`'s `UiAction::SaveBuffer` arm body with `{}`. The chord still resolves and the action still activates; nothing writes; the file still holds only its heading. Predicted isolated among the smokes; every seam test stays green. The coder records the measured red per `tests/README.md`'s "A red-run demonstration is a deliverable".
 
-`smoke_headless`'s 63, `release_profile.rs` (both halves — note its ELF comment already cites `app.rs::init_lua_path` baking `CARGO_MANIFEST_DIR`, which stays true, since branch 3 still holds the macro), `paint_golden.rs`, `roundtrip_nvim.rs`, `mouse_nvim.rs`, `frame_metrics_gate.rs`, every `#[cfg(test)]` seam table, and the whole `wolf-core` / `wolf-ffi` suite. Nothing in this unit may weaken or delete an assertion.
+**Smoke 2 — `the_save_dialog_writes_a_named_file_under_cage`** (judged sound; include).
+
+The route matters and must be stated plainly: **Save As has no chord and its menu item is unreachable** (the primary-menu popover is a documented deliberate test gap). So this smoke reaches the dialog through the *other* door — `Ctrl+Shift+S` on a **nameless** buffer, which `save_press` answers `Choose`. That is a genuine end-to-end path through `save_press`'s `Choose` arm, `save_dialog_proposal`'s unnamed branch, `open_save_dialog`, the callback, `save_as_target`, and `InputEvent::SaveAs`.
+
+Environment: chain `.env("GDK_DEBUG", SAVE_AS_GDK_DEBUG)` onto `cage_command`, with `const SAVE_AS_GDK_DEBUG: &str = "no-portals";` and a loud early assertion in the smoke body pinning that value against a re-typed literal, spelling out fact 4's hazard: without it GTK takes the portal route to the developer's real session bus, `cage` implements no `zxdg_exporter_v2`, and **a modal file dialog opens on the developer's desktop and the smoke hangs**.
+
+Scenario: launch; `:enew` (a *typed* `:enew`, which leaves the buffer genuinely unnamed — the front-end's own New Buffer would name it); `i`, type `$SAVEAS_SENTINEL`, Escape; `Ctrl+Shift+S`; settle for the dialog to present; **select-all in the name entry** (`wtype -M ctrl -k a -m ctrl`) then `wtype -- "$SAVEAS_TYPED_NAME"`; `wtype -k Return`; settle; teardown. Assert on disk that `<cwd>/$SAVEAS_TYPED_NAME` exists and contains `SAVEAS_SENTINEL`.
+
+*The one step the coder must verify by running it*: whether the pre-filled `Untitled.md` is replaced by the typed name or appended to. Fact 4 measured `wtype` of a name plus Return returning `Ok(<cwd>/typedname.md)`, but not against a pre-filled entry. If the first run produces a concatenated name, keep the select-all and adjust; do not weaken the assertion to a glob.
+
+*Falsifying edit:* replace `shell::perform`'s `UiAction::SaveBuffer` arm's `Choose` branch with a no-op (or make `save_press` answer `Refuse` for a nameless buffer). No dialog opens, the typed name lands in the Neovim buffer instead, no file appears, and the readback poll fails.
+
+**What it proves and does not prove** — record verbatim in `tests/README.md`:
+- Proves: the action is installed, the seam's `Choose` answer reaches a real `gtk::FileDialog`, the dialog's `Ok(GFile)` reaches the callback, and the resulting `InputEvent::SaveAs` writes the file — against **GTK's in-process fallback**.
+- Does **not** prove: anything about the portal route, which is the route a real desktop session takes (`gdk_display_should_use_portal` answers true wherever GDBus reaches a session bus). A different widget, a different overwrite confirmation, a different `GFile` producer.
+- Does **not** prove: the overwrite confirmation, since the target does not exist, nor the front-end's `force: true` end to end. An overwrite smoke would have to keyboard-drive GTK's confirmation alert, which is fragile; recorded as unproven with the recipe rather than written.
+
+### C. `wolf-core`, in `crates/wolf-core/tests/save_open.rs`
+
+**No `BUILD.bazel` change is needed**, and that is the reason to put these here rather than in a new file: `crates/wolf-core/BUILD.bazel:1259-1281` already lists `tests/save_open.rs` and `tests/common/mod.rs` in the `rust_test(name = "save_open")` target. **If the coder creates a new test file instead**, it needs a new `rust_test` mirroring that block exactly — `name`, both `srcs`, `crate_root`, `tags = ["no-sandbox"]`, `size = "small"`, `edition = "2021"`, `data = ["//bazel/nvim:nvim_tree", "//runtime/nvim:init.lua"]`, the three `WOLF_*` env entries, and `deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True)` — and that wiring cannot be verified from this host. Do not create a new file.
+
+| # | Behaviour | Test | Falsifying edit |
+| --- | --- | --- | --- |
+| 13 | An existing `SaveAs` producer keeps non-forcing semantics | update `save_as_new_path` to `force: false`, with a comment saying why `false` is right for a brand-new path and that it is what keeps the `E13` arm reachable | — (unchanged behaviour) |
+| 14 | `saveas` without `force` refuses to clobber | new `save_as_refuses_to_overwrite_without_force`: a temp `.md` holding `ORIGINAL_TEXT`; a core on a *different* named buffer holding `SAVE_TEXT`; `SaveAs { force: false }` at the existing path; after a bounded settle assert the file still holds `ORIGINAL_TEXT` and not `SAVE_TEXT`, **and** that `core.read_snapshot().current_file` is still the original buffer's path — `:saveas` fires `BufFilePost`, so a successful rename would have moved it. The positive readback is what keeps the negative from being a timing artefact. | Change the apply arm to always `saveas!`. Red here; `save_as_with_force_overwrites` stays green. |
+| 15 | `saveas!` overwrites | new `save_as_with_force_overwrites`: same setup with `force: true`; poll the existing file with `wait_for_file_contains` until it holds `SAVE_TEXT`, and assert `current_file` became the target | Drop the `!` — i.e. always plain `saveas`. Red here on the poll timeout; test 14 stays green. The two isolate each other. |
+
+### D. What is deliberately **not** tested, and why
+
+- The overwrite confirmation itself. It is GTK's or the portal's, never this crate's; nothing here observes it.
+- The Save As **menu item's** own activation — the primary-menu popover is an existing documented deliberate gap.
+- The `is_preview` / `is_terminal` / non-`Alive` refusal arms end to end: a refusal returns before any widget is touched, which is exactly the class `tests/README.md` already records as seam-table-only for `buffer_picker::open_decision` and `nav_ui::nav_press`.
+
+---
+
+## 6. Documentation
+
+Exactly one owner per fact. Listed with what each must say.
+
+**Must change:**
+
+1. **`crates/wolf-gnome/src/README.md`**
+   - **New** `#### save_ui.rs` entry, alphabetically between `render.rs` and `scrollbar.rs`. Purpose / Public API / Decisions / Gotchas, ≈200 words. Decisions carry: the named-but-not-on-disk rule and fact 3 as its reason; why the proposal takes the buffer's own parent; why no extension is appended; why the empty-state cwd diverges from `tabs_ui::new_tab_cwd`. Gotchas: the gate is not the blocking-call gate — link to DECISIONS.
+   - **`command_action.rs` entry, edited in place**: the `ui_action_for_front_end_action` bullet currently reads "the two navigation rows and About". Rewrite that clause to include Save and Save As.
+   - **`shell.rs` entry, edited in place**: one Decisions bullet beside the `preview_shape` one — Save and Save As read one `save_shape` pass each and issue no blocking call; the dialog carries `save_ui`'s proposal out and decides nothing.
+   - **`actions.rs` entry**: **no edit required.** Nothing in it states a count or names `Ctrl+Shift+S`, and its "promoting a reserved row" gotcha stays true (three Reserved rows remain). Do not pad it.
+   - **`lib.rs` entry**: no edit — it does not enumerate.
+
+2. **`crates/wolf-gnome/DECISIONS.md`**
+   - **"The accelerator namespace"**: extend the New Window paragraph with one sentence naming Save As as the second instance of the same rule (macOS ⇧⌘S; `Ctrl+Shift+S` spent on `win.save`; menu-only). Nothing there names `win.sidebar-show-project`, so its deletion needs no edit here.
+   - **"Crash and stall recovery"**: **the enumeration of ten does not change.** Add one sentence beside the existing "Paste adds none" / "The project search adds none either" sentences, worded so it can never be read as Save joining the inventory: Save and Save As add none — both ride the ordered input channel and the dialog is asynchronous — and are nevertheless gated on `Alive` for the paste path's reason, with the added point that a native modal over the opaque overlay would cover the Restart button that is the only route out of a stall.
+   - **"Present limitations"**: **delete** "No save or save-as dialog; saving is done from within Neovim. Open File and Open Folder are native dialogs." Replace with a present-tense bullet stating what is true: Save and Save As are front-end-only rows with no registry command, so **neither appears in the command palette**, whose rows come from `COMMAND_SPECS`; Save carries `Ctrl+Shift+S` and Save As is menu-only; and the overwrite confirmation belongs to GTK or to the desktop portal, so this front-end never observes it and cannot report a clobber it did not perform. (The evidence-side portal/cage fact goes to `tests/README.md`, below — the pair together covers the task's "palette gap and portal/cage limitation" with no duplication.)
+
+3. **`crates/wolf-gnome/README.md`** — line 18's "Saving is `:w` or `:saveas` from inside Neovim." is false. Rewrite in place: saving goes the same way as opening, through `InputEvent::Save` / `InputEvent::SaveAs`, reached from the primary menu's Save and Save As items, from `Ctrl+Shift+S`, and from `:w` / `:saveas` typed inside Neovim.
+
+4. **`crates/wolf-gnome/tests/README.md`**
+   - `smoke_headless.rs` entry: the counts (56 → 58, non-OCR 19 → 21, `65 passed` → the counted number), and add "saving" to the "scenarios span…" list.
+   - **Smoke conventions**: a new paragraph — a smoke that opens a native `gtk::FileDialog` **must** export `GDK_DEBUG=no-portals`, because GDBus reaches the developer's real session bus even with `DBUS_SESSION_BUS_ADDRESS` removed, so without it the smoke opens a modal dialog on the developer's desktop and hangs until it is answered. Per-smoke scenario environment, never production behaviour.
+   - **"What is still unproven"**: three entries — the portal route is undriven (what smoke 2 does and does not prove, §5.B); the overwrite confirmation and the front-end's `force: true` are unexercised end to end, with the `wolf-core` pair named as what covers the effect; and Save As's menu item activation, which inherits the primary-menu gap.
+   - **"Deliberate test gaps"**: the "native file dialogs … no dialog can be driven at all" bullet is now **false**. Rewrite in place: Open File and Open Folder are still undriven (trivial callback bodies; Open Folder's re-root is covered by the Open Recent smoke through the same `chdir_to`), while the save dialog is driven under GTK's in-process fallback.
+
+5. **`feat-list.md`**
+   - Line 99: tick Linux and put the branch in the Branch column — `| Native file dialogs (open / save / save-as) | `linux-feat/save-dialogs` | [x] | [x] |`. The macOS half predates any named branch, so the column carries the Linux branch alone (the column already mixes one-sided entries).
+   - Line 105: rewrite the partial-coverage paragraph. It must stop saying a row is unticked. New content: all three dialogs are native on both front-ends; on Linux Save and Save As are front-end-only rows with no registry command, so they reach the user from the primary menu and (Save alone) `Ctrl+Shift+S`, and not from the command palette, whose rows come from the registry.
+   - Lines 270-277: **delete item 2**, renumber 3 → 2 and 4 → 3. Item 1 (the preview coalesce) stays. **Change no other wording.**
+
+6. **`architecture.md`** — line 203 spells `SaveAs { path }`; it becomes `SaveAs { path, force }`. That is the only architecture.md edit; the crate boundaries and contracts are unchanged.
+
+7. **`crates/wolf-core/src/README.md`** — the `input.rs` entry's Public API bullet is generic ("…open (optionally at a line/column), save, chdir…") and needs no change, but add **one Decisions bullet**: `SaveAs` carries `force`, applied as `saveas!`, because a caller with its own confirming dialog must not lose the write to `E13: File exists`, which the input pump degrades to a warning nobody sees.
+
+8. **`crates/wolf-core/tests/README.md`** — line 478 currently ends "…and `InputEvent::SaveAs` creating a path that did not exist." Edit in place to add the two new cases: a non-forcing `SaveAs` leaving an existing file and the buffer's name untouched, and a forcing one replacing both.
+
+9. **`macos-followups.md`** — a new ledger row is **mandatory** under the standing rule at line 5 (`InputEvent` is `wolf-ffi`-consumed public API). Content: `InputEvent::SaveAs` gained `force: bool`; zero macOS producers today, so nothing compiles differently, but a future `NSSavePanel` must decide its own value since the panel confirms an overwrite the same way; `crates/wolf-core/tests/save_open.rs` gained two real-Neovim cases and **needs no `BUILD.bazel` change** (already wired as `rust_test(name = "save_open")`); `Cargo.toml`/`Cargo.lock` untouched, so no `CARGO_BAZEL_REPIN`; `crates/wolf-gnome` has no Bazel target. Also amend the existing `flake.nix` comment-chain row (row 12's habit) with the new smoke count.
+
+10. **`flake.nix`** — the `# GATE-REQUIRED` comment (§4.I).
+
+**Must NOT change, and why:**
+
+- **`build.md`** — no build, run or test command changes. The two new smokes run in the existing `nix develop --command cargo test -p wolf-gnome`, and the `wolf-core` cases in the existing target. `GDK_DEBUG=no-portals` is per-smoke scenario environment, owned by `tests/README.md`, not a developer-facing command.
+- **`command-lifecycle.md`** — this unit adds no `Command`, no registry row, no palette row and no drain path, so nothing in it goes stale. (Grep confirms it names neither Save nor `ui_action_for_front_end_action`.)
+- **`runtime/nvim/README.md`** — no Lua changes.
+- **`crates/wolf-gnome/src/actions.rs`'s README entry** — see item 1; nothing in it is falsified.
+- **`crates/wolf-macos/**`** — nothing to change; fact 2 is why.
 
 ---
 
 ## 7. Implementation order
 
-1. `crates/wolf-gnome/src/init_lua.rs` (new module + its unit tables).
-2. `crates/wolf-gnome/src/lib.rs` — `pub mod init_lua;` and the `//!` bullet. Compiles.
-3. `crates/wolf-gnome/src/app.rs` — rewrite `init_lua_path` as glue. `cargo build -p wolf-gnome` and `cargo test -p wolf-gnome --lib` green here; run the full `cargo test -p wolf-gnome` once to prove the fallback branch still carries all 63 smokes before any flake work.
-4. `flake.nix` — `wolfVendoredPins` and the `iaWriterMono` refactor **only**. `nix develop --command true` must still enter the shell; nothing else changed.
-5. `crates/wolf-gnome/tests/vendored_pins.rs`. Green against the refactor, and red under a one-digit edit.
-6. `flake.nix` — the `nixpkgs-runtime` input, `pkgsRuntime`, `wolfNeovim` / `wolfRipgrep` / the treesitter re-sourcing, and the `linuxShell` swap. Re-enter the shell; confirm `WOLF_NVIM_BIN` is the same store path as before (it must be — same rev).
-7. `flake.nix` — `wolfOrlando`, `wolfLighthouse`. `nix build` them individually first (`nix build .#packages.x86_64-linux.wolf-gnome` is not yet defined; build the derivations through a temporary `nix eval`/`nix build -f` or simply proceed to step 8 and inspect the output tree).
-8. `flake.nix` — `wolfGnomePackage` and the `optionalAttrs` outputs block. `nix build .#wolf-gnome` must succeed, and `nix eval --raw .#devShells.aarch64-darwin.default.drvPath` must still succeed (the Darwin laziness re-check the ledger's existing rows perform).
-9. `tools/wolf-package-smoke.sh`.
-10. `crates/wolf-gnome/tests/packaged_layout.rs`. Run it through the script; iterate on `postInstall` until green.
-11. `smoke_headless.rs` — guard G1 first (pure, fast, and it constrains the helper), then `packaged_cage_command`, then P1, then P2, then P3.
-12. Documentation, §8.
-13. The full Linux verification gate from `build.md`, then the packaged-artifact command.
+Every intermediate state compiles.
+
+1. **`wolf-core`**: add `force` to `InputEvent::SaveAs` and the `saveas!` / `saveas` apply arm. This breaks the single construction site — fix `crates/wolf-core/tests/save_open.rs`'s `save_as_new_path` to `force: false` in the same step. Run `cargo test -p wolf-core --test save_open`.
+2. **`crates/wolf-gnome/src/save_ui.rs`** plus `pub mod save_ui;` in `lib.rs`. Write the seam and its `#[cfg(test)] mod tests` (§5.A). Run `cargo test -p wolf-gnome --lib`.
+3. **`command_action.rs`**: the two `UiAction` variants and the two `ui_action_for_front_end_action` arms. This makes `shell.rs::perform` non-exhaustive — go straight to step 4.
+4. **`shell.rs`**: the title const, `SaveShape`, `save_shape`, `save_buffer`, `save_buffer_as`, `open_save_dialog`, the two `perform` arms. Build.
+5. **`actions.rs`**: delete the `win.sidebar-show-project` row; add the two new rows and the new `MENU_SECTIONS` section. Then move the test constants (§4.C) and add `the_save_as_row_is_menu_only_and_listed`. Run `cargo test -p wolf-gnome --lib`.
+6. **`command_action.rs` tests**: update `front_end_action_rows_are_classified`'s non-vacuity message and the module doc's class bullet.
+7. **`wolf-core` tests**: add tests 14 and 15 to `save_open.rs`. Run them, then run each falsifying edit (§5.C) and record the measured reds.
+8. **Smoke 1**, with its consts registered in `RELAUNCH_FIXTURE_NAMES`. Run it; run the `UiAction::SaveBuffer` revert and record the red.
+9. **Smoke 2**, with `SAVE_AS_GDK_DEBUG` and its pin assertion. Run it (watch the first run for the pre-filled-name behaviour); run its revert and record the red.
+10. **Seam falsifying edits** for §5.A rows 1, 3, 4, 5, 7, 10, 11, 12; record each measured red and its isolation.
+11. **Docs** (§6), in the listed order, then `prettier --write` on every Markdown file touched and `./tools/lint/markdown_check.sh <files>`.
+12. Full gate: `nix develop --command cargo test -p wolf-core`, `... -p wolf-gnome`, `nix develop --command cargo clippy --workspace --all-targets`.
 
 ---
 
-## 8. Documentation, per file
+## 8. Dependencies
 
-- **`build.md`** — §"The optimized build" line 55: the parenthetical "because the binary resolves the captive `init.lua` through a compile-time path into its own build tree" is now the *third* branch, not the rule; rewrite it to say the checkout binary resolves the captive `init.lua` from the checkout, and link the packaged section. Add a new subsection under "Linux and NixOS (Cargo)" — the `nix build` command, what the output carries (`bin/`, `share/wolf/nvim/`, `share/applications/`, `share/icons/hicolor/`, `share/fonts/`), how a NixOS configuration consumes it as a flake input, the `fonts.packages` note, and the packaged-evidence command `./tools/wolf-package-smoke.sh`. The paragraph at lines 86-88 about running outside the devShell stays true and stays.
-- **`feat-list.md`** — tick the four Linux boxes (Foundations "Neovim bundled into the shipped application"; Appearance "Application icon", "Vendored `orlando` rendering plugin", "Vendored `lighthouse` colorscheme") with `linux-feat/nixos-package` in the Branch column. Rewrite line 27 (the Foundations note claims "there is no packaged Linux application that carries its own Neovim the way `Wolf.app` does"). Rewrite line 206 (the Appearance note claims orlando and lighthouse are "bundled by Bazel into `Wolf.app` only … on Linux they are simply not there"), naming the packaged sibling layout and the evidence. Rewrite line 252 (Reliability note: "the Linux binary runs from the tree it was built in, because the captive `init.lua` is resolved through a compile-time absolute path"). Add a sentence to line 198 about the packaged app's font resolution if the mechanism lands. Delete "Suggested order of work" item 1 and **renumber 2-5 as 1-4**.
-- **`crates/wolf-gnome/DECISIONS.md`** — §"Platform and build", the paragraph at line 21 is made false by this unit and must be *rewritten in place*, not appended to: state the three-branch resolution, that the executable-relative branch is what makes a packaged binary work, that the `CARGO_MANIFEST_DIR` fallback is what keeps `cargo run` and the smokes working, and that the `WOLF_INIT_LUA` override is deliberately not existence-checked. Same section: a sentence that the crate now has a package output in `flake.nix` and that its evidence comes from ignored smokes rather than the default suite. §"The headless smoke test": one sentence that a set of ignored smokes runs the store artifact under the same compositor and that `tests/README.md` owns them.
-- **`crates/wolf-gnome/src/README.md`** — a new `#### init_lua.rs` entry in alphabetical position (between `input.rs` and `layout.rs`), Purpose / Public API / Decisions / Gotchas per the template, under the 200-word budget. The Decisions bullets are the two asymmetries: the override is not existence-checked while the exe-relative guess is, and `INSTALLED_INIT_LUA_RELATIVE` is the contract with the Nix install layout that `packaged_layout.rs` joins on. The Gotcha is the `wrapGAppsHook4` wrapper and `current_exe()`. Also edit the existing `#### app.rs` entry's Public API bullet, which names `init_lua_path` among the four `pub(crate)` helpers — it now reads the environment and `current_exe` and delegates the rule.
-- **`crates/wolf-gnome/README.md`** — line 31 says "Three environment variables matter"; `WOLF_INIT_LUA` makes it four. Add a short "Packaging" line pointing at `build.md` for the Nix package (the outside view belongs here; the commands belong there).
-- **`crates/wolf-gnome/tests/README.md`** — new `#### vendored_pins.rs` and `#### packaged_layout.rs` entries; update `#### smoke_headless.rs`'s counts (the pure guard makes it 64 passed, plus N ignored) and its Covers/Gotchas to name the packaged smokes and the one command that runs them; add whatever the P2 measurement leaves unproven to "What is still unproven", in the exact form the section uses.
-- **`resources/icons/README.md`** — the GNOME bullet's "**reserved for a future GNOME pass and not consumed by any build today**" is falsified. Rewrite the bullet, and rewrite "## What the build consumes" to name both consumers: the two macOS 1024×1024 masters through `BUILD.bazel`, and the four GNOME **light** PNGs plus the scalable SVG through `flake.nix`'s package, installed as `org.wolf.Wolf.{png,svg}` under `share/icons/hicolor/`. State why the dark export is not installed (hicolor has no appearance axis; both exports are self-contained round icons with their own background plate). Add an "Updating the GNOME icon" step mirroring the macOS one.
-- **`tools/README.md`** — one bullet for `wolf-package-smoke.sh`.
-- **`macos-followups.md`** — one new row, dated, branch `linux-feat/nixos-package`, carrying: (a) the Neovim patch divergence (Nix 0.12.2 / Bazel 0.12.3 / unstable 0.12.4), that it predates this unit, that the Linux side is now rev-pinned so it cannot drift further, and that closing it means either an off-cache source build or a Linux re-gate; (b) the obligation to add the reciprocal "BUMP BOTH TOGETHER" docstring note to `bazel/orlando/extensions.bzl` and `bazel/lighthouse/extensions.bzl` (this unit deliberately did not touch them) and to point them at `crates/wolf-gnome/tests/vendored_pins.rs`; (c) the standing `flake.nix`-changed spot check the ledger's other rows carry, with the Darwin `drvPath` eval result from step 8; (d) that the `.desktop` entry declares no `MimeType` and no field code because `run_with_args::<&str>(&[])` discards argv, which is a shared front-end property worth reconciling if macOS ever gains a document-type association.
-- Run `prettier --write` on every Markdown file touched, and `./tools/lint/markdown_check.sh` on them.
-
-`architecture.md` needs no change — nothing here crosses a crate boundary or changes a contract between crates.
+**None.** `gtk::FileDialog::save` and the `initial_name` / `initial_folder` properties are already in the pinned `gtk4` 0.11.x; `gio::File::for_path` is already used in this crate; `wolf_core::Liveness`, `Snapshot` and `InputEvent` are already dependencies of `wolf-gnome`. No `Cargo.lock` change, therefore no `CARGO_BAZEL_REPIN`.
 
 ---
 
-## 9. Dependencies
+## 9. Lint considerations
 
-**No new Rust crates.** `cairo-rs`'s `png` feature (already enabled, and already gating a test that runs on every `cargo test`) is what decodes the icons in `packaged_layout.rs`; `vendored_pins.rs` uses `std` string scanning rather than a regex crate, for the reason `release_profile.rs` records — this crate declines a dev-dependency for a test, because a lock-file change carries a `CARGO_BAZEL_REPIN` question nobody can answer from Linux.
+No `#[allow]` directives are expected, and none should be added speculatively. The workspace sets no `[lints]` table and neither crate denies `missing_docs` or enables pedantic, so `cargo clippy --workspace --all-targets` at defaults is the bar.
 
-**New Nix inputs:** one, `nixpkgs-runtime`, rev-locked to `9ae611a455b90cf061d8f332b977e387bda8e1ca`. `flake.lock` will gain an entry; today it resolves to a rev the lock already carries, so no new download.
+Points to get right rather than silence:
 
-**New nixpkgs packages referenced:** `wrapGAppsHook4`, `desktop-file-utils`, `librsvg`, `makeRustPlatform`, plus the existing GTK/WebKit set — all in nixpkgs, none new to the closure beyond the hooks.
-
----
-
-## 10. Lint considerations
-
-- `cargo clippy --workspace --all-targets -- -D warnings` covers `tests/*.rs`. Expect `clippy::too_many_lines` and `clippy::missing_panics_doc` pressure in the new test files; prefer splitting helpers over an `#[allow]`. Where an allow is unavoidable, it carries a one-line reason, matching the crate's habit.
-- `resolve_init_lua` takes four arguments including an `impl Fn`; that is under clippy's `too_many_arguments` threshold and matches `palette::open_recent_candidates`. No allow expected.
-- `#[must_use]` on `resolve_init_lua`, per the crate's convention for every seam.
-- The new constants are `&str` and need no allow.
-- `packaged_layout.rs` and the packaged smokes will trip `clippy::unwrap_used` habits — this crate's tests use `unwrap_or_else(|e| panic!(…))` with an explanatory message everywhere, not bare `unwrap`; follow it, because these panics *are* the failure messages an operator reads.
-- Markdown: `./tools/lint/markdown_check.sh` on every edited doc — watch the per-entry word budget on the new `src/README.md` entry and the banned changelog words ("now", "no longer", "previously") in every rewritten paragraph, especially the `DECISIONS.md` and `feat-list.md` rewrites, where the temptation to write "there is now a packaged application" is high.
-- `prettier --check "**/*.md"` gates; `proseWrap: never` means no hard wraps inside a paragraph.
+- `#[must_use]` on all four `save_ui` public functions — the crate's convention, not a lint requirement.
+- `SaveTarget<'a>` derives `Copy`, so passing it by value raises no `needless_pass_by_value`. It carries two bools, below `struct_excessive_bools`' threshold of three.
+- `SaveProposal` and `SaveAsRequest` own their data and are not `Copy` — deliberate, since a `PathBuf` and a `String` cannot ride a `Copy` enum. That is why the proposal is a second function rather than a `SavePress` payload.
+- `shell.rs`'s new functions take `&self` only, so `too_many_arguments` cannot bite.
+- Both seam enums are matched exhaustively at every call site with no `_` arm, which is the point; `wildcard_enum_match_arm` is not enabled and must not be worked around.
 
 ---
 
-## 11. Open questions / risks
+## Orchestrator decisions after the coder's first pass
 
-1. **The fontconfig mechanism is the least certain thing here.** I have verified what does *not* work (`XDG_DATA_DIRS` is never scanned; fontconfig's whole environment surface is `FONTCONFIG_FILE` / `FONTCONFIG_PATH` / `FONTCONFIG_SYSROOT`, none additive) and specified the additive `FONTCONFIG_FILE` that includes `/etc/fonts/fonts.conf`. Two residual risks: on a host with `fonts.fontconfig.enable = false` the include is skipped and the app sees **only** its own two families, which would render the GTK chrome in an editor face; and I have not executed the mechanism. Mitigation: P1's OCR runs with `FONTCONFIG_FILE` scrubbed, so a total failure to resolve any font is visible, and `packaged_layout.rs` pins the file's content. If a stronger font discriminator is wanted, the cheapest one is a `winwidth(0)` readback compared against a column count derived in-process from `cell_metrics_for_smoke()` — the packaged app's advance width would differ under a substituted family. Considered and rejected as the primary mechanism: `FcConfigAppFontAddDir` through a new `fontconfig-sys` dependency, which is the true macOS analogue (`FontRegistration.swift` registers `Contents/Resources/fonts/` with CoreText) but adds a C-FFI crate, a `Cargo.lock` change with an unanswerable-from-Linux repin question, and a Pango-font-map-cache ordering hazard on the startup path.
-2. **WebKit's helper processes.** `flake.nix`'s `linuxShell` comment asserts the out-of-process helpers are found through `PATH`; if that is literally true the wrapper must carry `WEBKIT_EXEC_PATH` or a `PATH` prefix. P3 is the cheap experiment that settles it, and §5.4 gives the decision rule for each outcome. If P3 is dropped for scope, the packaged preview pane is unverified and `tests/README.md` must say so.
-3. **The `v:progpath` equality assertion may have no executed red run** on this host, because making the two Neovims differ means temporarily bumping the main `nixpkgs` input. If the coder cannot take that measurement cheaply, the assertion is recorded as unfalsified rather than claimed.
-4. **The orlando pixel band is the one assertion whose discriminating power is inferred** from `orlando_bg_stress.rs`'s `hl_eol` statement rather than measured through `grim`. Measure it; if it does not discriminate, fall back to the readback and record the gap.
-5. **`nix build` is a cold Rust build** — `build.md` measures a cold `cargo build --release` at ~53 s wall / ~6 m 20 s user on this host for 167 crates, and the derivation cannot reuse `target/`. Every `./tools/wolf-package-smoke.sh` after a source change pays that. Not a blocker, but the orchestrator should not expect a fast loop.
-6. **Source filtering is mandatory, not tidiness.** A `src = ./.` without a filter copies `target/` — over a gigabyte here — into the store on every evaluation. If `nix build` appears to hang before it compiles anything, this is why.
-7. **The Nix path literal with spaces** (`resources/icons/Wolf application icon GNOME light`) is not a valid path literal and must be built by path-plus-string concatenation. This is an easy silent-looking eval error.
-8. **`optionalAttrs` on the outputs is required and looks like the guard the `NOTE:` block forbids.** If a later reader removes it "for consistency", `nix flake check` starts trying to evaluate a Wayland GTK application for Darwin. The comment distinguishing the two cases is load-bearing.
-9. **Adding orlando or lighthouse to `linuxShell` would silently destroy P2's control leg.** It looks like a convenience; it is not. Worth a comment beside both derivations.
+The production code for §7 steps 1-6 is in place and builds; `cargo clippy -p wolf-core
+-p wolf-gnome --all-targets -- -D warnings` and `cargo fmt --check` are clean, and
+`cargo test -p wolf-core --test save_open` passes (3 tests). Exactly one test is red:
+`actions::tests::bound_set_is_exactly_this_unit`, which is the test-writer's to move.
 
----
+Three plan corrections and two additions, all binding on the test-writer:
 
-## 12. Orchestrator rulings on the test-writer's report
+1. **The refusal-reason count in §3 / §5.A row 6 was wrong.** There are **five refusal
+   causes per function** (`NotResponding`, `Dead`, no core, preview pane, terminal pane)
+   and **six distinct strings across both functions**, because `NotResponding` carries a
+   different string in `save_as_press` — the modal covers the stall overlay's Restart
+   button, which `liveness_ui.rs:170` confirms is the only route out of `NotResponding`
+   (a `Dead` core auto-restarts; a stalled one does not). A distinctness test must
+   therefore probe five arms per function and assert six distinct strings across the
+   pair. A test demanding six probes from one function cannot pass and must not be
+   written.
 
-1. **G1 vs. ruling 3's two new exports.** Adopted as the test-writer recommends: `WOLF_TEST_ORLANDO_DIR` and `WOLF_TEST_LIGHTHOUSE_DIR` go in `PACKAGED_SCRUB_ALWAYS`, not in `KEPT_FOR_THE_COMPOSITOR`. No `wolf-gnome` code reads either, so scrubbing them costs nothing and the keep-list stays exactly the three variables `cage` itself needs. The coder must NOT make this edit; it reports G1's failure and the test-writer makes it.
-2. **`PACKAGED_LIGHTHOUSE_NORMAL_BG` is a measurement, not a guess.** The coder must read `colors/lighthouse.lua` out of the fetched store tree at the pinned commit `514dec2c…` and read the P2 sentinel back, and report the actual `Normal` background. If it is not `#1b1b1b`, report the measured value — do not edit the constant.
-3. **If P2's band-uniformity precondition fires**, the answer is that P2 keeps `FONTCONFIG_FILE` — the same exemption shape as its `GtkRuntimeEnv::Inherited` carve-out, because P1 is where the packaged-fontconfig claim is made and P2's subject is the two vendored Lua trees. Report it; the test-writer makes the edit.
-4. **The orlando band's discriminating power must be measured, never inferred.** If it does not discriminate, the row is ticked on the readbacks alone and `tests/README.md` says what stays unproven.
-5. The coder runs `cargo fmt` over every file it or the test-writer touched.
+2. **`Snapshot::is_preview_active()` does exist** (`crates/wolf-core/src/render.rs:962`,
+   a field read of `current_is_preview`); the orchestrator's fact was about the
+   `WolfCore` wrapper, which takes its own guard and is deliberately not used.
+   `Snapshot::win_buffers[..].is_terminal` exists too (`render.rs:523`), and `WinBuffer`
+   also carries `is_drawer` — the seam refuses a terminal either way.
 
----
+3. **Two extra seam rows are approved** on top of §5.A's tables, because each
+   discriminates a live branch nothing else reaches:
+   - `save_dialog_proposal` with a path that has a file name but an empty parent
+     (`Untitled.md`, no directory component) must fall through to `cwd`.
+   - `save_as_target` on `/` — absolute and non-empty, but `file_name()` is `None`, so
+     it is the one row that tells the `file_name` check apart from the `is_absolute`
+     check.
 
-## 13. Orchestrator rulings on the coder's report
+4. `action_for_key_table`'s doc comment says "the fourteen Bound chords" in three
+   places and carries no `Ctrl+Shift+S` row; §4.C's three new rows and those three
+   counts are required.
 
-The implementation is accepted. Six test-side items, ruled here on the coder's measurements.
-
-1. **`cage_is_only_spawned_through_the_isolating_helper`** — the test-writer's own section comment carries a literal `Command::new("cage")`, which the guard counts. Break the literal in the comment the way `CAGE_SPAWN_NEEDLE` is broken. Test-writer edit.
-
-2. **Three `doc_lazy_continuation` clippy errors** in `PACKAGED_PLUGINS_SCENARIO`'s doc comment. Test-writer edit.
-
-3. **`REQUIRED_WRAPPER_VARS` drops `GSETTINGS_SCHEMA_DIR`.** Measured: `wrapGAppsHook4` emits no such flag for any `buildInputs` configuration — it supplies schemas through `XDG_DATA_DIRS`, the standard GSettings lookup — and P1 launches, reaches `activate` and draws readable glyphs under the full scrub. The premise in the test's own comment is false and the comment is corrected with it. **No speculative sixth `--set-default` is added**: the rule is not to set a variable nothing verified, and that rule cuts both ways.
-
-4. **P2's orlando band changes shape, not strength.** Two edits, both required, and neither is a weakened assertion:
-   - P2 keeps `FONTCONFIG_FILE` (ruling §12.3, pre-committed), because P2's subject is whether the two vendored Lua trees load and the font stack is a confound P1 already owns.
-   - The band asserts **presence against absence of orlando's fill colour**, not uniformity. Measured, the fill cannot be uniform: a 1-px antialiased seam every ~22.4 px — the cell pitch — caps any per-cell-filled row at about 0.961, which is a property of Cairo drawing one background rectangle per cell and not of the assertion. So the floor must be a fraction of the sampled region carrying `#252525` in launch B, with a hard ceiling in launch A, and the constant's comment must carry the measured seam spacing and the 0.961 ceiling as its justification.
-5. **P3 keeps a narrower claim than the sibling smoke it borrowed from.** Measured: lighthouse's `Normal` background and `PREVIEW_DARK_BG` are both `#1b1b1b`, so the editor pane and the preview document are the same colour by construction and `assert_preview_theme_launch`'s control band cannot discriminate for this binary. P3 drops that reuse and asserts what it can: cage exit 0, the window-list readback carrying both the source buffer and the preview scratch, and the right pane rendering the document. Its doc comment states why the appearance discriminator is unavailable here and that the light/dark claim belongs to `preview_document_follows_the_configured_appearance_under_cage` on the checkout binary. P3's purpose was to settle the WebKit-helper question by measurement, and it did: `WEBKIT_EXEC_PATH` is not needed, the helper path is baked into `libwebkitgtk-6.0.so.4` as an absolute store path, and the token does not appear in the library at all.
-
-6. **New assertion, adopted: the two sibling trees must be non-empty, not merely present.** The coder measured that an empty `lighthouse/` satisfies `init.lua`'s `fs_stat` gate, makes `:colorscheme lighthouse` error, aborts `init.lua` mid-file and kills the app with `attempt to call global 'wolf_setup_current_file_tracking' (a nil value)`. An empty sibling is strictly worse than an absent one and nothing guards it.
-
-### Measurements accepted as recorded
-
-- `PACKAGED_LIGHTHOUSE_NORMAL_BG` is `#1b1b1b`, from two independent readings (the pinned `colors/lighthouse.lua`, and P2's sentinel), against a control reading `14161b`. The constant stands.
-- The `pkgsRuntime` swap is store-path-identical for all four variables.
-- `WEBKIT_EXEC_PATH` is not needed; the `flake.nix` comment claiming `PATH` is corrected.
-- The orlando band discriminates: `#252525` at 0.944 in the packaged launch against `#14161b` at 1.000 in the control.
-- The `v:progpath` assertion is live and green on real data (both launches read the same unwrapped store path) rather than vacuous; no red run was taken, and none is claimed.
+5. `front_end_action_rows_are_classified`'s non-vacuity message enumerates the
+   front-end rows by name and now omits Save and Save As. Message-only, and required.

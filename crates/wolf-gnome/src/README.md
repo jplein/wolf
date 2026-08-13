@@ -158,7 +158,7 @@ Purpose: the pure mapping from a drained `wolf_core::Command` to the UI action t
 **Public API**
 
 - `ui_action_for(command) -> UiAction` — total.
-- `ui_action_for_front_end_action(action) -> Option<UiAction>` — what an `actions::ACTION_TABLE` row carrying no command performs: the two navigation rows and About. `None` for anything else, and it is the only other way an action is installed.
+- `ui_action_for_front_end_action(action) -> Option<UiAction>` — what an `actions::ACTION_TABLE` row carrying no command performs: the two navigation rows, About, and Save and Save As. `None` for anything else, and it is the only other way an action is installed.
 - `UiAction` — the dispatched variants, plus `Deferred` and `NoGnomeEquivalent`, each carrying the concrete blocker as a string.
 
 **Decisions**
@@ -656,6 +656,26 @@ Purpose: the Cairo/Pango paint seam — one grid and its highlight table onto an
 - `GlyphPainter::new(cr)` and `draw(cr, …)` take the context twice with nothing binding them; both call sites pass the same one.
 - `FALLBACK_FG`, `FALLBACK_BG`, `draw_glyph` and `draw_text_line` are `pub(crate)` for [`cursor.rs`](#cursorrs) and [`pane_view.rs`](#pane_viewrs); reimplementing one lets cursor colors, glyph placement or the strip's text drift from the grid paint.
 
+#### `save_ui.rs`
+
+Purpose: the pure, GTK-free rulebook for Save and Save As — whether a press writes or opens a dialog, what that dialog proposes, and what a chosen path becomes. [`shell.rs`](#shellrs) carries the answers out.
+
+**Public API**
+
+- `save_press(liveness, target) -> SavePress` (`Write`, `Choose`, `Refuse(reason)`) and `save_as_press`, whose accepted arm is always `Choose`. Both are total over `Option<Liveness>` with no `_` arm, and decide liveness ahead of the buffer's shape.
+- `SaveTarget` — path, preview flag and terminal flag, which must come from one snapshot pass.
+- `save_dialog_proposal(path, cwd)`, `save_as_target(chosen)`, and `UNTITLED_SAVE_NAME`.
+
+**Decisions**
+
+- A named buffer is written, never prompted for, a never-written `Untitled N.md` included: `runtime/nvim/init.lua` has already chosen and claimed that name, which is on screen in the tab title. Only a buffer with no file name takes the dialog. An existence probe would make `Ctrl+Shift+S` disagree with a typed `:w`, and would leave the buffer unwritten whenever the dialog failed to present.
+- The proposal opens in the buffer's own parent, falling back to the window's cwd — deliberately not [`tabs_ui.rs`](#tabs_uirs)'s `new_tab_cwd`, which refuses the empty state. A dialog's folder is a starting point, not a claim that a directory is a project.
+- A chosen path is used verbatim, with no extension appended: rewriting it would mean the dialog confirmed an overwrite of a different file. `force` is `true` because that confirmation has already happened.
+
+**Gotchas**
+
+- The `Alive` gate is not the blocking-call gate: neither press blocks ([DECISIONS.md](../DECISIONS.md#crash-and-stall-recovery)).
+
 #### `scrollbar.rs`
 
 Purpose: a Neovim window's `win_viewport` projected onto a pane-local thumb rectangle and its colour. GTK-, Cairo- and Pango-free, so the whole rulebook runs in the fast suite; [`pane_view.rs`](#pane_viewrs) only fills the rectangle.
@@ -715,11 +735,11 @@ Purpose: the glue for the action namespace — `gio` actions, the primary menu, 
 
 - The chord controller matches keys itself: GTK's keymap-aware matching does not fire under the smokes' keystroke injector. Accelerators are registered only so the menu renders their labels, `app.` rows included ([`coordinator.rs`](#coordinatorrs)).
 - The controller lives on the window, so it runs ahead of any overlay's and needs no open-overlay guard: no overlay's keys are bound chords.
-- One settle point moves the sidebar's root, over [`workspace.rs`](#workspacers)'s `reroot_decision`, so `chdir_to` and a typed `:cd` cannot diverge. Neither is synchronous: the live cwd updates only after Neovim reports it.
-- The nav-button refresh caches nothing: `set_sensitive` already early-returns on an unchanged value.
+- One settle point moves the sidebar's root, over [`workspace.rs`](#workspacers)'s `reroot_decision`, so `chdir_to` and a typed `:cd` cannot diverge.
 - The three Markdown-preview presses read one `preview_shape` pass each: two snapshot reads would describe no window that existed. Each is a blocking RPC gated through [`preview_ui.rs`](#preview_uirs).
+- Save and Save As read one `save_shape` pass each for the same reason, and neither issues a blocking call; the dialog carries [`save_ui.rs`](#save_uirs)'s proposal out and decides nothing, `force` included.
 - `sidebar.set_visible` has one caller, over [`state_seam.rs`](#state_seamrs)'s `sidebar_is_shown`, or `set_empty_state(false)` would undo a user toggle.
-- The per-tab fan-outs go through [`tab_view.rs`](#tab_viewrs): the empty state, the sidebar preference — which also reaches the tabs a restore has queued — the focus return and the restart collapse. New Tab is gated by [`tabs_ui.rs`](#tabs_uirs)'s `new_tab_press`; [DECISIONS.md](../DECISIONS.md) owns the boundary.
+- The per-tab fan-outs go through [`tab_view.rs`](#tab_viewrs), New Tab is gated by [`tabs_ui.rs`](#tabs_uirs)'s `new_tab_press`, and [DECISIONS.md](../DECISIONS.md) owns the boundary.
 
 #### `state_seam.rs`
 
