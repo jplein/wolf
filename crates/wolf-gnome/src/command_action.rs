@@ -32,10 +32,15 @@
 //! - **Front-end-only rows** — an [`crate::actions::ACTION_TABLE`] row that carries
 //!   no [`wolf_core::Command`] at all, because the behaviour is the front end's own
 //!   rather than something Neovim can queue: the two navigation rows, whose visit
-//!   log is the front end's own view of the core, and About, which the registry has
-//!   no command for. Those resolve through
+//!   log is the front end's own view of the core; About, which the registry has no
+//!   command for; and Save and Save As. The registry carries no Save command
+//!   because adding one is a CROSS-PLATFORM change — the Swift `CommandKind` port
+//!   and `CommandDispatcher`'s `default`-free switch would both need arms, neither
+//!   compilable nor verifiable on the Linux host this was written on, and macOS has
+//!   no save UI to point them at. Those resolve through
 //!   [`ui_action_for_front_end_action`], which is the ONLY other way an action is
-//!   installed.
+//!   installed. The consequence is worth stating: a front-end-only row never
+//!   appears in the command palette, whose rows come from `wolf_core::COMMAND_SPECS`.
 //!
 //! Every `Deferred` / `NoGnomeEquivalent` reason is DISTINCT, so no two commands
 //! can collapse into one indistinguishable diagnostic.
@@ -119,6 +124,11 @@ pub enum UiAction {
     OpenInBrowser,
     /// Present the About dialog carrying the bundled fonts' licence notices.
     ShowAbout,
+    /// Write the focused buffer to its own path; a buffer with no file name at all
+    /// falls through to the save dialog instead, per [`crate::save_ui::save_press`].
+    SaveBuffer,
+    /// Open a native `gtk::FileDialog` to choose a new path for the focused buffer.
+    SaveBufferAs,
     /// Implemented on macOS, planned on GTK; the string names the blocker.
     Deferred(&'static str),
     /// Has no GNOME equivalent and will never be implemented.
@@ -182,7 +192,8 @@ pub fn ui_action_for(command: Command) -> UiAction {
 /// [`crate::shell::AppShell::install_actions`] cannot reach them through
 /// [`ui_action_for`]. The navigation rows have none because a pane's visit log is
 /// the front end's own view of the core; About has none because the registry
-/// carries no About command and the dialog is this front-end's own surface. A row
+/// carries no About command and the dialog is this front-end's own surface; Save and
+/// Save As have none for the reason the module docs give. A row
 /// that resolves in NEITHER place is skipped with a printed reason while its
 /// accelerator is still registered, which swallows the chord and does nothing at
 /// all — strictly worse than not binding it.
@@ -196,6 +207,8 @@ pub fn ui_action_for_front_end_action(action: &str) -> Option<UiAction> {
         "win.history-back" => Some(UiAction::HistoryBack),
         "win.history-forward" => Some(UiAction::HistoryForward),
         "win.about" => Some(UiAction::ShowAbout),
+        "win.save" => Some(UiAction::SaveBuffer),
+        "win.save-as" => Some(UiAction::SaveBufferAs),
         _ => None,
     }
 }
@@ -671,9 +684,13 @@ mod tests {
              times and this test proves nothing — a `ui_action_for_front_end_action` consisting of \
              nothing but `_ => None` would pass it. The front-end-only rows are the two navigation \
              ones (`win.history-back` / `win.history-forward`), whose history lives in the front \
-             end's own view of the core, and `win.about`, which the registry carries no command \
-             for. If every one of them has gained a `wolf_core::Command`, this function has no \
-             purpose left and should go rather than be left guarding nothing."
+             end's own view of the core; `win.about`, which the registry carries no command for; \
+             and `win.save` / `win.save-as`, which the registry carries no command for either — \
+             adding one is a cross-platform change (the Swift `CommandKind` port and \
+             `CommandDispatcher`'s `default`-free switch would both need arms) that cannot be \
+             compiled or verified on this host, and macOS has no save UI to point it at. If every \
+             one of them has gained a `wolf_core::Command`, this function has no purpose left and \
+             should go rather than be left guarding nothing."
         );
 
         // --- Forward: every command-less row is installable ------------------

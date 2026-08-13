@@ -180,6 +180,16 @@
 //! fall-through to `<C-b>` is the accepted wart of the `Ctrl+Shift+<letter>`
 //! namespace.
 //!
+//! SAVE and SAVE AS add none either. Both send on the ordered input channel
+//! (`InputEvent::Save` / `InputEvent::SaveAs`) and the native dialog resolves on a
+//! later main-loop turn, so nothing on either path can time out and the ten stand.
+//! [`crate::save_ui::save_press`] and [`crate::save_ui::save_as_press`] gate them
+//! anyway, for [`crate::clipboard_ui::paste_decision`]'s reason and NOT the blocking
+//! one: a save queued behind an opaque crash overlay would be applied by a RESTARTED
+//! Neovim to whatever buffer it happens to be on. Save As adds a second reason that
+//! must not be collapsed into the first — a native modal over the stall overlay
+//! covers the Restart button, which is the only route out of a stall.
+//!
 //! The project-search overlay ([`crate::search_overlay`]) adds NO blocking call
 //! either, and
 //! that is worth stating because the symmetry with the buffer picker suggests
@@ -218,6 +228,7 @@ use crate::picker::PickerHandle;
 use crate::preview_ui::{
     self, BrowserPress, EditPlacement, EditPress, PreviewPlacement, PreviewPress,
 };
+use crate::save_ui::{self, SaveAsPress, SavePress, SaveTarget};
 use crate::search_overlay::SearchHandle;
 use crate::state_seam;
 use crate::tab_view::{TabParts, TabsHandle};
@@ -269,6 +280,9 @@ const OPEN_FOLDER_DIALOG_TITLE: &str = "Open Folder";
 /// Title of the file-selection dialog.
 const OPEN_FILE_DIALOG_TITLE: &str = "Open File";
 
+/// Title of the save-as dialog.
+const SAVE_DIALOG_TITLE: &str = "Save As";
+
 /// How long [`AppShell::schedule_restart`] waits before running the (synchronous,
 /// main-loop-blocking) respawn, so the crash overlay is actually PRESENTED first.
 ///
@@ -314,6 +328,26 @@ struct PreviewShape {
     other_preview_panes: usize,
     /// Editor windows other than the active one.
     other_editor_panes: usize,
+}
+
+/// Everything the two save presses are decided against, read from ONE snapshot pass
+/// by [`AppShell::save_shape`].
+///
+/// [`PreviewShape`]'s precedent, and its reason: the three must describe the SAME
+/// instant. A path taken from one snapshot and a preview flag from another can name a
+/// shape that never existed, and [`save_ui::save_press`] would then answer `Write`
+/// for a pane that cannot be written.
+///
+/// OWNED (a `PathBuf`, not a borrow), so no `SnapshotReadGuard` is held past the read.
+#[derive(Clone)]
+struct SaveShape {
+    /// `Snapshot::current_file` — the focused buffer's path.
+    path: Option<PathBuf>,
+    /// `Snapshot::is_preview_active` — the focused pane is a preview scratch.
+    is_preview: bool,
+    /// `Snapshot::win_buffers[active_win].is_terminal` — the focused pane is a
+    /// terminal buffer.
+    is_terminal: bool,
 }
 
 /// The widgets and handles [`build`] needs, as one struct rather than eight
@@ -1261,6 +1295,135 @@ impl AppShell {
         }
     }
 
+    /// The whole buffer shape both save presses are decided against, read in ONE
+    /// snapshot pass — or `None` when there is no core.
+    ///
+    /// [`AppShell::read_active_win`]'s idiom: one core borrow, one
+    /// `SnapshotReadGuard` bound to a local so it is dropped at the end of THIS
+    /// function, before the caller takes another core lock.
+    ///
+    /// The flags are read off the `Snapshot` already in hand rather than through
+    /// `WolfCore::is_preview_active()`, for [`AppShell::preview_shape`]'s recorded
+    /// reason: that method takes its own guard, and a re-entrant read can deadlock
+    /// behind a queued writer.
+    fn save_shape(&self) -> Option<SaveShape> {
+        let core_ref = self.inner.core.borrow();
+        let core = core_ref.as_ref()?;
+        let snapshot = core.read_snapshot();
+        Some(SaveShape {
+            path: snapshot.current_file.clone(),
+            is_preview: snapshot.is_preview_active(),
+            is_terminal: snapshot
+                .active_win
+                .and_then(|win| snapshot.win_buffers.get(&win))
+                .is_some_and(|buffer| buffer.is_terminal),
+        })
+    }
+
+    /// Writes the focused buffer, opens the save dialog for a nameless one, or prints
+    /// why it did neither.
+    ///
+    /// **Neither branch blocks.** `InputEvent::Save` is fire-and-forget on the ordered
+    /// input channel and the dialog resolves on a later main-loop turn, so this adds
+    /// none of the ten; see the module docs for why it is gated anyway.
+    ///
+    /// [`AppShell::open_preview`]'s shape: the two reads happen first, each in its own
+    /// short borrow, before anything else touches the core.
+    fn save_buffer(&self) {
+        let liveness = self.read_liveness();
+        let shape = self.save_shape();
+
+        let press = save_ui::save_press(
+            liveness,
+            SaveTarget {
+                path: shape.as_ref().and_then(|s| s.path.as_deref()),
+                is_preview: shape.as_ref().is_some_and(|s| s.is_preview),
+                is_terminal: shape.as_ref().is_some_and(|s| s.is_terminal),
+            },
+        );
+
+        match press {
+            SavePress::Write => self.send_input(InputEvent::Save),
+            SavePress::Choose => self.open_save_dialog(shape.as_ref()),
+            SavePress::Refuse(reason) => {
+                eprintln!("wolf-gnome: save not performed: {reason}");
+            }
+        }
+    }
+
+    /// Opens the save dialog to give the focused buffer a new path, or prints why it
+    /// did not.
+    ///
+    /// [`AppShell::save_buffer`]'s shape over [`save_ui::save_as_press`], whose
+    /// accepted arm is always the dialog: a named buffer is what Save As exists to
+    /// rename.
+    fn save_buffer_as(&self) {
+        let liveness = self.read_liveness();
+        let shape = self.save_shape();
+
+        let press = save_ui::save_as_press(
+            liveness,
+            SaveTarget {
+                path: shape.as_ref().and_then(|s| s.path.as_deref()),
+                is_preview: shape.as_ref().is_some_and(|s| s.is_preview),
+                is_terminal: shape.as_ref().is_some_and(|s| s.is_terminal),
+            },
+        );
+
+        match press {
+            SaveAsPress::Choose => self.open_save_dialog(shape.as_ref()),
+            SaveAsPress::Refuse(reason) => {
+                eprintln!("wolf-gnome: save as not performed: {reason}");
+            }
+        }
+    }
+
+    /// Opens a native save chooser at [`save_ui::save_dialog_proposal`]'s folder and
+    /// name; on success asks the core to `saveas!` the chosen path.
+    ///
+    /// [`AppShell::open_file_dialog`]'s shape exactly, with the proposal carried in
+    /// from the seam — this function decides nothing, including the `force` flag,
+    /// which comes out of [`save_ui::save_as_target`] with its reason.
+    fn open_save_dialog(&self, shape: Option<&SaveShape>) {
+        // Cloned out in its own statement, the borrow discipline the rest of this
+        // module follows; it needs no core borrow at all and follows every re-root.
+        let rooted = self.inner.rooted_cwd.borrow().clone();
+        let proposal =
+            save_ui::save_dialog_proposal(shape.and_then(|s| s.path.as_deref()), rooted.as_deref());
+
+        let mut builder = gtk::FileDialog::builder()
+            .title(SAVE_DIALOG_TITLE)
+            .modal(true)
+            .initial_name(proposal.name);
+        if let Some(dir) = proposal.folder {
+            builder = builder.initial_folder(&gio::File::for_path(dir));
+        }
+        let dialog = builder.build();
+
+        let weak = Rc::downgrade(&self.inner);
+        dialog.save(
+            Some(&self.inner.window),
+            gio::Cancellable::NONE,
+            move |result| {
+                let Some(shell) = upgrade(&weak) else {
+                    return;
+                };
+                // An Err here is overwhelmingly "the user dismissed the dialog",
+                // which is not a condition worth reporting.
+                if let Ok(file) = result {
+                    if let Some(path) = file.path() {
+                        if let Some(request) = save_ui::save_as_target(&path) {
+                            shell.send_input(InputEvent::SaveAs {
+                                path: request.path,
+                                force: request.force,
+                            });
+                        }
+                    }
+                }
+            },
+        );
+    }
+
     /// Reads the captive nvim's [`Liveness`] ONCE per wake, applies the pure
     /// [`liveness_ui`] mapping, and reports whether the pane view and the file
     /// tree should run.
@@ -1686,6 +1849,8 @@ impl AppShell {
             UiAction::ShowAbout => about::present(&self.inner.window),
             UiAction::OpenFileDialog => self.open_file_dialog(),
             UiAction::OpenFolderDialog => self.open_folder_dialog(),
+            UiAction::SaveBuffer => self.save_buffer(),
+            UiAction::SaveBufferAs => self.save_buffer_as(),
             UiAction::NewUntitledBuffer => self.send_input(InputEvent::NewBuffer),
             UiAction::NewTab => self.new_tab(),
             UiAction::NewWindow => self.new_window(),

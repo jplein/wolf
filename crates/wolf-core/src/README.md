@@ -183,22 +183,22 @@ The toolkit-neutral input vocabulary front-ends speak, and its translation into 
 
 **Public API**
 
-- `InputEvent` — keys, mouse, scroll, whole-UI and per-grid resize, window focus, open (optionally at a line/column), save, chdir, tabpage switch and close, paste, buffer switch, and the appearance/terminal/full-width/UI-focus toggles.
-- `key_to_notation(&KeyEvent) -> String` — modifier order `C-`, `S-`, `A-`, `D-`; a bare printable character maps to itself, except `<`, which becomes `<lt>`.
-- `InputEvent::is_toast_dismissing()` — whether the event is deliberate user input that dismisses a showing message toast.
-- `Key`, `KeyEvent`, `MouseButton`, `MouseAction`, `MouseEvent`, `ScrollDirection`, `ScrollEvent`.
+- `InputEvent` — the event vocabulary a front-end sends, with `Key`, `KeyEvent`, `MouseButton`, `MouseAction`, `MouseEvent`, `ScrollDirection` and `ScrollEvent`.
+- `key_to_notation(&KeyEvent) -> String` — modifier order `C-`, `S-`, `A-`, `D-`; `<` becomes `<lt>`.
+- `InputEvent::is_toast_dismissing()` — whether the event dismisses a showing message toast.
 
 **Decisions**
 
-- Shift contract: for `Key::Char` the front-end delivers the already-shifted glyph and leaves `shift` false. The `S-` prefix is emitted only for named keys, the only place Neovim gives it meaning.
-- `MouseEvent` and `ScrollEvent` carry a target grid with grid-local row and column, because under `ext_multigrid` a pane has its own window grid; hardcoding grid 0 sends every click to the global grid.
-- `Chdir` applies `:tcd`, not `:cd`: each view is one nvim tabpage with its own working directory, and a global `:cd` would move every view of the shared nvim.
-- `Resize` forwards `nvim_ui_try_resize` and never resizes a local grid — the authoritative size arrives back as `grid_resize`.
+- Shift contract: for `Key::Char` the front-end delivers the already-shifted glyph and leaves `shift` false; `S-` is emitted only for named keys, where Neovim gives it meaning.
+- `MouseEvent` and `ScrollEvent` target a grid, with grid-local row and column: under `ext_multigrid` a pane has its own grid, and grid 0 is the global one.
+- `Chdir` applies `:tcd`, not `:cd`: each view is one nvim tabpage with its own working directory, and `:cd` would move every view.
+- `Resize` forwards `nvim_ui_try_resize` and never resizes a local grid: the authoritative size arrives back as `grid_resize`.
+- `SaveAs` carries `force`, applied as `saveas!`, for a caller whose own dialog has already confirmed the overwrite: plain `saveas` fails `E13: File exists`, and the input pump degrades that to a warning nobody sees. Forcing unconditionally would clobber for a front-end that confirms nothing.
 
 **Gotchas**
 
-- A scroll counts as dismissing here; the scroll-over-toast exemption lives entirely in the front-end, which never forwards that gesture.
-- Several variants delegate to `runtime/nvim/init.lua` helpers over `nvim_exec_lua`, so their real behaviour is defined there, not in this module.
+- A scroll counts as dismissing; the scroll-over-toast exemption lives in the front-end, which never forwards that gesture.
+- Several variants delegate to `runtime/nvim/init.lua` helpers over `nvim_exec_lua`, so their behaviour is defined there, not in this module.
 
 #### `markdown.rs`
 

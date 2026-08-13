@@ -199,6 +199,26 @@ pub const ACTION_TABLE: &[ActionBinding] = &[
                Ctrl+Shift alias for <C-t>",
     },
     ActionBinding {
+        action: "win.save",
+        accel: Some("<Control><Shift>s"),
+        ctrl_fold: None,
+        command: None,
+        status: BindingStatus::Bound,
+        note: "macOS Cmd+S; front-end-only, since the registry carries no Save command, and gives \
+               up only the Ctrl+Shift alias for <C-s> (LSP signature help in i/v/s), which is \
+               still typed as plain Ctrl+S",
+    },
+    ActionBinding {
+        action: "win.save-as",
+        accel: None,
+        ctrl_fold: None,
+        command: None,
+        status: BindingStatus::MenuOnly,
+        note: "macOS Shift+Cmd+S; menu-only because Ctrl+Shift+S is spent on win.save and no \
+               Ctrl+Shift+<letter> is free, the app.new-window precedent, so the primary menu is \
+               its only route",
+    },
+    ActionBinding {
         action: "win.close-pane",
         accel: Some("<Control><Shift>w"),
         ctrl_fold: None,
@@ -293,15 +313,6 @@ pub const ACTION_TABLE: &[ActionBinding] = &[
                Ctrl+Shift alias for <C-b>",
     },
     // --- Reserved for later units (declared here so the scheme is auditable) --
-    ActionBinding {
-        action: "win.sidebar-show-project",
-        accel: Some("<Control><Shift>s"),
-        ctrl_fold: None,
-        command: Some(Command::SidebarShowProject),
-        status: BindingStatus::Reserved,
-        note: "macOS Shift+Cmd+E; gives up only the Ctrl+Shift alias for <C-s> (LSP signature \
-               help in i/v/s)",
-    },
     ActionBinding {
         action: "win.increase-font-size",
         accel: Some("<Control>equal"),
@@ -430,6 +441,22 @@ pub const MENU_SECTIONS: &[MenuSection] = &[
             MenuItemSpec {
                 label: "Search in project",
                 action: "win.search-in-project",
+            },
+        ],
+    },
+    // Both rows carry `command: None`, so `menu_labels_match_the_registry` skips
+    // them and these two labels are free text. They MUST be: the registry has no
+    // Save titles to match against. Giving either row a `wolf_core::Command` later
+    // therefore also pins its label to that command's `CommandSpec::title`.
+    MenuSection {
+        items: &[
+            MenuItemSpec {
+                label: "Save",
+                action: "win.save",
+            },
+            MenuItemSpec {
+                label: "Save As…",
+                action: "win.save-as",
             },
         ],
     },
@@ -852,7 +879,7 @@ mod tests {
 
     /// The actions whose accelerators are actually registered — the
     /// [`BindingStatus::Bound`] rows of [`ACTION_TABLE`] — sorted.
-    const EXPECTED_BOUND_ACTIONS: [&str; 14] = [
+    const EXPECTED_BOUND_ACTIONS: [&str; 15] = [
         "app.quit",
         "win.buffer-picker",
         "win.close-pane",
@@ -864,6 +891,7 @@ mod tests {
         "win.new-buffer",
         "win.new-tab",
         "win.paste",
+        "win.save",
         "win.search-in-project",
         "win.terminal",
         "win.toggle-sidebar",
@@ -1372,7 +1400,7 @@ mod tests {
     /// `win.terminal` is a row that moves all three:
     ///
     /// - `action_for_key_table` — for EVERY Bound row, because that table asserts
-    ///   each of the fourteen chords resolves to its action and [`action_for_key`]
+    ///   each of the fifteen chords resolves to its action and [`action_for_key`]
     ///   scans `Bound` rows only, so a demoted row's chord answers `None`. The
     ///   `Ctrl+grave -> win.terminal` row is what makes that true of this one
     ///   (measured).
@@ -1403,8 +1431,9 @@ mod tests {
 
         assert_eq!(
             bound, expected,
-            "the set of BOUND accelerators changed. wolf-gnome registers exactly fourteen \
+            "the set of BOUND accelerators changed. wolf-gnome registers exactly fifteen \
              (Ctrl+Shift+O go-to-file, Ctrl+Shift+N new-buffer, Ctrl+Shift+T new-tab, \
+             Ctrl+Shift+S save, \
              Ctrl+Shift+P command-palette, Ctrl+Shift+E buffer-picker, \
              Ctrl+Shift+F search-in-project, Ctrl+Shift+W close-pane, \
              Ctrl+Shift+Q quit, Alt+Left history-back, Alt+Right history-forward, Ctrl+Shift+B \
@@ -1424,6 +1453,18 @@ mod tests {
              NOT isolated: `action_for_key_table`'s two Ctrl+Shift+T rows report None and \
              `menu_never_lists_a_reserved_action` rejects the \"New Tab\" item, and those three \
              moving TOGETHER is what says the row's STATUS changed rather than this list. \
+             A one-element diff naming \"win.save\" \
+             means the save chord was demoted, in which case `set_accels_for_action` registers \
+             nothing, `action_for_key` stops scanning the row, and Ctrl+Shift+S falls through to \
+             Neovim as <C-s> (LSP signature help in insert, visual and select mode) — Save is then \
+             reachable only from the primary menu, which still advertises a chord that cannot \
+             fire, and it is reachable from NOWHERE else, since the row carries no \
+             `wolf_core::Command` and so contributes no command-palette row and no :Wolf command. \
+             That demotion is NOT isolated either: `action_for_key_table`'s two Ctrl+Shift+S rows \
+             report None while its `Ctrl+s -> None` row stays green (it is about the UNSHIFTED \
+             chord, which no row ever binds), and `menu_never_lists_a_reserved_action` rejects the \
+             \"Save\" item. The same three moving together is what says the STATUS changed rather \
+             than this list. \
              Binding a reserved chord \
              early means shipping a menu/accelerator that does nothing — and DEMOTING one back to \
              Reserved silently unbinds a chord the menu still advertises. The two ALT rows are the \
@@ -1452,7 +1493,7 @@ mod tests {
     /// GTK's own keymap-aware matching does not fire under `wtype` (see the module
     /// docs) — so every row below is a user-visible behaviour:
     ///
-    /// * **The fourteen Bound chords must fire, in BOTH letter cases where they
+    /// * **The fifteen Bound chords must fire, in BOTH letter cases where they
     ///   have one.** A real keymap delivers the SHIFTED glyph for Ctrl+Shift+O —
     ///   keyval `O`, not `o` (`input::gdk_key`'s shift contract, and what
     ///   `tests/gdk_key.rs` pins) — so a case-SENSITIVE comparison would mean the
@@ -1477,7 +1518,8 @@ mod tests {
     ///   `<C-f>` (page forward), `<C-b>` (page backward), `<C-w>` (the
     ///   window-command prefix), `<C-t>` (jump to the older tag-stack entry in
     ///   normal mode, insert one shiftwidth of indent in insert mode), `<C-q>`,
-    ///   `<C-c>` and `<C-v>` must all still reach Neovim.
+    ///   `<C-s>` (LSP signature help in insert, visual and select mode), `<C-c>`
+    ///   and `<C-v>` must all still reach Neovim.
     ///
     ///   `<C-c>` and `<C-v>` are named separately because they are the two rows
     ///   where "it is only an alias" is not a good enough answer, and where the
@@ -1522,7 +1564,7 @@ mod tests {
 
         // (description, delivered keyval, modifier state, expected action)
         let cases: Vec<(&str, gdk::Key, gdk::ModifierType, Option<&'static str>)> = vec![
-            // --- The fourteen BOUND chords, in both letter cases where they have one
+            // --- The fifteen BOUND chords, in both letter cases where they have one
             (
                 "Ctrl+Shift+o -> win.go-to-file",
                 key_from_char('o'),
@@ -1558,6 +1600,18 @@ mod tests {
                 key_from_char('T'),
                 ctrl | shift,
                 Some("win.new-tab"),
+            ),
+            (
+                "Ctrl+Shift+s -> win.save",
+                key_from_char('s'),
+                ctrl | shift,
+                Some("win.save"),
+            ),
+            (
+                "Ctrl+Shift+S (the SHIFTED glyph a real keymap delivers) -> win.save",
+                key_from_char('S'),
+                ctrl | shift,
+                Some("win.save"),
             ),
             (
                 "Ctrl+Shift+w -> win.close-pane",
@@ -1771,6 +1825,14 @@ mod tests {
                 "Ctrl+v (no Shift) -> None, so <C-v> (visual BLOCK in normal mode, literal-next \
                  in insert and cmdline) still reaches Neovim",
                 key_from_char('v'),
+                ctrl,
+                None,
+            ),
+            (
+                "Ctrl+s (no Shift) -> None, so <C-s> (LSP signature help in insert, visual and \
+                 select mode) still reaches Neovim — the price the win.save row's note says it \
+                 pays is the Ctrl+SHIFT alias alone",
+                key_from_char('s'),
                 ctrl,
                 None,
             ),
@@ -2275,6 +2337,149 @@ mod tests {
              neither of which a user discovers by looking. \
              `menu_items_reference_declared_actions` checks the other direction and cannot see \
              this."
+        );
+    }
+
+    /// The Save As row spends no chord, and the primary menu is the ONLY thing that
+    /// makes it reachable at all.
+    ///
+    /// The sibling of [`the_new_window_row_is_menu_only_and_listed`], and it exists
+    /// for the same structural reason: every accelerator invariant in this module
+    /// opens with `let Some(accel) = binding.accel else { continue; }`, so a row with
+    /// no accelerator is SKIPPED by all four rather than checked by them, and the
+    /// property has to be stated somewhere.
+    ///
+    /// **Why this row spends no chord is a collision, not a preference.** macOS gives
+    /// Save As Shift+Cmd+S, whose Linux transliteration is Ctrl+Shift+S — which
+    /// `win.save` holds (macOS Cmd+S), and `Ctrl+Shift+<letter>` is the whole of this
+    /// front-end's available namespace. The table already answers that collision the
+    /// same way twice, at `app.new-window` against `win.new-buffer` and at
+    /// `win.open-folder` against `win.go-to-file`: the plain-Cmd row takes the chord
+    /// and the Shift+Cmd sibling goes to the menu.
+    ///
+    /// **It is sharper here than at New Window**, and that is why the `listed`
+    /// assertion below is load-bearing rather than tidy. New Window carries
+    /// `Command::NewWindow`, so it keeps a command-palette row and `:WolfNewWindow`
+    /// when its menu item goes. This row carries **no** `wolf_core::Command` at all
+    /// (there is no Save As command in `COMMAND_SPECS`, and adding one is the
+    /// cross-platform change this unit deliberately does not make), so the palette —
+    /// whose rows come from the registry — never offers it and no `:Wolf` command
+    /// drains to it. Delete the menu item and the feature is reachable from nowhere.
+    ///
+    /// FALSIFYING EDIT 1: delete the `"Save As…"` item from `MENU_SECTIONS`.
+    /// PREDICTED: the `listed` assertion fails.
+    /// PREDICTED ISOLATED: yes — `menu_items_reference_declared_actions` and
+    /// `menu_labels_match_the_registry` both walk `MENU_SECTIONS` and cannot see an
+    /// item that is not there, and the latter would skip this item anyway because the
+    /// row carries no command.
+    ///
+    /// FALSIFYING EDIT 2: give the row `accel: Some("<Control><Shift>s")`.
+    /// PREDICTED: the `accel` assertion below fails, AND `accels_are_unique` reddens
+    /// on the second occurrence of that spelling. PREDICTED NOT ISOLATED — and the
+    /// collision is precisely why the row spends no chord, so the pair moving together
+    /// is the evidence rather than noise.
+    ///
+    /// What that edit would NOT do is give Save As a working chord, and the reason is
+    /// worth stating because it is the shape a later "just add the accel" would take.
+    /// Both the registration path (`shell::install_actions`, which walks
+    /// [`bound_bindings`]) and the live matcher ([`action_for_key`], same filter) skip
+    /// a MenuOnly row, so the spelling would be a DECLARATION read by nothing — a
+    /// chord the table claims this row holds while nothing registers or matches it.
+    /// Promoting the row to `Bound` as well does not fix it either: `action_for_key`
+    /// returns the FIRST matching row and `win.save` precedes this one in
+    /// [`ACTION_TABLE`], so Save As would still never fire.
+    #[test]
+    fn the_save_as_row_is_menu_only_and_listed() {
+        const SAVE_AS_ACTION: &str = "win.save-as";
+
+        let binding = binding_for_action(SAVE_AS_ACTION).unwrap_or_else(|| {
+            panic!(
+                "no ACTION_TABLE row declares {SAVE_AS_ACTION:?}. The row is how \
+                 `shell::install_actions` learns to install Save As at all, so without it the \
+                 primary menu item renders insensitive and the native save dialog is unreachable \
+                 from the running application — there is no palette row and no :Wolf command to \
+                 fall back on, because the row carries no `wolf_core::Command`."
+            )
+        });
+
+        assert_eq!(
+            binding.accel, None,
+            "the {SAVE_AS_ACTION:?} row declares an accelerator ({:?}). The Linux transliteration \
+             of macOS's Shift+Cmd+S is Ctrl+Shift+S, which `win.save` already holds, and \
+             `Ctrl+Shift+<letter>` is the whole of this front-end's available namespace. A chord \
+             here does not give Save As one: both `set_accels_for_action` and `action_for_key` \
+             walk `bound_bindings()`, so a MenuOnly row's spelling is registered by nothing and \
+             matched by nothing — it is a declaration a reviewer reads as a price this row pays \
+             while it pays none. Promoting the row too would not help, since `action_for_key` \
+             returns the FIRST matching row and `win.save` precedes it here. It would also start \
+             this row being evaluated by `no_accel_makes_a_neovim_key_unreachable`, the test that \
+             decides whether a Neovim key just became unreachable.",
+            binding.accel
+        );
+        assert_eq!(
+            binding.ctrl_fold, None,
+            "the {SAVE_AS_ACTION:?} row declares ctrl_fold {:?} while carrying no accelerator. \
+             Every folding rule is reached only through `parse_accel(binding.accel?)`, so the \
+             declaration is READ BY NOTHING: it states a control byte this row gives up while the \
+             row gives up no key at all, and a reviewer takes the declaration for the price.",
+            binding.ctrl_fold
+        );
+        assert_eq!(
+            binding.status,
+            BindingStatus::MenuOnly,
+            "the {SAVE_AS_ACTION:?} row is {:?}, not MenuOnly. `Bound` would put it in the set \
+             `bound_set_is_exactly_this_unit` enumerates while it has no chord to register; \
+             `Reserved` would make `menu_never_lists_a_reserved_action` reject the menu item that \
+             is this row's ONLY route, and would falsely declare a chord held for a later unit \
+             when this row holds none. Installation follows from neither: `install_actions` keys \
+             on the `UiAction` classification and never reads `status`.",
+            binding.status
+        );
+        assert_eq!(
+            binding.command, None,
+            "the {SAVE_AS_ACTION:?} row claims registry command {:?}. There is no Save As command \
+             in `wolf_core::COMMAND_SPECS`: this action is front-end-only and resolves through \
+             `command_action::ui_action_for_front_end_action`. A command here would also subject \
+             the menu label to `menu_labels_match_the_registry`, which would then demand a title \
+             the registry does not have.",
+            binding.command
+        );
+
+        // MenuOnly means exactly that, and here it means MORE than it does at
+        // `app.new-window`: with no chord AND no registry command, an absent menu item
+        // leaves no route at all — not a palette row, not a `:Wolf` command, nothing.
+        let listed = MENU_SECTIONS
+            .iter()
+            .flat_map(|section| section.items)
+            .any(|item| item.action == SAVE_AS_ACTION);
+        assert!(
+            listed,
+            "the {SAVE_AS_ACTION:?} row is MenuOnly but no MENU_SECTIONS item references it, so \
+             NOTHING reaches it. It has no accelerator by design, and — unlike `app.new-window`, \
+             which keeps a palette row and `:WolfNewWindow` — it carries no `wolf_core::Command`, \
+             so the command palette (whose rows come from `COMMAND_SPECS`) never offers it and no \
+             Ex command drains to it. The primary menu is the whole of its reachability. \
+             `menu_items_reference_declared_actions` checks the other direction and cannot see \
+             this."
+        );
+
+        // The premise the paragraph above rests on: the chord this row gives up really
+        // IS spent, and spent on Save. Without it, "menu-only because Ctrl+Shift+S is
+        // taken" would be a claim about nothing.
+        let save = binding_for_action("win.save").unwrap_or_else(|| {
+            panic!(
+                "premise: no ACTION_TABLE row declares \"win.save\", so the reason this row spends \
+                 no chord — that Ctrl+Shift+S is already held by Save — is false, and one of the \
+                 two rows should be carrying it. `bound_set_is_exactly_this_unit` is red too."
+            )
+        });
+        assert_eq!(
+            save.accel,
+            Some("<Control><Shift>s"),
+            "premise: `win.save` must hold `<Control><Shift>s`, but holds {:?}. This row is \
+             menu-only ONLY because that chord is spent on Save; if it is free, the collision this \
+             test documents does not exist and Save As should take it.",
+            save.accel
         );
     }
 }
