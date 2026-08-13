@@ -18,7 +18,11 @@ This crate deliberately has no Bazel target at all. That absence is what keeps t
 
 The devShell supplies the toolchain that the gtk-rs and `webkit6` `-sys` crates probe for (gtk4, cairo, pango, glib, gdk-pixbuf, graphene, harfbuzz, webkitgtk and libsoup), exports `WOLF_NVIM_BIN` so the pinned Neovim is never taken from `PATH`, and pins the font stack through a generated `FONTCONFIG_FILE`; [`tests/README.md`](tests/README.md) owns what that file exposes and why it omits every host font directory.
 
-The binary locates the captive `init.lua` through `env!("CARGO_MANIFEST_DIR")` in `app.rs`'s `init_lua_path`, an absolute path into the checkout it was compiled in, so a binary run from anywhere other than this working tree finds no `init.lua`. Giving it a real resolution path — an environment override this crate reads, or a store path fixed at build time — is a change to this crate's source rather than something a packaging derivation can supply from outside.
+The binary locates the captive `init.lua` in three branches, in order: the `WOLF_INIT_LUA` override, then `<exe dir>/../share/wolf/nvim/init.lua` when that file is there, then an `env!("CARGO_MANIFEST_DIR")` path into the checkout it was compiled in. The middle branch is what makes an installed binary work anywhere; the last is what keeps `cargo run` and every compositor smoke working, so it is passed unconditionally. The rule is a pure seam and only the two reads that feed it — the environment and `current_exe()` — belong to `app.rs`.
+
+The override is deliberately not existence-checked while the executable-relative guess is, and the asymmetry is the point. A typed override is an instruction rather than a candidate: checking it would turn a typo into a silent fall-through to a different `init.lua`, where the failure that replaces the check is loud — Neovim launched with a missing `-u` never attaches, and the app prints `failed to start core` and opens no window.
+
+This crate also has a package output, `packages.wolf-gnome` in `flake.nix`, whose install layout and the executable-relative constant are one contract rather than two. Its evidence comes from `#[ignore]`d tests that one committed script always runs with the store path exported, not from the default suite, because a Nix builder can run none of them. [`build.md`](../../build.md) owns the commands and [`tests/README.md`](tests/README.md) the claims.
 
 ## The GUI denylist does not apply here
 
@@ -299,6 +303,8 @@ The project search adds none either. `start_search` resolves its root from the t
 The GTK glue is covered by end-to-end smokes that launch the real binary under `cage`, the headless wlroots compositor, drive it with `wtype` and [`wolf-pointer-inject`](../../tools/wolf-pointer-inject/README.md), screenshot the live window with `grim`, and read it back with `tesseract`. They prove the stack actually draws a window a human could see. They are not opt-in: they run in the ordinary `cargo test` suite, which is most of why it is slow. See [`tests/README.md`](tests/README.md) for the full list.
 
 A missing precondition fails loud rather than skipping quietly, because absence means the smoke toolchain was not provisioned; the environment they need is [`build.md`](../../build.md)'s.
+
+Three further smokes at the end of the same file drive the installed store artifact through the same helper, scrubbing from the child every devShell export that artifact must supply for itself. They are `#[ignore]`d because their precondition is a built package, and they live in that file rather than one of their own because a second test binary spawning `cage` cannot serialize against this one.
 
 Three details are load-bearing. Every smoke holds a shared mutex for its whole body, because two `cage` compositors started concurrently contend for the same Wayland socket and both fail. Each scenario runs inside `cage` as a single shell command, since `cage` exports its `WAYLAND_DISPLAY` only to its own child process tree. And every smoke's environment comes from one helper, which is the only thing keeping a smoke run out of the developer's real state and configuration directories.
 

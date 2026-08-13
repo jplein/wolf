@@ -19,7 +19,7 @@
 //! behaviour reads.
 
 use std::cell::RefCell;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use adw::prelude::*;
@@ -29,6 +29,7 @@ use wolf_core::{StateStore, WolfConfig};
 use crate::config_seam;
 use crate::coordinator::{self, Coordinator};
 use crate::frame_metrics;
+use crate::init_lua;
 use crate::CellMetrics;
 
 /// The GApplication id. Adwaita uses it for resource paths, the default window
@@ -129,11 +130,34 @@ pub(crate) fn measure_metrics(config: &WolfConfig) -> CellMetrics {
     CellMetrics::for_font(&cr, &config.font_family, pt, config.line_height)
 }
 
-/// Resolves the location of the in-repo `runtime/nvim/init.lua` relative to this
-/// crate.
+/// Resolves the captive `runtime/nvim/init.lua` this process launches Neovim with.
+///
+/// GLUE only: the three environment and filesystem reads live here, and the RULE
+/// that orders them lives in [`init_lua::resolve_init_lua`] — the same neighbourhood
+/// convention [`FONT_PT_ENV`] and [`config_seam::resolve_font_pt`] follow.
+///
+/// The `CARGO_MANIFEST_DIR` fallback is what keeps `cargo run` and every compositor
+/// smoke working, so it is passed unconditionally rather than guarded.
+///
+/// Under `wrapGAppsHook4` the installed `$out/bin/wolf-gnome` is a wrapper that
+/// `exec`s `$out/bin/.wolf-gnome-wrapped`, and `current_exe()` reads
+/// `/proc/self/exe` — so the parent directory is still `$out/bin` and the
+/// `../share/…` join still resolves. A wrapper does not break the middle branch; do
+/// not "fix" this by reaching for `argv[0]`.
 #[must_use]
 pub(crate) fn init_lua_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../runtime/nvim/init.lua")
+    let env_override = std::env::var(init_lua::INIT_LUA_ENV).ok();
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(Path::to_path_buf));
+    let manifest_fallback =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../runtime/nvim/init.lua");
+    init_lua::resolve_init_lua(
+        env_override.as_deref(),
+        exe_dir.as_deref(),
+        &manifest_fallback,
+        |p: &Path| p.exists(),
+    )
 }
 
 /// Opens the application-state store over the platform state directory.

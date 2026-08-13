@@ -18,11 +18,43 @@
 #   bazelisk to drive the Bazel build of `wolf-core`, using the host Xcode SDK
 #   for the C/link toolchain (not the older SDK shipped inside Nix). It carries
 #   no Rust toolchain (rules_rust downloads a pinned rustc) and no GUI packages.
+#
+# On Linux it also provides a PACKAGE output — `packages.wolf-gnome`, and
+# `packages.default` as the same derivation — which builds the `wolf-gnome`
+# binary at the workspace release profile and installs it as a self-contained
+# application: its own Neovim, ripgrep, treesitter trees and editor fonts wrapped
+# in, a captive `share/wolf/nvim/` runtime tree carrying `init.lua` beside the
+# vendored `orlando` and `lighthouse` trees, a desktop entry and the hicolor icon
+# set. There is deliberately no Darwin package output; `Wolf.app` is Bazel's.
 {
   description = "Wolf — Linux (NixOS) + macOS dev environment (Rust toolchain + pinned hermetic Neovim; bazelisk on Darwin)";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+
+    # The RUNTIME ASSETS the shipped application carries — Neovim, its
+    # nvim-treesitter grammars and queries, and ripgrep — held apart from the
+    # GTK/toolchain `nixpkgs` above and pinned to an explicit revision, so a
+    # `nix flake update nixpkgs` taken for a GTK fix cannot move what the Linux
+    # suite was run against. The property a packaging unit owes is that the
+    # artifact's Neovim IS the one the evidence was taken from; a floating input
+    # would make a green Linux suite evidence about one Neovim while the shipped
+    # application ran whatever the last update fetched.
+    #
+    # This is the same revision `nixpkgs` is locked at today, so nothing about the
+    # currently-tested Neovim changes and the closure is shared.
+    #
+    # IT CARRIES NEOVIM 0.12.2, and `bazel/nvim/extensions.bzl` pins 0.12.3 for
+    # macOS. That divergence predates this input and is deliberate rather than
+    # unnoticed: the shared `runtime/nvim/init.lua` states its measured claims per
+    # version (`vim.uv` on 0.12.3, treesitter starting by itself on a markdown
+    # buffer on 0.12.2), and a matching MINOR series is what preserves the API
+    # surface those claims rest on. Closing the patch gap costs either building
+    # Neovim from source on Linux — off the binary cache, taxing every
+    # `nix develop` — or bumping Linux and re-running the whole verification gate
+    # plus re-measuring the treesitter readbacks. Recorded in `macos-followups.md`.
+    nixpkgs-runtime.url = "github:NixOS/nixpkgs/9ae611a455b90cf061d8f332b977e387bda8e1ca";
+
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -33,6 +65,7 @@
   outputs =
     {
       nixpkgs,
+      nixpkgs-runtime,
       rust-overlay,
       flake-utils,
       ...
@@ -45,13 +78,21 @@
 
         isDarwin = pkgs.stdenv.isDarwin;
 
+        # The runtime-asset package set, from the rev-pinned second input. Its
+        # reason for existing is on `inputs.nixpkgs-runtime` above. Only Neovim,
+        # ripgrep and nvim-treesitter come from here; every toolchain and GUI
+        # package still comes from `pkgs`.
+        pkgsRuntime = import nixpkgs-runtime { inherit system; };
+
         # NOTE: `rustToolchain`, `wolfPointerInject`, `iaWriterMono`,
         # `wolfTreesitterLanguages` / `wolfTreesitterParsers` /
-        # `wolfTreesitterQueries`, and the GTK/Neovim packages below are only
-        # ever forced when `linuxShell` is evaluated. On Darwin
-        # `devShells.default` resolves to `darwinShell`, which references none of
-        # them, so Nix's laziness keeps these Linux-only derivations off the
-        # Darwin eval path. `wolfPointerInject` in particular is a Wayland
+        # `wolfTreesitterQueries`, `pkgsRuntime` and everything taken from it
+        # (`wolfNeovim`, `wolfRipgrep`), `wolfOrlando`, `wolfLighthouse`,
+        # `wolfGnomePackage`, and the GTK/Neovim packages below are only
+        # ever forced when `linuxShell` or the package output is evaluated. On
+        # Darwin `devShells.default` resolves to `darwinShell`, which references
+        # none of them, so Nix's laziness keeps these Linux-only derivations off
+        # the Darwin eval path. `wolfPointerInject` in particular is a Wayland
         # program that could not build on Darwin at all; it is safe only because
         # nothing outside `linuxShell` forces the thunk. `iaWriterMono` is
         # arch-independent data, and the treesitter grammars are ordinary C that
@@ -60,6 +101,16 @@
         # rule is the same for all of them. Do not add a top-level reference to
         # any of them, and do not wrap any of them in a `lib.optional` guard: a
         # guard would imply this laziness argument is unsound.
+        #
+        # THE ONE DELIBERATE EXCEPTION is the `optionalAttrs` on the `packages`
+        # output at the bottom of this file, and it is a different thing from the
+        # guard forbidden above. That prohibition is about guarding a Linux
+        # derivation INSIDE `linuxShell.packages`, where laziness already does the
+        # work. The output attribute set is not lazy in the same way: without the
+        # guard, `packages.aarch64-darwin.default` would EXIST as an attribute
+        # naming a Wayland GTK application that cannot build on Darwin at all, and
+        # `nix flake show` and `nix flake check` would try to evaluate it. The
+        # guard is on the attribute's existence, not on the derivation's value.
         rustToolchain = pkgs.rust-bin.stable.latest.default.override {
           extensions = [
             "rust-src"
@@ -143,29 +194,57 @@
             '';
           };
 
+        # The captive Neovim the devShell exports and the package wraps in, and
+        # the ripgrep behind `wolf-core`'s content search. Both come from
+        # `pkgsRuntime` so the tested binary and the shipped binary are the same
+        # store path by construction rather than by coincidence.
+        wolfNeovim = pkgsRuntime.neovim;
+        wolfRipgrep = pkgsRuntime.ripgrep;
+
+        # THE ONE PLACE the Nix side writes down what each vendored asset is
+        # pinned at. Every `fetchurl` below reads its commit and its sha256 from
+        # here rather than carrying a literal of its own.
+        #
+        # BUMP BOTH TOGETHER. Each of these three assets is fetched TWICE — once
+        # here for the Linux devShell and package, once by
+        # `bazel/<asset>/extensions.bzl` for the macOS `.app` — and each side
+        # verifies only its OWN sha256. So a one-sided bump is completely silent:
+        # both platforms build green while Linux ships one revision of a plugin and
+        # macOS bundles another. `crates/wolf-gnome/tests/vendored_pins.rs` is the
+        # drift check that would notice, and it runs on every `cargo test`.
+        #
+        # THE FORMATTING BELOW IS LOAD-BEARING, because that check is a line
+        # scanner and not a Nix parser — the same contract the workspace
+        # `Cargo.toml` carries for `release_profile.rs`. One attribute set per
+        # line, `commit` before `sha256`, both values double-quoted, the closing
+        # `};` on the SAME line, and the block's own closing `};` on a line of its
+        # own. Reformat this and the check reports every entry it can no longer
+        # read, rather than passing.
+        wolfVendoredPins = {
+          ia-writer-mono = { commit = "f32c04c3058a75d7ce28919ce70fe8800817491b"; sha256 = "826767eaea4ce43ccb7ca71327a5c63ac31206b99df400699e6744df6104e1b5"; };
+          orlando = { commit = "c960cf3e1c24fbdd2e6fb30ab9c8022cdc7b2bf9"; sha256 = "794911361108eb509ab00ec64ed03c229418be32f45ad7a385b6d2d6b057f3c5"; };
+          lighthouse = { commit = "514dec2c79701b74082defc19090bd1dae57765b"; sha256 = "a452624fee9ce7b82e11877b013f578aa1c3befda6b6564536c3264a40b8e0d2"; };
+        };
+
         # The vendored iA Writer Mono S static faces plus their licence, from the
         # SAME pinned commit tarball `bazel/ia-writer-mono/extensions.bzl`
-        # fetches.
-        #
-        # The URL and the sha256 below are THE SAME PIN as `_COMMIT` / `_SHA256`
-        # there, so the asset has one pin and not two. BUMP BOTH TOGETHER: this
-        # file and bazel/ia-writer-mono/extensions.bzl.
+        # fetches. The pin comes from `wolfVendoredPins` above.
         #
         # Linux-only in practice — see the NOTE above about why it stays off the
         # Darwin eval path.
         iaWriterMono =
           let
-            commit = "f32c04c3058a75d7ce28919ce70fe8800817491b";
+            pin = wolfVendoredPins.ia-writer-mono;
           in
           pkgs.stdenv.mkDerivation {
             pname = "ia-writer-mono-s";
             # The pin is the commit, not a release.
             version = "0-unstable-2023";
             src = pkgs.fetchurl {
-              url = "https://github.com/iaolo/iA-Fonts/archive/${commit}.tar.gz";
-              sha256 = "826767eaea4ce43ccb7ca71327a5c63ac31206b99df400699e6744df6104e1b5";
+              url = "https://github.com/iaolo/iA-Fonts/archive/${pin.commit}.tar.gz";
+              sha256 = pin.sha256;
             };
-            sourceRoot = "iA-Fonts-${commit}";
+            sourceRoot = "iA-Fonts-${pin.commit}";
             dontConfigure = true;
             dontBuild = true;
 
@@ -181,6 +260,120 @@
               # upstream LICENSE.md).
               install -Dm644 "iA Writer Mono/LICENSE.md" \
                 "$out/share/licenses/ia-writer-mono/LICENSE.md"
+              runHook postInstall
+            '';
+          };
+
+        # The vendored orlando Neovim plugin, from the SAME pinned commit tarball
+        # `bazel/orlando/extensions.bzl` fetches. The pin is in
+        # `wolfVendoredPins`.
+        #
+        # THE INSTALLED SUBTREES MIRROR `//bazel/orlando`'s `runtime_files`
+        # filegroup exactly — `plugin/`, `lua/`, `doc/` and `LICENSE*` — and the
+        # exclusions are the point rather than an economy: `test/`, `flake.nix`,
+        # `flake.lock`, `.luarc.json` and `README.md` are dev-only, macOS does not
+        # bundle them, and the whole reason to vendor on both platforms is that
+        # both ship the SAME files. An inclusive `cp -r` here is a divergence
+        # nothing else would report;
+        # `crates/wolf-gnome/tests/packaged_layout.rs` asserts the exclusions took.
+        #
+        # THE OUTPUT ROOT IS THE TREE ITSELF (`$out/plugin/orlando.lua`), with no
+        # inner `orlando/` directory. That differs from the Bazel TreeArtifact on
+        # purpose: `rules_apple` strips a TreeArtifact's own top-level name when
+        # copying it into `Contents/Resources/`, so Bazel has to nest. Nix has no
+        # such rule, and `wolfGnomePackage`'s `postInstall` names the destination
+        # directory explicitly.
+        #
+        # DELIBERATELY NOT IN `linuxShell.packages`, and that is not an oversight.
+        # The devShell must keep running the compositor smokes with NO orlando and
+        # NO lighthouse beside the checkout's `runtime/nvim/init.lua`, because that
+        # binary is the CONTROL leg of the packaged-artifact A/B in
+        # `smoke_headless.rs::the_packaged_binary_loads_the_vendored_lighthouse_and_orlando_under_cage`.
+        # Adding either tree to the shell looks like a convenience and silently
+        # destroys that control.
+        #
+        # Linux-only in practice — see the NOTE above about the Darwin eval path.
+        wolfOrlando =
+          let
+            pin = wolfVendoredPins.orlando;
+          in
+          pkgs.stdenv.mkDerivation {
+            pname = "wolf-orlando";
+            # The pin is the commit, not a release.
+            version = "0-unstable-2025";
+            src = pkgs.fetchurl {
+              url = "https://github.com/jplein/orlando/archive/${pin.commit}.tar.gz";
+              sha256 = pin.sha256;
+            };
+            sourceRoot = "orlando-${pin.commit}";
+            dontConfigure = true;
+            dontBuild = true;
+
+            # stdenv's `move-docs` setup hook relocates `$out/doc` to
+            # `$out/share/doc` by default, which would put orlando's `doc/` one
+            # directory away from where the plugin's own `runtimepath` entry
+            # expects it — `:help orlando` would find nothing, and the Nix tree
+            # would stop matching what `//bazel/orlando` bundles. `forceShare`
+            # names exactly which of `man doc info` the hook moves, so dropping
+            # `doc` from it is the narrow fix; `dontFixup` would be the broad one
+            # and would disable unrelated checks.
+            forceShare = [
+              "man"
+              "info"
+            ];
+
+            installPhase = ''
+              runHook preInstall
+              for d in plugin lua doc; do
+                mkdir -p "$out/$d"
+                cp -R "$d/." "$out/$d/"
+              done
+              for f in LICENSE*; do
+                install -Dm644 "$f" "$out/$f"
+              done
+              chmod -R u+w "$out"
+              runHook postInstall
+            '';
+          };
+
+        # The vendored lighthouse colorscheme, from the SAME pinned commit tarball
+        # `bazel/lighthouse/extensions.bzl` fetches. The pin is in
+        # `wolfVendoredPins`, and every note on `wolfOrlando` above applies here —
+        # including that this tree is deliberately absent from
+        # `linuxShell.packages`.
+        #
+        # lighthouse is a COLORSCHEME: its only runtime files are `colors/` and
+        # `LICENSE*`, matching `//bazel/lighthouse`'s filegroup. There is no
+        # `plugin/`, no `lua/` and no `doc/` to install.
+        #
+        # `sourceRoot` IS `lighthouse.nvim-<commit>`, not `lighthouse-<commit>`:
+        # the upstream repository name includes the `.nvim`. Getting this wrong
+        # makes the install phase find nothing at all. The Bazel extension carries
+        # the same warning.
+        wolfLighthouse =
+          let
+            pin = wolfVendoredPins.lighthouse;
+          in
+          pkgs.stdenv.mkDerivation {
+            pname = "wolf-lighthouse";
+            # The pin is the commit, not a release.
+            version = "0-unstable-2025";
+            src = pkgs.fetchurl {
+              url = "https://github.com/jplein/lighthouse.nvim/archive/${pin.commit}.tar.gz";
+              sha256 = pin.sha256;
+            };
+            sourceRoot = "lighthouse.nvim-${pin.commit}";
+            dontConfigure = true;
+            dontBuild = true;
+
+            installPhase = ''
+              runHook preInstall
+              mkdir -p "$out/colors"
+              cp -R colors/. "$out/colors/"
+              for f in LICENSE*; do
+                install -Dm644 "$f" "$out/$f"
+              done
+              chmod -R u+w "$out"
               runHook postInstall
             '';
           };
@@ -243,10 +436,18 @@
         # would deliver no parsers at all. `withAllGrammars` additionally costs
         # 249.9 MiB and 313 local builds for a set far wider than point 1's.
         #
+        # The plugin comes from `pkgsRuntime`, not from `pkgs`: the grammars and
+        # the queries are runtime assets the application carries, and pinning them
+        # to the same revision as Neovim is what keeps the parity claim on
+        # `wolfTreesitterQueries` below from being falsifiable by an unrelated
+        # `nix flake update nixpkgs`.
+        #
         # Linux-only in practice — see the NOTE above about the Darwin eval path.
         wolfTreesitterParsers = pkgs.symlinkJoin {
           name = "wolf-treesitter-parsers";
-          paths = map (lang: pkgs.vimPlugins.nvim-treesitter.parsers.${lang}) wolfTreesitterLanguages;
+          paths = map (
+            lang: pkgsRuntime.vimPlugins.nvim-treesitter.parsers.${lang}
+          ) wolfTreesitterLanguages;
         };
 
         # The query half: the nvim-treesitter plugin's `runtime` directory,
@@ -260,7 +461,11 @@
         # byte-identical queries; and the macOS package already globs queries
         # with no per-language filter. Parsers stay curated because each one is a
         # compile; queries are data and cost nothing to carry.
-        wolfTreesitterQueries = "${pkgs.vimPlugins.nvim-treesitter}/runtime";
+        #
+        # That parity claim is about a REVISION, so the plugin is taken from
+        # `pkgsRuntime` rather than `pkgs`: pinned by the runtime input, it cannot
+        # move under a `nixpkgs` bump taken for something else.
+        wolfTreesitterQueries = "${pkgsRuntime.vimPlugins.nvim-treesitter}/runtime";
 
         darwinShell = pkgs.mkShell {
           packages = [
@@ -278,8 +483,8 @@
         linuxShell = pkgs.mkShell {
           packages = [
             rustToolchain
-            pkgs.neovim
-            pkgs.ripgrep
+            wolfNeovim
+            wolfRipgrep
             pkgs.pkg-config
 
             # GTK4 / Cairo / Pango toolchain for the wolf-gnome front-end's
@@ -309,8 +514,17 @@
             # `system-deps` probe resolves — without it the crate does not
             # configure. At RUN time it supplies the out-of-process
             # `WebKitNetworkProcess` and `WebKitWebProcess` helpers that a
-            # `WebKitWebView` spawns; a web view with no helpers on PATH renders
+            # `WebKitWebView` spawns; a web view that cannot spawn them renders
             # nothing.
+            #
+            # Those helpers are found through an ABSOLUTE path compiled into
+            # `libwebkitgtk-6.0.so.4`, not through PATH and not through
+            # `WEBKIT_EXEC_PATH` — that name does not appear in the library at
+            # all. So the packaged wrapper needs no PATH entry and no execution
+            # variable of its own, which is a MEASURED fact rather than an
+            # inference: `smoke_headless.rs`'s packaged preview smoke launches the
+            # store binary with the devShell's exports scrubbed and gets a
+            # rendered document.
             #
             # libsoup_3 is NOT optional and not transitive here:
             # `webkitgtk-6.0.pc` declares
@@ -342,12 +556,15 @@
             pkgs.jetbrains-mono
             iaWriterMono
 
-            # GATE-REQUIRED: the fifty-four headless end-to-end smoke tests in
-            # crates/wolf-gnome/tests/smoke_headless.rs (of that file's
-            # sixty-one tests; the other seven need no compositor) run as part
-            # of a plain `cargo test` (no `--ignored`). They launch the real
+            # GATE-REQUIRED: the fifty-six headless end-to-end smoke tests in
+            # crates/wolf-gnome/tests/smoke_headless.rs (of the sixty-four that
+            # file's default suite runs; the other eight are pure guards that
+            # need no compositor) run as part of a plain `cargo test` (no
+            # `--ignored`). They launch the real
             # window under a headless Wayland compositor and OCR a screenshot,
-            # so these five must be present or the suite fails loud. cage =
+            # so these five must be present or the suite fails loud. The three
+            # `#[ignore]`d packaged smokes that `./tools/wolf-package-smoke.sh`
+            # drives need the same five. cage =
             # headless wlroots compositor, wtype = synthetic keystrokes,
             # grim = screenshot, tesseract = OCR, wolf-pointer-inject =
             # synthetic pointer (motion / button / axis). Not needed to *build*.
@@ -373,10 +590,10 @@
           shellHook = ''
             # WOLF_NVIM_BIN is how wolf-core and its tests locate the hermetic,
             # pinned nvim. Do not rely on PATH.
-            export WOLF_NVIM_BIN="${pkgs.lib.getExe pkgs.neovim}"
+            export WOLF_NVIM_BIN="${pkgs.lib.getExe wolfNeovim}"
             # WOLF_RG_BIN is how wolf-core's content search + its tests locate the
             # ripgrep binary on the Linux/cargo path. Do not rely on PATH.
-            export WOLF_RG_BIN="${pkgs.lib.getExe pkgs.ripgrep}"
+            export WOLF_RG_BIN="${pkgs.lib.getExe wolfRipgrep}"
             # The two directories `runtime/nvim/init.lua`'s treesitter gate falls
             # back to when the macOS .app's sibling `nvim-treesitter/` and
             # `parsers/` trees are absent, which on Linux they always are.
@@ -404,6 +621,30 @@
             # `packages` list either.
             export WOLF_NVIM_TREESITTER_DIR="${wolfTreesitterQueries}"
             export WOLF_PARSERS_DIR="${wolfTreesitterParsers}"
+
+            # The two vendored Lua trees, staged for
+            # `crates/wolf-ffi/tests/orlando_load.rs` and `lighthouse_load.rs`.
+            # Both drive a REAL Neovim against a reconstructed sibling layout and
+            # are the only automated proof of the two load branches in
+            # `runtime/nvim/init.lua`; without a tree to stage each one prints a
+            # loud SKIP and passes vacuously, which on Linux it always did before
+            # these derivations existed. The names carry TEST because they are
+            # test staging variables in the `WOLF_TEST_*` family, alongside
+            # `WOLF_TEST_INIT_LUA` / `WOLF_TEST_NVIM_DIR` — no application code
+            # reads either, and the packaged smokes scrub both.
+            #
+            # Each points at the TREE ITSELF rather than at a directory containing
+            # one: both tests probe for an inner `<dir>/orlando` or
+            # `<dir>/lighthouse` (the shape of the Bazel TreeArtifact) and fall
+            # back to the directory they were given, which is the shape these
+            # derivations have.
+            #
+            # This does NOT put either tree next to the checkout's
+            # `runtime/nvim/init.lua`: both tests reconstruct the layout in a temp
+            # directory, so the compositor smokes' control leg is untouched.
+            export WOLF_TEST_ORLANDO_DIR="${wolfOrlando}"
+            export WOLF_TEST_LIGHTHOUSE_DIR="${wolfLighthouse}"
+
             export RUST_SRC_PATH="${rustToolchain}/lib/rustlib/src/rust/library"
 
             # Pin the font stack for deterministic golden renders. We generate a
@@ -448,9 +689,329 @@
             export WLR_LIBINPUT_NO_DEVICES=1
           '';
         };
+
+        # The four GNOME LIGHT icon exports plus the scalable master, named one by
+        # one rather than as a directory.
+        #
+        # `./resources/icons/Wolf application icon GNOME light/...` is NOT a valid
+        # Nix path literal: a space terminates one. Hence the path-plus-string
+        # concatenation below. Naming each file individually also keeps the
+        # sibling macOS 1024x1024 masters — which `//crates/wolf-macos` owns — out
+        # of the store copy entirely.
+        gnomeIconDir = ./resources/icons + "/Wolf application icon GNOME light";
+        gnomeIcon48 = gnomeIconDir + "/icon-silhouette_48x48.png";
+        gnomeIcon64 = gnomeIconDir + "/icon-silhouette_64x64.png";
+        gnomeIcon128 = gnomeIconDir + "/icon-silhouette_128x128.png";
+        gnomeIcon256 = gnomeIconDir + "/icon-silhouette_256x256.png";
+        gnomeIconSvg = gnomeIconDir + "/icon-silhouette_scalable.svg";
+
+        # What the source filter KEEPS. A whitelist rather than a blocklist,
+        # because the cost of getting a blocklist wrong is silent and large.
+        #
+        # `lib.cleanSource` alone does NOT exclude `target/`, which on a working
+        # checkout is over a gigabyte; an unfiltered `src = ./.` copies all of it
+        # into the store on every evaluation. If `nix build` appears to hang
+        # before it compiles anything, this is why.
+        wolfPackageSourceFilter =
+          path: _type:
+          let
+            rel = pkgs.lib.removePrefix (toString ./. + "/") (toString path);
+          in
+          rel == "Cargo.toml" || rel == "Cargo.lock" || rel == "crates" || pkgs.lib.hasPrefix "crates/" rel;
+
+        # The installed Linux application: the release binary, its captive Neovim
+        # runtime tree, a desktop entry, the hicolor icon set and the two bundled
+        # editor font families.
+        #
+        # Built with the flake's OWN pinned Rust toolchain rather than
+        # `rustPlatform`'s nixpkgs default, so the artifact is compiled by the same
+        # rustc the Linux evidence was taken with.
+        wolfGnomePackage =
+          (pkgs.makeRustPlatform {
+            cargo = rustToolchain;
+            rustc = rustToolchain;
+          }).buildRustPackage
+            {
+              pname = "wolf-gnome";
+              version = "0.1.0";
+
+              src = pkgs.lib.cleanSourceWith {
+                src = ./.;
+                name = "wolf-source";
+                filter = wolfPackageSourceFilter;
+              };
+
+              # No `outputHashes`: `Cargo.lock` carries zero `source = "git+…"`
+              # entries, so every crate comes from crates.io.
+              cargoLock.lockFile = ./Cargo.lock;
+
+              # Only the front-end binary. `wolf-ffi` is the swift-bridge crate the
+              # macOS app consumes and the shipped Linux application does not use,
+              # so building it here would be pure cost.
+              cargoBuildFlags = [
+                "--package"
+                "wolf-gnome"
+                "--bin"
+                "wolf-gnome"
+              ];
+
+              # `buildType` is left at its default `"release"`, which is what
+              # selects the workspace `[profile.release]` — `opt-level = 3`,
+              # `lto = "thin"`, `panic = "unwind"`, `debug = "line-tables-only"`,
+              # `strip = "none"`. No extra flag is needed, and nothing here may
+              # override `strip`: the release contract is that symbols survive, so
+              # a `dontStrip = false` would break a stated property of the profile.
+
+              nativeBuildInputs = [
+                pkgs.pkg-config
+                pkgs.wrapGAppsHook4
+                pkgs.desktop-file-utils
+              ];
+
+              # The first eight are the `.pc` files the gtk-rs and `webkit6` `-sys`
+              # crates probe at build time, taken from `linuxShell`'s list, plus
+              # `libsoup_3` for the reason that list records (`webkitgtk-6.0.pc`
+              # declares `Requires: … libsoup-3.0`, so `soup3-sys` does not
+              # configure without it).
+              #
+              # The last five are RUNTIME, and they belong in `buildInputs` rather
+              # than anywhere else because that is how `wrapGAppsHook4` and the
+              # `glib` / `hicolor-icon-theme` setup hooks discover them: they
+              # accumulate GSETTINGS_SCHEMAS_PATH and XDG_ICON_DIRS from
+              # `buildInputs` and write the corresponding `--prefix` flags into the
+              # wrapper. `librsvg` is what puts the SVG loader into the pixbuf
+              # module cache, without which the scalable icon and Adwaita's own
+              # SVGs do not decode.
+              #
+              # `wolf-core`'s only C dependency is `rusqlite`'s BUNDLED SQLite,
+              # compiled by `cc` from stdenv — no system `sqlite` is needed and
+              # none must be added.
+              buildInputs = [
+                pkgs.gtk4
+                pkgs.libadwaita
+                pkgs.webkitgtk_6_0
+                pkgs.libsoup_3
+                pkgs.cairo
+                pkgs.pango
+                pkgs.glib
+                pkgs.gdk-pixbuf
+                pkgs.graphene
+                pkgs.harfbuzz
+
+                pkgs.librsvg
+                pkgs.gsettings-desktop-schemas
+                pkgs.adwaita-icon-theme
+                pkgs.hicolor-icon-theme
+                pkgs.shared-mime-info
+              ];
+
+              # THE SUITE `cargo test -p wolf-gnome` RUNS IS NOT A HEADLESS UNIT
+              # SUITE, and running it here is not possible rather than merely
+              # slow. Most of its tests launch `cage`, a wlroots compositor
+              # needing a writable `XDG_RUNTIME_DIR` at mode 0700, alongside
+              # `wtype`, `grim`, `tesseract` and this repository's own
+              # `wolf-pointer-inject`; every real-nvim test additionally needs
+              # `WOLF_NVIM_BIN`; and `wolf-core`'s swap-recovery test needs a
+              # writable `$HOME`. A Nix build sandbox provides no
+              # `/run/user/<uid>`, no `/dev/dri` (so GTK's GL renderer has no
+              # device), and no session bus. Running a curated subset would
+              # execute only the pure seams the checkout `cargo test` already
+              # covers, and would say nothing about the artifact.
+              #
+              # THE CONSEQUENCE IS STATED RATHER THAN HIDDEN: every piece of
+              # evidence about this artifact comes from OUTSIDE the build sandbox,
+              # through `./tools/wolf-package-smoke.sh` —
+              # `crates/wolf-gnome/tests/packaged_layout.rs` and the `#[ignore]`d
+              # packaged smokes in `crates/wolf-gnome/tests/smoke_headless.rs`.
+              doCheck = false;
+
+              postInstall = ''
+                # --- The captive Neovim runtime tree ------------------------------
+                #
+                # `runtime/nvim/init.lua` self-locates its siblings from its OWN
+                # directory (`debug.getinfo(1, "S").source`) and gates each on an
+                # `fs_stat`, so installing the two vendored trees NEXT TO it is the
+                # entire activation mechanism and needs no Lua edit. The captive
+                # file is a real copy at mode 644, and
+                # `crates/wolf-gnome/tests/packaged_layout.rs` asserts it is
+                # byte-identical to the checkout's.
+                #
+                # The destination is `INSTALLED_INIT_LUA_RELATIVE` joined onto
+                # `$out/bin` — the constant `crates/wolf-gnome/src/init_lua.rs`
+                # states. Move one and the other must move with it.
+                install -Dm644 ${./runtime/nvim/init.lua} \
+                  "$out/share/wolf/nvim/init.lua"
+
+                mkdir -p "$out/share/wolf/nvim/orlando" "$out/share/wolf/nvim/lighthouse"
+                cp -R ${wolfOrlando}/. "$out/share/wolf/nvim/orlando/"
+                cp -R ${wolfLighthouse}/. "$out/share/wolf/nvim/lighthouse/"
+                chmod -R u+w "$out/share/wolf/nvim"
+
+                # --- The desktop entry --------------------------------------------
+                #
+                # `Exec` is the ABSOLUTE store path, never a bare `wolf-gnome`. The
+                # entry and the binary are outputs of the same derivation, so the
+                # path cannot dangle while the entry is visible, and an absolute
+                # path removes any dependence on PATH ordering. A bare name would
+                # be resolved through the session's PATH, where a developer's
+                # `target/release` ahead of their profile would launch an UNWRAPPED
+                # binary carrying no WOLF_NVIM_BIN and no installed init.lua — a
+                # silent wrong-artifact launch from the application menu.
+                #
+                # NO `%f`, NO `%U` and NO `MimeType`: `app::run` calls
+                # `run_with_args::<&str>(&[])`, so the process ignores its real
+                # argv. A field code would make the desktop hand Wolf a path it
+                # silently drops, and a MIME type would put Wolf in the "Open With"
+                # list for every `.md` file and then open an empty window. Opening
+                # a file from the desktop needs `HANDLES_OPEN`, a real argv parse
+                # and an `open` handler — a unit of its own.
+                #
+                # `StartupWMClass` matches `app.rs`'s APP_ID so the shell
+                # associates the window with this entry.
+                mkdir -p "$out/share/applications"
+                cat > "$out/share/applications/org.wolf.Wolf.desktop" <<EOF
+                [Desktop Entry]
+                Type=Application
+                Version=1.0
+                Name=Wolf
+                GenericName=Markdown Editor
+                Comment=A Markdown editor that embeds Neovim as its editing engine
+                Exec=$out/bin/wolf-gnome
+                Icon=org.wolf.Wolf
+                Terminal=false
+                Categories=Utility;TextEditor;Development;
+                StartupNotify=true
+                StartupWMClass=org.wolf.Wolf
+                EOF
+
+                # --- The icons -----------------------------------------------------
+                #
+                # The hicolor theme is indexed BY DIRECTORY and never re-measures,
+                # so each export must land in the directory naming its own pixel
+                # size. Only the LIGHT set is installed: hicolor has no appearance
+                # axis, and both exports are full-bleed self-contained round icons
+                # with their own background plate rather than a symbolic pair, so
+                # installing the dark set under any name would either shadow this
+                # one or add an icon nothing looks up.
+                install -Dm644 ${gnomeIcon48} \
+                  "$out/share/icons/hicolor/48x48/apps/org.wolf.Wolf.png"
+                install -Dm644 ${gnomeIcon64} \
+                  "$out/share/icons/hicolor/64x64/apps/org.wolf.Wolf.png"
+                install -Dm644 ${gnomeIcon128} \
+                  "$out/share/icons/hicolor/128x128/apps/org.wolf.Wolf.png"
+                install -Dm644 ${gnomeIcon256} \
+                  "$out/share/icons/hicolor/256x256/apps/org.wolf.Wolf.png"
+                install -Dm644 ${gnomeIconSvg} \
+                  "$out/share/icons/hicolor/scalable/apps/org.wolf.Wolf.svg"
+
+                # --- The two editor font families ---------------------------------
+                #
+                # `iA Writer Mono S` is the family `wolf_core::default_config()`
+                # names, so a package without it renders a first-run user's default
+                # configuration in whatever face fontconfig substitutes; JetBrains
+                # Mono is the other family the shared `wolf-config.yaml` may name.
+                # The two file sets are disjoint, which is why one directory holds
+                # both — the same argument `crates/wolf-macos/README.md` makes for
+                # its single bundled `fonts/`. A NixOS user can also put this
+                # package in `fonts.packages` and get both families system-wide.
+                for f in ${iaWriterMono}/share/fonts/truetype/*.ttf; do
+                  install -Dm644 "$f" "$out/share/fonts/truetype/$(basename "$f")"
+                done
+                for f in ${pkgs.jetbrains-mono}/share/fonts/truetype/*.ttf; do
+                  install -Dm644 "$f" "$out/share/fonts/truetype/$(basename "$f")"
+                done
+                install -Dm644 ${iaWriterMono}/share/licenses/ia-writer-mono/LICENSE.md \
+                  "$out/share/licenses/ia-writer-mono-LICENSE.md"
+
+                # --- The ADDITIVE fontconfig fragment ------------------------------
+                #
+                # Three things here are each a thing a later reader would undo.
+                #
+                # (1) It is ADDITIVE, and it is NOT the devShell's exclusionary pin.
+                #     `crates/wolf-gnome/testdata/fonts.conf` omits every host font
+                #     directory deliberately, for golden-render determinism;
+                #     shipping that shape to a user would leave the GTK chrome
+                #     rendering in a monospace editor face. The `<include>` of the
+                #     system configuration is what keeps the host's own fonts,
+                #     aliases and rendering settings.
+                # (2) FONTCONFIG_FILE replaces the ROOT configuration rather than
+                #     extending it, which is why the include is written out
+                #     explicitly. `--prefix XDG_DATA_DIRS` cannot substitute for any
+                #     of this: fontconfig's `<dir prefix="xdg">fonts</dir>` covers
+                #     XDG_DATA_HOME alone and XDG_DATA_DIRS is never scanned,
+                #     verified against `/etc/fonts/fonts.conf` on a NixOS host.
+                # (3) The `<dir>` comes AFTER the include, so system fonts win ties.
+                mkdir -p "$out/share/wolf"
+                cat > "$out/share/wolf/fonts.conf" <<EOF
+                <?xml version="1.0"?>
+                <!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
+                <fontconfig>
+                  <include ignore_missing="yes">/etc/fonts/fonts.conf</include>
+                  <dir>$out/share/fonts</dir>
+                </fontconfig>
+                EOF
+
+                # Catches a malformed entry at build time rather than in a user's
+                # session, where the symptom is an application that simply does not
+                # appear in the menu.
+                desktop-file-validate "$out/share/applications/org.wolf.Wolf.desktop"
+              '';
+
+              # `wrapGAppsHook4` wraps during `fixupPhase` and CONSUMES the
+              # `gappsWrapperArgs` array, so these flags are appended to it rather
+              # than applied through a second `wrapProgram` call. A hand-rolled
+              # wrap here would double-wrap and shadow the hook's own
+              # `--prefix XDG_DATA_DIRS` / GSETTINGS_SCHEMA_DIR / GIO_EXTRA_MODULES
+              # / GDK_PIXBUF_MODULE_FILE.
+              #
+              # `--set-default` for every one, and the reason differs by group.
+              # WOLF_NVIM_BIN / WOLF_RG_BIN are direct macOS parity:
+              # `Project.swift` sets both with `setenv(name, value, 0)` — overwrite
+              # 0 — so a developer's own export wins there, and `--set-default` is
+              # the same rule. The two treesitter directories follow it for
+              # consistency and because a developer testing a work-in-progress
+              # query tree must be able to point the packaged binary at one.
+              # FONTCONFIG_FILE follows it so the devShell's exclusionary pin keeps
+              # winning INSIDE `nix develop`, which is what keeps `paint_golden.rs`
+              # and every OCR smoke reproducible; outside the shell the packaged
+              # additive config applies.
+              #
+              # WOLF_INIT_LUA IS NEVER SET HERE. Setting it would make
+              # `init_lua::resolve_init_lua`'s executable-relative branch dead code
+              # — branch 1 always wins — and would make the development override
+              # unusable on the packaged binary.
+              preFixup = ''
+                gappsWrapperArgs+=(
+                  --set-default WOLF_NVIM_BIN "${pkgs.lib.getExe wolfNeovim}"
+                  --set-default WOLF_RG_BIN "${pkgs.lib.getExe wolfRipgrep}"
+                  --set-default WOLF_NVIM_TREESITTER_DIR "${wolfTreesitterQueries}"
+                  --set-default WOLF_PARSERS_DIR "${wolfTreesitterParsers}"
+                  --set-default FONTCONFIG_FILE "$out/share/wolf/fonts.conf"
+                )
+              '';
+
+              meta = {
+                description = "A Markdown editor that embeds Neovim as its editing engine";
+                homepage = "https://github.com/jplein/wolf";
+                license = with pkgs.lib.licenses; [
+                  mit
+                  asl20
+                ];
+                mainProgram = "wolf-gnome";
+                platforms = pkgs.lib.platforms.linux;
+              };
+            };
       in
       {
         devShells.default = if isDarwin then darwinShell else linuxShell;
+      }
+      // pkgs.lib.optionalAttrs (!isDarwin) {
+        # `optionalAttrs` forces its CONDITION, never its value, so the Darwin
+        # evaluation path never touches `wolfGnomePackage`. The guard is required
+        # rather than tidy, and the NOTE beside `pkgsRuntime` above explains why it
+        # is a different thing from the `lib.optional` guard that block forbids.
+        packages.wolf-gnome = wolfGnomePackage;
+        packages.default = wolfGnomePackage;
       }
     );
 }

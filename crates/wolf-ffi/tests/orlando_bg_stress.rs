@@ -35,11 +35,21 @@
 //! in wolf-core: Neovim's line-grid protocol only re-sends changed cells, so a
 //! single misapplied event leaves stale cells forever.
 //!
-//! SKIP-when-unset policy: like `orlando_load`, loud no-op pass when the pinned
-//! nvim or the staged orlando tree is absent. The lighthouse colorscheme tree is
-//! staged too when available (the real bundle has it), but its absence does not
-//! skip the test — the default colorscheme also gives `CursorLine` (the group
-//! `OrlandoCodeBlock` links to) a distinct background.
+//! When this test SKIPs, and what a SKIP means: like `orlando_load`, a loud no-op
+//! pass when the pinned nvim or the vendored orlando tree is absent. That tree is
+//! staged on BOTH supported paths — Bazel stages `//bazel/orlando:orlando_tree`
+//! into the runfiles and wires `WOLF_TEST_ORLANDO_DIR`, and `flake.nix`'s
+//! `linuxShell.shellHook` exports the same variable from the `wolfOrlando`
+//! derivation, which builds the commit `bazel/orlando/extensions.bzl` pins — so this
+//! test runs on macOS and on Linux alike, and the SKIP branch is what a run outside
+//! BOTH environments takes. A SKIP inside either is a LOST EXPORT rather than the
+//! expected state, and costs this regression its whole reproduction;
+//! `the_shellhook_still_stages_the_vendored_lua_trees_for_the_ffi_tests` in
+//! `crates/wolf-gnome/tests/smoke_headless.rs` fails if either vendored-tree export
+//! is deleted from the `shellHook`. The lighthouse colorscheme tree is staged too
+//! when available (the real bundle has it), but its absence does not skip the test
+//! — the default colorscheme also gives `CursorLine` (the group `OrlandoCodeBlock`
+//! links to) a distinct background.
 
 mod common;
 
@@ -347,10 +357,15 @@ fn orlando_code_block_bg_stays_uniform_under_churn() {
     };
     std::env::set_var("WOLF_NVIM_BIN", &nvim_bin);
 
+    // Bazel stages the tree in the runfiles and the Linux devShell exports it from
+    // `wolfOrlando`, so this branch belongs to a run outside BOTH — inside either,
+    // reaching it means the export was lost (see the header).
     let Some(orlando_tree) = common::orlando_dir_or_none() else {
         eprintln!(
-            "\nSKIP: wolf-ffi orlando_bg_stress — WOLF_TEST_ORLANDO_DIR not staged \
-             (vendored orlando plugin is Bazel/macOS-only). No-op pass.\n"
+            "\nSKIP: wolf-ffi orlando_bg_stress — WOLF_TEST_ORLANDO_DIR is unset or names no \
+             readable tree, so this run is outside BOTH stagers: Bazel's runfiles and the Nix \
+             devShell's shellHook export. Outside them that is expected; INSIDE either it is a \
+             bug, and the wrong-background regression just went unreproduced. No-op pass.\n"
         );
         return;
     };

@@ -43,13 +43,29 @@
 //! staged `<lighthouse_tree>/lighthouse` to `T/lighthouse`, then launch nvim with
 //! `init_lua = T/init.lua`.
 //!
-//! ## SKIP-when-unset policy
+//! ## When this test SKIPs, and what a SKIP means
 //!
 //! Like its siblings this test needs a pinned nvim (`nvim_bin_or_skip`); it ALSO
-//! needs the staged lighthouse tree (`lighthouse_dir_or_none`). When either is
-//! absent — e.g. the cargo / Linux path, where lighthouse is not built — the test
-//! is a loud no-op pass, so it only ASSERTS when the tree is actually staged
-//! (Bazel/macOS).
+//! needs the vendored lighthouse tree (`lighthouse_dir_or_none`). That tree is
+//! staged on BOTH supported paths, so this test ASSERTS on macOS and on Linux
+//! alike:
+//!
+//!   * Bazel stages `//bazel/lighthouse:lighthouse_tree` into the runfiles and
+//!     wires `WOLF_TEST_LIGHTHOUSE_DIR` from the `rust_test` target's `env`.
+//!   * `flake.nix`'s `linuxShell.shellHook` exports the same variable from the
+//!     `wolfLighthouse` derivation, which builds the commit
+//!     `bazel/lighthouse/extensions.bzl` pins — the same commit the pinned color
+//!     constants below are read from, and `crates/wolf-gnome/tests/vendored_pins.rs`
+//!     is what keeps those two pins equal.
+//!
+//! The SKIP branch is therefore what a run OUTSIDE both environments takes — a
+//! bare `cargo test` on a host with no devShell — and it is correct behaviour
+//! there. Inside either environment a SKIP is a LOST EXPORT, not the expected
+//! state: it silently turns this file into a no-op pass and leaves the colorscheme
+//! activation branch unproven.
+//! `the_shellhook_still_stages_the_vendored_lua_trees_for_the_ffi_tests` in
+//! `crates/wolf-gnome/tests/smoke_headless.rs` fails if either vendored-tree export
+//! is deleted from the `shellHook`.
 
 mod common;
 
@@ -81,8 +97,11 @@ const MARK_OK: &str = "OK";
 //
 // These constants are the literal `guifg`/`guibg` values the vendored lighthouse
 // colorscheme defines for the two Wolf highlight groups at the pinned commit
-// 9da2bba190305b2c8d5d300c254a48c487dd4a1e (dark variant — init.lua sets
-// `background=dark`). If a lighthouse bump changes them, update these pins.
+// 514dec2c79701b74082defc19090bd1dae57765b (dark variant — init.lua sets
+// `background=dark`). That commit is what `bazel/lighthouse/extensions.bzl` and
+// `flake.nix`'s `wolfVendoredPins.lighthouse` both fetch, which
+// `crates/wolf-gnome/tests/vendored_pins.rs` is what keeps true. If a lighthouse
+// bump changes them, update these pins.
 /// `WolfTitlebar guibg=#1b1b1b` at the pinned commit (dark).
 const LIGHTHOUSE_TITLEBAR_BG: u32 = 0x001B_1B1B;
 /// `WolfTitlebar guifg=#f1f1f1` at the pinned commit (dark).
@@ -138,13 +157,16 @@ fn lighthouse_colorscheme_active_from_sibling_dir() {
     };
     std::env::set_var("WOLF_NVIM_BIN", &nvim_bin);
 
-    // SKIP too when the vendored lighthouse tree is not staged (cargo / Linux
-    // path): the activation branch only exists on the Bazel/macOS bundle path, so
-    // this test asserts only when there is a real tree to stage.
+    // SKIP too when the vendored lighthouse tree is not staged. Bazel stages it in
+    // the runfiles and the Linux devShell exports it from `wolfLighthouse`, so this
+    // branch belongs to a run outside BOTH — inside either, reaching it means the
+    // export was lost and this file has stopped proving anything (see the header).
     let Some(lighthouse_tree) = common::lighthouse_dir_or_none() else {
         eprintln!(
-            "\nSKIP: wolf-ffi lighthouse_load — WOLF_TEST_LIGHTHOUSE_DIR not staged \
-             (vendored lighthouse colorscheme is Bazel/macOS-only). No-op pass.\n"
+            "\nSKIP: wolf-ffi lighthouse_load — WOLF_TEST_LIGHTHOUSE_DIR is unset or names \
+             no readable tree, so this run is outside BOTH stagers: Bazel's runfiles and the \
+             Nix devShell's shellHook export. Outside them that is expected; INSIDE either it \
+             is a bug, and the colorscheme activation branch just went unproven. No-op pass.\n"
         );
         return;
     };
@@ -256,7 +278,7 @@ fn lighthouse_colorscheme_active_from_sibling_dir() {
     );
 
     // --- Startup theme pickup: WolfTitlebar / WolfCursor from the scheme ----
-    // lighthouse@9da2bba (dark) defines both Wolf groups (see the pinned
+    // lighthouse@514dec2 (dark) defines both Wolf groups (see the pinned
     // constants above). init.lua activates the colorscheme while nvim boots —
     // BEFORE core installs the theme-tracking helper over RPC — so this proves
     // the helper's emit-once picks up a colorscheme activated before setup ran.
@@ -278,7 +300,7 @@ fn lighthouse_colorscheme_active_from_sibling_dir() {
     );
     assert_eq!(
         titlebar_bg.rgb, LIGHTHOUSE_TITLEBAR_BG,
-        "titlebar bg should be lighthouse@9da2bba's dark WolfTitlebar guibg (#1b1b1b)"
+        "titlebar bg should be lighthouse@514dec2's dark WolfTitlebar guibg (#1b1b1b)"
     );
 
     let titlebar_fg = handle.theme_titlebar_fg();
@@ -288,7 +310,7 @@ fn lighthouse_colorscheme_active_from_sibling_dir() {
     );
     assert_eq!(
         titlebar_fg.rgb, LIGHTHOUSE_TITLEBAR_FG,
-        "titlebar fg should be lighthouse@9da2bba's dark WolfTitlebar guifg (#f1f1f1)"
+        "titlebar fg should be lighthouse@514dec2's dark WolfTitlebar guifg (#f1f1f1)"
     );
 
     // The WolfCursor override rides the EXISTING frame accessors (resolved at
@@ -297,12 +319,12 @@ fn lighthouse_colorscheme_active_from_sibling_dir() {
     assert_eq!(
         themed_frame.cursor_fill().rgb,
         LIGHTHOUSE_CURSOR_FILL,
-        "cursor_fill() should be lighthouse@9da2bba's dark WolfCursor guibg (#009fce)"
+        "cursor_fill() should be lighthouse@514dec2's dark WolfCursor guibg (#009fce)"
     );
     assert_eq!(
         themed_frame.cursor_glyph().rgb,
         LIGHTHOUSE_CURSOR_GLYPH,
-        "cursor_glyph() should be lighthouse@9da2bba's dark WolfCursor guifg (#000000)"
+        "cursor_glyph() should be lighthouse@514dec2's dark WolfCursor guifg (#000000)"
     );
 
     // --- Shutdown: clean teardown -------------------------------------------

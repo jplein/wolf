@@ -36,12 +36,26 @@
 //! staged `<orlando_tree>/orlando` to `T/orlando`, then launch nvim with
 //! `init_lua = T/init.lua`.
 //!
-//! ## SKIP-when-unset policy
+//! ## When this test SKIPs, and what a SKIP means
 //!
 //! Like its siblings this test needs a pinned nvim (`nvim_bin_or_skip`); it ALSO
-//! needs the staged orlando tree (`orlando_dir_or_none`). When either is absent —
-//! e.g. the cargo / Linux path, where orlando is not built — the test is a loud
-//! no-op pass, so it only ASSERTS when the tree is actually staged (Bazel/macOS).
+//! needs the vendored orlando tree (`orlando_dir_or_none`). That tree is staged on
+//! BOTH supported paths, so this test ASSERTS on macOS and on Linux alike:
+//!
+//!   * Bazel stages `//bazel/orlando:orlando_tree` into the runfiles and wires
+//!     `WOLF_TEST_ORLANDO_DIR` from the `rust_test` target's `env`.
+//!   * `flake.nix`'s `linuxShell.shellHook` exports the same variable from the
+//!     `wolfOrlando` derivation, which builds the commit
+//!     `bazel/orlando/extensions.bzl` pins — `crates/wolf-gnome/tests/vendored_pins.rs`
+//!     is what keeps those two pins equal.
+//!
+//! The SKIP branch is therefore what a run OUTSIDE both environments takes — a
+//! bare `cargo test` on a host with no devShell — and it is correct behaviour
+//! there. Inside either environment a SKIP is a LOST EXPORT, not the expected
+//! state: it silently turns this file into a no-op pass and leaves the orlando load
+//! branch unproven. `the_shellhook_still_stages_the_vendored_lua_trees_for_the_ffi_tests`
+//! in `crates/wolf-gnome/tests/smoke_headless.rs` fails if either vendored-tree
+//! export is deleted from the `shellHook`.
 
 mod common;
 
@@ -115,13 +129,16 @@ fn orlando_loads_from_sibling_dir() {
     };
     std::env::set_var("WOLF_NVIM_BIN", &nvim_bin);
 
-    // SKIP too when the vendored orlando tree is not staged (cargo / Linux path):
-    // the load branch only exists on the Bazel/macOS bundle path, so this test
-    // asserts only when there is a real tree to stage.
+    // SKIP too when the vendored orlando tree is not staged. Bazel stages it in the
+    // runfiles and the Linux devShell exports it from `wolfOrlando`, so this branch
+    // belongs to a run outside BOTH — inside either, reaching it means the export
+    // was lost and this file has stopped proving anything (see the header).
     let Some(orlando_tree) = common::orlando_dir_or_none() else {
         eprintln!(
-            "\nSKIP: wolf-ffi orlando_load — WOLF_TEST_ORLANDO_DIR not staged \
-             (vendored orlando plugin is Bazel/macOS-only). No-op pass.\n"
+            "\nSKIP: wolf-ffi orlando_load — WOLF_TEST_ORLANDO_DIR is unset or names no \
+             readable tree, so this run is outside BOTH stagers: Bazel's runfiles and the \
+             Nix devShell's shellHook export. Outside them that is expected; INSIDE either \
+             it is a bug, and the orlando load branch just went unproven. No-op pass.\n"
         );
         return;
     };

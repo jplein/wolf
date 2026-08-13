@@ -170,32 +170,43 @@ pub fn init_lua_path() -> PathBuf {
         .join("init.lua")
 }
 
-/// Resolves the Bazel-staged vendored orlando plugin tree
-/// (`WOLF_TEST_ORLANDO_DIR` → `$(rootpath //bazel/orlando:orlando_tree)`): the
-/// `orlando_tree` TreeArtifact whose inner content is `orlando/` (i.e.
-/// `<dir>/orlando/plugin/orlando.lua`).
+/// Resolves the vendored orlando plugin tree from `WOLF_TEST_ORLANDO_DIR`, whose
+/// inner content is `orlando/` (i.e. `<dir>/orlando/plugin/orlando.lua`). BOTH
+/// supported environments stage that tree and set the variable: Bazel's runfiles on
+/// macOS (`$(rootpath //bazel/orlando:orlando_tree)`, wired in the `rust_test`'s
+/// `env`) and `flake.nix`'s `linuxShell.shellHook` on Linux (from the `wolfOrlando`
+/// derivation, which builds the commit `bazel/orlando/extensions.bzl` pins).
 ///
-/// Returns `None` when the env var is unset (the cargo / Linux path, where the
-/// vendored plugin is not built at all) or when nothing resolves — so the
-/// `orlando_load` test SKIPS gracefully rather than failing. Mirrors the
-/// `*_or_none` / `*_or_skip` convention of the other runfile helpers and reuses
-/// the same [`resolve_runfile`] mechanism as [`init_lua_path`] /
+/// `None` is what a run OUTSIDE both gets — a bare `cargo test` on a host with no
+/// devShell — where `orlando_load` / `orlando_bg_stress` SKIP correctly; inside
+/// either environment a `None` is a LOST EXPORT, silently turning those tests into
+/// no-op passes.
+/// `the_shellhook_still_stages_the_vendored_lua_trees_for_the_ffi_tests` in
+/// `crates/wolf-gnome/tests/smoke_headless.rs` is the guard against that deletion.
+/// Mirrors the `*_or_none` / `*_or_skip` convention of the other runfile helpers and
+/// reuses the same [`resolve_runfile`] mechanism as [`init_lua_path`] /
 /// [`nvim_bin_or_skip`].
 #[must_use]
 pub fn orlando_dir_or_none() -> Option<PathBuf> {
     resolve_runfile("WOLF_TEST_ORLANDO_DIR")
 }
 
-/// Resolves the Bazel-staged vendored lighthouse colorscheme tree
-/// (`WOLF_TEST_LIGHTHOUSE_DIR` → `$(rootpath //bazel/lighthouse:lighthouse_tree)`):
-/// the `lighthouse_tree` TreeArtifact whose inner content is `lighthouse/` (i.e.
-/// `<dir>/lighthouse/colors/lighthouse.lua`).
+/// Resolves the vendored lighthouse colorscheme tree from `WOLF_TEST_LIGHTHOUSE_DIR`,
+/// whose inner content is `lighthouse/` (i.e. `<dir>/lighthouse/colors/lighthouse.lua`).
+/// BOTH supported environments stage that tree and set the variable: Bazel's runfiles
+/// on macOS (`$(rootpath //bazel/lighthouse:lighthouse_tree)`, wired in the
+/// `rust_test`'s `env`) and `flake.nix`'s `linuxShell.shellHook` on Linux (from the
+/// `wolfLighthouse` derivation, which builds the commit
+/// `bazel/lighthouse/extensions.bzl` pins).
 ///
-/// Returns `None` when the env var is unset (the cargo / Linux path, where the
-/// vendored colorscheme is not built at all) or when nothing resolves — so the
-/// `lighthouse_load` test SKIPS gracefully rather than failing. Mirrors the
-/// `*_or_none` / `*_or_skip` convention of the other runfile helpers and reuses
-/// the same [`resolve_runfile`] mechanism as [`init_lua_path`] /
+/// `None` is what a run OUTSIDE both gets — a bare `cargo test` on a host with no
+/// devShell — where `lighthouse_load` SKIPS correctly and `orlando_bg_stress` drops
+/// its colorscheme overlay; inside either environment a `None` is a LOST EXPORT,
+/// silently turning `lighthouse_load` into a no-op pass.
+/// `the_shellhook_still_stages_the_vendored_lua_trees_for_the_ffi_tests` in
+/// `crates/wolf-gnome/tests/smoke_headless.rs` is the guard against that deletion.
+/// Mirrors the `*_or_none` / `*_or_skip` convention of the other runfile helpers and
+/// reuses the same [`resolve_runfile`] mechanism as [`init_lua_path`] /
 /// [`nvim_bin_or_skip`].
 #[must_use]
 pub fn lighthouse_dir_or_none() -> Option<PathBuf> {

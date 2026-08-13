@@ -96,6 +96,14 @@
 //!   the `WOLF_FONT_PT`-over-`font-size` precedence
 //!   ([`config_seam::resolve_font_pt`], which takes the override as an argument so
 //!   the rule is testable without the process environment).
+//! - [`mod@init_lua`]: where the captive `runtime/nvim/init.lua` lives, as a
+//!   function of values — the `WOLF_INIT_LUA` override
+//!   ([`init_lua::INIT_LUA_ENV`]), then the installed tree beside the executable
+//!   ([`init_lua::INSTALLED_INIT_LUA_RELATIVE`], the contract with the Nix package's
+//!   install layout), then the build-tree fallback the caller supplies
+//!   ([`init_lua::resolve_init_lua`]). The environment read, the `current_exe()`
+//!   read and the existence probe are all `app.rs`'s, injected here as arguments,
+//!   in the same shape [`mod@config_seam`] takes its override.
 //! - [`mod@appearance`]: the OS DARK/LIGHT rulebook — the TOTAL
 //!   `(`[`wolf_core::Appearance`]`, os_dark)` →
 //!   [`appearance::ResolvedAppearance`] resolution
@@ -342,6 +350,7 @@ pub mod frame_metrics;
 pub mod frame_stats;
 pub mod geometry;
 pub mod glyph_style;
+pub mod init_lua;
 pub mod input;
 pub mod layout;
 pub mod liveness_ui;
