@@ -60,7 +60,9 @@ The drain order is fixed and every position is load-bearing. The liveness read r
 
 Nothing polls. No timer is periodic and no timer drives a read: neither a redraw, a liveness read, nor a state snapshot is scheduled by the clock. A periodic liveness poll in particular is rejected — it would let a lossy wake transport still raise the crash overlay eventually, buying insurance by destroying the evidence the crash smoke exists to gather. The frame-time instrument holds to the same property with its flag set, which is what shapes its cadence ([Frame-time instrumentation](#frame-time-instrumentation)).
 
-Two one-shot timers exist and neither is a poll. Each is armed by an arriving event, fires once, and disarms: the deferred restart, which exists because the overlay must be presented before a synchronous respawn blocks the main loop, and the sidebar's trailing refresh, which collapses a burst of traversal batches into one rebuild. Neither re-arms itself, so no timer exists while the application is idle.
+Three one-shot timers exist and none is a poll. Each is armed by an arriving event, fires once, and disarms: the deferred restart, which exists because the overlay must be presented before a synchronous respawn blocks the main loop; the sidebar's trailing refresh, which collapses a burst of traversal batches into one rebuild; and the preview's trailing render, armed by an arriving edit ([The preview render's budget](#the-preview-renders-budget)). None re-arms itself, so no timer exists while the application is idle.
+
+The preview's is the one to read carefully, because a burst can leave several of them alive at once — bounded by `ceil(PREVIEW_TRAILING_DELAY / inter-key interval)`, and zero while the user is idle. Each fires once and performs nothing unless it carries the live generation, since an armed GLib source cannot be withdrawn without a warning. A reader who finds five queued has found the design rather than a leak.
 
 One asynchronous callback exists and it is not a timer. `gdk::Clipboard::read_text_async` resolves on the main thread some turns after the paste chord, and its closure holds a `Weak` to the shell and reads the core through the same `Option`, so a read landing after the close handler has taken the core out performs nothing rather than panicking.
 
@@ -69,6 +71,24 @@ A `StyleManager` `dark` notification is neither a timer nor a poll either. It is
 The picker and the sidebar each run a long-lived `FileSearch` on the same pattern, and the project search runs a transient `SearchSession` that is replaced on every Enter. Their drain tasks hold only a `Weak` reference, so dropping a handle ends the task instead of leaking a cycle, and closing any of them drops its search to cancel the work.
 
 Dropping a `SearchSession` kills its `rg` child, which is the whole of what makes closing the overlay mid-search safe. It is also why the live session is taken and dropped in a statement of its own before the next one starts, rather than being overwritten in place.
+
+## The preview render's budget
+
+Typing beside a live Markdown preview would issue one blocking `render_preview` per keystroke, which [The measured reading](#the-measured-reading) records as the largest single cost on the typing path. A burst collapses instead into three kinds of render and no others: one on the first edit after a quiet gap, one whenever the burst has run `PREVIEW_MAX_STALENESS` unrendered, and one after the burst ends. The rule is a pure seam, [`preview_coalescer.rs`](src/README.md#preview_coalescerrs), which owns why the leading edge needs both of its conjuncts and why nothing cancels an armed fire.
+
+The leading edge is the half a reader feels: opening a preview, or touching a document after a pause, puts the change on screen at once rather than after a debounce nobody asked for. A pause qualifies only when it exceeds roughly `PREVIEW_TRAILING_DELAY` plus `PREVIEW_LEADING_IDLE`, measured from the last keystroke, because the idle threshold is measured from the last render and a burst's trailing fire lands one trailing delay after its last key.
+
+The trailing edge is a timer rather than the next wake, and that is the sharp half of the design: after the last keystroke there may be no further wake at all, so a wake-driven trailing edge is precisely the droppable one. The cap covers what a trailing debounce structurally cannot, since a user who never pauses would otherwise see no render until they stopped.
+
+Sustained typing therefore renders on a period of `PREVIEW_MAX_STALENESS` plus the interval to the next request, never the cap alone: the cap render fires once the burst has been pending that long, recording it clears the pending burst, and the clock restarts only at the next keystroke — about 535 ms at a 35 ms inter-key interval. Measured directly, an uninterrupted 300-key burst over 10.343 s paid twenty renders — one leading edge, eighteen cap renders and one trailing fire — and a 60-key burst over 2.704 s paid six.
+
+`preview_ui::may_render` is read twice per render, alone among the nine gates [Crash and stall recovery](#crash-and-stall-recovery) lists. The first read admits the request and touches no coalescer state; the second runs inside the pass itself, because a deferred blocking call can arrive at a Neovim that wedged after the arm. A refusal at fire time records no render, so the burst stays pending and the next due wake re-arms it at a zero delay.
+
+The trailing edge is undroppable, and the cases that could drop it are answered rather than argued:
+
+- The fire re-derives the pane set, the liveness reading and the document from live state, so a pane closed mid-burst is simply not due and there is no stale content to withdraw.
+- A tab switched away mid-burst stops re-arming, and its already-armed fire still runs and bypasses the tab gate deliberately: the gate protects `pane_status`, which joins the current-tabpage-only `Snapshot::windows`, and the render path reads none of it. The cost is bounded to one deferred blocking render per held tab. The pane view gains no reference to the tab layer to consult that gate, which would couple the two backwards.
+- A closing window is covered twice over: the armed closure holds a `Weak`, and the close handler's `core.borrow_mut().take()` leaves `may_render(None)` false — which is why that gate takes an `Option`.
 
 ## The coordinator and its windows
 
@@ -290,11 +310,13 @@ Core marks a stall only from a synchronous call's timeout arm, and ten such call
 
 **A window restoring `T` tabs carries `2T - 1` of them before it is interactive**: one `create_tabpage` per tab past the first, and one rebuild per tab carrying a layout. The two restore caps bound that product, the calls are all on the launch path, and none is reachable from the restart path, which discards the queue rather than replaying it.
 
-Nine are reachable from a running window: the buffer picker's candidate snapshot on Ctrl+Shift+E; a per-pane navigation move on Alt+Left or Alt+Right; the Copy yank on Ctrl+Shift+C; creating a tabpage, whose two triggers are New Tab on Ctrl+Shift+T and the restore materialization above; opening a Markdown preview and returning from one to its source, both reached from the command palette or from `:WolfPreview` / `:WolfEdit`; repointing a bound preview at a linked file, which only a click inside a rendered preview reaches; rendering that document for the loopback server behind Preview in Browser; and the preview render, the only one of the ten that repeats while the user simply types.
+Nine are reachable from a running window: the buffer picker's candidate snapshot on Ctrl+Shift+E; a per-pane navigation move on Alt+Left or Alt+Right; the Copy yank on Ctrl+Shift+C; creating a tabpage, whose two triggers are New Tab on Ctrl+Shift+T and the restore materialization above; opening a Markdown preview and returning from one to its source, both reached from the command palette or from `:WolfPreview` / `:WolfEdit`; repointing a bound preview at a linked file, which only a click inside a rendered preview reaches; rendering that document for the loopback server behind Preview in Browser; and the preview render, the one of the ten a burst of typing reaches, and coalesced rather than issued per keystroke ([The preview render's budget](#the-preview-renders-budget)).
 
 Paste adds none: `gdk::Clipboard::read_text_async` resolves on a later main-loop turn, and the insert is fire-and-forget on the ordered input channel. The sidebar's re-root adds none either: `WolfCore::live_cwd` is a `parking_lot` read of a tracked cell, taken once per wake and shared with the title refresh.
 
 The nine calls a running window issues are gated in the same shape. `buffer_picker::open_decision` refuses to open unless the core reads `Alive`; `nav_ui::nav_press` refuses a move on the same `Alive`-only arm; `clipboard_ui::copy_decision` refuses the yank on it too; `tabs_ui::new_tab_press` and `tabs_ui::restore_press` refuse the tabpage on it, one per trigger; and `preview_ui`'s `preview_press`, `edit_press`, `may_render`, `preview_file_press` and `browser_press` refuse the five preview calls on it. None can prevent a first stall, and none may be strengthened until it can — what they prevent is re-probing a Neovim already known to be wedged.
+
+`may_render` alone among the nine is read twice per render, because the call it admits can be deferred past the reading that admitted it ([The preview render's budget](#the-preview-renders-budget)).
 
 The palette's Open Recent rows add none: reading the candidates is a SQLite read plus a bounded `stat` walk over the store's capped contents, taken at open and never per keystroke, so the inventory is unchanged.
 
@@ -342,9 +364,15 @@ Over the identical recipe with the two binaries alternated in one session, `draw
 
 **`draw.pane` sits over that 8 ms threshold even so**, at a 9.50 ms p95 median in A, and the remainder is glyph rasterization at about 1.8 µs a glyph. Getting under the threshold needs damage tracking or a shaped-glyph cache, each a unit of its own.
 
-**The preview render is the largest single cost on the typing path, and coalescing it is a design decision rather than a draw fix.** The suspicion "Crash and stall recovery" records — that it is the only blocking RPC repeating while the user simply types — is confirmed: 988 blocking render calls at a 6.93 ms mean against 1238 keystrokes, 15.6 % of wall clock, pushing `wake`'s p95 to 9.1 ms and its worst interval to 34 ms.
+**`prev.render` was indicted too, and the repair is [The preview render's budget](#the-preview-renders-budget).** The suspicion "Crash and stall recovery" records — that it is the one blocking RPC a burst of typing reaches — was confirmed at 988 blocking render calls, a 6.93 ms mean against 1238 keystrokes, 15.6 % of wall clock, `wake`'s p95 at 9.1 ms and its worst interval at 34 ms.
 
-The only repair is temporal coalescing, whose trailing edge needs a one-shot event-armed timer and a user-visible preview-latency budget nothing has set. That is carried by a unit of its own, with these numbers as its evidence; until it lands, typing beside a live preview costs what the paragraph above measures.
+The coalesced reading was taken against a baseline of its own, with both binaries built and alternated in one session rather than compared against the paragraph above. Over two runs each of scenario B, `prev.render` falls from 1186 / 1188 calls and 6490.6 / 6527.1 ms to 90 / 90 calls and 201.9 / 210.2 ms across a 55 s run — 11.84 % / 11.91 % of wall clock against 0.37 % / 0.38 % — and `wake`'s p95 median from 8.55 / 8.50 ms to 0.15 / 0.22 ms.
+
+**The two baselines must not be spliced into one improvement figure.** That session's own baseline reads 11.9 % where the paragraph above records 15.6 %: the shape reproduces, at 1187 renders against 988 and a `wake` p95 of 8.5 against 9.1 ms, while the render mean is 5.48 against 6.93 ms, over a generated rather than byte-identical prose fixture and a denominator carrying about 22 s of non-typing wall clock. Measuring both binaries in one session is what makes the comparison sound.
+
+**The worst interval does not improve, and no claim may say it does.** `wake`'s max reads 30.74 / 34.00 ms against 32.78 / 33.64 ms, and in all four runs it lives in the cold preview open, where the single `prev.load` sample that opens a pane spends 10.3–10.9 ms on the WebProcess spawn and the full `load_html`. Coalescing does not touch the cold open, so the p95 median is the statistic to quote.
+
+**Total main-thread busy falls by about 3.5 points rather than by the render's whole share.** `draw.pane`'s count rises 78 % over the same wall clock at an unchanged per-frame mean — frames GTK wanted to deliver and could not while the thread sat in a blocking RPC — and the summed families go from 29.7 % to 26.1 %. The blocking RPC is gone and the wake path is 98 % cheaper; the freed CPU is largely spent painting a smoother editor rather than going idle.
 
 **Nothing else is indicted.** `wake` in scenario A reads a 0.11 ms p95, and `wake.tree`, `wake.shell`, `wake.state`, `pane.state`, `draw.status`, `draw.cmdline` and `prev.load` all sit below the threshold at which a repair could pay for itself. `draw.read` reads 0.00 ms, which is the measurement behind the claim that `read_snapshot` copies nothing and contends with no tokio writer.
 

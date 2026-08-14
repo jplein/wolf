@@ -238,7 +238,7 @@
 //! colour out of the capture rather than naming it — which is what lets it locate a
 //! private box's geometry without pinning it.
 //!
-//! **Nine pure guards**, which mechanically enforce invariants the cage smokes
+//! **Ten pure guards**, which mechanically enforce invariants the cage smokes
 //! depend on but cannot check themselves:
 //!
 //! * [`sidebar_filler_names_cannot_satisfy_any_smoke_assertion`] — no
@@ -308,6 +308,13 @@
 //!   comparison, because `clippy::assertions_on_constants` rejects an `assert!` whose
 //!   whole condition is constant and an `#[allow]` would suppress that lint for
 //!   anything added here later.
+//! * [`preview_burst_delay_stays_below_the_coalescer_trailing_delay`] —
+//!   [`PREVIEW_TYPE_DELAY_MS`], the pace the markdown-preview smoke types its live
+//!   edit at, must stay below `preview_coalescer::PREVIEW_TRAILING_DELAY`. That is
+//!   the premise the TRAILING-EDGE half of that smoke's assertion 11 rests on: paced
+//!   at or above the delay, every keystroke of the burst becomes its own leading edge
+//!   and the marker reaches the page without a trailing fire ever running, so the
+//!   assertion stays green over a coalescer that arms nothing.
 //! * [`every_shellhook_export_is_scrubbed_or_deliberately_kept`] — every
 //!   `export NAME=` inside `flake.nix`'s `linuxShell.shellHook` must appear in one of
 //!   the packaged smokes' three scrub lists or in the short
@@ -323,12 +330,12 @@
 //!   tree is not staged, so deleting those two `shellHook` lines turns three
 //!   real-Neovim tests into no-op passes and reddens nothing anywhere.
 //!
-//! All nine are compositor-free: none calls `require_smoke_env`, none takes
+//! All ten are compositor-free: none calls `require_smoke_env`, none takes
 //! `CAGE_LOCK` and none spawns a subprocess, so they still guard on a machine where
 //! the smoke toolchain is unavailable. They live here, next to the consts and
 //! helpers they read, rather than in a file of their own.
 //!
-//! Eight of the nine additionally need NO environment at all. The exception is
+//! Nine of the ten additionally need NO environment at all. The exception is
 //! [`the_column_cap_cannot_bind_at_the_ocr_smokes_geometry`], and the claim is
 //! stated precisely rather than loosely: it measures a
 //! real cell through [`cell_metrics_for_smoke`], so it needs the devShell's pinned
@@ -337,8 +344,8 @@
 //! a run outside the devShell fails it for that reason rather than for the reason
 //! its message names.
 //!
-//! So this target's summary line reads **`69 passed`**, not `60`: sixty cage
-//! smokes plus those nine guards.
+//! So this target's summary line reads **`70 passed`**, not `60`: sixty cage
+//! smokes plus those ten guards.
 //!
 //! **Three `#[ignore]`d PACKAGED smokes** sit at the end of this file and are NOT in
 //! that count. They drive `$out/bin/wolf-gnome` — the artifact `nix build
@@ -435,7 +442,7 @@
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use cairo::{Context, Format, ImageSurface};
 use wolf_core::config::CONFIG_FILE_NAME;
@@ -443,7 +450,7 @@ use wolf_core::state::STATE_FILE_NAME;
 use wolf_core::{
     load_state, preferences_dir, state_dir, CommandMru, PaneNode, PaneOrientation, RecentDirs,
 };
-use wolf_gnome::{CellMetrics, WINDOW_TITLE_FALLBACK};
+use wolf_gnome::{preview_coalescer::PREVIEW_TRAILING_DELAY, CellMetrics, WINDOW_TITLE_FALLBACK};
 
 /// The lowercase word we type in insert mode (in the window smoke scenario).
 /// Kept short and all-lowercase so OCR noise is unlikely to corrupt every
@@ -9730,13 +9737,157 @@ const PREVIEW_READBACK_B_NAME: &str = "pvwinsb.txt";
 /// the other would make the readback assertion hold by construction.
 const PREVIEW_READBACK_PREFIX: &str = "Preview: ";
 
+/// Milliseconds `wtype` waits between the keystrokes of step 6's live-edit burst,
+/// handed to the scenario as `TYPE_DELAY_MS`.
+///
+/// **Coupled to [`PREVIEW_TRAILING_DELAY`], and the coupling is what makes assertion
+/// 11 reach the coalescer's trailing edge at all.** At `wtype`'s default rate the
+/// whole marker can land inside one flush and be carried by a single leading-edge
+/// render, so the smoke would stay green with the coalescer arming nothing. Paced
+/// BELOW the trailing delay, the `o` takes the leading edge, the marker's characters
+/// coalesce, and only a fire after the LAST of them carries the complete word onto
+/// the page.
+///
+/// Raise it above the trailing delay and every keystroke becomes its own leading
+/// edge again: the smoke stays green and stops discriminating, with nothing in the
+/// run naming the number that disarmed it. That is what
+/// [`preview_burst_delay_stays_below_the_coalescer_trailing_delay`] refuses.
+///
+/// The number lives HERE and nowhere else — the scenario reads it out of the
+/// environment rather than assigning it, so `set -u` aborts the run if it fails to
+/// arrive instead of silently typing at the default rate.
+const PREVIEW_TYPE_DELAY_MS: u64 = 40;
+
+/// The text of the SUSTAINED burst step 9 types, handed to the scenario as
+/// `PREVIEW_CAP_FILLER`.
+///
+/// Sixty characters at [`PREVIEW_TYPE_DELAY_MS`] is 2.70-2.76 seconds of unbroken
+/// typing, measured under `cage` rather than multiplied out: `wtype` paces SLOWER
+/// than the delay it is given, by a near-constant ~5.5 ms a key — 45.8 ms measured at
+/// `-d 40` and 35.2 ms at `-d 30` — so every burst here runs about a seventh longer
+/// than its nominal length. That is what forces the staleness cap: the trailing timer never fires
+/// inside a burst that long, because every arm is superseded before it elapses, so
+/// every render during it is a cap render. Measured, this burst pays FOUR renders
+/// with the cap against ONE without it, which is the whole of assertion 13's
+/// discrimination. The marker leg cannot do that job — at thirteen keys it is one
+/// trailing delay's worth of typing, and a leading edge plus one trailing fire carry
+/// all of it.
+///
+/// **It reaches no capture and no disk.** Both `grim` calls are already done when it
+/// is typed, and the buffer it goes into is never written, so it can neither satisfy
+/// nor corrupt an OCR term — which is also why it needs no
+/// [`RELAUNCH_FIXTURE_NAMES`] row. It is ONE repeated letter for the same reason:
+/// a run of a single character spells no word at all, so the property holds however
+/// the fixture-naming rules are read.
+///
+/// Written as SIX GROUPS OF TEN rather than one run, so its length is countable by
+/// eye: the arithmetic in [`PREVIEW_CAP_RENDER_FLOOR`] rests on how many keystrokes
+/// it is, and a run of sixty identical characters is exactly the thing a reader
+/// cannot check.
+const PREVIEW_CAP_FILLER: &str = concat!(
+    "xxxxxxxxxx",
+    "xxxxxxxxxx",
+    "xxxxxxxxxx",
+    "xxxxxxxxxx",
+    "xxxxxxxxxx",
+    "xxxxxxxxxx"
+);
+
+/// This smoke's own frame-time report file, under the resolved `XDG_RUNTIME_DIR`
+/// rather than in the temp cwd, for the reason [`FRAME_STATS_FILE_NAME`] gives.
+///
+/// A SEPARATE path from that one rather than a shared one: the two smokes read the
+/// same instrument for opposite claims — that one requires `prev.render` to be
+/// absent — and one path would mean whichever ran first left evidence the other's
+/// [`clear_evidence`] deleted.
+const PREVIEW_FRAME_STATS_FILE_NAME: &str = "wolf_gnome_preview_frame_stats.txt";
+
+/// The bucket label assertion 12 sums, re-typed as a LITERAL.
+///
+/// It is `wolf_gnome::frame_stats::Bucket::PrevRender`'s label — one blocking
+/// `WolfCore::render_preview` call, alone, and the only row of the report that
+/// counts that RPC. Re-typed rather than imported for this file's usual reason, and
+/// deliberately not indexed out of [`FRAME_STATS_ABSENT_LABELS`], where the same
+/// string carries the opposite requirement.
+const PREVIEW_RENDER_LABEL: &str = "prev.render";
+
+/// The two labels assertion 14 compares, re-typed as LITERALS for the reason
+/// [`PREVIEW_RENDER_LABEL`] is.
+///
+/// `pane.prev` is the whole preview refresh pass and `pane.wake` is one tab's
+/// pane-view wake. A pass is opened from TWO places — every pane wake that reaches it,
+/// and the preview coalescer's one-shot fire — which is what makes the first count
+/// able to exceed the second, and what assertion 14 reads.
+const PREVIEW_PANE_PREV_LABEL: &str = "pane.prev";
+
+/// The wake side of that comparison. See [`PREVIEW_PANE_PREV_LABEL`].
+const PREVIEW_PANE_WAKE_LABEL: &str = "pane.wake";
+
+/// The ceiling assertion 12 holds the summed `prev.render` count to.
+///
+/// **MEASURED at both ends.** Three things move the source's `changedtick` here, and
+/// nothing else does: the cold open, step 6's thirteen-key marker burst, and step 9's
+/// sixty-key [`PREVIEW_CAP_FILLER`] burst. Coalesced, the whole run reads SEVEN or
+/// EIGHT — 7, 7 and 8 over three runs, broken down per leg in
+/// [`PREVIEW_CAP_RENDER_FLOOR`]. With `request_preview_render` calling the render pass
+/// unconditionally — the per-wake render this unit replaced, and the 15.6 % of wall
+/// clock `crates/wolf-gnome/DECISIONS.md` records — the same scenario reads SIXTY-ONE.
+///
+/// Twenty sits between the two and excludes each end for its own reason. It is twelve
+/// above the coalesced reading, which no plausible pacing closes: `wtype` running
+/// slower than it asks for stretches step 9's burst and so ADDS cap renders, but at
+/// one per `preview_coalescer::PREVIEW_MAX_STALENESS` that burst would have to last
+/// some six seconds longer than the ~2.4 it does. And it is forty-one below the
+/// uncoalesced reading, so no per-keystroke build can hide under it.
+///
+/// Deliberately NOT a ratio against the report's `keys=` counter: the scenario also
+/// types two ~150-character `:call writefile(…)` lines, which bump no source tick and
+/// would swamp any ratio.
+///
+/// Raise it only if a real COALESCED run exceeds it, and never to admit an
+/// uncoalesced one — that single edit is what would turn this assertion off.
+const PREVIEW_RENDER_BUDGET: u64 = 20;
+
+/// The floor assertion 13 holds the same sum to: the count below which the
+/// STALENESS CAP cannot have fired.
+///
+/// **MEASURED at both ends.** A capped run reads SEVEN or EIGHT — 7, 7 and 8 over
+/// three runs: the cold open pays one, step 6's marker leg two, and step 9's sustained
+/// burst four or five — its leading edge, two or three cap renders and the trailing
+/// fire after its last key, read block by block out of the report. With the cap gone —
+/// `delay` the trailing delay alone, the `min` against the cap's remainder dropped —
+/// the same run reads FOUR, and step 9's burst pays one.
+///
+/// Six is what separates them, and the exclusion rests on an argument rather than on
+/// this host's timing: with no cap, no burst in this scenario can pay more than its
+/// leading edge and one trailing fire, so the whole run cannot exceed one for the open
+/// plus two for the marker plus two for the sustained burst — five, whatever the
+/// pacing does. Six refuses every reading a cap-less build can produce and still
+/// leaves the capped reading a render of margin.
+///
+/// It carries [`PREVIEW_RENDER_BUDGET`]'s non-vacuity as well: a build that renders
+/// nothing at all reads ZERO, and no ceiling refuses that. There is no second, weaker
+/// floor beside this one — one number cannot honestly carry two derivations, and a
+/// floor of six implies every weaker one.
+///
+/// **The margin here is one render, the thinnest in this unit: green runs read 7, 7
+/// and 8. If it ever flakes, lengthen [`PREVIEW_CAP_FILLER`] — never lower the
+/// floor.** A longer burst buys margin honestly, at one more cap render per
+/// `preview_coalescer::PREVIEW_MAX_STALENESS` of typing, and it moves the capped
+/// reading alone. Lowering the floor moves it toward the five a cap-less run can
+/// reach, and at five it stops separating the two readings at all — which is the
+/// whole of the cap's end-to-end evidence, turned off by one character.
+const PREVIEW_CAP_RENDER_FLOOR: u64 = 6;
+
 /// The MARKDOWN-PREVIEW scenario, run as a single `sh -c` string inside `cage` (the
 /// [`PALETTE_SCENARIO`] shape, with [`STATUS_SCENARIO`]'s `<C-w>v` split and
 /// [`BUFPICK_SCENARIO`]'s `wait_file`): launch + poll, settle, open the OTHER file,
 /// park the block cursor, `<C-w>v`, open the SOURCE in the new pane, drive Preview
 /// through the palette, capture A, read the window list back, freeze `state.json`,
 /// drive Edit Source through the palette, read the window list back again, type the
-/// live marker into the source, hide the source behind the other file, capture B.
+/// live marker into the source, hide the source behind the other file, capture B, and
+/// then — with every pixel and every readback already on disk — type one SUSTAINED
+/// burst into the source, which is what forces the coalescer's staleness cap.
 ///
 /// ## The two budgets that are not settles
 ///
@@ -9748,6 +9899,28 @@ const PREVIEW_READBACK_PREFIX: &str = "Preview: ";
 /// have no such gap — the body swap itself is 5.3-12.4 ms — but the same budget is
 /// spent after the live edit, because what has to land there is a keystroke, a
 /// notification, a wake, a blocking `render_preview` and a JavaScript evaluation.
+///
+/// ## The live edit is PACED, and the pacing is load-bearing
+///
+/// Step 6 types the marker with `wtype -d "$TYPE_DELAY_MS"` rather than at `wtype`'s
+/// default rate, because at the default rate the whole burst can land inside one
+/// flush and be carried by a single LEADING-EDGE render — under which assertion 11
+/// passes with the preview coalescer arming nothing at all. Paced below
+/// [`PREVIEW_TRAILING_DELAY`], the `o` takes the leading edge, the marker's
+/// characters coalesce, and only a fire after the last of them carries the complete
+/// word onto the page. See [`PREVIEW_TYPE_DELAY_MS`] for the coupling and for the
+/// guard that keeps it.
+///
+/// The premise underneath is `wtype`'s own: that `-d` spaces the key events it
+/// synthesizes rather than merely delaying the first. It is not taken on trust —
+/// assertion 12's uncoalesced red run measures it, at 61 renders against a green
+/// run's 7 or 8. A burst that still arrived inside one flush could not produce that
+/// number under any revert.
+///
+/// Step 9's burst runs at the same pace for a different property. There the pacing
+/// has to hold for long enough that the trailing timer never elapses at all, which is
+/// what leaves the staleness cap as the only thing that can render during it. See
+/// [`PREVIEW_CAP_FILLER`].
 ///
 /// ## Why the block cursor is parked in only ONE pane
 ///
@@ -9792,6 +9965,18 @@ FILE_TRIES=100
 # through a notification, a wake, a blocking render_preview and a JS evaluation.
 # See the doc comment above before trimming it.
 PREVIEW_SETTLE=2.0
+#
+# TYPE_DELAY_MS -- how long wtype waits between the keystrokes of step 6's burst.
+# It is NOT assigned here: it arrives from the Rust side (PREVIEW_TYPE_DELAY_MS),
+# so the number lives in exactly one place and `set -eu` aborts the run if it fails
+# to arrive rather than quietly typing at wtype's default rate.
+#
+# It is COUPLED to wolf_gnome::preview_coalescer::PREVIEW_TRAILING_DELAY and must
+# stay BELOW it. Above it, every keystroke of the burst is its own leading edge,
+# the trailing edge stops being what puts the marker on screen, and assertion 11
+# goes back to passing over a coalescer that arms nothing. The guard
+# preview_burst_delay_stays_below_the_coalescer_trailing_delay is what keeps the
+# two in step; PREVIEW_TYPE_DELAY_MS carries the rest of the reasoning.
 
 # Launch the real app in the background; remember its pid.
 "$WOLF_BIN" &
@@ -9934,8 +10119,13 @@ wait_file "$PREVIEW_READBACK_B" || exit 14
 # step that reaches the body-swap branch: the first load into a view goes through
 # load_html, and a payload encoded once instead of twice throws inside JSON.parse
 # and leaves the previous document on screen.
+#
+# The marker is typed at TYPE_DELAY_MS per key rather than at wtype's default rate,
+# and that pacing is load-bearing: unpaced, the whole burst can land inside one
+# flush and be carried by a single leading-edge render, so this step would prove
+# nothing about the coalescer's trailing edge. See the doc comment above.
 wtype -- G
-wtype -- "o$PREVIEW_LIVE_MARKER"
+wtype -d "$TYPE_DELAY_MS" -- "o$PREVIEW_LIVE_MARKER"
 wtype -k Escape
 sleep "$PREVIEW_SETTLE"
 
@@ -9952,6 +10142,59 @@ sleep "$SETTLE"
 
 # --- Step 8: capture B, with the swapped document live -----------------------
 grim "$OUT_PNG"
+
+# --- Step 9: a SUSTAINED burst, to force the STALENESS CAP -------------------
+#
+# It lands here and nowhere else. Everything read from a pixel is already on disk --
+# both captures taken, both readbacks written, state.json frozen back at step 4 --
+# so a burst at this point can perturb no assertion above it. Beside the marker it
+# would land inside an OCR'd capture instead, which is why it is not there.
+#
+# What it forces: PREVIEW_CAP_FILLER is sixty keys, and at TYPE_DELAY_MS that is
+# roughly 2.4 seconds of CONTINUOUS typing. The trailing timer never elapses inside
+# a burst that long -- every arm is superseded by the next keystroke -- so every
+# render during it is a CAP render, one per the coalescer's maximum staleness.
+# Without the cap the same burst can pay at most its leading edge and the trailing
+# fire after its last key, and measured it pays ONE; with the cap it pays FOUR. That
+# gap is what assertion 13 reads, and the marker leg cannot produce it: thirteen keys
+# is one trailing delay's worth of typing, which a leading edge and a trailing fire
+# already carry.
+#
+# Re-opening the source is a WINDOW SWITCH, not an edit. The buffer is still loaded
+# and modified, `:e` on an already-loaded buffer does not re-read it from disk, and
+# the preview's reload is keyed on the source's changedtick -- so the switch itself
+# renders nothing. That is the same premise step 7 rests on, in the other direction.
+wtype -- ":e $PREVIEW_SOURCE_FILE"
+wtype -k Return
+sleep "$SETTLE"
+
+wtype -- G
+wtype -- o
+wtype -d "$TYPE_DELAY_MS" -- "$PREVIEW_CAP_FILLER"
+wtype -k Escape
+
+# At least PREVIEW_SETTLE, so the burst's own trailing fire has certainly landed
+# before the report below is flushed: a render that has not happened yet is a render
+# assertion 13 cannot count.
+sleep "$PREVIEW_SETTLE"
+
+# --- Step 10: force out the frame-stats report covering both bursts ----------
+#
+# The instrument arms no timer: a report is emitted from the LAST statement of the
+# drain-loop body, so it rides a wake. With the app idle after the capture, the
+# interval holding the burst's renders would be carried by the next wake -- and the
+# teardown below signals the app, so flush_final never runs and that interval would
+# never be written at all. Assertion 12 would then read a file missing exactly the
+# rows it exists to count.
+#
+# The sleep exceeds WOLF_FRAME_STATS_INTERVAL (set on the Rust side) so the boundary
+# has certainly passed, then a NORMAL-MODE Escape supplies the wake. Escape is the
+# cheapest wake there is and the only key that can be pressed here safely: it edits
+# no buffer, moves no cursor and draws no message, so it can satisfy nothing else in
+# this smoke -- and both captures are already on disk in any case.
+sleep 1.2
+wtype -k Escape
+sleep 0.3
 
 # Best-effort teardown: the app may already be gone.
 set +e
@@ -16701,11 +16944,27 @@ fn command_palette_chord_runs_the_selected_command_under_cage() {
 /// | 8 | the frozen `state.json`'s two leaves | **discriminator** — `layout_snapshot` persists the per-pane preview flag, against the SOURCE path | set `preview: false` unconditionally in `pane_view::layout_snapshot`'s `LeafContent`, which is the stub this unit replaced. Reddens this alone. | RED, and isolated as claimed: `the frozen state persisted leaves [(Some("pvoth.md"), Some(false)), (Some("pvsrc.md"), Some(false))], not [(Some("pvoth.md"), Some(false)), (Some("pvsrc.md"), Some(true))]`. Assertions 3 through 7 stayed green, so both panes were right on screen and only the PERSISTED flag was wrong — which is the whole reason this one is read from a frozen file rather than from pixels. |
 /// | 9 | readback B is `{Preview: <source>, <source>}` | **discriminator** — Edit Source reused the OTHER pane rather than clobbering the preview | write `edit_placement`'s reuse clause as `!p.active_is_preview`, i.e. `preview_placement`'s polarity copied across. The placement becomes `active`, the source replaces the PREVIEW, and the readback carries the other file instead of the preview scratch. | RED, isolated: `after the Edit Source leg the captive Neovim's windows hold ["pvoth.md", "pvsrc.md"], not ["Preview: pvsrc.md", "pvsrc.md"]`. That is the inversion's exact signature — the preview scratch GONE and the other file still open — with assertions 3 through 8 green, so the first half of the scenario was untouched by it. |
 /// | 10 | capture B carries [`PREVIEW_OCR_BODY`] | precondition — the preview pane is still showing a document at all | none; it is what separates "the swap failed and froze the stale document" from "the pane went blank" for assertion 11 | n/a |
-/// | 11 | capture B carries [`PREVIEW_OCR_LIVE`] | **discriminator** — the LIVE EDIT reached the DOM through the JSON body swap | in `pane_view::preview_swap_payload`, encode ONCE (`Ok(serde_json::to_string(body)?)` plus the two replacements). `JSON.parse` is then handed HTML, throws `Unrecognized token '<'` on every keystroke, and the preview keeps showing the document assertion 10 just found. | RED, isolated, and with the predicted stderr: `capture B did not contain "zzlivekilo" — the marker typed into the SOURCE buffer while the preview pane was live`, beside five copies of `wolf-gnome: preview body swap failed: about:blank:1:68: SyntaxError: JSON Parse error: Unrecognized token '<'`. Assertion 10 stayed green, which is the frozen-stale-document half of the signature this row names. |
+/// | 11 | capture B carries [`PREVIEW_OCR_LIVE`] | **discriminator** — the LIVE EDIT reached the DOM through the JSON body swap | in `pane_view::preview_swap_payload`, encode ONCE (`Ok(serde_json::to_string(body)?)` plus the two replacements). `JSON.parse` is then handed HTML, throws `Unrecognized token '<'` on every keystroke, and the preview keeps showing the document assertion 10 just found. **A SECOND revert reaches this assertion, and the paced burst is what admits it:** neuter the `RenderDecision::Arm` arm of `PaneInner::request_preview_render` so it arms nothing. The marker's characters then coalesce into a fire nobody ever runs, and the page carries at most the leading edge's `o`. The two reverts are distinguishable from the app's stderr — the single-encoding one prints `preview body swap failed` once per keystroke, the trailing-edge one prints nothing at all — and from assertion 12, which stays inside its budget under the first and reads a count with no trailing fire in it under the second. | RED, isolated, and with the predicted stderr: `capture B did not contain "zzlivekilo" — the marker typed into the SOURCE buffer while the preview pane was live`, beside five copies of `wolf-gnome: preview body swap failed: about:blank:1:68: SyntaxError: JSON Parse error: Unrecognized token '<'`. Assertion 10 stayed green, which is the frozen-stale-document half of the signature this row names. The trailing-edge revert: RED, isolated, and with the OTHER half of the signature — the same `capture B did not contain "zzlivekilo"` failure, and `preview body swap failed` printed NOT ONCE anywhere in the run, which is what tells the two reverts apart from stderr alone. Assertion 10 stayed green and the OCR dump beside the failure still carries the rendered heading and the `preview:` statusbar, so the pane was live and only the trailing edge was missing. Measured against the scenario INCLUDING step 9, whose burst lands after both captures and disturbs this leg not at all; the run's summed `prev.render` was 2, the cold open and the marker burst's leading edge with no trailing fire in it. |
+/// | 12 | the summed `prev.render` count in this run's own frame-stats report is at most [`PREVIEW_RENDER_BUDGET`] | **discriminator** — the bursts were COALESCED: the whole scenario paid a handful of blocking `render_preview` calls rather than one per keystroke | make `PaneInner::request_preview_render` call `run_preview_render_pass()` unconditionally, which is the per-wake render this unit replaced. Assertion 11 stays GREEN under it — every keystroke renders, so the marker certainly reaches the DOM — and that is exactly the point: only this row and row 13 can see the coalescing at all. | RED, isolated: `counts 61 blocking "prev.render" calls over all 14 report block(s), above the budget of 20`. Assertions 1 through 11 stayed green under it — assertion 11 included, which is this row's own claim, and the reason the row exists. Green runs of the same scenario read 7, 7 and 8, so the budget sits at least 12 above the coalesced reading and 41 below the uncoalesced one and needed no moving. |
+/// | 13 | the same sum is at least [`PREVIEW_CAP_RENDER_FLOOR`] | **discriminator** — the STALENESS CAP fired: step 9's ~2.4-second burst rendered several times DURING the typing, not only at its ends. Also row 12's non-vacuity half, since a build that renders nothing reads zero and no ceiling refuses that | drop the `min` against the cap's remainder in `PreviewCoalescer::request`, so the delay is always `PREVIEW_TRAILING_DELAY`. The sustained burst then renders at most twice — its leading edge and the trailing fire after its last key, since every arm inside it is superseded before it elapses — and measured, once. Rows 1 through 12 all stay green under it: the marker leg is shorter than the cap, so nothing else in this scenario can tell the difference. | RED, isolated: the run `counts 4 "prev.render" sample(s) over all 14 report block(s)`, under the floor. Rows 1 through 12 stayed green under it, the budget included, exactly as the revert column claims. Both ends measured: capped reads 7, 7 and 8 across three runs, cap-removed reads 4, and per block step 9's burst pays 4 renders capped against 1 with the cap gone. The floor was moved 7 to 6 on that evidence — two capped runs sat exactly ON seven, with no margin, and the third read 8 — and the derivation in [`PREVIEW_CAP_RENDER_FLOOR`] rewritten to the measured figures. |
+/// | 14 | the summed `pane.prev` count EXCEEDS the summed `pane.wake` count | **discriminator** — the coalescer's FIRE opens a preview-pass region of its own, so every `prev.render` sample has a parent and `frame_stats.rs`'s nesting table stays true | delete the `frame_metrics::scope(Bucket::PanePrev)` guard from the fire closure in `PaneInner::request_preview_render` (or bind it with `let _ =`, which drops it instantly). Rows 1 through 13 ALL stay green under it — the RPC is still timed, so every count they read is unchanged — which is why this row exists at all. Deliberately NOT `pane.prev` against `prev.render`: the pass runs on nearly every wake, so that comparison holds with the scope deleted and with the coalescer removed entirely. | RED, isolated: `counts 291 "pane.prev" region(s) against 291 "pane.wake", so no preview pass ran outside a pane wake`. Rows 1 through 13 stayed green under it, exactly as the revert column claims. Green reads +4 on three consecutive runs (298/294, 303/299, 309/305), which is the performing fires. **The comparison was written `>=` and the revert PASSED under it** — measured 299 against 299 — because the wakes-that-skip-the-pass term this scenario was assumed to have is zero: every pane wake reaches the pass. It was made STRICT on that evidence, and the 188-against-187 reading the row first carried predates step 9. |
 ///
 /// Assertion 11 is the highest-value assertion of the set and the reason the scenario
 /// has a second half at all: it is the ONLY one that reaches the body-swap branch, and
 /// the single-encoding bug it guards shipped green past every other check here.
+///
+/// Assertions 12 and 13 are the only ones that read a NUMBER rather than a page, and
+/// the only evidence anywhere that the render is coalesced rather than merely
+/// correct. They are two ends of ONE band around ONE sum, far enough apart that
+/// neither `wtype`'s real pacing nor a stray wake decides either: 12 excludes a
+/// per-keystroke render and 13 excludes a coalescer with no staleness cap. A green
+/// run sits at 7 or 8 between them, against 61 for the first regression and 4 for the
+/// second. Both bounds are measured at both ends, and each constant's doc carries its
+/// own readings and what they exclude.
+///
+/// Assertion 14 reads the report too, but a different pair of counts, and it is the
+/// only one that says anything about WHERE a render was timed rather than how many
+/// there were. Its own row carries why it cannot be folded into the other two.
 #[test]
 fn preview_pane_renders_and_edit_source_returns_under_cage() {
     const SMOKE: &str = "preview_pane_renders_and_edit_source_returns_under_cage";
@@ -16755,12 +17014,18 @@ fn preview_pane_renders_and_edit_source_returns_under_cage() {
     let readback_b = cwd.join(PREVIEW_READBACK_B_NAME);
     let out_png_before = runtime_dir.join("wolf_gnome_preview_open_smoke.png");
     let out_png = runtime_dir.join("wolf_gnome_preview_live_smoke.png");
+    // Assertions 12 and 13's evidence: the report the running app appends to. Cleared
+    // with the rest, and the clearing matters MORE here than for the captures, because
+    // the app APPENDS — a stale copy is not overwritten but added to, so a previous
+    // run's renders would be counted as this run's.
+    let stats_path = runtime_dir.join(PREVIEW_FRAME_STATS_FILE_NAME);
     for path in [
         &readback_a,
         &readback_b,
         &out_png_before,
         &out_png,
         &frozen_state_file,
+        &stats_path,
     ] {
         clear_evidence(path, SMOKE);
     }
@@ -16774,10 +17039,23 @@ fn preview_pane_renders_and_edit_source_returns_under_cage() {
         .env("PREVIEW_QUERY", PREVIEW_QUERY)
         .env("EDIT_QUERY", EDIT_QUERY)
         .env("PREVIEW_LIVE_MARKER", PREVIEW_LIVE_MARKER)
+        // The typing pace both bursts run at, from the one place the number lives.
+        // The scenario does not assign it: unset, `set -u` aborts the run rather than
+        // typing at wtype's default rate, which is the rate that would disarm
+        // assertion 11 and shorten step 9's burst below the staleness cap.
+        .env("TYPE_DELAY_MS", PREVIEW_TYPE_DELAY_MS.to_string())
+        .env("PREVIEW_CAP_FILLER", PREVIEW_CAP_FILLER)
         .env("PREVIEW_READBACK_A", &readback_a)
         .env("PREVIEW_READBACK_B", &readback_b)
         .env("PREVIEW_STATE_SRC", &smoke_state_file)
         .env("PREVIEW_STATE_COPY", &frozen_state_file)
+        // The frame-time instrument, armed for assertion 12 alone. The interval is
+        // the frame-stats smoke's, and it is shared safely because assertion 12 SUMS
+        // across reports: how many reports the run is cut into does not move the
+        // total, only which report each render lands in.
+        .env("WOLF_FRAME_STATS", "1")
+        .env("WOLF_FRAME_STATS_INTERVAL", FRAME_STATS_INTERVAL_SECS)
+        .env("WOLF_FRAME_STATS_FILE", &stats_path)
         .status()
         .expect("failed to spawn `cage` for the headless markdown-preview smoke scenario");
 
@@ -17068,6 +17346,201 @@ fn preview_pane_renders_and_edit_source_returns_under_cage() {
          reload down `load_html` instead, which would still show the marker — so a MISSING marker \
          is never that. PNG kept at {}. OCR output was:\n{ocr_live}",
         out_png.display()
+    );
+
+    // --- Assertion 12 (discriminator): the bursts were COALESCED --------------
+    //
+    // Everything above says the preview is CORRECT. This and assertion 13 are the
+    // only things in either suite that say what it COST: the number of blocking
+    // `render_preview` calls the whole run paid, read out of the report the
+    // application itself appended to. Assertion 11 stays green whether the marker
+    // coalesced or rendered per keystroke, which is precisely why these exist. The
+    // file is read once and the total summed once; 12 holds it to a ceiling and 13 to
+    // a floor, and the two failures name different regressions.
+    let stats_text = std::fs::read_to_string(&stats_path).unwrap_or_else(|e| {
+        panic!(
+            "{SMOKE}: could not read the frame-stats report {}: {e}. `frame_metrics::install()` \
+             opens it create/append as the FIRST statement of `app::run`, and the install header \
+             is written the moment the flag is read — before any interval can elapse — so an \
+             ABSENT file means the flag never reached the app (this smoke's `cage_command` is what \
+             sets WOLF_FRAME_STATS and WOLF_FRAME_STATS_FILE) rather than that no render was \
+             recorded. Note assertions 1 through 11 above passed, so the app ran and the preview \
+             worked; this is about the instrument, not about the feature.",
+            stats_path.display()
+        )
+    });
+    let stats_blocks = parse_frame_stats_blocks(&stats_text, &stats_path, SMOKE);
+    assert!(
+        !stats_blocks.is_empty(),
+        "{SMOKE}: the frame-stats report {} holds NO report blocks, so the counts below would be \
+         summed over nothing and would read zero whatever the application did. A report is emitted \
+         from the last statement of the drain-loop body and so rides a wake; step 10's normal-mode \
+         Escape exists to supply one after the last burst. Its absence means either that no \
+         interval ever closed (check WOLF_FRAME_STATS_INTERVAL, passed as \
+         {FRAME_STATS_INTERVAL_SECS:?}) or that the flush key never reached the app. File \
+         contents were:\n{stats_text}",
+        stats_path.display()
+    );
+
+    let renders = sum_frame_stats_counts(&stats_blocks, PREVIEW_RENDER_LABEL, &stats_path, SMOKE);
+
+    assert!(
+        renders <= PREVIEW_RENDER_BUDGET,
+        "{SMOKE}: the report at {} counts {renders} blocking {PREVIEW_RENDER_LABEL:?} calls over \
+         all {} report block(s), above the budget of {PREVIEW_RENDER_BUDGET}. Three things move \
+         the source's `changedtick` in this scenario: the cold open, step 6's paced burst of \
+         {PREVIEW_LIVE_MARKER:?}, and step 9's sixty-key sustained burst. Coalesced, this scenario \
+         reads 7 or 8; a count around sixty is one render PER KEYSTROKE, which is the per-wake \
+         render this unit replaced and the 15.6 % of wall clock \
+         `crates/wolf-gnome/DECISIONS.md` records — measured at 61 under exactly that revert. \
+         Every assertion above stays green under it, so this and assertion 13 are the only things \
+         in either suite that can see it. \
+         Do NOT raise PREVIEW_RENDER_BUDGET to admit the reading: read its doc comment first, \
+         which says which of the two directions is allowed. File contents were:\n{stats_text}",
+        stats_path.display(),
+        stats_blocks.len()
+    );
+
+    // --- Assertion 13 (discriminator): the STALENESS CAP fired ----------------
+    //
+    // Assertion 12 above cannot see the cap: a burst shorter than the cap is carried
+    // by a leading edge and a trailing fire, which is inside every budget. Step 9's
+    // sustained burst is what makes the cap the only thing that can render during it,
+    // and this floor is what reads the difference. It is also assertion 12's
+    // non-vacuity half — a build that renders nothing reads zero, which no ceiling
+    // can refuse.
+    assert!(
+        renders >= PREVIEW_CAP_RENDER_FLOOR,
+        "{SMOKE}: the report at {} counts {renders} {PREVIEW_RENDER_LABEL:?} sample(s) over all {} \
+         report block(s), below the {PREVIEW_CAP_RENDER_FLOOR} a run whose staleness cap fires \
+         cannot fall under. Step 9 types sixty keys at {PREVIEW_TYPE_DELAY_MS} ms — about 2.4 \
+         seconds of unbroken typing, during which the trailing timer NEVER elapses, since every arm \
+         is superseded by the next keystroke. So every render inside that burst is a cap render, \
+         and measured it pays FOUR of them where a green run reads 7 or 8 in total. Classify the \
+         reading: a count of four or five is the CAP GONE — `request` computing its delay as the \
+         trailing delay alone, with the `min` against the cap's remainder dropped, which measured \
+         reads exactly 4 — under which the burst pays only its ends, and a reader typing a long \
+         paragraph watches a frozen preview until they pause. A count near ZERO is something far \
+         coarser: no `prev.render` row at all, which `summarize`'s zero-count skip makes mean the \
+         RPC was never timed. Check that the `Bucket::PrevRender` region still wraps \
+         `WolfCore::render_preview`, and that a coalesced fire opens a `pane.prev` scope of its own \
+         — a `prev.render` sample with no parent is a nesting-contract break rather than a missing \
+         render. Assertions 6 and 11 above passed, so documents DID reach the web view. The unit \
+         test `preview_coalescer::tests::the_delay_is_capped_by_the_staleness_deadline` covers the \
+         same rule from values; this is its only end-to-end evidence. File contents were:\n\
+         {stats_text}",
+        stats_path.display(),
+        stats_blocks.len()
+    );
+
+    // --- Assertion 14 (discriminator): the FIRE opened its own region ---------
+    //
+    // The one claim assertions 12 and 13 cannot make. Both read `prev.render`, whose
+    // rows exist whether or not the sample sat inside a `pane.prev` region, so
+    // deleting the `frame_metrics::scope(Bucket::PanePrev)` guard from the fire
+    // closure leaves every count above unchanged — and silently makes
+    // `frame_stats.rs`'s nesting table false, since `prev.render` would have samples
+    // with no parent.
+    //
+    // The arithmetic, and why the comparison is this pair and not `pane.prev` against
+    // `prev.render`: a pass is opened by every pane wake that reaches it plus every
+    // performing coalescer fire, so `count(pane.prev)` is `count(pane.wake)`, minus
+    // the wakes that early-return before the pass, plus the fires.
+    //
+    // The subtracted term is ZERO here, and that is MEASURED rather than assumed: with
+    // the fire's scope deleted the two counts came out exactly equal (299 against 299),
+    // so every pane wake this scenario runs reaches the pass. The comparison is
+    // therefore STRICT. A `>=` here would be satisfied by the reverted build and would
+    // prove nothing at all — it was written that way first, and the revert passed under
+    // it.
+    //
+    // What the strict margin is: exactly the performing coalescer fires, since nothing
+    // is subtracted. Measured +4 on three consecutive green runs (298/294, 303/299,
+    // 309/305), against +0 with the fire's scope deleted.
+    //
+    // Comparing against `prev.render` instead would prove nothing either: the pass runs
+    // on nearly every wake, so 298 > 7 holds with the scope deleted and with the
+    // coalescer removed entirely.
+    let pane_prev =
+        sum_frame_stats_counts(&stats_blocks, PREVIEW_PANE_PREV_LABEL, &stats_path, SMOKE);
+    let pane_wake =
+        sum_frame_stats_counts(&stats_blocks, PREVIEW_PANE_WAKE_LABEL, &stats_path, SMOKE);
+    assert!(
+        pane_prev > pane_wake,
+        "{SMOKE}: the report at {} counts {pane_prev} {PREVIEW_PANE_PREV_LABEL:?} region(s) \
+         against {pane_wake} {PREVIEW_PANE_WAKE_LABEL:?}, so no preview pass ran outside a pane \
+         wake. Every performing coalescer fire opens a pass of its own OUTSIDE any wake, and this \
+         run performed several of them — assertion 13 above just proved it — so the count must \
+         EXCEED the wake count while the fire path still opens its region. What equality means: a \
+         `render_preview` performed outside any {PREVIEW_PANE_PREV_LABEL:?} region, which is the \
+         fire closure having lost its `frame_metrics::scope(Bucket::PanePrev)` guard (or binding \
+         it with `let _ =`, which drops it instantly). Every other assertion here stays green \
+         under that, and the cost is silent: `frame_stats.rs` states as FACT that a `prev.render` \
+         sample always has a parent, and a measurement run would read the preview RPC as \
+         unattributed time. Measured: +4 on three consecutive green runs against +0 with that \
+         guard deleted, every pane wake in this scenario reaching the pass. The margin IS the \
+         performing fires, so if this fires without the guard having moved, the finding is that \
+         the scenario stopped arming any fire at all — re-derive it, never relax the comparison \
+         back to `>=`, which the guard-deleted build satisfies. Do NOT weaken it to compare \
+         against {PREVIEW_RENDER_LABEL:?} either, which holds by construction. File contents \
+         were:\n{stats_text}",
+        stats_path.display()
+    );
+}
+
+/// The live-edit burst is typed FASTER than the coalescer's trailing delay, so its
+/// keystrokes really do coalesce.
+///
+/// ## What it closes
+///
+/// [`PREVIEW_TYPE_DELAY_MS`] and [`PREVIEW_TRAILING_DELAY`] live in different files —
+/// one is this smoke's typing pace, the other is the crate's tuning — and
+/// [`preview_pane_renders_and_edit_source_returns_under_cage`]'s assertion 11 only
+/// reaches the trailing edge while the first sits below the second. Raise the pace
+/// past the delay and every keystroke of the burst becomes its own LEADING edge: the
+/// marker still reaches the page, the smoke still passes, and the assertion quietly
+/// stops saying anything about the coalescing. That is the same shape as
+/// [`codehl_chroma_thresholds_are_separated`] — a constant a thousand lines from the
+/// assertion it can disarm, with nothing in a green run naming it.
+///
+/// ## Why it IMPORTS the crate's constant
+///
+/// This file's usual discipline is to re-type a production constant rather than read
+/// it, so an assertion cannot follow a renamed value silently. The discipline is
+/// aimed at ASSERTED TERMS, and this is its opposite: the whole content of the check
+/// is that the two numbers stay in a relation, so reading the real one is the point.
+/// A re-typed copy would go stale exactly when the tuning moved, which is the moment
+/// the guard exists for.
+///
+/// ## What it needs
+///
+/// NO environment: no compositor, no [`require_smoke_env`], no [`CAGE_LOCK`], no
+/// subprocess. It runs in microseconds and still guards on a machine with no smoke
+/// toolchain at all.
+///
+/// Falsifier: raise [`PREVIEW_TYPE_DELAY_MS`] to 200.
+#[test]
+fn preview_burst_delay_stays_below_the_coalescer_trailing_delay() {
+    const GUARD: &str = "preview_burst_delay_stays_below_the_coalescer_trailing_delay";
+
+    // Both sides are bound to locals before the comparison. `clippy::assertions_on_constants`
+    // rejects an `assert!` whose whole condition is constant — under `-D warnings` that
+    // is a build failure — and no `#[allow]` may be added here, for the reason
+    // `codehl_chroma_thresholds_are_separated` records. A local binding puts the
+    // condition outside that lint by construction rather than by luck.
+    let burst_delay = Duration::from_millis(PREVIEW_TYPE_DELAY_MS);
+    let trailing = PREVIEW_TRAILING_DELAY;
+    assert!(
+        burst_delay < trailing,
+        "{GUARD}: the preview smoke types its live-edit burst {burst_delay:?} per key, which is \
+         not below `preview_coalescer::PREVIEW_TRAILING_DELAY` ({trailing:?}). At that pace each \
+         keystroke arrives after the previous one's trailing fire has already run, so each is its \
+         own LEADING edge and nothing coalesces. \
+         `preview_pane_renders_and_edit_source_returns_under_cage` then stays green while its \
+         assertion 11 proves only that a single render reached the DOM — the trailing edge stops \
+         being what puts the marker on screen, and its second revert (arming nothing) stops \
+         reddening anything. Restore the pace below the delay; do not widen this guard to admit \
+         it, and if the coalescer's tuning is what moved, re-derive the pace from the new value."
     );
 }
 
@@ -34792,6 +35265,12 @@ const FRAME_STATS_FILE_NAME: &str = "wolf_gnome_frame_stats.txt";
 /// about ten seconds. **It is coupled to `BURST_GAP` in [`FRAME_STATS_SCENARIO`]**:
 /// the gap must exceed this, or two bursts land inside one interval and the scenario
 /// produces fewer reports than it reads as producing.
+///
+/// [`preview_pane_renders_and_edit_source_returns_under_cage`] hands the same value
+/// to its own launch for a different reason: its assertion 12 SUMS `prev.render`
+/// across every report, so how many reports a run is cut into cannot move the total.
+/// All that smoke needs is that at least one interval closes before the teardown
+/// signal, which any value well below its runtime satisfies.
 const FRAME_STATS_INTERVAL_SECS: &str = "1";
 
 /// The text typed into the buffer in each burst, after the insert-mode `i`.
@@ -35022,6 +35501,41 @@ impl FrameStatsBlock {
 /// INSIDE the field.
 fn parse_frame_stats_count(field: &str) -> Option<u64> {
     field.strip_suffix('*').unwrap_or(field).parse::<u64>().ok()
+}
+
+/// Sums one bucket's `count` column over every report block in a file.
+///
+/// Zero when the label appears in no block, which `summarize`'s zero-count skip makes
+/// mean "that region was never entered" rather than "the row was dropped" — the
+/// reading [`preview_pane_renders_and_edit_source_returns_under_cage`]'s assertions
+/// 12 through 14 all rest on. An unparseable count is a PANIC rather than a skipped
+/// row, because a silently-dropped row would lower a sum that three assertions read
+/// as evidence.
+fn sum_frame_stats_counts(
+    blocks: &[FrameStatsBlock],
+    label: &str,
+    path: &Path,
+    smoke: &str,
+) -> u64 {
+    blocks
+        .iter()
+        .flat_map(|block| block.rows.iter())
+        .filter(|row| row.label == label)
+        .map(|row| {
+            parse_frame_stats_count(&row.count_field).unwrap_or_else(|| {
+                panic!(
+                    "{smoke}: line {} of {} is a {label:?} row whose count field is {:?}, which is \
+                     not an integer (optionally followed by the `*` truncation marker). The count \
+                     is a `u64` printed into a right-aligned field, so anything else means the \
+                     row's format string and its arguments disagree — a formatter defect rather \
+                     than anything about the region the row names.",
+                    row.line_no,
+                    path.display(),
+                    row.count_field
+                )
+            })
+        })
+        .sum()
 }
 
 /// Parses one `keys=` / `wakes=` counter out of a footer.

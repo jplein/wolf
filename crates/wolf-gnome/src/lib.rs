@@ -266,7 +266,7 @@
 //!   ([`preview_ui::preview_placement`], [`preview_ui::edit_placement`]); five
 //!   TOTAL `Option<`[`wolf_core::Liveness`]`>` guards over the five BLOCKING RPCs
 //!   this adds — the two presses, a followed preview link, Preview in Browser, and
-//!   the per-wake render ([`preview_ui::preview_press`], [`preview_ui::edit_press`],
+//!   the coalesced render ([`preview_ui::preview_press`], [`preview_ui::edit_press`],
 //!   [`preview_ui::preview_file_press`], [`preview_ui::browser_press`],
 //!   [`preview_ui::may_render`]); whether a bound web view must be reloaded, keyed
 //!   on the source buffer's number AND its `changedtick` because two freshly opened
@@ -277,6 +277,17 @@
 //!   ([`preview_ui::browser_url`], whose `None` means launch NOTHING); and a preview
 //!   pane's two statusbar lines, which come from its own source path rather than
 //!   from `WolfCore::pane_status` ([`preview_ui::preview_status`]).
+//! - [`mod@preview_coalescer`]: WHEN that render runs — the clock-free, GTK-free
+//!   state machine that collapses a typing burst into a LEADING render, one more
+//!   whenever the burst has run [`preview_coalescer::PREVIEW_MAX_STALENESS`] without
+//!   one, and a trailing render after the burst ends
+//!   ([`preview_coalescer::PreviewCoalescer::request`], whose
+//!   [`preview_coalescer::RenderDecision`] is either "render inline" or "arm a
+//!   one-shot carrying this generation"). It owns no widget and reads no clock of
+//!   its own: [`mod@pane_view`] arms the timer, performs the render behind
+//!   [`preview_ui::may_render`], and reports it back through
+//!   [`preview_coalescer::PreviewCoalescer::rendered`]. Same generation-token
+//!   mechanism as [`mod@refresh_coalescer`], a different rule.
 //! - [`mod@tabs_ui`]: the NATIVE TABS rulebook, for the N tabs one window's single
 //!   captive Neovim serves — which tab a render wake may touch
 //!   ([`tabs_ui::tab_wake`]), which is the whole selection gate: a tab whose handle
@@ -389,6 +400,7 @@ pub mod pane_layout;
 pub mod pane_view;
 pub mod persistence;
 pub mod picker;
+pub mod preview_coalescer;
 pub mod preview_link;
 pub mod preview_ui;
 pub mod refresh_coalescer;

@@ -153,9 +153,12 @@
 //!
 //! The last five are the MARKDOWN PREVIEW's. [`AppShell::open_preview`] and
 //! [`AppShell::edit_source`] funnel through `WolfCore::open_preview` /
-//! `WolfCore::edit_source`, and `pane_view::refresh_previews` issues
-//! `WolfCore::render_preview` once per changed source per wake — the only one of the
-//! ten that can repeat while the user simply types. All three are gated through
+//! `WolfCore::edit_source`, and `pane_view::run_preview_render_pass` issues
+//! `WolfCore::render_preview` for a changed source — the only one of the ten that can
+//! repeat while the user simply types, and so the only one that is COALESCED
+//! ([`mod@crate::preview_coalescer`]): a burst of edits costs one render on its
+//! leading edge, one per [`crate::preview_coalescer::PREVIEW_MAX_STALENESS`] while it
+//! continues, and one trailing render after it ends. All three are gated through
 //! [`crate::preview_ui`] ([`preview_ui::preview_press`], [`preview_ui::edit_press`],
 //! `preview_ui::may_render`) with the buffer picker's argument and its limits.
 //! Neither press has an [`crate::actions`] accelerator row, so their only routes are
