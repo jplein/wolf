@@ -46,7 +46,7 @@ A packaged smoke launches the store binary under `cage` with every devShell expo
 | Per-pane status bar (filename + display path)              | `feat/status-bar` (`ffc3c49`)                                                 | [x]   | [x]   |
 | Active/inactive pane treatment (no dimming)                | `fix/dark-mode` (`745a8f5`)                                                   | [x]   | [x]   |
 | Editor padding / insets                                    | `feat/ui-tweaks-2` (`eadf266`, not the branch tip)                            | [x]   | [x]   |
-| macOS Option key composes accents (option-as-option)       | `feat/macos-alt-key-handling`                                                 | [x]   | [ ]   |
+| macOS Option key composes accents (option-as-option)       | `feat/macos-alt-key-handling` / `linux-feat/input-method`                     | [x]   | [x]   |
 
 Divider drag on GTK is the stock `gtk::Paned` handle drag, and the position it lands on is written back into the pure tree's weights, which is what makes it survive a re-layout and reach `state.json`. One divergence from macOS is real and deliberate: GTK renders an n-ary split as a right-leaning paned chain, so a divider governs its head child against the whole remainder, which is rescaled proportionally, where macOS's `setPairFraction` reweights only the adjacent pair.
 
@@ -61,6 +61,10 @@ Horizontal scroll, non-primary buttons and kinetic scrolling are handled on neit
 The content cap, its centred grid, the full-width toggle and the synthetic scrollbar land together on Linux, with three deliberate divergences from macOS. The thumb sits in the pane's right padding gutter rather than over the last text column, which is what macOS's own `drawScrollbars` prose describes and its code does not implement. Only the thumb is drawn and it never fades, because a fade needs the periodic timer [`crates/wolf-gnome/DECISIONS.md`](crates/wolf-gnome/DECISIONS.md) forbids. And the centring offset is floored to whole device pixels, because a half-pixel `cr.translate` resamples every glyph and this front-end has no HiDPI story.
 
 Pointer input is verified at two levels — the seams through a live Neovim, and four cage smokes injecting real pointer events into the running application via [`wolf-pointer-inject`](tools/wolf-pointer-inject/README.md). What that leaves unproven is listed in [`crates/wolf-gnome/tests/README.md`](crates/wolf-gnome/tests/README.md).
+
+Composition is where the two front-ends' mechanisms differ most, so the ticked row means different things on each side. macOS composes through a Carbon `UCKeyTranslate` wrapper that threads dead-key state across keystrokes, and only in option-as-option mode: its subject is one key. Linux puts a `gtk::IMMulticontext` on each window's key controller and offers every press to it before translating, which is wider — dead keys, compose sequences, `AltGr` levels and any input method that commits all reach Neovim, as one modifier-free character event each. Neither front-end draws anything while a sequence is pending.
+
+Two Linux limitations are live. A composed sequence is invisible until it commits, because GTK's own compose path reports an empty preedit string at every step, so there is no preedit display and no `set_cursor_location` to place one with. And while a sequence is pending, a plain `Ctrl+<letter>` press is claimed by the input method and does not reach Neovim; a bound chord is unaffected, because the capture-phase chord controller matches it first. [`crates/wolf-gnome/DECISIONS.md`](crates/wolf-gnome/DECISIONS.md#present-limitations) holds both, with what is measured, what follows from the code, and the measurement the repair owes.
 
 ## Command line, messages, completion
 
@@ -271,6 +275,4 @@ Work already carried is recorded in the tables above. What remains, in order, co
 
 1. **Coalescing the preview render.** Typing beside a live Markdown preview spends 15.6 % of wall clock in a blocking render call, which the frame-stats instrument measured rather than inferred. It is not a draw fix, which is why it is a unit rather than part of the row above: its only repair is temporal coalescing, whose trailing edge needs a one-shot event-armed timer and a preview-latency budget nobody has set. That budget is a user-visible decision, so this unit opens with a question rather than an implementation.
 
-2. **Composed and input-method text entry.** The macOS row is Option-as-option composing accents; the Linux counterpart is wider, because this front-end attaches no `gtk::IMContext` at all, so a dead key, a compose sequence and every input method reach Neovim as nothing.
-
-3. **Preview in browser.** Written and dispatched, and deliberately last: it needs a host where a human can watch the hand-off land, and a hand-off found broken there is repaired as its own effort, per the Markdown-preview table above.
+2. **Preview in browser.** Written and dispatched, and deliberately last: it needs a host where a human can watch the hand-off land, and a hand-off found broken there is repaired as its own effort, per the Markdown-preview table above.

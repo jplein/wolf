@@ -355,6 +355,27 @@ Purpose: the pure rulebook for the three attribute-borne decorations — underli
 - Pango carries one underline attribute per run, so `underline` and `undercurl` cannot coexist and undercurl wins. macOS folds both into a straight underline; the wave is a divergence pinned by [`paint_golden.rs`](../tests/README.md#paint_goldenrs).
 - No strikethrough colour is ever set, so Pango strikes in the layout foreground — macOS's behaviour, bought for free.
 
+#### `im_ui.rs`
+
+Purpose: the pure, GTK-free rulebook for composed and input-method text entry — where one window-level key event goes, and what one `commit` string becomes. [`window.rs`](#windowrs) owns the context and the `filter_keypress` call.
+
+**Public API**
+
+- `key_route(phase, overlay_open, im_filtered) -> KeyRoute` — `Overlay`, `AskInputMethod`, `Consumed`, `Translate` or `Ignore`, each an obligation on the glue. `im_filtered` is `None` until the context has been asked.
+- `commit_keys(text) -> Vec<KeyEvent>` — one modifier-free `Key::Char` per character, in order, control characters dropped.
+- `commit_decision(overlay_open, text) -> CommitDecision` — `Send(events)` or `Refuse(reason)`, the reason a mid-sentence clause the caller prints.
+
+**Decisions**
+
+- The overlay early return precedes the offer, because `filter_keypress` is a side effect rather than a query: an accepted key is held in a pending compose state and cannot be un-offered.
+- Both matches are `_`-free, so a new phase or route is an `E0004` until classified; `Ignore` is what keeps a release from doubling every key.
+- A control character never becomes a `Key::Char`: `key_to_notation` renders one as a raw byte, a second unnamed route to the named keys [`input.rs`](#inputrs) owns.
+- An empty commit is a `Send` of nothing, not a refusal: a refusal exists to be printed.
+
+**Gotchas**
+
+- The refusal arm is unreachable from this crate's glue, which asks the context only with no overlay open and gets `commit` synchronously from inside that call. It is there for an out-of-process engine committing on a later main-loop turn.
+
 #### `input.rs`
 
 Purpose: translates a GDK keyval plus modifier state into a `wolf_core::KeyEvent`. It has the exact shape of a `gtk::EventControllerKey` callback but stays a free function so it is testable without a display server.
@@ -372,6 +393,7 @@ Purpose: translates a GDK keyval plus modifier state into a `wolf_core::KeyEvent
 **Gotchas**
 
 - `SUPER_MASK` maps to `meta`, so an unmapped Super chord is forwarded for Neovim to mangle ([DECISIONS.md](../DECISIONS.md)); the chord controller intercepts only the ones this crate binds.
+- A plain printable normally reaches Neovim through the input method's `commit` rather than through this function, since the window's context claims one even with no sequence pending. What `gdk_key` carries is the named keys, the modifier chords and whatever the context declines ([`im_ui.rs`](#im_uirs)).
 
 #### `init_lua.rs`
 
@@ -888,15 +910,14 @@ Purpose: one window and everything scoped to it — an `adw::ApplicationWindow` 
 
 **Decisions**
 
-- Telling the coordinator is the close handler's first statement, while the core and panes are still alive: a subtree gathered after the core is taken out sees nothing, the gate refuses it, and the session is silently lost.
+- The close handler's statement order is load-bearing at both ends. Telling the coordinator comes first, or the gathered subtree sees nothing and the session is silently lost; focusing the input method out and clearing its client widget comes last, after the core is taken, so a focus-out commit finds no core and the context releases the window's widget tree.
 - The window registers with the coordinator before its first command drain, or the drain reaches a coordinator that does not know the window exists.
-- `refresh_subtree` and `cached_subtree` answer for every tab; `cached_subtree` pairs each live cache with its page position and appends the queued tabs' seeds, over [`state_seam.rs`](#state_seamrs)'s ordering rules. Both keep their one-window signatures, so [`coordinator.rs`](#coordinatorrs) never learns tabs exist.
 - `display_cwd` reads the cached subtree, so the palette and `state.json` cannot disagree about where a window is.
 - `WindowInner` does not hold the shell: the wake-drain future owns it for exactly the window's lifetime, and a second owner adds a lifetime nothing reads.
 
 **Gotchas**
 
-- The key controller carries no propagation phase, so it runs after [`shell.rs`](#shellrs)'s capture-phase chord controller, which stops a bound chord also reaching Neovim.
+- The key controller carries no propagation phase and offers each press to the window's `gtk::IMMulticontext` before translating, so a bound chord reaches neither Neovim nor the context — [`shell.rs`](#shellrs)'s capture-phase controller has already stopped it ([DECISIONS.md](../DECISIONS.md#window-structure)).
 
 #### `workspace.rs`
 
