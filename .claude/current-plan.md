@@ -1,563 +1,515 @@
-# Unit: composed and input-method text entry for `wolf-gnome`
+# Unit: coalescing the Markdown preview render (wolf-gnome)
 
-Branch: `linux-feat/input-method` (cut from `linux`).
+Branch: `linux-feat/preview-coalesce`, cut from `linux` (e76fe33).
 
 ## Problem
 
-`wolf-gnome` attaches no `gtk::IMContext`. Verified by grep (no occurrence of
-`IMContext`/`im_context`/`IMMulticontext` anywhere under `crates/wolf-gnome/src`)
-and by measurement: `gdk::Key::dead_acute.to_unicode()` is `None`, so
-`input::gdk_key` returns `None` for it and `window::wire_keys` drops the press.
-A dead key, a compose sequence and every input method therefore reach Neovim as
-nothing. This is the Linux side of the "macOS Option key composes accents" row.
+Typing beside a live Markdown preview issues a blocking `render_preview` RPC per
+keystroke — 988 calls at 6.93 ms mean against 1238 keystrokes, 15.6 % of wall clock,
+pushing `wake`'s p95 to 9.1 ms and its worst interval to 34 ms. It is the only blocking
+RPC that repeats while the user simply types. `crates/wolf-gnome/DECISIONS.md`,
+"Frame-time instrumentation", holds the numbers and the conditions.
 
-## Measured evidence gathered before planning
+## The budget, already decided (do not re-litigate)
 
-All of it from a throwaway `crates/wolf-gnome/examples/im_probe.rs` run under
-`cage` and driven with `wtype` — the same harness the smokes use. **The probe is
-deleted before the commit.** The probe attached a `gtk::IMMulticontext` to a
-bubble-phase `EventControllerKey` on the window, alongside a capture-phase
-controller modelling `shell::install_chord_controller`, and called
-`im.filter_keypress()` by hand from inside `key-pressed` (rather than through
-`EventControllerKey::set_im_context`).
+- **Leading edge.** The first keystroke after an idle gap renders immediately.
+- **150 ms trailing.** A burst collapses to one render after the user pauses.
+- **500 ms maximum staleness.** Caps a sustained burst at roughly two refreshes a second.
 
-1. `wtype -k dead_acute` and `wtype -k Multi_key` both work under `cage` with no
-   xkb or compose-key configuration in the compositor. `dead_acute` then `e`
-   commits `"é"`; `Multi_key` then `a` then `e` commits `"æ"`; `Multi_key s s`
-   commits `"ß"`. GTK's own compose handling is client-side, so the harness needs
-   nothing added to it.
-2. The capture-phase controller sees **every** key first, including `dead_acute`
-   and `Multi_key`. The accelerator namespace is untouched by anything below.
-3. With no compose sequence pending, the IM filters plain printables only:
-   `a`, `A`, `j`, `é` (keyval `eacute`), `ß` (keyval `ssharp`) all arrive as
-   `commit` and emit no `key-pressed`. `Ctrl+w`, `Ctrl+Shift+O`, `Escape`,
-   `BackSpace`, `Alt+j`, `Left`, `Return` are **not** filtered and still reach
-   `key-pressed`.
-4. Calling `im.filter_keypress(controller.current_event())` by hand from inside
-   `key-pressed` behaves identically to `set_im_context`, and puts the ordering
-   in this crate's code rather than in GTK's controller.
-5. **The preedit string is empty for every sequence GTK's own compose table
-   handles.** `preedit-start` / `preedit-changed` / `preedit-end` all fire around
-   a dead key and around a `Multi_key` sequence, and `preedit_string()` returns
-   `""` with cursor 0 at every step. Nothing is drawable.
-6. While a compose sequence is pending, a `Ctrl+<letter>` press **is** filtered
-   and swallowed, and the pending sequence survives it. `Escape` while pending is
-   also filtered, and aborts the sequence with no commit.
+## Orchestrator decisions on the architect's open questions
 
-## Scope decision, made on that evidence
-
-**In:** committed text. Dead keys, compose sequences, `AltGr` levels, and any
-input method that commits.
-
-**Out:** preedit display, and `set_cursor_location` with it. Finding 5 is the
-ground: GTK's compose path reports an empty preedit string, so a preedit renderer
-would draw nothing for every sequence this host or this harness can produce. The
-only thing that would exercise it is an ibus or fcitx engine, which cannot run
-under `cage` — `cage_command` deliberately removes `DBUS_SESSION_BUS_ADDRESS`,
-and the GTK 4 ibus module is not in the flake. Shipping an unexercised paint path
-over the grid is what `DECISIONS.md`'s "The pure seams" forbids. This is stated
-as a present-tense limitation in `DECISIONS.md` and in `feat-list.md`, not left
-for a user to find.
-
-## Constraints this unit must not break
-
-- The accelerator namespace invariant ("no Neovim key becomes unreachable"), held
-  by `actions::parse_accel` / `forbidden_reason` over `ACTION_TABLE`.
-- The Shift-glyph contract: `shift: false` on every `Key::Char`.
-- The overlay guard in `window::wire_keys`: while the picker, palette, buffer
-  picker or project search is open, nothing is forwarded to core.
-- Pure rulebook, thin glue: the precedence decision lives in a GTK-free seam with
-  unit tests, following `nav_ui.rs` and `tabs_ui.rs`.
-
-## Plan
-
-(architect's plan lands here)
-# Implementation plan: composed and input-method text entry for `wolf-gnome`
-
-## 1. Summary
-
-`wolf-gnome` attaches no `gtk::IMContext`, so `input::gdk_key` returns `None` for `dead_acute` and `Multi_key` and `window::wire_keys` drops the press: dead keys, compose sequences, AltGr levels and every input method reach Neovim as nothing. This unit attaches one `gtk::IMMulticontext` per window, routes each window-level key press through it before the `gdk_key` translation, and turns each `commit` string into `wolf_core::KeyEvent`s. The precedence (overlay beats input method beats translation) and the commit rulebook (one `Key::Char` per `char`, `shift: false`, control characters dropped, a commit arriving behind an open overlay refused) live in a new pure seam, `crates/wolf-gnome/src/im_ui.rs`, unit-tested the way `nav_ui.rs` is; `window.rs` holds only the glue. Preedit display is out of scope, on the measured ground that GTK's compose path reports an empty preedit string for every sequence this host or harness can produce.
-
-**The most important consequence of the measurements, and the thing that shapes the whole risk profile:** measurement 3 says the input method filters *plain printables* — `a`, `A`, `j` — with no sequence pending. After this change, every ordinary keystroke, including every normal-mode command key and every character of a typed `:e` command line, travels the `commit` path rather than the `gdk_key` path. This is not an accent feature bolted beside typing; it is a rerouting of typing. That is why the existing smoke suite is the regression evidence, and why the commit rule must be exactly right about ordering, control characters and `InputEvent::Key`-versus-`Paste`.
+1. **Three constants, as planned.** `PREVIEW_TRAILING_DELAY`, `PREVIEW_MAX_STALENESS`
+   and `PREVIEW_LEADING_IDLE` all exist by name, with the documented invariant
+   `PREVIEW_LEADING_IDLE >= PREVIEW_TRAILING_DELAY` pinned by test 4's preamble. The
+   brief requires all three budget elements tunable without reading the algorithm.
+2. **Assertion 12 (the render count, read out of a frame-stats report inside the
+   existing smoke) is in.** It is the only thing in either suite that can see the wiring.
+   If it proves flaky, report it — do not weaken it silently.
+3. **The end-to-end measurement is a separate deliverable from assertion 12** and is
+   taken by hand per §7.4 below. A number is claimed only if it was measured.
+4. This crate has **no Bazel target**; `cargo test` discovers every file in `tests/`.
+   No `rust_test` wiring is owed.
 
 ---
 
-## 2. Files to create
+# Architect's plan (authoritative)
 
-### 2.1 `/home/jplein/dev/jplein/wolf/crates/wolf-gnome/src/im_ui.rs`
+## 2. Facts established from the source
 
-The name: keep `im_ui.rs`. Its content is a precedence-and-refusal rulebook consumed by widget glue, which is the `nav_ui.rs` / `tabs_ui.rs` / `clipboard_ui.rs` species; `input.rs` and `mouse.rs` are the *translation* species (platform event → core value), and `commit_keys` is subordinate to the routing rule rather than the file's subject. `im_ui.rs` sorts next to `input.rs`'s neighbours in `src/README.md` either way.
+**`PaneInner` survives a tab switch.** One `PaneInner` per tab (`pane_view::build`,
+called at `crates/wolf-gnome/src/tab_view.rs:391`), held by `TabInner.panes`
+(`tab_view.rs:204`) for the life of the page. `TabsHandle::on_render_wake`
+(`tab_view.rs:919-946`) does not call `TabHandle::refresh` for a `TabWake::Hold`
+(`tab_view.rs:938`), so a background tab's `refresh_previews` is not called at all.
+`PaneInner` is dropped only when the page is deregistered (`tab_view.rs:374-378`).
 
-Pure, GTK-free, `wolf_core`-free except for `Key` and `KeyEvent`. No `WolfCore`, no widget type, no display.
+**`PaneState`/`PaneWidgets` do not survive.** `PaneState` (`pane_view.rs:420`) is a
+per-wake value. The `panes: RefCell<HashMap<PaneId, PaneWidgets>>` map is replaced
+wholesale by `apply_layout_rebuild` (`pane_view.rs:742`), cleared by
+`reset_after_restart` (`pane_view.rs:3205`), and has entries removed by `detect_closes`
+(`pane_view.rs:1216`, `:1230`).
 
-**Module doc comment** (nav_ui.rs's shape — sections, not a wall):
+**Conclusion: the coalescer's state lives on `PaneInner`, one per tab, never per pane.**
 
-- What it owns: the precedence for one window-level key press, and the rule turning one `commit` string into zero or more `KeyEvent`s.
-- **Why the ordering is a value rather than prose.** Offering a key to the input method is not a query: `filter_keypress` has a side effect, since a `dead_acute` it accepts is *swallowed into a pending compose state* that commits on a later key. So a key offered to the IM while an overlay is open cannot be un-offered; the overlay guard must short-circuit ahead of the offer, and that is what the enum makes executable.
-- **Why the seam cannot be one call.** The IM's answer is not known until it has been asked, and asking is the side effect above. Hence the `Option<bool>` staging described below: the glue asks once with `None`, and only an answer of `AskInputMethod` licenses it to call `filter_keypress` and ask again.
-- **Why a control character must never become a `Key::Char`.** `wolf_core::key_to_notation` renders a modifier-free `Key::Char(c)` as the bare character (`key_base` returns `c.to_string()`), so `Key::Char('\u{1b}')` sends a raw ESC byte through `nvim_input` and leaves insert mode; `'\r'` and `'\t'` are Enter and Tab by the same route. Those keys already have a route — `input::gdk_key`'s `named_key` maps `Return`/`Escape`/`Tab` to `Key::Enter`/`Key::Esc`/`Key::Tab`, which `key_to_notation` renders as `<CR>`/`<Esc>`/`<Tab>` and which measurement 3 says the IM does not filter. A control character in a commit would be a second, unnamed route to the same effect with no `<lt>`-style escaping and no modifier handling. `gdk_key` already refuses control characters at its own entry point; this is the identical rule at the second entry point, and two entry points that disagree is the bug.
-- **The Shift-glyph contract**, cross-referenced to `input.rs` rather than restated: the committed text already carries the glyph, so every emitted `KeyEvent` sets `shift: false` — and `ctrl`, `alt`, `meta` false too, because a commit is a *result*, not a chord.
-- **Totality is the contract**, pointing at the two `_`-free matches below.
+Two further facts:
 
-**Public API:**
+- `load_preview_document` (`pane_view.rs:2034-2098`) touches only the pane's
+  `webkit6::WebView` and `head_len`. A deferred render needs no `queue_redraw`.
+- `preview_ui`'s docs already describe the render as "the coalesced `render_preview`"
+  (`preview_ui.rs:38`, `:410`). Per CLAUDE.md the implementation is what must move;
+  `preview_ui.rs` needs no edit.
 
+## 3. Corrections to the candidate design
+
+1. **`request` must not be called on every wake.** Most wakes have no due pane. The glue
+   asks "is any pane due?" first (a cheap `current_load`/`loaded` comparison through
+   `preview_ui::needs_reload`, no allocation, no RPC) and calls `request` only then.
+   Otherwise a timer would be armed continuously while typing with no preview open.
+2. **The `may_render` refusal has two distinct cases.** At wake time the gate is read
+   *before* `request`, so a refusal touches no coalescer state. At fire time a refusal
+   returns without calling `rendered`, leaving `pending_since` set. State both
+   separately. A stale `pending_since` enters only through a `min`, so it can only pull
+   a later deadline *earlier* — never later.
+3. **No `Instant` arithmetic.** `Instant + Duration` panics on overflow. Express the
+   deadline in durations only:
+   `delay = PREVIEW_TRAILING_DELAY.min(PREVIEW_MAX_STALENESS.saturating_sub(now.saturating_duration_since(pending_since)))`.
+4. **`rendered(now)` is called from exactly one funnel** — the last statement of the one
+   private method that performs a render pass — so no caller can forget it.
+5. **One fresh one-shot per request** (not a repeating source, not a self-re-arming one).
+   Rejected A: `glib::timeout_add_local` with `ControlFlow::Continue` — a genuinely
+   repeating source, which reads as exactly the periodic timer `DECISIONS.md:61-63`
+   forbids. Rejected B: one live source that re-arms itself for the remaining time — it
+   makes `fire` three-way and moves arming into the fire closure, to save a `GSource`
+   attach that costs microseconds against a 6.93 ms RPC. The chosen shape bounds live
+   sources at `ceil(TRAILING / inter-key interval)` ≈ 5 during a fast burst and **zero
+   while idle**, which is the property `DECISIONS.md` states.
+6. The tab-gate interaction is the sharpest case — see §6.3.
+7. A frame-stats nesting contract breaks unless the fire path opens its own `pane.prev`
+   scope — see §5.4.
+
+## 4. New file: `crates/wolf-gnome/src/preview_coalescer.rs`
+
+Pure, GTK-free. No widget type, no `WolfCore`, no clock read of its own — every entry
+point takes `now: Instant` from the caller.
+
+**Constants** (the one site in the crate where these numbers live; module docs carry the
+literals, `DECISIONS.md` cites the names):
+
+- `pub const PREVIEW_TRAILING_DELAY: Duration = Duration::from_millis(150);` — above a
+  fast typist's inter-key interval, below the ~200 ms at which a delayed update reads as
+  lag.
+- `pub const PREVIEW_MAX_STALENESS: Duration = Duration::from_millis(500);` — a pure
+  trailing debounce renders *never* during sustained typing; this caps it at roughly two
+  refreshes a second.
+- `pub const PREVIEW_LEADING_IDLE: Duration = Duration::from_millis(150);` — the quiet
+  since the last render that re-arms the leading edge. **Must never be shorter than
+  `PREVIEW_TRAILING_DELAY`**, or a keystroke just after a trailing fire takes the leading
+  edge and renders back-to-back with it. Separate because it answers a different
+  question, and folding the two would make a retune of the trailing delay silently move
+  the leading-edge threshold.
+
+**Types**
+
+```rust
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RenderDecision {
+    Render,                                     // render inline on this wake
+    Arm { generation: u64, delay: Duration },   // arm a one-shot glib timeout
+}
+
+pub struct PreviewCoalescer {
+    pending_since: Option<Instant>,  // when the current unrendered burst began
+    last_render: Option<Instant>,    // when a pass last actually performed
+    armed: bool,
+    generation: u64,
+}
 ```
-pub enum KeyPhase { Press, Release }
-```
-Derive `Debug, Clone, Copy, PartialEq, Eq`. Two variants only. Doc: which of the two `gtk::EventControllerKey` signals is being routed.
 
-```
-pub enum KeyRoute { Overlay, AskInputMethod, Consumed, Translate, Ignore }
-```
-Derive `Debug, Clone, Copy, PartialEq, Eq`. Per-variant docs stating the glue's obligation:
-- `Overlay` — forward nothing, offer nothing, `glib::Propagation::Proceed`.
-- `AskInputMethod` — call `filter_keypress` with the controller's current event, then re-ask with `Some(answer)`.
-- `Consumed` — the IM claimed it; `Propagation::Stop`, translate nothing, count nothing.
-- `Translate` — hand the keyval and modifier state to `crate::gdk_key` (press only).
-- `Ignore` — a release the IM declined: `Propagation::Proceed` and nothing else. **Never `Translate`**: translating a release sends a second copy of every key.
+**Functions**
 
-```
-#[must_use]
-pub fn key_route(phase: KeyPhase, overlay_open: bool, im_filtered: Option<bool>) -> KeyRoute
-```
-Body shape, which is itself the precedence and must be written in this order:
+- `pub fn new() -> PreviewCoalescer` + `impl Default`.
+- `#[must_use] pub fn request(&mut self, now: Instant) -> RenderDecision`
+  - If `pending_since.is_none()`: set it to `now`; if
+    `last_render.is_none_or(|t| now.saturating_duration_since(t) >= PREVIEW_LEADING_IDLE)`
+    answer `Render` and return.
+  - Otherwise compute `delay` per §3.3, set `armed = true`,
+    `generation = generation.wrapping_add(1)`, answer `Arm { generation, delay }`. The
+    bump on *every* arm is what supersedes the previous source and makes the trailing
+    edge track the **last** keystroke rather than the first.
+- `pub fn fire(&mut self, generation: u64) -> bool` — `armed && generation == self.generation`;
+  clears `armed` **before** returning true (the `RefreshCoalescer::fire` rule).
+- `pub fn rendered(&mut self, now: Instant)` — `pending_since = None; last_render = Some(now); armed = false`.
 
-1. `if overlay_open { return KeyRoute::Overlay; }` — the early return *is* the statement that an overlay wins, and it holds whatever `im_filtered` says, so a caller that asked the IM anyway is told to discard the answer.
-2. `match im_filtered` with **no `_` arm**: `None => AskInputMethod`, `Some(true) => Consumed`, `Some(false) => match phase { Press => Translate, Release => Ignore }` — the inner match over `KeyPhase` carries **no `_` arm** either, so a future variant is an `E0004` here until classified. Document both, the way `nav_ui::nav_press` documents its `_`-free match.
+**No `cancel()`.** Module docs must say why: `RefreshCoalescer::cancel` exists because a
+re-root makes the armed fire's *content* wrong. Here the fire re-derives the pane set,
+the liveness reading and the document from live state at fire time, so there is no wrong
+content to cancel, and every teardown path is covered by `Weak::upgrade` and `may_render`.
 
-```
-#[must_use]
-pub fn commit_keys(text: &str) -> Vec<KeyEvent>
-```
-One `KeyEvent { key: Key::Char(c), ctrl: false, shift: false, alt: false, meta: false }` per `char` of `text`, in order, skipping every `c.is_control()`. Empty input yields an empty vec. Public (not private) so its rule can be asserted on its own, following `nav_ui::nav_query_win`'s precedent.
+Module docs must also carry: the relationship to `refresh_coalescer.rs` (same
+generation-token mechanism, different rule — do not merge); why the leading edge needs
+both conjuncts; why the deadline is a `min` of two terms; the one-shot-per-request
+decision with the two rejected alternatives.
 
-```
-pub enum CommitDecision { Send(Vec<KeyEvent>), Refuse(&'static str) }
-```
-Derive `Debug, Clone, PartialEq, Eq` (no `Copy` — it holds a `Vec`). `Refuse`'s payload is a mid-sentence clause, the `nav_ui::NavPress::Refuse` convention.
+## 5. Files to modify
 
-```
-#[must_use]
-pub fn commit_decision(overlay_open: bool, text: &str) -> CommitDecision
-```
-`Refuse` when an overlay is open, whatever the text; otherwise `Send(commit_keys(text))`, which may be an empty vec.
+### 5.1 `src/lib.rs`
 
-**Why an empty commit is `Send(vec![])` and not a refusal**, stated in the doc: a refusal reason is printed by the caller, and an empty or control-only commit is a routine event rather than a hazard. Only the overlay case is a hazard worth a printed line.
+- `pub mod preview_coalescer;` in the alphabetical list at `:392-394`.
+- New seam bullet in the module inventory near `:251-279`.
+- `:269`: `the per-wake render` → `the coalesced render`.
 
-**Why the refusal arm is not dead code**, stated in the doc: `commit` fires synchronously from inside `filter_keypress`, which the glue calls only when no overlay is open — so *this glue* cannot reach it. An out-of-process input method (ibus, fcitx) commits asynchronously, on a bus reply, at an arbitrary main-loop turn, exactly as `gdk::Clipboard::read_text_async` resolves on a later turn. The guard is for that, and the plan should say so rather than leave a reader to delete it as unreachable.
+### 5.2 `src/pane_view.rs` — the glue
 
-### 2.2 `/home/jplein/dev/jplein/wolf/crates/wolf-gnome/tests/im_commit_nvim.rs`
+**New field on `PaneInner`** (`:484-569`), near `pending_layout`:
+`preview_coalescer: RefCell<PreviewCoalescer>,`. Doc: one per **tab**, never per pane,
+because `panes` is replaced by `apply_layout_rebuild` and cleared by
+`reset_after_restart` (cite both), so a per-pane coalescer would drop a burst's trailing
+edge exactly when a rebuild happened mid-burst. `RefCell` mirrors
+`tree_view::TreeInner::coalescer` (`tree_view.rs:192`). Initialise in `build` (`:3399`).
 
-A new file rather than new cases in `roundtrip_nvim.rs`. Justification: `roundtrip_nvim.rs`'s stated subject, in its `tests/README.md` entry, is one sentence — "the full input seam: `gdk_key` to `InputEvent::Key` to `WolfCore` to snapshot … the shift-glyph contract end to end". A commit case is a different subject with a different failure diagnosis (a wrong glyph, a reordered word, a fired Escape — not a missing word), and folding it in would require that entry to be rewritten to cover two claims, which is what makes a red run ambiguous. This crate is Cargo-only with no Bazel target (`tests/README.md` line 3), so `cargo test` auto-discovers the file and CLAUDE.md's wiring obligation is discharged by that fact — but the `tests/README.md` entry is mandatory. Cost is one more test binary spawning one more Neovim, roughly a second.
+**Split `refresh_previews` (`:1564-1652`) into four.** Keep the existing doc comment's
+`seq` warning and call-ordering paragraph on `refresh_previews`.
 
-### 2.3 No other new files.
+1. `fn refresh_previews(self: &Rc<Self>)` — keeps `ids` and the `sync_preview_view` /
+   `apply_preview_frame` loop (`:1565-1569`) verbatim, then calls
+   `self.request_preview_render()`.
+2. `fn request_preview_render(self: &Rc<Self>)` — new.
+   - The liveness read and `preview_ui::may_render` gate, moved verbatim from
+     `:1571-1581` with its comment. A refusal returns having touched no coalescer state.
+   - `if !self.any_preview_due() { return; }`.
+   - `let decision = self.preview_coalescer.borrow_mut().request(Instant::now());` **in a
+     statement of its own**, with a comment: edition 2021 keeps a `match` scrutinee's
+     temporary alive for the whole match, so the `Render` arm's re-borrow inside
+     `rendered` would be a `RefCell` panic. Same rule as `tree_view.rs:269-270`.
+   - `Render => self.run_preview_render_pass()`.
+   - `Arm { generation, delay } =>` `let weak = Rc::downgrade(self);` and
+     `glib::timeout_add_local_once(delay, move || { ... })`: upgrade or return;
+     `let performs = inner.preview_coalescer.borrow_mut().fire(generation);` in its own
+     statement; if `performs`, open `let _guard = frame_metrics::scope(Bucket::PanePrev);`
+     (a **named** guard — `let _ =` measures nothing) and call
+     `inner.run_preview_render_pass()`.
+3. `fn any_preview_due(&self) -> bool` — one `panes` borrow, `current_load` vs `loaded`
+   through `preview_ui::needs_reload`. No `String` clone, no `preview` /
+   `pending_fragment` borrow.
+4. `fn run_preview_render_pass(&self)` — holds the existing body from `:1571-1651` in
+   order: the liveness read + `may_render` gate re-read here (so a deferred call cannot
+   fire into a Neovim that wedged since the arm; a refusal returns **without** calling
+   `rendered`), the `DueRender` collection (`:1587-1614` verbatim, including its
+   one-borrow comment), the render/load/record loop (`:1615-1651` verbatim, both
+   `Bucket` regions intact), and as its **last statement**
+   `self.preview_coalescer.borrow_mut().rendered(Instant::now());`. Doc: this is the only
+   function in the crate that calls `render_preview` and the only one that calls
+   `rendered`; a pass that passes the gate records a render whether or not any pane
+   turned out to be due, because "nothing is due" is exactly "there is nothing pending".
+
+**`apply_layout_rebuild` (`:705-777`) is not special-cased** — its `refresh_previews()`
+call at `:771` stays as it is. See §6.4.
+
+Imports: `std::time::Instant`, `crate::preview_coalescer::{PreviewCoalescer, RenderDecision}`.
+
+### 5.3 `src/window.rs` and `src/shell.rs` — module docs only
+
+Both state the render is issued "once per changed source per wake — the only one of the
+ten that can repeat while the user simply types" (`window.rs:64-67`, `shell.rs:154-158`).
+Rewrite both in present tense over the coalesced behaviour: still one of the ten, still
+gated by `preview_ui::may_render`, repeating at most once per leading edge plus once per
+`PREVIEW_MAX_STALENESS` while typing continues. Replace the clause; do not append.
+
+### 5.4 `src/frame_stats.rs` — module docs only, no code
+
+- Nesting table (`:21-30`): add one sentence that a `pane.prev` region is opened either
+  by a pane wake or by the preview coalescer's one-shot fire, so `prev.render` always has
+  a parent.
+- Count identities (`:48-63`): one bullet in the shape of the existing `count(pane.wake)`
+  one — `count(pane.prev)` may exceed `count(pane.wake)`, because a trailing fire is a
+  one-shot timer outside every `wake` region.
+- `Bucket::PanePrev`'s doc (`:144-145`): the pass, whether inside a pane wake or from the
+  coalescer's trailing fire.
+
+## 6. The trailing edge is undroppable — case by case
+
+1. **The burst ends.** The last request armed a fire nothing supersedes; it fires,
+   `fire` returns true, the pass re-derives the due set and renders. **This is why it
+   must be a timer and not "the next wake":** after the last keystroke there may be no
+   further wake at all, so a wake-driven trailing edge is precisely the droppable one.
+2. **The window loses focus.** Nothing in this crate ties the preview path to focus, and
+   a `glib` one-shot is a main-context source rather than a frame-clock tick.
+   *(Standard GLib behaviour, not measured here; the checkable claim is that this crate
+   suppresses nothing.)*
+3. **A tab switches mid-burst.** `tabs_ui::tab_wake` answers `Hold` and the held tab's
+   `on_render_wake` stops being called, so nothing re-arms — but the already-armed source
+   belongs to that tab's own `PaneInner` and still fires, bypassing the tab gate.
+   Deliberate and safe: the gate protects `pane_status`, which joins the
+   current-tabpage-only `Snapshot::windows`, and the render path reads none of it —
+   `current_load` comes from the tabpage-global `Snapshot::previews` × `markdown_ticks`,
+   and `render_preview` is keyed by bufnr. The cost is bounded to exactly one deferred
+   blocking render per held tab. `PaneInner` deliberately gains no reference to the tab
+   layer to consult the gate: that coupling would run backwards.
+4. **The preview pane closes mid-burst.** `detect_closes` removes the `PaneWidgets`; the
+   armed fire re-derives the due set, finds nothing, renders nothing, records `rendered`.
+   This is exactly why the fire re-enters the pass instead of capturing a
+   `Vec<DueRender>` at arm time.
+5. **The window closes.** Two independent belts: the closure holds a `Weak<PaneInner>`,
+   and the close handler's `core.borrow_mut().take()` leaves `may_render(None) == false`.
+6. **The core is taken out.** Same second belt — which is why `may_render` takes
+   `Option<Liveness>` (`preview_ui.rs:62-66`).
+7. **`may_render` refuses at fire time.** The pass returns without calling `rendered`.
+   `armed` is already cleared, `pending_since` stays set; the next wake with a due pane
+   skips the leading edge and computes `delay == Duration::ZERO`, re-arming for the next
+   main-loop turn — a one-turn retry, not a lost edit and not a busy loop.
+
+### 6.4 `apply_layout_rebuild` coalesces, with no special case
+
+- A restored preview pane has `loaded == None`, so it is due, and `apply_layout_rebuild`
+  only ever runs on a `PaneInner` whose `last_render` is `None`: `realize_layout` runs on
+  a pane view built moments earlier (`tab_view.rs:391` → `:620`), and
+  `consume_pending_layout` (`pane_view.rs:660-681`) fires on the first wake at which a
+  pane exists and early-returns from that wake before `refresh_previews` is reached
+  (`pane_view.rs:583-585`). So the leading edge takes it and the restored document loads
+  inline, exactly as today.
+- A second entry point bypassing the coalescer would be a second place the `may_render`
+  gate and the `loaded` bookkeeping must be kept in step.
+- If that premise ever stopped holding, the failure mode is a restore whose preview
+  paints one trailing delay late — never one that never paints.
+
+## 7. Test plan
+
+### 7.1 Unit tests in `src/preview_coalescer.rs`
+
+House style is `refresh_coalescer.rs:104-286`: a preamble comment stating the timer is
+driven **by hand**, nothing sleeps, no constant is compared against its own literal; one
+doc comment per test naming the property *and* the revert that must redden it. Build
+every `Instant` from one `let t0 = Instant::now();` plus `t0 + Duration::from_millis(..)`.
+
+| # | Test | Behaviour | Revert that must redden it |
+| --- | --- | --- | --- |
+| 1 | `the_first_edit_after_an_idle_gap_renders_immediately` | `request(t0)` on a fresh coalescer is `Render`; after `rendered(t0)`, `request(t0 + 10s)` is `Render` again. | Delete the early-`Render` branch so `request` always answers `Arm`. Cost: the first keystroke after a pause waits a whole trailing delay for a preview that could have been current at once. |
+| 2 | `a_burst_arms_one_fire_and_only_the_newest_generation_performs` | `rendered(t0)`, then `request` at +40/+80/+120 ms answer `Arm` with three **distinct** generations; `fire(g1)`, `fire(g2)` false, `fire(g3)` true. | Stop bumping `generation` in `request`. All three superseded sources then perform — three blocking renders for one burst — and the trailing edge tracks the burst's *first* keystroke. |
+| 3 | `the_delay_is_capped_by_the_staleness_deadline` | Requests every 40 ms from a burst beginning at `t0+40`: every `delay <= PREVIEW_TRAILING_DELAY`; at `pending + 400 ms` the delay is exactly `PREVIEW_MAX_STALENESS - 400 ms`; at `pending + PREVIEW_MAX_STALENESS` and beyond it is `Duration::ZERO`. | Drop the `min` against the cap remainder. A continuously typing user then sees no render until they pause, and a burst past the cap waits another full trailing delay. |
+| 4 | `an_edit_just_after_a_render_does_not_take_a_second_leading_edge` | `rendered(t0)`; `request(t0+40)` → `Arm{g}`; `fire(g)` true; `rendered(t0+190)`; `request(t0+200)` must be `Arm`, never `Render`. Preamble assertion: `PREVIEW_LEADING_IDLE >= PREVIEW_TRAILING_DELAY`. | Drop the `PREVIEW_LEADING_IDLE` conjunct. Every request then finds `pending_since` empty right after a render and answers `Render`, so every keystroke is its own leading edge and the coalescing is gone — the single most likely edit in this file. **Measured: this revert reddens four of the five tests, not one.** Tests 2, 3 and 5 each open with `rendered(t0)` then `request(t0+40)` and die in the `armed()` helper before reaching their own subject. No smaller edit isolates test 4; the conjunct is exactly what those three rest on too. The test's prose was corrected to say so. |
+| 5 | `a_duplicate_fire_at_the_same_generation_performs_nothing` | After a performing `fire(g)`, a second `fire(g)` is false. | Drop the `armed` term from `fire`'s condition. |
+
+Do **not** write a test whose only claim is "a fire the gate refused leaves the burst
+recoverable": with a two-variant `RenderDecision` both answers are progress, so no single
+edit falsifies it. Test 3's `Duration::ZERO` row is the mechanism that recovery rests on.
+
+### 7.2 Correctness under `cage` — extend the existing smoke
+
+Extend `preview_pane_renders_and_edit_source_returns_under_cage`
+(`tests/smoke_headless.rs:16710`) and `PREVIEW_SCENARIO` (`:9770`). **No new smoke, no
+new `cage` launch.**
+
+**(a) Make the trailing edge load-bearing.** Step 6 (`:9931-9940`) types the marker at
+`wtype`'s default rate, so the whole burst can land inside one flush and be carried by a
+single leading-edge render. Change to `wtype -d "$TYPE_DELAY_MS" -- "o$PREVIEW_LIVE_MARKER"`
+and add a `TYPE_DELAY_MS=40` knob beside `PREVIEW_SETTLE`, commented with the coupling: it
+must stay **below** `preview_coalescer::PREVIEW_TRAILING_DELAY`, or each keystroke becomes
+its own leading edge and the trailing edge stops being what puts the marker on screen.
+With 13 keys at 40 ms the `o` takes the leading edge, the marker characters coalesce, and
+only a fire after the last one carries the complete word — so assertion 11 gains a second
+named revert: **neuter the `RenderDecision::Arm` arm of `request_preview_render` so it
+arms nothing.** The two reverts are distinguishable from stderr (the single-encoding one
+prints `preview body swap failed`, the trailing-edge one prints nothing), and that
+belongs in the revert table.
+
+**(b) Guard that (a) stays armed.** New pure guard test beside the nine at `:244-300`:
+`preview_burst_delay_stays_below_the_coalescer_trailing_delay`, importing
+`wolf_gnome::preview_coalescer::PREVIEW_TRAILING_DELAY` and asserting the smoke's
+`TYPE_DELAY_MS` const is strictly below it. Falsifier: raise `TYPE_DELAY_MS` to 200.
+
+**(c) The saving, measured in the same run.** Arm the instrument on this smoke's
+`cage_command` (`:16768-16781`): `WOLF_FRAME_STATS=1`, `WOLF_FRAME_STATS_INTERVAL=1`,
+`WOLF_FRAME_STATS_FILE=<stats_path>` under `runtime_dir`, passed through
+`clear_evidence` alongside the other artifacts (`:16758-16766`). After `grim "$OUT_PNG"`
+add `sleep 1.2; wtype -k Escape; sleep 0.3`, commented: reports ride a wake, so the
+interval containing the burst is emitted by the *next* wake, and a harmless normal-mode
+`Escape` forces it before teardown. Then:
+
+- **Assertion 12 (discriminator): the render count.** Parse with the existing
+  `parse_frame_stats_blocks` (`:35053`) and `parse_frame_stats_count` (`:35023`), sum
+  `prev.render`'s `count` across blocks, assert `2 <= total <= PREVIEW_RENDER_BUDGET`
+  with `PREVIEW_RENDER_BUDGET = 8` documented. Arithmetic for the doc comment: the only
+  things moving the source's `changedtick` are the cold open (1) and the 13-key burst;
+  coalesced that is 1 open + 1 leading + at most 1 cap + 1 trailing ≈ 3–4, while a
+  per-wake render is one per keystroke ≈ 14–15. The lower bound is the non-vacuity half.
+  Deliberately **not** a ratio against `keys=`: the scenario types two ~150-character
+  `:call writefile(...)` lines that bump no source tick.
+- Revert for assertion 12: make `request_preview_render` call `run_preview_render_pass()`
+  unconditionally. Assertion 11 stays green under it — which is the point.
+
+**(d) Red-run demonstrations are deliverables** (`tests/README.md:175`): the coder fills
+the `measured` column for both new reverts from real red runs.
+
+### 7.3 What stays unproven — record it in `tests/README.md`
+
+- The 500 ms cap has no end-to-end evidence; its only falsifiable evidence is unit test 3.
+- The held-tab deferred fire (§6.3) is reasoned from the tab gate's inputs, not measured.
+
+### 7.4 The end-to-end saving (orchestrator's addition)
+
+Separate from assertion 12, and the only thing that may be compared against the 15.6 %
+baseline. Per `build.md:377`, on this host (the same `AMD Ryzen AI MAX+ 395` under NixOS
+the baseline was taken on):
+
+- Build **two** release binaries: one from `linux` (the uncoalesced baseline) and one
+  from this branch. Alternate them in one session, as `DECISIONS.md:341` did.
+- Scenario B of the recorded reading: two panes with a live Markdown preview, a large
+  prose fixture, `wtype -d 30` bursts over roughly thirty seconds,
+  `WOLF_FRAME_STATS_INTERVAL=2`, no `WOLF_FONT_PT`.
+- Two runs per binary; report `prev.render`'s count, mean and its share of wall clock,
+  plus `wake`'s p95, for each. Anything inside the run-to-run spread is not a signal.
+- Keep the driver script in the scratchpad; it is not committed.
+- **If it cannot be run, say so plainly and claim no number.**
+
+## 8. Documentation owed
+
+### 8.1 `crates/wolf-gnome/DECISIONS.md`
+
+- `:63` — "Two one-shot timers exist and neither is a poll" becomes three, adding the
+  preview's trailing render: armed by an arriving edit, fires once, disarms, none exists
+  while idle. Add one sentence stating honestly that during a burst several superseded
+  sources can be alive at once, each firing once and performing nothing unless it carries
+  the live generation — a reader who finds five queued sources must not conclude the
+  invariant is broken.
+- **New `##` section immediately after "Threading and the wake"**: the three-part budget
+  with the constants **cited by name, not by value**; why a leading edge; why a timer
+  rather than the next wake; why a cap; the double read of `may_render` and why a
+  deferred blocking call must re-read the gate; the undroppability list of §6 condensed.
+- `:289-297` — "Crash and stall recovery". The **count does not change**: ten reachable,
+  nine from a running window, all gated on `Alive`. Two edits: `:293`'s closing clause
+  about the render being "the only one of the ten that repeats while the user simply
+  types" is rewritten to say it is coalesced and what it repeats at; `:297` gains the
+  fact that `may_render` alone among the nine is read twice per render, because its call
+  can be deferred past the reading that admitted it.
+- `:345-347` — "The measured reading". Rewrite in the shape `:341` uses for `draw.grid`:
+  keep 988 / 6.93 ms / 15.6 % as the baseline the repair is measured against, add the new
+  figures, and **delete outright** the forward-looking sentences at `:347`.
+
+### 8.2 `crates/wolf-gnome/src/README.md`
+
+- **New `#### preview_coalescer.rs` entry** before `#### preview_link.rs` (`:605`).
+  Purpose, the public API, and Decisions: the leading edge's two conjuncts; the cap as a
+  `min` term; one fresh one-shot per request with a generation token; why it is not
+  `refresh_coalescer.rs` widened (that seam is clock-free by construction and is a macOS
+  port whose four proven tests would have to be rewritten around a clock, for a rule the
+  sidebar does not want); no `cancel`, because the fire re-derives everything.
+- `#### pane_view.rs` (`:544-561`): one new Decisions bullet — the render half is
+  coalesced, the coalescer is per tab because `panes` is replaced by a layout rebuild,
+  and the fire re-enters the same pass so the gate and the due set are re-read. Tighten
+  rather than append.
+- `#### refresh_coalescer.rs` (`:639-657`): no edit.
+
+### 8.3 `crates/wolf-gnome/tests/README.md`
+
+- `:121-124`: smoke count unchanged at sixty; the pure-guard count goes from nine to ten
+  and `69 passed` → `70 passed`.
+- The preview smoke's artifact list gains a frame-stats report file — edit in place.
+- Add the two "still unproven" entries from §7.3.
+
+### 8.4 `tests/smoke_headless.rs` module docs
+
+`:241-246` "**Nine pure guards**" → ten, with a bullet for the new guard. The frame-stats
+smoke's own inventory sentence (`:145-151`) is untouched.
+
+### 8.5 `feat-list.md`
+
+- `:260`: "Only the preview render repeats while the user simply types" — present tense
+  over the coalesced behaviour.
+- `:268`: replace the "`prev.render` is deliberately left alone … carried onward as a
+  unit of its own" sentence with the repaired reading, in the shape of the `draw.grid`
+  sentence beside it.
+- `:272-278`: delete item 1 of "Suggested order of work for Linux" and renumber "Preview
+  in browser" to 1. Change no other wording.
+
+### 8.6 Formatting
+
+`prettier --write` every touched Markdown file, then `./tools/lint/markdown_check.sh`.
+
+## 9. Implementation order
+
+1. `src/preview_coalescer.rs` + unit tests; `lib.rs` wiring.
+2. `pane_view.rs`: field, initialiser, the split, the timer arm, the `PanePrev` scope.
+3. `frame_stats.rs` doc edits.
+4. `window.rs` / `shell.rs` doc clauses.
+5. Smoke edits: knob, `-d` pacing, flush key, frame-stats env, assertion 12, new guard.
+6. The two red-run demonstrations; fill the revert table's `measured` column.
+7. The end-to-end measurement (§7.4).
+8. Documentation (§8), with the measured numbers in hand.
+
+## 11. Lint
+
+- `cargo clippy --workspace --all-targets -- -D warnings` covers `#[cfg(test)]` too.
+- `impl Default` required. `Option::is_none_or`, not `map_or(true, ..)`.
+- No `Instant + Duration`; `saturating_duration_since` / `Duration::saturating_sub` only.
+- `#[must_use]` on `request` and `new`.
+- Named guard for `frame_metrics::scope`, never `let _ =`.
+- No `#[allow]`. If `run_preview_render_pass` trips `too_many_lines`, split the
+  `DueRender` collection into `fn due_previews(&self) -> Vec<DueRender>`.
+
+## 12. Flagged / unverified
+
+- GLib timeouts firing for an unfocused toplevel is standard behaviour, not measured here.
+- Assertion 12's expected counts (3–4 coalesced, 14–15 uncoalesced) are derived, not
+  measured. Confirm both ends from a real run; adjust `PREVIEW_RENDER_BUDGET` only if the
+  *coalesced* count exceeds it, never to accommodate an uncoalesced one.
+- Whether the report covering the burst reaches the file before teardown depends on the
+  added flush key. If flaky, the fix is a longer post-capture idle, not a weaker
+  assertion.
 
 ---
 
-## 3. Files to modify
-
-### 3.1 `crates/wolf-gnome/src/lib.rs`
-
-- Add `pub mod im_ui;` to the module list, alphabetically between `frame_stats` and `init_lua`… in fact between `glyph_style` and `init_lua`.
-- Add a bullet to the crate-level `//!` seam inventory, in the established voice, naming `im_ui::key_route`, `im_ui::commit_keys`, `im_ui::commit_decision`, `KeyRoute`, `KeyPhase`, `CommitDecision`, and stating in one clause that the precedence is a value because offering a key to the IM is a side effect.
-- **No re-export** in the `pub use` block. Nothing outside the crate needs these (the tier-2 test uses `wolf_gnome::im_ui::…`, which works because the module is `pub`), and the block's stated rule is that a re-export exists for a concrete consumer (`cell_at`, `restart_button_rect`).
-
-### 3.2 `crates/wolf-gnome/src/window.rs`
-
-**`wire_keys` — signature.** Change to return the context:
-
-`fn wire_keys(...) -> gtk::IMMulticontext` — same six parameters, no new ones. The context is constructed inside because nothing above needs to supply it, and this keeps the parameter count at six, below `clippy::too_many_arguments`.
-
-**`wire_keys` — body, in this order:**
-
-1. `let im = gtk::IMMulticontext::new();`
-2. `im.set_client_widget(Some(window));` — before `focus_in`, so the context has a surface when it becomes focused.
-3. `im.connect_commit(...)` — the closure captures clones of `core` and the four overlay handles, plus nothing else. Body:
-   - Compute `overlay_open` from the same four `is_open()` reads the press guard uses.
-   - `match im_ui::commit_decision(overlay_open, text)`:
-     - `Refuse(reason)` → one `eprintln!("wolf-gnome: commit not forwarded: {reason}")`, following `nav_ui`'s printed-refusal convention, and return.
-     - `Send(events)` → `if let Some(core) = core.borrow().as_ref() { for ev in events { core.send_input(InputEvent::Key(ev)); frame_metrics::note_keystroke(); } }`.
-4. `im.focus_in();`
-5. `controller.connect_key_pressed(...)` — the closure now binds `controller` (not `_controller`) and captures `im.clone()`. Body:
-   - `let overlay_open = picker.is_open() || palette.is_open() || buffers.is_open() || search.is_open();`
-   - `match im_ui::key_route(KeyPhase::Press, overlay_open, None)`:
-     - `Overlay` → `Propagation::Proceed`.
-     - `AskInputMethod` → `let filtered = controller.current_event().is_some_and(|ev| im.filter_keypress(&ev));` then re-enter with `im_ui::key_route(KeyPhase::Press, overlay_open, Some(filtered))`.
-     - the other three arms are unreachable on the first ask and must be handled by the same `match` as the second ask — write it as a small helper closure or a second `match` on the re-ask result, but **do not** collapse the two asks into one.
-   - On `Translate` → the existing `crate::gdk_key(keyval, state)` block, unchanged, including `note_keystroke()`.
-   - On `Consumed` → `Propagation::Stop`, no translation, no counter.
-   - On `Ignore` → `Propagation::Proceed` (unreachable on a press; the match stays total).
-   - **`current_event()` answering `None` must be treated as "the IM declined" (`false`), never as consumed.** A missing event is a GTK anomaly; falling through to `gdk_key` loses at worst the composition, while treating it as consumed loses the keystroke outright. Write the reason in a comment.
-6. `controller.connect_key_released(...)` — new. Same overlay guard, `KeyPhase::Release`, `Consumed` → `Stop`, everything else → `Proceed`, and **no call to `gdk_key` on any path**.
-7. `window.add_controller(controller);`
-8. `im`
-
-**Why forward releases at all** (write this into the doc comment): the whole design rests on measurement 4, that a hand-rolled `filter_keypress` from inside `key-pressed` behaves identically to `EventControllerKey::set_im_context`. `set_im_context` forwards *both* press and release; a press-only forward silently diverges from the thing the measurement licensed. Measurement 6 records that the IM does claim some events while a sequence is pending. Nothing else in this crate consumes key releases — `install_chord_controller` connects `key_pressed` only — so the forward costs nothing today and closes a class of wedged-state-machine failures that would be silent.
-
-**Why not `EventControllerKey::set_im_context`** (a "do not simplify" note): GTK would then offer the key to the IM before this crate's overlay guard ran, moving the ordering out of this crate's code and making the overlay-versus-IM precedence unstatable and untestable. Measurement 4 is what makes the hand-rolled call free.
-
-**`wire_keys` doc comment** — rewrite. The sentence "Otherwise every key is translated via the pure [`crate::gdk_key`] seam into core input" becomes false and must be replaced, not appended to: every press that survives the overlay guard is offered to this window's `gtk::IMMulticontext` first, and only a press the IM declines is translated. Keep the existing capture-phase paragraph verbatim — it is still true and still load-bearing.
-
-**`build`** — line 804 becomes `let im = wire_keys(&window, &core, &picker, &palette, &buffers, &search);` and the `CloseParts` literal gains `im: &im`.
-
-**`CloseParts`** — add `im: &'a gtk::IMMulticontext`, with a field doc naming what the handler does with it.
-
-**`wire_close`** — clone the context into the closure and, as the **last** statement of the handler, after the core has been taken and shut down:
-```
-im.focus_out();
-im.set_client_widget(None::<&gtk::Widget>);
-```
-Two reasons, both written down. First, `gtk_im_context_set_client_widget` stores the widget in the context, which the controller closures own and which the window owns — a cycle that keeps a closed window's whole widget tree alive, and this application closes windows routinely. Second, `focus_out` on a context with a pending sequence may commit it; running the teardown **after** `core.borrow_mut().take()` means such a commit finds `None` and performs nothing, rather than pushing into a core that is being shut down. The ordering *within* the handler is not load-bearing beyond that, but the existing rule — `coordinator.on_window_closing(id)` is the first statement — is untouched and must stay first.
-
-**Module doc comment** — the input paragraph, if present, gains one clause. Do not restate `im_ui`'s rules here.
-
-### 3.3 `crates/wolf-gnome/src/shell.rs`
-
-**Untouched. Deliberately, and this is a claim rather than an omission.**
-
-`install_chord_controller` sets `PropagationPhase::Capture` on its controller and the IM lives on `window.rs`'s phase-less (bubble) controller. GTK runs every capture-phase controller root→target before any bubble-phase controller runs, and measurement 2 confirms the capture controller sees every key first, `dead_acute` and `Multi_key` included. So a chord this crate binds *and enables* is matched and `Propagation::Stop`ped before the input method is ever offered the key: the accelerator namespace keeps first refusal by construction, not by cooperation. Attaching the IM to the chord controller, or moving `wire_keys`' controller into the capture phase, would invert that and swallow every bound chord — worth a sentence in `wire_keys`' doc comment so nobody "unifies" the two controllers.
-
-### 3.4 `crates/wolf-gnome/DECISIONS.md`
-
-Four edits. Sentences quoted exactly.
-
-**(a) "Window structure", the input paragraph.** This becomes false as written:
-
-> Input has two regimes. Keys are global: a capture-phase controller on the window matches this crate's own chords and stops propagation, and a bubble-phase controller routes everything else through the key seam into Neovim's current window, so a bound chord is never also forwarded.
-
-Rewrite the middle clause: the bubble-phase controller offers everything else to the window's own input method and routes only what the input method declines through the key seam. Keep "so a bound chord is never also forwarded" — still true, and now for a second reason worth one clause: a bound chord never reaches the input method either.
-
-**(b) "The accelerator namespace" — one sentence becomes conditionally false, and it is the sharpest finding of this review.**
-
-> One consequence is worth knowing: a disabled action's accelerator falls through to Neovim, which is what a real GTK accelerator does and what the chord controller deliberately reproduces, so in the empty state `Ctrl+Shift+O` reaches Neovim as `<C-o>`, `Ctrl+Shift+F` as `<C-f>` and `Ctrl+Shift+B` as `<C-b>`.
-
-and, carrying more weight:
-
-> Plain Ctrl+C and Ctrl+V carry no shift, and `action_for_key` compares its three modifiers exactly, so neither matches a bound chord and both still reach Neovim.
-
-Measurement 6 says that **while a compose sequence is pending, a `Ctrl+<letter>` press is filtered and swallowed**. A bound, enabled chord is immune (the capture controller took it first), but a *disabled* action's fall-through and every unbound `Ctrl+<letter>` — `<C-c>`, `<C-v>`, `<C-w>`, plain `Ctrl+P` — are not: between a dead-key press and the next key they reach the input method and are eaten. Both sentences need a qualifying clause naming that window, and the "Present limitations" bullet below must state it as a live limitation rather than burying it here.
-
-Do **not** fix it in this unit. The obvious repair — never offer a press carrying `CONTROL_MASK` to the input method — is a one-arm change to `key_route` (it would take the modifier state as a fourth argument), but no measurement licenses it: nobody has measured that skipping the offer leaves the pending sequence intact and lets the chord through. Name it as a follow-up with the measurement it owes, and note that the seam's shape makes it a one-row flip with its own red run.
-
-**(c) "Present limitations".** Delete this bullet, which becomes wrong:
-
-> - No input-method composition support.
-
-Replace it with two present-tense bullets:
-
-- A composed sequence draws nothing while it is pending: GTK's own compose path reports an empty preedit string at every step (`preedit-start`, `preedit-changed` and `preedit-end` all fire and `preedit_string()` answers `""` with cursor 0), so a dead key and a `Multi_key` sequence are invisible until they commit, and this front-end sets no `set_cursor_location`. An engine that does produce a preedit string cannot run under the harness at all — `cage_command` removes `DBUS_SESSION_BUS_ADDRESS` and no GTK 4 ibus module is in the flake — so a preedit renderer would be an unexercised paint path over the grid, which "The pure seams" forbids.
-- While a compose sequence is pending, a `Ctrl+<letter>` press is claimed by the input method and does not reach Neovim, and the sequence survives it. Bound, enabled chords are unaffected, because the capture-phase chord controller matches them first; what this costs is a disabled action's fall-through and every `Ctrl+<letter>` Neovim wants for itself, `<C-c>` and `<C-v>` included, inside the one-keystroke window between a dead key and the key that resolves it.
-- A window's input method is focused in once at build and focused out at close, and nothing tracks window activation, so in a session with several windows every window's context reports itself focused. This crate wires no window-activation handler at all (it also sends no `InputEvent::SetUiFocus`); adding one is a unit of its own. GTK's built-in simple context is entirely client-side and per instance, so nothing crosses between windows today.
-
-**(d) The `wakes/key` paragraph under "Frame-time instrumentation"** — no edit needed, and say so in the commit message rather than in the file. See §7.
-
-### 3.5 `crates/wolf-gnome/src/README.md`
-
-**New `#### im_ui.rs` entry**, alphabetically between `glyph_style.rs` and `init_lua.rs`. Under 200 words. Purpose; Public API (the three functions and the three types, one line each); Decisions — the early-return-is-the-precedence rule, the `_`-free matches, why control characters are dropped (one clause, pointing at `key_to_notation`), why an empty commit is not a refusal; Gotchas — the overlay refusal exists for an asynchronous out-of-process commit, not for this glue.
-
-**Edit `#### input.rs` in place.** Its Purpose stays true. Add one Gotcha: a printable key normally reaches Neovim through the input method's `commit` rather than through this function, since the IM filters plain printables with no sequence pending; `gdk_key` is what handles the named keys, the modifier chords and anything the IM declines. Do not restate `im_ui`'s rules — link.
-
-**Edit `#### window.rs`'s Gotcha in place.** This becomes incomplete:
-
-> - The key controller carries no propagation phase, so it runs after [`shell.rs`](#shellrs)'s capture-phase chord controller, which stops a bound chord also reaching Neovim.
-
-Rewrite it to add that the same controller offers each press to the window's `gtk::IMMulticontext` before translating, and that the capture-phase controller's first refusal is what keeps a bound chord out of the IM as well as out of Neovim. Add one Decision bullet: the close handler focuses the context out and clears its client widget as its last statement, after the core is taken, so a teardown-time commit finds no core and so the context does not hold the window alive.
-
-**`#### shell.rs`** — no edit. Its Decisions are all still true.
-
-### 3.6 `crates/wolf-gnome/tests/README.md`
-
-- **New `#### im_commit_nvim.rs` entry** with Covers and Gotchas (see §4.2 for the content).
-- **Edit `#### smoke_headless.rs` in place.** The counts move: "Fifty-eight end-to-end smokes … thirty-seven OCR a `grim` screenshot and twenty-one call no OCR helper at all" becomes fifty-nine / thirty-seven / twenty-two, and "the target reports `67 passed`, not `58`" becomes `68 passed`, not `59`. Grep the whole file and the `smoke_headless.rs` module doc comment for every count phrase rather than editing the two you happen to remember; the module comment carries several ("fifty-six", "Five of the fifty-six read RAW PIXELS", the smoke-family enumeration at the top).
-- **"What is still unproven"** gains three entries, each in the established voice:
-  - The overlay guard on the commit path. `commit_decision`'s `Refuse` arm is unreachable from this glue, since GTK's built-in context commits synchronously inside `filter_keypress` and that call is made only with no overlay open. Reaching it needs an out-of-process engine, which the harness cannot run. Table-tested only — the same shape as the existing `window::wire_keys`' buffer-picker guard entry.
-  - A commit arriving after the close handler has taken the core out. Same reason; the `if let Some(core)` arm is executed by nothing.
-  - The release forward. Nothing observes that the input method is ever offered a release, or that one it claims is stopped: measurement 6 is the only evidence, taken from a deleted probe, and no compose sequence in the smoke straddles a release the IM claims in a way any observable distinguishes. What a *wrong* release path would do is loudly visible (§8, hazard 3), so the gap is that the right one is unproven, not that a wrong one would hide.
-- **Optionally** add a sentence to "Smoke conventions" only if the compose smoke needs a new convention — it does not; it is an ordinary member of the non-OCR readback family the SAVE smokes' block already describes.
-
-### 3.7 `crates/wolf-gnome/tests/smoke_headless.rs`
-
-See §4.3 for the smoke. Beyond it:
-
-- **`cage_command`** gains `.env("GTK_IM_MODULE", SMOKE_GTK_IM_MODULE)` with `const SMOKE_GTK_IM_MODULE: &str = "gtk-im-context-simple";`. See §6.
-- **`cage_command`'s doc comment**: "the five environment variables EVERY smoke must have" → six, and a sixth bullet.
-- **`cage_is_only_spawned_through_the_isolating_helper`'s doc comment**: "would silently lose ALL FIVE variables" → six; "which is the only thing that sets `WOLF_STATE_DIR`, `HOME` and `XDG_CACHE_HOME`" gains the new name; add a sixth numbered cost paragraph. Its **assertion message** enumerates the variables too ("without `WOLF_STATE_DIR`, `WOLF_CONFIG_DIR`, `HOME` or `XDG_CACHE_HOME`, and WITH whatever `DBUS_SESSION_BUS_ADDRESS`…") and must gain the new name with its cost clause.
-- **`packaged_cage_command`'s doc comment**: "it carries `WOLF_STATE_DIR`, `WOLF_CONFIG_DIR`, `HOME`, `XDG_CACHE_HOME` and the `DBUS_SESSION_BUS_ADDRESS` removal. None of those five is a devShell export and none of them may be scrubbed" → six, with `GTK_IM_MODULE` classified the same way `WOLF_FONT_PT` is: harness isolation, set by `cage_command` rather than by the `shellHook`, and therefore never scrubbed.
-- **`RELAUNCH_FIXTURE_NAMES`** gains the compose smoke's fixture name and its two readback names, per `CD_READBACK_NAME`'s stated reason (their absolute paths are echoed into the typed `:call writefile(...)` command line). Run `restore_fixture_names_cannot_satisfy_their_own_assertions` after adding them; if it carries a count or an exemption-block count, update it rather than guessing.
-
-### 3.8 `feat-list.md`
-
-- Row 49, `macOS Option key composes accents (option-as-option)`: the Linux box `[ ]` → `[x]`, and the branch column gains `linux-feat/input-method`.
-- Delete item 2 of "Suggested order of work for Linux" ("**Composed and input-method text entry.** …") and renumber items 3 onward. Its premise — "this front-end attaches no `gtk::IMContext` at all" — becomes false.
-- If the surrounding prose names the divergences that remain, add one sentence naming the two limitations from §3.4(c) rather than claiming parity.
-
-### 3.9 Not touched, and each with its reason
-
-- **`architecture.md`** — untouched. Its input contract ("The front-end pushes `InputEvent`s onto an ordered FIFO channel … fuses a run of consecutive `Key` events into one `nvim_input` call") is exactly what a multi-character commit uses, unchanged. Apply CLAUDE.md's test: delete `wolf-gnome` and the IM precedence rule vanishes with it — it is a crate-local constraint, so it belongs in `crates/wolf-gnome/DECISIONS.md`. The counter-argument, that "translate OS input into core's abstract input events" is a cross-crate boundary sentence, is already satisfied by the existing text: nothing at the boundary changes shape.
-- **`build.md`** — untouched. `GTK_IM_MODULE` is set inside `cage_command`, so no developer types it and no workflow changes. Argued the other way: build.md owns "environment", and this is an environment variable — but the variable belongs to one test target's harness, and what a given test target covers belongs in that directory's README, which is where the pin's reason goes.
-- **`crates/wolf-gnome/README.md`** — untouched. Its "Four environment variables matter" sentence is about *running the application*, and this unit adds no variable the application reads.
-- **`crates/wolf-gnome/src/frame_metrics.rs`** — untouched; see §7.
-
----
-
-## 4. Test plan
-
-### 4.1 Tier 1 — seam unit tests, in `src/im_ui.rs`'s `#[cfg(test)] mod tests`
-
-Follow `nav_ui.rs`'s conventions exactly: domain constants at the top, a table with a row-count assertion written as **independent literals** (the `NAMED_BUTTON_CASES` precedent — never `CASES.len()` compared to a product of the same arrays), rules stated over the whole domain where a per-row failure would quote an index instead of naming the rule, and a non-vacuity assertion beside every implication.
-
-Domain constants: `ALL_PHASES: [KeyPhase; 2]`, `ALL_OVERLAY: [bool; 2]`, `ALL_FILTER: [Option<bool>; 3]`, and `ROUTE_CASES: usize = 2 * 2 * 3` written as literals.
-
-| # | Test | What it pins | Smallest source edit that falsifies it |
-|---|---|---|---|
-| 1 | `key_route_table` | All twelve `(phase, overlay_open, im_filtered)` rows, plus the count assertion | In `key_route`, change `Some(false) => match phase { Release => Ignore }` to `Translate` |
-| 2 | `an_open_overlay_wins_over_the_input_method` | Sweep: `overlay_open == true` ⇒ `Overlay`, for every phase and every filter answer, including `Some(true)` and `Some(false)`. Non-vacuity: at least one input answers something else | Move the `if overlay_open` early return below the `match im_filtered`, i.e. make `(true, _, None)` answer `AskInputMethod` |
-| 3 | `a_release_is_never_translated` | Sweep: no `Release` input answers `Translate`. Non-vacuity: a `Press` input does | The same `Release => Translate` edit as #1, but the failure message names the rule rather than a row |
-| 4 | `the_input_method_is_asked_exactly_once_before_it_answers` | `AskInputMethod` is the answer for `im_filtered == None` and for nothing else, over the whole domain — so a glue loop cannot be told to ask twice | `None => Consumed` (or `Translate`), which would make the glue never call `filter_keypress` at all |
-| 5 | `commit_keys_table` | Rows: `""` → empty; `"é"`, `"æ"`, `"ß"` → one event each carrying that exact char; a multi-character commit (`"the"`) → three events in source order; `"a\u{1b}b"` → two events, `a` then `b`; `"\n"`, `"\t"`, `"\u{1b}"`, `"\u{7f}"` → empty; `"<"` → one `Key::Char('<')` | Delete the `is_control` filter (the four control rows and the mixed row go red); `text.chars().rev()`; `text.chars().next()` (the multi-character row goes red) |
-| 6 | `no_committed_key_carries_a_modifier` | Over every fixture string in #5's corpus, every emitted event has `ctrl`, `shift`, `alt`, `meta` all false. Message names the Shift-glyph contract and `wolf_core::KeyEvent`'s doc | `shift: true` in `commit_keys` |
-| 7 | `a_committed_key_renders_as_itself_in_neovim_notation` | Cross-check against `wolf_core::key_to_notation`: for every event #5 produces, the notation is the character itself, except `'<'` which is `"<lt>"`; and the notation is never a bare control byte and never an angle-bracket named key | Delete the `is_control` filter — `"\u{1b}"` then produces the notation `"\u{1b}"`, a raw ESC into `nvim_input`. This test is the executable form of the "why" paragraph |
-| 8 | `commit_decision_table` | `(overlay_open, text)` over the same corpus: `Refuse` for every text with an overlay open, including `""`; `Send` otherwise, carrying exactly `commit_keys(text)` | Drop the `overlay_open` parameter from the decision |
-| 9 | `an_empty_commit_is_not_a_refusal` | `commit_decision(false, "")` is `Send` with an empty vec | Make empty text a `Refuse` — which would print a reason on a routine event |
-| 10 | `the_refusal_reason_is_non_empty_and_reads_as_a_clause` | Non-empty, and not sentence-cased, using `nav_ui::tests::is_sentence_cased` re-declared locally (the file's own precedent — do not import across modules) | Empty the reason string |
-
-Note for the coder: tests #2 and #3 are the two that must survive as *sweeps*, not tables — a table row failure quotes an index, and the rules these state are the two whose violation is catastrophic and easy to reintroduce.
-
-### 4.2 Tier 2 — `crates/wolf-gnome/tests/im_commit_nvim.rs`
-
-Shape: `mod common;` plus `common::{require_nvim_bin, config, wake_channel, FLUSH_TIMEOUT}`, a local `key_from_char` (the file-local helper the `tests/README.md` "The `key_from_char` helper" section describes — re-declare it, do not import), a `SETTLE` constant and the drain/sleep/drain treatment `roundtrip_nvim.rs`'s README entry requires of any case that reads a snapshot.
-
-Every case routes through the seam: `im_ui::commit_decision(overlay_open, text)`, and on `Send(events)` sends each as `InputEvent::Key`. Insert mode is entered through `gdk_key(key_from_char('i'), ModifierType::empty())`, so the two seams compose exactly as `wire_keys` composes them.
-
-| # | Test | Behaviour | Falsifying source edit |
-|---|---|---|---|
-| A | `a_committed_character_reaches_the_buffer` | Insert mode, commit `"é"`, Escape, settle; row 0 contains `"é"` | `commit_keys` returning an empty vec, or dropping non-ASCII |
-| B | `a_multi_character_commit_arrives_in_order` | Insert mode, commit a multi-character string (`"ærø"`), Escape, settle; row 0 contains it **in that order** | `text.chars().rev()`, or `text.chars().next()` only |
-| C | `a_control_character_in_a_commit_never_reaches_neovim` | Insert mode, commit `"a\u{1b}b"`, Escape, settle; row 0 is exactly `"ab"` (trimmed). This is the discriminating case: without the filter, the raw ESC leaves insert mode, the following `b` becomes a normal-mode word motion, and row 0 reads `"a"` | Delete the `is_control` filter in `commit_keys` |
-| D | `a_commit_behind_an_open_overlay_sends_nothing` | Type a marker in insert mode, Escape; then `commit_decision(true, "é")` and send only on `Send`; settle; row 0 is unchanged and contains no `"é"` | Drop the `overlay_open` parameter from `commit_decision` |
-| E | `a_normal_mode_commit_is_a_command_and_not_text` | Buffer with two known lines; in **normal** mode commit `"dd"` through the seam; settle; the first line is gone and the second is now row 0 | None in `im_ui` — this pins the *transport*. Recorded honestly in the README entry: what it discriminates is that the seam's output is delivered as `InputEvent::Key` rather than `InputEvent::Paste`, and the test's own loop is what chooses that. The glue's choice is covered by the smokes (§8), because after this unit every normal-mode key in every smoke travels the commit path |
-
-`tests/README.md` entry — Covers: the commit rulebook against a real Neovim, including the control-character drop, whose failure mode is a fired Escape rather than a stray glyph. Gotchas: needs `WOLF_NVIM_BIN`, `common::require_nvim_bin` panics rather than skipping; leaving insert mode emits follow-up flushes so every case drains and sleeps a settle window; case E pins the transport rather than the seam, and its choice of `InputEvent::Key` is the test's own.
-
-### 4.3 Tier 3 — one smoke in `crates/wolf-gnome/tests/smoke_headless.rs`
-
-**Template: `ctrl_shift_s_saves_the_focused_buffer_to_disk_under_cage` and its `SAVE_SCENARIO`.** That is the file's non-OCR readback family: keyboard-only, no `wolf-pointer-inject`, no `grim`, no `tesseract`, a `wait_file` poll for a file the captive Neovim writes, an exit-code vocabulary (11 for a dead app, a distinct code per missing readback), an assertion-0 precondition that the fixture's own bytes do not pre-satisfy the discriminator, and an assertion table in the doc comment with a `revert` and a `measured` column. Mirror all of it. `typed_cd_reroots_the_sidebar_under_cage`'s `CD_SCENARIO` is the secondary reference for the `wait_file` helper body and the `FILE_TRIES` knob.
-
-**Name:** `composed_text_reaches_neovim_under_cage`.
-
-**New constants:**
-- `COMPOSE_FIXTURE_FILE` — e.g. `"cmpjuliet.md"`, deliberately unlike every asserted term.
-- `COMPOSE_FIXTURE_HEADING` — e.g. `"# CMPFIXTUREHEAD"`, the file's whole content going in.
-- `COMPOSE_EXPECTED: &str = "éæß"` — the exact line the three sequences must produce.
-- `COMPOSE_BEFORE_NAME`, `COMPOSE_READBACK_NAME` — both under `XDG_RUNTIME_DIR`, both registered in `RELAUNCH_FIXTURE_NAMES`.
-- `COMPOSE_STEP` inside the scenario — the pause between two keys of one compose sequence. A timing knob; no assertion depends on it.
-
-**What the scenario shell script does**, step by step:
-
-1. `set -eu`; `WAIT_TRIES=75`, `WAIT_INTERVAL=0.2`, `SETTLE=1.0`, `FILE_TRIES=100`, `COMPOSE_STEP=0.1` — the shared values, with `SETTLE`'s comment pointing back at `SCENARIO`'s canonical measured table.
-2. `cleanup()` trap killing `app_pid`, installed before anything starts.
-3. Launch `"$WOLF_BIN" &`; poll `kill -0` / `wtype ""` with `exit 11` on an early exit; `sleep "$SETTLE"`.
-4. `wait_file()` helper, the `SAVE_SCENARIO` body verbatim.
-5. `wtype -- ":e $COMPOSE_FILE"`, `wtype -k Return`, `sleep "$SETTLE"` — a named buffer with known content.
-6. Precondition readback: `wtype -- ":call writefile([bufname('%')], '$BEFORE')"`, `wtype -k Return`, `wait_file "$BEFORE" || exit 24`. This proves keys reach Neovim at all, so a failure of the discriminator is attributable to the input method rather than to a lost keystroke — which matters more here than in any other smoke, because a broken commit path breaks *all* typing and every other symptom would be a red herring.
-7. Park at the end and open a fresh empty line in insert mode: `wtype -- G`, `wtype -- o`, `sleep "$COMPOSE_STEP"`.
-8. The three sequences, **one `wtype` invocation per key**, each followed by `sleep "$COMPOSE_STEP"` (each invocation uploads a fresh single-keycode keymap, so separate invocations are what keep the compose state machine's input ordered and unbatched):
-   - `wtype -k dead_acute` then `wtype -- e` → `é`
-   - `wtype -k Multi_key`, `wtype -- a`, `wtype -- e` → `æ`
-   - `wtype -k Multi_key`, `wtype -- s`, `wtype -- s` → `ß`
-9. `wtype -k Escape`; `sleep "$SETTLE"`.
-10. The discriminator readback: `wtype -- ":call writefile([getline('$')], '$COMPOSE_READBACK')"`, `wtype -k Return`, `wait_file "$COMPOSE_READBACK" || exit 25`.
-11. `exit 0`. **No `grim`, no `tesseract`, no `:w`, no cursor parking** — nothing here is a claim about pixels, and the scenario must contain no second route from the buffer to a file.
-
-**Rust-side assertions:**
-
-| # | Assertion | Kind | Revert |
-|---|---|---|---|
-| 0 | The fixture on disk contains none of `é`, `æ`, `ß` before the launch | precondition — the evidence is not pre-satisfied by the fixture | none |
-| 1 | `status.success()`, with an exit-code decoder naming 11 (launch), 24 (no keys reach Neovim at all — check the keyboard-only smokes first) and 25 (the buffer readback never appeared) | precondition | none |
-| 2 | `$BEFORE` names `COMPOSE_FIXTURE_FILE` | precondition — the `:e` took effect | none |
-| 3 | the readback line **equals** `COMPOSE_EXPECTED` | **the discriminator** | delete the `im.filter_keypress(...)` call in `wire_keys`, so every press goes straight to `Translate`. `gdk_key` answers `None` for `dead_acute` and `Multi_key`, so the line reads `"eaess"` — a specific, unambiguous red |
-| 4 | the readback line contains no ASCII character | corroboration — any ASCII means one compose member leaked through uncomposed, which distinguishes a partly-working compose table from a wholly-broken one | none of its own; green under assertion 3's revert only in the sense that 3 fires first |
-
-Equality rather than `contains` in assertion 3 is load-bearing: it is what makes a doubled commit (`"ééææßß"`) and a reordered one visible, which a `contains` would not catch.
-
-A second revert worth running and recording in the `measured` column: replace the `connect_commit` handler's send loop with `{}`. The readback then holds an empty line, assertion 3 reds with an empty `got`, and the pair of reverts distinguishes "the IM was never offered the key" from "the commit never reached core".
-
-**Regression evidence — the smokes that constitute proof that ordinary typing, the bound chords, and Neovim's `<C-w>` chords still work.** These are not new tests; they are the existing ones that must stay green, and after this unit they are all exercising the commit path for the first time. Name them in the commit message and in the smoke's doc comment:
-
-- **Ordinary typing:** `window_renders_typed_text_under_cage` (types `ihello` + Escape and OCRs `hello` — a doubled or dropped commit reads as `hheelllloo` or as an empty page); `ctrl_shift_s_saves_the_focused_buffer_to_disk_under_cage` (types `zzsavedelta` and asserts those exact bytes on disk — the sharpest of the set, since it is an exact string rather than an OCR `contains`); `new_untitled_buffer_replaces_open_file_under_cage`; and, less directly, every smoke that types a `:e …` command line, which is all of them.
-- **The bound chords:** `picker_opens_and_loads_selected_file_under_cage` (Ctrl+Shift+O), `command_palette_chord_runs_the_selected_command_under_cage` (Ctrl+Shift+P), `buffer_picker_chord_switches_to_the_queried_buffer_under_cage` and `buffer_picker_bare_enter_switches_to_the_previous_buffer_under_cage` (Ctrl+Shift+E), `project_search_chord_opens_the_matched_line_under_cage` (Ctrl+Shift+F), `sidebar_toggle_chord_hides_the_file_tree_under_cage` (Ctrl+Shift+B), `ctrl_shift_s_saves_the_focused_buffer_to_disk_under_cage` (Ctrl+Shift+S), `native_tabs_open_switch_and_close_under_cage` (Ctrl+Shift+T), `copy_and_paste_round_trip_through_the_clipboard_under_cage` (Ctrl+Shift+C and Ctrl+Shift+V), `close_pane_chord_closes_focused_pane_under_cage` (Ctrl+Shift+W), `alt_left_navigates_back_to_the_previous_file_under_cage` (Alt+Left), `two_windows_two_neovims_and_two_saved_sessions_under_cage` (Ctrl+Shift+Q and Ctrl+Shift+N via the palette).
-- **Neovim's `<C-w>` chords:** `vertical_split_shows_two_panes_under_cage` (`<C-w>v`), `horizontal_split_shows_two_panes_under_cage` (`<C-w>s`), `focus_move_returns_to_first_pane_under_cage` (`<C-w>v` then `<C-w>h`), `close_pane_leaves_one_under_cage` (`<C-w>c`), `three_panes_keep_all_files_visible_under_cage`, `terminal_drawer_opens_and_is_not_persisted_under_cage` and `terminal_drawer_defaults_to_full_width_under_cage` (`<C-w>k` / `<C-w>j`). Measurement 3 says a `Ctrl+w` press with nothing pending is not filtered, so these are the evidence that the measurement holds under the shipped glue rather than only under the probe.
-
----
-
-## 5. Implementation order
-
-1. `src/im_ui.rs` — the seam and its `#[cfg(test)] mod tests`. It depends on nothing but `wolf_core::{Key, KeyEvent}`, so it compiles and its tests run before any widget code changes. Run `cargo test -p wolf-gnome --lib im_ui` here.
-2. `src/lib.rs` — `pub mod im_ui;` plus the crate-doc bullet. (Step 1 will not compile into the crate until this lands; do them together if the compiler complains about an unreferenced file.)
-3. `tests/im_commit_nvim.rs` — the headless tier. It needs only step 1 and a real Neovim, so it lands and goes green before any GTK glue exists.
-4. `src/window.rs` — `wire_keys`' new body and return type, `CloseParts`' new field, `wire_close`'s teardown, and `build`'s call site, in that order (the return type change forces the call site, which forces the struct field).
-5. `tests/smoke_headless.rs` — `SMOKE_GTK_IM_MODULE` and the `cage_command` line first, then the three doc-comment and one assertion-message count updates, then the compose smoke's constants, scenario and test, then the `RELAUNCH_FIXTURE_NAMES` entries. Run `cage_is_only_spawned_through_the_isolating_helper` and `restore_fixture_names_cannot_satisfy_their_own_assertions` immediately after, since both are pure and fail in microseconds.
-6. Run the smoke suite once whole (`cargo test -p wolf-gnome --test smoke_headless`) before touching any documentation — this is where a broken commit path shows up as a mass failure across the OCR smokes rather than as one red test, and it is the step that must be seen green.
-7. Take the two red runs for the compose smoke's assertion 3 and record them in the `measured` column.
-8. Documentation, last, in this order: `crates/wolf-gnome/DECISIONS.md`, `crates/wolf-gnome/src/README.md`, `crates/wolf-gnome/tests/README.md`, `feat-list.md`. Then `prettier --write` on each, then `./tools/lint/markdown_check.sh` on the four.
-
----
-
-## 6. Dependencies, and the `GTK_IM_MODULE` question
-
-**No new external packages.** `gtk::IMMulticontext`, `IMContextExt` (`set_client_widget`, `focus_in`, `focus_out`, `filter_keypress`, `connect_commit`) and `EventControllerExt::current_event` are all in the pinned `gtk4` 0.11.x, and `window.rs` already has `use adw::prelude::*;`, whose re-export of the gtk prelude carries every one of those traits — so no new `use` line either. No `flake.nix` change: nothing new is linked, and deliberately no GTK 4 ibus module is added.
-
-**Pin `GTK_IM_MODULE` in `cage_command`, to `gtk-im-context-simple`. Yes.**
-
-The reason is not tidiness. `gtk::IMMulticontext` selects its slave from `GtkSettings:gtk-im-module`, which GTK initializes from the `GTK_IM_MODULE` environment variable, and `cage_command` inherits the developer's environment wholesale. On this host that variable reads `ibus`, the GTK 4 ibus module is not installed, and GTK falls back to its built-in simple context — which is exactly what the probe measured. That fallback is a property of *this host*, not of the harness. Before this unit the variable did nothing, because no context was attached. After it, the variable decides which context every smoke's typing goes through, so on a host that does have the GTK 4 ibus module — a different NixOS configuration, or a future flake that pulls ibus in for some other reason — the entire suite's typing would silently reroute through an engine that cannot reach its daemon, since the harness removes `DBUS_SESSION_BUS_ADDRESS`. **This unit is what makes the smokes' typing host-dependent for the first time, and the pin is what takes that back.**
-
-Value: `gtk-im-context-simple`, named explicitly, rather than removing the variable. Removing it lets GTK apply its own default selection, which on Wayland consults the compositor for `zwp_text_input_manager_v3` — a `cage`/wlroots-dependent branch that would make the choice depend on the compositor build rather than on anything this repo pins. `gtk-im-context-simple` names the context the probe measured, on every host and every compositor.
-
-What the pin does *not* buy, and must be said in the doc comment rather than implied: it does not make the smokes evidence about any out-of-process input method. They cannot be — the harness removes the session bus and the flake ships no engine — and that is already recorded as the ground for the scope decision. The pin documents that constraint instead of leaving it to the ambient environment.
-
-**Guard-test obligations.** `cage_is_only_spawned_through_the_isolating_helper` is the only guard that counts `cage_command`'s variables, and it counts them **in prose** (its doc comment's "ALL FIVE" and its five numbered cost paragraphs) and **in its assertion message**, not in an executable list — so nothing goes red automatically and all three must be edited by hand. `packaged_cage_command`'s doc comment carries a fourth "those five". No other guard enumerates them: `every_shellhook_export_is_scrubbed_or_deliberately_kept` and `the_shellhook_still_stages_the_vendored_lua_trees_for_the_ffi_tests` both scan `flake.nix`'s `linuxShell.shellHook` exports, and `GTK_IM_MODULE` is not one — it is set by the harness, like `WOLF_FONT_PT` — so those two are untouched and `PACKAGED_SCRUB_ALWAYS` must **not** gain it.
-
----
-
-## 7. `frame_metrics::note_keystroke`, and the absent core
-
-**Count a committed character.** One `note_keystroke()` per `InputEvent::Key` the commit handler actually sends, so a multi-character commit counts N.
-
-The reason is the counter's own documented contract — `frame_metrics::note_keystroke`'s doc comment reads "Counts one key actually delivered to Neovim", and `wire_keys`' existing comment says it is counted "where the key is actually DELIVERED, so a key the overlay guard above swallowed and a key typed at a window with no core are both correctly absent from the denominator". A committed character *is* a key delivered to Neovim, and after this change it is how nearly every key is delivered. Not counting it would silently empty the denominator of `wakes/key` for ordinary typing.
-
-Read against `DECISIONS.md`'s `wakes/key` paragraph — "an upper bound on the wakes attributable to typing, never an attribution … Mouse, scroll, resize and out-of-band core notifications all inflate it" — the two answers differ in kind. Leaving commits uncounted would still satisfy "upper bound" (an uncounted delivery only raises the ratio), which is precisely the trap: it would keep the stated property technically true while destroying the instrument, since under the harness there is no pointer and no resize and the ratio is meant to sit close to attribution. Counting keeps the invariant that the counter equals the number of `InputEvent::Key`s the window sent. **No documentation change is needed** — that paragraph and `frame_metrics.rs`'s doc comment both stay exactly true.
-
-The one thing that is *not* counted, correctly: a `dead_acute` press the IM claims. It delivers nothing to core and produces no wake, so both sides of the ratio are untouched.
-
-**An absent core.** `if let Some(core) = core.borrow().as_ref()` — the same shape `wire_keys`' press path already uses, with the borrow taken and released in one statement per `DECISIONS.md`'s rule. A commit that finds `None` performs nothing and prints nothing: the close handler has already taken the core out, and the window is tearing down. Deliberately **no liveness gate**: `send_input` is fire-and-forget on the ordered channel and blocks on nothing, so `nav_ui::nav_press`'s argument does not apply, and gating commits while the existing `gdk_key` path is ungated would make typing `e` and typing `é` behave differently at a dead core. This arm is reachable only through an asynchronous out-of-process commit, so it is unobservable here and goes in `tests/README.md`'s "What is still unproven".
-
----
-
-## 8. Every place this could silently break ordinary typing, and what catches each
-
-| # | Failure | Why it is reachable | What catches it |
-|---|---|---|---|
-| 1 | `connect_commit` never wired, or its handler sends nothing | Measurement 3: the IM filters plain printables, so **all** typing goes through `commit` — a missing handler is total input death, not a lost accent | Mass smoke failure. First and loudest: `window_renders_typed_text_under_cage`; `ctrl_shift_s_saves_the_focused_buffer_to_disk_under_cage` reports it as an exact-bytes miss. Unit: `commit_decision`'s `Send` rows |
-| 2 | The IM claims a press **and** the glue also translates it | Handling `Consumed` as a fall-through, or asking the IM after translating | `ctrl_shift_s_…` (the file would read `zzzzssaavveeddeellttaa`), `window_renders_typed_text_under_cage` (`hheelllloo` fails `contains("hello")`). Unit: `key_route_table`'s `(Press, false, Some(true)) => Consumed` row |
-| 3 | A release routed to `gdk_key` | The new `connect_key_released` handler is the only place this can happen, and it is one line away | Same two smokes — every key doubles. Unit: `a_release_is_never_translated` |
-| 4 | The overlay guard placed below the IM offer | A "simplification" that computes `filtered` first and then checks overlays | Weakly. The four overlay smokes very likely stay green, because a focused `gtk::Entry` consumes printables in the bubble phase before the window controller runs — the same hole `tests/README.md` already records for `window::wire_keys`' buffer-picker guard. Unit: `an_open_overlay_wins_over_the_input_method`. Record it as unproven, with that entry as precedent |
-| 5 | The chord controller loses first refusal (the IM moved onto the capture controller, or `set_im_context` used) | Every bound chord swallowed | The eleven chord smokes in §4.3, all at once |
-| 6 | `current_event()` answering `None` treated as consumed | A `?` or an `unwrap_or(true)` where `unwrap_or(false)` belongs | Nothing, if it never fires; total input loss, if it does. Closed by writing the rule and its reason at the call site — this is a "state it, do not test it" case, and it should be named in `window.rs`'s comment |
-| 7 | A multi-character commit sent as `InputEvent::Paste` | It looks equivalent in insert mode | Every smoke that drives normal mode: `nvim_paste` in normal mode inserts text where `nvim_input` runs a command, and after this unit every normal-mode key travels the commit path, so `close_pane_leaves_one_under_cage`, the split smokes and every `:e` line break at once. Headless: case E |
-| 8 | `GTK_IM_MODULE` inherited from the developer | A host with the GTK 4 ibus module reroutes every smoke's typing through an engine with no session bus | Nothing, without the pin. Closed by §6 |
-| 9 | A commit arriving after the core is taken out | Only an asynchronous engine can produce it | Nothing. `if let Some(core)`; recorded as unproven |
-| 10 | The IM begins filtering named keys (Escape, Return, arrows) | Would follow from a different slave context being selected | Every smoke — each drives `wtype -k Escape` and `wtype -k Return`. This is the other thing §6's pin protects |
-
----
-
-## 9. Answers to the remaining questions
-
-**Multi-character commits, and ordering against `send_input`.** Yes, the path must handle them, and not only in theory: an out-of-process engine commits whole words and phrases, and `gtk_im_context_reset` can commit a partial sequence in one string. The rule is one `InputEvent::Key` per `char`, pushed in `text.chars()` order in a single loop, with the core borrow taken once for the loop (matching `wire_keys`' existing shape, and safe because `send_input` is a channel push that cannot re-enter the close handler). Ordering is then free and already contracted: `wolf_core::input::apply_batch` fuses a run of consecutive `Key` events into one `nvim_input` call, so a two-character commit reaches Neovim as one call and one redraw flush — exactly what a burst of keystrokes already does, which is why `architecture.md` needs no edit. What must not happen is `InputEvent::Paste`: `nvim_paste` bypasses `nvim_input`, so a normal-mode commit of `dd` would insert the text instead of deleting a line, and it is one undo block that runs no mappings. Given measurement 3, normal-mode commits are the common case, not an exotic one.
-
-**Per window, per tab, or per pane?** Per window, and the reasoning is structural rather than aesthetic. Per pane is not merely wrong but impossible: `DECISIONS.md`'s "GTK keyboard focus never lands on a pane area" means a pane could never be an IM client, and "Every widget under the pane area is destroyed and rebuilt on each layout change" means a per-pane context would be destroyed mid-sequence on any split or divider drag, dropping a pending compose state with nothing reporting it. Per tab is coherent but buys nothing and costs something: there is exactly one key controller per window and one core per window, so the routing decision has no per-tab input to read, while N contexts per window would give N compose states in a UI that shows one — and the tab switch would then need a `reset()` policy nothing measures. Per window matches the one thing that is already per window: the controller the IM is driven from. The honest cost is recorded as a limitation — with several windows open, each window's context reports itself focused in, because this crate wires no window-activation handler at all.
-
-**Anything in `DECISIONS.md` or `src/README.md` that becomes false**, quoted exactly:
-
-1. `DECISIONS.md`, "Present limitations": `- No input-method composition support.` — wholly wrong; deleted and replaced (§3.4c).
-2. `DECISIONS.md`, "Window structure": `a bubble-phase controller routes everything else through the key seam into Neovim's current window` — false as written; the controller offers to the input method first (§3.4a).
-3. `DECISIONS.md`, "The accelerator namespace": `so in the empty state \`Ctrl+Shift+O\` reaches Neovim as \`<C-o>\`, \`Ctrl+Shift+F\` as \`<C-f>\` and \`Ctrl+Shift+B\` as \`<C-b>\`` — conditionally false: not while a compose sequence is pending (§3.4b).
-4. `DECISIONS.md`, "The accelerator namespace": `Plain Ctrl+C and Ctrl+V carry no shift, and \`action_for_key\` compares its three modifiers exactly, so neither matches a bound chord and both still reach Neovim.` — conditionally false for the same window, and this is the one that carries weight, since `<C-c>` interrupts and `<C-v>` is visual-block and insert-mode literal-next (§3.4b).
-5. `src/README.md`, `window.rs` Gotcha: `The key controller carries no propagation phase, so it runs after \`shell.rs\`'s capture-phase chord controller, which stops a bound chord also reaching Neovim.` — still true but incomplete; rewritten in place (§3.5).
-6. `src/README.md`, `input.rs`: nothing false, but the entry is now misleading by omission — a printable key normally reaches Neovim through `commit`, not through `gdk_key`. One Gotcha added (§3.5).
-7. `window.rs`'s `wire_keys` doc comment (source, not a README): `Otherwise every key is translated via the pure \`crate::gdk_key\` seam into core input.` — false; rewritten (§3.2).
-8. `feat-list.md`: `this front-end attaches no \`gtk::IMContext\` at all, so a dead key, a compose sequence and every input method reach Neovim as nothing` — false; that whole work item is deleted (§3.8).
-
-`DECISIONS.md`'s "The accelerator namespace" invariant sentence itself — `**The invariant is that no Neovim key becomes unreachable.**` — stays true and is not weakened by this unit: the swallow in finding 6 is a transient state, not a permanently unreachable key, and it is recorded as a limitation with a named follow-up rather than as an exception to the invariant.
-
----
-
-## 10. Lint considerations
-
-No `#[allow]` directives should be needed anywhere, and the plan is arranged so none is. The gate is `cargo clippy --workspace --all-targets -- -D warnings` with default lints only (no pedantic), per `build.md`.
-
-Two places where one would be tempting, and why each is avoided:
-
-- `clippy::too_many_arguments` on `wire_keys`. It stands at six parameters and the default threshold is seven; constructing the `gtk::IMMulticontext` inside and *returning* it, rather than passing it in, keeps it at six. If a later change does push it over, follow the `ShellParts` / `CloseParts` / `crate::persistence::StateParts` precedent and take a struct — do not add an allow.
-- `clippy::needless_pass_by_value` and `clippy::must_use_candidate` are pedantic and not enabled; add `#[must_use]` to `key_route`, `commit_keys` and `commit_decision` anyway, for consistency with every other seam in this crate.
-
-Two mechanical items: derive `Debug, Clone, Copy, PartialEq, Eq` on `KeyPhase` and `KeyRoute` and `Debug, Clone, PartialEq, Eq` on `CommitDecision` (it holds a `Vec`, so no `Copy`) — the seam tests need `assert_eq!` and `matches!` over all three. And `--all-targets` means clippy lints the new `#[cfg(test)] mod tests` and `tests/im_commit_nvim.rs` too, so the usual test-code rules apply: no `unwrap()` where a message helps, and every assertion carries the failure message the house style expects.
-
----
-
-# Orchestrator amendments to the plan above
-
-These override the architect where they differ.
-
-1. **Delete `crates/wolf-gnome/examples/im_probe.rs`.** It is the throwaway probe
-   that produced the measurements at the top of this file. It is in the working
-   tree right now and must not be committed. Deleting it is part of the coder's
-   job, not a follow-up.
-2. **Verify every count before editing it.** The architect's numbers for
-   `smoke_headless.rs` ("fifty-eight", "sixty-seven passed", "five of the
-   fifty-six") are read from the file, not computed. Grep for every count phrase
-   in `tests/smoke_headless.rs` and `tests/README.md`, and re-derive each from the
-   test binary's own reported pass count after the suite runs. Do not trust a
-   number in this plan.
-3. **Verify `packaged_cage_command` before editing it.** Check whether it delegates
-   to `cage_command` or builds its own `Command`. If it delegates, it inherits
-   `GTK_IM_MODULE` automatically and only its doc comment changes.
-4. **The seam's file name is `src/im_ui.rs`.** Settled.
-5. **The double-`match` shape in §3.2 step 5 is a description, not a prescription.**
-   Implement the two-stage ask however reads best, provided the overlay guard
-   short-circuits strictly before any `filter_keypress` call, and the routing
-   comes from `im_ui::key_route` rather than from inline booleans.
-
-## Orchestrator ruling on plan test #4 (§4.1 row 4)
-
-The plan states `the_input_method_is_asked_exactly_once_before_it_answers` as a
-biconditional over the whole domain — "`AskInputMethod` is the answer for
-`im_filtered == None` and for nothing else". That is false against a correct
-implementation and contradicts row 2, because `key_route(Press, true, None)`
-answers `Overlay`: the overlay early return precedes the match, which is the very
-thing row 2 demands.
-
-**Assert two one-directional statements instead**, both over the whole domain:
-
-1. Every input answering `AskInputMethod` has `im_filtered == None`.
-2. Every input with `im_filtered == None` **and** `overlay_open == false` answers
-   `AskInputMethod`.
-
-Each needs its own non-vacuity assertion. The rule the test is protecting is that
-the glue's two-stage ask cannot loop, and both directions above are needed to say
-it.
-
----
-
-# Outcome
-
-Shipped on `linux-feat/input-method`. What differs from the plan above, and why:
-
-1. **The release handler classifies but cannot act.** GTK 4's `key-released` is a
-   void signal — `connect_key_released` takes no `Propagation` return — so plan
-   §3.2 step 6's "`Consumed` → `Stop`" is not expressible. The handler makes the
-   offer, which is the thing the measurement licensed, and its route match is a
-   total `_`-free classification with no action in any arm.
-2. **Plan test #4 was a biconditional that contradicted plan test #2.** Replaced
-   by the two one-directional statements recorded above.
-3. **Plan §4.2 case D would have been vacuous as written.** It attempted the
-   refused commit in normal mode, where a leaked `é` changes no buffer. It is
-   attempted in insert mode instead.
-4. **The compose smoke's revert (b) does not produce the predicted empty line.**
-   It reds one assertion earlier, at exit 24, because a commit handler that sends
-   nothing breaks *all* typing — the `:e` and the `writefile` command lines
-   included, so no readback is ever written. The pair still discriminates, by exit
-   code rather than by content.
-5. **`smoke_headless.rs`'s aggregate counts were already stale by two before this
-   unit touched them**, and the two Save smokes were the missing pair. Repaired
-   along with the enumerations that back them.
-6. **One smoke beyond the plan.**
-   `a_control_chord_while_composing_is_claimed_by_the_input_method_under_cage`.
-   `DECISIONS.md` states the `Ctrl+<letter>`-while-composing limitation as
-   measured, and that measurement came from the probe deleted at the top of this
-   file — so the claim rested on nothing in the tree. It reproduces: control arm
-   two panes, subject arm one.
-
-Not built, and stated as present-tense limitations rather than left to be found:
-preedit display and `set_cursor_location`; the `Ctrl+<letter>` swallow inside a
-pending sequence, whose repair owes a measurement first.
+## The measurement, taken (pass 3) — the numbers the docs must use
+
+Four runs alternated in one session, release profile, both binaries measured rather than
+comparing this branch against a recorded number. Independently re-derived by the
+orchestrator from the retained reports.
+
+| | baseline (`linux`) | this branch |
+| --- | --- | --- |
+| `prev.render` count | 1186 / 1188 | 90 / 90 |
+| `prev.render` total | 6490.6 / 6527.1 ms | 201.9 / 210.2 ms |
+| wall clock | 54.8 / 54.8 s | 55.1 / 55.2 s |
+| share of wall clock | 11.84 % / 11.91 % | 0.37 % / 0.38 % |
+| `wake` p95 median | 8.55 / 8.50 ms | 0.15 / 0.22 ms |
+| worst `wake` max | 30.74 / 34.00 ms | 32.78 / 33.64 ms |
+
+**Three framing constraints, in the coder's words, binding on every doc:**
+
+1. **The baseline reads 11.9 % whole-run, not the recorded 15.6 %.** The shape reproduces
+   (1187 renders against 988, `wake` p95 8.5 against 9.1 ms, worst interval 30.7–34.0
+   against 34 ms) but the render mean is 5.48 against 6.93 ms, from a denominator carrying
+   ~22 s of non-typing wall clock and a generated rather than byte-identical prose fixture.
+   **No doc may state the improvement as "15.6 % → 0.4 %"**, which would silently mix two
+   measurement setups. Measuring both binaries in one session is what makes the comparison
+   sound.
+2. **The 34 ms worst interval does not improve, and must not be claimed.** In all four runs
+   `wake`'s max lives in the cold preview open, where `prev.load` alone is 10.3–10.9 ms for
+   the WebProcess spawn and the full `load_html`. Coalescing does not touch the cold open.
+   The p95 median is the statistic to quote.
+3. **Total main-thread busy falls by about 3.5 points, not 11.5.** `draw.pane` count rises
+   78 % over the same wall clock at an unchanged per-frame mean — frames GTK wanted to
+   deliver and could not while the thread sat in a blocking RPC. Summed families go 29.7 %
+   → 26.1 %. The honest sentence: the blocking RPC is gone and the wake path is 98 %
+   cheaper, and the freed CPU is largely spent painting a smoother editor rather than going
+   idle.
+
+The prediction given when the budget was set (15.6 % → roughly 1.4 %) is **not** to be
+quoted as confirmed. Quote the measurement.
+
+The staleness cap has value-level evidence from the same run. Across all 28 typing blocks
+of both branch runs the modal reading is **4 renders per 2-second block** (24 of 28; range
+3–5, the fives being blocks that also caught an inter-burst trailing fire). Four per two
+seconds is exactly two a second, which is exactly `PREVIEW_MAX_STALENESS`. An earlier
+report of "3 per 2-second block" was one block from one run and must not be used.
+
+## Status
+
+- [x] Branch created
+- [x] Architect plan
+- [x] Tests (unit + cage, including the sustained-burst cap evidence)
+- [x] Implementation, with five unit falsifiers demonstrated red
+- [x] Measurement (pass 3)
+- [ ] Smoke bounds confirmed (pass 4)
+- [ ] Review
+- [ ] Docs
+- [ ] Full suite, commit, merge

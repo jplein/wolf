@@ -543,7 +543,7 @@ Purpose: the pure codec between the live pane tree, whose leaves are pane ids, a
 
 #### `pane_view.rs`
 
-Purpose: the GTK glue turning `layout`'s pane tree into nested `gtk::Paned`, one `gtk::Overlay` host per window, and the drawer strip below them.
+Purpose: the GTK glue turning `layout`'s pane tree into nested `gtk::Paned`, one `gtk::Overlay` host per window, plus the drawer strip.
 
 **Public API**
 
@@ -553,12 +553,13 @@ Purpose: the GTK glue turning `layout`'s pane tree into nested `gtk::Paned`, one
 
 **Decisions**
 
-- A dragged divider position is written back into the tree's weights, because a rebuild destroys the paned; positions re-apply from the tree on every `max-position` notify, since nested allocation reports intermediate values before settling.
-- `realize_layout` rebuilds into whichever tabpage Neovim is current on, so the restore materialization is its only legal caller; it drops the queued copy, so a restored tab costs one rebuild. `request_layout_rebuild` defers, which is tab 0's route.
-- Pointer input is one `gtk::GestureDrag`: a gesture keeps delivering after the pointer leaves the widget. Grid and button pin at press, so a wandering drag edits its starting pane.
-- Each pane's status and `b:wolf_full_width` cache once per wake: reading at use time re-enters `draw_pane`'s guard, and paint, pointer and resize must agree inside one frame.
-- One funnel produces every grid resize, compared against the size the pane last asked for rather than the lagging snapshot grid; it runs every wake, since a lifted content cap re-divides a still allocation.
-- The drawer strip's height re-applies on every wake, so a toplevel resize converges over two frames; `reset_after_restart` clears the drawer, whose dead grid `detect_closes` can never reach after a restart.
+- A dragged divider position is written back into the tree's weights, because a rebuild destroys the paned, and re-applies on every `max-position` notify, since nested allocation reports intermediate values.
+- `realize_layout` rebuilds into whichever tabpage Neovim is current on, so restore materialization is its only legal caller; `request_layout_rebuild` defers instead.
+- The preview's render half goes through [`preview_coalescer.rs`](#preview_coalescerrs), whose state sits on `PaneInner`, one per tab: a rebuild replaces `panes` wholesale. The fire re-enters this pass, re-reading the gate and the due set.
+- Pointer input is one `gtk::GestureDrag`, which keeps delivering after the pointer leaves the widget, so grid and button pin at press.
+- Each pane's status and `b:wolf_full_width` cache once per wake: reading at use time re-enters `draw_pane`'s guard, and paint, pointer and resize must agree in one frame.
+- One funnel produces every grid resize, against the size the pane last asked for rather than the lagging snapshot grid; it runs every wake, since a lifted cap re-divides a still allocation.
+- The drawer strip's height re-applies on every wake, so a toplevel resize converges over two frames, and `reset_after_restart` clears the drawer `detect_closes` cannot reach.
 
 #### `persistence.rs`
 
@@ -601,6 +602,24 @@ Purpose: the file-picker overlay — a search entry over a ranked results list. 
 - Closing drops the `FileSearch`, which cancels the background traversal.
 - `next_selection`, `restored_index` and `activation_index` are `pub(crate)` and shared with [`palette.rs`](#paletters), [`buffer_picker.rs`](#buffer_pickerrs) and [`search_overlay.rs`](#search_overlayrs), so all four overlays navigate and activate identically. They stay here because the macOS `PickerSeam` port names this file as its counterpart.
 - `FocusTarget` is `pub(crate)` and shared the same way, by all four overlays and the sidebar; [DECISIONS.md](../DECISIONS.md#window-structure) owns why it is a closure rather than a captured widget.
+
+#### `preview_coalescer.rs`
+
+Purpose: the pure, GTK-free state machine behind the Markdown preview's coalesced render. It reads no clock: every entry point takes `now` from the caller. [DECISIONS.md](../DECISIONS.md#the-preview-renders-budget) owns the budget, [`pane_view.rs`](#pane_viewrs) the glue.
+
+**Public API**
+
+- `request(now) -> RenderDecision` — `Render` inline on this wake, or `Arm { generation, delay }` for a one-shot `glib` timeout; call it only for a due pane, or a timer stays armed for nothing.
+- `fire(generation) -> bool`, and `rendered(now)`, which the render pass calls as its last statement.
+- `PREVIEW_TRAILING_DELAY`, `PREVIEW_MAX_STALENESS` and `PREVIEW_LEADING_IDLE` — the one site in this crate where the three budget numbers live.
+
+**Decisions**
+
+- The leading edge needs both conjuncts, nothing pending and the last render at least `PREVIEW_LEADING_IDLE` old; dropping either turns steady typing back into one render per keystroke.
+- The armed delay is the lesser of `PREVIEW_TRAILING_DELAY` and the cap's remainder; a spent budget answers a zero delay.
+- One fresh one-shot per request, each carrying a new generation, so the sources armed earlier in a burst perform nothing.
+- Not [`refresh_coalescer.rs`](#refresh_coalescerrs) widened: that seam is clock-free by construction and wants neither a leading edge nor a cap.
+- No `cancel`, because the fire re-derives the pane set, the liveness reading and the document, so there is no wrong content to withdraw.
 
 #### `preview_link.rs`
 

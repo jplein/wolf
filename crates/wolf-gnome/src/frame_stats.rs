@@ -28,6 +28,10 @@
 //! | `draw.pane` | `draw.read`, `draw.grid`, `draw.status` |
 //! | `draw.cmdline` | none; a sibling of `draw.pane` |
 //!
+//! A `pane.prev` region is opened either by a pane wake or by the preview
+//! coalescer's one-shot trailing fire ([`crate::preview_coalescer`]), which is what
+//! keeps `prev.render` from ever having no parent.
+//!
 //! # The double-count trap
 //!
 //! A nested bucket's time is already inside its parent's. Summing a parent
@@ -58,6 +62,9 @@
 //!   restart arrives from a deferred one-shot timer or the crash overlay's Restart
 //!   button, so it is outside every `wake` region and its `pane.wake` samples have
 //!   no parent at all — not a `wake.tabs` and not a `wake`.
+//! - `count(pane.prev)` may exceed `count(pane.wake)`: a trailing preview render
+//!   runs from a one-shot timer outside every `wake` region, so it opens a
+//!   `pane.prev` of its own with no `pane.wake` parent.
 //! - `count(draw.status) >= count(draw.grid)`: the strip is never skipped, and the
 //!   grid is skipped for a preview pane.
 //! - `count(draw.pane)` is NOT `count(wake) * panes`: GTK coalesces frames.
@@ -141,7 +148,8 @@ pub enum Bucket {
     PaneWake,
     /// The per-pane status refresh inside a pane wake.
     PaneState,
-    /// The whole preview refresh pass inside a pane wake.
+    /// The whole preview render pass, whether it runs inside a pane wake or from the
+    /// preview coalescer's trailing fire.
     PanePrev,
     /// One `render_preview` blocking RPC, alone.
     PrevRender,

@@ -159,6 +159,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::time::Instant;
 
 use adw::prelude::*;
 use gtk::{gio, glib};
@@ -182,6 +183,7 @@ use crate::geometry;
 use crate::layout::{Orientation, PaneId, PaneLayout, PaneTree};
 use crate::mouse::{self, PaneScroll, ScrollAccumulator};
 use crate::pane_layout;
+use crate::preview_coalescer::{PreviewCoalescer, RenderDecision};
 use crate::preview_link::{self, PreviewLink};
 use crate::preview_ui::{self, DocumentUpdate, PreviewFilePress, PreviewLoad};
 use crate::render::{draw_glyph, draw_text_line, FALLBACK_BG, FALLBACK_FG};
@@ -323,7 +325,8 @@ struct PaneWidgets {
     loaded: Cell<Option<PreviewLoad>>,
     /// The join of `Snapshot::previews` and `Snapshot::markdown_ticks` for THIS
     /// wake, filled beside `preview` by [`PaneInner::refresh_pane_state`] and
-    /// compared against `loaded` by [`PaneInner::refresh_previews`].
+    /// compared against `loaded` by [`PaneInner::any_preview_due`] and
+    /// [`PaneInner::run_preview_render_pass`].
     ///
     /// Cached rather than re-read where it is used, so the one function that issues
     /// the BLOCKING `render_preview` holds no snapshot guard at all — the strongest
@@ -433,12 +436,12 @@ struct PaneState {
     load: Option<PreviewLoad>,
 }
 
-/// One pane whose preview document has to be re-rendered on this wake, with
+/// One pane whose preview document has to be re-rendered on this pass, with
 /// everything the render and the load need — all of it read in ONE `panes` borrow.
 ///
-/// A named value rather than [`PaneInner::refresh_previews`]'s former
-/// `(PaneId, PreviewLoad)` tuple, the file's own [`PaneJoin`] / [`PaneState`]
-/// precedent. The four fields are read at the SAME INSTANT, and that is the whole
+/// A named value rather than a `(PaneId, PreviewLoad)` tuple in
+/// [`PaneInner::run_preview_render_pass`], following the file's own [`PaneJoin`] /
+/// [`PaneState`] precedent. The four fields are read at the SAME INSTANT, and that is the whole
 /// reason the load strategy is decided here rather than at the load: `update`
 /// depends on `loaded` and on whether a fragment is pending, and both can move
 /// between the borrow and the blocking `render_preview` that follows it.
@@ -566,6 +569,16 @@ struct PaneInner {
     /// [`PaneHandle::request_layout_rebuild`] and consumed by the first wake at
     /// which a window grid exists (see [`PaneInner::consume_pending_layout`]).
     pending_layout: RefCell<Option<PaneNode>>,
+    /// The trailing-render state machine behind the Markdown preview
+    /// ([`PaneInner::request_preview_render`]).
+    ///
+    /// One per TAB, never per pane. `panes` is replaced wholesale by
+    /// [`PaneInner::apply_layout_rebuild`] and cleared by
+    /// [`PaneInner::reset_after_restart`], so a coalescer living on a `PaneWidgets`
+    /// would lose a burst's pending edge exactly when a rebuild landed mid-burst —
+    /// and the rule is about the user's typing, which is not per pane. `RefCell`
+    /// mirrors `tree_view::TreeInner::coalescer`.
+    preview_coalescer: RefCell<PreviewCoalescer>,
 }
 
 impl PaneInner {
@@ -1550,7 +1563,9 @@ impl PaneInner {
     }
 
     /// Brings every pane's web view into line with its preview state: creates or
-    /// removes the view, frames it, and re-loads the ones whose bound source moved.
+    /// removes the view and frames it on this wake, then puts the RENDER half —
+    /// re-loading the panes whose bound source moved — through
+    /// [`Self::request_preview_render`], which may defer it.
     ///
     /// Called from [`Self::on_render_wake`] AFTER [`Self::refresh_pane_state`], which
     /// is what fills `preview` and `current_load`, and BEFORE [`Self::sync_pane_grids`];
@@ -1567,11 +1582,103 @@ impl PaneInner {
             self.sync_preview_view(*id);
             self.apply_preview_frame(*id);
         }
+        self.request_preview_render();
+    }
 
+    /// Puts one render request through [`PreviewCoalescer`]: renders inline on the
+    /// leading edge, and otherwise arms the one-shot that carries the burst's
+    /// trailing edge.
+    ///
+    /// Asking [`Self::any_preview_due`] BEFORE the coalescer is what keeps a timer
+    /// off the wake path entirely while the user types with no preview open: a
+    /// request on every wake would arm one continuously for nothing.
+    fn request_preview_render(self: &Rc<Self>) {
         // `WolfCore::render_preview` is a BLOCKING RPC on the GTK main thread, so it
         // carries the same liveness gate the two presses do rather than a weaker one
         // (`crates/wolf-gnome/DECISIONS.md`, "Crash and stall recovery"). The read is
         // a lock-free atomic in a borrow of its own.
+        //
+        // Refused HERE, no coalescer state is touched at all — an unrelated wake
+        // against a wedged Neovim must not look like a burst that has begun.
+        let liveness = {
+            let core_ref = self.core.borrow();
+            core_ref.as_ref().map(WolfCore::liveness)
+        };
+        if !preview_ui::may_render(liveness) {
+            return;
+        }
+        if !self.any_preview_due() {
+            return;
+        }
+
+        // Own statement. Edition 2021 keeps a `match` scrutinee's temporary alive for
+        // the whole match, so the `Render` arm's re-borrow — `run_preview_render_pass`
+        // ends by recording the render — would be a `RefCell` double-borrow panic.
+        // The same rule as `tree_view::TreeInner::refresh_coalesced`.
+        let decision = self.preview_coalescer.borrow_mut().request(Instant::now());
+        match decision {
+            RenderDecision::Render => self.run_preview_render_pass(),
+            RenderDecision::Arm { generation, delay } => {
+                // A `Weak`, like the sidebar's armed refresh: a queued fire must not
+                // keep this tab's pane view alive past the page that owns it.
+                let weak = Rc::downgrade(self);
+                glib::timeout_add_local_once(delay, move || {
+                    let Some(inner) = weak.upgrade() else {
+                        return;
+                    };
+                    // Own statement, for the reason above: the pass re-borrows the
+                    // coalescer as its last act.
+                    let performs = inner.preview_coalescer.borrow_mut().fire(generation);
+                    if performs {
+                        // A one-shot fires outside every `pane.wake` region, so this
+                        // pass opens its own `pane.prev` — `frame_stats`' nesting
+                        // contract is that a `prev.render` sample always has a
+                        // `pane.prev` parent. The guard is NAMED: `let _ =` drops it
+                        // at once and measures nothing.
+                        let _guard = frame_metrics::scope(Bucket::PanePrev);
+                        inner.run_preview_render_pass();
+                    }
+                });
+            }
+        }
+    }
+
+    /// Whether any pane's bound source has moved past what its web view holds.
+    ///
+    /// One `panes` borrow and a `Cell` comparison per pane: no `String` clone and
+    /// neither the `preview` nor the `pending_fragment` borrow the render pass
+    /// takes, because this runs on EVERY wake with a preview open.
+    fn any_preview_due(&self) -> bool {
+        let panes = self.panes.borrow();
+        panes.values().any(|p| {
+            let Some(current) = p.current_load.get() else {
+                return false;
+            };
+            preview_ui::needs_reload(Some(current), p.loaded.get())
+        })
+    }
+
+    /// Renders every due pane's document and loads it into that pane's web view.
+    ///
+    /// **The only function in this crate that calls `WolfCore::render_preview`, and
+    /// the only one that calls [`PreviewCoalescer::rendered`]** — which is its last
+    /// statement, so no path through it can forget to record the render.
+    ///
+    /// The liveness gate is read again here, and that is not a duplicate of
+    /// [`Self::request_preview_render`]'s: this call can arrive from a one-shot armed
+    /// milliseconds ago, into a Neovim that wedged in between. A refusal returns
+    /// WITHOUT recording a render — as does the core being taken out mid-loop — so
+    /// the burst stays pending and the next due wake re-arms it, at a zero delay
+    /// once the staleness budget is spent.
+    ///
+    /// A pass that passes the gate records a render whether or not any pane turned
+    /// out to be due: the due set is re-derived here rather than captured at arm
+    /// time, and "nothing is due" is exactly "there is nothing pending".
+    fn run_preview_render_pass(&self) {
+        // Re-derived, never captured at arm time: a pane can close between the arm
+        // and the fire, and `detect_closes` will have removed its entry by now.
+        let ids: Vec<PaneId> = self.panes.borrow().keys().copied().collect();
+
         let liveness = {
             let core_ref = self.core.borrow();
             core_ref.as_ref().map(WolfCore::liveness)
@@ -1640,15 +1747,33 @@ impl PaneInner {
             //
             // It is also recorded on `load_preview_document`'s no-view early return,
             // and that is sound only because of an INVARIANT this loop depends on:
-            // `sync_preview_view` ran over these same ids above, and `current_load` is
-            // `Some` exactly when `preview` is, so every pane that reaches here already
-            // has a web view. Move either of those and this records a document that
-            // was loaded into nothing, leaving the pane blank until the source's tick
-            // moves again.
+            // every pane that reaches here already has a web view. The argument must
+            // hold on BOTH entry paths — this pass runs inline on a wake and from the
+            // coalescer's one-shot, where nothing whatever precedes it — so it cannot
+            // rest on `sync_preview_view` having just run above:
+            //
+            // - `current_load` is written ONLY by `refresh_pane_state`, and a pane is
+            //   due here only when it is `Some`;
+            // - every wake that runs `refresh_pane_state` runs `refresh_previews` — and
+            //   so `sync_preview_view` over every pane — later in that SAME wake;
+            // - `consume_pending_layout` early-returns from its wake BEFORE
+            //   `refresh_pane_state`, so a pane built by a layout rebuild carries
+            //   `current_load == None` until a wake that does both, and is not due
+            //   until then.
+            //
+            // So a pane cannot be due without a view, whenever this runs. Move any of
+            // those three and this records a document that was loaded into nothing,
+            // leaving the pane blank until the source's tick moves again.
+            //
+            // What this argument replaces is the reason NOT to capture the due set at
+            // arm time: the set is re-derived here precisely so a pane that closed
+            // mid-burst is simply no longer in it.
             if let Some(p) = self.panes.borrow().get(&id) {
                 p.loaded.set(Some(load));
             }
         }
+        // The one funnel, and the LAST statement of it.
+        self.preview_coalescer.borrow_mut().rendered(Instant::now());
     }
 
     /// Creates pane `pane_id`'s web view when it becomes a preview, and removes and
@@ -3465,6 +3590,7 @@ pub fn build(core: &Rc<RefCell<Option<WolfCore>>>, metrics: &Rc<CellMetrics>) ->
         active_pane: Cell::new(None),
         drawer: Cell::new(DrawerState::new()),
         pending_layout: RefCell::new(None),
+        preview_coalescer: RefCell::new(PreviewCoalescer::new()),
     });
 
     {

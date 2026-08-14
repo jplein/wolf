@@ -63,8 +63,12 @@
 //!
 //!   The last five are the MARKDOWN PREVIEW's: `WolfCore::open_preview`,
 //!   `WolfCore::edit_source`, and the `WolfCore::render_preview` that
-//!   `pane_view::refresh_previews` issues once per changed source per wake — the
-//!   only one of the ten that can repeat while the user simply types — plus two
+//!   `pane_view::run_preview_render_pass` issues for a changed source — the only one
+//!   of the ten that can repeat while the user simply types, which is why it is the
+//!   one that is COALESCED ([`mod@crate::preview_coalescer`]): a burst of edits costs
+//!   one render on its leading edge, one per
+//!   [`crate::preview_coalescer::PREVIEW_MAX_STALENESS`] while it continues, and one
+//!   trailing render after it ends — plus two
 //!   that need a preview already on screen: `WolfCore::preview_file`, which
 //!   repoints a bound preview at a file linked from the rendered document, and
 //!   `WolfCore::open_in_browser`, which renders that document for the loopback
