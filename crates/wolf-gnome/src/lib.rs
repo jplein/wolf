@@ -5,6 +5,19 @@
 //!
 //! - [`gdk_key`]: translates a GDK keyval + modifier state into a toolkit-neutral
 //!   [`wolf_core::KeyEvent`], honoring the shift-glyph contract.
+//! - [`mod@im_ui`]: the COMPOSED and INPUT-METHOD entry rulebook that stands in
+//!   front of [`gdk_key`] — what one window-level key event is routed to
+//!   ([`im_ui::key_route`], over [`im_ui::KeyPhase`] and [`im_ui::KeyRoute`]), and
+//!   what one `commit` string from the window's `gtk::IMMulticontext` becomes
+//!   ([`im_ui::commit_keys`]: one modifier-free `Key::Char` per `char`, in order,
+//!   with every control character dropped, since a committed `\u{1b}` would reach
+//!   Neovim as a raw ESC). [`im_ui::commit_decision`] is the same overlay guard on
+//!   the commit path, and answers an [`im_ui::CommitDecision`]. The precedence is a
+//!   VALUE rather than prose because offering a key to the input method is a SIDE
+//!   EFFECT — a dead key it accepts is swallowed into a pending compose state — so
+//!   the overlay guard must short-circuit before the offer, which is why the
+//!   answer is staged over an `Option<bool>` the glue fills in only once it has
+//!   been licensed to ask.
 //! - [`paint`]: paints a [`wolf_core::Snapshot`] onto a Cairo context (an offscreen
 //!   `ImageSurface` in tests, a `DrawingArea` context in production).
 //! - [`mod@glyph_style`]: the DECORATION half of that paint, as data — one cell's
@@ -364,6 +377,7 @@ pub mod frame_metrics;
 pub mod frame_stats;
 pub mod geometry;
 pub mod glyph_style;
+pub mod im_ui;
 pub mod init_lua;
 pub mod input;
 pub mod layout;

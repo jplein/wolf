@@ -118,12 +118,17 @@
 //! - **Paint:** per-pane painting and the mode-aware cursor live in
 //!   [`crate::pane_view`] (which uses the pure [`crate::paint`]/[`crate::cursor`]
 //!   seams); this module installs no draw handler of its own.
-//! - **Input:** a window-level [`gtk::EventControllerKey`] routes keys through the
-//!   pure [`crate::gdk_key`] seam into [`WolfCore::send_input`]; nvim routes them to
-//!   its current window, and the cursor renders in whichever pane owns that grid.
+//! - **Input:** a window-level [`gtk::EventControllerKey`] offers each key to this
+//!   window's own [`gtk::IMMulticontext`] and routes what the context declines
+//!   through the pure [`crate::gdk_key`] seam into [`WolfCore::send_input`], while
+//!   what it CLAIMS arrives as a `commit` string and reaches the same call through
+//!   [`mod@crate::im_ui`] — which owns that precedence and the commit rulebook.
+//!   nvim routes the result to its current window, and the cursor renders in
+//!   whichever pane owns that grid.
 //!   The controller has no propagation phase (i.e. Bubble), so it runs only after
 //!   [`crate::shell`]'s CAPTURE-phase chord controller has had its say — which is
-//!   exactly the guarantee that a bound chord is not also forwarded to Neovim.
+//!   exactly the guarantee that a bound chord is not also forwarded to Neovim, nor
+//!   offered to the input method.
 //!   **POINTER input, unlike keys, is not window-level at all**: it is PER-PANE and
 //!   lives entirely in [`crate::pane_view`], where each pane `DrawingArea` carries
 //!   its own `gtk::GestureDrag` (press → drag → release), `gtk::EventControllerScroll`
@@ -180,6 +185,7 @@ use crate::coordinator::{self, Coordinator, CoordinatorInner, WindowId};
 use crate::crash_overlay;
 use crate::frame_metrics;
 use crate::frame_stats::Bucket;
+use crate::im_ui;
 use crate::palette::{self, PaletteHandle};
 use crate::picker::{self, PickerHandle};
 use crate::search_overlay::{self, SearchHandle};
@@ -801,10 +807,11 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
         tabs.on_render_wake();
     }
 
-    wire_keys(&window, &core, &picker, &palette, &buffers, &search);
+    let im = wire_keys(&window, &core, &picker, &palette, &buffers, &search);
     wire_close(CloseParts {
         window: &window,
         core: &core,
+        im: &im,
         picker: &picker,
         palette: &palette,
         buffers: &buffers,
@@ -845,11 +852,20 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
     Some(handle)
 }
 
-/// Installs the key controller. While any transient overlay (the file picker, the
-/// command palette, the buffer picker or the project search) is open, keys are left
-/// for that overlay's focused widgets (forwarding to the core is suppressed).
-/// Otherwise every key is translated via the pure [`crate::gdk_key`] seam into core
-/// input. No smoke discriminates it — see "What is still unproven" in
+/// Installs this window's input method and its key controller, and returns the
+/// context so [`wire_close`] can tear it down.
+///
+/// While any transient overlay (the file picker, the command palette, the buffer
+/// picker or the project search) is open, keys are left for that overlay's focused
+/// widgets: nothing is forwarded to the core, and — the half that is easy to lose —
+/// nothing is OFFERED to the input method either. Otherwise every press is offered
+/// to this window's [`gtk::IMMulticontext`] first, and only a press the context
+/// DECLINES is translated via the pure [`crate::gdk_key`] seam into core input; a
+/// press it claims arrives later as a `commit` string, which becomes core input
+/// through [`crate::im_ui::commit_decision`] instead. The precedence and the commit
+/// rulebook are [`mod@crate::im_ui`]'s, not this function's — every branch below
+/// reads its answer from [`crate::im_ui::key_route`]. No smoke discriminates the
+/// overlay guard — see "What is still unproven" in
 /// `crates/wolf-gnome/tests/README.md`.
 ///
 /// The controller carries NO propagation phase (i.e. Bubble), so a chord Wolf
@@ -858,6 +874,27 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
 /// [`crate::shell`]'s chord controller matches it in the CAPTURE phase and stops
 /// propagation. That is deliberate; it is what guarantees a bound chord is not ALSO
 /// forwarded to Neovim.
+///
+/// **Do not unify the two controllers, and do not reach for
+/// `EventControllerKey::set_im_context`.** Both are one-line "simplifications" and
+/// both invert the ordering above. GTK runs every capture-phase controller
+/// root-to-target before any bubble-phase one, so the chord controller has first
+/// refusal by CONSTRUCTION rather than by cooperation: a bound, enabled chord is
+/// matched and stopped before the input method is ever offered the key. Attaching
+/// the context to the chord controller, or moving this controller into the capture
+/// phase, would offer every bound chord to the context first and let it swallow
+/// them. `set_im_context` fails a different way: GTK would make the offer before
+/// this function's overlay guard ran, which moves the overlay-versus-input-method
+/// precedence out of this crate and makes it unstatable and untestable. Calling
+/// `filter_keypress` by hand from inside `key-pressed` was measured to behave
+/// identically, so the hand-rolled call costs nothing.
+///
+/// Releases are forwarded to the context for the same measurement's sake:
+/// `set_im_context` offers BOTH phases, so a press-only forward silently diverges
+/// from the thing that measurement licensed, and an input method does claim events
+/// while a sequence is pending. Nothing else in this crate consumes key releases, so
+/// the forward costs nothing and closes a class of wedged-state-machine failures
+/// that would otherwise be silent.
 fn wire_keys(
     window: &adw::ApplicationWindow,
     core: &Rc<RefCell<Option<WolfCore>>>,
@@ -865,35 +902,150 @@ fn wire_keys(
     palette: &PaletteHandle,
     buffers: &BufferPickerHandle,
     search: &SearchHandle,
-) {
-    let core = core.clone();
-    let picker = picker.clone();
-    let palette = palette.clone();
-    let buffers = buffers.clone();
-    let search = search.clone();
-    let controller = gtk::EventControllerKey::new();
-    controller.connect_key_pressed(move |_controller, keyval, _keycode, state| {
-        // An overlay is open: let its focused widgets handle the key; never forward
-        // to nvim/core.
-        if picker.is_open() || palette.is_open() || buffers.is_open() || search.is_open() {
-            return glib::Propagation::Proceed;
-        }
-        match crate::gdk_key(keyval, state) {
-            Some(event) => {
-                if let Some(core) = core.borrow().as_ref() {
-                    core.send_input(InputEvent::Key(event));
-                    // Counted where the key is actually DELIVERED, so a key the
-                    // overlay guard above swallowed and a key typed at a window with
-                    // no core are both correctly absent from the denominator of the
-                    // report's `wakes/key`.
-                    frame_metrics::note_keystroke();
+) -> gtk::IMMulticontext {
+    // Constructed here rather than passed in: nothing above needs to supply it, and
+    // returning it keeps this function at six parameters.
+    let im = gtk::IMMulticontext::new();
+    // BEFORE `focus_in` below, so the context already has a surface to work against
+    // at the moment it is told it is focused.
+    im.set_client_widget(Some(window));
+
+    {
+        let core = core.clone();
+        let picker = picker.clone();
+        let palette = palette.clone();
+        let buffers = buffers.clone();
+        let search = search.clone();
+        im.connect_commit(move |_im, text| {
+            let overlay_open =
+                picker.is_open() || palette.is_open() || buffers.is_open() || search.is_open();
+            match im_ui::commit_decision(overlay_open, text) {
+                im_ui::CommitDecision::Refuse(reason) => {
+                    eprintln!("wolf-gnome: commit not forwarded: {reason}");
                 }
-                glib::Propagation::Stop
+                im_ui::CommitDecision::Send(events) => {
+                    // A commit that finds no core performs nothing: the close handler
+                    // has already taken it out and the window is tearing down. The
+                    // borrow is taken and released in this one statement's scope, per
+                    // `crates/wolf-gnome/DECISIONS.md`.
+                    if let Some(core) = core.borrow().as_ref() {
+                        for event in events {
+                            core.send_input(InputEvent::Key(event));
+                            // One per Key ACTUALLY sent, so a multi-character commit
+                            // counts N: the counter's contract is keys delivered to
+                            // Neovim, and a committed character is how nearly every
+                            // key is delivered, because the input method filters
+                            // plain printables.
+                            frame_metrics::note_keystroke();
+                        }
+                    }
+                }
             }
-            None => glib::Propagation::Proceed,
-        }
-    });
+        });
+    }
+
+    im.focus_in();
+
+    let controller = gtk::EventControllerKey::new();
+    {
+        let core = core.clone();
+        let picker = picker.clone();
+        let palette = palette.clone();
+        let buffers = buffers.clone();
+        let search = search.clone();
+        let im = im.clone();
+        controller.connect_key_pressed(move |controller, keyval, _keycode, state| {
+            let overlay_open =
+                picker.is_open() || palette.is_open() || buffers.is_open() || search.is_open();
+            // Asked with `None` FIRST: the answer is what licenses the offer, and the
+            // offer cannot be taken back once made.
+            let route = match im_ui::key_route(im_ui::KeyPhase::Press, overlay_open, None) {
+                im_ui::KeyRoute::AskInputMethod => {
+                    // No current event is treated as the input method DECLINING,
+                    // never as it having claimed the key. A missing event is a GTK
+                    // anomaly; falling through to `gdk_key` loses at worst a
+                    // composition, while treating it as claimed loses the keystroke
+                    // outright — so `is_some_and` here, never `map_or(true, …)`.
+                    let filtered = controller
+                        .current_event()
+                        .is_some_and(|event| im.filter_keypress(&event));
+                    im_ui::key_route(im_ui::KeyPhase::Press, overlay_open, Some(filtered))
+                }
+                settled => settled,
+            };
+            match route {
+                // Nothing forwarded, nothing offered, nothing counted.
+                im_ui::KeyRoute::Overlay => glib::Propagation::Proceed,
+                im_ui::KeyRoute::Consumed => glib::Propagation::Stop,
+                im_ui::KeyRoute::Translate => match crate::gdk_key(keyval, state) {
+                    Some(event) => {
+                        if let Some(core) = core.borrow().as_ref() {
+                            core.send_input(InputEvent::Key(event));
+                            // Counted where the key is actually DELIVERED, so a key
+                            // the overlay guard above swallowed, a key the input
+                            // method claimed and a key typed at a window with no core
+                            // are all correctly absent from the denominator of the
+                            // report's `wakes/key`.
+                            frame_metrics::note_keystroke();
+                        }
+                        glib::Propagation::Stop
+                    }
+                    None => glib::Propagation::Proceed,
+                },
+                // Both unreachable on a press, and both spelled out rather than
+                // folded into a `_` so a new `KeyRoute` variant is an E0004 here:
+                // `Ignore` is the RELEASE answer, and the re-ask above was made with
+                // `Some(_)`, which never answers `AskInputMethod`.
+                im_ui::KeyRoute::Ignore | im_ui::KeyRoute::AskInputMethod => {
+                    glib::Propagation::Proceed
+                }
+            }
+        });
+    }
+
+    {
+        let picker = picker.clone();
+        let palette = palette.clone();
+        let buffers = buffers.clone();
+        let search = search.clone();
+        let im = im.clone();
+        controller.connect_key_released(move |controller, _keyval, _keycode, _state| {
+            let overlay_open =
+                picker.is_open() || palette.is_open() || buffers.is_open() || search.is_open();
+            let route = match im_ui::key_route(im_ui::KeyPhase::Release, overlay_open, None) {
+                im_ui::KeyRoute::AskInputMethod => {
+                    // `is_some_and`, for the press handler's reason and not by copy: a
+                    // missing current event means the input method DECLINED. It matters
+                    // less here, since no release is translated either way, but the two
+                    // handlers disagreeing about what a missing event means is exactly
+                    // the kind of drift that makes the offer sequence unreadable.
+                    let filtered = controller
+                        .current_event()
+                        .is_some_and(|event| im.filter_keypress(&event));
+                    im_ui::key_route(im_ui::KeyPhase::Release, overlay_open, Some(filtered))
+                }
+                settled => settled,
+            };
+            // GTK 4's `key-released` is a VOID signal — there is no `Propagation` to
+            // return — so a release the input method claims cannot be stopped and one
+            // it declines needs no action. The whole point of this handler is
+            // therefore the OFFER above, which the overlay arm withholds; the match
+            // stays total and `_`-free so a new route has to be classified here too.
+            match route {
+                im_ui::KeyRoute::Overlay
+                | im_ui::KeyRoute::Consumed
+                | im_ui::KeyRoute::Ignore
+                | im_ui::KeyRoute::AskInputMethod => {}
+                // NEVER `crate::gdk_key`: the press for this same physical key was
+                // already translated and forwarded, so translating the release
+                // forwards a second copy of every key the user types.
+                im_ui::KeyRoute::Translate => {}
+            }
+        });
+    }
+
     window.add_controller(controller);
+    im
 }
 
 /// The handles [`wire_close`] needs, as one struct rather than nine positional
@@ -904,6 +1056,9 @@ struct CloseParts<'a> {
     window: &'a adw::ApplicationWindow,
     /// The live core, taken out and shut down by the handler.
     core: &'a Rc<RefCell<Option<WolfCore>>>,
+    /// This window's input method, focused out and detached from its client widget
+    /// as the LAST thing the handler does — after the core has been taken.
+    im: &'a gtk::IMMulticontext,
     /// The file picker, whose close drops its `FileSearch`.
     picker: &'a PickerHandle,
     /// The command palette, closed for teardown symmetry.
@@ -937,8 +1092,19 @@ struct CloseParts<'a> {
 /// three-arm rule, not this handler's: closing the last window keeps the session,
 /// closing one of several drops that window, and a close during a quit commits
 /// nothing because the quit path already committed everything.
+///
+/// The input-method teardown is the LAST statement, and that ordering is
+/// load-bearing for its own reason: `focus_out` on a context holding a pending
+/// compose sequence may COMMIT it, and running the teardown after
+/// `core.borrow_mut().take()` means such a commit finds `None` and performs nothing
+/// rather than pushing into a core that is being shut down. Clearing the client
+/// widget is what keeps the context from holding the closed window's whole widget
+/// tree alive — `gtk_im_context_set_client_widget` stores the widget in the context,
+/// which the controller closures own and which the window owns, and this application
+/// closes windows routinely.
 fn wire_close(parts: CloseParts<'_>) {
     let core = parts.core.clone();
+    let im = parts.im.clone();
     let picker = parts.picker.clone();
     let palette = parts.palette.clone();
     let buffers = parts.buffers.clone();
@@ -973,6 +1139,10 @@ fn wire_close(parts: CloseParts<'_>) {
                 eprintln!("wolf-gnome: core shutdown error: {err}");
             }
         }
+        // LAST, and after the core is gone: see the doc comment above for both
+        // reasons.
+        im.focus_out();
+        im.set_client_widget(None::<&gtk::Widget>);
         glib::Propagation::Proceed
     });
 }
