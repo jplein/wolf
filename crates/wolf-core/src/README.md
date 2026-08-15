@@ -34,7 +34,7 @@ Spawns and supervises the captive Neovim child, and wraps every RPC core issues 
 
 - `NvimConfig::from_env` resolves the binary and creates the private state root. The config carries an `Arc<TempDir>` guard, so those directories exist only while some clone of the config is alive.
 - `NvimProcess::handle` yields a cloned RPC handle usable without borrowing the process; the browser-preview server re-renders through one.
-- The `setup_*` methods install the nvim-side wiring (autocmds, commands, helpers) behind every out-of-band `wolf_*` notification the redraw handler folds. A respawn has to re-run the whole chain; a fresh nvim emits nothing until it does.
+- The `setup_*` methods install the nvim-side wiring (autocmds, commands, helpers) behind every out-of-band `wolf_*` notification the redraw handler routes. A respawn has to re-run the whole chain; a fresh nvim emits nothing until it does.
 - `NvimError::Timeout` is never constructed here; it comes from `api`'s RPC chokepoint.
 
 **Decisions**
@@ -46,20 +46,20 @@ Spawns and supervises the captive Neovim child, and wraps every RPC core issues 
 
 #### `redraw.rs`
 
-The `nvim-rs` handler: it folds each `redraw` batch into `Snapshot` and routes the out-of-band `wolf_*` notifications into sibling cells and queues.
+The `nvim-rs` handler: folds each `redraw` batch into `Snapshot` and routes the out-of-band `wolf_*` notifications into its sibling cells, queues and the file-search registry.
 
 **Decisions**
 
-- Only `flush` bumps `seq`. Out-of-band notifications fire the wake without bumping it, so a front-end gating on `seq` alone misses every one of them.
-- In `grid_line`, `repeat` counts columns including the first, so an explicit `0` is a real zero-width no-op; clamping it to 1 paints past the event's span, which Neovim's shadow grid never repaints, leaving a wrong-background cell. Neovim also sends a double-width glyph's trailing half as its own empty-text cell, so synthesizing a placeholder shifts the row right.
+- Only `flush` bumps `seq`; out-of-band notifications wake without bumping it, so gating repaint on `seq` alone misses them. `wolf_cwd` and `wolf_fs_changed` wake nothing — the first rides its `:cd`'s redraw flush, the second feeds the `SearchRegistry`, whose sessions wake on a swap.
+- In `grid_line`, `repeat` counts columns including the first, so an explicit `0` is a zero-width no-op; clamping it to 1 paints past the event's span, which Neovim's shadow grid never repaints, leaving a wrong-background cell. A double-width glyph's trailing half arrives as its own empty-text cell, so synthesizing a placeholder shifts the row right.
 - `win_hide` removes the window entry but keeps its grid: Neovim reuses that grid id and may re-`win_pos` without resizing first.
-- A resolved `confirm()` and an invalid-key re-prompt produce byte-identical `cmdline_hide` batches, so the toast is stashed with its prompt and restored only if a later `cmdline_show` prompt matches.
-- The open-file mirror drops terminal buffers from `files` and from `active`, because a front-end replays it as `:edit` after a crash. Measured: the replay does not fail — Neovim re-runs `termopen()`, so each crash silently spawns another shell.
+- A resolved `confirm()` and an invalid-key re-prompt produce byte-identical `cmdline_hide` batches, so the toast is stashed with its prompt and restored only if a later `cmdline_show` matches.
+- The open-file mirror drops terminal buffers: a front-end replays it as `:edit` after a crash. Measured: the replay does not fail — Neovim re-runs `termopen()`, so each crash spawns another shell.
 
 **Gotchas**
 
-- `RedrawHandler` is `Clone`; every clone shares one snapshot, queues and history cell, which is how a respawn keeps them.
-- Lock order: the nav-history fold takes the snapshot write lock first and the nav mutex second with no `.await` between; `WolfCore` takes the nav mutex alone. Reversing either creates a cycle.
+- `RedrawHandler` is `Clone`; clones share one snapshot, queues and history cell, so a respawn keeps them.
+- Lock order: the nav-history fold takes the snapshot write lock then the nav mutex, with no `.await` between; `WolfCore` takes the nav mutex alone. Reversing either cycles.
 
 #### `render.rs`
 
@@ -239,23 +239,22 @@ The four bundled fonts' verbatim licence texts, compiled in. Pure data, no GUI a
 
 #### `files.rs`
 
-Purpose: the streaming file-list traversal behind the picker's `FileSearch` session — a synchronous MRU seed followed by a background `ignore`-crate walk that streams the rest in.
+Purpose: the streaming file-list traversal behind the picker's `FileSearch` session — a synchronous MRU seed, then a background `ignore`-crate walk — plus the `SearchRegistry`, which re-walks live sessions on `wolf_fs_changed`. Traversal rules live in the module doc; the rescan's why is in [DECISIONS.md](../DECISIONS.md).
 
 **Public API**
 
-- `FileEntry` — the canonical definition, re-exported from `mru` and the crate root. `display` is relative to the search root and is what the UI shows and `rank` ranks.
+- `FileEntry` — the canonical definition, re-exported from `mru` and the crate root; `display` is what the UI shows and `rank` ranks.
 - `FileSearch::read` — returns an owned guard, so a reader's borrow may outlive the `FileSearch`.
 
 **Decisions**
 
-- The walk is bounded by `SearchBounds` (entry cap, wall-clock budget, max depth, skipped absolute directories) because the root can fall back to `$HOME`. The three scalar caps read `WOLF_SEARCH_MAX_ENTRIES` / `WOLF_SEARCH_BUDGET_MS` / `WOLF_SEARCH_MAX_DEPTH`, each rejecting zero, so a stray `0` cannot instantly truncate every search.
-- Hitting a cap sets `truncated` (finished but not exhaustive) and still ends the search `complete`, so the picker treats it as done; only a real `cancel` leaves it incomplete. Depth pruning is invisible in `ignore`'s API and sets neither flag.
-- The walker settings (`hidden(false)`, git ignore/global/exclude, `require_git(false)`) reproduce `git ls-files --others --exclude-standard` inside a repo and a plain recursive walk outside one. `follow_links(false)` is what stops a symlink loop from hanging the walk.
-- A symlink is listed only when it resolves to a plain file.
+- The walk is bounded by `SearchBounds` (the `WOLF_SEARCH_*` caps, each rejecting zero) because the root can fall back to `$HOME`. A capped walk ends `truncated` yet `complete`; only a real `cancel` leaves it incomplete.
+- Both walks share the one `walk_files` helper so their rules cannot drift; a rescan reuses the session's original `SearchBounds` and re-seeds from `MruStore::recent`, which prunes rows for deleted files.
+- `needs_rescan` makes `BufWritePost` conditional (rescan only for a path under the root and absent from `seen`); every other trigger forces a re-walk. Hence `append_batch` folds streamed paths into `seen`: seed-only membership would make every `:w` of a walk-discovered file a spurious walk.
 
 **Gotchas**
 
-- The session shape is the shared pattern in [DECISIONS.md](../DECISIONS.md); specific to this one is the synchronous MRU seed, which also seeds the dedup set so a rediscovered recent file is not listed twice.
+- The session shape is the shared pattern in [DECISIONS.md](../DECISIONS.md); specific here is the synchronous MRU seed, which also seeds the dedup set so a rediscovered recent file is not listed twice.
 
 #### `search.rs`
 

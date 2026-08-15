@@ -9539,13 +9539,12 @@ exit 0
 // MARKDOWN-PREVIEW fixtures: a rendered preview pane, its statusbar, its
 // persisted leaf, a LIVE EDIT of the source, and Edit Source's inverse placement.
 //
-// ## Why the placement has to be MODE_ACTIVE, and what it buys
+// ## Why the IN-PLACE Preview is the one this leg uses, and what it buys
 //
 // The scenario opens the OTHER file, splits with `<C-w>v`, opens the Markdown
-// SOURCE in the new pane, and drives Preview from there. `preview_ui::preview_placement`
-// answers `active` for that shape (two panes, an editor active, no other preview),
-// so `wolf_open_preview` REPLACES the source pane's buffer with the preview scratch
-// — and the source's raw text is then displayed in NO pane at all.
+// SOURCE in the new pane, and drives Preview from there. `wolf_open_preview` binds
+// IN PLACE, so it REPLACES the source pane's buffer with the preview scratch — and
+// the source's raw text is then displayed in NO pane at all.
 //
 // That is the whole soundness argument for the body assertion: nvim cannot draw
 // [`PREVIEW_OCR_BODY`] anywhere, the sidebar and the `:e` toast draw FILENAMES, and
@@ -9555,7 +9554,7 @@ exit 0
 // layout is asserted to hold exactly TWO leaves and the readback exactly two
 // windows: two independent statements of the premise, either of which catches it.
 //
-// ## Why the live edit runs AFTER Edit Source rather than before it
+// ## Why the live edit runs AFTER the Edit leg rather than before it
 //
 // Only a SECOND load into a live web view takes the JSON body-swap branch
 // (`pane_view::preview_swap_payload`); the first goes through `load_html` and looks
@@ -9564,13 +9563,14 @@ exit 0
 // all — the measured bug printed `JSON Parse error: Unrecognized token '<'` on every
 // keystroke while the preview silently kept showing the stale document.
 //
-// Editing the source needs the source in a WINDOW, and Edit Source is what puts it
-// back there — into the OTHER pane, which is the leg's own discriminator. The marker
-// is then typed into that pane, where nvim draws it too, so the scenario opens the
-// other file over it before capturing: at capture B the marker's raw text is off
-// screen again and only the preview pane can draw it. Doing the live edit BEFORE
-// the Edit leg would need a `:e` of the source into the other pane, which would
-// satisfy that leg's readback by itself.
+// Editing the source needs the source in a WINDOW, and Edit in Another Pane is what
+// puts it there — in a SPLIT, which is the leg's own discriminator. The in-place
+// `Edit` cannot serve here: it replaces the preview it is fired from, leaving nothing
+// for the live edit to be observed in. The marker is then typed into the new pane,
+// where nvim draws it too, so the scenario opens the other file over it before
+// capturing: at capture B the marker's raw text is off screen again and only the
+// preview pane can draw it. Doing the live edit BEFORE the Edit leg would need a `:e`
+// of the source into another pane, which would satisfy that leg's readback by itself.
 //
 // ## The fixture-naming rule, as everywhere else here
 //
@@ -9671,14 +9671,14 @@ const PREVIEW_OCR_LIVE: &str = "zzlivekilo";
 /// query on screen and satisfy the statusbar assertion with no preview pane in
 /// existence. `prv` cannot.
 ///
-/// ## The two rows are NOT separable, so this query relies on the RANKING
+/// ## The three rows are NOT separable, so this query relies on the RANKING
 ///
-/// `Preview in Browser` is dispatched, so the palette's classification filter removes
-/// neither row, and no query can separate them: `Preview` is a PREFIX of
-/// `Preview in Browser`, so every subsequence of the first is a subsequence of the
-/// second. What makes both preview smokes deterministic is that `Preview` ranks FIRST
-/// — the two rows tie on every ranking key down to display LENGTH, where 7 characters
-/// beat 18 — and that Enter activates the preselected top row.
+/// `Preview in Browser` and `Preview in Another Pane` are dispatched too, so the
+/// palette's classification filter removes no row, and no query can separate them:
+/// `Preview` is a PREFIX of both, so every subsequence of the first is a subsequence
+/// of the others. What makes the preview smokes deterministic is that `Preview` ranks
+/// FIRST — the rows tie on every ranking key down to display LENGTH, where 7
+/// characters beat 18 and 22 — and that Enter activates the preselected top row.
 ///
 /// That premise is pinned executably in the fast suite by
 /// `palette::tests::palette_rows_for_the_preview_smoke_rank_the_named_command_first`,
@@ -9693,19 +9693,41 @@ const PREVIEW_OCR_LIVE: &str = "zzlivekilo";
 /// [`cage_command`]'s `HOME` redirect).
 const PREVIEW_QUERY: &str = "prv";
 
-/// Typed into the palette's search entry to reach the `Edit Source` row.
+/// Typed into the palette's search entry to reach the `Preview in Another Pane` row.
 ///
-/// `edts` is a subsequence of `Edit Source` and of no other palette title, actionable
-/// or not: `Close Window`, `Use full width for content`, `Toggle sidebar`,
-/// `Open Folder…` and `New Window` each carry `e` then `d` but never a later `t`
-/// followed by an `s`. Unlike [`PREVIEW_QUERY`] it really is UNIQUE — one row, not a
-/// top row — which is why its unit-test row claims an unfiltered floor and an
-/// actionable row count of one rather than the other's two.
-const EDIT_QUERY: &str = "edts";
+/// Every smoke that needs the preview BESIDE its source types this rather than
+/// [`PREVIEW_QUERY`], and the reason is the whole pane model: `Preview` binds the
+/// preview into the ACTIVE pane, so from a one-pane window it leaves the preview
+/// alone on screen with no editor pane, no control band and no right half. Only the
+/// other-pane command splits, and a split is what every derived rectangle in those
+/// scenarios is measured against.
+///
+/// Unlike [`PREVIEW_QUERY`] this really is UNIQUE — `prvan` is a subsequence of
+/// `Preview in Another Pane` and of no other title, because neither `Preview` nor
+/// `Preview in Browser` carries an `a` after its `v`. It therefore rests on
+/// uniqueness rather than on a ranking, which is one fewer premise; the fast suite
+/// pins that in
+/// `palette::tests::palette_rows_for_the_preview_smoke_rank_the_named_command_first`
+/// alongside the other two.
+const PREVIEW_OTHER_PANE_QUERY: &str = "prvan";
+
+/// Typed into the palette's search entry to reach the `Edit in Another Pane` row.
+///
+/// `ednap` is a subsequence of `Edit in Another Pane` and of no other palette title,
+/// actionable or not — `Preview in Another Pane`, the one title that shares its tail,
+/// carries no `d` before its `n`. Unlike [`PREVIEW_QUERY`] it really is UNIQUE — one
+/// row, not a top row — which is why its unit-test row claims an unfiltered floor and
+/// an actionable row count of one rather than the other's two.
+///
+/// It reaches the OTHER-PANE Edit rather than the in-place one because the live-edit
+/// leg needs the source in a window WITHOUT losing the preview: the in-place
+/// `edit_source` replaces the preview it is fired from, which would leave steps 6
+/// onward with no preview pane to observe.
+const EDIT_QUERY: &str = "ednap";
 
 /// The two canonical `CommandSpec::id`s the palette records when the `Preview` and
-/// `Edit Source` rows are activated — the smoke's proof that the two queries reached
-/// the rows they name.
+/// `Edit in Another Pane` rows are activated — the smoke's proof that the two queries
+/// reached the rows they name.
 ///
 /// A PRECONDITION rather than a discriminator, and the ordering is why:
 /// `PaletteInner::activate_selection` records BEFORE it dispatches, so a hit here says
@@ -9716,7 +9738,7 @@ const EDIT_QUERY: &str = "edts";
 /// `palette::tests::palette_rows_for_the_preview_smoke_rank_the_named_command_first`
 /// pins the same two ids against the same two queries in the fast suite, which is the
 /// join that keeps this literal honest.
-const PREVIEW_MRU_KEYS: [&str; 2] = ["preview", "edit"];
+const PREVIEW_MRU_KEYS: [&str; 2] = ["preview", "edit_in_other_pane"];
 
 /// Name of the file the captive Neovim writes its window/buffer list into AFTER the
 /// Preview leg. It lands in the temp cwd, so the sidebar draws its name — hence the
@@ -9724,7 +9746,7 @@ const PREVIEW_MRU_KEYS: [&str; 2] = ["preview", "edit"];
 /// every asserted term.
 const PREVIEW_READBACK_A_NAME: &str = "pvwinsa.txt";
 
-/// Name of the same readback taken again AFTER the Edit Source leg.
+/// Name of the same readback taken again AFTER the Edit-in-another-pane leg.
 const PREVIEW_READBACK_B_NAME: &str = "pvwinsb.txt";
 
 /// The prefix `runtime/nvim/init.lua`'s `wolf_ensure_preview_buf` gives a preview
@@ -10095,12 +10117,13 @@ if [ ! -s "$PREVIEW_STATE_SRC" ]; then
 fi
 cp "$PREVIEW_STATE_SRC" "$PREVIEW_STATE_COPY"
 
-# --- Step 5: drive EDIT SOURCE through the same palette ----------------------
+# --- Step 5: drive EDIT IN ANOTHER PANE through the same palette -------------
 #
-# The active pane IS the preview, and exactly one other pane is an editor, so
-# `edit_placement` answers `reuse_editor_pane`: the source binds into the OTHER pane
-# and focus follows it. That is what puts the source back in a window the next step
-# can type into.
+# The active pane IS the preview. `edit_in_other` with a target of 0 SPLITS and binds
+# the source into the new pane, moving focus there and leaving the preview standing.
+# That is what puts the source in a window the next step can type into WITHOUT losing
+# the preview the rest of this scenario observes — which the in-place `edit_source`
+# would replace.
 wtype -M ctrl -M shift -k p -m shift -m ctrl
 sleep "$SETTLE"
 wtype -- "$EDIT_QUERY"
@@ -10420,9 +10443,9 @@ const LINK_CLUSTER_MAX_H_PX: usize = 48;
 ///
 /// ## Why `:WolfPreview` rather than the command palette
 ///
-/// Preview has two routes and this one takes the Ex command, unlike its two sibling
-/// preview smokes. `prv` selects `Preview` AND `Preview in Browser` and is decided by
-/// a ranking tie-break (see [`PREVIEW_QUERY`]); the Ex command names one command and
+/// Preview has two routes and this one takes the Ex command, unlike its sibling
+/// preview smokes. A palette query is matched as a subsequence and can in principle be
+/// reordered by ranking (see [`PREVIEW_QUERY`]); the Ex command names one command and
 /// cannot be reordered by anything. That matters more here than elsewhere because this
 /// smoke's whole geometry — and therefore its measured click point — depends on the
 /// preview landing in the RIGHT half, so a palette that activated the other row would
@@ -10431,9 +10454,9 @@ const LINK_CLUSTER_MAX_H_PX: usize = 48;
 ///
 /// ## Why the preview is deterministically the RIGHT half
 ///
-/// One pane is open when Preview fires, so `preview_ui::preview_placement` takes its
-/// `pane_count <= 1` branch and answers `split_right`, which dominates both of its
-/// other inputs. The rest of the chain is written out on
+/// One pane is open when Preview in Another Pane fires, and it SPLITS: a split of one
+/// pane can only produce two, and the new one is the right half. The rest of the chain
+/// is written out on
 /// [`preview_document_follows_the_configured_appearance_under_cage`] and is not
 /// restated here.
 ///
@@ -10452,7 +10475,7 @@ PREVIEW_SETTLE=2.0
 
 # --- Step 1: the source in the window's ONE pane ----------------------------
 #
-# One pane is what makes the placement `split_right`, which is what puts the preview
+# One pane is what makes the split deterministic, which is what puts the preview
 # in the RIGHT half the click constants were measured against.
 #
 # $LINK_SOURCE_FILE carries its SUBDIRECTORY, and is typed RELATIVE so the buffer's
@@ -10482,10 +10505,12 @@ read_wins() {
     wait_file "$1" || exit 14
 }
 
-# --- Step 2: open the preview, by its Ex command -----------------------------
+# --- Step 2: open the preview BESIDE the source, by its Ex command ------------
 #
-# `:WolfPreview` and not the palette: see this const's doc comment.
-wtype -- ":WolfPreview"
+# An Ex command and not the palette: see this const's doc comment. The OTHER-PANE
+# one, because `:WolfPreview` binds in place and would leave this one-pane window
+# showing only the preview -- with no editor half for the click geometry below.
+wtype -- ":WolfPreviewInOtherPane"
 wtype -k Return
 
 # The COLD open budget: the blocking open_preview RPC, the wake carrying the
@@ -10618,8 +10643,8 @@ const UNSAVED_READBACK_NAME: &str = "unwins.txt";
 ///
 /// ## Why the focus move before the `:e` is load-bearing
 ///
-/// `wolf_open_preview("split_right")` splits and then binds the preview into the NEW
-/// window, so the current window after the Preview leg is the PREVIEW. A `:e` typed
+/// `wolf_preview_in_other` splits and then binds the preview into the NEW window, so
+/// the current window after the Preview leg is the PREVIEW. A `:e` typed
 /// there would replace the preview scratch itself and the smoke would be capturing an
 /// ordinary editor pane. `<C-w>h` moves to the original pane — the one still holding
 /// the untitled buffer — which is the pane the cover file must land in.
@@ -10698,13 +10723,16 @@ wtype -- "i$UNSAVED_MARKER"
 wtype -k Escape
 sleep "$SETTLE"
 
-# --- Step 3: drive PREVIEW through the command palette -----------------------
+# --- Step 3: drive PREVIEW IN ANOTHER PANE through the command palette --------
 #
-# Ctrl+Shift+P, the query, Enter on the preselected top row. Preview has no
-# accelerator row of its own -- the palette and :WolfPreview are its only routes.
+# Ctrl+Shift+P, the query, Enter on the only matching row. The OTHER-PANE command and
+# not plain Preview: this window has ONE pane, and the in-place Preview would bind the
+# scratch into it and leave the untitled buffer displayed nowhere -- so step 4's
+# two-window readback could not hold. Neither command has an accelerator row of its
+# own; the palette and the :Wolf* Ex commands are their only routes.
 wtype -M ctrl -M shift -k p -m shift -m ctrl
 sleep "$SETTLE"
-wtype -- "$PREVIEW_QUERY"
+wtype -- "$PREVIEW_OTHER_PANE_QUERY"
 sleep "$SETTLE"
 wtype -k Return
 sleep "$PREVIEW_SETTLE"
@@ -10719,8 +10747,8 @@ wait_file "$UNSAVED_READBACK" || exit 14
 
 # --- Step 5: move to the SOURCE pane -----------------------------------------
 #
-# The Preview leg left the current window on the PREVIEW (split_right binds into the
-# new split), so without this the :e below would replace the preview scratch itself.
+# The Preview leg left the current window on the PREVIEW (the other-pane bind lands in
+# the new split), so without this the :e below would replace the preview scratch itself.
 wtype -M ctrl -k w -m ctrl
 wtype -k h
 sleep "$SETTLE"
@@ -10936,10 +10964,9 @@ fn smoke_state_dir(cwd: &Path) -> PathBuf {
 /// that forced this split: its launch 1 quits with a preview pane open, so its
 /// `state.json` records a two-leaf layout with a live preview leaf, and launch 2
 /// would then restore TWO panes before its own Preview press. That press's
-/// `preview_ui::preview_placement` input would be `pane_count = 2` rather than `1`,
-/// the placement would be `active` rather than `split_right`, and every derived
-/// rectangle in that smoke — all of which assume the preview is the RIGHT half —
-/// would be aimed at the wrong pane. Worse, it would make a colour claim depend on
+/// split would make THREE panes rather than two, and every derived rectangle in that
+/// smoke — all of which assume the preview is the RIGHT half of two — would be aimed
+/// at the wrong pane. Worse, it would make a colour claim depend on
 /// the restore path, which is a different unit's subject entirely.
 ///
 /// A suffix per launch is what keeps each launch's own persistence its own.
@@ -16910,8 +16937,7 @@ fn command_palette_chord_runs_the_selected_command_under_cage() {
 /// `wolf_open_preview` replaces the source pane's buffer and the source's raw text is
 /// drawn NOWHERE. That is what makes assertion 6 a statement about WebKit's pixels
 /// rather than about nvim's. It is not assumed: assertions 5 and 8 both fail if a
-/// third pane appeared instead, and `preview_ui::tests::preview_placement_table` pins
-/// the rule headlessly. Assertion 5 is ordered AHEAD of the two OCR assertions for
+/// third pane appeared instead. Assertion 5 is ordered AHEAD of the two OCR assertions for
 /// exactly that reason — the premise is established before it is used.
 ///
 /// **Each palette query ranks the row it names FIRST.** Pinned in the fast suite by
@@ -16942,7 +16968,7 @@ fn command_palette_chord_runs_the_selected_command_under_cage() {
 /// | 6 | capture A carries [`PREVIEW_OCR_BODY`] | **discriminator** — the web view rendered the document | delete the `self.load_preview_document(id, &html);` call in `PaneInner::refresh_previews`, leaving the `loaded.set(..)` beneath it so nothing re-arms. The pane still becomes a preview and still gets a view; the view is simply never given a document. | RED, isolated: `capture A did not contain "zzbodyoscar" — the rendered heading of pvsrc.md`. Assertions 3, 4 and 5 stayed green, so the preview really was bound and only the DOCUMENT was missing; the OCR dump beside the failure still carries the `preview:` statusbar line, which is assertion 7 passing over an empty view. |
 /// | 7 | capture A carries [`PREVIEW_OCR_STATUS`] | **discriminator** — a preview pane's statusbar comes from `preview_ui::preview_status` | in `PaneInner::refresh_pane_state`'s `Some(info)` arm, use `core.pane_status(j.grid)` for a preview pane. Preview windows are omitted from `win_buffers`, so it answers `[No Name]`. NOT isolated: it empties `abs_path` too, so assertion 8 would also fail — but 7 is evaluated first. | RED: `capture A did not contain "preview", so no pane's statusbar named itself a preview`. Assertions 3 through 6 stayed green — the web view still rendered its document — so this reddened the statusbar alone, and assertion 8 went unevaluated exactly as the revert column predicts. |
 /// | 8 | the frozen `state.json`'s two leaves | **discriminator** — `layout_snapshot` persists the per-pane preview flag, against the SOURCE path | set `preview: false` unconditionally in `pane_view::layout_snapshot`'s `LeafContent`, which is the stub this unit replaced. Reddens this alone. | RED, and isolated as claimed: `the frozen state persisted leaves [(Some("pvoth.md"), Some(false)), (Some("pvsrc.md"), Some(false))], not [(Some("pvoth.md"), Some(false)), (Some("pvsrc.md"), Some(true))]`. Assertions 3 through 7 stayed green, so both panes were right on screen and only the PERSISTED flag was wrong — which is the whole reason this one is read from a frozen file rather than from pixels. |
-/// | 9 | readback B is `{Preview: <source>, <source>}` | **discriminator** — Edit Source reused the OTHER pane rather than clobbering the preview | write `edit_placement`'s reuse clause as `!p.active_is_preview`, i.e. `preview_placement`'s polarity copied across. The placement becomes `active`, the source replaces the PREVIEW, and the readback carries the other file instead of the preview scratch. | RED, isolated: `after the Edit Source leg the captive Neovim's windows hold ["pvoth.md", "pvsrc.md"], not ["Preview: pvsrc.md", "pvsrc.md"]`. That is the inversion's exact signature — the preview scratch GONE and the other file still open — with assertions 3 through 8 green, so the first half of the scenario was untouched by it. |
+/// | 9 | readback B is `{Preview: <source>, <source>, <other>}` | **discriminator** — Edit-in-another-pane split and bound the source WITHOUT replacing the preview | point `shell::perform`'s `EditInOtherPane` arm at `AppShell::edit_source`, the in-place command. The source then replaces the preview it was fired from, and the readback loses the preview scratch. | not yet measured on this branch: the arm is new here, and the revert is stated for the next red run. |
 /// | 10 | capture B carries [`PREVIEW_OCR_BODY`] | precondition — the preview pane is still showing a document at all | none; it is what separates "the swap failed and froze the stale document" from "the pane went blank" for assertion 11 | n/a |
 /// | 11 | capture B carries [`PREVIEW_OCR_LIVE`] | **discriminator** — the LIVE EDIT reached the DOM through the JSON body swap | in `pane_view::preview_swap_payload`, encode ONCE (`Ok(serde_json::to_string(body)?)` plus the two replacements). `JSON.parse` is then handed HTML, throws `Unrecognized token '<'` on every keystroke, and the preview keeps showing the document assertion 10 just found. **A SECOND revert reaches this assertion, and the paced burst is what admits it:** neuter the `RenderDecision::Arm` arm of `PaneInner::request_preview_render` so it arms nothing. The marker's characters then coalesce into a fire nobody ever runs, and the page carries at most the leading edge's `o`. The two reverts are distinguishable from the app's stderr — the single-encoding one prints `preview body swap failed` once per keystroke, the trailing-edge one prints nothing at all — and from assertion 12, which stays inside its budget under the first and reads a count with no trailing fire in it under the second. | RED, isolated, and with the predicted stderr: `capture B did not contain "zzlivekilo" — the marker typed into the SOURCE buffer while the preview pane was live`, beside five copies of `wolf-gnome: preview body swap failed: about:blank:1:68: SyntaxError: JSON Parse error: Unrecognized token '<'`. Assertion 10 stayed green, which is the frozen-stale-document half of the signature this row names. The trailing-edge revert: RED, isolated, and with the OTHER half of the signature — the same `capture B did not contain "zzlivekilo"` failure, and `preview body swap failed` printed NOT ONCE anywhere in the run, which is what tells the two reverts apart from stderr alone. Assertion 10 stayed green and the OCR dump beside the failure still carries the rendered heading and the `preview:` statusbar, so the pane was live and only the trailing edge was missing. Measured against the scenario INCLUDING step 9, whose burst lands after both captures and disturbs this leg not at all; the run's summed `prev.render` was 2, the cold open and the marker burst's leading edge with no trailing fire in it. |
 /// | 12 | the summed `prev.render` count in this run's own frame-stats report is at most [`PREVIEW_RENDER_BUDGET`] | **discriminator** — the bursts were COALESCED: the whole scenario paid a handful of blocking `render_preview` calls rather than one per keystroke | make `PaneInner::request_preview_render` call `run_preview_render_pass()` unconditionally, which is the per-wake render this unit replaced. Assertion 11 stays GREEN under it — every keystroke renders, so the marker certainly reaches the DOM — and that is exactly the point: only this row and row 13 can see the coalescing at all. | RED, isolated: `counts 61 blocking "prev.render" calls over all 14 report block(s), above the budget of 20`. Assertions 1 through 11 stayed green under it — assertion 11 included, which is this row's own claim, and the reason the row exists. Green runs of the same scenario read 7, 7 and 8, so the budget sits at least 12 above the coalesced reading and 41 below the uncoalesced one and needed no moving. |
@@ -17091,7 +17117,7 @@ fn preview_pane_renders_and_edit_source_returns_under_cage() {
             recent.iter().any(|k| k == key),
             "{SMOKE}: the command MRU at {} does not hold {key:?}; it holds {recent:?}. Both \
              palette rows must have been activated — {PREVIEW_QUERY:?} for `preview` and \
-             {EDIT_QUERY:?} for `edit`. An EMPTY list means neither palette ever opened or Enter \
+             {EDIT_QUERY:?} for `edit_in_other_pane`. An EMPTY list means neither palette ever opened or Enter \
              activated nothing; a list holding ONE of the two names which leg failed; a list \
              holding some OTHER id means a query matched a row it does not name, which \
              `palette::tests::palette_rows_for_the_preview_smoke_rank_the_named_command_first` \
@@ -17279,15 +17305,18 @@ fn preview_pane_renders_and_edit_source_returns_under_cage() {
         ),
     }
 
-    // --- Assertion 9 (discriminator): Edit Source REUSED the editor pane ------
+    // --- Assertion 9 (discriminator): Edit-in-another-pane SPLIT, and the -----
+    //     preview SURVIVED
     //
-    // The active pane was the preview and exactly one other pane was an editor, so
-    // `edit_placement` must answer `reuse_editor_pane`: the source binds into the
-    // OTHER pane and the preview survives. Both facts are in this one comparison.
+    // `edit_in_other(0)` splits and binds the source into the new pane, so all three
+    // buffers stand: the preview scratch, the source it renders, and the file the
+    // first pane still holds. Both facts — a third window appeared, and the preview
+    // was not the thing replaced — are in this one comparison.
     let want_edit = {
         let mut want = vec![
             format!("{PREVIEW_READBACK_PREFIX}{PREVIEW_SOURCE_FILE}"),
             PREVIEW_SOURCE_FILE.to_string(),
+            PREVIEW_OTHER_FILE.to_string(),
         ];
         want.sort();
         want
@@ -17295,14 +17324,15 @@ fn preview_pane_renders_and_edit_source_returns_under_cage() {
     let got_edit = read_window_buffer_names(&readback_b, SMOKE);
     assert_eq!(
         got_edit, want_edit,
-        "{SMOKE}: after the Edit Source leg the captive Neovim's windows hold {got_edit:?}, not \
-         {want_edit:?} (both sorted). {PREVIEW_OTHER_FILE:?} still present, with the preview \
-         scratch GONE, is the POLARITY INVERSION: `edit_placement`'s reuse clause written as \
-         `!p.active_is_preview` answers `active`, so the source replaces the preview it was fired \
-         from and the pane the user was reading is the one that gets clobbered. \
-         {PREVIEW_OTHER_FILE:?} present WITH the preview scratch means Edit Source did nothing at \
-         all — check `shell::perform`'s `EditSource` arm and `edit_press`'s preview gate. THREE \
-         entries mean it took `split_left`, i.e. the pane count was read as one."
+        "{SMOKE}: after the Edit-in-another-pane leg the captive Neovim's windows hold \
+         {got_edit:?}, not {want_edit:?} (both sorted). TWO entries with the preview scratch GONE \
+         means the IN-PLACE `edit_source` ran instead of `edit_in_other`: the source replaced the \
+         preview it was fired from, and steps 6 onward have no preview left to observe — check \
+         `shell::perform`'s `EditInOtherPane` arm and that {EDIT_QUERY:?} still selects the \
+         other-pane row. TWO entries with the preview scratch PRESENT means the leg did nothing at \
+         all — check `edit_press`'s preview gate. A missing {PREVIEW_OTHER_FILE:?} means core \
+         reused that window rather than splitting, i.e. a `target_win` other than \
+         `shell::SPLIT_FOR_OTHER_PANE` reached `edit_in_other`."
     );
 
     let ocr_live = ocr_to_lowercase(&out_png);
@@ -17815,8 +17845,8 @@ fn preview_link_click_repoints_the_pane_under_cage() {
              {LINK_BLUE_MIN_MARGIN}`). The rendered LINK is the only thing on that page with \
              that colour, so this means one of: (a) the preview never opened, in which case the \
              pane is an ordinary editor and assertion 4 below is red too — check that \
-             `:WolfPreview` still resolves and that `preview_placement` still answers \
-             `split_right` for one pane; (b) the document rendered but the link was not styled \
+             `:WolfPreviewInOtherPane` still resolves and still splits; (b) the document \
+             rendered but the link was not styled \
              as one, i.e. `markdown.rs` stopped emitting an `<a>` or the theme's link colour \
              changed; (c) the appearance is not `dark`, so the light palette's link colour is on \
              screen instead — {SMOKE_APPEARANCE:?} is what `write_smoke_config` seeds. PNG kept \
@@ -17973,10 +18003,9 @@ fn preview_link_click_repoints_the_pane_under_cage() {
 /// fresh temp cwd; see [`UNSAVED_BUFFER_NAME`] for why the freshness matters.
 ///
 /// **The palette's `prv` row is the one that runs.** `prv` matches `Preview` AND
-/// `Preview in Browser`, and what makes it deterministic is the RANKING plus a fresh
-/// command MRU — pinned in the fast suite by
+/// `Preview in Another Pane` is reached by [`PREVIEW_OTHER_PANE_QUERY`], which is
+/// UNIQUE and needs no ranking — pinned in the fast suite by
 /// `palette::tests::palette_rows_for_the_preview_smoke_rank_the_named_command_first`.
-/// See [`PREVIEW_QUERY`].
 ///
 /// ## Assertions, classified
 ///
@@ -18017,7 +18046,7 @@ fn preview_of_an_unsaved_buffer_renders_under_cage() {
         .env("UNSAVED_MARKER", UNSAVED_MARKER)
         .env("UNSAVED_COVER_FILE", UNSAVED_COVER_FILE)
         .env("UNSAVED_READBACK", &readback)
-        .env("PREVIEW_QUERY", PREVIEW_QUERY)
+        .env("PREVIEW_OTHER_PANE_QUERY", PREVIEW_OTHER_PANE_QUERY)
         .status()
         .expect("failed to spawn `cage` for the headless unsaved-buffer preview scenario");
 
@@ -18059,13 +18088,13 @@ fn preview_of_an_unsaved_buffer_renders_under_cage() {
         "{SMOKE}: after the Preview leg the captive Neovim's windows hold {got:?}, not {want:?} \
          (both sorted, so window order is not the subject). A single entry with no \
          `{PREVIEW_READBACK_PREFIX}` row means the palette dispatched nothing: check that \
-         {PREVIEW_QUERY:?} still ranks `Preview` first (the fast suite pins it) and that \
-         `shell::perform` still has its `OpenPreview` arm. A DIFFERENT `Untitled N.md` index \
+         {PREVIEW_OTHER_PANE_QUERY:?} still selects `Preview in Another Pane` (the fast suite \
+         pins it) and that `shell::perform` still has its `PreviewInOtherPane` arm. A DIFFERENT `Untitled N.md` index \
          means the collision check found something in the temp cwd — a stale swap file or an \
          on-disk `Untitled.md` — which would make this a fixture problem rather than a preview \
          one; `make_temp_cwd` gives every run a fresh directory precisely so that cannot happen. \
-         THREE entries mean the placement split a third pane instead of answering `split_right` \
-         for a one-pane window. Note the NAMING revert does not reach this assertion at all: an \
+         A SINGLE entry naming only the preview scratch means the IN-PLACE Preview ran instead \
+         of the other-pane one, so the untitled buffer is displayed nowhere. Note the NAMING revert does not reach this assertion at all: an \
          unnamed buffer makes `fnamemodify(bufname(b), ':t')` the empty string, and \
          `read_window_buffer_names` panics on it first with \"a window is bound to an unnamed \
          buffer\" — which is the same finding said one step earlier, not a different one."
@@ -23700,7 +23729,7 @@ fn find_link_cluster(capture: &Capture, rect: SampleRect) -> Option<LinkCluster>
 /// absolute output pixels.
 ///
 /// Built from the same pane area [`preview_theme_pane_area`] gives, because the two
-/// smokes put their preview in the same half by the same `split_right` placement and
+/// smokes put their preview in the same half by the same other-pane split and
 /// duplicating that arithmetic would be two things to keep in step. It is inset from
 /// ALL FOUR of the preview pane's edges — see [`LINK_SEARCH_INSET_X_PX`] for the ring
 /// the horizontal inset clears, and [`BAND_BOTTOM_CLEARANCE_PX`] for what the bottom
@@ -24120,20 +24149,23 @@ run_launch() {
 
     # --- Step 1: open the SOURCE in the window's ONE pane --------------------
     #
-    # One pane is what makes the placement deterministic: `preview_placement`
-    # answers `split_right` for a pane count of 1 whatever the two preview inputs
-    # say. See the smoke's doc comment for the rest of that chain.
+    # One pane is what makes the geometry deterministic: the other-pane Preview in
+    # step 2 splits it, and a split of ONE pane can only produce two. See the
+    # smoke's doc comment for the rest of that chain.
     wtype -- ":e $SRC_FILE"
     wtype -k Return
     sleep "$SETTLE"
 
-    # --- Step 2: drive PREVIEW through the command palette -------------------
+    # --- Step 2: drive PREVIEW IN ANOTHER PANE through the command palette ----
     #
-    # Ctrl+Shift+P, the query, Enter. Preview has no accelerator row of its own, so
-    # the palette and the :WolfPreview Ex command are its only two routes.
+    # Ctrl+Shift+P, the query, Enter. The OTHER-PANE command and not plain Preview:
+    # Preview binds in place, so from one pane it would leave no editor pane for
+    # assertion 4's control band and no right half for assertion 5's sample band.
+    # Neither has an accelerator row of its own, so the palette and the :Wolf* Ex
+    # commands are their only two routes.
     wtype -M ctrl -M shift -k p -m shift -m ctrl
     sleep "$SETTLE"
-    wtype -- "$PREVIEW_QUERY"
+    wtype -- "$PREVIEW_OTHER_PANE_QUERY"
     sleep "$SETTLE"
     wtype -k Return
     sleep "$PREVIEW_SETTLE"
@@ -24211,9 +24243,9 @@ exit 0
 /// The whole geometry rests on this and it is not obvious, so it is written out
 /// rather than assumed. Each launch opens the source in the window's ONE pane, so:
 ///
-/// 1. `preview_ui::preview_placement` takes its `pane_count <= 1` branch and answers
-///    `MODE_SPLIT_RIGHT`. That branch DOMINATES both preview inputs, so nothing about
-///    what the pane holds can change the answer.
+/// 1. Preview in Another Pane passes `shell::SPLIT_FOR_OTHER_PANE` (`0`), so core
+///    SPLITS rather than reusing a window. Nothing about what the pane holds can
+///    change that: this front end never nominates a target window.
 /// 2. The Lua's `wolf_do_split('v')` emits a Split intent naming the ORIGINAL window
 ///    as `from`.
 /// 3. `pane_view::apply_split` builds `Frame::Split { children: [Leaf(target),
@@ -24346,8 +24378,8 @@ fn preview_document_follows_the_configured_appearance_under_cage() {
         state_light,
         "{SMOKE}: both runs were pointed at the SAME state directory {}. Launch 1 quits with a \
          preview pane open, so its `state.json` records a two-leaf layout with a live preview leaf \
-         — which launch 2 would then RESTORE, making its own Preview press a two-pane placement \
-         (`active`, not `split_right`) and putting its preview in a pane none of the derived \
+         — which launch 2 would then RESTORE, so its own Preview press would split a SECOND \
+         time and put its preview in a pane none of the derived \
          rectangles below is aimed at. See `smoke_state_dir_at`.",
         state_dark.display()
     );
@@ -24363,7 +24395,7 @@ fn preview_document_follows_the_configured_appearance_under_cage() {
     let mut cmd = cage_command(PREVIEW_THEME_SCENARIO, &cwd);
     cmd.env("WOLF_BIN", bin)
         .env("SRC_FILE", PREVIEW_THEME_SOURCE_FILE)
-        .env("PREVIEW_QUERY", PREVIEW_QUERY)
+        .env("PREVIEW_OTHER_PANE_QUERY", PREVIEW_OTHER_PANE_QUERY)
         .env("CONFIG_DIR_DARK", &config_dark)
         .env("CONFIG_DIR_LIGHT", &config_light)
         .env("STATE_DIR_DARK", &state_dark)
@@ -24436,8 +24468,9 @@ fn preview_document_follows_the_configured_appearance_under_cage() {
              {want_windows:?} (both sorted, so window order is not the subject). A SINGLE entry \
              naming {PREVIEW_THEME_SOURCE_FILE:?} means no preview was bound at all — the palette \
              dispatched nothing, or `shell::perform` has no `OpenPreview` arm, or the \
-             {PREVIEW_QUERY:?} query matched no row. A SINGLE entry naming the preview scratch \
-             means the placement was `active` rather than `split_right`: the preview replaced the \
+             {PREVIEW_OTHER_PANE_QUERY:?} query matched no row. A SINGLE entry naming the \
+             preview scratch means the IN-PLACE Preview ran rather than the other-pane one: the \
+             preview replaced the \
              window's only pane, so there is no editor pane for assertion 4's control band and no \
              right half for assertion 5's sample band. THREE entries mean it split twice, which \
              also moves the preview out of the right half. Every rectangle below is derived on the \
@@ -24540,7 +24573,7 @@ fn assert_preview_theme_launch(smoke: &str, launch: &ThemeLaunch<'_>) {
          {CONTROL_MAX_THEME_FRACTION} ceiling. Two readings are possible and they are told apart \
          by the size of the number. A fraction near 1.0 means the two panes are the wrong way \
          round: the preview landed LEFT, so this band is inside the web view and the smoke's whole \
-         geometry is inverted — check `preview_ui::preview_placement`, `pane_view::apply_split`'s \
+         geometry is inverted — check `pane_view::apply_split`'s \
          child order and `PaneTree::pane_rects`. A fraction just above the ceiling means the \
          captive Neovim's own background has COLLIDED with the preview theme's, at which point \
          assertion 6 below can no longer tell the pane chrome from the document. The response to \
@@ -25139,20 +25172,23 @@ wait_file() {
 
 # --- Step 1: open the SOURCE in the window's ONE pane ------------------------
 #
-# One pane is what makes the placement deterministic: `preview_placement` answers
-# `split_right` for a pane count of 1 whatever the two preview inputs say, so the
-# preview is the RIGHT half and the derived rectangles mean what they say.
+# One pane is what makes the geometry deterministic: the other-pane Preview below
+# splits it, a split of ONE pane can only produce two, and the new pane is the RIGHT
+# half -- so the derived rectangles mean what they say.
 wtype -- ":e $SRC_FILE"
 wtype -k Return
 sleep "$SETTLE"
 
-# --- Step 2: drive PREVIEW through the command palette -----------------------
+# --- Step 2: drive PREVIEW IN ANOTHER PANE through the command palette --------
 #
-# Ctrl+Shift+P, the query, Enter. Preview has no accelerator row of its own, so the
-# palette and the :WolfPreview Ex command are its only two routes.
+# Ctrl+Shift+P, the query, Enter. The OTHER-PANE command and not plain Preview:
+# Preview binds in place, so from this window's one pane it would leave no second
+# pane and the derived rectangles below would name nothing. Neither has an
+# accelerator row of its own, so the palette and the :Wolf* Ex commands are their
+# only two routes.
 wtype -M ctrl -M shift -k p -m shift -m ctrl
 sleep "$SETTLE"
-wtype -- "$PREVIEW_QUERY"
+wtype -- "$PREVIEW_OTHER_PANE_QUERY"
 sleep "$SETTLE"
 wtype -k Return
 sleep "$PREVIEW_SETTLE"
@@ -25355,7 +25391,7 @@ fn preview_highlights_a_fenced_code_block_under_cage() {
         // directory it set — the same override two smokes make for `HOME`.
         .env("WOLF_CONFIG_DIR", &config)
         .env("SRC_FILE", CODEHL_SOURCE_FILE)
-        .env("PREVIEW_QUERY", PREVIEW_QUERY)
+        .env("PREVIEW_OTHER_PANE_QUERY", PREVIEW_OTHER_PANE_QUERY)
         .env("HL_LANG", CODEHL_HL_LANG)
         .env("OUT_PNG", &out_png)
         .env("WINS", &wins)
@@ -25404,9 +25440,10 @@ fn preview_highlights_a_fenced_code_block_under_cage() {
         "{SMOKE}: after the Preview leg the captive Neovim's windows hold {got_windows:?}, not \
          {want_windows:?} (both sorted, so window order is not the subject). A SINGLE entry naming \
          {CODEHL_SOURCE_FILE:?} means no preview was bound at all — the palette dispatched \
-         nothing, or the {PREVIEW_QUERY:?} query matched no row. A SINGLE entry naming the preview \
-         scratch means the placement was `active` rather than `split_right`, so the preview \
-         replaced the window's only pane and there is no right half for the sampled columns. THREE \
+         nothing, or the {PREVIEW_OTHER_PANE_QUERY:?} query matched no row. A SINGLE entry naming \
+         the preview scratch means the IN-PLACE Preview ran rather than the other-pane one, so the \
+         preview replaced the window's only pane and there is no right half for the sampled \
+         columns. THREE \
          entries mean it split twice. Every rectangle below assumes exactly two side-by-side \
          panes, so none of them means anything until this holds."
     );
@@ -25915,10 +25952,14 @@ wtype -- ":e $SRC_FILE"
 wtype -k Return
 sleep "$SETTLE"
 
-# --- Step 2: drive PREVIEW through the command palette -----------------------
+# --- Step 2: drive PREVIEW IN ANOTHER PANE through the command palette --------
+#
+# The OTHER-PANE command and not plain Preview: Preview binds in place, so from this
+# window's one pane it would leave no second pane and the bands below would have no
+# right half to sample.
 wtype -M ctrl -M shift -k p -m shift -m ctrl
 sleep "$SETTLE"
-wtype -- "$PREVIEW_QUERY"
+wtype -- "$PREVIEW_OTHER_PANE_QUERY"
 sleep "$SETTLE"
 wtype -k Return
 sleep "$PREVIEW_SETTLE"
@@ -26022,7 +26063,7 @@ fn preview_inline_code_keeps_the_baseline_grid_under_cage() {
     cmd.env("WOLF_BIN", bin)
         .env("WOLF_CONFIG_DIR", &config)
         .env("SRC_FILE", CODEGRID_SOURCE_FILE)
-        .env("PREVIEW_QUERY", PREVIEW_QUERY)
+        .env("PREVIEW_OTHER_PANE_QUERY", PREVIEW_OTHER_PANE_QUERY)
         .env("OUT_PNG", &out_png)
         .env("WINS", &wins);
 
@@ -26059,9 +26100,9 @@ fn preview_inline_code_keeps_the_baseline_grid_under_cage() {
         got_windows, want_windows,
         "{SMOKE}: after the Preview leg the captive Neovim's windows hold {got_windows:?}, not \
          {want_windows:?} (both sorted). A SINGLE entry naming {CODEGRID_SOURCE_FILE:?} means no \
-         preview was bound at all; a SINGLE entry naming the preview scratch means the placement \
-         was `active` rather than `split_right`, so there is no right half for the sampled columns \
-         to be inside. Every rectangle below assumes exactly two side-by-side panes."
+         preview was bound at all; a SINGLE entry naming the preview scratch means the IN-PLACE \
+         Preview ran rather than the other-pane one, so there is no right half for the sampled \
+         columns to be inside. Every rectangle below assumes exactly two side-by-side panes."
     );
 
     let preview_columns = preview_theme_preview_columns();
@@ -26548,9 +26589,9 @@ sleep "$SETTLE"
 
 # --- Step 3: drive PREVIEW through the command palette -----------------------
 #
-# Ctrl+Shift+P, the query, Enter. With two panes and no preview yet,
-# `preview_placement` answers `active`: the preview replaces the pane the source is
-# in, which is the RIGHT one. See the smoke's doc comment for the whole chain.
+# Ctrl+Shift+P, the query, Enter. The IN-PLACE Preview here, deliberately: it replaces
+# the pane the source is in, which is the RIGHT one. See the smoke's doc comment for
+# the whole chain.
 wtype -M ctrl -M shift -k p -m shift -m ctrl
 sleep "$SETTLE"
 wtype -- "$PREVIEW_QUERY"
@@ -26888,8 +26929,8 @@ fn file_picker_covers_the_live_preview_under_cage() {
          {PICKOVER_SOURCE_FILE:?} and {PICKOVER_OTHER_FILE:?} with NO preview scratch mean no \
          preview was bound at all — the palette dispatched nothing, `shell::perform` has no \
          `OpenPreview` arm, or the {PREVIEW_QUERY:?} query matched no row. A SINGLE entry means the \
-         `<C-w>v` split never happened, so there is one pane, `preview_placement` answered \
-         `split_right` instead of `active`, and the preview is not where every rectangle below \
+         `<C-w>v` split never happened, so the in-place bind replaced the window's only pane \
+         and the preview is not where every rectangle below \
          assumes it is. THREE entries mean it split twice. The whole geometry below is derived on \
          the assumption of exactly two side-by-side panes with the preview in the RIGHT one, so \
          none of it means anything until this holds."
@@ -37919,16 +37960,20 @@ sleep "$SETTLE"
 
 # --- Step 1: open the SOURCE in the window's ONE pane ------------------------
 #
-# One pane is what makes the placement deterministic: `preview_placement` answers
-# `split_right` for a pane count of 1 whatever the two preview inputs say.
+# One pane is what makes the geometry deterministic: the other-pane Preview below
+# splits it, and a split of ONE pane can only produce two.
 wtype -- ":e $SRC_FILE"
 wtype -k Return
 sleep "$SETTLE"
 
-# --- Step 2: drive PREVIEW through the command palette -----------------------
+# --- Step 2: drive PREVIEW IN ANOTHER PANE through the command palette --------
+#
+# The OTHER-PANE command and not plain Preview: Preview binds in place, so from this
+# window's one pane it would leave no second pane and the bands below would have no
+# right half to sample.
 wtype -M ctrl -M shift -k p -m shift -m ctrl
 sleep "$SETTLE"
-wtype -- "$PREVIEW_QUERY"
+wtype -- "$PREVIEW_OTHER_PANE_QUERY"
 sleep "$SETTLE"
 wtype -k Return
 sleep "$PREVIEW_SETTLE"
@@ -38089,7 +38134,7 @@ fn the_packaged_binary_opens_a_preview_under_cage() {
     let status = packaged_cage_command(PACKAGED_PREVIEW_SCENARIO, &cwd, GtkRuntimeEnv::Scrubbed)
         .env("WOLF_BIN", &bin)
         .env("SRC_FILE", PREVIEW_THEME_SOURCE_FILE)
-        .env("PREVIEW_QUERY", PREVIEW_QUERY)
+        .env("PREVIEW_OTHER_PANE_QUERY", PREVIEW_OTHER_PANE_QUERY)
         .env("OUT_PNG", &out_png)
         .env("WINS", &wins)
         .status()
@@ -38132,8 +38177,8 @@ fn the_packaged_binary_opens_a_preview_under_cage() {
          entry naming {PREVIEW_THEME_SOURCE_FILE:?} means no preview was bound at all — in a \
          PACKAGED run the first thing to check is the palette itself, since the command registry \
          and the Ctrl+Shift+P chord are unaffected by packaging, and the second is whether the web \
-         view could be constructed. A SINGLE entry naming the preview scratch means the placement \
-         was `active` rather than `split_right`. Every rectangle below assumes exactly two \
+         view could be constructed. A SINGLE entry naming the preview scratch means the IN-PLACE \
+         Preview ran rather than the other-pane one. Every rectangle below assumes exactly two \
          side-by-side panes."
     );
 

@@ -588,8 +588,9 @@ fn non_markdown_buffer_reports_no_cursor() {
 /// The `b:wolf_preview_source` guard: a PREVIEW SCRATCH buffer never becomes a
 /// `markdown_cursors` key, even when its filetype IS markdown.
 ///
-/// `wolf_open_preview("split_right")` splits a new pane and binds the preview scratch
-/// into it, leaving that PREVIEW pane current. The scratch is then deliberately made
+/// A typed `:vsplit` first gives the source a second window; `wolf_open_preview()`
+/// then binds the preview scratch IN PLACE into the active (new split) pane,
+/// leaving that PREVIEW pane current. The scratch is then deliberately made
 /// `modifiable` and given `filetype=markdown`, which defeats the INCIDENTAL exclusion
 /// the sibling `wolf_markdown_dirty` autocmd relies on (a scratch never runs filetype
 /// detection, so its filetype is normally `""`). That leaves the EXPLICIT
@@ -613,11 +614,18 @@ fn preview_scratch_buffer_reports_no_cursor() {
         |c| c.line == 1,
     );
 
-    let preview_bufnr = core.open_preview("split_right");
+    // A second pane first (typed `:vsplit`), so the SOURCE keeps a window of its
+    // own once the in-place open_preview() converts the active pane to a preview.
+    ex(&core, "vsplit");
+    poll_snapshot(&core, &waiter, "two live windows after :vsplit", |snap| {
+        (snap.windows.len() >= 2).then_some(())
+    });
+
+    let preview_bufnr = core.open_preview();
     assert!(
         preview_bufnr > 0,
-        "open_preview(\"split_right\") on a markdown buffer must return the preview \
-         scratch bufnr (> 0), got {preview_bufnr}"
+        "open_preview() on a markdown buffer must return the preview scratch bufnr \
+         (> 0), got {preview_bufnr}"
     );
     assert_ne!(
         preview_bufnr, source_bufnr,
@@ -630,7 +638,7 @@ fn preview_scratch_buffer_reports_no_cursor() {
     poll_snapshot(
         &core,
         &waiter,
-        "the freshly split PREVIEW pane to become the active pane",
+        "the in-place-bound PREVIEW pane to become the active pane",
         |snap| snap.is_preview_active().then_some(()),
     );
 
@@ -866,12 +874,13 @@ fn cursor_and_tick_share_the_source_bufnr_key() {
         |c| c.line >= 1,
     );
 
-    // Open the preview so `previews` carries the SAME source bufnr as both maps.
-    let preview_bufnr = core.open_preview("split_right");
+    // Open the preview (IN PLACE, in the sole pane) so `previews` carries the SAME
+    // source bufnr as both maps. The maps are UPSERT-only, so losing the source's
+    // window does not disturb the keys asserted below.
+    let preview_bufnr = core.open_preview();
     assert!(
         preview_bufnr > 0,
-        "open_preview(\"split_right\") must return the preview scratch bufnr, got \
-         {preview_bufnr}"
+        "open_preview() must return the preview scratch bufnr, got {preview_bufnr}"
     );
     let preview_source_bufnrs = poll_snapshot(
         &core,

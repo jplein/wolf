@@ -1,36 +1,31 @@
-//! The pure, GTK-free rulebook for the MARKDOWN PREVIEW pane: where a preview
-//! opens, where its inverse lands the source editor, whether either press may be
-//! issued at all, whether a frame may be rendered, when a bound web view must be
-//! reloaded, and what a preview pane's statusbar reads.
+//! The pure, GTK-free rulebook for the MARKDOWN PREVIEW pane: whether a Preview or
+//! Edit press may be issued at all, whether a frame may be rendered, when a bound
+//! web view must be reloaded, and what a preview pane's statusbar reads.
 //!
 //! A port of `WolfKeyMap`'s `PreviewSeam` and `EditSeam` (see
 //! `crates/wolf-macos/Sources/WolfKeyMap/README.md`), joined into one module
-//! because the two placement
-//! rules are inverses of each other and a reader who has only one of them in front
-//! of them is exactly the reader who inverts the polarity. Data in, data out — no
-//! widget type, no `webkit6::WebView`, no `WolfCore` — which is what lets the whole
-//! rulebook be unit-tested headlessly, the way [`crate::nav_ui`] and
-//! [`crate::clipboard_ui`] are. The widget work of carrying the answers out lives
-//! in [`crate::pane_view`].
+//! because Preview and Edit are inverses decided against the same pane mode, and a
+//! reader who has only one of them in front of them is exactly the reader who
+//! inverts the gate's polarity. Data in, data out — no widget type, no
+//! `webkit6::WebView`, no `WolfCore` — which is what lets the whole rulebook be
+//! unit-tested headlessly, the way [`crate::nav_ui`] and [`crate::clipboard_ui`]
+//! are. The widget work of carrying the answers out lives in
+//! [`crate::pane_view`].
 //!
-//! ## The mode strings are a cross-language contract
+//! ## Placement is not this seam's decision
 //!
-//! [`MODE_SPLIT_RIGHT`] and its four siblings are the exact `mode` argument
-//! `WolfCore::open_preview` / `WolfCore::edit_source` thread into
-//! `runtime/nvim/init.lua`'s `wolf_open_preview(mode)` and `wolf_edit_source(mode)`,
-//! which dispatch on the literal string. A rename here is silently a no-op there:
-//! the Lua falls through to its own `else` branch and binds into the current
-//! window, so the preview replaces the pane the user was reading.
+//! `WolfCore::open_preview` and `WolfCore::edit_source` act IN PLACE on the active
+//! pane; `preview_in_other` and `edit_in_other` take the target window as an
+//! argument. A pane's mode is derived from whether its window appears in
+//! `Snapshot::previews`, never stored, so there is no placement to choose and no
+//! mode argument to thread — see `architecture.md`. Reintroducing a split-or-reuse
+//! rule here would be inventing a decision core does not accept.
 //!
-//! ## The two placements are inverses, and the polarity is the whole difference
-//!
-//! [`preview_placement`] reuses a counterpart pane when the active pane is **not**
-//! a preview; [`edit_placement`] reuses one when the active pane **is**. Both
-//! conditions are defensive: a preview opened from inside a preview pane, or a
-//! source edited from inside an editor pane, would clobber the one pane holding
-//! what the user asked to keep. Copying either condition to the other side is the
-//! single most likely edit here, which is why `the_two_placements_are_inverses`
-//! states the separation over the whole input domain rather than row by row.
+//! [`preview_press`] therefore gates BOTH Preview entry points and [`edit_press`]
+//! both Edit ones: which pane receives the bind is not part of the question either
+//! answers, and splitting the seam in two would leave four rulebooks stating one
+//! rule. That is why their refusal strings name "the preview helpers" rather than a
+//! single Lua function.
 //!
 //! ## The blocking calls
 //!
@@ -116,24 +111,6 @@ use wolf_core::{Liveness, PaneStatus};
 /// and the statusbar read the same way.
 pub const PREVIEW_STATUS_PREFIX: &str = "Preview: ";
 
-/// Open the preview in a NEW pane to the right of the only pane there is.
-pub const MODE_SPLIT_RIGHT: &str = "split_right";
-
-/// Bind the preview (or the source) into the ACTIVE pane, replacing its buffer.
-///
-/// Shared by both placements: it is the same instruction to Neovim either way.
-pub const MODE_ACTIVE: &str = "active";
-
-/// Bind the preview into the OTHER pane, which is already a preview.
-pub const MODE_REUSE_PREVIEW_PANE: &str = "reuse_preview_pane";
-
-/// Open the source editor in a NEW pane to the left of the lone preview, so the
-/// editor lands left and the preview stays right.
-pub const MODE_SPLIT_LEFT: &str = "split_left";
-
-/// Bind the source into the OTHER pane, which is already an editor.
-pub const MODE_REUSE_EDITOR_PANE: &str = "reuse_editor_pane";
-
 /// What a preview pane's web view was last loaded from: the source buffer's
 /// number AND its `changedtick`.
 ///
@@ -147,43 +124,23 @@ pub struct PreviewLoad {
     pub source_tick: u64,
 }
 
-/// The window shape a Preview press is decided against.
-#[derive(Clone, Copy, Debug)]
-pub struct PreviewPlacement {
-    /// The window's live pane count.
-    pub pane_count: usize,
-    /// Whether the ACTIVE pane is itself a preview.
-    pub active_is_preview: bool,
-    /// How many panes OTHER than the active one are previews.
-    pub other_preview_panes: usize,
-}
-
-/// The window shape an Edit press is decided against.
-#[derive(Clone, Copy, Debug)]
-pub struct EditPlacement {
-    /// The window's live pane count.
-    pub pane_count: usize,
-    /// Whether the ACTIVE pane is itself a preview.
-    pub active_is_preview: bool,
-    /// How many panes OTHER than the active one are editors (non-preview).
-    pub other_editor_panes: usize,
-}
-
 /// What pressing Preview does.
 #[derive(Debug, PartialEq, Eq)]
 pub enum PreviewPress {
-    /// Issue the BLOCKING `open_preview` at this placement mode.
-    Open(&'static str),
+    /// Issue the BLOCKING `open_preview`, which binds the preview into the active
+    /// pane.
+    Open,
     /// Do nothing and issue no RPC; the string names why, as a mid-sentence clause
     /// (the [`crate::command_action`] / [`crate::nav_ui`] convention).
     Refuse(&'static str),
 }
 
-/// What pressing Edit Source does.
+/// What pressing Edit does.
 #[derive(Debug, PartialEq, Eq)]
 pub enum EditPress {
-    /// Issue the BLOCKING `edit_source` at this placement mode.
-    Edit(&'static str),
+    /// Issue the BLOCKING `edit_source`, which binds the source back into the
+    /// active pane.
+    Edit,
     /// Do nothing and issue no RPC; the string names why, as a mid-sentence clause.
     Refuse(&'static str),
 }
@@ -208,67 +165,20 @@ pub enum BrowserPress {
     Refuse(&'static str),
 }
 
-/// Where a Preview press opens its pane.
-///
-/// `pane_count <= 1` splits right unconditionally — a degenerate count of `0` falls
-/// here too. Exactly two panes with an EDITOR active and exactly one other preview
-/// reuses that preview. Everything else replaces the active pane's buffer.
-#[must_use]
-pub fn preview_placement(p: PreviewPlacement) -> &'static str {
-    // The pane count is read FIRST and dominates both preview inputs: they describe
-    // a two-pane window, so consulting them for a lone pane would be reading a shape
-    // that does not exist and would replace the only pane the user has.
-    if p.pane_count <= 1 {
-        return MODE_SPLIT_RIGHT;
-    }
-    if p.pane_count == 2 && !p.active_is_preview && p.other_preview_panes == 1 {
-        return MODE_REUSE_PREVIEW_PANE;
-    }
-    MODE_ACTIVE
-}
-
-/// Where an Edit press lands the source editor — [`preview_placement`]'s inverse.
-///
-/// `pane_count <= 1` splits left unconditionally. Exactly two panes with a PREVIEW
-/// active and exactly one other editor reuses that editor. Everything else replaces
-/// the active pane's buffer.
-#[must_use]
-pub fn edit_placement(p: EditPlacement) -> &'static str {
-    // The pane count dominates here too, for the same reason it does on the preview
-    // side.
-    if p.pane_count <= 1 {
-        return MODE_SPLIT_LEFT;
-    }
-    // The polarity is INVERTED relative to `preview_placement`: reuse needs the
-    // ACTIVE pane to BE a preview. Copying that seam's `!p.active_is_preview` across
-    // is the single most likely edit in this file, and it silently swaps rows 3 and 4
-    // of `edit_placement_table` — an Edit fired from the preview pane would clobber
-    // the preview it was fired from.
-    if p.pane_count == 2 && p.active_is_preview && p.other_editor_panes == 1 {
-        return MODE_REUSE_EDITOR_PANE;
-    }
-    MODE_ACTIVE
-}
-
 /// Whether a Preview press may issue its BLOCKING `open_preview` at all.
 ///
 /// TOTAL by construction: a `match` over `Option<Liveness>` with **no `_` arm**,
 /// read BEFORE the `markdown_active` gate (see the module docs). Only
-/// [`Liveness::Alive`] with a Markdown buffer active opens, at the mode
-/// [`preview_placement`] gives for `p`.
+/// [`Liveness::Alive`] with a Markdown buffer active opens.
 #[must_use]
-pub fn preview_press(
-    liveness: Option<Liveness>,
-    markdown_active: bool,
-    p: PreviewPlacement,
-) -> PreviewPress {
+pub fn preview_press(liveness: Option<Liveness>, markdown_active: bool) -> PreviewPress {
     match liveness {
         Some(Liveness::Alive) => {
             if markdown_active {
-                PreviewPress::Open(preview_placement(p))
+                PreviewPress::Open
             } else {
                 PreviewPress::Refuse(
-                    "the buffer being edited is not Markdown, and wolf_open_preview no-ops on \
+                    "the buffer being edited is not Markdown, and the preview helpers no-op on \
                      anything else, so the blocking RPC would be spent to be told nothing happened",
                 )
             }
@@ -291,17 +201,21 @@ pub fn preview_press(
 ///
 /// TOTAL by construction, the same shape as [`preview_press`]: liveness first, then
 /// the `preview_active` gate. Only [`Liveness::Alive`] with a preview pane active
-/// edits, at the mode [`edit_placement`] gives for `p`.
+/// edits.
+///
+/// The `preview_active` gate is [`preview_press`]'s `markdown_active` INVERTED in
+/// spirit — Preview needs a source, Edit needs a preview — and copying either
+/// call's argument across is the likeliest edit in this file.
 #[must_use]
-pub fn edit_press(liveness: Option<Liveness>, preview_active: bool, p: EditPlacement) -> EditPress {
+pub fn edit_press(liveness: Option<Liveness>, preview_active: bool) -> EditPress {
     match liveness {
         Some(Liveness::Alive) => {
             if preview_active {
-                EditPress::Edit(edit_placement(p))
+                EditPress::Edit
             } else {
                 EditPress::Refuse(
                     "the active pane is not a preview, so there is no b:wolf_preview_source to \
-                     return to and wolf_edit_source would find nothing to do",
+                     return to and the edit helpers would find nothing to do",
                 )
             }
         }
@@ -574,68 +488,6 @@ mod tests {
     /// `(liveness, gate)` product.
     const ALL_GATES: [bool; 2] = [true, false];
 
-    /// The pane counts the whole-domain sweeps walk: below the split branch, at it,
-    /// at the reuse branch's exact arity, and two counts above it.
-    const SWEEP_PANE_COUNTS: [usize; 5] = [0, 1, 2, 3, 4];
-
-    /// Both values of `active_is_preview`.
-    const SWEEP_FLAGS: [bool; 2] = [false, true];
-
-    /// The counterpart-pane counts the sweeps walk: none, the one the reuse branch
-    /// requires, and more than one.
-    const SWEEP_COUNTERPARTS: [usize; 3] = [0, 1, 2];
-
-    /// How many placements each sweep visits: five pane counts times two polarities
-    /// times three counterpart counts.
-    ///
-    /// LITERALS rather than the product of the three arrays' lengths, for the reason
-    /// `nav_ui::tests::SWEEP_INPUTS` states: an array that lost an entry shrinks both
-    /// sides of such a comparison together, so it passes while the sweep silently
-    /// covers less than the domain it names.
-    const SWEEP_PLACEMENTS: usize = 5 * 2 * 3;
-
-    /// How many `(pane_count, active_is_preview, other_preview_panes,
-    /// other_editor_panes)` shapes the CROSSED sweep visits: the two counterpart
-    /// counts varied INDEPENDENTLY, because the two seams read different ones and a
-    /// window really can hold, say, one other preview and two other editors.
-    ///
-    /// Literals for the same reason [`SWEEP_PLACEMENTS`] is.
-    const CROSSED_PLACEMENTS: usize = 5 * 2 * 3 * 3;
-
-    /// Every [`PreviewPlacement`] the sweeps walk, in a fixed order.
-    fn all_preview_placements() -> Vec<PreviewPlacement> {
-        let mut out = Vec::new();
-        for pane_count in SWEEP_PANE_COUNTS {
-            for active_is_preview in SWEEP_FLAGS {
-                for other_preview_panes in SWEEP_COUNTERPARTS {
-                    out.push(PreviewPlacement {
-                        pane_count,
-                        active_is_preview,
-                        other_preview_panes,
-                    });
-                }
-            }
-        }
-        out
-    }
-
-    /// Every [`EditPlacement`] the sweeps walk, in a fixed order.
-    fn all_edit_placements() -> Vec<EditPlacement> {
-        let mut out = Vec::new();
-        for pane_count in SWEEP_PANE_COUNTS {
-            for active_is_preview in SWEEP_FLAGS {
-                for other_editor_panes in SWEEP_COUNTERPARTS {
-                    out.push(EditPlacement {
-                        pane_count,
-                        active_is_preview,
-                        other_editor_panes,
-                    });
-                }
-            }
-        }
-        out
-    }
-
     /// Whether `reason` opens like a SENTENCE (`Xy…`) rather than as a mid-sentence
     /// clause. Copied from `clipboard_ui.rs`'s helper of the same name, including
     /// its deliberate allowance for an ALL-CAPS opener such as `GNOME`.
@@ -645,528 +497,6 @@ mod tests {
             return false;
         };
         first.is_uppercase() && second.is_lowercase()
-    }
-
-    // =========================================================================
-    // preview_placement
-    // =========================================================================
-
-    /// One [`preview_placement`] table row.
-    struct PreviewPlacementCase {
-        desc: &'static str,
-        input: PreviewPlacement,
-        expected: &'static str,
-    }
-
-    /// How many named rows the preview placement table carries, as a literal.
-    const NAMED_PREVIEW_PLACEMENT_ROWS: usize = 7;
-
-    /// Pins where a Preview press opens its pane, one row per named shape.
-    ///
-    /// Property: the split branch is `pane_count <= 1` and dominates both preview
-    /// inputs; the reuse branch is scoped to EXACTLY two panes, an editor active and
-    /// EXACTLY one other preview; everything else replaces the active pane.
-    ///
-    /// The four `active` rows are what give the reuse row meaning. Row 4 breaks the
-    /// "an editor is active" clause, rows 5 and 6 break the "exactly one other
-    /// preview" clause from either side of it, and row 7 breaks the "exactly two
-    /// panes" clause — so a seam that dropped any single clause reddens on a row
-    /// that names which clause went, rather than on all of them at once.
-    ///
-    /// Falsifier: change `pane_count <= 1` to `pane_count < 1`. A lone pane then
-    /// takes the `active` branch and the preview replaces the only source pane
-    /// there is, leaving the user's document nowhere on screen.
-    #[test]
-    fn preview_placement_table() {
-        let cases = [
-            PreviewPlacementCase {
-                desc: "0 panes: a degenerate count falls to the split branch, never to active",
-                input: PreviewPlacement {
-                    pane_count: 0,
-                    active_is_preview: false,
-                    other_preview_panes: 0,
-                },
-                expected: MODE_SPLIT_RIGHT,
-            },
-            PreviewPlacementCase {
-                desc: "1 pane: the ordinary first Preview press, and the shape a user meets first",
-                input: PreviewPlacement {
-                    pane_count: 1,
-                    active_is_preview: false,
-                    other_preview_panes: 0,
-                },
-                expected: MODE_SPLIT_RIGHT,
-            },
-            PreviewPlacementCase {
-                desc: "2 panes, editor active, exactly ONE other preview: the ONLY reuse shape",
-                input: PreviewPlacement {
-                    pane_count: 2,
-                    active_is_preview: false,
-                    other_preview_panes: 1,
-                },
-                expected: MODE_REUSE_PREVIEW_PANE,
-            },
-            PreviewPlacementCase {
-                desc: "2 panes but the ACTIVE pane is itself a preview: reuse is declined",
-                input: PreviewPlacement {
-                    pane_count: 2,
-                    active_is_preview: true,
-                    other_preview_panes: 1,
-                },
-                expected: MODE_ACTIVE,
-            },
-            PreviewPlacementCase {
-                desc: "2 panes with NO other preview: there is nothing to reuse",
-                input: PreviewPlacement {
-                    pane_count: 2,
-                    active_is_preview: false,
-                    other_preview_panes: 0,
-                },
-                expected: MODE_ACTIVE,
-            },
-            PreviewPlacementCase {
-                desc: "2 panes with TWO other previews: ambiguous, so reuse is declined",
-                input: PreviewPlacement {
-                    pane_count: 2,
-                    active_is_preview: false,
-                    other_preview_panes: 2,
-                },
-                expected: MODE_ACTIVE,
-            },
-            PreviewPlacementCase {
-                desc: "3 panes: the reuse branch is scoped to exactly two, so this stays active",
-                input: PreviewPlacement {
-                    pane_count: 3,
-                    active_is_preview: false,
-                    other_preview_panes: 1,
-                },
-                expected: MODE_ACTIVE,
-            },
-        ];
-
-        assert_eq!(
-            cases.len(),
-            NAMED_PREVIEW_PLACEMENT_ROWS,
-            "the preview placement table must carry its {NAMED_PREVIEW_PLACEMENT_ROWS} named rows, \
-             not {}. They are not a sample: three of them break one clause of the reuse condition \
-             each, so dropping any single row leaves one clause of that condition unmeasured and a \
-             seam that ignored it would pass.",
-            cases.len()
-        );
-
-        for case in &cases {
-            let got = preview_placement(case.input);
-            assert_eq!(
-                got, case.expected,
-                "preview_placement({:?}) must be {:?}, got {got:?} — {}. The mode string is \
-                 dispatched on LITERALLY by `runtime/nvim/init.lua`'s `wolf_open_preview(mode)`, so \
-                 a wrong one is not a near miss: `split_right` where `active` was meant opens a \
-                 pane the user did not ask for, `active` where `split_right` was meant replaces the \
-                 source they were reading, and `reuse_preview_pane` where `active` was meant binds \
-                 the preview into a pane that is not a preview at all.",
-                case.input, case.expected, case.desc
-            );
-        }
-
-        // The split branch DOMINATES both preview inputs, which no row above can
-        // show: every split row carries the quiet inputs, so a seam that tested the
-        // reuse condition FIRST would satisfy all seven.
-        let dominated = PreviewPlacement {
-            pane_count: 1,
-            active_is_preview: true,
-            other_preview_panes: 1,
-        };
-        assert_eq!(
-            preview_placement(dominated),
-            MODE_SPLIT_RIGHT,
-            "a pane_count of 1 must split right whatever the two preview inputs say. They describe \
-             a two-pane window and cannot both be true here, so a seam that consulted them before \
-             the pane count would be reading a shape that does not exist — and would open the \
-             preview by replacing the window's only pane."
-        );
-    }
-
-    // =========================================================================
-    // edit_placement
-    // =========================================================================
-
-    /// One [`edit_placement`] table row.
-    struct EditPlacementCase {
-        desc: &'static str,
-        input: EditPlacement,
-        expected: &'static str,
-    }
-
-    /// How many named rows the edit placement table carries, as a literal.
-    const NAMED_EDIT_PLACEMENT_ROWS: usize = 7;
-
-    /// Pins where an Edit press lands the source editor, one row per named shape —
-    /// [`preview_placement_table`] mirrored, with the polarity INVERTED.
-    ///
-    /// Property: `pane_count <= 1` splits LEFT unconditionally; the reuse branch is
-    /// exactly two panes with a PREVIEW active and exactly one other editor;
-    /// everything else replaces the active pane.
-    ///
-    /// Falsifier: write the reuse condition as `!p.active_is_preview`, which is
-    /// [`preview_placement`]'s clause copied across. Row 4 is then `reuse_editor_pane`
-    /// and row 3 `active`, so an Edit fired from the preview pane clobbers the
-    /// preview instead of landing in the editor beside it — and an Edit fired from an
-    /// editor pane binds the source into the OTHER editor, silently replacing a
-    /// second file the user had open.
-    #[test]
-    fn edit_placement_table() {
-        let cases = [
-            EditPlacementCase {
-                desc: "0 panes: a degenerate count falls to the split branch, never to active",
-                input: EditPlacement {
-                    pane_count: 0,
-                    active_is_preview: true,
-                    other_editor_panes: 0,
-                },
-                expected: MODE_SPLIT_LEFT,
-            },
-            EditPlacementCase {
-                desc: "1 pane: a lone preview, so the editor needs a new pane to its LEFT",
-                input: EditPlacement {
-                    pane_count: 1,
-                    active_is_preview: true,
-                    other_editor_panes: 0,
-                },
-                expected: MODE_SPLIT_LEFT,
-            },
-            EditPlacementCase {
-                desc: "2 panes, PREVIEW active, exactly ONE other editor: the ONLY reuse shape",
-                input: EditPlacement {
-                    pane_count: 2,
-                    active_is_preview: true,
-                    other_editor_panes: 1,
-                },
-                expected: MODE_REUSE_EDITOR_PANE,
-            },
-            EditPlacementCase {
-                desc: "2 panes but the ACTIVE pane is NOT a preview: reuse is declined (the \
-                       INVERTED clause)",
-                input: EditPlacement {
-                    pane_count: 2,
-                    active_is_preview: false,
-                    other_editor_panes: 1,
-                },
-                expected: MODE_ACTIVE,
-            },
-            EditPlacementCase {
-                desc: "2 panes with NO other editor: there is nothing to reuse",
-                input: EditPlacement {
-                    pane_count: 2,
-                    active_is_preview: true,
-                    other_editor_panes: 0,
-                },
-                expected: MODE_ACTIVE,
-            },
-            EditPlacementCase {
-                desc: "2 panes with TWO other editors: ambiguous, so reuse is declined",
-                input: EditPlacement {
-                    pane_count: 2,
-                    active_is_preview: true,
-                    other_editor_panes: 2,
-                },
-                expected: MODE_ACTIVE,
-            },
-            EditPlacementCase {
-                desc: "3 panes: the reuse branch is scoped to exactly two, so this stays active",
-                input: EditPlacement {
-                    pane_count: 3,
-                    active_is_preview: true,
-                    other_editor_panes: 1,
-                },
-                expected: MODE_ACTIVE,
-            },
-        ];
-
-        assert_eq!(
-            cases.len(),
-            NAMED_EDIT_PLACEMENT_ROWS,
-            "the edit placement table must carry its {NAMED_EDIT_PLACEMENT_ROWS} named rows, not \
-             {}. Rows 3 and 4 are the pair that must never go: they are the two whose expectations \
-             depend on the polarity being INVERTED relative to preview_placement — row 3 reuses \
-             with a preview active, row 4 declines with an editor active — so without them the \
-             two seams could share one implementation and nothing here would notice.",
-            cases.len()
-        );
-
-        for case in &cases {
-            let got = edit_placement(case.input);
-            assert_eq!(
-                got, case.expected,
-                "edit_placement({:?}) must be {:?}, got {got:?} — {}. The mode string is dispatched \
-                 on LITERALLY by `runtime/nvim/init.lua`'s `wolf_edit_source(mode)`: `split_left` \
-                 where `active` was meant opens a pane nobody asked for, `active` where \
-                 `split_left` was meant replaces the lone preview so the preview vanishes, and \
-                 `reuse_editor_pane` where `active` was meant binds the source over a second file \
-                 the user had open in the other pane.",
-                case.input, case.expected, case.desc
-            );
-        }
-
-        // The split branch DOMINATES both inputs here too, for the same reason it
-        // does on the preview side.
-        let dominated = EditPlacement {
-            pane_count: 1,
-            active_is_preview: false,
-            other_editor_panes: 1,
-        };
-        assert_eq!(
-            edit_placement(dominated),
-            MODE_SPLIT_LEFT,
-            "a pane_count of 1 must split left whatever the two inputs say. They describe a \
-             two-pane window and cannot hold here, so a seam that consulted them before the pane \
-             count would be reading a shape that does not exist."
-        );
-    }
-
-    // =========================================================================
-    // the two placements, stated over the whole domain
-    // =========================================================================
-
-    /// Every mode constant, paired with the name a failure should quote.
-    const ALL_MODES: [(&str, &str); 5] = [
-        ("MODE_SPLIT_RIGHT", MODE_SPLIT_RIGHT),
-        ("MODE_ACTIVE", MODE_ACTIVE),
-        ("MODE_REUSE_PREVIEW_PANE", MODE_REUSE_PREVIEW_PANE),
-        ("MODE_SPLIT_LEFT", MODE_SPLIT_LEFT),
-        ("MODE_REUSE_EDITOR_PANE", MODE_REUSE_EDITOR_PANE),
-    ];
-
-    /// The five mode constants are distinct and non-empty, neither placement ever
-    /// answers with the OTHER one's exclusive modes, and the two REUSE branches are
-    /// separated by the polarity of `active_is_preview`.
-    ///
-    /// Property 1 — the RANGES. `preview_placement` ranges over exactly
-    /// `{split_right, reuse_preview_pane, active}` and `edit_placement` over exactly
-    /// `{split_left, reuse_editor_pane, active}`, over all
-    /// [`SWEEP_PLACEMENTS`] inputs each. Asserting the range EXACTLY, rather than
-    /// asserting the absence of the other side's modes, is what stops the rule
-    /// holding vacuously: a seam that returned `MODE_ACTIVE` for everything answers
-    /// with none of the other side's modes and would satisfy a negative-only test
-    /// while making both splits unreachable.
-    ///
-    /// Property 2 — the SEPARATION, over the [`CROSSED_PLACEMENTS`] shapes both seams
-    /// can be handed at once. They never take their reuse branch together, and each
-    /// takes it at exactly ONE value of `active_is_preview` — Preview at `false`, Edit
-    /// at `true`. **The ranges do not imply this and cannot see it.** Measured: with
-    /// `edit_placement`'s reuse clause written as `!p.active_is_preview`, the whole
-    /// `--lib` suite went 253 to 252 passed with `edit_placement_table` the single
-    /// failure, and this test stayed GREEN — an inverted clause still produces all
-    /// three modes, just for different inputs. Property 2 is what closes that, so the
-    /// module docs' claim about the polarity is stated over the whole input domain
-    /// rather than resting on one table row.
-    ///
-    /// The literal values are pinned here rather than left to the constants alone,
-    /// because they are a contract with `runtime/nvim/init.lua`, which dispatches on
-    /// the literal string and falls through to binding the current window when it
-    /// does not recognise one. A rename is silent on the Lua side and would replace
-    /// the pane the user is reading.
-    ///
-    /// Falsifiers, one per property: for the ranges, return [`MODE_SPLIT_RIGHT`] from
-    /// `edit_placement`'s `pane_count <= 1` branch — the copy-paste that the two seams
-    /// sitting in one file invites. For the separation, write `edit_placement`'s reuse
-    /// clause as `!p.active_is_preview`, which is the SAME copy-paste made one clause
-    /// lower down; deleting that clause outright fails it too, from the opposite side
-    /// (an empty polarity set rather than an inverted one).
-    #[test]
-    fn the_two_placements_are_inverses() {
-        // --- the constants themselves ----------------------------------------
-        let mut seen: HashSet<&str> = HashSet::new();
-        for (name, value) in ALL_MODES {
-            assert!(
-                !value.trim().is_empty(),
-                "{name} is empty. It is threaded verbatim into `wolf_open_preview(mode)` / \
-                 `wolf_edit_source(mode)`, whose dispatch is a chain of string comparisons — an \
-                 empty mode matches none of them and falls through to binding the current window."
-            );
-            assert!(
-                seen.insert(value),
-                "{name} ({value:?}) duplicates another mode constant. The Lua dispatcher branches \
-                 on the literal string, so two modes sharing one value are ONE branch: the \
-                 placement decision this seam exists to make would silently stop being made."
-            );
-        }
-        assert_eq!(
-            seen.len(),
-            ALL_MODES.len(),
-            "the {} mode constants collapsed into {} distinct string(s); see the message above for \
-             which pair.",
-            ALL_MODES.len(),
-            seen.len()
-        );
-
-        // The literal values, pinned against `runtime/nvim/init.lua`'s dispatch.
-        assert_eq!(
-            [
-                MODE_SPLIT_RIGHT,
-                MODE_ACTIVE,
-                MODE_REUSE_PREVIEW_PANE,
-                MODE_SPLIT_LEFT,
-                MODE_REUSE_EDITOR_PANE
-            ],
-            [
-                "split_right",
-                "active",
-                "reuse_preview_pane",
-                "split_left",
-                "reuse_editor_pane"
-            ],
-            "the mode strings are a CROSS-LANGUAGE contract: `runtime/nvim/init.lua`'s \
-             `wolf_open_preview` and `wolf_edit_source` compare `mode` against these exact \
-             literals and fall through to binding the CURRENT window when none matches. Renaming \
-             one here compiles, ships, and silently turns every placement into \"replace the pane \
-             the user is looking at\"."
-        );
-
-        // --- preview_placement's range ---------------------------------------
-        let mut probed = 0_usize;
-        let mut preview_modes: HashSet<&str> = HashSet::new();
-        for placement in all_preview_placements() {
-            probed += 1;
-            preview_modes.insert(preview_placement(placement));
-        }
-        assert_eq!(
-            probed, SWEEP_PLACEMENTS,
-            "the preview sweep visited {probed} placements, not the {SWEEP_PLACEMENTS} it claims \
-             to. A SHRUNK domain means the range assertion below is stated over less than the \
-             input space it names."
-        );
-
-        let want_preview: HashSet<&str> = [MODE_SPLIT_RIGHT, MODE_REUSE_PREVIEW_PANE, MODE_ACTIVE]
-            .into_iter()
-            .collect();
-        assert_eq!(
-            preview_modes, want_preview,
-            "preview_placement's range over all {SWEEP_PLACEMENTS} placements must be exactly \
-             {{split_right, reuse_preview_pane, active}}. An EXTRA mode means it answered with an \
-             edit-only mode — `split_left` opens the new pane on the wrong side and \
-             `reuse_editor_pane` binds the preview into the pane holding the user's source. A \
-             MISSING mode means a whole branch is unreachable: no `split_right` means Preview \
-             never opens a second pane and always replaces the source in place."
-        );
-
-        // --- edit_placement's range ------------------------------------------
-        let mut probed = 0_usize;
-        let mut edit_modes: HashSet<&str> = HashSet::new();
-        for placement in all_edit_placements() {
-            probed += 1;
-            edit_modes.insert(edit_placement(placement));
-        }
-        assert_eq!(
-            probed, SWEEP_PLACEMENTS,
-            "the edit sweep visited {probed} placements, not the {SWEEP_PLACEMENTS} it claims to."
-        );
-
-        let want_edit: HashSet<&str> = [MODE_SPLIT_LEFT, MODE_REUSE_EDITOR_PANE, MODE_ACTIVE]
-            .into_iter()
-            .collect();
-        assert_eq!(
-            edit_modes, want_edit,
-            "edit_placement's range over all {SWEEP_PLACEMENTS} placements must be exactly \
-             {{split_left, reuse_editor_pane, active}}. An EXTRA mode is the copy-paste this test \
-             exists for: `split_right` here puts the source editor on the right of the preview, \
-             inverting the one thing the split-left branch is named for, and \
-             `reuse_preview_pane` binds the SOURCE into the preview pane."
-        );
-
-        // MODE_ACTIVE is deliberately shared, and that is a decision rather than an
-        // oversight: it is the same instruction to Neovim on both sides. Stated here
-        // so nobody "completes" the symmetry by inventing a second constant.
-        assert!(
-            preview_modes.contains(MODE_ACTIVE) && edit_modes.contains(MODE_ACTIVE),
-            "both placements must be able to answer MODE_ACTIVE. It is deliberately SHARED — \
-             `nvim_win_set_buf` on the current window is the same instruction whichever direction \
-             asked for it — so splitting it into two constants would add a Lua branch for no \
-             behaviour."
-        );
-
-        // --- the SEPARATION, over the CROSSED domain --------------------------
-        //
-        // The two range assertions above hold for an INVERTED `edit_placement` — an
-        // inverted clause still produces all three of its modes, just for different
-        // inputs — so they say nothing about the polarity at all. This is what does:
-        // over every shape both seams can be handed at once, they never reuse
-        // TOGETHER, and each reuses at exactly ONE value of `active_is_preview`.
-        let mut crossed = 0_usize;
-        let mut preview_reuse_polarities: HashSet<bool> = HashSet::new();
-        let mut edit_reuse_polarities: HashSet<bool> = HashSet::new();
-        for pane_count in SWEEP_PANE_COUNTS {
-            for active_is_preview in SWEEP_FLAGS {
-                for other_preview_panes in SWEEP_COUNTERPARTS {
-                    for other_editor_panes in SWEEP_COUNTERPARTS {
-                        crossed += 1;
-                        let preview = preview_placement(PreviewPlacement {
-                            pane_count,
-                            active_is_preview,
-                            other_preview_panes,
-                        });
-                        let edit = edit_placement(EditPlacement {
-                            pane_count,
-                            active_is_preview,
-                            other_editor_panes,
-                        });
-                        let both_reuse =
-                            preview == MODE_REUSE_PREVIEW_PANE && edit == MODE_REUSE_EDITOR_PANE;
-                        assert!(
-                            !both_reuse,
-                            "both seams took their REUSE branch for one window shape (pane_count = \
-                             {pane_count}, active_is_preview = {active_is_preview}, \
-                             other_preview_panes = {other_preview_panes}, other_editor_panes = \
-                             {other_editor_panes}). They are inverses: Preview reuses a counterpart \
-                             when the active pane is NOT a preview, Edit when it IS, so no single \
-                             window can satisfy both. Both firing means the two conditions agree on \
-                             the polarity — the copy-paste this file's module docs name as the \
-                             single most likely edit here — and an Edit fired from the preview pane \
-                             would clobber the preview it was fired from."
-                        );
-                        if preview == MODE_REUSE_PREVIEW_PANE {
-                            preview_reuse_polarities.insert(active_is_preview);
-                        }
-                        if edit == MODE_REUSE_EDITOR_PANE {
-                            edit_reuse_polarities.insert(active_is_preview);
-                        }
-                    }
-                }
-            }
-        }
-        assert_eq!(
-            crossed, CROSSED_PLACEMENTS,
-            "the crossed sweep visited {crossed} shapes, not the {CROSSED_PLACEMENTS} it claims \
-             to. A SHRUNK domain means the separation below is stated over less than the input \
-             space it names — and the shape most likely to go missing is a two-pane window with \
-             one counterpart of EACH kind, which is the only shape where both reuse branches are \
-             otherwise eligible at once."
-        );
-
-        // Stated as a SET rather than as "never both", because "never both" alone is
-        // satisfied by a seam whose reuse branch is unreachable. An EMPTY set is
-        // exactly that, and it fails here.
-        let editor_active: HashSet<bool> = [false].into_iter().collect();
-        let preview_active: HashSet<bool> = [true].into_iter().collect();
-        assert_eq!(
-            preview_reuse_polarities, editor_active,
-            "preview_placement reused a preview pane at active_is_preview values \
-             {preview_reuse_polarities:?}, and it must be exactly {{false}}. An EMPTY set means the \
-             reuse branch is unreachable, so a second Preview press opens a THIRD pane instead of \
-             re-using the one already showing a preview. A set containing `true` means the clause \
-             lost its negation, and a Preview fired from inside the preview pane binds the new \
-             preview over the pane the user was reading."
-        );
-        assert_eq!(
-            edit_reuse_polarities, preview_active,
-            "edit_placement reused an editor pane at active_is_preview values \
-             {edit_reuse_polarities:?}, and it must be exactly {{true}} — the INVERSE of \
-             preview_placement's {{false}} above. `{{false}}` here is `preview_placement`'s clause \
-             copied across verbatim: Edit then declines to reuse from the preview pane (the one \
-             place it is ever fired from) and replaces that pane's buffer instead, while an Edit \
-             from an editor pane binds the source over a second file the user had open. That is the \
-             single most likely edit in this file, and without this clause \
-             `edit_placement_table`'s row 4 is the only thing that can see it."
-        );
     }
 
     // =========================================================================
@@ -1181,7 +511,7 @@ mod tests {
     /// `clipboard_ui::tests::WantCopy` precedent.
     #[derive(Clone, Copy)]
     enum WantPress {
-        /// The BLOCKING RPC is issued, at the mode the placement function gives.
+        /// The BLOCKING RPC is issued.
         Act,
         /// No RPC at all.
         Refuse,
@@ -1243,25 +573,9 @@ mod tests {
         },
     ];
 
-    /// A lone editor pane — the placement every press row that is not about
-    /// placement carries.
-    const LONE_EDITOR: PreviewPlacement = PreviewPlacement {
-        pane_count: 1,
-        active_is_preview: false,
-        other_preview_panes: 0,
-    };
-
-    /// A lone preview pane, the Edit side's counterpart to [`LONE_EDITOR`].
-    const LONE_PREVIEW: EditPlacement = EditPlacement {
-        pane_count: 1,
-        active_is_preview: true,
-        other_editor_panes: 0,
-    };
-
-    /// Pins the Preview press for every `(Option<Liveness>, markdown_active)` input,
-    /// and pins that an accepted press carries [`preview_placement`]'s own answer.
+    /// Pins the Preview press for every `(Option<Liveness>, markdown_active)` input.
     ///
-    /// Three properties, and the second is the one no other test can see.
+    /// Two properties, and the second is the one no other test can see.
     ///
     /// 1. Only a live core with a Markdown buffer active may issue the BLOCKING
     ///    `open_preview`; the other seven inputs refuse and issue nothing.
@@ -1271,11 +585,6 @@ mod tests {
     ///    liveness match. The two refusal reasons for a dead core then differ, and a
     ///    user whose Neovim has crashed is told their buffer is not Markdown — about
     ///    a snapshot that stopped advancing when the editor did.
-    /// 3. An accepted press carries the placement mode for the shape it was handed,
-    ///    over the whole placement sweep. Stated against `preview_placement` rather
-    ///    than against literals so the two cannot drift; the modes themselves are
-    ///    pinned independently by [`preview_placement_table`], which is what stops
-    ///    this clause holding for two wrong answers that happen to agree.
     #[test]
     fn preview_press_table() {
         assert_eq!(
@@ -1301,15 +610,15 @@ mod tests {
 
         // --- 1: the decision itself ------------------------------------------
         for case in PRESS_CASES {
-            let got = preview_press(case.liveness, case.gate, LONE_EDITOR);
+            let got = preview_press(case.liveness, case.gate);
             match case.want {
                 WantPress::Act => assert_eq!(
                     got,
-                    PreviewPress::Open(MODE_SPLIT_RIGHT),
+                    PreviewPress::Open,
                     "preview_press({}, markdown_active = {}) returned {got:?}, but this input MUST \
-                     open at {MODE_SPLIT_RIGHT:?}. A refusal here makes the Preview command do \
-                     nothing at all on a perfectly healthy editor showing a Markdown file, and \
-                     prints a reason for a hazard that is not present.",
+                     open. A refusal here makes the Preview command do nothing at all on a \
+                     perfectly healthy editor showing a Markdown file, and prints a reason for a \
+                     hazard that is not present.",
                     liveness_name(case.liveness),
                     case.gate
                 ),
@@ -1333,8 +642,8 @@ mod tests {
             if liveness == Some(Liveness::Alive) {
                 continue;
             }
-            let with_gate = preview_press(liveness, true, LONE_EDITOR);
-            let without_gate = preview_press(liveness, false, LONE_EDITOR);
+            let with_gate = preview_press(liveness, true);
+            let without_gate = preview_press(liveness, false);
             assert_eq!(
                 with_gate,
                 without_gate,
@@ -1347,7 +656,7 @@ mod tests {
                 liveness_name(liveness)
             );
         }
-        let alive_gate_shut = preview_press(Some(Liveness::Alive), false, LONE_EDITOR);
+        let alive_gate_shut = preview_press(Some(Liveness::Alive), false);
         assert!(
             matches!(alive_gate_shut, PreviewPress::Refuse(_)),
             "a LIVE core with a non-Markdown buffer active returned {alive_gate_shut:?} rather \
@@ -1355,50 +664,15 @@ mod tests {
              the one arm where the Markdown gate must decide: `wolf_open_preview` no-ops on a \
              non-Markdown buffer, and issuing the blocking RPC to learn that is the cost."
         );
-
-        // --- 3: an accepted press carries the placement's own mode ------------
-        let mut probed = 0_usize;
-        let mut opened: HashSet<&str> = HashSet::new();
-        for placement in all_preview_placements() {
-            probed += 1;
-            let got = preview_press(Some(Liveness::Alive), true, placement);
-            let expected = preview_placement(placement);
-            assert_eq!(
-                got,
-                PreviewPress::Open(expected),
-                "preview_press(Alive, markdown_active = true, {placement:?}) returned {got:?}, but \
-                 an accepted press must carry `preview_placement`'s own answer ({expected:?}). The \
-                 press path and the placement path are the only two answers to \"where does this \
-                 preview go\", and a press that decided for itself would open somewhere the \
-                 placement table never pinned."
-            );
-            let PreviewPress::Open(mode) = got else {
-                unreachable!("the assertion above already required an Open")
-            };
-            opened.insert(mode);
-        }
-        assert_eq!(
-            probed, SWEEP_PLACEMENTS,
-            "the accepted-press sweep visited {probed} placements, not {SWEEP_PLACEMENTS}."
-        );
-        assert!(
-            opened.len() > 1,
-            "every accepted press over all {SWEEP_PLACEMENTS} placements carried the same mode \
-             ({opened:?}), so the clause above holds for a `preview_press` that ignores its \
-             placement argument entirely AND a `preview_placement` that is a constant. The \
-             placement table is what pins the individual modes; this is what proves the press \
-             carries more than one of them."
-        );
     }
 
     // =========================================================================
     // edit_press
     // =========================================================================
 
-    /// Pins the Edit press for every `(Option<Liveness>, preview_active)` input, and
-    /// pins that an accepted press carries [`edit_placement`]'s own answer.
+    /// Pins the Edit press for every `(Option<Liveness>, preview_active)` input.
     ///
-    /// [`preview_press_table`]'s three properties, mirrored. The gate is
+    /// [`preview_press_table`]'s two properties, mirrored. The gate is
     /// `preview_active` here: `wolf_edit_source` reads `b:wolf_preview_source` off
     /// the current buffer and returns 0 unless it is a preview scratch, so an Edit
     /// from an ordinary buffer spends a blocking RPC to be told nothing happened.
@@ -1409,14 +683,14 @@ mod tests {
     fn edit_press_table() {
         // --- 1: the decision itself ------------------------------------------
         for case in PRESS_CASES {
-            let got = edit_press(case.liveness, case.gate, LONE_PREVIEW);
+            let got = edit_press(case.liveness, case.gate);
             match case.want {
                 WantPress::Act => assert_eq!(
                     got,
-                    EditPress::Edit(MODE_SPLIT_LEFT),
+                    EditPress::Edit,
                     "edit_press({}, preview_active = {}) returned {got:?}, but this input MUST \
-                     edit at {MODE_SPLIT_LEFT:?}. A refusal here makes Edit Source do nothing at \
-                     all from a healthy preview pane, which is the ONE surface that pane offers.",
+                     edit. A refusal here makes Edit do nothing at all from a healthy preview \
+                     pane, which is the ONE surface that pane offers.",
                     liveness_name(case.liveness),
                     case.gate
                 ),
@@ -1438,8 +712,8 @@ mod tests {
             if liveness == Some(Liveness::Alive) {
                 continue;
             }
-            let with_gate = edit_press(liveness, true, LONE_PREVIEW);
-            let without_gate = edit_press(liveness, false, LONE_PREVIEW);
+            let with_gate = edit_press(liveness, true);
+            let without_gate = edit_press(liveness, false);
             assert_eq!(
                 with_gate,
                 without_gate,
@@ -1450,43 +724,12 @@ mod tests {
                 liveness_name(liveness)
             );
         }
-        let alive_gate_shut = edit_press(Some(Liveness::Alive), false, LONE_PREVIEW);
+        let alive_gate_shut = edit_press(Some(Liveness::Alive), false);
         assert!(
             matches!(alive_gate_shut, EditPress::Refuse(_)),
             "a LIVE core with an ordinary (non-preview) buffer active returned {alive_gate_shut:?} \
              rather than a refusal, so the clause above compares two refusals that mean nothing. \
              This is the one arm where the preview gate must decide."
-        );
-
-        // --- 3: an accepted press carries the placement's own mode ------------
-        let mut probed = 0_usize;
-        let mut edited: HashSet<&str> = HashSet::new();
-        for placement in all_edit_placements() {
-            probed += 1;
-            let got = edit_press(Some(Liveness::Alive), true, placement);
-            let expected = edit_placement(placement);
-            assert_eq!(
-                got,
-                EditPress::Edit(expected),
-                "edit_press(Alive, preview_active = true, {placement:?}) returned {got:?}, but an \
-                 accepted press must carry `edit_placement`'s own answer ({expected:?}). Deciding \
-                 for itself would land the source editor somewhere the placement table never \
-                 pinned."
-            );
-            let EditPress::Edit(mode) = got else {
-                unreachable!("the assertion above already required an Edit")
-            };
-            edited.insert(mode);
-        }
-        assert_eq!(
-            probed, SWEEP_PLACEMENTS,
-            "the accepted-press sweep visited {probed} placements, not {SWEEP_PLACEMENTS}."
-        );
-        assert!(
-            edited.len() > 1,
-            "every accepted Edit over all {SWEEP_PLACEMENTS} placements carried the same mode \
-             ({edited:?}), so the clause above holds for an `edit_press` that ignores its \
-             placement argument entirely."
         );
     }
 
@@ -1833,7 +1076,7 @@ mod tests {
         for (source, liveness, gate) in probes {
             // Rendered BEFORE the destructuring, because none of the press types is
             // `Copy` and the `else` arm must be able to name what it actually got.
-            let preview = preview_press(liveness, gate, LONE_EDITOR);
+            let preview = preview_press(liveness, gate);
             let preview_shown = format!("{preview:?}");
             let PreviewPress::Refuse(preview_reason) = preview else {
                 panic!(
@@ -1843,7 +1086,7 @@ mod tests {
                      and that is the finding) or the probe no longer selects the arm it names."
                 )
             };
-            let edit = edit_press(liveness, gate, LONE_PREVIEW);
+            let edit = edit_press(liveness, gate);
             let edit_shown = format!("{edit:?}");
             let EditPress::Refuse(edit_reason) = edit else {
                 panic!(

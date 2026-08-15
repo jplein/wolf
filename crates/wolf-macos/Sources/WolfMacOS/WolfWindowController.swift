@@ -503,11 +503,21 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
     bufferPicker?.open()
   }
 
-  /// Switches the active pane to the chosen row's buffer via
-  /// `WolfCoreHandle.switch_buffer` (window-scoped; the active window is resolved
-  /// core-side).
+  /// Opens the chosen row's buffer in the active pane, routed by the pane's
+  /// mode: a PREVIEW pane previews the buffer (`preview_buffer`, falling back to
+  /// a plain `switch_buffer` when the buffer is not previewable — the pane
+  /// converts to edit mode); an EDIT pane switches to it (`switch_buffer`,
+  /// window-scoped; the active window is resolved core-side).
   private func activateBufferRow(_ row: BufferPickerRow) {
-    handle?.switch_buffer(row.bufnr)
+    guard let handle else { return }
+    if let paneContainer, paneContainer.activePaneIsPreview {
+      let activeWin = paneContainer.activeWin
+      if handle.preview_buffer(activeWin, row.bufnr) != 0 {
+        paneContainer.onRenderWake()
+        return
+      }
+    }
+    handle.switch_buffer(row.bufnr)
   }
 
   /// Performs a chosen palette row's action, dispatched by its kind:
@@ -535,8 +545,11 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
   }
 
   /// Presents a native `NSOpenPanel` (files only) as a sheet on this window and,
-  /// on confirmation, opens the chosen file in this window's Neovim (`handle.open`)
-  /// then returns first responder to the editor pane.
+  /// on confirmation, opens the chosen file in this window's Neovim, routed by
+  /// the active pane's mode: a PREVIEW pane previews the file
+  /// (`handle.preview_file`, falling back to `handle.open` when the file is not
+  /// previewable — the pane converts to edit mode); an EDIT pane edits it
+  /// (`handle.open`). Then returns first responder to the editor pane.
   func presentOpenFileDialog() {
     guard let window else { return }
     let panel = NSOpenPanel()
@@ -549,9 +562,24 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
     }
     panel.beginSheetModal(for: window) { [weak self] response in
       guard response == .OK, let url = panel.url else { return }
-      self?.handle?.open(url.path)
+      self?.openChosenFile(url.path)
       self?.refocusEditor()
     }
+  }
+
+  /// Opens `path` in the active pane, routed by the pane's mode (preview mode →
+  /// `preview_file` with the `open` fallback on `0`; edit mode → `open`). The
+  /// shared routing behind the open dialog's confirmation.
+  private func openChosenFile(_ path: String) {
+    guard let handle else { return }
+    if let paneContainer, paneContainer.activePaneIsPreview {
+      let activeWin = paneContainer.activeWin
+      if handle.preview_file(activeWin, path) != 0 {
+        paneContainer.onRenderWake()
+        return
+      }
+    }
+    handle.open(path)
   }
 
   /// Presents a native `NSOpenPanel` (directories only) as a sheet on this window
@@ -628,13 +656,36 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
 
   // MARK: - Edit commands
 
-  /// Copies the current visual-mode selection to the system clipboard. Yanks
-  /// the selection out of the captive Neovim (blocking briefly) and, only when
-  /// the returned text is non-empty, writes it to `NSPasteboard.general`. A
-  /// no-op outside visual mode (the Edit > Copy item is additionally disabled
-  /// there via `AppDelegate.validateMenuItem`).
+  /// Copies the current selection to the system clipboard, from whichever of the TWO
+  /// sources the pure `PreviewCopySeam.copySource` picks — the active pane's preview
+  /// page, or the captive Neovim's visual-mode selection. This is a mechanical switch
+  /// over that decision, and `canCopy` (which `AppDelegate.validateMenuItem` reads)
+  /// is the same decision, so the menu can never claim enabled while Copy yields
+  /// nothing.
+  ///
+  /// The preview branch is fully SYNCHRONOUS: the text was already pushed out of the
+  /// page and cached, so nothing is evaluated or awaited here. It deliberately does
+  /// NOT call `copy_selection()` — that is a blocking RPC that yanks INSIDE Neovim,
+  /// and it would touch registers for a selection that is not Neovim's.
   func copy() {
-    guard let text = handle?.copy_selection().toString(), !text.isEmpty else { return }
+    switch PreviewCopySeam.copySource(
+      previewSelection: activePreviewSelection, isVisualMode: isVisualMode)
+    {
+    case .previewSelection(let text):
+      writeToPasteboard(text)
+    case .neovimVisual:
+      // Yanks out of the captive Neovim (blocking briefly), and writes only when the
+      // returned text is non-empty.
+      guard let text = handle?.copy_selection().toString(), !text.isEmpty else { return }
+      writeToPasteboard(text)
+    case .none:
+      return
+    }
+  }
+
+  /// Replaces `NSPasteboard.general`'s contents with `text`. Shared by both Copy
+  /// sources so the two can never write the pasteboard differently.
+  private func writeToPasteboard(_ text: String) {
     let pasteboard = NSPasteboard.general
     pasteboard.clearContents()
     pasteboard.setString(text, forType: .string)
@@ -764,9 +815,24 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
   func layoutSnapshot() -> SavedPaneNode? { paneContainer?.layoutSnapshot() }
 
   /// Whether this window's active document is in Neovim visual mode
-  /// (`v`/`V`/`<C-v>`). Read by the coordinator's menu validation to enable
-  /// the Edit > Copy command only when there is a selection to copy.
+  /// (`v`/`V`/`<C-v>`). One of the two inputs to `canCopy`; it gates only the
+  /// NEOVIM source of Edit > Copy.
   var isVisualMode: Bool { handle?.is_visual_mode() ?? false }
+
+  /// The selection this window's ACTIVE pane's preview page last pushed, or `nil`
+  /// when the active pane is not a preview or reported no selection. The other input
+  /// to `canCopy`, and one dictionary read (see
+  /// `PaneContainerView.activePaneSelection` for why it keys on the per-view active
+  /// pane).
+  var activePreviewSelection: PreviewCopySeam.Selection? { paneContainer?.activePaneSelection }
+
+  /// Whether Edit > Copy has anything to copy, from EITHER source. Read by the
+  /// coordinator's menu validation; `copy()` switches over the same pure decision
+  /// with the same two inputs, so enablement and action cannot drift apart.
+  var canCopy: Bool {
+    PreviewCopySeam.isCopyEnabled(
+      previewSelection: activePreviewSelection, isVisualMode: isVisualMode)
+  }
 
   /// Whether this window's active buffer is a Markdown file. Read by the
   /// coordinator's menu validation to enable the View > Preview command only on
@@ -774,7 +840,7 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
   var isMarkdownActive: Bool { handle?.is_markdown_active() ?? false }
 
   /// Whether this window's active pane is a PREVIEW pane. Read by the
-  /// coordinator's menu validation to enable the View > Edit Source command only
+  /// coordinator's menu validation to enable the View > Edit command only
   /// from a preview pane.
   var isPreviewActive: Bool { handle?.is_preview_active() ?? false }
 
@@ -859,46 +925,57 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
       currentFlags: entries.map { $0.is_current() })
   }
 
-  /// Opens (or reuses) the Markdown preview pane for the active source buffer.
+  /// Previews the active source buffer IN PLACE: the active pane becomes the
+  /// preview pane (core's `open_preview()`, no placement decision).
   ///
-  /// The placement mode is chosen from this window's live pane/preview state via
-  /// the pure `PreviewSeam.placementMode` (three modes: single pane → new pane to
-  /// the right; two panes whose OTHER pane already previews → reuse THAT preview
-  /// pane rather than clobbering the active editor; every other multi-pane case →
-  /// replace the active pane), then handed to core's `open_preview(mode)`. The
-  /// front-end learns the new/reused pane + the source↔preview mapping on the next
-  /// wake (via `previews()`), so no synchronous window handle is needed here; a
-  /// repaint is requested so the web view surfaces promptly.
+  /// The front-end learns the source↔preview mapping on the next wake (via
+  /// `previews()`), so no synchronous window handle is needed here; a repaint is
+  /// requested so the web view surfaces promptly.
   func openPreview() {
     guard let handle, let paneContainer else { return }
-    let inputs = paneContainer.previewPlacementInputs()
-    let mode = PreviewSeam.placementMode(
-      paneCount: inputs.paneCount,
-      activePaneIsPreview: inputs.activePaneIsPreview,
-      otherPreviewPaneCount: inputs.otherPreviewPaneCount)
-    _ = handle.open_preview(mode)
+    _ = handle.open_preview()
     paneContainer.onRenderWake()
   }
 
-  /// Navigates from the active PREVIEW pane back to its source file (the inverse
-  /// of `openPreview`).
+  /// Navigates from the active PREVIEW pane back to its source file IN PLACE:
+  /// the active pane becomes an edit pane (core's `edit_source()`, no placement
+  /// decision — the inverse of `openPreview`).
   ///
-  /// The placement mode is chosen from this window's live pane/preview state via
-  /// the pure `EditSeam.placementMode` (three modes: single pane → new editor pane
-  /// to the LEFT, preview stays right; two panes whose OTHER pane is an editor →
-  /// bind the source into THAT editor pane and focus it; every other case → replace
-  /// the active preview pane), then handed to core's `edit_source(mode)`. The
-  /// front-end learns the new pane + updated snapshot on the next wake (via
-  /// `previews()` / the current-file notification), so no synchronous window handle
-  /// is needed here; a repaint is requested so the editor surfaces promptly.
+  /// The front-end learns the updated snapshot on the next wake (via
+  /// `previews()` / the current-file notification), so no synchronous window
+  /// handle is needed here; a repaint is requested so the editor surfaces
+  /// promptly.
   func editSource() {
     guard let handle, let paneContainer else { return }
-    let inputs = paneContainer.editPlacementInputs()
-    let mode = EditSeam.placementMode(
-      paneCount: inputs.paneCount,
-      activePaneIsPreview: inputs.activePaneIsPreview,
-      otherEditorPaneCount: inputs.otherEditorPaneCount)
-    _ = handle.edit_source(mode)
+    _ = handle.edit_source()
+    paneContainer.onRenderWake()
+  }
+
+  /// Previews the active pane's Markdown file in ANOTHER pane
+  /// (`:WolfPreviewInOtherPane`): the container resolves the target — prefer the
+  /// pane to the RIGHT, else any other pane, else a split (`0`) — and core
+  /// performs the bind (or the atomic split+bind) via `preview_in_other`. Focus
+  /// stays in the source-editing pane. A no-op when the resolution is `nil` (the
+  /// drawer is focused) or the handle is gone.
+  func previewInOtherPane() {
+    guard let handle, let paneContainer,
+      let target = paneContainer.otherPaneTarget(prefer: .right)
+    else { return }
+    _ = handle.preview_in_other(target)
+    paneContainer.onRenderWake()
+  }
+
+  /// Edits the active preview pane's SOURCE file in ANOTHER pane
+  /// (`:WolfEditInOtherPane`): the container resolves the target — prefer the
+  /// pane to the LEFT, else any other pane, else a split (`0`) — and core
+  /// performs the bind (or the atomic split+bind) via `edit_in_other`, focusing
+  /// the pane now editing the source. A no-op when the resolution is `nil` (the
+  /// drawer is focused) or the handle is gone.
+  func editInOtherPane() {
+    guard let handle, let paneContainer,
+      let target = paneContainer.otherPaneTarget(prefer: .left)
+    else { return }
+    _ = handle.edit_in_other(target)
     paneContainer.onRenderWake()
   }
 

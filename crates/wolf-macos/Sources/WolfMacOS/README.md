@@ -202,21 +202,22 @@ Purpose: The "no folder open" overlay — a full-bleed subview of `PaneContainer
 
 #### `FileTreeView.swift`
 
-Purpose: The file-tree sidebar: an `NSOutlineView` driven by a long-lived `FfiFileSearch`. The cwd appears as a single synthetic root node; a single click opens a file (returning focus to the editor) or toggles a directory, and the current buffer's row is bolded and revealed.
+Purpose: The file-tree sidebar: an `NSOutlineView` driven by a long-lived `FfiFileSearch`. The cwd is a synthetic root; a click opens a file in the active pane or toggles a directory, and the current buffer's row is bolded and revealed.
 
 **Public API**
 
 - `start()` / `close()` — open and drop the tree-search session; `close()` cancels the background traversal.
-- `refresh()` is immediate, `scheduleRefresh()` coalesces to about one reload per frame; `TreeWakeBridge` uses the latter for streaming traversal batches.
+- `refresh()` is immediate, `scheduleRefresh()` coalesces to about one reload per frame; `TreeWakeBridge` uses the latter for traversal batches.
 - `onRenderWake()` — re-roots on a cwd change, then reveals and bolds the current buffer.
 - `setSidebarVisible(_:)` — relays the split item's `isCollapsed` KVO; refresh work is deferred while collapsed.
 
 **Decisions**
 
-- `NSOutlineView` keys expansion and selection on object identity, so one `TreeItem` per `relPath` is cached and the same instance handed back across reloads, its fields refreshed in place. Fresh instances per reload would collapse the tree.
+- `NSOutlineView` keys expansion and selection on object identity, so one `TreeItem` per `relPath` is cached and handed back across reloads, its fields refreshed in place. Fresh instances would collapse the tree.
 - The outline draws a clear background and adds no `NSVisualEffectView`: the enclosing `.sidebar` split item supplies the vibrancy, which would otherwise double up.
-- `reveal(abs:)` expands ancestors top-down before locating the row, because a row exists only once its parent is expanded. An empty `rel_path_for` means the file has not streamed in yet, so the reveal stays pending for the next refresh.
+- `reveal(abs:)` expands ancestors top-down before locating the row, because a row exists only once its parent is expanded. An empty `rel_path_for` means the file has not streamed in yet, so the reveal stays pending.
 - `reroot(to:)` cancels the pending coalesced refresh first — a stale fire would run against the discarded tree.
+- Activating a file routes on the active pane's mode, as the pickers do: a preview pane gets `preview_file`, falling back to `open` on `0`. A bare `open` drops the pane to edit mode.
 
 #### `FontRegistration.swift`
 
@@ -314,22 +315,23 @@ Purpose: The crash/stall overlay — a full-bleed opaque cover over a broken edi
 
 #### `PaneContainerView.swift`
 
-Purpose: The editor area — one flat, flipped `NSView` that paints every split pane itself, owns the pure `PaneTree`, hosts the preview web views and overlays, and is the editor's first responder. The flat-view choice is in [DECISIONS.md](../../DECISIONS.md).
+Purpose: The editor area — one flat, flipped `NSView` that paints every split pane, owns the pure `PaneTree`, hosts the preview web views and overlays, and is the editor's first responder. The flat-view choice is in [DECISIONS.md](../../DECISIONS.md).
 
 **Public API**
 
 - `markRefocusRebind()` / `rebind(tabpageHandle:)` — arm a grid rebind after a tabpage switch or crash restart.
 - `layoutSnapshot()` / `requestLayoutRebuild(_:)` — the snapshot is `nil` for a lone empty pane.
-- `activeWin` — the per-view active window; prefer it over the tabpage-shared `WolfCoreHandle.active_win()`.
+- `activeWin` — the per-view active window, and the key for `activePaneSelection`. Never the tabpage-shared `WolfCoreHandle.active_win()`, which would let a background tab's selection enable Copy here.
+- `otherPaneTarget(prefer:)` — maps `OtherPaneSeam.target` to the window argument for `preview_in_other` / `edit_in_other`: `0` means split, `nil` means no-op.
 
 **Decisions**
 
-- The refocus rebind waits for `handle.active_tabpage()` to match this view's tabpage and skips close detection on that pass: the vacated tabpage's grids are gone and would prune live panes.
+- The refocus rebind waits for `handle.active_tabpage()` to match this view's tabpage and skips close detection that pass: the vacated tabpage's grids are gone and would prune live panes.
 - Web-view frame, occlusion test, and statusbar span come from one `geometry(_:fullWidth:)` call, written together before `needsDisplay`, so no frame paints preview alignment without a web view.
-- A grid is skipped only when an opaque, loaded preview web view fully covers it, and the loaded flag survives reloads, because WebKit keeps displaying the previous document while the next one loads.
-- Scroll direction is the sign of `scrollingDeltaY` alone; it already reflects natural scrolling, so `isDirectionInvertedFromDevice` double-corrects.
+- A grid is skipped only under an opaque, loaded preview web view; that flag survives reloads because WebKit keeps displaying the outgoing document while the next loads.
+- Scroll direction is the sign of `scrollingDeltaY`, which already reflects natural scrolling; `isDirectionInvertedFromDevice` double-corrects.
 - The terminal drawer pane lives in the pane map but outside `tree`, so leaves, neighbours, and splits exclude it.
-- Preview updating is a four-file model this class implements only part of; read [how a preview reaches its web view](../../DECISIONS.md) before changing the strategy switch, the navigation count, or the live-document bookkeeping.
+- Preview updating spans several files; read [how a preview reaches its web view](../../DECISIONS.md) first.
 
 #### `PickerPanel.swift`
 
@@ -464,6 +466,20 @@ Purpose: The `WKScriptMessageHandler` that forwards a preview page's pushed scro
 - A body missing `s` degrades to `0` rather than dropping the message, so a partially decodable push still refreshes the cache.
 - `container` is weak: the web view's `WKUserContentController` retains this handler strongly.
 
+#### `PreviewSelectionHandler.swift`
+
+Purpose: The `WKScriptMessageHandler` that forwards a preview page's pushed selected text, posted by `PreviewCopySeam.selectionScriptJS`, into its `PaneContainerView`'s per-window cache, where Edit > Copy reads it synchronously.
+
+**Public API**
+
+- `init(win:container:)` — `win` is the Neovim window handle identifying the pane in the container's per-window maps.
+
+**Decisions**
+
+- The push direction, and why it cannot be a pull, is in [DECISIONS.md](../../DECISIONS.md).
+- An empty payload is a positive clear and drops the cached entry, while a body `PreviewCopySeam.decodeSelectionMessage` rejects leaves the cache untouched: a malformed message says nothing about the selection, so treating it as a clear would discard a good entry.
+- `container` is weak: the web view's `WKUserContentController` retains this handler strongly.
+
 #### `Project.swift`
 
 Purpose: One captive Neovim instance shared by N views, each bound to one nvim tabpage. Owns the single `WolfCoreHandle` and the per-project wake token. Main-thread-only.
@@ -496,6 +512,7 @@ Purpose: The sidebar content-search panel — a query field and three toggles ab
 - `focusSearchField()` defers `makeFirstResponder` by one runloop tick. Invoked from the Command Palette, the palette's `close()` runs afterwards and ends in `makeFirstResponder(paneContainer)`, clobbering a synchronous focus. Other entry points have no competing refocus, so the one deferral serves every path.
 - `refresh()` rebuilds only when the snapshot version or the char budget has advanced, so repeated batches and idle wakes cost nothing. The budget is part of the gate so a sidebar resize re-windows the lines.
 - Collapsed files are tracked by path so a rebuild preserves them; every other file row expands.
+- Activating a line row routes on the active pane's mode, as the pickers do: a preview pane gets `preview_file`, falling back to `open_at` on `0`. A preview has no cursor, so the match's line and column reach nvim only on the edit path.
 
 #### `SearchWakeBridge.swift`
 
@@ -630,20 +647,21 @@ Purpose: The process-global map from a core's per-project wake token to the `Pro
 
 #### `WolfWindowController.swift`
 
-Purpose: One view — a single tab's whole stack (window, pane container, sidebar, picker overlays, state persistence) bound to a `(project, tabpageHandle)` pair. A tab is its own OS window; several may share a native tab group.
+Purpose: One view — a single tab's whole UI stack, bound to a `(project, tabpageHandle)` pair. A tab is its own OS window; several may share a native tab group.
 
 **Public API**
 
 - `build() -> Bool` — returns `false`, having built nothing, when the tabpage bind is invalid, so the coordinator drops the would-be view.
-- `hasFolder` — false in the empty state; gates the sidebar, the file tree, and the "Open folder…" overlay, since an empty-state window must never scan `home`.
+- `hasFolder` — false in the empty state, gating the sidebar and file tree, since an empty-state window must never scan `home`.
 - `persistedCwd` — the tabpage-local cwd, correct even when this view is not current, unlike `currentCwd`, which follows whichever tabpage is current.
+- `canCopy` — whether Edit > Copy has anything to copy; `copy()` takes the same decision.
 
 **Decisions**
 
 - `project` is held strong so the shared core outlives this view's teardown while a sibling still binds it; the project holds views weakly, so there is no cycle. A view never shuts the core down itself.
-- `teardown()` is idempotent and defers `removeController` to the next runloop turn, capturing `self` strongly on purpose: during `windowWillClose` the coordinator's collection is the last strong reference, so dropping it synchronously frees the `NSWindow` mid-close.
+- `teardown()` is idempotent and defers `removeController` one runloop turn, capturing `self` strongly on purpose: during `windowWillClose` the coordinator's collection is the last strong reference, so dropping it synchronously frees the `NSWindow` mid-close.
 - `window.historyNav = self` is wired explicitly: this is not an `NSWindowController`, so a `target: nil` toolbar action could never reach it through the responder chain.
-- The file tree starts at the end of `build()`, after the sidebar's initial collapse state has seeded the tree's refresh gate, so a restored collapsed sidebar defers its first outline work instead of reloading while hidden.
+- The file tree starts at the end of `build()`, after the sidebar's collapse state has seeded the tree's refresh gate, so a restored collapsed sidebar defers its first outline work instead of reloading while hidden.
 
 #### `main.swift`
 

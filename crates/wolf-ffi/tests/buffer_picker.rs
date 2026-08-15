@@ -33,18 +33,20 @@
 //! Like its siblings, this test needs a pinned nvim (`WOLF_NVIM_BIN` or the
 //! Bazel-staged tree). It **loudly SKIPS** (no-op pass) when none is available.
 //!
-//! ## SINGLE #[test]
+//! ## Test-per-session
 //!
-//! The whole flow lives in ONE `#[test]` because it walks a stateful sequence
-//! against a single embedded Neovim (create buffers, snapshot bufnrs, then
-//! scroll / switch / round-trip a view), mirroring `command_palette.rs`.
+//! Each `#[test]` walks a stateful sequence against its OWN single embedded
+//! Neovim (create buffers, snapshot bufnrs, then observe), mirroring
+//! `command_palette.rs`. The first covers listing/switching/view round-trips;
+//! the second covers the pane-mode UNION listing (one row per file across
+//! edited + previewed, no `Preview: ` scratch rows).
 
 mod common;
 
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use wolf_ffi::{wolf_ffi_start, FfiBufferRow, FfiKeyEvent};
+use wolf_ffi::{wolf_ffi_start, FfiBufferRow, FfiKeyEvent, FfiPreview};
 
 /// Generous overall timeout for nvim `--embed` startup plus each async effect
 /// (buffer creation, the ordered `switch_buffer` RPC, the winsaveview/winrestview
@@ -353,6 +355,206 @@ fn buffer_picker_lists_switches_and_restores_view() {
     wait_for_active_topline(&handle, 0, "top-of-buffer for a never-shown buffer");
 
     // --- 8. Shutdown: clean teardown ----------------------------------------
+    handle.shutdown();
+    drop(tmp);
+}
+
+/// The lowest real WINDOW grid id (grid 1 is the outer/global grid; editor windows
+/// are `>= 2` under `ext_multigrid`). Mirrors `preview.rs`.
+const WINDOW_GRID_MIN: u64 = 2;
+
+/// The two-pane window count reached after a typed `:vsplit`.
+const TWO_PANES: usize = 2;
+
+/// The live editor WINDOW grids (grids `>= WINDOW_GRID_MIN` that are not hidden).
+/// Mirrors `preview.rs::live_window_count`.
+fn live_window_count(handle: &wolf_ffi::WolfCoreHandle) -> usize {
+    handle
+        .windows()
+        .iter()
+        .filter(|w| !w.hidden() && w.grid() >= WINDOW_GRID_MIN)
+        .count()
+}
+
+/// Blocks (bounded by [`FLUSH_TIMEOUT`]) until the attached active frame reports a
+/// non-empty grid (`cols > 0`), the sibling tests' attach handshake.
+fn wait_for_attach(handle: &wolf_ffi::WolfCoreHandle) {
+    let deadline = Instant::now() + FLUSH_TIMEOUT;
+    let mut frame = handle.read_frame();
+    while Instant::now() < deadline {
+        frame = handle.read_frame();
+        if frame.cols() > 0 {
+            break;
+        }
+        sleep(POLL_INTERVAL);
+    }
+    assert!(
+        frame.cols() > 0,
+        "core should attach and report a non-empty active frame (cols, got {})",
+        frame.cols()
+    );
+}
+
+/// Blocks until exactly `n` live editor window grids exist, then asserts it.
+/// Mirrors `preview.rs`.
+fn wait_for_window_count(handle: &wolf_ffi::WolfCoreHandle, n: usize, desc: &str) {
+    let deadline = Instant::now() + FLUSH_TIMEOUT;
+    let mut count = live_window_count(handle);
+    while Instant::now() < deadline {
+        count = live_window_count(handle);
+        if count == n {
+            return;
+        }
+        sleep(POLL_INTERVAL);
+    }
+    assert_eq!(count, n, "there should be {n} live window grids ({desc})");
+}
+
+/// Blocks until `predicate(&previews)` holds on a fresh `previews()` snapshot,
+/// returning that snapshot. Panics with `desc` on timeout. Mirrors `preview.rs`.
+fn wait_for_previews(
+    handle: &wolf_ffi::WolfCoreHandle,
+    desc: &str,
+    predicate: impl Fn(&[FfiPreview]) -> bool,
+) -> Vec<FfiPreview> {
+    let deadline = Instant::now() + FLUSH_TIMEOUT;
+    while Instant::now() < deadline {
+        let previews = handle.previews();
+        if predicate(&previews) {
+            return previews;
+        }
+        sleep(POLL_INTERVAL);
+    }
+    panic!("timed out after {FLUSH_TIMEOUT:?} waiting for previews() ({desc})");
+}
+
+/// The number of ranked rows whose `display()` ends with `suffix`.
+fn rows_ending_with(rows: &[FfiBufferRow], suffix: &str) -> usize {
+    rows.iter()
+        .filter(|r| r.display().ends_with(suffix))
+        .count()
+}
+
+#[test]
+fn buffer_picker_lists_the_union_of_edited_and_previewed_files() {
+    // The pane-mode UNION contract (plan Q4): the picker lists one row per FILE —
+    // the deduplicated union of files edited and files previewed — with no
+    // preview/edit distinction. Two shapes are pinned:
+    //   * a file EDITED in one pane and PREVIEWED in another gets ONE row, and
+    //   * a PREVIEW-ONLY file (reached by a link-follow, never `:e`-ed) still gets
+    //     its own row, because `wolf_preview_file` marks the source buflisted.
+    // In both shapes the preview SCRATCH (created unlisted) contributes no
+    // `Preview: ` row.
+    //
+    // Loud SKIP (no-op pass) when no pinned nvim is available, like the siblings.
+    let Some(nvim_bin) = common::nvim_bin_or_skip() else {
+        return;
+    };
+    std::env::set_var("WOLF_NVIM_BIN", &nvim_bin);
+
+    let init_lua = common::init_lua_path();
+
+    // A fresh temp cwd holding two real markdown files, kept alive until after
+    // `shutdown()`. beta.md is NEVER `:e`-ed — it enters only via `preview_file`.
+    let tmp = tempfile::tempdir().expect("failed to create temp cwd directory");
+    std::fs::write(
+        tmp.path().join("alpha.md"),
+        "# Alpha Heading\n\nSome paragraph text.\n",
+    )
+    .expect("failed to write alpha.md");
+    std::fs::write(
+        tmp.path().join("beta.md"),
+        "# Beta Heading\n\nAnother paragraph.\n",
+    )
+    .expect("failed to write beta.md");
+    let beta_path = tmp.path().join("beta.md").to_string_lossy().into_owned();
+
+    let handle = wolf_ffi_start(
+        init_lua.to_string_lossy().into_owned(),
+        tmp.path().to_string_lossy().into_owned(),
+        common::DEFAULT_COLS,
+        common::DEFAULT_ROWS,
+    )
+    .expect("wolf_ffi_start should return a handle (is WOLF_NVIM_BIN a valid nvim?)");
+
+    // --- 1. Attach; edit alpha.md; split into a second pane -------------------
+    wait_for_attach(&handle);
+    send_ex_command(&handle, ":e alpha.md");
+    wait_for_active_filename(&handle, "alpha.md");
+    send_ex_command(&handle, ":vsplit");
+    wait_for_window_count(&handle, TWO_PANES, "after the typed :vsplit");
+
+    // --- 2. Preview alpha.md IN PLACE in the active (new split) pane ----------
+    // Layout after this: one pane EDITS alpha.md, the other PREVIEWS alpha.md. The
+    // preview WINDOW is read back from the previews() row rather than from a
+    // pre-captured `active_win()`, which can lag the typed `:vsplit`.
+    let scratch_bufnr = handle.open_preview();
+    assert!(
+        scratch_bufnr > 0,
+        "open_preview() on a markdown buffer must return a valid preview bufnr \
+         (> 0), got {scratch_bufnr}"
+    );
+    let previews = wait_for_previews(&handle, "one alpha.md preview in the split pane", |p| {
+        p.len() == 1
+    });
+    let preview_win = previews[0].win();
+    assert!(
+        preview_win > 0,
+        "the preview row must carry a real window handle (> 0), got {preview_win}"
+    );
+
+    // --- 3. UNION: edited-in-A + previewed-in-B alpha.md is ONE picker row ----
+    let rows = wait_for_ranked(&handle, "exactly one alpha.md row", |rows| {
+        rows_ending_with(rows, "alpha.md") == 1
+    });
+    assert_eq!(
+        rows_ending_with(&rows, "alpha.md"),
+        1,
+        "a file edited in one pane AND previewed in another must be ONE picker row: {:?}",
+        rows.iter().map(FfiBufferRow::display).collect::<Vec<_>>()
+    );
+    assert!(
+        !rows.iter().any(|r| r.display().starts_with("Preview: ")),
+        "the preview scratch is unlisted, so no `Preview: ` row may appear: {:?}",
+        rows.iter().map(FfiBufferRow::display).collect::<Vec<_>>()
+    );
+
+    // --- 4. A PREVIEW-ONLY file gets its own row ------------------------------
+    // Repoint the preview pane at beta.md, which no pane has ever edited. The
+    // link-follow buflists the background-loaded source, so the union grows by
+    // exactly that file.
+    let beta_bufnr = handle.preview_file(preview_win, beta_path);
+    assert!(
+        beta_bufnr > 0,
+        "preview_file(win, <abs beta.md>) must return beta.md's source bufnr (> 0), \
+         got {beta_bufnr}"
+    );
+    wait_for_previews(&handle, "the preview pane now previews beta.md", |p| {
+        p.iter()
+            .any(|row| row.win() == preview_win && row.source_bufnr() == beta_bufnr)
+    });
+
+    let rows = wait_for_ranked(&handle, "a beta.md row after the link-follow", |rows| {
+        rows_ending_with(rows, "beta.md") == 1
+    });
+    assert_eq!(
+        rows_ending_with(&rows, "beta.md"),
+        1,
+        "a preview-only (never-edited) file must get exactly ONE picker row: {:?}",
+        rows.iter().map(FfiBufferRow::display).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        rows_ending_with(&rows, "alpha.md"),
+        1,
+        "alpha.md keeps its single union row alongside the preview-only file: {:?}",
+        rows.iter().map(FfiBufferRow::display).collect::<Vec<_>>()
+    );
+    assert!(
+        !rows.iter().any(|r| r.display().starts_with("Preview: ")),
+        "still no `Preview: ` scratch rows in the union listing: {:?}",
+        rows.iter().map(FfiBufferRow::display).collect::<Vec<_>>()
+    );
+
     handle.shutdown();
     drop(tmp);
 }

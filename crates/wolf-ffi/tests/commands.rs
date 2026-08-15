@@ -25,11 +25,12 @@
 //! DECREASE_FONT_SIZE = 12, COMMAND_PALETTE = 13, COPY = 14, PASTE = 15,
 //! BUFFER_PICKER = 16, NEW_TAB = 17, PREVIEW = 18, EDIT = 19, TERMINAL = 20,
 //! PREVIEW_IN_BROWSER = 21, FULL_WIDTH = 22, TOGGLE_SIDEBAR = 23,
-//! SIDEBAR_SHOW_PROJECT = 24, SEARCH_IN_PROJECT = 25 (the `wolf_core::Command`
-//! variant order). These local consts MUST match `mod command_kind` in
-//! `wolf-ffi/src/lib.rs` and the Swift `CommandKind` port — exactly how `panes.rs`
-//! re-declares `INTENT_KIND_SPLIT` locally as a contract guard (the guard array
-//! below asserts contiguous 0..=25).
+//! SIDEBAR_SHOW_PROJECT = 24, SEARCH_IN_PROJECT = 25,
+//! PREVIEW_IN_OTHER_PANE = 26, EDIT_IN_OTHER_PANE = 27 (the
+//! `wolf_core::Command` variant order). These local consts MUST match
+//! `mod command_kind` in `wolf-ffi/src/lib.rs` and the Swift `CommandKind` port —
+//! exactly how `panes.rs` re-declares `INTENT_KIND_SPLIT` locally as a contract
+//! guard (the guard array below asserts contiguous 0..=27).
 //!
 //! ## What this asserts
 //!
@@ -107,8 +108,8 @@ const CMD_KIND_BUFFER_PICKER: u8 = 16;
 const CMD_KIND_NEW_TAB: u8 = 17;
 /// `FfiCommand::kind()` for Preview (the appended discriminant 18, View menu).
 const CMD_KIND_PREVIEW: u8 = 18;
-/// `FfiCommand::kind()` for Edit Source (the appended discriminant 19, View menu;
-/// the inverse of Preview).
+/// `FfiCommand::kind()` for Edit (the appended discriminant 19, View menu; the
+/// inverse of Preview — its registry `id` stays `edit`, title "Edit").
 const CMD_KIND_EDIT: u8 = 19;
 /// `FfiCommand::kind()` for Terminal (the appended discriminant 20, View menu).
 /// Renumbered from 18 to 20 when the terminal drawer merged alongside the
@@ -130,6 +131,12 @@ const CMD_KIND_SIDEBAR_SHOW_PROJECT: u8 = 24;
 /// `FfiCommand::kind()` for Search in project (the appended discriminant 25, View
 /// menu; reveals the sidebar showing the search UI).
 const CMD_KIND_SEARCH_IN_PROJECT: u8 = 25;
+/// `FfiCommand::kind()` for Preview in Another Pane (the appended discriminant
+/// 26, View menu; previews the active pane's file in another pane).
+const CMD_KIND_PREVIEW_IN_OTHER_PANE: u8 = 26;
+/// `FfiCommand::kind()` for Edit in Another Pane (the appended discriminant 27,
+/// View menu; edits the active preview's source in another pane).
+const CMD_KIND_EDIT_IN_OTHER_PANE: u8 = 27;
 
 /// Builds a printable-character `FfiKeyEvent` (kind=Char) for `c`, all modifiers
 /// false (the already-resolved glyph rides in `ch`). Same as `panes.rs`.
@@ -196,9 +203,9 @@ fn commands_drain_close_and_minimize() {
     };
     std::env::set_var("WOLF_NVIM_BIN", &nvim_bin);
 
-    // Discriminant-contract guard: the local consts MUST be contiguous 0..=25 in
-    // variant order (mirrors `mod command_kind`). Referencing all twenty-six here
-    // also keeps them from tripping dead-code lints.
+    // Discriminant-contract guard: the local consts MUST be contiguous 0..=27 in
+    // variant order (mirrors `mod command_kind`). Referencing all twenty-eight
+    // here also keeps them from tripping dead-code lints.
     assert_eq!(
         [
             CMD_KIND_NEW_WINDOW,
@@ -227,12 +234,14 @@ fn commands_drain_close_and_minimize() {
             CMD_KIND_TOGGLE_SIDEBAR,
             CMD_KIND_SIDEBAR_SHOW_PROJECT,
             CMD_KIND_SEARCH_IN_PROJECT,
+            CMD_KIND_PREVIEW_IN_OTHER_PANE,
+            CMD_KIND_EDIT_IN_OTHER_PANE,
         ],
         [
             0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
-            24, 25
+            24, 25, 26, 27
         ],
-        "command_kind discriminants must be contiguous 0..=25 in Command variant order"
+        "command_kind discriminants must be contiguous 0..=27 in Command variant order"
     );
 
     let init_lua = common::init_lua_path();
@@ -410,6 +419,30 @@ fn commands_drain_close_and_minimize() {
     // auto-registered as a COMMAND_SPECS row and drains the appended discriminant 25.
     send_ex_command(&handle, ":WolfSearchInProject");
     poll_for_command_kind(&handle, CMD_KIND_SEARCH_IN_PROJECT, ":WolfSearchInProject");
+
+    // --- 3q. :WolfPreviewInOtherPane<CR> -> an FfiCommand with kind() ==
+    // PREVIEW_IN_OTHER_PANE. A pure FFI drain: nothing acts on it here (the
+    // front-end that would resolve the target pane and call `preview_in_other`
+    // is absent), so NO pane is split or repointed. This proves
+    // `:WolfPreviewInOtherPane` is auto-registered as a COMMAND_SPECS row and
+    // drains the appended discriminant 26 — the split+bind mechanism itself is
+    // covered by the `other_pane.rs` integration test.
+    send_ex_command(&handle, ":WolfPreviewInOtherPane");
+    poll_for_command_kind(
+        &handle,
+        CMD_KIND_PREVIEW_IN_OTHER_PANE,
+        ":WolfPreviewInOtherPane",
+    );
+
+    // --- 3r. :WolfEditInOtherPane<CR> -> an FfiCommand with kind() ==
+    // EDIT_IN_OTHER_PANE. A pure FFI drain: nothing acts on it here (the
+    // front-end that would resolve the target pane and call `edit_in_other` is
+    // absent), so NO pane is split or rebound. This proves `:WolfEditInOtherPane`
+    // is auto-registered as a COMMAND_SPECS row and drains the appended
+    // discriminant 27 — the split+bind mechanism itself is covered by the
+    // `other_pane.rs` integration test.
+    send_ex_command(&handle, ":WolfEditInOtherPane");
+    poll_for_command_kind(&handle, CMD_KIND_EDIT_IN_OTHER_PANE, ":WolfEditInOtherPane");
 
     // --- 4. Shutdown: clean teardown ----------------------------------------
     handle.shutdown();

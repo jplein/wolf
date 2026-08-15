@@ -460,12 +460,12 @@ extension WolfCoreHandleRef {
         __swift_bridge__$WolfCoreHandle$is_preview_active(ptr)
     }
 
-    public func edit_source<GenericIntoRustString: IntoRustString>(_ mode: GenericIntoRustString) -> Int64 {
-        __swift_bridge__$WolfCoreHandle$edit_source(ptr, { let rustString = mode.intoRustString(); rustString.isOwned = false; return rustString.ptr }())
+    public func edit_source() -> Int64 {
+        __swift_bridge__$WolfCoreHandle$edit_source(ptr)
     }
 
-    public func open_preview<GenericIntoRustString: IntoRustString>(_ mode: GenericIntoRustString) -> Int64 {
-        __swift_bridge__$WolfCoreHandle$open_preview(ptr, { let rustString = mode.intoRustString(); rustString.isOwned = false; return rustString.ptr }())
+    public func open_preview() -> Int64 {
+        __swift_bridge__$WolfCoreHandle$open_preview(ptr)
     }
 
     public func render_preview(_ source_bufnr: Int64) -> RustString {
@@ -478,6 +478,18 @@ extension WolfCoreHandleRef {
 
     public func preview_file<GenericIntoRustString: IntoRustString>(_ win: Int64, _ path: GenericIntoRustString) -> Int64 {
         __swift_bridge__$WolfCoreHandle$preview_file(ptr, win, { let rustString = path.intoRustString(); rustString.isOwned = false; return rustString.ptr }())
+    }
+
+    public func preview_buffer(_ win: Int64, _ bufnr: Int64) -> Int64 {
+        __swift_bridge__$WolfCoreHandle$preview_buffer(ptr, win, bufnr)
+    }
+
+    public func preview_in_other(_ target_win: Int64) -> Int64 {
+        __swift_bridge__$WolfCoreHandle$preview_in_other(ptr, target_win)
+    }
+
+    public func edit_in_other(_ target_win: Int64) -> Int64 {
+        __swift_bridge__$WolfCoreHandle$edit_in_other(ptr, target_win)
     }
 
     public func previews() -> RustVec<FfiPreview> {

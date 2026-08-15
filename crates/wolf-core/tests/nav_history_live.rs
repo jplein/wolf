@@ -549,10 +549,10 @@ fn preview_transition_and_link_follow_are_tracked() {
     let count_before = rows_before.len();
 
     // --- 1. Turn THIS pane into a preview of a.md ---------------------------
-    let preview_bufnr = core.open_preview("active");
+    let preview_bufnr = core.open_preview();
     assert!(
         preview_bufnr > 0,
-        "open_preview(\"active\") on a markdown buffer must return a scratch bufnr, \
+        "open_preview() on a markdown buffer must return a scratch bufnr, \
          got {preview_bufnr}"
     );
     poll_until(
@@ -1165,10 +1165,16 @@ fn win_buffers_carries_bufnrs_unnamed_windows_and_skips_previews() {
     // --- 3. A preview scratch pane is ABSENT from win_buffers ---------------
     ex_command(&core, "e a.md");
     poll_pane_filename(&core, &waiter, grid, "a.md");
-    let preview_bufnr = core.open_preview("split_right");
+    // A typed `:vsplit` first: the in-place open_preview() binds into the ACTIVE
+    // (new split) pane, so the original a.md window keeps its win_buffers entry.
+    ex_command(&core, "vsplit");
+    poll_until(&core, &waiter, "two live windows after :vsplit", |snap| {
+        snap.windows.len() >= TWO_WINDOWS
+    });
+    let preview_bufnr = core.open_preview();
     assert!(
         preview_bufnr > 0,
-        "open_preview(\"split_right\") must return a scratch bufnr, got {preview_bufnr}"
+        "open_preview() must return a scratch bufnr, got {preview_bufnr}"
     );
     let preview_win = poll_win_where(&core, &waiter, "a preview window", |snap| {
         snap.previews.keys().copied().next()
@@ -1523,10 +1529,10 @@ fn a_failed_back_to_a_deleted_preview_source_reverts_the_cursor() {
     poll_pane_filename(&core, &waiter, grid, "a.md");
 
     // --- 1. Preview(a), then a link-follow to Preview(b) --------------------
-    let preview_bufnr = core.open_preview("active");
+    let preview_bufnr = core.open_preview();
     assert!(
         preview_bufnr > 0,
-        "open_preview(\"active\") on a markdown buffer must return a scratch bufnr, \
+        "open_preview() on a markdown buffer must return a scratch bufnr, \
          got {preview_bufnr}"
     );
     poll_until(
@@ -1795,7 +1801,8 @@ fn back_in_a_background_pane_updates_it_without_moving_focus() {
 
     // --- 1. A second pane, still focused, previewing a.md -------------------
     // `:vsplit` focuses the NEW window, which inherits a.md, so pane B's history
-    // seeds with Edit(a); `open_preview("active")` then pushes Preview(a) on top.
+    // seeds with Edit(a); the in-place `open_preview()` then pushes Preview(a) on
+    // top.
     ex_command(&core, "vsplit");
     poll_until(&core, &waiter, "two live windows after :vsplit", |snap| {
         snap.windows.len() >= TWO_WINDOWS
@@ -1806,10 +1813,10 @@ fn back_in_a_background_pane_updates_it_without_moving_focus() {
     let grid_b = wait_for_grid_of_win(&core, &waiter, win_b);
     poll_pane_filename(&core, &waiter, grid_b, "a.md");
 
-    let preview_bufnr = core.open_preview("active");
+    let preview_bufnr = core.open_preview();
     assert!(
         preview_bufnr > 0,
-        "open_preview(\"active\") on a markdown buffer must return a scratch bufnr, \
+        "open_preview() on a markdown buffer must return a scratch bufnr, \
          got {preview_bufnr}"
     );
     poll_until(

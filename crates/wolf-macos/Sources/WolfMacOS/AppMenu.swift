@@ -43,6 +43,8 @@ enum AppMenu {
     static let terminal = 20
     static let previewInBrowser = 21
     static let fullWidth = 22
+    static let previewInOtherPane = 26
+    static let editInOtherPane = 27
   }
 
   /// The dynamic submenus `install` hands back to the coordinator: the Window
@@ -227,8 +229,10 @@ enum AppMenu {
   }
 
   /// The Edit menu (Copy `⌘c` / Paste `⌘v`). Both titles mirror
-  /// `wolf_core::COMMAND_SPECS`. Copy is enabled only in visual mode (gated by
-  /// `AppDelegate.validateMenuItem`); Paste is always enabled.
+  /// `wolf_core::COMMAND_SPECS`. Copy is enabled whenever either of its sources has
+  /// something to copy — a preview-pane selection or a Neovim visual-mode selection —
+  /// gated by `AppDelegate.validateMenuItem` through
+  /// `WolfWindowController.canCopy`; Paste is always enabled.
   private static func editMenuItem(target: AppDelegate) -> NSMenuItem {
     let item = NSMenuItem()
     let menu = NSMenu(title: "Edit")
@@ -247,9 +251,10 @@ enum AppMenu {
   /// The View menu (Toggle Sidebar `⌃⌘s` / Project `⇧⌘e` / Search
   /// `⇧⌘f` / a separator / Reset Font Size `⌘0` / Increase Font Size `⌘=` /
   /// Decrease Font Size `⌘-` / a separator / Command Palette… `⌘p` / Buffer
-  /// Picker… `⌘e` / Preview / Edit Source / Terminal `` ⌃` `` / a separator /
-  /// Enter Full Screen `⌃⌘f`). The font-size, palette, preview and terminal
-  /// titles mirror `wolf_core::COMMAND_SPECS`.
+  /// Picker… `⌘e` / Preview / Edit / Preview in Another Pane / Edit in Another
+  /// Pane / Terminal `` ⌃` `` / a separator / Enter Full Screen `⌃⌘f`). The
+  /// font-size, palette, preview and terminal titles mirror
+  /// `wolf_core::COMMAND_SPECS`.
   ///
   /// Project / Search are AppDelegate-targeted view-state items
   /// (`showProjectTreeMenuItem`/`showSearchMenuItem`): each reveals the sidebar
@@ -319,13 +324,29 @@ enum AppMenu {
     menu.addItem(
       commandItem(
         title: "Preview", tag: Tag.preview, keyEquivalent: "", target: target))
-    // View > Edit Source: the inverse of Preview, enabled only from a preview
+    // View > Edit: the inverse of Preview, enabled only from a preview
     // pane (gated in AppDelegate.validateMenuItem). NO key equivalent.
     menu.addItem(
       commandItem(
-        title: "Edit Source", tag: Tag.edit, keyEquivalent: "", target: target))
+        title: "Edit", tag: Tag.edit, keyEquivalent: "", target: target))
+    // View > Preview in Another Pane: previews the active pane's Markdown file
+    // in another pane (reuse or split right). Enabled only on a Markdown buffer
+    // (gated in AppDelegate.validateMenuItem, mirroring Preview). NO key
+    // equivalent.
+    menu.addItem(
+      commandItem(
+        title: "Preview in Another Pane", tag: Tag.previewInOtherPane,
+        keyEquivalent: "", target: target))
+    // View > Edit in Another Pane: edits the active preview's source in another
+    // pane (reuse or split, source lands left). Enabled only from a preview
+    // pane (gated in AppDelegate.validateMenuItem, mirroring Edit). NO key
+    // equivalent.
+    menu.addItem(
+      commandItem(
+        title: "Edit in Another Pane", tag: Tag.editInOtherPane,
+        keyEquivalent: "", target: target))
     // View > Terminal: toggles the per-project terminal drawer. Always enabled
-    // (unlike Preview / Edit Source it is not gated in
+    // (unlike Preview / Edit it is not gated in
     // AppDelegate.validateMenuItem).
     menu.addItem(
       commandItem(
