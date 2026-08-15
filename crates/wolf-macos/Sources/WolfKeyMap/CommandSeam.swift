@@ -23,7 +23,7 @@ import Foundation
 /// `copy == 14`, `paste == 15`, `bufferPicker == 16`, `newTab == 17`,
 /// `preview == 18`, `edit == 19`, `terminal == 20`, `previewInBrowser == 21`,
 /// `fullWidth == 22`, `toggleSidebar == 23`, `sidebarShowProject == 24`,
-/// `searchInProject == 25`.
+/// `searchInProject == 25`, `previewInOtherPane == 26`, `editInOtherPane == 27`.
 public enum CommandKind {
   /// Open a new editor window.
   case newWindow
@@ -78,9 +78,15 @@ public enum CommandKind {
   case sidebarShowProject
   /// Reveal the sidebar showing the search UI (and focus the search field).
   case searchInProject
+  /// Preview the active pane's Markdown file in another pane (reuse or split
+  /// right).
+  case previewInOtherPane
+  /// Edit the active preview pane's source file in another pane (reuse or
+  /// split, source lands left).
+  case editInOtherPane
 
-  /// Maps an FFI command-kind discriminant (`0` → `.newWindow` .. `25` →
-  /// `.searchInProject`, else `nil`), guarding the contract shared with
+  /// Maps an FFI command-kind discriminant (`0` → `.newWindow` .. `27` →
+  /// `.editInOtherPane`, else `nil`), guarding the contract shared with
   /// `wolf-ffi`'s `mod command_kind`.
   public init?(ffi: UInt8) {
     switch ffi {
@@ -110,6 +116,8 @@ public enum CommandKind {
     case 23: self = .toggleSidebar
     case 24: self = .sidebarShowProject
     case 25: self = .searchInProject
+    case 26: self = .previewInOtherPane
+    case 27: self = .editInOtherPane
     default: return nil
     }
   }

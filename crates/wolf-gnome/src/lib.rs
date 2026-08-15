@@ -260,10 +260,7 @@
 //!   `WolfKeyMap/PreviewLinkSeam.swift` with two deliberate divergences named in
 //!   that module's docs. It owns URI arithmetic and nothing else; the liveness gates
 //!   and the load strategy are [`mod@preview_ui`]'s.
-//! - [`mod@preview_ui`]: the MARKDOWN PREVIEW rulebook — where a Preview press opens
-//!   its pane and where its inverse lands the source editor, two rules whose reuse
-//!   branches differ ONLY in the polarity of `active_is_preview`
-//!   ([`preview_ui::preview_placement`], [`preview_ui::edit_placement`]); five
+//! - [`mod@preview_ui`]: the MARKDOWN PREVIEW rulebook — five
 //!   TOTAL `Option<`[`wolf_core::Liveness`]`>` guards over the five BLOCKING RPCs
 //!   this adds — the two presses, a followed preview link, Preview in Browser, and
 //!   the coalesced render ([`preview_ui::preview_press`], [`preview_ui::edit_press`],

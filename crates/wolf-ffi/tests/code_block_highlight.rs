@@ -52,7 +52,7 @@ const CYCLE_SETTLE: Duration = Duration::from_millis(150);
 /// are `>= 2` under `ext_multigrid`). Mirrors `preview.rs`/`pane_status.rs`.
 const WINDOW_GRID_MIN: u64 = 2;
 
-/// The two-pane window count reached after the split-right preview placement.
+/// The two-pane window count reached after a typed `:vsplit`.
 const TWO_PANES: usize = 2;
 
 // -- FfiKeyEvent.kind discriminants (mirror `wolf-ffi/src/lib.rs` `mod kind`) --
@@ -331,13 +331,17 @@ fn code_block_go_highlighted_and_unknown_lang_plain() {
     // before the SYNC `open_preview` races ahead of the buffered `:e`.
     wait_for_current_file(&handle, "hl.md");
 
-    let preview_bufnr = handle.open_preview("split_right".to_string());
+    // The in-place open_preview() binds the scratch into the ACTIVE pane, so a
+    // typed `:vsplit` first keeps a second pane editing hl.md — the pane step 3
+    // cycles back to for the `:e plain.md`.
+    send_ex_command(&handle, ":vsplit");
+    wait_for_window_count(&handle, TWO_PANES, "after the typed :vsplit");
+    let preview_bufnr = handle.open_preview();
     assert!(
         preview_bufnr > 0,
-        "open_preview(\"split_right\") on a markdown buffer must return a valid \
-         preview bufnr (> 0), got {preview_bufnr}"
+        "open_preview() on a markdown buffer must return a valid preview bufnr \
+         (> 0), got {preview_bufnr}"
     );
-    wait_for_window_count(&handle, TWO_PANES, "after split-right preview of hl.md");
 
     let previews = wait_for_previews(&handle, "one hl.md preview", |p| {
         p.iter().any(|row| row.source_name() == "hl.md")
@@ -369,16 +373,25 @@ fn code_block_go_highlighted_and_unknown_lang_plain() {
 
     // --- 3. NEGATIVE: an unknown-language fence falls back to plain <pre><code> -
     // Focus the source pane, switch it to plain.md (still a .md, so markdown stays
-    // active), and bind its preview into the OTHER (preview) pane.
+    // active), and preview it IN PLACE in that pane. (Both panes then hold a
+    // preview, which is fine — only the rendered HTML is asserted below.)
+    // Deterministic barrier first: wait for the markdown gate to go FALSE (the
+    // active pane holds the non-markdown scratch), or `focus_markdown_source`
+    // could read a stale true and skip the cycle.
+    wait_for_markdown_active(
+        &handle,
+        false,
+        "the in-place bind leaves the (non-markdown) preview scratch pane current",
+    );
     focus_markdown_source(&handle);
     send_ex_command(&handle, ":e plain.md");
     wait_for_current_file(&handle, "plain.md");
 
-    let plain_preview_bufnr = handle.open_preview("reuse_preview_pane".to_string());
+    let plain_preview_bufnr = handle.open_preview();
     assert!(
         plain_preview_bufnr > 0,
-        "open_preview(\"reuse_preview_pane\") on plain.md must return a valid preview \
-         bufnr (> 0), got {plain_preview_bufnr}"
+        "open_preview() on plain.md must return a valid preview bufnr (> 0), got \
+         {plain_preview_bufnr}"
     );
 
     let previews = wait_for_previews(&handle, "one plain.md preview", |p| {

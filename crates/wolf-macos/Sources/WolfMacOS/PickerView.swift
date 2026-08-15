@@ -281,13 +281,22 @@ final class PickerView: NSView, NSTableViewDataSource, NSTableViewDelegate,
     }
   }
 
-  /// Opens the selected row's payload (or the first row if none is selected) via
-  /// `WolfCoreHandle.open`, then closes. With ZERO rows it is a true no-op.
+  /// Opens the selected row's payload (or the first row if none is selected),
+  /// routed by the active pane's mode: a PREVIEW pane previews the file
+  /// (`WolfCoreHandle.preview_file`, falling back to `open` when the file is not
+  /// previewable — the pane converts to edit mode); an EDIT pane edits it
+  /// (`WolfCoreHandle.open`). Then closes. With ZERO rows it is a true no-op.
   func activateSelection() {
     if rows.isEmpty { return }
     let idx = tableView.selectedRow
     let payload = (idx >= 0 && idx < rows.count) ? rows[idx].payload : rows[0].payload
-    handle.open(payload)
+    if let paneContainer, paneContainer.activePaneIsPreview,
+      handle.preview_file(paneContainer.activeWin, payload) != 0
+    {
+      paneContainer.onRenderWake()
+    } else {
+      handle.open(payload)
+    }
     close()
   }
 

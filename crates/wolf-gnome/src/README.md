@@ -638,11 +638,10 @@ Purpose: the pure, GTK-free URI rulebook for a link clicked inside the Markdown 
 
 #### `preview_ui.rs`
 
-Purpose: the pure, GTK-free rulebook for the Markdown preview pane — its placements, its gates, how a rendered document reaches the view, and what the pane's statusbar reads. [`preview_link.rs`](#preview_linkrs) owns a clicked link's URI arithmetic.
+Purpose: the pure, GTK-free rulebook for the Markdown preview pane — its gates, how a rendered document reaches the view, and what the pane's statusbar reads. [`preview_link.rs`](#preview_linkrs) owns a clicked link's URI arithmetic.
 
 **Public API**
 
-- The five `MODE_*` strings `runtime/nvim/init.lua` dispatches on, chosen by `preview_placement` and `edit_placement` — one rule at opposite polarities of `active_is_preview`.
 - `preview_press`, `edit_press`, `may_render`, `preview_file_press` and `browser_press` — the gate on every blocking preview RPC, total over `Option<Liveness>` with no `_` arm.
 - `browser_url(raw)` — `None` for an empty or all-whitespace address; the loopback-prefix check is core's contract, deliberately not duplicated.
 - `document_update(current, loaded, fragment_pending)` — swap in place, or full load.
@@ -650,7 +649,7 @@ Purpose: the pure, GTK-free rulebook for the Markdown preview pane — its place
 
 **Decisions**
 
-- A mode string renamed here compiles and does nothing there: the Lua binds the current window instead, replacing the pane the user was reading.
+- Placement is not decided here. Both presses act in place on the active pane, and a pane's mode is derived from `Snapshot::previews` rather than stored, so there is no split-or-reuse rule to state and no mode argument to thread.
 - Liveness is read before the buffer-kind gate, so a wedged Neovim is reported as wedged rather than as a non-Markdown buffer. `preview_file_press` has no buffer-kind gate at all: a linked file's Markdown-ness is core's, unanswerable here without the filesystem.
 - Both `PreviewLoad` comparisons key on the source bufnr, never the `changedtick`: two freshly opened files share a tick, so a tick-keyed source switch would swap a linked file's body under the previous file's base URI.
 - `preview_status`'s `abs_path` is the source path verbatim: [`pane_view.rs`](#pane_viewrs) persists it as a pane-layout leaf, and `state.json` records no working directory to resolve a relative one against.

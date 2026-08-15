@@ -29,7 +29,8 @@
 /// `DecreaseFontSize`(12), `CommandPalette`(13), `Copy`(14), `Paste`(15),
 /// `BufferPicker`(16), `NewTab`(17), `Preview`(18), `Edit`(19), `Terminal`(20),
 /// `PreviewInBrowser`(21), `FullWidth`(22), `ToggleSidebar`(23),
-/// `SidebarShowProject`(24), `SearchInProject`(25).
+/// `SidebarShowProject`(24), `SearchInProject`(25), `PreviewInOtherPane`(26),
+/// `EditInOtherPane`(27).
 /// Adding a command is additive
 /// (append a variant + a [`COMMAND_SPECS`] row); reordering is a breaking change.
 /// `CommandPalette` is the palette's own invoking command and is EXCLUDED from the
@@ -65,7 +66,7 @@ pub enum Command {
     /// Open the command-palette overlay (its own invoking command; EXCLUDED from
     /// the palette's candidate list).
     CommandPalette,
-    /// Copy the visual-mode selection to the system clipboard.
+    /// Copy the current selection to the system clipboard.
     Copy,
     /// Paste from the system clipboard into the active document.
     Paste,
@@ -97,6 +98,14 @@ pub enum Command {
     /// Reveal the sidebar showing the search UI (and focus the search field) — a
     /// native-only AppKit action.
     SearchInProject,
+    /// Preview the active pane's Markdown file in ANOTHER pane — reuse an
+    /// existing other pane or split one to the right (only available when the
+    /// active buffer is a Markdown file).
+    PreviewInOtherPane,
+    /// Edit the active preview pane's source file in ANOTHER pane — reuse an
+    /// existing other pane or split one to the left (only has an effect when the
+    /// active pane is a preview pane).
+    EditInOtherPane,
 }
 
 /// The menu group a command belongs to in a native menu bar.
@@ -284,7 +293,7 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
         command: Command::Edit,
         id: "edit",
         ex_command: "WolfEdit",
-        title: "Edit Source",
+        title: "Edit",
         menu: MenuGroup::View,
     },
     CommandSpec {
@@ -329,6 +338,20 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
         title: "Search in project",
         menu: MenuGroup::View,
     },
+    CommandSpec {
+        command: Command::PreviewInOtherPane,
+        id: "preview_in_other_pane",
+        ex_command: "WolfPreviewInOtherPane",
+        title: "Preview in Another Pane",
+        menu: MenuGroup::View,
+    },
+    CommandSpec {
+        command: Command::EditInOtherPane,
+        id: "edit_in_other_pane",
+        ex_command: "WolfEditInOtherPane",
+        title: "Edit in Another Pane",
+        menu: MenuGroup::View,
+    },
 ];
 
 impl Command {
@@ -361,11 +384,12 @@ mod tests {
     /// (16), `Command::NewTab` (17), `Command::Preview` (18), `Command::Edit`
     /// (19), `Command::Terminal` (20), `Command::PreviewInBrowser` (21),
     /// `Command::FullWidth` (22), `Command::ToggleSidebar` (23),
-    /// `Command::SidebarShowProject` (24), and `Command::SearchInProject`
-    /// (discriminant 25) past `Command::CommandPalette` (13).
+    /// `Command::SidebarShowProject` (24), `Command::SearchInProject` (25),
+    /// `Command::PreviewInOtherPane` (26), and `Command::EditInOtherPane`
+    /// (discriminant 27) past `Command::CommandPalette` (13).
     /// A named constant so the magic-number lint stays quiet and the count's
     /// meaning is explicit.
-    const EXPECTED_COMMAND_COUNT: usize = 26;
+    const EXPECTED_COMMAND_COUNT: usize = 28;
 
     /// The append-only slice index (== FFI discriminant == `command_kind`) of
     /// `Command::CommandPalette`.
@@ -426,9 +450,19 @@ mod tests {
     const SIDEBAR_SHOW_PROJECT_INDEX: usize = 24;
 
     /// The append-only slice index (== FFI discriminant == `command_kind`) of
-    /// `Command::SearchInProject`: the appended discriminant 25 and LAST row of
-    /// [`COMMAND_SPECS`].
+    /// `Command::SearchInProject`: the appended discriminant 25. No longer the
+    /// last row after `PreviewInOtherPane` is appended at 26.
     const SEARCH_IN_PROJECT_INDEX: usize = 25;
+
+    /// The append-only slice index (== FFI discriminant == `command_kind`) of
+    /// `Command::PreviewInOtherPane`: the appended discriminant 26. No longer
+    /// the last row after `EditInOtherPane` is appended at 27.
+    const PREVIEW_IN_OTHER_PANE_INDEX: usize = 26;
+
+    /// The append-only slice index (== FFI discriminant == `command_kind`) of
+    /// `Command::EditInOtherPane`: the appended discriminant 27 and LAST row of
+    /// [`COMMAND_SPECS`].
+    const EDIT_IN_OTHER_PANE_INDEX: usize = 27;
 
     /// `from_id` resolves the canonical `command_palette` id to the new variant.
     #[test]
@@ -452,8 +486,9 @@ mod tests {
     }
 
     /// Appending Copy, Paste, BufferPicker, NewTab, Preview, Edit, Terminal,
-    /// PreviewInBrowser, FullWidth, ToggleSidebar, SidebarShowProject, and
-    /// SearchInProject grows the registry to exactly 26 rows.
+    /// PreviewInBrowser, FullWidth, ToggleSidebar, SidebarShowProject,
+    /// SearchInProject, PreviewInOtherPane, and EditInOtherPane grows the
+    /// registry to exactly 28 rows.
     #[test]
     fn command_specs_has_expected_len() {
         assert_eq!(
@@ -462,7 +497,8 @@ mod tests {
             "COMMAND_SPECS must hold exactly {EXPECTED_COMMAND_COUNT} rows \
              after appending Copy, Paste, BufferPicker, NewTab, Preview, Edit, \
              Terminal, PreviewInBrowser, FullWidth, ToggleSidebar, \
-             SidebarShowProject, and SearchInProject"
+             SidebarShowProject, SearchInProject, PreviewInOtherPane, and \
+             EditInOtherPane"
         );
     }
 
@@ -658,7 +694,7 @@ mod tests {
         let spec = Command::Edit.spec();
         assert_eq!(spec.id, "edit", "id");
         assert_eq!(spec.ex_command, "WolfEdit", "ex_command");
-        assert_eq!(spec.title, "Edit Source", "title");
+        assert_eq!(spec.title, "Edit", "title");
         assert_eq!(spec.menu, MenuGroup::View, "menu group");
     }
 
@@ -861,20 +897,90 @@ mod tests {
         assert_eq!(spec.menu, MenuGroup::View, "menu group");
     }
 
-    /// Append-discriminant guard: SearchInProject is the LAST row (index 25), so
-    /// the slice index equals its FFI discriminant. Reordering breaks this.
+    /// Append-discriminant guard: SearchInProject stays at fixed index 25 (no
+    /// longer the last row after PreviewInOtherPane is appended at 26), so the
+    /// slice index still equals its FFI discriminant. Reordering breaks this.
     #[test]
-    fn search_in_project_is_the_last_row() {
+    fn search_in_project_is_at_index_25() {
         assert_eq!(
             COMMAND_SPECS[SEARCH_IN_PROJECT_INDEX].command,
             Command::SearchInProject,
             "the row at index {SEARCH_IN_PROJECT_INDEX} must be \
              Command::SearchInProject"
         );
+    }
+
+    /// `from_id` resolves the canonical `preview_in_other_pane` id to the new
+    /// variant.
+    #[test]
+    fn preview_in_other_pane_id_round_trips() {
         assert_eq!(
-            SEARCH_IN_PROJECT_INDEX,
+            Command::from_id("preview_in_other_pane"),
+            Some(Command::PreviewInOtherPane),
+            "\"preview_in_other_pane\" must resolve to Command::PreviewInOtherPane"
+        );
+    }
+
+    /// The PreviewInOtherPane spec pins its id, ex-command, title, and View menu
+    /// group (the canonical registry row for the preview-in-another-pane command).
+    #[test]
+    fn preview_in_other_pane_spec_fields() {
+        let spec = Command::PreviewInOtherPane.spec();
+        assert_eq!(spec.id, "preview_in_other_pane", "id");
+        assert_eq!(spec.ex_command, "WolfPreviewInOtherPane", "ex_command");
+        assert_eq!(spec.title, "Preview in Another Pane", "title");
+        assert_eq!(spec.menu, MenuGroup::View, "menu group");
+    }
+
+    /// Append-discriminant guard: PreviewInOtherPane stays at fixed index 26 (no
+    /// longer the last row after EditInOtherPane is appended at 27), so the slice
+    /// index still equals its FFI discriminant. Reordering breaks this.
+    #[test]
+    fn preview_in_other_pane_is_at_index_26() {
+        assert_eq!(
+            COMMAND_SPECS[PREVIEW_IN_OTHER_PANE_INDEX].command,
+            Command::PreviewInOtherPane,
+            "the row at index {PREVIEW_IN_OTHER_PANE_INDEX} must be \
+             Command::PreviewInOtherPane"
+        );
+    }
+
+    /// `from_id` resolves the canonical `edit_in_other_pane` id to the new
+    /// variant.
+    #[test]
+    fn edit_in_other_pane_id_round_trips() {
+        assert_eq!(
+            Command::from_id("edit_in_other_pane"),
+            Some(Command::EditInOtherPane),
+            "\"edit_in_other_pane\" must resolve to Command::EditInOtherPane"
+        );
+    }
+
+    /// The EditInOtherPane spec pins its id, ex-command, title, and View menu
+    /// group (the canonical registry row for the edit-in-another-pane command).
+    #[test]
+    fn edit_in_other_pane_spec_fields() {
+        let spec = Command::EditInOtherPane.spec();
+        assert_eq!(spec.id, "edit_in_other_pane", "id");
+        assert_eq!(spec.ex_command, "WolfEditInOtherPane", "ex_command");
+        assert_eq!(spec.title, "Edit in Another Pane", "title");
+        assert_eq!(spec.menu, MenuGroup::View, "menu group");
+    }
+
+    /// Append-discriminant guard: EditInOtherPane is the LAST row (index 27), so
+    /// the slice index equals its FFI discriminant. Reordering breaks this.
+    #[test]
+    fn edit_in_other_pane_is_the_last_row() {
+        assert_eq!(
+            COMMAND_SPECS[EDIT_IN_OTHER_PANE_INDEX].command,
+            Command::EditInOtherPane,
+            "the row at index {EDIT_IN_OTHER_PANE_INDEX} must be \
+             Command::EditInOtherPane"
+        );
+        assert_eq!(
+            EDIT_IN_OTHER_PANE_INDEX,
             COMMAND_SPECS.len() - 1,
-            "SearchInProject must be the FINAL row of COMMAND_SPECS"
+            "EditInOtherPane must be the FINAL row of COMMAND_SPECS"
         );
     }
 

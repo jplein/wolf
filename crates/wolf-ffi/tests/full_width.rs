@@ -64,7 +64,7 @@ const POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// `preview.rs`'s `CYCLE_SETTLE`.
 const CYCLE_SETTLE: Duration = Duration::from_millis(150);
 
-/// The two-pane window count reached after the split-right preview placement.
+/// The two-pane window count reached after a typed `:vsplit`.
 const TWO_PANES: usize = 2;
 
 /// The lowest real WINDOW grid id (grid 1 is the outer/global grid; editor windows
@@ -392,7 +392,7 @@ fn full_width_flag_flows_to_the_preview_source() {
     )
     .expect("wolf_ffi_start should return a handle (is WOLF_NVIM_BIN a valid nvim?)");
 
-    // --- 1. Attach; open alpha.md as the source and split-right preview it ----
+    // --- 1. Attach; open alpha.md; split via :vsplit; preview it in place -----
     wait_for_attach(&handle);
     send_ex_command(&handle, ":e alpha.md");
     wait_for_markdown_active(&handle, true, "after :e alpha.md");
@@ -402,13 +402,17 @@ fn full_width_flag_flows_to_the_preview_source() {
     // buffer before the SYNC `open_preview` races ahead of the buffered `:e`.
     wait_for_current_file(&handle, "alpha.md");
 
-    let preview_bufnr = handle.open_preview("split_right".to_string());
+    // The in-place open_preview() binds the scratch into the ACTIVE pane, so a
+    // typed `:vsplit` first keeps a second pane editing the alpha.md source for
+    // the toggle below.
+    send_ex_command(&handle, ":vsplit");
+    wait_for_window_count(&handle, TWO_PANES, "after the typed :vsplit");
+    let preview_bufnr = handle.open_preview();
     assert!(
         preview_bufnr > 0,
-        "open_preview(\"split_right\") on a markdown buffer must return a valid \
-         preview bufnr (> 0), got {preview_bufnr}"
+        "open_preview() on a markdown buffer must return a valid preview bufnr \
+         (> 0), got {preview_bufnr}"
     );
-    wait_for_window_count(&handle, TWO_PANES, "after split-right preview");
 
     // --- 2. previews() surfaces one row for alpha.md, defaulting to NOT full width
     let previews = wait_for_previews(&handle, "one alpha.md preview", |p| {
@@ -425,9 +429,17 @@ fn full_width_flag_flows_to_the_preview_source() {
     );
 
     // --- 3. Toggle the SOURCE buffer full width; the preview row's flag follows
-    // Focus the markdown SOURCE pane (the split left the preview pane active) so the
-    // toggle lands on alpha.md, then flip it. The Lua helper re-emits wolf_preview,
-    // so the preview row's source_full_width() must flip to true.
+    // Focus the markdown SOURCE pane (the in-place bind left the preview pane
+    // active) so the toggle lands on alpha.md, then flip it. The Lua helper
+    // re-emits wolf_preview, so the preview row's source_full_width() must flip
+    // to true. Deterministic barrier first: wait for the markdown gate to go
+    // FALSE (the active pane holds the non-markdown scratch), or
+    // `focus_markdown_source` could read a stale true and skip the cycle.
+    wait_for_markdown_active(
+        &handle,
+        false,
+        "the in-place bind leaves the (non-markdown) preview scratch pane current",
+    );
     focus_markdown_source(&handle);
     handle.toggle_full_width();
     wait_for_previews(

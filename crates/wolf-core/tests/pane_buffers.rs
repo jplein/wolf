@@ -522,11 +522,18 @@ fn buffers_map_skips_preview_panes_and_drops_closed_windows() {
     );
 
     // (b) A preview scratch pane is still SKIPPED by the emit.
-    let preview_bufnr = core.open_preview("split_right");
+    // A typed `:vsplit` first (the in-place open_preview() binds into the ACTIVE
+    // pane), so the surviving alpha.md editor window keeps its buffers entry while
+    // the new split pane becomes the preview.
+    ex_command(&core, "vsplit");
+    poll_until(&core, &waiter, "two live windows after :vsplit", |snap| {
+        snap.windows.len() >= 2
+    });
+    let preview_bufnr = core.open_preview();
     assert!(
         preview_bufnr > 0,
-        "open_preview(\"split_right\") on a markdown buffer must return a scratch \
-         bufnr (> 0), got {preview_bufnr}"
+        "open_preview() on a markdown buffer must return a scratch bufnr (> 0), \
+         got {preview_bufnr}"
     );
     poll_until(&core, &waiter, "a preview window to appear", |snap| {
         !snap.previews.is_empty()
@@ -555,6 +562,10 @@ fn buffers_map_skips_preview_panes_and_drops_closed_windows() {
     assert!(
         !core.read_snapshot().buffers.contains_key(&preview_win),
         "preview scratch panes are SKIPPED, so their window never enters buffers"
+    );
+    assert!(
+        core.read_snapshot().buffers.contains_key(&win_a),
+        "the alpha.md editor window keeps its buffers entry beside the preview pane"
     );
     let st = core.pane_status(preview_grid);
     assert_eq!(

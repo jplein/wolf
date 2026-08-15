@@ -150,23 +150,6 @@ Purpose: Pure geometry for the terminal drawer — a full-width strip along the 
 
 - The drawer is not a tree leaf, so it has no `PaneTree` divider — its top edge is not drag-resizable — and `PaneTree.neighbor` cannot resolve focus moves out of it. `DrawerFocusSeam` bridges that.
 
-#### `EditSeam.swift`
-
-Purpose: The pure placement decision for the Edit Source command — from a window's pane count and what the other pane holds, it picks the `mode` string handed to core's `edit_source(mode)`. The inverse of `PreviewSeam`; Foundation only, so it needs no live view or Neovim.
-
-**Public API**
-
-- `placementMode(paneCount:activePaneIsPreview:otherEditorPaneCount:) -> String` — `"split_left"` when the preview is the only pane, so the source opens in a new pane to its left; `"reuse_editor_pane"` when there are exactly two panes, the active one is a preview and the other is an editor, so the source binds there and takes focus instead of clobbering the preview; `"active"` otherwise, replacing the preview in the active pane.
-
-**Decisions**
-
-- Both extra parameters are defaulted, so a caller that passes only `paneCount` can reach `"split_left"` or `"active"` but never the reuse case. Reuse is opt-in.
-- `activePaneIsPreview: false` declines reuse defensively — Edit is only meaningful fired from a preview pane.
-
-**Gotchas**
-
-- The return values are a string contract with core's `edit_source`, not free-form labels. `PaneContainerView.editPlacementInputs()` derives the three inputs from the live pane layout.
-
 #### `EditorInset.swift`
 
 Purpose: Pure arithmetic for the per-pane text-grid inset. Given one pane's size and its statusbar-strip height, it produces the pane-local rectangle the grid paints into, plus the horizontal inset the statusbar and cmdline text share so they left-align with grid text.
@@ -296,6 +279,21 @@ Purpose: Pure key translation for the macOS front end — the fields an `NSView.
 
 - On macOS the Backspace key is `kVK_Delete` and forward-delete is `kVK_ForwardDelete` — easy to transpose.
 
+#### `OtherPaneSeam.swift`
+
+Purpose: Resolves which other pane receives an other-pane bind — Preview in Another Pane and Edit in Another Pane — as an existing pane or a fresh split. Foundation only, over `PaneTree` and scalar bounds; the split-and-bind mechanics belong to core and the Lua helpers.
+
+**Public API**
+
+- `Side` — the preferred side: preview prefers `.right`, edit `.left`.
+- `Target` — `.split` or `.existing(PaneId)`.
+- `target(active:prefer:tree:width:height:)` — rules in order: an `active` that is not a tree leaf (the drawer, an unknown pane) yields `nil`, so the command no-ops rather than splitting; a single leaf yields `.split`; a `tree.neighbor` on the preferred side yields `.existing`; otherwise the DFS-adjacent leaf in `leaves()` order with wrap — `.right` the next leaf, `.left` the previous.
+
+**Decisions**
+
+- Purely geometric, with no buffer-content preference: a fallback target that is itself a preview is simply repointed under ordinary bind semantics.
+- `width` / `height` must be the same bounds pair the caller's focus resolution uses (the drawer-reduced editor height), so the neighbor geometry matches what the user sees.
+
 #### `PaletteSeam.swift`
 
 Purpose: The command palette's pure decision seam, the sibling of `PickerSeam`. Foundation only, so it is unit-testable headlessly.
@@ -345,6 +343,24 @@ Purpose: The pure codec between the live `PaneTree` layout and the shapes that p
 **Gotchas**
 
 - The JSON key names and the `"v"` / `"h"` orientation tags are a contract with the Lua helper, and the token stream is a contract with `wolf-ffi`. Neither can be changed on one side alone.
+
+#### `PaneModeSeam.swift`
+
+Purpose: The pure per-pane mode decision. A pane is in preview mode or edit mode, derived — never stored — from whether its nvim window appears in the `previews()` snapshot, and the mode decides whether a picker or open-dialog activation previews or edits its target. Foundation only.
+
+**Public API**
+
+- `PaneMode` — `.edit` or `.preview`.
+- `mode(activeWin:previewWins:) -> PaneMode` — `.preview` iff `activeWin` is non-zero and in `previewWins`; `activeWin == 0`, no bound pane yet, is always `.edit`.
+
+**Decisions**
+
+- The mode is derived per call rather than stored, so a pane's mode can never go stale against the previews snapshot.
+- A preview in a different pane leaves the active pane in edit mode: the decision keys on the active pane's own window, not on whether any preview exists.
+
+**Gotchas**
+
+- `PaneContainerView.activePaneIsPreview` supplies the live inputs. `PickerView` and `WolfWindowController` route activations through it — preview mode goes to `preview_buffer` / `preview_file`, falling back to a plain switch or open on `0`, which converts the pane to edit mode.
 
 #### `PaneOcclusion.swift`
 
@@ -438,6 +454,28 @@ Purpose: The pure decision functions behind the macOS file picker — trigger de
 
 - `nextSelection` and `restoredIndex` also drive the command palette and the buffer picker, so a change here is not confined to the file picker.
 
+#### `PreviewCopySeam.swift`
+
+Purpose: The pure rules behind Copy from a Markdown preview pane — the selection push channel, its payload decoding, and which of Copy's two sources supplies the bytes. Foundation only.
+
+**Public API**
+
+- `Selection` — the raw, untrimmed selected text; `isCopyable` is false when it is whitespace-only.
+- `decodeSelectionMessage(_:) -> SelectionMessage?` — `.selection` or `.cleared`; `nil` means malformed, and must leave the cache alone rather than read as a clear.
+- `CopySource` — `.previewSelection(String)` carrying the raw text, `.neovimVisual`, `.none`.
+- `selectionHandlerName`, `selectionScriptJS(handlerName:)` — the document-start script posting `{ t: <text> }` on selection change, mouse-up, key-up and once at load.
+- `copySource(previewSelection:isVisualMode:)`, with `isCopyEnabled(…)` defined as `copySource(…) != .none` so validation and the action cannot disagree.
+
+**Decisions**
+
+- The text rides in the push: menu validation is synchronous and needs a cache anyway, and one snapshot behind both the enable decision and the copied bytes makes enabled-but-nothing-to-copy impossible.
+- A copyable preview selection outranks visual mode, because the caller supplies one only when the active pane is that preview; a non-copyable entry does not mask visual mode.
+- Whitespace-only counts as empty, and `CharacterSet.whitespaces` covers U+00A0, so `text != ""` is not equivalent. Trimming decides whether to copy, never what.
+
+**Gotchas**
+
+- `selectionHandlerName` rides the same `WKUserContentController` as the other preview channels, so every name must differ; teardown is in [DECISIONS.md](../../DECISIONS.md).
+
 #### `PreviewLinkSeam.swift`
 
 Purpose: Classifies a link clicked in the Markdown preview web view into one of three actions, and synthesizes the JavaScript that scrolls a fragment into view.
@@ -477,15 +515,14 @@ Purpose: Every decision behind Markdown-preview scroll-sync — which marker a c
 **Gotchas**
 
 - The fallback sweep filters on `data-col="0"` and must never be widened — see [the position-marker contract](../../../wolf-core/DECISIONS.md).
-- `stateHandlerName` and `PreviewSeam.clickFocusHandlerName` share one `WKUserContentController`, so they must differ; teardown is in [DECISIONS.md](../../DECISIONS.md).
+- `stateHandlerName` shares one `WKUserContentController` with the other preview channels' handler names, so all of them must differ; teardown is in [DECISIONS.md](../../DECISIONS.md).
 
 #### `PreviewSeam.swift`
 
-Purpose: Where a Preview command opens its pane, which preview windows need their web view reloaded, and the click-to-focus script a preview pane injects.
+Purpose: Which preview windows need their web view reloaded, and the click-to-focus script a preview pane injects.
 
 **Public API**
 
-- `placementMode(paneCount:activePaneIsPreview:otherPreviewPaneCount:) -> String` — the `mode` string handed to core's `wolf_open_preview`: `"split_right"`, `"reuse_preview_pane"`, or `"active"`.
 - `PreviewLoad` — one preview window's `(sourceBufnr, sourceTick)` reload key.
 - `winsNeedingReload(current:loaded:) -> [Int64]` — order is unspecified, and a window present in `loaded` but absent from `current`, a dropped preview, is never returned.
 - `clickFocusHandlerName` and `clickFocusJS(handlerName:)`.
@@ -495,7 +532,6 @@ Purpose: Where a Preview command opens its pane, which preview windows need thei
 - The reload gate keys on the source buffer number as well as the tick. Two freshly opened files can share a `changedtick`, so a tick-only gate leaves a reused preview pane rendering the file it was bound to before.
 - `PreviewLoad` is a struct rather than a tuple so `Optional` inequality compiles, which is what lets the gate be one dictionary comparison.
 - `clickFocusJS` registers `mousedown` in the capture phase. The hosting `WKWebView` swallows AppKit mouse events, so the container's `mouseDown` never fires over a preview pane, and capture stops an inner element that halts propagation from suppressing the focus notification.
-- Pane reuse is declined when the active pane is itself a preview, so a preview is never opened from inside a preview.
 
 #### `RestoreSeam.swift`
 

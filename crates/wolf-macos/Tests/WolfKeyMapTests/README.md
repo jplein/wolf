@@ -105,16 +105,6 @@ Note that the nearby `swift_format_srcs` glob feeds lint and format only, not te
 
 - Two pane-area heights are fixed deliberately — one divisible by three, one not — because the only thing distinguishing them is the rounding in `drawerHeight`. A new case should state which side it exercises.
 
-#### `EditSeamTests.swift`
-
-**Covers**
-
-- `EditSeam.placementMode(paneCount:activePaneIsPreview:otherEditorPaneCount:)`, in particular how narrow the reuse branch is: exactly two panes, the active pane a preview, and exactly one other editor pane. Every other shape, including three or more panes, falls to the active-pane branch; a pane count of one or zero splits left.
-
-**Gotchas**
-
-- The returned strings are the literal `mode` argument passed to `edit_source` in `crates/wolf-ffi/src/lib.rs`, not display labels — changing one here without changing the Rust side breaks the call silently. What those modes actually do to the layout is covered by the real-nvim `//crates/wolf-ffi:edit` test.
-
 #### `EditorInsetTests.swift`
 
 **Covers** — `EditorInset`, the per-pane text-grid inset arithmetic. Pins the padding constant, one exact `gridRect` for a representative pane, the additive invariants tying `gridRect` back to the pane and statusbar dimensions, and the clamp edges.
@@ -157,6 +147,12 @@ Note that the nearby `swift_format_srcs` glob feeds lint and format only, not te
 
 **Gotchas** — the `Kind` discriminants and `kVK_*` codes are local copies that must stay in lockstep with the Rust `FfiKeyEvent` and `wolf-core/src/input.rs`; note that Backspace is `kVK_Delete` and forward-delete is `kVK_ForwardDelete`, which are easy to transpose. `assertKey` compares field by field because the generated `FfiKeyEvent` is not `Equatable`.
 
+#### `OtherPaneSeamTests.swift`
+
+**Covers** — `OtherPaneSeam.target(active:prefer:tree:width:height:)` over hand-built `PaneTree`s: a single leaf splits on both sides, the preferred-side geometric neighbor wins when it resolves, a missing neighbor falls back to the DFS-adjacent leaf with wrap (edge panes wrap; a vertical stack with no lateral neighbor still finds the other pane), a 2×2 grid resolves the cross-axis-overlap neighbor rather than the diagonal, and a non-leaf active pane — the drawer case, a fresh `PaneId` — yields `nil`.
+
+**Gotchas** — fixtures reuse `PaneTreeTests`' vocabulary (explicit pane ids, the same non-square 100×40 bounds) so width and height math stay distinguishable; the AppKit glue that maps a `Target` to a window handle (`PaneContainerView.otherPaneTarget`) is manual-smoke, with the nvim-side bind covered by the real-nvim `//crates/wolf-ffi:other_pane` test.
+
 #### `PaletteSeamTests.swift`
 
 **Covers** — `PaletteSeam.isPaletteTrigger(charactersIgnoringModifiers:command:)`, the case-insensitive Command+P chord, and `PaletteSeam.PaletteRowKind(ffi:)`, which decodes the FFI row-kind discriminant and must stay in lockstep with wolf-ffi's `mod palette_row_kind`.
@@ -174,6 +170,16 @@ Note that the nearby `swift_format_srcs` glob feeds lint and format only, not te
 **Covers** — the `PaneLayoutCodec` / `SavedPaneNode` bridge: `encode` (leaf ids to buffer paths, an unmapped leaf to the empty path, preview marking), the `postOrderTokens` / `decodeTokens` round-trip over leaf, two-child, n-ary and perpendicular-nested trees, `isEmptyLeaf`, `PaneTree.rebuilt(from:firstLeafId:)`, and the `specJSON` object shape.
 
 **Gotchas** — the `specJSON` cases parse with `JSONSerialization` and assert only the object graph, so key ordering and float spelling stay unpinned on purpose; the key names themselves must match `runtime/nvim/init.lua`'s `wolf_rebuild_layout`. A preview leaf's `path` is its source Markdown file, and `isEmptyLeaf` is false for an empty-path preview leaf because preview-ness has to survive persistence.
+
+#### `PaneModeSeamTests.swift`
+
+**Covers**
+
+- `PaneModeSeam.mode(activeWin:previewWins:)`: an active window in `previewWins` is preview mode; one absent from it is edit mode; `activeWin == 0` is edit mode even with previews live elsewhere; an empty set is edit mode; and a preview in a different pane leaves the active pane in edit mode, because the decision keys on the active pane's own window.
+
+**Gotchas**
+
+- Scalar inputs only. The `activePaneIsPreview` glue in `PaneContainerView` and the picker and open-dialog routing that consume it are manual-smoke; the nvim-side behavior behind each route is covered by the real-nvim `//crates/wolf-ffi:preview` and `:edit` tests.
 
 #### `PaneOcclusionTests.swift`
 
@@ -241,6 +247,20 @@ The three pure file-picker seams, each as a table of cases: `isPickerTrigger` (t
 - `isPickerTrigger` matches Command+O, the platform convention for "open". Both front-ends agree on the letter; they differ only in modifier, since wolf-gnome must use Ctrl+Shift. A case asserts that Command+"p" is false, pinning the letter against drift.
 - `nextSelection` and `restoredIndex` are exact ports of `crates/wolf-gnome/src/picker.rs` and are meant to stay case-for-case in step with it.
 
+#### `PreviewCopySeamTests.swift`
+
+**Covers**
+
+- `PreviewCopySeam.decodeSelectionMessage` as a table: copyable text, whitespace preserved verbatim, the empty and whitespace-only clears, and the four malformed shapes (wrong value type, missing key, non-dictionary, `nil`) that must leave the cache alone.
+- The `copySource` matrix and `Selection.isCopyable`, including that a copyable preview selection beats visual mode while a non-copyable one does not mask it, plus a sweep asserting `isCopyEnabled(…) == (copySource(…) != .none)` over the whole matrix.
+- The emitted JavaScript: the handler it posts to, the `t` key the decoder requires, the `selectionchange` / capture-phase `mouseup` / `keyup` listeners, the rAF throttle, the collapsed early-out, the `try` / `catch` wrapper, the document-start push, and a custom handler name.
+
+**Gotchas**
+
+- Scalar and string inputs only. A live selection, the `NSPasteboard` write and a real ⌘C cannot be automated and stay manual-smoke.
+- The handler name is asserted to differ from `PreviewSeam.clickFocusHandlerName` and `PreviewScrollSeam.stateHandlerName`, because all three share one `WKUserContentController` and a duplicate silently replaces a handler.
+- Assertions on the generated source pin the argument text, not just a substring: `contains("true")` alone is satisfied by the script's own `pending = true`.
+
 #### `PreviewLinkSeamTests.swift`
 
 **Covers**
@@ -263,7 +283,7 @@ The three pure file-picker seams, each as a table of cases: `isPickerTrigger` (t
 
 **Covers**
 
-Two unrelated `PreviewSeam` decisions plus the click-to-focus surface. `placementMode(...)` is pinned across its three modes, including the two-pane branch that reuses an existing preview pane and the defensive cases that fall back to the active pane. `winsNeedingReload(current:loaded:)` is the per-preview-window reload gate, covered for first bind, source change, tick advance, an unchanged no-op, independent windows, and windows dropped from `current`.
+The `PreviewSeam` reload gate plus the click-to-focus surface. `winsNeedingReload(current:loaded:)` is the per-preview-window reload gate, covered for first bind, source change, tick advance, an unchanged no-op, independent windows, and windows dropped from `current`; the click-to-focus cases pin the handler name and that the generated script registers a capture-phase `mousedown` posting to it.
 
 **Gotchas**
 

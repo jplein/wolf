@@ -204,6 +204,13 @@ pub struct WolfCore {
     /// Reentrancy guard for [`restart_nvim`](WolfCore::restart_nvim): a concurrent
     /// or nested restart request is a no-op while one is in flight.
     restarting: AtomicBool,
+    /// The live file-search session registry (see [`files::SearchRegistry`]).
+    /// Created once at [`WolfCore::start`] and cloned into the redraw handler,
+    /// which routes each `wolf_fs_changed` notification into it;
+    /// [`start_file_search`](WolfCore::start_file_search) registers every new
+    /// session so the debounced rescan keeps long-lived sessions (the tree
+    /// sidebar) tracking writes/renames/deletes made through the captive nvim.
+    search_registry: Arc<files::SearchRegistry>,
 }
 
 /// The process's canonicalized home directory, resolved at most once.
@@ -274,6 +281,13 @@ impl WolfCore {
             .map(|d| MruStore::open(&d))
             .unwrap_or_else(MruStore::disabled);
 
+        // The file-search session registry: `start_file_search` registers each
+        // live session; the redraw handler routes `wolf_fs_changed` events into
+        // it, and it debounces + re-walks the registered sessions (see
+        // `files::SearchRegistry`). Built on this runtime's handle so rescan
+        // walks share the traversal's blocking pool.
+        let search_registry = Arc::new(files::SearchRegistry::new(runtime.handle().clone()));
+
         let handler = RedrawHandler::new(
             snapshot.clone_handle(),
             intents.clone(),
@@ -281,6 +295,7 @@ impl WolfCore {
             tracked_cwd.clone(),
             recent_dirs.clone(),
             nav_history.clone(),
+            search_registry.clone(),
             wake.clone(),
         );
 
@@ -314,6 +329,7 @@ impl WolfCore {
             proc.setup_commands().await?;
             proc.setup_tabs().await?;
             proc.setup_open_files().await?;
+            proc.setup_fs_events().await?;
             proc.setup_view_tracking().await?;
             proc.setup_preview().await?;
             Ok::<NvimProcess, NvimError>(proc)
@@ -406,6 +422,7 @@ impl WolfCore {
             handler,
             nvim_cfg,
             restarting: AtomicBool::new(false),
+            search_registry,
         })
     }
 
@@ -636,62 +653,51 @@ impl WolfCore {
         }
     }
 
-    /// Opens (or reuses) the Markdown preview pane for the active source buffer and
-    /// returns the preview scratch buffer's number (`0` on error or when the active
-    /// buffer is not Markdown).
+    /// Previews the active source buffer in place — the active pane becomes the
+    /// preview pane — and returns the preview scratch buffer's number (`0` on error
+    /// or when the active buffer is not Markdown).
     ///
     /// Blocks briefly on the captive nvim via
     /// [`block_on_rpc`](Self::block_on_rpc) (bounded by
     /// [`rpc_timeout`](Self::rpc_timeout) — [`RPC_TIMEOUT_DEFAULT`],
     /// `WOLF_RPC_TIMEOUT_MS`) to run the `wolf_open_preview` helper (see
-    /// [`crate::nvim::NvimProcess::open_preview`]).
-    /// `mode` is chosen by the front-end via `PreviewSeam.placementMode`:
-    /// `"split_right"` (single pane → new pane on the right), `"active"` (multi
-    /// pane → replace the active pane's buffer), or `"reuse_preview_pane"` (exactly
-    /// two panes with the OTHER pane already a preview → bind into that OTHER preview
-    /// window, leaving the active editor untouched; falls back to `"active"` when
-    /// none). The
-    /// front-end learns the new pane + the source↔preview mapping on the next wake
-    /// (via the `wolf_preview` notification), so no synchronous window handle is
-    /// needed. An RPC error (including a [`NvimError::Timeout`] on a wedged nvim) is
-    /// logged and returns `0`.
+    /// [`crate::nvim::NvimProcess::open_preview`]). The bind never creates a pane;
+    /// the front-end learns the source↔preview mapping on the next wake (via the
+    /// `wolf_preview` notification), so no synchronous window handle is needed. An
+    /// RPC error (including a [`NvimError::Timeout`] on a wedged nvim) is logged
+    /// and returns `0`.
     #[must_use]
-    pub fn open_preview(&self, mode: &str) -> i64 {
+    pub fn open_preview(&self) -> i64 {
         let nvim = self.nvim.borrow();
-        match self.block_on_rpc("open_preview", nvim.open_preview(mode)) {
+        match self.block_on_rpc("open_preview", nvim.open_preview()) {
             Ok(bufnr) => bufnr,
             Err(e) => {
-                tracing::warn!("open_preview({mode}) failed: {e}");
+                tracing::warn!("open_preview() failed: {e}");
                 0
             }
         }
     }
 
-    /// Navigates from the active PREVIEW pane back to its source file and returns
-    /// the source buffer's number (`0` on error or when the active buffer is not a
-    /// preview pane).
+    /// Navigates from the active PREVIEW pane back to its source file in place —
+    /// the active pane becomes an edit pane — and returns the source buffer's
+    /// number (`0` on error or when the active buffer is not a preview pane).
     ///
     /// Blocks briefly on the captive nvim via
     /// [`block_on_rpc`](Self::block_on_rpc) (bounded by
     /// [`rpc_timeout`](Self::rpc_timeout) — [`RPC_TIMEOUT_DEFAULT`],
     /// `WOLF_RPC_TIMEOUT_MS`) to run the `wolf_edit_source` helper (see
-    /// [`crate::nvim::NvimProcess::edit_source`]).
-    /// `mode` is chosen by the front-end via `EditSeam.placementMode`:
-    /// `"split_left"` (single pane → new editor pane on the LEFT, preview stays
-    /// right), `"active"` (replace the active preview's buffer with the source), or
-    /// `"reuse_editor_pane"` (exactly two panes with the OTHER pane an editor → bind
-    /// the source into that OTHER editor window and focus it; falls back to
-    /// `"active"` when none). The front-end learns the new pane + updated snapshot on
-    /// the next wake (via the `wolf_preview` / `wolf_current_file` notifications), so
-    /// no synchronous window handle is needed. An RPC error (including a
-    /// [`NvimError::Timeout`] on a wedged nvim) is logged and returns `0`.
+    /// [`crate::nvim::NvimProcess::edit_source`]). The bind never creates a pane;
+    /// the front-end learns the updated snapshot on the next wake (via the
+    /// `wolf_preview` / `wolf_current_file` notifications), so no synchronous
+    /// window handle is needed. An RPC error (including a [`NvimError::Timeout`] on
+    /// a wedged nvim) is logged and returns `0`.
     #[must_use]
-    pub fn edit_source(&self, mode: &str) -> i64 {
+    pub fn edit_source(&self) -> i64 {
         let nvim = self.nvim.borrow();
-        match self.block_on_rpc("edit_source", nvim.edit_source(mode)) {
+        match self.block_on_rpc("edit_source", nvim.edit_source()) {
             Ok(bufnr) => bufnr,
             Err(e) => {
-                tracing::warn!("edit_source({mode}) failed: {e}");
+                tracing::warn!("edit_source() failed: {e}");
                 0
             }
         }
@@ -724,6 +730,83 @@ impl WolfCore {
             Ok(bufnr) => bufnr,
             Err(e) => {
                 tracing::warn!("preview_file({win}, {path}) failed: {e}");
+                0
+            }
+        }
+    }
+
+    /// Previews the already-open buffer `bufnr` in window `win` (`0` = the current
+    /// window), replacing that pane's buffer with the source's preview scratch, and
+    /// returns the source bufnr — the preview-mode buffer-picker activation path.
+    ///
+    /// Blocks briefly on the captive nvim via
+    /// [`block_on_rpc`](Self::block_on_rpc) (bounded by
+    /// [`rpc_timeout`](Self::rpc_timeout) — [`RPC_TIMEOUT_DEFAULT`],
+    /// `WOLF_RPC_TIMEOUT_MS`) to run the `wolf_preview_buffer` helper (see
+    /// [`crate::nvim::NvimProcess::preview_buffer`]). Returns the source bufnr
+    /// (`> 0`) on success; `0` when `bufnr` is invalid, unnamed, or not Markdown,
+    /// or on RPC error (including a [`NvimError::Timeout`] on a wedged nvim,
+    /// logged). The front-end falls back to a plain buffer switch on `0` (the pane
+    /// converts to edit mode).
+    #[must_use]
+    pub fn preview_buffer(&self, win: i64, bufnr: i64) -> i64 {
+        let nvim = self.nvim.borrow();
+        match self.block_on_rpc("preview_buffer", nvim.preview_buffer(win, bufnr)) {
+            Ok(source) => source,
+            Err(e) => {
+                tracing::warn!("preview_buffer({win}, {bufnr}) failed: {e}");
+                0
+            }
+        }
+    }
+
+    /// Previews the active pane's Markdown file in ANOTHER pane — binding the
+    /// preview scratch into `target_win` when it is a usable other pane, else
+    /// splitting a new pane to the right — and returns the SOURCE bufnr (`0` on
+    /// error or when the active buffer is not Markdown).
+    ///
+    /// Blocks briefly on the captive nvim via
+    /// [`block_on_rpc`](Self::block_on_rpc) (bounded by
+    /// [`rpc_timeout`](Self::rpc_timeout) — [`RPC_TIMEOUT_DEFAULT`],
+    /// `WOLF_RPC_TIMEOUT_MS`) to run the `wolf_preview_in_other` helper (see
+    /// [`crate::nvim::NvimProcess::preview_in_other`]). The helper gates before
+    /// any split, so a rejected call never changes the layout; a split surfaces
+    /// as an ordinary vertical Split layout intent on the next wake. Focus stays
+    /// in the source-editing pane. An RPC error (including a
+    /// [`NvimError::Timeout`] on a wedged nvim) is logged and returns `0`.
+    #[must_use]
+    pub fn preview_in_other(&self, target_win: i64) -> i64 {
+        let nvim = self.nvim.borrow();
+        match self.block_on_rpc("preview_in_other", nvim.preview_in_other(target_win)) {
+            Ok(bufnr) => bufnr,
+            Err(e) => {
+                tracing::warn!("preview_in_other({target_win}) failed: {e}");
+                0
+            }
+        }
+    }
+
+    /// Edits the active preview pane's SOURCE file in ANOTHER pane — binding the
+    /// source into `target_win` when it is a usable other pane, else splitting
+    /// (the scratch keeps the new right window, the source lands in the
+    /// original) — and returns the bufnr bound into that pane (`0` on error or
+    /// when the active pane is not a preview).
+    ///
+    /// Blocks briefly on the captive nvim via
+    /// [`block_on_rpc`](Self::block_on_rpc) (bounded by
+    /// [`rpc_timeout`](Self::rpc_timeout) — [`RPC_TIMEOUT_DEFAULT`],
+    /// `WOLF_RPC_TIMEOUT_MS`) to run the `wolf_edit_in_other` helper (see
+    /// [`crate::nvim::NvimProcess::edit_in_other`]). The helper gates before any
+    /// split and FOCUSES the pane now editing the source. An RPC error
+    /// (including a [`NvimError::Timeout`] on a wedged nvim) is logged and
+    /// returns `0`.
+    #[must_use]
+    pub fn edit_in_other(&self, target_win: i64) -> i64 {
+        let nvim = self.nvim.borrow();
+        match self.block_on_rpc("edit_in_other", nvim.edit_in_other(target_win)) {
+            Ok(bufnr) => bufnr,
+            Err(e) => {
+                tracing::warn!("edit_in_other({target_win}) failed: {e}");
                 0
             }
         }
@@ -1263,6 +1346,20 @@ impl WolfCore {
             bounds.skip_dirs.insert(home.join(".cache"));
         }
 
+        // Register the session with the fs-event rescan registry BEFORE the
+        // traversal spawns, so no `wolf_fs_changed` event can slip between the
+        // walk and the registration. The entry shares the session's `state` /
+        // `cancel` handles; dropping the returned `FileSearch` sets `cancel`,
+        // which is the registry's cue to prune the entry.
+        self.search_registry.register(files::SessionEntry::new(
+            state.clone(),
+            cancel.clone(),
+            root.clone(),
+            bounds.clone(),
+            wake.clone(),
+            self.mru.clone(),
+        ));
+
         files::spawn_traversal(
             root,
             state.clone(),
@@ -1467,6 +1564,7 @@ impl WolfCore {
             proc.setup_commands().await?;
             proc.setup_tabs().await?;
             proc.setup_open_files().await?;
+            proc.setup_fs_events().await?;
             proc.setup_view_tracking().await?;
             proc.setup_preview().await?;
             Ok::<NvimProcess, NvimError>(proc)

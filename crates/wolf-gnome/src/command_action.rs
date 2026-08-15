@@ -111,12 +111,19 @@ pub enum UiAction {
     /// Show or hide the terminal drawer, the full-width shell Neovim opens along
     /// the bottom of the pane area.
     ToggleTerminal,
-    /// Open the Markdown preview for the focused buffer, at the placement
-    /// [`crate::preview_ui::preview_placement`] gives.
+    /// Bind the Markdown preview for the focused buffer into its own pane, at the
+    /// gate [`crate::preview_ui::preview_press`] gives.
     OpenPreview,
-    /// Leave the focused preview pane for its source file, at the placement
-    /// [`crate::preview_ui::edit_placement`] gives.
+    /// Return the focused preview pane to its source file, at the gate
+    /// [`crate::preview_ui::edit_press`] gives.
     EditSource,
+    /// Bind the Markdown preview for the focused buffer into ANOTHER pane, leaving
+    /// the source on screen and focused. Gated by
+    /// [`crate::preview_ui::preview_press`], the same decision as [`Self::OpenPreview`].
+    PreviewInOtherPane,
+    /// Bind the focused preview's source into ANOTHER pane and move focus there,
+    /// leaving the preview on screen. Gated by [`crate::preview_ui::edit_press`].
+    EditInOtherPane,
     /// Serve the focused Markdown buffer from core's loopback preview server over a
     /// BLOCKING RPC and hand the resulting `http://127.0.0.1:<port>/…` address to the
     /// platform's URI launcher, at the gate
@@ -181,6 +188,8 @@ pub fn ui_action_for(command: Command) -> UiAction {
              from)",
         ),
         Command::SearchInProject => UiAction::OpenSearchOverlay,
+        Command::PreviewInOtherPane => UiAction::PreviewInOtherPane,
+        Command::EditInOtherPane => UiAction::EditInOtherPane,
     }
 }
 
@@ -224,13 +233,14 @@ mod tests {
     /// The commands `wolf-gnome` DISPATCHES, by canonical `CommandSpec::id`,
     /// sorted. Ids (not variants) so the failure message names the registry row a
     /// reader can grep for.
-    const EXPECTED_DISPATCHED_IDS: [&str; 21] = [
+    const EXPECTED_DISPATCHED_IDS: [&str; 23] = [
         "buffer_picker",
         "close_pane",
         "close_window",
         "command_palette",
         "copy",
         "edit",
+        "edit_in_other_pane",
         "full_width",
         "go_to_file",
         "minimize_window",
@@ -242,6 +252,7 @@ mod tests {
         "paste",
         "preview",
         "preview_in_browser",
+        "preview_in_other_pane",
         "quit_application",
         "search_in_project",
         "terminal",
@@ -411,6 +422,16 @@ mod tests {
             desc: "25 SearchInProject: opens the in-window project-search overlay",
             command: Command::SearchInProject,
             want: Want::Exact(UiAction::OpenSearchOverlay),
+        },
+        Case {
+            desc: "26 PreviewInOtherPane: binds the preview into a pane other than the active one",
+            command: Command::PreviewInOtherPane,
+            want: Want::Exact(UiAction::PreviewInOtherPane),
+        },
+        Case {
+            desc: "27 EditInOtherPane: binds the source into a pane other than the active one",
+            command: Command::EditInOtherPane,
+            want: Want::Exact(UiAction::EditInOtherPane),
         },
     ];
 

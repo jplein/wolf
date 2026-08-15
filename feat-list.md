@@ -151,20 +151,21 @@ One thing is deliberately not persisted on Linux: the window position, which Way
 
 ## Markdown preview
 
-| Feature                                           | Branch or commit                       | macOS | Linux |
-| ------------------------------------------------- | -------------------------------------- | ----- | ----- |
-| Markdown → HTML rendering (`wolf_core::markdown`) | `feat/markdown-preview`                | [x]   | [x]   |
-| In-app live preview pane                          | `feat/markdown-preview` (`b159793`)    | [x]   | [x]   |
-| Preview pane reuse / placement modes              | `feat/markdown-preview` (`937bb7f`)    | [x]   | [x]   |
-| Follow links inside the preview                   | `feat/markdown-preview` (`61204b7`)    | [x]   | [x]   |
-| Full path in a preview pane's status bar          | `feat/markdown-preview` (`2116415`)    | [x]   | [x]   |
-| Math symbols / Inter font in the preview          | `feat/markdown-preview` (`6f6abd1`)    | [x]   | [x]   |
-| "Edit Source" (preview's inverse)                 | `feat/markdown-preview` (`8a72e50`)    | [x]   | [x]   |
-| Preview theme follows light/dark                  | `fix/dark-mode` (`3edf74e`, `66ce35e`) | [x]   | [x]   |
-| Typography tuning for the preview                 | `feat/typography` (`6838614`)          | [x]   | [x]   |
-| Syntax-highlighted code blocks                    | `feat/code-block-syntax-highlighting`  | [x]   | [x]   |
-| Preview of anonymous / unsaved buffers            | `feat/preview-anonymous-files`         | [x]   | [x]   |
-| Preview in browser (loopback HTTP server)         | `feat/preview-server` (`4728086`)      | [x]   | [ ]   |
+| Feature                                            | Branch or commit                       | macOS | Linux |
+| -------------------------------------------------- | -------------------------------------- | ----- | ----- |
+| Markdown → HTML rendering (`wolf_core::markdown`)  | `feat/markdown-preview`                | [x]   | [x]   |
+| In-app live preview pane                           | `feat/markdown-preview` (`b159793`)    | [x]   | [x]   |
+| Per-pane preview/edit mode, in-place Preview       | `feat/markdown-preview` (`937bb7f`)    | [x]   | [x]   |
+| Follow links inside the preview                    | `feat/markdown-preview` (`61204b7`)    | [x]   | [x]   |
+| Full path in a preview pane's status bar           | `feat/markdown-preview` (`2116415`)    | [x]   | [x]   |
+| Math symbols / Inter font in the preview           | `feat/markdown-preview` (`6f6abd1`)    | [x]   | [x]   |
+| "Edit" (preview's inverse)                         | `feat/markdown-preview` (`8a72e50`)    | [x]   | [x]   |
+| "Preview in Another Pane" / "Edit in Another Pane" | —                                      | [x]   | [x]   |
+| Preview theme follows light/dark                   | `fix/dark-mode` (`3edf74e`, `66ce35e`) | [x]   | [x]   |
+| Typography tuning for the preview                  | `feat/typography` (`6838614`)          | [x]   | [x]   |
+| Syntax-highlighted code blocks                     | `feat/code-block-syntax-highlighting`  | [x]   | [x]   |
+| Preview of anonymous / unsaved buffers             | `feat/preview-anonymous-files`         | [x]   | [x]   |
+| Preview in browser (loopback HTTP server)          | `feat/preview-server` (`4728086`)      | [x]   | [ ]   |
 
 The rendering pipeline and the loopback preview server are entirely in `wolf-core` and stay GUI-free by design. `wolf-gnome` hosts the second kind of pane content in a `webkit6::WebView`, the GTK analogue of `WKWebView`: every pane leaf is an overlay whose main child is the editor's drawing area, so a preview replaces a pane's grid without replacing its widget, and a live edit reaches the DOM as a JSON-encoded body swap that preserves the reader's scroll offset where a full reload would not.
 

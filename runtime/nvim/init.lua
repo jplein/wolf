@@ -1494,6 +1494,65 @@ function _G.wolf_setup_open_files(chan)
 	emit()
 end
 
+-- Filesystem-change events for the file-search rescan: wolf-core invokes this
+-- over RPC after the open-file mirror setup, passing its own RPC channel id. It
+-- notifies core via wolf_fs_changed whenever the set of files on disk may have
+-- changed, so core can re-walk its live file-search sessions (the tree sidebar
+-- / picker). The payload is { event_name, abs_path } — core treats BufWritePost
+-- as conditional (rescan only for a not-yet-listed path) and every other event
+-- as unconditional.
+--
+-- Two trigger classes, two autocmds:
+--
+-- 1. Buffer events (BufWritePost/BufFilePost/BufDelete): the event names the
+--    file that changed, so the payload carries its absolute path and the
+--    callback skips non-file buffers.
+-- 2. Refocus-edge events (ShellCmdPost/FocusGained/TermLeave): force catch-ups
+--    for mutations nvim never saw as buffer events — a `:!mv`/`:!rm` shell
+--    command, an external terminal or Finder while the app was unfocused, a
+--    command run in the drawer's shell. The event names no file, so the
+--    payload carries an explicit "" (no path semantics).
+--
+-- TermLeave rather than WinLeave: the drawer auto-startinserts on WinEnter
+-- (WolfTerminalInsert augroup), so every drawer-exit path passes a t -> n
+-- mode change and TermLeave covers all of them without a buftype guard.
+--
+-- This is a DEDICATED event rather than a reuse of wolf_open_files because that
+-- augroup also fires on BufEnter/WinEnter/TabEnter, which would turn every
+-- focus change into a rescan.
+function _G.wolf_setup_fs_events(chan)
+	local group = vim.api.nvim_create_augroup("WolfFsEvents", { clear = true })
+	vim.api.nvim_create_autocmd({ "BufWritePost", "BufFilePost", "BufDelete" }, {
+		group = group,
+		callback = function(args)
+			-- Skip non-file buffers (terminals, help, prompt, scratch). The
+			-- buftype read is pcall-guarded because args.buf can already be
+			-- invalid on BufDelete; an unreadable buftype fails OPEN (notify
+			-- anyway — an extra rescan is harmless, a missed one is the bug).
+			local ok, buftype = pcall(function()
+				return vim.bo[args.buf].buftype
+			end)
+			if ok and buftype ~= "" then
+				return
+			end
+			pcall(vim.rpcnotify, chan, "wolf_fs_changed", { args.event, vim.fn.fnamemodify(args.file, ":p") })
+		end,
+	})
+	-- Separate callback, NOT a reuse of the buffer-event one: its buftype guard
+	-- would swallow TermLeave (the current buffer IS the terminal) and
+	-- FocusGained while the drawer is focused. No per-event guards. The path is
+	-- an explicit "" — for these events args.file is only the incidental current
+	-- buffer, and fnamemodify("", ":p") would fabricate the cwd; "" states "no
+	-- path semantics". The element must still be present: core's decode drops a
+	-- 1-element payload.
+	vim.api.nvim_create_autocmd({ "ShellCmdPost", "FocusGained", "TermLeave" }, {
+		group = group,
+		callback = function(args)
+			pcall(vim.rpcnotify, chan, "wolf_fs_changed", { args.event, "" })
+		end,
+	})
+end
+
 -- Per-pane view tracking for the buffer picker: wolf-core invokes this over RPC
 -- after the command setup. Unlike the other setups it takes NO channel id and
 -- emits NO rpcnotify — it only maintains an in-nvim (winid, bufnr) -> winsaveview
@@ -2004,47 +2063,30 @@ vim.api.nvim_create_autocmd("VimEnter", {
 -- so wolf_open_preview reuses one preview buffer per source across invocations.
 _G.wolf_preview_bufs = _G.wolf_preview_bufs or {}
 
--- Opens (or reuses) the Markdown preview pane for the ACTIVE source buffer and
--- returns the preview scratch buffer's number. wolf-core calls this over
--- nvim_exec_lua from WolfCore::open_preview, passing `mode`:
---   * "split_right": single-pane placement -- reuse wolf_do_split('v') (which
---     emits a wolf_layout Vertical Split intent so the shell creates+binds the new
---     pane) then bind the preview buffer into the new (current) window.
---   * "reuse_preview_pane": two-pane placement whose OTHER pane already shows a
---     preview -- bind the preview buffer into that OTHER window (located by its
---     b:wolf_preview_source marker) WITHOUT changing the current window, falling
---     back to the current window when no other preview window is found.
---   * "active": multi-pane placement -- just bind the preview buffer into the
---     current window (nvim_win_set_buf), replacing its content.
--- No-op (returns 0) unless the active buffer's filetype is markdown (the same gate
--- as the Preview command). The preview pane is a real nvim buffer (OD1 = Design S):
--- a listed + nofile + nomodifiable scratch buffer named "Preview: <cwd-relative path>"
--- carrying b:wolf_preview_source (its source's abs path) and b:wolf_preview_source_bufnr
--- (its source's bufnr). Being buflisted, it surfaces in the buffer picker as
--- "Preview: <cwd-relative path>" with no front-end injection; the path-based trackers skip
--- it via b:wolf_preview_source.
 -- Creates (or reuses, via the _G.wolf_preview_bufs map) the preview scratch
 -- buffer for `source_buf` (whose abs path is `source_path`) and returns its
--- bufnr. Factored out of wolf_open_preview so wolf_preview_file can create the
--- same kind of preview buffer for a file the user navigated to via a link. The
--- preview buffer is a listed + scratch (nofile) + nomodifiable buffer named
--- "Preview: <cwd-relative path>" carrying b:wolf_preview_source / b:wolf_preview_source_bufnr.
+-- bufnr. Factored out of wolf_open_preview so wolf_preview_file /
+-- wolf_preview_buffer can create the same kind of preview buffer. The preview
+-- buffer is an UNLISTED scratch (nofile) + nomodifiable buffer named
+-- "Preview: <cwd-relative path>" carrying b:wolf_preview_source /
+-- b:wolf_preview_source_bufnr. Unlisted is deliberate: the buffer picker lists
+-- one row per FILE (the source buffer, which wolf_preview_file marks buflisted),
+-- with no separate "Preview: " rows; the scratch keeps its name only for
+-- window-title display and debuggability.
 function _G.wolf_ensure_preview_buf(source_buf, source_path)
 	local preview_buf = _G.wolf_preview_bufs[source_buf]
 	if not preview_buf or not vim.api.nvim_buf_is_valid(preview_buf) then
-		-- listed = true (surfaces in the picker), scratch = true (nofile /
-		-- bufhidden=hide / noswapfile defaults).
-		preview_buf = vim.api.nvim_create_buf(true, true)
+		-- listed = false (the picker lists the SOURCE buffer instead), scratch =
+		-- true (nofile / bufhidden=hide / noswapfile defaults).
+		preview_buf = vim.api.nvim_create_buf(false, true)
 		local rel = vim.fn.fnamemodify(source_path, ":.")
-		-- Name the buffer "Preview: <cwd-relative path>" so it surfaces in the picker
-		-- with that label (OD1). nvim_buf_set_name raises E95 when that name is
-		-- already taken by ANOTHER buffer (two sources sharing a cwd-relative path,
-		-- e.g. two README.md at the same relative location); the reuse map above
-		-- already short-circuits a re-preview of the SAME source, so a collision here
-		-- is only a DIFFERENT source. On collision fall back to a bufnr-disambiguated
-		-- name so the second preview still opens (rather than open_preview returning
-		-- 0). The common, non-colliding case keeps the exact "Preview: <cwd-relative
-		-- path>" name the picker row asserts on.
+		-- Name the buffer "Preview: <cwd-relative path>". nvim_buf_set_name raises
+		-- E95 when that name is already taken by ANOTHER buffer (two sources sharing
+		-- a cwd-relative path, e.g. two README.md at the same relative location); the
+		-- reuse map above already short-circuits a re-preview of the SAME source, so
+		-- a collision here is only a DIFFERENT source. On collision fall back to a
+		-- bufnr-disambiguated name so the second preview still opens (rather than
+		-- open_preview returning 0).
 		local wanted = "Preview: " .. rel
 		if not pcall(vim.api.nvim_buf_set_name, preview_buf, wanted) then
 			pcall(vim.api.nvim_buf_set_name, preview_buf, wanted .. " (" .. source_buf .. ")")
@@ -2057,58 +2099,37 @@ function _G.wolf_ensure_preview_buf(source_buf, source_path)
 	return preview_buf
 end
 
-function _G.wolf_open_preview(mode)
+-- Previews the ACTIVE source buffer IN PLACE (the active pane becomes a preview
+-- pane) and returns the preview scratch buffer's number. wolf-core calls this
+-- over nvim_exec_lua from WolfCore::open_preview. No-op (returns 0) unless the
+-- active buffer's filetype is markdown (the same gate as the Preview command).
+function _G.wolf_open_preview()
 	if vim.bo.filetype ~= "markdown" then
 		return 0
 	end
 	local source_buf = vim.api.nvim_get_current_buf()
 	local source_path = vim.api.nvim_buf_get_name(source_buf)
 
-	-- Re-emit the SOURCE buffer's cursor BEFORE any placement branch, while the
-	-- source buffer and its window are still CURRENT.
+	-- Re-emit the SOURCE buffer's cursor BEFORE the bind, while the source buffer
+	-- and its window are still CURRENT.
 	--
-	-- LOAD-BEARING ORDERING: for "split_right" / "active" the placement below does
-	-- nvim_win_set_buf(0, preview_buf), making the preview scratch the current
-	-- buffer. Emitting after that would hit emit_cursor's preview-scratch guard and
-	-- bail, leaving the freshly opened preview with no anchor until the user's next
-	-- cursor move. Emitting first means a newly opened preview immediately scrolls
-	-- to where the user is.
+	-- LOAD-BEARING ORDERING: the bind below does nvim_win_set_buf(0, preview_buf),
+	-- making the preview scratch the current buffer. Emitting after that would hit
+	-- emit_cursor's preview-scratch guard and bail, leaving the freshly opened
+	-- preview with no anchor until the user's next cursor move. Emitting first
+	-- means a newly opened preview immediately scrolls to where the user is.
 	if _G.wolf_emit_markdown_cursor then
 		_G.wolf_emit_markdown_cursor(source_buf)
 	end
 
 	local preview_buf = _G.wolf_ensure_preview_buf(source_buf, source_path)
 
-	if mode == "split_right" then
-		-- Single-pane placement: split a new pane to the right, then bind the
-		-- preview into it (the new split is the current window).
-		wolf_do_split("v")
-		vim.api.nvim_win_set_buf(0, preview_buf)
-	elseif mode == "reuse_preview_pane" then
-		-- Two-pane placement whose OTHER pane already previews: bind into that
-		-- OTHER preview window (found by its b:wolf_preview_source marker) WITHOUT
-		-- changing the current window. Falls back to the current window when no
-		-- other preview window is found (defensive; the seam already gates this).
-		local cur = vim.api.nvim_get_current_win()
-		local target = nil
-		for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-			if win ~= cur then
-				local src = vim.b[vim.api.nvim_win_get_buf(win)].wolf_preview_source
-				if src ~= nil and src ~= "" then
-					target = win
-					break
-				end
-			end
-		end
-		vim.api.nvim_win_set_buf(target or cur, preview_buf)
-	else
-		-- "active" (and any unknown mode): replace the current window's buffer.
-		vim.api.nvim_win_set_buf(0, preview_buf)
-	end
+	-- In place: replace the current window's buffer with the preview scratch.
+	vim.api.nvim_win_set_buf(0, preview_buf)
 
 	-- Nudge the front-end to re-emit the previews snapshot so it learns the new
-	-- bind. Done for ALL modes (the emit is idempotent -- the handler wholesale-
-	-- replaces its previews snapshot).
+	-- bind (the emit is idempotent -- the handler wholesale-replaces its previews
+	-- snapshot).
 	--
 	-- CORRECTION: this comment used to claim a background-window nvim_win_set_buf
 	-- fires NO window event. It DOES. Probed directly against the pinned nvim
@@ -2133,38 +2154,28 @@ function _G.wolf_open_preview(mode)
 	if _G.wolf_emit_previews then
 		_G.wolf_emit_previews()
 	end
-	-- Re-assert the active buffer's filetype: a reuse bind's BACKGROUND
-	-- nvim_win_set_buf fires BufWinEnter with the preview scratch as the current
-	-- buffer, which would leave is_markdown_active stuck false for the (still
-	-- markdown) active source pane. Unconditional for all modes -- symmetric and
-	-- idempotent (the current-file emit wholesale-replaces the tracked filetype).
+	-- Re-assert the active buffer state: the bind fires BufWinEnter with the
+	-- preview scratch as the current buffer, and the explicit re-emit makes the
+	-- tracked current-file snapshot independent of autocmd ordering. Idempotent
+	-- (the current-file emit wholesale-replaces the tracked filetype).
 	if _G.wolf_emit_current_file then
 		_G.wolf_emit_current_file()
 	end
 	return preview_buf
 end
 
--- Navigates from the ACTIVE preview pane back to its SOURCE file and returns the
--- source buffer's number. The inverse of wolf_open_preview. wolf-core calls this
--- over nvim_exec_lua from WolfCore::edit_source, passing `mode`:
---   * "split_left": single-pane placement -- capture the ORIGINAL window, split
---     (via wolf_do_split('v'), which emits a wolf_layout Vertical Split intent so
---     the shell creates+binds the new pane), then bind the source into the ORIGINAL
---     window and focus it. The front-end inserts the new leaf AFTER the original in
---     the PaneTree, so the original ends up the LEFT/editor pane and the new window
---     keeps the preview on the RIGHT -- editor left, preview right.
---   * "reuse_editor_pane": two-pane placement whose OTHER pane is an EDITOR (no
---     b:wolf_preview_source) -- bind the source into that OTHER window and focus it,
---     falling back to the current window when no other editor window is found.
---   * "active": replace the current preview pane's buffer with the source.
+-- Navigates from the ACTIVE preview pane back to its SOURCE file IN PLACE (the
+-- active pane becomes an edit pane) and returns the source buffer's number. The
+-- inverse of wolf_open_preview. wolf-core calls this over nvim_exec_lua from
+-- WolfCore::edit_source.
 -- Gate: reads b:wolf_preview_source / b:wolf_preview_source_bufnr off the CURRENT
 -- buffer; returns 0 (no-op) unless the active buffer is a preview scratch. Binding
--- prefers nvim_win_set_buf(win, source_bufnr) when the bufnr is a valid buffer
+-- prefers nvim_win_set_buf(0, source_bufnr) when the bufnr is a valid buffer
 -- (window-scoped, no disk re-read, no MRU churn -- like wolf_switch_buffer); else
--- it focuses the target window and :edits the source path. No MRU recording. After
--- binding it re-emits the previews + current-file snapshots (both idempotent) so
--- the front-end + core's current_is_preview re-settle. Returns the source bufnr.
-function _G.wolf_edit_source(mode)
+-- it :edits the source path. No MRU recording. After binding it re-emits the
+-- previews + current-file snapshots (both idempotent) so the front-end + core's
+-- current_is_preview re-settle. Returns the source bufnr.
+function _G.wolf_edit_source()
 	local cur_buf = vim.api.nvim_get_current_buf()
 	local source_path = vim.b[cur_buf].wolf_preview_source
 	if source_path == nil or source_path == "" then
@@ -2185,30 +2196,8 @@ function _G.wolf_edit_source(mode)
 		end
 	end
 
-	if mode == "split_left" then
-		local orig = vim.api.nvim_get_current_win()
-		wolf_do_split("v")
-		edit_into(orig)
-		vim.api.nvim_set_current_win(orig)
-	elseif mode == "reuse_editor_pane" then
-		local cur = vim.api.nvim_get_current_win()
-		local target = nil
-		for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-			if win ~= cur then
-				local src = vim.b[vim.api.nvim_win_get_buf(win)].wolf_preview_source
-				if src == nil or src == "" then
-					target = win
-					break
-				end
-			end
-		end
-		target = target or cur
-		edit_into(target)
-		vim.api.nvim_set_current_win(target)
-	else
-		-- "active" (and any unknown mode): replace the current window's preview.
-		edit_into(0)
-	end
+	-- In place: replace the current window's preview with the source.
+	edit_into(0)
 
 	-- Re-emit so the front-end learns the pane now shows the source and core
 	-- re-settles current_is_preview. Both are idempotent, but only one is required.
@@ -2229,10 +2218,77 @@ function _G.wolf_edit_source(mode)
 	return source_bufnr or 0
 end
 
+-- Previews an ALREADY-OPEN buffer `bufnr` in window `win` (0 = current),
+-- replacing that pane's buffer with the source's preview scratch. wolf-core
+-- calls this over nvim_exec_lua from WolfCore::preview_buffer (the preview-mode
+-- buffer-picker activation path).
+--
+-- Returns the SOURCE bufnr (> 0) on success; 0 when `bufnr` is invalid,
+-- unnamed, or not Markdown. On 0 the front-end falls back to a plain
+-- switch_buffer (the pane converts to edit mode).
+function _G.wolf_preview_buffer(win, bufnr)
+	if bufnr == nil or bufnr == 0 or not vim.api.nvim_buf_is_valid(bufnr) then
+		return 0
+	end
+	local source_path = vim.api.nvim_buf_get_name(bufnr)
+	if source_path == "" then
+		return 0
+	end
+
+	-- Markdown gate: honor an already-set filetype, else ask vim.filetype.match
+	-- (by buffer + filename) and set it; a non-markdown buffer yields 0.
+	if vim.bo[bufnr].filetype ~= "markdown" then
+		local ft = vim.filetype.match({ buf = bufnr, filename = source_path })
+		if ft == "markdown" then
+			vim.bo[bufnr].filetype = "markdown"
+		else
+			return 0
+		end
+	end
+
+	-- A picked buffer can be buflisted yet UNLOADED (`:badd`); load it so the
+	-- render pull sees its lines. No-op for an already-loaded buffer.
+	vim.fn.bufload(bufnr)
+
+	local preview_buf = _G.wolf_ensure_preview_buf(bufnr, source_path)
+
+	-- Bind the preview into the requested window, falling back to the current
+	-- window when `win` is missing/zero/invalid.
+	if win and win ~= 0 and vim.api.nvim_win_is_valid(win) then
+		vim.api.nvim_win_set_buf(win, preview_buf)
+	else
+		vim.api.nvim_win_set_buf(0, preview_buf)
+	end
+
+	-- Re-emit so the front-end learns the pane's new preview and the ACTIVE
+	-- pane's filetype is re-asserted. Both are idempotent, but only one is
+	-- required.
+	--
+	-- Measured against the pinned nvim 0.12.3: a bind into a background window DOES
+	-- fire BufEnter + BufWinEnter, with the TARGET window and buffer temporarily
+	-- current. The BufWinEnter-driven WolfCurrentFile emit therefore reports this
+	-- preview SCRATCH as the active buffer (empty path, is_preview true) and nothing
+	-- corrects it once focus snaps back -- wolf_emit_current_file is LOAD-BEARING.
+	-- wolf_emit_previews is hardening: its nvim_list_wins() sweep runs on the same
+	-- BufWinEnter and is already accurate.
+	if _G.wolf_emit_previews then
+		_G.wolf_emit_previews()
+	end
+	if _G.wolf_emit_current_file then
+		_G.wolf_emit_current_file()
+	end
+
+	return bufnr
+end
+
 -- Repoints the preview window `win` at the Markdown file `path` (an ABSOLUTE
 -- path, resolved by the front-end from a clicked file:// link), replacing that
 -- pane's current preview with a preview of the linked file. wolf-core calls this
 -- over nvim_exec_lua from WolfCore::preview_file.
+--
+-- The disk-path front half of wolf_preview_buffer: it bufadd/bufloads `path`,
+-- marks the source BUFLISTED (so a preview-only file gets its own buffer-picker
+-- row -- the union listing), then delegates the gate + bind + re-emits.
 --
 -- Returns the linked file's SOURCE bufnr (> 0) on success; 0 when `path` is
 -- empty, unreadable, or not Markdown. A 0 always leaves the pane as it was; what
@@ -2251,47 +2307,161 @@ function _G.wolf_preview_file(win, path)
 	local source_buf = vim.fn.bufadd(path)
 	vim.fn.bufload(source_buf)
 
-	-- Markdown gate: honor an already-set filetype, else ask vim.filetype.match
-	-- (by buffer + filename) and set it; a non-markdown file yields 0.
-	if vim.bo[source_buf].filetype ~= "markdown" then
-		local ft = vim.filetype.match({ buf = source_buf, filename = path })
-		if ft == "markdown" then
-			vim.bo[source_buf].filetype = "markdown"
-		else
-			return 0
-		end
+	local result = _G.wolf_preview_buffer(win, source_buf)
+	if result ~= 0 then
+		-- The union listing: a background-loaded (`bufadd`) source is unlisted,
+		-- which would keep a preview-only file out of the buffer picker. List it --
+		-- the picker's one-row-per-file union is the source buffers, never the
+		-- scratch. Only on success: a rejected non-markdown link must not grow a
+		-- picker row.
+		vim.bo[source_buf].buflisted = true
+	end
+	return result
+end
+
+-- Whether `target_win` is a usable OTHER-pane bind target for
+-- wolf_preview_in_other / wolf_edit_in_other: non-nil, non-zero, a valid window,
+-- NOT the current window (binding "elsewhere" into the active pane would be the
+-- in-place command), and NOT the terminal drawer (identified by b:wolf_terminal
+-- on its buffer or w:wolf_terminal on the window). Any failure sends the caller
+-- down the split path instead.
+local function wolf_other_pane_target_ok(target_win)
+	if target_win == nil or target_win == 0 then
+		return false
+	end
+	if not vim.api.nvim_win_is_valid(target_win) then
+		return false
+	end
+	if target_win == vim.api.nvim_get_current_win() then
+		return false
+	end
+	local buf = vim.api.nvim_win_get_buf(target_win)
+	if vim.b[buf].wolf_terminal == true or vim.w[target_win].wolf_terminal == true then
+		return false
+	end
+	return true
+end
+
+-- Previews the ACTIVE pane's Markdown file in ANOTHER pane and returns the
+-- SOURCE bufnr (not the scratch bufnr -- the front-end joins previews() rows on
+-- the source). wolf-core calls this over nvim_exec_lua from
+-- WolfCore::preview_in_other, passing the front-end-resolved target window (0
+-- when the front-end wants a split).
+--
+-- Gate FIRST, before any split: returns 0 unless the active buffer's filetype is
+-- markdown, so a mis-timed palette activation is a pure no-op that never splits.
+-- With a usable target (wolf_other_pane_target_ok) the scratch is bound into it
+-- WITHOUT moving focus; otherwise wolf_do_split("v") creates the new window (the
+-- shell's applySplit lands it to the RIGHT of `from`), the scratch is bound into
+-- that new window, and focus returns to `from` -- the focus rule is that focus
+-- follows the EDIT-mode view of the document, so the source editor stays
+-- focused either way. No MRU recording. Re-emits mirror wolf_open_preview.
+function _G.wolf_preview_in_other(target_win)
+	if vim.bo.filetype ~= "markdown" then
+		return 0
+	end
+	local source_buf = vim.api.nvim_get_current_buf()
+	local source_path = vim.api.nvim_buf_get_name(source_buf)
+
+	-- Re-emit the SOURCE buffer's cursor BEFORE the bind, while the source buffer
+	-- is still current (same load-bearing ordering as wolf_open_preview: emitting
+	-- after the bind would hit emit_cursor's preview-scratch guard in the split
+	-- path's transient new window).
+	if _G.wolf_emit_markdown_cursor then
+		_G.wolf_emit_markdown_cursor(source_buf)
 	end
 
-	local source_path = vim.api.nvim_buf_get_name(source_buf)
 	local preview_buf = _G.wolf_ensure_preview_buf(source_buf, source_path)
 
-	-- Bind the preview into the requested window, falling back to the current
-	-- window when `win` is missing/zero/invalid.
-	if win and win ~= 0 and vim.api.nvim_win_is_valid(win) then
-		vim.api.nvim_win_set_buf(win, preview_buf)
+	if wolf_other_pane_target_ok(target_win) then
+		-- Reuse: bind into the existing target; focus stays where it is.
+		vim.api.nvim_win_set_buf(target_win, preview_buf)
 	else
+		-- Split: wolf_do_split("v") performs the real :vsplit (the NEW window
+		-- becomes current) and notifies the Split {from, win} intent; bind the
+		-- scratch into the new window, then hand focus back to the source editor.
+		local from = vim.api.nvim_get_current_win()
+		_G.wolf_do_split("v")
 		vim.api.nvim_win_set_buf(0, preview_buf)
+		vim.api.nvim_set_current_win(from)
 	end
 
-	-- Re-emit so the front-end learns the pane now previews the linked file and the
-	-- ACTIVE pane's filetype is re-asserted. Both are idempotent, but only one is
-	-- required.
-	--
-	-- Measured against the pinned nvim 0.12.3: a bind into a background window DOES
-	-- fire BufEnter + BufWinEnter, with the TARGET window and buffer temporarily
-	-- current. The BufWinEnter-driven WolfCurrentFile emit therefore reports this
-	-- preview SCRATCH as the active buffer (empty path, is_preview true) and nothing
-	-- corrects it once focus snaps back -- wolf_emit_current_file is LOAD-BEARING.
-	-- wolf_emit_previews is hardening: its nvim_list_wins() sweep runs on the same
-	-- BufWinEnter and is already accurate.
+	-- Same guarded re-emits as wolf_open_preview: previews is hardening (its
+	-- window sweep already runs on the bind's BufWinEnter), current-file is
+	-- LOAD-BEARING for the background bind (the autocmd emit ran with the target
+	-- window temporarily current).
 	if _G.wolf_emit_previews then
 		_G.wolf_emit_previews()
 	end
 	if _G.wolf_emit_current_file then
 		_G.wolf_emit_current_file()
 	end
-
 	return source_buf
+end
+
+-- Edits the ACTIVE preview pane's SOURCE file in ANOTHER pane and returns the
+-- bufnr bound into that pane (nvim_win_get_buf of the bound window, so an :edit
+-- fallback still reports non-zero -- a deliberate divergence from
+-- wolf_edit_source's `source_bufnr or 0`). wolf-core calls this over
+-- nvim_exec_lua from WolfCore::edit_in_other, passing the front-end-resolved
+-- target window (0 when the front-end wants a split).
+--
+-- Gate FIRST, before any split: returns 0 unless the active buffer carries
+-- b:wolf_preview_source. With a usable target (wolf_other_pane_target_ok) the
+-- source is bound into it and that pane is FOCUSED; otherwise wolf_do_split("v")
+-- creates the new window (which keeps showing the scratch, landing the preview
+-- to the RIGHT), the source is bound into the ORIGINAL window `from`, and `from`
+-- is focused -- focus follows the EDIT-mode view of the document. No MRU
+-- recording. Re-emits mirror wolf_edit_source.
+function _G.wolf_edit_in_other(target_win)
+	local cur_buf = vim.api.nvim_get_current_buf()
+	local source_path = vim.b[cur_buf].wolf_preview_source
+	if source_path == nil or source_path == "" then
+		return 0
+	end
+	local source_bufnr = vim.b[cur_buf].wolf_preview_source_bufnr
+
+	-- Bind the source into window `win`, mirroring wolf_edit_source's edit_into:
+	-- prefer the window-scoped bufnr bind; fall back to focusing the window and
+	-- :editing the path when the bufnr is stale.
+	local function bind_source_into(win)
+		if source_bufnr ~= nil and vim.api.nvim_buf_is_valid(source_bufnr) then
+			vim.api.nvim_win_set_buf(win, source_bufnr)
+		else
+			vim.api.nvim_set_current_win(win)
+			vim.cmd("edit " .. vim.fn.fnameescape(source_path))
+		end
+	end
+
+	local bound_win
+	if wolf_other_pane_target_ok(target_win) then
+		-- Reuse: bind the source into the target, then focus it (the pane now
+		-- editing the document).
+		bind_source_into(target_win)
+		vim.api.nvim_set_current_win(target_win)
+		bound_win = target_win
+	else
+		-- Split: the new (right) window keeps the scratch; the ORIGINAL window
+		-- becomes the editor. Bind the source into `from` and focus it.
+		local from = vim.api.nvim_get_current_win()
+		_G.wolf_do_split("v")
+		bind_source_into(from)
+		vim.api.nvim_set_current_win(from)
+		bound_win = from
+	end
+
+	-- Same re-emits as wolf_edit_source: current-file is LOAD-BEARING (focus and
+	-- the current buffer changed), previews is hardening.
+	if _G.wolf_emit_previews then
+		_G.wolf_emit_previews()
+	end
+	if _G.wolf_emit_current_file then
+		_G.wolf_emit_current_file()
+	end
+	if bound_win ~= nil and vim.api.nvim_win_is_valid(bound_win) then
+		return vim.api.nvim_win_get_buf(bound_win)
+	end
+	return 0
 end
 
 -- Preview tracking + dirty signal: wolf-core invokes this over RPC after ui_attach

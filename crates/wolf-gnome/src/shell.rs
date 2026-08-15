@@ -228,9 +228,7 @@ use crate::nav_ui::{self, NavAvailability, NavPress};
 use crate::palette::{PaletteAction, PaletteHandle};
 use crate::pane_view;
 use crate::picker::PickerHandle;
-use crate::preview_ui::{
-    self, BrowserPress, EditPlacement, EditPress, PreviewPlacement, PreviewPress,
-};
+use crate::preview_ui::{self, BrowserPress, EditPress, PreviewPress};
 use crate::save_ui::{self, SaveAsPress, SavePress, SaveTarget};
 use crate::search_overlay::SearchHandle;
 use crate::state_seam;
@@ -311,26 +309,28 @@ const SAVE_DIALOG_TITLE: &str = "Save As";
 /// genuinely dwells.
 const RESTART_DEFER: Duration = Duration::from_millis(50);
 
+/// The `target_win` this shell passes to `WolfCore::preview_in_other` and
+/// `WolfCore::edit_in_other`: `0`, core's documented request to SPLIT rather than
+/// to reuse a named window.
+///
+/// Nominating a live window instead would displace whatever that pane already
+/// holds, and the GTK pane tree carries no rule for which document is safe to
+/// evict. Splitting always adds rather than replaces, so the answer is never wrong.
+const SPLIT_FOR_OTHER_PANE: i64 = 0;
+
 /// Everything the two Markdown-preview presses are decided against, read from ONE
 /// snapshot pass by [`AppShell::preview_shape`].
 ///
-/// One value rather than five reads, because the five must describe the SAME
-/// instant: a pane count taken from one snapshot and a preview-active flag from
-/// another can name a shape that never existed, and the placement seams answer
-/// "replace the pane the user is reading" for exactly such a shape.
+/// One value rather than two reads, because the two must describe the SAME instant:
+/// Preview and Edit are inverses, so a `markdown_active` taken from one snapshot and
+/// a `preview_active` from another can name a pane that is both and a pane that is
+/// neither.
 #[derive(Clone, Copy)]
 struct PreviewShape {
     /// `Snapshot::is_markdown_active` — the Preview press's buffer-kind gate.
     markdown_active: bool,
-    /// `Snapshot::is_preview_active` — the Edit press's gate, and both placements'
-    /// `active_is_preview` polarity input.
+    /// `Snapshot::is_preview_active` — the Edit press's gate.
     preview_active: bool,
-    /// Editor windows plus preview windows.
-    pane_count: usize,
-    /// Preview windows other than the active one.
-    other_preview_panes: usize,
-    /// Editor windows other than the active one.
-    other_editor_panes: usize,
 }
 
 /// Everything the two save presses are decided against, read from ONE snapshot pass
@@ -1137,37 +1137,19 @@ impl AppShell {
     /// therefore read off the `Snapshot` already in hand, through
     /// [`Snapshot::is_markdown_active`] and [`Snapshot::is_preview_active`].
     ///
-    /// The counts are `win_buffers` (whose keys are exactly the EDITOR windows,
-    /// preview scratches being excluded from it) and `previews` (keyed by the preview
-    /// WINDOW handle), which are disjoint — so their sum is the pane count and each
-    /// "other" count is that map's keys minus the active window.
-    ///
     /// [`Snapshot::is_markdown_active`]: wolf_core::Snapshot::is_markdown_active
     /// [`Snapshot::is_preview_active`]: wolf_core::Snapshot::is_preview_active
     fn preview_shape(&self) -> Option<PreviewShape> {
         let core_ref = self.inner.core.borrow();
         let core = core_ref.as_ref()?;
         let snapshot = core.read_snapshot();
-        let active = snapshot.active_win;
         Some(PreviewShape {
             markdown_active: snapshot.is_markdown_active(),
             preview_active: snapshot.is_preview_active(),
-            pane_count: snapshot.win_buffers.len() + snapshot.previews.len(),
-            other_preview_panes: snapshot
-                .previews
-                .keys()
-                .filter(|win| Some(**win) != active)
-                .count(),
-            other_editor_panes: snapshot
-                .win_buffers
-                .keys()
-                .filter(|win| Some(**win) != active)
-                .count(),
         })
     }
 
-    /// Opens a Markdown preview of the active buffer at the placement
-    /// [`preview_ui::preview_placement`] gives for the live window shape, or prints
+    /// Binds a Markdown preview of the active buffer into the active pane, or prints
     /// why it did not.
     ///
     /// **The open is a BLOCKING RPC on the GTK main thread**
@@ -1182,34 +1164,26 @@ impl AppShell {
         let liveness = self.read_liveness();
         let shape = self.preview_shape();
 
-        let press = preview_ui::preview_press(
-            liveness,
-            shape.is_some_and(|s| s.markdown_active),
-            PreviewPlacement {
-                pane_count: shape.map_or(0, |s| s.pane_count),
-                active_is_preview: shape.is_some_and(|s| s.preview_active),
-                other_preview_panes: shape.map_or(0, |s| s.other_preview_panes),
-            },
-        );
+        let press = preview_ui::preview_press(liveness, shape.is_some_and(|s| s.markdown_active));
 
         match press {
             PreviewPress::Refuse(reason) => {
                 eprintln!("wolf-gnome: preview not opened: {reason}");
             }
-            PreviewPress::Open(mode) => {
+            PreviewPress::Open => {
                 let core_ref = self.inner.core.borrow();
                 if let Some(core) = core_ref.as_ref() {
                     // The returned bufnr is deliberately discarded: the front-end
-                    // learns the new pane from the next wake's `wolf_preview`
+                    // learns the new bind from the next wake's `wolf_preview`
                     // notification, never from this answer.
-                    let _ = core.open_preview(mode);
+                    let _ = core.open_preview();
                 }
             }
         }
     }
 
-    /// Returns from the active preview pane to its source file at the placement
-    /// [`preview_ui::edit_placement`] gives, or prints why it did not.
+    /// Returns the active preview pane to its source file, or prints why it did
+    /// not.
     ///
     /// **The return is a BLOCKING RPC on the GTK main thread**
     /// (`WolfCore::edit_source` over `block_on_rpc`), gated by
@@ -1219,26 +1193,76 @@ impl AppShell {
         let liveness = self.read_liveness();
         let shape = self.preview_shape();
 
-        let press = preview_ui::edit_press(
-            liveness,
-            shape.is_some_and(|s| s.preview_active),
-            EditPlacement {
-                pane_count: shape.map_or(0, |s| s.pane_count),
-                active_is_preview: shape.is_some_and(|s| s.preview_active),
-                other_editor_panes: shape.map_or(0, |s| s.other_editor_panes),
-            },
-        );
+        let press = preview_ui::edit_press(liveness, shape.is_some_and(|s| s.preview_active));
 
         match press {
             EditPress::Refuse(reason) => {
                 eprintln!("wolf-gnome: source not edited: {reason}");
             }
-            EditPress::Edit(mode) => {
+            EditPress::Edit => {
                 let core_ref = self.inner.core.borrow();
                 if let Some(core) = core_ref.as_ref() {
-                    // Discarded for the same reason `open_preview`'s is: the pane the
+                    // Discarded for the same reason `open_preview`'s is: the bind the
                     // source lands in arrives with the next wake's notifications.
-                    let _ = core.edit_source(mode);
+                    let _ = core.edit_source();
+                }
+            }
+        }
+    }
+
+    /// Binds the active buffer's Markdown preview into ANOTHER pane, leaving the
+    /// source on screen and focused, or prints why it did not.
+    ///
+    /// **The bind is a BLOCKING RPC on the GTK main thread**
+    /// (`WolfCore::preview_in_other` over `block_on_rpc`), gated by
+    /// [`preview_ui::preview_press`] — the SAME decision [`AppShell::open_preview`]
+    /// is gated by, because the two differ only in which pane receives the bind and
+    /// not in whether the buffer can be previewed at all.
+    ///
+    /// A `target_win` of `0` asks core to SPLIT. This front end always passes `0`
+    /// rather than nominating a live window, so the preview lands in a pane of its
+    /// own and never displaces a document the user already has open. Core's split
+    /// surfaces here as an ordinary vertical `Split` layout intent on the next wake.
+    fn preview_in_other_pane(&self) {
+        let liveness = self.read_liveness();
+        let shape = self.preview_shape();
+
+        let press = preview_ui::preview_press(liveness, shape.is_some_and(|s| s.markdown_active));
+
+        match press {
+            PreviewPress::Refuse(reason) => {
+                eprintln!("wolf-gnome: preview not opened in another pane: {reason}");
+            }
+            PreviewPress::Open => {
+                let core_ref = self.inner.core.borrow();
+                if let Some(core) = core_ref.as_ref() {
+                    // Discarded for `open_preview`'s reason: the new pane and its
+                    // bind both arrive with the next wake's notifications.
+                    let _ = core.preview_in_other(SPLIT_FOR_OTHER_PANE);
+                }
+            }
+        }
+    }
+
+    /// Binds the active preview's source into ANOTHER pane and moves focus there,
+    /// leaving the preview on screen, or prints why it did not.
+    ///
+    /// [`AppShell::preview_in_other_pane`]'s inverse, gated by
+    /// [`preview_ui::edit_press`] and passing the same `0` for the same reason.
+    fn edit_in_other_pane(&self) {
+        let liveness = self.read_liveness();
+        let shape = self.preview_shape();
+
+        let press = preview_ui::edit_press(liveness, shape.is_some_and(|s| s.preview_active));
+
+        match press {
+            EditPress::Refuse(reason) => {
+                eprintln!("wolf-gnome: source not edited in another pane: {reason}");
+            }
+            EditPress::Edit => {
+                let core_ref = self.inner.core.borrow();
+                if let Some(core) = core_ref.as_ref() {
+                    let _ = core.edit_in_other(SPLIT_FOR_OTHER_PANE);
                 }
             }
         }
@@ -1871,6 +1895,8 @@ impl AppShell {
             UiAction::QuitApplication => self.quit_application(),
             UiAction::OpenPreview => self.open_preview(),
             UiAction::EditSource => self.edit_source(),
+            UiAction::PreviewInOtherPane => self.preview_in_other_pane(),
+            UiAction::EditInOtherPane => self.edit_in_other_pane(),
             UiAction::OpenInBrowser => self.preview_in_browser(),
             // Unreachable through an installed action (install_actions skips these)
             // and already reported by the drain, but never silent either way.

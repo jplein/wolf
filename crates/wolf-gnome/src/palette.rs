@@ -810,35 +810,43 @@ mod tests {
         actionable_rows: usize,
     }
 
-    /// The two queries the cage smokes
-    /// `preview_pane_renders_and_edit_source_returns_under_cage` and
-    /// `preview_of_an_unsaved_buffer_renders_under_cage` type into the palette (their
-    /// `PREVIEW_QUERY` and `EDIT_QUERY`).
+    /// The three queries the markdown-preview cage smokes type into the palette (their
+    /// `PREVIEW_QUERY`, `PREVIEW_OTHER_PANE_QUERY` and `EDIT_QUERY`).
     ///
     /// Duplicated here for the reason [`SMOKE_QUERY`] is, and joined to the smokes by
     /// [`palette_rows_for_the_preview_smoke_rank_the_named_command_first`] — which is
     /// also where the `prv` collision and its tie-break are pinned.
     ///
     /// The two rows differ in both numbers, and the difference is the point. `prv` is
-    /// a subsequence of `Preview` AND of `Preview in Browser`, and both commands are
-    /// DISPATCHED, so the classification filter removes neither: the query really
-    /// shows two rows and the smokes depend on the RANKING rather than on uniqueness.
-    /// The floor of 2 states that the collision is still there, which is what keeps
-    /// "the top row carries `Command::Preview`" from silently becoming a claim about a
-    /// query that matches one title. `edts` matches exactly one title in the whole
+    /// a subsequence of `Preview`, of `Preview in Browser` AND of
+    /// `Preview in Another Pane`, all three of which are DISPATCHED, so the
+    /// classification filter removes none: the query really shows three rows and the
+    /// smokes depend on the RANKING rather than on uniqueness. The floor of 2 states
+    /// that the collision is still there, which is what keeps "the top row carries
+    /// `Command::Preview`" from silently becoming a claim about a query that matches
+    /// one title. It is deliberately a FLOOR and not the row count: another
+    /// `Preview…` command would raise the count and leave the collision the floor
+    /// exists to state exactly as true. `ednap` matches exactly one title in the whole
     /// registry, filtered or not, so claiming either of those of it would be false.
-    const PREVIEW_SMOKE_QUERIES: [PreviewSmokeQuery; 2] = [
+    const PREVIEW_SMOKE_QUERIES: [PreviewSmokeQuery; 3] = [
         PreviewSmokeQuery {
             query: "prv",
             command: Command::Preview,
             id: "preview",
             unfiltered_floor: 2,
-            actionable_rows: 2,
+            actionable_rows: 3,
         },
         PreviewSmokeQuery {
-            query: "edts",
-            command: Command::Edit,
-            id: "edit",
+            query: "prvan",
+            command: Command::PreviewInOtherPane,
+            id: "preview_in_other_pane",
+            unfiltered_floor: 1,
+            actionable_rows: 1,
+        },
+        PreviewSmokeQuery {
+            query: "ednap",
+            command: Command::EditInOtherPane,
+            id: "edit_in_other_pane",
             unfiltered_floor: 1,
             actionable_rows: 1,
         },
@@ -2062,7 +2070,7 @@ mod tests {
     ///
     /// `preview_pane_renders_and_edit_source_returns_under_cage` and
     /// `preview_of_an_unsaved_buffer_renders_under_cage` drive Preview (and, in the
-    /// first, Edit Source) by typing a query and pressing Enter on the preselected TOP
+    /// first, Edit in Another Pane) by typing a query and pressing Enter on the top
     /// row, so "the top row carries the command the query names" is what makes which
     /// command runs deterministic. That premise cannot be checked from a smoke — the
     /// overlay is closed before `grim` fires and a screenshot can neither count rows
@@ -2070,19 +2078,20 @@ mod tests {
     /// smokes stochastic rather than red. They redden here instead.
     ///
     /// The `mru_key` half is the other end of the same join: those smokes assert the
-    /// command MRU holds `preview` and `edit` after the activations, which only means
-    /// anything while those are the ids these rows record.
+    /// command MRU holds `preview` and `edit_in_other_pane` after the activations,
+    /// which only means anything while those are the ids these rows record.
     ///
-    /// ## `prv` matches TWO rows, and NO query can separate them
+    /// ## `prv` matches THREE rows, and NO query can separate them
     ///
-    /// `Command::PreviewInBrowser` is dispatched, so [`palette_rows`]' classification
-    /// filter does not remove it and `prv` selects `Preview` and `Preview in Browser`
-    /// both. Uniqueness is unrecoverable and must not be chased: `rank_matches`
-    /// matches a term as a case-insensitive SUBSEQUENCE, and `Preview` is a PREFIX of
-    /// `Preview in Browser`, so every subsequence of the first is a subsequence of the
-    /// second. What decides is therefore the tie-break — the two rows tie on
-    /// `mru_group`, `mru_rank`, `score`, `match_start` and `span`, and separate only at
-    /// `len`, where `Preview`'s 7 characters sort ahead of the other's 18.
+    /// `Command::PreviewInBrowser` and `Command::PreviewInOtherPane` are both
+    /// dispatched, so [`palette_rows`]' classification filter removes neither and `prv`
+    /// selects `Preview`, `Preview in Browser` and `Preview in Another Pane` alike.
+    /// Uniqueness is unrecoverable and must not be chased: `rank_matches` matches a
+    /// term as a case-insensitive SUBSEQUENCE, and `Preview` is a PREFIX of both
+    /// others, so every subsequence of the first is a subsequence of them too. What
+    /// decides is therefore the tie-break — the rows tie on `mru_group`, `mru_rank`,
+    /// `score`, `match_start` and `span`, and separate only at `len`, where `Preview`'s
+    /// 7 characters sort ahead of the others' 18 and 22.
     ///
     /// ## The adversarial MRU INVERTS the order, and that is asserted, not hidden
     ///

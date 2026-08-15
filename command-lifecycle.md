@@ -71,6 +71,8 @@ Three entry points route here:
 
 `.previewInBrowser` is worth calling out as a third shape alongside the flavors of §8. Like the `.preview` and `.edit` arms it invokes a blocking core method — `handle.open_in_browser()` returns the loopback preview server's URL for the pinned Markdown file — and the front-end then opens that URL with `NSWorkspace`. It touches the captive nvim but issues no `InputEvent`, so it is neither purely native nor an ordered-input editor-affecting command.
 
+`.previewInOtherPane` and `.editInOtherPane` add one more wrinkle: their dispatch carries a front-end-derived argument — the target window the controller resolves from its own pane geometry (`0` to request a split) — into the blocking `preview_in_other` / `edit_in_other` calls, where every other command's dispatch is argument-free.
+
 ## 7. The editor-affecting path back into nvim
 
 Many commands only touch the front-end (§8a). Others must change editor state, and those loop back into the captive Neovim through a fixed chain:
@@ -126,6 +128,6 @@ Everything in (a); the dispatcher arm opens a Swift overlay (`openCommandPalette
 - Extend the Swift `CommandKind` and its `init?(ffi:)`, plus `CommandSeamTests`.
 - Add the `wolf_gnome::command_action::ui_action_for` arm. That match has no catch-all, so a new variant fails to compile in `wolf-gnome` until it is classified as a dispatched action, deferred, or without a GNOME equivalent. A dispatched command also becomes a row in the GTK command palette; a deferred one, or one with no GNOME equivalent, does not. To reach it from the primary menu or an accelerator, add its row in `crates/wolf-gnome/src/actions.rs` — see [`crates/wolf-gnome/DECISIONS.md`](crates/wolf-gnome/DECISIONS.md), "The accelerator namespace", for the invariant that `parse_accel` enforces.
 - Extend the contiguous-`0..=N` guard array in `crates/wolf-ffi/tests/commands.rs` and add a `:Wolf<Pascal>` drain step.
-- If the command needs a tagged menu item, add an `AppMenu` `Tag` value and the item itself, with any accelerator. To enable it only in some states, add a case to `AppDelegate.validateMenuItem` backed by a `Snapshot` predicate bridged onto `WolfCoreHandle` — the `is_visual_mode` / `is_markdown_active` / `is_preview_active` precedent. A command with no such case, `Terminal` among them, is always enabled.
+- If the command needs a tagged menu item, add an `AppMenu` `Tag` value and the item itself, with any accelerator. To enable it only in some states, add a case to `AppDelegate.validateMenuItem` backed by a `Snapshot` predicate bridged onto `WolfCoreHandle` — the `is_visual_mode` / `is_markdown_active` / `is_preview_active` precedent. A case may also fold in view-local state the core cannot see, as Copy's does with a preview pane's cached selection. A command with no such case, `Terminal` among them, is always enabled.
 - Every command except `CommandPalette` becomes a palette candidate, so bump `STATIC_COMMAND_COUNT` in `crates/wolf-core/tests/palette_rank.rs`.
 - Update the affected directory READMEs and this document, then run `prettier --write` on every edited Markdown file.

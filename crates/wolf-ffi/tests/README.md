@@ -70,7 +70,7 @@ The baseline handle lifecycle: `wolf_ffi_start`, `read_frame` (dense `cols * row
 
 **Covers**
 
-`buffer_picker()` and its `ranked(query, max)` (buflisted-only, most-recently-used first), the window-scoped `switch_buffer(bufnr)`, and the per-`(winid, bufnr)` view round-trip. Spawns a real Neovim: needs `WOLF_NVIM_BIN`, and the `:buffer_picker` target stages the nvim runfiles and is tagged `no-sandbox`.
+`buffer_picker()` and its `ranked(query, max)` (buflisted-only, most-recently-used first), the window-scoped `switch_buffer(bufnr)`, the per-`(winid, bufnr)` view round-trip, and the union listing: a file both edited and previewed gets one row, and a preview-only file gets a row of its own with no `Preview: ` row anywhere. Spawns a real Neovim: needs `WOLF_NVIM_BIN`, and the `:buffer_picker` target stages the nvim runfiles and is tagged `no-sandbox`.
 
 **Gotchas**
 
@@ -159,7 +159,7 @@ The command channel: typing each `:Wolf…` Ex command and draining an `FfiComma
 
 **Covers**
 
-The Edit surface: the `is_preview_active()` gate and `edit_source(mode)` for `split_left`, `reuse_editor_pane` and `active`, plus the reuse fallback with no other editor pane, the not-a-preview no-op, and neutral values after `shutdown()`. Spawns a real Neovim: needs `WOLF_NVIM_BIN`, and the `:edit` target stages the nvim runfiles and is tagged `no-sandbox`.
+The Edit surface: the `is_preview_active()` gate and the in-place `edit_source()` — the active pane's preview becomes its source in the same window while a second pane is left alone, `previews()` drops the window, `is_preview_active()` falls and `is_markdown_active()` rises — plus the off-preview no-op and neutral values after `shutdown()`. Spawns a real Neovim: needs `WOLF_NVIM_BIN`, and the `:edit` target stages the nvim runfiles and is tagged `no-sandbox`.
 
 **Gotchas**
 
@@ -271,6 +271,17 @@ Real-nvim coverage of multi-core identity and wake routing, running two cores at
 - Deliberately one `#[test]`: it installs the process-global wake callback and sets `WOLF_STATE_DIR`, so new cases belong inside that test rather than beside it.
 - Baselines are captured after a settle pause, so a late startup redraw wake is not mistaken for a misrouted one.
 
+#### `other_pane.rs`
+
+**Covers**
+
+`preview_in_other(target_win)` / `edit_in_other(target_win)`: the split path (a vertical Split intent from the original window; preview binds the scratch into the new right window and keeps focus in the source editor, edit binds the source into the original window and focuses it), reuse of an existing target window with no new intent, the gate-before-split no-ops (non-markdown and off-preview return 0 with no layout change), the fall-back-to-split for an invalid target and for the terminal drawer, the stale-bufnr `:edit` fallback still returning non-zero, and post-shutdown neutrals. Spawns a real Neovim: needs `WOLF_NVIM_BIN`, and the `:other_pane` target stages the nvim runfiles and is tagged `no-sandbox`.
+
+**Gotchas**
+
+- The no-split and no-focus-move assertions hold a settle pause before checking, because the failure they guard against arrives asynchronously; a synchronous check passes vacuously.
+- The drawer-rejection case opens the real drawer through `toggle_terminal()` and waits on its `DRAWER_OPEN` intent, so the `w:wolf_terminal` tag is exercised on a live drawer window rather than a hand-set variable.
+
 #### `orlando_bg_stress.rs`
 
 Real-nvim regression test for cells drawing with the wrong background inside an orlando code block: it stages the vendored plugin like `orlando_load` and hammers a fenced-code document with seeded-random scrolling, motion, edit+undo, and fence churn. Target `//crates/wolf-ffi:orlando_bg_stress` stages the nvim runfiles, `//bazel/orlando:orlando_tree`, and `//bazel/lighthouse:lighthouse_tree`, runs unsandboxed, and is `size = "medium"`; it skips without a pinned nvim or the orlando tree, and lighthouse is optional. Inside the Linux devShell both trees are exported, so it runs there against the vendored colorscheme rather than Neovim's defaults.
@@ -315,7 +326,9 @@ Real-nvim coverage of the split-panes bridge — `windows()`, `active_win`, `gri
 
 #### `preview.rs`
 
-**Covers** — the Markdown-preview bridge: the `is_markdown_active` gate, `open_preview(mode)` placements plus the reuse-pane fallback, the `previews()` rows, `render_preview` HTML (headings, slugs, LaTeX), and `preview_file(win, path)` link-follow, plus the scroll-sync cursor join — a row's `source_cursor_line()` / `source_cursor_col()` matching `Snapshot.markdown_cursors` for its own source buffer, and the `line == 0` sentinel a background-loaded source produces. Real nvim; target `//crates/wolf-ffi:preview` (staged nvim runfiles or `WOLF_NVIM_BIN`, `tags = ["no-sandbox"]`). Each case seeds its own temp cwd and polls the local `wait_for_*` helpers.
+**Covers** — the Markdown-preview bridge: the `is_markdown_active` gate, the in-place `open_preview()` and its round-trip with `edit_source()` including scratch reuse across cycles, the `previews()` rows (two panes previewing one source share the scratch), the buffer picker's one-row-per-file union with no `Preview: ` rows, and `render_preview` HTML (headings, slugs, LaTeX).
+
+Also `preview_buffer(win, bufnr)` — markdown binds and returns the source bufnr, non-markdown returns 0, an unsaved `Untitled.md` works — `preview_file(win, path)` link-follow with the source left buflisted only on success, and the scroll-sync cursor join: a row's `source_cursor_line()` / `source_cursor_col()` matching `Snapshot.markdown_cursors` for its own source buffer, and the `line == 0` sentinel a background-loaded source produces. Real nvim; target `//crates/wolf-ffi:preview` (staged nvim runfiles or `WOLF_NVIM_BIN`, `tags = ["no-sandbox"]`). Each case seeds its own temp cwd and polls the local `wait_for_*` helpers.
 
 **Gotchas** — the startup buffer is already a markdown `Untitled.md`, so `wait_for_markdown_active(true)` returns instantly across a markdown-to-markdown `:e`; use `wait_for_current_file` as the switch barrier before a synchronous `open_preview`. The temp cwd is nvim's working dir and search root, so keep it alive until after `shutdown()`.
 
@@ -360,6 +373,12 @@ Real-nvim coverage of the split-panes bridge — `windows()`, `active_win`, `gri
 **Covers** — the file-tree sidebar surface: `start_tree_search()`, `children_of(dir)` with the `FfiTreeNode` accessors, `rel_path_for(abs)`, the free function `wolf_ffi_ancestors_to_reveal`, and `cwd()` / `current_file()` round-tripped through `open`. Real nvim; target `//crates/wolf-ffi:tree_search` (staged nvim runfiles or `WOLF_NVIM_BIN`, `tags = ["no-sandbox"]`).
 
 **Gotchas** — the seeded cwd carries a dotfile and a `.gitignore` plus the file it ignores on purpose; directories-before-files case-insensitive ordering, dotfile inclusion, and gitignore exclusion are all asserted against that exact layout. Path comparisons canonicalize, so the macOS `/var` to `/private/var` symlink does not break them.
+
+#### `tree_search_rescan.rs`
+
+**Covers** — the fs-event rescan reaching the tree bridge end to end: a long-lived `start_tree_search()` session gains a root node for a file created through typed keystrokes (`:e` / insert / `:w`), loses it after `remove_file` plus `:bdelete!`, advances `version()` on each swap, and keeps the directories-before-files ordering across the swaps. Real nvim; target `//crates/wolf-ffi:tree_search_rescan` (staged nvim runfiles or `WOLF_NVIM_BIN`, `tags = ["no-sandbox"]`).
+
+**Gotchas** — the write assertion requires both the new node and a `version()` advance before declaring the rescan landed, because the version is what wakes the Swift side into `scheduleRefresh()`; a node without a bump is an invisible update in the real UI. Keystrokes go through `send_key` / `FfiKeyEvent` — the same path the generated Swift glue drives — never a convenience method.
 
 #### `treesitter_highlight.rs`
 
