@@ -32,6 +32,17 @@ Both trees are fetched, not compiled. Measured with `nix build --dry-run` agains
 
 After editing `flake.nix`, run through `nix develop --command`. An already-loaded direnv environment is stale until the shell is re-entered, and a stale one has no GTK.
 
+### Running the packaged release build
+
+To run the packaged Nix release build without adding it as an input to your NixOS configuration, run these commands:
+
+```sh
+nix build .#wolf-gnome
+env -u FONTCONFIG_FILE ./result/bin/wolf-gnome
+```
+
+`nix build` resolves `.` from the repository root, which is where an active direnv has already exported the devShell's pinned `FONTCONFIG_FILE`. The wrapper sets that variable as a default, so an exported one wins, and the launch draws its GTK chrome — sidebar, menu, pickers — from the pinned DejaVu stack rather than the desktop's own UI font, which that configuration cannot see. Scrubbing the variable is what lets the wrapper's additive fragment apply and makes the run represent an installed one.
+
 ### Building and testing
 
 ```sh
