@@ -18,11 +18,9 @@
 //! Two further reasons hold independently of that one. The gutter the thumb sits in
 //! is painted in the editor's own background, a per-frame value out of the snapshot,
 //! while a widget's background is theme-owned — the same reason the statusbar strip
-//! is painted, per `DECISIONS.md` "Window structure". And a pane leaf must stay a
-//! bare `gtk::DrawingArea`: `ACTIVE_PANE_CSS` is an `outline` precisely so it
-//! consumes no layout space and never enters the inset arithmetic, and a widget
-//! child would need a `gtk::Overlay` or `gtk::Fixed` around every leaf, rebuilt and
-//! re-parented on every layout change.
+//! is painted, per `DECISIONS.md` "Window structure". And a widget child would ride
+//! the pane's host `gtk::Overlay`, re-parented into a freshly rebuilt tree on every
+//! layout change, inside the pane area `DECISIONS.md`'s focus regime warns about.
 //!
 //! ## The thumb sits in the pane's right PADDING GUTTER
 //!
@@ -33,8 +31,7 @@
 //! [`SCROLLBAR_THICKNESS_PX`] plus [`SCROLLBAR_MARGIN_PX`] no wider than
 //! [`crate::editor_inset::EDITOR_PADDING_PX`], the thumb lies wholly inside padding
 //! that has already been subtracted, so it never covers a glyph at any pane width,
-//! capped or not. The margin also clears the two-pixel active-pane outline, which
-//! `outline-offset: -2px` draws over the pane's last four pixels.
+//! capped or not.
 //!
 //! **The thumb therefore does not enter `grid_size_for_pane`, and that is the
 //! load-bearing half.** If it consumed grid width, a pane's column count would drop
@@ -585,7 +582,7 @@ mod tests {
     /// The thumb lies wholly inside the pane's right padding gutter, at every pane
     /// width, so it can never cover a glyph.
     ///
-    /// The first two assertions are relations between constants and are what make
+    /// The first assertion is a relation between constants and is what makes
     /// the per-width loop meaningful rather than incidental: the gutter is
     /// [`crate::editor_inset::EDITOR_PADDING_PX`] wide and already subtracted from
     /// every grid rectangle, so a thumb that fits inside it costs the grid nothing.
@@ -605,16 +602,15 @@ mod tests {
     #[test]
     #[allow(
         clippy::assertions_on_constants,
-        reason = "this test opens with two relations between production constants — \
+        reason = "this test opens with a relation between production constants — \
                   SCROLLBAR_THICKNESS_PX plus SCROLLBAR_MARGIN_PX fitting inside \
-                  EDITOR_PADDING_PX, and SCROLLBAR_MARGIN_PX clearing the 4 px the \
-                  active-pane outline covers — which clippy const-folds to a literal and \
-                  reports as vacuous. Being true at compile time is the point: each is a fact \
-                  about the constants whose whole value is the message it carries the day \
-                  SCROLLBAR_THICKNESS_PX is widened past the gutter it hides in, or the margin \
-                  is narrowed under the focus ring, and neither has any runtime input to \
-                  depend on. Scoped to this ONE function rather than the module so a genuinely \
-                  vacuous constant assertion added anywhere else here is still reported."
+                  EDITOR_PADDING_PX — which clippy const-folds to a literal and reports as \
+                  vacuous. Being true at compile time is the point: it is a fact about the \
+                  constants whose whole value is the message it carries the day \
+                  SCROLLBAR_THICKNESS_PX is widened past the gutter it hides in, and it has \
+                  no runtime input to depend on. Scoped to this ONE function rather than the \
+                  module so a genuinely vacuous constant assertion added anywhere else here \
+                  is still reported."
     )]
     fn the_thumb_lies_wholly_inside_the_right_gutter() {
         assert!(
@@ -628,14 +624,6 @@ mod tests {
              widening the bar past the padding means either covering text or taking \
              a column away from Neovim, and the second is a reflow on every scroll.",
             SCROLLBAR_THICKNESS_PX + SCROLLBAR_MARGIN_PX
-        );
-        assert!(
-            SCROLLBAR_MARGIN_PX >= 4.0,
-            "the thumb sits {SCROLLBAR_MARGIN_PX} px in from the pane's right edge, \
-             inside the active-pane focus ring. `ACTIVE_PANE_CSS_DATA` is \
-             `outline: 2px solid; outline-offset: -2px`, so the ring covers the \
-             pane's last four pixels; a margin below 4 puts the thumb under it and \
-             the mark changes appearance with which pane has focus."
         );
 
         for pane_w in [100.0, 320.0, 840.0, 2500.0] {

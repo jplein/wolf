@@ -46,7 +46,7 @@
 //! to apply splits (mutate the tree + bind a new pane) and focus-direction moves
 //! (resolve the neighbour in the tree + `focus_win`), detects closed windows (a
 //! bound pane whose grid vanished) and collapses them, resolves pending pane grids,
-//! and updates the active-pane focus ring from `active_win`.
+//! and reconciles the active pane from `active_win`.
 //!
 //! ## Layout persistence
 //!
@@ -214,15 +214,6 @@ const SURFACE_EDGE_PX: f64 = 1.0;
 /// How far the surfaces' edge is blended from the editor background towards its
 /// foreground. Low enough to read as a separator rather than as content.
 const SURFACE_EDGE_ALPHA: f64 = 0.35;
-
-/// CSS class applied to the active pane's `DrawingArea` to draw a focus ring.
-const ACTIVE_PANE_CSS: &str = "wolf-active-pane";
-
-/// CSS defining [`ACTIVE_PANE_CSS`]. An `outline` (not a `border`) so the ring does
-/// NOT consume layout space (no resize churn on focus changes). Loaded into the
-/// default display by [`install_pane_css`], once per TAB.
-const ACTIVE_PANE_CSS_DATA: &str =
-    ".wolf-active-pane { outline: 2px solid #3584e4; outline-offset: -2px; }";
 
 /// Divisor to convert an 8-bit color channel (0–255) to Cairo's 0.0–1.0 range.
 const RGB_MAX: f64 = 255.0;
@@ -551,7 +542,8 @@ struct PaneInner {
     statusbar_secondary: pango::FontDescription,
     /// The live core, shared with the rest of the app.
     core: Rc<RefCell<Option<WolfCore>>>,
-    /// The currently active pane (focus ring + cursor target), if any.
+    /// The currently active pane — the cursor's target and the pane whose statusbar
+    /// strip draws at full strength — if any.
     active_pane: Cell<Option<PaneId>>,
     /// The terminal drawer's binding: the pane bound to the drawer window, plus the
     /// most recently active EDITOR pane the focus bridge returns to.
@@ -1296,7 +1288,7 @@ impl PaneInner {
     }
 
     /// Refreshes the active pane from `active_win` (fallback: the pane owning the
-    /// cursor's grid), updating the focus ring when it changes.
+    /// cursor's grid).
     fn update_active_pane(&self) {
         let target = {
             let core_ref = self.core.borrow();
@@ -1432,8 +1424,8 @@ impl PaneInner {
             .map(|(id, _)| *id)
     }
 
-    /// Sets the active pane, records it as the drawer bridge's most-recently-used
-    /// EDITOR pane, and refreshes the focus-ring CSS across all panes.
+    /// Sets the active pane and records it as the drawer bridge's most-recently-used
+    /// EDITOR pane.
     ///
     /// The MRU is recorded HERE and nowhere else, so every route into a pane —
     /// intent, click, restore, `active_win` reconciliation — funnels through one
@@ -1447,14 +1439,6 @@ impl PaneInner {
             let mut state = self.drawer.get();
             state.record_active(pane, is_leaf);
             self.drawer.set(state);
-        }
-        let panes = self.panes.borrow();
-        for (pid, p) in panes.iter() {
-            if Some(*pid) == pane {
-                p.area.add_css_class(ACTIVE_PANE_CSS);
-            } else {
-                p.area.remove_css_class(ACTIVE_PANE_CSS);
-            }
         }
     }
 
@@ -3522,8 +3506,6 @@ impl PaneHandle {
 /// [`PaneHandle`]. No panes exist until the first window grid appears on a wake.
 #[must_use]
 pub fn build(core: &Rc<RefCell<Option<WolfCore>>>, metrics: &Rc<CellMetrics>) -> PaneHandle {
-    install_pane_css();
-
     let cmdline_area = gtk::DrawingArea::builder()
         .hexpand(true)
         .vexpand(false)
@@ -4147,26 +4129,6 @@ fn pick_initial_window(snap: &Snapshot) -> Option<(i64, u64)> {
         .filter(|w| w.grid >= MIN_WINDOW_GRID && !w.hidden)
         .min_by_key(|w| w.grid)
         .map(|w| (w.win, w.grid))
-}
-
-/// Adds a display-global provider carrying the [`ACTIVE_PANE_CSS`] definition.
-///
-/// [`build`] calls this, and a pane view is built per TAB, so every tab of every
-/// window adds another identical provider to the same default display. Identical
-/// providers are inert — the rule resolves the same either way — and the call is
-/// deliberately NOT hoisted into [`crate::coordinator`]: no smoke observes this
-/// outline (the OCR smokes read text, not chrome), so the hoist would be an
-/// unverifiable edit to the startup path.
-fn install_pane_css() {
-    if let Some(display) = gdk::Display::default() {
-        let provider = gtk::CssProvider::new();
-        provider.load_from_string(ACTIVE_PANE_CSS_DATA);
-        gtk::style_context_add_provider_for_display(
-            &display,
-            &provider,
-            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
-        );
-    }
 }
 
 #[cfg(test)]

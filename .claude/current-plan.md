@@ -1,515 +1,434 @@
-# Unit: coalescing the Markdown preview render (wolf-gnome)
-
-Branch: `linux-feat/preview-coalesce`, cut from `linux` (e76fe33).
-
-## Problem
-
-Typing beside a live Markdown preview issues a blocking `render_preview` RPC per
-keystroke — 988 calls at 6.93 ms mean against 1238 keystrokes, 15.6 % of wall clock,
-pushing `wake`'s p95 to 9.1 ms and its worst interval to 34 ms. It is the only blocking
-RPC that repeats while the user simply types. `crates/wolf-gnome/DECISIONS.md`,
-"Frame-time instrumentation", holds the numbers and the conditions.
-
-## The budget, already decided (do not re-litigate)
-
-- **Leading edge.** The first keystroke after an idle gap renders immediately.
-- **150 ms trailing.** A burst collapses to one render after the user pauses.
-- **500 ms maximum staleness.** Caps a sustained burst at roughly two refreshes a second.
-
-## Orchestrator decisions on the architect's open questions
-
-1. **Three constants, as planned.** `PREVIEW_TRAILING_DELAY`, `PREVIEW_MAX_STALENESS`
-   and `PREVIEW_LEADING_IDLE` all exist by name, with the documented invariant
-   `PREVIEW_LEADING_IDLE >= PREVIEW_TRAILING_DELAY` pinned by test 4's preamble. The
-   brief requires all three budget elements tunable without reading the algorithm.
-2. **Assertion 12 (the render count, read out of a frame-stats report inside the
-   existing smoke) is in.** It is the only thing in either suite that can see the wiring.
-   If it proves flaky, report it — do not weaken it silently.
-3. **The end-to-end measurement is a separate deliverable from assertion 12** and is
-   taken by hand per §7.4 below. A number is claimed only if it was measured.
-4. This crate has **no Bazel target**; `cargo test` discovers every file in `tests/`.
-   No `rust_test` wiring is owed.
-
----
-
-# Architect's plan (authoritative)
-
-## 2. Facts established from the source
-
-**`PaneInner` survives a tab switch.** One `PaneInner` per tab (`pane_view::build`,
-called at `crates/wolf-gnome/src/tab_view.rs:391`), held by `TabInner.panes`
-(`tab_view.rs:204`) for the life of the page. `TabsHandle::on_render_wake`
-(`tab_view.rs:919-946`) does not call `TabHandle::refresh` for a `TabWake::Hold`
-(`tab_view.rs:938`), so a background tab's `refresh_previews` is not called at all.
-`PaneInner` is dropped only when the page is deregistered (`tab_view.rs:374-378`).
-
-**`PaneState`/`PaneWidgets` do not survive.** `PaneState` (`pane_view.rs:420`) is a
-per-wake value. The `panes: RefCell<HashMap<PaneId, PaneWidgets>>` map is replaced
-wholesale by `apply_layout_rebuild` (`pane_view.rs:742`), cleared by
-`reset_after_restart` (`pane_view.rs:3205`), and has entries removed by `detect_closes`
-(`pane_view.rs:1216`, `:1230`).
-
-**Conclusion: the coalescer's state lives on `PaneInner`, one per tab, never per pane.**
-
-Two further facts:
-
-- `load_preview_document` (`pane_view.rs:2034-2098`) touches only the pane's
-  `webkit6::WebView` and `head_len`. A deferred render needs no `queue_redraw`.
-- `preview_ui`'s docs already describe the render as "the coalesced `render_preview`"
-  (`preview_ui.rs:38`, `:410`). Per CLAUDE.md the implementation is what must move;
-  `preview_ui.rs` needs no edit.
-
-## 3. Corrections to the candidate design
-
-1. **`request` must not be called on every wake.** Most wakes have no due pane. The glue
-   asks "is any pane due?" first (a cheap `current_load`/`loaded` comparison through
-   `preview_ui::needs_reload`, no allocation, no RPC) and calls `request` only then.
-   Otherwise a timer would be armed continuously while typing with no preview open.
-2. **The `may_render` refusal has two distinct cases.** At wake time the gate is read
-   *before* `request`, so a refusal touches no coalescer state. At fire time a refusal
-   returns without calling `rendered`, leaving `pending_since` set. State both
-   separately. A stale `pending_since` enters only through a `min`, so it can only pull
-   a later deadline *earlier* — never later.
-3. **No `Instant` arithmetic.** `Instant + Duration` panics on overflow. Express the
-   deadline in durations only:
-   `delay = PREVIEW_TRAILING_DELAY.min(PREVIEW_MAX_STALENESS.saturating_sub(now.saturating_duration_since(pending_since)))`.
-4. **`rendered(now)` is called from exactly one funnel** — the last statement of the one
-   private method that performs a render pass — so no caller can forget it.
-5. **One fresh one-shot per request** (not a repeating source, not a self-re-arming one).
-   Rejected A: `glib::timeout_add_local` with `ControlFlow::Continue` — a genuinely
-   repeating source, which reads as exactly the periodic timer `DECISIONS.md:61-63`
-   forbids. Rejected B: one live source that re-arms itself for the remaining time — it
-   makes `fire` three-way and moves arming into the fire closure, to save a `GSource`
-   attach that costs microseconds against a 6.93 ms RPC. The chosen shape bounds live
-   sources at `ceil(TRAILING / inter-key interval)` ≈ 5 during a fast burst and **zero
-   while idle**, which is the property `DECISIONS.md` states.
-6. The tab-gate interaction is the sharpest case — see §6.3.
-7. A frame-stats nesting contract breaks unless the fire path opens its own `pane.prev`
-   scope — see §5.4.
-
-## 4. New file: `crates/wolf-gnome/src/preview_coalescer.rs`
-
-Pure, GTK-free. No widget type, no `WolfCore`, no clock read of its own — every entry
-point takes `now: Instant` from the caller.
-
-**Constants** (the one site in the crate where these numbers live; module docs carry the
-literals, `DECISIONS.md` cites the names):
-
-- `pub const PREVIEW_TRAILING_DELAY: Duration = Duration::from_millis(150);` — above a
-  fast typist's inter-key interval, below the ~200 ms at which a delayed update reads as
-  lag.
-- `pub const PREVIEW_MAX_STALENESS: Duration = Duration::from_millis(500);` — a pure
-  trailing debounce renders *never* during sustained typing; this caps it at roughly two
-  refreshes a second.
-- `pub const PREVIEW_LEADING_IDLE: Duration = Duration::from_millis(150);` — the quiet
-  since the last render that re-arms the leading edge. **Must never be shorter than
-  `PREVIEW_TRAILING_DELAY`**, or a keystroke just after a trailing fire takes the leading
-  edge and renders back-to-back with it. Separate because it answers a different
-  question, and folding the two would make a retune of the trailing delay silently move
-  the leading-edge threshold.
-
-**Types**
-
-```rust
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RenderDecision {
-    Render,                                     // render inline on this wake
-    Arm { generation: u64, delay: Duration },   // arm a one-shot glib timeout
-}
-
-pub struct PreviewCoalescer {
-    pending_since: Option<Instant>,  // when the current unrendered burst began
-    last_render: Option<Instant>,    // when a pass last actually performed
-    armed: bool,
-    generation: u64,
-}
-```
-
-**Functions**
-
-- `pub fn new() -> PreviewCoalescer` + `impl Default`.
-- `#[must_use] pub fn request(&mut self, now: Instant) -> RenderDecision`
-  - If `pending_since.is_none()`: set it to `now`; if
-    `last_render.is_none_or(|t| now.saturating_duration_since(t) >= PREVIEW_LEADING_IDLE)`
-    answer `Render` and return.
-  - Otherwise compute `delay` per §3.3, set `armed = true`,
-    `generation = generation.wrapping_add(1)`, answer `Arm { generation, delay }`. The
-    bump on *every* arm is what supersedes the previous source and makes the trailing
-    edge track the **last** keystroke rather than the first.
-- `pub fn fire(&mut self, generation: u64) -> bool` — `armed && generation == self.generation`;
-  clears `armed` **before** returning true (the `RefreshCoalescer::fire` rule).
-- `pub fn rendered(&mut self, now: Instant)` — `pending_since = None; last_render = Some(now); armed = false`.
-
-**No `cancel()`.** Module docs must say why: `RefreshCoalescer::cancel` exists because a
-re-root makes the armed fire's *content* wrong. Here the fire re-derives the pane set,
-the liveness reading and the document from live state at fire time, so there is no wrong
-content to cancel, and every teardown path is covered by `Weak::upgrade` and `may_render`.
-
-Module docs must also carry: the relationship to `refresh_coalescer.rs` (same
-generation-token mechanism, different rule — do not merge); why the leading edge needs
-both conjuncts; why the deadline is a `min` of two terms; the one-shot-per-request
-decision with the two rejected alternatives.
-
-## 5. Files to modify
-
-### 5.1 `src/lib.rs`
-
-- `pub mod preview_coalescer;` in the alphabetical list at `:392-394`.
-- New seam bullet in the module inventory near `:251-279`.
-- `:269`: `the per-wake render` → `the coalesced render`.
-
-### 5.2 `src/pane_view.rs` — the glue
-
-**New field on `PaneInner`** (`:484-569`), near `pending_layout`:
-`preview_coalescer: RefCell<PreviewCoalescer>,`. Doc: one per **tab**, never per pane,
-because `panes` is replaced by `apply_layout_rebuild` and cleared by
-`reset_after_restart` (cite both), so a per-pane coalescer would drop a burst's trailing
-edge exactly when a rebuild happened mid-burst. `RefCell` mirrors
-`tree_view::TreeInner::coalescer` (`tree_view.rs:192`). Initialise in `build` (`:3399`).
-
-**Split `refresh_previews` (`:1564-1652`) into four.** Keep the existing doc comment's
-`seq` warning and call-ordering paragraph on `refresh_previews`.
-
-1. `fn refresh_previews(self: &Rc<Self>)` — keeps `ids` and the `sync_preview_view` /
-   `apply_preview_frame` loop (`:1565-1569`) verbatim, then calls
-   `self.request_preview_render()`.
-2. `fn request_preview_render(self: &Rc<Self>)` — new.
-   - The liveness read and `preview_ui::may_render` gate, moved verbatim from
-     `:1571-1581` with its comment. A refusal returns having touched no coalescer state.
-   - `if !self.any_preview_due() { return; }`.
-   - `let decision = self.preview_coalescer.borrow_mut().request(Instant::now());` **in a
-     statement of its own**, with a comment: edition 2021 keeps a `match` scrutinee's
-     temporary alive for the whole match, so the `Render` arm's re-borrow inside
-     `rendered` would be a `RefCell` panic. Same rule as `tree_view.rs:269-270`.
-   - `Render => self.run_preview_render_pass()`.
-   - `Arm { generation, delay } =>` `let weak = Rc::downgrade(self);` and
-     `glib::timeout_add_local_once(delay, move || { ... })`: upgrade or return;
-     `let performs = inner.preview_coalescer.borrow_mut().fire(generation);` in its own
-     statement; if `performs`, open `let _guard = frame_metrics::scope(Bucket::PanePrev);`
-     (a **named** guard — `let _ =` measures nothing) and call
-     `inner.run_preview_render_pass()`.
-3. `fn any_preview_due(&self) -> bool` — one `panes` borrow, `current_load` vs `loaded`
-   through `preview_ui::needs_reload`. No `String` clone, no `preview` /
-   `pending_fragment` borrow.
-4. `fn run_preview_render_pass(&self)` — holds the existing body from `:1571-1651` in
-   order: the liveness read + `may_render` gate re-read here (so a deferred call cannot
-   fire into a Neovim that wedged since the arm; a refusal returns **without** calling
-   `rendered`), the `DueRender` collection (`:1587-1614` verbatim, including its
-   one-borrow comment), the render/load/record loop (`:1615-1651` verbatim, both
-   `Bucket` regions intact), and as its **last statement**
-   `self.preview_coalescer.borrow_mut().rendered(Instant::now());`. Doc: this is the only
-   function in the crate that calls `render_preview` and the only one that calls
-   `rendered`; a pass that passes the gate records a render whether or not any pane
-   turned out to be due, because "nothing is due" is exactly "there is nothing pending".
-
-**`apply_layout_rebuild` (`:705-777`) is not special-cased** — its `refresh_previews()`
-call at `:771` stays as it is. See §6.4.
-
-Imports: `std::time::Instant`, `crate::preview_coalescer::{PreviewCoalescer, RenderDecision}`.
-
-### 5.3 `src/window.rs` and `src/shell.rs` — module docs only
-
-Both state the render is issued "once per changed source per wake — the only one of the
-ten that can repeat while the user simply types" (`window.rs:64-67`, `shell.rs:154-158`).
-Rewrite both in present tense over the coalesced behaviour: still one of the ten, still
-gated by `preview_ui::may_render`, repeating at most once per leading edge plus once per
-`PREVIEW_MAX_STALENESS` while typing continues. Replace the clause; do not append.
-
-### 5.4 `src/frame_stats.rs` — module docs only, no code
-
-- Nesting table (`:21-30`): add one sentence that a `pane.prev` region is opened either
-  by a pane wake or by the preview coalescer's one-shot fire, so `prev.render` always has
-  a parent.
-- Count identities (`:48-63`): one bullet in the shape of the existing `count(pane.wake)`
-  one — `count(pane.prev)` may exceed `count(pane.wake)`, because a trailing fire is a
-  one-shot timer outside every `wake` region.
-- `Bucket::PanePrev`'s doc (`:144-145`): the pass, whether inside a pane wake or from the
-  coalescer's trailing fire.
-
-## 6. The trailing edge is undroppable — case by case
-
-1. **The burst ends.** The last request armed a fire nothing supersedes; it fires,
-   `fire` returns true, the pass re-derives the due set and renders. **This is why it
-   must be a timer and not "the next wake":** after the last keystroke there may be no
-   further wake at all, so a wake-driven trailing edge is precisely the droppable one.
-2. **The window loses focus.** Nothing in this crate ties the preview path to focus, and
-   a `glib` one-shot is a main-context source rather than a frame-clock tick.
-   *(Standard GLib behaviour, not measured here; the checkable claim is that this crate
-   suppresses nothing.)*
-3. **A tab switches mid-burst.** `tabs_ui::tab_wake` answers `Hold` and the held tab's
-   `on_render_wake` stops being called, so nothing re-arms — but the already-armed source
-   belongs to that tab's own `PaneInner` and still fires, bypassing the tab gate.
-   Deliberate and safe: the gate protects `pane_status`, which joins the
-   current-tabpage-only `Snapshot::windows`, and the render path reads none of it —
-   `current_load` comes from the tabpage-global `Snapshot::previews` × `markdown_ticks`,
-   and `render_preview` is keyed by bufnr. The cost is bounded to exactly one deferred
-   blocking render per held tab. `PaneInner` deliberately gains no reference to the tab
-   layer to consult the gate: that coupling would run backwards.
-4. **The preview pane closes mid-burst.** `detect_closes` removes the `PaneWidgets`; the
-   armed fire re-derives the due set, finds nothing, renders nothing, records `rendered`.
-   This is exactly why the fire re-enters the pass instead of capturing a
-   `Vec<DueRender>` at arm time.
-5. **The window closes.** Two independent belts: the closure holds a `Weak<PaneInner>`,
-   and the close handler's `core.borrow_mut().take()` leaves `may_render(None) == false`.
-6. **The core is taken out.** Same second belt — which is why `may_render` takes
-   `Option<Liveness>` (`preview_ui.rs:62-66`).
-7. **`may_render` refuses at fire time.** The pass returns without calling `rendered`.
-   `armed` is already cleared, `pending_since` stays set; the next wake with a due pane
-   skips the leading edge and computes `delay == Duration::ZERO`, re-arming for the next
-   main-loop turn — a one-turn retry, not a lost edit and not a busy loop.
-
-### 6.4 `apply_layout_rebuild` coalesces, with no special case
-
-- A restored preview pane has `loaded == None`, so it is due, and `apply_layout_rebuild`
-  only ever runs on a `PaneInner` whose `last_render` is `None`: `realize_layout` runs on
-  a pane view built moments earlier (`tab_view.rs:391` → `:620`), and
-  `consume_pending_layout` (`pane_view.rs:660-681`) fires on the first wake at which a
-  pane exists and early-returns from that wake before `refresh_previews` is reached
-  (`pane_view.rs:583-585`). So the leading edge takes it and the restored document loads
-  inline, exactly as today.
-- A second entry point bypassing the coalescer would be a second place the `may_render`
-  gate and the `loaded` bookkeeping must be kept in step.
-- If that premise ever stopped holding, the failure mode is a restore whose preview
-  paints one trailing delay late — never one that never paints.
-
-## 7. Test plan
-
-### 7.1 Unit tests in `src/preview_coalescer.rs`
-
-House style is `refresh_coalescer.rs:104-286`: a preamble comment stating the timer is
-driven **by hand**, nothing sleeps, no constant is compared against its own literal; one
-doc comment per test naming the property *and* the revert that must redden it. Build
-every `Instant` from one `let t0 = Instant::now();` plus `t0 + Duration::from_millis(..)`.
-
-| # | Test | Behaviour | Revert that must redden it |
-| --- | --- | --- | --- |
-| 1 | `the_first_edit_after_an_idle_gap_renders_immediately` | `request(t0)` on a fresh coalescer is `Render`; after `rendered(t0)`, `request(t0 + 10s)` is `Render` again. | Delete the early-`Render` branch so `request` always answers `Arm`. Cost: the first keystroke after a pause waits a whole trailing delay for a preview that could have been current at once. |
-| 2 | `a_burst_arms_one_fire_and_only_the_newest_generation_performs` | `rendered(t0)`, then `request` at +40/+80/+120 ms answer `Arm` with three **distinct** generations; `fire(g1)`, `fire(g2)` false, `fire(g3)` true. | Stop bumping `generation` in `request`. All three superseded sources then perform — three blocking renders for one burst — and the trailing edge tracks the burst's *first* keystroke. |
-| 3 | `the_delay_is_capped_by_the_staleness_deadline` | Requests every 40 ms from a burst beginning at `t0+40`: every `delay <= PREVIEW_TRAILING_DELAY`; at `pending + 400 ms` the delay is exactly `PREVIEW_MAX_STALENESS - 400 ms`; at `pending + PREVIEW_MAX_STALENESS` and beyond it is `Duration::ZERO`. | Drop the `min` against the cap remainder. A continuously typing user then sees no render until they pause, and a burst past the cap waits another full trailing delay. |
-| 4 | `an_edit_just_after_a_render_does_not_take_a_second_leading_edge` | `rendered(t0)`; `request(t0+40)` → `Arm{g}`; `fire(g)` true; `rendered(t0+190)`; `request(t0+200)` must be `Arm`, never `Render`. Preamble assertion: `PREVIEW_LEADING_IDLE >= PREVIEW_TRAILING_DELAY`. | Drop the `PREVIEW_LEADING_IDLE` conjunct. Every request then finds `pending_since` empty right after a render and answers `Render`, so every keystroke is its own leading edge and the coalescing is gone — the single most likely edit in this file. **Measured: this revert reddens four of the five tests, not one.** Tests 2, 3 and 5 each open with `rendered(t0)` then `request(t0+40)` and die in the `armed()` helper before reaching their own subject. No smaller edit isolates test 4; the conjunct is exactly what those three rest on too. The test's prose was corrected to say so. |
-| 5 | `a_duplicate_fire_at_the_same_generation_performs_nothing` | After a performing `fire(g)`, a second `fire(g)` is false. | Drop the `armed` term from `fire`'s condition. |
-
-Do **not** write a test whose only claim is "a fire the gate refused leaves the burst
-recoverable": with a two-variant `RenderDecision` both answers are progress, so no single
-edit falsifies it. Test 3's `Duration::ZERO` row is the mechanism that recovery rests on.
-
-### 7.2 Correctness under `cage` — extend the existing smoke
-
-Extend `preview_pane_renders_and_edit_source_returns_under_cage`
-(`tests/smoke_headless.rs:16710`) and `PREVIEW_SCENARIO` (`:9770`). **No new smoke, no
-new `cage` launch.**
-
-**(a) Make the trailing edge load-bearing.** Step 6 (`:9931-9940`) types the marker at
-`wtype`'s default rate, so the whole burst can land inside one flush and be carried by a
-single leading-edge render. Change to `wtype -d "$TYPE_DELAY_MS" -- "o$PREVIEW_LIVE_MARKER"`
-and add a `TYPE_DELAY_MS=40` knob beside `PREVIEW_SETTLE`, commented with the coupling: it
-must stay **below** `preview_coalescer::PREVIEW_TRAILING_DELAY`, or each keystroke becomes
-its own leading edge and the trailing edge stops being what puts the marker on screen.
-With 13 keys at 40 ms the `o` takes the leading edge, the marker characters coalesce, and
-only a fire after the last one carries the complete word — so assertion 11 gains a second
-named revert: **neuter the `RenderDecision::Arm` arm of `request_preview_render` so it
-arms nothing.** The two reverts are distinguishable from stderr (the single-encoding one
-prints `preview body swap failed`, the trailing-edge one prints nothing), and that
-belongs in the revert table.
-
-**(b) Guard that (a) stays armed.** New pure guard test beside the nine at `:244-300`:
-`preview_burst_delay_stays_below_the_coalescer_trailing_delay`, importing
-`wolf_gnome::preview_coalescer::PREVIEW_TRAILING_DELAY` and asserting the smoke's
-`TYPE_DELAY_MS` const is strictly below it. Falsifier: raise `TYPE_DELAY_MS` to 200.
-
-**(c) The saving, measured in the same run.** Arm the instrument on this smoke's
-`cage_command` (`:16768-16781`): `WOLF_FRAME_STATS=1`, `WOLF_FRAME_STATS_INTERVAL=1`,
-`WOLF_FRAME_STATS_FILE=<stats_path>` under `runtime_dir`, passed through
-`clear_evidence` alongside the other artifacts (`:16758-16766`). After `grim "$OUT_PNG"`
-add `sleep 1.2; wtype -k Escape; sleep 0.3`, commented: reports ride a wake, so the
-interval containing the burst is emitted by the *next* wake, and a harmless normal-mode
-`Escape` forces it before teardown. Then:
-
-- **Assertion 12 (discriminator): the render count.** Parse with the existing
-  `parse_frame_stats_blocks` (`:35053`) and `parse_frame_stats_count` (`:35023`), sum
-  `prev.render`'s `count` across blocks, assert `2 <= total <= PREVIEW_RENDER_BUDGET`
-  with `PREVIEW_RENDER_BUDGET = 8` documented. Arithmetic for the doc comment: the only
-  things moving the source's `changedtick` are the cold open (1) and the 13-key burst;
-  coalesced that is 1 open + 1 leading + at most 1 cap + 1 trailing ≈ 3–4, while a
-  per-wake render is one per keystroke ≈ 14–15. The lower bound is the non-vacuity half.
-  Deliberately **not** a ratio against `keys=`: the scenario types two ~150-character
-  `:call writefile(...)` lines that bump no source tick.
-- Revert for assertion 12: make `request_preview_render` call `run_preview_render_pass()`
-  unconditionally. Assertion 11 stays green under it — which is the point.
-
-**(d) Red-run demonstrations are deliverables** (`tests/README.md:175`): the coder fills
-the `measured` column for both new reverts from real red runs.
-
-### 7.3 What stays unproven — record it in `tests/README.md`
-
-- The 500 ms cap has no end-to-end evidence; its only falsifiable evidence is unit test 3.
-- The held-tab deferred fire (§6.3) is reasoned from the tab gate's inputs, not measured.
-
-### 7.4 The end-to-end saving (orchestrator's addition)
-
-Separate from assertion 12, and the only thing that may be compared against the 15.6 %
-baseline. Per `build.md:377`, on this host (the same `AMD Ryzen AI MAX+ 395` under NixOS
-the baseline was taken on):
-
-- Build **two** release binaries: one from `linux` (the uncoalesced baseline) and one
-  from this branch. Alternate them in one session, as `DECISIONS.md:341` did.
-- Scenario B of the recorded reading: two panes with a live Markdown preview, a large
-  prose fixture, `wtype -d 30` bursts over roughly thirty seconds,
-  `WOLF_FRAME_STATS_INTERVAL=2`, no `WOLF_FONT_PT`.
-- Two runs per binary; report `prev.render`'s count, mean and its share of wall clock,
-  plus `wake`'s p95, for each. Anything inside the run-to-run spread is not a signal.
-- Keep the driver script in the scratchpad; it is not committed.
-- **If it cannot be run, say so plainly and claim no number.**
-
-## 8. Documentation owed
-
-### 8.1 `crates/wolf-gnome/DECISIONS.md`
-
-- `:63` — "Two one-shot timers exist and neither is a poll" becomes three, adding the
-  preview's trailing render: armed by an arriving edit, fires once, disarms, none exists
-  while idle. Add one sentence stating honestly that during a burst several superseded
-  sources can be alive at once, each firing once and performing nothing unless it carries
-  the live generation — a reader who finds five queued sources must not conclude the
-  invariant is broken.
-- **New `##` section immediately after "Threading and the wake"**: the three-part budget
-  with the constants **cited by name, not by value**; why a leading edge; why a timer
-  rather than the next wake; why a cap; the double read of `may_render` and why a
-  deferred blocking call must re-read the gate; the undroppability list of §6 condensed.
-- `:289-297` — "Crash and stall recovery". The **count does not change**: ten reachable,
-  nine from a running window, all gated on `Alive`. Two edits: `:293`'s closing clause
-  about the render being "the only one of the ten that repeats while the user simply
-  types" is rewritten to say it is coalesced and what it repeats at; `:297` gains the
-  fact that `may_render` alone among the nine is read twice per render, because its call
-  can be deferred past the reading that admitted it.
-- `:345-347` — "The measured reading". Rewrite in the shape `:341` uses for `draw.grid`:
-  keep 988 / 6.93 ms / 15.6 % as the baseline the repair is measured against, add the new
-  figures, and **delete outright** the forward-looking sentences at `:347`.
-
-### 8.2 `crates/wolf-gnome/src/README.md`
-
-- **New `#### preview_coalescer.rs` entry** before `#### preview_link.rs` (`:605`).
-  Purpose, the public API, and Decisions: the leading edge's two conjuncts; the cap as a
-  `min` term; one fresh one-shot per request with a generation token; why it is not
-  `refresh_coalescer.rs` widened (that seam is clock-free by construction and is a macOS
-  port whose four proven tests would have to be rewritten around a clock, for a rule the
-  sidebar does not want); no `cancel`, because the fire re-derives everything.
-- `#### pane_view.rs` (`:544-561`): one new Decisions bullet — the render half is
-  coalesced, the coalescer is per tab because `panes` is replaced by a layout rebuild,
-  and the fire re-enters the same pass so the gate and the due set are re-read. Tighten
-  rather than append.
-- `#### refresh_coalescer.rs` (`:639-657`): no edit.
-
-### 8.3 `crates/wolf-gnome/tests/README.md`
-
-- `:121-124`: smoke count unchanged at sixty; the pure-guard count goes from nine to ten
-  and `69 passed` → `70 passed`.
-- The preview smoke's artifact list gains a frame-stats report file — edit in place.
-- Add the two "still unproven" entries from §7.3.
-
-### 8.4 `tests/smoke_headless.rs` module docs
-
-`:241-246` "**Nine pure guards**" → ten, with a bullet for the new guard. The frame-stats
-smoke's own inventory sentence (`:145-151`) is untouched.
-
-### 8.5 `feat-list.md`
-
-- `:260`: "Only the preview render repeats while the user simply types" — present tense
-  over the coalesced behaviour.
-- `:268`: replace the "`prev.render` is deliberately left alone … carried onward as a
-  unit of its own" sentence with the repaired reading, in the shape of the `draw.grid`
-  sentence beside it.
-- `:272-278`: delete item 1 of "Suggested order of work for Linux" and renumber "Preview
-  in browser" to 1. Change no other wording.
-
-### 8.6 Formatting
-
-`prettier --write` every touched Markdown file, then `./tools/lint/markdown_check.sh`.
-
-## 9. Implementation order
-
-1. `src/preview_coalescer.rs` + unit tests; `lib.rs` wiring.
-2. `pane_view.rs`: field, initialiser, the split, the timer arm, the `PanePrev` scope.
-3. `frame_stats.rs` doc edits.
-4. `window.rs` / `shell.rs` doc clauses.
-5. Smoke edits: knob, `-d` pacing, flush key, frame-stats env, assertion 12, new guard.
-6. The two red-run demonstrations; fill the revert table's `measured` column.
-7. The end-to-end measurement (§7.4).
-8. Documentation (§8), with the measured numbers in hand.
-
-## 11. Lint
-
-- `cargo clippy --workspace --all-targets -- -D warnings` covers `#[cfg(test)]` too.
-- `impl Default` required. `Option::is_none_or`, not `map_or(true, ..)`.
-- No `Instant + Duration`; `saturating_duration_since` / `Duration::saturating_sub` only.
-- `#[must_use]` on `request` and `new`.
-- Named guard for `frame_metrics::scope`, never `let _ =`.
-- No `#[allow]`. If `run_preview_render_pass` trips `too_many_lines`, split the
-  `DueRender` collection into `fn due_previews(&self) -> Vec<DueRender>`.
-
-## 12. Flagged / unverified
-
-- GLib timeouts firing for an unfocused toplevel is standard behaviour, not measured here.
-- Assertion 12's expected counts (3–4 coalesced, 14–15 uncoalesced) are derived, not
-  measured. Confirm both ends from a real run; adjust `PREVIEW_RENDER_BUDGET` only if the
-  *coalesced* count exceeds it, never to accommodate an uncoalesced one.
-- Whether the report covering the burst reaches the file before teardown depends on the
-  added flush key. If flaky, the fix is a longer post-capture idle, not a weaker
-  assertion.
-
----
-
-## The measurement, taken (pass 3) — the numbers the docs must use
-
-Four runs alternated in one session, release profile, both binaries measured rather than
-comparing this branch against a recorded number. Independently re-derived by the
-orchestrator from the retained reports.
-
-| | baseline (`linux`) | this branch |
-| --- | --- | --- |
-| `prev.render` count | 1186 / 1188 | 90 / 90 |
-| `prev.render` total | 6490.6 / 6527.1 ms | 201.9 / 210.2 ms |
-| wall clock | 54.8 / 54.8 s | 55.1 / 55.2 s |
-| share of wall clock | 11.84 % / 11.91 % | 0.37 % / 0.38 % |
-| `wake` p95 median | 8.55 / 8.50 ms | 0.15 / 0.22 ms |
-| worst `wake` max | 30.74 / 34.00 ms | 32.78 / 33.64 ms |
-
-**Three framing constraints, in the coder's words, binding on every doc:**
-
-1. **The baseline reads 11.9 % whole-run, not the recorded 15.6 %.** The shape reproduces
-   (1187 renders against 988, `wake` p95 8.5 against 9.1 ms, worst interval 30.7–34.0
-   against 34 ms) but the render mean is 5.48 against 6.93 ms, from a denominator carrying
-   ~22 s of non-typing wall clock and a generated rather than byte-identical prose fixture.
-   **No doc may state the improvement as "15.6 % → 0.4 %"**, which would silently mix two
-   measurement setups. Measuring both binaries in one session is what makes the comparison
-   sound.
-2. **The 34 ms worst interval does not improve, and must not be claimed.** In all four runs
-   `wake`'s max lives in the cold preview open, where `prev.load` alone is 10.3–10.9 ms for
-   the WebProcess spawn and the full `load_html`. Coalescing does not touch the cold open.
-   The p95 median is the statistic to quote.
-3. **Total main-thread busy falls by about 3.5 points, not 11.5.** `draw.pane` count rises
-   78 % over the same wall clock at an unchanged per-frame mean — frames GTK wanted to
-   deliver and could not while the thread sat in a blocking RPC. Summed families go 29.7 %
-   → 26.1 %. The honest sentence: the blocking RPC is gone and the wake path is 98 %
-   cheaper, and the freed CPU is largely spent painting a smoother editor rather than going
-   idle.
-
-The prediction given when the budget was set (15.6 % → roughly 1.4 %) is **not** to be
-quoted as confirmed. Quote the measurement.
-
-The staleness cap has value-level evidence from the same run. Across all 28 typing blocks
-of both branch runs the modal reading is **4 renders per 2-second block** (24 of 28; range
-3–5, the fives being blocks that also caught an inter-burst trailing fire). Four per two
-seconds is exactly two a second, which is exactly `PREVIEW_MAX_STALENESS`. An earlier
-report of "3 per 2-second block" was one block from one run and must not be used.
+# Plan: Remove the active-pane focus ring from wolf-gnome
 
 ## Status
 
-- [x] Branch created
-- [x] Architect plan
-- [x] Tests (unit + cage, including the sustained-burst cap evidence)
-- [x] Implementation, with five unit falsifiers demonstrated red
-- [x] Measurement (pass 3)
-- [ ] Smoke bounds confirmed (pass 4)
-- [ ] Review
-- [ ] Docs
-- [ ] Full suite, commit, merge
+COMPLETE. Canonical gate green on the final tree: `cargo build --workspace --all-targets` exit 0,
+`cargo test --workspace` exit 0 — 1144 passed, 0 failed, 10 ignored (all pre-existing, each stating
+its reason). `cargo clippy --workspace --all-targets -- -D warnings` exit 0, verified real by driver
+invocation and by a positive control that failed as expected. `cargo fmt --all -- --check` and
+`prettier --check "**/*.md"` clean; `markdown_check.sh` reports no findings on the two edited docs.
+
+Diff-level confirmation that nothing was weakened: exactly one `assert!` removed across the change
+(R1's approved one), zero `#[test]` functions added or removed.
+
+Open, reported to the user, NOT fixed here: `DECISIONS.md:161` says "Every widget under the pane area
+is destroyed and rebuilt on each layout change", false by the same evidence that corrected `:145` —
+the hosts, their `DrawingArea` children and any `WebView` overlay child all survive; only the
+`gtk::Paned` tree is rebuilt. Pre-existing, one clause.
+
+**Evidence held (workflow step 7).** The new pixel assertion was falsified against the tree with the
+ring present, before any source change:
+
+```
+assertion `left == right` failed: … 0 pixels at the LEFT pane's own left edge (x 251..255) and 586
+at the RIGHT pane's own right edge (x 1276..1280), rows 67..360, are exactly GNOME's accent #3584e4
+  left: 586
+ right: 0
+```
+
+586 is exactly half the right probe's 1172 px — two of four columns for all 293 rows, which is what
+a 2 px outline at `outline-offset: -2px` draws. The precondition stayed green, so the subject was
+not vacuous. `the_thumb_lies_wholly_inside_the_right_gutter`, whose assertion set materially changed
+under R1, was falsified separately by raising `SCROLLBAR_THICKNESS_PX` to 24 and restored to a
+matching sha256. T1–T12 are comments and assertion messages with no behavior to disable, so none is
+owed evidence.
+
+**Gate results (real).** `cargo test -p wolf-gnome` exit 0 — 484 passed, 0 failed, 10 ignored
+(pre-existing, self-declaring); smoke target 70 passed, 0 failed, 577.57s, unfiltered.
+`cargo clippy --workspace --all-targets -- -D warnings` exit 0. `prettier --check` on `DECISIONS.md`
+ok. `cargo fmt --all -- --check` RED, whitespace only, inside the test-writer's `pane_edge_probes()`.
+
+**The empirical unknown from §7.2 is settled by measurement.** Both probes read 1172 px of a single
+colour `(20, 22, 27)`, and the reference pixel at `(1262, 213)` reads the same. The outermost four
+columns are the right pane's own padding, as inferred.
+
+## 0.2 Orchestrator rulings, round 3 (post-review)
+
+The reviewer approved with three routed items. Rulings:
+
+**R6 — the reviewer's severity-1 finding is resolved in the change's favor; `DECISIONS.md:147` stands.**
+I read the deleted ablation table directly (`git show HEAD:crates/wolf-gnome/tests/smoke_headless.rs`,
+lines 7648-7663):
+
+```
+as captured                     4 DIVIDERBR=AVO
+right pane cropped out alone    77 DIVIDERBRAVO   (correct)
+whole ring masked               B DIVIDERBRAVO    (correct)
+ring TOP edge only masked       # DIVIDERBRAVO    (correct)
+ring LEFT edge only masked      a DIVIDERBRAVO    (correct)
+ring RIGHT edge only masked     4 DIVIDERBR=AVO   (still wrong)
+ring BOTTOM edge only masked    4 DIVIDERBR=AVO   (still wrong)
+```
+
+with the conclusion "So it is the ring's TOP edge: a long thin high-contrast horizontal line
+immediately above a 15-cell heading, which `--psm 11` folds into the same sparse region and scales
+from." The `:147` sentence is faithful, geometry included. The reviewer conflated two measurements:
+`DIVIDER_BODY_LINE_COUNT`'s ablation concerns the `~` COLUMN, where masking the ring left the misread
+in place, while this one concerns the heading OCR, where masking its top edge fixed it. Both are true
+of different readings. The technical-writer should carry the decisive line into `:147` so the claim
+stays checkable, since the table itself is gone.
+
+**R7 — the precondition gains the left-probe cross-check (reviewer item 2): APPROVED.** The message
+names a cause the check cannot detect: if the window fails to reach the output's right edge, the
+reference pixel at x 1262 is outside it too, both regions read the compositor's background, they
+compare equal, and the subject assertion goes vacuous. `count_exactly(left_probe, editor_bg) > 0`
+closes it, because the left probe's x is `OVERLAY_ORIGIN_X_EXPECTED` and sits inside the pane area by
+construction. This STRENGTHENS a precondition; the two-assertion shape in §7.2 was the architect's
+sketch, not a boundary.
+
+**R8 — the false clause at `smoke_headless.rs:10388` is deleted (reviewer item 3): APPROVED.** It
+claims `LINK_SEARCH_INSET_Y_PX` starts the search below the statusbar strip. The search rect is
+`y 87..600` and the strip spans `y 47..139` at `SMOKE_FONT_PT`, so rows 87..139 are inside the strip
+band. The bullet's conclusion survives on its second reason (grey theme text, which `is_link_blue`'s
+blue-over-red margin rejects). Pre-existing defect, adjacent to T3, worth fixing while we are here.
+
+## 0.1 Orchestrator rulings, round 2
+
+**R3 — `cargo fmt -p wolf-gnome` is the coder's to run, despite landing in a test file.** Applying a
+formatter is mechanical, not authoring, and a whole agent round for whitespace is waste. The coder
+runs it and re-verifies; it must change no token.
+
+**R4 — record the settled measurement (coder's recommendation 1): APPROVED.** §7.2 asked for exactly
+this. The test-writer rewrites `pane_edge_probes()`'s "inference until the first green run"
+paragraph as the measured fact it now is, citing the counts above.
+
+**R5 — the two uncovered guards (coder's recommendations 3 and 4) are NOT built in this pass.** The
+coder measured that both fail to fire: deleting the `record_active` block from `set_active_pane`
+leaves the whole suite green (`drawer_up_target` falls back to `bottom_most_leaf`, which returns the
+same pane in every one-editor-pane scenario), and inverting the active-pane predicate at
+`pane_view.rs:2428` also leaves it green (`tests/README.md:240` already records that OCR reads
+neither a font weight nor a dim). Both are pre-existing gaps this change did not create. The second
+becomes more consequential — the strip's text is the only active-pane signal and nothing observes
+it — but building new smoke coverage is beyond "remove the border", and scaling scope up is the
+user's call, not mine. Surface both to the user as findings. Do NOT add a replacement indicator, and
+do not weaken anything to compensate.
+
+**Recommendation 5** (the `Six of the sixty read RAW PIXELS` count in `smoke_headless.rs`'s module
+doc, and whether `tests/README.md` carries a matching one) goes to the technical-writer.
+
+## Problem statement
+
+`crates/wolf-gnome/src/pane_view.rs` installs a display-global CSS provider carrying
+`.wolf-active-pane { outline: 2px solid #3584e4; outline-offset: -2px; }` and toggles that class
+across every pane on each focus change, drawing a bright blue ring around the active pane. Delete
+the rule, the provider install, and the class toggle. The per-pane statusbar strip's text — bold at
+full strength in the active pane, both lines scaled by `STATUSBAR_INACTIVE_ALPHA` elsewhere — then
+becomes the ONLY active-pane signal, which is what macOS already does. That is the intended
+outcome. Do NOT add a replacement indicator.
+
+## 0. Orchestrator rulings
+
+**R1 — the deleted `scrollbar.rs` const assertion (§4.2c) is approved.** The `SCROLLBAR_MARGIN_PX >= 4.0`
+check's entire subject was the four pixels the outline covered. It could not fail before or after
+(`SCROLLBAR_MARGIN_PX` is 6.0), it never guarded a false positive, and re-justifying it would invent
+a rule that never existed. This is the one deletion approved; no other assertion may go. The
+thumb-inside-the-gutter property must remain carried by the surviving const relation plus the
+per-width loop.
+
+**R2 — `DECISIONS.md:111` (§4.3b) is a REWRITE OF EXISTING TEXT, not new prose.** The architect
+proposed wording without quoting what is there. Read `:109`-`:111` first and rewrite what those
+paragraphs actually say. If the existing text makes a claim the architect's wording drops or
+invents (e.g. "the class reaches no pixel", or the `tests/README.md` citation), keep the file
+truthful over the proposed sentence. The reviewer will check this one specifically.
+
+## 1. What must NOT change
+
+Hard boundary for every agent:
+
+- **`active_pane` state stays.** `PaneInner::active_pane: Cell<Option<PaneId>>` (`pane_view.rs:555`)
+  is read by `draw_pane` at `:2444`
+  (`statusbar_layout::statusbar_text(fg, bg, self.active_pane.get() == Some(pane_id))`), by
+  `apply_split` `:1120`, `apply_focus` `:1164`, `detect_closes` `:1248`, `reset_after_restart` `:3332`.
+  It is routing and cursor-target state, not the ring.
+- **The MRU bookkeeping in `set_active_pane` stays** — `self.active_pane.set(pane)` plus the
+  `tree.borrow().leaves().contains(&pane)` / `DrawerState::record_active` block at `:1444-1450`.
+  Deleting it silently breaks `<C-w>k` out of the terminal drawer.
+- **Every call site of `set_active_pane` stays** (`:657`, `:776`, `:1104`, `:1144`, `:1250`, `:1320`,
+  `:2596`), as does `update_active_pane` and its position in `on_render_wake`.
+- **The statusbar strip's active/inactive treatment stays exactly as it is.** No replacement
+  indicator of any kind — no border, no tint, no scrim, no gutter mark.
+- **No assertion is deleted** beyond the single one approved in R1. The two cluster ceilings in the
+  preview-link smoke (`LINK_CLUSTER_MAX_W_PX`, `LINK_CLUSTER_MAX_H_PX`) keep their values, and the
+  `<C-w>h` step in `DIVIDER_RELAUNCH_SCENARIO` stays in the scenario.
+- `tree_view.rs`'s `CURRENT_FILE_CSS` provider and its `install_css()` are untouched.
+
+## 2. Files to create
+
+None.
+
+## 3. Code — `crates/wolf-gnome/src/pane_view.rs` (coder)
+
+Edit in this order so the tree never fails to compile mid-edit:
+
+**a. `:1451-1458` — delete the class-toggle loop.** Remove the trailing block of `set_active_pane`
+(`let panes = self.panes.borrow();` and the `for (pid, p) in panes.iter()` add/remove loop). The
+function then ends after the `if let Some(pane) = pane { … }` drawer block and takes no `panes`
+borrow at all.
+
+**b. `:1435-1436` — `set_active_pane`'s summary.** First line becomes: "Sets the active pane and
+records it as the drawer bridge's most-recently-used EDITOR pane." The paragraph below it ("The MRU
+is recorded HERE and nowhere else…") is unchanged.
+
+**c. `:3525` — delete `install_pane_css();`** from the top of `build`, and the blank line after it.
+
+**d. `:4152-4170` — delete `install_pane_css` and its whole doc comment.** `gdk` stays imported-by-use
+elsewhere (`:2288`, `:2804`, `:3203`, `:3225`); `gtk::CssProvider` and
+`gtk::style_context_add_provider_for_display` were fully qualified, so no import to clean up.
+
+**e. `:218-225` — delete `ACTIVE_PANE_CSS` and `ACTIVE_PANE_CSS_DATA`** with their doc comments.
+
+**f. `:49` — module doc.** "…resolves pending pane grids, and updates the active-pane focus ring from
+`active_win`" → "…and reconciles the active pane from `active_win`."
+
+**g. `:554` — the `active_pane` field doc.** "The currently active pane (focus ring + cursor target),
+if any." → "The currently active pane — the cursor's target and the pane whose statusbar strip draws
+at full strength — if any."
+
+**h. `:1298-1299` — `update_active_pane`'s doc.** Drop the trailing clause: "Refreshes the active pane
+from `active_win` (fallback: the pane owning the cursor's grid)."
+
+After these edits `grep -n 'ACTIVE_PANE\|wolf-active-pane\|install_pane_css\|focus ring\|focus-ring'`
+over `src/` must return nothing.
+
+## 4. Code — `crates/wolf-gnome/src/scrollbar.rs`
+
+### Module docs (coder)
+
+**a. `:21-25`** — delete the `ACTIVE_PANE_CSS` premise; the sentence stands on the surviving reason:
+
+> And a pane leaf must stay a bare `gtk::DrawingArea`: a widget child would need a `gtk::Overlay` or
+> `gtk::Fixed` around every leaf, rebuilt and re-parented on every layout change.
+
+**b. `:36-37`** — delete the last sentence of the padding-gutter paragraph ("The margin also clears
+the two-pixel active-pane outline, which `outline-offset: -2px` draws over the pane's last four
+pixels."). The paragraph ends at "…so it never covers a glyph at any pane width, capped or not."
+
+### `#[cfg(test)] mod tests` (test-writer)
+
+**c. `:632-639`** — delete the second assertion in `the_thumb_lies_wholly_inside_the_right_gutter`,
+the `SCROLLBAR_MARGIN_PX >= 4.0` check whose message names `ACTIVE_PANE_CSS_DATA`. Approved per R1.
+
+**d. `:606-618`** — the `#[allow(clippy::assertions_on_constants, reason = …)]` attribute **STAYS**
+(the surviving `SCROLLBAR_THICKNESS_PX + SCROLLBAR_MARGIN_PX <= EDITOR_PADDING_PX` is still
+const-folded and `-D warnings` is unconditional). Only its `reason` text changes — it currently names
+two relations and the ring:
+
+> this test opens with a relation between production constants — SCROLLBAR_THICKNESS_PX plus
+> SCROLLBAR_MARGIN_PX fitting inside EDITOR_PADDING_PX — which clippy const-folds to a literal and
+> reports as vacuous. Being true at compile time is the point: it is a fact about the constants whose
+> whole value is the message it carries the day SCROLLBAR_THICKNESS_PX is widened past the gutter it
+> hides in, and it has no runtime input to depend on. Scoped to this ONE function rather than the
+> module so a genuinely vacuous constant assertion added anywhere else here is still reported.
+
+**e. `:588-589`** — "The first two assertions are relations between constants and are what make…" →
+"The first assertion is a relation between constants and is what makes…". The `FALSIFYING EDIT`
+paragraph at `:600-604` is unchanged and still correct (raising `SCROLLBAR_THICKNESS_PX` to 24 still
+fires the surviving relation first with the measured message).
+
+## 5. Docs — `crates/wolf-gnome/DECISIONS.md` (coder)
+
+Rewrite three paragraphs in place, then `prettier --write` (`.prettierrc` sets `proseWrap: never`, so
+each stays one long line). Present tense only — no "no longer", "previously", "used to".
+
+**a. `:109` →**
+
+> **A display-global CSS provider is deliberately not hoisted up here, and the hoist is a named
+> follow-up.** Each build adds one to the default display for
+> [`tree_view.rs`](src/README.md#tree_viewrs)'s current-file bold, one per window, so every extra
+> window adds another identical provider, inert since the rule resolves the same either way.
+
+**b. `:111` —** see R2. Read the existing text and rewrite it faithfully; do not paste invented
+wording.
+
+**c. `:147` →**
+
+> A pane is painted identically whether it is active or not: no scrim, no tint, no border, nothing
+> conditional in the grid paint. **The strip's text is the only active-pane signal** — bold at full
+> strength in the active pane, both lines scaled by `STATUSBAR_INACTIVE_ALPHA` in the others — and
+> macOS draws the same. An edge treatment is the thing to resist: it lands in the padding gutter
+> [`scrollbar.rs`](src/README.md#scrollbarrs)'s thumb hides in, and a long thin high-contrast line
+> above a narrow pane's text is measured to corrupt `tesseract --psm 11`'s scale estimate for the
+> whole pane.
+
+That last clause rehouses the divider smoke's ablation finding: a durable, cross-cutting cost of
+re-adding chrome at a pane's edge, which is `DECISIONS.md`'s job. No other document restates it.
+
+## 6. Docs — no change (verified by the architect)
+
+- `crates/wolf-gnome/src/README.md` — the `pane_view.rs` (`:544-562`) and `scrollbar.rs` (`:719-739`)
+  entries contain no ring, outline or CSS mention. Do NOT add one: the ring's absence is a
+  `DECISIONS.md` fact, and duplicating it here violates one-file-one-owner.
+- `crates/wolf-gnome/tests/README.md` — the per-smoke counts at `:121` are unaffected; the new
+  assertion lands in a smoke that already OCRs, so the buckets and the total of sixty hold.
+
+## 7. Tests — `crates/wolf-gnome/tests/smoke_headless.rs` (test-writer)
+
+### 7.1 Prose and message sites — thirteen, each with its decision
+
+| # | Site | Decision |
+|---|---|---|
+| T1 | `:3180` `FOCUS_SCENARIO` shell comment | Reword: "# Let the focus change land (intent drained on wake, routing and the active pane updated)." No step is dead; the sleep still budgets the wake. |
+| T2 | `:10350-10362` `LINK_SEARCH_INSET_X_PX` doc | **Constant stays at 10 and must not be reduced.** Its surviving job is keeping the search off both pane boundaries and out of the neighbouring editor pane. Replacement paragraph below the table. Closing sentence of the `BAND_X_INSET_PX` paragraph: "Ten pixels clears a 2 px outline five times over and still leaves the whole link inside" → "Ten pixels clears the boundary and still leaves the whole link inside." **No setup is dead** — the inset is still applied in `link_search_rect` at `:23747`/`:23751`. |
+| T3 | `:10364-10373` `LINK_SEARCH_INSET_Y_PX` doc | "The same ring clearance as…" → "The same boundary clearance as…"; "…puts the pane's top outline well outside the rectangle" → "…keeps the pane's own top boundary well outside the rectangle." Do NOT claim it clears the statusbar strip: the derived rect is `y 87..600` and the strip at `SMOKE_FONT_PT` reaches lower than 87. The strip's grey text is already covered by `LINK_CLICK_X`'s note that `is_link_blue`'s blue-over-red margin rejects it. |
+| T4 | `:10420-10427` `LINK_CLUSTER_MAX_W_PX` doc | **This is the "only meaningful because of a false positive" case — the ceiling stays at 400.** One clause: "…while a focus ring or any other pane-spanning blue would produce…" → "…while any pane-spanning blue would produce something near the search rectangle's own ~484 px." |
+| T5 | `:17604-17609` smoke doc | Replace the ring parenthetical with the general form: "…so a cluster swollen to the whole pane — which any pane-spanning blue-dominant mark would produce, chrome drawn at the pane's own edge being the obvious way to get one — would contain the click constant whatever it was." Rest unchanged. |
+| T6 | `:17862-17881` assertion 3's ceiling MESSAGE | Assertion untouched. Two sentences of the message: "the first suspect is `pane_view`'s `ACTIVE_PANE_CSS` focus ring, a 2 px `#3584e4` outline that satisfies the same blue-dominant predicate and would swell the box to the whole pane" → "the suspect is a pane-spanning mark satisfying the same blue-dominant predicate — chrome drawn at the pane's own edge, or a second styled element in the document." KEEP "The containment assertion below would then hold for ANY click point, so this one has to fire first" and KEEP "do NOT raise these ceilings". |
+| T7 | `:23734-23736` `link_search_rect` doc | "see [`LINK_SEARCH_INSET_X_PX`] for the ring the horizontal inset clears" → "…for what the horizontal inset clears". |
+| T8 | `:25856-25876` `CODEGRID_CHIP_INSET_X_PX` doc | Inset stays at 10. Replace `:25865-25869` with: "Ten pixels is [`LINK_SEARCH_INSET_X_PX`]'s value and clears the same thing: both pane boundaries. What the inset buys here is that the band cannot reach the OTHER pane, whose background is the editor's and is a colour this assertion takes no position on." |
+| T9 | `:7646-7681` `DIVIDER_RELAUNCH_SCENARIO`'s closing `<C-w>h` | **The step is NOT dead — keep both `wtype` lines and the `sleep`.** It still moves the active-pane statusbar emphasis (bold, full strength, drawn at the top of the pane directly above the heading) and Neovim's block cursor off the narrow pane the OCR reads. Delete the six-row ring-ablation table at `:7653-7659` and the paragraph at `:7661-7665` (they ablate something the build does not render). Keep the "`<C-w>h` is a pure FocusDir intent … resizes nothing … no-op either way" paragraph verbatim. Keep the "if the OCR assertion fails on DIVIDER_OCR_LEFT instead, the next lever is dvleft.md's body" paragraph with "the ring" → "that treatment". Proposed opener: "# The narrow right pane is what the OCR assertion reads, and `--psm 11` scales a sparse region from everything in it, so that pane is given as little non-text ink as possible: this moves the active-pane treatment — the strip's bold, full-strength filename — and Neovim's block cursor into the WIDE pane. `crates/wolf-gnome/DECISIONS.md` records why nothing else is drawn at a pane's edge, and what one would cost this reading." |
+| T10 | `:7184-7226` `DIVIDER_BODY_LINE_COUNT` doc | Constant stays at 24. Four edits. `:7192-7197`: "TWO such neighbours were measured… and the active-pane FOCUS RING, which…" → one neighbour, the `~` column, which this constant answers; drop the "A reader wants the ring first" sentence. `:7203-7206`: "Four controlled ablations … masking out the block cursor, masking out the focus ring and padding the image all left the misread in place" → "Three controlled ablations … masking out the block cursor and padding the image both left the misread in place". `:7215-7218`: drop "for both hazards" and "leave the ring exactly where it is". `:7220`: "With BOTH of those answered, a third cause remained" → "With that answered, a second cause remained". Also drop the banned "now" at `:7213`. |
+| T11 | `:28372-28391` "Reading a narrow column" | `:28376`: "All three findings … an end-of-buffer marker column, a focus ring's edge, and a misclassified glyph" → "Both findings … an end-of-buffer marker column and a misclassified glyph". `:28380-28382`: "three separate things … Two are answered by FIXTURE and one by the READER" → "two separate things … One is answered by FIXTURE and one by the READER". Delete the FOCUS RING table row at `:28388`. `:28391`: "The third is why this smoke…" → "The second is why this smoke…". |
+| T12 | `:28779-28785` assertion 3's failure message | Assertion untouched. "Two further causes are ANSWERED BY FIXTURE …" → one cause, the `~` column, same parenthetical; "Do NOT lower DIVIDER_RELAUNCH_DRAG_PX for either: it moves neither" → "…for it: it moves the column nowhere, and it narrows the weight gap assertion 1 rests on." Optionally append one clause noting the closing `<C-w>h` keeps the strip emphasis and the block cursor in the WIDE pane. |
+
+T2's replacement paragraph:
+
+> It keeps the search off both pane boundaries: the `gtk::Paned` handle and the editor pane beyond it
+> on the left, the window edge on the right. Nothing there is part of the rendered document, and a
+> pane-spanning mark inside the rectangle would swell the located cluster to the whole pane and make
+> the containment assertion below pass for any click point at all — which is what
+> [`LINK_CLUSTER_MAX_W_PX`] fires on.
+
+### 7.2 The new assertion — warranted, and not theater
+
+`pane_view.rs`'s claim that "no smoke observes this outline" was true of the suite as written, not a
+statement about what the toolchain can do. `smoke_headless.rs` already carries `decode_capture`
+(`:23906`), `Capture::pixel` (`:23573`), `Capture::count_exactly(rect, colour)` (`:23579`) and
+`SampleRect` (`:23541`); eight smokes assert on raw pixels with them. The ring is a solid,
+axis-aligned, opaque `#3584e4` band along a pane's edge — `count_exactly` reads it directly.
+
+A `#[cfg(test)]` unit assertion is **not viable and must not be attempted**: `install_pane_css` needed
+a `gdk::Display`, `pane_view.rs`'s test module is pure-string only, and the crate's `cargo test` runs
+with no display. A source-text grep test would be theater. Write neither.
+
+**Where.** Inside the existing `vertical_split_shows_two_panes_under_cage` (`:16051-16151`) — no new
+`cage` launch, and its scenario already produces the right page: two panes, the RIGHT one active by
+construction (`<C-w>v` focuses the new pane, `:e file B` lands there, then `grim`).
+
+**New items**, placed with the other pixel helpers near `:23540-23600`:
+
+- `PANE_EDGE_PROBE_W_PX: f64 = 4.0` — probe depth from a pane's own edge; documented as spanning both
+  possible placements of a 2 px outline offset inward by 2 px, and as sitting well left of the
+  scrollbar thumb, whose left edge is `SCROLLBAR_THICKNESS_PX + SCROLLBAR_MARGIN_PX` = 14 px in.
+- `PANE_EDGE_PROBE_TOP_INSET_PX: f64 = EDITOR_PADDING_PX` — start one padding gutter below the pane
+  area's top edge so the probe cannot read the corner where two edges meet.
+- `PANE_EDGE_GUTTER_REF_INSET_PX: f64 = 18.0` — where the reference background pixel is read: inside
+  the 20 px `EDITOR_PADDING_PX` gutter `draw_pane` fills with the editor background, and left of the
+  thumb's 14 px.
+- `ADWAITA_ACCENT_RGB: Rgb8 = (0x35, 0x84, 0xe4)` — GNOME's accent, and a colour this front-end takes
+  into no pane, since it takes no colour from the GTK theme into the pane area at all.
+- `fn pane_edge_probes() -> (SampleRect, SampleRect)` — right probe `x ∈ [output_w - 4, output_w)`,
+  left probe `x ∈ [origin_x, origin_x + 4)`, both `y ∈ [OVERLAY_ORIGIN_Y_EXPECTED + 20, output_h / 2)`.
+  Derive every number through `exact_f64` and `pixel_index`, never an `as` cast (the file forbids
+  them). Two probes so the assertion holds whichever pane is active, without needing the divider's
+  position.
+
+**In the test**, after the existing OCR assertions:
+
+1. **Precondition (non-vacuity).** `let bg = capture.pixel(ref_x, ref_y);` then assert
+   `capture.count_exactly(right_probe, bg) > 0`, with a message saying the probe read no pixel of the
+   editor's own background, so it is not looking at the pane's padding at all — the window does not
+   reach the output's right edge, or the pane origin moved; re-derive from `CAGE_OUTPUT_*_EXPECTED` /
+   `OVERLAY_ORIGIN_Y_EXPECTED` rather than moving the probe.
+2. **Subject.** Assert
+   `count_exactly(right_probe, ADWAITA_ACCENT_RGB) + count_exactly(left_probe, ADWAITA_ACCENT_RGB) == 0`,
+   with a message stating the product rule: a pane carries no edge treatment, the strip's text is the
+   only active-pane signal, `DECISIONS.md` records why, and a non-zero reading means themed chrome is
+   being drawn inside the pane area. Keep the PNG at its path.
+
+**Empirical unknown to confirm on the first green run:** that the window's outermost 4 columns at
+`y ∈ [67, 360)` really are the right pane's padding, i.e. precondition 1 passes. If it does not, move
+the probe 2 px inward or drop `PANE_EDGE_PROBE_W_PX` to 2 — never delete the assertion, never widen it
+to a tolerance. If the probe is fully uniform, record that as a MEASURED count in the doc comment per
+this file's idiom; do not upgrade precondition 1 into a full-uniformity assertion without the
+measurement.
+
+**Wiring:** none needed. `crates/wolf-gnome` has no `BUILD.bazel` (`tests/README.md:3` — Cargo-only),
+and this is an assertion added to an existing `#[test]` in an existing file, so `cargo test` already
+runs it. No new test file, no new target.
+
+### 7.3 Required red run (step 7 of the workflow)
+
+The coder must capture the new assertion FAILING with the ring present, and paste the output. Cheapest
+route: run the new assertion against the pre-change tree (stash the `pane_view.rs` deletions).
+Expected red: a few hundred accent pixels in the right probe (the ring's right edge is a full-height
+2 px line), with precondition 1 green.
+
+### 7.4 Behaviours and their smallest falsifying edits
+
+| Behaviour | Test | Smallest falsifying edit |
+|---|---|---|
+| No accent-coloured chrome at a pane's edge | `vertical_split_shows_two_panes_under_cage`, new assertion | Re-add the CSS rule, the provider install and the class toggle |
+| The probe is aimed at the pane's own padding | same, new precondition | `PANE_EDGE_PROBE_W_PX` walking off the window, or `OVERLAY_ORIGIN_Y_EXPECTED` |
+| The active pane still drives the strip's bold | `statusbar_layout::tests` row 1 (`:581`) and the statusbar smoke | Invert `self.active_pane.get() == Some(pane_id)` at `pane_view.rs:2444` |
+| `set_active_pane` still records the drawer MRU | terminal-drawer smoke legs d/e (`<C-w>k` out, `<C-w>j` in) | Delete the `record_active` block at `:1446-1450` — the guard against over-deleting in §3a |
+| The thumb still hides wholly inside the right gutter | `the_thumb_lies_wholly_inside_the_right_gutter` | Raise `SCROLLBAR_THICKNESS_PX` to 24 |
+| A swollen blue cluster still cannot vacuously satisfy the link click point | preview-link assertion 3 | Raise `LINK_CLUSTER_MAX_W_PX` past the search rect's ~484 px |
+
+## 8. Implementation order
+
+1. `pane_view.rs`: class-toggle loop (`:1451-1458`) → `install_pane_css();` call (`:3525`) →
+   `fn install_pane_css` (`:4152-4170`) → the two consts (`:218-225`). Never leaves a dangling ref.
+2. `pane_view.rs`: the four rustdoc corrections. Confirm the §3 grep comes back empty.
+3. `scrollbar.rs`: module doc `:21-25` and `:36-37`; then the test's doc, its clippy `reason`, and the
+   deleted second assertion. Compile.
+4. `smoke_headless.rs`: the twelve prose/message sites T1–T12. Compile with `--all-targets`.
+5. `smoke_headless.rs`: the new constants, `pane_edge_probes()`, and the two assertions.
+6. `DECISIONS.md`: the three paragraphs; then `prettier --write crates/wolf-gnome/DECISIONS.md`.
+7. Red-run demonstration for the new assertion, then the full gate.
+
+## 9. Dependencies
+
+None. No new crate, dev-dependency or devShell tool. `Capture`, `SampleRect`, `count_exactly`,
+`decode_capture`, `pixel_index` and `exact_f64` all already exist in `smoke_headless.rs`.
+
+## 10. Lint
+
+- **KEEP** `#[allow(clippy::assertions_on_constants, reason = …)]` on
+  `the_thumb_lies_wholly_inside_the_right_gutter`; only the `reason` text changes. Removing it fails
+  `-D warnings`.
+- No new `#[allow]` in `pane_view.rs`. `set_active_pane` shrinks to two statements and takes no
+  `panes` borrow; nothing becomes unused.
+- New test code: `exact_f64` / `pixel_index` for every conversion — `clippy::cast_precision_loss` and
+  the file's own convention both rule out bare `as`.
+- `cargo clippy --workspace --all-targets` lints `tests/*.rs`, so `pane_edge_probes()` must be used or
+  `dead_code` fires. Both probes are consumed by the one assertion.
+- After editing `DECISIONS.md`: `prettier --write`, then optionally
+  `./tools/lint/markdown_check.sh crates/wolf-gnome/DECISIONS.md` (advisory). The rewritten `:147`
+  must avoid "no longer", "previously", "used to".
+
+## 11. Verification
+
+All from the repository root inside the devShell (`build.md:25` — the `shellHook` substitutes store
+paths into a repo-relative fontconfig template, so a run started elsewhere loses the font pinning
+every golden render depends on).
+
+```sh
+nix develop --command cargo fmt --all -- --check
+nix develop --command prettier --check "**/*.md"
+nix develop --command cargo clippy --workspace --all-targets -- -D warnings
+nix develop --command cargo test -p wolf-gnome
+```
+
+While iterating on one smoke:
+
+```sh
+nix develop --command cargo test -p wolf-gnome --test smoke_headless -- vertical_split_shows_two_panes_under_cage --nocapture
+nix develop --command cargo test -p wolf-gnome --test smoke_headless -- dragged_divider_weights_survive_relaunch_under_cage --nocapture
+nix develop --command cargo test -p wolf-gnome --test smoke_headless -- preview_link_click_repoints_the_pane_under_cage --nocapture
+```
+
+**Wall clock.** `cargo test -p wolf-gnome` is dominated by the GTK smokes: sixty of them each launch
+the real binary in a real window under `cage`, serialized by a process-wide `CAGE_LOCK` because two
+compositors contend for one Wayland socket, several running two full app launches plus multi-second
+settles. Expect tens of minutes and no parallel speedup. `require_smoke_env` panics rather than
+skipping if `cage`, `wtype`, `grim`, `tesseract` or `wolf-pointer-inject` is off `PATH`, or if
+`WOLF_NVIM_BIN` / `WOLF_RG_BIN` are unset — that is a stale devShell, not a product failure; re-enter
+`nix develop`.
+
+**Report real results.** The three smokes above are the only ones whose pixels this change can move,
+and only in one direction: it removes `#3584e4` ink and reveals the editor background beneath it.
+Every colour-fraction band in the suite is inset at least 10 px from a pane boundary
+(`LINK_SEARCH_INSET_X_PX`, `CODEGRID_CHIP_INSET_X_PX`) or 80 px (`BAND_X_INSET_PX`), so none sampled
+the ring; the two readings that did include a pane edge — the divider relaunch's full-page OCR and the
+drawer band — lose a high-contrast line, which can only help `--psm 11`. A red run in any of them is a
+finding to diagnose from the retained PNG, never a constant to tune.

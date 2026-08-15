@@ -216,7 +216,7 @@
 //! readback and a `state.json` frozen mid-run — because in both cases the surface
 //! under test cannot be read any other way.
 //!
-//! Five of the sixty read RAW PIXELS out of their own captures, which is the
+//! Six of the sixty read RAW PIXELS out of their own captures, which is the
 //! only route this harness has to a claim OCR cannot make — it reads no colour, and
 //! it cannot answer "where on the page is this".
 //! [`preview_document_follows_the_configured_appearance_under_cage`] captures two
@@ -237,6 +237,10 @@
 //! frames differ solely by an overlay, and the only one that reads a widget's fill
 //! colour out of the capture rather than naming it — which is what lets it locate a
 //! private box's geometry without pinning it.
+//! [`vertical_split_shows_two_panes_under_cage`] decodes the same capture its two OCR
+//! assertions read and counts the theme accent at each pane's own outer edge. Its claim
+//! is about what is NOT painted there, so no reading of the page could carry it, and it
+//! is the only pixel reading here taken outside a preview or an overlay.
 //!
 //! **Ten pure guards**, which mechanically enforce invariants the cage smokes
 //! depend on but cannot check themselves:
@@ -3177,7 +3181,7 @@ sleep "$SETTLE"
 wtype -M ctrl -k w -m ctrl
 wtype -k h
 
-# Let the focus change land (intent drained on wake, focus ring + routing updated).
+# Let the focus change land (intent drained on wake, routing and the active pane updated).
 sleep "$SETTLE"
 
 # Type the distinctive marker into the now-focused (left) pane's buffer, then leave
@@ -7189,35 +7193,30 @@ const DIVIDER_OCR_RIGHT: &str = "dividerbravo";
 ///
 /// `tesseract --psm 11` groups a sparse pane into ONE region and estimates a scale
 /// from it, so anything long, thin and high-contrast sharing that region corrupts
-/// the reading of a 15-cell heading it can plainly see. TWO such neighbours were
-/// measured in this pane, and they take different fixes: the `~` end-of-buffer
-/// column, which this constant answers, and the active-pane FOCUS RING, which
-/// [`DIVIDER_RELAUNCH_SCENARIO`]'s focus move answers — its ablation table lives
-/// beside that move. A reader who has just seen the OCR assertion go red wants the
-/// ring first; it is the one whose corruptor is production rendering.
+/// the reading of a 15-cell heading it can plainly see. ONE such neighbour was
+/// measured in this pane: the `~` end-of-buffer column, which this constant answers.
 ///
 /// MEASURED for the `~` column, with a heading and nothing else in the file: the
 /// narrow pane renders that one short line above a bare vertical column of markers,
 /// and the heading read as `4 DIVIDERBR=I-\V0`. The glyphs were not the problem —
 /// the `A` bitmaps in the two panes are pixel-identical bar a two-pixel offset, and
-/// the SAME pixels moved into the wide pane read `DIVIDERBRAVO` correctly. Four
+/// the SAME pixels moved into the wide pane read `DIVIDERBRAVO` correctly. Three
 /// controlled ablations on the retained PNG isolated it: masking out the block
-/// cursor, masking out the focus ring and padding the image all left the misread in
-/// place, while blanking the `~` column alone — everything else untouched — fixed
-/// it. It is the hazard [`SIDEBAR_FILLER_COUNT`] exists for, one pane wide instead
-/// of one page wide, and it takes the same fix: give tesseract ordinary text at the
-/// ordinary scale to calibrate against.
+/// cursor and padding the image both left the misread in place, while blanking the
+/// `~` column alone — everything else untouched — fixed it. It is the hazard
+/// [`SIDEBAR_FILLER_COUNT`] exists for, one pane wide instead of one page wide, and
+/// it takes the same fix: give tesseract ordinary text at the ordinary scale to
+/// calibrate against.
 ///
 /// Twenty-four lines plus the heading is comfortably more than the measured
 /// `winheight(0)` of 14, so no `~` marker is drawn in that pane at all — a later
 /// run's retained PNG shows the 24 body lines and no marker anywhere. RAISING IT
-/// BUYS NOTHING against a red OCR assertion now: the column it targets is already
-/// gone. The other lever, shrinking [`DIVIDER_RELAUNCH_DRAG_PX`], is wrong for both
-/// hazards — it would leave the `~` column exactly where it is, leave the ring
-/// exactly where it is, and narrow the weight gap the smoke's first assertion rests
-/// on.
+/// BUYS NOTHING against a red OCR assertion: the column it targets is already gone.
+/// The other lever, shrinking [`DIVIDER_RELAUNCH_DRAG_PX`], is wrong — it would
+/// leave the `~` column exactly where it is and narrow the weight gap the smoke's
+/// first assertion rests on.
 ///
-/// With BOTH of those answered, a third cause remained and is not a fixture problem
+/// With that answered, a second cause remained and is not a fixture problem
 /// at all: `--psm 11` misclassified one glyph of the heading at 15 columns, on
 /// pixels a second segmentation mode read correctly. That one is answered by
 /// [`ocr_uniform_block_to_lowercase`], the reader the divider relaunch smoke adds
@@ -7646,35 +7645,25 @@ read_widths "$DIV_W2"
 # Move focus to the WIDE left pane, AFTER the widths above are read and before the
 # screenshot.
 #
-# The blue active-pane FOCUS RING around the narrow right pane corrupts the OCR of
-# the heading inside it. Isolated by ablation on a retained PNG, one mask at a
-# time and everything else untouched:
-#
-#     as captured                     4 DIVIDERBR=AVO
-#     right pane cropped out alone    77 DIVIDERBRAVO   (correct)
-#     whole ring masked               B DIVIDERBRAVO    (correct)
-#     ring TOP edge only masked       # DIVIDERBRAVO    (correct)
-#     ring LEFT edge only masked      a DIVIDERBRAVO    (correct)
-#     ring RIGHT edge only masked     4 DIVIDERBR=AVO   (still wrong)
-#     ring BOTTOM edge only masked    4 DIVIDERBR=AVO   (still wrong)
-#
-# So it is the ring's TOP edge: a long thin high-contrast horizontal line
-# immediately above a 15-cell heading, which `--psm 11` folds into the same sparse
-# region and scales from. That is the DIVIDER_BODY_LINE_COUNT hazard from a second
-# source, and the ring is production rendering -- the active-pane treatment -- so
-# the fixture moves rather than the ring.
+# The narrow right pane is what the OCR assertion reads, and `--psm 11` scales a
+# sparse region from everything in it, so that pane is given as little non-text ink
+# as possible: this moves the active-pane treatment -- the strip's bold,
+# full-strength filename, drawn at the top of the pane directly above the heading --
+# and Neovim's block cursor into the WIDE pane. `crates/wolf-gnome/DECISIONS.md`
+# records why nothing else is drawn at a pane's edge, and what one would cost this
+# reading.
 #
 # `<C-w>h` is a pure FocusDir intent (the shell's `PaneTree::neighbor` ->
 # nvim_set_current_win; the FOCUS_SCENARIO precedent). It resizes nothing, so the
 # widths just read stay true whatever it does, and if focus is already on the left
 # pane it is a no-op -- the same end state either way.
 #
-# This MOVES the ring onto the left pane rather than removing it from the capture,
-# so if the OCR assertion now fails on DIVIDER_OCR_LEFT instead, this line is the
-# first suspect and the next lever is known: give dvleft.md the body dvright.md
+# This MOVES that treatment onto the left pane rather than removing it from the
+# capture, so if the OCR assertion fails on DIVIDER_OCR_LEFT instead, this line is
+# the first suspect and the next lever is known: give dvleft.md the body dvright.md
 # already carries. The left pane is twice as wide and holds a bare heading over a
-# `~` column TODAY while reading correctly, and several sibling smokes OCR a
-# heading inside a focused pane, so the ring alone is not expected to bite there --
+# `~` column while reading correctly, and several sibling smokes OCR a heading
+# inside a focused pane, so that treatment alone is not expected to bite there --
 # but that is inference, and only this pane has been ablated.
 wtype -M ctrl -k w -m ctrl
 wtype -k h
@@ -10349,27 +10338,27 @@ const LINK_BLUE_MIN_MARGIN: u16 = 60;
 
 /// How far inside the preview pane's LEFT and RIGHT edges the link search starts.
 ///
-/// It clears `pane_view`'s `ACTIVE_PANE_CSS` focus ring, which is a 2 px
-/// `outline: solid #3584e4` drawn INSIDE the pane's own edge — and `#3584e4` satisfies
-/// the blue-dominant predicate above, so a ring inside the search rectangle would
-/// swell the located cluster to the whole pane and make the containment assertion pass
-/// for any click point at all.
+/// It keeps the search off both pane boundaries: the `gtk::Paned` handle and the
+/// editor pane beyond it on the left, the window edge on the right. Nothing there is
+/// part of the rendered document, and a pane-spanning mark inside the rectangle would
+/// swell the located cluster to the whole pane and make the containment assertion below
+/// pass for any click point at all — which is what [`LINK_CLUSTER_MAX_W_PX`] fires on.
 ///
 /// **[`BAND_X_INSET_PX`] cannot be reused here**, and the reason is measured: it is 80
 /// px, while the link's first glyph sits 22 px right of the pane boundary, so an 80 px
 /// inset would start the search 57 px INSIDE the link and cut the cluster in half. Ten
-/// pixels clears a 2 px outline five times over and still leaves the whole link inside.
+/// pixels clears the boundary and still leaves the whole link inside.
 const LINK_SEARCH_INSET_X_PX: f64 = 10.0;
 
 /// How far below the preview pane's own TOP edge the link search starts.
 ///
-/// The same ring clearance as [`LINK_SEARCH_INSET_X_PX`], with more room because there
-/// is nothing to lose: the pane's top edge is at y = 47 and the link's first row is at
-/// y = 165, so 40 px of clearance costs nothing and puts the pane's top outline well
-/// outside the rectangle. The search's BOTTOM is [`BAND_BOTTOM_CLEARANCE_PX`] above the
-/// output, which that constant's own doc comment explains — it clears the window's
-/// full-width command-line strip, where a Neovim message could draw in a colour this
-/// file takes no position on.
+/// The same boundary clearance as [`LINK_SEARCH_INSET_X_PX`], with more room because
+/// there is nothing to lose: the pane's top edge is at y = 47 and the link's first row
+/// is at y = 165, so 40 px of clearance costs nothing and keeps the pane's own top
+/// boundary well outside the rectangle. The search's BOTTOM is
+/// [`BAND_BOTTOM_CLEARANCE_PX`] above the output, which that constant's own doc comment
+/// explains — it clears the window's full-width command-line strip, where a Neovim
+/// message could draw in a colour this file takes no position on.
 const LINK_SEARCH_INSET_Y_PX: f64 = 40.0;
 
 /// x of the point injected at the rendered link, in absolute output pixels.
@@ -10395,9 +10384,9 @@ const LINK_SEARCH_INSET_Y_PX: f64 = 40.0;
 /// * The source's PATH does grow, and it is drawn: the pane's statusbar strip renders
 ///   it on the secondary line. That strip cannot move the web view's origin, because
 ///   `statusbar_layout::statusbar_layout` derives its height from the two FONT SIZES
-///   alone and never from its text, and it cannot enter the search rectangle either,
-///   since [`LINK_SEARCH_INSET_Y_PX`] starts the search below it. It is grey theme
-///   text in any case, which [`is_link_blue`]'s blue-over-red margin rejects.
+///   alone and never from its text. Its band's lower rows do fall inside the search
+///   rectangle, and what they hold there is grey theme text, which [`is_link_blue`]'s
+///   blue-over-red margin rejects.
 /// * The sidebar gains a directory row. The pane area is built from
 ///   [`OVERLAY_ORIGIN_X_EXPECTED`], a fixed widget corner every pane smoke shares, so
 ///   a row's text cannot move it.
@@ -10421,9 +10410,9 @@ const LINK_CLICK_Y: i64 = 171;
 ///
 /// An ACCEPTANCE CRITERION rather than a tuned number, and the half that stops the
 /// containment assertion below from holding vacuously: the measured cluster is 215 px
-/// wide, while a focus ring or any other pane-spanning blue would produce something
-/// near the search rectangle's own ~484 px. 400 sits far above the one and below the
-/// other, so the two readings are never ambiguous.
+/// wide, while any pane-spanning blue would produce something near the search
+/// rectangle's own ~484 px. 400 sits far above the one and below the other, so the two
+/// readings are never ambiguous.
 const LINK_CLUSTER_MAX_W_PX: usize = 400;
 
 /// The tallest the located link cluster may be, in pixels.
@@ -16049,6 +16038,8 @@ fn tree_sidebar_shows_files_under_cage() {
 
 #[test]
 fn vertical_split_shows_two_panes_under_cage() {
+    const SMOKE: &str = "vertical_split_shows_two_panes_under_cage";
+
     // Serialize against the other cage tests (shared Wayland socket); recover from
     // poisoning so a failure in a sibling test does not cascade here.
     let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -16146,6 +16137,118 @@ fn vertical_split_shows_two_panes_under_cage() {
          renders once that file is loaded into a PANE. A miss usually means the <C-w>v chord did \
          not create a second pane, or :e did not open file B in it. PNG kept at {} for inspection. \
          OCR output was:\n{ocr_text}",
+        out_png.display()
+    );
+
+    // --- A pane's own edges carry no themed chrome ----------------------------
+    //
+    // Pixels rather than OCR, for the reason `tests/README.md` records: tesseract
+    // cannot tell one colour from another, so no reading of this page is evidence
+    // about what is painted at a pane's edge. This capture is already the right page
+    // for it — two panes, the right one active by construction — so the claim costs
+    // no second `cage` launch.
+    let capture = decode_capture(&out_png, SMOKE, "the vertical-split capture");
+    let (left_probe, right_probe) = pane_edge_probes();
+
+    // The reference is the editor's OWN background, read out of the right pane's
+    // padding gutter rather than named as a constant: the colour comes from the
+    // colorscheme through highlight 0, so a literal here would pin a palette this
+    // smoke takes no position on.
+    //
+    // Its row is the probe's vertical midpoint — 213 at the pinned output, below the
+    // pane's statusbar strip, which is about 92 px tall at SMOKE_FONT_PT (two line
+    // boxes of `STATUSBAR_LINE_FACTOR` times the font in device pixels, two paddings
+    // and a gap). The strip matters because `draw_pane` clips it to its own band
+    // VERTICALLY and not horizontally, so a long secondary line can reach into this
+    // gutter. A reference taken off a glyph reddens the precondition below instead of
+    // passing it quietly, which is the safe direction and the first thing to check.
+    let output_w = exact_f64(CAGE_OUTPUT_W_EXPECTED, "CAGE_OUTPUT_W_EXPECTED");
+    let ref_x = pixel_index(
+        output_w - PANE_EDGE_GUTTER_REF_INSET_PX,
+        "the pane-edge reference column",
+    );
+    let ref_y = (right_probe.y0 + right_probe.y1) / 2;
+    let editor_bg = capture.pixel(ref_x, ref_y);
+
+    // Precondition, first half: the right probe is aimed at a pane's padding at all.
+    assert!(
+        capture.count_exactly(right_probe, editor_bg) > 0,
+        "{SMOKE}: the RIGHT-edge probe (x {}..{}, y {}..{}) holds no pixel of the editor's own \
+         background {editor_bg:?}, read at ({ref_x}, {ref_y}) inside what should be the same \
+         pane's padding gutter. The probe is then not looking at the right pane's padding at all, \
+         and the accent assertion below would hold for a window that never reached those columns \
+         — vacuously, which is what this precondition exists to stop. Three causes, in the order \
+         to check them on the retained PNG: the reference pixel landed on INK rather than \
+         background; the window reaches past the reference column but not the output's right \
+         edge, so something that is not a pane occupies the last {PANE_EDGE_PROBE_W_PX} px; or \
+         the pane area's origin moved, so these rows are outside a pane. A window that falls \
+         short of the reference column as well leaves this check green — the LEFT cross-check \
+         below is what catches that one. RE-DERIVE the probe from CAGE_OUTPUT_W_EXPECTED, \
+         CAGE_OUTPUT_H_EXPECTED and OVERLAY_ORIGIN_Y_EXPECTED; do not nudge it until it passes. \
+         PNG kept at {}.",
+        right_probe.x0,
+        right_probe.x1,
+        right_probe.y0,
+        right_probe.y1,
+        out_png.display()
+    );
+
+    // Precondition, second half: the reference colour is the EDITOR's background rather
+    // than the compositor's. The right probe alone cannot tell them apart — if the window
+    // falls short of the output's right edge, the reference column is outside it too, both
+    // regions read whatever the compositor paints there, and the check above compares that
+    // colour with itself. The left probe's x is OVERLAY_ORIGIN_X_EXPECTED, inside the pane
+    // area by construction and far from the right edge, so a colour read off a shrunken
+    // window's exterior holds no pixel in it. Both panes fill their allocation from the
+    // same highlight 0, so a window of the size it should be satisfies this for free.
+    assert!(
+        capture.count_exactly(left_probe, editor_bg) > 0,
+        "{SMOKE}: the LEFT-edge probe (x {}..{}, y {}..{}) holds no pixel of {editor_bg:?}, \
+         the colour read at ({ref_x}, {ref_y}) and taken here for the editor's own \
+         background, while the RIGHT probe, checked above, holds it. Both panes fill \
+         their whole allocation from the same `highlight 0`, and this probe's columns \
+         start at OVERLAY_ORIGIN_X_EXPECTED, inside the pane area by construction — so \
+         the reference is NOT the editor's background. The cause this half exists to \
+         catch: the window does not extend to the output's right edge, the reference \
+         column is outside it too, and the RIGHT probe matched only because both read \
+         the COMPOSITOR's background — passing the check above while leaving the accent \
+         assertion below vacuous. Failing that, the pane area's origin moved and these \
+         columns are outside a pane. RE-DERIVE both probes from CAGE_OUTPUT_W_EXPECTED, \
+         CAGE_OUTPUT_H_EXPECTED, OVERLAY_ORIGIN_X_EXPECTED and OVERLAY_ORIGIN_Y_EXPECTED; \
+         do not nudge either until it passes. PNG kept at {}.",
+        left_probe.x0,
+        left_probe.x1,
+        left_probe.y0,
+        left_probe.y1,
+        out_png.display()
+    );
+
+    // Subject: no pixel at either pane's own outer edge is the theme's accent.
+    let accent_left = capture.count_exactly(left_probe, ADWAITA_ACCENT_RGB);
+    let accent_right = capture.count_exactly(right_probe, ADWAITA_ACCENT_RGB);
+    assert_eq!(
+        accent_left + accent_right,
+        0,
+        "{SMOKE}: {accent_left} pixels at the LEFT pane's own left edge (x {}..{}) and \
+         {accent_right} at the RIGHT pane's own right edge (x {}..{}), rows {}..{}, are exactly \
+         GNOME's accent #3584e4 ({ADWAITA_ACCENT_RGB:?} decoded). A pane is painted identically \
+         whether it is active or not: `draw_pane` fills the whole allocation from the snapshot's \
+         highlight 0 and this front-end takes no colour from the GTK theme into a pane, so the \
+         per-pane statusbar strip's TEXT is the only active-pane signal — bold at full strength \
+         in the active pane, both lines scaled by STATUSBAR_INACTIVE_ALPHA in the others. \
+         `crates/wolf-gnome/DECISIONS.md` records why, and what an edge treatment costs beyond \
+         the look of it: it lands in the padding gutter `scrollbar.rs`'s thumb hides in, and a \
+         long thin high-contrast mark beside a narrow pane's text is what DIVIDER_BODY_LINE_COUNT \
+         records corrupting `tesseract --psm 11`'s scale estimate for a whole pane. A non-zero \
+         count means themed chrome is being drawn inside the pane area — an outline, a border or \
+         a tint on a pane's `DrawingArea` — rather than a colour that drifted, so do NOT turn \
+         this into a threshold. PNG kept at {}.",
+        left_probe.x0,
+        left_probe.x1,
+        right_probe.x0,
+        right_probe.x1,
+        right_probe.y0,
+        right_probe.y1,
         out_png.display()
     );
 }
@@ -17602,11 +17705,11 @@ fn preview_burst_delay_stays_below_the_coalescer_trailing_delay() {
 /// investigations and the messages say so.
 ///
 /// The tightness half of assertion 3 is not decoration. A bounding box is satisfied by
-/// any point inside it, so a cluster swollen to the whole pane — which `ACTIVE_PANE_CSS`'s
-/// `#3584e4` focus ring would produce, since it satisfies the same blue-dominant
-/// predicate — would contain the click constant whatever it was. The width and height
-/// ceilings are what keep "the constant is inside the link" from degenerating into "the
-/// constant is inside the pane".
+/// any point inside it, so a cluster swollen to the whole pane — which any
+/// pane-spanning blue-dominant mark would produce, chrome drawn at the pane's own edge
+/// being the obvious way to get one — would contain the click constant whatever it was.
+/// The width and height ceilings are what keep "the constant is inside the link" from
+/// degenerating into "the constant is inside the pane".
 ///
 /// **Assertion 4 is the EVIDENCE**, and it is a Neovim readback rather than OCR: after
 /// a successful follow, `tabpagebuflist()` names a preview scratch
@@ -17864,9 +17967,9 @@ fn preview_link_click_repoints_the_pane_under_cage() {
         "{SMOKE}: the blue-dominant cluster in capture A spans {}x{} pixels (x [{}, {}], y [{}, \
          {}], {} pixels), which exceeds the {LINK_CLUSTER_MAX_W_PX}x{LINK_CLUSTER_MAX_H_PX} a \
          SINGLE LINE of link text can occupy. The measured cluster is 215x12. A box this large \
-         means the search picked up something other than the link — the first suspect is \
-         `pane_view`'s `ACTIVE_PANE_CSS` focus ring, a 2 px `#3584e4` outline that satisfies the \
-         same blue-dominant predicate and would swell the box to the whole pane. The containment \
+         means the search picked up something other than the link: the suspect is a \
+         pane-spanning mark satisfying the same blue-dominant predicate — chrome drawn at the \
+         pane's own edge, or a second styled element in the document. The containment \
          assertion below would then hold for ANY click point, so this one has to fire first. Fix \
          the search INSET (LINK_SEARCH_INSET_X_PX / LINK_SEARCH_INSET_Y_PX); do NOT raise these \
          ceilings. PNG kept at {}.",
@@ -23626,6 +23729,141 @@ impl Capture {
     }
 }
 
+// --- A pane's own EDGE, which carries no themed chrome ----------------------
+//
+// Four constants and one helper, read by `vertical_split_shows_two_panes_under_cage`
+// and by nothing else. They live here, beside `Capture`, because everything they are
+// built on is here: that smoke is an OCR smoke a thousand lines above, and a colour
+// claim needs pixels rather than a page of text.
+
+/// GNOME's accent colour, `#3584e4`, which no pixel at a pane's own edge may carry.
+///
+/// The pane area takes NO colour from the GTK theme. `pane_view::draw_pane` fills the
+/// whole allocation — the statusbar strip's band and all four padding gutters included —
+/// from highlight 0 of the Neovim snapshot, and every fill after it comes from the same
+/// snapshot. So this is not merely a colour that happens to be absent: it is the value
+/// themed chrome painted at a pane's edge lands on, and the one value that tells "the
+/// editor drew this" apart from "the theme drew this".
+///
+/// Exact equality rather than a distance, because a solid CSS outline or border is
+/// axis-aligned and opaque and hits the literal value. A tolerance would start matching
+/// the editor's own blues instead.
+const ADWAITA_ACCENT_RGB: Rgb8 = (0x35, 0x84, 0xe4);
+
+/// How deep into a pane, from its own left or right edge, [`pane_edge_probes`] reads.
+///
+/// Four pixels, and the number carries a reason rather than a margin: a 2 px treatment
+/// offset 2 px inward lands on the pane's last four columns whichever way the offset
+/// rounds, so four columns catch it without the probe modelling the rounding. Four also
+/// stays well outside the scrollbar thumb, whose left edge sits `SCROLLBAR_THICKNESS_PX`
+/// plus `SCROLLBAR_MARGIN_PX` — 14 px — in from the pane's right edge: a deeper probe
+/// would read a grey mark whose presence depends on whether the buffer overflows its
+/// window, which is not this assertion's subject.
+const PANE_EDGE_PROBE_W_PX: f64 = 4.0;
+
+/// How far below the pane area's own top edge [`pane_edge_probes`] starts.
+///
+/// One `editor_inset::EDITOR_PADDING_PX` gutter, so neither probe reads the CORNER where
+/// a pane's top edge meets its side. At a corner a treatment along the top and one along
+/// the side are the same pixels, and a probe that included one could not say which edge
+/// it had found.
+const PANE_EDGE_PROBE_TOP_INSET_PX: f64 = wolf_gnome::editor_inset::EDITOR_PADDING_PX;
+
+/// How far in from the OUTPUT's right edge the reference background pixel is read.
+///
+/// Eighteen puts it inside the right pane's own 20 px `EDITOR_PADDING_PX` gutter, which
+/// `draw_pane` fills with the editor's background along with the rest of the allocation,
+/// and four pixels left of the scrollbar thumb's left edge at 14 px in.
+///
+/// It sits OUTSIDE [`pane_edge_probes`]' right probe deliberately. A reference read from
+/// inside the probe would be whatever the probe happens to hold, so the precondition it
+/// feeds would hold however the pane was painted — including with the probe covered edge
+/// to edge by something that is not the editor's background at all.
+const PANE_EDGE_GUTTER_REF_INSET_PX: f64 = 18.0;
+
+/// The two rectangles [`vertical_split_shows_two_panes_under_cage`] reads for themed
+/// chrome, as `(LEFT, RIGHT)`: the LEFT pane's own left edge first, the RIGHT pane's own
+/// right edge second, in the order of the x each is derived from. A same-typed pair is
+/// the shape a later edit transposes silently, which is why the order is written down
+/// here and why the call site binds both halves by name.
+///
+/// TWO probes rather than one, because which pane is ACTIVE is not the subject. An edge
+/// treatment follows the focus, and this scenario's focus sits in the right pane only by
+/// construction (`<C-w>v` focuses the new pane and `:e` file B lands there). Reading both
+/// outer edges makes the assertion hold whichever pane is active, and neither probe has
+/// to know where the divider is — the `gtk::Paned` handle's width is theme-owned and this
+/// file models it nowhere.
+///
+/// Both span rows from one [`PANE_EDGE_PROBE_TOP_INSET_PX`] below the pane area's top
+/// edge down to the output's vertical midpoint. The midpoint rather than the bottom keeps
+/// them clear of the window's full-width command-line strip, which belongs to no pane.
+///
+/// The two are the same width and share their rows by construction, so neither RECTANGLE
+/// can go quietly degenerate while the other holds: a non-empty right probe is a non-empty
+/// left one. That is a fact about the geometry alone and says nothing about what either
+/// probe holds, which is why the precondition below reads both for a colour.
+///
+/// Derived at the pinned output size: LEFT `x 251..255`, RIGHT `x 1276..1280`, both
+/// `y 67..360`.
+///
+/// MEASURED 2026-08-15 on a **1280x720** cage output, from the PNG this smoke retains: each
+/// probe holds 1172 pixels of ONE distinct colour, `(20, 22, 27)` — 4 columns across all 293
+/// rows — and the reference pixel at `(1262, 213)`, inside the right pane's padding gutter,
+/// reads that same value. The outermost four columns are therefore the RIGHT pane's own
+/// padding, and the four at [`OVERLAY_ORIGIN_X_EXPECTED`] the LEFT pane's: that colour is
+/// the editor's background out of the Neovim snapshot, and the theme paints nothing there.
+///
+/// The precondition re-establishes it per run, and it reads BOTH probes for that colour,
+/// because each establishes what the other cannot. The RIGHT probe is the side no measured
+/// constant pins, so it is the one that says the outermost columns are a pane's padding at
+/// all. The LEFT probe's x is [`OVERLAY_ORIGIN_X_EXPECTED`], measured and cross-checked in
+/// its own doc comment, so it says instead what the REFERENCE is: a colour read off the
+/// exterior of a window that falls short of the output's right edge holds no pixel in those
+/// columns. Together they exclude the reading neither excludes alone — reference and right
+/// probe both outside the window, both holding the compositor's background, agreeing with
+/// each other while the subject assertion below runs vacuously.
+///
+/// The single colour is a reading of this page rather than a property to assert. `draw_pane`
+/// clips the statusbar strip vertically and not horizontally, so a long secondary line can
+/// reach these columns with no themed chrome present anywhere; the precondition's job is
+/// non-vacuity, and a full-uniformity check would report that text as an edge treatment.
+///
+/// The subject has ink to find: a 2 px treatment at `outline-offset: -2px` covers two of the
+/// four columns on every row, and adding such a rule reads 586 accent pixels in the right
+/// probe — half of 1172 — against 0 in the left, the right pane being the active one here.
+///
+/// If the precondition fails, move the probe inward or narrow [`PANE_EDGE_PROBE_W_PX`] to
+/// 2; never delete the precondition, and never soften the subject assertion into a
+/// tolerance.
+fn pane_edge_probes() -> (SampleRect, SampleRect) {
+    let output_w = exact_f64(CAGE_OUTPUT_W_EXPECTED, "CAGE_OUTPUT_W_EXPECTED");
+    let output_h = exact_f64(CAGE_OUTPUT_H_EXPECTED, "CAGE_OUTPUT_H_EXPECTED");
+    let y0 = pixel_index(
+        OVERLAY_ORIGIN_Y_EXPECTED + PANE_EDGE_PROBE_TOP_INSET_PX,
+        "the pane-edge probes' first row",
+    );
+    let y1 = pixel_index(output_h / 2.0, "the pane-edge probes' last row");
+    let left = SampleRect {
+        x0: pixel_index(OVERLAY_ORIGIN_X_EXPECTED, "the left probe's first column"),
+        x1: pixel_index(
+            OVERLAY_ORIGIN_X_EXPECTED + PANE_EDGE_PROBE_W_PX,
+            "the left probe's last column",
+        ),
+        y0,
+        y1,
+    };
+    let right = SampleRect {
+        x0: pixel_index(
+            output_w - PANE_EDGE_PROBE_W_PX,
+            "the right probe's first column",
+        ),
+        x1: pixel_index(output_w, "the right probe's last column"),
+        y0,
+        y1,
+    };
+    (left, right)
+}
+
 /// Whether `pixel` is the rendered LINK's ink rather than body text or background.
 ///
 /// Both clauses are load-bearing and each rejects a different thing. `b >
@@ -23731,9 +23969,9 @@ fn find_link_cluster(capture: &Capture, rect: SampleRect) -> Option<LinkCluster>
 /// Built from the same pane area [`preview_theme_pane_area`] gives, because the two
 /// smokes put their preview in the same half by the same other-pane split and
 /// duplicating that arithmetic would be two things to keep in step. It is inset from
-/// ALL FOUR of the preview pane's edges — see [`LINK_SEARCH_INSET_X_PX`] for the ring
-/// the horizontal inset clears, and [`BAND_BOTTOM_CLEARANCE_PX`] for what the bottom
-/// one does.
+/// ALL FOUR of the preview pane's edges — see [`LINK_SEARCH_INSET_X_PX`] for what the
+/// horizontal inset clears, and [`BAND_BOTTOM_CLEARANCE_PX`] for what the bottom one
+/// does.
 ///
 /// Derived at the pinned output size: `x 776..1270`, `y 87..600`. The MEASURED link
 /// cluster is `x [788, 1002]`, `y [165, 176]`, which sits inside it with room on every
@@ -25862,11 +26100,9 @@ const CODEGRID_MIN_CHIP_PX: usize = 120;
 /// line, so an 80 px inset would cut the chip roughly in half and the counted floor
 /// would depend on exactly where a proportional face breaks.
 ///
-/// Ten pixels is [`LINK_SEARCH_INSET_X_PX`]'s value and clears the same thing: the 2 px
-/// `#3584e4` focus ring `pane_view`'s `ACTIVE_PANE_CSS` draws inside the pane's own
-/// edge. That ring cannot satisfy an exact-[`CODEGRID_CHIP_COLOUR`] test in any case;
-/// what the inset really buys here is that the band cannot reach the OTHER pane, whose
-/// background is the editor's and is a colour this assertion takes no position on.
+/// Ten pixels is [`LINK_SEARCH_INSET_X_PX`]'s value and clears the same thing: both pane
+/// boundaries. What the inset buys here is that the band cannot reach the OTHER pane,
+/// whose background is the editor's and is a colour this assertion takes no position on.
 ///
 /// That the wide band adds only chip pixels, and not contamination that could mask a
 /// collapse, is MEASURED rather than argued — see [`CODEGRID_MIN_CHIP_PX`], which
@@ -28372,24 +28608,23 @@ fn divider_drag_survives_a_pane_relayout_under_cage() {
 /// ## Reading a narrow column
 ///
 /// The ablations below were run on a 15-column pane, before the per-pane chrome
-/// narrowed it to 13. All three findings are properties of the RENDER rather than of
-/// that width — an end-of-buffer marker column, a focus ring's edge, and a
-/// misclassified glyph — and the narrower the column, the more each one matters, so
-/// the answers hold a fortiori. The counts are left as they were measured.
+/// narrowed it to 13. Both findings are properties of the RENDER rather than of that
+/// width — an end-of-buffer marker column and a misclassified glyph — and the
+/// narrower the column, the more each one matters, so the answers hold a fortiori.
+/// The counts are left as they were measured.
 ///
-/// Fitting the term is necessary and was not sufficient, and three separate
-/// things had to be answered before assertion 3 could read the narrow pane. Two are
+/// Fitting the term is necessary and was not sufficient, and two separate
+/// things had to be answered before assertion 3 could read the narrow pane. One is
 /// answered by FIXTURE and one by the READER; each was isolated by measurement on a
 /// retained PNG rather than argued.
 ///
 /// | what corrupted the reading | how it was isolated | what answers it |
 /// | --- | --- | --- |
-/// | the `~` end-of-buffer column above a lone heading — a sparse region `--psm 11` scales the whole pane from | four ablations on one PNG, one at a time; blanking the `~` column alone fixed it | [`DIVIDER_BODY_LINE_COUNT`] body lines, which fill the pane past `winheight` so no marker is drawn |
-/// | the active-pane FOCUS RING's top edge — a long thin high-contrast line immediately above the heading | six ablations on one PNG; the top edge alone accounted for it | [`DIVIDER_RELAUNCH_SCENARIO`]'s closing `<C-w>h`, which moves the ring to the WIDE pane |
+/// | the `~` end-of-buffer column above a lone heading — a sparse region `--psm 11` scales the whole pane from | three ablations on one PNG, one at a time; blanking the `~` column alone fixed it | [`DIVIDER_BODY_LINE_COUNT`] body lines, which fill the pane past `winheight` so no marker is drawn |
 /// | a single misclassified GLYPH at 15 columns | the same pixels read through both segmentation modes, twice over | the second reader, [`ocr_uniform_block_to_lowercase`] |
 ///
-/// The third is why this smoke, alone of the sixty, reads its capture twice.
-/// With the first two answered, on one retained PNG:
+/// The second is why this smoke, alone of the sixty, reads its capture twice.
+/// With the first answered, on one retained PNG:
 ///
 /// | command | verbatim output |
 /// | --- | --- |
@@ -28776,13 +29011,13 @@ fn dragged_divider_weights_survive_relaunch_under_cage() {
              THIRD, and only once those are ruled out: a genuinely unbound or unpainted pane. The \
              width readback above already showed Neovim has both windows, so this is the LAST \
              reading of a red assertion 3, not the first.\n\
-             Two further causes are ANSWERED BY FIXTURE, and the retained PNG is where to confirm \
-             they are still answered rather than re-derive them: the `~` end-of-buffer column \
+             ONE further cause is ANSWERED BY FIXTURE, and the retained PNG is where to confirm \
+             it is still answered rather than re-derive it: the `~` end-of-buffer column \
              (DIVIDER_BODY_LINE_COUNT's body lines fill the pane past winheight, so no marker is \
-             drawn) and the active-pane FOCUS RING (DIVIDER_RELAUNCH_SCENARIO's closing `<C-w>h` \
-             puts it around the WIDE pane; the ablation table is beside that move). Do NOT lower \
-             DIVIDER_RELAUNCH_DRAG_PX for either: it moves neither, and it narrows the weight gap \
-             assertion 1 rests on.\n\
+             drawn). Do NOT lower DIVIDER_RELAUNCH_DRAG_PX for it: it moves the column nowhere, \
+             and it narrows the weight gap assertion 1 rests on. DIVIDER_RELAUNCH_SCENARIO's \
+             closing `<C-w>h` keeps the active-pane statusbar emphasis and Neovim's block cursor \
+             in the WIDE pane, so neither is ink in the sparse region this pane is scaled from.\n\
              PNG kept at {} for inspection.\n\
              `--psm 11` output was:\n\
              {ocr_sparse}\n\
