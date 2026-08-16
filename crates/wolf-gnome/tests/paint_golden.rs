@@ -42,7 +42,7 @@ const FONT_SIZE_PT: f64 = 16.0;
 /// exercises the path a user gets rather than a special case; at 16 pt it makes
 /// the cell taller than the glyph box, which is what gives
 /// [`the_baseline_centres_the_glyph_box_in_the_cell`] something to measure.
-const LINE_HEIGHT_PERCENT: f64 = 130.0;
+const LINE_HEIGHT_PERCENT: f64 = 180.0;
 
 /// Highlight id carrying a distinct fg/bg (anything non-zero; 0 is the default).
 const DEFINED_HL_ID: u64 = 7;
@@ -676,9 +676,9 @@ const SUB_BASELINE_GUARD_PX: f64 = 1.0;
 ///
 /// Derived, not guessed: at [`SMOKE_PROBE_SIZE_PT`] the font size is
 /// `28 * 96/72 == 37.33` device pixels, so [`LINE_HEIGHT_PERCENT`] gives
-/// `round(37.33 * 1.3) == 49`; the pinned DejaVu Sans Mono measures ascent 35 and
+/// `round(37.33 * 1.8) == 67`; the pinned DejaVu Sans Mono measures ascent 35 and
 /// descent 9 at that size (the table in `src/cell_metrics_math.rs`'s own docs), so
-/// the baseline centres at `35 + (49 - 44)/2 == 37.5` and roughly ten rows remain
+/// the baseline centres at `35 + (67 - 44)/2 == 46.5` and nineteen rows remain
 /// below it once [`SUB_BASELINE_GUARD_PX`] is spent. That derivation rests on
 /// measurements taken elsewhere, which is why [`render_decoration_fixture`]
 /// asserts it rather than assuming it.
@@ -700,7 +700,7 @@ const MIN_STRIKE_INK_PX: usize = 10;
 /// across the cell for it to be a wave rather than a straight line.
 ///
 /// Two, chosen between two measurements rather than picked: the wave's measured
-/// top-edge spread is exactly 3 device pixels, rows 37 to 40 across all 18 sampled
+/// top-edge spread is exactly 3 device pixels, rows 46 to 49 across all 18 sampled
 /// columns (see [`the_undercurl_is_wavy_rather_than_straight`]), and a horizontal
 /// rectangle — which is what `Underline::Single` draws — measures exactly 0, since
 /// every column of a rectangle has the same top edge. That leaves one pixel of
@@ -792,7 +792,7 @@ fn decoration_fixture_snapshot() -> Snapshot {
 /// a surface to exactly `DECORATION_COLS x DECORATION_ROWS` cells, and paints the
 /// decoration fixture onto it.
 ///
-/// The smokes' 28 pt rather than this file's 16 pt, and the shipped 130 % rather
+/// The smokes' 28 pt rather than this file's 16 pt, and the shipped 180 % rather
 /// than the smokes' 118 %: the decorations need a cell TALLER than the glyph box,
 /// so there is room below the baseline for a wave to be a wave. The two
 /// preconditions at the end are what keep that a measured property of the pinned
@@ -897,14 +897,14 @@ fn sub_baseline_rows(metrics: &CellMetrics, height: usize) -> (usize, usize) {
 /// than [`sub_baseline_rows`], starting at the baseline's own row.
 ///
 /// MEASURED at [`SMOKE_PROBE_SIZE_PT`] / [`LINE_HEIGHT_PERCENT`] on the pinned
-/// font stack: `cell_w = 22.4765625`, `cell_h = 49`, `baseline = 37.5`,
-/// `ascent = 35`, `descent = 9`, and Pango's wave occupies device rows 37 to 43.
-/// [`sub_baseline_rows`] starts at `ceil(baseline + SUB_BASELINE_GUARD_PX) == 39`
-/// and so cuts the wave's whole upper half away; rows 39 and 40 are near-solid,
+/// font stack: `cell_w = 22.4765625`, `cell_h = 67`, `baseline = 46.5`,
+/// `ascent = 35`, `descent = 9`, and Pango's wave occupies device rows 46 to 52.
+/// [`sub_baseline_rows`] starts at `ceil(baseline + SUB_BASELINE_GUARD_PX) == 48`
+/// and so cuts the wave's whole upper half away; rows 48 and 49 are near-solid,
 /// which is why a top-edge measurement taken over that band can only ever report a
 /// spread of about 1 and reads as a shallow wave when the wave is not shallow.
 ///
-/// This band starts at `floor(baseline) == 37` instead, and it keeps no guard row
+/// This band starts at `floor(baseline) == 46` instead, and it keeps no guard row
 /// against the glyph. The guard is what stops GLYPH ink entering an INK-based
 /// band, and the one case that reads this band separates the two by colour rather
 /// than by position — see [`topmost_reddish_rows`].
@@ -1179,13 +1179,13 @@ fn strikethrough_adds_foreground_ink_across_the_glyph() {
 /// from a plain underline too.
 ///
 /// MEASURED at [`SMOKE_PROBE_SIZE_PT`] / [`LINE_HEIGHT_PERCENT`] on the pinned
-/// font stack: `cell_w = 22.4765625`, `cell_h = 49`, `baseline = 37.5`,
-/// `ascent = 35`, `descent = 9`; Pango's wave occupies device rows 37 to 43, a
+/// font stack: `cell_w = 22.4765625`, `cell_h = 67`, `baseline = 46.5`,
+/// `ascent = 35`, `descent = 9`; Pango's wave occupies device rows 46 to 52, a
 /// seven-row band whose top edge spans exactly 3 device pixels. All 18 sampled
-/// columns carry the decoration's colour, and their topmost coloured rows run 37,
-/// 38, 39, 40 and back — so the spread is measured over the full band, not over a
-/// subset the colour threshold happened to keep. The same sampler over the
-/// plain-underline column reports row 37 in every one of those 18 columns, a
+/// columns carry the decoration's colour, and their topmost coloured rows cycle
+/// through 46, 47, 48 and 49 — so the spread is measured over the full band, not
+/// over a subset the colour threshold happened to keep. The same sampler over the
+/// plain-underline column reports row 46 in every one of those 18 columns, a
 /// spread of 0. Anyone moving this fixture's font size or line-height is moving
 /// all of those numbers at once and owes the band and [`MIN_WAVE_SPREAD_PX`] a
 /// fresh measurement — the wave's amplitude scales with the face's underline

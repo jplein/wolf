@@ -21,7 +21,7 @@ pub const CONFIG_FILE_NAME: &str = "wolf-config.yaml";
 /// The default font family (platform-independent).
 const DEFAULT_FONT_FAMILY: &str = "iA Writer Mono S";
 /// The default line-height, as a percentage of the font size (all platforms).
-const DEFAULT_LINE_HEIGHT: f64 = 130.0;
+const DEFAULT_LINE_HEIGHT: f64 = 180.0;
 /// The default font size in points on macOS.
 const DEFAULT_FONT_SIZE_MACOS: f64 = 14.0;
 /// The default font size in points on Linux.
@@ -135,7 +135,7 @@ pub fn preferences_dir() -> Option<PathBuf> {
     }
 }
 
-/// The built-in defaults: font family `"iA Writer Mono S"`, line-height 130%, and
+/// The built-in defaults: font family `"iA Writer Mono S"`, line-height 180%, and
 /// a platform-specific font size (14 pt on macOS, 10 pt elsewhere).
 #[must_use]
 pub fn default_config() -> WolfConfig {
@@ -251,7 +251,7 @@ mod tests {
     // NOTE: must match wolf_core::config::DEFAULT_FONT_FAMILY (the verified iA Writer Mono S CoreText family name).
     const EXPECT_DEFAULT_FONT_FAMILY: &str = "iA Writer Mono S";
     /// The documented default line-height (percent of font size), all platforms.
-    const EXPECT_DEFAULT_LINE_HEIGHT: f64 = 130.0;
+    const EXPECT_DEFAULT_LINE_HEIGHT: f64 = 180.0;
     /// The documented default font size on macOS (points).
     const EXPECT_DEFAULT_FONT_SIZE_MACOS: f64 = 14.0;
     /// The documented default font size on Linux (points).
@@ -765,7 +765,7 @@ mod tests {
         );
         assert_eq!(
             cfg.line_height, EXPECT_DEFAULT_LINE_HEIGHT,
-            "default line-height is platform-independent (130%)"
+            "default line-height is platform-independent (180%)"
         );
 
         let want_size = if cfg!(target_os = "macos") {

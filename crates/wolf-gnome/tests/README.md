@@ -80,7 +80,7 @@ Rules that are decidable from their arguments are pinned in each seam's own `#[c
 **Covers**
 
 - `paint` onto an offscreen ARGB32 `ImageSurface` from a hand-built 4x2 `Snapshot`: exact equality on known background fills, background-only interiors for a wide-trailing empty cell, and ink in a glyph cell.
-- The line-height argument to `CellMetrics::for_font` at the shipped 130 % default: a larger percentage gives a taller cell, the advance width does not move with it, and the baseline centres the glyph box. An unresolvable family still measures, matches a resolvable one's cell height, and keeps the name the caller asked for.
+- The line-height argument to `CellMetrics::for_font` at the shipped 180 % default: a larger percentage gives a taller cell, the advance width does not move with it, and the baseline centres the glyph box. An unresolvable family still measures, matches a resolvable one's cell height, and keeps the name the caller asked for.
 - The three decorations, over a fixture of their own: undercurl draws ink below the glyph box, in `special` when set and in the foreground when not; undercurl and a plain underline draw different marks; strikethrough adds foreground ink and no `special` pixel.
 - The two values `render::GlyphPainter` keeps across the cells of one paint, over a third fixture: an undecorated cell painted after every decorated one carries no leaked underline, and bold and italic each restore the plain face for the cell after them. That trailing cell is required: the control column is painted before every decorated one, so a forward leak is invisible to it.
 

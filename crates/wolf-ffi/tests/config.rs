@@ -44,7 +44,7 @@ const CONFIG_FILE_NAME: &str = "wolf-config.yaml";
 // NOTE: must match wolf_core::config::DEFAULT_FONT_FAMILY (the verified iA Writer Mono S CoreText family name).
 const EXPECT_DEFAULT_FONT_FAMILY: &str = "iA Writer Mono S";
 /// Platform-independent default line-height (percent).
-const EXPECT_DEFAULT_LINE_HEIGHT: f64 = 130.0;
+const EXPECT_DEFAULT_LINE_HEIGHT: f64 = 180.0;
 /// Default font size on macOS (points).
 const EXPECT_DEFAULT_FONT_SIZE_MACOS: f64 = 14.0;
 /// Default font size on Linux (points).

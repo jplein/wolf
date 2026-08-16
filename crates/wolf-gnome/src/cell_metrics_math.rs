@@ -213,8 +213,8 @@ mod tests {
     /// height, so the case reads as the thing it stands in for.
     ///
     /// NOTHING SHIPPED REACHES THIS BRANCH TODAY. Every `line_height_percent` that
-    /// arrives at `for_font` is positive: `wolf_core::default_config()`'s 130, the
-    /// smokes' 118, the golden fixture's 130/100/160. `load_or_create` does not
+    /// arrives at `for_font` is positive: `wolf_core::default_config()`'s 180, the
+    /// smokes' 118, the golden fixture's 180/100/160. `load_or_create` does not
     /// validate the key, so a hand-written `line-height: 0` in a user's
     /// `wolf-config.yaml` would land here — that is what the branch is for, and this
     /// test and its sibling are the only callers exercising it.
