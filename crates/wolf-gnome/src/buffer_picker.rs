@@ -456,7 +456,7 @@ pub fn build(
         .build();
 
     let buffer_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    buffer_box.add_css_class("background");
+    crate::overlay_style::apply(&buffer_box);
     buffer_box.set_halign(gtk::Align::Center);
     buffer_box.set_valign(gtk::Align::Start);
     buffer_box.set_margin_top(BUFFER_BOX_MARGIN);

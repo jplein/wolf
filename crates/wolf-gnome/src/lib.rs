@@ -392,6 +392,7 @@ pub mod layout;
 pub mod liveness_ui;
 pub mod mouse;
 pub mod nav_ui;
+mod overlay_style;
 pub mod palette;
 pub mod pane_layout;
 pub mod pane_view;

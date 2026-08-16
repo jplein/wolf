@@ -503,6 +503,21 @@ Purpose: the pure, GTK-free rulebook for per-pane navigation — which window a 
 
 - The buttons desensitize while the `gio` actions stay enabled — the opposite of `win.go-to-file`'s empty-state treatment, for the reason in [DECISIONS.md](../DECISIONS.md).
 
+#### `overlay_style.rs`
+
+Purpose: the shared look of the four transient overlays ([`picker.rs`](#pickerrs), [`palette.rs`](#paletters), [`buffer_picker.rs`](#buffer_pickerrs), [`search_overlay.rs`](#search_overlayrs)) — a GNOME-menu surface, corner radius, shadow and menu-sized rows, as one CSS class.
+
+**Public API**
+
+- `apply(overlay_box)` — `pub(crate)`; adds the class and installs the stylesheet on the default display the first time it is called. Use it instead of `add_css_class("background")`, whose window colours it replaces.
+
+**Decisions**
+
+- Colours are libadwaita named colours, never literals, so the overlays follow the scheme [`appearance.rs`](#appearancers) resolves without this file knowing which one is in effect.
+- The list and its scroller are forced transparent: GTK gives a bare `list` the view background, which would punch a panel through the popover surface the box paints.
+- The row padding is what sets the line height between items, and it is deliberately larger than the GTK default so the lists read as a menu rather than a dense table.
+- A thread-local flag installs the provider once rather than once per overlay per window. This shares a stylesheet only — [`picker.rs`](#pickerrs) owns why no common overlay widget is extracted, and that judgement is unaffected.
+
 #### `palette.rs`
 
 Purpose: the command-palette overlay — registry commands, one Open Recent row per usable recent directory, one Switch to Window row per other window.

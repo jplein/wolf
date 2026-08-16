@@ -756,7 +756,7 @@ pub fn build(
         .build();
 
     let search_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    search_box.add_css_class("background");
+    crate::overlay_style::apply(&search_box);
     search_box.set_halign(gtk::Align::Center);
     search_box.set_valign(gtk::Align::Start);
     search_box.set_margin_top(SEARCH_BOX_MARGIN);

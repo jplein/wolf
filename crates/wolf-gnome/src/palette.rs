@@ -621,7 +621,7 @@ pub fn build(
         .build();
 
     let palette_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    palette_box.add_css_class("background");
+    crate::overlay_style::apply(&palette_box);
     palette_box.set_halign(gtk::Align::Center);
     palette_box.set_valign(gtk::Align::Start);
     palette_box.set_margin_top(PALETTE_BOX_MARGIN);

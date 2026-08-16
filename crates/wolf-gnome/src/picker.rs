@@ -363,7 +363,7 @@ pub fn build(
         .build();
 
     let picker_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    picker_box.add_css_class("background");
+    crate::overlay_style::apply(&picker_box);
     picker_box.set_halign(gtk::Align::Center);
     picker_box.set_valign(gtk::Align::Start);
     picker_box.set_margin_top(PICKER_BOX_MARGIN);
