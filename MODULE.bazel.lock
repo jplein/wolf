@@ -223,7 +223,7 @@
   "moduleExtensions": {
     "//bazel/ia-writer-mono:extensions.bzl%ia_writer_mono": {
       "general": {
-        "bzlTransitiveDigest": "/u7tWVaLYGopmCpqTwL7XsZhOkKtMThBdQ6+dhaiSBA=",
+        "bzlTransitiveDigest": "Zz1hdW+2wVyCaxu7E5iPBS1WuR4ZizVXs07cp5JXKS8=",
         "usagesDigest": "oZHNcFnSCrZO1qzEtiyW14hpI9XuqjkeOcx+S0YGJyQ=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -467,7 +467,7 @@
     },
     "//bazel/treesitter-parsers:extensions.bzl%treesitter_parsers": {
       "general": {
-        "bzlTransitiveDigest": "5yRCpxXcDzjfhOd1arnD0Yx/2IjOeZXuGS5gl87iCJE=",
+        "bzlTransitiveDigest": "n/m2j9mkC5jU1cLdhQTo9or/PDbMEqoIGLacQUgF80c=",
         "usagesDigest": "1UBYAl5lh4lyV/Ut+PfTuJvPKcXt+aCMphnM6Dxvomw=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
