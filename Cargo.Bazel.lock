@@ -1,5 +1,5 @@
 {
-  "checksum": "1a88015815d1a4f6a483322864202470cde6ffa6b491354cc9677e28e482755f",
+  "checksum": "ab275359e3635cc35281cd44ae2648321ada1846b7d15abaef3ae1095a031a0a",
   "crates": {
     "ahash 0.8.12": {
       "name": "ahash",
@@ -3099,7 +3099,9 @@
             "v2_60",
             "v2_62",
             "v2_64",
-            "v2_66"
+            "v2_66",
+            "v2_68",
+            "v2_70"
           ],
           "selects": {}
         },
@@ -3200,7 +3202,9 @@
             "v2_60",
             "v2_62",
             "v2_64",
-            "v2_66"
+            "v2_66",
+            "v2_68",
+            "v2_70"
           ],
           "selects": {}
         },
@@ -3305,7 +3309,9 @@
             "v2_60",
             "v2_62",
             "v2_64",
-            "v2_66"
+            "v2_66",
+            "v2_68",
+            "v2_70"
           ],
           "selects": {}
         },
@@ -3486,7 +3492,9 @@
             "v2_60",
             "v2_62",
             "v2_64",
-            "v2_66"
+            "v2_66",
+            "v2_68",
+            "v2_70"
           ],
           "selects": {}
         },
@@ -3648,7 +3656,9 @@
           "common": [
             "v2_58",
             "v2_62",
-            "v2_66"
+            "v2_66",
+            "v2_68",
+            "v2_70"
           ],
           "selects": {}
         },
@@ -4862,6 +4872,153 @@
         "MIT"
       ],
       "license_file": "LICENSE-APACHE"
+    },
+    "javascriptcore6 0.6.0": {
+      "name": "javascriptcore6",
+      "version": "0.6.0",
+      "package_url": "https://gitlab.gnome.org/World/Rust/webkit6-rs",
+      "repository": {
+        "Http": {
+          "url": "https://static.crates.io/crates/javascriptcore6/0.6.0/download",
+          "sha256": "8d8d4f64d976c6dc6068723b6ef7838acf954d56b675f376c826f7e773362ddb"
+        }
+      },
+      "targets": [
+        {
+          "Library": {
+            "crate_name": "javascriptcore6",
+            "crate_root": "src/lib.rs",
+            "srcs": {
+              "allow_empty": true,
+              "include": [
+                "**/*.rs"
+              ]
+            }
+          }
+        }
+      ],
+      "library_target_name": "javascriptcore6",
+      "common_attrs": {
+        "compile_data_glob": [
+          "**"
+        ],
+        "deps": {
+          "common": [
+            {
+              "id": "glib 0.22.7",
+              "target": "glib"
+            },
+            {
+              "id": "javascriptcore6-sys 0.6.0",
+              "target": "javascriptcore6_sys",
+              "alias": "ffi"
+            },
+            {
+              "id": "libc 0.2.186",
+              "target": "libc"
+            }
+          ],
+          "selects": {}
+        },
+        "edition": "2024",
+        "version": "0.6.0"
+      },
+      "license": "MIT",
+      "license_ids": [
+        "MIT"
+      ],
+      "license_file": null
+    },
+    "javascriptcore6-sys 0.6.0": {
+      "name": "javascriptcore6-sys",
+      "version": "0.6.0",
+      "package_url": "https://gitlab.gnome.org/World/Rust/webkit6-rs",
+      "repository": {
+        "Http": {
+          "url": "https://static.crates.io/crates/javascriptcore6-sys/0.6.0/download",
+          "sha256": "f2b9787581c8949a7061c9b8593c4d1faf4b0fe5e5643c6c7793df20dbe39cf6"
+        }
+      },
+      "targets": [
+        {
+          "Library": {
+            "crate_name": "javascriptcore6_sys",
+            "crate_root": "src/lib.rs",
+            "srcs": {
+              "allow_empty": true,
+              "include": [
+                "**/*.rs"
+              ]
+            }
+          }
+        },
+        {
+          "BuildScript": {
+            "crate_name": "build_script_build",
+            "crate_root": "build.rs",
+            "srcs": {
+              "allow_empty": true,
+              "include": [
+                "**/*.rs"
+              ]
+            }
+          }
+        }
+      ],
+      "library_target_name": "javascriptcore6_sys",
+      "common_attrs": {
+        "compile_data_glob": [
+          "**"
+        ],
+        "deps": {
+          "common": [
+            {
+              "id": "glib-sys 0.22.6",
+              "target": "glib_sys"
+            },
+            {
+              "id": "gobject-sys 0.22.6",
+              "target": "gobject_sys"
+            },
+            {
+              "id": "javascriptcore6-sys 0.6.0",
+              "target": "build_script_build"
+            },
+            {
+              "id": "libc 0.2.186",
+              "target": "libc"
+            }
+          ],
+          "selects": {}
+        },
+        "edition": "2024",
+        "version": "0.6.0"
+      },
+      "build_script_attrs": {
+        "compile_data_glob": [
+          "**"
+        ],
+        "compile_data_glob_excludes": [
+          "**/*.rs"
+        ],
+        "data_glob": [
+          "**"
+        ],
+        "deps": {
+          "common": [
+            {
+              "id": "system-deps 7.0.8",
+              "target": "system_deps"
+            }
+          ],
+          "selects": {}
+        }
+      },
+      "license": "MIT",
+      "license_ids": [
+        "MIT"
+      ],
+      "license_file": null
     },
     "lazy_static 1.5.0": {
       "name": "lazy_static",
@@ -8679,6 +8836,177 @@
       ],
       "license_file": "LICENSE-APACHE"
     },
+    "soup3 0.9.0": {
+      "name": "soup3",
+      "version": "0.9.0",
+      "package_url": "https://gitlab.gnome.org/World/Rust/soup3-rs",
+      "repository": {
+        "Http": {
+          "url": "https://static.crates.io/crates/soup3/0.9.0/download",
+          "sha256": "92d38b59ff6d302538efd337e15d04d61c5b909ec223c60ae4061d74605a962a"
+        }
+      },
+      "targets": [
+        {
+          "Library": {
+            "crate_name": "soup",
+            "crate_root": "src/lib.rs",
+            "srcs": {
+              "allow_empty": true,
+              "include": [
+                "**/*.rs"
+              ]
+            }
+          }
+        }
+      ],
+      "library_target_name": "soup",
+      "common_attrs": {
+        "compile_data_glob": [
+          "**"
+        ],
+        "crate_features": {
+          "common": [
+            "default"
+          ],
+          "selects": {}
+        },
+        "deps": {
+          "common": [
+            {
+              "id": "futures-channel 0.3.32",
+              "target": "futures_channel"
+            },
+            {
+              "id": "gio 0.22.6",
+              "target": "gio"
+            },
+            {
+              "id": "glib 0.22.7",
+              "target": "glib"
+            },
+            {
+              "id": "libc 0.2.186",
+              "target": "libc"
+            },
+            {
+              "id": "soup3-sys 0.9.0",
+              "target": "soup3_sys",
+              "alias": "ffi"
+            }
+          ],
+          "selects": {}
+        },
+        "edition": "2024",
+        "version": "0.9.0"
+      },
+      "license": "MIT",
+      "license_ids": [
+        "MIT"
+      ],
+      "license_file": "LICENSE"
+    },
+    "soup3-sys 0.9.0": {
+      "name": "soup3-sys",
+      "version": "0.9.0",
+      "package_url": "https://gitlab.gnome.org/World/Rust/soup3-rs",
+      "repository": {
+        "Http": {
+          "url": "https://static.crates.io/crates/soup3-sys/0.9.0/download",
+          "sha256": "79d5d25225bb06f83b78ff8cc35973b56d45fcdd21af6ed6d2bbd67f5a6f9bea"
+        }
+      },
+      "targets": [
+        {
+          "Library": {
+            "crate_name": "soup3_sys",
+            "crate_root": "src/lib.rs",
+            "srcs": {
+              "allow_empty": true,
+              "include": [
+                "**/*.rs"
+              ]
+            }
+          }
+        },
+        {
+          "BuildScript": {
+            "crate_name": "build_script_build",
+            "crate_root": "build.rs",
+            "srcs": {
+              "allow_empty": true,
+              "include": [
+                "**/*.rs"
+              ]
+            }
+          }
+        }
+      ],
+      "library_target_name": "soup3_sys",
+      "common_attrs": {
+        "compile_data_glob": [
+          "**"
+        ],
+        "crate_features": {
+          "common": [
+            "v3_0"
+          ],
+          "selects": {}
+        },
+        "deps": {
+          "common": [
+            {
+              "id": "gio-sys 0.22.0",
+              "target": "gio_sys"
+            },
+            {
+              "id": "glib-sys 0.22.6",
+              "target": "glib_sys"
+            },
+            {
+              "id": "gobject-sys 0.22.6",
+              "target": "gobject_sys"
+            },
+            {
+              "id": "libc 0.2.186",
+              "target": "libc"
+            },
+            {
+              "id": "soup3-sys 0.9.0",
+              "target": "build_script_build"
+            }
+          ],
+          "selects": {}
+        },
+        "edition": "2024",
+        "version": "0.9.0"
+      },
+      "build_script_attrs": {
+        "compile_data_glob": [
+          "**"
+        ],
+        "compile_data_glob_excludes": [
+          "**/*.rs"
+        ],
+        "data_glob": [
+          "**"
+        ],
+        "deps": {
+          "common": [
+            {
+              "id": "system-deps 7.0.8",
+              "target": "system_deps"
+            }
+          ],
+          "selects": {}
+        }
+      },
+      "license": "MIT",
+      "license_ids": [
+        "MIT"
+      ],
+      "license_file": "LICENSE"
+    },
     "swift-bridge 0.1.59": {
       "name": "swift-bridge",
       "version": "0.1.59",
@@ -11114,6 +11442,232 @@
       ],
       "license_file": null
     },
+    "webkit6 0.6.1": {
+      "name": "webkit6",
+      "version": "0.6.1",
+      "package_url": "https://gitlab.gnome.org/World/Rust/webkit6-rs",
+      "repository": {
+        "Http": {
+          "url": "https://static.crates.io/crates/webkit6/0.6.1/download",
+          "sha256": "4959dd2a92813d4b2ae134e71345a03030bcff189b4f79cd131e9218aba22b70"
+        }
+      },
+      "targets": [
+        {
+          "Library": {
+            "crate_name": "webkit6",
+            "crate_root": "src/lib.rs",
+            "srcs": {
+              "allow_empty": true,
+              "include": [
+                "**/*.rs"
+              ]
+            }
+          }
+        }
+      ],
+      "library_target_name": "webkit6",
+      "common_attrs": {
+        "compile_data_glob": [
+          "**"
+        ],
+        "crate_features": {
+          "common": [
+            "v2_42",
+            "v2_44",
+            "v2_46",
+            "v2_48",
+            "v2_50",
+            "v2_52"
+          ],
+          "selects": {}
+        },
+        "deps": {
+          "common": [
+            {
+              "id": "gdk4 0.11.2",
+              "target": "gdk4",
+              "alias": "gdk"
+            },
+            {
+              "id": "gio 0.22.6",
+              "target": "gio"
+            },
+            {
+              "id": "glib 0.22.7",
+              "target": "glib"
+            },
+            {
+              "id": "gtk4 0.11.3",
+              "target": "gtk4",
+              "alias": "gtk"
+            },
+            {
+              "id": "javascriptcore6 0.6.0",
+              "target": "javascriptcore6",
+              "alias": "javascriptcore"
+            },
+            {
+              "id": "libc 0.2.186",
+              "target": "libc"
+            },
+            {
+              "id": "soup3 0.9.0",
+              "target": "soup"
+            },
+            {
+              "id": "webkit6-sys 0.6.0",
+              "target": "webkit6_sys",
+              "alias": "ffi"
+            }
+          ],
+          "selects": {}
+        },
+        "edition": "2024",
+        "version": "0.6.1"
+      },
+      "license": "MIT",
+      "license_ids": [
+        "MIT"
+      ],
+      "license_file": null
+    },
+    "webkit6-sys 0.6.0": {
+      "name": "webkit6-sys",
+      "version": "0.6.0",
+      "package_url": "https://gitlab.gnome.org/World/Rust/webkit6-rs",
+      "repository": {
+        "Http": {
+          "url": "https://static.crates.io/crates/webkit6-sys/0.6.0/download",
+          "sha256": "236078ce03ff041bf87904c8257e6a9b0e9e0f957267c15f9c1756aadcf02581"
+        }
+      },
+      "targets": [
+        {
+          "Library": {
+            "crate_name": "webkit6_sys",
+            "crate_root": "src/lib.rs",
+            "srcs": {
+              "allow_empty": true,
+              "include": [
+                "**/*.rs"
+              ]
+            }
+          }
+        },
+        {
+          "BuildScript": {
+            "crate_name": "build_script_build",
+            "crate_root": "build.rs",
+            "srcs": {
+              "allow_empty": true,
+              "include": [
+                "**/*.rs"
+              ]
+            }
+          }
+        }
+      ],
+      "library_target_name": "webkit6_sys",
+      "common_attrs": {
+        "compile_data_glob": [
+          "**"
+        ],
+        "crate_features": {
+          "common": [
+            "v2_42",
+            "v2_44",
+            "v2_46",
+            "v2_48",
+            "v2_50",
+            "v2_52"
+          ],
+          "selects": {}
+        },
+        "deps": {
+          "common": [
+            {
+              "id": "gdk4-sys 0.11.2",
+              "target": "gdk4_sys",
+              "alias": "gdk_sys"
+            },
+            {
+              "id": "gio-sys 0.22.0",
+              "target": "gio_sys"
+            },
+            {
+              "id": "glib-sys 0.22.6",
+              "target": "glib_sys"
+            },
+            {
+              "id": "gobject-sys 0.22.6",
+              "target": "gobject_sys"
+            },
+            {
+              "id": "gtk4-sys 0.11.3",
+              "target": "gtk4_sys",
+              "alias": "gtk_sys"
+            },
+            {
+              "id": "javascriptcore6-sys 0.6.0",
+              "target": "javascriptcore6_sys",
+              "alias": "javascriptcore_sys"
+            },
+            {
+              "id": "libc 0.2.186",
+              "target": "libc"
+            },
+            {
+              "id": "soup3-sys 0.9.0",
+              "target": "soup3_sys",
+              "alias": "soup_sys"
+            },
+            {
+              "id": "webkit6-sys 0.6.0",
+              "target": "build_script_build"
+            }
+          ],
+          "selects": {}
+        },
+        "edition": "2024",
+        "version": "0.6.0"
+      },
+      "build_script_attrs": {
+        "compile_data_glob": [
+          "**"
+        ],
+        "compile_data_glob_excludes": [
+          "**/*.rs"
+        ],
+        "data_glob": [
+          "**"
+        ],
+        "deps": {
+          "common": [
+            {
+              "id": "system-deps 7.0.8",
+              "target": "system_deps"
+            }
+          ],
+          "selects": {}
+        },
+        "link_deps": {
+          "common": [
+            {
+              "id": "gtk4-sys 0.11.3",
+              "target": "gtk4_sys",
+              "alias": "gtk_sys"
+            }
+          ],
+          "selects": {}
+        }
+      },
+      "license": "MIT",
+      "license_ids": [
+        "MIT"
+      ],
+      "license_file": null
+    },
     "winapi-util 0.1.11": {
       "name": "winapi-util",
       "version": "0.1.11",
@@ -12768,6 +13322,14 @@
             {
               "id": "pangocairo 0.22.0",
               "target": "pangocairo"
+            },
+            {
+              "id": "serde_json 1.0.150",
+              "target": "serde_json"
+            },
+            {
+              "id": "webkit6 0.6.1",
+              "target": "webkit6"
             }
           ],
           "selects": {}
@@ -13083,7 +13645,8 @@
     "thiserror 1.0.69",
     "tokio 1.52.3",
     "tracing 0.1.44",
-    "tracing-subscriber 0.3.23"
+    "tracing-subscriber 0.3.23",
+    "webkit6 0.6.1"
   ],
   "direct_dev_deps": [],
   "unused_patches": []
