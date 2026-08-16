@@ -560,6 +560,7 @@ Purpose: the GTK glue turning `layout`'s pane tree into nested `gtk::Paned`, one
 - Each pane's status and `b:wolf_full_width` cache once per wake: reading at use time re-enters `draw_pane`'s guard, and paint, pointer and resize must agree in one frame.
 - One funnel produces every grid resize, against the size the pane last asked for rather than the lagging snapshot grid; it runs every wake, since a lifted cap re-divides a still allocation.
 - The drawer strip's height re-applies on every wake, so a toplevel resize converges over two frames, and `reset_after_restart` clears the drawer `detect_closes` cannot reach.
+- The statusbar strip's family comes from the desktop's `gtk-font-name`, read once per tab; its sizes come from the editor's font, so the override moves no [`statusbar_layout.rs`](#statusbar_layoutrs) geometry.
 
 #### `persistence.rs`
 

@@ -156,7 +156,9 @@ Rules that are decidable from their arguments are pinned in each seam's own `#[c
 
 #### `../testdata/fonts.conf`
 
-Template fontconfig that exposes three pinned font directories — DejaVu, JetBrains Mono and iA Writer Mono S — and deliberately omits every host font dir, so Pango measurement and Cairo rasterization are reproducible across machines. The two editor families are exposed because the shared `wolf-config.yaml` can name either; the `monospace` alias still resolves to DejaVu Sans Mono, which keeps a generic request deterministic with three families visible.
+Template fontconfig that exposes three pinned font directories — DejaVu, JetBrains Mono and iA Writer Mono S — and deliberately omits every host font dir, so Pango measurement and Cairo rasterization are reproducible across machines. The two editor families are exposed because the shared `wolf-config.yaml` can name either. Every generic family the application can ask for is aliased to a pinned face, which is what keeps a generic request deterministic with three families visible: `monospace` to DejaVu Sans Mono for a grid request, and `sans-serif` and `sans` to DejaVu Sans for the pane statusbar strip, which asks for the desktop UI family.
+
+The aliases reach generic requests only, and `gtk-font-name` usually names a concrete family the pinned trees lack. A last-resort rule appends `DejaVu Sans` to every pattern at lowest priority: a resolvable request is untouched, an unresolvable one lands on that pinned face, so the strip's face is the same on every host rather than a function of the developer's desktop setting.
 
 The flake's `shellHook` substitutes its placeholders with Nix store paths and points `FONTCONFIG_FILE` at the generated copy, so this file is never consumed directly. Edit it here; the copy is rebuilt on each `nix develop`.
 

@@ -3540,7 +3540,9 @@ pub fn build(core: &Rc<RefCell<Option<WolfCore>>>, metrics: &Rc<CellMetrics>) ->
     // The strip is measured ONCE: `metrics` never changes for the life of the
     // process, so nothing here belongs on the paint path. Everything is in DEVICE
     // PIXELS, which is the unit `statusbar_layout` is called in on this front-end
-    // and the unit Cairo paints in.
+    // and the unit Cairo paints in. The desktop UI family is read here too, once per
+    // TAB, so a `gtk-font-name` change reaches tabs opened after it and every tab at
+    // the next launch.
     let primary_px = metrics.size_px;
     let secondary_px = statusbar_layout::secondary_font_size(primary_px);
     let statusbar = statusbar_layout::statusbar_layout(
@@ -3548,6 +3550,13 @@ pub fn build(core: &Rc<RefCell<Option<WolfCore>>>, metrics: &Rc<CellMetrics>) ->
         secondary_px,
         STATUSBAR_VERTICAL_PADDING,
         STATUSBAR_LINE_GAP,
+    );
+    // `gtk::Settings::default()` answers None with no display; `ui_font_family` then
+    // answers None as well and the strip keeps the base description's family.
+    let ui_family = ui_font_family(
+        gtk::Settings::default()
+            .and_then(|s| s.gtk_font_name())
+            .as_deref(),
     );
 
     let inner = Rc::new(PaneInner {
@@ -3564,9 +3573,9 @@ pub fn build(core: &Rc<RefCell<Option<WolfCore>>>, metrics: &Rc<CellMetrics>) ->
         toast_lines: Cell::new(0),
         toast_was_prompt: Cell::new(false),
         statusbar,
-        statusbar_primary: strip_font(&metrics.font, primary_px, false),
-        statusbar_primary_bold: strip_font(&metrics.font, primary_px, true),
-        statusbar_secondary: strip_font(&metrics.font, secondary_px, false),
+        statusbar_primary: strip_font(&metrics.font, ui_family.as_deref(), primary_px, false),
+        statusbar_primary_bold: strip_font(&metrics.font, ui_family.as_deref(), primary_px, true),
+        statusbar_secondary: strip_font(&metrics.font, ui_family.as_deref(), secondary_px, false),
         metrics: metrics.clone(),
         core: core.clone(),
         active_pane: Cell::new(None),
@@ -3901,8 +3910,43 @@ fn install_paned_position(
     }
 }
 
-/// The grid font at `size_px` DEVICE PIXELS, for one of the statusbar strip's two
-/// lines.
+/// The desktop UI FAMILY named by a GTK `gtk-font-name` string, or `None` when
+/// there is no usable one.
+///
+/// **The family is taken and everything else in the string is discarded**, which
+/// the signature cannot say. The SIZE goes because wolf's own size math owns the
+/// strip's line boxes — [`statusbar_layout`](crate::statusbar_layout) reserves the
+/// band's height from the two sizes alone — so adopting the desktop's point size
+/// would move the strip. The STYLE and WEIGHT words go because bold-when-active is
+/// the whole active/inactive signal on the primary line: a `gtk-font-name` of
+/// `"Cantarell Bold 11"` must not bold an inactive pane's filename.
+///
+/// **`None` means "no override", not "a default family".** This crate names no
+/// family of its own, so an absent or unusable setting leaves the strip on the base
+/// description's family rather than substituting one here.
+///
+/// The trim-and-empty guard makes the seam total, in the shape
+/// [`secondary_font_size`](crate::statusbar_layout::secondary_font_size)'s
+/// `is_finite` check does, so nothing downstream has to reason about a blank family
+/// reaching `set_family` and then Pango's own fallback. It does NOT carry the
+/// obvious inputs, measured rather than assumed: `from_string("")` and
+/// `from_string("   ")` answer a description naming no family at all, so `family()`
+/// is already `None`, and `"  Cantarell  11 "` is trimmed by Pango itself. What it
+/// does carry is a family Pango DOES return that is blank — `"\u{00a0}"` comes back
+/// as `Some("\u{00a0}")`, and Rust trims it to nothing.
+fn ui_font_family(gtk_font_name: Option<&str>) -> Option<String> {
+    let desc = pango::FontDescription::from_string(gtk_font_name?);
+    let family = desc.family()?;
+    let trimmed = family.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(trimmed.to_owned())
+}
+
+/// The strip font for one of the statusbar's two lines: `base` with an absolute size
+/// of `size_px` DEVICE PIXELS, a bold weight when `bold`, and `family` overriding the
+/// base's family when it is `Some` — the only one of the three that is optional.
 ///
 /// **`set_absolute_size`, not `set_size`, and the difference is deliberate.**
 /// [`CellMetrics::for_font`] uses `set_size` because that is a POINT size and
@@ -3913,8 +3957,16 @@ fn install_paned_position(
 /// font in the same unit keeps the whole strip in one unit. At the 96 dpi this
 /// crate assumes the two spellings give the same physical size; above it they would
 /// not, which is subsumed by the crate's recorded absence of HiDPI handling.
-fn strip_font(base: &pango::FontDescription, size_px: f64, bold: bool) -> pango::FontDescription {
+fn strip_font(
+    base: &pango::FontDescription,
+    family: Option<&str>,
+    size_px: f64,
+    bold: bool,
+) -> pango::FontDescription {
     let mut font = base.clone();
+    if let Some(family) = family {
+        font.set_family(family);
+    }
     font.set_absolute_size(size_px * f64::from(pango::SCALE));
     if bold {
         font.set_weight(pango::Weight::Bold);
@@ -4717,5 +4769,361 @@ mod tests {
              carve that is CONSISTENTLY wrong therefore passes the guard on every render — so the \
              stylesheet is swapped in as content on the second load and forever after."
         );
+    }
+
+    // -----------------------------------------------------------------------------
+    // The statusbar strip's font. [`ui_font_family`] turns the desktop's
+    // `gtk-font-name` into the family the strip paints in, and [`strip_font`] applies
+    // that family, a pixel size and the bold flag to one of the strip's two lines.
+    // Both are pure `pango::FontDescription` calls: no font map is consulted, no
+    // display is opened and nothing is rasterized, so neither family named below has
+    // to be installed on the machine that runs these rows.
+    // -----------------------------------------------------------------------------
+
+    /// The synthetic base's family — the face the strip keeps when the desktop names
+    /// no usable one. A monospace name, because that is what the editor's own
+    /// description carries, and deliberately not [`OVERRIDE_FAMILY`].
+    const BASE_FAMILY: &str = "DejaVu Sans Mono";
+
+    /// The family the desktop asks for. Its one requirement is being distinguishable
+    /// from [`BASE_FAMILY`]: an override that cannot be told from the base makes every
+    /// loop-2 family row hold whether or not `set_family` runs at all.
+    const OVERRIDE_FAMILY: &str = "Cantarell";
+
+    /// The base description's size, in POINTS — set through `set_size`, which is the
+    /// spelling [`CellMetrics::for_font`] uses for the grid face. It is a point size
+    /// on purpose; see the SIZE UNIT paragraph of [`statusbar_font_family_table`].
+    const BASE_POINT_SIZE: i32 = 14;
+
+    /// One [`ui_font_family`] row: a `gtk-font-name` setting, the family it must
+    /// yield, and the reason the row is here.
+    struct FamilyCase {
+        desc: &'static str,
+        gtk_font_name: Option<&'static str>,
+        want: Option<&'static str>,
+    }
+
+    /// How many named rows the family table carries — the ARRAY'S length, for exactly
+    /// the reason [`NAMED_PAYLOAD_ROWS`] is: dropping a row is a compile error rather
+    /// than a check that could itself be edited away. Row 5 is the row that most needs
+    /// that protection, being the only one the trim-and-empty guard answers to.
+    const NAMED_FAMILY_ROWS: usize = 10;
+
+    /// Every shape a `gtk-font-name` arrives in, and what each one settles.
+    ///
+    /// The settings are real: GTK's own built-in default is `"Sans 10"`, GNOME ships
+    /// `"Cantarell 11"`, and anyone who has typed a weight into
+    /// `org.gnome.desktop.interface font-name` produces row 8's shape.
+    const FAMILY_CASES: [FamilyCase; NAMED_FAMILY_ROWS] = [
+        FamilyCase {
+            // `gtk::Settings::default()` answers None with no display, which is the
+            // path every headless run takes.
+            desc: "no setting at all",
+            gtk_font_name: None,
+            want: None,
+        },
+        FamilyCase {
+            // Coverage, not a falsifier: Pango parses this to a description naming no
+            // family, so `family()` is already None. See the first non-claim.
+            desc: "an empty setting",
+            gtk_font_name: Some(""),
+            want: None,
+        },
+        FamilyCase {
+            // Same as the row above, and green under the same edits — the second
+            // non-claim is what says so.
+            desc: "a whitespace-only setting",
+            gtk_font_name: Some("   "),
+            want: None,
+        },
+        FamilyCase {
+            // Measured: Pango reads this as a size-only description — family None,
+            // size 11264 units — so the size is what must NOT come through.
+            desc: "a size with no family",
+            gtk_font_name: Some("11"),
+            want: None,
+        },
+        FamilyCase {
+            // The one measured input that makes the trim-and-empty guard load-bearing.
+            // Pango hands back the NO-BREAK SPACE as a family — `family()` is
+            // `Some("\u{00a0}")` — and Rust's `trim`, whose whitespace is Unicode's
+            // rather than ASCII's, is the only thing that reduces it to nothing before
+            // it reaches `set_family`.
+            desc: "a NO-BREAK SPACE, the one blank family Pango really returns",
+            gtk_font_name: Some("\u{00a0}"),
+            want: None,
+        },
+        FamilyCase {
+            desc: "the ordinary GNOME setting",
+            gtk_font_name: Some("Cantarell 11"),
+            want: Some("Cantarell"),
+        },
+        FamilyCase {
+            // A second family, so a hardcoded answer cannot satisfy both this row and
+            // the one above it.
+            desc: "a different family",
+            gtk_font_name: Some("Inter 11"),
+            want: Some("Inter"),
+        },
+        FamilyCase {
+            // The style and weight words are DROPPED rather than folded into the
+            // family: bold-when-active is the strip's active/inactive signal, so a
+            // desktop font naming Bold must not bold an inactive pane's filename.
+            desc: "style and weight words are dropped",
+            gtk_font_name: Some("Cantarell Bold Italic 11"),
+            want: Some("Cantarell"),
+        },
+        FamilyCase {
+            // A MULTI-WORD family with no size, which is what says the parse is
+            // Pango's: `split_whitespace().next()` answers "DejaVu" here.
+            desc: "a two-word family survives whole",
+            gtk_font_name: Some("DejaVu Sans"),
+            want: Some("DejaVu Sans"),
+        },
+        FamilyCase {
+            // Measured: Pango trims this itself, giving `Some("Cantarell")` before the
+            // guard sees it. The row pins that the guard duplicates no work Pango
+            // already does — not that the guard is what handles padding.
+            desc: "a padded setting, which Pango trims itself",
+            gtk_font_name: Some("  Cantarell  11 "),
+            want: Some("Cantarell"),
+        },
+    ];
+
+    /// One [`strip_font`] row: the family override, pixel size and bold flag handed to
+    /// it, and the properties the resulting description must carry.
+    struct StripCase {
+        desc: &'static str,
+        family: Option<&'static str>,
+        size_px: f64,
+        bold: bool,
+        want_family: &'static str,
+        want_units: f64,
+        size_tol: f64,
+    }
+
+    /// How many named rows the strip-font table carries — the ARRAY'S length, for the
+    /// reason [`NAMED_PAYLOAD_ROWS`] is.
+    const NAMED_STRIP_ROWS: usize = 4;
+
+    /// The three properties [`strip_font`] applies, in the four combinations that tell
+    /// them apart: family overridden and not, bold and not, whole pixels and not.
+    const STRIP_CASES: [StripCase; NAMED_STRIP_ROWS] = [
+        StripCase {
+            // The row that names the direction of a family failure: it is the only one
+            // that stays green when `set_family` is deleted.
+            desc: "no override, so the base's family survives",
+            family: None,
+            size_px: 28.0,
+            bold: false,
+            want_family: BASE_FAMILY,
+            // 28.0 * pango::SCALE, which is exact in both f64 and pango units.
+            want_units: 28672.0,
+            size_tol: 0.0,
+        },
+        StripCase {
+            desc: "an override replaces the base's family",
+            family: Some(OVERRIDE_FAMILY),
+            size_px: 28.0,
+            bold: false,
+            want_family: OVERRIDE_FAMILY,
+            want_units: 28672.0,
+            size_tol: 0.0,
+        },
+        StripCase {
+            // The active pane's primary line: overridden AND bold. The only row that
+            // survives a hardcoded `set_weight(Bold)`, which is what makes the other
+            // three name that edit.
+            desc: "the active pane's primary line, overridden and bold",
+            family: Some(OVERRIDE_FAMILY),
+            size_px: 28.0,
+            bold: true,
+            want_family: OVERRIDE_FAMILY,
+            want_units: 28672.0,
+            size_tol: 0.0,
+        },
+        StripCase {
+            // The secondary line under a 28 px primary: `secondary_font_size` scales by
+            // 0.8, so 22.4 is a size the strip really asks for rather than an invented
+            // one. 22.4 * 1024 is 22937.6, which is not a whole pango unit — hence the
+            // tolerance, one unit wide so it holds whichever way Pango's conversion
+            // breaks the tie. Tuning the literal instead would hide that.
+            desc: "a fractional pixel size, which cannot land on a whole pango unit",
+            family: Some(OVERRIDE_FAMILY),
+            size_px: 22.4,
+            bold: false,
+            want_family: OVERRIDE_FAMILY,
+            want_units: 22937.6,
+            size_tol: 1.0,
+        },
+    ];
+
+    /// [`ui_font_family`] answers the FAMILY a `gtk-font-name` names and nothing else,
+    /// and [`strip_font`] applies that family, an absolute pixel size and the bold flag
+    /// to one line of the strip.
+    ///
+    /// The two are one mechanism and are pinned together. The first decides WHETHER the
+    /// strip takes the desktop's family; the second decides whether that family reaches
+    /// the description without disturbing the two properties wolf keeps for itself. The
+    /// SIZE is wolf's because [`statusbar_layout`](crate::statusbar_layout) reserves the
+    /// band's height from the sizes alone, so adopting the desktop's would move the
+    /// strip, the grid rect's origin and every measured constant the OCR smokes carry.
+    /// The WEIGHT is wolf's because bold-when-active is the entire active/inactive
+    /// signal on the primary line.
+    ///
+    /// SIZE UNIT is not a duplicate of SIZE. `size()` reads the same number whether it
+    /// was set as points or as pixels, so a revert to `set_size` keeps the number and
+    /// changes the UNIT — to one that is dpi-dependent, against line boxes measured in
+    /// device pixels. `is_size_absolute()` is what tells the two apart, and the base
+    /// carries a POINT size precisely so that flag cannot be inherited from it.
+    ///
+    /// `set_absolute_size` stores INTEGER pango units, so `size_px * SCALE` is not
+    /// always a reachable expectation: `22.4 * 1024` is `22937.6` and the stored value
+    /// is a whole number either side of it. That is why each row carries its own
+    /// tolerance — exact on the whole-pixel rows, one unit on the fractional one —
+    /// rather than a literal tuned until it passed, which would bury the rounding
+    /// instead of naming it.
+    ///
+    /// FALSIFYING EDITS. Each names the edit and the rows it fires on.
+    ///
+    /// - Delete `set_family` from [`strip_font`]: loop-2 rows 2, 3 and 4 fail on
+    ///   FAMILY while row 1 stays green, which is what names the failure as the
+    ///   OVERRIDE rather than as a base that went missing.
+    /// - Delete `set_absolute_size`: all four loop-2 rows fail on SIZE, the clone
+    ///   carrying the base's point size — which SIZE UNIT would catch as well, were the
+    ///   row to get that far. Family and weight stay green, naming the size alone.
+    /// - Drop the `* pango::SCALE`: all four rows fail on SIZE with the pixel count
+    ///   itself, a strip a thousandth of its intended height.
+    /// - Hardcode `set_weight(Bold)`: loop-2 rows 1, 2 and 4 fail on WEIGHT and row 3
+    ///   stays green — bold is not a constant, and an inactive pane's filename must not
+    ///   be bold.
+    /// - Drop the trim-and-empty guard in [`ui_font_family`]: loop-1 row 5 fails, and
+    ///   rows 2, 3 and 4 stay green. Read the first non-claim before reading anything
+    ///   more into that.
+    /// - Replace the Pango parse with `split_whitespace().next()`: loop-1 row 9 fails,
+    ///   a two-word family arriving as its first word.
+    ///
+    /// THREE NON-CLAIMS, so nobody reads more into these rows than they hold.
+    ///
+    /// Rows 2 and 3 (`""` and `"   "`) do NOT prove the trim-and-empty guard, measured
+    /// rather than predicted: `FontDescription::from_string` parses both to a
+    /// description naming no family, so `family()` answers `None` and the function has
+    /// returned before the guard is reached — delete the guard and both rows stay
+    /// GREEN. What they prove alone is that a blank setting yields no override at all,
+    /// which is worth a row because the alternative is `set_family("")` and Pango's own
+    /// fallback choosing the strip's face. The guard itself is row 5's to catch, and
+    /// row 5's alone.
+    ///
+    /// Row 10 (`"  Cantarell  11 "`) proves nothing about the guard either. Pango trims
+    /// it before the guard sees it, so the row's claim is the narrower one that the
+    /// trim adds no behaviour of its own on padded input.
+    ///
+    /// Neither loop reaches `build`, so nothing here says the strip's descriptions are
+    /// built from the DESKTOP's family: that read goes through `gtk::Settings`, which
+    /// needs a display. What this table pins is the seam's behaviour, not its wiring;
+    /// the wiring is the smoke suite's, where the strip is drawn for real.
+    #[test]
+    fn statusbar_font_family_table() {
+        // The row counts are enforced by the two arrays' own types, so there is no
+        // arity assertion here: one would be a tautology against the same constants.
+        for case in &FAMILY_CASES {
+            let (desc, gtk_font_name, want) = (case.desc, case.gtk_font_name, case.want);
+            let got = ui_font_family(gtk_font_name);
+            assert_eq!(
+                got.as_deref(),
+                want,
+                "FAMILY: case {desc} — ui_font_family({gtk_font_name:?}) = {got:?}, want {want:?}. \
+                 A family where `None` is expected reaches `set_family`, which hands Pango a name \
+                 it cannot match and lets Pango's fallback pick the strip's face; a `None` where a \
+                 family is expected leaves the strip on the editor's monospace face, which is the \
+                 whole behaviour under test. A family carrying a size or a weight word means the \
+                 parse kept more of the setting than the FAMILY, and a size adopted from the \
+                 desktop would move the strip's height."
+            );
+        }
+
+        let mut base = pango::FontDescription::new();
+        base.set_family(BASE_FAMILY);
+        base.set_size(BASE_POINT_SIZE * pango::SCALE);
+
+        // PREMISES about the synthetic base, measured rather than assumed. Each is what
+        // makes some row below able to fail at all.
+        assert_ne!(
+            base.family().as_deref(),
+            Some(OVERRIDE_FAMILY),
+            "the base description is already in {OVERRIDE_FAMILY:?}, so the override rows below \
+             cannot tell a `set_family` that ran from one that did not, and deleting the override \
+             would leave them green. Change BASE_FAMILY or OVERRIDE_FAMILY so the two differ."
+        );
+        assert_ne!(
+            base.weight(),
+            pango::Weight::Bold,
+            "the base description is already Bold, so the three non-bold rows below cannot tell an \
+             untouched weight from a hardcoded `set_weight(Bold)` — the bold-when-active signal \
+             would then be untested. A fresh `FontDescription` given only a family and a size is \
+             expected to carry a non-Bold weight; suspect Pango's defaults before this test."
+        );
+        assert!(
+            !base.is_size_absolute(),
+            "the base was built with `set_size`, a POINT size, yet reports an ABSOLUTE one. The \
+             SIZE UNIT assertion below would then hold for a `strip_font` that sets no size at \
+             all, since the flag would arrive with the clone. Suspect Pango's `set_size` before \
+             suspecting this test."
+        );
+        let base_units = f64::from(base.size());
+
+        for case in &STRIP_CASES {
+            let (desc, family, size_px, bold) = (case.desc, case.family, case.size_px, case.bold);
+            let (want_family, want_units, size_tol) =
+                (case.want_family, case.want_units, case.size_tol);
+            let font = strip_font(&base, family, size_px, bold);
+
+            let got_family = font.family();
+            assert_eq!(
+                got_family.as_deref(),
+                Some(want_family),
+                "FAMILY: case {desc} — strip_font(base, {family:?}, {size_px}, {bold}) is set in \
+                 {got_family:?}, want {want_family:?}. {BASE_FAMILY:?} where an override is \
+                 expected means `set_family` never runs and the strip stays on the editor's \
+                 monospace face whatever the desktop asks for; an override where {BASE_FAMILY:?} \
+                 is expected means a `None` family substitutes a face of this crate's choosing \
+                 instead of leaving the base's alone."
+            );
+
+            let got_units = f64::from(font.size());
+            assert!(
+                (got_units - want_units).abs() <= size_tol,
+                "SIZE: case {desc} — strip_font(base, {family:?}, {size_px}, {bold}) measures \
+                 {got_units} pango units, want {want_units} within {size_tol}. {base_units} means \
+                 the base's own size survived and no size was applied; {size_px} means the pixel \
+                 count reached Pango unscaled, i.e. a missing `* pango::SCALE`, which is a strip \
+                 painted a thousandth of its intended height. Any other number is a size this \
+                 crate did not ask for, and the strip's reserved band would no longer fit it."
+            );
+            assert!(
+                font.is_size_absolute(),
+                "SIZE UNIT: case {desc} — strip_font(base, {family:?}, {size_px}, {bold}) carries \
+                 a POINT size, not an absolute one. `size()` reads the same number either way, so \
+                 this flag is the only thing that distinguishes `set_absolute_size` from the \
+                 `set_size` the base was built with: the strip's line boxes, padding and gap are \
+                 all device pixels, and a point size makes the text's height dpi-dependent against \
+                 them."
+            );
+
+            let want_weight = if bold {
+                pango::Weight::Bold
+            } else {
+                base.weight()
+            };
+            let got_weight = font.weight();
+            assert_eq!(
+                got_weight, want_weight,
+                "WEIGHT: case {desc} — strip_font(base, {family:?}, {size_px}, {bold}) is \
+                 {got_weight:?}, want {want_weight:?}. Bold on a row asking for bold={bold} breaks \
+                 the active/inactive signal: every pane's filename then reads as active, or none \
+                 does. A weight that is neither Bold nor the base's own means `strip_font` sets a \
+                 weight nobody asked it for."
+            );
+        }
     }
 }

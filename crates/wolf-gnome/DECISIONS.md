@@ -230,6 +230,8 @@ The cell height and baseline are a Rust port of `WolfKeyMap/CellMetricsMath.swif
 
 **A family Pango cannot resolve is substituted by fontconfig, and this crate adds no fallback of its own.** macOS needs one because CoreText returns a different family rather than substituting; Pango substitutes per lookup and always yields usable metrics, so a hand-rolled fallback could only override a better answer. A test pins that the description keeps the family the caller asked for.
 
+**The pane statusbar strip takes its family from the desktop and its sizes from the editor.** The grid keeps the configured editor family, while the strip asks `GtkSettings` for `gtk-font-name` and paints wolf's own two sizes in that family — macOS parity rather than a Linux choice, since `PaneContainerView.swift` draws the same strip with `.boldSystemFont(ofSize:)` and `.systemFont(ofSize:)` at `statusbarPrimaryFontSize` and `statusbarSecondaryFontSize`. The desktop font's point size is parsed and discarded deliberately: `statusbar_layout` reserves the band's height from the two sizes alone, so adopting it would move the strip height, and with it the grid rect's origin, the pane content floor and every measured constant the compositor smokes carry.
+
 ## The preview's light and dark
 
 A Markdown preview follows the configured appearance through a chain whose links are all in libadwaita and WebKitGTK rather than in this crate, and one version bump ends it. What the document itself carries — a dark palette, a `prefers-color-scheme: light` block, and one compile-time-constant stylesheet serving both appearances — belongs to [`wolf-core/src/markdown/README.md`](../wolf-core/src/markdown/README.md).
