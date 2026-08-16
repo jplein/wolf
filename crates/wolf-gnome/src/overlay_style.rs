@@ -15,9 +15,13 @@
 //! copies of the appearance that a reader would otherwise have to keep in sync by
 //! eye.
 //!
-//! The list and its scroller are forced transparent because GTK gives a bare
-//! `list` the VIEW background, which would punch a white (or near-black) panel
-//! through the popover surface the box paints.
+//! The list, the viewport that scrolls it and their scroller are all forced
+//! transparent because GTK gives a bare `list` the VIEW background, which would
+//! punch a white (or near-black) panel through the popover surface the box
+//! paints. The viewport is named because it is a node of that same chain: it
+//! paints nothing under the current theme, so naming it costs no pixel and is
+//! what keeps a theme that gives it a background from reintroducing the panel
+//! one level down.
 
 use std::cell::Cell;
 
@@ -48,6 +52,7 @@ const OVERLAY_CSS_DATA: &str = "
 }
 
 .wolf-overlay scrolledwindow,
+.wolf-overlay viewport,
 .wolf-overlay list {
   background-color: transparent;
 }

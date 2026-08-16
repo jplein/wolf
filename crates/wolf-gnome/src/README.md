@@ -505,18 +505,22 @@ Purpose: the pure, GTK-free rulebook for per-pane navigation — which window a 
 
 #### `overlay_style.rs`
 
-Purpose: the shared look of the four transient overlays ([`picker.rs`](#pickerrs), [`palette.rs`](#paletters), [`buffer_picker.rs`](#buffer_pickerrs), [`search_overlay.rs`](#search_overlayrs)) — a GNOME-menu surface, corner radius, shadow and menu-sized rows, as one CSS class.
+Purpose: the shared look of the four transient overlays ([`picker.rs`](#pickerrs), [`palette.rs`](#paletters), [`buffer_picker.rs`](#buffer_pickerrs), [`search_overlay.rs`](#search_overlayrs)) — a GNOME-menu surface with menu-sized rows, as one CSS class.
 
 **Public API**
 
-- `apply(overlay_box)` — `pub(crate)`; adds the class and installs the stylesheet on the default display the first time it is called. Use it instead of `add_css_class("background")`, whose window colours it replaces.
+- `apply(overlay_box)` — `pub(crate)`; adds the class and installs the stylesheet on first call. Call it instead of `add_css_class("background")`, whose window colours it replaces.
 
 **Decisions**
 
-- Colours are libadwaita named colours, never literals, so the overlays follow the scheme [`appearance.rs`](#appearancers) resolves without this file knowing which one is in effect.
-- The list and its scroller are forced transparent: GTK gives a bare `list` the view background, which would punch a panel through the popover surface the box paints.
-- The row padding is what sets the line height between items, and it is deliberately larger than the GTK default so the lists read as a menu rather than a dense table.
-- A thread-local flag installs the provider once rather than once per overlay per window. This shares a stylesheet only — [`picker.rs`](#pickerrs) owns why no common overlay widget is extracted, and that judgement is unaffected.
+- Colours are libadwaita named colours, never literals, so the overlays follow whichever scheme [`appearance.rs`](#appearancers) resolves.
+- The scroller, its viewport and the list are forced transparent: GTK gives a bare `list` the view background, which would punch a panel through the popover surface. The viewport paints nothing under Adwaita dark (captures are byte-identical either way) and is named for the light path and future themes.
+- A thread-local flag installs the provider once per process rather than once per overlay per window; [DECISIONS.md](../DECISIONS.md#the-coordinator-and-its-windows) compares that with the crate's other display-global provider.
+- `mod overlay_style;` is private, alone in [`lib.rs`](#librs): nothing outside the crate consumes or tests it, so `pub mod` would widen the crate's public surface for no gain.
+
+**Gotchas**
+
+- The `entry`/`label` bottom margin is scoped to direct children: a fifth direct child of the box silently gains it, and row labels deliberately do not match.
 
 #### `palette.rs`
 
@@ -611,13 +615,12 @@ Purpose: the file-picker overlay — a search entry over a ranked results list. 
 - The picker has no trigger predicate of its own: it opens from the `win.go-to-file` action; see [`actions.rs`](#actionsrs).
 - The key controller runs in the capture phase, so Escape and the arrows are seen before the `SearchEntry` consumes them, and the arrows move the list selection while focus stays in the entry.
 - The selection is preserved across a streaming rebuild unless the query changed, so an arriving batch does not yank the user back to the top row.
-- Activation with zero rows is a true no-op: it neither opens anything nor closes the picker.
+- No shared overlay widget is extracted, and that is a judgement: the four overlays already share the three seams below, and the widget construction left over is covered only by the cage smokes, so a common type would risk three working overlays to remove boilerplate.
 
 **Gotchas**
 
-- Closing drops the `FileSearch`, which cancels the background traversal.
 - `next_selection`, `restored_index` and `activation_index` are `pub(crate)` and shared with [`palette.rs`](#paletters), [`buffer_picker.rs`](#buffer_pickerrs) and [`search_overlay.rs`](#search_overlayrs), so all four overlays navigate and activate identically. They stay here because the macOS `PickerSeam` port names this file as its counterpart.
-- `FocusTarget` is `pub(crate)` and shared the same way, by all four overlays and the sidebar; [DECISIONS.md](../DECISIONS.md#window-structure) owns why it is a closure rather than a captured widget.
+- `FocusTarget` is `pub(crate)` and shared by all four overlays and the sidebar; [DECISIONS.md](../DECISIONS.md#window-structure) owns why it is a closure rather than a captured widget.
 
 #### `preview_coalescer.rs`
 

@@ -106,9 +106,9 @@ A close arriving during a quit commits nothing at all. The quit path has already
 
 **The `app.` rows are installed once for the process and every window's shell installs `win.` rows only.** `gio::ActionMap::add_action` replaces an existing entry, so installing `app.quit` per window would leave the last window's closure owning the whole application's Quit — and closing that window would silently kill Ctrl+Shift+Q for every window still open.
 
-**A display-global CSS provider is deliberately not hoisted up here, and the hoist is a named follow-up.** Each build adds one to the default display for [`tree_view.rs`](src/README.md#tree_viewrs)'s current-file bold, one per window, so every extra window adds another identical provider, inert since the rule resolves the same either way.
+**Neither of the crate's two display-global CSS providers is installed from up here, and the two follow opposite policies below it.** [`tree_view.rs`](src/README.md#tree_viewrs) adds one per window for its current-file bold, so every extra window adds another identical provider, inert since the rule resolves the same either way. [`overlay_style.rs`](src/README.md#overlay_stylers) adds one per process behind a thread-local flag, reaching the effect a hoist would have without the coordinator needing to know that four overlays share a stylesheet.
 
-What holds the hoist is evidence: the class reaches no pixel. [`tests/README.md`](tests/README.md) records that for the bold, so moving the call would be an unverifiable edit to a startup path.
+What holds `tree_view`'s call where it is, is evidence: the class reaches no pixel, and [`tests/README.md`](tests/README.md) records that for the bold, so moving it would be an unverifiable edit to a startup path. That argument bears on where a call lives, not on whether it is guarded — which is the distinction that lets `overlay_style` carry a flag while `tree_view` carries none.
 
 New Window opens a fresh, empty window at `$HOME` with its own core, inheriting nothing from the window it was asked from: not the working directory, not the layout, not the size. That is what macOS's `makeNewWindow` does and parity is the row's whole subject; inheriting a project is a new tab's behaviour.
 

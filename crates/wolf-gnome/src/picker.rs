@@ -43,7 +43,8 @@
 //! that the widget layer of these modules is covered only by the cage smokes, so
 //! refactoring three working overlays behind a common type would put their five
 //! smokes at risk (two for the file picker, one for the palette, two for the buffer
-//! picker) to save boilerplate no test executes.
+//! picker) to save boilerplate no assertion covers — those smokes construct these
+//! widgets, but what they assert on is pixels and OCR.
 
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
