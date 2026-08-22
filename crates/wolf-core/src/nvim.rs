@@ -2,7 +2,7 @@
 //!
 //! Neovim is located *only* via `WOLF_NVIM_BIN` (exported by the flake devShell),
 //! never PATH and never by scanning `/nix/store`. It is launched
-//! `--embed --clean -u <init.lua> -i NONE -n` with `NVIM_APPNAME` and the
+//! `--embed --clean -u <init.lua> -i NONE` with `NVIM_APPNAME` and the
 //! `XDG_*` dirs pinned under a private temp dir so it cannot read the user's
 //! config/state. All RPC is generic/untyped to insulate us from nvim-rs's older
 //! typed API.
@@ -59,6 +59,23 @@ pub enum NvimError {
     Timeout(&'static str, Duration),
 }
 
+/// The durable, Wolf-owned directories resolved from `state_dir()` that
+/// [`NvimConfig::from_env`] folds into the config (grouped so `from_env` stays
+/// under clippy's `too_many_arguments`). Every field is `Option`: `None` means
+/// `state_dir()` was unresolvable — swap and spell then fall back to ephemeral
+/// dirs under the private state root, and the user dirs are skipped entirely.
+#[derive(Clone, Debug, Default)]
+pub struct DurableDirs {
+    /// The per-project swap dir ([`crate::state::swap_dir_for`]).
+    pub swap_dir: Option<PathBuf>,
+    /// The global spell dir ([`crate::state::spell_dir`]).
+    pub spell_dir: Option<PathBuf>,
+    /// The user override dir ([`crate::state::runtime_user_dir`]).
+    pub runtime_user_dir: Option<PathBuf>,
+    /// The user parser dir ([`crate::state::parsers_user_dir`]).
+    pub parsers_user_dir: Option<PathBuf>,
+}
+
 /// Configuration for launching the captive Neovim.
 #[derive(Clone, Debug)]
 pub struct NvimConfig {
@@ -76,6 +93,19 @@ pub struct NvimConfig {
     /// project (letting a fresh nvim recover a dead nvim's swap), distinct from the
     /// ephemeral `state_root` (which still hosts the hermetic XDG isolation).
     pub swap_dir: PathBuf,
+    /// The DURABLE, GLOBAL spell directory (`'spellfile'` parent inside nvim,
+    /// via the `WOLF_SPELL_DIR` env var). Resolved like
+    /// [`crate::state::spell_dir`]; already fallback-applied like
+    /// [`swap_dir`](Self::swap_dir), so it is always a concrete path.
+    pub spell_dir: PathBuf,
+    /// The user override dir ([`crate::state::runtime_user_dir`], exported as
+    /// `WOLF_RUNTIME_USER_DIR`). `None` = skip: no creation, no export,
+    /// init.lua no-ops.
+    pub runtime_user_dir: Option<PathBuf>,
+    /// The user parser dir ([`crate::state::parsers_user_dir`], exported as
+    /// `WOLF_PARSERS_USER_DIR`). `None` = skip: no creation, no export,
+    /// init.lua no-ops.
+    pub parsers_user_dir: Option<PathBuf>,
     /// Working directory the captive nvim is launched in (so its `getcwd()`
     /// starts here rather than inheriting the host process's cwd).
     pub cwd: PathBuf,
@@ -92,15 +122,16 @@ impl NvimConfig {
     /// private temp dir to host the isolated `XDG_*` state. `cwd` is the working
     /// directory the captive nvim will be launched in (see [`spawn`]).
     ///
-    /// `swap_dir` is the DURABLE per-project swap dir ([`crate::state::swap_dir_for`]);
-    /// `None` (an unresolvable `state_dir()`) falls back to an EPHEMERAL
-    /// `state_root/swap` under the private temp dir (documented — the swap then does
-    /// not survive a process exit, but recovery within one session still works and
-    /// nothing panics).
+    /// `dirs` carries the DURABLE, Wolf-owned directories (see [`DurableDirs`]).
+    /// A `None` swap or spell dir (an unresolvable `state_dir()`) falls back to
+    /// an EPHEMERAL `state_root/swap` / `state_root/spell` under the private temp
+    /// dir (documented — recovery and `zg` still work within one session, nothing
+    /// survives a process exit, and nothing panics). A `None` user dir stays
+    /// `None`: [`spawn`] then skips its creation and export, and init.lua no-ops.
     pub fn from_env(
         init_lua: PathBuf,
         cwd: PathBuf,
-        swap_dir: Option<PathBuf>,
+        dirs: DurableDirs,
         cols: u16,
         rows: u16,
     ) -> Result<Self, NvimError> {
@@ -114,7 +145,8 @@ impl NvimConfig {
             .tempdir()
             .map_err(NvimError::StateDir)?;
         let state_root = temp.path().to_path_buf();
-        let swap_dir = swap_dir.unwrap_or_else(|| state_root.join("swap"));
+        let swap_dir = dirs.swap_dir.unwrap_or_else(|| state_root.join("swap"));
+        let spell_dir = dirs.spell_dir.unwrap_or_else(|| state_root.join("spell"));
 
         Ok(Self {
             nvim_bin: PathBuf::from(bin),
@@ -122,6 +154,9 @@ impl NvimConfig {
             appname: NVIM_APPNAME.to_string(),
             state_root,
             swap_dir,
+            spell_dir,
+            runtime_user_dir: dirs.runtime_user_dir,
+            parsers_user_dir: dirs.parsers_user_dir,
             cwd,
             initial_cols: cols,
             initial_rows: rows,
@@ -1699,10 +1734,16 @@ fn value_is_true(value: Option<&Value>) -> bool {
 
 /// Spawns the captive Neovim with the given redraw handler.
 ///
-/// Launches `--embed --clean -u <init.lua> -i NONE -n`, pinning `NVIM_APPNAME`
+/// Launches `--embed --clean -u <init.lua> -i NONE` (no `-n` — see the NOTE in
+/// the body: `-n` would disable the swap files crash recovery rests on), pinning
+/// `NVIM_APPNAME`
 /// and the `XDG_*` dirs under `cfg.state_root`, exporting `WOLF_SWAP_DIR`
 /// (`cfg.swap_dir`, the durable per-project swap dir init.lua points `'directory'`
-/// at), and sets the child's working directory to `cfg.cwd` (so its `getcwd()`
+/// at), `WOLF_SPELL_DIR` (`cfg.spell_dir`, the durable spell dir init.lua points
+/// `'spellfile'` into), and — when `Some` — `WOLF_RUNTIME_USER_DIR`
+/// (`cfg.runtime_user_dir`, the user override dir init.lua sources last) and
+/// `WOLF_PARSERS_USER_DIR` (`cfg.parsers_user_dir`, the durable `:TSInstall`
+/// target). Sets the child's working directory to `cfg.cwd` (so its `getcwd()`
 /// starts there rather than inheriting the host process's cwd).
 ///
 /// The io-loop handle is MOVED into a supervisor task that awaits it and — unless
@@ -1724,8 +1765,20 @@ pub async fn spawn(
         std::fs::create_dir_all(d).map_err(NvimError::StateDir)?;
     }
     // The durable per-project swap dir must exist before nvim points `'directory'`
-    // at it; create it best-effort (a failure just means nvim falls back).
+    // at it. FATAL on failure: a missing 'directory' makes nvim silently fall back
+    // to its default swap location, degrading crash recovery with no visible error.
     std::fs::create_dir_all(&cfg.swap_dir).map_err(NvimError::StateDir)?;
+    // The durable spell dir must exist before init.lua points 'spellfile' into it:
+    // nvim never creates the parent of an EXPLICITLY set 'spellfile' (only of the
+    // runtimepath-derived default), so a missing parent makes `zg` fail with E484
+    // and drop the word silently. FATAL for the same reason as the swap dir.
+    std::fs::create_dir_all(&cfg.spell_dir).map_err(NvimError::StateDir)?;
+    // The durable user parser dir (:TSInstall's install_dir): init.lua gates the
+    // whole nvim-treesitter activation on an fs_stat of the exported path, so the
+    // dir must exist before launch. FATAL like the two above.
+    if let Some(d) = &cfg.parsers_user_dir {
+        std::fs::create_dir_all(d).map_err(NvimError::StateDir)?;
+    }
 
     // NOTE: the `-n` flag (no swap file) is DELIBERATELY omitted: it forces
     // `'updatecount' = 0`, which disables swap files entirely — but Wolf now relies
@@ -1745,9 +1798,16 @@ pub async fn spawn(
         .env("XDG_STATE_HOME", &state_home)
         .env("XDG_CACHE_HOME", &cache_home)
         .env("WOLF_SWAP_DIR", &cfg.swap_dir)
+        .env("WOLF_SPELL_DIR", &cfg.spell_dir)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if let Some(d) = &cfg.runtime_user_dir {
+        cmd.env("WOLF_RUNTIME_USER_DIR", d);
+    }
+    if let Some(d) = &cfg.parsers_user_dir {
+        cmd.env("WOLF_PARSERS_USER_DIR", d);
+    }
     cmd.current_dir(&cfg.cwd);
 
     let (nvim, io_handle, mut child) = new_child_cmd(&mut cmd, handler)

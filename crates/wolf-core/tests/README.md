@@ -26,6 +26,7 @@ It offers:
 - `config(cols, rows)` / `config_in(cwd, cols, rows)` build a `CoreConfig`. `config_in` is the single funnel that points `WOLF_STATE_DIR` at the process-global hermetic temp dir `hermetic_state_dir()` returns, set-if-absent, so a test managing its own state dir wins.
 - `wake_channel() -> (WakeFn, FlushWaiter)`, with `wait_for_flush`, `wait_for_initial_flush`, `wait_for_wake` and `drain`.
 - `start_core_sized`, `start_core_with_temp_md[_sized]`, `temp_md`, `temp_md_path`, `fresh_cwd`, and the input constructors.
+- `send_ex` types `:{cmd}<CR>` as keystrokes; `probe_values` evaluates expressions inside the live nvim by having it `writefile` them to a probe path and polling that file — the eval channel for a core that exposes no eval RPC. `resolve_test_runfile` resolves extra Bazel-staged runfiles beyond nvim + init.lua.
 
 **Gotchas**
 
@@ -391,6 +392,14 @@ Headless: `pane_status` is IO-free string and path math, so the target needs no 
 - Cases supply pre-aligned POSIX literals so `strip_prefix` lines up; the production caller canonicalizes cwd, home and buf_path itself.
 - `path == cwd` and `path == home` are pinned deliberately: neither may collapse to an empty relative string.
 
+#### `parsers_user.rs`
+
+Real Neovim plus the vendored nvim-treesitter and parsers trees (`//crates/wolf-core:parsers_user` stages both alongside the nvim runfiles; `WOLF_NVIM_BIN`, `no-sandbox`).
+
+**Covers** — the durable `:TSInstall` target: core creates `<state_dir>/parsers_user` and exports `WOLF_PARSERS_USER_DIR`; init.lua registers `:TSInstall`, lands the user dir on `runtimepath` strictly ahead of the bundled parsers tree (user parsers shadow bundled), and points nvim-treesitter's `install_dir` at it.
+
+**Gotchas** — Assertion order is load-bearing: `get_install_dir('parser')` mkdirs its target and appends to rtp itself, so the on-disk and rtp assertions must run before that probe. Both sides of the install-dir comparison are canonicalized (macOS `/var` vs `/private/var`; the Lua side is `vim.fs.normalize`d). The vendored trees resolve Bazel-first, devShell-second, and the test panics rather than skipping when neither resolves.
+
 #### `rank_bounded.rs`
 
 Headless: ranking reads only each entry's `display` and `mru_rank`, so the target needs no nvim or runfiles.
@@ -484,6 +493,14 @@ Real Neovim: needs `WOLF_NVIM_BIN`, the staged nvim runfiles, and `tags = ["no-s
 - The wedge races the input pump's coalesce-and-apply hop. If this turns flaky, widen the wedge sleep or the return bound — never tighten them, because a tight bound reintroduces the exact race the test exists to pin.
 - The wedge sleep is finite on purpose, so nvim recovers on its own and teardown does not block.
 
+#### `runtime_user.rs`
+
+Real Neovim (staged runfiles, wired `WOLF_NVIM_BIN`, `no-sandbox`).
+
+**Covers** — the `runtime_user/` override directory through a full core start: a fresh state dir is seeded with the `init_user.lua` template (greppable override sentence included); a pre-existing user file is sourced last — its `vim.o.linebreak = false` beats init.lua's wrap default — and is never rewritten; a non-empty dir without `init_user.lua` is left untouched; an erroring user file degrades to a `vim.notify` warning surfaced via `:messages` while startup succeeds with defaults intact. The headless seed-function contract lives in `state_unit.rs`.
+
+**Gotchas** — Every test mutates `WOLF_STATE_DIR`, so each holds the file-local `ENV_LOCK` for its whole body and sets its own tempdir; none `remove_var`s. The `linebreak` readback is the position half of the sourced-last claim: a `1` means the load point moved above Wolf's wrap defaults, not merely that the file failed to run.
+
 #### `save_open.rs`
 
 Real Neovim: needs `WOLF_NVIM_BIN`, the staged nvim runfiles, and `tags = ["no-sandbox"]`.
@@ -533,9 +550,25 @@ Spawns a real Neovim (staged nvim runfiles, wired `WOLF_NVIM_BIN`, `no-sandbox`)
 
 Spawns a real Neovim (staged runfiles, wired `WOLF_NVIM_BIN`, `no-sandbox`). The suite's smoke test — if this fails, nothing else in the real-nvim set is meaningful.
 
-**Covers** — attaching as an `ext_linegrid` UI: global grid 1 is sized to the requested attach, highlight defaults are populated by `default_colors_set`, `mode_infos` is non-empty after `mode_info_set`, and `shutdown` is clean.
+**Covers** — attaching as an `ext_linegrid` UI: global grid 1 is sized to the requested attach, highlight defaults are populated by `default_colors_set`, `mode_infos` is non-empty after `mode_info_set`, and `shutdown` is clean. Also that every start creates the durable user directories under `state_dir()` — `spell/`, `parsers_user/`, and a seeded `runtime_user/init_user.lua` — and exports each path into the captive nvim's environment, one assertion per creation and per export.
 
 **Gotchas** — Under `ext_multigrid` only grid 1 carries the requested attach size; window grids (id >= 2) take the window content area instead.
+
+#### `spell.rs`
+
+Real Neovim (staged runfiles, wired `WOLF_NVIM_BIN`, `no-sandbox`).
+
+**Covers** — the `WolfSpell` FileType autocmd: window-local `'spell'` on for markdown, text and gitcommit with `'spelllang'` pinned to `en` and `'spellfile'` at `<state_dir>/spell/en.utf-8.add`; and the design pin that `'spell'` ends up off when the same window switches from a prose file to a non-prose one — the case falsifies an always-on `"*"` callback (or anything leaving spell on globally), while the shipped explicit off is determinism hardening: nvim resets the window-local value from the window-global one on a buffer switch, so the off guarantee must not depend on that global staying off.
+
+**Gotchas** — Uses the shared hermetic state dir and never mutates env, so cases stay concurrent-safe; the durable and comma-escaping cases live in `spell_durable.rs`, which owns exclusive `WOLF_STATE_DIR` mutation. Option state is observed via `probe_values`; the `:e`-driven cases pair each spell assertion with a `&filetype` precondition so a failure is attributable to the prose set rather than to filetype detection (the markdown case opens the harness's own `.md` fixture instead).
+
+#### `spell_durable.rs`
+
+Real Neovim (staged runfiles, wired `WOLF_NVIM_BIN`, `no-sandbox`).
+
+**Covers** — durability of the user dictionary: a `zg`-added word lands in `<state_dir>/spell/en.utf-8.add` and reads back good (`spellbadword`) in a second core over the same state dir; and a state dir with a literal comma in its path still receives both the swap file (under `swap_dir_for(cwd)`) and the `zg` write — pinning init.lua's comma-escaping of `'directory'` and `'spellfile'`, each a comma-separated option list an unescaped comma silently splits.
+
+**Gotchas** — Both tests mutate `WOLF_STATE_DIR` under the file-local `ENV_LOCK`, held for the whole body and never removed. Each fixture's made-up token is its first word so the cursor already sits on it for a bare `zg`, and the buffer must be markdown so the `WolfSpell` autocmd has spell on — `zg` errors with spell off.
 
 #### `state_layout.rs`
 
@@ -552,6 +585,8 @@ It also covers `rebuild_layout_spec`, the wire document `wolf_rebuild_layout` de
 Headless — explicit `tempfile` dirs passed to `StateStore::open` / `load_state`; no nvim, no runfiles, no `no-sandbox` tag.
 
 **Covers** — the whole-tree `state` API: the `set_snapshot` -> `flush` -> `load_state` round-trip, an unchanged snapshot skipping a rewrite, a later snapshot fully replacing the prior tree, the silently-ignore matrix (absent, corrupt, wrong-shape, flat pre-tabs and unsupported-version files all load as `None` with the bytes left untouched), and `swap_dir_for` stability per canonical cwd.
+
+Also the durable user-directory surface: the `spell_dir`/`runtime_user_dir`/`parsers_user_dir` resolvers under a `WOLF_STATE_DIR` override, `seed_runtime_user_dir`'s one-time-seed contract (missing and empty dirs seeded, any non-empty dir left byte-identical even when `init_user.lua` is absent), and `NvimConfig::from_env` falling back to ephemeral `state_root` swap/spell dirs on an empty `DurableDirs`.
 
 **Gotchas** — Env-mutating cases take the file-local `ENV_LOCK`, since cargo runs this binary's tests concurrently in one process. `REWRITE_OBSERVE_DELAY` outlasts coarse filesystem mtime resolution — mtime is how the no-rewrite claim is observed.
 
@@ -579,7 +614,7 @@ Spawns a real Neovim (staged runfiles, wired `WOLF_NVIM_BIN`, `no-sandbox`). One
 
 Spawns a real Neovim (staged runfiles, wired `WOLF_NVIM_BIN`, `no-sandbox`).
 
-**Covers** — the tabpage lifecycle: `create_tabpage` / `set_current_tabpage` / `close_tabpage` / `cwd_for_tabpage` / `current_tabpage` plus `Snapshot.current_tabpage`, per-tabpage `:tcd` cwd including a non-current read, the shared buffer list, handle stability across a renumber, and the keystone that window handles survive a tabpage switch. Also that the shared captive config holds `showtabline` at `0` — at one tabpage, and across the creation of a second, where Neovim's own default would otherwise draw a tabline neither front-end paints and spend a row of the window grid on it.
+**Covers** — the tabpage lifecycle: `create_tabpage` / `set_current_tabpage` / `close_tabpage` / `cwd_for_tabpage` / `current_tabpage` plus `Snapshot.current_tabpage`, per-tabpage `:tcd` cwd including a non-current read, the shared buffer list, handle stability across a renumber, and the keystone that window handles survive a tabpage switch. Also that `showtabline` holds at `0` — at one tabpage, and across the creation of a second, where Neovim's default would otherwise draw a tabline neither front-end paints and spend a grid row on it.
 
 It also measures the tabpage scope of the snapshot maps, which is a property of nvim plus the captive `init.lua` rather than of any Rust type: `win_buffers` and `buffers` hold every window of the whole instance, while `windows` holds the current tabpage's alone. A front-end can therefore resolve a background tabpage's buffers by window handle with no RPC, which is what per-tab persistence rests on. The falsifier is `nvim_tabpage_list_wins(0)` in place of `nvim_list_wins()` in `wolf_setup_buffer_tracking`'s emit.
 

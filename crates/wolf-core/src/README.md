@@ -123,24 +123,25 @@ Reads the user-preferences file `wolf-config.yaml` and resolves the per-platform
 
 #### `state.rs`
 
-Persists the application-state tree to `state.json`, and renders a saved pane layout into the spec Neovim's rebuild helper decodes.
+Persists the application-state tree to `state.json` and renders a saved pane layout into the spec Neovim's rebuild helper decodes.
 
 **Public API**
 
-- `state_dir()` — `WOLF_STATE_DIR` overrides the per-platform default. `swap_dir_for(cwd)` derives a per-project swap directory under it, stable across respawns, so a fresh nvim finds a dead one's swap files.
-- `load_state(dir)` — read-only and infallible: an absent file is a silent `None`; any other failure warns and leaves the on-disk bytes intact.
-- `StateStore::open/state/set_snapshot/flush` — the front-end submits the whole tree; `set_snapshot` compares before swapping, so a redundant re-submit costs no disk write.
-- `rebuild_layout_spec(&PaneNode) -> String` — the spec `WolfCore::rebuild_layout` takes. Total: a non-finite weight is emitted as `0.0`, and the unreachable serialization error degrades to `"{}"`.
+- `state_dir()` — `WOLF_STATE_DIR` overrides the per-platform default; `swap_dir_for(cwd)` derives a stable per-project swap dir under it, so a fresh nvim finds a dead one's swaps.
+- `spell_dir()` / `runtime_user_dir()` / `parsers_user_dir()` — global (not per-project) subdirs of `state_dir()`, exported as matching `WOLF_*` env vars; `None` when unresolvable. `seed_runtime_user_dir(dir)` seeds the `INIT_USER_FILE_NAME` template into a missing or empty dir only; a non-empty dir is never touched, even without the template ([DECISIONS.md](../DECISIONS.md)).
+- `load_state(dir)` — read-only and infallible: an absent file is a silent `None`; any other failure warns and leaves the bytes intact.
+- `StateStore::open/state/set_snapshot/flush` — `set_snapshot` compares the submitted whole tree before swapping, so a redundant re-submit costs no disk write.
+- `rebuild_layout_spec(&PaneNode) -> String` — the spec `WolfCore::rebuild_layout` takes; total (non-finite weight becomes `0.0`, serialization error degrades to `"{}"`).
 
 **Decisions**
 
-- The spec is deliberately not `PaneNode`'s serde shape, and its leaves are emitted depth-first so a caller can zip them onto the handles `rebuild_layout` returns. See [DECISIONS.md](../DECISIONS.md); the shape is in [`runtime/nvim/README.md`](../../../runtime/nvim/README.md).
-- One `wolf-state-writer` thread owns every write, coalescing a burst then replacing the file by sibling-tmp plus rename, so a crash never leaves a partial file. A failed write still advances the written generation, so `flush` cannot hang.
-- `WindowState.tabs` has no `#[serde(default)]`, so a file without it fails to deserialize and is ignored rather than half-migrated.
+- The spec is deliberately not `PaneNode`'s serde shape; leaves emit depth-first to zip onto `rebuild_layout`'s returned handles ([DECISIONS.md](../DECISIONS.md); shape in [`runtime/nvim/README.md`](../../../runtime/nvim/README.md)).
+- One `wolf-state-writer` thread owns every write: coalesce, sibling-tmp, rename — no partial file after a crash. A failed write still advances the generation; `flush` cannot hang.
+- `WindowState.tabs` has no `#[serde(default)]`: a file without it fails deserialization and is ignored rather than half-migrated.
 
 **Gotchas**
 
-- Opening one directory twice in a process races two writer threads on the shared tmp name; clone one store instead. Across processes, last writer wins. Geometry is `f64` points in the front-end's coordinate space; non-positive means unset.
+- Opening one directory twice in-process races two writers on the tmp name — clone one store. Across processes, last writer wins. Geometry is front-end `f64` points; non-positive means unset.
 
 #### `layout.rs`
 

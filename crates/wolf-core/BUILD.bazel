@@ -1134,6 +1134,122 @@ rust_test(
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
+# Real-nvim SPELL test: the WolfSpell FileType autocmd (spell ON for
+# markdown/text/gitcommit, OFF otherwise) and the durable 'spellfile' under the
+# shared hermetic state dir. Mirrors `swap_recovery` in shape.
+rust_test(
+    name = "spell",
+    srcs = [
+        "tests/common/mod.rs",
+        "tests/spell.rs",
+    ],
+    crate_root = "tests/spell.rs",
+    # Spawning a real nvim child does not work under the macOS build sandbox, so
+    # run unsandboxed. `no-sandbox` (vs `local`) keeps Bazel test-result caching.
+    tags = ["no-sandbox"],
+    size = "small",
+    edition = "2021",
+    data = [
+        "//bazel/nvim:nvim_tree",
+        "//runtime/nvim:init.lua",
+    ],
+    env = {
+        "WOLF_NVIM_BIN": "$(rootpath //bazel/nvim:nvim_tree)/nvim/bin/nvim",
+        "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
+        "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
+    },
+    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+)
+
+# Real-nvim DURABLE SPELL DICTIONARY test: a zg'd word survives a full core
+# restart, and a comma'd state dir still gets a working swap 'directory' and
+# 'spellfile' (init.lua's comma-escaping). Env-mutating (exclusive
+# WOLF_STATE_DIR), serialized by a file-local lock.
+rust_test(
+    name = "spell_durable",
+    srcs = [
+        "tests/common/mod.rs",
+        "tests/spell_durable.rs",
+    ],
+    crate_root = "tests/spell_durable.rs",
+    # Spawning a real nvim child does not work under the macOS build sandbox, so
+    # run unsandboxed. `no-sandbox` (vs `local`) keeps Bazel test-result caching.
+    tags = ["no-sandbox"],
+    size = "small",
+    edition = "2021",
+    data = [
+        "//bazel/nvim:nvim_tree",
+        "//runtime/nvim:init.lua",
+    ],
+    env = {
+        "WOLF_NVIM_BIN": "$(rootpath //bazel/nvim:nvim_tree)/nvim/bin/nvim",
+        "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
+        "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
+    },
+    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+)
+
+# Real-nvim RUNTIME_USER test: one-time seeding of init_user.lua, its
+# after-every-default load position, the non-empty-dir hands-off contract, and
+# the warn-not-fail path for an erroring user file. Env-mutating (exclusive
+# WOLF_STATE_DIR), serialized by a file-local lock.
+rust_test(
+    name = "runtime_user",
+    srcs = [
+        "tests/common/mod.rs",
+        "tests/runtime_user.rs",
+    ],
+    crate_root = "tests/runtime_user.rs",
+    # Spawning a real nvim child does not work under the macOS build sandbox, so
+    # run unsandboxed. `no-sandbox` (vs `local`) keeps Bazel test-result caching.
+    tags = ["no-sandbox"],
+    size = "small",
+    edition = "2021",
+    data = [
+        "//bazel/nvim:nvim_tree",
+        "//runtime/nvim:init.lua",
+    ],
+    env = {
+        "WOLF_NVIM_BIN": "$(rootpath //bazel/nvim:nvim_tree)/nvim/bin/nvim",
+        "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
+        "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
+    },
+    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+)
+
+# Real-nvim PARSERS_USER test: core creates + exports the durable :TSInstall
+# target, init.lua activates the vendored nvim-treesitter (plugin file sourced,
+# install_dir wired, user dir first on rtp). Needs the staged nvim-treesitter +
+# parsers trees (mirrors //crates/wolf-ffi:treesitter_highlight). Env-mutating,
+# serialized by a file-local lock.
+rust_test(
+    name = "parsers_user",
+    srcs = [
+        "tests/common/mod.rs",
+        "tests/parsers_user.rs",
+    ],
+    crate_root = "tests/parsers_user.rs",
+    # Spawning a real nvim child does not work under the macOS build sandbox, so
+    # run unsandboxed. `no-sandbox` (vs `local`) keeps Bazel test-result caching.
+    tags = ["no-sandbox"],
+    size = "small",
+    edition = "2021",
+    data = [
+        "//bazel/nvim:nvim_tree",
+        "//bazel/nvim-treesitter:nvim_treesitter_tree",
+        "//bazel/treesitter-parsers:parsers_tree",
+        "//runtime/nvim:init.lua",
+    ],
+    env = {
+        "WOLF_NVIM_BIN": "$(rootpath //bazel/nvim:nvim_tree)/nvim/bin/nvim",
+        "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
+        "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
+        "WOLF_TEST_NVIM_TREESITTER_DIR": "$(rootpath //bazel/nvim-treesitter:nvim_treesitter_tree)",
+        "WOLF_TEST_PARSERS_DIR": "$(rootpath //bazel/treesitter-parsers:parsers_tree)",
+    },
+    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+)
+
 # Real-nvim SWAP-BASED RECOVERY test (plan §9 cases c + d): the recovery-aware
 # `SwapExists` autocmd silently recovers a DEAD owner's unsaved edit
 # (swapchoice "r") and edits the clean on-disk copy when the owner is still ALIVE
@@ -1147,6 +1263,9 @@ rust_test(
         "tests/swap_recovery.rs",
     ],
     crate_root = "tests/swap_recovery.rs",
+    # The stale-swap case needs a cwd under $HOME (nvim home_replace's the swap
+    # owner path), and Bazel strips HOME from test envs unless inherited.
+    env_inherit = ["HOME"],
     # Spawning a real nvim child does not work under the macOS build sandbox, so
     # run unsandboxed. `no-sandbox` (vs `local`) keeps Bazel test-result caching.
     tags = ["no-sandbox"],

@@ -3,7 +3,10 @@
 -- This file is version-controlled in the Wolf repo and loaded by the captive
 -- Neovim that wolf-core spawns, via:
 --
---     nvim --embed --clean -u runtime/nvim/init.lua -i NONE -n
+--     nvim --embed --clean -u runtime/nvim/init.lua -i NONE
+--
+-- (`-n` is deliberately absent: it would zero 'updatecount' and disable the
+-- swap files crash recovery rests on -- see the swap block below.)
 --
 -- `--clean` already skips the user's config/plugins/shada; we further pin the
 -- XDG_* dirs and NVIM_APPNAME away from the user's from the spawning side. The
@@ -27,6 +30,17 @@
 
 local opt = vim.opt
 
+-- 'directory' and 'spellfile' are comma-separated option LISTS: a literal comma
+-- in a path silently splits the value into two bogus, nonexistent entries and
+-- the option quietly reverts to nvim's default -- a failure that looks like
+-- success from inside nvim. Escape commas before assigning either. Spaces need
+-- no escaping through the Lua option API (a macOS "Application Support" path is
+-- fine). The parentheses discard gsub's substitution count, which would
+-- otherwise ride along as a second value.
+local function escape_option_path(p)
+	return (p:gsub(",", "\\,"))
+end
+
 -- Swap files are ON (crash-recovery of unsaved edits). They live in a DURABLE,
 -- Wolf-owned, per-project swap directory (WOLF_SWAP_DIR, resolved core-side like
 -- state_dir() and STABLE across respawns of the same project) rather than next to
@@ -35,10 +49,13 @@ local opt = vim.opt
 -- files with the same basename in different dirs never collide) and DROPS the
 -- default leading "." entry (which would otherwise put a `.swp` next to the file).
 -- Keep nvim's default updatecount/updatetime.
+--
+-- ORDERING: escape the path FIRST, then append the trailing "//" -- the "//" is
+-- nvim's marker, not part of the path, and must stay unescaped.
 opt.swapfile = true
 local swap_dir = vim.env.WOLF_SWAP_DIR
 if swap_dir ~= nil and swap_dir ~= "" then
-	opt.directory = swap_dir .. "//"
+	opt.directory = escape_option_path(swap_dir) .. "//"
 end
 
 -- Recovery-aware swap policy: a SwapExists must NEVER surface the blocking E325
@@ -169,6 +186,91 @@ opt.smoothscroll = true
 -- Treat opened files as markdown by default (Wolf is a Markdown editor).
 vim.filetype.add({ extension = { md = "markdown" } })
 
+-- Spell checking for PROSE filetypes only (markdown / text / gitcommit).
+--
+-- Buffer-local, from a FileType autocmd, rather than a global `spell`: a global
+-- one would also underline the terminal drawer and every non-prose buffer.
+--
+-- ORDERING: this MUST be registered BEFORE `vim.cmd("syntax on")` below. Measured
+-- against the pinned nvim, a FileType autocmd registered AFTER `syntax on` is
+-- never reached for `markdown` when the buffer arrives as a STARTUP FILE
+-- ARGUMENT -- the chain stops at the `syntaxset` handler `syntax on` installs, so
+-- `text` and `gitcommit` still fire but `markdown` silently does not. Registering
+-- first makes all three fire on every open path.
+--
+-- The pattern is "*" with an EXPLICIT OFF for non-prose filetypes, not a
+-- prose-only pattern list. That is determinism hardening, not a leak fix:
+-- measured on the pinned nvim, `vim.opt_local.spell` sets only the window-LOCAL
+-- value, which nvim resets from the window-global value (off) on a buffer
+-- switch, so a prose-only autocmd leaves a code file spell-off too. The
+-- explicit off guarantees that outcome regardless of the window-global value --
+-- it holds even if some future code sets `vim.o.spell` or `:set spell`, where
+-- the reset-from-global behavior would turn every buffer switch spell-ON.
+--
+-- `spelllang` is pinned to "en" rather than left at its default: the bundled
+-- Neovim runtime ships exactly ONE spell file
+-- (share/nvim/runtime/spell/en.utf-8.spl), and a language with no .spl anywhere
+-- on runtimepath makes the runtime `spellfile.lua` plugin open a BLOCKING
+-- "download it?" prompt. Wolf attaches with `ext_messages` (which forces
+-- cmdheight = 0), so such a prompt has nowhere to draw and would wedge the UI.
+--
+-- SPELL_LANG is shared by two consumers: the `spelllang` set in the callback
+-- below, and the user-dictionary filename in the `spellfile` block that follows.
+-- They MUST agree -- see that block for why. The reason `en` specifically is
+-- pinned is the paragraph above; do not restate it.
+local SPELL_LANG = "en"
+local spell_prose = { markdown = true, text = true, gitcommit = true }
+local spell_group = vim.api.nvim_create_augroup("WolfSpell", { clear = true })
+vim.api.nvim_create_autocmd("FileType", {
+	group = spell_group,
+	pattern = "*",
+	callback = function(args)
+		local prose = spell_prose[args.match] == true
+		vim.opt_local.spell = prose
+		if prose then
+			vim.opt_local.spelllang = SPELL_LANG
+		end
+	end,
+})
+
+-- The DURABLE user spell dictionary: `zg` / `zw` write to WOLF_SPELL_DIR (a
+-- global, Wolf-owned dir resolved core-side from state_dir()), so a word the
+-- user teaches Wolf survives a restart.
+--
+-- Left unset, nvim derives 'spellfile' from the first writable runtimepath
+-- entry, which lands under the XDG_DATA_HOME that wolf-core pins to a private
+-- temp dir for hermeticity -- so the word would die with the process.
+--
+-- GLOBAL (vim.opt), once, at init -- NOT buffer-local and NOT from a new
+-- FileType autocmd. 'spellfile' is local-to-buffer, but the global value seeds
+-- every new buffer, verified on all three open paths (startup file argument,
+-- `:edit`, `:enew` + `set ft=markdown`). The tempting "simplification" is to
+-- move this into a FileType autocmd appended at the end of this file: that
+-- FAILS for a markdown startup file argument, for exactly the `syntax on`
+-- ordering reason documented above. If buffer-local is ever genuinely needed,
+-- it has to go inside the EXISTING WolfSpell callback -- do not register a new
+-- autocmd for it.
+--
+-- Core created the dir before launch (a FATAL create_dir_all in spawn): nvim
+-- creates the parent of the runtimepath-derived DEFAULT spellfile but never of
+-- an explicitly set one, so a missing parent makes `zg` fail with E484 and drop
+-- the word silently.
+--
+-- Commas are escaped because 'spellfile' is a comma-separated LIST -- see
+-- escape_option_path above; the swap 'directory' block carries the same guard.
+--
+-- The filename tracks SPELL_LANG because nvim derives the dictionary name from
+-- 'spelllang' and 'encoding': with spelllang = "en" and encoding = "utf-8",
+-- `zg` writes <lang>.utf-8.add. A filename that disagreed with 'spelllang'
+-- would make `zg` write a file nvim never reads back.
+--
+-- An absent or empty WOLF_SPELL_DIR is a strict no-op leaving 'spellfile' alone
+-- (nvim's default behavior), matching the swap block's shape above.
+local spell_dir = vim.env.WOLF_SPELL_DIR
+if spell_dir ~= nil and spell_dir ~= "" then
+	opt.spellfile = escape_option_path(spell_dir) .. "/" .. SPELL_LANG .. ".utf-8.add"
+end
+
 -- Enable built-in syntax highlighting so the grid carries varied hl_ids. It is the
 -- highlight source for every buffer treesitter does NOT attach to, and the
 -- fallback where an attach fails.
@@ -197,8 +299,11 @@ vim.cmd("syntax on")
 -- ABSENT, so this whole block is a strict NO-OP: no runtimepath change, no error.
 -- We self-locate init.lua's own directory (rather than assume a fixed path), look
 -- for the sibling `orlando/`, and only if it exists prepend it to runtimepath and
--- deterministically source its plugin file — necessary because `--clean` does not
--- scan user plugin dirs, so a plain rtp prepend alone would not auto-source it.
+-- deterministically source its plugin file. The explicit source makes orlando's
+-- definitions exist DURING init, not merely eventually: measured on the pinned
+-- nvim, `--clean` keeps 'loadplugins' on, so an rtp-prepended tree's plugin/*.lua
+-- also load in the startup plugin phase AFTER this file finishes — see the
+-- matching note in the nvim-treesitter parsers_user block below.
 -- orlando itself guards on vim.g.loaded_orlando, so the explicit source is safe.
 -- orlando's wrap_indent also sets wrap/linebreak/breakindent; additive & harmless
 -- with the wrap/linebreak/smoothscroll set above.
@@ -282,8 +387,9 @@ end
 -- `vim.env` is a table view over getenv/setenv and is UNAFFECTED by `--clean`,
 -- which suppresses user config, plugins and shada but not the process
 -- environment (this file already relies on that at `WOLF_SWAP_DIR` above). The
--- captive nvim inherits it: `nvim.rs` overrides six variables on the child and
--- calls no `env_clear`, and `cage` clears nothing either.
+-- captive nvim inherits it: `nvim.rs` overrides its NVIM_APPNAME / XDG_* /
+-- WOLF_* variables on the child and calls no `env_clear`, and `cage` clears
+-- nothing either.
 --
 -- A resolved path that has VANISHED falls through to nil rather than being
 -- prepended, so a store path garbage-collected under a long-lived shell degrades
@@ -293,11 +399,14 @@ end
 -- `vim.treesitter.start` finds highlights + injections queries), then prepend the
 -- parsers tree (so nvim resolves <rtp>/parser/<lang>.so) and the inert textobjects
 -- tree, each only if it independently resolves. markdown / markdown_inline parsers
--- already ship with nvim, so they are NOT re-vendored. We do NOT call
--- nvim-treesitter's heavy `.setup{}` (its :TSInstall machinery is
--- non-deterministic under --clean); the vendored plugin is used purely as an
--- on-rtp query provider. A FileType=markdown autocmd runs `vim.treesitter.start`
--- on each markdown buffer (wrapped in pcall so a query-loader incompatibility
+-- already ship with nvim, so they are NOT re-vendored. The vendored plugin is
+-- both a query provider AND — when WOLF_PARSERS_USER_DIR resolves — a real
+-- plugin: its plugin file is sourced (registering :TSInstall) and `setup()`
+-- receives the durable install_dir, so user-compiled parsers land under
+-- state_dir() rather than dying with the hermetic XDG root; see the
+-- parsers_user block inside the gate. A FileType=markdown autocmd runs
+-- `vim.treesitter.start` on each markdown buffer (wrapped in pcall so a
+-- query-loader incompatibility
 -- degrades to syntax-on rather than raising). Base markdown highlighting is NOT
 -- what that buys — nvim starts treesitter on such a buffer by itself, as above.
 -- What the autocmd and the two rtp entries buy is routing a fenced block through
@@ -325,6 +434,44 @@ if nvim_treesitter_dir then
 	local textobjects_dir = this_dir .. "/nvim-treesitter-textobjects"
 	if uv.fs_stat(textobjects_dir) then
 		vim.opt.runtimepath:prepend(textobjects_dir)
+	end
+
+	-- The durable user parser dir (WOLF_PARSERS_USER_DIR, created core-side in
+	-- spawn): activate the vendored nvim-treesitter as a REAL plugin so
+	-- :TSInstall compiles into it, and give user parsers precedence over the
+	-- bundled parsers tree.
+	--
+	-- Placement inside this gate is deliberate: the `require` needs the vendored
+	-- tree's lua/ on runtimepath, which the gate's prepend above provides.
+	--
+	-- The explicit `runtime` call sources plugin/nvim-treesitter.lua, which is
+	-- what registers :TSInstall / :TSUpdate / :TSUninstall / :TSLog (setup()
+	-- does not). MEASURED on the pinned nvim: `--clean` keeps 'loadplugins' on,
+	-- so an rtp-prepended tree's plugin/*.lua also load in the startup plugin
+	-- phase after this file -- the explicit call makes registration happen HERE,
+	-- deterministically, independent of that phase (the plugin guards on
+	-- vim.g.loaded_nvim_treesitter, and all its requires are lazy, so sourcing
+	-- is cheap and the later phase is a no-op for it). Only
+	-- plugin/nvim-treesitter.lua is sourced here: the sibling
+	-- query_predicates.lua registers predicates unused by every bundled language.
+	--
+	-- `setup({ install_dir = ... })` is a pure config merge (no install jobs, no
+	-- network), but it EAGERLY prepends install_dir to rtp by raw string concat.
+	-- Hence the ORDER: setup first, then `vim.opt.runtimepath:prepend` -- the
+	-- option-list prepend dedupes, so the entry lands exactly once and at the
+	-- front whether or not the pcall'd setup succeeded. The pcall degrades a
+	-- version incompatibility to "no :TSInstall" instead of a startup error.
+	--
+	-- The prepend puts the user dir AHEAD of the bundled parsers_dir prepended
+	-- above, so a user-installed parser deliberately shadows the bundled one for
+	-- the same language.
+	local parsers_user_dir = vim.env.WOLF_PARSERS_USER_DIR
+	if parsers_user_dir ~= nil and parsers_user_dir ~= "" and uv.fs_stat(parsers_user_dir) then
+		vim.cmd.runtime("plugin/nvim-treesitter.lua")
+		pcall(function()
+			require("nvim-treesitter").setup({ install_dir = parsers_user_dir })
+		end)
+		vim.opt.runtimepath:prepend(parsers_user_dir)
 	end
 
 	-- Start treesitter on a buffer, tolerating a query-loader incompatibility: a
@@ -2626,4 +2773,22 @@ function _G.wolf_setup_preview(chan)
 	emit_previews()
 	-- ...and so the startup buffer's cursor is known without waiting for a move.
 	emit_cursor(vim.api.nvim_get_current_buf())
+end
+
+-- The user's own init_user.lua (WOLF_RUNTIME_USER_DIR, seeded once core-side).
+--
+-- MUST remain the LAST thing in this file: the file is the user's override
+-- point, and "loads last" is the contract that makes anything in it win over
+-- every Wolf default above. An error in the user's file is theirs, not Wolf's:
+-- the pcall keeps startup alive and the vim.notify surfaces a WARN naming
+-- init_user.lua in :messages (the notify text must contain that literal name).
+local runtime_user_dir = vim.env.WOLF_RUNTIME_USER_DIR
+if runtime_user_dir ~= nil and runtime_user_dir ~= "" then
+	local user_init = runtime_user_dir .. "/init_user.lua"
+	if uv and uv.fs_stat(user_init) then
+		local ok, err = pcall(dofile, user_init)
+		if not ok then
+			vim.notify("Wolf: error in init_user.lua: " .. tostring(err), vim.log.levels.WARN)
+		end
+	end
 end

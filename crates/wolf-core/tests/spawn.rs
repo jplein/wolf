@@ -1,5 +1,7 @@
 //! Integration test: spawn a real nvim, attach as an ext_linegrid UI, and verify
-//! the initial render-state snapshot is well-formed. Requires `WOLF_NVIM_BIN`.
+//! the initial render-state snapshot is well-formed — plus that every core start
+//! creates the durable user directories and exports their `WOLF_*` env vars.
+//! Requires `WOLF_NVIM_BIN`.
 
 mod common;
 
@@ -41,5 +43,69 @@ fn spawn_and_attach() {
     );
 
     // Clean shutdown must succeed.
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// Every core start must create the durable user-writeable directories under
+/// `state_dir()` and export their paths into the captive nvim's environment.
+/// One assertion per create/seed call and one per `.env(…)` export, so
+/// disabling any single one fails exactly one assertion.
+///
+/// Uses the SHARED hermetic state dir (`common::hermetic_state_dir()`, the same
+/// dir the core resolves via `state_dir()`), so no env mutation is needed and
+/// the test stays concurrent-safe within this binary.
+#[test]
+fn durable_dirs_created_and_exported() {
+    let (core, _waiter) = common::start_core_sized(DEFAULT_COLS, DEFAULT_ROWS);
+    let state = common::hermetic_state_dir();
+
+    // On-disk halves — each pins one create_dir_all / seed call in core.
+    assert!(
+        state.join("spell").is_dir(),
+        "spawn must create <state_dir>/spell before launch: nvim never creates the parent \
+         of an explicit 'spellfile', so a missing dir makes zg fail silently (E484)"
+    );
+    assert!(
+        state.join("parsers_user").is_dir(),
+        "spawn must create <state_dir>/parsers_user before launch (it is the durable \
+         :TSInstall target)"
+    );
+    assert!(
+        state.join("runtime_user").join("init_user.lua").is_file(),
+        "WolfCore::start must seed <state_dir>/runtime_user with init_user.lua when the \
+         dir is missing or empty (a missing file means the seed call in api.rs is gone)"
+    );
+
+    // In-nvim halves — each pins one `.env(…)` export in spawn. `$VAR` reads the
+    // CHILD's environment, so an empty line means that export is gone even
+    // though the dir above exists.
+    let probe_dir = tempfile::tempdir().expect("create probe dir");
+    let vals = common::probe_values(
+        &core,
+        &[
+            "$WOLF_SPELL_DIR",
+            "$WOLF_RUNTIME_USER_DIR",
+            "$WOLF_PARSERS_USER_DIR",
+        ],
+        &probe_dir.path().join("env.txt"),
+    );
+    assert_eq!(
+        vals[0],
+        state.join("spell").to_string_lossy(),
+        "WOLF_SPELL_DIR must be exported to the captive nvim and point at <state_dir>/spell"
+    );
+    assert_eq!(
+        vals[1],
+        state.join("runtime_user").to_string_lossy(),
+        "WOLF_RUNTIME_USER_DIR must be exported to the captive nvim and point at \
+         <state_dir>/runtime_user"
+    );
+    assert_eq!(
+        vals[2],
+        state.join("parsers_user").to_string_lossy(),
+        "WOLF_PARSERS_USER_DIR must be exported to the captive nvim and point at \
+         <state_dir>/parsers_user"
+    );
+
     core.shutdown().expect("shutdown should be Ok");
 }

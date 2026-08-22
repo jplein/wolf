@@ -51,6 +51,12 @@ The last two are the pattern to follow when adding a capability: prefer a subpro
 - **stderr is captured, not discarded.** It is piped and drained to the log by a background `BufReader::lines()` task. Redirecting it to `/dev/null` would hide a crashing nvim's diagnostics, and not draining it would deadlock on a full pipe buffer.
 - **Swap files stay enabled.** The launch deliberately does not pass `-n`, which would zero `updatecount` and disable swap. Swap files are what recover unsaved edits after a crash restart.
 
+## The bundle is Wolf's; `state_dir()` is the user's
+
+The embedded runtime — nvim, `init.lua`, the vendored plugins and parsers — is Wolf's and is replaced wholesale on upgrade; nothing under it is user-writeable. Everything under `state_dir()` is the user's, and Wolf never modifies it, with one exception: `seed_runtime_user_dir` writes the `init_user.lua` template into a missing or empty `runtime_user/`, and never again once the directory has anything in it — even when the template file itself is absent, because a non-empty directory is the user's and a deleted template may be a decision.
+
+Core resolves the durable directories (`swap`, `spell`, `runtime_user`, `parsers_user`) and hands them to `init.lua` as `WOLF_*` environment variables, so `init.lua` needs no platform knowledge. Seeding happens in `WolfCore::start`, not in `spawn`, so the crash-respawn path carries no new failure surface; a seed failure warns and startup continues.
+
 ## Liveness and restart
 
 Core keeps a lock-free `Arc<AtomicU8>` liveness cell (`Alive` / `NotResponding` / `Dead`) alongside a clone of the redraw wake, mutated only through [`liveness`](src/README.md)'s transition helpers so each real change fires the wake exactly once.

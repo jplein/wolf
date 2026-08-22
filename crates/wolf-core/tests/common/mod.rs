@@ -25,7 +25,7 @@
 
 #![allow(dead_code)] // Not every helper is used by every test binary.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::sync::{mpsc, Arc, OnceLock};
@@ -501,4 +501,72 @@ pub fn type_str(core: &WolfCore, s: &str) {
     for c in s.chars() {
         core.send_input(ch(c));
     }
+}
+
+// --- Ex-command + file-probe observation channel ---------------------------
+
+/// Types `:{cmd}<CR>` as keystrokes: `:` enters command-line mode, `cmd` is
+/// typed literally, Enter executes it. `cmd` must NOT include the leading `:`.
+///
+/// Promoted from the identical local helper in `messages.rs` (`swap_recovery.rs`
+/// carries the same shape as `ex_command`), so probe-driven tests share one
+/// definition.
+pub fn send_ex(core: &WolfCore, cmd: &str) {
+    core.send_input(ch(':'));
+    type_str(core, cmd);
+    core.send_input(key(Key::Enter));
+}
+
+/// Gap between polls of the probe file [`probe_values`] waits on.
+const PROBE_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+/// Evaluates `exprs` INSIDE the live nvim and returns their values as strings,
+/// one per expression, in order.
+///
+/// The observation channel is a file probe: core exposes no eval RPC, so this
+/// types `:call writefile([<exprs>], '<probe>')` through the input pump and
+/// polls `probe` until it holds exactly one line per expression (50 ms cadence,
+/// [`FLUSH_TIMEOUT`] budget). Because the writefile command is queued BEHIND any
+/// keys the caller sent earlier, the values observe nvim's state AFTER those
+/// keys were processed — no separate settle is needed.
+///
+/// Expressions are spliced into the command line verbatim, so they must be
+/// cmdline-safe (each must evaluate to a string or number; keep quoting simple —
+/// a double-quoted `luaeval("…")` may carry single quotes inside). `probe` is
+/// single-quoted, so its path must not contain a single quote (temp paths do
+/// not). A timeout means the command never wrote the file — usually because one
+/// expression raised — and the panic names the exact command.
+pub fn probe_values(core: &WolfCore, exprs: &[&str], probe: &Path) -> Vec<String> {
+    // A stale probe from an earlier call at the same path would satisfy the poll
+    // with old values; remove it first so only THIS command's write can.
+    let _ = std::fs::remove_file(probe);
+    let cmd = format!("call writefile([{}], '{}')", exprs.join(", "), probe.display());
+    send_ex(core, &cmd);
+
+    let deadline = Instant::now() + FLUSH_TIMEOUT;
+    loop {
+        if let Ok(text) = std::fs::read_to_string(probe) {
+            let lines: Vec<String> = text.lines().map(String::from).collect();
+            // writefile writes one line per list item; fewer means mid-write.
+            if lines.len() == exprs.len() {
+                return lines;
+            }
+        }
+        if Instant::now() >= deadline {
+            panic!(
+                "timed out after {FLUSH_TIMEOUT:?} waiting for nvim to write the probe file {} \
+                 (command `:{cmd}`) — a timeout usually means one of the probed expressions \
+                 raised, so writefile never ran",
+                probe.display()
+            );
+        }
+        std::thread::sleep(PROBE_POLL_INTERVAL);
+    }
+}
+
+/// Public wrapper over the private [`resolve_runfile`], for test binaries that
+/// stage EXTRA runfiles beyond nvim + init.lua (e.g. the vendored
+/// nvim-treesitter and parsers trees `parsers_user.rs` resolves Bazel-first).
+pub fn resolve_test_runfile(env_key: &str) -> Option<PathBuf> {
+    resolve_runfile(env_key)
 }

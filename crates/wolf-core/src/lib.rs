@@ -116,7 +116,8 @@ pub use render::{
 pub use search::{SearchMatch, SearchOptions, SearchReadGuard, SearchSession};
 pub use search_tree::{context_window, file_label, project, ContextWindow, SearchFileGroup};
 pub use state::{
-    load_state, state_dir, PaneNode, PaneOrientation, StateStore, TabState, WindowState, WolfState,
+    load_state, parsers_user_dir, runtime_user_dir, seed_runtime_user_dir, spell_dir, state_dir,
+    PaneNode, PaneOrientation, StateStore, TabState, WindowState, WolfState, INIT_USER_FILE_NAME,
 };
 pub use tree::{
     ancestors_to_reveal, children_of, node_rel_path, rel_path_for, TreeIndex, TreeIndexCache,

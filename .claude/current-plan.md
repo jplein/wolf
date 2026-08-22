@@ -1,389 +1,248 @@
-# Plan: GNOME-menu appearance for the four wolf-gnome overlays
+# Plan: user-writeable state directories (spell, runtime_user, parsers_user)
 
 ## Status
 
-COMPLETE. All suites green, three falsifiers captured red, docs corrected, lint clean.
-
-## CORRECTION to this plan's own record
-
-The claim recorded below — "Had the typo taken the whole block, F1 would have read `(29,29,32)` and
-gone green like F2" — was true of the PRE-D2 test and is false of the shipped one. Assertion 4 now
-carries the `!= PICKOVER_UNSTYLED_FILL` inequality, so a whole-block CSS failure reading `(29,29,32)`
-reddens rather than passing. The technical writer caught this when it was handed to it as fact and
-refused to write it into `tests/README.md`. The live gap it wrote instead is the real one: assertion 4
-reads the fill empirically and only rules colours OUT, so a stylesheet resolving to some fourth
-opaque colour passes, and the one inequality that discriminates is pinned to a libadwaita literal
-that silently degrades to a no-op if a release re-tints `@view_bg_color`.
-
-## FINAL STATE — seven modified files
-
-`.claude/current-plan.md`, `crates/wolf-gnome/DECISIONS.md`, `crates/wolf-gnome/src/README.md`,
-`crates/wolf-gnome/src/overlay_style.rs`, `crates/wolf-gnome/src/picker.rs`,
-`crates/wolf-gnome/tests/README.md`, `crates/wolf-gnome/tests/smoke_headless.rs`. No untracked files,
-no falsifier leftovers (checked for `*.orig`, `*.bak`, `*.rej`, `*~`).
-
-| gate | result |
-| --- | --- |
-| `cargo fmt --all -- --check` | pass |
-| `cargo clippy --workspace --all-targets -- -D warnings` | pass |
-| `cargo build --workspace --all-targets` | pass |
-| `prettier --check "**/*.md"` | pass, repo-wide |
-| `./tools/lint/markdown_check.sh` on all three edited docs | **no findings**; the only warnings are `[big-file]` and the `pane_view.rs` / `tabs_ui.rs` entry budgets, all proven pre-existing by extracting each file at `HEAD` and diffing the finding sets |
-| `cargo test -p wolf-gnome --test smoke_headless` | **70 passed, 0 failed, 3 ignored** |
-| `cargo test --workspace` | **exit 0** — wolf-core lib 237, wolf-gnome lib 380, smoke 70, doctests 0 |
-
-## FAILURE EVIDENCE — three falsifiers, all captured red
-
-| falsifier | edit | result |
-| --- | --- | --- |
-| **F2** | body of `overlay_style::apply` emptied | RED, assertion 4's `PICKOVER_UNSTYLED_FILL`, `left: (29,29,32) right: (29,29,32)` |
-| **F3** | `padding: 8px 10px` removed from `list > row` | RED, assertion 9, run of **22** against the 28 floor; assertions 1–8 green |
-| **P1b** | the paint-order falsifier from the test's own doc | RED, assertion 4's absence half, `left: 32000 right: 0` |
-
-Every source file restored and confirmed by sha256, not by eye.
-
-## Process findings worth carrying forward
-
-- **`cp -p` is an unsafe revert.** A preserved mtime lets cargo skip the rebuild and re-run the stale
-  binary; the coder hit a false red this way and caught it by comparing source mtime against
-  `target/debug/deps/*.rmeta`. Restore with plain `cp`, or `touch` after, and look for a `Compiling`
-  line before believing a falsifier result. A checksum proves the bytes, not the binary under test.
-- **`git diff --stat HEAD -- 'crates/*/src'` is a false-empty pathspec** — it reports nothing even
-  with files under it modified. Use `crates/wolf-gnome/src` or `'crates/*/src/*'`.
-- **`RUSTDOCFLAGS="-D warnings" cargo doc -p wolf-gnome` is red crate-wide and always was** — 111
-  errors, 105 `private_intra_doc_links` plus 6 `crate::liveness_ui` ambiguities. Proven pre-existing
-  by stashing only `overlay_style.rs` and diffing the two error sets. Not this change's to fix.
-- **`crates/wolf-gnome/tests/README.md` is 1.66x the size ceiling and grows every increment.** A
-  structural split is its own task.
-
-## Still unproven, recorded in `tests/README.md`
-
-`@popover_fg_color`, the radius, the shadow, the box padding and the entry/label margin reach no
-assertion; light mode reaches no pixel path at all; the `viewport` rule changes no pixel under dark
-(measured byte-identical captures) and is kept for the light path. Pre-existing and out of scope:
-assertion 7's ink floor still has no captured red.
-
-## FULL GATE — GREEN
-
-| step | result |
-| --- | --- |
-| `cargo fmt --all -- --check` | pass (the test file's two hunks are fixed) |
-| `prettier --check "**/*.md"` | pass |
-| `cargo clippy --workspace --all-targets -- -D warnings` | pass |
-| `cargo build --workspace --all-targets` | pass |
-| target smoke alone | **ok, 1 passed**, 12.26 s |
-| `cargo test -p wolf-gnome --test smoke_headless` | **70 passed, 0 failed, 3 ignored** — matches `tests/README.md` |
-| `cargo test --workspace` | **exit 0** — wolf-core lib 237, wolf-gnome lib 380, smoke 70, doctests 0 |
-
-## FAILURE EVIDENCE — fresh, against the FINAL test
-
-- **F2** (body of `overlay_style::apply` emptied) — RED at `smoke_headless.rs:27496`, assertion 4's
-  `PICKOVER_UNSTYLED_FILL` line, `left: (29,29,32) right: (29,29,32)`.
-- **P1b** (the falsifier written verbatim in the test's own doc) — RED at `smoke_headless.rs:27465`,
-  assertion 4's absence half, `left: 32000 right: 0`.
-
-Both files restored by byte copy and confirmed by sha256, not by eye. Target smoke re-run green after
-the reverts.
-
-## MEASUREMENTS — both open questions answered, one prediction upheld
-
-- **Open question 4 answered: the box renders exactly 600 × 400.** `box_left = 465`, `box_right =
-  1065`; `box_top = 71`, `box_bottom = 471`. `padding: 6px` does NOT fold outward — it eats the
-  content area, which measures 588 × 388, and the entry's focus-ring bbox confirms the 6 px inset on
-  both sides. The plan's "may render 612 × 412" is withdrawn.
-- **Open question 3 measured, prediction holds.** Row height is **34 px** shipped and **22 px** with
-  the `list > row` padding removed (delta 12, not 16 — Adwaita's own row padding is 2 px per side).
-  Against the measured 348 px viewport that is capacity 10 vs 15: exactly a third fewer, as predicted.
-  The heights and the viewport are directly measured; the two counts are a derivation assuming rows
-  abut.
-- **D7 changes no pixel — measured, not inferred.** Captures with and without the `viewport` rule are
-  byte-identical, which also shows the capture is byte-reproducible across runs on this host.
-
-## Coder findings worth keeping
-
-- **`git diff --stat HEAD -- 'crates/*/src'` is a false-empty check** — it prints nothing even with
-  `crates/wolf-gnome/src/overlay_style.rs` modified. Earlier passes used it as revert evidence; the
-  checksums are what actually carried that claim. Use `crates/wolf-gnome/src` or `'crates/*/src/*'`.
-- **`RUSTDOCFLAGS="-D warnings" cargo doc -p wolf-gnome --no-deps` is red crate-wide and always was**:
-  111 errors, 105 `private_intra_doc_links` plus 6 `crate::liveness_ui` ambiguities. Proven
-  pre-existing by stashing only `overlay_style.rs` and diffing the two error sets — identical, and no
-  error mentions `overlay_style`. D3's specific hazard does not fire. Not a blocker and not this
-  change's to fix; recorded because the reviewer expected green.
-
-**D8 — the line-height half of the feature gets an assertion.** The user asked for two things and
-only the background half is discriminated. The coder measured a falsifiable observable at zero extra
-cost: the selected row's highlight is 34 px shipped, 22 px with the row padding removed. A floor
-between the two reddens on the feature's removal. Not scope creep — it covers the requested feature.
-
-## REVIEWER VERDICT — approved with minor notes
-
-No logic error found. The thread-local guard is sound across windows and fails in the safe direction
-(a second thread would add an identical, inert provider — it cannot fail by SKIPPING an install).
-All five selectors match the real widget tree. The four call sites are identical in placement and
-nothing else about them diverged. D3 introduces no rustdoc hazard — the reviewer grepped the crate
-and no item, public or private, links to `crate::overlay_style`.
-
-`crash_overlay.rs:111` and `shell.rs:577` confirmed deliberate, with a stronger reason than the plan
-had: `crash_overlay.rs:109`'s own comment records that `.background` is the opacity mechanism that
-makes the scrim hide the frozen last frame instead of tinting it, and `crash_overlay.rs:96-104` warns
-that any padding change silently invalidates `restart_button_rect` and the pixel the crash smoke
-clicks. Converting that call site would have been a real regression.
-
-One unreachable-but-worth-naming path: if `gdk::Display::default()` were `None` for a process's whole
-life the box would be fully transparent rather than falling back to `@window_bg_color` — a worse
-failure than the pre-change state. Unreachable because `gtk::Box::new` carries
-`assert_initialized_main_thread!()` and GTK cannot initialize without a default display. Recorded so
-nobody "fixes" the guard in the wrong direction.
-
-**D7 — the `viewport` node gets added to the transparency selector.** The reviewer showed the
-viewport paints nothing in Adwaita dark (the measured `(54,54,58)` could only have reached the
-reference band by passing through it), so this is not a live bug. I am adding it anyway: the evidence
-covers dark only, light mode reaches no pixel path at all, and a viewport that already paints nothing
-cannot be made more opaque — so the change cannot redden any smoke. The reviewer's framing is the
-deciding one: leaving it as neither an addition nor a recorded measurement leaves the next reader
-unable to tell the omission from an oversight.
-
-## INSET MEASUREMENTS (coder, decode of the retained baseline captures)
-
-R inset by the declared 12 px radius on right and bottom — `x 787..1053, y 159..459`:
-
-| quantity | value |
-| --- | --- |
-| pixels | 79,800 (266 × 300) |
-| `sample_dark` | **0** |
-| `sample_ink` | **0** |
-| `sample_fill_fraction` | **exactly 1.0000000000** (79,800 / 79,800) |
-| non-fill histogram | **empty** — R holds exactly one colour, `(54,54,58)` |
-| `control_dark_fraction` | 0.940489 (floor 0.80) |
-| `control_ink` | 1,976, unchanged (floor 500) |
-| `overlap_w` / `overlap_h` | 266 / 300, both over the 200 floors |
-
-The arc's intrusion has bbox `x 1054..1064, y 460..470` — 38 pixels inside a corner square of side 11.
-So a 12 px inset clears it with exactly one pixel of margin per axis, and that margin comes from the
-`border-radius` the stylesheet already names rather than from a tuned number. D5 holds, and the whole
-arc is outside R, so no shadow-alpha change can move a pixel into it.
-
-**D6 — assertion 6 keeps the TRUE edges; assertions 7 and 8 both take the inset rect.** Two reasons,
-both structural. Assertion 7 exists to prove the region assertion 8 samples was a live preview, so the
-pair must describe the SAME rectangle or assertion 7's guarantee does not cover assertion 8's region.
-And the inset must be applied only AFTER both halves of assertion 6 have run: under P1b
-`box_right == web_left == 787`, so insetting first yields `x1 < x0` and panics on an underflow inside
-`SampleRect::pixels()` instead of reddening assertion 6 with its diagnostic. Assertion 6 having
-already established both spans are ≥ 200 ≫ 12 is what makes the subtraction unconditionally safe.
-
-`PICKOVER_SAMPLE_MIN_FILL_FRACTION` stays 0.98 even though the measured value is exactly 1.0 — the
-slack is reserved for a list row that renders taller, per the constant's own doc.
-
-## SECOND MEASURED PASS (coder) — the re-derivation works, one pixel survives
-
-Re-derived edges land exactly where the opaque surface stops: `box_right = 1065`, `box_bottom = 471`,
-R back to the documented `787..1065 × 159..471`, 86,736 px. Fill fraction 0.9698 → **0.999562** (38
-non-fill pixels). The floor `0.98` stays — the arc costs 0.000438, ~46x under the floor, and that
-slack is what the constant's doc reserves for a taller list row.
-
-**`sample_dark` is 1, not 0** — at `(1064, 470)`, R's own bottom-right corner pixel. No value of
-`PICKOVER_EDGE_MIN_NON_FILL_PX` in `12..=159` excludes it; every one yields the same edges. The arc's
-other exposed pixels read 24/25/26 (shadow-tinted); only the pixel diagonally furthest from the
-surface has faded to the preview's exact value.
-
-**F2 — RED at assertion 4's new `PICKOVER_UNSTYLED_FILL` line**, reading `(29,29,32)`, matching the
-first pass exactly. The gap D2 targeted is closed: the feature can no longer be deleted while this
-smoke stays green.
-
-**P1b — RED at assertion 4's absence half**, which is what the test's own doc predicts (assertion 4
-fires first; 6 is never reached). The coder carried assertion 6 through by hand off the retained P1b
-captures using the NEW fill-side scan: column 787 carries 160/160 non-fill, so the scan stops on its
-own first column, `box_right = 787`, `overlap_w = 0`, well under the 200 floor. **The fill-side scan
-is not self-fulfilling** — that was the whole point of the re-derivation and it holds.
-
-Gate after reverts: clippy and build clean; `git diff --stat HEAD -- 'crates/*/src'` empty. Two
-`rustfmt` violations remain, both in the test file (`smoke_headless.rs:23756` and `:27421`) — the
-test-writer's to fix.
-
-**D5 — R is inset by the declared corner radius, not by one pixel.** All four of the coder's inset
-variants are rejected. A 1px inset passes for an accidental reason: the arc's other exposed pixels
-escape the `== PREVIEW_DARK_BG` check only because the shadow tints them to 24/25/26, so a change to
-the shadow's alpha would redden the assertion for a reason nobody could attribute — the same "green
-for a bad reason" shape already caught once in this workflow. The box has a 12px `border-radius`, so
-a rectangle spanning the box's full straight extent is genuinely not fully occluded at its corners;
-that is geometry, not noise. Assertion 8 samples an R inset by the radius on the right and bottom.
-Assertion 6 keeps measuring the TRUE overlap, so it still says the box really does cover the preview
-by ≥200×200 — only the fully-occluded sampling region shrinks.
-
-## MEASURED RESULTS (coder, first pass) — these supersede predictions
-
-Gate green (fmt, prettier, clippy `-D warnings`, build). Headless crate tests green: `--lib` 380,
-`--doc` 0, `gdk_key` 1, `paint_golden` 16 + 1 ignored, `vendored_pins` 3, `frame_metrics_gate` 4.
-Step 4: the fourteen other overlay smokes **14 passed, 0 failed** (142.6 s) — "exactly one test can
-see this change" holds. `cage` got a real headless compositor; the pixel evidence is genuine.
-
-**Step 2 RED at assertion 8** (`smoke_headless.rs:27473`), decision-table row 2. Assertions 1–7
-passed. `R` = `x 787..1069, y 159..476` (89,394 px) against the documented `787..1065 × 159..471`
-(86,736) — `box_right` +4, `box_bottom` +5. `sample_dark` 66, `sample_ink` 0, fill fraction 0.9698
-against the 0.98 floor. Fill read back as **`(54,54,58)` = `@popover_bg_color` dark**, as predicted,
-and absent from the control. The change reached the pixel it was meant to.
-
-Coder's forensics on the retained captures — both mechanisms present, shadow dominant:
-
-- The opaque surface still ends at **x = 1065, y = 471**. Beyond it is a 4-column / 5-row band of
-  `(23,23,23)`–`(26,26,26)`: the outset shadow. It is not *exactly* `PREVIEW_DARK_BG`, so
-  `first_uniform_column`/`first_uniform_row` walk straight past it. **2,592 of the 2,696 non-fill
-  pixels are that band** — that is what drops the fraction.
-- The 66 exact-`(27,27,27)` pixels are a quarter-disc at the bottom-right corner, bbox
-  `x 1054..1068, y 464..475` — the 12 px radius.
-- Row-scan data for the re-derivation: **rows 460–470 have 1–11 non-fill pixels (the corner); row 471
-  has all 278.** Any threshold between 12 and 277 separates them cleanly.
-
-**F1 (typo `@popover_bg_colour`) — RED at assertion 4**, `control_fill_hits` 32000 vs 0, colour
-`(20,22,27)` in both captures. Exactly the predicted shape. But narrow: it reddens only *because* the
-`list { transparent }` rule outlives the erroring declaration. Had the typo taken the whole block,
-F1 would have read `(29,29,32)` and gone green like F2.
-
-**F2 (`apply()` made a no-op) — GREEN. This is the finding.** Green *including* assertion 8. With no
-class applied the box still paints an opaque `(29,29,32)` = `@view_bg_color` across the whole
-reference band — the `GtkListBox`'s own view background, which the shipped stylesheet deliberately
-turns transparent. So assertion 4 is satisfied by the list widget's default, not by anything
-`overlay_style` does. **The smoke discriminates "an opaque box covers the preview", not "the overlay
-stylesheet resolved".** Deleting the feature makes the test pass.
-
-Working tree confirmed clean after both falsifiers (`git diff --stat HEAD -- crates/` empty,
-`overlay_style.rs` sha256 back to `a6b16d53…`).
-
-## ORCHESTRATOR DECISIONS
-
-**D1 — assertion 8 is re-derived, not softened.** Legitimate consequence of accepted work. Option (a)
-is adopted but CORRECTED: the coder measured that option (a) as literally written starts the
-`box_bottom` row scan at `reference.y1 = 460`, and row 460 already holds a corner pixel, so
-`box_bottom` stops at its own scan start and stops measuring anything — a green for a bad reason.
-Use the row-population threshold instead (see the measured data above).
-
-**D2 — the F2 gap gets closed, not merely recorded.** The plan's fallback was to record it as
-unproven. I am overriding that for one reason: the test is being edited anyway for D1, and one
-`assert_ne!` in the same assertion makes the difference between a feature with zero discriminating
-coverage and a feature with some. A test nobody has seen fail is attached to nothing, and F2 proved
-this one is. The addition takes the same shape as the two `assert_ne!`s already in assertion 4.
-
-**D3 — `mod overlay_style;` stays private.** It is internal glue with no consumer outside the crate
-and nothing testable in it; `pub mod` would widen the crate's public surface for no gain. The
-rustdoc `private_intra_doc_links` hazard is real only if a *public* item's doc ever links to it —
-reviewer confirms none does.
-
-**D4 — the residual gap is recorded.** `@popover_fg_color`, the radius, the paddings and the
-entry/label margin still reach no assertion, and F1's narrowness is a real caveat. Both go in
-`tests/README.md` under "What is still unproven". That is the technical-writer's.
-
-## The change under review
-
-Committed as `77f8c1d` on top of `94c70ba`. `git diff 94c70ba..HEAD` is the change. Working tree clean.
-
-- `crates/wolf-gnome/src/overlay_style.rs` — NEW. `pub(crate) fn apply(&gtk::Box)` adds a
-  `wolf-overlay` class and installs one display-global stylesheet, guarded by a thread-local flag.
-- `picker.rs`, `palette.rs`, `buffer_picker.rs`, `search_overlay.rs` — each swapped
-  `add_css_class("background")` for `crate::overlay_style::apply(&…_box)`.
-- `lib.rs` — `mod overlay_style;` (private; every other module is `pub mod`).
-- `src/README.md` — one new `#### overlay_style.rs` entry.
-
-The stylesheet sets `@popover_bg_color` / `@popover_fg_color`, `border-radius: 12px`,
-`box-shadow: 0 1px 5px 1px rgba(0,0,0,0.18)`, `padding: 6px` on the box, `margin-bottom: 6px` on a
-direct `entry`/`label` child, transparency on `scrolledwindow`/`list`, and `padding: 8px 10px` +
-`border-radius: 6px` on `list > row`. Against libadwaita 1.9.0, `@popover_bg_color` is `#ffffff`
-light / `#36363a` dark; the previous `.background` was `@window_bg_color`, `#222226` dark.
-
-## Architect's key findings
-
-**Exactly one test can see this change:** `file_picker_covers_the_live_preview_under_cage` in
-`crates/wolf-gnome/tests/smoke_headless.rs` — the only capture in the repo taken with a transient
-overlay open (`tests/README.md` states this invariant). `paint_golden.rs` is Cairo/Pango only, opens
-no display, touches no `CssProvider`: it cannot see this change, and a red there is unrelated.
-
-**The colour change alone should NOT break it.** Its reference band `x 500..700, y 300..460` reads
-the fill colour empirically out of the sample capture rather than pinning a theme literal. The band
-previously read `(29,29,32)` = `@view_bg_color` (the ListBox's own view background); with
-`list { background-color: transparent }` it now reads through to `@popover_bg_color` `(54,54,58)`.
-Still one flat colour, still absent from the control capture.
-
-**The real hazard is SHAPE, and assertion 8 measures shape.** `box_right`/`box_bottom` are located by
-scanning for the first line that is exactly `PREVIEW_DARK_BG`, so the new outset `box-shadow` (drawn
-outside the border box, unclipped) pushes both outward, and the 12px radius makes the bottom-right
-corner translucent inside R. Predicted: `sample_fill_fraction` drops to ~0.957, below the
-`PICKOVER_SAMPLE_MIN_FILL_FRACTION = 0.98` floor. This is a LEGITIMATE consequence of accepted work.
-
-## Failure-mode decision table (binding)
-
-| Symptom | Diagnosis | Response |
-| --- | --- | --- |
-| Assertion 8 fails on `sample_fill_fraction` ~0.95–0.97, `sample_dark == 0`, `sample_ink == 0` | Shadow widened R past the opaque surface | Re-derive edges. Do NOT soften the floor — the smoke's own doc forbids it |
-| Assertion 8 fails, `sample_dark != 0`, small count (tens) | Rounded corner exposing the preview | Same re-derivation |
-| Assertion 8 fails, `sample_dark` large, or fill fraction near zero | Not the stylesheet — paint-order/timing | Investigate; read the retained PNGs |
-| Assertion 4 fails: `control_fill_hits != 0`, same colour in both captures | The box painted NO surface — colour did not resolve, or `apply` did not run | Real regression. Investigate the stylesheet |
-| Any other smoke fails | None of them can see this change | Suspect a stray `cage`; re-run alone |
-
-**Re-derivation, if assertion 8 fires — option (a), preferred:** locate `box_right` as the first
-column at/right of `web_left` whose rows `reference.y0..y1` are NOT `fill`, and `box_bottom`
-symmetrically. R then names the opaque surface exactly; `sample_dark` returns to 0 and the fill
-fraction to ~1.0. This KEEPS discriminating power: under the P1b paint-order falsifier the column at
-`web_left` is not `fill`, so `box_right == web_left`, `overlap_w == 0`, and assertion 6 still reddens.
-Re-measure every affected doc number off fresh retained captures, and re-run P1b to prove it.
-
-## No new test — and the two red runs that license that conclusion
-
-`gtk::CssProvider::new()` carries `assert_initialized_main_thread!()`; `gtk::init` appears NOWHERE in
-this crate, and GDK4 ships no headless backend. A CSS-parse test would need a compositor, and once
-under `cage` the only falsifiable observable is a pixel — which is the smoke that already exists.
-Every non-pixel formulation ("the constant contains the string…") passes with `apply()` deleted and
-is excluded by this plan's own rule.
-
-The silent-CSS-failure mode is already discriminated, by accident but genuinely. Prove it:
-
-- **F2** — replace the body of `overlay_style::apply` with nothing. Predicted red: assertion 4.
-- **F1** — typo `@popover_bg_color` to `@popover_bg_colour` in `OVERLAY_CSS_DATA`. Predicted red:
-  assertion 4's `control_fill_hits` half, same colour in both captures.
-
-Revert each after; confirm `git status` clean. **If either comes back GREEN, that is the finding** —
-the smoke does not discriminate the overlay's surface, and it gets recorded in `tests/README.md`
-under "What is still unproven" rather than papered over.
-
-Gap that remains and reaches no assertion: `@popover_fg_color`, the radius, the shadow, the paddings,
-the entry/label margin. No honest cheap test exists (OCR reads neither colour nor geometry). Record
-it in `tests/README.md`.
-
-## Commands (all through `nix develop --command`, from the repo root)
-
-Check for a stray `cage` first — a wedged one fails every cage smoke with a lockfile error that reads
-exactly like a mass regression.
-
-0. `cargo fmt --all -- --check` · `prettier --check "**/*.md"` ·
-   `cargo clippy --workspace --all-targets -- -D warnings` · `cargo build --workspace --all-targets`
-1. `cargo test -p wolf-gnome --lib` · `--doc` ·
-   `--test gdk_key --test paint_golden --test vendored_pins --test frame_metrics_gate`
-2. `cargo test -p wolf-gnome --test smoke_headless -- --exact file_picker_covers_the_live_preview_under_cage --nocapture`
-3. the other fourteen overlay-opening smokes (all take their capture after the overlay closed)
-4. `cargo test -p wolf-gnome --test smoke_headless` — expect `70 passed`
-5. `cargo test --workspace`
-
-Not run: `packaged_layout.rs` / `wolf-package-smoke.sh` (every falsifier there is a `flake.nix` edit),
-`bazelisk` (this crate has no Bazel target by design).
-
-## Documentation drift to fix
-
-- **`crates/wolf-gnome/DECISIONS.md` ~line 109** — says a display-global CSS provider is added "one
-  per window" for `tree_view`. The crate has TWO providers under TWO policies (`tree_view` unguarded
-  per window; `overlay_style` thread-local guarded, once). Rewrite in place, present tense.
-- **`tests/smoke_headless.rs` doc comments** — `pickover_fill_reference_band`'s doc says "The box
-  paints Adwaita's `.background`", now wrong; `PICKOVER_CONTROL_MIN_DARK_FRACTION`'s doc quotes the
-  fill as `(29,29,32)`, which is `@view_bg_color`. Re-measure.
-- **`tests/README.md` "What is still unproven"** — add the overlay-chrome bullet.
-- Correct as they stand: `src/README.md`, `lib.rs` module doc, `crates/wolf-gnome/README.md`,
-  `architecture.md`, `build.md`, `tree_view.rs`'s `install_css` doc.
-- `crash_overlay.rs:111` and `shell.rs:577` still call `add_css_class("background")` — deliberate
-  (a full-bleed scrim and a pane-filling empty state; neither wants menu chrome). Reviewer confirms.
-
-## Open questions for the reviewer
-
-1. `mod overlay_style;` private vs `pub mod` — the only private module in `lib.rs`. No test needs it
-   public. Decide deliberately; leaving it undecided is not an option. Hazard: rustdoc's
-   `private_intra_doc_links` fires under `-D warnings` if a public item ever links to it.
-2. The `viewport` node between `scrolledwindow` and `list` is not made transparent.
-3. Taller rows mean roughly a third fewer visible rows in the three overlays that cap content height.
-4. `padding: 6px` folds into GTK's measured minimum, so 600×400 may render 612×412.
-5. Light mode reaches no pixel path at all — only dark is verified by any test.
+COMPLETE (pending final markdown lint confirmation) — implementation, tests, BUILD wiring, and docs landed; full wolf-core suite 51/51 uncached (incl. swap_recovery with `env_inherit = ["HOME"]`, and the sweep covered the final rewritten test files — checksum-verified); wolf-ffi 38/38; Bazel lint targets pass; cargo-side gate (fmt/clippy --all-targets/doctests/cargo test) is Linux-only on this host and unexercised. Falsifiability evidence below. Reviewer's blocking items fixed and verified: orlando/parsers_user `--clean` comments corrected to measured behavior (init.lua, tests/parsers_user.rs, durable-user-directory-plan.md), query_predicates one-liner added, pre-existing `-n` launch-line comment drift fixed in nvim.rs + init.lua headers. Technical writer verified all docs against source (two doc-ward fixes: the plan doc's `--clean` clause; tests/README.md spell.rs precondition overclaim); architecture.md / crate README / build.md confirmed unaffected. Known unrelated follow-ups (out of scope, not addressed): `redraw_grid::scroll_emits_viewport` flakes under machine load; pre-existing advisory markdown findings in wolf-gnome docs; five stray untracked root .md files predating this work.
+
+## Falsifiability evidence (coder, step 6 — every falsifier applied to app code, captured, restored; restores verified by cmp against snapshots)
+
+| Falsifier | Test | Failure (verbatim core) |
+|---|---|---|
+| Delete WolfSpell autocmd | spell.rs (all 3) | `opening a .md file must turn window-local 'spell' ON … left: "0" right: "1"` |
+| Delete `opt.spellfile` assignment | spell.rs 1 | `'spellfile' must point at the durable <state_dir>/spell/en.utf-8.add … left: ""` |
+| Drop text/gitcommit from prose set | spell.rs 2 only | `'spell' must be ON for filetype=text … left: "0"` |
+| Always-on `"*"` callback | spell.rs 3 only | `…must turn 'spell' OFF … left: "1" right: "0"` |
+| Remove WOLF_SPELL_DIR export | spawn; spell_durable 1 | `WOLF_SPELL_DIR must be exported … left: ""`; `timed out … zg to append the word to the durable en.utf-8.add` |
+| Remove spell `create_dir_all` | spawn; spell_durable 1 | `spawn must create <state_dir>/spell before launch…`; same zg timeout |
+| Drop gsub from 'directory' | spell_durable 2 | `timed out … a .swp entry in the comma'd durable swap dir` |
+| Drop gsub from 'spellfile' | spell_durable 2 | startup aborts: unescaped comma raises E474 in init.lua |
+| Remove WOLF_RUNTIME_USER_DIR export | spawn | `WOLF_RUNTIME_USER_DIR must be exported … left: ""` |
+| Remove WOLF_PARSERS_USER_DIR export | spawn; parsers_user (rtp assertion) | `WOLF_PARSERS_USER_DIR must be exported … left: ""`; `<state_dir>/parsers_user must be ON 'runtimepath'` |
+| Delete seed call in api.rs | spawn; runtime_user 1 | `WolfCore::start must seed <state_dir>/runtime_user with init_user.lua` |
+| Remove parsers_user `create_dir_all` | spawn; parsers_user 1 | `spawn must create <state_dir>/parsers_user before launch` |
+| Delete EOF dofile block | runtime_user 2 | `a pre-existing init_user.lua must be dofile'd at startup … left: "MISSING"` |
+| Remove vim.notify branch | runtime_user 4 | `timed out … the init_user.lua warning to surface via :messages` |
+| Seed when init_user.lua absent | state_unit 3 + runtime_user 3 | `a NON-EMPTY dir must report Ok(false)…`; `…must never be seeded, even when init_user.lua is absent` |
+| Resolver leaf changed | state_unit 1 | `spell_dir() must resolve to <state_dir>/spell … left: Some("…/spellx")` |
+| Seed returns Ok(false) w/o write | state_unit 2 | `seeding a MISSING dir must report Ok(true)…` |
+| Remove from_env spell fallback | state_unit 4 | `…must fall back to the ephemeral state_root/spell … left: ""` |
+| Delete setup+prepend (19b) | parsers_user 2 | `<state_dir>/parsers_user must be ON 'runtimepath' …` |
+| Drop install_dir from setup() | parsers_user 4 | `install dir must be <state_dir>/parsers_user/parser … left: "…/data/wolf/site/parser"` |
+
+Three named falsifiers measured non-falsifying (rulings above): reference on-only autocmd (spell.rs 3), prepend-alone deletion, runtime-call deletion.
+
+## Problem statement
+
+Implement the work described in `durable-user-directory-plan.md` (repo root — authoritative scope). The embedded Neovim runtime stays immutable in the app bundle / nix store. Wolf adds user-writeable directories under the platform state dir (`state_dir()` in `crates/wolf-core/src/state.rs`), all resolved core-side and handed to `runtime/nvim/init.lua` via `WOLF_*` env vars following the existing `WOLF_SWAP_DIR` pattern. No front-end (Swift/GTK/FFI) changes.
+
+1. **Spell**: enable spell checking for `markdown`/`text`/`gitcommit` only, plus a durable user dictionary (`state_dir()/spell`, `WOLF_SPELL_DIR`, `'spellfile'` at `<dir>/en.utf-8.add`). Reference: `git diff main...feat/spell-check` (reapply/adapt; do not merge).
+2. **runtime_user/**: seeded once (only when missing or empty) with an `init_user.lua` template; never touched when non-empty; `WOLF_RUNTIME_USER_DIR`; sourced via `pcall(dofile, …)` at the very end of `init.lua`; user-file errors are `vim.notify` warnings.
+3. **parsers_user/**: created in `spawn`; `WOLF_PARSERS_USER_DIR`; `init.lua` activates the vendored nvim-treesitter (main branch) — runtime-source its plugin file, `require("nvim-treesitter").setup({ install_dir = … })`, user parsers shadow bundled `parsers/`.
+
+## Falsifiability findings + orchestrator rulings (post-coder step 6)
+
+Three named falsifiers did not falsify; measurements accepted, rulings:
+
+1. **spell.rs test 3 passes under the reference on-only autocmd** — `vim.opt_local` spell is NOT sticky on this pinned nvim (window-local value resets from window-global on buffer switch). RULING: keep the `"*"`-with-explicit-off design as determinism hardening (it guarantees spell off for non-prose regardless of window-global state and survives future `vim.o.spell`-touching code), but every comment/doc stating the stickiness premise must be corrected to this measured rationale. Test 3 stays (it falsifies an always-on callback — evidence 4b).
+2. **Deleting the parsers_user rtp prepend alone is invisible** — `setup()` eagerly prepends the identical string; the explicit prepend is load-bearing only when `pcall(setup)` fails. RULING: keep the prepend; combined falsifier 19b (setup + prepend deleted) is the accepted evidence; no test change.
+3. **Deleting `vim.cmd.runtime("plugin/nvim-treesitter.lua")` is invisible** — measured: `--clean` keeps `'loadplugins'` on, so rtp-prepended `plugin/*.lua` load post-init anyway. RULING: keep the explicit call (registers `:TSInstall` deterministically during init); assertion 3 is a regression guard, not a falsifiable edge; coder already corrected the false premise in init.lua comments and the README's orlando decision.
+
+Also landed by orchestrator approval: `env_inherit = ["HOME"]` on the `swap_recovery` Bazel target (pre-existing environmental failure, proven unrelated).
+
+## Orchestrator decisions
+
+- The architect's deviation from the reference diff is ACCEPTED: the `WolfSpell` autocmd uses `pattern = "*"` setting `spell` on for prose filetypes and OFF otherwise (window-local `'spell'` is sticky; the reference's on-only autocmd leaves spell enabled when a prose window switches to a non-prose file). `tests/spell.rs` test 3 pins this.
+- Seeding lives in `api.rs::WolfCore::start` (not `spawn`) so the respawn path stays free of a new failure surface.
+- `swap_recovery.rs` is NOT modified; comma-escaping coverage lives in `spell_durable.rs`.
+
+# Architect plan (execute as written)
+
+## 1. Summary
+
+Three new directories resolved core-side, exported as env vars: `spell/` (durable `zg`/`zw` dictionary + spell on for prose filetypes), `runtime_user/` (one-time seed of `init_user.lua`, sourced last), `parsers_user/` (`:TSInstall` target; vendored nvim-treesitter activated as a real plugin). Also carries the reference branch's swap hardening not yet landed: comma-escaping of `'directory'` in `init.lua` (the fatal `create_dir_all` half already landed at `nvim.rs:1728`, but its comment still says "best-effort" — fix the comment). `CoreConfig` untouched.
+
+## 2. Pre-flight verification (coder, read-only, before treesitter wiring)
+
+The vendored nvim-treesitter is the **main branch** (pinned in `bazel/nvim-treesitter/extensions.bzl`, commit `4916d659…`; tree: `nvim-treesitter/{lua,plugin,queries,LICENSE}`). It is a Bazel external, not checked in. Verify against the fetched tree (`$(bazel info output_base)/external/*nvim_treesitter*/…`, or download the pinned tarball):
+
+1. **`:TSInstall` is registered by `plugin/nvim-treesitter.lua`**, not by `setup()`. Under `--clean`, plugin dirs are never scanned, so `init.lua` must `vim.cmd.runtime("plugin/nvim-treesitter.lua")` after prepending the tree to `runtimepath` (orlando pattern). Verify the exact plugin file name.
+2. **`require("nvim-treesitter").setup({ install_dir = … })` is a lightweight config merge** — no install jobs, no network/compilation.
+3. **`install_dir` lands on `runtimepath` only lazily** (expected accessor: `require('nvim-treesitter.config').get_install_dir('parser')` — verify name; the `parsers_user.rs` probe depends on it). `init.lua` therefore **prepends** `WOLF_PARSERS_USER_DIR` itself, unconditionally — which also gives user parsers precedence over bundled `parsers/`.
+
+If any assumption fails: keep the manual rtp prepend (load-bearing regardless); fallback for a missing/misnamed plugin file is sourcing whatever `plugin/*.lua` the tree ships; fallback for a heavy `setup()` is the `pcall` wrap (already specified). Report the verified accessor + plugin file name to the orchestrator.
+
+## 3. Files to create (test-writer)
+
+- `crates/wolf-core/tests/spell.rs`
+- `crates/wolf-core/tests/spell_durable.rs`
+- `crates/wolf-core/tests/runtime_user.rs`
+- `crates/wolf-core/tests/parsers_user.rs`
+
+No new source files.
+
+## 4. Files to modify
+
+### 4.1 `crates/wolf-core/src/state.rs` — coder
+
+Add, directly after `swap_dir_for` (~line 243):
+
+- `pub fn spell_dir() -> Option<PathBuf>` — `state_dir().map(|d| d.join("spell"))`. `#[must_use]`. Doc: global, deliberately not per-project (a word list belongs to the language, not the open folder); `None` only when `state_dir()` unresolvable → `NvimConfig::from_env` falls back to ephemeral `state_root/spell`.
+- `pub fn runtime_user_dir() -> Option<PathBuf>` — `state_dir().map(|d| d.join("runtime_user"))`. `#[must_use]`.
+- `pub fn parsers_user_dir() -> Option<PathBuf>` — `state_dir().map(|d| d.join("parsers_user"))`. `#[must_use]`.
+- `pub const INIT_USER_FILE_NAME: &str = "init_user.lua";`
+- `const INIT_USER_TEMPLATE: &str` — Lua comments only: this file is the user's, loaded after every Wolf default at the end of Wolf's `init.lua`, never overwritten once the directory is non-empty, errors reported as warnings. Must include the exact greppable sentence `-- Wolf loads this file last, so anything here overrides Wolf's defaults.`
+- `pub fn seed_runtime_user_dir(dir: &Path) -> std::io::Result<bool>` — dir missing: `create_dir_all` + write template, `Ok(true)`. Exists with zero entries: write template, `Ok(true)`. Non-empty: touch nothing — **even when `init_user.lua` is absent** — `Ok(false)`. Doc the one-time-seed contract (sole exception to "Wolf never writes into the user's state-dir subtrees").
+
+### 4.2 `crates/wolf-core/src/lib.rs` — coder
+
+Extend the `pub use state::{…}` re-export (line 118) with `spell_dir`, `runtime_user_dir`, `parsers_user_dir`, `seed_runtime_user_dir`, `INIT_USER_FILE_NAME`.
+
+### 4.3 `crates/wolf-core/src/nvim.rs` — coder
+
+- New `pub struct DurableDirs` (near `NvimConfig`, ~line 60), derive `Clone, Debug, Default`: `pub swap_dir: Option<PathBuf>`, `pub spell_dir: Option<PathBuf>`, `pub runtime_user_dir: Option<PathBuf>`, `pub parsers_user_dir: Option<PathBuf>`. (Keeps `from_env` under clippy `too_many_arguments`.)
+- `NvimConfig` gains: `pub spell_dir: PathBuf` (resolved, fallback applied; doc like `swap_dir`), `pub runtime_user_dir: Option<PathBuf>`, `pub parsers_user_dir: Option<PathBuf>`.
+- `NvimConfig::from_env(init_lua: PathBuf, cwd: PathBuf, dirs: DurableDirs, cols: u16, rows: u16)`. Body: `swap_dir = dirs.swap_dir.unwrap_or_else(|| state_root.join("swap"))`; `spell_dir = dirs.spell_dir.unwrap_or_else(|| state_root.join("spell"))` (ephemeral fallback: `zg` works, words die with process); `runtime_user_dir`/`parsers_user_dir` carried as `Option` (`None` = skip: no creation, no export, init.lua no-ops).
+- `spawn` (~1720-1751):
+  - Fix stale comment above `create_dir_all(&cfg.swap_dir)` (1726-1727): the call IS fatal; say why (missing `'directory'` silently degrades crash recovery).
+  - Add fatal `create_dir_all(&cfg.spell_dir)` with comment: nvim never creates the parent of an explicit `'spellfile'`; missing parent → `zg` fails E484 silently.
+  - `if let Some(d) = &cfg.parsers_user_dir` → fatal `create_dir_all(d)`.
+  - Env exports: unconditional `.env("WOLF_SPELL_DIR", &cfg.spell_dir)`; conditional `WOLF_RUNTIME_USER_DIR` / `WOLF_PARSERS_USER_DIR` when `Some`.
+  - Update `spawn` doc comment's env-var list.
+
+### 4.4 `crates/wolf-core/src/api.rs` — coder
+
+In `WolfCore::start` (~308-317), after computing `swap_dir`: resolve `state::spell_dir()`, `state::runtime_user_dir()`, `state::parsers_user_dir()`. If `runtime_user` is `Some`, call `state::seed_runtime_user_dir(dir)`; on `Err`, `tracing::warn!` and continue (never fatal). Build `DurableDirs { swap_dir, spell_dir, runtime_user_dir, parsers_user_dir }`, pass to `from_env`. Update imports (line 33 gains `nvim::DurableDirs`; line 38 gains the new resolvers).
+
+### 4.5 `runtime/nvim/init.lua` — coder (positions load-bearing)
+
+1. **Comma-escape helper + swap hardening** (before the swap block, ~line 38): `local function escape_option_path(p) return (p:gsub(",", "\\,")) end` with comment (`'directory'`/`'spellfile'` are comma-separated lists; a literal comma silently splits the value). Change line 41 to `opt.directory = escape_option_path(swap_dir) .. "//"`.
+2. **Spell block** — after `vim.filetype.add` (line 170), **strictly before `vim.cmd("syntax on")`** (line 191; ordering load-bearing — after `syntax on` the FileType autocmd never fires for a markdown startup file argument; carry the reference diff's comment):
+   - Augroup `WolfSpell` (`clear = true`), one `FileType` autocmd, `pattern = "*"`, callback: `local prose = { markdown = true, text = true, gitcommit = true }` (file-local table); set `vim.opt_local.spell = (prose[args.match] == true)`; set `vim.opt_local.spelllang = "en"` when turning on. Comment the deviation: `'spell'` is window-local and sticky — startup buffer `Untitled.md` has `filetype=markdown` at VimEnter, so an on-only autocmd leaves spell on for every non-prose file later `:e`d in that window; the `"*"` pattern turns it off on the way out. `en` pinned: the only language whose `.spl` the pinned nvim ships (a missing `.spl` opens a blocking download prompt that has nowhere to draw under `ext_messages`).
+   - Global `'spellfile'`: `local spell_dir = vim.env.WOLF_SPELL_DIR; if spell_dir ~= nil and spell_dir ~= "" then vim.opt.spellfile = escape_option_path(spell_dir) .. "/en.utf-8.add" end`. Comment: core created the dir pre-launch (nvim never creates a spellfile's parent; missing parent → E484 silent drop).
+3. **parsers_user / nvim-treesitter activation** — inside the `if nvim_treesitter_dir then` gate (318-353), after the textobjects prepend (~328), before the `WolfTreesitter` autocmd:
+   ```lua
+   local parsers_user_dir = vim.env.WOLF_PARSERS_USER_DIR
+   if parsers_user_dir ~= nil and parsers_user_dir ~= "" and uv.fs_stat(parsers_user_dir) then
+       vim.cmd.runtime("plugin/nvim-treesitter.lua")
+       pcall(function()
+           require("nvim-treesitter").setup({ install_dir = parsers_user_dir })
+       end)
+       vim.opt.runtimepath:prepend(parsers_user_dir)
+   end
+   ```
+   PRE-FLIGHT VERIFIED (coder): `plugin/nvim-treesitter.lua` is the exact plugin file (registers `:TSInstall`/`TSUpdate`/`TSUninstall`/`TSLog`, guard `vim.g.loaded_nvim_treesitter`, all requires lazy — cheap to source); `setup()` is a pure config merge BUT eagerly prepends `install_dir` to rtp via raw string concat (`vim.o.rtp = dir .. ',' .. vim.o.rtp`). Hence the ORDER above: setup first, then `vim.opt.runtimepath:prepend` — option-list prepend dedupes, so the entry lands exactly once and at the front whether or not the `pcall(setup)` succeeded. Comments to carry: user dir lands ahead of bundled `parsers_dir` (user parsers deliberately shadow bundled); `--clean` never sources plugin dirs so the explicit `runtime` call registers `:TSInstall` (orlando pattern); `pcall` degrades incompatibility to "no :TSInstall"; only `plugin/nvim-treesitter.lua` is sourced — the sibling `query_predicates.lua` predicates are unused by every bundled language (one-line comment). Placement inside the gate deliberate (`require` needs the tree's `lua/` on rtp, prepended by the gate). **Rewrite the stale gate comments in place** (295-298 "We do NOT call … .setup{}" and the "purely an on-rtp query provider" framing) to the new contract — present tense, no changelog words.
+4. **End-of-file user override load point** — appended after `wolf_setup_preview` (line 2629), stays the last thing in the file:
+   ```lua
+   local runtime_user_dir = vim.env.WOLF_RUNTIME_USER_DIR
+   if runtime_user_dir ~= nil and runtime_user_dir ~= "" then
+       local user_init = runtime_user_dir .. "/init_user.lua"
+       if uv and uv.fs_stat(user_init) then
+           local ok, err = pcall(dofile, user_init)
+           if not ok then
+               vim.notify("Wolf: error in init_user.lua: " .. tostring(err), vim.log.levels.WARN)
+           end
+       end
+   end
+   ```
+   Comment: must remain last — user code overrides every Wolf default; user-file errors warn, never fail startup. The notify text must contain the literal `init_user.lua` (a test greps `:messages` for it). File-level `uv` local (line 208) is in scope.
+
+### 4.6 `crates/wolf-core/BUILD.bazel` — coder
+
+Four new `rust_test` targets mirroring the `swap_recovery` stanza (1143-1165) in shape — `tests/common/mod.rs` in `srcs`, `crate_root` on the test file, `tags = ["no-sandbox"]`, `size = "small"`, `edition = "2021"`, `data = ["//bazel/nvim:nvim_tree", "//runtime/nvim:init.lua"]`, `env = { "WOLF_NVIM_BIN": "$(rootpath //bazel/nvim:nvim_tree)/nvim/bin/nvim", "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)", "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)" }`, `deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True)`:
+
+- `spell`, `spell_durable`, `runtime_user`.
+- `parsers_user` — additionally `"//bazel/nvim-treesitter:nvim_treesitter_tree"` and `"//bazel/treesitter-parsers:parsers_tree"` in `data`, and `"WOLF_TEST_NVIM_TREESITTER_DIR": "$(rootpath //bazel/nvim-treesitter:nvim_treesitter_tree)"`, `"WOLF_TEST_PARSERS_DIR": "$(rootpath //bazel/treesitter-parsers:parsers_tree)"` in `env` (mirror `//crates/wolf-ffi:treesitter_highlight`, wolf-ffi BUILD.bazel 848-873).
+
+Short leading comments in house style. `state_unit`/`spawn` targets already glob their files — no change. Confirm each new target actually runs under `bazelisk test`.
+
+### 4.7 Documentation — coder
+
+- `runtime/nvim/README.md`: env list (line 11) names all exported `WOLF_*` vars; rewrite in place the stale "purely an on-runtimepath query provider" decision to the new contract; add Decisions entries for the spell block (before-`syntax on`; `"*"` pattern with explicit off — window-local stickiness; comma-escaping; `en` pinned) and the end-of-file `init_user.lua` load point (last-wins, pcall + notify); note `:TSInstall` compiling depends on the user's toolchain — Wolf only guarantees a durable install target.
+- `crates/wolf-core/src/README.md` `#### state.rs` entry (line 124): extend Public API with the three resolvers + `seed_runtime_user_dir` (one-time-seed semantics), within the ~200-word budget.
+- `crates/wolf-core/DECISIONS.md`: new short section (after "How core embeds Neovim"): bundle is Wolf's, replaced wholesale on upgrade; everything under `state_dir()` is the user's and Wolf never modifies it, sole exception the one-time seeding of an empty `runtime_user/`; core resolves dirs → `WOLF_*` env vars.
+- `architecture.md`: no change.
+- `prettier --write` + `./tools/lint/markdown_check.sh` on touched Markdown.
+
+## 5. Test plan (test-writer)
+
+Shared conventions: real nvim via `common::require_nvim_bin`; observation channel is the **file probe** — `:call writefile([<expr1>, …], '<probe path>')` via `common::ch(':')` + `type_str` + `Key::Enter`, then poll the probe file (50 ms cadence, 10 s budget). Add to `tests/common/mod.rs`:
+
+- `pub fn send_ex(core: &WolfCore, cmd: &str)` (promote the `messages.rs` helper).
+- `pub fn probe_values(core: &WolfCore, exprs: &[&str], probe: &Path) -> Vec<String>` — writes the `:call writefile([…], '…')` command, polls, returns lines. Keep expressions cmdline-safe (no single quotes inside `luaeval` strings).
+- `pub fn resolve_test_runfile(env_key: &str) -> Option<PathBuf>` — `pub` wrapper over the private `resolve_runfile`.
+
+`WOLF_STATE_DIR` strategy per binary:
+
+| binary | strategy |
+|---|---|
+| `spell.rs`, `spawn.rs` | shared hermetic (`common::hermetic_state_dir()`), no env mutation, concurrent-safe |
+| `spell_durable.rs`, `runtime_user.rs`, `parsers_user.rs` | file-local `static ENV_LOCK: Mutex<()>` (the `state_unit.rs` precedent); each test holds the lock for its whole body, `set_var`s its own fresh tempdir, never `remove_var` |
+| `state_unit.rs` | existing `ENV_LOCK` for env-mutating additions |
+
+### `tests/spell.rs` (shared hermetic)
+
+1. `spell_enables_for_markdown_on_open` — Open a temp `.md`; probe `string(&l:spell)` == `"1"`, `&spelllang` == `"en"`, `&spellfile` == `hermetic_state_dir()/spell/en.utf-8.add`. Falsifiers: delete `WolfSpell` block; delete `opt.spellfile` assignment.
+2. `spell_enables_for_text_and_gitcommit` — `:e notes.txt` → `&l:spell == 1`; `:e COMMIT_EDITMSG` → `&l:spell == 1` and `&filetype == "gitcommit"`. Falsifier: drop `text`/`gitcommit` from the prose set.
+3. `spell_disabled_for_non_prose_after_prose` — open `.md` (spell on), then `:e main.lua` in the same window; probe `&l:spell == 0`, `&filetype == "lua"`. Pins the `"*"`-pattern design. Falsifier: revert autocmd to on-only three-pattern form.
+
+### `tests/spell_durable.rs` (per-test `set_var` under `ENV_LOCK`)
+
+1. `zg_word_survives_core_restart` — fresh tempdir state dir; open temp `.md` whose first word is `zzqxwolf`; send `zg`; poll `<state>/spell/en.utf-8.add` until it contains the token. `core.shutdown()`. Second core, same env; probe `&spellfile` (same path) and `join(spellbadword('zzqxwolf'), '|')` → first element empty (word good ⇒ durable dictionary loaded). Falsifiers: remove `WOLF_SPELL_DIR` export in `spawn`; remove `create_dir_all(&cfg.spell_dir)`.
+2. `comma_state_dir_swap_and_spellfile_escaped` — state tempdir whose leaf contains a comma (`wolf,state`). Swap half: `:e <cwd>/probe.md`, type text, `:preserve`, poll `swap_dir_for(&canonical_cwd)` for a `*.swp` entry. Spell half: `zg` a token, poll `<state,dir>/spell/en.utf-8.add`. Falsifiers: drop the gsub from `'directory'`; from `'spellfile'`.
+
+### `tests/runtime_user.rs` (per-test `set_var` under `ENV_LOCK`)
+
+1. `empty_state_dir_is_seeded_and_template_sourced` — fresh tempdir; start core; `<state>/runtime_user/init_user.lua` exists and contains the greppable sentence; core flushes normally. Falsifier: delete the `seed_runtime_user_dir` call in `api.rs`.
+2. `user_file_is_sourced_last_and_overrides_defaults` — pre-create `init_user.lua` with `vim.g.wolf_user_marker = "loaded"` and `vim.o.linebreak = false` (init.lua sets `linebreak = true` at line 162 → observing `0` proves execution AND after-defaults position). Probe `get(g:, 'wolf_user_marker', 'MISSING')` == `"loaded"`, `string(&linebreak)` == `"0"`. Also byte-identical before/after check on the user file. Falsifier: delete the EOF dofile block; (position half) moving the block above the wrap settings flips `&linebreak` to `1`.
+3. `non_empty_dir_without_init_user_is_untouched` — pre-create only `notes.txt`. Assert `init_user.lua` absent, `notes.txt` byte-identical, core works. Falsifier: seed whenever `init_user.lua` absent.
+4. `erroring_user_file_warns_but_startup_succeeds` — `init_user.lua` = `error("wolf-test-boom")`. Core starts, initial flush arrives; open `.md`, `&l:spell == 1` (defaults survived); `send_ex("messages")`, poll `Snapshot.toast` text for a line containing `init_user.lua`. Falsifier (warning half): remove the `vim.notify` branch.
+
+### `tests/parsers_user.rs` (per-test `set_var` under `ENV_LOCK`; one test fn)
+
+Setup: `set_var("WOLF_STATE_DIR", tempdir)`; resolve staged trees Bazel-first, devShell-second (wolf-ffi common precedent, `crates/wolf-ffi/tests/common/mod.rs` 216-270): `resolve_test_runfile("WOLF_TEST_NVIM_TREESITTER_DIR")` → `set_var("WOLF_NVIM_TREESITTER_DIR", root.join("nvim-treesitter"))`; likewise `WOLF_TEST_PARSERS_DIR` → `WOLF_PARSERS_DIR` = `root.join("parsers")`. If neither resolves, panic loudly.
+
+`parsers_user_dir_created_activated_and_first_on_rtp` — start core; assert:
+
+1. `<state>/parsers_user` exists. Falsifier: remove the `WOLF_PARSERS_USER_DIR` export (sharper than removing create_dir_all).
+2. Probe `&runtimepath`: contains parsers_user path AND its index strictly before the bundled parsers dir's (precedence). Probe rtp before any plugin-internal assertion (the accessor appends to rtp itself and would mask a missing prepend). Falsifier: delete the `prepend` line.
+3. Probe `exists(':TSInstall')` == `"2"`. Falsifier: delete the `vim.cmd.runtime(...)` line.
+4. Probe `luaeval(...)` calling `require('nvim-treesitter.config').get_install_dir('parser')` (PRE-FLIGHT CONFIRMED accessor, singular `'parser'`; parsers land at `<install_dir>/parser/<lang>.so`) == `<state>/parsers_user/parser`. CAVEATS (pre-flight): the accessor has a mkdir side effect (creates `<install_dir>/parser/`), so the on-disk assertion 1 and the rtp assertion 2 MUST run before this probe (they already do — keep that order); the returned path is `vim.fs.normalize`d, so normalize/canonicalize both sides before comparing (macOS tempdirs may differ in trailing-slash or `/var` vs `/private/var` spelling — canonicalize the Rust side, compare suffix-tolerantly if needed). Falsifier: drop `install_dir` from `setup()` (accessor then returns the stdpath default under the hermetic XDG root).
+
+### `tests/spawn.rs` addition (shared hermetic)
+
+`durable_dirs_created_and_exported` — start core; `state = common::hermetic_state_dir()`; on disk: `state/spell`, `state/parsers_user`, `state/runtime_user/init_user.lua` exist; probe `$WOLF_SPELL_DIR`, `$WOLF_RUNTIME_USER_DIR`, `$WOLF_PARSERS_USER_DIR` inside nvim == the `state/…` paths. Falsifiers: each `.env(…)` export and each `create_dir_all`, one assertion apiece.
+
+### `tests/state_unit.rs` additions (headless)
+
+1. `spell_runtime_parsers_dirs_resolve_under_state_dir` (ENV_LOCK, `WOLF_STATE_DIR` override): resolvers == `<override>/{spell,runtime_user,parsers_user}`. Falsifier: change a `join` leaf.
+2. `seed_runtime_user_seeds_missing_and_empty_dirs` (no env): missing dir → `Ok(true)` + file with greppable sentence; fresh empty dir → `Ok(true)`. Falsifier: return `Ok(false)` without writing.
+3. `seed_runtime_user_never_touches_non_empty_dir` (no env): dir with only `notes.txt` → `Ok(false)`, no `init_user.lua`, `notes.txt` unchanged; dir with custom `init_user.lua` → `Ok(false)`, byte-identical. Falsifier: seed whenever `init_user.lua` absent.
+4. `from_env_falls_back_to_ephemeral_spell_dir` (ENV_LOCK; save/restore `WOLF_NVIM_BIN`, set dummy non-empty): `from_env(any_init, any_cwd, DurableDirs::default(), 80, 24)` → `spell_dir == state_root.join("spell")`, `swap_dir == state_root.join("swap")`, `runtime_user_dir.is_none()`, `parsers_user_dir.is_none()`. Falsifier: remove the spell `unwrap_or_else` fallback.
+
+### `swap_recovery.rs`
+
+No changes (comma coverage deliberately lives in `spell_durable.rs`; it needs exclusive `WOLF_STATE_DIR` mutation).
+
+## 6. Implementation order
+
+1. **Coder pre-flight**: verify §2 assumptions; report accessor + plugin file name.
+2. **Test-writer**: common helpers → `state_unit.rs` additions → `spawn.rs` addition → `spell.rs` → `spell_durable.rs` → `runtime_user.rs` → `parsers_user.rs`. Reference the planned API exactly: `wolf_core::{spell_dir, runtime_user_dir, parsers_user_dir, seed_runtime_user_dir, INIT_USER_FILE_NAME}`, `wolf_core::nvim::{NvimConfig, DurableDirs}`.
+3. **Coder**: `state.rs` → `lib.rs` → `nvim.rs` → `api.rs` (compiles at every step; `from_env` signature change + its sole caller land together).
+4. **Coder**: `init.lua` in §4.5 order (helper first).
+5. **Coder**: `BUILD.bazel` targets; run `bazelisk test` on the six affected targets + pre-existing real-nvim suite (regression: every core start now creates/seeds dirs); `cargo test` where available.
+6. **Coder**: falsifiability passes — apply each named revert, observe the mapped test fail, restore.
+7. **Coder**: docs (§4.7) + prettier + markdown lint.
+
+## 7. Dependencies
+
+None new. Bazel trees `//bazel/nvim-treesitter:nvim_treesitter_tree` and `//bazel/treesitter-parsers:parsers_tree` already exist (consumed by wolf-ffi).
+
+## 8. Lint considerations
+
+- `DurableDirs` exists to stay under `clippy::too_many_arguments`; do not flatten.
+- New `pub` items need doc comments; `#[must_use]` on pure resolvers (house style).
+- `tests/common/mod.rs` carries `#![allow(dead_code)]` already. Env-mutating tests use `std::env::set_var` per existing practice (edition 2021).
+- `init.lua`: tabs, match comment register.
+- Markdown: `proseWrap: never`; no changelog words ("now", "no longer") when rewriting the stale nvim-treesitter decision.
+
+Key files: `crates/wolf-core/src/state.rs`, `crates/wolf-core/src/nvim.rs` (struct ~60-131, spawn ~1700-1799), `crates/wolf-core/src/api.rs` (~308-317), `runtime/nvim/init.lua` (38-42, 170-191, 305-353, EOF 2629), `crates/wolf-core/BUILD.bazel` (template 1143-1165; ffi template `crates/wolf-ffi/BUILD.bazel` 848-873), `crates/wolf-core/tests/common/mod.rs`.

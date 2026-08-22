@@ -30,12 +30,14 @@ use crate::layout::LayoutIntent;
 use crate::liveness::{self, Liveness};
 use crate::mru::{FileEntry, MruStore};
 use crate::nav_history::{MenuRow, NavMove, NavTarget, MAX_MENU_ROWS};
-use crate::nvim::{self, NvimConfig, NvimError, NvimProcess};
+use crate::nvim::{self, DurableDirs, NvimConfig, NvimError, NvimProcess};
 use crate::recent_dirs::RecentDirs;
 use crate::redraw::{CommandQueue, IntentQueue, NavHistoryCell, RedrawHandler, TrackedCwd, WakeFn};
 use crate::render::{OwnedSnapshotReadGuard, SharedSnapshot, Snapshot, TabFiles};
 use crate::search::{self, SearchOptions, SearchSession, SearchState};
-use crate::state::{state_dir, swap_dir_for};
+use crate::state::{
+    parsers_user_dir, runtime_user_dir, seed_runtime_user_dir, spell_dir, state_dir, swap_dir_for,
+};
 
 /// How long the input pump waits after the first event of a burst for siblings
 /// to enqueue, so a synchronous run of `send_input` calls coalesces into one
@@ -312,9 +314,30 @@ impl WolfCore {
         let canonical_cwd = std::fs::canonicalize(&cwd).unwrap_or_else(|_| cwd.clone());
         let swap_dir = swap_dir_for(&canonical_cwd);
 
-        let nvim_cfg =
-            NvimConfig::from_env(cfg.init_lua, cwd.clone(), swap_dir, cfg.cols, cfg.rows)
-                .map_err(CoreError::Nvim)?;
+        // The remaining durable, Wolf-owned dirs (all global, unlike the
+        // per-project swap dir). Seeding runtime_user happens HERE rather than in
+        // spawn so the respawn path carries no new failure surface; a seed failure
+        // is a warning, never fatal — the dofile in init.lua just finds no file.
+        let spell_dir = spell_dir();
+        let runtime_user_dir = runtime_user_dir();
+        let parsers_user_dir = parsers_user_dir();
+        if let Some(dir) = &runtime_user_dir {
+            if let Err(e) = seed_runtime_user_dir(dir) {
+                tracing::warn!(
+                    "wolf-core: could not seed runtime_user dir {}: {e}",
+                    dir.display()
+                );
+            }
+        }
+
+        let dirs = DurableDirs {
+            swap_dir,
+            spell_dir,
+            runtime_user_dir,
+            parsers_user_dir,
+        };
+        let nvim_cfg = NvimConfig::from_env(cfg.init_lua, cwd.clone(), dirs, cfg.cols, cfg.rows)
+            .map_err(CoreError::Nvim)?;
 
         let nvim = runtime.block_on(async {
             let proc =
