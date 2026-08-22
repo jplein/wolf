@@ -228,6 +228,26 @@ pub fn swap_dir_for(cwd: &Path) -> Option<PathBuf> {
     state_dir().map(|d| d.join("swap").join(name))
 }
 
+/// Resolves the durable, Wolf-owned, GLOBAL user spell-dictionary directory.
+///
+/// Returns `state_dir()/spell` — the directory init.lua points `'spellfile'` at,
+/// so a word taught with `zg` / `zw` outlives the nvim that learned it.
+///
+/// DELIBERATELY NOT per-project and NOT cwd-hashed, UNLIKE [`swap_dir_for`]: a
+/// swap file belongs to one project's files, but a word list belongs to the
+/// LANGUAGE, so every project shares one dictionary. Do not "make it consistent"
+/// with [`swap_dir_for`] by hashing the cwd — that would silently fragment the
+/// user's dictionary across folders.
+///
+/// `None` only when [`state_dir`] cannot be resolved (no `WOLF_STATE_DIR`
+/// override and no home directory); [`crate::nvim::NvimConfig::from_env`] then
+/// falls back to an ephemeral spell dir under the nvim state root (documented,
+/// no panic).
+#[must_use]
+pub fn spell_dir() -> Option<PathBuf> {
+    state_dir().map(|d| d.join("spell"))
+}
+
 /// Reads `dir/state.json`, or `None` when it is absent or unusable.
 ///
 /// INFALLIBLE and STRICTLY read-only: it NEVER creates, rewrites, or deletes

@@ -1032,6 +1032,39 @@ rust_test(
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
+# Real-nvim integration test for the DURABLE user spell dictionary: a word taught
+# with `zg` must outlive the nvim that learned it and be known to a later nvim
+# started from a DIFFERENT working directory. Exercises `state::spell_dir()` ->
+# `WOLF_SPELL_DIR` -> the init.lua `'spellfile'` assignment end to end. A separate
+# target from `spell` above on purpose: the test owns `WOLF_STATE_DIR`
+# process-wide and the spell dictionary is global, so it must be the ONLY test in
+# its binary. Otherwise identical to `spell`: drives a REAL pinned Neovim (no
+# mocks), stages the captive `init.lua` + the pinned nvim tree as runfiles, reuses
+# `tests/common/mod.rs`, and runs unsandboxed so the nvim child can spawn.
+rust_test(
+    name = "spell_durable",
+    srcs = [
+        "tests/common/mod.rs",
+        "tests/spell_durable.rs",
+    ],
+    crate_root = "tests/spell_durable.rs",
+    # Spawning a real nvim child does not work under the macOS build sandbox, so
+    # run unsandboxed. `no-sandbox` (vs `local`) keeps Bazel test-result caching.
+    tags = ["no-sandbox"],
+    size = "small",
+    edition = "2021",
+    data = [
+        "//bazel/nvim:nvim_tree",
+        "//runtime/nvim:init.lua",
+    ],
+    env = {
+        "WOLF_NVIM_BIN": "$(rootpath //bazel/nvim:nvim_tree)/nvim/bin/nvim",
+        "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
+        "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
+    },
+    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+)
+
 # Real-nvim integration test for external-file reload (`autoread` + `:checktime`):
 # a file changed on disk from OUTSIDE the editor must reload into an UNMODIFIED
 # buffer (the load-bearing case) while a buffer with unsaved in-editor edits must

@@ -520,3 +520,43 @@ fn swap_dir_for_is_stable_per_cwd_and_distinct_across_cwds() {
         "swap_dir_for(cwd_b) = {b1:?} must live under {swap_root:?}"
     );
 }
+
+// =========================================================================
+// spell_dir — GLOBAL (no cwd component), directly under state_dir()
+// (env-mutating: WOLF_STATE_DIR, so serialized behind ENV_LOCK)
+// =========================================================================
+
+/// `spell_dir()` resolves the durable user spell dictionary directory. Unlike
+/// [`swap_dir_for_is_stable_per_cwd_and_distinct_across_cwds`] above, it takes NO
+/// cwd and must not derive one: a swap file belongs to one project's files, but a
+/// word list belongs to the language, so a word taught in one project must be
+/// known in every other. The assertion is EXACT path equality rather than
+/// `starts_with`, so a later "let's make this consistent with swap_dir_for"
+/// change that appends a cwd hash fails here instead of silently splitting the
+/// user's dictionary per project.
+#[test]
+fn spell_dir_is_global_and_under_state_dir() {
+    let _guard = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+
+    let state = tempdir().expect("create temp state dir");
+    std::env::set_var("WOLF_STATE_DIR", state.path());
+
+    let first = wolf_core::state::spell_dir();
+    let second = wolf_core::state::spell_dir();
+
+    std::env::remove_var("WOLF_STATE_DIR");
+
+    let first = first.expect("spell_dir() should resolve under WOLF_STATE_DIR");
+    let second = second.expect("spell_dir() should resolve under WOLF_STATE_DIR");
+
+    assert_eq!(
+        first, second,
+        "spell_dir() must be deterministic within a process (got {first:?} vs {second:?})"
+    );
+    assert_eq!(
+        first,
+        state.path().join("spell"),
+        "spell_dir() must be exactly <state_dir>/spell with NO cwd-derived component; \
+         a cwd hash would make the user dictionary per-project"
+    );
+}

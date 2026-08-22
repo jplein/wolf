@@ -17,13 +17,25 @@
 //! env var is core → nvim, computed by the core); it is
 //! `swap_dir_for(cwd) = state_dir()/swap/<hash(canonical cwd)>`. So the test lever
 //! is (a) a STABLE `state_dir()` and (b) a FIXED cwd:
-//!   * `common::config_in` already points `WOLF_STATE_DIR` at a process-global
-//!     hermetic temp dir (set-if-absent, stable for the whole test binary), so the
-//!     swap dir is stable across a restart (case c) and shared between two cores
-//!     that use the SAME cwd (case d).
+//!   * [`hostile_state_dir`] points `WOLF_STATE_DIR` at one process-global temp dir
+//!     for the whole test binary (the harness's own hermetic default is
+//!     set-if-absent and so never competes), which makes the swap dir stable across
+//!     a restart (case c) and shared between two cores that use the SAME cwd
+//!     (case d).
 //!   * Each test canonicalizes and OWNS its cwd; case c reuses it across the
 //!     restart, case d passes the SAME cwd to both cores. Distinct tests use
 //!     distinct cwds, so their swap subdirs never collide.
+//!
+//! ## The state dir carries a comma and a space ON PURPOSE
+//!
+//! [`start_core_in`] pins `WOLF_STATE_DIR` at a directory named
+//! [`HOSTILE_STATE_SUBDIR`], so every `WOLF_SWAP_DIR` derived from it inherits a
+//! comma and a space. `'directory'` is a comma-separated LIST, so an unescaped
+//! comma splits one real path into two nonexistent entries and nvim silently
+//! reverts to its own default swap dir — under which the recovery assertions below
+//! still pass, out of a directory Wolf neither owns nor cleans up. Routing them
+//! through a hostile path is what makes them cover the escaping; the on-disk
+//! `swap_root` poll in [`dead_owner_recovers_silently`] is what names the failure.
 //!
 //! ## Dependency on coder work (tests-first)
 //!
@@ -40,6 +52,7 @@
 mod common;
 
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
@@ -65,6 +78,78 @@ const POLL_INTERVAL: Duration = Duration::from_millis(25);
 /// own loop BEFORE the next command (the input bursts are otherwise unordered
 /// relative to nvim's execution, and no redraw flush marks the write).
 const PRESERVE_SETTLE: Duration = Duration::from_millis(300);
+
+/// Name of the directory `WOLF_STATE_DIR` points at. The comma and the space are
+/// DELIBERATE. Do not tidy this into a plain name — doing so silently deletes the
+/// only coverage of the comma escaping on the swap path, and every test in this
+/// file keeps passing while durable swap is broken.
+///
+/// `'directory'` is a COMMA-SEPARATED option, exactly like `'spellfile'` (see
+/// `spell_durable.rs`, which carries the twin of this constant): a raw comma
+/// splits the one real path into two bogus, nonexistent entries and nvim falls
+/// back to its OWN default swap dir. Recovery then still works, so nothing visible
+/// from inside nvim looks wrong — only a path that actually contains a comma, plus
+/// an assertion on where the swap physically landed, catches it.
+///
+/// The space mirrors the real macOS state dir
+/// (`~/Library/Application Support/Wolf`). Spaces need NO escaping through the Lua
+/// option API, so an escape mistakenly extended to them fails here loudly rather
+/// than in a user's home directory.
+const HOSTILE_STATE_SUBDIR: &str = "Application Support,Wolf";
+
+/// Subdirectory of the state dir holding the per-project swap dirs
+/// (`state_dir()/swap/<hash(cwd)>`). Spelled out rather than read back from
+/// `wolf_core::swap_dir_for`, so the assertion states its expectation
+/// independently instead of agreeing with the implementation through a shared bug.
+const SWAP_SUBDIR: &str = "swap";
+
+/// The temp dir guard plus the hostile state root inside it. Held in a `OnceLock`
+/// so the directory outlives every nvim child in the process: statics are not
+/// dropped at exit, so it is never deleted out from under a running core.
+static HOSTILE_STATE_DIR: OnceLock<(tempfile::TempDir, PathBuf)> = OnceLock::new();
+
+/// Points `WOLF_STATE_DIR` at a throwaway directory whose name carries a comma and
+/// a space (see [`HOSTILE_STATE_SUBDIR`]) and returns that directory.
+///
+/// Called from [`start_core_in`] rather than from each test body, so no core in
+/// this binary can be started without it. `get_or_init` runs the `set_var` exactly
+/// once and blocks any concurrent test thread until it has, so every core in the
+/// process — including the ones a restart spawns — resolves the SAME state dir,
+/// which the restart cases depend on. The harness's own hermetic default is
+/// set-if-absent, so it never clobbers this.
+fn hostile_state_dir() -> &'static Path {
+    let (_guard, root) = HOSTILE_STATE_DIR.get_or_init(|| {
+        let dir = tempfile::tempdir().expect("failed to create temp state dir");
+        let root = dir.path().join(HOSTILE_STATE_SUBDIR);
+        std::fs::create_dir_all(&root)
+            .unwrap_or_else(|e| panic!("failed to create state dir {}: {e}", root.display()));
+        std::env::set_var("WOLF_STATE_DIR", &root);
+        (dir, root)
+    });
+    root.as_path()
+}
+
+/// Recursively searches `dir` for a regular file whose name CONTAINS `needle`.
+/// A missing `dir` is simply no match — which is the interesting failure here, not
+/// an error: it means the swap landed somewhere else entirely.
+fn find_file_named_containing(dir: &Path, needle: &str) -> Option<PathBuf> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if let Some(hit) = find_file_named_containing(&path, needle) {
+                return Some(hit);
+            }
+        } else if path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.contains(needle))
+        {
+            return Some(path);
+        }
+    }
+    None
+}
 
 /// Polls `pred` until `true` (draining wakes each iteration) or panics after
 /// [`FLUSH_TIMEOUT`]. `desc` names the awaited condition.
@@ -107,7 +192,13 @@ fn type_unsaved_edit(core: &WolfCore, waiter: &FlushWaiter) {
 /// Starts a `WolfCore` rooted at `cwd` and waits for the initial attach flush.
 /// Mirrors `swap_exists.rs`'s local `start_core_in`. Both cores in case d go
 /// through here with the SAME `cwd`, so they resolve the SAME durable swap dir.
+///
+/// The `hostile_state_dir()` call is load-bearing, not setup hygiene: it is what
+/// puts a comma and a space into every `WOLF_SWAP_DIR` this file produces, so the
+/// recovery assertions below run through an escaped `'directory'`. It lives here
+/// so a new test cannot forget it.
 fn start_core_in(cwd: &Path) -> (WolfCore, FlushWaiter) {
+    let _ = hostile_state_dir();
     let (wake, waiter) = common::wake_channel();
     let core = WolfCore::start(
         common::config_in(
@@ -141,6 +232,10 @@ fn owned_cwd() -> (tempfile::TempDir, PathBuf) {
 /// c. DEAD owner → silent recover: a fixture with an unsaved edit whose owning nvim
 /// has DIED comes back with the edit recovered (`v:swapchoice = "r"`) and NO
 /// pending confirm prompt (no block).
+///
+/// Also the one place that pins WHERE the swap physically lands, since the state
+/// dir is named [`HOSTILE_STATE_SUBDIR`]: an unescaped comma in `'directory'` is
+/// invisible to every other assertion here.
 #[test]
 fn dead_owner_recovers_silently() {
     let (_dir, cwd) = owned_cwd();
@@ -155,6 +250,47 @@ fn dead_owner_recovers_silently() {
     type_unsaved_edit(&core, &waiter);
     ex_command(&core, "preserve");
     sleep(PRESERVE_SETTLE);
+
+    // WHERE the swap landed, asserted before anything recovers from it. The rest of
+    // this test passes just as well when nvim quietly falls back to its OWN default
+    // swap dir (the failure mode an unescaped comma in HOSTILE_STATE_SUBDIR
+    // produces), so recovery alone proves nothing about `'directory'`.
+    //
+    // The needle is this test's unique cwd component, which appears in the swap file
+    // NAME only because the trailing `//` made nvim encode the buffer's full path
+    // into it (`/` -> `%`). So one poll covers both halves of the option: the escaped
+    // path (or the file is not under `swap_root` at all) and the UNescaped `//` (or
+    // the name is a plain `note.md.swp` with no path in it).
+    let swap_root = hostile_state_dir().join(SWAP_SUBDIR);
+    let cwd_tag = cwd
+        .file_name()
+        .and_then(|n| n.to_str())
+        .expect("the temp cwd must have a usable final component")
+        .to_string();
+    poll_until(
+        &waiter,
+        &format!(
+            "`:preserve` to write a full-path-encoded swap for {} under the Wolf swap \
+             dir {} — a timeout here means nvim reverted to its own default swap dir, \
+             which is what an unescaped comma in {HOSTILE_STATE_SUBDIR:?} causes",
+            fixture.display(),
+            swap_root.display()
+        ),
+        || find_file_named_containing(&swap_root, &cwd_tag).is_some(),
+    );
+    let swap_path = find_file_named_containing(&swap_root, &cwd_tag)
+        .expect("the swap file was just observed by the poll above");
+    let swap_name = swap_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .expect("the swap file must have a usable name")
+        .to_string();
+    assert!(
+        swap_name.ends_with(".swp") && swap_name.contains("note.md"),
+        "the encoded swap name must end in .swp and carry the buffer's own file \
+         name; got {swap_name:?} at {}",
+        swap_path.display()
+    );
 
     // Kill the swap owner (SIGKILL), then wait for the Dead transition.
     self_sigkill(&core);

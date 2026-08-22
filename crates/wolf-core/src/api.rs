@@ -35,7 +35,7 @@ use crate::recent_dirs::RecentDirs;
 use crate::redraw::{CommandQueue, IntentQueue, NavHistoryCell, RedrawHandler, TrackedCwd, WakeFn};
 use crate::render::{OwnedSnapshotReadGuard, SharedSnapshot, Snapshot, TabFiles};
 use crate::search::{self, SearchOptions, SearchSession, SearchState};
-use crate::state::{state_dir, swap_dir_for};
+use crate::state::{spell_dir, state_dir, swap_dir_for};
 
 /// How long the input pump waits after the first event of a burst for siblings
 /// to enqueue, so a synchronous run of `send_input` calls coalesces into one
@@ -308,13 +308,21 @@ impl WolfCore {
         // The durable, per-project swap dir (STABLE across respawns of this cwd).
         // Canonicalize the cwd first so the hash matches a caller that passes an
         // already-canonical cwd; `None` (unresolvable state_dir) makes NvimConfig
-        // fall back to an ephemeral swap dir under its temp state root.
+        // fall back to an ephemeral swap dir under its temp state root. The durable
+        // spell dir takes NO cwd: it is global by design.
         let canonical_cwd = std::fs::canonicalize(&cwd).unwrap_or_else(|_| cwd.clone());
         let swap_dir = swap_dir_for(&canonical_cwd);
+        let spell_dir = spell_dir();
 
-        let nvim_cfg =
-            NvimConfig::from_env(cfg.init_lua, cwd.clone(), swap_dir, cfg.cols, cfg.rows)
-                .map_err(CoreError::Nvim)?;
+        let nvim_cfg = NvimConfig::from_env(
+            cfg.init_lua,
+            cwd.clone(),
+            swap_dir,
+            spell_dir,
+            cfg.cols,
+            cfg.rows,
+        )
+        .map_err(CoreError::Nvim)?;
 
         let nvim = runtime.block_on(async {
             let proc =

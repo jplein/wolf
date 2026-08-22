@@ -1,343 +1,356 @@
-# Plan: Copy from a Markdown preview pane
+# Durable user spell dictionary (`zg` / `zw`)
 
-## Status
+Status: all review findings fixed, 98/98 green. Final test coverage + docs in flight.
 
-Complete, pending the manual smoke list in §4. Every lint green (`//tools/lint:check`, 5/5), `//crates/wolf-macos:WolfKeyMapTests` 428 cases with 30 in `PreviewCopySeamTests`, `//crates/... //bazel/...` 96/96, `//crates/wolf-macos:Wolf` builds, docs written and under budget.
+## Round 4: orchestrator decisions on the coder's new recommendations
 
-Earlier detail, kept for the record:
+All three review findings are fixed and verified. Finding 2 was confirmed a LIVE bug, not a
+theoretical one: with the path unescaped, `swapname('%')` resolved to nvim's own default
+swap dir — durable swap was silently disabled whenever the state dir contained a comma, and
+`spell_durable`'s hostile dir was hitting exactly that. Escaped, the swap lands in the Wolf
+dir with the `//` full-path encoding intact.
 
-Implemented and green: `//crates/wolf-macos:WolfKeyMapTests` runs 28 `PreviewCopySeamTests` cases, all passing; `//crates/wolf-macos:Wolf` builds; `//crates/... //bazel/...` 96/96 pass; swift-format clean.
+1. **ACCEPTED (test-writer): lock in the `'directory'` comma escaping.** Nothing asserts it
+   today — `swap_recovery` uses a comma-free tempdir. We just fixed a real silent bug with
+   zero coverage, so it goes in: give `swap_recovery.rs` a comma-and-space-bearing state
+   dir, mirroring `spell_durable`'s `HOSTILE_STATE_SUBDIR`, so the existing recovery
+   assertions run through an escaped path.
+2. **DECLINED for this change: the `redraw_grid` scroll flake.** Measured at 4/10 failures
+   on committed `HEAD` with all of this work stashed, so it strictly predates it and is
+   unrelated to spell or swap. `scroll_shifts_grid_content` and
+   `scroll_up_shifts_grid_content_down` sample the grid without waiting for the post-scroll
+   redraw to settle. A real bug worth fixing, but fixing it here would expand a
+   spell-dictionary change into unrelated test-harness repair. Report it to the user as a
+   separate item.
 
-Second test pass done — two accepted gaps from the coder's review, both added and passing with no seam change:
+## Round 3: orchestrator decisions on the review
 
-1. `testSelectionScriptJSPostsUnderTheKeyTheDecoderAccepts` pins the payload key `"t"` across the JS/Swift boundary (`selectionScriptJS` emits it, `decodeSelectionMessage` requires it; nothing tied them, so a JS-side rename would leave the suite green and the feature dead).
-2. `testSelectionScriptJSFiresOnePushAtDocumentStart` pins the document-start `post()` that re-seeds the cache to cleared on a full load.
+Reviewer verdict: approved. Plan conformance item for item, all three measured constraints
+respected with reasons recorded at the site, `syntax on` ordering intact, the
+global-not-per-project decision genuinely protected in `state.rs`, and `spell_durable`
+cannot pass vacuously. Three notes, all accepted:
 
-`PreviewCopySeamTests` is 30 cases; the `WolfKeyMapTests` binary is 428, 0 failures, run with `--cache_test_results=no`.
+1. **(must fix, test-writer) Stale tests-first note**, `tests/state_unit.rs:538-539`. It
+   claims `spell_dir` "does not exist until the coder adds it" — false, and exactly the
+   history narration `CLAUDE.md` bans. Delete those two lines; keep the rest of the doc.
+2. **(accepted, coder) `'directory'` has the same comma hazard and no escaping**,
+   `init.lua:33-36`. `'directory'` is also a comma-separated list, so a comma in
+   `state_dir()` splits it into two bogus entries and durable swap silently reverts to
+   nvim's default. This is live in our own suite: `spell_durable`'s `HOSTILE_STATE_SUBDIR`
+   contains a comma, so that test runs with swap effectively disabled — a situation THIS
+   change introduced. One line, and leaving one block escaped-and-documented beside an
+   identical unescaped one is precisely how the reason gets lost. Mind the trailing `//`:
+   escape the path, then append.
+3. **(accepted, coder) Comment contradicts code**, `nvim.rs:1724-1726`. The swap
+   `create_dir_all` comment says "best-effort (a failure just means nvim falls back)" but
+   `?` propagates and fails the spawn. The BEHAVIOR is deliberate and mirrors the XDG
+   `create_dir_all`s above it — fix the COMMENT, not the code. Pre-existing, but the
+   correct new spell comment directly below makes it newly conspicuous.
 
-Declined nothing. The coder's third item is the documentation sweep, queued for the technical writer.
+Reviewer observations accepted without action: no test covers a regression to a
+post-`syntax on` `FileType` autocmd for `'spellfile'` (that failure mode needs a markdown
+startup file argument, which neither the tests nor production ever use — the `init.lua`
+comment is the protection); the empty-`WOLF_SPELL_DIR` no-op branch is untested and
+unreachable from Wolf.
 
-Reviewer: **approved with minor notes**. All eight plan-conformance checks pass, with file:line evidence — teardown removes all three handlers by name and prunes both dictionaries; the cache clear sits above the `updateStrategy` switch so both replacement branches pass through it; `activePaneSelection` keys on `activeWin` with no fallback; the `.neovimVisual` branch is byte-for-byte today's behavior; both hand-maintained `srcs` lists are edited.
+Round 2 closed: both test bugs fixed, `spell_durable` runs 1 test and passes (0.4s, `small`
+stands), `spawn` runs 4 (3 new). Full sweep `98 out of 98 tests pass`, no flakes this run.
+The hostile `Application Support,Wolf` state dir passed with no application change, which is
+the real proof of the comma escaping. Lint 5/5, clippy log clean. Docs (plan step 8) are the
+only remaining work.
 
-Orchestrator decisions on the review findings:
+## Round 2: orchestrator decisions on the coder's report
 
-- **F6 (accepted, test-writer)** — the capture-phase assertion `js.contains("true")` is vacuous (`pending = true` satisfies it), so dropping the capture argument would leave the suite green while breaking §7 defense 2. Pinned to `'mouseup', post, true)` / `'keyup', post, true)`. Plus a `toString()` pin: without it, a `text` function returning `''` unconditionally satisfies every other JS assertion.
-- **F3 (accepted, coder — fix the code)** — a late message after teardown wrote a permanent entry: the prune iterates `previewWebViews.keys`, which `removePreviewWebView` has already nil'd, so the inherited "the next prune drops it" comment is false. Harmless for two `Double`s of scroll state, not for a document's text. `recordPreviewSelection` now ignores a `win` absent from `previewWebViews`.
-- **F4 (accepted, coder — comment)** — the synchronous clear is authoritative against a late *clear*, not a late *set*: a `mouseup` / `keyup` / pending rAF push can re-populate the entry in the frame or two before WebKit commits the replacement. Benign (`post()` reads live state at call time), but the comment claimed more than it delivers.
-- **F2 (out of scope, reported not fixed)** — while a preview selection is cached, the main menu's ⌘C wins over a focused Wolf text field (sidebar Search, file-tree rename), so the preview text is copied instead of the field's. A live Neovim visual-mode selection already does this by the identical mechanism, so this change widens a pre-existing defect rather than introducing one; fixing it means changing who wins ⌘C for the editor path too, which is beyond this bug. Added to the smoke list; report to the user.
-- **F5 (accepted, plan)** — the two-preview-pane smoke step could not pass as written; corrected above.
-- **F1 and the doc list** — technical writer.
+Implementation is complete and verified by hand (the coder confirmed the full chain
+end to end against the pinned nvim, including a spell dir containing both a comma and a
+space). `:spell`, `:state_unit`, `:swap_recovery`, `:spawn` all pass; `state_unit` runs the
+new `spell_dir_is_global_and_under_state_dir`. Only `spell_durable` is red, and both causes
+are bugs in the TEST file, not the implementation.
 
-Also noted by the reviewer, deliberately NOT fixed here: `PreviewSeamTests.testClickFocusJSCaptureMousedownPostsToHandler` has the same vacuous `contains("true")` hole, and `recordPreviewScrollState` carries the same false "next prune drops it" sentence. Both are pre-existing and outside this change.
+**Must fix (test-writer):**
 
-Then: technical writer.
+1. **`drop(core)` after `core.shutdown()` — compile error.** `WolfCore::shutdown` takes
+   `self` by value, so the explicit `drop(core);` is a use-after-move (E0382). Delete that
+   line; keep `drop(waiter);`. Shutdown already consumes and drops the core.
+2. **The `<none>` sentinel can never fire.** Measured: `vim.fn.spellbadword()` returns an
+   empty STRING at index 1 for a good word, not `nil`, and `""` is truthy in Lua — so
+   `(… [1] or "<none>")` yields `""` and every `assert_eq!(…, NONE)` fails with a confusing
+   empty string even when the feature works. Bind the call once in Lua and map empty to the
+   sentinel explicitly. Note this bug also makes the "before" assertion pass by accident.
 
-Deviations from the plan: none reported by the coder. One incidental fix — the `previewScrollHandlers` doc comment said "Both handlers" and was made wrong by this change, so it names all three.
+**Also adopt (test-writer):**
 
-## Problem statement
+3. **Fold a comma AND a space into `spell_durable`'s own state dir.** The comma escaping is
+   the one guard whose failure is completely silent (`zg` falls back to the rtp default and
+   looks like success), and the test already owns its `WOLF_STATE_DIR` tempdir, so this
+   costs nothing — create a subdirectory whose name contains both, and point
+   `WOLF_STATE_DIR` at it. This locks in exactly what the coder verified by hand. Rejected
+   the alternative of a separate comma-only target: a whole new Bazel target for one
+   assertion, when the existing test can carry it for free.
 
-When text is selected in a Markdown preview pane, ⌘C does nothing and Edit > Copy is greyed out.
+**Also adopt (test-writer):**
 
-Copy must work for a selection in a preview pane — both the ⌘C key equivalent and the Edit > Copy menu item — copying the preview web view's selected text to `NSPasteboard`. The existing editor-pane behavior (Neovim visual-mode yank) must be unchanged.
+4. **Cover the `from_env(…, None, …)` spell-dir fallback in `crates/wolf-core/tests/spawn.rs`.**
+   Nothing exercises the `None` → `state_root/spell` branch or `spawn`'s `create_dir_all`
+   for it, and a regression there is invisible until `zg` silently fails `E484`. Cheap and
+   headless; `spawn.rs` is already wired.
 
-## Root cause (verified by the architect)
+**Declined:**
 
-- `Sources/WolfMacOS/AppMenu.swift:234-247` `editMenuItem()` builds Copy via `commandItem(title: "Copy", tag: Tag.copy, keyEquivalent: "c", target: target)` — an explicitly targeted item, so the main menu's `performKeyEquivalent` matches ⌘C and validation decides everything. The target is `AppDelegate`, not `nil`, so the responder chain is never consulted: the fix must live inside the menu-item path, and making the web view first responder cannot help.
-- `Sources/WolfMacOS/AppDelegate.swift:748-749` `validateMenuItem` returns `keyController?.isVisualMode ?? false` for `.copy` — why the item greys out and ⌘C is inert.
-- `Sources/WolfMacOS/WolfWindowController.swift:664-669` `copy()` yanks via `handle.copy_selection()`.
+5. A separate assertion that `WOLF_SPELL_DIR` is present in the child's environment.
+   `spell_durable` proves it end to end, and asserting it in `spawn.rs` would mean
+   duplicating the toast/echo probe machinery a third time. The redundancy is not worth the
+   maintenance cost.
 
-The existence of the bug proves the menu wins the key-equivalent race against the `WKWebView`; if WebKit ever won it, it would copy the same bytes, so the fix is robust either way.
+**Noted, not a blocker:** the full sweep shows one flaky real-nvim target per run
+(`tabpages`, then `save_open` — a different one each time), each passing in isolation, each
+log ending at `running N tests` with no assertion output. Pre-existing, load-related, and
+matching flakiness already seen on `autoread` and `spell` before this change. Not caused by
+this work; do not chase it here.
 
-**No core change is needed.** `wolf_core::COMMAND_SPECS` (`crates/wolf-core/src/command.rs:257-263`) carries only `command / id / ex_command / title / menu` — no availability predicate — and `palette.rs` does no enablement filtering. Availability is entirely a front-end concern. The only core-side touch is a stale one-line doc comment (§9.7).
+## Problem
 
-## Design constraints
+`zg` (add word to the user spell dictionary) and `zw` currently write to a path that does
+not survive the session, so a word the user teaches Wolf is forgotten on restart. The user
+reported this directly.
 
-- Menu validation is synchronous, so "does the preview have a selection" cannot be an async `evaluateJavaScript` round trip. Use the existing push-based pattern: a document-start user script plus a `WKScriptMessageHandler` pushing state into a Swift-side cache on `PaneContainerView` — parallel to click-to-focus (`PreviewSeam.clickFocusJS` / `PreviewClickFocusHandler`) and scroll state (`PreviewScrollSeam` / `PreviewScrollStateHandler`).
-- Any new script-message handler on a preview web view's `WKUserContentController` must be removed in `PaneContainerView.removePreviewWebView`, or the controller leaks the handler and keeps the container alive.
-- All pure logic lives in a headless `WolfKeyMap` seam with unit tests.
-- New Swift test files must be added explicitly to the `srcs` of `//crates/wolf-macos:WolfKeyMapTests`, or they never run.
-- Real `WKWebView` selection and a live ⌘C cannot be automated: manual smoke steps.
+Cause: `runtime/nvim/init.lua` leaves `'spellfile'` unset. With no explicit value nvim
+derives the target from the first writable directory on `runtimepath` plus
+`/spell/en.utf-8.add`. `crates/wolf-core/src/nvim.rs`'s `spawn` pins `XDG_DATA_HOME` (and
+the other `XDG_*` dirs) under a private temp dir for hermeticity, so the derived path lands
+in that temp dir and dies with the process.
+
+## Desired behavior
+
+`zg` / `zw` write under `state_dir()` — macOS `~/Library/Application Support/Wolf/spell`,
+Linux `~/.local/state/wolf/spell` — so taught words persist across restarts.
+
+The dictionary is GLOBAL, not per-project: a word list is a property of the language, not
+of the open folder. Deliberately UNLIKE `swap_dir_for(cwd)`, which hashes the cwd. Use
+`state_dir()/spell` with no cwd component.
+
+## Empirical findings (measured against the pinned nvim 0.12.3; binding)
+
+1. **Set `'spellfile'` GLOBALLY (`vim.opt.spellfile`), once, at init.** It is local-to-buffer
+   but the global value seeds every new buffer; verified on all three open paths (startup
+   file argument, `:edit`, `:enew` + `set ft=markdown`). A buffer-local set from a NEW
+   `FileType` autocmd appended at the end of `init.lua` FAILS for a markdown startup file
+   argument — the same `syntax on` hazard the `WolfSpell` comment documents. If buffer-local
+   is ever wanted it must go inside the EXISTING `WolfSpell` callback.
+2. **`vim.fn.mkdir(dir, "p")` is MANDATORY, not defensive.** nvim does not create the parent
+   of an explicitly-set `'spellfile'`. Missing parent ⇒ `zg` fails `E484` and the word is
+   silently dropped; no dir, no file. nvim auto-creates only for the runtimepath-derived
+   DEFAULT, which is why the premise misleads.
+3. **A comma anywhere in the path silently defeats the feature.** `'spellfile'` is a
+   comma-separated list; a raw comma raises `E5113`/`E474` and leaves the option EMPTY, so
+   `zg` falls back to the default rtp spellfile and looks like success. Escape with
+   `(path:gsub(",", "\\,"))`. Spaces need no escaping through the Lua option API, so a macOS
+   `Application Support` path is fine.
+4. **`zg` writes two files:** `en.utf-8.add` (plain text, one word per line) and a compiled
+   `en.utf-8.add.spl`. No `:mkspell` needed — `zg` recompiles in-process and
+   `spellbadword()` reports the word good immediately. A fresh nvim with the same
+   `'spellfile'` also sees it good (verified end to end).
+5. **The compiled `.add.spl` is the load-time source of truth, not the `.add`.** Externally
+   appending to `.add` is NOT picked up; nvim does not auto-recompile and emits no warning.
+   TESTING IMPLICATION: never hand-write the `.add` from Rust. Drive the real `zg`.
+
+## Orchestrator decisions on the architect's open questions
+
+- **`SPELL_LANG` shared local: ADOPTED.** Introduce it and use it in both the filename and
+  the existing `WolfSpell` callback. Only a literal inside the callback body changes; the
+  registration order — the load-bearing part — is untouched, and `//crates/wolf-core:spell`
+  asserts `spelllang == "en"`, so a mistake fails loudly.
+- **`size = "small"` for the new target: ADOPTED as the starting point.** If the first real
+  run exceeds ~30s wall, the coder bumps that one target to `medium` and says so. Do not
+  weaken poll assertions to fit a timeout.
+- **`pcall` around `mkdir`: ADOPTED.** An init.lua that raises during startup is worse than
+  a `zg` that fails.
 
 ---
 
-## 1. Summary
-
-Add a third push channel to the Markdown preview web view — a document-start user script that pushes the page's current selection text out to Swift over a `WKScriptMessageHandler`, cached per preview window on `PaneContainerView`. All rules (handler name, JS source, message decoding, and the "is Copy enabled / which source does Copy use" decision) live in a new headless `WolfKeyMap.PreviewCopySeam`. `AppDelegate.validateMenuItem` and `WolfWindowController.copy()` both consult that one seam decision with the same two inputs, so the menu can never claim enabled while Copy yields nothing, and the Neovim visual-mode yank path is reached by exactly the same branch as today.
-
-## 2. Files to create
-
-### `crates/wolf-macos/Sources/WolfKeyMap/PreviewCopySeam.swift`
-
-A new seam file rather than an addition to `PreviewSeam`. Reason to state in its header: `PreviewSeam` owns reload arithmetic plus the click-to-focus channel and `PreviewScrollSeam` owns the scroll channel; a third channel is a third file, which is also what the one-entry-per-file README rule expects. Imports **Foundation only**.
-
-```swift
-public enum PreviewCopySeam {
-
-  public struct Selection: Equatable {
-    public let text: String
-    public init(text: String)
-    /// `true` when `text` is non-empty after trimming `.whitespacesAndNewlines`.
-    public var isCopyable: Bool { get }
-  }
-
-  public enum SelectionMessage: Equatable {
-    case selection(Selection)   // a well-formed push carrying copyable text
-    case cleared                // a well-formed push with no (or whitespace-only) selection
-  }
-
-  public enum CopySource: Equatable {
-    case previewSelection(String)   // the payload is the RAW selected text
-    case neovimVisual
-    case none
-  }
-
-  /// Must differ from `PreviewSeam.clickFocusHandlerName` and
-  /// `PreviewScrollSeam.stateHandlerName` — all three ride one
-  /// `WKUserContentController`.
-  public static let selectionHandlerName = "wolfPreviewSelection"
-
-  public static func selectionScriptJS(handlerName: String = selectionHandlerName) -> String
-
-  /// `nil` means malformed — ignore the message and leave the cache alone.
-  public static func decodeSelectionMessage(_ body: Any?) -> SelectionMessage?
-
-  public static func copySource(
-    previewSelection: Selection?, isVisualMode: Bool) -> CopySource
-
-  /// Defined as `copySource(...) != .none`, so the two can never disagree.
-  public static func isCopyEnabled(
-    previewSelection: Selection?, isVisualMode: Bool) -> Bool
-}
-```
-
-Rules to encode and document on the declarations:
-
-- `copySource` precedence, ordered: a non-`nil` `previewSelection` whose `isCopyable` is true wins over `isVisualMode`; otherwise `isVisualMode` gives `.neovimVisual`; otherwise `.none`. Preview wins because the caller passes a non-`nil` selection only when the **active pane is that preview**, so a stale global nvim mode must not override what the user is looking at. A cached-but-non-copyable entry must **not** mask visual mode — a named test case.
-- `.previewSelection` carries the **raw, untrimmed** text. Trimming decides *whether* to copy; it must never change *what* is copied.
-- Whitespace-only counts as empty: a stray click-drag across a margin selects whitespace, and clobbering `NSPasteboard` with `" "` is worse than doing nothing. Note that `CharacterSet.whitespaces` includes U+00A0, so a non-breaking-space-only selection is also "empty".
-- `decodeSelectionMessage` accepts only `[String: Any]` with a `String` under key `"t"`. Anything else (non-dictionary, missing key, wrong value type, `nil`) returns `nil`. Extra keys are ignored. An empty or whitespace-only `"t"` returns `.cleared` — a positive clear, distinct from the malformed `nil`, because a collapsed selection must actively drop the cached entry.
-
-**The JS contract** produced by `selectionScriptJS(handlerName:)`:
-
-- One self-invoking function wrapped entirely in `try { … } catch (e) {}`, mirroring `PreviewScrollSeam.stateScriptJS`, so a missing message handler can never throw into the page.
-- A single internal `post` closure: read `window.getSelection()`; if absent, `rangeCount === 0`, or `isCollapsed`, the text is the empty string (an **O(1) early-out** — `toString()` is never called for a collapsed selection); otherwise `selection.toString()`. Post `{ t: <string> }` to `window.webkit.messageHandlers.<handlerName>`, guarded by the same existence check the scroll script uses.
-- Payload shape is exactly one key, always present. Empty string is the "cleared" signal; deliberately no separate boolean, so the Swift decoder has one thing to validate.
-- Listeners:
-  1. `document.addEventListener('selectionchange', …)` — **rAF-throttled** with the same `pending` flag idiom as the scroll script's `scroll` listener. Primary trigger and the one needing throttling: during a drag-select it fires per pointer move and `toString()` is O(selection length).
-  2. `mouseup` in the **capture phase**, unthrottled. The "settled" push, and what makes §7's ordering safe: it runs after WebKit collapses the selection at a click point, capture-phase for the same reason `clickFocusJS` is.
-  3. `keyup` in the capture phase, unthrottled. Covers ⌘A (Wolf's menu has no Select All item, so ⌘A reaches the web view) without depending on `selectionchange` firing for a programmatic Select All.
-  4. One `post()` at document start, so a full `loadHTMLString` resets the cache with no Swift involvement.
-- `keydown` is deliberately absent: the selection is not yet updated at keydown, so a push there would be stale.
-
-### `crates/wolf-macos/Sources/WolfMacOS/PreviewSelectionHandler.swift`
-
-The thin `WKScriptMessageHandler` adapter, structurally identical to `PreviewScrollStateHandler.swift` — copy its header shape (why the push direction, why `container` is weak, main-thread callback).
-
-- `final class PreviewSelectionHandler: NSObject, WKScriptMessageHandler`
-- `let win: Int64`, `weak var container: PaneContainerView?`, `init(win:container:)`
-- `userContentController(_:didReceive:)` calls `PreviewCopySeam.decodeSelectionMessage(message.body)` and switches: `.selection(let sel)` → `container?.recordPreviewSelection(win: win, selection: sel)`; `.cleared` → `container?.recordPreviewSelection(win: win, selection: nil)`; `nil` → return without touching the cache.
-- No logic beyond that switch. Imports `WebKit` and `WolfKeyMap`.
-- No BUILD edit needed: `wolf_macos_lib` globs `Sources/WolfMacOS/*.swift`.
-
-### `crates/wolf-macos/Tests/WolfKeyMapTests/PreviewCopySeamTests.swift`
-
-See §4. Header comment in the house style of `PreviewSeamTests.swift`: a "CONTRACT UNDER TEST" block restating the seam's signatures and the decision matrix.
-
-## 3. Files to modify
-
-### `crates/wolf-macos/BUILD.bazel` — two srcs lists
-
-Both hand-maintained; missing either is a silent gap.
-
-1. `swift_library(name = "wolf_key_map")` `srcs`: add `"Sources/WolfKeyMap/PreviewCopySeam.swift"` immediately before line 91's `"Sources/WolfKeyMap/PreviewLinkSeam.swift"`, keeping alphabetical order. **Without this the seam does not compile into the module at all.**
-2. `swift_test(name = "WolfKeyMapTests")` `srcs`: add `"Tests/WolfKeyMapTests/PreviewCopySeamTests.swift"` immediately before line 290's `"Tests/WolfKeyMapTests/PreviewLinkSeamTests.swift"`.
-
-No change to `wolf_macos_lib` (globbed) or to `swift_format_srcs` / `markdown_srcs` (globbed).
-
-### `crates/wolf-macos/Sources/WolfMacOS/PaneContainerView.swift`
-
-**Add two stored properties** in the per-window map block (after `previewScrollStates`, around line 271):
-
-- `private var previewSelectionHandlers: [Int64: PreviewSelectionHandler] = [:]` — the retained proxy, documented with the same reason as `previewScrollHandlers`.
-- `private var previewSelections: [Int64: PreviewCopySeam.Selection] = [:]` — the live copyable selection each preview page pushed. Document that its only reader is the synchronous menu-validation / copy path, and that it may hold the whole document's text after ⌘A (bounded, dropped on document replacement and on pane close).
-
-**`ensurePreviewWebView(for:)` (line 1523)** — after the scroll-sync block (line 1558), add a third parallel block: construct `PreviewSelectionHandler(win: win, container: self)`, store it in `previewSelectionHandlers[win]`, `config.userContentController.add(proxy, name: PreviewCopySeam.selectionHandlerName)`, and `addUserScript` a `WKUserScript(source: PreviewCopySeam.selectionScriptJS(), injectionTime: .atDocumentStart, forMainFrameOnly: true)`. Update the existing comment that says "Both handlers must be removed in `removePreviewWebView`" to say all three.
-
-**`removePreviewWebView(_:)` (line 1627)** — add `removeScriptMessageHandler(forName: PreviewCopySeam.selectionHandlerName)` alongside the two existing removals, then `previewSelectionHandlers[win] = nil` and `previewSelections[win] = nil`.
-
-**`syncPreviewWebViews()` prune path (line 1297)** — no edit needed; it already routes dead wins through `removePreviewWebView`. Verify only.
-
-**`reloadDirtyPreviews()` (line 1340)** — add one synchronous clear, `previewSelections[win] = nil`, immediately before the `switch PreviewScrollSeam.updateStrategy(…)` at line 1394, so it covers **both** the `.inPlace` and `.fullLoad` branches. Comment why: both paths destroy the DOM selection, and the Swift-side clear is authoritative because it is synchronous — it does not depend on the page getting a `selectionchange` out before the user opens the Edit menu. The `captureDecision` `.drop` branch needs no separate clear: a source switch always takes `.fullLoad` and passes through the same line.
-
-**New internal accessor** next to `activeWin` / `activePaneIsPreview` (around line 652-669):
-
-```swift
-/// The copyable selection the ACTIVE pane's preview page last pushed, or `nil`
-/// when the active pane is not a preview / has no selection.
-var activePaneSelection: PreviewCopySeam.Selection? { get }
-```
-
-Implementation: `let win = activeWin; guard win != 0 else { return nil }; return previewSelections[win]`. Document that identity is `activeWin` — the **per-view** active pane — and never `handle.active_win()`, which is shared across a project's tabpages and would let a background tab's preview selection enable Copy in this window. Unlike `WolfWindowController.historyWin`, there is deliberately **no** `active_win()` fallback, for that exact reason.
-
-**New method** next to `recordPreviewScrollState(win:state:)` (line 1593):
-
-```swift
-/// Caches (or clears) the selection a preview page pushed out.
-func recordPreviewSelection(win: Int64, selection: PreviewCopySeam.Selection?)
-```
-
-Pure cache write, no repaint, no wake — same doc shape as `recordPreviewScrollState`, including the note that a late message for a removed window writes a dead entry the next prune drops.
-
-### `crates/wolf-macos/Sources/WolfMacOS/WolfWindowController.swift`
-
-**Two new read-only properties**, placed with `isVisualMode` (line 797):
-
-```swift
-/// The active pane's pushed preview selection, or `nil`.
-var activePreviewSelection: PreviewCopySeam.Selection? { paneContainer?.activePaneSelection }
-
-/// Whether Edit > Copy has anything to copy, from either source.
-var canCopy: Bool  // PreviewCopySeam.isCopyEnabled(previewSelection:isVisualMode:)
-```
-
-`canCopy` resolves both inputs in one place so validation and the action cannot drift. Both are cheap: one dictionary read plus the existing snapshot read behind `is_visual_mode()`.
-
-**Rewrite `copy()` (line 664)** as a mechanical switch over `PreviewCopySeam.copySource(previewSelection: activePreviewSelection, isVisualMode: isVisualMode)`:
-
-- `.previewSelection(let text)` → write `text` to `NSPasteboard.general`. It must **not** call `handle.copy_selection()`: that is a blocking RPC that yanks inside Neovim and would touch registers for a selection that is not Neovim's.
-- `.neovimVisual` → today's body verbatim: `handle?.copy_selection().toString()`, guarded by `!text.isEmpty`, then write.
-- `.none` → return.
-
-Factor the two-line pasteboard write into a `private func writeToPasteboard(_ text: String)` so both branches share it. Rewrite the doc comment: Copy has two sources, chosen by the pure seam; the preview branch is fully synchronous because the text was already pushed.
-
-### `crates/wolf-macos/Sources/WolfMacOS/AppDelegate.swift`
-
-- `validateMenuItem` `.copy` case (line 748-749): `return keyController?.canCopy ?? false`. The `keyController` resolution is unchanged (no `?? controllers.first` fallback for tagged commands).
-- Update the function's doc comment (lines 701-706), which says Copy is disabled "unless the key window is in visual mode": it is enabled when the active pane is a preview with a non-empty selection **or** the key window is in visual mode.
-
-### `crates/wolf-macos/Sources/WolfMacOS/AppMenu.swift`
-
-Comment-only: the `editMenuItem` doc (line 231-233) says "Copy is enabled only in visual mode". Restate: Copy is enabled when either source has something to copy (gated by `AppDelegate.validateMenuItem` → `WolfWindowController.canCopy`); Paste is always enabled. No structural change — Copy stays a tagged Wolf command item.
-
-### `crates/wolf-macos/Sources/WolfMacOS/CommandDispatcher.swift`
-
-**No change.** `.copy` → `controller?.copy()` is already source-agnostic. Consequence for the record: the command-palette row and a drained `:WolfCopy` both reach the same `copy()`, so they copy a preview selection when the originating window's active pane is a preview — consistent, and a no-op when neither source has content, exactly as today.
-
-## 4. Test plan
-
-### New headless file: `Tests/WolfKeyMapTests/PreviewCopySeamTests.swift`
-
-Scalar and string inputs only — no AppKit, no `WKWebView`, no Neovim.
-
-**Handler-name cases**
-
-1. `selectionHandlerName == "wolfPreviewSelection"`.
-2. It differs from **both** `PreviewSeam.clickFocusHandlerName` and `PreviewScrollSeam.stateHandlerName`. Load-bearing: all three ride one `WKUserContentController`, where a duplicate name silently replaces a handler.
-
-**JS-synthesis cases** (string containment, in the style of `PreviewScrollSeamTests`)
-
-3. The generated source posts to `window.webkit.messageHandlers.wolfPreviewSelection`.
-4. It registers `selectionchange`.
-5. It registers `mouseup` and `keyup`.
-6. It contains `requestAnimationFrame` (the throttle) and `isCollapsed` (the O(1) early-out).
-7. It is wrapped in `try` / `catch`.
-8. A custom `handlerName:` argument is interpolated instead of the default.
-
-**Decoding cases**
-
-9. `["t": "hello"]` → `.selection` with `text == "hello"`.
-10. `["t": "  hi  "]` → `.selection` with the text preserved **verbatim**, leading/trailing whitespace included.
-11. `["t": ""]` → `.cleared`.
-12. `["t": "   \n\t "]` → `.cleared` (whitespace-only).
-13. `["t": 42]` → `nil` (wrong value type).
-14. `[:]` → `nil` (missing key).
-15. `"hello"` (not a dictionary) → `nil`.
-16. `nil` body → `nil`.
-17. `["t": "x", "junk": 1]` → `.selection` (extra keys ignored).
-18. Multi-line and non-ASCII text round-trips unchanged.
-
-**Decision-matrix cases**
-
-19. `(nil, isVisualMode: false)` → `.none`.
-20. `(nil, true)` → `.neovimVisual`.
-21. `(copyable, false)` → `.previewSelection` carrying the raw text.
-22. `(copyable, true)` → `.previewSelection` — preview wins over visual mode.
-23. `(Selection(text: ""), false)` → `.none`.
-24. `(Selection(text: ""), true)` → `.neovimVisual` — a non-copyable cached entry must not mask visual mode.
-25. `(Selection(text: " \n "), true)` → `.neovimVisual`; `(same, false)` → `.none`.
-26. `Selection.isCopyable` directly: `""`, `" "`, `"\n"`, `"\t"`, U+00A0-only are all false; `"a"` and `" a "` are true.
-27. **Equivalence sweep**: loop the whole matrix asserting `isCopyEnabled(...) == (copySource(...) != .none)`.
-
-### BUILD wiring and proof it runs
-
-Add the file to `swift_test(name = "WolfKeyMapTests")` `srcs` as in §3, then run `bazelisk test //crates/wolf-macos:WolfKeyMapTests --test_output=all` and confirm the `PreviewCopySeamTests` case names appear. A file absent from `srcs` never compiles into the binary and never runs, with no error.
-
-### Manual smoke steps (report at the end; not automatable)
-
-- Drag-select text in a preview pane → Edit > Copy becomes enabled; ⌘C then pastes exactly the selected text into another app.
-- Choosing Edit > Copy with the mouse copies the same bytes as ⌘C.
-- Click once in the preview to collapse the selection → Copy greys out again (exercises §7).
-- With a preview selection live, type in the source file (body-swap path) → Copy greys out.
-- Editor pane unchanged: visual-mode ⌘C still yanks from Neovim; Copy is greyed in normal mode.
-- ⌘A in the preview enables Copy and copies the whole document.
-- Two preview panes, selection in one: focusing the other greys Copy out. Focusing back does NOT re-enable it, and that is correct: a preview pane regains focus only by a click inside its web view, and that same `mousedown` collapses the selection (§7 defense 2). Verify the re-enable half with ⌘A after refocusing instead.
-- With a paragraph selected in a preview pane, click into the sidebar Search field, select the query text, press ⌘C and paste elsewhere: confirm which text lands. Copy is now enabled while a preview selection is cached, so the main menu's ⌘C wins over the focused field. Check whether a live Neovim visual-mode selection already does the same — it should, which makes this a pre-existing defect this change widens rather than a regression it introduces.
-- Close a preview pane, then open a new one and repeat — no crash, no stale enablement (proves handler removal and cache prune).
-- Copy in a background tab's preview does not enable Copy in the key window.
-
-## 5. Implementation order
-
-1. `Sources/WolfKeyMap/PreviewCopySeam.swift` + its `wolf_key_map` `srcs` entry.
-2. `Tests/WolfKeyMapTests/PreviewCopySeamTests.swift` + its `WolfKeyMapTests` `srcs` entry. Run the suite and confirm the new cases execute before touching any AppKit file.
-3. `PaneContainerView.swift`: the two dictionaries, `recordPreviewSelection(win:selection:)`, `activePaneSelection`, the `ensurePreviewWebView` registration, the `removePreviewWebView` teardown, the `reloadDirtyPreviews` clear.
-4. `PreviewSelectionHandler.swift`.
-5. `WolfWindowController.swift`: `activePreviewSelection`, `canCopy`, the `copy()` rewrite, `writeToPasteboard`.
-6. `AppDelegate.swift`: the `.copy` validation case and its doc comment.
-7. `AppMenu.swift`: the `editMenuItem` comment.
-8. Build the app (`bazelisk build //crates/wolf-macos:Wolf`), re-run `//crates/wolf-macos:WolfKeyMapTests`, then the manual smoke list.
-9. Documentation (§9), then `prettier --write` on every touched Markdown file and `./tools/lint/markdown_check.sh` on them.
-
-## 6. Dependencies
-
-None. No new external packages, no new Bazel external repos, no FFI surface change, no Rust change.
-
-## 7. Interaction with the click-to-focus script
-
-A `mousedown` in the preview posts to `wolfPaneFocus` (focusing the pane) and, in WebKit, also collapses the selection at the click point. The hazard is a stale `previewSelections[win]` left true after a click that cleared the selection. Three independent defenses, in the order they fire:
-
-1. The collapse fires `selectionchange`, whose rAF-throttled push runs on the next frame and posts `{ t: "" }` → `.cleared` → the entry is removed.
-2. The unthrottled capture-phase `mouseup` push runs after the collapse in the same gesture, so the cache is correct by the time the button is released — well before any menu can open or a ⌘C can be typed.
-3. The two handlers are independent and neither reads the other's state, so no ordering between `wolfPaneFocus` and `wolfPreviewSelection` can produce a wrong answer. Both are posted from the page on the same IPC path and delivered on the main thread in post order; `focusPreviewPane(win:)` deliberately does not touch `previewSelections`.
-
-The remaining theoretical failure — `selectionchange` never firing *and* no `mouseup` arriving — leaves at worst a stale enabled Copy that copies the text the user had genuinely selected a moment earlier. That is the benign direction.
-
-## 8. Payload decision: text is carried in the push
-
-**Chosen: carry the text.** `copy()` is then fully synchronous, exactly like the Neovim branch beside it.
-
-- **For:** menu validation is synchronous and cannot await `evaluateJavaScript`, so a cache is required for the enable decision regardless. Deriving both the enable decision and the copied bytes from the *same* cached snapshot makes "enabled but copies nothing" structurally impossible. It also avoids an asynchronous `NSPasteboard` write, which would let a ⌘C immediately followed by ⌘V read the previous clipboard, and avoids copying an empty string when the document is replaced between ⌘C and the JS callback.
-- **Against:** `selection.toString()` is O(selection length) and runs on every throttled push. Mitigated by the rAF throttle, by the O(1) collapsed early-out (the common case never calls `toString()`), and by selection changes being user-gesture-driven — typing in the editor pane produces no selection pushes.
-- **Staleness:** the two document-replacement paths are covered by the single synchronous `previewSelections[win] = nil` before the `updateStrategy` switch in `reloadDirtyPreviews`, authoritative precisely because it does not depend on the page delivering a `selectionchange` in time. The page's document-start `post()` then re-seeds the cache to cleared on the full-load path.
-- **Memory:** worst case one document's text per preview window, dropped on document replacement and on `removePreviewWebView`.
-
-## 9. Documentation updates required
-
-Per CLAUDE.md ownership. Edit existing entries in place; do not append.
-
-1. **`crates/wolf-macos/Sources/WolfKeyMap/README.md`** — new `#### PreviewCopySeam.swift` entry before the `PreviewLinkSeam.swift` entry (line 457). Purpose: the pure rules behind Copy from a preview pane — the selection push channel and the "which source does Copy use" decision. Public API: the four symbols plus `selectionHandlerName`. Decisions: the text rides in the payload so `copy()` is synchronous and the enable decision and the copied bytes come from one snapshot; whitespace-only counts as empty (with the U+00A0 note); a copyable preview selection outranks Neovim visual mode because the caller only supplies one for the active pane. Gotchas: the handler name shares a `WKUserContentController` with `PreviewSeam.clickFocusHandlerName` and `PreviewScrollSeam.stateHandlerName`, so all three must differ; teardown is in DECISIONS.md (link, do not restate). Budget ~200 words.
-2. **`crates/wolf-macos/Sources/WolfMacOS/README.md`**
-   - New `#### PreviewSelectionHandler.swift` entry after the `PreviewScrollStateHandler.swift` entry (line 454): purpose, `init(win:container:)`, the weak-container reason, the malformed-body-is-ignored-versus-empty-body-clears distinction, and a link to DECISIONS.md.
-   - `#### PaneContainerView.swift` (line 315): one Public API bullet for `activePaneSelection`, stating it keys on `activeWin` (per-view) with no `active_win()` fallback so a background tab's selection cannot enable Copy here. Adjust the closing "four-file model" bullet if the DECISIONS section's file count changes.
-   - `#### WolfWindowController.swift` (line 632): one Public API bullet for `canCopy`.
-   - `AppMenu.swift` / `AppDelegate.swift` / `CommandDispatcher.swift` entries: no change.
-3. **`crates/wolf-macos/DECISIONS.md`**, "How a preview reaches its web view" (line 66). Correct the sentence at line 74 — "Two script-message handlers ride on one preview web view's content controller… and both must be removed at teardown" — to name **three** channels (click-to-focus, scroll state, selection), keeping the distinct-names and teardown requirements. Add at most three sentences: Copy reads the same pushed cache for the same reason scroll state does — menu validation is synchronous and `evaluateJavaScript` is not — and the cache is cleared synchronously on both document-replacement paths rather than trusting the page to report the collapse. Link, do not restate the seam's rules.
-4. **`crates/wolf-macos/Tests/WolfKeyMapTests/README.md`** — new `#### PreviewCopySeamTests.swift` entry before `PreviewLinkSeamTests.swift` (line 250): the decode table, the `copySource` / `isCopyEnabled` matrix including the equivalence sweep, the JS-containment assertions. Gotchas: the handler-name-distinctness case exists because all three names share one content controller; live selection and a real ⌘C are manual-smoke.
-5. **`crates/wolf-ffi/src/README.md`** line 74 — "`is_visual_mode(&self) -> bool` — Gates the Edit > Copy menu item." Inaccurate: it gates only the Neovim branch of Copy. One-line correction. Line 72's `copy_selection` entry stays accurate.
-6. **`architecture.md`** line 101 — "Copy yanks the visual-mode selection over a blocking RPC so the shell can write it out". Amend: Copy has two sources, and a selection in a Markdown preview is copied from the web view without any RPC. One clause; it is a genuine cross-crate contract statement.
-7. **`crates/wolf-core/src/command.rs`** line 69 — the `Command::Copy` doc comment "Copy the visual-mode selection to the system clipboard." Reword to "Copy the current selection to the system clipboard" so core does not assert a front-end rule it no longer owns. No `COMMAND_SPECS`, palette, or FFI change accompanies it.
-
-## 10. Lint considerations
-
-- No linter ignore directives expected.
-- swift-format: both new Swift files are covered by the `swift_format_srcs` glob. Run `bazel run //tools/lint:swift_format.fix`, verify with `bazel test //tools/lint:swift_format`. The generated JS is a multi-line string literal like `PreviewScrollSeam.stateScriptJS` — keep the indentation shape swift-format already accepts there.
-- Markdown: after editing docs run `prettier --write` (`.prettierrc` sets `proseWrap: never`), then `./tools/lint/markdown_check.sh <files>` or `bazel test //tools/lint:markdown`. New entries must be present tense with no "now", "no longer", or "previously"; the DECISIONS.md edit is a rewrite of the existing sentence, not a sentence added beside it.
+## File-by-file plan
+
+### `crates/wolf-core/src/state.rs`
+
+Add `pub fn spell_dir() -> Option<PathBuf>`, `#[must_use]`, directly below `swap_dir_for`.
+Returns `state_dir().map(|d| d.join("spell"))`. No re-export in `lib.rs` (`swap_dir_for`
+is not re-exported either; tests reach it as `wolf_core::state::…`).
+
+Doc comment must state: it is `state_dir()/spell`; it is deliberately NOT per-project and
+NOT cwd-hashed, UNLIKE `swap_dir_for` — name `swap_dir_for` explicitly so a later agent does
+not "make it consistent" by hashing the cwd. A swap file belongs to one project's files; a
+word list belongs to the language. `None` only when `state_dir()` cannot resolve, and
+`NvimConfig::from_env` then falls back to an ephemeral dir under the private state root
+(documented, no panic).
+
+### `crates/wolf-core/src/nvim.rs`
+
+- **Field** `pub spell_dir: PathBuf` immediately after `swap_dir`, before `cwd`.
+  `_state_guard` stays last and private. Doc: durable, Wolf-owned, GLOBAL user-dictionary
+  dir, exported as `WOLF_SPELL_DIR`; global unlike `swap_dir`; distinct from the ephemeral
+  `state_root`, which is exactly what made the default spellfile ephemeral.
+- **`from_env`** gains a `spell_dir: Option<PathBuf>` parameter immediately after
+  `swap_dir` (six params, under clippy's threshold of 8 — do NOT bundle them into a struct).
+  Body: `let spell_dir = spell_dir.unwrap_or_else(|| state_root.join("spell"));`.
+  Extend the EXISTING swap-fallback doc paragraph in place to cover both; state the
+  consequence of the fallback: `zg` still works within the session (real writable dir, so
+  no `E484`), the words simply do not outlive the process — the pre-change behavior, no
+  panic.
+- **`spawn`**: `create_dir_all(&cfg.spell_dir).map_err(NvimError::StateDir)?` immediately
+  after the `swap_dir` one, commented with finding 2 as the reason. Add
+  `.env("WOLF_SPELL_DIR", &cfg.spell_dir)` on the line after the `WOLF_SWAP_DIR` export.
+  Rewrite `spawn`'s doc clause in place to name both vars; do not append a second sentence.
+
+### `crates/wolf-core/src/api.rs`
+
+In `WolfCore::start` (~308-317): extend `use crate::state::{state_dir, swap_dir_for};` with
+`spell_dir`; add `let spell_dir = spell_dir();` after the `swap_dir_for` line; pass it as the
+new fourth argument. Extend the existing comment in place with one clause: the spell dir
+takes no cwd — it is global by design. Do not restate the why (that lives in `state.rs`).
+`restart_nvim` reuses the stored config and needs no change.
+
+### `runtime/nvim/init.lua`
+
+Insert immediately BEFORE the `local spell_group = vim.api.nvim_create_augroup("WolfSpell",
+…)` line and AFTER the existing comment block. A plain option assignment before the augroup
+creation does not move the `WolfSpell` registration relative to `vim.cmd("syntax on")`, so
+the load-bearing ordering is preserved. Do NOT move, wrap, or re-register `WolfSpell`.
+
+- `local SPELL_LANG = "en"` above the block, commenting both consumers. Do not restate why
+  `en` is pinned — the existing comment already carries it; reference it.
+- Change `vim.opt_local.spelllang = "en"` inside the `WolfSpell` callback to
+  `vim.opt_local.spelllang = SPELL_LANG`. This is the ONLY edit inside the existing block.
+- Block behavior, in order: read `vim.env.WOLF_SPELL_DIR`; guard
+  `if dir ~= nil and dir ~= "" then` (strict no-op otherwise, matching the swap block's
+  shape); `pcall(vim.fn.mkdir, dir, "p")`; build `dir .. "/" .. SPELL_LANG .. ".utf-8.add"`;
+  escape commas over the whole joined path with `(path:gsub(",", "\\,"))` (parenthesized so
+  the substitution count is discarded); `vim.opt.spellfile = <escaped>`.
+- Comments must carry the WHY for each non-obvious step: global not buffer-local (finding 1,
+  and name it as the simplification a later agent would attempt); mkdir mandatory (finding
+  2); comma escaping (finding 3, including that spaces are fine so nobody "fixes" that);
+  the `spelllang` ↔ filename coupling (nvim derives the name from `'spelllang'` and
+  `'encoding'`, so the filename must track `SPELL_LANG`).
+- Tab-indented, matching the file. No Lua linter exists.
+
+### `crates/wolf-core/tests/spell_durable.rs` (new)
+
+A SIBLING file, not an extension of `spell.rs`, for three reasons the module doc must state:
+(1) it sets `WOLF_STATE_DIR` process-wide before any core starts, and a peer `#[test]`
+thread in the same binary calling the same set-if-absent helper is a real data race — a
+binary with exactly ONE `#[test]` has no peer (the lever `recent_dirs_records.rs` uses);
+(2) the spell dir is global, so every test in one binary shares one dictionary — isolation
+by target is the only isolation that holds; (3) it starts two cores sequentially and should
+not slow the existing fast target.
+
+Local helpers duplicated from `spell.rs` (deliberate; `poll_until` already exists in two
+files): `send_ex`, `toast_text`, `poll_until`, `echo`, `write_fixture`, `open`. Do NOT hoist
+them into `tests/common/mod.rs` — that recompiles ~40 targets for two consumers.
+The `echo` unique-tag discipline is not optional: ext_messages leaves the previous message
+in the toast, so a fixed marker matches stale residue. Copy the monotonic-nonce scheme.
+
+`BAD_WORD`: a fixed lowercase-ASCII nonsense word. Lowercase matters — unusual
+capitalization triggers separate `spellbadword` rules. Step 2 below is the resolver for
+whether the chosen literal is suitable.
+
+Single test `zg_persists_the_user_dictionary_across_cores`:
+
+1. `common::require_nvim_bin()`.
+2. `tempfile::tempdir()` + `set_var("WOLF_STATE_DIR", …)` BEFORE anything touches the
+   harness; hold the guard for the whole test.
+3. cwd A: canonicalized tempdir (macOS `/tmp` → `/private/tmp`), like `swap_recovery.rs`.
+   Write `note.md` whose FIRST LINE IS EXACTLY `BAD_WORD`, so `gg0` lands on its first char.
+4. Core 1 via `config_in(cwd_a, …)` + `wake_channel()`; `wait_for_initial_flush`; open
+   `note.md` via `InputEvent::Open`; `wait_for_flush`.
+5. Precondition probe: filetype/`spell`/`spelllang` = `markdown`/`true`/`en`. Without it the
+   rest can pass vacuously.
+6. **Before** assertion: `spellbadword(BAD_WORD)[1]` == `BAD_WORD`. Load-bearing — guards
+   against a word already in the dictionary.
+7. Drive the REAL `zg` as keystrokes: `type_str(&core, "gg0zg")`. Not `:normal! zg`, not
+   `:spellgood` — the point is the user's gesture. Never write the `.add` from Rust.
+8. Poll until `<state>/spell/en.utf-8.add` exists; assert its contents contain a line equal
+   to `BAD_WORD` after trimming. Poll, don't sleep — keystrokes arrive asynchronously.
+9. Assert the compiled `en.utf-8.add.spl` sibling also exists (finding 4/5).
+10. Same-session assertion: re-probe `spellbadword(BAD_WORD)` in core 1 ⇒ `<none>`.
+    Separates "`zg` failed" from "persistence failed" when it goes red.
+11. `core.shutdown()`, drop core + waiter so the child is gone.
+12. cwd B: a DIFFERENT canonicalized tempdir + a markdown fixture (content need not contain
+    `BAD_WORD`; it only has to open as markdown). Core 2 via `config_in(cwd_b, …)`.
+13. Probe filetype/spell, then `spellbadword(BAD_WORD)` ⇒ `<none>`. The different cwd proves
+    the dictionary is global; say so in the assertion message.
+14. `core2.shutdown()`.
+
+Finding 3's failure mode is caught implicitly: a comma-emptied `'spellfile'` sends `zg` to
+the rtp default and step 8 times out.
+
+### `crates/wolf-core/tests/state_unit.rs` (existing, already wired)
+
+Add one headless `#[test]` `spell_dir_is_global_and_under_state_dir` after
+`swap_dir_for_is_stable_per_cwd_and_distinct_across_cwds`, with a matching `// ====` banner.
+Take `ENV_LOCK` first (this file's convention), set `WOLF_STATE_DIR` to a tempdir, call
+`spell_dir()` twice, `remove_var`, assert: both `Some`, equal to each other, byte-equal to
+`state.path().join("spell")`, and carrying NO cwd-derived component. Assert exact equality
+rather than only `starts_with`, so a future cwd hash fails.
+
+### `crates/wolf-core/BUILD.bazel`
+
+New `rust_test` `spell_durable` immediately after the `spell` target, copying it field for
+field: `srcs = ["tests/common/mod.rs", "tests/spell_durable.rs"]`, matching `crate_root`,
+`tags = ["no-sandbox"]` with the sibling's verbatim comment, `size = "small"`,
+`edition = "2021"`, the same `data` and `env`, the same `deps`. Do NOT put `WOLF_STATE_DIR`
+in `env` — the test owns its own. Preceding comment in the house style.
+
+### Docs (edit in place per CLAUDE.md; never append beside stale prose)
+
+- `runtime/nvim/README.md` — line ~11: name both `WOLF_SWAP_DIR` and `WOLF_SPELL_DIR` in the
+  launch-env sentence (edit, don't add). After the existing spell Decisions paragraph, ONE
+  sibling paragraph (the swap decision already uses two adjacent paragraphs): points at
+  `WOLF_SPELL_DIR/<spelllang>.utf-8.add` so `zg` survives a restart; global rather than
+  buffer-local because a buffer-local set hits the `syntax on` hazard the paragraph above
+  describes (refer, don't restate); `mkdir -p` first because nvim does not create the parent
+  and `zg` then fails `E484` silently; commas escaped because a raw comma empties the option
+  and makes `zg` look like it worked; absent/empty env var leaves the option alone. Do not
+  restate the core-side resolution. Four sentences max, under 600 chars.
+- `crates/wolf-core/src/README.md` — `state.rs` Public API: one bullet after `swap_dir_for`.
+  `nvim.rs` Public API: edit the `NvimConfig::from_env` bullet in place to name both durable
+  dirs and their env vars plus the ephemeral fallback. One bullet each; do not append.
+- `crates/wolf-core/DECISIONS.md` — edit the "Hermetic launch" bullet in place: append a
+  clause naming the two directories that deliberately escape the temp root and the single
+  reason (their contents must outlive the process). Do not describe nvim-side option
+  mechanics.
+- `crates/wolf-core/tests/README.md` — new `#### spell_durable.rs` entry between `spell.rs`
+  and `state_layout.rs` (kind line, **Covers**, **Gotchas** per the house template; the
+  gotchas are the one-`#[test]` rule and the never-hand-write-the-`.add` rule). Edit the
+  `state_unit.rs` entry's trailing clause in place to name `spell_dir`.
+- `prettier --write` then `./tools/lint/markdown_check.sh` on every touched file. Present
+  tense only — `markdown_check.sh` bans "now", "no longer", "previously", "the old", and
+  this is a bug fix, so that temptation is strong.
+
+---
+
+## Implementation order
+
+1. `state.rs` → 2. `nvim.rs` → 3. `api.rs` (workspace compiles again) → 4. `init.lua`
+(feature live) → 5. `state_unit.rs` test → 6. `spell_durable.rs` → 7. `BUILD.bazel`, then
+CONFIRM the target actually runs → 8. docs + prettier + markdown lint → 9. full run.
+
+Full run: `bazelisk test //crates/... //bazel/... //runtime/...` — NOT `//...`, a stale
+`.worktrees/` checkout breaks package loading (pre-existing, unrelated).
+
+Regression targets to watch: `//crates/wolf-core:spell` (the `spelllang` literal became a
+local), `:state_unit`, `:swap_recovery`, `:spawn` (the `from_env` signature and the `spawn`
+env block moved).
+
+## Risks (settled)
+
+- **`from_env` callers**: exactly ONE in the repo (`api.rs`). `NvimConfig` is unconstructible
+  outside the crate (`_state_guard` is private). Neither `wolf-ffi` nor `wolf-macos` names
+  it. No Swift/FFI change, no `swift_test` `srcs` edit.
+- **`WOLF_SPELL_DIR` collision**: zero existing occurrences in the repo. `WOLF_TEST_*` /
+  `WOLF_NVIM_BIN` are Bazel→test-process; `WOLF_STATE_DIR` / `WOLF_RPC_TIMEOUT_MS` /
+  `WOLF_LOG` are read by the core itself. No shadowing.
+- **macOS `.app`**: nothing to stage. `state_dir()` resolves to the same
+  `~/Library/Application Support/Wolf` the app already uses for `state.json` and the sqlite
+  MRUs; the app is not sandboxed; `spawn` creates `spell/` on first launch. The block touches
+  `'spellfile'` only, never `runtimepath`, so the vendored bundle siblings are unaffected.
+- **Restart path**: `restart_nvim` re-spawns against the stored config, re-creates the dir
+  and re-exports the var. A crash restart keeps the dictionary.

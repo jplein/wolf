@@ -29,10 +29,20 @@ local opt = vim.opt
 -- files with the same basename in different dirs never collide) and DROPS the
 -- default leading "." entry (which would otherwise put a `.swp` next to the file).
 -- Keep nvim's default updatecount/updatetime.
+--
+-- Commas in the path are escaped for exactly the reason the 'spellfile' block
+-- below escapes them: 'directory' is a comma-separated LIST too, so a raw comma
+-- splits the path into two bogus, nonexistent entries and durable swap silently
+-- reverts to nvim's default -- a failure that looks like success from inside
+-- nvim. Spaces need no escaping through the Lua option API (a macOS
+-- "Application Support" path is fine). ORDERING: escape the path FIRST, then
+-- append the trailing "//" -- the "//" is nvim's marker, not part of the path,
+-- and must stay unescaped. The parentheses around the gsub discard its
+-- substitution count, which would otherwise be concatenated too.
 opt.swapfile = true
 local swap_dir = vim.env.WOLF_SWAP_DIR
 if swap_dir ~= nil and swap_dir ~= "" then
-	opt.directory = swap_dir .. "//"
+	opt.directory = (swap_dir:gsub(",", "\\,")) .. "//"
 end
 
 -- Recovery-aware swap policy: a SwapExists must NEVER surface the blocking E325
@@ -160,13 +170,66 @@ vim.filetype.add({ extension = { md = "markdown" } })
 -- runtimepath makes the runtime `spellfile.lua` plugin open a BLOCKING "download
 -- it?" prompt. Wolf attaches with `ext_messages` (which forces cmdheight = 0), so
 -- such a prompt has nowhere to draw and would wedge the UI.
+--
+-- SPELL_LANG is shared by two consumers: the `spelllang` set in the callback
+-- below, and the user-dictionary filename in the `spellfile` block that follows.
+-- They MUST agree -- see that block for why. The reason `en` specifically is
+-- pinned is the paragraph above; do not restate it.
+local SPELL_LANG = "en"
+
+-- The DURABLE user spell dictionary: `zg` / `zw` write to WOLF_SPELL_DIR (a
+-- global, Wolf-owned dir resolved core-side from state_dir()), so a word the user
+-- teaches Wolf survives a restart.
+--
+-- Left unset, nvim derives 'spellfile' from the first writable runtimepath entry,
+-- which lands under the XDG_DATA_HOME that wolf-core pins to a private temp dir
+-- for hermeticity -- so the word died with the process. That is the bug this
+-- fixes.
+--
+-- GLOBAL (vim.opt), once, at init -- NOT buffer-local and NOT from a new FileType
+-- autocmd. 'spellfile' is local-to-buffer, but the global value seeds every new
+-- buffer, verified on all three open paths (startup file argument, `:edit`,
+-- `:enew` + `set ft=markdown`). The tempting "simplification" is to move this
+-- into a FileType autocmd appended at the end of this file: that FAILS for a
+-- markdown startup file argument, for exactly the `syntax on` ordering reason
+-- documented above. If buffer-local is ever genuinely needed, it has to go inside
+-- the EXISTING WolfSpell callback -- do not register a new autocmd for it.
+--
+-- The mkdir is MANDATORY, not defensive: nvim creates the parent of the
+-- runtimepath-derived DEFAULT spellfile but never of an explicitly set one, so a
+-- missing parent makes `zg` fail with E484 and drop the word silently. pcall'd
+-- because an init.lua that raises during startup is worse than a `zg` that fails.
+--
+-- Commas are escaped because 'spellfile' is a comma-separated LIST: a raw comma
+-- raises E5113/E474 and leaves the option EMPTY, which sends `zg` back to the
+-- runtimepath default and looks like success from inside nvim. The swap
+-- 'directory' block above carries the SAME guard for the same reason -- keep the
+-- two in step. Spaces need no escaping through the Lua option API (a macOS
+-- "Application Support" path is fine), so do not add quoting for them. The
+-- parentheses around the gsub discard its substitution count, which would
+-- otherwise become a second assigned value.
+--
+-- The filename tracks SPELL_LANG because nvim derives the dictionary name from
+-- 'spelllang' and 'encoding': with spelllang = "en" and encoding = "utf-8", `zg`
+-- writes <lang>.utf-8.add. A filename that disagreed with 'spelllang' would make
+-- `zg` write a file nvim never reads back.
+--
+-- An absent or empty WOLF_SPELL_DIR is a strict no-op leaving 'spellfile' alone
+-- (nvim's default behavior), matching the swap block's shape above.
+local spell_dir = vim.env.WOLF_SPELL_DIR
+if spell_dir ~= nil and spell_dir ~= "" then
+	pcall(vim.fn.mkdir, spell_dir, "p")
+	local spell_file = spell_dir .. "/" .. SPELL_LANG .. ".utf-8.add"
+	opt.spellfile = (spell_file:gsub(",", "\\,"))
+end
+
 local spell_group = vim.api.nvim_create_augroup("WolfSpell", { clear = true })
 vim.api.nvim_create_autocmd("FileType", {
 	group = spell_group,
 	pattern = { "markdown", "text", "gitcommit" },
 	callback = function()
 		vim.opt_local.spell = true
-		vim.opt_local.spelllang = "en"
+		vim.opt_local.spelllang = SPELL_LANG
 	end,
 })
 

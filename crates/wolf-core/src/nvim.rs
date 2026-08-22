@@ -76,6 +76,15 @@ pub struct NvimConfig {
     /// project (letting a fresh nvim recover a dead nvim's swap), distinct from the
     /// ephemeral `state_root` (which still hosts the hermetic XDG isolation).
     pub swap_dir: PathBuf,
+    /// The DURABLE, Wolf-owned, GLOBAL user spell-dictionary directory
+    /// (`'spellfile'` inside nvim, via the `WOLF_SPELL_DIR` env var). Resolved by
+    /// [`crate::state::spell_dir`], which — unlike `swap_dir` — takes NO cwd
+    /// component: a word list belongs to the language, not to the open project.
+    /// Distinct from the ephemeral `state_root`: nvim's DEFAULT spellfile is
+    /// derived from `runtimepath` and therefore landed under the pinned
+    /// `XDG_DATA_HOME` below, which is exactly what made a taught word die with
+    /// the process.
+    pub spell_dir: PathBuf,
     /// Working directory the captive nvim is launched in (so its `getcwd()`
     /// starts here rather than inheriting the host process's cwd).
     pub cwd: PathBuf,
@@ -92,15 +101,19 @@ impl NvimConfig {
     /// private temp dir to host the isolated `XDG_*` state. `cwd` is the working
     /// directory the captive nvim will be launched in (see [`spawn`]).
     ///
-    /// `swap_dir` is the DURABLE per-project swap dir ([`crate::state::swap_dir_for`]);
-    /// `None` (an unresolvable `state_dir()`) falls back to an EPHEMERAL
-    /// `state_root/swap` under the private temp dir (documented — the swap then does
-    /// not survive a process exit, but recovery within one session still works and
-    /// nothing panics).
+    /// `swap_dir` is the DURABLE per-project swap dir ([`crate::state::swap_dir_for`])
+    /// and `spell_dir` the DURABLE global user-dictionary dir
+    /// ([`crate::state::spell_dir`]); `None` for either (an unresolvable
+    /// `state_dir()`) falls back to an EPHEMERAL `state_root/swap` or
+    /// `state_root/spell` under the private temp dir. Documented, not a panic: both
+    /// fall-backs are real writable directories, so within one session swap
+    /// recovery still works and `zg` still succeeds (no `E484`) — the contents
+    /// simply do not outlive the process, which is the pre-existing behavior.
     pub fn from_env(
         init_lua: PathBuf,
         cwd: PathBuf,
         swap_dir: Option<PathBuf>,
+        spell_dir: Option<PathBuf>,
         cols: u16,
         rows: u16,
     ) -> Result<Self, NvimError> {
@@ -115,6 +128,7 @@ impl NvimConfig {
             .map_err(NvimError::StateDir)?;
         let state_root = temp.path().to_path_buf();
         let swap_dir = swap_dir.unwrap_or_else(|| state_root.join("swap"));
+        let spell_dir = spell_dir.unwrap_or_else(|| state_root.join("spell"));
 
         Ok(Self {
             nvim_bin: PathBuf::from(bin),
@@ -122,6 +136,7 @@ impl NvimConfig {
             appname: NVIM_APPNAME.to_string(),
             state_root,
             swap_dir,
+            spell_dir,
             cwd,
             initial_cols: cols,
             initial_rows: rows,
@@ -1683,7 +1698,9 @@ fn value_is_true(value: Option<&Value>) -> bool {
 /// Launches `--embed --clean -u <init.lua> -i NONE -n`, pinning `NVIM_APPNAME`
 /// and the `XDG_*` dirs under `cfg.state_root`, exporting `WOLF_SWAP_DIR`
 /// (`cfg.swap_dir`, the durable per-project swap dir init.lua points `'directory'`
-/// at), and sets the child's working directory to `cfg.cwd` (so its `getcwd()`
+/// at) and `WOLF_SPELL_DIR` (`cfg.spell_dir`, the durable global user-dictionary
+/// dir init.lua points `'spellfile'` at), and sets the child's working directory
+/// to `cfg.cwd` (so its `getcwd()`
 /// starts there rather than inheriting the host process's cwd).
 ///
 /// The io-loop handle is MOVED into a supervisor task that awaits it and — unless
@@ -1705,8 +1722,17 @@ pub async fn spawn(
         std::fs::create_dir_all(d).map_err(NvimError::StateDir)?;
     }
     // The durable per-project swap dir must exist before nvim points `'directory'`
-    // at it; create it best-effort (a failure just means nvim falls back).
+    // at it: nvim does NOT create a missing `'directory'` entry, and with the
+    // default "." entry dropped by the trailing "//" a missing dir means NO swap
+    // file at all, so a crash silently loses the unsaved edits the durable swap
+    // exists to recover. A failure here is therefore FATAL to the spawn, like the
+    // XDG dirs above -- do not soften it to best-effort.
     std::fs::create_dir_all(&cfg.swap_dir).map_err(NvimError::StateDir)?;
+    // The durable spell dir must exist before nvim points `'spellfile'` at it, and
+    // this is MANDATORY rather than defensive: nvim creates the parent of the
+    // runtimepath-DERIVED default spellfile but never of an explicitly set one, so
+    // a missing parent makes `zg` fail with E484 and drop the word silently.
+    std::fs::create_dir_all(&cfg.spell_dir).map_err(NvimError::StateDir)?;
 
     // NOTE: the `-n` flag (no swap file) is DELIBERATELY omitted: it forces
     // `'updatecount' = 0`, which disables swap files entirely — but Wolf now relies
@@ -1726,6 +1752,7 @@ pub async fn spawn(
         .env("XDG_STATE_HOME", &state_home)
         .env("XDG_CACHE_HOME", &cache_home)
         .env("WOLF_SWAP_DIR", &cfg.swap_dir)
+        .env("WOLF_SPELL_DIR", &cfg.spell_dir)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
