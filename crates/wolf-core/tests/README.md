@@ -527,6 +527,20 @@ Spawns a real Neovim (staged runfiles, wired `WOLF_NVIM_BIN`, `no-sandbox`). The
 
 **Gotchas** — Under `ext_multigrid` only grid 1 carries the requested attach size; window grids (id >= 2) take the window content area instead.
 
+#### `spell.rs`
+
+Real Neovim (`//crates/wolf-core:spell`: staged nvim runfiles, `WOLF_NVIM_BIN`, `no-sandbox`).
+
+**Covers**
+
+- init.lua's `WolfSpell` augroup: `spell` is on for `markdown`, `text` and `gitcommit` buffers and off for every other filetype, with `spelllang` pinned to `en`.
+- The bundled `en.utf-8.spl` actually loads — `spellbadword()` flags a misspelling, which no `spelllang` without a real spell file behind it would do.
+
+**Gotchas**
+
+- `spell` is window-local and never reaches `Snapshot`, so each case echoes it through `nvim_echo` and reads the result from `Snapshot.toast`.
+- Every probe mints a unique tag. `ext_messages` leaves the previous message in the toast, so polling for a fixed marker matches the prior probe's residue and silently asserts stale state.
+
 #### `state_layout.rs`
 
 Headless — driven entirely through `tempfile` dirs handed to `StateStore::open` / `load_state`, so its target needs no runfiles and no `no-sandbox` tag.

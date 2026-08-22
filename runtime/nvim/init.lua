@@ -142,6 +142,34 @@ opt.smoothscroll = true
 -- Treat opened files as markdown by default (Wolf is a Markdown editor).
 vim.filetype.add({ extension = { md = "markdown" } })
 
+-- Spell checking for PROSE filetypes only (markdown / text / gitcommit).
+--
+-- Buffer-local, from a FileType autocmd, rather than a global `spell`: a global
+-- one would also underline the terminal drawer and every non-prose buffer.
+--
+-- ORDERING: this MUST be registered BEFORE `vim.cmd("syntax on")` below. Measured
+-- against the pinned nvim 0.12.3, a FileType autocmd registered AFTER `syntax on`
+-- is never reached for `markdown` when the buffer arrives as a STARTUP FILE
+-- ARGUMENT -- the chain stops at the `syntaxset` handler `syntax on` installs, so
+-- `text` and `gitcommit` still fire but `markdown` silently does not. Registering
+-- first makes all three fire on every open path.
+--
+-- `spelllang` is pinned to "en" rather than left at its default: the bundled
+-- Neovim runtime ships exactly ONE spell file
+-- (share/nvim/runtime/spell/en.utf-8.spl), and a language with no .spl anywhere on
+-- runtimepath makes the runtime `spellfile.lua` plugin open a BLOCKING "download
+-- it?" prompt. Wolf attaches with `ext_messages` (which forces cmdheight = 0), so
+-- such a prompt has nowhere to draw and would wedge the UI.
+local spell_group = vim.api.nvim_create_augroup("WolfSpell", { clear = true })
+vim.api.nvim_create_autocmd("FileType", {
+	group = spell_group,
+	pattern = { "markdown", "text", "gitcommit" },
+	callback = function()
+		vim.opt_local.spell = true
+		vim.opt_local.spelllang = "en"
+	end,
+})
+
 -- Enable built-in syntax highlighting (markdown) so the grid carries varied
 -- hl_ids. This is the highlight source on Linux/cargo and the fallback when
 -- treesitter is unavailable; the conditional treesitter block below layers over it
