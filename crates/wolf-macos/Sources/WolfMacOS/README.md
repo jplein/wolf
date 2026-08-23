@@ -202,22 +202,22 @@ Purpose: The "no folder open" overlay — a full-bleed subview of `PaneContainer
 
 #### `FileTreeView.swift`
 
-Purpose: The file-tree sidebar: an `NSOutlineView` driven by a long-lived `FfiFileSearch`. The cwd is a synthetic root, and a click opens a file in the active pane or toggles a directory.
+Purpose: The file-tree sidebar: an `NSOutlineView` driven by a long-lived `FfiFileSearch`, rooted at a synthetic cwd node. A click opens a file or toggles a directory.
 
 **Public API**
 
 - `start()` / `close()` — open and drop the tree-search session, cancelling its background traversal.
-- `refresh()` is immediate; `scheduleRefresh()`, which `TreeWakeBridge` uses for traversal batches, coalesces to about one reload per frame.
-- `onRenderWake()` — re-roots on a cwd change, then accents and reveals the current buffer's row.
-- `setSidebarVisible(_:)` — relays the split item's `isCollapsed` KVO; refresh work defers while collapsed.
+- `refresh()` is immediate; `scheduleRefresh()`, which `TreeWakeBridge` uses, coalesces traversal batches to about one reload per frame.
+- `onRenderWake()` — re-roots on a cwd change, then accents and reveals what the active pane shows.
+- `setSidebarVisible(_:)` — relays the split item's `isCollapsed` KVO; refresh defers while collapsed.
 
 **Decisions**
 
 - `NSOutlineView` keys expansion and selection on object identity, so one `TreeItem` per `relPath` is cached and handed back across reloads. Fresh instances would collapse the tree.
 - The outline draws a clear background and adds no `NSVisualEffectView`: the enclosing `.sidebar` split item already supplies the vibrancy.
-- `reveal(abs:)` expands ancestors top-down before locating the row, because a row exists only once its parent is expanded. An empty `rel_path_for` leaves the reveal pending until the file streams in.
+- `reveal(abs:)` expands ancestors top-down before locating the row, because a row exists only once its parent is expanded; a not-yet-streamed file leaves the reveal pending.
 - `reroot(to:)` cancels the pending coalesced refresh first — a stale fire would run against the discarded tree.
-- `TreeCellView` marks the current buffer with a [`SidebarRowStyle`](../WolfKeyMap/README.md#sidebarrowstyleswift) label color rather than the row's selection tint, which AppKit drops at the first app switch.
+- `TreeCellView` marks what the active pane shows — a preview's source, else the current buffer — with a [`SidebarRowStyle`](../WolfKeyMap/README.md#sidebarrowstyleswift) label color, not the row's selection tint, which AppKit drops at the first app switch.
 - Activating a file routes on the active pane's mode, as the pickers do: a preview pane gets `preview_file`, falling back to `open` on `0`, which drops the pane to edit mode.
 
 #### `FontRegistration.swift`
@@ -316,23 +316,23 @@ Purpose: The crash/stall overlay — a full-bleed opaque cover over a broken edi
 
 #### `PaneContainerView.swift`
 
-Purpose: The editor area — one flat, flipped `NSView` that paints every split pane, owns the pure `PaneTree`, hosts the preview web views and overlays, and is the editor's first responder. The flat-view choice is in [DECISIONS.md](../../DECISIONS.md).
+Purpose: The editor area — one flat, flipped `NSView` that paints every split pane, owns the pure `PaneTree`, hosts the preview web views, and is the editor's first responder. [DECISIONS.md](../../DECISIONS.md) covers the flat-view choice and how a preview reaches its web view.
 
 **Public API**
 
-- `markRefocusRebind()` / `rebind(tabpageHandle:)` — arm a grid rebind after a tabpage switch or crash restart.
+- `markRefocusRebind()` / `rebind(tabpageHandle:)` — arm a grid rebind after a tabpage switch or restart.
 - `layoutSnapshot()` / `requestLayoutRebuild(_:)` — the snapshot is `nil` for a lone empty pane.
-- `activeWin` — the per-view active window, and the key for `activePaneSelection`. Never the tabpage-shared `WolfCoreHandle.active_win()`, which would let a background tab's selection enable Copy here.
+- `activeWin` — the per-view active window, keying `activePaneSelection` and `activePreviewSourcePath`. Never the tabpage-shared `WolfCoreHandle.active_win()`, which would let a background tab's selection enable Copy here.
+- `activePreviewSourcePath` — the Markdown source the active pane previews, or `nil` in edit mode; the sidebar marks it.
 - `otherPaneTarget(prefer:)` — maps `OtherPaneSeam.target` to the window argument for `preview_in_other` / `edit_in_other`: `0` means split, `nil` means no-op.
 
 **Decisions**
 
-- The refocus rebind waits for `handle.active_tabpage()` to match this view's tabpage and skips close detection that pass: the vacated tabpage's grids are gone and would prune live panes.
-- Web-view frame, occlusion test, and statusbar span come from one `geometry(_:fullWidth:)` call, written together before `needsDisplay`, so no frame paints preview alignment without a web view.
-- A grid is skipped only under an opaque, loaded preview web view; that flag survives reloads because WebKit keeps displaying the outgoing document while the next loads.
+- The refocus rebind waits for `handle.active_tabpage()` to match this view's tabpage and skips close detection that pass: the vacated tabpage's grids would prune live panes.
+- Web-view frame, occlusion test and statusbar span come from one `geometry(_:fullWidth:)` call, written together before `needsDisplay`, so no frame paints preview alignment without a web view.
+- A grid is skipped only under an opaque, loaded preview web view; the flag survives reloads because WebKit keeps showing the outgoing document.
 - Scroll direction is the sign of `scrollingDeltaY`, which already reflects natural scrolling; `isDirectionInvertedFromDevice` double-corrects.
-- The terminal drawer pane lives in the pane map but outside `tree`, so leaves, neighbours, and splits exclude it.
-- Preview updating spans several files; read [how a preview reaches its web view](../../DECISIONS.md) first.
+- The terminal drawer pane lives in the pane map but outside `tree`, so leaves, neighbours and splits exclude it.
 
 #### `PickerPanel.swift`
 

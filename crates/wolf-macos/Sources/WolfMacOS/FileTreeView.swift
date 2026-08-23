@@ -237,8 +237,8 @@ final class FileTreeView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate
     }
   }
 
-  /// Reacts to an editor render wake: if `current_file()` changed, records it,
-  /// re-accents, and reveals the new current buffer.
+  /// Reacts to an editor render wake: if the file the active pane shows changed,
+  /// records it, re-accents, and reveals it.
   func onRenderWake() {
     // Re-root FIRST so a simultaneous cwd + current-file change reveals into
     // the NEW tree.
@@ -246,7 +246,11 @@ final class FileTreeView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate
     if !cwd.isEmpty && cwd != cwdPath {
       reroot(to: cwd)
     }
-    let current = handle.current_file().toString()
+    // What the active pane SHOWS, which for a preview pane is the Markdown source
+    // it renders rather than its unnamed scratch buffer.
+    let current = SidebarRowStyle.markedFile(
+      previewSource: paneContainer?.activePreviewSourcePath,
+      currentFile: handle.current_file().toString())
     if current == lastCurrent { return }
     lastCurrent = current
     currentFileAbs = current.isEmpty ? nil : current

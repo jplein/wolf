@@ -687,6 +687,24 @@ final class PaneContainerView: NSView {
     return PaneModeSeam.mode(activeWin: activeWin, previewWins: previewWins) == .preview
   }
 
+  /// The absolute path of the SOURCE Markdown file the ACTIVE pane is previewing,
+  /// or `nil` when that pane is in edit mode. Read by the sidebar, which marks
+  /// what the active pane SHOWS — a preview scratch buffer is unnamed, so
+  /// `WolfCoreHandle.current_file` reports "" for it.
+  ///
+  /// Identity is `activeWin` — the per-VIEW active pane — for the same reason
+  /// spelled out on `activePaneSelection`.
+  var activePreviewSourcePath: String? {
+    let win = activeWin
+    guard win != 0 else { return nil }
+    // `previews()` yields borrowed `FfiPreviewRef`s valid only for the loop body,
+    // so the path is copied out INSIDE the iteration (as `leafPaths` does).
+    for preview in handle.previews() where preview.win() == win {
+      return preview.source_path().toString()
+    }
+    return nil
+  }
+
   /// The copyable selection the ACTIVE pane's preview page last pushed, or `nil` when
   /// the active pane is not a preview (no entry exists for a non-preview window) or
   /// its page reported no selection.

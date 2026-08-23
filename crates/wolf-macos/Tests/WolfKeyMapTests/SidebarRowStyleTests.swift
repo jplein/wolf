@@ -3,11 +3,12 @@
 //  Pure, headless unit tests for the `WolfKeyMap.SidebarRowStyle` seam — the
 //  file-tree sidebar's choice of label color for one row.
 //
-//  What matters here is the property the seam exists for: the current-buffer
-//  accent depends ONLY on the current-buffer flag, never on selection or window
-//  focus, so it cannot go missing the way a selection tint does after an app
-//  switch. The emphasized-selection case is the single documented exception,
-//  where an accent fill would otherwise swallow accent text.
+//  Two properties matter here. The accent depends ONLY on the current-buffer
+//  flag, never on selection or window focus, so it cannot go missing the way a
+//  selection tint does after an app switch — the emphasized-selection case is the
+//  single documented exception, where an accent fill would otherwise swallow
+//  accent text. And a previewing pane's source file is what gets marked, since
+//  nvim names the preview's own scratch buffer "".
 //
 
 import XCTest
@@ -31,5 +32,26 @@ final class SidebarRowStyleTests: XCTestCase {
       SidebarRowStyle.labelColor(isCurrent: true, isEmphasized: true), .selected)
     XCTAssertEqual(
       SidebarRowStyle.labelColor(isCurrent: false, isEmphasized: true), .selected)
+  }
+
+  /// A previewing pane marks its Markdown source, not the edited buffer — the
+  /// case nvim reports as an empty `current_file`, and the one an edit pane's
+  /// nil source falls through.
+  func testPreviewSourceIsMarked() {
+    XCTAssertEqual(
+      SidebarRowStyle.markedFile(previewSource: "/w/a.md", currentFile: ""), "/w/a.md")
+    XCTAssertEqual(
+      SidebarRowStyle.markedFile(previewSource: "/w/a.md", currentFile: "/w/b.swift"),
+      "/w/a.md")
+    XCTAssertEqual(
+      SidebarRowStyle.markedFile(previewSource: nil, currentFile: "/w/b.swift"), "/w/b.swift")
+  }
+
+  /// A pathless preview source falls back to the edited buffer rather than
+  /// clearing the mark, and with neither there is nothing to mark.
+  func testEmptyPreviewSourceFallsBack() {
+    XCTAssertEqual(
+      SidebarRowStyle.markedFile(previewSource: "", currentFile: "/w/b.swift"), "/w/b.swift")
+    XCTAssertEqual(SidebarRowStyle.markedFile(previewSource: nil, currentFile: ""), "")
   }
 }

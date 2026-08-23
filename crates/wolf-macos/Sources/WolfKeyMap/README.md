@@ -638,9 +638,11 @@ Purpose: The pure choice of label color for one file-tree sidebar row — the cu
 
 - `SidebarLabelColor` — the color role of one row's label: `.normal`, `.current` (the current buffer's accent), or `.selected` (an emphasized selection's contrasting text).
 - `labelColor(isCurrent:isEmphasized:) -> SidebarLabelColor` — an emphasized selection wins, because accent text on an accent fill is unreadable; otherwise only the current buffer is accented.
+- `markedFile(previewSource:currentFile:) -> String` — which file the sidebar marks. A previewing pane's source wins; an empty or nil source falls back to the edited buffer, and `""` marks nothing.
 
 **Decisions**
 
+- A preview pane's scratch buffer is unnamed, and nvim's `wolf_current_file` reports `""` for it, so `currentFile` alone cannot name what a preview shows. The front-end supplies the per-pane source through `PaneContainerView.activePreviewSourcePath`.
 - The accent depends on the current-buffer flag alone, never on the row's selection. AppKit tints a selected source-list label only while the row view is emphasized — a key window whose first responder is the outline — and the sidebar outline never becomes first responder, so a selection tint holds until the first app switch and never returns.
 
 #### `StateSeam.swift`

@@ -335,7 +335,7 @@ The `PreviewSeam` reload gate plus the click-to-focus surface. `winsNeedingReloa
 
 #### `SidebarRowStyleTests.swift`
 
-**Covers**: `SidebarRowStyle.labelColor` across the cross product of `isCurrent` and `isEmphasized`: the current buffer is accented and every other row plain, and an emphasized selection overrides both.
+**Covers**: `SidebarRowStyle.labelColor` across the cross product of `isCurrent` and `isEmphasized`: the current buffer is accented and every other row plain, and an emphasized selection overrides both. Plus `markedFile`: a preview source wins over the edited buffer, and a nil or empty one falls back to it.
 
 #### `StateSeamTests.swift`
 

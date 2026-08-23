@@ -1,6 +1,7 @@
 //
 //  SidebarRowStyle.swift
-//  Pure, AppKit-free choice of the label color for one file-tree sidebar row.
+//  Pure, AppKit-free choices behind the file-tree sidebar's current-file mark:
+//  which file is marked, and the color one row's label is drawn in.
 //
 //  The sidebar marks the current buffer with a COLOR, and that color must not be
 //  a side effect of the row's SELECTION. AppKit tints a selected source-list
@@ -37,5 +38,19 @@ public enum SidebarRowStyle {
       return .selected
     }
     return isCurrent ? .current : .normal
+  }
+
+  /// The absolute path the sidebar marks, or "" for none: the file the ACTIVE
+  /// pane is previewing when it is previewing one, else the edited buffer.
+  ///
+  /// A preview pane's scratch buffer is unnamed, and nvim's `wolf_current_file`
+  /// reports "" for it, so `currentFile` alone cannot name what a preview shows.
+  /// `previewSource` is the front-end's per-pane answer, and an empty one falls
+  /// back rather than clearing the mark.
+  public static func markedFile(previewSource: String?, currentFile: String) -> String {
+    if let previewSource, !previewSource.isEmpty {
+      return previewSource
+    }
+    return currentFile
   }
 }
