@@ -90,12 +90,16 @@ final class PickerView: NSView, NSTableViewDataSource, NSTableViewDelegate,
   /// The rounded search bar: a container holding the magnifier + text field. We
   /// build it ourselves (rather than an `NSSearchField`) so a large font is never
   /// clipped and the magnifier/text alignment is under our control.
-  private let searchContainer = NSView()
+  private let searchContainer = PickerChrome.searchBarBackdrop(
+    cornerRadius: PickerView.searchBarCornerRadius)
   private let magnifierView = NSImageView()
   /// The borderless text field the user types into (the "search field").
   private let searchField = NSTextField()
   private let tableView = NSTableView()
   private let scrollView = NSScrollView()
+  /// The panel's full-bleed background, behind every other subview.
+  private let backdrop = PickerChrome.panelBackdrop(
+    cornerRadius: PickerView.cornerRadius)
 
   /// The live file-search session while open; `nil` when closed.
   private var search: FfiFileSearch?
@@ -153,8 +157,6 @@ final class PickerView: NSView, NSTableViewDataSource, NSTableViewDelegate,
     layer?.borderWidth = 1
     translatesAutoresizingMaskIntoConstraints = false
     buildSubviews()
-    // Assign the frozen CGColor layer chrome AFTER the search bar is built (so
-    // `searchContainer.layer` exists), resolved against the current appearance.
     applyChromeColors()
   }
 
@@ -170,16 +172,16 @@ final class PickerView: NSView, NSTableViewDataSource, NSTableViewDelegate,
     searchContainer.needsDisplay = true
   }
 
-  /// Assigns the panel + search-bar layer chrome (background, border) from the
-  /// dynamic system NSColors, resolved against this view's CURRENT effective
-  /// appearance. A bare `NSColor.windowBackgroundColor.cgColor` resolves against
-  /// whatever appearance is globally current (often stale during an appearance
-  /// change), so the conversions run inside `performAsCurrentDrawingAppearance`.
+  /// Assigns the panel's border colour from the dynamic system NSColor, resolved
+  /// against this view's CURRENT effective appearance. A bare
+  /// `NSColor.separatorColor.cgColor` resolves against whatever appearance is
+  /// globally current (often stale during an appearance change), so the
+  /// conversion runs inside `performAsCurrentDrawingAppearance`. Neither
+  /// background needs the same handling: a `PickerChrome` material re-resolves
+  /// itself.
   private func applyChromeColors() {
     effectiveAppearance.performAsCurrentDrawingAppearance {
-      layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
       layer?.borderColor = NSColor.separatorColor.cgColor
-      searchContainer.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
     }
   }
 
@@ -379,6 +381,7 @@ final class PickerView: NSView, NSTableViewDataSource, NSTableViewDelegate,
     scrollView.hasVerticalScroller = true
     scrollView.drawsBackground = false
 
+    addSubview(backdrop)
     addSubview(searchContainer)
     addSubview(scrollView)
 
@@ -395,6 +398,10 @@ final class PickerView: NSView, NSTableViewDataSource, NSTableViewDelegate,
       equalTo: searchContainer.bottomAnchor, constant: pad)
 
     NSLayoutConstraint.activate([
+      backdrop.topAnchor.constraint(equalTo: topAnchor),
+      backdrop.leadingAnchor.constraint(equalTo: leadingAnchor),
+      backdrop.trailingAnchor.constraint(equalTo: trailingAnchor),
+      backdrop.bottomAnchor.constraint(equalTo: bottomAnchor),
       searchContainer.topAnchor.constraint(equalTo: topAnchor, constant: pad),
       searchContainer.leadingAnchor.constraint(equalTo: leadingAnchor, constant: pad),
       searchContainer.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -pad),
@@ -410,14 +417,6 @@ final class PickerView: NSView, NSTableViewDataSource, NSTableViewDelegate,
   /// avoid `NSSearchField` because its text cell clips a large font; here the text
   /// field sizes to its font and is vertically centered, so nothing is clipped.
   private func buildSearchBar() {
-    searchContainer.translatesAutoresizingMaskIntoConstraints = false
-    searchContainer.wantsLayer = true
-    // The search-bar background is assigned in `applyChromeColors()` (frozen
-    // CGColor re-resolved on appearance changes).
-    searchContainer.layer?.cornerRadius = Self.searchBarCornerRadius
-    // No border around the search bar.
-    searchContainer.layer?.borderWidth = 0
-
     magnifierView.translatesAutoresizingMaskIntoConstraints = false
     magnifierView.image = NSImage(
       systemSymbolName: "magnifyingglass", accessibilityDescription: "Search")

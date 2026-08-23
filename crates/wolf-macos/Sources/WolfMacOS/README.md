@@ -63,7 +63,7 @@ Purpose: The floating buffer picker — a search field plus a results list backe
 - Activation records no MRU; ordering comes from Neovim's buffer list.
 - Candidates are fixed at open, so there is no wake bridge — `ranked()` re-filters synchronously per keystroke.
 - `close()` clears `isOpen` before dismissing the panel, because `orderOut` re-enters through `windowDidResignKey`; the guard makes that re-entry a no-op.
-- Layer chrome is re-resolved on `viewDidChangeEffectiveAppearance` inside `performAsCurrentDrawingAppearance`. `CGColor`s frozen from dynamic `NSColor`s do not follow a dark/light switch, and a bare `.cgColor` conversion resolves against whatever appearance is globally current, which is often stale mid-change.
+- The panel background and the search bar are `PickerChrome` backdrops; the border alone stays a `CGColor`, which ignores appearance changes, so `viewDidChangeEffectiveAppearance()` re-resolves it inside `performAsCurrentDrawingAppearance`.
 
 #### `CellMetrics.swift`
 
@@ -334,6 +334,20 @@ Purpose: The editor area — one flat, flipped `NSView` that paints every split 
 - Scroll direction is the sign of `scrollingDeltaY`, which already reflects natural scrolling; `isDirectionInvertedFromDevice` double-corrects.
 - The terminal drawer pane lives in the pane map but outside `tree`, so leaves, neighbours and splits exclude it.
 
+#### `PickerChrome.swift`
+
+Purpose: Builds the two `NSVisualEffectView` backdrops a picker panel is made of — the full-bleed panel background and the rounded search-bar background.
+
+**Public API**
+
+- `PickerChrome.panelBackdrop(cornerRadius:)` / `searchBarBackdrop(cornerRadius:)` — configured, masked subviews the caller pins with constraints.
+
+**Decisions**
+
+- The backdrops are materials rather than `windowBackgroundColor` and `controlBackgroundColor` fills, because when the desktop tints windows the tint lives in the material, not in the colour. The results list is an `NSTableView`, which paints its own tinted material, so a flat fill leaves the list one shade and the padding and search bar around it another. Drawing the colour live instead of freezing it into a `CGColor` does not help: measured, both are the untinted shade.
+- `state` is `.active` rather than the default, which would drop the material — and the tint with it — whenever the panel is not key, which it is not while the editor behind it holds focus.
+- Corners come from `maskImage`, not a layer `cornerRadius`: a behind-window material is composited outside the view's own layer, leaving a layer mask with nothing to clip.
+
 #### `PickerPanel.swift`
 
 Purpose: The reusable borderless, non-activating child window that hosts one transient picker overlay in front of its owning main window. Constructed and driven by `PickerPanelHost`.
@@ -399,7 +413,7 @@ Purpose: The floating file picker: a hand-built search bar over an `NSTableView`
 **Decisions**
 
 - The search bar is hand-built (rounded container, magnifier, borderless `NSTextField`) rather than an `NSSearchField`, whose cell caps its text rect at the standard control height and clips the large font used here.
-- Layer chrome is `CGColor` and does not follow appearance changes, so `viewDidChangeEffectiveAppearance()` re-resolves it inside `performAsCurrentDrawingAppearance`. A one-time `NSColor.cgColor` assignment freezes the chrome at construction.
+- The panel background and the search bar are `PickerChrome` backdrops; the border alone stays a `CGColor`, which ignores appearance changes, so `viewDidChangeEffectiveAppearance()` re-resolves it inside `performAsCurrentDrawingAppearance`.
 - Traversal wakes route through `PickerRefreshCoalescer`; keystrokes and `open()` refresh immediately. A large tree emits hundreds of batch wakes and each direct refresh re-ranks the whole list.
 - `refresh()` keeps the selection index when the query is unchanged, so a streaming batch does not yank the user's selection back to the top.
 - `close()` clears `isOpen` before dismissing, because `orderOut` re-enters through `windowDidResignKey → close()`.

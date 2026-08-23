@@ -90,12 +90,16 @@ final class BufferPickerView: NSView, NSTableViewDataSource, NSTableViewDelegate
   weak var host: PickerPanelHosting?
 
   /// The rounded search bar: a container holding the magnifier + text field.
-  private let searchContainer = NSView()
+  private let searchContainer = PickerChrome.searchBarBackdrop(
+    cornerRadius: BufferPickerView.searchBarCornerRadius)
   private let magnifierView = NSImageView()
   /// The borderless text field the user types into (the "search field").
   private let searchField = NSTextField()
   private let tableView = NSTableView()
   private let scrollView = NSScrollView()
+  /// The panel's full-bleed background, behind every other subview.
+  private let backdrop = PickerChrome.panelBackdrop(
+    cornerRadius: BufferPickerView.cornerRadius)
 
   /// The live buffer-picker session while open; `nil` when closed.
   private var session: FfiBufferPicker?
@@ -144,8 +148,6 @@ final class BufferPickerView: NSView, NSTableViewDataSource, NSTableViewDelegate
     layer?.borderWidth = 1
     translatesAutoresizingMaskIntoConstraints = false
     buildSubviews()
-    // Assign the frozen CGColor layer chrome AFTER the search bar is built (so
-    // `searchContainer.layer` exists), resolved against the current appearance.
     applyChromeColors()
   }
 
@@ -161,16 +163,16 @@ final class BufferPickerView: NSView, NSTableViewDataSource, NSTableViewDelegate
     searchContainer.needsDisplay = true
   }
 
-  /// Assigns the panel + search-bar layer chrome (background, border) from the
-  /// dynamic system NSColors, resolved against this view's CURRENT effective
-  /// appearance. A bare `NSColor.windowBackgroundColor.cgColor` resolves against
-  /// whatever appearance is globally current (often stale during an appearance
-  /// change), so the conversions run inside `performAsCurrentDrawingAppearance`.
+  /// Assigns the panel's border colour from the dynamic system NSColor, resolved
+  /// against this view's CURRENT effective appearance. A bare
+  /// `NSColor.separatorColor.cgColor` resolves against whatever appearance is
+  /// globally current (often stale during an appearance change), so the
+  /// conversion runs inside `performAsCurrentDrawingAppearance`. Neither
+  /// background needs the same handling: a `PickerChrome` material re-resolves
+  /// itself.
   private func applyChromeColors() {
     effectiveAppearance.performAsCurrentDrawingAppearance {
-      layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
       layer?.borderColor = NSColor.separatorColor.cgColor
-      searchContainer.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
     }
   }
 
@@ -355,6 +357,7 @@ final class BufferPickerView: NSView, NSTableViewDataSource, NSTableViewDelegate
     scrollView.hasVerticalScroller = true
     scrollView.drawsBackground = false
 
+    addSubview(backdrop)
     addSubview(searchContainer)
     addSubview(scrollView)
 
@@ -368,6 +371,10 @@ final class BufferPickerView: NSView, NSTableViewDataSource, NSTableViewDelegate
       equalTo: searchContainer.bottomAnchor, constant: pad)
 
     NSLayoutConstraint.activate([
+      backdrop.topAnchor.constraint(equalTo: topAnchor),
+      backdrop.leadingAnchor.constraint(equalTo: leadingAnchor),
+      backdrop.trailingAnchor.constraint(equalTo: trailingAnchor),
+      backdrop.bottomAnchor.constraint(equalTo: bottomAnchor),
       searchContainer.topAnchor.constraint(equalTo: topAnchor, constant: pad),
       searchContainer.leadingAnchor.constraint(equalTo: leadingAnchor, constant: pad),
       searchContainer.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -pad),
@@ -381,13 +388,6 @@ final class BufferPickerView: NSView, NSTableViewDataSource, NSTableViewDelegate
   /// Builds the rounded search bar: a container whose leading holds the magnifier
   /// and whose remaining width is a borderless, focus-ring-less `NSTextField`.
   private func buildSearchBar() {
-    searchContainer.translatesAutoresizingMaskIntoConstraints = false
-    searchContainer.wantsLayer = true
-    // The search-bar background is assigned in `applyChromeColors()` (frozen
-    // CGColor re-resolved on appearance changes).
-    searchContainer.layer?.cornerRadius = Self.searchBarCornerRadius
-    searchContainer.layer?.borderWidth = 0
-
     magnifierView.translatesAutoresizingMaskIntoConstraints = false
     magnifierView.image = NSImage(
       systemSymbolName: "magnifyingglass", accessibilityDescription: "Search")
