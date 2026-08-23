@@ -202,22 +202,23 @@ Purpose: The "no folder open" overlay — a full-bleed subview of `PaneContainer
 
 #### `FileTreeView.swift`
 
-Purpose: The file-tree sidebar: an `NSOutlineView` driven by a long-lived `FfiFileSearch`. The cwd is a synthetic root; a click opens a file in the active pane or toggles a directory, and the current buffer's row is bolded and revealed.
+Purpose: The file-tree sidebar: an `NSOutlineView` driven by a long-lived `FfiFileSearch`. The cwd is a synthetic root, and a click opens a file in the active pane or toggles a directory.
 
 **Public API**
 
-- `start()` / `close()` — open and drop the tree-search session; `close()` cancels the background traversal.
-- `refresh()` is immediate, `scheduleRefresh()` coalesces to about one reload per frame; `TreeWakeBridge` uses the latter for traversal batches.
-- `onRenderWake()` — re-roots on a cwd change, then reveals and bolds the current buffer.
-- `setSidebarVisible(_:)` — relays the split item's `isCollapsed` KVO; refresh work is deferred while collapsed.
+- `start()` / `close()` — open and drop the tree-search session, cancelling its background traversal.
+- `refresh()` is immediate; `scheduleRefresh()`, which `TreeWakeBridge` uses for traversal batches, coalesces to about one reload per frame.
+- `onRenderWake()` — re-roots on a cwd change, then accents and reveals the current buffer's row.
+- `setSidebarVisible(_:)` — relays the split item's `isCollapsed` KVO; refresh work defers while collapsed.
 
 **Decisions**
 
-- `NSOutlineView` keys expansion and selection on object identity, so one `TreeItem` per `relPath` is cached and handed back across reloads, its fields refreshed in place. Fresh instances would collapse the tree.
-- The outline draws a clear background and adds no `NSVisualEffectView`: the enclosing `.sidebar` split item supplies the vibrancy, which would otherwise double up.
-- `reveal(abs:)` expands ancestors top-down before locating the row, because a row exists only once its parent is expanded. An empty `rel_path_for` means the file has not streamed in yet, so the reveal stays pending.
+- `NSOutlineView` keys expansion and selection on object identity, so one `TreeItem` per `relPath` is cached and handed back across reloads. Fresh instances would collapse the tree.
+- The outline draws a clear background and adds no `NSVisualEffectView`: the enclosing `.sidebar` split item already supplies the vibrancy.
+- `reveal(abs:)` expands ancestors top-down before locating the row, because a row exists only once its parent is expanded. An empty `rel_path_for` leaves the reveal pending until the file streams in.
 - `reroot(to:)` cancels the pending coalesced refresh first — a stale fire would run against the discarded tree.
-- Activating a file routes on the active pane's mode, as the pickers do: a preview pane gets `preview_file`, falling back to `open` on `0`. A bare `open` drops the pane to edit mode.
+- `TreeCellView` marks the current buffer with a [`SidebarRowStyle`](../WolfKeyMap/README.md#sidebarrowstyleswift) label color rather than the row's selection tint, which AppKit drops at the first app switch.
+- Activating a file routes on the active pane's mode, as the pickers do: a preview pane gets `preview_file`, falling back to `open` on `0`, which drops the pane to edit mode.
 
 #### `FontRegistration.swift`
 

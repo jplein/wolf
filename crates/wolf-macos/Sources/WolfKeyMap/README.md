@@ -630,6 +630,19 @@ Purpose: The pure decision behind the View menu's Project and Search checkmarks.
 
 - Checked and enabled are separate concerns. `AppDelegate.validateMenuItem` uses this seam only for the checkmark and always leaves both items enabled, since choosing either while the sidebar is hidden is what reveals it.
 
+#### `SidebarRowStyle.swift`
+
+Purpose: The pure choice of label color for one file-tree sidebar row — the current buffer's mark. Foundation only, so it is testable without an outline view.
+
+**Public API**
+
+- `SidebarLabelColor` — the color role of one row's label: `.normal`, `.current` (the current buffer's accent), or `.selected` (an emphasized selection's contrasting text).
+- `labelColor(isCurrent:isEmphasized:) -> SidebarLabelColor` — an emphasized selection wins, because accent text on an accent fill is unreadable; otherwise only the current buffer is accented.
+
+**Decisions**
+
+- The accent depends on the current-buffer flag alone, never on the row's selection. AppKit tints a selected source-list label only while the row view is emphasized — a key window whose first responder is the outline — and the sidebar outline never becomes first responder, so a selection tint holds until the first app switch and never returns.
+
 #### `StateSeam.swift`
 
 Purpose: The pure decision seams for the macOS state-restore path — validating a saved window frame, and deciding whether a window opens a folder or the empty state. Foundation and CoreGraphics only; the AppKit glue feeds it real window frames, `NSScreen` visible frames and a `FileManager`-backed directory check.

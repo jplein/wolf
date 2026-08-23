@@ -333,6 +333,10 @@ The `PreviewSeam` reload gate plus the click-to-focus surface. `winsNeedingReloa
 
 **Covers**: `SidebarMenuSeam.isChecked` across the cross product of `sidebarVisible` and `current` (`.tree` / `.search` / `nil`) against both menu items: only the active panel's entry is checked, a hidden sidebar checks nothing whatever `current` says, and a `nil` current checks nothing.
 
+#### `SidebarRowStyleTests.swift`
+
+**Covers**: `SidebarRowStyle.labelColor` across the cross product of `isCurrent` and `isEmphasized`: the current buffer is accented and every other row plain, and an emphasized selection overrides both.
+
 #### `StateSeamTests.swift`
 
 **Covers**: two tables. `restoredWindowFrame` accepts a frame intersecting any screen's visible frame (second display, partly past an edge) and returns nil for non-positive width or height (the unset sentinel), a fully offscreen frame, and an empty screen list. `launchDecision` returns `.folder` only for a restored path the injected `isDirectory` closure accepts, and `.emptyState(nvimCwd: home)` for empty, deleted, plain-file, and missing paths.

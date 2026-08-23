@@ -3,7 +3,8 @@
 //  The AppKit file-tree sidebar: an `NSOutlineView` (in an `NSScrollView`) fed by
 //  the Rust file-tree bridge, listing the cwd's files filtered by `.gitignore`
 //  (dotfiles included). Single click opens a file (and returns focus to the
-//  editor) or toggles a directory; the current buffer is bolded and revealed.
+//  editor) or toggles a directory; the current buffer's row is accented and
+//  revealed.
 //
 //  The macOS analog of wolf-gnome's `tree_view.rs`. The pure hierarchical
 //  projection lives in `wolf-core`'s `tree` module and is reached over FFI
@@ -15,6 +16,37 @@
 import AppKit
 import WolfFFI
 import WolfKeyMap
+
+/// One row of the sidebar outline: a label whose color is re-resolved through
+/// `SidebarRowStyle` whenever the current-buffer flag or AppKit's background
+/// style changes.
+///
+/// The current-buffer mark is applied HERE, to the label's own color, rather than
+/// being left to the row's selection tint — see `SidebarRowStyle` for why a
+/// selection tint disappears at the first app switch.
+final class TreeCellView: NSTableCellView {
+  /// Whether this row's file is the current buffer.
+  var isCurrent = false {
+    didSet { applyLabelColor() }
+  }
+
+  override var backgroundStyle: NSView.BackgroundStyle {
+    didSet { applyLabelColor() }
+  }
+
+  private func applyLabelColor() {
+    switch SidebarRowStyle.labelColor(
+      isCurrent: isCurrent, isEmphasized: backgroundStyle == .emphasized)
+    {
+    case .normal:
+      textField?.textColor = .labelColor
+    case .current:
+      textField?.textColor = .controlAccentColor
+    case .selected:
+      textField?.textColor = .alternateSelectedControlTextColor
+    }
+  }
+}
 
 /// A stable, identity-bearing node in the sidebar's outline.
 ///
@@ -46,7 +78,8 @@ final class TreeItem {
 /// Holds a long-lived `FfiFileSearch` (started via `start_tree_search`) for its
 /// whole lifetime; the registered tree wake calls `scheduleRefresh()` on each
 /// traversal batch (COALESCED to at most one `refresh()` per frame), and the
-/// editor render wake calls `onRenderWake()` to reveal + bold the current buffer.
+/// editor render wake calls `onRenderWake()` to reveal + accent the current
+/// buffer.
 /// All state is plain main-thread properties.
 final class FileTreeView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate {
   /// Reuse identifier for the outline's text cells.
@@ -56,9 +89,9 @@ final class FileTreeView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate
   private weak var paneContainer: PaneContainerView?
 
   /// The proportional system UI font for rows (the sidebar is chrome, not the
-  /// editor grid), with a bold variant for the current buffer's row.
+  /// editor grid). Every row shares it: the current buffer is marked by the
+  /// label's COLOR, not by a heavier face.
   private let font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
-  private let boldFont = NSFont.boldSystemFont(ofSize: NSFont.systemFontSize)
 
   private let outlineView = NSOutlineView()
   private let scrollView = NSScrollView()
@@ -102,7 +135,7 @@ final class FileTreeView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate
   /// (VS Code / Snacks model: root expanded, its subdirectories collapsed).
   private var didInitialExpand = false
 
-  /// The absolute path of the current buffer (bolded), or `nil` for none.
+  /// The absolute path of the current buffer (accented), or `nil` for none.
   private var currentFileAbs: String?
   /// The last `current_file()` acted on, so `onRenderWake` only reveals on an
   /// actual change.
@@ -205,7 +238,7 @@ final class FileTreeView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate
   }
 
   /// Reacts to an editor render wake: if `current_file()` changed, records it,
-  /// re-bolds, and reveals the new current buffer.
+  /// re-accents, and reveals the new current buffer.
   func onRenderWake() {
     // Re-root FIRST so a simultaneous cwd + current-file change reveals into
     // the NEW tree.
@@ -219,6 +252,7 @@ final class FileTreeView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate
     currentFileAbs = current.isEmpty ? nil : current
     pendingReveal = current.isEmpty ? nil : current
     refresh()
+    restyleVisibleRows()
   }
 
   /// Reveals `abs` in the outline: expands its ancestor directories (top-down,
@@ -311,15 +345,33 @@ final class FileTreeView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate
   ) -> NSView? {
     let cell =
       outlineView.makeView(withIdentifier: Self.cellIdentifier, owner: self)
-      as? NSTableCellView ?? makeCell()
+      as? TreeCellView ?? makeCell()
     guard let treeItem = item as? TreeItem else { return cell }
     cell.textField?.stringValue = treeItem.name
-    let isCurrent = !treeItem.isDir && treeItem.absPath == currentFileAbs
-    cell.textField?.font = isCurrent ? boldFont : font
+    cell.isCurrent = isCurrent(treeItem)
     return cell
   }
 
   // MARK: - Private
+
+  /// Whether `item` is the file the editor currently has open (directories never
+  /// are).
+  private func isCurrent(_ item: TreeItem) -> Bool {
+    !item.isDir && item.absPath == currentFileAbs
+  }
+
+  /// Moves the current-buffer accent over the rows AppKit already has on screen.
+  /// The version gate skips the reload whenever the snapshot has not advanced —
+  /// which is the common case for a buffer switch — and a skipped reload never
+  /// re-runs `viewFor`, so without this the accent would stay on the old row.
+  private func restyleVisibleRows() {
+    outlineView.enumerateAvailableRowViews { rowView, row in
+      guard let item = outlineView.item(atRow: row) as? TreeItem,
+        let cell = rowView.view(atColumn: 0) as? TreeCellView
+      else { return }
+      cell.isCurrent = isCurrent(item)
+    }
+  }
 
   /// Builds the synthetic root `TreeItem` for `cwd`: a directory node whose name
   /// is the cwd's basename, with the sentinel rel-path `""` (so its children are
@@ -411,10 +463,10 @@ final class FileTreeView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate
     ])
   }
 
-  /// Creates a reusable outline cell: an `NSTableCellView` with a single-line,
+  /// Creates a reusable outline cell: a `TreeCellView` with a single-line,
   /// vertically centered label.
-  private func makeCell() -> NSTableCellView {
-    let cell = NSTableCellView()
+  private func makeCell() -> TreeCellView {
+    let cell = TreeCellView()
     cell.identifier = Self.cellIdentifier
 
     let label = NSTextField(labelWithString: "")
