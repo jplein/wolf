@@ -16,6 +16,9 @@
 #                         (Swift AND Rust) built at `-c opt` via an outgoing-edge
 #                         transition. Tagged `manual`. Build this for real use.
 #                         Runnable with `bazel run`.
+#   - InstallWolf       : `bazel run` installs WolfRelease to
+#                         ~/Applications/Wolf.app, replacing any existing one.
+#                         Tagged `manual` (it pulls in the opt graph).
 #   - WolfKeyMapTests   : the swift_test over the pure seam.
 #   - xcodeproj         : an UNCOMMITTED Xcode project for debugging/LLDB only.
 load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
@@ -240,6 +243,42 @@ opt_bundle(
     bundle = ":Wolf",
     tags = ["manual"],
     visibility = ["//visibility:public"],
+)
+
+# Installs the optimized bundle to `~/Applications/Wolf.app`, replacing any
+# existing one: `bazel run //crates/wolf-macos:InstallWolf`.
+#
+# `data` is `:WolfRelease`, so the installed app is always the `-c opt` build and
+# Bazel builds it as part of the run — there is no separate build step to forget
+# and no way to install a stale `-Onone` bundle by mistake.
+#
+# `manual` is load-bearing for the same reason it is on `:WolfRelease`: this
+# target depends on the transitioned bundle, so without it a plain
+# `bazel build //...` would rebuild the entire Rust + Swift + treesitter graph a
+# second time at `-c opt`. An explicit `run` on the label is unaffected.
+#
+# The script takes the archive path as an argument rather than searching
+# runfiles: `$(rootpath)` resolves against the runfiles root, which is exactly
+# the CWD `bazel run` sets.
+#
+# The path must come through this filegroup, NOT from `$(rootpath :WolfRelease)`
+# directly. `:WolfRelease` is an executable rule, and location expansion on an
+# executable target yields its EXECUTABLE — the runner symlink — instead of its
+# `files`. The filegroup is not executable, so expansion falls back to `files`,
+# which is the opt `Wolf.zip`. The failure is not a build error: the script is
+# simply handed the runner and reports `ditto: Couldn't read PKZip signature`.
+filegroup(
+    name = "wolf_release_archive",
+    srcs = [":WolfRelease"],
+    tags = ["manual"],
+)
+
+sh_binary(
+    name = "InstallWolf",
+    srcs = ["install_wolf.sh"],
+    args = ["$(rootpath :wolf_release_archive)"],
+    data = [":wolf_release_archive"],
+    tags = ["manual"],
 )
 
 # Inspects the built `.app`: asserts the pinned nvim tree + captive init.lua

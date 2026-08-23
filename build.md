@@ -239,6 +239,18 @@ ls -l "$APP/Contents/MacOS/Wolf"
 
 The aquery action's input path must contain `-opt-`; a `-fastbuild-` input is the bug. The action's own configuration reads `darwin_arm64-fastbuild`, which is the top-level target's config and is expected. The size check is the conclusive one: the main binary is about 8.26 MB optimized against about 25.4 MB for fastbuild, roughly three times smaller.
 
+### Installing the app
+
+```sh
+bazel run //crates/wolf-macos:InstallWolf
+```
+
+Builds `:WolfRelease` and installs it to `~/Applications/Wolf.app`, replacing any bundle already there. Because the installer depends on `:WolfRelease` rather than on `:Wolf`, the installed app is always the optimized one; there is no separate build step to forget and no way to install an `-Onone` bundle by mistake.
+
+The installer extracts the archive, not the `<name>_archive-root/Wolf.app` directory beside it, since that directory is untracked and cannot be carried in runfiles. It extracts with `ditto`, which preserves the symlinks, exec bits and code signature that make the bundle launchable, and it extracts to a staging directory next to the destination before removing the installed app, so an interrupted run leaves the existing installation intact.
+
+Like `:WolfRelease` itself the target is tagged `manual`, so it never sweeps into a wildcard build.
+
 ### The measured penalty
 
 Measured on the dev host with the same capture protocol (steady-state window, typing only), fastbuild against `-c opt`:

@@ -23,9 +23,12 @@ bazel build //crates/wolf-macos:WolfRelease        # the optimized (-c opt) .app
 bazel build //crates/wolf-macos:Wolf               # the development .app bundle, -Onone
 bazel run   //crates/wolf-macos:WolfRelease        # launch the optimized .app
 bazel run   //crates/wolf-macos:xcodeproj          # generate the (uncommitted) Xcode project
+bazel run   //crates/wolf-macos:InstallWolf        # install the optimized .app to ~/Applications
 ```
 
 `:Wolf` is the fast-iteration development build (fastbuild, Swift `-Onone`, Rust unoptimized) and is what the test targets and the Xcode project build against; it is substantially slower at runtime. `:WolfRelease` is the one to build for real use, for installing, and for any performance measurement.
+
+`:InstallWolf` builds `:WolfRelease` and installs it to `~/Applications/Wolf.app`, replacing any bundle already there. It depends on `:WolfRelease`, so it can only ever install the optimized build.
 
 Resolve the release `.app` path from `bazel cquery --output=files //crates/wolf-macos:WolfRelease`, never from `bazel-bin`. See [Building Wolf](../../build.md) for the measured penalty and the exact recipe.
 
