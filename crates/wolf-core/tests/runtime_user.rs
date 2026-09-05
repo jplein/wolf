@@ -126,7 +126,10 @@ fn user_file_is_sourced_last_and_overrides_defaults() {
     let probe_dir = tempfile::tempdir().expect("create probe dir");
     let vals = common::probe_values(
         &core,
-        &["get(g:, 'wolf_user_marker', 'MISSING')", "string(&linebreak)"],
+        &[
+            "get(g:, 'wolf_user_marker', 'MISSING')",
+            "string(&linebreak)",
+        ],
         &probe_dir.path().join("override.txt"),
     );
     assert_eq!(
@@ -199,8 +202,11 @@ fn erroring_user_file_warns_but_startup_succeeds() {
     let state = fresh_state_dir();
     let user_dir = state.path().join("runtime_user");
     std::fs::create_dir_all(&user_dir).expect("create runtime_user dir");
-    std::fs::write(user_dir.join("init_user.lua"), "error(\"wolf-test-boom\")\n")
-        .expect("write erroring init_user.lua");
+    std::fs::write(
+        user_dir.join("init_user.lua"),
+        "error(\"wolf-test-boom\")\n",
+    )
+    .expect("write erroring init_user.lua");
 
     // Startup completing at all (initial flush + open) is itself the pcall
     // assertion: without the pcall, init.lua raises and the attach never lands.

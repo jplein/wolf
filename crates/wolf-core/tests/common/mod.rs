@@ -540,7 +540,11 @@ pub fn probe_values(core: &WolfCore, exprs: &[&str], probe: &Path) -> Vec<String
     // A stale probe from an earlier call at the same path would satisfy the poll
     // with old values; remove it first so only THIS command's write can.
     let _ = std::fs::remove_file(probe);
-    let cmd = format!("call writefile([{}], '{}')", exprs.join(", "), probe.display());
+    let cmd = format!(
+        "call writefile([{}], '{}')",
+        exprs.join(", "),
+        probe.display()
+    );
     send_ex(core, &cmd);
 
     let deadline = Instant::now() + FLUSH_TIMEOUT;

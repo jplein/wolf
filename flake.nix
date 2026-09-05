@@ -86,7 +86,7 @@
 
         # NOTE: `rustToolchain`, `wolfPointerInject`, `iaWriterMono`,
         # `wolfTreesitterLanguages` / `wolfTreesitterParsers` /
-        # `wolfTreesitterQueries`, `pkgsRuntime` and everything taken from it
+        # `wolfTreesitterPlugin`, `pkgsRuntime` and everything taken from it
         # (`wolfNeovim`, `wolfRipgrep`), `wolfOrlando`, `wolfLighthouse`,
         # `wolfGnomePackage`, and the GTK/Neovim packages below are only
         # ever forced when `linuxShell` or the package output is evaluated. On
@@ -439,7 +439,7 @@
         # The plugin comes from `pkgsRuntime`, not from `pkgs`: the grammars and
         # the queries are runtime assets the application carries, and pinning them
         # to the same revision as Neovim is what keeps the parity claim on
-        # `wolfTreesitterQueries` below from being falsifiable by an unrelated
+        # `wolfTreesitterPlugin` below from being falsifiable by an unrelated
         # `nix flake update nixpkgs`.
         #
         # Linux-only in practice — see the NOTE above about the Darwin eval path.
@@ -450,22 +450,44 @@
           ) wolfTreesitterLanguages;
         };
 
-        # The query half: the nvim-treesitter plugin's `runtime` directory,
-        # WHOLE and UNFILTERED. It already contains `queries/<lang>/`, so it is
-        # itself a runtimepath entry and needs no assembly.
+        # The plugin half: ONE runtimepath-shaped tree carrying the bundled
+        # queries, the `lua/nvim-treesitter/` modules and the `plugin/` loader as
+        # siblings. Assembly is required because upstream splits them — the
+        # queries sit at `runtime/queries/` while `lua/` and `plugin/` sit at the
+        # archive root — and a runtimepath entry must expose all three at its own
+        # top level.
         #
-        # Unfiltered is deliberate, and asymmetric with the curated parser list
-        # above on purpose. This is the same upstream revision
-        # `bazel/nvim-treesitter/extensions.bzl` pins for macOS
-        # (4916d6592ede8c07973490d9322f187e07dfefac), so the two platforms get
-        # byte-identical queries; and the macOS package already globs queries
-        # with no per-language filter. Parsers stay curated because each one is a
+        # Do NOT "simplify" this back to `${pkgsRuntime.vimPlugins.nvim-treesitter}/runtime`.
+        # That path satisfies the query lookup and silently drops the other two,
+        # so `vim.cmd.runtime("plugin/nvim-treesitter.lua")` finds nothing,
+        # `:TSInstall` never registers, and the pcall'd
+        # `require("nvim-treesitter").setup` degrades to a no-op — leaving the
+        # durable `parsers_user/` install dir reachable on macOS and not on
+        # Linux. `crates/wolf-core/tests/parsers_user.rs` is what catches it.
+        #
+        # The remap mirrors `bazel/nvim-treesitter/extensions.bzl`, which lifts
+        # `runtime/queries` back to `queries` and globs `lua/**` and `plugin/**`
+        # to the same end, so both platforms present the same tree shape.
+        #
+        # Queries stay unfiltered, asymmetric with the curated parser list above
+        # on purpose. This is the same upstream revision that extension pins for
+        # macOS (4916d6592ede8c07973490d9322f187e07dfefac), so the two platforms
+        # get byte-identical queries, and the macOS package globs them with no
+        # per-language filter. Parsers stay curated because each one is a
         # compile; queries are data and cost nothing to carry.
         #
         # That parity claim is about a REVISION, so the plugin is taken from
         # `pkgsRuntime` rather than `pkgs`: pinned by the runtime input, it cannot
         # move under a `nixpkgs` bump taken for something else.
-        wolfTreesitterQueries = "${pkgsRuntime.vimPlugins.nvim-treesitter}/runtime";
+        wolfTreesitterPlugin =
+          pkgs.runCommand "wolf-nvim-treesitter" { src = pkgsRuntime.vimPlugins.nvim-treesitter; }
+            ''
+              mkdir -p "$out"
+              cp -R "$src/runtime/queries" "$out/queries"
+              cp -R "$src/lua" "$out/lua"
+              cp -R "$src/plugin" "$out/plugin"
+              cp "$src/LICENSE" "$out/LICENSE"
+            '';
 
         darwinShell = pkgs.mkShell {
           packages = [
@@ -619,7 +641,7 @@
             # substituted before the shell is entered — exactly how the
             # `${pkgs.gnused}/bin/sed` call below works, and `gnused` is in no
             # `packages` list either.
-            export WOLF_NVIM_TREESITTER_DIR="${wolfTreesitterQueries}"
+            export WOLF_NVIM_TREESITTER_DIR="${wolfTreesitterPlugin}"
             export WOLF_PARSERS_DIR="${wolfTreesitterParsers}"
 
             # The two vendored Lua trees, staged for
@@ -984,7 +1006,7 @@
                 gappsWrapperArgs+=(
                   --set-default WOLF_NVIM_BIN "${pkgs.lib.getExe wolfNeovim}"
                   --set-default WOLF_RG_BIN "${pkgs.lib.getExe wolfRipgrep}"
-                  --set-default WOLF_NVIM_TREESITTER_DIR "${wolfTreesitterQueries}"
+                  --set-default WOLF_NVIM_TREESITTER_DIR "${wolfTreesitterPlugin}"
                   --set-default WOLF_PARSERS_DIR "${wolfTreesitterParsers}"
                   --set-default FONTCONFIG_FILE "$out/share/wolf/fonts.conf"
                 )

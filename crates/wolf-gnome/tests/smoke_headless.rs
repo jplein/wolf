@@ -10985,7 +10985,72 @@ fn smoke_state_dir_at(cwd: &Path, suffix: &str) -> PathBuf {
             dir.display()
         )
     });
+    seed_smoke_spell_override(&dir);
     dir
+}
+
+/// The `init_user.lua` every smoke's Neovim is given, which turns spell checking
+/// back OFF. Written into the per-run state dir, never into a real one.
+///
+/// Clearing the augroup is what disables it. The option is set from a `FileType`
+/// autocmd on `WolfSpell`, so assigning `spell = false` here alone would be
+/// overwritten on the next buffer that autocmd sees. This file is sourced LAST, after
+/// every Wolf default, so the group exists by the time it runs. The window sweep
+/// covers any buffer that reached its filetype before this point.
+const SMOKE_INIT_USER_LUA: &str = "\
+-- Seeded by the wolf-gnome smoke harness; see `seed_smoke_spell_override`.
+vim.api.nvim_create_augroup(\"WolfSpell\", { clear = true })
+for _, win in ipairs(vim.api.nvim_list_wins()) do
+\tvim.wo[win].spell = false
+end
+";
+
+/// Pins every smoke's Neovim to spell-OFF, through the app's own user-override hook.
+///
+/// ## Why the smokes cannot run with spell on
+///
+/// The captive `init.lua` turns window-local `'spell'` ON for markdown, and EVERY
+/// fixture heading these smokes OCR is a coined word — `SOLOZULU`, `STALLFIXTURE`,
+/// `PROJECTNEEDLE` — so nvim draws a red undercurl along the glyph baseline. The
+/// page is drawn correctly; tesseract is what cannot read it. Measured: six OCR
+/// smokes failed with their heading plainly legible in the retained PNG, each
+/// reporting "the GTK pane did not paint it" about a pane that had.
+///
+/// Pinned rather than inherited, for the reason `GTK_IM_MODULE` is pinned in
+/// [`cage_command`]: every OCR threshold in this file was calibrated against an
+/// undercurl-free page, so leaving spell on would leave sixty heading assertions
+/// nearer their margin than the number each was tuned to, and the ones that still
+/// passed would be passing by luck.
+///
+/// ## Why this is a seed and not an app change
+///
+/// Spell on prose IS the shipped behaviour and has its own coverage in
+/// `wolf-core`'s `spell.rs` and `spell_durable.rs`. What belongs here is the smokes'
+/// observation channel, not the editor's defaults, so the override goes in through
+/// `runtime_user/init_user.lua` exactly as a user's would. A pre-existing
+/// `init_user.lua` is sourced and never rewritten by the app, so seeding it before
+/// launch also suppresses the template the app would otherwise write there.
+///
+/// Called from [`smoke_state_dir_at`], the one place smoke state dirs are derived,
+/// and from the typed-`:cd` smoke, the one smoke that builds its own.
+fn seed_smoke_spell_override(state_dir: &Path) {
+    let dir = state_dir.join("runtime_user");
+    std::fs::create_dir_all(&dir).unwrap_or_else(|e| {
+        panic!(
+            "failed to create the smoke runtime_user dir {}: {e}. It carries the seeded \
+             init_user.lua that turns spell checking off; without it every OCR assertion on a \
+             coined fixture heading reads an undercurl. See `seed_smoke_spell_override`.",
+            dir.display()
+        )
+    });
+    let file = dir.join("init_user.lua");
+    std::fs::write(&file, SMOKE_INIT_USER_LUA).unwrap_or_else(|e| {
+        panic!(
+            "failed to seed the smoke init_user.lua at {}: {e}. See \
+             `seed_smoke_spell_override`.",
+            file.display()
+        )
+    });
 }
 
 /// The config directory one smoke's app is given via `WOLF_CONFIG_DIR`: a
@@ -30640,6 +30705,9 @@ fn typed_cd_reroots_the_sidebar_under_cage() {
             state_override.display()
         )
     });
+    // This smoke does not go through `smoke_state_dir_at`, so it seeds the spell
+    // override itself; see `seed_smoke_spell_override`.
+    seed_smoke_spell_override(&state_override);
     assert!(
         !state_override.starts_with(&root),
         "{SMOKE}: the WOLF_STATE_DIR override {} is INSIDE the `:cd` target {}, so the app's own \

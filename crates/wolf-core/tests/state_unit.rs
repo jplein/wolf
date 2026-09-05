@@ -587,7 +587,10 @@ fn seed_runtime_user_seeds_missing_and_empty_dirs() {
     // A MISSING dir is created and seeded.
     let root = tempdir().expect("create temp dir");
     let missing = root.path().join("runtime_user");
-    assert!(!missing.exists(), "precondition: the dir must not exist yet");
+    assert!(
+        !missing.exists(),
+        "precondition: the dir must not exist yet"
+    );
     let seeded = seed_runtime_user_dir(&missing).expect("seeding a missing dir should be Ok");
     assert!(
         seeded,
@@ -657,7 +660,10 @@ fn seed_runtime_user_never_touches_non_empty_dir() {
     write(&user_file, custom);
 
     let seeded = seed_runtime_user_dir(&dir2).expect("seeding over a custom file should be Ok");
-    assert!(!seeded, "a dir holding a custom init_user.lua must report Ok(false)");
+    assert!(
+        !seeded,
+        "a dir holding a custom init_user.lua must report Ok(false)"
+    );
     assert_eq!(
         read(&user_file),
         custom,

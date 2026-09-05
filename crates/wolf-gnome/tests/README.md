@@ -118,16 +118,17 @@ Rules that are decidable from their arguments are pinned in each seam's own `#[c
 
 **Covers**
 
-- Sixty end-to-end smokes launch the built binary under `cage`: thirty-seven OCR a `grim` screenshot and twenty-three call no OCR helper at all, asserting instead on raw pixels, on values the captive Neovim writes back, on a file on disk, or on the exit status alone.
-- The scenarios span text rendering, the sidebar, the four overlays, splits, pointer input, crash and stall recovery, relaunch and per-tab state, navigation, the clipboard, saving, the appearance, the command line, the terminal drawer, the preview pane, native tabs, composed text and a chord claimed mid-sequence, the frame-time instrument, and a second window.
-- Ten compositor-free guards over the fixtures, constants and harness, so the target reports `70 passed`, not `60`. Two read `flake.nix`: every `shellHook` export must be scrubbed from the packaged runs or keep-listed, and both vendored-tree exports must exist.
-- Three `#[ignore]`d packaged smokes outside that count drive the store binary, scrubbing every devShell export the artifact supplies for itself: a clean launch read by OCR, an A/B against the checkout binary over the two vendored Lua trees, and a preview pane.
+- Sixty end-to-end smokes launch the built binary under `cage`: thirty-seven OCR a `grim` screenshot and twenty-three call no OCR helper, asserting instead on raw pixels, values the captive Neovim writes back, a file on disk, or the exit status.
+- The scenarios span text rendering, the sidebar, the four overlays, splits, pointer input, crash and stall recovery, relaunch and per-tab state, navigation, the clipboard, saving, the appearance, the command line, the terminal drawer, the preview pane, native tabs, composed text and a mid-sequence chord, the frame-time instrument, and a second window.
+- Ten compositor-free guards over the fixtures, constants and harness, so the target reports `70 passed`, not `60`. Two read `flake.nix`: every `shellHook` export must be scrubbed or keep-listed, and both vendored-tree exports must exist.
+- Three `#[ignore]`d packaged smokes outside that count drive the store binary, scrubbing every devShell export the artifact supplies itself: a clean OCR launch, an A/B against the checkout binary over the two vendored Lua trees, and a preview pane.
 
 **Gotchas**
 
 - Run only these with `cargo test -p wolf-gnome --test smoke_headless`, inside the devShell; the packaged three run only through `./tools/wolf-package-smoke.sh`.
 - Read [Smoke conventions](#smoke-conventions) first; several of those rules exist because a smoke passed while proving nothing.
 - The frame-time report is appended to a file, so a stale copy would read as this run's evidence; both smokes arming it clear their own first.
+- Spell checking is off in every smoke, so OCR reads glyphs not undercurls; see `seed_smoke_spell_override`.
 
 #### `vendored_pins.rs`
 
