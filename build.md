@@ -125,10 +125,13 @@ A NixOS configuration consumes the flake as an input:
 ```nix
 {
   inputs.wolf.url = "github:jplein/wolf";
+  inputs.wolf.inputs.nixpkgs.follows = "nixpkgs";
   # then, from a module that has the flake in scope:
   environment.systemPackages = [ wolf.packages.${pkgs.system}.wolf-gnome ];
 }
 ```
+
+The `follows` line is not optional in practice. The application loads the host's graphics driver from `/run/opengl-driver`, and that driver needs a glibc at least as new as the system's. Built against an older `nixpkgs` than the host, the window still draws but WebKit's web process aborts with `Could not create default EGL display: EGL_BAD_PARAMETER`, leaving the Markdown preview blank. A `result` built from this repository's own lock has the same exposure, so run `nix flake update nixpkgs` when it falls behind the host. Neovim comes from the separately pinned `nixpkgs-runtime` input and runs in a process of its own, so it is unaffected.
 
 Listing it in `fonts.packages` as well makes the two editor families available system-wide, because they are installed at the layout fontconfig scans. That is a convenience and not a requirement: the application resolves them through its own `FONTCONFIG_FILE` either way.
 

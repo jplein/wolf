@@ -14,7 +14,8 @@
 #   exports `WOLF_NVIM_BIN`, the absolute path to the pinned `nvim` binary — the
 #   *only* way `wolf-core` and its tests are allowed to locate Neovim: never via
 #   the system PATH, never by scanning `/nix/store`.
-# - Darwin (aarch64-darwin, x86_64-darwin): a minimal shell that provides
+# - Darwin (aarch64-darwin only — nixpkgs 26.11 dropped x86_64-darwin, so an
+#   Intel Mac builds through Bazel without this shell): a minimal shell that provides
 #   bazelisk to drive the Bazel build of `wolf-core`, using the host Xcode SDK
 #   for the C/link toolchain (not the older SDK shipped inside Nix). It carries
 #   no Rust toolchain (rules_rust downloads a pinned rustc) and no GUI packages.
@@ -41,8 +42,14 @@
     # would make a green Linux suite evidence about one Neovim while the shipped
     # application ran whatever the last update fetched.
     #
-    # This is the same revision `nixpkgs` is locked at today, so nothing about the
-    # currently-tested Neovim changes and the closure is shared.
+    # The asymmetry runs the other way for `nixpkgs` itself, which must NOT lag the
+    # host. The GTK process dlopens the host's Mesa from `/run/opengl-driver`, and
+    # that Mesa needs a glibc at least as new as the system's. A `nixpkgs` lock
+    # older than the NixOS host leaves the process on an older glibc, the driver
+    # fails to load, and WebKit's web process aborts with "Could not create
+    # default EGL display: EGL_BAD_PARAMETER" — a blank Markdown preview. Neovim
+    # runs in a process of its own and is unaffected, which is why it can stay
+    # pinned here.
     #
     # IT CARRIES NEOVIM 0.12.2, and `bazel/nvim/extensions.bzl` pins 0.12.3 for
     # macOS. That divergence predates this input and is deliberate rather than
@@ -70,13 +77,13 @@
       flake-utils,
       ...
     }:
-    flake-utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" "x86_64-darwin" ] (
+    flake-utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ] (
       system:
       let
         overlays = [ (import rust-overlay) ];
         pkgs = import nixpkgs { inherit system overlays; };
 
-        isDarwin = pkgs.stdenv.isDarwin;
+        isDarwin = pkgs.stdenv.hostPlatform.isDarwin;
 
         # The runtime-asset package set, from the rev-pinned second input. Its
         # reason for existing is on `inputs.nixpkgs-runtime` above. Only Neovim,
