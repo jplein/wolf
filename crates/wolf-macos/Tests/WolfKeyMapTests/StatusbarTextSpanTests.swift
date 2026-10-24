@@ -18,15 +18,15 @@ final class StatusbarTextSpanTests: XCTestCase {
   private let maxGridCols: Double = 90.0
 
   /// A representative pane-local grid origin: `P.minX + EditorInset.padding`
-  /// for a pane at x == 0 (plan §3).
+  /// for a pane at x == 0.
   private let gridLeftAtOrigin: Double = 20.0
 
-  /// A representative grid origin for a right-hand split (plan §5 case 6).
+  /// A representative grid origin for a right-hand split.
   private let gridLeftSplit: Double = 512.0
 
   // MARK: - Helpers
 
-  /// Builds a span from the four inputs, in the plan's argument order.
+  /// Builds a span from the four inputs, in the initializer's argument order.
   private func span(
     gridLeft: Double, gridWidth: Double, paintOffsetX: Double, kind: PaneContentKind
   ) -> StatusbarTextSpan {
@@ -38,14 +38,14 @@ final class StatusbarTextSpanTests: XCTestCase {
   }
 
   /// The centering inset `PaneGeometry` derives for a grid wider than the cap:
-  /// `max(0, (gridWidth - min(gridWidth, cap)) / 2)` (plan §3).
+  /// `max(0, (gridWidth - min(gridWidth, cap)) / 2)`.
   private func expectedPaintOffsetX(gridWidth: Double) -> Double {
     let cap = maxGridCols * cellWidth
     return max(0.0, (gridWidth - min(gridWidth, cap)) / 2.0)
   }
 
-  /// Asserts the universal invariants every span must satisfy regardless of kind
-  /// (plan §5 case 12), mirroring `assertInvariants` in `StatusbarLayoutTests`.
+  /// Asserts the universal invariants every span must satisfy regardless of kind,
+  /// mirroring `assertInvariants` in `StatusbarLayoutTests`.
   private func assertInvariants(
     _ s: StatusbarTextSpan,
     gridLeft: Double,

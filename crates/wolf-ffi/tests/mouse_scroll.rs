@@ -3,8 +3,8 @@
 //! This drives the RUST half of the swift-bridge mouse/scroll machinery against a
 //! REAL, hermetic Neovim — NO mocks, per the project testing policy. It is a
 //! sibling of `panes.rs` / `tree_search.rs` / `file_search.rs` (same staging /
-//! SKIP-when-unset machinery, reusing `tests/common/mod.rs`) but exercises the NEW
-//! input surface the coder adds per plan §3:
+//! SKIP-when-unset machinery, reusing `tests/common/mod.rs`) but exercises the
+//! input surface:
 //!
 //!   * `WolfCoreHandle::send_mouse(ev: FfiMouseEvent)` (button/action/mods + grid +
 //!     grid-local row/col → `nvim_input_mouse`)
@@ -14,23 +14,15 @@
 //!     accessors (read from `snapshot.windows[grid].viewport` in
 //!     `from_snapshot_grid`)
 //!
-//! ## Dependency on coder work (plan §2 + §3)
+//! The `grid: u64` threads through `wolf_core::{MouseEvent, ScrollEvent}` to
+//! `nvim_input_mouse`; the discriminants live in the `mod mouse_button` /
+//! `mod mouse_action` / `mod scroll_dir` tables in `src/lib.rs`. The
+//! `//crates/wolf-ffi:mouse_scroll` `rust_test` target runs this file under Bazel.
 //!
-//! None of this exists yet: the coder threads a `grid: u64` through
-//! `wolf_core::{MouseEvent, ScrollEvent}` + `apply_mouse`/`apply_scroll`/
-//! `nvim_input_mouse`, adds `send_mouse`/`send_scroll` to the FFI `WolfCoreHandle`,
-//! adds the transparent `FfiMouseEvent`/`FfiScrollEvent` structs + the
-//! `mod mouse_button`/`mod mouse_action`/`mod scroll_dir` discriminant tables, adds
-//! the viewport accessors to `FfiFrame`, regenerates `generated/`, AND adds the
-//! `//crates/wolf-ffi:mouse_scroll` `rust_test` target to `BUILD.bazel` (mirroring
-//! `panes`, srcs `["tests/common/mod.rs", "tests/mouse_scroll.rs"]`,
-//! `crate_root = "tests/mouse_scroll.rs"`). This test file does NOT touch BUILD
-//! files.
-//!
-//! ## What this EMPIRICALLY confirms (the architect's open uncertainties)
+//! ## What this EMPIRICALLY confirms
 //!
 //!   * `nvim_input_mouse` grid-targeting under `ext_multigrid`: events must target
-//!     the pane's WINDOW grid (>= 2) with GRID-LOCAL row/col (plan §2.1 uncertainty).
+//!     the pane's WINDOW grid (>= 2) with GRID-LOCAL row/col.
 //!     A mouse press moving the cursor to the targeted cell proves the grid + coord
 //!     contract.
 //!   * The scroll DIRECTION discriminant (UP = 0 decreases `topline`, DOWN = 1

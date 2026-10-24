@@ -9,7 +9,7 @@
 //! `state_dir()` / `WOLF_STATE_DIR`: it constructs a `CommandMru::open(<tempdir>)`
 //! directly, so it needs no env-lock and never races another binary's environment.
 //!
-//! Surface exercised (per plan §2 / §5):
+//! Surface exercised:
 //! - `wolf_core::CommandMru::open(dir: &Path) -> CommandMru` (infallible; eagerly
 //!   creates `dir/command-mru.sqlite`)
 //! - `wolf_core::CommandMru::disabled() -> CommandMru` (all methods no-op)

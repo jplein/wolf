@@ -98,7 +98,7 @@ final class PickerRefreshCoalescerTests: XCTestCase {
     XCTAssertEqual(performCount, 1, "a single request performs exactly once")
   }
 
-  /// The debounce window is in the ~30–60fps band (16–33 ms). The plan sets it
+  /// The debounce window is in the ~30–60fps band (16–33 ms). It is set
   /// to 0.033 s; this pins it can't drift outside a sane range.
   func testRefreshIntervalIsInFrameBand() {
     let lowerBound: TimeInterval = 0.016

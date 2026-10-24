@@ -623,7 +623,7 @@ mod tests {
         expected: NavButtons,
     }
 
-    /// The sensitivity decision, one row per named case of the plan's decision
+    /// The sensitivity decision, one row per named case of the decision
     /// table.
     ///
     /// A `const` item rather than a local so the count assertion in
@@ -714,7 +714,7 @@ mod tests {
         assert_eq!(
             BUTTON_CASES.len(),
             NAMED_BUTTON_CASES,
-            "the nav_buttons table must carry the {NAMED_BUTTON_CASES} named rows of the plan's \
+            "the nav_buttons table must carry the {NAMED_BUTTON_CASES} named rows of the \
              decision table, but carries {}. The rows are not a sample: four of them pair a rich \
              history with a refused press (dead / wedged / absent core, and the 0 sentinel) and \
              four pair a live core with each history reading, so dropping any one leaves a whole \

@@ -38,8 +38,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
   /// project removes itself (`removeProject`) when its last view closes.
   private var projects: [Project] = []
 
-  /// The next monotonic tab id to mint (replaces the old per-window slot index;
-  /// used only as an opaque Window-menu / raise key, never a `state.json` slot).
+  /// The next monotonic tab id to mint (used only as an opaque Window-menu / raise
+  /// key, never a `state.json` slot).
   private var nextTabId = 0
 
   /// The coalesced whole-tree snapshot work item (~150ms debounce), so a KVO /
@@ -200,8 +200,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
   /// PHASE B — assembles the OS windows/tab-groups: for each saved window group
   /// in order, anchors the first surviving view at the group's validated frame
-  /// and `addTabbedWindow`s the rest into its tab group (parity with the old
-  /// single-phase group assembly). A group with no surviving views is dropped.
+  /// and `addTabbedWindow`s the rest into its tab group. A group with no surviving
+  /// views is dropped.
   private func assembleWindows(
     _ byGroup: [Int: [(pos: Int, controller: WolfWindowController)]],
     groups: [RestoredWindowGroup]
@@ -261,7 +261,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
   /// app chrome, then pushes it to every live project. In `auto` mode it clears
   /// any forced `NSApp.appearance` (following the system), reads the effective
   /// appearance, and installs the OS-toggle observer; in `dark`/`light` it forces
-  /// `NSApp.appearance` (OD-e: the whole app, not just the grid) and removes the
+  /// `NSApp.appearance` (the whole app, not just the grid) and removes the
   /// observer. An unknown discriminant falls back to `auto`.
   private func applyResolvedAppearance() {
     let raw = config?.appearance() ?? AppearanceMode.auto.rawValue
@@ -301,7 +301,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
   }
 
   /// The `auto`-mode observer callback: re-resolves the live OS appearance and,
-  /// when it actually changed, re-pushes it to every project. No debounce (OD-c):
+  /// when it actually changed, re-pushes it to every project. No debounce:
   /// the KVO fires once per real OS toggle and re-applying an unchanged background
   /// is a harmless no-op.
   private func systemAppearanceChanged() {
@@ -730,7 +730,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     case .editInOtherPane:
       return keyController?.isPreviewActive ?? false
     case .fullWidth:
-      // ALWAYS enabled (OQ-2); only the checkmark tracks the active buffer's
+      // ALWAYS enabled; only the checkmark tracks the active buffer's
       // full-width state.
       item.state = (keyController?.isFullWidthActive ?? false) ? .on : .off
       return true
@@ -773,8 +773,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
   /// Decides how a window launches from its restored cwd: reopen the folder when
   /// `restoredCwd` still names a directory, else the "no folder open" empty state
-  /// with nvim launched at home. NEVER the process working directory (the old
-  /// `launchCwd` fallback that polluted the recent-dirs MRU).
+  /// with nvim launched at home. NEVER the process working directory, which would
+  /// pollute the recent-dirs MRU.
   private func launchDecision(restoredCwd: String) -> StateSeam.LaunchDecision {
     StateSeam.launchDecision(
       restored: restoredCwd, home: homeDir(), isDirectory: isDirectoryCheck())

@@ -1,4 +1,4 @@
-//! Integration tests for the DURABLE spell dictionary (plan §5): a `zg`-added
+//! Integration tests for the DURABLE spell dictionary: a `zg`-added
 //! word lands in `<state_dir()>/spell/en.utf-8.add` and survives a full core
 //! restart, and a state dir whose path contains a literal comma still gets a
 //! working swap `'directory'` AND `'spellfile'` — pinning init.lua's

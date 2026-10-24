@@ -1,12 +1,9 @@
-//! Integration tests for `wolf-core`'s TABPAGE lifecycle surface (plan §1 + §5.1):
-//! the project/tabpage-per-view model where one captive Neovim holds multiple
+//! Integration tests for `wolf-core`'s TABPAGE lifecycle surface: the
+//! project/tabpage-per-view model where one captive Neovim holds multiple
 //! nvim TABPAGES, one per front-end view. These drive a REAL, hermetic nvim (no
 //! mocks) via `WOLF_NVIM_BIN`; the common helpers panic loudly if it is unset.
 //!
-//! ## Dependency on coder work (plan §1.5 + §1.1)
-//!
-//! These tests reference NEW `WolfCore` methods + a NEW `Snapshot` field the coder
-//! adds; the file will not compile until they land — that is expected:
+//! ## Surface under test
 //!
 //!   * `WolfCore::create_tabpage(cwd: Option<&Path>) -> i64` — blocking; `tabnew`
 //!     (+ `:tcd cwd` when `Some`); returns the new tabpage HANDLE (0 on error).
@@ -32,11 +29,12 @@
 //!     the same grid id AND the same window handle on the way back —
 //!     `win_hide_removes_window_but_keeps_grid_on_tabpage_switch` pins exactly that,
 //!     and a round trip was measured to return `grid_for_win(w1)` unchanged. Window
-//!     HANDLES being stable is the load-bearing assumption OD2 rests on (see
-//!     `window_handles_survive_a_tabpage_switch`). We nevertheless assert on
-//!     window-HANDLE membership + `grid_for_win` round-trips and never on literal
-//!     grid-id values or HashMap order, because id REUSE is an observation about
-//!     nvim rather than a contract this crate is entitled to lean on.
+//!     HANDLES being stable is the load-bearing assumption the refocus-rebind
+//!     design rests on (see `window_handles_survive_a_tabpage_switch`). We
+//!     nevertheless assert on window-HANDLE membership + `grid_for_win`
+//!     round-trips and never on literal grid-id values or HashMap order, because
+//!     id REUSE is an observation about nvim rather than a contract this crate is
+//!     entitled to lean on.
 //!   * `Snapshot.current_tabpage` and the window/grid churn arrive across several
 //!     flushes (and out-of-band notifications), so we POLL with a generous timeout,
 //!     draining wakes, rather than waiting for a single flush.
@@ -179,7 +177,7 @@ fn win_buffer_tail(snap: &Snapshot, win: i64) -> Option<String> {
 }
 
 /// Types an Ex command `:<cmd><CR>` one key at a time. Used here for `:vsplit` and
-/// `:tcd <path>` (NOT a `:tab*` command — those are locked out by OD4).
+/// `:tcd <path>` (NOT a `:tab*` command — those are locked out).
 fn ex_command(core: &WolfCore, cmd: &str) {
     core.send_input(ch(':'));
     type_str(core, cmd);
@@ -403,12 +401,12 @@ fn switch_back_makes_second_tabpage_grids_vanish() {
     core.shutdown().expect("shutdown should be Ok");
 }
 
-/// 3. **KEYSTONE (OD2):** nvim WINDOW handles are STABLE across a tabpage switch —
-///    only GRID ids churn. Split T1 into W1,W2; switch to T2 and back; assert the
-///    SAME W1,W2 reappear and both `grid_for_win` resolve to live grids.
+/// 3. **KEYSTONE:** nvim WINDOW handles are STABLE across a tabpage switch.
+///    Split T1 into W1,W2; switch to T2 and back; assert the SAME W1,W2 reappear
+///    and both `grid_for_win` resolve to live grids. Grid ids are not asserted (see
+///    the module docs).
 ///
-/// The whole refocus-rebind design (OD2) rests on this. The coder runs it FIRST; if
-/// it FAILS the coder must STOP and report. Assertions are deliberately explicit.
+/// The refocus-rebind design rests on this. Assertions are deliberately explicit.
 #[test]
 fn window_handles_survive_a_tabpage_switch() {
     let (core, waiter) = common::start_core_sized(common::DEFAULT_COLS, common::DEFAULT_ROWS);
@@ -449,17 +447,17 @@ fn window_handles_survive_a_tabpage_switch() {
     let after = window_handles(&core.read_snapshot());
     assert_eq!(
         after, split_handles,
-        "KEYSTONE FAILURE (OD2): window handles did NOT survive the tabpage switch — \
+        "KEYSTONE FAILURE (refocus rebind): window handles did NOT survive the tabpage switch — \
          before={split_handles:?}, after={after:?}. The refocus-rebind design depends \
-         on stable window handles; if this fails the coder must STOP and report."
+         on stable window handles; if this fails, that design is unsound."
     );
 
-    // And each surviving handle rebinds to a live (fresh) grid via grid_for_win.
+    // And each surviving handle rebinds to a live grid via grid_for_win.
     let snap = core.read_snapshot();
     for &win in &after {
         let grid = snap.grid_for_win(win).unwrap_or_else(|| {
             panic!(
-                "KEYSTONE FAILURE (OD2): grid_for_win({win}) did not resolve after the \
+                "KEYSTONE FAILURE (refocus rebind): grid_for_win({win}) did not resolve after the \
                  switch back to T1 (windows={after:?})"
             )
         });
@@ -489,7 +487,7 @@ fn per_tabpage_cwd_including_non_current() {
     let canon_a = canon(dir_a.path());
     let canon_b = canon(dir_b.path());
 
-    // `:tcd dirA` on T1 (tab-local cwd, per OD3). Path has no spaces (tempdir), so
+    // `:tcd dirA` on T1 (tab-local cwd). Path has no spaces (tempdir), so
     // it can be typed literally on the command line.
     let path_a = dir_a
         .path()
@@ -644,7 +642,7 @@ fn stable_handle_survives_tabpage_renumber() {
     drop(dir_c);
 }
 
-/// 7. **`win_hide` semantics (OD7):** on a tabpage switch nvim emits `win_hide`
+/// 7. **`win_hide` semantics:** on a tabpage switch nvim emits `win_hide`
 ///    (NOT `win_close`/`grid_destroy`) for the LEAVING tabpage's windows and REUSES
 ///    the same grid id + window handle on the way back. The `redraw.rs` `win_hide`
 ///    handler therefore REMOVES the window from `Snapshot.windows` (so
@@ -1049,8 +1047,10 @@ fn per_window_buffers_are_global_across_tabpages() {
          RPC into another tabpage; per-tab persistence must fall back to caching each tab's \
          last-known-good subtree, which goes stale the moment a `:tabdo`, a plugin or a buffer \
          switch changes a background tab's files, with nothing able to tell the user; and \
-         `crates/wolf-core/src/redraw.rs`'s `win_close` comment (\"a window in a non-current \
-         tabpage is absent from both maps by construction\") turns out to be the accurate one. \
+         `notes/crates/wolf-core/src/redraw.rs.md#orphaned-nav-history` and \
+         `specs/architecture.md` (core↔front-end contract, tabpage scope), which both state \
+         that a background tabpage's window IS in `win_buffers` and `buffers`, are wrong and \
+         must be corrected. \
          This is a MEASUREMENT of the pinned Neovim plus `runtime/nvim/init.lua`, whose \
          `wolf_setup_buffer_tracking` sweeps `nvim_list_wins()` (global) rather than \
          `nvim_tabpage_list_wins(0)` (current tabpage) — so never relax this assertion to match a \

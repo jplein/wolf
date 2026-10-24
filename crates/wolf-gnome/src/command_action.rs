@@ -4,7 +4,7 @@
 //! `wolf-core` queues every user-triggered command — a `:Wolf*` Ex-command, a
 //! `require('wolf').*()` Lua call, or the `close_window` that
 //! `runtime/nvim/init.lua`'s `:q`/`:qa` handler fires — and the GTK front-end
-//! drains that queue on each render wake. This module owns the DECISION of what
+//! drains that queue on each render wake. This module owns the decision of what
 //! each command means to the GTK shell; the widget work of carrying it out lives
 //! in the GTK glue layer. Keeping the decision here (data in, data out, no GTK
 //! types) is exactly what lets it be unit-tested headlessly, the same way
@@ -269,7 +269,7 @@ mod tests {
     /// strings' actual contract (non-empty, clause-shaped, unique) is asserted by
     /// [`unimplemented_reasons_are_distinct_and_non_empty`].
     enum Want {
-        /// An exact, payload-free [`UiAction`] — a command this unit DISPATCHES.
+        /// An exact, payload-free [`UiAction`] — a command wolf-gnome DISPATCHES.
         Exact(UiAction),
         /// `UiAction::Deferred(_)` — planned on GTK, blocked on something concrete.
         Deferred,
@@ -286,7 +286,7 @@ mod tests {
     }
 
     /// The COMPLETE `Command -> UiAction` classification, one row per
-    /// [`wolf_core::Command`] variant in discriminant order (plan section 3.2).
+    /// [`wolf_core::Command`] variant in discriminant order.
     ///
     /// This table is the authority for the classification; `ui_action_table`
     /// checks the implementation against it and `every_registered_command_maps`
@@ -466,12 +466,12 @@ mod tests {
     /// non-vacuous: a newly appended core command cannot be absorbed silently.
     ///
     /// FALSIFYING EDIT for the row that carries the content-width cap: classify
-    /// `Command::FullWidth` as `UiAction::Deferred`. MEASURED: `case: 22 FullWidth:
+    /// `Command::FullWidth` as `UiAction::Deferred`. MEASURED: `` case: 22 FullWidth:
     /// toggles the focused buffer's content width — ui_action_for(FullWidth)
     /// returned Deferred("the ~90-column content cap is a front-end feature
     /// wolf-gnome does not implement"), which does not match the classification
-    /// pinned in plan section 3.2`. This test was run ALONE under that edit, so the
-    /// failure above is its own and not
+    /// pinned in `CASES` ``. This test was run ALONE under that edit, so the failure
+    /// above is its own and not
     /// [`dispatched_commands_are_the_expected_set`]'s showing through it.
     #[test]
     fn ui_action_table() {
@@ -490,7 +490,7 @@ mod tests {
             assert!(
                 satisfies(&case.want, got),
                 "case: {} — ui_action_for({:?}) returned {got:?}, which does not match the \
-                 classification pinned in plan section 3.2",
+                 classification pinned in `CASES`",
                 case.desc,
                 case.command
             );
@@ -530,8 +530,7 @@ mod tests {
     /// and run this test ALONE so its evidence is its own. Expected: the sorted `left`
     /// comes back one element short of `right`, the missing element being
     /// `"preview_in_browser"` in sorted position between `"preview"` and
-    /// `"quit_application"`. That command is the one this unit promoted, so it is the
-    /// edit a reverting change would actually make.
+    /// `"quit_application"`.
     ///
     /// MEASURED with the same shape on a different row, which is what says the diff
     /// really is one element and really names the command rather than reporting that

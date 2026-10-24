@@ -7,7 +7,7 @@
 //! parses that payload into a [`LayoutIntent`] and pushes it onto a drainable
 //! queue; the front-end consumes intents on wake via [`crate::api::WolfCore::drain_intents`].
 //!
-//! Asymmetry (decision D4): a SPLIT is PERFORMED by nvim (so it really creates the
+//! Asymmetry: a SPLIT is PERFORMED by nvim (so it really creates the
 //! window + grid and emits `win_pos`) AND reported as a [`LayoutIntent::Split`] so
 //! the shell learns the orientation and which pane to split. A focus MOVE is a
 //! PURE intent ([`LayoutIntent::FocusDir`]): nvim does NOT change focus; the shell
@@ -256,10 +256,6 @@ mod tests {
     }
 
     /// A valid `drawer_open` map -> `Some(DrawerOpen { win })`, preserving `win`.
-    ///
-    /// NOTE (coder): the `LayoutIntent::DrawerOpen { win: i64 }` variant and its
-    /// `from_payload` `"drawer_open"` arm do NOT exist yet — the coder adds them per
-    /// the fix plan §2. This test will not compile until they land (by design).
     #[test]
     fn from_payload_valid_drawer_open() {
         let payload = map(vec![

@@ -7,7 +7,7 @@
 //! any other binary's environment. The record-on-`:cd` path (driven through a real
 //! nvim) is covered separately in `tests/recent_dirs_records.rs`.
 //!
-//! Surface exercised (per the recent-dirs plan):
+//! Surface exercised:
 //! - `wolf_core::RecentDirs::open(dir: &Path) -> RecentDirs` (infallible; eagerly
 //!   creates `dir/folder-mru.sqlite`)
 //! - `wolf_core::RecentDirs::disabled() -> RecentDirs` (all methods no-op)

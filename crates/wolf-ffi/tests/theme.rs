@@ -3,7 +3,7 @@
 //! This drives the RUST half of the swift-bridge theme machinery against a REAL,
 //! hermetic Neovim — NO mocks, per the project testing policy. It is the sibling
 //! of `panes.rs` (same staging / SKIP-when-unset machinery, reusing
-//! `tests/common/mod.rs`) but exercises the NEW theme surface:
+//! `tests/common/mod.rs`) but exercises the theme surface:
 //!
 //!   * `WolfCoreHandle::theme_titlebar_bg() -> FfiColor` (`.rgb` / `.set`, the
 //!     `default_fg`/`default_bg` unset convention: `set == false` when the
@@ -13,11 +13,7 @@
 //!     the `WolfCursor` override pre-resolved (bg = fill, fg = glyph) — no new
 //!     cursor FFI surface.
 //!
-//! ## Dependency on coder work
-//!
-//! The two handle methods do not exist yet: the coder implements them in
-//! `crates/wolf-ffi/src/lib.rs`, regenerates `generated/`, AND adds the
-//! `//crates/wolf-ffi:theme` `rust_test` target to `BUILD.bazel`.
+//! The `//crates/wolf-ffi:theme` `rust_test` target runs this file under Bazel.
 //!
 //! ## NOTE on `:doautocmd ColorScheme`
 //!

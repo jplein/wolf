@@ -128,7 +128,7 @@ final class HistorySeamTests: XCTestCase {
     XCTAssertNotEqual(
       HistorySeam.backIdentifier, HistorySeam.forwardIdentifier,
       "the two toolbar items must be addressable separately")
-    // RTL-aware chevrons (NOT chevron.left/right), per the architect's call.
+    // RTL-aware chevrons (NOT chevron.left/right), so Back and Forward mirror in RTL locales.
     XCTAssertEqual(HistorySeam.backSymbolName, "chevron.backward")
     XCTAssertEqual(HistorySeam.forwardSymbolName, "chevron.forward")
     XCTAssertEqual(

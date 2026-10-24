@@ -133,8 +133,8 @@ pub struct ActionBinding {
 }
 
 /// The COMPLETE Linux accelerator scheme of `notes/wolf-gnome-decisions.md`,
-/// "The accelerator namespace": one row per action, covering later units'
-/// reserved chords as well as this unit's bound ones.
+/// "The accelerator namespace": one row per action, covering reserved chords as
+/// well as bound ones.
 ///
 /// Reserved rows are present so the namespace is auditable in one place and so
 /// the `no_accel_makes_a_neovim_key_unreachable` unit test checks them too — a
@@ -1002,7 +1002,7 @@ mod tests {
             with_accel > 0,
             "ACTION_TABLE declares no accelerators at all, so every per-accel test in this module \
              would pass vacuously. Populate it from the scheme in \
-             `notes/wolf-gnome-decisions.md`, \"The accelerator namespace\" (plan section 2.4)."
+             `notes/wolf-gnome-decisions.md`, \"The accelerator namespace\"."
         );
 
         for binding in ACTION_TABLE {
@@ -1387,7 +1387,7 @@ mod tests {
     /// test would mean the chord was already unmatched or the menu had already lost
     /// its item.
     ///
-    /// `win.new-tab` is the OTHER row that moves all three, and it is this unit's.
+    /// `win.new-tab` is the OTHER row that moves all three.
     /// Reverting its status to `Reserved` reddens `action_for_key_table` on BOTH its
     /// `Ctrl+Shift+T` rows — [`action_for_key`] scans `Bound` rows only, so each
     /// letter case answers `None` — and `menu_never_lists_a_reserved_action` on the
@@ -1509,10 +1509,9 @@ mod tests {
     ///   modifiers EXACTLY so `<Control><Shift>c` cannot match a state without
     ///   Shift, and the bubble-phase controller then encodes `Key::Char('c')` with
     ///   `ctrl: true` as `<C-c>`. The two rows below are what keep that true.
-    /// * **A Reserved row must NOT fire.** Its action is not installed this unit,
-    ///   so a match would swallow the key and do nothing at all — worse than not
-    ///   binding it. `Ctrl+minus` (`win.decrease-font-size`) is the row carrying
-    ///   that bucket.
+    /// * **A Reserved row must NOT fire.** Its action is not installed, so a match
+    ///   would swallow the key and do nothing at all — worse than not binding it.
+    ///   `Ctrl+minus` (`win.decrease-font-size`) is the row carrying that bucket.
     /// * **The modifier match is EXACT, not "at least".** Adding Alt to a bound
     ///   Ctrl+Shift chord must miss, and adding Ctrl to a bound ALT chord must miss
     ///   too — `Ctrl+Alt+Left` is not `<Alt>Left`, so it stays Neovim's. A modifier
@@ -1963,8 +1962,7 @@ mod tests {
     fn menu_items_reference_declared_actions() {
         assert!(
             !MENU_SECTIONS.is_empty(),
-            "MENU_SECTIONS is empty, so every menu test in this module would pass vacuously. \
-             Populate it from plan section 3.1."
+            "MENU_SECTIONS is empty, so every menu test in this module would pass vacuously."
         );
 
         for (index, section) in MENU_SECTIONS.iter().enumerate() {
@@ -2325,10 +2323,10 @@ mod tests {
     /// assertion below is load-bearing rather than tidy. New Window carries
     /// `Command::NewWindow`, so it keeps a command-palette row and `:WolfNewWindow`
     /// when its menu item goes. This row carries **no** `wolf_core::Command` at all
-    /// (there is no Save As command in `COMMAND_SPECS`, and adding one is the
-    /// cross-platform change this unit deliberately does not make), so the palette —
-    /// whose rows come from the registry — never offers it and no `:Wolf` command
-    /// drains to it. Delete the menu item and the feature is reachable from nowhere.
+    /// (there is no Save As command in `COMMAND_SPECS`, and adding one would be a
+    /// cross-platform change), so the palette — whose rows come from the registry —
+    /// never offers it and no `:Wolf` command drains to it. Delete the menu item and
+    /// the feature is reachable from nowhere.
     ///
     /// FALSIFYING EDIT 1: delete the `"Save As…"` item from `MENU_SECTIONS`.
     /// PREDICTED: the `listed` assertion fails.

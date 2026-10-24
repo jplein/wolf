@@ -4,26 +4,10 @@
 //! `rank::rank_matches` and `palette::rank_palette` which it reuses/mirrors.
 //!
 //! These live in a dedicated integration file (with its own `buffer_rank` BUILD
-//! target) rather than an in-module `#[cfg(test)] mod tests` inside the NEW
-//! `src/buffer_picker.rs`, to avoid colliding with the coder who creates that
-//! file. This mirrors the crate's existing precedent for `palette_rank.rs`.
+//! target) rather than an in-module `#[cfg(test)] mod tests` inside
+//! `src/buffer_picker.rs`, mirroring the crate's precedent for `palette_rank.rs`.
 //!
-//! ## Dependency on coder work (plan §4 / §8a)
-//!
-//! None of this exists yet — the coder adds `pub mod buffer_picker;` (+ the
-//! re-exports this file imports) to `crates/wolf-core/src/lib.rs`, and adds the
-//! `//crates/wolf-core:buffer_rank` `rust_test` target to `BUILD.bazel` (a copy
-//! of the `palette_rank` stanza). This file does NOT touch non-test source. It
-//! assumes the plan's exact signatures:
-//!
-//! - `pub struct BufInfo { pub bufnr: i64, pub name: String, pub lastused: i64,
-//!   pub modified: bool }` (derives `Debug` / `Clone` for the panic messages here)
-//! - `pub struct BufferRow { pub bufnr: i64, pub display: String,
-//!   pub modified: bool }` (derives `Debug` for the panic messages here)
-//! - `#[must_use] pub fn rank_buffers(buffers: &[BufInfo], cwd: Option<&Path>,
-//!   query: &str, max: usize) -> Vec<BufferRow>`
-//!
-//! Display contract (plan §4, DECISION §13.6 — no `~`-home fold in v1):
+//! Display contract (no `~`-home fold):
 //!   empty name -> `[No Name]`; a name under `cwd` -> the cwd-relative remainder;
 //!   a name outside `cwd` -> the absolute path verbatim.
 

@@ -14,7 +14,7 @@ final class FrameStatsTests: XCTestCase {
   /// Tolerance for the `Double` ratio assertions.
   private let eps: Double = 1e-9
 
-  /// The default report interval the plan pins for `WOLF_FRAME_STATS_INTERVAL`.
+  /// The pinned default report interval for `WOLF_FRAME_STATS_INTERVAL`.
   private let defaultInterval: TimeInterval = 5.0
 
   // MARK: - 0. Bucket discriminants + labels
@@ -379,7 +379,7 @@ final class FrameStatsTests: XCTestCase {
       (0, 7, nil, "wakes with no keystrokes -> still nil"),
       (10, 30, 3.0, "30 wakes / 10 keys -> 3.0"),
       (5, 0, 0.0, "0 wakes / 5 keys -> 0.0"),
-      (48, 142, 142.0 / 48.0, "the plan's sample ratio"),
+      (48, 142, 142.0 / 48.0, "142 wakes / 48 keys -> a non-integer ratio"),
       (4, 2, 0.5, "fewer wakes than keys -> a sub-1 ratio"),
     ]
     for (keys, wakes, want, desc) in cases {

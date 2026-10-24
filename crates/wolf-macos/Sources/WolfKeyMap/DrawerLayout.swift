@@ -12,8 +12,8 @@ import Foundation
 /// whole pane area and `drawerRect(width:)` is `nil`.
 public struct DrawerLayout {
   /// The fixed drawer weight (fraction of the pane-area height): ~1/3, matching
-  /// the `wolf_toggle_terminal` Lua helper's `botright <lines/3>split` (FD3: no
-  /// divider-drag resize this pass).
+  /// the `wolf_toggle_terminal` Lua helper's `botright <lines/3>split`. The drawer
+  /// has no divider-drag resize.
   public static let defaultWeight: Double = 1.0 / 3.0
 
   /// The editor region's height, in points: `hasDrawer ? max(0, paneAreaHeight -

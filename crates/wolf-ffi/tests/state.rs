@@ -1,10 +1,9 @@
-//! Integration test for the `wolf-ffi` state-persistence bridge surface, rewritten
-//! for the TREE-shaped snapshot model (plan Phase 2 + OD3). The target name stays
-//! `//crates/wolf-ffi:state`.
+//! Integration test for the `wolf-ffi` state-persistence bridge surface over the
+//! TREE-shaped snapshot model, run under Bazel as `//crates/wolf-ffi:state`.
 //!
 //! ## What this drives
 //!
-//! The NEW write-side snapshot-builder free functions (pure Rust over the shared
+//! The write-side snapshot-builder free functions (pure Rust over the shared
 //! `StateStore` + a `Mutex` scratch — NO live nvim needed):
 //!
 //!   * `wolf_ffi_state_snapshot_begin()` — clears the scratch tree.
@@ -22,11 +21,10 @@
 //!   * `FfiWindowState::x()/y()/width()/height() -> f64`, `tabs() -> Vec<FfiTabState>`
 //!   * `FfiTabState::cwd() -> String`, `sidebar_visible() -> bool`
 //!
-//! The old granular handle setters (`state_set_geometry` /
-//! `state_set_sidebar_visible` / `state_flush`) and the start-time StateStore
-//! attach are GONE (OD1: the core no longer mirrors cwd), so this test needs NO
-//! nvim — it is a pure builder round-trip, driven purely through `WOLF_STATE_DIR`
-//! pointed at a `tempfile::tempdir()`, like `tests/config.rs`.
+//! The handle has no state setters and the core does not mirror cwd into the
+//! store, so this test needs NO nvim — it is a pure builder round-trip, driven
+//! purely through `WOLF_STATE_DIR` pointed at a `tempfile::tempdir()`, like
+//! `tests/config.rs`.
 //!
 //! ## SINGLE #[test]
 //!
@@ -77,7 +75,7 @@ const W0_TAB0_CWD: &str = "/proj/window-zero/tab-a";
 const W0_TAB1_CWD: &str = "/proj/window-zero/tab-b";
 const W1_TAB0_CWD: &str = "/proj/window-one/only-tab";
 
-// -- Pane-layout push-builder fixture (feature plan §4.2/§4.3) ------------------
+// -- Pane-layout push-builder fixture -------------------------------------------
 /// The FFI orientation discriminant for a VERTICAL split (0 = horizontal, 1 = vertical).
 const ORIENT_VERTICAL: u8 = 1;
 /// The number of children in the pushed split.
@@ -90,7 +88,7 @@ const ROOT_WEIGHT: f64 = 1.0;
 const LEAF_LEFT_PATH: &str = "/proj/window-one/left.md";
 const LEAF_RIGHT_PATH: &str = "/proj/window-one/right.md";
 
-// -- Preview-leaf fixture (feature plan ROUND 2 — preview restore) --------------
+// -- Preview-leaf fixture (preview restore) -------------------------------------
 /// The SOURCE markdown path carried by the PREVIEW leaf (preview: true). For a
 /// preview leaf the path is its source file, so `is_preview()` + `leaf_path()`
 /// together let the rebuild recreate a preview of this file.

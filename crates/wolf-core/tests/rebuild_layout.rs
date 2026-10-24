@@ -1,7 +1,7 @@
-//! Real-nvim integration test for the pane-layout REBUILD API (feature plan
-//! §4.4): `WolfCore::rebuild_layout(spec_json)` realizes a saved pane-split tree
-//! in the current tabpage's single starting window (via `:split`/`:vsplit` +
-//! `:edit`) and returns the resulting window handles in DFS order — the SAME order
+//! Real-nvim integration test for the pane-layout REBUILD API:
+//! `WolfCore::rebuild_layout(spec_json)` realizes a saved pane-split tree in the
+//! current tabpage's single starting window (via `:split`/`:vsplit` + `:edit`)
+//! and returns the resulting window handles in DFS order — the SAME order
 //! as `PaneTree.leaves()` / `PaneTree.rebuilt`, so the front-end can zip each
 //! handle to its rebuilt leaf. nvim produces only the WINDOW COUNT + TOPOLOGY +
 //! per-window BUFFER; sizes come later from the front-end's weights.
@@ -14,18 +14,17 @@
 //! count, distinctness, and the per-window buffer each maps to (via
 //! `grid_for_win` -> `pane_status`).
 //!
-//! ## Dependency on coder work (feature plan §4.4)
+//! ## Surface under test
 //!
 //! `WolfCore::rebuild_layout(&self, spec_json: &str) -> Vec<i64>` and the
-//! `runtime/nvim/init.lua` `wolf_rebuild_layout` helper do not exist yet. The
-//! coder adds them, plus the `//crates/wolf-core:rebuild_layout` `rust_test`
-//! target. This file does NOT touch non-test source.
+//! `runtime/nvim/init.lua` `wolf_rebuild_layout` helper. The
+//! `//crates/wolf-core:rebuild_layout` `rust_test` target runs this file.
 //!
 //! The spec JSON shape matches `PaneLayoutCodec.specJSON`:
 //!   * leaf:  `{ "leaf": true, "path": "<abs path or empty>", "preview": <bool> }`
 //!   * split: `{ "orientation": "h"|"v", "weights": [...], "children": [...] }`
 //!
-//! ## Preview leaves (feature plan ROUND 2)
+//! ## Preview leaves
 //!
 //! A leaf with `"preview": true` carries its SOURCE markdown path; on rebuild the
 //! Lua helper turns that leaf's window into a PREVIEW of the source (via
@@ -257,10 +256,10 @@ fn rebuild_perpendicular_tree_with_empty_leaf() {
     core.shutdown().expect("shutdown should be Ok");
 }
 
-/// (c) A vertical split of [ EDITOR of a .md, PREVIEW of the SAME .md ] (feature
-/// plan ROUND 2): two distinct handles; the editor pane shows the md file, and the
-/// preview leaf is RECONSTRUCTED as a real preview of the md SOURCE (reported by
-/// the core's `previews()` at the preview window handle) — NOT a blank/edit buffer.
+/// (c) A vertical split of [ EDITOR of a .md, PREVIEW of the SAME .md ]: two
+/// distinct handles; the editor pane shows the md file, and the preview leaf is
+/// RECONSTRUCTED as a real preview of the md SOURCE (reported by the core's
+/// `previews()` at the preview window handle) — NOT a blank/edit buffer.
 #[test]
 fn rebuild_editor_and_preview_of_same_markdown() {
     let (core, waiter) = common::start_core_sized(common::DEFAULT_COLS, common::DEFAULT_ROWS);

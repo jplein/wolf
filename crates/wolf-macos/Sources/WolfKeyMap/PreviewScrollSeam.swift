@@ -116,7 +116,7 @@ public enum PreviewScrollSeam {
   ///
   /// Deliberately separate from `PreviewSeam.PreviewLoad`, which is what was last
   /// DISPATCHED and must stay exactly `(sourceBufnr, sourceTick)` so a cursor-only
-  /// change can never arm a reload (D3). This type carries no tick on purpose: what
+  /// change can never arm a reload. This type carries no tick on purpose: what
   /// is committed is a DOCUMENT, and how many edits behind it is says nothing about
   /// whether its body can be swapped. What it carries instead is `headLength`, the
   /// only thing a body-only swap can get WRONG.
@@ -151,7 +151,7 @@ public enum PreviewScrollSeam {
   /// are deliberately distinct VALUES rather than one optional, because a caller's
   /// mechanical `switch` is only as safe as the type's ability to tell them apart —
   /// and `.discard` versus `.commit(nil)` is exactly the pair whose conflation wiped a
-  /// good live document (M1).
+  /// good live document.
   public enum LoadCommitOutcome: Equatable {
     /// More navigations are still outstanding for this window, so THIS callback is
     /// not the one that decides: leave the live AND the pending descriptor alone.
@@ -418,8 +418,8 @@ public enum PreviewScrollSeam {
   ///     `didFinish`). The count is what this rule actually guarantees: it stays
   ///     non-zero from the FIRST outstanding navigation until the LAST one's callback,
   ///     so no in-place update can ever run while any navigation is pending. A
-  ///     Set-based flag guaranteed only "the most recent callback has not landed", and
-  ///     the earlier callback cleared it out from under a still-navigating load (M1).
+  ///     Set-based flag guarantees only "the most recent callback has not landed", and
+  ///     the earlier callback clears it out from under a still-navigating load.
   ///     Because the slot is empty again exactly when the count reaches zero — every
   ///     capture is consumed by a `didFinish`, and
   ///     ``loadCommitOutcome(remaining:pending:succeeded:)``'s `.discard` is where the
@@ -430,8 +430,8 @@ public enum PreviewScrollSeam {
   ///     failed in-place update, which clears `previewLiveDocuments[win]` precisely to
   ///     force this rule.
   ///  4. **`.fullLoad` when the SOURCE BUFFER changed.** That is a NAVIGATION, and
-  ///     the new file must open at its top — H1's guarantee, mirrored here at the
-  ///     strategy layer. The tick is irrelevant: two freshly opened files can share a
+  ///     the new file must open at its top — the source-switch reset, mirrored here at
+  ///     the strategy layer. The tick is irrelevant: two freshly opened files can share a
   ///     `changedtick`, so only the bufnr may decide.
   ///  5. **`.fullLoad` when ``splitDocument(_:)`` returns `nil`.**
   ///  6. **`.fullLoad` when the head LENGTH changed.** A body-only swap leaves the
@@ -485,22 +485,22 @@ public enum PreviewScrollSeam {
   /// What a preview navigation's terminal callback may commit, given how many
   /// navigations for that window are STILL outstanding after it decremented the count.
   ///
-  /// TWO NAVIGATIONS CAN STRADDLE ONE PAGE LOAD — the same window H2 exists to
-  /// survive. The reload coalescer serializes to one reload per ~33ms and does NOT
-  /// wait for `didFinish`, so full load N+1 is routinely issued while N is still
-  /// navigating, OVERWRITING the pending descriptor. WebKit then reports the
-  /// superseded load N as a FAILURE as often as not, so which callback flavor arrives
-  /// is not under our control and must not change the answer.
+  /// TWO NAVIGATIONS CAN STRADDLE ONE PAGE LOAD. The reload coalescer serializes to one
+  /// reload per ~33ms and does NOT wait for `didFinish`, so full load N+1 is routinely
+  /// issued while N is still navigating, OVERWRITING the pending descriptor. WebKit then
+  /// reports the superseded load N as a FAILURE as often as not, so which callback
+  /// flavor arrives is not under our control and must not change the answer.
   ///
   /// The rules:
   ///
   ///  * `remaining > 0` → ``LoadCommitOutcome/stillOutstanding``, whatever `succeeded`
   ///    says. A superseded load's callback decides nothing: it may not commit, and it
   ///    may not destructively consume the pending descriptor that the load STILL
-  ///    navigating needs. (Consuming it is exactly what the old `Set<Int64>` flag did,
-  ///    after which the next coalescer tick saw an all-clear in-flight flag, chose
-  ///    `.inPlace`, and swapped a body into a document that was about to be replaced —
-  ///    a visible flicker, i.e. the exact symptom the in-place path exists to remove.)
+  ///    navigating needs. (Consuming it is exactly what a `Set<Int64>` flag would do,
+  ///    after which the next coalescer tick would see an all-clear in-flight flag,
+  ///    choose `.inPlace`, and swap a body into a document that is about to be
+  ///    replaced — a visible flicker, i.e. the exact symptom the in-place path exists
+  ///    to remove.)
   ///  * `remaining == 0 && succeeded` → ``LoadCommitOutcome/commit(_:)`` carrying
   ///    `pending` VERBATIM, including `nil`: a successful load of an unsplittable
   ///    document must positively clear the live slot, or
@@ -608,7 +608,7 @@ public enum PreviewScrollSeam {
   /// It is defined AFTER `moveTo`/`__wolfRestore` and BEFORE the scroll listener, and
   /// it reaches the viewport ONLY through `scrollAnchorTo` / `moveTo` /
   /// `__wolfFollow` — it adds no second `scrollTo`, and none of `scrollBy`,
-  /// `scrollIntoView` or `scrollTop =`. Keep it that way (see the N2 funnel invariant
+  /// `scrollIntoView` or `scrollTop =`. Keep it that way (see the funnel invariant
   /// below); a direct scroll here would fire an unarmed `scroll` event that the
   /// listener classifies as the USER's.
   ///
@@ -619,9 +619,9 @@ public enum PreviewScrollSeam {
   /// a `-0` marker, the scan normally terminates in a single step.
   ///
   /// That tier-4 sweep's `[data-col="0"]` filter is LOAD-BEARING and must never be
-  /// widened to all `.wolf-src`. wolf-core now places the per-100-column anchors
+  /// widened to all `.wolf-src`. wolf-core places the per-100-column anchors
   /// INLINE, at their true position inside a block's rendered content, so `col > 0`
-  /// anchors are no longer in globally ascending document order (a later hard line's
+  /// anchors are not in globally ascending document order (a later hard line's
   /// `-0` anchor is still flushed at the block top, ahead of an earlier-offset
   /// `col > 0` anchor placed inside that block). Only the `data-col="0"`
   /// SUBSEQUENCE is guaranteed ascending, which is exactly what a backwards sweep
@@ -650,7 +650,7 @@ public enum PreviewScrollSeam {
   /// no-op that fires no `scroll` event; comparing the raw value would arm the flag
   /// for a scroll that never happens and swallow the next genuine user scroll.
   /// Clamping in `moveTo` covers every programmatic scroll, which is why
-  /// `scrollAnchorTo` no longer clamps separately.
+  /// `scrollAnchorTo` does not clamp separately.
   ///
   /// The ONE programmatic scroll in this crate that deliberately does NOT go through
   /// `moveTo` is ``PreviewLinkSeam/scrollIntoViewJS(fragmentId:)``'s
@@ -841,7 +841,7 @@ public enum PreviewScrollSeam {
   /// `callAsyncJavaScript(_:arguments:in:in:completionHandler:)` dictionary from.
   ///
   /// They live HERE, as one exported constant, for the same reason the tuning numbers
-  /// do (D1): the JS body and the caller's dictionary must be provably unable to
+  /// do: the JS body and the caller's dictionary must be provably unable to
   /// drift. An EXTRA free name in the body is a `ReferenceError` on every keystroke —
   /// which degrades the feature to permanent full loads, silently, with a green
   /// suite — and a missing one is a payload shipped and then ignored. Short names

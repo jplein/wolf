@@ -1,6 +1,6 @@
 //! The native GTK pane-tree view for `wolf-gnome` (the split-panes UI).
 //!
-//! This is the GTK glue (decision D7/D8) that turns the pure [`crate::layout`]
+//! This is the GTK glue that turns the pure [`crate::layout`]
 //! [`PaneTree`] into a live tree of nested `gtk::Paned`s, one `gtk::DrawingArea`
 //! per pane, plus a one-row **cmdline strip** along the bottom. It mirrors the
 //! `tree_view.rs` / `picker.rs` patterns: `Rc`/`RefCell`/`Cell` interior mutability
@@ -24,7 +24,7 @@
 //! the pointer paths translate a pane-local point into grid-local space before
 //! [`cell_at`]. The strip's own rulebook is [`crate::statusbar_layout`].
 //!
-//! ## Cmdline strip (★ S3 requirement)
+//! ## Cmdline strip
 //!
 //! Under `ext_multigrid` the command line, `/`-search, and messages live outside the
 //! window grids the panes paint. Three surfaces make them visible again, each painted
@@ -3347,7 +3347,7 @@ impl PaneHandle {
     /// still passes, because the buffer text is simply drawn at the top-left of an
     /// over-large grid.
     ///
-    /// ## Known v1 limitations
+    /// ## Known limitations
     ///
     /// - A crash while the window was SPLIT leaves the dead nvim's extra
     ///   window/grid entries in the snapshot: no `win_close`/`grid_destroy` is

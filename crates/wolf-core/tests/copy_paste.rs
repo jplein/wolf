@@ -1,4 +1,4 @@
-//! Integration tests for the COPY / PASTE surface against a real nvim (plan §6.2):
+//! Integration tests for the COPY / PASTE surface against a real nvim:
 //! visual-mode detection (`Snapshot::is_visual_mode`), yanking a visual selection
 //! out of the captive nvim (`WolfCore::copy_visual_selection`), and pasting text
 //! back in (`WolfCore::paste`).
@@ -7,14 +7,6 @@
 //! reusing `tests/common/mod.rs`. Modeled on `input_keys.rs` / `redraw_grid.rs`:
 //! type keys through `send_input`, wait for a redraw flush, then assert on the
 //! snapshot / grid.
-//!
-//! ## Dependency on coder work (plan §3.3–§3.5)
-//!
-//! These do NOT exist yet — the coder adds them, so this file will not compile
-//! until then (expected for test-first):
-//!   * `WolfCore::copy_visual_selection(&self) -> Option<String>`
-//!   * `WolfCore::paste(&self, text: String)` (fire-and-forget `InputEvent::Paste`)
-//!   * `Snapshot::is_visual_mode(&self) -> bool` (true for `v` / `V` / `<C-v>`)
 
 mod common;
 
@@ -53,10 +45,9 @@ const COPY_FIXTURE: &str = "WOLFCOPY selection target\n";
 
 /// The distinctive first word of [`COPY_FIXTURE`]. `ve` from the line start
 /// selects exactly this token (visual is inclusive of the end char), so the
-/// yanked unnamed register must CONTAIN it. NOTE to coder: this pins the copy
-/// path to nvim's visual-`y` semantics (unnamed register `"`); the yank must be
-/// synchronous so the register is populated before `copy_visual_selection`
-/// returns.
+/// yanked unnamed register must CONTAIN it. This pins the copy path to nvim's
+/// visual-`y` semantics (unnamed register `"`); the yank must be synchronous so
+/// the register is populated before `copy_visual_selection` returns.
 const COPY_WORD: &str = "WOLFCOPY";
 
 /// A distinctive token pasted into an empty buffer; it must show up in the grid.

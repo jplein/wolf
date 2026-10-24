@@ -1,6 +1,6 @@
 //! Pure, GUI-free, IO-free Markdown → themed-HTML rendering for the preview pane.
 //!
-//! `wolf-core` owns the render (requirement 6): the front-end web view just loads
+//! `wolf-core` owns the render: the front-end web view just loads
 //! the HTML string this module produces. Like [`crate::rank`] this module touches
 //! NO GUI toolkit and NO filesystem — it is a pure `&str` → `String` transform,
 //! headlessly unit-testable. The Markdown engine is [`pulldown_cmark`], chosen for
@@ -15,7 +15,7 @@
 //! marker is an empty inline `<span class="wolf-src" id="wl-{L}-{C}"
 //! data-line="{L}" data-col="{C}"></span>` (see [`marker_span`]): `L` is the
 //! 1-based hard buffer line (matches nvim `line('.')`), `C` is the 0-based
-//! CHARACTER column (OD4 — a character offset, NOT a byte offset, so multibyte
+//! CHARACTER column (a character offset, NOT a byte offset, so multibyte
 //! lines resolve correctly). The `id` gives O(1) `getElementById`; the CSS
 //! `.wolf-src` rule (in `markdown/base.css`) makes it a zero-size, invisible inline
 //! anchor that never affects the rendered body.
@@ -28,7 +28,7 @@
 //! ## DOM placement (two tiers: block-top flush, and inline splitting)
 //!
 //! [`MarkerInjector`] walks the offset iterator and places each marker by one of
-//! two rules. Marker ids, the id scheme, the CHARACTER-column semantics (OD4),
+//! two rules. Marker ids, the id scheme, the CHARACTER-column semantics,
 //! source ordering and [`MARKER_COLUMN_STRIDE`] are identical under both — only
 //! DOM PLACEMENT differs.
 //!
@@ -180,7 +180,7 @@
 //!    (`[source_bufnr, line, char_col]`) from markdown-guarded `CursorMoved` /
 //!    `CursorMovedI` / `BufEnter` / `BufWinEnter` autocmds. `line` is a 1-based
 //!    `line('.')`; `char_col` is `charcol('.') - 1`, which is ALREADY a 0-based
-//!    CHARACTER column (OD4) — `charcol()` is `col()`'s character-index twin, so
+//!    CHARACTER column — `charcol()` is `col()`'s character-index twin, so
 //!    there is **no** byte→character conversion anywhere in the chain, and none is
 //!    needed. Do NOT add one, and do not switch the Lua side to `col('.')`: that
 //!    would silently mis-anchor every line containing a multibyte character.
@@ -324,12 +324,12 @@ const MATH_CSS: &str = include_str!("markdown/math.css");
 
 /// The available preview HTML/CSS themes.
 ///
-/// One variant ships this cut ([`PreviewTheme::Default`], the default theme whose
-/// CSS carries a dark palette plus a `prefers-color-scheme: light` palette so it
+/// One variant exists ([`PreviewTheme::Default`], the default theme whose CSS
+/// carries a dark palette plus a `prefers-color-scheme: light` palette so it
 /// follows the app's resolved dark/light appearance — but is NOT wired to the live
-/// nvim colorscheme (OD5)). The enum + [`theme_css`] + `include_str!`'d CSS files
-/// are structured so more themes and a config-driven selector can drop in later;
-/// selection is a hardcoded `PreviewTheme::Default` at the call site for now.
+/// nvim colorscheme). The enum + [`theme_css`] + `include_str!`'d CSS files
+/// leave room for more themes and a config-driven selector; the call site
+/// hardcodes `PreviewTheme::Default`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum PreviewTheme {
     /// The default preview theme. Its CSS ships a dark palette plus a
@@ -352,14 +352,14 @@ pub fn theme_css(theme: PreviewTheme) -> &'static str {
 /// How the rendered Markdown body's content area is sized horizontally.
 ///
 /// A per-render choice threaded into [`render_html`]. [`WidthMode::Full`] is the
-/// full-bleed / historical behavior (the in-app webview FRAME does any capping);
+/// full-bleed behavior (the in-app webview FRAME does any capping);
 /// [`WidthMode::Capped`] appends a `max-width` cap + horizontal centering to the
-/// CSS so the standalone document (the browser preview, always-capped per OQ-3)
+/// CSS so the standalone document (the always-capped browser preview)
 /// caps its own content.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum WidthMode {
     /// Cap the content to [`CAPPED_WIDTH_CSS`] (`max-width: 45rem`, ≈ 90 proportional
-    /// Inter characters — OQ-3) and center it horizontally. Used by the always-capped
+    /// Inter characters) and center it horizontally. Used by the always-capped
     /// browser preview and static `.md` disk renders.
     Capped,
     /// Full-bleed: no content `max-width` cap and no centering, so the caller's
@@ -376,7 +376,7 @@ pub enum WidthMode {
 /// `45rem` ≈ 90 proportional Inter characters: at the default 16px root font the
 /// average Inter glyph advance is roughly half the em (~8px), so `45rem = 720px`
 /// holds on the order of 90 characters — honoring the user's explicit "~90
-/// characters" request (OQ-3) for a proportional font, the same target the 90-column
+/// characters" request for a proportional font, the same target the 90-column
 /// editor cap uses for its monospaced grid.
 ///
 /// ONLY horizontal properties are set (`max-width`, the two side margins, the two
@@ -457,10 +457,10 @@ fn markdown_options() -> Options {
     options.insert(Options::ENABLE_FOOTNOTES);
     options.insert(Options::ENABLE_STRIKETHROUGH);
     options.insert(Options::ENABLE_TASKLISTS);
-    // O5: honor explicit `{#custom-id}` heading attributes; the auto-slug pipeline
+    // Honor explicit `{#custom-id}` heading attributes; the auto-slug pipeline
     // only assigns an id when the heading declares none.
     options.insert(Options::ENABLE_HEADING_ATTRIBUTES);
-    // Task 1: yield `Event::InlineMath` / `Event::DisplayMath` for `$…$` / `$$…$$`
+    // Yield `Event::InlineMath` / `Event::DisplayMath` for `$…$` / `$$…$$`
     // LaTeX so `MathRenderer` can convert them to inline MathML.
     options.insert(Options::ENABLE_MATH);
     options
@@ -528,7 +528,7 @@ pub fn code_blocks(source: &str) -> Vec<CodeBlockInfo> {
 /// `width_mode` selects the content-area sizing: [`WidthMode::Full`] appends no
 /// width CSS (full-bleed; the in-app webview frame caps it), while
 /// [`WidthMode::Capped`] appends [`CAPPED_WIDTH_CSS`] AFTER the theme CSS so the
-/// standalone document (the always-capped browser preview, OQ-3) caps + centers its
+/// standalone document (the always-capped browser preview) caps + centers its
 /// own content.
 #[must_use]
 pub fn render_html(source: &str, theme: PreviewTheme, width_mode: WidthMode) -> String {
@@ -614,7 +614,7 @@ fn marker_span(line: u32, col: u32) -> String {
 /// Each entry is `(byte_offset, line, col)`: `line` is the 1-based hard line,
 /// `col` is the 0-based CHARACTER column, and `byte_offset` is that position's byte
 /// offset into `source` (the line's start byte plus the byte length of the first
-/// `col` characters of that line — OD4). Emits `(L, 0)` for every hard line, plus
+/// `col` characters of that line). Emits `(L, 0)` for every hard line, plus
 /// `(L, k*MARKER_COLUMN_STRIDE)` for each `k*MARKER_COLUMN_STRIDE` strictly less
 /// than the line's character length.
 ///
@@ -647,7 +647,7 @@ fn desired_markers(source: &str) -> Vec<(usize, u32, u32)> {
 
 /// Converts accumulated heading text into a GitHub-style, Unicode-preserving URL
 /// slug, deduplicating against the shared `seen` map so ids are unique in document
-/// order. This is the source-of-truth implementation of §SLUG.
+/// order. This is the source-of-truth implementation of the heading-id slug rule.
 ///
 /// Algorithm (EXACT):
 /// 1. Lowercase the whole string via [`str::to_lowercase`] (full Unicode — so
@@ -668,7 +668,7 @@ fn desired_markers(source: &str) -> Vec<(usize, u32, u32)> {
 ///    are also registered in the same map, so a later auto-slug that would collide
 ///    with an explicit id suffixes around it. The rare literal `"{base}-{n}"`
 ///    heading-text collision (e.g. an actual `"foo-1"` heading clashing with the
-///    dedup of a second `"foo"`) is documented and accepted (O2).
+///    dedup of a second `"foo"`) is documented and accepted.
 fn slugify(text: &str, seen: &mut HashMap<String, u32>) -> String {
     let lowered = text.to_lowercase();
     let mut base = String::with_capacity(lowered.len());
@@ -688,7 +688,7 @@ fn slugify(text: &str, seen: &mut HashMap<String, u32>) -> String {
     dedup(base, seen)
 }
 
-/// Deduplicates `base` against the shared `seen` map (§SLUG step 4): an unseen
+/// Deduplicates `base` against the shared `seen` map (`slugify` step 4): an unseen
 /// `base` is used as-is (count → 1); a seen `base` becomes `"{base}-{n}"` for the
 /// current count `n` (count → n+1). Shared by [`slugify`] and the explicit-id
 /// registration in [`heading_slugs`].
@@ -712,10 +712,10 @@ fn dedup(base: String, seen: &mut HashMap<String, u32>) -> String {
 /// explicit `{#custom}` id (nothing to assign — but the explicit id is still
 /// REGISTERED in the shared `seen` map so later auto-slugs suffix around it).
 ///
-/// This runs a FRESH parse of `source` (O6: the extra pre-pass is accepted — renders
+/// This runs a FRESH parse of `source` (the extra pre-pass is accepted because renders
 /// are debounced). The accumulated heading text for auto-slugs is the in-order
 /// concatenation of every [`Event::Text`] and [`Event::Code`] between the heading's
-/// `Start` and `End`, matching §SLUG.
+/// `Start` and `End`.
 fn heading_slugs(source: &str, options: Options) -> Vec<Option<String>> {
     let mut seen: HashMap<String, u32> = HashMap::new();
     let mut slugs: Vec<Option<String>> = Vec::new();
@@ -1608,7 +1608,7 @@ mod tests {
         );
     }
 
-    /// The per-100-column byte offset is a CHARACTER offset (OD4): for a line of
+    /// The per-100-column byte offset is a CHARACTER offset: for a line of
     /// 2-byte characters the `-100` marker's byte offset is `200`, not `100`.
     #[test]
     fn per_hundred_marker_uses_character_columns() {
@@ -1654,9 +1654,9 @@ mod tests {
         );
     }
 
-    /// `WidthMode::Capped` (the BROWSER preview's always-on mode, OD3) appends a
+    /// `WidthMode::Capped` (the BROWSER preview's always-on mode) appends a
     /// `body.wolf-markdown` rule that caps the content to `max-width:45rem` (≈ 90
-    /// proportional Inter chars, OQ-3) and centers it with `margin-left:auto` /
+    /// proportional Inter chars) and centers it with `margin-left:auto` /
     /// `margin-right:auto`. Only HORIZONTAL props are set, so the vertical baseline
     /// grid is preserved (checked here by the presence of the horizontal-only cap
     /// rule; a substring match for `max-width:45rem` + the auto side margins is
@@ -1684,7 +1684,7 @@ mod tests {
         HashMap::new()
     }
 
-    /// The common case: lowercase and space→hyphen (§SLUG steps 1-2).
+    /// The common case: lowercase and space→hyphen (`slugify` steps 1-2).
     #[test]
     fn slugify_basic() {
         let mut seen = fresh_seen();
@@ -1703,7 +1703,7 @@ mod tests {
         assert_eq!(slugify("C++ & Rust", &mut seen), "c--rust");
     }
 
-    /// An existing hyphen in the source text is preserved verbatim (§SLUG: `'-'`
+    /// An existing hyphen in the source text is preserved verbatim (`slugify` step 2: `'-'`
     /// → push `'-'`), never doubled or collapsed.
     #[test]
     fn slugify_keeps_existing_hyphens() {
@@ -1720,7 +1720,7 @@ mod tests {
     }
 
     /// Unicode is RETAINED and lowercased (full Unicode `to_lowercase`), so
-    /// `"Café Ω"` → `"café-ω"` (O2 accepts Unicode-preserving slugs).
+    /// `"Café Ω"` → `"café-ω"` (slugs are Unicode-preserving by design).
     #[test]
     fn slugify_unicode() {
         let mut seen = fresh_seen();
@@ -1728,7 +1728,7 @@ mod tests {
     }
 
     /// A heading that strips to nothing (all punctuation) falls back to the base
-    /// `"section"` (§SLUG step 3).
+    /// `"section"` (`slugify` step 3).
     #[test]
     fn slugify_empty_after_strip() {
         let mut seen = fresh_seen();
@@ -1737,7 +1737,7 @@ mod tests {
 
     /// Duplicate headings dedup against the SHARED `seen` map in document order:
     /// the first `"Intro"` → `"intro"`, the second → `"intro-1"`, the third →
-    /// `"intro-2"` (§SLUG step 4).
+    /// `"intro-2"` (`slugify` step 4).
     #[test]
     fn slugify_dedup() {
         let mut seen = fresh_seen();
@@ -1757,7 +1757,7 @@ mod tests {
         );
     }
 
-    /// An explicit `{#custom}` id is honored verbatim (O5); it is also REGISTERED
+    /// An explicit `{#custom}` id is honored verbatim; it is also REGISTERED
     /// in `seen`, so a later auto-slug that would collide suffixes around it
     /// (`"# Custom"` → `id="custom-1"`).
     #[test]
@@ -2851,9 +2851,9 @@ mod tests {
 
     /// G2: the identity predicate must be an EXACT byte compare of
     /// `source[range]` against the payload, not the `range.len() == text.len()`
-    /// heuristic the plan explicitly rejected.
+    /// heuristic.
     ///
-    /// `&amp;` (U12, I5) cannot tell the two apart: 5 source bytes → 1 payload byte
+    /// `&amp;` (U12) cannot tell the two apart: 5 source bytes → 1 payload byte
     /// fails a length check just as it fails a byte check. `&nvap;` can — its
     /// source and payload are both 6 bytes, so ONLY the byte compare rejects it.
     ///

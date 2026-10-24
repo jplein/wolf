@@ -52,9 +52,8 @@ pub const MAX_RESTORE_TABS: usize = 8;
 
 /// One restored TAB's plan.
 ///
-/// A struct rather than a bare `Option<PaneNode>` so the deferred unit that gives
-/// tabs independent working directories adds a field here instead of changing every
-/// signature that carries one.
+/// A struct rather than a bare `Option<PaneNode>` so per-tab state can be added as a
+/// field here instead of changing every signature that carries one.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TabPlan {
     /// This tab's saved pane tree, or `None`. Attached ONLY when the chosen cwd IS
@@ -1641,7 +1640,7 @@ mod tests {
     /// **THE RESTORE KEYSTONE.** A window saved with three tabs plans three tabs, in
     /// saved order, each carrying its own layout.
     ///
-    /// The revert it exists to catch is part one's shape — building the plan from
+    /// The revert it exists to catch is the one-tab shape — building the plan from
     /// `saved_tabs.first()` alone. Under it the launch opens one tab, the other two
     /// contribute nothing, and the next gather writes the one-tab window back over
     /// the save: the user's other tabs are GONE rather than merely unopened, and no
@@ -1685,7 +1684,7 @@ mod tests {
         assert_eq!(
             plans[0].tabs.len(),
             SAVED_TAB_FILES.len(),
-            "a window saved with {} tabs must plan {} of them, got {}. ONE is part one's shape \
+            "a window saved with {} tabs must plan {} of them, got {}. ONE is the one-tab shape \
              surviving — the plan built from `saved_tabs.first()` alone — and it is not a missing \
              feature but a DATA LOSS: the extra tabs never open, so no page ever gathers them, and \
              the first snapshot after the launch writes a one-tab window back over the saved tree. \

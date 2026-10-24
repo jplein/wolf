@@ -122,7 +122,7 @@ final class ToastView: NSView {
   /// Scrolls the toast content by `deltaY` points (positive scrolls the content
   /// up, revealing later lines), clamped to the scrollable range. Called by the
   /// container when a wheel gesture lands over the toast, so that gesture never
-  /// reaches Neovim (and hence never dismisses the toast — OD8).
+  /// reaches Neovim (and hence never dismisses the toast).
   func scrollBy(deltaY: CGFloat) {
     scrollOffset = clampedOffset(scrollOffset - deltaY)
     needsDisplay = true

@@ -10,12 +10,12 @@ final class StatusbarLayoutTests: XCTestCase {
   /// sibling headless tests' `eps`).
   private let eps: Double = 1e-9
 
-  /// The line factor the plan pins (`ceil(fontSize * lineFactor)`).
+  /// The pinned line factor (`ceil(fontSize * lineFactor)`).
   private let lineFactor: Double = 1.25
 
   // MARK: - Helpers
 
-  /// Builds a layout from the four inputs, in the plan's argument order.
+  /// Builds a layout from the four inputs, in the initializer's argument order.
   private func layout(
     primary: Double, secondary: Double, padding: Double, gap: Double
   ) -> StatusbarLayout {
@@ -31,7 +31,7 @@ final class StatusbarLayoutTests: XCTestCase {
     (fontSize * lineFactor).rounded(.up)
   }
 
-  /// Asserts every structural invariant of a `StatusbarLayout` (plan §6.1),
+  /// Asserts every structural invariant of a `StatusbarLayout`,
   /// independent of the exact line factor.
   private func assertInvariants(
     _ l: StatusbarLayout,

@@ -1,7 +1,7 @@
 //! The GTK GLUE that commits `wolf-gnome`'s application state to `state.json`.
 //!
 //! Named after (and playing the role of) the macOS `StatePersistence.swift`, and
-//! thin by construction: every DECISION already lives in the pure
+//! thin by construction: every decision already lives in the pure
 //! [`crate::state_seam`] / [`crate::pane_layout`] seams, so this module only
 //! gathers live values and hands them over. It follows the same conventions as
 //! `shell.rs` and `crash_overlay.rs` — an `Rc` of shared inner state, interior

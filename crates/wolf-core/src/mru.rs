@@ -47,8 +47,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use parking_lot::Mutex;
 use rusqlite::Connection;
 
-/// [`FileEntry`] lives in the [`crate::files`] module (S2); it is re-exported here
-/// so existing `mru::FileEntry` references (and the S1 tests) keep resolving.
+/// [`FileEntry`] lives in the [`crate::files`] module; it is re-exported here
+/// so existing `mru::FileEntry` references keep resolving.
 pub use crate::files::FileEntry;
 
 /// Maximum number of entries [`MruStore::recent`] returns (per directory).

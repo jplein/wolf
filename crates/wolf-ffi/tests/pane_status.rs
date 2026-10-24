@@ -3,21 +3,14 @@
 //! This drives the RUST half of the statusbar machinery against a REAL, hermetic
 //! Neovim — NO mocks, per the project testing policy. It is the sibling of
 //! `panes.rs` (same staging / SKIP-when-unset machinery, reusing
-//! `tests/common/mod.rs`) but exercises the NEW opaque `FfiPaneStatus` surface the
-//! coder adds per plan §5:
+//! `tests/common/mod.rs`) but exercises the opaque `FfiPaneStatus` surface:
 //!
 //!   * `WolfCoreHandle::pane_status_for_grid(grid: u64) -> FfiPaneStatus`
 //!   * `FfiPaneStatus::filename() -> String`
 //!   * `FfiPaneStatus::display_path() -> String`
 //!   * `FfiPaneStatus::abs_path() -> String`
 //!
-//! ## Dependency on coder work (plan §5 / §8)
-//!
-//! These do not exist yet: the coder implements `FfiPaneStatus` + the accessors +
-//! `pane_status_for_grid` in `crates/wolf-ffi/src/lib.rs`, regenerates `generated/`,
-//! AND adds the `//crates/wolf-ffi:pane_status` `rust_test` target to `BUILD.bazel`
-//! (mirroring `panes`, srcs `["tests/common/mod.rs", "tests/pane_status.rs"]`,
-//! `crate_root = "tests/pane_status.rs"`). This test file does NOT touch BUILD files.
+//! The `//crates/wolf-ffi:pane_status` `rust_test` target runs this file under Bazel.
 //!
 //! ## SKIP-when-unset policy
 //!

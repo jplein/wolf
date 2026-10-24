@@ -1,7 +1,7 @@
-//! Integration test for RESTART + Tier-1 RESTORE (architect plan §9 case b): when
-//! the captive Neovim dies, `WolfCore::restart_nvim()` respawns it in place, and
-//! the front-end reopens the file-backed buffers that were open (the Tier-1
-//! open-file mirror captured BEFORE the restart wiped it).
+//! Integration test for RESTART + Tier-1 RESTORE: when the captive Neovim dies,
+//! `WolfCore::restart_nvim()` respawns it in place, and the front-end reopens the
+//! file-backed buffers that were open (the Tier-1 open-file mirror captured
+//! BEFORE the restart wiped it).
 //!
 //! Tier-1 now also includes named-but-unsaved `Untitled.md` buffers (the
 //! anonymous-buffer feature names the startup buffer `Untitled.md`). Reopening such a
@@ -12,9 +12,7 @@
 //! Drives a REAL, hermetic Neovim (via `WOLF_NVIM_BIN`, resolved by
 //! `common::require_nvim_bin`) — no mocks.
 //!
-//! ## Dependency on coder work (tests-first)
-//!
-//! References NEW surface the coder adds; will not compile until it lands:
+//! ## Surface under test
 //!
 //!   * `WolfCore::liveness(&self) -> wolf_core::Liveness`.
 //!   * `WolfCore::restart_nvim(&self) -> Result<(), _>` — kill-if-needed, respawn
@@ -489,7 +487,7 @@ fn open_files_omits_a_terminal_buffer() {
 /// changed" and the front-end does NOT redundantly rebind + reopen (which would
 /// duplicate tabpages). The actual teardown+respawn path (`Ok(true)`) is covered
 /// by `restart_respawns_and_reopens_open_files` from a Dead state. This pins the
-/// no-op contract (plan §5 step 1 + §11 reentrancy guard).
+/// no-op contract (the `Alive` check, behind the `restarting` reentrancy guard).
 #[test]
 fn restart_on_live_core_is_a_noop_ok_false() {
     let (core, waiter) = common::start_core_sized(common::DEFAULT_COLS, common::DEFAULT_ROWS);

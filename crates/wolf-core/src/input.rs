@@ -308,7 +308,7 @@ pub enum InputEvent {
 
 impl InputEvent {
     /// Whether this event is a deliberate user action that should DISMISS a
-    /// showing message toast (OD8): a [`Key`](InputEvent::Key),
+    /// showing message toast: a [`Key`](InputEvent::Key),
     /// [`Mouse`](InputEvent::Mouse), or [`Scroll`](InputEvent::Scroll).
     ///
     /// A scroll IS dismissing here; the scroll-over-toast exemption is realized
@@ -649,7 +649,7 @@ async fn name_untitled_current(nvim: &Nvim) -> Result<(), Box<CallError>> {
 /// Toggles the active buffer's content width via the init.lua
 /// `wolf_toggle_full_width` helper, invoked over `nvim_exec_lua`. The helper flips
 /// `b:wolf_full_width` on the effective buffer (the SOURCE buffer when the active
-/// pane is a preview scratch — OQ-1) and re-emits the current-file / per-window
+/// pane is a preview scratch) and re-emits the current-file / per-window
 /// full-width / previews notifications so the front-end resizes the content.
 async fn toggle_full_width(nvim: &Nvim) -> Result<(), Box<CallError>> {
     let _ = nvim

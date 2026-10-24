@@ -19,7 +19,7 @@ final class RestoreSeamTests: XCTestCase {
   }
 
   /// A `SavedWindow` from `(cwd, sidebarVisible)` tuples, in tab order. The
-  /// per-tab pane `layout` (feature plan §3.3) is irrelevant to grouping, so it is
+  /// per-tab pane `layout` is irrelevant to grouping, so it is
   /// `nil` here; the dedicated passthrough test below sets it explicitly.
   private func window(_ tabs: [(String, Bool)]) -> RestoreSeam.SavedWindow {
     RestoreSeam.SavedWindow(
@@ -107,7 +107,7 @@ final class RestoreSeamTests: XCTestCase {
       "the two different-dir tabs must land in DIFFERENT projects")
   }
 
-  // MARK: - (d) OD5: each empty-state tab is its OWN project, never merged
+  // MARK: - (d) each empty-state tab is its OWN project, never merged
 
   func testEmptyStateTabsAreEachTheirOwnProject() {
     // Three empty-state ("") tabs in ONE window => THREE distinct projects.
@@ -117,7 +117,7 @@ final class RestoreSeamTests: XCTestCase {
 
     XCTAssertEqual(
       plan.projects.count, 3,
-      "N empty-state tabs must become N distinct projects (OD5: never merged)")
+      "N empty-state tabs must become N distinct projects (never merged)")
     for proj in plan.projects {
       XCTAssertEqual(
         proj.tabs.count, 1,

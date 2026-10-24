@@ -331,8 +331,9 @@ const THREE_LINE_COMMENT: &str = "// one\n// two\n// three\nfn x() {}\n";
 
 /// `check_root` over `repo/` reports exactly the planted findings: doc-ref and doc-anchor from
 /// comments (doc comments included, strings and placeholders excluded), notes-orphan and
-/// notes-unlinked for mirrors, md-link and md-anchor for Markdown, and nothing from skipped dirs,
-/// skipped prefixes or symlinks.
+/// notes-unlinked for mirrors, md-link and md-anchor for Markdown, workflow-ref from a source
+/// comment but not from the Markdown in `docs/history.md`, and nothing from skipped dirs, skipped
+/// prefixes or symlinks.
 ///
 /// The fixture is copied to a scratch dir first, since Bazel's runfiles are symlinks and the
 /// walk never follows them. The space-named dir, `node_modules/`, the generated dir and the
@@ -381,6 +382,7 @@ fn repo_mode_reports_exactly_the_planted_findings() {
         ("src/a.rs", 10, "doc-ref"),
         ("src/a.rs", 13, "doc-anchor"),
         ("src/a.rs", 16, "doc-ref"),
+        ("src/history.rs", 2, "workflow-ref"),
     ]
     .iter()
     .map(|(p, l, r)| (p.to_string(), *l, r.to_string()))
@@ -393,7 +395,9 @@ fn repo_mode_reports_exactly_the_planted_findings() {
          src/a.rs doc-anchor or notes-unlinked on a Dup or foo heading means the slug kept \
          backticks or skipped the -1 suffix; a missing src/a.rs:16 means doc comments are not \
          scanned; anything under node_modules, crates/wolf-ffi/generated, linked or \
-         src/linked_file.rs means a skip rule or the no-symlink rule is broken. Findings:\n{}",
+         src/linked_file.rs means a skip rule or the no-symlink rule is broken; a missing \
+         src/history.rs:2 means workflow-ref does not run in root mode, and any workflow-ref in \
+         docs/history.md means Markdown is scanned for it. Findings:\n{}",
         render(&findings)
     );
 
@@ -414,6 +418,12 @@ fn repo_mode_reports_exactly_the_planted_findings() {
             "notes/src/a.rs.md",
             21,
             "heading \"Unlinked\" (#unlinked) is not linked from any comment in src/a.rs",
+        ),
+        (
+            "src/history.rs",
+            2,
+            "workflow reference \"OD4\": it cites a planning document that is not in the repo; \
+             state the reason in present tense or delete it",
         ),
     ];
     for (path, line, message) in messages {
@@ -560,6 +570,38 @@ fn cli_one_finding_exits_one_with_the_exact_finding_line() {
         out, want,
         "stdout must hold exactly the one finding, in `path:line: [rule] message` form; \
          summaries belong on stderr. stderr:\n{err}"
+    );
+}
+
+/// `--files` runs `workflow-ref`, not only `--root`: over `cli/workflow_ref.rs` it reports an inner
+/// doc comment and two plain comments, skips the string literal between them, and quotes each
+/// match as the source spells it. The quoted text on line 5 is the leftmost match on that line.
+#[test]
+fn cli_files_mode_reports_workflow_references_in_their_source_case() {
+    let path = format!("{}/cli/workflow_ref.rs", relative_fixtures_dir());
+    let (code, out, err) = run_cli(&["--files", &path]);
+    assert_eq!(
+        code, 1,
+        "a file with workflow references must exit 1 (0 = --files does not run workflow-ref, \
+         2 = usage or I/O error); stdout:\n{out}\nstderr:\n{err}"
+    );
+    let want: String = [(1, "OQ7"), (3, "NOTE TO CODER"), (5, "Note to the coder")]
+        .iter()
+        .map(|(line, matched)| {
+            format!(
+            "{path}:{line}: [workflow-ref] workflow reference \"{matched}\": it cites a planning \
+             document that is not in the repo; state the reason in present tense or delete it\n"
+        )
+        })
+        .collect();
+    assert_eq!(
+        out, want,
+        "stdout must hold exactly the three workflow-ref findings. A missing line 1 means doc \
+         comments are skipped; a line 4 finding means string literals are scanned; lowercase \
+         quoted text means the match is reported from a lowercased copy instead of the source; \
+         a bare \"the coder\" on line 5 means the leftmost, longer phrase is not matched first or \
+         is missing from the pattern table; no output at all means --files skips the rule. \
+         stderr:\n{err}"
     );
 }
 

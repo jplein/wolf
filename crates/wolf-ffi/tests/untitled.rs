@@ -1,18 +1,18 @@
-//! Integration test for the ANONYMOUS-BUFFER naming feature (plan §"Name anonymous
-//! buffers `Untitled.md`"): every anonymous/new editable buffer gets a real, unsaved
-//! markdown name — `Untitled.md`, then `Untitled 2.md`, `Untitled 3.md`, … (index 1
-//! is un-numbered, so `Untitled 1.md` is NEVER generated) — choosing the first name
-//! that collides with neither an existing Neovim buffer NOR a file on disk in cwd.
-//! Naming sets `filetype=markdown` (so the in-app preview gate passes) but NEVER
-//! writes the file to disk: an `Untitled N.md` buffer is a new, unsaved document
-//! until the user explicitly `:w`-saves it.
+//! Integration test for the ANONYMOUS-BUFFER naming feature: every anonymous/new
+//! editable buffer gets a real, unsaved markdown name — `Untitled.md`, then
+//! `Untitled 2.md`, `Untitled 3.md`, … (index 1 is un-numbered, so `Untitled 1.md`
+//! is NEVER generated) — choosing the first name that collides with neither an
+//! existing Neovim buffer NOR a file on disk in cwd. Naming sets `filetype=markdown`
+//! (so the in-app preview gate passes) but NEVER writes the file to disk: an
+//! `Untitled N.md` buffer is a new, unsaved document until the user explicitly
+//! `:w`-saves it.
 //!
 //! This drives the RUST half against a REAL, hermetic Neovim — NO mocks, per the
 //! project testing policy. It is the sibling of `file_actions.rs` / `preview.rs`
 //! (same staging / SKIP-when-unset machinery, reusing `tests/common/mod.rs`, and the
 //! same "poll `read_frame()` until attached" pattern).
 //!
-//! ## Coverage (the plan's Test plan enumeration)
+//! ## Coverage
 //!
 //! 1. `startup_names_untitled_markdown_no_auto_write` — startup naming + no auto-write.
 //! 2. `new_buffer_collides_up_the_sequence` — Cmd-N buffer collision: Untitled.md ->
@@ -28,14 +28,14 @@
 //! 7. `chdir_leaves_real_file_untouched` — the guard leaves a real, named file put
 //!    across a `chdir` (no re-home).
 //!
-//! ## Dependency on coder work
+//! ## What backs it
 //!
 //! Backed by the `wolf_new_untitled` / `wolf_name_untitled_current` Lua helpers +
 //! the `VimEnter` `WolfUntitled` autocmd in `runtime/nvim/init.lua`, wired into the
-//! `NewBuffer` and `Chdir` arms of `crates/wolf-core/src/input.rs`. No new FFI method
-//! is added — this exercises the existing `new_buffer` / `chdir` / `open` /
-//! `current_file` / `is_markdown_active` surface. This test file does NOT touch BUILD
-//! files (the coder adds the `//crates/wolf-ffi:untitled` `rust_test` target).
+//! `NewBuffer` and `Chdir` arms of `crates/wolf-core/src/input.rs`. There is no
+//! dedicated FFI method: this exercises the `new_buffer` / `chdir` / `open` /
+//! `current_file` / `is_markdown_active` surface. The `//crates/wolf-ffi:untitled`
+//! `rust_test` target runs this file under Bazel.
 //!
 //! ## SKIP-when-unset policy
 //!

@@ -1,6 +1,5 @@
-//! Integration test for `wolf-core`'s PUBLIC Markdown-preview render surface
-//! (plan §"Core: Markdown→HTML rendering module" + the "Pure Rust unit" test
-//! bullet). It exercises ONLY the re-exported public API — `wolf_core::render_html`,
+//! Integration test for `wolf-core`'s PUBLIC Markdown-preview render surface. It
+//! exercises ONLY the re-exported public API — `wolf_core::render_html`,
 //! `wolf_core::PreviewTheme`, and `wolf_core::theme_css` — NOT the module's internals
 //! (`desired_markers`, `MarkerInjector`, …), which remain private.
 //!
@@ -56,20 +55,20 @@ use wolf_core::{
 };
 
 /// The per-line/per-100-column marker id substring for hard line `line` (1-based)
-/// and 0-based character column `col`, per the plan's `id="wl-{L}-{C}"` anchor
-/// scheme. Behavior is asserted via this id substring so the test never depends on
-/// the source `MARKER_COLUMN_STRIDE`, the private marker-injection internals, or
+/// and 0-based character column `col`, in the `id="wl-{L}-{C}"` anchor scheme.
+/// Behavior is asserted via this id substring so the test never depends on the
+/// source `MARKER_COLUMN_STRIDE`, the private marker-injection internals, or
 /// attribute order.
-// per plan: the anchor id format is `wl-{L}-{C}` with double-quoted `id="…"`.
+// The anchor id format is `wl-{L}-{C}` with double-quoted `id="…"`.
 fn marker_id(line: u32, col: u32) -> String {
     format!("id=\"wl-{line}-{col}\"")
 }
 
-/// The per-100-column stride the plan mandates (`MARKER_COLUMN_STRIDE = 100`),
-/// re-declared LOCALLY as a behavioral constant. The source const is public and
-/// could be imported, but pinning the literal here keeps the assertion independent
-/// of the implementation: if the source stride changes, this test must fail rather
-/// than quietly track it. A line of exactly this many characters is the first that
+/// The per-100-column marker stride (`MARKER_COLUMN_STRIDE = 100`), re-declared
+/// LOCALLY as a behavioral constant. The source const is public and could be
+/// imported, but pinning the literal here keeps the assertion independent of the
+/// implementation: if the source stride changes, this test must fail rather than
+/// quietly track it. A line of exactly this many characters is the first that
 /// earns a `-100` marker.
 const COLUMN_STRIDE: u32 = 100;
 
@@ -77,9 +76,9 @@ const COLUMN_STRIDE: u32 = 100;
 /// earn exactly one per-100-column marker (`-100`) and no `-200`.
 const LONG_LINE_LEN: usize = 150;
 
-/// Number of 2-byte multibyte characters ("é") on the OD4 line: between one and two
-/// strides of CHARACTERS (so `-100` fires, `-200` does not), while the BYTE length
-/// (240) exceeds two strides — proving columns count characters, not bytes.
+/// Number of 2-byte multibyte characters ("é") on the multibyte line: between one
+/// and two strides of CHARACTERS (so `-100` fires, `-200` does not), while the BYTE
+/// length (240) exceeds two strides — proving columns count characters, not bytes.
 const MULTIBYTE_CHAR_COUNT: usize = 120;
 
 #[test]
@@ -483,9 +482,9 @@ const BASELINE: i32 = 24;
 /// reads as arithmetic.
 const BORDER: i32 = 1;
 
-/// `(selector, font-size px, line-height px)` for the six heading levels
-/// (plan §2). h3–h6 are the levels that today fall through to UA defaults; the
-/// whole point of pinning them here is that the fix cannot silently regress.
+/// `(selector, font-size px, line-height px)` for the six heading levels. h3–h6
+/// would otherwise fall through to UA defaults; pinning them here keeps that from
+/// silently regressing.
 const HEADING_SCALE: &[(&str, i32, i32)] = &[
     ("h1", 32, 48),
     ("h2", 24, 48),
@@ -640,7 +639,7 @@ fn normalize_ws(s: &str) -> String {
 /// named by the query `part`.
 ///
 /// `base.css` writes its rules descendant-scoped (`body.wolf-markdown h1`),
-/// while the plan's tables name bare elements (`h1`), so an entry matches when
+/// while the tables here name bare elements (`h1`), so an entry matches when
 /// it equals the query OR ends with ` {query}` after a purely-descendant
 /// ancestor prefix. The "purely descendant" guard is what keeps the query `ul`
 /// from wrongly matching `body.wolf-markdown li > ul` — the discarded prefix
@@ -1197,7 +1196,8 @@ fn inline_code_declares_zero_leading_so_it_cannot_grow_a_line_box() {
          disagree. So a code box at ANY non-zero leading pushes its line past its \
          {BASELINE}px unit — and, because every later block's top offset shifts \
          with it, the error ACCUMULATES down the document instead of staying \
-         constant. `base.css`'s header records the A/B: 26 / 74 / 123 for a \
+         constant. `specs/markdown-stylesheet.md` (\"Inline code leading\") \
+         records the A/B: 26 / 74 / 123 for a \
          paragraph, a list and a pre against units of 24 / 72 / 120, and 24 / 72 \
          / 120 with this declaration in place. Zero removes the code box's union \
          term and nothing else.\n\n\

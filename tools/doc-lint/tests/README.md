@@ -15,9 +15,9 @@ Cargo discovers every `tests/*.rs`, but Bazel does not: a new file needs its own
 
 - `fixtures/lang/<language>/` holds one or more files per language, each beside a `<file>.expected` sidecar. Each region of a fixture opens with a one-line `case:` comment naming what it covers, and those comments obey the limits themselves.
 - `fixtures/lang/other/notes.txt` is the no-language control and has no sidecar.
-- `fixtures/repo/` is a miniature repository for `check_root`.
+- `fixtures/repo/` is a miniature repository for `check_root`. Its `docs/history.md` spells workflow references in Markdown, which must not be reported, beside the one in `src/history.rs`, which must.
 - `fixtures/same_code/` holds `strip` and `same-code` pairs, each compared with `old.rs` or `old.nix`.
-- `fixtures/cli/` holds inputs for `run()`.
+- `fixtures/cli/` holds inputs for `run()`. `workflow_ref.rs` mixes upper and lower case so the quoted match shows which copy it came from.
 - `fixtures/files_mode/` is a miniature repository root for the `--files` test. Its `src/notes/` is a decoy, not a mirror.
 
 A sidecar has one `LINE RULE` pair per line, such as `7 comment-lines`, and an empty sidecar means no findings. The comparison is exact, so a duplicate report is a mismatch.
@@ -36,8 +36,9 @@ Purpose: the data-driven runner over `fixtures/`, plus the repo-mode, `same-code
 **Covers**
 
 - Every `lang/` fixture against its sidecar through `lint_source`. It fails when there are no fixtures, a fixture lacks a sidecar, a sidecar is stray, a `Language` variant has no fixture, or the `notes.txt` control is missing.
-- `check_root` over `repo/`: the exact `(path, line, rule)` set and the wording of the `doc-ref`, `doc-anchor`, `notes-orphan` and `notes-unlinked` messages.
+- `check_root` over `repo/`: the exact `(path, line, rule)` set and the wording of the `doc-ref`, `doc-anchor`, `notes-orphan`, `notes-unlinked` and `workflow-ref` messages.
 - `strip_comments` and the `same-code` subcommand over `same_code/`; `run()` exit codes, the exact finding line, and path order.
+- `--files` running `workflow-ref` over `cli/workflow_ref.rs`, quoting each match in its source case.
 
 **Gotchas**
 
@@ -55,4 +56,4 @@ Purpose: `run()` in `--files` mode, checking that `doc-ref` targets resolve agai
 
 #### `api.rs`
 
-Purpose: `language_for` name mappings, `heading_slug`, and `missing_coverage` against an inline stand-in for the lint package's `BUILD.bazel`. Needs no fixture data.
+Purpose: `language_for` name mappings, `heading_slug`, the `workflow-ref` rule id, and `missing_coverage` against an inline stand-in for the lint package's `BUILD.bazel`. Needs no fixture data.

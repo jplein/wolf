@@ -1,15 +1,12 @@
-//! Integration tests for LIVENESS detection (architect plan §9 case a): the
-//! captive Neovim CRASHING (process death) or STALLING (wedged event loop) must
-//! flip `WolfCore::liveness()` and fire the front-end wake, so a frozen window
-//! stops silently dropping input and can notify + recover.
+//! Integration tests for LIVENESS detection: the captive Neovim CRASHING
+//! (process death) or STALLING (wedged event loop) must flip
+//! `WolfCore::liveness()` and fire the front-end wake, so a frozen window stops
+//! silently dropping input and can notify + recover.
 //!
 //! Drives a REAL, hermetic Neovim (via `WOLF_NVIM_BIN`, resolved by
 //! `common::require_nvim_bin`) — no mocks, per the project's real-nvim policy.
 //!
-//! ## Dependency on coder work (tests-first)
-//!
-//! These reference NEW surface the coder adds; the file will not compile until it
-//! lands — expected:
+//! ## Surface under test
 //!
 //!   * `WolfCore::liveness(&self) -> wolf_core::Liveness` — a cheap, lock-free
 //!     read of the atomic liveness cell (NOT an RPC).
@@ -182,7 +179,7 @@ fn stall_marks_not_responding() {
         .expect("shutdown should force-kill the wedged child and return Ok");
 }
 
-/// STALL → recovery AUTO-CLEAR (RESOLVED §11): a transient stall escalates to
+/// STALL → recovery AUTO-CLEAR: a transient stall escalates to
 /// `NotResponding`, but once nvim answers again a SUCCESSFUL `block_on_rpc` call
 /// compare-exchanges `NotResponding -> Alive` (never touching `Dead`) and fires a
 /// wake, so the overlay self-dismisses without a manual restart.

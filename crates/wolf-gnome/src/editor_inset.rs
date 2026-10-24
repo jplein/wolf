@@ -870,8 +870,8 @@ mod tests {
         expected: (u16, u16),
     }
 
-    /// The table this unit is judged on: literal pixel sizes proving the grid handed
-    /// to Neovim accounts for BOTH the statusbar strip and the four padding gutters.
+    /// The grid-size table: literal pixel sizes proving the grid handed to Neovim
+    /// accounts for BOTH the statusbar strip and the four padding gutters.
     ///
     /// ATTRIBUTION — each falsifying edit leaves a different pair of rows green, so a
     /// failure names which subtraction went missing rather than merely reporting that

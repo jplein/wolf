@@ -1,5 +1,5 @@
-//! Deterministic, headless integration coverage for the `wolf-ffi` config surface
-//! (plan §4): the free `wolf_ffi_load_config()` constructor and the opaque
+//! Deterministic, headless integration coverage for the `wolf-ffi` config surface:
+//! the free `wolf_ffi_load_config()` constructor and the opaque
 //! `FfiConfig` accessors `font_family()` / `font_size()` / `line_height()`.
 //!
 //! Unlike the real-nvim tests in this crate (`bridge_smoke`, `panes`, …), this one
@@ -8,25 +8,8 @@
 //! honors first) pointed at a `tempfile::tempdir()`. It is modeled structurally on
 //! `tests/frame_pack.rs` (self-contained, no `tests/common/` nvim staging).
 //!
-//! ## NOTE to coder — Bazel wiring required for this to run under `bazel test`
-//!
-//! Add a `rust_test` named `config` mirroring `frame_pack` (self-contained, no
-//! `common/`, NO `no-sandbox` tag — this test needs no nvim child):
-//!
-//! ```python
-//! rust_test(
-//!     name = "config",
-//!     srcs = ["tests/config.rs"],
-//!     crate_root = "tests/config.rs",
-//!     edition = "2021",
-//!     deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
-//! )
-//! ```
-//!
-//! `tempfile` is already a `[dev-dependencies]` of `wolf-ffi`, so `all_crate_deps(
-//! normal_dev = True)` supplies it (as it does for `panes`). The bridge accessors
-//! and `wolf_ffi_load_config()` are the only `wolf_ffi` symbols named here, so no
-//! `//crates/wolf-core` dep is required.
+//! The `//crates/wolf-ffi:config` target carries no `no-sandbox` tag, because this
+//! test spawns no nvim child.
 //!
 //! Both tests below MUTATE the process-global `WOLF_CONFIG_DIR`, so they are
 //! serialized through `ENV_LOCK` (cargo runs them concurrently in one process).
@@ -155,7 +138,7 @@ fn appearance_discriminant_round_trips() {
     let _guard = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
 
     // Each present-and-valid `appearance` value must surface as its `mod appearance`
-    // discriminant over the bridge (OD-a: `appearance() -> u8`).
+    // discriminant over the bridge (`appearance() -> u8`).
     let present_cases = [
         ("dark", APPEARANCE_DARK),
         ("light", APPEARANCE_LIGHT),

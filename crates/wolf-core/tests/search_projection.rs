@@ -8,18 +8,17 @@
 //! These functions are PURE (no nvim, no rg, no filesystem), so this test needs
 //! no staged runfiles and no `no-sandbox` tag — the pure analog of
 //! `pane_status_unit` / `palette_rank`. The PRIVATE rg-JSON parse functions
-//! (`parse_rg_line` / `match_from_event`) are covered by the coder's inline
+//! (`parse_rg_line` / `match_from_event`) are covered by the inline
 //! `#[cfg(test)]` module inside `src/search.rs`; this file only exercises the
 //! public re-exported pure fns.
 //!
-//! NOTE to coder (field/ctor shape): the tests construct `SearchMatch` values
-//! directly via a struct literal, so `SearchMatch`'s fields
+//! The tests construct `SearchMatch` values directly via a struct literal, so
+//! `SearchMatch`'s fields
 //! (`abs_path`/`rel_path`/`line_number`/`column`/`line_text`/`match_ranges`)
-//! must be PUBLIC per the plan (§2 `search.rs`). Likewise the tests read
-//! `SearchFileGroup { abs_path, rel_path, label, match_indices }` and
-//! `ContextWindow { text, ranges, truncated_left, truncated_right }` as public
-//! fields. If the coder exposes these behind accessors instead, align the tests
-//! with the plan's stated field shape.
+//! must stay PUBLIC. Likewise the tests read `SearchFileGroup { abs_path,
+//! rel_path, label, match_indices }` and `ContextWindow { text, ranges,
+//! truncated_left, truncated_right }` as public fields; moving them behind
+//! accessors means rewriting these tests.
 
 use std::path::PathBuf;
 

@@ -5,7 +5,7 @@
 //!
 //! 1. **Cargo / Linux devShell:** the flake devShell exports an explicit,
 //!    ALREADY-ABSOLUTE `WOLF_NVIM_BIN`, and `init.lua` is found relative to
-//!    `CARGO_MANIFEST_DIR`. This path is unchanged and always wins when present.
+//!    `CARGO_MANIFEST_DIR`. This path always wins when present.
 //! 2. **Bazel (`bazel test //crates/wolf-core:file_search`):** the `rust_test`
 //!    stages the pinned `//bazel/nvim:nvim_tree` and `//runtime/nvim:init.lua` as
 //!    runfiles and injects RUNFILES-RELATIVE paths via `WOLF_TEST_NVIM_DIR` /
@@ -18,10 +18,6 @@
 //! handle a skip return, so [`require_nvim_bin`] still PANICS as the last resort
 //! when nothing resolves. On both real environments (cargo devShell, Bazel host)
 //! resolution always succeeds, so the panic never fires there.
-//!
-//! Public API surface consumed here mirrors the plan's `src/api` + `src/input`
-//! re-exports. Where a method name is genuinely ambiguous in the plan a
-//! `// NOTE:` comment flags the assumption for the coder to align.
 
 #![allow(dead_code)] // Not every helper is used by every test binary.
 
@@ -211,9 +207,7 @@ pub fn fresh_cwd() -> PathBuf {
 /// Builds a `CoreConfig` with the resolved init.lua path, the given grid size,
 /// and a fresh per-call `cwd` (so each core gets its own working directory).
 ///
-/// NOTE: assumes `CoreConfig` has public fields `init_lua`, `cols`, `rows`, and
-/// (new in S1) `cwd` (per plan §D6). If `CoreConfig` instead exposes a
-/// builder/constructor, the coder should adapt [`config_in`] (the single literal).
+/// [`config_in`] holds the single `CoreConfig` literal.
 pub fn config(cols: u16, rows: u16) -> CoreConfig {
     config_in(fresh_cwd(), cols, rows)
 }

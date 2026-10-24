@@ -3,21 +3,15 @@
 //! This drives the RUST half of the swift-bridge command machinery against a REAL,
 //! hermetic Neovim — NO mocks, per the project testing policy. It is the sibling
 //! of `panes.rs` (same staging / SKIP-when-unset machinery, reusing
-//! `tests/common/mod.rs`) but exercises the NEW command surface the coder adds per
-//! plan §3:
+//! `tests/common/mod.rs`) but exercises the command surface:
 //!
 //!   * `WolfCoreHandle::drain_commands() -> Vec<FfiCommand>`
 //!   * opaque `FfiCommand` with a `kind() -> u8` accessor
 //!   * a `command_kind` discriminant module (single source of truth)
 //!
-//! ## Dependency on coder work (plan §3 + §5)
+//! The `//crates/wolf-ffi:commands` `rust_test` target runs this file under Bazel.
 //!
-//! These do not exist yet: the coder implements `FfiCommand` +
-//! `WolfCoreHandle::drain_commands()` in `crates/wolf-ffi/src/lib.rs`, regenerates
-//! `generated/`, AND adds the `//crates/wolf-ffi:commands` `rust_test` target to
-//! `BUILD.bazel` (copy of `panes`). This test file does NOT touch BUILD files.
-//!
-//! ## Discriminant contract (plan §3, mirrors `mod command_kind`)
+//! ## Discriminant contract (mirrors `mod command_kind`)
 //!
 //! NEW_WINDOW = 0, CLOSE_WINDOW = 1, QUIT_APPLICATION = 2, HIDE_APPLICATION = 3,
 //! MINIMIZE_WINDOW = 4, GO_TO_FILE = 5, OPEN_FILE = 6, OPEN_FOLDER = 7,

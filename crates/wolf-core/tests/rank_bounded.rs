@@ -18,16 +18,13 @@
 //! equivalence via `assert_eq!`. Because both paths share the same `score_entry`
 //! / tokenization, the property is robust: we never re-derive the expected order
 //! by hand — we compare against `rank_matches().take(n)` directly. That is what
-//! pins the plan's requirement that the bounded n-boundary tiebreak (the `index`
-//! final key) matches the stable-sort `take(n)`.
+//! pins the requirement that the bounded n-boundary tiebreak (the `index` final
+//! key) matches the stable-sort `take(n)`.
 //!
-//! ## Dependency on coder work (plan Fix #2)
+//! ## Surface under test
 //!
-//! Neither `rank_matches_top_n` nor the `PartialEq`/`Eq` derive on `Match` exists
-//! yet — the coder adds both in `crates/wolf-core/src/rank.rs` (+ re-exports
-//! `rank_matches_top_n` from `lib.rs`) and adds the `//crates/wolf-core:rank_bounded`
-//! `rust_test` target to `BUILD.bazel`. This file touches NO non-test source. It
-//! assumes the plan's exact signature:
+//! The crate root re-exports `rank_matches_top_n`, and the
+//! `//crates/wolf-core:rank_bounded` `rust_test` target runs this file:
 //!
 //! - `pub fn rank_matches_top_n(query: &str, entries: &[FileEntry], n: usize) -> Vec<Match>`
 //! - `Match` additionally derives `PartialEq, Eq` (so `assert_eq!` on `Vec<Match>`
@@ -43,7 +40,7 @@ use wolf_core::{rank_matches, rank_matches_top_n, FileEntry, Match};
 const TIE_GROUP: usize = 20;
 
 /// Size of the large synthetic in-memory set used to assert exact equivalence at
-/// scale (plan 7a: ~5,000–10,000 entries).
+/// scale.
 const LARGE_SET_SIZE: usize = 8_000;
 
 /// Every Nth entry in the large synthetic set carries an `mru_rank`, so the

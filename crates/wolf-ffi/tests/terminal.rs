@@ -1,4 +1,4 @@
-//! Integration test for the `wolf-ffi` TERMINAL-DRAWER bridge surface (plan §8.3):
+//! Integration test for the `wolf-ffi` TERMINAL-DRAWER bridge surface:
 //! the native-facing `WolfCoreHandle::toggle_terminal()` action that backs the
 //! macOS "Terminal" command (`:WolfTerminal`, `` ⌃` ``).
 //!
@@ -14,29 +14,20 @@
 //! `tests/common/mod.rs`, and the same "poll `read_frame()` until attached"
 //! pattern).
 //!
-//! ## Dependency on coder work (plan §3–§5)
-//!
-//! `toggle_terminal` does NOT exist on `WolfCoreHandle` yet: the coder adds it to
-//! the bridge (`extern "Rust"`) and `impl WolfCoreHandle` in
-//! `crates/wolf-ffi/src/lib.rs`, backed by the new `wolf_core::InputEvent::ToggleTerminal`
-//! variant and the `wolf_toggle_terminal()` helper in `runtime/nvim/init.lua`. This
-//! test file does NOT touch non-test source or BUILD files, and it will not compile
-//! until that method lands — that is expected.
+//! The `//crates/wolf-ffi:terminal` `rust_test` target runs this file under Bazel.
 //!
 //! We drive `toggle_terminal()` (the HANDLE method that actually runs the helper)
 //! rather than `:WolfTerminal` — the Ex-command would only enqueue an `FfiCommand`
 //! with no front-end dispatcher present to call the method back.
 //!
-//! ## Drawer-open layout intent (fix cycle 2/7)
+//! ## Drawer-open layout intent
 //!
 //! The open path additionally emits a `LayoutIntent::DrawerOpen { win }` (surfaced as
 //! `FfiLayoutIntent { kind: intent_kind::DRAWER_OPEN = 2, win }`) so the front-end can
 //! render the drawer as a root-bottom pane. Because nothing drains intents here they
 //! accumulate; step 2b polls `drain_intents()` for `kind() == 2` with `win() != 0`.
-//! The `intent_kind::DRAWER_OPEN` const, the `from_intent` arm, and `init.lua`'s
-//! `wolf_emit_drawer` do NOT exist yet - the coder lands them (by design).
 //!
-//! ## Terminal detection (OD7)
+//! ## Terminal detection
 //!
 //! Terminal buffers are `buflisted`, so they surface in the buffer-picker snapshot;
 //! their `display()` label is the verbatim `term://…` buffer name (the picker's
@@ -75,17 +66,13 @@ const POLL_INTERVAL: Duration = Duration::from_millis(50);
 const RANKED_MAX: usize = 100;
 
 /// The Neovim naming convention prefix for a terminal buffer's name (`term://…`),
-/// used to detect the drawer buffer in the picker snapshot (OD7).
+/// used to detect the drawer buffer in the picker snapshot.
 const TERM_PREFIX: &str = "term://";
 
 /// `FfiLayoutIntent::kind()` for a DRAWER_OPEN intent — the append-only third
 /// layout-intent discriminant (mirrors `wolf-ffi/src/lib.rs` `mod intent_kind`,
-/// after `SPLIT = 0` / `FOCUS_DIR = 1`; fix plan §2 / FD5). The `wolf_toggle_terminal`
-/// open path emits this so the front-end renders the drawer as a root-bottom pane.
-///
-/// NOTE (coder): `intent_kind::DRAWER_OPEN = 2` + the `FfiLayoutIntent::from_intent`
-/// arm + `init.lua`'s `wolf_emit_drawer` do NOT exist yet — this assertion only
-/// passes once they land (by design).
+/// after `SPLIT = 0` / `FOCUS_DIR = 1`). The `wolf_toggle_terminal` open path emits
+/// this so the front-end renders the drawer as a root-bottom pane.
 const INTENT_KIND_DRAWER_OPEN: u8 = 2;
 
 // -- FfiKeyEvent.kind discriminants (mirror `wolf-ffi/src/lib.rs` `mod kind`) --
@@ -148,7 +135,7 @@ fn send_ex_command(handle: &wolf_ffi::WolfCoreHandle, cmd: &str) {
 }
 
 /// The bufnrs of all ranked buffer rows whose `display()` names a terminal buffer
-/// (the `term://` prefix, OD7), from a FRESH picker snapshot (the picker snapshots
+/// (the `term://` prefix), from a FRESH picker snapshot (the picker snapshots
 /// `list_buffers()` at each `buffer_picker()` call).
 fn term_bufnrs(handle: &wolf_ffi::WolfCoreHandle) -> Vec<i64> {
     handle
@@ -365,10 +352,6 @@ fn terminal_toggle_persists_and_recreates() {
 /// This reuses `terminal.rs`'s open path (`toggle_terminal()` + the DRAWER_OPEN
 /// layout intent that names the drawer WINDOW handle) and `full_width.rs`'s poll
 /// helpers.
-///
-/// NOTE (test-first): the `init.lua` change that sets `b:wolf_full_width = true`
-/// on the terminal buffer + re-emits `wolf_full_width` is not written yet — the
-/// coder lands it next, so this test fails until then (by design).
 #[test]
 fn terminal_drawer_defaults_to_full_width() {
     // Loud SKIP (no-op pass) when no pinned nvim is available, exactly like the

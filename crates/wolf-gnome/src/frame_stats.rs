@@ -742,7 +742,7 @@ mod tests {
     /// the report-table name, and the macOS front-end's table is meant to `diff`
     /// against this one, so both halves are contract.
     ///
-    /// Falsifying edit (from the plan): change `DrawGrid`'s label to `"draw.cells"`.
+    /// Falsifying edit: change `DrawGrid`'s label to `"draw.cells"`.
     #[test]
     fn bucket_indices_and_labels_table() {
         let cases: [(Bucket, usize, &str); 15] = [
@@ -812,7 +812,7 @@ mod tests {
     /// right-aligned count, so the table stops being column-aligned and the two
     /// front-ends' reports stop being `diff`-able.
     ///
-    /// Falsifying edit (from the plan): make `WakeTree` return `"wake.tabs"`.
+    /// Falsifying edit: make `WakeTree` return `"wake.tabs"`.
     #[test]
     fn bucket_labels_are_unique_and_fit_the_report_column() {
         assert_eq!(
@@ -876,7 +876,7 @@ mod tests {
     /// serves both front-ends. The parser takes the RAW value rather than a map, so
     /// this test touches no process environment.
     ///
-    /// Falsifying edit (from the plan): drop the `trim()` (row `" on "` fires) or
+    /// Falsifying edit: drop the `trim()` (row `" on "` fires) or
     /// drop the lowercasing (rows `"TRUE"` and `"Yes"` fire).
     #[test]
     fn is_enabled_table() {
@@ -988,12 +988,10 @@ mod tests {
     /// applied to the same input the production code sees: an expectation derived
     /// through the function under test holds whatever that function does.
     ///
-    /// Falsifying edit (from the plan): delete the `v > 0.0` guard — rows `"0"` and
+    /// Falsifying edit: delete the `v > 0.0` guard — rows `"0"` and
     /// `"-1"` fire, the second by panicking rather than by comparing.
     ///
-    /// ONE READING THE PLAN LEAVES OPEN, stated so it can be corrected in one place:
-    /// "at most one hour" is read here as INCLUSIVE, so `"3600"` is accepted and
-    /// `"3600.5"` is not.
+    /// "At most one hour" is INCLUSIVE: `"3600"` is accepted and `"3600.5"` is not.
     #[test]
     fn report_interval_table() {
         let cases = [
@@ -1182,7 +1180,7 @@ mod tests {
     /// decision is a comparison between two values, and testing it against a real
     /// clock would measure the scheduler instead.
     ///
-    /// Falsifying edit (from the plan): change `>=` to `>` — the exactly-equal rows
+    /// Falsifying edit: change `>=` to `>` — the exactly-equal rows
     /// fire, and nothing else does.
     #[test]
     fn interval_elapsed_table() {
@@ -1246,7 +1244,7 @@ mod tests {
     ///
     /// `10 + 20 + 31 = 61` over three samples is `20`, not `20.33` and not `21`.
     /// Rounding instead would move every mean in every report by up to half a
-    /// nanosecond — harmless on its own, but the plan's repair rules rank buckets by
+    /// nanosecond — harmless on its own, but performance repairs rank buckets by
     /// `count * mean`, so the mean's definition is contract rather than cosmetic.
     #[test]
     fn basic_accumulation_pins_integer_mean() {
@@ -1327,7 +1325,7 @@ mod tests {
     /// makes the p95 column trustworthy as a frame-budget reading; an interpolating
     /// variant would report a frame time no frame ever took.
     ///
-    /// Falsifying edits (from the plan): change `ceil` to `floor` — the `[10, 20]`
+    /// Falsifying edits: change `ceil` to `floor` — the `[10, 20]`
     /// p95 row and the `1..=100` p95 row fire; drop the `- 1` — the `[10, 20, 30]`
     /// p50 row and the `1..=100` rows fire.
     #[test]
@@ -1531,7 +1529,7 @@ mod tests {
     /// file, which is the only thing separating "the labels are wired" from "the
     /// formatter prints all fifteen labels whatever was recorded".
     ///
-    /// Falsifying edit (from the plan): delete the `count == 0` skip in `summarize`.
+    /// Falsifying edit: delete the `count == 0` skip in `summarize`.
     #[test]
     fn recording_one_bucket_leaves_others_empty() {
         let mut stats = FrameStats::new();
@@ -1574,7 +1572,7 @@ mod tests {
     /// rather than as a silently-equal duplicate. This is the tripwire for the
     /// storage ever ceasing to derive its size from `Bucket::ALL.len()`.
     ///
-    /// Falsifying edit (from the plan): make two variants return the same `index()`.
+    /// Falsifying edit: make two variants return the same `index()`.
     #[test]
     fn every_bucket_round_trips_through_record_and_summarize() {
         let mut stats = FrameStats::new();
@@ -1640,7 +1638,7 @@ mod tests {
     /// `SAMPLE_CAPACITY` with the same formula the implementation uses would hold
     /// for whatever formula that was.
     ///
-    /// Falsifying edit (from the plan): keep the FIRST capacity samples instead of
+    /// Falsifying edit: keep the FIRST capacity samples instead of
     /// the last.
     #[test]
     fn ring_bound_keeps_exact_count_and_windowed_percentiles() {
@@ -1738,7 +1736,7 @@ mod tests {
     /// it must. Both arms are asserted, because a `>=` implementation passes the
     /// first-arm-only version of this test in the wrong direction.
     ///
-    /// Falsifying edit (from the plan): change `>` to `>=`.
+    /// Falsifying edit: change `>` to `>=`.
     #[test]
     fn exactly_capacity_samples_is_not_truncated() {
         let capacity = u64::try_from(SAMPLE_CAPACITY).expect("SAMPLE_CAPACITY fits in a u64");
@@ -1830,7 +1828,7 @@ mod tests {
     /// scroll, resize and out-of-band core notifications all inflate it — which is
     /// why nothing here or in the cage smoke asserts on its VALUE against a live run.
     ///
-    /// Falsifying edit (from the plan): relax the `keystrokes > 0` guard.
+    /// Falsifying edit: relax the `keystrokes > 0` guard.
     #[test]
     fn wakes_per_keystroke_table() {
         let cases = [
@@ -1859,7 +1857,7 @@ mod tests {
                 expected: Some(0.0),
             },
             RatioCase {
-                desc: "the macOS sample ratio, so the two reports read alike",
+                desc: "142 wakes over 48 keys -> a non-integer ratio",
                 keystrokes: 48,
                 wakes: 142,
                 expected: Some(142.0 / 48.0),
@@ -1920,7 +1918,7 @@ mod tests {
     /// measurement's "before and after" comparison would be between one interval and
     /// a growing prefix of the whole session.
     ///
-    /// Falsifying edit (from the plan): drop `samples.clear()`.
+    /// Falsifying edit: drop `samples.clear()`.
     #[test]
     fn reset_zeroes_everything() {
         let mut stats = FrameStats::new();
@@ -1968,7 +1966,7 @@ mod tests {
     /// — shows up as a max or a p95 far outside the small range rather than as a
     /// value that merely looks a little off.
     ///
-    /// Falsifying edit (from the plan): drop the write-index reset.
+    /// Falsifying edit: drop the write-index reset.
     #[test]
     fn reset_starts_a_fresh_window_with_no_leakage() {
         let mut stats = FrameStats::new();
@@ -2025,7 +2023,7 @@ mod tests {
     /// The zero-nanosecond row states one reading explicitly: a sample of zero is
     /// still a SAMPLE, so `is_empty` is count-based rather than sum-based.
     ///
-    /// Falsifying edit (from the plan): make `is_empty` ignore the keystroke counter.
+    /// Falsifying edit: make `is_empty` ignore the keystroke counter.
     #[test]
     fn is_empty_tracks_all_three_mutators() {
         let fresh = FrameStats::new();
@@ -2051,7 +2049,7 @@ mod tests {
         assert!(
             !stats.is_empty(),
             "after `record_keystroke` the accumulator holds a counter the footer prints, so it is \
-             not empty. This is the mutator the plan names as the likeliest to be forgotten, and \
+             not empty. This is the mutator likeliest to be forgotten, and \
              forgetting it drops exactly the intervals in which the user typed but nothing was \
              timed."
         );
@@ -2101,7 +2099,7 @@ mod tests {
     /// sort. Their labels are 4, 9 and 11 characters and their counts 3, 2 and 3
     /// digits, so no single width can satisfy all three by coincidence.
     ///
-    /// Falsifying edits (from the plan): change any width by one, drop the `*`, or
+    /// Falsifying edits: change any width by one, drop the `*`, or
     /// drop the sort.
     #[test]
     fn format_produces_the_exact_pinned_table() {
@@ -2255,7 +2253,7 @@ mod tests {
     /// The `n/a` matters because the alternative spellings are all lies: `0.00` says
     /// the user typed and nothing woke, `NaN` and `inf` say the guard is missing.
     ///
-    /// Falsifying edit (from the plan): print `0.00` for the `None` ratio.
+    /// Falsifying edit: print `0.00` for the `None` ratio.
     #[test]
     fn format_emits_header_and_footer_with_no_buckets() {
         let report = Report {
@@ -2290,7 +2288,7 @@ mod tests {
     /// footer or a header that lost it is invisible to `grep wolf-frame-stats` and
     /// invisible to the cage smoke's parser. The `+ 3` is header, column row, footer.
     ///
-    /// Falsifying edit (from the plan): drop the prefix from the footer.
+    /// Falsifying edit: drop the prefix from the footer.
     #[test]
     fn every_formatted_line_carries_the_grep_prefix() {
         let mut stats = FrameStats::new();
@@ -2340,7 +2338,7 @@ mod tests {
     /// re-matching an earlier row, and every `wake.*` label carries `wake` as a
     /// prefix, so a substring scan is the weaker check here.
     ///
-    /// Falsifying edit (from the plan): remove the sort in `format_report`.
+    /// Falsifying edit: remove the sort in `format_report`.
     #[test]
     fn formatted_bucket_rows_are_in_index_order() {
         let mut stats = FrameStats::new();

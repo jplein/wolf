@@ -1,46 +1,17 @@
 //! Headless, deterministic unit coverage for `FfiFrame`'s snapshot -> frame
-//! packing (plan §A "Decision on coder's recommended extra test").
+//! packing.
 //!
-//! Unlike `tests/bridge_smoke.rs` — which needs a real, env-provisioned Neovim and
-//! therefore loudly SKIPS on the macOS Bazel host (`WOLF_NVIM_BIN` unset) — this
-//! test builds a [`wolf_core::Snapshot`] BY HAND (no nvim, no `WolfCore`, no Swift)
-//! and asserts exactly what [`FfiFrame::from_snapshot`] produces: color packing,
-//! the style-flag bitset, reverse-video resolution, cursor shape/visibility, the
-//! reverse-video cursor fill/glyph, the default colors, and the flat `cells()`
-//! grid. It is real, non-mock coverage of the resolution/packing logic that today
-//! runs ONLY when `WOLF_NVIM_BIN` is set (i.e. never on this host).
+//! Unlike `tests/bridge_smoke.rs` — which needs a real, staged Neovim and loudly
+//! SKIPS without one — this test builds a [`wolf_core::Snapshot`] BY HAND (no nvim,
+//! no `WolfCore`, no Swift) and asserts exactly what [`FfiFrame::from_snapshot`]
+//! produces: color packing, the style-flag bitset, reverse-video resolution, cursor
+//! shape/visibility, the reverse-video cursor fill/glyph, the default colors, and
+//! the flat `cells()` grid. It is real, non-mock coverage of the resolution/packing
+//! logic that needs no live `WolfCore`.
 //!
-//! ## NOTE to coder — two small wiring changes are required for this to compile/run
-//!
-//! 1. **Expose the constructor.** `FfiFrame::from_snapshot(&wolf_core::Snapshot)`
-//!    is currently a PRIVATE `fn` in `src/lib.rs`. Change it to
-//!    `pub fn from_snapshot(...)` (no behavior change — `read_frame` keeps
-//!    delegating to it). The test drives this snapshot-level constructor directly,
-//!    which is the whole point: it needs no live `WolfCore`. Everything else the
-//!    test touches is already public (the `FfiFrame`/`FfiCell` accessors, the
-//!    transparent `FfiColor { rgb, set }` fields, and all the `wolf_core` builder
-//!    types: `Snapshot`, `Grid`, `Cell`, `HighlightTable`, `HlAttr`,
-//!    `DefaultColors`, `Cursor`, `CursorShape`, `ModeInfo`, `Rgb`).
-//!
-//! 2. **Add the Bazel test target.** Mirror the `bridge_smoke` `rust_test` in
-//!    `crates/wolf-ffi/BUILD.bazel`, but self-contained (no `common/`) and with
-//!    `wolf-core` on the dep line so the test can name `wolf_core::Snapshot`:
-//!
-//!    ```python
-//!    rust_test(
-//!        name = "frame_pack",
-//!        srcs = ["tests/frame_pack.rs"],
-//!        crate_root = "tests/frame_pack.rs",
-//!        edition = "2021",
-//!        deps = [":wolf_ffi", "//crates/wolf-core:wolf_core"],
-//!    )
-//!    ```
-//!
-//!    (`wolf-core` is already a normal dependency of `wolf-ffi`, so under Cargo the
-//!    `use wolf_core::...` below already resolves; the explicit Bazel dep just
-//!    mirrors that for `bazel test`.)
-//!
-//! No application code other than the one-word visibility change in (1) is needed.
+//! The `//crates/wolf-ffi:frame_pack` target is self-contained (no `common/`) and
+//! names `//crates/wolf-core:wolf_core` directly so the test can build a
+//! `wolf_core::Snapshot`.
 
 use std::collections::HashMap;
 

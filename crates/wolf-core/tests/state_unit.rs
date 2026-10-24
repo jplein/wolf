@@ -1,26 +1,21 @@
-//! Headless coverage for the NEW TREE-shaped `wolf_core::state` surface (plan
-//! Phase 1 + OD1): the `TabState` / `WindowState{geometry, tabs}` / `WolfState`
-//! value types (all re-exported at the crate root), `StateStore::set_snapshot`,
-//! `load_state`, and `state_dir`.
+//! Headless coverage for the TREE-shaped `wolf_core::state` surface: the
+//! `TabState` / `WindowState{geometry, tabs}` / `WolfState` value types (all
+//! re-exported at the crate root), `StateStore::set_snapshot`, `load_state`, and
+//! `state_dir`.
 //!
 //! ## Why this lives in `tests/` rather than `src/state.rs`'s `#[cfg(test)]`
 //!
-//! The architect plan places these cases in an in-module `#[cfg(test)] mod
-//! tests` inside `src/state.rs`. That module does not exist yet (tests are
-//! written first), so the cases live here as an integration-style binary
-//! exercising ONLY the planned public, crate-root-re-exported API. The coder may
-//! keep this file as-is (everything asserted is public behavior) or fold the
-//! cases into `src/state.rs`'s test module — either satisfies the plan.
+//! Everything asserted is public behavior, so the cases run as an
+//! integration-style binary against the crate-root re-exports and need no
+//! access to the module's private items.
 //!
-//! ## What changed vs the pre-tabs schema
+//! ## The tree-shaped schema
 //!
-//! The old granular setters (`set_geometry` / `set_cwd` / `set_sidebar_visible`
-//! / `truncate_windows`) are GONE. State is now written as a WHOLE TREE via
-//! `set_snapshot(WolfState)`: the front-end walks its live windows/tabs and
-//! submits the entire tree at once. `state.json` is a tree — each window carries
-//! geometry + a `tabs` list, each tab carries `{ cwd, sidebar_visible }`. There
-//! is NO migration path: a flat (pre-tabs) file is unparseable in the new format
-//! and is silently ignored.
+//! State is written as a WHOLE TREE via `set_snapshot(WolfState)`: the front-end
+//! walks its live windows/tabs and submits the entire tree at once. `state.json`
+//! is a tree — each window carries geometry + a `tabs` list, each tab carries
+//! `{ cwd, sidebar_visible }`. There is NO migration path: a flat (pre-tabs) file
+//! is unparseable and is silently ignored.
 //!
 //! Also headless coverage for the durable user-directory surface: the
 //! `spell_dir` / `runtime_user_dir` / `parsers_user_dir` resolvers,
@@ -45,8 +40,8 @@ use wolf_core::{
     StateStore, TabState, WindowState, WolfState, INIT_USER_FILE_NAME,
 };
 
-/// Generous upper bound for `StateStore::flush` in tests: well beyond the
-/// planned ~100ms write-coalesce delay, so a timeout always means a real bug.
+/// Generous upper bound for `StateStore::flush` in tests: well beyond
+/// `src/state.rs`'s `WRITE_COALESCE_DELAY`, so a timeout always means a real bug.
 const FLUSH_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// A pause inserted BEFORE re-submitting an unchanged snapshot, so that a
@@ -120,8 +115,8 @@ fn mtime(path: &Path) -> SystemTime {
         .unwrap_or_else(|e| panic!("stat {}: {e}", path.display()))
 }
 
-/// A tab with the given cwd + sidebar visibility (test builder). The new
-/// per-tab pane `layout` (feature plan §4.1) is irrelevant to this file's
+/// A tab with the given cwd + sidebar visibility (test builder). The per-tab
+/// pane `layout` is irrelevant to this file's
 /// geometry/round-trip cases, so it is `None`; the dedicated `state_layout`
 /// target covers the pane-tree round-trip.
 fn tab(cwd: &str, sidebar_visible: bool) -> TabState {

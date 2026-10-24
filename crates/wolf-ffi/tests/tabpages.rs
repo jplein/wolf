@@ -1,4 +1,4 @@
-//! Integration test for the `wolf-ffi` TABPAGE bridge surface (plan §2.1 + §5.2):
+//! Integration test for the `wolf-ffi` TABPAGE bridge surface:
 //! the per-project/tabpage-per-view handle methods the macOS front-end drives to
 //! bind a view to an nvim tabpage, switch the current view, read a non-current
 //! view's cwd, and close a view's tabpage (keeping the shared nvim alive until the
@@ -9,14 +9,10 @@
 //! staging / SKIP-when-unset machinery, reusing `tests/common/mod.rs`, and the same
 //! `read_frame()` / `windows()` live-grid polling pattern).
 //!
-//! ## Dependency on coder work (plan §2.1)
+//! ## Bridge surface
 //!
-//! These `WolfCoreHandle` methods do NOT exist yet: the coder adds them to the
-//! bridge (`extern "Rust"`) and `impl WolfCoreHandle` in `crates/wolf-ffi/src/lib.rs`
-//! (backed by the new `wolf_core` tabpage API), regenerates `generated/`, AND adds
-//! the `//crates/wolf-ffi:tabpages` `rust_test` target to `BUILD.bazel` (copy of
-//! `close_pane`). This test file does NOT touch BUILD files, and it will not compile
-//! until they land — that is expected:
+//! The `//crates/wolf-ffi:tabpages` `rust_test` target runs this file under Bazel.
+//! The `WolfCoreHandle` methods under test, backed by the `wolf_core` tabpage API:
 //!
 //!   * `create_tabpage(&self, cwd: String) -> i64` — `tabnew` (+ `:tcd cwd` when
 //!     non-empty); the new tabpage handle (0 when the core is gone).
@@ -244,7 +240,7 @@ fn tabpage_lifecycle_over_the_bridge() {
         let grid = handle.grid_for_win(*win);
         assert_ne!(
             grid, 0,
-            "grid_for_win({win}) must re-resolve to a live grid after the switch back (OD2)"
+            "grid_for_win({win}) must re-resolve to a live grid after the switch back"
         );
         assert!(
             handle.read_frame_for_grid(grid).cols() > 0,

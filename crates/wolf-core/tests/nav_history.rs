@@ -6,18 +6,14 @@
 //! `pane_status` which it sits beside.
 //!
 //! These live in a dedicated integration file (with its own `nav_history` BUILD
-//! target) rather than an in-module `#[cfg(test)] mod tests` inside the NEW
-//! `src/nav_history.rs`, to avoid colliding with the coder who creates that file.
-//! This mirrors the crate's existing precedent (`tests/palette_rank.rs`,
-//! `tests/buffer_rank.rs`, `tests/pane_status_unit.rs`).
+//! target) rather than an in-module `#[cfg(test)] mod tests` inside
+//! `src/nav_history.rs`. This mirrors the crate's existing precedent
+//! (`tests/palette_rank.rs`, `tests/buffer_rank.rs`, `tests/pane_status_unit.rs`).
 //!
-//! ## Dependency on coder work (plan §B9 / §B11)
+//! ## Surface under test
 //!
-//! None of this exists yet — the coder adds `pub mod nav_history;` (+ the
-//! re-exports this file imports) in `crates/wolf-core/src/lib.rs`, adds
-//! `WinBuffer` to the `pub use render::{…}` list, and adds the
-//! `//crates/wolf-core:nav_history` `rust_test` target to `BUILD.bazel`. This file
-//! does NOT touch non-test source. It assumes the plan's exact API surface:
+//! The `//crates/wolf-core:nav_history` `rust_test` target runs this file. The
+//! API surface it exercises:
 //!
 //! - `pub enum NavTarget { Edit { path: PathBuf }, Preview { source: PathBuf },
 //!   Terminal { bufnr: i64 }, Untitled { bufnr: i64 } }`
@@ -36,8 +32,7 @@
 //!   -> HashMap<PathBuf, String>`
 //!
 //! `disambiguate` is imported through the MODULE path (`wolf_core::nav_history::`)
-//! because plan §B11's crate-root re-export list does not name it; everything else
-//! comes through the crate-root re-exports the plan does specify.
+//! and everything else through the crate root; both paths are public.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -113,7 +108,7 @@ fn named_buffer(bufnr: i64, path: &str) -> WinBuffer {
 
 // === 1. Feedback-loop suppression ===
 
-/// **The load-bearing case (Part A, "Feedback-loop suppression").**
+/// **The load-bearing case: feedback-loop suppression.**
 ///
 /// `back` / `forward` / `jump` record an `expected` target for the pane. The very
 /// next derived change that MATCHES it is ABSORBED (our own move landing, echoed
@@ -121,11 +116,11 @@ fn named_buffer(bufnr: i64, path: &str) -> WinBuffer {
 /// PUSHES. Without this the pane's own back-move would immediately push a new
 /// entry and Back could never actually go back.
 ///
-/// (Implementation note for the coder: after `back()` the cursor ALREADY points at
-/// the target, so branch 2 of the `observe` rule — `current() == Some(target)` —
-/// may absorb the echo before branch 3 — `expected == Some(target)` — is consulted.
-/// Both branches are "absorb"; this test asserts the OBSERVABLE contract, namely
-/// that nothing is pushed and `expected` is cleared either way.)
+/// (After `back()` the cursor ALREADY points at the target, so branch 2 of the
+/// `observe` rule — `current() == Some(target)` — may absorb the echo before
+/// branch 3 — `expected == Some(target)` — is consulted. Both branches are
+/// "absorb"; this test asserts the OBSERVABLE contract, namely that nothing is
+/// pushed and `expected` is cleared either way.)
 #[test]
 fn back_sets_expected_and_the_echoed_emit_is_absorbed_not_pushed() {
     let (a, b, c) = (edit("/p/a.md"), edit("/p/b.md"), edit("/p/c.md"));
@@ -477,7 +472,7 @@ fn revert_restores_only_when_the_cursor_has_not_moved_on() {
 
 // === 3. `derive_target` + `NavTarget` identity ===
 
-/// The full `derive_target` precedence matrix (plan §B9). A window present in
+/// The full `derive_target` precedence matrix. A window present in
 /// NEITHER map yields `None` — the locked "no entry, no push, no prune" clause
 /// that makes the two notifications' arrival order irrelevant.
 #[test]
@@ -699,7 +694,7 @@ fn nav_history_forwards_jump_and_revert_per_window() {
 // === 4b. `NavHistory::observe`: the emit-level repeat filter above the four-branch rule ===
 // It drops a target repeating the last one folded for its window; its doc comment says why.
 
-/// **The D2 case.** A late repeat of the target we just LEFT is DROPPED, not
+/// **The late-repeat case.** A late repeat of the target we just LEFT is DROPPED, not
 /// pushed — and the filter does not swallow the genuine navigation that follows.
 #[test]
 fn a_late_repeat_of_the_target_we_left_is_dropped_not_pushed() {
@@ -1160,7 +1155,7 @@ fn pathless_rows_are_excluded_from_collisions_and_numbered() {
 /// A label that ends up as a FULL ABSOLUTE path gets the home directory
 /// abbreviated to `~`.
 ///
-/// Contract assumption (stated in the test-writer report): a path with FEWER
+/// Contract assumption: a path with FEWER
 /// components than the current `k` contributes its FULL ABSOLUTE form. Here the
 /// `README.md` group needs `k == 4` to separate `a/b/c` from `x/b/c`, and
 /// `/Users/alice/README.md` has only three components — so it falls back to its

@@ -39,8 +39,8 @@ final class PickerSeamTests: XCTestCase {
         chars: "o", command: false, expected: false),
       // --- Right modifier, wrong letter --------------------------------
       TriggerCase(
-        // Guards against a stale "p" target from the old Ctrl+Shift+P
-        // chord: the macOS seam matches "o", not "p".
+        // Guards against a "p" target (Ctrl+Shift+P is the Linux command
+        // palette): the macOS seam matches "o", not "p".
         desc: "Command+'p' (wrong letter) => false",
         chars: "p", command: true, expected: false),
       TriggerCase(

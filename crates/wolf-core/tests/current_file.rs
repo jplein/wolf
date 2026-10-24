@@ -1,4 +1,4 @@
-//! Tests for `wolf-core`'s current-file tracking (S1): the snapshot exposes the
+//! Tests for `wolf-core`'s current-file tracking: the snapshot exposes the
 //! absolute, canonicalized path of the buffer currently being edited in nvim via
 //! `Snapshot.current_file: Option<PathBuf>`, or `None` for an unnamed buffer.
 //!

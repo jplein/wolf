@@ -3,7 +3,7 @@
 //! `wolf-core` reports the captive Neovim's health as a [`wolf_core::Liveness`]
 //! (`Alive` / `NotResponding` / `Dead`) — a cheap lock-free atomic read, not an
 //! RPC — and offers `WolfCore::restart_nvim()` plus the RPC-free Tier-1 open-file
-//! mirror `WolfCore::open_files_for_tabpage()`. This module owns every DECISION
+//! mirror `WolfCore::open_files_for_tabpage()`. This module owns every decision
 //! that follows from those values; the widget work of carrying them out lives in
 //! [`crate::crash_overlay`] and [`crate::shell`]. Keeping the decisions here (data
 //! in, data out, no GTK types) is exactly what lets them be unit-tested

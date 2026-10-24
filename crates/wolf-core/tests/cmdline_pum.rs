@@ -1,27 +1,11 @@
 //! Integration tests for `wolf-core`'s NATIVE command-line + completion-popup
-//! surface (feature plan §2/§3/§4). These drive a REAL, hermetic nvim (no mocks)
-//! via `WOLF_NVIM_BIN`; the common helpers panic loudly if it is unset.
-//!
-//! ## Dependency on coder work (plan §3 + §5)
-//!
-//! These tests reference NEW `Snapshot` fields + methods the coder adds in
-//! `crates/wolf-core/src/render.rs`; the file will not compile until they land —
-//! that is expected:
-//!
-//!   * `Snapshot.cmdline: Cmdline` where
-//!     `Cmdline { active: bool, firstc: String, prompt: String,
-//!                content: Vec<CmdlineChunk>, pos: usize, indent: usize,
-//!                level: u32 }` + `Cmdline::text(&self) -> String` (concatenated
-//!     content chunk text).
-//!   * `Snapshot.pum: Pum` where
-//!     `Pum { visible: bool, items: Vec<PumItem>, selected: i64, row: i64,
-//!            col: i64, grid: i64 }` and `PumItem { word, kind, menu, info }`
-//!     (all `String`).
+//! surface (`Snapshot.cmdline`, `Snapshot.pum`). These drive a REAL, hermetic nvim
+//! (no mocks) via `WOLF_NVIM_BIN`; the common helpers panic loudly if it is unset.
 //!
 //! Attaching with `ext_popupmenu` + `ext_messages` (which implicitly enables
 //! `ext_cmdline` and sets `cmdheight=0`) plus `runtime/nvim/init.lua`'s
 //! `wildoptions+=pum` is what makes `:` populate `Snapshot.cmdline` and `<Tab>`
-//! populate `Snapshot.pum` as a cmdline-anchored vertical popup — all coder work.
+//! populate `Snapshot.pum` as a cmdline-anchored vertical popup.
 //!
 //! ## Testing conventions (mirroring `tabpages.rs` / `file_search.rs`)
 //!

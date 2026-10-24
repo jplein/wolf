@@ -1,9 +1,7 @@
-//! Integration tests for SWAP-BASED unsaved-edit recovery (architect plan §9
-//! cases c + d, plus the startup-naming case e added later). This file
-//! SUPERSEDES `swap_exists.rs`: with the new design
-//! `'swapfile'` is ON always and `'directory'` is the durable, Wolf-owned
-//! per-project swap dir (resolved like `state_dir()` from the core's cwd), so the
-//! old "plant a `.<name>.swp` next to the file" provocation no longer matches.
+//! Integration tests for SWAP-BASED unsaved-edit recovery. `'swapfile'` is ON
+//! always and `'directory'` is the durable, Wolf-owned per-project swap dir
+//! (resolved like `state_dir()` from the core's cwd), so a provocation must plant
+//! its swap there, not as a `.<name>.swp` next to the file.
 //!
 //! The recovery-aware `SwapExists` autocmd must NEVER raise a blocking prompt:
 //!   * c. DEAD owner  → `v:swapchoice = "r"` (silently RECOVER the unsaved edit);
@@ -32,8 +30,8 @@
 //!
 //! ## How the swap dir is controlled (read before trusting green)
 //!
-//! Per plan §6 the swap dir is NOT a `WOLF_SWAP_DIR` the test sets directly (that
-//! env var is core → nvim, computed by the core); it is
+//! The swap dir is NOT a `WOLF_SWAP_DIR` the test sets directly (that env var is
+//! core → nvim, computed by the core); it is
 //! `swap_dir_for(cwd) = state_dir()/swap/<hash(canonical cwd)>`. So the test lever
 //! is (a) a STABLE `state_dir()` and (b) a FIXED cwd:
 //!   * `common::config_in` already points `WOLF_STATE_DIR` at a process-global
@@ -59,13 +57,7 @@
 //! pre-existing test passed while the defence was dead for every real project.
 //! A case-e test at a `/tmp` cwd would be green with OR without the fix.
 //!
-//! ## Dependency on coder work (tests-first)
-//!
-//! Won't compile until: `'swapfile'` on + durable `'directory'` + the
-//! recovery-aware `SwapExists` autocmd (init.lua §6/§7), `swap_dir_for` wired
-//! through `NvimConfig` (§6), and `WolfCore::{liveness, restart_nvim}` (§1/§5).
-//!
-//! ## Limits (documented, per plan §Constraints)
+//! ## Limits
 //!
 //! SIGKILL skips `preserve_exit`, so the swap only holds edits synced BEFORE the
 //! kill — every test that kills its nvim therefore forces a deterministic
@@ -160,8 +152,8 @@ fn type_unsaved_edit(core: &WolfCore, waiter: &FlushWaiter) {
 }
 
 /// Starts a `WolfCore` rooted at `cwd` and waits for the initial attach flush.
-/// Mirrors `swap_exists.rs`'s local `start_core_in`. Both cores in case d go
-/// through here with the SAME `cwd`, so they resolve the SAME durable swap dir.
+/// Both cores in case d go through here with the SAME `cwd`, so they resolve the
+/// SAME durable swap dir.
 fn start_core_in(cwd: &Path) -> (WolfCore, FlushWaiter) {
     let (wake, waiter) = common::wake_channel();
     let core = WolfCore::start(
@@ -437,7 +429,7 @@ fn live_owner_edits_anyway() {
     core_a.shutdown().expect("core A shutdown should be Ok");
 }
 
-/// RESTART-SHADOW guard (architect follow-up, round 2): an unsaved `Untitled.md` must
+/// RESTART-SHADOW guard: an unsaved `Untitled.md` must
 /// survive a crash-restart via swap recovery. The `:preserve` + SIGKILL below leaves a
 /// stale swap for `<cwd>/Untitled.md`, so on restart the fresh nvim's `VimEnter` naming
 /// consults `_G.wolf_untitled_swap_exists`, sees that swap and names its OWN startup

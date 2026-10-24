@@ -1,32 +1,25 @@
-//! Integration test for the `wolf-ffi` NAVIGATION-HISTORY bridge surface (plan
-//! §B7): the six `WolfCoreHandle::history_*` methods and the opaque
-//! `FfiHistoryEntry` rows (`display()` / `index()` / `is_current()`) the macOS
-//! History menu is built from.
+//! Integration test for the `wolf-ffi` NAVIGATION-HISTORY bridge surface: the six
+//! `WolfCoreHandle::history_*` methods and the opaque `FfiHistoryEntry` rows
+//! (`display()` / `index()` / `is_current()`) the macOS History menu is built from.
 //!
 //! This drives the RUST half against a REAL, hermetic Neovim — NO mocks, per the
 //! project testing policy. It is modeled on `tests/preview.rs`, reusing
 //! `tests/common/mod.rs` and the same loud SKIP-when-no-nvim guard.
 //!
-//! ## NOTE to coder — Bazel target
+//! ## Bridge surface
 //!
-//! This file needs a `//crates/wolf-ffi:history` `rust_test` target added to
-//! `crates/wolf-ffi/BUILD.bazel` (a copy of the `:preview` stanza:
-//! `srcs = ["tests/common/mod.rs", "tests/history.rs"]`,
-//! `crate_root = "tests/history.rs"`). This test file does NOT touch BUILD files.
-//!
-//! ## Dependency on coder work (plan §B7)
-//!
-//! None of this exists yet — the coder adds, on `WolfCoreHandle`:
+//! The `//crates/wolf-ffi:history` `rust_test` target runs this file under Bazel.
+//! The `WolfCoreHandle` methods under test:
 //!   * `history_can_back(&self, win: i64) -> bool`
 //!   * `history_can_forward(&self, win: i64) -> bool`
 //!   * `history_back(&self, win: i64) -> bool`
 //!   * `history_forward(&self, win: i64) -> bool`
 //!   * `history_jump(&self, win: i64, index: u32) -> bool`
 //!   * `history_entries(&self, win: i64) -> Vec<FfiHistoryEntry>`
-//!     plus the OPAQUE `FfiHistoryEntry { display() -> String, index() -> u32,
-//! is_current() -> bool }` (opaque, not a `swift_repr = "struct"`, so a
-//!     `Vec<FfiHistoryEntry>` is supported), and regenerates `generated/`. This test
-//!     file will not compile until that lands — expected.
+//!
+//! `FfiHistoryEntry { display() -> String, index() -> u32, is_current() -> bool }`
+//! is OPAQUE, not a `swift_repr = "struct"`, so a `Vec<FfiHistoryEntry>` is
+//! supported.
 //!
 //! ## The startup buffer is a NAMED `Untitled.md`
 //!

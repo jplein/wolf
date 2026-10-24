@@ -1,9 +1,9 @@
-//! Integration tests for SPELL CHECKING on prose filetypes (plan §4.5 spell
-//! block + §4.3 `WOLF_SPELL_DIR` export): the `WolfSpell` FileType autocmd
-//! turns window-local `'spell'` ON for markdown/text/gitcommit and OFF for
-//! everything else, `'spelllang'` is pinned to `en`, and the global
-//! `'spellfile'` points at `<state_dir()>/spell/en.utf-8.add`. Drives a REAL,
-//! hermetic nvim (via `WOLF_NVIM_BIN`) — no mocks.
+//! Integration tests for SPELL CHECKING on prose filetypes: the `WolfSpell`
+//! FileType autocmd turns window-local `'spell'` ON for markdown/text/gitcommit
+//! and OFF for everything else, `'spelllang'` is pinned to `en`, and the global
+//! `'spellfile'` points at `<state_dir()>/spell/en.utf-8.add` (via spawn's
+//! `WOLF_SPELL_DIR` export). Drives a REAL, hermetic nvim (via `WOLF_NVIM_BIN`)
+//! — no mocks.
 //!
 //! State-dir strategy: SHARED HERMETIC (`common::hermetic_state_dir()`), no env
 //! mutation, so the tests in this binary are concurrent-safe. The cases that
@@ -14,11 +14,6 @@
 //! no eval RPC, so nvim itself writes the probed option values to a temp file.
 //! Because the probe command queues behind earlier keys, a probe after an `:e`
 //! observes the post-`:e` window state with no extra settle.
-//!
-//! ## Dependency on coder work (tests-first)
-//!
-//! Passing values require the init.lua spell block and spawn's
-//! `WOLF_SPELL_DIR` export; the file compiles against the existing public API.
 
 mod common;
 

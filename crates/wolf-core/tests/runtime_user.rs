@@ -1,5 +1,4 @@
-//! Integration tests for the `runtime_user/` USER OVERRIDE directory (plan
-//! §4.1 seed + §4.4 seed call + §4.5 end-of-file dofile): a fresh
+//! Integration tests for the `runtime_user/` USER OVERRIDE directory: a fresh
 //! `<state_dir()>/runtime_user` is seeded once with the `init_user.lua`
 //! template; a pre-existing `init_user.lua` is sourced LAST (after every Wolf
 //! default) and never rewritten; a non-empty dir is never touched; and an

@@ -3,7 +3,7 @@
 //! This drives the RUST half of the swift-bridge file-search surface against a
 //! REAL, hermetic Neovim — NO mocks, per the project testing policy. It is the
 //! sibling of `bridge_smoke.rs` (same staging / SKIP-when-unset machinery,
-//! reusing `tests/common/mod.rs`) but exercises the NEW picker surface:
+//! reusing `tests/common/mod.rs`) but exercises the picker surface:
 //!
 //!   * `WolfCoreHandle::start_file_search() -> FfiFileSearch`
 //!   * `FfiFileSearch::ranked(query: String, max: usize) -> Vec<FfiFileEntry>`
@@ -24,8 +24,7 @@
 //! asserted only at the round-trip-survives level: we issue `open(path)` and
 //! confirm the core stays responsive (`read_frame` keeps returning a sane frame
 //! and does not panic). We CANNOT assert the exact opened buffer name here:
-//! `FfiFrame` has no `current_file` accessor and the plan deliberately does NOT
-//! add one.
+//! `FfiFrame` has no `current_file` accessor.
 
 mod common;
 

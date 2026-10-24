@@ -1,25 +1,13 @@
-//! Integration tests for `wolf-core`'s MESSAGE-TOAST surface (feature plan
-//! §2/§3/§4): Neovim's `ext_messages` `msg_show` / `msg_history_show` folded into
-//! `Snapshot.toast`, with `search_count` suppressed and the toast cleared on the
-//! next user input (OD8). These drive a REAL, hermetic nvim (no mocks) via
-//! `WOLF_NVIM_BIN`; the common helpers panic loudly if it is unset.
-//!
-//! ## Dependency on coder work (plan §3 + §5)
-//!
-//! These tests reference a NEW `Snapshot.toast` field + methods the coder adds in
-//! `crates/wolf-core/src/render.rs`; the file will not compile until they land —
-//! that is expected:
-//!
-//!   * `Snapshot.toast: Toast` where `Toast { visible: bool, messages:
-//!     Vec<Message> }`, `Message { kind: String, id: i64, lines:
-//!     Vec<Vec<ToastChunk>> }`, and `ToastChunk { text: String, attr_id: u64 }`.
-//!   * `Toast::lines(&self) -> Vec<Vec<ToastChunk>>` (all messages' lines flattened
-//!     in order) and `Toast::kind(&self) -> String` (last message's kind, or "").
-//!   * The `api.rs` input pump clears the toast on any `Key` / `Mouse` / `Scroll`
-//!     input (gated by `!toast.is_prompt()`), BEFORE applying that input.
+//! Integration tests for `wolf-core`'s MESSAGE-TOAST surface: Neovim's
+//! `ext_messages` `msg_show` / `msg_history_show` folded into `Snapshot.toast`,
+//! with `search_count` suppressed and the toast cleared on the next user input.
+//! These drive a REAL, hermetic nvim (no mocks) via `WOLF_NVIM_BIN`; the common
+//! helpers panic loudly if it is unset.
 //!
 //! Attaching with `ext_messages` (which routes messages off the grid) is what makes
-//! `nvim_echo` / `:echomsg` / `:messages` populate `Snapshot.toast` — coder work.
+//! `nvim_echo` / `:echomsg` / `:messages` populate `Snapshot.toast`. The `api.rs`
+//! input pump clears the toast on any `Key` / `Mouse` / `Scroll` input, unless
+//! `toast.is_prompt()`, before applying that input.
 //!
 //! ## Testing conventions (mirroring `theme.rs` / `tabpages.rs`)
 //!
@@ -171,8 +159,8 @@ fn messages_command_populates_toast_from_history() {
     core.shutdown().expect("shutdown should be Ok");
 }
 
-/// The toast is cleared on the next user input (OD8): once a message is visible, a
-/// plain movement key dismisses it (`Snapshot.toast.visible` -> false).
+/// The toast is cleared on the next user input: once a message is visible, a plain
+/// movement key dismisses it (`Snapshot.toast.visible` -> false).
 #[test]
 fn toast_clears_on_next_input() {
     const MARKER: &str = "dismiss me please";
@@ -207,9 +195,9 @@ fn toast_clears_on_next_input() {
 /// Consecutive user-initiated messages do NOT accumulate: because typing `:` for
 /// the second command is itself a dismissing key that clears the live toast BEFORE
 /// the new message lands, the toast reflects only the LATEST message — the
-/// non-accumulation behavior the plan's `replace_last` handling targets.
+/// non-accumulation behavior the `replace_last` handling targets.
 ///
-/// NOTE (test-writer): a true `msg_show.replace_last` (same-keystroke in-place
+/// NOTE: a true `msg_show.replace_last` (same-keystroke in-place
 /// replacement) cannot be reliably triggered from real headless nvim via the
 /// keystroke-only driving surface, so this asserts the equivalent observable
 /// contract — the clear-on-input path yields a replaced, non-accumulated toast.
@@ -250,13 +238,13 @@ fn consecutive_messages_do_not_accumulate() {
     core.shutdown().expect("shutdown should be Ok");
 }
 
-/// A real `confirm` prompt is NOT dismissed by a passing input (OD8 gate). The
+/// A real `confirm` prompt is NOT dismissed by a passing input (the prompt gate). The
 /// input pump clears the toast on the next Key/Mouse/Scroll UNLESS
 /// `toast.is_prompt()` (last kind == `"confirm"`); this drives a live
 /// `confirm()` dialog, sends a non-answering key, and asserts the prompt toast
 /// SURVIVES — proving the `!is_prompt()` gate prevented the dismissal.
 ///
-/// NOTE (test-writer): this drives a REAL nvim `confirm()` (per CLAUDE.md's
+/// NOTE: this drives a REAL nvim `confirm()` (per CLAUDE.md's
 /// prefer-real-nvim policy), which emits `msg_show` kind `"confirm"` and then
 /// blocks reading a char (our async-sent keys still reach it). The benign key
 /// (`z`) is not a valid accelerator, so nvim keeps prompting; we then press
@@ -324,7 +312,7 @@ fn confirm_prompt_is_not_dismissed_by_input() {
 /// answers with the valid accelerator `y`, and asserts the toast is gone —
 /// `!toast.is_prompt()` being the primary contract.
 ///
-/// NOTE (test-writer): this is the positive complement to
+/// NOTE: this is the positive complement to
 /// `confirm_prompt_is_not_dismissed_by_input`, which sends the INVALID `z` (so
 /// the prompt survives). Here the valid `y` resolves the dialog, so no trailing
 /// `<Esc>` is needed — nvim unblocks on the answer.
@@ -394,7 +382,7 @@ fn confirm_prompt_cleared_when_answered() {
 /// shows only the new message, is no longer a prompt, and never re-shows the
 /// original confirm text.
 ///
-/// NOTE (test-writer): the `msg_show`-drop path is exercised here (less
+/// NOTE: the `msg_show`-drop path is exercised here (less
 /// timing-sensitive than driving a fresh `input()` cmdline); the cmdline
 /// prompt-mismatch drop path is covered deterministically by the inline
 /// `cmdline_show_nonmatching_prompt_drops_stashed_confirm` unit test.

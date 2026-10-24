@@ -2,7 +2,7 @@
 //! the "Restart Neovim" button, and the small transient "Neovim was restarted"
 //! banner.
 //!
-//! Every DECISION this module acts on is made in the pure
+//! Every decision this module acts on is made in the pure
 //! [`mod@crate::liveness_ui`] seam (which mode to show, what it says, where the
 //! button sits); this file only builds widgets and toggles visibility. It mirrors
 //! [`crate::picker`] / [`crate::tree_view`]: an `Rc<CrashInner>` on the single

@@ -1,4 +1,4 @@
-//! Pure display-string math for the per-pane statusbar (plan §4).
+//! Pure display-string math for the per-pane statusbar.
 //!
 //! This module is IO-free string/path arithmetic over ALREADY-CANONICAL inputs:
 //! the caller ([`crate::api::WolfCore::pane_status`]) canonicalizes the buffer
@@ -32,7 +32,7 @@ pub struct PaneStatus {
 }
 
 /// Computes the [`PaneStatus`] for a buffer path, given the (already-canonical)
-/// cwd and home directories (plan §4).
+/// cwd and home directories.
 ///
 /// Precedence for `display_path`:
 /// 1. Empty `buf_path` (unnamed buffer) → `{ filename: NO_NAME, display_path: "" }`.

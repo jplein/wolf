@@ -48,7 +48,7 @@ public enum StateSeam {
   /// non-empty AND `isDirectory(restored)` (it may have been deleted — or
   /// replaced by a plain file — since the last run); otherwise the empty state,
   /// with nvim launched at `home`. This NEVER returns the process working
-  /// directory (the old `launchCwd` fallback that polluted the recent-dirs MRU).
+  /// directory, which would pollute the recent-dirs MRU.
   /// The injected closure keeps the seam pure (the caller passes a
   /// FileManager-backed check; tests pass a set lookup).
   public static func launchDecision(

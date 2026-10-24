@@ -9,14 +9,12 @@
 //! bundles another. Nothing anywhere fails. This file is the only thing that would
 //! notice.
 //!
-//! ## THIS TEST IS RED UNTIL `flake.nix` GAINS ITS `wolfVendoredPins` BLOCK
+//! ## The parser defines the contract
 //!
-//! It is written against the block the packaging unit adds, not against the file as
-//! it stands, and that ordering is deliberate: the parser and the block are one
-//! contract, and writing the parser after the block would let the block's shape
-//! dictate the check instead of the other way round. A failure naming an ABSENT
-//! block is therefore the expected state before the flake edit lands, and the fix
-//! is to add the block in the shape [`nix_pins`] documents — **never** to loosen the
+//! The parser and the `wolfVendoredPins` block in `flake.nix` are one contract, and
+//! the parser is its definition: the block takes the shape [`nix_pins`] documents,
+//! so the check is not dictated by whatever shape the block happens to have. When
+//! the two disagree, the fix is to restore that shape — **never** to loosen the
 //! parser until it accepts whatever is there.
 //!
 //! ## The two extraction rules, stated so nobody invents a third
@@ -274,8 +272,8 @@ fn parse_pin_line(line: &str) -> Option<NixPin> {
 /// between them carries one whole asset, in the shape [`parse_pin_line`] documents.
 ///
 /// `None` for the whole result means the opening line is absent. That is reported
-/// separately from an empty block, because "the packaging unit has not landed yet"
-/// and "the block was emptied" are different findings.
+/// separately from an empty block, because "the block is absent" and "the block
+/// was emptied" are different findings.
 fn nix_pins(text: &str) -> Option<(Vec<NixPin>, Vec<String>)> {
     let mut lines = text.lines();
     lines.find(|line| line.trim() == NIX_BLOCK_OPEN)?;
@@ -304,12 +302,9 @@ fn require_nix_pins(guard: &str, path: &Path, text: &str) -> Vec<NixPin> {
         panic!(
             "{guard}: {} contains no line whose trimmed form is exactly `{NIX_BLOCK_OPEN}`, so the \
              Nix side of all three pins could not be located and this check is comparing nothing. \
-             Two states look like this and both are actionable. BEFORE the packaging unit lands, \
-             the block simply does not exist yet and this failure is expected — add it, in the \
-             shape `parse_pin_line`'s doc comment states. AFTER it lands, the binding was renamed \
-             or reformatted, in which case fix `flake.nix` or this constant so the two agree \
-             again. Do NOT widen the scanner to search for something looser: a matcher that finds \
-             a block wherever one might be is a matcher that reports a stale one.",
+             The binding was renamed or reformatted: fix `flake.nix` or this constant so the two \
+             agree again. Do NOT widen the scanner to search for something looser: a matcher that \
+             finds a block wherever one might be is a matcher that reports a stale one.",
             path.display()
         )
     };

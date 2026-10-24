@@ -14,7 +14,7 @@
 //! [`FileSearch::read`] (owning an `Arc` clone of the lock), so the guard's
 //! lifetime is independent of the [`FileSearch`].
 //!
-//! ## Traversal rules (per plan §D3/§D6)
+//! ## Traversal rules
 //!
 //! The walk uses the `ignore` crate (ripgrep's walker) configured to behave like
 //! `git ls-files --others --exclude-standard` inside a repo and a plain recursive

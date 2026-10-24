@@ -419,7 +419,7 @@ impl NvimProcess {
     /// Blocks on `nvim_buf_get_lines(source_bufnr, 0, -1, false)` to read the whole
     /// buffer, joins the lines with `\n`, and renders via
     /// [`crate::markdown::render_html_with_highlights`] with the fixed
-    /// [`crate::markdown::PreviewTheme::Default`] (OD5). Fenced/indented code blocks
+    /// [`crate::markdown::PreviewTheme::Default`]. Fenced/indented code blocks
     /// are treesitter-highlighted through the captive Neovim (see
     /// [`render_source_html`] and [`highlight_code_blocks`]); any block that cannot
     /// be highlighted falls back to plain `<pre><code>`. An RPC error (e.g. an
@@ -1552,7 +1552,7 @@ impl NvimProcess {
 /// ([`crate::markdown::code_blocks`]), asks the captive Neovim to
 /// treesitter-highlight them ([`highlight_code_blocks`]), and renders via
 /// [`crate::markdown::render_html_with_highlights`] with the fixed
-/// [`crate::markdown::PreviewTheme::Default`] (OD5) and the given `width_mode`
+/// [`crate::markdown::PreviewTheme::Default`] and the given `width_mode`
 /// (in-app callers pass [`crate::markdown::WidthMode::Full`] and let the webview
 /// frame cap; the browser preview passes [`crate::markdown::WidthMode::Capped`]).
 /// The highlight pass degrades gracefully and PER FENCE: any block Neovim cannot

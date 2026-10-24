@@ -341,8 +341,8 @@ fn cursor_reported_on_buffer_entry_without_any_motion() {
     core.shutdown().expect("shutdown should be Ok");
 }
 
-/// THE load-bearing OD4 test: the reported column is a CHARACTER column, never a
-/// BYTE column.
+/// THE load-bearing character-column test: the reported column is a CHARACTER
+/// column, never a BYTE column.
 ///
 /// Line 3 of [`MULTIBYTE_DOC`] is `éééX`; each `é` is 2 bytes in UTF-8. Three `l`
 /// motions from column 0 move three CHARACTERS, so `charcol('.') - 1` must report
@@ -393,7 +393,7 @@ fn multibyte_line_reports_character_column_not_byte_column() {
     core.shutdown().expect("shutdown should be Ok");
 }
 
-/// Pins `charcol()`'s past-end-of-line insert-mode semantics (plan §11 risk 1).
+/// Pins `charcol()`'s past-end-of-line insert-mode semantics.
 ///
 /// In insert mode the cursor may sit ONE PAST the last character, where
 /// `charcol('.')` returns `char_len + 1`, so the reported 0-based column equals the

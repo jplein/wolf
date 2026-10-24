@@ -14,16 +14,13 @@
 //! `start_file_search`, so holding the lock across that call is sufficient — no
 //! `serial_test` dependency needed).
 //!
-//! Surface exercised (per plan §files.rs / §api.rs `start_file_search`):
+//! Surface exercised (`files.rs` / `api.rs` `start_file_search`):
 //! - `SearchBounds::from_env()` reads the 3 env vars (defaults 50_000 / 5s / 64).
 //! - `FileSearchState.truncated: bool` — set true when the walk stops early at
 //!   the entry cap or the time budget. A cap-/budget-truncated search STILL sets
 //!   `complete = true` (post-loop `!cancel`). Depth pruning does NOT set
 //!   `truncated` (it is invisible in the `ignore` API), so the depth test asserts
 //!   via ABSENCE of a too-deep file rather than on the flag.
-//!
-//! NOTE to coder: the read guard fields assumed here are `entries`, `complete`,
-//! `version` (existing) and the NEW `truncated`. If any differ, align them.
 
 mod common;
 
@@ -50,8 +47,8 @@ const POLL_INTERVAL: Duration = Duration::from_millis(50);
 const ENTRY_CAP: usize = 10;
 
 /// Number of flat `.md` files the entry-cap test creates. Comfortably exceeds
-/// both [`ENTRY_CAP`] and the traversal batch size (plan: `TRAVERSAL_BATCH =
-/// 256`) so the walk is forced to break at the cap mid-batch.
+/// [`ENTRY_CAP`] and stays below the traversal batch size (`files.rs`'s
+/// `TRAVERSAL_BATCH = 256`), so the walk is forced to break at the cap mid-batch.
 const FLAT_FILE_COUNT: usize = 100;
 
 /// Number of files the budget test creates. Large enough that ~this many stat

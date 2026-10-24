@@ -1,6 +1,6 @@
-//! Real-nvim end-to-end test of the record-on-open path (plan §D5): when a
-//! drained input batch contains `InputEvent::Open { path }`, the api.rs input
-//! pump must record that path in the MRU cache.
+//! Real-nvim end-to-end test of the record-on-open path: when a drained input
+//! batch contains `InputEvent::Open { path }`, the api.rs input pump must record
+//! that path in the MRU cache.
 //!
 //! This drives a REAL, hermetic Neovim process (no mocks) and requires
 //! `WOLF_NVIM_BIN` (the shared harness fails loudly if it is unset).
@@ -111,10 +111,9 @@ fn has_display(recent: &[wolf_core::FileEntry], display: &str) -> bool {
 /// must record that open into the single global MRU (`state_dir()/file-mru.sqlite`)
 /// scoped to B's directory, B-relative — NOT scoped to A's directory.
 ///
-/// NOTE to coder: this asserts the plan's WRITE-path behavior — the pump records
-/// `InputEvent::Open` into the global MRU under `<nvim-cwd>` (the tracked cwd, B),
-/// and `mru_recent()` reports B's rows with B-relative `display`. It depends on the
-/// directory-scoped MRU + `wolf_cwd` tracking; it passes once that lands.
+/// The pump records `InputEvent::Open` into the global MRU under `<nvim-cwd>` (the
+/// tracked cwd, B), and `mru_recent()` reports B's rows with B-relative `display`.
+/// It depends on the directory-scoped MRU + `wolf_cwd` tracking.
 #[test]
 fn open_after_cd_records_in_nvim_cwd_mru() {
     let _ = common::require_nvim_bin();

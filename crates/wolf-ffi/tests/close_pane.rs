@@ -1,20 +1,13 @@
-//! Integration test for `WolfCoreHandle::close_pane()` (plan §5): the FFI method
+//! Integration test for `WolfCoreHandle::close_pane()`: the FFI method
 //! backing the macOS "Close" command, which runs `:close` to drop the CURRENT
 //! split (NOT the buffer — that is `:bdelete`, exercised elsewhere).
 //!
 //! This drives the RUST half against a REAL, hermetic Neovim — NO mocks, per the
 //! project testing policy. It is the sibling of `panes.rs` (same staging /
 //! SKIP-when-unset machinery, reusing `tests/common/mod.rs`, and the same
-//! `windows()` live-grid polling pattern).
-//!
-//! ## Dependency on coder work (plan §5)
-//!
-//! `WolfCoreHandle::close_pane()` does NOT exist yet: the coder adds it to the
-//! bridge (`extern "Rust"`) and `impl WolfCoreHandle` in
-//! `crates/wolf-ffi/src/lib.rs`, backed by `wolf_core::InputEvent::ClosePane` ->
-//! `nvim_command("close")`, AND adds the `//crates/wolf-ffi:close_pane` `rust_test`
-//! target to `BUILD.bazel` (copy of `panes`). This test file does NOT touch BUILD
-//! files, and it will not compile until that method lands — that is expected.
+//! `windows()` live-grid polling pattern). The method is backed by
+//! `wolf_core::InputEvent::ClosePane` -> `nvim_command("close")`, and the
+//! `//crates/wolf-ffi:close_pane` `rust_test` target runs this file under Bazel.
 //!
 //! ## Why the FFI method, NOT typed `:close`
 //!

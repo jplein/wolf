@@ -1,19 +1,12 @@
-//! Real-nvim end-to-end test of the EMPTY-STATE launch contract, TRIMMED to its
-//! recent-directories (folder-MRU) hygiene assertions ONLY (plan OD1).
+//! Real-nvim end-to-end test of the EMPTY-STATE launch contract's
+//! recent-directories (folder-MRU) hygiene.
 //!
-//! With the per-window-tabs change, `wolf-core` no longer mirrors cwd into a
-//! `StateStore` (`attach_state_store` + the `redraw.rs::apply_cwd` store-mirror
-//! are removed; cwd is read from each controller at snapshot time by the
-//! front-end). So the former assertions that the launch cwd is/ isn't persisted
-//! into `state.json` are GONE — that path no longer exists.
-//!
-//! What REMAINS observable core-side is the folder-MRU hygiene: the captive
-//! nvim's one-shot startup `wolf_cwd` emit updates the tracked-cwd cell ONLY —
-//! it must NOT record the launch/initial directory into the recent-dirs MRU
-//! (`<state-dir>/folder-mru.sqlite`). A genuine later `:cd` (a real
-//! `DirChanged`) still records into the MRU as before. `apply_cwd` keeps its
-//! `recent_dirs.record` + tracked-cwd write; only the StateStore mirror was
-//! dropped.
+//! The captive nvim's one-shot startup `wolf_cwd` emit updates the tracked-cwd
+//! cell ONLY — it must NOT record the launch/initial directory into the
+//! recent-dirs MRU (`<state-dir>/folder-mru.sqlite`). A genuine later `:cd` (a
+//! real `DirChanged`) does record into the MRU. `wolf-core` does not persist cwd
+//! into a `StateStore`; the front-end reads it from each controller at snapshot
+//! time.
 //!
 //! This drives a REAL, hermetic Neovim process (no mocks) and requires
 //! `WOLF_NVIM_BIN` (the shared harness fails loudly if it is unset). Modeled

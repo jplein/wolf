@@ -25,7 +25,7 @@ final class PaneTreeTests: XCTestCase {
   /// Half the height — a 0.5 Horizontal split boundary.
   private let halfH: Double = 20.0
   /// One quarter of the test width — a 0.25-weight Vertical split column width
-  /// under the macOS weight-preservation policy (feature plan §3.1).
+  /// under the macOS weight-preservation policy.
   private let quarterW: Double = 100.0 / 4.0
 
   /// Tolerance for comparing the `Double` rect components. The arithmetic is a

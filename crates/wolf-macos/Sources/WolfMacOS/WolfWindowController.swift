@@ -588,7 +588,7 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
 
   /// Toggles the active buffer's content width between the ~90-char default and
   /// full pane width (`:WolfFullWidth`). Core flips `b:wolf_full_width` on the
-  /// effective buffer (the SOURCE buffer for a preview scratch — OQ-1) and re-emits
+  /// effective buffer (the SOURCE buffer for a preview scratch) and re-emits
   /// the current-file / per-window full-width / previews notifications; a repaint is
   /// requested so the editor + preview panes resize promptly on the next wake.
   func toggleFullWidth() {
@@ -788,7 +788,7 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
 
   /// Whether this window's active buffer is in FULL-WIDTH mode. Read by the
   /// coordinator's menu validation to show the View > Use full width for content
-  /// checkmark (the item is always enabled — OQ-2).
+  /// checkmark (the item is always enabled).
   var isFullWidthActive: Bool { handle?.is_full_width_active() ?? false }
 
   /// The nvim WINDOW handle addressed by the History menu and the Back / Forward
@@ -952,7 +952,7 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
   /// This view became key: make it its project's current view so nvim renders
   /// THIS view's tabpage, and arm the pane container's one-shot refocus rebind
   /// (nvim churns grid ids across the switch; the container re-derives its
-  /// grid bindings on the next wake reflecting this tabpage — OD2). Guarded so a
+  /// grid bindings on the next wake reflecting this tabpage). Guarded so a
   /// redundant key notification for the already-current view is a no-op.
   func windowDidBecomeKey(_ notification: Notification) {
     guard project.currentView !== self else { return }

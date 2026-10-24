@@ -1,14 +1,13 @@
-//! Headless coverage for the NEW per-tab PANE-LAYOUT persistence (feature plan
-//! §4.1): `TabState.layout: Option<PaneNode>` plus the `PaneNode` / `PaneOrientation`
+//! Headless coverage for the per-tab PANE-LAYOUT persistence:
+//! `TabState.layout: Option<PaneNode>` plus the `PaneNode` / `PaneOrientation`
 //! value types (all re-exported at the crate root), round-tripped through
 //! `StateStore::set_snapshot` -> `flush` -> `load_state`, with the on-disk serde
 //! shape pinned and the v1 back-compat + unknown-field tolerance guarded.
 //!
 //! ## Why this lives in `tests/` rather than `src/state.rs`'s `#[cfg(test)]`
 //!
-//! Tests are written before the coder adds the schema. This file exercises ONLY
-//! the planned public, crate-root-re-exported API. The coder may keep it as-is or
-//! fold the cases into `src/state.rs`'s test module.
+//! This file exercises ONLY the public, crate-root-re-exported API, so the cases
+//! need no access to the module's private items.
 //!
 //! ## What is asserted
 //!
@@ -20,7 +19,7 @@
 //!   * TOLERANCE: a file carrying an unknown extra field still loads.
 //!   * ON-DISK SHAPE: orientation serializes as `"horizontal"` / `"vertical"` and
 //!     each node's tag is `"type": "leaf"` / `"type": "split"`.
-//!   * PREVIEW (ROUND 2): a leaf's `preview: bool` round-trips (`"preview": true`
+//!   * PREVIEW: a leaf's `preview: bool` round-trips (`"preview": true`
 //!     on disk for a preview leaf); a v1 leaf object with NO `preview` key loads as
 //!     `preview: false` (the field is `#[serde(default)]`; STATE_VERSION stays 1).
 //!
@@ -64,8 +63,8 @@ fn leaf(path: &str) -> PaneNode {
     }
 }
 
-/// A PREVIEW leaf pane node whose `path` is its SOURCE markdown file (ROUND 2 —
-/// preview restore). `preview: true` marks it so `wolf_rebuild_layout` recreates a
+/// A PREVIEW leaf pane node whose `path` is its SOURCE markdown file (preview
+/// restore). `preview: true` marks it so `wolf_rebuild_layout` recreates a
 /// preview of the source instead of `:edit`-ing a blank buffer.
 fn preview_leaf(path: &str) -> PaneNode {
     PaneNode::Leaf {
@@ -467,8 +466,8 @@ fn rebuild_layout_spec_matches_the_lua_contract() {
         preview_doc.get("preview"),
         Some(&Value::Bool(true)),
         "a preview leaf must render `\"preview\": true`, which routes the Lua side to \
-         `wolf_preview_file` instead of `:edit`. wolf-gnome never produces one today, but the flag \
-         is carried end to end so the preview unit adds a VALUE rather than a field."
+         `wolf_preview_file` instead of `:edit`: a pane saved while showing a preview is restored \
+         as a preview of its source file, in the same window, not as the source buffer itself."
     );
 
     // --- an empty-path leaf ------------------------------------------------

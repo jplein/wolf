@@ -1,7 +1,7 @@
-//! Integration test for the `WolfCoreHandle::set_background(dark)` bridge method
-//! (the appearance plan §3.5 / §5.3): the macOS front-end resolves a dark/light
-//! appearance and fans it out to each project's core over the FFI bridge, which
-//! must flip the captive Neovim's global `&background`.
+//! Integration test for the `WolfCoreHandle::set_background(dark)` bridge method:
+//! the macOS front-end resolves a dark/light appearance and fans it out to each
+//! project's core over the FFI bridge, which must flip the captive Neovim's global
+//! `&background`.
 //!
 //! This drives the RUST half of the swift-bridge appearance machinery against a
 //! REAL, hermetic Neovim — NO mocks, per the project testing policy. It is the
@@ -19,22 +19,17 @@
 //! `FfiFrame::cursor_fill()` (which carries the `WolfCursor guibg`). The observed
 //! marker is a direct function of `&background`, so it proves the flip.
 //!
-//! ## Dependency on coder work (plan §3.5)
-//!
-//! `set_background` does NOT exist on `WolfCoreHandle` yet: the coder adds it to
-//! the bridge (`extern "Rust"`) + `impl WolfCoreHandle` in
-//! `crates/wolf-ffi/src/lib.rs` (backed by `wolf_core::InputEvent::SetBackground`),
-//! regenerates `generated/`, AND adds the `//crates/wolf-ffi:appearance` `rust_test`
-//! target to `BUILD.bazel`. This test file does NOT touch BUILD files, and it will
-//! not compile until that method lands — that is expected.
+//! `set_background` is backed by `wolf_core::InputEvent::SetBackground`; the
+//! `//crates/wolf-ffi:appearance` `rust_test` target runs this file under Bazel.
 //!
 //! ## SKIP-when-unset policy
 //!
 //! Like its siblings, this test needs a pinned nvim located via `WOLF_NVIM_BIN`
 //! (or the Bazel-staged tree). It **loudly SKIPS** (no-op pass) when none is
 //! available, via `common::nvim_bin_or_skip`. The plain repo `init.lua` is used
-//! (no lighthouse sibling), whose line-111 fallback sets `vim.o.background = "dark"`
-//! at launch — so the initial observed state is `dark`.
+//! (no lighthouse sibling), so its lighthouse branch — the only place it sets
+//! `vim.o.background` — never runs, and the initial observed state is Neovim's own
+//! default, `dark`.
 
 mod common;
 

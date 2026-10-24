@@ -1,7 +1,6 @@
-//! Integration test for the `parsers_user/` durable `:TSInstall` target (plan
-//! §4.3 create/export + §4.5 nvim-treesitter activation): core creates
-//! `<state_dir()>/parsers_user` and exports `WOLF_PARSERS_USER_DIR`; init.lua
-//! sources the vendored nvim-treesitter's plugin file (registering
+//! Integration test for the `parsers_user/` durable `:TSInstall` target: core
+//! creates `<state_dir()>/parsers_user` and exports `WOLF_PARSERS_USER_DIR`;
+//! init.lua sources the vendored nvim-treesitter's plugin file (registering
 //! `:TSInstall`), passes the dir to `setup({ install_dir = … })`, and prepends
 //! it to `'runtimepath'` AHEAD of the bundled parsers tree, so user-installed
 //! parsers shadow bundled ones. Drives a REAL, hermetic nvim — no mocks.

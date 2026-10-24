@@ -128,7 +128,7 @@ public enum RestoreSeam {
             builders.append((launchCwd: tab.cwd, tabs: [planned]))
           }
         } else {
-          // OD5: an empty-state / deleted-dir tab is its OWN project.
+          // An empty-state / deleted-dir tab is its OWN project.
           builders.append((launchCwd: home, tabs: [planned]))
         }
       }

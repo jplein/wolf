@@ -11,10 +11,10 @@
 //! built via `key_from_char(c)`, so the keyval already carries the exact glyph
 //! regardless of layout.
 //!
-//! NOTE to coder: this test uses gdk4's associated `gdk::Key` constants (e.g.
-//! `gdk::Key::Return`) and the `ModifierType` mask constants. If the pinned
-//! gtk-rs minor names a constant differently, prefer `gdk::Key::from_name("...")`
-//! over inventing new API — do not change `gdk_key`'s contract to fit the test.
+//! This test uses gdk4's associated `gdk::Key` constants (e.g. `gdk::Key::Return`)
+//! and the `ModifierType` mask constants. If the pinned gtk-rs minor names a
+//! constant differently, prefer `gdk::Key::from_name("...")` over inventing new
+//! API — do not change `gdk_key`'s contract to fit the test.
 
 use gdk::glib::translate::from_glib;
 use gdk::ModifierType;

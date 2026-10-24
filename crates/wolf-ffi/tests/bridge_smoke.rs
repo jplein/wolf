@@ -1,40 +1,24 @@
 //! Integration smoke test for the `wolf-ffi` Rust bridge surface.
 //!
-//! This drives the RUST half of the swift-bridge surface (plan §A) against a
-//! REAL, hermetic Neovim — NO mocks, per the project testing policy. It does NOT
-//! involve Swift, AppKit, or any window: it constructs `FfiKeyEvent`s by hand and
-//! calls `wolf_ffi_start` / `read_frame` / `send_key` / `resize` / `shutdown`
-//! directly, exactly as the generated Swift glue eventually will.
+//! This drives the RUST half of the swift-bridge surface against a REAL, hermetic
+//! Neovim — NO mocks, per the project testing policy. It does NOT involve Swift,
+//! AppKit, or any window: it constructs `FfiKeyEvent`s by hand and calls
+//! `wolf_ffi_start` / `read_frame` / `send_key` / `resize` / `shutdown` directly,
+//! exactly as the generated Swift glue does.
 //!
 //! ## SKIP-when-unset policy
 //!
-//! Like the wolf-core suite, the bridge needs a pinned nvim located via
-//! `WOLF_NVIM_BIN`. UNLIKE wolf-core (which panics), this test **loudly SKIPS**
-//! when `WOLF_NVIM_BIN` is unset/empty: Bazel-on-macOS cannot provision nvim yet,
-//! so the test must be a no-op there rather than a failure, while still running
-//! for real on Linux/Cargo devShells. See `common::nvim_bin_or_skip`.
+//! Like the wolf-core suite, the bridge needs a pinned nvim, located via
+//! `WOLF_NVIM_BIN` or the Bazel-staged tree. UNLIKE wolf-core (which panics), this
+//! test **loudly SKIPS** when neither is available, so a run outside both the
+//! devShell and Bazel is a no-op rather than a failure. See
+//! `common::nvim_bin_or_skip`.
 //!
-//! ## TODO (wake symbol) — NOTE to coder
+//! ## Wake
 //!
-//! Per plan §A the production wake is `extern "Swift" { fn wolf_ffi_wake(); }`,
-//! wired as `WakeFn = Arc::new(|| wolf_ffi_wake())`. In a Rust-only integration
-//! test there is no Swift code providing that symbol, so a naive build of
-//! `wolf_ffi_start` would FAIL TO LINK on the unresolved Swift `wolf_ffi_wake`.
-//! `wolf-ffi` MUST therefore expose a wake path that links WITHOUT Swift, e.g.:
-//!   * a `#[cfg(test)]` / fallback no-op `wolf_ffi_wake` in the crate, OR
-//!   * the planned `extern "C" fn wolf_ffi_start(..., wake: extern "C" fn())`
-//!     shim, against which this test passes a no-op `extern "C"` wake.
-//!     Whichever the coder picks, `wolf_ffi_start(init_lua, cwd, cols, rows)` as
-//!     called below must link and run with no Swift runtime present. The wake is
-//!     irrelevant to what this test asserts (it polls `read_frame`, see below).
-//!
-//! ## NOTE to coder — import paths
-//!
-//! The names below (`wolf_ffi_start`, `WolfCoreHandle`, `FfiFrame`, `FfiCell`,
-//! `FfiKeyEvent`) must be reachable from the `wolf_ffi` crate root for this rlib
-//! integration test to name them. If swift-bridge keeps them inside the `ffi`
-//! bridge module, add `pub use ffi::{...};` (and a plain `pub fn wolf_ffi_start`)
-//! at the crate root, or adjust the `use` below to the real module path.
+//! The test never registers a wake (`wolf_ffi_set_wake`), so the wake is a no-op
+//! and the crate links with no Swift runtime present; the test polls `read_frame`
+//! instead.
 
 mod common;
 
@@ -45,8 +29,8 @@ use wolf_ffi::{wolf_ffi_start, FfiFrame, FfiKeyEvent};
 
 /// `FfiKeyEvent.kind` discriminant for a printable Char.
 ///
-/// NOTE to coder: must match the Rust `FfiKeyEvent` kind scheme (plan §A) and the
-/// Swift `KeyMapTests` `Kind.char` (both mirror `wolf_core::Key` variant order,
+/// Must match the Rust `FfiKeyEvent` kind scheme (`mod kind` in `src/lib.rs`) and
+/// the Swift `KeyMapTests` `Kind.char` (both mirror `wolf_core::Key` variant order,
 /// where `Char` is first). If the bridge numbers kinds differently, update this
 /// constant and the Swift `Kind` enum together.
 const KIND_CHAR: u8 = 0;
@@ -61,7 +45,7 @@ const FLUSH_TIMEOUT: Duration = Duration::from_secs(10);
 /// POLLS `read_frame()` until the observable grid changes (or a timeout), which
 /// is the same pattern the wolf-core `current_file.rs` / multigrid tests use for
 /// out-of-band, non-seq-bumping updates. This is the robust choice given the
-/// surface; if the coder later adds a frame sequence accessor, prefer that.
+/// surface.
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 /// Resize target (clearly different from the 80x24 start so the change is

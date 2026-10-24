@@ -698,47 +698,42 @@ const SMOKE_LINE_HEIGHT: &str = "118";
 ///
 /// ## The window title is page text too, and is deliberately held CONSTANT
 ///
-/// Since the state-persistence unit the `adw::HeaderBar` renders the app's WORKING
-/// DIRECTORY, so the title is part of the page `tesseract` calibrates against — a
-/// third input to this fixture's arithmetic, alongside the filler rows and the
-/// editor grid. It was measured to matter, and the measurement is recorded here
-/// rather than left to be re-derived:
+/// The `adw::HeaderBar` renders the app's WORKING DIRECTORY, so the title is part
+/// of the page `tesseract` calibrates against — a third input to this fixture's
+/// arithmetic, alongside the filler rows and the editor grid. It was measured to
+/// matter, and the measurement is recorded here rather than left to be re-derived:
 ///
 /// | arm | five consecutive capture md5s | size |
 /// | --- | --- | --- |
 /// | title rendering the run-varying temp path | all five DIFFERENT | 34.2–35.0 KB, varying |
 /// | `set_title` suppressed (the base page) | `5ea4d070…` ×5, byte-identical | 26074 ×5 |
 ///
-/// With a run-varying title — [`make_temp_cwd`] used to hand the app a directory
-/// named from `std::env::temp_dir()` + the pid + a 19-digit nanosecond timestamp, so
-/// the header bar drew a different string on every run —
-/// [`window_renders_typed_text_under_cage`]'s OCR became STOCHASTIC: the isolated
-/// leading `h` of [`OCR_WORD`] misclassified (`ello` / `ﬁello`, the documented
-/// signature above) in 2 of ~93 runs. Before that title existed the capture was
-/// bit-for-bit reproducible.
+/// With a run-varying title — a directory named from `std::env::temp_dir()` + the
+/// pid + a 19-digit nanosecond timestamp, so the header bar draws a different string
+/// on every run — [`window_renders_typed_text_under_cage`]'s OCR is STOCHASTIC: the
+/// isolated leading `h` of [`OCR_WORD`] misclassified (`ello` / `ﬁello`, the
+/// documented signature above) in 2 of ~93 runs. With the title suppressed the
+/// capture is bit-for-bit reproducible.
 ///
-/// **The fix was not to raise this number.** [`make_temp_cwd`] and [`cage_command`]
-/// now hold the rendered title at the fixed string `~/project` for every smoke (a
+/// **The fix is not to raise this number.** [`make_temp_cwd`] and [`cage_command`]
+/// hold the rendered title at the fixed string `~/project` for every smoke (a
 /// fixed-name cwd under a `HOME` that is its own parent), so the captured page is
-/// byte-identical across runs again and the five-file floor measured above still
-/// means what it meant when it was measured. Letting a run-varying path back into
-/// the title reintroduces that ~2% flake, and raising this count would NOT fix it:
-/// more filler files can only make a stochastic page misread less often, never
-/// deterministically.
+/// byte-identical across runs and the five-file floor measured above means what it
+/// meant when it was measured. Letting a run-varying path back into the title
+/// reintroduces that ~2% flake, and raising this count would NOT fix it: more filler
+/// files can only make a stochastic page misread less often, never deterministically.
 ///
 /// ## Why it belongs here at all
 ///
-/// Before the per-test temp cwd landed, this smoke ran with `crates/wolf-gnome` as
-/// the app's cwd and the sidebar happened to list ~35 repo entries, so the assertion
-/// has ALWAYS implicitly depended on that page density — accidentally. Writing these
-/// files makes the dependency explicit and deliberate, and mirrors what most other
-/// smokes get incidentally from the fixture files they drop into their own temp
-/// cwds. (Five drop no fixture files at all: the empty-state smoke hides the sidebar
-/// entirely, the `:qa` smoke asserts on an exit status rather than OCR, and the
-/// click, drag and scroll pointer smokes build their buffer with `:put` and assert
-/// on Neovim-written readback files rather than on pixels.)
+/// The assertion depends on the sidebar's page density — the five-file floor
+/// measured above. Writing these files makes that dependency explicit and deliberate,
+/// and mirrors what most other smokes get incidentally from the fixture files they
+/// drop into their own temp cwds. (Five drop no fixture files at all: the empty-state
+/// smoke hides the sidebar entirely, the `:qa` smoke asserts on an exit status rather
+/// than OCR, and the click, drag and scroll pointer smokes build their buffer with
+/// `:put` and assert on Neovim-written readback files rather than on pixels.)
 ///
-/// Several smokes now write these fillers DELIBERATELY rather than relying on their
+/// Several smokes write these fillers DELIBERATELY rather than relying on their
 /// own fixtures for density — the keyboard crash-recovery smoke and all three
 /// state-persistence smokes, the last of which
 /// ([`window_title_shows_the_working_directory_under_cage`]) asserts on a single
@@ -758,23 +753,16 @@ const SIDEBAR_FILLER_COUNT: usize = 9;
 /// `treenode`, `paneleft`/`paneright`, `htopfile`/`hbotfile`,
 /// `focusone`/`focustwo`/`zzleft`, `closekeep`/`closegone`,
 /// `triaone`/`tribtwo`/`tricthree`, `folder`, `zzfresh`/`newbufbase`,
-/// `quitkeep`/`quitgone`, `chordkeep`/`chordgone`, — added with the
-/// pointer-harness unit — `wedgestay`/`wedgeclick`, and — added with the
-/// state-persistence unit — `restorealfa`/`restorebravo`/`restorecharlie`,
-/// `solozulu`/`soloalfa` and `titlezulu`/`titlehome`, and — added with the
-/// buffer-picker unit — `bufpickalfa`/`bufpickbravo`, `responding` and
-/// `stallfixture`, and — added with the project-search unit —
-/// `projsearchalfa`/`projsearchdelta`, and — added with the Open Recent unit —
-/// `ortango`, and — added with the navigation-history unit —
-/// `navbackalfa`/`navbackbravo` and `sbtangoleaf`/`sidebarkeepalfa`, and — added
-/// with the file-tree-sidebar-parity unit —
-/// `cdtango`/`cdrootzulu`/`cdouterhome`, and — added with the Markdown-preview unit
-/// — `zzbodyoscar`/`zzothertango`/`zzlivekilo` and the one ORDINARY WORD in the whole
-/// table, `preview`, and — added with the preview-interaction unit —
-/// `zzunsavedromeo`/`zzcoversierra`, and — added with the terminal-drawer unit —
-/// `zzdrawermark`/`zzeditorfill`, and — added with the native-tabs unit —
-/// `zztabalfa`/`zztabbravo` — so a stray
-/// filler can never satisfy one of those either. [`sidebar_filler_names_cannot_satisfy_any_smoke_assertion`]
+/// `quitkeep`/`quitgone`, `chordkeep`/`chordgone`, `wedgestay`/`wedgeclick`,
+/// `restorealfa`/`restorebravo`/`restorecharlie`, `solozulu`/`soloalfa`,
+/// `titlezulu`/`titlehome`, `bufpickalfa`/`bufpickbravo`, `responding`,
+/// `stallfixture`, `projsearchalfa`/`projsearchdelta`, `ortango`,
+/// `navbackalfa`/`navbackbravo`, `sbtangoleaf`/`sidebarkeepalfa`,
+/// `cdtango`/`cdrootzulu`/`cdouterhome`, `zzbodyoscar`/`zzothertango`/`zzlivekilo`,
+/// the one ORDINARY WORD in the whole table, `preview`,
+/// `zzunsavedromeo`/`zzcoversierra`, `zzdrawermark`/`zzeditorfill`, and
+/// `zztabalfa`/`zztabbravo` — so a stray filler can never satisfy one of those
+/// either. [`sidebar_filler_names_cannot_satisfy_any_smoke_assertion`]
 /// enforces this mechanically against [`ASSERTED_OCR_TERMS`], which holds the consts
 /// themselves; this list is a reader's summary and the test is the authority.
 ///
@@ -805,13 +793,13 @@ const SIDEBAR_FILLER_BODY: &str = "# FILLER\n";
 ///
 /// ## Why the filename must NOT contain [`PICKER_OCR`]
 ///
-/// It used to. This file was named `pickertarget.md` while [`PICKER_OCR`] was
-/// `pickertarget`, so the tree sidebar's own row for the fixture satisfied the
-/// smoke's positive assertion whether or not the picker ever opened — the editor
-/// pane contributed nothing. That is not a theory: during the command-drain unit's
-/// broken-accelerator run (GTK's keymap-aware accel matching never fired under
-/// `wtype`, so Ctrl+Shift+O was forwarded to Neovim instead of opening the picker)
-/// this smoke PASSED while the picker demonstrably never opened.
+/// A fixture named `pickertarget.md` under a [`PICKER_OCR`] of `pickertarget` lets
+/// the tree sidebar's own row for the fixture satisfy the smoke's positive assertion
+/// whether or not the picker ever opens — the editor pane contributes nothing. That
+/// is not a theory: in a broken-accelerator run under that naming (GTK's keymap-aware
+/// accel matching never fired under `wtype`, so Ctrl+Shift+O was forwarded to Neovim
+/// instead of opening the picker) this smoke PASSED while the picker demonstrably
+/// never opened.
 ///
 /// It is the exact failure mode
 /// [`sidebar_filler_names_cannot_satisfy_any_smoke_assertion`] exists to prevent,
@@ -1433,7 +1421,7 @@ const RESTART_FAIL_MARKER_NAME: &str = "failmark";
 ///
 /// It is what actually measures `liveness_ui::MAX_AUTO_RESTART_ATTEMPTS`. A refused
 /// wrapper exits BEFORE its `exec`, so it is never a process named `nvim` and the
-/// `/proc` scan is structurally blind to it — MEASURED in pass 5: with the cap set
+/// `/proc` scan is structurally blind to it — MEASURED by running the revert: with the cap set
 /// to `u32::MAX` the scan-only check left smoke B fully GREEN. Same naming
 /// constraint as the wrapper: the tree sidebar lists it.
 const RESTART_ATTEMPTS_NAME: &str = "spawnlog";
@@ -1841,8 +1829,8 @@ const PROBE_Y: i32 = 360;
 /// The value carries the probe click's unknown SUB-CELL PHASE, so it OVER-estimates
 /// the true origin by up to one cell — which is exactly why the band adds `cell_w` /
 /// `cell_h` (see [`PANE_ORIGIN_TOLERANCE_PX`]). `-1.0` is the deliberate impossible
-/// placeholder the smoke is first landed with; re-deriving it is a matter of putting
-/// `-1.0` back and reading the band failure's message.
+/// placeholder; re-deriving the value is a matter of putting `-1.0` back and reading
+/// the band failure's message.
 const PANE_ORIGIN_X_EXPECTED: f64 = 280.375;
 
 /// y of the editor pane's TEXT GRID origin in output pixels, as DERIVED from the
@@ -1888,10 +1876,10 @@ const PANE_ORIGIN_TOLERANCE_PX: f64 = 12.0;
 /// GRID's corner; this one names the WIDGET's. The per-pane chrome is the difference,
 /// and the two are only ever equal in a build that has none.
 ///
-/// MEASURED by the coder, 2026-08-04, on a **1280x720** cage output, from a temporary
-/// tick callback that printed every distinct overlay allocation across the crash, the
-/// restart and the click, and reproduced on a second run: origin `(251, 47)`,
-/// allocation `1029 x 673`. The two agree by construction — `1280 - 251 = 1029` and
+/// Measured 2026-08-04 on a **1280x720** cage output, from a temporary tick callback
+/// that printed every distinct overlay allocation across the crash, the restart and
+/// the click, and reproduced on a second run: origin `(251, 47)`, allocation
+/// `1029 x 673`. The two agree by construction — `1280 - 251 = 1029` and
 /// `720 - 47 = 673` — so they are one measurement, not two.
 ///
 /// ## The cross-check, which is what makes the number trustworthy
@@ -3919,7 +3907,7 @@ assert_no_nvim_respawn() {
 # its line count is the number of automatic attempts the front-end made. Reading it
 # is the only sound way to measure the cap:
 #
-#   MEASURED 2026-08-02 (pass 5). `assert_no_nvim_respawn` alone does NOT
+#   MEASURED 2026-08-02. `assert_no_nvim_respawn` alone does NOT
 #   discriminate the cap, and this was proven by running the revert: with
 #   `MAX_AUTO_RESTART_ATTEMPTS = u32::MAX` the smoke stayed GREEN. The reason is
 #   that a refused wrapper never becomes `nvim` at all -- it is a /bin/sh script
@@ -3949,7 +3937,7 @@ assert_one_restart_attempt() {
         echo "  exactly one is the contract." >&2
         echo "  MORE than one means the cap is gone and a permanently failing respawn now" >&2
         echo "  retries forever -- the exact hazard the cap exists to prevent, and the defect" >&2
-        echo "  macos-followups.md records the Swift side still has." >&2
+        echo "  notes/macos-followups.md records the Swift side still has." >&2
         echo "  ZERO means no automatic restart was attempted at all, so the crash overlay" >&2
         echo "  below is showing CRASHED_RETRYING_MESSAGE for a restart that never ran." >&2
         exit 20
@@ -4028,7 +4016,7 @@ fn with_nvim_pid_helper(scenario: &str) -> String {
 ///
 /// Step 6 fires a burst of input and kills the Neovim child with NO settle in
 /// between. That is not carelessness and must not be "fixed" by inserting a sleep:
-/// it is the adversarial half of the plan's wake-coalescing argument. The GTK wake
+/// it is the adversarial half of the wake-coalescing argument. The GTK wake
 /// bridge is an `async_channel::bounded(1)`, so a wake fired while the channel is
 /// full is DROPPED — and `mark_dead` fires exactly once, after which a dead Neovim
 /// produces no further redraw wakes ever. Bursting first maximises the chance the
@@ -6700,9 +6688,10 @@ const TWOWIN_READBACK_B_NAME: &str = "wtwo_bcwd.txt";
 const TWOWIN_READBACK_R2_NAME: &str = "wtwo_run2.txt";
 
 /// How many lines carrying `"tabs"` the frozen `state.json` must hold — one per
-/// persisted window, because `state_seam::window_subtree` writes exactly one tab
-/// per window and `wolf_core`'s writer serializes with
-/// `serde_json::to_string_pretty`, which puts every key on its own line.
+/// persisted window, because each `WindowState` has exactly one `tabs` key however
+/// many tabs it holds, no other type has a key of that name, and `wolf_core`'s
+/// writer serializes with `serde_json::to_string_pretty`, which puts every key on
+/// its own line.
 ///
 /// **This is a guard on the WRITE side that fires BEFORE run 2 launches**, and that
 /// is its whole reason for existing: without it, a build that committed only one
@@ -6824,7 +6813,7 @@ sleep "$SETTLE"
 
 # --- Step 3: TWO windows means TWO Neovims -----------------------------------
 #
-# The load-bearing observable of the whole unit, and the one no capture can take.
+# The load-bearing observable of the whole smoke, and the one no capture can take.
 wait_nvim_count 2 21 "after the palette activated New Window"
 
 # The count is right as soon as the process exists, which is before its core has
@@ -7801,9 +7790,9 @@ const STATUS_READBACK_NAME: &str = "status_winheight.txt";
 /// strip reach a pixel.
 ///
 /// MEASURED 2026-08-04 on a **1280x720** cage output at `WOLF_FONT_PT` =
-/// [`SMOKE_FONT_PT`]: **11** rows, read off the smoke's own first failure against the
-/// `-1` placeholder it was landed with. The un-inset grid was 14 rows at the same
-/// font on the same output, so the chrome costs three whole rows.
+/// [`SMOKE_FONT_PT`]: **11** rows, read off the smoke's own failure against a `-1`
+/// placeholder. The un-inset grid was 14 rows at the same font on the same output,
+/// so the chrome costs three whole rows.
 ///
 /// It is derived from a RUN, never computed: the placeholder is the procedure, exactly
 /// as it is for [`PANE_ORIGIN_X_EXPECTED`] and [`PANE_ORIGIN_Y_EXPECTED`]. Put `-1`
@@ -8221,7 +8210,7 @@ const PREVIEW_PANE_WAKE_LABEL: &str = "pane.wake";
 /// sixty-key [`PREVIEW_CAP_FILLER`] burst. Coalesced, the whole run reads SEVEN or
 /// EIGHT — 7, 7 and 8 over three runs, broken down per leg in
 /// [`PREVIEW_CAP_RENDER_FLOOR`]. With `request_preview_render` calling the render pass
-/// unconditionally — the per-wake render this unit replaced, and the 15.6 % of wall
+/// unconditionally — the uncoalesced per-wake render, and the 15.6 % of wall
 /// clock `notes/wolf-gnome-decisions.md` records — the same scenario reads SIXTY-ONE.
 ///
 /// Twenty sits between the two and excludes each end for its own reason. It is twelve
@@ -8261,7 +8250,7 @@ const PREVIEW_RENDER_BUDGET: u64 = 20;
 /// floor beside this one — one number cannot honestly carry two derivations, and a
 /// floor of six implies every weaker one.
 ///
-/// **The margin here is one render, the thinnest in this unit: green runs read 7, 7
+/// **The margin here is one render, the thinnest in this smoke: green runs read 7, 7
 /// and 8. If it ever flakes, lengthen [`PREVIEW_CAP_FILLER`] — never lower the
 /// floor.** A longer burst buys margin honestly, at one more cap render per
 /// `preview_coalescer::PREVIEW_MAX_STALENESS` of typing, and it moves the capped
@@ -9098,9 +9087,9 @@ exit 0
 /// Not auto-deleted: keeping it around aids post-mortem inspection of a failed
 /// run, mirroring the wolf-core/common `fresh_cwd` rationale. Each run therefore
 /// also leaves one new `<state dir>/swap/<hash>/` holding at most one `.swp`;
-/// harmless, because no future run resolves to that hash — and since the
-/// `WOLF_STATE_DIR` isolation landed, that state dir is this cwd's own sibling
-/// ([`smoke_state_dir`]) rather than the developer's real `~/.local/state/wolf/`.
+/// harmless, because no future run resolves to that hash — and that state dir is
+/// this cwd's own sibling ([`smoke_state_dir`]) rather than the developer's real
+/// `~/.local/state/wolf/`.
 ///
 /// ## Why the returned directory has a FIXED name under a unique parent
 ///
@@ -9109,8 +9098,8 @@ exit 0
 /// [`TEMP_CWD_BASENAME`]. That split exists for one reason, and it is an OCR
 /// determinism reason rather than a filesystem one.
 ///
-/// Since the state-persistence unit the `adw::HeaderBar` renders the app's working
-/// directory, so the temp directory's NAME became page text in every capture. While
+/// The `adw::HeaderBar` renders the app's working directory, so the temp
+/// directory's NAME is page text in every capture. While
 /// that name was `<tmpdir>/wolf-gnome-smoke-<pid>-<19-digit nanos>` the captured page
 /// therefore differed on every run, and it was measured to differ:
 ///
@@ -9214,8 +9203,8 @@ const TEMP_CWD_BASENAME: &str = "project";
 /// `wolf_core::state::state_dir()` resolves `WOLF_STATE_DIR` first and otherwise
 /// falls back to `$XDG_STATE_HOME/wolf` — on Linux `~/.local/state/wolf`. Without
 /// this override every smoke writes into the DEVELOPER'S REAL state directory:
-/// today the durable per-project swap dir (`swap/<hash of cwd>/`) and the three MRU
-/// sqlite files, and — from the state-persistence unit onward — `state.json` itself.
+/// the durable per-project swap dir (`swap/<hash of cwd>/`), the three MRU sqlite
+/// files, and `state.json` itself.
 /// That last one is not untidiness. `state.json` holds the developer's real saved
 /// window size, working directory and pane layout, so without this helper running
 /// the test suite would read it at launch and then CLOBBER it on quit with a
@@ -9257,7 +9246,7 @@ fn smoke_state_dir(cwd: &Path) -> PathBuf {
 /// split would make THREE panes rather than two, and every derived rectangle in that
 /// smoke — all of which assume the preview is the RIGHT half of two — would be aimed
 /// at the wrong pane. Worse, it would make a colour claim depend on
-/// the restore path, which is a different unit's subject entirely.
+/// the restore path, which is the restore smokes' subject, not this one's.
 ///
 /// A suffix per launch is what keeps each launch's own persistence its own.
 fn smoke_state_dir_at(cwd: &Path, suffix: &str) -> PathBuf {
@@ -9627,14 +9616,14 @@ fn smoke_shader_cache_dir() -> PathBuf {
 /// for anyone to re-derive that.
 ///
 /// These are spelled out here rather than obtained from `dirs`, which `wolf-gnome`
-/// does not depend on (and must not gain one for a test — see the plan's D2 /
-/// amendment A4 on `Cargo.lock` and `CARGO_BAZEL_REPIN`). That makes them a MIRROR of
-/// the XDG defaults, with the honest limitation written down: they are the right
-/// paths only while `$XDG_STATE_HOME` / `$XDG_DATA_HOME` are unset in the environment
-/// cage inherits, which is the case in this repo's devShell (`flake.nix` exports
-/// `XDG_DATA_DIRS`, neither of these). On a host that DOES
-/// export one, a leak lands outside the temp tree instead — where the sibling check on
-/// the developer's real state file catches it. The two checks are complementary and
+/// does not depend on (and must not gain one for a test: a new dependency changes
+/// `Cargo.lock` and needs a `CARGO_BAZEL_REPIN`). That makes them a MIRROR of the XDG
+/// defaults, with the honest limitation written down: they are the right paths only
+/// while `$XDG_STATE_HOME` / `$XDG_DATA_HOME` are unset in the environment cage
+/// inherits, which is the case in this repo's devShell (`flake.nix` exports
+/// `XDG_DATA_DIRS`, neither of these). On a host that DOES export one, a leak lands
+/// outside the temp tree instead — where the sibling check on the developer's real
+/// state file catches it. The two checks are complementary and
 /// between them cover both cases.
 const HOME_STATE_DIR_FALLBACKS: [&str; 2] = [".local/state/wolf", ".local/share/wolf"];
 
@@ -9669,13 +9658,12 @@ const HOME_CONFIG_DIR_FALLBACK: &str = ".config/wolf";
 /// [`cage_command`] inherits the developer's environment wholesale. On the
 /// development host that variable reads `ibus`, the GTK 4 ibus module is not
 /// installed, and GTK falls back to its built-in simple context — which is exactly
-/// the context every measurement behind the input-method unit was taken against.
+/// the context every input-method measurement was taken against.
 /// That fallback is a property of THAT HOST, not of this harness.
 ///
-/// Before the front-end attached a context the variable did nothing, because there
-/// was no context to select. It decides which context every smoke's typing goes
-/// through — and after the input-method unit that is ALL typing, not only accents,
-/// since the context filters plain printables with no sequence pending. On a host
+/// The variable decides which context every smoke's typing goes through — and that
+/// is ALL typing, not only accents, since the context filters plain printables with
+/// no sequence pending. On a host
 /// that does have the GTK 4 ibus module — a different NixOS configuration, or a
 /// future flake that pulls ibus in for some other reason — the entire suite's typing
 /// would silently reroute through an engine that cannot reach its daemon, because
@@ -10002,8 +9990,8 @@ impl Drop for CageRuntime<'_> {
 ///
 /// ## Why `HOME` is set, and why it is the cwd's parent
 ///
-/// Since the state-persistence unit the `adw::HeaderBar` renders the app's working
-/// directory, so the temp directory's name is page text in every capture — and
+/// The `adw::HeaderBar` renders the app's working directory, so the temp
+/// directory's name is page text in every capture — and
 /// `tesseract` classifies a word by the WHOLE page (see [`SIDEBAR_FILLER_COUNT`]).
 /// While the title drew the run-varying `<tmpdir>/wolf-gnome-smoke-<pid>-<nanos>`,
 /// the captured page differed on every run, measured:
@@ -10155,12 +10143,11 @@ const CAGE_SPAWN_NEEDLE: &str = concat!("Command::new(\"", "cage", "\")");
 ///
 /// A fifth, and it is the one that would be least obvious in a red run because it
 /// depends on the MACHINE. Without [`cage_command`]'s `GTK_IM_MODULE` the app takes
-/// whichever input method the developer's environment names, and after the
-/// input-method unit that context is what every printable keystroke travels
-/// through — the window offers each press to it before translating. On a host
-/// carrying the GTK 4 ibus module the typing in that smoke reroutes through an
-/// engine whose daemon is not on the cage's private bus, so keys are swallowed on
-/// that machine and nowhere else. See [`SMOKE_GTK_IM_MODULE`] for the
+/// whichever input method the developer's environment names, and that context is
+/// what every printable keystroke travels through — the window offers each press to
+/// it before translating. On a host carrying the GTK 4 ibus module the typing in
+/// that smoke reroutes through an engine whose daemon is not on the cage's private
+/// bus, so keys are swallowed on that machine and nowhere else. See [`SMOKE_GTK_IM_MODULE`] for the
 /// measurement and for why the value is named rather than the variable cleared.
 ///
 /// A sixth, which is a REMOVAL rather than a setting and is the only one of the
@@ -13191,49 +13178,38 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
 /// [`ASSERTED_OCR_TERMS`] is the authority; as a reader's summary the terms are
 /// `hello`, `pickertarget`, `picktwo`/`pickone`, `treenode`,
 /// `paneleft`/`paneright`, `htopfile`/`hbotfile`, `focusone`/`focustwo`/`zzleft`,
-/// `closekeep`/`closegone`, `triaone`/`tribtwo`/`tricthree`, and — added with the
-/// command-drain unit — `folder` ([`EMPTY_STATE_OCR`]), `zzfresh`
-/// ([`NEWBUF_OCR_PRESENT`]), `newbufbase` ([`NEWBUF_OCR_ABSENT`]), `quitkeep`
-/// ([`QUIT_OCR_KEEP`]), `quitgone` ([`QUIT_OCR_GONE`]), `chordkeep`
-/// ([`CHORD_CLOSE_OCR_KEEP`]) and `chordgone` ([`CHORD_CLOSE_OCR_GONE`]); — added
-/// with the pointer-harness unit — `wedgestay` ([`WEDGE_OCR_STAY`]) and `wedgeclick`
-/// ([`WEDGE_OCR_CLICK`]); and — added with the crash-recovery unit — `bounceback`
-/// ([`RESTART_OCR_HEADING`]), `unsavedburst` ([`RESTART_OCR_UNSAVED`]), `restarted`
-/// ([`RESTART_OCR_BANNER`]) and `crashed` ([`RESTART_OCR_OVERLAY`]); and — added
-/// with the state-persistence unit — `restorealfa` / `restorebravo` /
-/// `restorecharlie` ([`RESTORE_OCR_ALFA`] / [`RESTORE_OCR_BRAVO`] /
-/// [`RESTORE_OCR_CHARLIE`]), `solozulu` ([`SOLO_OCR_PRESENT`]), `soloalfa`
-/// ([`SOLO_OCR_ABSENT`]), `titlezulu` ([`TITLE_OCR_PRESENT`]) and `titlehome`
-/// ([`TITLE_OCR_ABSENT`]); and — added with the divider-drag unit — `divideralfa`
-/// and `dividerbravo` ([`DIVIDER_OCR_LEFT`] / [`DIVIDER_OCR_RIGHT`]); and — added
-/// with the command-palette unit — `zzpalrun` ([`PALETTE_OCR_PRESENT`]) and
-/// `palcmdbase` ([`PALETTE_OCR_ABSENT`]); and — added with the buffer-picker unit —
-/// `bufpickalfa` ([`BUFPICK_OCR_PRESENT`]), `bufpickbravo`
-/// ([`BUFPICK_OCR_ABSENT`]), `bufpickcharlie` ([`BUFPICK_OCR_CURRENT`]),
-/// `responding` ([`STALL_OCR_PRESENT`]) and
-/// `stallfixture` ([`STALL_OCR_ABSENT`]); and — added with the project-search unit
-/// — `projsearchalfa` ([`PROJSEARCH_OCR_PRESENT`]) and `projsearchdelta`
-/// ([`PROJSEARCH_OCR_ABSENT`]); and — added with the Open Recent unit — `ortango`
-/// ([`OPENRECENT_OCR_PRESENT`]); and — added with the navigation-history unit —
-/// `navbackalfa` ([`NAVBACK_OCR_PRESENT`]), `navbackbravo`
-/// ([`NAVBACK_OCR_ABSENT`]), `sbtangoleaf` ([`SIDEBARTOGGLE_OCR_ABSENT`]) and
-/// `sidebarkeepalfa` ([`SIDEBARTOGGLE_OCR_KEEP`]); and — added with the
-/// file-tree-sidebar-parity unit — `cdtango` ([`CD_OCR_ROOTED`]), `cdrootzulu`
-/// ([`CD_OCR_ROOT_NODE`]) and `cdouterhome` ([`CD_OCR_UNABBREVIATED`]); and — added
-/// with the pane-chrome unit — `statusalfa` ([`STATUS_OCR_A`]), `statusbravo`
-/// ([`STATUS_OCR_B`]) and `statusready` ([`STATUS_OCR_MARKER`]); and — added with
-/// the Markdown-preview unit — `zzbodyoscar` ([`PREVIEW_OCR_BODY`]), `zzothertango`
-/// ([`PREVIEW_OCR_OTHER`]), `zzlivekilo` ([`PREVIEW_OCR_LIVE`]) and `preview`
-/// ([`PREVIEW_OCR_STATUS`]), the only ordinary English word in the table and
-/// therefore the only one a filler could plausibly acquire by accident; and — added
-/// with the preview-interaction unit — `zzunsavedromeo` ([`UNSAVED_OCR_MARKER`]) and
-/// `zzcoversierra` ([`UNSAVED_OCR_COVER`]); and — added with the terminal-drawer unit
-/// — `zzdrawermark` ([`DRAWER_OCR_MARKER`]) and `zzeditorfill`
-/// ([`DRAWER_OCR_EDITOR_ABSENT`]); and — added with the native-tabs unit —
-/// `zztabalfa` ([`TABS_OCR_FIRST`]) and `zztabbravo` ([`TABS_OCR_SECOND`]), which
-/// are asserted in BOTH directions across three captures of one smoke. None is a
-/// substring of any [`SIDEBAR_FILLER_FILES`] entry, and no filler may be renamed to
-/// make one so.
+/// `closekeep`/`closegone`, `triaone`/`tribtwo`/`tricthree`, `folder`
+/// ([`EMPTY_STATE_OCR`]), `zzfresh` ([`NEWBUF_OCR_PRESENT`]), `newbufbase`
+/// ([`NEWBUF_OCR_ABSENT`]), `quitkeep` ([`QUIT_OCR_KEEP`]), `quitgone`
+/// ([`QUIT_OCR_GONE`]), `chordkeep` ([`CHORD_CLOSE_OCR_KEEP`]) and `chordgone`
+/// ([`CHORD_CLOSE_OCR_GONE`]); `wedgestay` ([`WEDGE_OCR_STAY`]) and `wedgeclick`
+/// ([`WEDGE_OCR_CLICK`]); `bounceback` ([`RESTART_OCR_HEADING`]), `unsavedburst`
+/// ([`RESTART_OCR_UNSAVED`]), `restarted` ([`RESTART_OCR_BANNER`]) and `crashed`
+/// ([`RESTART_OCR_OVERLAY`]); `restorealfa` / `restorebravo` / `restorecharlie`
+/// ([`RESTORE_OCR_ALFA`] / [`RESTORE_OCR_BRAVO`] / [`RESTORE_OCR_CHARLIE`]),
+/// `solozulu` ([`SOLO_OCR_PRESENT`]), `soloalfa` ([`SOLO_OCR_ABSENT`]), `titlezulu`
+/// ([`TITLE_OCR_PRESENT`]) and `titlehome` ([`TITLE_OCR_ABSENT`]); `divideralfa`
+/// and `dividerbravo` ([`DIVIDER_OCR_LEFT`] / [`DIVIDER_OCR_RIGHT`]); `zzpalrun`
+/// ([`PALETTE_OCR_PRESENT`]) and `palcmdbase` ([`PALETTE_OCR_ABSENT`]);
+/// `bufpickalfa` ([`BUFPICK_OCR_PRESENT`]), `bufpickbravo` ([`BUFPICK_OCR_ABSENT`]),
+/// `bufpickcharlie` ([`BUFPICK_OCR_CURRENT`]), `responding` ([`STALL_OCR_PRESENT`])
+/// and `stallfixture` ([`STALL_OCR_ABSENT`]); `projsearchalfa`
+/// ([`PROJSEARCH_OCR_PRESENT`]) and `projsearchdelta` ([`PROJSEARCH_OCR_ABSENT`]);
+/// `ortango` ([`OPENRECENT_OCR_PRESENT`]); `navbackalfa` ([`NAVBACK_OCR_PRESENT`]),
+/// `navbackbravo` ([`NAVBACK_OCR_ABSENT`]), `sbtangoleaf`
+/// ([`SIDEBARTOGGLE_OCR_ABSENT`]) and `sidebarkeepalfa` ([`SIDEBARTOGGLE_OCR_KEEP`]);
+/// `cdtango` ([`CD_OCR_ROOTED`]), `cdrootzulu` ([`CD_OCR_ROOT_NODE`]) and
+/// `cdouterhome` ([`CD_OCR_UNABBREVIATED`]); `statusalfa` ([`STATUS_OCR_A`]),
+/// `statusbravo` ([`STATUS_OCR_B`]) and `statusready` ([`STATUS_OCR_MARKER`]);
+/// `zzbodyoscar` ([`PREVIEW_OCR_BODY`]), `zzothertango` ([`PREVIEW_OCR_OTHER`]),
+/// `zzlivekilo` ([`PREVIEW_OCR_LIVE`]) and `preview` ([`PREVIEW_OCR_STATUS`]), the
+/// only ordinary English word in the table and therefore the only one a filler could
+/// plausibly acquire by accident; `zzunsavedromeo` ([`UNSAVED_OCR_MARKER`]) and
+/// `zzcoversierra` ([`UNSAVED_OCR_COVER`]); `zzdrawermark` ([`DRAWER_OCR_MARKER`])
+/// and `zzeditorfill` ([`DRAWER_OCR_EDITOR_ABSENT`]); and `zztabalfa`
+/// ([`TABS_OCR_FIRST`]) and `zztabbravo` ([`TABS_OCR_SECOND`]), which are asserted
+/// in BOTH directions across three captures of one smoke. None is a substring of any
+/// [`SIDEBAR_FILLER_FILES`] entry, and no filler may be renamed to make one so.
 ///
 /// The smokes that contribute no term at all are enumerated in
 /// [`ASSERTED_OCR_TERMS`]'s own doc comment, which is the one place that list lives:
@@ -13247,8 +13223,8 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
 /// word that smoke asserts. (The state-persistence smokes' own fixtures ARE covered,
 /// but by a separate guard:
 /// [`restore_fixture_names_cannot_satisfy_their_own_assertions`], so the two
-/// failures stay separately diagnosable.) That gap was live, and an audit with the
-/// command-drain unit found exactly two instances:
+/// failures stay separately diagnosable.) That gap was live, and an audit found
+/// exactly two instances:
 ///
 /// * [`picker_opens_and_loads_selected_file_under_cage`] shipped a
 ///   `pickertarget.md` fixture against a `pickertarget` assertion, and PASSED green
@@ -14808,7 +14784,7 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
 ///
 /// It is zero today by arithmetic and not by design: one pane at the pinned output
 /// size leaves 989 px of grid, while 90 columns of the measured 28 pt cell need
-/// 2022.89 px. The margin is a factor of two, so nothing in this unit could move it —
+/// 2022.89 px. The margin is a factor of two, so this suite's own settings cannot reach it —
 /// but the font size, the output size and the header bar's width are all things a
 /// later change touches routinely, and the first symptom of the cap binding would be
 /// every OCR assertion failing at once for no visible reason.
@@ -14981,14 +14957,14 @@ fn window_renders_typed_text_under_cage() {
          second is the swap modal: `nvim_buf_set_name` creates the startup buffer's swap file inside the rename, and \
          a pre-existing swap for `<cwd>/Untitled.md` raises a blocking `do_dialog` ATTENTION/E325 \
          prompt (`mode() == \"r?\"`) that answers itself with your first key. Check \
-         `state_dir()/swap/<hash-of-cwd>/` for a `%…%Untitled.md.swp` — since the \
-         `WOLF_STATE_DIR` isolation landed that is this run's `-state` sibling of the temp cwd \
+         `state_dir()/swap/<hash-of-cwd>/` for a `%…%Untitled.md.swp` — that is this run's \
+         `-state` sibling of the temp cwd \
          (see `smoke_state_dir`), NOT `~/.local/state/wolf/swap/` — and see \
          `crates/wolf-core/tests/swap_recovery.rs`'s \
          `stale_untitled_swap_does_not_block_a_fresh_start`, which pins this headlessly \
          (and deterministically). Only if neither applies should you consider focus / \
-         input routing (a Phase 2 pass chased that hypothesis and DISPROVED it — deferring \
-         `grab_focus()` into `window.connect_map()` changes nothing). For (c) specifically it is \
+         input routing (that hypothesis is DISPROVED: deferring `grab_focus()` into \
+         `window.connect_map()` changes nothing). For (c) specifically it is \
          NOT a rendering failure: all but the first key reached Neovim, which is exactly what \
          separates it from (a).\n\
          \n\
@@ -15298,8 +15274,9 @@ fn vertical_split_shows_two_panes_under_cage() {
         "OCR did not contain {VSPLIT_OCR_LEFT:?} — the HEADING of {VSPLIT_FILE_LEFT}, which only \
          renders once that file is loaded into a PANE. A miss usually means the first pane stopped \
          rendering after the split; if NEITHER heading appears, suspect instead that the `:e` \
-         commands never reached the cmdline (see the cmdline-visibility note above the VSPLIT_* \
-         consts). PNG kept at {} for inspection. OCR output was:\n{ocr_text}",
+         commands never reached the cmdline (see the \"Cmdline visibility\" paragraph of \
+         `notes/crates/wolf-gnome/tests/smoke_headless.rs.md#split-pane-smokes`). PNG kept at {} \
+         for inspection. OCR output was:\n{ocr_text}",
         out_png.display()
     );
     assert!(
@@ -15881,7 +15858,7 @@ fn new_untitled_buffer_replaces_open_file_under_cage() {
         "OCR did not contain the marker {NEWBUF_OCR_PRESENT:?} typed into the new untitled \
          buffer. The likely causes: the Ctrl+Shift+N accelerator never fired (GTK's application \
          accels are matched in the CAPTURE phase — if this fails together with both picker \
-         smokes, suspect accel matching for a shifted letter and see the plan's contingency), or \
+         smokes, suspect accel matching for a shifted letter), or \
          `win.new-buffer` fired but never reached `InputEvent::NewBuffer`. PNG kept at {} for \
          inspection. OCR output was:\n{ocr_text}",
         out_png.display()
@@ -15932,10 +15909,9 @@ fn new_untitled_buffer_replaces_open_file_under_cage() {
 ///
 /// ## Assertions, classified
 ///
-/// A precondition gets NO revert: inventing one would manufacture a discriminator
-/// this smoke does not have. The `measured` column is the coder's to fill from an
-/// actual red run, per `tests/README.md`'s "A red-run demonstration is a deliverable,
-/// not a formality".
+/// A precondition gets NO revert: inventing one would manufacture a discriminator this
+/// smoke does not have. The `measured` column is from an actual red run, per
+/// `tests/README.md`'s "A red-run demonstration is a deliverable, not a formality".
 ///
 /// | # | assertion | kind | revert | measured |
 /// | --- | --- | --- | --- | --- |
@@ -16066,8 +16042,8 @@ fn command_palette_chord_runs_the_selected_command_under_cage() {
 ///
 /// ## What it covers that no other smoke does
 ///
-/// Everything work unit 17 added, and nothing else in this repository touches any of
-/// it: `shell::perform`'s `OpenPreview` / `EditSource` arms and the two blocking RPCs
+/// The whole preview path, and nothing else in this repository touches any of it:
+/// `shell::perform`'s `OpenPreview` / `EditSource` arms and the two blocking RPCs
 /// beneath them, `preview_ui`'s two placement seams carried out by a real Neovim,
 /// `pane_view`'s lazily-created `webkit6::WebView` inside the per-pane overlay host,
 /// the `previews` × `markdown_ticks` join that decides a reload, the JSON body swap
@@ -16102,10 +16078,10 @@ fn command_palette_chord_runs_the_selected_command_under_cage() {
 ///
 /// ## Assertions, classified
 ///
-/// A precondition gets NO revert: inventing one would manufacture a discriminator
-/// this smoke does not have. The `measured` column is the coder's to fill from an
-/// actual red run, per `tests/README.md`'s "A red-run demonstration is a deliverable,
-/// not a formality".
+/// A precondition gets NO revert: inventing one would manufacture a discriminator this
+/// smoke does not have. The `measured` column is from an actual red run, per
+/// `tests/README.md`'s "A red-run demonstration is a deliverable, not a formality".
+/// Rows marked unmeasured have not been run against a captured red.
 ///
 /// | # | assertion | kind | revert | measured |
 /// | --- | --- | --- | --- | --- |
@@ -16116,11 +16092,11 @@ fn command_palette_chord_runs_the_selected_command_under_cage() {
 /// | 5 | readback A is `{Preview: <source>, <other>}` | **discriminator** — Neovim really bound a preview scratch, of the right source, in one of two windows | restore the stub `perform` arm that classified `UiAction::OpenPreview` as unhandled. NOT isolated: assertion 7 fails under it as well, and goes unevaluated only because this one aborts first. Assertion 6 does NOT fail under it — measured twice, independently: a preview that never opens leaves the source's raw Markdown on screen, so [`PREVIEW_OCR_BODY`] is satisfied by the editor grid rather than by WebKit. That is why this assertion is ordered ahead of the two OCR ones: it states the same fact WITHOUT pixels. | RED, and it aborted FIRST, which is what the reordering exists for: `after the Preview leg the captive Neovim's windows hold ["pvoth.md", "pvsrc.md"], not ["Preview: pvsrc.md", "pvoth.md"]`, with `left: ["pvoth.md", "pvsrc.md"]` against `right: ["Preview: pvsrc.md", "pvoth.md"]`. Assertions 3 and 4 stayed green and 6 onward went unevaluated; the app printed `wolf-gnome: ui action not performed: markdown preview is not wired` once per leg. Assertion 6 was then checked directly, by OCRing the retained capture A: it CONTAINS `zzbodyoscar` and lacks `preview`, so 6 would have passed under this revert and 7 is the one that would have reported next. |
 /// | 6 | capture A carries [`PREVIEW_OCR_BODY`] | **discriminator** — the web view rendered the document | delete the `self.load_preview_document(id, &html);` call in `PaneInner::refresh_previews`, leaving the `loaded.set(..)` beneath it so nothing re-arms. The pane still becomes a preview and still gets a view; the view is simply never given a document. | RED, isolated: `capture A did not contain "zzbodyoscar" — the rendered heading of pvsrc.md`. Assertions 3, 4 and 5 stayed green, so the preview really was bound and only the DOCUMENT was missing; the OCR dump beside the failure still carries the `preview:` statusbar line, which is assertion 7 passing over an empty view. |
 /// | 7 | capture A carries [`PREVIEW_OCR_STATUS`] | **discriminator** — a preview pane's statusbar comes from `preview_ui::preview_status` | in `PaneInner::refresh_pane_state`'s `Some(info)` arm, use `core.pane_status(j.grid)` for a preview pane. Preview windows are omitted from `win_buffers`, so it answers `[No Name]`. NOT isolated: it empties `abs_path` too, so assertion 8 would also fail — but 7 is evaluated first. | RED: `capture A did not contain "preview", so no pane's statusbar named itself a preview`. Assertions 3 through 6 stayed green — the web view still rendered its document — so this reddened the statusbar alone, and assertion 8 went unevaluated exactly as the revert column predicts. |
-/// | 8 | the frozen `state.json`'s two leaves | **discriminator** — `layout_snapshot` persists the per-pane preview flag, against the SOURCE path | set `preview: false` unconditionally in `pane_view::layout_snapshot`'s `LeafContent`, which is the stub this unit replaced. Reddens this alone. | RED, and isolated as claimed: `the frozen state persisted leaves [(Some("pvoth.md"), Some(false)), (Some("pvsrc.md"), Some(false))], not [(Some("pvoth.md"), Some(false)), (Some("pvsrc.md"), Some(true))]`. Assertions 3 through 7 stayed green, so both panes were right on screen and only the PERSISTED flag was wrong — which is the whole reason this one is read from a frozen file rather than from pixels. |
-/// | 9 | readback B is `{Preview: <source>, <source>, <other>}` | **discriminator** — Edit-in-another-pane split and bound the source WITHOUT replacing the preview | point `shell::perform`'s `EditInOtherPane` arm at `AppShell::edit_source`, the in-place command. The source then replaces the preview it was fired from, and the readback loses the preview scratch. | not yet measured on this branch: the arm is new here, and the revert is stated for the next red run. |
+/// | 8 | the frozen `state.json`'s two leaves | **discriminator** — `layout_snapshot` persists the per-pane preview flag, against the SOURCE path | set `preview: false` unconditionally in `pane_view::layout_snapshot`'s `LeafContent`. Reddens this alone. | RED, and isolated as claimed: `the frozen state persisted leaves [(Some("pvoth.md"), Some(false)), (Some("pvsrc.md"), Some(false))], not [(Some("pvoth.md"), Some(false)), (Some("pvsrc.md"), Some(true))]`. Assertions 3 through 7 stayed green, so both panes were right on screen and only the PERSISTED flag was wrong — which is the whole reason this one is read from a frozen file rather than from pixels. |
+/// | 9 | readback B is `{Preview: <source>, <source>, <other>}` | **discriminator** — Edit-in-another-pane split and bound the source WITHOUT replacing the preview | point `shell::perform`'s `EditInOtherPane` arm at `AppShell::edit_source`, the in-place command. The source then replaces the preview it was fired from, and the readback loses the preview scratch. | unmeasured: no red run of this revert is recorded. |
 /// | 10 | capture B carries [`PREVIEW_OCR_BODY`] | precondition — the preview pane is still showing a document at all | none; it is what separates "the swap failed and froze the stale document" from "the pane went blank" for assertion 11 | n/a |
 /// | 11 | capture B carries [`PREVIEW_OCR_LIVE`] | **discriminator** — the LIVE EDIT reached the DOM through the JSON body swap | in `pane_view::preview_swap_payload`, encode ONCE (`Ok(serde_json::to_string(body)?)` plus the two replacements). `JSON.parse` is then handed HTML, throws `Unrecognized token '<'` on every keystroke, and the preview keeps showing the document assertion 10 just found. **A SECOND revert reaches this assertion, and the paced burst is what admits it:** neuter the `RenderDecision::Arm` arm of `PaneInner::request_preview_render` so it arms nothing. The marker's characters then coalesce into a fire nobody ever runs, and the page carries at most the leading edge's `o`. The two reverts are distinguishable from the app's stderr — the single-encoding one prints `preview body swap failed` once per keystroke, the trailing-edge one prints nothing at all — and from assertion 12, which stays inside its budget under the first and reads a count with no trailing fire in it under the second. | RED, isolated, and with the predicted stderr: `capture B did not contain "zzlivekilo" — the marker typed into the SOURCE buffer while the preview pane was live`, beside five copies of `wolf-gnome: preview body swap failed: about:blank:1:68: SyntaxError: JSON Parse error: Unrecognized token '<'`. Assertion 10 stayed green, which is the frozen-stale-document half of the signature this row names. The trailing-edge revert: RED, isolated, and with the OTHER half of the signature — the same `capture B did not contain "zzlivekilo"` failure, and `preview body swap failed` printed NOT ONCE anywhere in the run, which is what tells the two reverts apart from stderr alone. Assertion 10 stayed green and the OCR dump beside the failure still carries the rendered heading and the `preview:` statusbar, so the pane was live and only the trailing edge was missing. Measured against the scenario INCLUDING step 9, whose burst lands after both captures and disturbs this leg not at all; the run's summed `prev.render` was 2, the cold open and the marker burst's leading edge with no trailing fire in it. |
-/// | 12 | the summed `prev.render` count in this run's own frame-stats report is at most [`PREVIEW_RENDER_BUDGET`] | **discriminator** — the bursts were COALESCED: the whole scenario paid a handful of blocking `render_preview` calls rather than one per keystroke | make `PaneInner::request_preview_render` call `run_preview_render_pass()` unconditionally, which is the per-wake render this unit replaced. Assertion 11 stays GREEN under it — every keystroke renders, so the marker certainly reaches the DOM — and that is exactly the point: only this row and row 13 can see the coalescing at all. | RED, isolated: `counts 61 blocking "prev.render" calls over all 14 report block(s), above the budget of 20`. Assertions 1 through 11 stayed green under it — assertion 11 included, which is this row's own claim, and the reason the row exists. Green runs of the same scenario read 7, 7 and 8, so the budget sits at least 12 above the coalesced reading and 41 below the uncoalesced one and needed no moving. |
+/// | 12 | the summed `prev.render` count in this run's own frame-stats report is at most [`PREVIEW_RENDER_BUDGET`] | **discriminator** — the bursts were COALESCED: the whole scenario paid a handful of blocking `render_preview` calls rather than one per keystroke | make `PaneInner::request_preview_render` call `run_preview_render_pass()` unconditionally, which is the uncoalesced per-wake render. Assertion 11 stays GREEN under it — every keystroke renders, so the marker certainly reaches the DOM — and that is exactly the point: only this row and row 13 can see the coalescing at all. | RED, isolated: `counts 61 blocking "prev.render" calls over all 14 report block(s), above the budget of 20`. Assertions 1 through 11 stayed green under it — assertion 11 included, which is this row's own claim, and the reason the row exists. Green runs of the same scenario read 7, 7 and 8, so the budget sits at least 12 above the coalesced reading and 41 below the uncoalesced one and needed no moving. |
 /// | 13 | the same sum is at least [`PREVIEW_CAP_RENDER_FLOOR`] | **discriminator** — the STALENESS CAP fired: step 9's ~2.4-second burst rendered several times DURING the typing, not only at its ends. Also row 12's non-vacuity half, since a build that renders nothing reads zero and no ceiling refuses that | drop the `min` against the cap's remainder in `PreviewCoalescer::request`, so the delay is always `PREVIEW_TRAILING_DELAY`. The sustained burst then renders at most twice — its leading edge and the trailing fire after its last key, since every arm inside it is superseded before it elapses — and measured, once. Rows 1 through 12 all stay green under it: the marker leg is shorter than the cap, so nothing else in this scenario can tell the difference. | RED, isolated: the run `counts 4 "prev.render" sample(s) over all 14 report block(s)`, under the floor. Rows 1 through 12 stayed green under it, the budget included, exactly as the revert column claims. Both ends measured: capped reads 7, 7 and 8 across three runs, cap-removed reads 4, and per block step 9's burst pays 4 renders capped against 1 with the cap gone. The floor was moved 7 to 6 on that evidence — two capped runs sat exactly ON seven, with no margin, and the third read 8 — and the derivation in [`PREVIEW_CAP_RENDER_FLOOR`] rewritten to the measured figures. |
 /// | 14 | the summed `pane.prev` count EXCEEDS the summed `pane.wake` count | **discriminator** — the coalescer's FIRE opens a preview-pass region of its own, so every `prev.render` sample has a parent and `frame_stats.rs`'s nesting table stays true | delete the `frame_metrics::scope(Bucket::PanePrev)` guard from the fire closure in `PaneInner::request_preview_render` (or bind it with `let _ =`, which drops it instantly). Rows 1 through 13 ALL stay green under it — the RPC is still timed, so every count they read is unchanged — which is why this row exists at all. Deliberately NOT `pane.prev` against `prev.render`: the pass runs on nearly every wake, so that comparison holds with the scope deleted and with the coalescer removed entirely. | RED, isolated: `counts 291 "pane.prev" region(s) against 291 "pane.wake", so no preview pass ran outside a pane wake`. Rows 1 through 13 stayed green under it, exactly as the revert column claims. Green reads +4 on three consecutive runs (298/294, 303/299, 309/305), which is the performing fires. **The comparison was written `>=` and the revert PASSED under it** — measured 299 against 299 — because the wakes-that-skip-the-pass term this scenario was assumed to have is zero: every pane wake reaches the pass. It was made STRICT on that evidence, and the 188-against-187 reading the row first carried predates step 9. |
 ///
@@ -16376,8 +16352,8 @@ fn preview_pane_renders_and_edit_source_returns_under_cage() {
                 got,
                 want,
                 "{SMOKE}: the frozen state persisted leaves {got:?}, not {want:?} (each entry is \
-                 `(file name, preview flag)`, sorted). `Some(false)` on BOTH is the stub this unit \
-                 replaced — `layout_snapshot` writing `preview: false` unconditionally, so a \
+                 `(file name, preview flag)`, sorted). `Some(false)` on BOTH is a stubbed flag \
+                 — `layout_snapshot` writing `preview: false` unconditionally, so a \
                  preview pane is restored with `:edit` and the next launch reopens the SOURCE \
                  where the preview was. A `None` NAME on the preview leaf means \
                  `preview_status`'s `abs_path` came back empty or relativized, which is \
@@ -16391,7 +16367,7 @@ fn preview_pane_renders_and_edit_source_returns_under_cage() {
         other => panic!(
             "{SMOKE}: the frozen state persisted `layout: {other:?}` for two side-by-side panes, \
              not a two-child Vertical split. A `None` means the snapshot gate refused every wake — \
-             which after this unit specifically implicates `snapshot_readiness`, whose reported \
+             which implicates `snapshot_readiness`, whose reported \
              count must be `win_buffers.len() + previews.len()`, since a preview window appears in \
              neither map otherwise. A `Leaf` means the split never reached the pane tree at all. \
              File: {}",
@@ -16493,8 +16469,8 @@ fn preview_pane_renders_and_edit_source_returns_under_cage() {
          all {} report block(s), above the budget of {PREVIEW_RENDER_BUDGET}. Three things move \
          the source's `changedtick` in this scenario: the cold open, step 6's paced burst of \
          {PREVIEW_LIVE_MARKER:?}, and step 9's sixty-key sustained burst. Coalesced, this scenario \
-         reads 7 or 8; a count around sixty is one render PER KEYSTROKE, which is the per-wake \
-         render this unit replaced and the 15.6 % of wall clock \
+         reads 7 or 8; a count around sixty is one render PER KEYSTROKE, which is the uncoalesced \
+         per-wake render and the 15.6 % of wall clock \
          `notes/wolf-gnome-decisions.md` records — measured at 61 under exactly that revert. \
          Every assertion above stays green under it, so this and assertion 13 are the only things \
          in either suite that can see it. \
@@ -16713,9 +16689,8 @@ fn preview_burst_delay_stays_below_the_coalescer_trailing_delay() {
 /// ## Assertions, classified
 ///
 /// A precondition gets NO revert: inventing one would manufacture a discriminator this
-/// smoke does not have. The `measured` column is the coder's to fill from an actual red
-/// run, per `tests/README.md`'s "A red-run demonstration is a deliverable, not a
-/// formality".
+/// smoke does not have. The `measured` column is from an actual red run, per
+/// `tests/README.md`'s "A red-run demonstration is a deliverable, not a formality".
 ///
 /// | # | assertion | kind | revert | measured |
 /// | --- | --- | --- | --- | --- |
@@ -17019,8 +16994,7 @@ fn preview_link_click_repoints_the_pane_under_cage() {
 ///
 /// ## Assertions, classified
 ///
-/// A precondition gets NO revert. The `measured` column is the coder's to fill from an
-/// actual red run.
+/// A precondition gets NO revert. The `measured` column is from an actual red run.
 ///
 /// | # | assertion | kind | revert | measured |
 /// | --- | --- | --- | --- | --- |
@@ -17172,10 +17146,9 @@ fn preview_of_an_unsaved_buffer_renders_under_cage() {
 ///
 /// ## Assertions, classified
 ///
-/// A precondition gets NO revert: inventing one would manufacture a discriminator
-/// this smoke does not have. The `measured` column is the coder's to fill from an
-/// actual red run, per `tests/README.md`'s "A red-run demonstration is a
-/// deliverable, not a formality".
+/// A precondition gets NO revert: inventing one would manufacture a discriminator this
+/// smoke does not have. The `measured` column is from an actual red run, per
+/// `tests/README.md`'s "A red-run demonstration is a deliverable, not a formality".
 ///
 /// | # | assertion | kind | revert | measured |
 /// | --- | --- | --- | --- | --- |
@@ -17434,10 +17407,9 @@ fn buffer_picker_chord_switches_to_the_queried_buffer_under_cage() {
 ///
 /// ## Assertions, classified
 ///
-/// A precondition gets NO revert: inventing one would manufacture a discriminator
-/// this smoke does not have. The `measured` column is the coder's to fill from an
-/// actual red run, per `tests/README.md`'s "A red-run demonstration is a deliverable,
-/// not a formality".
+/// A precondition gets NO revert: inventing one would manufacture a discriminator this
+/// smoke does not have. The `measured` column is from an actual red run, per
+/// `tests/README.md`'s "A red-run demonstration is a deliverable, not a formality".
 ///
 /// | # | assertion | kind | revert | measured |
 /// | --- | --- | --- | --- | --- |
@@ -17684,17 +17656,16 @@ fn buffer_picker_bare_enter_switches_to_the_previous_buffer_under_cage() {
 ///
 /// ## Assertions, classified
 ///
-/// A precondition gets NO revert: inventing one would manufacture a discriminator
-/// this smoke does not have. The `measured` column is the coder's to fill from an
-/// actual red run, per `tests/README.md`'s "A red-run demonstration is a
-/// deliverable, not a formality".
+/// A precondition gets NO revert: inventing one would manufacture a discriminator this
+/// smoke does not have. The `measured` column is from an actual red run, per
+/// `tests/README.md`'s "A red-run demonstration is a deliverable, not a formality".
 ///
 /// | # | assertion | kind | revert | measured |
 /// | --- | --- | --- | --- | --- |
 /// | 1 | `status.success()` | precondition — the cage scenario ran to completion | none; do not invent one | no revert of its own, and RED all the same in two runs, both of them reverts commissioned for row 6. `search_options_for` → `all_files: false`, and `enter_action` → always `RunSearch`: each took scenario `exit 14`, the scenario's readback never appeared, and the run ended HERE, at the exit-status assertion, in 28.7 s wall. Neither reached assertion 6. |
 /// | 2 | [`assert_png_present`] | precondition — grim produced an image | none; do not invent one | n/a — precondition, no revert of its own. |
 /// | 3 | readback `expand('%:t')` is [`PROJSEARCH_FILE_TARGET`] | **discriminator** — the right FILE opened | coarse, because with a one-row list `activation_target` cannot be made to resolve a different path: in `search_overlay.rs`'s `activate_selection`, delete the `WolfCore::open_at` call and keep the `close()`. Assertions 3, 4, 5 and 6 go red together; record it as coarse. | RED at assertion 3, in 8.24 s: `… after the second Enter the captive Neovim reports its current file as "psrxray.md", not the search target "psrzulu.txt".` — `left: "psrxray.md"`, `right: "psrzulu.txt"`. Assertions 4, 5, 6 and 7 were not evaluated under it; the harness aborts at the first failure. |
-/// | 4 | readback `line('.')` is [`PROJSEARCH_MATCH_LINE`] | **discriminator — the right LINE** | in `activate_selection`, send `InputEvent::Open { path }` instead of `core.open_at(path, line, col)`. The right file still opens, so 3, 6 and 7 stay green and only 4 and 5 redden. **This is the unit's key isolated revert — the whole "a result row is not a file" premise reduced to one line.** | RED at assertion 4, in 8.04 s: `… the cursor landed on line 1, not the matched line 9. Assertion 3 passed, so the right FILE is open …` — `left: Some(1)`, `right: Some(9)`; `test result: FAILED. 0 passed; 1 failed; … 33 filtered out; finished in 8.04s`. **Assertion 3 stayed GREEN**, which is what makes this the isolated one. Assertions 5, 6 and 7 were not evaluated under it; the harness aborts at the first failure. |
+/// | 4 | readback `line('.')` is [`PROJSEARCH_MATCH_LINE`] | **discriminator — the right LINE** | in `activate_selection`, send `InputEvent::Open { path }` instead of `core.open_at(path, line, col)`. The right file still opens, so 3, 6 and 7 stay green and only 4 and 5 redden. **This is the smoke's key isolated revert — the whole "a result row is not a file" premise reduced to one line.** | RED at assertion 4, in 8.04 s: `… the cursor landed on line 1, not the matched line 9. Assertion 3 passed, so the right FILE is open …` — `left: Some(1)`, `right: Some(9)`; `test result: FAILED. 0 passed; 1 failed; … 33 filtered out; finished in 8.04s`. **Assertion 3 stayed GREEN**, which is what makes this the isolated one. Assertions 5, 6 and 7 were not evaluated under it; the harness aborts at the first failure. |
 /// | 5 | readback `col('.')` is [`PROJSEARCH_EXPECTED_COL`] | **discriminator — the right COLUMN** | assertion 4's revert reddens this one too, and they are the pair it exists to redden. A second, narrower one: in `activation_target`, return `0` for the column — the 0-based zero whose `col('.')` reading is the plain-open 1 — while keeping the correct line. | RED at assertion 5, in 8.24 s, under the narrower column-only revert: `… the cursor landed in column 1, not the matched column 15.` — `left: Some(1)`, `right: Some(15)`. The run reached assertion 5 at all, so assertions 1-4 passed under it: it is isolated to the column. |
 /// | 6 | OCR contains [`PROJSEARCH_OCR_PRESENT`] | **discriminator** — the pane really re-rendered onto the target | assertion 3's coarse revert. A second, INDEPENDENT one: in `search_options_for`, set `all_files: false` — the `.txt` target is then never searched, the list stays empty, the second Enter does nothing, the overlay stays open and swallows the `o` / Escape, and the capture shows the starting file. That is the `all_files` discriminator, and [`restore_fixture_names_cannot_satisfy_their_own_assertions`] is what keeps the target's extension able to carry it. | NO isolated red run. The `all_files: false` revert was run and did NOT reach this assertion: the scenario's readback never appeared, it took `exit 14`, and the run went red at the exit-status assertion (row 1) in 28.7 s wall. Assertion 3's coarse revert went red at assertion 3, also before this one was evaluated. Recorded as measured rather than as the predicted route. |
 /// | 7 | OCR lacks [`PROJSEARCH_OCR_ABSENT`] | **discriminator with NO isolated red run, by design** | none. With a single pane two headings cannot both be on screen, so every revert that reddens 7 reddens 6 first. Its contribution is naming WHICH file is showing, not detecting that the wrong one is — the same shape as the buffer-picker smoke's assertion 5. Record it verbatim rather than inventing a revert. | none, by design — recorded rather than invented. It was not evaluated in any red run above: those ended at rows 1, 3, 4 and 5. |
@@ -18977,7 +18948,7 @@ fn click_then_close_keeps_keyboard_input_alive_under_cage() {
 /// ## The burst before the kill is DELIBERATE and load-bearing
 ///
 /// The scenario fires a burst of input and SIGKILLs Neovim with no settle in
-/// between. That is the adversarial half of the wake-coalescing argument this unit
+/// between. That is the adversarial half of the wake-coalescing argument crash recovery
 /// rests on: `wolf-gnome`'s wake bridge is an `async_channel::bounded(1)` whose
 /// `try_send` DROPS a wake fired into a full channel, `mark_dead` fires exactly once,
 /// and a dead Neovim produces no further redraw wakes — so if coalescing were unsafe,
@@ -19013,7 +18984,7 @@ fn click_then_close_keeps_keyboard_input_alive_under_cage() {
 /// swap-recovery reopen path AND the "active path last" ordering rule.
 ///
 /// What discriminates the ORDER is the SCENARIO'S OWN RECOVERY POLL, not an OCR
-/// term. MEASURED in pass 5 by running the revert: with `reopen_order` pushing
+/// term. MEASURED by running the revert: with `reopen_order` pushing
 /// `active` FIRST, the focused buffer stays the recovered `Untitled.md`, the poll —
 /// which waits for `bufname('%')` to name the fixture — never satisfies, and the run
 /// ends at scenario exit **19** BEFORE any OCR assertion is reached. `bounceback`
@@ -19035,8 +19006,7 @@ fn click_then_close_keeps_keyboard_input_alive_under_cage() {
 /// core test structurally cannot have: the GTK front-end in the loop, driving the
 /// reopen itself.
 ///
-/// ## Red-run reverts (FIVE reverts, six rows — run EVERY revert; pass 5 records the
-/// measured outcome)
+/// ## Red-run reverts (FIVE reverts, six rows — run EVERY revert)
 ///
 /// The sixth row is listed honestly: it has no isolated revert of its own, and saying
 /// so is the point — an assertion that cannot be shown red on its own must not be
@@ -19264,7 +19234,7 @@ fn nvim_crash_recovers_and_reopens_the_file_under_cage() {
          {RESTART_OCR_BANNER:?} assertion below next: if the banner IS present while this is \
          absent, the app recovered and flashed the banner but painted something other than the \
          reopened fixture. Do NOT go looking at `reopen_order` first: a reversed reopen order \
-         was MEASURED in pass 5 to fail EARLIER, at the scenario's own recovery poll (exit 19), \
+         was MEASURED to fail EARLIER, at the scenario's own recovery poll (exit 19), \
          so it cannot be what brought you here. PNG kept at {}. OCR output was:\n{ocr_after}",
         out_png.display()
     );
@@ -19362,8 +19332,8 @@ fn nvim_crash_recovers_and_reopens_the_file_under_cage() {
 /// ## Assertions, classified
 ///
 /// A precondition and a control get NO revert: inventing one would manufacture a
-/// discriminator this smoke does not have. The `measured` column is the coder's to
-/// fill from an actual red run.
+/// discriminator this smoke does not have. The `measured` column is from an actual red
+/// run.
 ///
 /// | # | assertion | kind | revert | measured |
 /// | --- | --- | --- | --- | --- |
@@ -19540,14 +19510,14 @@ fn stalled_nvim_raises_the_stall_overlay_under_cage() {
 ///
 /// `crash_overlay.rs` is all GTK widget construction and has NO unit tests — it
 /// cannot have any. This smoke is therefore the sole coverage for four of its five
-/// revert rows below, which is why pass 5 must run EVERY one of them rather than
-/// sampling.
+/// revert rows below, which is why EVERY one of them must be run rather than
+/// sampled.
 ///
 /// * `crashed` PRESENT during the dwell — the overlay is actually shown. Stated
-///   honestly, because pass 5 measured it: NO revert exercises this assertion in
-///   isolation. B1 (never `set_visible(true)`) exits 19 at the recovery poll before
-///   the dwell OCR is read, and B2 fails it for the OPACITY defect. It is a real
-///   assertion with no isolated red run of its own.
+///   honestly, because it is measured: NO revert exercises this assertion in
+///   isolation. The visibility revert (never `set_visible(true)`) exits 19 at the
+///   recovery poll before the dwell OCR is read, and the opacity revert fails it for
+///   the OPACITY defect. It is a real assertion with no isolated red run of its own.
 /// * `bounceback` ABSENT during the dwell — the overlay is OPAQUE and full-bleed.
 ///   Nothing else in this repo proves occlusion: the empty-state smoke asserts
 ///   presence only. The assertion is non-vacuous in the other direction too, because
@@ -19570,7 +19540,7 @@ fn stalled_nvim_raises_the_stall_overlay_under_cage() {
 /// under cage the window is the output with zero CSD offset; into
 /// `restart_button_rect`; then a tenth of the way in from that rect's LEFT edge
 /// horizontally, and the rect's CENTRE vertically. That asymmetry is not stylistic —
-/// a centre-derived x was measured in pass 5 to be blind to the button-width revert.
+/// a centre-derived x was measured to be blind to the button-width revert.
 /// The derivation comment in the body carries the measurement, and states the width
 /// bound the inset does and does not discriminate.
 ///
@@ -19614,8 +19584,8 @@ fn stalled_nvim_raises_the_stall_overlay_under_cage() {
 /// | button, absolute | `x 605.5..925.5`, `y 391.5..455.5` |
 /// | rendered button, inspected | `x 605..925`, `y 392..456` |
 ///
-/// The origin and the allocation are the coder's 2026-08-04 measurement, taken from
-/// a temporary tick callback over every distinct allocation across the crash, the
+/// The origin and the allocation are a 2026-08-04 measurement, taken from a
+/// temporary tick callback over every distinct allocation across the crash, the
 /// restart and the click, and reproduced on a second run; the rendered button is an
 /// independent inspection of a retained capture. The two agree to within the half
 /// pixel GTK snaps a centred block of odd leftover height by, which is what makes the
@@ -19635,15 +19605,15 @@ fn stalled_nvim_raises_the_stall_overlay_under_cage() {
 /// A green run is therefore the observation that the derived point hits the target,
 /// and it is the anchor above that it confirms.
 ///
-/// ## Red-run reverts (five; run EVERY one — pass 5 records the measured outcome)
+/// ## Red-run reverts (five; run EVERY one — the last column records the measured outcome)
 ///
 /// | assertion | revert | expected red symptom | measured |
 /// | --- | --- | --- | --- |
 /// | `crashed` present | make `CrashOverlay::set_mode` never call `set_visible(true)` | `crashed` absent and `bounceback` PRESENT in the dwell capture (the frozen frame shows through) | red, but NOT by the predicted route: measured `exit status: 19`, scenario stderr `the click at (641, 426) drove no recovery`. The restart button lives INSIDE the overlay, so a never-shown overlay is also a never-shown button and the run exits at the recovery poll before the dwell OCR is read. Restored, green |
 /// | `bounceback` absent (opacity) | remove `add_css_class("background")` from the overlay box | BOTH terms present in the dwell capture | red on the FIRST dwell assertion instead: `the dwell capture did not contain "crashed"`, while the same OCR dump carries `# bounceback` — the frozen frame does show through exactly as predicted, and the fully transparent box additionally leaves its own label unreadable against the editor text. Restored, green |
-/// | the attempt cap | set `MAX_AUTO_RESTART_ATTEMPTS = u32::MAX` | scenario exit **20**: the app spins respawning against the refusing wrapper. Worth capturing as evidence in its own right — it demonstrates the infinite-retry hazard the cap exists to prevent | **DID NOT GO RED as first written — the smoke stayed fully GREEN with the cap removed.** Cause: `assert_no_nvim_respawn` counted children named `nvim`, and a refused wrapper exits BEFORE its `exec`, so an unbounded retry loop is invisible to it and exit 20 was unreachable. FIXED in pass 5 by having the wrapper log each refusal (see `RESTART_ATTEMPTS_NAME` / `assert_one_restart_attempt`); the same revert then reproduced `exit status: 20` with `the app made 75 automatic respawn attempt(s)` against the capped build's 1. Restored, green |
+/// | the attempt cap | set `MAX_AUTO_RESTART_ATTEMPTS = u32::MAX` | scenario exit **20**: the app spins respawning against the refusing wrapper. Worth capturing as evidence in its own right — it demonstrates the infinite-retry hazard the cap exists to prevent | **DID NOT GO RED as first written — the smoke stayed fully GREEN with the cap removed.** Cause: `assert_no_nvim_respawn` counted children named `nvim`, and a refused wrapper exits BEFORE its `exec`, so an unbounded retry loop is invisible to it and exit 20 was unreachable. FIXED by having the wrapper log each refusal (see `RESTART_ATTEMPTS_NAME` / `assert_one_restart_attempt`); the same revert then reproduced `exit status: 20` with `the app made 75 automatic respawn attempt(s)` against the capped build's 1. Restored, green |
 /// | the button | make `CrashOverlay::connect_restart` drop its callback | scenario exit **19**: the click does nothing | reproduced exactly (`exit status: 19`, scenario stderr `the click at (641, 426) drove no recovery`), restored, green |
-/// | the button geometry | change `RESTART_BUTTON_WIDTH` to `40` **in the widget builder only** | the derived point misses the button; scenario exit **19** | **DID NOT GO RED as first written — the smoke stayed fully GREEN.** Cause: the click was derived at the rect's CENTRE, and a `halign(Center)` button is centred on that same point whatever width it requests. Measured by scanning the dwell capture: correct builder renders x 605..924 (320px), the 40px builder renders x 669..861 (193px, the label's natural width) — both centred on x 765, and even the 3/4 point (x 845) is still inside the narrow one. FIXED in pass 5 by aiming a tenth in from the rect's LEFT edge (x 641); the same revert then reproduced `exit status: 19` with `the click at (641, 426) drove no recovery`. Restored, green |
+/// | the button geometry | change `RESTART_BUTTON_WIDTH` to `40` **in the widget builder only** | the derived point misses the button; scenario exit **19** | **DID NOT GO RED as first written — the smoke stayed fully GREEN.** Cause: the click was derived at the rect's CENTRE, and a `halign(Center)` button is centred on that same point whatever width it requests. Measured by scanning the dwell capture: correct builder renders x 605..924 (320px), the 40px builder renders x 669..861 (193px, the label's natural width) — both centred on x 765, and even the 3/4 point (x 845) is still inside the narrow one. FIXED by aiming a tenth in from the rect's LEFT edge (x 641); the same revert then reproduced `exit status: 19` with `the click at (641, 426) drove no recovery`. Restored, green |
 #[test]
 fn crash_overlay_and_restart_button_recover_under_cage() {
     const SMOKE: &str = "crash_overlay_and_restart_button_recover_under_cage";
@@ -20883,7 +20853,7 @@ fn three_tabs_survive_a_relaunch_under_cage() {
 ///
 /// Every headless test in this crate can only see values the front-end computed —
 /// never that GTK really built a second window over a second core, and never that
-/// the store received a two-window tree. The failure this unit exists to prevent is
+/// the store received a two-window tree. The failure this smoke exists to catch is
 /// SILENT: two `StateStore`s over one directory both report a successful flush, the
 /// file holds whichever tree was written last, and each store still claims its own
 /// in memory, so one window's entire session is lost with no panic and no error and
@@ -20891,8 +20861,8 @@ fn three_tabs_survive_a_relaunch_under_cage() {
 /// two observables that tell that apart.
 ///
 /// MEASURED cost: 16.73 s run ALONE, and +16.55 s / +17.38 s on two full-suite
-/// runs — under the 18–25 s the plan predicted, and the cheapest of this file's
-/// two-launch smokes despite starting four Neovims across its two runs.
+/// runs — the cheapest of this file's two-launch smokes despite starting four
+/// Neovims across its two runs.
 ///
 /// ## The route to the second window is forced
 ///
@@ -20964,7 +20934,7 @@ fn three_tabs_survive_a_relaunch_under_cage() {
 /// | F1 | in `command_action.rs`, restore `Command::NewWindow => UiAction::Deferred(..)` | the palette's classification filter drops the New Window row, so the typed query lists nothing, Enter dispatches nothing, and step 3 aborts with **exit 21** and `count=1` — steps 4–10 unreached | within the smoke, yes; across the suite no (`command_action.rs`'s and `actions.rs`'s tables redden too) | **AS PREDICTED.** Exit 21 at step 3: `expected EXACTLY 2 live Neovim child(ren) … the last scan counted 1`. The count poll exhausts its budget rather than answering early, so the run is LONGER than the green one — 26.39 s. Steps 4–10 are unreached by construction, which is what makes the exit code readable on its own. |
 /// | F2 | in `coordinator.rs`, make `assemble` walk `self.handles().iter().take(1)` | step 7 aborts with **exit 25** (`grep -c` reports 1); run 2 never launches, so the restore poll cannot mask it | **yes** — this is exactly why step 7 exists | **AS PREDICTED.** Exit 25 at step 7: `run 1's state.json carries 1 line(s) matching '"tabs"', not 2`. The isolation claim is MEASURED rather than argued: 11.77 s against 16.73 s green — SHORTER than the passing run, because run 2 never launched. That timing is the evidence that the write-side guard fires before the restore poll can turn a write-side defect into a read-side one. |
 /// | F3 | in `coordinator.rs`, make `open_new_window` pass the process cwd into `restore_plans` | step 4's readback is the project directory and the smoke aborts with **exit 22**; steps 5–10 unreached | **yes** (step 3 passes first) | **AS PREDICTED, and exit 22 rather than exit 26** — the discrimination those two codes exist for. The readback was `getcwd() = …/project` with `bufname('%') = Untitled 2.md`, so the focus guard passed first (the keystrokes DID reach the new window) and the inheritance check is what fired. 8.91 s. The `Untitled 2.md` is also why step 4's comment names no fixed ordinal. |
-/// | O19 | in `coordinator.rs`, delete the body of `install_app_actions` | Ctrl+Shift+Q resolves no action, falls through to Neovim as a plain `<C-Q>`, the app stays alive, and step 6 aborts with **exit 12** | **yes** — nothing else in this suite activates an `app.` action | **AS PREDICTED.** Exit 12 at step 6: `run 1 (pid …) is still alive after Ctrl+Shift+Q`. Steps 3, 4 and 5 all passed first — two live `nvim` children, no inherited project, window B re-rooted — so the failure is isolated to `app.quit` and says nothing about building the second window. 26.88 s. |
+/// | step 6 | in `coordinator.rs`, delete the body of `install_app_actions` | Ctrl+Shift+Q resolves no action, falls through to Neovim as a plain `<C-Q>`, the app stays alive, and step 6 aborts with **exit 12** | **yes** — nothing else in this suite activates an `app.` action | **AS PREDICTED.** Exit 12 at step 6: `run 1 (pid …) is still alive after Ctrl+Shift+Q`. Steps 3, 4 and 5 all passed first — two live `nvim` children, no inherited project, window B re-rooted — so the failure is isolated to `app.quit` and says nothing about building the second window. 26.88 s. |
 ///
 /// Each `measured` cell is from a run of that edit ALONE, per `tests/README.md`'s
 /// "A red-run demonstration is a deliverable, not a formality".
@@ -21066,7 +21036,7 @@ fn two_windows_two_neovims_and_two_saved_sessions_under_cage() {
          Exit 15: a Neovim readback file never appeared.\n\
          Exit 16: run 1 wrote NO state.json at all at {} — upstream of anything about windows.\n\
          Exit 21: run 1 did not have EXACTLY TWO live `nvim` children after the palette \
-         activation. This is the unit's central claim: one core per window, so a count of 1 means \
+         activation. This is the smoke's central claim: one core per window, so a count of 1 means \
          no second window was built (check `ui_action_for(Command::NewWindow)`, \
          `AppShell::perform`'s arm, and `Coordinator::open_new_window`).\n\
          Exit 22: the new window INHERITED the invoking window's project directory. New Window \
@@ -21099,7 +21069,7 @@ fn two_windows_two_neovims_and_two_saved_sessions_under_cage() {
     assert_eq!(
         saved.windows.len(),
         2,
-        "{SMOKE}: run 1's state.json carries {} window(s), not 2. This is the unit's whole claim \
+        "{SMOKE}: run 1's state.json carries {} window(s), not 2. This is the smoke's whole claim \
          on the write side. ONE means the tree lost a window between the two windows' subtrees and \
          the file: `Coordinator::assemble` collects every live window's cached subtree in registry \
          order, and a window that contributed nothing — its `may_snapshot` gate shut and no cached \
@@ -21122,8 +21092,8 @@ fn two_windows_two_neovims_and_two_saved_sessions_under_cage() {
             window.tabs.len(),
             1,
             "{SMOKE}: run 1's window {index} carries {} tab(s), not 1. `window_subtree` writes \
-             exactly one tab per window — tabs are a later unit's subject — so anything else means \
-             the subtree was assembled somewhere other than that function. File: {}",
+             every tab the window contributes and this scenario opens one per window, so anything \
+             else means the subtree gathered a tab the window does not have. File: {}",
             window.tabs.len(),
             run1_state_file.display()
         );
@@ -22064,10 +22034,10 @@ const CONTROL_MAX_THEME_FRACTION: f64 = 0.02;
 /// colour.
 ///
 /// Not 100%: the band is inside the web view, and a document that grew — or a WebKit
-/// that drew a scrollbar — would put a little non-background ink in it. Phase 0
-/// measured the dominant colour of a whole-screen preview frame at 79.8% with the
-/// app chrome included; inside the pane, with the fixture deliberately short, the
-/// band is background almost everywhere.
+/// that drew a scrollbar — would put a little non-background ink in it. The
+/// dominant colour of a whole-screen preview frame measured 79.8% with the app
+/// chrome included; inside the pane, with the fixture deliberately short, the band
+/// is background almost everywhere.
 const SAMPLE_MIN_THEME_FRACTION: f64 = 0.90;
 
 /// The most of assertion 5's sample band that may be the OTHER appearance's theme
@@ -25561,7 +25531,7 @@ exit 0
 /// | 4 | the reference band is ONE colour in the sample, that colour appears ZERO times in the same band in the control, and it is none of [`PREVIEW_DARK_BG`], [`PICKOVER_HEADING_INK`] or [`PICKOVER_UNSTYLED_FILL`] | precondition in its first two halves — they make the fill EMPIRICAL rather than a pinned theme value, and say the colour belongs to the box rather than to the pane under it — and **discriminator** in the unstyled-fill half, which is the only reading in this file that separates "the overlay stylesheet resolved" from "an opaque widget under the box painted something" | F2, below: empty the body of `overlay_style::apply`. It is also where a build that hid the box ENTIRELY reddens — P1b below is exactly that build, and **this is the assertion P1b's red fired on**, second half | green: 32,000 / 32,000 open, 0 / 32,000 closed, the fill `(54, 54, 58)`. red (P1b): the band is uniform in BOTH captures and the colour is the same `(20, 22, 27)` in both, so the absence half read 32,000. red (F2): the uniformity and absence halves both hold and the fill reads exactly [`PICKOVER_UNSTYLED_FILL`] `(29, 29, 32)`, which is the line that fires and the only one that does |
 /// | 5 | all four edges of R are locatable | precondition — the web view's top and left in the control by the preview background arriving, the box's right and bottom in the sample by its own fill leaving | none; do not invent one | green: 787..1065 x 159..471 |
 /// | 6 | R — the TRUE overlap, before any inset — spans at least [`PICKOVER_MIN_OVERLAP_W_PX`] columns and [`PICKOVER_MIN_OVERLAP_H_PX`] rows | **discriminator, geometrical** — the box's VISIBLE surface reaches into the web view's own columns and rows at all. Passing it is also what makes S's subtraction safe, which is why S is built after this row rather than before it | P1b, below — NOT reached, because assertion 4 fired first. Carried through by hand off the red PNG it would have read `overlap_w` = 0 against the 200 floor | green: 278 x 312 |
-/// | 7 | in the CONTROL, S is at least [`PICKOVER_CONTROL_MIN_DARK_FRACTION`] `PREVIEW_DARK_BG` and carries at least [`PICKOVER_CONTROL_MIN_INK_PX`] [`PICKOVER_HEADING_INK`] pixels | **paired control** — S really is inside a web view that really rendered the document. Without it the sample half holds over a blank pane. It reads S and not R because assertion 8 reads S: a control over a different rectangle would not cover the region the discriminator samples. | drop the Preview leg from the scenario, or blank the render (`WolfCore::render_preview` answering the empty string it returns on an RPC failure). The first was TAKEN and reddens assertion 3, the louder and more correct answer — so the ink floor here has **no captured red**. The only edit that reaches it is the second, and that is a `src/` change this unit forbids. A known gap, recorded rather than implied. | green: 0.9405 dark of S's 79,800 pixels, 1,976 white |
+/// | 7 | in the CONTROL, S is at least [`PICKOVER_CONTROL_MIN_DARK_FRACTION`] `PREVIEW_DARK_BG` and carries at least [`PICKOVER_CONTROL_MIN_INK_PX`] [`PICKOVER_HEADING_INK`] pixels | **paired control** — S really is inside a web view that really rendered the document. Without it the sample half holds over a blank pane. It reads S and not R because assertion 8 reads S: a control over a different rectangle would not cover the region the discriminator samples. | drop the Preview leg from the scenario, or blank the render (`WolfCore::render_preview` answering the empty string it returns on an RPC failure). The first was TAKEN and reddens assertion 3, the louder and more correct answer — so the ink floor here has **no captured red**. The only edit that reaches it is the second, and that `src/` change has not been run against this smoke. A known gap, recorded rather than implied. | green: 0.9405 dark of S's 79,800 pixels, 1,976 white |
 /// | 8 | in the SAMPLE, S holds EXACTLY zero `PREVIEW_DARK_BG`, EXACTLY zero [`PICKOVER_HEADING_INK`], and at least [`PICKOVER_SAMPLE_MIN_FILL_FRACTION`] of the fill colour assertion 4 read back | **discriminator** — the fully-occluded part of the overlap is the picker's surface and nothing of the preview survives in it | P1b, below — NOT reached, and it would have been vacuous if it had been: the red's R is degenerate at zero area | green: 0, 0, and a fill fraction of exactly 1.0000 across S's 79,800 pixels — the inset puts the box's corner arc outside S, so it holds one colour, `(54, 54, 58)`, and the histogram of everything else is empty |
 /// | 9 | in the SAMPLE, the run of [`PICKOVER_ROW_HIGHLIGHT`] rows inside the box is at least [`PICKOVER_MIN_SELECTED_ROW_H_PX`] rows tall | **discriminator** — the SELECTED ROW is menu-sized, which is the half of the overlay appearance no other assertion here reads. Assertion 4's fill inequality sees the box's surface and is satisfied whatever the rows measure | F3, below: remove `padding: 8px 10px` from `list > row` in `overlay_style::OVERLAY_CSS_DATA` | green: 34 rows, bbox `x 471..1058, y 117..150`. red (F3): 22 rows |
 ///
@@ -25599,7 +25569,7 @@ exit 0
 /// changes the view's GEOMETRY, since a window-level overlay child is laid out against
 /// the window rather than against the pane, so its red is not isolated: R would move as
 /// well as invert and the reading would not be attributable. It is written down here,
-/// with that cost stated, so a later unit takes it deliberately rather than
+/// with that cost stated, so a later change takes it deliberately rather than
 /// rediscovering it.
 ///
 /// **P1c, rejected.** Making `PickerHandle::open` a no-op reddens assertions 4 and 6
@@ -27110,9 +27080,9 @@ fn divider_drag_survives_a_pane_relayout_under_cage() {
 
 /// A dragged divider's weights reach `state.json` and come back on the next launch.
 ///
-/// The round trip unit 4 built the channel for, driven for the first time by a
-/// weight that is NOT an equal share — which is what makes "the saved weights were
-/// applied" distinguishable from "the equal-share default was recomputed" at all.
+/// The round trip, driven by a weight that is NOT an equal share — which is what
+/// makes "the saved weights were applied" distinguishable from "the equal-share
+/// default was recomputed" at all.
 ///
 /// Two app launches run inside ONE `cage` instance, with `wolf-pointer-inject` alive
 /// across both; see [`DIVIDER_RELAUNCH_SCENARIO`] for the exit-code table and for
@@ -27124,8 +27094,9 @@ fn divider_drag_survives_a_pane_relayout_under_cage() {
 /// 1. **The save side, on the FILE.** The `state.json` RUN 1 wrote — frozen by the
 ///    scenario before run 2 can write over it — carries a `Vertical` split of two
 ///    named leaves whose weights sum to 1 and differ by at least
-///    [`MIN_WEIGHT_GAP`]. Nothing before this unit could write such a vector:
-///    `layout.rs`'s only writers produce `1/n` and `[0.5, 0.5]`.
+///    [`MIN_WEIGHT_GAP`]. Only a drag writes such a vector, through
+///    `PaneTree::set_divider_fraction`; `layout.rs`'s other writers produce `1/n` and
+///    `[0.5, 0.5]`.
 /// 2. **The restore side, on run 2's PIXELS.** The restored panes' width ratio
 ///    matches run 1's post-drag ratio and sits at least [`MIN_RATIO_OFFSET`] off
 ///    centre. The second clause is what stops the first being satisfied by a
@@ -27772,10 +27743,9 @@ fn window_title_shows_the_working_directory_under_cage() {
 ///
 /// ## Assertions, classified
 ///
-/// A precondition gets NO revert: inventing one would manufacture a discriminator
-/// this smoke does not have. The `measured` column is the coder's to fill from an
-/// actual red run, per `tests/README.md`'s "A red-run demonstration is a deliverable,
-/// not a formality".
+/// A precondition gets NO revert: inventing one would manufacture a discriminator this
+/// smoke does not have. The `measured` column is from an actual red run, per
+/// `tests/README.md`'s "A red-run demonstration is a deliverable, not a formality".
 ///
 /// | # | assertion | kind | revert | measured |
 /// | --- | --- | --- | --- | --- |
@@ -28065,10 +28035,9 @@ fn open_recent_palette_row_reroots_the_window_under_cage() {
 ///
 /// ## Assertions, classified
 ///
-/// A precondition gets NO revert: inventing one would manufacture a discriminator
-/// this smoke does not have. The `measured` column is the coder's to fill from an
-/// actual red run, per `tests/README.md`'s "A red-run demonstration is a
-/// deliverable, not a formality".
+/// A precondition gets NO revert: inventing one would manufacture a discriminator this
+/// smoke does not have. The `measured` column is from an actual red run, per
+/// `tests/README.md`'s "A red-run demonstration is a deliverable, not a formality".
 ///
 /// | # | assertion | kind | revert | measured |
 /// | --- | --- | --- | --- | --- |
@@ -28441,10 +28410,9 @@ fn sidebar_toggle_chord_hides_the_file_tree_under_cage() {
 ///
 /// ## Assertions, classified
 ///
-/// A precondition gets NO revert: inventing one would manufacture a discriminator
-/// this smoke does not have. The `measured` column is the coder's to fill from an
-/// actual red run, per `tests/README.md`'s "A red-run demonstration is a deliverable,
-/// not a formality".
+/// A precondition gets NO revert: inventing one would manufacture a discriminator this
+/// smoke does not have. The `measured` column is from an actual red run, per
+/// `tests/README.md`'s "A red-run demonstration is a deliverable, not a formality".
 ///
 /// | # | assertion | kind | revert | measured |
 /// | --- | --- | --- | --- | --- |
@@ -28735,10 +28703,9 @@ fn typed_cd_reroots_the_sidebar_under_cage() {
 ///
 /// ## Assertions, classified
 ///
-/// A precondition gets NO revert: inventing one would manufacture a discriminator
-/// this smoke does not have. The `measured` column is the coder's to fill from an
-/// actual red run, per `tests/README.md`'s "A red-run demonstration is a deliverable,
-/// not a formality".
+/// A precondition gets NO revert: inventing one would manufacture a discriminator this
+/// smoke does not have. The `measured` column is from an actual red run, per
+/// `tests/README.md`'s "A red-run demonstration is a deliverable, not a formality".
 ///
 /// | # | assertion | kind | revert | measured |
 /// | --- | --- | --- | --- | --- |
@@ -28746,7 +28713,7 @@ fn typed_cd_reroots_the_sidebar_under_cage() {
 /// | 1 | `status.success()` | precondition — the cage scenario ran to completion | none; do not invent one | n/a |
 /// | 2 | [`assert_png_present`] | precondition — grim produced an image | none; do not invent one | n/a |
 /// | 3 | the `&laststatus` readback is `0` | **precondition** — Neovim draws no statusline of its own, so a filename on the page came from our strip. Asked of the CAPTIVE NEOVIM rather than read off `runtime/nvim/init.lua`, because that file is a premise this test does not control | none; do not invent one | n/a |
-/// | 4 | OCR contains [`STATUS_OCR_MARKER`] | **precondition, not a discriminator** — the capture's proof of life. Its absence means the capture is stale or the cmdline stopped painting, neither of which this unit touches | none; do not invent one | n/a |
+/// | 4 | OCR contains [`STATUS_OCR_MARKER`] | **precondition, not a discriminator** — the capture's proof of life. Its absence means the capture is stale or the cmdline stopped painting, neither of which is the feature under test | none; do not invent one | n/a |
 /// | 5 | OCR contains [`STATUS_OCR_A`] | **the discriminator for PER-PANE-ness** | in `draw_pane`, look the cached status up by `self.active_pane.get()` instead of by the `pane_id` being painted — a one-line change. Both strips then read `statusbravo.md`, so this row goes red while row 6 stays GREEN, which is the only revert here that discriminates per-pane-ness rather than presence. | RED: `OCR did not contain "statusalfa" — the name of statusalfa.md, which is open in the FIRST (left) pane and can be drawn only by that pane's status bar. Assertion 4 is GREEN`. **The panic alone does not carry the claim; the TERM COUNTS in that run's dump do: `statusbravo` 3, `statusalfa` 0, `statusready` 1.** Assertion 6's term survives on the page — twice over, as this row's own message tells the reader to check for — while assertion 5's is gone. That asymmetry is what makes the failure discriminate per-pane-ness rather than mere presence. |
 /// | 6 | OCR contains [`STATUS_OCR_B`] | **discriminator for the strip rendering at all**, jointly with row 5 | delete the two `render::draw_text_line` calls from `draw_pane`. Rows 5 and 6 both go red; 5 fails first, so this row has no isolated red run under it. | RED, and the panic NAMES ASSERTION 5 — the test is fail-fast and this row has no isolated red run, exactly as the revert column says. **Its evidence is again the term counts: `statusready` 1, and NOTHING else — neither `statusalfa` nor `statusbravo` is anywhere on the page.** That is what separates this revert from row 5's, where `statusbravo` survived: there one strip still drew, here neither does. |
 /// | 7 | `winheight(0)` equals [`STATUS_EXPECTED_WINHEIGHT`] | **the discriminator for the editor inset and the strip's height** — the only end-to-end proof either reaches a pixel | delete the `- 2 * padding` term from `editor_inset::grid_rect`'s `h` (one more row survives) or the `statusbar_h` term (two more) | RED under BOTH reverts, with assertions 4, 5 and 6 green under each, so both are observed here as a changed row count. **Three distinct values, which is what proves this assertion separates the two terms rather than merely noticing that the chrome changed: baseline 11; without `statusbar_h`, `the focused pane reports winheight(0) = 13`; without `- 2 * padding`, `= 12`.** Both messages read `expected -1` because the constant was still its placeholder when they were taken — the evidence is the REPORTED `winheight(0)`, which the constant since being pinned to 11 does not affect, so neither revert needs re-running. Against the pinned 11 they would read `left: 13` and `left: 12` against `right: 11`. |
@@ -29019,14 +28986,13 @@ exit 0
 /// The FIRST line of the two-line `:echo`, and the one that discriminates.
 ///
 /// It is the line a single-row strip cannot show: with only the last line drawn this
-/// term is absent and [`MSG_OCR_SECOND`] is present, which is exactly the shape of
-/// the behaviour that stood while the deferral did.
+/// term is absent and [`MSG_OCR_SECOND`] is present.
 const MSG_OCR_FIRST: &str = "victorlima";
 
 /// The SECOND (last) line of the two-line `:echo`.
 ///
-/// Asserted as a control rather than as the feature: it is present both before and
-/// after this unit, so on its own it proves only that the message arrived at all.
+/// Asserted as a control rather than as the feature: a single-row strip draws it
+/// too, so on its own it proves only that the message arrived at all.
 const MSG_OCR_SECOND: &str = "oscarhotel";
 
 /// The CONFIRM-PROMPT scenario: make an unsaved edit, run `:confirm bdelete`,
@@ -29177,7 +29143,7 @@ fn multi_line_message_shows_more_than_its_last_line_under_cage() {
     assert!(
         ocr_text.contains(MSG_OCR_SECOND),
         "{SMOKE}: OCR did not contain the message's LAST line {MSG_OCR_SECOND:?}. This is the \
-         control, not the feature: it was on screen before this unit too, so its absence means \
+         control, not the feature: a single-row strip draws it too, so its absence means \
          the `:echo` never ran or the toast never drew at all, and the next assertion would be \
          meaningless. PNG kept at {}.\n\nOCR output was:\n{ocr_text}",
         out_png.display()
@@ -29185,7 +29151,7 @@ fn multi_line_message_shows_more_than_its_last_line_under_cage() {
     assert!(
         ocr_text.contains(MSG_OCR_FIRST),
         "{SMOKE}: OCR contained the message's last line {MSG_OCR_SECOND:?} but not its FIRST line \
-         {MSG_OCR_FIRST:?}. That is exactly the single-row behaviour this unit replaced: a \
+         {MSG_OCR_FIRST:?}. That is exactly the single-row failure: a \
          two-line `msg_show` reduced to its final line. Check `pane_view::place_toast`'s height \
          and `cmdline_ui::toast_view`'s budget. PNG kept at {}.\n\nOCR output was:\n{ocr_text}",
         out_png.display()
@@ -29261,10 +29227,10 @@ fn confirm_prompt_shows_then_clears_once_answered_under_cage() {
 /// It exists for two separate assertions, and the second one is why its BODY is
 /// sixteen lines rather than a bare heading.
 ///
-/// **The persisted-layout leg (M27).** `layout_snapshot` iterates `tree.leaves()`,
+/// **The persisted-layout leg.** `layout_snapshot` iterates `tree.leaves()`,
 /// so the assertion is that the frozen `state.json` holds exactly one leaf and that
 /// the leaf is THIS file. The fixture is what makes the second half of that
-/// discriminating — and only the second half. Measured 10/10 in pass 8: with the
+/// discriminating — and only the second half. Measured 10/10: with the
 /// `:e` removed the layout still persists as one leaf naming `Untitled.md`, because
 /// `persistable_layout` suppresses only an UNNAMED lone leaf and the app's default
 /// buffer is named. So "one leaf, no `term://`" is NOT vacuous without a fixture;
@@ -29343,7 +29309,7 @@ const DRAWER_MARKER: &str = "ZZDRAWERMARK";
 
 /// Lowercased [`DRAWER_MARKER`] — what the band OCR must contain.
 ///
-/// MEASURED in pass 8, 3/3 runs at [`SMOKE_FONT_PT`]: the band read
+/// MEASURED over 3/3 runs at [`SMOKE_FONT_PT`]: the band read
 /// `zzdrawermark]`, the trailing bracket being the terminal's own cell after the
 /// text. `contains` is what the assertion uses, so that trailing glyph is harmless.
 const DRAWER_OCR_MARKER: &str = "zzdrawermark";
@@ -29352,18 +29318,18 @@ const DRAWER_OCR_MARKER: &str = "zzdrawermark";
 ///
 /// **The whole marker leg turns on this command's SHAPE, and it was measured the
 /// hard way.** At [`SMOKE_FONT_PT`] the drawer's grid is ONE text row
-/// (`winheight = 1`), so the planned `echo <MARKER>` + Return scrolls the marker off
-/// before `grim` fires: pass 8 measured a bare `jplein@nixos:~/project$` band on 6
-/// of 6 runs. `printf` writes the marker with NO trailing newline and the `sleep`
+/// (`winheight = 1`), so an `echo <MARKER>` + Return scrolls the marker off before
+/// `grim` fires: a bare `jplein@nixos:~/project$` band was measured on 6 of 6 runs.
+/// `printf` writes the marker with NO trailing newline and the `sleep`
 /// then blocks, so the shell never prints another prompt and the marker is the last
 /// thing on the last row — measured present 3/3.
 ///
-/// Long enough to outlive the whole scenario many times over — pass 8 measured the
-/// comparable restart scenario end to end at 10.6 s — because a `sleep` that RETURNS
+/// Long enough to outlive the whole scenario many times over — the comparable
+/// restart scenario measures 10.6 s end to end — because a `sleep` that RETURNS
 /// reprints the prompt and scrolls the marker off exactly as `echo` did.
 ///
 /// It leaks no process: the shell is a child of the captive Neovim, which SIGHUPs
-/// its terminal job on exit. Pass 8 measured zero leaked processes after fifteen
+/// its terminal job on exit. Zero leaked processes were measured after fifteen
 /// cage launches driving this command.
 const DRAWER_MARKER_SLEEP_SECS: &str = "300";
 
@@ -29372,8 +29338,8 @@ const DRAWER_MARKER_SLEEP_SECS: &str = "300";
 /// `pane_view::strip_height` REQUESTS `ceil(cell_h * CMDLINE_STRIP_ROWS)` as the
 /// strip's content height; what GTK allocates it is two pixels more. That is a
 /// widget-layer fact this file does not model, so it is MEASURED rather than
-/// derived: pass 8 confirmed the whole band derivation, of which this is the only
-/// hand-supplied term, exact at 28, 16 and 10 pt. A term proportional to the font
+/// derived: the whole band derivation, of which this is the only hand-supplied
+/// term, was measured exact at 28, 16 and 10 pt. A term proportional to the font
 /// would not hold at three sizes, which is what says two pixels is a fixed overhead
 /// rather than a rounding of something.
 ///
@@ -29385,7 +29351,7 @@ const DRAWER_BAND_STRIP_EXTRA_PX: f64 = 2.0;
 /// OCRs: the drawer strip's text band, BELOW its own statusbar and above the cmdline
 /// strip.
 ///
-/// ## Why a band and not the page (O16)
+/// ## Why a band and not the page
 ///
 /// The drawer's statusbar draws `wolf_core::pane_status`'s raw
 /// `term:///<cwd>//<pid>:/nix/store/<hash>/bin/bash`, whose `<pid>` changes every
@@ -29394,7 +29360,7 @@ const DRAWER_BAND_STRIP_EXTRA_PX: f64 = 2.0;
 /// BYTE-IDENTICAL, 6/6 and 3/3. An OCR sample of the whole drawer is a flake by
 /// construction.
 ///
-/// **Pass 7's claim that the shell PROMPT also varies per run is falsified.**
+/// **The shell PROMPT does not vary per run.**
 /// [`cage_command`] sets `HOME` to the temp cwd's parent, so bash's `\w` renders the
 /// constant `~/project` — the same mechanism that pins the window title.
 ///
@@ -29414,9 +29380,9 @@ const DRAWER_BAND_STRIP_EXTRA_PX: f64 = 2.0;
 /// from `editor_inset::min_pane_size`, i.e. exactly what `apply_drawer_frame`
 /// passes.
 ///
-/// **A DISCLOSED discrepancy.** Pass 8 recorded the band as `y 560..674` at
+/// **A DISCLOSED discrepancy.** A measured run put the band at `y 560..674` at
 /// [`SMOKE_FONT_PT`]; this derivation gives `y 557..674`, because it reads
-/// `statusbar_layout(...).height` (92 px there) where pass 8's note implies 95. The
+/// `statusbar_layout(...).height` (92 px there) where that measurement implies 95. The
 /// three pixels are the strip's own closing `STATUSBAR_VERTICAL_PADDING`, which
 /// carries no ink — so the extra rows are background either way. The derivation is
 /// kept rather than the recorded literal because it moves with the chrome; if the
@@ -29424,8 +29390,8 @@ const DRAWER_BAND_STRIP_EXTRA_PX: f64 = 2.0;
 ///
 /// ## Why x is restricted to the pane area
 ///
-/// Pass 8 cropped the full width and noted that at one text row the band contains no
-/// sidebar text INCIDENTALLY — which depends on [`SIDEBAR_FILLER_COUNT`] and the
+/// A full-width crop at one text row contains no sidebar text, but only
+/// INCIDENTALLY — which depends on [`SIDEBAR_FILLER_COUNT`] and the
 /// tree's row height, neither of which this smoke controls. Starting at the pane
 /// area's own left edge ([`OVERLAY_ORIGIN_X_EXPECTED`]) makes it STRUCTURAL: no
 /// sidebar row can enter the sample however many files a later scenario writes. Every
@@ -29485,7 +29451,7 @@ fn drawer_band_rect() -> SampleRect {
 }
 
 /// S1: the file the captive Neovim writes `&buftype` into after `<C-w>k` out of the
-/// drawer — leg d, the half of the focus bridge M11 measured the trap in.
+/// drawer — leg d, the half of the focus bridge where Neovim alone leaves focus trapped.
 ///
 /// All six of S1's readbacks live under `XDG_RUNTIME_DIR` rather than in the smoke's
 /// cwd, so the app's own `FileSearch` never lists them and no tree row bears their
@@ -29510,12 +29476,12 @@ const DRAWER_BT_HIDDEN_NAME: &str = "wolf_gnome_drawer_bt_hidden.txt";
 /// drawer arm. See [`DRAWER_BT_UP_NAME`].
 const DRAWER_BT_REOPEN_NAME: &str = "wolf_gnome_drawer_bt_reopen.txt";
 
-/// S1: `&buftype` after a `:vsplit` of an EDITOR pane and a `<C-w>j` — O32 leg 1,
-/// the drawer surviving an ordinary `rebuild_pane_area`. See [`DRAWER_BT_UP_NAME`].
+/// S1: `&buftype` after a `:vsplit` of an EDITOR pane and a `<C-w>j` — leg f, the
+/// drawer surviving an ordinary `rebuild_pane_area`. See [`DRAWER_BT_UP_NAME`].
 const DRAWER_BT_VSPLIT_NAME: &str = "wolf_gnome_drawer_bt_vsplit.txt";
 
-/// S1: `&buftype` after a `:split` from INSIDE the drawer and a `<C-w>k` — O32
-/// leg 2, `apply_split`'s drawer guard. See [`DRAWER_BT_UP_NAME`].
+/// S1: `&buftype` after a `:split` from INSIDE the drawer and a `<C-w>k` — leg g,
+/// `apply_split`'s drawer guard. See [`DRAWER_BT_UP_NAME`].
 const DRAWER_BT_SPLITGUARD_NAME: &str = "wolf_gnome_drawer_bt_splitguard.txt";
 
 /// The window count `winnr('$')` must report once the chord has HIDDEN the drawer:
@@ -29535,12 +29501,12 @@ const DRAWER_WINS_AFTER_HIDE: i64 = 1;
 
 /// The window count `winnr('$')` must report after the `:split` inside the drawer.
 ///
-/// **A PRECONDITION, and explicitly NOT the discriminator.** The plan's original
-/// readback for O32 leg 2 was this count alone, and pass 8 REFUTED it:
-/// `init.lua`'s `do_split` runs `vim.cmd("split")` BEFORE it emits the intent, so
-/// Neovim really has four windows whether or not `apply_split`'s drawer guard holds,
-/// and `pending_resize` returns `None` for the zero-sized allocation an invisible
-/// pane gets, so the guard-deleted build issues no `resize_grid` either. What the
+/// **A PRECONDITION, and explicitly NOT the discriminator.** This count alone cannot
+/// discriminate leg g: `init.lua`'s `do_split` runs `vim.cmd("split")` BEFORE it
+/// emits the intent, so Neovim really has four windows whether or not
+/// `apply_split`'s drawer guard holds, and `pending_resize` returns `None` for the
+/// zero-sized allocation an invisible pane gets, so the guard-deleted build issues no
+/// `resize_grid` either. What the
 /// count says is that the `:split` reached Neovim at all; what discriminates the
 /// guard is the `&buftype` after `<C-w>k` beside it.
 ///
@@ -29734,7 +29700,7 @@ wtype -k k
 sleep "$SETTLE"
 probe "$BT_REOPEN"
 
-# --- Step 9: O32 leg 1 -- a :vsplit of an EDITOR pane -----------------------
+# --- Step 9: leg f -- a :vsplit of an EDITOR pane ---------------------------
 #
 # A no-op <C-w>k first: in a GREEN run step 8 already left focus in the editor and
 # nothing moves (the editor has no tree neighbour above it and the bridge answers
@@ -29752,7 +29718,7 @@ wtype -k j
 sleep "$SETTLE"
 probe "$BT_VSPLIT"
 
-# --- Step 10: O32 leg 2 -- a :split from INSIDE the drawer ------------------
+# --- Step 10: leg g -- a :split from INSIDE the drawer ----------------------
 #
 # `probe` above left Neovim in Normal mode in the drawer, so the abbreviation
 # expands as typed. The new window shows the same terminal buffer, so its WinEnter
@@ -29776,30 +29742,29 @@ exit 0
 ///
 /// ## What it is the only evidence for
 ///
-/// Pass 7 landed twelve `pane_view` items with no automated falsifier at all; their
-/// only evidence was one by-hand `cage` run. This smoke converts the intent arm, the
-/// pane binding, the structural append, both halves of the focus bridge, the drawer's
-/// only UNBIND path, the split guard and the `state.json` exclusion. Its RED run for
-/// the marker leg is ALREADY measured: M15/M16 captured today's build with the drawer
-/// open in Neovim and NO terminal strip anywhere on screen — keystrokes going into an
-/// invisible shell.
+/// No other automated test falsifies the intent arm, the pane binding, the structural
+/// append, both halves of the focus bridge, the drawer's only UNBIND path, the split
+/// guard or the `state.json` exclusion. Its RED run for the marker leg is ALREADY
+/// measured: the invisible-shell capture, of a build without the front-end drawer,
+/// shows the drawer open in Neovim and NO terminal strip anywhere on screen —
+/// keystrokes going into an invisible shell.
 ///
 /// ## The legs, and what each one's falsifier is
 ///
 /// | leg | assertion | falsifying edit | predicted red |
 /// | --- | --- | --- | --- |
-/// | b | the sampled band contains [`DRAWER_OCR_MARKER`] | restore `LayoutIntent::DrawerOpen { .. } => {}` in `pane_view::apply_intent`, or append the drawer host BEFORE the tree widget in `rebuild_pane_area` | no marker; the band reads the editor's fill rows instead — M15/M16's exact page |
+/// | b | the sampled band contains [`DRAWER_OCR_MARKER`] | restore `LayoutIntent::DrawerOpen { .. } => {}` in `pane_view::apply_intent`, or append the drawer host BEFORE the tree widget in `rebuild_pane_area` | no marker; the band reads the editor's fill rows instead — the invisible-shell capture's exact page |
 /// | b' | the band does NOT contain [`DRAWER_OCR_EDITOR_ABSENT`] | either of the same two edits | the band carries `010zzeditorfill` / `011zzeditorfill` |
-/// | c | the frozen `state.json` holds exactly one leaf, it is the fixture, and no leaf starts with `term://` | insert the drawer with `tree.split(..)` — the design O1 rejected | two leaves, the second `term:///…//<pid>:…` — P2 realized |
-/// | d | after `<C-w>k`, `&buftype` is not `terminal` | revert `apply_focus` to its pre-unit body | still `terminal`: M11 measured Neovim declining the pure intent, so with no front-end answer the user cannot leave the drawer |
+/// | c | the frozen `state.json` holds exactly one leaf, it is the fixture, and no leaf starts with `term://` | insert the drawer with `tree.split(..)`, inside the pane tree | two leaves, the second `term:///…//<pid>:…` — the drawer-as-pane hazard |
+/// | d | after `<C-w>k`, `&buftype` is not `terminal` | in `pane_view::apply_focus`, call `tree.neighbor(origin, dir, ..)` in place of `drawer::focus_target` | still `terminal`: Neovim is measured declining the pure intent, so with no front-end answer the user cannot leave the drawer |
 /// | e | after `<C-w>j`, `&buftype` IS `terminal` | delete the `dir == Down` bridge arm from `drawer::focus_target` | `bt=[]` — focus never left the editor |
-/// | f | after a `:vsplit` and `<C-w>j`, `&buftype` IS `terminal` (O32 leg 1), the split having added a window — asserted as a comparison between two LIVE readbacks, not against a literal | drop `rebuild_pane_area`'s host-unparent loop, or leave the drawer pane unbound by the rebuild | the strip is unreachable after the rebuild — UNPROVEN, neither edit has been run against a captured red |
-/// | g | after a `:split` inside the drawer and `<C-w>k`, `&buftype` is not `terminal` (O32 leg 2) | delete `apply_split`'s drawer guard | `bt=[terminal]`: `pane_for_win` answers the invisible pane, `focus_target` takes the editor branch, `neighbor` returns `None` for a non-leaf, and nothing moves |
+/// | f | after a `:vsplit` and `<C-w>j`, `&buftype` IS `terminal`, the split having added a window — asserted as a comparison between two LIVE readbacks, not against a literal | drop `rebuild_pane_area`'s host-unparent loop, or leave the drawer pane unbound by the rebuild | the strip is unreachable after the rebuild — UNPROVEN, neither edit has been run against a captured red |
+/// | g | after a `:split` inside the drawer and `<C-w>k`, `&buftype` is not `terminal` | delete `apply_split`'s drawer guard | `bt=[terminal]`: `pane_for_win` answers the invisible pane, `focus_target` takes the editor branch, `neighbor` returns `None` for a non-leaf, and nothing moves |
 /// | h | after the chord HIDES the drawer and another press re-opens it, `<C-w>k` out of the NEW drawer answers a `&buftype` that is not `terminal` | delete BOTH the `if let Some(drawer_id) = closed_drawer { … }` block and the loop's `.filter(…)` from `detect_closes` | `bt=[terminal]`: the drawer is never removed from `panes` and `DrawerState` is never cleared, so `apply_drawer_open` refuses the re-open on a stale `is_open()` and no pane follows the new window |
 ///
 /// Leg g's window count is a PRECONDITION and NOT the discriminator — see
-/// [`DRAWER_WINS_AFTER_SPLIT`] for the readback pass 8 refuted. Leg h's two window
-/// counts are preconditions for the same kind of reason: see
+/// [`DRAWER_WINS_AFTER_SPLIT`] for why the count alone cannot discriminate. Leg h's
+/// two window counts are preconditions for the same kind of reason: see
 /// [`DRAWER_WINS_AFTER_HIDE`] and [`DRAWER_WINS_WITH_DRAWER`].
 ///
 /// Appending the drawer host BEFORE the tree widget sits in legs b/b' rather than in
@@ -29812,7 +29777,7 @@ exit 0
 /// has been run against a captured red, so leg f is an unproven row.
 ///
 /// **Leg h runs between legs e and f**, not after leg g — the scenario's step 8. It
-/// is lettered last so the letters this unit's captured red runs already name keep
+/// is lettered last so the letters the captured red runs already name keep
 /// pointing at the rows they were measured against; the scenario's step comments are
 /// the authority on order.
 ///
@@ -29925,7 +29890,8 @@ fn terminal_drawer_opens_and_is_not_persisted_under_cage() {
         "{SMOKE}: the drawer's text band did not contain {DRAWER_OCR_MARKER:?}. Three outcomes are \
          distinguishable from the OCR text below, and they have different first suspects. (a) It \
          carries {DRAWER_OCR_EDITOR_ABSENT:?} — the EDITOR is filling those rows, so no drawer \
-         strip is on screen at all: that is M15/M16's page, and the first suspect is \
+         strip is on screen at all: that is the invisible-shell capture's page, and the first \
+         suspect is \
          `pane_view::apply_intent` dropping `LayoutIntent::DrawerOpen`. (b) It carries a shell \
          PROMPT and no marker — the marker scrolled off, which at this font size means the typed \
          command reprinted the prompt (see DRAWER_MARKER_SLEEP_SECS for the measured `echo` \
@@ -29988,15 +29954,16 @@ fn terminal_drawer_opens_and_is_not_persisted_under_cage() {
     let mut leaves: Vec<&str> = Vec::new();
     collect_leaf_paths(layout, &mut leaves);
 
-    // The `term://` check first: it names P2 alone, and a count assertion would fire ahead of it.
+    // The `term://` check first: it names the drawer-as-pane hazard alone; a count would mask it.
     for path in &leaves {
         assert!(
             !path.starts_with(TERMINAL_BUFFER_SCHEME),
             "{SMOKE}: the frozen state.json persists a leaf whose path starts with \
-             {TERMINAL_BUFFER_SCHEME:?}: {path:?}. That is P2 realized — the drawer became a \
+             {TERMINAL_BUFFER_SCHEME:?}: {path:?}. That is the drawer-as-pane hazard — the \
+             drawer became a \
              `PaneTree` leaf, so `layout_snapshot` wrote the terminal's scheme string into \
              state.json and `wolf_rebuild_layout` would `:edit` it at the next launch, spawning a \
-             second shell (M23) against a working directory that no longer exists. The whole \
+             second shell against a working directory that has been deleted. The whole \
              persisted layout was {leaves:?}. File: {}",
             frozen_state_file.display()
         );
@@ -30028,7 +29995,7 @@ fn terminal_drawer_opens_and_is_not_persisted_under_cage() {
         "{SMOKE}: the frozen state.json's single leaf names {tail:?}, want \
          {DRAWER_FIXTURE_FILE:?}. An `Untitled.md` here means the `:e` never landed, at which \
          point the leaf-count assertion above proves rather less than it appears to — measured \
-         10/10 in pass 8, a drawer-open session with NO `:e` still persists one leaf, because \
+         10/10, a drawer-open session with NO `:e` still persists one leaf, because \
          `persistable_layout` suppresses only an UNNAMED lone leaf and the default buffer is \
          named. The comparison is on the file NAME rather than the whole path because /tmp may \
          resolve through a symlink. File: {}",
@@ -30041,11 +30008,11 @@ fn terminal_drawer_opens_and_is_not_persisted_under_cage() {
         bt, DRAWER_TERMINAL_BUFTYPE,
         "{SMOKE}: after `<C-w>k` from inside the drawer the focused window still holds a terminal \
          buffer (`bt={bt:?}`, wins={wins}). Neovim emits `<C-w>k` as a PURE intent and declines to \
-         act on it — M11 measured `active_win` unchanged — so the ONLY thing that can move focus \
+         act on it — `active_win` is measured unchanged — so the ONLY thing that can move focus \
          is the front-end: `apply_focus` resolving the origin through `drawer::focus_target` and \
          calling `focus_win`. With that reverted the user who opens the drawer cannot leave it, \
-         which is the trap O3 exists to close. Every leg below this one is typed from wherever \
-         focus ended up, so treat their failures as noise until this passes."
+         which is the trap the focus bridge exists to close. Every leg below this one is typed \
+         from wherever focus ended up, so treat their failures as noise until this passes."
     );
 
     // --- Assertion 6 (leg e): <C-w>j BRIDGES back into the drawer -------------
@@ -30185,8 +30152,8 @@ const TERMINAL_BUFFER_SCHEME: &str = "term://";
 /// Every leaf path in a persisted layout, in tree order.
 ///
 /// A walker rather than a match on the root, because the assertion it feeds is about
-/// the WHOLE tree: under the design O1 rejected the drawer would be a second child of
-/// a split, and a root-only read would report the editor leaf and miss it entirely.
+/// the WHOLE tree: a drawer inside the pane tree would be a second child of a split,
+/// and a root-only read would report the editor leaf and miss it entirely.
 fn collect_leaf_paths<'a>(node: &'a PaneNode, out: &mut Vec<&'a str>) {
     match node {
         PaneNode::Leaf { path, .. } => out.push(path),
@@ -30308,7 +30275,7 @@ wait_file "$GEOMETRY" || exit 12
 exit 0
 "#;
 
-/// **Row E:** the terminal drawer defaults to FULL WIDTH — wider than the 90-column
+/// The terminal drawer defaults to FULL WIDTH — wider than the 90-column
 /// content cap every editor pane is held to — and its height is driven by the
 /// front-end's own allocation rather than by Neovim's `floor(lines / 3)`.
 ///
@@ -30322,10 +30289,9 @@ exit 0
 /// uncapped width is a third again as wide, which is what makes both comparisons
 /// two-sided rather than a rounding judgement.
 ///
-/// MEASURED at that size, pass 8: drawer `winwidth(0)` **123**, drawer
-/// `winheight(0)` **8**, editor `winwidth(1)` **90**, `&lines` **42**. (Pass 7 read
-/// `&lines` as 40 by hand; 42 is the measured value. Leg d compares two live values,
-/// so it is unaffected either way.)
+/// MEASURED at that size: drawer `winwidth(0)` **123**, drawer `winheight(0)` **8**,
+/// editor `winwidth(1)` **90**, `&lines` **42**. Leg d compares two live values, so it
+/// does not depend on the measured `&lines`.
 ///
 /// ## The three legs
 ///
@@ -30333,13 +30299,13 @@ exit 0
 /// | --- | --- | --- | --- |
 /// | b | `winwidth(1) == editor_inset::MAX_GRID_COLS` | — (a PREMISE: it says the cap is in force, without which leg c compares nothing) | the editor is not capped here and this smoke is measuring the wrong regime |
 /// | c | `winwidth(0) > MAX_GRID_COLS` | ignore `full_width_for_win` for the drawer in `refresh_pane_state` | the drawer reports exactly `MAX_GRID_COLS` |
-/// | d | `winheight(0) < &lines / 3` | skip the drawer in `sync_pane_grids` / `pending_resize` | exactly `&lines / 3` — M9/M10's "nvim re-divides only the grids the front-end has not sized" |
+/// | d | `winheight(0) < &lines / 3` | skip the drawer in `sync_pane_grids` / `pending_resize` | exactly `&lines / 3` — nvim is measured to re-divide only the grids the front-end has not sized |
 ///
-/// Leg c is O4's observation in the running application: Row E ships in `init.lua`
-/// alone (`b:wolf_full_width = true` plus two guarded re-emits) and rides the
-/// ordinary `full_width_for_win` path this front-end already consumes. **If it cannot
-/// pass without new front-end code, that is a finding to report rather than a licence
-/// to widen the row.**
+/// Leg c observes, in the running application, that the full-width default ships in
+/// `init.lua` alone (`b:wolf_full_width = true` plus two guarded re-emits) and rides
+/// the ordinary `full_width_for_win` path this front-end already consumes. **If it
+/// cannot pass without new front-end code, that is a finding to report rather than a
+/// licence to widen the default.**
 ///
 /// Leg d's strict inequality holds by construction: the front-end's row count
 /// subtracts the statusbar strip and both padding gutters from a third of the pane
@@ -30424,19 +30390,19 @@ fn terminal_drawer_defaults_to_full_width_under_cage() {
          `refresh_pane_state` must take the drawer's `full_width_for_win`, which \
          `runtime/nvim/init.lua` seeds with `b:wolf_full_width = true` when it opens the split and \
          re-emits explicitly on the same wake. Nothing in this front-end special-cases the drawer \
-         for width — if making this pass needs front-end code, that is a FINDING about Row E, not \
-         a reason to widen it."
+         for width — if making this pass needs front-end code, that is a FINDING about the \
+         full-width default, not a reason to widen it."
     );
 
-    // --- Assertion 4 (leg d): O5 — the drawer's HEIGHT is front-end driven ----
+    // --- Assertion 4 (leg d): the drawer's HEIGHT is front-end driven ---------
     let nvim_third = lines / 3;
     assert!(
         drawer_h < nvim_third,
         "{SMOKE}: the drawer reports winheight(0) = {drawer_h}, which is not less than Neovim's \
          own `&lines / 3` = {nvim_third} (&lines = {lines}; measured 8 against 14). EQUAL heights \
          mean the front-end never issued a `resize_grid` for the drawer, so the size Neovim \
-         divided for itself at `botright <h>split` still stands — M9/M10 measured that nvim \
-         re-divides only the grids the front-end has NOT sized, so an unsized drawer keeps drifting \
+         divided for itself at `botright <h>split` still stands — nvim is measured to re-divide \
+         only the grids the front-end has NOT sized, so an unsized drawer keeps drifting \
          with every outer resize. The front-end's own count is strictly smaller by construction: it \
          subtracts the statusbar strip and both padding gutters from a third of the pane area \
          before dividing by the cell height. A GREATER height would mean the drawer was given more \
@@ -30463,7 +30429,7 @@ const DRAWER_RESTART_AFTER_UP_NAME: &str = "wolf_gnome_drawer_restart_after_up.t
 /// The window count `winnr('$')` reports with the drawer open: the editor pane plus
 /// the drawer.
 ///
-/// MEASURED in pass 8 either side of the restart, and shared by two smokes because it
+/// MEASURED either side of the restart, and shared by two smokes because it
 /// is the same arrangement: [`terminal_drawer_reopens_after_a_neovim_restart_under_cage`]
 /// asserts it before the kill and again after the second chord, and
 /// [`terminal_drawer_opens_and_is_not_persisted_under_cage`]'s leg h asserts it once
@@ -30483,7 +30449,7 @@ const DRAWER_WINS_WITH_DRAWER: i64 = 2;
 ///
 /// ## Both waits are POLLS, not sleeps
 ///
-/// MEASURED in pass 8: kill -> the restarted Neovim answers takes 1.007 s / 1.016 s,
+/// MEASURED over two runs: kill -> the restarted Neovim answers takes 1.007 s / 1.016 s,
 /// and chord #2 -> the drawer answers `bt=[terminal]` takes 810 ms / 812 ms. Both
 /// polls succeeded on their FIRST iteration in both runs, and `FILE_TRIES * 0.2 s` is
 /// about twenty times the measured recovery — so the budget is generous by design and
@@ -30644,30 +30610,30 @@ exit 0
 
 /// The drawer can be opened AGAIN after the captive Neovim crashes and is restarted
 /// in place — the only falsifier anywhere for `reset_after_restart` clearing the
-/// drawer state (O11).
+/// drawer state.
 ///
-/// ## Why nothing else can catch it (M19)
+/// ## Why nothing else can catch it
 ///
 /// A SIGKILL freezes the snapshot; `restart_nvim()` then wholesale-replaces
 /// `win_buffers` and `full_width` but leaves the DEAD drawer's grid and its `WinInfo`
 /// in place. So `detect_closes` — which collapses a pane whose grid vanished — can
 /// never fire for the drawer, and `reset_after_restart` clears `tree`, `panes`,
-/// `next_pane_id` and `active_pane` but not the field O1 puts the drawer in. A
+/// `next_pane_id` and `active_pane` but not the field that holds the drawer. A
 /// surviving id keeps `apply_drawer_open`'s `is_open()` guard true against a dead
 /// Neovim's pane, and the drawer can never be opened again for the rest of the
 /// session.
 ///
 /// The guard must therefore keep reading `DrawerState::is_open()` and NOT
-/// `panes.contains_key` (O17): a self-healing guard would delete this smoke's only
+/// `panes.contains_key`: a self-healing guard would delete this smoke's only
 /// falsifier while leaving the stale state in place.
 ///
-/// ## §5.4's predicted red is WRONG, and this is what replaces it
+/// ## Why the red is not "one window and an empty buftype"
 ///
-/// The plan predicted "one window and an empty buftype" after the second chord. Pass
-/// 8 measured that FALSE: the chord runs `_G.wolf_toggle_terminal()` inside Neovim,
-/// so with the clear deleted Neovim still builds the drawer window — `wins=2` and
-/// `&buftype == terminal`, in BOTH builds. Only the front-end half breaks, and it
-/// breaks silently: no pane is bound, so nothing is painted and nothing moves.
+/// With the clear deleted, the second chord still leaves two windows: it runs
+/// `_G.wolf_toggle_terminal()` inside Neovim, so Neovim still builds the drawer
+/// window — `wins=2` and `&buftype == terminal`, in BOTH builds. Only the front-end
+/// half breaks, and it breaks silently: no pane is bound, so nothing is painted and
+/// nothing moves.
 ///
 /// **The discriminator is `<C-w>k` out of the re-opened drawer.** Green `bt=[]`;
 /// predicted red `bt=[terminal]`, because `apply_drawer_open` returns early on the
@@ -30677,10 +30643,10 @@ exit 0
 ///
 /// ## Why it is not folded into the crash smoke
 ///
-/// O11's hazard needs the drawer bound BEFORE the kill, and folding it would change
-/// `nvim_crash_recovers_and_reopens_the_file_under_cage`'s pre-crash capture and its
-/// delicate `winheight` equality — a smoke whose assertions were calibrated without a
-/// drawer taking a third of the pane area.
+/// The stale-drawer hazard needs the drawer bound BEFORE the kill, and folding it
+/// would change `nvim_crash_recovers_and_reopens_the_file_under_cage`'s pre-crash
+/// capture and its delicate `winheight` equality — a smoke whose assertions were
+/// calibrated without a drawer taking a third of the pane area.
 #[test]
 fn terminal_drawer_reopens_after_a_neovim_restart_under_cage() {
     const SMOKE: &str = "terminal_drawer_reopens_after_a_neovim_restart_under_cage";
@@ -30750,8 +30716,8 @@ fn terminal_drawer_reopens_after_a_neovim_restart_under_cage() {
          wins={wins}). The crash mirror replays `open_files_for_tabpage` through \
          `liveness_ui::reopen_order`, which puts the active entry LAST so it lands focused — so a \
          terminal here means `wolf_core::redraw::apply_open_files` stopped filtering `term://` \
-         names out of the mirror and the replay `:edit`ed one. M23 measured what that does: a \
-         SECOND shell is spawned, with a fresh pid inside an otherwise byte-identical name, and \
+         names out of the mirror and the replay `:edit`ed one. That is measured to spawn a \
+         SECOND shell, with a fresh pid inside an otherwise byte-identical name, and \
          nothing is reported to the user. `nvim_restart::open_files_omits_a_terminal_buffer` \
          covers the same filter headlessly and will be red too."
     );
@@ -30788,8 +30754,8 @@ fn terminal_drawer_reopens_after_a_neovim_restart_under_cage() {
          drawer: `apply_drawer_open` returns early on a stale `is_open()` against the DEAD \
          Neovim's pane id, no pane is bound to the new window, `apply_focus` falls back to the \
          sole editor leaf as its origin, and `neighbor` on a one-leaf tree answers `None`. Nothing \
-         is painted and nothing moves, silently, for the rest of the session. M19 makes this the \
-         unit's sharpest hazard: `detect_closes` can NEVER fire for the drawer, because the dead \
+         is painted and nothing moves, silently, for the rest of the session. This is the \
+         drawer's sharpest hazard: `detect_closes` can NEVER fire for the drawer, because the dead \
          drawer's grid survives the restart. Check `PaneInner::reset_after_restart` calls \
          `DrawerState::clear()`, and that the guard still reads `is_open()` rather than \
          `panes.contains_key` — a self-healing guard would delete this assertion's only falsifier."
@@ -30836,9 +30802,10 @@ const TABS_OCR_FIRST: &str = "zztabalfa";
 /// ```
 ///
 /// `wolf_create_tabpage` runs `:tabnew` and only THEN `:tcd cwd` when `cwd ~= nil`,
-/// so the explicit form lands on the directory the tabpage already had — and O3
-/// makes the front-end's chosen cwd that same directory by construction, so the two
-/// calls agree by design rather than by accident. Two escapes were measured and both
+/// so the explicit form lands on the directory the tabpage already had — and a new
+/// tab inheriting the window's folder makes the front-end's chosen cwd that same
+/// directory by construction, so the two calls agree by design rather than by
+/// accident. Two escapes were measured and both
 /// fail: `haslocaldir(-1, 0)` reads `1` for an INHERITED tab as well as for an
 /// explicitly `:tcd`'d one, and a window-local `:lcd` is inherited by `:tabnew` too.
 ///
@@ -31191,7 +31158,7 @@ exit 0
 ///
 /// ## What it proves that nothing else can
 ///
-/// Every headless test of this unit can only see values the front-end itself
+/// Every headless tab test can only see values the front-end itself
 /// computed. This is the only observation in the repository that a second
 /// `adw::TabPage` exists over one core at all, that the GTK selection reaches
 /// Neovim, that the bar costs the editor grid real rows, and that `close-page`'s
@@ -31217,7 +31184,7 @@ exit 0
 /// A precondition gets no revert of its own. Where a revert WAS run and this smoke
 /// stayed green, or reddened somewhere other than the row it was aimed at, that
 /// measurement stands in the revert column in place of the claim it falsified. The
-/// `measured` column is the coder's to fill from an actual run.
+/// `measured` column is from an actual run.
 ///
 /// | # | assertion | kind | revert | measured |
 /// | --- | --- | --- | --- | --- |
@@ -31225,15 +31192,15 @@ exit 0
 /// | 1 | the scenario exited 0 | precondition — it ran to completion | none; do not invent one | n/a |
 /// | 2 | three captures present, the injected point inside the reported extents | precondition | none | n/a |
 /// | 3 | `&showtabline == 0` | PRECONDITION for assertion 6 — Neovim draws no tabline of its own | none of this crate's; `crates/wolf-core/tests/tabpages.rs::a_second_tabpage_draws_no_neovim_tabline` owns it | n/a |
-/// | 4 | leg (c) reports two tabpages, the second current | **discriminator** — F1 | `command_action.rs`: restore `Command::NewTab => Deferred(..)` | scenario exit 22 |
-/// | 5 | leg (c)'s `getcwd()` ends in [`TABS_SUBDIR`] | PRECONDITION for leg (d) — where the new tab is rooted | **no isolated red.** F2 (`shell.rs`: `create_tabpage(Some(cwd))` -> `create_tabpage(None)`) was RUN and this smoke stayed GREEN: `:tabnew` copies the current window's effective directory, so the tab inherits leg (b)'s `:tcd` under both calls, and O3 makes the two arguments name the same directory anyway. `haslocaldir(-1, 0)` and a window-local `:lcd` were both measured and neither separates them either. Kept because a tab rooted somewhere UNRELATED has no other observer here; see [`TABS_SUBDIR`] | F2 ran: GREEN |
-/// | 6 | `H2 < H1` | **discriminator** — F3 | `window.rs`: drop the `content.append(&tabs.bar_widget())`, which leaves `H2 == H1`. A SECOND revert lands on this same assertion: dropping `set_selected_page` from `open_tab` leaves the new page unmapped and `0x0`, `pane_view::pending_resize` refuses that size, and the new tabpage's grid keeps a taller default — `H2` reads 14 against `H1` = 11, a GROWN count | scenario exit 24, from either |
-/// | 7 | leg (e) reports tabpage 1 and the first file | **discriminator** — F4 | `tab_view.rs`: delete the `set_current_tabpage` call in the selection notify | scenario exit 25 |
+/// | 4 | leg (c) reports two tabpages, the second current | **discriminator** | `command_action.rs`: restore `Command::NewTab => Deferred(..)` | scenario exit 22 |
+/// | 5 | leg (c)'s `getcwd()` ends in [`TABS_SUBDIR`] | PRECONDITION for leg (d) — where the new tab is rooted | **no isolated red.** The revert in `shell.rs`, `create_tabpage(Some(cwd))` -> `create_tabpage(None)`, was RUN and this smoke stayed GREEN: `:tabnew` copies the current window's effective directory, so the tab inherits leg (b)'s `:tcd` under both calls, and a new tab inheriting the window's folder makes the two arguments name the same directory anyway. `haslocaldir(-1, 0)` and a window-local `:lcd` were both measured and neither separates them either. Kept because a tab rooted somewhere UNRELATED has no other observer here; see [`TABS_SUBDIR`] | ran: GREEN |
+/// | 6 | `H2 < H1` | **discriminator** | `window.rs`: drop the `content.append(&tabs.bar_widget())`, which leaves `H2 == H1`. A SECOND revert lands on this same assertion: dropping `set_selected_page` from `open_tab` leaves the new page unmapped and `0x0`, `pane_view::pending_resize` refuses that size, and the new tabpage's grid keeps a taller default — `H2` reads 14 against `H1` = 11, a GROWN count | scenario exit 24, from either |
+/// | 7 | leg (e) reports tabpage 1 and the first file | **discriminator** | `tab_view.rs`: delete the `set_current_tabpage` call in the selection notify | scenario exit 25 |
 /// | 8 | `&hidden` is on | PRECONDITION for assertion 9 — Neovim would accept the close | none | n/a |
-/// | 9 | leg (f) reports one tabpage | **discriminator** — F5 | `tab_view.rs`: return `Propagation::Proceed` with no `close_page_finish` | scenario exit 26 |
+/// | 9 | leg (f) reports one tabpage | **discriminator** | `tab_view.rs`: return `Propagation::Proceed` with no `close_page_finish` | scenario exit 26 |
 /// | 10 | capture A carries [`TABS_OCR_FIRST`] | precondition — capture B's non-vacuity partner | none | n/a |
 /// | 11 | capture B carries [`TABS_OCR_SECOND`] | corroboration for the SELECTION of a newly appended page | `tab_view.rs`: drop `set_selected_page` from `open_tab`. MEASURED, and the run never reaches capture B: the unselected page's `DrawingArea` stays unmapped at `0x0`, `pending_resize` refuses that size, the new tabpage's grid keeps a taller default and leg (c) exits 24 with `H2` = 14 against `H1` = 11. The revert DOES redden this smoke — at assertion 6, not here — so it is not an unproven rule; what has no red of its own is this assertion | scenario exit 24, in leg (c) |
-/// | 12 | capture B does NOT carry [`TABS_OCR_FIRST`] | **discriminator** — F6 | **no isolated red.** What it catches is two panes drawn at once, which is reachable only by a structural edit that appends both tabs' widgets to one visible container. Recorded rather than papered over, the same shape as the drawer smoke's leg (f) | n/a |
+/// | 12 | capture B does NOT carry [`TABS_OCR_FIRST`] | **discriminator** | **no isolated red.** What it catches is two panes drawn at once, which is reachable only by a structural edit that appends both tabs' widgets to one visible container. Recorded rather than papered over, the same shape as the drawer smoke's leg (f) | n/a |
 /// | 13 | capture C carries [`TABS_OCR_FIRST`] and not [`TABS_OCR_SECOND`] | corroboration — the only pixel evidence that selecting a page changes what is on screen | none that is isolated; see the capture-C paragraph above | n/a |
 ///
 /// ## Seconds
@@ -31408,8 +31375,8 @@ fn native_tabs_open_switch_and_close_under_cage() {
     );
     assert_inside_extents(SMOKE, "the FIRST TAB's centre", (click_x, click_y), extents);
 
-    // Assertion 3 (precondition): `showtabline` is 0, or a second tabpage costs a row with no bar; F3
-    // has no red. `init.lua` is not this test's to control, so Neovim is asked.
+    // Assertion 3 (precondition): `showtabline` is 0, or a second tabpage costs a row with no bar and
+    // dropping the bar has no red. `init.lua` is not this test's to control, so Neovim is asked.
     let leg_c = read_readback(&read_c, SMOKE);
     let mut leg_c_lines = leg_c.lines();
     let leg_c_numbers = leg_c_lines.next().unwrap_or_default();
@@ -31456,7 +31423,7 @@ fn native_tabs_open_switch_and_close_under_cage() {
          FIRST tab, making capture B's crossed pair describe the wrong page."
     );
 
-    // Assertion 5 (precondition for leg (d)): `:tabnew` inherits the effective cwd, so F2 stays green;
+    // Assertion 5 (precondition for leg (d)): `:tabnew` inherits the effective cwd, so it has no red;
     // kept because leg (d)'s bare `:e` resolves here. Compared on the last component (symlinks).
     let got_tail = leg_c_cwd.rsplit('/').next().unwrap_or_default();
     assert_eq!(
@@ -31756,7 +31723,7 @@ fn ocr_uniform_block_to_lowercase(png: &Path) -> String {
 /// depends on stays a fixed, unparameterized command over a whole file.
 ///
 /// The `--psm 11` here is the same sparse-text mode, and it is MEASURED at this band:
-/// pass 10 ran it and the crop's entire OCR output was the single token
+/// in a measured run the crop's entire OCR output was the single token
 /// `ZZDRAWERMARK]` — the marker, one stray bracket, and no statusbar ink at all, which
 /// is the band's placement and the mode's suitability in one reading. If the marker is
 /// visibly present in the retained crop and the assertion still fails, `--psm 6` is the
@@ -32590,8 +32557,8 @@ const COMPOSE_UNCOMPOSED_READING: &str = "eaess";
 /// COMPOSE smoke: the file the captive Neovim writes `bufname('%')` into BEFORE any
 /// compose key is pressed.
 ///
-/// A PRECONDITION, and it carries more weight here than in any sibling smoke: after
-/// this unit the input method filters plain printables, so a broken commit path
+/// A PRECONDITION, and it carries more weight here than in any sibling smoke: the
+/// input method filters plain printables, so a broken commit path
 /// breaks ALL typing rather than only accents, and every other symptom in a red run
 /// would be a red herring. This readback is what says keys were reaching Neovim at
 /// all when the compose sequences were driven.
@@ -32779,8 +32746,8 @@ exit 0
 ///
 /// ## The regression evidence this smoke does NOT carry
 ///
-/// Measurement 3 behind this unit says the input method filters plain printables
-/// with no sequence pending, so EVERY ordinary keystroke — every normal-mode command
+/// The input method is measured to filter plain printables with no sequence
+/// pending, so EVERY ordinary keystroke — every normal-mode command
 /// key, every character of a typed `:e` line — travels the commit path rather than
 /// the `gdk_key` path. This is not an accent feature bolted beside typing; it is a
 /// rerouting of typing. What proves the rerouting is safe is the rest of this file
@@ -32874,8 +32841,8 @@ fn composed_text_reaches_neovim_under_cage() {
          Exit 11: the app died before it was ready for input — a LAUNCH failure, and nothing below \
          is about composing.\n\
          Exit 24: the `bufname('%')` readback never appeared, so keys were not reaching Neovim at \
-         all. That is the loudest possible symptom of this unit going wrong, because the input \
-         method filters plain printables: a commit handler that sends nothing breaks ALL typing, \
+         all. That is the loudest possible symptom of the input method going wrong, because it \
+         filters plain printables: a commit handler that sends nothing breaks ALL typing, \
          not only accents. Check `window_renders_typed_text_under_cage` first.\n\
          Exit 25: the composed-line readback never appeared, so the `:call writefile(...)` never \
          ran — ordinary keys reached Neovim (exit 24 would have fired otherwise) but the cmdline \
@@ -33305,7 +33272,7 @@ fn a_control_chord_while_composing_is_claimed_by_the_input_method_under_cage() {
          Exit 11: the app died before it was ready for input — a LAUNCH failure, and nothing below \
          is about the input method.\n\
          Exit 24: the `bufname('%')` readback never appeared, so keys were not reaching Neovim at \
-         all. That is the loudest possible symptom of the input-method unit going wrong, because \
+         all. That is the loudest possible symptom of the input method going wrong, because \
          the input method filters plain printables: a commit handler that sends nothing breaks ALL \
          typing, not only accents. Check `window_renders_typed_text_under_cage` first.\n\
          Exit 25, 26 or 27: one of the three `winnr('$')` readbacks before the dead key never \
@@ -33981,7 +33948,7 @@ fn frame_stats_report_covers_the_live_typing_path_under_cage() {
          `maybe_emit()` is not being called from that loop, or that `interval_elapsed` never \
          answered true, or that `is_empty()` answered true on every wake — which would mean \
          `record`, `note_wake` and `note_keystroke` are all reaching a different accumulator from \
-         the one the emit reads (the `thread_local!` hazard the plan names). Note the TWO spaces \
+         the one the emit reads (the accumulator is a `thread_local!`). Note the TWO spaces \
          before `window=`: they are part of the pinned layout. File contents were:\n{text}",
         stats_path.display()
     );
@@ -34049,10 +34016,11 @@ fn frame_stats_report_covers_the_live_typing_path_under_cage() {
             "{SMOKE}: no report in {} carries a bucket row labelled {label:?}, so that region was \
              never entered and timed during a real typing session — `summarize` omits every \
              zero-count bucket, which is what makes an absent row mean exactly that. Check the \
-             call site for this bucket in the plan's table, and remember that a `Scope` bound with \
-             `let _ = frame_metrics::scope(..)` rather than to a NAMED guard drops instantly and \
-             records a region of zero length, which still produces a row — so an absent row is the \
-             call site missing outright. Labels actually seen: {:?}. File contents were:\n{text}",
+             `frame_metrics::scope` call site for this bucket, and remember that a `Scope` bound \
+             with `let _ = frame_metrics::scope(..)` rather than to a NAMED guard drops instantly \
+             and records a region of zero length, which still produces a row — so an absent row is \
+             the call site missing outright. Labels actually seen: {:?}. \
+             File contents were:\n{text}",
             stats_path.display(),
             blocks
                 .iter()
@@ -36065,7 +36033,7 @@ exit 0
 /// NOT made here. It belongs to
 /// [`preview_document_follows_the_configured_appearance_under_cage`], which makes it
 /// against the CHECKOUT binary — whose editor background is `#14161b` — with a two
-/// launch pair the packaging unit does not change.
+/// launch pair that packaging does not change.
 ///
 /// ## What this smoke does claim
 ///

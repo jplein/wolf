@@ -110,9 +110,9 @@ pub enum Command {
 
 /// The menu group a command belongs to in a native menu bar.
 ///
-/// Metadata for a front-end that chooses to render the registry (deferred for
-/// this cut — the macOS menu hardcodes its own item list). Kept in the canonical
-/// registry so the grouping is defined in one place.
+/// Metadata for a front-end that chooses to render the registry (the macOS menu
+/// hardcodes its own item list). Kept in the canonical registry so the grouping is
+/// defined in one place.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MenuGroup {
     /// The application menu (About / Hide / Quit).

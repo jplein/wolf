@@ -2820,7 +2820,7 @@ mod tests {
             "after the drag the middle top column no longer overlaps the bottom-LEFT pane at all, \
              so the pane below it is the bottom-RIGHT one. Answering the bottom-left pane here \
              means `neighbor` resolved against idealized equal shares rather than against the \
-             dragged geometry — the behaviour `architecture.md` used to document as a limitation."
+             dragged geometry."
         );
     }
 }

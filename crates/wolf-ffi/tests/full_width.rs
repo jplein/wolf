@@ -1,11 +1,11 @@
 //! Integration test for the `wolf-ffi` FULL-WIDTH (per-buffer content width)
-//! bridge surface (feature plan §3–§7): the native-facing editor-affecting toggle
-//! that backs the macOS "Use full width for content" command (`:WolfFullWidth`).
+//! bridge surface: the native-facing editor-affecting toggle that backs the macOS
+//! "Use full width for content" command (`:WolfFullWidth`).
 //!
 //!   * `WolfCoreHandle::toggle_full_width(&self)` -> `InputEvent::ToggleFullWidth`
 //!     -> the `wolf_toggle_full_width()` Lua helper in `init.lua`, which flips the
 //!     effective buffer's `b:wolf_full_width` (targeting the SOURCE buffer when the
-//!     active pane is a preview scratch — OQ-1) and re-emits the current-file /
+//!     active pane is a preview scratch) and re-emits the current-file /
 //!     per-window full-width / previews notifications.
 //!   * `WolfCoreHandle::is_full_width_active(&self) -> bool` — the active buffer's
 //!     flag (drives the View-menu checkmark).
@@ -19,17 +19,13 @@
 //! editor-affecting toggle) and `preview.rs` (same staging / SKIP-when-unset
 //! machinery, reusing `tests/common/mod.rs`).
 //!
-//! ## Dependency on coder work (plan §3–§7)
+//! ## What backs it
 //!
-//! None of `toggle_full_width` / `is_full_width_active` / `full_width_for_win` /
-//! `FfiPreview::source_full_width` exists yet: the coder adds them to the bridge
-//! (`extern "Rust"`) and `impl WolfCoreHandle` in `crates/wolf-ffi/src/lib.rs`,
-//! backed by the new `wolf_core::InputEvent::ToggleFullWidth` variant, the
+//! The `wolf_core::InputEvent::ToggleFullWidth` variant, the
 //! `Snapshot.current_is_full_width` / `full_width` state, the `wolf_full_width`
 //! notification, and the `wolf_toggle_full_width()` / `wolf_setup_full_width()`
-//! helpers in `runtime/nvim/init.lua`, then regenerates `generated/` and appends
-//! `command_kind::FULL_WIDTH = 22`. This test file does NOT touch non-test source,
-//! and it will not compile until that lands — expected.
+//! helpers in `runtime/nvim/init.lua`. The `//crates/wolf-ffi:full_width`
+//! `rust_test` target runs this file under Bazel.
 //!
 //! We drive `toggle_full_width()` (the HANDLE method that actually runs the helper)
 //! rather than relying on `:WolfFullWidth` to toggle — the Ex-command only enqueues

@@ -1,5 +1,4 @@
-//! Integration test for the `wolf-ffi` RECENT-DIRECTORIES bridge accessor
-//! (plan §FFI):
+//! Integration test for the `wolf-ffi` RECENT-DIRECTORIES bridge accessor:
 //!
 //!   * `WolfCoreHandle::recent_dirs(&self) -> Vec<String>` — returns the GLOBAL
 //!     recent-directories MRU newest-first (capped at 20), as owned Strings;
@@ -17,15 +16,8 @@
 //! BEFORE start), reusing `tests/common/mod.rs` and the same "poll `read_frame()`
 //! until attached" pattern.
 //!
-//! ## Dependency on coder work (plan §FFI)
-//!
-//! `recent_dirs` does NOT exist on `WolfCoreHandle` yet: the coder adds it to the
-//! bridge (`extern "Rust"`) and `impl WolfCoreHandle` in
-//! `crates/wolf-ffi/src/lib.rs`, delegating to the existing
-//! `wolf_core::WolfCore::recent_dirs()`, AND adds the
-//! `//crates/wolf-ffi:recent_dirs` `rust_test` target in `BUILD.bazel`. This test
-//! file does NOT touch non-test source, and it will not compile until that method
-//! lands — that is expected.
+//! The `//crates/wolf-ffi:recent_dirs` `rust_test` target runs this file under
+//! Bazel.
 //!
 //! ## SKIP-when-unset policy
 //!

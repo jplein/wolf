@@ -4,13 +4,12 @@
 //! This drives a REAL, hermetic Neovim (no mocks) via the shared `tests/common`
 //! harness — exactly like `theme.rs` / `commands.rs` — AND a REAL loopback TCP
 //! socket. The HTTP client is HAND-ROLLED on `std::net::TcpStream` (see
-//! [`http_get`]): the plan's dependency denylist forbids an HTTP-client crate
-//! (reqwest/hyper/ureq) reaching the Bazel test deps, and `std::net` adds zero
-//! dependency nodes.
+//! [`http_get`]): an HTTP-client crate (reqwest/hyper/ureq) is denylisted from
+//! the Bazel test deps, and `std::net` adds zero dependency nodes.
 //!
-//! The server (per the plan) is a tiny static site rooted at the project root
-//! (falling back to the pinned file's parent dir — the case these tests exercise,
-//! since the temp `.md` is outside nvim's cwd):
+//! The server is a tiny static site rooted at the project root (falling back to
+//! the pinned file's parent dir — the case these tests exercise, since the temp
+//! `.md` is outside nvim's cwd):
 //!   * binds `127.0.0.1:0` (a random OS-assigned port), loopback ONLY;
 //!   * serves the PINNED file at its ROOT-relative path (the URL
 //!     `open_in_browser` returns) = `markdown::render_html` of the source buffer,
@@ -27,11 +26,11 @@
 //! `is_markdown_active()` for the initial markdown gate, and `GET /tick` for the
 //! post-edit tick bump — each bounded by [`FLUSH_TIMEOUT`] so a hang fails loudly.
 //!
-//! NOTE to coder / ASSUMPTIONS (flagged for alignment):
+//! Assumptions:
 //!   * `WolfCore::open_in_browser(&self) -> String` returns the loopback URL
 //!     pointing at the pinned file's ROOT-relative path
 //!     (`http://127.0.0.1:<port>/<relpath>`) or an EMPTY string when the active
-//!     buffer is not markdown / on error (plan §4 `api.rs`).
+//!     buffer is not markdown / on error.
 //!   * The rendered page carries the `wolf-markdown` body wrapper (verified in
 //!     `markdown::render_html`), the `/tick` poll endpoint, and a `location.reload`
 //!     call — the three robust body markers asserted below.
@@ -527,8 +526,8 @@ fn missing_markdown_target_is_404() {
 /// Edge case: with a NON-markdown buffer active, `open_in_browser` returns an
 /// EMPTY string (there is no markdown source to preview).
 ///
-/// The startup buffer is no longer non-markdown — the anonymous-buffer feature names
-/// it `Untitled.md` and sets `filetype=markdown` — so this drives a genuinely
+/// The startup buffer is markdown — the anonymous-buffer feature names it
+/// `Untitled.md` and sets `filetype=markdown` — so this drives a genuinely
 /// NON-markdown buffer by opening a real `.txt` file and waiting for the markdown
 /// gate to drop to false.
 #[test]

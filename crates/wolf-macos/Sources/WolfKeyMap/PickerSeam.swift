@@ -15,9 +15,8 @@ public enum PickerSeam {
   /// modifiers (ctrl/alt) are not part of the signature and so are neither
   /// required nor disqualifying. An empty string (no first scalar) is `false`.
   ///
-  /// Both platforms now agree on the LETTER: wolf-gnome's file picker is
-  /// Ctrl+Shift+O (it was Ctrl+Shift+P until the command-drain unit moved it and
-  /// reserved P for the command palette). What differs is the MODIFIER and the
+  /// Both platforms agree on the LETTER: wolf-gnome's file picker is Ctrl+Shift+O
+  /// (Ctrl+Shift+P is its command palette). What differs is the MODIFIER and the
   /// MECHANISM.
   ///
   /// The modifier difference is deliberate and still load-bearing: Command+O is
@@ -31,7 +30,7 @@ public enum PickerSeam {
   ///
   /// The mechanism difference: this is a Swift predicate, whereas the Linux side
   /// is a table lookup (`actions::action_for_key` -> `win.go-to-file`), so there
-  /// is no longer a Rust predicate for this function to be a parity port of. See
+  /// is no Rust predicate for this function to be a parity port of. See
   /// `crates/wolf-gnome/README.md`, "Keyboard accelerators".
   public static func isPickerTrigger(
     charactersIgnoringModifiers: String,

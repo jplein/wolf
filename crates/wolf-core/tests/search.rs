@@ -7,7 +7,7 @@
 //! `WOLF_RG_BIN`) — NO mocks, consistent with the project's real-tool policy and
 //! the sibling `tests/file_search.rs`. The temp trees are seeded with `tempfile`.
 //!
-//! Surface exercised (per the search plan §2):
+//! Surface exercised:
 //! - `WolfCore::start_search(SearchOptions { query, use_regex, case_sensitive,
 //!   all_files }, wake) -> SearchSession` (streams rg matches into a versioned
 //!   snapshot behind a lock, sets `complete = true` when rg finishes).

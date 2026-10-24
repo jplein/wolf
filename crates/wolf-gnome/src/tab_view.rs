@@ -2,7 +2,7 @@
 //! carrying one [`crate::pane_view::PaneHandle`] per tab over ONE shared
 //! [`WolfCore`].
 //!
-//! Every DECISION this module acts on is [`mod@crate::tabs_ui`]'s — which tab a
+//! Every decision this module acts on is [`mod@crate::tabs_ui`]'s — which tab a
 //! wake may touch, what closing one does, whether a New Tab press may issue its
 //! blocking RPC, the directory a new tab inherits, and the string a tab draws. This
 //! file is the widget work of carrying those answers out, in the same relationship

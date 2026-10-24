@@ -310,7 +310,7 @@ mod tests {
     #[test]
     fn reset_alive_leaves_dead_the_restart_exit() {
         // reset_alive is the ONLY documented exit from the terminal Dead state,
-        // used by `restart_nvim` (plan §5 step 3). It fires a wake on the change.
+        // used by `restart_nvim`. It fires a wake on the change.
         let state = state_at(Liveness::Dead);
         let (wake, count) = counting_wake();
 

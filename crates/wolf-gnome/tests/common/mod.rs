@@ -82,9 +82,8 @@ pub fn fresh_cwd() -> PathBuf {
 /// Builds a `CoreConfig` with the resolved init.lua path, the given grid size,
 /// and a fresh per-call `cwd`.
 ///
-/// NOTE to coder: assumes `CoreConfig` has public fields `init_lua`, `cols`,
-/// `rows`, and (new in S1) `cwd` (per plan §D6). If that changes, adapt
-/// [`config_in`] (the single literal).
+/// Assumes `CoreConfig` has public fields `init_lua`, `cols`, `rows` and `cwd`.
+/// If that changes, adapt [`config_in`] (the single literal).
 pub fn config(cols: u16, rows: u16) -> CoreConfig {
     config_in(fresh_cwd(), cols, rows)
 }

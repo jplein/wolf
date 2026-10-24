@@ -1,5 +1,5 @@
-//! Integration + pure-registry tests for the S-Commands ARCHITECTURE: the new
-//! Neovim->shell COMMAND CHANNEL that generalizes the `wolf_layout` intent channel.
+//! Integration + pure-registry tests for the COMMAND CHANNEL: the Neovim->shell
+//! channel that generalizes the `wolf_layout` intent channel.
 //!
 //! A Command is a no-parameter, no-return user action. Unlike layout intents,
 //! commands are ONLY user-triggered (an Ex-command `:Wolf<Pascal>` or the Lua
@@ -19,14 +19,10 @@
 //! The `Command`/`COMMAND_SPECS` PURE tests at the bottom do NOT start a core, so
 //! they run regardless of whether a pinned nvim is available.
 //!
-//! NOTE to coder / ASSUMPTIONS (flagged for alignment):
-//!   * `wolf_core::Command` derives `Debug, Clone, Copy, PartialEq, Eq` (used in
-//!     `.contains(&Command::...)` and panic messages), per plan §2.
-//!   * `CommandSpec` exposes its `command`, `id`, and `ex_command` fields publicly
-//!     (so `COMMAND_SPECS` rows can be inspected). If the coder instead exposes
-//!     accessor methods, adapt the four pure tests below (the single field-access
-//!     site each).
-//!   * `WolfCore::drain_commands(&self) -> Vec<Command>` mirrors `drain_intents`.
+//! The tests rely on `wolf_core::Command` deriving `PartialEq` and `Debug` (for
+//! `.contains(&Command::...)` and panic messages) and on `CommandSpec`'s public
+//! `command`, `id`, and `ex_command` fields (so `COMMAND_SPECS` rows can be
+//! inspected).
 
 mod common;
 
@@ -76,11 +72,11 @@ fn poll_until(core: &WolfCore, waiter: &FlushWaiter, desc: &str, pred: impl Fn(&
 }
 
 /// Polls `core.drain_commands()` until it yields a non-empty batch (or panics
-/// after `timeout`), returning the first non-empty drain. This is the plan §4
-/// `drain_until_command` helper, the command-channel sibling of
-/// `layout_intents.rs`'s `drain_until_intent`. Each `:Wolf*` Ex-command / `wolf`
-/// Lua call under test enqueues exactly one `Command`, so the first non-empty
-/// drain is the batch we assert on. `desc` describes the awaited command.
+/// after `timeout`), returning the first non-empty drain. This is the
+/// command-channel sibling of `layout_intents.rs`'s `drain_until_intent`. Each
+/// `:Wolf*` Ex-command / `wolf` Lua call under test enqueues exactly one
+/// `Command`, so the first non-empty drain is the batch we assert on. `desc`
+/// describes the awaited command.
 fn drain_until_command(core: &WolfCore, timeout: Duration, desc: &str) -> Vec<Command> {
     let deadline = Instant::now() + timeout;
     loop {

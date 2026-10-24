@@ -29,13 +29,10 @@
 //! does not block. We deliberately do NOT set `WOLF_RPC_TIMEOUT_MS`: there is no
 //! RPC left on this path to bound — that is the whole point.
 //!
-//! ## Dependency on coder work
+//! ## Surface under test
 //!
-//! The signature is UNCHANGED (`fn resolve_search_root(&self) -> PathBuf`); only
-//! the impl changes from a blocking `current_dir` RPC to a `live_cwd()` read.
-//! Until the coder rewrites `resolve_search_root`, this file will not compile with
-//! the intended behavior — that tests-first state is expected. `live_cwd()` and
-//! the `FileSearch` read guard (`entries` / `complete`) already exist.
+//! `fn resolve_search_root(&self) -> PathBuf` is a `live_cwd()` read, not a
+//! blocking `current_dir` RPC.
 
 mod common;
 

@@ -1025,7 +1025,7 @@ mod tests {
     }
 
     /// Equal weights give equal widths — the property the whole signature exists for,
-    /// and the test that would have caught the defect the day it landed.
+    /// and the test that catches a regression to scaling by `max_position`.
     ///
     /// A fresh `<C-w>v` splits with two equal weights and no drag, so the two panes
     /// must come out the same width to within the handle. Scaling by `max_position`
@@ -1034,13 +1034,12 @@ mod tests {
     /// `f * (span - handle - e_min)` and the end child gets everything else — a
     /// difference of exactly `e_min`, at every fraction, forever.
     ///
-    /// **The old-floor row is the load-bearing one and must not be deleted as
-    /// redundant.** It uses the one-cell `e_min` that shipped before
-    /// `editor_inset::min_pane_size` raised the per-pane floor, and it shows from a
-    /// unit test that the defect never depended on the raise: it was always there,
-    /// 22 px wide, sitting just inside a compositor tolerance that had been
-    /// calibrated on it. What the raised floor changed was the size of the symptom,
-    /// not its existence.
+    /// **The one-cell-floor row is the load-bearing one and must not be deleted as
+    /// redundant.** It uses a one-cell `e_min`, below the per-pane floor
+    /// `editor_inset::min_pane_size` raises it to, and it shows from a unit test that
+    /// the defect never depended on the raise: at one cell it is 22 px wide, small
+    /// enough to sit just inside a loose compositor tolerance. The raised floor
+    /// changes the size of the symptom, not its existence.
     ///
     /// The bound is `handle + 1`, and both terms are real: the handle is space
     /// neither child gets, and the `+ 1` is the half pixel `round` can move an odd
@@ -1050,10 +1049,10 @@ mod tests {
     /// FALSIFYING EDIT: restore `round(max * fraction)`. Row 1 then answers 483,
     /// giving widths 483 and 545, and row 2 answers 503, giving 503 and 525 — spreads
     /// of 62 and 22 px against a bound of 2. Both rows go red, and the second is the
-    /// one that says the old floor was never safe either.
+    /// one that says the one-cell floor is not safe either.
     ///
     /// MEASURED, in two runs, because the loop is fail-fast and row 1 would otherwise
-    /// abort before row 2 ran — the second scoped the edit to the old floor's
+    /// abort before row 2 ran — the second scoped the edit to the one-cell floor's
     /// `max_position` (`if max == 1005 { max } else { span }`) so row 2 could be
     /// reached:
     ///
@@ -1063,7 +1062,7 @@ mod tests {
     ///   1005, 1029, 0.5) = 503, want 515`.
     ///
     /// The second is the load-bearing one: 503 against 515 is the 22 px spread the
-    /// defect always had, measured on the floor that shipped before this unit.
+    /// defect has, measured on the one-cell floor.
     #[test]
     fn equal_weights_give_equal_widths() {
         let cases = [

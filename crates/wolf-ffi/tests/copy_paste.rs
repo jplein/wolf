@@ -1,4 +1,4 @@
-//! Integration test for the COPY / PASTE / visual-mode FFI surface (plan §6.4):
+//! Integration test for the COPY / PASTE / visual-mode FFI surface:
 //! `WolfCoreHandle::is_visual_mode()`, `copy_selection()`, and `paste(text)`.
 //!
 //! This drives the RUST half of the swift-bridge command machinery against a REAL,
@@ -6,14 +6,9 @@
 //! `close_pane.rs` (same staging / SKIP-when-unset machinery, reusing
 //! `tests/common/mod.rs`, and the same `read_frame` live-grid polling pattern).
 //!
-//! ## Dependency on coder work (plan §4)
-//!
-//! These bridge methods do NOT exist yet — the coder adds them to the `extern
-//! "Rust"` block and `impl WolfCoreHandle` in `crates/wolf-ffi/src/lib.rs`
-//! (backed by `WolfCore::copy_visual_selection` / `paste` / `Snapshot::is_visual_mode`),
-//! and adds the `//crates/wolf-ffi:copy_paste` `rust_test` target to `BUILD.bazel`
-//! (copy of `close_pane`). This file does NOT touch BUILD files, and will not
-//! compile until those methods land — that is expected for test-first.
+//! The bridge methods are backed by `WolfCore::copy_visual_selection` / `paste` /
+//! `Snapshot::is_visual_mode`; the `//crates/wolf-ffi:copy_paste` target runs this
+//! file under Bazel. Their signatures:
 //!
 //!   * `fn is_visual_mode(&self) -> bool;`
 //!   * `fn copy_selection(&self) -> String;` (empty string when not visual / empty)

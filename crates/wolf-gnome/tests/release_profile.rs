@@ -510,8 +510,8 @@ fn the_release_profile_never_aborts_on_panic() {
         "{GUARD}: {} declares no `{RELEASE_SECTION}` section. With no block there, `cargo build \
          --release` takes cargo's built-in defaults, so nothing in this file's contract holds — \
          and the two failures are different: an absent section means the block was deleted, \
-         while a present-but-empty one means its keys were. Restore the block described in the \
-         comment above it.",
+         while a present-but-empty one means its keys were. Restore the block; \
+         `notes/Cargo.toml.md#release-profile` gives each key and its reason.",
         path.display()
     );
 

@@ -353,7 +353,7 @@ mod tests {
     /// case the module docs forbid turning into a prompt.
     ///
     /// Its parent is [`CWD`] itself, so the "buffer's own parent" and "the window's
-    /// cwd" rules COINCIDE here on purpose: that is the reason §2.2's divergence
+    /// cwd" rules COINCIDE here on purpose: that is why proposing the parent over the cwd
     /// costs nothing for a fresh Untitled buffer, and it is why [`NESTED_FILE`]
     /// rather than this one is what discriminates the folder rule.
     const UNTITLED_FILE: &str = "/home/u/proj/Untitled.md";
@@ -985,7 +985,7 @@ mod tests {
     /// `right: Choose`.
     ///
     /// FALSIFYING EDIT 2 (behaviour 2) — add an existence probe and redirect a
-    /// named-but-absent buffer to `Choose`, i.e. the design §2.2 rejects.
+    /// named-but-absent buffer to `Choose`, which the save rule rejects.
     /// `wolf_name_untitled` has already picked a collision-checked name that is on
     /// screen in the tab title, the pane statusbar and the window's file row, so Save
     /// writes it; Ctrl+S and a typed `:w` must not disagree. MEASURED with

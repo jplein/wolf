@@ -1,8 +1,8 @@
-//! Integration tests for the S2 Neovim->shell INTENT CHANNEL plus the init.lua
+//! Integration tests for the Neovim->shell INTENT CHANNEL plus the init.lua
 //! command/chord overrides and active-window tracking. These exercise CORE ONLY:
-//! the front-end does not yet consume intents, so nothing in these tests "acts"
-//! on a `FocusDir` intent — which is exactly what makes the "focus is pure"
-//! assertion (test 4) load-bearing.
+//! no front-end runs here, so nothing in these tests "acts" on a `FocusDir`
+//! intent — which is exactly what makes the "focus is pure" assertion (test 4)
+//! load-bearing.
 //!
 //! All tests drive a REAL, hermetic nvim (no mocks) via `WOLF_NVIM_BIN`; the
 //! common helpers panic loudly if it is unset.
@@ -19,10 +19,10 @@
 //!     timeout, draining wakes / draining the intent queue each iteration, rather
 //!     than waiting for a single flush.
 //!
-//! NOTE to coder: these tests assume `LayoutIntent` derives `Debug` (used in
-//! panic messages) and that `SplitOrientation` / `FocusDir` derive `Debug + Copy`
-//! (`expect_split` returns a copied `SplitOrientation`, and both are formatted in
-//! panic messages). `PartialEq` is not required by this file.
+//! These tests rely on `LayoutIntent` deriving `Debug` (used in panic messages)
+//! and on `SplitOrientation` / `FocusDir` deriving `Debug + Copy` (`expect_split`
+//! returns a copied `SplitOrientation`, and both are formatted in panic messages).
+//! `PartialEq` is not required by this file.
 
 mod common;
 
@@ -72,10 +72,9 @@ fn poll_until(core: &WolfCore, waiter: &FlushWaiter, desc: &str, pred: impl Fn(&
 /// the queue side, so we simply call it on a fixed interval. `desc` describes the
 /// awaited intent for the panic message.
 ///
-/// This is the plan's `drain_until_intent` helper, generalized with a `desc` for
-/// clearer failures. Each <C-w> chord / ex-command under test enqueues exactly
-/// one `LayoutIntent`, so the first non-empty drain is the batch we want; callers
-/// then assert on the specific variant inside it.
+/// Each <C-w> chord / ex-command under test enqueues exactly one `LayoutIntent`,
+/// so the first non-empty drain is the batch we want; callers then assert on the
+/// specific variant inside it.
 fn drain_until_intent(core: &WolfCore, timeout: Duration, desc: &str) -> Vec<LayoutIntent> {
     let deadline = Instant::now() + timeout;
     loop {
@@ -226,7 +225,7 @@ fn ctrl_w_v_emits_vertical_split() {
 /// Typing `:vsplit<CR>` (the `cnoreabbrev` path) emits a vertical split intent
 /// and performs the split.
 ///
-/// NOTE to coder: this exercises the EX-COMMAND (cabbrev) override, which is the
+/// NOTE: this exercises the EX-COMMAND (cabbrev) override, which is the
 /// FRAGILE path — `cnoreabbrev` only expands a whole word at the command line and
 /// is guarded by `getcmdtype()==':' && getcmdline()==word`. If this proves flaky
 /// in practice, the robust coverage is the `<C-w>v` chord test above; do NOT
@@ -510,8 +509,8 @@ fn ex_qa_does_not_merely_drop_pane_count() {
 fn ctrl_w_c_noop_on_last_window() {
     let (core, waiter, _file) = common::start_core_with_temp_md(DOC);
     let base = wait_for_initial_window(&core, &waiter);
-    // NOTE to coder: a freshly opened single file is exactly one editor window,
-    // so `base == 1` here; the guard must refuse to close it.
+    // A freshly opened single file is exactly one editor window, so `base == 1`
+    // here; the guard must refuse to close it.
     assert_eq!(
         base, 1,
         "expected exactly one window before the last-window close test"

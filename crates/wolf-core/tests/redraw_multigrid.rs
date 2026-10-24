@@ -1,4 +1,4 @@
-//! Integration tests for the S1 multigrid foundation: the snapshot now holds
+//! Integration tests for the multigrid foundation: the snapshot holds
 //! MULTIPLE grids keyed by grid id (`Snapshot.grids`), a per-grid window map
 //! (`Snapshot.windows`), a cursor that names its grid (`Cursor.grid`), and
 //! per-grid resize. These tests drive a REAL, hermetic nvim (no mocks) via
@@ -7,7 +7,7 @@
 //! IMPORTANT testing conventions for this file:
 //!   * We assert on grid/window MAP SIZES, MEMBERSHIP, and ACTIVE-grid behavior.
 //!     We do NOT assert literal `WinInfo.win` handle values — the window-handle
-//!     encoding is a coder implementation detail. We only assert ids are
+//!     encoding is an implementation detail. We only assert ids are
 //!     internally consistent (the same `win` appears in `windows` and
 //!     `grid_for_win` round-trips).
 //!   * We never assume HashMap iteration order.
@@ -62,9 +62,10 @@ fn poll_until(core: &WolfCore, waiter: &FlushWaiter, desc: &str, pred: impl Fn(&
     }
 }
 
-/// Types an Ex command `:<cmd><CR>` one key at a time. In S1 there are no
-/// init.lua overrides (those land in S2), so `:split`/`:close` run the REAL nvim
-/// window ops, which create/destroy windows + grids and emit win_pos/win_close.
+/// Types an Ex command `:<cmd><CR>` one key at a time. init.lua's `cnoreabbrev`
+/// overrides route `:split`/`:close` through `wolf_do_split`/`wolf_do_close`,
+/// which still run the REAL nvim window ops, so they create/destroy windows +
+/// grids and emit win_pos/win_close.
 fn ex_command(core: &WolfCore, cmd: &str) {
     core.send_input(ch(':'));
     type_str(core, cmd);
@@ -176,7 +177,7 @@ fn split_adds_grid_and_window() {
         (snap.grids.len(), snap.windows.len())
     };
 
-    // Raw `:split<CR>` (no overrides in S1) -> nvim makes a new window + grid.
+    // `:split<CR>` -> nvim makes a new window + grid.
     ex_command(&core, "split");
 
     poll_until(

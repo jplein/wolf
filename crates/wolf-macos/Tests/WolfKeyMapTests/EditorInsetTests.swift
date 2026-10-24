@@ -10,7 +10,7 @@ final class EditorInsetTests: XCTestCase {
   /// `PaneGeometryTests.swift`).
   private let eps: Double = 1e-9
 
-  /// The padding the plan pins as the single source of truth (points).
+  /// The padding pinned as the single source of truth (points).
   private let pinnedPadding: Double = 20.0
 
   // MARK: - Helpers (ported from PaneGeometryTests' `approx` / `assertRectEqual`)
@@ -37,7 +37,7 @@ final class EditorInsetTests: XCTestCase {
     )
   }
 
-  // MARK: - Exact case pinned to the representative numbers (plan §6)
+  // MARK: - Exact case pinned to the representative numbers
 
   func testExactGridRectForRepresentativePane() {
     // pane 840x600, statusbar 40, padding 20: gridRect = (20, 40 + 20, 840 - 40, 600 - 40 - 40)

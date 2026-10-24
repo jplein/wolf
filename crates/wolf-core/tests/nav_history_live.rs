@@ -1,7 +1,7 @@
-//! REAL-NVIM integration tests for the per-pane navigation history (plan §B2-§B6):
-//! the `wolf_buffers` -> `Snapshot.win_buffers` parse, the `fold_nav_targets` fold
+//! REAL-NVIM integration tests for the per-pane navigation history: the
+//! `wolf_buffers` -> `Snapshot.win_buffers` parse, the `fold_nav_targets` fold
 //! over `win_buffers` + `previews`, the `win_close` prune, and the six
-//! `WolfCore::history_*` methods that move the pane through the two new
+//! `WolfCore::history_*` methods that move the pane through the two
 //! `_G.wolf_history_*` Lua helpers.
 //!
 //! These drive a REAL, hermetic nvim (NO mocks, per the project testing policy)
@@ -11,9 +11,9 @@
 //! SEPARATELY from redraw flushes, so every assertion POLLS with a generous
 //! timeout, draining wakes as it goes.
 //!
-//! ## Surface under test (plan §B4/§B5/§B11)
+//! ## Surface under test
 //!
-//! All of this has SHIPPED. On `WolfCore`:
+//! On `WolfCore`:
 //!   * `history_can_back(&self, win: i64) -> bool`
 //!   * `history_can_forward(&self, win: i64) -> bool`
 //!   * `history_back(&self, win: i64) -> bool`     (true == the pane MOVED)
@@ -42,7 +42,7 @@
 //! RELATIVE growth ("exactly one entry was added") and the newest-first row
 //! prefix, which is robust to that prefix.
 //!
-//! ## Terminal DRAWER exclusion, as shipped
+//! ## Terminal DRAWER exclusion
 //!
 //! [`split_terminal_is_tracked_but_the_drawer_pane_never_gets_history`] and
 //! [`toggling_the_drawer_never_touches_a_survivor_panes_history`] assert the locked
@@ -1181,13 +1181,13 @@ fn win_buffers_carries_bufnrs_unnamed_windows_and_skips_previews() {
 /// Navigating Back to an unsaved buffer rebinds **that same modified buffer**
 /// instead of reading a file that was never written to disk.
 ///
-/// This is the contract both plan §B4 and `crates/wolf-core/src/nvim.rs` call
-/// **LOAD-BEARING**: the startup buffer is a NAMED `<cwd>/Untitled.md`
-/// (`wolf_name_untitled`) that has no file behind it, so
+/// This is the contract `history_open` in `crates/wolf-core/src/nvim.rs`
+/// documents, and it is **LOAD-BEARING**: the startup buffer is a NAMED
+/// `<cwd>/Untitled.md` (`wolf_name_untitled`) that has no file behind it, so
 /// `_G.wolf_history_open`'s `vim.fn.bufadd(<cwd>/Untitled.md)` must resolve to the
 /// EXISTING buffer. [`unnamed_buffers_are_untitled_entries_named_ones_are_edits`]
-/// only asserts the LABELS; nothing until now modified a buffer and navigated back
-/// to it.
+/// only asserts the LABELS; no other test modifies a buffer and navigates back to
+/// it.
 ///
 /// ## What actually discriminates
 ///
@@ -1267,7 +1267,7 @@ fn back_to_an_unsaved_buffer_rebinds_the_same_modified_buffer() {
     let bound = win_bufnr(&core, win);
     assert_eq!(
         bound, untitled_bufnr,
-        "LOAD-BEARING (§B4): Back must rebind the EXISTING buffer for \
+        "LOAD-BEARING: Back must rebind the EXISTING buffer for \
          <cwd>/Untitled.md, not `bufadd` a second one for a path that has no file \
          behind it"
     );
@@ -1382,12 +1382,11 @@ fn back_to_a_symlinked_path_rebinds_the_same_buffer() {
 ///
 /// [`split_terminal_is_tracked_but_the_drawer_pane_never_gets_history`] covers the
 /// drawer's OWN (empty) history on the open path. This covers the SURVIVOR pane
-/// across the full round trip, which is what plan §C1's final claim asserts and
-/// nothing tested: the OPEN path needs `wolf_suppress_buffers` (the `botright
-/// split` fires `WinNew`/`WinEnter` while the new window still shows the PREVIOUS
-/// buffer), while the HIDE path is claimed to need no suppression at all — the
-/// drawer window is gone, `win_close` prunes it, and the survivors' derived targets
-/// are unchanged so the fold sees nothing new.
+/// across the full round trip: the OPEN path needs `wolf_suppress_buffers` (the
+/// `botright split` fires `WinNew`/`WinEnter` while the new window still shows the
+/// PREVIOUS buffer), while the HIDE path needs no suppression at all — the drawer
+/// window is gone, `win_close` prunes it, and the survivors' derived targets are
+/// unchanged so the fold sees nothing new.
 #[test]
 fn toggling_the_drawer_never_touches_a_survivor_panes_history() {
     let cwd = common::fresh_cwd();
@@ -1449,7 +1448,7 @@ fn toggling_the_drawer_never_touches_a_survivor_panes_history() {
     let rows_after = displays(&core.history_entries(win));
     assert_eq!(
         rows_after, rows_before,
-        "§C1: the HIDE path needs no emit suppression — the drawer window is gone, \
+        "the HIDE path needs no emit suppression — the drawer window is gone, \
          `win_close` prunes it, and the survivor's derived target never changed"
     );
     assert_eq!(
@@ -1478,7 +1477,7 @@ fn toggling_the_drawer_never_touches_a_survivor_panes_history() {
 
 // === 11. A failed Back to a preview target reverts the cursor ===
 
-/// The OTHER realistic failure plan §B6 names, alongside the wiped `Terminal`
+/// The OTHER realistic failure, alongside the wiped `Terminal`
 /// bufnr that [`a_failed_back_returns_false_and_reverts_the_cursor`] covers: a
 /// `Preview` whose SOURCE file has been deleted from disk.
 ///
@@ -1616,8 +1615,8 @@ fn a_failed_back_to_a_deleted_preview_source_reverts_the_cursor() {
 /// `'winfixbuf'` (nvim >= 0.10, so present in the pinned 0.12.3) pins a window to
 /// its current buffer: `nvim_win_set_buf` into it raises `E1513` instead of
 /// switching. Both handles stay VALID, so the guards above pass and the failure
-/// lands exactly where this test needs it. (The other route the plan names is the
-/// cmdwin, which a test cannot hold open across a blocking RPC.)
+/// lands exactly where this test needs it. (The other route to a throwing bind is
+/// the cmdwin, which a test cannot hold open across a blocking RPC.)
 ///
 /// The last step — clearing `'winfixbuf'` and going Back again, successfully —
 /// keeps the test honest twice over: it shows the `false` came from the pinned

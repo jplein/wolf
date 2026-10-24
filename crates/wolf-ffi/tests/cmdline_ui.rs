@@ -1,10 +1,10 @@
 //! Integration test for the `wolf-ffi` NATIVE command-line / completion-popup /
-//! message-toast bridge surface (feature plan §5).
+//! message-toast bridge surface.
 //!
 //! This drives the RUST half of the swift-bridge cmdline machinery against a REAL,
 //! hermetic Neovim — NO mocks, per the project testing policy. It is the sibling
 //! of `panes.rs` / `theme.rs` (same staging / SKIP-when-unset machinery, reusing
-//! `tests/common/mod.rs`) but exercises the NEW cmdline / pum / toast accessors:
+//! `tests/common/mod.rs`) but exercises the cmdline / pum / toast accessors:
 //!
 //!   * `WolfCoreHandle::cmdline() -> FfiCmdline` (`active()`, `firstc()`, `text()`,
 //!     `pos()`).
@@ -15,12 +15,7 @@
 //!     the color accessors `fg()` / `bg()` / `special()`, RESOLVED in Rust against
 //!     the highlight table like `FfiCell`).
 //!
-//! ## Dependency on coder work (plan §5)
-//!
-//! These accessors + opaque types do not exist yet: the coder implements them in
-//! `crates/wolf-ffi/src/lib.rs`, regenerates `generated/`, AND adds the
-//! `//crates/wolf-ffi:cmdline_ui` `rust_test` target to `BUILD.bazel` (mirroring
-//! `theme`). This test file does NOT touch BUILD files.
+//! The `//crates/wolf-ffi:cmdline_ui` `rust_test` target runs this file under Bazel.
 //!
 //! ## SKIP-when-unset policy
 //!
@@ -163,7 +158,7 @@ fn poll_first_chunk_fg(handle: &WolfCoreHandle, needle: &str) -> FfiColor {
     }
 }
 
-/// OD1: the toast keeps Neovim's STYLED color resolved in Rust, not a flattened
+/// The toast keeps Neovim's STYLED color resolved in Rust, not a flattened
 /// monochrome. An error message (`emsg`, `ErrorMsg`-highlighted) must resolve a
 /// chunk fg DISTINCT from an unstyled `list_cmd` echo's chunk fg.
 ///
@@ -172,7 +167,7 @@ fn poll_first_chunk_fg(handle: &WolfCoreHandle, needle: &str) -> FfiColor {
 /// against the pinned nvim's default colorscheme, where `ErrorMsg` is red and the
 /// unstyled echo resolves to the default foreground. If a future pinned scheme
 /// made `ErrorMsg` equal the default fg, this strict distinctness would need
-/// softening — see the test-writer report.
+/// softening.
 #[test]
 fn emsg_toast_keeps_styled_color() {
     let Some(nvim_bin) = common::nvim_bin_or_skip() else {
@@ -218,7 +213,7 @@ fn emsg_toast_keeps_styled_color() {
     let err_fg = poll_first_chunk_fg(&handle, "E492");
 
     // The error chunk's fg is resolved (set) in Rust and DISTINCT from the plain
-    // echo's fg — the toast preserves Neovim's per-message styled color (OD1).
+    // echo's fg — the toast preserves Neovim's per-message styled color.
     assert!(
         err_fg.set,
         "the emsg chunk fg should be a resolved (set) color (rgb {:#08x})",
@@ -227,7 +222,7 @@ fn emsg_toast_keeps_styled_color() {
     assert!(
         err_fg.set != plain_fg.set || err_fg.rgb != plain_fg.rgb,
         "an error message's fg (rgb {:#08x}, set {}) must differ from a plain echo's \
-         fg (rgb {:#08x}, set {}) — the toast keeps Neovim's styled color (OD1), \
+         fg (rgb {:#08x}, set {}) — the toast keeps Neovim's styled color, \
          not one flattened foreground",
         err_fg.rgb,
         err_fg.set,

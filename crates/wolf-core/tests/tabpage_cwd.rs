@@ -31,14 +31,11 @@
 //! not block. We deliberately do NOT set `WOLF_RPC_TIMEOUT_MS`: there is no RPC to
 //! bound here — that is the whole point.
 //!
-//! ## Dependency on coder work
+//! ## Surface under test
 //!
-//! The signature is UNCHANGED (`fn cwd_for_tabpage(&self, handle: i64) ->
-//! Option<PathBuf>`); only the impl changes from a blocking RPC to a
-//! `Snapshot.tab_cwds` read. Until the coder adds the `tab_cwds` field + the
-//! `wolf_tab_cwds` notify handler + rewrites `cwd_for_tabpage`, this file (and the
-//! rest of the tabpage suite) will not compile — that tests-first state is
-//! expected.
+//! `fn cwd_for_tabpage(&self, handle: i64) -> Option<PathBuf>` is a
+//! `Snapshot.tab_cwds` read (fed by the `wolf_tab_cwds` notification), not a
+//! blocking RPC.
 
 mod common;
 

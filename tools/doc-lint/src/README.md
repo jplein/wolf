@@ -10,8 +10,8 @@ Purpose: the public API, the language table in code, and the two drivers that co
 
 **Public API**
 
-- `lint_source(display_path, text, lang) -> Vec<Finding>`: the comment-limit rules only, with no file system access.
-- `check_files(cwd, files, cfg) -> io::Result<Vec<Finding>>`: comment rules plus `doc-ref` and `doc-anchor`, references resolved against `cwd`. An unreadable file is an error rather than a finding.
+- `lint_source(display_path, text, lang) -> Vec<Finding>`: the comment limits and `workflow-ref`, with no file system access.
+- `check_files(cwd, files, cfg) -> io::Result<Vec<Finding>>`: the comment limits, `workflow-ref`, `doc-ref` and `doc-anchor`, references resolved against `cwd`. An unreadable file is an error rather than a finding.
 - `check_root(root, cfg) -> Vec<Finding>`: every rule over a walk of `root`; unreadable files are skipped.
 - `language_for(path)`, `WalkConfig::repo_default()`, `Finding`, `Rule::id()`, `MAX_COMMENT_LINES` and `MAX_COMMENT_WIDTH`, plus the re-exported `run`, `strip_comments`, `heading_slug` and `missing_coverage`.
 
@@ -42,6 +42,16 @@ Purpose: finds the root-relative Markdown paths written in comments and applies 
 **Gotchas**
 
 - The reference scan reads the raw comment text, markers included, so a path right after `//` with no space is not at a boundary and is not a reference.
+
+#### `workflow.rs`
+
+Purpose: `workflow-ref`, over the raw text of every comment line.
+
+**Decisions**
+
+- The patterns live only in the `PATTERNS` table of string literals. `--root .` scans doc-lint's own comments, so a comment that spells a pattern, even to explain it, is a finding.
+- The match runs on an ASCII-lowercased copy, which keeps every byte offset, so the quoted text is sliced from the original line.
+- A line is deduplicated against the last finding only, which holds because `comments` arrive in source order. Two comments on one line therefore give one finding, as the sidecar comparison requires.
 
 #### `markdown.rs`
 

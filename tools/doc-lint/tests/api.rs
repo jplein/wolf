@@ -1,4 +1,4 @@
-//! Public-API tests for doc-lint: file-name to language mapping, heading slugs, and the
+//! Public-API tests for doc-lint: file-name to language mapping, heading slugs, rule ids, and the
 //! `bazel-coverage` check behind `missing_coverage`.
 //!
 //! Mappings for names that cannot be fixture files (`BUILD.bazel`, `Cargo.toml`, `flake.nix`,
@@ -7,7 +7,7 @@
 
 use std::path::Path;
 
-use doc_lint::{heading_slug, language_for, missing_coverage, Language};
+use doc_lint::{heading_slug, language_for, missing_coverage, Language, Rule};
 
 fn lang(name: &str) -> Option<Language> {
     language_for(Path::new(name))
@@ -89,6 +89,16 @@ fn unlinted_files_map_to_none() {
             "x.rs.expected",
         ],
         None,
+    );
+}
+
+#[test]
+fn workflow_ref_rule_has_its_documented_id() {
+    assert_eq!(
+        Rule::WorkflowRef.id(),
+        "workflow-ref",
+        "the id is printed between brackets in every finding and is the sidecar key in \
+         fixtures/lang, so any other spelling breaks both"
     );
 }
 

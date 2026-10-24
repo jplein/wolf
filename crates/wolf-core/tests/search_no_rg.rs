@@ -60,7 +60,7 @@ fn start_core_in(cwd: &Path) -> WolfCore {
 
 /// With `WOLF_RG_BIN` unset, `start_search` returns an immediately-`complete`
 /// session carrying `error == Some("WOLF_RG_BIN unset")` and no matches, and
-/// fires the wake — the graceful-degrade contract (§4 / review note N1).
+/// fires the wake — the graceful-degrade contract.
 #[test]
 fn start_search_without_rg_degrades_gracefully() {
     // Defensively clear WOLF_RG_BIN BEFORE starting core. This binary owns its

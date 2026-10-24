@@ -419,7 +419,7 @@ mod tests {
     /// emitted inside.
     ///
     /// `render_html_with_highlights` wraps this block in `<!-- … -->` in every
-    /// preview document's head (D7), so a licence text containing a comment
+    /// preview document's head, so a licence text containing a comment
     /// delimiter would close the comment early and dump thousands of lines of
     /// legal text into the rendered page — or, worse, leave the rest of the head
     /// inside a comment that never closes. This is the guard that keeps that

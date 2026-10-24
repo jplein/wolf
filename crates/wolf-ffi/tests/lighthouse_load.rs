@@ -15,17 +15,6 @@
 //! emit-once must still surface the themed titlebar (`theme_titlebar_bg()` /
 //! `theme_titlebar_fg()`) and cursor (`cursor_fill()` / `cursor_glyph()`) colors.
 //!
-//! ## Coder wiring (BUILD.bazel — NOT done here)
-//!
-//! This file does NOT touch BUILD files. The coder adds a `//crates/wolf-ffi:lighthouse_load`
-//! `rust_test` modeled on `orlando_load`
-//! (`srcs = ["tests/common/mod.rs", "tests/lighthouse_load.rs"]`,
-//! `crate_root = "tests/lighthouse_load.rs"`), and MUST wire, alongside the existing
-//! WOLF_TEST_INIT_LUA / WOLF_TEST_NVIM_DIR:
-//!   * `data`: add `"//bazel/lighthouse:lighthouse_tree"`
-//!   * `env`:  add `"WOLF_TEST_LIGHTHOUSE_DIR": "$(rootpath //bazel/lighthouse:lighthouse_tree)"`
-//!     `tempfile` is already a `[dev-dependencies]` of the crate (used by `panes`).
-//!
 //! ## How this proves activation (no exec_lua seam on the FFI surface)
 //!
 //! The `wolf-ffi` bridge exposes no Lua-eval accessor (only `send_key` etc.), so —

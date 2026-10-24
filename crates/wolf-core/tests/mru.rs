@@ -337,7 +337,7 @@ fn deleted_file_is_omitted_and_pruned_from_cache() {
 }
 
 /// (e) The DB lives at `<state_dir>/file-mru.sqlite`, and NO `.wolf` directory is
-/// ever created under a project `directory` arg (the MRU no longer lives there).
+/// ever created under a project `directory` arg.
 #[test]
 fn db_lives_in_state_dir_and_no_wolf_dir_is_created() {
     let state = state_tempdir();

@@ -85,7 +85,7 @@ const POLL_INTERVAL: Duration = Duration::from_millis(50);
 const UNSAVED_MARKER: &str = "ZZUNSAVED";
 
 /// Starts a `WolfCore` rooted at `cwd` and waits for the initial attach flush, so
-/// startup never races the test body. Copied VERBATIM from `swap_exists.rs`'s
+/// startup never races the test body. Copied VERBATIM from `swap_recovery.rs`'s
 /// local `start_core_in` (it is intentionally not in `common`).
 fn start_core_in(cwd: &Path) -> (WolfCore, common::FlushWaiter) {
     let (wake, waiter) = common::wake_channel();
@@ -142,7 +142,7 @@ fn wait_for_row0_contains(core: &WolfCore, waiter: &common::FlushWaiter, needle:
 /// An UNMODIFIED buffer whose file was changed on disk from OUTSIDE the editor
 /// must reload when the UI regains focus (`set_ui_focus(true)` → `FocusGained` →
 /// `:checktime`). This is the load-bearing case (grid-assertion idiom mirrored
-/// from `swap_exists.rs`).
+/// from `swap_recovery.rs`).
 #[test]
 fn external_change_reloads_unmodified_buffer() {
     let _ = common::require_nvim_bin();

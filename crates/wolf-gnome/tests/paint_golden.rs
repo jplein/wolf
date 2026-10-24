@@ -1,6 +1,6 @@
 //! Structural golden tests for `wolf_gnome::paint`.
 //!
-//! Strategy (per plan §5b): the PRIMARY, always-on gate is STRUCTURAL — we paint a
+//! Strategy: the PRIMARY, always-on gate is STRUCTURAL — we paint a
 //! hand-built deterministic `Snapshot` onto an offscreen Cairo `ImageSurface`
 //! (no window, no display) and then sample raw ARGB bytes at the CENTER of known
 //! cell rectangles. Background fills are rasterizer-independent, so we can assert
@@ -184,8 +184,8 @@ type Pixel = (u8, u8, u8, u8);
 /// targets we run on (x86_64 Linux) the in-memory byte order per pixel is
 /// `B, G, R, A`. Opaque fills are unaffected by premultiplication.
 ///
-/// NOTE to coder: if this suite is ever run on a big-endian target, this byte
-/// ordering must be flipped. We assert little-endian to keep the comparison exact.
+/// If this suite is ever run on a big-endian target, this byte ordering must be
+/// flipped. We assert little-endian to keep the comparison exact.
 fn pixel_at(data: &[u8], stride: usize, x: usize, y: usize) -> Pixel {
     let i = y * stride + x * 4;
     let b = data[i];
@@ -584,8 +584,8 @@ const LEAK_SOURCE_COL: usize = 5;
 /// [`CONTROL_COL`] is at column 0, before every decoration, and that is why it
 /// cannot stand in for this cell: `paint` walks a row left to right through ONE
 /// `GlyphPainter`, so a decoration that leaks forward lands only on cells that are
-/// decorated anyway. Measured by the coder: with the layout's attribute clear
-/// deleted, every case in this file stayed green.
+/// decorated anyway. Measured: with the layout's attribute clear deleted, every
+/// case in this file stayed green.
 const TRAILING_CONTROL_COL: usize = 6;
 
 /// Highlight id for [`UNDERLINE_COL`].
@@ -966,11 +966,11 @@ fn topmost_reddish_rows(
 /// `Underline::None` for `undercurl` in `glyph_style::glyph_decoration` — that
 /// column loses all sub-baseline ink.
 ///
-/// This case is also the MEASUREMENT the plan owes for whether Pango honours an
-/// underline colour on `PANGO_UNDERLINE_ERROR` as it does on `Single`. A red here
-/// that reports ink but no reddish pixel is that answer, not a broken test: the
-/// recorded response is to keep the wave, drop the colour from the undercurl arm,
-/// and record the limitation — never to fall back to a straight `Single`.
+/// This case also measures whether Pango honours an underline colour on
+/// `PANGO_UNDERLINE_ERROR` as it does on `Single`. A red here that reports ink but
+/// no reddish pixel is that answer, not a broken test: the recorded response is to
+/// keep the wave, drop the colour from the undercurl arm, and record the
+/// limitation — never to fall back to a straight `Single`.
 #[test]
 fn undercurl_draws_ink_below_the_glyph_box_in_the_special_colour() {
     let (mut surface, metrics) = render_decoration_fixture();
@@ -1771,8 +1771,8 @@ fn italic_is_applied_and_then_restored_within_one_paint() {
 ///     -- --ignored regenerate_png_golden
 /// ```
 ///
-/// NOTE to coder: `ImageSurface::write_to_png` requires the cairo-rs `png`
-/// feature to be enabled in `crates/wolf-gnome/Cargo.toml`'s `cairo` dependency.
+/// `ImageSurface::write_to_png` requires the cairo-rs `png` feature to be enabled
+/// in `crates/wolf-gnome/Cargo.toml`'s `cairo` dependency.
 #[test]
 #[ignore = "dev aid: regenerates the optional PNG golden; never part of the CI gate"]
 fn regenerate_png_golden() {

@@ -1,12 +1,12 @@
 # tools/doc-lint
 
-`doc-lint` enforces the comment limits in [CLAUDE.md](../../CLAUDE.md), checks the doc paths written in comments and the `notes/` mirror conventions, and, over a whole checkout, checks relative links in Markdown. It is a std-only Rust binary in a Cargo workspace of its own. The per-file view of the source is in [`src/README.md`](src/README.md), and the tests are described in [`tests/README.md`](tests/README.md).
+`doc-lint` enforces the comment limits in [CLAUDE.md](../../CLAUDE.md), flags comments that cite planning documents absent from the repo, checks the doc paths written in comments and the `notes/` mirror conventions, and, over a whole checkout, checks relative links in Markdown. It is a std-only Rust binary in a Cargo workspace of its own. The per-file view of the source is in [`src/README.md`](src/README.md), and the tests are described in [`tests/README.md`](tests/README.md).
 
 ## Command line
 
 ```sh
 doc-lint --root <dir>            # every rule over the tree under <dir>
-doc-lint --files <path>...       # comment rules, doc-ref and doc-anchor, relative to the cwd
+doc-lint --files <path>...       # comment limits, workflow-ref, doc-ref and doc-anchor, relative to the cwd
 doc-lint strip <file>            # the file with every comment removed
 doc-lint same-code <old> <new>   # exit 0 when the two differ only in comments
 ```
@@ -17,17 +17,18 @@ Findings go to stdout as `path:line: [rule] message`, sorted by path and then li
 
 ## Rules
 
-| Rule             | Mode     | Fails on                                                                                                           | Message                                                                                                           |
-| ---------------- | -------- | ------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
-| `comment-lines`  | both     | A non-doc comment block over `MAX_COMMENT_LINES` (2) lines, reported at its first line.                            | `comment is N lines (max 2): cut it, shorten it, or move the rest to notes/<path>.md under a heading and link it` |
-| `comment-width`  | both     | A non-doc comment line over `MAX_COMMENT_WIDTH` (100) chars.                                                       | `comment line is N chars (max 100), measured from the comment marker`                                             |
-| `doc-ref`        | both     | A Markdown path in any comment, doc comments included, that does not exist.                                        | `<ref> does not exist`                                                                                            |
-| `doc-anchor`     | both     | The `#anchor` of such a path, when it matches no heading of the file.                                              | `<file> has no heading with anchor #x`                                                                            |
-| `notes-orphan`   | `--root` | A mirror `notes/<P>.md` whose `<P>` does not exist.                                                                | `notes/<P>.md mirrors <P>, which does not exist`                                                                  |
-| `notes-unlinked` | `--root` | A `##` heading of a mirror that no comment in `<P>` links to.                                                      | `heading "<text>" (#slug) is not linked from any comment in <P>`                                                  |
-| `md-link`        | `--root` | A relative link, image or reference definition whose target does not exist.                                        | `<target> does not exist`                                                                                         |
-| `md-anchor`      | `--root` | A link fragment that matches no heading of the target Markdown file.                                               | `<file> has no heading with anchor #x`                                                                            |
-| `bazel-coverage` | `--root` | A `BUILD.bazel` whose `//<dir>:comment_srcs` or `//<dir>:markdown_srcs` is not listed in `tools/lint/BUILD.bazel`. | `tools/lint/BUILD.bazel does not list "<label>"`                                                                  |
+| Rule             | Mode     | Fails on                                                                                                           | Message                                                                                                                                     |
+| ---------------- | -------- | ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `comment-lines`  | both     | A non-doc comment block over `MAX_COMMENT_LINES` (2) lines, reported at its first line.                            | `comment is N lines (max 2): cut it, shorten it, or move the rest to notes/<path>.md under a heading and link it`                           |
+| `comment-width`  | both     | A non-doc comment line over `MAX_COMMENT_WIDTH` (100) chars.                                                       | `comment line is N chars (max 100), measured from the comment marker`                                                                       |
+| `doc-ref`        | both     | A Markdown path in any comment, doc comments included, that does not exist.                                        | `<ref> does not exist`                                                                                                                      |
+| `doc-anchor`     | both     | The `#anchor` of such a path, when it matches no heading of the file.                                              | `<file> has no heading with anchor #x`                                                                                                      |
+| `workflow-ref`   | both     | A comment line, doc comments included, holding a pattern from [Workflow references](#workflow-references).         | `workflow reference "<matched text>": it cites a planning document that is not in the repo; state the reason in present tense or delete it` |
+| `notes-orphan`   | `--root` | A mirror `notes/<P>.md` whose `<P>` does not exist.                                                                | `notes/<P>.md mirrors <P>, which does not exist`                                                                                            |
+| `notes-unlinked` | `--root` | A `##` heading of a mirror that no comment in `<P>` links to.                                                      | `heading "<text>" (#slug) is not linked from any comment in <P>`                                                                            |
+| `md-link`        | `--root` | A relative link, image or reference definition whose target does not exist.                                        | `<target> does not exist`                                                                                                                   |
+| `md-anchor`      | `--root` | A link fragment that matches no heading of the target Markdown file.                                               | `<file> has no heading with anchor #x`                                                                                                      |
+| `bazel-coverage` | `--root` | A `BUILD.bazel` whose `//<dir>:comment_srcs` or `//<dir>:markdown_srcs` is not listed in `tools/lint/BUILD.bazel`. | `tools/lint/BUILD.bazel does not list "<label>"`                                                                                            |
 
 `bazel-coverage` runs only when the root has a `tools/lint/BUILD.bazel`, and the root package's labels are written `//:comment_srcs`. A label counts only when quoted in full.
 
@@ -38,6 +39,14 @@ A full-line comment has only whitespace before its marker. Full-line line commen
 Every physical line counts toward the limit, blank comment lines included, except a block comment's delimiter-only first or last line such as `/*`, `*/`, `--[[`, `]]`, or a Lua closer written with a leading `--`, as in `--]]` or `--]==]`. Width is counted in chars, trailing whitespace excluded, from the marker on a comment's first line and from the first non-space char on a block's later lines. A line whose text after the marker is a single token with no whitespace, such as a URL, is exempt from the width limit but still counts as a line.
 
 There is no suppression comment. The exemptions are structural: doc comments, the single-token width exemption, and the excluded paths below.
+
+### Workflow references
+
+The patterns are `note to coder`, `note to the coder`, `the coder`, `the coders`, `test-writer`, `test writer`, `test-writers`, `test writers`, `architect plan`, `the architect`, `per plan`, `per the plan`, `from the plan`, `feature plan`, `fix plan`, `plan §`, `plan section`, and `OD` or `OQ` followed by digits or by `-` and ASCII letters or digits. Strings and Markdown are never scanned.
+
+Matching ignores ASCII case, and a match end that is alphanumeric or `_` must not touch another such char. An id's digits or letters are taken greedily before that check, so `plan §4`, `OD2.`, `oq-a` and `method-OQ-1` match while `COD2`, `OD2B`, `OD2_x`, `OQ-1_x`, a bare `OD-`, `lathe coder` and `the architecture` do not. Each line gets at most one finding, even when two comments share it, quoting the leftmost match, the longest at that position, as the source spells it.
+
+Bare `the plan`, `§`, and ids such as `D4`, `O2`, `H1` or `S1` are not patterns, because the code uses them as domain terms: restore plans, `CSS 2.1 §10.8`, `-O2`, file-local heights and labels.
 
 ### References and anchors
 

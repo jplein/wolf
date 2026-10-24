@@ -702,7 +702,7 @@ mod tests {
     /// really takes, and it is why [`percent_encode_path`] is load-bearing rather than
     /// a defensive nicety — see [`file_uri_for_table`]'s row for the same source.
     ///
-    /// The O12 row (`/notes/12:30 standup.md`) is defensive AT THIS LEVEL for the same
+    /// The `/notes/12:30 standup.md` row is defensive AT THIS LEVEL for the same
     /// reason the other schemeless rows are, but the grammar it exercises is not:
     /// [`scheme_of_follows_the_rfc_grammar`] pins it on inputs every real click
     /// carries.
@@ -920,7 +920,7 @@ mod tests {
             ClassifyCase {
                 desc: "module row 9 (defensive only because `file_uri_for` answers Some for \
                        every real source path — a schemeless target IS produced when the base \
-                       is None), O12: a colon inside a PATH SEGMENT is not a scheme, so the \
+                       is None): a colon inside a PATH SEGMENT is not a scheme, so the \
                        file is previewed rather than handed to an external launcher — the \
                        grammar itself is pinned on reachable inputs by \
                        scheme_of_follows_the_rfc_grammar",
@@ -1118,7 +1118,8 @@ mod tests {
             },
             BaseUriCase {
                 desc: "DEFENSIVE, and one of the only two None inputs: an EMPTY source path has \
-                       no location to synthesize one from (init.lua:2229 keeps such a preview \
+                       no location to synthesize one from (`emit_previews` inside \
+                       `wolf_setup_preview` in `runtime/nvim/init.lua` keeps such a preview \
                        from ever becoming a pane)",
                 source: "",
                 want: None,
@@ -1156,7 +1157,7 @@ mod tests {
                 want: Some("file:///a/what%3F.md"),
             },
             BaseUriCase {
-                desc: "O13: a trailing slash on the INPUT is REFLECTED, never repaired",
+                desc: "a trailing slash on the INPUT is REFLECTED, never repaired",
                 source: "/a/x.md/",
                 want: Some("file:///a/x.md/"),
             },
@@ -1351,7 +1352,7 @@ mod tests {
     /// first colon", and the difference decides whether a LOCAL path is handed to an
     /// external launcher.
     ///
-    /// O12: there is deliberately NO `C:\…` row. Wolf runs on Linux and macOS, so a
+    /// There is deliberately NO `C:\…` row. Wolf runs on Linux and macOS, so a
     /// drive letter is not an input this function can receive, and pinning one would
     /// constrain a correct change for a case that cannot occur. `/notes/12:30
     /// standup.md` is the real input with a colon in a path segment, and the grammar

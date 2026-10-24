@@ -124,7 +124,7 @@ mod cursor_shape {
 ///
 /// The single source of truth shared with the Swift `AppearanceMode` port (a
 /// `UInt8` raw-value enum in `WolfKeyMap`) and the `AppearanceSeamTests`
-/// discriminant contract (plan OD-a).
+/// discriminant contract.
 mod appearance {
     /// Follow the macOS system appearance (`auto`).
     pub const AUTO: u8 = 0;
@@ -137,7 +137,7 @@ mod appearance {
 /// The layout-intent kind discriminants packed into [`FfiLayoutIntent::kind`].
 ///
 /// The single source of truth shared with the Swift `PaneTree` port and the
-/// `WolfKeyMapTests` / `tests/panes.rs` discriminant contract (plan §3.1).
+/// `WolfKeyMapTests` / `tests/panes.rs` discriminant contract.
 mod intent_kind {
     /// A window SPLIT was performed by nvim (carries orientation + from + win).
     pub const SPLIT: u8 = 0;
@@ -151,7 +151,7 @@ mod intent_kind {
 /// The command-kind discriminants packed into [`FfiCommand::kind`].
 ///
 /// The single source of truth shared with the Swift `CommandKind` port and the
-/// `WolfKeyMapTests` / `tests/commands.rs` discriminant contract (plan §3),
+/// `WolfKeyMapTests` / `tests/commands.rs` discriminant contract,
 /// mirroring the variant order of [`wolf_core::Command`].
 mod command_kind {
     /// Open a new editor window.
@@ -2427,7 +2427,7 @@ impl WolfCoreHandle {
     /// Toggles the active buffer's content width between the ~90-char default and
     /// full pane width via [`WolfCore::toggle_full_width`] (the
     /// `wolf_toggle_full_width` Lua helper; targets the SOURCE buffer when the active
-    /// pane is a preview scratch — OQ-1). A no-op once the core is gone.
+    /// pane is a preview scratch). A no-op once the core is gone.
     pub fn toggle_full_width(&self) {
         if let Some(core) = self.core.borrow().as_ref() {
             core.toggle_full_width();
@@ -2599,7 +2599,7 @@ impl WolfCoreHandle {
     /// Blocks briefly on the captive nvim. Returns the linked file's source bufnr
     /// (`> 0`) on success; `0` when `path` is empty, unreadable, or not Markdown, on
     /// error, or once the core has been shut down. `path` is ABSOLUTE (no relative
-    /// resolution). On `0` the front-end applies its own O3 fallback.
+    /// resolution). On `0` the front-end falls back to a plain open.
     #[must_use]
     pub fn preview_file(&self, win: i64, path: String) -> i64 {
         self.core
@@ -3587,7 +3587,7 @@ impl FfiPaneStatus {
 /// The native command line (`ext_cmdline`), opaque to Swift.
 ///
 /// A projection of [`wolf_core::Cmdline`] with its content chunks already
-/// flattened to a single [`text`](FfiCmdline::text) String (OD1 — the cmdline is
+/// flattened to a single [`text`](FfiCmdline::text) String (the cmdline is
 /// flattened across the FFI; only the toast keeps styled chunks). The front-end
 /// paints `firstc` + `text` with the caret at `pos` when `active`.
 pub struct FfiCmdline {
@@ -3677,8 +3677,8 @@ impl FfiCmdline {
 ///
 /// A projection of [`wolf_core::Pum`]. When `anchor_grid == -1` the popup is
 /// anchored to the command line and `anchor_col` is a BYTE offset into the
-/// cmdline text (OD2 — the front-end shows `word` primarily with `kind` as a
-/// small trailing hint).
+/// cmdline text (the front-end shows `word` primarily with `kind` as a small
+/// trailing hint).
 pub struct FfiPum {
     visible: bool,
     selected: i64,
@@ -3804,8 +3804,8 @@ impl FfiPumItem {
 /// The message toast (`ext_messages`), opaque to Swift.
 ///
 /// A projection of [`wolf_core::Toast`]. Each chunk's colors are RESOLVED in
-/// Rust against the highlight table at pack time (OD1 — message color is
-/// load-bearing and must never be re-resolved in Swift).
+/// Rust against the highlight table at pack time (message color is load-bearing
+/// and must never be re-resolved in Swift).
 pub struct FfiToast {
     visible: bool,
     kind: String,

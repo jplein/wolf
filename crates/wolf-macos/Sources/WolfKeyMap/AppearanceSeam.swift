@@ -5,7 +5,7 @@ import Foundation
 /// The user's configured appearance mode, decoded from the FFI discriminant.
 ///
 /// A `UInt8` raw-value enum so the raw values ARE the contract shared with
-/// `wolf-ffi`'s `mod appearance` and `wolf_core::config::Appearance` (plan OD-a):
+/// `wolf-ffi`'s `mod appearance` and `wolf_core::config::Appearance`:
 /// `auto == 0`, `dark == 1`, `light == 2`. `AppDelegate` reads
 /// `FfiConfig.appearance()` (a `u8`) and maps it via `AppearanceMode(rawValue:)`;
 /// an out-of-range discriminant decodes to `nil`.

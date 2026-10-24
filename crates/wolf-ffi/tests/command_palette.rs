@@ -1,24 +1,15 @@
-//! Integration test for the `wolf-ffi` COMMAND-PALETTE bridge session (plan
-//! §Q1 / §5): the opaque `FfiCommandPalette` returned by
-//! `WolfCoreHandle::command_palette()`, its `add_window` / `record` mutators, and
-//! its `ranked(query, max) -> Vec<FfiCommandRow>` ranker with the per-row
-//! accessors.
+//! Integration test for the `wolf-ffi` COMMAND-PALETTE bridge session: the opaque
+//! `FfiCommandPalette` returned by `WolfCoreHandle::command_palette()`, its
+//! `add_window` / `record` mutators, and its `ranked(query, max) ->
+//! Vec<FfiCommandRow>` ranker with the per-row accessors.
 //!
 //! This drives the RUST half against a REAL, hermetic Neovim — NO mocks, per the
 //! project testing policy. It is modeled on `tests/recent_dirs.rs` (staging
 //! `WOLF_STATE_DIR` to a tempdir BEFORE start, `chdir` + poll to populate the
 //! recent-dirs MRU), reusing `tests/common/mod.rs`.
 //!
-//! ## Dependency on coder work (plan §Q1 / §5)
-//!
-//! None of this exists yet: the coder adds `command_palette()` to `WolfCoreHandle`
-//! plus the `FfiCommandPalette` / `FfiCommandRow` opaque types and the
-//! `mod palette_row_kind` discriminants in `crates/wolf-ffi/src/lib.rs`,
-//! regenerates `generated/`, AND adds the `//crates/wolf-ffi:command_palette`
-//! `rust_test` target in `BUILD.bazel` (copy of `recent_dirs`). This test file does
-//! NOT touch non-test source, and it will not compile until that lands — expected.
-//!
-//! Bridge surface assumed (plan §Q1):
+//! The `//crates/wolf-ffi:command_palette` `rust_test` target runs this file under
+//! Bazel. Bridge surface (row kinds mirror `mod palette_row_kind` in `src/lib.rs`):
 //!   * `WolfCoreHandle::command_palette(&self) -> FfiCommandPalette`
 //!   * `FfiCommandPalette::add_window(&self, index: u16, cwd: String)`
 //!   * `FfiCommandPalette::record(&self, key: String)`
@@ -69,7 +60,7 @@ const WINDOW_INDEX: u16 = 7;
 /// a path).
 const WINDOW_CWD: &str = "/tmp/x";
 
-// -- palette_row_kind discriminants (mirror plan §Q1, `mod palette_row_kind`) ---
+// -- palette_row_kind discriminants (mirror `mod palette_row_kind`) -------------
 /// `FfiCommandRow::row_kind()` for a static registry command.
 const ROW_KIND_STATIC: u8 = 0;
 /// `FfiCommandRow::row_kind()` for a "Switch to Window" row.

@@ -18,7 +18,7 @@
 //!    and ranked via [`rank_matches`](crate::rank::rank_matches), truncated to
 //!    `max`, and each surviving `Match.index` maps back to a cloned [`BufferRow`].
 //!
-//! ## Display string (DECISION §13.6 — no `~`-home fold in v1)
+//! ## Display string (no `~`-home fold)
 //!
 //! An empty buffer name → [`NO_NAME`](crate::pane_status::NO_NAME); a name under
 //! `cwd` → the cwd-relative remainder (lossy); any other name → the absolute name

@@ -1,32 +1,15 @@
-//! Integration test for the `wolf-ffi` BUFFER-PICKER bridge surface (plan §5 /
-//! §8c): the opaque `FfiBufferPicker` returned by
-//! `WolfCoreHandle::buffer_picker()`, its `ranked(query, max) -> Vec<FfiBufferRow>`
-//! ranker, and the HANDLE-level activation `WolfCoreHandle::switch_buffer(bufnr)`
-//! (which resolves `active_win()` live and window-scopes the switch via
-//! `nvim_win_set_buf`, then restores that pane's saved `(winid, bufnr)` view).
+//! Integration test for the `wolf-ffi` BUFFER-PICKER bridge surface: the opaque
+//! `FfiBufferPicker` returned by `WolfCoreHandle::buffer_picker()` (seeded from a
+//! blocking `list_buffers()` snapshot taken at construction), its
+//! `ranked(query, max) -> Vec<FfiBufferRow>` ranker, and the HANDLE-level activation
+//! `WolfCoreHandle::switch_buffer(bufnr)` (which resolves `active_win()` live and
+//! window-scopes the switch via `nvim_win_set_buf`, then restores that pane's saved
+//! `(winid, bufnr)` view).
 //!
 //! This drives the RUST half against a REAL, hermetic Neovim — NO mocks, per the
 //! project testing policy. It is modeled on `tests/command_palette.rs` and
-//! `tests/panes.rs`, reusing `tests/common/mod.rs`.
-//!
-//! ## Dependency on coder work (plan §5 / §8c)
-//!
-//! None of this exists yet: the coder adds, on `WolfCoreHandle`,
-//!   * `buffer_picker(&self) -> FfiBufferPicker` (seeded from a BLOCKING
-//!     `list_buffers()` snapshot taken at construction), and
-//!   * `switch_buffer(&self, bufnr: i64)` (reads `active_win()` live, then
-//!     window-scopes the switch),
-//!     plus the opaque types
-//!   * `FfiBufferPicker { fn ranked(&self, query: String, max: usize) ->
-//!     Vec<FfiBufferRow> }`
-//!   * `FfiBufferRow { fn bufnr() -> i64; fn display() -> String;
-//!     fn modified() -> bool }`
-//!     in `crates/wolf-ffi/src/lib.rs`, regenerates `generated/`, AND adds the
-//!     `//crates/wolf-ffi:buffer_picker` `rust_test` target to `BUILD.bazel` (a copy
-//!     of the `command_palette` stanza, srcs `["tests/common/mod.rs",
-//! "tests/buffer_picker.rs"]`, `crate_root = "tests/buffer_picker.rs"`). This test
-//!     file does NOT touch non-test source or BUILD files, and it will not compile
-//!     until that lands — expected.
+//! `tests/panes.rs`, reusing `tests/common/mod.rs`; the
+//! `//crates/wolf-ffi:buffer_picker` `rust_test` target runs it under Bazel.
 //!
 //! ## SKIP-when-unset policy
 //!

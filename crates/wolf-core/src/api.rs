@@ -1112,7 +1112,7 @@ impl WolfCore {
     /// Enqueued on the same ordered input channel as keystrokes; applied via the
     /// init.lua `wolf_toggle_full_width` helper, which flips `b:wolf_full_width` on
     /// the effective buffer (the SOURCE buffer when the active pane is a preview
-    /// scratch — OQ-1) and re-emits the current-file / per-window full-width /
+    /// scratch) and re-emits the current-file / per-window full-width /
     /// previews notifications.
     pub fn toggle_full_width(&self) {
         self.send_input(InputEvent::ToggleFullWidth);
@@ -1713,23 +1713,6 @@ mod tests {
     //! pinned deterministically and fast, without spawning Neovim. The end-to-end
     //! behaviour against a real, wedged nvim is covered by
     //! `tests/rpc_timeout.rs`.
-    //!
-    //! NOTE to coder: these are written to the signature the plan specifies for the
-    //! not-yet-existing items. `timeout_block_on` is expected to be:
-    //!
-    //! ```ignore
-    //! fn timeout_block_on<F, T>(
-    //!     runtime: &tokio::runtime::Runtime,
-    //!     timeout: std::time::Duration,
-    //!     what: &'static str,
-    //!     fut: F,
-    //! ) -> Result<T, NvimError>
-    //! where
-    //!     F: std::future::Future<Output = Result<T, NvimError>>;
-    //! ```
-    //!
-    //! and `NvimError::Timeout(&'static str, Duration)` a new variant. If the coder
-    //! diverges from these, align the source (not the test) with the plan.
 
     use std::future;
     use std::time::{Duration, Instant};

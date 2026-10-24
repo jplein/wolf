@@ -19,7 +19,7 @@ public enum PreviewLinkSeam {
   /// Classifies `url` (WebKit's resolved link target) against the previewed
   /// `sourcePath` (the abs path of the file currently shown in the pane).
   ///
-  /// Rules (plan §A):
+  /// Rules:
   ///  - a scheme other than `file` (and non-nil) — `http`/`https`/`mailto`/`tel`/
   ///    `ftp`/… — → `.openInBrowser(url)`.
   ///  - `file` scheme: `frag` is `url.fragment` (Foundation returns it

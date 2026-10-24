@@ -1,5 +1,5 @@
-//! Integration tests for the S2 async streaming traversal + the `FileSearch`
-//! session (`wolf_core::FileSearch`, `WolfCore::start_file_search`).
+//! Integration tests for the async streaming traversal + the `FileSearch` session
+//! (`wolf_core::FileSearch`, `WolfCore::start_file_search`).
 //!
 //! These exercise REAL filesystem trees (via `tempfile`) and, for the git cases,
 //! the REAL `git` binary (shelled out with `std::process::Command`) — no mocks,
@@ -9,20 +9,13 @@
 //! Neovim located via `WOLF_NVIM_BIN`; so these are also real-nvim integration
 //! tests and fail loudly (via `common::require_nvim_bin`) if it is unset.
 //!
-//! Surface exercised (per plan §D3/§D4/§D6):
+//! Surface exercised:
 //! - `WolfCore::start_file_search(&self, wake: WakeFn) -> FileSearch`
 //!   (SYNCHRONOUSLY seeds MRU results, then streams traversal results, bumping
 //!   `version` + waking per batch, and finally sets `complete = true`).
 //! - `FileSearch::read()` -> an owned guard that `Deref`s to a view exposing
 //!   `entries`, `complete: bool`, and `version: u64`.
 //! - `FileSearch::cancel(&self)` (and `Drop`) stop the traversal.
-//!
-//! NOTE to coder (D4 view shape): the tests follow §D4 literally and access the
-//! read guard's fields as `view.entries`, `view.complete`, `view.version`. They
-//! iterate `view.entries` by reference and `.clone()` out of it, so they work
-//! whether the guard derefs to a `FileSearchView`/`FileSearchState` holding
-//! `entries: Vec<FileEntry>` or a borrowed `&[FileEntry]`. If the field/accessor
-//! names differ, align them with §D4 (`entries` / `complete` / `version`).
 
 mod common;
 
@@ -49,7 +42,7 @@ const POLL_INTERVAL: Duration = Duration::from_millis(50);
 const CANCEL_SETTLE: Duration = Duration::from_millis(500);
 
 /// Number of files the cancel test creates. Comfortably exceeds the traversal
-/// batch size (plan: `TRAVERSAL_BATCH = 256`) so cancellation has multiple
+/// batch size (`files.rs`'s `TRAVERSAL_BATCH = 256`) so cancellation has multiple
 /// batches to interrupt.
 const MANY_FILES: usize = 600;
 
@@ -427,9 +420,9 @@ fn gitignore_applies_to_nested_subdirs() {
 
 /// (6) A `.wolf` directory in the tree is excluded from traversal.
 ///
-/// The core no longer creates `<cwd>/.wolf` (the MRU moved to the state dir), so
-/// to still exercise the traversal exclusion we create a `.wolf/junk.md` by hand
-/// and assert it never appears in the results.
+/// The core never creates `<cwd>/.wolf` (the MRU lives in the state dir), so to
+/// exercise the traversal exclusion we create a `.wolf/junk.md` by hand and assert
+/// it never appears in the results.
 #[test]
 fn wolf_cache_dir_is_excluded() {
     let _ = common::require_nvim_bin();
@@ -676,10 +669,9 @@ fn file_search_root_defaults_to_cfg_cwd_without_cd() {
 /// `:cd` test, so B's absolute path types cleanly as `:cd` keystrokes and the
 /// relativized `display` strings line up.
 ///
-/// NOTE to coder: this asserts the plan's READ-path behavior — `start_file_search`
-/// must seed from the global MRU filtered by `<resolved-root>` (resolved-root =
-/// nvim's live cwd), so the seed's `display` relativizes against the SAME dir the
-/// traversal lists.
+/// `start_file_search` must seed from the global MRU filtered by `<resolved-root>`
+/// (resolved-root = nvim's live cwd), so the seed's `display` relativizes against
+/// the SAME dir the traversal lists.
 #[test]
 fn mru_seed_follows_nvim_cd() {
     let _ = common::require_nvim_bin();

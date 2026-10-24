@@ -236,7 +236,7 @@ mod tests {
 
     /// The on-disk file name the module reads/creates. Kept as a local literal so
     /// the tests do not depend on the production `CONFIG_FILE_NAME` const being
-    /// public; if the coder makes it `pub`, this can be swapped for `super::…`.
+    /// public; if it becomes `pub`, this can be swapped for `super::…`.
     const CONFIG_FILE_NAME: &str = "wolf-config.yaml";
 
     /// The documented default font family (platform-independent).
@@ -282,10 +282,10 @@ mod tests {
             actual.line_height, expected.line_height,
             "{ctx}: line_height"
         );
-        // `Appearance` derives `PartialEq`/`Debug` (plan §3.1), so compare it
+        // `Appearance` derives `PartialEq`/`Debug`, so compare it
         // directly. `default_config()` yields `Appearance::Auto`.
         assert_eq!(actual.appearance, expected.appearance, "{ctx}: appearance");
-        // The macOS option-as-alt flag (plan: `WolfConfig.macos_option_as_alt`,
+        // The macOS option-as-alt flag (`WolfConfig.macos_option_as_alt`,
         // kebab key `macos-option-as-alt`); `default_config()` yields `false`.
         assert_eq!(
             actual.macos_option_as_alt, expected.macos_option_as_alt,

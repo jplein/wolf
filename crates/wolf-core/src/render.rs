@@ -416,8 +416,8 @@ pub struct WinInfo {
     pub height: usize,
     /// This window's scroll viewport (from `win_viewport`).
     pub viewport: Viewport,
-    /// Historically "whether the window is hidden (from `win_hide`)", but now
-    /// effectively ALWAYS `false` and unused (OD8). On a `win_hide` (most notably
+    /// Whether the window is hidden (from `win_hide`); always `false` in practice
+    /// and unused. On a `win_hide` (most notably
     /// a tabpage switch, which hides every window of the leaving tabpage) the
     /// handler REMOVES the window from `Snapshot.windows` entirely rather than
     /// flagging it here, so `windows`/`grid_for_win` reflect only the current
@@ -458,7 +458,7 @@ pub struct ThemeColors {
 /// notification.
 ///
 /// A preview pane is backed by a real Neovim scratch buffer named
-/// `Preview: <basename>` carrying `b:wolf_preview_source` (OD1 = Design S). The
+/// `Preview: <basename>` carrying `b:wolf_preview_source`. The
 /// `wolf_preview` autocmd scans windows for that buffer variable and reports, per
 /// preview window (keyed in [`Snapshot::previews`] by the preview WINDOW handle),
 /// the SOURCE buffer's number and absolute path so the front-end can pull rendered
@@ -652,7 +652,7 @@ pub struct ToastChunk {
 pub struct Message {
     /// The message kind (`emsg`, `echomsg`, `list_cmd`, ...), or empty.
     pub kind: String,
-    /// The message id (0 when none / a non-integer id, per OD7).
+    /// The message id (0 when none / a non-integer id).
     pub id: i64,
     /// The message's lines; each is a run of styled chunks.
     pub lines: Vec<Vec<ToastChunk>>,
@@ -662,7 +662,7 @@ pub struct Message {
 /// `msg_history_show` (the `ext_messages` protocol).
 ///
 /// Multiple `messages` accumulate in order (e.g. `:messages` history); the
-/// front-ends render them bottom-left, dismissing on the next input (OD8).
+/// front-ends render them bottom-left, dismissing on the next input.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Toast {
     /// Whether the toast is currently showing.
@@ -801,9 +801,9 @@ pub struct Snapshot {
     pub current_is_preview: bool,
     /// Whether the buffer currently being edited in nvim is in FULL-WIDTH mode (it
     /// carries a truthy `b:wolf_full_width`). Updated out-of-band from the redraw
-    /// stream via the `wolf_current_file` notification (a 4th boolean argument added
-    /// to the existing current-file autocmd emit; see [`crate::redraw`]). For a
-    /// preview scratch the reported flag is the SOURCE buffer's (OQ-1). Because it is
+    /// stream via the `wolf_current_file` notification (a 4th boolean argument of
+    /// the current-file autocmd emit; see [`crate::redraw`]). For a
+    /// preview scratch the reported flag is the SOURCE buffer's. Because it is
     /// not a redraw frame, updating it does NOT bump `seq`. Drives
     /// [`Snapshot::is_full_width_active`], the View-menu "Use full width for content"
     /// checkmark. Defaults to `false`.
@@ -868,7 +868,7 @@ pub struct Snapshot {
     pub pum: Pum,
     /// The message toast (`ext_messages`), folded from `msg_show` /
     /// `msg_clear` / `msg_history_show`. Empty by default; cleared on the next
-    /// dismissing input (Key/Mouse/Scroll — OD8) unless it is a prompt.
+    /// dismissing input (Key/Mouse/Scroll) unless it is a prompt.
     pub toast: Toast,
     /// A confirm() prompt's toast messages stashed across the one-flush window
     /// between the dialog's `cmdline_hide` and a possible re-prompt
@@ -1018,8 +1018,8 @@ impl Snapshot {
     /// drops any stashed confirm ([`Snapshot::pending_confirm`]) — a
     /// dismiss/clear supersedes a confirm that was mid-resolve.
     ///
-    /// Called from the input pump on the next dismissing input (Key/Mouse/Scroll
-    /// — OD8), gated by `!toast.is_prompt()`, and from `msg_clear`. This is NOT a
+    /// Called from the input pump on the next dismissing input (Key/Mouse/Scroll),
+    /// gated by `!toast.is_prompt()`, and from `msg_clear`. This is NOT a
     /// redraw frame, so callers do not bump `seq`.
     pub fn clear_toast(&mut self) {
         self.toast.messages.clear();

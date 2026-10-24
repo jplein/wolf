@@ -4,19 +4,8 @@
 //! — and proves that the captive `runtime/nvim/init.lua` actually finds, adds to
 //! `runtimepath`, and sources a sibling `orlando/` plugin tree (the macOS bundle
 //! layout `Contents/Resources/{init.lua,orlando/}`). It is the ONLY automated
-//! proof of the new "orlando present" load branch (the absent-path no-op is
-//! already covered, unchanged, by `bridge_smoke`).
-//!
-//! ## Coder wiring (BUILD.bazel — NOT done here)
-//!
-//! This file does NOT touch BUILD files. The coder adds a `//crates/wolf-ffi:orlando_load`
-//! `rust_test` modeled on `bridge_smoke` / `panes`
-//! (`srcs = ["tests/common/mod.rs", "tests/orlando_load.rs"]`,
-//! `crate_root = "tests/orlando_load.rs"`, `tags = ["no-sandbox"]`, `size = "small"`),
-//! and MUST wire, alongside the existing WOLF_TEST_INIT_LUA / WOLF_TEST_NVIM_DIR:
-//!   * `data`: add `"//bazel/orlando:orlando_tree"`
-//!   * `env`:  add `"WOLF_TEST_ORLANDO_DIR": "$(rootpath //bazel/orlando:orlando_tree)"`
-//!     `tempfile` is already a `[dev-dependencies]` of the crate (used by `panes`).
+//! proof of the "orlando present" load branch (the absent-path no-op is covered by
+//! `bridge_smoke`).
 //!
 //! ## How this proves the load (no exec_lua seam on the FFI surface)
 //!

@@ -363,13 +363,13 @@ fn a_commit_behind_an_open_overlay_sends_nothing() {
 
 /// A commit delivered in NORMAL mode is executed as a command, not inserted as text.
 ///
-/// Measurement 3 behind this unit says the input method filters plain printables
-/// with no sequence pending, so every normal-mode command key travels the commit
-/// path: `dd`, `gg`, `<C-w>` sequences, every character of a typed `:e` command
-/// line. That makes the transport choice — `InputEvent::Key` rather than
-/// `InputEvent::Paste` — the single most consequential thing about the commit
-/// handler, because `nvim_paste` bypasses `nvim_input` entirely, runs no mappings,
-/// and would insert the text `dd` where a line deletion belongs.
+/// The input method filters plain printables with no sequence pending (measured),
+/// so every normal-mode command key travels the commit path: `dd`, `gg`, `<C-w>`
+/// sequences, every character of a typed `:e` command line. That makes the
+/// transport choice — `InputEvent::Key` rather than `InputEvent::Paste` — the
+/// single most consequential thing about the commit handler, because `nvim_paste`
+/// bypasses `nvim_input` entirely, runs no mappings, and would insert the text `dd`
+/// where a line deletion belongs.
 ///
 /// **What this case discriminates, stated honestly:** nothing inside `im_ui`. The
 /// seam answers `Send(events)` either way; it is [`send_commit`]'s own choice of

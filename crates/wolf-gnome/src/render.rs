@@ -151,9 +151,9 @@ impl CellMetrics {
 /// Paints `grid` (resolved against `highlights`) onto the Cairo context `cr`
 /// using `metrics`.
 ///
-/// Under `ext_multigrid` the front-end paints a single grid at a time (the
-/// active window grid in S1, a per-pane grid in S3), so this takes the grid and
-/// its highlight table directly rather than a whole `Snapshot`.
+/// Under `ext_multigrid` the front-end paints a single grid at a time (one per
+/// pane), so this takes the grid and its highlight table directly rather than a
+/// whole `Snapshot`.
 ///
 /// Widget-free: `cr` may be backed by an offscreen `ImageSurface` (tests) or a
 /// `DrawingArea` (production). See the module docs for the per-cell algorithm.

@@ -1,8 +1,7 @@
-//! Integration tests for the per-pane statusbar's CORE surface: the snapshot now
-//! carries a per-window buffer-path map (`Snapshot.buffers`, plan §2) fed by the
-//! `wolf_buffers` notification (plan §3), and `WolfCore::pane_status(grid)` joins a
-//! grid -> window -> buffer path and formats it via the pure `pane_status` fn
-//! (plan §4/§5).
+//! Integration tests for the per-pane statusbar's CORE surface: the snapshot
+//! carries a per-window buffer-path map (`Snapshot.buffers`) fed by the
+//! `wolf_buffers` notification, and `WolfCore::pane_status(grid)` joins a
+//! grid -> window -> buffer path and formats it via the pure `pane_status` fn.
 //!
 //! These drive a REAL, hermetic nvim (no mocks) via `WOLF_NVIM_BIN`; the common
 //! helpers PANIC loudly if it is unset (matching the rest of the wolf-core suite —
@@ -11,13 +10,7 @@
 //! from redraw flushes and per-window layout changes lag across several flushes,
 //! every assertion POLLS with a generous timeout, draining wakes as it goes.
 //!
-//! ## Dependency on coder work (plan §5)
-//!
-//! `WolfCore::pane_status(grid: u64) -> PaneStatus` does not exist yet. The coder
-//! adds it in `crates/wolf-core/src/api.rs`, plus `Snapshot.buffers`, the
-//! `wolf_buffers` handler, `setup_buffer_tracking`, and the Lua tracker; and adds
-//! the `//crates/wolf-core:pane_buffers` `rust_test` target to `BUILD.bazel`. This
-//! file does NOT touch non-test source.
+//! The `//crates/wolf-core:pane_buffers` `rust_test` target runs this file.
 //!
 //! ## Determinism of the cwd-relative display path
 //!
@@ -190,7 +183,7 @@ fn ex_command(core: &WolfCore, cmd: &str) {
     core.send_input(key(Key::Enter));
 }
 
-/// The cwd-relative form the coder's `pane_status` should produce for `file`
+/// The cwd-relative form `pane_status` should produce for `file`
 /// opened under `cwd`, computed by canonicalizing BOTH sides (the core does the
 /// same, and `/var`/`/tmp` are symlinks on macOS).
 fn expected_cwd_relative(cwd: &PathBuf, file: &PathBuf) -> String {

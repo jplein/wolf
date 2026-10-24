@@ -3,8 +3,7 @@
 //! This drives the RUST half of the swift-bridge pane machinery against a REAL,
 //! hermetic Neovim — NO mocks, per the project testing policy. It is the sibling
 //! of `tree_search.rs` / `file_search.rs` (same staging / SKIP-when-unset
-//! machinery, reusing `tests/common/mod.rs`) but exercises the NEW pane surface
-//! the coder adds per plan §3:
+//! machinery, reusing `tests/common/mod.rs`) but exercises the pane surface:
 //!
 //!   * `WolfCoreHandle::windows() -> Vec<FfiWinInfo>` (`grid()`, `win()`,
 //!     `hidden()`)
@@ -16,16 +15,9 @@
 //!   * `WolfCoreHandle::resize_grid(grid: u64, cols: u16, rows: u16)`
 //!   * `WolfCoreHandle::focus_win(win: i64)`
 //!
-//! ## Dependency on coder work (plan §3 + §5)
+//! The `//crates/wolf-ffi:panes` `rust_test` target runs this file under Bazel.
 //!
-//! These accessors do not exist yet: the coder implements them in
-//! `crates/wolf-ffi/src/lib.rs` (the `FfiLayoutIntent` / `FfiWinInfo` opaque types
-//! + the `WolfCoreHandle` methods), regenerates `generated/`, AND adds the
-//!   `//crates/wolf-ffi:panes` `rust_test` target to `BUILD.bazel` (mirroring
-//!   `tree_search`, srcs `["tests/common/mod.rs", "tests/panes.rs"]`,
-//!   `crate_root = "tests/panes.rs"`). This test file does NOT touch BUILD files.
-//!
-//! ## Discriminant contract (plan §3.1)
+//! ## Discriminant contract
 //!
 //! Intent kind: SPLIT = 0, FOCUS_DIR = 1. Orientation: HORIZONTAL = 0,
 //! VERTICAL = 1. These MUST match `mod intent_kind` / `mod orientation` in
@@ -69,7 +61,7 @@ const KIND_CHAR: u8 = 0;
 /// The Enter / Return key (executes the typed Ex command).
 const KIND_ENTER: u8 = 1;
 
-// -- Layout-intent discriminants (mirror plan §3.1) ---------------------------
+// -- Layout-intent discriminants (mirror `mod intent_kind`) -------------------
 /// `FfiLayoutIntent::kind()` for a window SPLIT.
 const INTENT_KIND_SPLIT: u8 = 0;
 /// `SplitOrientation::Vertical` discriminant (side-by-side, `:vsplit`).

@@ -225,7 +225,7 @@ function _G.wolf_setup_current_file_tracking(chan)
 		local buf = vim.api.nvim_get_current_buf()
 		if vim.b[buf].wolf_preview_source ~= nil then
 			-- A preview scratch reports the SOURCE buffer's full-width flag (4th arg)
-			-- so the View-menu checkmark matches the document (OQ-1).
+			-- so the View-menu checkmark matches the document.
 			local source_bufnr = vim.b[buf].wolf_preview_source_bufnr
 			local full_width = false
 			if source_bufnr ~= nil and vim.api.nvim_buf_is_valid(source_bufnr) then

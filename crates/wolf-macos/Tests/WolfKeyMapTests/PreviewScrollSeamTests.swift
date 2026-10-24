@@ -7,7 +7,7 @@ import XCTest
 final class PreviewScrollSeamTests: XCTestCase {
 
   /// The exact textual form the seam must interpolate a `Double` tuning constant or
-  /// coordinate into the generated JS as (plan §5.1: `String(format: "%.2f", v)`,
+  /// coordinate into the generated JS as (`String(format: "%.2f", v)`,
   /// no locale argument => non-localized => always a `.` decimal separator).
   private func jsDouble(_ v: Double) -> String {
     String(format: "%.2f", v)
@@ -32,7 +32,7 @@ final class PreviewScrollSeamTests: XCTestCase {
 
   /// Exactly what the new document's `.atDocumentStart` seeding `post()` pushes:
   /// `__wolfLine` is still 0, so `resolve` returns null and `window.scrollY` is 0.
-  /// This value must NEVER be allowed to overwrite an in-flight restore (H2).
+  /// This value must NEVER be allowed to overwrite an in-flight restore.
   private let seedState = PreviewScrollSeam.ScrollState(anchorTop: nil, scrollY: 0)
 
   /// A real, live scroll state: the cursor's anchor resolved 320px down a viewport
@@ -374,7 +374,7 @@ final class PreviewScrollSeamTests: XCTestCase {
       "the same cursor move DOES arm the scroll gate — the two gates are independent")
   }
 
-  // MARK: - T-5 / H1: a SOURCE SWITCH is a navigation, so the restore is DROPPED
+  // MARK: - a SOURCE SWITCH is a navigation, so the restore is DROPPED
 
   func testCaptureDecisionDropsWhenTheSourceBufferSwitched() {
     let decision = PreviewScrollSeam.captureDecision(
@@ -388,7 +388,7 @@ final class PreviewScrollSeamTests: XCTestCase {
       "a changed sourceBufnr means the window navigated to ANOTHER FILE, so the "
         + "previous file's scroll offset must not be restored into it — otherwise "
         + "clicking [appendix](appendix.md) from a guide.md scrolled to y=3000 opens "
-        + "appendix.md 3000px into its middle (H1)")
+        + "appendix.md 3000px into its middle")
   }
 
   /// The tick is IRRELEVANT to rule 1: two freshly opened files can legitimately
@@ -406,7 +406,7 @@ final class PreviewScrollSeamTests: XCTestCase {
         + "a navigation")
   }
 
-  // MARK: - T-5: rule 1 WINS over rule 2 (the ordering is load-bearing)
+  // MARK: - rule 1 WINS over rule 2 (the ordering is load-bearing)
 
   func testCaptureDecisionSourceSwitchWinsOverAPendingRestore() {
     let decision = PreviewScrollSeam.captureDecision(
@@ -420,10 +420,10 @@ final class PreviewScrollSeamTests: XCTestCase {
       "the rules are ORDERED: a source switch must drop even when a restore is in "
         + "flight and the cache is the document-start seed. Keeping the pending "
         + "restore here would apply the OLD file's offset to the NEW file — exactly "
-        + "the H1 regression, reintroduced through rule 2")
+        + "what the source-switch reset prevents, reintroduced through rule 2")
   }
 
-  // MARK: - T-5: a FIRST BIND is not a navigation
+  // MARK: - a FIRST BIND is not a navigation
 
   func testCaptureDecisionFirstBindIsNotANavigation() {
     let decision = PreviewScrollSeam.captureDecision(
@@ -443,7 +443,7 @@ final class PreviewScrollSeamTests: XCTestCase {
       "a first bind with a real cached state captures it like any other reload")
   }
 
-  // MARK: - T-5 / H2: the document-start SEED must not clobber an in-flight restore
+  // MARK: - the document-start SEED must not clobber an in-flight restore
 
   func testCaptureDecisionKeepsAnInFlightRestoreAgainstTheDocumentStartSeed() {
     let decision = PreviewScrollSeam.captureDecision(
@@ -458,10 +458,10 @@ final class PreviewScrollSeamTests: XCTestCase {
         + "document's atDocumentStart post() has already reset the cache to (nil, 0). "
         + "Capturing that seed would overwrite the GOOD pending restore with a "
         + "no-target one and the page would stay at the top — the original "
-        + "jump-to-top bug, returned (H2)")
+        + "jump-to-top bug, returned")
   }
 
-  // MARK: - T-5: the seed with NOTHING in flight has nothing to protect
+  // MARK: - the seed with NOTHING in flight has nothing to protect
 
   func testCaptureDecisionCapturesTheSeedWhenNoRestoreIsInFlight() {
     let decision = PreviewScrollSeam.captureDecision(
@@ -477,9 +477,9 @@ final class PreviewScrollSeamTests: XCTestCase {
         + "seed is simply the current truth and is captured normally")
   }
 
-  // MARK: - T-5: a REAL scroll position still overwrites an in-flight restore
+  // MARK: - a REAL scroll position still overwrites an in-flight restore
 
-  /// The boundary that stops the H2 fix from OVER-applying. If `.keepPending` were
+  /// The boundary that stops the seed-clobber guard from OVER-applying. If `.keepPending` were
   /// returned for any non-nil `pendingRestore`, a preview whose `didFinish` was slow
   /// would freeze on the first captured offset and ignore every subsequent scroll.
   func testCaptureDecisionARealScrollPositionOverwritesAnInFlightRestore() {
@@ -498,11 +498,11 @@ final class PreviewScrollSeamTests: XCTestCase {
         + "the restore would freeze at a stale offset")
     XCTAssertNotEqual(
       decision, .keepPending,
-      "over-applying the H2 fix to every pending restore would trade one freeze for "
-        + "another")
+      "over-applying the seed-clobber guard to every pending restore would trade one "
+        + "freeze for another")
   }
 
-  // MARK: - T-5: the ordinary edit — same buffer, bumped tick
+  // MARK: - the ordinary edit — same buffer, bumped tick
 
   func testCaptureDecisionCapturesAnOrdinaryEdit() {
     let decision = PreviewScrollSeam.captureDecision(
@@ -519,7 +519,7 @@ final class PreviewScrollSeamTests: XCTestCase {
         + "pre-reload anchor offset is captured so the edited region stays stationary")
   }
 
-  // MARK: - T-5: no cached state yet — an empty request, never a crash
+  // MARK: - no cached state yet — an empty request, never a crash
 
   func testCaptureDecisionWithNoCachedStateCapturesAnEmptyRequest() {
     // Reachable before the first post() and after a `.drop`. Pins only the `pendingRestore == nil`
@@ -542,17 +542,17 @@ final class PreviewScrollSeamTests: XCTestCase {
         + "pin the anchor to the very top of the viewport")
   }
 
-  // MARK: - T-7 / §16 clarification: a nil cache must not clobber an in-flight restore
+  // MARK: - a nil cache must not clobber an in-flight restore
 
-  /// The second sub-case of rule 2, and the one an earlier revision of this file
-  /// wrongly called unreachable.
+  /// The second sub-case of rule 2, and a reachable one.
   ///
   /// A `nil` `cachedState` carries NO information about scroll position — exactly
   /// like the document-start seed — so it must not overwrite a good in-flight
   /// restore either. Under a rule 2 that keyed LITERALLY on the seed shape
   /// (`anchorTop == nil && scrollY == 0`), a `nil` state is not the seed, so this
   /// combination would fall through to rule 3 and `.capture` an empty request,
-  /// reintroducing H2 (the page would sit at the top with `hasTarget == 0`).
+  /// defeating the seed-clobber guard (the page would sit at the top with
+  /// `hasTarget == 0`).
   ///
   /// It is REACHABLE in production, and precisely BECAUSE of the `.drop` branch this
   /// same feature added: `.drop` nils `previewScrollStates[win]`, so every reload for
@@ -573,11 +573,11 @@ final class PreviewScrollSeamTests: XCTestCase {
       "a nil cache carries no position at all, so it must be treated exactly like the "
         + "document-start seed: the in-flight restore is the better capture and must "
         + "survive. Capturing here would replace it with a target-less request and "
-        + "the preview would jump to the top — H2, through the door `.drop` opened. "
+        + "the preview would jump to the top, through the door `.drop` opened. "
         + "Do NOT `simplify` rule 2 back to the literal seed check")
   }
 
-  // MARK: - T-5: the built request carries the PASSED cursor through unchanged
+  // MARK: - the built request carries the PASSED cursor through unchanged
 
   func testCaptureDecisionCarriesTheCursorThrough() {
     let cursor = PreviewScrollSeam.CursorPos(line: 4321, col: 199)
@@ -594,7 +594,7 @@ final class PreviewScrollSeamTests: XCTestCase {
         + "rounding or defaulting here would silently disagree with the page")
   }
 
-  // MARK: - T-5: the seed needs BOTH conditions, not either one
+  // MARK: - the seed needs BOTH conditions, not either one
 
   func testCaptureDecisionSeedRequiresBothAnUnresolvedAnchorAndZeroScrollY() {
     // An unresolvable anchor partway down a scrolled document: the cursor's line was
@@ -775,7 +775,7 @@ final class PreviewScrollSeamTests: XCTestCase {
         + "fires, making the restore inexact — the script must scroll instantly")
   }
 
-  // MARK: - D1: the Swift tuning constants actually REACH the generated JS
+  // MARK: - the Swift tuning constants actually REACH the generated JS
 
   func testStateScriptJSCarriesTheSwiftTuningConstants() {
     let js = PreviewScrollSeam.stateScriptJS()
@@ -801,7 +801,7 @@ final class PreviewScrollSeamTests: XCTestCase {
 
   // MARK: - the programmatic-scroll flag is ARMED before every programmatic scroll
 
-  /// Half of the DEV-2 guard: every scroll the script performs ITSELF must first set
+  /// Half of the programmatic-scroll guard: every scroll the script performs ITSELF must first set
   /// `window.__wolfProgrammatic`, because a `window.scrollTo` fires a real `scroll`
   /// event that is otherwise indistinguishable from a user's wheel.
   func testStateScriptJSArmsTheProgrammaticFlagBeforeScrolling() {
@@ -826,7 +826,7 @@ final class PreviewScrollSeamTests: XCTestCase {
         + "dispatched synchronously: \(js)")
   }
 
-  // MARK: - DEV-2: a programmatic scroll must NOT set the user-scrolled flag
+  // MARK: - a programmatic scroll must NOT set the user-scrolled flag
 
   /// The other half, and the actual regression this pins. `restoreJS` re-applies the
   /// restore on the next animation frame and again on `document.fonts.ready`, both
@@ -869,9 +869,9 @@ final class PreviewScrollSeamTests: XCTestCase {
         + "scroll is judged on its own merits: \(js)")
   }
 
-  // MARK: - T-6 / L1: the flag is armed ONLY when the offset actually changes
+  // MARK: - the flag is armed ONLY when the offset actually changes
 
-  /// The third half of the DEV-2 guard, and the fix for review finding L1.
+  /// The third half of the programmatic-scroll guard, and the fix for the unchanged-offset arm.
   ///
   /// `__wolfProgrammatic` is armed by `moveTo` and CONSUMED by the scroll listener's
   /// rAF callback — but `window.scrollTo(0, y)` to the offset the page is ALREADY at
@@ -932,13 +932,14 @@ final class PreviewScrollSeamTests: XCTestCase {
       "the guard must compare the REQUESTED offset against the CURRENT one (any of "
         + "\(accepted) ignoring whitespace) — scrolling to where the page already is "
         + "fires no scroll event, so an unconditionally armed flag is never consumed "
-        + "and swallows the next genuine user scroll (L1): \(js)")
+        + "and swallows the next genuine user scroll: \(js)")
   }
 
-  // MARK: - T-8 / F-1: the arming guard compares the CLAMPED offset, not the raw one
+  // MARK: - the arming guard compares the CLAMPED offset, not the raw one
 
-  /// L1's fix (`y !== W.scrollY`) is bounded, not total — this is the SECOND instance
-  /// of the same bug class, and the reason the clamp has to move.
+  /// The fix for the unchanged-offset arm (`y !== W.scrollY`) is bounded, not total —
+  /// this is the SECOND instance of the same bug class, and the reason the clamp sits
+  /// inside `moveTo`.
   ///
   /// `__wolfRestore`'s no-anchor branch calls `moveTo(fallbackY)` with the RAW captured
   /// `window.scrollY`. When the reloaded document is SHORTER than the one that offset
@@ -946,11 +947,11 @@ final class PreviewScrollSeamTests: XCTestCase {
   /// document's max scroll; WebKit clamps it, the page ends up somewhere other than the
   /// requested `y`, and if that clamped destination is where the page already sits, NO
   /// `scroll` event is dispatched. The unconsumed `__wolfProgrammatic` then stays armed
-  /// and swallows the next GENUINE user scroll — exactly the L1 failure, reached through
-  /// a different door. `scrollAnchorTo` already clamps to the document's max scroll
-  /// before it calls `moveTo`; the raw-`fallbackY` path is the one still exposed, so the
-  /// clamp belongs INSIDE `moveTo`, AHEAD of the comparison, where every programmatic
-  /// scroll must pass through it.
+  /// and swallows the next GENUINE user scroll — exactly the unchanged-offset arm,
+  /// reached through a different door. `scrollAnchorTo` already clamps to the document's
+  /// max scroll before it calls `moveTo`; the raw-`fallbackY` path is the one still
+  /// exposed, so the clamp belongs INSIDE `moveTo`, AHEAD of the comparison, where every
+  /// programmatic scroll must pass through it.
   ///
   /// Clamping AFTER the comparison would not help: the comparison would still be judging
   /// an offset the page will never actually reach.
@@ -1013,12 +1014,12 @@ final class PreviewScrollSeamTests: XCTestCase {
       clampAt, guardAt,
       "the Math.min clamp must sit BEFORE the offset comparison: comparing the RAW "
         + "target leaves the flag armed whenever WebKit clamps an over-target scroll "
-        + "into a no-op, which swallows the next genuine user scroll (F-1): \(js)")
+        + "into a no-op, which swallows the next genuine user scroll: \(js)")
     XCTAssertLessThan(
       heightAt, guardAt,
       "the clamp's upper bound must be derived from the document's scrollHeight, and "
         + "computed before the comparison — an arbitrary Math.min would not bound the "
-        + "over-target case F-1 is about: \(js)")
+        + "over-target case this test is about: \(js)")
     XCTAssertTrue(
       squeezed.contains("innerHeight") || squeezed.contains("clientHeight"),
       "the max scroll is scrollHeight MINUS the viewport height, so moveTo's bound must "
@@ -1026,9 +1027,9 @@ final class PreviewScrollSeamTests: XCTestCase {
         + "still leave every bottom-of-document restore over-target: \(js)")
   }
 
-  // MARK: - N2: EVERY scroll the script performs funnels through the single `moveTo`
+  // MARK: - EVERY scroll the script performs funnels through the single `moveTo`
 
-  /// The structural pin the other three DEV-2 guards are missing.
+  /// The structural pin the other three programmatic-scroll guards are missing.
   ///
   /// They assert that the ONE `__wolfProgrammatic = true` sits inside `moveTo`, that it
   /// is guarded, and that the guard sees the clamped offset — but nothing stops a future
@@ -1039,8 +1040,8 @@ final class PreviewScrollSeamTests: XCTestCase {
   /// bypassing scroll would fire a `scroll` event with the flag NOT armed, the throttled
   /// listener would classify the script's OWN scroll as the user's, `__wolfUserScrolled`
   /// would go `true`, and `restoreJS`'s `requestAnimationFrame` and
-  /// `document.fonts.ready` re-applies would both be skipped — the DEV-2 bug for the
-  /// third time, silently, with a green suite.
+  /// `document.fonts.ready` re-applies would both be skipped — defeating the
+  /// programmatic-scroll guard, silently, with a green suite.
   ///
   /// So the invariant is not "the arming is correct" but "there is exactly ONE scroll,
   /// and it is `moveTo`'s". Only that composes: `scrollAnchorTo`, `__wolfFollow` and
@@ -1054,8 +1055,8 @@ final class PreviewScrollSeamTests: XCTestCase {
   /// `scrollIntoView`; the sweep below additionally proves the injected script contains no
   /// `scrollIntoView` (or any other viewport-mutating API) of its own.
   ///
-  /// NEW CALLER — `__wolfUpdate` (the in-place body swap). It is the fourth entry point
-  /// that moves the viewport, and it is bound by exactly the same invariant: it must
+  /// `__wolfUpdate` (the in-place body swap) is the fourth entry point that moves the
+  /// viewport, and it is bound by exactly the same invariant: it must
   /// reach the viewport ONLY through `scrollAnchorTo` / `moveTo` / `__wolfFollow`, and
   /// must introduce neither a second `scrollTo(` nor any of the bypass APIs swept below.
   /// It is deliberately defined AFTER `moveTo` in the script, which is what keeps the
@@ -1064,9 +1065,9 @@ final class PreviewScrollSeamTests: XCTestCase {
   /// the swap to save the re-anchor's layout flush: the swap's whole point is that the
   /// replaceChildren AND the re-anchor happen in ONE JavaScript task, and routing the
   /// re-anchor around `moveTo` would fire an unarmed `scroll` event that the listener
-  /// classifies as the USER's — DEV-2, for the fourth time. If this test ever fails after
-  /// `__wolfUpdate` is added, the fix is to move `__wolfUpdate`'s DEFINITION after
-  /// `moveTo`; it is never to loosen an assertion here.
+  /// classifies as the USER's, defeating the programmatic-scroll guard. If this test
+  /// ever fails because of `__wolfUpdate`, the fix is to keep `__wolfUpdate`'s
+  /// DEFINITION after `moveTo`; it is never to loosen an assertion here.
   func testStateScriptJSFunnelsEveryScrollThroughMoveTo() {
     let js = PreviewScrollSeam.stateScriptJS()
     // Whitespace-insensitive so reformatting the JS string cannot break this test, while
@@ -1080,7 +1081,7 @@ final class PreviewScrollSeamTests: XCTestCase {
         + "that arms __wolfProgrammatic. A second, direct scrollTo would fire a scroll "
         + "event with the flag unarmed, the listener would mark it as a USER scroll, and "
         + "restoreJS's rAF / document.fonts.ready re-applies would then always be "
-        + "skipped (DEV-2). Route the new scroll through moveTo instead: \(js)")
+        + "skipped. Route the new scroll through moveTo instead: \(js)")
 
     guard let helper = squeezed.range(of: "moveTo=function") else {
       return XCTFail(
@@ -1092,25 +1093,25 @@ final class PreviewScrollSeamTests: XCTestCase {
       return XCTFail(
         "the script's sole `scrollTo(` sits BEFORE the `moveTo` helper, so it is not "
           + "moveTo's — a scroll outside the funnel is not preceded by the "
-          + "__wolfProgrammatic arming and would be misread as a user scroll (DEV-2): "
+          + "__wolfProgrammatic arming and would be misread as a user scroll: "
           + "\(js)")
     }
     XCTAssertFalse(
       body[body.startIndex..<scrolled.lowerBound].contains("function"),
       "the sole `scrollTo(` must sit INSIDE `moveTo`'s body — a `function` token between "
         + "moveTo's start and the scroll means the scroll migrated into some LATER "
-        + "helper, i.e. it bypasses the funnel and its arming/clamping guards (DEV-2): "
+        + "helper, i.e. it bypasses the funnel and its arming/clamping guards: "
         + "\(js)")
 
     // No other viewport-mutating API may appear either: each is an equally valid way to
-    // scroll around `moveTo`'s back, and would reproduce the same DEV-2 failure.
+    // scroll around `moveTo`'s back, and would reproduce the same failure.
     for bypass in [".scroll(", "scrollBy(", "scrollIntoView", "scrollTop="] {
       XCTAssertFalse(
         squeezed.contains(bypass),
         "the injected script must not move the viewport with `\(bypass)` — every scroll "
           + "has to go through `moveTo` so __wolfProgrammatic is armed first, otherwise "
           + "the script's own scroll is classified as the USER's and restoreJS's late "
-          + "re-applies are silently killed (DEV-2). Note this bans the API only in "
+          + "re-applies are silently killed. Note this bans the API only in "
           + "stateScriptJS: PreviewLinkSeam.scrollIntoViewJS's e.scrollIntoView(true) is "
           + "a different seam and legitimately bypasses moveTo: \(js)")
     }
@@ -1418,7 +1419,7 @@ final class PreviewScrollSeamTests: XCTestCase {
         + "this rule")
   }
 
-  // MARK: - updateStrategy rule 4: a source switch is a NAVIGATION (H1, mirrored)
+  // MARK: - updateStrategy rule 4: a source switch is a NAVIGATION
 
   func testUpdateStrategyFullLoadWhenTheSourceBufferSwitched() {
     XCTAssertEqual(
@@ -1429,7 +1430,7 @@ final class PreviewScrollSeamTests: XCTestCase {
         liveDocument: live(bufnr: sourceBufnr)),
       .fullLoad,
       "the committed document belongs to another SOURCE BUFFER, so this is a "
-        + "navigation and the new file must open at its TOP — H1's guarantee, mirrored "
+        + "navigation and the new file must open at its TOP — the source-switch reset, mirrored "
         + "at the strategy layer. Note the ticks are EQUAL here: two freshly opened "
         + "files can legitimately share a changedtick, so only the bufnr may decide")
   }
@@ -1465,7 +1466,7 @@ final class PreviewScrollSeamTests: XCTestCase {
         + "preview pins PreviewTheme::Default + WidthMode::Full, so the head is "
         + "byte-identical on every render, INCLUDING across a dark/light flip — but "
         + "encoding it as a RULE makes the premise self-enforcing rather than "
-        + "comment-only, which is the class of latent assumption that produced H1/H2")
+        + "comment-only")
     XCTAssertEqual(
       strategy(
         html: html,
@@ -1545,7 +1546,7 @@ final class PreviewScrollSeamTests: XCTestCase {
       "the head lengths MATCH (every in-app preview shares the same constant head), so "
         + "rule 6 is satisfied and only rule 4 stands between a cross-file link and an "
         + "in-place swap that would open the new file at the old one's scroll offset — "
-        + "the H1 regression, reached through the new path")
+        + "what the source-switch reset prevents, reached through the new path")
     XCTAssertEqual(
       strategy(html: html, bufnr: sourceBufnr, liveDocument: live(bufnr: sourceBufnr)),
       .inPlace(body: "<p>the other file</p>"),
@@ -1608,7 +1609,7 @@ final class PreviewScrollSeamTests: XCTestCase {
         + "caused by the flags and not by some incidental mismatch")
   }
 
-  // MARK: - E1: the in-place payload sheds the ~965 KiB base64 head
+  // MARK: - the in-place payload sheds the ~965 KiB base64 head
 
   func testUpdateStrategyInPlaceCarriesTheExactBodyNotTheWholeDocument() {
     let head = "@font-face{font-family:Inter;src:url(data:font/woff2;base64,AAAABBBB)}"
@@ -1630,7 +1631,7 @@ final class PreviewScrollSeamTests: XCTestCase {
         "the in-place payload must NOT carry `\(shed)`. The real head inlines two "
           + "woff2 faces as ~965 KiB of base64; re-shipping that across the WKWebView "
           + "IPC boundary and re-parsing it as CSS at the reload coalescer's ~33ms "
-          + "cadence — ~30 MB/s while the user types — is the cost this whole change "
+          + "cadence — ~30 MB/s while the user types — is the cost the in-place path "
           + "exists to remove: \(carried)")
     }
   }
@@ -1644,7 +1645,7 @@ final class PreviewScrollSeamTests: XCTestCase {
   /// (what was last DISPATCHED) — so nothing but a test stops them from drifting
   /// apart. If they ever disagreed, a cross-file link would either swap the new file's
   /// body into the old document, or restore the old file's offset into the new one.
-  /// Both are H1.
+  /// Both break the source-switch reset.
   func testASourceSwitchIsBothAFullLoadAndADrop() {
     let previous = load(bufnr: sourceBufnr, tick: 5)
     let current = load(bufnr: otherBufnr, tick: 5)
@@ -1666,9 +1667,9 @@ final class PreviewScrollSeamTests: XCTestCase {
         pendingRestore: nil),
       .drop,
       "and the capture gate — which the full path then consults, exactly as it does "
-        + "today — must drop the previous file's offset. H1 is guaranteed DOUBLY, and "
-        + "that redundancy is deliberate: neither gate may be removed on the strength "
-        + "of the other")
+        + "today — must drop the previous file's offset. The source-switch reset is "
+        + "guaranteed DOUBLY, and that redundancy is deliberate: neither gate may be "
+        + "removed on the strength of the other")
   }
 
   // MARK: - composition: captureDecision is a FULL-LOAD-ONLY concern
@@ -1883,7 +1884,7 @@ final class PreviewScrollSeamTests: XCTestCase {
   /// parenthesized wrapper — is therefore rejected at CALL time, not at Swift compile
   /// time.
   ///
-  /// This is the same silent-degradation class as the `.page` content world (OD-4),
+  /// This is the same silent-degradation class as the `.page` content world,
   /// and the reason it needs its own test is that NOTHING else here would catch it:
   /// `testInPlaceUpdateJSUsesExactlyTheDeclaredArgumentNames` would happily pass a body
   /// wrapped in `function (h, l, c) { … }`, because the wrapper's own parameters are
@@ -1924,7 +1925,7 @@ final class PreviewScrollSeamTests: XCTestCase {
   /// listener, so slicing this way keeps `__wolfRestore`'s statements — notably its
   /// `__wolfUserScrolled = false` — OUT of the region. That placement is also what
   /// keeps `testStateScriptJSFunnelsEveryScrollThroughMoveTo`'s "no `function` token
-  /// between `moveTo=function` and the sole `scrollTo(`" analysis valid (OD-3).
+  /// between `moveTo=function` and the sole `scrollTo(`" analysis valid.
   private func inPlaceUpdateRegion(
     _ squeezed: String,
     file: StaticString = #filePath,
@@ -2055,7 +2056,7 @@ final class PreviewScrollSeamTests: XCTestCase {
     XCTAssertTrue(
       afterSwap.contains("scrollAnchorTo(") || afterSwap.contains("moveTo("),
       "the re-anchor must reach the viewport through scrollAnchorTo/moveTo — the "
-        + "single funnel that arms and clamps __wolfProgrammatic (OD-3): \(region)")
+        + "single funnel that arms and clamps __wolfProgrammatic: \(region)")
   }
 
   // MARK: - stateScriptJS: the in-place path must NOT clear the user-scroll flag
@@ -2086,7 +2087,7 @@ final class PreviewScrollSeamTests: XCTestCase {
         + "certainly __wolfUpdate) started discarding user scrolls: \(squeezed)")
   }
 
-  // MARK: - loadCommitOutcome fixtures (M1)
+  // MARK: - loadCommitOutcome fixtures
 
   /// The head string identifying the descriptor full load N stages in
   /// `pendingPreviewDocuments[win]` while it navigates.
@@ -2098,7 +2099,7 @@ final class PreviewScrollSeamTests: XCTestCase {
   /// Load N's pending descriptor. The straddling descriptors carry deliberately
   /// DIFFERENT head lengths, purely as identity tags: in production the head is
   /// invariant (`updateStrategy` rule 6), but a test that cannot tell D_N from D_N+1
-  /// cannot tell a correct commit from M1's commit of the wrong one.
+  /// cannot tell a correct commit from the straddling-load defect's commit of the wrong one.
   private var documentN: PreviewScrollSeam.LiveDocument {
     live(bufnr: sourceBufnr, head: documentNHead)
   }
@@ -2119,15 +2120,15 @@ final class PreviewScrollSeamTests: XCTestCase {
       remaining: remaining, pending: pending, succeeded: succeeded)
   }
 
-  // MARK: - T-E: remaining > 0 is .stillOutstanding, whatever the callback reported
+  // MARK: - remaining > 0 is .stillOutstanding, whatever the callback reported
 
   /// A SUPERSEDED load's callback must neither commit nor discard anything.
   /// `.stillOutstanding` carries NO payload at all — no descriptor comes back out of
   /// the seam — which is precisely what makes a contract-following caller leave BOTH
   /// the live slot and the pending slot exactly as they were, so load N+1's descriptor
-  /// survives load N's callback (M1 step 4, where the old `Set` destructively consumed
-  /// it). WebKit reports a superseded load as a FAILURE, so `succeeded: false` is the
-  /// COMMON case here, not the exotic one; both must answer identically, because at
+  /// survives load N's callback (a `Set` destructively consumes it: the straddling-load
+  /// defect). WebKit reports a superseded load as a FAILURE, so `succeeded: false` is
+  /// the COMMON case here, not the exotic one; both must answer identically, because at
   /// `remaining > 0` the callback simply is not the one that decides.
   func testLoadCommitOutcomeIsStillOutstandingWhileLoadsRemain() {
     let remainingCounts = [1, 2, 5]
@@ -2147,7 +2148,7 @@ final class PreviewScrollSeamTests: XCTestCase {
     }
   }
 
-  // MARK: - T-E: the LAST load, succeeded => .commit(pending)
+  // MARK: - the LAST load, succeeded => .commit(pending)
 
   /// The only outcome that may move a descriptor into `previewLiveDocuments[win]`, and
   /// it must carry the descriptor of the load that actually COMMITTED — not some older
@@ -2170,11 +2171,11 @@ final class PreviewScrollSeamTests: XCTestCase {
         + "swap against stale CSS")
     XCTAssertNotEqual(
       outcome, .commit(documentN),
-      "committing the SUPERSEDED load's descriptor is the mirror image of M1: the live "
-        + "slot would describe a document the web view is not showing")
+      "committing the SUPERSEDED load's descriptor is the mirror image of the straddling-load "
+        + "defect: the live slot would describe a document the web view is not showing")
   }
 
-  // MARK: - T-E: the LAST load, succeeded, nothing splittable => .commit(nil)
+  // MARK: - the LAST load, succeeded, nothing splittable => .commit(nil)
 
   /// `splitDocument` returns nil for the `""` a failed `render_preview` yields, so the
   /// caller stages NO pending descriptor even though the navigation itself succeeds.
@@ -2188,15 +2189,15 @@ final class PreviewScrollSeamTests: XCTestCase {
         + "CLEARS the live slot and sends the next update back down the full-load path")
   }
 
-  // MARK: - T-E: the LAST load, FAILED => .discard, which is NOT .commit(nil)
+  // MARK: - the LAST load, FAILED => .discard, which is NOT .commit(nil)
 
   /// The heart of the fix. A failed navigation never commits, so WebKit keeps
   /// displaying the PREVIOUS document and the previous live descriptor stays accurate —
   /// `.discard` therefore leaves the live slot UNTOUCHED and only clears the pending
   /// descriptor that will now never commit. Conflating it with `.commit(nil)` is
-  /// exactly how M1 step 7 wiped a perfectly good live document and forced a pointless
-  /// extra full load; the two cases are kept distinct so a caller's mechanical `switch`
-  /// physically cannot make that mistake.
+  /// exactly how the straddling-load defect's last step wipes a perfectly good live
+  /// document and forces a pointless extra full load; the two cases are kept distinct
+  /// so a caller's mechanical `switch` physically cannot make that mistake.
   func testLoadCommitOutcomeDiscardsOnTheLastFailureAndNeverCommits() {
     let outcome = commitOutcome(remaining: 0, pending: documentN, succeeded: false)
     XCTAssertEqual(
@@ -2207,7 +2208,7 @@ final class PreviewScrollSeamTests: XCTestCase {
       outcome, .commit(nil),
       "`.discard` is deliberately NOT `.commit(nil)`: the first leaves a good live "
         + "document in place (the web view still shows it), the second would erase it. "
-        + "That erasure IS M1 step 7")
+        + "That erasure IS the straddling-load defect's last step")
     XCTAssertNotEqual(
       outcome, .commit(documentN),
       "and a failed navigation certainly may not promote the descriptor of a document "
@@ -2218,23 +2219,23 @@ final class PreviewScrollSeamTests: XCTestCase {
         + "handed a `.commit` it would apply to the live slot")
   }
 
-  // MARK: - T-E / M1: the shipping blocker — two loads straddling one page load
+  // MARK: - two loads straddling one page load
 
-  /// THE regression guard for M1, walked step by step through `loadCommitOutcome` with
-  /// `remaining` / live / pending modelled as locals and the caller's whole mechanical
-  /// `switch` reproduced verbatim.
+  /// THE regression guard for the straddling-load defect, walked step by step through
+  /// `loadCommitOutcome` with `remaining` / live / pending modelled as locals and the
+  /// caller's whole mechanical `switch` reproduced verbatim.
   ///
   /// The failure it guards: the reload coalescer serializes to one reload per ~33ms and
   /// does NOT wait for `didFinish`, so full load N+1 is issued while N is still
-  /// navigating and OVERWRITES the pending descriptor. With the old `Set<Int64>`,
+  /// navigating and OVERWRITES the pending descriptor. With a `Set<Int64>`,
   /// `didFinish(N)` — or `didFail(N)`, since WebKit reports a superseded load as a
-  /// failure — removed the window from the set, so the in-flight flag read CLEAR while
-  /// N+1 was still navigating, AND that same callback consumed N+1's descriptor into
-  /// the live slot. The next tick then saw rule 2 false and rule 3 false, chose
-  /// `.inPlace`, and swapped a body into the document N+1 was about to replace; N+1
-  /// committed, discarded the swap and reverted to older content — a visible flicker,
-  /// the exact symptom this whole change exists to remove — and N+1's own callback
-  /// finally nil'd the live descriptor, forcing one more pointless full load.
+  /// failure — would remove the window from the set, so the in-flight flag would read
+  /// CLEAR while N+1 is still navigating, AND that same callback would consume N+1's
+  /// descriptor into the live slot. The next tick would then see rule 2 false and rule
+  /// 3 false, choose `.inPlace`, and swap a body into the document N+1 is about to
+  /// replace; N+1 would commit, discard the swap and revert to older content — a
+  /// visible flicker, the exact symptom the in-place path exists to remove — and N+1's
+  /// own callback would nil the live descriptor, forcing one more pointless full load.
   ///
   /// Run for BOTH flavors of N's callback, because which one WebKit delivers for a
   /// superseded load is not under our control and must not change the answer.
@@ -2281,7 +2282,7 @@ final class PreviewScrollSeamTests: XCTestCase {
       let bothOutstanding = 2
       XCTAssertEqual(
         remaining, bothOutstanding,
-        "\(flavor): a COUNT distinguishes two straddling loads; the old Set could not")
+        "\(flavor): a COUNT distinguishes two straddling loads; a Set could not")
       XCTAssertEqual(liveSlot, alreadyShowing, "\(flavor): still nothing committed")
       XCTAssertEqual(
         pendingSlot, documentNPlus1, "\(flavor): N+1's descriptor replaced N's")
@@ -2300,10 +2301,10 @@ final class PreviewScrollSeamTests: XCTestCase {
       XCTAssertEqual(
         pendingSlot, documentNPlus1,
         "\(flavor): and it must NOT destructively consume N+1's pending descriptor, "
-          + "which N+1's own callback still needs (M1 step 4)")
+          + "which N+1's own callback still needs")
 
       // Steps 4-5, the next coalescer tick: every other full-load rule passes, so rule 2 (a load in
-      // flight) alone stops M1's body swap into a doomed document.
+      // flight) alone stops the straddling-load defect's body swap into a doomed document.
       XCTAssertEqual(
         strategy(
           html: document(body: "<p>a third keystroke</p>"),
@@ -2311,23 +2312,23 @@ final class PreviewScrollSeamTests: XCTestCase {
           liveDocument: liveSlot,
           loadInFlight: remaining > 0),
         .fullLoad,
-        "\(flavor): with N+1 outstanding the tick must NOT choose .inPlace. M1 chose it "
-          + "here, swapped a body into the document N+1 was about to replace, and the "
-          + "commit then reverted the swap — the visible flicker")
+        "\(flavor): with N+1 outstanding the tick must NOT choose .inPlace. Choosing it "
+          + "here swaps a body into the document N+1 is about to replace, and the "
+          + "commit then reverts the swap — the visible flicker")
 
       // Step 6: N+1 commits.
       callback(succeeded: true)
       XCTAssertEqual(remaining, 0, "\(flavor): nothing is outstanding any more")
       XCTAssertEqual(
         liveSlot, documentNPlus1,
-        "\(flavor): M1 step 7 — the live slot must hold D_N+1, NOT nil. The Set-based "
-          + "code had already consumed the descriptor in step 3, so this callback set "
-          + "the live slot to nil and forced a pointless extra full load")
+        "\(flavor): the live slot must hold D_N+1, NOT nil. Set-based "
+          + "code would have consumed the descriptor in step 3, so this callback would set "
+          + "the live slot to nil and force a pointless extra full load")
       XCTAssertNil(
         pendingSlot, "\(flavor): the descriptor moved to the live slot, so nothing pends")
 
-      // Step 7: the very next edit is therefore the cheap in-place swap this whole
-      // change exists to enable, instead of another ~965 KiB navigation.
+      // Step 7: the very next edit is therefore the cheap in-place swap, instead of
+      // another ~965 KiB navigation.
       let nextBody = "<p>after the straddle</p>"
       XCTAssertEqual(
         strategy(
@@ -2336,12 +2337,12 @@ final class PreviewScrollSeamTests: XCTestCase {
           liveDocument: liveSlot,
           loadInFlight: remaining > 0),
         .inPlace(body: nextBody),
-        "\(flavor): a correct live descriptor is what lets rule 3 and rule 6 pass; "
-          + "wiping it in step 6 is what made M1 pay for one more full load")
+        "\(flavor): a correct live descriptor is what lets rule 3 and rule 6 pass; wiping it "
+          + "in step 6 is what made the straddling-load defect pay for one more full load")
     }
   }
 
-  // MARK: - T-F: the three outcomes are mutually distinguishable values
+  // MARK: - the three outcomes are mutually distinguishable values
 
   /// A caller's `switch` is only as safe as the type's ability to tell its cases apart.
   /// `.discard` and `.commit(nil)` are the pair that matters — one preserves a live
@@ -2358,8 +2359,8 @@ final class PreviewScrollSeamTests: XCTestCase {
         + "`.stillOutstanding` must change nothing at all")
     XCTAssertNotEqual(
       discard, commitNothing,
-      "the M1 distinction: a FAILED last load leaves the live document alone, a "
-        + "SUCCESSFUL one with nothing splittable erases it")
+      "the distinction the straddling-load defect missed: a FAILED last load leaves "
+        + "the live document alone, a SUCCESSFUL one with nothing splittable erases it")
     XCTAssertNotEqual(
       stillOutstanding, commitNothing,
       "a superseded load's callback must never be mistaken for the commit of an "

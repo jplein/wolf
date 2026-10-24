@@ -1,4 +1,5 @@
-//! doc-lint: comment limits, doc-path references, `notes/` mirrors and Markdown links.
+//! doc-lint: comment limits, workflow references, doc-path references, `notes/` mirrors and
+//! Markdown links.
 //!
 //! The rules, their wording and the CLI are described in `tools/doc-lint/README.md`.
 
@@ -11,6 +12,7 @@ mod refs;
 mod rules;
 mod strip;
 mod walk;
+mod workflow;
 
 use std::fmt;
 use std::fs;
@@ -35,6 +37,7 @@ pub enum Rule {
     CommentWidth,
     DocRef,
     DocAnchor,
+    WorkflowRef,
     NotesOrphan,
     NotesUnlinked,
     MdLink,
@@ -50,6 +53,7 @@ impl Rule {
             Rule::CommentWidth => "comment-width",
             Rule::DocRef => "doc-ref",
             Rule::DocAnchor => "doc-anchor",
+            Rule::WorkflowRef => "workflow-ref",
             Rule::NotesOrphan => "notes-orphan",
             Rule::NotesUnlinked => "notes-unlinked",
             Rule::MdLink => "md-link",
@@ -168,14 +172,16 @@ impl WalkConfig {
     }
 }
 
-/// The comment-limit findings for one source text. `display_path` is used verbatim in findings.
+/// The comment-limit and `workflow-ref` findings for one source text, with no file system access.
+///
+/// `display_path` is used verbatim in findings.
 pub fn lint_source(display_path: &str, text: &str, lang: Language) -> Vec<Finding> {
     let text = lexer::normalize(text);
     let lexed = lexer::lex(&text, lang);
-    rules::limit_findings(display_path, &lexed.comments)
+    comment_findings(display_path, &text, &lexed.comments)
 }
 
-/// The comment rules plus `doc-ref`/`doc-anchor` for `files`, resolved against `cwd`.
+/// The comment limits, `workflow-ref`, `doc-ref` and `doc-anchor` for `files`, against `cwd`.
 ///
 /// Files with no language are skipped. An unreadable file is an error, not a finding.
 pub fn check_files(cwd: &Path, files: &[PathBuf], cfg: &WalkConfig) -> io::Result<Vec<Finding>> {
@@ -226,9 +232,16 @@ fn source_findings(
 ) -> Vec<Finding> {
     let text = lexer::normalize(text);
     let lexed = lexer::lex(&text, lang);
-    let mut findings = rules::limit_findings(display, &lexed.comments);
+    let mut findings = comment_findings(display, &text, &lexed.comments);
     let found = refs::refs_in(&text, &lexed.comments);
     findings.extend(refs::ref_findings(root, display, &found, cfg, cache));
+    findings
+}
+
+/// The rules that read only the comments: the limits and `workflow-ref`.
+fn comment_findings(display: &str, text: &str, comments: &[lexer::Comment]) -> Vec<Finding> {
+    let mut findings = rules::limit_findings(display, comments);
+    findings.extend(workflow::workflow_findings(display, text, comments));
     findings
 }
 

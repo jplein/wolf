@@ -555,7 +555,7 @@ mod tests {
         expected: RerootAction<'static>,
     }
 
-    /// The whole re-root rule as a table, in the order the plan states it.
+    /// The whole re-root rule as a table.
     ///
     /// Two distinguishable failure classes, and the message names the row so a
     /// failure identifies which:

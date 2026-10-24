@@ -458,9 +458,9 @@ impl RedrawHandler {
     /// buffer (it carries `b:wolf_preview_source`). A missing 3rd arg maps to
     /// `false`, which drives [`Snapshot::is_preview_active`] to `false`.
     ///
-    /// The (new) fourth argument is a boolean: whether the active buffer is in
+    /// The fourth argument is a boolean: whether the active buffer is in
     /// FULL-WIDTH mode (it carries a truthy `b:wolf_full_width`; for a preview
-    /// scratch this is the SOURCE buffer's flag — OQ-1). A missing 4th arg maps to
+    /// scratch this is the SOURCE buffer's flag). A missing 4th arg maps to
     /// `false`, which drives [`Snapshot::is_full_width_active`] to `false`.
     ///
     /// The write lock is acquired via [`SharedSnapshot::write_async`] and is NOT
@@ -1036,9 +1036,9 @@ impl RedrawHandler {
 /// the info is redundant under the current option set):
 /// `win_float_pos` / `win_external_pos` / `msg_set_pos` (floats/external windows
 /// are not rendered; message placement is handled natively);
-/// `cmdline_special_char` (OD6 — the `?`/`^R` insert-hint char, v1 limitation);
-/// `cmdline_block_show` / `cmdline_block_append` / `cmdline_block_hide` (OD5 —
-/// interactive `:function` blocks, v1 limitation); `msg_showmode` /
+/// `cmdline_special_char` (the `?`/`^R` insert-hint char, a known limitation);
+/// `cmdline_block_show` / `cmdline_block_append` / `cmdline_block_hide`
+/// (interactive `:function` blocks, a known limitation); `msg_showmode` /
 /// `msg_showcmd` (showcmd off) / `msg_ruler` (ruler off).
 ///
 /// `closed_wins` collects the nvim WINDOW handles of every `win_close`d grid (the
@@ -1625,7 +1625,7 @@ fn msg_show(snap: &mut Snapshot, params: Vec<Value>) {
 
     let replace_last = params.get(2).and_then(Value::as_bool).unwrap_or(false);
     let append = params.get(4).and_then(Value::as_bool).unwrap_or(false);
-    // OD7: integer id only; a string/absent id is treated as 0 (no replace-by-id).
+    // Integer id only; a string/absent id is treated as 0 (no replace-by-id).
     let id = params.get(5).and_then(Value::as_i64).unwrap_or(0);
 
     let lines = split_content_into_lines(chunks);
@@ -1733,7 +1733,7 @@ mod tests {
         ])])
     }
 
-    /// Builds `msg_show` params in the exact tuple order the coder implemented:
+    /// Builds `msg_show` params in nvim's exact tuple order:
     /// `[kind, content, replace_last, history, append, id, trigger]`.
     fn msg_show_params(
         kind: &str,

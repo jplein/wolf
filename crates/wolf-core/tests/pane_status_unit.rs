@@ -1,20 +1,18 @@
 //! Pure, headless tests for the per-pane statusbar display-string function
 //! (`wolf_core::pane_status` + the `PaneStatus` type + the `NO_NAME` constant).
 //! No mocks, no Neovim, no filesystem — `pane_status` is IO-free string/path math
-//! over already-canonical inputs (plan §4).
+//! over already-canonical inputs.
 //!
 //! These live in a dedicated integration file (with its own `pane_status_unit`
-//! BUILD target) rather than an in-module `#[cfg(test)] mod tests` inside the NEW
-//! `src/pane_status.rs`, to avoid colliding with the coder who creates that file.
-//! This mirrors the crate's precedent (`tests/palette_rank.rs`, `tests/commands.rs`).
+//! BUILD target) rather than an in-module `#[cfg(test)] mod tests` inside
+//! `src/pane_status.rs`, mirroring the crate's precedent (`tests/palette_rank.rs`,
+//! `tests/commands.rs`).
 //!
-//! ## Dependency on coder work (plan §4 / §8)
+//! ## Surface under test
 //!
-//! None of this exists yet — the coder adds `pub mod pane_status;` plus
-//! `pub use pane_status::{pane_status, PaneStatus, NO_NAME};` in
-//! `crates/wolf-core/src/lib.rs`, and adds the `//crates/wolf-core:pane_status_unit`
-//! `rust_test` target to `BUILD.bazel`. This file does NOT touch non-test source.
-//! It assumes the plan's exact signatures:
+//! The crate root re-exports `pane_status`, `PaneStatus` and `NO_NAME`, and the
+//! `//crates/wolf-core:pane_status_unit` `rust_test` target runs this file.
+//! The signatures:
 //!
 //! - `pub const NO_NAME: &str = "[No Name]";`
 //! - `pub struct PaneStatus { pub filename: String, pub display_path: String }`
@@ -29,7 +27,7 @@ use std::path::Path;
 
 use wolf_core::{pane_status, PaneStatus, NO_NAME};
 
-/// Thin wrapper so cases can pass `Option<&str>` and read like the plan's table.
+/// Thin wrapper so cases can pass `Option<&str>` and read like a table.
 fn status(buf: &str, cwd: Option<&str>, home: Option<&str>) -> PaneStatus {
     pane_status(buf, cwd.map(Path::new), home.map(Path::new))
 }

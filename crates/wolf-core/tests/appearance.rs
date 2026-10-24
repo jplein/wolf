@@ -1,7 +1,6 @@
 //! Tests for `wolf-core`'s `WolfCore::set_background(dark)` -> `:set background=…`
-//! path (the appearance plan §3.4 / §5.2): the front-end resolves a dark/light
-//! appearance and pushes it to the captive Neovim, which must flip nvim's global
-//! `&background` option accordingly.
+//! path: the front-end resolves a dark/light appearance and pushes it to the
+//! captive Neovim, which must flip nvim's global `&background` option accordingly.
 //!
 //! ## Observing `&background` without a public eval
 //!
@@ -22,14 +21,15 @@
 //!     on one channel), any colorscheme re-source triggered by `:set background=…`
 //!     cannot race the marker we then write.
 //!
-//! This is the "poll `read_snapshot().theme`" fallback the plan calls for when no
-//! direct `&background` assertion is available; it still proves the option flips,
-//! since the observed marker is a direct function of `&background`.
+//! This "poll `read_snapshot().theme`" fallback stands in for a direct
+//! `&background` assertion; it still proves the option flips, since the observed
+//! marker is a direct function of `&background`.
 //!
 //! All tests drive a REAL, hermetic nvim (no mocks) via `WOLF_NVIM_BIN`; the
 //! common helpers panic loudly if it is unset. The plain repo `init.lua` is used
-//! (no lighthouse staged), whose line-111 fallback sets `vim.o.background = "dark"`
-//! at launch — so the initial observed state is `dark`.
+//! (no lighthouse staged), so its lighthouse branch — the only place it sets
+//! `vim.o.background` — never runs, and the initial observed state is Neovim's own
+//! default, `dark`.
 
 mod common;
 
@@ -110,7 +110,7 @@ fn assert_background_is(core: &WolfCore, waiter: &FlushWaiter, want_light: bool)
 
 /// `set_background(false)` flips nvim's global `&background` to `light`, and
 /// `set_background(true)` flips it back to `dark`. The initial state is `dark`
-/// (the init.lua line-111 fallback), observed before any `set_background` call.
+/// (Neovim's own default; see the module docs), observed before any `set_background` call.
 #[test]
 fn set_background_flips_vim_background() {
     let (core, waiter) = common::start_core_sized(common::DEFAULT_COLS, common::DEFAULT_ROWS);

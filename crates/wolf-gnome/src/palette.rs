@@ -1771,14 +1771,13 @@ mod tests {
     /// index 0, and each spans 2. They separate at `len` — 3, 7 and 10 characters —
     /// so the shortest title wins. That is the whole of why Enter runs New.
     ///
-    /// ## Why THREE, and why that is this unit's business
+    /// ## Why THREE rows
     ///
-    /// `Command::NewTab` was classified `Deferred` while `wolf-gnome` had no native
-    /// tabs, so [`palette_rows`]' filter removed its row and only two titles reached
-    /// the list. Dispatching it puts a THIRD `New…` row in front of the same smoke,
-    /// and this test is where that is checked rather than discovered: the smoke's own
-    /// capture cannot tell a new tab from a new buffer, because the freshly selected
-    /// `adw::TabPage` shows an empty pane exactly where the base file's heading was.
+    /// `Command::NewTab` is dispatched, so [`palette_rows`]' filter keeps its row and
+    /// a THIRD `New…` row reaches the list in front of the same smoke. This test is
+    /// where that is checked rather than discovered: the smoke's own capture cannot
+    /// tell a new tab from a new buffer, because the freshly selected `adw::TabPage`
+    /// shows an empty pane exactly where the base file's heading was.
     /// The value of this test is its GREEN — it is the tripwire that keeps
     /// `command_palette_chord_runs_the_selected_command_under_cage` activating the
     /// command it names — and its red is only ever the news that the tie-break moved.
@@ -2308,9 +2307,9 @@ mod tests {
     /// registry's size instead of one more than it, and every other Open Recent test
     /// in this module goes red with it.
     ///
-    /// The `display` clause is the D2 label rule stated where the row is built: the
-    /// shown string carries the FULL absolute path, unabbreviated, because it is also
-    /// the string ranked against the query (see
+    /// The `display` clause is the "type what you see" label rule stated where the row
+    /// is built: the shown string carries the FULL absolute path, unabbreviated,
+    /// because it is also the string ranked against the query (see
     /// [`open_recent_row_is_matched_by_its_visible_label`]).
     #[test]
     fn palette_rows_include_recent_dirs() {
@@ -2366,8 +2365,8 @@ mod tests {
             "the Open Recent row's label is {:?}, which does not contain the seeded path \
              {dir_text:?} in full. The label is also the string `rank_matches` ranks against, so \
              an abbreviated or rewritten one makes the user unable to type what they can see — \
-             see `open_recent_row_is_matched_by_its_visible_label`, and D2 in the plan for why \
-             `title::display_title` is deliberately NOT applied here.",
+             see `open_recent_row_is_matched_by_its_visible_label` and the \"type what you see\" \
+             label rule for why `title::display_title` is deliberately NOT applied here.",
             row.display
         );
     }
@@ -2600,13 +2599,13 @@ mod tests {
         );
     }
 
-    /// D2's "type what you see" property, made executable: the string the palette
+    /// The "type what you see" property, made executable: the string the palette
     /// RANKS is the string it SHOWS, so a query taken verbatim from the visible label
     /// selects that row.
     ///
     /// ## No revert exists, and none is to be invented
     ///
-    /// Option (a) — reuse `PaletteRow::display` unchanged — is the ABSENCE of a
+    /// Reusing `PaletteRow::display` unchanged is the ABSENCE of a
     /// post-rank label rewrite, so there is no production line to delete. This test
     /// reddens under [`palette_rows_include_recent_dirs`]' revert and adds no
     /// independent discrimination today; what it guards is a FUTURE edit that
@@ -2671,7 +2670,8 @@ mod tests {
             "the sole row matching {DISTINCTIVE:?} is labelled {:?}, which does not contain the \
              query VERBATIM. It was still matched, so the ranked string does contain it — which \
              means the two have come apart and the label is being rewritten after ranking. That \
-             is the divergence D2 exists to prevent: `wolf_core::palette`'s own doc calls \
+             is the divergence the \"type what you see\" label rule exists to prevent: \
+             `wolf_core::palette`'s own doc calls \
              `display` \"the label shown in the palette (and the string ranked against the \
              query)\", so a rewrite here also makes a core doc false.",
             row.display

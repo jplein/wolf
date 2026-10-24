@@ -145,7 +145,7 @@ final class PaneContainerView: NSView {
   /// Set by the window controller (`windowDidBecomeKey`) after it drives its
   /// project's `set_current_tabpage`: the next wake whose snapshot reflects this
   /// view's tabpage re-derives every pane's grid binding (nvim churns grid ids
-  /// across a tabpage switch while WINDOW handles stay stable — OD2), then clears
+  /// across a tabpage switch while WINDOW handles stay stable), then clears
   /// the flag. See `onRenderWake`.
   private var pendingRefocusRebind = false
 
@@ -191,7 +191,7 @@ final class PaneContainerView: NSView {
   /// The `(sourceBufnr, sourceTick)` each preview window's web view was last loaded
   /// at, so a reload (`render_preview` + `loadHTMLString`) fires when the window's
   /// bound source BUFFER changed (a reused preview pane switching sources, even at
-  /// an equal tick) OR its tick advanced (or on first bind) — the OD6
+  /// an equal tick) OR its tick advanced (or on first bind) — the
   /// live-on-change gate, plus the reused-preview-pane fix.
   private var lastPreviewLoads: [Int64: PreviewSeam.PreviewLoad] = [:]
   /// The `WKNavigationDelegate` for each preview web view — retained here because a
@@ -263,7 +263,7 @@ final class PaneContainerView: NSView {
   /// A COUNT, never a `Set`, and that is load-bearing. Two navigations can STRADDLE
   /// one page load: the coalescer serializes reloads to one per debounce window but
   /// does NOT wait for `didFinish`, so load N+1 is routinely issued while N is still
-  /// navigating (the same straddling window H2 exists to survive). With a set, N's
+  /// navigating. With a set, N's
   /// callback — very often a `didFail`, since WebKit reports a superseded load as a
   /// failure — cleared the flag while N+1 was still outstanding, the next coalescer
   /// tick read rule 2 as all-clear, and the resulting body swap was discarded by
@@ -301,8 +301,9 @@ final class PaneContainerView: NSView {
   ///
   /// Set only by `previewInPlaceUpdateFailed`. Re-arming through a dedicated set
   /// rather than by nil'ing `lastPreviewLoads[win]` is deliberate: `lastPreviewLoads`
-  /// is also `captureDecision`'s `previousLoad`, and rule 1 (the H1 guard — a source
-  /// switch must DROP the previous file's offsets) requires it to be non-nil.
+  /// is also `captureDecision`'s `previousLoad`, and rule 1 (the source-switch
+  /// reset — a source switch must DROP the previous file's offsets) requires it to be
+  /// non-nil.
   /// Destroying it to force a reload would disable that guard on exactly the recovery
   /// reload, and in the persistent-failure mode permanently.
   private var previewForcedReloads: Set<Int64> = []
@@ -347,7 +348,7 @@ final class PaneContainerView: NSView {
   /// Debounces the BLOCKING preview reload (`render_preview` + `loadHTMLString`)
   /// so a fast-typing burst — which fires many render wakes, each advancing the
   /// source `changedtick` — yields ONE trailing main-thread `render_preview`
-  /// round-trip per ~30fps window rather than one per wake (OD6 / OD12). The
+  /// round-trip per ~30fps window rather than one per wake. The
   /// per-window load gate (`lastPreviewLoads`, keyed by win → last-loaded
   /// `(sourceBufnr, sourceTick)`) stays the redundant-reload guard (same source
   /// buffer AND tick → still no reload); the coalescer bounds the RATE of the
@@ -464,7 +465,7 @@ final class PaneContainerView: NSView {
 
   // MARK: - Geometry
 
-  /// The height of the pane area. Under OD9 the native command line + toast are
+  /// The height of the pane area. The native command line + toast are
   /// OVERLAY subviews shown only while active (not a permanently-reserved band),
   /// so the pane area — and hence each pane grid — occupies the FULL view height
   /// (matching Neovim's `cmdheight=0`). The overlays composite over the bottom of
@@ -478,7 +479,7 @@ final class PaneContainerView: NSView {
 
   /// The current pane rectangles from the pure layout, in this view's (flipped)
   /// coordinates, spanning the FULL bounds (origin `(0, 0)`): the panes tile the
-  /// whole `paneAreaHeight` (the full view height under OD9; the command line /
+  /// whole `paneAreaHeight` (the full view height; the command line /
   /// toast are bottom overlays that composite over it). The per-pane 20pt inset is
   /// NOT applied here — it is applied around each pane's grid in `gridRect(ofPane:)`,
   /// so these rects are the full pane rectangles.
@@ -1004,7 +1005,7 @@ final class PaneContainerView: NSView {
   /// first pane exists, apply layout intents, collapse closed panes, resolve
   /// pending grids, refresh the active pane, sync grid sizes, then redraw.
   ///
-  /// REFOCUS REBIND (OD2): when this view just became its project's current view
+  /// REFOCUS REBIND: when this view just became its project's current view
   /// (`markRefocusRebind`), nvim has switched to this view's tabpage — churning
   /// grid ids while keeping WINDOW handles stable. The pane→grid bindings from
   /// before the switch are stale. Consume the rebind ONLY once the snapshot
@@ -1089,7 +1090,7 @@ final class PaneContainerView: NSView {
   }
 
   /// Refreshes the three bottom overlays from the live snapshot and lays them
-  /// out (OD9 — overlay when active). Reads `handle.cmdline()` / `handle.pum()` /
+  /// out (overlay when active). Reads `handle.cmdline()` / `handle.pum()` /
   /// `handle.toast()` (the toast's chunk colors are already resolved in Rust),
   /// updates each subview, then positions the visible ones along the bottom of
   /// the editor area: the command line spans the bottom row, the completion popup
@@ -1163,12 +1164,12 @@ final class PaneContainerView: NSView {
   }
 
   /// Reconciles the hosted Markdown-preview `WKWebView`s with the core's current
-  /// `previews()` snapshot (requirement 2 / OD1 = Design S).
+  /// `previews()` snapshot.
   ///
   /// For every pane bound to a preview WINDOW (a window showing a
   /// `b:wolf_preview_source` scratch buffer), ensure a `WKWebView` framed to the
   /// pane's GRID rect, and reload it from `render_preview(source_bufnr)` whenever
-  /// the source's `changedtick` advanced (the OD6 live-on-change gate; a keystroke
+  /// the source's `changedtick` advanced (the live-on-change gate; a keystroke
   /// burst is already coalesced into one tick-advancing wake). The pane's grid is
   /// recorded in `previewNamesByGrid` so `paintStatusbar` shows `Preview: <name>`
   /// and `drawScrollbars` suppresses the synthetic scrollbar. Web views for
@@ -1403,7 +1404,7 @@ final class PaneContainerView: NSView {
         previewScrollStates[win] = nil
         pendingPreviewRestores[win] = nil
         lastPreviewCursors[win] = nil
-        // Same F-2 reasoning: what is committed belongs to the OLD file, so it must
+        // Same reasoning: what is committed belongs to the OLD file, so it must
         // not be the basis of any strategy decision for the new one.
         previewLiveDocuments[win] = nil
       case .keepPending:
@@ -1632,13 +1633,13 @@ final class PaneContainerView: NSView {
 
   /// Repoints the preview `win` at the linked file `path` (a clicked `file://`
   /// link). Asks core to `preview_file`; on success (`src > 0`) stashes any
-  /// `fragment` to scroll after the reload and requests a coalesced reload. On `0`
-  /// applies O3: an existing-but-non-previewable file is handed to the OS default
+  /// `fragment` to scroll after the reload and requests a coalesced reload. On `0`,
+  /// an existing-but-non-previewable file is handed to the OS default
   /// app (`NSWorkspace.open`); a missing file is a no-op.
   func previewFile(win: Int64, path: String, fragment: String?) {
     let src = handle.preview_file(win, path)
     if src == 0 {
-      // O3: not previewable. If the file exists, let the OS default app open
+      // Not previewable. If the file exists, let the OS default app open
       // it; if it is missing, do nothing (keep the preview view-only).
       if FileManager.default.fileExists(atPath: path) {
         NSWorkspace.shared.open(URL(fileURLWithPath: path))
@@ -1740,7 +1741,7 @@ final class PaneContainerView: NSView {
   /// `PreviewScrollSeam.loadCommitOutcome`'s answer to the live and pending document
   /// descriptors. A mechanical switch — the whole decision is in the pure seam,
   /// because this bookkeeping is compile + manual-smoke only, which is exactly where
-  /// the straddling-load defect (M1) hid.
+  /// the straddling-load defect hid.
   ///
   /// A callback arriving with NOTHING counted for that window belongs to a navigation
   /// this view never issued, and it decides nothing: `decidePolicyFor` `.cancel`s
@@ -1787,13 +1788,13 @@ final class PaneContainerView: NSView {
   /// a failure costs at most ONE extra full reload — there is no loop.
   ///
   /// The re-arm goes through its own set rather than through `lastPreviewLoads[win] =
-  /// nil`, which is what it used to do. `lastPreviewLoads` is ALSO `captureDecision`'s
-  /// `previousLoad`, and rule 1 — the H1 guard, which DROPS the previous file's
-  /// offsets when the source buffer switches — requires a non-nil `previousLoad`.
-  /// Nil'ing it disabled that guard on the recovery reload, and in the persistent
-  /// failure mode below it disabled it on EVERY reload; a fragment-less cross-file
-  /// link landing in that state would then open the new file at the old file's scroll
-  /// offset, which is H1 verbatim.
+  /// nil`. `lastPreviewLoads` is ALSO `captureDecision`'s `previousLoad`, and rule 1 —
+  /// the source-switch reset, which DROPS the previous file's offsets when the source
+  /// buffer switches — requires a non-nil `previousLoad`. Nil'ing it would disable that
+  /// guard on the recovery reload, and in the persistent failure mode below on EVERY
+  /// reload; a fragment-less cross-file link landing in that state would then open the
+  /// new file at the old file's scroll offset, the exact bug the source-switch reset
+  /// prevents.
   ///
   /// A PERSISTENTLY failing in-place update (a wrong `callAsyncJavaScript` content
   /// world is the way to get one) therefore degrades to one full load per tick, which
@@ -1810,7 +1811,7 @@ final class PaneContainerView: NSView {
 
   /// Nulls EVERY pane's bound grid, then re-resolves each via `grid_for_win` on
   /// its (stable) window handle. The `PaneTree` topology is untouched, so a
-  /// multi-pane layout restores by rebinding grids alone (OD2).
+  /// multi-pane layout restores by rebinding grids alone.
   private func rebindStaleGrids() {
     for id in panes.keys {
       panes[id]?.boundGrid = nil
@@ -1946,7 +1947,7 @@ final class PaneContainerView: NSView {
   private func applySplit(orientation: Orientation, from: Int64, win: Int64) {
     if paneForWin(win) != nil { return }
     guard let target = paneForWin(from) ?? activePane else { return }
-    // A split fired from within the drawer is dropped front-end-side (FD2): the
+    // A split fired from within the drawer is dropped front-end-side: the
     // drawer is not a tree leaf, so it cannot host an editor split.
     guard target != drawerPaneId else { return }
     let newId = allocPaneId()

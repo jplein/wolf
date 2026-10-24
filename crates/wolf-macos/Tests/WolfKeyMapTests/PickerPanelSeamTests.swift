@@ -10,10 +10,10 @@ final class PickerPanelSeamTests: XCTestCase {
   /// `PaneGeometryTests.swift` / `EditorInsetTests.swift`).
   private let eps: Double = 1e-9
 
-  /// The picker's fixed top margin below the content top, in points (plan §2/§7).
+  /// The picker's fixed top margin below the content top, in points.
   private let topMargin: Double = 24.0
 
-  /// The picker's fixed width, in points (plan §7 representative inputs).
+  /// The picker's fixed width, in points.
   private let panelWidth: Double = 600.0
 
   // MARK: - Helpers (ported from PaneGeometryTests' `approx` / `assertRectEqual`)

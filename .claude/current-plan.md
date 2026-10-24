@@ -474,3 +474,126 @@ Routing (orchestrator):
 ## Review round 1 — tech-writer done (no shell; prettier/lint not yet run on its files)
 
 Applied: S2, S3, nits 2, 3, 7; fixed 7 doc/code divergences (doc side). Orchestrator decision: apply its drafted CLAUDE.md text for S1 and nit 1 (within the user's request to define specs/notes conventions; flag to user). Pending after the coder's round-1 lexer fixes: `tools/doc-lint/src/README.md` `lexer/shell.rs` entry (arithmetic `<<`), `tools/doc-lint/README.md` delimiter-only list (+`--]]`), `tools/lint/README.md:72` ("and present in the worktree"), `.bazelrc:19` comment (clippy fails `bazel build //...` too).
+
+---
+
+# Follow-up task: remove workflow history from code; fix stale strings
+
+## Request (from the user)
+
+Resolve the two items left as-is: (1) error-message strings that still describe text that moved; (2) the "plan §N" history references remaining in code.
+
+## Measured (orchestrator, current tree, excluding *.md, fixtures, .claude/, binaries)
+
+- `§`: 151 hits; "NOTE to coder"/"the coder"/"coder must": 97; "test-writer"/"architect": 20; "from the plan"/"the plan"/"plan's": 89; `OD#`/`OQ#`: 62; `(D#)`: 4. About 100 files (wolf-core tests 38, wolf-ffi tests 22, wolf-core src 12, wolf-macos Tests 9, wolf-gnome src 8, macos Sources 5, gnome tests 4, ffi src 1, doc-lint tests 1). `resources/icons/*` hits are binary/SVG false positives — skip.
+- By kind (narrow regex): ~232 doc comments, ~12 plain comments, ~19 string literals.
+- False positives exist: "plan" is a domain term in `crates/wolf-gnome/src/state_seam.rs` (restore plan), `smoke_headless.rs` embedded-shell echo text about restore plans, etc. Legit `§` uses (e.g. section refs into a real spec like `specs/architecture.md` §Output) are fine when they name a real document.
+- Stale strings already identified: `crates/wolf-core/tests/tabpages.rs:~1052` (quotes old redraw.rs win_close comment; now substantively wrong), `crates/wolf-core/tests/markdown_render.rs:~1200` (base.css header A/B → specs/markdown-stylesheet.md), `crates/wolf-gnome/src/preview_link.rs:1120` (`init.lua:2229`), `crates/wolf-gnome/tests/smoke_headless.rs:~15301` (VSPLIT cmdline-visibility note), `crates/wolf-gnome/tests/release_profile.rs:514` ("comment above it"), `crates/wolf-gnome/src/layout.rs:2912` ("architecture.md used to document"), `crates/wolf-gnome/tests/smoke_headless.rs:4398` (embedded echo naming macos-followups.md).
+
+## Follow-up plan (architect; approved by orchestrator)
+
+Orchestrator decisions: adopt §8 prevention rule `workflow-ref` (lands after the editorial pass). PRE snapshot of `crates/` taken at `/tmp/claude-1000/-home-jplein-dev-jplein-wolf--worktrees-feat-documentation-checks-and-updates/246ae29a-6a21-4f1c-b4a6-a4b6369bd31d/scratchpad/pre-history/` (361 files). doc-lint built at `tools/doc-lint/target/debug/doc-lint` (DL). No Markdown pass needed (architect grep: READMEs, specs, notes/crates have zero hits; specs/command-lifecycle.md § refs are real).
+
+### F1. Scope
+Editorial pass over `crates/` only, plus eight stale message strings. Free-form `notes/*.md` reports stay as they are.
+
+### F2. Classification and editing rules (verbatim for every coder)
+
+**A. Workflow history (must go)** — a token citing something that doesn't resolve to a repo file or a same-file definition (grep the label in the same file and in `**/*.md` excluding `.claude/`):
+- Plan citations: `plan §N`, `(plan §3.1)`, `per plan`, `per the plan`, `the plan's …`, `feature/fix/search/appearance/architect plan`, `the design §2.2`, `D2 in the plan`, `§D4`, `§B4`, `§C1`, `§Q1`, `§A`, `§FFI`, `§SLUG`, `§Constraints`, `§"…"`, `DECISION §13.6`, `RESOLVED §11`, `§16 clarification`, `§5.4's predicted red`.
+- Decision/question ids: `OD1`–`OD12`, `OQ#`, `FD2/FD3/FD5`, bare `D1`–`D8` (`decision D4`, `(D7)`, `(D3)`), `O2/O3/O5/O6/O11–O17/O32`, `Design S`, `requirement 2`, `requirement 6`, `review note N1`.
+- Review/test-plan ids (wolf-macos only): `H1`, `H2`, `L1`, `F-1`, `F-2`, `DEV-2`, `T-5`–`T-8`.
+- Milestone labels used temporally: `new in S1`, `In S1 there are no overrides`, `the S1 multigrid foundation`, `the S2 async streaming traversal`, `S3`, `Phase 1`, `Phase 2 pass`, `Phase 0`, `pass 8 REFUTED`, `in v1`.
+- Role instructions: `NOTE to coder`, `the coder adds/implements/runs/must`, `the coder's to fill`, `Measured by the coder`, `test-writer`, `## Dependency on coder work …`, and "does not exist yet / will not compile until they land" inside those passages.
+
+**B. Legitimate (stays):** "plan" as a domain value (`RestorePlan`, `TabPlan`, `restore_plans`, `plan_for_window` in `state_seam.rs`; `coordinator.rs:332`; `tab_view.rs:784`; `RestorePlan`/`ProjectPlan`/Phase A/B in `RestoreSeam.swift` and `AppDelegate.swift`; restore-smoke `echo` lines in `smoke_headless.rs` ~6891, 7040–7054). `§` naming a real document section (`CSS 2.1 §10.8` ~22019). File-local names defined in the same file (`T1/T2/W1/W2` in `tabpages.rs`; `H1/H2` heights in `smoke_headless.rs` and `tabpages.rs:816`; numbered assertions, legs (a)–(h), rows; S1 drawer readback consts in `smoke_headless.rs` ~29487–29517; `F1`/`F5` keys). "Falsifying edit:" — keep content, drop " (from the plan)". Unrelated words: `Information Architects Inc.`, `specs/architecture.md`, `init?(coder: NSCoder)`, `-O2`.
+
+**C. Edit actions, in order of preference:**
+1. Delete the label only when the sentence stands without it (`(plan §3.1)`, `(OD8)`, `Falsifying edit (from the plan):` → `Falsifying edit:`). Fix leftover punctuation.
+2. Replace the id with the decision's name when the sentence needs it (`The whole refocus-rebind design (OD2) rests on this` → `The refocus-rebind design rests on this`). Find names in READMEs/specs/notes; link only to anchors that exist (doc-lint checks `notes/…md#x` in all comments). wolf-macos review ids: pick one 2–5-word phrase per id from context and use it consistently in that file (e.g. H1 → "the source-switch reset", H2 → "the seed-clobber guard", L1 → "the unchanged-offset arm", F-1 → "the clamped-offset arm"); MARK lines drop the `T-5 / H1:` prefix.
+3. Rewrite in present tense when the substance is durable: `MEASURED by the coder, 2026-08-04, on …` → `Measured 2026-08-04 on …`; `NOTE to coder: if this suite is ever run on a big-endian target …` → the constraint without the label (`paint_golden.rs:187`, `:1774`, `gdk_key.rs:14`); `because plan §B11's crate-root re-export list does not name it` → `because the crate root does not re-export it` (verify in `lib.rs`); `The plan predicted …` → what the test observes; `The \`measured\` column is the coder's to fill from an actual run` (×12 in smoke_headless.rs) → read the table: values present → "The `measured` column is from an actual red run"; unmeasured → "Rows marked unmeasured have not been run against a captured red".
+4. Delete the whole sentence/paragraph/section when it only instructed an implementer or described pre-implementation state: every `## Dependency on coder work (…)` section (`pane_buffers.rs:14–20`, `panes.rs:19–26`, …); `NOTE to coder (D4 view shape): … align them with §D4` (`file_search.rs:20–25`); `The coder runs it FIRST; …` (`tabpages.rs:410–411`); `… do NOT exist yet — the coder adds them per the fix plan §2. This test will not compile until they land` (`wolf-core/src/layout.rs:261–262`); `the NEW pane surface the coder adds per plan §3:` → `the pane surface:` (`panes.rs:6–7` and siblings); `ONE READING THE PLAN LEAVES OPEN, …` → state the chosen reading as a decision (`frame_stats.rs:994`). Before deleting, keep any still-true fact (BUILD wiring, "single #[test]") as one present-tense sentence.
+
+**D. Invariants:** a public item's doc comment still says what the item is (first sentence survives). Re-wrap only paragraphs you edit; lines ≤100 columns (Swift: ≤100 from column 0). Edited plain comments stay ≤2 lines × ≤100 chars from the marker; never `//` → `///`; delete a comment the edit empties. No new intra-doc links; keep `[`…`]` balanced. Never write "now", "no longer", "previously", "used to". In `smoke_headless.rs`, never write the cage-spawn needle or a `"$WOLF_BIN" … &` line (the file reads itself via `include_str!` ~10210, ~11013).
+
+### F3. String literals
+Rust/Swift message strings may be edited when the literal only flows into a message (`assert*!`, `panic!`, `expect`, `poll_until` descriptions, `desc`/`case` fields only formatted into messages, XCTest messages). Before editing: (1) `rg -n 'should_panic' crates` — confirm zero or not your text; (2) `rg -n 'include_str!\("[^"]*\.(rs|swift)"\)' crates` — only `smoke_headless.rs` reads itself; your edit must not create/remove text matching `CAGE_SPAWN_NEEDLE`, `is_launch_line`, `PID_CAPTURE_LINE`, `is_shell_command`; (3) trace the binding — if compared, written, sent to nvim, or used as a key, do not edit; report. Swift string edits: only characters between quotes; never touch `\`, `"`, `\(`, `+`; lines ≤100. Embedded shell in `smoke_headless.rs` raw strings: edit only if (a) a stale-ref fix (F4 #6) or a §A id (e.g. `# --- Step 9: O32 leg 1 --` ~29737, ~29755) AND (b) a `#` shell comment or `echo … >&2`. Keep the raw string's physical line count; never touch an `echo` without `>&2`, a heredoc body, or lines with `$WOLF_BIN`, `cage`, `wait_ready`, `hsend`. Domain "plan" echoes stay.
+
+### F4. The eight stale strings
+1. `crates/wolf-core/tests/tabpages.rs` ~1052–1053: replace the clause from `` and `crates/wolf-core/src/redraw.rs`'s `win_close` comment (\"…\") turns out to be the accurate one. `` with `` and `notes/crates/wolf-core/src/redraw.rs.md#orphaned-nav-history` and `specs/architecture.md` (core↔front-end contract, tabpage scope), which both state that a background tabpage's window IS in `win_buffers` and `buffers`, are wrong and must be corrected. `` Also :454 `if this fails the coder must STOP and report.` → `if this fails, that design is unsound.`; :452 and :462 `KEYSTONE FAILURE (OD2):` → `KEYSTONE FAILURE (refocus rebind):`. Leave :1057 `If it is red, STOP and report.`
+2. `crates/wolf-core/tests/markdown_render.rs:1200`: ``\`base.css\`'s header records the A/B:`` → ``\`specs/markdown-stylesheet.md\` (\"Inline code leading\") records the A/B:``.
+3. `crates/wolf-gnome/src/preview_link.rs:1121`: `(init.lua:2229 keeps such a preview from ever becoming a pane)` → ``(`emit_previews` inside `wolf_setup_preview` in `runtime/nvim/init.lua` keeps such a preview from ever becoming a pane)``. Also drop `O12:`/`O13:` prefixes in `desc` strings ~923, ~1159.
+4. `crates/wolf-gnome/tests/smoke_headless.rs:15301–15302`: `(see the cmdline-visibility note above the VSPLIT_* consts)` → ``(see the \"Cmdline visibility\" paragraph of `notes/crates/wolf-gnome/tests/smoke_headless.rs.md#split-pane-smokes`)``.
+5. `crates/wolf-gnome/tests/release_profile.rs:513–514`: `Restore the block described in the comment above it.` → ``Restore the block; `notes/Cargo.toml.md#release-profile` gives each key and its reason.``
+6. `crates/wolf-gnome/tests/smoke_headless.rs:3952` (embedded `echo … >&2`): `macos-followups.md records the Swift side still has.` → `notes/macos-followups.md records the Swift side still has.` Keep it a single `echo "…" >&2`.
+7. `crates/wolf-gnome/src/layout.rs:2823`: delete `` — the behaviour `architecture.md` used to document as a limitation``; end at `dragged geometry.`
+8. `crates/wolf-gnome/tests/vendored_pins.rs:307–309`: delete `BEFORE the packaging unit lands, the block simply does not exist yet and this failure is expected — add it, in the shape … states. AFTER it lands,`; begin `The binding was renamed or reformatted, in which case …`; fix "Two states look like this" to fit one state.
+
+Other message-only edits from §A: `wolf-gnome/src/palette.rs` 2369, 2674 (D2 → the "type what you see" label rule, as at :2603); `nav_ui.rs:717`; `frame_stats.rs:2054`; `wolf-ffi/tests/cmdline_ui.rs:230`; `wolf-ffi/tests/tabpages.rs:247`; `wolf-core/tests/nav_history_live.rs` 1270, 1452; `smoke_headless.rs` 15884, 33984, 34052; Swift `FrameStatsTests.swift:382` → `"142 wakes / 48 keys -> a non-integer ratio"`, `RestoreSeamTests.swift:120`, H1/H2/L1/F-1 messages in `PreviewScrollSeamTests.swift`.
+
+### F5. Chunks (disjoint; no shared docs edited; cross-refs to orchestrator)
+| Chunk | Paths | Stale strings |
+|---|---|---|
+| K1 | `crates/wolf-core/tests/[a-m]*.rs`, `crates/wolf-core/tests/common/**` | #2 |
+| K2 | `crates/wolf-core/tests/[n-z]*.rs` | #1 |
+| K3 | `crates/wolf-ffi/**` | — |
+| K4 | `crates/wolf-core/src/**`, `crates/wolf-gnome/src/**` | #3, #7 |
+| K5 | `crates/wolf-gnome/tests/**` | #4, #5, #6, #8 |
+| K6 | `crates/wolf-macos/**` | — |
+
+Finder (set DIRS; run from repo root):
+```
+PAT='(?i:\bnote to (?:the )?coder\b|\bthe coder\b|\bcoder(?:\x27s)?\s+(?:work|adds|implements|must|runs|should)\b|\bcoder\x27s\b|\bby the coder\b|\btest[- ]writers?\b|\barchitect(?:\x27s)? plan\b|\b(?:feature|fix|search|appearance|design) plan\b|\bper (?:the )?plan\b|\bfrom the plan\b|\bin the plan\b|\bthe plan\b|\bplan\x27s\b|\bplan §|\breview (?:note|finding)s?\b)|§|\b(?:OD|OQ|FD)\d+\b|(?<![-\w])[DO]\d{1,2}\b|\bDECISION\b|\bRESOLVED §|\bDesign [A-Z]\b|\brequirement \d\b|\b(?:new )?in S\d\b|\bS\d (?:multigrid|async|foundation)\b|\bPhase \d\b|\bpass \d+ REFUTED|\bdo(?:es)? not exist yet\b|\bnot compile until\b'
+rg -nP -g '!*.md' -g '!*.{svg,png,icns,txt,b64,lock,json}' "$PAT" $DIRS
+```
+K6 also: `rg -nP '\b[HL]\d\b|\bF-\d\b|\bT-\d\b|\bDEV-\d\b' crates/wolf-macos`. "does not exist yet" has domain hits in `state_seam.rs`, `actions.rs`, `shell.rs`, `PaneContainerView.swift:1324` — leave them.
+
+### F6. Verification (each coder, repo root)
+1. `CHANGED=$(diff -rq "$PRE/<dir>" <dir> | awk '/differ$/{print $4}')` per chunk dir.
+2. `$DL --files $CHANGED` → no output.
+3. Files with no string edit: `$DL same-code "$PRE/$f" "$f"` → exit 0.
+4. Files with string edits: `diff <($DL strip "$PRE/$f") <($DL strip "$f")`; every hunk is a planned string line; report `file:line old → new` (embedded-shell lines separately).
+5. `cargo fmt --all -- --check`.
+6. K5 only: `cargo test -p wolf-gnome --test smoke_headless cage_is_only_spawned_through_the_isolating_helper every_launch_waits_for_readiness_before_its_first_input`.
+7. No commits, no `cargo fmt` without `--check`, no other `cargo test`.
+
+Final gate once after all chunks. Residual check: `rg -nP -g '!*.md' -g '!.claude/**' -g '!tools/doc-lint/tests/fixtures/**' -g '!tools/lint/testdata/**' -g '!*.{svg,png,icns,txt,b64,lock,json}' "$PAT" .` — allowed: domain "plan" in `state_seam.rs`, `coordinator.rs`, `tab_view.rs`; restore-smoke echo lines; `CSS 2.1 §10.8`; "does not exist yet" domain lines. wolf-macos id grep empty except `F1`/`F5`.
+
+### F7. Prevention rule `workflow-ref` (doc-lint; after the pass)
+- Scope: every comment, doc comments included, every language, both `--files` and `--root`. Strings and Markdown not scanned. One finding per comment line, first match.
+- Message: `workflow reference "<matched text>": it cites a planning document that is not in the repo; state the reason in present tense or delete it`.
+- Case-insensitive substring match with word boundaries both ends (non-alphanumeric, non-`_`): `note to coder`, `note to the coder`, `the coder`, `test-writer`, `test writer`, `architect plan`, `the architect`, `per plan`, `per the plan`, `from the plan`, `feature plan`, `fix plan`, `plan §`, and tokens `OD<digits>`, `OQ<digits>`.
+- Not banned: bare `the plan`, `§`, `D\d`, `O\d`, `H1`/`L1`, `S\d`.
+- Patterns live in a `const` table of string literals (doc-lint's own comments must not spell them).
+- Docs: `tools/doc-lint/README.md` rule table, `src/README.md` entry. CLAUDE.md mention needs user approval.
+- Tests: `tests/fixtures/lang/.../workflow_ref.rs` reported: `/// Falsifying edit (from the plan): x`, `//! per plan §3`, `// NOTE TO CODER: y`, `// see OD2.`, `/* the test-writer adds */`; not reported: `let s = "per plan §3";`, `// COD2 ODE OD restore plan architecture Information Architects`, `// the restore plan's tabs`. `workflow_ref.swift`: `/// OQ3 decides` reported; `init?(coder: NSCoder)` not. `workflow_ref.sh`: `# per the plan` reported; `echo "per the plan"` not. `api.rs`: `Rule::WorkflowRef.id() == "workflow-ref"`; CLI `--files` case printing exactly the expected `[workflow-ref]` lines.
+- Falsifiers: skip doc comments; drop lowercasing; drop leading boundary (COD2 reported); drop trailing boundary (ODE reported); scan strings; delete `from the plan` entry; wire into `--root` only.
+
+### F7 test-writer choices (binding for the coder)
+- Quoted `<matched text>` keeps source case (original slice). Quote the leftmost match on the line; `note to the coder` must win over `the coder` when both start at the same place (prefer the longest match at the leftmost position).
+- Boundary is checked only at a pattern end that is itself alphanumeric or `_` (so `plan §4` matches `plan §`); `_` is not a boundary.
+- `lint_source` must run `workflow-ref` (language fixtures go through it); update its doc.
+- Tests: `fixtures/lang/{rust,swift,shell}/workflow_ref.*`, `fixtures/cli/workflow_ref.rs`, `fixtures/repo/src/history.rs`, `fixtures/repo/docs/history.md`; new tests `cli_files_mode_reports_workflow_references_in_their_source_case` (fixtures.rs), `workflow_ref_rule_has_its_documented_id` (api.rs); repo test expects `("src/history.rs", 2, "workflow-ref")`. No new Bazel wiring. `tests/README.md` needs the new entries (technical-writer).
+
+### Follow-up integration inbox
+- K1: history wording left in comments: `crates/wolf-core/tests/browser_preview.rs:~529` "no longer non-markdown"; `crates/wolf-core/tests/common/mod.rs:8` "This path is unchanged". Rewrite present-tense in integration.
+- K1 → K4: `crates/wolf-core/src/render.rs:1022` doc has `— OD8)` (K4 should catch; verify in residual grep).
+- K3: `crates/wolf-ffi/tests/appearance.rs` SKIP section claims an init.lua "line-111 fallback" sets `vim.o.background = "dark"`; current init.lua sets it only in the lighthouse-sibling branch (~154). K1 reworded the same claim in `crates/wolf-core/tests/appearance.rs` to "fallback". Verify against `runtime/nvim/init.lua` and fix both comments to the measured fact.
+- K3 FYI: `crates/wolf-ffi/tests/file_actions.rs` "NOT the old empty `[No Name]`" — history wording; rewrite present tense.
+- K4: `runtime/nvim/init.lua:228` has `(OQ-1)` — no chunk owns it; fix in integration.
+- K4: hyphenated ids (`OQ-1`, `OQ-3`, `OD-a`) are missed by the finder and by F7 `OQ<digits>`. Decision: extend `workflow-ref` with `OD-`/`OQ-` followed by an alphanumeric token (test-writer adds fixture cases), and sweep the tree for `\b(OD|OQ)-[A-Za-z0-9]+\b`.
+- K4: milestone-history phrases not caught by the finder: "this unit" (`crates/wolf-gnome/src/actions.rs:137,1390,1512,2329`; `command_action.rs:272,533`; `palette.rs:1774` heading + paragraph; `editor_inset.rs:873`; `geometry.rs:1066` "the floor that shipped before this unit"), "this cut" (`crates/wolf-core/src/markdown.rs:327`, `command.rs:114`), "historical behavior" (`markdown.rs` `WidthMode`). Rewrite present-tense in integration; sweep the tree for `this unit|this cut|shipped before|historical behaviou?r`.
+- K5: workflow ids outside the finder remain in `crates/wolf-gnome/tests/smoke_headless.rs`: "pass N" (1436, 3922 embedded-shell #, 19016, 19038, 19267 msg, 19543, 19547, 19573, 19638, 29264, 29267, 29346, 29356, 29361, 29366, 29375, 29397, 29417, 29419, 29427, 29779, 30031 msg, 30325, 30326, 30466, 30486, 31759); M-ids M9/M10/M11/M15/M16/M19/M23/M27 (29264–30791, several in messages); "P2 realized" (29793, 29991, 29996 msg); "Row E" (30338, 30427); verify B1/B2 at 19548–19549 and P1/P2/P3 ~34713 are file-local; "since the WOLF_STATE_DIR isolation landed" (14985 msg). Second sweep needed (one coder, smoke_headless.rs only).
+- K6: done (44→1 finder, 50→0 ids). Swift string-edit files for the macOS compile-unverified list: `FrameStatsTests.swift`, `PreviewScrollSeamTests.swift`, `RestoreSeamTests.swift`. History voice left in Swift (`the old`/`no longer`): `PreviewScrollSeam.swift:500`; `PreviewScrollSeamTests.swift:2229`, `:2284` (msg), `:2324–2326` (msg); `AppDelegate.swift:41,203,776`; `StateSeam.swift:51`; `PickerSeam.swift:34`; `PickerSeamTests.swift:42`.
+- K6 → K4: `crates/wolf-gnome/src/frame_stats.rs:~1860` desc "the macOS sample ratio" — optional align with the Swift desc.
+- K2: done (104→0). `crates/wolf-core/tests/autoread.rs:88`, `:145` cite `swap_exists.rs`, which does not exist (now `swap_recovery.rs`?) — verify and repoint. `crates/wolf-core/tests/tabpages.rs` header bullet says a tabpage switch "does NOT churn GRID ids" while the KEYSTONE doc says "only GRID ids churn" — read the test assertions to establish which is true; fix the wrong comment.
+- I1 done (smoke_headless ids removed; self-read tests pass). Left for final pass in `smoke_headless.rs`: "unit" history at ~810, 9259, 17691, 21062 (msg), 21095 (msg), 21118 (msg), 29782 (table), 29803; `SIDEBAR_FILLER_COUNT` doc ~712 "used to hand", ~721 "now hold", ~738 "now write".
+- Rule extension done (hyphen ids; 4 falsifiers shown). Remaining `workflow-ref` hit: `crates/wolf-macos/Tests/WolfKeyMapTests/HistorySeamTests.swift:131` "per the architect's call".
+
+## Follow-up review (reviewer: needs revision, no blockers) — routing
+- R-A (coder, smoke_headless.rs only): S3 (doc ~6698 "writes exactly one tab per window" → the true reason: one `tabs` key per `WindowState`); S6 (~45 "this unit"/"the X unit" milestone phrases incl. fixture lists ~761–770, ~13194–13227; messages 16374, 16389, 16492, 29165, 29173, 32863, 33294; rethink 27116 and 29165); nit: drop undefined "— F1".."F5" at ~31214–31219.
+- R-B (coder, everything else in crates/): S1 ("plan section 3.2" `command_action.rs:289,473,493`; `actions.rs:1005,1966`; `config.rs:288` "(plan: …"); S2 (`crates/wolf-core/tests/appearance.rs:113` "line-111 fallback"); S4 (`vendored_pins.rs` `//!` :12–20, :14, :277, and :307 message wording); S5 (`state_layout.rs:469–470` message); nits `state_seam.rs:55` roadmap ref, `file_search.rs:423`, `mru.rs:340` history voice.
+- Rule: add patterns `plan section` and plurals `test-writers`/`test writers`/`the coders` to `workflow-ref` (test-writer first, then coder).
+
+## Follow-up status: COMPLETE on Linux (uncommitted, on top of 0c9ee7f)
+Final gate green 174s warm: workspace 1178 passed / 0 failed / 10 ignored; doc-lint 29 passed; `doc-lint --root .` empty (incl. `workflow-ref`). same-code vs PRE: 111 comment-only, 20 with message-string/embedded-shell edits (all planned). init.lua comment-only. Residual sweeps clean. macOS-unverified items added to `notes/macos-followups.md` row 2026-10-24 items (11)–(13).

@@ -1,4 +1,4 @@
-//! Integration test for the `wolf-ffi` FILE-ACTION bridge surface (plan §3 + §5):
+//! Integration test for the `wolf-ffi` FILE-ACTION bridge surface:
 //! two native-facing Neovim actions on `WolfCoreHandle` that back the macOS
 //! "Open Folder…" and "New" commands:
 //!
@@ -8,7 +8,7 @@
 //!     `wolf_new_untitled()` (a fresh, MODIFIABLE, unsaved buffer in the current
 //!     window, named `Untitled.md` / `Untitled 2.md` / … — the first name that
 //!     collides with neither an existing buffer nor a file on disk in cwd — so
-//!     `current_file()` ends with an `Untitled( N)?.md` name, NOT the old empty
+//!     `current_file()` ends with an `Untitled( N)?.md` name, NOT an empty
 //!     `[No Name]`. In THIS test the earlier `chdir` re-homes the startup
 //!     `Untitled.md` into the target dir (a listed buffer collision), so the
 //!     `new_buffer()` collision walk skips index 1 and lands on `Untitled 2.md`.)
@@ -22,14 +22,11 @@
 //! staging / SKIP-when-unset machinery, reusing `tests/common/mod.rs`, and the
 //! same "poll `read_frame()` until attached" pattern).
 //!
-//! ## Dependency on coder work (plan §3 + §5)
+//! ## What backs `new_buffer`
 //!
-//! `new_buffer` on `WolfCoreHandle` is backed by the `wolf_core::InputEvent::NewBuffer`
-//! variant, which the coder rewires from a raw `:enew` to the `wolf_new_untitled()`
-//! Lua helper (naming + `filetype=markdown`, no auto-write); `chdir` already exists.
-//! The coder keeps the `//crates/wolf-ffi:file_actions`
-//! `rust_test` target in `BUILD.bazel`. This test file does NOT touch BUILD files,
-//! and it will not compile until that method lands — that is expected.
+//! The `wolf_core::InputEvent::NewBuffer` variant runs the `wolf_new_untitled()` Lua
+//! helper (naming + `filetype=markdown`, no auto-write). The
+//! `//crates/wolf-ffi:file_actions` `rust_test` target runs this file under Bazel.
 //!
 //! ## SKIP-when-unset policy
 //!

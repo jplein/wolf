@@ -4,17 +4,14 @@
 //! IO-free, exactly like `rank::rank_matches` which it reuses.
 //!
 //! These live in a dedicated integration file (with its own `palette_rank` BUILD
-//! target) rather than an in-module `#[cfg(test)] mod tests` inside the NEW
-//! `src/palette.rs`, to avoid colliding with the coder who creates that file. This
-//! mirrors the crate's existing precedent: the pure `command.rs` registry tests
-//! live in `tests/commands.rs` for the same "don't collide with the coder" reason.
+//! target) rather than an in-module `#[cfg(test)] mod tests` inside
+//! `src/palette.rs`. This mirrors the crate's existing precedent: the pure
+//! `command.rs` registry tests live in `tests/commands.rs`.
 //!
-//! ## Dependency on coder work (plan §Q3 / §5)
+//! ## Surface under test
 //!
-//! None of this exists yet — the coder adds `pub mod palette;` (+ the re-exports
-//! this file imports) in `crates/wolf-core/src/lib.rs`, and adds the
-//! `//crates/wolf-core:palette_rank` `rust_test` target to `BUILD.bazel`. This
-//! file does NOT touch non-test source. It assumes the plan's exact signatures:
+//! The crate root re-exports everything this file imports, and the
+//! `//crates/wolf-core:palette_rank` `rust_test` target runs it. The signatures:
 //!
 //! - `pub struct PaletteRow { pub display: String, pub mru_key: String,
 //!   pub kind: PaletteRowKind, pub command: Option<Command>,
@@ -47,7 +44,7 @@ use wolf_core::{rank_palette, Command, PaletteRow, PaletteRowKind, PaletteWindow
 ///
 /// Preview, Edit, Terminal, PreviewInBrowser, FullWidth, ToggleSidebar,
 /// SidebarShowProject, SearchInProject, PreviewInOtherPane and EditInOtherPane
-/// are all palette static rows (OD4: unlike the macOS menu items, which gate
+/// are all palette static rows (unlike the macOS menu items, which gate
 /// Preview/Edit/Preview in Browser/Use full width/sidebar/other-pane actions on
 /// the active buffer/pane, the palette does not gate any spec — it lists them
 /// all).
