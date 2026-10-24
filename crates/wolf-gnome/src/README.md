@@ -47,7 +47,7 @@ Purpose: the entry point — activate, and delegate. `run` builds the `adw::Appl
 **Public API**
 
 - `run() -> glib::ExitCode` — hands GTK an empty argv, so the process command line is never parsed or rejected.
-- `load_config`, `measure_metrics`, `open_state_store`, `init_lua_path` and `ready_file_path` are `pub(crate)`, called once each by [`coordinator.rs`](#coordinatorrs). `init_lua_path` and `ready_file_path` are glue alone: they make the environment and filesystem reads and leave the rules to [`init_lua.rs`](#init_luars) and [`ready_seam.rs`](#ready_seamrs).
+- `load_config`, `measure_metrics`, `open_state_store`, `init_lua_path` and `ready_file_path` are `pub(crate)`, called once each by [`coordinator.rs`](#coordinatorrs). `init_lua_path` and `ready_file_path` are glue alone: they do the reads and leave the rules to [`init_lua.rs`](#init_luars) and [`ready_seam.rs`](#ready_seamrs).
 
 **Decisions**
 
@@ -57,7 +57,7 @@ Purpose: the entry point — activate, and delegate. `run` builds the `adw::Appl
 
 **Gotchas**
 
-- The later-activate path is a desktop's "launch it again, get a window". No smoke reaches it: the harness strips `DBUS_SESSION_BUS_ADDRESS`, so a second process becomes its own primary instance instead.
+- The later-activate path is a desktop's "launch it again, get a window". No smoke exercises it, though a second launch into a live cage would reach it over that cage's private bus.
 
 #### `appearance.rs`
 

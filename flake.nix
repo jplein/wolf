@@ -585,16 +585,18 @@
             pkgs.jetbrains-mono
             iaWriterMono
 
-            # GATE-REQUIRED: the fifty-eight headless end-to-end smoke tests in
-            # crates/wolf-gnome/tests/smoke_headless.rs (of the sixty-seven that
-            # file's default suite runs; the other nine are pure guards that
+            # GATE-REQUIRED: the sixty headless end-to-end smoke tests in
+            # crates/wolf-gnome/tests/smoke_headless.rs (of the seventy-three that
+            # file's default suite runs; the other thirteen are pure guards that
             # need no compositor) run as part of a plain `cargo test` (no
             # `--ignored`). They launch the real
             # window under a headless Wayland compositor and OCR a screenshot,
-            # so these five must be present or the suite fails loud. The three
+            # so these six must be present or the suite fails loud. The three
             # `#[ignore]`d packaged smokes that `./tools/wolf-package-smoke.sh`
-            # drives need the same five. cage =
-            # headless wlroots compositor, wtype = synthetic keystrokes,
+            # drives need the same six. cage =
+            # headless wlroots compositor, dbus = `dbus-run-session`, which gives
+            # each cage one private session bus (the preview's WebView draws
+            # blank without one), wtype = synthetic keystrokes,
             # grim = screenshot, tesseract = OCR, wolf-pointer-inject =
             # synthetic pointer (motion / button / axis). Not needed to *build*.
             #
@@ -604,6 +606,7 @@
             # holds the seat's pointer capability open for a whole scenario. See
             # tools/wolf-pointer-inject/README.md.
             pkgs.cage
+            pkgs.dbus
             pkgs.wtype
             pkgs.grim
             pkgs.tesseract
@@ -706,14 +709,11 @@
             # --- SMOKE: headless Wayland compositor env ------------------------
             # Used by the cage smoke tests in
             # crates/wolf-gnome/tests/smoke_headless.rs, which run as part of the
-            # default `cargo test`.
-            # XDG_RUNTIME_DIR holds the Wayland socket; default it to a private
-            # mktemp dir if the host has not set one. wlroots is told to use its
-            # headless backend with no real input devices. We do NOT export
-            # WAYLAND_DISPLAY — cage creates and exports it for its child tree.
-            if [ -z "''${XDG_RUNTIME_DIR:-}" ]; then
-              export XDG_RUNTIME_DIR="$(mktemp -d -t wolf-xdg-runtime.XXXXXX)"
-            fi
+            # default `cargo test`. wlroots is told to use its headless backend
+            # with no real input devices. We do NOT export WAYLAND_DISPLAY or
+            # XDG_RUNTIME_DIR: the harness gives each cage a private runtime
+            # directory, and cage creates and exports WAYLAND_DISPLAY for its
+            # child tree.
             export WLR_BACKENDS=headless
             export WLR_LIBINPUT_NO_DEVICES=1
           '';

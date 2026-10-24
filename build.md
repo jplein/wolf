@@ -59,7 +59,9 @@ Most tests spawn the pinned Neovim as a real child process rather than a mock, a
 
 `cargo test` also runs the rustdoc doctests in `src/**`, which `rust_test` does not. A doctest is therefore Linux-only coverage, the exact mirror of the Bazel wiring gap under [Running the tests](#running-the-tests): a fenced or indented block in a `//!` or `///` comment compiles as Rust unless it is tagged `text` or `ignore`, and a prose list that only looks like code fails there and nowhere else.
 
-What each target covers lives with the tests: [`wolf-core/tests`](crates/wolf-core/tests/README.md), [`wolf-ffi/tests`](crates/wolf-ffi/tests/README.md), [`wolf-gnome/tests`](crates/wolf-gnome/tests/README.md). The GTK end-to-end smokes run in that suite rather than opting in: they launch the real window under `cage`, a headless Wayland compositor, and drive it with `wtype`, `grim`, `tesseract` and [`wolf-pointer-inject`](tools/wolf-pointer-inject/README.md). All four come from the devShell, and the smokes fail loudly rather than skipping when one is missing, since absence means the suite is running outside `nix develop`. They also need a set and writable `XDG_RUNTIME_DIR`, which is where `cage` puts its Wayland socket.
+What each target covers lives with the tests: [`wolf-core/tests`](crates/wolf-core/tests/README.md), [`wolf-ffi/tests`](crates/wolf-ffi/tests/README.md), [`wolf-gnome/tests`](crates/wolf-gnome/tests/README.md). The GTK end-to-end smokes run in that suite rather than opting in: they launch the real window under `cage`, a headless Wayland compositor, and drive it with `wtype`, `grim`, `tesseract` and [`wolf-pointer-inject`](tools/wolf-pointer-inject/README.md), each scenario under `dbus-run-session`. All of them come from the devShell, and the smokes fail loudly rather than skipping when one is missing, since absence means the suite is running outside `nix develop`.
+
+Several cages run at once. `WOLF_SMOKE_JOBS=<n>` sets how many, and `1` runs them serially; unset, the count is `available_parallelism` divided by `DEFAULT_SMOKE_JOBS_CPUS_PER_CAGE`, clamped to between 1 and `DEFAULT_SMOKE_JOBS_CAP`, whose doc comment in `smoke_headless.rs` carries the measured wall times. Two `cargo test` runs share no socket or file, but each sizes its slots for the whole host, so never overlap them: together they oversubscribe the CPU and stretch the scenarios' fixed settles.
 
 ### The optimized build
 
@@ -135,13 +137,13 @@ The `follows` line is not optional in practice. The application loads the host's
 
 Listing it in `fonts.packages` as well makes the two editor families available system-wide, because they are installed at the layout fontconfig scans. That is a convenience and not a requirement: the application resolves them through its own `FONTCONFIG_FILE` either way.
 
-Nothing about the artifact is checked inside the build sandbox. `doCheck` is off, because the suite needs a compositor, a writable `XDG_RUNTIME_DIR` and a session bus a Nix builder has none of, so one command builds the package and runs every test that reads or launches it:
+Nothing about the artifact is checked inside the build sandbox. `doCheck` is off, because the suite needs a compositor and a graphics device a Nix builder has none of, so one command builds the package and runs every test that reads or launches it:
 
 ```sh
 ./tools/wolf-package-smoke.sh
 ```
 
-It prints the store path it resolved before it starts, since that path is the subject of everything the run reports, and it must not overlap another `cargo test`: two compositors contend for one Wayland socket. What those tests assert belongs with them, in [`wolf-gnome/tests`](crates/wolf-gnome/tests/README.md).
+It prints the store path it resolved before it starts, since that path is the subject of everything the run reports, and it must not overlap another `cargo test`, for the reason [Building and testing](#building-and-testing) gives. What those tests assert belongs with them, in [`wolf-gnome/tests`](crates/wolf-gnome/tests/README.md).
 
 ### The verification gate
 
@@ -400,7 +402,7 @@ nix develop --command env WOLF_FRAME_STATS=1 WOLF_FRAME_STATS_INTERVAL=2 \
 tail -f /tmp/wolf-frame-stats.txt
 ```
 
-**On a host with no display session, drive it under `cage` and `wtype`** — the recipe the measured reading came from. Give `cage` a fixture project directory outside the checkout holding one large prose file, with `HOME` set to that directory's parent and `DBUS_SESSION_BUS_ADDRESS` removed, so the run cannot touch the real `~/.local/state/wolf` or `~/.config/wolf`. The scenario then settles, opens the file, jumps to its end, and types several `wtype -d 30` bursts over roughly thirty seconds.
+**On a host with no display session, drive it under `cage` and `wtype`** — the recipe the measured reading came from. Give `cage` a fixture project directory outside the checkout holding one large prose file, with `HOME` set to that directory's parent, so the run cannot touch the real `~/.local/state/wolf` or `~/.config/wolf`, and the scenario under `dbus-run-session`, so a launch cannot hand off to a running `wolf-gnome` through the developer's session bus. The scenario then settles, opens the file, jumps to its end, and types several `wtype -d 30` bursts over roughly thirty seconds.
 
 **Do not set `WOLF_FONT_PT`** in that scenario. The smokes' 28 pt exists for OCR and would understate every per-cell cost. Record the grid size, the font size, the pane count and whether a preview was open beside any number taken this way, and run each scenario twice: only a difference larger than the spread between two runs of the same scenario is a signal.
 

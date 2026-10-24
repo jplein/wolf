@@ -24,10 +24,10 @@
 # shell entered from another directory has no template to read and none of the
 # font pinning the smokes rest on.
 #
-# Do NOT run it while another `cargo test` is in flight. The packaged smokes
-# launch `cage`, and two compositors contend for one Wayland socket — both then
-# fail with `unable to lock lockfile`, which reads as a mass regression rather
-# than as the collision it is.
+# Do NOT run it while another `cargo test` is in flight. Each run sizes its
+# cage slots for the whole host, so two at once oversubscribe it and stretch the
+# scenarios' fixed settles, which reads as scattered flakes rather than as the
+# overload it is.
 set -euo pipefail
 
 readonly PACKAGE_ATTR=".#wolf-gnome"

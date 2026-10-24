@@ -154,12 +154,12 @@
 //! Eight smokes run **two app launches inside ONE `cage` instance** (one scenario
 //! string, two sequential `"$WOLF_BIN" &` blocks) — the four relaunch ones, the
 //! configured-font-size one, the configured-appearance one, the
-//! preview-appearance one and the two-window one — so `CAGE_LOCK`
-//! semantics are unchanged and the count of compositors started is still one per
-//! smoke. That shape is not merely economical for the two-window smoke, it is
-//! MANDATORY there: [`cage_command`] removes `DBUS_SESSION_BUS_ADDRESS`, so a
-//! second `wolf-gnome` PROCESS becomes its own primary instance with its own
-//! `StateStore` over the same directory rather than a second window of the first.
+//! preview-appearance one and the two-window one — so each still holds one cage
+//! slot and starts one compositor. In the two-window smoke the second WINDOW comes
+//! from the palette inside run 1, and run 2 launches only after run 1 has exited,
+//! so the two launches never overlap; see
+//! [`two_windows_two_neovims_and_two_saved_sessions_under_cage`] for why a second
+//! overlapping process is not an alternative.
 //!
 //! Nine of them additionally run **`wolf-pointer-inject`** inside cage —
 //! this repo's own long-lived `zwlr_virtual_pointer_v1` client, see
@@ -242,7 +242,7 @@
 //! is about what is NOT painted there, so no reading of the page could carry it, and it
 //! is the only pixel reading here taken outside a preview or an overlay.
 //!
-//! **Eleven pure guards**, which mechanically enforce invariants the cage smokes
+//! **Thirteen pure guards**, which mechanically enforce invariants the cage smokes
 //! depend on but cannot check themselves:
 //!
 //! * [`sidebar_filler_names_cannot_satisfy_any_smoke_assertion`] — no
@@ -296,6 +296,25 @@
 //!   defined once, in [`READINESS_PRELUDE`]; and the bare `if wtype "" …` probe loop
 //!   appears nowhere. A scenario that types on a fixed budget passes on an idle host
 //!   and loses its first keys on a loaded one, so review alone would not catch it.
+//! * [`every_cage_gets_a_private_runtime_dir_and_no_host_session`] — every
+//!   [`cage_command`], and both [`packaged_cage_command`] arms, hands its cage the
+//!   private directory of the [`CageRuntime`] it was given as `XDG_RUNTIME_DIR`: a
+//!   fresh, distinct, mode-0700 directory with no `bus` entry, short enough for every
+//!   socket under it. `DBUS_SESSION_BUS_ADDRESS`, `WAYLAND_DISPLAY`, `WAYLAND_SOCKET`
+//!   and `DISPLAY` are removed, `WOLF_READY_FILE` lies inside that directory, and the
+//!   scenario runs under `dbus-run-session`. The wrapper is what blocks the hand-off:
+//!   it gives each cage a private session bus that dies with it, so a launch cannot
+//!   reach the developer's bus and hand off to their running `wolf-gnome`, which
+//!   would leave the smoke testing the wrong process while passing. The private
+//!   directory separates each cage's Wayland socket, WebKit proxy sockets and
+//!   runtime files, and is defence in depth should the wrapper go: it offers no
+//!   `bus` for GIO's `$XDG_RUNTIME_DIR/bus` fallback.
+//! * [`cage_slots_bound_concurrency`] — the `WOLF_SMOKE_JOBS` parse
+//!   ([`parse_smoke_jobs`]) and the [`CageSlots`] semaphore behind it: an override is
+//!   honoured above the cap, `0` and garbage are errors, the default is the measured
+//!   one, and no more holders than the limit are ever inside. A semaphore that admits
+//!   one cage too many passes on an idle host and stretches every fixed settle on a
+//!   loaded one.
 //! * [`the_column_cap_cannot_bind_at_the_ocr_smokes_geometry`] — the premise every
 //!   OCR smoke's geometry rests on, given `editor_inset`'s content-width cap:
 //!   at the pinned output size, the measured pane origin and
@@ -342,12 +361,12 @@
 //!   tree is not staged, so deleting those two `shellHook` lines turns three
 //!   real-Neovim tests into no-op passes and reddens nothing anywhere.
 //!
-//! All eleven are compositor-free: none calls `require_smoke_env`, none takes
-//! `CAGE_LOCK` and none spawns a subprocess, so they still guard on a machine where
+//! All thirteen are compositor-free: none calls `require_smoke_env`, none takes a
+//! global cage slot and none spawns a subprocess, so they still guard on a machine where
 //! the smoke toolchain is unavailable. They live here, next to the consts and
 //! helpers they read, rather than in a file of their own.
 //!
-//! Ten of the eleven additionally need NO environment at all. The exception is
+//! Twelve of the thirteen additionally need NO environment at all. The exception is
 //! [`the_column_cap_cannot_bind_at_the_ocr_smokes_geometry`], and the claim is
 //! stated precisely rather than loosely: it measures a
 //! real cell through [`cell_metrics_for_smoke`], so it needs the devShell's pinned
@@ -356,8 +375,8 @@
 //! a run outside the devShell fails it for that reason rather than for the reason
 //! its message names.
 //!
-//! So this target's summary line reads **`71 passed`**, not `60`: sixty cage
-//! smokes plus those eleven guards.
+//! So this target's summary line reads **`73 passed`**, not `60`: sixty cage
+//! smokes plus those thirteen guards.
 //!
 //! **Three `#[ignore]`d PACKAGED smokes** sit at the end of this file and are NOT in
 //! that count. They drive `$out/bin/wolf-gnome` — the artifact `nix build
@@ -366,9 +385,9 @@
 //! it: `./tools/wolf-package-smoke.sh`. An ignored test is not part of the default
 //! suite, which is a different thing from a silently-skipped one — their
 //! precondition still fails loud. They live in THIS file rather than one of their
-//! own because a second test binary that spawns `cage` runs concurrently with this
-//! one and [`CAGE_LOCK`] cannot serialize across processes; the section header above
-//! them carries the rest of that reasoning.
+//! own because `cage` is spawned in one place only, [`cage_command`], and the guard
+//! that enforces it reads only this file; the section header above them carries the
+//! rest of that reasoning.
 //!
 //! ## Readiness before the first input
 //!
@@ -395,7 +414,9 @@
 //! suite command does not run is a silently-skipped test.
 //!
 //! They are, however, the slowest part of the suite: each drives a real
-//! compositor, and all sixty serialize behind `CAGE_LOCK` (see below).
+//! compositor. They run [`smoke_jobs`] at a time, each in a [`CageSlots`] slot and a
+//! private runtime directory; `WOLF_SMOKE_JOBS=<n>` overrides the count, and `1` runs
+//! them one at a time.
 //!
 //! ```text
 //! nix develop --command cargo test -p wolf-gnome --test smoke_headless
@@ -403,8 +424,8 @@
 //!
 //! ## Requirements of the sixty cage smokes (from the devShell's smoke toolchain)
 //!
-//! - `cage` (headless wlroots compositor), `wtype`, `grim`, `tesseract` and
-//!   `wolf-pointer-inject` on `PATH`. The last one is NOT an upstream package: it is
+//! - `cage` (headless wlroots compositor), `dbus-run-session`, `wtype`, `grim`,
+//!   `tesseract` and `wolf-pointer-inject` on `PATH`. The last one is NOT an upstream package: it is
 //!   built from this repo's own `tools/wolf-pointer-inject/` by `flake.nix`, so
 //!   `command -v wolf-pointer-inject` succeeding can only mean the flake provided
 //!   it. Only the nine pointer-driven smokes use it, but it is required
@@ -416,7 +437,6 @@
 //!   project-search overlay an immediately-complete session with zero matches. See
 //!   [`require_smoke_env`], which fails loud rather than letting that surface as an
 //!   empty result list.
-//! - `XDG_RUNTIME_DIR` set and writable (the Wayland socket lives there).
 //!
 //! Per project policy every one of the sixty FAILS LOUD if any of the above is
 //! missing rather than silently skipping, mirroring `common::require_nvim_bin` — a
@@ -446,21 +466,152 @@ use wolf_gnome::{preview_coalescer::PREVIEW_TRAILING_DELAY, CellMetrics, WINDOW_
 /// so the full word — not just a prefix — can be asserted against OCR.
 const OCR_WORD: &str = "hello";
 
-/// Serializes the sixty cage smoke tests. Each launches its own
-/// `cage` compositor, and two compositors started concurrently contend for the
-/// same Wayland socket under `XDG_RUNTIME_DIR` (lockfile error), failing both.
-/// Under the default multi-threaded test harness these tests would otherwise run
-/// in parallel, so each acquires this lock for its whole body to force serial
-/// execution. Poisoning is recovered from (`into_inner`) so one panicking test
-/// does not cascade into failing the others.
+/// The environment variable that sets how many cage smokes run at once. `1` runs
+/// them one at a time; unset, [`parse_smoke_jobs`] derives the default.
+const SMOKE_JOBS_ENV: &str = "WOLF_SMOKE_JOBS";
+
+/// Host threads per cage in the default job count: unset, [`SMOKE_JOBS_ENV`] is
+/// `available_parallelism / DEFAULT_SMOKE_JOBS_CPUS_PER_CAGE`, clamped to
+/// `1..=`[`DEFAULT_SMOKE_JOBS_CAP`].
 ///
-/// The nine pointer-driven smokes join this same lock rather than living in a file of
-/// their own: each `tests/*.rs` is a separate crate AND a separate PROCESS, so an
-/// in-process `static Mutex` cannot serialize across them at all, and
-/// `tests/common/mod.rs` is compiled separately into every integration-test binary,
-/// so a `static CAGE_LOCK` moved there would be N independent mutexes rather than
-/// one shared one — it would look like a fix and serialize nothing.
-static CAGE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+/// Each cage runs a compositor, a GTK app with WebKit, a captive Neovim and, after
+/// the scenario, `tesseract`, and every scenario waits on fixed settles that load
+/// stretches. The per-cage share and the cap come from measurement; the table is in
+/// [`DEFAULT_SMOKE_JOBS_CAP`]'s doc.
+const DEFAULT_SMOKE_JOBS_CPUS_PER_CAGE: usize = 2;
+
+/// The most cages the default runs at once, whatever the host.
+///
+/// Measured on the 32-thread development host (AMD Ryzen AI MAX+ 395), full
+/// `smoke_headless` runs at each `WOLF_SMOKE_JOBS`, every one `73 passed`:
+///
+/// | jobs | `finished in` | process user time |
+/// | --- | --- | --- |
+/// | 1 | 543.2 s | 73.4 s |
+/// | 2 | 280.3 s | 67.8 s |
+/// | 4 | 137.4 s | 64.9 s |
+/// | 8 | 77.1 s, 75.1 s | 65.6 s, 65.1 s |
+/// | 12 | 76.0 s, 70.5 s | 65.2 s, 66.1 s |
+/// | 16 | 65.2 s, 64.2 s | 66.5 s, 65.4 s |
+///
+/// The default is the smallest count whose mean of two runs is within about 10 % of
+/// the best mean, with no failure: 16 (64.7 s against 73.3 s at 12), so the pair
+/// gives 16 on that host. Past 8 the wall time is
+/// bounded by the slowest smokes rather than by the slots. The user time is the
+/// harness's own reaped children and undercounts the killed apps, so it shows only
+/// that the work does not grow with concurrency.
+const DEFAULT_SMOKE_JOBS_CAP: usize = 16;
+
+/// The cage-slot count for a [`SMOKE_JOBS_ENV`] value `raw` (`None` when unset) on
+/// a host with `parallelism` threads.
+///
+/// An explicit value is trimmed and must be at least 1. It is deliberately not
+/// capped: the cap shapes the default only, and a stress run needs to go past it.
+/// `0` is an error rather than "the default", because zero slots would block every
+/// smoke in [`CageSlots::acquire`] with nothing reported.
+///
+/// **Gotcha:** the lack of a cap has a practical ceiling. Each running cage takes one
+/// X display number for its Xwayland, and wlroots tries only about 33 of them, so a
+/// value much above about 30 can leave a cage's Xwayland with no display to start
+/// on. 24 is the largest value measured green.
+fn parse_smoke_jobs(raw: Option<&str>, parallelism: usize) -> Result<usize, String> {
+    let Some(raw) = raw else {
+        return Ok(
+            (parallelism / DEFAULT_SMOKE_JOBS_CPUS_PER_CAGE).clamp(1, DEFAULT_SMOKE_JOBS_CAP)
+        );
+    };
+    match raw.trim().parse::<usize>() {
+        Ok(jobs) if jobs >= 1 => Ok(jobs),
+        Ok(_) => Err(format!(
+            "{SMOKE_JOBS_ENV}={raw:?} admits no cage at all; it must be at least 1 (1 runs the \
+             cage smokes one at a time)"
+        )),
+        Err(e) => Err(format!(
+            "{SMOKE_JOBS_ENV}={raw:?} is not a whole number of cage slots ({e}); unset it for the \
+             default, or set 1 to run the cage smokes one at a time"
+        )),
+    }
+}
+
+/// This process's cage-slot count: [`SMOKE_JOBS_ENV`] through [`parse_smoke_jobs`],
+/// read once. Panics with the parse error when the variable is set but unusable.
+fn smoke_jobs() -> usize {
+    static JOBS: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *JOBS.get_or_init(|| {
+        let raw = match std::env::var(SMOKE_JOBS_ENV) {
+            Ok(raw) => Some(raw),
+            Err(std::env::VarError::NotPresent) => None,
+            Err(e) => panic!("{SMOKE_JOBS_ENV} is unreadable: {e}"),
+        };
+        let parallelism = std::thread::available_parallelism().map_or(1, usize::from);
+        parse_smoke_jobs(raw.as_deref(), parallelism).unwrap_or_else(|e| panic!("{e}"))
+    })
+}
+
+/// A counting semaphore over the cage smokes.
+///
+/// **Decisions**
+///
+/// - It is per process. Two `cargo test` invocations each size their slots for the
+///   whole host, so running them at once oversubscribes it; nothing here can bound
+///   across them, which is why the docs still say not to overlap runs.
+/// - A smoke holds its slot for its whole body, OCR included, because `tesseract`
+///   competes for the same cores as the next cage's fixed settles.
+/// - Concurrency is `min(`[`SMOKE_JOBS_ENV`]`, --test-threads)`: libtest's own
+///   thread pool is the outer bound, and a slot only throttles below it.
+/// - A poisoned mutex is recovered with `into_inner`, so one panicking smoke does
+///   not fail the rest; the counter is only ever changed under the lock.
+struct CageSlots {
+    /// Holders inside.
+    running: std::sync::Mutex<usize>,
+    freed: std::sync::Condvar,
+}
+
+impl CageSlots {
+    const fn new() -> Self {
+        Self {
+            running: std::sync::Mutex::new(0),
+            freed: std::sync::Condvar::new(),
+        }
+    }
+
+    /// Blocks until fewer than `limit` slots are held, and holds one until the
+    /// returned guard drops.
+    fn acquire(&self, limit: usize) -> CageSlotGuard<'_> {
+        let running = self
+            .running
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut running = self
+            .freed
+            .wait_while(running, |running| *running >= limit)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *running += 1;
+        CageSlotGuard { slots: self }
+    }
+}
+
+/// One held slot of a [`CageSlots`]; dropping it frees the slot and wakes every
+/// waiter.
+struct CageSlotGuard<'a> {
+    slots: &'a CageSlots,
+}
+
+impl Drop for CageSlotGuard<'_> {
+    fn drop(&mut self) {
+        let mut running = self
+            .slots
+            .running
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *running -= 1;
+        drop(running);
+        self.slots.freed.notify_all();
+    }
+}
+
+/// The cage slots every smoke in this process takes through [`require_smoke_env`].
+static CAGE_SLOTS: CageSlots = CageSlots::new();
 
 /// Font size (points) handed to the app via `WOLF_FONT_PT`. Larger than the
 /// interactive default so the rendered glyphs are big enough for `tesseract` to
@@ -2472,7 +2623,14 @@ const WEIGHT_SUM_EPS: f64 = 1e-9;
 /// required unconditionally, not just by the nine pointer-driven smokes: a devShell missing
 /// it is an unprovisioned devShell, and the project policy is to fail loud rather
 /// than let the gate pass green while proving less than it claims.
-const REQUIRED_TOOLS: [&str; 5] = ["cage", "wtype", "grim", "tesseract", "wolf-pointer-inject"];
+const REQUIRED_TOOLS: [&str; 6] = [
+    "cage",
+    "dbus-run-session",
+    "wtype",
+    "grim",
+    "tesseract",
+    "wolf-pointer-inject",
+];
 
 /// Confirms `tool` resolves on `PATH` (via `command -v`). Returns true if found.
 fn tool_on_path(tool: &str) -> bool {
@@ -2484,10 +2642,15 @@ fn tool_on_path(tool: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Panics with an actionable message unless every smoke precondition holds:
-/// the five compositor/OCR/pointer tools are on `PATH`, `WOLF_NVIM_BIN` and
-/// `WOLF_RG_BIN` are set, and `XDG_RUNTIME_DIR` is set and writable. Returns the
-/// resolved `XDG_RUNTIME_DIR`.
+/// Takes one of this process's [`CAGE_SLOTS`] (blocking until one is free), then
+/// panics with an actionable message unless every smoke precondition holds: the six
+/// [`REQUIRED_TOOLS`] are on `PATH`, and `WOLF_NVIM_BIN` and `WOLF_RG_BIN`
+/// are set. Returns the smoke's [`CageRuntime`]: its slot plus a fresh private runtime
+/// directory, which every capture and readback path is joined onto and which
+/// [`cage_command`] hands the cage as `XDG_RUNTIME_DIR`.
+///
+/// Bind the result to a named variable for the whole body; `let _ =` drops it at
+/// once, freeing the slot and deleting the directory.
 ///
 /// Both binary variables are checked here, for every smoke, rather than only in the
 /// smokes that need them. `cage_command` inherits this process's environment, so a
@@ -2496,7 +2659,9 @@ fn tool_on_path(tool: &str) -> bool {
 /// panic and does not block on an unset `WOLF_RG_BIN` — it hands back a session that
 /// is already complete with zero matches. Checking unconditionally is what turns
 /// "the result list stayed empty" into "the devShell was not entered".
-fn require_smoke_env() -> PathBuf {
+fn require_smoke_env() -> CageRuntime<'static> {
+    let slot = CAGE_SLOTS.acquire(smoke_jobs());
+
     let missing: Vec<&str> = REQUIRED_TOOLS
         .iter()
         .copied()
@@ -2505,8 +2670,8 @@ fn require_smoke_env() -> PathBuf {
     assert!(
         missing.is_empty(),
         "wolf-gnome headless smoke test: missing required tool(s) {missing:?} on PATH. \
-         These are provided by the flake devShell smoke toolchain (cage, wtype, grim, \
-         tesseract, wolf-pointer-inject). Run via `nix develop --command cargo test -p \
+         These are provided by the flake devShell smoke toolchain (cage, dbus-run-session, \
+         wtype, grim, tesseract, wolf-pointer-inject). Run via `nix develop --command cargo test -p \
          wolf-gnome`. Note that `wolf-pointer-inject` is built from this repo's own \
          `tools/wolf-pointer-inject/` by flake.nix, NOT from nixpkgs — if it alone is \
          missing, the devShell is stale, so re-enter `nix develop`."
@@ -2536,27 +2701,7 @@ fn require_smoke_env() -> PathBuf {
         ),
     }
 
-    let runtime_dir = match std::env::var("XDG_RUNTIME_DIR") {
-        Ok(v) if !v.trim().is_empty() => PathBuf::from(v),
-        _ => panic!(
-            "wolf-gnome headless smoke test: XDG_RUNTIME_DIR is not set (or empty). The \
-             headless Wayland socket lives there; the flake devShell smoke env should export \
-             it (defaulting to a mktemp dir if unset)."
-        ),
-    };
-    let meta = std::fs::metadata(&runtime_dir).unwrap_or_else(|e| {
-        panic!(
-            "wolf-gnome headless smoke test: XDG_RUNTIME_DIR {} is not accessible: {e}",
-            runtime_dir.display()
-        )
-    });
-    assert!(
-        meta.is_dir() && !meta.permissions().readonly(),
-        "wolf-gnome headless smoke test: XDG_RUNTIME_DIR {} must be a writable directory.",
-        runtime_dir.display()
-    );
-
-    runtime_dir
+    CageRuntime::fresh(slot)
 }
 
 /// The whole interactive scenario, run as a single `sh -c` string INSIDE `cage`
@@ -5657,8 +5802,8 @@ exit 0
 // sessions survive one, and the window title renders the working directory.
 //
 // The four relaunch smokes run TWO app launches inside ONE `cage` instance — one
-// scenario string with two sequential `"$WOLF_BIN" &` blocks — so `CAGE_LOCK`
-// semantics are unchanged and no second compositor is ever started. Three of them
+// scenario string with two sequential `"$WOLF_BIN" &` blocks — so each holds one
+// cage slot and no second compositor is ever started. Three of them
 // share this exit-code vocabulary, which is documented once here and referenced
 // from each scenario; the divider one keeps `POINTER_PREAMBLE`'s codes for the
 // helper functions it copies and renumbers these, so it carries its own table:
@@ -6979,13 +7124,11 @@ exit 0
 //
 // ## The second window is opened from INSIDE the one process, and it must be
 //
-// `cage_command` REMOVES `DBUS_SESSION_BUS_ADDRESS`, so a second `wolf-gnome`
-// launched under the same compositor never reaches the first through the
-// single-instance D-Bus path: it becomes its own primary instance, with its own
-// `StateStore` over the same directory, which is the silent-clobber shape the
-// coordinator exists to prevent. Two processes would therefore prove the OPPOSITE
-// of this smoke's claim while looking identical from outside. The palette is the
-// route: Ctrl+Shift+P, `TWOWIN_NEW_WINDOW_QUERY`, Enter.
+// The subject is New Window: one process, one coordinator, one `StateStore`, two
+// windows. A second `wolf-gnome` launched under the same compositor would not reach
+// it: every cage has its own private `dbus-run-session` bus, so a second launch while
+// the first is alive hands off to it through single-instance activation, which
+// exercises the launch path instead of New Window. The palette is the route: Ctrl+Shift+P, `TWOWIN_NEW_WINDOW_QUERY`, Enter.
 //
 // ## Two projects, not one, and by construction
 //
@@ -7215,8 +7358,8 @@ sleep "$SETTLE"
 # accelerator (Ctrl+Shift+N is spent on win.new-buffer), so the palette, the primary
 # menu and :WolfNewWindow are its only routes -- and of those, the palette is the
 # only one this harness can drive. Launching the binary a second time is NOT an
-# alternative: cage_command removes DBUS_SESSION_BUS_ADDRESS, so a second process
-# becomes its own primary instance.
+# alternative: on the cage's own bus it hands off through single-instance
+# activation, which is the launch path rather than New Window.
 wtype -M ctrl -M shift -k p -m shift -m ctrl
 sleep "$SETTLE"
 wtype -- "$TWOWIN_NEW_WINDOW_QUERY"
@@ -8833,11 +8976,6 @@ const PREVIEW_CAP_FILLER: &str = concat!(
 
 /// This smoke's own frame-time report file, under the resolved `XDG_RUNTIME_DIR`
 /// rather than in the temp cwd, for the reason [`FRAME_STATS_FILE_NAME`] gives.
-///
-/// A SEPARATE path from that one rather than a shared one: the two smokes read the
-/// same instrument for opposite claims — that one requires `prev.render` to be
-/// absent — and one path would mean whichever ran first left evidence the other's
-/// [`clear_evidence`] deleted.
 const PREVIEW_FRAME_STATS_FILE_NAME: &str = "wolf_gnome_preview_frame_stats.txt";
 
 /// The bucket label assertion 12 sums, re-typed as a LITERAL.
@@ -9218,7 +9356,7 @@ exit 0
 //
 // A pointer smoke, and the only one whose click target is aimed at something WebKit
 // drew rather than at something this crate painted. It shares POINTER_PREAMBLE with
-// the six other `pointer_scenario` bodies and joins them on CAGE_LOCK.
+// the six other `pointer_scenario` bodies.
 //
 // ## Both fixtures live in a SUBDIRECTORY, and that is what arms a falsifier
 //
@@ -9826,17 +9964,27 @@ fn make_temp_cwd() -> PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .expect("system time is before the unix epoch")
         .as_nanos();
+    let seq = TEMP_CWD_SEQ.fetch_add(1, Ordering::Relaxed);
     // The UNIQUE part is the parent, and it is never rendered: `cage_command` makes
-    // it the app's `HOME`, so the title abbreviates it to `~`.
-    let parent = std::env::temp_dir().join(format!("{TEMP_CWD_PREFIX}{pid}-{nanos}"));
+    // it the app's `HOME`, so the title abbreviates it to `~`. Created
+    // non-recursively, so two smokes that ever computed the same name fail here
+    // rather than silently sharing one cwd.
+    let parent = std::env::temp_dir().join(format!("{TEMP_CWD_PREFIX}{pid}-{nanos}-{seq}"));
     let dir = parent.join(TEMP_CWD_BASENAME);
-    std::fs::create_dir_all(&dir)
-        .unwrap_or_else(|e| panic!("failed to create temp cwd {}: {e}", dir.display()));
+    for level in [&parent, &dir] {
+        std::fs::create_dir(level)
+            .unwrap_or_else(|e| panic!("failed to create temp cwd {}: {e}", level.display()));
+    }
     dir
 }
 
+/// Distinguishes the [`make_temp_cwd`] directories of one test process, which run
+/// concurrently and can read the same nanosecond clock value.
+static TEMP_CWD_SEQ: AtomicUsize = AtomicUsize::new(0);
+
 /// The fixed leading part of every [`make_temp_cwd`] directory's UNIQUE PARENT; the
-/// rest is the process id and a nanosecond timestamp, i.e. ASCII digits and `-` only.
+/// rest is the process id, a nanosecond timestamp and a sequence number, i.e. ASCII
+/// digits and `-` only.
 ///
 /// It is a named const rather than an inline literal because it is a FIXTURE with the
 /// same hazard as [`SIDEBAR_FILLER_FILES`]: the window title renders the app's working
@@ -10307,7 +10455,7 @@ fn smoke_shader_cache_dir() -> PathBuf {
 /// the XDG defaults, with the honest limitation written down: they are the right
 /// paths only while `$XDG_STATE_HOME` / `$XDG_DATA_HOME` are unset in the environment
 /// cage inherits, which is the case in this repo's devShell (`flake.nix` exports
-/// `XDG_DATA_DIRS` and `XDG_RUNTIME_DIR`, neither of these). On a host that DOES
+/// `XDG_DATA_DIRS`, neither of these). On a host that DOES
 /// export one, a leak lands outside the temp tree instead — where the sibling check on
 /// the developer's real state file catches it. The two checks are complementary and
 /// between them cover both cases.
@@ -10354,7 +10502,8 @@ const HOME_CONFIG_DIR_FALLBACK: &str = ".config/wolf";
 /// that does have the GTK 4 ibus module — a different NixOS configuration, or a
 /// future flake that pulls ibus in for some other reason — the entire suite's typing
 /// would silently reroute through an engine that cannot reach its daemon, because
-/// [`cage_command`] removes `DBUS_SESSION_BUS_ADDRESS`. **The attached context is
+/// the only bus a cage has is its own private one from `dbus-run-session`, where no
+/// engine runs. **The attached context is
 /// what makes the smokes' typing host-dependent at all, and this pin is what takes
 /// that back.**
 ///
@@ -10369,7 +10518,8 @@ const HOME_CONFIG_DIR_FALLBACK: &str = ".config/wolf";
 /// ## What the pin does NOT buy
 ///
 /// It makes no smoke evidence about any OUT-OF-PROCESS input method. None can be:
-/// this harness removes the session bus and the flake ships no engine. The pin
+/// the flake ships no input-method engine and no GTK 4 ibus module, so nothing on a
+/// cage's private bus could serve one. The pin
 /// documents that constraint instead of leaving it to the ambient environment, and
 /// [`ctrl_shift_s_saves_the_focused_buffer_to_disk_under_cage`]'s
 /// `GDK_DEBUG` note is the same species of per-smoke isolation.
@@ -10453,32 +10603,140 @@ wait_file_contains() {
 }
 "#;
 
-/// Distinguishes the readiness files of one test process's smokes.
-static SMOKE_READY_SEQ: AtomicUsize = AtomicUsize::new(0);
+/// Distinguishes the runtime directories of one test process's cages.
+static SMOKE_RUNTIME_SEQ: AtomicUsize = AtomicUsize::new(0);
 
-/// A fresh `WOLF_READY_FILE` path for one smoke, with any stale file (and its
-/// `.tmp`) removed.
+/// The fixed leading part of every [`CageRuntime`] directory's name; the rest is the
+/// process id and [`SMOKE_RUNTIME_SEQ`]. It deliberately does not start with
+/// [`TEMP_CWD_PREFIX`].
+const RUNTIME_DIR_PREFIX: &str = "wolf-smoke-rt-";
+
+/// The longest [`CageRuntime`] directory path, in bytes.
 ///
-/// Under `std::env::temp_dir()` rather than beside the cwd: the typed-`:cd` smoke
-/// re-roots the sidebar to the cwd's parent, where a file appearing mid-run would be
-/// drawn. The name deliberately does not start with [`TEMP_CWD_PREFIX`].
-fn smoke_ready_file() -> PathBuf {
-    let n = SMOKE_READY_SEQ.fetch_add(1, Ordering::Relaxed);
-    let path = std::env::temp_dir().join(format!("wolf-smoke-ready-{}-{n}", std::process::id()));
-    let mut tmp = path.clone().into_os_string();
-    tmp.push(".tmp");
-    let _ = std::fs::remove_file(&path);
-    let _ = std::fs::remove_file(PathBuf::from(tmp));
-    path
+/// Every socket a cage's tree makes under `XDG_RUNTIME_DIR` must fit a 108-byte
+/// `sun_path` (107 bytes plus the NUL). The longest measured under live cages,
+/// sampled every second across full runs at 1 to 16 jobs, is WebKit's
+/// `webkitgtk/a11y-proxy-XXXXXX`, 27 bytes past the directory; this leaves that plus
+/// its separator and an 8-byte margin. Under `nix develop` the directory is 45–46
+/// bytes.
+const RUNTIME_DIR_MAX_BYTES: usize = 71;
+
+/// The app's `WOLF_READY_FILE`, inside its cage's runtime directory.
+const READY_FILE_NAME: &str = "wolf-ready";
+
+/// Where [`cage_command`] sends the cage's stdout and stderr, inside its runtime
+/// directory: the scenario's own diagnostics, the app's `wolf-ready:` lines and the
+/// compositor's log.
+const CAGE_LOG_NAME: &str = "cage.log";
+
+/// How much of [`CAGE_LOG_NAME`] a failing smoke prints.
+const CAGE_LOG_TAIL_LINES: usize = 80;
+
+/// One smoke's cage slot plus the private `XDG_RUNTIME_DIR` its cage runs in.
+///
+/// It dereferences to that directory, which also holds the smoke's captures,
+/// readbacks, ready file and [`CAGE_LOG_NAME`].
+///
+/// **Decisions**
+///
+/// - A fresh mode-0700 directory per cage, created non-recursively so a name
+///   collision fails at construction. It separates each cage's Wayland socket,
+///   WebKit proxy sockets and runtime files; shared, two cages contend for one
+///   Wayland socket.
+/// - What blocks a launch from handing off to the developer's running `wolf-gnome`
+///   is [`cage_command`]'s `dbus-run-session`, not this directory. Measured with an
+///   `org.wolf.Wolf` owner live on `$XDG_RUNTIME_DIR/bus`: without the
+///   `XDG_RUNTIME_DIR` line the window smoke stays green and nothing reaches that
+///   bus; without the wrapper as well the launch hands off to the owner and exits 11.
+///   The directory is defence in depth: it holds no `bus`, so should the wrapper go,
+///   GIO's `$XDG_RUNTIME_DIR/bus` fallback finds nothing to hand off to.
+/// - Under `temp_dir()`, not beside the cwd: the typed-`:cd` smoke re-roots the
+///   sidebar to the cwd's parent, where a directory appearing mid-run is drawn.
+/// - Removed on drop when the smoke passed, which bounds the footprint of a full
+///   run; kept when it panicked, with its path and the tail of [`CAGE_LOG_NAME`]
+///   printed into the failure output.
+/// - [`cage_command`] takes it by reference, so no cage can be spawned without both
+///   a slot and a private directory.
+///
+/// **Gotcha:** bind it to a named variable for the whole body. `let _ =` drops it at
+/// once, freeing the slot and deleting the directory under the running cage.
+struct CageRuntime<'a> {
+    dir: PathBuf,
+    _slot: CageSlotGuard<'a>,
+}
+
+impl<'a> CageRuntime<'a> {
+    /// Creates the directory and takes ownership of `slot`. Panics if the path is
+    /// longer than [`RUNTIME_DIR_MAX_BYTES`] or already exists.
+    fn fresh(slot: CageSlotGuard<'a>) -> Self {
+        use std::os::unix::fs::DirBuilderExt;
+
+        let seq = SMOKE_RUNTIME_SEQ.fetch_add(1, Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("{RUNTIME_DIR_PREFIX}{}-{seq}", std::process::id()));
+        let len = dir.as_os_str().len();
+        assert!(
+            len <= RUNTIME_DIR_MAX_BYTES,
+            "the cage runtime directory {} is {len} bytes, over RUNTIME_DIR_MAX_BYTES \
+             ({RUNTIME_DIR_MAX_BYTES}), so the cage's Wayland socket under it would not fit a \
+             108-byte sun_path. It lives under TMPDIR ({}); point TMPDIR somewhere shorter.",
+            dir.display(),
+            std::env::temp_dir().display()
+        );
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&dir)
+            .unwrap_or_else(|e| {
+                panic!(
+                    "failed to create the cage runtime directory {}: {e}. It must be new: a \
+                     shared runtime directory is a shared Wayland socket and session-bus fallback.",
+                    dir.display()
+                )
+            });
+        Self { dir, _slot: slot }
+    }
+}
+
+impl std::ops::Deref for CageRuntime<'_> {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        &self.dir
+    }
+}
+
+impl Drop for CageRuntime<'_> {
+    fn drop(&mut self) {
+        if !std::thread::panicking() {
+            let _ = std::fs::remove_dir_all(&self.dir);
+            return;
+        }
+        let log_path = self.dir.join(CAGE_LOG_NAME);
+        let tail = match std::fs::read_to_string(&log_path) {
+            Ok(log) => {
+                let lines: Vec<&str> = log.lines().collect();
+                lines[lines.len().saturating_sub(CAGE_LOG_TAIL_LINES)..].join("\n")
+            }
+            Err(e) => format!("<could not read {}: {e}>", log_path.display()),
+        };
+        eprintln!(
+            "cage runtime directory kept for post-mortem: {}\n\
+             last {CAGE_LOG_TAIL_LINES} lines of {}:\n{tail}",
+            self.dir.display(),
+            log_path.display()
+        );
+    }
 }
 
 /// Builds the `cage` invocation every smoke runs its scenario through — and is the
 /// SINGLE place in this file where the compositor is ever spawned.
 ///
-/// It fixes the invocation (`cage -- sh -c <READINESS_PRELUDE><scenario>`, with `cwd`
+/// It fixes the invocation (`cage -- dbus-run-session -- sh -c
+/// <READINESS_PRELUDE><scenario>`, with `cwd`
 /// as the working directory, which is how the app comes to derive `CoreConfig.cwd`
-/// from it) plus the seven environment variables EVERY smoke must have — and the one
-/// it must NOT have:
+/// from it), its stdout and stderr (appended to the runtime's [`CAGE_LOG_NAME`], so
+/// parallel cages do not interleave), the eight environment variables EVERY smoke
+/// must have, and the four it must NOT have:
 ///
 /// * `WOLF_FONT_PT` = [`SMOKE_FONT_PT`] — a large font, so the rendered glyphs are
 ///   legible to `tesseract`, AND the exact number [`cell_metrics_for_smoke`]
@@ -10509,7 +10767,7 @@ fn smoke_ready_file() -> PathBuf {
 ///   smoke of a `cargo test` invocation, so mesa's shader cache is warm for all of
 ///   them but the first. It does NOT carry into the next invocation: the path is
 ///   under `TMPDIR`, which `nix develop --command` rewrites every time (measured; see
-///   that function). Of the five paths set here it is the only one that is
+///   that function). Of the six paths set here it is the only one that is
 ///   deliberately NOT per-smoke, and it is the direct counterweight to the `HOME` line above:
 ///   redirecting `HOME` also redirected `$HOME/.cache`, which made every launch
 ///   rebuild ~4.9 MB of shaders. A cold cache costs launch time spent in `wait_ready`,
@@ -10523,12 +10781,22 @@ fn smoke_ready_file() -> PathBuf {
 ///   comment before changing it: the pin is what stops the suite's typing becoming
 ///   host-dependent, and it does NOT make any smoke evidence about an
 ///   out-of-process input method.
-/// * `WOLF_READY_FILE` = [`smoke_ready_file`] — where the app writes its pid once its
-///   launch windows accept keystrokes, read by the `wait_ready` that
-///   [`READINESS_PRELUDE`] defines. The prelude is prepended to every scenario here,
-///   which is what lets no scenario carry its own copy and none forget it.
-/// * `DBUS_SESSION_BUS_ADDRESS` is REMOVED rather than set, and it is the only
-///   variable here that is. **A DANGLING one kills the app before its first frame**:
+/// * `XDG_RUNTIME_DIR` = the [`CageRuntime`]'s private directory, where the cage
+///   makes its Wayland socket and WebKit its proxy sockets. It holds no `bus`, which
+///   is defence in depth behind `dbus-run-session`, the thing that keeps a launch off
+///   the developer's session bus. See [`CageRuntime`].
+/// * `WOLF_READY_FILE` = [`READY_FILE_NAME`] inside that directory — where the app
+///   writes its pid once its launch windows accept keystrokes, read by the
+///   `wait_ready` that [`READINESS_PRELUDE`] defines. The prelude is prepended to
+///   every scenario here, which is what lets no scenario carry its own copy and none
+///   forget it.
+/// * `WAYLAND_DISPLAY`, `WAYLAND_SOCKET` and `DISPLAY` are REMOVED: each names the
+///   developer's own display. libwayland prefers `WAYLAND_SOCKET` over the
+///   `WAYLAND_DISPLAY` cage sets for its child, wlroots picks a nested backend from
+///   `WAYLAND_DISPLAY` wherever `WLR_BACKENDS` is unset, and with `DISPLAY` set GIO
+///   can autolaunch a session bus over X11.
+/// * `DBUS_SESSION_BUS_ADDRESS` is REMOVED rather than set. **A DANGLING one kills
+///   the app before its first frame**:
 ///   measured under `cage` in three cases, a path that does not exist is FATAL (the
 ///   proximate message on the measurement host is
 ///   `bwrap: Can't create file at /.flatpak-info: Permission denied`, from WebKit's
@@ -10540,6 +10808,20 @@ fn smoke_ready_file() -> PathBuf {
 ///   by luck: a developer whose session bus address points at a stale path would see
 ///   every one of them fail at launch (exit 11), reading as a launch failure in
 ///   whatever change happened to be in flight.
+///
+/// ## Why the scenario runs under `dbus-run-session`
+///
+/// It gives each cage exactly one session bus, private to it and gone when it exits.
+/// The app takes the address `dbus-run-session` sets and never looks for
+/// `$XDG_RUNTIME_DIR/bus`, so this wrapper is what keeps a launch from handing off to
+/// the developer's running `wolf-gnome` (measured; see [`CageRuntime`]). The preview
+/// needs a session bus too: measured, with no bus at all (a dead `bus` socket,
+/// `DBUS_SESSION_BUS_ADDRESS=disabled:`, or `DISPLAY` unset) the WebView draws blank
+/// after the live edit and the markdown-preview smoke fails every time. Without the
+/// wrapper GIO finds no address and autolaunches a bus through `dbus-launch` on the
+/// cage's own Xwayland `DISPLAY`, starting an Xwayland and a stray `dbus-daemon` per
+/// launch. The `env_remove`s above still apply to the cage itself;
+/// `dbus-run-session` sets its own address for `sh`.
 ///
 /// ## Why `HOME` is set, and why it is the cwd's parent
 ///
@@ -10588,8 +10870,8 @@ fn smoke_ready_file() -> PathBuf {
 /// respectively), so both keep the determinism property this default exists for.
 ///
 /// Callers chain only their own scenario-specific `.env(...)` / `.arg(...)`
-/// additions on top. Two per-smoke notes that used to live on the `WOLF_FONT_PT`
-/// line stay at their call sites: the vsplit / hsplit / three-pane smokes point at
+/// additions on top. Two per-smoke font notes live at their call sites rather than
+/// on the `WOLF_FONT_PT` line: the vsplit / hsplit / three-pane smokes point at
 /// the "Note (OCR width)" / "Note (OCR height)" paragraphs above their own consts,
 /// because if two or three panes are ever too narrow or too short for 28 pt OCR the
 /// fix is per-test (widen the window, or lower the font for THAT test) and must not
@@ -10597,10 +10879,23 @@ fn smoke_ready_file() -> PathBuf {
 ///
 /// [`cage_is_only_spawned_through_the_isolating_helper`] enforces the "single place"
 /// property mechanically, because a smoke that spawned the compositor directly would
-/// silently lose ALL SEVEN variables and the readiness prelude.
-fn cage_command(scenario: &str, cwd: &Path) -> Command {
+/// silently lose every variable above, the readiness prelude and the private runtime
+/// directory.
+fn cage_command(scenario: &str, cwd: &Path, runtime: &CageRuntime<'_>) -> Command {
+    let log_path = runtime.join(CAGE_LOG_NAME);
+    let log = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .unwrap_or_else(|e| panic!("failed to open the cage log {}: {e}", log_path.display()));
+    let log_err = log
+        .try_clone()
+        .unwrap_or_else(|e| panic!("failed to clone the cage log {}: {e}", log_path.display()));
     let mut cmd = Command::new("cage");
     cmd.arg("--")
+        // The cage's one private session bus, which dies with it.
+        .arg("dbus-run-session")
+        .arg("--")
         .arg("sh")
         .arg("-c")
         .arg(format!("{READINESS_PRELUDE}\n{scenario}"))
@@ -10614,14 +10909,22 @@ fn cage_command(scenario: &str, cwd: &Path) -> Command {
         // inherited: see `SMOKE_GTK_IM_MODULE` for the measurement and for what the
         // pin deliberately does NOT buy.
         .env("GTK_IM_MODULE", SMOKE_GTK_IM_MODULE)
+        // The cage's own Wayland socket, and no `bus` for GIO to fall back to.
+        .env("XDG_RUNTIME_DIR", &**runtime)
         // Where the app writes its pid once it accepts input; `wait_ready` in
         // `READINESS_PRELUDE` reads it.
-        .env("WOLF_READY_FILE", smoke_ready_file())
+        .env("WOLF_READY_FILE", runtime.join(READY_FILE_NAME))
         // Removed, never set: a DANGLING session-bus address kills the app before its
         // first frame under WebKit's mandatory sandbox. See the doc comment above for
         // the three measured cases and for why there is no way to disable the sandbox
         // instead.
-        .env_remove("DBUS_SESSION_BUS_ADDRESS");
+        .env_remove("DBUS_SESSION_BUS_ADDRESS")
+        // The developer's display, which nothing inside the cage may reach.
+        .env_remove("WAYLAND_DISPLAY")
+        .env_remove("WAYLAND_SOCKET")
+        .env_remove("DISPLAY")
+        .stdout(log)
+        .stderr(log_err);
     cmd
 }
 
@@ -10638,9 +10941,9 @@ const CAGE_SPAWN_NEEDLE: &str = concat!("Command::new(\"", "cage", "\")");
 
 /// Enforces mechanically that the compositor is spawned in exactly ONE place in this
 /// file — [`cage_command`] — which is the only thing that sets `WOLF_STATE_DIR`,
-/// `HOME`, `XDG_CACHE_HOME`, `GTK_IM_MODULE` and `WOLF_READY_FILE`, the only thing
-/// that prepends [`READINESS_PRELUDE`], and the only thing that CLEARS
-/// `DBUS_SESSION_BUS_ADDRESS`.
+/// `HOME`, `XDG_CACHE_HOME`, `GTK_IM_MODULE`, `WOLF_READY_FILE` and the private
+/// `XDG_RUNTIME_DIR`, the only thing that prepends [`READINESS_PRELUDE`], and the only
+/// thing that CLEARS `DBUS_SESSION_BUS_ADDRESS` and the host display variables.
 ///
 /// ## What an extra occurrence costs
 ///
@@ -10684,12 +10987,12 @@ const CAGE_SPAWN_NEEDLE: &str = concat!("Command::new(\"", "cage", "\")");
 /// input-method unit that context is what every printable keystroke travels
 /// through — the window offers each press to it before translating. On a host
 /// carrying the GTK 4 ibus module the typing in that smoke reroutes through an
-/// engine whose session bus this harness has deliberately removed, so keys are
-/// swallowed on that machine and nowhere else. See [`SMOKE_GTK_IM_MODULE`] for the
+/// engine whose daemon is not on the cage's private bus, so keys are swallowed on
+/// that machine and nowhere else. See [`SMOKE_GTK_IM_MODULE`] for the
 /// measurement and for why the value is named rather than the variable cleared.
 ///
-/// And a sixth, which is a REMOVAL rather than a setting and is the only one of the
-/// seven that can take the app down before it draws anything at all. A smoke that
+/// A sixth, which is a REMOVAL rather than a setting and is the only one of the
+/// eight that can take the app down before it draws anything at all. A smoke that
 /// spawns `cage` itself inherits the developer's `DBUS_SESSION_BUS_ADDRESS`, and a
 /// DANGLING one — a path that does not exist — is fatal under WebKit's mandatory
 /// bubblewrap sandbox (measured: non-existent path fatal, unset fine,
@@ -10699,10 +11002,18 @@ const CAGE_SPAWN_NEEDLE: &str = concat!("Command::new(\"", "cage", "\")");
 /// [`cage_command`]'s bullet for the measurement and for why the sandbox cannot
 /// simply be turned off.
 ///
-/// And a seventh, which fails loudly on every machine: the scenario loses
+/// A seventh, which fails loudly on every machine: the scenario loses
 /// [`READINESS_PRELUDE`] and `WOLF_READY_FILE` together, so its first `wait_ready`
 /// call exits 127 (no such command) — or, were the prelude copied in, `set -u` stops
 /// it at the unset `WOLF_READY_FILE`.
+///
+/// And an eighth, which passes where it should fail: without the `dbus-run-session`
+/// wrapper the scenario has no session bus of its own, so GIO finds the developer's
+/// at `$XDG_RUNTIME_DIR/bus` in the inherited runtime directory, the launch hands off
+/// to their running `wolf-gnome`, and the smoke drives that process instead of the one
+/// under test. The wrapper is what blocks that hand-off. Losing the private
+/// `XDG_RUNTIME_DIR` as well puts the cage's Wayland socket, WebKit proxy sockets and
+/// runtime files in the developer's directory beside every other parallel cage.
 ///
 /// ## Why the needle is built from fragments, and why that is load-bearing
 ///
@@ -10718,7 +11029,7 @@ const CAGE_SPAWN_NEEDLE: &str = concat!("Command::new(\"", "cage", "\")");
 /// So the count is asserted from BOTH sides: at least one (the guard is not vacuous)
 /// and at most one (the invariant holds).
 ///
-/// This test is PURE: no compositor, no `require_smoke_env`, no `CAGE_LOCK`, no
+/// This test is PURE: no compositor, no `require_smoke_env`, no cage slot, no
 /// subprocess — the same shape as
 /// [`sidebar_filler_names_cannot_satisfy_any_smoke_assertion`], and it runs in
 /// microseconds on a machine with no smoke toolchain at all.
@@ -10742,10 +11053,15 @@ fn cage_is_only_spawned_through_the_isolating_helper() {
         "expected exactly ONE occurrence of {CAGE_SPAWN_NEEDLE:?} in this file (the one inside \
          `cage_command`), found {occurrences}. Every extra one is a compositor spawned OUTSIDE \
          `cage_command` and therefore without `WOLF_STATE_DIR`, `WOLF_CONFIG_DIR`, `HOME`, \
-         `XDG_CACHE_HOME`, `GTK_IM_MODULE`, `WOLF_READY_FILE` or the readiness prelude, and \
-         WITH whatever `DBUS_SESSION_BUS_ADDRESS` the developer's session exported. Five of \
-         those losses are spelled out here: one is loud on every machine, one is fatal, two are \
-         destructive and one is host-dependent. Losing the prelude is the loud one: its \
+         `XDG_CACHE_HOME`, `GTK_IM_MODULE`, `WOLF_READY_FILE`, the readiness prelude, the \
+         `dbus-run-session` wrapper or its private `XDG_RUNTIME_DIR`, and WITH whatever \
+         `DBUS_SESSION_BUS_ADDRESS` and display the developer's session exported. Without the \
+         wrapper there is no private session bus, so GIO finds the developer's at \
+         `$XDG_RUNTIME_DIR/bus`, the launch hands off to their running wolf-gnome and the smoke \
+         drives the wrong process; without the private directory the cage's Wayland socket, \
+         WebKit proxy sockets and runtime files land in the developer's runtime directory \
+         beside every other parallel cage. Five more of those losses are spelled out here: one is loud \
+         on every machine, one is fatal, two are destructive and one is host-dependent. Losing the prelude is the loud one: its \
          `wait_ready` call exits 127 (or, with the prelude copied in, `set -u` stops at the \
          unset `WOLF_READY_FILE`). A DANGLING session-bus address is the fatal one: it kills the \
          app before its first frame under WebKit's mandatory sandbox, so that smoke exits 11 \
@@ -10762,9 +11078,631 @@ fn cage_is_only_spawned_through_the_isolating_helper() {
          every printable keystroke is offered to that context before it is translated — so on a \
          host carrying the GTK 4 ibus module the typing reroutes through an engine whose session \
          bus this harness removes, and the smoke fails on that machine and nowhere else. Route \
-         the new smoke through `cage_command(scenario, &cwd)` and chain only its own `.env(...)` \
+         the new smoke through `cage_command(scenario, &cwd, &runtime_dir)` and chain only its own `.env(...)` \
          additions on top; do not copy the helper's body."
     );
+}
+
+// ---------------------------------------------------------------------------
+// Guards over the cage slots and the private runtime directory each cage runs in.
+
+/// Every cage runs in a private runtime directory of its own, and nothing in its
+/// environment names the developer's session bus or display.
+///
+/// ## What it closes
+///
+/// A launch that reaches the developer's session bus hands off to their running
+/// `wolf-gnome` through single-instance activation. The smoke then drives the wrong
+/// process, and on a host with no `wolf-gnome` running it passes anyway, so a green
+/// run elsewhere proves nothing. The `dbus-run-session` wrapper (check 10) is what
+/// blocks that hand-off: it gives each cage a private session bus that dies with it.
+/// Measured with an `org.wolf.Wolf` owner live on the bus a cage would otherwise
+/// find: deleting only the `XDG_RUNTIME_DIR` line stays green with nothing reaching
+/// that bus, while removing the wrapper as well brings the full hand-off back.
+///
+/// The private runtime directory (checks 1 to 5) does a different job. Several cages
+/// run at once ([`CageSlots`]), and a directory two of them share holds one set of
+/// Wayland sockets, WebKit proxy sockets and runtime files for both. It is also
+/// defence in depth should the wrapper go: GIO's fallback without an address is
+/// `$XDG_RUNTIME_DIR/bus`, and the private directory offers none. Every property
+/// below is one `.env` line, one argument or one `DirBuilder` argument, far from any
+/// smoke that depends on it.
+///
+/// ## What it checks
+///
+/// It builds two [`CageRuntime`]s on a local [`CageSlots`] and reads, through
+/// `Command::get_envs`, the commands [`cage_command`] and [`packaged_cage_command`]
+/// build over them. There an `.env` shows as `(name, Some(value))`, an `.env_remove`
+/// as `(name, None)`, and an inherited variable not at all. Each falsifying edit
+/// below fires its own check and no earlier one.
+///
+/// - **Non-vacuity:** `HOME`, `WOLF_STATE_DIR` and `WOLF_CONFIG_DIR` are set, so the
+///   map really is the one [`cage_command`] builds.
+/// 1. `XDG_RUNTIME_DIR` is set to runtime A's directory, which differs from this
+///    process's own value. Falsify: delete `.env("XDG_RUNTIME_DIR", …)` from
+///    [`cage_command`].
+/// 2. Runtimes A and B have different directories, and B's command carries B's.
+///    Falsify: drop the sequence number from [`CageRuntime::fresh`]'s directory
+///    name. `fresh` itself then fails with `AlreadyExists` building B, which is the
+///    intended first line; adding `.recursive(true)` to its `DirBuilder` as well
+///    reaches this check's own message.
+/// 3. Each directory is a real directory (not a symlink), mode `0700`, owned by the
+///    temp cwd's owner. Falsify: `.mode(0o755)` in [`CageRuntime::fresh`].
+/// 4. Neither directory has a `bus` entry after its command is built. Falsify: in
+///    [`CageRuntime::fresh`], `std::fs::File::create(dir.join("bus"))`, or a symlink
+///    there to the developer's `/run/user/<uid>/bus`.
+/// 5. Each path is at most [`RUNTIME_DIR_MAX_BYTES`]. Falsify: set that const to
+///    `10`. `fresh`'s own length assertion fires first; with it deleted, this one
+///    does.
+/// 6. `DBUS_SESSION_BUS_ADDRESS` is removed. Falsify: delete its `.env_remove`.
+/// 7. `WAYLAND_DISPLAY`, `WAYLAND_SOCKET` and `DISPLAY` are each removed. Falsify:
+///    delete any one of the three `.env_remove`s; all missing ones are reported.
+/// 8. `WOLF_READY_FILE` lies inside its own runtime's directory, for A and B.
+///    Falsify: set it to `std::env::temp_dir().join(READY_FILE_NAME)`.
+/// 9. Both [`packaged_cage_command`] arms, [`GtkRuntimeEnv::Scrubbed`] and
+///    [`GtkRuntimeEnv::Inherited`], keep checks 1, 6 and 7. Falsify: add
+///    `"XDG_RUNTIME_DIR"` to [`PACKAGED_SCRUB_ALWAYS`].
+/// 10. [`cage_command`] and both [`packaged_cage_command`] arms pass `cage` exactly
+///     `--`, `dbus-run-session`, `--`, `sh`, `-c` and then one argument, the script,
+///     so every scenario runs under a private session bus that dies with its cage.
+///     Without it, GIO autolaunches a bus through the cage's own Xwayland `DISPLAY`;
+///     every neutralizer that leaves no bus at all (a dead `bus` socket,
+///     `DBUS_SESSION_BUS_ADDRESS=disabled:`, no `DISPLAY`) was measured to blank the
+///     preview's WebView. Falsify: drop `dbus-run-session` and its `--` from
+///     [`cage_command`].
+///
+/// ## The premise, and what it does not cover
+///
+/// `get_envs` and `get_args` report what the builder applies at spawn, which is what
+/// std documents for them. The guard spawns nothing, so what `cage` itself exports to
+/// its child (for example a `DISPLAY` from Xwayland) is outside its reach and is
+/// measured instead; check 10 pins the wrapper that gives that child its own bus
+/// whatever `cage` exports.
+///
+/// A semaphore broken so that two slots cannot be held at once hangs this guard in
+/// `acquire`; [`cage_slots_bound_concurrency`] is the guard that turns that into a
+/// failure.
+///
+/// ## What it needs
+///
+/// No compositor, no [`require_smoke_env`], no global cage slot and no subprocess.
+/// It writes a temp cwd and two runtime directories under `temp_dir()`; the runtimes
+/// remove theirs when dropped and the guard removes the cwd's parent, so a passing
+/// run leaves nothing behind.
+#[test]
+fn every_cage_gets_a_private_runtime_dir_and_no_host_session() {
+    const GUARD: &str = "every_cage_gets_a_private_runtime_dir_and_no_host_session";
+    // Re-typed rather than shared with `cage_command`, so renaming a variable there
+    // fails here instead of moving the check along with it.
+    const RUNTIME_VAR: &str = "XDG_RUNTIME_DIR";
+    const READY_VAR: &str = "WOLF_READY_FILE";
+    const BUS_VAR: &str = "DBUS_SESSION_BUS_ADDRESS";
+    const DISPLAY_VARS: [&str; 3] = ["WAYLAND_DISPLAY", "WAYLAND_SOCKET", "DISPLAY"];
+    const ISOLATION_VARS: [&str; 3] = ["HOME", "WOLF_STATE_DIR", "WOLF_CONFIG_DIR"];
+    // GIO's session-bus fallback, relative to `XDG_RUNTIME_DIR`.
+    const GIO_BUS_FALLBACK: &str = "bus";
+    // Room for both runtimes below to hold a slot at once.
+    const LOCAL_LIMIT: usize = 2;
+    // What `cage` must run, ahead of the script: a private session bus around `sh`.
+    const SESSION_WRAPPER: [&str; 5] = ["--", "dbus-run-session", "--", "sh", "-c"];
+
+    type EnvMap = std::collections::BTreeMap<std::ffi::OsString, Option<std::ffi::OsString>>;
+
+    fn env_map(cmd: &Command) -> EnvMap {
+        cmd.get_envs()
+            .map(|(name, value)| (name.to_owned(), value.map(OsStr::to_owned)))
+            .collect()
+    }
+
+    // How `name` reaches the child, in words a failure message can carry.
+    fn reach(envs: &EnvMap, name: &str) -> String {
+        match envs.get(OsStr::new(name)) {
+            None => format!(
+                "not mentioned, so the child INHERITS this process's value ({:?})",
+                std::env::var_os(name)
+            ),
+            Some(None) => "removed".to_owned(),
+            Some(Some(value)) => format!("SET to {value:?}"),
+        }
+    }
+
+    let local = CageSlots::new();
+    let cwd = make_temp_cwd();
+    let rt_a = CageRuntime::fresh(local.acquire(LOCAL_LIMIT));
+    let rt_b = CageRuntime::fresh(local.acquire(LOCAL_LIMIT));
+    let dir_a: &Path = &rt_a;
+    let dir_b: &Path = &rt_b;
+    let envs_a = env_map(&cage_command("true", &cwd, &rt_a));
+    let envs_b = env_map(&cage_command("true", &cwd, &rt_b));
+
+    // --- Non-vacuity: the map is the one `cage_command` builds ------------------
+    let unset: Vec<String> = ISOLATION_VARS
+        .into_iter()
+        .filter(|name| !matches!(envs_a.get(OsStr::new(name)), Some(Some(_))))
+        .map(|name| format!("{name}: {}", reach(&envs_a, name)))
+        .collect();
+    assert!(
+        unset.is_empty(),
+        "{GUARD}: the command `cage_command` built does not SET {unset:?}. Those are its own \
+         per-smoke isolation, set on every call, so either `get_envs` is not reading the command \
+         `cage_command` returned or that helper lost its isolation. Either way every check below \
+         would be judging the wrong environment; fix this first."
+    );
+
+    // --- Check 1: the cage gets its runtime's directory, not this process's -----
+    let want_a = Some(dir_a.as_os_str().to_owned());
+    assert_eq!(
+        envs_a.get(OsStr::new(RUNTIME_VAR)),
+        Some(&want_a),
+        "{GUARD}: check 1: {RUNTIME_VAR} is {}, where it must be SET to the CageRuntime's own \
+         directory {}. Inherited, the cage puts its Wayland socket, WebKit proxy sockets and \
+         runtime files in the developer's runtime directory beside every other parallel cage, \
+         and the only thing between the app and the developer's session bus at \
+         `$XDG_RUNTIME_DIR/bus` is the `dbus-run-session` wrapper: drop that too and a launch \
+         hands off to their running wolf-gnome, and the smoke drives the wrong process. Restore \
+         `.env(\"{RUNTIME_VAR}\", …)` in `cage_command`.",
+        reach(&envs_a, RUNTIME_VAR),
+        dir_a.display()
+    );
+    assert_ne!(
+        std::env::var_os(RUNTIME_VAR).as_deref(),
+        Some(dir_a.as_os_str()),
+        "{GUARD}: check 1: the CageRuntime's directory {} IS this test process's own \
+         {RUNTIME_VAR}. A cage there shares the developer's Wayland socket directory and runtime \
+         files, and loses the defence in depth against a hand-off that the private directory \
+         gives should the `dbus-run-session` wrapper go: the developer's `bus` sits right there \
+         for GIO's fallback. `CageRuntime::fresh` must create a new directory under `temp_dir()`, never \
+         reuse the inherited one.",
+        dir_a.display()
+    );
+
+    // --- Check 2: one directory per cage ---------------------------------------
+    assert_ne!(
+        dir_a,
+        dir_b,
+        "{GUARD}: check 2: two CageRuntimes built back to back share the directory {}. Two cages \
+         running at once would then share one Wayland socket directory (the second `cage` fails \
+         on the first's lockfile) plus every capture, readback and ready file under it. \
+         `CageRuntime::fresh` must name each directory uniquely, with the pid and a process-wide \
+         sequence, and create it non-recursively so a collision fails at construction.",
+        dir_a.display()
+    );
+    let want_b = Some(dir_b.as_os_str().to_owned());
+    assert_eq!(
+        envs_b.get(OsStr::new(RUNTIME_VAR)),
+        Some(&want_b),
+        "{GUARD}: check 2: the command built over the SECOND CageRuntime has {RUNTIME_VAR} {}, \
+         not that runtime's own directory {}. `cage_command` must read the directory from the \
+         runtime it is handed, never from a cached or shared value, or every parallel cage lands \
+         in one directory again.",
+        reach(&envs_b, RUNTIME_VAR),
+        dir_b.display()
+    );
+
+    // --- Check 3: a real 0700 directory owned by this user ---------------------
+    let cwd_meta = std::fs::metadata(&cwd).unwrap_or_else(|e| {
+        panic!(
+            "{GUARD}: could not stat the temp cwd {} that `make_temp_cwd` just created: {e}",
+            cwd.display()
+        )
+    });
+    let cwd_uid = std::os::unix::fs::MetadataExt::uid(&cwd_meta);
+    for dir in [dir_a, dir_b] {
+        let meta = std::fs::symlink_metadata(dir).unwrap_or_else(|e| {
+            panic!(
+                "{GUARD}: check 3: could not stat the runtime directory {}: {e}. It must exist from \
+                 `CageRuntime::fresh` until the runtime is dropped.",
+                dir.display()
+            )
+        });
+        let mode = std::os::unix::fs::MetadataExt::mode(&meta) & 0o777;
+        let uid = std::os::unix::fs::MetadataExt::uid(&meta);
+        let kind = if meta.is_dir() {
+            "a directory"
+        } else if meta.file_type().is_symlink() {
+            "a SYMLINK"
+        } else {
+            "NOT a directory"
+        };
+        assert!(
+            meta.is_dir() && mode == 0o700 && uid == cwd_uid,
+            "{GUARD}: check 3: the runtime directory {} is {kind} with mode {mode:o}, owned by uid \
+             {uid}. It must be a real directory, mode 700, owned by uid {cwd_uid} (the owner of \
+             the temp cwd). A symlink puts the cage's socket and the GIO bus fallback wherever it \
+             points; a wider mode lets another user connect to the cage's Wayland socket and read \
+             its captures, against the XDG base-directory spec's 0700. Create it with \
+             `DirBuilder::new().mode(0o700)`.",
+            dir.display()
+        );
+    }
+
+    // --- Check 4: no `bus` for GIO to fall back to -----------------------------
+    for dir in [dir_a, dir_b] {
+        let fallback = dir.join(GIO_BUS_FALLBACK);
+        match std::fs::symlink_metadata(&fallback) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            found => panic!(
+                "{GUARD}: check 4: the runtime directory {} has an entry at {} ({found:?}), where it \
+                 must have none. Inside the cage `dbus-run-session` sets {BUS_VAR} to its own \
+                 private bus, so this entry is not consulted while that wrapper is in place. The \
+                 check is the defence in depth for when it is not: with no address set, GIO \
+                 connects to `$XDG_RUNTIME_DIR/bus`, so this entry would decide which session bus \
+                 the app joins, and a socket or link reaching the developer's bus would hand the \
+                 launch off to their running wolf-gnome, leaving the smoke driving the wrong \
+                 process.",
+                dir.display(),
+                fallback.display()
+            ),
+        }
+    }
+
+    // --- Check 5: short enough for every socket under it -----------------------
+    for dir in [dir_a, dir_b] {
+        let len = dir.as_os_str().len();
+        assert!(
+            len <= RUNTIME_DIR_MAX_BYTES,
+            "{GUARD}: check 5: the runtime directory {} is {len} bytes, over RUNTIME_DIR_MAX_BYTES \
+             ({RUNTIME_DIR_MAX_BYTES}). Every socket made under it, the cage's Wayland socket first, \
+             must fit a 108-byte `sun_path`, and that limit was measured from the longest one under \
+             a live cage. Past it, binding fails and the cage or the app dies at startup. A long \
+             TMPDIR is the usual cause; shorten it rather than raising the limit.",
+            dir.display()
+        );
+    }
+
+    // --- Check 6: no session-bus address ---------------------------------------
+    assert_eq!(
+        envs_a.get(OsStr::new(BUS_VAR)),
+        Some(&None),
+        "{GUARD}: check 6: {BUS_VAR} is {}, where it must be REMOVED. Inherited, the app joins \
+         the developer's session bus and hands off to their running wolf-gnome; a DANGLING \
+         inherited address kills the app before its first frame under WebKit's sandbox (see \
+         `cage_command`). Restore its `.env_remove`.",
+        reach(&envs_a, BUS_VAR)
+    );
+
+    // --- Check 7: no host display ----------------------------------------------
+    let leaked: Vec<String> = DISPLAY_VARS
+        .into_iter()
+        .filter(|name| envs_a.get(OsStr::new(name)) != Some(&None))
+        .map(|name| format!("{name}: {}", reach(&envs_a, name)))
+        .collect();
+    assert!(
+        leaked.is_empty(),
+        "{GUARD}: check 7: {leaked:?}. Each must be REMOVED from the cage's environment, because \
+         each names the developer's own display to a process that must only ever see the cage's: \
+         libwayland prefers WAYLAND_SOCKET over the WAYLAND_DISPLAY cage sets for its child, \
+         wlroots picks a nested backend from WAYLAND_DISPLAY wherever WLR_BACKENDS is not pinned, \
+         and with DISPLAY set GIO can autolaunch or find a session bus over X11. Restore the \
+         missing `.env_remove`s in `cage_command`."
+    );
+
+    // --- Check 8: the ready file belongs to its own cage -----------------------
+    for (envs, dir) in [(&envs_a, dir_a), (&envs_b, dir_b)] {
+        let ready = match envs.get(OsStr::new(READY_VAR)) {
+            Some(Some(value)) => Some(Path::new(value)),
+            _ => None,
+        };
+        assert!(
+            ready.is_some_and(|path| path.starts_with(dir) && path != dir),
+            "{GUARD}: check 8: {READY_VAR} is {}, which is not a file inside this cage's runtime \
+             directory {}. Outside it nothing ties the file to this cage: a path another cage can \
+             also name lets that cage's app satisfy this cage's `wait_ready`, so input starts \
+             before this app accepts it, and the file outlives the runtime directory's cleanup.",
+            reach(envs, READY_VAR),
+            dir.display()
+        );
+    }
+
+    // --- Check 9: the packaged smokes keep all of it ---------------------------
+    let mut undone = Vec::new();
+    for arm in [GtkRuntimeEnv::Scrubbed, GtkRuntimeEnv::Inherited] {
+        let envs = env_map(&packaged_cage_command("true", &cwd, &rt_a, arm));
+        if envs.get(OsStr::new(RUNTIME_VAR)) != Some(&want_a) {
+            undone.push(format!(
+                "{arm:?}: {RUNTIME_VAR} is {}",
+                reach(&envs, RUNTIME_VAR)
+            ));
+        }
+        for name in std::iter::once(BUS_VAR).chain(DISPLAY_VARS) {
+            if envs.get(OsStr::new(name)) != Some(&None) {
+                undone.push(format!("{arm:?}: {name} is {}", reach(&envs, name)));
+            }
+        }
+    }
+    assert!(
+        undone.is_empty(),
+        "{GUARD}: check 9: `packaged_cage_command` undoes the cage isolation: {undone:#?}\n\
+         Every packaged smoke runs the STORE binary, which is the binary a developer also has \
+         installed and running, so a packaged cage that reaches the developer's runtime directory \
+         or display hands its launch off to that running copy and passes against the wrong \
+         process. Either a name in PACKAGED_SCRUB_ALWAYS, PACKAGED_SCRUB_GTK_RUNTIME or \
+         PACKAGED_SCRUB_FONT_STACK is one of these isolation variables (take it off: the scrub \
+         lists hold devShell exports, never harness isolation), or `packaged_cage_command` no \
+         longer builds on `cage_command` with the runtime it was handed."
+    );
+
+    // --- Check 10: every scenario runs under its cage's own session bus --------
+    let mut argvs: Vec<(String, Vec<std::ffi::OsString>)> = vec![(
+        "cage_command".to_owned(),
+        cage_command("true", &cwd, &rt_a)
+            .get_args()
+            .map(OsStr::to_owned)
+            .collect(),
+    )];
+    for arm in [GtkRuntimeEnv::Scrubbed, GtkRuntimeEnv::Inherited] {
+        argvs.push((
+            format!("packaged_cage_command({arm:?})"),
+            packaged_cage_command("true", &cwd, &rt_a, arm)
+                .get_args()
+                .map(OsStr::to_owned)
+                .collect(),
+        ));
+    }
+    let unwrapped: Vec<String> = argvs
+        .iter()
+        .filter(|(_, args)| {
+            args.len() != SESSION_WRAPPER.len() + 1
+                || !args
+                    .iter()
+                    .zip(SESSION_WRAPPER)
+                    .all(|(arg, want)| arg.as_os_str() == OsStr::new(want))
+        })
+        // The last argument is the whole readiness prelude plus the scenario, so only
+        // the leading ones and the count are printed.
+        .map(|(builder, args)| {
+            let head: Vec<_> = args.iter().take(SESSION_WRAPPER.len()).collect();
+            format!("{builder}: {} args, starting {head:?}", args.len())
+        })
+        .collect();
+    assert!(
+        unwrapped.is_empty(),
+        "{GUARD}: check 10: these commands do not pass `cage` exactly {SESSION_WRAPPER:?} \
+         followed by the one script argument: {unwrapped:#?}\n\
+         Without `dbus-run-session` around `sh`, each cage's scenario has no session bus of its \
+         own. That wrapper is what blocks a launch from handing off to the developer's running \
+         wolf-gnome; without it GIO finds a bus some other way, autolaunching one through the \
+         cage's own Xwayland `DISPLAY` (a stray `dbus-daemon` and an Xwayland start per launch), \
+         and wherever that route is closed the preview's WebView finds no session bus and draws \
+         blank, so the preview smokes fail with their body text missing. Any other argument count means the script is no longer the \
+         single `sh -c` argument, so `sh` would run something other than the readiness prelude \
+         plus the scenario. Restore `--`, `dbus-run-session`, `--` ahead of `sh -c` in \
+         `cage_command`."
+    );
+
+    if let Some(parent) = cwd.parent() {
+        let _ = std::fs::remove_dir_all(parent);
+    }
+}
+
+/// [`parse_smoke_jobs`] honours `WOLF_SMOKE_JOBS`, and [`CageSlots`] never admits
+/// more cages than its limit.
+///
+/// ## What it closes
+///
+/// The cage slots are the only thing between the smokes and an oversubscribed host.
+/// A semaphore that admits one cage too many passes on an idle machine and stretches
+/// every fixed settle on a loaded one, so its failures arrive as scattered flakes in
+/// unrelated smokes rather than as a failure naming it. A parse that drops the
+/// override, or accepts `0`, either ignores the knob the docs give for serial runs or
+/// blocks every smoke forever.
+///
+/// ## What it checks
+///
+/// **(a) The parse**, as a table. `(Some("1"), 32)` is `Ok(1)`. `(Some(" 12 "), 32)`
+/// is `Ok(12)`, above the cap; falsify with `.min(DEFAULT_SMOKE_JOBS_CAP)` on the
+/// override. `(None, 32)` is the value computed from
+/// [`DEFAULT_SMOKE_JOBS_CPUS_PER_CAGE`] and [`DEFAULT_SMOKE_JOBS_CAP`], which is
+/// also asserted to be the literal `16`, the default measured on that 32-thread host;
+/// falsify by re-tuning either constant without the measurement. `(None, 12)` is
+/// computed the same way and catches a default that ignores `parallelism` or divides
+/// by another number; falsify with `None => Ok(DEFAULT_SMOKE_JOBS_CAP)`. `(None, 1)`
+/// and `(None, 3)` are `1`; falsify by removing the clamp's lower bound. `"0"`, `""`,
+/// `"x"` and `"-1"` are each an `Err`; falsify by accepting `0`.
+///
+/// **(b) The bound**, at limits 1 and 3. Six threads contend for one local
+/// [`CageSlots`]. Each holder waits, under a deadline, until every thread has arrived
+/// and the run is full (or everyone has been admitted), then keeps its slot a moment
+/// longer so that a semaphore admitting one more has the time to do it. The most
+/// holders ever inside at once must equal the limit exactly. Falsify: in the wait
+/// predicate of `acquire`, change `running >= limit` to `running > limit`. A
+/// semaphore that admits fewer than its limit, or never wakes a waiter, fails on a
+/// holder's deadline or on the overall one instead.
+///
+/// ## Timing
+///
+/// Every blocking wait here ends at a deadline, and every thread that could block in
+/// a broken `acquire` is abandoned rather than joined, so a broken semaphore fails
+/// loudly instead of hanging the suite; that is why the slots are leaked to
+/// `'static`. The extra hold only widens the window for an over-admission: a correct
+/// semaphore can never exceed its limit, however long the hold.
+///
+/// ## What it needs
+///
+/// No compositor, no [`require_smoke_env`], no global cage slot, no subprocess and no
+/// environment: it builds its own [`CageSlots`] and uses only std threads.
+#[test]
+fn cage_slots_bound_concurrency() {
+    use std::sync::{mpsc, Arc};
+    use std::time::Instant;
+
+    const GUARD: &str = "cage_slots_bound_concurrency";
+    // The host the default was measured on, and the default measured there.
+    const MEASUREMENT_HOST_THREADS: usize = 32;
+    const EXPECT_DEFAULT_JOBS_ON_MEASUREMENT_HOST: usize = 16;
+    // A host between the clamp's two bounds, where the division itself decides.
+    const MID_HOST_THREADS: usize = 12;
+    // Contenders per bound run: more than either limit, so some always wait.
+    const CONTENDERS: usize = 6;
+    // Every blocking wait in this guard ends here.
+    const DEADLINE: Duration = Duration::from_secs(5);
+    // How long a holder keeps its slot once the run is full.
+    const OVERADMIT_WINDOW: Duration = Duration::from_millis(100);
+
+    // --- (a) The WOLF_SMOKE_JOBS parse ------------------------------------------
+    let default_on_host = (MEASUREMENT_HOST_THREADS / DEFAULT_SMOKE_JOBS_CPUS_PER_CAGE)
+        .clamp(1, DEFAULT_SMOKE_JOBS_CAP);
+    assert_eq!(
+        default_on_host, EXPECT_DEFAULT_JOBS_ON_MEASUREMENT_HOST,
+        "{GUARD}: (a) DEFAULT_SMOKE_JOBS_CPUS_PER_CAGE ({DEFAULT_SMOKE_JOBS_CPUS_PER_CAGE}) and \
+         DEFAULT_SMOKE_JOBS_CAP ({DEFAULT_SMOKE_JOBS_CAP}) give {default_on_host} cage slots on \
+         the {MEASUREMENT_HOST_THREADS}-thread host the default was measured on, but the measured \
+         default there is {EXPECT_DEFAULT_JOBS_ON_MEASUREMENT_HOST}. A constant moved without a \
+         measurement. If a new measurement moved the default, update this literal together with \
+         the table in those constants' doc comment."
+    );
+    let ok_rows: [(Option<&str>, usize, usize, &str); 6] = [
+        (Some("1"), MEASUREMENT_HOST_THREADS, 1, "an explicit 1 is the serial run"),
+        (
+            Some(" 12 "),
+            MEASUREMENT_HOST_THREADS,
+            12,
+            "an explicit value is trimmed and is NOT capped at DEFAULT_SMOKE_JOBS_CAP: the cap \
+             shapes the default only, and capping the override silently refuses a stress run",
+        ),
+        (
+            None,
+            MEASUREMENT_HOST_THREADS,
+            default_on_host,
+            "unset, the default is one cage per DEFAULT_SMOKE_JOBS_CPUS_PER_CAGE threads, capped",
+        ),
+        (
+            None,
+            MID_HOST_THREADS,
+            (MID_HOST_THREADS / DEFAULT_SMOKE_JOBS_CPUS_PER_CAGE).clamp(1, DEFAULT_SMOKE_JOBS_CAP),
+            "the default scales with the host, so one that ignores `parallelism`, or divides it by \
+             another number, answers something else here",
+        ),
+        (
+            None,
+            1,
+            1,
+            "a one-thread host still runs one cage: without the clamp's lower bound the default \
+             is 0 and every smoke blocks in `acquire` forever",
+        ),
+        (
+            None,
+            3,
+            (3 / DEFAULT_SMOKE_JOBS_CPUS_PER_CAGE).clamp(1, DEFAULT_SMOKE_JOBS_CAP),
+            "a host with fewer threads than one cage's share still runs one cage, for the same \
+             reason",
+        ),
+    ];
+    for (raw, parallelism, expected, why) in ok_rows {
+        let got = parse_smoke_jobs(raw, parallelism);
+        assert_eq!(
+            got,
+            Ok(expected),
+            "{GUARD}: (a) parse_smoke_jobs({raw:?}, {parallelism}) answered {got:?}, expected \
+             Ok({expected}): {why}."
+        );
+    }
+    let err_rows: [(&str, &str); 4] = [
+        (
+            "0",
+            "zero slots admit no cage at all, so every smoke would block in `acquire` with no \
+             failure ever reported",
+        ),
+        (
+            "",
+            "a set-but-empty value is a mistake on the caller's command line, and reading it as \
+             unset would run the default the caller was trying to override",
+        ),
+        ("x", "a typo would silently become the default"),
+        ("-1", "a negative count is not a count"),
+    ];
+    for (raw, why) in err_rows {
+        let got = parse_smoke_jobs(Some(raw), MEASUREMENT_HOST_THREADS);
+        assert!(
+            got.is_err(),
+            "{GUARD}: (a) {SMOKE_JOBS_ENV}={raw:?} parsed as {got:?}, where it must be an Err that \
+             `smoke_jobs` turns into a panic naming the variable: {why}."
+        );
+    }
+
+    // --- (b) Never more than `limit` holders at once ----------------------------
+    for limit in [1, 3] {
+        let slots: &'static CageSlots = Box::leak(Box::new(CageSlots::new()));
+        let arrived = Arc::new(AtomicUsize::new(0));
+        let entered = Arc::new(AtomicUsize::new(0));
+        let inside = Arc::new(AtomicUsize::new(0));
+        let most_inside = Arc::new(AtomicUsize::new(0));
+        let (done_tx, done_rx) = mpsc::channel::<Result<(), String>>();
+        for _ in 0..CONTENDERS {
+            let arrived = Arc::clone(&arrived);
+            let entered = Arc::clone(&entered);
+            let inside = Arc::clone(&inside);
+            let most_inside = Arc::clone(&most_inside);
+            let done_tx = done_tx.clone();
+            std::thread::spawn(move || {
+                arrived.fetch_add(1, Ordering::SeqCst);
+                let slot = slots.acquire(limit);
+                let now = inside.fetch_add(1, Ordering::SeqCst) + 1;
+                most_inside.fetch_max(now, Ordering::SeqCst);
+                entered.fetch_add(1, Ordering::SeqCst);
+                let give_up = Instant::now() + DEADLINE;
+                let outcome = loop {
+                    let all_arrived = arrived.load(Ordering::SeqCst) == CONTENDERS;
+                    let full = inside.load(Ordering::SeqCst) >= limit;
+                    let all_admitted = entered.load(Ordering::SeqCst) == CONTENDERS;
+                    if all_arrived && (full || all_admitted) {
+                        break Ok(());
+                    }
+                    if Instant::now() >= give_up {
+                        break Err(format!(
+                            "a holder waited {DEADLINE:?} for the run to fill, with {} inside \
+                             against a limit of {limit}, {} of {CONTENDERS} admitted so far and {} \
+                             arrived",
+                            inside.load(Ordering::SeqCst),
+                            entered.load(Ordering::SeqCst),
+                            arrived.load(Ordering::SeqCst)
+                        ));
+                    }
+                    std::thread::sleep(Duration::from_millis(1));
+                };
+                // Keep the slot a moment longer, so a semaphore that admits one more
+                // than `limit` has the time to do it while this holder is still in.
+                std::thread::sleep(OVERADMIT_WINDOW);
+                inside.fetch_sub(1, Ordering::SeqCst);
+                drop(slot);
+                let _ = done_tx.send(outcome);
+            });
+        }
+        drop(done_tx);
+
+        let give_up = Instant::now() + DEADLINE * 2;
+        for finished in 0..CONTENDERS {
+            match done_rx.recv_timeout(give_up.saturating_duration_since(Instant::now())) {
+                Ok(Ok(())) => {}
+                Ok(Err(why)) => panic!(
+                    "{GUARD}: (b) at limit {limit}, {why}. The semaphore admits FEWER holders than \
+                     its limit, or does not wake a waiter when a slot frees (a release without \
+                     `notify_all`). Under the smokes that runs the suite at a fraction of \
+                     WOLF_SMOKE_JOBS, or leaves a smoke that never starts."
+                ),
+                Err(e) => panic!(
+                    "{GUARD}: (b) at limit {limit}, only {finished} of {CONTENDERS} contenders \
+                     finished within {:?} ({e}); {} were admitted in all and {} are inside now. \
+                     The rest are blocked in `acquire` while slots are free: a release that never \
+                     notifies, or a wait predicate that never clears. Under the smokes that hangs \
+                     the suite with no failure reported.",
+                    DEADLINE * 2,
+                    entered.load(Ordering::SeqCst),
+                    inside.load(Ordering::SeqCst)
+                ),
+            }
+        }
+        let most = most_inside.load(Ordering::SeqCst);
+        assert_eq!(
+            most, limit,
+            "{GUARD}: (b) at limit {limit}, {most} holders were inside at once. Above the limit, \
+             the semaphore admits one cage too many (`running > limit` where `running >= limit` \
+             belongs): every extra cage stretches the others' fixed settles, so the smokes pass on \
+             an idle host and flake on a loaded one, and WOLF_SMOKE_JOBS=1 no longer runs them \
+             serially. Below it, a holder's deadline would have fired first, so this reading is \
+             not reachable."
+        );
+    }
 }
 
 /// The head of a launch line: a double quote and a `$`, as in `"$WOLF_BIN" &`.
@@ -10897,7 +11835,7 @@ fn enclosing_scenario(lines: &[&str], index: usize) -> String {
 /// [`POINTER_PREAMBLE`], whose raw string ends before any body's `hsend`, so the
 /// scan stops at that raw string's end rather than reading into the body.
 ///
-/// Pure: no compositor, no `CAGE_LOCK`, no environment, no subprocess.
+/// Pure: no compositor, no cage slot, no environment, no subprocess.
 #[test]
 fn every_launch_waits_for_readiness_before_its_first_input() {
     let source = include_str!("smoke_headless.rs");
@@ -11153,7 +12091,7 @@ const EXPECT_SMOKE_APPEARANCE: &str = "dark";
 ///
 /// ## What it needs
 ///
-/// NO environment: no compositor, no `require_smoke_env`, no `CAGE_LOCK`, no
+/// NO environment: no compositor, no `require_smoke_env`, no cage slot, no
 /// subprocess, and — unlike
 /// [`the_column_cap_cannot_bind_at_the_ocr_smokes_geometry`] — no pinned
 /// `FONTCONFIG_FILE`, because it measures no cell. It writes into a fresh temp
@@ -11304,8 +12242,8 @@ fn pointer_err_path(cwd: &Path) -> PathBuf {
     cwd.join(POINTER_HELPER_ERR_NAME)
 }
 
-/// Runs one pointer scenario — [`POINTER_PREAMBLE`] plus `body` — inside `cage`, and
-/// returns cage's exit status.
+/// Runs one pointer scenario — [`POINTER_PREAMBLE`] plus `body` — inside `cage` in
+/// `runtime`, and returns cage's exit status.
 ///
 /// The per-smoke environment arrives as a SLICE rather than as positional
 /// parameters. That is a deliberate lint-shape decision, following the `GridTarget`
@@ -11315,12 +12253,13 @@ fn pointer_err_path(cwd: &Path) -> PathBuf {
 fn run_pointer_scenario(
     body: &str,
     cwd: &Path,
+    runtime: &CageRuntime<'_>,
     out_png: &Path,
     extra_env: &[(&str, &OsStr)],
 ) -> ExitStatus {
     // Cargo sets this for integration tests of a crate that declares a `[[bin]]`.
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
-    let mut cmd = cage_command(&pointer_scenario(body), cwd);
+    let mut cmd = cage_command(&pointer_scenario(body), cwd, runtime);
     cmd.env("WOLF_BIN", bin)
         .env("OUT_PNG", out_png)
         .env("CMD_FIFO", cwd.join(POINTER_CMD_FIFO_NAME))
@@ -13301,7 +14240,7 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
 /// widened to cover fixture names without an opt-out list, and why the
 /// state-persistence fixtures got their own guard with the exemption written down.
 ///
-/// This test is PURE: no compositor, no `require_smoke_env`, no `CAGE_LOCK`, no
+/// This test is PURE: no compositor, no `require_smoke_env`, no cage slot, no
 /// subprocess. It reads two const tables and finishes in microseconds, so it adds
 /// nothing to the smoke suite's runtime and — unlike the sixty smokes — still
 /// guards the fixture on a machine where the smoke toolchain is unavailable.
@@ -13378,7 +14317,7 @@ fn sidebar_filler_names_cannot_satisfy_any_smoke_assertion() {
 /// [`make_temp_cwd`] returns `<unique>/project` and [`cage_command`] sets `HOME` to
 /// `<unique>`, so `title::display_title` abbreviates and the rendered title is the
 /// constant `~/project`. So [`TEMP_CWD_BASENAME`] is the part that is REALLY on the
-/// page, and it is checked first. [`TEMP_CWD_PREFIX`] and its `{pid}-{nanos}` tail
+/// page, and it is checked first. [`TEMP_CWD_PREFIX`] and its `{pid}-{nanos}-{seq}` tail
 /// are normally abbreviated away — but they are still checked, because a regression
 /// in the abbreviation draws the whole path, and a prefix carrying an asserted term
 /// would turn that clean red into a mysterious pass (or a mysterious spurious
@@ -13393,8 +14332,8 @@ fn sidebar_filler_names_cannot_satisfy_any_smoke_assertion() {
 ///
 /// ## What it does not cover
 ///
-/// Only the two fixed components. The variable part of the path is the process id and
-/// a nanosecond timestamp — ASCII digits and `-` — which the third loop below proves
+/// Only the two fixed components. The variable part of the path is the process id, a
+/// nanosecond timestamp and a sequence number — ASCII digits and `-` — which the third loop below proves
 /// cannot contain any asserted term rather than merely asserting it in prose. The
 /// PARENT of the unique directory (`std::env::temp_dir()`, i.e. `TMPDIR` or `/tmp`)
 /// is NOT checked, because it is a property of the host rather than of this fixture;
@@ -13403,7 +14342,7 @@ fn sidebar_filler_names_cannot_satisfy_any_smoke_assertion() {
 /// note is the place to start looking.
 ///
 /// PURE, like its two siblings: no compositor, no `require_smoke_env`, no
-/// `CAGE_LOCK`, no subprocess.
+/// cage slot, no subprocess.
 #[test]
 fn temp_cwd_name_cannot_satisfy_any_smoke_assertion() {
     // Guard the guard: an empty term table would make every loop below run zero times
@@ -13469,7 +14408,7 @@ fn temp_cwd_name_cannot_satisfy_any_smoke_assertion() {
         );
     }
 
-    // The variable part of the path is `{pid}-{nanos}`, so it is ASCII digits and `-`
+    // The variable part of the path is `{pid}-{nanos}-{seq}`, so it is ASCII digits and `-`
     // only. That is safe if and only if no asserted term is spellable in those
     // characters — which is a property of the terms, so it is checked here rather than
     // asserted in a comment.
@@ -13478,7 +14417,8 @@ fn temp_cwd_name_cannot_satisfy_any_smoke_assertion() {
             term.chars().any(|c| c.is_ascii_alphabetic()),
             "asserted OCR term {const_name} = {term:?} contains no ASCII letter, so it could be a \
              substring of the digits-and-hyphens tail `make_temp_cwd` appends to \
-             {TEMP_CWD_PREFIX:?} (the process id and a nanosecond timestamp). `{smoke}` would \
+             {TEMP_CWD_PREFIX:?} (the process id, a nanosecond timestamp and a sequence number). \
+             `{smoke}` would \
              then be satisfied — or spuriously broken — by whatever pid the test harness happened \
              to get, on any run where the title's home abbreviation is not doing its job. Give the \
              term a letter, or stop deriving the temp-dir name from numbers."
@@ -13665,7 +14605,7 @@ fn temp_cwd_name_cannot_satisfy_any_smoke_assertion() {
 /// evidence that lives only in a run log is evidence that is about to be lost.
 ///
 /// PURE, like its two siblings: no compositor, no `require_smoke_env`, no
-/// `CAGE_LOCK`, no subprocess.
+/// cage slot, no subprocess.
 #[test]
 fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
     // Guard the guard: either empty table would make the loops below run zero times
@@ -15047,7 +15987,7 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
 /// else and the cell width is not the one the app measures.
 /// [`cell_metrics_for_smoke`] fails loudly on a non-positive cell, so an
 /// unprovisioned host fails there rather than here. It still needs no compositor, no
-/// [`require_smoke_env`], no `CAGE_LOCK` and no subprocess.
+/// [`require_smoke_env`], no cage slot and no subprocess.
 ///
 /// ## What it does not cover
 ///
@@ -15110,10 +16050,6 @@ fn the_column_cap_cannot_bind_at_the_ocr_smokes_geometry() {
 
 #[test]
 fn window_renders_typed_text_under_cage() {
-    // Serialize against the other cage test (shared Wayland socket); recover from
-    // poisoning so a failure in the sibling test does not cascade here.
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     let runtime_dir = require_smoke_env();
 
     // Locate the freshly built binary under test (Cargo sets this env var for
@@ -15154,9 +16090,9 @@ fn window_renders_typed_text_under_cage() {
 
     // Run the WHOLE scenario inside cage. cage sets WAYLAND_DISPLAY for the child
     // tree, so wtype/grim inside the scenario see the headless display. We inherit
-    // the parent environment (WOLF_NVIM_BIN, WLR_BACKENDS, XDG_RUNTIME_DIR,
-    // FONTCONFIG_FILE, ...) and add the scenario-specific vars.
-    let status = cage_command(SCENARIO, &cwd)
+    // the parent environment (WOLF_NVIM_BIN, WLR_BACKENDS, FONTCONFIG_FILE, ...) and
+    // add the scenario-specific vars.
+    let status = cage_command(SCENARIO, &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
         .env("OCR_WORD", OCR_WORD)
@@ -15249,10 +16185,6 @@ fn window_renders_typed_text_under_cage() {
 
 #[test]
 fn picker_opens_and_loads_selected_file_under_cage() {
-    // Serialize against the other cage test (shared Wayland socket); recover from
-    // poisoning so a failure in the sibling test does not cascade here.
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     let runtime_dir = require_smoke_env();
 
     // Locate the freshly built binary under test.
@@ -15280,7 +16212,7 @@ fn picker_opens_and_loads_selected_file_under_cage() {
 
     // Run the whole picker scenario inside cage, with the temp dir as the working
     // directory so the app picks it up as its cwd.
-    let status = cage_command(PICKER_SCENARIO, &cwd)
+    let status = cage_command(PICKER_SCENARIO, &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
         .env("PICKER_QUERY", PICKER_QUERY)
@@ -15329,10 +16261,6 @@ fn picker_opens_and_loads_selected_file_under_cage() {
 
 #[test]
 fn picker_arrow_navigation_selects_second_match_under_cage() {
-    // Serialize against the other cage tests (shared Wayland socket); recover from
-    // poisoning so a failure in a sibling test does not cascade here.
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     let runtime_dir = require_smoke_env();
 
     // Locate the freshly built binary under test.
@@ -15373,7 +16301,7 @@ fn picker_arrow_navigation_selects_second_match_under_cage() {
 
     // Run the whole picker-navigation scenario inside cage, with the temp dir as
     // the working directory so the app picks it up as its cwd.
-    let status = cage_command(PICKER_NAV_SCENARIO, &cwd)
+    let status = cage_command(PICKER_NAV_SCENARIO, &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
         .env("PICKER_NAV_QUERY", PICKER_NAV_QUERY)
@@ -15434,10 +16362,6 @@ fn picker_arrow_navigation_selects_second_match_under_cage() {
 /// either cause: a tree that never populated, or a root that never expanded.
 #[test]
 fn tree_sidebar_shows_files_under_cage() {
-    // Serialize against the other cage tests (shared Wayland socket); recover from
-    // poisoning so a failure in a sibling test does not cascade here.
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     let runtime_dir = require_smoke_env();
 
     // Locate the freshly built binary under test.
@@ -15466,7 +16390,7 @@ fn tree_sidebar_shows_files_under_cage() {
 
     // Run the whole tree scenario inside cage, with the temp dir as the working
     // directory so the app picks it up as its cwd and the tree populates from it.
-    let status = cage_command(TREE_SCENARIO, &cwd)
+    let status = cage_command(TREE_SCENARIO, &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
         .status()
@@ -15511,10 +16435,6 @@ fn tree_sidebar_shows_files_under_cage() {
 fn vertical_split_shows_two_panes_under_cage() {
     const SMOKE: &str = "vertical_split_shows_two_panes_under_cage";
 
-    // Serialize against the other cage tests (shared Wayland socket); recover from
-    // poisoning so a failure in a sibling test does not cascade here.
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     let runtime_dir = require_smoke_env();
 
     // Locate the freshly built binary under test.
@@ -15558,7 +16478,7 @@ fn vertical_split_shows_two_panes_under_cage() {
     // width)" paragraph above the VSPLIT_* consts: if two side-by-side panes are ever
     // too narrow for 28pt OCR, widen the window or lower the font for THIS test —
     // never for all twenty by editing the helper.
-    let status = cage_command(VSPLIT_SCENARIO, &cwd)
+    let status = cage_command(VSPLIT_SCENARIO, &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
         .env("VSPLIT_FILE_LEFT", VSPLIT_FILE_LEFT)
@@ -15726,10 +16646,6 @@ fn vertical_split_shows_two_panes_under_cage() {
 
 #[test]
 fn horizontal_split_shows_two_panes_under_cage() {
-    // Serialize against the other cage tests (shared Wayland socket); recover from
-    // poisoning so a failure in a sibling test does not cascade here.
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     let runtime_dir = require_smoke_env();
 
     // Locate the freshly built binary under test.
@@ -15773,7 +16689,7 @@ fn horizontal_split_shows_two_panes_under_cage() {
     // height)" paragraph above the HSPLIT_* consts: if two stacked panes are ever too
     // short for 28pt OCR, make the window taller or lower the font for THIS test —
     // never for all twenty by editing the helper.
-    let status = cage_command(HSPLIT_SCENARIO, &cwd)
+    let status = cage_command(HSPLIT_SCENARIO, &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
         .env("HSPLIT_FILE_TOP", HSPLIT_FILE_TOP)
@@ -15823,10 +16739,6 @@ fn horizontal_split_shows_two_panes_under_cage() {
 
 #[test]
 fn focus_move_returns_to_first_pane_under_cage() {
-    // Serialize against the other cage tests (shared Wayland socket); recover from
-    // poisoning so a failure in a sibling test does not cascade here.
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     let runtime_dir = require_smoke_env();
 
     // Locate the freshly built binary under test.
@@ -15865,7 +16777,7 @@ fn focus_move_returns_to_first_pane_under_cage() {
 
     // Run the whole focus-move scenario inside cage, with the temp dir as the
     // working directory so the app picks it up as its cwd.
-    let status = cage_command(FOCUS_SCENARIO, &cwd)
+    let status = cage_command(FOCUS_SCENARIO, &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
         .env("FOCUS_FILE_LEFT", FOCUS_FILE_LEFT)
@@ -15925,10 +16837,6 @@ fn focus_move_returns_to_first_pane_under_cage() {
 
 #[test]
 fn close_pane_leaves_one_under_cage() {
-    // Serialize against the other cage tests (shared Wayland socket); recover from
-    // poisoning so a failure in a sibling test does not cascade here.
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     let runtime_dir = require_smoke_env();
 
     // Locate the freshly built binary under test.
@@ -15967,7 +16875,7 @@ fn close_pane_leaves_one_under_cage() {
 
     // Run the whole close-pane scenario inside cage, with the temp dir as the
     // working directory so the app picks it up as its cwd.
-    let status = cage_command(CLOSE_SCENARIO, &cwd)
+    let status = cage_command(CLOSE_SCENARIO, &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
         .env("CLOSE_FILE_KEEP", CLOSE_FILE_KEEP)
@@ -16017,10 +16925,6 @@ fn close_pane_leaves_one_under_cage() {
 
 #[test]
 fn three_panes_keep_all_files_visible_under_cage() {
-    // Serialize against the other cage tests (shared Wayland socket); recover from
-    // poisoning so a failure in a sibling test does not cascade here.
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     let runtime_dir = require_smoke_env();
 
     // Locate the freshly built binary under test.
@@ -16058,7 +16962,7 @@ fn three_panes_keep_all_files_visible_under_cage() {
     // width)" paragraph above the TRI_* consts: if three side-by-side panes are ever
     // too narrow for 28pt OCR, widen the window or lower the font for THIS test —
     // never for all twenty by editing the helper.
-    let status = cage_command(TRISPLIT_SCENARIO, &cwd)
+    let status = cage_command(TRISPLIT_SCENARIO, &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
         .env("TRI_FILE_A", TRI_FILE_A)
@@ -16129,10 +17033,6 @@ fn three_panes_keep_all_files_visible_under_cage() {
 /// supposed to mean "no project is open".
 #[test]
 fn empty_state_shows_open_folder_button_under_cage() {
-    // Serialize against the other cage tests (shared Wayland socket); recover from
-    // poisoning so a failure in a sibling test does not cascade here.
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     let runtime_dir = require_smoke_env();
 
     // Locate the freshly built binary under test.
@@ -16168,7 +17068,7 @@ fn empty_state_shows_open_folder_button_under_cage() {
     // is last-write-wins per key. The determinism property the default exists for is
     // preserved: with HOME == cwd, `title::display_title` renders the constant `~`,
     // so this smoke's page is still byte-identical across runs.
-    let status = cage_command(EMPTY_STATE_SCENARIO, &cwd)
+    let status = cage_command(EMPTY_STATE_SCENARIO, &cwd, &runtime_dir)
         .env("HOME", &cwd)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
@@ -16213,10 +17113,6 @@ fn empty_state_shows_open_folder_button_under_cage() {
 
 #[test]
 fn new_untitled_buffer_replaces_open_file_under_cage() {
-    // Serialize against the other cage tests (shared Wayland socket); recover from
-    // poisoning so a failure in a sibling test does not cascade here.
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     let runtime_dir = require_smoke_env();
 
     // Locate the freshly built binary under test.
@@ -16244,7 +17140,7 @@ fn new_untitled_buffer_replaces_open_file_under_cage() {
 
     // Run the whole new-untitled-buffer scenario inside cage, with the temp dir as
     // the working directory so the app picks it up as its cwd.
-    let status = cage_command(NEWBUF_SCENARIO, &cwd)
+    let status = cage_command(NEWBUF_SCENARIO, &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
         .env("NEWBUF_FILE", NEWBUF_FILE)
@@ -16357,10 +17253,6 @@ fn new_untitled_buffer_replaces_open_file_under_cage() {
 fn command_palette_chord_runs_the_selected_command_under_cage() {
     const SMOKE: &str = "command_palette_chord_runs_the_selected_command_under_cage";
 
-    // Serialize against the other cage tests (shared Wayland socket); recover from
-    // poisoning so a failure in a sibling test does not cascade here.
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     let runtime_dir = require_smoke_env();
 
     // Locate the freshly built binary under test.
@@ -16400,7 +17292,7 @@ fn command_palette_chord_runs_the_selected_command_under_cage() {
     // wants the ordinary `Folder` launch decision and the constant `~/project` title.
     let smoke_state = smoke_state_dir(&cwd);
 
-    let status = cage_command(PALETTE_SCENARIO, &cwd)
+    let status = cage_command(PALETTE_SCENARIO, &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
         .env("PALETTE_FILE", PALETTE_FILE)
@@ -16569,10 +17461,6 @@ fn command_palette_chord_runs_the_selected_command_under_cage() {
 fn preview_pane_renders_and_edit_source_returns_under_cage() {
     const SMOKE: &str = "preview_pane_renders_and_edit_source_returns_under_cage";
 
-    // Serialize against the other cage tests (shared Wayland socket); recover from
-    // poisoning so a failure in a sibling test does not cascade here.
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     let runtime_dir = require_smoke_env();
 
     // Locate the freshly built binary under test.
@@ -16614,10 +17502,8 @@ fn preview_pane_renders_and_edit_source_returns_under_cage() {
     let readback_b = cwd.join(PREVIEW_READBACK_B_NAME);
     let out_png_before = runtime_dir.join("wolf_gnome_preview_open_smoke.png");
     let out_png = runtime_dir.join("wolf_gnome_preview_live_smoke.png");
-    // Assertions 12 and 13's evidence: the report the running app appends to. Cleared
-    // with the rest, and the clearing matters MORE here than for the captures, because
-    // the app APPENDS — a stale copy is not overwritten but added to, so a previous
-    // run's renders would be counted as this run's.
+    // Assertions 12 and 13's evidence: the report the running app appends to, in this
+    // smoke's own fresh runtime directory, so no earlier run's renders are in it.
     let stats_path = runtime_dir.join(PREVIEW_FRAME_STATS_FILE_NAME);
     for path in [
         &readback_a,
@@ -16625,12 +17511,11 @@ fn preview_pane_renders_and_edit_source_returns_under_cage() {
         &out_png_before,
         &out_png,
         &frozen_state_file,
-        &stats_path,
     ] {
         clear_evidence(path, SMOKE);
     }
 
-    let status = cage_command(PREVIEW_SCENARIO, &cwd)
+    let status = cage_command(PREVIEW_SCENARIO, &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG_BEFORE", &out_png_before)
         .env("OUT_PNG", &out_png)
@@ -17118,7 +18003,7 @@ fn preview_pane_renders_and_edit_source_returns_under_cage() {
 ///
 /// ## What it needs
 ///
-/// NO environment: no compositor, no [`require_smoke_env`], no [`CAGE_LOCK`], no
+/// NO environment: no compositor, no [`require_smoke_env`], no cage slot, no
 /// subprocess. It runs in microseconds and still guards on a machine with no smoke
 /// toolchain at all.
 ///
@@ -17263,10 +18148,6 @@ fn preview_burst_delay_stays_below_the_coalescer_trailing_delay() {
 fn preview_link_click_repoints_the_pane_under_cage() {
     const SMOKE: &str = "preview_link_click_repoints_the_pane_under_cage";
 
-    // Serialize against the other cage tests (shared Wayland socket); recover from
-    // poisoning so a failure in a sibling test does not cascade here.
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     let runtime_dir = require_smoke_env();
 
     // The fixture's link and the file the readback expects are two halves of one
@@ -17380,6 +18261,7 @@ fn preview_link_click_repoints_the_pane_under_cage() {
     let status = run_pointer_scenario(
         POINTER_LINK_BODY,
         &cwd,
+        &runtime_dir,
         &out_png,
         &[
             ("LINK_SOURCE_FILE", OsStr::new(LINK_SOURCE_FILE)),
@@ -17598,10 +18480,6 @@ fn preview_link_click_repoints_the_pane_under_cage() {
 fn preview_of_an_unsaved_buffer_renders_under_cage() {
     const SMOKE: &str = "preview_of_an_unsaved_buffer_renders_under_cage";
 
-    // Serialize against the other cage tests (shared Wayland socket); recover from
-    // poisoning so a failure in a sibling test does not cascade here.
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     let runtime_dir = require_smoke_env();
 
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
@@ -17615,7 +18493,7 @@ fn preview_of_an_unsaved_buffer_renders_under_cage() {
         clear_evidence(path, SMOKE);
     }
 
-    let status = cage_command(UNSAVED_PREVIEW_SCENARIO, &cwd)
+    let status = cage_command(UNSAVED_PREVIEW_SCENARIO, &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
         .env("UNSAVED_MARKER", UNSAVED_MARKER)
@@ -17790,10 +18668,6 @@ fn buffer_picker_chord_switches_to_the_queried_buffer_under_cage() {
     // this makes the query redundant and assertion 4 vacuous.
     const MIN_TARGET_INDEX: usize = 2;
 
-    // Serialize against the other cage tests (shared Wayland socket); recover from
-    // poisoning so a failure in a sibling test does not cascade here.
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     let runtime_dir = require_smoke_env();
 
     // Locate the freshly built binary under test.
@@ -17834,7 +18708,7 @@ fn buffer_picker_chord_switches_to_the_queried_buffer_under_cage() {
     let out_png = runtime_dir.join("wolf_gnome_bufpick_smoke.png");
     clear_evidence(&out_png, SMOKE);
 
-    let status = cage_command(BUFPICK_SCENARIO, &cwd)
+    let status = cage_command(BUFPICK_SCENARIO, &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
         .env("BUFPICK_FILE_TARGET", BUFPICK_FILE_TARGET)
@@ -18059,10 +18933,6 @@ fn buffer_picker_bare_enter_switches_to_the_previous_buffer_under_cage() {
     // assertion 3.
     const MIN_TARGET_INDEX: usize = 2;
 
-    // Serialize against the other cage tests (shared Wayland socket); recover from
-    // poisoning so a failure in a sibling test does not cascade here.
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     let runtime_dir = require_smoke_env();
 
     // Locate the freshly built binary under test.
@@ -18104,7 +18974,7 @@ fn buffer_picker_bare_enter_switches_to_the_previous_buffer_under_cage() {
     let out_png = runtime_dir.join("wolf_gnome_bufpick_bare_smoke.png");
     clear_evidence(&out_png, SMOKE);
 
-    let status = cage_command(BUFPICK_BARE_SCENARIO, &cwd)
+    let status = cage_command(BUFPICK_BARE_SCENARIO, &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
         .env("BUFPICK_FILE_TARGET", BUFPICK_FILE_TARGET)
@@ -18344,10 +19214,6 @@ fn buffer_picker_bare_enter_switches_to_the_previous_buffer_under_cage() {
 fn project_search_chord_opens_the_matched_line_under_cage() {
     const SMOKE: &str = "project_search_chord_opens_the_matched_line_under_cage";
 
-    // Serialize against the other cage tests (shared Wayland socket); recover from
-    // poisoning so a failure in a sibling test does not cascade here.
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     let runtime_dir = require_smoke_env();
 
     // Locate the freshly built binary under test.
@@ -18399,7 +19265,7 @@ fn project_search_chord_opens_the_matched_line_under_cage() {
     // `WOLF_RG_BIN` is not set here: it is INHERITED from the devShell, exactly as
     // `WOLF_NVIM_BIN` is, and `require_smoke_env` above has already failed loud if it
     // is missing.
-    let status = cage_command(PROJSEARCH_SCENARIO, &cwd)
+    let status = cage_command(PROJSEARCH_SCENARIO, &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
         .env("PROJSEARCH_FILE_START", PROJSEARCH_FILE_START)
@@ -18529,10 +19395,6 @@ fn project_search_chord_opens_the_matched_line_under_cage() {
 
 #[test]
 fn colon_q_closes_focused_pane_under_cage() {
-    // Serialize against the other cage tests (shared Wayland socket); recover from
-    // poisoning so a failure in a sibling test does not cascade here.
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     let runtime_dir = require_smoke_env();
 
     // Locate the freshly built binary under test.
@@ -18571,7 +19433,7 @@ fn colon_q_closes_focused_pane_under_cage() {
 
     // Run the whole :q scenario inside cage, with the temp dir as the working
     // directory so the app picks it up as its cwd.
-    let status = cage_command(COLON_Q_SCENARIO, &cwd)
+    let status = cage_command(COLON_Q_SCENARIO, &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
         .env("QUIT_FILE_KEEP", QUIT_FILE_KEEP)
@@ -18623,13 +19485,9 @@ fn colon_q_closes_focused_pane_under_cage() {
 
 #[test]
 fn colon_qa_closes_the_window_under_cage() {
-    // Serialize against the other cage tests (shared Wayland socket); recover from
-    // poisoning so a failure in a sibling test does not cascade here.
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     // No screenshot is taken here, but the smoke env is still required: the scenario
     // launches under `cage` and drives it with `wtype`.
-    let _runtime_dir = require_smoke_env();
+    let runtime_dir = require_smoke_env();
 
     // Locate the freshly built binary under test.
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
@@ -18641,7 +19499,7 @@ fn colon_qa_closes_the_window_under_cage() {
     // Run the whole :qa scenario inside cage. This smoke deliberately captures NO
     // PNG and runs neither grim nor tesseract: its assertion is that the app PROCESS
     // exited, and exited CLEANLY, which no pixel can show.
-    let status = cage_command(COLON_QA_SCENARIO, &cwd)
+    let status = cage_command(COLON_QA_SCENARIO, &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
         .status()
         .expect("failed to spawn `cage` for the headless :qa smoke scenario");
@@ -18674,10 +19532,6 @@ fn colon_qa_closes_the_window_under_cage() {
 
 #[test]
 fn close_pane_chord_closes_focused_pane_under_cage() {
-    // Serialize against the other cage tests (shared Wayland socket); recover from
-    // poisoning so a failure in a sibling test does not cascade here.
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     let runtime_dir = require_smoke_env();
 
     // Locate the freshly built binary under test.
@@ -18716,7 +19570,7 @@ fn close_pane_chord_closes_focused_pane_under_cage() {
 
     // Run the whole Ctrl+Shift+W close-pane scenario inside cage, with the temp dir
     // as the working directory so the app picks it up as its cwd.
-    let status = cage_command(CHORD_CLOSE_SCENARIO, &cwd)
+    let status = cage_command(CHORD_CLOSE_SCENARIO, &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
         .env("CHORD_CLOSE_FILE_KEEP", CHORD_CLOSE_FILE_KEEP)
@@ -18829,10 +19683,6 @@ fn close_pane_chord_closes_focused_pane_under_cage() {
 fn click_positions_the_cursor_under_cage() {
     const SMOKE: &str = "click_positions_the_cursor_under_cage";
 
-    // Serialize against the other cage tests (shared Wayland socket); recover from
-    // poisoning so a failure in a sibling test does not cascade here.
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     let runtime_dir = require_smoke_env();
 
     // A fresh temp cwd, exactly like every other smoke; see `make_temp_cwd`
@@ -18870,6 +19720,7 @@ fn click_positions_the_cursor_under_cage() {
     let status = run_pointer_scenario(
         POINTER_CLICK_BODY,
         &cwd,
+        &runtime_dir,
         &out_png,
         &[
             ("POS0", pos0.as_os_str()),
@@ -19021,8 +19872,6 @@ fn drag_selects_a_range_under_cage() {
     // The column `cell_at` must clamp Drag B's out-of-pane release to.
     const CLAMPED_LEFT_COLUMN: i64 = 1;
 
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     let runtime_dir = require_smoke_env();
     let cwd = make_temp_cwd();
     let metrics = cell_metrics_for_smoke();
@@ -19058,6 +19907,7 @@ fn drag_selects_a_range_under_cage() {
     let status = run_pointer_scenario(
         POINTER_DRAG_BODY,
         &cwd,
+        &runtime_dir,
         &out_png,
         &[
             ("SEL_Z", sel_z.as_os_str()),
@@ -19337,8 +20187,6 @@ fn wheel_scroll_moves_the_viewport_under_cage() {
     // falsifiable.
     const TOPLINE_AT_REST: i64 = 1;
 
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     let runtime_dir = require_smoke_env();
     let cwd = make_temp_cwd();
 
@@ -19357,6 +20205,7 @@ fn wheel_scroll_moves_the_viewport_under_cage() {
     let status = run_pointer_scenario(
         POINTER_SCROLL_BODY,
         &cwd,
+        &runtime_dir,
         &out_png,
         &[
             ("W0_BEFORE", w0_before_file.as_os_str()),
@@ -19520,8 +20369,6 @@ fn wheel_scroll_moves_the_viewport_under_cage() {
 fn click_then_close_keeps_keyboard_input_alive_under_cage() {
     const SMOKE: &str = "click_then_close_keeps_keyboard_input_alive_under_cage";
 
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     let runtime_dir = require_smoke_env();
 
     // Create a fresh temp cwd and drop BOTH markdown targets into it. The app reads
@@ -19555,6 +20402,7 @@ fn click_then_close_keeps_keyboard_input_alive_under_cage() {
     let status = run_pointer_scenario(
         POINTER_WEDGE_BODY,
         &cwd,
+        &runtime_dir,
         &out_png,
         &[
             ("WEDGE_FILE_CLICK", OsStr::new(WEDGE_FILE_CLICK)),
@@ -19775,10 +20623,6 @@ fn nvim_crash_recovers_and_reopens_the_file_under_cage() {
     // 1. Named rather than inlined so the two assertions below cannot drift apart.
     const VIM_TRUE: i64 = 1;
 
-    // Serialize against the other cage tests (shared Wayland socket); recover from
-    // poisoning so a failure in a sibling test does not cascade here.
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     let runtime_dir = require_smoke_env();
 
     // Locate the freshly built binary under test.
@@ -19821,7 +20665,7 @@ fn nvim_crash_recovers_and_reopens_the_file_under_cage() {
         clear_evidence(path, SMOKE);
     }
 
-    let status = cage_command(&with_nvim_pid_helper(CRASH_SCENARIO), &cwd)
+    let status = cage_command(&with_nvim_pid_helper(CRASH_SCENARIO), &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
         .env("OUT_PNG_BEFORE", &out_png_before)
@@ -20131,10 +20975,6 @@ fn nvim_crash_recovers_and_reopens_the_file_under_cage() {
 fn stalled_nvim_raises_the_stall_overlay_under_cage() {
     const SMOKE: &str = "stalled_nvim_raises_the_stall_overlay_under_cage";
 
-    // Serialize against the other cage tests (shared Wayland socket); recover from
-    // poisoning so a failure in a sibling test does not cascade here.
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     let runtime_dir = require_smoke_env();
 
     // Locate the freshly built binary under test.
@@ -20172,7 +21012,7 @@ fn stalled_nvim_raises_the_stall_overlay_under_cage() {
     // environment, so setting it here reaches the app through `cage -- sh -c`. It
     // is a timing knob only; see `STALL_RPC_TIMEOUT_MS` for the two bounds it sits
     // between and for why shortening it is safe in this scenario.
-    let status = cage_command(&with_nvim_pid_helper(STALL_SCENARIO), &cwd)
+    let status = cage_command(&with_nvim_pid_helper(STALL_SCENARIO), &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
         .env("OUT_PNG_BEFORE", &out_png_before)
@@ -20427,10 +21267,6 @@ fn crash_overlay_and_restart_button_recover_under_cage() {
 
     use std::os::unix::fs::PermissionsExt;
 
-    // Serialize against the other cage tests (shared Wayland socket); recover from
-    // poisoning so a failure in a sibling test does not cascade here.
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     let runtime_dir = require_smoke_env();
 
     // The REAL Neovim, read from THIS process's environment (which `require_smoke_env`
@@ -20570,6 +21406,7 @@ fn crash_overlay_and_restart_button_recover_under_cage() {
     let status = run_pointer_scenario(
         &body,
         &cwd,
+        &runtime_dir,
         &out_png,
         &[
             // The wrapper, on the CAGE command only.
@@ -20801,8 +21638,8 @@ fn state_file_fingerprint(path: &Path) -> Option<(u64, Option<SystemTime>)> {
 /// asymmetric layout, each holding its own file, rebuilt from `state.json`.
 ///
 /// Two app launches run inside ONE `cage` instance (see [`RESTORE_LAYOUT_SCENARIO`]
-/// and the shared exit-code table above [`RELAUNCH_RESTORE_SETTLE`]), so `CAGE_LOCK`
-/// semantics are unchanged and no second compositor is started.
+/// and the shared exit-code table above [`RELAUNCH_RESTORE_SETTLE`]), so the smoke
+/// holds one cage slot and no second compositor is started.
 ///
 /// ## What it asserts
 ///
@@ -20849,10 +21686,6 @@ fn state_file_fingerprint(path: &Path) -> Option<(u64, Option<SystemTime>)> {
 fn pane_layout_survives_relaunch_under_cage() {
     const SMOKE: &str = "pane_layout_survives_relaunch_under_cage";
 
-    // Serialize against the other cage tests (shared Wayland socket); recover from
-    // poisoning so a failure in a sibling test does not cascade here.
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     let runtime_dir = require_smoke_env();
 
     // Locate the freshly built binary under test.
@@ -20882,7 +21715,7 @@ fn pane_layout_survives_relaunch_under_cage() {
     // `cage_command` supplies WOLF_FONT_PT and WOLF_STATE_DIR. The state dir is what
     // makes the two runs share a `state.json` at all — and what keeps them out of the
     // developer's real one.
-    let status = cage_command(RESTORE_LAYOUT_SCENARIO, &cwd)
+    let status = cage_command(RESTORE_LAYOUT_SCENARIO, &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
         .env("RESTORE_FILE_LEFT", RESTORE_FILE_LEFT)
@@ -21030,10 +21863,6 @@ fn pane_layout_survives_relaunch_under_cage() {
 fn single_pane_file_survives_relaunch_under_cage() {
     const SMOKE: &str = "single_pane_file_survives_relaunch_under_cage";
 
-    // Serialize against the other cage tests (shared Wayland socket); recover from
-    // poisoning so a failure in a sibling test does not cascade here.
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     // --- Assertion 4, first part: this TEST process must be un-overridden -----
     //
     // Asserted BEFORE anything runs, because `wolf_core::state_dir()` below resolves
@@ -21138,7 +21967,7 @@ fn single_pane_file_survives_relaunch_under_cage() {
         clear_evidence(path, SMOKE);
     }
 
-    let status = cage_command(RESTORE_SOLO_SCENARIO, &cwd)
+    let status = cage_command(RESTORE_SOLO_SCENARIO, &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
         .env("SOLO_FILE", SOLO_FILE)
@@ -21514,7 +22343,7 @@ fn assert_frozen_tabs(smoke: &str, stage: &str, state_dir: &Path, diagnosis: &st
 /// three after a second quit in which two of them were never selected.**
 ///
 /// Two app launches run inside ONE `cage` instance (see [`RESTORE_TABS_SCENARIO`]),
-/// so `CAGE_LOCK` semantics are unchanged and no second compositor is started.
+/// so the smoke holds one cage slot and no second compositor is started.
 ///
 /// ## Why it asserts on no pixel
 ///
@@ -21609,10 +22438,6 @@ fn assert_frozen_tabs(smoke: &str, stage: &str, state_dir: &Path, diagnosis: &st
 fn three_tabs_survive_a_relaunch_under_cage() {
     const SMOKE: &str = "three_tabs_survive_a_relaunch_under_cage";
 
-    // Serialize against the other cage tests (shared Wayland socket); recover from
-    // poisoning so a failure in a sibling test does not cascade here.
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     let runtime_dir = require_smoke_env();
 
     // Locate the freshly built binary under test.
@@ -21672,7 +22497,7 @@ fn three_tabs_survive_a_relaunch_under_cage() {
         clear_evidence(path, SMOKE);
     }
 
-    let status = cage_command(RESTORE_TABS_SCENARIO, &cwd)
+    let status = cage_command(RESTORE_TABS_SCENARIO, &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
         .env("TABS_FILE_ONE", TABS_RESTORE_FILE_ONE)
         .env("TABS_FILE_TWO", TABS_RESTORE_FILE_TWO)
@@ -21791,7 +22616,7 @@ fn three_tabs_survive_a_relaunch_under_cage() {
 /// Neovims, both sessions in one `state.json`, and both restored at relaunch.**
 ///
 /// Two app launches run inside ONE `cage` instance (see [`TWOWIN_SCENARIO`]), so
-/// `CAGE_LOCK` semantics are unchanged and no second compositor is started.
+/// the smoke holds one cage slot and no second compositor is started.
 ///
 /// ## Why it asserts on no pixel, and why that is the honest shape
 ///
@@ -21826,11 +22651,11 @@ fn three_tabs_survive_a_relaunch_under_cage() {
 ///
 /// ## The route to the second window is forced
 ///
-/// [`cage_command`] removes `DBUS_SESSION_BUS_ADDRESS`, so a second `wolf-gnome`
-/// process under the same compositor never reaches the first through the
-/// single-instance D-Bus path: it becomes its own primary instance with its own
-/// store over the same directory, which is the clobber above rather than a second
-/// window. The palette is the only route this harness can drive — New Window
+/// A second `wolf-gnome` process under the same compositor is not New Window. Every
+/// cage has its own private `dbus-run-session` bus, so a second launch while the
+/// first is alive hands off to it through single-instance activation, which
+/// exercises the launch path rather than a second window. The palette is the only
+/// route this harness can drive — New Window
 /// carries no accelerator, and the primary menu popover cannot be clicked (see the
 /// deliberate gaps in `tests/README.md`).
 ///
@@ -21901,10 +22726,6 @@ fn three_tabs_survive_a_relaunch_under_cage() {
 #[test]
 fn two_windows_two_neovims_and_two_saved_sessions_under_cage() {
     const SMOKE: &str = "two_windows_two_neovims_and_two_saved_sessions_under_cage";
-
-    // Serialize against the other cage tests (shared Wayland socket); recover from
-    // poisoning so a failure in a sibling test does not cascade here.
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
     let runtime_dir = require_smoke_env();
 
@@ -21981,7 +22802,7 @@ fn two_windows_two_neovims_and_two_saved_sessions_under_cage() {
     // and `wait_nvim_count`; this scenario calls none of that fragment's exiting
     // functions, so its 16/17/18/20 are unreachable here.
     let scenario = with_nvim_pid_helper(TWOWIN_SCENARIO);
-    let status = cage_command(&scenario, &cwd)
+    let status = cage_command(&scenario, &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
         .env("TWOWIN_FIRST_FILE", TWOWIN_FIRST_FILE)
         .env("TWOWIN_SECOND_NAME", TWOWIN_SECOND_NAME)
@@ -22308,8 +23129,8 @@ exit 0
 /// build cannot produce, because both of its launches would measure the same cell
 /// and report the same number of columns.
 ///
-/// Both launches run inside ONE `cage` instance, so `CAGE_LOCK` semantics are
-/// unchanged and no second compositor is started.
+/// Both launches run inside ONE `cage` instance, so the smoke holds one cage slot
+/// and no second compositor is started.
 ///
 /// ## The one smoke that removes `WOLF_FONT_PT`
 ///
@@ -22340,10 +23161,6 @@ exit 0
 #[test]
 fn config_font_size_changes_the_grid_under_cage() {
     const SMOKE: &str = "config_font_size_changes_the_grid_under_cage";
-
-    // Serialize against the other cage tests (shared Wayland socket); recover from
-    // poisoning so a failure in a sibling test does not cascade here.
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
     let runtime_dir = require_smoke_env();
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
@@ -22383,7 +23200,7 @@ fn config_font_size_changes_the_grid_under_cage() {
         clear_evidence(path, SMOKE);
     }
 
-    let mut cmd = cage_command(CONFIG_GRID_SCENARIO, &cwd);
+    let mut cmd = cage_command(CONFIG_GRID_SCENARIO, &cwd, &runtime_dir);
     cmd.env("WOLF_BIN", bin)
         .env("CONFIG_DIR_SMALL", &config_small)
         .env("CONFIG_DIR_LARGE", &config_large)
@@ -22696,7 +23513,7 @@ exit 0
 /// ## The conventions it obeys
 ///
 /// A fresh temp working directory ([`make_temp_cwd`], mandatory — the captive
-/// Neovim's swap directory is keyed on it); [`CAGE_LOCK`] for the whole body; one
+/// Neovim's swap directory is keyed on it); [`require_smoke_env`]'s cage slot and runtime directory for the whole body; one
 /// `sh -c` string through [`cage_command`], the single environment helper and the
 /// only place the compositor is spawned; and eight exit codes naming eight causes,
 /// four per launch, so no code covers both — see [`APPEARANCE_SCENARIO`] for why
@@ -22707,10 +23524,6 @@ exit 0
 #[test]
 fn configured_appearance_reaches_neovims_background_under_cage() {
     const SMOKE: &str = "configured_appearance_reaches_neovims_background_under_cage";
-
-    // Serialize against the other cage tests (shared Wayland socket); recover from
-    // poisoning so a failure in a sibling test does not cascade here.
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
     let runtime_dir = require_smoke_env();
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
@@ -22781,7 +23594,7 @@ fn configured_appearance_reaches_neovims_background_under_cage() {
         clear_evidence(path, SMOKE);
     }
 
-    let mut cmd = cage_command(APPEARANCE_SCENARIO, &cwd);
+    let mut cmd = cage_command(APPEARANCE_SCENARIO, &cwd, &runtime_dir);
     cmd.env("WOLF_BIN", bin)
         .env("CONFIG_DIR_DARK", &config_dark)
         .env("CONFIG_DIR_LIGHT", &config_light)
@@ -24012,7 +24825,7 @@ exit 0
 /// ## The conventions it obeys
 ///
 /// A fresh temp working directory ([`make_temp_cwd`], mandatory — the captive
-/// Neovim's swap directory is keyed on it); [`CAGE_LOCK`] for the whole body; one
+/// Neovim's swap directory is keyed on it); [`require_smoke_env`]'s cage slot and runtime directory for the whole body; one
 /// `sh -c` string through [`cage_command`], the single environment helper and the
 /// only place the compositor is spawned; per-launch config AND state directories; and
 /// eight exit codes naming eight causes, four per launch.
@@ -24028,10 +24841,6 @@ exit 0
 #[test]
 fn preview_document_follows_the_configured_appearance_under_cage() {
     const SMOKE: &str = "preview_document_follows_the_configured_appearance_under_cage";
-
-    // Serialize against the other cage tests (shared Wayland socket); recover from
-    // poisoning so a failure in a sibling test does not cascade here.
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
     let runtime_dir = require_smoke_env();
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
@@ -24089,7 +24898,7 @@ fn preview_document_follows_the_configured_appearance_under_cage() {
         clear_evidence(path, SMOKE);
     }
 
-    let mut cmd = cage_command(PREVIEW_THEME_SCENARIO, &cwd);
+    let mut cmd = cage_command(PREVIEW_THEME_SCENARIO, &cwd, &runtime_dir);
     cmd.env("WOLF_BIN", bin)
         .env("SRC_FILE", PREVIEW_THEME_SOURCE_FILE)
         .env("PREVIEW_OTHER_PANE_QUERY", PREVIEW_OTHER_PANE_QUERY)
@@ -24997,7 +25806,7 @@ exit 0
 /// ## The conventions it obeys
 ///
 /// A fresh temp working directory ([`make_temp_cwd`], mandatory — the captive
-/// Neovim's swap directory is keyed on it); [`CAGE_LOCK`] for the whole body; one
+/// Neovim's swap directory is keyed on it); [`require_smoke_env`]'s cage slot and runtime directory for the whole body; one
 /// `sh -c` string through [`cage_command`], the single environment helper and the only
 /// place the compositor is spawned; and a config directory of its own pinning the
 /// appearance the two theme colours are measured at.
@@ -25010,10 +25819,6 @@ exit 0
 #[test]
 fn preview_highlights_a_fenced_code_block_under_cage() {
     const SMOKE: &str = "preview_highlights_a_fenced_code_block_under_cage";
-
-    // Serialize against the other cage tests (shared Wayland socket); recover from
-    // poisoning so a failure in a sibling test does not cascade here.
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
     // --- Assertion 0 (tripwire on the fixture) -------------------------------
     //
@@ -25065,7 +25870,7 @@ fn preview_highlights_a_fenced_code_block_under_cage() {
         clear_evidence(path, SMOKE);
     }
 
-    let mut cmd = cage_command(CODEHL_SCENARIO, &cwd);
+    let mut cmd = cage_command(CODEHL_SCENARIO, &cwd, &runtime_dir);
     cmd.env("WOLF_BIN", bin)
         // Chained AFTER `cage_command`, deliberately winning over the shared config
         // directory it set — the same override two smokes make for `HOME`.
@@ -25382,7 +26187,7 @@ fn preview_highlights_a_fenced_code_block_under_cage() {
 ///
 /// ## What it needs
 ///
-/// NO environment: no compositor, no [`require_smoke_env`], no [`CAGE_LOCK`], no
+/// NO environment: no compositor, no [`require_smoke_env`], no cage slot, no
 /// subprocess. It runs in microseconds and still guards on a machine where the smoke
 /// toolchain is unavailable.
 #[test]
@@ -25702,10 +26507,6 @@ exit 0
 fn preview_inline_code_keeps_the_baseline_grid_under_cage() {
     const SMOKE: &str = "preview_inline_code_keeps_the_baseline_grid_under_cage";
 
-    // Serialize against the other cage tests (shared Wayland socket); recover from
-    // poisoning so a failure in a sibling test does not cascade here.
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     let runtime_dir = require_smoke_env();
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
 
@@ -25723,7 +26524,7 @@ fn preview_inline_code_keeps_the_baseline_grid_under_cage() {
         clear_evidence(path, SMOKE);
     }
 
-    let mut cmd = cage_command(CODEGRID_SCENARIO, &cwd);
+    let mut cmd = cage_command(CODEGRID_SCENARIO, &cwd, &runtime_dir);
     cmd.env("WOLF_BIN", bin)
         .env("WOLF_CONFIG_DIR", &config)
         .env("SRC_FILE", CODEGRID_SOURCE_FILE)
@@ -26749,7 +27550,7 @@ exit 0
 /// ## The conventions it obeys
 ///
 /// A fresh temp working directory ([`make_temp_cwd`], mandatory — the captive Neovim's
-/// swap directory is keyed on it); [`CAGE_LOCK`] for the whole body; one `sh -c`
+/// swap directory is keyed on it); [`require_smoke_env`]'s cage slot and runtime directory for the whole body; one `sh -c`
 /// string through [`cage_command`], the single environment helper and the only place
 /// the compositor is spawned; a config directory of its own pinning the appearance the
 /// two theme colours are measured at; and two exit codes naming two causes.
@@ -26765,10 +27566,6 @@ fn file_picker_covers_the_live_preview_under_cage() {
     const SMOKE: &str = "file_picker_covers_the_live_preview_under_cage";
     const CONTROL_LABEL: &str = "the control capture (preview live, no overlay)";
     const SAMPLE_LABEL: &str = "the sample capture (file picker open)";
-
-    // Serialize against the other cage tests (shared Wayland socket); recover from
-    // poisoning so a failure in a sibling test does not cascade here.
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
     let runtime_dir = require_smoke_env();
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
@@ -26799,7 +27596,7 @@ fn file_picker_covers_the_live_preview_under_cage() {
         clear_evidence(path, SMOKE);
     }
 
-    let mut cmd = cage_command(PICKOVER_SCENARIO, &cwd);
+    let mut cmd = cage_command(PICKOVER_SCENARIO, &cwd, &runtime_dir);
     cmd.env("WOLF_BIN", bin)
         // Chained AFTER `cage_command`, deliberately winning over the shared config
         // directory it set — the code-highlight smoke's precedent.
@@ -27582,10 +28379,6 @@ exit 0
 fn column_cap_and_full_width_toggle_change_the_grid_under_cage() {
     const SMOKE: &str = "column_cap_and_full_width_toggle_change_the_grid_under_cage";
 
-    // Serialize against the other cage tests (shared Wayland socket); recover from
-    // poisoning so a failure in a sibling test does not cascade here.
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     let runtime_dir = require_smoke_env();
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
 
@@ -27601,7 +28394,7 @@ fn column_cap_and_full_width_toggle_change_the_grid_under_cage() {
         clear_evidence(path, SMOKE);
     }
 
-    let mut cmd = cage_command(FULLWIDTH_SCENARIO, &cwd);
+    let mut cmd = cage_command(FULLWIDTH_SCENARIO, &cwd, &runtime_dir);
     cmd.env("WOLF_BIN", bin)
         .env("WIDTH_CAPPED", &width_capped)
         .env("WIDTH_FULL", &width_full);
@@ -27930,7 +28723,7 @@ exit 0
 /// ## The conventions it obeys, including the one that does not bite
 ///
 /// A fresh temp working directory ([`make_temp_cwd`], mandatory — the captive
-/// Neovim's swap directory is keyed on it); [`CAGE_LOCK`] for the whole body; one
+/// Neovim's swap directory is keyed on it); [`require_smoke_env`]'s cage slot and runtime directory for the whole body; one
 /// `sh -c` string through [`cage_command`], which is the single environment helper
 /// and the only place the compositor is spawned; and four exit codes that name four
 /// causes with no two folded together.
@@ -27958,10 +28751,6 @@ exit 0
 fn copy_and_paste_round_trip_through_the_clipboard_under_cage() {
     const SMOKE: &str = "copy_and_paste_round_trip_through_the_clipboard_under_cage";
 
-    // Serialize against the other cage tests (shared Wayland socket); recover from
-    // poisoning so a failure in a sibling test does not cascade here.
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     let runtime_dir = require_smoke_env();
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
 
@@ -27974,7 +28763,7 @@ fn copy_and_paste_round_trip_through_the_clipboard_under_cage() {
     let readback = runtime_dir.join(CLIP_READBACK_NAME);
     clear_evidence(&readback, SMOKE);
 
-    let mut cmd = cage_command(CLIPBOARD_SCENARIO, &cwd);
+    let mut cmd = cage_command(CLIPBOARD_SCENARIO, &cwd, &runtime_dir);
     cmd.env("WOLF_BIN", bin)
         .env("CLIP_MARK", CLIP_MARK)
         .env("CLIP_READBACK", &readback);
@@ -28095,10 +28884,6 @@ fn divider_drag_survives_a_pane_relayout_under_cage() {
     // more.
     const UNDISTURBED_CELLS: i64 = 2;
 
-    // Serialize against the other cage tests (shared Wayland socket); recover from
-    // poisoning so a failure in a sibling test does not cascade here.
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     let runtime_dir = require_smoke_env();
 
     // A fresh temp cwd like every other smoke. It stays EMPTY of fixtures: this
@@ -28130,6 +28915,7 @@ fn divider_drag_survives_a_pane_relayout_under_cage() {
     let status = run_pointer_scenario(
         POINTER_DIVIDER_BODY,
         &cwd,
+        &runtime_dir,
         &out_png,
         &[
             ("PROBE_FILE", probe.as_os_str()),
@@ -28478,10 +29264,6 @@ fn dragged_divider_weights_survive_relaunch_under_cage() {
     // How many panes each width readback must describe.
     const EXPECTED_PANES: usize = 2;
 
-    // Serialize against the other cage tests (shared Wayland socket); recover from
-    // poisoning so a failure in a sibling test does not cascade here.
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     let runtime_dir = require_smoke_env();
 
     // Locate the freshly built binary under test.
@@ -28540,7 +29322,7 @@ fn dragged_divider_weights_survive_relaunch_under_cage() {
 
     let (seed_lo, seed_hi) = divider_seed_span(1, COLUMNS);
 
-    let status = cage_command(DIVIDER_RELAUNCH_SCENARIO, &cwd)
+    let status = cage_command(DIVIDER_RELAUNCH_SCENARIO, &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
         .env("CMD_FIFO", cwd.join(POINTER_CMD_FIFO_NAME))
@@ -28908,10 +29690,6 @@ fn dragged_divider_weights_survive_relaunch_under_cage() {
 fn window_title_shows_the_working_directory_under_cage() {
     const SMOKE: &str = "window_title_shows_the_working_directory_under_cage";
 
-    // Serialize against the other cage tests (shared Wayland socket); recover from
-    // poisoning so a failure in a sibling test does not cascade here.
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     let runtime_dir = require_smoke_env();
 
     // Locate the freshly built binary under test.
@@ -28958,7 +29736,7 @@ fn window_title_shows_the_working_directory_under_cage() {
     // (`~/titlezulu`, with `titlehome-parent` abbreviated away), so it is stated here
     // rather than inherited — a later change to the helper's rule must not silently
     // retarget this smoke's subject. Chained after the helper, so it wins regardless.
-    let status = cage_command(TITLE_SCENARIO, &project)
+    let status = cage_command(TITLE_SCENARIO, &project, &runtime_dir)
         .env("HOME", &home)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
@@ -29092,10 +29870,6 @@ fn window_title_shows_the_working_directory_under_cage() {
 fn open_recent_palette_row_reroots_the_window_under_cage() {
     const SMOKE: &str = "open_recent_palette_row_reroots_the_window_under_cage";
 
-    // Serialize against the other cage tests (shared Wayland socket); recover from
-    // poisoning so a failure in a sibling test does not cascade here.
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     // --- Assertion 0b, first part: this TEST process must be un-overridden -----
     //
     // Asserted BEFORE anything runs, because `wolf_core::state_dir()` below resolves
@@ -29213,7 +29987,7 @@ fn open_recent_palette_row_reroots_the_window_under_cage() {
         clear_evidence(path, SMOKE);
     }
 
-    let status = cage_command(OPENRECENT_SCENARIO, &cwd)
+    let status = cage_command(OPENRECENT_SCENARIO, &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
         .env("OPENRECENT_START_FILE", OPENRECENT_START_FILE)
@@ -29400,10 +30174,6 @@ fn open_recent_palette_row_reroots_the_window_under_cage() {
 fn alt_left_navigates_back_to_the_previous_file_under_cage() {
     const SMOKE: &str = "alt_left_navigates_back_to_the_previous_file_under_cage";
 
-    // Serialize against the other cage tests (shared Wayland socket); recover from
-    // poisoning so a failure in a sibling test does not cascade here.
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     let runtime_dir = require_smoke_env();
 
     // Locate the freshly built binary under test.
@@ -29432,7 +30202,7 @@ fn alt_left_navigates_back_to_the_previous_file_under_cage() {
         clear_evidence(path, SMOKE);
     }
 
-    let status = cage_command(NAVBACK_SCENARIO, &cwd)
+    let status = cage_command(NAVBACK_SCENARIO, &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
         .env("NAVBACK_FILE_FIRST", NAVBACK_FILE_FIRST)
@@ -29609,10 +30379,6 @@ fn alt_left_navigates_back_to_the_previous_file_under_cage() {
 fn sidebar_toggle_chord_hides_the_file_tree_under_cage() {
     const SMOKE: &str = "sidebar_toggle_chord_hides_the_file_tree_under_cage";
 
-    // Serialize against the other cage tests (shared Wayland socket); recover from
-    // poisoning so a failure in a sibling test does not cascade here.
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     let runtime_dir = require_smoke_env();
 
     // Locate the freshly built binary under test.
@@ -29649,7 +30415,7 @@ fn sidebar_toggle_chord_hides_the_file_tree_under_cage() {
         clear_evidence(path, SMOKE);
     }
 
-    let status = cage_command(SIDEBARTOGGLE_SCENARIO, &cwd)
+    let status = cage_command(SIDEBARTOGGLE_SCENARIO, &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
         .env("OUT_PNG_BEFORE", &out_png_before)
@@ -29846,10 +30612,6 @@ fn sidebar_toggle_chord_hides_the_file_tree_under_cage() {
 fn typed_cd_reroots_the_sidebar_under_cage() {
     const SMOKE: &str = "typed_cd_reroots_the_sidebar_under_cage";
 
-    // Serialize against the other cage tests (shared Wayland socket); recover from
-    // poisoning so a failure in a sibling test does not cascade here.
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     let runtime_dir = require_smoke_env();
 
     // Locate the freshly built binary under test.
@@ -29979,7 +30741,7 @@ fn typed_cd_reroots_the_sidebar_under_cage() {
     // last-write-wins per key), the same way the title and empty-state smokes override
     // `HOME`. `HOME` itself is deliberately NOT overridden: the helper's default is
     // already the value every assertion below is written against.
-    let status = cage_command(CD_SCENARIO, &cwd)
+    let status = cage_command(CD_SCENARIO, &cwd, &runtime_dir)
         .env("WOLF_STATE_DIR", &state_override)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
@@ -30205,10 +30967,6 @@ fn typed_cd_reroots_the_sidebar_under_cage() {
 fn pane_status_bar_shows_each_panes_filename_under_cage() {
     const SMOKE: &str = "pane_status_bar_shows_each_panes_filename_under_cage";
 
-    // Serialize against the other cage tests (shared Wayland socket); recover from
-    // poisoning so a failure in a sibling test does not cascade here.
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     let runtime_dir = require_smoke_env();
 
     // Locate the freshly built binary under test.
@@ -30278,7 +31036,7 @@ fn pane_status_bar_shows_each_panes_filename_under_cage() {
         );
     }
 
-    let status = cage_command(STATUS_SCENARIO, &cwd)
+    let status = cage_command(STATUS_SCENARIO, &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
         .env("STATUS_PATH_A", &path_a)
@@ -30611,7 +31369,6 @@ const CONFIRM_OCR_OPTIONS: &str = "ancel";
 fn completion_popup_lists_matches_under_cage() {
     const SMOKE: &str = "completion_popup_lists_matches_under_cage";
 
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let runtime_dir = require_smoke_env();
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
     let cwd = make_temp_cwd();
@@ -30620,7 +31377,7 @@ fn completion_popup_lists_matches_under_cage() {
     let out_png = runtime_dir.join("wolf_gnome_pum.png");
     clear_evidence(&out_png, SMOKE);
 
-    let status = cage_command(PUM_SCENARIO, &cwd)
+    let status = cage_command(PUM_SCENARIO, &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
         .status()
@@ -30657,7 +31414,6 @@ fn completion_popup_lists_matches_under_cage() {
 fn multi_line_message_shows_more_than_its_last_line_under_cage() {
     const SMOKE: &str = "multi_line_message_shows_more_than_its_last_line_under_cage";
 
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let runtime_dir = require_smoke_env();
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
     let cwd = make_temp_cwd();
@@ -30666,7 +31422,7 @@ fn multi_line_message_shows_more_than_its_last_line_under_cage() {
     let out_png = runtime_dir.join("wolf_gnome_message.png");
     clear_evidence(&out_png, SMOKE);
 
-    let status = cage_command(MSG_SCENARIO, &cwd)
+    let status = cage_command(MSG_SCENARIO, &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
         .env("MSG_FIRST", MSG_OCR_FIRST)
@@ -30703,7 +31459,6 @@ fn multi_line_message_shows_more_than_its_last_line_under_cage() {
 fn confirm_prompt_shows_then_clears_once_answered_under_cage() {
     const SMOKE: &str = "confirm_prompt_shows_then_clears_once_answered_under_cage";
 
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let runtime_dir = require_smoke_env();
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
     let cwd = make_temp_cwd();
@@ -30714,7 +31469,7 @@ fn confirm_prompt_shows_then_clears_once_answered_under_cage() {
     clear_evidence(&out_png, SMOKE);
     clear_evidence(&out_png2, SMOKE);
 
-    let status = cage_command(CONFIRM_SCENARIO, &cwd)
+    let status = cage_command(CONFIRM_SCENARIO, &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
         .env("OUT_PNG2", &out_png2)
@@ -31380,10 +32135,6 @@ exit 0
 fn terminal_drawer_opens_and_is_not_persisted_under_cage() {
     const SMOKE: &str = "terminal_drawer_opens_and_is_not_persisted_under_cage";
 
-    // Serialize against the other cage tests (shared Wayland socket); recover from
-    // poisoning so a failure in a sibling test does not cascade here.
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     let runtime_dir = require_smoke_env();
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
 
@@ -31428,7 +32179,7 @@ fn terminal_drawer_opens_and_is_not_persisted_under_cage() {
         clear_evidence(path, SMOKE);
     }
 
-    let status = cage_command(DRAWER_SCENARIO, &cwd)
+    let status = cage_command(DRAWER_SCENARIO, &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
         .env("DRAWER_FIXTURE", DRAWER_FIXTURE_FILE)
@@ -31932,8 +32683,6 @@ exit 0
 fn terminal_drawer_defaults_to_full_width_under_cage() {
     const SMOKE: &str = "terminal_drawer_defaults_to_full_width_under_cage";
 
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     let runtime_dir = require_smoke_env();
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
     let cwd = make_temp_cwd();
@@ -31942,7 +32691,7 @@ fn terminal_drawer_defaults_to_full_width_under_cage() {
     let geometry = runtime_dir.join(DRAWER_GEOMETRY_READBACK_NAME);
     clear_evidence(&geometry, SMOKE);
 
-    let mut cmd = cage_command(DRAWER_FULLWIDTH_SCENARIO, &cwd);
+    let mut cmd = cage_command(DRAWER_FULLWIDTH_SCENARIO, &cwd, &runtime_dir);
     cmd.env("WOLF_BIN", bin).env("GEOMETRY", &geometry);
 
     // THE line that makes this smoke possible, chained AFTER `cage_command` so it
@@ -32275,8 +33024,6 @@ exit 0
 fn terminal_drawer_reopens_after_a_neovim_restart_under_cage() {
     const SMOKE: &str = "terminal_drawer_reopens_after_a_neovim_restart_under_cage";
 
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     let runtime_dir = require_smoke_env();
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
     let cwd = make_temp_cwd();
@@ -32290,14 +33037,18 @@ fn terminal_drawer_reopens_after_a_neovim_restart_under_cage() {
         clear_evidence(path, SMOKE);
     }
 
-    let status = cage_command(&with_nvim_pid_helper(DRAWER_RESTART_SCENARIO), &cwd)
-        .env("WOLF_BIN", bin)
-        .env("BT_BEFORE", &bt_before)
-        .env("BT_RECOVERED", &bt_recovered)
-        .env("BT_REOPENED", &bt_reopened)
-        .env("BT_AFTER_UP", &bt_after_up)
-        .status()
-        .expect("failed to spawn `cage` for the headless drawer restart scenario");
+    let status = cage_command(
+        &with_nvim_pid_helper(DRAWER_RESTART_SCENARIO),
+        &cwd,
+        &runtime_dir,
+    )
+    .env("WOLF_BIN", bin)
+    .env("BT_BEFORE", &bt_before)
+    .env("BT_RECOVERED", &bt_recovered)
+    .env("BT_REOPENED", &bt_reopened)
+    .env("BT_AFTER_UP", &bt_after_up)
+    .status()
+    .expect("failed to spawn `cage` for the headless drawer restart scenario");
 
     // --- Assertion 1 (precondition): the scenario ran to completion -----------
     assert!(
@@ -32903,10 +33654,6 @@ fn native_tabs_open_switch_and_close_under_cage() {
     const TABS_AFTER_CLOSE: i64 = 1;
     const FIRST_TABPAGE_NR: i64 = 1;
 
-    // Serialize against the other cage tests (shared Wayland socket); recover from
-    // poisoning so a failure in a sibling test does not cascade here.
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     let runtime_dir = require_smoke_env();
 
     let cwd = make_temp_cwd();
@@ -32990,6 +33737,7 @@ fn native_tabs_open_switch_and_close_under_cage() {
     let status = run_pointer_scenario(
         POINTER_TABS_BODY,
         &cwd,
+        &runtime_dir,
         &out_png,
         &[
             ("TABS_FIRST_FILE", OsStr::new(TABS_FIRST_FILE)),
@@ -33716,9 +34464,10 @@ exit 0
 /// This smoke sets [`SAVE_AS_GDK_DEBUG`] even though its green path opens NO dialog,
 /// and the reason is the red path rather than the green one. Should an edit ever make
 /// `save_press` answer `Choose` for a NAMED buffer, `AppShell::open_save_dialog` runs;
-/// without the variable GTK takes the portal route to the developer's real session bus
-/// and a modal file dialog opens on the developer's DESKTOP while this smoke hangs
-/// holding the Wayland socket, wedging every other cage smoke. With it, that same wrong
+/// without the variable GTK takes the portal route, and wherever that route reaches
+/// the host's portal a modal file dialog opens on the developer's DESKTOP while this
+/// smoke hangs holding its cage slot. Each cage's only bus is its own private one, so
+/// the variable is defence in depth; see [`SAVE_AS_GDK_DEBUG`]. With it, that same wrong
 /// answer merely opens an in-process dialog inside `cage` that nothing answers, and the
 /// smoke fails on its own assertion instead. If that happens, the finding is in
 /// `save_ui::save_press`. See [`the_save_dialog_writes_a_named_file_under_cage`].
@@ -33739,10 +34488,6 @@ exit 0
 #[test]
 fn ctrl_shift_s_saves_the_focused_buffer_to_disk_under_cage() {
     const SMOKE: &str = "ctrl_shift_s_saves_the_focused_buffer_to_disk_under_cage";
-
-    // Serialize against the other cage tests (shared Wayland socket); recover from
-    // poisoning so a failure in a sibling test does not cascade here.
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
     let runtime_dir = require_smoke_env();
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
@@ -33785,7 +34530,7 @@ fn ctrl_shift_s_saves_the_focused_buffer_to_disk_under_cage() {
          unlike, as the sibling smokes do."
     );
 
-    let status = cage_command(SAVE_SCENARIO, &cwd)
+    let status = cage_command(SAVE_SCENARIO, &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
         .env("SAVE_FILE", SAVE_FIXTURE_FILE)
         .env("SAVE_SENTINEL", SAVE_SENTINEL)
@@ -33920,18 +34665,19 @@ const SAVEAS_PROPOSED_NAME: &str = wolf_gnome::save_ui::UNTITLED_SAVE_NAME;
 /// Under `XDG_RUNTIME_DIR` for [`SAVE_READBACK_BEFORE_NAME`]'s reason.
 const SAVEAS_READBACK_NAMELESS_NAME: &str = "wolf_gnome_saveas_nameless.txt";
 
-/// The value of `GDK_DEBUG` **both** save smokes export, and **the only thing standing
-/// between a later "simplification" and a wedged suite.**
+/// The value of `GDK_DEBUG` **both** save smokes export: defence in depth against a
+/// dialog opening on the developer's desktop.
 ///
-/// Measured, and not negotiable: `gdk_display_should_use_portal` answers true because
-/// GDBus reaches the developer's REAL session bus at `$XDG_RUNTIME_DIR/bus` even though
-/// the harness removes `DBUS_SESSION_BUS_ADDRESS`. GTK then exports a window handle
-/// through `zxdg_exporter_v2`, which `cage` does not implement, and proceeds to
-/// `show_portal_file_chooser(self, NULL)` anyway — so the request goes to the HOST's
-/// `org.freedesktop.portal.Desktop`. The consequence is not an invisible dialog: **a
+/// Measured: whenever the app reaches a session bus, `gdk_display_should_use_portal`
+/// answers true. GTK then exports a window handle through `zxdg_exporter_v2`, which
+/// `cage` does not implement, and proceeds to `show_portal_file_chooser(self, NULL)`
+/// anyway — so the request goes to the HOST's `org.freedesktop.portal.Desktop`, **a
 /// modal file dialog opens on the developer's desktop and this smoke hangs** until it
-/// is answered or the app is killed, holding the Wayland socket the whole time and
-/// failing every other cage smoke with `unable to lock lockfile`.
+/// is answered or the app is killed, holding its cage slot the whole time. Each cage's
+/// only bus is its own from [`cage_command`]'s `dbus-run-session`, so the host's
+/// portal is out of reach today; the export keeps GTK's in-process chooser, the one
+/// this smoke was measured against, whatever that private bus can activate, and
+/// guards against the isolation regressing.
 ///
 /// `no-portals` forces GTK's in-process fallback, which was measured under `cage` to
 /// present (`visible=true mapped=true realized=true`, 881x326) and to return
@@ -33944,12 +34690,10 @@ const SAVEAS_READBACK_NAMELESS_NAME: &str = "wolf_gnome_saveas_nameless.txt";
 /// run Ctrl+Shift+S over a NAMED buffer answers `Write` and no dialog is ever
 /// constructed, so the variable does nothing. But any falsifying edit that makes
 /// `save_press` answer `Choose` for a named buffer — including the obvious one, dropping
-/// the `save_name` check — reaches `AppShell::open_save_dialog`, and without this
-/// variable that opens a modal on the developer's DESKTOP and hangs the smoke while it
-/// holds the Wayland lock, failing every other cage smoke in the suite with `unable to
-/// lock lockfile`. With it, the same wrong answer opens an unanswered in-process dialog
-/// inside `cage` and the smoke fails on its own assertion. It costs nothing green and
-/// removes a hazard that would otherwise read as a mass regression.
+/// the `save_name` check — reaches `AppShell::open_save_dialog`. Wherever a session
+/// bus is reachable, that opens a modal on the developer's DESKTOP and hangs the smoke.
+/// With it, the same wrong answer opens an unanswered in-process dialog inside `cage`
+/// and the smoke fails on its own assertion. It costs nothing green.
 ///
 /// This is PER-SMOKE SCENARIO ENVIRONMENT and never production behaviour.
 const SAVE_AS_GDK_DEBUG: &str = "no-portals";
@@ -34132,28 +34876,25 @@ fn the_save_dialog_writes_a_named_file_under_cage() {
 
     // --- Assertion 0: the pin, asserted BEFORE anything is spawned ------------
     //
-    // Loud and first, because getting it wrong does not fail this test — it opens a
-    // modal file dialog on the developer's desktop and hangs the whole suite behind the
-    // Wayland lock. The literal is deliberately RE-TYPED rather than read from the
+    // Loud and first, because wherever a session bus is reachable, getting it wrong
+    // does not fail this test — it opens a modal file dialog on the developer's desktop
+    // and hangs this smoke. The literal is deliberately RE-TYPED rather than read from the
     // const, since comparing a const against itself would pin nothing.
     assert_eq!(
         SAVE_AS_GDK_DEBUG, "no-portals",
-        "SAVE_AS_GDK_DEBUG is no longer \"no-portals\". DO NOT RUN THIS SMOKE until it is. \
-         Measured: `gdk_display_should_use_portal` answers true because GDBus reaches the \
-         developer's REAL session bus at $XDG_RUNTIME_DIR/bus even with DBUS_SESSION_BUS_ADDRESS \
-         removed; GTK then tries to export a window handle through `zxdg_exporter_v2`, which \
-         `cage` does not implement, and calls `show_portal_file_chooser(self, NULL)` anyway. The \
-         request therefore goes to the HOST's org.freedesktop.portal.Desktop, so a MODAL FILE \
-         DIALOG OPENS ON THE DEVELOPER'S DESKTOP and this smoke hangs until it is answered — \
-         holding the Wayland socket the whole time, which fails every other cage smoke with \
-         `unable to lock lockfile … maybe another compositor is running` and reads as a mass \
-         regression in whatever change is in flight. `no-portals` forces GTK's in-process \
+        "SAVE_AS_GDK_DEBUG is not \"no-portals\". DO NOT RUN THIS SMOKE until it is. \
+         Measured: whenever the app reaches a session bus, `gdk_display_should_use_portal` \
+         answers true; GTK then tries to export a window handle through `zxdg_exporter_v2`, \
+         which `cage` does not implement, and calls `show_portal_file_chooser(self, NULL)` \
+         anyway. The request therefore goes to the HOST's org.freedesktop.portal.Desktop, so a \
+         MODAL FILE DIALOG OPENS ON THE DEVELOPER'S DESKTOP and this smoke hangs until it is \
+         answered, holding its cage slot. Each cage's only bus is its own private one from \
+         `dbus-run-session`; this pin keeps GTK's in-process chooser regardless, and is the \
+         defence in depth for when that isolation regresses. `no-portals` forces GTK's in-process \
          fallback, which was measured under `cage` to present at 881x326 and to hand \
          `Ok(<cwd>/typedname.md)` back to the callback. This is per-smoke scenario environment and \
          never production behaviour."
     );
-
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
     let runtime_dir = require_smoke_env();
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
@@ -34180,7 +34921,7 @@ fn the_save_dialog_writes_a_named_file_under_cage() {
          a name unlike the proposal can tell a REPLACED entry from an appended one."
     );
 
-    let mut cmd = cage_command(SAVEAS_SCENARIO, &cwd);
+    let mut cmd = cage_command(SAVEAS_SCENARIO, &cwd, &runtime_dir);
     cmd.env("WOLF_BIN", bin)
         .env("NAMELESS", &nameless)
         .env("SAVEAS_SENTINEL", SAVEAS_SENTINEL)
@@ -34557,10 +35298,6 @@ exit 0
 fn composed_text_reaches_neovim_under_cage() {
     const SMOKE: &str = "composed_text_reaches_neovim_under_cage";
 
-    // Serialize against the other cage tests (shared Wayland socket); recover from
-    // poisoning so a failure in a sibling test does not cascade here.
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     let runtime_dir = require_smoke_env();
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
 
@@ -34612,7 +35349,7 @@ fn composed_text_reaches_neovim_under_cage() {
         );
     }
 
-    let status = cage_command(COMPOSE_SCENARIO, &cwd)
+    let status = cage_command(COMPOSE_SCENARIO, &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
         .env("COMPOSE_FILE", COMPOSE_FIXTURE_FILE)
         .env("BEFORE", &before)
@@ -35030,10 +35767,6 @@ exit 0
 fn a_control_chord_while_composing_is_claimed_by_the_input_method_under_cage() {
     const SMOKE: &str = "a_control_chord_while_composing_is_claimed_by_the_input_method_under_cage";
 
-    // Serialize against the other cage tests (shared Wayland socket); recover from
-    // poisoning so a failure in a sibling test does not cascade here.
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     let runtime_dir = require_smoke_env();
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
 
@@ -35065,7 +35798,7 @@ fn a_control_chord_while_composing_is_claimed_by_the_input_method_under_cage() {
         clear_evidence(evidence, SMOKE);
     }
 
-    let status = cage_command(IMCHORD_SCENARIO, &cwd)
+    let status = cage_command(IMCHORD_SCENARIO, &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
         .env("IMCHORD_FILE", IMCHORD_FIXTURE_FILE)
         .env("BUFNAME_OUT", &bufname_out)
@@ -35684,10 +36417,6 @@ fn parse_frame_stats_blocks(text: &str, path: &Path, smoke: &str) -> Vec<FrameSt
 fn frame_stats_report_covers_the_live_typing_path_under_cage() {
     const SMOKE: &str = "frame_stats_report_covers_the_live_typing_path_under_cage";
 
-    // Serialize against the other cage tests (shared Wayland socket); recover from
-    // poisoning so a failure in a sibling test does not cascade here.
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     let runtime_dir = require_smoke_env();
 
     // Locate the freshly built binary under test.
@@ -35700,15 +36429,12 @@ fn frame_stats_report_covers_the_live_typing_path_under_cage() {
     // `workspace::launch_decision` does not take its `cwd == home` empty-state arm).
     let cwd = make_temp_cwd();
 
-    // Start from a clean slate: evidence that could be a previous run's leftover is
-    // not evidence. `clear_evidence` removes AND asserts absent — which matters more
-    // here than anywhere else in this file, because the app APPENDS to this path, so
-    // a stale copy would not be overwritten but added to.
+    // The app APPENDS to this path; it starts absent because the runtime directory is
+    // this smoke's own and fresh.
     let stats_path = runtime_dir.join(FRAME_STATS_FILE_NAME);
-    clear_evidence(&stats_path, SMOKE);
 
     // --- Assertion 1: the scenario ran to completion --------------------------
-    let status = cage_command(FRAME_STATS_SCENARIO, &cwd)
+    let status = cage_command(FRAME_STATS_SCENARIO, &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
         .env("WOLF_FRAME_STATS", "1")
         .env("WOLF_FRAME_STATS_INTERVAL", FRAME_STATS_INTERVAL_SECS)
@@ -35986,12 +36712,8 @@ fn frame_stats_report_covers_the_live_typing_path_under_cage() {
 // what a user launches.
 //
 // THEY LIVE IN THIS FILE RATHER THAN A NEW ONE, and that is not a stylistic call. A
-// second test binary that spawns `cage` runs CONCURRENTLY with this one under
-// `cargo test -p wolf-gnome`, and [`CAGE_LOCK`] is a per-process mutex that cannot
-// serialize across processes — the tests README records the signature (`unable to
-// lock lockfile … maybe another compositor is running`, plus a hang that reads as a
-// mass regression). A second file would also need a compositor spawn of its own — a
-// `Command::new` naming `cage`, written apart HERE on purpose. A contiguous spelling
+// second file would need a compositor spawn of its own — a `Command::new` naming
+// `cage`, written apart HERE on purpose. A contiguous spelling
 // in this file is counted by [`cage_is_only_spawned_through_the_isolating_helper`] as
 // a SECOND spawn site and turns that guard permanently red, which is the same reason
 // [`CAGE_SPAWN_NEEDLE`] is assembled from fragments; do not rejoin it. That guard
@@ -36086,7 +36808,7 @@ fn packaged_binary(smoke: &str) -> PathBuf {
 /// compositor keep-list because NO `wolf-gnome` code reads either: they stage the two
 /// vendored trees for `crates/wolf-ffi/tests/orlando_load.rs` and `lighthouse_load.rs`,
 /// which reconstruct their own sibling layout in a temp directory. Scrubbing them
-/// costs nothing and keeps [`KEPT_FOR_THE_COMPOSITOR`] at exactly the three names
+/// costs nothing and keeps [`KEPT_FOR_THE_COMPOSITOR`] at exactly the two names
 /// `cage` itself needs.
 const PACKAGED_SCRUB_ALWAYS: [&str; 8] = [
     "WOLF_NVIM_BIN",
@@ -36135,11 +36857,9 @@ const PACKAGED_SCRUB_FONT_STACK: [&str; 1] = ["FONTCONFIG_FILE"];
 /// The `shellHook` exports every packaged smoke deliberately KEEPS, because they
 /// belong to `cage` rather than to the application under test.
 ///
-/// Removing any of these would break the compositor itself, not the artifact:
-/// `XDG_RUNTIME_DIR` is where the Wayland socket lives, and the two `WLR_*` values
-/// are what select wlroots' headless backend and stop it looking for input devices.
-const KEPT_FOR_THE_COMPOSITOR: [&str; 3] =
-    ["XDG_RUNTIME_DIR", "WLR_BACKENDS", "WLR_LIBINPUT_NO_DEVICES"];
+/// Removing either would break the compositor itself, not the artifact: they select
+/// wlroots' headless backend and stop it looking for input devices.
+const KEPT_FOR_THE_COMPOSITOR: [&str; 2] = ["WLR_BACKENDS", "WLR_LIBINPUT_NO_DEVICES"];
 
 /// Whether a packaged scenario also removes [`PACKAGED_SCRUB_GTK_RUNTIME`] and
 /// [`PACKAGED_SCRUB_FONT_STACK`] — the two lists that a scenario with an unwrapped
@@ -36168,10 +36888,13 @@ enum GtkRuntimeEnv {
 /// is mandatory rather than tidy: that helper is the single spawn site
 /// [`cage_is_only_spawned_through_the_isolating_helper`] enforces, and it carries
 /// `WOLF_STATE_DIR`, `WOLF_CONFIG_DIR`, `HOME`, `XDG_CACHE_HOME`, `GTK_IM_MODULE`,
-/// `WOLF_READY_FILE` (with the readiness prelude) and the `DBUS_SESSION_BUS_ADDRESS`
-/// removal. None of those seven is a devShell export and none of them may be
-/// scrubbed: they are the harness's own isolation, and the config directory in particular is what pins the font family, size,
-/// line-height and appearance that every derived band below is computed against.
+/// `WOLF_READY_FILE` (with the readiness prelude), the private `XDG_RUNTIME_DIR` of
+/// `runtime`, and the removal of `DBUS_SESSION_BUS_ADDRESS` and the host display
+/// variables. None of those is a devShell export and none of them may be scrubbed:
+/// they are the harness's own isolation. The runtime directory is what keeps the
+/// store binary from handing its launch off to a copy the developer has installed and
+/// running, and the config directory is what pins the font family, size, line-height
+/// and appearance that every derived band below is computed against.
 ///
 /// What IS removed is [`PACKAGED_SCRUB_ALWAYS`], plus
 /// [`PACKAGED_SCRUB_GTK_RUNTIME`] and [`PACKAGED_SCRUB_FONT_STACK`] when
@@ -36184,8 +36907,13 @@ enum GtkRuntimeEnv {
 ///
 /// [`every_shellhook_export_is_scrubbed_or_deliberately_kept`] is what keeps the three
 /// scrub lists tracking `flake.nix` as it changes.
-fn packaged_cage_command(scenario: &str, cwd: &Path, gtk_runtime: GtkRuntimeEnv) -> Command {
-    let mut cmd = cage_command(scenario, cwd);
+fn packaged_cage_command(
+    scenario: &str,
+    cwd: &Path,
+    runtime: &CageRuntime<'_>,
+    gtk_runtime: GtkRuntimeEnv,
+) -> Command {
+    let mut cmd = cage_command(scenario, cwd, runtime);
     for name in PACKAGED_SCRUB_ALWAYS {
         cmd.env_remove(name);
     }
@@ -36335,7 +37063,7 @@ fn require_linux_shell_hook_exports(guard: &str) -> (PathBuf, Vec<String>, usize
 ///
 /// ## What it needs
 ///
-/// NO environment: no compositor, no `require_smoke_env`, no [`CAGE_LOCK`], no
+/// NO environment: no compositor, no `require_smoke_env`, no cage slot, no
 /// subprocess and no built package. It reads one file, and it is NOT `#[ignore]`d —
 /// it runs in the ordinary suite, which is the point, since the leak it guards
 /// against arrives with a `flake.nix` edit rather than with a packaged run.
@@ -36491,7 +37219,7 @@ const VENDORED_TREE_EXPORTS: [(&str, &str); 2] = [
 ///
 /// ## What it needs
 ///
-/// NO environment: no compositor, no `require_smoke_env`, no [`CAGE_LOCK`], no
+/// NO environment: no compositor, no `require_smoke_env`, no cage slot, no
 /// subprocess and no built package. It reads one file, and it is NOT `#[ignore]`d —
 /// the deletion it guards against arrives with a `flake.nix` edit, so it has to run in
 /// the ordinary suite.
@@ -36596,8 +37324,6 @@ const PACKAGED_SMOKE_PNG_NAME: &str = "wolf_gnome_packaged_smoke.png";
 fn packaged_binary_renders_typed_text_under_cage() {
     const SMOKE: &str = "packaged_binary_renders_typed_text_under_cage";
 
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     let runtime_dir = require_smoke_env();
     let bin = packaged_binary(SMOKE);
 
@@ -36610,7 +37336,7 @@ fn packaged_binary_renders_typed_text_under_cage() {
     let out_png = runtime_dir.join(PACKAGED_SMOKE_PNG_NAME);
     clear_evidence(&out_png, SMOKE);
 
-    let status = packaged_cage_command(SCENARIO, &cwd, GtkRuntimeEnv::Scrubbed)
+    let status = packaged_cage_command(SCENARIO, &cwd, &runtime_dir, GtkRuntimeEnv::Scrubbed)
         .env("WOLF_BIN", &bin)
         .env("OUT_PNG", &out_png)
         .env("OCR_WORD", OCR_WORD)
@@ -37344,8 +38070,6 @@ exit 0
 fn the_packaged_binary_loads_the_vendored_lighthouse_and_orlando_under_cage() {
     const SMOKE: &str = "the_packaged_binary_loads_the_vendored_lighthouse_and_orlando_under_cage";
 
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     let runtime_dir = require_smoke_env();
     let store_bin = packaged_binary(SMOKE);
     let control_bin = env!("CARGO_BIN_EXE_wolf-gnome");
@@ -37387,7 +38111,12 @@ fn the_packaged_binary_loads_the_vendored_lighthouse_and_orlando_under_cage() {
         clear_evidence(path, SMOKE);
     }
 
-    let mut cmd = packaged_cage_command(PACKAGED_PLUGINS_SCENARIO, &cwd, GtkRuntimeEnv::Inherited);
+    let mut cmd = packaged_cage_command(
+        PACKAGED_PLUGINS_SCENARIO,
+        &cwd,
+        &runtime_dir,
+        GtkRuntimeEnv::Inherited,
+    );
     cmd.env("SRC_FILE", PACKAGED_PLUGINS_SOURCE_FILE)
         .env("CONTROL_BIN", control_bin)
         .env("CONTROL_NVIM_BIN", &control_nvim)
@@ -37961,8 +38690,6 @@ exit 0
 fn the_packaged_binary_opens_a_preview_under_cage() {
     const SMOKE: &str = "the_packaged_binary_opens_a_preview_under_cage";
 
-    let _cage_guard = CAGE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
     let runtime_dir = require_smoke_env();
     let bin = packaged_binary(SMOKE);
 
@@ -37979,14 +38706,19 @@ fn the_packaged_binary_opens_a_preview_under_cage() {
         clear_evidence(path, SMOKE);
     }
 
-    let status = packaged_cage_command(PACKAGED_PREVIEW_SCENARIO, &cwd, GtkRuntimeEnv::Scrubbed)
-        .env("WOLF_BIN", &bin)
-        .env("SRC_FILE", PREVIEW_THEME_SOURCE_FILE)
-        .env("PREVIEW_OTHER_PANE_QUERY", PREVIEW_OTHER_PANE_QUERY)
-        .env("OUT_PNG", &out_png)
-        .env("WINS", &wins)
-        .status()
-        .expect("failed to spawn `cage` for the packaged preview scenario");
+    let status = packaged_cage_command(
+        PACKAGED_PREVIEW_SCENARIO,
+        &cwd,
+        &runtime_dir,
+        GtkRuntimeEnv::Scrubbed,
+    )
+    .env("WOLF_BIN", &bin)
+    .env("SRC_FILE", PREVIEW_THEME_SOURCE_FILE)
+    .env("PREVIEW_OTHER_PANE_QUERY", PREVIEW_OTHER_PANE_QUERY)
+    .env("OUT_PNG", &out_png)
+    .env("WINS", &wins)
+    .status()
+    .expect("failed to spawn `cage` for the packaged preview scenario");
 
     // --- Assertion 1 (precondition): the scenario ran to completion -----------
     assert!(
