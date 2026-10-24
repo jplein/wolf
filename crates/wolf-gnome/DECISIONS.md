@@ -58,7 +58,7 @@ The drain order is fixed and every position is load-bearing. The liveness read r
 
 `WolfCore` is not `Send`. It lives only on the main thread in an `Rc<RefCell<Option<_>>>` shared by the widget closures, and the wake closure is the only thing that crosses a thread boundary. Every core borrow is taken and dropped in its own statement, because the close-request handler does `borrow_mut().take()` and an outstanding borrow on that path is a panic rather than a warning.
 
-Nothing polls. No timer is periodic and no timer drives a read: neither a redraw, a liveness read, nor a state snapshot is scheduled by the clock. A periodic liveness poll in particular is rejected — it would let a lossy wake transport still raise the crash overlay eventually, buying insurance by destroying the evidence the crash smoke exists to gather. The frame-time instrument holds to the same property with its flag set, which is what shapes its cadence ([Frame-time instrumentation](#frame-time-instrumentation)).
+Nothing polls. No timer is periodic and no timer drives a read: neither a redraw, a liveness read, nor a state snapshot is scheduled by the clock. A periodic liveness poll in particular is rejected — it would let a lossy wake transport still raise the crash overlay eventually, buying insurance by destroying the evidence the crash smoke exists to gather. The frame-time instrument holds to the same property with its flag set, which is what shapes its cadence ([Frame-time instrumentation](#frame-time-instrumentation)), and so does the [readiness probe](#the-readiness-file), which is checked on events the window already receives.
 
 Three one-shot timers exist and none is a poll. Each is armed by an arriving event, fires once, and disarms: the deferred restart, which exists because the overlay must be presented before a synchronous respawn blocks the main loop; the sidebar's trailing refresh, which collapses a burst of traversal batches into one rebuild; and the preview's trailing render, armed by an arriving edit ([The preview render's budget](#the-preview-renders-budget)). None re-arms itself, so no timer exists while the application is idle.
 
@@ -92,7 +92,7 @@ The trailing edge is undroppable, and the cases that could drop it are answered 
 
 ## The coordinator and its windows
 
-A process-scoped coordinator sits above the window-scoped shell, and exactly five things live up there, each because a second copy of it would be wrong rather than merely wasteful: the one `StateStore`, the one config read, the one `CellMetrics` measurement, the `app.`-namespace actions, and the session's launch plans. Everything else is per-window and stays there.
+A process-scoped coordinator sits above the window-scoped shell, and exactly six things live up there, each because a second copy of it would be wrong rather than merely wasteful: the one `StateStore`, the one config read, the one `CellMetrics` measurement, the `app.`-namespace actions, the session's launch plans, and the test-only [readiness probe](#the-readiness-file), whose condition spans every window a launch restores. Everything else is per-window and stays there.
 
 The config is read once so two windows cannot disagree about the font mid-session; the metrics because they are deterministic given the config and already shared by `Rc` inside a window; the plans because a launch restores a session rather than a window. The store's reason is sharper.
 
@@ -338,7 +338,7 @@ A missing precondition fails loud rather than skipping quietly, because absence 
 
 Three further smokes at the end of the same file drive the installed store artifact through the same helper, scrubbing from the child every devShell export that artifact must supply for itself. They are `#[ignore]`d because their precondition is a built package, and they live in that file rather than one of their own because a second test binary spawning `cage` cannot serialize against this one.
 
-Three details are load-bearing. Every smoke holds a shared mutex for its whole body, because two `cage` compositors started concurrently contend for the same Wayland socket and both fail. Each scenario runs inside `cage` as a single shell command, since `cage` exports its `WAYLAND_DISPLAY` only to its own child process tree. And every smoke's environment comes from one helper, which is the only thing keeping a smoke run out of the developer's real state and configuration directories.
+Four details are load-bearing. Every smoke holds a shared mutex for its whole body, because two `cage` compositors started concurrently contend for the same Wayland socket and both fail. Each scenario runs inside `cage` as a single shell command, since `cage` exports its `WAYLAND_DISPLAY` only to its own child process tree. Every smoke's environment comes from one helper, which is the only thing keeping a smoke run out of the developer's real state and configuration directories. And no scenario sends input before the [readiness file](#the-readiness-file) names the pid it launched.
 
 ## Frame-time instrumentation
 
@@ -379,6 +379,24 @@ The coalesced reading was taken against a baseline of its own, with both binarie
 **Total main-thread busy falls by about 3.5 points rather than by the render's whole share.** `draw.pane`'s count rises 78 % over the same wall clock at an unchanged per-frame mean — frames GTK wanted to deliver and could not while the thread sat in a blocking RPC — and the summed families go from 29.7 % to 26.1 %. The blocking RPC is gone and the wake path is 98 % cheaper; the freed CPU is largely spent painting a smoother editor rather than going idle.
 
 **Nothing else is indicted.** `wake` in scenario A reads a 0.11 ms p95, and `wake.tree`, `wake.shell`, `wake.state`, `pane.state`, `draw.status`, `draw.cmdline` and `prev.load` all sit below the threshold at which a repair could pay for itself. `draw.read` reads 0.00 ms, which is the measurement behind the claim that `read_snapshot` copies nothing and contends with no tokio writer.
+
+## The readiness file
+
+`WOLF_READY_FILE=<path>` is a test-only hook, off by default: once a launch's windows accept keystrokes, the process writes its pid there, and the smoke harness types nothing until the file names the pid it launched. No fixed sleep is a sound budget for that moment, because launch-to-input is a few hundred milliseconds on an idle host — longer with a cold shader cache — and unbounded under load. The predicate is [`ready_seam.rs`](src/README.md#ready_seamrs)'s; the coordinator gathers the readings and writes the file.
+
+**A keyboard on the seat is the delivery precondition.** A headless `cage` seat has no keyboard until a virtual keyboard has existed, and the first key the first virtual keyboard sends after the window maps is lost. The harness primes the seat with a key-free `wtype ""`, and the app waits until that virtual keyboard appears in its seat's device list, so no key is sent before the client can receive one. The window must also have a focus widget for the window-level key controller to receive from.
+
+**`is_active` and `Seat::keyboard()` are both rejected readings.** Under `cage` the toplevel turns active only after a real key arrives, so waiting for it deadlocks. `Seat::keyboard()` answers GDK's logical "Core Keyboard", which exists on a seat with no keyboard at all, so testing it is vacuous. `seat.devices(KEYBOARD)` lists only non-logical devices, so it turns non-empty when the virtual keyboard appears and stays so after the `wtype` that created it exits.
+
+**The input window is the last mapped.** All windows share one Wayland connection, so the ordinal of each window's first frame-clock `after-paint` is its map order. Only that window must also have every bound pane's requested grid applied by Neovim, which is what makes pointer targets and `winwidth` readbacks mean what they say. An older, covered window may never be redrawn — inferred from wlroots' occlusion handling, not measured — so requiring it to be sized could hang.
+
+**Every launch window must finish its restore.** A pending saved layout, or a restore queue that still owes pages, is consumed on a later wake with blocking RPCs that would interleave with typed keys. An abandoned restore issues no further RPC and counts as finished. Every window must also have a live core, a bound pane and a painted frame.
+
+**"Neovim is not at a prompt" is deliberately not a condition.** The file means keys are delivered, not that they are interpreted as intended, so a startup prompt stays visible as the bug it is.
+
+**Triggers.** The predicate is checked at the end of each wake, on the seat's `device-added` and after each frame-clock paint, all wired only in a window built while the probe is pending; there is no timer. Each change of the unmet condition is reported on stderr as `wolf-ready: waiting on <condition>`, through the same never-panic write the frame-time instrument uses.
+
+**Lifetime and format.** The probe fires once per process and is never re-armed, so a Neovim restart or a later New Window is not covered. The file holds the pid and a newline, written through a `.tmp` and a rename, so a reader never sees a partial pid and a scenario's two launches can share one path. There is no margin after the write: a keystroke still lost means a condition is missing, and a sleep would hide which.
 
 ## Present limitations
 

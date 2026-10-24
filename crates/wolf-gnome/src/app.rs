@@ -8,7 +8,7 @@
 //! the running primary instance over D-Bus — opens one fresh window instead.
 //!
 //! Everything a window is lives in [`mod@crate::window`]; everything the process
-//! owns exactly once lives in [`mod@crate::coordinator`], which calls the four
+//! owns exactly once lives in [`mod@crate::coordinator`], which calls the five
 //! helpers below. The split is `crates/wolf-gnome/DECISIONS.md`'s to justify.
 //!
 //! The coordinator is held in an `Rc<RefCell<Option<_>>>` captured by the
@@ -30,6 +30,7 @@ use crate::config_seam;
 use crate::coordinator::{self, Coordinator};
 use crate::frame_metrics;
 use crate::init_lua;
+use crate::ready_seam;
 use crate::CellMetrics;
 
 /// The GApplication id. Adwaita uses it for resource paths, the default window
@@ -158,6 +159,18 @@ pub(crate) fn init_lua_path() -> PathBuf {
         &manifest_fallback,
         |p: &Path| p.exists(),
     )
+}
+
+/// The test-only readiness file `WOLF_READY_FILE` names, or `None` when it names
+/// none — which is the shipped default.
+///
+/// GLUE only, shaped like [`init_lua_path`]: the environment read lives here and
+/// the rule lives in [`ready_seam::ready_file_path`]. Called once per process, by
+/// [`crate::coordinator::build`].
+#[must_use]
+pub(crate) fn ready_file_path() -> Option<PathBuf> {
+    let raw = std::env::var(ready_seam::READY_FILE_ENV).ok();
+    ready_seam::ready_file_path(raw.as_deref()).map(PathBuf::from)
 }
 
 /// Opens the application-state store over the platform state directory.

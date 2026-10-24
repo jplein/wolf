@@ -28,7 +28,9 @@ nix develop --command cargo test -p wolf-gnome
 
 After editing `flake.nix`, use `nix develop --command` explicitly: an already-loaded direnv environment is stale and has no GTK.
 
-Running needs a Wayland or X11 session, or the headless compositor the smoke tests launch. Four environment variables matter. `WOLF_FONT_PT` overrides the configured `font-size` and wins over it, as it does on macOS; `WOLF_CONFIG_DIR` overrides where `wolf-config.yaml` is read and created, and belongs to [`config.rs`](../wolf-core/src/README.md#configrs); `WOLF_STATE_DIR` overrides where `state.json`, the MRU databases and the per-project swap directories are kept; `WOLF_INIT_LUA` names the captive `runtime/nvim/init.lua` outright, ahead of both paths the binary would otherwise resolve, and is deliberately not checked for existence, so a typo fails loudly instead of falling through to another file.
+Running needs a Wayland or X11 session, or the headless compositor the smoke tests launch. Five environment variables matter. `WOLF_FONT_PT` overrides the configured `font-size` and wins over it, as it does on macOS; `WOLF_CONFIG_DIR` overrides where `wolf-config.yaml` is read and created, and belongs to [`config.rs`](../wolf-core/src/README.md#configrs); `WOLF_STATE_DIR` overrides where `state.json`, the MRU databases and the per-project swap directories are kept; `WOLF_INIT_LUA` names the captive `runtime/nvim/init.lua` outright, ahead of both paths the binary would otherwise resolve, and is deliberately not checked for existence, so a typo fails loudly instead of falling through to another file.
+
+`WOLF_READY_FILE` belongs to the smoke harness: the binary writes its pid there once its launch windows accept input ([DECISIONS.md](DECISIONS.md#the-readiness-file)).
 
 ## Packaging
 

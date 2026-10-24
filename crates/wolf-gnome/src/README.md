@@ -47,7 +47,7 @@ Purpose: the entry point — activate, and delegate. `run` builds the `adw::Appl
 **Public API**
 
 - `run() -> glib::ExitCode` — hands GTK an empty argv, so the process command line is never parsed or rejected.
-- `load_config`, `measure_metrics`, `open_state_store` and `init_lua_path` are `pub(crate)`, called once each by [`coordinator.rs`](#coordinatorrs). `init_lua_path` is glue alone: it makes the `WOLF_INIT_LUA` and `current_exe()` reads, passes `Path::exists` as the probe, and leaves the ordering rule to [`init_lua.rs`](#init_luars).
+- `load_config`, `measure_metrics`, `open_state_store`, `init_lua_path` and `ready_file_path` are `pub(crate)`, called once each by [`coordinator.rs`](#coordinatorrs). `init_lua_path` and `ready_file_path` are glue alone: they make the environment and filesystem reads and leave the rules to [`init_lua.rs`](#init_luars) and [`ready_seam.rs`](#ready_seamrs).
 
 **Decisions**
 
@@ -187,21 +187,23 @@ Purpose: the pure configuration seam — every rule about consuming a `wolf_core
 
 #### `coordinator.rs`
 
-Purpose: the process-scoped layer above the windows — the one state store, the one config read, the one cell measurement, the ordered registry of live windows, and the `app.`-namespace actions. [DECISIONS.md](../DECISIONS.md#the-coordinator-and-its-windows) owns why each is process-scoped, and the state protocol.
+Purpose: the process-scoped layer above the windows, and the ordered registry of live windows. [DECISIONS.md](../DECISIONS.md#the-coordinator-and-its-windows) owns what lives there, why, and the state protocol.
 
 **Public API**
 
 - `build() -> Coordinator`, then `install_app_actions(app)` and `restore_session(app)`, in that order.
 - `open_new_window(app)`, `commit(waking)`, `on_window_closing(id)`, `quit(app)`, `raise(id)`, `palette_windows(exclude)`, `register(handle)`, `window_count()`.
-- `next_free_id(next, live) -> WindowId`, the pure id arithmetic, and `upgrade(&weak)` for the window-side closures.
+- `next_free_id(next, live) -> WindowId`, the pure id arithmetic, and `upgrade(&weak)` for window-side closures.
+- `ready_pending()`, `next_paint_ordinal()`, `check_ready()` — the readiness probe.
 
 **Decisions**
 
-- The coordinator holds strong `WindowHandle`s and every window-side closure a `Weak` it upgrades per use, so a dropped coordinator performs nothing rather than panicking. The other direction is a cycle through the whole graph, so nothing would ever be dropped.
+- The coordinator holds strong `WindowHandle`s and every window-side closure a `Weak` it upgrades per use: the other direction is a cycle through the whole graph, and a dropped coordinator performs nothing rather than panicking.
 - `install_app_actions` runs before the first window exists, so the menu and the chord controller resolve `app.quit` from the first frame. Each window's [`shell.rs`](#shellrs) registers their accelerators, per-application and idempotent, so the menu draws the chord beside its Quit item.
-- Quit and New Window funnel through here from a drained command, a palette row and a chord alike. A window that has lost its application or its coordinator opens nothing, and quits by closing itself.
+- Quit and New Window funnel through here from a drained command, a palette row or a chord. A window that has lost its application or its coordinator opens nothing, and quits by closing itself.
 - `quit` closes every window the _application_ holds rather than every registered one, since a transient toplevel such as About would otherwise keep the process alive.
 - `next_free_id` is a free function because the wrap it guards is unreachable through the registry, and a reused id deregisters and raises the wrong window.
+- The readiness probe judges nothing until `restore_session` has opened every launch window, so no window is judged alone.
 
 #### `crash_overlay.rs`
 
@@ -568,7 +570,7 @@ Purpose: the GTK glue turning `layout`'s pane tree into nested `gtk::Paned`, one
 
 - `build(core, metrics) -> PaneHandle` — panes appear with the first grid.
 - `cmdline_widget()` — the focus-return target for overlays and sidebar; plus `toast_widget()` and `pum_widget()`.
-- `reset_after_restart()`, `request_layout_rebuild(saved)`, `realize_layout(saved)`, `layout_snapshot() -> LayoutGather`, `snapshot_readiness()`.
+- `reset_after_restart()`, `request_layout_rebuild(saved)`, `realize_layout(saved)`, `layout_snapshot() -> LayoutGather`, `snapshot_readiness()`, `readiness()`.
 
 **Decisions**
 
@@ -577,7 +579,7 @@ Purpose: the GTK glue turning `layout`'s pane tree into nested `gtk::Paned`, one
 - The preview's render half goes through [`preview_coalescer.rs`](#preview_coalescerrs), whose state sits on `PaneInner`, one per tab: a rebuild replaces `panes` wholesale. The fire re-enters this pass, re-reading the gate and the due set.
 - Pointer input is one `gtk::GestureDrag`, which keeps delivering after the pointer leaves the widget, so grid and button pin at press.
 - Each pane's status and `b:wolf_full_width` cache once per wake: reading at use time re-enters `draw_pane`'s guard, and paint, pointer and resize must agree in one frame.
-- One funnel produces every grid resize, against the size the pane last asked for rather than the lagging snapshot grid; it runs every wake, since a lifted cap re-divides a still allocation.
+- One funnel produces every grid resize, against the size the pane last asked for, not the lagging snapshot grid; it runs every wake, since a lifted cap re-divides a still allocation.
 - The drawer strip's height re-applies on every wake, so a toplevel resize converges over two frames, and `reset_after_restart` clears the drawer `detect_closes` cannot reach.
 - The statusbar strip's family comes from the desktop's `gtk-font-name`, read once per tab; its sizes come from the editor's font, so the override moves no [`statusbar_layout.rs`](#statusbar_layoutrs) geometry.
 
@@ -672,6 +674,21 @@ Purpose: the pure, GTK-free rulebook for the Markdown preview pane — its gates
 - Liveness is read before the buffer-kind gate, so a wedged Neovim is reported as wedged rather than as a non-Markdown buffer. `preview_file_press` has no buffer-kind gate at all: a linked file's Markdown-ness is core's, unanswerable here without the filesystem.
 - Both `PreviewLoad` comparisons key on the source bufnr, never the `changedtick`: two freshly opened files share a tick, so a tick-keyed source switch would swap a linked file's body under the previous file's base URI.
 - `preview_status`'s `abs_path` is the source path verbatim: [`pane_view.rs`](#pane_viewrs) persists it as a pane-layout leaf, and `state.json` records no working directory to resolve a relative one against.
+
+#### `ready_seam.rs`
+
+Purpose: the pure predicate behind the test-only readiness file — whether a launch's windows accept keystrokes, as a function of per-window readings. [DECISIONS.md](../DECISIONS.md#the-readiness-file) owns why each condition is there.
+
+**Public API**
+
+- `launch_readiness(&[WindowReadiness]) -> Result<(), Blocker>` — `Ok`, or the first unmet condition in a fixed order: every window's settle conditions in slice order, then the input conditions of the window with the greatest `first_paint`.
+- `PaneReadiness`, `WindowReadiness`, and `Blocker` with `ALL` and `label()`, the text of the `wolf-ready: waiting on <label>` stderr line.
+- `grid_settled`, `restore_owed`, `ready_file_path`, `ready_file_contents`, and `next_step` over `ReadyStep`.
+- `READY_FILE_ENV` and `LINE_PREFIX`, the contract with the smoke harness's `wait_ready`.
+
+**Decisions**
+
+- `next_step` reports a blocker once per change, because the checks run on every wake and every frame.
 
 #### `refresh_coalescer.rs`
 
@@ -943,18 +960,19 @@ Purpose: one window and everything scoped to it — an `adw::ApplicationWindow` 
 
 - `build(parts) -> Option<WindowHandle>` — `None` when the core fails to start; a launch whose only window fails exits.
 - `WindowParts` — the construction inputs as a struct, under `clippy::too_many_arguments`.
-- `WindowHandle::id`, `present`, `refresh_subtree`, `cached_subtree` and `display_cwd`.
+- `WindowHandle::id`, `present`, `refresh_subtree`, `cached_subtree`, `display_cwd` and `readiness`.
 
 **Decisions**
 
 - The close handler's statement order is load-bearing at both ends. Telling the coordinator comes first, or the gathered subtree sees nothing and the session is silently lost; focusing the input method out and clearing its client widget comes last, after the core is taken, so a focus-out commit finds no core and the context releases the window's widget tree.
-- The window registers with the coordinator before its first command drain, or the drain reaches a coordinator that does not know the window exists.
+- The window registers with the coordinator before its first command drain, or the drain reaches a coordinator unaware of it.
 - `display_cwd` reads the cached subtree, so the palette and `state.json` cannot disagree about where a window is.
-- `WindowInner` does not hold the shell: the wake-drain future owns it for exactly the window's lifetime, and a second owner adds a lifetime nothing reads.
+- `WindowInner` does not hold the shell, which the wake-drain future owns for exactly the window's lifetime.
 
 **Gotchas**
 
 - The key controller carries no propagation phase and offers each press to the window's `gtk::IMMulticontext` before translating, so a bound chord reaches neither Neovim nor the context — [`shell.rs`](#shellrs)'s capture-phase controller has already stopped it ([DECISIONS.md](../DECISIONS.md#window-structure)).
+- Readiness triggers are wired only in a window built while the probe is pending.
 
 #### `workspace.rs`
 

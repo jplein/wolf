@@ -186,6 +186,7 @@ use crate::pane_layout;
 use crate::preview_coalescer::{PreviewCoalescer, RenderDecision};
 use crate::preview_link::{self, PreviewLink};
 use crate::preview_ui::{self, DocumentUpdate, PreviewFilePress, PreviewLoad};
+use crate::ready_seam;
 use crate::render::{draw_glyph, draw_text_line, FALLBACK_BG, FALLBACK_FG};
 use crate::scrollbar;
 use crate::state_seam;
@@ -1015,6 +1016,42 @@ impl PaneInner {
             })
         };
         (bound, reported)
+    }
+
+    /// This tab's input readiness for the test-only readiness file (see
+    /// [`crate::ready_seam`]): the bound panes, how many of them Neovim has sized
+    /// to what this pane view requested, and whether a saved layout is pending.
+    ///
+    /// Each borrow is its own statement, and the core borrow is taken only after
+    /// the pane-map borrow is released.
+    fn readiness(&self) -> ready_seam::PaneReadiness {
+        let layout_pending = self.pending_layout.borrow().is_some();
+        let pairs: Vec<(u64, Option<(u16, u16)>)> = self
+            .panes
+            .borrow()
+            .values()
+            .filter_map(|p| p.grid.get().map(|grid| (grid, p.requested_grid.get())))
+            .collect();
+        let sized = {
+            let core_ref = self.core.borrow();
+            core_ref.as_ref().map_or(0, |core| {
+                let snap = core.read_snapshot();
+                pairs
+                    .iter()
+                    .filter(|(grid, requested)| {
+                        ready_seam::grid_settled(
+                            *requested,
+                            snap.grid(*grid).map(|g| (g.cols, g.rows)),
+                        )
+                    })
+                    .count()
+            })
+        };
+        ready_seam::PaneReadiness {
+            bound: pairs.len(),
+            sized,
+            layout_pending,
+        }
     }
 
     /// Drains and applies all pending layout intents (splits, focus moves and the
@@ -3451,6 +3488,13 @@ impl PaneHandle {
     #[must_use]
     pub fn snapshot_readiness(&self) -> (usize, usize) {
         self.inner.snapshot_readiness()
+    }
+
+    /// This tab's input readiness for the test-only readiness file (see
+    /// [`PaneInner::readiness`]).
+    #[must_use]
+    pub fn readiness(&self) -> ready_seam::PaneReadiness {
+        self.inner.readiness()
     }
 
     /// Resets the pane view to its pre-first-pane state after a SUCCESSFUL in-place

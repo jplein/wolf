@@ -23,6 +23,8 @@
 //!   only.
 //! - **The launch plan.** A launch restores a SESSION, not a window:
 //!   [`crate::state_seam::restore_plans`] answers with one plan per saved window.
+//! - **The test-only readiness probe** ([`Coordinator::check_ready`]), process-scoped
+//!   because its condition spans every window the launch restores.
 //!
 //! ## Ownership, and why the direction is forced
 //!
@@ -51,7 +53,8 @@
 //! save with an empty file.
 
 use std::cell::{Cell, RefCell};
-use std::path::Path;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::rc::{Rc, Weak};
 use std::time::Duration;
 
@@ -62,6 +65,7 @@ use wolf_core::{PaletteWindow, StateStore, WolfConfig, WolfState};
 use crate::actions;
 use crate::app;
 use crate::command_action::{ui_action_for, UiAction};
+use crate::ready_seam::{self, Blocker, ReadyStep, WindowReadiness};
 use crate::state_seam::{self, CloseCommit, RestorePlan};
 use crate::window::{self, WindowHandle, WindowParts};
 use crate::workspace;
@@ -74,6 +78,17 @@ use crate::CellMetrics;
 /// document plus a rename, so two seconds is generous; it exists to bound the
 /// quit path against a wedged filesystem, not to be reached.
 const STATE_FLUSH_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// What a launch window that is no longer registered contributes to the readiness
+/// predicate: no core, so [`ready_seam::Blocker::CoreNotAlive`].
+const MISSING_WINDOW: WindowReadiness = WindowReadiness {
+    liveness: None,
+    panes: None,
+    restore_owed: false,
+    first_paint: None,
+    has_keyboard: false,
+    has_focus_widget: false,
+};
 
 /// A live window's identity, minted by the coordinator and never reused while
 /// the window it names is alive.
@@ -105,6 +120,24 @@ pub struct CoordinatorInner {
     /// Latched by [`Coordinator::quit`] BEFORE any window is closed, so each
     /// window's close handler reads it and skips its own commit.
     shutting_down: Cell<bool>,
+    /// The readiness probe, `None` unless `WOLF_READY_FILE` names a file.
+    ready: RefCell<Option<ReadyProbe>>,
+}
+
+/// The test-only readiness probe's state; see [`Coordinator::check_ready`].
+struct ReadyProbe {
+    /// Where the pid is written.
+    path: PathBuf,
+    /// The windows the launch opened, set once [`Coordinator::restore_session`] has
+    /// opened them all; `None` until then, which keeps a check during the launch
+    /// from judging a partial set.
+    launch: Option<Vec<WindowId>>,
+    /// The blocker last reported on stderr.
+    last: Option<Blocker>,
+    /// Whether the file has been written (or the write failed). Never re-armed.
+    fired: bool,
+    /// The next first-paint ordinal to hand out.
+    next_paint: u32,
 }
 
 /// A cloneable handle to the process-scoped coordinator.
@@ -136,6 +169,13 @@ pub fn build() -> Coordinator {
             windows: RefCell::new(Vec::new()),
             next_id: Cell::new(0),
             shutting_down: Cell::new(false),
+            ready: RefCell::new(app::ready_file_path().map(|path| ReadyProbe {
+                path,
+                launch: None,
+                last: None,
+                fired: false,
+                next_paint: 0,
+            })),
         }),
     }
 }
@@ -163,6 +203,16 @@ pub fn next_free_id(next: WindowId, live: &[WindowId]) -> WindowId {
         id = id.wrapping_add(1);
     }
     id
+}
+
+/// Writes this process's pid to `path` through `<path>.tmp` and a rename, so a
+/// reader sees either no file or the whole pid.
+fn write_ready_file(path: &Path) -> std::io::Result<()> {
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
+    std::fs::write(&tmp, ready_seam::ready_file_contents(std::process::id()))?;
+    std::fs::rename(&tmp, path)
 }
 
 /// Upgrades a closure's `Weak<CoordinatorInner>` back into a [`Coordinator`].
@@ -274,18 +324,18 @@ impl Coordinator {
             Path::is_dir,
         );
 
-        let mut opened = 0_usize;
-        for plan in &plans {
-            if self.open_window(app.upcast_ref(), plan) {
-                opened += 1;
-            }
-        }
-        if opened == 0 {
+        let opened: Vec<WindowId> = plans
+            .iter()
+            .filter_map(|plan| self.open_window(app.upcast_ref(), plan))
+            .collect();
+        if opened.is_empty() {
             eprintln!(
                 "wolf-gnome: no window could be opened for any of the {} restored plans; exiting",
                 plans.len()
             );
         }
+        self.arm_ready(opened);
+        self.check_ready();
     }
 
     /// Opens a FRESH, EMPTY window with its own core.
@@ -318,13 +368,14 @@ impl Coordinator {
             eprintln!("wolf-gnome: restore_plans returned no plan for a new window; none opened");
             return;
         };
-        if !self.open_window(app.upcast_ref(), &plan) {
+        if self.open_window(app.upcast_ref(), &plan).is_none() {
             eprintln!("wolf-gnome: the new window's core failed to start; no window was opened");
         }
     }
 
-    /// Builds one window for `plan` and registers it. Answers whether it opened.
-    fn open_window(&self, app: &gtk::Application, plan: &RestorePlan) -> bool {
+    /// Builds one window for `plan` and registers it. Answers its id, or `None`
+    /// when it did not open.
+    fn open_window(&self, app: &gtk::Application, plan: &RestorePlan) -> Option<WindowId> {
         let id = self.mint_id();
         window::build(WindowParts {
             app,
@@ -334,7 +385,117 @@ impl Coordinator {
             config: &self.inner.config,
             metrics: &self.inner.metrics,
         })
-        .is_some()
+        .map(|handle| handle.id())
+    }
+
+    /// Whether the readiness probe is armed and has not fired.
+    ///
+    /// [`crate::window::build`] reads it once, to decide whether to wire the
+    /// readiness triggers at all: a window opened after the file was written (a
+    /// mid-run New Window) or in a process without `WOLF_READY_FILE` wires none.
+    #[must_use]
+    pub fn ready_pending(&self) -> bool {
+        self.inner
+            .ready
+            .borrow()
+            .as_ref()
+            .is_some_and(|probe| !probe.fired)
+    }
+
+    /// The next first-paint ordinal: `0` for the first window to paint, then `1`, …
+    ///
+    /// The ordinal is the map order, which is what picks the window the compositor
+    /// focuses; see [`crate::ready_seam`].
+    pub fn next_paint_ordinal(&self) -> u32 {
+        let mut ready = self.inner.ready.borrow_mut();
+        let Some(probe) = ready.as_mut() else {
+            return 0;
+        };
+        let ordinal = probe.next_paint;
+        probe.next_paint = probe.next_paint.saturating_add(1);
+        ordinal
+    }
+
+    /// Hands the probe the windows the launch opened. Before this, no check judges
+    /// anything, so a window built first cannot be found ready alone.
+    fn arm_ready(&self, launch: Vec<WindowId>) {
+        if let Some(probe) = self.inner.ready.borrow_mut().as_mut() {
+            probe.launch = Some(launch);
+        }
+    }
+
+    /// Evaluates the readiness predicate once and acts on it: writes the pid to the
+    /// readiness file when every launch window accepts input, or reports a changed
+    /// blocker on stderr.
+    ///
+    /// Called at the end of every wake, when the seat gains a device, and after every
+    /// frame-clock paint — wired only while the probe is pending — and once at the
+    /// end of [`Coordinator::restore_session`]. A no-op when the probe is absent,
+    /// not yet armed, or has fired.
+    ///
+    /// Stderr is written with a discarded `write_all` rather than `eprintln!`, which
+    /// panics on a closed stderr: a diagnostic must never take the application down.
+    /// The file is written to `<path>.tmp` and renamed into place, so the harness
+    /// never reads a partial pid.
+    pub fn check_ready(&self) {
+        let (path, launch) = {
+            let ready = self.inner.ready.borrow();
+            match ready.as_ref() {
+                Some(ReadyProbe {
+                    path,
+                    launch: Some(launch),
+                    fired: false,
+                    ..
+                }) => (path.clone(), launch.clone()),
+                _ => return,
+            }
+        };
+        let handles = self.handles();
+        let windows: Vec<WindowReadiness> = launch
+            .iter()
+            .map(|id| {
+                handles
+                    .iter()
+                    .find(|handle| handle.id() == *id)
+                    .map_or(MISSING_WINDOW, WindowHandle::readiness)
+            })
+            .collect();
+        let now = ready_seam::launch_readiness(&windows);
+        let step = {
+            let mut ready = self.inner.ready.borrow_mut();
+            let Some(probe) = ready.as_mut() else {
+                return;
+            };
+            let step = ready_seam::next_step(probe.last, now);
+            match step {
+                ReadyStep::Report(blocker) => probe.last = Some(blocker),
+                ReadyStep::Write => probe.fired = true,
+                ReadyStep::Wait => {}
+            }
+            step
+        };
+        match step {
+            ReadyStep::Report(blocker) => {
+                let line = format!(
+                    "{}waiting on {}\n",
+                    ready_seam::LINE_PREFIX,
+                    blocker.label()
+                );
+                let _ = std::io::stderr().write_all(line.as_bytes());
+            }
+            ReadyStep::Write => {
+                let line = match write_ready_file(&path) {
+                    Ok(()) => format!("{}wrote {}\n", ready_seam::LINE_PREFIX, path.display()),
+                    Err(err) => format!(
+                        "{}could not write {}: {err}\n",
+                        ready_seam::LINE_PREFIX,
+                        path.display()
+                    ),
+                };
+                let _ = std::io::stderr().write_all(line.as_bytes());
+            }
+            ReadyStep::Wait => {}
+        }
     }
 
     /// Registers a freshly built window. Called by [`crate::window::build`]

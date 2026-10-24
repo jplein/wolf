@@ -242,7 +242,7 @@
 //! is about what is NOT painted there, so no reading of the page could carry it, and it
 //! is the only pixel reading here taken outside a preview or an overlay.
 //!
-//! **Ten pure guards**, which mechanically enforce invariants the cage smokes
+//! **Eleven pure guards**, which mechanically enforce invariants the cage smokes
 //! depend on but cannot check themselves:
 //!
 //! * [`sidebar_filler_names_cannot_satisfy_any_smoke_assertion`] — no
@@ -288,6 +288,14 @@
 //!   `WOLF_STATE_DIR` and so the only thing keeping the smokes off the developer's
 //!   real `~/.local/state/wolf/` — and, since the shader-cache fix, the only thing
 //!   that sets `XDG_CACHE_HOME` too (see [`smoke_shader_cache_dir`]).
+//! * [`every_launch_waits_for_readiness_before_its_first_input`] — every launch line
+//!   in every scenario is followed by `wait_ready "$app_pid"` before its first
+//!   `wtype`, `hsend`, `hstep` or `grim`, with no sleep in between; the
+//!   `app_pid=$!` capturing each launch's pid is followed directly by that call, and
+//!   there are exactly as many captures as recognised launch lines; `wait_ready` is
+//!   defined once, in [`READINESS_PRELUDE`]; and the bare `if wtype "" …` probe loop
+//!   appears nowhere. A scenario that types on a fixed budget passes on an idle host
+//!   and loses its first keys on a loaded one, so review alone would not catch it.
 //! * [`the_column_cap_cannot_bind_at_the_ocr_smokes_geometry`] — the premise every
 //!   OCR smoke's geometry rests on, given `editor_inset`'s content-width cap:
 //!   at the pinned output size, the measured pane origin and
@@ -334,12 +342,12 @@
 //!   tree is not staged, so deleting those two `shellHook` lines turns three
 //!   real-Neovim tests into no-op passes and reddens nothing anywhere.
 //!
-//! All ten are compositor-free: none calls `require_smoke_env`, none takes
+//! All eleven are compositor-free: none calls `require_smoke_env`, none takes
 //! `CAGE_LOCK` and none spawns a subprocess, so they still guard on a machine where
 //! the smoke toolchain is unavailable. They live here, next to the consts and
 //! helpers they read, rather than in a file of their own.
 //!
-//! Nine of the ten additionally need NO environment at all. The exception is
+//! Ten of the eleven additionally need NO environment at all. The exception is
 //! [`the_column_cap_cannot_bind_at_the_ocr_smokes_geometry`], and the claim is
 //! stated precisely rather than loosely: it measures a
 //! real cell through [`cell_metrics_for_smoke`], so it needs the devShell's pinned
@@ -348,8 +356,8 @@
 //! a run outside the devShell fails it for that reason rather than for the reason
 //! its message names.
 //!
-//! So this target's summary line reads **`70 passed`**, not `60`: sixty cage
-//! smokes plus those ten guards.
+//! So this target's summary line reads **`71 passed`**, not `60`: sixty cage
+//! smokes plus those eleven guards.
 //!
 //! **Three `#[ignore]`d PACKAGED smokes** sit at the end of this file and are NOT in
 //! that count. They drive `$out/bin/wolf-gnome` — the artifact `nix build
@@ -362,43 +370,18 @@
 //! one and [`CAGE_LOCK`] cannot serialize across processes; the section header above
 //! them carries the rest of that reasoning.
 //!
-//! ## A vacuously-passing check recorded here: the `wtype ""` window-map poll
+//! ## Readiness before the first input
 //!
-//! Every scenario opens with a loop that retries a no-op `wtype ""` until one
-//! succeeds, and its comment used to claim that success "only happens once cage has
-//! a mapped surface to deliver input to". **That claim is measured FALSE.**
-//! Instrumented, the loop breaks at **`tries = 0` on every single run**: `cage`
-//! advertises `zwp_virtual_keyboard_manager_v1` as soon as the compositor itself is
-//! up, BEFORE any client surface maps, so the very first `wtype ""` always succeeds
-//! and the `WAIT_TRIES = 75` budget (15 s) is never spent.
-//!
-//! So the poll does **not** gate input readiness, and `WAIT_TRIES` / `WAIT_INTERVAL`
-//! are not an input-readiness budget. The ONLY real budget between spawning the app
-//! and typing the first key is the fixed `SETTLE` sleep that follows the loop —
-//! which is why `SETTLE` carries the measured margin table in [`SCENARIO`] and why
-//! it was raised from `0.5` to `1.0`.
-//!
-//! The poll is deliberately **kept**, not deleted: it still catches the one thing it
-//! can catch — a `cage` that never came up at all — and its `kill -0` arm still
-//! catches an app that died before the scenario ever typed. It simply no longer
-//! claims something it cannot prove.
-//!
-//! This is the EIGHTH vacuously-passing check this effort has found. It is recorded
-//! HERE, beside the scenarios, because that is where the next reader meets it — while
-//! editing a scenario's poll knobs, not while reading Markdown;
-//! `crates/wolf-gnome/tests/README.md` keeps the running prose record of the others,
-//! under "A red-run demonstration is a deliverable, not a formality". It is the same
-//! shape as the entries already there (the drag smoke's false premise, the untested
-//! auto-restart cap, the centre-derived restart-button click): **a check aimed at the right
-//! property, looking somewhere the defect could not appear.**
-//!
-//! Its concrete cost was DIAGNOSTIC. A residual ~0.8% failure of
-//! [`window_renders_typed_text_under_cage`] (1 in 120) was chased as input routing
-//! and then as the swap modal, because a poll that appeared to have already proved
-//! the client could accept keys ruled out the true cause — too little margin before
-//! the first keystroke — by fiat. The measured signature (two empty lines, cursor on
-//! line 2) is now the FIRST thing that smoke's failure message tells the reader to
-//! check.
+//! No scenario sends a key, a pointer event or a capture before `wait_ready` returns.
+//! [`cage_command`] sets `WOLF_READY_FILE` and prepends [`READINESS_PRELUDE`], whose
+//! `wait_ready` polls until the app has written its own pid there — which it does
+//! once its launch windows accept keystrokes (`crates/wolf-gnome/DECISIONS.md`, "The
+//! readiness file"). A launch that never gets there exits 40 after 30 s, and the
+//! app's `wolf-ready: waiting on <condition>` stderr lines name the conjunct it was
+//! stuck on. No fixed sleep stands in for this, because launch latency grows with
+//! load. Before polling, `wait_ready` primes the seat with a key-free `wtype ""`:
+//! a headless `cage` seat has no keyboard until a virtual keyboard has existed, and
+//! without that the first key of the first keyboard is lost.
 //!
 //! ## When it runs
 //!
@@ -446,6 +429,7 @@
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime};
 
 use cairo::{Context, Format, ImageSurface};
@@ -2581,13 +2565,10 @@ fn require_smoke_env() -> PathBuf {
 ///
 /// Design notes:
 /// - Launch the app in the background and capture its pid so we can kill it.
-/// - Poll, bounded by `WAIT_TRIES * WAIT_INTERVAL`, so a compositor that never
-///   came up (or an app that died on launch) fails fast instead of hanging. This
-///   poll used to be described as waiting "for the window to map"; **it does not**
-///   — `cage` advertises `zwp_virtual_keyboard_manager_v1` before any surface
-///   maps, so the probe succeeds at `tries = 0` on every run. See the module doc
-///   comment's record of that vacuity, and the `SETTLE` block below, which is the
-///   only real budget before the first keystroke.
+/// - Wait with `wait_ready` (see [`READINESS_PRELUDE`]), which primes the seat's
+///   keyboard and then waits until the app reports that its window accepts
+///   keystrokes. It exits 11 if the app dies first and 40 if the app never becomes
+///   ready, so nothing is typed into a window that cannot take it.
 /// - Type `ihello` (enter insert mode + the word), then `Escape`.
 /// - MOVE THE CURSOR OFF ROW 0 before screenshotting: send a normal-mode `o`
 ///   (open a new line BELOW and enter insert on the now-empty row 1), then
@@ -2603,76 +2584,23 @@ fn require_smoke_env() -> PathBuf {
 const SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
-# for the window to map, which this poll cannot observe (see the poll below).
-# WAIT_TRIES is sized generously for the FULL workspace suite, where ~90
-# integration-test binaries (most spawning a real nvim) run in parallel. A timing
-# knob only -- no assertion depends on it.
-WAIT_TRIES=75
+# WAIT_INTERVAL paces this file's polls (wait_file, the quit polls).
+#
+# SETTLE -- this is the CANONICAL copy of this comment; the other scenarios carry
+# the same value and point back here. SETTLE is the settle BETWEEN steps, not a
+# launch budget: no scenario sends input before `wait_ready` (the prelude
+# cage_command prepends) has seen the app write its own pid to $WOLF_READY_FILE,
+# which it does only once its launch windows accept keystrokes. A cold shader
+# cache or a loaded host therefore costs time in that wait rather than lost keys.
+# What SETTLE still covers is the gap between a step and the next one that depends
+# on it: a redraw before a capture, an overlay mapping before its query.
 WAIT_INTERVAL=0.2
-#
-# SETTLE -- READ THIS BEFORE TRIMMING IT. This is the CANONICAL copy of this
-# comment; the other eighteen scenarios carry the same value and point back here.
-#
-# SETTLE is the ONLY real budget between spawning the app and typing the first
-# key. The wtype poll below LOOKS like an input-readiness gate and is not one:
-# cage advertises zwp_virtual_keyboard_manager_v1 as soon as the compositor is
-# up, before any surface maps, so instrumented that loop breaks at tries=0 on
-# every single run and WAIT_TRIES is never spent. See this file's module doc
-# comment, which records that as the eighth vacuously-passing check found here.
-#
-# Measured on this host: 20 iterations per cell, identical code, the ONLY
-# variable being whether the mesa shader cache under XDG_CACHE_HOME was warm.
-#
-#   SETTLE | cold cache | warm cache
-#   -------|------------|-----------
-#   0.15   |  0/20      |  0/20
-#   0.20   |  --        |  0/20
-#   0.25   |  0/20      | 20/20
-#   0.30   |  0/20      |  --
-#   0.35   | 20/20      | 20/20
-#   0.40   | 20/20      |  --
-#
-# Thresholds: warm in (0.20, 0.25], cold in (0.30, 0.35]. A cold cache costs
-# ~4.9 MB of shader rebuild (mesa_shader_cache + radv_builtin_shaders) on every
-# launch. At the old SETTLE=0.5 that left only ~1.5x headroom cold, and a
-# 120-iteration loop found 1 failure (~0.8%) whose capture md5
-# c9a797d31d606335297b40823e64371a is BYTE-IDENTICAL to a deliberately induced
-# cold/0.25 failure: two empty lines with the cursor on line 2, i.e. the whole
-# first `wtype -- "i$OCR_WORD"` and its Escape delivered before the client could
-# accept keys, and lost. `cage_command` now pins XDG_CACHE_HOME to a SHARED warm
-# directory, which deletes the cold column at its source; 1.0 is ~3x the measured
-# cold threshold on top of that. Do not trim it back.
 SETTLE=1.0
 
 # Launch the real app in the background; remember its pid.
 "$WOLF_BIN" &
 app_pid=$!
-
-# Wait for the app to still be alive AND for the compositor to be up.
-#
-# This is NOT an input-readiness gate, despite how it reads. A no-op `wtype ""`
-# succeeds as soon as cage advertises zwp_virtual_keyboard_manager_v1, which it
-# does before any surface maps -- measured, this loop breaks at tries=0 on every
-# single run, so WAIT_TRIES / WAIT_INTERVAL never gate anything here. It is kept
-# rather than deleted because it still catches a cage that never came up at all,
-# and the `kill -0` arm still catches an app that died on launch. The real budget
-# before the first keystroke is the SETTLE above.
-tries=0
-while [ "$tries" -lt "$WAIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        echo "wolf-gnome smoke: app process exited early (pid $app_pid)" >&2
-        exit 11
-    fi
-    if wtype "" >/dev/null 2>&1; then
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-
-# Give nvim a final moment to finish its initial redraw before typing.
-sleep "$SETTLE"
+wait_ready "$app_pid" 11 "wolf-gnome smoke"
 
 # Enter insert mode and type the word, then leave insert mode.
 wtype -- "i$OCR_WORD"
@@ -2701,11 +2629,10 @@ wait "$app_pid" 2>/dev/null
 exit 0
 "#;
 
-/// The interactive PICKER scenario, run as a single `sh -c` string INSIDE `cage`
-/// (same structure as [`SCENARIO`]): launch the app, poll until `cage` is up (NOT
-/// until the window maps — see [`SCENARIO`]'s `SETTLE` comment), settle, open the
-/// picker with the Ctrl+Shift+O trigger, type a query that matches the target file,
-/// activate the selection with Enter, settle, and screenshot.
+/// The interactive PICKER scenario, run as a single `sh -c` string INSIDE `cage` (same
+/// structure as [`SCENARIO`]): launch the app, wait until it is ready for input
+/// (`wait_ready`), open the picker with the Ctrl+Shift+O trigger, type a query that
+/// matches the target file, activate the selection with Enter, settle, and screenshot.
 ///
 /// The app derives `CoreConfig.cwd` from `std::env::current_dir()`, so the target
 /// `.md` is placed in the cage process's working directory (set via
@@ -2713,43 +2640,14 @@ exit 0
 const PICKER_SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
-# for the window to map, which this poll cannot observe (see the poll below).
-# WAIT_TRIES is sized generously for the FULL workspace suite, where ~90
-# integration-test binaries (most spawning a real nvim) run in parallel. A timing
-# knob only -- no assertion depends on it.
-#
-# SETTLE is the ONLY real budget between spawning the app and the first
-# keystroke: the wtype poll below does NOT gate input readiness (it breaks at
-# tries=0 on every run -- see the module doc comment). SCENARIO carries the
-# measured margin table behind this value; do not trim it back.
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 
 # Launch the real app in the background; remember its pid.
 "$WOLF_BIN" &
 app_pid=$!
-
-# Wait for the app to still be alive AND for the compositor to be up. The no-op
-# `wtype ""` does NOT prove a surface has mapped: cage advertises
-# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
-# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
-tries=0
-while [ "$tries" -lt "$WAIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        echo "wolf-gnome picker smoke: app process exited early (pid $app_pid)" >&2
-        exit 11
-    fi
-    if wtype "" >/dev/null 2>&1; then
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-
-# Final settle for nvim's initial redraw before driving the picker.
-sleep "$SETTLE"
+wait_ready "$app_pid" 11 "wolf-gnome picker smoke"
 
 # Open the picker with the trigger chord Ctrl+Shift+O. That chord is the
 # `win.go-to-file` accelerator; Ctrl+Shift+P opens the command palette.
@@ -2786,12 +2684,11 @@ wait "$app_pid" 2>/dev/null
 exit 0
 "#;
 
-/// The interactive picker KEYBOARD-NAVIGATION scenario, run as a single `sh -c`
-/// string INSIDE `cage` (same structure as [`PICKER_SCENARIO`]): launch the app,
-/// poll until `cage` is up (NOT until the window maps — see [`SCENARIO`]'s `SETTLE`
-/// comment), settle, open the picker with Ctrl+Shift+O, type a query that matches
-/// BOTH navigation files, press `Down` once to move the list selection to the
-/// SECOND row, then `Enter` to open it, settle, and screenshot.
+/// The interactive picker KEYBOARD-NAVIGATION scenario, run as a single `sh -c` string
+/// INSIDE `cage` (same structure as [`PICKER_SCENARIO`]): launch the app, wait until it
+/// is ready for input (`wait_ready`), open the picker with Ctrl+Shift+O, type a query
+/// that matches BOTH navigation files, press `Down` once to move the list selection to
+/// the SECOND row, then `Enter` to open it, settle, and screenshot.
 ///
 /// Two files are created in the cage process's working directory by the caller
 /// (`pick1.md` => row 0, `pick2.md` => row 1; see the rank-tiebreak comment near
@@ -2799,43 +2696,14 @@ exit 0
 const PICKER_NAV_SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
-# for the window to map, which this poll cannot observe (see the poll below).
-# WAIT_TRIES is sized generously for the FULL workspace suite, where ~90
-# integration-test binaries (most spawning a real nvim) run in parallel. A timing
-# knob only -- no assertion depends on it.
-#
-# SETTLE is the ONLY real budget between spawning the app and the first
-# keystroke: the wtype poll below does NOT gate input readiness (it breaks at
-# tries=0 on every run -- see the module doc comment). SCENARIO carries the
-# measured margin table behind this value; do not trim it back.
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 
 # Launch the real app in the background; remember its pid.
 "$WOLF_BIN" &
 app_pid=$!
-
-# Wait for the app to still be alive AND for the compositor to be up. The no-op
-# `wtype ""` does NOT prove a surface has mapped: cage advertises
-# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
-# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
-tries=0
-while [ "$tries" -lt "$WAIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        echo "wolf-gnome picker nav smoke: app process exited early (pid $app_pid)" >&2
-        exit 11
-    fi
-    if wtype "" >/dev/null 2>&1; then
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-
-# Final settle for nvim's initial redraw before driving the picker.
-sleep "$SETTLE"
+wait_ready "$app_pid" 11 "wolf-gnome picker nav smoke"
 
 # Open the picker with the trigger chord Ctrl+Shift+O (same chord as the other
 # picker scenario; see its note for the wtype modifier syntax).
@@ -2882,26 +2750,15 @@ exit 0
 "#;
 
 /// The TREE-SIDEBAR scenario, run as a single `sh -c` string INSIDE `cage` (same
-/// structure as [`SCENARIO`]): launch the app, poll until `cage` is up (NOT until
-/// the window maps — see [`SCENARIO`]'s `SETTLE` comment), settle, then wait a
-/// little longer for the long-lived FileSearch to stream results into the tree, and
-/// screenshot. No keyboard interaction at all — we only assert the
-/// sidebar lists the file by name, which depends purely on tree population from
-/// the app's cwd (set via `Command::current_dir` by the caller).
+/// structure as [`SCENARIO`]): launch the app, wait until it is ready for input
+/// (`wait_ready`), then wait a little longer for the long-lived FileSearch to stream
+/// results into the tree, and screenshot. No keyboard interaction at all — we only
+/// assert the sidebar lists the file by name, which depends purely on tree population
+/// from the app's cwd (set via `Command::current_dir` by the caller).
 const TREE_SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
-# for the window to map, which this poll cannot observe (see the poll below).
-# WAIT_TRIES is sized generously for the FULL workspace suite, where ~90
-# integration-test binaries (most spawning a real nvim) run in parallel. A timing
-# knob only -- no assertion depends on it.
-#
-# SETTLE is the ONLY real budget between spawning the app and the first
-# keystroke: the wtype poll below does NOT gate input readiness (it breaks at
-# tries=0 on every run -- see the module doc comment). SCENARIO carries the
-# measured margin table behind this value; do not trim it back.
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 # Extra settle for the streamed FileSearch traversal to populate the tree.
@@ -2910,27 +2767,9 @@ TREE_SETTLE=1.5
 # Launch the real app in the background; remember its pid.
 "$WOLF_BIN" &
 app_pid=$!
+wait_ready "$app_pid" 11 "wolf-gnome tree smoke"
 
-# Wait for the app to still be alive AND for the compositor to be up. The no-op
-# `wtype ""` does NOT prove a surface has mapped: cage advertises
-# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
-# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
-tries=0
-while [ "$tries" -lt "$WAIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        echo "wolf-gnome tree smoke: app process exited early (pid $app_pid)" >&2
-        exit 11
-    fi
-    if wtype "" >/dev/null 2>&1; then
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-
-# Final settle for nvim's initial redraw, plus extra time for the tree's
-# FileSearch to stream the cwd listing into the sidebar.
-sleep "$SETTLE"
+# Extra time for the tree's FileSearch to stream the cwd listing into the sidebar.
 sleep "$TREE_SETTLE"
 
 # Capture the live window to the output PNG.
@@ -2944,52 +2783,23 @@ exit 0
 "#;
 
 /// The VERTICAL-SPLIT scenario, run as a single `sh -c` string INSIDE `cage` (same
-/// structure as [`SCENARIO`]): launch the app, poll until `cage` is up (NOT until
-/// the window maps — see [`SCENARIO`]'s `SETTLE` comment), settle, open
-/// file A (`:e $VSPLIT_FILE_LEFT<CR>`) in the editor pane, trigger a vertical split
-/// with `<C-w>v`, open file B (`:e $VSPLIT_FILE_RIGHT<CR>`) in the new pane, settle,
-/// and screenshot. Both files live in the cage process's working directory (set via
-/// `Command::current_dir` by the caller) — NOT created from inside this script.
+/// structure as [`SCENARIO`]): launch the app, wait until it is ready for input
+/// (`wait_ready`), open file A (`:e $VSPLIT_FILE_LEFT<CR>`) in the editor pane, trigger
+/// a vertical split with `<C-w>v`, open file B (`:e $VSPLIT_FILE_RIGHT<CR>`) in the new
+/// pane, settle, and screenshot. Both files live in the cage process's working
+/// directory (set via `Command::current_dir` by the caller) — NOT created from inside
+/// this script.
 const VSPLIT_SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
-# for the window to map, which this poll cannot observe (see the poll below).
-# WAIT_TRIES is sized generously for the FULL workspace suite, where ~90
-# integration-test binaries (most spawning a real nvim) run in parallel. A timing
-# knob only -- no assertion depends on it.
-#
-# SETTLE is the ONLY real budget between spawning the app and the first
-# keystroke: the wtype poll below does NOT gate input readiness (it breaks at
-# tries=0 on every run -- see the module doc comment). SCENARIO carries the
-# measured margin table behind this value; do not trim it back.
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 
 # Launch the real app in the background; remember its pid.
 "$WOLF_BIN" &
 app_pid=$!
-
-# Wait for the app to still be alive AND for the compositor to be up. The no-op
-# `wtype ""` does NOT prove a surface has mapped: cage advertises
-# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
-# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
-tries=0
-while [ "$tries" -lt "$WAIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        echo "wolf-gnome vsplit smoke: app process exited early (pid $app_pid)" >&2
-        exit 11
-    fi
-    if wtype "" >/dev/null 2>&1; then
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-
-# Final settle for nvim's initial redraw before driving the editor.
-sleep "$SETTLE"
+wait_ready "$app_pid" 11 "wolf-gnome vsplit smoke"
 
 # Open file A in the (single) editor pane via an Ex command. The ':' enters the
 # cmdline (rendered as the S3 bottom strip on grid 1); Return executes the :e.
@@ -3025,53 +2835,23 @@ wait "$app_pid" 2>/dev/null
 exit 0
 "#;
 
-/// The HORIZONTAL-SPLIT scenario, run as a single `sh -c` string INSIDE `cage`
-/// (same structure as [`VSPLIT_SCENARIO`]): launch the app, poll until `cage` is up
-/// (NOT until the window maps — see [`SCENARIO`]'s `SETTLE` comment), settle,
-/// open file A (`:e $HSPLIT_FILE_TOP<CR>`) in the editor pane, trigger a
-/// HORIZONTAL split with `<C-w>s`, open file B (`:e $HSPLIT_FILE_BOTTOM<CR>`) in the
-/// new (stacked) pane, settle, and screenshot. Both files live in the cage
-/// process's working directory (set via `Command::current_dir` by the caller).
+/// The HORIZONTAL-SPLIT scenario, run as a single `sh -c` string INSIDE `cage` (same
+/// structure as [`VSPLIT_SCENARIO`]): launch the app, wait until it is ready for input
+/// (`wait_ready`), open file A (`:e $HSPLIT_FILE_TOP<CR>`) in the editor pane, trigger
+/// a HORIZONTAL split with `<C-w>s`, open file B (`:e $HSPLIT_FILE_BOTTOM<CR>`) in the
+/// new (stacked) pane, settle, and screenshot. Both files live in the cage process's
+/// working directory (set via `Command::current_dir` by the caller).
 const HSPLIT_SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
-# for the window to map, which this poll cannot observe (see the poll below).
-# WAIT_TRIES is sized generously for the FULL workspace suite, where ~90
-# integration-test binaries (most spawning a real nvim) run in parallel. A timing
-# knob only -- no assertion depends on it.
-#
-# SETTLE is the ONLY real budget between spawning the app and the first
-# keystroke: the wtype poll below does NOT gate input readiness (it breaks at
-# tries=0 on every run -- see the module doc comment). SCENARIO carries the
-# measured margin table behind this value; do not trim it back.
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 
 # Launch the real app in the background; remember its pid.
 "$WOLF_BIN" &
 app_pid=$!
-
-# Wait for the app to still be alive AND for the compositor to be up. The no-op
-# `wtype ""` does NOT prove a surface has mapped: cage advertises
-# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
-# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
-tries=0
-while [ "$tries" -lt "$WAIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        echo "wolf-gnome hsplit smoke: app process exited early (pid $app_pid)" >&2
-        exit 11
-    fi
-    if wtype "" >/dev/null 2>&1; then
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-
-# Final settle for nvim's initial redraw before driving the editor.
-sleep "$SETTLE"
+wait_ready "$app_pid" 11 "wolf-gnome hsplit smoke"
 
 # Open file A in the (single) editor pane via an Ex command. The ':' enters the
 # cmdline (rendered as the S3 bottom strip on grid 1); Return executes the :e.
@@ -3108,52 +2888,23 @@ exit 0
 "#;
 
 /// The FOCUS-MOVE scenario, run as a single `sh -c` string INSIDE `cage` (same
-/// structure as [`VSPLIT_SCENARIO`]): launch the app, poll until `cage` is up (NOT
-/// until the window maps — see [`SCENARIO`]'s `SETTLE` comment), settle,
-/// open file A in the editor pane, vertical-split (`<C-w>v`, focus moves to the new
-/// RIGHT pane), open file B there, move focus back LEFT (`<C-w>h`), then type the
-/// marker (`i$FOCUS_MARKER<Esc>`) into the now-focused pane, settle, and screenshot.
-/// Both files live in the cage process's working directory (set by the caller).
+/// structure as [`VSPLIT_SCENARIO`]): launch the app, wait until it is ready for input
+/// (`wait_ready`), open file A in the editor pane, vertical-split (`<C-w>v`, focus
+/// moves to the new RIGHT pane), open file B there, move focus back LEFT (`<C-w>h`),
+/// then type the marker (`i$FOCUS_MARKER<Esc>`) into the now-focused pane, settle, and
+/// screenshot. Both files live in the cage process's working directory (set by the
+/// caller).
 const FOCUS_SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
-# for the window to map, which this poll cannot observe (see the poll below).
-# WAIT_TRIES is sized generously for the FULL workspace suite, where ~90
-# integration-test binaries (most spawning a real nvim) run in parallel. A timing
-# knob only -- no assertion depends on it.
-#
-# SETTLE is the ONLY real budget between spawning the app and the first
-# keystroke: the wtype poll below does NOT gate input readiness (it breaks at
-# tries=0 on every run -- see the module doc comment). SCENARIO carries the
-# measured margin table behind this value; do not trim it back.
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 
 # Launch the real app in the background; remember its pid.
 "$WOLF_BIN" &
 app_pid=$!
-
-# Wait for the app to still be alive AND for the compositor to be up. The no-op
-# `wtype ""` does NOT prove a surface has mapped: cage advertises
-# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
-# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
-tries=0
-while [ "$tries" -lt "$WAIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        echo "wolf-gnome focus smoke: app process exited early (pid $app_pid)" >&2
-        exit 11
-    fi
-    if wtype "" >/dev/null 2>&1; then
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-
-# Final settle for nvim's initial redraw before driving the editor.
-sleep "$SETTLE"
+wait_ready "$app_pid" 11 "wolf-gnome focus smoke"
 
 # Open file A in the (single) editor pane.
 wtype -- ":e $FOCUS_FILE_LEFT"
@@ -3216,52 +2967,22 @@ exit 0
 "#;
 
 /// The CLOSE-PANE scenario, run as a single `sh -c` string INSIDE `cage` (same
-/// structure as [`VSPLIT_SCENARIO`]): launch the app, poll until `cage` is up (NOT
-/// until the window maps — see [`SCENARIO`]'s `SETTLE` comment), settle,
-/// open file A in the editor pane, vertical-split (`<C-w>v`, focus moves to the new
-/// RIGHT pane), open file B there, then close the focused (right) pane with
-/// `<C-w>c`, settle, and screenshot. Both files live in the cage process's working
+/// structure as [`VSPLIT_SCENARIO`]): launch the app, wait until it is ready for input
+/// (`wait_ready`), open file A in the editor pane, vertical-split (`<C-w>v`, focus
+/// moves to the new RIGHT pane), open file B there, then close the focused (right) pane
+/// with `<C-w>c`, settle, and screenshot. Both files live in the cage process's working
 /// directory (set by the caller).
 const CLOSE_SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
-# for the window to map, which this poll cannot observe (see the poll below).
-# WAIT_TRIES is sized generously for the FULL workspace suite, where ~90
-# integration-test binaries (most spawning a real nvim) run in parallel. A timing
-# knob only -- no assertion depends on it.
-#
-# SETTLE is the ONLY real budget between spawning the app and the first
-# keystroke: the wtype poll below does NOT gate input readiness (it breaks at
-# tries=0 on every run -- see the module doc comment). SCENARIO carries the
-# measured margin table behind this value; do not trim it back.
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 
 # Launch the real app in the background; remember its pid.
 "$WOLF_BIN" &
 app_pid=$!
-
-# Wait for the app to still be alive AND for the compositor to be up. The no-op
-# `wtype ""` does NOT prove a surface has mapped: cage advertises
-# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
-# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
-tries=0
-while [ "$tries" -lt "$WAIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        echo "wolf-gnome close smoke: app process exited early (pid $app_pid)" >&2
-        exit 11
-    fi
-    if wtype "" >/dev/null 2>&1; then
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-
-# Final settle for nvim's initial redraw before driving the editor.
-sleep "$SETTLE"
+wait_ready "$app_pid" 11 "wolf-gnome close smoke"
 
 # Open file A (the SURVIVOR) in the (single) editor pane.
 wtype -- ":e $CLOSE_FILE_KEEP"
@@ -3303,53 +3024,23 @@ exit 0
 "#;
 
 /// The THREE-PANE scenario, run as a single `sh -c` string INSIDE `cage` (same
-/// structure as [`VSPLIT_SCENARIO`]): launch the app, poll until `cage` is up (NOT
-/// until the window maps — see [`SCENARIO`]'s `SETTLE` comment), settle,
-/// open file A, vertical-split (`<C-w>v`) and open file B in the new RIGHT pane,
-/// focus back LEFT (`<C-w>h`), vertical-split AGAIN and open file C in the new
-/// sub-pane — flattening into one row of three columns [A, C, B] under the n-ary
-/// model. Park the cursor off the text (`o`+Escape) and screenshot. All three
-/// files live in the cage process's working directory (set by the caller).
+/// structure as [`VSPLIT_SCENARIO`]): launch the app, wait until it is ready for input
+/// (`wait_ready`), open file A, vertical-split (`<C-w>v`) and open file B in the new
+/// RIGHT pane, focus back LEFT (`<C-w>h`), vertical-split AGAIN and open file C in the
+/// new sub-pane — flattening into one row of three columns [A, C, B] under the n-ary
+/// model. Park the cursor off the text (`o`+Escape) and screenshot. All three files
+/// live in the cage process's working directory (set by the caller).
 const TRISPLIT_SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
-# for the window to map, which this poll cannot observe (see the poll below).
-# WAIT_TRIES is sized generously for the FULL workspace suite, where ~90
-# integration-test binaries (most spawning a real nvim) run in parallel. A timing
-# knob only -- no assertion depends on it.
-#
-# SETTLE is the ONLY real budget between spawning the app and the first
-# keystroke: the wtype poll below does NOT gate input readiness (it breaks at
-# tries=0 on every run -- see the module doc comment). SCENARIO carries the
-# measured margin table behind this value; do not trim it back.
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 
 # Launch the real app in the background; remember its pid.
 "$WOLF_BIN" &
 app_pid=$!
-
-# Wait for the app to still be alive AND for the compositor to be up. The no-op
-# `wtype ""` does NOT prove a surface has mapped: cage advertises
-# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
-# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
-tries=0
-while [ "$tries" -lt "$WAIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        echo "wolf-gnome three-pane smoke: app process exited early (pid $app_pid)" >&2
-        exit 11
-    fi
-    if wtype "" >/dev/null 2>&1; then
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-
-# Final settle for nvim's initial redraw before driving the editor.
-sleep "$SETTLE"
+wait_ready "$app_pid" 11 "wolf-gnome three-pane smoke"
 
 # Open file A in the (single) editor pane.
 wtype -- ":e $TRI_FILE_A"
@@ -3413,10 +3104,9 @@ exit 0
 "#;
 
 /// The EMPTY-STATE scenario, run as a single `sh -c` string INSIDE `cage` (same
-/// structure as [`TREE_SCENARIO`]): launch the app, poll until `cage` is up (NOT
-/// until the window maps — see [`SCENARIO`]'s `SETTLE` comment),
-/// settle, and screenshot. No keyboard interaction at all — the assertion is purely
-/// that the "no folder open" status page rendered.
+/// structure as [`TREE_SCENARIO`]): launch the app, wait until it is ready for input
+/// (`wait_ready`), and screenshot. No keyboard interaction at all — the assertion is
+/// purely that the "no folder open" status page rendered.
 ///
 /// The caller launches cage with `HOME` set to the same fresh temp directory it
 /// uses as the working directory, which is what makes `workspace::launch_decision`
@@ -3426,44 +3116,14 @@ exit 0
 const EMPTY_STATE_SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
-# for the window to map, which this poll cannot observe (see the poll below).
-# WAIT_TRIES is sized generously for the FULL workspace suite, where ~90
-# integration-test binaries (most spawning a real nvim) run in parallel. A timing
-# knob only -- no assertion depends on it.
-#
-# SETTLE is the ONLY real budget between spawning the app and the first
-# keystroke: the wtype poll below does NOT gate input readiness (it breaks at
-# tries=0 on every run -- see the module doc comment). SCENARIO carries the
-# measured margin table behind this value; do not trim it back.
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 
 # Launch the real app in the background; remember its pid.
 "$WOLF_BIN" &
 app_pid=$!
-
-# Wait for the app to still be alive AND for the compositor to be up. The no-op
-# `wtype ""` does NOT prove a surface has mapped: cage advertises
-# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
-# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
-tries=0
-while [ "$tries" -lt "$WAIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        echo "wolf-gnome empty-state smoke: app process exited early (pid $app_pid)" >&2
-        exit 11
-    fi
-    if wtype "" >/dev/null 2>&1; then
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-
-# Final settle so the status page (and the captive nvim's initial redraw behind it)
-# have landed before capturing.
-sleep "$SETTLE"
+wait_ready "$app_pid" 11 "wolf-gnome empty-state smoke"
 
 # Capture the live window to the output PNG.
 grim "$OUT_PNG"
@@ -3475,53 +3135,23 @@ wait "$app_pid" 2>/dev/null
 exit 0
 "#;
 
-/// The NEW-UNTITLED-BUFFER scenario, run as a single `sh -c` string INSIDE `cage`
-/// (same structure as [`VSPLIT_SCENARIO`]): launch the app, poll until `cage` is up
-/// (NOT until the window maps — see [`SCENARIO`]'s `SETTLE` comment), settle,
-/// open the base file (`:e $NEWBUF_FILE<CR>`), fire the Ctrl+Shift+N
-/// accelerator, type the marker into the fresh buffer, park the cursor off the
-/// marker's row, settle, and screenshot. The base file lives in the cage process's
-/// working directory (set via `Command::current_dir` by the caller).
+/// The NEW-UNTITLED-BUFFER scenario, run as a single `sh -c` string INSIDE `cage` (same
+/// structure as [`VSPLIT_SCENARIO`]): launch the app, wait until it is ready for input
+/// (`wait_ready`), open the base file (`:e $NEWBUF_FILE<CR>`), fire the Ctrl+Shift+N
+/// accelerator, type the marker into the fresh buffer, park the cursor off the marker's
+/// row, settle, and screenshot. The base file lives in the cage process's working
+/// directory (set via `Command::current_dir` by the caller).
 const NEWBUF_SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
-# for the window to map, which this poll cannot observe (see the poll below).
-# WAIT_TRIES is sized generously for the FULL workspace suite, where ~90
-# integration-test binaries (most spawning a real nvim) run in parallel. A timing
-# knob only -- no assertion depends on it.
-#
-# SETTLE is the ONLY real budget between spawning the app and the first
-# keystroke: the wtype poll below does NOT gate input readiness (it breaks at
-# tries=0 on every run -- see the module doc comment). SCENARIO carries the
-# measured margin table behind this value; do not trim it back.
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 
 # Launch the real app in the background; remember its pid.
 "$WOLF_BIN" &
 app_pid=$!
-
-# Wait for the app to still be alive AND for the compositor to be up. The no-op
-# `wtype ""` does NOT prove a surface has mapped: cage advertises
-# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
-# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
-tries=0
-while [ "$tries" -lt "$WAIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        echo "wolf-gnome new-buffer smoke: app process exited early (pid $app_pid)" >&2
-        exit 11
-    fi
-    if wtype "" >/dev/null 2>&1; then
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-
-# Final settle for nvim's initial redraw before driving the editor.
-sleep "$SETTLE"
+wait_ready "$app_pid" 11 "wolf-gnome new-buffer smoke"
 
 # Open the base file so there is something DISTINCTIVE on screen to displace.
 wtype -- ":e $NEWBUF_FILE"
@@ -3570,53 +3200,23 @@ exit 0
 "#;
 
 /// The COMMAND-PALETTE scenario, run as a single `sh -c` string INSIDE `cage` (same
-/// structure as [`NEWBUF_SCENARIO`]): launch the app, poll until `cage` is up (NOT
-/// until the window maps — see [`SCENARIO`]'s `SETTLE` comment), settle, open the
-/// base file (`:e $PALETTE_FILE<CR>`), fire the Ctrl+Shift+P accelerator, type the
-/// query, press Enter to activate the sole ranked row, then type the marker into the
-/// buffer that row's command created, park the cursor off the marker's row, settle,
-/// and screenshot. The base file lives in the cage process's working directory (set
-/// via `Command::current_dir` by the caller).
+/// structure as [`NEWBUF_SCENARIO`]): launch the app, wait until it is ready for input
+/// (`wait_ready`), open the base file (`:e $PALETTE_FILE<CR>`), fire the Ctrl+Shift+P
+/// accelerator, type the query, press Enter to activate the sole ranked row, then type
+/// the marker into the buffer that row's command created, park the cursor off the
+/// marker's row, settle, and screenshot. The base file lives in the cage process's
+/// working directory (set via `Command::current_dir` by the caller).
 const PALETTE_SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
-# for the window to map, which this poll cannot observe (see the poll below).
-# WAIT_TRIES is sized generously for the FULL workspace suite, where ~90
-# integration-test binaries (most spawning a real nvim) run in parallel. A timing
-# knob only -- no assertion depends on it.
-#
-# SETTLE is the ONLY real budget between spawning the app and the first
-# keystroke: the wtype poll below does NOT gate input readiness (it breaks at
-# tries=0 on every run -- see the module doc comment). SCENARIO carries the
-# measured margin table behind this value; do not trim it back.
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 
 # Launch the real app in the background; remember its pid.
 "$WOLF_BIN" &
 app_pid=$!
-
-# Wait for the app to still be alive AND for the compositor to be up. The no-op
-# `wtype ""` does NOT prove a surface has mapped: cage advertises
-# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
-# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
-tries=0
-while [ "$tries" -lt "$WAIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        echo "wolf-gnome command-palette smoke: app process exited early (pid $app_pid)" >&2
-        exit 11
-    fi
-    if wtype "" >/dev/null 2>&1; then
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-
-# Final settle for nvim's initial redraw before driving the editor.
-sleep "$SETTLE"
+wait_ready "$app_pid" 11 "wolf-gnome command-palette smoke"
 
 # Open the base file so there is something DISTINCTIVE on screen for the palette's
 # command to displace.
@@ -3681,11 +3281,11 @@ exit 0
 "#;
 
 /// The BUFFER-PICKER scenario, run as a single `sh -c` string INSIDE `cage` (same
-/// structure as [`PALETTE_SCENARIO`]): launch the app, poll until `cage` is up (NOT
-/// until the window maps — see [`SCENARIO`]'s `SETTLE` comment), settle, open the
-/// three fixtures in a known order with a gap between them, read the resulting
-/// buffer list back out of Neovim, fire Ctrl+Shift+E, type the query, press Enter,
-/// park the block cursor off the asserted row, settle, and screenshot.
+/// structure as [`PALETTE_SCENARIO`]): launch the app, wait until it is ready for input
+/// (`wait_ready`), open the three fixtures in a known order with a gap between them,
+/// read the resulting buffer list back out of Neovim, fire Ctrl+Shift+E, type the
+/// query, press Enter, park the block cursor off the asserted row, settle, and
+/// screenshot.
 ///
 /// Standalone — it does NOT need [`with_nvim_pid_helper`], because nothing here
 /// identifies or signals the Neovim child.
@@ -3704,23 +3304,13 @@ exit 0
 ///
 /// ## Exit codes
 ///
-/// * `11` — the app died before its window mapped (the shared convention).
+/// * `11` — the app died before it was ready for input (the shared convention).
 /// * `14` — the buffer-list readback the captive Neovim was told to write never
 ///   appeared, so the premise below cannot be checked at all.
 const BUFPICK_SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
-# for the window to map, which this poll cannot observe (see the poll below).
-# WAIT_TRIES is sized generously for the FULL workspace suite, where ~90
-# integration-test binaries (most spawning a real nvim) run in parallel. A timing
-# knob only -- no assertion depends on it.
-#
-# SETTLE is the ONLY real budget between spawning the app and the first
-# keystroke: the wtype poll below does NOT gate input readiness (it breaks at
-# tries=0 on every run -- see the module doc comment). SCENARIO carries the
-# measured margin table behind this value; do not trim it back.
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 # How many WAIT_INTERVAL polls to allow for the readback file.
@@ -3738,26 +3328,7 @@ MRU_GAP=1.2
 # Launch the real app in the background; remember its pid.
 "$WOLF_BIN" &
 app_pid=$!
-
-# Wait for the app to still be alive AND for the compositor to be up. The no-op
-# `wtype ""` does NOT prove a surface has mapped: cage advertises
-# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
-# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
-tries=0
-while [ "$tries" -lt "$WAIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        echo "wolf-gnome buffer-picker smoke: app process exited early (pid $app_pid)" >&2
-        exit 11
-    fi
-    if wtype "" >/dev/null 2>&1; then
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-
-# Final settle for nvim's initial redraw before driving the editor.
-sleep "$SETTLE"
+wait_ready "$app_pid" 11 "wolf-gnome buffer-picker smoke"
 
 # Poll for a readback file the captive Neovim writes. Nothing downstream may read a
 # file we merely hope is there. (The CRASH_SCENARIO body, verbatim.)
@@ -3886,23 +3457,13 @@ exit 0
 ///
 /// ## Exit codes
 ///
-/// * `11` — the app died before its window mapped (the shared convention).
+/// * `11` — the app died before it was ready for input (the shared convention).
 /// * `14` — the buffer-list readback the captive Neovim was told to write never
 ///   appeared, so the premise below cannot be checked at all.
 const BUFPICK_BARE_SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
-# for the window to map, which this poll cannot observe (see the poll below).
-# WAIT_TRIES is sized generously for the FULL workspace suite, where ~90
-# integration-test binaries (most spawning a real nvim) run in parallel. A timing
-# knob only -- no assertion depends on it.
-#
-# SETTLE is the ONLY real budget between spawning the app and the first
-# keystroke: the wtype poll below does NOT gate input readiness (it breaks at
-# tries=0 on every run -- see the module doc comment). SCENARIO carries the
-# measured margin table behind this value; do not trim it back.
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 # How many WAIT_INTERVAL polls to allow for the readback file.
@@ -3921,26 +3482,7 @@ MRU_GAP=1.2
 # Launch the real app in the background; remember its pid.
 "$WOLF_BIN" &
 app_pid=$!
-
-# Wait for the app to still be alive AND for the compositor to be up. The no-op
-# `wtype ""` does NOT prove a surface has mapped: cage advertises
-# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
-# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
-tries=0
-while [ "$tries" -lt "$WAIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        echo "wolf-gnome buffer-picker bare-Enter smoke: app process exited early (pid $app_pid)" >&2
-        exit 11
-    fi
-    if wtype "" >/dev/null 2>&1; then
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-
-# Final settle for nvim's initial redraw before driving the editor.
-sleep "$SETTLE"
+wait_ready "$app_pid" 11 "wolf-gnome buffer-picker bare-Enter smoke"
 
 # Poll for a readback file the captive Neovim writes. Nothing downstream may read a
 # file we merely hope is there. (The CRASH_SCENARIO body, verbatim.)
@@ -4073,7 +3615,7 @@ exit 0
 ///
 /// ## Exit codes
 ///
-/// * `11` — the app died before its window mapped (the shared convention).
+/// * `11` — the app died before it was ready for input (the shared convention).
 /// * `14` — the cursor readback the captive Neovim was told to write never
 ///   appeared, so the three location assertions cannot be checked at all. The most
 ///   likely cause is an overlay that stayed open, which means the app is still
@@ -4084,17 +3626,7 @@ exit 0
 const PROJSEARCH_SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
-# for the window to map, which this poll cannot observe (see the poll below).
-# WAIT_TRIES is sized generously for the FULL workspace suite, where ~90
-# integration-test binaries (most spawning a real nvim) run in parallel. A timing
-# knob only -- no assertion depends on it.
-#
-# SETTLE is the ONLY real budget between spawning the app and the first
-# keystroke: the wtype poll below does NOT gate input readiness (it breaks at
-# tries=0 on every run -- see the module doc comment). SCENARIO carries the
-# measured margin table behind this value; do not trim it back.
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 # How many WAIT_INTERVAL polls to allow for the readback file.
@@ -4103,26 +3635,7 @@ FILE_TRIES=100
 # Launch the real app in the background; remember its pid.
 "$WOLF_BIN" &
 app_pid=$!
-
-# Wait for the app to still be alive AND for the compositor to be up. The no-op
-# `wtype ""` does NOT prove a surface has mapped: cage advertises
-# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
-# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
-tries=0
-while [ "$tries" -lt "$WAIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        echo "wolf-gnome project-search smoke: app process exited early (pid $app_pid)" >&2
-        exit 11
-    fi
-    if wtype "" >/dev/null 2>&1; then
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-
-# Final settle for nvim's initial redraw before driving the editor.
-sleep "$SETTLE"
+wait_ready "$app_pid" 11 "wolf-gnome project-search smoke"
 
 # Poll for a readback file the captive Neovim writes. Nothing downstream may read a
 # file we merely hope is there. (The CRASH_SCENARIO body, verbatim.)
@@ -4244,53 +3757,23 @@ wait "$app_pid" 2>/dev/null
 exit 0
 "#;
 
-/// The `:q` CLOSE-PANE scenario, run as a single `sh -c` string INSIDE `cage`
-/// (mirrors [`CLOSE_SCENARIO`] step for step): launch the app, poll until `cage` is
-/// up (NOT until the window maps — see [`SCENARIO`]'s `SETTLE` comment), settle,
-/// open file A in the editor pane, vertical-split (`<C-w>v`, focus moves to
-/// the new RIGHT pane), open file B there, then close the focused pane with the Ex
-/// command `:q` instead of `<C-w>c`, settle, and screenshot. Both files live in the
-/// cage process's working directory (set by the caller).
+/// The `:q` CLOSE-PANE scenario, run as a single `sh -c` string INSIDE `cage` (mirrors
+/// [`CLOSE_SCENARIO`] step for step): launch the app, wait until it is ready for input
+/// (`wait_ready`), open file A in the editor pane, vertical-split (`<C-w>v`, focus
+/// moves to the new RIGHT pane), open file B there, then close the focused pane with
+/// the Ex command `:q` instead of `<C-w>c`, settle, and screenshot. Both files live in
+/// the cage process's working directory (set by the caller).
 const COLON_Q_SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
-# for the window to map, which this poll cannot observe (see the poll below).
-# WAIT_TRIES is sized generously for the FULL workspace suite, where ~90
-# integration-test binaries (most spawning a real nvim) run in parallel. A timing
-# knob only -- no assertion depends on it.
-#
-# SETTLE is the ONLY real budget between spawning the app and the first
-# keystroke: the wtype poll below does NOT gate input readiness (it breaks at
-# tries=0 on every run -- see the module doc comment). SCENARIO carries the
-# measured margin table behind this value; do not trim it back.
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 
 # Launch the real app in the background; remember its pid.
 "$WOLF_BIN" &
 app_pid=$!
-
-# Wait for the app to still be alive AND for the compositor to be up. The no-op
-# `wtype ""` does NOT prove a surface has mapped: cage advertises
-# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
-# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
-tries=0
-while [ "$tries" -lt "$WAIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        echo "wolf-gnome :q smoke: app process exited early (pid $app_pid)" >&2
-        exit 11
-    fi
-    if wtype "" >/dev/null 2>&1; then
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-
-# Final settle for nvim's initial redraw before driving the editor.
-sleep "$SETTLE"
+wait_ready "$app_pid" 11 "wolf-gnome :q smoke"
 
 # Open file A (the SURVIVOR) in the (single) editor pane.
 wtype -- ":e $QUIT_FILE_KEEP"
@@ -4333,9 +3816,8 @@ exit 0
 "#;
 
 /// The `:qa` CLOSE-WINDOW scenario, run as a single `sh -c` string INSIDE `cage`:
-/// launch the app, poll until `cage` is up (NOT until the window maps — see
-/// [`SCENARIO`]'s `SETTLE` comment), settle, type `:qa<CR>`, then POLL
-/// for the app process to disappear and REAP it to check how it went.
+/// launch the app, wait until it is ready for input (`wait_ready`), type `:qa<CR>`,
+/// then POLL for the app process to disappear and REAP it to check how it went.
 ///
 /// This is the only scenario that captures NO screenshot: its whole assertion is
 /// that the process is gone and exited cleanly, which is a property of the process
@@ -4348,55 +3830,26 @@ exit 0
 /// process vanish exactly as a clean shutdown does, so without that check this
 /// scenario would pass green on the very regression its failure message blames.
 ///
-/// Exit codes: `0` the app exited cleanly (success); `11` the app died before the
-/// window mapped; `12` the app was still alive after `QUIT_TRIES * WAIT_INTERVAL`
+/// Exit codes: `0` the app exited cleanly (success); `11` the app died before it
+/// was ready for input; `12` the app was still alive after `QUIT_TRIES * WAIT_INTERVAL`
 /// seconds — i.e. the drained `close_window` command never reached
 /// `window.close()`; `13` the app exited but with a NON-ZERO status — i.e. the
 /// shutdown path itself panicked or aborted.
 const COLON_QA_SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
-# for the window to map, which this poll cannot observe (see the poll below).
-# WAIT_TRIES is sized generously for the FULL workspace suite, where ~90
-# integration-test binaries (most spawning a real nvim) run in parallel. A timing
-# knob only -- no assertion depends on it.
-#
-# SETTLE is the ONLY real budget between spawning the app and the first
-# keystroke: the wtype poll below does NOT gate input readiness (it breaks at
-# tries=0 on every run -- see the module doc comment). SCENARIO carries the
-# measured margin table behind this value; do not trim it back.
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
-# How many WAIT_INTERVAL polls to allow for the app to EXIT after :qa. Sized like
-# WAIT_TRIES because the shutdown path (close-request -> picker/tree close ->
-# WolfCore::shutdown -> nvim exit) runs under the same parallel-suite load.
+# How many WAIT_INTERVAL polls to allow for the app to EXIT after :qa (15 s). Sized
+# for the parallel-suite load the shutdown path (close-request -> picker/tree close
+# -> WolfCore::shutdown -> nvim exit) runs under.
 QUIT_TRIES=75
 
 # Launch the real app in the background; remember its pid.
 "$WOLF_BIN" &
 app_pid=$!
-
-# Wait for the app to still be alive AND for the compositor to be up. The no-op
-# `wtype ""` does NOT prove a surface has mapped: cage advertises
-# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
-# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
-tries=0
-while [ "$tries" -lt "$WAIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        echo "wolf-gnome :qa smoke: app process exited early (pid $app_pid)" >&2
-        exit 11
-    fi
-    if wtype "" >/dev/null 2>&1; then
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-
-# Final settle for nvim's initial redraw before driving the cmdline.
-sleep "$SETTLE"
+wait_ready "$app_pid" 11 "wolf-gnome :qa smoke"
 
 # Quit-all. init.lua's do_quit sees `all` and fires
 # `vim.rpcnotify(chan, "wolf_command", "close_window")` (behind its E37 guard; the
@@ -4447,53 +3900,23 @@ wait "$app_pid" 2>/dev/null
 exit 12
 "#;
 
-/// The Ctrl+Shift+W CLOSE-PANE scenario, run as a single `sh -c` string INSIDE
-/// `cage` (mirrors [`CLOSE_SCENARIO`] step for step): launch the app, poll until
-/// `cage` is up (NOT until the window maps — see [`SCENARIO`]'s `SETTLE` comment),
-/// settle, open file A in the editor pane, vertical-split (`<C-w>v`, focus
-/// moves to the new RIGHT pane), open file B there, then close the focused pane
-/// with the Ctrl+Shift+W ACCELERATOR instead of `<C-w>c`, settle, and screenshot.
-/// Both files live in the cage process's working directory (set by the caller).
+/// The Ctrl+Shift+W CLOSE-PANE scenario, run as a single `sh -c` string INSIDE `cage`
+/// (mirrors [`CLOSE_SCENARIO`] step for step): launch the app, wait until it is ready
+/// for input (`wait_ready`), open file A in the editor pane, vertical-split (`<C-w>v`,
+/// focus moves to the new RIGHT pane), open file B there, then close the focused pane
+/// with the Ctrl+Shift+W ACCELERATOR instead of `<C-w>c`, settle, and screenshot. Both
+/// files live in the cage process's working directory (set by the caller).
 const CHORD_CLOSE_SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
-# for the window to map, which this poll cannot observe (see the poll below).
-# WAIT_TRIES is sized generously for the FULL workspace suite, where ~90
-# integration-test binaries (most spawning a real nvim) run in parallel. A timing
-# knob only -- no assertion depends on it.
-#
-# SETTLE is the ONLY real budget between spawning the app and the first
-# keystroke: the wtype poll below does NOT gate input readiness (it breaks at
-# tries=0 on every run -- see the module doc comment). SCENARIO carries the
-# measured margin table behind this value; do not trim it back.
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 
 # Launch the real app in the background; remember its pid.
 "$WOLF_BIN" &
 app_pid=$!
-
-# Wait for the app to still be alive AND for the compositor to be up. The no-op
-# `wtype ""` does NOT prove a surface has mapped: cage advertises
-# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
-# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
-tries=0
-while [ "$tries" -lt "$WAIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        echo "wolf-gnome chord-close smoke: app process exited early (pid $app_pid)" >&2
-        exit 11
-    fi
-    if wtype "" >/dev/null 2>&1; then
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-
-# Final settle for nvim's initial redraw before driving the editor.
-sleep "$SETTLE"
+wait_ready "$app_pid" 11 "wolf-gnome chord-close smoke"
 
 # Open file A (the SURVIVOR) in the (single) editor pane.
 wtype -- ":e $CHORD_CLOSE_FILE_KEEP"
@@ -4944,7 +4367,7 @@ fn with_nvim_pid_helper(scenario: &str) -> String {
 ///
 /// ## Exit codes
 ///
-/// * `11` — the app died before its window mapped (the shared convention).
+/// * `11` — the app died before it was ready for input (the shared convention).
 /// * `14` — a readback file the captive Neovim was told to write never appeared.
 /// * `16` — THE APP DIED with its Neovim. See [`FIND_NVIM_PID_HELPER`].
 /// * `17` — the Neovim child could not be identified uniquely.
@@ -4954,16 +4377,7 @@ fn with_nvim_pid_helper(scenario: &str) -> String {
 const CRASH_SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
-# for the window to map, which this poll cannot observe (see the poll below). Same
-# values the other keyboard-only smokes use, sized for the FULL workspace suite.
-# Timing knobs only -- no assertion depends on any of them.
-#
-# SETTLE is the ONLY real budget between spawning the app and the first
-# keystroke: the wtype poll below does NOT gate input readiness (it breaks at
-# tries=0 on every run -- see the module doc comment). SCENARIO carries the
-# measured margin table behind this value; do not trim it back.
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 # How many WAIT_INTERVAL polls to allow for a readback file, and for the whole
@@ -4987,26 +4401,7 @@ trap cleanup EXIT INT TERM HUP
 # Launch the real app in the background; remember its pid.
 "$WOLF_BIN" &
 app_pid=$!
-
-# Wait for the app to still be alive AND for the compositor to be up. The no-op
-# `wtype ""` does NOT prove a surface has mapped: cage advertises
-# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
-# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
-tries=0
-while [ "$tries" -lt "$WAIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        echo "wolf-gnome crash smoke: app process exited early (pid $app_pid)" >&2
-        exit 11
-    fi
-    if wtype "" >/dev/null 2>&1; then
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-
-# Final settle for nvim's initial redraw before driving the editor.
-sleep "$SETTLE"
+wait_ready "$app_pid" 11 "wolf-gnome crash smoke"
 
 # Poll for a readback file the captive Neovim writes. Nothing downstream may read a
 # file we merely hope is there.
@@ -5207,7 +4602,7 @@ exit 0
 ///
 /// ## Exit codes owned
 ///
-/// * `11` — the app died before its window mapped (the shared convention).
+/// * `11` — the app died before it was ready for input (the shared convention).
 /// * `16` — THE APP DIED with its wedged Neovim. The worst failure of this feature,
 ///   and its own code so it can never be confused with a missing overlay. See
 ///   [`FIND_NVIM_PID_HELPER`].
@@ -5216,15 +4611,7 @@ exit 0
 const STALL_SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
-# for the window to map, which this poll cannot observe (see the poll below). Same
-# values the other keyboard-only smokes use, sized for the FULL workspace suite.
-#
-# SETTLE is the ONLY real budget between spawning the app and the first
-# keystroke: the wtype poll below does NOT gate input readiness (it breaks at
-# tries=0 on every run -- see the module doc comment). SCENARIO carries the
-# measured margin table behind this value; do not trim it back.
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 # How many WAIT_INTERVAL polls `wait_nvim_pid` may spend identifying the child.
@@ -5262,26 +4649,7 @@ trap cleanup EXIT INT TERM HUP
 # Launch the real app in the background; remember its pid.
 "$WOLF_BIN" &
 app_pid=$!
-
-# Wait for the app to still be alive AND for the compositor to be up. The no-op
-# `wtype ""` does NOT prove a surface has mapped: cage advertises
-# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
-# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
-tries=0
-while [ "$tries" -lt "$WAIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        echo "wolf-gnome stall smoke: app process exited early (pid $app_pid)" >&2
-        exit 11
-    fi
-    if wtype "" >/dev/null 2>&1; then
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-
-# Final settle for nvim's initial redraw before driving the editor.
-sleep "$SETTLE"
+wait_ready "$app_pid" 11 "wolf-gnome stall smoke"
 
 # --- Step 3: open the fixture, so the editor has something distinctive up ---
 wtype -- ":e $STALL_FILE"
@@ -5350,7 +4718,7 @@ exit 0
 /// Everything the FIVE pointer scenarios have in common, as one `sh` fragment:
 /// the teardown trap, the command FIFO, the `wolf-pointer-inject` helper, the
 /// poll-for-ack protocol, the readback-file poll, the buffer fixture, the app
-/// launch + window-map poll, and one initial in-pane `motion`.
+/// launch + readiness wait, and one initial in-pane `motion`.
 ///
 /// This is a DELIBERATE deviation from this file's "one self-contained scenario
 /// const per smoke" style. The preamble is ~90 lines of FIFO / ack / poll plumbing,
@@ -5380,28 +4748,22 @@ exit 0
 ///
 /// ## Exit codes (following the [`COLON_QA_SCENARIO`] precedent)
 ///
-/// * `11` — the app died before its window mapped.
+/// * `11` — the app died before it was ready for input.
 /// * `12` — the helper never became ready.
 /// * `13` — a helper command was not acked within budget.
 /// * `14` — a Neovim readback file never appeared.
 /// * `15` — the helper died mid-scenario.
+/// * `40` — the app never became ready for input ([`READINESS_PRELUDE`]).
 ///
-/// Each one echoes a one-line reason AND the helper's stderr, because when the
-/// helper is the failing party its own message ("no `zwlr_virtual_pointer_manager_v1`
-/// in the registry", "more than one `wl_output`") is the whole diagnosis.
+/// Each of `12`–`15` echoes a one-line reason AND the helper's stderr, because when
+/// the helper is the failing party its own message ("no
+/// `zwlr_virtual_pointer_manager_v1` in the registry", "more than one `wl_output`") is
+/// the whole diagnosis. `11` and `40` come from the shared `wait_ready`, which echoes
+/// its own reason only: neither is about the helper.
 const POINTER_PREAMBLE: &str = r#"
 set -eu
 
-# Poll knobs. WAIT_TRIES/WAIT_INTERVAL/SETTLE are the SAME values the fourteen
-# keyboard-only smokes use, sized for the FULL workspace suite where ~90
-# integration-test binaries run in parallel. Timing knobs only -- no assertion
-# depends on any of them.
-#
-# SETTLE is the ONLY real budget between spawning the app and the first injected
-# event: the wtype poll below does NOT gate readiness (it breaks at tries=0 on
-# every run -- see the module doc comment). SCENARIO carries the measured margin
-# table behind this value; do not trim it back.
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 # How many WAIT_INTERVAL polls to allow for a helper line (`ready ...` or `ok <n>`).
@@ -5636,29 +4998,7 @@ hwait_ready
 # Launch the real app in the background; remember its pid.
 "$WOLF_BIN" &
 app_pid=$!
-
-# Wait for the app to still be alive AND for the compositor to be up. The no-op
-# `wtype ""` does NOT prove a surface has mapped: cage advertises
-# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
-# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
-tries=0
-while [ "$tries" -lt "$WAIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        echo "wolf-gnome pointer smoke: app process exited early (pid $app_pid)" >&2
-        echo "  wolf-pointer-inject stderr follows:" >&2
-        cat "$HELPER_ERR" >&2
-        exit 11
-    fi
-    if wtype "" >/dev/null 2>&1; then
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-
-# Final settle for nvim's initial redraw. There is nothing observable to poll for
-# the FIRST redraw, so this matches every existing smoke.
-sleep "$SETTLE"
+wait_ready "$app_pid" 11 "wolf-gnome pointer smoke"
 
 # One initial in-pane motion, so wl_pointer.enter and a first motion are delivered
 # before anything depends on them. This is also the position `record_pointer`
@@ -6325,10 +5665,10 @@ exit 0
 //
 // | code | meaning |
 // | --- | --- |
-// | `11` | run 1's app died before its window mapped |
+// | `11` | run 1's app died before it was ready for input |
 // | `12` | run 1 was still alive after the quit poll budget — the drain/close path failed |
 // | `13` | run 1 exited NON-ZERO: it went away, but not cleanly. That implicates a panic in `Coordinator::on_window_closing` (the close path's gather, commit and blocking flush), or a `RefCell` double-borrow against `window::wire_close`'s `core.borrow_mut().take()` |
-// | `14` | run 2's app died before its window mapped |
+// | `14` | run 2's app died before it was ready for input |
 // | `15` | the Neovim readback file never appeared in run 2 |
 // | `16` | (the single-pane and two-window smokes) run 1 wrote no `state.json` at all |
 // | `21`–`26` | the two-window smoke's own; see `TWOWIN_SCENARIO`'s table |
@@ -6338,15 +5678,14 @@ exit 0
 // equally true of a clean shutdown and of a panic in the GTK main loop, and this
 // is the first unit in which the close path does real work.
 
-/// Extra settle after the SECOND launch of a relaunch smoke, on top of the usual
+/// Extra settle after the two-window smoke's MID-RUN New Window, on top of the usual
 /// `SETTLE`.
 ///
-/// The layout rebuild does not happen at `window::build` time: it is QUEUED there
-/// (`PaneHandle::request_layout_rebuild`) and consumed on the first render wake at
-/// which a window grid exists, and it then issues `WolfCore::rebuild_layout` — a
-/// BLOCKING RPC that drives `:vsplit` / `:split` / `:edit` inside the captive
-/// Neovim once per leaf. A timing knob only: no assertion depends on its value,
-/// and every observable below is polled for.
+/// A window opened after launch is not covered by the readiness file, which fires
+/// once per process, so this sleep is what waits for it. A launch's own restore needs
+/// no settle: `wait_ready` holds until no saved layout is pending and no restore owes
+/// a page. A timing knob only: no assertion depends on its value, and every
+/// observable below is polled for.
 const RELAUNCH_RESTORE_SETTLE: &str = "2.0";
 
 // --- S1 fixtures: three files, three panes, one asymmetric tree -------------
@@ -6414,26 +5753,16 @@ const RESTORE_READBACK_EXPECTED: &str = "rleft.md rmid.md rright.md";
 /// types `:qa`, POLLS for the process to go, and REAPS it to check the status.
 ///
 /// **Run 2** launches the SAME binary in the SAME working directory with the SAME
-/// `WOLF_STATE_DIR` (both inherited from `cage_command`), polls that `cage` is up
-/// (NOT that the window mapped — see [`SCENARIO`]'s `SETTLE` comment), settles for
-/// the restore, and asks the restored Neovim to `writefile` its own
-/// `tabpagebuflist()` — the load-bearing observable — before the screenshot.
+/// `WOLF_STATE_DIR` (both inherited from `cage_command`), waits until it is ready for
+/// input (`wait_ready`), which covers the restore, and asks the restored Neovim to
+/// `writefile` its own `tabpagebuflist()` — the load-bearing observable — before the
+/// screenshot.
 ///
 /// See the exit-code table above this const.
 const RESTORE_LAYOUT_SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
-# for either run's window to map, which `wait_window` cannot observe (see it
-# below). WAIT_TRIES is sized generously for the FULL workspace suite, where ~90
-# integration-test binaries (most spawning a real nvim) run in parallel. Timing
-# knobs only -- no assertion depends on any of them.
-#
-# SETTLE is the ONLY real budget between spawning EITHER run's app and its first
-# keystroke: `wait_window`'s wtype probe does NOT gate input readiness (it breaks
-# at tries=0 on every run -- see the module doc comment). SCENARIO carries the
-# measured margin table behind this value; do not trim it back.
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 # How many WAIT_INTERVAL polls to allow for run 1 to EXIT after :qa, and for the
@@ -6452,26 +5781,6 @@ cleanup() {
     fi
 }
 trap cleanup EXIT INT TERM HUP
-
-# Wait for the app to still be alive AND for the compositor to be up. The no-op
-# `wtype ""` does NOT prove a surface has mapped (measured: it breaks at tries=0
-# on every run) -- SETTLE is the real budget, see SCENARIO. $1 is the exit code
-# to use if the app dies first, so run 1 and run 2 stay distinguishable.
-wait_window() {
-    tries=0
-    while [ "$tries" -lt "$WAIT_TRIES" ]; do
-        if ! kill -0 "$app_pid" 2>/dev/null; then
-            echo "wolf-gnome relaunch smoke: app process exited early (pid $app_pid)" >&2
-            exit "$1"
-        fi
-        if wtype "" >/dev/null 2>&1; then
-            return 0
-        fi
-        tries=$((tries + 1))
-        sleep "$WAIT_INTERVAL"
-    done
-    return 0
-}
 
 # Poll for a readback file the captive Neovim writes. Nothing downstream may read
 # a file we merely hope is there.
@@ -6494,8 +5803,7 @@ wait_file() {
 # =========================================================================
 "$WOLF_BIN" &
 app_pid=$!
-wait_window 11
-sleep "$SETTLE"
+wait_ready "$app_pid" 11 "wolf-gnome relaunch smoke"
 
 # Open file A in the single starting pane.
 wtype -- ":e $RESTORE_FILE_LEFT"
@@ -6574,11 +5882,7 @@ app_pid=
 # =========================================================================
 "$WOLF_BIN" &
 app_pid=$!
-wait_window 14
-sleep "$SETTLE"
-# The rebuild happens on the wake AFTER the first pane binds and issues a blocking
-# RPC per leaf, so this waits longer than a plain redraw would need.
-sleep "$RESTORE_SETTLE"
+wait_ready "$app_pid" 14 "wolf-gnome relaunch smoke"
 
 # THE load-bearing observable: one line holding every window's buffer TAIL name, in
 # window order, space separated. `:t` sidesteps any question of how /tmp resolves.
@@ -6649,11 +5953,7 @@ const SOLO_READBACK_EXPECTED: &str = "szulu.md";
 const RESTORE_SOLO_SCENARIO: &str = r#"
 set -eu
 
-# SETTLE is the ONLY real budget between spawning EITHER run's app and its first
-# keystroke: `wait_window`'s wtype probe does NOT gate input readiness (it breaks
-# at tries=0 on every run -- see the module doc comment). SCENARIO carries the
-# measured margin table behind this value; do not trim it back.
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 QUIT_TRIES=75
@@ -6667,25 +5967,6 @@ cleanup() {
     fi
 }
 trap cleanup EXIT INT TERM HUP
-
-# The no-op `wtype ""` does NOT prove a surface has mapped (measured: it breaks at
-# tries=0 on every run) -- SETTLE is the real budget, see SCENARIO. $1 is the exit
-# code to use if the app dies first, so run 1 and run 2 stay distinguishable.
-wait_window() {
-    tries=0
-    while [ "$tries" -lt "$WAIT_TRIES" ]; do
-        if ! kill -0 "$app_pid" 2>/dev/null; then
-            echo "wolf-gnome single-pane smoke: app process exited early (pid $app_pid)" >&2
-            exit "$1"
-        fi
-        if wtype "" >/dev/null 2>&1; then
-            return 0
-        fi
-        tries=$((tries + 1))
-        sleep "$WAIT_INTERVAL"
-    done
-    return 0
-}
 
 wait_file() {
     f=$1
@@ -6706,8 +5987,7 @@ wait_file() {
 # =========================================================================
 "$WOLF_BIN" &
 app_pid=$!
-wait_window 11
-sleep "$SETTLE"
+wait_ready "$app_pid" 11 "wolf-gnome single-pane smoke"
 
 # The whole point: a single unsplit pane holding a single file. Under the old
 # ARITY guard this shape persisted its cwd and NOTHING else.
@@ -6762,9 +6042,7 @@ cp "$SOLO_STATE_SRC" "$SOLO_STATE_COPY"
 # =========================================================================
 "$WOLF_BIN" &
 app_pid=$!
-wait_window 14
-sleep "$SETTLE"
-sleep "$RESTORE_SETTLE"
+wait_ready "$app_pid" 14 "wolf-gnome single-pane smoke"
 
 # THE load-bearing observable: the tail name of the CURRENT buffer. A broken build
 # answers `Untitled.md`; an app that reopened "the first file it found" would
@@ -6864,10 +6142,10 @@ const TABS_RESTORE_READBACK_NAME: &str = "tabs_run2.txt";
 ///
 /// | code | meaning |
 /// | --- | --- |
-/// | `11` | run 1's app died before its window mapped |
+/// | `11` | run 1's app died before it was ready for input |
 /// | `12` | run 1 was still alive after `:qa` |
 /// | `13` | run 1 exited NON-ZERO — it went away, but not cleanly |
-/// | `14` | run 2's app died before its window mapped |
+/// | `14` | run 2's app died before it was ready for input |
 /// | `15` | run 1's tabpage-count readback file never appeared |
 /// | `16` | run 2 was still alive after `:qa` |
 /// | `17` | run 2 exited NON-ZERO |
@@ -6886,10 +6164,7 @@ const TABS_RESTORE_READBACK_NAME: &str = "tabs_run2.txt";
 const RESTORE_TABS_SCENARIO: &str = r#"
 set -eu
 
-# SETTLE is the ONLY real budget between spawning EITHER run's app and its first
-# keystroke: `wait_window`'s wtype probe does NOT gate input readiness (it breaks at
-# tries=0 on every run) -- see SCENARIO for the measured margin table.
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 QUIT_TRIES=75
@@ -6903,13 +6178,11 @@ FILE_TRIES=100
 TABS_BAR_SETTLE=2.0
 
 # How many times RUN 2 re-issues its readback while waiting for the restored tabs to
-# exist. This is the scenario's whole materialization budget, and it is spent by
-# ASKING AGAIN rather than by sleeping: `$RESTORE_SETTLE` is a floor, not a
-# guarantee, because materialization first waits for Neovim's `wolf_tabpage`
-# notification and then issues up to four BLOCKING RPCs (one create_tabpage and one
-# rebuild_layout per restored tab), all on the GTK main thread. At $WAIT_INTERVAL
-# plus two wtype round trips per try this is well over ten seconds of retrying on top
-# of the settle, and it is only ever paid in full on a run that is already failing.
+# exist. `wait_ready` already holds until no restore owes a page, so the first try
+# normally answers; the retries are the backstop for a readiness that released too
+# early, spent by ASKING AGAIN rather than by sleeping. At $WAIT_INTERVAL plus two
+# wtype round trips per try this is well over ten seconds of retrying, and it is only
+# ever paid in full on a run that is already failing.
 READBACK_TRIES=60
 
 cleanup() {
@@ -6920,24 +6193,6 @@ cleanup() {
     fi
 }
 trap cleanup EXIT INT TERM HUP
-
-# $1 is the exit code to use if the app dies first, so run 1 and run 2 stay
-# distinguishable.
-wait_window() {
-    tries=0
-    while [ "$tries" -lt "$WAIT_TRIES" ]; do
-        if ! kill -0 "$app_pid" 2>/dev/null; then
-            echo "wolf-gnome three-tab smoke: app process exited early (pid $app_pid)" >&2
-            exit "$1"
-        fi
-        if wtype "" >/dev/null 2>&1; then
-            return 0
-        fi
-        tries=$((tries + 1))
-        sleep "$WAIT_INTERVAL"
-    done
-    return 0
-}
 
 wait_file() {
     f=$1
@@ -6958,8 +6213,7 @@ wait_file() {
 # =========================================================================
 "$WOLF_BIN" &
 app_pid=$!
-wait_window 11
-sleep "$SETTLE"
+wait_ready "$app_pid" 11 "wolf-gnome three-tab smoke"
 
 # Tab 0: the tab the next launch will select.
 wtype -- ":e $TABS_FILE_ONE"
@@ -7045,11 +6299,7 @@ cp "$TABS_STATE_SRC" "$TABS_STATE_COPY_1"
 # =========================================================================
 "$WOLF_BIN" &
 app_pid=$!
-wait_window 14
-sleep "$SETTLE"
-# Materialization runs on a render wake and issues a blocking create_tabpage plus a
-# blocking rebuild_layout per restored tab, so this waits longer than a plain redraw.
-sleep "$RESTORE_SETTLE"
+wait_ready "$app_pid" 14 "wolf-gnome three-tab smoke"
 
 # THE load-bearing observable: one line per TABPAGE, in tabpage order, holding that
 # tabpage's buffer tail names. `:t` sidesteps any question of how /tmp resolves.
@@ -7062,10 +6312,10 @@ sleep "$RESTORE_SETTLE"
 #
 # POLLED and RE-ISSUED, rather than written once after a fixed settle. `writefile`
 # truncates, so each re-issue replaces the whole file with the answer as of now and
-# the loop simply stops once three tabpages exist. Writing once would sample the
-# tabpage list at whatever moment $RESTORE_SETTLE happened to end, and on a slow host
-# that is BEFORE materialization has run -- so the Rust side would read one line and
-# assertion 2 would report a deleted queue_restore for what is only a slow launch.
+# the loop simply stops once three tabpages exist. Writing once would rest the whole
+# observable on `wait_ready`'s restore conjunct: if that ever released before
+# materialization ran, the Rust side would read one line and assertion 2 would report
+# a deleted queue_restore for what is only a readiness defect.
 #
 # Exhausting the budget is deliberately NOT fatal. A readback that has settled at one
 # line across every re-issue IS assertion 2's red, and assertion 2's message names
@@ -7299,7 +6549,7 @@ const DIVIDER_W2_NAME: &str = "dv_widths_two.txt";
 ///
 /// | code | meaning |
 /// | --- | --- |
-/// | `11` | run 1's app died before its window mapped |
+/// | `11` | run 1's app died before it was ready for input |
 /// | `12` | `wolf-pointer-inject` never printed its `ready …` line |
 /// | `13` | a helper command was never acked within budget |
 /// | `14` | a Neovim readback file never appeared |
@@ -7307,15 +6557,12 @@ const DIVIDER_W2_NAME: &str = "dv_widths_two.txt";
 /// | `16` | run 1 was still alive after the `:qa` poll budget |
 /// | `17` | run 1 exited NON-ZERO — it went away, but not cleanly |
 /// | `18` | run 1 wrote no `state.json` at all |
-/// | `19` | run 2's app died before its window mapped |
+/// | `19` | run 2's app died before it was ready for input |
 /// | `21` | the bisection seeds did not straddle the divider |
 const DIVIDER_RELAUNCH_SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs, all copied from POINTER_PREAMBLE and RESTORE_SOLO_SCENARIO. Timing
-# knobs only -- no assertion depends on any of them. SETTLE is the ONLY real budget
-# between spawning either run's app and its first keystroke; see SCENARIO.
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 ACK_TRIES=75
@@ -7423,26 +6670,6 @@ wait_file() {
     echo "wolf-gnome divider relaunch smoke: readback file $f never appeared (or stayed empty)." >&2
     cat "$HELPER_ERR" >&2
     return 1
-}
-
-# The no-op `wtype ""` does NOT prove a surface has mapped (measured: it breaks at
-# tries=0 on every run) -- SETTLE is the real budget, see SCENARIO. $1 is the exit
-# code to use if the app dies first, so run 1 and run 2 stay distinguishable.
-wait_window() {
-    tries=0
-    while [ "$tries" -lt "$WAIT_TRIES" ]; do
-        if ! kill -0 "$app_pid" 2>/dev/null; then
-            echo "wolf-gnome divider relaunch smoke: app process exited early (pid $app_pid)" >&2
-            cat "$HELPER_ERR" >&2
-            exit "$1"
-        fi
-        if wtype "" >/dev/null 2>&1; then
-            return 0
-        fi
-        tries=$((tries + 1))
-        sleep "$WAIT_INTERVAL"
-    done
-    return 0
 }
 
 # probe_buffer <x>: click at (<x>, $PROBE_Y) and leave the TAIL NAME of the buffer
@@ -7556,8 +6783,7 @@ hwait_ready
 # =========================================================================
 "$WOLF_BIN" &
 app_pid=$!
-wait_window 11
-sleep "$SETTLE"
+wait_ready "$app_pid" 11 "wolf-gnome divider relaunch smoke"
 
 # One in-pane motion so wl_pointer.enter and a first motion are delivered before
 # anything depends on them.
@@ -7636,9 +6862,7 @@ cp "$DIV_STATE_SRC" "$DIV_STATE_COPY"
 # =========================================================================
 "$WOLF_BIN" &
 app_pid=$!
-wait_window 19
-sleep "$SETTLE"
-sleep "$RESTORE_SETTLE"
+wait_ready "$app_pid" 19 "wolf-gnome divider relaunch smoke"
 
 read_widths "$DIV_W2"
 
@@ -7710,23 +6934,14 @@ const TITLE_OCR_PRESENT: &str = "titlezulu";
 const TITLE_OCR_ABSENT: &str = "titlehome";
 
 /// The WINDOW-TITLE scenario, run as a single `sh -c` string inside `cage` (the
-/// [`TREE_SCENARIO`] shape): launch the app, poll until `cage` is up (NOT until the
-/// window maps — see [`SCENARIO`]'s `SETTLE` comment), settle
-/// long enough for the tree's `FileSearch` to populate the sidebar AND for nvim to
-/// report its cwd on the render wake that sets the title, then screenshot. No
-/// keyboard interaction at all.
+/// [`TREE_SCENARIO`] shape): launch the app, wait until it is ready for input
+/// (`wait_ready`), settle long enough for the tree's `FileSearch` to populate the
+/// sidebar AND for nvim to report its cwd on the render wake that sets the title, then
+/// screenshot. No keyboard interaction at all.
 const TITLE_SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
-# for the window to map, which this poll cannot observe (see the poll below).
-# Timing knobs only -- no assertion depends on any of them.
-#
-# SETTLE is the ONLY real budget between spawning the app and the capture: the
-# wtype poll below does NOT gate readiness (it breaks at tries=0 on every run --
-# see the module doc comment). SCENARIO carries the measured margin table behind
-# this value; do not trim it back.
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 # Extra settle for the streamed FileSearch traversal to populate the sidebar and
@@ -7735,24 +6950,9 @@ TREE_SETTLE=1.5
 
 "$WOLF_BIN" &
 app_pid=$!
+wait_ready "$app_pid" 11 "wolf-gnome title smoke"
 
-# The no-op `wtype ""` does NOT prove a surface has mapped: cage advertises
-# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
-# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
-tries=0
-while [ "$tries" -lt "$WAIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        echo "wolf-gnome title smoke: app process exited early (pid $app_pid)" >&2
-        exit 11
-    fi
-    if wtype "" >/dev/null 2>&1; then
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-
-sleep "$SETTLE"
+# Extra time for the tree's FileSearch to stream the cwd listing into the sidebar.
 sleep "$TREE_SETTLE"
 
 grim "$OUT_PNG"
@@ -7952,10 +7152,10 @@ const TWOWIN_STATE_TABS_LINES: &str = "2";
 ///
 /// | code | meaning |
 /// | --- | --- |
-/// | `11` | run 1's app died before its window mapped |
+/// | `11` | run 1's app died before it was ready for input |
 /// | `12` | run 1 was still alive after `Ctrl+Shift+Q` — the chord reached no `app.quit` |
 /// | `13` | run 1 exited NON-ZERO: it went away, but not cleanly |
-/// | `14` | run 2's app died before its window mapped |
+/// | `14` | run 2's app died before it was ready for input |
 /// | `15` | a Neovim readback file never appeared |
 /// | `16` | run 1 wrote no `state.json` at all |
 /// | `21` | run 1 did not have EXACTLY TWO live `nvim` children after the palette activation |
@@ -7967,12 +7167,8 @@ const TWOWIN_STATE_TABS_LINES: &str = "2";
 const TWOWIN_SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs, copied from RESTORE_SOLO_SCENARIO. Timing knobs only -- no assertion
-# depends on any of them. SETTLE is the ONLY real budget between spawning either
-# run's app and its first keystroke: `wait_window`'s wtype probe does NOT gate input
-# readiness (it breaks at tries=0 on every run -- see the module doc comment).
-# FILE_TRIES is also `wait_nvim_count`'s budget, since that function reads it.
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO. FILE_TRIES is also
+# `wait_nvim_count`'s budget, since that function reads it.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 QUIT_TRIES=75
@@ -7986,25 +7182,6 @@ cleanup() {
     fi
 }
 trap cleanup EXIT INT TERM HUP
-
-# The no-op `wtype ""` does NOT prove a surface has mapped (measured: it breaks at
-# tries=0 on every run) -- SETTLE is the real budget, see SCENARIO. $1 is the exit
-# code to use if the app dies first, so run 1 and run 2 stay distinguishable.
-wait_window() {
-    tries=0
-    while [ "$tries" -lt "$WAIT_TRIES" ]; do
-        if ! kill -0 "$app_pid" 2>/dev/null; then
-            echo "wolf-gnome two-window smoke: app process exited early (pid $app_pid)" >&2
-            exit "$1"
-        fi
-        if wtype "" >/dev/null 2>&1; then
-            return 0
-        fi
-        tries=$((tries + 1))
-        sleep "$WAIT_INTERVAL"
-    done
-    return 0
-}
 
 wait_file() {
     f=$1
@@ -8025,8 +7202,7 @@ wait_file() {
 # =========================================================================
 "$WOLF_BIN" &
 app_pid=$!
-wait_window 11
-sleep "$SETTLE"
+wait_ready "$app_pid" 11 "wolf-gnome two-window smoke"
 
 # Window A opens the first project's file, so it has a named leaf to persist.
 wtype -- ":e $TWOWIN_FIRST_FILE"
@@ -8228,14 +7404,10 @@ cp "$TWOWIN_STATE_SRC" "$TWOWIN_STATE_COPY"
 # =========================================================================
 "$WOLF_BIN" &
 app_pid=$!
-wait_window 14
-sleep "$SETTLE"
-sleep "$RESTORE_SETTLE"
+wait_ready "$app_pid" 14 "wolf-gnome two-window smoke"
 
 # --- Step 9: BOTH windows came back, each with its own core ------------------
 wait_nvim_count 2 23 "after the relaunch restored the saved session"
-
-sleep "$SETTLE"
 
 # --- Step 10: the focused restored window holds a COHERENT session -----------
 #
@@ -8423,24 +7595,14 @@ const RECENT_DIRS_DB_NAME: &str = "folder-mru.sqlite";
 ///
 /// ## Exit codes
 ///
-/// * `11` — the app died before its window mapped (the shared convention).
+/// * `11` — the app died before it was ready for input (the shared convention).
 /// * `14` — the `getcwd()` readback never appeared, which means the palette never
 ///   closed and the Ex command was typed into its `SearchEntry` instead. That is a
 ///   DISTINCT cause from "the wrong row ran", which exits 0 and fails assertion 3.
 const OPENRECENT_SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
-# for the window to map, which this poll cannot observe (see the poll below).
-# WAIT_TRIES is sized generously for the FULL workspace suite, where ~90
-# integration-test binaries (most spawning a real nvim) run in parallel. A timing
-# knob only -- no assertion depends on it.
-#
-# SETTLE is the ONLY real budget between spawning the app and the first
-# keystroke: the wtype poll below does NOT gate input readiness (it breaks at
-# tries=0 on every run -- see the module doc comment). SCENARIO carries the
-# measured margin table behind this value; do not trim it back.
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 # How many WAIT_INTERVAL polls to allow for the readback file.
@@ -8449,26 +7611,7 @@ FILE_TRIES=100
 # Launch the real app in the background; remember its pid.
 "$WOLF_BIN" &
 app_pid=$!
-
-# Wait for the app to still be alive AND for the compositor to be up. The no-op
-# `wtype ""` does NOT prove a surface has mapped: cage advertises
-# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
-# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
-tries=0
-while [ "$tries" -lt "$WAIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        echo "wolf-gnome open-recent smoke: app process exited early (pid $app_pid)" >&2
-        exit 11
-    fi
-    if wtype "" >/dev/null 2>&1; then
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-
-# Final settle for nvim's initial redraw before driving the editor.
-sleep "$SETTLE"
+wait_ready "$app_pid" 11 "wolf-gnome open-recent smoke"
 
 # Poll for a readback file the captive Neovim writes. Nothing downstream may read a
 # file we merely hope is there. (The BUFPICK_SCENARIO body, verbatim.)
@@ -8622,17 +7765,17 @@ const NAVBACK_READBACK_BEFORE: &str = "nb_before.txt";
 const NAVBACK_READBACK_AFTER: &str = "nb_after.txt";
 
 /// The NAV-BACK scenario, run as a single `sh -c` string INSIDE `cage` (the
-/// [`SCENARIO`] shape): launch the app, poll until `cage` is up (NOT until the
-/// window maps — see [`SCENARIO`]'s `SETTLE` comment), settle, `:e` the two
-/// fixtures in order, read `bufname('%')` back, fire Alt+Left, read `bufname('%')`
-/// back again, park the block cursor off the asserted row, settle, and screenshot.
+/// [`SCENARIO`] shape): launch the app, wait until it is ready for input
+/// (`wait_ready`), `:e` the two fixtures in order, read `bufname('%')` back, fire
+/// Alt+Left, read `bufname('%')` back again, park the block cursor off the asserted
+/// row, settle, and screenshot.
 ///
 /// Standalone — it does NOT need [`with_nvim_pid_helper`], because nothing here
 /// identifies or signals the Neovim child.
 ///
 /// ## Exit codes
 ///
-/// * `11` — the app died before its window mapped (the shared convention).
+/// * `11` — the app died before it was ready for input (the shared convention).
 /// * `24` — the BEFORE `bufname('%')` readback never appeared, so the premise that
 ///   the second `:e` landed cannot be checked at all.
 /// * `25` — the AFTER `bufname('%')` readback never appeared. Distinct from `24` on
@@ -8641,17 +7784,7 @@ const NAVBACK_READBACK_AFTER: &str = "nb_after.txt";
 const NAVBACK_SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
-# for the window to map, which this poll cannot observe (see the poll below).
-# WAIT_TRIES is sized generously for the FULL workspace suite, where ~90
-# integration-test binaries (most spawning a real nvim) run in parallel. A timing
-# knob only -- no assertion depends on it.
-#
-# SETTLE is the ONLY real budget between spawning the app and the first
-# keystroke: the wtype poll below does NOT gate input readiness (it breaks at
-# tries=0 on every run -- see the module doc comment). SCENARIO carries the
-# measured margin table behind this value; do not trim it back.
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 # How many WAIT_INTERVAL polls to allow for a readback file.
@@ -8660,26 +7793,7 @@ FILE_TRIES=100
 # Launch the real app in the background; remember its pid.
 "$WOLF_BIN" &
 app_pid=$!
-
-# Wait for the app to still be alive AND for the compositor to be up. The no-op
-# `wtype ""` does NOT prove a surface has mapped: cage advertises
-# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
-# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
-tries=0
-while [ "$tries" -lt "$WAIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        echo "wolf-gnome nav-back smoke: app process exited early (pid $app_pid)" >&2
-        exit 11
-    fi
-    if wtype "" >/dev/null 2>&1; then
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-
-# Final settle for nvim's initial redraw before driving the editor.
-sleep "$SETTLE"
+wait_ready "$app_pid" 11 "wolf-gnome nav-back smoke"
 
 # Poll for a readback file the captive Neovim writes. Nothing downstream may read a
 # file we merely hope is there. (The CRASH_SCENARIO body, verbatim.)
@@ -8822,12 +7936,11 @@ const SIDEBARTOGGLE_HEADING: &str = "# SIDEBARKEEPALFA";
 /// follows it.
 const SIDEBARTOGGLE_OCR_KEEP: &str = "sidebarkeepalfa";
 
-/// The SIDEBAR-TOGGLE scenario, run as a single `sh -c` string INSIDE `cage`:
-/// launch the app, poll until `cage` is up (NOT until the window maps — see
-/// [`SCENARIO`]'s `SETTLE` comment), settle long enough for the streamed
-/// `FileSearch` to populate the tree (the [`TREE_SCENARIO`] budget), open the
-/// editor fixture, park the block cursor, capture A, fire Ctrl+Shift+B, settle,
-/// capture B.
+/// The SIDEBAR-TOGGLE scenario, run as a single `sh -c` string INSIDE `cage`: launch
+/// the app, wait until it is ready for input (`wait_ready`), settle long enough for the
+/// streamed `FileSearch` to populate the tree (the [`TREE_SCENARIO`] budget), open the
+/// editor fixture, park the block cursor, capture A, fire Ctrl+Shift+B, settle, capture
+/// B.
 ///
 /// Standalone — it does NOT need [`with_nvim_pid_helper`], and it writes no
 /// readback file: both of its observables are pixels, and the three-way guard
@@ -8836,21 +7949,11 @@ const SIDEBARTOGGLE_OCR_KEEP: &str = "sidebarkeepalfa";
 ///
 /// ## Exit codes
 ///
-/// * `11` — the app died before its window mapped (the shared convention).
+/// * `11` — the app died before it was ready for input (the shared convention).
 const SIDEBARTOGGLE_SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
-# for the window to map, which this poll cannot observe (see the poll below).
-# WAIT_TRIES is sized generously for the FULL workspace suite, where ~90
-# integration-test binaries (most spawning a real nvim) run in parallel. A timing
-# knob only -- no assertion depends on it.
-#
-# SETTLE is the ONLY real budget between spawning the app and the first
-# keystroke: the wtype poll below does NOT gate input readiness (it breaks at
-# tries=0 on every run -- see the module doc comment). SCENARIO carries the
-# measured margin table behind this value; do not trim it back.
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 # Extra settle for the streamed FileSearch traversal to populate the tree. Capture A
@@ -8862,27 +7965,9 @@ TREE_SETTLE=1.5
 # Launch the real app in the background; remember its pid.
 "$WOLF_BIN" &
 app_pid=$!
+wait_ready "$app_pid" 11 "wolf-gnome sidebar-toggle smoke"
 
-# Wait for the app to still be alive AND for the compositor to be up. The no-op
-# `wtype ""` does NOT prove a surface has mapped: cage advertises
-# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
-# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
-tries=0
-while [ "$tries" -lt "$WAIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        echo "wolf-gnome sidebar-toggle smoke: app process exited early (pid $app_pid)" >&2
-        exit 11
-    fi
-    if wtype "" >/dev/null 2>&1; then
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-
-# Final settle for nvim's initial redraw, plus extra time for the tree's FileSearch
-# to stream the cwd listing into the sidebar.
-sleep "$SETTLE"
+# Extra time for the tree's FileSearch to stream the cwd listing into the sidebar.
 sleep "$TREE_SETTLE"
 
 # --- Step 2: open the editor fixture ----------------------------------------
@@ -9107,7 +8192,7 @@ const CD_READBACK_NAME: &str = "cdcwd.txt";
 ///
 /// ## Exit codes
 ///
-/// * `11` — the app died before its window mapped (the shared convention). A LAUNCH
+/// * `11` — the app died before it was ready for input (the shared convention). A LAUNCH
 ///   failure; nothing below is about the `:cd`.
 /// * `14` — the `getcwd()` readback never appeared, i.e. the Ex command never
 ///   executed. DISTINCT from "the `:cd` went to the wrong place", which exits 0 and
@@ -9115,17 +8200,7 @@ const CD_READBACK_NAME: &str = "cdcwd.txt";
 const CD_SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
-# for the window to map, which this poll cannot observe (see the poll below).
-# WAIT_TRIES is sized generously for the FULL workspace suite, where ~90
-# integration-test binaries (most spawning a real nvim) run in parallel. A timing
-# knob only -- no assertion depends on it.
-#
-# SETTLE is the ONLY real budget between spawning the app and the first
-# keystroke: the wtype poll below does NOT gate input readiness (it breaks at
-# tries=0 on every run -- see the module doc comment). SCENARIO carries the
-# measured margin table behind this value; do not trim it back.
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 # Extra settle for the RE-ROOTED FileSearch to stream the new root's listing into
@@ -9138,26 +8213,7 @@ FILE_TRIES=100
 # Launch the real app in the background; remember its pid.
 "$WOLF_BIN" &
 app_pid=$!
-
-# Wait for the app to still be alive AND for the compositor to be up. The no-op
-# `wtype ""` does NOT prove a surface has mapped: cage advertises
-# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
-# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
-tries=0
-while [ "$tries" -lt "$WAIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        echo "wolf-gnome typed-cd smoke: app process exited early (pid $app_pid)" >&2
-        exit 11
-    fi
-    if wtype "" >/dev/null 2>&1; then
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-
-# Final settle for nvim's initial redraw before driving the editor.
-sleep "$SETTLE"
+wait_ready "$app_pid" 11 "wolf-gnome typed-cd smoke"
 
 # Poll for a readback file the captive Neovim writes. Nothing downstream may read a
 # file we merely hope is there. (The OPENRECENT_SCENARIO body, verbatim.)
@@ -9394,24 +8450,14 @@ const STATUS_EXPECTED_WINHEIGHT: i64 = 11;
 ///
 /// ## Exit codes
 ///
-/// * `11` — the app died before its window mapped (the shared convention). A LAUNCH
+/// * `11` — the app died before it was ready for input (the shared convention). A LAUNCH
 ///   failure; nothing below is about the status bar.
 /// * `14` — the readback never appeared, i.e. the Ex command never executed. DISTINCT
 ///   from "the panes are the wrong size", which exits 0 and fails assertion 7.
 const STATUS_SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
-# for the window to map, which this poll cannot observe (see the poll below).
-# WAIT_TRIES is sized generously for the FULL workspace suite, where ~90
-# integration-test binaries (most spawning a real nvim) run in parallel. A timing
-# knob only -- no assertion depends on it.
-#
-# SETTLE is the ONLY real budget between spawning the app and the first
-# keystroke: the wtype poll below does NOT gate input readiness (it breaks at
-# tries=0 on every run -- see the module doc comment). SCENARIO carries the
-# measured margin table behind this value; do not trim it back.
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 # How many WAIT_INTERVAL polls to allow for the readback file.
@@ -9420,26 +8466,7 @@ FILE_TRIES=100
 # Launch the real app in the background; remember its pid.
 "$WOLF_BIN" &
 app_pid=$!
-
-# Wait for the app to still be alive AND for the compositor to be up. The no-op
-# `wtype ""` does NOT prove a surface has mapped: cage advertises
-# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
-# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
-tries=0
-while [ "$tries" -lt "$WAIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        echo "wolf-gnome statusbar smoke: app process exited early (pid $app_pid)" >&2
-        exit 11
-    fi
-    if wtype "" >/dev/null 2>&1; then
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-
-# Final settle for nvim's initial redraw before driving the editor.
-sleep "$SETTLE"
+wait_ready "$app_pid" 11 "wolf-gnome statusbar smoke"
 
 # Poll for a readback file the captive Neovim writes. Nothing downstream may read a
 # file we merely hope is there. (The CD_SCENARIO body, verbatim.)
@@ -9944,7 +8971,7 @@ const PREVIEW_CAP_RENDER_FLOOR: u64 = 6;
 ///
 /// ## Exit codes
 ///
-/// * `11` — the app died before its window ever mapped (the shared convention). A
+/// * `11` — the app died before it was ready for input (the shared convention). A
 ///   LAUNCH failure; nothing else in this smoke is about the preview.
 /// * `14` — a window-list readback the captive Neovim was told to write never
 ///   appeared, so the leg it belongs to cannot be checked at all.
@@ -9954,17 +8981,7 @@ const PREVIEW_CAP_RENDER_FLOOR: u64 = 6;
 const PREVIEW_SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
-# for the window to map, which this poll cannot observe (see the poll below).
-# WAIT_TRIES is sized generously for the FULL workspace suite, where ~90
-# integration-test binaries (most spawning a real nvim) run in parallel. A timing
-# knob only -- no assertion depends on it.
-#
-# SETTLE is the ONLY real budget between spawning the app and the first
-# keystroke: the wtype poll below does NOT gate input readiness (it breaks at
-# tries=0 on every run -- see the module doc comment). SCENARIO carries the
-# measured margin table behind this value; do not trim it back.
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 # How many WAIT_INTERVAL polls to allow for a readback file.
@@ -9992,26 +9009,7 @@ PREVIEW_SETTLE=2.0
 # Launch the real app in the background; remember its pid.
 "$WOLF_BIN" &
 app_pid=$!
-
-# Wait for the app to still be alive AND for the compositor to be up. The no-op
-# `wtype ""` does NOT prove a surface has mapped: cage advertises
-# zwp_virtual_keyboard_manager_v1 before any surface maps, and measured, this
-# breaks at tries=0 on every run. SETTLE above is the real budget; see SCENARIO.
-tries=0
-while [ "$tries" -lt "$WAIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        echo "wolf-gnome markdown-preview smoke: app process exited early (pid $app_pid)" >&2
-        exit 11
-    fi
-    if wtype "" >/dev/null 2>&1; then
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-
-# Final settle for nvim's initial redraw before driving the editor.
-sleep "$SETTLE"
+wait_ready "$app_pid" 11 "wolf-gnome markdown-preview smoke"
 
 # Poll for a readback file the captive Neovim writes. Nothing downstream may read a
 # file we merely hope is there. (The STATUS_SCENARIO body, verbatim.)
@@ -10640,20 +9638,13 @@ const UNSAVED_READBACK_NAME: &str = "unwins.txt";
 ///
 /// ## Exit codes
 ///
-/// * `11` — the app died before its window ever mapped (the shared convention).
+/// * `11` — the app died before it was ready for input (the shared convention).
 /// * `14` — the window-list readback never appeared, so the Preview leg cannot be
 ///   checked at all.
 const UNSAVED_PREVIEW_SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
-# for the window to map, which this poll cannot observe (see the poll below).
-#
-# SETTLE is the ONLY real budget between spawning the app and the first keystroke:
-# the wtype poll below does NOT gate input readiness (it breaks at tries=0 on every
-# run -- see the module doc comment). SCENARIO carries the measured margin table
-# behind this value; do not trim it back.
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 # How many WAIT_INTERVAL polls to allow for a readback file.
@@ -10665,22 +9656,7 @@ PREVIEW_SETTLE=2.0
 # Launch the real app in the background; remember its pid.
 "$WOLF_BIN" &
 app_pid=$!
-
-tries=0
-while [ "$tries" -lt "$WAIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        echo "wolf-gnome unsaved-preview smoke: app process exited early (pid $app_pid)" >&2
-        exit 11
-    fi
-    if wtype "" >/dev/null 2>&1; then
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-
-# Final settle for nvim's initial redraw before driving the editor.
-sleep "$SETTLE"
+wait_ready "$app_pid" 11 "wolf-gnome unsaved-preview smoke"
 
 # Poll for a readback file the captive Neovim writes. (The PREVIEW_SCENARIO body,
 # verbatim.)
@@ -11214,8 +10190,8 @@ fn smoke_home(cwd: &Path) -> &Path {
 /// `wolf-gnome-smoke-*` cwds and any sweep of that tree takes it too. The reason to
 /// keep the name distinct is that it is SHARED by every smoke, so it must not be read
 /// as one more per-smoke artifact when someone is pairing directories to runs in a
-/// post-mortem. Losing it costs one cold launch, which [`smoke_shader_cache_dir`]
-/// shows is covered by `SETTLE` on its own.
+/// post-mortem. Losing it costs one cold launch, which is time spent in `wait_ready`
+/// and nothing else.
 const SHARED_SHADER_CACHE_DIR: &str = "wolf-smoke-shader-cache";
 
 /// The `XDG_CACHE_HOME` every smoke's app is given: ONE directory —
@@ -11238,10 +10214,9 @@ const SHARED_SHADER_CACHE_DIR: &str = "wolf-smoke-shader-cache";
 /// were counted on this host.
 ///
 /// So state honestly what this buys and what it does not. It buys: the first cage
-/// smoke of an invocation pays a cold cache and the other 29 run warm, which is where
-/// the pre-state-persistence settle margin came from. It does NOT buy: warmth across
-/// invocations — the first smoke of EVERY invocation is cold. The section after the
-/// table below is why that is acceptable rather than a defect to fix.
+/// smoke of an invocation pays a cold cache and the rest run warm. It does NOT buy:
+/// warmth across invocations — the first smoke of EVERY invocation is cold, which is
+/// acceptable because a cold cache costs launch time, not correctness (below).
 ///
 /// ## Why this exists (measured, not inferred)
 ///
@@ -11251,42 +10226,17 @@ const SHARED_SHADER_CACHE_DIR: &str = "wolf-smoke-shader-cache";
 /// be undone — silently made `$HOME/.cache` a FRESH directory on every smoke, so mesa
 /// rebuilt its shader cache (`mesa_shader_cache` + `radv_builtin_shaders`, ~4.9 MB)
 /// from scratch on every single launch. That is pure added latency between spawning
-/// the app and the window being able to accept keys, and `SETTLE` is the only budget
-/// covering it (see [`SCENARIO`]).
-///
-/// Measured, 20 iterations per cell, identical code, cache warmth the only variable:
-///
-/// | `SETTLE` | cold cache | warm cache |
-/// | --- | --- | --- |
-/// | 0.15 | 0/20 | 0/20 |
-/// | 0.20 | — | 0/20 |
-/// | 0.25 | 0/20 | **20/20** |
-/// | 0.30 | 0/20 | — |
-/// | 0.35 | **20/20** | 20/20 |
-/// | 0.40 | 20/20 | — |
-///
-/// Warm threshold ∈ (0.20, 0.25]; cold threshold ∈ (0.30, 0.35]. Pointing
-/// `XDG_CACHE_HOME` at one shared directory warms the cache once per invocation and
-/// keeps it warm across the smokes of THAT invocation: 29 of the 30 run warm instead
-/// of all 30 running cold. That removes most of the regression at its source rather
-/// than paying for it in settle time. It does not remove the cold column — the first
-/// smoke of every invocation still lands in it, because the directory moves with
-/// `TMPDIR` (see the section above).
+/// the app and the window being able to accept keys. Measured as the shortest fixed
+/// pre-input sleep that let the first keystroke land (20 iterations per cell), warm
+/// launches needed between 0.20 and 0.25 s and cold ones between 0.30 and 0.35 s.
 ///
 /// ## Why one cold launch per invocation is ACCEPTABLE, not a defect to fix
 ///
-/// Because `SETTLE = 1.0` covers the cold case on its own: it is ~2.9× the measured
-/// cold threshold in the table above, and the cold arm was run deliberately — a fresh
-/// `nix develop --command`, and therefore a guaranteed-empty shader cache, on every
-/// one of 100 iterations — for a result of 100/100 passes. Cross-invocation warmth is
-/// therefore a BONUS, not a requirement, and chasing a `TMPDIR`-proof location would
-/// be a design change bought with no measured benefit.
-///
-/// The tripwire, so the next reader does not have to re-derive it: that argument holds
-/// only while `SETTLE` carries that margin. Trim `SETTLE` and the cold case stops being
-/// covered by margin alone, at which point this directory's per-invocation instability
-/// starts to matter for real. The fix then is to put `SETTLE` back, not to go hunting
-/// for a stabler cache path.
+/// Because no scenario types on a fixed budget: `wait_ready` waits for the app's own
+/// readiness file, so a cold cache makes that wait about a tenth of a second longer
+/// and changes nothing else. Cross-invocation warmth is therefore a BONUS, not a
+/// requirement, and chasing a `TMPDIR`-proof location would be a design change bought
+/// with no measured benefit.
 ///
 /// ## Why sharing is SAFE here, and why it is shared ON PURPOSE
 ///
@@ -11300,9 +10250,8 @@ const SHARED_SHADER_CACHE_DIR: &str = "wolf-smoke-shader-cache";
 /// two helpers exist to prevent is reachable through it.
 ///
 /// So this is shared **deliberately**. Do not "fix" it into a per-smoke directory to
-/// match its neighbours: that is precisely the change that reintroduced the flake, and
-/// it reintroduces it invisibly — the symptom is a ~0.8% OCR failure in
-/// [`window_renders_typed_text_under_cage`] weeks later, not a red run here.
+/// match its neighbours: every launch would then rebuild the shaders, a cost paid on
+/// every smoke for no isolation it does not already have.
 ///
 /// ## What else `XDG_CACHE_HOME` reaches, and what it does not
 ///
@@ -11322,19 +10271,17 @@ const SHARED_SHADER_CACHE_DIR: &str = "wolf-smoke-shader-cache";
 /// non-directory.
 ///
 /// **That bounded failure mode is why a FIXED name is acceptable rather than reckless.**
-/// The worst case of a name collision is the cold column of the table above, and at
-/// `SETTLE = 1.0` cold still carries ~2.9× the measured cold threshold — so the
-/// degradation is covered by the settle margin by construction. A per-user or per-run
-/// name would buy nothing that margin does not already cover, while giving up the one
-/// property this directory exists for.
+/// The worst case of a name collision is a cold cache, which costs launch time inside
+/// `wait_ready` and nothing else. A per-user or per-run name would buy nothing, while
+/// giving up the one property this directory exists for.
 fn smoke_shader_cache_dir() -> PathBuf {
     let dir = std::env::temp_dir().join(SHARED_SHADER_CACHE_DIR);
     std::fs::create_dir_all(&dir).unwrap_or_else(|e| {
         panic!(
             "failed to create the shared smoke shader cache dir {}: {e}. It is handed to every \
              smoke as XDG_CACHE_HOME so mesa's shader cache stays warm across runs; without it \
-             every launch rebuilds ~4.9 MB of shaders and the fixed SETTLE budget loses most of \
-             its headroom. See `smoke_shader_cache_dir`.",
+             every launch rebuilds ~4.9 MB of shaders and waits that much longer to become ready \
+             for input. See `smoke_shader_cache_dir`.",
             dir.display()
         )
     });
@@ -11428,13 +10375,110 @@ const HOME_CONFIG_DIR_FALLBACK: &str = ".config/wolf";
 /// `GDK_DEBUG` note is the same species of per-smoke isolation.
 const SMOKE_GTK_IM_MODULE: &str = "gtk-im-context-simple";
 
+/// The shell every scenario starts with: [`cage_command`] prepends it, so no
+/// scenario can forget it and none defines its own copy.
+///
+/// `wait_ready <pid> <died-code> <label>` first PRIMES the seat with a key-free
+/// `wtype ""`, retried until it succeeds (cage may not be up yet), then polls until
+/// `$WOLF_READY_FILE` names `<pid>`. The app writes it once its launch windows
+/// accept keystrokes (see `crates/wolf-gnome/DECISIONS.md`, "The readiness file").
+///
+/// The priming is load-bearing, not a liveness probe. A headless `cage` seat has no
+/// keyboard until a virtual keyboard exists, and the first key the first virtual
+/// keyboard sends after the window maps is lost (measured: the leading `i` of
+/// `ihello` dropped in 5 of 10 runs without it). `wtype ""` creates a keyboard and
+/// sends no key; the seat keeps the capability after it exits, and the app's
+/// `no-keyboard` condition waits for the client to see it.
+///
+/// It exits `<died-code>` if the app dies first, and `READY_TIMEOUT_EXIT` (40) after
+/// `READY_TRIES × READY_INTERVAL` (30 s) — killing the app first, because `cage`
+/// outlives its shell while a client is still connected, and a scenario with no
+/// teardown trap would otherwise hang the test. There is deliberately no settle
+/// after it: a keystroke lost past readiness means the predicate lacks a condition,
+/// and a sleep would hide which. Comparing the pid rather than testing for the file
+/// is what lets a relaunch scenario's two launches share one path, and its
+/// variables are all `_ready_`-prefixed so it cannot clobber a scenario's `tries`.
+///
+/// `wait_file_contains <file> <needle> <label>` polls until `<file>` holds `<needle>`
+/// and returns 1 after 20 s, leaving the decision to the caller.
+const READINESS_PRELUDE: &str = r#"
+READY_TRIES=600
+READY_INTERVAL=0.05
+READY_TIMEOUT_EXIT=40
+
+wait_ready() {
+    _ready_n=0
+    _ready_primed=
+    while [ "$_ready_n" -lt "$READY_TRIES" ]; do
+        if ! kill -0 "$1" 2>/dev/null; then
+            echo "$3 (pid $1) exited before it was ready for input" >&2
+            exit "$2"
+        fi
+        if [ -z "$_ready_primed" ] && wtype "" >/dev/null 2>&1; then
+            _ready_primed=1
+        fi
+        _ready_got=
+        read -r _ready_got 2>/dev/null <"$WOLF_READY_FILE" || true
+        if [ "$_ready_got" = "$1" ]; then
+            return 0
+        fi
+        _ready_n=$((_ready_n + 1))
+        sleep "$READY_INTERVAL"
+    done
+    if [ -z "$_ready_primed" ]; then
+        echo "$3: wtype could not prime the seat's keyboard within $READY_TRIES x ${READY_INTERVAL}s" >&2
+        echo "  (no wtype on PATH, or cage never came up)" >&2
+    else
+        echo "$3: $WOLF_READY_FILE did not name pid $1 within $READY_TRIES x ${READY_INTERVAL}s;" >&2
+        echo "  the app's 'wolf-ready:' stderr lines name the last unmet condition" >&2
+    fi
+    kill "$1" 2>/dev/null || true
+    exit "$READY_TIMEOUT_EXIT"
+}
+
+FILE_CONTAINS_TRIES=200
+FILE_CONTAINS_INTERVAL=0.1
+
+wait_file_contains() {
+    _wfc_n=0
+    while [ "$_wfc_n" -lt "$FILE_CONTAINS_TRIES" ]; do
+        if [ -s "$1" ] && grep -qF -- "$2" "$1"; then
+            return 0
+        fi
+        _wfc_n=$((_wfc_n + 1))
+        sleep "$FILE_CONTAINS_INTERVAL"
+    done
+    echo "$3: timed out waiting for $1 to contain $2" >&2
+    return 1
+}
+"#;
+
+/// Distinguishes the readiness files of one test process's smokes.
+static SMOKE_READY_SEQ: AtomicUsize = AtomicUsize::new(0);
+
+/// A fresh `WOLF_READY_FILE` path for one smoke, with any stale file (and its
+/// `.tmp`) removed.
+///
+/// Under `std::env::temp_dir()` rather than beside the cwd: the typed-`:cd` smoke
+/// re-roots the sidebar to the cwd's parent, where a file appearing mid-run would be
+/// drawn. The name deliberately does not start with [`TEMP_CWD_PREFIX`].
+fn smoke_ready_file() -> PathBuf {
+    let n = SMOKE_READY_SEQ.fetch_add(1, Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!("wolf-smoke-ready-{}-{n}", std::process::id()));
+    let mut tmp = path.clone().into_os_string();
+    tmp.push(".tmp");
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(PathBuf::from(tmp));
+    path
+}
+
 /// Builds the `cage` invocation every smoke runs its scenario through — and is the
 /// SINGLE place in this file where the compositor is ever spawned.
 ///
-/// It fixes the invocation (`cage -- sh -c <scenario>`, with `cwd` as the working
-/// directory, which is how the app comes to derive `CoreConfig.cwd` from it) plus
-/// the six environment variables EVERY smoke must have — and the one it must NOT
-/// have:
+/// It fixes the invocation (`cage -- sh -c <READINESS_PRELUDE><scenario>`, with `cwd`
+/// as the working directory, which is how the app comes to derive `CoreConfig.cwd`
+/// from it) plus the seven environment variables EVERY smoke must have — and the one
+/// it must NOT have:
 ///
 /// * `WOLF_FONT_PT` = [`SMOKE_FONT_PT`] — a large font, so the rendered glyphs are
 ///   legible to `tesseract`, AND the exact number [`cell_metrics_for_smoke`]
@@ -11465,13 +10509,13 @@ const SMOKE_GTK_IM_MODULE: &str = "gtk-im-context-simple";
 ///   smoke of a `cargo test` invocation, so mesa's shader cache is warm for all of
 ///   them but the first. It does NOT carry into the next invocation: the path is
 ///   under `TMPDIR`, which `nix develop --command` rewrites every time (measured; see
-///   that function). This is the only one of the four that is deliberately NOT
-///   per-smoke, and it is the direct counterweight to the `HOME` line above:
+///   that function). Of the five paths set here it is the only one that is
+///   deliberately NOT per-smoke, and it is the direct counterweight to the `HOME` line above:
 ///   redirecting `HOME` also redirected `$HOME/.cache`, which made every launch
-///   rebuild ~4.9 MB of shaders and cost `SETTLE` most of its measured headroom. Read
-///   that function's doc comment — including why sharing carries no state between
-///   smokes, and why the one cold launch per invocation is covered by `SETTLE`
-///   alone — before changing it, and do not make it per-smoke.
+///   rebuild ~4.9 MB of shaders. A cold cache costs launch time spent in `wait_ready`,
+///   not correctness. Read that function's doc comment — including why sharing
+///   carries no state between smokes — before changing it, and do not make it
+///   per-smoke.
 /// * `GTK_IM_MODULE` = [`SMOKE_GTK_IM_MODULE`] — which input method every smoke's
 ///   typing goes through. `gtk::IMMulticontext` selects its slave from
 ///   `GtkSettings:gtk-im-module`, which GTK initializes from this variable, and this
@@ -11479,6 +10523,10 @@ const SMOKE_GTK_IM_MODULE: &str = "gtk-im-context-simple";
 ///   comment before changing it: the pin is what stops the suite's typing becoming
 ///   host-dependent, and it does NOT make any smoke evidence about an
 ///   out-of-process input method.
+/// * `WOLF_READY_FILE` = [`smoke_ready_file`] — where the app writes its pid once its
+///   launch windows accept keystrokes, read by the `wait_ready` that
+///   [`READINESS_PRELUDE`] defines. The prelude is prepended to every scenario here,
+///   which is what lets no scenario carry its own copy and none forget it.
 /// * `DBUS_SESSION_BUS_ADDRESS` is REMOVED rather than set, and it is the only
 ///   variable here that is. **A DANGLING one kills the app before its first frame**:
 ///   measured under `cage` in three cases, a path that does not exist is FATAL (the
@@ -11549,13 +10597,13 @@ const SMOKE_GTK_IM_MODULE: &str = "gtk-im-context-simple";
 ///
 /// [`cage_is_only_spawned_through_the_isolating_helper`] enforces the "single place"
 /// property mechanically, because a smoke that spawned the compositor directly would
-/// silently lose ALL SIX variables.
+/// silently lose ALL SEVEN variables and the readiness prelude.
 fn cage_command(scenario: &str, cwd: &Path) -> Command {
     let mut cmd = Command::new("cage");
     cmd.arg("--")
         .arg("sh")
         .arg("-c")
-        .arg(scenario)
+        .arg(format!("{READINESS_PRELUDE}\n{scenario}"))
         .current_dir(cwd)
         .env("HOME", smoke_home(cwd))
         .env("XDG_CACHE_HOME", smoke_shader_cache_dir())
@@ -11566,6 +10614,9 @@ fn cage_command(scenario: &str, cwd: &Path) -> Command {
         // inherited: see `SMOKE_GTK_IM_MODULE` for the measurement and for what the
         // pin deliberately does NOT buy.
         .env("GTK_IM_MODULE", SMOKE_GTK_IM_MODULE)
+        // Where the app writes its pid once it accepts input; `wait_ready` in
+        // `READINESS_PRELUDE` reads it.
+        .env("WOLF_READY_FILE", smoke_ready_file())
         // Removed, never set: a DANGLING session-bus address kills the app before its
         // first frame under WebKit's mandatory sandbox. See the doc comment above for
         // the three measured cases and for why there is no way to disable the sandbox
@@ -11587,7 +10638,8 @@ const CAGE_SPAWN_NEEDLE: &str = concat!("Command::new(\"", "cage", "\")");
 
 /// Enforces mechanically that the compositor is spawned in exactly ONE place in this
 /// file — [`cage_command`] — which is the only thing that sets `WOLF_STATE_DIR`,
-/// `HOME`, `XDG_CACHE_HOME` and `GTK_IM_MODULE`, and the only thing that CLEARS
+/// `HOME`, `XDG_CACHE_HOME`, `GTK_IM_MODULE` and `WOLF_READY_FILE`, the only thing
+/// that prepends [`READINESS_PRELUDE`], and the only thing that CLEARS
 /// `DBUS_SESSION_BUS_ADDRESS`.
 ///
 /// ## What an extra occurrence costs
@@ -11611,12 +10663,11 @@ const CAGE_SPAWN_NEEDLE: &str = concat!("Command::new(\"", "cage", "\")");
 /// state-dir one in one respect: it is intermittent, so it looks like a flake in
 /// whatever change happens to be in flight rather than like a missing `.env` line.
 ///
-/// And a third, of the same intermittent kind: without [`cage_command`]'s
+/// And a third, a cost rather than a flake: without [`cage_command`]'s
 /// `XDG_CACHE_HOME` the app's mesa shader cache is whatever the inherited environment
 /// gives it, which under a redirected `HOME` is a cold per-run directory. That costs
-/// ~4.9 MB of shader rebuild inside the fixed `SETTLE` budget and was measured to turn
-/// a 20/20 cell into 0/20 at settle values that pass warm — again surfacing as an OCR
-/// flake somewhere else entirely. See [`smoke_shader_cache_dir`].
+/// ~4.9 MB of shader rebuild on every launch, paid as time inside `wait_ready`. See
+/// [`smoke_shader_cache_dir`].
 ///
 /// A fourth, and it is the loudest of the set: without `WOLF_CONFIG_DIR` the app
 /// resolves its preferences directory from `XDG_CONFIG_HOME` — which the `HOME`
@@ -11638,15 +10689,20 @@ const CAGE_SPAWN_NEEDLE: &str = concat!("Command::new(\"", "cage", "\")");
 /// measurement and for why the value is named rather than the variable cleared.
 ///
 /// And a sixth, which is a REMOVAL rather than a setting and is the only one of the
-/// six that can take the app down before it draws anything at all. A smoke that
+/// seven that can take the app down before it draws anything at all. A smoke that
 /// spawns `cage` itself inherits the developer's `DBUS_SESSION_BUS_ADDRESS`, and a
 /// DANGLING one — a path that does not exist — is fatal under WebKit's mandatory
 /// bubblewrap sandbox (measured: non-existent path fatal, unset fine,
 /// existing-but-dead fine). The app dies before its first frame, so the scenario's
-/// window poll reports `exit 11` and the run reads as a LAUNCH failure in whatever
+/// readiness wait reports `exit 11` and the run reads as a LAUNCH failure in whatever
 /// change is in flight, on the developer's machine and nowhere else. See
 /// [`cage_command`]'s bullet for the measurement and for why the sandbox cannot
 /// simply be turned off.
+///
+/// And a seventh, which fails loudly on every machine: the scenario loses
+/// [`READINESS_PRELUDE`] and `WOLF_READY_FILE` together, so its first `wait_ready`
+/// call exits 127 (no such command) — or, were the prelude copied in, `set -u` stops
+/// it at the unset `WOLF_READY_FILE`.
 ///
 /// ## Why the needle is built from fragments, and why that is load-bearing
 ///
@@ -11656,11 +10712,11 @@ const CAGE_SPAWN_NEEDLE: &str = concat!("Command::new(\"", "cage", "\")");
 /// permanently-red count is to relax it to `<= 1` — at which point a needle that
 /// matches NOTHING (someone renames the binary, or `cage` moves behind a const)
 /// satisfies it vacuously and the guard silently stops guarding. That is exactly the
-/// vacuity shape recorded in `crates/wolf-gnome/tests/README.md` ("Vacuity is not
-/// only a fixture-naming problem"), where a check aimed at the right property was
-/// looking somewhere the defect could not appear. So the count is asserted from BOTH
-/// sides: at least one (the guard is not vacuous) and at most one (the invariant
-/// holds).
+/// vacuity shape `crates/wolf-gnome/tests/README.md` records under "Smoke
+/// conventions" ("A red-run demonstration is a deliverable, not a formality"): a
+/// check aimed at the right property, looking somewhere the defect cannot appear.
+/// So the count is asserted from BOTH sides: at least one (the guard is not vacuous)
+/// and at most one (the invariant holds).
 ///
 /// This test is PURE: no compositor, no `require_smoke_env`, no `CAGE_LOCK`, no
 /// subprocess — the same shape as
@@ -11686,14 +10742,16 @@ fn cage_is_only_spawned_through_the_isolating_helper() {
         "expected exactly ONE occurrence of {CAGE_SPAWN_NEEDLE:?} in this file (the one inside \
          `cage_command`), found {occurrences}. Every extra one is a compositor spawned OUTSIDE \
          `cage_command` and therefore without `WOLF_STATE_DIR`, `WOLF_CONFIG_DIR`, `HOME`, \
-         `XDG_CACHE_HOME` or `GTK_IM_MODULE`, and WITH whatever `DBUS_SESSION_BUS_ADDRESS` the \
-         developer's session exported. Two of those are destructive, one is fatal and one is \
-         host-dependent: a DANGLING session-bus address \
-         kills the app before its first frame under WebKit's mandatory sandbox, so that smoke \
-         exits 11 and reads as a launch failure in whatever change is in flight. Without \
-         `WOLF_STATE_DIR` that smoke's app \
-         resolves `state_dir()` to the developer's real `~/.local/state/wolf/`, READS their real \
-         state.json at launch (so it starts from the developer's last session instead of a clean \
+         `XDG_CACHE_HOME`, `GTK_IM_MODULE`, `WOLF_READY_FILE` or the readiness prelude, and \
+         WITH whatever `DBUS_SESSION_BUS_ADDRESS` the developer's session exported. Five of \
+         those losses are spelled out here: one is loud on every machine, one is fatal, two are \
+         destructive and one is host-dependent. Losing the prelude is the loud one: its \
+         `wait_ready` call exits 127 (or, with the prelude copied in, `set -u` stops at the \
+         unset `WOLF_READY_FILE`). A DANGLING session-bus address is the fatal one: it kills the \
+         app before its first frame under WebKit's mandatory sandbox, so that smoke exits 11 \
+         and reads as a launch failure in whatever change is in flight. Without \
+         `WOLF_STATE_DIR` that smoke's app resolves `state_dir()` to the developer's real \
+         `~/.local/state/wolf/`, READS their real state.json at launch (so it starts from the developer's last session instead of a clean \
          slate) and OVERWRITES it on quit with its own throwaway temp-cwd layout. Without \
          `WOLF_CONFIG_DIR` it resolves `preferences_dir()` from `XDG_CONFIG_HOME` or \
          `$HOME/.config` and `load_or_create` READS the developer's real wolf-config.yaml — or, \
@@ -11706,6 +10764,345 @@ fn cage_is_only_spawned_through_the_isolating_helper() {
          bus this harness removes, and the smoke fails on that machine and nowhere else. Route \
          the new smoke through `cage_command(scenario, &cwd)` and chain only its own `.env(...)` \
          additions on top; do not copy the helper's body."
+    );
+}
+
+/// The head of a launch line: a double quote and a `$`, as in `"$WOLF_BIN" &`.
+///
+/// This and the six needles below are assembled from fragments for the reason
+/// [`CAGE_SPAWN_NEEDLE`] is: [`every_launch_waits_for_readiness_before_its_first_input`]
+/// scans this file's own source, so a needle spelled contiguously could match the
+/// line that declares it.
+const LAUNCH_HEAD: &str = concat!("\"", "$");
+
+/// The start of the readiness call that must follow every launch.
+const READY_CALL_NEEDLE: &str = concat!("wait_ready", " \"$app_pid\"");
+
+/// The start of `wait_ready`'s definition. Matched only at the start of a trimmed
+/// line, because the pointer helper's `hwait_ready() {` contains this text.
+const READY_DEF_NEEDLE: &str = concat!("wait_", "ready() {");
+
+/// The loop line of the bare `if wtype "" …` launch probe, matched as a whole
+/// trimmed line. `wtype ""` itself legitimately appears inside the prelude's priming
+/// step, so the bare command is not the needle.
+const OLD_PROBE_LINE: &str = concat!("if wtype ", "\"\"", " >/dev/null 2>&1; then");
+
+/// The line that closes every scenario's raw string.
+const RAW_STRING_END: &str = concat!("\"", "#;");
+
+/// The end of the line that opens a scenario's raw string, used only to name the
+/// scenario in a failure message.
+const RAW_STRING_OPEN: &str = concat!("r", "#\"");
+
+/// The first command of each kind of input or capture a scenario sends. A launch's
+/// readiness wait must come before the first of these.
+const FIRST_INPUT_HEADS: [&str; 4] = ["wtype", "hsend", "hstep", "grim"];
+
+/// The number of launch lines this file holds, counted against the source: every
+/// `"$WOLF_BIN" &` in a scenario plus the packaged plugins smoke's `"$app_bin" &`.
+/// A floor rather than an exact count, so a new smoke does not have to edit it;
+/// deleting a smoke does.
+const EXPECT_MIN_LAUNCH_SITES: usize = 62;
+
+/// The line that captures a launch's pid, matched as a whole trimmed line. Every
+/// launch line is followed by one, and every one is followed by the readiness call.
+const PID_CAPTURE_LINE: &str = concat!("app_pid", "=$!");
+
+/// Whether `line` launches the app: trimmed and with a trailing ` &` removed, it is
+/// a single quoted expansion such as `"$WOLF_BIN"`.
+fn is_launch_line(line: &str) -> bool {
+    let trimmed = line.trim();
+    let command = trimmed.strip_suffix(" &").unwrap_or(trimmed);
+    command.len() > LAUNCH_HEAD.len()
+        && command.starts_with(LAUNCH_HEAD)
+        && command.ends_with('"')
+        && !command.contains(' ')
+}
+
+/// Whether `line` is a shell command rather than a blank line or a `#` comment.
+fn is_shell_command(line: &str) -> bool {
+    let trimmed = line.trim();
+    !trimmed.is_empty() && !trimmed.starts_with('#')
+}
+
+/// The scenario const enclosing the 0-based line `index`, for failure messages:
+/// the name of the nearest preceding `const NAME: &str = r#"` line, and its 1-based
+/// line number.
+fn enclosing_scenario(lines: &[&str], index: usize) -> String {
+    lines[..index]
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, line)| line.trim_end().ends_with(RAW_STRING_OPEN))
+        .map_or_else(
+            || "no enclosing raw string found".to_owned(),
+            |(i, line)| {
+                let trimmed = line.trim();
+                let name = trimmed
+                    .strip_prefix("const ")
+                    .and_then(|rest| rest.split(':').next())
+                    .unwrap_or(trimmed);
+                format!("{name}, opened at line {}", i + 1)
+            },
+        )
+}
+
+/// Enforces mechanically that every launch in every scenario waits for the app's
+/// readiness file before its first input, with no fixed sleep standing in for it.
+///
+/// ## What it checks
+///
+/// - **Every launch line is followed by `wait_ready "$app_pid"`** before the first
+///   line that starts with `wtype`, `hsend`, `hstep` or `grim`, the next launch, or
+///   the end of the scenario's raw string. A launch line is one whose trimmed form,
+///   minus a trailing ` &`, is a single quoted expansion (`"$WOLF_BIN"`,
+///   `"$app_bin"`).
+/// - **Nothing sleeps between the launch and that `wait_ready`.** A sleep there is a
+///   fixed launch budget standing in for the readiness file, and on a loaded host it
+///   is either too short or wasted.
+/// - **There are at least [`EXPECT_MIN_LAUNCH_SITES`] launch lines**, so a matcher
+///   that stops recognizing launches cannot pass by checking none.
+/// - **`wait_ready` is defined exactly once, inside [`READINESS_PRELUDE`]**, so no
+///   scenario shadows it with a copy that does not read `WOLF_READY_FILE`.
+/// - **The bare `if wtype "" …` probe loop appears nowhere.** It returns as soon as
+///   cage accepts a virtual keyboard, before the window maps, and leaves the scenario
+///   to type after a fixed settle: the budget this guard exists to keep out.
+/// - **The first command after every `app_pid=$!` is `wait_ready "$app_pid"`**, with
+///   only blank and `#` comment lines between. The first check's scan stops only at a
+///   line that itself starts with an input command, so a scenario helper that wraps
+///   input (`fill_buffer`, `probe_winnr`, `wv_chord`, `quit_app`) run before the
+///   wait would slip past it. Falsifying edit: insert a line `true` between any
+///   `app_pid=$!` and its `wait_ready` — only this check fires.
+/// - **There are exactly as many `app_pid=$!` lines as recognised launch lines.**
+///   Every launch captures its pid, so a surplus capture is a launch the matcher
+///   misses, such as `"$WOLF_BIN" 2>"$LOG" &`, which every other check here then
+///   skips. The floor alone catches that only while no new smoke has raised the
+///   count above it. This runs before the floor check, so its more specific message
+///   is the one a reader sees. Falsifying edit: add a redirect to any launch, e.g.
+///   `"$WOLF_BIN" 2>/dev/null &`.
+///
+/// ## What it deliberately does not cover
+///
+/// The two-window smoke's mid-run New Window is not a launch line, and the
+/// readiness file is written once per process, so nothing here could hold it to a
+/// readiness wait; its settles stay. A Neovim restart inside a running app is the
+/// same case. The `#[ignore]`d packaged smokes launch through [`cage_command`] too,
+/// so their launch lines are checked and counted like any other.
+///
+/// ## The premise
+///
+/// The guard reads text, so it trusts that each scenario's launches and inputs are
+/// lines of its raw string in execution order. The pointer smokes are the one
+/// place where that needs care: their launch and `wait_ready` sit in
+/// [`POINTER_PREAMBLE`], whose raw string ends before any body's `hsend`, so the
+/// scan stops at that raw string's end rather than reading into the body.
+///
+/// Pure: no compositor, no `CAGE_LOCK`, no environment, no subprocess.
+#[test]
+fn every_launch_waits_for_readiness_before_its_first_input() {
+    let source = include_str!("smoke_headless.rs");
+    let lines: Vec<&str> = source.lines().collect();
+
+    let launches: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| is_launch_line(line))
+        .map(|(i, _)| i)
+        .collect();
+    let pid_captures: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| line.trim() == PID_CAPTURE_LINE)
+        .map(|(i, _)| i)
+        .collect();
+
+    let unpaired_captures: Vec<String> = pid_captures
+        .iter()
+        .filter(|&&capture| {
+            !lines[..capture]
+                .iter()
+                .rev()
+                .find(|line| is_shell_command(line))
+                .is_some_and(|line| is_launch_line(line))
+        })
+        .map(|&capture| {
+            let context = enclosing_scenario(&lines, capture);
+            format!("line {} ({context})", capture + 1)
+        })
+        .collect();
+    assert_eq!(
+        pid_captures.len(),
+        launches.len(),
+        "found {} `{PID_CAPTURE_LINE}` lines but {} recognised launch lines. Every launch \
+         captures its pid, so a surplus capture is a launch the matcher no longer recognises \
+         (a `\"$WOLF_BIN\" &` reworded, e.g. `\"$WOLF_BIN\" 2>\"$LOG\" &`), and every other check \
+         here skips it: that launch could type before readiness and stay green. A surplus launch \
+         is one whose pid is never captured, so its `wait_ready` waits on another launch's pid \
+         or on none. Captures whose preceding command is not a recognised launch: [{}]. Launch \
+         lines found (1-based): {:?}",
+        pid_captures.len(),
+        launches.len(),
+        unpaired_captures.join(", "),
+        launches.iter().map(|i| i + 1).collect::<Vec<_>>()
+    );
+
+    assert!(
+        launches.len() >= EXPECT_MIN_LAUNCH_SITES,
+        "found {} launch lines, expected at least {EXPECT_MIN_LAUNCH_SITES}. Either a smoke was \
+         deleted (lower EXPECT_MIN_LAUNCH_SITES to the new count) or the launch matcher no \
+         longer recognizes this file's launches (a `\"$WOLF_BIN\" &` reworded, e.g. with a \
+         redirect), in which case every check below is checking fewer launches than exist. \
+         Launch lines found (1-based): {:?}",
+        launches.len(),
+        launches.iter().map(|i| i + 1).collect::<Vec<_>>()
+    );
+
+    let mut missing_wait = Vec::new();
+    let mut sleep_before_wait = Vec::new();
+    for &launch in &launches {
+        let window_end = lines[launch + 1..]
+            .iter()
+            .position(|line| {
+                let trimmed = line.trim();
+                trimmed == RAW_STRING_END
+                    || is_launch_line(line)
+                    || FIRST_INPUT_HEADS
+                        .iter()
+                        .any(|head| trimmed.starts_with(head))
+            })
+            .map_or(lines.len(), |offset| launch + 1 + offset);
+        let context = enclosing_scenario(&lines, launch);
+        let stopped_at = lines
+            .get(window_end)
+            .map_or("end of file", |line| line.trim());
+
+        let Some(ready) =
+            (launch + 1..window_end).find(|&i| lines[i].trim().starts_with(READY_CALL_NEEDLE))
+        else {
+            missing_wait.push(format!(
+                "line {} ({context}): `{}` reaches line {} (`{stopped_at}`) with no \
+                 `{READY_CALL_NEEDLE}` in between",
+                launch + 1,
+                lines[launch].trim(),
+                window_end + 1
+            ));
+            continue;
+        };
+        for (i, line) in lines.iter().enumerate().take(ready).skip(launch + 1) {
+            if line.trim().starts_with("sleep") {
+                sleep_before_wait.push(format!(
+                    "line {} ({context}): `{}` between the launch at line {} and its \
+                     `{READY_CALL_NEEDLE}` at line {}",
+                    i + 1,
+                    line.trim(),
+                    launch + 1,
+                    ready + 1
+                ));
+            }
+        }
+    }
+
+    assert!(
+        missing_wait.is_empty(),
+        "{} launch(es) send input, capture, relaunch or end the scenario without first calling \
+         `{READY_CALL_NEEDLE}`. Such a scenario types into a window that may not have mapped, \
+         bound a keyboard or finished its restore, which is the lost-first-keystroke failure \
+         `window_renders_typed_text_under_cage` documents as signature (a); it passes or fails \
+         with the host's load. Add `{READY_CALL_NEEDLE} <died-code> \"<label>\"` straight after \
+         `app_pid=$!`:\n{}",
+        missing_wait.len(),
+        missing_wait.join("\n")
+    );
+    assert!(
+        sleep_before_wait.is_empty(),
+        "{} sleep(s) sit between a launch and its readiness wait. That is a fixed launch \
+         budget standing in for `wait_ready`: on an idle host it is time wasted, and it implies \
+         a margin the readiness file is meant to make unnecessary. Delete the sleep; if a first \
+         key is still lost, the app's readiness predicate lacks a condition:\n{}",
+        sleep_before_wait.len(),
+        sleep_before_wait.join("\n")
+    );
+
+    let capture_not_followed_by_wait: Vec<String> = pid_captures
+        .iter()
+        .filter_map(|&capture| {
+            let next = lines[capture + 1..]
+                .iter()
+                .enumerate()
+                .find(|(_, line)| is_shell_command(line))
+                .map(|(offset, line)| (capture + 1 + offset, line.trim()));
+            let context = enclosing_scenario(&lines, capture);
+            match next {
+                Some((_, line)) if line.starts_with(READY_CALL_NEEDLE) => None,
+                Some((i, line)) => Some(format!(
+                    "line {} ({context}): `{PID_CAPTURE_LINE}` is followed at line {} \
+                     by `{line}`",
+                    capture + 1,
+                    i + 1
+                )),
+                None => Some(format!(
+                    "line {} ({context}): `{PID_CAPTURE_LINE}` is followed by no \
+                     command at all",
+                    capture + 1
+                )),
+            }
+        })
+        .collect();
+    assert!(
+        capture_not_followed_by_wait.is_empty(),
+        "{} launch(es) run a command between capturing the pid and `{READY_CALL_NEEDLE}`. The \
+         first-input scan above stops only at a line that itself starts with wtype, hsend, hstep \
+         or grim, so a scenario helper that wraps input (fill_buffer, probe_winnr, wv_chord, \
+         quit_app, ...) placed here sends keys or a capture the scan never sees, into a window \
+         that may not accept keystrokes yet. Move `{READY_CALL_NEEDLE} <died-code> \"<label>\"` \
+         to the first command after `{PID_CAPTURE_LINE}`; only blank and comment lines may sit \
+         between them:\n{}",
+        capture_not_followed_by_wait.len(),
+        capture_not_followed_by_wait.join("\n")
+    );
+
+    let definitions: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| line.trim().starts_with(READY_DEF_NEEDLE))
+        .map(|(i, _)| i + 1)
+        .collect();
+    assert_eq!(
+        definitions.len(),
+        1,
+        "expected exactly one line starting `{READY_DEF_NEEDLE}` in this file, the one in \
+         READINESS_PRELUDE; found it at lines {definitions:?}. Zero means the prelude's \
+         definition was renamed or reformatted, so this check no longer sees it (and a \
+         scenario calling `wait_ready` would exit 127). More than one means a scenario defines \
+         its own, which shadows the prelude's for that scenario and need not wait for \
+         WOLF_READY_FILE at all."
+    );
+    let prelude_definitions = READINESS_PRELUDE
+        .lines()
+        .filter(|line| line.trim().starts_with(READY_DEF_NEEDLE))
+        .count();
+    assert_eq!(
+        prelude_definitions, 1,
+        "the one `{READY_DEF_NEEDLE}` definition (line(s) {definitions:?}) must be the one in \
+         READINESS_PRELUDE, which cage_command prepends to every scenario; READINESS_PRELUDE \
+         holds {prelude_definitions}. A definition living in a single scenario leaves every \
+         other scenario's `wait_ready` call undefined (exit 127)."
+    );
+
+    let old_probes: Vec<String> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| line.trim() == OLD_PROBE_LINE)
+        .map(|(i, _)| format!("line {} ({})", i + 1, enclosing_scenario(&lines, i)))
+        .collect();
+    assert!(
+        old_probes.is_empty(),
+        "the bare launch-probe loop line `{OLD_PROBE_LINE}` appears at: {}. That loop \
+         returns as soon as cage accepts a virtual keyboard, which is before the window maps, \
+         and leaves the scenario to rely on a fixed settle. Use `{READY_CALL_NEEDLE} \
+         <died-code> \"<label>\"` instead; the prelude's `wait_ready` already primes the \
+         seat with a key-free `wtype \"\"`.",
+        old_probes.join(", ")
     );
 }
 
@@ -11951,8 +11348,11 @@ fn assert_pointer_scenario_succeeded(smoke: &str, status: ExitStatus, cwd: &Path
         status.success(),
         "{smoke}: the cage pointer scenario exited unsuccessfully ({status}). Read the exit code \
          FIRST; each one names a different half of the harness.\n\
-         Exit 11: the app died before its window ever mapped. A LAUNCH failure — no pointer event \
+         Exit 11: the app died before it was ready for input. A LAUNCH failure — no pointer event \
          was ever injected, and nothing below is about pointer input.\n\
+         Exit 40: the app stayed up but never wrote its readiness file within `wait_ready`'s \
+         budget; the app's `wolf-ready: waiting on …` stderr lines name the unmet condition. \
+         Also a launch failure, not a pointer one.\n\
          Exit 12: `wolf-pointer-inject` never printed its `ready …` line. Check its own exit code \
          in the stderr below: 3 = cage does not advertise `zwlr_virtual_pointer_manager_v1` at \
          all, 4 = no `wl_seat`, 5 = no `wl_output` and no `-e`, 6 = more than one output, 7 = zero \
@@ -15765,7 +15165,10 @@ fn window_renders_typed_text_under_cage() {
     assert!(
         status.success(),
         "cage scenario exited unsuccessfully ({status}); the app may have failed to launch, \
-         the window may not have mapped, or wtype/grim failed. Screenshot expected at {}.",
+         the window may not have mapped, or wtype/grim failed. Exit 11: the app died before it \
+         was ready for input. Exit 40: it never became ready — the app's `wolf-ready: waiting \
+         on …` stderr line names the condition it was stuck on, and \"wtype could not prime \
+         the seat\" means no keyboard was ever created. Screenshot expected at {}.",
         out_png.display()
     );
 
@@ -15798,13 +15201,13 @@ fn window_renders_typed_text_under_cage() {
          exactly TWO empty lines with the block cursor on line 2, i.e. ONE row below the empty \
          row 0. That means the ENTIRE first `wtype -- \"i{OCR_WORD}\"` AND its `Escape` were \
          delivered before the client could accept keys, and were LOST; the trailing `o` + \
-         `Escape` then produced the second line on their own. This is a TIMING / MARGIN failure, \
-         NOT a rendering failure and NOT the swap modal. It was measured directly: capture md5 \
-         `c9a797d31d606335297b40823e64371a`, byte-identical to a deliberately induced \
-         cold-shader-cache run at `SETTLE=0.25`. Look at `SETTLE` (the ONLY real budget before \
-         the first keystroke — the `wtype` poll ahead of it gates nothing, see the module doc \
-         comment) and at `XDG_CACHE_HOME` in `cage_command` (a cold mesa shader cache costs ~4.9 \
-         MB of rebuild inside that budget). Here, unlike (c), more settle IS the fix.\n\
+         `Escape` then produced the second line on their own. This is a READINESS failure, NOT a \
+         rendering failure and NOT the swap modal: the scenario typed only after `wait_ready` saw \
+         the app's readiness file, so the app declared itself ready while the compositor was \
+         still dropping keys, and the readiness predicate is missing a conjunct. Read the app's \
+         `wolf-ready:` stderr lines and `crates/wolf-gnome/DECISIONS.md`, \"The readiness \
+         file\", and find the condition that held too early. A sleep after `wait_ready` is NOT \
+         the fix; it would hide which conjunct is missing.\n\
          \n\
          (b) if nothing drew at all (no window, no tildes, no cursor), it is a rendering/launch \
          failure.\n\
@@ -15815,8 +15218,11 @@ fn window_renders_typed_text_under_cage() {
          before Neovim saw it, so {OCR_WORD:?} executed in NORMAL mode instead of being inserted \
          (its trailing `o` is what opened the extra line). Count the lines and the cursor row \
          before choosing between (a) and (c); they are one row apart and nothing else \
-         distinguishes them. The KNOWN cause of (c) is the swap modal, and it is where to look \
-         first: `nvim_buf_set_name` creates the startup buffer's swap file inside the rename, and \
+         distinguishes them. (c) has two KNOWN causes. The first is a seat that had no \
+         keyboard: the first key the first virtual keyboard sends after the window maps is \
+         lost, which is why `wait_ready` primes the seat with `wtype \"\"` and the app waits on \
+         `no-keyboard` — if that priming or that condition was removed, look there first. The \
+         second is the swap modal: `nvim_buf_set_name` creates the startup buffer's swap file inside the rename, and \
          a pre-existing swap for `<cwd>/Untitled.md` raises a blocking `do_dialog` ATTENTION/E325 \
          prompt (`mode() == \"r?\"`) that answers itself with your first key. Check \
          `state_dir()/swap/<hash-of-cwd>/` for a `%…%Untitled.md.swp` — since the \
@@ -15824,11 +15230,11 @@ fn window_renders_typed_text_under_cage() {
          (see `smoke_state_dir`), NOT `~/.local/state/wolf/swap/` — and see \
          `crates/wolf-core/tests/swap_recovery.rs`'s \
          `stale_untitled_swap_does_not_block_a_fresh_start`, which pins this headlessly \
-         (and deterministically). Only if there is no such swap should you consider focus / \
+         (and deterministically). Only if neither applies should you consider focus / \
          input routing (a Phase 2 pass chased that hypothesis and DISPROVED it — deferring \
          `grab_focus()` into `window.connect_map()` changes nothing). For (c) specifically it is \
-         NOT a rendering failure and no amount of extra settle time will fix it — that is exactly \
-         what separates it from (a).\n\
+         NOT a rendering failure: all but the first key reached Neovim, which is exactly what \
+         separates it from (a).\n\
          \n\
          (d) if row 0 visibly DREW {OCR_WORD:?} but the OCR text below garbles it (measured: the \
          isolated leading `h` classified as the ligature U+FB01), the page went sparse or \
@@ -17007,7 +16413,7 @@ fn command_palette_chord_runs_the_selected_command_under_cage() {
     assert!(
         status.success(),
         "{SMOKE}: the cage command-palette scenario exited unsuccessfully ({status}). Exit 11: \
-         the app died before its window ever mapped — a LAUNCH failure, and nothing below is \
+         the app died before it was ready for input — a LAUNCH failure, and nothing below is \
          about the palette. Otherwise the app may have failed to map its window, the `:e` may \
          not have loaded, or wtype/grim failed. Note this assertion says nothing about whether \
          the palette opened: the scenario has no readback and exits 0 whatever the chord did. \
@@ -17257,7 +16663,7 @@ fn preview_pane_renders_and_edit_source_returns_under_cage() {
     assert!(
         status.success(),
         "{SMOKE}: the cage markdown-preview scenario exited unsuccessfully ({status}). Exit 11: \
-         the app died before its window ever mapped — a LAUNCH failure, and nothing below is about \
+         the app died before it was ready for input — a LAUNCH failure, and nothing below is about \
          the preview. Exit 14: a window-list readback never appeared, so the captive Neovim never \
          ran the typed Ex command. Exit 16: the app persisted no state.json at all while the \
          preview pane was live, which is `may_snapshot` refusing rather than the preview flag \
@@ -17829,8 +17235,9 @@ fn preview_burst_delay_stays_below_the_coalescer_trailing_delay() {
 /// swapped into a body whose BASE URI still points at the previous file's directory,
 /// which is invisible to a readback and to a single click. The guard's only falsifiable
 /// evidence is `preview_ui::tests::document_update_table`. This is the same shape as
-/// the vacuously-passing checks this file collects in its module doc: **a check aimed
-/// at the right property, looking somewhere the defect could not appear.** Saying so
+/// the vacuously-passing checks `tests/README.md` collects under "Smoke conventions"
+/// ("A red-run demonstration is a deliverable, not a formality"): **a check aimed at
+/// the right property, looking somewhere the defect cannot appear.** Saying so
 /// here is what stops a later reader trying that revert, seeing green, and concluding
 /// the guard is unnecessary.
 ///
@@ -18222,7 +17629,7 @@ fn preview_of_an_unsaved_buffer_renders_under_cage() {
     assert!(
         status.success(),
         "{SMOKE}: the cage unsaved-buffer preview scenario exited unsuccessfully ({status}). Exit \
-         11: the app died before its window ever mapped — a LAUNCH failure, and nothing below is \
+         11: the app died before it was ready for input — a LAUNCH failure, and nothing below is \
          about the preview. Exit 14: the window-list readback never appeared, so the captive \
          Neovim never ran the typed Ex command, which is a KEYBOARD failure rather than a preview \
          one. Otherwise wtype or grim failed. Note this assertion says nothing about whether a \
@@ -18443,7 +17850,7 @@ fn buffer_picker_chord_switches_to_the_queried_buffer_under_cage() {
         status.success(),
         "{SMOKE}: the cage buffer-picker scenario exited unsuccessfully ({status}). Read the exit \
          code FIRST.\n\
-         Exit 11: the app died before its window ever mapped — a LAUNCH failure, and nothing \
+         Exit 11: the app died before it was ready for input — a LAUNCH failure, and nothing \
          below is about the buffer picker.\n\
          Exit 14: the buffer-list readback the captive Neovim was told to write never appeared, \
          so the premise assertion below cannot run at all. Keys are not reaching Neovim, or the \
@@ -18712,7 +18119,7 @@ fn buffer_picker_bare_enter_switches_to_the_previous_buffer_under_cage() {
         status.success(),
         "{SMOKE}: the cage bare-Enter buffer-picker scenario exited unsuccessfully ({status}). \
          Read the exit code FIRST.\n\
-         Exit 11: the app died before its window ever mapped — a LAUNCH failure, and nothing \
+         Exit 11: the app died before it was ready for input — a LAUNCH failure, and nothing \
          below is about the buffer picker.\n\
          Exit 14: the buffer-list readback the captive Neovim was told to write never appeared, \
          so the premise assertion below cannot run at all. Keys are not reaching Neovim, or the \
@@ -18931,7 +18338,7 @@ fn buffer_picker_bare_enter_switches_to_the_previous_buffer_under_cage() {
 ///
 /// ## Exit codes
 ///
-/// * `11` — the app died before its window mapped.
+/// * `11` — the app died before it was ready for input.
 /// * `14` — the cursor readback never appeared, so assertions 3, 4 and 5 cannot run.
 #[test]
 fn project_search_chord_opens_the_matched_line_under_cage() {
@@ -19006,7 +18413,7 @@ fn project_search_chord_opens_the_matched_line_under_cage() {
         status.success(),
         "{SMOKE}: the cage project-search scenario exited unsuccessfully ({status}). Read the exit \
          code FIRST.\n\
-         Exit 11: the app died before its window ever mapped — a LAUNCH failure, and nothing below \
+         Exit 11: the app died before it was ready for input — a LAUNCH failure, and nothing below \
          is about the project search.\n\
          Exit 14: the cursor readback the captive Neovim was told to write never appeared, so \
          assertions 3, 4 and 5 cannot run at all. Either keys are not reaching Neovim — check the \
@@ -19247,7 +18654,7 @@ fn colon_qa_closes_the_window_under_cage() {
          -> `UiAction::CloseWindow` -> `window.close()` -> clean `WolfCore::shutdown`. The \
          scenario reports WHICH half failed through its exit code; read it before anything else. \
          \n\
-         Exit 11: the app died before its window ever mapped. That is a LAUNCH failure, not a \
+         Exit 11: the app died before it was ready for input. That is a LAUNCH failure, not a \
          drain failure — `:qa` was never even typed. \n\
          Exit 12: the app was STILL RUNNING after the poll budget, i.e. the drained \
          `close_window` never reached `window.close()`. Check that `shell.on_render_wake()` is \
@@ -20431,7 +19838,7 @@ fn nvim_crash_recovers_and_reopens_the_file_under_cage() {
         status.success(),
         "{SMOKE}: the cage crash scenario exited unsuccessfully ({status}). Read the exit code \
          FIRST; each names a different failure.\n\
-         Exit 11: the app died before its window ever mapped — a LAUNCH failure, nothing to do \
+         Exit 11: the app died before it was ready for input — a LAUNCH failure, nothing to do \
          with crash recovery.\n\
          Exit 14: a readback file the captive Neovim was told to write never appeared. Keys are \
          not reaching Neovim at all; check the keyboard-only smokes first.\n\
@@ -20779,7 +20186,7 @@ fn stalled_nvim_raises_the_stall_overlay_under_cage() {
         status.success(),
         "{SMOKE}: the cage stall scenario exited unsuccessfully ({status}). Read the exit code \
          FIRST; each names a different failure.\n\
-         Exit 11: the app died before its window ever mapped — a LAUNCH failure, nothing to do \
+         Exit 11: the app died before it was ready for input — a LAUNCH failure, nothing to do \
          with stall detection.\n\
          Exit 16: THE APP DIED WITH ITS WEDGED NEOVIM. This is the worst possible failure of this \
          feature and has its own code so it can never be confused with a missing overlay: the GTK \
@@ -21482,18 +20889,17 @@ fn pane_layout_survives_relaunch_under_cage() {
         .env("RESTORE_FILE_MID", RESTORE_FILE_MID)
         .env("RESTORE_FILE_RIGHT", RESTORE_FILE_RIGHT)
         .env("RESTORE_READBACK", &readback)
-        .env("RESTORE_SETTLE", RELAUNCH_RESTORE_SETTLE)
         .status()
         .expect("failed to spawn `cage` for the headless pane-layout relaunch scenario");
     assert!(
         status.success(),
         "{SMOKE}: the cage relaunch scenario exited unsuccessfully ({status}). Exit 11: run 1's \
-         app died before its window mapped. Exit 12: run 1 was still alive after `:qa` — the \
+         app died before it was ready for input. Exit 12: run 1 was still alive after `:qa` — the \
          drained close_window never reached window.close(). Exit 13: run 1 exited NON-ZERO, i.e. \
          it went away but not cleanly, which implicates a panic in \
          `Coordinator::on_window_closing`, or a core.borrow() held across `wire_close`'s \
          core.borrow_mut().take(). \
-         Exit 14: run 2's app died before its window mapped. Exit 15: the Neovim readback never \
+         Exit 14: run 2's app died before it was ready for input. Exit 15: the Neovim readback never \
          appeared in run 2. Screenshot expected at {}; readback at {}.",
         out_png.display(),
         readback.display()
@@ -21739,16 +21145,15 @@ fn single_pane_file_survives_relaunch_under_cage() {
         .env("SOLO_READBACK", &readback)
         .env("SOLO_STATE_SRC", &smoke_state_file)
         .env("SOLO_STATE_COPY", &run1_state_file)
-        .env("RESTORE_SETTLE", RELAUNCH_RESTORE_SETTLE)
         .status()
         .expect("failed to spawn `cage` for the headless single-pane relaunch scenario");
     assert!(
         status.success(),
         "{SMOKE}: the cage single-pane relaunch scenario exited unsuccessfully ({status}). Exit \
-         11: run 1's app died before its window mapped. Exit 12: run 1 was still alive after \
+         11: run 1's app died before it was ready for input. Exit 12: run 1 was still alive after \
          `:qa`. Exit 13: run 1 exited NON-ZERO — it went away but not cleanly, which implicates a \
          panic in `Coordinator::on_window_closing` or a core.borrow() held across `wire_close`'s \
-         core.borrow_mut().take(). Exit 14: run 2's app died before its window mapped. Exit 15: \
+         core.borrow_mut().take(). Exit 14: run 2's app died before it was ready for input. Exit 15: \
          the Neovim readback never appeared in run 2. Exit 16: run 1 wrote NO state.json at all at \
          {} — not the arity guard (which still writes the file, with a null layout) but something \
          upstream of it. Screenshot expected at {}.",
@@ -22277,18 +21682,17 @@ fn three_tabs_survive_a_relaunch_under_cage() {
         .env("TABS_STATE_SRC", &smoke_state_file)
         .env("TABS_STATE_COPY_1", &run1_state_file)
         .env("TABS_STATE_COPY_2", &run2_state_file)
-        .env("RESTORE_SETTLE", RELAUNCH_RESTORE_SETTLE)
         .status()
         .expect("failed to spawn `cage` for the headless three-tab relaunch scenario");
     assert!(
         status.success(),
         "{SMOKE}: the cage three-tab relaunch scenario exited unsuccessfully ({status}). Read the \
          exit code FIRST; each names a different half of the claim.\n\
-         Exit 11: run 1's app died before its window mapped — a LAUNCH failure.\n\
+         Exit 11: run 1's app died before it was ready for input — a LAUNCH failure.\n\
          Exit 12: run 1 was still alive after `:qa`.\n\
          Exit 13: run 1 exited NON-ZERO — it went away, but not cleanly. Three tabs close in \
          sequence here, so a borrow discipline that held at one tab is the first suspect.\n\
-         Exit 14: run 2's app died before its window mapped.\n\
+         Exit 14: run 2's app died before it was ready for input.\n\
          Exit 15: run 1's TABPAGE-COUNT readback file never appeared.\n\
          Exit 16: run 2 was still alive after `:qa`.\n\
          Exit 17: run 2 exited NON-ZERO — it RESTORED tabs, so suspect `materialize_restore`.\n\
@@ -22597,14 +22001,14 @@ fn two_windows_two_neovims_and_two_saved_sessions_under_cage() {
         status.success(),
         "{SMOKE}: the cage two-window scenario exited unsuccessfully ({status}). Read the exit \
          code FIRST; each names a different half of the claim.\n\
-         Exit 11: run 1's app died before its window mapped — a LAUNCH failure.\n\
+         Exit 11: run 1's app died before it was ready for input — a LAUNCH failure.\n\
          Exit 12: run 1 was still alive after Ctrl+Shift+Q. That chord is this suite's ONLY \
          exercise of `app.quit`, so suspect `Coordinator::install_app_actions` before anything \
          else: with no `app.quit` installed the chord controller declines the key and Neovim gets \
          a plain <C-Q>.\n\
          Exit 13: run 1 exited NON-ZERO — it went away, but not cleanly. Two windows close in \
          sequence here, so a borrow discipline that held at one window is the first suspect.\n\
-         Exit 14: run 2's app died before its window mapped.\n\
+         Exit 14: run 2's app died before it was ready for input.\n\
          Exit 15: a Neovim readback file never appeared.\n\
          Exit 16: run 1 wrote NO state.json at all at {} — upstream of anything about windows.\n\
          Exit 21: run 1 did not have EXACTLY TWO live `nvim` children after the palette \
@@ -22785,16 +22189,13 @@ const CONFIG_GRID_MIN_COLUMN_GAP: i64 = 5;
 /// the front-end drives from the measured cell size, while the latter reports the
 /// layout width, which is blind to it.
 ///
-/// Exit codes, each naming one cause: `11` run 1's app died before its window
-/// mapped; `12` run 1 was still alive after `:qa!`; `13` run 1 exited non-zero;
+/// Exit codes, each naming one cause: `11` run 1's app died before it was
+/// ready for input; `12` run 1 was still alive after `:qa!`; `13` run 1 exited non-zero;
 /// `14` run 1's width readback never appeared; `15`–`18` the same four for run 2.
 const CONFIG_GRID_SCENARIO: &str = r#"
 set -eu
 
-# SETTLE is the ONLY real budget between spawning either run's app and its first
-# keystroke: `wait_window`'s wtype probe does NOT gate input readiness (it breaks
-# at tries=0 on every run -- see the module doc comment).
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 QUIT_TRIES=75
@@ -22808,24 +22209,6 @@ cleanup() {
     fi
 }
 trap cleanup EXIT INT TERM HUP
-
-# $1 is the exit code to use if the app dies first, so run 1 and run 2 stay
-# distinguishable.
-wait_window() {
-    tries=0
-    while [ "$tries" -lt "$WAIT_TRIES" ]; do
-        if ! kill -0 "$app_pid" 2>/dev/null; then
-            echo "wolf-gnome config-grid smoke: app process exited early (pid $app_pid)" >&2
-            exit "$1"
-        fi
-        if wtype "" >/dev/null 2>&1; then
-            return 0
-        fi
-        tries=$((tries + 1))
-        sleep "$WAIT_INTERVAL"
-    done
-    return 0
-}
 
 wait_file() {
     f=$1
@@ -22884,8 +22267,7 @@ export WOLF_CONFIG_DIR
 
 "$WOLF_BIN" &
 app_pid=$!
-wait_window 11
-sleep "$SETTLE"
+wait_ready "$app_pid" 11 "wolf-gnome config-grid smoke"
 
 # `winwidth(0)`, NEVER `nvim_win_get_width()`: the former is the GRID width the
 # front-end drives from the measured cell size.
@@ -22903,8 +22285,7 @@ export WOLF_CONFIG_DIR
 
 "$WOLF_BIN" &
 app_pid=$!
-wait_window 15
-sleep "$SETTLE"
+wait_ready "$app_pid" 15 "wolf-gnome config-grid smoke"
 
 wtype -- ":call writefile([printf('%d', winwidth(0))], '$WIDTH_LARGE')"
 wtype -k Return
@@ -23022,7 +22403,7 @@ fn config_font_size_changes_the_grid_under_cage() {
     assert!(
         status.success(),
         "{SMOKE}: the cage configured-font-size scenario exited unsuccessfully ({status}). Exit \
-         11: run 1's app died before its window mapped — with WOLF_FONT_PT removed, a panic in \
+         11: run 1's app died before it was ready for input — with WOLF_FONT_PT removed, a panic in \
          the config path (`load_config`, `resolve_font_pt`, or a non-positive size reaching \
          `for_font`) is the first thing to look at. Exit 12: run 1 was still alive after `:qa!`. \
          Exit 13: run 1 exited NON-ZERO — it went away, but not cleanly. Exit 14: run 1's width \
@@ -23123,12 +22504,12 @@ const APPEARANCE_LIGHT_READBACK_NAME: &str = "wolf_gnome_appearance_background_2
 /// crate's.
 ///
 /// Exit codes are PER LAUNCH, [`CONFIG_GRID_SCENARIO`]'s scheme exactly: `11` run
-/// 1's app died before its window mapped; `12` run 1 was still alive after `:qa!`;
+/// 1's app died before it was ready for input; `12` run 1 was still alive after `:qa!`;
 /// `13` run 1 exited non-zero; `14` run 1's `&background` readback never appeared
 /// (or stayed empty); `15`–`18` the same four for run 2.
 ///
 /// Eight codes and not five, because a code shared between the launches folds two
-/// causes into one: "an app died before its window mapped" is a different
+/// causes into one: "an app died before it was ready for input" is a different
 /// investigation depending on whether it was the launch reading a forced `dark` or
 /// the one reading a forced `light`, and the convention
 /// `crates/wolf-gnome/tests/README.md` states is about the CODE carrying the
@@ -23143,10 +22524,7 @@ const APPEARANCE_LIGHT_READBACK_NAME: &str = "wolf_gnome_appearance_background_2
 const APPEARANCE_SCENARIO: &str = r#"
 set -eu
 
-# SETTLE is the ONLY real budget between spawning either run's app and its first
-# keystroke: `wait_window`'s wtype probe does NOT gate input readiness (it breaks
-# at tries=0 on every run -- see the module doc comment).
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 QUIT_TRIES=75
@@ -23160,25 +22538,6 @@ cleanup() {
     fi
 }
 trap cleanup EXIT INT TERM HUP
-
-# $1 is the exit code to use if the app dies first, so run 1 and run 2 stay
-# distinguishable by the CODE alone; $2 is the run label, printed as well so a
-# truncated log needs no code table.
-wait_window() {
-    tries=0
-    while [ "$tries" -lt "$WAIT_TRIES" ]; do
-        if ! kill -0 "$app_pid" 2>/dev/null; then
-            echo "wolf-gnome appearance smoke: $2 app exited early (pid $app_pid)" >&2
-            exit "$1"
-        fi
-        if wtype "" >/dev/null 2>&1; then
-            return 0
-        fi
-        tries=$((tries + 1))
-        sleep "$WAIT_INTERVAL"
-    done
-    return 0
-}
 
 wait_file() {
     f=$1
@@ -23195,7 +22554,7 @@ wait_file() {
 }
 
 # $1 is the exit code for "still alive after :qa!", $2 for "exited non-zero", and
-# $3 is the run label; see wait_window.
+# $3 is the run label.
 quit_app() {
     wtype -- ":qa!"
     wtype -k Return
@@ -23237,8 +22596,7 @@ export WOLF_CONFIG_DIR
 
 "$WOLF_BIN" &
 app_pid=$!
-wait_window 11 "run 1 (appearance: dark)"
-sleep "$SETTLE"
+wait_ready "$app_pid" 11 "wolf-gnome appearance smoke run 1 (appearance: dark)"
 
 # `&background` is a global option, so no window or buffer has to be current for
 # this to be the value the front-end pushed.
@@ -23256,8 +22614,7 @@ export WOLF_CONFIG_DIR
 
 "$WOLF_BIN" &
 app_pid=$!
-wait_window 15 "run 2 (appearance: light)"
-sleep "$SETTLE"
+wait_ready "$app_pid" 15 "wolf-gnome appearance smoke run 2 (appearance: light)"
 
 wtype -- ":call writefile([&background], '$BG_LIGHT')"
 wtype -k Return
@@ -23438,7 +22795,7 @@ fn configured_appearance_reaches_neovims_background_under_cage() {
         status.success(),
         "{SMOKE}: the cage configured-appearance scenario exited unsuccessfully ({status}). Every \
          code names ONE cause in ONE launch. Exit 11: run 1's app (`appearance: \
-         {APPEARANCE_FORCED_DARK}`) died before its window mapped — a panic while resolving the \
+         {APPEARANCE_FORCED_DARK}`) died before it was ready for input — a panic while resolving the \
          appearance is the first thing to look at, since `appearance::apply_at_launch` runs before \
          any widget is built and takes the whole launch with it. Exit 12: run 1 was still alive \
          after `:qa!`. Exit 13: run 1 exited NON-ZERO — it went away, but not cleanly, and that is \
@@ -24378,13 +23735,13 @@ struct ThemeLaunch<'a> {
 /// leg duplicated by hand is a preview leg that can be edited on one side only, and
 /// this smoke's whole design is that the two launches are the same run at two
 /// settings. Its nine positional parameters are saved into named variables
-/// immediately, since `wait_window` and `quit_app` rebind `$1`.
+/// immediately, since `wait_ready` and `quit_app` rebind `$1`.
 ///
 /// Exit codes are PER LAUNCH, [`APPEARANCE_SCENARIO`]'s scheme exactly: `11` run 1's
-/// app died before its window mapped; `12` run 1 was still alive after `:qa!`; `13`
+/// app died before it was ready for input; `12` run 1 was still alive after `:qa!`; `13`
 /// run 1 exited non-zero; `14` run 1's window-list readback never appeared; `15`–`18`
 /// the same four for run 2. Eight and not four, for the reason that smoke gives: "an
-/// app died before its window mapped" is a different investigation depending on which
+/// app died before it was ready for input" is a different investigation depending on which
 /// appearance it was reading.
 ///
 /// A `grim` failure has no code of its own: it aborts under `set -eu` and the cage
@@ -24393,10 +23750,7 @@ struct ThemeLaunch<'a> {
 const PREVIEW_THEME_SCENARIO: &str = r#"
 set -eu
 
-# SETTLE is the ONLY real budget between spawning either run's app and its first
-# keystroke: `wait_window`'s wtype probe does NOT gate input readiness (it breaks
-# at tries=0 on every run -- see the module doc comment).
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 QUIT_TRIES=75
@@ -24417,25 +23771,6 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM HUP
 
-# $1 is the exit code to use if the app dies first, so run 1 and run 2 stay
-# distinguishable by the CODE alone; $2 is the run label, printed as well so a
-# truncated log needs no code table.
-wait_window() {
-    tries=0
-    while [ "$tries" -lt "$WAIT_TRIES" ]; do
-        if ! kill -0 "$app_pid" 2>/dev/null; then
-            echo "wolf-gnome preview-appearance smoke: $2 app exited early (pid $app_pid)" >&2
-            exit "$1"
-        fi
-        if wtype "" >/dev/null 2>&1; then
-            return 0
-        fi
-        tries=$((tries + 1))
-        sleep "$WAIT_INTERVAL"
-    done
-    return 0
-}
-
 wait_file() {
     f=$1
     t=0
@@ -24451,7 +23786,7 @@ wait_file() {
 }
 
 # $1 is the exit code for "still alive after :qa!", $2 for "exited non-zero", and
-# $3 is the run label; see wait_window.
+# $3 is the run label.
 quit_app() {
     wtype -- ":qa!"
     wtype -k Return
@@ -24485,7 +23820,7 @@ quit_app() {
 # exit codes and are otherwise the same run -- which is the whole design of this
 # smoke, so the body must never be duplicated.
 #
-# The nine parameters are saved into named variables FIRST: wait_window and
+# The nine parameters are saved into named variables FIRST: wait_ready and
 # quit_app below rebind $1..$3 for their own calls.
 run_launch() {
     cfg=$1
@@ -24507,8 +23842,7 @@ run_launch() {
 
     "$WOLF_BIN" &
     app_pid=$!
-    wait_window "$code_died" "$label"
-    sleep "$SETTLE"
+    wait_ready "$app_pid" "$code_died" "wolf-gnome preview-appearance smoke $label"
 
     # --- Step 1: open the SOURCE in the window's ONE pane --------------------
     #
@@ -24777,7 +24111,7 @@ fn preview_document_follows_the_configured_appearance_under_cage() {
         status.success(),
         "{SMOKE}: the cage preview-appearance scenario exited unsuccessfully ({status}). Every \
          code names ONE cause in ONE launch. Exit 11: run 1's app (`appearance: \
-         {APPEARANCE_FORCED_DARK}`) died before its window mapped — `appearance::apply_at_launch` \
+         {APPEARANCE_FORCED_DARK}`) died before it was ready for input — `appearance::apply_at_launch` \
          runs before any widget is built and takes the whole launch with it, so a panic there is \
          the first thing to look at. Exit 12: run 1 was still alive after `:qa!`. Exit 13: run 1 \
          exited NON-ZERO — it went away, but not cleanly, which is a separate code from 12 because \
@@ -25469,7 +24803,7 @@ fn first_majority_row(capture: &Capture, rect: SampleRect, colour: Rgb8) -> Opti
 ///
 /// ## Exit codes, and why there are only two
 ///
-/// * `11` — the app died before its window ever mapped (the shared convention).
+/// * `11` — the app died before it was ready for input (the shared convention).
 /// * `14` — a readback the captive Neovim was told to write never appeared, so the
 ///   assertion that reads it cannot be evaluated at all.
 ///
@@ -25488,10 +24822,7 @@ fn first_majority_row(capture: &Capture, rect: SampleRect, colour: Rgb8) -> Opti
 const CODEHL_SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs: WAIT_TRIES * WAIT_INTERVAL for CAGE to come up -- NOT for the window
-# to map, which this poll cannot observe (see the module doc comment). SETTLE is the
-# only real budget between spawning the app and the first keystroke.
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 FILE_TRIES=100
@@ -25503,21 +24834,7 @@ PREVIEW_SETTLE=2.0
 
 "$WOLF_BIN" &
 app_pid=$!
-
-tries=0
-while [ "$tries" -lt "$WAIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        echo "wolf-gnome code-highlight smoke: app process exited early (pid $app_pid)" >&2
-        exit 11
-    fi
-    if wtype "" >/dev/null 2>&1; then
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-
-sleep "$SETTLE"
+wait_ready "$app_pid" 11 "wolf-gnome code-highlight smoke"
 
 wait_file() {
     f=$1
@@ -25768,7 +25085,7 @@ fn preview_highlights_a_fenced_code_block_under_cage() {
     assert!(
         status.success(),
         "{SMOKE}: the cage code-highlight scenario exited unsuccessfully ({status}). Exit 11: the \
-         app died before its window mapped. Exit 14: one of the two readbacks never appeared — \
+         app died before it was ready for input. Exit 14: one of the two readbacks never appeared — \
          {} (the window list) or {} (the injected langtree); the second is a long typed `:lua` \
          line, so an empty file there means the command line did not execute as typed rather than \
          that treesitter answered anything. Codes 12 and 13 do not exist here on purpose: nothing \
@@ -26262,13 +25579,13 @@ fn codegrid_chip_columns() -> (usize, usize) {
 /// its two subjects unobserved. What they share is their SHAPE, and the shared shape is
 /// documented on [`CODEHL_SCENARIO`] rather than restated here.
 ///
-/// Exit codes, the same two and for the same reasons: `11` the app died before its
-/// window mapped, `14` the window-list readback never appeared. `12` and `13` are
+/// Exit codes, the same two and for the same reasons: `11` the app died before it
+/// was ready for input, `14` the window-list readback never appeared. `12` and `13` are
 /// deliberately absent — nothing here depends on a clean exit.
 const CODEGRID_SCENARIO: &str = r#"
 set -eu
 
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 FILE_TRIES=100
@@ -26278,21 +25595,7 @@ PREVIEW_SETTLE=2.0
 
 "$WOLF_BIN" &
 app_pid=$!
-
-tries=0
-while [ "$tries" -lt "$WAIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        echo "wolf-gnome baseline-grid smoke: app process exited early (pid $app_pid)" >&2
-        exit 11
-    fi
-    if wtype "" >/dev/null 2>&1; then
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-
-sleep "$SETTLE"
+wait_ready "$app_pid" 11 "wolf-gnome baseline-grid smoke"
 
 wait_file() {
     f=$1
@@ -26436,7 +25739,7 @@ fn preview_inline_code_keeps_the_baseline_grid_under_cage() {
     assert!(
         status.success(),
         "{SMOKE}: the cage baseline-grid scenario exited unsuccessfully ({status}). Exit 11: the \
-         app died before its window mapped. Exit 14: the window-list readback at {} never \
+         app died before it was ready for input. Exit 14: the window-list readback at {} never \
          appeared. Codes 12 and 13 do not exist here on purpose: nothing in this smoke depends on \
          a clean exit, so the scenario ends with a best-effort kill. Any OTHER status is `grim` or \
          `wtype` failing under `set -eu`.",
@@ -27091,7 +26394,7 @@ fn pickover_fill_reference_band() -> SampleRect {
 ///
 /// ## Exit codes
 ///
-/// * `11` — the app died before its window ever mapped (the shared convention).
+/// * `11` — the app died before it was ready for input (the shared convention).
 /// * `14` — the window-list readback never appeared, so the precondition that makes
 ///   both captures mean anything cannot be checked at all.
 ///
@@ -27103,10 +26406,7 @@ fn pickover_fill_reference_band() -> SampleRect {
 const PICKOVER_SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs: WAIT_TRIES * WAIT_INTERVAL for CAGE to come up -- NOT for the window
-# to map, which this poll cannot observe (see the module doc comment). SETTLE is the
-# only real budget between spawning the app and the first keystroke.
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 FILE_TRIES=100
@@ -27118,21 +26418,7 @@ PREVIEW_SETTLE=2.0
 
 "$WOLF_BIN" &
 app_pid=$!
-
-tries=0
-while [ "$tries" -lt "$WAIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        echo "wolf-gnome picker-over-preview smoke: app process exited early (pid $app_pid)" >&2
-        exit 11
-    fi
-    if wtype "" >/dev/null 2>&1; then
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-
-sleep "$SETTLE"
+wait_ready "$app_pid" 11 "wolf-gnome picker-over-preview smoke"
 
 wait_file() {
     f=$1
@@ -27534,7 +26820,7 @@ fn file_picker_covers_the_live_preview_under_cage() {
     assert!(
         status.success(),
         "{SMOKE}: the cage picker-over-preview scenario exited unsuccessfully ({status}). Exit 11: \
-         the app died before its window ever mapped, which is a LAUNCH failure and says nothing \
+         the app died before it was ready for input, which is a LAUNCH failure and says nothing \
          about the picker or the preview. Exit 14: the window-list readback never appeared at {} — \
          keys are not reaching Neovim, or the typed Ex command did not execute, so this is a \
          keyboard failure rather than a compositing one and the keyboard-only smokes are where to \
@@ -28122,7 +27408,7 @@ const FULLWIDTH_FULL_READBACK_NAME: &str = "wolf_gnome_fullwidth_full.txt";
 /// `ext_multigrid` the former reports the GRID width the front-end drives from the
 /// column cap, while the latter reports the layout width, which is blind to it.
 ///
-/// Exit codes, each naming one cause: `11` the app died before its window mapped;
+/// Exit codes, each naming one cause: `11` the app died before it was ready for input;
 /// `12` the CAPPED readback never appeared; `13` the FULL-WIDTH readback never
 /// appeared; `14` the app was still alive after `:qa!`; `15` the app exited non-zero.
 /// 12 and 13 are separate on purpose — the first says the app never got as far as
@@ -28131,10 +27417,7 @@ const FULLWIDTH_FULL_READBACK_NAME: &str = "wolf_gnome_fullwidth_full.txt";
 const FULLWIDTH_SCENARIO: &str = r#"
 set -eu
 
-# SETTLE is the ONLY real budget between spawning the app and its first keystroke:
-# `wait_window`'s wtype probe does NOT gate input readiness (it breaks at tries=0 on
-# every run -- see the module doc comment).
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 # TWICE the settle, and the doubling is deliberate. The first readback follows a
@@ -28156,22 +27439,6 @@ cleanup() {
     fi
 }
 trap cleanup EXIT INT TERM HUP
-
-wait_window() {
-    tries=0
-    while [ "$tries" -lt "$WAIT_TRIES" ]; do
-        if ! kill -0 "$app_pid" 2>/dev/null; then
-            echo "wolf-gnome column-cap smoke: app process exited early (pid $app_pid)" >&2
-            exit 11
-        fi
-        if wtype "" >/dev/null 2>&1; then
-            return 0
-        fi
-        tries=$((tries + 1))
-        sleep "$WAIT_INTERVAL"
-    done
-    return 0
-}
 
 wait_file() {
     f=$1
@@ -28219,8 +27486,7 @@ quit_app() {
 
 "$WOLF_BIN" &
 app_pid=$!
-wait_window
-sleep "$SETTLE"
+wait_ready "$app_pid" 11 "wolf-gnome column-cap smoke"
 
 # READBACK 1 -- the grid while the content-width cap is in force.
 wtype -- ":call writefile([printf('%d', winwidth(0))], '$WIDTH_CAPPED')"
@@ -28352,7 +27618,7 @@ fn column_cap_and_full_width_toggle_change_the_grid_under_cage() {
     assert!(
         status.success(),
         "{SMOKE}: the cage column-cap scenario exited unsuccessfully ({status}). Exit 11: the app \
-         died before its window mapped — at {FULLWIDTH_SMOKE_FONT_PT} pt a panic in the cell \
+         died before it was ready for input — at {FULLWIDTH_SMOKE_FONT_PT} pt a panic in the cell \
          measurement or in `min_pane_size` is the first thing to look at. Exit 12: the CAPPED \
          readback never appeared at {}, so the app never answered at all. Exit 13: the FULL-WIDTH \
          readback never appeared at {} — it answered once and then stopped, which is what a panic \
@@ -28465,17 +27731,14 @@ const CLIP_EXPECTED_OCCURRENCES: usize = 2;
 /// there is nothing to get wrong.
 ///
 /// Exit codes, each naming ONE cause and no two folded together: `11` the app died
-/// before its window mapped; `12` the buffer readback never appeared (or was empty);
+/// before it was ready for input; `12` the buffer readback never appeared (or was empty);
 /// `13` the app was still alive after `:qa!`; `14` the app exited non-zero. 13 and 14
 /// are separate because a process that panicked in the GTK main loop and one that
 /// shut down cleanly are equally GONE — only the status tells them apart.
 const CLIPBOARD_SCENARIO: &str = r#"
 set -eu
 
-# SETTLE is the ONLY real budget between spawning the app and its first keystroke:
-# `wait_window`'s wtype probe does NOT gate input readiness (it breaks at tries=0 on
-# every run -- see the module doc comment).
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 # TWICE the settle, and the doubling is deliberate. Every other pause in this
@@ -28499,22 +27762,6 @@ cleanup() {
     fi
 }
 trap cleanup EXIT INT TERM HUP
-
-wait_window() {
-    tries=0
-    while [ "$tries" -lt "$WAIT_TRIES" ]; do
-        if ! kill -0 "$app_pid" 2>/dev/null; then
-            echo "wolf-gnome clipboard smoke: app process exited early (pid $app_pid)" >&2
-            exit 11
-        fi
-        if wtype "" >/dev/null 2>&1; then
-            return 0
-        fi
-        tries=$((tries + 1))
-        sleep "$WAIT_INTERVAL"
-    done
-    return 0
-}
 
 wait_file() {
     f=$1
@@ -28562,8 +27809,7 @@ quit_app() {
 
 "$WOLF_BIN" &
 app_pid=$!
-wait_window
-sleep "$SETTLE"
+wait_ready "$app_pid" 11 "wolf-gnome clipboard smoke"
 
 # Seed the whole buffer: the marker on line 1, then TWO EMPTY LINES. Set through the
 # API rather than typed in insert mode, so the marker cannot be corrupted by a dropped
@@ -28739,7 +27985,7 @@ fn copy_and_paste_round_trip_through_the_clipboard_under_cage() {
     assert!(
         status.success(),
         "{SMOKE}: the cage clipboard scenario exited unsuccessfully ({status}). Exit 11: the app \
-         died before its window mapped, so no chord was ever pressed and nothing below is about \
+         died before it was ready for input, so no chord was ever pressed and nothing below is about \
          the clipboard. Exit 12: the buffer readback never appeared at {}, so the app never got as \
          far as executing the final `:call writefile(...)` — a panic on the paste path (the async \
          clipboard callback runs on the GTK main thread and takes the core borrow) is the first \
@@ -29316,7 +28562,6 @@ fn dragged_divider_weights_survive_relaunch_under_cage() {
         .env("RELAUNCH_DRAG_PX", DIVIDER_RELAUNCH_DRAG_PX.to_string())
         .env("DIV_STATE_SRC", &smoke_state_file)
         .env("DIV_STATE_COPY", &run1_state_file)
-        .env("RESTORE_SETTLE", RELAUNCH_RESTORE_SETTLE)
         .status()
         .expect("failed to spawn `cage` for the headless divider relaunch scenario");
 
@@ -29326,7 +28571,7 @@ fn dragged_divider_weights_survive_relaunch_under_cage() {
         status.success(),
         "{SMOKE}: the cage divider relaunch scenario exited unsuccessfully ({status}). Read the \
          exit code FIRST; each names a different half of the harness.\n\
-         Exit 11: run 1's app died before its window mapped — a LAUNCH failure.\n\
+         Exit 11: run 1's app died before it was ready for input — a LAUNCH failure.\n\
          Exit 12: `wolf-pointer-inject` never printed its `ready …` line (its own exit code is in \
          the stderr below: 3 = no `zwlr_virtual_pointer_manager_v1`, 4 = no `wl_seat`, 5 = no \
          `wl_output`, 6 = more than one output, 7 = zero extents).\n\
@@ -29339,7 +28584,7 @@ fn dragged_divider_weights_survive_relaunch_under_cage() {
          `Coordinator::on_window_closing`.\n\
          Exit 18: run 1 wrote NO state.json at all at {}, which is upstream of anything about \
          weights.\n\
-         Exit 19: run 2's app died before its window mapped.\n\
+         Exit 19: run 2's app died before it was ready for input.\n\
          Exit 21: the bisection seeds ({seed_lo}, {seed_hi}) did not straddle the divider; the \
          scenario's stderr names the four candidate causes in order, and \
          `click_positions_the_cursor_under_cage` fails on its own if the pane origin moved.\n\
@@ -29722,7 +28967,7 @@ fn window_title_shows_the_working_directory_under_cage() {
     assert!(
         status.success(),
         "{SMOKE}: the cage window-title scenario exited unsuccessfully ({status}); the app may \
-         have failed to launch (exit 11 means it died before its window mapped) or grim failed. \
+         have failed to launch (exit 11 means it died before it was ready for input) or grim failed. \
          Screenshot expected at {}.",
         out_png.display()
     );
@@ -29981,7 +29226,7 @@ fn open_recent_palette_row_reroots_the_window_under_cage() {
     assert!(
         status.success(),
         "{SMOKE}: the cage Open Recent scenario exited unsuccessfully ({status}). Exit 11: the app \
-         died before its window ever mapped — a LAUNCH failure, and nothing below is about Open \
+         died before it was ready for input — a LAUNCH failure, and nothing below is about Open \
          Recent. Exit 14: the `getcwd()` readback never appeared, which means the palette never \
          CLOSED and the Ex command was typed into its SearchEntry — a distinct cause from \"the \
          wrong row ran\", which exits 0 and fails assertion 3 instead. Otherwise wtype or grim \
@@ -30202,7 +29447,7 @@ fn alt_left_navigates_back_to_the_previous_file_under_cage() {
         status.success(),
         "{SMOKE}: the cage nav-back scenario exited unsuccessfully ({status}). Read the exit code \
          FIRST.\n\
-         Exit 11: the app died before its window ever mapped — a LAUNCH failure, and nothing below \
+         Exit 11: the app died before it was ready for input — a LAUNCH failure, and nothing below \
          is about navigation.\n\
          Exit 24: the BEFORE `bufname('%')` readback never appeared, so keys were not reaching \
          Neovim at all. Check the keyboard-only smokes first; nothing here is diagnosable.\n\
@@ -30416,7 +29661,7 @@ fn sidebar_toggle_chord_hides_the_file_tree_under_cage() {
     assert!(
         status.success(),
         "{SMOKE}: the cage sidebar-toggle scenario exited unsuccessfully ({status}).\n\
-         Exit 11: the app died before its window ever mapped — a LAUNCH failure, and nothing below \
+         Exit 11: the app died before it was ready for input — a LAUNCH failure, and nothing below \
          is about the sidebar.\n\
          Any other status means wtype or grim failed, or the `:e` did not load. This scenario \
          writes no readback file, so it has no other exit codes of its own; note that it exits 0 \
@@ -30748,7 +29993,7 @@ fn typed_cd_reroots_the_sidebar_under_cage() {
         status.success(),
         "{SMOKE}: the cage typed-`:cd` scenario exited unsuccessfully ({status}). Read the exit \
          code FIRST; each one names a different half of the run.\n\
-         Exit 11: the app died before its window ever mapped. A LAUNCH failure — the `:cd` was \
+         Exit 11: the app died before it was ready for input. A LAUNCH failure — the `:cd` was \
          never typed and nothing below is about the sidebar.\n\
          Exit 14: the `getcwd()` readback never appeared, which means the Ex command never \
          executed — keys stopped reaching Neovim. That is DISTINCT from \"the `:cd` went somewhere \
@@ -31048,7 +30293,7 @@ fn pane_status_bar_shows_each_panes_filename_under_cage() {
         status.success(),
         "{SMOKE}: the cage per-pane statusbar scenario exited unsuccessfully ({status}). Read the \
          exit code FIRST; each names a different half of the run.\n\
-         Exit 11: the app died before its window ever mapped. A LAUNCH failure — nothing below is \
+         Exit 11: the app died before it was ready for input. A LAUNCH failure — nothing below is \
          about the status bar.\n\
          Exit 14: the `winheight(0)` readback never appeared, which means the Ex command never \
          executed: keys stopped reaching Neovim, or the <C-w>v split left focus somewhere \
@@ -31194,27 +30439,13 @@ fn pane_status_bar_shows_each_panes_filename_under_cage() {
 const PUM_SCENARIO: &str = r#"
 set -eu
 
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 
 "$WOLF_BIN" &
 app_pid=$!
-
-tries=0
-while [ "$tries" -lt "$WAIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        echo "wolf-gnome pum smoke: app process exited early (pid $app_pid)" >&2
-        exit 11
-    fi
-    if wtype "" >/dev/null 2>&1; then
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-
-sleep "$SETTLE"
+wait_ready "$app_pid" 11 "wolf-gnome pum smoke"
 
 # Park the block cursor on its own row so it cannot corrupt a glyph the OCR reads.
 wtype -k o
@@ -31263,27 +30494,13 @@ const PUM_OCR_ITEM2: &str = "setfiletype";
 const MSG_SCENARIO: &str = r#"
 set -eu
 
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 
 "$WOLF_BIN" &
 app_pid=$!
-
-tries=0
-while [ "$tries" -lt "$WAIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        echo "wolf-gnome message smoke: app process exited early (pid $app_pid)" >&2
-        exit 11
-    fi
-    if wtype "" >/dev/null 2>&1; then
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-
-sleep "$SETTLE"
+wait_ready "$app_pid" 11 "wolf-gnome message smoke"
 
 wtype -k o
 wtype -k Escape
@@ -31325,32 +30542,18 @@ const MSG_OCR_SECOND: &str = "oscarhotel";
 /// crash-overlay capture. `bdelete` cannot end the process however the dialog goes,
 /// so a failure here stays a failure about pixels.
 ///
-/// Exit codes: `11` the app died before the window mapped; `14` the app was gone
+/// Exit codes: `11` the app died before it was ready for input; `14` the app was gone
 /// before the second capture, i.e. answering the dialog took the process down.
 const CONFIRM_SCENARIO: &str = r#"
 set -eu
 
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 
 "$WOLF_BIN" &
 app_pid=$!
-
-tries=0
-while [ "$tries" -lt "$WAIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        echo "wolf-gnome confirm smoke: app process exited early (pid $app_pid)" >&2
-        exit 11
-    fi
-    if wtype "" >/dev/null 2>&1; then
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-
-sleep "$SETTLE"
+wait_ready "$app_pid" 11 "wolf-gnome confirm smoke"
 
 # An unsaved edit, which is what gives `:confirm bdelete` something to ask about.
 wtype -- "i$CONFIRM_EDIT"
@@ -31927,7 +31130,7 @@ const DRAWER_WINS_AFTER_SPLIT: i64 = 4;
 ///
 /// ## Exit codes
 ///
-/// * `11` — the app died before its window mapped (the shared convention).
+/// * `11` — the app died before it was ready for input (the shared convention).
 /// * `14` — a `&buftype` readback the captive Neovim was told to write never
 ///   appeared. With the drawer focused that is what a keystroke reaching BASH looks
 ///   like from out here.
@@ -31936,11 +31139,7 @@ const DRAWER_WINS_AFTER_SPLIT: i64 = 4;
 const DRAWER_SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
-# for the window to map, which this poll cannot observe (see the module doc).
-#
-# SETTLE is the ONLY real budget between spawning the app and the first keystroke.
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 # The chord's round trip: the GTK accelerator, InputEvent::ToggleTerminal, the Lua
@@ -31963,21 +31162,7 @@ trap cleanup EXIT INT TERM HUP
 
 "$WOLF_BIN" &
 app_pid=$!
-
-tries=0
-while [ "$tries" -lt "$WAIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        echo "wolf-gnome terminal-drawer smoke: app process exited early (pid $app_pid)" >&2
-        exit 11
-    fi
-    if wtype "" >/dev/null 2>&1; then
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-
-sleep "$SETTLE"
+wait_ready "$app_pid" 11 "wolf-gnome terminal-drawer smoke"
 
 wait_file() {
     f=$1
@@ -32264,7 +31449,7 @@ fn terminal_drawer_opens_and_is_not_persisted_under_cage() {
     assert!(
         status.success(),
         "{SMOKE}: the cage terminal-drawer scenario exited unsuccessfully ({status}). Exit 11: the \
-         app died before its window mapped — a LAUNCH failure, and nothing below is about the \
+         app died before it was ready for input — a LAUNCH failure, and nothing below is about the \
          drawer. Exit 14: a `&buftype` readback never appeared; with focus in the drawer that is \
          what an Ex command typed into TERMINAL-INSERT looks like from out here, so suspect the \
          `CTRL-\\ CTRL-N` before it rather than the assertion it belongs to. Exit 16: the app \
@@ -32651,12 +31836,12 @@ const DRAWER_GEOMETRY_READBACK_NAME: &str = "wolf_gnome_drawer_geometry.txt";
 /// [`DRAWER_FIXTURE_FILE`] give — `wolf_toggle_terminal` ends in `startinsert`, so
 /// without it the Ex command is run by bash.
 ///
-/// Exit codes: `11` the app died before its window mapped; `12` the geometry readback
+/// Exit codes: `11` the app died before it was ready for input; `12` the geometry readback
 /// never appeared.
 const DRAWER_FULLWIDTH_SCENARIO: &str = r#"
 set -eu
 
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 DRAWER_SETTLE=2.0
@@ -32673,21 +31858,7 @@ trap cleanup EXIT INT TERM HUP
 
 "$WOLF_BIN" &
 app_pid=$!
-
-tries=0
-while [ "$tries" -lt "$WAIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        echo "wolf-gnome drawer full-width smoke: app process exited early (pid $app_pid)" >&2
-        exit 11
-    fi
-    if wtype "" >/dev/null 2>&1; then
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-
-sleep "$SETTLE"
+wait_ready "$app_pid" 11 "wolf-gnome drawer full-width smoke"
 
 wait_file() {
     f=$1
@@ -32785,7 +31956,7 @@ fn terminal_drawer_defaults_to_full_width_under_cage() {
     assert!(
         status.success(),
         "{SMOKE}: the cage drawer full-width scenario exited unsuccessfully ({status}). Exit 11: \
-         the app died before its window mapped — at {FULLWIDTH_SMOKE_FONT_PT} pt a panic in the \
+         the app died before it was ready for input — at {FULLWIDTH_SMOKE_FONT_PT} pt a panic in the \
          cell measurement or in `min_pane_size` is the first thing to look at. Exit 12: the \
          geometry readback never appeared at {}, which with focus in the drawer means the Ex \
          command was typed into TERMINAL-INSERT and run by bash — check the `CTRL-\\ CTRL-N` ahead \
@@ -32910,7 +32081,7 @@ const DRAWER_WINS_WITH_DRAWER: i64 = 2;
 ///
 /// ## Exit codes
 ///
-/// * `11` — the app died before its window mapped (the shared convention).
+/// * `11` — the app died before it was ready for input (the shared convention).
 /// * `14` — a `&buftype` readback never appeared.
 /// * `16` — THE APP DIED with its Neovim. See [`FIND_NVIM_PID_HELPER`].
 /// * `17` — the Neovim child could not be identified uniquely, so nothing was killed.
@@ -32923,7 +32094,7 @@ const DRAWER_WINS_WITH_DRAWER: i64 = 2;
 const DRAWER_RESTART_SCENARIO: &str = r#"
 set -eu
 
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 DRAWER_SETTLE=2.0
@@ -32940,21 +32111,7 @@ trap cleanup EXIT INT TERM HUP
 
 "$WOLF_BIN" &
 app_pid=$!
-
-tries=0
-while [ "$tries" -lt "$WAIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        echo "wolf-gnome drawer restart smoke: app process exited early (pid $app_pid)" >&2
-        exit 11
-    fi
-    if wtype "" >/dev/null 2>&1; then
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-
-sleep "$SETTLE"
+wait_ready "$app_pid" 11 "wolf-gnome drawer restart smoke"
 
 wait_file() {
     f=$1
@@ -33146,7 +32303,7 @@ fn terminal_drawer_reopens_after_a_neovim_restart_under_cage() {
     assert!(
         status.success(),
         "{SMOKE}: the cage drawer restart scenario exited unsuccessfully ({status}). Exit 11: the \
-         app died before its window mapped. Exit 14: a `&buftype` readback never appeared — with \
+         app died before it was ready for input. Exit 14: a `&buftype` readback never appeared — with \
          focus in the drawer that is an Ex command run by bash. Exit 16: THE APP DIED WITH ITS \
          NEOVIM, which is this feature's worst outcome and must never be read as a slow restart. \
          Exit 17: the Neovim child could not be identified uniquely, so nothing was killed and \
@@ -34441,15 +33598,13 @@ const SAVE_READBACK_BEFORE_NAME: &str = "wolf_gnome_save_before.txt";
 ///
 /// ## Exit codes
 ///
-/// * `11` — the app died before its window mapped (the shared convention).
+/// * `11` — the app died before it was ready for input (the shared convention).
 /// * `24` — the `bufname('%')` readback never appeared, so keys were not reaching
 ///   Neovim at all and nothing below is diagnosable.
 const SAVE_SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
-# for the window to map, which this poll cannot observe (see the poll below).
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 # How many WAIT_INTERVAL polls to allow for a readback file.
@@ -34466,22 +33621,7 @@ trap cleanup EXIT INT TERM HUP
 
 "$WOLF_BIN" &
 app_pid=$!
-
-tries=0
-while [ "$tries" -lt "$WAIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        echo "wolf-gnome save smoke: app process exited early (pid $app_pid)" >&2
-        exit 11
-    fi
-    if wtype "" >/dev/null 2>&1; then
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-
-# Final settle for nvim's initial redraw before driving the editor.
-sleep "$SETTLE"
+wait_ready "$app_pid" 11 "wolf-gnome save smoke"
 
 # Poll for a readback file the captive Neovim writes. Nothing downstream may read a
 # file we merely hope is there. (The NAVBACK_SCENARIO body, verbatim.)
@@ -34537,8 +33677,10 @@ wait_file "$BEFORE" || exit 24
 # distinguishes.
 wtype -M ctrl -M shift -k s -m shift -m ctrl
 
-# Let the ordered input channel carry `InputEvent::Save` and nvim's `write` land.
-sleep "$SETTLE"
+# Wait for nvim's `write` to land: the sentinel exists only in the buffer, so it
+# reaching the file is the write itself. A timeout falls through on purpose, so the
+# Rust assertion on the file's contents names the red.
+wait_file_contains "$SAVE_FILE" "$SAVE_SENTINEL" "wolf-gnome save smoke" || true
 
 exit 0
 "#;
@@ -34660,7 +33802,7 @@ fn ctrl_shift_s_saves_the_focused_buffer_to_disk_under_cage() {
         status.success(),
         "{SMOKE}: the cage save scenario exited unsuccessfully ({status}). Read the exit code \
          FIRST.\n\
-         Exit 11: the app died before its window ever mapped — a LAUNCH failure, and nothing below \
+         Exit 11: the app died before it was ready for input — a LAUNCH failure, and nothing below \
          is about saving.\n\
          Exit 24: the `bufname('%')` readback never appeared, so keys were not reaching Neovim at \
          all. Check the keyboard-only smokes first; nothing here is diagnosable.\n\
@@ -34842,13 +33984,13 @@ const SAVE_AS_GDK_DEBUG: &str = "no-portals";
 ///
 /// ## Exit codes
 ///
-/// * `11` — the app died before its window mapped (the shared convention).
+/// * `11` — the app died before it was ready for input (the shared convention).
 /// * `26` — the nameless-buffer readback never appeared, so keys were not reaching
 ///   Neovim at all and nothing below is diagnosable.
 const SAVEAS_SCENARIO: &str = r#"
 set -eu
 
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 # The native dialog is a separate toplevel: it has to map, realize and take keyboard
@@ -34868,21 +34010,7 @@ trap cleanup EXIT INT TERM HUP
 
 "$WOLF_BIN" &
 app_pid=$!
-
-tries=0
-while [ "$tries" -lt "$WAIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        echo "wolf-gnome save-as smoke: app process exited early (pid $app_pid)" >&2
-        exit 11
-    fi
-    if wtype "" >/dev/null 2>&1; then
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-
-sleep "$SETTLE"
+wait_ready "$app_pid" 11 "wolf-gnome save-as smoke"
 
 wait_file() {
     f=$1
@@ -34941,6 +34069,12 @@ sleep "$SETTLE"
 wtype -k Return
 
 # Let the dialog close, its callback run, and `InputEvent::SaveAs` reach nvim.
+#
+# A fixed settle on purpose, not a poll for the typed file: assertion 4 checks that
+# the buffer did not ALSO reach disk under the proposed name, and a poll would end
+# the run the moment the first write landed, before any second one. Its falsifier
+# (a second SaveAs to the proposed name) stays green with either wait, because
+# Neovim refuses that write with E139, so no measurement licenses shortening this.
 sleep "$DIALOG_SETTLE"
 
 exit 0
@@ -35066,7 +34200,7 @@ fn the_save_dialog_writes_a_named_file_under_cage() {
         status.success(),
         "{SMOKE}: the cage save-as scenario exited unsuccessfully ({status}). Read the exit code \
          FIRST.\n\
-         Exit 11: the app died before its window ever mapped — a LAUNCH failure, and nothing below \
+         Exit 11: the app died before it was ready for input — a LAUNCH failure, and nothing below \
          is about the dialog.\n\
          Exit 26: the `bufname('%')` readback after the typed `:enew` never appeared, so keys were \
          not reaching Neovim at all. Check the keyboard-only smokes first.\n\
@@ -35249,7 +34383,7 @@ const COMPOSE_READBACK_NAME: &str = "wolf_gnome_compose_line.txt";
 ///
 /// ## Exit codes
 ///
-/// * `11` — the app died before its window mapped (the shared convention).
+/// * `11` — the app died before it was ready for input (the shared convention).
 /// * `24` — the `bufname('%')` readback never appeared, so keys were not reaching
 ///   Neovim at all and nothing below is diagnosable. Check the keyboard-only smokes
 ///   first.
@@ -35257,10 +34391,7 @@ const COMPOSE_READBACK_NAME: &str = "wolf_gnome_compose_line.txt";
 const COMPOSE_SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
-# for the window to map, which this poll cannot observe (see the poll below).
-# SETTLE carries SCENARIO's measured margin table; do not trim it back.
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 # How many WAIT_INTERVAL polls to allow for a readback file.
@@ -35281,22 +34412,7 @@ trap cleanup EXIT INT TERM HUP
 
 "$WOLF_BIN" &
 app_pid=$!
-
-tries=0
-while [ "$tries" -lt "$WAIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        echo "wolf-gnome compose smoke: app process exited early (pid $app_pid)" >&2
-        exit 11
-    fi
-    if wtype "" >/dev/null 2>&1; then
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-
-# Final settle for nvim's initial redraw before driving the editor.
-sleep "$SETTLE"
+wait_ready "$app_pid" 11 "wolf-gnome compose smoke"
 
 # Poll for a readback file the captive Neovim writes. Nothing downstream may read a
 # file we merely hope is there. (The SAVE_SCENARIO body, verbatim.)
@@ -35509,7 +34625,7 @@ fn composed_text_reaches_neovim_under_cage() {
         status.success(),
         "{SMOKE}: the cage compose scenario exited unsuccessfully ({status}). Read the exit code \
          FIRST.\n\
-         Exit 11: the app died before its window ever mapped — a LAUNCH failure, and nothing below \
+         Exit 11: the app died before it was ready for input — a LAUNCH failure, and nothing below \
          is about composing.\n\
          Exit 24: the `bufname('%')` readback never appeared, so keys were not reaching Neovim at \
          all. That is the loudest possible symptom of this unit going wrong, because the input \
@@ -35696,7 +34812,7 @@ const IMCHORD_WINDOWS_SPLIT: i64 = 2;
 ///
 /// ## Exit codes
 ///
-/// * `11` — the app died before its window mapped (the shared convention).
+/// * `11` — the app died before it was ready for input (the shared convention).
 /// * `24` — the `bufname('%')` readback never appeared, so keys were not reaching
 ///   Neovim at all and nothing below is diagnosable. Check the keyboard-only smokes
 ///   first.
@@ -35709,10 +34825,7 @@ const IMCHORD_WINDOWS_SPLIT: i64 = 2;
 const IMCHORD_SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
-# for the window to map, which this poll cannot observe (see the poll below).
-# SETTLE carries SCENARIO's measured margin table; do not trim it back.
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 # How many WAIT_INTERVAL polls to allow for a readback file.
@@ -35734,22 +34847,7 @@ trap cleanup EXIT INT TERM HUP
 
 "$WOLF_BIN" &
 app_pid=$!
-
-tries=0
-while [ "$tries" -lt "$WAIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        echo "wolf-gnome composed-chord smoke: app process exited early (pid $app_pid)" >&2
-        exit 11
-    fi
-    if wtype "" >/dev/null 2>&1; then
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-
-# Final settle for nvim's initial redraw before driving the editor.
-sleep "$SETTLE"
+wait_ready "$app_pid" 11 "wolf-gnome composed-chord smoke"
 
 # Poll for a readback file the captive Neovim writes. Nothing downstream may read a
 # file we merely hope is there. (The SAVE_SCENARIO body, verbatim.)
@@ -35983,7 +35081,7 @@ fn a_control_chord_while_composing_is_claimed_by_the_input_method_under_cage() {
         status.success(),
         "{SMOKE}: the cage composed-chord scenario exited unsuccessfully ({status}). Read the exit \
          code FIRST.\n\
-         Exit 11: the app died before its window ever mapped — a LAUNCH failure, and nothing below \
+         Exit 11: the app died before it was ready for input — a LAUNCH failure, and nothing below \
          is about the input method.\n\
          Exit 24: the `bufname('%')` readback never appeared, so keys were not reaching Neovim at \
          all. That is the loudest possible symptom of the input-method unit going wrong, because \
@@ -36225,23 +35323,15 @@ const FRAME_STATS_ABSENT_LABELS: [&str; 2] = ["prev.render", "prev.load"];
 /// is why four bursts are typed to close several intervals, and why the last burst's
 /// keystrokes are expected to reach no report at all.
 ///
-/// Exit codes: 11 the app died before the compositor came up, 12 it died between
+/// Exit codes: 11 the app died before it was ready for input, 12 it died between
 /// bursts, 13 it died during the final idle. Each is distinct because "the app is
 /// gone" and "the app shut down" are the same observation otherwise, and because a
 /// dead app produces exactly the empty file that a disabled instrument produces.
 const FRAME_STATS_SCENARIO: &str = r#"
 set -eu
 
-# Poll knobs: up to WAIT_TRIES * WAIT_INTERVAL seconds for CAGE to come up -- NOT
-# for the window to map, which this poll cannot observe (see the poll below).
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
-#
-# SETTLE -- SCENARIO carries the CANONICAL copy of this comment and the measured
-# margin table behind the value; this scenario carries the same value for the same
-# reason. It is the only real budget between spawning the app and the first key:
-# the wtype poll below gates nothing (cage advertises the virtual-keyboard
-# protocol before any surface maps, so it breaks at tries=0 on every run).
 SETTLE=1.0
 #
 # BURST_GAP -- the idle between typing bursts, and the one knob that is this
@@ -36256,27 +35346,7 @@ BURST_GAP=1.2
 # Launch the real app in the background; remember its pid.
 "$WOLF_BIN" &
 app_pid=$!
-
-# Wait for the app to still be alive AND for the compositor to be up. This is NOT
-# an input-readiness gate -- see SCENARIO's copy of this comment. What it still
-# catches is a cage that never came up, and (the kill -0 arm) an app that died on
-# launch, which would otherwise surface as an empty report file and read exactly
-# like an instrument that never armed.
-tries=0
-while [ "$tries" -lt "$WAIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        echo "wolf-gnome frame-stats smoke: app exited before its window mapped (pid $app_pid)" >&2
-        exit 11
-    fi
-    if wtype "" >/dev/null 2>&1; then
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-
-# Give nvim a final moment to finish its initial redraw before typing.
-sleep "$SETTLE"
+wait_ready "$app_pid" 11 "wolf-gnome frame-stats smoke"
 
 # Four bursts of insert-mode typing, each followed by an idle longer than the
 # report interval, so at least two report intervals close with keystrokes inside
@@ -36649,7 +35719,7 @@ fn frame_stats_report_covers_the_live_typing_path_under_cage() {
     assert!(
         status.success(),
         "{SMOKE}: the cage frame-stats scenario exited unsuccessfully ({status}). Exit 11: the app \
-         died before the compositor came up, so nothing was ever typed. Exit 12: it died between \
+         died before it was ready for input, so nothing was ever typed. Exit 12: it died between \
          typing bursts. Exit 13: it died during the final idle. All three are distinct from a \
          clean shutdown on purpose — a process that panicked in the GTK main loop and one that \
          exited cleanly are equally gone, and both produce the same empty report file that a \
@@ -37097,10 +36167,10 @@ enum GtkRuntimeEnv {
 /// It goes THROUGH [`cage_command`] rather than building its own invocation, which
 /// is mandatory rather than tidy: that helper is the single spawn site
 /// [`cage_is_only_spawned_through_the_isolating_helper`] enforces, and it carries
-/// `WOLF_STATE_DIR`, `WOLF_CONFIG_DIR`, `HOME`, `XDG_CACHE_HOME`, `GTK_IM_MODULE`
-/// and the `DBUS_SESSION_BUS_ADDRESS` removal. None of those six is a devShell
-/// export and none of them may be scrubbed: they are the harness's own isolation,
-/// and the config directory in particular is what pins the font family, size,
+/// `WOLF_STATE_DIR`, `WOLF_CONFIG_DIR`, `HOME`, `XDG_CACHE_HOME`, `GTK_IM_MODULE`,
+/// `WOLF_READY_FILE` (with the readiness prelude) and the `DBUS_SESSION_BUS_ADDRESS`
+/// removal. None of those seven is a devShell export and none of them may be
+/// scrubbed: they are the harness's own isolation, and the config directory in particular is what pins the font family, size,
 /// line-height and appearance that every derived band below is computed against.
 ///
 /// What IS removed is [`PACKAGED_SCRUB_ALWAYS`], plus
@@ -37960,7 +37030,7 @@ fn packaged_band_colour(
 ///
 /// Four per launch, derived from a base so the function takes seven parameters
 /// rather than ten (a tenth positional needs `${10}`, which is a trap this file does
-/// not need). The BASE itself means the app died before its window mapped; base plus
+/// not need). The BASE itself means the app died before it was ready for input; base plus
 /// one, still alive after `:qa!`; base plus two, exited non-zero; base plus three,
 /// the readback never appeared. The offsets are spelled in words on purpose: written
 /// as `+ 1` at the start of a line they open a Markdown list, and
@@ -37968,7 +37038,7 @@ fn packaged_band_colour(
 ///
 /// Launch A's base is 11 and launch B's is 15 — so `11`-`14` and `15`-`18`, the scheme
 /// [`APPEARANCE_SCENARIO`] already uses. Eight codes and not four, for that smoke's
-/// stated reason: "the app died before its window mapped" is a different investigation
+/// stated reason: "the app died before it was ready for input" is a different investigation
 /// depending on which binary it was.
 ///
 /// A `grim` failure has no code of its own: it aborts under `set -eu` and the cage
@@ -37976,10 +37046,7 @@ fn packaged_band_colour(
 const PACKAGED_PLUGINS_SCENARIO: &str = r#"
 set -eu
 
-# SETTLE is the ONLY real budget between spawning either run's app and its first
-# keystroke: `wait_window`'s wtype probe does NOT gate input readiness (it breaks
-# at tries=0 on every run -- see the module doc comment).
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 QUIT_TRIES=75
@@ -37993,25 +37060,6 @@ cleanup() {
     fi
 }
 trap cleanup EXIT INT TERM HUP
-
-# $1 is the exit code to use if the app dies first, so launch A and launch B stay
-# distinguishable by the CODE alone; $2 is the label, printed as well so a
-# truncated log needs no code table.
-wait_window() {
-    tries=0
-    while [ "$tries" -lt "$WAIT_TRIES" ]; do
-        if ! kill -0 "$app_pid" 2>/dev/null; then
-            echo "wolf-gnome packaged-plugins smoke: $2 app exited early (pid $app_pid)" >&2
-            exit "$1"
-        fi
-        if wtype "" >/dev/null 2>&1; then
-            return 0
-        fi
-        tries=$((tries + 1))
-        sleep "$WAIT_INTERVAL"
-    done
-    return 0
-}
 
 wait_file() {
     f=$1
@@ -38028,7 +37076,7 @@ wait_file() {
 }
 
 # $1 is the exit code for "still alive after :qa!", $2 for "exited non-zero", and
-# $3 is the label; see wait_window.
+# $3 is the label.
 quit_app() {
     wtype -- ":qa!"
     wtype -k Return
@@ -38062,7 +37110,7 @@ quit_app() {
 # state directories and different exit-code bases, and are otherwise the same run
 # -- which is the whole design of this smoke, so the body must never be duplicated.
 #
-# The seven parameters are saved into named variables FIRST: wait_window and
+# The seven parameters are saved into named variables FIRST: wait_ready and
 # quit_app below rebind $1..$3 for their own calls.
 run_launch() {
     app_bin=$1
@@ -38097,8 +37145,7 @@ run_launch() {
 
     "$app_bin" &
     app_pid=$!
-    wait_window "$code_died" "$label"
-    sleep "$SETTLE"
+    wait_ready "$app_pid" "$code_died" "wolf-gnome packaged-plugins smoke $label"
 
     # --- Step 1: open the fenced fixture in the window's ONE pane ------------
     wtype -- ":e $SRC_FILE"
@@ -38360,13 +37407,13 @@ fn the_packaged_binary_loads_the_vendored_lighthouse_and_orlando_under_cage() {
     assert!(
         status.success(),
         "{SMOKE}: the cage scenario exited unsuccessfully ({status}). Every code names ONE cause \
-         in ONE launch. 11: launch A (the checkout binary at {control_bin}) died before its window \
-         mapped — it runs with the devShell's XDG_DATA_DIRS and GSETTINGS_SCHEMA_DIR kept \
+         in ONE launch. 11: launch A (the checkout binary at {control_bin}) died before it was \
+         ready for input — it runs with the devShell's XDG_DATA_DIRS and GSETTINGS_SCHEMA_DIR kept \
          deliberately, so this is about the binary rather than the environment. 12: launch A was \
          still alive after `:qa!`. 13: launch A exited NON-ZERO — it went away, but not cleanly, \
          which is a separate code because a panic in the GTK main loop makes a process vanish \
          exactly as a clean shutdown does. 14: launch A's readback never appeared at {}. 15: \
-         launch B (the store binary at {}) died before its window mapped, and this is the \
+         launch B (the store binary at {}) died before it was ready for input, and this is the \
          interesting one — launch B runs with WOLF_NVIM_BIN genuinely UNSET, so the wrapper is the \
          only thing that can supply it, and `failed to start core` is what it looks like when it \
          does not. 16/17/18: the same three for launch B, whose readback is at {}. Any other \
@@ -38731,12 +37778,12 @@ fn packaged_preview_ink_band() -> SampleRect {
 /// `run_launch` body with one launch and no per-launch config directory, since the
 /// appearance is not the variable here.
 ///
-/// Exit codes: `11` the app died before its window mapped, `12` still alive after
+/// Exit codes: `11` the app died before it was ready for input, `12` still alive after
 /// `:qa!`, `13` exited non-zero, `14` the window-list readback never appeared.
 const PACKAGED_PREVIEW_SCENARIO: &str = r#"
 set -eu
 
-WAIT_TRIES=75
+# SETTLE is the settle between steps; see SCENARIO.
 WAIT_INTERVAL=0.2
 SETTLE=1.0
 QUIT_TRIES=75
@@ -38757,20 +37804,7 @@ trap cleanup EXIT INT TERM HUP
 
 "$WOLF_BIN" &
 app_pid=$!
-
-tries=0
-while [ "$tries" -lt "$WAIT_TRIES" ]; do
-    if ! kill -0 "$app_pid" 2>/dev/null; then
-        echo "wolf-gnome packaged-preview smoke: app exited early (pid $app_pid)" >&2
-        exit 11
-    fi
-    if wtype "" >/dev/null 2>&1; then
-        break
-    fi
-    tries=$((tries + 1))
-    sleep "$WAIT_INTERVAL"
-done
-sleep "$SETTLE"
+wait_ready "$app_pid" 11 "wolf-gnome packaged-preview smoke"
 
 # --- Step 1: open the SOURCE in the window's ONE pane ------------------------
 #
@@ -38958,7 +37992,7 @@ fn the_packaged_binary_opens_a_preview_under_cage() {
     assert!(
         status.success(),
         "{SMOKE}: the cage scenario exited unsuccessfully ({status}) for the PACKAGED binary at \
-         {}. Exit 11: the app died before its window mapped. Exit 12: still alive after `:qa!`. \
+         {}. Exit 11: the app died before it was ready for input. Exit 12: still alive after `:qa!`. \
          Exit 13: exited NON-ZERO, which is the one to read closely here — WebKit's mandatory \
          bubblewrap sandbox and its out-of-process helpers are what this smoke exists to \
          exercise, and a helper that cannot be spawned takes the process with it rather than \

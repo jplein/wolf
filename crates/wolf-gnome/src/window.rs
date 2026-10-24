@@ -4,10 +4,10 @@
 //! actions and its own contribution to the persisted state tree.
 //!
 //! [`build`] is the whole window. [`crate::coordinator`] is the process-scoped
-//! layer above it and owns the five things a second copy of would be wrong — the
-//! state store, the config, the cell metrics, the `app.`-namespace actions and
-//! the session's launch plans — so everything here is per-window by
-//! construction.
+//! layer above it and owns the six things a second copy of would be wrong — the
+//! state store, the config, the cell metrics, the `app.`-namespace actions, the
+//! session's launch plans and the test-only readiness probe — so everything here
+//! is per-window by construction.
 //!
 //! The window is backed by a live [`WolfCore`]:
 //!
@@ -174,13 +174,14 @@
 //! row; the toast and the popup are overlay children above it, so a message taller
 //! than one line costs the pane area no height and scrolls under a pointer gesture.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+use std::io::Write;
 use std::path::Path;
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
 
 use adw::prelude::*;
-use gtk::glib;
+use gtk::{gdk, glib};
 use wolf_core::{CoreConfig, InputEvent, TabState, WakeFn, WindowState, WolfConfig, WolfCore};
 
 use crate::appearance;
@@ -192,6 +193,7 @@ use crate::frame_stats::Bucket;
 use crate::im_ui;
 use crate::palette::{self, PaletteHandle};
 use crate::picker::{self, PickerHandle};
+use crate::ready_seam;
 use crate::search_overlay::{self, SearchHandle};
 use crate::shell::{
     self, ShellParts, GO_TO_FILE_ACTION, HISTORY_BACK_ACTION, HISTORY_FORWARD_ACTION,
@@ -264,7 +266,7 @@ pub struct WindowParts<'a> {
 }
 
 /// One window's shared state: everything the coordinator needs to ask a window
-/// for, and nothing else.
+/// for — its state contribution and its readiness for input — and nothing else.
 ///
 /// It deliberately does NOT hold the [`crate::shell::AppShell`]. The shell is
 /// already owned for exactly the window's lifetime by the wake-drain future,
@@ -279,6 +281,11 @@ struct WindowInner {
     /// lives inside them; what this window contributes to `state.json` is EVERY
     /// tab's state in tab order — see [`WindowHandle::cached_subtree`].
     tabs: TabsHandle,
+    /// This window's core, read for its liveness by [`WindowHandle::readiness`].
+    core: Rc<RefCell<Option<WolfCore>>>,
+    /// The ordinal of this window's first frame-clock `after-paint`, set only while
+    /// the readiness probe is pending; see [`crate::ready_seam`].
+    first_paint: Cell<Option<u32>>,
 }
 
 /// A cloneable handle to one live window, held STRONGLY by the coordinator.
@@ -393,6 +400,35 @@ impl WindowHandle {
             .and_then(|window| window.tabs.first().map(|tab| tab.cwd.clone()))
             .unwrap_or_default()
     }
+
+    /// This window's reading for the test-only readiness predicate
+    /// ([`crate::ready_seam::launch_readiness`]).
+    ///
+    /// Each value is read in its own statement, so no borrow of the core or the tab
+    /// layer is held across another.
+    #[must_use]
+    pub fn readiness(&self) -> ready_seam::WindowReadiness {
+        let liveness = self.inner.core.borrow().as_ref().map(WolfCore::liveness);
+        let panes = self
+            .inner
+            .tabs
+            .selected()
+            .map(|tab| tab.panes().readiness());
+        let restore_owed = self.inner.tabs.pending_restore().is_some_and(|restore| {
+            ready_seam::restore_owed(restore.layouts.len(), restore.may_create)
+        });
+        let first_paint = self.inner.first_paint.get();
+        let has_keyboard = seat_has_keyboard(&self.inner.window);
+        let has_focus_widget = GtkWindowExt::focus(&self.inner.window).is_some();
+        ready_seam::WindowReadiness {
+            liveness,
+            panes,
+            restore_owed,
+            first_paint,
+            has_keyboard,
+            has_focus_widget,
+        }
+    }
 }
 
 /// Builds one application window and wires it to a freshly started [`WolfCore`].
@@ -414,6 +450,12 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
         config,
         metrics,
     } = parts;
+
+    // Read ONCE: a window built while the test-only readiness probe is pending
+    // wires its triggers; any other window (no `WOLF_READY_FILE`, or a later New
+    // Window) wires none and pays one bool test per wake.
+    let ready_armed = coordinator.ready_pending();
+    let coordinator_weak = coordinator.weak();
 
     // Wake plumbing: the tokio worker fires `wake` (Send + Sync); it only pushes
     // onto the channel. Dropping a "full" send is correct — a redraw is already
@@ -750,6 +792,7 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
         let tabs = tabs.clone();
         let tree = tree.clone();
         let shell = shell.clone();
+        let coordinator_weak = coordinator_weak.clone();
         glib::spawn_future_local(async move {
             while wake_rx.recv().await.is_ok() {
                 // `count(wake) == wakes` exactly, by construction: this counter and
@@ -779,6 +822,13 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
                 // measured region. This is the whole report cadence: nothing here
                 // arms a timer (`crates/wolf-gnome/DECISIONS.md`).
                 frame_metrics::maybe_emit();
+                // The end of a wake is when a pane binds, a grid is resized and a
+                // restore step lands, so it is one of the readiness triggers.
+                if ready_armed {
+                    if let Some(coordinator) = coordinator::upgrade(&coordinator_weak) {
+                        coordinator.check_ready();
+                    }
+                }
             }
         });
     }
@@ -833,6 +883,8 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
             id,
             window: window.clone(),
             tabs: tabs.clone(),
+            core: core.clone(),
+            first_paint: Cell::new(None),
         }),
     };
     coordinator.register(&handle);
@@ -852,8 +904,68 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
     if let Some(area) = (focus_target)() {
         area.grab_focus();
     }
+    if ready_armed {
+        wire_ready_triggers(&handle, coordinator_weak);
+    }
 
     Some(handle)
+}
+
+/// Whether `window`'s display's default seat exposes a keyboard device — the
+/// readiness file's delivery precondition ([`crate::ready_seam`]).
+///
+/// It reads the seat's non-logical devices, `devices(KEYBOARD)`, which lists the
+/// `wtype` virtual keyboard, not `SeatExt::keyboard`: that answers GDK's logical
+/// "Core Keyboard", which exists (and `capabilities()` reports `KEYBOARD`) on a seat
+/// with no keyboard at all, so it would make the conjunct vacuous. Measured under
+/// `cage`: `devices(KEYBOARD)` is empty until a virtual keyboard has existed, and
+/// stays non-empty after the `wtype` that created it exits.
+fn seat_has_keyboard(window: &adw::ApplicationWindow) -> bool {
+    WidgetExt::display(window)
+        .default_seat()
+        .is_some_and(|seat| !seat.devices(gdk::SeatCapabilities::KEYBOARD).is_empty())
+}
+
+/// Connects the two readiness triggers no wake covers: the seat gaining a device
+/// (`device-added`, which is how a keyboard appears) and a painted frame (the frame
+/// clock's `after-paint`, whose first firing also records this window's map
+/// ordinal).
+///
+/// Called by [`build`] only while the readiness probe is pending, after
+/// `present()`, so the frame clock exists. Both closures hold `Weak`s, so neither
+/// keeps the coordinator or the window alive.
+fn wire_ready_triggers(handle: &WindowHandle, coordinator: Weak<CoordinatorInner>) {
+    if let Some(seat) = WidgetExt::display(&handle.inner.window).default_seat() {
+        let coordinator = coordinator.clone();
+        seat.connect_device_added(move |_seat, _device| {
+            if let Some(coordinator) = coordinator::upgrade(&coordinator) {
+                coordinator.check_ready();
+            }
+        });
+    }
+    let Some(clock) = handle.inner.window.frame_clock() else {
+        // Not `eprintln!`, which panics on a failed stderr write: a diagnostic must
+        // never take the application down.
+        let _ = std::io::stderr().write_all(
+            b"wolf-gnome: the window has no frame clock after present(); the readiness file \
+              will never be written\n",
+        );
+        return;
+    };
+    let window = Rc::downgrade(&handle.inner);
+    clock.connect_after_paint(move |_clock| {
+        let Some(coordinator) = coordinator::upgrade(&coordinator) else {
+            return;
+        };
+        if let Some(inner) = window.upgrade() {
+            if inner.first_paint.get().is_none() {
+                inner
+                    .first_paint
+                    .set(Some(coordinator.next_paint_ordinal()));
+            }
+        }
+        coordinator.check_ready();
+    });
 }
 
 /// Installs this window's input method and its key controller, and returns the

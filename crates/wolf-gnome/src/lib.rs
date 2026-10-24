@@ -78,6 +78,12 @@
 //!   gate ([`frame_stats::interval_elapsed`]). It reads no clock and holds no
 //!   state: the process-global glue that does both is [`mod@frame_metrics`], which
 //!   is deliberately not a seam.
+//! - [`mod@ready_seam`]: the test-only READINESS FILE's predicate — when a
+//!   launch's windows accept keystrokes, as a function of per-window readings
+//!   ([`ready_seam::launch_readiness`], which answers the first unmet
+//!   [`ready_seam::Blocker`]), plus the `WOLF_READY_FILE` parser, the file's
+//!   contents and the report-once-per-change rule ([`ready_seam::next_step`]). The
+//!   coordinator gathers the readings and does the I/O.
 //! - [`mod@scrollbar`]: the projection of a Neovim window's `win_viewport` onto a
 //!   pane-local thumb rectangle ([`scrollbar::scrollbar_thumb`]) and that thumb's
 //!   colour over the editor's own background
@@ -401,6 +407,7 @@ pub mod picker;
 pub mod preview_coalescer;
 pub mod preview_link;
 pub mod preview_ui;
+pub mod ready_seam;
 pub mod refresh_coalescer;
 pub mod render;
 pub mod save_ui;

@@ -1,248 +1,304 @@
-# Plan: user-writeable state directories (spell, runtime_user, parsers_user)
+# Plan: readiness waits instead of fixed sleeps in the wolf-gnome cage smokes
 
 ## Status
 
-COMPLETE (pending final markdown lint confirmation) — implementation, tests, BUILD wiring, and docs landed; full wolf-core suite 51/51 uncached (incl. swap_recovery with `env_inherit = ["HOME"]`, and the sweep covered the final rewritten test files — checksum-verified); wolf-ffi 38/38; Bazel lint targets pass; cargo-side gate (fmt/clippy --all-targets/doctests/cargo test) is Linux-only on this host and unexercised. Falsifiability evidence below. Reviewer's blocking items fixed and verified: orlando/parsers_user `--clean` comments corrected to measured behavior (init.lua, tests/parsers_user.rs, durable-user-directory-plan.md), query_predicates one-liner added, pre-existing `-n` launch-line comment drift fixed in nvim.rs + init.lua headers. Technical writer verified all docs against source (two doc-ward fixes: the plan doc's `--clean` clause; tests/README.md spell.rs precondition overclaim); architecture.md / crate README / build.md confirmed unaffected. Known unrelated follow-ups (out of scope, not addressed): `redraw_grid::scroll_emits_viewport` flakes under machine load; pre-existing advisory markdown findings in wolf-gnome docs; five stray untracked root .md files predating this work.
+DONE (increment 1, uncommitted).
 
-## Falsifiability evidence (coder, step 6 — every falsifier applied to app code, captured, restored; restores verified by cmp against snapshots)
+Round 5:
+- `window.rs`: `eprintln!` changed to `write_all`, and the doc comment reworded.
+- Markdown: prettier clean. markdown_check shows only findings that predate this increment (big-file, and the `pane_view.rs`/`tabs_ui.rs` budgets); the coordinator entry was trimmed to fit its budget.
+- Guards: 11 passed. Checks 6 and 7 were each seen red.
+- Gate: all 5 steps exit 0. Workspace 1176 passed, 0 failed; smoke_headless `71 passed … 536.98s`.
 
-| Falsifier | Test | Failure (verbatim core) |
-|---|---|---|
-| Delete WolfSpell autocmd | spell.rs (all 3) | `opening a .md file must turn window-local 'spell' ON … left: "0" right: "1"` |
-| Delete `opt.spellfile` assignment | spell.rs 1 | `'spellfile' must point at the durable <state_dir>/spell/en.utf-8.add … left: ""` |
-| Drop text/gitcommit from prose set | spell.rs 2 only | `'spell' must be ON for filetype=text … left: "0"` |
-| Always-on `"*"` callback | spell.rs 3 only | `…must turn 'spell' OFF … left: "1" right: "0"` |
-| Remove WOLF_SPELL_DIR export | spawn; spell_durable 1 | `WOLF_SPELL_DIR must be exported … left: ""`; `timed out … zg to append the word to the durable en.utf-8.add` |
-| Remove spell `create_dir_all` | spawn; spell_durable 1 | `spawn must create <state_dir>/spell before launch…`; same zg timeout |
-| Drop gsub from 'directory' | spell_durable 2 | `timed out … a .swp entry in the comma'd durable swap dir` |
-| Drop gsub from 'spellfile' | spell_durable 2 | startup aborts: unescaped comma raises E474 in init.lua |
-| Remove WOLF_RUNTIME_USER_DIR export | spawn | `WOLF_RUNTIME_USER_DIR must be exported … left: ""` |
-| Remove WOLF_PARSERS_USER_DIR export | spawn; parsers_user (rtp assertion) | `WOLF_PARSERS_USER_DIR must be exported … left: ""`; `<state_dir>/parsers_user must be ON 'runtimepath'` |
-| Delete seed call in api.rs | spawn; runtime_user 1 | `WolfCore::start must seed <state_dir>/runtime_user with init_user.lua` |
-| Remove parsers_user `create_dir_all` | spawn; parsers_user 1 | `spawn must create <state_dir>/parsers_user before launch` |
-| Delete EOF dofile block | runtime_user 2 | `a pre-existing init_user.lua must be dofile'd at startup … left: "MISSING"` |
-| Remove vim.notify branch | runtime_user 4 | `timed out … the init_user.lua warning to surface via :messages` |
-| Seed when init_user.lua absent | state_unit 3 + runtime_user 3 | `a NON-EMPTY dir must report Ok(false)…`; `…must never be seeded, even when init_user.lua is absent` |
-| Resolver leaf changed | state_unit 1 | `spell_dir() must resolve to <state_dir>/spell … left: Some("…/spellx")` |
-| Seed returns Ok(false) w/o write | state_unit 2 | `seeding a MISSING dir must report Ok(true)…` |
-| Remove from_env spell fallback | state_unit 4 | `…must fall back to the ephemeral state_root/spell … left: ""` |
-| Delete setup+prepend (19b) | parsers_user 2 | `<state_dir>/parsers_user must be ON 'runtimepath' …` |
-| Drop install_dir from setup() | parsers_user 4 | `install dir must be <state_dir>/parsers_user/parser … left: "…/data/wolf/site/parser"` |
+Earlier: STEP 9b. Reviewer: approved, no blockers. Decisions:
+- Guard hardening accepted. These two checks are added to `every_launch_waits_…`:
+  - (6) the first non-blank, non-comment line after each `app_pid=$!` starts with `wait_ready "$app_pid"`;
+  - (7) the count of `app_pid=$!` lines equals the count of launch lines.
+- Comment fixes in smoke_headless.rs go to the test-writer:
+  - the dangling pointer at about :17138 and the missing heading cited at about :10712;
+  - the "six"/"four"/tally counts at about :10688, :10509 and :10745;
+  - the past-tense phrasing ("replaced", "the old launch probe") at about :294, :10782, :10848, :10854 and :10957.
+- The technical writer handles:
+  - tests/README :186, "Nothing sleeps after `wait_ready`", which is wrong (TREE_SETTLE follows it at three sites). The guard enforces only no sleep between a launch and its `wait_ready`.
+  - Owner overlap: the src/README `ready_seam.rs` Decisions bullets restate DECISIONS.md.
+  - The DECISIONS wording "physical keyboard device".
+  - The E4 entry in "What is still unproven".
+- The coder then runs the guard, falsifiers for checks 6 and 7, clippy and fmt, and the markdown checks.
+- Tell the user: `./tools/wolf-package-smoke.sh` exits 40 until the package is rebuilt from a commit containing `ready_seam.rs`.
 
-Three named falsifiers measured non-falsifying (rulings above): reference on-only autocmd (spell.rs 3), prepend-alone deletion, runtime-call deletion.
+The technical writer is done:
+- tests/README: the after-`wait_ready` wording, the guard's three checks, and the E4 "unproven" entry.
+- src/README: the duplicated bullets are cut.
+- DECISIONS: virtual keyboard / non-logical devices.
+
+It had no shell, so the coder runs prettier and markdown_check on tests/README.md, DECISIONS.md and src/README.md.
+
+Added for the coder's final round:
+- `window.rs` about :945: the new "no frame clock after present()" diagnostic uses `eprintln!`, which breaks the DECISIONS:359 rule. Switch it to `write_all` with the result discarded.
+- `window.rs` about :916: the comment says "The PHYSICAL devices". Reword it to "non-logical devices (the `wtype` virtual keyboard counts)".
+
+Previous: STEP 9 (reviewer running → technical writer). Round 4 is green. T12 is now a `StepCase` row struct. `cargo fmt --check` passes with exit 0, and plain `cargo clippy --workspace --all-targets -D warnings` passes with exit 0. `ready_seam` has 15 passed, and the T12 falsifier went red again. The round 3 gate covers build and test, since only test code changed. Coder round 3 done. All 15 unit tests and the guard pass; every unit falsifier (T1–T14, check order) and all 5 guard falsifiers went red, each restored by checksum. E1 red: exit 40 at 32.10 s. E2 red in 5/5, OCR without "hello", signature (a). E4 green in 10/10, and neither relaunch smoke ever logs `layout-pending`/`restore-owed`, because the synchronous wake in `window::build` settles the restore before the first check. That goes into tests/README "What is still unproven", where those two conjuncts' only falsifiers are their unit rows (technical writer). Flake: five full runs, all `71 passed`, at 536.34 / 534.34 / 533.58 / 531.94 / 533.09 s, against a 580.18 / 578.47 s baseline. Relaunch and save smokes passed 5/5 each, and the typed-text smoke passed 10/10 under 32 busy-loops. Gate: fmt, prettier, build and test (1176 passed, 0 failed) are green. Clippy is red: `clippy::type_complexity` at `ready_seam.rs:991`, the `cases` tuple array in `next_step_table`, which goes to the test-writer.
+
+Previous: STEP 8 (coder round 3: run new tests, falsifiers, flake loops, gate). Test-writer done: 15 unit tests in ready_seam.rs (T1–T14 + `blockers_are_reported_in_check_order`), guard `every_launch_waits_for_readiness_before_its_first_input` (5 checks, floor 62 launch sites: 61 `"$WOLF_BIN" &` + 1 `"$app_bin" &`), counts → Eleven guards / `71 passed`. Accepted extensions: any `sleep` (not only SETTLE) between launch and `wait_ready` fails check 3; the next launch line ends a scan. Coder round 2 done: R1 implemented, H1 measured true, full conversion + docs applied. Full smoke run after: `70 passed … finished in 536.49s`, real 8m56.554s (baseline 580.18 s / 578.47 s, real 9m40s / 9m38s): ~43 s saved. SAVEAS gate did not discriminate (E139 on the falsifier's second write), so `DIALOG_SETTLE` stays at that site with a comment. Remaining: test-writer (unit tests, guard, counts) → coder (run them, falsifiers E1, E2, E4 + guard and unit falsifiers, flake loops, gate) → reviewer → technical writer.
+
+### Evidence so far
+- E3 (= H1(a), priming removed): `wolf-ready: waiting on no-keyboard`, exit 40, `finished in 32.71s`.
+- H1(b): with priming, `kbd_devices=1 has_keyboard=true live_wtype_procs=0` → `wolf-ready: wrote …`.
+- H1(c): `window_renders_typed_text_under_cage --exact` 20/20, 2.85–2.94 s each.
+- E5 Save: the documented revert → `timed out waiting for svromeo.md to contain zzsavedelta` + the Rust assertion names the failure.
+
+### R1 amendments from coder round 2
+- `has_keyboard` reads `!seat.devices(gdk::SeatCapabilities::KEYBOARD).is_empty()`, not `Seat::keyboard()`/`capabilities()`: GDK returns the logical "Core Keyboard" and `KEYBOARD` caps even with zero physical keyboards (measured `keyboard=Some("Core Keyboard") caps=POINTER | KEYBOARD kbd_devices=0`).
+- Trigger: `seat.connect_device_added`, gated on `ready_armed`; the `notify::is-active` trigger is removed.
+- The guard's "no old probe" check matches the exact old loop line `if wtype "" >/dev/null 2>&1; then` (`wtype ""` legitimately remains in the priming code).
+
+## Revision R1 (orchestrator decision, from coder measurements)
+
+Measured by the coder (10-run loops and manual cage runs; all experiments reverted):
+- Under headless cage, `gtk::Window::is_active()` becomes true only after a virtual keyboard sends a real key event; `wtype ""` does not activate the window. The plan's `active` conjunct deadlocks: `wolf-ready: waiting on not-active` for 30 s, exit 40.
+- The `wtype ""` poll is NOT vacuous. It creates a virtual keyboard, so the seat gains keyboard capability. Without it, the first key is lost in 5/10 runs (signature (c): the leading `i` dropped). With `active` off and one `wtype ""` at the start of `wait_ready`: 10/10 pass.
+
+Decision:
+1. Replace `Blocker::NotActive` with `Blocker::NoKeyboard` (label `no-keyboard`). `WindowReadiness.active` becomes `has_keyboard: bool`, read as "this window's display's default seat exposes a keyboard device" (`gdk::Display::default_seat()` → `Seat::keyboard()` is `Some`, or the gtk4-rs equivalent). It stays an input-window conjunct, checked last. Rationale: the observed loss is a seat-capability race — a key sent before the client has bound `wl_keyboard` has no resource to land on. The conjunct is the client-side half of that race; the priming is the server-side half.
+2. `wait_ready` runs one `wtype ""` before polling, with its own failure message (wtype missing, or cage not up yet; retry it inside the poll loop until it succeeds). It sends no key event.
+3. Before converting the remaining scenarios, the coder must measure hypothesis H1: (a) without the priming, the predicate times out naming `no-keyboard` (this becomes falsifier E3, replacing the old one); (b) with the priming, `has_keyboard` turns true and stays true after `wtype ""` exits; (c) `window_renders_typed_text_under_cage --exact` passes 20/20. If H1(a) or H1(b) is false, stop and report; do not fall back to a sleep.
+4. Accepted from the coder: `wait_ready` kills the app (`kill "$1"`) before `exit 40` on timeout, so a red run fails in ~30 s instead of hanging cage; `#[must_use]` removed from `launch_readiness` (clippy `double_must_use`).
+5. Docs and comments: the plan's claim that the `wtype ""` poll is vacuous is wrong. Rewrite the relevant comments and docs to say it primes the seat's keyboard capability, and that `wait_ready` now does that.
+6. Test-writer changes: T2/T4/T13/T14 rows use `NoKeyboard`/`has_keyboard`/`no-keyboard`; `ALL` stays 10 entries. The guard matches a definition only where the trimmed line starts with `wait_ready() {` (the pointer helper `hwait_ready() {` contains the substring).
+
+## Measurement isolation
+
+The harness removes `DBUS_SESSION_BUS_ADDRESS`, but GIO falls back to `$XDG_RUNTIME_DIR/bus`. While the user's own packaged wolf-gnome was running, every smoke launch handed off to it as a single-instance activation; the first baseline attempt failed every test and left windows in the user's instance. All measurements in this increment run with `XDG_RUNTIME_DIR` set to a private directory on the command line (e.g. `XDG_RUNTIME_DIR=/tmp/claude-1000/wolf-xdg`). Fixing the gap in the harness is out of scope here (it belongs with the private-runtime-dir work in step 2) and has been reported to the user.
 
 ## Problem statement
 
-Implement the work described in `durable-user-directory-plan.md` (repo root — authoritative scope). The embedded Neovim runtime stays immutable in the app bundle / nix store. Wolf adds user-writeable directories under the platform state dir (`state_dir()` in `crates/wolf-core/src/state.rs`), all resolved core-side and handed to `runtime/nvim/init.lua` via `WOLF_*` env vars following the existing `WOLF_SWAP_DIR` pattern. No front-end (Swift/GTK/FFI) changes.
+The 60 `*_under_cage` smokes in `crates/wolf-gnome/tests/smoke_headless.rs` took 576 s of a 676 s `cargo test --workspace` run. They serialize on `CAGE_LOCK`; each launches cage + wolf-gnome + captive nvim + WebKit through the single helper `cage_command`, runs a `sh -c` scenario, then grim + tesseract OCR.
 
-1. **Spell**: enable spell checking for `markdown`/`text`/`gitcommit` only, plus a durable user dictionary (`state_dir()/spell`, `WOLF_SPELL_DIR`, `'spellfile'` at `<dir>/en.utf-8.add`). Reference: `git diff main...feat/spell-check` (reapply/adapt; do not merge).
-2. **runtime_user/**: seeded once (only when missing or empty) with an `init_user.lua` template; never touched when non-empty; `WOLF_RUNTIME_USER_DIR`; sourced via `pcall(dofile, …)` at the very end of `init.lua`; user-file errors are `vim.notify` warnings.
-3. **parsers_user/**: created in `spawn`; `WOLF_PARSERS_USER_DIR`; `init.lua` activates the vendored nvim-treesitter (main branch) — runtime-source its plugin file, `require("nvim-treesitter").setup({ install_dir = … })`, user parsers shadow bundled `parsers/`.
+Most of that time is fixed sleeps in the scenario scripts: 291 `sleep "$SETTLE"` (SETTLE=1.0, 55 copies of the knob; canonical comment at the `SCENARIO` const ~line 2603), plus PREVIEW_SETTLE=2.0, TREE_SETTLE=1.5, DRAWER_SETTLE=2.0, TABS_BAR_SETTLE=2.0, TOGGLE/PASTE/DIALOG_SETTLE=2.0, RESTORE_SETTLE, MRU_GAP, COMPOSE_STEP, POINTER_STEP.
 
-## Falsifiability findings + orchestrator rulings (post-coder step 6)
+Goal: replace fixed sleeps with waits on the condition the next step actually depends on, cutting suite time without adding flakiness, and making the smokes tolerant of a loaded machine (so a later, out-of-scope step can run cages in parallel).
 
-Three named falsifiers did not falsify; measurements accepted, rulings:
+### Known facts
 
-1. **spell.rs test 3 passes under the reference on-only autocmd** — `vim.opt_local` spell is NOT sticky on this pinned nvim (window-local value resets from window-global on buffer switch). RULING: keep the `"*"`-with-explicit-off design as determinism hardening (it guarantees spell off for non-prose regardless of window-global state and survives future `vim.o.spell`-touching code), but every comment/doc stating the stickiness premise must be corrected to this measured rationale. Test 3 stays (it falsifies an always-on callback — evidence 4b).
-2. **Deleting the parsers_user rtp prepend alone is invisible** — `setup()` eagerly prepends the identical string; the explicit prepend is load-bearing only when `pcall(setup)` fails. RULING: keep the prepend; combined falsifier 19b (setup + prepend deleted) is the accepted evidence; no test change.
-3. **Deleting `vim.cmd.runtime("plugin/nvim-treesitter.lua")` is invisible** — measured: `--clean` keeps `'loadplugins'` on, so rtp-prepended `plugin/*.lua` load post-init anyway. RULING: keep the explicit call (registers `:TSInstall` deterministically during init); assertion 3 is a regression guard, not a falsifiable edge; coder already corrected the false premise in init.lua comments and the README's orlando decision.
+- The first SETTLE is the only budget before the first keystroke. The existing `wtype ""` poll is vacuous: cage advertises the virtual keyboard before any surface maps. SETTLE was measured (warm shader cache threshold 0.25 s, cold 0.35 s, chosen 1.0). Failure signature (a) in `window_renders_typed_text_under_cage` documents what lost early keystrokes look like.
+- Many smokes have the captive Neovim write "readback" files (getcwd(), bufname, winwidth, …, via typed `:call writefile(...)`) under XDG_RUNTIME_DIR, then sleep, then the Rust side reads them. Those sleeps can become polls for the file with a generous timeout.
+- No app-side readiness hook exists. A test-only signal (e.g. an env var naming a file the app touches once the first frame is drawn AND the captive Neovim is attached and accepting input) would replace the first SETTLE. Open question: whether per-surface readiness (WebKit preview loaded, drawer, tree, tab bar) is needed for the other settles.
+- Many settle values carry measured-flake history in their comments. They must not simply be shrunk. Every replaced wait must become a condition the following step genuinely depends on, with a timeout that fails loudly and names the condition.
 
-Also landed by orchestrator approval: `env_inherit = ["HOME"]` on the `swap_recovery` Bazel target (pre-existing environmental failure, proven unrelated).
+### Scope and increments
 
-## Orchestrator decisions
+- Increment 1 (this run): the app-side readiness signal; replace the initial SETTLE across all scenarios; convert readback-file sleeps to polls.
+- Later increments (not this run unless the plan says otherwise): per-surface settles (preview, drawer, tree, tabs, dialogs, paste, pointer steps).
+- Out of scope: parallel cages, private XDG_RUNTIME_DIR per cage, replacing CAGE_LOCK.
 
-- The architect's deviation from the reference diff is ACCEPTED: the `WolfSpell` autocmd uses `pattern = "*"` setting `spell` on for prose filetypes and OFF otherwise (window-local `'spell'` is sticky; the reference's on-only autocmd leaves spell enabled when a prose window switches to a non-prose file). `tests/spell.rs` test 3 pins this.
-- Seeding lives in `api.rs::WolfCore::start` (not `spawn`) so the respawn path stays free of a new failure surface.
-- `swap_recovery.rs` is NOT modified; comma-escaping coverage lives in `spell_durable.rs`.
+### Requirements
 
-# Architect plan (execute as written)
+- Measure before/after wall time of the smoke binary: `nix develop --command cargo test -p wolf-gnome --test smoke_headless`.
+- Run the converted smokes repeatedly (at least 5x) to check flakiness.
+- Any app-side hook is documented, off by default, and costs nothing when unset (mirror `WOLF_FRAME_STATS`).
+- Docs per CLAUDE.md: update `crates/wolf-gnome/DECISIONS.md`, `src/README.md` and `tests/README.md` entries in place (net-negative where possible), present tense only, prettier after editing Markdown.
+- Final check: the Linux verification gate in `build.md` passes.
+- Do not commit.
+
+---
+
+# Architect plan — Increment 1: app-side readiness signal + file waits replace fixed launch sleeps
 
 ## 1. Summary
 
-Three new directories resolved core-side, exported as env vars: `spell/` (durable `zg`/`zw` dictionary + spell on for prose filetypes), `runtime_user/` (one-time seed of `init_user.lua`, sourced last), `parsers_user/` (`:TSInstall` target; vendored nvim-treesitter activated as a real plugin). Also carries the reference branch's swap hardening not yet landed: comma-escaping of `'directory'` in `init.lua` (the fatal `create_dir_all` half already landed at `nvim.rs:1728`, but its comment still says "best-effort" — fix the comment). `CoreConfig` untouched.
+A test-only, off-by-default hook `WOLF_READY_FILE=<path>`: the app writes its pid to that path once its launch windows accept keystrokes. A shared shell prelude (`cage_command` prepends it to every scenario) provides `wait_ready <pid> <died-code> <label>`, which polls for the file to name the launched pid (30 s, then exit 40 naming the condition). In every scenario, the vacuous `wtype ""` loop / `wait_window` call plus the initial `sleep "$SETTLE"` after each launch (62 launch sites + 1 twin-launch site) becomes one `wait_ready`; the 5 run-2 `sleep "$RESTORE_SETTLE"` lines go too, since "restore finished" is a conjunct. Two sleeps waiting for a file Neovim writes (end of the Save smoke and the Save As dialog smoke) become content polls.
 
-## 2. Pre-flight verification (coder, read-only, before treesitter wiring)
+Investigation finding: every typed `:call writefile(...)` readback already uses `wait_file` (59 call sites, 32 copies of the function); no `sleep "$SETTLE"` is a readback wait, so item (b) reduces to the two save-file waits. The remaining 227 `sleep "$SETTLE"` are inter-step waits for something else and stay (classified in §3). Expected saving this increment: ~45–60 s.
 
-The vendored nvim-treesitter is the **main branch** (pinned in `bazel/nvim-treesitter/extensions.bzl`, commit `4916d659…`; tree: `nvim-treesitter/{lua,plugin,queries,LICENSE}`). It is a Bazel external, not checked in. Verify against the fetched tree (`$(bazel info output_base)/external/*nvim_treesitter*/…`, or download the pinned tarball):
+### What "ready to accept keystrokes" means (evidence)
 
-1. **`:TSInstall` is registered by `plugin/nvim-treesitter.lua`**, not by `setup()`. Under `--clean`, plugin dirs are never scanned, so `init.lua` must `vim.cmd.runtime("plugin/nvim-treesitter.lua")` after prepending the tree to `runtimepath` (orlando pattern). Verify the exact plugin file name.
-2. **`require("nvim-treesitter").setup({ install_dir = … })` is a lightweight config merge** — no install jobs, no network/compilation.
-3. **`install_dir` lands on `runtimepath` only lazily** (expected accessor: `require('nvim-treesitter.config').get_install_dir('parser')` — verify name; the `parsers_user.rs` probe depends on it). `init.lua` therefore **prepends** `WOLF_PARSERS_USER_DIR` itself, unconditionally — which also gives user parsers precedence over bundled `parsers/`.
+- Core attached: `WolfCore::start` (`crates/wolf-core/src/api.rs:237-359`) blocks inside `window::build` (`window.rs:434`) until nvim is spawned, `ui_attach`ed and every `setup_*` RPC has answered; the input pump is an unbounded FIFO (`api.rs:370-425`), so once `build` returns, a key that reaches GTK reaches nvim.
+- Key path wired: `wire_keys` (`window.rs:814`, `im.focus_in()` `:951`) and the focus grab (`:852`) run synchronously in `build`. `GTK_IM_MODULE` is pinned to the simple context (`smoke_headless.rs:11429`), so no async IM dependency.
+- The missing precondition is the compositor's. Signature (a) (`smoke_headless.rs:15796-15807`) is keys sent before the toplevel is mapped and keyboard-focused, which cage drops before GTK sees them. cage gives keyboard focus to the newest mapped view and activates it, which GTK reports as `gtk::Window::is_active()`. The file is written only after the app processed that activation, and wtype starts only after the file exists, so cage processes wtype's keys after routing focus to the window. `is_active` of the last-mapped launch window is the delivery conjunct.
+- Panes exist and are sized: panes appear on the first wake with a window grid (`pane_view.rs:629`); grid sizes follow the allocation (`pending_resize` `:1501`, `on_pane_resize` `:2523`). Pointer smokes click at derived pixels straight after launch and several readbacks read `winwidth`, so the last-mapped window must have ≥1 bound pane and every bound pane's `requested_grid` (`:296`) must equal the snapshot grid's `cols`/`rows`.
+- Restore finished: tab 0's saved layout is consumed on a later wake (`consume_pending_layout` `:665`) and tabs 1..n are created on later wakes (`tab_view.rs:475`), both with blocking main-thread RPCs that can interleave with typed keys. Every launch window needs `pending_layout == None` and no restore queue still owing pages (an abandoned restore, `may_create == false`, `tab_view.rs:172-194`, counts as finished).
+- Multi-window restore (two-window smoke run 2): restore conjuncts apply to all launch windows (wake-driven); input conjuncts (focus widget, grids sized, active) apply only to the window whose first frame committed last, because cage maps and focuses it last. That is not necessarily the last-built one (the two-window smoke records that focus is not fixed). An older covered window may get no frame callbacks (inferred from wlroots occlusion, not measured), so requiring it be sized could hang.
+- First frame drawn: each launch window must have committed ≥1 frame (frame-clock `after-paint`); the ordinal of the first after-paint is the map order, since all windows share one `wl_display` and cage processes their first commits in that order.
+- Rejected conjunct, "Neovim not at a prompt": the signal means "keys are delivered", not "interpreted as intended"; the fresh-cwd rule prevents the swap modal, and signature (c) must stay visible as a startup bug.
+- Once per process: fires once after `restore_session`, never re-armed. Neovim restart readiness and mid-run New Window are later increments (C6, C7).
+- No settle after `wait_ready`: every delivery precondition is a conjunct. If a first keystroke is still lost, a conjunct is missing; a sleep would hide it.
 
-If any assumption fails: keep the manual rtp prepend (load-bearing regardless); fallback for a missing/misnamed plugin file is sourcing whatever `plugin/*.lua` the tree ships; fallback for a heavy `setup()` is the `pcall` wrap (already specified). Report the verified accessor + plugin file name to the orchestrator.
+## 2. Files to create
 
-## 3. Files to create (test-writer)
+### `crates/wolf-gnome/src/ready_seam.rs` (new; pure — no GTK, no env reads, no clock)
 
-- `crates/wolf-core/tests/spell.rs`
-- `crates/wolf-core/tests/spell_durable.rs`
-- `crates/wolf-core/tests/runtime_user.rs`
-- `crates/wolf-core/tests/parsers_user.rs`
+Coder writes the non-test part; test-writer appends `#[cfg(test)] mod tests`.
 
-No new source files.
+- `pub const READY_FILE_ENV: &str = "WOLF_READY_FILE";`
+- `pub const LINE_PREFIX: &str = "wolf-ready: ";` (stderr prefix)
+- `#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub struct PaneReadiness { pub bound: usize, pub sized: usize, pub layout_pending: bool }`
+- `#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub struct WindowReadiness { pub liveness: Option<wolf_core::Liveness>, pub panes: Option<PaneReadiness> /* None = no selected tab */, pub restore_owed: bool, pub first_paint: Option<u32>, pub active: bool, pub has_focus_widget: bool }`
+- `#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub enum Blocker { NoLaunchWindow, CoreNotAlive, NoSelectedTab, NoPaneBound, LayoutPending, RestoreOwed, NotPainted, NoFocusWidget, GridsUnsized, NotActive }` with `pub const ALL: [Blocker; 10]` and `pub fn label(self) -> &'static str` (labels: `no-launch-window`, `core-not-alive`, `no-selected-tab`, `no-pane-bound`, `layout-pending`, `restore-owed`, `not-painted`, `no-focus-widget`, `grids-unsized`, `not-active`).
+- `#[must_use] pub fn launch_readiness(windows: &[WindowReadiness]) -> Result<(), Blocker>` — fixed check order (tests pin it):
+  1. empty slice → `NoLaunchWindow`;
+  2. for each window in slice order: `liveness == Some(Alive)` else `CoreNotAlive` (exhaustive match over `Option<Liveness>`, no `_` arm); `panes` is `Some` else `NoSelectedTab`; `bound >= 1` else `NoPaneBound`; `!layout_pending` else `LayoutPending`; `!restore_owed` else `RestoreOwed`; `first_paint.is_some()` else `NotPainted`;
+  3. the input window is the one with the greatest `first_paint`; it must have `has_focus_widget` (else `NoFocusWidget`), `sized == bound` (else `GridsUnsized`), `active` (else `NotActive`), in that order;
+  4. `Ok(())`.
+- `#[must_use] pub fn grid_settled(requested: Option<(u16, u16)>, actual: Option<(usize, usize)>) -> bool` — true only when both `Some` and cols and rows are equal (`usize::from`, not `as`).
+- `#[must_use] pub fn restore_owed(queued: usize, may_create: bool) -> bool` — `queued > 0 && may_create`.
+- `#[must_use] pub fn ready_file_path(raw: Option<&str>) -> Option<&str>` — the same trim rule as `frame_stats::report_file_path`.
+- `#[must_use] pub fn ready_file_contents(pid: u32) -> String` — `format!("{pid}\n")`.
+- `#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub enum ReadyStep { Write, Report(Blocker), Wait }` and `#[must_use] pub fn next_step(last: Option<Blocker>, now: Result<(), Blocker>) -> ReadyStep`: `Ok` → `Write`; `Err(b)` with `Some(b) != last` → `Report(b)`; otherwise `Wait`.
 
-## 4. Files to modify
+Module doc: one short block with each conjunct's reason (as above), why older windows need no sizing, and why there is no post-ready margin. No other new files (unit tests live in the seam; the guard goes in `smoke_headless.rs`).
 
-### 4.1 `crates/wolf-core/src/state.rs` — coder
+## 3. Files to modify
 
-Add, directly after `swap_dir_for` (~line 243):
+### `crates/wolf-gnome/src/lib.rs`
+`pub mod ready_seam;` (alphabetical, before `refresh_coalescer`) and one bullet in the crate doc's seam list.
 
-- `pub fn spell_dir() -> Option<PathBuf>` — `state_dir().map(|d| d.join("spell"))`. `#[must_use]`. Doc: global, deliberately not per-project (a word list belongs to the language, not the open folder); `None` only when `state_dir()` unresolvable → `NvimConfig::from_env` falls back to ephemeral `state_root/spell`.
-- `pub fn runtime_user_dir() -> Option<PathBuf>` — `state_dir().map(|d| d.join("runtime_user"))`. `#[must_use]`.
-- `pub fn parsers_user_dir() -> Option<PathBuf>` — `state_dir().map(|d| d.join("parsers_user"))`. `#[must_use]`.
-- `pub const INIT_USER_FILE_NAME: &str = "init_user.lua";`
-- `const INIT_USER_TEMPLATE: &str` — Lua comments only: this file is the user's, loaded after every Wolf default at the end of Wolf's `init.lua`, never overwritten once the directory is non-empty, errors reported as warnings. Must include the exact greppable sentence `-- Wolf loads this file last, so anything here overrides Wolf's defaults.`
-- `pub fn seed_runtime_user_dir(dir: &Path) -> std::io::Result<bool>` — dir missing: `create_dir_all` + write template, `Ok(true)`. Exists with zero entries: write template, `Ok(true)`. Non-empty: touch nothing — **even when `init_user.lua` is absent** — `Ok(false)`. Doc the one-time-seed contract (sole exception to "Wolf never writes into the user's state-dir subtrees").
+### `crates/wolf-gnome/src/app.rs`
+`pub(crate) fn ready_file_path() -> Option<PathBuf>`: `std::env::var(ready_seam::READY_FILE_ENV)` through `ready_seam::ready_file_path`. Glue only, shaped like `init_lua_path` (`:148`).
 
-### 4.2 `crates/wolf-core/src/lib.rs` — coder
+### `crates/wolf-gnome/src/pane_view.rs`
+`PaneHandle::readiness(&self) -> ready_seam::PaneReadiness` next to `snapshot_readiness` (`:3452`), delegating to a new `PaneInner::readiness`. Borrow discipline, four separate statements: (1) `layout_pending = self.pending_layout.borrow().is_some()`; (2) collect `(grid, requested_grid)` for panes whose `grid` is `Some`; (3) read the snapshot under its own core borrow and count pairs where `ready_seam::grid_settled(req, snap.grid(g).map(|g| (g.cols, g.rows)))`; (4) return `PaneReadiness { bound: pairs.len(), sized, layout_pending }`. Nothing else changes.
 
-Extend the `pub use state::{…}` re-export (line 118) with `spell_dir`, `runtime_user_dir`, `parsers_user_dir`, `seed_runtime_user_dir`, `INIT_USER_FILE_NAME`.
+### `crates/wolf-gnome/src/coordinator.rs`
+- Private `struct ReadyProbe { path: PathBuf, launch: Option<Vec<WindowId>>, last: Option<Blocker>, fired: bool, next_paint: u32 }`; field `ready: RefCell<Option<ReadyProbe>>` on `CoordinatorInner` (`:91-108`), set in `build()` (`:122`) from `app::ready_file_path()`.
+- `pub fn ready_pending(&self) -> bool` (probe exists and has not fired); `pub fn next_paint_ordinal(&self) -> u32` (increments `next_paint`).
+- `pub fn check_ready(&self)`:
+  1. in its own statement, clone `(path, launch)` out if the probe is pending and `launch` is `Some`; otherwise return;
+  2. build one `WindowReadiness` per launch id from `self.handles()` (a missing handle → `liveness: None` and defaults);
+  3. `launch_readiness`;
+  4. in one `borrow_mut` statement apply `next_step` (`Report(b)` → set `last`; `Write` → `fired = true`);
+  5. after the borrow is released, do the I/O. `Report` → stderr `"{LINE_PREFIX}waiting on {label}\n"` via `write_all`, result discarded (the frame-metrics rule: never `eprintln!` on a diagnostic path). `Write` → `ready_file_contents(std::process::id())` to `<path>.tmp` (append `.tmp` to the `OsString`), `std::fs::rename` to `path`, then `"{LINE_PREFIX}wrote {path}\n"`; on error print `could not write …` once and stay fired.
+- Private `fn arm_ready(&self, launch: Vec<WindowId>)`.
+- `open_window` (`:327`) returns `Option<WindowId>` (`.map(|h| h.id())`); `open_new_window` (`:311`) uses `.is_none()`.
+- `restore_session` (`:258`) collects opened ids, then `self.arm_ready(ids); self.check_ready();`.
+- Module doc: a sixth bullet, "the test-only readiness probe — process-scoped because its condition spans every window the launch restores".
 
-### 4.3 `crates/wolf-core/src/nvim.rs` — coder
+### `crates/wolf-gnome/src/window.rs`
+- `WindowInner` (`:273`): add `core: Rc<RefCell<Option<WolfCore>>>` and `first_paint: Cell<Option<u32>>`; update its doc ("everything the coordinator needs to ask a window for").
+- `pub fn readiness(&self) -> ready_seam::WindowReadiness` on `WindowHandle`, each read its own statement: `liveness` = `core.borrow().as_ref().map(WolfCore::liveness)`; `panes` = `tabs.selected().map(|t| t.panes().readiness())`; `restore_owed` = `tabs.pending_restore().is_some_and(|r| ready_seam::restore_owed(r.layouts.len(), r.may_create))`; `first_paint` = `first_paint.get()`; `active` = `window.is_active()`; `has_focus_widget` = the window's focus widget is `Some` (`GtkWindowExt::focus` or `RootExt::focus`, whichever gtk4-rs exposes).
+- In `build`: at the top, `let ready_armed = coordinator.ready_pending();` and `let coordinator_weak = coordinator.weak();`. In the drain-loop future (`:753-783`), after `frame_metrics::maybe_emit()`: `if ready_armed { if let Some(c) = coordinator::upgrade(&coordinator_weak) { c.check_ready(); } }`. After `window.present()` and the focus grab (`:849-854`), if `ready_armed`, call a new private `fn wire_ready_triggers(handle: &WindowHandle, coordinator: Weak<CoordinatorInner>)` that connects `window.connect_is_active_notify(→ check_ready)` and `window.frame_clock()`'s `connect_after_paint` (first sets `first_paint` from `coordinator.next_paint_ordinal()` if `None`, then `check_ready`). Both closures hold `Weak<WindowInner>` and `Weak<CoordinatorInner>`. If `frame_clock()` is `None`, print one message.
+- When unset, nothing is connected: one env read per process, one bool test per wake.
+- No `tab_view.rs` changes: `selected()` (`:802`), `pending_restore()` (`:836`) and `TabHandle::panes()` (`:252`) already exist.
 
-- New `pub struct DurableDirs` (near `NvimConfig`, ~line 60), derive `Clone, Debug, Default`: `pub swap_dir: Option<PathBuf>`, `pub spell_dir: Option<PathBuf>`, `pub runtime_user_dir: Option<PathBuf>`, `pub parsers_user_dir: Option<PathBuf>`. (Keeps `from_env` under clippy `too_many_arguments`.)
-- `NvimConfig` gains: `pub spell_dir: PathBuf` (resolved, fallback applied; doc like `swap_dir`), `pub runtime_user_dir: Option<PathBuf>`, `pub parsers_user_dir: Option<PathBuf>`.
-- `NvimConfig::from_env(init_lua: PathBuf, cwd: PathBuf, dirs: DurableDirs, cols: u16, rows: u16)`. Body: `swap_dir = dirs.swap_dir.unwrap_or_else(|| state_root.join("swap"))`; `spell_dir = dirs.spell_dir.unwrap_or_else(|| state_root.join("spell"))` (ephemeral fallback: `zg` works, words die with process); `runtime_user_dir`/`parsers_user_dir` carried as `Option` (`None` = skip: no creation, no export, init.lua no-ops).
-- `spawn` (~1720-1751):
-  - Fix stale comment above `create_dir_all(&cfg.swap_dir)` (1726-1727): the call IS fatal; say why (missing `'directory'` silently degrades crash recovery).
-  - Add fatal `create_dir_all(&cfg.spell_dir)` with comment: nvim never creates the parent of an explicit `'spellfile'`; missing parent → `zg` fails E484 silently.
-  - `if let Some(d) = &cfg.parsers_user_dir` → fatal `create_dir_all(d)`.
-  - Env exports: unconditional `.env("WOLF_SPELL_DIR", &cfg.spell_dir)`; conditional `WOLF_RUNTIME_USER_DIR` / `WOLF_PARSERS_USER_DIR` when `Some`.
-  - Update `spawn` doc comment's env-var list.
+### `crates/wolf-gnome/tests/smoke_headless.rs` (coder: harness + scenarios; test-writer: guard + guard counts)
 
-### 4.4 `crates/wolf-core/src/api.rs` — coder
+**Harness**
+- `const READINESS_PRELUDE: &str` (shell) defining `READY_TRIES=600`, `READY_INTERVAL=0.05` (30 s), `READY_TIMEOUT_EXIT=40`, and:
+  - `wait_ready()`, with only `_ready_`-prefixed variables so it cannot clobber a scenario's `tries`/`t`. Each iteration: `kill -0 $1` failing → echo "`$3` (pid `$1`) exited before it was ready for input" and `exit "$2"`; `_ready_got=; read -r _ready_got < "$WOLF_READY_FILE" 2>/dev/null || true`; equal to `$1` → return 0; otherwise sleep. On timeout: echo a line naming `$WOLF_READY_FILE`, the pid and the budget, plus "the app's `wolf-ready:` stderr lines name the last unmet condition", then `exit "$READY_TIMEOUT_EXIT"`.
+  - `wait_file_contains()` (`<file> <needle> <label>`), 200 × 0.1 s: return 0 when `[ -s file ] && grep -qF needle file`; on timeout echo "timed out waiting for `<file>` to contain `<needle>`" and return 1.
+- `fn smoke_ready_file() -> PathBuf`: `std::env::temp_dir().join(format!("wolf-smoke-ready-{pid}-{n}"))` with `n` from a `static AtomicUsize`; remove a stale file and its `.tmp`. Not a sibling of the cwd (the typed-`:cd` smoke, `:30620-30689`, re-roots the sidebar to `cwd.parent()`); the prefix must not start with `TEMP_CWD_PREFIX`.
+- `cage_command` (`:11553`): `.arg(format!("{READINESS_PRELUDE}\n{scenario}"))` and `.env("WOLF_READY_FILE", smoke_ready_file())`. Do not touch `CAGE_LOCK`, `XDG_RUNTIME_DIR` or any other variable. Update its doc (six variables → seven, a bullet for `WOLF_READY_FILE` and the prelude), the guard doc and message (`:11588-11709`, incl. "ALL SIX" at `:11552`, plus a clause that a bypassing smoke loses `wait_ready` (exit 127) and `WOLF_READY_FILE` (`set -u` fails)), and `packaged_cage_command`'s "None of those six" (`:37095-37116`).
 
-In `WolfCore::start` (~308-317), after computing `swap_dir`: resolve `state::spell_dir()`, `state::runtime_user_dir()`, `state::parsers_user_dir()`. If `runtime_user` is `Some`, call `state::seed_runtime_user_dir(dir)`; on `Err`, `tracing::warn!` and continue (never fatal). Build `DurableDirs { swap_dir, spell_dir, runtime_user_dir, parsers_user_dir }`, pass to `from_env`. Update imports (line 33 gains `nvim::DurableDirs`; line 38 gains the new resolvers).
+**Scenario conversions — category A, 63 sites**
+- At each launch, delete the `wtype ""` poll loop or `wait_window N` call and its comment, and the following `sleep "$SETTLE"` with its "Final settle…" comment. Insert `wait_ready "$app_pid" <that site's existing died-early code> "<that scenario's echo label>"`.
+- Delete every `wait_window()` definition, every `WAIT_TRIES=75`, and each "SETTLE is the ONLY real budget…" knob comment. Keep `WAIT_INTERVAL` (used by `wait_file`, quit polls, concatenated helpers) and `SETTLE=1.0` with a one-line comment pointing to `SCENARIO`. Re-word COLON_QA's "Sized like WAIT_TRIES" comment (`:4372-4374`).
+- The 62 post-launch lines: 2675, 2752, 2838, 2933, 2992, 3074, 3156, 3264, 3352, 3466, 3524, 3619, 3760, 3943, 4125, 4293, 4399, 4496, 5009, 5284, 5661, 6498, 6578, 6710, 6766, 6962, 7049, 7560, 7640, 7755, 8029, 8232, 8471, 8682, 8885, 9160, 9442, 10014, 10683, 22888, 22907, 23241, 23260, 24511, 25520, 26295, 27135, 28223, 28566, 31217, 31286, 31353, 31980, 32690, 32957, 34484, 34885, 35299, 35752, 36279, 38101, 38773. The 63rd: the two-window run-2 `sleep "$SETTLE"` at 8238, after `wait_nvim_count`.
+- Delete `sleep "$RESTORE_SETTLE"` at 6581, 6767, 7052, 7641, 8233. Keep 8059 (a mid-run New Window, which no readiness file covers).
+- Remove `.env("RESTORE_SETTLE", RELAUNCH_RESTORE_SETTLE)` at 21485, 21742, 22280, 29319; keep 22593 (two-window). Rewrite the `RELAUNCH_RESTORE_SETTLE` doc (`:6341-6350`) to say it serves only the mid-run window, and the RESTORE_TABS comments mentioning it (`:6907-6913`, `:7063-7068`).
 
-### 4.5 `runtime/nvim/init.lua` — coder (positions load-bearing)
+**Category B**
+- SAVE (`:34540-34543`): `sleep "$SETTLE"` → `wait_file_contains "$SAVE_FILE" "$SAVE_SENTINEL" "wolf-gnome save smoke" || true`. A timeout falls through on purpose so the Rust assertion at `:34696` names the red (precedent: the RESTORE_TABS non-fatal readback). Premise: Neovim writes a small fixture (<8 KB) in one write.
+- SAVEAS (`:34943-34946`): the final `sleep "$DIALOG_SETTLE"` → `wait_file_contains "$SAVEAS_TYPED_NAME" "$SAVEAS_SENTINEL" "wolf-gnome save-as smoke" || true`. Gate: run the smoke's negative "proposed name not written" falsifier (`:35148`). If that assertion no longer reddens, restore `DIALOG_SETTLE` there and record why.
 
-1. **Comma-escape helper + swap hardening** (before the swap block, ~line 38): `local function escape_option_path(p) return (p:gsub(",", "\\,")) end` with comment (`'directory'`/`'spellfile'` are comma-separated lists; a literal comma silently splits the value). Change line 41 to `opt.directory = escape_option_path(swap_dir) .. "//"`.
-2. **Spell block** — after `vim.filetype.add` (line 170), **strictly before `vim.cmd("syntax on")`** (line 191; ordering load-bearing — after `syntax on` the FileType autocmd never fires for a markdown startup file argument; carry the reference diff's comment):
-   - Augroup `WolfSpell` (`clear = true`), one `FileType` autocmd, `pattern = "*"`, callback: `local prose = { markdown = true, text = true, gitcommit = true }` (file-local table); set `vim.opt_local.spell = (prose[args.match] == true)`; set `vim.opt_local.spelllang = "en"` when turning on. Comment the deviation: `'spell'` is window-local and sticky — startup buffer `Untitled.md` has `filetype=markdown` at VimEnter, so an on-only autocmd leaves spell on for every non-prose file later `:e`d in that window; the `"*"` pattern turns it off on the way out. `en` pinned: the only language whose `.spl` the pinned nvim ships (a missing `.spl` opens a blocking download prompt that has nowhere to draw under `ext_messages`).
-   - Global `'spellfile'`: `local spell_dir = vim.env.WOLF_SPELL_DIR; if spell_dir ~= nil and spell_dir ~= "" then vim.opt.spellfile = escape_option_path(spell_dir) .. "/en.utf-8.add" end`. Comment: core created the dir pre-launch (nvim never creates a spellfile's parent; missing parent → E484 silent drop).
-3. **parsers_user / nvim-treesitter activation** — inside the `if nvim_treesitter_dir then` gate (318-353), after the textobjects prepend (~328), before the `WolfTreesitter` autocmd:
-   ```lua
-   local parsers_user_dir = vim.env.WOLF_PARSERS_USER_DIR
-   if parsers_user_dir ~= nil and parsers_user_dir ~= "" and uv.fs_stat(parsers_user_dir) then
-       vim.cmd.runtime("plugin/nvim-treesitter.lua")
-       pcall(function()
-           require("nvim-treesitter").setup({ install_dir = parsers_user_dir })
-       end)
-       vim.opt.runtimepath:prepend(parsers_user_dir)
-   end
-   ```
-   PRE-FLIGHT VERIFIED (coder): `plugin/nvim-treesitter.lua` is the exact plugin file (registers `:TSInstall`/`TSUpdate`/`TSUninstall`/`TSLog`, guard `vim.g.loaded_nvim_treesitter`, all requires lazy — cheap to source); `setup()` is a pure config merge BUT eagerly prepends `install_dir` to rtp via raw string concat (`vim.o.rtp = dir .. ',' .. vim.o.rtp`). Hence the ORDER above: setup first, then `vim.opt.runtimepath:prepend` — option-list prepend dedupes, so the entry lands exactly once and at the front whether or not the `pcall(setup)` succeeded. Comments to carry: user dir lands ahead of bundled `parsers_dir` (user parsers deliberately shadow bundled); `--clean` never sources plugin dirs so the explicit `runtime` call registers `:TSInstall` (orlando pattern); `pcall` degrades incompatibility to "no :TSInstall"; only `plugin/nvim-treesitter.lua` is sourced — the sibling `query_predicates.lua` predicates are unused by every bundled language (one-line comment). Placement inside the gate deliberate (`require` needs the tree's `lua/` on rtp, prepended by the gate). **Rewrite the stale gate comments in place** (295-298 "We do NOT call … .setup{}" and the "purely an on-rtp query provider" framing) to the new contract — present tense, no changelog words.
-4. **End-of-file user override load point** — appended after `wolf_setup_preview` (line 2629), stays the last thing in the file:
-   ```lua
-   local runtime_user_dir = vim.env.WOLF_RUNTIME_USER_DIR
-   if runtime_user_dir ~= nil and runtime_user_dir ~= "" then
-       local user_init = runtime_user_dir .. "/init_user.lua"
-       if uv and uv.fs_stat(user_init) then
-           local ok, err = pcall(dofile, user_init)
-           if not ok then
-               vim.notify("Wolf: error in init_user.lua: " .. tostring(err), vim.log.levels.WARN)
-           end
-       end
-   end
-   ```
-   Comment: must remain last — user code overrides every Wolf default; user-file errors warn, never fail startup. The notify text must contain the literal `init_user.lua` (a test greps `:messages` for it). File-level `uv` local (line 208) is in scope.
+**Comments that become false — rewrite in place, never append**
+- Module doc "A vacuously-passing check recorded here" (`:365-401`): delete; add a short "Readiness before the first input" section (`wait_ready`, `WOLF_READY_FILE`, exit 40, `wolf-ready:` stderr).
+- `SCENARIO`'s doc bullets (`:2582-2600`) and its canonical in-script SETTLE block with the margin table (`:2606-2646`, `:2652-2660`, `:2674`): SETTLE is the inter-step settle, not the launch budget.
+- ~20 doc comments "poll until cage is up (NOT until the window maps — see SCENARIO's SETTLE comment)" (e.g. `:2706, 2791, 2886, 2948, 3030, 3112, 3220, 3307, 3417, 3480, 3574, 3685, 4249, 4337, 4452, 6418, 7714, 8626, 8827`).
+- POINTER_PREAMBLE (`:5353, 5395-5403, 5640-5643, 5659-5660`), the frame-stats scenario (`:36239-36245, 36260-36264, 36278`), and the two-window comments (`:7970-7974, 7990-7992`).
+- Every "died before its window mapped" → "died before it was ready for input" (exit tables, ~40 occurrences from `:3707` to `:38734`, plus the shell echo lines).
+- `window_renders_typed_text_under_cage` signature (a) (`:15796-15807`): it means the readiness predicate missed a conjunct; read the `wolf-ready:` stderr and DECISIONS "The readiness file"; a post-ready sleep is not the fix. Rewrite (c)'s last sentence (`:15829-15831`) to match.
+- `SHARED_SHADER_CACHE_DIR` / `smoke_shader_cache_dir` docs (`:11216-11218, 11250-11290, 11324-11328`) and panic text (`:11334-11338`); the `cage_command` XDG_CACHE_HOME bullet (`:11464-11474`); guard paragraph 3 (`:11614-11619`). New point: a cold cache costs time in `wait_ready`, not correctness. Do not change XDG_CACHE_HOME behaviour.
+- Final check, must return nothing: `rg -n 'ONLY real budget|wtype ""|margin table|WAIT_TRIES|before its window mapped' crates/wolf-gnome/tests/smoke_headless.rs`.
 
-### 4.6 `crates/wolf-core/BUILD.bazel` — coder
+### Classification of the 291 `sleep "$SETTLE"` uses
 
-Four new `rust_test` targets mirroring the `swap_recovery` stanza (1143-1165) in shape — `tests/common/mod.rs` in `srcs`, `crate_root` on the test file, `tags = ["no-sandbox"]`, `size = "small"`, `edition = "2021"`, `data = ["//bazel/nvim:nvim_tree", "//runtime/nvim:init.lua"]`, `env = { "WOLF_NVIM_BIN": "$(rootpath //bazel/nvim:nvim_tree)/nvim/bin/nvim", "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)", "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)" }`, `deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True)`:
+| Category | Uses | Disposition |
+| --- | ---: | --- |
+| A. Pre-first-keystroke budget (62 post-launch + 8238) | 63 | This increment |
+| B. Wait for a file Neovim writes (34541; plus the SAVEAS `DIALOG_SETTLE`, not counted) | 1 | This increment |
+| C1. Neovim-only keystroke steps (Ex, normal/insert keys, `fill_buffer` ×3); next step is FIFO-ordered behind them, most deletable once each next step is checked to read only Neovim state | 85 | Later |
+| C2. Pane layout changes (`<C-w>v/s/h/c/j/k`, `:vsplit`/`:split`, drawer focus); needs a "layout settled, grids sized" signal | 31 | Later |
+| C3. Overlay and app-action chords (open, query ranking, activation, New buffer, Alt+Left, re-root); needs per-overlay readiness | 48 | Later |
+| C4. Pre-capture settles before `grim`; needs "frame presented after the last change" | 36 | Later |
+| C5. Pointer steps after `hsend`/`hstep` | 16 | Later |
+| C6. Crash/restart recovery (5114, 5153, 6087); could reuse the predicate, re-armed | 3 | Later |
+| C7. Other: mid-run New Window 8058, clipboard copy 28597, save-dialog typed name 34940, compose/IM chords 35809/35821/35832/35841, frame-stats idle 36297 | 8 | Later |
 
-- `spell`, `spell_durable`, `runtime_user`.
-- `parsers_user` — additionally `"//bazel/nvim-treesitter:nvim_treesitter_tree"` and `"//bazel/treesitter-parsers:parsers_tree"` in `data`, and `"WOLF_TEST_NVIM_TREESITTER_DIR": "$(rootpath //bazel/nvim-treesitter:nvim_treesitter_tree)"`, `"WOLF_TEST_PARSERS_DIR": "$(rootpath //bazel/treesitter-parsers:parsers_tree)"` in `env` (mirror `//crates/wolf-ffi:treesitter_highlight`, wolf-ffi BUILD.bazel 848-873).
+Total 63 + 1 + 227 = 291. All other named settles stay (`PREVIEW_`, `TREE_`, `DRAWER_`, `TABS_BAR_`, `TOGGLE_`, `PASTE_`, the remaining `DIALOG_`, `MRU_GAP`, `COMPOSE_STEP`, `POINTER_STEP`, `BURST_GAP`, `RESTORE_SETTLE` at 8059).
 
-Short leading comments in house style. `state_unit`/`spawn` targets already glob their files — no change. Confirm each new target actually runs under `bazelisk test`.
+Shared helpers: new helpers live in one `READINESS_PRELUDE` that `cage_command` prepends, so no scenario can forget them. The 32 existing `wait_file` copies are correct polls with scenario-specific messages; leave them (later increment).
 
-### 4.7 Documentation — coder
+### Documentation (coder; in place, present tense, then `prettier --write` and `./tools/lint/markdown_check.sh <files>`)
 
-- `runtime/nvim/README.md`: env list (line 11) names all exported `WOLF_*` vars; rewrite in place the stale "purely an on-runtimepath query provider" decision to the new contract; add Decisions entries for the spell block (before-`syntax on`; `"*"` pattern with explicit off — window-local stickiness; comma-escaping; `en` pinned) and the end-of-file `init_user.lua` load point (last-wins, pcall + notify); note `:TSInstall` compiling depends on the user's toolchain — Wolf only guarantees a durable install target.
-- `crates/wolf-core/src/README.md` `#### state.rs` entry (line 124): extend Public API with the three resolvers + `seed_runtime_user_dir` (one-time-seed semantics), within the ~200-word budget.
-- `crates/wolf-core/DECISIONS.md`: new short section (after "How core embeds Neovim"): bundle is Wolf's, replaced wholesale on upgrade; everything under `state_dir()` is the user's and Wolf never modifies it, sole exception the one-time seeding of an empty `runtime_user/`; core resolves dirs → `WOLF_*` env vars.
-- `architecture.md`: no change.
-- `prettier --write` + `./tools/lint/markdown_check.sh` on touched Markdown.
+- `crates/wolf-gnome/DECISIONS.md`: a new `## The readiness file` section after "### The measured reading", before "## Present limitations", about four paragraphs — purpose (test-only, off by default; launch-to-input is 0.25–0.35 s on the dev host and longer under load, so no fixed sleep is a sound budget); the predicate conjuncts with reasons (`active` is the delivery precondition because cage activates exactly the window it focuses; the input window is the last-mapped, by first-commit order; older windows need not be sized, marked as inferred; restore conjuncts cover the blocking RPCs that interleave with typed keys); triggers (end of each wake, `notify::is-active`, frame-clock after-paint; wired only when armed; no timer); lifetime and format (once per process, not re-armed on restart; holds the pid, atomic rename, so a scenario's two launches can share one path; coordinator-owned, so the process-global carve-out stays single). Also: "The coordinator and its windows" ¶1 "five things" → six; "Threading and the wake" "Nothing polls…" sentence adds the readiness probe beside the frame-time instrument; "The headless smoke test" "Three details" → four, adding that no scenario sends input before the readiness file names its pid, with a link.
+- `crates/wolf-gnome/src/README.md`: a new `#### ready_seam.rs` entry before `refresh_coalescer.rs` (≤200 words); `app.rs` Public API + `ready_file_path`; `coordinator.rs` Public API + `ready_pending`, `next_paint_ordinal`, `check_ready` and one Decisions bullet; `window.rs` + `WindowHandle::readiness` and a Gotcha that triggers are wired only when armed; `pane_view.rs` Public API + `readiness()`.
+- `crates/wolf-gnome/README.md` "Running": "Four environment variables" → five, with one sentence: `WOLF_READY_FILE` belongs to the smoke harness; the binary writes its pid there once its launch windows accept input (link to DECISIONS).
+- `crates/wolf-gnome/tests/README.md` "Smoke conventions": a new paragraph "**No scenario sends input before `wait_ready`.**" covering the prelude, the pid match, exit 40, the died-early code, `SETTLE` remaining only between steps, no post-ready margin, and the guard's name.
+- `build.md`: no change.
 
-## 5. Test plan (test-writer)
+## 4. Test plan (test-writer, unless noted)
 
-Shared conventions: real nvim via `common::require_nvim_bin`; observation channel is the **file probe** — `:call writefile([<expr1>, …], '<probe path>')` via `common::ch(':')` + `type_str` + `Key::Enter`, then poll the probe file (50 ms cadence, 10 s budget). Add to `tests/common/mod.rs`:
+All auto-discovered (no Bazel target for this crate). Confirm each runs with a non-zero count: `nix develop --command cargo test -p wolf-gnome --lib ready_seam` and `nix develop --command cargo test -p wolf-gnome --test smoke_headless every_launch_waits`.
 
-- `pub fn send_ex(core: &WolfCore, cmd: &str)` (promote the `messages.rs` helper).
-- `pub fn probe_values(core: &WolfCore, exprs: &[&str], probe: &Path) -> Vec<String>` — writes the `:call writefile([…], '…')` command, polls, returns lines. Keep expressions cmdline-safe (no single quotes inside `luaeval` strings).
-- `pub fn resolve_test_runfile(env_key: &str) -> Option<PathBuf>` — `pub` wrapper over the private `resolve_runfile`.
+Unit tests in `src/ready_seam.rs` (table-driven, literals re-typed rather than imported):
 
-`WOLF_STATE_DIR` strategy per binary:
+| Test | Asserts | Falsifier |
+| --- | --- | --- |
+| T1 `a_settled_single_window_launch_is_ready` | baseline → Ok | `launch_readiness` always `Err(NotActive)` |
+| T2 `each_unmet_condition_names_its_own_blocker` | baseline with one field flipped → expected blocker; rows: liveness None/NotResponding/Dead, panes None, bound 0 & sized 0, layout_pending, restore_owed, first_paint None, focus false, sized < bound, active false | delete that conjunct; named case: drop `bound >= 1` and the zero-pane row answers Ok (0 == 0) |
+| T3 `only_the_last_mapped_window_must_accept_input` | w0 (painted 2, active) + w1 (painted 1, inactive, unsized, no focus) → Ok | pick `windows.last()` not max `first_paint`, or apply input checks to every window |
+| T4 `the_last_mapped_window_must_be_active` | w0 (1, active), w1 (2, inactive) → NotActive | `any(active)` |
+| T5 `every_launch_window_must_finish_its_restore` | older window `layout_pending` → LayoutPending | settle checks on the input window only |
+| T6 `an_empty_launch_is_never_ready` | `[]` → NoLaunchWindow | remove the empty arm |
+| T7 `an_unpainted_window_holds_readiness` | `[None, Some(1) active]` → NotPainted | skip `None` when picking the max |
+| T8 `grid_settled_table` | both missing cases, equal, col mismatch, row mismatch | `requested.is_some()` alone; or cols only |
+| T9 `restore_owed_table` | (0,t),(0,f),(2,t),(2,f) | ignore `may_create` ((2,f) fires; an abandoned restore blocks forever) |
+| T10 `ready_file_path_table` | `report_file_path`'s rows | return untrimmed |
+| T11 `ready_file_contents_is_the_pid_and_one_newline` | `"4242\n"` | drop the newline or add a prefix |
+| T12 `next_step_table` | five rows | always `Report` (same-blocker row fires: a stderr line per frame) |
+| T13 `blocker_labels_are_distinct_and_nonempty` | over `ALL`, `ALL.len()` pinned to 10 | duplicate a label |
+| T14 `the_env_var_and_prefix_are_the_harness_contract` | literals `"WOLF_READY_FILE"`, `"wolf-ready: "` | rename either |
 
-| binary | strategy |
-|---|---|
-| `spell.rs`, `spawn.rs` | shared hermetic (`common::hermetic_state_dir()`), no env mutation, concurrent-safe |
-| `spell_durable.rs`, `runtime_user.rs`, `parsers_user.rs` | file-local `static ENV_LOCK: Mutex<()>` (the `state_unit.rs` precedent); each test holds the lock for its whole body, `set_var`s its own fresh tempdir, never `remove_var` |
-| `state_unit.rs` | existing `ENV_LOCK` for env-mutating additions |
+Guard in `tests/smoke_headless.rs`: `every_launch_waits_for_readiness_before_its_first_input`. Pure (`include_str!`, no `CAGE_LOCK`, no env), placed next to `cage_is_only_spawned_through_the_isolating_helper`, with needles built from `concat!` fragments as `CAGE_SPAWN_NEEDLE` (`:11586`) is.
+- A launch line: trimmed, with `" &"` stripped, starts with `"$`, ends with `"`, contains no space.
+- For each launch line, scan forward to the first line whose trimmed form starts with `wtype`, `hsend`, `hstep` or `grim`, or that ends the raw string (`"#;`). Assert a line starting with `wait_ready "$app_pid"` occurs in that window, and no `sleep "$SETTLE"` occurs between the launch and that `wait_ready`.
+- Assert ≥60 launch sites; exactly one `wait_ready() {` definition in the file; zero occurrences of the `wtype ""` probe line.
+- Falsifiers: put `sleep "$SETTLE"` back before `wait_ready` in `PICKER_SCENARIO` (second assertion fires); delete its `wait_ready` (first fires); break the launch matcher (floor fires); paste a second `wait_ready() {` (definition count fires).
+- Count updates: module doc ("Ten pure guards" → Eleven, "All ten" → All eleven, "Nine of the ten" → Ten of the eleven, "`70 passed`" → "`71 passed`", plus a bullet for the new guard); `tests/README.md` `smoke_headless.rs` entry ("Ten compositor-free guards … `70 passed`" → "Eleven … `71 passed`").
 
-### `tests/spell.rs` (shared hermetic)
+End-to-end falsifiers on existing smokes (coder runs after implementation, reverts each, records the outcome):
+- E1 never fires: `check_ready`'s `Write` arm skips the write → `window_renders_typed_text_under_cage` fails after ~30 s with cage status 40; stderr has the timeout line and either `wolf-ready: waiting on …` or no lines.
+- E2 fires too early: write the ready file as the first statement of `restore_session` (before any window is built) and mark fired → signature (a) (row 0 blank, cursor on line 2) in ≥4 of 5 runs.
+- E3 `active` alone: skip the `NotActive` check, run `window_renders_typed_text_under_cage` ×10. If green, record in `tests/README.md` "What is still unproven" that this conjunct's only falsifier is its unit row.
+- E4 restore conjuncts: skip the `LayoutPending` and `RestoreOwed` checks; run `pane_layout_survives_relaunch_under_cage` and `three_tabs_survive_a_relaunch_under_cage` ×5. Expected red on the first; record either way.
+- E5 save conversions: run each save smoke's documented revert once; confirm the Rust message still names the failure and the SAVEAS negative assertion still discriminates, else revert that conversion as in §3.
 
-1. `spell_enables_for_markdown_on_open` — Open a temp `.md`; probe `string(&l:spell)` == `"1"`, `&spelllang` == `"en"`, `&spellfile` == `hermetic_state_dir()/spell/en.utf-8.add`. Falsifiers: delete `WolfSpell` block; delete `opt.spellfile` assignment.
-2. `spell_enables_for_text_and_gitcommit` — `:e notes.txt` → `&l:spell == 1`; `:e COMMIT_EDITMSG` → `&l:spell == 1` and `&filetype == "gitcommit"`. Falsifier: drop `text`/`gitcommit` from the prose set.
-3. `spell_disabled_for_non_prose_after_prose` — open `.md` (spell on), then `:e main.lua` in the same window; probe `&l:spell == 0`, `&filetype == "lua"`. Pins the `"*"`-pattern design. Falsifier: revert autocmd to on-only three-pattern form.
+## 5. Order and split
 
-### `tests/spell_durable.rs` (per-test `set_var` under `ENV_LOCK`)
+1. Coder: `ready_seam.rs` (non-test) + `lib.rs` mod line; build.
+2. Coder: `app.rs`, `pane_view.rs`, `coordinator.rs`, `window.rs`; build; `cargo clippy -p wolf-gnome --all-targets -- -D warnings`.
+3. Coder: harness (`READINESS_PRELUDE`, `smoke_ready_file`, `cage_command`).
+4. Coder: convert SCENARIO only; run `window_renders_typed_text_under_cage` once; confirm a `wolf-ready: wrote` line and a pass. Stop and investigate on a timeout (the blocker label names the cause; `not-active` or `grids-unsized` means an assumption in §1 is wrong).
+5. Coder: remaining scenarios, RESTORE_SETTLE sites, B, then the comment rewrites.
+6. Coder: docs.
+7. Test-writer, after the coder (both edit the module doc): `ready_seam.rs` unit tests, the guard, the guard-count edits.
+8. Falsifiers E1–E5, measurement, flake loops, gate.
 
-1. `zg_word_survives_core_restart` — fresh tempdir state dir; open temp `.md` whose first word is `zzqxwolf`; send `zg`; poll `<state>/spell/en.utf-8.add` until it contains the token. `core.shutdown()`. Second core, same env; probe `&spellfile` (same path) and `join(spellbadword('zzqxwolf'), '|')` → first element empty (word good ⇒ durable dictionary loaded). Falsifiers: remove `WOLF_SPELL_DIR` export in `spawn`; remove `create_dir_all(&cfg.spell_dir)`.
-2. `comma_state_dir_swap_and_spellfile_escaped` — state tempdir whose leaf contains a comma (`wolf,state`). Swap half: `:e <cwd>/probe.md`, type text, `:preserve`, poll `swap_dir_for(&canonical_cwd)` for a `*.swp` entry. Spell half: `zg` a token, poll `<state,dir>/spell/en.utf-8.add`. Falsifiers: drop the gsub from `'directory'`; from `'spellfile'`.
+## 6. Measurement protocol
 
-### `tests/runtime_user.rs` (per-test `set_var` under `ENV_LOCK`)
+- Pre-flight before every run: `pgrep -a cage` prints nothing and no other `cargo test` is running (overlap causes cage lockfile collisions).
+- Baseline, before any edit, run twice: `nix develop --command bash -c 'cargo test -p wolf-gnome --test smoke_headless --no-run && time cargo test -p wolf-gnome --test smoke_headless'`. Record libtest's "finished in" and `real`.
+- After: the same two runs. Expected saving ~45–60 s (63 × (1.0 s − ready latency) + 5 × 2.0 s + ~3 s). Report the mean delta honestly.
+- Flake checks: 5 consecutive full runs (each its own `nix develop --command`), all `71 passed`; `window_renders_typed_text_under_cage --exact` ×20; the five relaunch smokes and the two save smokes ×5 each.
+- Informative only: `window_renders_typed_text_under_cage` ×10 under `nproc` CPU busy-loops (not another `cargo test`), to sanity-check the 30 s budget.
+- Finally the Linux verification gate (`build.md:146-159`).
+- The three `#[ignore]`d packaged smokes build from git-tracked sources, so an untracked `ready_seam.rs` is invisible to them; they are outside the gate. Do not stage or commit to run them.
 
-1. `empty_state_dir_is_seeded_and_template_sourced` — fresh tempdir; start core; `<state>/runtime_user/init_user.lua` exists and contains the greppable sentence; core flushes normally. Falsifier: delete the `seed_runtime_user_dir` call in `api.rs`.
-2. `user_file_is_sourced_last_and_overrides_defaults` — pre-create `init_user.lua` with `vim.g.wolf_user_marker = "loaded"` and `vim.o.linebreak = false` (init.lua sets `linebreak = true` at line 162 → observing `0` proves execution AND after-defaults position). Probe `get(g:, 'wolf_user_marker', 'MISSING')` == `"loaded"`, `string(&linebreak)` == `"0"`. Also byte-identical before/after check on the user file. Falsifier: delete the EOF dofile block; (position half) moving the block above the wrap settings flips `&linebreak` to `1`.
-3. `non_empty_dir_without_init_user_is_untouched` — pre-create only `notes.txt`. Assert `init_user.lua` absent, `notes.txt` byte-identical, core works. Falsifier: seed whenever `init_user.lua` absent.
-4. `erroring_user_file_warns_but_startup_succeeds` — `init_user.lua` = `error("wolf-test-boom")`. Core starts, initial flush arrives; open `.md`, `&l:spell == 1` (defaults survived); `send_ex("messages")`, poll `Snapshot.toast` text for a line containing `init_user.lua`. Falsifier (warning half): remove the `vim.notify` branch.
+## 7. Timeouts
 
-### `tests/parsers_user.rs` (per-test `set_var` under `ENV_LOCK`; one test fn)
+- `wait_ready`: 600 × 0.05 s = 30 s. An idle launch is ready in well under 1 s. Restore adds up to 2T−1 blocking RPCs, each bounded by the 5 s `RPC_TIMEOUT_DEFAULT` (`api.rs:54`); a timeout marks the core NotResponding, which makes readiness unreachable, so a wedge fails loudly. At 8 parallel cages, ~8× slower startup is still ~7× inside the budget. A red run is capped at 30 s instead of hanging. The 50 ms interval costs ~25 ms per launch on average.
+- `wait_file_contains`: 200 × 0.1 s = 20 s, matching `FILE_TRIES × WAIT_INTERVAL`.
+- Every timeout names its condition: the shell line names the file, pid or needle; the app's `wolf-ready: waiting on <label>` names the conjunct.
 
-Setup: `set_var("WOLF_STATE_DIR", tempdir)`; resolve staged trees Bazel-first, devShell-second (wolf-ffi common precedent, `crates/wolf-ffi/tests/common/mod.rs` 216-270): `resolve_test_runfile("WOLF_TEST_NVIM_TREESITTER_DIR")` → `set_var("WOLF_NVIM_TREESITTER_DIR", root.join("nvim-treesitter"))`; likewise `WOLF_TEST_PARSERS_DIR` → `WOLF_PARSERS_DIR` = `root.join("parsers")`. If neither resolves, panic loudly.
+## 8. Dependencies and lint
 
-`parsers_user_dir_created_activated_and_first_on_rtp` — start core; assert:
-
-1. `<state>/parsers_user` exists. Falsifier: remove the `WOLF_PARSERS_USER_DIR` export (sharper than removing create_dir_all).
-2. Probe `&runtimepath`: contains parsers_user path AND its index strictly before the bundled parsers dir's (precedence). Probe rtp before any plugin-internal assertion (the accessor appends to rtp itself and would mask a missing prepend). Falsifier: delete the `prepend` line.
-3. Probe `exists(':TSInstall')` == `"2"`. Falsifier: delete the `vim.cmd.runtime(...)` line.
-4. Probe `luaeval(...)` calling `require('nvim-treesitter.config').get_install_dir('parser')` (PRE-FLIGHT CONFIRMED accessor, singular `'parser'`; parsers land at `<install_dir>/parser/<lang>.so`) == `<state>/parsers_user/parser`. CAVEATS (pre-flight): the accessor has a mkdir side effect (creates `<install_dir>/parser/`), so the on-disk assertion 1 and the rtp assertion 2 MUST run before this probe (they already do — keep that order); the returned path is `vim.fs.normalize`d, so normalize/canonicalize both sides before comparing (macOS tempdirs may differ in trailing-slash or `/var` vs `/private/var` spelling — canonicalize the Rust side, compare suffix-tolerantly if needed). Falsifier: drop `install_dir` from `setup()` (accessor then returns the stdpath default under the hermetic XDG root).
-
-### `tests/spawn.rs` addition (shared hermetic)
-
-`durable_dirs_created_and_exported` — start core; `state = common::hermetic_state_dir()`; on disk: `state/spell`, `state/parsers_user`, `state/runtime_user/init_user.lua` exist; probe `$WOLF_SPELL_DIR`, `$WOLF_RUNTIME_USER_DIR`, `$WOLF_PARSERS_USER_DIR` inside nvim == the `state/…` paths. Falsifiers: each `.env(…)` export and each `create_dir_all`, one assertion apiece.
-
-### `tests/state_unit.rs` additions (headless)
-
-1. `spell_runtime_parsers_dirs_resolve_under_state_dir` (ENV_LOCK, `WOLF_STATE_DIR` override): resolvers == `<override>/{spell,runtime_user,parsers_user}`. Falsifier: change a `join` leaf.
-2. `seed_runtime_user_seeds_missing_and_empty_dirs` (no env): missing dir → `Ok(true)` + file with greppable sentence; fresh empty dir → `Ok(true)`. Falsifier: return `Ok(false)` without writing.
-3. `seed_runtime_user_never_touches_non_empty_dir` (no env): dir with only `notes.txt` → `Ok(false)`, no `init_user.lua`, `notes.txt` unchanged; dir with custom `init_user.lua` → `Ok(false)`, byte-identical. Falsifier: seed whenever `init_user.lua` absent.
-4. `from_env_falls_back_to_ephemeral_spell_dir` (ENV_LOCK; save/restore `WOLF_NVIM_BIN`, set dummy non-empty): `from_env(any_init, any_cwd, DurableDirs::default(), 80, 24)` → `spell_dir == state_root.join("spell")`, `swap_dir == state_root.join("swap")`, `runtime_user_dir.is_none()`, `parsers_user_dir.is_none()`. Falsifier: remove the spell `unwrap_or_else` fallback.
-
-### `swap_recovery.rs`
-
-No changes (comma coverage deliberately lives in `spell_durable.rs`; it needs exclusive `WOLF_STATE_DIR` mutation).
-
-## 6. Implementation order
-
-1. **Coder pre-flight**: verify §2 assumptions; report accessor + plugin file name.
-2. **Test-writer**: common helpers → `state_unit.rs` additions → `spawn.rs` addition → `spell.rs` → `spell_durable.rs` → `runtime_user.rs` → `parsers_user.rs`. Reference the planned API exactly: `wolf_core::{spell_dir, runtime_user_dir, parsers_user_dir, seed_runtime_user_dir, INIT_USER_FILE_NAME}`, `wolf_core::nvim::{NvimConfig, DurableDirs}`.
-3. **Coder**: `state.rs` → `lib.rs` → `nvim.rs` → `api.rs` (compiles at every step; `from_env` signature change + its sole caller land together).
-4. **Coder**: `init.lua` in §4.5 order (helper first).
-5. **Coder**: `BUILD.bazel` targets; run `bazelisk test` on the six affected targets + pre-existing real-nvim suite (regression: every core start now creates/seeds dirs); `cargo test` where available.
-6. **Coder**: falsifiability passes — apply each named revert, observe the mapped test fail, restore.
-7. **Coder**: docs (§4.7) + prettier + markdown lint.
-
-## 7. Dependencies
-
-None new. Bazel trees `//bazel/nvim-treesitter:nvim_treesitter_tree` and `//bazel/treesitter-parsers:parsers_tree` already exist (consumed by wolf-ffi).
-
-## 8. Lint considerations
-
-- `DurableDirs` exists to stay under `clippy::too_many_arguments`; do not flatten.
-- New `pub` items need doc comments; `#[must_use]` on pure resolvers (house style).
-- `tests/common/mod.rs` carries `#![allow(dead_code)]` already. Env-mutating tests use `std::env::set_var` per existing practice (edition 2021).
-- `init.lua`: tabs, match comment register.
-- Markdown: `proseWrap: never`; no changelog words ("now", "no longer") when rewriting the stale nvim-treesitter decision.
-
-Key files: `crates/wolf-core/src/state.rs`, `crates/wolf-core/src/nvim.rs` (struct ~60-131, spawn ~1700-1799), `crates/wolf-core/src/api.rs` (~308-317), `runtime/nvim/init.lua` (38-42, 170-191, 305-353, EOF 2629), `crates/wolf-core/BUILD.bazel` (template 1143-1165; ffi template `crates/wolf-ffi/BUILD.bazel` 848-873), `crates/wolf-core/tests/common/mod.rs`.
+No new dependencies: `std` (`fs`, `sync::atomic`) and existing gtk4/gdk4 API (`connect_is_active_notify`, `frame_clock`, `FrameClock::connect_after_paint`, `Window::focus`). No `#[allow]` expected: `usize::from(u16)` rather than `as`; exhaustive `Option<Liveness>` match with no `_` arm; `let _ =` on stderr `write_all`; the guard's needles via `concat!` and computed-count assertions (no `assertions_on_constants`). `cargo fmt`; `prettier --write` and `./tools/lint/markdown_check.sh` on the edited Markdown, avoiding banned changelog words and ALL-CAPS runs.
