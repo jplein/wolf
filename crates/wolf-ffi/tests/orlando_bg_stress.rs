@@ -285,9 +285,8 @@ fn check_invariants(
         s.trim_end().to_string()
     };
 
-    // The block background: taken from the first visible block row's column 0.
-    // All block cells must match it, and it must differ from the default bg
-    // (otherwise orlando isn't painting and the whole test would be vacuous).
+    // The block bg comes from the first visible block row's column 0. Every block cell must match
+    // it, and it must differ from the default bg or the test is vacuous.
     let mut block_bg: Option<Option<u32>> = None;
 
     for (r, row) in row_cells.iter().enumerate().take(rows) {
@@ -357,9 +356,8 @@ fn orlando_code_block_bg_stays_uniform_under_churn() {
     };
     std::env::set_var("WOLF_NVIM_BIN", &nvim_bin);
 
-    // Bazel stages the tree in the runfiles and the Linux devShell exports it from
-    // `wolfOrlando`, so this branch belongs to a run outside BOTH — inside either,
-    // reaching it means the export was lost (see the header).
+    // Bazel stages the tree and the devShell exports it from `wolfOrlando`, so inside either,
+    // reaching this skip means the export was lost.
     let Some(orlando_tree) = common::orlando_dir_or_none() else {
         eprintln!(
             "\nSKIP: wolf-ffi orlando_bg_stress — WOLF_TEST_ORLANDO_DIR is unset or names no \
@@ -506,9 +504,8 @@ fn orlando_code_block_bg_stays_uniform_under_churn() {
                 "26G A x <Esc> u".to_string()
             }
             6 => {
-                // Insert an unterminated fence on a prose line (1-based 18, a
-                // short paragraph) — everything below turns gray — then delete
-                // it. Sometimes without settling in between (the racy path).
+                // Insert an unterminated fence on prose line 18, graying everything below,
+                // then delete it, sometimes without settling in between (the racy path).
                 send_chars(&handle, "18G");
                 send_chars(&handle, "o```");
                 send_esc(&handle);
@@ -531,9 +528,8 @@ fn orlando_code_block_bg_stays_uniform_under_churn() {
         };
         history.push(format!("iter {iter}: {desc}"));
 
-        // Let the churn finish, then park the cursor on a blank line (the `{`
-        // paragraph motion) so neither matchparen nor the cursor cell can
-        // legitimately recolor a block cell, and check at true idle.
+        // Let the churn finish, then park on a blank line (`{`) so neither matchparen nor the
+        // cursor cell can recolor a block cell, and check at true idle.
         settle(&handle, grid);
         send_esc(&handle);
         send_chars(&handle, "{");

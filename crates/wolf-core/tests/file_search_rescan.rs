@@ -347,13 +347,8 @@ fn deleted_file_disappears() {
         displays(&baseline)
     );
 
-    // Open it via `InputEvent::Open` — the only path the input pump records
-    // into the MRU (`:e` typed as keystrokes never records) — and poll until
-    // the record lands, so the rescan's `MruStore::recent(&root)` re-seed
-    // genuinely holds doomed.md and only its deleted-file pruning stands
-    // between the seed and a resurrected entry. Then remove the file from disk
-    // and drop the buffer: the `:bdelete!` fires BufDelete -> forced rescan of
-    // a tree that no longer holds the file.
+    // Open via `InputEvent::Open` and wait for the MRU record, or the resurrection guard is vacuous;
+    // then delete the file and `:bdelete!`, whose BufDelete forces a rescan.
     let doomed = cwd.join("doomed.md");
     core.send_input(InputEvent::Open {
         path: doomed.clone(),
@@ -504,9 +499,8 @@ fn burst_of_new_files_all_appear_deduped() {
     let search = core.start_file_search(wake);
     poll_until_complete(&search, &wakes);
 
-    // Three back-to-back `:e` + `:w` pairs. Writing a brand-new empty buffer
-    // creates the file and fires BufWritePost, so no insert is needed; the
-    // pairs land well inside one another's debounce windows.
+    // Three back-to-back `:e` + `:w` pairs inside one another's debounce windows; writing a new
+    // empty buffer creates the file and fires BufWritePost, so no insert is needed.
     let names = ["burst_a.md", "burst_b.md", "burst_c.md"];
     for name in names {
         send_ex(&core, &waiter, &format!("e {name}"));
@@ -626,9 +620,8 @@ fn focus_gained_rescans() {
         displays(&baseline)
     );
 
-    // Delete OUTSIDE nvim, then push both focus edges (false, then true): nvim
-    // de-dupes FocusGained, so only a genuine unfocused→focused transition
-    // fires it deterministically (see `refocus_ui`).
+    // Delete outside nvim, then push both focus edges: nvim de-dupes FocusGained, so only a real
+    // unfocused-to-focused transition fires it (see `refocus_ui`).
     fs::remove_file(cwd.join("ext.md")).expect("failed to remove ext.md");
     refocus_ui(&core);
 
@@ -681,13 +674,8 @@ fn term_leave_rescans() {
         displays(&baseline)
     );
 
-    // Open the drawer, then let it settle FULLY before touching anything: both
-    // the terminal buffer/job spawn and the WinEnter `startinsert` are async
-    // (drawer open, job start, mode_change redraw), so wait for the term://
-    // buffer to be listed AND for the snapshot to report Terminal-mode. Only a
-    // settled t-mode drawer guarantees the close toggle produces a t → n mode
-    // change (the TermLeave edge). Mirrors the generous per-effect settling in
-    // `wolf-ffi/tests/terminal.rs`.
+    // Let the drawer settle (term:// buffer listed, Terminal mode reported): only a settled t-mode
+    // drawer makes the close toggle produce the t -> n TermLeave edge.
     core.toggle_terminal();
     wait_until("the drawer's term:// buffer to be listed", || {
         has_terminal_buffer(&core)
@@ -696,9 +684,8 @@ fn term_leave_rescans() {
         current_mode_name(&core) == "terminal"
     });
 
-    // Delete from OUTSIDE nvim while the drawer is open (stand-in for a command
-    // the user ran in the drawer's shell — the drawer's own shell is too slow /
-    // nondeterministic to drive from a test), then close the drawer.
+    // Delete from outside nvim while the drawer is open, standing in for a command run in its
+    // shell, which is too slow and nondeterministic to drive; then close the drawer.
     fs::remove_file(cwd.join("gone.md")).expect("failed to remove gone.md");
     core.toggle_terminal();
 

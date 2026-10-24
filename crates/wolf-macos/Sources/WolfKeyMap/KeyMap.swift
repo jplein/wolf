@@ -1,27 +1,5 @@
-//
-//  KeyMap.swift
-//  Pure, AppKit-free key translation for the macOS front-end.
-//
-//  `WolfKeyMap.translate(...)` is the macOS analog of wolf-gnome's `gdk_key`
-//  seam: it takes exactly the data an `NSView.keyDown(_:)` pulls off an
-//  `NSEvent` — the virtual `keyCode`, `characters`, `charactersIgnoringModifiers`,
-//  and the four modifier booleans — and returns a generated `FfiKeyEvent?` ready
-//  to hand to the Rust bridge (`WolfCoreHandle.send_key`). It imports ONLY
-//  Foundation and the generated FFI struct, so it is unit-testable headlessly
-//  (no `NSEvent`, no window, no event loop).
-//
-//  ## The Shift contract (must match wolf-core/src/input.rs)
-//
-//  * Named keys (Return, Tab, arrows, F-keys, …) are recognized from `keyCode`
-//    first — their `characters` is often a control scalar — and KEEP the real
-//    `shift` flag, so wolf-core can emit `<S-Tab>`, `<S-Left>`, etc.
-//  * Printable characters carry the ALREADY-SHIFTED glyph in `ch` with
-//    `shift = false` (wolf-core ignores `shift` for `Key::Char` and expects the
-//    shifted glyph). Shift+'a' → 'A', Shift+'1' → '!', both `shift = false`.
-//  * When ctrl/alt/meta are held, the glyph is taken from
-//    `charactersIgnoringModifiers` (lowercased), never the modifier-mangled
-//    `characters` (so Ctrl+w → 'w', not U+0017).
-//  * Bare modifier keys and unmodified control characters map to `nil`.
+// Pure, AppKit-free key translation from `NSEvent` fields to `FfiKeyEvent`.
+// The Shift contract: crates/wolf-macos/Sources/WolfKeyMap/README.md#keymapswift
 
 import Foundation
 
@@ -98,9 +76,8 @@ public enum WolfKeyMap {
       )
     }
 
-    // 2. Printable fallback. When ctrl/alt/meta are held, the unmodified glyph
-    //    (lowercased) is authoritative; otherwise the shifted glyph in
-    //    `characters` carries the case and `shift` is dropped for the Char.
+    // 2. Printable fallback: with ctrl/alt/meta held the lowercased unmodified glyph wins;
+    // otherwise the shifted glyph in `characters` carries the case and `shift` is dropped.
     let hasComboModifier = ctrl || alt || meta
     let source = hasComboModifier ? charactersIgnoringModifiers.lowercased() : characters
 

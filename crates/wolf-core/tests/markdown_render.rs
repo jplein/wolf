@@ -114,9 +114,8 @@ fn render_html_wraps_body_in_a_themed_document() {
 
 #[test]
 fn code_blocks_enumerates_a_fenced_go_block_via_public_api() {
-    // The re-exported `code_blocks` enumerates one `CodeBlockInfo` for a fenced go
-    // block: lowercased lang + the body text (incl. the trailing newline). Mirrors
-    // the in-module unit test at the PUBLIC-API level (crate-root re-exports).
+    // One `CodeBlockInfo` for a fenced go block: lowercased lang plus the body incl. its trailing
+    // newline, at the public-API level (the in-module unit test covers the internals).
     let blocks = code_blocks("# H\n\n```go\npackage main\n```\n");
     assert_eq!(blocks.len(), 1, "one fenced code block: {blocks:?}");
     assert_eq!(
@@ -132,10 +131,8 @@ fn code_blocks_enumerates_a_fenced_go_block_via_public_api() {
 
 #[test]
 fn render_html_with_highlights_emits_inline_styled_spans_via_public_api() {
-    // The re-exported `render_html_with_highlights` + `BlockHighlight` /
-    // `HighlightSpan` / `HighlightStyle` types turn one `[0, 7)` byte-column span
-    // into a color+bold inline `<span>`, still inside `<pre><code
-    // class="language-go">`.
+    // One `[0, 7)` byte-column span becomes a color+bold inline `<span>` still inside
+    // `<pre><code class="language-go">`, through the re-exported highlight types.
     let src = "```go\npackage foo\n```\n";
     let block = BlockHighlight {
         spans: vec![HighlightSpan {
@@ -223,9 +220,8 @@ fn markers_appear_in_source_order() {
 
 #[test]
 fn heading_marker_sits_immediately_before_its_tag() {
-    // A paragraph, a blank line, then a heading on hard line 3. Its `wl-3-0` anchor
-    // must be emitted IMMEDIATELY BEFORE the `<h1>` (substring order), so a later
-    // scroll-sync can map line 3 to the heading's top.
+    // The heading on hard line 3 gets its `wl-3-0` anchor immediately before `<h1>`, so scroll-sync
+    // can map line 3 to the heading's top.
     let source = "para\n\n# Heading\n";
     let html = render_html(source, PreviewTheme::Default, WidthMode::Full);
 
@@ -257,9 +253,8 @@ fn heading_marker_sits_immediately_before_its_tag() {
 
 #[test]
 fn long_line_earns_a_per_hundred_column_marker() {
-    // Hard line 1 is short (< stride, no `-100` anchor); hard line 3 is a paragraph
-    // of LONG_LINE_LEN characters (>= stride, so it earns a `wl-3-100` anchor but
-    // NOT a `wl-3-200` one, since 200 is not strictly < LONG_LINE_LEN).
+    // Line 1 is short (no `-100` anchor); line 3 has LONG_LINE_LEN chars, earning `wl-3-100` but
+    // not `wl-3-200`, since 200 is not strictly < LONG_LINE_LEN.
     assert!(
         LONG_LINE_LEN >= COLUMN_STRIDE as usize,
         "sanity: the long line clears the stride"
@@ -286,9 +281,8 @@ fn long_line_earns_a_per_hundred_column_marker() {
 
 #[test]
 fn no_marker_span_inside_a_fenced_code_block() {
-    // Hard lines 3..=6 are a fenced code block. Their per-line anchors collapse to
-    // BEFORE the `<pre>` (the block start); none may land inside `<pre><code>…`,
-    // which would corrupt the rendered code.
+    // Lines 3..=6 are a fenced block: their anchors collapse to before `<pre>`, never inside
+    // `<pre><code>`, where they would corrupt the code.
     let source = "# Heading\n\n```\nfn main() {}\ncode two\n```\n";
     let html = render_html(source, PreviewTheme::Default, WidthMode::Full);
 
@@ -343,12 +337,8 @@ fn multi_line_paragraph_collapses_its_markers_before_the_single_p() {
 
 #[test]
 fn per_hundred_column_marker_counts_characters_not_bytes() {
-    // OD4: columns are 0-based CHARACTER offsets, not bytes. Hard line 3 is a
-    // paragraph of MULTIBYTE_CHAR_COUNT × "é" (each 2 bytes in UTF-8): > 100
-    // CHARACTERS but > 200 BYTES. The per-100-column marker fires on the CHARACTER
-    // count, so `wl-3-100` must appear (char length >= 100) while `wl-3-200` must
-    // NOT (only ~120 chars) — a byte-based scheme would wrongly emit `wl-3-200`
-    // (since the byte length exceeds 200).
+    // Columns count characters, not bytes: the "é" line is over 100 chars and over 200 bytes, so
+    // `wl-3-100` appears and `wl-3-200` must not, as a byte-based scheme would emit it.
     let multibyte_line = "é".repeat(MULTIBYTE_CHAR_COUNT);
     assert!(
         multibyte_line.chars().count() >= COLUMN_STRIDE as usize
@@ -359,9 +349,8 @@ fn per_hundred_column_marker_counts_characters_not_bytes() {
         multibyte_line.len() > 2 * COLUMN_STRIDE as usize,
         "sanity: the line's BYTE length exceeds two strides (so byte/char differ)"
     );
-    // Two leading lines put the long multibyte line on hard line 3, rendered as its
-    // own single-line paragraph — exactly the block shape
-    // `long_line_earns_a_per_hundred_column_marker` already relies on.
+    // Two leading lines put the multibyte line on hard line 3 as its own paragraph, the shape
+    // `long_line_earns_a_per_hundred_column_marker` relies on.
     let source = format!("# Title\n\n{multibyte_line}");
 
     let html = render_html(&source, PreviewTheme::Default, WidthMode::Full);
@@ -380,13 +369,8 @@ fn per_hundred_column_marker_counts_characters_not_bytes() {
 
 #[test]
 fn container_collapses_interior_line_markers_before_its_opening_tag() {
-    // OD8 / the ratified `offset < range.end` rule: a container block (here a
-    // bulleted list) collapses EVERY interior line's `wl-{L}-0` anchor to the TOP of
-    // the container — before the opening `<ul>` — rather than per-item. This is the
-    // accepted v1 scroll granularity: all interior anchors still EXIST (unique ids)
-    // but resolve to the container top.
-    //
-    // Two leading lines put the list's three items on hard lines 3, 4, and 5.
+    // A container (here a list) collapses every interior `wl-{L}-0` anchor to before its `<ul>`,
+    // not per item: all anchors exist but resolve to its top. The items sit on lines 3, 4 and 5.
     let source = "intro\n\n- item one\n- item two\n- item three\n";
     let html = render_html(source, PreviewTheme::Default, WidthMode::Full);
 
@@ -411,12 +395,8 @@ fn container_collapses_interior_line_markers_before_its_opening_tag() {
 
 #[test]
 fn latex_math_renders_mathml_with_inlined_fonts() {
-    // The no-Neovim primary automated proof for tasks 1 & 2: a doc with BOTH inline
-    // `$...$` and display `$$...$$` LaTeX math must render inline MathML (block mode
-    // for the display math), and inline BOTH the Inter and the Latin Modern Math
-    // fonts as self-contained base64 data URIs. Assertions key off the STABLE
-    // contracts (`<math`, `display="block"`, the family names, `data:font/woff2`),
-    // NOT exact MathML byte sequences.
+    // Inline `$…$` and display `$$…$$` render MathML (block mode for display), with Inter and Latin
+    // Modern Math inlined as data URIs. Assert on stable contracts, never exact MathML bytes.
     let source = "Inline $e=mc^2$ here.\n\n$$\\int_0^1 x\\,dx$$\n";
     let html = render_html(source, PreviewTheme::Default, WidthMode::Full);
 
@@ -460,10 +440,8 @@ fn theme_css_default_is_non_empty() {
 
 #[test]
 fn default_theme_carries_dark_and_light_palettes() {
-    // The Default theme keeps its DARK values as the unconditional default and adds
-    // a `@media (prefers-color-scheme: light)` block so the preview follows the app's
-    // resolved appearance. The rendered document must embed BOTH palettes plus the
-    // `color-scheme: light dark` declaration that makes the web view honor them.
+    // Default keeps dark as the unconditional default plus a light `@media` block; the document
+    // must embed both palettes and `color-scheme: light dark`, which makes the web view honor them.
     let html = render_html("# Title\n\ntext", PreviewTheme::Default, WidthMode::Full);
 
     assert!(
@@ -492,11 +470,8 @@ fn default_theme_carries_dark_and_light_palettes() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Baseline-grid assertions (plan §6). `base.css` is `include_str!`'d verbatim
-// into the rendered document, so these tests audit the SHIPPED stylesheet
-// through the public `render_html` surface — no private const, no new file.
-// ---------------------------------------------------------------------------
+// --- Baseline-grid assertions: base.css is `include_str!`'d verbatim, so these audit the
+// shipped stylesheet through the public `render_html` surface.
 
 /// The baseline unit, re-declared LOCALLY as a behavioral constant: every
 /// vertical dimension in `base.css` must be `0` or a whole multiple of this.
@@ -546,8 +521,8 @@ const HEADING_SCALE: &[(&str, i32, i32)] = &[
 ///   is also where the reason it must be zero rather than 24 is written down.
 ///   `pre code` (`padding: 0`) is asserted directly by
 ///   [`pre_sits_on_the_baseline_grid`] for its `font-size: inherit` instead.
-/// - **`img`** — `height: auto` is the accepted intrinsic-height drift (plan
-///   §3.4 / the header's DOCUMENTED RESIDUALS). It is unparseable as px by
+/// - **`img`** — `height: auto` is the accepted intrinsic-height drift (the
+///   accepted residuals in crates/wolf-core/src/markdown/README.md#decisions). It is unparseable as px by
 ///   construction, and there is no CSS-only way to snap it. Sweeping it would
 ///   fail permanently for a drift the design accepts.
 /// - **`a` / `a:hover`** — `text-decoration` only. No vertical dimension.
@@ -563,12 +538,8 @@ const GRID_SELECTORS: &[&str] = &[
     "body.wolf-markdown",
     "body.wolf-markdown > *:not(.wolf-src):not(*:not(.wolf-src) ~ *)",
     "body.wolf-markdown > *:last-child",
-    // The GENERAL last-block rule, the symmetric twin of the general
-    // first-block entry above. Trivially on-grid today (`margin-bottom: 0`), so
-    // it catches no arithmetic — it is listed because both general edge rules
-    // are new, are spelled in a way that invites "simplification" back to
-    // `:first-child`/`:last-child`, and because the sweep's non-empty assertion
-    // makes SILENT DELETION of the rule fail loudly here.
+    // The general last-block rule: trivially on-grid, but listed so its deletion fails loudly and
+    // its anchor-skipping spelling is not "simplified" back to `:last-child`.
     "body.wolf-markdown > *:not(.wolf-src):not(:has(~ *:not(.wolf-src)))",
     "p",
     "h1",
@@ -602,14 +573,12 @@ const VERTICAL_LONGHANDS: &[&str] = &[
 /// Adding a value here is the documented way to introduce a compensated
 /// dimension — and it forces the author to say which border it pays for.
 const COMPENSATION_ALLOWLIST: &[(&str, &str, i32)] = &[
-    // Compensate the `th, td { border: 1px }` collapsed row border:
-    // 12 + 24 (line-height) + 11 + 1 = 48 = 2 baselines of row pitch. The 12/11
-    // asymmetry exists because 47 is odd; it is imperceptible.
+    // Compensates the collapsed `th, td { border: 1px }` row border: 12 + 24 + 11 + 1 = 48, two
+    // baselines; the 12/11 split exists because 47 is odd.
     ("th, td", "padding-top", 12),
     ("th, td", "padding-bottom", 11),
-    // Compensates the table's OWN bottom outer border, which has no next row to
-    // share with: a collapsed-border table is 48N + 1 tall, so 23 + 1 = 24
-    // brings the whole table to 48N + 24 = exactly 2N+1 baselines.
+    // Compensates the table's own bottom border: a collapsed table is 48N + 1 tall, so 23 + 1
+    // brings it to 48N + 24, exactly 2N+1 baselines.
     ("table", "margin-bottom", 23),
 ];
 
@@ -646,9 +615,8 @@ fn style_block(html: &str) -> &str {
     &html[start..start + end]
 }
 
-/// Removes `/* … */` comments. `base.css` carries a long header comment that
-/// tabulates the scale and the compensation arithmetic — it contains braces,
-/// colons and semicolons, so it MUST be stripped before any brace scanning.
+/// Removes `/* … */` comments. A `base.css` comment may contain braces, colons
+/// and semicolons, so comments MUST be stripped before any brace scanning.
 fn strip_comments(css: &str) -> String {
     let mut out = String::with_capacity(css.len());
     let mut rest = css;
@@ -778,9 +746,7 @@ fn rendered_stylesheet() -> String {
 
 #[test]
 fn baseline_unit_is_declared() {
-    // The grid's single documented token. Literal px are used everywhere else
-    // (so the sweep test can actually check the numbers), but the unit itself
-    // must be declared and discoverable.
+    // The grid's single declared token; literal px elsewhere keep the sweep able to check numbers.
     let html = render_html("# Title\n\ntext", PreviewTheme::Default, WidthMode::Full);
 
     assert!(
@@ -887,10 +853,8 @@ fn headings_declare_explicit_font_size_and_line_height() {
 
 #[test]
 fn headings_reserve_anchor_scroll_clearance() {
-    // The shared `h1, h2, … h6` rule's `scroll-margin-top`. The grid sweep sees
-    // this property (it is in VERTICAL_LONGHANDS) and so would catch an off-grid
-    // value — but it is blind to the declaration being DELETED outright, which
-    // is the regression this test exists to make impossible.
+    // Guards the `scroll-margin-top` declaration's existence: the sweep would catch an off-grid
+    // value but not its deletion.
     const ANCHOR_CLEARANCE: i32 = 2 * BASELINE;
 
     let css = rendered_stylesheet();
@@ -937,11 +901,8 @@ fn headings_reserve_anchor_scroll_clearance() {
 
 #[test]
 fn heading_bottom_rule_is_gone_from_base_and_theme() {
-    // h1/h2 no longer carry a section rule. Both halves of the deletion matter,
-    // and the theme half is the one the `hr` bug taught us to check: a
-    // `border-bottom-color` left behind in `themes/default.css` would paint
-    // nothing today (there is no border to color) and would therefore sit there
-    // silently until someone re-adds a border and gets a surprise.
+    // h1/h2 carry no section rule, in base or theme: a leftover theme `border-bottom-color` paints
+    // nothing and would sit silently until someone re-adds a border.
     let css = rendered_stylesheet();
 
     for &(selector, font_size, _) in HEADING_SCALE
@@ -950,14 +911,8 @@ fn heading_bottom_rule_is_gone_from_base_and_theme() {
     {
         let decls = rule_decls(&css, selector);
 
-        // Sanity: `rule_decls` merges every matching rule, so a non-empty map
-        // proves nothing — the shared `h1, h2, … h6` rule and the theme's
-        // `h1…h6 { color }` rule would keep it populated even if the per-level
-        // `body.wolf-markdown {selector}` rule vanished entirely. Assert a
-        // declaration ONLY that per-level rule supplies (`font-size`; the shared
-        // rule carries font-weight/scroll-margin-top, the theme only color), so
-        // the two absence assertions below are about a rule that is genuinely
-        // still being parsed rather than vacuously true of a lost rule.
+        // `rule_decls` merges every matching rule, so assert `font-size`, which only the per-level rule
+        // supplies, or the absence checks below would hold vacuously for a lost rule.
         assert_eq!(
             decls.get("font-size").and_then(|v| px(v)),
             Some(font_size),
@@ -993,17 +948,8 @@ fn heading_bottom_rule_is_gone_from_base_and_theme() {
         );
     }
 
-    // The theme half. Substring checks against the WHOLE document, not
-    // `rule_decls`: the light palette lives inside the one `@media
-    // (prefers-color-scheme: light)` block, which the crude parser deliberately
-    // cannot address (see `style_block`). One check covers BOTH palettes.
-    //
-    // Note for future authors: this is a substring check over the whole emitted
-    // document, and base.css's header comment ships inside that document. So
-    // merely MENTIONING `border-bottom-color` in CSS prose will fail this test,
-    // not just declaring it. That is deliberate — a comment describing a border
-    // color is a strong hint someone is about to re-add one — but if you trip it
-    // from a comment, the fix is to reword the comment, not to loosen the check.
+    // Substring checks over the whole document, since `rule_decls` cannot reach the `@media` block.
+    // base.css's comments ship too: if CSS prose trips this, reword the prose, not the check.
     let html = render_html(
         "# Title\n\n## Section\n",
         PreviewTheme::Default,
@@ -1103,12 +1049,8 @@ fn hr_occupies_whole_baselines_and_is_painted_by_its_border() {
          instead of a hairline: {decls:?}"
     );
 
-    // The important half: the theme guard. `themes/default.css` is emitted
-    // AFTER base.css, so a leftover `hr { background-color: … }` WINS the
-    // cascade and paints the 24px box as a solid bar — the highest-consequence
-    // regression in this change. Substring checks, not `rule_decls`: the light
-    // palette lives inside the one `@media` block, which the crude parser
-    // cannot address (see `style_block`).
+    // Theme guard: emitted after base.css, a leftover `hr { background-color }` wins and paints the
+    // 24px box as a solid bar. Substring checks, since `rule_decls` cannot reach `@media`.
     let html = render_html("---\n", PreviewTheme::Default, WidthMode::Full);
     assert!(
         html.contains("border-top-color: #3a3a3a"),
@@ -1214,9 +1156,8 @@ fn pre_sits_on_the_baseline_grid() {
         "`pre` margin must be `0 0 24px`: {decls:?}"
     );
 
-    // Regression guard for the 0.81em compounding bug: `code` set 0.9em and
-    // `pre code` ALSO set 0.9em, so code inside a <pre> rendered at 0.81em.
-    // The size is now set once, on `pre`.
+    // `code` and `pre code` both at 0.9em compound to 0.81em inside <pre>, so the size is set
+    // once, on `pre`.
     let pre_code = rule_decls(&css, "pre code");
     assert_eq!(
         pre_code.get("font-size").map(String::as_str),
@@ -1237,16 +1178,8 @@ fn pre_sits_on_the_baseline_grid() {
 fn inline_code_declares_zero_leading_so_it_cannot_grow_a_line_box() {
     let css = rendered_stylesheet();
 
-    // The FULL selector, never a bare `code`, and that choice is load-bearing.
-    // `selector_entry_matches` strips a purely-descendant ancestor prefix, so the
-    // query `code` would ALSO match `body.wolf-markdown pre code` and merge its
-    // declarations in — and a future edit that moved this zero onto `pre code`
-    // alone would then keep this test green while inline `code` in a paragraph
-    // silently regained its 24px box, which is the case the zero exists for.
-    // `body.wolf-markdown code` cannot match `body.wolf-markdown pre code`
-    // (`strip_suffix` fails), so the merge here is only with `themes/*.css`'s own
-    // `body.wolf-markdown code` rules, which declare colour and background only
-    // and so cannot supply a `line-height` this assertion would read.
+    // The full selector, never a bare `code`: see crates/wolf-core/tests/README.md#markdown_renderrs
+    // Its only merge partners are the themes' `body.wolf-markdown code` rules, colour only.
     let decls = rule_decls(&css, "body.wolf-markdown code");
 
     assert_eq!(
@@ -1290,13 +1223,8 @@ fn inline_code_declares_zero_leading_so_it_cannot_grow_a_line_box() {
 fn pre_code_declares_no_leading_of_its_own() {
     let css = rendered_stylesheet();
 
-    // The companion to the test above, and the ONE case that test structurally
-    // cannot see. `selector_entry_matches` requires the query to be the entry, or
-    // the entry's suffix after a purely-descendant prefix, so
-    // `body.wolf-markdown code` cannot match `body.wolf-markdown pre code` — the
-    // `strip_suffix` succeeds but the discarded prefix is `body.wolf-markdown pre `,
-    // which is not what that query names. Adding a `line-height` HERE would
-    // therefore leave the zero-leading test fully green.
+    // The case the test above cannot see: its query never matches `body.wolf-markdown pre code`,
+    // so a `line-height` added here would leave it green.
     let decls = rule_decls(&css, "body.wolf-markdown pre code");
 
     assert!(
@@ -1341,20 +1269,8 @@ fn pre_code_declares_no_leading_of_its_own() {
 
 #[test]
 fn blockquote_last_child_margin_is_zeroed() {
-    // One of the three rules that exist ONLY to prevent a specific layout bug,
-    // and the only one the rest of the suite does not reach:
-    //   - `pre code { font-size: inherit }` is guarded by
-    //     `pre_sits_on_the_baseline_grid`;
-    //   - `li > ul, li > ol { margin-bottom: 0 }` is incidentally guarded by the
-    //     sweep, which asserts that every GRID_SELECTORS rule is non-empty;
-    //   - this one has no guard at all and can currently be deleted silently.
-    //
-    // What deleting it would cause: a blockquote's last child (typically a <p>,
-    // which carries `margin: 0 0 24px`) keeps its bottom margin, and because
-    // blockquote has NO vertical padding, that margin has nothing to collapse
-    // through — the quote renders 24px TALLER than its content. That is still
-    // on-grid, so the sweep would never notice, but it is visually lopsided
-    // against the quote's 0 top padding: air below the text, none above.
+    // Deleting this rule leaves a blockquote's last <p> with an uncollapsed 24px bottom margin (no
+    // vertical padding): on-grid but lopsided, and no other test guards it.
     let css = rendered_stylesheet();
     let decls = rule_decls(&css, "blockquote > :last-child");
 
@@ -1376,24 +1292,8 @@ fn blockquote_last_child_margin_is_zeroed() {
 
 #[test]
 fn stylesheets_are_emitted_in_base_then_math_then_theme_order() {
-    // Emission order is load-bearing, not cosmetic: the three stylesheets share
-    // one <style> block at equal specificity, so on any conflicting property the
-    // LAST one wins. Plan §10 flags this as a MEDIUM risk for math.css (which is
-    // vendored and must not be edited — it wins over base.css on anything it
-    // touches), and the `hr` theme guard in
-    // `hr_occupies_whole_baselines_and_is_painted_by_its_border` proves the same
-    // ordering for the theme: base.css sets `background: transparent` on a 24px
-    // hr box, and only because the theme comes AFTER can it repaint that box —
-    // which is exactly why the theme must use `border-top-color` and not
-    // `background-color`. Reorder these and the grid's compensation rules start
-    // losing cascades silently, with no other test noticing.
-    //
-    // Markers are chosen to be stable and unique to one file: `--wolf-baseline`
-    // is base.css's documented grid token (and is separately asserted by
-    // `baseline_unit_is_declared`); `menv-cases` is a vendored pulldown-latex
-    // class name in math.css that this repo does not author; `color-scheme:
-    // light dark` is the theme declaration `default_theme_carries_dark_and_light_palettes`
-    // already pins. None can be edited away without failing another test first.
+    // Emission order base, math, theme is load-bearing: one <style> block, equal specificity.
+    // See notes/crates/wolf-core/tests/markdown_render.rs.md#stylesheet-emission-order
     let source = "# Title\n\nInline $e=mc^2$ and a rule.\n\n---\n";
     let html = render_html(source, PreviewTheme::Default, WidthMode::Full);
 
@@ -1431,11 +1331,8 @@ fn stylesheets_are_emitted_in_base_then_math_then_theme_order() {
 
 #[test]
 fn every_vertical_dimension_is_on_the_baseline_grid() {
-    // The sweep. Over every styled selector, every vertical dimension must be
-    // 0 or a whole multiple of 24px — except the three documented compensations.
-    // Any NEW off-grid vertical value anywhere in base.css fails here, and any
-    // new compensated value forces its author to add an allowlist entry naming
-    // the border it pays for.
+    // Every vertical dimension of every styled selector is 0 or a multiple of 24px, except the
+    // allowlisted compensations, each of which names the border it pays for.
     let css = rendered_stylesheet();
     let mut violations: Vec<String> = Vec::new();
 
@@ -1512,54 +1409,8 @@ fn every_vertical_dimension_is_on_the_baseline_grid() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Edge-reset assertions: the RENDERED structure, not the declaration text.
-//
-// Every test above audits `base.css` as TEXT. That is structurally unable to
-// catch the class of bug where a declaration exists, is spelled correctly, and
-// still applies to the wrong element — which is exactly what the NAIVE spelling
-// of the two edge rules does:
-//
-//   body.wolf-markdown > *:first-child { margin-top: 0 }
-//   body.wolf-markdown > *:last-child  { margin-bottom: 0 }
-//
-// The scroll-sync `MarkerInjector` flushes its column-ZERO `<span
-// class="wolf-src">` anchors as raw HTML BEFORE each block's opening tag (its
-// per-100-column anchors go inside the block's inline content instead, which is
-// irrelevant here — they are never direct children of the body), and the
-// `wl-1-0` anchor has byte offset 0 — so the body's actual first child is an
-// ANCHOR, not the first block:
-//
-//   <body class="wolf-markdown"><span class="wolf-src" id="wl-1-0" …></span><h1 …>
-//
-// `:first-child` would therefore match a span that has no margin to zero,
-// leaving the <h1> with its full 48px margin-top. The body has NO padding, so
-// that margin resolves one of two ways, and it does not matter which: either it
-// collapses out through the body's top edge (the body satisfies every condition
-// for parent-child collapsing — no border-top, no padding-top, no clearance, no
-// BFC), displacing the whole document 48px down; or, if the leading anchor's
-// anonymous block box blocks the collapse-through, the 48px sits INSIDE the body
-// between the anchor and the <h1>. Both outcomes put the opening heading 48px
-// below the top edge and defeat flush-to-edge. (The escaped-margin case is
-// positional, NOT a color gap: neither base.css nor the theme sets a background
-// on `html`, so the body's background propagates to the canvas and paints the
-// displaced region.) `base.css` consequently spells the opening-block rule as
-//
-//   body.wolf-markdown > *:not(.wolf-src):not(*:not(.wolf-src) ~ *)
-//
-// — "not an anchor, and no non-anchor sibling precedes it" — which skips a
-// leading anchor run of ANY length. Symmetrically, `flush_before(usize::MAX)`
-// emits trailing anchors AFTER the last block, so `:last-child` matches an
-// anchor too. Note 48 is 2 baselines: the grid invariant SURVIVES, so the sweep
-// cannot see this either.
-//
-// These tests therefore pin the OUTCOME — "the declaration that must reach the
-// opening/closing block actually wins on that block" — by parsing the emitted
-// body into its child list and resolving the cascade against it. They are
-// deliberately agnostic about HOW that is achieved: any selector shape that
-// skips the anchors passes, and so would a change that stopped emitting a
-// leading anchor at all.
-// ---------------------------------------------------------------------------
+// --- Edge-reset assertions: the rendered structure, not the declaration text ---
+// See notes/crates/wolf-core/tests/markdown_render.rs.md#edge-resets-skip-leading-anchors
 
 /// A direct element child of `<body class="wolf-markdown">`.
 #[derive(Debug, Clone)]
@@ -1930,9 +1781,8 @@ fn selector_matches_body_child(entry: &str, children: &[BodyChild], idx: usize) 
     if steps[0].1 != "body.wolf-markdown" {
         return Some(false);
     }
-    // The first hop must land ON a body child (child or descendant combinator);
-    // any further `>`/descendant hop lands on a DESCENDANT of a body child, which
-    // is never the element under test.
+    // The first hop lands on a body child; any later hop lands on a descendant of one, which is
+    // never the element under test.
     if !matches!(steps[1].0, '>' | ' ') {
         return Some(false);
     }
@@ -2103,9 +1953,7 @@ fn anchor_note(children: &[BodyChild], idx: usize, leading: bool) -> String {
 
 #[test]
 fn first_child_margin_reset_reaches_the_opening_heading() {
-    // A document that OPENS with a heading — the exact case the opening-block
-    // rule, `> *:not(.wolf-src):not(*:not(.wolf-src) ~ *) { margin-top: 0 }`,
-    // exists for.
+    // A document that opens with a heading: the case the opening-block rule exists for.
     let html = render_html(
         "# Title\n\nBody text.\n",
         PreviewTheme::Default,
@@ -2185,14 +2033,8 @@ const MIN_LEADING_ANCHORS: usize = 2;
 
 #[test]
 fn first_child_margin_reset_survives_a_multi_anchor_leading_run() {
-    // The same outcome as the test above, but with a leading anchor run LONGER
-    // THAN ONE. Leading blank lines advance the first block's source line past
-    // 0, so the renderer flushes a marker per skipped line before the opening
-    // <h1>. Blank lines are the only way to stack a leading run: a heading past
-    // 100 columns does not, because its per-100-column anchors are placed inside
-    // the <h1> rather than before it. Nothing about this is exotic — a document
-    // that opens with a blank line is ordinary — so the reset must hold for a run
-    // of any length, not just one.
+    // A leading anchor run longer than one: leading blank lines flush a marker per skipped line
+    // before the <h1> (long-heading anchors go inside it), and opening blank lines are ordinary.
     let html = render_html(
         "\n\n# Title\n\nBody.\n",
         PreviewTheme::Default,
@@ -2256,10 +2098,8 @@ fn first_child_margin_reset_survives_a_multi_anchor_leading_run() {
 
 #[test]
 fn last_child_margin_reset_reaches_the_closing_block() {
-    // A TRAILING NEWLINE is the common case, and it is what puts a trailing
-    // `wolf-src` anchor after the final block: the last hard line's marker has
-    // nowhere left to attach, so `flush_before(usize::MAX)` emits it after the
-    // closing tag.
+    // A trailing newline, the common case, puts a `wolf-src` anchor after the final block via
+    // `flush_before(usize::MAX)`.
     let html = render_html(
         "# Title\n\nLast paragraph.\n",
         PreviewTheme::Default,
@@ -2325,13 +2165,8 @@ fn last_child_margin_reset_reaches_the_closing_block() {
 
 #[test]
 fn scroll_sync_anchors_stay_zero_sized() {
-    // The guard that makes the two tests above safe to fix. The cheapest-looking
-    // way to stop the anchors from displacing `:first-child` is to change the
-    // `.wolf-src` rule — and it does not even work (`:first-child` is structural,
-    // so `display: none` would not help), while `font-size: 0` / `line-height: 0`
-    // are load-bearing: the body sets `line-height` as a LENGTH, so without the
-    // explicit zero every marker would inherit a hard 24px line box and inject a
-    // visible blank line before every block in the document.
+    // Keeps `.wolf-src` zero-sized: body sets `line-height` as a length, so without these zeros each
+    // marker inherits a 24px line box. No edit to this rule can fix the structural `:first-child`.
     let css = rendered_stylesheet();
     let decls = rule_decls(&css, ".wolf-src");
 
@@ -2356,23 +2191,8 @@ fn scroll_sync_anchors_stay_zero_sized() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Inline-level anchoring for the per-100-column markers.
-//
-// Reported symptom: "if a single paragraph is very long and a user is typing at
-// the end, it is the beginning of the paragraph that is in view, not the end."
-// The per-100-column markers used to be flushed before the block's opening tag
-// along with the per-line ones, so every one of them measured to the paragraph's
-// top and cursor-follow always revealed the paragraph's start.
-//
-// A block's interior `col != 0` markers are now DEFERRED past the opening tag and
-// placed at their real position in the rendered inline flow. Column-zero markers
-// keep their block-top placement (the front-end's tier-4 sweep filters on
-// `[data-col="0"]` and depends on their document order), and the placement is
-// suppressed inside code blocks, HTML blocks, tables and image alt text.
-//
-// These tests use the PUBLIC surface only, like the rest of this file.
-// ---------------------------------------------------------------------------
+// --- Inline-level anchoring for the per-100-column markers ---
+// See notes/crates/wolf-core/tests/markdown_render.rs.md#inline-column-anchors
 
 /// Number of `"lorem ipsum dolor "` (18-character) repeats that make the
 /// regression fixture's paragraph: 30 × 18 = 540 characters on ONE hard line, so
@@ -2487,11 +2307,8 @@ fn mixed_marker_fixture() -> String {
 
 #[test]
 fn long_single_line_paragraph_anchors_inside_the_paragraph() {
-    // THE regression test for the reported bug. Hard line 3 is one 540-character
-    // paragraph (`"lorem ipsum dolor "` is 18 characters). Its `wl-3-0` anchor
-    // keeps the block-top placement, but `wl-3-100`, `wl-3-200` and `wl-3-300`
-    // must now sit INSIDE the <p>, in source order, so a cursor deep in the line
-    // resolves to a rect deep in the rendered paragraph.
+    // Line 3 is a 540-char paragraph: `wl-3-0` stays at the block top, but `wl-3-{100,200,300}` sit
+    // inside the <p> in order, so a cursor deep in the line resolves deep in the paragraph.
     let paragraph = "lorem ipsum dolor ".repeat(REGRESSION_PARAGRAPH_REPEATS);
     assert!(
         paragraph.chars().count() > 3 * COLUMN_STRIDE as usize,
@@ -2540,10 +2357,8 @@ fn long_single_line_paragraph_anchors_inside_the_paragraph() {
 
 #[test]
 fn inline_marker_never_lands_inside_a_fenced_code_block() {
-    // Hard line 4 is a 200-character code line, so it earns a `wl-4-100` marker
-    // whose byte offset is inside the fence. Inside a fenced block a single Text
-    // event can span a whole line INCLUDING its newline, so without the exclusion
-    // that marker would split the rendered code.
+    // Line 4 is a 200-char code line whose `wl-4-100` falls inside the fence; one Text event can
+    // span a whole code line, so without the exclusion the marker would split the code.
     let code_line = "x".repeat(2 * COLUMN_STRIDE as usize);
     let source = format!("# H\n\n```\n{code_line}\ncode two\n```\n");
 
@@ -2573,10 +2388,8 @@ fn inline_marker_never_lands_inside_a_fenced_code_block() {
 
 #[test]
 fn inline_marker_never_lands_inside_a_highlighted_code_block() {
-    // The highlighted path: `CodeHighlighter` rewrites the block interior into one
-    // inline-HTML event but keeps the real `Start`/`End(CodeBlock)`, so the
-    // exclusion must still bracket the block — and the `<pre><code
-    // class="language-…">` wrapper must be untouched.
+    // `CodeHighlighter` rewrites the interior into one inline-HTML event but keeps Start/End, so
+    // the exclusion must still bracket the block and leave the `<pre><code>` wrapper untouched.
     const HIGHLIGHT_END_COL: u32 = 10;
     let code_line = "x".repeat(2 * COLUMN_STRIDE as usize);
     let source = format!("# H\n\n```rust\n{code_line}\ncode two\n```\n");
@@ -2628,11 +2441,8 @@ fn inline_marker_never_lands_inside_a_highlighted_code_block() {
 
 #[test]
 fn image_alt_attribute_never_receives_a_marker() {
-    // `"alt word "` is 9 characters, so the alt text spans source bytes 2..182 and
-    // character column 100 falls well inside it. pulldown-cmark builds the `alt`
-    // attribute by consuming the image's inner events: it ESCAPES text into the
-    // attribute and DROPS raw HTML outright — so a marker leaking in would either
-    // corrupt `alt="…"` or vanish from the document entirely.
+    // Column 100 falls inside the alt text, which pulldown-cmark builds by escaping text and
+    // dropping raw HTML, so a leaked marker would corrupt `alt="…"` or vanish.
     let source = format!("![{}](i.png)", "alt word ".repeat(20));
     let html = render_html(&source, PreviewTheme::Default, WidthMode::Full);
 
@@ -2661,12 +2471,8 @@ fn image_alt_attribute_never_receives_a_marker() {
 
 #[test]
 fn escapes_and_entities_survive_inline_anchoring() {
-    // 96 filler characters put `&amp;` at bytes 96..101, so character column 100
-    // (the `;`) falls STRICTLY inside the entity's source span — a region whose
-    // rendered payload (`&`) is unrelated to its source bytes, so it must never be
-    // split. `\*escaped\*` follows, where the backslash bytes are covered by no
-    // event at all. Total line length is 174 characters: past one stride, short of
-    // two.
+    // Column 100 (the `;`) falls inside `&amp;`, whose rendered payload is unrelated to its bytes;
+    // `\*escaped\*` then has bytes covered by no event. 174 chars: past one stride, short of two.
     let source = format!("{}&amp; \\*escaped\\* {}", "a".repeat(96), "a".repeat(60));
     assert!(
         source.chars().count() > COLUMN_STRIDE as usize
@@ -2703,18 +2509,8 @@ fn escapes_and_entities_survive_inline_anchoring() {
 
 #[test]
 fn column_zero_markers_still_collapse_to_the_block_top() {
-    // Pins BOTH halves of the placement rule at once, on one paragraph made of
-    // three hard lines whose first line is 250 characters:
-    //
-    //   * `wl-1-0`, `wl-2-0` and `wl-3-0` all still collapse to before the <p>;
-    //   * `wl-1-100` and `wl-1-200` sit inside it.
-    //
-    // That also pins the DOCUMENTED ordering exception: in document order the
-    // later lines' column-zero anchors precede line 1's interior anchors, so
-    // markers are no longer globally ascending. That is only safe because the
-    // front-end's fallback sweep filters on `[data-col="0"]`, and the col-0
-    // subsequence IS still ascending (see
-    // `column_zero_markers_appear_in_ascending_document_order`).
+    // `wl-{1,2,3}-0` collapse before the <p> while `wl-1-100`/`-200` sit inside it, so markers are
+    // not globally ascending; the col-0 subsequence still is, as the test below pins.
     let long_first_line = "a".repeat(250);
     let source = format!("{long_first_line}\nsecond line\nthird line\n");
 
@@ -2755,9 +2551,7 @@ fn column_zero_markers_still_collapse_to_the_block_top() {
 
 #[test]
 fn every_marker_id_appears_exactly_once() {
-    // The "none emitted twice, none dropped" guard, over a fixture that drives
-    // every placement path (inline split, deferral past an un-splittable region,
-    // block-top flush for code/table/image, and the trailing flush).
+    // None emitted twice, none dropped, over a fixture that drives every placement path.
     let source = mixed_marker_fixture();
     let html = render_html(&source, PreviewTheme::Default, WidthMode::Full);
 
@@ -2788,14 +2582,8 @@ fn every_marker_id_appears_exactly_once() {
 
 #[test]
 fn column_zero_markers_appear_in_ascending_document_order() {
-    // The exact invariant the front-end's tier-4 fallback sweep depends on: it
-    // walks `.wolf-src[data-col="0"]` BACKWARDS from the end of the document to
-    // find the nearest preceding line, which is only correct while the col-0
-    // anchors' `data-line` values are non-decreasing in document order.
-    //
-    // Interior (`col != 0`) anchors deliberately break the GLOBAL ordering — see
-    // `column_zero_markers_still_collapse_to_the_block_top` — so this subsequence
-    // is what has to hold, and the sweep must never be widened to all `.wolf-src`.
+    // The tier-4 sweep walks `.wolf-src[data-col="0"]` backwards, so col-0 `data-line` must not
+    // decrease; interior anchors break global order, so never widen the sweep to all `.wolf-src`.
     let source = mixed_marker_fixture();
     let html = render_html(&source, PreviewTheme::Default, WidthMode::Full);
 
@@ -2817,17 +2605,8 @@ fn column_zero_markers_appear_in_ascending_document_order() {
 
 #[test]
 fn inline_marker_lands_inside_its_own_list_item() {
-    // A container claims ALL of its items' markers at its own `Start`, so a
-    // multi-item list is the case where two siblings' deferred markers coexist in
-    // the queue. Hard line 1 is the short item; hard line 2 is `- ` + 240
-    // characters = 242 characters, so it earns `wl-2-100` and `wl-2-200` (300 is
-    // not < 242), whose byte offsets (112 and 212) both fall inside the SECOND
-    // item's text.
-    //
-    // The list is TIGHT (no blank line between the items), so pulldown-cmark
-    // splices the item paragraphs away and renders `<ul>\n<li>…</li>\n<li>…</li>\n
-    // </ul>` with no `<p>` wrappers — these assertions do not depend on that
-    // either way, they only key off the `</li>` positions.
+    // A container claims all its items' markers at its `Start`, so siblings' deferred markers
+    // coexist; line 2 (242 chars) earns `wl-2-100`/`-200` at bytes 112 and 212, in the second item.
     let long = "lorem ipsum ".repeat(20);
     let source = format!("- short one\n- {long}\n");
 
@@ -2897,24 +2676,8 @@ fn inline_marker_lands_inside_its_own_list_item() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// NESTED excluded blocks.
-//
-// Every other code-block / table test in this file uses a TOP-LEVEL block, where
-// nothing is ever deferred — so they cannot see this failure mode at all:
-//
-//   A CONTAINER (`List` / `Item` / `BlockQuote` / `FootnoteDefinition`) defers
-//   every `col != 0` marker across its WHOLE range at its own `Start`, including
-//   markers whose byte offsets fall inside a `CodeBlock` / `HtmlBlock` / `Table`
-//   NESTED in that container. By the time the nested block's `Start` arrives
-//   those markers are already deferred — past the marker cursor — so the nested
-//   block's own non-deferrable claim cannot reclaim them. They then survive to
-//   the nested block's `End`, where the suppression depth has already dropped
-//   back to 0, and get drained INSIDE `<pre><code>` / `<table>`.
-//
-// The markers of a nested excluded block must instead be flushed ahead of that
-// block's opening tag, exactly as a top-level one's are.
-// ---------------------------------------------------------------------------
+// --- Nested excluded blocks: a container's deferred markers must not drain inside them ---
+// See notes/crates/wolf-core/tests/markdown_render.rs.md#nested-excluded-blocks
 
 /// The slice of `html` from the first `open` to the first `close`, with `html` in
 /// the panic message when either is missing. Crude on purpose — the fixtures
@@ -2950,9 +2713,8 @@ fn nested_exclusion_failure(container: &str, nested: &str, region: &str, html: &
 
 #[test]
 fn nested_code_block_in_a_blockquote_takes_no_inline_marker() {
-    // Hard line 2 is `> ` + 200 characters = 202 characters, so it earns `wl-2-100`
-    // and `wl-2-200` at byte offsets 106 and 206 — both inside the fenced block's
-    // source range, and both deferred by the enclosing blockquote.
+    // Line 2 (`> ` + 200 = 202 chars) earns `wl-2-100`/`-200` at bytes 106 and 206, inside the
+    // fence and deferred by the blockquote.
     let long = "x".repeat(2 * COLUMN_STRIDE as usize);
     let source = format!("> ```\n> {long}\n> ```\n");
 
@@ -2982,10 +2744,8 @@ fn nested_code_block_in_a_blockquote_takes_no_inline_marker() {
 
 #[test]
 fn nested_code_block_in_a_list_item_takes_no_inline_marker() {
-    // The same hole reached through `List`/`Item` rather than `BlockQuote`, and the
-    // shape this repo's own Markdown actually uses. Hard line 2 is two spaces of
-    // continuation indent plus 200 characters = 202 characters, so `wl-2-100` and
-    // `wl-2-200` sit at byte offsets 106 and 206, inside the fence.
+    // The same hole via `List`/`Item`, the shape this repo's Markdown uses: line 2 (2 + 200 chars)
+    // puts `wl-2-100`/`-200` at bytes 106 and 206, inside the fence.
     let long = "x".repeat(2 * COLUMN_STRIDE as usize);
     let source = format!("- ```\n  {long}\n  ```\n");
 
@@ -3027,10 +2787,8 @@ fn nested_code_block_in_a_list_item_takes_no_inline_marker() {
 
 #[test]
 fn nested_table_in_a_list_item_takes_no_inline_marker() {
-    // The foster-parenting variant: a raw span emitted between `<tbody>` and `<tr>`
-    // is relocated OUT of the table by the HTML parser, so it must never get there.
-    // Hard line 3 is `  | ` + 130 + ` | y |` = 140 characters, so it earns
-    // `wl-3-100` at byte offset 128 — inside the table, deferred by the list.
+    // Foster-parenting: the HTML parser relocates a span between `<tbody>` and `<tr>` out of the
+    // table. Line 3 is 140 chars, so `wl-3-100` sits at byte 128, inside it, deferred by the list.
     let long_cell = "w".repeat(130);
     let source = format!("- | a | b |\n  | --- | --- |\n  | {long_cell} | y |\n");
 
@@ -3077,19 +2835,8 @@ fn nested_table_in_a_list_item_takes_no_inline_marker() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Bundled-font licence notices in the document HEAD.
-//
-// The four fonts this crate bundles are compiled into `wolf_core::licenses` and
-// emitted into every rendered document's `<head>` as an HTML comment. These two
-// cases assert the user-facing half of that: that the notices REACH a rendered
-// document at all, and that they land where they cannot disturb the stylesheet.
-//
-// Following this file's stated re-declare-do-not-import discipline, the four
-// distinctive phrases are local literals. Importing them from
-// `wolf_core::licenses` would make these cases assert that a constant equals
-// itself, and they would keep passing with the head interpolation deleted.
-// ---------------------------------------------------------------------------
+// --- Bundled-font licence notices in the document head ---
+// Phrases are local literals: importing them from `wolf_core::licenses` would assert x == x.
 
 /// Inter's distinctive phrase, from its own copyright line.
 ///
@@ -3120,9 +2867,8 @@ const LICENCE_PHRASES: [(&str, &str); 4] = [
 
 #[test]
 fn every_bundled_font_licence_ships_in_the_rendered_document() {
-    // The obligation this discharges is a licence-compliance one, not a cosmetic
-    // one: two of these fonts are embedded in the document as base64 `@font-face`
-    // payloads, and the other two ship as editor faces in the same distribution.
+    // A licence-compliance obligation: two fonts embed as base64 `@font-face` payloads and the
+    // other two ship as editor faces in the same distribution.
     let html = render_html("# Hi\n\ntext", PreviewTheme::Default, WidthMode::Full);
 
     for (font, phrase) in LICENCE_PHRASES {
@@ -3140,14 +2886,8 @@ fn every_bundled_font_licence_ships_in_the_rendered_document() {
 
 #[test]
 fn the_licence_notices_sit_in_the_document_head() {
-    // Placement is load-bearing, not tidiness. `base.css` selects the first and last
-    // real block with `body.wolf-markdown > *:not(.wolf-src):not(*:not(.wolf-src) ~ *)`
-    // and `:has(~ *:not(.wolf-src))`, so a new element child inside <body> takes
-    // `:last-child` and the real last block loses its bottom-margin reset — which
-    // `every_vertical_dimension_is_on_the_baseline_grid` is the standing guard for.
-    // The head placement is also what keeps `markdown.rs`'s "the head is
-    // byte-identical on every render" premise true, since the notices are a
-    // compile-time constant.
+    // Head placement is load-bearing: a new body child would take `:last-child` from the real last
+    // block, and the compile-time notices keep the head byte-identical on every render.
     let html = render_html("# Hi\n\ntext", PreviewTheme::Default, WidthMode::Full);
 
     let body_at = html.find("<body").unwrap_or_else(|| {

@@ -1,18 +1,4 @@
-//
-//  KeyComposer.swift
-//  The macOS dead-key / Option-character composition glue (option-as-option).
-//
-//  A surgical wrapper over Carbon's `UCKeyTranslate` that threads a persisted
-//  `deadKeyState` across keystrokes so an Option-then-letter dead-key sequence
-//  (Option-u then u → "ü") composes, while a plain key with no pending dead key
-//  composes to itself. This is the AppKit/Carbon-bound half of the feature; the
-//  pure DECISION logic (whether to route here, and how a composed string maps to
-//  `FfiKeyEvent`s) lives in the headlessly-testable `KeyComposition` seam in the
-//  WolfKeyMap module.
-//
-//  It is deliberately NOT unit-testable (it reads the live keyboard layout via
-//  TSM); its contract is proven end-to-end by the `wolf-ffi` `unicode_key`
-//  real-nvim test, which asserts the composed scalar reaches the buffer.
+// Dead-key and Option-character composition over Carbon's `UCKeyTranslate`.
 
 import AppKit
 import Carbon.HIToolbox

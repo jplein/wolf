@@ -636,12 +636,8 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
-    // Nothing in this module reads a clock, touches the environment or touches GTK,
-    // and neither does anything below: every [`Duration`] is constructed directly,
-    // every environment value arrives as an `Option<&str>` argument, and no test
-    // sleeps. That is the whole reason the seam takes the RAW value rather than an
-    // environment map — a parallel `cargo test` process must never mutate its own
-    // environment (the rule `config_seam::resolve_font_pt` already establishes).
+    // No clock, environment or GTK here or below: durations are built directly and env values arrive
+    // as `Option<&str>`, since a parallel `cargo test` must never mutate its environment.
 
     /// Nanoseconds per millisecond, so a fixture reads as a duration a human can
     /// picture rather than as a seven-digit integer.
@@ -735,9 +731,7 @@ mod tests {
             .collect()
     }
 
-    // ---------------------------------------------------------------------------
-    // 0. Bucket identity
-    // ---------------------------------------------------------------------------
+    // --- 0. Bucket identity ---
 
     /// Pins every variant's storage index and report label, and that [`Bucket::ALL`]
     /// is `0..15` ascending with no gaps.
@@ -865,9 +859,7 @@ mod tests {
         );
     }
 
-    // ---------------------------------------------------------------------------
-    // 1. Environment parsing (the raw value, never the environment)
-    // ---------------------------------------------------------------------------
+    // --- 1. Environment parsing (the raw value, never the environment) ---
 
     /// One [`is_enabled`] row.
     struct EnabledCase {
@@ -1248,9 +1240,7 @@ mod tests {
         }
     }
 
-    // ---------------------------------------------------------------------------
-    // 2. Accumulation
-    // ---------------------------------------------------------------------------
+    // --- 2. Accumulation ---
 
     /// Pins the mean as TRUNCATING integer division, `sum / count`.
     ///
@@ -1320,9 +1310,7 @@ mod tests {
         }
     }
 
-    // ---------------------------------------------------------------------------
-    // 3. Percentile math (nearest-rank)
-    // ---------------------------------------------------------------------------
+    // --- 3. Percentile math (nearest-rank) ---
 
     /// One [`percentile`] row.
     struct PercentileCase<'a> {
@@ -1518,9 +1506,8 @@ mod tests {
             );
         }
 
-        // The upper clamp's own case. `p = 1.5` puts the rank at `ceil(1.5 * 3) - 1
-        // == 4`, two slots past the last element of a three-element slice, which is
-        // the only shape of input that reaches the clamp at all.
+        // The upper clamp's own case: `p = 1.5` ranks `ceil(4.5) - 1 == 4`, two past the end of a
+        // three-element slice, the only input shape that reaches the clamp.
         let three = [1_u64, 2, 3];
         assert_eq!(
             percentile(&three, 1.5),
@@ -1535,9 +1522,7 @@ mod tests {
         );
     }
 
-    // ---------------------------------------------------------------------------
-    // 4. Bucket isolation
-    // ---------------------------------------------------------------------------
+    // --- 4. Bucket isolation ---
 
     /// Recording one bucket leaves every other one out of the report entirely.
     ///
@@ -1637,9 +1622,7 @@ mod tests {
         }
     }
 
-    // ---------------------------------------------------------------------------
-    // 5. The ring bound and truncation
-    // ---------------------------------------------------------------------------
+    // --- 5. The ring bound and truncation ---
 
     /// The percentile window is bounded to the LAST [`SAMPLE_CAPACITY`] samples,
     /// while `count`, the sum and `max` stay exact and unbounded.
@@ -1676,8 +1659,7 @@ mod tests {
         const P50_RANK: u64 = 2047;
         // ceil(0.95 * 4096) - 1 == ceil(3891.2) - 1 == 3892 - 1 == 3891
         const P95_RANK: u64 = 3891;
-        // 100 samples of 1 ns == 100; plus sum(1000..5096) == 4096 * 1000 + (4095 * 4096 / 2)
-        //   == 4_096_000 + 8_386_560 == 12_482_560; total 12_482_660 over 4196 samples.
+        // 100 × 1 ns + sum(1000..5096) == 100 + 12_482_560 == 12_482_660 over 4196 samples;
         // 4196 * 2974 == 12_478_904, remainder 3756 < 4196, so the truncating mean is 2974.
         const EXPECT_MEAN: u64 = 2974;
 
@@ -1827,9 +1809,7 @@ mod tests {
         );
     }
 
-    // ---------------------------------------------------------------------------
-    // 6. The wakes/keystroke ratio
-    // ---------------------------------------------------------------------------
+    // --- 6. The wakes/keystroke ratio ---
 
     /// One [`Report::wakes_per_keystroke`] row.
     struct RatioCase {
@@ -1931,9 +1911,7 @@ mod tests {
         }
     }
 
-    // ---------------------------------------------------------------------------
-    // 7. reset() and the emit gate
-    // ---------------------------------------------------------------------------
+    // --- 7. reset() and the emit gate ---
 
     /// `reset` zeroes every bucket and both counters, after every mutator.
     ///
@@ -2098,9 +2076,7 @@ mod tests {
         );
     }
 
-    // ---------------------------------------------------------------------------
-    // 8. Format stability and diffability
-    // ---------------------------------------------------------------------------
+    // --- 8. Format stability and diffability ---
 
     /// The byte-exact report table, from a [`Report`] whose buckets are supplied OUT
     /// OF ORDER.

@@ -223,12 +223,8 @@ pub fn grid_size_for_pane(
     cell_h: f64,
     cap: ColumnCap,
 ) -> (u16, u16) {
-    // The rect the DIVISION uses is deliberately the UNCAPPED one, and the cap is
-    // applied to the column COUNT below. `floor_to_px` truncates the rect's width to
-    // whole pixels, and a capped width is EXACTLY `max_cols * cell_w` — so flooring
-    // it first loses a fraction of a pixel and with it the last whole column, every
-    // time the cell width is not integral, which is every cell width the shipped app
-    // measures. Do not "simplify" this by passing `cap` down.
+    // The division uses the uncapped rect and caps the column count: flooring a capped width loses
+    // the last column at every non-integral cell width. Do not pass `cap` down.
     let rect = grid_rect(
         f64::from(pane_w),
         f64::from(pane_h),
@@ -468,9 +464,7 @@ mod tests {
             },
             // --- The clamps: only w and h, and only at zero ---------------------
             RectCase {
-                // w = 40 - 40 = 0; h = 70 - 30 - 40 = 0. Both land exactly on the
-                // floor without the clamp doing anything, which is why rows 3 and 4
-                // exist beside this one.
+                // w = 40 - 40 = 0; h = 70 - 30 - 40 = 0: exactly on the floor with no clamp, hence rows 3 and 4.
                 desc: "a pane that is exactly its own chrome leaves no grid",
                 pane_w: 40.0,
                 pane_h: 70.0,
@@ -532,12 +526,8 @@ mod tests {
                 cap: ColumnCap::uncapped(CELL_W),
                 expected: (20.0, 50.0, 0.0, 0.0),
             },
-            // --- Non-finite inputs collapse the WHOLE result --------------------
-            // Not a per-field answer: a rect with a good `y` and a NaN `x` would let
-            // `grid_local` hand `cell_at` a NaN column for every pointer event in the
-            // pane, which `cell_at` silently treats as column 0 rather than
-            // rejecting. All four fields go to zero so the failure is visible as a
-            // zero-extent grid instead.
+            // Non-finite inputs collapse the whole result: a NaN `x` would hand `cell_at` a NaN column, read
+            // silently as column 0. Zeroing all four makes the failure a visible zero-extent grid.
             RectCase {
                 desc: "a NaN pane width collapses the whole result",
                 pane_w: f64::NAN,
@@ -565,15 +555,11 @@ mod tests {
                 cap: ColumnCap::uncapped(CELL_W),
                 expected: (0.0, 0.0, 0.0, 0.0),
             },
-            // --- The cap, the centring, and the three degenerate arms -----------
-            //
-            // Every row below shares one pane HEIGHT and one chrome — 680 px,
-            // statusbar_h 32, padding 20 — so y = 52 and h = 680 - 32 - 40 = 608
-            // throughout and only the x/w pair is under test.
+            // The cap, the centring and the degenerate arms. Every row shares 680 px height, statusbar_h 32,
+            // padding 20, so y = 52 and h = 608 throughout; only x/w is under test.
             RectCase {
                 // inset_w = 2500 - 40 = 2460; capped = min(2460, 90 * 8) = 720;
-                // centre = floor((2460 - 720) / 2) = floor(870.0) = 870;
-                // x = 20 + 870 = 890.
+                // centre = floor((2460 - 720) / 2) = 870; x = 20 + 870 = 890.
                 desc: "11: a pane far wider than the cap is capped and centred",
                 pane_w: 2500.0,
                 pane_h: 680.0,
@@ -586,9 +572,8 @@ mod tests {
                 expected: (890.0, 52.0, 720.0, 608.0),
             },
             RectCase {
-                // The SAME pane with no cap: x back at the padding, w the whole
-                // inset. Row 11's control — it is what makes row 11's failure name
-                // the cap rather than the pane arithmetic.
+                // The same pane uncapped: x at the padding, w the whole inset. Row 11's control, so its failure
+                // names the cap rather than the pane arithmetic.
                 desc: "12: the same pane uncapped fills the inset from the padding",
                 pane_w: 2500.0,
                 pane_h: 680.0,
@@ -598,10 +583,8 @@ mod tests {
                 expected: (20.0, 52.0, 2460.0, 608.0),
             },
             RectCase {
-                // inset_w = 2501 - 40 = 2461; capped = 720; the leftover 1741 is ODD,
-                // so centre = floor(870.5) = 870 and x = 890 — NOT 890.5. The only
-                // row in this table whose leftover is odd, and so the only one that
-                // can see the floor at all.
+                // inset_w = 2461; capped = 720; the leftover 1741 is odd, so centre = floor(870.5) = 870 and
+                // x = 890, not 890.5. The only odd leftover here, so the only row that sees the floor.
                 desc: "13: an odd leftover floors the centring offset",
                 pane_w: 2501.0,
                 pane_h: 680.0,
@@ -614,10 +597,8 @@ mod tests {
                 expected: (890.0, 52.0, 720.0, 608.0),
             },
             RectCase {
-                // inset_w = 700 - 40 = 660, and 90 * 8 = 720 > 660, so the cap does
-                // not bind: `min` picks the inset, the leftover is 0, and the rect is
-                // identical to row 15's uncapped twin. This is the arm every existing
-                // compositor smoke runs in.
+                // inset_w = 660 < 90 * 8 = 720, so the cap does not bind and the rect equals row 15's uncapped
+                // twin. Every existing compositor smoke runs in this arm.
                 desc: "14: a pane narrower than the cap is untouched by it",
                 pane_w: 700.0,
                 pane_h: 680.0,
@@ -630,9 +611,7 @@ mod tests {
                 expected: (20.0, 52.0, 660.0, 608.0),
             },
             RectCase {
-                // Row 14's uncapped twin, with the same expectation written out
-                // rather than cross-referenced, so "identical" is a value a reader
-                // can check by looking at two lines.
+                // Row 14's uncapped twin, with the expectation written out so "identical" is checkable by eye.
                 desc: "15: row 14's pane uncapped is the same rectangle",
                 pane_w: 700.0,
                 pane_h: 680.0,
@@ -642,9 +621,8 @@ mod tests {
                 expected: (20.0, 52.0, 660.0, 608.0),
             },
             RectCase {
-                // A cap measured in a ZERO-width cell names no width at all, so the
-                // whole cap is discarded rather than producing `min(2460, 0) = 0`. A
-                // zero-width grid is what hands Neovim a one-column window.
+                // A zero-width cell names no width, so the whole cap is discarded rather than giving
+                // `min(2460, 0) = 0`: a zero-width grid hands Neovim a one-column window.
                 desc: "16: a zero cell width discards the cap",
                 pane_w: 2500.0,
                 pane_h: 680.0,
@@ -671,12 +649,8 @@ mod tests {
                 expected: (20.0, 52.0, 2460.0, 608.0),
             },
             RectCase {
-                // The cell width inside the cap joins the four pane dimensions in the
-                // non-finite guard: a NaN there collapses the WHOLE result, exactly
-                // as a NaN pane width does in row 8. Without that arm the row yields
-                // (20, 52, 2460, 608), because `NaN > 0.0` is false and the capping
-                // branch is simply skipped — a plausible-looking rect, which is worse
-                // than a NaN one.
+                // The cap's cell width joins the non-finite guard, as a NaN pane width does in row 8. Without it
+                // `NaN > 0.0` skips capping and yields (20, 52, 2460, 608): plausible, which is worse than NaN.
                 desc: "18: a NaN cap cell width collapses the whole result",
                 pane_w: 2500.0,
                 pane_h: 680.0,
@@ -981,10 +955,8 @@ mod tests {
     fn grid_size_for_pane_table() {
         let cases = [
             SizeCase {
-                // w = 840 - 40 = 800 -> 800/8 = 100 cols.
-                // h = 680 - 32 - 40 = 608 -> 608/16 = 38 rows.
-                // Without the chrome the same pane would be 105 x 42, so the chrome
-                // costs exactly 5 columns and 4 rows here.
+                // w = 800 -> 100 cols; h = 680 - 32 - 40 = 608 -> 38 rows. Without the chrome the pane is
+                // 105 x 42, so the chrome costs exactly 5 columns and 4 rows.
                 desc: "A: the chrome costs whole cells in both axes",
                 pane_w: 840,
                 pane_h: 680,
@@ -1057,25 +1029,8 @@ mod tests {
                 expected: (101, 38),
             },
             SizeCase {
-                // The only row whose rect is NOT a whole number of pixels, and the
-                // only one that reaches this module's own `f64 -> i32` conversion.
-                //
-                // w = 840 - 40 = 800 -> 800/8 = 100 cols. Integral, so the column
-                //   axis is the CONTROL: it must not move.
-                // h = 680 - 32.5 - 40 = 607.5, FLOORED to 607 -> floor(607/16)
-                //   = 37.9375 -> 37 rows.
-                // Rounding instead would carry 607.5 to 608, and 608/16 is exactly
-                // 38 — a whole extra row of buffer text, from half a pixel of strip.
-                //
-                // The strip height this seam is CALLED with is integral by
-                // construction: `statusbar_layout`'s `height` is two `ceil`ed line
-                // boxes plus the vertical padding twice and the line gap once, all of
-                // which ship as whole numbers. So this row pins the seam's stated
-                // CONTRACT — the conversion floors, whatever it is handed — rather
-                // than a state production can reach today. That is deliberate: the
-                // seam takes `f64`, and the day someone feeds it a scaled or
-                // dpi-converted strip height is the day the contract has to already
-                // be true.
+                // The only fractional rect: h = 607.5 floors to 607 -> 37 rows (rounding gives 38); w is control.
+                // See notes/crates/wolf-gnome/src/editor_inset.rs.md#fractional-strip-height
                 desc: "H: a fractional strip height is floored, never rounded",
                 pane_w: 840,
                 pane_h: 680,
@@ -1086,9 +1041,8 @@ mod tests {
             },
             // --- The cap, applied to the COUNT ---------------------------------
             SizeCase {
-                // The uncapped rect is 2500 - 40 = 2460 px, i.e. 2460/8 = 307 whole
-                // columns; the cap reduces the COUNT to 90. Rows are untouched by
-                // the cap in every row below: h = 680 - 32 - 40 = 608 -> 38.
+                // The uncapped rect is 2460 px = 307 whole columns; the cap reduces the count to 90. Rows are
+                // untouched in every row below: h = 608 -> 38.
                 desc: "I: a wide pane's column count is reduced to the cap",
                 pane_w: 2500,
                 pane_h: 680,
@@ -1111,9 +1065,8 @@ mod tests {
                 expected: (307, 38),
             },
             SizeCase {
-                // w = 700 - 40 = 660 -> floor(660/8) = 82, which is below the 90-column
-                // cap, so `apply` leaves it alone. This is the arm every existing
-                // compositor smoke runs in.
+                // w = 660 -> floor(660/8) = 82, below the 90-column cap, so `apply` leaves it alone. Every
+                // existing compositor smoke runs in this arm.
                 desc: "K: a pane narrower than the cap is untouched by it",
                 pane_w: 700,
                 pane_h: 680,
@@ -1137,16 +1090,8 @@ mod tests {
                 expected: (82, 38),
             },
             SizeCase {
-                // THE row that pins the floor-to-px hazard, at the cell the smokes
-                // actually measure for DejaVu Sans Mono at 28 pt.
-                //
-                // The division must run on the UNCAPPED rect: 2460 px is already whole,
-                // 2460/22.4765625 = 109.44 -> 109 columns, and `apply` reduces that to
-                // 90. Run it on the CAPPED rect instead and the width is
-                // 90 * 22.4765625 = 2022.890625, which `floor_to_px` truncates to 2022,
-                // and 2022/22.4765625 = 89.96 -> 89: one column short, silently, for
-                // every non-integral cell width — which is every cell width the shipped
-                // app measures.
+                // Pins the floor-to-px hazard at the smokes' 28 pt cell: 2460 / 22.4765625 -> 109, capped to 90.
+                // On the capped rect, 90 * 22.4765625 floors to 2022 px -> 89 columns, one short.
                 desc: "M: a non-integral cell still reaches the whole cap",
                 pane_w: 2500,
                 pane_h: 680,
@@ -1221,7 +1166,7 @@ mod tests {
     /// [`grid_rect_table`] and [`grid_size_for_pane_table`] are what pin the values;
     /// a pair that agreed on the wrong quantity — both capping at 80 columns, say —
     /// satisfies this property perfectly at every row. That is the same lesson
-    /// `DECISIONS.md` records under "Pane weights and dividers" for
+    /// `notes/wolf-gnome-decisions.md` records under "Pane weights and dividers" for
     /// `divider_position` and `divider_span_fraction`, where the round trip agreed
     /// for the defect's whole life; it is cross-referenced here rather than
     /// restated.
@@ -1533,10 +1478,8 @@ mod tests {
             );
         }
 
-        // The rect a 2500 px pane produces under a 90-column cap at an 8 px cell:
-        // inset 2460, capped 720, centre floor(870.0) = 870, so x = 20 + 870 = 890,
-        // y = 32 + 20 = 52, h = 680 - 32 - 40 = 608. A LITERAL, for the same reason
-        // the first rect is one.
+        // 2500 px pane, 90-column cap, 8 px cell: x = 20 + floor(870.0) = 890, y = 52, h = 608.
+        // A literal, for the same reason the first rect is one.
         let capped = GridRect {
             x: 890.0,
             y: 52.0,
@@ -1560,10 +1503,8 @@ mod tests {
                 expected: (8.0, 16.0),
             },
             LocalCase {
-                // (100 - 890, 60 - 52). x = 100 is in the LEFT MARGIN the centring
-                // creates — inside the pane, outside the grid — which is a region no
-                // uncapped pane has at all. It goes negative and `cell_at` clamps it
-                // to column 0, exactly as a gutter point does.
+                // (100 - 890, 60 - 52): x = 100 is in the centring's left margin, inside the pane and outside the
+                // grid. It goes negative and `cell_at` clamps it to column 0, as a gutter point does.
                 desc: "a point in the centring's left margin is negative in x",
                 x: 100.0,
                 y: 60.0,
@@ -1687,10 +1628,8 @@ mod tests {
                 cell_h: 19.51,
             },
             ComposeCase {
-                // A pane wide enough for the cap to bind, so the grid sits in the
-                // middle with a 870 px margin either side. Both margins are regions
-                // no uncapped pane has, and the probes below reach them: a click
-                // there must still name a real cell rather than escaping the grid.
+                // A pane wide enough for the cap to bind: a 870 px margin each side, regions no uncapped pane has.
+                // A click there must still name a real cell.
                 desc: "a capped, centred pane with a margin on each side",
                 pane_w: 2500,
                 pane_h: 680,
@@ -1937,9 +1876,8 @@ mod tests {
                 expected_i32: (8, 16),
             },
             MinPaneCase {
-                // The 28 pt cell `tests/smoke_headless.rs` records for the pinned
-                // DejaVu Sans Mono (22.4765625 x 44.0), under a tall strip:
-                // (ceil(22.4765625) + 40, 44 + 92 + 40) = (63, 176).
+                // The 28 pt DejaVu Sans Mono cell `tests/smoke_headless.rs` records (22.4765625 x 44.0), under
+                // a tall strip: (ceil(22.4765625) + 40, 44 + 92 + 40) = (63, 176).
                 desc: "the smoke's measured cell under a tall strip",
                 cell_w: 22.4765625,
                 cell_h: 44.0,

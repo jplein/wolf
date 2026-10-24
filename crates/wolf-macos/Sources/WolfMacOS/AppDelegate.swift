@@ -1,9 +1,4 @@
-//
-//  AppDelegate.swift
-//  The application coordinator: once-only launch setup (wake bridges, fonts,
-//  config, cell metrics), a collection of per-window controllers, and the Cmd-N
-//  new-window entry point.
-//
+// The application coordinator: launch setup, the window controllers, and Cmd-N.
 
 import AppKit
 import Foundation
@@ -81,9 +76,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
   }
 
   func applicationDidFinishLaunching(_ notification: Notification) {
-    // Arm the frame-time instrumentation FIRST. This forces the once-only
-    // `FrameMetrics.enabled` evaluation here rather than mid-frame, and is a
-    // no-op unless WOLF_FRAME_STATS is set. See FrameMetrics.swift.
+    // Arm frame-time instrumentation first, so the once-only `FrameMetrics.enabled` read happens
+    // here rather than mid-frame.
     FrameMetrics.start()
 
     // Register the three process-global wake callbacks ONCE; each routes by
@@ -93,12 +87,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     TreeWakeBridge.install()
     SearchWakeBridge.install()
 
-    // Build the native menu bar (net-new). Every Wolf item funnels through
-    // `handleCommandMenuItem(_:)` → `CommandDispatcher`. Keep all THREE dynamic
-    // submenus — Window, Open Recent, and History — so their dynamic lists can
-    // be rebuilt; Window is rebuilt explicitly from lifecycle hooks, while Open
-    // Recent and History both rebuild lazily via `menuNeedsUpdate`, which
-    // dispatches on menu IDENTITY.
+    // Keep all three dynamic submenus: Window rebuilds from lifecycle hooks, while Open Recent and
+    // History rebuild lazily in `menuNeedsUpdate`, which dispatches on menu identity.
     let menus = AppMenu.install(target: self)
     windowMenu = menus.window
     openRecentMenu = menus.openRecent
@@ -108,25 +98,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     historyMenu = menus.history
     historyMenu?.delegate = self
 
-    // Register the bundled font TTFs with CoreText, then resolve the user
-    // config BEFORE measuring so `CellMetrics` can resolve the configured
-    // family/size/line-height. Both are measured ONCE and shared by every
-    // window.
+    // Register fonts and load the config before measuring, so `CellMetrics` resolves the configured
+    // family, size and line height. Measured once and shared by every window.
     FontRegistration.registerBundledFonts()
     let config = wolf_ffi_load_config()
     let metrics = CellMetrics.measured(config: config)
     self.config = config
     self.metrics = metrics
 
-    // Resolve the configured appearance BEFORE any project starts: force
-    // dark/light (also setting the app chrome via `NSApp.appearance`), or in
-    // `auto` mode follow — and observe — the live OS appearance. Every project
-    // materialized below is then pushed the resolved value.
+    // Resolve the appearance before any project starts, so every project below gets the value;
+    // `auto` follows and observes the live OS appearance.
     applyResolvedAppearance()
 
-    // Read the saved state BEFORE any core starts: one WINDOW GROUP per saved
-    // window, each with its ordered tabs. A fresh run restores nothing → one
-    // default empty-state window with a single tab (its own fresh project).
+    // Read saved state before any core starts. A fresh run restores nothing and opens one
+    // empty-state window with its own project.
     let restoredGroups = Self.restoredGroups(from: wolf_ffi_load_state())
 
     if restoredGroups.isEmpty {
@@ -141,9 +126,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
       return
     }
 
-    // GROUP-BY-CWD restore (plan §4.2 + OD5): build the pure project plan from
-    // the saved tree, materialize its projects + views (Phase A), then assemble
-    // the OS windows/tab-groups from the original saved geometry (Phase B).
+    // Group-by-cwd restore: plan projects from the saved tree, materialize projects and views,
+    // then assemble the OS windows and tab groups from the saved geometry.
     let plan = RestoreSeam.plan(
       windows: Self.savedWindows(from: restoredGroups),
       home: homeDir(),
@@ -392,16 +376,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     // Stop observing the OS appearance before teardown.
     removeAppearanceObserver()
 
-    // Walk the whole live window/tab tree and commit it SYNCHRONOUSLY (any
-    // coalesced snapshot may not have fired yet), then block briefly on the
-    // state writer so `state.json` is on disk before teardown.
+    // Commit the whole tree synchronously, as a coalesced snapshot may not have fired, then block
+    // briefly on the writer so `state.json` is on disk before teardown.
     snapshotNow()
     _ = wolf_ffi_state_flush()
 
-    // Tear down the remaining views (backstop for any that did not go through
-    // windowWillClose); each view's teardown detaches from its project, which
-    // shuts the core down when its last view goes. Then shut down any project
-    // that still lingers (belt-and-suspenders — e.g. a project with no views).
+    // Backstop for views that skipped windowWillClose; the last view's detach shuts its core down,
+    // and any project left with no views is shut down below.
     for controller in controllers {
       controller.teardown()
     }
@@ -580,17 +561,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
       for tabWindow in groupWindows {
         guard let tab = controllers.first(where: { $0.owns(tabWindow) }) else { continue }
-        // Per-view PERSISTED cwd (OD6): the tabpage's authoritative tab-local
-        // `:tcd` cwd, correct even for a non-current view (unlike the live
-        // `currentCwd`, which follows the current tabpage). `persistedCwd` reads
-        // it via `cwd_for_tabpage` — a cheap out-of-band snapshot read (no RPC),
-        // so this per-tab snapshot walk never blocks on the captive nvim.
+        // `persistedCwd` is the tabpage's `:tcd`, right for a non-current view unlike `currentCwd`,
+        // and `cwd_for_tabpage` reads it out of band, so this walk never blocks on nvim.
         wolf_ffi_state_snapshot_add_tab(tab.persistedCwd, tab.sidebarVisible)
 
-        // Attach the tab's pane-split layout (topology + weights + per-leaf buffer
-        // path) via the post-order push-builder, when it has one. An empty-state
-        // (unnamed, non-preview) lone pane returns nil and pushes nothing; a lone
-        // pane bound to a file or preview now pushes a single leaf.
+        // An empty-state lone pane returns nil and pushes nothing; a lone pane bound to a file or
+        // preview pushes a single leaf.
         if let layout = tab.layoutSnapshot() {
           for token in PaneLayoutCodec.postOrderTokens(layout) {
             switch token {
@@ -706,15 +682,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
   /// (`.preview`) command unless the key window's active buffer is Markdown.
   /// Every other item stays enabled.
   func validateMenuItem(_ item: NSMenuItem) -> Bool {
-    // The History items are front-end-only (no `command_kind` tag), so they are
-    // validated BEFORE the `handleCommandMenuItem` guard below. Back/Forward track
-    // the active pane's stack; a dynamic row is always clickable (the checkmarked
-    // one is a no-op core-side).
-    //
-    // The controller is resolved with the SAME `?? controllers.first` fallback as
-    // `menuNeedsUpdate` and the three actions: without it, a menu opened while no
-    // Wolf window is key would render rows that click through fine while Back /
-    // Forward (and their ⌘[ / ⌘] equivalents) greyed out.
+    // History items carry no `command_kind` tag, so validate them before the guard. Keep the
+    // `?? controllers.first` fallback: without it Back/Forward grey out when no Wolf window is key.
     switch item.action {
     case #selector(historyBackMenuItem(_:)):
       let target = controllers.first { $0.owns(effectiveKeyWindow) } ?? controllers.first
@@ -747,9 +716,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     case .closePane:
       return (keyController?.paneCount ?? 0) > 1
     case .copy:
-      // BOTH Copy sources, resolved by the one pure decision `copy()` also switches
-      // over — never `isVisualMode` alone, which would grey the item out over a live
-      // preview selection.
+      // Both Copy sources, via the decision `copy()` also uses; `isVisualMode` alone would grey the
+      // item out over a live preview selection.
       return keyController?.canCopy ?? false
     case .preview:
       return keyController?.isMarkdownActive ?? false

@@ -1,21 +1,4 @@
-//
-//  TreeRefreshGate.swift
-//  A pure, headless visibility + version gate for the sidebar file tree's refresh
-//  (perf plan Layer 3).
-//
-//  Two redundant-work problems it removes:
-//    - The outline reload/reveal ran even while the sidebar was collapsed/hidden
-//      (which is why hiding the sidebar did not help the freeze). The VISIBILITY
-//      gate defers all refresh work while hidden and runs exactly ONE catch-up
-//      refresh when the sidebar reappears with deferred work pending.
-//    - A full `reloadData()` ran on every render wake even when nothing structural
-//      changed. The VERSION gate reloads only when the file-search snapshot version
-//      has advanced since the last reload.
-//
-//  It is toolkit-free (Foundation only), so it is unit-testable without AppKit: the
-//  `FileTreeView` relays the sidebar's real `isCollapsed` KVO into `setVisible`,
-//  and passes `search.version()` into `shouldReload`.
-//
+// Pure visibility and version gate for a sidebar panel's refresh.
 
 import Foundation
 

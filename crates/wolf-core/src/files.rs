@@ -676,10 +676,8 @@ fn request_rescan(entry: Arc<SessionEntry>, handle: &tokio::runtime::Handle) {
             rescan_session(&entry);
         }
         entry.rescan_running.store(false, Ordering::SeqCst);
-        // A request can land between the dirty check above and the store: it
-        // saw `rescan_running == true` and spawned nothing, so re-check here
-        // and keep the walk loop alive if this thread can re-acquire the run
-        // flag. Whoever wins the CAS owns the next iteration.
+        // A request landing between the dirty check and the store spawned nothing, so re-check;
+        // whoever wins the CAS on the run flag owns the next iteration.
         if entry.rescan_dirty.load(Ordering::SeqCst)
             && entry
                 .rescan_running
@@ -704,9 +702,8 @@ fn request_rescan(entry: Arc<SessionEntry>, handle: &tokio::runtime::Handle) {
 /// `version` under one short write lock, keeping `complete = true`. The
 /// session wake fires once, strictly after the lock drops.
 fn rescan_session(entry: &SessionEntry) {
-    // Bounded wait for the initial walk. Its own wall-clock budget bounds it,
-    // so waiting that same budget (plus slack for the final append) suffices;
-    // bailing on elapse just means the NEXT fs event retries.
+    // The initial walk is bounded by its own budget, so wait that plus slack; on elapse the
+    // next fs event retries.
     let wait_deadline = Instant::now() + entry.bounds.budget + Duration::from_secs(1);
     loop {
         if entry.cancel.load(Ordering::SeqCst) {
@@ -770,16 +767,8 @@ fn rescan_session(entry: &SessionEntry) {
     }
 }
 
-// ===========================================================================
-// Headless unit tests for the pure rescan decision, [`needs_rescan`].
-//
-// Contract: `force` (BufFilePost / BufDelete) always rescans; otherwise
-// (BufWritePost) rescan only when some path lies under `root` AND is absent
-// from the session's `seen` set — a `:w` of an already-listed file costs
-// nothing. `paths` and `seen` hold absolute, already-canonicalized paths
-// (canonicalization mismatches upstream fail open to an extra walk; that is
-// the caller's concern, not this helper's).
-// ===========================================================================
+// Unit tests for [`needs_rescan`]: `force` always rescans, otherwise only a path under `root`
+// that is absent from `seen` does.
 #[cfg(test)]
 mod rescan_decision_tests {
     use super::*;
@@ -864,9 +853,8 @@ mod rescan_decision_tests {
 
     #[test]
     fn any_new_under_root_path_in_a_batch_rescans() {
-        // A debounced batch mixing an already-seen path, an out-of-root path,
-        // and ONE new under-root path must still rescan: any qualifying path
-        // is sufficient.
+        // A batch mixing a seen path, an out-of-root path and one new under-root path still
+        // rescans: any qualifying path is enough.
         assert!(
             needs_rescan(
                 false,
@@ -883,19 +871,15 @@ mod rescan_decision_tests {
     }
 }
 
-// ===========================================================================
-// Headless unit tests for [`append_batch`]'s maintenance of
-// [`FileSearchState::seen`].
-// ===========================================================================
+// Unit tests for [`append_batch`]'s maintenance of [`FileSearchState::seen`].
 #[cfg(test)]
 mod append_batch_seen_tests {
     use super::*;
 
     #[test]
     fn append_batch_folds_paths_into_seen() {
-        // `seen` must hold every streamed path, not just the MRU seed —
-        // otherwise `needs_rescan` would treat a `:w` of any walk-discovered
-        // file as unknown and trigger a spurious rescan.
+        // `seen` must hold every streamed path, not just the MRU seed, or a `:w` of a
+        // walk-discovered file would trigger a spurious rescan.
         let state = Arc::new(RwLock::new(FileSearchState::seeded(Vec::new())));
         let path = PathBuf::from("/root/project/discovered.md");
         let mut batch = vec![FileEntry {

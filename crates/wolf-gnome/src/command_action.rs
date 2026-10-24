@@ -714,13 +714,8 @@ mod tests {
              should go rather than be left guarding nothing."
         );
 
-        // --- Forward: every command-less row is installable ------------------
-        //
-        // A `Vec` rather than a `HashSet` because `UiAction` is deliberately not
-        // `Hash` — it carries `&'static str` payloads whose contract is equality and
-        // distinctness, not hashing — and the list is short enough that the linear
-        // scan costs nothing. Its length is not asserted here: the row set is
-        // `ACTION_TABLE`'s to define, and the loop is over whatever it declares.
+        // --- Forward: every command-less row is installable. A `Vec`, since `UiAction` is deliberately
+        // not `Hash`; the row count is `ACTION_TABLE`'s to define, so it is not asserted.
         let mut seen: Vec<UiAction> = Vec::new();
         for action in &front_end_rows {
             let resolved = ui_action_for_front_end_action(action);

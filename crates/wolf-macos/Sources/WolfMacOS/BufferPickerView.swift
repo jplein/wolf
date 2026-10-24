@@ -1,20 +1,4 @@
-//
-//  BufferPickerView.swift
-//  The AppKit buffer picker: a floating, top-center overlay panel with a search
-//  field and a results list, fed by the Rust buffer-picker bridge.
-//
-//  The buffer-picker sibling of `CommandPaletteView.swift`. Structurally parallel —
-//  a search bar + `NSTableView` in an `NSScrollView`, navigated via
-//  `PickerSeam.nextSelection` / `restoredIndex`, rendered with `PickerRow` /
-//  `PickerRowCellView` — but backed by an opaque `FfiBufferPicker` session
-//  (candidates snapshotted at open from Neovim's listed buffers, MRU-ordered) and
-//  activating a row by switching the ACTIVE pane to that buffer
-//  (`WolfCoreHandle.switch_buffer(bufnr)`). Candidates are fixed at open, so there
-//  is NO wake bridge: `ranked()` re-filters synchronously per keystroke. Unlike the
-//  command palette it preselects ROW 2 on the initial empty-query open, so a bare
-//  <CR> switches to the most-recently-used OTHER buffer (telescope-style ~ Ctrl-^),
-//  and records NO MRU. Exercised by manual smoke only.
-//
+// The AppKit buffer picker overlay, fed by the Rust buffer-picker bridge.
 
 import AppKit
 import WolfFFI
@@ -203,9 +187,8 @@ final class BufferPickerView: NSView, NSTableViewDataSource, NSTableViewDelegate
   /// to the editor. Idempotent.
   func close() {
     if !isOpen { return }
-    // Tear down state BEFORE dismissing the panel: `orderOut` inside
-    // `dismissPanel` can re-enter `windowDidResignKey → close()`; the `isOpen`
-    // guard above makes that re-entry a no-op.
+    // Tear down before dismissing: `orderOut` can re-enter `close()` via `windowDidResignKey`,
+    // and the `isOpen` guard above makes that re-entry a no-op.
     isOpen = false
     session = nil
     host?.dismissPanel()

@@ -27,7 +27,7 @@
 //!
 //! NO BAZEL WIRING, and none is missing. `crates/wolf-gnome` has no
 //! `BUILD.bazel` at all — that absence is deliberate and load-bearing, see
-//! [`crates/wolf-gnome/DECISIONS.md`](../DECISIONS.md) — so there is no
+//! [`notes/wolf-gnome-decisions.md`](../../../notes/wolf-gnome-decisions.md) — so there is no
 //! `rust_test` target for this file to be added to, and no silent macOS-only gap
 //! for an unwired file to fall into. Do not "fix" the missing target.
 
@@ -119,19 +119,8 @@ const OWN_SOURCE_NEEDLE: &str = "crates/wolf-gnome/src";
 /// tell "our crates emitted no debug info" from "the paths were remapped".
 const SOURCE_SAMPLE_LIMIT: usize = 8;
 
-// Nothing here asserts on `opt-level`, `lto` or `codegen-units`. None of the
-// three has a silent failure mode — a wrong `opt-level` shows up in any
-// measurement, and `lto`/`codegen-units` are a compile-time-versus-run-time
-// trade whose right value is whatever the next measurement says. Pinning them
-// would convert a future measured retune into a test edit, which is how a guard
-// stops meaning anything.
-//
-// Nothing asserts on `.symtab` either, and that omission is not an oversight: no
-// revert isolates it, because every `strip` value that removes the symbol table
-// (`"symbols"`, `true`) is documented to remove the debug sections as well, so
-// `the_binary_under_test_carries_line_tables` goes red for those values before
-// any `.symtab` check could add anything. Documented rather than measured — the
-// `strip` revert that was actually run here is `"debuginfo"`.
+// No assertion on `opt-level`, `lto`, `codegen-units` or `.symtab`, deliberately.
+// See notes/crates/wolf-gnome/tests/release_profile.rs.md#unasserted-keys-and-sections
 
 // ---------------------------------------------------------------------------
 // Manifest helpers.
@@ -163,8 +152,8 @@ fn workspace_manifest_path() -> PathBuf {
 /// comment on a profile key (`debug = "line-tables-only" # why` would yield the
 /// value `line-tables-only" # why`). Both hold in the manifest as written, and a
 /// change to either shows up as a failed assertion here rather than as a wrong
-/// answer somewhere else. Put the rationale in the comment block ABOVE the
-/// profile, which is where it already lives.
+/// answer somewhere else. Put the rationale in notes/Cargo.toml.md#release-profile,
+/// which the comment above the profile links.
 fn release_profile_keys(manifest: &str) -> BTreeMap<String, String> {
     let mut keys = BTreeMap::new();
     let mut in_release = false;
@@ -215,31 +204,8 @@ fn declares_release_profile(manifest: &str) -> bool {
     manifest.lines().any(|line| line.trim() == RELEASE_SECTION)
 }
 
-// ---------------------------------------------------------------------------
-// ELF helpers.
-//
-// A WHOLE-FILE SUBSTRING SCAN IS NOT SOUND FOR EITHER NEEDLE THIS TEST USES, AND
-// MUST NEVER REPLACE THIS WALK. Both instances are measured, not reasoned:
-//
-//   * `.debug_line` — every Rust binary links std's backtrace machinery
-//     (`object` / `gimli`), which carries DWARF section names as string literals
-//     in `.rodata`, so `strings … | grep debug_line` matches on a FULLY STRIPPED
-//     binary too.
-//   * `crates/wolf-gnome/src` — the `debug = false` binary contains that string
-//     18 times, every one of them in `.rodata`: `app.rs::init_lua_path` bakes
-//     `env!("CARGO_MANIFEST_DIR")`, and `panic!` location strings carry source
-//     paths. A whole-file scan would therefore pass on exactly the artifact this
-//     test exists to reject.
-//
-// The rule behind both: the bytes being present in the file says nothing. A
-// section header naming the section, and the needle found INSIDE that section's
-// own extent, is the evidence.
-//
-// A related shortcut is defeated for a third reason, so do not "simplify" toward
-// it: `strip = "debuginfo"` removes every `.debug*` section EXCEPT
-// `.debug_gdb_scripts`, which survives at 34 bytes. Any wildcard "some `.debug*`
-// section exists" check therefore passes on a stripped binary. This file keys on
-// specifically named sections for that reason.
+// ELF helpers: never replace this section walk with a whole-file substring scan.
+// See notes/crates/wolf-gnome/tests/release_profile.rs.md#section-walk-not-substring-scan
 
 const ELF_MAGIC: [u8; 4] = [0x7f, b'E', b'L', b'F'];
 const ELF_HEADER_LEN: usize = 64;
@@ -783,18 +749,12 @@ fn the_binary_under_test_carries_line_tables() {
         bin.display()
     );
 
-    // --- Assertion 2: the line tables are OURS, not just std's ----------------
-    //
-    // Assertion 1 above survives `debug = false` (271,586 bytes of std's own),
-    // so this is the assertion actually attached to the `debug` contract. Each
-    // section in `NEEDLE_SECTIONS` is searched in order and the first PRESENT one
-    // carrying the needle wins, which is what makes this robust across a rustc
-    // DWARF version bump rather than pinned to the DWARF 4 measured here.
+    // --- Assertion 2: the line tables are ours, not just std's ----------------
+    // Assertion 1 survives `debug = false` (std's own tables), so this one guards `debug`.
     let mut searched: Vec<(&str, usize)> = Vec::new();
     let mut hit: Option<(&str, usize)> = None;
-    // Every present section's text, in the order searched, so a failure quotes
-    // back the one that can actually show the shapes its guidance names — see
-    // `source_path_samples`. Retained rather than overwritten for that reason.
+    // Every present section's text is kept, so a failure can quote back the one that shows the
+    // shapes its guidance names (see `source_path_samples`).
     let mut texts: Vec<(&str, String)> = Vec::new();
 
     for section in NEEDLE_SECTIONS {
@@ -805,19 +765,8 @@ fn the_binary_under_test_carries_line_tables() {
         println!("{GUARD}: {section} = {} bytes", bytes.len());
         searched.push((section, bytes.len()));
 
-        // `.debug_str` and `.debug_line_str` are NUL-separated UTF-8; `.debug_line`
-        // is a binary line program with its DWARF 4 directory and file names
-        // embedded in it. A lossy view serves both: the needle is ASCII, so
-        // surrounding invalid bytes become U+FFFD without splitting the run, and
-        // the owned copy is what the failure path quotes entries back from.
-        //
-        // It also assumes the section is UNCOMPRESSED, which is true on this
-        // toolchain and is NOT an observed failure — no `SHF_COMPRESSED` section
-        // has been seen here. A linker `--compress-debug-sections=zlib` or a
-        // future rustc default would make the needle unfindable in readable bytes,
-        // so the failure message names compression as a third candidate cause
-        // rather than leaving a reader to chase the two that would not be true.
-        // Inflating it here would mean a dependency; see this file's header.
+        // A lossy view serves all three sections because the needle is ASCII; assumes no compression.
+        // See notes/crates/wolf-gnome/tests/release_profile.rs.md#lossy-uncompressed-reads
         let text = String::from_utf8_lossy(&bytes).into_owned();
         let carries_needle = text.contains(OWN_SOURCE_NEEDLE);
         texts.push((section, text));

@@ -1,19 +1,4 @@
-//
-//  FontSizeSeam.swift
-//  Pure, AppKit-/CoreText-free font-size stepping + clamping seam.
-//
-//  The per-window View-menu font-size commands (Reset / Increase / Decrease,
-//  plan §3) step and clamp a point size. This seam owns ONLY the pure arithmetic
-//  (step ±1, clamp into `[minPointSize, maxPointSize]`); the on-screen relayout
-//  (re-measuring `CellMetrics`, reflowing the grid, repainting) is AppKit glue in
-//  `WolfWindowController` and is manual-smoke only. Reset is NOT in the seam — the
-//  controller resets to its stored launch default.
-//
-//  The API is `Double`-typed (the controller bridges to/from `CGFloat` at its call
-//  sites) so it can be asserted headlessly with a tight accuracy. Imports ONLY
-//  Foundation, so it lives in the Foundation-only `WolfKeyMap` module alongside
-//  `CellMetricsMath.swift` / `ShortcutSeam.swift`.
-//
+// Pure font-size stepping and clamping for the View-menu font-size commands.
 
 import Foundation
 

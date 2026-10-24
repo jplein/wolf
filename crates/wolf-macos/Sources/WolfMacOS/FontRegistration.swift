@@ -1,9 +1,4 @@
-//
-//  FontRegistration.swift
-//  Registers the bundled font TTFs with CoreText (process scope). The app bundles
-//  two families in Contents/Resources/fonts/: JetBrains Mono and iA Writer Mono S
-//  (the default grid font).
-//
+// Registers the bundled font files with CoreText at process scope.
 
 import CoreText
 import Foundation

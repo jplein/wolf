@@ -1,40 +1,27 @@
 # Bazel build for the `wolf-ffi` swift-bridge surface over `wolf-core`.
-#
-# Targets:
-#   - wolf_ffi            : the staticlib + rlib the macOS app and the Rust test link.
-#   - wolf_ffi_cc         : a cc_library exposing the committed generated C headers
-#                           (+ the hand-written wake header) and linking the archive,
-#                           consumed by the Swift `swift_library` targets.
-#   - gen_bindings        : standalone swift-bridge codegen (run via `bazel run`).
-#   - bridge_smoke        : the Rust integration test (rlib-linked; loud-skips when
-#                           WOLF_NVIM_BIN is unset).
-#
-# swift-bridge is confined to THIS crate's graph; it never enters wolf-core's tree.
+# swift-bridge stays in this crate's graph; see notes/wolf-ffi-decisions.md#containment
 load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_static_library", "rust_test")
 load("@build_bazel_rules_swift//swift:swift_interop_hint.bzl", "swift_interop_hint")
+load("//tools/lint:defs.bzl", "comment_srcs")
 
 exports_files(["Cargo.toml"])
 
-# This crate's docs, for `//tools/lint:markdown`. Bazel forbids cross-package
-# globbing, so each package exposes its own `markdown_srcs`. The machine-generated
-# bindings under `generated/` carry no prose and are excluded.
+# This package's sources and docs for //tools/lint, which cannot glob across packages.
+comment_srcs(exclude = ["generated/**"])
+
 filegroup(
     name = "markdown_srcs",
     srcs = glob(
-        [
-            "**/README.md",
-            "DECISIONS.md",
-        ],
+        ["**/*.md"],
         exclude = ["generated/**"],
         allow_empty = True,
     ),
     visibility = ["//tools/lint:__pkg__"],
 )
 
-# The swift-bridge-generated Swift glue (committed). Compiled INTO the Swift
-# front-end's `wolf_key_map` module so `FfiKeyEvent` and the `WolfCoreHandle` /
-# `FfiFrame` wrappers are available to Swift. Foundation-only (no AppKit).
+# The committed swift-bridge Swift glue (Foundation-only), compiled into the Swift front-end's
+# `wolf_key_map` module.
 filegroup(
     name = "generated_swift",
     srcs = [
@@ -44,9 +31,8 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-# The hand-written Rust glue + the swift-bridge `mod ffi`. The crate-types come
-# from Cargo.toml (staticlib + rlib); rust_library produces the rlib used by the
-# Rust integration test, rust_static_library produces libwolf_ffi.a for the app.
+# rust_library builds the rlib the Rust tests link; rust_static_library builds the app's
+# libwolf_ffi.a.
 _WOLF_FFI_DEPS = [
     "//crates/wolf-core:wolf_core",
     "@crates//:swift-bridge",
@@ -73,11 +59,8 @@ rust_static_library(
     deps = _WOLF_FFI_DEPS,
 )
 
-# C interface for Swift: the committed generated headers + the hand-written wake
-# header, with the staticlib linked in. The interop hint names the Clang module
-# `WolfFFI` (matching the committed module.modulemap and the `import WolfFFI` line
-# gen_bindings prepends), using the committed module map so the module layout is
-# identical under Bazel and under Xcode/SwiftPM.
+# C interface for Swift: committed headers + wake header, linking the staticlib. The hint uses
+# the committed module map, so `WolfFFI` has the same layout under Bazel and Xcode/SwiftPM.
 swift_interop_hint(
     name = "wolf_ffi_cc_hint",
     module_map = "generated/module.modulemap",
@@ -108,21 +91,14 @@ rust_test(
         "tests/common/mod.rs",
     ],
     crate_root = "tests/bridge_smoke.rs",
-    # Spawning a real nvim child (exec + writing its XDG temp dirs) does not work
-    # under the macOS build sandbox, so run this test unsandboxed. `no-sandbox`
-    # (vs `local`) keeps Bazel test-result caching, which is keyed on the staged
-    # nvim/init.lua inputs.
+    # Spawning nvim fails under the macOS build sandbox. `no-sandbox` (vs `local`) keeps result
+    # caching, which is keyed on the staged nvim/init.lua inputs.
     tags = ["no-sandbox"],
     # Bounded by two 10s FLUSH_TIMEOUTs + nvim startup; runs in ~0.2s.
     size = "small",
     edition = "2021",
-    # Drive a REAL pinned Neovim through the bridge (no mocks). The captive
-    # `init.lua` and the pinned nvim tree are staged as runfiles and passed by
-    # runfiles-relative path; `common::{init_lua_path,nvim_bin_or_skip}` resolve
-    # them (an explicit `WOLF_NVIM_BIN` still wins for the cargo/devShell path).
-    # Staging `init.lua` is what fixes the former hang: under Bazel,
-    # `CARGO_MANIFEST_DIR` is an ephemeral sandbox path, so nvim could not read its
-    # init and blocked on a "Press ENTER" prompt forever.
+    # Stage init.lua: under Bazel `CARGO_MANIFEST_DIR` is an ephemeral sandbox path, and nvim
+    # without a readable init blocks forever on a "Press ENTER" prompt.
     data = [
         "//bazel/nvim:nvim_tree",
         "//runtime/nvim:init.lua",
@@ -134,15 +110,6 @@ rust_test(
     deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
 )
 
-# Real-nvim integration test for the COMPOSED-CHARACTER delivery path (the macOS
-# option-as-option feature): a single Unicode scalar such as "ü" (U+00FC),
-# delivered as ONE modifier-free `FfiKeyEvent`, must land verbatim in the Neovim
-# buffer in insert mode. This is the Rust-side proof for the Swift `KeyComposer` →
-# `charEvents` → `send_key` path (the AppKit/Carbon glue is not headlessly
-# testable, but the composed scalar crossing the bridge IS). Modeled on
-# `bridge_smoke` exactly: drives a REAL pinned Neovim (no mocks), loud-skips when
-# WOLF_NVIM_BIN is unset, and stages the captive `init.lua` + pinned nvim tree as
-# runfiles. Reuses `tests/common/mod.rs`.
 rust_test(
     name = "unicode_key",
     srcs = [
@@ -166,11 +133,6 @@ rust_test(
     deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
 )
 
-# Real-nvim integration test for the file-search bridge surface
-# (`start_file_search` / `ranked` / `display` / `path` / `open`). Modeled on
-# `bridge_smoke` exactly: drives a REAL pinned Neovim (no mocks), loud-skips when
-# WOLF_NVIM_BIN is unset, and stages the captive `init.lua` + pinned nvim tree as
-# runfiles. Reuses `tests/common/mod.rs`.
 rust_test(
     name = "file_search",
     srcs = [
@@ -194,12 +156,6 @@ rust_test(
     deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
 )
 
-# Real-nvim integration test for the file-TREE bridge surface
-# (`start_tree_search` / `children_of` / `rel_path_for` / `name` / `rel_path` /
-# `abs_path` / `is_dir` / `current_file` / the free `wolf_ffi_ancestors_to_reveal`).
-# Modeled on `file_search` exactly: drives a REAL pinned Neovim (no mocks),
-# loud-skips when WOLF_NVIM_BIN is unset, and stages the captive `init.lua` +
-# pinned nvim tree as runfiles. Reuses `tests/common/mod.rs`.
 rust_test(
     name = "tree_search",
     srcs = [
@@ -223,13 +179,6 @@ rust_test(
     deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
 )
 
-# Real-nvim integration test for the fs-event-driven RESCAN of the file-TREE
-# bridge surface: a long-lived `start_tree_search()` session must reflect a file
-# created through the captive nvim (`:e` / insert / `:w` via `send_key`) and a
-# file deleted from disk (`remove_file` + `:bdelete!`), with `version()`
-# advancing and dirs-before-files ordering intact. Modeled on `tree_search`
-# above verbatim: same staged runfiles, env, tags, and deps; loud-skips when no
-# pinned nvim is available. Reuses `tests/common/mod.rs`.
 rust_test(
     name = "tree_search_rescan",
     srcs = [
@@ -253,15 +202,6 @@ rust_test(
     deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
 )
 
-# Real-nvim + real-rg integration test for the CONTENT-SEARCH bridge surface
-# (`start_search` -> `FfiSearch::version`/`files(budget)`,
-# `FfiSearchFile::label`/`rel_path`/`abs_path`/`matches`,
-# `FfiSearchMatch::line_number`/`column`/`display_text`/`truncated_*`/`range_*`,
-# `ignorecase`, and the `open_at` line/column round-trip). Modeled on
-# `tree_search` exactly but ALSO stages the pinned rg tree (`//bazel/rg:rg_tree`)
-# and wires `WOLF_RG_BIN`. Loud-skips when nvim OR rg is unavailable. Reuses
-# `tests/common/mod.rs`. NOTE: `//bazel/rg:rg_tree` is a CODER-CREATED target
-# (search plan impl step 4); this target will not build until `bazel/rg` exists.
 rust_test(
     name = "search",
     srcs = [
@@ -287,12 +227,6 @@ rust_test(
     deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
 )
 
-# Real-nvim integration test for the split-panes bridge surface
-# (`windows` / `active_win` / `grid_for_win` / `read_frame_for_grid` /
-# `drain_intents` / `resize_grid` / `focus_win`, plus the `FfiLayoutIntent` /
-# `FfiWinInfo` opaque accessors). Modeled on `tree_search` exactly: drives a REAL
-# pinned Neovim (no mocks), loud-skips when WOLF_NVIM_BIN is unset, and stages the
-# captive `init.lua` + pinned nvim tree as runfiles. Reuses `tests/common/mod.rs`.
 rust_test(
     name = "panes",
     srcs = [
@@ -316,11 +250,6 @@ rust_test(
     deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
 )
 
-# Real-nvim integration test for the per-pane statusbar bridge surface
-# (`pane_status_for_grid` + the opaque `FfiPaneStatus::filename()`/`display_path()`
-# accessors). Modeled on `panes` exactly: drives a REAL pinned Neovim (no mocks),
-# loud-skips when WOLF_NVIM_BIN is unset, and stages the captive `init.lua` + pinned
-# nvim tree as runfiles. Reuses `tests/common/mod.rs`.
 rust_test(
     name = "pane_status",
     srcs = [
@@ -344,11 +273,6 @@ rust_test(
     deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
 )
 
-# Real-nvim integration test for the COMMAND CHANNEL bridge surface
-# (`drain_commands` + the opaque `FfiCommand::kind()`, guarding the `command_kind`
-# discriminant contract). Modeled on `panes` exactly: drives a REAL pinned Neovim
-# (no mocks), loud-skips when WOLF_NVIM_BIN is unset, and stages the captive
-# `init.lua` + pinned nvim tree as runfiles. Reuses `tests/common/mod.rs`.
 rust_test(
     name = "commands",
     srcs = [
@@ -372,13 +296,6 @@ rust_test(
     deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
 )
 
-# Real-nvim integration test for the FULL-WIDTH (per-buffer content width) bridge
-# surface (`WolfCoreHandle::toggle_full_width` / `is_full_width_active` /
-# `full_width_for_win`, and `FfiPreview::source_full_width`, guarding the
-# `command_kind::FULL_WIDTH = 22` discriminant). Modeled on `commands` exactly:
-# drives a REAL pinned Neovim (no mocks), loud-skips when WOLF_NVIM_BIN is unset,
-# and stages the captive `init.lua` + pinned nvim tree as runfiles. Reuses
-# `tests/common/mod.rs`.
 rust_test(
     name = "full_width",
     srcs = [
@@ -402,11 +319,6 @@ rust_test(
     deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
 )
 
-# Real-nvim integration test for `WolfCoreHandle::close_pane()` -> `:close` (the
-# macOS "Close" command that drops the current split, NOT the buffer). Modeled on
-# `commands`/`panes` exactly: drives a REAL pinned Neovim (no mocks), loud-skips
-# when WOLF_NVIM_BIN is unset, and stages the captive `init.lua` + pinned nvim tree
-# as runfiles. Reuses `tests/common/mod.rs`.
 rust_test(
     name = "close_pane",
     srcs = [
@@ -430,13 +342,6 @@ rust_test(
     deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
 )
 
-# Real-nvim integration test for the TABPAGE bridge surface (plan §2.1 + §5.2):
-# `create_tabpage` / `current_tabpage` / `active_tabpage` / `cwd_for_tabpage` /
-# `set_current_tabpage` / `close_tabpage`, the grid re-bind contract across a
-# tabpage switch (OD2), a NON-current tabpage's tab-local cwd, and the neutral
-# post-`shutdown` values. Modeled on `close_pane` exactly: drives a REAL pinned
-# Neovim (no mocks), loud-skips when WOLF_NVIM_BIN is unset, and stages the captive
-# `init.lua` + pinned nvim tree as runfiles. Reuses `tests/common/mod.rs`.
 rust_test(
     name = "tabpages",
     srcs = [
@@ -460,11 +365,6 @@ rust_test(
     deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
 )
 
-# Real-nvim integration test for the COPY / PASTE / visual-mode bridge surface
-# (`WolfCoreHandle::is_visual_mode` / `copy_selection` / `paste`). Modeled on
-# `close_pane` exactly: drives a REAL pinned Neovim (no mocks), loud-skips when
-# WOLF_NVIM_BIN is unset, and stages the captive `init.lua` + pinned nvim tree as
-# runfiles. Reuses `tests/common/mod.rs`.
 rust_test(
     name = "copy_paste",
     srcs = [
@@ -488,13 +388,6 @@ rust_test(
     deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
 )
 
-# Real-nvim integration test for the file-action bridge surface
-# (`WolfCoreHandle::chdir` -> `:cd` reflected by `cwd()`, and
-# `WolfCoreHandle::new_buffer` -> `:enew` reflected by `current_file()`).
-# Modeled on `commands` exactly: drives a REAL pinned Neovim (no mocks),
-# loud-skips when WOLF_NVIM_BIN is unset, and stages the captive `init.lua` +
-# pinned nvim tree as runfiles. Reuses `tests/common/mod.rs`. `tempfile` comes
-# from `[dev-dependencies]` via `all_crate_deps(normal_dev = True)`.
 rust_test(
     name = "file_actions",
     srcs = [
@@ -518,14 +411,6 @@ rust_test(
     deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
 )
 
-# Real-nvim integration test for the ANONYMOUS-BUFFER naming surface (every
-# anonymous/new buffer becomes `Untitled.md` / `Untitled 2.md` / … — the first name
-# colliding with neither an existing buffer nor a file on disk in cwd — markdown-typed
-# and NEVER auto-saved). Exercises the `wolf_new_untitled` / `wolf_name_untitled_current`
-# Lua helpers + the `VimEnter` autocmd via the existing `new_buffer` / `chdir` / `open`
-# FFI surface. Modeled on `file_actions` exactly: drives a REAL pinned Neovim (no
-# mocks), loud-skips when WOLF_NVIM_BIN is unset, and stages the captive `init.lua` +
-# pinned nvim tree as runfiles. Reuses `tests/common/mod.rs`.
 rust_test(
     name = "untitled",
     srcs = [
@@ -549,11 +434,6 @@ rust_test(
     deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
 )
 
-# Real-nvim integration test for the terminal-drawer bridge surface
-# (`WolfCoreHandle::toggle_terminal`, backed by the `wolf_toggle_terminal()` Lua
-# helper). Modeled on `file_actions` exactly: drives a REAL pinned Neovim (no
-# mocks), loud-skips when WOLF_NVIM_BIN is unset, and stages the captive `init.lua`
-# + pinned nvim tree as runfiles. Reuses `tests/common/mod.rs`.
 rust_test(
     name = "terminal",
     srcs = [
@@ -577,12 +457,6 @@ rust_test(
     deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
 )
 
-# Real-nvim integration test for the mouse + scroll bridge surface
-# (`send_mouse` / `send_scroll`, plus the `FfiFrame` viewport accessors
-# `topline` / `botline` / `curline` / `linecount`). Modeled on `panes` exactly:
-# drives a REAL pinned Neovim (no mocks), loud-skips when WOLF_NVIM_BIN is unset,
-# and stages the captive `init.lua` + pinned nvim tree as runfiles. Reuses
-# `tests/common/mod.rs`.
 rust_test(
     name = "mouse_scroll",
     srcs = [
@@ -606,14 +480,6 @@ rust_test(
     deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
 )
 
-# Real-nvim integration test for the vendored orlando plugin load branch in the
-# captive `init.lua`. Modeled on `panes` exactly: drives a REAL pinned Neovim (no
-# mocks), loud-skips when WOLF_NVIM_BIN is unset. Additionally stages the vendored
-# orlando plugin tree (`//bazel/orlando:orlando_tree`) and passes its runfiles path
-# via WOLF_TEST_ORLANDO_DIR; the test reconstructs the bundle layout (init.lua with
-# a sibling `orlando/`) in a temp dir and asserts `vim.g.loaded_orlando` /
-# `require("orlando")`. SKIPS when the tree is not staged (cargo / Linux path).
-# Reuses `tests/common/mod.rs`.
 rust_test(
     name = "orlando_load",
     srcs = [
@@ -639,13 +505,6 @@ rust_test(
     deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
 )
 
-# Stress-reproduction test for the "cells occasionally draw with the wrong
-# background" bug: drives a REAL pinned Neovim with the vendored orlando plugin
-# (and lighthouse, when staged) exactly like `orlando_load`, then hammers the
-# session with cursor/scroll/edit/fence churn and asserts at every idle point
-# that code-block rows keep a uniform background and the grid text matches the
-# buffer. SKIPS when the orlando tree is not staged (cargo / Linux path).
-# Reuses `tests/common/mod.rs`.
 rust_test(
     name = "orlando_bg_stress",
     srcs = [
@@ -673,16 +532,6 @@ rust_test(
     deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
 )
 
-# Real-nvim integration test for the vendored lighthouse colorscheme activation
-# branch in the captive `init.lua`. Modeled on `orlando_load` exactly: drives a
-# REAL pinned Neovim (no mocks), loud-skips when WOLF_NVIM_BIN is unset.
-# Additionally stages the vendored lighthouse colorscheme tree
-# (`//bazel/lighthouse:lighthouse_tree`) and passes its runfiles path via
-# WOLF_TEST_LIGHTHOUSE_DIR; the test reconstructs the bundle layout (init.lua with
-# a sibling `lighthouse/`) in a temp dir and asserts `vim.g.colors_name ==
-# "lighthouse"` / `vim.o.background == "dark"` (the scheme is genuinely ACTIVE, not
-# merely on rtp). SKIPS when the tree is not staged (cargo / Linux path). Reuses
-# `tests/common/mod.rs`.
 rust_test(
     name = "lighthouse_load",
     srcs = [
@@ -708,12 +557,6 @@ rust_test(
     deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
 )
 
-# Real-nvim integration test for the WolfCursor / WolfTitlebar theme bridge
-# surface (`theme_titlebar_bg` / `theme_titlebar_fg`, plus the themed
-# `cursor_fill` / `cursor_glyph` on the existing frame accessors). Modeled on
-# `panes` exactly: drives a REAL pinned Neovim (no mocks), loud-skips when
-# WOLF_NVIM_BIN is unset, and stages the captive `init.lua` + pinned nvim tree
-# as runfiles. Reuses `tests/common/mod.rs`.
 rust_test(
     name = "theme",
     srcs = [
@@ -737,13 +580,6 @@ rust_test(
     deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
 )
 
-# Real-nvim integration test for the `WolfCoreHandle::set_background(dark)` bridge
-# method (the appearance plan §3.5 / §5.3): the captive nvim's global `&background`
-# must flip light/dark, observed INDIRECTLY through the resolved
-# `FfiFrame::cursor_fill()` (a `WolfCursor guibg` marker chosen by the live
-# `&background`). Modeled on `theme` exactly: drives a REAL pinned Neovim (no mocks),
-# loud-skips when WOLF_NVIM_BIN is unset, and stages the captive `init.lua` + pinned
-# nvim tree as runfiles. Reuses `tests/common/mod.rs`.
 rust_test(
     name = "appearance",
     srcs = [
@@ -767,11 +603,6 @@ rust_test(
     deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
 )
 
-# Real-nvim integration test for the NATIVE command-line / completion-popup /
-# message-toast bridge surface (feature plan §5): `cmdline()`, `pum()`, and
-# `toast()` read across the bridge. Modeled on `theme` exactly: drives a REAL
-# pinned Neovim (no mocks), loud-skips when WOLF_NVIM_BIN is unset, and stages the
-# captive `init.lua` + pinned nvim tree as runfiles. Reuses `tests/common/mod.rs`.
 rust_test(
     name = "cmdline_ui",
     srcs = [
@@ -795,16 +626,6 @@ rust_test(
     deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
 )
 
-# Real-nvim ABI test for the vendored, host-compiled treesitter parsers. Modeled on
-# `orlando_load` exactly: drives a REAL pinned Neovim (no mocks), loud-skips when
-# WOLF_NVIM_BIN is unset. Uses the REAL captive `init.lua` UNCHANGED (no highlighting
-# enablement) and stages the compiled parsers tree
-# (`//bazel/treesitter-parsers:parsers_tree`), passing its runfiles path via
-# WOLF_TEST_PARSERS_DIR; the test loads `parser/go.so` by absolute path via
-# `vim.treesitter.language.add` and parses with it, proving the shipped `.so` is
-# ABI-compatible with pinned nvim 0.12.3. The tree also resolves from the Linux
-# devShell's WOLF_PARSERS_DIR, so the test runs there too; it SKIPS only on a host
-# where neither provider resolves. Reuses `tests/common/mod.rs`.
 rust_test(
     name = "treesitter_parser_abi",
     srcs = [
@@ -830,21 +651,6 @@ rust_test(
     deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
 )
 
-# Real-nvim integration test for the treesitter highlighting + fenced-code
-# injection branch in the captive `init.lua`. Modeled on `treesitter_parser_abi`
-# exactly: drives a REAL pinned Neovim (no mocks), loud-skips when WOLF_NVIM_BIN is
-# unset. Stages BOTH the vendored nvim-treesitter queries tree
-# (`//bazel/nvim-treesitter:nvim_treesitter_tree`) and the compiled parsers tree
-# (`//bazel/treesitter-parsers:parsers_tree`) as siblings `nvim-treesitter/` +
-# `parsers/` next to a temp `init.lua`; the test opens a markdown buffer with a
-# fenced ```go``` block and asserts that treesitter is attached to the buffer
-# (`vim.treesitter.highlighter.active[buf]`, a precondition — the pinned nvim starts
-# treesitter on markdown by itself) AND, the discriminating half, that the fenced
-# block produces an injected `go` langtree, which is the automated proof of
-# `init.lua`'s conditional treesitter block. Both trees also resolve from the Linux
-# devShell's WOLF_NVIM_TREESITTER_DIR / WOLF_PARSERS_DIR, so the test runs there too;
-# it SKIPS only on a host where neither provider resolves. Reuses
-# `tests/common/mod.rs`.
 rust_test(
     name = "treesitter_highlight",
     srcs = [
@@ -872,14 +678,6 @@ rust_test(
     deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
 )
 
-# Real-nvim integration test for treesitter syntax highlighting of fenced code
-# blocks in the Markdown preview (task #4). Stages the same nvim-treesitter + parsers
-# bundle as `treesitter_highlight`, opens a markdown doc with a fenced `go` block,
-# calls `render_preview`, and asserts the HTML contains inline-styled color spans for
-# the go tokens; an unknown language yields plain `<pre><code>`. Both trees also
-# resolve from the Linux devShell's WOLF_NVIM_TREESITTER_DIR / WOLF_PARSERS_DIR, so
-# the test runs there too; it SKIPS only on a host where neither provider resolves.
-# Reuses `tests/common/mod.rs`.
 rust_test(
     name = "code_block_highlight",
     srcs = [
@@ -907,13 +705,6 @@ rust_test(
     deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
 )
 
-# Real-nvim integration test for per-cell text ATTRIBUTES + the special (underline)
-# color crossing the FFI bridge (`FfiCell::flags()` + the new `FfiCell::special()`).
-# Modeled on `bridge_smoke` exactly: drives a REAL pinned Neovim (no mocks),
-# loud-skips when WOLF_NVIM_BIN is unset, and stages the captive `init.lua` + pinned
-# nvim tree as runfiles. Defines a bold/italic/underline highlight group with a
-# `special` color, applies it to a buffer glyph, and asserts the resolved `FfiCell`
-# exposes the correct flag bits AND special color. Reuses `tests/common/mod.rs`.
 rust_test(
     name = "attribute_highlight",
     srcs = [
@@ -937,10 +728,7 @@ rust_test(
     deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
 )
 
-# Headless, deterministic packing test: builds a `wolf_core::Snapshot` by hand and
-# asserts `FfiFrame::from_snapshot`'s color packing, flag bits, cursor reverse-video,
-# shape/visibility, and the flat `cells()` grid. Needs no nvim — MUST pass regardless
-# of WOLF_NVIM_BIN. `wolf-core` is on the dep line so the test can name its builders.
+# Headless (no nvim). wolf-core is a direct dep so the test can name its Snapshot builders.
 rust_test(
     name = "frame_pack",
     srcs = ["tests/frame_pack.rs"],
@@ -952,13 +740,6 @@ rust_test(
     ],
 )
 
-# Deterministic, headless coverage for the config bridge surface
-# (`wolf_ffi_load_config` + the `FfiConfig` accessors). Spawns NO nvim and needs
-# no network: it drives the bridge purely through `WOLF_CONFIG_DIR` (the
-# determinism hook `preferences_dir()` honors first) pointed at a
-# `tempfile::tempdir()`. Self-contained like `frame_pack` — no `tests/common/`
-# nvim staging and NO `no-sandbox` tag. `tempfile` comes from `[dev-dependencies]`
-# via `all_crate_deps(normal_dev = True)`.
 rust_test(
     name = "config",
     srcs = ["tests/config.rs"],
@@ -967,17 +748,6 @@ rust_test(
     deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
 )
 
-# Headless round-trip test for the TREE-shaped state-persistence bridge surface
-# (the `wolf_ffi_state_snapshot_begin` / `_add_window` / `_add_tab` / `_commit`
-# builder free-fns + `wolf_ffi_state_flush`, read back through
-# `wolf_ffi_load_state` + the `FfiState` / `FfiWindowState.tabs()` / `FfiTabState`
-# accessors, plus old-format rejection). The snapshot builder is PURE Rust over
-# the shared StateStore (OD1: the core no longer mirrors cwd), so this spawns NO
-# nvim — it drives the bridge purely through `WOLF_STATE_DIR` pointed at a
-# `tempfile::tempdir()`, exactly like the `config` target (no `tests/common/`
-# staging and NO `no-sandbox` tag). A SINGLE #[test]: it mutates the
-# process-global WOLF_STATE_DIR and opens the process-wide SHARED_STORE, which is
-# only safe with one test per binary.
 rust_test(
     name = "state",
     srcs = ["tests/state.rs"],
@@ -987,14 +757,6 @@ rust_test(
     deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
 )
 
-# Real-nvim integration test for the RECENT-DIRECTORIES bridge accessor
-# (`WolfCoreHandle::recent_dirs() -> Vec<String>`, the GLOBAL folder-MRU
-# newest-first, backed by `WolfCore::recent_dirs()` reading
-# `<state_dir>/folder-mru.sqlite`). Modeled on `state` exactly: drives a REAL
-# pinned Neovim (no mocks), loud-skips when WOLF_NVIM_BIN is unset, and stages the
-# captive `init.lua` + pinned nvim tree as runfiles. Reuses `tests/common/mod.rs`.
-# A SINGLE #[test]: it mutates the process-global WOLF_STATE_DIR (the store opens
-# once at core start), which is only safe with one test per binary.
 rust_test(
     name = "recent_dirs",
     srcs = [
@@ -1018,15 +780,6 @@ rust_test(
     deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
 )
 
-# Real-nvim integration test for the COMMAND-PALETTE bridge session
-# (`WolfCoreHandle::command_palette() -> FfiCommandPalette`, its `add_window` /
-# `record` mutators, and `ranked(query, max) -> Vec<FfiCommandRow>` with the
-# per-row accessors). Modeled on `recent_dirs` exactly: drives a REAL pinned
-# Neovim (no mocks), loud-skips when WOLF_NVIM_BIN is unset, and stages the captive
-# `init.lua` + pinned nvim tree as runfiles. Reuses `tests/common/mod.rs`. A
-# SINGLE #[test]: it mutates the process-global WOLF_STATE_DIR (the command-MRU +
-# recent-dirs stores open once at core start), which is only safe with one test
-# per binary.
 rust_test(
     name = "command_palette",
     srcs = [
@@ -1050,13 +803,6 @@ rust_test(
     deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
 )
 
-# Real-nvim integration test for the BUFFER-PICKER bridge session
-# (`WolfCoreHandle::buffer_picker() -> FfiBufferPicker`, its `ranked(query, max) ->
-# Vec<FfiBufferRow>` ranker with the per-row accessors, and the handle-level
-# `switch_buffer(bufnr)` activation with the per-pane winsaveview/winrestview view
-# round-trip). Modeled on `command_palette` exactly: drives a REAL pinned Neovim
-# (no mocks), loud-skips when WOLF_NVIM_BIN is unset, and stages the captive
-# `init.lua` + pinned nvim tree as runfiles. Reuses `tests/common/mod.rs`.
 rust_test(
     name = "buffer_picker",
     srcs = [
@@ -1080,15 +826,6 @@ rust_test(
     deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
 )
 
-# Real-nvim integration test for the MARKDOWN-PREVIEW bridge surface
-# (`WolfCoreHandle::is_markdown_active`, the in-place `open_preview() -> i64`,
-# `render_preview(source_bufnr) -> String`, `previews() -> Vec<FfiPreview>` with
-# its per-row accessors, the `preview_file(win, path)` / `preview_buffer(win,
-# bufnr)` binds, and the buffer picker's per-file union listing — the unlisted
-# scratch contributes no `Preview: ` row; the buflisted source is the row). Modeled
-# on `buffer_picker` exactly: drives a REAL pinned Neovim (no mocks), loud-skips
-# when WOLF_NVIM_BIN is unset, and stages the captive `init.lua` + pinned nvim tree
-# as runfiles. Reuses `tests/common/mod.rs`.
 rust_test(
     name = "preview",
     srcs = [
@@ -1112,15 +849,6 @@ rust_test(
     deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
 )
 
-# Real-nvim integration test for the NAVIGATION-HISTORY bridge surface
-# (`WolfCoreHandle::history_can_back` / `history_can_forward` / `history_back` /
-# `history_forward` / `history_jump(win, index)` / `history_entries(win) ->
-# Vec<FfiHistoryEntry>` with its `display()` / `index()` / `is_current()` row
-# accessors), including the neutral-fallback contract for an unknown window, the
-# terminal DRAWER window, and a shut-down core. Modeled on `preview` exactly:
-# drives a REAL pinned Neovim (no mocks), loud-skips when WOLF_NVIM_BIN is unset,
-# and stages the captive `init.lua` + pinned nvim tree as runfiles. Reuses
-# `tests/common/mod.rs`.
 rust_test(
     name = "history",
     srcs = [
@@ -1144,13 +872,6 @@ rust_test(
     deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
 )
 
-# Real-nvim integration test for the EDIT bridge surface — the INVERSE of Preview
-# (`WolfCoreHandle::is_preview_active` and the in-place `edit_source() -> i64`,
-# which replaces the active preview pane's buffer with its source — same window,
-# no new pane — plus the off-a-preview no-op gate). Modeled on `preview` exactly:
-# drives a REAL pinned Neovim (no mocks), loud-skips when WOLF_NVIM_BIN is unset,
-# and stages the captive `init.lua` + pinned nvim tree as runfiles. Reuses
-# `tests/common/mod.rs`.
 rust_test(
     name = "edit",
     srcs = [
@@ -1174,14 +895,6 @@ rust_test(
     deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
 )
 
-# Real-nvim integration test for the OTHER-PANE bridge surface
-# (`WolfCoreHandle::preview_in_other(target_win)` / `edit_in_other(target_win)`):
-# the reuse-vs-split target resolution, the atomic Lua split+bind surfacing as an
-# ordinary vertical Split layout intent, the gate-before-split no-ops, the
-# invalid-target split fallback, and the focus-follows-the-source-editor rule.
-# Modeled on `preview` exactly: drives a REAL pinned Neovim (no mocks), loud-skips
-# when WOLF_NVIM_BIN is unset, and stages the captive `init.lua` + pinned nvim
-# tree as runfiles. Reuses `tests/common/mod.rs`.
 rust_test(
     name = "other_pane",
     srcs = [
@@ -1205,17 +918,6 @@ rust_test(
     deps = [":wolf_ffi"] + all_crate_deps(normal_dev = True),
 )
 
-# Real-nvim integration test for the MULTI-CORE wake-routing bridge surface
-# (`WolfCoreHandle::wake_token` + the token-carrying `wolf_ffi_set_wake` ABI +
-# independent per-core snapshots). The former per-index state section
-# (`state_set_geometry` / `state_set_sidebar_visible` / `state_set_window_count`
-# + `wolf_ffi_start`'s trailing `window_index`) was removed with the
-# per-window-tabs change; the tree snapshot round-trip is covered headlessly by
-# the `state` target. Drives TWO REAL pinned Neovim instances (no mocks),
-# loud-skips when WOLF_NVIM_BIN is unset, and stages the captive `init.lua` +
-# pinned nvim tree as runfiles. Reuses `tests/common/mod.rs`. A SINGLE #[test]: it
-# mutates the process-global WOLF_STATE_DIR and registers the process-global wake
-# callback, which is only safe with one test per binary.
 rust_test(
     name = "multi_window",
     srcs = [

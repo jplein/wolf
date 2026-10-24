@@ -1,8 +1,4 @@
-//
-//  WindowRegistry.swift
-//  Routes a wolf-core wake (carrying its per-PROJECT token) to the owning
-//  `Project`, which fans it out to its current view.
-//
+// Routes a wolf-core wake by its project token to the owning `Project`.
 
 import Foundation
 

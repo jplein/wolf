@@ -210,9 +210,8 @@ fn cwd_for_tabpage_is_out_of_band_and_does_not_block_when_nvim_wedged() {
          (bound={PROMPT_BOUND:?}, wedge={WEDGE_SLEEP_MS}ms)"
     );
 
-    // Let the finite wedge sleep fully elapse so nvim recovers before teardown; a
-    // wedged shutdown could otherwise block. WEDGE_SETTLE has already passed, so
-    // this over-waits by design (robustness over speed).
+    // Let the whole finite wedge sleep elapse so nvim recovers; a still-wedged shutdown could block.
+    // This over-waits on purpose, since WEDGE_SETTLE has already passed.
     sleep(Duration::from_millis(WEDGE_SLEEP_MS));
     core.shutdown().expect("shutdown should be Ok");
     drop((dir_a, dir_b));

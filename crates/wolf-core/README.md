@@ -2,9 +2,9 @@
 
 The platform-agnostic Rust core of Wolf. Core contains everything Neovim-related and draws no pixels: it spawns a hermetic, pinned `nvim --embed`, attaches as a multigrid UI, folds the entire `redraw` event stream into a render-state snapshot, surfaces a Neovim-to-shell layout-intent channel for native split panes, accepts abstract input events, and signals the front-end through a single wake callback when a new frame is ready.
 
-**Read [DECISIONS.md](DECISIONS.md) before changing anything in this crate.** It holds the one hard rule about the dependency tree, the threading and locking model, and the constraints a refactor would otherwise undo.
+**Read [wolf-core-decisions.md](../../notes/wolf-core-decisions.md) before changing anything in this crate.** It holds the one hard rule about the dependency tree, the threading and locking model, and the constraints a refactor would otherwise undo.
 
-For workspace context see [`architecture.md`](../../architecture.md) and [`build.md`](../../build.md).
+For workspace context see [`architecture.md`](../../specs/architecture.md) and [`build.md`](../../build.md).
 
 ## Layout
 
@@ -40,7 +40,7 @@ Everything below is re-exported from the crate root as `wolf_core::…`. The own
 | Persisted state    | `StateStore`, `WolfState`, `WindowState`, `TabState`, `PaneNode`              |
 | Logging            | `init_tracing`                                                                |
 
-One public entry point is reached through its module rather than the root: `state::rebuild_layout_spec` renders a saved `PaneNode` into the JSON `WolfCore::rebuild_layout` takes, so a front-end restoring a pane layout never hand-rolls that document. See [`src/README.md`](src/README.md#staters) for the module entry and [DECISIONS.md](DECISIONS.md) for the contract it shares with the Swift renderer.
+One public entry point is reached through its module rather than the root: `state::rebuild_layout_spec` renders a saved `PaneNode` into the JSON `WolfCore::rebuild_layout` takes, so a front-end restoring a pane layout never hand-rolls that document. See [`src/README.md`](src/README.md#staters) for the module entry and [wolf-core-decisions.md](../../notes/wolf-core-decisions.md) for the contract it shares with the Swift renderer.
 
 ## Building and testing
 

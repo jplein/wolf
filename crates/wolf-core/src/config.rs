@@ -4,14 +4,6 @@
 //! preferences directory (macOS `~/Library/Preferences/Wolf`, Linux
 //! `~/.config/wolf`), and reads — or creates-with-defaults — a
 //! `wolf-config.yaml` holding `config: { font-family, font-size, line-height }`.
-//!
-//! The production implementation (the `WolfConfig` struct, the private serde
-//! `ConfigFile`/`ConfigSection`, the `CONFIG_FILE_NAME`/`DEFAULT_*` consts, and
-//! the `preferences_dir()` / `default_config()` / `load_or_create()` functions)
-//! is written by the coder ABOVE this test module, per the architect plan §2.
-//
-// NOTE(test-writer): production code goes here (config module); the coder
-// implements it above this test module.
 
 use std::path::{Path, PathBuf};
 
@@ -248,7 +240,7 @@ mod tests {
     const CONFIG_FILE_NAME: &str = "wolf-config.yaml";
 
     /// The documented default font family (platform-independent).
-    // NOTE: must match wolf_core::config::DEFAULT_FONT_FAMILY (the verified iA Writer Mono S CoreText family name).
+    // Must match wolf_core::config::DEFAULT_FONT_FAMILY, the verified CoreText family name.
     const EXPECT_DEFAULT_FONT_FAMILY: &str = "iA Writer Mono S";
     /// The documented default line-height (percent of font size), all platforms.
     const EXPECT_DEFAULT_LINE_HEIGHT: f64 = 180.0;
@@ -312,9 +304,7 @@ mod tests {
             .unwrap_or_else(|e| panic!("writing {}: {e}", path.display()));
     }
 
-    // =====================================================================
     // load_or_create — absent file
-    // =====================================================================
 
     #[test]
     fn creates_file_with_defaults_when_absent() {
@@ -359,9 +349,7 @@ mod tests {
         assert_config_eq(&reread, &created, "re-read == first create");
     }
 
-    // =====================================================================
     // load_or_create — existing, well-formed file
-    // =====================================================================
 
     #[test]
     fn parses_existing_file() {
@@ -391,18 +379,15 @@ mod tests {
     fn round_trips() {
         let dir = tempdir().expect("create temp dir");
 
-        // First call creates the file from defaults; the second reads that exact
-        // file back. Both must equal the defaults — i.e. the serialized form the
-        // module writes round-trips cleanly through its own reader.
+        // The first call writes the defaults and the second reads that file back, so the
+        // serialized form must round-trip through the module's own reader.
         let first = load_or_create(dir.path());
         let second = load_or_create(dir.path());
         assert_config_eq(&first, &default_config(), "first == defaults");
         assert_config_eq(&second, &first, "second (re-read) == first");
     }
 
-    // =====================================================================
     // load_or_create — degraded inputs (defaults-on-error, never clobber)
-    // =====================================================================
 
     #[test]
     fn malformed_file_falls_back_to_defaults() {
@@ -446,9 +431,8 @@ mod tests {
     fn valid_yaml_wrong_shape_falls_back_to_defaults() {
         let dir = tempdir().expect("create temp dir");
         let path = dir.path().join(CONFIG_FILE_NAME);
-        // Structurally valid YAML, but the WRONG SHAPE: `config` maps to a scalar
-        // string instead of the expected mapping. This parses cleanly as YAML yet
-        // fails to deserialize into `ConfigFile`, so the whole load falls back.
+        // Valid YAML of the wrong shape (`config` is a scalar): it fails to deserialize into
+        // `ConfigFile`, so the whole load falls back.
         let wrong_shape = "config: \"just a string\"\n";
         write(&path, wrong_shape);
 
@@ -464,9 +448,7 @@ mod tests {
         );
     }
 
-    // =====================================================================
-    // appearance — new config key (auto/dark/light, default auto)
-    // =====================================================================
+    // appearance (auto/dark/light, default auto)
 
     /// Formats a full, well-formed `config:` section (all three required font
     /// fields, with the CUSTOM non-default values) plus an `appearance:` line
@@ -491,9 +473,8 @@ mod tests {
 
     #[test]
     fn parses_appearance_values() {
-        // Each valid enum string maps to its DISTINCT variant, and the font fields
-        // parse alongside it (so we know the whole section deserialized, not a
-        // defaults fallback).
+        // Each string maps to its own variant, and the font fields parse alongside it, proving
+        // the section deserialized rather than fell back.
         let cases = [
             ("auto", Appearance::Auto),
             ("dark", Appearance::Dark),
@@ -527,11 +508,8 @@ mod tests {
 
     #[test]
     fn missing_appearance_defaults_to_auto() {
-        // Back-compat: a config with all the required font fields but NO
-        // `appearance` key must parse SUCCESSFULLY (via `#[serde(default)]`), NOT
-        // fall back to the full defaults. So appearance is Auto AND the custom font
-        // fields are preserved (distinguishing this from the whole-file fallback of
-        // `missing_field_falls_back_to_defaults`, which drops a REQUIRED font field).
+        // A missing `appearance` key parses via `#[serde(default)]` and keeps the custom font
+        // fields, unlike the whole-file fallback of `missing_field_falls_back_to_defaults`.
         let dir = tempdir().expect("create temp dir");
         let path = dir.path().join(CONFIG_FILE_NAME);
         let yaml = format!(
@@ -565,10 +543,8 @@ mod tests {
 
     #[test]
     fn invalid_appearance_falls_back_to_defaults() {
-        // An out-of-range appearance value (`purple`) fails the enum, so the whole
-        // section fails to deserialize and the load falls back to the defaults
-        // (OD-b: whole-file fallback), leaving the user's file untouched — the same
-        // contract as the wrong-shape case above.
+        // `purple` fails the enum, so the whole load falls back to the defaults and leaves the
+        // user's file untouched, as in the wrong-shape case.
         let dir = tempdir().expect("create temp dir");
         let path = dir.path().join(CONFIG_FILE_NAME);
         let invalid = config_yaml_with_appearance("purple");
@@ -624,10 +600,7 @@ mod tests {
         }
     }
 
-    // =====================================================================
-    // macos-option-as-alt — new config key (bool, default false =
-    // option-as-option; mirrors Ghostty's `macos-option-as-alt`)
-    // =====================================================================
+    // macos-option-as-alt (bool, default false; mirrors Ghostty's `macos-option-as-alt`)
 
     /// Formats a full, well-formed `config:` section (all three required font
     /// fields, with the CUSTOM non-default values) plus a `macos-option-as-alt:`
@@ -682,12 +655,8 @@ mod tests {
 
     #[test]
     fn missing_macos_option_as_alt_defaults_to_false() {
-        // Back-compat: a config with all the required font fields but NO
-        // `macos-option-as-alt` key must parse SUCCESSFULLY (via
-        // `#[serde(default)]`), NOT fall back to the full defaults. So the flag is
-        // false AND the custom font fields are preserved (distinguishing this from
-        // the whole-file fallback of `missing_field_falls_back_to_defaults`, which
-        // drops a REQUIRED font field).
+        // A missing `macos-option-as-alt` key parses via `#[serde(default)]` and keeps the custom
+        // font fields, unlike the whole-file fallback of `missing_field_falls_back_to_defaults`.
         let dir = tempdir().expect("create temp dir");
         let path = dir.path().join(CONFIG_FILE_NAME);
         let yaml = format!(
@@ -752,9 +721,7 @@ mod tests {
         );
     }
 
-    // =====================================================================
     // default_config — platform-specific font size
-    // =====================================================================
 
     #[test]
     fn defaults_are_platform_specific() {
@@ -779,9 +746,7 @@ mod tests {
         );
     }
 
-    // =====================================================================
     // preferences_dir — WOLF_CONFIG_DIR override (env-mutating: serialized)
-    // =====================================================================
 
     #[test]
     fn preferences_dir_honors_env_override() {

@@ -151,10 +151,8 @@ fn ex_and_lua_faces_emit_commands() {
         ":WolfCloseWindow must enqueue Command::CloseWindow; got {commands:?}"
     );
 
-    // --- Lua face: `:lua require('wolf').quit_application()<CR>` -----------------
-    // Proves `require('wolf')` resolves under `--clean` (via package.loaded seeding)
-    // and that the snake_case function `quit_application` rpcnotifies the same
-    // `wolf_command` channel.
+    // Lua face: `require('wolf')` resolves under `--clean` (via package.loaded seeding), and
+    // `quit_application` rpcnotifies the same `wolf_command` channel.
     ex_command(&core, "lua require('wolf').quit_application()");
     let commands = drain_until_command(
         &core,
@@ -563,12 +561,8 @@ fn ex_qa_emits_close_window_when_multiple_panes() {
     core.shutdown().expect("shutdown should be Ok");
 }
 
-// --- Pure registry tests (no nvim; run regardless of the skip guard) ----------
-//
-// These pin the canonical `COMMAND_SPECS` table + `Command::from_id` contract
-// without starting a core, so they pass on hosts with no pinned Neovim. They are
-// the integration-file home for the plan §2 `command.rs` unit assertions (kept
-// here to avoid colliding with the coder creating `command.rs` itself).
+// Pure registry tests: they start no core, so they pin `COMMAND_SPECS` and `Command::from_id`
+// even on hosts with no pinned Neovim.
 
 /// Every spec's canonical `id` round-trips back to its `Command` via `from_id`.
 #[test]

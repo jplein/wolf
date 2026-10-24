@@ -105,9 +105,8 @@ const SOLO_PATH: &str = "/proj/window-one/solo.md";
 
 #[test]
 fn snapshot_builder_round_trips_the_whole_tree() {
-    // Point the state machinery at a private tempdir for the WHOLE test. This is
-    // the `state_dir()` determinism hook AND where the shared store's writer lands
-    // state.json; safe to mutate because this binary has exactly one test.
+    // A private state dir for the whole test, where the shared store writes state.json. Safe to
+    // mutate because this binary has exactly one test.
     let state_dir = tempfile::tempdir().expect("failed to create temp state dir");
     std::env::set_var("WOLF_STATE_DIR", state_dir.path());
     let state_path = state_dir.path().join(STATE_FILE_NAME);
@@ -123,9 +122,8 @@ fn snapshot_builder_round_trips_the_whole_tree() {
         "the restore read must NEVER create state.json"
     );
 
-    // --- 2. Build a 2-window / 3-tab tree via the snapshot builder -----------
-    // Window 0 gets TWO tabs, window 1 gets ONE (tabs attach to the most recently
-    // added window), interleaved exactly as the coordinator's snapshot walk emits.
+    // --- 2. Build a 2-window / 3-tab tree. Tabs attach to the last added window, interleaved as
+    // the coordinator's snapshot walk emits them.
     wolf_ffi_state_snapshot_begin();
     wolf_ffi_state_snapshot_add_window(W0_X, W0_Y, W0_WIDTH, W0_HEIGHT);
     wolf_ffi_state_snapshot_add_tab(W0_TAB0_CWD.to_string(), true);
@@ -204,21 +202,16 @@ fn snapshot_builder_round_trips_the_whole_tree() {
         "state.json must be pretty-printed (newline + indentation), got:\n{text}"
     );
 
-    // --- 3b. Attach a pane layout to the last tab and round-trip it ----------
-    // Rebuild the SAME 2-window / 3-tab tree, then attach a vertical 2-leaf split
-    // to the LAST tab (window 1, tab 0) via the post-order layout push-builder:
-    // push the two leaves, wrap them in a split, then commit-to-tab. The whole
-    // scratch tree (now carrying the layout) is committed and read back through
-    // the FfiTabState.has_layout()/layout() + FfiPaneNode accessors.
+    // --- 3b. Rebuild the same tree with a vertical 2-leaf split on the last tab, pushed
+    // post-order, and read it back through the layout accessors.
     wolf_ffi_state_snapshot_begin();
     wolf_ffi_state_snapshot_add_window(W0_X, W0_Y, W0_WIDTH, W0_HEIGHT);
     wolf_ffi_state_snapshot_add_tab(W0_TAB0_CWD.to_string(), true);
     wolf_ffi_state_snapshot_add_tab(W0_TAB1_CWD.to_string(), false);
     wolf_ffi_state_snapshot_add_window(W1_X, W1_Y, W1_WIDTH, W1_HEIGHT);
     wolf_ffi_state_snapshot_add_tab(W1_TAB0_CWD.to_string(), false);
-    // Post-order token stream for split[ leaf(LEFT), leaf(RIGHT) ]: leaves first,
-    // then the split that pops the top two. Both leaves are plain EDITOR leaves
-    // (preview: false); the preview case is exercised in step 3c below.
+    // Post-order: leaves first, then the split pops the top two. Both are editor leaves; step 3c
+    // covers a preview leaf.
     wolf_ffi_state_layout_push_leaf(LEAF_LEFT_PATH.to_string(), false, HALF_WEIGHT);
     wolf_ffi_state_layout_push_leaf(LEAF_RIGHT_PATH.to_string(), false, HALF_WEIGHT);
     wolf_ffi_state_layout_push_split(ORIENT_VERTICAL, TWO_CHILDREN, ROOT_WEIGHT);
@@ -276,12 +269,7 @@ fn snapshot_builder_round_trips_the_whole_tree() {
     assert!(right.is_leaf(), "child 1 is a leaf");
     assert_eq!(right.leaf_path(), LEAF_RIGHT_PATH, "child 1 leaf path");
 
-    // --- 3c. A PREVIEW leaf round-trips its is_preview() marker + source path -
-    // Rebuild the SAME tree, but attach a vertical split to the LAST tab whose
-    // FIRST child is a PREVIEW leaf (source path, preview=true) and whose second
-    // child is a plain EDITOR leaf (preview=false). After load, walk the FfiPaneNode
-    // and assert is_preview() true/false per child and that the preview leaf's
-    // leaf_path() is the pushed SOURCE path.
+    // --- 3c. A preview leaf round-trips `is_preview()` and its source path, beside an editor leaf.
     wolf_ffi_state_snapshot_begin();
     wolf_ffi_state_snapshot_add_window(W0_X, W0_Y, W0_WIDTH, W0_HEIGHT);
     wolf_ffi_state_snapshot_add_tab(W0_TAB0_CWD.to_string(), true);
@@ -358,12 +346,7 @@ fn snapshot_builder_round_trips_the_whole_tree() {
         "the editor sibling keeps its own buffer path"
     );
 
-    // --- 3d. A LONE leaf (single-pane tab) round-trips as a top-level leaf ----
-    // Rebuild the SAME tree, but attach a SINGLE editor leaf (NO split) to the LAST
-    // tab: push one leaf, then commit-to-tab. This is the single-pane persistence
-    // case — the layout's root is the leaf itself, not a split. After load, assert
-    // the last tab has_layout(), its root is a (non-preview) leaf, and its path is
-    // the pushed SOLO_PATH.
+    // --- 3d. A lone leaf (single-pane tab) round-trips as the layout root, not a split.
     wolf_ffi_state_snapshot_begin();
     wolf_ffi_state_snapshot_add_window(W0_X, W0_Y, W0_WIDTH, W0_HEIGHT);
     wolf_ffi_state_snapshot_add_tab(W0_TAB0_CWD.to_string(), true);
@@ -420,11 +403,8 @@ fn snapshot_builder_round_trips_the_whole_tree() {
         "the lone leaf's path round-trips as the single-pane tab's open file"
     );
 
-    // --- 4. Old (flat, pre-tabs) format is rejected -> zero windows ----------
-    // The committed tree is now stable on disk (flush returned). Overwrite it with
-    // a FLAT, pre-tabs file (window-level cwd/sidebar, NO `tabs`); the new schema
-    // requires `tabs`, so `wolf_ffi_load_state()` must silently yield 0 windows.
-    // No further `commit` fires, so the shared store's writer never re-touches it.
+    // --- 4. A flat file without `tabs` loads as zero windows. Overwritten after the flush, and no
+    // later commit fires, so the shared store's writer never rewrites it.
     const FLAT_STATE_JSON: &str = r#"{
   "version": 1,
   "windows": [

@@ -1,18 +1,4 @@
-//
-//  DrawerFocusSeam.swift
-//  Pure, AppKit-/CoreGraphics-free focus-target selection for editor<->drawer
-//  navigation (terminal-drawer navigation addendum §1).
-//
-//  The terminal drawer stays OUT of the pure `PaneTree` (preserving its 1:1 parity
-//  with wolf-gnome), so `<C-w>k` from the drawer cannot resolve its target via
-//  `PaneTree.neighbor`. Instead the front-end bridges into the editor by picking a
-//  concrete editor leaf. This seam is that pure computation over the editor's leaf
-//  rects; the `applyFocus` AppKit glue that calls it is compile + manual-smoke only.
-//
-//  Like `PaneTree` / `DrawerLayout`, it reuses the existing `Rect` / `PaneId` types
-//  from `PaneTree.swift` and is `Double`-based so it stays headlessly testable (see
-//  `DrawerFocusSeamTests.swift`).
-//
+// Pure choice of the editor pane `<C-w>k` from the terminal drawer focuses.
 
 import Foundation
 

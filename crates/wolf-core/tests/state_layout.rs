@@ -148,9 +148,7 @@ fn sample_tree() -> WolfState {
     }
 }
 
-// =========================================================================
-// Full round-trip: set_snapshot -> flush -> load_state == the whole tree
-// =========================================================================
+// === Full round-trip: set_snapshot -> flush -> load_state == the whole tree ===
 
 #[test]
 fn pane_layout_round_trips_through_store_and_load() {
@@ -204,18 +202,15 @@ fn pane_layout_round_trips_through_store_and_load() {
     );
 }
 
-// =========================================================================
-// Back-compat: a v1 file with NO `layout` field loads with layout: None
-// =========================================================================
+// === Back-compat: a v1 file with no `layout` field loads with layout: None ===
 
 #[test]
 fn v1_file_without_layout_loads_with_none() {
     let dir = tempdir().expect("create temp state dir");
     let path = dir.path().join(STATE_FILE_NAME);
 
-    // A valid v1 tree whose tabs carry only cwd + sidebar_visible (the pre-layout
-    // shape). `layout` is `#[serde(default)]`, so this must load with None — and
-    // STATE_VERSION stays 1 (no version bump, no discard of existing state).
+    // A v1 tree whose tabs carry only cwd + sidebar_visible: `layout` is `#[serde(default)]`, so it
+    // loads as None with STATE_VERSION still 1.
     let no_layout = r#"{
   "version": 1,
   "windows": [
@@ -243,18 +238,15 @@ fn v1_file_without_layout_loads_with_none() {
     );
 }
 
-// =========================================================================
-// Tolerance: an unknown extra field still loads
-// =========================================================================
+// === Tolerance: an unknown extra field still loads ===
 
 #[test]
 fn unknown_extra_field_is_tolerated() {
     let dir = tempdir().expect("create temp state dir");
     let path = dir.path().join(STATE_FILE_NAME);
 
-    // A valid v1 tree carrying a `layout` AND an unknown extra field on both the
-    // window and the tab. With no `deny_unknown_fields`, load_state must tolerate
-    // it (newer writers must not break older readers).
+    // A v1 tree with an unknown extra field on window and tab: with no `deny_unknown_fields` it
+    // loads, so newer writers do not break older readers.
     let with_extra = r#"{
   "version": 1,
   "windows": [
@@ -295,9 +287,7 @@ fn unknown_extra_field_is_tolerated() {
     );
 }
 
-// =========================================================================
-// PREVIEW round-trip: a preview leaf preserves `preview: true` (ROUND 2)
-// =========================================================================
+// === Preview round-trip: a preview leaf preserves `preview: true` ===
 
 #[test]
 fn preview_leaf_round_trips_preserving_the_preview_flag() {
@@ -351,19 +341,15 @@ fn preview_leaf_round_trips_preserving_the_preview_flag() {
     );
 }
 
-// =========================================================================
-// Back-compat: a v1 layout leaf with NO `preview` key loads as preview: false
-// =========================================================================
+// === Back-compat: a v1 layout leaf with no `preview` key loads as preview: false ===
 
 #[test]
 fn v1_layout_leaf_without_preview_defaults_to_false() {
     let dir = tempdir().expect("create temp state dir");
     let path = dir.path().join(STATE_FILE_NAME);
 
-    // A hand-crafted v1 file whose leaf objects carry `type`/`path` but NO `preview`
-    // key (the round-1 shape). `preview` is `#[serde(default)]`, so each leaf must
-    // load with `preview: false` — and the file must NOT be rejected (still v1, no
-    // version bump).
+    // A v1 leaf with `type`/`path` but no `preview` key: `preview` is `#[serde(default)]`, so it
+    // loads as false and the file is not rejected (still v1).
     let no_preview = r#"{
   "version": 1,
   "windows": [
@@ -407,20 +393,8 @@ fn v1_layout_leaf_without_preview_defaults_to_false() {
     );
 }
 
-// =========================================================================
-// `rebuild_layout_spec` — the WIRE shape `_G.wolf_rebuild_layout` decodes
-//
-// This is NOT `PaneNode`'s serde shape. The Lua helper reads a terser document:
-//
-//   leaf  -> { "leaf": true, "path": "<abs or empty>", "preview": true|false }
-//   split -> { "orientation": "v"|"h", "weights": [...], "children": [...] }
-//
-// Every assertion below PARSES the rendered string back with
-// `serde_json::from_str::<Value>` and inspects fields, rather than comparing
-// strings: key ORDER is not part of the contract (`vim.json.decode` is a JSON
-// parser, not a text matcher), and a string comparison would turn a harmless
-// serializer change into a red test while still missing a genuinely wrong VALUE.
-// =========================================================================
+// === `rebuild_layout_spec`: the wire shape `_G.wolf_rebuild_layout` decodes, not PaneNode's ===
+// Assertions parse it back and compare fields, since key order is not part of the contract.
 
 /// Parses a rendered spec back into a `serde_json::Value`, panicking with the
 /// offending text on failure.
@@ -507,12 +481,8 @@ fn rebuild_layout_spec_matches_the_lua_contract() {
          the leaf count regardless"
     );
 
-    // --- the ORIENTATION TAG, both directions ------------------------------
-    //
-    // THE row most worth having. Inverting `v`/`h` transposes every restored
-    // layout — a saved side-by-side pair comes back stacked — while every
-    // count-based assertion (handles returned, leaves realized, panes bound)
-    // stays green, because the COUNT is unchanged.
+    // Orientation tag, both ways: inverting `v`/`h` transposes every restored layout while every
+    // count-based assertion stays green.
     let vertical = parse_spec(&two_child_split());
     assert_eq!(
         vertical.get("orientation").and_then(Value::as_str),
@@ -592,10 +562,8 @@ fn rebuild_layout_spec_matches_the_lua_contract() {
 
 #[test]
 fn rebuild_layout_spec_leaf_order_is_dfs() {
-    // `wolf_rebuild_layout` realizes regions child-0-first and gathers handles in
-    // the same walk, so the DOCUMENT order of leaves IS the order the returned
-    // handle vector is in. Every front-end zips its own DFS leaf ids onto that
-    // vector by index, which is why the order is a contract and not an incidental.
+    // `wolf_rebuild_layout` gathers handles child-0-first and front-ends zip their DFS leaf ids onto
+    // that vector by index, so the document's leaf order is a contract.
     let mut paths = Vec::new();
     spec_leaf_paths(&parse_spec(&nary_split()), &mut paths);
     assert_eq!(
@@ -635,10 +603,8 @@ fn rebuild_layout_spec_leaf_order_is_dfs() {
 
 #[test]
 fn rebuild_layout_spec_escapes_paths() {
-    // THIS is why the renderer is not hand-rolled. A file name may legally contain
-    // a double quote, a backslash and even a newline on Linux. An unescaped quote
-    // makes `pcall(vim.json.decode, …)` fail, `wolf_rebuild_layout` return `{}`,
-    // and the restore abort SILENTLY — no error, no handles, no layout.
+    // Why the renderer is not hand-rolled: Linux names may hold `"`, `\` and newlines, and an
+    // unescaped quote makes `vim.json.decode` fail and the restore abort silently.
     const NASTY: &str = "/proj/we\"ird\\path\nnewline.md";
 
     let doc = parse_spec(&leaf(NASTY));
@@ -669,12 +635,8 @@ fn rebuild_layout_spec_escapes_paths() {
 
 #[test]
 fn rebuild_layout_spec_tolerates_a_non_finite_weight() {
-    // `serde_json::Number::from_f64` has no representation for NaN or ±inf, so the
-    // renderer substitutes `0.0` and stays TOTAL. The substitution is purely
-    // cosmetic: `wolf_rebuild_layout` produces the window COUNT and TOPOLOGY only
-    // and never reads `weights` (pane sizes come from the front-end). What matters
-    // is that the DOCUMENT still parses — an emitted `null` (or a panic) would take
-    // the whole restore down over a value nobody reads.
+    // `from_f64` cannot represent NaN or ±inf, so the renderer emits `0.0` and stays total. The Lua
+    // side never reads `weights`, and a `null` or a panic would abort the whole restore.
     let poisoned = PaneNode::Split {
         orientation: PaneOrientation::Vertical,
         weights: vec![f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 0.5],

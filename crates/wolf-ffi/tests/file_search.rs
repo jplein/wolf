@@ -84,9 +84,7 @@ fn is_ci_subsequence(needle: &str, haystack: &str) -> bool {
 
 #[test]
 fn file_search_ranks_and_opens() {
-    // Loud SKIP (no-op pass) when no pinned nvim is available, exactly like
-    // `bridge_smoke`. Otherwise export the resolved binary so wolf-core launches
-    // it.
+    // Loud skip (no-op pass) without a pinned nvim, exactly like `bridge_smoke`.
     let Some(nvim_bin) = common::nvim_bin_or_skip() else {
         return;
     };
@@ -94,17 +92,14 @@ fn file_search_ranks_and_opens() {
 
     let init_lua = common::init_lua_path();
 
-    // Seed a fresh temp cwd with a couple of files for the search to find. We use
-    // `tempfile` (a dev-dependency) so the directory is cleaned up on drop; we
-    // keep `tmp` alive until after `shutdown()` so it outlives the session as
-    // nvim's working dir + search root, then drop it explicitly at the end.
+    // Seed a temp cwd for the search. It is nvim's working dir and search root, so `tmp` stays
+    // alive until after `shutdown()`.
     let tmp = tempfile::tempdir().expect("failed to create temp cwd directory");
     std::fs::write(tmp.path().join(FILE_ALPHA), "# alpha\n").expect("failed to seed alpha.md");
     std::fs::write(tmp.path().join(FILE_BETA), "# beta\n").expect("failed to seed beta.md");
 
-    // Canonicalize the cwd for path assertions: on macOS the temp dir under
-    // `/var/folders/...` canonicalizes to `/private/var/folders/...`, and
-    // wolf-core may report either form, so we compare against the canonical path.
+    // Canonicalize for path assertions: a macOS temp dir under `/var` resolves to `/private/var`,
+    // and wolf-core may report either form.
     let canonical_cwd = tmp
         .path()
         .canonicalize()
@@ -121,9 +116,7 @@ fn file_search_ranks_and_opens() {
 
     let search = handle.start_file_search();
 
-    // --- ranked("") streams in the seeded files -----------------------------
-    // The traversal runs on a background worker, so the first `ranked` call may
-    // see an empty (or partial) snapshot; poll until both files appear.
+    // --- ranked("") streams in from a background worker: poll until both seeded files appear.
     let deadline = Instant::now() + FLUSH_TIMEOUT;
     let mut displays: Vec<String> = Vec::new();
     while Instant::now() < deadline {
@@ -181,9 +174,8 @@ fn file_search_ranks_and_opens() {
         );
     }
 
-    // --- filtering query ranks the matching file first -----------------------
-    // "alpha" matches alpha.md (and not beta.md, which has no a-l-p-h-a
-    // subsequence), so alpha.md must be present and, being the best match, first.
+    // --- filtering query ranks the matching file first: "alpha" matches alpha.md but not
+    // beta.md, which has no a-l-p-h-a subsequence.
     let filtered = search.ranked("alpha".to_string(), MAX_RESULTS);
     let filtered_displays: Vec<String> = filtered.iter().map(|e| e.display()).collect();
     assert!(
@@ -196,11 +188,8 @@ fn file_search_ranks_and_opens() {
         "ranked(\"alpha\") should rank {FILE_ALPHA:?} first (got {filtered_displays:?})"
     );
 
-    // --- open(path) round-trips without panic; core stays responsive ---------
-    // Resolve alpha's absolute path from the entry itself, then open it. We
-    // CANNOT assert the opened buffer name (no `current_file` accessor on
-    // `FfiFrame`); the assertion is that `open` issues cleanly and the core keeps
-    // producing sane frames.
+    // --- open(path) round-trips without panic and the core keeps producing sane frames.
+    // `FfiFrame` has no `current_file` accessor, so the opened buffer name is not asserted.
     let alpha_path = entries
         .iter()
         .find(|e| e.display() == FILE_ALPHA)
@@ -267,9 +256,8 @@ fn file_search_bounds_large_tree() {
     // Seed a fresh temp cwd with a large nested tree.
     let tmp = tempfile::tempdir().expect("failed to create temp cwd directory");
 
-    // The exact-best match lives at the root: "alpha.md" has match_start 0 and a
-    // component/word-start + contiguous score, so it must outrank the nested
-    // "alphaNNNN.md" files (whose "alpha" begins deeper in the display).
+    // Root "alpha.md" matches contiguously from position 0, so it outranks every nested
+    // "alphaNNNN.md", whose match begins deeper in the display.
     std::fs::write(tmp.path().join(FILE_ALPHA), "# alpha\n").expect("failed to seed root alpha.md");
 
     let mut alpha_seq = 0usize;

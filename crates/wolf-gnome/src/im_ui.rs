@@ -204,15 +204,8 @@ mod tests {
 
     use wolf_core::key_to_notation;
 
-    // =========================================================================
-    // The whole input domain
-    // =========================================================================
-    //
-    // Two of the rules below are stated over EVERY input rather than over one
-    // table row, so that a failure NAMES the rule instead of quoting an index —
-    // the [`crate::nav_ui`] / [`crate::liveness_ui`] convention. They are the two
-    // whose violation is catastrophic and easy to reintroduce: an overlay that
-    // stops winning, and a release that starts being translated.
+    // === The whole input domain: two rules swept over every input so a failure names the rule ===
+    // (an overlay that stops winning; a release that starts being translated).
 
     /// Both phases [`key_route`] is total over.
     const ALL_PHASES: [KeyPhase; 2] = [KeyPhase::Press, KeyPhase::Release];
@@ -247,9 +240,7 @@ mod tests {
     /// [`ROUTE_CASES`]'s reason.
     const RELEASE_SWEEP_INPUTS: usize = 2 * 3;
 
-    // =========================================================================
-    // key_route
-    // =========================================================================
+    // === key_route ===
 
     /// One [`key_route`] table row.
     struct RouteCase {
@@ -373,10 +364,8 @@ mod tests {
             cases.len()
         );
 
-        // Every domain input appears EXACTLY once, so the count above cannot be
-        // satisfied by twelve copies of one row, and a duplicated row cannot hide a
-        // missing one. The nav_ui `BUTTON_CASES` coverage loop, tightened to an
-        // exact count because this domain is small enough to enumerate whole.
+        // Every domain input appears exactly once, so twelve copies of one row cannot satisfy the count
+        // and a duplicate cannot hide a missing row.
         let inputs: Vec<(KeyPhase, bool, Option<bool>)> = cases
             .iter()
             .map(|case| (case.phase, case.overlay_open, case.im_filtered))
@@ -410,9 +399,8 @@ mod tests {
             );
         }
 
-        // Non-vacuity of a different kind: every variant is REACHABLE. An
-        // implementation that collapsed two arms into one would satisfy a table
-        // whose rows had been "corrected" alongside it, but not this.
+        // Non-vacuity: every variant is reachable, which two merged arms cannot satisfy even with the
+        // table rows "corrected" alongside them.
         let answers: Vec<KeyRoute> = ALL_PHASES
             .into_iter()
             .flat_map(|phase| {
@@ -483,9 +471,8 @@ mod tests {
             ALL_FILTER.len()
         );
 
-        // Non-vacuity: `|_, _, _| KeyRoute::Overlay` satisfies every iteration above
-        // while making the window permanently deaf. The witness is the input the
-        // glue takes on an ordinary keystroke.
+        // Non-vacuity: `|_, _, _| KeyRoute::Overlay` passes every loop above with a deaf window; the
+        // witness is an ordinary keystroke's input.
         let no_overlay = key_route(KeyPhase::Press, false, Some(false));
         assert_eq!(
             no_overlay,
@@ -591,9 +578,8 @@ mod tests {
                         );
                     }
 
-                    // Direction 2: no overlay and no answer yet implies the offer is
-                    // licensed. Without it, the glue would never call
-                    // `filter_keypress` at all and no accent would ever compose.
+                    // Direction 2: no overlay and no answer yet licenses the offer; otherwise the glue never calls
+                    // `filter_keypress` and no accent ever composes.
                     if im_filtered.is_none() && !overlay_open {
                         unasked_without_overlay += 1;
                         assert_eq!(
@@ -629,10 +615,8 @@ mod tests {
              takes on every ordinary keystroke."
         );
 
-        // The witness for the converse this test deliberately does NOT assert.
-        // Recorded as an assertion rather than as prose, because the tempting
-        // "tightening" — AskInputMethod exactly where `im_filtered` is None — is
-        // false here and would put the overlay guard back below the offer.
+        // The witness for the converse this test does not assert: AskInputMethod exactly where
+        // `im_filtered` is None is false, and asserting it would put the overlay guard below the offer.
         let behind_an_overlay = key_route(KeyPhase::Press, true, None);
         assert_eq!(
             behind_an_overlay,
@@ -645,9 +629,7 @@ mod tests {
         );
     }
 
-    // =========================================================================
-    // commit_keys
-    // =========================================================================
+    // === commit_keys ===
 
     /// One [`commit_keys`] fixture.
     struct CommitCase {
@@ -893,9 +875,7 @@ mod tests {
         );
     }
 
-    // =========================================================================
-    // commit_decision
-    // =========================================================================
+    // === commit_decision ===
 
     /// How many inputs the decision is pinned over: the eleven corpus fixtures
     /// times the two overlay states. Literals, for [`ROUTE_CASES`]'s reason.
@@ -985,9 +965,8 @@ mod tests {
              a refusal. This row is what stops the two being told apart by the wrong rule."
         );
 
-        // The discriminating negative: what refuses is the overlay, not the
-        // emptiness. Without it, a `commit_decision` that refused on `overlay_open`
-        // OR on empty text would satisfy the pair above.
+        // The discriminating negative: the overlay refuses, not the emptiness; a decision refusing on
+        // `overlay_open` or on empty text would satisfy the pair above.
         let behind_an_overlay = commit_decision(true, "");
         assert!(
             matches!(behind_an_overlay, CommitDecision::Refuse(_)),

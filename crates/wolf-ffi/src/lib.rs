@@ -32,10 +32,8 @@
 //! test never registers, so the wake is a harmless no-op there and the staticlib
 //! and the rlib both link with no Swift runtime present.
 
-// swift-bridge's `#[swift_bridge::bridge]` expansion emits same-type raw-pointer
-// casts in the generated FFI shims (e.g. `*mut FfiFrame -> *mut FfiFrame`); a
-// module-level allow does not reach those sibling items, so this one lint is
-// allowed crate-wide. The hand-written glue performs no such casts.
+// swift-bridge's expansion emits same-type raw-pointer casts into sibling items that a
+// module-level allow cannot reach, so this one lint is allowed crate-wide.
 #![allow(clippy::unnecessary_cast)]
 
 use std::cell::RefCell;
@@ -54,11 +52,8 @@ use wolf_core::{
     WindowState, WolfCore, WolfState,
 };
 
-// Re-export the bridge-defined transparent structs at the crate root so the Rust
-// integration test (and any other rlib consumer) can name
-// `wolf_ffi::{FfiColor, FfiKeyEvent}` directly. The opaque `FfiFrame`, `FfiCell`,
-// and `WolfCoreHandle`, plus `wolf_ffi_start`, are already crate-root `pub` items
-// defined below.
+// Re-export the bridge's transparent structs so rlib consumers (the Rust tests) can name them;
+// the opaque types and `wolf_ffi_start` are already crate-root `pub` items.
 pub use ffi::{FfiColor, FfiKeyEvent, FfiMouseEvent, FfiScrollEvent};
 
 /// `FfiKeyEvent.kind` discriminants. These mirror the variant order of
@@ -322,9 +317,8 @@ mod liveness {
     pub const DEAD: u8 = 2;
 }
 
-// swift-bridge's generated module expands into code that does not satisfy this
-// crate's stricter lints; scope a narrow allow to the bridge module only. The
-// hand-written glue below the module is held to the normal bar.
+// swift-bridge's expansion fails this crate's stricter lints; the allow is scoped to the bridge
+// module so the hand-written glue below is held to the normal bar.
 #[allow(clippy::all, missing_docs, unused)]
 #[swift_bridge::bridge]
 mod ffi {
@@ -338,9 +332,8 @@ mod ffi {
         set: bool,
     }
 
-    // A structured key event from Swift, mapped in Rust into a
-    // `wolf_core::KeyEvent`. The `kind` field discriminates the logical key; for
-    // `kind == Char`, `ch` is the (already-shifted) Unicode scalar.
+    // A key event from Swift, mapped here into a `wolf_core::KeyEvent`. `kind` is a `mod kind`
+    // discriminant; for a char key, `ch` is the already-shifted Unicode scalar.
     #[swift_bridge(swift_repr = "struct")]
     struct FfiKeyEvent {
         kind: u8,
@@ -352,10 +345,8 @@ mod ffi {
         meta: bool,
     }
 
-    // A structured mouse event from Swift, mapped in Rust into a
-    // `wolf_core::MouseEvent`. `button`/`action` discriminate via `mod
-    // mouse_button` / `mod mouse_action`; `grid` is the target WINDOW grid (>= 2
-    // under ext_multigrid) and `row`/`col` are GRID-LOCAL.
+    // A mouse event from Swift; `button`/`action` per `mod mouse_button`/`mod mouse_action`.
+    // `grid` is the target window grid (>= 2 under ext_multigrid); `row`/`col` are grid-local.
     #[swift_bridge(swift_repr = "struct")]
     struct FfiMouseEvent {
         button: u8,
@@ -368,9 +359,8 @@ mod ffi {
         alt: bool,
     }
 
-    // A structured scroll event from Swift, mapped in Rust into a
-    // `wolf_core::ScrollEvent`. `direction` discriminates via `mod scroll_dir`;
-    // `grid` is the target WINDOW grid and `row`/`col` are GRID-LOCAL.
+    // A scroll event from Swift; `direction` per `mod scroll_dir`. `grid` is the target window
+    // grid and `row`/`col` are grid-local.
     #[swift_bridge(swift_repr = "struct")]
     struct FfiScrollEvent {
         direction: u8,
@@ -393,23 +383,19 @@ mod ffi {
     extern "Rust" {
         type WolfCoreHandle;
 
-        // The per-core wake-routing identity token, minted fresh per
-        // `wolf_ffi_start` and carried as the sole arg of every wake callback so
-        // a process-global callback routes each wake to the right window.
+        // This core's wake-routing token, minted per `wolf_ffi_start` and passed to every wake
+        // callback so one process-global callback routes each wake to the right core.
         fn wake_token(&self) -> u64;
         fn read_frame(&self) -> FfiFrame;
-        // The per-grid paint-ready frame for `grid` (the pane container reads one
-        // per pane, plus grid 1 for the cmdline strip). An absent grid yields an
-        // empty `0x0` frame (Swift treats `cols() == 0` as "grid gone").
+        // One frame per pane, plus grid 1 for the cmdline strip. An absent grid yields a `0x0`
+        // frame (Swift reads `cols() == 0` as "grid gone").
         fn read_frame_for_grid(&self, grid: u64) -> FfiFrame;
         fn send_key(&self, ev: FfiKeyEvent);
-        // Maps a structured mouse event into a `wolf_core::MouseEvent` and forwards
-        // it to Neovim (`nvim_input_mouse` targeting `ev.grid` with grid-local
-        // row/col). A no-op on an unrecognized button/action discriminant.
+        // Forwards via `nvim_input_mouse` on `ev.grid` with grid-local row/col; a no-op on an
+        // unrecognized button/action discriminant.
         fn send_mouse(&self, ev: FfiMouseEvent);
-        // Maps a structured scroll event into a `wolf_core::ScrollEvent` and
-        // forwards it to Neovim (`nvim_input_mouse("wheel", …)`). A no-op on an
-        // unrecognized direction discriminant.
+        // Forwards via `nvim_input_mouse("wheel", …)`; a no-op on an unrecognized direction
+        // discriminant.
         fn send_scroll(&self, ev: FfiScrollEvent);
         fn resize(&self, cols: u16, rows: u16);
         // Resizes a single window `grid` (in cells); nvim echoes the authoritative
@@ -428,73 +414,50 @@ mod ffi {
         fn grid_for_win(&self, win: i64) -> u64;
         // The currently active Neovim window handle, or 0 if not yet known.
         fn active_win(&self) -> i64;
-        // Creates a new nvim TABPAGE (a new view of this PROJECT), optionally
-        // rooted at `cwd` via `:tcd` (empty string = no `:tcd`), and returns its
-        // stable HANDLE. Blocks briefly on the captive nvim. 0 when the core is
-        // gone (the caller then drops the would-be view).
+        // Creates a tabpage (a new view of this project), `:tcd`'d to `cwd` unless empty, and returns
+        // its handle. Blocks briefly; 0 when the core is gone (the caller drops the view).
         fn create_tabpage(&self, cwd: String) -> i64;
-        // Realizes a saved pane-split tree (`spec_json` from
-        // `PaneLayoutCodec.specJSON`) in the current tabpage's single starting
-        // window via `:split`/`:vsplit` + `:edit`, returning the resulting window
-        // handles in DFS/leaf order (same order as `PaneTree.leaves()`). Blocks
-        // briefly on the captive nvim. An empty `Vec` on error / when the core is
-        // gone. nvim produces only the window COUNT + TOPOLOGY + per-window BUFFER;
-        // sizes come from the front-end's weights.
+        // Realizes a saved split tree (`PaneLayoutCodec.specJSON`) in the current tabpage's lone
+        // window; returns window handles in leaf order. Sizes come from the front-end's weights.
         fn rebuild_layout(&self, spec_json: String) -> Vec<i64>;
         // The current tabpage's stable HANDLE via a blocking RPC (the first-view
         // bind). 0 when the core is gone.
         fn current_tabpage(&self) -> i64;
-        // The CHEAP `Snapshot.current_tabpage` refocus gate (updated out-of-band
-        // via `wolf_tabpage`), read from the snapshot with no RPC. 0 when the core
-        // is gone / not yet known.
+        // The cheap refocus gate: `Snapshot.current_tabpage` (updated via `wolf_tabpage`), no RPC.
+        // 0 when the core is gone or not yet known.
         fn active_tabpage(&self) -> i64;
-        // A tabpage's tab-local `:tcd` cwd (canonicalized), authoritative for a
-        // NON-current view. Blocks briefly on the captive nvim. Empty when the
-        // core is gone or the handle is invalid (e.g. a closed tabpage).
+        // A tabpage's canonicalized `:tcd` cwd, authoritative for a non-current view. Blocks briefly;
+        // empty when the core is gone or the handle is invalid (e.g. a closed tabpage).
         fn cwd_for_tabpage(&self, tab: i64) -> String;
         // Makes tabpage `tab` current (the front-end drives every tabpage switch
         // when a view becomes key). A no-op when the core is gone.
         fn set_current_tabpage(&self, tab: i64);
-        // Closes tabpage `tab` (a non-last view close; the shared nvim stays alive
-        // until its LAST view closes — the front-end shuts the core down then). A
-        // no-op when the core is gone.
+        // Closes a non-last view's tabpage; the shared nvim lives until its last view closes, when
+        // the front-end shuts the core down instead.
         fn close_tabpage(&self, tab: i64);
         // Focuses a specific Neovim window (click-to-focus / resolved FocusDir).
         fn focus_win(&self, win: i64);
-        // The captive nvim's liveness (`mod liveness`: ALIVE / NOT_RESPONDING /
-        // DEAD), a cheap lock-free read (no RPC). DEAD when the core is gone. The
-        // front-end reads this on each wake to drive the crash/stall overlay.
+        // `mod liveness`, a lock-free read with no RPC, polled on each wake to drive the crash/stall
+        // overlay. DEAD when the core is gone.
         fn liveness(&self) -> u8;
-        // Restarts the captive nvim IN PLACE after a crash/stall: force-kills the
-        // old process, respawns in the same cwd, re-runs the setup chain. Returns
-        // true on success (liveness Alive, fresh tabpage-1, empty buffer list);
-        // false when the core is gone or the respawn failed. The front-end then
-        // reopens the Tier-1 files it captured (via open_files_for_tabpage) BEFORE
-        // the restart and rebinds each view to a fresh tabpage.
+        // Force-kills and respawns the captive nvim in place, re-running setup; false when the core
+        // is gone or the respawn failed. Capture `open_files_for_tabpage` first: a respawn wipes it.
         fn restart(&self) -> bool;
-        // The Tier-1 open-file mirror for tabpage `tab` (its file-backed open
-        // buffers + active buffer), a cheap snapshot read (no RPC). The front-end
-        // captures this per view BEFORE a restart (a respawn wipes the mirror). An
-        // empty-backed `FfiOpenFiles` when the core is gone or the tab is unknown.
+        // The Tier-1 open-file mirror for `tab`, a snapshot read with no RPC; capture it before a
+        // `restart`. Empty-backed when the core is gone or the tab is unknown.
         fn open_files_for_tabpage(&self, tab: i64) -> FfiOpenFiles;
-        // Forwards OS window/app focus to the captive Neovim UI (nvim_ui_set_focus):
-        // true on activate (fires FocusGained -> WolfAutoRead :checktime reload),
-        // false on resign. Both edges reported so each refocus is a real transition.
+        // `nvim_ui_set_focus`: true on activate (FocusGained -> WolfAutoRead `:checktime`), false on
+        // resign. Both edges are reported so each refocus is a real transition.
         fn set_ui_focus(&self, gained: bool);
         fn shutdown(&self);
-        // Starts a streaming file-search session over the core's cwd, fed by the
-        // registered file-search wake. Infallible: returns an empty-backed handle
-        // when the core is gone (mirroring `read_frame`'s empty-frame fallback).
+        // A streaming file search over the core's cwd, fed by the file-search wake. Infallible:
+        // empty-backed when the core is gone.
         fn start_file_search(&self) -> FfiFileSearch;
-        // Starts a SEPARATE long-lived streaming file-search session for the
-        // file-tree sidebar, fed by the registered TREE wake. Same infallible
-        // empty-backed fallback as `start_file_search`.
+        // A separate long-lived file search for the file-tree sidebar, fed by the tree wake.
+        // Same empty-backed fallback as `start_file_search`.
         fn start_tree_search(&self) -> FfiFileSearch;
-        // Starts a ripgrep-backed CONTENT search for the sidebar search panel,
-        // fed by the registered SEARCH wake. `use_regex`/`case_sensitive`/
-        // `all_files` are the three toggle-button states. Infallible: returns an
-        // empty-backed `FfiSearch` when the core is gone (or `WOLF_RG_BIN` is
-        // unset, degrading gracefully to no results).
+        // A ripgrep-backed content search fed by the search wake; the bools are the panel's toggles.
+        // Empty-backed when the core is gone or `WOLF_RG_BIN` is unset.
         fn start_search(
             &self,
             query: String,
@@ -502,199 +465,131 @@ mod ffi {
             case_sensitive: bool,
             all_files: bool,
         ) -> FfiSearch;
-        // The captive nvim's `ignorecase` option, read once to seed the search
-        // panel's "case sensitive" toggle (`case_sensitive = !ignorecase`).
-        // Blocks briefly on the captive nvim; false on error/timeout/shut-down.
+        // nvim's `ignorecase`, read once to seed the panel's case-sensitive toggle as its inverse.
+        // Blocks briefly; false on error, timeout or shutdown.
         fn ignorecase(&self) -> bool;
-        // Opens `path` AND jumps the cursor to `line`/`col` (search-result click)
-        // via `InputEvent::OpenAt`. `line` is 1-based, `col` a 0-based byte offset.
-        // The core's input pump records the MRU. A no-op when the core is gone.
+        // Opens `path` at `line` (1-based) and `col` (0-based byte offset) via `InputEvent::OpenAt`;
+        // the input pump records the MRU. A no-op when the core is gone.
         fn open_at(&self, path: String, line: u64, col: u64);
-        // Builds a fresh command-palette session seeded with the core's recent
-        // dirs + command MRU. The front-end feeds each OTHER window via
-        // `add_window`, then calls `ranked`. Infallible: returns an empty-backed
-        // session when the core is gone (mirroring `start_file_search`).
+        // A fresh palette session seeded with recent dirs + the command MRU; the front-end adds each
+        // other window via `add_window`, then calls `ranked`. Empty-backed when the core is gone.
         fn command_palette(&self) -> FfiCommandPalette;
         // The absolute path of the buffer currently being edited (canonicalized
         // by core), or the empty string for an unnamed buffer / shut-down core.
         fn current_file(&self) -> String;
-        // Neovim's LIVE, already-canonicalized working directory (tracks
-        // `:cd`/`DirChanged`), or the empty string until nvim first reports it /
-        // after shutdown.
+        // nvim's live, canonicalized cwd (tracks `:cd`/`DirChanged`); empty until nvim first reports
+        // it, and after shutdown.
         fn cwd(&self) -> String;
-        // The GLOBAL recent-directories MRU, newest-first (capped at 20), as
-        // owned Strings; an empty `Vec` when the store is disabled/unreadable or
-        // the core is gone. Drives the File > Open Recent submenu.
+        // The global recent-directories MRU, newest first, capped at 20 (File > Open Recent). Empty
+        // when the store is disabled or unreadable, or the core is gone.
         fn recent_dirs(&self) -> Vec<String>;
-        // The WolfTitlebar theme group's background color (the macOS titlebar
-        // background), following the `default_fg`/`default_bg` convention:
-        // unset when the group is absent/cleared or the core is gone.
+        // The `WolfTitlebar` group's background (the macOS titlebar); unset when the group is absent
+        // or cleared, or the core is gone.
         fn theme_titlebar_bg(&self) -> FfiColor;
-        // The WolfTitlebar theme group's foreground color (carried for future
-        // title-text coloring; not applied on macOS this pass). Same unset
-        // convention as `theme_titlebar_bg`.
+        // The `WolfTitlebar` group's foreground, carried for title-text coloring, which macOS does
+        // not apply. Same unset convention as `theme_titlebar_bg`.
         fn theme_titlebar_fg(&self) -> FfiColor;
-        // The per-pane statusbar strings for the window drawing into `grid`
-        // (base filename + display path). `FfiPaneStatus` is opaque so its
-        // Strings are read back via accessor methods. An unnamed buffer / grid
-        // with no window / shut-down core yields the `[No Name]` filename with
-        // an empty display path.
+        // The statusbar strings for the window drawing into `grid`. An unnamed buffer, a grid with no
+        // window or a shut-down core yields `[No Name]` with an empty display path.
         fn pane_status_for_grid(&self, grid: u64) -> FfiPaneStatus;
         // Opens `path` (an absolute filesystem path) in Neovim via
         // `InputEvent::Open`; the core's input pump records the MRU.
         fn open(&self, path: String);
-        // Changes the current VIEW's working directory to `path` (an absolute
-        // filesystem path) via `InputEvent::Chdir` (`:tcd`, the tab-local cwd —
-        // each view/tabpage owns its own working directory).
+        // Changes the current view's cwd to absolute `path` via `InputEvent::Chdir`, which is `:tcd`:
+        // each view (tabpage) owns its own working directory.
         fn chdir(&self, path: String);
-        // Sets the global `background` option via `InputEvent::SetBackground`
-        // (`:set background=dark|light`). `dark: true` selects dark, `false`
-        // light. The macOS front-end pushes the resolved appearance at launch and
-        // live in `auto` mode. A no-op when the core is gone.
+        // `:set background=dark|light` via `InputEvent::SetBackground`. The macOS front-end pushes
+        // the resolved appearance at launch and live in `auto` mode. A no-op when the core is gone.
         fn set_background(&self, dark: bool);
         // Closes the current split (the pane) via `InputEvent::ClosePane`
         // (`:close`).
         fn close_pane(&self);
-        // Opens a new empty buffer in the current window and names it the next
-        // free `Untitled N.md` (markdown-typed, not written to disk) via
-        // `InputEvent::NewBuffer` (the `wolf_new_untitled` Lua helper).
+        // Opens an empty buffer named the next free `Untitled N.md` (markdown-typed, never written)
+        // via `InputEvent::NewBuffer` (the `wolf_new_untitled` Lua helper).
         fn new_buffer(&self);
         // Toggles the per-project terminal drawer via
         // `InputEvent::ToggleTerminal` (the `wolf_toggle_terminal` Lua helper).
         fn toggle_terminal(&self);
-        // Toggles the active buffer's content width between the ~90-char default and
-        // full pane width via `InputEvent::ToggleFullWidth` (the
-        // `wolf_toggle_full_width` Lua helper; targets the SOURCE buffer for a preview
-        // scratch). A no-op when the core is gone.
+        // Toggles content width between the ~90-char default and full pane width via the
+        // `wolf_toggle_full_width` Lua helper, which targets a preview scratch's source buffer.
         fn toggle_full_width(&self);
-        // Whether the active buffer is in FULL-WIDTH mode (`current_is_full_width`,
-        // i.e. it carries a truthy `b:wolf_full_width`; for a preview scratch this is
-        // the SOURCE buffer's flag). Drives the View > Use full width for content menu
-        // checkmark. False when the core is gone.
+        // Whether the active buffer (a preview scratch's source) has a truthy `b:wolf_full_width`.
+        // Drives the View > Use full width for content checkmark; false when the core is gone.
         fn is_full_width_active(&self) -> bool;
-        // Whether the window `win` is in FULL-WIDTH mode (the per-window `full_width`
-        // map). The front-end threads this into a pane's geometry (`maxCols: nil` for
-        // full width, `90` for the ~90-char default). False when the core is gone or
-        // `win` is absent from the map.
+        // The per-window full-width flag the front-end threads into a pane's geometry (`maxCols: nil`
+        // vs `90`). False when the core is gone or `win` is not in the map.
         fn full_width_for_win(&self, win: i64) -> bool;
-        // The current visual-mode selection yanked to text (blocks briefly on
-        // the captive nvim), or the empty string when not in visual mode / the
-        // selection is empty / the core is gone. The front-end writes it to
-        // `NSPasteboard` only when non-empty.
+        // The visual selection yanked to text (blocks briefly); empty outside visual mode, for an empty
+        // selection, or when the core is gone. The front-end writes the pasteboard only when non-empty.
         fn copy_selection(&self) -> String;
         // Pastes `text` into the active document via `InputEvent::Paste`
         // (`nvim_paste`). A no-op when the core is gone.
         fn paste(&self, text: String);
-        // Builds a fresh buffer-picker session seeded from a blocking snapshot of
-        // the core's listed buffers plus the live cwd. The front-end filters per
-        // keystroke via `ranked`. Infallible: returns an empty-backed session when
-        // the core is gone (mirroring `command_palette`).
+        // A fresh buffer-picker session seeded from a blocking snapshot of the listed buffers plus
+        // the live cwd; the front-end filters via `ranked`. Empty-backed when the core is gone.
         fn buffer_picker(&self) -> FfiBufferPicker;
-        // Switches the ACTIVE window to buffer `bufnr` via `InputEvent::SwitchBuffer`
-        // (window-scoped `nvim_win_set_buf` + per-pane view restore). Resolves the
-        // active window live from the snapshot. A no-op when the core is gone or no
-        // active window is known.
+        // Switches the live active window to `bufnr` (`nvim_win_set_buf` + per-pane view restore).
+        // A no-op when the core is gone or no active window is known.
         fn switch_buffer(&self, bufnr: i64);
         // Whether the active document is in Neovim visual mode (`v`/`V`/`<C-v>`).
         // Gates the Edit > Copy menu item. False when the core is gone.
         fn is_visual_mode(&self) -> bool;
-        // Whether the active buffer is a Markdown file (`current_filetype ==
-        // "markdown"`). Gates the View > Preview menu item + palette row. False
-        // when the core is gone.
+        // Whether the active buffer's filetype is `markdown`; gates View > Preview and its palette
+        // row. False when the core is gone.
         fn is_markdown_active(&self) -> bool;
-        // Whether the active buffer is a PREVIEW buffer (`current_is_preview`,
-        // i.e. it carries `b:wolf_preview_source`). Gates the View > Edit
-        // menu item. False when the core is gone.
+        // Whether the active buffer is a preview (carries `b:wolf_preview_source`); gates View >
+        // Edit. False when the core is gone.
         fn is_preview_active(&self) -> bool;
-        // Navigates from the active PREVIEW pane back to its source file in place
-        // (the active pane becomes an edit pane) and returns the source buffer's
-        // number. Blocks briefly on the captive nvim. Returns 0 when the active
-        // buffer is not a preview, on error, or when the core is gone.
+        // Replaces the active preview pane's buffer with its source in place and returns the source
+        // bufnr. Blocks briefly; 0 off a preview, on error, or when the core is gone.
         fn edit_source(&self) -> i64;
-        // Previews the active source buffer in place (the active pane becomes the
-        // preview pane) and returns the preview scratch buffer's number. Blocks
-        // briefly on the captive nvim. Returns 0 when the active buffer is not
-        // Markdown, on error, or when the core is gone.
+        // Replaces the active pane's Markdown buffer with its preview in place and returns the
+        // scratch bufnr. Blocks briefly; 0 off Markdown, on error, or when the core is gone.
         fn open_preview(&self) -> i64;
-        // Renders the Markdown SOURCE buffer `source_bufnr` to a themed HTML
-        // document the front-end web view loads. Blocks briefly on the captive
-        // nvim. Returns the empty string on error / when the core is gone.
+        // Renders Markdown buffer `source_bufnr` to the themed HTML document the web view loads.
+        // Blocks briefly; empty on error or when the core is gone.
         fn render_preview(&self, source_bufnr: i64) -> String;
-        // Opens (or reuses) the loopback-only browser-preview HTTP server pinned at
-        // the active Markdown buffer and returns its `http://127.0.0.1:<port>/<relpath>`
-        // URL (the pinned file's root-relative path), which the front-end opens in
-        // the system default browser. Blocks
-        // briefly on the captive nvim to resolve the buffer. Returns the empty
-        // string when the active buffer is not Markdown, on error, or when the core
-        // is gone.
+        // Starts or reuses the loopback-only preview server pinned at the active Markdown buffer and
+        // returns its `http://127.0.0.1:<port>/<relpath>` URL. Blocks briefly; empty on failure.
         fn open_in_browser(&self) -> String;
-        // Repoints the preview window `win` at the Markdown file at absolute
-        // `path` (a linked file the user clicked in the preview), replacing that
-        // pane's preview with the linked file's. Blocks briefly on the captive
-        // nvim. Returns the linked file's SOURCE bufnr (> 0) on success; 0 when
-        // `path` is empty, unreadable, or not Markdown, on error, or when the core
-        // is gone. `path` is ABSOLUTE (no relative resolution). On 0 the front-end
-        // applies its own O3 fallback.
+        // Repoints preview window `win` at the Markdown file at absolute `path` (a clicked link) and
+        // returns its source bufnr. Blocks briefly; 0 on failure, and the front-end falls back.
         fn preview_file(&self, win: i64, path: String) -> i64;
-        // Previews the already-open buffer `bufnr` in window `win` (0 = current),
-        // replacing that pane's buffer with the source's preview scratch (the
-        // preview-mode buffer-picker activation path). Blocks briefly on the
-        // captive nvim. Returns the source bufnr (> 0) on success; 0 when `bufnr`
-        // is invalid, unnamed, or not Markdown, on error, or when the core is
-        // gone. On 0 the front-end falls back to switch_buffer (edit mode).
+        // Previews open buffer `bufnr` in window `win` (0 = current); returns the source bufnr.
+        // Blocks briefly; 0 if invalid, unnamed or not Markdown, and the front-end uses switch_buffer.
         fn preview_buffer(&self, win: i64, bufnr: i64) -> i64;
-        // Previews the active pane's Markdown file in ANOTHER pane: binds the
-        // preview scratch into `target_win` when it is a usable other pane, else
-        // splits a new pane to the right (an ordinary vertical Split intent).
-        // Focus stays in the source-editing pane. Blocks briefly on the captive
-        // nvim. Returns the SOURCE bufnr (> 0) on success; 0 when the active
-        // buffer is not Markdown, on error, or when the core is gone.
+        // Previews the active Markdown file in `target_win` if usable, else splits right (a vertical
+        // Split intent); focus stays put. Blocks briefly; returns the source bufnr, 0 on failure.
         fn preview_in_other(&self, target_win: i64) -> i64;
-        // Edits the active preview pane's SOURCE file in ANOTHER pane: binds the
-        // source into `target_win` when it is a usable other pane, else splits
-        // (the scratch keeps the new right window, the source lands in the
-        // original). Focuses the pane now editing the source. Blocks briefly on
-        // the captive nvim. Returns the bufnr bound into that pane (> 0) on
-        // success; 0 when the active pane is not a preview, on error, or when
-        // the core is gone.
+        // Edits the active preview's source in `target_win` if usable, else splits (source lands
+        // left), and focuses that pane. Blocks briefly; returns the bound bufnr, 0 on failure.
         fn edit_in_other(&self, target_win: i64) -> i64;
-        // A snapshot of the open preview panes: one `FfiPreview` per window
-        // showing a preview scratch buffer, each joined to its source's live
-        // changedtick. `FfiPreview` is opaque so a `Vec<FfiPreview>` is supported.
-        // Empty when the core is gone.
+        // One `FfiPreview` per window showing a preview scratch, joined to its source's live
+        // changedtick. Empty when the core is gone.
         fn previews(&self) -> Vec<FfiPreview>;
-        // Whether pane `win` has an older entry to go Back to in its per-pane
-        // navigation history. A cheap snapshot read (no RPC). False for an unknown
-        // window, a never-navigated pane, the terminal DRAWER, or a gone core.
+        // Whether pane `win` can go Back in its navigation history; a snapshot read with no RPC.
+        // False for an unknown window, a never-navigated pane, the terminal drawer, or a gone core.
         fn history_can_back(&self, win: i64) -> bool;
         // Whether pane `win` has a newer entry to go Forward to. Same contract.
         fn history_can_forward(&self, win: i64) -> bool;
-        // Moves pane `win` one entry BACK. Blocks briefly on the captive nvim.
-        // Returns whether the pane actually MOVED; false at the bottom of the
-        // stack, for an unknown window, on error, or when the core is gone.
+        // Moves pane `win` one entry back (blocks briefly) and returns whether it actually moved;
+        // false at the bottom of the stack, for an unknown window, on error, or for a gone core.
         fn history_back(&self, win: i64) -> bool;
         // Moves pane `win` one entry FORWARD. Same contract as `history_back`.
         fn history_forward(&self, win: i64) -> bool;
-        // Moves pane `win` to the STACK index `index` (an `FfiHistoryEntry::index`).
-        // Returns whether the pane actually MOVED; false for an out-of-range index
-        // AND for the cursor's own index (clicking the checkmarked row is a no-op).
+        // Moves pane `win` to stack `index` (an `FfiHistoryEntry::index`); false when it does not
+        // move, including for the cursor's own index, so clicking the checkmarked row is a no-op.
         fn history_jump(&self, win: i64, index: u32) -> bool;
-        // Pane `win`'s History-menu rows, NEWEST-FIRST, capped at 10 DISTINCT
-        // targets, with finished disambiguated labels and at most one `is_current`.
-        // `FfiHistoryEntry` is opaque so a `Vec<FfiHistoryEntry>` is supported.
-        // Empty when the core is gone.
+        // Pane `win`'s History-menu rows, newest first, capped at 10 distinct targets, with final
+        // labels and at most one `is_current`. Empty when the core is gone.
         fn history_entries(&self, win: i64) -> Vec<FfiHistoryEntry>;
-        // The native command line (`ext_cmdline`) as an opaque `FfiCmdline`
-        // (active / firstc / prompt / text / pos / indent / level). An inactive
-        // cmdline (or a shut-down core) yields an inactive value.
+        // The native command line (`ext_cmdline`); inactive when none is showing or the core is gone.
         fn cmdline(&self) -> FfiCmdline;
         // The completion popup (`ext_popupmenu`) as an opaque `FfiPum`
         // (visible / selected / anchor + items). Hidden when the core is gone.
         fn pum(&self) -> FfiPum;
-        // The message toast (`ext_messages`) as an opaque `FfiToast`
-        // (visible / kind / lines). Its chunk colors are RESOLVED in Rust against
-        // the same highlight table the frame uses (like `FfiCell`). Empty/hidden
-        // when the core is gone.
+        // The message toast (`ext_messages`); chunk colors are resolved in Rust against the frame's
+        // highlight table. Hidden when the core is gone.
         fn toast(&self) -> FfiToast;
     }
 
@@ -703,9 +598,8 @@ mod ffi {
 
         // The tabpage's active buffer's absolute path, or "" for an unnamed buffer.
         fn active_path(&self) -> String;
-        // The file-backed buffer paths open in the tabpage (absolute), for the
-        // front-end to reopen after a restart. Empty when the core is gone / the
-        // tab is unknown. Reopen ACTIVE last so it lands focused.
+        // The instance-global listed file-backed paths (absolute), not per-tabpage, to reopen after
+        // a restart; reopen the active one last so it lands focused.
         fn files(&self) -> Vec<String>;
     }
 
@@ -720,22 +614,17 @@ mod ffi {
         fn source_name(&self) -> String;
         // The source file's absolute path.
         fn source_path(&self) -> String;
-        // The source file's cwd/home-relative DISPLAY path (e.g.
-        // "crates/wolf-macos/README.md"), for the preview pane's secondary
-        // statusbar line.
+        // The source\'s cwd/home-relative display path (e.g. "crates/wolf-macos/README.md"), for
+        // the preview pane's secondary statusbar line.
         fn source_display_path(&self) -> String;
         // The source buffer's current `changedtick`; the front-end reloads the web
         // view when this advances (0 until the first `wolf_markdown_dirty`).
         fn source_tick(&self) -> u64;
-        // Whether the SOURCE Markdown buffer is in FULL-WIDTH mode (its
-        // `b:wolf_full_width` flag). The front-end frames this preview pane's web view
-        // to the full inset pane when true, or the capped+centered ~90-char rect when
-        // false.
+        // Whether the source buffer has `b:wolf_full_width`; the web view then fills the inset pane
+        // instead of the capped, centered ~90-char rect.
         fn source_full_width(&self) -> bool;
-        // The SOURCE buffer's cursor LINE (1-based, matching the `wl-{L}-{C}` marker
-        // scheme emitted into the preview HTML). `0` until the first
-        // `wolf_markdown_cursor` — the front-end treats 0 as "cursor unknown" and
-        // does not scroll.
+        // The source cursor line, 1-based to match the preview's `wl-{L}-{C}` markers. 0 until the
+        // first `wolf_markdown_cursor`, meaning "unknown": the front-end does not scroll.
         fn source_cursor_line(&self) -> u32;
         // The SOURCE buffer's cursor COLUMN — a 0-based CHARACTER column, NOT a byte
         // column. `0` until the first `wolf_markdown_cursor`.
@@ -759,14 +648,11 @@ mod ffi {
     extern "Rust" {
         type FfiFileSearch;
 
-        // The top `max` ranked entries for `query` against the latest streamed
-        // search snapshot. An empty `query` lists all entries MRU-first. `FfiFileEntry`
-        // is opaque so a `Vec<FfiFileEntry>` is supported (same as `FfiCell`).
+        // The top `max` entries for `query` against the latest streamed snapshot; an empty `query`
+        // lists all entries MRU-first.
         fn ranked(&self, query: String, max: usize) -> Vec<FfiFileEntry>;
-        // The IMMEDIATE children of `dir` ("" = the cwd root) projected from the
-        // latest streamed search snapshot: directories-first then files (each
-        // case-insensitive by name). `FfiTreeNode` is opaque so a
-        // `Vec<FfiTreeNode>` is supported.
+        // The immediate children of `dir` ("" = the cwd root) from the latest snapshot, directories
+        // first then files, each case-insensitive by name.
         fn children_of(&self, dir: String) -> Vec<FfiTreeNode>;
         // Maps an absolute path to its tree-display rel-path (EXACT entry-path
         // match), or the empty string when no streamed entry matches.
@@ -800,23 +686,19 @@ mod ffi {
     }
 
     extern "Rust" {
-        // The ancestor directory rel-paths of `rel_path`, from the cwd root down
-        // to the node's parent (`"src/main.rs"` -> `["src"]`, `"README.md"` ->
-        // `[]`). A free fn (no session needed) delegating to `wolf_core::tree`.
+        // The ancestor dir rel-paths of `rel_path`, root down to its parent (`"src/main.rs"` ->
+        // `["src"]`). A free fn delegating to `wolf_core::tree`.
         fn wolf_ffi_ancestors_to_reveal(rel_path: String) -> Vec<String>;
     }
 
     extern "Rust" {
         type FfiSearch;
 
-        // The current content-search snapshot version (0 when no session backs
-        // this handle). The panel reloads its results outline only when this
-        // advances.
+        // The content-search snapshot version (0 when no session backs this handle); the panel
+        // reloads its results only when it advances.
         fn version(&self) -> u64;
-        // The matched files projected + sorted (case-insensitively by rel-path)
-        // from the latest streamed snapshot, each carrying its matching lines
-        // windowed to `budget` CHARACTERS. `FfiSearchFile` is opaque so a
-        // `Vec<FfiSearchFile>` is supported.
+        // The matched files from the latest snapshot, sorted case-insensitively by rel-path, each
+        // carrying its matching lines windowed to `budget` characters.
         fn files(&self, budget: u32) -> Vec<FfiSearchFile>;
     }
 
@@ -849,9 +731,8 @@ mod ffi {
         fn truncated_left(&self) -> bool;
         // Whether context was hidden on the RIGHT of the window (trailing ellipsis).
         fn truncated_right(&self) -> bool;
-        // The bold match ranges within `display_text`, as parallel byte-offset
-        // vectors (`range_starts[i]`..`range_ends[i]`), avoiding an extra opaque
-        // type.
+        // The bold ranges within `display_text` as parallel byte-offset vectors
+        // (`range_starts[i]..range_ends[i]`), avoiding an extra opaque type.
         fn range_starts(&self) -> Vec<u32>;
         fn range_ends(&self) -> Vec<u32>;
     }
@@ -874,10 +755,8 @@ mod ffi {
     }
 
     extern "Rust" {
-        // Loads the resolved user config (reading — or creating with defaults —
-        // `wolf-config.yaml` in the platform prefs dir). A free fn (no live core
-        // needed) delegating to `wolf_core::config`; infallible (defaults on any
-        // error). Standalone, like `wolf_ffi_ancestors_to_reveal`.
+        // Loads the resolved user config, reading or creating `wolf-config.yaml` in the platform
+        // prefs dir. A free fn needing no live core; infallible (defaults on any error).
         fn wolf_ffi_load_config() -> FfiConfig;
     }
 
@@ -912,9 +791,8 @@ mod ffi {
         fn cwd(&self) -> String;
         // Whether the tab's file-tree sidebar was visible.
         fn sidebar_visible(&self) -> bool;
-        // Whether the tab carries a saved pane-split layout (false ONLY for an
-        // empty-state (unnamed, non-preview) lone pane; a lone pane showing a file
-        // or preview persists a single leaf).
+        // Whether the tab has a saved split layout: false only for an empty-state lone pane (a lone
+        // pane showing a file or preview persists a single leaf).
         fn has_layout(&self) -> bool;
         // The tab's saved pane-split layout as an opaque `FfiPaneNode` root (an
         // empty leaf when the tab has no layout).
@@ -944,10 +822,8 @@ mod ffi {
     }
 
     extern "Rust" {
-        // Loads the saved application state from the platform state dir (the
-        // pre-start restore read). NEVER creates the file and NEVER opens the
-        // live store; absent/corrupt/unresolvable all yield an empty window
-        // list. A free fn, standalone like `wolf_ffi_load_config`.
+        // The pre-start restore read: never creates the file or opens the live store, and an absent,
+        // corrupt or unresolvable file yields an empty window list.
         fn wolf_ffi_load_state() -> FfiState;
 
         // Clears the write-side scratch tree, starting a fresh whole-tree
@@ -959,25 +835,20 @@ mod ffi {
         // Pushes a tab (its cwd + sidebar visibility) onto the most recently
         // added window. A defensive no-op when no window has been added yet.
         fn wolf_ffi_state_snapshot_add_tab(cwd: String, sidebar_visible: bool);
-        // Pushes a LEAF node (buffer `path`, a Markdown preview of `path` when
-        // `preview` is true, weighing `weight` within its parent) onto the layout
-        // push-builder stack. Part of the post-order token replay that assembles a
-        // tab's pane-split layout across the scalar bridge.
+        // Pushes a leaf (buffer `path`, a preview when `preview`, `weight` in its parent) onto the
+        // layout stack: a post-order replay that carries one tab's split tree across the bridge.
         fn wolf_ffi_state_layout_push_leaf(path: String, preview: bool, weight: f64);
-        // Pops the top `child_count` layout-stack nodes, wraps them into a SPLIT
-        // (`orientation` 0 = horizontal, 1 = vertical), and pushes it back on
-        // (weighing `weight` within its parent; the root split's weight is 1.0).
+        // Pops `child_count` nodes, wraps them in a split (`orientation` 0 = horizontal, 1 =
+        // vertical) and pushes it back with `weight` (1.0 for the root split).
         fn wolf_ffi_state_layout_push_split(orientation: u8, child_count: u32, weight: f64);
-        // Pops the single remaining layout-stack node onto the scratch tree's LAST
-        // window's LAST tab's `layout`, then clears the stack. A defensive no-op
-        // when the stack is not a single node or there is no tab to attach to.
+        // Moves the single remaining layout node to the last window's last tab and clears the stack;
+        // a no-op unless exactly one node remains and a tab exists.
         fn wolf_ffi_state_layout_commit_to_tab();
         // Commits the scratch tree into the shared state store (a whole-tree
         // `set_snapshot`); an identical tree is a no-op there.
         fn wolf_ffi_state_snapshot_commit();
-        // Blocks until every pending state write has been attempted (bounded by
-        // an internal ~2s timeout). Returns whether everything pending flushed in
-        // time (true when no store exists — there is nothing to flush).
+        // Blocks until every pending state write is attempted (bounded by `STATE_FLUSH_TIMEOUT`).
+        // Returns whether all flushed in time; true when no store exists.
         fn wolf_ffi_state_flush() -> bool;
     }
 
@@ -998,17 +869,15 @@ mod ffi {
         fn cursor_grid(&self) -> u64;
         fn default_fg(&self) -> FfiColor;
         fn default_bg(&self) -> FfiColor;
-        // Reverse-video cursor colors (so the cursor is reliably visible). Two
-        // scalar accessors rather than a `Vec<FfiColor>`: swift-bridge does not
-        // emit Vec support for transparent structs.
+        // Reverse-video cursor colors, as two scalar accessors because swift-bridge does not emit
+        // `Vec` support for transparent structs.
         fn cursor_fill(&self) -> FfiColor;
         fn cursor_glyph(&self) -> FfiColor;
         // The flat, row-major grid of resolved cells (`cols * rows` entries).
         // `FfiCell` is opaque (Vec support is generated for opaque types).
         fn cells(&self) -> Vec<FfiCell>;
-        // The viewport's first visible buffer line (0-based, as nvim's
-        // `win_viewport` reports), for the synthetic scrollbar; 0 when this grid
-        // has no associated window.
+        // The viewport's first visible buffer line (0-based, per `win_viewport`), for the synthetic
+        // scrollbar; 0 when this grid has no window.
         fn topline(&self) -> u64;
         // One past the viewport's last visible buffer line; 0 when no window.
         fn botline(&self) -> u64;
@@ -1063,15 +932,11 @@ mod ffi {
     extern "Rust" {
         type FfiCommandPalette;
 
-        // Appends one OTHER open window to the session (the current window is
-        // excluded by the caller). `index` is the front-end window index (the
-        // raise target); `cwd` is the window's working directory (`""` for an
-        // empty-state window, which renders as "Untitled").
+        // Adds one other open window (the caller excludes the current one): `index` is its raise
+        // target, `cwd` its working directory ("" for an empty-state window, shown as "Untitled").
         fn add_window(&self, index: u16, cwd: String);
-        // The top `max` ranked palette rows for `query`. Assembles the static
-        // registry commands (minus CommandPalette) + the added windows + the
-        // recent dirs, ranks MRU-first via `wolf_core::rank_palette`. `FfiCommandRow`
-        // is opaque so a `Vec` is supported.
+        // The top `max` rows for `query`: static commands (minus CommandPalette), added windows and
+        // recent dirs, ranked MRU-first via `wolf_core::rank_palette`.
         fn ranked(&self, query: String, max: usize) -> Vec<FfiCommandRow>;
         // Records `key` (a row's `mru_key`) into the global command MRU on
         // activation, so it floats to the top of a later `ranked("")`.
@@ -1100,11 +965,8 @@ mod ffi {
     extern "Rust" {
         type FfiBufferPicker;
 
-        // The top `max` ranked buffer rows for `query`, MRU-ordered
-        // (lastused-DESC) among matches via `wolf_core::rank_buffers` over the
-        // snapshot taken at `buffer_picker()`. An empty `query` lists all buffers
-        // MRU-first (current buffer at row 0). `FfiBufferRow` is opaque so a `Vec`
-        // is supported.
+        // The top `max` rows for `query`, ordered by lastused among matches via `rank_buffers` over
+        // the `buffer_picker()` snapshot; an empty query lists all, current buffer at row 0.
         fn ranked(&self, query: String, max: usize) -> Vec<FfiBufferRow>;
     }
 
@@ -1232,13 +1094,11 @@ mod ffi {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Wake registration (Swift-free; see the crate docs).
-// ---------------------------------------------------------------------------
+// --- Wake registration (Swift-free; see the crate docs) ---
 
 /// The C ABI of the front-end wake callback. It carries the firing core's
-/// per-window wake token so a single process-global callback can route each
-/// wake to the right window WITHOUT clobbering.
+/// per-project wake token (one captive Neovim shared by N views) so a single
+/// process-global callback can route each wake to the right project WITHOUT clobbering.
 type WakeCallback = extern "C" fn(u64);
 
 /// The next wake token to mint. Starts at 1 (0 is reserved as a "no core" /
@@ -1316,9 +1176,8 @@ fn registered_filesearch_wake(token: u64) -> WakeFn {
     Arc::new(move || {
         let ptr = FILESEARCH_WAKE_FN.load(Ordering::Acquire);
         if !ptr.is_null() {
-            // SAFETY: `ptr` was set from a valid `extern "C" fn(u64)` by
-            // `wolf_ffi_set_filesearch_wake`; a non-null value is always such a
-            // pointer.
+            // SAFETY: `ptr` was set from a valid `extern "C" fn(u64)` by `wolf_ffi_set_filesearch_wake`;
+            // a non-null value is always such a pointer.
             let f: WakeCallback = unsafe { std::mem::transmute::<*mut (), WakeCallback>(ptr) };
             f(token);
         }
@@ -1437,9 +1296,7 @@ pub fn wolf_ffi_ancestors_to_reveal(rel_path: String) -> Vec<String> {
     wolf_core::tree::ancestors_to_reveal(&rel_path)
 }
 
-// ---------------------------------------------------------------------------
-// FfiConfig: the resolved user configuration (opaque to Swift).
-// ---------------------------------------------------------------------------
+// --- FfiConfig: the resolved user configuration (opaque to Swift) ---
 
 /// The resolved user configuration (opaque to Swift; String-in-struct is not
 /// supported for transparent bridge structs, so — like [`FfiFileEntry`] — this is
@@ -1515,9 +1372,7 @@ pub fn wolf_ffi_load_config() -> FfiConfig {
     }
 }
 
-// ---------------------------------------------------------------------------
-// FfiState / FfiWindowState: the saved application state (opaque to Swift).
-// ---------------------------------------------------------------------------
+// --- FfiState / FfiWindowState: the saved application state (opaque to Swift) ---
 
 /// The saved application state as loaded by [`wolf_ffi_load_state`] (opaque to
 /// Swift). A thin wrapper vending the per-window entries — kept opaque (rather
@@ -1751,9 +1606,7 @@ pub fn wolf_ffi_load_state() -> FfiState {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Write-side snapshot builder (free fns over the shared store + a scratch tree).
-// ---------------------------------------------------------------------------
+// --- Write-side snapshot builder (free fns over the shared store + a scratch tree) ---
 
 /// The write-side scratch tree the coordinator builds up window-by-window /
 /// tab-by-tab before committing it whole. A process-wide `Mutex` (the builder is
@@ -1925,9 +1778,7 @@ pub fn wolf_ffi_state_flush() -> bool {
     shared_store().is_none_or(|store| store.flush(STATE_FLUSH_TIMEOUT))
 }
 
-// ---------------------------------------------------------------------------
-// Opaque handles.
-// ---------------------------------------------------------------------------
+// --- Opaque handles ---
 
 /// An opaque, main-thread-only handle to a live [`WolfCore`].
 ///
@@ -2208,9 +2059,8 @@ impl WolfCoreHandle {
         let Some(core) = borrow.as_ref() else {
             return liveness::DEAD;
         };
-        // Map through the `mod liveness` constants so the FFI discriminant module
-        // is provably the mirror of `wolf_core::Liveness` (a mismatch would fail to
-        // compile here rather than drift silently).
+        // Map through `mod liveness` so a mismatch with `wolf_core::Liveness` fails to compile
+        // rather than drifting silently.
         match core.liveness() {
             Liveness::Alive => liveness::ALIVE,
             Liveness::NotResponding => liveness::NOT_RESPONDING,
@@ -2997,9 +2847,7 @@ pub fn wolf_ffi_start(
     }
 }
 
-// ---------------------------------------------------------------------------
-// FfiCell: one resolved grid cell (opaque to Swift).
-// ---------------------------------------------------------------------------
+// --- FfiCell: one resolved grid cell (opaque to Swift) ---
 
 /// One resolved grid cell: its text, foreground/background, and style flags.
 ///
@@ -3052,9 +2900,7 @@ impl FfiCell {
     }
 }
 
-// ---------------------------------------------------------------------------
-// FfiLayoutIntent: a drained layout intent (opaque to Swift).
-// ---------------------------------------------------------------------------
+// --- FfiLayoutIntent: a drained layout intent (opaque to Swift) ---
 
 /// One drained layout intent (opaque to Swift, so a `Vec<FfiLayoutIntent>` is
 /// supported — swift-bridge emits Vec support only for opaque types).
@@ -3148,9 +2994,7 @@ impl FfiLayoutIntent {
     }
 }
 
-// ---------------------------------------------------------------------------
-// FfiCommand: one drained user-triggered command (opaque to Swift).
-// ---------------------------------------------------------------------------
+// --- FfiCommand: one drained user-triggered command (opaque to Swift) ---
 
 /// One drained command (opaque to Swift, so a `Vec<FfiCommand>` is supported —
 /// swift-bridge emits Vec support only for opaque types).
@@ -3206,9 +3050,7 @@ impl FfiCommand {
     }
 }
 
-// ---------------------------------------------------------------------------
-// FfiCommandPalette / FfiCommandRow: the command-palette session (opaque to Swift).
-// ---------------------------------------------------------------------------
+// --- FfiCommandPalette / FfiCommandRow: the command-palette session (opaque to Swift) ---
 
 /// A command-palette session (opaque to Swift).
 ///
@@ -3346,9 +3188,7 @@ impl FfiCommandRow {
     }
 }
 
-// ---------------------------------------------------------------------------
-// FfiBufferPicker / FfiBufferRow: the buffer-picker session (opaque to Swift).
-// ---------------------------------------------------------------------------
+// --- FfiBufferPicker / FfiBufferRow: the buffer-picker session (opaque to Swift) ---
 
 /// A buffer-picker session (opaque to Swift).
 ///
@@ -3421,9 +3261,7 @@ impl FfiBufferRow {
     }
 }
 
-// ---------------------------------------------------------------------------
-// FfiWinInfo: one window's grid + handle + hidden flag (opaque to Swift).
-// ---------------------------------------------------------------------------
+// --- FfiWinInfo: one window's grid + handle + hidden flag (opaque to Swift) ---
 
 /// One window's `(grid, win, hidden)` triple (opaque to Swift, so a
 /// `Vec<FfiWinInfo>` is supported — swift-bridge emits Vec support only for opaque
@@ -3463,9 +3301,7 @@ impl FfiWinInfo {
     }
 }
 
-// ---------------------------------------------------------------------------
-// FfiPreview: one open preview pane's window + source + tick (opaque to Swift).
-// ---------------------------------------------------------------------------
+// --- FfiPreview: one open preview pane's window + source + tick (opaque to Swift) ---
 
 /// One open preview pane (opaque to Swift, so a `Vec<FfiPreview>` is supported —
 /// swift-bridge emits Vec support only for opaque types).
@@ -3590,9 +3426,7 @@ impl FfiPreview {
     }
 }
 
-// ---------------------------------------------------------------------------
-// FfiHistoryEntry: one History-menu row (opaque to Swift).
-// ---------------------------------------------------------------------------
+// --- FfiHistoryEntry: one History-menu row (opaque to Swift) ---
 
 /// One rendered History-menu row (opaque to Swift, so a `Vec<FfiHistoryEntry>` is
 /// supported — swift-bridge emits Vec support only for opaque types, exactly like
@@ -3647,9 +3481,7 @@ impl FfiHistoryEntry {
     }
 }
 
-// ---------------------------------------------------------------------------
-// FfiPaneStatus: one pane's statusbar strings (opaque to Swift).
-// ---------------------------------------------------------------------------
+// --- FfiPaneStatus: one pane's statusbar strings (opaque to Swift) ---
 
 /// One pane's statusbar strings — the base `filename` and the `display_path`
 /// beneath it (opaque to Swift, so its Strings are read back via accessor
@@ -3750,9 +3582,7 @@ impl FfiPaneStatus {
     }
 }
 
-// ---------------------------------------------------------------------------
-// FfiCmdline: the native command line (opaque to Swift).
-// ---------------------------------------------------------------------------
+// --- FfiCmdline: the native command line (opaque to Swift) ---
 
 /// The native command line (`ext_cmdline`), opaque to Swift.
 ///
@@ -3841,9 +3671,7 @@ impl FfiCmdline {
     }
 }
 
-// ---------------------------------------------------------------------------
-// FfiPum / FfiPumItem: the completion popup (opaque to Swift).
-// ---------------------------------------------------------------------------
+// --- FfiPum / FfiPumItem: the completion popup (opaque to Swift) ---
 
 /// The completion popup (`ext_popupmenu`), opaque to Swift.
 ///
@@ -3971,9 +3799,7 @@ impl FfiPumItem {
     }
 }
 
-// ---------------------------------------------------------------------------
-// FfiToast / FfiToastLine / FfiToastChunk: the message toast (opaque to Swift).
-// ---------------------------------------------------------------------------
+// --- FfiToast / FfiToastLine / FfiToastChunk: the message toast (opaque to Swift) ---
 
 /// The message toast (`ext_messages`), opaque to Swift.
 ///
@@ -4114,9 +3940,7 @@ impl FfiToastChunk {
     }
 }
 
-// ---------------------------------------------------------------------------
-// FfiFileSearch / FfiFileEntry: the file-picker search surface (opaque to Swift).
-// ---------------------------------------------------------------------------
+// --- FfiFileSearch / FfiFileEntry: the file-picker search surface (opaque to Swift) ---
 
 /// A live file-search session handle (opaque to Swift).
 ///
@@ -4275,10 +4099,7 @@ impl FfiTreeNode {
     }
 }
 
-// ---------------------------------------------------------------------------
-// FfiSearch / FfiSearchFile / FfiSearchMatch: the sidebar content-search surface
-// (opaque to Swift).
-// ---------------------------------------------------------------------------
+// --- FfiSearch / FfiSearchFile / FfiSearchMatch: the sidebar content search (opaque) ---
 
 /// A live content-search session handle (opaque to Swift).
 ///
@@ -4494,9 +4315,7 @@ impl FfiFileEntry {
     }
 }
 
-// ---------------------------------------------------------------------------
-// FfiFrame: an owned, resolved snapshot of the active grid.
-// ---------------------------------------------------------------------------
+// --- FfiFrame: an owned, resolved snapshot of the active grid ---
 
 /// An opaque, owned, paint-ready frame: the active grid with every cell already
 /// resolved against the highlight table in Rust (never re-resolved in Swift).
@@ -4739,9 +4558,7 @@ impl FfiFrame {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Color / style / key helpers.
-// ---------------------------------------------------------------------------
+// --- Color / style / key helpers ---
 
 /// Fallback foreground (white) when neither a highlight nor the defaults set one,
 /// mirroring wolf-gnome's `render::FALLBACK_FG`.
@@ -4858,9 +4675,8 @@ fn cursor_colors(snap: &wolf_core::Snapshot, grid: &Grid) -> (Rgb, Rgb) {
         ),
     };
 
-    // WolfCursor theme override: honored unconditionally (explicit app-level
-    // opt-in, unlike the guarded mode-attr path below). A bg-only group keeps
-    // the reverse-video glyph (the cell's bg).
+    // The WolfCursor theme override wins unconditionally (explicit opt-in, unlike the guarded
+    // mode-attr path below); a bg-only group keeps the reverse-video glyph (the cell's bg).
     if let Some(bg) = snap.theme.cursor.bg {
         return (bg, snap.theme.cursor.fg.unwrap_or(cell_bg));
     }

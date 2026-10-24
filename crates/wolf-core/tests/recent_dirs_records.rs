@@ -34,9 +34,8 @@ fn cd_records_directory_at_top_of_recent_dirs() {
     // Fail loud if the real nvim binary is missing.
     let _ = common::require_nvim_bin();
 
-    // The always-on recent-dirs store reads state_dir(); pin it to a fresh
-    // tempdir BEFORE starting the core so folder-mru.sqlite lands somewhere we can
-    // inspect (and never in the user's real state dir). Keep the guard alive.
+    // The recent-dirs store reads state_dir() eagerly: pin it to a fresh tempdir before the core
+    // starts, so folder-mru.sqlite is inspectable and never the user's. Keep the guard alive.
     let state_dir = tempfile::tempdir().expect("failed to create temp state dir");
     std::env::set_var("WOLF_STATE_DIR", state_dir.path());
 
@@ -45,14 +44,8 @@ fn cd_records_directory_at_top_of_recent_dirs() {
     let (_dir_a, cwd_a) = temp_cwd();
     let (core, waiter) = start_core_in_with_waiter(&cwd_a);
 
-    // MRU-hygiene regression guard: the launch/initial cwd A is deliberately NOT
-    // recorded into the recent-dirs MRU. Only directories the user actively
-    // opens (a typed `:cd`, or the Open-Folder command) should populate the MRU.
-    // The captive nvim's child-workdir launch fires the one-shot startup
-    // `wolf_cwd` emit, which now updates the tracked-cwd cell ONLY (it is flagged
-    // as the initial emit and skipped by `apply_cwd`'s record/store path). This
-    // test runs against a fresh, hermetic WOLF_STATE_DIR, so before any `:cd` the
-    // MRU must be EMPTY (and in particular must not contain A).
+    // Only a typed `:cd` or Open-Folder records; the startup `wolf_cwd` emit updates only the
+    // tracked-cwd cell, so the hermetic MRU must be empty here and never contain the launch cwd A.
     let before_any_cd = core.recent_dirs();
     assert!(
         before_any_cd.is_empty(),
@@ -69,15 +62,12 @@ fn cd_records_directory_at_top_of_recent_dirs() {
     common::type_str(&core, path_b);
     core.send_input(common::key(Key::Enter));
 
-    // Wait for nvim to process the `:cd` and flush, then poll BOTH read paths:
-    // the launch cwd A is NEVER recorded (see the pre-`:cd` guard above), so the
-    // FIRST recorded entry — and thus rank 0 — must be the user-typed B.
+    // The launch cwd A is never recorded, so rank 0 must be the user-typed B.
     waiter.wait_for_flush(&core, common::FLUSH_TIMEOUT);
     wait_for_recent_top(&core, state_dir.path(), &cwd_b);
 
-    // By the time B has landed, the setup-time initial emit has definitively been
-    // processed; A must still be absent from the MRU (it is not merely ranked
-    // below B — it was never recorded at all).
+    // Once B has landed the startup emit has been processed, and A must still be absent: never
+    // recorded, not merely ranked below B.
     let after_cd_b = core.recent_dirs();
     assert!(
         !after_cd_b.iter().any(|p| paths_equal(p, &cwd_a)),

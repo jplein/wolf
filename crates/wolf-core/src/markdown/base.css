@@ -1,290 +1,8 @@
-/* Structural + marker CSS shared by every preview theme.
- *
- * This file is include_str!'d into the rendered HTML document (BEFORE the
- * selected theme's CSS) by crate::markdown. It is NOT a Markdown doc and is not
- * prettier-formatted. It owns three things:
- *
- * CAUTION -- NEVER write an element name in angle brackets anywhere in this
- * file, not even in a comment. Every byte here ships VERBATIM into the rendered
- * document's style block, ahead of the real body tag, and three consumers scan
- * that HTML for the FIRST match of a fixed needle: the macOS preview's
- * head/body split, the browser preview's live-reload script injection, and the
- * integration tests. A comment that merely mentions a tag corrupts all three,
- * silently. Name elements in prose instead -- "the code element", "p", "li".
- * The in-module test embedded_stylesheets_carry_no_markup_like_text enforces
- * this and explains the failure modes in full.
- *
- *  1. The invisible position-marker rule (.wolf-src): a zero-size inline anchor
- *     that the macOS preview's cursor-follow scroll JS (WolfKeyMap's
- *     PreviewScrollSeam) resolves by getElementById on its `wl-{line}-{col}` id
- *     and then measures with getBoundingClientRect(). It must take NO layout
- *     space and never affect the rendered body, so it is an inline element
- *     clamped to zero width/height with hidden overflow.
- *     Its `font-size: 0` and `line-height: 0` are load-bearing: because the body
- *     now sets line-height as a LENGTH (see 3 below), a marker that lost its own
- *     `line-height: 0` would inherit a hard 24px and inject visible blank lines
- *     throughout the document. Its `visibility: hidden` is load-bearing for a
- *     DIFFERENT reason and must NOT be "optimized" into `display: none`: a
- *     visibility-hidden element still generates a box, so
- *     getBoundingClientRect() reports a real position; a display-none element
- *     generates no box and reports all zeros, which would silently collapse
- *     every anchor to the top of the document and break the whole scheme with no
- *     visible symptom in the rendered page. Do not touch this rule.
- *
- *  2. Structural layout (margins, code/table/blockquote framing) that a theme
- *     layers colors on top of.
- *
- *  3. A 24px BASELINE GRID governing every vertical dimension in the file.
- *
- * ---------------------------------------------------------------------------
- * THE BASELINE GRID
- * ---------------------------------------------------------------------------
- *
- * Unit: 24px (16px body text x 1.5), declared once as the documented token
- * `--wolf-baseline: 24px` on body.wolf-markdown. Written B below.
- *
- * INVARIANT -- a claim about the values this file DECLARES, not about the
- * laid-out document, whose line boxes exceed them wherever two faces meet (see
- * THE INLINE-CODE PADDING CLAIM IS CORRECT AND IS NOT THE WHOLE STORY below for
- * the mechanism, the measured excess, and why no declaration can express it):
- *
- *   Every element's vertical margin is 0 or a whole multiple of 24px, AND every
- *   element's border-box height (content + padding + border) is a whole
- *   multiple of 24px.
- *
- * This invariant is closed under margin collapsing: collapsing takes max(a, b),
- * and the max of two multiples of 24 is a multiple of 24. That is why border
- * compensation always folds the border into PADDING or an explicit HEIGHT --
- * never into a margin.
- *
- * line-height IS A LENGTH, NOT A RATIO
- *
- * body.wolf-markdown sets `line-height: 24px`, deliberately not a unitless
- * `1.5`. A unitless number re-multiplies against each DESCENDANT's own
- * font-size, so an inline code element at 0.875em, a small element, and
- * superscripts would each produce a different line box and fall off the grid.
- * A length inherits as the COMPUTED 24px regardless of descendant font-size.
- * The cost is that any element wanting different leading must say so
- * explicitly: only h1/h2 (48px) and pre (24px, stated anyway) do.
- *
- * THE TYPE SCALE
- *
- *   element  font-size  line-height     margin-top   margin-bottom
- *   body/p   16px       24px  (1B)      p: 0         p: 24px (1B)
- *   h1       32px       48px  (2B)      48px (2B)    24px (1B)
- *   h2       24px       48px  (2B)      48px (2B)    24px (1B)
- *   h3       20px       24px  (1B)      48px (2B)    0
- *   h4       18px       24px  (1B)      24px (1B)    0
- *   h5       16px       24px  (1B)      24px (1B)    0
- *   h6       14px       24px  (1B)      24px (1B)    0
- *
- * h1/h2 preserve today's rendered sizes exactly (2em / 1.5em of 16px), so this
- * is not also a visual resize of the two most-seen headings. h3-h6 previously
- * fell through to UA defaults (18.7 / 16 / 13.3 / 10.7px, where h5 equalled
- * body text and h6 was illegibly small); the 20/18/16/14 ramp is smooth and
- * bottoms out legibly, with h6 distinguished by weight 600 rather than by being
- * tiny. h2 takes 48px leading because the only other grid-legal value at a 24px
- * font is 24px (ratio 1.0), where wrapped lines nearly touch.
- *
- * Every heading has strictly more space above than below (48>24, 48>0, 24>0).
- * h3-h6 with margin-bottom 0 hug the content they introduce. Collapsing does
- * the section spacing for free: p{margin-bottom:24px} against
- * h2{margin-top:48px} collapses to max(24,48) = 48 = 2B.
- *
- * BORDER COMPENSATION
- *
- * hr -- an explicit 24px border-box height absorbs the rule structurally, and
- * the rule is drawn as border-top (colored by the theme via border-top-color,
- * NOT background-color: the box is 24px tall, so any background would paint a
- * solid bar instead of a hairline). Total = 24 (margin-top) + 24 (box) + 0
- * (margin-bottom) = 48px = 2B. Margins alone could not fix the old
- * 1px-height hr: an hr before an h2 collapses to 48 and re-exposes the 1px.
- *
- * table th/td -- with border-collapse:collapse adjacent rows SHARE one border,
- * so an N-row table has N+1 horizontal lines. Row pitch:
- *
- *   12 (padding-top) + 24 (line-height) + 11 (padding-bottom) + 1 (shared
- *   border) = 48px = 2B
- *
- * 47 is odd, so the padding cannot be split evenly; the 12/11 asymmetry is
- * imperceptible. The whole table is 47N + (N+1) = 48N + 1; the trailing 1px is
- * the table's own bottom outer border, which has no next row to share with, so
- * table{margin-bottom:23px} brings the total to 48N + 24 = exactly 2N+1
- * baselines.
- *
- * No compensation is needed for blockquote (it has no border on any edge and
- * its vertical padding is 0, so its border-box height is just the sum of its
- * on-grid children), pre (no border), or inline code (vertical padding on an
- * inline box paints background but does not grow the line box).
- *
- * THE INLINE-CODE PADDING CLAIM IS CORRECT AND IS NOT THE WHOLE STORY
- *
- * Padding is not what inline code costs the grid. FONT METRICS are.
- * line-height inherits as a computed LENGTH, so the inline code box is 24px
- * tall exactly like the text around it -- but an inline box's leading is
- * distributed as HALF-LEADING around THAT BOX'S OWN font metrics, not around
- * the containing block's. With line-height L, ascent A and descent D, a box
- * extends (L + A - D) / 2 above its baseline and (L - A + D) / 2 below it. Two
- * baseline-aligned 24px boxes in different faces therefore do not coincide:
- * the line box is their union, L + (max(A - D) - min(A - D)) / 2 over the faces
- * present on the line, which exceeds L whenever two faces disagree on A - D.
- * The body face and the monospace code face do disagree, so an unmanaged line
- * carrying a code element is taller than its 24px unit. How much taller is set
- * by the pair of faces on that line and is NOT a constant: 2px for a paragraph
- * and for a list, 3px for pre, which pairs a different two faces because the UA
- * stylesheet gives pre its own monospace family rather than the body's. And
- * because every later block's top offset shifts with it, that error would
- * ACCUMULATE rather than stay constant like the table residual above.
- *
- * THE FIX IS line-height: 0 ON THE CODE ELEMENT, and it ships. The rule itself
- * carries why zero rather than 24. MEASURED against the real rendered document
- * in WebKitGTK 2.52.4: border-box heights of 26 for a paragraph carrying inline
- * code (unit 24), 74 for a list (72) and 123 for pre (120) become 24 / 72 / 120
- * -- fully on grid. Attributed by A/B rather than by reasoning, which is also
- * how the alternative was rejected: overriding the code element's font-family
- * to inherit gives 25 / 73 / 120 and destroys the monospace face, so it is not
- * the fix and does not ship.
- *
- * TWO CONSEQUENCES OF THE ZERO WERE EYEBALLED rather than reasoned, on one
- * capture at WebKitGTK 2.52.4, because engine behaviour settles them and
- * arithmetic cannot. The chip's background SURVIVES: exact chip pixels occupy a
- * 20-row band inside each 24px line box. Glyphs do NOT overflow their line --
- * against a fixture of deliberate descenders and tall ascenders, every line's
- * ink stays strictly inside its own 24px unit. Both are pinned out of a real
- * render by preview_inline_code_keeps_the_baseline_grid_under_cage, so neither
- * observation can rot silently.
- *
- * MACOS IS UNVERIFIED. The rule changes the document macOS renders too, and no
- * macOS host was available to measure it on. Every number above is a Linux
- * WebKitGTK reading; the macOS ones are inferred from the shared engine.
- *
- * DO NOT UNDO IT IN EITHER OF THE TWO AVAILABLE WAYS.
- *   1. Do not give pre code, or the highlight spans inside it, a line-height.
- *      That reintroduces the union term this zero removes, and only on lines
- *      carrying a highlighted token -- a PER-TOKEN grid error, worse than the
- *      constant one the zero removes. Pinned by
- *      pre_code_declares_no_leading_of_its_own.
- *   2. Do not delete the zero on the grounds that pre declares its own 24px.
- *      The zero is not for pre. It is for INLINE code in a paragraph or list
- *      item, where the block strut is the body face's and its union with the
- *      monospace box is what overflows. pre is the one place the zero is
- *      redundant, so deleting it there deletes it everywhere.
- *
- * THE DECLARED-VALUE SWEEP STRUCTURALLY CANNOT SEE THIS. markdown_render.rs
- * checks the values this file DECLARES; the excess it cannot see exists only in
- * the LAID-OUT box, which no text-level assertion produces. A green sweep is
- * therefore not evidence that the grid holds line by line -- exactly as with
- * the edge-rule bug below, which is invisible to it for a different reason.
- *
- * EDGE RULES (and why their selectors are not just :first-child/:last-child)
- *
- * The first block must have margin-top 0 and the last block margin-bottom 0.
- * The body has no padding, so an unreset 48px margin-top on the opening block
- * goes one of two ways. Either it collapses out through the body's top edge --
- * parent-child collapsing is unblocked with no border-top, no padding-top, no
- * clearance and no BFC -- displacing the whole document 48px; note this is a
- * POSITIONAL symptom only, not a visible color gap, because neither this file
- * nor any theme sets a background on `html`, so per CSS background propagation
- * the body's background paints the entire canvas including the escaped margin.
- * Or, if a leading .wolf-src anchor's anonymous block box blocks the
- * collapse-through, the 48px instead sits INSIDE the body between that
- * anonymous box and the heading. Which way it resolves depends on whether that
- * anonymous box is self-collapsing (a function of the anonymous container's
- * inherited 24px strut, not the span's own line-height: 0) -- engine-dependent
- * territory, and it does not matter: both outcomes put the opening heading 48px
- * down and defeat the flush-to-edge body. A mirrored argument covers the last
- * block. 48 is still a multiple of 24, so the GRID SWEEP CANNOT SEE THIS BUG --
- * only the DOM-level edge tests can. The obvious spelling --
- * `body.wolf-markdown > *:first-child` / `:last-child` -- is INERT here: the
- * scroll-sync .wolf-src anchors are real elements in the body, flushed before
- * the first block's opening tag and (for any source ending in a newline) after
- * the last block's closing tag. Those structural pseudo-classes therefore land
- * on a zero-size anchor that has no margin to zero, and the real block keeps
- * its margin. So the rules must SKIP the anchors:
- *
- *   first: `> *:not(.wolf-src):not(*:not(.wolf-src) ~ *)`
- *          -- not an anchor, and no non-anchor sibling precedes it
- *   last:  `> *:not(.wolf-src):not(:has(~ *:not(.wolf-src)))`
- *          -- not an anchor, and no non-anchor sibling follows it
- *
- * The naive `> *:last-child` ALSO ships, ahead of the general last-block rule.
- * It is not an alternative that was chosen over the general form: it is a
- * harmless partial fallback that happens to be correct for the one case where
- * the source does not end in a newline (no trailing anchor, so :last-child is
- * the real block). The general rule below it covers every case, including that
- * one. Both are present; neither is redundant enough to be worth removing.
- *
- * Both non-naive forms are UNBOUNDED in the length of the anchor run they skip: the
- * first-block rule quantifies over "any earlier non-anchor sibling" via a
- * sibling combinator inside :not(), the last-block rule over "any later
- * non-anchor sibling" via :has(). Neither caps the run at one. Each lives in
- * its OWN rule because both are Selectors 4 (complex :not() argument, :has()):
- * an engine missing either must drop just that rule, not invalidate a shared
- * selector list.
- *
- * Do not "simplify" these back to the bare structural form, and do not try to
- * fix it from the .wolf-src side instead: :first-child is structural, so no
- * display/size change on the anchor would help, and its font-size/line-height 0
- * are load-bearing (see 1 above).
- *
- * MID-BLOCK ANCHORS DO NOT AFFECT THESE RULES -- AND STILL DO NOT.
- *
- * The renderer no longer emits .wolf-src anchors only as leading/trailing runs:
- * a line's per-100-column anchors (wl-{L}-100, wl-{L}-200, ...) are now placed
- * INSIDE a block's inline content, by splitting the text run that contains them,
- * so an anchor can sit between two characters of a paragraph, heading, list item
- * or link. Every selector above is a `body.wolf-markdown > *` CHILD selector, so
- * it only ever considers the body's DIRECT element children -- and an
- * inline-placed anchor is a descendant of a p/h1/li/a/em element, never a
- * direct child of the body. It therefore cannot match `> *`, cannot become a
- * first/last body child, and cannot lengthen the anchor run these rules skip.
- * Body-level leading/trailing anchor runs still come exclusively from
- * column-zero markers and from markers flushed before/after a block, whose
- * placement is unchanged. No rule here needed a change for inline anchoring, and
- * none should be added: these selectors are already correct, not now
- * over-general. Do not simplify them.
- *
- * DOCUMENTED RESIDUALS
- *
- *  - A table immediately followed by any block whose margin-top exceeds 23px
- *    collapses the table's 23px against that larger margin, re-exposing the 1px.
- *    That is every heading (h1-h3 at 48px, h4-h6 at 24px) and hr (24px). The
- *    error is constant, not accumulating.
- *  - Images and display MathML are ACCEPTED drift: their intrinsic heights are
- *    not grid-quantized and there is no CSS-only way to snap them. No JS
- *    re-snapping is used anywhere in this document.
- *
- * HORIZONTAL DIMENSIONS ARE NOT GRID-CONSTRAINED
- *
- * The grid is vertical only. The 32px list indent, the 16px cell padding and
- * the 24px blockquote inset are chosen for looks, not for the grid. Do not
- * "fix" them to multiples of 24. The body itself is flush to the pane edges by
- * design (padding: 0); any inset belongs to the preview pane chrome.
- *
- * LITERAL PX, NOT calc(var(--wolf-baseline) * n)
- *
- * `--wolf-baseline` is declared as the documented token, but every other value
- * in this file is a literal integer px. Reasons: the grid audit test asserts
- * that values are whole multiples of 24, which it can do against `48px` but not
- * against a calc() expression (there it could only string-match syntax, proving
- * nothing about the number); the compensated values 23/12/11 are not clean
- * multiples anyway and would become calc(... - 1px), hiding the compensation;
- * and calc() buys no configurability today, since there is a single PreviewTheme
- * and no user config surface. THIS HEADER is the single source of truth for the
- * arithmetic -- do not add per-declaration comments restating it.
- *
- * Everything is px rather than rem/em on purpose: rem resolves against a root
- * font-size this document never sets, so a WebKit minimum-font-size preference
- * or OS text scaling could silently detune the grid.
- */
+/* No angle-bracket tags, even here. See specs/markdown-stylesheet.md#no-markup
+ * The 24px baseline grid: see specs/markdown-stylesheet.md#baseline-grid */
 
-/* Invisible per-line / per-100-column source markers. Zero-size, no layout
- * impact, never selectable — purely an anchor target for the cursor-follow
- * scroll, whose JS (WolfKeyMap's PreviewScrollSeam) looks each one up by id and
- * measures it with getBoundingClientRect(). `visibility: hidden` is therefore
- * load-bearing and must NOT become `display: none`: a no-box element reports an
- * all-zero rect, silently collapsing every anchor to the top of the document.
- * See the header comment. */
+/* Zero-size anchors for the cursor-follow scroll: `visibility: hidden`, never `display: none`,
+ * which reports an all-zero rect. See crates/wolf-core/src/markdown/README.md#basecss */
 .wolf-src {
   display: inline;
   width: 0;
@@ -319,27 +37,14 @@ body.wolf-markdown {
   word-wrap: break-word;
 }
 
-/* The document's FIRST real block. `:first-child` alone is not enough: the
- * scroll-sync markers are emitted before the first block's opening tag, so the
- * body's first element child is usually a .wolf-src span, which has no margin to
- * zero -- leaving the opening heading's 48px margin-top in play against a body
- * that has no padding to absorb it. Reads as "not an anchor, and has no
- * non-anchor sibling before it",
- * which is unbounded in the leading anchor run's length. See EDGE RULES.
- *
- * Kept in its OWN rule: the complex `:not()` argument is Selectors 4, so an
- * engine without it must drop only this rule rather than invalidate a whole
- * selector list. */
+/* The first real block, skipping leading anchors; its own rule because the `:not()` is Selectors 4.
+ * See specs/markdown-stylesheet.md#edge-rules */
 body.wolf-markdown > *:not(.wolf-src):not(*:not(.wolf-src) ~ *) {
   margin-top: 0;
 }
 
-/* PARTIAL FALLBACK for the last real block. This only does the job when the
- * source does NOT end in a newline; otherwise `:last-child` lands on the
- * trailing marker span that flush_before(usize::MAX) emits, which has no margin
- * to zero. The general rule below handles both cases and is what actually
- * carries the invariant; this one is kept because it is cheap, Selectors 3, and
- * correct whenever it matches. See EDGE RULES. */
+/* Partial fallback, right only when the source ends without a newline; the rule below is general.
+ * See specs/markdown-stylesheet.md#edge-rules */
 body.wolf-markdown > *:last-child {
   margin-bottom: 0;
 }
@@ -418,16 +123,8 @@ body.wolf-markdown code {
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
     "Liberation Mono", monospace;
   font-size: 0.875em;
-  /* Zero, not 24px and not absent. The body declares its line-height as a
-   * LENGTH, so it inherits onto this inline box and is then distributed as
-   * half-leading around the MONOSPACE face's own metrics rather than the
-   * containing block's; the line box is the union over the faces present, so any
-   * non-zero leading here makes every line carrying inline code taller than its
-   * 24px unit and shifts each block below it. Zero removes that union term and
-   * nothing else: the chip still paints, because an inline box's content area
-   * comes from the font metrics rather than from line-height, and a code block
-   * is still governed by the 24px strut pre declares for itself. See the header
-   * comment for the measured A/B. */
+  /* Zero, not 24px and not absent: any leading here pushes lines carrying inline code off the grid.
+   * See specs/markdown-stylesheet.md#inline-code-leading */
   line-height: 0;
   padding: 2px 4px;
   border-radius: 6px;
@@ -459,8 +156,8 @@ body.wolf-markdown blockquote > :last-child {
 
 body.wolf-markdown table {
   border-collapse: collapse;
-  /* 23px, not 24: a collapsed-border table is 48N + 1 tall, and this pays off
-   * that trailing 1px. See BORDER COMPENSATION in the header. */
+  /* 23px, not 24: a collapsed-border table is 48N + 1 tall, and this pays off that trailing 1px.
+   * See specs/markdown-stylesheet.md#border-compensation */
   margin: 0 0 23px;
 }
 

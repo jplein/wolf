@@ -1,18 +1,4 @@
-//
-//  PreviewLinkSeam.swift
-//  Pure, AppKit-free Markdown-preview link-handling seam.
-//
-//  The sibling of `PreviewSeam` / `CommandSeam`: a pure, display-free decision
-//  exercised with scalar inputs only — NO AppKit, NO WKWebView, NO live Neovim. It
-//  classifies a link the user clicked in the preview web view (a resolved URL plus
-//  the previewed source file's path) into one of three actions, and emits the JS
-//  used to scroll a fragment into view. ALL link-routing branching lives here so it
-//  is headlessly unit-testable; the `PreviewNavigationDelegate` glue that calls
-//  `NSWorkspace.open` / `evaluateJavaScript` stays thin (compile + manual-smoke).
-//
-//  Imports ONLY Foundation, so it lives in the Foundation-only `WolfKeyMap` module
-//  alongside `PreviewSeam.swift` / `CommandSeam.swift`.
-//
+// Pure classification of a link clicked in the Markdown preview.
 
 import Foundation
 

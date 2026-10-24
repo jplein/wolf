@@ -1,38 +1,4 @@
-//
-//  DrawerFocusSeamTests.swift
-//  Pure, headless unit tests for the AppKit-free `WolfKeyMap.DrawerFocusSeam`.
-//
-//  These exercise the terminal-drawer FOCUS-SELECTION seam the coder adds in
-//  `Sources/WolfKeyMap/DrawerFocusSeam.swift` (terminal-drawer navigation addendum
-//  §1/§5). The drawer stays OUT of the pure `PaneTree` (preserving its 1:1 parity
-//  with wolf-gnome), so editor<->drawer `<C-w>j`/`<C-w>k` navigation is a front-end
-//  bridge computed from leaf rects rather than a tree neighbour. This seam is that
-//  pure computation; the `applyFocus` AppKit glue that calls it is compile +
-//  manual-smoke only.
-//
-//  Like `PaneTreeTests` / `DrawerLayoutTests`, they import ONLY Foundation-level
-//  test machinery (no AppKit / CoreGraphics, no live Neovim) and stay in the
-//  headless `WolfKeyMap` module.
-//
-//  ## CONTRACT UNDER TEST (the API the coder must honor, addendum §1)
-//
-//    public enum DrawerFocusSeam {
-//        // The leaf with the greatest `y + h` (top-left origin -> larger y is
-//        // lower); tie-break: smallest `x`, then smallest `PaneId`. nil on empty.
-//        public static func bottomMostLeaf(_ rects: [(PaneId, Rect)]) -> PaneId?
-//        // `lastEditorPane` if non-nil AND present in `leaves`; otherwise the
-//        // `bottomMostLeaf(rects)` fallback.
-//        public static func drawerUpTarget(
-//            lastEditorPane: PaneId?, leaves: [PaneId], rects: [(PaneId, Rect)]
-//        ) -> PaneId?
-//    }
-//
-//  `Rect` / `PaneId` are the EXISTING types from `PaneTree.swift` (`Rect(x:y:w:h:)`,
-//  `Double` fields; `PaneId == UInt64`).
-//
-//  NOTE (coder): `DrawerFocusSeam` does NOT exist yet — this file will not compile
-//  until the coder adds it (by design). Test-writer references it as the contract.
-//
+// See crates/wolf-macos/Tests/WolfKeyMapTests/README.md#drawerfocusseamtestsswift
 
 import XCTest
 

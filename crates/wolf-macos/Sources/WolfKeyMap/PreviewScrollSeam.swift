@@ -1,39 +1,5 @@
-//
-//  PreviewScrollSeam.swift
-//  Pure, AppKit-free Markdown-preview scroll-sync seam.
-//
-//  The sibling of `PreviewSeam` / `PreviewLinkSeam`: a pure, display-free decision
-//  exercised with scalar inputs only — NO AppKit, NO WKWebView, NO live Neovim. It
-//  owns ALL the anchor arithmetic (which `wl-{L}-{C}` marker id a cursor resolves
-//  to), the viewport-edge "should we scroll at all" rule, the per-window
-//  needs-a-scroll gate, and every JavaScript string the preview web view is ever
-//  asked to evaluate for scroll purposes. The AppKit glue
-//  (`PaneContainerView` + `PreviewScrollStateHandler`) stays thin: it caches state,
-//  captures it before a reload, and evaluates the strings this seam synthesizes.
-//
-//  Imports ONLY Foundation, so it lives in the Foundation-only `WolfKeyMap` module
-//  alongside `PreviewSeam.swift` / `PreviewLinkSeam.swift`.
-//
-//  ## No JSON escaper here, deliberately
-//
-//  Unlike `PreviewLinkSeam` — which interpolates a user-controlled fragment string
-//  and therefore needs `jsonEscape` — EVERY value this seam interpolates into JS is
-//  a validated NUMBER (a `UInt32` line/column or a `Double` coordinate). Anchor ids
-//  are assembled INSIDE the JS from those numbers, never in Swift. So no escaper is
-//  needed and none should be added.
-//
-//  `Double`s are rendered with `String(format: "%.2f", v)` — no locale argument, so
-//  non-localized, so the decimal separator is always `.` and can never become a `,`
-//  that would silently split one JS argument into two. Integers use `String(v)`.
-//
-//  ## The tuning constants live HERE and ONLY here
-//
-//  The six tuning numbers below are INTERPOLATED into the generated JS rather than
-//  duplicated as literals in the script text. A literal in both places could drift
-//  silently: the Swift tests would stay green while the shipped scrolling behaved
-//  differently. `PreviewScrollSeamTests` asserts the generated JS actually contains
-//  each constant's rendered form, so a constant change provably reaches the page.
-//
+// Pure Markdown-preview scroll-sync rules and the JavaScript they generate.
+// See notes/crates/wolf-macos/Sources/WolfKeyMap/PreviewScrollSeam.swift.md#no-json-escaper
 
 import Foundation
 

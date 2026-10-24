@@ -1,28 +1,11 @@
-# Structure-preserving compiled-treesitter-parsers TreeArtifact + a smoke test.
-#
-# `parsers_tree` merges the per-grammar host-compiled `parser/<lang>.so` shared
-# objects (each produced by a `ts_<lang>` external-repo overlay; see extensions.bzl)
-# into ONE `parsers/` TreeArtifact; the macOS app bundles it at
-# `Contents/Resources/parsers/`, so the files land at
-# `Contents/Resources/parsers/parser/<lang>.so`. These compiled parsers are
-# VENDORED + SHIPPED and ENABLED on macOS: the captive init.lua prepends them to
-# runtimepath so markdown highlighting + fenced-code injection are live in the .app.
-#
-# The compiled parsers are host (apple_support / Xcode) Mach-O shared objects, so
-# there is no `select()` (the cc toolchain already resolves per host arch). See
-# extensions.bzl and the directory README for pins, the ts_grammar template, how to
-# add a language, and the drop+LOG status table.
+# Host-compiled treesitter parsers merged into one `parsers/` TreeArtifact, plus a smoke test.
+# No `select()`: the cc toolchain resolves the host arch. See bazel/treesitter-parsers/README.md.
 
 load("@aspect_bazel_lib//lib:copy_to_directory.bzl", "copy_to_directory")
+load("//tools/lint:defs.bzl", "comment_srcs")
 
-# Merge every curated grammar's `parser/<lang>.so` into a single `parsers/`
-# TreeArtifact. `include_external_repositories` makes each `@ts_<lang>//parser/
-# <lang>.so` enter as `parser/<lang>.so` (its path WITHIN the external repo); then
-# `replace_prefixes` remaps the `parser` prefix to `parsers/parser`, so the output
-# is `parsers/parser/<lang>.so`. The inner `parsers/` dir is deliberate: rules_apple
-# strips the bundled TreeArtifact's OWN top-level dir name when copying into
-# Contents/Resources/, so nesting under `parsers/` lands it at
-# Contents/Resources/parsers/ robustly.
+# `replace_prefixes` maps each `parser/<lang>.so` under an inner `parsers/`, because rules_apple
+# strips a TreeArtifact's own top-level name when bundling it.
 copy_to_directory(
     name = "parsers_tree",
     srcs = [
@@ -59,9 +42,14 @@ sh_test(
     data = [":parsers_tree"],
 )
 
-# This package's docs, for `//tools/lint:markdown`.
+# This package's sources and docs for //tools/lint, which cannot glob across packages.
+comment_srcs()
+
 filegroup(
     name = "markdown_srcs",
-    srcs = ["README.md"],
+    srcs = glob(
+        ["**/*.md"],
+        allow_empty = True,
+    ),
     visibility = ["//tools/lint:__pkg__"],
 )

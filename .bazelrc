@@ -1,8 +1,5 @@
-# Wolf macOS Bazel build configuration.
-#
-# Scope: build the platform-agnostic `wolf-core` Rust crate with the host Xcode
-# SDK (apple_support C/link toolchain), rustc from rules_rust, and dependencies
-# from the existing Cargo workspace via crate_universe.
+# Wolf macOS Bazel build configuration: `wolf-core` and the app, with the host Xcode SDK,
+# rustc from rules_rust, and crates from the Cargo workspace via crate_universe.
 
 common --enable_bzlmod
 common --enable_platform_specific_config
@@ -19,10 +16,6 @@ build:macos --apple_generate_dsym=false
 # Keep the bzlmod lockfile current as deps resolve.
 common --lockfile_mode=update
 
-# --- Advisory lint config (opt-in only) -------------------------------------
-# `--config=lint` makes clippy treat every lint as an error (-Dwarnings) so the
-# //tools/lint clippy CHECK actually fails on findings. It is DELIBERATELY not a
-# default: the standard build/test path (and the 47/47 default suite) is
-# byte-for-byte unchanged unless a developer opts in with `--config=lint`.
-# Usage: bazel test --config=lint //tools/lint:clippy
-build:lint --@rules_rust//rust/settings:clippy_flags=-Dwarnings
+# clippy fails on any lint. It runs as a build action of the rust_clippy targets behind
+# //tools/lint:clippy, so a lint fails `bazel build //...` as well as `bazel test //...`.
+build --@rules_rust//rust/settings:clippy_flags=-Dwarnings

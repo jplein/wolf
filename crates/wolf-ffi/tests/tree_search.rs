@@ -50,10 +50,7 @@ const FLUSH_TIMEOUT: Duration = Duration::from_secs(10);
 /// settle. Mirrors `file_search`'s `POLL_INTERVAL`.
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
-// -- seeded layout ---------------------------------------------------------
-//
-// A nested tree plus a top-level file, a dotfile (listed), and a `.gitignore`
-// + the file it ignores (excluded).
+// -- seeded layout: a nested tree, a top-level file, a listed dotfile, a gitignored file --
 const DIR_SRC: &str = "src";
 const DIR_DOCS: &str = "docs";
 const FILE_MAIN: &str = "src/main.rs";
@@ -67,9 +64,7 @@ const FILE_IGNORED: &str = "ignored.md";
 
 #[test]
 fn tree_search_projects_children_and_reveals_current_file() {
-    // Loud SKIP (no-op pass) when no pinned nvim is available, exactly like
-    // `file_search`. Otherwise export the resolved binary so wolf-core launches
-    // it.
+    // Loud skip (no-op pass) without a pinned nvim, exactly like `file_search`.
     let Some(nvim_bin) = common::nvim_bin_or_skip() else {
         return;
     };
@@ -77,11 +72,8 @@ fn tree_search_projects_children_and_reveals_current_file() {
 
     let init_lua = common::init_lua_path();
 
-    // Seed a fresh temp cwd with a nested tree, a top-level file, a dotfile, and
-    // a `.gitignore` plus the file it ignores. We use `tempfile` (a
-    // dev-dependency) so the directory is cleaned up on drop; we keep `tmp` alive
-    // until after `shutdown()` so it outlives the session as nvim's working dir +
-    // search root, then drop it explicitly at the end.
+    // Seed the layout above in a temp cwd. It is nvim's working dir and search root, so `tmp`
+    // stays alive until after `shutdown()`.
     let tmp = tempfile::tempdir().expect("failed to create temp cwd directory");
     std::fs::create_dir_all(tmp.path().join(DIR_SRC)).expect("failed to create src/");
     std::fs::create_dir_all(tmp.path().join(DIR_DOCS)).expect("failed to create docs/");
@@ -95,9 +87,8 @@ fn tree_search_projects_children_and_reveals_current_file() {
         .expect("failed to seed .gitignore");
     std::fs::write(tmp.path().join(FILE_IGNORED), "ignored\n").expect("failed to seed ignored.md");
 
-    // Canonicalize the cwd for path assertions: on macOS the temp dir under
-    // `/var/folders/...` canonicalizes to `/private/var/folders/...`, and
-    // wolf-core may report either form, so we compare against the canonical path.
+    // Canonicalize for path assertions: a macOS temp dir under `/var` resolves to `/private/var`,
+    // and wolf-core may report either form.
     let canonical_cwd = tmp
         .path()
         .canonicalize()
@@ -112,11 +103,8 @@ fn tree_search_projects_children_and_reveals_current_file() {
     )
     .expect("wolf_ffi_start should return a handle (is WOLF_NVIM_BIN a valid nvim?)");
 
-    // --- handle.cwd() reports nvim's live, canonical working directory -------
-    // `cwd()` is empty until nvim first reports its directory via the
-    // `wolf_cwd`/DirChanged notification, which arrives slightly AFTER start, so
-    // poll (bounded by the same FLUSH_TIMEOUT/POLL_INTERVAL) until non-empty.
-    // Driving a later `:cd` re-root is deferred to manual smoke (flaky headless).
+    // --- cwd() stays empty until nvim's `wolf_cwd` report lands just after start, so poll.
+    // A later `:cd` re-root is flaky headless and is left to manual smoke.
     let deadline = Instant::now() + FLUSH_TIMEOUT;
     let mut reported_cwd = handle.cwd();
     while Instant::now() < deadline {
@@ -131,9 +119,7 @@ fn tree_search_projects_children_and_reveals_current_file() {
         "cwd() should report nvim's live working directory within {FLUSH_TIMEOUT:?} \
          (it stays empty until nvim's first DirChanged/wolf_cwd notification)"
     );
-    // Robust against the macOS /var -> /private/var symlink, exactly like the
-    // abs_path / current_file comparisons elsewhere in this test: canonicalize
-    // the reported cwd and compare it to the canonical seeded cwd.
+    // Canonicalize the reported cwd too, against the macOS /var -> /private/var symlink.
     let canonical_reported = Path::new(&reported_cwd)
         .canonicalize()
         .expect("cwd() should report a path that exists on disk");
@@ -146,10 +132,7 @@ fn tree_search_projects_children_and_reveals_current_file() {
     // The tree gets its OWN long-lived `FfiFileSearch` via `start_tree_search()`.
     let tree = handle.start_tree_search();
 
-    // --- children_of("") streams in the top level ---------------------------
-    // The traversal runs on a background worker, so the first call may see an
-    // empty (or partial) snapshot; poll until the dirs and the top-level file
-    // appear.
+    // --- children_of("") streams in from a background worker: poll until the top level appears.
     let deadline = Instant::now() + FLUSH_TIMEOUT;
     let mut top = tree.children_of(String::new());
     while Instant::now() < deadline {
@@ -163,19 +146,14 @@ fn tree_search_projects_children_and_reveals_current_file() {
         sleep(POLL_INTERVAL);
     }
 
-    // --- version() has advanced past its initial state after streaming --------
-    // The live snapshot's `version` starts at 1 and is non-decreasing as batches
-    // stream in; now that entries have streamed, it must be > 0. Capture it here
-    // (as the crate's `u64`) so a later read can prove non-decreasing behavior.
+    // --- version() is > 0 once entries have streamed; kept to prove it never decreases later.
     let v1: u64 = tree.version();
     assert!(
         v1 > 0,
         "version() should be > 0 after entries have streamed in (got {v1})"
     );
 
-    // Directories come BEFORE files, case-insensitively by name. Collect the
-    // directory names in order and the file names in order, then assert the
-    // dirs all precede the files and each group is correctly ordered.
+    // Directories come before files, each group ordered case-insensitively by name.
     let dir_names: Vec<String> = top
         .iter()
         .filter(|n| n.is_dir())
@@ -268,11 +246,7 @@ fn tree_search_projects_children_and_reveals_current_file() {
         );
     }
 
-    // --- children_of("src") is stable across repeated calls -----------------
-    // With no intervening snapshot change, the cached-index path must return
-    // identical results across calls. Call twice more and assert equality by
-    // (name, rel_path, is_dir) for each node. This is behavioral sanity for the
-    // per-snapshot cached index (the build-count proof is headless, in T1).
+    // --- children_of("src") returns identical nodes across calls with no snapshot change.
     let src_children_again_a = tree.children_of(DIR_SRC.to_string());
     let src_children_again_b = tree.children_of(DIR_SRC.to_string());
     let project = |nodes: &[wolf_ffi::FfiTreeNode]| -> Vec<(String, String, bool)> {
@@ -295,8 +269,6 @@ fn tree_search_projects_children_and_reveals_current_file() {
     );
 
     // --- version() is non-decreasing across calls with no reset --------------
-    // After further reads/settling since `v1`, the snapshot version must never go
-    // backwards.
     let v2: u64 = tree.version();
     assert!(
         v2 >= v1,
@@ -310,9 +282,7 @@ fn tree_search_projects_children_and_reveals_current_file() {
         "two consecutive version() reads must be non-decreasing (v2={v2}, v3={v3})"
     );
 
-    // --- rel_path_for(abs) maps a streamed entry to its display -------------
-    // Use the abs_path of a streamed `src/main.rs` node: it IS that entry's path,
-    // so the EXACT-match `rel_path_for` returns its display with `/` separators.
+    // --- rel_path_for(abs) maps a streamed node's exact abs_path to its `/`-separated display.
     let main_abs = src_children
         .iter()
         .find(|n| n.name() == "main.rs")

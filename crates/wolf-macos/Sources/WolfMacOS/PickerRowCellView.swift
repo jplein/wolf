@@ -1,14 +1,4 @@
-//
-//  PickerRowCellView.swift
-//  A reusable, file-agnostic list-row view rendering a `PickerRow`.
-//
-//  Deliberately GENERAL (like `PickerRow`), so the same cell backs any picker /
-//  selector: a leading `NSImageView` (the small icon, aligned with the search
-//  magnifier) and a single title label (aligned with the typed text). The icon's
-//  BOTTOM lines up with the text's baseline. The alignment insets are derived by
-//  `PickerView` from the search-bar layout and injected via `init`. AppKit-only,
-//  so exercised by manual smoke.
-//
+// A reusable, file-agnostic list-row view rendering a `PickerRow`.
 
 import AppKit
 

@@ -1,17 +1,4 @@
-//
-//  GlyphStyle.swift
-//  Pure, AppKit-/CoreText-free resolution of a cell's packed style-flag bits +
-//  its fg / special colors into a paint-ready `GlyphStyle`.
-//
-//  This is the headless-testable seam (plan §B1) the renderer paints from: it
-//  maps `FfiCell.flags()` (bold/italic/underline/undercurl/strikethrough bits,
-//  mirroring `mod flag` in `crates/wolf-ffi/src/lib.rs`) plus the cell's
-//  foreground and special (underline) colors into a `GlyphStyle` value. It
-//  imports ONLY Foundation (the generated `FfiColor` glue rides in the same
-//  `WolfKeyMap` module), so it stays AppKit-/CoreText-free and unit-testable
-//  without a live font. On-screen font-variant selection + decoration stroking
-//  are the renderer's job (`CellMetrics` / `PaneContainerView`).
-//
+// Pure resolution of a cell's style flags and colors into a paint-ready `GlyphStyle`.
 
 import Foundation
 

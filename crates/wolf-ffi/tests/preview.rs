@@ -470,14 +470,12 @@ fn preview_opens_in_place_and_round_trips_with_edit() {
     // Back on the markdown buffer for the preview.
     send_ex_command(&handle, ":e alpha.md");
     wait_for_markdown_active(&handle, true, "back on alpha.md");
-    // Real switch barrier: is_markdown_active cannot witness a markdown->markdown
-    // switch, so wait until alpha.md is genuinely the ACTIVE buffer before the SYNC
-    // `open_preview` races ahead of the buffered `:e`.
+    // Barrier on alpha.md being current: the markdown gate cannot witness a markdown-to-markdown
+    // switch, and the sync `open_preview` would race the buffered `:e`.
     wait_for_current_file(&handle, "alpha.md");
 
-    // --- 3. In-place placement: open_preview() -------------------------------
-    // The single editing pane becomes the preview pane: NO new pane, same window.
-    // `open_preview` returns the preview scratch bufnr (> 0 since markdown active).
+    // --- 3. In-place open_preview(): the single pane becomes the preview in the same window, and
+    // the call returns the scratch bufnr.
     let active_win = handle.active_win();
     assert!(
         active_win > 0,
@@ -530,20 +528,15 @@ fn preview_opens_in_place_and_round_trips_with_edit() {
         html.contains(r#"id="wl-1-0""#),
         "render_preview must carry the first hard line's `wl-1-0` anchor: {html}"
     );
-    // The heading slug id ships through the nvim -> render_preview path (proves the
-    // `HeadingIdAssigner` output survives the FFI round-trip, not just the pure
-    // `render_html` unit tests). `# Alpha Heading` slugs to `alpha-heading`.
+    // The heading slug survives the nvim -> render_preview round-trip, not just the `render_html`
+    // unit tests: `# Alpha Heading` slugs to `alpha-heading`.
     assert!(
         html.contains(r#"id="alpha-heading""#),
         "render_preview must carry the heading slug id from the nvim path: {html}"
     );
 
-    // --- 5b. The preview row exposes the source's cwd-relative display path ---
-    // `source_display_path()` feeds the preview pane's SECONDARY statusbar line,
-    // mirroring editor panes. The fixture lives at the cwd ROOT, so the display
-    // path ends with the bare basename. Use `ends_with`, NOT exact equality: the
-    // source path is uncanonicalized while live_cwd is canonical, so a
-    // `/var`<->`/private/var` mismatch can leave `source_display_path()` absolute.
+    // --- 5b. The row's cwd-relative display path ends with the basename. `ends_with`, not equality:
+    // an uncanonicalized source vs a canonical cwd can leave it absolute (`/var`).
     let alpha_display = alpha_row.source_display_path();
     assert!(
         !alpha_display.is_empty(),
@@ -554,9 +547,7 @@ fn preview_opens_in_place_and_round_trips_with_edit() {
         "source_display_path() must end with the source file path (alpha.md), got {alpha_display}"
     );
 
-    // --- 6. Buffer picker: the per-file UNION, no `Preview: ` rows ------------
-    // The scratch is created UNLISTED and the previewed source stays buflisted, so
-    // the picker shows exactly ONE row for alpha.md and no preview-scratch row.
+    // --- 6. Buffer picker: the unlisted scratch and buflisted source give exactly one alpha.md row.
     let rows = wait_for_ranked(&handle, "one alpha.md row while previewing", |rows| {
         rows_ending_with(rows, "alpha.md") == 1
     });
@@ -642,10 +633,8 @@ fn preview_picker_shows_one_cwd_relative_row_for_subdir_source() {
 
     let init_lua = common::init_lua_path();
 
-    // Seed the markdown source in a SUBDIRECTORY of the cwd. The picker names the
-    // SOURCE buffer with its cwd-relative path (`docs/alpha.md`), and the preview
-    // scratch is unlisted — this is the test that pins the union listing for a
-    // relative-path source (no bare-basename duplicate, no `Preview: ` row).
+    // Seed the source in a subdirectory: the picker names it `docs/alpha.md`, pinning the union
+    // listing for a relative-path source (no basename duplicate, no `Preview: ` row).
     let tmp = tempfile::tempdir().expect("failed to create temp cwd directory");
     let docs_dir = tmp.path().join("docs");
     std::fs::create_dir(&docs_dir).expect("failed to create docs subdir");
@@ -667,10 +656,8 @@ fn preview_picker_shows_one_cwd_relative_row_for_subdir_source() {
     wait_for_attach(&handle);
     send_ex_command(&handle, ":e docs/alpha.md");
     wait_for_markdown_active(&handle, true, "after :e docs/alpha.md");
-    // Real switch barrier: the startup buffer is a markdown `Untitled.md`, so
-    // `wait_for_markdown_active(true)` returns IMMEDIATELY (markdown->markdown) and
-    // cannot witness the `:e docs/alpha.md`. Wait until alpha.md is genuinely the
-    // ACTIVE buffer before the SYNC `open_preview` races ahead of the buffered `:e`.
+    // Barrier on alpha.md being current: the startup `Untitled.md` is already markdown, so the
+    // markdown gate returns at once and the sync `open_preview` would race the buffered `:e`.
     wait_for_current_file(&handle, "alpha.md");
 
     // --- 2. In-place preview: previews() surfaces one row for alpha.md --------
@@ -691,18 +678,15 @@ fn preview_picker_shows_one_cwd_relative_row_for_subdir_source() {
         .find(|row| row.source_name() == "alpha.md")
         .expect("a preview row for docs/alpha.md must exist");
 
-    // --- 3. The preview row's display path is the cwd-relative subdir path ----
-    // `ends_with` (not exact equality): uncanonicalized source path vs canonical
-    // live_cwd can leave this absolute on a `/var`<->`/private/var` mismatch.
+    // --- 3. The row's display path is the cwd-relative subdir path; `ends_with`, since an
+    // uncanonicalized source vs a canonical cwd can leave it absolute.
     let display = alpha_row.source_display_path();
     assert!(
         display.ends_with("docs/alpha.md"),
         "source_display_path() must be the cwd-relative subdir path docs/alpha.md, got {display}"
     );
 
-    // --- 4. The picker lists ONE row for the source, and no scratch row -------
-    // The previewed source keeps its cwd-relative name (`docs/alpha.md`); the
-    // scratch (named `Preview: docs/alpha.md`) is unlisted and must not appear.
+    // --- 4. One picker row for `docs/alpha.md`; the unlisted `Preview: docs/alpha.md` has none.
     let rows = wait_for_ranked(&handle, "one docs/alpha.md row while previewing", |rows| {
         rows_ending_with(rows, "docs/alpha.md") == 1
     });
@@ -751,9 +735,8 @@ fn two_panes_previewing_the_same_source_share_one_scratch_and_one_picker_row() {
     send_ex_command(&handle, ":vsplit");
     wait_for_window_count(&handle, TWO_PANES, "after the typed :vsplit");
 
-    // --- 2. Preview alpha.md IN PLACE in the active (new split) pane ----------
-    // The preview WINDOW is read back from the previews() row rather than from a
-    // pre-captured `active_win()`, which can lag the typed `:vsplit`.
+    // --- 2. Preview alpha.md in place in the new split. Read the preview window from previews(),
+    // not a pre-captured `active_win()`, which can lag the typed `:vsplit`.
     let scratch_bufnr = handle.open_preview();
     assert!(
         scratch_bufnr > 0,
@@ -770,10 +753,7 @@ fn two_panes_previewing_the_same_source_share_one_scratch_and_one_picker_row() {
         "the preview row must carry a real window handle (> 0), got {first_preview_win}"
     );
 
-    // --- 3. Live-update: editing the SOURCE advances the preview's tick -------
-    // The other pane still edits alpha.md. Focus it, capture the current tick,
-    // delete a line (`dd` — a normal-mode buffer change that fires TextChanged),
-    // and observe the joined source_tick advance.
+    // --- 3. Live update: `dd` in the source pane fires TextChanged, advancing the joined source_tick.
     wait_for_preview_active(
         &handle,
         true,
@@ -871,10 +851,8 @@ fn render_preview_renders_latex_math_and_inlines_fonts() {
     wait_for_attach(&handle);
     send_ex_command(&handle, ":e math.md");
     wait_for_markdown_active(&handle, true, "after :e math.md");
-    // Real switch barrier: the startup buffer is a markdown `Untitled.md`, so
-    // `wait_for_markdown_active(true)` returns IMMEDIATELY (markdown->markdown) and
-    // cannot witness the `:e math.md`. Wait until math.md is genuinely the ACTIVE
-    // buffer before the SYNC `open_preview` races ahead of the buffered `:e`.
+    // Barrier on math.md being current: the startup `Untitled.md` is already markdown, so the
+    // markdown gate returns at once and the sync `open_preview` would race the buffered `:e`.
     wait_for_current_file(&handle, "math.md");
 
     let preview_bufnr = handle.open_preview();
@@ -899,10 +877,8 @@ fn render_preview_renders_latex_math_and_inlines_fonts() {
         "the preview row must carry math.md's real source bufnr (> 0), got {math_bufnr}"
     );
 
-    // --- 3. render_preview() carries the MathML + inlined fonts through nvim ---
-    // Proves the LaTeX->MathML + inlined Inter/Latin Modern Math fonts survive the
-    // real nvim -> render_preview FFI round-trip, not just the pure unit tests.
-    // Assertions key off the STABLE contracts, NOT exact MathML byte sequences.
+    // --- 3. render_preview() carries MathML and the inlined fonts through real nvim. Assertions
+    // key off stable contracts, not exact MathML bytes.
     let html = handle.render_preview(math_bufnr);
     assert!(
         html.contains("<math"),
@@ -939,9 +915,8 @@ fn preview_file_repoints_pane_and_keeps_the_source_buflisted() {
 
     let init_lua = common::init_lua_path();
 
-    // A fresh temp cwd holding alpha.md (which LINKS to beta.md at an anchor), the
-    // linked beta.md, and a plain-text file (the non-markdown `preview_file` gate
-    // case). Kept alive until after `shutdown()`.
+    // A temp cwd: alpha.md linking to beta.md at an anchor, beta.md, and a plain-text file for the
+    // non-markdown gate. Kept alive until after `shutdown()`.
     let tmp = tempfile::tempdir().expect("failed to create temp cwd directory");
     std::fs::write(
         tmp.path().join("alpha.md"),
@@ -973,10 +948,8 @@ fn preview_file_repoints_pane_and_keeps_the_source_buflisted() {
     wait_for_attach(&handle);
     send_ex_command(&handle, ":e alpha.md");
     wait_for_markdown_active(&handle, true, "after :e alpha.md");
-    // Real switch barrier: the startup buffer is a markdown `Untitled.md`, so
-    // `wait_for_markdown_active(true)` returns IMMEDIATELY (markdown->markdown) and
-    // cannot witness the `:e alpha.md`. Wait until alpha.md is genuinely the ACTIVE
-    // buffer before the SYNC `open_preview` races ahead of the buffered `:e`.
+    // Barrier on alpha.md being current: the startup `Untitled.md` is already markdown, so the
+    // markdown gate returns at once and the sync `open_preview` would race the buffered `:e`.
     wait_for_current_file(&handle, "alpha.md");
 
     let alpha_preview_bufnr = handle.open_preview();
@@ -1019,10 +992,8 @@ fn preview_file_repoints_pane_and_keeps_the_source_buflisted() {
         "preview_file must NOT create a new pane (still one live window)",
     );
 
-    // --- 3. The link-navigated SOURCE becomes buflisted: its own picker row ---
-    // beta.md was loaded in the BACKGROUND (`bufadd`/`bufload`) and never edited,
-    // yet `wolf_preview_file` marks it buflisted, so the union listing gives the
-    // preview-only file exactly one row — and still no `Preview: ` scratch row.
+    // --- 3. beta.md, background-loaded and never edited, is buflisted by `wolf_preview_file`, so
+    // it gets exactly one picker row and still no `Preview: ` row.
     let rows = wait_for_ranked(&handle, "a beta.md row after the link-follow", |rows| {
         rows_ending_with(rows, "beta.md") == 1
     });
@@ -1070,12 +1041,8 @@ fn preview_file_repoints_pane_and_keeps_the_source_buflisted() {
             .collect::<Vec<_>>(),
     );
 
-    // --- 5b. The rejected file gains NO picker row (success-gated buflisting) --
-    // `wolf_preview_file` marks the source buflisted only AFTER the markdown gate
-    // passes, so a rejected non-markdown path must not leak a listed buffer into
-    // the picker. `preview_file` is a SYNCHRONOUS RPC, so a fresh ranked snapshot
-    // taken after the 0 return is a valid negative read — had the helper listed
-    // the buffer before gating, the row would already be here.
+    // --- 5b. The rejected file gains no row: buflisting follows the markdown gate, and the sync
+    // `preview_file` makes a snapshot after its 0 return a valid negative read.
     let rows = ranked_snapshot(&handle);
     assert_eq!(
         rows_ending_with(&rows, "notes.txt"),
@@ -1098,13 +1065,8 @@ fn preview_file_repoints_pane_and_keeps_the_source_buflisted() {
 
 #[test]
 fn preview_buffer_binds_markdown_and_gates_non_markdown() {
-    // The buffer-flavored bind behind preview-mode buffer-picker activation:
-    // `preview_buffer(win, bufnr)` previews an ALREADY-OPEN buffer (no disk path
-    // round-trip), returning the source bufnr — or the neutral 0 for a
-    // non-markdown buffer, which is the front-end's cue to fall back to a plain
-    // `switch_buffer` (the pane converts to edit mode).
-    //
-    // Loud SKIP (no-op pass) when no pinned nvim is available, like the siblings.
+    // `preview_buffer(win, bufnr)` previews an open buffer and returns its bufnr, or 0 for a
+    // non-markdown one, the front-end's cue to fall back to `switch_buffer`.
     let Some(nvim_bin) = common::nvim_bin_or_skip() else {
         return;
     };
@@ -1140,11 +1102,8 @@ fn preview_buffer_binds_markdown_and_gates_non_markdown() {
     )
     .expect("wolf_ffi_start should return a handle (is WOLF_NVIM_BIN a valid nvim?)");
 
-    // --- 1. Attach; type a heading into the UNSAVED startup Untitled.md -------
-    // The startup buffer is a named, never-written `Untitled.md` with
-    // `filetype=markdown`. Type the heading while it is still focused and wait for
-    // it to RENDER (a pure frame read, no RPC), so the later render assertion has
-    // deterministic content.
+    // --- 1. Type a heading into the unsaved markdown `Untitled.md` and wait for it to render (a
+    // pure frame read), so the later render assertion has deterministic content.
     wait_for_attach(&handle);
     wait_for_current_file(&handle, "Untitled.md");
     type_in_insert(&handle, HEADING);
@@ -1208,12 +1167,8 @@ fn preview_buffer_binds_markdown_and_gates_non_markdown() {
             .collect::<Vec<_>>(),
     );
 
-    // --- 5. An UNLOADED markdown buffer is bufload-ed and previews correctly --
-    // `:badd gamma.md` creates a buflisted but UNLOADED buffer: it has no lines
-    // in memory and no detected filetype (detection runs at load). The helper's
-    // markdown gate must fall through to `vim.filetype.match` on the NAME, and
-    // its `bufload` must pull the file's real contents off disk before binding —
-    // otherwise the render below would carry an empty buffer.
+    // --- 5. `:badd gamma.md` makes an unloaded buffer with no filetype: the gate must match on the
+    // name, and `bufload` must pull the on-disk contents before binding.
     send_ex_command(&handle, ":badd gamma.md");
     let rows = wait_for_ranked(&handle, "a gamma.md picker row after :badd", |rows| {
         bufnr_for_suffix(rows, "gamma.md").is_some()
@@ -1229,9 +1184,8 @@ fn preview_buffer_binds_markdown_and_gates_non_markdown() {
         p.iter()
             .any(|row| row.win() == active_win && row.source_bufnr() == gamma_bufnr)
     });
-    // The render must carry gamma.md's ON-DISK contents (the `bufload` result),
-    // not the empty line set an unloaded buffer would render as. The pull is
-    // blocking but the bind's re-emit is async, so poll like the siblings.
+    // The render carries gamma.md's on-disk contents. The pull blocks but the bind's re-emit is
+    // async, so poll like the siblings.
     let deadline = Instant::now() + FLUSH_TIMEOUT;
     let mut html = handle.render_preview(gamma_bufnr);
     while Instant::now() < deadline {
@@ -1247,10 +1201,8 @@ fn preview_buffer_binds_markdown_and_gates_non_markdown() {
          un-bufload-ed buffer renders empty: {html}"
     );
 
-    // --- 6. The UNSAVED Untitled.md markdown buffer previews too --------------
-    // `win == 0` binds into the CURRENT window. The buffer has never been written
-    // to disk, so this pins the gate on FILETYPE rather than file existence, and
-    // the render must reflect the buffer's live (typed) contents.
+    // --- 6. The unsaved Untitled.md previews too (`win == 0` is the current window), pinning the
+    // gate on filetype rather than file existence.
     let returned = handle.preview_buffer(0, untitled_bufnr);
     assert_eq!(
         returned, untitled_bufnr,
@@ -1292,11 +1244,8 @@ fn preview_buffer_binds_markdown_and_gates_non_markdown() {
 
 #[test]
 fn preview_renders_untitled_buffer() {
-    // The anonymous-buffer feature: a fresh session with NO markdown file on disk
-    // still lands on a real, markdown-named `Untitled.md` buffer, so the in-app
-    // preview gate passes and renders the buffer's live contents.
-    //
-    // Loud SKIP (no-op pass) when no pinned nvim is available, like the siblings.
+    // A fresh session with no markdown on disk lands on a markdown `Untitled.md`, so the preview
+    // gate passes. Loud skip (no-op pass) without a pinned nvim.
     let Some(nvim_bin) = common::nvim_bin_or_skip() else {
         return;
     };
@@ -1309,9 +1258,7 @@ fn preview_renders_untitled_buffer() {
     const HEADING: &str = "# Untitled Heading";
     const HEADING_TEXT: &str = "Untitled Heading";
 
-    // A fresh, EMPTY temp cwd — deliberately NO markdown file to open. The startup
-    // buffer must be the anonymous `Untitled.md` document. Kept alive until after
-    // `shutdown()`.
+    // A fresh, empty temp cwd with no markdown file to open. Kept alive until after `shutdown()`.
     let tmp = tempfile::tempdir().expect("failed to create temp cwd directory");
 
     let handle = wolf_ffi_start(
@@ -1334,15 +1281,8 @@ fn preview_renders_untitled_buffer() {
     // --- 2. Type a heading into the (empty) Untitled.md buffer ----------------
     type_in_insert(&handle, HEADING);
 
-    // CRITICAL ordering barrier: the heading is typed via the ASYNC key channel,
-    // while `open_preview()` below is a SYNCHRONOUS RPC that binds the NOMODIFIABLE
-    // preview scratch into the current window. If the sync RPC wins the race, the
-    // async `i# Untitled Heading<Esc>` keys arrive AFTER the rebind — `i` fails
-    // with E21, nothing is inserted, and the source stays empty. So first WAIT
-    // until the heading has actually landed in and rendered from the
-    // (still-bound, modifiable) source buffer. `wait_for_frame_text` is a pure
-    // read of the already-flushed active frame (no RPC), so it cannot move focus;
-    // only once the heading is on screen do we preview.
+    // Barrier: keys are async but `open_preview()` is sync and binds the nomodifiable scratch, so a
+    // late `i` would fail with E21. Wait, by frame read with no RPC, until the heading renders.
     wait_for_frame_text(&handle, HEADING_TEXT);
 
     // --- 3. open_preview() returns a real preview bufnr, in place -------------
@@ -1372,11 +1312,8 @@ fn preview_renders_untitled_buffer() {
         "the preview row must carry Untitled.md's real source bufnr (> 0), got {source_bufnr}"
     );
 
-    // --- 5. render_preview() carries the typed heading text -------------------
-    // The insert-mode text is buffered on the async key channel, and the render
-    // reflects the source buffer's current lines. A one-shot `render_preview` can
-    // race ahead of the typed heading landing, so POLL the blocking pull (bounded by
-    // FLUSH_TIMEOUT) until the rendered HTML CONTAINS the heading text.
+    // --- 5. render_preview() can race the typed heading on the async key channel, so poll until
+    // the HTML contains it.
     let deadline = Instant::now() + FLUSH_TIMEOUT;
     let mut html = handle.render_preview(source_bufnr);
     while Instant::now() < deadline {
@@ -1398,19 +1335,8 @@ fn preview_renders_untitled_buffer() {
 
 #[test]
 fn preview_carries_the_source_buffers_cursor() {
-    // THE scroll-sync FFI join, end to end: `WolfCoreHandle::previews()` looks each
-    // row's `source_bufnr` up in `wolf_core::Snapshot::markdown_cursors` and exposes
-    // the result as `FfiPreview::source_cursor_line()` / `source_cursor_col()`. This
-    // is the one layer of the cursor-follow feature that is otherwise covered only
-    // by compilation: the Lua -> core half is pinned by
-    // `//crates/wolf-core:markdown_cursor` and the Swift arithmetic by
-    // `PreviewScrollSeamTests`, but nothing else witnesses the JOIN.
-    //
-    // The contract pinned here is exactly the one the front-end consumes: LINE is
-    // 1-based (matching the `wl-{L}-{C}` marker scheme's `L`), COLUMN is a 0-based
-    // CHARACTER column (its `C`), and both describe the row's OWN SOURCE buffer.
-    //
-    // Loud SKIP (no-op pass) when no pinned nvim is available, like the siblings.
+    // Scroll-sync join: `previews()` exposes each row's source cursor from `markdown_cursors`.
+    // See notes/crates/wolf-ffi/tests/preview.rs.md#scroll-sync-join
     let Some(nvim_bin) = common::nvim_bin_or_skip() else {
         return;
     };
@@ -1433,10 +1359,8 @@ fn preview_carries_the_source_buffers_cursor() {
     wait_for_attach(&handle);
     send_ex_command(&handle, ":e alpha.md");
     wait_for_markdown_active(&handle, true, "after :e alpha.md");
-    // Real switch barrier: the startup buffer is itself a markdown `Untitled.md`, so
-    // `wait_for_markdown_active(true)` returns IMMEDIATELY and cannot witness the
-    // `:e alpha.md`. Wait until alpha.md is genuinely the ACTIVE buffer before the
-    // SYNC `open_preview` races ahead of the buffered `:e`.
+    // Barrier on alpha.md being current: the startup `Untitled.md` is already markdown, so the
+    // markdown gate returns at once and the sync `open_preview` would race the buffered `:e`.
     wait_for_current_file(&handle, "alpha.md");
 
     // --- 2. Split (typed :vsplit), then preview IN PLACE in the new pane ------
@@ -1449,9 +1373,8 @@ fn preview_carries_the_source_buffers_cursor() {
         "open_preview() on a markdown buffer must return a valid preview bufnr \
          (> 0), got {preview_bufnr}"
     );
-    // Deterministic barrier before cycling back: the in-place bind leaves the
-    // PREVIEW pane current, and `focus_markdown_source` would otherwise be able to
-    // read a stale `is_markdown_active() == true` and skip the cycle.
+    // Barrier before cycling back: the in-place bind leaves the preview current, and
+    // `focus_markdown_source` could otherwise read a stale true and skip the cycle.
     wait_for_preview_active(
         &handle,
         true,
@@ -1471,9 +1394,8 @@ fn preview_carries_the_source_buffers_cursor() {
         "the preview row must carry alpha.md's real source bufnr (> 0), got {alpha_bufnr}"
     );
 
-    // --- 3. Drive the SOURCE buffer's cursor to an ABSOLUTE position ---------
-    // Back to the source pane first, so the motions move the SOURCE cursor rather
-    // than the (nomodifiable, guarded) preview scratch's.
+    // --- 3. Drive the source cursor to an absolute position, from the source pane so the motions
+    // move it rather than the guarded preview scratch's.
     focus_markdown_source(&handle);
     handle.send_key(char_key('g'));
     handle.send_key(char_key('g'));
@@ -1520,10 +1442,8 @@ fn preview_carries_the_source_buffers_cursor() {
          anchor id, so an off-by-one here silently mis-anchors every scroll"
     );
 
-    // --- 5. The join keys on the SOURCE bufnr, not the preview scratch -------
-    // No row's `source_bufnr()` is the scratch buffer, so a lookup by the scratch's
-    // number finds nothing at all — which is what makes step 3/4's values provably
-    // the SOURCE buffer's cursor rather than anything the preview pane reported.
+    // --- 5. The join keys on the source bufnr: no row's `source_bufnr()` is the scratch, so steps
+    // 3 and 4 provably read the source cursor.
     assert!(
         cursor_for_source(&previews, preview_bufnr).is_none(),
         "the preview SCRATCH bufnr {preview_bufnr} must never appear as a row's \
@@ -1536,22 +1456,8 @@ fn preview_carries_the_source_buffers_cursor() {
 
 #[test]
 fn preview_cursor_defaults_to_zero_when_unreported() {
-    // The "cursor unknown" sentinel: `WolfCoreHandle::previews()`'s
-    // `markdown_cursors` join ends in `unwrap_or_default()`, so a preview whose
-    // SOURCE buffer has never reported a cursor reports `(0, 0)`. The front-end
-    // gates on that (`CursorPos.isKnown` is `line > 0`) and refuses to scroll — so
-    // if the sentinel ever became, say, `1`, every such preview would silently jump
-    // to the top of the document instead of staying put.
-    //
-    // `preview_file` is the deterministic way to reach that state: it makes the
-    // linked file a source via a background `bufadd`/`bufload` and binds only the
-    // PREVIEW SCRATCH into the window, so the linked source never becomes current
-    // and never fires the cursor autocmds (`emit_cursor` bails on any buffer that is
-    // not `nvim_get_current_buf()`, and the scratch is excluded by the explicit
-    // `b:wolf_preview_source` guard). That is exactly why there is deliberately NO
-    // cursor re-emit in `wolf_preview_file`.
-    //
-    // Loud SKIP (no-op pass) when no pinned nvim is available, like the siblings.
+    // Cursor-unknown sentinel: a source that never reported a cursor reads `(0, 0)`.
+    // See notes/crates/wolf-ffi/tests/preview.rs.md#cursor-unknown-sentinel
     let Some(nvim_bin) = common::nvim_bin_or_skip() else {
         return;
     };
@@ -1592,10 +1498,8 @@ fn preview_cursor_defaults_to_zero_when_unreported() {
     );
     wait_for_window_count(&handle, ONE_PANE, "in-place preview creates no pane");
 
-    // --- 2. POSITIVE control: alpha.md's preview DOES carry a known cursor ---
-    // Without this the negative assertion below would be vacuous — a dead cursor
-    // pipeline would also report the sentinel. (alpha.md's cursor was recorded
-    // while it was the current buffer, before the in-place bind.)
+    // --- 2. Positive control: alpha.md's preview carries a known cursor, recorded while it was
+    // current, so the negative assertion below is not vacuous.
     let previews = wait_for_previews(
         &handle,
         "alpha.md's preview row to carry a KNOWN cursor (line >= 1)",

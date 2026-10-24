@@ -40,12 +40,8 @@ pub struct FontLicense {
     pub text: &'static str,
 }
 
-// Each text is `include_str!`'d twice: once into the named constant a
-// `FONT_LICENSES` row carries, and once into `FONT_LICENSE_NOTICES`' `concat!`.
-// `concat!` accepts only literal tokens, so it cannot be handed the constant, and
-// there is no way to build the block from the registry at compile time without a
-// new dependency. The pair of tests that compare a row's `text` against the block
-// is what keeps the two spellings of each path honest.
+// Each text is `include_str!`'d twice because `concat!` takes only literals, not the constant;
+// the tests comparing a row's `text` against the block keep the two paths in sync.
 
 /// Inter's licence text.
 const INTER_TEXT: &str = include_str!("markdown/assets/inter-OFL.txt");
@@ -282,9 +278,8 @@ mod tests {
                  correct licences attributed to the wrong four fonts."
             );
 
-            // The other half: a phrase drawn from the shared OFL boilerplate would
-            // be found in three of the four texts and could not tell a swap apart
-            // from a correct wiring at all.
+            // A phrase from the shared OFL boilerplate is in three of the four texts, so it
+            // could not tell a swap from a correct wiring.
             let carriers: Vec<&str> = FONT_LICENSES
                 .iter()
                 .filter(|candidate| candidate.text.contains(phrase))

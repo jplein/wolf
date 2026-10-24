@@ -1,33 +1,4 @@
-//
-//  TreeRefreshGateTests.swift
-//  Pure, headless unit tests for the `WolfKeyMap.TreeRefreshGate` seam.
-//
-//  This is the redundant-work gate behind the file-tree sidebar (plan Layer 3):
-//  a VISIBILITY gate (defer all outline/children work while the sidebar is
-//  collapsed/hidden; run ONE catch-up refresh when it reappears) plus a VERSION
-//  gate (reloadData only when the snapshot version actually advanced). Together
-//  they stop the render-wake storm from doing full reload/reveal work on every
-//  wake — and stop it entirely while the sidebar is hidden (which is why hiding
-//  the sidebar did not previously help).
-//
-//  These tests exercise the pure seam directly — NO AppKit, NO outline view —
-//  exactly the headless style of the other WolfKeyMap seam tests
-//  (PickerRefreshCoalescerTests etc.).
-//
-//  NOTE to coder: this references the pure `WolfKeyMap.TreeRefreshGate` the coder
-//  adds in `Sources/WolfKeyMap/TreeRefreshGate.swift` (plan Layer 3). The
-//  contract asserted below is:
-//    * `init(isVisible: Bool)`
-//    * `func requestRefresh() -> Bool` — true when visible; when hidden returns
-//      false AND records deferred work.
-//    * `func setVisible(_ visible: Bool) -> Bool` — true iff this is a
-//      hidden->visible transition WITH deferred work pending (clearing the
-//      deferred flag); false otherwise.
-//    * `func shouldReload(version: UInt64) -> Bool` — true iff `version` differs
-//      from the last reloaded version (recording it); false when unchanged.
-//    * `func resetReloadTracking()` — clears the last-reloaded version so the
-//      next `shouldReload` reloads again.
-//
+// See crates/wolf-macos/Tests/WolfKeyMapTests/README.md#treerefreshgatetestsswift
 
 import XCTest
 
@@ -94,9 +65,8 @@ final class TreeRefreshGateTests: XCTestCase {
     let hiddenVersion: UInt64 = 3
     let gate = TreeRefreshGate(isVisible: false)
 
-    // Hidden: requests defer, and reload tracking must NOT advance — a
-    // shouldReload check here must still see the version as fresh once
-    // visible (i.e. hidden work never consumed it).
+    // Hidden: requests defer and reload tracking must not advance, so the version is still fresh
+    // for shouldReload once visible.
     for _ in 0..<kHiddenRequestCount {
       XCTAssertFalse(gate.requestRefresh(), "hidden request must defer")
     }

@@ -555,17 +555,11 @@ mod tests {
     #[test]
     fn strict_prefix_beats_scattered_subsequence() {
         let entries = [
-            // 0: words ["docs","intro","md"]; component "docs" starts with "doc"
-            //    (+100), word "docs" starts with "doc" (+20), contiguous (+4)
-            //    = 124. (Not in the assertion, just present in the input.)
+            // 0: component start +100, word start +20, contiguous +4 = 124 (not asserted).
             entry("docs/intro.md", None),
-            // 1: word "mydocument" starts with "my", NOT "doc"; no component/word
-            //    starts with "doc"; "doc" only appears scattered/contained
-            //    (my-DOC-ument) -> contiguous (+4) only = 4.
+            // 1: "doc" only appears inside "mydocument", so contiguous +4 only = 4.
             entry("mydocument.md", None),
-            // 2: words ["doc","notes","md"]; component "doc_notes.md" starts with
-            //    "doc" (+100), word "doc" starts with "doc" (+20), contiguous (+4)
-            //    = 124.
+            // 2: component start +100, word start +20, contiguous +4 = 124.
             entry("doc_notes.md", None),
         ];
 
@@ -644,10 +638,8 @@ mod tests {
             entry("ax.md", None), // 3: len 5, lexicographically before "ay.md"
         ];
 
-        // All four match "a" and each scores 124 (component start +100, word
-        // start +20, contiguous +4), with match_start 0 and span 0, so the score
-        // and earlier keys all tie. Only `len` (key 6) then `display` (key 7)
-        // decide: "a.md" (len 4) < "ab.md" < "ax.md" < "ay.md".
+        // All four score 124 with match_start 0 and span 0, so only `len` (key 6) then
+        // `display` (key 7) decide: "a.md" < "ab.md" < "ax.md" < "ay.md".
         let got = rank_matches("a", &entries);
         assert_eq!(indices(&got), vec![1, 0, 3, 2]);
     }

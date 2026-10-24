@@ -139,11 +139,8 @@ fn compiled_go_parser_is_abi_compatible_with_pinned_nvim() {
         }
     };
 
-    // Use a temp dir as the core cwd AND for the sentinel. CONTRACT: this path
-    // (and the resolved `.so` path) must contain no spaces or double-quotes,
-    // because both are interpolated VERBATIM into the double-quoted Lua string
-    // typed below — a tempdir / runfiles path satisfies this, exactly as the
-    // orlando/lighthouse sibling tests document and rely on.
+    // A temp dir for the core cwd and the sentinel. It and the `.so` path must hold no spaces or
+    // double quotes: both are interpolated verbatim into a double-quoted Lua string.
     let tmp = tempfile::tempdir().expect("failed to create temp staging dir");
     let root = tmp.path();
 
@@ -175,13 +172,8 @@ fn compiled_go_parser_is_abi_compatible_with_pinned_nvim() {
         frame.cols()
     );
 
-    // --- Ask nvim to load the compiled go parser and parse with it ----------
-    // No exec_lua accessor exists on the FFI surface, so drive a real `:lua`
-    // Ex command (through the same send_key path Swift uses) that writes two
-    // markers. Note the Lua string literal `"package main\nfunc f() {}"`: the
-    // `\n` is typed as a backslash-n pair (Rust `\\n`) so Lua — not Rust — turns
-    // it into a real newline. `{path=...}` / `func f() {}` braces are doubled for
-    // `format!`. Both interpolated paths are space/quote-free (see CONTRACT above).
+    // --- Load the go parser and parse with it, via a typed `:lua` (no Lua-eval accessor).
+    // The Lua literal's `\n` is typed as a backslash-n pair (Rust `\\n`), so Lua makes the newline.
     let parser_str = go_parser.to_string_lossy().into_owned();
     let sentinel = root.join("parser_abi_proof.txt");
     let sentinel_str = sentinel.to_string_lossy().into_owned();

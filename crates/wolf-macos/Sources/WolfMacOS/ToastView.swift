@@ -1,16 +1,4 @@
-//
-//  ToastView.swift
-//  The message toast (`ext_messages`): a dedicated overlay `NSView` pinned
-//  BOTTOM-LEFT of the editor area, painting the current messages with their
-//  styled chunks (colors RESOLVED in Rust against the highlight table — message
-//  color is load-bearing). Height is capped at ~10 lines; a longer message is
-//  scrollable, and scrolling WHILE HOVERING the toast is the single gesture that
-//  does NOT dismiss it (OD8) — realized by the container forwarding that wheel to
-//  `scrollBy(deltaY:)` here instead of to Neovim.
-//
-//  A projection of the core's `Snapshot.toast` read across the FFI as an
-//  `FfiToast`. This AppKit glue is compile-verified + manual-smoke only.
-//
+// The message toast (`ext_messages`) overlay.
 
 import AppKit
 import CoreText

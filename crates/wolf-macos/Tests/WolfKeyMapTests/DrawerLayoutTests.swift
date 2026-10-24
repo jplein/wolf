@@ -1,34 +1,4 @@
-//
-//  DrawerLayoutTests.swift
-//  Pure, headless unit tests for the AppKit-free `WolfKeyMap.DrawerLayout`.
-//
-//  These exercise the terminal-drawer GEOMETRY seam the coder adds in
-//  `Sources/WolfKeyMap/DrawerLayout.swift` (terminal-drawer FIX plan §4/§7). Like
-//  `EditorInsetTests` / `PaneGeometryTests`, they import ONLY Foundation-level test
-//  machinery (no AppKit / CoreGraphics, no live Neovim) and stay in the headless
-//  `WolfKeyMap` module. `PaneContainerView`'s wiring of this seam is window-server
-//  AppKit glue and is compile + manual-smoke only; all headless coverage lands here.
-//  They reuse the `eps` / `approx` + `assertRectEqual` style from `EditorInsetTests`.
-//
-//  ## CONTRACT UNDER TEST (the API the coder must honor, plan §4)
-//
-//    public struct DrawerLayout {
-//        public static let defaultWeight: Double = 1.0 / 3.0
-//        public let editorHeight: Double   // hasDrawer ? max(0, paneAreaHeight - drawerHeight)
-//                                          //           : paneAreaHeight
-//        public let drawerHeight: Double   // hasDrawer ? (paneAreaHeight*weight).rounded() : 0
-//        public init(paneAreaHeight: Double, hasDrawer: Bool, weight: Double)
-//        public func drawerRect(width: Double) -> Rect?  // full-width strip at y=editorHeight,
-//                                                        //   h=drawerHeight; nil when !hasDrawer
-//    }
-//
-//  `Rect` is the EXISTING value type from `PaneTree.swift` (`Rect(x:y:w:h:)`,
-//  `Double` fields). The drawer is a FULL-WIDTH root-bottom strip: the editor tree
-//  tiles over `editorHeight`, the drawer occupies `[editorHeight, paneAreaHeight]`.
-//
-//  NOTE (coder): `DrawerLayout` does NOT exist yet — this file will not compile
-//  until the coder adds it (by design). Test-writer references it as the contract.
-//
+// See crates/wolf-macos/Tests/WolfKeyMapTests/README.md#drawerlayouttestsswift
 
 import XCTest
 

@@ -1,36 +1,4 @@
-//
-//  CmdlineSeamTests.swift
-//  Pure, headless unit tests for the `WolfKeyMap.CmdlineSeam` namespace.
-//
-//  The cmdline-render analog of `PaletteSeamTests.swift`: it exercises the pure,
-//  display-free seams behind the macOS cmdline band with scalar inputs only — NO
-//  FfiCmdline (which can't be built headlessly), NO NSView, NO AppKit. Three
-//  contracts are under test:
-//
-//    * CmdlineSeam.composedLine(prompt:firstc:text:) -> String
-//      — the string painted in the cmdline band, `prompt + firstc + text`. An
-//      empty `prompt` collapses to today's `firstc + text`, so normal `:` / `/`
-//      command entry is unchanged; a non-empty `prompt` (e.g. a `confirm()`
-//      dialog's `[A], (B): ` answer line) is rendered inline. This pins the
-//      regression fix: with `firstc` and `text` both empty the line is still the
-//      prompt, not blank.
-//
-//    * CmdlineSeam.caretPrefix(prompt:firstc:text:byteCount:) -> String
-//      — the substring left of the caret whose width positions the caret:
-//      `prompt + firstc + bytePrefix(of: text, byteCount:)`. Including the prompt
-//      width keeps the caret after the prompt. Defined in terms of `bytePrefix`,
-//      so the same tested byte-slicing backs the caret math.
-//
-//    * CmdlineSeam.bytePrefix(of:byteCount:) -> String
-//      — the UTF-8 byte-prefix of a string (relocated verbatim from the old
-//      `CmdlineView.bytePrefix`): `byteCount <= 0` -> "", `byteCount >=` the
-//      UTF-8 length -> the whole string, else the leading `byteCount` UTF-8 bytes
-//      decoded back to a String (lossy on a split multi-byte boundary).
-//
-//  NOTE to coder: this references the pure `WolfKeyMap.CmdlineSeam` enum the coder
-//  will add in `Sources/WolfKeyMap/CmdlineSeam.swift`. The signatures asserted
-//  below are the contract the implementation must satisfy.
-//
+// See crates/wolf-macos/Tests/WolfKeyMapTests/README.md#cmdlineseamtestsswift
 
 import XCTest
 

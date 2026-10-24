@@ -609,10 +609,8 @@ fn an_open_that_loses_the_lock_race_preserves_rows() {
         files.push(path);
     }
 
-    // Write the rows entirely through the PUBLIC API, then drop the handle so no
-    // Wolf-owned connection is live for the rest of the test. The test therefore
-    // never hand-rolls the schema, the `directory` normalization, or the `opened_at`
-    // units — it only reads back what the store itself wrote.
+    // Write rows only through the public API and drop the handle, so no Wolf connection stays live
+    // and the test never hand-rolls the schema, `directory` normalization or `opened_at` units.
     {
         let store = MruStore::open(state.path());
         for file in &files {
@@ -754,9 +752,8 @@ fn wrong_schema_db_is_silently_recreated() {
     let state = state_tempdir();
     let db = state.path().join(MRU_DB_NAME);
 
-    // A VALID sqlite database whose `mru` table has the OLD single-`path` schema.
-    // `CREATE TABLE IF NOT EXISTS` will not repair it, so only the schema probe can
-    // surface it as an error the caller heals.
+    // A valid sqlite DB whose `mru` table has the old single-`path` schema: `CREATE TABLE IF NOT
+    // EXISTS` cannot repair it, so only the schema probe can surface it as an error the caller heals.
     {
         let conn = rusqlite::Connection::open(&db).expect("failed to open sqlite for bad schema");
         conn.execute_batch("CREATE TABLE mru (path TEXT PRIMARY KEY);")

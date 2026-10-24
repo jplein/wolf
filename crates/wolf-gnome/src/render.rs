@@ -37,7 +37,7 @@ const RGB_MAX: f64 = 255.0;
 /// created over an `ImageSurface` — measured on this host — and the probe surface
 /// `app::measure_metrics`, `tests/paint_golden.rs` and
 /// `tests/smoke_headless.rs::cell_metrics_for_smoke` all measure against is
-/// exactly such a surface. `wolf-gnome/DECISIONS.md` records that this crate has
+/// exactly such a surface. `notes/wolf-gnome-decisions.md` records that this crate has
 /// no HiDPI handling and assumes 96 dpi; this constant is where that assumption
 /// stops being implicit.
 const PANGO_DEFAULT_DPI: f64 = 96.0;
@@ -109,9 +109,8 @@ impl CellMetrics {
     ) -> Self {
         let mut font = pango::FontDescription::new();
         font.set_family(family);
-        // Deliberately `set_size` and not `set_absolute_size`: the latter changes
-        // how the face is rasterized, and every OCR assertion rides on the
-        // current rasterization.
+        // `set_size`, not `set_absolute_size`: the latter changes how the face rasterizes, and every OCR
+        // assertion rides on the current rasterization.
         font.set_size((size_pt * f64::from(pango::SCALE)) as i32);
 
         let context = pangocairo::functions::create_context(cr);
@@ -121,10 +120,8 @@ impl CellMetrics {
         let cell_w = f64::from(metrics.approximate_char_width()) / scale;
         let ascent = f64::from(metrics.ascent()) / scale;
         let descent = f64::from(metrics.descent()) / scale;
-        // `FontMetrics::height` is Pango's recommended line height and is the
-        // counterpart of what `CTFontGetLeading` contributes on macOS. Clamped
-        // because a face whose recommended height is under its own glyph box
-        // would otherwise make the natural line height shrink.
+        // `FontMetrics::height` is Pango's recommended line height, the counterpart of macOS's
+        // `CTFontGetLeading`; clamped so a face whose height is under its glyph box cannot shrink the line.
         let leading = (f64::from(metrics.height()) / scale - ascent - descent).max(0.0);
 
         let dpi = pangocairo::functions::context_get_resolution(&context);
@@ -293,9 +290,8 @@ impl GlyphPainter {
 
         let decoration = glyph_style::glyph_decoration(style);
         if decoration.is_empty() {
-            // A fresh layout carries no attributes; a reused one carries whatever
-            // the last decorated cell left on it, and Pango would apply that list
-            // to this cell's text too.
+            // A reused layout keeps the last decorated cell's attributes, which Pango would apply to this
+            // cell's text too.
             if self.decorated {
                 self.layout.set_attributes(None);
                 self.decorated = false;
@@ -306,9 +302,8 @@ impl GlyphPainter {
                 attrs.insert(pango::AttrInt::new_underline(decoration.underline));
             }
             if decoration.strikethrough {
-                // Deliberately no `AttrColor::new_strikethrough_color`: with no
-                // such attribute Pango strikes in the layout's foreground, which
-                // is the macOS behaviour. See `glyph_style`'s module docs.
+                // No `AttrColor::new_strikethrough_color`: without it Pango strikes in the foreground, as macOS
+                // does. See `glyph_style`'s module docs.
                 attrs.insert(pango::AttrInt::new_strikethrough(true));
             }
             if let Some(color) = decoration.underline_color {
@@ -320,12 +315,8 @@ impl GlyphPainter {
         }
 
         set_source(cr, fg);
-        // Pango places the LAYOUT'S TOP at the move-to point, so moving to the
-        // cell origin would hang the glyphs from the cell's top edge.
-        // `baseline - ascent` is the leftover space above the glyph box, so this
-        // is what puts the glyph's baseline at `metrics.baseline` inside a cell
-        // the configured line-height made taller than the glyphs. When the cell is
-        // exactly the glyph box the offset is exactly 0.0 and nothing moves.
+        // Pango puts the layout's top at the move-to point; offsetting by `baseline - ascent` puts the
+        // baseline at `metrics.baseline` in a cell taller than its glyphs, and is 0.0 when they match.
         cr.move_to(x, y + metrics.baseline - metrics.ascent);
         pangocairo::functions::show_layout(cr, &self.layout);
     }

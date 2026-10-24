@@ -11,43 +11,6 @@
 //! `app.rs` is the only GTK glue: it computes the cell box from `CellMetrics`,
 //! calls [`cursor_rect`]/[`cursor_colors`] here, and issues the opaque Cairo fill.
 
-// =============================================================================
-// NOTE to coder: this file was bootstrapped by the test-writer with ONLY the
-// tests below. It WILL NOT COMPILE until you add the items the tests reference,
-// exactly as `geometry.rs` was bootstrapped. Implement the following ABOVE the
-// `#[cfg(test)] mod tests` block (do not change the test module):
-//
-//   Named constants (the tests pin these exact values):
-//     - MIN_BAR_PX: f64 = 2.0      // minimum bar thickness in pixels
-//     - DEFAULT_CELL_PCT: f64 = 0.25 // Neovim convention when cell_percentage is None
-//     - PCT_DENOM: f64 = 100.0     // cell_percentage is a PERCENT (1–100)
-//
-//   pub fn cursor_rect(
-//       shape: wolf_core::CursorShape,
-//       cell_x: f64, cell_y: f64, cell_w: f64, cell_h: f64,
-//       cell_percentage: Option<u32>,
-//   ) -> (f64, f64, f64, f64)   // returns (x, y, w, h)
-//     - Block      => (cell_x, cell_y, cell_w, cell_h), IGNORING cell_percentage.
-//     - Vertical   => left bar: w = (cell_w * pct).max(MIN_BAR_PX).min(cell_w),
-//                     full height; x = cell_x, y = cell_y, h = cell_h.
-//     - Horizontal => bottom bar: h = (cell_h * pct).max(MIN_BAR_PX).min(cell_h),
-//                     full width; x = cell_x, w = cell_w, y = cell_y + cell_h - h.
-//     - pct = cell_percentage.map(|p| f64::from(p) / PCT_DENOM)
-//                            .unwrap_or(DEFAULT_CELL_PCT)
-//                            .clamp(0.0, 1.0);
-//
-//   pub fn cursor_colors(snap: &wolf_core::Snapshot)
-//       -> (wolf_core::Rgb, wolf_core::Rgb)   // returns (fill, glyph)
-//     - If mode_infos[cursor.mode_idx].attr_id resolves (via highlights.resolve)
-//       to BOTH fg=Some AND bg=Some => HONOR it: (fill, glyph) = (bg, fg).
-//     - Else INVERT the underlying cell: resolve grid.cell(row, col).hl_id;
-//         fill  = style.fg or defaults.fg or FALLBACK_FG (white 255,255,255)
-//         glyph = style.bg or defaults.bg or FALLBACK_BG (black 0,0,0)
-//       Reuse render.rs's pub(crate) FALLBACK_FG / FALLBACK_BG (no drift).
-//     - mode_idx out of range OR empty mode_infos => inversion path, no panic
-//       (use `mode_infos.get(mode_idx)`).
-// =============================================================================
-
 use wolf_core::{CursorShape, Rgb, Snapshot};
 
 use crate::render::{FALLBACK_BG, FALLBACK_FG};
@@ -122,9 +85,8 @@ pub fn cursor_rect(
 pub fn cursor_colors(snap: &Snapshot) -> (Rgb, Rgb) {
     let defaults = &snap.highlights.defaults;
 
-    // Underlying cell colors (the inversion source), computed once and reused as
-    // the inversion result, the visibility reference for the mode-attr honor
-    // path, and the glyph fallback for a bg-only WolfCursor theme.
+    // Underlying cell colors: the inversion result, the visibility reference for the mode-attr path,
+    // and the glyph fallback for a bg-only WolfCursor theme.
     let (cell_fg, cell_bg) = match snap.active_grid().cell(snap.cursor.row, snap.cursor.col) {
         Some(cell) => {
             let style = snap.highlights.resolve(cell.hl_id);
@@ -139,9 +101,8 @@ pub fn cursor_colors(snap: &Snapshot) -> (Rgb, Rgb) {
         ),
     };
 
-    // WolfCursor theme override: honored unconditionally (explicit app-level
-    // opt-in, unlike the guarded mode-attr path below). A bg-only group keeps
-    // the reverse-video glyph (the cell's bg).
+    // WolfCursor is an explicit opt-in, so it is honored without the mode-attr path's visibility
+    // guard; a bg-only group keeps the reverse-video glyph (the cell's bg).
     if let Some(bg) = snap.theme.cursor.bg {
         return (bg, snap.theme.cursor.fg.unwrap_or(cell_bg));
     }
@@ -202,10 +163,8 @@ mod tests {
         );
     }
 
-    // --- cursor_rect fixture dims ------------------------------------------
-    //
-    // Deliberately NON-SQUARE (cell_w != cell_h) so width math and height math
-    // are distinguishable, and a NON-ZERO origin so offsets are not assumed 0.
+    // --- cursor_rect fixture dims: non-square and at a non-zero origin, so width, height and
+    // offset math are each distinguishable.
 
     /// Fixture cell width (px) — distinct from the height on purpose.
     const CELL_W: f64 = 20.0;
@@ -391,9 +350,7 @@ mod tests {
         assert!(approx(PCT_DENOM, 100.0), "PCT_DENOM must be 100.0");
     }
 
-    // =====================================================================
-    // cursor_colors
-    // =====================================================================
+    // === cursor_colors ===
 
     /// Grid columns in the color fixtures.
     const COLS: usize = 4;
@@ -449,10 +406,8 @@ mod tests {
     /// Contract fallback glyph when nothing resolves: black.
     const FALLBACK_BG: Rgb = Rgb { r: 0, g: 0, b: 0 };
 
-    // Defaults-merged fixtures for the visibility-guard cases. These exercise the
-    // production path where a Cursor highlight leaves a channel unset and the
-    // editor defaults fill it in (the exact situation that re-introduced the
-    // invisible cursor the guard must prevent).
+    // Defaults-merged fixtures: a Cursor highlight leaves a channel unset and the editor defaults
+    // fill it in, which is how an invisible cursor slips past a naive guard.
     /// Editor default foreground (set via `set_defaults` in the guard cases).
     const DEFAULT_FG: Rgb = Rgb { r: 1, g: 2, b: 3 };
     /// Editor default background (set via `set_defaults` in the guard cases);
@@ -627,23 +582,16 @@ mod tests {
 
     #[test]
     fn cursor_colors_falls_through_when_honored_fill_equals_background() {
-        // Regression guard (core case): a Cursor highlight that sets ONLY a bg
-        // equal to the underlying cell's background, with fg filled in from the
-        // editor DEFAULTS, must NOT be honored. Honoring it would paint a dark
-        // block over an identically-dark cell — an invisible cursor. The function
-        // must fall through to inversion instead.
-        //
-        // "The background" here = resolve(CELL_HL).bg = CELL_BG (the cursor cell's
-        // own highlight wins over defaults.bg).
+        // A bg-only Cursor hl equal to the cell's background, fg from the defaults, must not be honored:
+        // it would paint an invisible cursor. The background is resolve(CELL_HL).bg = CELL_BG.
         let mut snap = base_snapshot(CELL_HL);
         snap.highlights.set_defaults(DefaultColors {
             fg: Some(DEFAULT_FG),
             bg: Some(DEFAULT_BG),
             special: None,
         });
-        // bg-ONLY mode hl, equal to the cell background. After resolve:
-        //   fg = DEFAULT_FG (Some), bg = CELL_BG (Some) -> passes the old
-        //   "both Some" gate, but the honored fill (CELL_BG) == cell background.
+        // bg-only mode hl equal to the cell background: after resolve both channels are Some, yet the
+        // honored fill (CELL_BG) equals the cell background.
         snap.highlights.define(
             MODE_HL,
             HlAttr {
@@ -668,10 +616,8 @@ mod tests {
 
     #[test]
     fn cursor_colors_falls_through_when_honored_fill_equals_glyph() {
-        // Degenerate Cursor hl: fg == bg makes an invisible glyph. Even though both
-        // channels are Some (and bg != the cell background, so the "equals
-        // background" guard does NOT apply), fill == glyph makes honoring pointless;
-        // the function must fall through to inversion.
+        // Degenerate fg == bg: both channels are Some and bg differs from the cell background, but
+        // fill == glyph makes honoring pointless, so it falls through to inversion.
         let mut snap = base_snapshot(CELL_HL);
         snap.highlights.define(
             MODE_HL,
@@ -700,10 +646,8 @@ mod tests {
 
     #[test]
     fn cursor_colors_honors_distinct_mode_attr_with_defaults_set() {
-        // Positive case proving the guard does NOT over-trigger in the production,
-        // defaults-merged path: with editor defaults SET, a Cursor hl whose bg and
-        // fg are both set, bg != fg, and bg != the underlying cell background
-        // (CELL_BG), is still honored as (bg, fg).
+        // The guard does not over-trigger with defaults set: bg and fg set, bg != fg, bg != CELL_BG
+        // is still honored as (bg, fg).
         let mut snap = base_snapshot(CELL_HL);
         snap.highlights.set_defaults(DefaultColors {
             fg: Some(DEFAULT_FG),
@@ -736,17 +680,8 @@ mod tests {
         );
     }
 
-    // =====================================================================
-    // cursor_colors — WolfCursor theme override (Snapshot.theme.cursor)
-    // =====================================================================
-    //
-    // The theme branch is the FIRST branch: a `theme.cursor.bg` of `Some(bg)` is
-    // honored UNCONDITIONALLY (WolfCursor is an explicit app-level opt-in,
-    // unlike the mode-attr path with its visibility guard), with
-    // `glyph = theme.cursor.fg.unwrap_or(cell_bg)` (the reverse-video glyph when
-    // the theme fg is unset). A `theme.cursor.bg` of `None` falls through to the
-    // UNCHANGED existing logic, which every test above pins (all of them run
-    // with the default all-`None` theme).
+    // === cursor_colors: WolfCursor theme override (Snapshot.theme.cursor) ===
+    // A `Some` bg wins unconditionally; `None` falls through to the logic above, tested with no theme.
 
     /// WolfCursor theme foreground (the themed GLYPH color); distinct from every
     /// other fixture color so theme-vs-mode-vs-invert is unambiguous.
@@ -797,10 +732,8 @@ mod tests {
 
     #[test]
     fn cursor_colors_theme_beats_honorable_mode_attr() {
-        // The mode attr here is exactly the honorable setup of
-        // `cursor_colors_honors_mode_attr_with_both_fg_and_bg` (both channels
-        // set, MODE_BG != CELL_BG, MODE_BG != MODE_FG). With the theme ALSO set,
-        // the theme branch runs FIRST and must win over the mode attr.
+        // The honorable mode attr of `cursor_colors_honors_mode_attr_with_both_fg_and_bg`; with the
+        // theme also set, the theme branch runs first and must win.
         let mut snap = base_snapshot(CELL_HL);
         snap.highlights.define(
             MODE_HL,

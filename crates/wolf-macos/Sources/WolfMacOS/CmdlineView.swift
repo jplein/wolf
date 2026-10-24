@@ -1,16 +1,4 @@
-//
-//  CmdlineView.swift
-//  The native command line (`ext_cmdline`): a dedicated overlay `NSView` that
-//  paints `prompt + firstc + text` with a caret at `pos`, pinned to the bottom of
-//  the editor area and shown only while a command line is active (OD9 — overlay
-//  when active rather than reserving a permanent band). The `prompt` is painted
-//  inline for `confirm()` / `input()`-style prompts (empty otherwise).
-//
-//  A projection of the core's `Snapshot.cmdline` read across the FFI as an
-//  `FfiCmdline` (OD1 — the command-line content is flattened to a single `text()`
-//  String; only the message toast keeps styled chunks). This AppKit glue is
-//  compile-verified + manual-smoke only.
-//
+// The native command line (`ext_cmdline`) overlay.
 
 import AppKit
 import CoreText

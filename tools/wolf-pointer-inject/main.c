@@ -1,39 +1,6 @@
 /*
- * wolf-pointer-inject — a long-lived Wayland virtual-pointer injector.
- *
- * WHAT IT IS
- *   A tiny `zwlr_virtual_pointer_v1` client. It does two jobs at once, and both
- *   are load-bearing for the `wolf-gnome` cage smoke tests:
- *
- *     1. It HOLDS a virtual pointer device open for its whole lifetime. Under
- *        cage's `WLR_BACKENDS=headless` backend there are no real input
- *        devices, so wlroots advertises `WL_SEAT_CAPABILITY_POINTER` only while
- *        some virtual pointer exists on the seat. A tool that creates a device,
- *        injects, and immediately destroys it flips the capability on and back
- *        off again before any client can bind `wl_pointer` — which is exactly
- *        why `wlrctl` was measured to deliver ZERO `wl_pointer.button` events
- *        while still exiting 0.
- *     2. It INJECTS absolute motion, button press/release and axis events on
- *        command, reading one command per line from stdin and acknowledging
- *        each on stdout only after the compositor has processed it.
- *
- * WHY NOT `wlrctl`
- *   Measured: `capabilities(3)` -> `get_pointer` -> `capabilities(2)` ->
- *   `release`, 59 microseconds apart; no `wl_pointer.button` ever reached the
- *   GTK client; exit status 0 regardless. It also has no press/release split,
- *   so a drag cannot be expressed. It must stay out of `flake.nix`.
- *
- * WHY NOT `ydotool`
- *   `ydotool` writes to a uinput kernel device. `WLR_BACKENDS=headless` means
- *   cage consumes no kernel input devices at all, so nothing it writes is ever
- *   read.
- *
- * NOT COVERED BY ANY GATE STEP
- *   No `cargo fmt`, `clippy`, `prettier` or test target reaches this file. Its
- *   only automated check is `-Wall -Wextra` in the `flake.nix` derivation.
- *
- * See tools/wolf-pointer-inject/README.md for the command grammar, the ack
- * protocol, the exit-code table and the coordinate model.
+ * wolf-pointer-inject: holds a Wayland virtual pointer open and injects events. See
+ * tools/wolf-pointer-inject/README.md for why, the command grammar, acks and exit codes.
  */
 
 #include <errno.h>
@@ -48,12 +15,8 @@
 #include "wlr-virtual-pointer-unstable-v1-client-protocol.h"
 
 /*
- * Button codes. Deliberately defined here rather than pulled in from
- * <linux/input-event-codes.h>, which is the source of truth for these values —
- * that header would add a `linux-headers` dependency to the derivation for
- * three integers. Only BTN_LEFT is used by the smokes today; the other two
- * exist so a future negative-control smoke can inject a button the app is
- * expected to refuse.
+ * Button codes, defined here because <linux/input-event-codes.h> would add a
+ * `linux-headers` dependency to the derivation for three integers.
  */
 #define WOLF_BTN_LEFT 0x110   /* 272 */
 #define WOLF_BTN_RIGHT 0x111  /* 273 */
@@ -174,9 +137,8 @@ static void registry_global(void *data, struct wl_registry *registry, uint32_t n
 
 	if (strcmp(interface, wl_output_interface.name) == 0) {
 		st->output_count++;
-		/* Version 2 is enough for wl_output.mode, which is all we read. Only
-		 * the first output is bound; output_count > 1 is a fatal error below,
-		 * because the coordinate model assumes exactly one. */
+		/* Version 2 suffices for wl_output.mode. Only the first output is bound; more
+		 * than one is fatal below, because the coordinate model assumes exactly one. */
 		if (st->output == NULL) {
 			st->output = wl_registry_bind(registry, name, &wl_output_interface, 2);
 			wl_output_add_listener(st->output, &output_listener, st);
@@ -211,10 +173,8 @@ static const struct wl_registry_listener registry_listener = {
 /* ------------------------------------------------------------------ time -- */
 
 /*
- * Real monotonic timestamps are load-bearing, not cosmetic. GDK uses event
- * times for click / double-click detection and for its own event ordering; a
- * frozen or zero clock risks GTK folding successive presses into one
- * multi-press sequence.
+ * Real monotonic timestamps: GDK uses event times for click detection and ordering,
+ * and a frozen clock risks GTK folding successive presses into one multi-press.
  */
 static uint32_t time_ms(void)
 {
@@ -328,9 +288,8 @@ static int roundtrip_or_die(int seq)
 int main(int argc, char **argv)
 {
 	/*
-	 * FIRST statement, and it is not optional. stdout to a file or a pipe is
-	 * block-buffered by default, so the readiness line and every ack would
-	 * sit in libc's buffer and the scenario's poll would hang forever.
+	 * First statement: stdout to a pipe is block-buffered, so the readiness line and
+	 * every ack would sit in libc's buffer and the scenario's poll would hang.
 	 */
 	setbuf(stdout, NULL);
 	setbuf(stderr, NULL);
@@ -430,12 +389,8 @@ int main(int argc, char **argv)
 	}
 
 	/*
-	 * Prefer create_virtual_pointer_with_output when the manager is version 2
-	 * or newer and exactly one output was bound: it pins motion_absolute's
-	 * coordinate space to that output rather than to the (implicit) layout, so
-	 * the extents are unambiguously the output's pixel size. Under cage
-	 * headless the two are identical today; _with_output makes that a stated
-	 * fact rather than a coincidence.
+	 * Prefer _with_output (manager v2+, one output): it pins motion_absolute's space
+	 * to that output, so the extents are stated to be the output's pixel size.
 	 */
 	if (state.manager_version >= 2 && state.output != NULL) {
 		state.pointer = zwlr_virtual_pointer_manager_v1_create_virtual_pointer_with_output(
@@ -491,16 +446,8 @@ int main(int argc, char **argv)
 				return 9;
 			}
 			/*
-			 * Bound the point ABOVE as well as below, and make it FATAL.
-			 * motion_absolute's coordinates are a fraction of the extents:
-			 * wlroots computes x / extent_w, so x >= extent_w normalises to
-			 * >= 1.0 and positions the pointer off the output. The
-			 * compositor accepts the request, we would ack `ok`, and the GTK
-			 * client would receive NOTHING — the exact "exits 0, delivers
-			 * nothing" shape this tool exists to eliminate (it is why
-			 * `wlrctl` is unusable). Both coordinates are compared as
-			 * unsigned long, which is exact for a non-negative long and for
-			 * a uint32_t on every ABI this builds on.
+			 * Fatal above as well as below: x >= extent_w lands off-output, so GTK would get
+			 * nothing while we ack `ok` (the README's exit 10). Unsigned long compares are exact.
 			 */
 			if ((unsigned long)x >= (unsigned long)state.extent_w ||
 			    (unsigned long)y >= (unsigned long)state.extent_h) {
@@ -521,9 +468,8 @@ int main(int argc, char **argv)
 			zwlr_virtual_pointer_v1_motion_absolute(state.pointer, time_ms(),
 								(uint32_t)x, (uint32_t)y,
 								state.extent_w, state.extent_h);
-			/* MANDATORY. GTK's Wayland backend buffers wl_pointer events and
-			 * only converts them into GdkEvents on wl_pointer.frame. Without
-			 * this the compositor delivers bytes and GTK delivers nothing. */
+			/* Required: GTK turns wl_pointer events into GdkEvents only on
+			 * wl_pointer.frame (see the README's frame requirement). */
 			zwlr_virtual_pointer_v1_frame(state.pointer);
 		} else if (strcmp(cmd, "press") == 0 || strcmp(cmd, "release") == 0) {
 			char *bs = strtok_r(NULL, " \t", &saveptr);
@@ -558,10 +504,8 @@ int main(int argc, char **argv)
 				}
 				zwlr_virtual_pointer_v1_axis_source(
 					state.pointer, WL_POINTER_AXIS_SOURCE_WHEEL);
-				/* axis_discrete carries BOTH the continuous `value` and the
-				 * `discrete` step count in one request (confirmed against
-				 * wlr-virtual-pointer-unstable-v1.xml: args are time, axis,
-				 * value, discrete), so no separate axis call is needed. */
+				/* axis_discrete carries both `value` and the `discrete` step count
+				 * (per wlr-virtual-pointer-unstable-v1.xml), so no separate axis call. */
 				zwlr_virtual_pointer_v1_axis_discrete(
 					state.pointer, time_ms(),
 					WL_POINTER_AXIS_VERTICAL_SCROLL,

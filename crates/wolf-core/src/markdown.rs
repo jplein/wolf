@@ -569,13 +569,11 @@ pub fn render_html_with_highlights(
     let slugs = heading_slugs(source, options);
     let offset_iter = Parser::new_ext(source, options).into_offset_iter();
     let with_ids = HeadingIdAssigner::new(offset_iter, slugs);
-    // MathRenderer sits BEFORE MarkerInjector: it replaces each math event with an
-    // `InlineHtml` MathML span, which `is_block_start` never matches, so no marker
-    // is ever injected inside a `<math>` element.
+    // Before MarkerInjector: math becomes `InlineHtml`, which `is_block_start` never matches, so
+    // no marker is injected inside a math element.
     let with_math = MathRenderer::new(with_ids);
-    // CodeHighlighter sits BETWEEN MathRenderer and MarkerInjector so the injector
-    // still sees the real block-level `Start(CodeBlock)` (its flush trigger); the
-    // highlighter passes `Start`/`End` through and swaps only interior `Text`.
+    // Before MarkerInjector, which still sees the real `Start(CodeBlock)` it flushes on: the
+    // highlighter swaps only interior `Text`.
     let with_code = CodeHighlighter::new(with_math, code_highlights);
     let injector = MarkerInjector::new(with_code, markers, source);
 
@@ -589,14 +587,8 @@ pub fn render_html_with_highlights(
         WidthMode::Full => "",
     };
 
-    // The bundled fonts' licence notices go in the HEAD, as an HTML comment, and
-    // never inside the body: `base.css` selects the document's first and last real
-    // block with `body.wolf-markdown > *:not(.wolf-src):not(*:not(.wolf-src) ~ *)`
-    // and `:has(~ *:not(.wolf-src))`, so a new element child inside <body> takes
-    // `:last-child` and strips the real last block's bottom-margin reset. The
-    // leading `\n` is load-bearing too: `<!--` followed by `>` or `->` closes a
-    // comment immediately, and the newline puts the block's first character out of
-    // that position whatever it later becomes.
+    // Notices go in the head, never the body: see crates/wolf-core/src/markdown/README.md#decisions.
+    // The leading `\n` stops a notice starting with `>` or `->` from closing the `<!--` at once.
     format!(
         "<!doctype html><html><head><meta charset=\"utf-8\">\
          <!--\n{licenses}\n-->\
@@ -636,10 +628,8 @@ fn desired_markers(source: &str) -> Vec<(usize, u32, u32)> {
         // Column-zero marker for every hard line.
         markers.push((line_start, line_no, 0));
 
-        // Per-100-column markers for a long enough line. `char_indices().nth(col)`
-        // gives the byte offset of the `col`-th CHARACTER within the line; a line
-        // exactly `char_len` chars long has none at or past `char_len`, so the loop
-        // stops before reaching the line end.
+        // `char_indices().nth(col)` is the byte offset of the `col`-th character; no marker sits
+        // at or past `char_len`.
         let char_len = line.chars().count();
         let mut col = MARKER_COLUMN_STRIDE;
         while col < char_len {
@@ -960,9 +950,8 @@ where
                 return Some((event, range));
             };
 
-            // Eagerly drain the inner iterator, accumulating interior `Text` into
-            // one string (byte-identical to `code_blocks`), until this block's
-            // `End(CodeBlock)`. Any unexpected interior event is buffered verbatim.
+            // Drain to this block's `End(CodeBlock)`, joining interior `Text` byte-identically to
+            // `code_blocks`; any other interior event is buffered verbatim.
             let mut text = String::new();
             let mut end_range = range.clone();
             for (inner_event, inner_range) in self.inner.by_ref() {
@@ -1244,10 +1233,8 @@ fn snap_split_point(
     offset: usize,
     min_exclusive: usize,
 ) -> usize {
-    // The half-open candidate window `[low, high)`, clamped into the splittable
-    // interior `(max(min_exclusive, range.start), range.end)`. An empty window
-    // (possible only if the caller's preconditions are violated) falls through to
-    // `offset`.
+    // The window `[low, high)` is clamped into `(max(min_exclusive, range.start), range.end)`;
+    // an empty one, possible only on violated preconditions, falls through to `offset`.
     let lower = min_exclusive.max(range.start).saturating_add(1);
     let low = offset.saturating_sub(MARKER_SNAP_MAX_BYTES).max(lower);
     let high = offset.saturating_add(MARKER_SNAP_MAX_BYTES).min(range.end);
@@ -1508,36 +1495,8 @@ where
             let opens_exclusion = opens_no_inject_region(&event);
             self.drain_deferred_at_or_before(range.start);
             if opens_exclusion {
-                // An EXCLUDED block nested in a container needs its interior
-                // markers flushed here, ahead of its opening tag.
-                //
-                // `no_inject_depth` alone cannot protect it: a container (`List`,
-                // `Item`, `BlockQuote`, `FootnoteDefinition`) defers every
-                // `col != 0` marker across its WHOLE range at its own `Start`,
-                // including markers whose offsets fall inside a `CodeBlock` /
-                // `HtmlBlock` / `Table` nested inside it. Those markers are
-                // already past `next_marker` by the time this `Start` arrives, so
-                // the `claim_before(.., deferrable = false)` below cannot reclaim
-                // them — they would survive to the block's `End`, where step 1 has
-                // just dropped the depth back to 0 and step 2 would drain them
-                // INSIDE `<pre><code>` or just before `</tbody></table>` (the
-                // foster-parenting hazard the exclusion exists to prevent).
-                //
-                // Draining them before the tag gives a nested excluded block
-                // exactly the same flush-before-the-tag placement a top-level one
-                // gets, which is what `defers_interior_markers` promises.
-                //
-                // Deliberately NOT gated on `no_inject_depth == 0` the way step 2
-                // is, and the asymmetry is intentional rather than an oversight.
-                // Step 2's gate stops a drain from firing INSIDE a suppressed
-                // region (`End(TableRow)` within a table). This drain is what makes
-                // the exclusion work — it moves markers out of harm's way BEFORE
-                // the region opens — so if an excluded block ever did nest inside
-                // another (unreachable today: none of the four regions can contain
-                // a `CodeBlock`, `HtmlBlock` or `Table`, and `Start(Image)` is not
-                // a block start so it takes step 5), suppressing it would be
-                // exactly wrong: the markers would be stranded and drained at the
-                // inner `End`, which is the bug this drain exists to fix.
+                // Drain markers a container already deferred, ahead of the excluded block's tag; not
+                // gated on `no_inject_depth`. See notes/crates/wolf-core/src/markdown.rs.md#nested-excluded-blocks
                 self.drain_deferred_before(range.end);
             }
             self.claim_before(range, defers_interior_markers(&event));
@@ -1548,9 +1507,8 @@ where
             return;
         }
 
-        // 4. A `Text` in an unsuppressed context is the inline placement point:
-        //    first let through everything due at or before it (the markers that
-        //    fell in a gap covered by no `Text`), then try to split it.
+        // 4. An unsuppressed `Text` is the inline placement point: drain the markers due at or
+        //    before it, then try to split it.
         if let Event::Text(text) = &event {
             if self.no_inject_depth == 0 && !self.deferred.is_empty() {
                 self.drain_deferred_at_or_before(range.start);
@@ -1582,20 +1540,8 @@ where
             }
             match self.inner.next() {
                 Some((event, range)) => {
-                    // Buffer the event (expanded with whatever markers are due at
-                    // it), then loop back to drain `pending` in order.
-                    //
-                    // EVERY event goes through `pending` — do NOT "optimize" this
-                    // into returning a non-block, non-Text event directly. Step 4
-                    // of `place` may drain markers into `pending` and only THEN
-                    // have `try_split_text` decline (the identity predicate fails
-                    // on an entity reference, say), in which case the `Text` must
-                    // still be emitted AFTER the markers just drained ahead of it.
-                    // A direct return would emit it first and silently reverse
-                    // their document order. `entity_reference_is_not_split` and
-                    // `escapes_and_entities_survive_inline_anchoring` both take
-                    // exactly that path. The cost is one extra loop iteration per
-                    // event.
+                    // Every event goes through `pending`; returning one directly can reorder markers.
+                    // See notes/crates/wolf-core/src/markdown.rs.md#every-event-goes-through-pending
                     self.place(event, &range);
                 }
                 None => {
@@ -1987,19 +1933,8 @@ mod tests {
         );
     }
 
-    // -----------------------------------------------------------------------
-    // Code-block syntax highlighting (task #4).
-    //
-    // These reference the NEW in-module API the coder implements: `code_blocks`,
-    // `render_html_with_highlights`, and the `CodeBlockInfo` / `HighlightStyle` /
-    // `HighlightSpan` / `BlockHighlight` types. Because they live IN the module
-    // they name those types directly (not the crate-root re-exported path).
-    //
-    // BYTE-COLUMN CONTRACT (constructed literally below): `start_col`/`end_col` are
-    // BYTE columns, half-open `[start, end)`; `row` is 0-based within the block text
-    // (`text.split('\n')`). For `text == "package foo\n"`, row 0 is `"package foo"`
-    // and the token `package` is bytes `[0, 7)`.
-    // -----------------------------------------------------------------------
+    // Code-block highlighting. `start_col`/`end_col` are half-open byte columns; `row` is
+    // 0-based within `text.split('\n')`.
 
     /// A single fenced ```` ```go ```` block enumerates to one `CodeBlockInfo` whose
     /// `lang` is the lowercased info-string token and whose `text` is the block body
@@ -2293,22 +2228,8 @@ mod tests {
         assert_eq!(depth, 0, "highlight spans must balance: {inside}");
     }
 
-    // -----------------------------------------------------------------------
     // Inline-level marker anchoring.
-    //
-    // A block's interior per-100-column markers (`col != 0`) are DEFERRED past
-    // the block's opening tag and placed at their real position in the rendered
-    // inline flow, by splitting the `Event::Text` whose SOURCE range contains
-    // them (prefix `Text`, the marker as raw `Event::Html`, remainder `Text`).
-    // Column-zero markers keep their block-top placement, the split point snaps
-    // to the nearest word boundary, and splitting is suppressed inside code
-    // blocks, HTML blocks, tables and image alt text.
-    //
-    // Every fixture below is built with `repeat()`/`format!`, and every column
-    // arithmetic claim (which character sits at column 100/200, and where the
-    // nearest whitespace boundary is) is spelled out in the test's comment so it
-    // can be re-derived without running the code.
-    // -----------------------------------------------------------------------
+    // See notes/wolf-core-decisions.md#the-preview-position-marker-contract
 
     /// The rendered document's `<body …>` INNER html: the slice between the body
     /// start tag's `>` and the closing `</body>`.
@@ -2900,15 +2821,8 @@ mod tests {
         let mut vanilla = String::new();
         html::push_html(&mut vanilla, Parser::new_ext(&source, markdown_options()));
 
-        // The `\n` normalization is REQUIRED and is not a weakening of the check.
-        // pulldown-cmark's HTML writer tracks whether the last thing it wrote ended
-        // in a newline (`html.rs:86-88`); writing a raw anchor span clears that
-        // flag, so a block tag following an anchor is written as `\n<p>` instead of
-        // `<p>`. That artifact PREDATES this change (it is a property of injecting
-        // raw HTML at all) and is pure inter-tag whitespace. Both sides are
-        // transformed identically, so every remaining difference — a lost
-        // character, a re-escaped entity, a duplicated run — still fails the
-        // comparison.
+        // Required: after a raw anchor span pulldown-cmark writes a block tag as `\n<p>`, which is
+        // inter-tag whitespace; both sides are normalized, so any real difference still fails.
         let stripped = strip_marker_spans(body_of(&rendered)).replace('\n', "");
         let expected = vanilla.replace('\n', "");
         assert_eq!(
@@ -3017,10 +2931,8 @@ mod tests {
     /// multibyte run where nothing in the window qualifies.
     #[test]
     fn snap_split_point_honors_its_contract() {
-        // A space, 40 × `あ`, a space: 122 bytes. Char boundaries are 0, 1, 4, 7,
-        // … 121, 122. A split at byte 61 is 61 bytes from the leading space and 60
-        // from the trailing one — both outside the ±32-byte window — so nothing in
-        // the window is a word boundary and the split must stay at the offset.
+        // A space, 40 × `あ`, a space: 122 bytes. Byte 61 is 61 and 60 bytes from the spaces,
+        // outside the ±32-byte window, so the split stays at the offset.
         let multibyte_run = format!(" {} ", "あ".repeat(MULTIBYTE_RUN_CHARS));
         let multibyte_len = multibyte_run.len();
         assert!(
@@ -3028,9 +2940,7 @@ mod tests {
             "fixture sanity: byte 61 must be a char boundary in the multibyte run"
         );
 
-        // Each case is `(case, source, range, offset, min_exclusive, expected)`;
-        // `range` is a `Range<usize>` and the three numbers are byte offsets (the
-        // `snap_split_point` call below pins the element types).
+        // `(case, source, range, offset, min_exclusive, expected)`; the numbers are byte offsets.
         let cases = [
             (
                 "snaps to the word boundary at the offset itself",
@@ -3065,10 +2975,8 @@ mod tests {
                 0,
                 10,
             ),
-            // The whitespace sits at byte 11 == `range.end`, so `range.end` is the
-            // NEAREST word boundary — and must still be rejected, because splitting
-            // there would leave an empty remainder slice. Without the
-            // `min(.., range.end)` clamp on the window this returns 11.
+            // Byte 11 == `range.end` is the nearest boundary but leaves an empty remainder, so it is
+            // rejected; without the `min(.., range.end)` clamp this returns 11.
             (
                 "range.end is never a candidate, even when it is the nearest boundary",
                 "abcdefghijk lm",

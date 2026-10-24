@@ -1,20 +1,4 @@
-//
-//  PaneModeSeamTests.swift
-//  Pure, headless unit tests for the AppKit-free `WolfKeyMap.PaneModeSeam`.
-//
-//  These exercise the pure per-pane mode decision in
-//  `Sources/WolfKeyMap/PaneModeSeam.swift`: each pane is in PREVIEW mode or EDIT
-//  mode, derived — never stored — from whether the pane's nvim window appears in
-//  the `previews()` snapshot. The Preview and Edit commands act IN PLACE on the
-//  active pane, so the only front-end question is which action a picker /
-//  open-dialog activation routes to (preview mode → `preview_file` /
-//  `preview_buffer`; edit mode → `open` / `switch_buffer`). The pinned contract:
-//  the active pane is in preview mode iff its OWN window is in the set, and
-//  `activeWin == 0` (unknown / no bound pane) is always edit mode. Like
-//  `PreviewSeamTests` / `CommandSeamTests`, they import ONLY Foundation-level
-//  test machinery (no AppKit, no WKWebView, no live Neovim) and stay in the
-//  headless `WolfKeyMap` module.
-//
+// See crates/wolf-macos/Tests/WolfKeyMapTests/README.md#panemodeseamtestsswift
 
 import XCTest
 

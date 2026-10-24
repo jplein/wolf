@@ -1,28 +1,4 @@
-//
-//  ScrollAccumulatorTests.swift
-//  Pure, headless unit tests for the AppKit-free `WolfKeyMap.ScrollAccumulator`.
-//
-//  These exercise the scroll-delta -> discrete-line-step seam the coder adds in
-//  `Sources/WolfKeyMap/ScrollAccumulator.swift` (plan §4.2). Foundation-only, no
-//  AppKit / live Neovim; same headless `WolfKeyMap` module as `PaneTreeTests` /
-//  `PaneGeometryTests`.
-//
-//  ## CONTRACT UNDER TEST (the API the coder must honor, plan §4.2)
-//
-//    public struct ScrollAccumulator {
-//        public init()
-//        // Accumulates `deltaY` into a private SIGNED remainder; returns the signed
-//        // whole-cell step count newly crossed (positive = +deltaY direction). Guards
-//        // cellHeight <= 0 -> 0. The remainder CARRIES between calls.
-//        public mutating func consume(deltaY: Double, cellHeight: Double) -> Int
-//        public mutating func reset()
-//    }
-//
-//  Reference algorithm (signed): `remainder += deltaY`;
-//  `while remainder >= cellHeight { steps += 1; remainder -= cellHeight }`;
-//  `while remainder <= -cellHeight { steps -= 1; remainder += cellHeight }`.
-//  Direction-agnostic — AppKit maps the sign to up/down.
-//
+// See crates/wolf-macos/Tests/WolfKeyMapTests/README.md#scrollaccumulatortestsswift
 
 import XCTest
 

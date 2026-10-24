@@ -1,10 +1,4 @@
-//
-//  SidebarMenuSeam.swift
-//  A pure, display-free seam deciding whether a View-menu sidebar entry
-//  ("Project" / "Search") should show a checkmark.
-//
-//  Foundation-only (NO AppKit): unit-testable without a window or NSMenuItem.
-//
+// Pure check for whether a View-menu sidebar entry shows a checkmark.
 
 import Foundation
 

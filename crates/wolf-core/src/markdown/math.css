@@ -1,27 +1,5 @@
-/* MathML styling for pulldown-latex output.
- *
- * Adapted from pulldown-latex's styles.css (MIT, carloskiki/pulldown-latex). This
- * file is include_str!'d into the rendered HTML document by crate::markdown (AFTER
- * base.css, alongside the inlined @font-face rules). It is NOT a Markdown doc and
- * is not prettier-formatted.
- *
- * Three changes were made vs. the upstream styles.css:
- *   1. All @font-face rules are dropped. The upstream lmroman text faces and the
- *      Latin Modern Math face used relative url('font/...') paths that do not
- *      resolve in the inlined preview document; crate::markdown supplies the math
- *      font itself via an inlined base64 data: URI @font-face (MATH_FONT_FACE),
- *      and the upstream mtext font rule is dropped with the faces it referenced.
- *   2. The MathML @namespace m prefix is removed and every m|... selector is
- *      rewritten to its plain element/class form (WebKit / WebKitGTK render the
- *      un-namespaced math DOM pulldown-latex emits).
- *   3. A final pin (math, math star -> "Latin Modern Math") is appended so all
- *      math content resolves to the bundled Latin Modern Math font, never a
- *      host-installed one.
- *
- * NOTE: this file must never contain the literal open-tag sequence for a math
- * element, so downstream tests that scan the document for the first such tag find
- * the rendered body, not this comment.
- */
+/* MathML styling adapted from pulldown-latex's styles.css (MIT, carloskiki/pulldown-latex).
+ * Never write the math element's open tag. See crates/wolf-core/src/markdown/README.md#mathcss */
 
 math {
   font-family: "Latin Modern Math";

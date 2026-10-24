@@ -38,9 +38,8 @@ pub fn gdk_key(keyval: gdk::Key, state: gdk::ModifierType) -> Option<KeyEvent> {
     let alt = state.contains(gdk::ModifierType::ALT_MASK);
     let meta = state.contains(gdk::ModifierType::SUPER_MASK);
 
-    // Named keys first: their `to_unicode()` is often a control char (e.g. Return
-    // -> '\r'), so they must be resolved before the printable fallback. Named keys
-    // keep the real `shift` modifier.
+    // Named keys first: their `to_unicode()` is often a control char (Return -> '\r'), so they
+    // resolve before the printable fallback, keeping the real `shift` modifier.
     if let Some(key) = named_key(keyval) {
         // `ISO_Left_Tab` *is* Shift+Tab; ensure shift is reflected even if the
         // platform did not also set the SHIFT mask.

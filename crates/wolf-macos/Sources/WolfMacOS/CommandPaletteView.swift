@@ -1,18 +1,4 @@
-//
-//  CommandPaletteView.swift
-//  The AppKit command palette: a floating, top-center overlay panel with a search
-//  field and a results list, fed by the Rust command-palette bridge.
-//
-//  The command-palette sibling of `PickerView.swift` (the proven file picker is
-//  left untouched). Structurally parallel — a search bar + `NSTableView` in an
-//  `NSScrollView`, navigated via `PickerSeam.nextSelection` / `restoredIndex`,
-//  rendered with `PickerRow` / `PickerRowCellView` — but backed by an opaque
-//  `FfiCommandPalette` session instead of an `FfiFileSearch`, and activating a row
-//  by KIND (dispatch a static command / raise a window / open-or-raise a recent
-//  folder) rather than opening a file. Candidates are fixed at open (recent dirs +
-//  the added windows), so there is NO wake bridge: `ranked()` re-filters
-//  synchronously per keystroke. Exercised by manual smoke only.
-//
+// The AppKit command palette overlay, fed by the Rust command-palette bridge.
 
 import AppKit
 import WolfFFI
@@ -210,9 +196,8 @@ final class CommandPaletteView: NSView, NSTableViewDataSource, NSTableViewDelega
   /// focus to the editor. Idempotent.
   func close() {
     if !isOpen { return }
-    // Tear down state BEFORE dismissing the panel: `orderOut` inside
-    // `dismissPanel` can re-enter `windowDidResignKey → close()`; the `isOpen`
-    // guard above makes that re-entry a no-op.
+    // Tear down before dismissing: `orderOut` can re-enter `close()` via `windowDidResignKey`,
+    // and the `isOpen` guard above makes that re-entry a no-op.
     isOpen = false
     session = nil
     host?.dismissPanel()

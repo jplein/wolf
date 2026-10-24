@@ -1,36 +1,24 @@
-# Bazel build for the platform-agnostic `wolf-core` crate.
-#
-# Dependencies are pulled from the Cargo workspace via crate_universe
-# (`@crates`). `all_crate_deps` reads this package's Cargo.toml to select the
-# right subset. No GUI toolkit is present in this graph — see the denylist query
-# in build.md. The `file_search` rust_test below runs the real-nvim file-search
-# integration tests on the macOS Bazel host: it stages the pinned nvim
-# (`//bazel/nvim:nvim_tree`) + the captive `//runtime/nvim:init.lua` as runfiles,
-# mirroring `//crates/wolf-ffi:bridge_smoke`.
+# Bazel build for the GUI-free `wolf-core` crate; deps come from the Cargo workspace via
+# crate_universe. See notes/wolf-core-decisions.md#the-one-hard-rule
 load("@crates//:defs.bzl", "all_crate_deps")
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("//tools/lint:defs.bzl", "comment_srcs")
 
 exports_files(["Cargo.toml"])
 
-# This crate's docs, for `//tools/lint:markdown`. Bazel forbids cross-package
-# globbing, so each package exposes its own `markdown_srcs`.
+# This package's sources and docs for //tools/lint, which cannot glob across packages.
+comment_srcs()
+
 filegroup(
     name = "markdown_srcs",
     srcs = glob(
-        [
-            "**/README.md",
-            "DECISIONS.md",
-        ],
+        ["**/*.md"],
         allow_empty = True,
     ),
     visibility = ["//tools/lint:__pkg__"],
 )
 
-# wolf-core's LIBRARY unit tests: the `#[cfg(test)] mod tests` modules inside
-# `src/**` (e.g. rank.rs, layout.rs). These are PURE — no Neovim, no filesystem,
-# no GUI — so they need no runfiles and no `no-sandbox` tag. `crate = ":wolf_core"`
-# recompiles the library with `--test` so its in-module unit tests run. The
-# `normal_dev` deps are included so any dev-only test deps resolve.
+# The in-module `#[cfg(test)]` unit tests: pure, so no runfiles and no `no-sandbox` tag.
 rust_test(
     name = "wolf_core_lib_test",
     crate = ":wolf_core",
@@ -43,13 +31,8 @@ rust_test(
 rust_library(
     name = "wolf_core",
     srcs = glob(["src/**/*.rs"]),
-    # Every file a module include_str!'s must be available to rustc at compile
-    # time: the markdown module's base + theme CSS (src/markdown/*.css) and its
-    # single-line base64 font sidecars (src/markdown/assets/*.b64), plus the four
-    # bundled fonts' licence texts the licenses module compiles in — two beside the
-    # preview assets (src/markdown/assets/*.txt) and two of its own
-    # (src/licenses/*.txt). A .txt outside this glob compiles under Cargo and fails
-    # the Bazel build.
+    # Every file a module include_str!'s: one outside these globs compiles under Cargo but
+    # fails under Bazel.
     compile_data = glob([
         "src/markdown/**/*.css",
         "src/markdown/assets/*.b64",
@@ -63,18 +46,8 @@ rust_library(
     deps = all_crate_deps(normal = True),
 )
 
-# Real-nvim integration test for the file-search search-root behavior
-# (`start_file_search` rooted at nvim's live `getcwd()`). Modeled on
-# `//crates/wolf-ffi:bridge_smoke`: drives a REAL pinned Neovim (no mocks) and
-# stages the captive `init.lua` + the pinned nvim tree as runfiles. Reuses
-# `tests/common/mod.rs` (a `mod common;` src, so it is listed in `srcs`).
-#
-# `tests/common/mod.rs` resolves the staged runfiles to ABSOLUTE paths (mirroring
-# wolf-ffi's harness): `WOLF_TEST_NVIM_DIR` / `WOLF_TEST_INIT_LUA` are joined
-# against `$TEST_SRCDIR` / `$RUNFILES_DIR` before the captive nvim is spawned with
-# `current_dir(&cfg.cwd)`, so the binary and init.lua resolve regardless of cwd.
-# The full file_search suite (10 tests, including the two cwd-following cases)
-# passes here.
+# Real-nvim targets stage the pinned nvim tree and init.lua as runfiles, which
+# tests/common/mod.rs resolves to absolute paths.
 rust_test(
     name = "file_search",
     srcs = [
@@ -92,28 +65,17 @@ rust_test(
         "//runtime/nvim:init.lua",
     ],
     env = {
-        # The harness (tests/common/mod.rs) resolves the staged nvim + init.lua to
-        # ABSOLUTE paths from WOLF_TEST_NVIM_DIR / WOLF_TEST_INIT_LUA (the runfiles
-        # dirs). WOLF_NVIM_BIN is also pointed at the binary in the pinned tree, but
-        # the harness trusts it only when it is absolute-and-existing; the relative
-        # value below is ignored in favor of the resolved WOLF_TEST_NVIM_DIR path.
-        # (On the cargo/devShell path an explicit absolute WOLF_NVIM_BIN wins.)
+        # The harness trusts WOLF_NVIM_BIN only when absolute, so it ignores this relative value.
+        # See crates/wolf-core/tests/README.md#the-shared-harness--commonmodrs
         "WOLF_NVIM_BIN": "$(rootpath //bazel/nvim:nvim_tree)/nvim/bin/nvim",
         "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
         "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
     },
-    # An integration test sees both the crate's normal deps and its dev-deps.
-    # `normal_dev = True` alone is insufficient here: crate_universe omits a dep
-    # from the dev map when it is ALSO a normal dep (tempfile is in both of
-    # wolf-core's dependency tables), so the test would not see `tempfile`.
+    # `normal = True` too: crate_universe drops tempfile, both a normal and a dev dep, from the
+    # dev map.
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
-# Real-nvim integration test for the fs-event-driven RESCAN of a live
-# `FileSearch` session (writes / renames / deletes performed through the
-# captive nvim re-walk and swap the entry list). Modeled on `file_search`
-# above verbatim: same staged runfiles, same WOLF_* env, same `no-sandbox`
-# tag, same deps. Reuses `tests/common/mod.rs`.
 rust_test(
     name = "file_search_rescan",
     srcs = [
@@ -131,9 +93,7 @@ rust_test(
         "//runtime/nvim:init.lua",
     ],
     env = {
-        # See the `file_search` env comment above: the harness resolves the staged
-        # nvim + init.lua to ABSOLUTE paths; the relative WOLF_NVIM_BIN below is
-        # trusted only when absolute-and-existing.
+        # The harness ignores this relative WOLF_NVIM_BIN, as in `file_search`.
         "WOLF_NVIM_BIN": "$(rootpath //bazel/nvim:nvim_tree)/nvim/bin/nvim",
         "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
         "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
@@ -143,14 +103,6 @@ rust_test(
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
-# Real-nvim + real-rg integration test for the ripgrep-backed CONTENT search
-# (`WolfCore::start_search` streaming into a `SearchSession` snapshot, the
-# `SearchOptions` knobs, `SearchMatch` ranges/column, and the `open_at`
-# line/column round-trip). Modeled on the `file_search` target above but ALSO
-# stages the pinned rg tree (`//bazel/rg:rg_tree`) and wires `WOLF_RG_BIN` (the
-# test harness resolves it to an absolute path, mirroring the nvim handling).
-# NOTE: `//bazel/rg:rg_tree` is a CODER-CREATED target (search plan impl step 4);
-# this test target will not build until `bazel/rg` exists.
 rust_test(
     name = "search",
     srcs = [
@@ -177,17 +129,8 @@ rust_test(
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
-# Real-nvim graceful-degrade test for the ripgrep-backed CONTENT search when the
-# pinned rg binary is ABSENT: `WolfCore::start_search` with `WOLF_RG_BIN` unset
-# must return an immediately-`complete` `SearchSession` carrying
-# `error == Some("WOLF_RG_BIN unset")` and no matches (review note N1). This lives
-# in its OWN dedicated binary because it removes the process-global `WOLF_RG_BIN`
-# env var, which would race the real-rg `search` target's threads if co-located.
-# Mirrors the `search` target for the nvim setup (staged `//bazel/nvim:nvim_tree`
-# + `//runtime/nvim:init.lua`, wired `WOLF_NVIM_BIN`/`WOLF_TEST_*` env,
-# `no-sandbox` so the nvim child can spawn) but DELIBERATELY OMITS
-# `//bazel/rg:rg_tree` from `data` and `WOLF_RG_BIN` from `env` — the whole point
-# is that rg is unavailable.
+# Own binary: it unsets the process-global `WOLF_RG_BIN`, which would race `search`'s
+# threads. rg is deliberately absent from `data` and `env`.
 rust_test(
     name = "search_no_rg",
     srcs = [
@@ -212,14 +155,6 @@ rust_test(
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
-# Headless coverage for the PUBLIC search projection/display surface
-# (`project` / `file_label` / `context_window` re-exported from `search_tree`):
-# case-insensitive file grouping, line-number ordering, and the balanced 2-line
-# context-window truncation (including multibyte/emoji char-boundary slicing).
-# These are pure `&str`/slice transforms (no nvim, no rg, no filesystem), so this
-# needs NO staged runfiles and no `no-sandbox` tag — the pure analog of
-# `pane_status_unit`. The PRIVATE rg-JSON parse fns are covered by the coder's
-# inline `#[cfg(test)]` module in `src/search.rs` (run by `wolf_core_lib_test`).
 rust_test(
     name = "search_projection",
     srcs = ["tests/search_projection.rs"],
@@ -229,13 +164,7 @@ rust_test(
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
-# Real-nvim integration test for the BOUNDED file-search traversal (the
-# `$HOME`-walk safety net: entry cap, wall-clock budget, max depth). An EXACT
-# mirror of the `file_search` target above: drives a REAL pinned Neovim (no
-# mocks), stages the captive `init.lua` + the pinned nvim tree as runfiles,
-# reuses `tests/common/mod.rs`, and runs unsandboxed so the nvim child can spawn.
-# A SEPARATE binary from `file_search` because each test here mutates the
-# process-global `WOLF_SEARCH_*` env vars that tune the caps.
+# Own binary: each test mutates the process-global `WOLF_SEARCH_*` env vars.
 rust_test(
     name = "file_search_bounds",
     srcs = [
@@ -260,11 +189,6 @@ rust_test(
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
-# Real-nvim integration test for the record-on-open write path
-# (`InputEvent::Open` recorded into the global MRU store scoped to nvim's live cwd).
-# An EXACT mirror of the `file_search` target above: drives a REAL pinned Neovim
-# (no mocks), stages the captive `init.lua` + the pinned nvim tree as runfiles,
-# reuses `tests/common/mod.rs`, and runs unsandboxed so the nvim child can spawn.
 rust_test(
     name = "mru_open_records",
     srcs = [
@@ -289,12 +213,6 @@ rust_test(
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
-# Real-nvim integration test for the COPY / PASTE surface (visual-mode detection,
-# yanking a visual selection out of the captive nvim, and pasting text back in).
-# An EXACT mirror of the `mru_open_records` target above: drives a REAL pinned
-# Neovim (no mocks), stages the captive `init.lua` + the pinned nvim tree as
-# runfiles, reuses `tests/common/mod.rs`, and runs unsandboxed so the nvim child
-# can spawn.
 rust_test(
     name = "copy_paste",
     srcs = [
@@ -319,15 +237,6 @@ rust_test(
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
-# Headless coverage for the PUBLIC `state` module surface (`StateStore` /
-# `load_state` / `state_dir`): store round-trip, the silently-ignore matrix,
-# multi-window preservation, the unset-geometry sentinel, concurrent setters,
-# flush/coalescing semantics, and the WOLF_STATE_DIR override. Needs NO nvim and
-# no staged runfiles (everything is driven through explicit tempdirs), so there
-# is no `no-sandbox` tag and no `data`/`env` — the pure analog of
-# `//crates/wolf-ffi:config`. `normal = True` rides alongside `normal_dev` for
-# the same reason as `file_search` above (tempfile lives in BOTH of wolf-core's
-# dependency tables, so crate_universe omits it from the dev map alone).
 rust_test(
     name = "state_unit",
     srcs = ["tests/state_unit.rs"],
@@ -337,16 +246,6 @@ rust_test(
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
-# Headless coverage for the NEW per-tab PANE-LAYOUT persistence (feature plan
-# §4.1): the `TabState.layout: Option<PaneNode>` field + the `PaneNode` /
-# `PaneOrientation` value types round-tripped through `StateStore::set_snapshot`
-# -> `flush` -> `load_state`, plus the v1-without-layout back-compat (loads with
-# `layout: None`), unknown-field tolerance, and the on-disk serde string shape.
-# Needs NO nvim and no staged runfiles (driven through explicit tempdirs), so
-# there is no `no-sandbox` tag and no `data`/`env` — the pure analog of
-# `state_unit`. `normal = True` rides alongside `normal_dev` for the same reason
-# as the tests above (tempfile lives in BOTH of wolf-core's dependency tables, so
-# crate_universe omits it from the dev map alone).
 rust_test(
     name = "state_layout",
     srcs = ["tests/state_layout.rs"],
@@ -356,16 +255,6 @@ rust_test(
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
-# Headless coverage for the PUBLIC `recent_dirs` module surface
-# (`RecentDirs::open`/`disabled`/`record`/`recent` + `RECENT_DIRS_LIMIT`): DB
-# creation, newest-first ordering, move-to-top, the 20-entry cap (with prune
-# proven across a re-open), and silent self-heal over garbage/wrong-schema DBs.
-# Needs NO nvim and no staged runfiles (everything is driven through explicit
-# tempdirs constructed directly), so there is no `no-sandbox` tag and no
-# `data`/`env` — the headless analog of `state_unit`. `normal = True` rides
-# alongside `normal_dev` for the same reason as the tests above (tempfile lives
-# in BOTH of wolf-core's dependency tables, so crate_universe omits it from the
-# dev map alone).
 rust_test(
     name = "recent_dirs",
     srcs = ["tests/recent_dirs.rs"],
@@ -375,16 +264,6 @@ rust_test(
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
-# Headless coverage for the PUBLIC `command_mru` module surface
-# (`CommandMru::open`/`disabled`/`record`/`recent` + `COMMAND_MRU_LIMIT`): DB
-# creation at `<dir>/command-mru.sqlite`, newest-first ordering, move-to-top, the
-# 100-entry cap (with prune proven across a re-open), and silent self-heal over
-# garbage/wrong-schema DBs. Needs NO nvim and no staged runfiles (everything is
-# driven through explicit tempdirs constructed directly), so there is no
-# `no-sandbox` tag and no `data`/`env` — the headless analog of `recent_dirs`.
-# `normal = True` rides alongside `normal_dev` for the same reason as the tests
-# above (tempfile lives in BOTH of wolf-core's dependency tables, so
-# crate_universe omits it from the dev map alone).
 rust_test(
     name = "command_mru",
     srcs = ["tests/command_mru.rs"],
@@ -394,14 +273,6 @@ rust_test(
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
-# Headless coverage for the PUBLIC command-palette ranking surface
-# (`rank_palette` + `PaletteRow`/`PaletteRowKind`/`PaletteWindow`): CommandPalette
-# exclusion, row kind/command/window_index/path/mru_key/labels, the empty-cwd
-# "Untitled" case, MRU-first floating, static-only fallback, the AND-subsequence
-# query filter, and `max` truncation. `rank_palette` is IO-free (it reuses
-# `rank_matches`), so this needs NO nvim and no staged runfiles — the pure analog
-# of the `rank` in-module tests, kept in a dedicated file to avoid colliding with
-# the coder who creates `src/palette.rs`.
 rust_test(
     name = "palette_rank",
     srcs = ["tests/palette_rank.rs"],
@@ -411,17 +282,6 @@ rust_test(
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
-# Headless coverage for the PUBLIC per-pane navigation-history data model
-# (`NavTarget` / `PaneHistory` / `NavHistory` / `NavMove` / `MenuRow` +
-# `derive_target` / `disambiguate` / `menu_rows`): feedback-loop suppression (the
-# locked absorb rule), truncate-on-new-navigation, keep-every-visit, the
-# MAX_ENTRIES cap + cursor math, can_back/can_forward, jump/revert, the
-# stale-`expected` self-heal, the `derive_target` precedence matrix, per-window
-# prune, the 10-distinct-row menu cap + checkmark rule, and the PREFIX-form
-# minimal-growth label pipeline. `nav_history` is pure path MATH (no nvim, no
-# filesystem — `disambiguate` never touches the disk), so this needs NO staged
-# runfiles — the pure analog of `palette_rank`, kept in a dedicated file to avoid
-# colliding with the coder who creates `src/nav_history.rs`.
 rust_test(
     name = "nav_history",
     srcs = ["tests/nav_history.rs"],
@@ -431,13 +291,6 @@ rust_test(
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
-# Headless coverage for the PUBLIC buffer-picker ranking surface (`rank_buffers` +
-# `BufInfo`/`BufferRow`): MRU ordering (current buffer at index 0), tie-break by
-# bufnr ascending, the AND-subsequence query filter keeping MRU-first order,
-# cwd-relative/absolute/[No Name] display strings, and `max` truncation.
-# `rank_buffers` is IO-free (it reuses `rank_matches`), so this needs NO nvim and
-# no staged runfiles — the pure analog of `palette_rank`, kept in a dedicated file
-# to avoid colliding with the coder who creates `src/buffer_picker.rs`.
 rust_test(
     name = "buffer_rank",
     srcs = ["tests/buffer_rank.rs"],
@@ -447,15 +300,6 @@ rust_test(
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
-# Headless equivalence coverage for the BOUNDED top-N picker ranking
-# (`rank_matches_top_n` vs `rank_matches().take(n)`): empty/all-whitespace fast
-# path, single/multi-term AND, order-independence, no-match, tie groups that
-# straddle `n` (including identical displays that exercise the `index`
-# tiebreak), MRU-first dominance, edge `n` (0/1/over-count), a large synthetic
-# in-memory set at n=200, and ASCII-fold parity with a non-ASCII char.
-# `rank_matches_top_n` is IO-free (same `score_entry` as `rank_matches`), so this
-# needs NO nvim and no staged runfiles — the pure analog of `palette_rank`, kept
-# in a dedicated file to avoid colliding with the coder who edits `src/rank.rs`.
 rust_test(
     name = "rank_bounded",
     srcs = ["tests/rank_bounded.rs"],
@@ -465,22 +309,6 @@ rust_test(
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
-# Real-nvim integration test for the save-on-cwd-change flow (state plan §4): a
-# `:cd` typed into the embedded nvim must persist into `<state-dir>/state.json`
-# through the attached StateStore. The passive setup-time `wolf_cwd` emission is
-# deliberately NOT persisted (it is tracked-only, so an empty-state window keeps
-# `cwd == ""`); that suppression is proven separately by the `empty_state_cwd`
-# target. An EXACT mirror of the `mru_open_records` target above: drives a REAL
-# pinned Neovim (no mocks), stages the captive `init.lua` + the pinned nvim tree
-# as runfiles, reuses `tests/common/mod.rs`, and runs unsandboxed so the nvim
-# child can spawn.
-# Headless coverage for the PUBLIC Markdown-preview render surface
-# (`render_html` / `PreviewTheme` / `theme_css`): the themed-document wrapper, the
-# per-line `wl-{L}-0` anchors, the per-100-column `wl-{L}-100` marker, source
-# order, the heading-marker-immediately-before-its-tag placement, and that no
-# marker span lands inside a fenced code block. `render_html` is a pure `&str` ->
-# `String` transform (no nvim, no filesystem), so this needs NO staged runfiles —
-# the pure analog of `pane_status_unit`.
 rust_test(
     name = "markdown_render",
     srcs = ["tests/markdown_render.rs"],
@@ -490,17 +318,6 @@ rust_test(
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
-# Real-nvim integration test for the Markdown-preview CURSOR signal: the
-# `CursorMoved`/`CursorMovedI` autocmds installed by `_G.wolf_setup_preview(chan)`
-# `rpcnotify` `wolf_markdown_cursor` with `[source_bufnr, line, char_col]`, which
-# core UPSERTS into `Snapshot.markdown_cursors` (keyed by the SOURCE bufnr, like
-# `markdown_ticks`). Pins the 1-based line / 0-based CHARACTER column contract
-# (including `charcol()`'s past-EOL insert-mode value), the independence from the
-# dirty signal, the filetype + `b:wolf_preview_source` guards, and the shared
-# source-bufnr key the FFI `previews()` join depends on. An EXACT mirror of the
-# `current_file` target: drives a REAL pinned Neovim (no mocks), stages the captive
-# `init.lua` + the pinned nvim tree as runfiles, reuses `tests/common/mod.rs`, and
-# runs unsandboxed so the nvim child can spawn.
 rust_test(
     name = "markdown_cursor",
     srcs = [
@@ -525,13 +342,6 @@ rust_test(
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
-# Headless coverage for the PURE per-pane statusbar display-string function
-# (`pane_status` + `PaneStatus` + `NO_NAME`): the empty/[No Name] case, cwd-relative
-# remainder (nested + direct), the `~`/home-relative and path==home cases, the
-# absolute passthrough, the path==cwd edge, and cwd-over-home precedence.
-# `pane_status` is IO-free string/path math, so this needs NO nvim and no staged
-# runfiles — the pure analog of `palette_rank`, kept in a dedicated file to avoid
-# colliding with the coder who creates `src/pane_status.rs`.
 rust_test(
     name = "pane_status_unit",
     srcs = ["tests/pane_status_unit.rs"],
@@ -541,12 +351,6 @@ rust_test(
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
-# Real-nvim integration test for the per-pane statusbar CORE surface: the snapshot's
-# per-window buffer map (`Snapshot.buffers`) fed by the `wolf_buffers` notification,
-# and `WolfCore::pane_status(grid)` joining grid -> window -> buffer path. An EXACT
-# mirror of the `theme` target above: drives a REAL pinned Neovim (no mocks), stages
-# the captive `init.lua` + the pinned nvim tree as runfiles, reuses
-# `tests/common/mod.rs`, and runs unsandboxed so the nvim child can spawn.
 rust_test(
     name = "pane_buffers",
     srcs = [
@@ -571,15 +375,6 @@ rust_test(
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
-# Real-nvim integration test for the PER-PANE NAVIGATION HISTORY core surface: the
-# extended `wolf_buffers` emit feeding `Snapshot.win_buffers`, the per-window fold
-# over `win_buffers` + `previews`, the `win_close` prune, and the six
-# `WolfCore::history_*` methods that move the pane through the new
-# `_G.wolf_history_*` Lua helpers (including the LOAD-BEARING feedback-loop
-# assertion: Back moves the pane AND the resulting emit is absorbed). An EXACT
-# mirror of the `pane_buffers` target above: drives a REAL pinned Neovim (no
-# mocks), stages the captive `init.lua` + the pinned nvim tree as runfiles, reuses
-# `tests/common/mod.rs`, and runs unsandboxed so the nvim child can spawn.
 rust_test(
     name = "nav_history_live",
     srcs = [
@@ -604,21 +399,6 @@ rust_test(
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
-# Real-nvim integration test for the TABPAGE lifecycle surface (plan §1 + §5.1):
-# create/close/switch tabpages, per-tabpage `:tcd` cwd (`cwd_for_tabpage`), the
-# shared buffer list, the `Snapshot.current_tabpage` refocus barrier, and the
-# KEYSTONE win-handle-stability assumption (OD2). An EXACT mirror of the
-# `pane_buffers` target above: drives a REAL pinned Neovim (no mocks), stages the
-# captive `init.lua` + the pinned nvim tree as runfiles, reuses
-# `tests/common/mod.rs`, and runs unsandboxed so the nvim child can spawn.
-# Real-nvim integration test for the pane-layout REBUILD API (feature plan §4.4):
-# `WolfCore::rebuild_layout(spec_json)` realizes a saved pane-split tree in the
-# current tabpage (via `:split`/`:vsplit` + `:edit`) and returns the resulting
-# window handles in DFS/leaf order; each window's buffer must match the requested
-# leaf path, and an empty-path leaf lands an unnamed buffer. An EXACT mirror of
-# the `tabpages` target below: drives a REAL pinned Neovim (no mocks), stages the
-# captive `init.lua` + the pinned nvim tree as runfiles, reuses
-# `tests/common/mod.rs`, and runs unsandboxed so the nvim child can spawn.
 rust_test(
     name = "rebuild_layout",
     srcs = [
@@ -667,12 +447,6 @@ rust_test(
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
-# Real-nvim integration test for the WolfCursor / WolfTitlebar theme tracking
-# (`Snapshot.theme` fed by the `wolf_theme` notification: startup emit-once,
-# runtime `:hi` + `:doautocmd ColorScheme`, link resolution, cleared fallback).
-# An EXACT mirror of the `recent_dirs_records` target below: drives a REAL pinned
-# Neovim (no mocks), stages the captive `init.lua` + the pinned nvim tree as
-# runfiles, reuses `tests/common/mod.rs`, and runs unsandboxed so the nvim child can spawn.
 rust_test(
     name = "theme",
     srcs = [
@@ -697,13 +471,6 @@ rust_test(
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
-# Real-nvim integration test for `WolfCore::set_background(dark)` -> `:set
-# background=…` (the appearance plan §3.4 / §5.2): the captive nvim's global
-# `&background` must flip light/dark, observed INDIRECTLY through the `wolf_theme`
-# snapshot channel (a `WolfCursor guibg` marker chosen by the live `&background`).
-# An EXACT mirror of the `theme` target above: drives a REAL pinned Neovim (no
-# mocks), stages the captive `init.lua` + the pinned nvim tree as runfiles, reuses
-# `tests/common/mod.rs`, and runs unsandboxed so the nvim child can spawn.
 rust_test(
     name = "appearance",
     srcs = [
@@ -728,12 +495,6 @@ rust_test(
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
-# Real-nvim integration test for the NATIVE command-line + completion-popup surface
-# (feature plan §3/§4): `:` then `e Fi` populates `Snapshot.cmdline`, `<Tab>`
-# populates `Snapshot.pum` with the `Fi`-prefixed files, and `<Esc>` tears both
-# down. An EXACT mirror of the `theme` target above: drives a REAL pinned Neovim
-# (no mocks), stages the captive `init.lua` + the pinned nvim tree as runfiles,
-# reuses `tests/common/mod.rs`, and runs unsandboxed so the nvim child can spawn.
 rust_test(
     name = "cmdline_pum",
     srcs = [
@@ -758,12 +519,6 @@ rust_test(
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
-# Real-nvim integration test for the MESSAGE-TOAST surface (feature plan §3/§4):
-# `nvim_echo` / `:echomsg` / `:messages` populate `Snapshot.toast`, `search_count`
-# is suppressed, and the toast clears on the next user input (OD8). An EXACT mirror
-# of the `theme` target above: drives a REAL pinned Neovim (no mocks), stages the
-# captive `init.lua` + the pinned nvim tree as runfiles, reuses
-# `tests/common/mod.rs`, and runs unsandboxed so the nvim child can spawn.
 rust_test(
     name = "messages",
     srcs = [
@@ -788,12 +543,6 @@ rust_test(
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
-# Real-nvim integration test for the LAYOUT INTENTS surface: the split/close/focus
-# chords and :split/:vsplit/:close/:q Ex-command overrides reported over the
-# `wolf_layout` channel. An EXACT mirror of the `commands` target below: drives a
-# REAL pinned Neovim (no mocks), stages the captive `init.lua` + the pinned nvim
-# tree as runfiles, reuses `tests/common/mod.rs`, and runs unsandboxed so the nvim
-# child can spawn.
 rust_test(
     name = "layout_intents",
     srcs = [
@@ -818,14 +567,6 @@ rust_test(
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
-# Real-nvim integration test for the COMMAND CHANNEL (command plan §4): a
-# `:WolfCloseWindow` typed into the embedded nvim drains a `Command::CloseWindow`,
-# and `require('wolf').quit_application()` drains a `Command::QuitApplication`
-# (proving the `wolf` module loads under --clean). Also runs the PURE
-# `COMMAND_SPECS` registry tests (which need no nvim). An EXACT mirror of the
-# `theme` target: drives a REAL pinned Neovim (no mocks), stages the captive
-# `init.lua` + the pinned nvim tree as runfiles, reuses `tests/common/mod.rs`, and
-# runs unsandboxed so the nvim child can spawn.
 rust_test(
     name = "commands",
     srcs = [
@@ -850,16 +591,7 @@ rust_test(
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
-# Real-nvim integration test for the BROWSER PREVIEW server (browser-preview plan
-# §3/§10): `WolfCore::open_in_browser` lazily starts a loopback-only HTTP server
-# bound to `127.0.0.1:0`, serves `GET /` (rendered markdown + injected reload
-# script), `GET /tick` (the live changedtick), 404s everything else, reuses the
-# server on a second call, and returns "" for a non-markdown buffer. The HTTP
-# client is hand-rolled on `std::net::TcpStream` (no HTTP-client crate). An EXACT
-# mirror of the `commands` target above: drives a REAL pinned Neovim (no mocks),
-# stages the captive `init.lua` + the pinned nvim tree as runfiles, reuses
-# `tests/common/mod.rs`, and runs unsandboxed so the nvim child can spawn (the
-# loopback socket also needs the unsandboxed network).
+# Unsandboxed also for the loopback socket the preview server binds.
 rust_test(
     name = "browser_preview",
     srcs = [
@@ -884,14 +616,6 @@ rust_test(
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
-# Real-nvim integration test for the EMPTY-STATE launch contract, TRIMMED to its
-# recent-directories (folder-MRU) hygiene assertions only (plan OD1): the captive
-# nvim's launch/initial cwd must NOT be recorded into the recent-dirs MRU, while a
-# genuine later `:cd` still records. The former core-side `state.json` cwd-mirror
-# assertions are gone (that path was removed with the per-window-tabs change).
-# Drives a REAL pinned Neovim (no mocks), stages the captive `init.lua` + the
-# pinned nvim tree as runfiles, reuses `tests/common/mod.rs`, and runs unsandboxed
-# so the nvim child can spawn.
 rust_test(
     name = "empty_state_cwd",
     srcs = [
@@ -916,14 +640,6 @@ rust_test(
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
-# Real-nvim integration test for the central RPC-timeout chokepoint (effort (a)):
-# with a small `WOLF_RPC_TIMEOUT_MS`, a captive nvim WEDGED inside a finite
-# `vim.uv.sleep` still returns each interactive synchronous RPC's documented
-# fallback within a bound (proving `block_on_rpc` converts an unbounded hang into
-# a bounded stall). An EXACT mirror of the `theme` target above: drives a REAL
-# pinned Neovim (no mocks), stages the captive `init.lua` + the pinned nvim tree
-# as runfiles, reuses `tests/common/mod.rs`, and runs unsandboxed so the nvim
-# child can spawn.
 rust_test(
     name = "rpc_timeout",
     srcs = [
@@ -948,13 +664,6 @@ rust_test(
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
-# Real-nvim regression guard for the out-of-band per-tabpage cwd: `cwd_for_tabpage`
-# is a cheap `Snapshot.tab_cwds` lookup (no blocking RPC), so it must reflect a
-# `:tcd` out-of-band AND return PROMPTLY even while nvim is wedged (the exact
-# looped-blocking bug this fix removes). An EXACT mirror of the `rpc_timeout`
-# target above: drives a REAL pinned Neovim (no mocks), stages the captive
-# `init.lua` + the pinned nvim tree as runfiles, reuses `tests/common/mod.rs`, and
-# runs unsandboxed so the nvim child can spawn.
 rust_test(
     name = "tabpage_cwd",
     srcs = [
@@ -979,13 +688,6 @@ rust_test(
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
-# Real-nvim integration test that the file-search root is resolved OUT-OF-BAND
-# (from the tracked `live_cwd()` cell, no blocking getcwd RPC): the picker must
-# follow a `:cd` out-of-band AND resolve its root PROMPTLY even while nvim is
-# wedged (the getcwd-pile-up bug this fix removes). An EXACT mirror of the
-# `tabpage_cwd` target above: drives a REAL pinned Neovim (no mocks), stages the
-# captive `init.lua` + the pinned nvim tree as runfiles, reuses
-# `tests/common/mod.rs`, and runs unsandboxed so the nvim child can spawn.
 rust_test(
     name = "search_root_out_of_band",
     srcs = [
@@ -1010,14 +712,6 @@ rust_test(
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
-# Real-nvim integration test for external-file reload (`autoread` + `:checktime`):
-# a file changed on disk from OUTSIDE the editor must reload into an UNMODIFIED
-# buffer (the load-bearing case) while a buffer with unsaved in-editor edits must
-# NOT be clobbered (the guard). Exercises the init.lua `WolfAutoRead` augroup that
-# runs `:checktime` on `FocusGained`/`BufEnter`/`CursorHold`/`CursorHoldI`. An
-# EXACT mirror of the `swap_exists` target above: drives a REAL pinned Neovim (no
-# mocks), stages the captive `init.lua` + the pinned nvim tree as runfiles, reuses
-# `tests/common/mod.rs`, and runs unsandboxed so the nvim child can spawn.
 rust_test(
     name = "autoread",
     srcs = [
@@ -1042,13 +736,6 @@ rust_test(
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
-# Real-nvim integration test for the record-on-`:cd` write path of the GLOBAL
-# recent-directories MRU: a `:cd <dir>` typed into the embedded nvim must land
-# `<dir>` at the top of the always-on `folder-mru.sqlite` store (verified via both
-# `WolfCore::recent_dirs()` and the physical DB under a hermetic WOLF_STATE_DIR).
-# An EXACT mirror of the `theme` target above: drives a REAL pinned Neovim
-# (no mocks), stages the captive `init.lua` + the pinned nvim tree as runfiles,
-# reuses `tests/common/mod.rs`, and runs unsandboxed so the nvim child can spawn.
 rust_test(
     name = "recent_dirs_records",
     srcs = [
@@ -1073,13 +760,6 @@ rust_test(
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
-# Real-nvim LIVENESS detection test (crash & stall, plan §9 case a): a SIGKILL of
-# the captive nvim (an unexpected death) flips `WolfCore::liveness()` to `Dead` and
-# fires the front-end wake; a wedged nvim escalates repeated RPC `Timeout` to
-# `NotResponding`. An EXACT mirror of the `rpc_timeout` target above: drives a REAL
-# pinned Neovim (no mocks), stages the captive `init.lua` + the pinned nvim tree as
-# runfiles, reuses `tests/common/mod.rs`, and runs unsandboxed so the nvim child
-# can spawn.
 rust_test(
     name = "nvim_liveness",
     srcs = [
@@ -1104,12 +784,6 @@ rust_test(
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
-# Real-nvim RESTART + Tier-1 RESTORE test (plan §9 case b): after a crash,
-# `WolfCore::restart_nvim()` respawns nvim in place (Alive, fresh tabpage, empty
-# buffer list) and the front-end reopens the file-backed buffers captured from the
-# open-file mirror before the restart. An EXACT mirror of the `rpc_timeout` target
-# above: real pinned Neovim (no mocks), staged runfiles, shared `tests/common`,
-# unsandboxed.
 rust_test(
     name = "nvim_restart",
     srcs = [
@@ -1134,9 +808,6 @@ rust_test(
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
-# Real-nvim SPELL test: the WolfSpell FileType autocmd (spell ON for
-# markdown/text/gitcommit, OFF otherwise) and the durable 'spellfile' under the
-# shared hermetic state dir. Mirrors `swap_recovery` in shape.
 rust_test(
     name = "spell",
     srcs = [
@@ -1161,10 +832,6 @@ rust_test(
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
-# Real-nvim DURABLE SPELL DICTIONARY test: a zg'd word survives a full core
-# restart, and a comma'd state dir still gets a working swap 'directory' and
-# 'spellfile' (init.lua's comma-escaping). Env-mutating (exclusive
-# WOLF_STATE_DIR), serialized by a file-local lock.
 rust_test(
     name = "spell_durable",
     srcs = [
@@ -1189,10 +856,6 @@ rust_test(
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
-# Real-nvim RUNTIME_USER test: one-time seeding of init_user.lua, its
-# after-every-default load position, the non-empty-dir hands-off contract, and
-# the warn-not-fail path for an erroring user file. Env-mutating (exclusive
-# WOLF_STATE_DIR), serialized by a file-local lock.
 rust_test(
     name = "runtime_user",
     srcs = [
@@ -1217,11 +880,6 @@ rust_test(
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
-# Real-nvim PARSERS_USER test: core creates + exports the durable :TSInstall
-# target, init.lua activates the vendored nvim-treesitter (plugin file sourced,
-# install_dir wired, user dir first on rtp). Needs the staged nvim-treesitter +
-# parsers trees (mirrors //crates/wolf-ffi:treesitter_highlight). Env-mutating,
-# serialized by a file-local lock.
 rust_test(
     name = "parsers_user",
     srcs = [
@@ -1250,12 +908,6 @@ rust_test(
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
-# Real-nvim SWAP-BASED RECOVERY test (plan §9 cases c + d): the recovery-aware
-# `SwapExists` autocmd silently recovers a DEAD owner's unsaved edit
-# (swapchoice "r") and edits the clean on-disk copy when the owner is still ALIVE
-# (swapchoice "e"), never blocking on a confirm prompt. SUPERSEDES `swap_exists`.
-# An EXACT mirror of the `swap_exists` target above: real pinned Neovim (no mocks),
-# staged runfiles, shared `tests/common`, unsandboxed.
 rust_test(
     name = "swap_recovery",
     srcs = [
@@ -1282,15 +934,6 @@ rust_test(
     },
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
-
-# --- Previously-unwired integration tests -----------------------------------
-# These `tests/*.rs` files existed but had NO Bazel target, so `cargo test`
-# (Linux/Nix) ran them while `bazel test` (macOS) silently skipped them. The
-# targets below close that gap so BOTH paths cover the same set. Six drive a REAL
-# pinned Neovim (mirror the `commands`/`swap_recovery` targets: staged nvim +
-# init.lua runfiles, wired env, `no-sandbox` so the nvim child can spawn); `mru`
-# is HEADLESS (real SQLite on a tempfs, no nvim — the headless analog of
-# `state_unit`, so no `data`/`env`/`common`).
 
 # Real-nvim: the active-buffer path/filetype/preview/full-width tracking that
 # drives `Snapshot.current_file` via the `wolf_current_file` notification.
@@ -1344,9 +987,6 @@ rust_test(
     deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
 )
 
-# Headless (no nvim): the S1 MRU cache (`wolf_core::mru::MruStore`) against a real
-# SQLite database on a real tempfs. The headless analog of `state_unit`; the
-# record-on-open path driven through nvim is covered by `mru_open_records`.
 rust_test(
     name = "mru",
     srcs = ["tests/mru.rs"],

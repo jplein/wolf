@@ -108,11 +108,8 @@ fn snapshot(
 ) -> Snapshot {
     let mut grids = HashMap::new();
     grids.insert(grid_id, grid);
-    // Build from `Snapshot::default()` and assign the PUBLIC fields, rather than a
-    // struct-update literal (`..Snapshot::default()`): the snapshot now carries a
-    // crate-private field (`pending_confirm`), and functional-update syntax cannot
-    // fill a private field across a crate boundary (E0451). Mirrors the
-    // `Snapshot::new(..) + field assignment` pattern the wolf-gnome fixtures use.
+    // Default plus field assignment, not `..Snapshot::default()`: the crate-private
+    // `pending_confirm` field makes functional-update syntax fail with E0451.
     let mut snap = Snapshot::default();
     snap.grids = grids;
     snap.highlights = highlights;
@@ -177,10 +174,8 @@ fn special_color_packs_from_resolved_style() {
     const HL: u64 = 1;
     const PLAIN_HL: u64 = 2;
 
-    // A highlight carrying an explicit `special` (underline) color plus the
-    // underline attribute must surface across the bridge as a SET `FfiColor` with
-    // the exact 0x00RRGGBB packing, and must set the UNDERLINE flag bit — mirroring
-    // how `explicit_highlight_colors_pack_to_set_rgb` proves fg/bg packing.
+    // An explicit `special` color plus underline packs to a set 0x00RRGGBB `FfiColor` and sets the
+    // UNDERLINE bit.
     let mut highlights = HighlightTable::new();
     highlights.define(
         HL,
@@ -249,10 +244,8 @@ fn special_color_packs_from_resolved_style() {
 
 #[test]
 fn unset_highlight_yields_unset_colors() {
-    // hl_id 0 sets nothing AND the defaults are unset, so `resolve` yields
-    // None for fg/bg and the packed FfiColor is set=false (the front-end then
-    // falls back at the default_fg/default_bg level). With defaults present this
-    // cell would instead resolve to the defaults (covered separately).
+    // hl_id 0 with unset defaults resolves to None, so the packed color is unset and the front-end
+    // falls back to its own defaults.
     let highlights = HighlightTable::new();
 
     let mut grid = Grid::new(COLS, ROWS);
@@ -387,9 +380,8 @@ fn reverse_video_is_resolved_once_not_double_applied() {
     const ORIG_BG: u32 = 0x0022_2222;
     const HL: u64 = 1;
 
-    // `HighlightTable::resolve` already applies `reverse` (swaps fg/bg) before the
-    // bridge sees the style, so the bridge must store the ALREADY-SWAPPED colors
-    // verbatim — it must NOT swap a second time.
+    // `HighlightTable::resolve` already swaps fg/bg for `reverse`, so the bridge stores the colors
+    // as given and must not swap again.
     let mut highlights = HighlightTable::new();
     highlights.define(
         HL,
@@ -488,9 +480,7 @@ fn cursor_not_visible_when_on_different_grid_than_active() {
     let highlights = HighlightTable::new();
     let grid = Grid::new(COLS, ROWS);
 
-    // The only grid present is GRID_ID, so it is the active grid. The cursor
-    // claims a different, ABSENT grid id, so active_grid_id() != cursor.grid and
-    // the cursor must report not-visible.
+    // The cursor names an absent grid, so it differs from the active grid and is not visible.
     let cursor = Cursor {
         grid: GRID_ID + 1,
         row: 0,
@@ -562,9 +552,8 @@ fn cursor_fill_glyph_use_mode_cursor_attr_when_distinct() {
     const CELL_HL: u64 = 1;
     const CURSOR_HL: u64 = 5;
 
-    // A mode cursor highlight (attr_id) whose bg differs from both the cell bg and
-    // its own fg overrides the plain reverse video: fill = attr bg, glyph = attr
-    // fg (the (b, f) return of `cursor_colors`).
+    // A mode cursor attr whose bg differs from the cell bg and its own fg overrides reverse video:
+    // fill = attr bg, glyph = attr fg.
     let mut highlights = HighlightTable::new();
     highlights.define(
         CELL_HL,
@@ -628,9 +617,8 @@ fn cursor_fill_glyph_honor_theme_cursor_fg_and_bg() {
     const THEME_BG: u32 = 0x0044_5566;
     const HL: u64 = 1;
 
-    // `Snapshot.theme.cursor` (the WolfCursor group) with BOTH channels set is
-    // honored unconditionally, overriding the plain reverse video of the cell
-    // under the cursor: fill = theme bg, glyph = theme fg.
+    // A WolfCursor theme group with both channels set overrides reverse video unconditionally:
+    // fill = theme bg, glyph = theme fg.
     let mut highlights = HighlightTable::new();
     highlights.define(
         HL,
@@ -683,9 +671,8 @@ fn cursor_glyph_falls_back_to_cell_bg_when_theme_fg_unset() {
     const THEME_BG: u32 = 0x0044_5566;
     const HL: u64 = 1;
 
-    // A bg-only WolfCursor group is still honored for the FILL, but the glyph
-    // falls back to the cell's bg (the reverse-video glyph), per D4:
-    // glyph = theme.cursor.fg.unwrap_or(cell_bg).
+    // A bg-only WolfCursor group still sets the fill; the glyph falls back to the cell bg:
+    // `theme.cursor.fg.unwrap_or(cell_bg)`.
     let mut highlights = HighlightTable::new();
     highlights.define(
         HL,
@@ -742,10 +729,8 @@ fn theme_cursor_wins_over_mode_cursor_attr() {
     const CELL_HL: u64 = 1;
     const CURSOR_HL: u64 = 5;
 
-    // The mode-cursor attr here is exactly the honorable setup of
-    // `cursor_fill_glyph_use_mode_cursor_attr_when_distinct` (both channels set,
-    // bg distinct from the cell bg and from its own fg). With the theme ALSO
-    // set, the theme branch runs FIRST and must win over the mode attr.
+    // The mode attr is honorable, as in `cursor_fill_glyph_use_mode_cursor_attr_when_distinct`, but
+    // with the theme also set, the theme branch runs first and wins.
     let mut highlights = HighlightTable::new();
     highlights.define(
         CELL_HL,

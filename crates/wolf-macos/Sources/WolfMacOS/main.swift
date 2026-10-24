@@ -1,7 +1,4 @@
-//
-//  main.swift
-//  Entry point: build the shared application, install the delegate, run.
-//
+// Entry point: build the shared application, install the delegate, run.
 
 import AppKit
 

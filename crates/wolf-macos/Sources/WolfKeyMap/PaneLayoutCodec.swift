@@ -1,21 +1,4 @@
-//
-//  PaneLayoutCodec.swift
-//  Pure, AppKit-free codec bridging the `PaneTree` layout to the persistable +
-//  FFI shapes for the macOS split-panes UI.
-//
-//  Three transforms, all Foundation-only and unit-tested headlessly (see
-//  `PaneLayoutCodecTests.swift`):
-//    * `encode(_:paths:previews:)` maps a `PaneLayout` (whose leaves are `PaneId`s)
-//      into a `SavedPaneNode` tree keyed by per-leaf buffer PATH (an unmapped leaf →
-//      "") plus a per-leaf `preview` flag (a leaf whose id is in `previews` — for a
-//      preview pane the path is the SOURCE Markdown file's ABS path).
-//    * `postOrderTokens(_:)` flattens a `SavedPaneNode` to the post-order token
-//      stream the FFI push-builder replays (leaf / split, each carrying the child's
-//      weight and — for a leaf — its `preview` flag; the root weight is 1.0), and
-//      `decodeTokens(_:)` is its inverse.
-//    * `specJSON(_:)` renders a `SavedPaneNode` to the single JSON string the nvim
-//      `wolf_rebuild_layout` Lua helper decodes.
-//
+// Pure codec between the `PaneTree` layout and its persisted, FFI and Lua shapes.
 
 import Foundation
 

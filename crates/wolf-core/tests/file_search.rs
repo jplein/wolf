@@ -113,9 +113,8 @@ fn start_core_in(cwd: &Path) -> WolfCore {
         wake,
     )
     .expect("WolfCore::start failed (is WOLF_NVIM_BIN a valid nvim?)");
-    // This is the attach wait directly after start with no intervening input.
-    // The attach flush (seq 0 -> 1) already landed during WolfCore::start, so use
-    // the absolute-threshold initial-flush wait (an advance-based wait would hang).
+    // The attach flush landed during WolfCore::start, so use the absolute-threshold initial wait;
+    // an advance-based wait would hang.
     waiter.wait_for_initial_flush(&core, common::FLUSH_TIMEOUT);
     core
 }
@@ -472,19 +471,13 @@ fn mru_seed_is_synchronous_and_not_duplicated() {
     write_file(&cwd.join("seeded.md"), "s");
     write_file(&cwd.join("other.md"), "o");
 
-    // Record seeded.md into the MRU BEFORE starting the core/search, via a direct
-    // MruStore on the global state-dir DB (the same file-mru.sqlite the core will
-    // read), scoped to `cwd`.
+    // Record seeded.md before the core starts, via a direct MruStore on the same global
+    // file-mru.sqlite the core reads, scoped to `cwd`.
     {
         let store = MruStore::open(&common::hermetic_state_dir());
         store.record(&cwd, &cwd.join("seeded.md"));
-        // Read the row back through the SAME handle before the core is ever
-        // started. `record` is fire-and-forget and `recent` degrades SILENTLY to an
-        // empty Vec, so a store that failed to write leaves no trace here — and the
-        // traversal below would still find seeded.md on disk, satisfying the
-        // "exactly one" assertions from the TRAVERSAL rather than from the MRU. This
-        // makes the write land loudly, at the point it actually broke, instead of as
-        // a mysterious `mru_rank == None` further down.
+        // Read back before the core starts: `record` is fire-and-forget and `recent` fails silently, so
+        // a broken write would pass the count off the traversal and fail later naming the wrong thing.
         let stored = displays(&store.recent(&cwd));
         assert!(
             stored.contains("seeded.md"),
@@ -615,10 +608,8 @@ fn file_search_root_follows_nvim_cd() {
     common::type_str(&core, path_b);
     core.send_input(common::key(Key::Enter));
 
-    // Wait for nvim to process the `:cd` and flush a redraw, then poll until the
-    // tracked `live_cwd()` reports B. The search root now derives from that cell
-    // (fed by the `wolf_cwd` notify, which fires NO wake), so `wait_for_flush`
-    // alone — keyed on `seq` — does not guarantee the cwd landed before we search.
+    // The root derives from `live_cwd()`, fed by the wake-less `wolf_cwd` notify, so
+    // `wait_for_flush` alone does not prove the cwd landed: poll until it reports B.
     waiter.wait_for_flush(&core, common::FLUSH_TIMEOUT);
     poll_until(
         &waiter,
@@ -695,10 +686,8 @@ fn mru_seed_follows_nvim_cd() {
     let (_dir_a, cwd_a) = temp_cwd();
     let (_dir_b, cwd_b) = temp_cwd();
 
-    // B holds a NESTED recent file; A holds its own recent file. Both are recorded
-    // into the SINGLE global MRU (state_dir/file-mru.sqlite), scoped by directory,
-    // before the core ever runs. A's row must NOT appear once nvim is in B
-    // (per-directory isolation).
+    // Both rows go into the single global MRU, scoped by directory, before the core runs; A's row
+    // must not appear once nvim is in B.
     let recent_b = cwd_b.join("sub").join("recent_b.md");
     write_file(&recent_b, "b");
     let recent_a = cwd_a.join("recent_a.md");
@@ -707,13 +696,8 @@ fn mru_seed_follows_nvim_cd() {
         let store = MruStore::open(&common::hermetic_state_dir());
         store.record(&cwd_b, &recent_b);
         store.record(&cwd_a, &recent_a);
-        // Read BOTH rows back through the SAME handle before the core is started.
-        // `record` is fire-and-forget and `recent` degrades SILENTLY to an empty Vec,
-        // so a store that failed to write (or that another handle recreated under us)
-        // leaves no trace here. The traversal would still find `sub/recent_b.md` on
-        // disk, so the `seeded.len() == 1` assertion further down would pass off the
-        // TRAVERSAL and only the `mru_rank.is_some()` line would fail — a failure that
-        // names the wrong thing. Fail here instead, where the write actually broke.
+        // Read both back before the core starts, for the same reason as the seed test above: a broken
+        // write would otherwise pass the count off the traversal and fail on the wrong line.
         let stored_b = displays(&store.recent(&cwd_b));
         assert!(
             stored_b.contains(&rel(&["sub", "recent_b.md"])),
@@ -741,10 +725,8 @@ fn mru_seed_follows_nvim_cd() {
     common::type_str(&core, path_b);
     core.send_input(common::key(Key::Enter));
 
-    // Wait for nvim to process the `:cd` and flush, then poll until the tracked
-    // `live_cwd()` reports B. The seed root now derives from that cell (fed by the
-    // `wolf_cwd` notify, which fires NO wake), so `wait_for_flush` alone — keyed on
-    // `seq` — does not guarantee the cwd landed before the seed resolves.
+    // The seed root derives from `live_cwd()`, fed by the wake-less `wolf_cwd` notify, so
+    // `wait_for_flush` alone does not prove the cwd landed: poll until it reports B.
     waiter.wait_for_flush(&core, common::FLUSH_TIMEOUT);
     poll_until(
         &waiter,

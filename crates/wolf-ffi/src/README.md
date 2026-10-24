@@ -2,7 +2,7 @@
 
 `lib.rs` is the crate root: one `#[swift_bridge::bridge] mod ffi` plus the hand-written Rust glue behind it. It builds as a `staticlib` (the archive the `.app` links through the generated Swift) and as an `rlib`, so the Rust integration tests link and drive the same surface headlessly with no Swift runtime present. `bin/gen_bindings.rs` regenerates the committed bindings.
 
-Read [`../DECISIONS.md`](../DECISIONS.md) first. It holds the durable constraints behind this file — the registered C function pointer that carries the wake, the per-project wake tokens, the four wake channels, the append-only discriminant rule, and the generated-bindings workflow — and none of that is repeated here.
+Read [`wolf-ffi-decisions.md`](../../../notes/wolf-ffi-decisions.md) first. It holds the durable constraints behind this file — the registered C function pointer that carries the wake, the per-project wake tokens, the four wake channels, the append-only discriminant rule, and the generated-bindings workflow — and none of that is repeated here.
 
 **Shapes that repeat across the whole surface.** Knowing these makes the entries below read as signatures rather than as a list of exceptions.
 
@@ -22,7 +22,7 @@ Read [`../DECISIONS.md`](../DECISIONS.md) first. It holds the durable constraint
 - `shutdown(&self)` — Takes the core out of the handle and drops it; every method afterwards returns its empty-backed value.
 - `set_ui_focus(&self, gained: bool)` — `nvim_ui_set_focus`. Both edges are reported so each refocus is a real transition, which is what makes `FocusGained` fire the autoread `:checktime`.
 
-The four `extern "C"` wake registrations (`wolf_ffi_set_wake`, `wolf_ffi_set_filesearch_wake`, `wolf_ffi_set_tree_wake`, `wolf_ffi_set_search_wake`) live in `generated/wolf_ffi_wake.h` rather than in `mod ffi`; see [`../DECISIONS.md`](../DECISIONS.md).
+The four `extern "C"` wake registrations (`wolf_ffi_set_wake`, `wolf_ffi_set_filesearch_wake`, `wolf_ffi_set_tree_wake`, `wolf_ffi_set_search_wake`) live in `generated/wolf_ffi_wake.h` rather than in `mod ffi`; see [`wolf-ffi-decisions.md`](../../../notes/wolf-ffi-decisions.md).
 
 ### Liveness and restart
 
@@ -228,7 +228,7 @@ All windows share one process-wide store, opened lazily over the platform state 
 
 ## Discriminant tables
 
-These `u8` values are the ABI: Swift decodes raw integers, so the numbers are content, not magic. They are append-only — see [`../DECISIONS.md`](../DECISIONS.md).
+These `u8` values are the ABI: Swift decodes raw integers, so the numbers are content, not magic. They are append-only — see [`wolf-ffi-decisions.md`](../../../notes/wolf-ffi-decisions.md).
 
 | Module             | Mirrors                       | Values                                                                                                                                                                    |
 | ------------------ | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -295,4 +295,4 @@ Purpose: the standalone codegen behind `bazel run //crates/wolf-ffi:gen_bindings
 **Gotchas**
 
 - `generated/module.modulemap` and `generated/wolf_ffi_wake.h` are hand-written and are never overwritten here, so re-running this binary cannot restore them.
-- Writing in-tree requires `bazel run`; see [`../DECISIONS.md`](../DECISIONS.md).
+- Writing in-tree requires `bazel run`; see [`wolf-ffi-decisions.md`](../../../notes/wolf-ffi-decisions.md).

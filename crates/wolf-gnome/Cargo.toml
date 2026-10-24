@@ -9,9 +9,7 @@ license.workspace = true
 name = "wolf_gnome"
 path = "src/lib.rs"
 
-# The windowed application binary. Declaring this `[[bin]]` is also what makes
-# Cargo export `CARGO_BIN_EXE_wolf-gnome` to the integration tests (the headless
-# smoke test locates the built binary via that env var).
+# The windowed app. Declaring `[[bin]]` also exports `CARGO_BIN_EXE_wolf-gnome` to the tests.
 [[bin]]
 name = "wolf-gnome"
 path = "src/main.rs"
@@ -19,67 +17,24 @@ path = "src/main.rs"
 [dependencies]
 wolf-core = { path = "../wolf-core" }
 
-# gtk-rs crates. NOTE on versioning: in the real gtk-rs ecosystem the gtk4-rs
-# repo (gtk4/gdk4/gsk4) and the "core" repo (cairo-rs/pango/pangocairo/glib/...)
-# are released together but carry DIFFERENT minor numbers; gdk4 0.11.x depends on
-# the core crates at 0.22.x. So the invariant is "one coherent release set", not
-# "one identical minor": gdk4 = 0.11 MUST be paired with cairo/pango/pangocairo =
-# 0.22 (mismatched -sys minors fail to link). Deferred (window phase, do NOT add):
-# gtk4 (gtk), libadwaita (adw).
-# `v4_8` is what exposes `gdk::ScrollUnit`, which the pure `mouse::scroll_threshold`
-# seam names in its public signature. gtk4's `v4_12` already turns it on
-# transitively (v4_12 -> v4_10 -> v4_8 -> gdk/v4_8), but relying on ANOTHER crate's
-# feature graph for a type this crate exposes in a public API is fragile — pin it
-# here. Cargo.lock does not record features, so this changes no lock file and
-# carries no CARGO_BAZEL_REPIN obligation.
+# One coherent gtk-rs release set; `v4_8` is pinned here because a public signature names it.
+# See notes/crates/wolf-gnome/Cargo.toml.md#gtk-rs-release-set
 gdk = { version = "0.11", package = "gdk4", features = ["v4_8"] }
-# gtk4 (as `gtk`) and libadwaita (as `adw`) drive the actual window. They belong
-# to the SAME coherent gtk-rs release set as gdk4 0.11 (libadwaita 0.9 depends on
-# gtk4 0.11 / gdk4 0.11 / cairo-pango 0.22). NO version feature on adw (we target
-# the system GTK already present, not a newer pinned ABI).
+# Same release set as gdk4 0.11 (libadwaita 0.9 needs gtk4 0.11, gdk4 0.11, cairo-pango 0.22).
+# No version feature on adw: Wolf targets the system GTK, not a newer pinned ABI.
 gtk = { version = "0.11", package = "gtk4", features = ["v4_12"] }
 adw = { version = "0.9", package = "libadwaita" }
-# webkit6 drives the Markdown preview pane's web view. It belongs to the SAME
-# coherent gtk-rs release set as gdk4 0.11 / gtk4 0.11 / libadwaita 0.9: webkit6
-# 0.6.1 requires gtk4 ^0.11, gdk4 ^0.11, glib ^0.22 and gio ^0.22, which is
-# exactly what this workspace already locks (gtk4 0.11.3, gdk4 0.11.2, glib
-# 0.22.7, gio 0.22.6), so it joins the graph without moving a single existing
-# version. UNCONDITIONAL, matching gtk/adw/cairo: gtk4-sys already sits
-# unconditionally in Cargo.Bazel.lock with a green macOS build, so a cfg-gated
-# entry would buy nothing and split the dependency graph.
-# `v2_52` matches the flake's pinned webkitgtk-2.52.4+abi=6.0 — the ABI the
-# devShell's webkitgtk-6.0.pc actually describes. Do NOT raise it past what the
-# flake pins.
-# `gtk_v4_18` is DELIBERATELY NOT enabled: this crate pins gtk4's `v4_12` on
-# purpose (see the gdk entry above), and gtk_v4_18 would drag gtk4's v4_18 in
-# behind webkit's back.
-# INVISIBLE COUPLING, guard it: webkit6 names `gtk::Accessible` unconditionally,
-# in `WebView` and in `WebViewBase`. gtk4 gates that type behind `v4_10` from
-# 0.11.4 onward (0.11.3, the version locked today, exports it ungated) — so the
-# `^0.11` requirement above admits, on any `cargo update`, a gtk4 where this
-# binds. The `v4_12` on gtk satisfies it either way. Trimming gtk4's feature
-# BELOW v4_10 then breaks the build with an error that names accessibility and
-# points at neither the feature nor webkit. Measured against gtk4 0.11.4:
-#   error[E0425]: cannot find type `Accessible` in crate `gtk`
-#     --> webkit6-0.6.1/src/auto/web_view.rs:27:129
-#     --> webkit6-0.6.1/src/auto/web_view_base.rs:10:128
+# `v2_52` matches the flake's webkitgtk; gtk4 must keep `v4_10` or above for `gtk::Accessible`.
+# See notes/crates/wolf-gnome/Cargo.toml.md#webkit6-features
 webkit6 = { version = "0.6", features = ["v2_52"] }
-# cairo-rs is renamed to `cairo` and needs the `png` feature for ImageSurface PNG
-# I/O. Two consumers, and the second one GATES: the #[ignore]d
-# golden-regeneration dev aid writes a PNG with it, and
-# `preview_document_follows_the_configured_appearance_under_cage` DECODES its two
-# `grim` captures with `ImageSurface::create_from_png` to sample raw pixels — so
-# dropping this feature breaks a test that runs on every `cargo test`, not just an
-# opt-in aid. As with the gdk entry above, a feature change moves no lock file.
+# `png` is load-bearing: a cage smoke run by every `cargo test` decodes its `grim` captures with
+# `ImageSurface::create_from_png`.
 cairo = { version = "0.22", package = "cairo-rs", features = ["png"] }
 pango = "0.22"
 pangocairo = "0.22"
 # Coalescing wake channel: the tokio worker fires a Send+Sync wake closure that
 # pushes onto this channel; the GTK main loop drains it via spawn_future_local.
 async-channel = "2"
-# The Markdown preview's in-place body swap encodes the rendered body as a JS
-# string literal through `serde_json::to_string`, which is what makes an arbitrary
-# document safe to embed in generated JS source (see `pane_view::preview_swap_payload`).
-# Same spec as wolf-core's, and already in the workspace lock, so no new package
-# resolves and nothing moves.
+# Encodes the preview's body swap as a JS string literal (see `pane_view::preview_swap_payload`).
+# Same spec as wolf-core's, so the workspace lock does not move.
 serde_json = "1"

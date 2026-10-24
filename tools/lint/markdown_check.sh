@@ -1,42 +1,15 @@
 #!/usr/bin/env bash
-# Markdown CHECK: enforce the documentation rules in CLAUDE.md mechanically.
-#
-# The rules exist because agent-written docs drift the same four ways every
-# time; rules that are not checked drift back. This target catches the half a
-# machine can see:
-#
-#   long-line     a paragraph over MAX_LINE characters. With `proseWrap: never`
-#                 in .prettierrc a paragraph is exactly one line, so line length
-#                 IS paragraph length, and prettier will never split it.
-#   changelog     "now", "no longer", "previously", "the old", "renamed from",
-#                 "this increment" — prose describing a delta from a past state
-#                 rather than the present system. Git already holds the past.
-#   allcaps       all-caps emphasis. Genuine acronyms are allowlisted below;
-#                 everything else is shouting, and when everything is
-#                 emphasized nothing is.
-#   entry-budget  a `####` per-file entry over MAX_ENTRY_WORDS words, which
-#                 means the entry is transcribing implementation.
-#   big-file      (warning only) a doc over MAX_BYTES bytes.
-#
-# Files are passed as "$@" by the BUILD rule via `$(rootpaths ...)`.
-#
-# ADVISORY: like the rest of //tools/lint this target is `manual`-tagged and
-# non-gating. Findings are real and worth fixing, but the target's contract is
-# that it RAN, not that the tree is clean.
-#
-# Text inside backticks and fenced code blocks is exempt from the changelog and
-# allcaps rules, so a doc can quote a banned word by writing it as `now`.
+# Checks Markdown files, passed as "$@", against the documentation rules in CLAUDE.md.
+# The rules, thresholds and exemptions: tools/lint/README.md#what-markdown-checks
 set -euo pipefail
 
 MAX_LINE="${WOLF_MD_MAX_LINE:-800}"
 MAX_BYTES="${WOLF_MD_MAX_BYTES:-50000}"
 MAX_ENTRY_WORDS="${WOLF_MD_MAX_ENTRY_WORDS:-250}"
 
-# Genuine acronyms, proper nouns, and identifiers. Anything all-caps that is not
-# here (and contains no digit) is treated as emphasis. Repo filenames are listed
-# because they are proper nouns that read as shouting to a naive matcher.
+# Acronyms, proper nouns and repo filenames; any other all-caps word without a digit is emphasis.
 # Keep sorted.
-ACRONYMS="ABI ANSI API APIs ARC ARGB ASCII BMP BSD BUILD CJK CLAUDE CLI CPU CRLF CSS CWD DECISIONS DEL DFS DOM EOF EOL ESC FFI FIFO GDK GNOME GNU GTK GUI GUST HTML HTTP HTTPS IDE IME JSON KVO LLDB LOC LSP MIT MODULE MRU NTP NVIM OCR OFL OOM PID PNG POSIX README RGB RHS RPC RRGGBB RTL SDK SHA SIGKILL SIGTERM SIL SVG TCC TCP TLS TMPDIR TODO TOML TSM TTF TTY URI URL URLs UTF VIMRUNTIME XDG YAML ZIP"
+ACRONYMS="ABI ANSI API APIs ARC ARGB ASCII BMP BSD BUILD CJK CLAUDE CLI CPU CRLF CSS CWD DECISIONS DEL DFS DOM EOF EOL ESC FFI FIFO GDK GNOME GNU GTK GUI GUST HTML HTTP HTTPS IDE IME JSON KVO LLDB LOC LSP MIT MODULE MRU NTP NVIM OCR OFL OOM PID PNG POSIX README RGB RHS RPC RRGGBB RTL SDK SHA SIGKILL SIGTERM SIL SVG TCC TCP TLS TMPDIR TODO TOML TSM TTF TTY URI URL URLs UTF VIMRUNTIME XDG XML YAML ZIP"
 
 if [[ "$#" -eq 0 ]]; then
   echo "ERROR: no Markdown files were passed to the checker." >&2
@@ -49,8 +22,7 @@ echo
 
 status=0
 
-# Size ceiling is a WARNING: it never fails the target, because a directory with
-# many source files legitimately needs a longer README than one with few.
+# The size ceiling only warns: a directory with many source files legitimately needs a long README.
 for f in "$@"; do
   bytes=$(wc -c <"${f}")
   if [[ "${bytes}" -gt "${MAX_BYTES}" ]]; then
@@ -67,6 +39,7 @@ BEGIN {
   n = split(acronyms, arr, " ")
   for (i = 1; i <= n; i++) allowed[arr[i]] = 1
   findings = 0
+  header_msg = "first line must be: Last verified at commit `<40-hex sha>`."
 }
 
 function report(file, line, rule, msg) {
@@ -76,9 +49,8 @@ function report(file, line, rule, msg) {
 
 # Close the open #### entry and report it if it blew the word budget.
 function close_entry() {
-  # Report against entry_file, not FILENAME. close_entry() is called from the
-  # FNR == 1 rule, which fires once awk has already advanced to the next file,
-  # so FILENAME would blame the last entry of one file on the file after it.
+  # Blame entry_file, not FILENAME: the FNR == 1 caller runs after awk has
+  # advanced to the next file.
   if (entry != "" && entry_words > max_entry_words)
     report(entry_file, entry_line, "entry-budget", \
            "entry " entry " is " entry_words " words (budget " max_entry_words ")")
@@ -86,7 +58,39 @@ function close_entry() {
   entry_words = 0
 }
 
-FNR == 1 { close_entry(); fence = 0 }
+# Report a notes/ file that ended before its verification line, against its own name.
+function close_note() {
+  if (note_file != "" && note_pending)
+    report(note_file, 1, "notes-header", header_msg)
+  note_file = ""
+  note_pending = 0
+}
+
+function is_header(line,   sha) {
+  if (line !~ /^Last verified at commit `[0-9a-f]+`\.$/) return 0
+  sha = line
+  sub(/^Last verified at commit `/, "", sha)
+  sub(/`\.$/, "", sha)
+  return length(sha) == 40
+}
+
+FNR == 1 {
+  close_entry()
+  close_note()
+  fence = 0
+  in_notes = (FILENAME ~ /(^|\/)notes\//)
+  if (in_notes) {
+    note_file = FILENAME
+    note_pending = 1
+  }
+}
+
+# ---- notes header ----------------------------------------------------------
+# The first line that is neither blank nor a heading must be the verification line.
+note_pending && $0 !~ /^[ \t]*$/ && $0 !~ /^(#|##|###|####|#####|######)[ \t]/ {
+  note_pending = 0
+  if (!is_header($0)) report(FILENAME, FNR, "notes-header", header_msg)
+}
 
 # Fenced code blocks are exempt from every content rule.
 /^[ \t]*(```|~~~)/ { fence = !fence; next }
@@ -123,8 +127,8 @@ length($0) > max_line && $0 !~ /^[ \t]*\|/ {
          "line is " length($0) " chars (max " max_line "); split the paragraph")
 }
 
-# ---- changelog voice -------------------------------------------------------
-{
+# ---- changelog voice (notes/ is exempt) -------------------------------------
+!in_notes {
   low = tolower(prose)
   if (low ~ /(^|[^a-z0-9_])now([^a-z0-9_]|$)/) report(FILENAME, FNR, "changelog", "\"now\"")
   if (low ~ /no longer/)                       report(FILENAME, FNR, "changelog", "\"no longer\"")
@@ -156,6 +160,7 @@ length($0) > max_line && $0 !~ /^[ \t]*\|/ {
 
 END {
   close_entry()
+  close_note()
   if (findings > 0) {
     printf "\n%d finding(s).\n", findings
     exit 1

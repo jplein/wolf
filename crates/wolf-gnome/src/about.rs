@@ -11,7 +11,7 @@
 //! ## Plain GTK, not `adw::AboutDialog`
 //!
 //! `adw::AboutDialog` needs `libadwaita`'s `v1_5` feature and `adw::AboutWindow`
-//! needs `v1_2`. `DECISIONS.md` records that this crate's `libadwaita` carries no
+//! needs `v1_2`. `notes/wolf-gnome-decisions.md` records that this crate's `libadwaita` carries no
 //! version feature on purpose — the target is the system GTK already present, not
 //! a newer pinned ABI — so adding one for a single dialog would change the crate's
 //! build contract and put the whole smoke suite on the devShell's libadwaita
@@ -20,7 +20,7 @@
 //! ## Why a separate toplevel
 //!
 //! The dialog is its own window, so the main window's focus widget is untouched
-//! and `DECISIONS.md`'s focus regime — which is about widgets INSIDE the main
+//! and `notes/wolf-gnome-decisions.md`'s focus regime — which is about widgets INSIDE the main
 //! window being destroyed and taking the toplevel's focus with them — does not
 //! apply. That is why a transient window was chosen over a fifth in-window
 //! overlay.

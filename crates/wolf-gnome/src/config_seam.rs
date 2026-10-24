@@ -66,9 +66,7 @@ mod tests {
     /// constant fails here rather than moving with it.
     const EXPECT_FALLBACK_FONT_PT: f64 = 14.0;
 
-    // =====================================================================
-    // resolve_font_pt — the WOLF_FONT_PT over `font-size` precedence (D1)
-    // =====================================================================
+    // === resolve_font_pt: `WOLF_FONT_PT` over `font-size` ===
 
     /// `WOLF_FONT_PT` wins over the configured `font-size`.
     ///

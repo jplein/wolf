@@ -1,11 +1,6 @@
-# Structure-preserving JetBrains Mono font TreeArtifact + a smoke test.
-#
-# `jetbrains_mono_tree` resolves to the assembled `fonts/` TreeArtifact (the four
-# static desktop TTF faces + OFL.txt); the macOS app bundles it at
-# `Contents/Resources/fonts/`, where `FontRegistration.swift` registers the TTFs
-# with CoreText so "JetBrains Mono" resolves. JetBrains Mono is DATA
-# (arch-independent), so there is NO `select()` here (unlike //bazel/nvim). See
-# extensions.bzl and the directory README for the pin and how to bump it.
+# The JetBrains Mono `fonts/` TreeArtifact and its smoke test; arch-independent data, so no
+# `select()`. See bazel/jetbrains-mono/README.md for the pin and how to bump it.
+load("//tools/lint:defs.bzl", "comment_srcs")
 
 # The assembled JetBrains Mono tree (a `fonts/` TreeArtifact:
 # JetBrainsMono-{Regular,Italic,Bold,BoldItalic}.ttf + OFL.txt).
@@ -22,9 +17,14 @@ sh_test(
     data = [":jetbrains_mono_tree"],
 )
 
-# This package's docs, for `//tools/lint:markdown`.
+# This package's sources and docs for //tools/lint, which cannot glob across packages.
+comment_srcs()
+
 filegroup(
     name = "markdown_srcs",
-    srcs = ["README.md"],
+    srcs = glob(
+        ["**/*.md"],
+        allow_empty = True,
+    ),
     visibility = ["//tools/lint:__pkg__"],
 )

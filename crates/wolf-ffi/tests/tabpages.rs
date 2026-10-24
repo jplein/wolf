@@ -222,9 +222,8 @@ fn tabpage_lifecycle_over_the_bridge() {
         "grid_for_win(w1) should re-resolve to a live grid once T1 is current again"
     );
 
-    // --- 4. Grid re-bind contract across a split + switch (OD2) --------------
-    // Split T1 into two windows, switch away to T2 and back, and assert each window
-    // handle re-resolves via grid_for_win to a live, paintable grid.
+    // --- 4. After a split and a switch to T2 and back, each window handle re-resolves via
+    // grid_for_win to a live, paintable grid.
     send_ex_command(&handle, ":vsplit");
     poll("T1 to reach two live windows after :vsplit", || {
         live_windows(&handle).len() == TWO_WINDOWS
@@ -253,11 +252,8 @@ fn tabpage_lifecycle_over_the_bridge() {
         );
     }
 
-    // --- 5. cwd_for_tabpage for a NON-current tabpage ------------------------
-    // T1 is current; T2 (rooted at dirB via :tcd) is NOT. Its tab-local cwd is
-    // still readable and equals dirB. The value now arrives out-of-band (via the
-    // `wolf_tab_cwds` notification) rather than on-demand, so POLL for it to land
-    // before asserting, rather than reading once.
+    // --- 5. cwd_for_tabpage reads non-current T2's tab-local cwd (dirB). It arrives out-of-band
+    // via the `wolf_tab_cwds` notification, so poll.
     poll(
         "cwd_for_tabpage(T2) to report dirB via the out-of-band snapshot",
         || canon(&handle.cwd_for_tabpage(t2)) == canon_b,
@@ -274,9 +270,7 @@ fn tabpage_lifecycle_over_the_bridge() {
          (reported={reported_b:?})"
     );
 
-    // --- 6. Last-tabpage-close vs shutdown -----------------------------------
-    // Two tabpages exist (T1, T2). Close the (non-current) T2: the core stays alive
-    // and T2's handle goes invalid (cwd_for_tabpage(T2) -> "").
+    // --- 6. Closing non-current T2 keeps the core alive and invalidates T2 (cwd_for_tabpage -> "").
     handle.close_tabpage(t2);
     poll(
         "T2's handle to become invalid after close_tabpage(T2)",

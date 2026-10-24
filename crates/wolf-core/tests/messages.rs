@@ -99,9 +99,8 @@ fn poll_until(waiter: &FlushWaiter, desc: &str, mut pred: impl FnMut() -> bool) 
 fn multiline_echo_populates_toast_with_kind() {
     let (core, waiter) = common::start_core_sized(common::DEFAULT_COLS, common::DEFAULT_ROWS);
 
-    // Drive a two-line message via nvim_echo with a `kind`. The `\n` inside the
-    // Lua string literal (typed as the two chars `\` `n`) becomes a real newline
-    // that the fold splits into two toast lines. Typed as an Ex `:lua` command.
+    // A two-line nvim_echo with a `kind`: the Lua `\n` becomes a real newline that the fold splits
+    // into two toast lines.
     send_ex(
         &core,
         r#"lua vim.api.nvim_echo({{"line one\n"},{"line two"}}, false, { kind = "list_cmd" })"#,
@@ -151,9 +150,8 @@ fn messages_command_populates_toast_from_history() {
         snap.toast.visible && toast_text(&core).contains(MARKER)
     });
 
-    // `:messages` emits `msg_history_show`. Typing `:` first is itself a dismissing
-    // key (it clears the live toast), so a match here proves the toast was
-    // REPOPULATED from history, not merely still showing the earlier echomsg.
+    // Typing `:` is itself a dismissing key, so a match proves `:messages` (`msg_history_show`)
+    // repopulated the toast from history rather than leaving the earlier echomsg up.
     send_ex(&core, "messages");
     poll_until(
         &waiter,
@@ -334,9 +332,8 @@ fn confirm_prompt_is_not_dismissed_by_input() {
 fn confirm_prompt_cleared_when_answered() {
     let (core, waiter) = common::start_core_sized(common::DEFAULT_COLS, common::DEFAULT_ROWS);
 
-    // Drive a confirm() dialog: it surfaces as a `msg_show` kind "confirm" and
-    // then blocks awaiting an answer key. The `&yes`/`&no` define accelerators
-    // `y`/`n`.
+    // confirm() surfaces as a `msg_show` of kind "confirm" and blocks for an answer; `&yes`/`&no`
+    // define the accelerators `y`/`n`.
     send_ex(&core, r#"call confirm("Really do it?", "&yes\n&no")"#);
 
     poll_until(
@@ -360,9 +357,8 @@ fn confirm_prompt_cleared_when_answered() {
         );
     }
 
-    // Answer with the VALID accelerator `y`. This resolves the dialog, which
-    // Neovim reports with a `cmdline_hide` (and NO `msg_clear`); the fold must
-    // clear the lingering confirm prompt toast on that hide.
+    // The valid accelerator `y` resolves the dialog, which nvim reports with `cmdline_hide` and no
+    // `msg_clear`; the fold must clear the lingering prompt toast on that hide.
     core.send_input(ch('y'));
 
     poll_until(

@@ -1,31 +1,6 @@
 #!/bin/sh
-#
-# bundle_layout_test.sh
-#
-# sh_test that inspects the built macOS application bundle (target
-# //crates/wolf-macos:Wolf, declared as `data` on the sh_test) and asserts the
-# pinned Neovim tree + captive init.lua + vendored orlando plugin landed at the
-# expected resource paths.
-#
-# It asserts, relative to `Wolf.app/`:
-#   a. Contents/Resources/nvim/bin/nvim                       exists & executable
-#   b. Contents/Resources/nvim/lib/nvim/parser/markdown.so   exists
-#   c. Contents/Resources/nvim/share/nvim/runtime            exists & is a dir
-#   d. Contents/Resources/init.lua                           exists & is a file
-#   e. Contents/Resources/orlando/plugin/orlando.lua         exists & is a file
-#   f. Contents/Resources/orlando/lua/orlando/init.lua       exists & is a file
-#   g. Contents/Resources/lighthouse/colors/lighthouse.lua   exists & is a file
-#   u. Contents/Resources/rg/rg                              exists & executable
-#
-# This test only inspects files; it does NOT execute nvim and needs no network.
-#
-# rules_apple may deliver the application as either a `Wolf.app` directory OR a
-# zipped archive in runfiles, so we handle BOTH forms.
-#
-# NOTE to coder: confirm which form rules_apple 4.5.3 delivers `:Wolf` as in the
-# test runfiles (an unzipped `Wolf.app` directory, or a `Wolf.zip`/ipa-like
-# archive). Once known, pin the direct runfiles path and simplify this resolver
-# to the single form that actually occurs.
+# sh_test asserting the pinned nvim tree, init.lua and vendored resources are in Wolf.app.
+# Inspects files only; rules_apple may deliver the app as a directory or a zip, so both work.
 
 set -eu
 
@@ -34,27 +9,20 @@ fail() {
   exit 1
 }
 
-# ---------------------------------------------------------------------------
 # Locate the runfiles roots.
-# ---------------------------------------------------------------------------
 RUNFILES_ROOTS=""
 [ "${TEST_SRCDIR:-}" != "" ] && RUNFILES_ROOTS="$RUNFILES_ROOTS $TEST_SRCDIR"
 [ "${RUNFILES_DIR:-}" != "" ] && RUNFILES_ROOTS="$RUNFILES_ROOTS $RUNFILES_DIR"
 [ -d "$0.runfiles" ] && RUNFILES_ROOTS="$RUNFILES_ROOTS $0.runfiles"
 
-# ---------------------------------------------------------------------------
 # Locate the bundle: prefer an unzipped Wolf.app directory; else a Wolf archive.
-# ---------------------------------------------------------------------------
-# NOTE to coder: once the workspace/repo name is known, prefer the direct path
-# (e.g. "$TEST_SRCDIR/_main/crates/wolf-macos/Wolf.app").
 APP_DIR=""
 APP_ARCHIVE=""
 for root in $RUNFILES_ROOTS; do
   [ -d "$root" ] || continue
 
-  # Direct, expected layout. rules_apple 4.5.3 delivers `:Wolf` as a `Wolf.zip`
-  # archive in runfiles (a SYMLINK), so probe the direct path first; `-e`/`-d`
-  # follow symlinks.
+  # rules_apple 4.5.3 delivers `:Wolf` as a `Wolf.zip` symlink in runfiles; probe the direct
+  # paths first (`-e`/`-d` follow symlinks).
   for cand in \
     "$root"/*/crates/wolf-macos/Wolf.app \
     "$root"/crates/wolf-macos/Wolf.app
@@ -112,61 +80,43 @@ echo "Located bundle: $APP_DIR"
 RES="$APP_DIR/Contents/Resources"
 [ -d "$RES" ] || fail "bundle has no Contents/Resources directory: $RES"
 
-# ---------------------------------------------------------------------------
 # (a) Contents/Resources/nvim/bin/nvim exists and is executable.
-# ---------------------------------------------------------------------------
 NVIM="$RES/nvim/bin/nvim"
 [ -f "$NVIM" ] || fail "expected bundled nvim binary at $NVIM, but it is missing"
 [ -x "$NVIM" ] || fail "bundled nvim binary is not executable (exec bit lost?): $NVIM"
 echo "PASS check (a): $NVIM exists and is executable"
 
-# ---------------------------------------------------------------------------
 # (b) Contents/Resources/nvim/lib/nvim/parser/markdown.so exists.
-# ---------------------------------------------------------------------------
 MARKDOWN_SO="$RES/nvim/lib/nvim/parser/markdown.so"
 [ -f "$MARKDOWN_SO" ] || fail "expected treesitter parser at $MARKDOWN_SO, but it is missing"
 echo "PASS check (b): $MARKDOWN_SO exists"
 
-# ---------------------------------------------------------------------------
 # (c) Contents/Resources/nvim/share/nvim/runtime is a directory.
-# ---------------------------------------------------------------------------
 RUNTIME_DIR="$RES/nvim/share/nvim/runtime"
 [ -d "$RUNTIME_DIR" ] || fail "expected runtime directory at $RUNTIME_DIR, but it is missing or not a directory"
 echo "PASS check (c): $RUNTIME_DIR exists and is a directory"
 
-# ---------------------------------------------------------------------------
 # (d) Contents/Resources/init.lua is a regular file.
-# ---------------------------------------------------------------------------
 INIT_LUA="$RES/init.lua"
 [ -f "$INIT_LUA" ] || fail "expected captive config at $INIT_LUA, but it is missing or not a regular file"
 echo "PASS check (d): $INIT_LUA exists and is a regular file"
 
-# ---------------------------------------------------------------------------
 # (e) Contents/Resources/orlando/plugin/orlando.lua is a regular file.
-# ---------------------------------------------------------------------------
 ORLANDO_PLUGIN="$RES/orlando/plugin/orlando.lua"
 [ -f "$ORLANDO_PLUGIN" ] || fail "expected vendored orlando plugin at $ORLANDO_PLUGIN, but it is missing"
 echo "PASS check (e): $ORLANDO_PLUGIN exists"
 
-# ---------------------------------------------------------------------------
 # (f) Contents/Resources/orlando/lua/orlando/init.lua is a regular file.
-# ---------------------------------------------------------------------------
 ORLANDO_INIT="$RES/orlando/lua/orlando/init.lua"
 [ -f "$ORLANDO_INIT" ] || fail "expected vendored orlando module at $ORLANDO_INIT, but it is missing"
 echo "PASS check (f): $ORLANDO_INIT exists"
 
-# ---------------------------------------------------------------------------
 # (g) Contents/Resources/lighthouse/colors/lighthouse.lua is a regular file.
-# ---------------------------------------------------------------------------
 LIGHTHOUSE_COLORS="$RES/lighthouse/colors/lighthouse.lua"
 [ -f "$LIGHTHOUSE_COLORS" ] || fail "expected vendored lighthouse colorscheme at $LIGHTHOUSE_COLORS, but it is missing"
 echo "PASS check (g): $LIGHTHOUSE_COLORS exists"
 
-# ---------------------------------------------------------------------------
-# (h) Contents/Resources/nvim-treesitter carries a bundled markdown query file.
-#     (VENDORED and ENABLED on macOS — the captive init.lua lights markdown
-#      highlighting + fenced-code injection from these queries.)
-# ---------------------------------------------------------------------------
+# (h) nvim-treesitter carries a markdown query; init.lua lights highlighting and injection from it.
 TS_QUERY=""
 for cand in \
   "$RES/nvim-treesitter/queries/markdown/injections.scm" \
@@ -180,21 +130,13 @@ done
 [ -n "$TS_QUERY" ] || fail "expected a vendored nvim-treesitter markdown query under $RES/nvim-treesitter/queries/markdown/, but none is present"
 echo "PASS check (h): $TS_QUERY exists"
 
-# ---------------------------------------------------------------------------
-# (i) Contents/Resources/nvim-treesitter-textobjects/lua/nvim-treesitter-textobjects
-#     is a directory. (VENDORED-but-INERT — the `main`-branch self-named Lua layout;
-#     master's classic `lua/nvim-treesitter/textobjects` no longer applies.)
-# ---------------------------------------------------------------------------
+# (i) nvim-treesitter-textobjects, vendored but inert, in its main-branch self-named Lua layout.
 TO_LUA_DIR="$RES/nvim-treesitter-textobjects/lua/nvim-treesitter-textobjects"
 [ -d "$TO_LUA_DIR" ] || fail "expected vendored textobjects Lua module dir at $TO_LUA_DIR, but it is missing or not a directory"
 echo "PASS check (i): $TO_LUA_DIR exists and is a directory"
 
-# ---------------------------------------------------------------------------
-# (j) Contents/Resources/parsers/parser/<lang>.so — the curated host-compiled
-#     treesitter parsers. HARD: go/rust/typescript/tsx/json non-empty; SOFT-note
-#     swift/kotlin/java (drop+LOG policy). (VENDORED/SHIPPED and ENABLED on macOS —
-#     the captive init.lua lights markdown highlighting + fenced-code injection.)
-# ---------------------------------------------------------------------------
+# (j) Curated compiled parsers: go/rust/typescript/tsx/json are required and non-empty;
+# swift/kotlin/java are optional under the drop-and-log policy.
 for lang in go rust typescript tsx json; do
   so="$RES/parsers/parser/$lang.so"
   [ -f "$so" ] || fail "expected bundled compiled parser at $so, but it is missing"
@@ -210,12 +152,7 @@ for lang in swift kotlin java; do
   fi
 done
 
-# ---------------------------------------------------------------------------
-# (k)-(n) Contents/Resources/fonts/JetBrainsMono-<Face>.ttf — the bundled
-#     JetBrains Mono TTFs (regular/italic/bold/bold-italic). VENDORED and
-#     REGISTERED with CoreText on macOS so "JetBrains Mono" resolves as the
-#     default UI/grid font. Each must be a non-empty regular file.
-# ---------------------------------------------------------------------------
+# (k)-(n) The four JetBrains Mono TTFs, registered with CoreText; each a non-empty file.
 for entry in \
   "k:JetBrainsMono-Regular.ttf" \
   "l:JetBrainsMono-Italic.ttf" \
@@ -230,22 +167,13 @@ do
   echo "PASS check ($label): $FONT exists and is non-empty"
 done
 
-# ---------------------------------------------------------------------------
-# (o) Contents/Resources/fonts/OFL.txt — the SIL Open Font License shipped with
-#     the vendored JetBrains Mono TTFs (compliance). Non-empty regular file.
-# ---------------------------------------------------------------------------
+# (o) fonts/OFL.txt, the license shipped with the JetBrains Mono TTFs; a non-empty file.
 FONT_LICENSE="$RES/fonts/OFL.txt"
 [ -f "$FONT_LICENSE" ] || fail "expected bundled font license at $FONT_LICENSE, but it is missing"
 [ -s "$FONT_LICENSE" ] || fail "bundled font license $FONT_LICENSE exists but is EMPTY (zero bytes)"
 echo "PASS check (o): $FONT_LICENSE exists and is non-empty"
 
-# ---------------------------------------------------------------------------
-# (p)-(s) Contents/Resources/fonts/iAWriterMonoS-<Face>.ttf — the bundled
-#     iA Writer Mono S TTFs (regular/italic/bold/bold-italic). VENDORED and
-#     REGISTERED with CoreText on macOS so "iA Writer Mono S" resolves as the
-#     new default UI/grid font. Shares Contents/Resources/fonts/ with JetBrains
-#     Mono. Each must be a non-empty regular file.
-# ---------------------------------------------------------------------------
+# (p)-(s) The four iA Writer Mono S TTFs, the default grid font, sharing fonts/ with JetBrains Mono.
 for entry in \
   "p:iAWriterMonoS-Regular.ttf" \
   "q:iAWriterMonoS-Italic.ttf" \
@@ -260,22 +188,14 @@ do
   echo "PASS check ($label): $FONT exists and is non-empty"
 done
 
-# ---------------------------------------------------------------------------
-# (t) Contents/Resources/fonts/LICENSE.md — the iA (SIL Open Font License)
-#     shipped with the vendored iA Writer Mono S TTFs (compliance). Named
-#     LICENSE.md, NOT OFL.txt. Non-empty regular file.
-# ---------------------------------------------------------------------------
+# (t) fonts/LICENSE.md, the iA Writer Mono S license, named LICENSE.md rather than OFL.txt.
 IA_FONT_LICENSE="$RES/fonts/LICENSE.md"
 [ -f "$IA_FONT_LICENSE" ] || fail "expected bundled iA font license at $IA_FONT_LICENSE, but it is missing"
 [ -s "$IA_FONT_LICENSE" ] || fail "bundled iA font license $IA_FONT_LICENSE exists but is EMPTY (zero bytes)"
 echo "PASS check (t): $IA_FONT_LICENSE exists and is non-empty"
 
-# ---------------------------------------------------------------------------
-# (u) Contents/Resources/rg/rg — the pinned, bundled ripgrep binary powering the
-#     sidebar content search (located by Project.rgBinPath() -> WOLF_RG_BIN).
-#     Exists & executable (catches exec-bit loss through http_archive ->
-#     copy_to_directory, exactly like the nvim check (a)).
-# ---------------------------------------------------------------------------
+# (u) rg/rg, the bundled ripgrep behind sidebar search, is executable: this catches exec-bit
+# loss through http_archive and copy_to_directory, as check (a) does.
 RG="$RES/rg/rg"
 [ -f "$RG" ] || fail "expected bundled rg binary at $RG, but it is missing"
 [ -x "$RG" ] || fail "bundled rg binary is not executable (exec bit lost?): $RG"

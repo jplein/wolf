@@ -1,31 +1,4 @@
-//
-//  CwdTitleSeamTests.swift
-//  Pure, headless unit tests for the `WolfKeyMap.CwdTitleSeam` namespace.
-//
-//  A pure, display-free seam (plan §A) that computes the window title text from a
-//  working-directory path, abbreviating the user's home directory to `~` per the
-//  macOS convention. Exercised with scalar string inputs only — NO AppKit, NO
-//  window, NO FileManager, NO implicit `$HOME` (the `home` argument is always
-//  injected, which is load-bearing for determinism).
-//
-//  CONTRACT UNDER TEST:
-//    * CwdTitleSeam.displayTitle(cwd: String, home: String) -> String
-//      - empty or all-whitespace `cwd` => "" (caller substitutes an app-name
-//        fallback).
-//      - `home` is normalized by stripping ONE trailing "/" before comparison; an
-//        empty `home` disables abbreviation and returns `cwd` unchanged.
-//      - `cwd == normalizedHome` => "~".
-//      - `cwd` begins with `normalizedHome + "/"` => "~/" + <remainder after the
-//        "home/">. Abbreviation happens ONLY on a full path-segment boundary, so
-//        "/Users/janet/x" must NOT be abbreviated against home "/Users/jane".
-//      - otherwise (cwd not under home) => `cwd` returned verbatim (full absolute
-//        path).
-//
-//  NOTE to coder: this test references the pure `WolfKeyMap.CwdTitleSeam` enum the
-//  coder adds in `Sources/WolfKeyMap/CwdTitleSeam.swift` (and lists in the
-//  `wolf_key_map` srcs in BUILD.bazel). The single function signature asserted
-//  below is the contract the implementation must satisfy.
-//
+// See crates/wolf-macos/Tests/WolfKeyMapTests/README.md#cwdtitleseamtestsswift
 
 import XCTest
 
@@ -63,9 +36,8 @@ final class CwdTitleSeamTests: XCTestCase {
   // MARK: - prefix-collision guard (segment-boundary match only)
 
   func testPrefixCollisionIsNotAbbreviated() {
-    // "/Users/janet/x" shares the textual prefix "/Users/jane" with home but is
-    // NOT under it (the next character is "t", not "/"), so it must NOT become
-    // "~t/x" — it is returned verbatim.
+    // "/Users/janet/x" shares the text prefix "/Users/jane" but is not under it (next char is "t"),
+    // so it is returned verbatim, not "~t/x".
     XCTAssertEqual(
       CwdTitleSeam.displayTitle(cwd: "/Users/janet/x", home: home), "/Users/janet/x",
       "a path that only shares a textual prefix (not a segment boundary) must not abbreviate")

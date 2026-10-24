@@ -60,10 +60,8 @@ fn type_word_via_gdk_key_appears_in_grid() {
     // Enter insert mode: 'i'.
     core.send_input(key_event(key_from_char('i'), ModifierType::empty()));
 
-    // Type the word. For the uppercase letter we feed the already-uppercased
-    // keyval AND set the SHIFT mask, exactly as real GDK reports a Shift+letter
-    // press; gdk_key must drop the shift for printable chars and still produce the
-    // uppercase glyph. Lowercase letters are fed with no modifiers.
+    // The uppercase letter is fed uppercased with `SHIFT_MASK`, as GDK reports Shift+letter;
+    // gdk_key must drop the shift for printable chars and still produce the uppercase glyph.
     for c in WORD.chars() {
         let state = if c.is_ascii_uppercase() {
             ModifierType::SHIFT_MASK

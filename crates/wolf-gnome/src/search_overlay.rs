@@ -9,7 +9,7 @@
 //! command palette and the buffer picker, the chord is resolved from
 //! [`crate::actions::ACTION_TABLE`] by a CAPTURE-phase controller
 //! ([`crate::shell`]), so it is guaranteed not to also be forwarded to Neovim (see
-//! `crates/wolf-gnome/DECISIONS.md`, "The accelerator namespace").
+//! `notes/wolf-gnome-decisions.md`, "The accelerator namespace").
 //!
 //! ## A result row is a LOCATION, not a file
 //!
@@ -29,7 +29,7 @@
 //! There is deliberately no `connect_search_changed`: a search runs only when the
 //! user presses Enter, so no keystroke can spawn `rg` and no debounce timer is
 //! needed. The macOS front-end takes the same decision and says so in
-//! `crates/wolf-macos/Sources/WolfMacOS/SearchView.swift:364-366` — the search
+//! `buildSubviews()` in `crates/wolf-macos/Sources/WolfMacOS/SearchView.swift` — the search
 //! field's action fires on Return and `controlTextDidChange` is deliberately not
 //! wired.
 //!
@@ -498,9 +498,8 @@ impl SearchInner {
             SearchOpenDecision::Open => {}
         }
 
-        // Any session left over from a previous open is taken in a statement of its
-        // own, so no `RefCell` borrow is live when the drop — which kills its rg
-        // child — runs.
+        // A leftover session is taken in its own statement, so no `RefCell` borrow is live when its drop
+        // kills the rg child.
         let leftover = self.search.borrow_mut().take();
         drop(leftover);
 
@@ -653,9 +652,8 @@ impl SearchInner {
         };
         *self.search.borrow_mut() = Some(session);
         *self.ran_query.borrow_mut() = Some(query);
-        // The first refresh of an ERRORED run comes from here, not from the wake:
-        // `start_search` fires `wake()` before returning on the `WOLF_RG_BIN` unset
-        // path, so nothing may assume the wake arrives after the session is stored.
+        // An errored run's first refresh comes from here: `start_search` fires `wake()` before returning
+        // when `WOLF_RG_BIN` is unset, so the wake may precede storing the session.
         self.refresh();
     }
 
@@ -726,7 +724,7 @@ impl SearchHandle {
 /// it.
 ///
 /// `area` resolves the focus-return widget at CLOSE time — the SELECTED tab's
-/// cmdline strip, never a pane drawing area (`DECISIONS.md`, "Window structure").
+/// cmdline strip, never a pane drawing area (`notes/wolf-gnome-decisions.md`, "Window structure").
 /// See [`crate::picker::FocusTarget`] for why it is a closure.
 #[must_use]
 pub fn build(
@@ -768,10 +766,8 @@ pub fn build(
 
     overlay.add_overlay(&search_box);
 
-    // Wake plumbing: streaming batches fire this from a tokio worker (Send + Sync);
-    // it only pushes onto the channel. A dropped "full" send is correct (a refresh
-    // is already pending). DROP-SAFE: ignore try_send errors so a late cancel-path
-    // wake after the channel closes is harmless.
+    // Batches fire this from a tokio worker and it only pushes; a full or closed channel means a
+    // refresh is pending or the overlay is gone, so `try_send` errors are ignored.
     let (wake_tx, wake_rx) = async_channel::bounded::<()>(SEARCH_WAKE_CHANNEL_CAP);
     let wake: WakeFn = Arc::new(move || {
         let _ = wake_tx.try_send(());
@@ -794,9 +790,8 @@ pub fn build(
         wake,
     });
 
-    // Drain the wake channel on the GTK main thread, refreshing the (open) overlay
-    // on each batch signal. A Weak avoids a reference cycle (inner owns the wake's
-    // sender; the task holds only a weak ref so dropping the handle ends the task).
+    // Drained on the main thread. The task holds only a `Weak`, so dropping the handle ends it
+    // instead of leaking a cycle (inner owns the wake's sender).
     {
         let inner_weak = Rc::downgrade(&inner);
         glib::spawn_future_local(async move {
@@ -829,12 +824,8 @@ pub fn build(
         });
     }
 
-    // Key handling (Capture phase so the SearchEntry does not swallow these first):
-    // Esc closes; Up/Down move the LIST selection (NOT the entry's text cursor) and
-    // are consumed so the keypress does not also move the caret; every other key
-    // Proceeds to the entry so typing flows normally. Enter deliberately rides
-    // `connect_activate` rather than this controller, because that is the path the
-    // three existing overlay smokes already exercise.
+    // Capture phase so the SearchEntry does not swallow these: Esc closes; Up/Down move the list
+    // selection, not the caret. Enter rides `connect_activate`, the path the overlay smokes exercise.
     {
         let inner_weak = Rc::downgrade(&inner);
         let key = gtk::EventControllerKey::new();
@@ -876,20 +867,10 @@ mod tests {
 
     use crate::picker::activation_index;
 
-    // What the seams above must derive for this module to compile. These are not
-    // preferences; each one is used by an assertion or a failure message here:
-    //
-    //   * `SearchOpenDecision` — `Debug` (printed when an arm returns the wrong
-    //     class).
-    //   * `EnterAction` — `Debug, PartialEq` (the table asserts equality and prints
-    //     both sides).
-    //
-    // `SearchRow` needs nothing: every assertion reads its fields by name, so a
-    // failure names the field rather than dumping a struct.
+    // The seams above must derive `Debug` on `SearchOpenDecision` and `Debug, PartialEq` on
+    // `EnterAction` for these assertions; `SearchRow` needs none, its fields being read by name.
 
-    // =====================================================================
-    // Shared fixture vocabulary
-    // =====================================================================
+    // === Shared fixture vocabulary ===
 
     /// Stand-in for the search root every fixture path hangs off, so `abs_path`
     /// values are absolute and mutually distinct. Mirrors
@@ -934,9 +915,7 @@ mod tests {
         }
     }
 
-    // =====================================================================
-    // The whole input domain of `open_decision`
-    // =====================================================================
+    // === The whole input domain of `open_decision` ===
 
     /// Every liveness state the core can report. Mirrors
     /// `buffer_picker::tests::ALL_LIVENESS`, which is the other total table over
@@ -1255,9 +1234,7 @@ mod tests {
         }
     }
 
-    // =====================================================================
-    // search_options_for
-    // =====================================================================
+    // === search_options_for ===
 
     /// One `search_options_for` table row.
     struct OptionsCase {
@@ -1359,9 +1336,7 @@ mod tests {
         }
     }
 
-    // =====================================================================
-    // result_rows: ordering
-    // =====================================================================
+    // === result_rows: ordering ===
 
     /// The character budget the row-assembly tests hand `result_rows`.
     ///
@@ -1441,9 +1416,7 @@ mod tests {
         );
     }
 
-    // =====================================================================
-    // result_rows: the location each row carries
-    // =====================================================================
+    // === result_rows: the location each row carries ===
 
     /// The anti-swap fixture: every line number, every column and every row index is
     /// distinct from every other value in the table, so no coincidence can satisfy a
@@ -1552,9 +1525,7 @@ mod tests {
         }
     }
 
-    // =====================================================================
-    // result_rows: the label
-    // =====================================================================
+    // === result_rows: the label ===
 
     /// The label fixture's file, chosen with a parent directory so
     /// `SearchFileGroup::label` is the non-trivial `"<basename> - <parent>"` form
@@ -1719,9 +1690,7 @@ mod tests {
         );
     }
 
-    // =====================================================================
-    // result_rows: the cap, and the empty case
-    // =====================================================================
+    // === result_rows: the cap, and the empty case ===
 
     /// The row cap the cap test applies. Far below the fixture's match count, and
     /// not equal to it, so `.take(max)` has something to do.
@@ -1741,9 +1710,8 @@ mod tests {
             .map(|index| {
                 fixture_match(
                     "capped.md",
-                    // Non-contiguous and never equal to the row index, so a cap that
-                    // kept the wrong rows cannot coincide with one that kept the
-                    // right ones.
+                    // Non-contiguous and never equal to the row index, so a cap keeping the wrong rows cannot
+                    // coincide with one keeping the right ones.
                     (index + 1) * 6,
                     u32::try_from(index).expect("a fixture index fits in u32") + 2,
                     4,
@@ -1808,9 +1776,7 @@ mod tests {
         );
     }
 
-    // =====================================================================
-    // activation_target
-    // =====================================================================
+    // === activation_target ===
 
     /// The rows `activation_target` resolves against, as `(rel_path, line_number,
     /// column)` in the order they are listed.
@@ -1845,9 +1811,8 @@ mod tests {
                 abs_path: PathBuf::from(FIXTURE_ROOT).join(rel),
                 line_number: *line,
                 column: *column,
-                // Never anything an assertion in this module reads: `activation_target`
-                // resolves an index and copies three fields, and must not be given a
-                // reason to look as though the label matters.
+                // Never read by an assertion here: `activation_target` resolves an index and copies three
+                // fields, and the label must not look as though it matters.
                 label: format!("row {rel}"),
             })
             .collect()
@@ -2026,9 +1991,7 @@ mod tests {
         );
     }
 
-    // =====================================================================
-    // enter_action
-    // =====================================================================
+    // === enter_action ===
 
     /// One `enter_action` table row.
     struct EnterCase {
@@ -2209,9 +2172,7 @@ mod tests {
         );
     }
 
-    // =====================================================================
-    // search_status
-    // =====================================================================
+    // === search_status ===
 
     /// The error string core produces when ripgrep was never located. It is the only
     /// message this arm ever has to carry in practice, and the status line is the
@@ -2555,9 +2516,7 @@ mod tests {
         );
     }
 
-    // =====================================================================
-    // The cage smoke's premise, made executable in the fast suite
-    // =====================================================================
+    // === The cage smoke's premise, made executable in the fast suite ===
 
     /// The project-search cage smoke's target file (its `PROJSEARCH_FILE_TARGET`) —
     /// the file the overlay must open.

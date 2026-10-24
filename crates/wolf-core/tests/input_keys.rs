@@ -46,9 +46,8 @@ fn cursor_moves() {
         .get(snap.cursor.mode_idx)
         .expect("cursor.mode_idx should index into mode_infos");
 
-    // Insert mode in nvim is conventionally a vertical bar cursor and/or a mode
-    // whose name contains "insert". Accept either signal so we don't over-couple
-    // to nvim's exact mode_info_set ordering/labels.
+    // Accept either a mode name containing "insert" or a vertical-bar cursor, so the check does
+    // not couple to nvim's mode_info_set ordering or labels.
     let name_says_insert = mode.name.to_lowercase().contains("insert");
     let shape_says_insert = matches!(mode.shape, CursorShape::Vertical);
     assert!(
@@ -143,10 +142,7 @@ fn key_notation_fkeys_and_mods() {
         "<A-x>"
     );
 
-    // Meta/super + s -> <D-s>.
-    // NOTE: per the plan the meta/super prefix is `D-` (modifier order
-    // C-,S-,A-,D-). If the implementation emits `<M-s>` instead, the coder must
-    // reconcile this with the documented ordering; we assert `<D-s>` as specified.
+    // Meta/super + s -> <D-s>; the modifier order is C-, S-, A-, D-.
     assert_eq!(
         key_to_notation(&ev(Key::Char('s'), false, false, false, true)),
         "<D-s>"

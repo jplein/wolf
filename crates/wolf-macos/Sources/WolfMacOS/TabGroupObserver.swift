@@ -1,17 +1,4 @@
-//
-//  TabGroupObserver.swift
-//  Best-effort observation of ONE window's native tab group (membership +
-//  selection), firing `onChange` so the coordinator re-snapshots the whole tree
-//  after a tear-off / merge / reorder / tab switch.
-//
-//  The native tab bar mutates `NSWindowTabGroup.windows` (tear-off, drag-merge,
-//  reorder) and `.selectedWindow` (tab switch) without any explicit call site of
-//  ours, so a KVO backstop keeps `state.json` current. Because a window's
-//  `tabGroup` can change identity (a torn-off window gets a fresh group), the
-//  observer re-attaches on `didBecomeKey` — which reliably fires around those
-//  transitions — and re-emits a snapshot then too. The coordinator's coalesced
-//  ~150ms timer absorbs the resulting KVO storm.
-//
+// Best-effort KVO on one window's native tab group.
 
 import AppKit
 
@@ -37,9 +24,8 @@ final class TabGroupObserver: NSObject {
     reattachObserver = NotificationCenter.default.addObserver(
       forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main
     ) { [weak self] _ in
-      // Membership changes (tear-off / drag-merge) frequently move a
-      // window into a NEW tab group and make it key; re-attach to that
-      // group and re-emit a snapshot.
+      // Tear-off and drag-merge often move a window into a new tab group and make it key, so
+      // re-attach to that group and re-emit a snapshot.
       self?.attach()
       self?.onChange()
     }

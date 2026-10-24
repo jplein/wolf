@@ -124,9 +124,7 @@ fn file_actions_chdir_and_new_buffer() {
         frame.cols()
     );
 
-    // --- 2. chdir(dir): cwd() must follow the requested working directory ----
-    // A fresh temp dir; canonicalize-compare the reported cwd against it so the
-    // assertion is robust to macOS `/var` -> `/private/var` symlinking.
+    // --- 2. chdir(dir): cwd() follows, compared canonicalized (macOS `/var` -> `/private/var`).
     let target_dir = tempfile::tempdir().expect("failed to create temp chdir target dir");
     let canonical_target = target_dir
         .path()
@@ -155,9 +153,8 @@ fn file_actions_chdir_and_new_buffer() {
         "cwd() should follow handle.chdir (reported={reported_cwd:?}, target={canonical_target:?})"
     );
 
-    // --- 3. open(file): current_file() must report the opened file ----------
-    // Written under the ORIGINAL temp cwd; opened via its absolute path (works
-    // regardless of the just-changed working directory).
+    // --- 3. open(file): current_file() reports a file under the original cwd, opened by
+    // absolute path.
     let file_path = tmp_cwd.path().join("new_me.md");
     std::fs::write(&file_path, FILE_CONTENT).expect("failed to write the temp file to open");
     let canonical_file = file_path
@@ -187,15 +184,8 @@ fn file_actions_chdir_and_new_buffer() {
          (reported={current:?}, target={canonical_file:?})"
     );
 
-    // --- 4. new_buffer(): wolf_new_untitled names the fresh buffer Untitled N.md -
-    // The old behavior was a raw `:enew` -> `[No Name]` -> empty `current_file()`.
-    // That expectation is now INVERTED: `new_buffer()` produces a real, unsaved,
-    // markdown-named buffer. Because the earlier `chdir` re-homed the startup buffer
-    // to `<target_dir>/Untitled.md` (still a listed buffer), the collision walk skips
-    // the un-numbered index 1 and lands on `Untitled 2.md`. Assert the BASENAME
-    // matches the `^Untitled( \d+)?\.md$` shape (robust to `/var` <-> `/private/var`
-    // symlinking and to the exact collision index), AND specifically that it is the
-    // numbered `Untitled 2.md` the single re-homed collision forces here.
+    // --- 4. new_buffer() names the fresh buffer `Untitled 2.md`: the chdir re-homed the startup
+    // `Untitled.md` into the target dir, so the collision walk skips index 1.
     const UNTITLED_2: &str = "Untitled 2.md";
     handle.new_buffer();
 

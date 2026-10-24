@@ -1,28 +1,4 @@
-//
-//  PreviewSelectionHandler.swift
-//  The `WKScriptMessageHandler` glue that caches a preview page's selected text.
-//
-//  A thin AppKit/WebKit adapter (compile + manual-smoke only), the exact structural
-//  sibling of `PreviewClickFocusHandler` / `PreviewScrollStateHandler`. The
-//  document-start selection script (`PreviewCopySeam.selectionScriptJS`) PUSHES the
-//  page's current selection out to this handler — on every selection change, every
-//  mouse-up and key-up, and once at document start — and this handler forwards it
-//  into the `PaneContainerView`'s per-window cache.
-//
-//  The push direction is load-bearing. Edit > Copy's enablement is decided in
-//  `AppDelegate.validateMenuItem`, which is SYNCHRONOUS and therefore cannot await an
-//  `evaluateJavaScript` round trip; a continuously refreshed Swift-side copy turns
-//  that decision into a plain dictionary read. The text rides along in the push so
-//  the enable decision and the copied bytes come from one snapshot.
-//
-//  ALL the rules — the handler name, the injected JS, the payload shape and the
-//  copy-source decision — live in the headless `WolfKeyMap.PreviewCopySeam`; this file
-//  only routes the decoded result.
-//
-//  The web view's `WKUserContentController` retains this handler STRONGLY; this
-//  handler holds the container WEAKLY, so there is no retain cycle. The callback fires
-//  on the main thread (WebKit's script-message callbacks are main-thread).
-//
+// The `WKScriptMessageHandler` glue that caches a preview page's selected text.
 
 import WebKit
 import WolfKeyMap

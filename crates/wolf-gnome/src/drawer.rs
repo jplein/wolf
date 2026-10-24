@@ -13,7 +13,7 @@
 //! parity with wolf-gnome"* — the macOS decision was taken FOR this front-end, and
 //! the durable reasons (a `term://` string kept out of `state.json`, a divider
 //! fraction with nowhere to live, every `neighbor` result left unperturbed) are in
-//! `crates/wolf-gnome/DECISIONS.md`. The price is paid here: a pane the tree cannot
+//! `notes/wolf-gnome-decisions.md`. The price is paid here: a pane the tree cannot
 //! see needs its own height rule and its own focus bridge.
 //!
 //! ## This module MERGES two Swift files
@@ -394,11 +394,8 @@ mod tests {
     ///   with NO drawer" row returns editor 600.0 rather than collapsing.
     #[test]
     fn drawer_split_table() {
-        // Guard on the FIXTURE, not on the function: every expected number below
-        // describes the production regime, and this is the one line tying the two
-        // together. `init.lua:1231` opens the split at `floor(lines / 3)`, so a
-        // DRAWER_WEIGHT that is not a third means the pixels and the rows have
-        // parted company and the table describes a drawer this app never opens.
+        // Guard on the fixture: init.lua opens the split at `floor(lines / 3)`, so a DRAWER_WEIGHT that
+        // is not a third means this table describes a drawer the app never opens.
         assert_eq!(
             DRAWER_WEIGHT, THIRD,
             "DRAWER_WEIGHT is {DRAWER_WEIGHT}, not one third. The rows below are \
@@ -409,9 +406,8 @@ mod tests {
         );
 
         let cases = [
-            // --- A degenerate pane area collapses the WHOLE result, matching this
-            // --- crate's `geometry` / `editor_inset` convention. The collapse runs
-            // --- BEFORE the `has_drawer` branch, so the closed row collapses too.
+            // --- A degenerate pane area collapses the whole result (the `geometry` / `editor_inset`
+            // --- convention), before the `has_drawer` branch, so the closed row collapses too.
             SplitCase {
                 desc: "a zero pane area collapses both fields",
                 height: 0.0,
@@ -486,10 +482,8 @@ mod tests {
                 expected_drawer: 202.0,
                 sums_to_height: true,
             },
-            // --- The FLOOR: divergence 1 from `DrawerLayout.swift`, which has no
-            // --- floor at all. 90 px is a pane area short enough that a third of it
-            // --- (30 px) is under one pane's minimum, so the strip would be
-            // --- allocated, painted and focusable while showing no text.
+            // --- The floor, divergence 1 from `DrawerLayout.swift` (which has none): a third of 90 px is
+            // --- under one pane's minimum, so the strip would be allocated and focusable but show no text.
             SplitCase {
                 desc: "a short pane area floors the drawer at min_drawer_height",
                 height: 90.0,
@@ -500,12 +494,8 @@ mod tests {
                 expected_drawer: 63.0,
                 sums_to_height: true,
             },
-            // --- The INVERTED range, which is a PANIC GUARD rather than tidiness:
-            // --- `f64::clamp` panics outright when its lower bound exceeds its
-            // --- upper one, and a pane area shorter than one pane's minimum is a
-            // --- real transient while a window allocation settles. The drawer takes
-            // --- the whole area and the editor is left with nothing, which is the
-            // --- only total answer available.
+            // --- The inverted range is a panic guard: `f64::clamp` panics when min > max, and a pane area
+            // --- under one pane's minimum is a real transient. The drawer takes it all, the one total answer.
             SplitCase {
                 desc: "min_drawer_height above the pane area caps instead of panicking",
                 height: 40.0,
@@ -541,9 +531,8 @@ mod tests {
                 sums_to_height: true,
             },
             SplitCase {
-                // The `.max(0.0)` on the lower bound is what this row is for: with a
-                // negative floor AND a negative weight there is nothing else holding
-                // the drawer's height at or above zero.
+                // The `.max(0.0)` on the lower bound is what this row is for: with a negative floor and weight,
+                // nothing else keeps the drawer's height at or above zero.
                 desc: "a negative floor and a negative weight still cannot go below zero",
                 height: 600.0,
                 has_drawer: true,
@@ -553,10 +542,8 @@ mod tests {
                 expected_drawer: 0.0,
                 sums_to_height: true,
             },
-            // --- Divergence 2: the guard covers `weight` and `min_drawer_height`
-            // --- too, not just the height. Narrowing it is the tempting
-            // --- "simplification" (neither is read when there is no drawer), and
-            // --- these five rows are what make that visible.
+            // --- Divergence 2: the guard covers `weight` and `min_drawer_height` too, though neither is
+            // --- read without a drawer; these five rows make narrowing it visible.
             SplitCase {
                 desc: "a NaN weight collapses BOTH fields rather than poisoning one",
                 height: 600.0,
@@ -598,9 +585,8 @@ mod tests {
                 sums_to_height: false,
             },
             SplitCase {
-                // The guard runs BEFORE the `has_drawer` short-circuit, so a
-                // poisoned term collapses the result even on the branch that would
-                // never have read it.
+                // The guard runs before the `has_drawer` short-circuit, so a poisoned term collapses the
+                // result even on the branch that would never read it.
                 desc: "a NaN weight collapses even with NO drawer",
                 height: 600.0,
                 has_drawer: false,
@@ -743,9 +729,8 @@ mod tests {
                 expected: Some(MIDDLE_ID),
             },
             BottomCase {
-                // Same bottom edge, different x: the LEFT leaf wins, it is listed
-                // SECOND, and it carries the GREATER id — so neither "keep the first"
-                // nor the id tie-break can produce this answer by accident.
+                // Same bottom edge, different x: the left leaf wins while listed second with the greater id,
+                // so neither "keep the first" nor the id tie-break can produce this by accident.
                 desc: "a tie on the bottom edge breaks to the SMALLEST x",
                 rects: vec![
                     (LESSER_ID, rect(500.0, 300.0, 500.0, 300.0)),
@@ -754,9 +739,8 @@ mod tests {
                 expected: Some(GREATER_ID),
             },
             BottomCase {
-                // Identical rects: only the id can separate them. `pane_rects` never
-                // produces this, and that is the point — the clause is a verbatim
-                // port and this row is what stops it being deleted as unreachable.
+                // Identical rects: only the id separates them. `pane_rects` never produces this; the row stops
+                // the verbatim-ported clause being deleted as unreachable.
                 desc: "a tie on the bottom edge AND on x breaks to the SMALLEST id",
                 rects: vec![
                     (GREATER_ID, rect(0.0, 300.0, PANE_W, 300.0)),
@@ -870,9 +854,8 @@ mod tests {
         let mut tree = PaneTree::new(TOP);
         tree.split(TOP, BOTTOM, Orientation::Horizontal);
 
-        // Guards on the FIXTURE. A `PaneTree` that stacked these two side by side,
-        // or ordered them the other way, would make every row below assert about a
-        // window shape this front-end never builds.
+        // Fixture guard: any other stacking or order would make every row below assert about a window
+        // shape this front-end never builds.
         assert_eq!(
             tree.leaves(),
             vec![TOP, BOTTOM],
@@ -892,13 +875,8 @@ mod tests {
              rows are never reached and would pass with the bridge deleted."
         );
 
-        // Guards on the SECOND pass's height, measured against the real `PaneTree`
-        // rather than assumed of it. The first says the reduced height genuinely
-        // changes the geometry the seam works over — without it, a height that
-        // happened to equal `PANE_H` would make the second pass a re-run of the
-        // first and prove nothing. The next two say the tree's own answers are the
-        // same at both heights, which is the premise the scale-invariance divergence
-        // rests on and the half that is `PaneTree`'s behaviour, not this module's.
+        // Measured against the real `PaneTree`: the reduced height changes the rects (else pass two
+        // proves nothing), and the tree's answers match at both heights, which scale invariance rests on.
         assert_ne!(
             tree.pane_rects(PANE_W, EDITOR_REGION_H),
             tree.pane_rects(PANE_W, PANE_H),
@@ -987,8 +965,7 @@ mod tests {
                 state: open_with_mru,
                 expected: None,
             },
-            // --- Rule 3: an ordinary tree neighbour is the answer, and it takes
-            // --- precedence over the bridge — otherwise `<C-w>j` from the top row
+            // --- Rule 3: an ordinary tree neighbour wins over the bridge, or `<C-w>j` from the top row
             // --- would skip the pane directly below it.
             FocusCase {
                 desc: "editor with a neighbour below: a tree neighbour WINS over the bridge",

@@ -54,9 +54,6 @@ const FLUSH_TIMEOUT: Duration = Duration::from_secs(10);
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 // -- FfiKeyEvent.kind discriminants (mirror `wolf-ffi/src/lib.rs` `mod kind`) --
-//
-// Char is first, Enter second (the `wolf_core::Key` variant order); the only two
-// kinds needed to type an Ex command. Same as `panes.rs`.
 /// A printable character (`ch` carries the Unicode scalar).
 const KIND_CHAR: u8 = 0;
 /// The Enter / Return key (executes the typed Ex command).
@@ -195,10 +192,8 @@ fn close_pane_drops_one_split() {
         "after :vsplit there should be exactly two live editor window grids (got {after_split})"
     );
 
-    // --- 4. close_pane() -> :close over RPC; poll back to ONE live grid -----
-    // Call the FFI method DIRECTLY (nvim_command("close") over RPC). A typed
-    // `:close<CR>` would be intercepted by the captive init.lua overrides; the FFI
-    // method bypasses them.
+    // --- 4. close_pane() -> :close over RPC; poll back to one live grid.
+    // Call the method, not a typed `:close<CR>`, which the captive init.lua intercepts.
     handle.close_pane();
 
     let deadline = Instant::now() + FLUSH_TIMEOUT;

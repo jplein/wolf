@@ -1,6 +1,6 @@
 //! Pure, GTK-free pane-layout tree for the `wolf-gnome` split-panes UI.
 //!
-//! The crate's pure-seam rule (`crates/wolf-gnome/DECISIONS.md`, "The pure seams")
+//! The crate's pure-seam rule (`notes/wolf-gnome-decisions.md`, "The pure seams")
 //! splits the panes feature into a PURE layout core (this module) and a GTK glue
 //! layer (`pane_view.rs`). This module owns the pane-layout TREE and every geometry
 //! decision that can be reasoned about without a display server, a widget, or a
@@ -148,8 +148,8 @@ enum Frame {
 /// An n-ary tree of editor panes (Neovim's frame model).
 ///
 /// Leaves are panes; internal nodes are flat rows/columns of child frames. The tree
-/// is NEVER empty (it always has at least its root leaf). See the module docs and
-/// the test-contract NOTE above for the pinned conventions (a same-orientation
+/// is NEVER empty (it always has at least its root leaf). See the module docs
+/// for the pinned conventions (a same-orientation
 /// split inserts a flat sibling AFTER the target; Vertical divides width; DFS
 /// child-order traversal).
 pub struct PaneTree {
@@ -361,9 +361,8 @@ impl PaneTree {
         let run: f64 = weights[boundary..].iter().sum();
         let mut tail: f64 = weights[boundary + 1..].iter().sum();
 
-        // Proportions of an all-zero remainder carry no information, so give its
-        // members equal shares to scale from. `equalize` rather than an open-coded
-        // `1/n` keeps this module's one float cast in one place.
+        // An all-zero remainder carries no proportions, so equalize it to scale from; `equalize`, not
+        // an open-coded `1/n`, keeps this module's one float cast in one place.
         if tail <= 0.0 {
             equalize(&mut weights[boundary + 1..]);
             tail = weights[boundary + 1..].iter().sum();
@@ -732,9 +731,7 @@ mod tests {
     /// shape in which a dragged divider CHANGES a neighbour answer.
     const P5: PaneId = 5;
 
-    // --- Bounds used across the geometry tests ------------------------------
-    //
-    // Non-square (W != H) so width math and height math are distinguishable.
+    // Bounds used across the geometry tests: non-square so width and height math are distinguishable.
     /// Test bounds width (px).
     const W: f64 = 100.0;
     /// Test bounds height (px).
@@ -789,9 +786,7 @@ mod tests {
         x_overlap && y_overlap
     }
 
-    // =====================================================================
-    // construction
-    // =====================================================================
+    // --- construction ---
 
     #[test]
     fn new_is_single_leaf() {
@@ -808,9 +803,7 @@ mod tests {
         assert_rect(rect_for(&rects, P1), 0.0, 0.0, W, H, "root fills bounds");
     }
 
-    // =====================================================================
-    // split
-    // =====================================================================
+    // --- split ---
 
     #[test]
     fn split_vertical_two_leaves() {
@@ -865,9 +858,8 @@ mod tests {
 
     #[test]
     fn nested_split_rects() {
-        // Vertical split (P1 left, P2 right), then split the LEFT child (P1)
-        // horizontally into P1 (top) / P3 (bottom). The three rects must tile the
-        // bounds with no overlap and a union equal to the full area.
+        // Vertical split (P1 | P2), then split P1 horizontally into P1 / P3: the three rects must tile
+        // the bounds with no overlap.
         let mut tree = PaneTree::new(P1);
         tree.split(P1, P2, Orientation::Vertical);
         tree.split(P1, P3, Orientation::Horizontal);
@@ -897,23 +889,13 @@ mod tests {
         );
     }
 
-    // =====================================================================
-    // n-ary FLAT (same-orientation) split behavior
-    //
-    // These pin the n-ary frame model (architect's N-ARY plan): a split whose
-    // orientation MATCHES the containing frame FLATTENS into a flat, equalized
-    // sibling row/column (no nesting); a PERPENDICULAR split still NESTS (as the
-    // existing perpendicular tests above already assert). The flat cases are THE
-    // 3-pane regression: the old binary always-nest model produced nested
-    // 25/25/50 columns, blanking the pre-existing right pane.
-    // =====================================================================
+    // --- n-ary flat split: a same-orientation split flattens into an equalized row, a perpendicular
+    // one nests. See crates/wolf-gnome/src/README.md#layoutrs
 
     #[test]
     fn vsplit_flattens_into_row() {
-        // Start with a row [P1, P2] (Vertical = side by side), then Vertical-split
-        // P1 AGAIN. Because the new split's orientation MATCHES the row, P3 is
-        // inserted as a FLAT sibling AFTER the target P1 (architect's "insert after
-        // target" rule) and the row re-equalizes — NOT a nested sub-split.
+        // Row [P1, P2], then Vertical-split P1 again: the orientation matches, so P3 is a flat sibling
+        // inserted after P1 and the row re-equalizes, not a nested sub-split.
         let mut tree = PaneTree::new(P1);
         tree.split(P1, P2, Orientation::Vertical);
         tree.split(P1, P3, Orientation::Vertical);
@@ -995,11 +977,8 @@ mod tests {
 
     #[test]
     fn hsplit_of_row_member_nests() {
-        // PERPENDICULAR split still NESTS: row [P1, P2], then HORIZONTAL-split P1.
-        // Horizontal is perpendicular to the Vertical row, so P1 is wrapped in a
-        // stacked sub-frame [P1, P3] occupying the left half; P2 keeps the full-
-        // height right half. (Same shape as `nested_split_rects` via a different
-        // sequence — confirming nest-only-when-perpendicular.)
+        // A perpendicular split still nests: Horizontal-splitting P1 of row [P1, P2] wraps it in [P1, P3]
+        // in the left half, the shape `nested_split_rects` builds by a different sequence.
         let mut tree = PaneTree::new(P1);
         tree.split(P1, P2, Orientation::Vertical);
         tree.split(P1, P3, Orientation::Horizontal);
@@ -1039,9 +1018,7 @@ mod tests {
         );
     }
 
-    // =====================================================================
-    // remove / collapse
-    // =====================================================================
+    // --- remove / collapse ---
 
     #[test]
     fn remove_collapses_sibling() {
@@ -1070,9 +1047,8 @@ mod tests {
 
     #[test]
     fn remove_collapses_sibling_subtree() {
-        // Nested case: P1 on the left, and a horizontally-split (P2 top / P3
-        // bottom) subtree on the right. Removing P1 collapses its sibling SUBTREE
-        // up into the root slot, which then fills the whole bounds.
+        // P1 left, [P2 / P3] right: removing P1 collapses the sibling subtree into the root slot, which
+        // then fills the bounds.
         let mut tree = PaneTree::new(P1);
         tree.split(P1, P2, Orientation::Vertical);
         tree.split(P2, P3, Orientation::Horizontal);
@@ -1116,9 +1092,7 @@ mod tests {
 
     #[test]
     fn remove_re_equalizes_row() {
-        // Flat row [P1, P3, P2] (see `vsplit_flattens_into_row`); removing the
-        // middle pane P3 leaves a flat [P1, P2] that RE-EQUALIZES to 50/50 — NOT
-        // 25/75 (nvim equalalways).
+        // Flat row [P1, P3, P2]: removing P3 re-equalizes [P1, P2] to 50/50, not 25/75 (equalalways).
         let mut tree = PaneTree::new(P1);
         tree.split(P1, P2, Orientation::Vertical);
         tree.split(P1, P3, Orientation::Vertical);
@@ -1152,10 +1126,8 @@ mod tests {
 
     #[test]
     fn remove_collapses_single_child() {
-        // Row [P1, P2], then a PERPENDICULAR (Horizontal) split of P1 nests a
-        // column [P1, P3] in the left half. Removing P3 leaves the column with a
-        // single child P1, which COLLAPSES into the parent slot; P1 then re-
-        // equalizes with P2 into 50/50 halves.
+        // Row [P1, P2] with a perpendicular column [P1, P3] on the left: removing P3 collapses the
+        // one-child column, and P1 re-equalizes with P2 to 50/50.
         let mut tree = PaneTree::new(P1);
         tree.split(P1, P2, Orientation::Vertical);
         tree.split(P1, P3, Orientation::Horizontal);
@@ -1189,21 +1161,8 @@ mod tests {
 
     #[test]
     fn remove_collapses_and_merges_same_orientation() {
-        // The MERGE case (architect's stated sequence):
-        //   new(P1)
-        //   vsplit P1            -> row[P1, P2]
-        //   hsplit P2 (perp)     -> row[P1, col[P2, P3]]
-        //   vsplit P2 (perp to   -> row[P1, col[ row[P2, P4], P3 ]]
-        //     the column)
-        //   remove P3            -> the column drops to a single child row[P2, P4],
-        //                           which COLLAPSES, and because it is the SAME
-        //                           orientation as the root row it MERGES upward:
-        //                           => flat row[P1, P2, P4].
-        //
-        // NOTE to coder: this pins the final shape — a single FLAT row [P1, P2, P4]
-        // of equal thirds. The impl's normalize() must (a) collapse the 1-child
-        // column AND (b) merge the surviving same-orientation row into the parent
-        // (no same-orientation Split may persist nested), then re-equalize.
+        // The merge case: row[P1, col[row[P2, P4], P3]] minus P3 collapses the column, and its row merges
+        // into the same-orientation root: a flat row[P1, P2, P4] of equal thirds.
         let mut tree = PaneTree::new(P1);
         tree.split(P1, P2, Orientation::Vertical);
         tree.split(P2, P3, Orientation::Horizontal);
@@ -1237,9 +1196,7 @@ mod tests {
         );
     }
 
-    // =====================================================================
-    // neighbor
-    // =====================================================================
+    // --- neighbor ---
 
     #[test]
     fn neighbor_basic_vertical() {
@@ -1321,13 +1278,7 @@ mod tests {
 
     #[test]
     fn neighbor_nested() {
-        // Build a clean 2x2 grid:
-        //   split V (P1 left, P2 right), then split EACH side horizontally:
-        //     split P1 -> P1 (top-left)    / P3 (bottom-left)
-        //     split P2 -> P2 (top-right)   / P4 (bottom-right)
-        // Resulting rects in 100x40:
-        //   P1 (0, 0,50,20)   P2 (50, 0,50,20)
-        //   P3 (0,20,50,20)   P4 (50,20,50,20)
+        // A clean 2x2 grid in 100x40: P1 (0,0) P2 (50,0) top, P3 (0,20) P4 (50,20) bottom, each 50x20.
         let mut tree = PaneTree::new(P1);
         tree.split(P1, P2, Orientation::Vertical);
         tree.split(P1, P3, Orientation::Horizontal);
@@ -1477,9 +1428,7 @@ mod tests {
         );
     }
 
-    // =====================================================================
-    // determinism
-    // =====================================================================
+    // --- determinism ---
 
     #[test]
     fn leaves_and_rects_order_is_stable() {
@@ -1503,9 +1452,7 @@ mod tests {
         );
     }
 
-    // =====================================================================
-    // from_layout — the inverse of `layout()`, for the state-restore path
-    // =====================================================================
+    // --- from_layout: the inverse of `layout()`, for the state-restore path ---
 
     /// The four canonical shapes the rest of this module already builds, each as a
     /// `(description, tree)` pair. Reused by the round-trip test so the constructor
@@ -1569,13 +1516,8 @@ mod tests {
                   precedent)"
     )]
     fn from_layout_does_not_reshape() {
-        // A SAME-ORIENTATION nested split. `PaneTree::split` never produces one (it
-        // inserts a flat sibling instead) and `remove`'s `normalize` flattens any it
-        // finds — but a hand-edited `state.json` can absolutely contain one, and
-        // `from_layout` must PRESERVE it rather than tidying it away. Flattening
-        // would not change the leaf SET, but it would change the tree the widget
-        // builder walks, and the whole point of this constructor is that what nvim
-        // was asked to build and what GTK builds stay in lockstep.
+        // A same-orientation nested split, which `split` never makes but a hand-edited `state.json` can:
+        // `from_layout` preserves it, so the tree nvim was asked for and the one GTK builds stay in step.
         let nested_same_orientation = PaneLayout::Split {
             orientation: Orientation::Vertical,
             children: vec![
@@ -1626,11 +1568,8 @@ mod tests {
 
     #[test]
     fn from_layout_rejects_broken_invariants() {
-        // Every input below is reachable from a hand-edited or corrupted
-        // `state.json`. Rejecting is a CRASH GUARD, not tidiness: `pane_view`'s
-        // `build_chain` indexes `children[0]` unconditionally, so a zero-child split
-        // reaching the widget layer is a PANIC, and `collect_rects` divides by the
-        // weight sum.
+        // Every input is reachable from a hand-edited `state.json`; rejecting is a crash guard, since
+        // `build_chain` indexes `children[0]` blindly and `collect_rects` divides by the weight sum.
         let cases: [(&str, PaneLayout); 8] = [
             (
                 "a zero-child split (build_chain would index children[0] and panic)",
@@ -1744,17 +1683,8 @@ mod tests {
         );
     }
 
-    // =====================================================================
-    // divider fractions — the drag mutator, its reader, and the SUFFIX
-    // convention that deliberately diverges from macOS
-    //
-    // [`PaneTree::set_divider_fraction`] is the ONLY writer in this module that
-    // can produce a non-equal weight vector: `split`, `remove` and `DEFAULT_RATIO`
-    // between them yield nothing but `1/n` and `[0.5, 0.5]`. Every downstream
-    // claim that a SAVED weight was applied rather than recomputed rests on that,
-    // so these tests are also what stops `pane_layout`'s and the smokes' weight
-    // assertions being vacuous.
-    // =====================================================================
+    // --- divider fractions. `set_divider_fraction` is the only writer of a non-equal weight vector,
+    // so these tests keep `pane_layout`'s and the smokes' saved-weight assertions from being vacuous.
 
     /// A two-leaf vertical split at [`DEFAULT_RATIO`] — the shape one `<C-w>v`
     /// produces.
@@ -1992,9 +1922,7 @@ mod tests {
     /// below wrong.
     #[test]
     fn set_divider_fraction_walks_a_path() {
-        // Vertical[ Horizontal[P1, P3], P2 ] — the shape `hsplit_of_row_member_nests`
-        // builds: a stacked column of two in the left half, one full-height pane on
-        // the right.
+        // Vertical[Horizontal[P1, P3], P2]: a stacked pair in the left half, one full-height pane right.
         let mut tree = PaneTree::new(P1);
         tree.split(P1, P2, Orientation::Vertical);
         tree.split(P1, P3, Orientation::Horizontal);
@@ -2283,15 +2211,8 @@ mod tests {
             "the nested column's fraction read back as {got}, not 0.8"
         );
 
-        // …and at an INNER boundary of a nested split, which is the only shape in
-        // which `path` and `boundary` can be confused for one another. A reader
-        // that answered about the whole nested split whenever the path was
-        // non-empty would survive every case above: the flat cases have an empty
-        // path, and the case just above is at boundary 0, where the head's share of
-        // the suffix IS the head's share of the split.
-        //
-        // Vertical[ Horizontal[P1, P3, P4], P2 ] — a column of three in the left
-        // half, one full-height pane on the right.
+        // …and at an inner boundary of a nested split, the only shape where `path` and `boundary` can be
+        // confused: Vertical[Horizontal[P1, P3, P4], P2]. A reader conflating them passes every case above.
         let mut deep = PaneTree::new(P1);
         deep.split(P1, P2, Orientation::Vertical);
         deep.split(P1, P3, Orientation::Horizontal);
@@ -2483,11 +2404,8 @@ mod tests {
              assertion above is the one that discriminates."
         );
 
-        // --- Three children, dragged at the INNER boundary ---------------------
-        //
-        // The renormalization has to scale the WHOLE vector, including the prefix
-        // weight the mutator never writes: `weights[0]` goes in at 2 of a total of
-        // 4 and must come out at 0.5 of a total of 1.
+        // --- Three children, dragged at the inner boundary: renormalization scales the whole vector,
+        // including the unwritten prefix: `weights[0]` goes in at 2 of 4 and comes out at 0.5 of 1.
         let row = PaneLayout::Split {
             orientation: Orientation::Vertical,
             children: vec![
@@ -2858,15 +2776,8 @@ mod tests {
             );
         }
 
-        // --- Half 2: the discriminating shape ----------------------------------
-        //
-        //   Horizontal[ Vertical[P1, P2, P3], Vertical[P4, P5] ]
-        //
-        // a row of THREE over a row of TWO. At equal shares the middle column spans
-        // x 33.3..66.7 and so overlaps BOTH bottom panes; the tie resolves to the
-        // DFS-first candidate, P4. Dragging the top row's first divider to 0.6
-        // moves the middle column to 60..80, clear of P4 entirely, and the answer
-        // becomes P5.
+        // Half 2: Horizontal[Vertical[P1, P2, P3], Vertical[P4, P5]]. At equal shares the middle column
+        // overlaps both bottom panes and ties to DFS-first P4; a 0.6 drag moves it to 60..80, giving P5.
         let mut tree = PaneTree::new(P1);
         tree.split(P1, P4, Orientation::Horizontal);
         tree.split(P1, P2, Orientation::Vertical);

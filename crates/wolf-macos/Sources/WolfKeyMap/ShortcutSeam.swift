@@ -1,15 +1,4 @@
-//
-//  ShortcutSeam.swift
-//  Pure, AppKit-free decision seams for macOS keyboard shortcuts.
-//
-//  The sibling of `PickerSeam`: a pure, display-free seam exercised with scalar
-//  inputs only — NO NSEvent, NO window, NO AppKit. It decides whether a keystroke
-//  is the Command-N "new window" chord (plan §5). It mirrors the shape of
-//  `PickerSeam.isPickerTrigger` but matches the letter "n" instead of "o".
-//
-//  Imports ONLY Foundation, so it lives in the Foundation-only `WolfKeyMap`
-//  module alongside `PickerSeam.swift`.
-//
+// Pure, AppKit-free decision seams for keyboard shortcuts.
 
 import Foundation
 

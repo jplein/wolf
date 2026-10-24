@@ -1,46 +1,4 @@
-//
-//  PreviewSeamTests.swift
-//  Pure, headless unit tests for the AppKit-free `WolfKeyMap.PreviewSeam`.
-//
-//  Like `FontSizeSeamTests` / `CommandSeamTests`, they import ONLY
-//  Foundation-level test machinery (no AppKit, no WKWebView, no live Neovim) and
-//  stay in the headless `WolfKeyMap` module. The Preview command's mechanism
-//  itself (an IN-PLACE `nvim_win_set_buf` on the active pane) is core + AppKit
-//  glue, covered by the wolf-ffi real-nvim tests; what remains pure here is the
-//  per-window reload gate and the click-to-focus channel. The per-pane
-//  preview/edit MODE decision lives in `PaneModeSeamTests`.
-//
-//  ## CONTRACT UNDER TEST — preview reload gate (winsNeedingReload)
-//
-//    public enum PreviewSeam {
-//        // A per-preview-WINDOW load key. Two freshly-opened files can share a
-//        // `sourceTick`, so the gate must react to the bound SOURCE BUFFER
-//        // identity changing as well as the tick advancing.
-//        public struct PreviewLoad: Equatable {
-//            public let sourceBufnr: Int64
-//            public let sourceTick: UInt64
-//            public init(sourceBufnr: Int64, sourceTick: UInt64)
-//        }
-//
-//        // Returns the preview WINDOW handles (keys of `current`) whose
-//        // `PreviewLoad` differs from the `loaded` entry for that same win.
-//        static func winsNeedingReload(
-//            current: [Int64: PreviewLoad],
-//            loaded: [Int64: PreviewLoad]
-//        ) -> [Int64]
-//    }
-//
-//  A win is returned iff `loaded[win] != current[win]`, which fires on:
-//    * FIRST BIND      — no `loaded` entry for the win yet.
-//    * SOURCE CHANGED  — a different `sourceBufnr` even at an EQUAL `sourceTick`
-//                        (the reused-preview-pane regression: a single window
-//                        switching which source it previews must reload).
-//    * TICK ADVANCED   — the same `sourceBufnr` but a newer `sourceTick`.
-//  It does NOT fire when all of (win, sourceBufnr, sourceTick) match. Only
-//  `current` is iterated, so a win present only in `loaded` is never returned.
-//  The result ORDER is unspecified (dictionary iteration): assert membership via
-//  `Set<Int64>`, never array equality.
-//
+// See crates/wolf-macos/Tests/WolfKeyMapTests/README.md#previewseamtestsswift
 
 import XCTest
 
@@ -63,10 +21,8 @@ final class PreviewSeamTests: XCTestCase {
   // MARK: - winsNeedingReload: an EMPTY loaded map reloads EVERY current win
 
   func testEmptyLoadedReloadsEveryCurrentWin() {
-    // The exact mechanism the appearance re-pull relies on: clearing the per-window
-    // `loaded` map (an empty `[:]`) must make `winsNeedingReload` return EVERY
-    // currently-bound preview window, so a dark/light flip forces a full re-render
-    // of the freshly re-sourced nvim colorscheme colors.
+    // Clearing `loaded` to `[:]` must reload every bound preview window: the appearance re-pull
+    // relies on it to re-render with the freshly sourced colorscheme.
     let current: [Int64: PreviewSeam.PreviewLoad] = [
       10: PreviewSeam.PreviewLoad(sourceBufnr: 1, sourceTick: 5),
       11: PreviewSeam.PreviewLoad(sourceBufnr: 2, sourceTick: 6),

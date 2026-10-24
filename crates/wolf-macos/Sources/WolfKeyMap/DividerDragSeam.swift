@@ -1,15 +1,4 @@
-//
-//  DividerDragSeam.swift
-//  Pure, AppKit-free divider-drag math for the macOS split-panes UI.
-//
-//  Maps a pointer position along the drag axis to a clamped left-child fraction
-//  for the two adjacent panes a divider governs. The clamp keeps NO pane below the
-//  minimum grid size (min columns for a vertical divider, min rows for a
-//  horizontal one), accounting for per-side pixel OVERHEAD (editor inset +
-//  statusbar). The clamp lives HERE (it needs cell size + pixel spans), NOT in the
-//  pixel-free `PaneTree`. Foundation-only, unit-tested headlessly (see
-//  `DividerDragSeamTests.swift`).
-//
+// Pure divider-drag math: pointer position to a clamped left-child fraction.
 
 import Foundation
 

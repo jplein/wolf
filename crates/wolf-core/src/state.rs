@@ -121,7 +121,7 @@ pub enum PaneNode {
 ///
 /// A tab is ONE TABPAGE, never a captive Neovim of its own. On GTK a window owns
 /// one core and one tab; on macOS N views share their project's single Neovim,
-/// each bound to a tabpage of it (`crates/wolf-macos/DECISIONS.md`, "One Neovim
+/// each bound to a tabpage of it (`notes/wolf-macos-decisions.md`, "One Neovim
 /// per project").
 ///
 /// `cwd` is the absolute canonicalized path nvim reported, or `""` when it has
@@ -564,12 +564,8 @@ fn writer_loop(inner: &Arc<StoreInner>) {
             let mut cell = inner.cell.lock();
             while cell.generation <= cell.written {
                 let timed_out = inner.cond.wait_for(&mut cell, WRITER_IDLE_POLL).timed_out();
-                // The writer's own Arc is the only one left: every StateStore
-                // handle is gone, nothing is pending, so exit. The pending
-                // check (`generation <= written`) must be re-read here: a last
-                // handle can mutate and drop between the wait timing out and
-                // the lock being reacquired, and that mutation must still be
-                // written.
+                // Exit once every StateStore handle is gone. Re-check `generation <= written`:
+                // a last handle can mutate and drop between the timeout and the relock.
                 if timed_out && Arc::strong_count(inner) == 1 && cell.generation <= cell.written {
                     return;
                 }

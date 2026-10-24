@@ -1,20 +1,10 @@
 #!/usr/bin/env bash
-# swift-format CHECK: lint Swift sources with the host Xcode swift-format binary.
-#
-# This is a `no-sandbox` sh_test: the swift-format binary lives in the host
-# Xcode toolchain (resolved via `xcrun --find swift-format`), not a hermetic
-# Bazel input, so it must run outside the sandbox. The Swift source files are
-# staged as runfiles (passed as "$@" by the BUILD rule via `$(rootpaths ...)`).
-#
-# ADVISORY: `lint --strict` may report style violations on existing code. That
-# is expected; the target's job is to RUN the linter, not to guarantee zero
-# findings.
+# `swift-format lint --strict` over the Swift files passed as "$@", with the host Xcode binary,
+# which is why the test is `no-sandbox`.
 set -euo pipefail
 
-# Resolve the host swift-format binary. Prefer `xcrun --find`, then derive it
-# from `xcode-select -p`, then fall back to the canonical Xcode path. Bazel test
-# actions run with a scrubbed environment, so we try several routes and print
-# diagnostics if all fail.
+# Bazel tests run with a scrubbed environment, so try xcrun, then xcode-select, then the
+# canonical Xcode path.
 find_swift_format() {
   local sf
   sf="$(/usr/bin/xcrun --find swift-format 2>/dev/null || true)"

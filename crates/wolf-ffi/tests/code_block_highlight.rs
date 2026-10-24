@@ -325,15 +325,12 @@ fn code_block_go_highlighted_and_unknown_lang_plain() {
     // --- 2. POSITIVE: hl.md's go block highlights to inline-styled spans -------
     send_ex_command(&handle, ":e hl.md");
     wait_for_markdown_active(&handle, true, "after :e hl.md");
-    // Real switch barrier: the startup buffer is now a markdown `Untitled.md`, so
-    // `wait_for_markdown_active(true)` returns IMMEDIATELY (markdown->markdown) and
-    // cannot witness the `:e hl.md`. Wait until hl.md is genuinely the ACTIVE buffer
-    // before the SYNC `open_preview` races ahead of the buffered `:e`.
+    // Barrier on hl.md being current: the startup `Untitled.md` is already markdown, so the
+    // markdown gate returns at once and the sync `open_preview` would race the buffered `:e`.
     wait_for_current_file(&handle, "hl.md");
 
-    // The in-place open_preview() binds the scratch into the ACTIVE pane, so a
-    // typed `:vsplit` first keeps a second pane editing hl.md — the pane step 3
-    // cycles back to for the `:e plain.md`.
+    // open_preview() binds the scratch into the active pane, so `:vsplit` first keeps a second pane
+    // editing hl.md for step 3's `:e plain.md`.
     send_ex_command(&handle, ":vsplit");
     wait_for_window_count(&handle, TWO_PANES, "after the typed :vsplit");
     let preview_bufnr = handle.open_preview();
@@ -371,13 +368,8 @@ fn code_block_go_highlighted_and_unknown_lang_plain() {
         "render_preview(hl.md) must keep the `class=\"language-go\"` code wrapper: {html}"
     );
 
-    // --- 3. NEGATIVE: an unknown-language fence falls back to plain <pre><code> -
-    // Focus the source pane, switch it to plain.md (still a .md, so markdown stays
-    // active), and preview it IN PLACE in that pane. (Both panes then hold a
-    // preview, which is fine — only the rendered HTML is asserted below.)
-    // Deterministic barrier first: wait for the markdown gate to go FALSE (the
-    // active pane holds the non-markdown scratch), or `focus_markdown_source`
-    // could read a stale true and skip the cycle.
+    // --- 3. Negative: an unknown-language fence falls back to plain <pre><code>.
+    // Wait for the gate to go false first, or `focus_markdown_source` reads a stale true.
     wait_for_markdown_active(
         &handle,
         false,

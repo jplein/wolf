@@ -8,7 +8,7 @@
 //!
 //! ## A scrollbar here is a projection, not a control
 //!
-//! `architecture.md` decision 5 makes the scrollbar a rendering of Neovim's own
+//! `specs/architecture.md` decision 5 makes the scrollbar a rendering of Neovim's own
 //! viewport rather than an input surface, and this crate takes that literally: the
 //! thumb is painted, and there is no `gtk::Scrollbar`. A `gtk::Scrollbar` carries a
 //! `gtk::Adjustment` and is interactive, so shipping one would invite a thumb drag
@@ -18,9 +18,9 @@
 //! Two further reasons hold independently of that one. The gutter the thumb sits in
 //! is painted in the editor's own background, a per-frame value out of the snapshot,
 //! while a widget's background is theme-owned — the same reason the statusbar strip
-//! is painted, per `DECISIONS.md` "Window structure". And a widget child would ride
+//! is painted, per `notes/wolf-gnome-decisions.md` "Window structure". And a widget child would ride
 //! the pane's host `gtk::Overlay`, re-parented into a freshly rebuilt tree on every
-//! layout change, inside the pane area `DECISIONS.md`'s focus regime warns about.
+//! layout change, inside the pane area `notes/wolf-gnome-decisions.md`'s focus regime warns about.
 //!
 //! ## The thumb sits in the pane's right PADDING GUTTER
 //!
@@ -41,7 +41,7 @@
 //!
 //! ## Only the thumb is drawn, and there is no track
 //!
-//! macOS fades its overlay bar out on a repeating 30 Hz timer. `DECISIONS.md`
+//! macOS fades its overlay bar out on a repeating 30 Hz timer. `notes/wolf-gnome-decisions.md`
 //! "Threading and the wake" states that nothing polls and no timer is periodic, so
 //! this crate cannot port the fade, and the bar is therefore always visible. A
 //! permanently visible full-height trough is a GNOME-unidiomatic ornament, and it is
@@ -337,9 +337,8 @@ mod tests {
                 expected: Some((826.0, 52.0, 8.0, 33.44)),
             },
             ThumbCase {
-                // y = 52 + (189/200) * 608 = 626.56, and 626.56 + 33.44 = 660 is
-                // exactly the grid's lower edge — the thumb ends flush with it rather
-                // than hanging below.
+                // y = 52 + (189/200) * 608 = 626.56, and 626.56 + 33.44 = 660 is exactly the grid's lower edge,
+                // so the thumb ends flush rather than hanging below.
                 desc: "2: a viewport at the bottom is flush with the grid's lower edge",
                 pane_w: 840.0,
                 grid: GRID,
@@ -392,9 +391,8 @@ mod tests {
                 expected: None,
             },
             ThumbCase {
-                // THE row `u64` arithmetic panics on. `botline - topline` is -60 as a
-                // real number; taken in `u64` it is an overflow, which is a debug
-                // panic rather than a wrapped value.
+                // The row `u64` arithmetic panics on: `botline - topline` is -60, which in `u64` overflows
+                // (a debug panic, not a wrapped value).
                 desc: "6: a botline BELOW its topline yields no thumb and no panic",
                 pane_w: 840.0,
                 grid: GRID,
@@ -483,9 +481,8 @@ mod tests {
                 expected: None,
             },
             ThumbCase {
-                // Row 1 with an absurd `curline` and nothing else changed. The cursor
-                // line is deliberately unread, so the thumb must not move — a cursor
-                // move that scrolls nothing must not make the indicator jump.
+                // Row 1 with an absurd `curline`: the cursor line is deliberately unread, so a cursor move that
+                // scrolls nothing must not move the thumb.
                 desc: "12: curline is unread, so a wild cursor line moves nothing",
                 pane_w: 840.0,
                 grid: GRID,
@@ -498,24 +495,8 @@ mod tests {
                 expected: Some((826.0, 52.0, 8.0, 33.44)),
             },
             ThumbCase {
-                // THE ONLY ROW IN THIS TABLE ON WHICH THE UPPER `y` CLAMP BINDS, and
-                // the reason it exists. The floor lifts `h` above the proportional
-                // height — `max(608 * 11/100000, 24) = 24` — so the proportional
-                // POSITION leaves no room for it: `raw = 52 + (99989/100000) *
-                // 608 = 659.93312`, while the lowest top edge a 24 px thumb may have
-                // is `52 + 608 - 24 = 636`. The clamp is what turns the first number
-                // into the second, and without it the thumb hangs 23.93 px below the
-                // pane's grid — the real bug it prevents, a 100k-line file scrolled to
-                // its end.
-                //
-                // ROW 2 IS NOT A SUBSTITUTE AND THIS IS NOT A DUPLICATE OF IT. Row 2
-                // lands exactly on the boundary: `626.56 + 33.44` is precisely 660,
-                // the grid's own lower edge, so the clamp returns its argument
-                // untouched there and deleting the clamp outright leaves row 2 green.
-                // Every other `Some` row's raw `y` sits far BELOW the bound — rows 1,
-                // 7 and 12 at the track's top, row 8 in a track no taller than its own
-                // thumb — so the clamp is a no-op for them too. Delete this row and
-                // nothing in the file tests the clamp at all.
+                // The only row on which the upper `y` clamp binds (raw 659.93 against a 636 bound); delete it
+                // and nothing tests the clamp. See notes/crates/wolf-gnome/src/scrollbar.rs.md#the-clamp-row.
                 desc: "13: the floor's thumb is held inside the end of a huge buffer",
                 pane_w: 840.0,
                 grid: GRID,

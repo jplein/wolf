@@ -1,20 +1,4 @@
-//
-//  DrawerLayout.swift
-//  Pure, AppKit-/CoreGraphics-free geometry for the terminal DRAWER (terminal-drawer
-//  FIX plan §4).
-//
-//  This is a headless seam in the `WolfKeyMap` module — Foundation-only, no live
-//  view, no `CGFloat`. The drawer is a full-width, root-bottom strip at a fixed
-//  ~1/3 weight held OUTSIDE the pure `PaneTree` (so the tree keeps its 1:1 parity
-//  with wolf-gnome). Given the pane-area height and whether a drawer is present, it
-//  splits that height into the editor region (which the tree tiles over) and the
-//  drawer strip below it, and vends the full-width drawer rectangle.
-//
-//  Like `EditorInset` / `PaneGeometry`, it reuses the existing `Rect` value type
-//  from `PaneTree.swift` and is `Double`-based so it stays headlessly testable (see
-//  `DrawerLayoutTests.swift`). `PaneContainerView` wires it into `paneRects()`; that
-//  AppKit glue is compile + manual-smoke only.
-//
+// Pure geometry splitting the pane area into the editor region and the terminal drawer.
 
 import Foundation
 

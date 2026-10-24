@@ -92,9 +92,7 @@ impl TreeRefreshGate {
 mod tests {
     use super::*;
 
-    // =========================================================================
-    // The version gate
-    // =========================================================================
+    // === The version gate ===
 
     /// One call in a version-gate SEQUENCE: the snapshot version the caller passes
     /// and whether the gate must answer "rebuild".
@@ -205,10 +203,8 @@ mod tests {
              version 2 of the old one"
         );
 
-        // The production shape of the same hazard, spelled out: a session whose
-        // first batch was version 1, a re-root, and a fresh search that also
-        // starts at version 1. Without the reset the new project's first batch is
-        // indistinguishable from a redundant wake.
+        // The production shape: version 1, a re-root, and a fresh search starting at version 1 again;
+        // without the reset the new project's first batch looks like a redundant wake.
         let mut gate = TreeRefreshGate::new(true);
         assert!(
             gate.should_rebuild(1),
@@ -223,9 +219,7 @@ mod tests {
         );
     }
 
-    // =========================================================================
-    // The visibility gate
-    // =========================================================================
+    // === The visibility gate ===
 
     /// While hidden, a refresh is dropped and remembered; the sidebar reappearing
     /// owes exactly ONE catch-up.
@@ -282,9 +276,7 @@ mod tests {
         );
     }
 
-    // =========================================================================
-    // The two gates against a streaming traversal
-    // =========================================================================
+    // === The two gates against a streaming traversal ===
 
     /// Nine wakes carrying three distinct versions produce three rebuilds.
     ///
@@ -381,13 +373,8 @@ mod tests {
              catch-up owed on the way out would rebuild a tree nobody can see"
         );
 
-        // --- a batch lands at version 2 while hidden --------------------------
-        //
-        // The refresh is REFUSED here, so production returns before ever reading
-        // the search view: `should_rebuild` is NEVER called for version 2, and the
-        // gate's version tracking is still sitting at 1 when the sidebar comes
-        // back. That is exactly what makes step 5 the interesting one — the
-        // catch-up is the first and only call that ever sees version 2.
+        // --- A batch lands at version 2 while hidden: refused before the search view is read, so the
+        // gate still tracks 1 and step 5's catch-up is the only call that ever sees version 2.
         assert!(
             !gate.request_refresh(),
             "step 3: a traversal batch arriving while the sidebar is HIDDEN must be refused, and \

@@ -93,15 +93,8 @@ const EXPECTED_SENTINEL_LINES: usize = 2;
 /// The marker the `:lua` command writes for a satisfied condition.
 const MARK_OK: &str = "OK";
 
-// -- Pinned WolfCursor / WolfTitlebar values (dark variant) --------------------
-//
-// These constants are the literal `guifg`/`guibg` values the vendored lighthouse
-// colorscheme defines for the two Wolf highlight groups at the pinned commit
-// 514dec2c79701b74082defc19090bd1dae57765b (dark variant — init.lua sets
-// `background=dark`). That commit is what `bazel/lighthouse/extensions.bzl` and
-// `flake.nix`'s `wolfVendoredPins.lighthouse` both fetch, which
-// `crates/wolf-gnome/tests/vendored_pins.rs` is what keeps true. If a lighthouse
-// bump changes them, update these pins.
+// -- Dark-variant WolfCursor / WolfTitlebar values at the commit in bazel/lighthouse/README.md.
+// A lighthouse bump that changes them means updating these pins.
 /// `WolfTitlebar guibg=#1b1b1b` at the pinned commit (dark).
 const LIGHTHOUSE_TITLEBAR_BG: u32 = 0x001B_1B1B;
 /// `WolfTitlebar guifg=#f1f1f1` at the pinned commit (dark).
@@ -157,10 +150,8 @@ fn lighthouse_colorscheme_active_from_sibling_dir() {
     };
     std::env::set_var("WOLF_NVIM_BIN", &nvim_bin);
 
-    // SKIP too when the vendored lighthouse tree is not staged. Bazel stages it in
-    // the runfiles and the Linux devShell exports it from `wolfLighthouse`, so this
-    // branch belongs to a run outside BOTH — inside either, reaching it means the
-    // export was lost and this file has stopped proving anything (see the header).
+    // Skip without the lighthouse tree. Bazel stages it and the devShell exports it from
+    // `wolfLighthouse`, so inside either, reaching this skip means the export was lost.
     let Some(lighthouse_tree) = common::lighthouse_dir_or_none() else {
         eprintln!(
             "\nSKIP: wolf-ffi lighthouse_load — WOLF_TEST_LIGHTHOUSE_DIR is unset or names \
@@ -229,13 +220,8 @@ fn lighthouse_colorscheme_active_from_sibling_dir() {
         frame.cols()
     );
 
-    // --- Ask nvim to write a sentinel proving lighthouse is active ----------
-    // No exec_lua accessor exists on the FFI surface, so drive a real `:lua`
-    // Ex command (through the same send_key path Swift uses) that writes two
-    // markers: whether `vim.g.colors_name == "lighthouse"` (activation ran) and
-    // whether `vim.o.background == "dark"` (dark variant selected). The path has
-    // no spaces/quotes (a tempdir path), so typing it verbatim inside a Lua
-    // double-quoted string is safe.
+    // --- Sentinel: a typed `:lua` (no Lua-eval accessor) writes `colors_name` and `background`.
+    // The tempdir path has no spaces or quotes, so it is typed verbatim into a Lua string.
     let sentinel = root.join("lighthouse_proof.txt");
     let sentinel_str = sentinel.to_string_lossy().into_owned();
     let lua_cmd = format!(
@@ -277,13 +263,8 @@ fn lighthouse_colorscheme_active_from_sibling_dir() {
          (sentinel line 2 = {background:?})"
     );
 
-    // --- Startup theme pickup: WolfTitlebar / WolfCursor from the scheme ----
-    // lighthouse@514dec2 (dark) defines both Wolf groups (see the pinned
-    // constants above). init.lua activates the colorscheme while nvim boots —
-    // BEFORE core installs the theme-tracking helper over RPC — so this proves
-    // the helper's emit-once picks up a colorscheme activated before setup ran.
-    // The `wolf_theme` notification arrives asynchronously; poll until the
-    // titlebar bg surfaces as set.
+    // --- Startup pickup: init.lua activates lighthouse before core installs the theme helper, so
+    // this proves the helper's emit-once sees it. `wolf_theme` is async, so poll.
     let deadline = Instant::now() + FLUSH_TIMEOUT;
     let mut titlebar_bg = handle.theme_titlebar_bg();
     while Instant::now() < deadline {

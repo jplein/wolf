@@ -209,11 +209,8 @@ fn entry_cap_truncates_and_completes() {
         "hitting the entry cap must mark the search truncated; got {} entries",
         result.entries.len()
     );
-    // A cap-truncated walk still ends cleanly, so `complete` is true (that is what
-    // `poll_until_complete` waited for) — the flag exists for future UX/FFI.
-    // Bound: with TRAVERSAL_BATCH (256) > ENTRY_CAP the walk breaks exactly at the
-    // cap, so expect ==ENTRY_CAP. We assert `<= ENTRY_CAP` (plus `>= 1`) to stay
-    // robust if a future batch-flush boundary lets a couple extra entries land.
+    // TRAVERSAL_BATCH (256) > ENTRY_CAP, so the walk breaks exactly at the cap; `<=` rather than
+    // `==` keeps the case robust to a future batch-flush boundary.
     assert!(
         result.entries.len() <= ENTRY_CAP,
         "streaming must stop at (or very near) the cap {ENTRY_CAP}; got {}",

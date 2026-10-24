@@ -1,23 +1,4 @@
-//
-//  RestoreSeam.swift
-//  Pure, AppKit-free "group-by-cwd" restore planner for the project/tabpage
-//  model (plan §4.2 + OD5).
-//
-//  The macOS front-end maps each view (an OS window / native tab) to one nvim
-//  TABPAGE within a captive-Neovim PROJECT; project identity is NOT persisted.
-//  On restore, this seam rebuilds projects from the saved (window, tab, cwd)
-//  tree: tabs whose saved cwd is a REAL existing directory group by that cwd
-//  STRING (merging across windows) into one project; every empty-state (`""`)
-//  or since-deleted / non-directory tab becomes its OWN single-tab project
-//  (OD5 — never collapse them, matching "new window => new project").
-//
-//  Purity: the ONLY injected impurity is `isDirectory` (the AppKit caller passes
-//  a FileManager-backed check; tests pass a set lookup). The seam does NOT
-//  canonicalize — the AppKit caller persists an already-canonical cwd via
-//  `cwd_for_tabpage`, so grouping is on the cwd string as-saved. Imports only
-//  Foundation, so it lives in the Foundation-only `WolfKeyMap` module alongside
-//  `StateSeam.swift` / `CwdTitleSeam.swift`.
-//
+// Pure group-by-cwd restore planner for the project and tabpage model.
 
 import Foundation
 

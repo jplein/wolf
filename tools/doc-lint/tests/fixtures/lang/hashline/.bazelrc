@@ -1,0 +1,14 @@
+# case: only a line whose first non-space char is # is a comment
+
+build --x # seg01abcd seg02abcd seg03abcd seg04abcd seg05abcd seg06abcd seg07abcd seg08abcd seg09abcd seg10abcd
+
+# case: three # lines fail
+
+# one
+# two
+# three
+build --y
+
+    # indented one
+    # indented two
+build --z

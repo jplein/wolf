@@ -23,7 +23,7 @@
 //! `undercurl` maps to [`pango::Underline::Error`], Pango's wavy underline, for
 //! three reasons. A hand-stroked Cairo wave would give `draw_glyph` a SECOND
 //! drawing mechanism with its own thickness, amplitude and vertical placement,
-//! which is exactly what `crates/wolf-gnome/DECISIONS.md`'s one-glyph-path rule
+//! which is exactly what `notes/wolf-gnome-decisions.md`'s one-glyph-path rule
 //! exists to prevent. The placement is Pango's to know in any case: the underline
 //! position and thickness come from the face's own `OS/2` / `post` metrics, which
 //! Pango already reads and this crate does not, so a hand-stroked wave would need
@@ -64,7 +64,7 @@
 //! ## Divergence from macOS
 //!
 //! macOS folds `undercurl` into a STRAIGHT underline; this front-end draws the
-//! wave Neovim asked for. `macos-followups.md` records it as a portable
+//! wave Neovim asked for. `notes/macos-followups.md` records it as a portable
 //! improvement rather than a Linux quirk.
 
 use wolf_core::{ResolvedStyle, Rgb};
@@ -129,9 +129,8 @@ impl GlyphDecoration {
 /// Takes `&ResolvedStyle` to match `draw_glyph`'s own parameter.
 #[must_use]
 pub fn glyph_decoration(style: &ResolvedStyle) -> GlyphDecoration {
-    // `undercurl` is tested FIRST, and that order is the rule: Pango carries one
-    // underline attribute per run, so a style with both bits set has to lose one
-    // and the wave is the one Neovim asked for.
+    // `undercurl` is tested first: Pango carries one underline attribute per run, so with both bits
+    // set one must lose, and the wave is the one Neovim asked for.
     let underline = if style.undercurl {
         pango::Underline::Error
     } else if style.underline {

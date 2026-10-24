@@ -292,78 +292,51 @@ impl Handler for RedrawHandler {
                 }
             }
             CURRENT_FILE_EVENT => {
-                // `apply_current_file` acquires and DROPS the write lock before
-                // returning, so the wake fires strictly after the lock is
-                // released — same wake-after-unlock invariant as the redraw path.
+                // The wake fires after `apply_current_file` has dropped the write lock.
                 self.apply_current_file(args).await;
                 (self.wake)();
             }
             BUFFERS_EVENT => {
-                // `apply_buffers` builds the new map BEFORE taking the write
-                // guard, then assigns it and DROPS the lock before returning; the
-                // wake fires strictly after the lock is released (same
-                // wake-after-unlock invariant). This is NOT a redraw frame, so
-                // `seq` is left unchanged.
+                // Not a redraw frame, so no `seq` bump; wakes after `apply_buffers` drops the lock.
                 self.apply_buffers(args).await;
                 (self.wake)();
             }
             TAB_CWDS_EVENT => {
-                // `apply_tab_cwds` builds the new map BEFORE taking the write
-                // guard, then assigns it and DROPS the lock before returning; the
-                // wake fires strictly after the lock is released (same
-                // wake-after-unlock invariant). This is NOT a redraw frame, so
-                // `seq` is left unchanged.
+                // Not a redraw frame, so no `seq` bump; wakes after `apply_tab_cwds` drops the lock.
                 self.apply_tab_cwds(args).await;
                 (self.wake)();
             }
             OPEN_FILES_EVENT => {
-                // `apply_open_files` builds the new map BEFORE taking the write
-                // guard, then assigns it wholesale and DROPS the lock before
-                // returning; the wake fires strictly after the lock is released
-                // (same wake-after-unlock invariant). This is NOT a redraw frame, so
-                // `seq` is left unchanged.
+                // Not a redraw frame, so no `seq` bump; wakes after `apply_open_files` drops the lock.
                 self.apply_open_files(args).await;
                 (self.wake)();
             }
             FULL_WIDTH_EVENT => {
-                // `apply_full_width` builds the new map BEFORE taking the write
-                // guard, then assigns it wholesale and DROPS the lock before
-                // returning; the wake fires strictly after the lock is released
-                // (same wake-after-unlock invariant). This is NOT a redraw frame, so
-                // `seq` is left unchanged.
+                // Not a redraw frame, so no `seq` bump; wakes after `apply_full_width` drops the lock.
                 self.apply_full_width(args).await;
                 (self.wake)();
             }
             ACTIVE_WIN_EVENT => {
-                // `apply_active_win` acquires and DROPS the write lock before
-                // returning; wake fires after the lock is released (same
-                // wake-after-unlock invariant). This is NOT a redraw frame, so
-                // `seq` is left unchanged.
+                // Not a redraw frame, so no `seq` bump; wakes after `apply_active_win` drops the lock.
                 self.apply_active_win(args).await;
                 (self.wake)();
             }
             TABPAGE_EVENT => {
-                // `apply_tabpage` acquires and DROPS the write lock before
-                // returning; wake fires after the lock is released (same
-                // wake-after-unlock invariant). This is NOT a redraw frame, so
-                // `seq` is left unchanged.
+                // Not a redraw frame, so no `seq` bump; wakes after `apply_tabpage` drops the lock.
                 self.apply_tabpage(args).await;
                 (self.wake)();
             }
             LAYOUT_EVENT => {
-                // A layout intent is out-of-band: parse it, push onto the sibling
-                // intent queue (a brief Mutex, no snapshot lock, never held across
-                // an `.await`), and wake so the front-end drains it. No `seq` bump.
+                // Out-of-band, no `seq` bump: queue under a brief Mutex, never the snapshot lock, and
+                // wake the front-end to drain it.
                 if let Some(intent) = args.first().and_then(LayoutIntent::from_payload) {
                     self.intents.lock().push_back(intent);
                 }
                 (self.wake)();
             }
             COMMAND_EVENT => {
-                // A command is out-of-band and user-triggered: resolve the id to a
-                // `Command`, push onto the sibling command queue (a brief Mutex, no
-                // snapshot lock, never held across an `.await`), and wake so the
-                // front-end drains it. An unknown id is dropped. No `seq` bump.
+                // Out-of-band, no `seq` bump: queue under a brief Mutex, never the snapshot lock, and
+                // wake the front-end to drain it. An unknown id is dropped.
                 if let Some(command) = args
                     .first()
                     .and_then(Value::as_str)
@@ -374,53 +347,28 @@ impl Handler for RedrawHandler {
                 (self.wake)();
             }
             THEME_EVENT => {
-                // `apply_theme` acquires and DROPS the write lock before
-                // returning; wake fires after the lock is released (same
-                // wake-after-unlock invariant). This is NOT a redraw frame, so
-                // `seq` is left unchanged.
+                // Not a redraw frame, so no `seq` bump; wakes after `apply_theme` drops the lock.
                 self.apply_theme(args).await;
                 (self.wake)();
             }
             PREVIEW_EVENT => {
-                // `apply_previews` builds the new map BEFORE taking the write
-                // guard, then assigns it wholesale and DROPS the lock before
-                // returning; the wake fires strictly after the lock is released
-                // (same wake-after-unlock invariant). This is NOT a redraw frame,
-                // so `seq` is left unchanged.
+                // Not a redraw frame, so no `seq` bump; wakes after `apply_previews` drops the lock.
                 self.apply_previews(args).await;
                 (self.wake)();
             }
             MARKDOWN_DIRTY_EVENT => {
-                // `apply_markdown_dirty` acquires and DROPS the write lock before
-                // returning; wake fires after the lock is released (same
-                // wake-after-unlock invariant). This is NOT a redraw frame, so
-                // `seq` is left unchanged.
+                // Not a redraw frame, so no `seq` bump; wakes after `apply_markdown_dirty` drops the lock.
                 self.apply_markdown_dirty(args).await;
                 (self.wake)();
             }
             MARKDOWN_CURSOR_EVENT => {
-                // `apply_markdown_cursor` acquires and DROPS the write lock before
-                // returning; wake fires after the lock is released (same
-                // wake-after-unlock invariant). This is NOT a redraw frame, so
-                // `seq` is left unchanged.
+                // Not a redraw frame, so no `seq` bump; wakes after `apply_markdown_cursor` drops the lock.
                 self.apply_markdown_cursor(args).await;
                 (self.wake)();
             }
             FS_CHANGED_EVENT => {
-                // An fs change is NOT render state: no snapshot lock, no `seq`
-                // bump, and NO handler-level wake — the registry's debounced
-                // rescan fires each session's own wake when (and only when) a
-                // swap lands. The path is canonicalized to match the canonical
-                // paths a session's `seen` set holds, with a raw fallback
-                // because canonicalize FAILS for a just-deleted path (and a
-                // mismatch only fails open to an extra walk). `force` marks the
-                // unconditional events; only `BufWritePost` is conditional on
-                // the path being new to a session, so the path-less refocus
-                // events (`ShellCmdPost`/`FocusGained`/`TermLeave`, arriving as
-                // `[event, ""]`) are covered with no extra decode logic — force
-                // short-circuits before the path matters.
-                // The single argument is the `[event_name, abs_path]` pair (one
-                // msgpack array, like the other single-payload wolf_* events).
+                // Not render state: no lock, no `seq`, no wake; a rescan that swaps wakes its session.
+                // See notes/crates/wolf-core/src/redraw.rs.md#fs-change-events
                 if let Some(pair) = args.first().and_then(Value::as_array) {
                     let force = pair
                         .first()
@@ -434,13 +382,8 @@ impl Handler for RedrawHandler {
                 }
             }
             CWD_EVENT => {
-                // nvim's cwd is NOT render state, so there is intentionally NO
-                // wake here: the `:cd`/`:lcd`/`:tcd` that triggered this already
-                // produces its own redraw flush (and hence wake) through the
-                // normal `redraw` path. `apply_cwd` only updates the sibling
-                // `TrackedCwd` cell (a brief RwLock, no snapshot lock, no `seq`
-                // bump), which the input pump reads to scope the global MRU store
-                // by nvim's live cwd.
+                // No wake: the `:cd` that triggered this flushes its own redraw. Only `TrackedCwd`
+                // changes, which the input pump reads to scope the MRU by nvim's live cwd.
                 self.apply_cwd(args);
             }
             _ => {}
@@ -543,11 +486,7 @@ impl RedrawHandler {
         snap.current_filetype = filetype;
         snap.current_is_preview = is_preview;
         snap.current_is_full_width = is_full_width;
-        // A current_file change is NOT a redraw frame, so `seq` (the redraw-frame
-        // counter, advanced only on `flush`) is intentionally left unchanged. The
-        // caller still fires the wake after this lock drops so the front-end can
-        // re-read the snapshot.
-        // Lock drops here as `snap` goes out of scope at function return.
+        // Not a redraw frame, so `seq` is unchanged; the caller wakes after this lock drops.
     }
 
     /// Applies a `wolf_preview` notification: WHOLESALE-REPLACES the snapshot's
@@ -601,13 +540,10 @@ impl RedrawHandler {
 
         let mut snap = self.snapshot.write_async().await;
         snap.previews = map;
-        // The derived navigation target joins BOTH maps, and EITHER notification
-        // can complete a transition, so the fold runs here as well as in
-        // `apply_buffers`.
+        // The nav target joins both maps and either notification can complete it, so fold here
+        // as well as in `apply_buffers`.
         self.fold_nav_targets(&snap);
-        // A previews change is NOT a redraw frame, so `seq` is intentionally left
-        // unchanged. The caller fires the wake after this lock drops.
-        // Lock drops here as `snap` goes out of scope at function return.
+        // Not a redraw frame, so `seq` is unchanged; the caller wakes after this lock drops.
     }
 
     /// Folds one derived [`NavTarget`](crate::nav_history::NavTarget) per window
@@ -787,13 +723,10 @@ impl RedrawHandler {
         let mut snap = self.snapshot.write_async().await;
         snap.buffers = map;
         snap.win_buffers = win_map;
-        // The derived navigation target joins BOTH maps, and EITHER notification
-        // can complete a transition, so the fold runs here as well as in
-        // `apply_previews`.
+        // The nav target joins both maps and either notification can complete it, so fold here
+        // as well as in `apply_previews`.
         self.fold_nav_targets(&snap);
-        // A buffers change is NOT a redraw frame, so `seq` is intentionally left
-        // unchanged. The caller fires the wake after this lock drops.
-        // Lock drops here as `snap` goes out of scope at function return.
+        // Not a redraw frame, so `seq` is unchanged; the caller wakes after this lock drops.
     }
 
     /// Applies a `wolf_tab_cwds` notification: WHOLESALE-REPLACES the snapshot's
@@ -839,9 +772,7 @@ impl RedrawHandler {
 
         let mut snap = self.snapshot.write_async().await;
         snap.tab_cwds = map;
-        // A tab_cwds change is NOT a redraw frame, so `seq` is intentionally left
-        // unchanged. The caller fires the wake after this lock drops.
-        // Lock drops here as `snap` goes out of scope at function return.
+        // Not a redraw frame, so `seq` is unchanged; the caller wakes after this lock drops.
     }
 
     /// Applies a `wolf_open_files` notification: WHOLESALE-REPLACES the snapshot's
@@ -916,9 +847,7 @@ impl RedrawHandler {
 
         let mut snap = self.snapshot.write_async().await;
         snap.open_files = map;
-        // An open_files change is NOT a redraw frame, so `seq` is intentionally left
-        // unchanged. The caller fires the wake after this lock drops.
-        // Lock drops here as `snap` goes out of scope at function return.
+        // Not a redraw frame, so `seq` is unchanged; the caller wakes after this lock drops.
     }
 
     /// Applies a `wolf_full_width` notification: WHOLESALE-REPLACES the snapshot's
@@ -952,9 +881,7 @@ impl RedrawHandler {
 
         let mut snap = self.snapshot.write_async().await;
         snap.full_width = map;
-        // A full_width change is NOT a redraw frame, so `seq` is intentionally left
-        // unchanged. The caller fires the wake after this lock drops.
-        // Lock drops here as `snap` goes out of scope at function return.
+        // Not a redraw frame, so `seq` is unchanged; the caller wakes after this lock drops.
     }
 
     /// Applies a `wolf_active_win` notification: sets the snapshot's `active_win`
@@ -1272,22 +1199,12 @@ fn grid_line(snap: &mut Snapshot, params: Vec<Value>) {
         if let Some(hl) = parts.get(1).and_then(as_u64) {
             current_hl = hl;
         }
-        // `repeat` counts how many columns the cell occupies, INCLUDING the
-        // first — so an explicit `repeat` of 0 is a zero-width no-op cell.
-        // Neovim really emits those: a trailing `[" ", 0, 0]` clear-to-EOL cell
-        // when there is nothing left to clear. Clamping it up to 1 (as this
-        // once did) writes a spurious default-highlight space ONE column past
-        // the event's real span; Neovim's shadow grid never has that cell, so
-        // it is never repainted and the corruption persists on screen (single
-        // wrong-background cells just past end-of-line).
+        // nvim emits `repeat` 0 (a `[" ", 0, 0]` clear-to-EOL cell) as a no-op; clamping it to 1
+        // paints a space past the span that nvim never repaints.
         let repeat = parts.get(2).and_then(as_u64).unwrap_or(1);
 
-        // Each cell tuple maps to exactly one grid column. Neovim already emits
-        // the trailing half of a double-width glyph as its own cell with empty
-        // text (verified against the protocol), so we must NOT synthesize an
-        // extra placeholder here — doing so would shift following cells right by
-        // one column. Storing the empty text verbatim satisfies the render spec
-        // ("text = '' for the trailing wide cell").
+        // nvim already emits a wide glyph's trailing half as an empty cell; synthesizing another
+        // would shift the following cells right.
         for _ in 0..repeat {
             g.set_cell(
                 row,
@@ -1430,18 +1347,8 @@ fn win_pos(snap: &mut Snapshot, params: &[Value]) {
 }
 
 fn win_hide(snap: &mut Snapshot, params: &[Value]) {
-    // [grid]
-    //
-    // A window is hidden when it stops being displayed — most importantly, when
-    // its TABPAGE is no longer current (Neovim emits `win_hide` for every window
-    // of the tabpage being left on a tabpage switch, and re-emits `win_pos` for
-    // them on the way back; it does NOT `win_close`/`grid_destroy` them). Remove
-    // the WINDOW entry so `Snapshot.windows` (and therefore
-    // [`Snapshot::grid_for_win`]) reflects ONLY the current tabpage's windows —
-    // the project/tabpage-per-view contract the front-end's refocus rebind relies
-    // on. The GRID is intentionally KEPT (Neovim reuses the same grid id when the
-    // window is shown again, and may re-`win_pos` without re-`grid_resize`ing), so
-    // a rebound window always resolves to a live, paintable grid.
+    // [grid] — sent for each window of a tabpage being left. Drop the window so `windows` holds
+    // only the current tabpage's; keep the grid, which nvim re-shows without a `grid_resize`.
     let Some(grid) = params.first().and_then(as_u64) else {
         return;
     };
@@ -1449,36 +1356,12 @@ fn win_hide(snap: &mut Snapshot, params: &[Value]) {
 }
 
 fn win_close(snap: &mut Snapshot, params: &[Value], closed_wins: &mut Vec<i64>) {
-    // [grid]
-    //
-    // Remove BOTH the window entry and its grid. Neovim also emits `grid_destroy`
-    // for the same grid on a window close; removing the grid here too makes the
-    // two paths idempotent so the grid is gone regardless of event ordering.
+    // [grid] — also remove the grid, so this and `grid_destroy` agree in either order.
     let Some(grid) = params.first().and_then(as_u64) else {
         return;
     };
-    // The payload carries only the GRID, so resolve the nvim WINDOW handle from
-    // the entry we are about to remove and hand it to the caller's collector; that
-    // pane's navigation history is pruned after the batch.
-    //
-    // KNOWN LIMIT (documented, deliberately not fixed): `win_hide` — fired for
-    // every window of a tabpage being LEFT — already removes the `windows` entry,
-    // so a later `win_close` for such a grid cannot recover the handle and that
-    // pane's history is orphaned. nvim never reuses window handles, so an orphan is
-    // only memory, bounded per pane per nvim-process lifetime, and that bound is
-    // the whole reason this is left alone: `nav_history` is deliberately free of
-    // timers, epochs and reapers, and reclaiming a bounded leak is not worth a
-    // second authority over it.
-    //
-    // The reason that used to sit here — that a window in a non-current tabpage is
-    // absent from `win_buffers` and `buffers` by construction — is MEASURED FALSE.
-    // `runtime/nvim/init.lua` fills both by sweeping `nvim_list_wins()`, which is
-    // global across tabpages, so a background tabpage's windows are PRESENT in both;
-    // `per_window_buffers_are_global_across_tabpages` in `tests/tabpages.rs`
-    // measures it and `architecture.md` states it as the cross-crate contract. An
-    // "absent from `wolf_buffers` for N emits" reaper would therefore not mistake a
-    // background window for a closed one. Do not read that correction as licence to
-    // build one.
+    // Collect the closed window's handle so its nav history is pruned after the batch.
+    // See notes/crates/wolf-core/src/redraw.rs.md#orphaned-nav-history
     if let Some(win) = snap.windows.get(&grid).map(|w| w.win) {
         if win != 0 {
             closed_wins.push(win);
@@ -1624,14 +1507,8 @@ fn cmdline_show(snap: &mut Snapshot, params: &[Value]) {
         level,
     };
 
-    // If a confirm dialog was hidden on the last `cmdline_hide` (its messages
-    // stashed in `pending_confirm`), decide whether THIS cmdline is that dialog
-    // re-prompting after an invalid key or an unrelated cmdline. The hide batch is
-    // byte-identical either way, so we distinguish by the prompt: a prompt-style
-    // cmdline (empty `firstc`, non-empty `prompt`) whose prompt matches the stashed
-    // options line is the confirm's own re-prompt → restore the toast. Anything
-    // else (a `:`/`/` cmdline, or a different prompt like a fresh `input()`) means
-    // the confirm resolved → drop the stash, leaving the toast cleared.
+    // A prompt-style cmdline matching the stashed options line is the confirm re-prompting.
+    // See notes/crates/wolf-core/src/redraw.rs.md#confirm-dialog-stash
     if let Some(pending) = snap.pending_confirm.take() {
         let is_reprompt = snap.cmdline.firstc.is_empty()
             && !snap.cmdline.prompt.is_empty()
@@ -1655,17 +1532,8 @@ fn cmdline_pos(snap: &mut Snapshot, params: &[Value]) {
 }
 
 fn cmdline_hide(snap: &mut Snapshot) {
-    // [level, abort] — the (possibly nested) command line closed. v1 collapses
-    // any recursion level to the single surface, so any hide clears it.
-    //
-    // Capture the options-line prompt BEFORE resetting the cmdline: a `confirm()`
-    // dialog's options ride the cmdline while its prompt text rides the toast as a
-    // `confirm` message. Neovim never emits `msg_clear` when the dialog resolves,
-    // so if we left the toast alone the prompt would linger forever. But an INVALID
-    // key produces a byte-identical hide+re-prompt, so we cannot clear outright:
-    // instead STASH the confirm toast's messages (with the captured prompt) and
-    // hide the toast, so a genuine resolve shows cleared immediately while a later
-    // matching `cmdline_show` (see there) can restore it.
+    // [level, abort]; any nesting level clears the one surface. A confirm toast is stashed, not
+    // cleared. See notes/crates/wolf-core/src/redraw.rs.md#confirm-dialog-stash
     let prompt = snap.cmdline.prompt.clone();
     snap.cmdline = Cmdline::default();
     if snap.toast.is_prompt() {
@@ -1731,9 +1599,8 @@ fn popupmenu_hide(snap: &mut Snapshot) {
 }
 
 fn msg_show(snap: &mut Snapshot, params: Vec<Value>) {
-    // A new message supersedes any confirm stashed mid-resolve (see
-    // `cmdline_hide`): drop it so a later prompt-style `cmdline_show` cannot
-    // resurrect a stale confirm toast underneath this message.
+    // A new message supersedes a stashed confirm, which a later `cmdline_show` must not
+    // resurrect underneath it.
     snap.pending_confirm = None;
     // [kind, content, replace_last, history, append, id, trigger]
     let kind = params
@@ -1798,9 +1665,8 @@ fn msg_clear(snap: &mut Snapshot) {
 }
 
 fn msg_history_show(snap: &mut Snapshot, params: Vec<Value>) {
-    // A history render supersedes any confirm stashed mid-resolve (see
-    // `cmdline_hide`): drop it so a later prompt-style `cmdline_show` cannot
-    // resurrect a stale confirm toast underneath these messages.
+    // A history render supersedes a stashed confirm, which a later `cmdline_show` must not
+    // resurrect underneath it.
     snap.pending_confirm = None;
     // [entries, prev_cmd]; entry [kind, content, append]
     let Some(entries) = params.first().and_then(Value::as_array) else {
@@ -2208,8 +2074,7 @@ mod tests {
                 expected: false,
             },
             TerminalNameCase {
-                // A real path CAN contain the scheme text: `//` is legal in a POSIX
-                // path, and a directory may be called `term:`. This is the row that
+                // `//` is legal in a POSIX path and a directory may be called `term:`, so this row
                 // pins `starts_with` against a later `contains`.
                 desc: "a real path containing term:// somewhere other than the start",
                 name: "/home/u/notes/term://weird.md",

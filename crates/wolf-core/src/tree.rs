@@ -280,12 +280,7 @@ mod tests {
 
     use crate::FileEntry;
 
-    // -- test helper -------------------------------------------------------
-    //
-    // Builds a `FileEntry` from a single `display` string. CONVENTION: the
-    // absolute `path` is synthesized as `/root/{display}`, so a File node's
-    // `abs_path` is exactly `PathBuf::from(format!("/root/{display}"))`. The MRU
-    // rank is irrelevant to the projection, so it is always `None`.
+    // Builds a `FileEntry` whose `path` is `/root/{display}`, with no MRU rank.
     fn fe(display: &str) -> FileEntry {
         FileEntry {
             path: PathBuf::from(format!("/root/{display}")),
@@ -321,9 +316,7 @@ mod tests {
         }
     }
 
-    // =====================================================================
     // children_of
-    // =====================================================================
 
     #[test]
     fn children_of_root_lists_top_level_dirs_first_then_files() {
@@ -437,9 +430,7 @@ mod tests {
         assert_eq!(got, want);
     }
 
-    // =====================================================================
     // ancestors_to_reveal
-    // =====================================================================
 
     #[test]
     fn ancestors_to_reveal_cases() {
@@ -477,9 +468,7 @@ mod tests {
         }
     }
 
-    // =====================================================================
     // node_rel_path
-    // =====================================================================
 
     #[test]
     fn node_rel_path_both_variants() {
@@ -490,9 +479,7 @@ mod tests {
         assert_eq!(node_rel_path(&f), "a/b/c.md", "File rel_path");
     }
 
-    // =====================================================================
     // rel_path_for
-    // =====================================================================
 
     #[test]
     fn rel_path_for_returns_display_of_matching_entry() {
@@ -529,9 +516,7 @@ mod tests {
         assert_eq!(rel_path_for(&entries, Path::new("/root/a")), None);
     }
 
-    // =====================================================================
     // edge cases
-    // =====================================================================
 
     #[test]
     fn empty_entries_yield_empty() {
@@ -541,22 +526,13 @@ mod tests {
         assert_eq!(ancestors_to_reveal(""), Vec::<String>::new());
     }
 
-    // =====================================================================
-    // TreeIndex / TreeIndexCache (T1)
-    //
-    // The per-snapshot index re-implements the SAME projection as the free
-    // `children_of`, but as an O(children) borrowed-slice lookup. These tests
-    // reuse the `fe`/`abs`/`dir`/`file` helpers above and pin that the index's
-    // `children_of` returns the SAME hand-built vecs (compared as slices,
-    // since `TreeIndex::children_of` yields `&[TreeNode]`), plus the cache's
-    // build-once-per-version behavior.
-    // =====================================================================
+    // TreeIndex / TreeIndexCache: the index's `children_of` must return the same vecs as the
+    // free `children_of`, and the cache must build once per version.
 
     #[test]
     fn tree_index_equivalence_all_cases() {
-        // The multi-dir entry set used by
-        // `children_of_root_lists_top_level_dirs_first_then_files`, plus a deep
-        // nested chain so we can also probe intermediate dirs.
+        // The `children_of_root_lists_top_level_dirs_first_then_files` entries plus a deep
+        // nested chain, so intermediate dirs can be probed too.
         let entries = [
             fe("readme.md"),
             fe("src/main.rs"),
@@ -656,9 +632,7 @@ mod tests {
 
     #[test]
     fn tree_index_large_shape() {
-        // Synthesize DIR_COUNT * FILE_COUNT entries across many dirs, build the
-        // index ONCE, and assert per-dir child counts + dirs-first ordering on a
-        // sampled dir. Correctness only — NO wall-clock/timing assertion.
+        // DIR_COUNT * FILE_COUNT entries, indexed once; asserts correctness only, never timing.
         const DIR_COUNT: usize = 50;
         const FILE_COUNT: usize = 50;
         const SAMPLE_DIR: usize = 7;
@@ -694,10 +668,8 @@ mod tests {
             );
         }
 
-        // Dirs-first ordering holds for a sampled dir's children: they are all
-        // files (leaves), so none is a Dir, and they are sorted case-insensitively
-        // by name with rel_path tie-break (matching `node_cmp`). Check the sampled
-        // dir's files equal the hand-built, sorted expectation.
+        // A sampled dir's children are all files, sorted case-insensitively by name with a
+        // rel_path tie-break, matching `node_cmp`.
         let mut expected: Vec<TreeNode> = (0..FILE_COUNT)
             .map(|j| file(&format!("dir{SAMPLE_DIR}/file{j}.rs")))
             .collect();

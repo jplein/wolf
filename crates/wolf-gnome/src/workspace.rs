@@ -105,9 +105,8 @@ pub fn launch_decision(
             };
         }
     }
-    // No project: start nvim in the home directory when it really is one, else at
-    // the fallback. `$HOME` pointing at a non-directory is no better a place to
-    // start than `/`.
+    // No project: start in the home directory when it really is one, else at the fallback; a
+    // `$HOME` that is not a directory is no better a start than `/`.
     let nvim_cwd = home
         .filter(|home| is_dir(home))
         .map_or_else(|| PathBuf::from(FALLBACK_CWD), Path::to_path_buf);
@@ -134,9 +133,8 @@ fn is_usable_project(path: &Path, home: Option<&Path>, is_dir: &impl Fn(&Path) -
 /// returns `true` would re-root it at the OLD cwd.
 #[must_use]
 pub fn reroot_ready(pending: Option<&Path>, live: Option<&Path>) -> bool {
-    // A plain `==`: `Path: PartialEq` compares COMPONENTS, so a trailing separator
-    // is already ignored. It does NOT resolve `.` / `..` / symlinks, which is why
-    // callers canonicalize both sides first.
+    // A plain `==`: `Path` equality compares components, so a trailing separator is ignored, but it
+    // resolves no `.`, `..` or symlinks, which is why callers canonicalize both sides.
     match (pending, live) {
         (Some(pending), Some(live)) => pending == live,
         _ => false,
@@ -243,9 +241,7 @@ pub fn home_dir() -> Option<PathBuf> {
 mod tests {
     use super::*;
 
-    // --- Paths used across the launch-decision table ------------------------
-    //
-    // All absolute and all distinct, so `==` comparisons are unambiguous.
+    // --- Paths for the launch-decision table: all absolute and distinct, so `==` is unambiguous.
     /// A real project directory (the terminal-launch case).
     const PROJECT: &str = "/projects/wolf";
     /// The user's home directory (the desktop-launch case).
@@ -297,16 +293,8 @@ mod tests {
     #[test]
     fn launch_decision_table() {
         let cases = [
-            // =============================================================
-            // The PRE-RESTORE rows, re-run verbatim with `restored: None`.
-            //
-            // Their expectations are UNCHANGED, which is the whole compatibility
-            // argument for adding the parameter: with nothing saved (or nothing
-            // usable saved) `launch_decision` must behave exactly as it always did,
-            // and every existing cage smoke — all of which now launch with an empty
-            // state dir — must therefore see the same first launch as before.
-            // =============================================================
-            // --- the one Folder case, and its near misses --------------------
+            // === `restored: None` rows: the process cwd alone decides, as on every cage smoke's first launch.
+            // --- The one Folder case, and its near misses ---
             Case {
                 desc: "a real project dir that is neither home nor / is a project",
                 process_cwd: Some(PROJECT),
@@ -378,10 +366,7 @@ mod tests {
                 dirs: &[],
                 want: Want::EmptyState(FALLBACK_CWD),
             },
-            // =============================================================
-            // The RESTORED candidate. It gets its turn only after the process cwd
-            // has been refused, and it faces the SAME `is_usable_project` predicate.
-            // =============================================================
+            // === The restored candidate: tried only once the process cwd is refused, by the same predicate.
             Case {
                 // The desktop-launcher shape, which is the case macOS handles too:
                 // $HOME is not a project, so the saved project opens.
@@ -417,10 +402,8 @@ mod tests {
                 want: Want::Folder(RESTORED),
             },
             Case {
-                // THE ORDERING RULE. Launching Wolf from a directory is the Linux
-                // idiom; silently reopening yesterday's project instead would be
-                // surprising, and macOS (which never consults a process cwd) is
-                // deliberately NOT mirrored here.
+                // The ordering rule: launching from a directory is the Linux idiom, and silently reopening
+                // yesterday's project would surprise. macOS, which never reads a process cwd, is not mirrored.
                 desc: "a usable process cwd WINS over an equally usable restored cwd",
                 process_cwd: Some(PROJECT),
                 restored: Some(RESTORED),
@@ -524,11 +507,8 @@ mod tests {
             },
             // --- what `Path` equality does and does not normalize -------------
             RerootCase {
-                // NOTE to coder: `Path: PartialEq` compares COMPONENTS, and a
-                // trailing separator contributes no component, so "/projects/wolf/"
-                // and "/projects/wolf" ARE equal. This row documents that a plain
-                // `==` is enough for the trailing-slash case and must not be
-                // hand-rolled into a byte comparison.
+                // `Path` equality compares components and a trailing separator adds none, so a plain `==`
+                // covers this; do not hand-roll a byte comparison.
                 desc: "a trailing separator is not a difference (Path compares components)",
                 pending: Some("/projects/wolf/"),
                 live: Some(PROJECT),
@@ -552,13 +532,8 @@ mod tests {
         }
     }
 
-    // =========================================================================
-    // reroot_decision
-    // =========================================================================
-    //
-    // Three directories, all absolute and all distinct, so every comparison the
-    // rule makes is unambiguous. They are named for the ROLE each plays in a
-    // settle rather than for their contents.
+    // === reroot_decision ===
+    // Three distinct absolute directories, named for the role each plays in a settle.
 
     /// Where the sidebar is already rooted in most rows.
     const DIR_A: &str = "/a";
@@ -658,9 +633,8 @@ mod tests {
                 },
             },
             DecisionCase {
-                // The anti-premature-re-root row: the request is out but nvim is
-                // still in the old directory, which is where the sidebar already
-                // is. Re-rooting here would re-root at the OLD cwd.
+                // Anti-premature re-root: the request is out but nvim is still in the old directory, where the
+                // sidebar already is; re-rooting now would re-root at the old cwd.
                 desc: "a pending request nvim has not applied yet => stay at the old root",
                 pending: Some(DIR_B),
                 live: Some(DIR_A),
@@ -668,9 +642,8 @@ mod tests {
                 expected: RerootAction::Stay,
             },
             DecisionCase {
-                // A stuck pending request must not decide WHERE to root: the live
-                // cwd does. Re-rooting at `pending` here would show /b while nvim
-                // sits in /c.
+                // A stuck pending request must not decide where to root; the live cwd does. Rooting at
+                // `pending` would show /b while nvim sits in /c.
                 desc: "the target is the LIVE cwd, never the pending one, and the flag stays set",
                 pending: Some(DIR_B),
                 live: Some(DIR_C),
@@ -681,9 +654,8 @@ mod tests {
                 },
             },
             DecisionCase {
-                // The SECOND settle after the row-6 re-root: `rooted` has caught
-                // up, so the only thing left to do is discard the flag. This is
-                // what makes one chdir exactly one re-root.
+                // The second settle after the row-6 re-root: `rooted` has caught up, so only the flag is
+                // discarded. This makes one chdir exactly one re-root.
                 desc: "a satisfied request against the directory already rooted just clears the \
                        flag",
                 pending: Some(DIR_A),
@@ -721,9 +693,7 @@ mod tests {
         }
     }
 
-    // =========================================================================
-    // root_label
-    // =========================================================================
+    // === root_label ===
 
     /// One `root_label` table row.
     struct LabelCase {
@@ -768,9 +738,8 @@ mod tests {
                 expected: "/",
             },
             LabelCase {
-                // Also has no final component. An empty label means the caller
-                // installs no root row; production never reaches it because
-                // `live_cwd` is always absolute.
+                // Also no final component: an empty label means the caller installs no root row; production
+                // never reaches it since `live_cwd` is always absolute.
                 desc: "the empty path yields an empty label rather than panicking",
                 cwd: "",
                 expected: "",

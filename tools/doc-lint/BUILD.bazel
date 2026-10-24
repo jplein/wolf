@@ -1,0 +1,77 @@
+# doc-lint, the comment and doc-reference linter behind //tools/lint:comments.
+# A standalone Cargo workspace with no dependencies, so it needs no crate_universe repin.
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("//tools/lint:defs.bzl", "comment_srcs")
+
+rust_library(
+    name = "doc_lint_lib",
+    srcs = glob(
+        ["src/**/*.rs"],
+        exclude = ["src/main.rs"],
+    ),
+    crate_name = "doc_lint",
+    edition = "2021",
+    visibility = ["//tools/lint:__pkg__"],
+)
+
+rust_binary(
+    name = "doc_lint",
+    srcs = ["src/main.rs"],
+    edition = "2021",
+    visibility = ["//tools/lint:__pkg__"],
+    deps = [":doc_lint_lib"],
+)
+
+rust_test(
+    name = "doc_lint_unit_test",
+    size = "small",
+    crate = ":doc_lint_lib",
+    edition = "2021",
+)
+
+# The glob must stage dotfile fixtures such as tests/fixtures/lang/hashline/.bazelrc.
+rust_test(
+    name = "doc_lint_fixtures_test",
+    size = "small",
+    srcs = ["tests/fixtures.rs"],
+    data = glob(["tests/fixtures/**"]),
+    edition = "2021",
+    env = {"DOC_LINT_FIXTURES": "tools/doc-lint/tests/fixtures"},
+    deps = [":doc_lint_lib"],
+)
+
+rust_test(
+    name = "doc_lint_api_test",
+    size = "small",
+    srcs = ["tests/api.rs"],
+    edition = "2021",
+    deps = [":doc_lint_lib"],
+)
+
+# Its own binary because the test changes the process cwd, which would race any sibling test.
+rust_test(
+    name = "doc_lint_files_mode_test",
+    size = "small",
+    srcs = ["tests/files_mode.rs"],
+    data = glob(["tests/fixtures/files_mode/**"]),
+    edition = "2021",
+    env = {"DOC_LINT_FIXTURES": "tools/doc-lint/tests/fixtures"},
+    deps = [":doc_lint_lib"],
+)
+
+comment_srcs(exclude = [
+    "target/**",
+    "tests/fixtures/**",
+])
+
+filegroup(
+    name = "markdown_srcs",
+    srcs = glob(
+        ["**/*.md"],
+        exclude = [
+            "target/**",
+            "tests/fixtures/**",
+        ],
+    ),
+    visibility = ["//tools/lint:__pkg__"],
+)

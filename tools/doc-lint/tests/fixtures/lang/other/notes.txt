@@ -1,0 +1,3 @@
+# case: a .txt file has no language, so these three lines are never linted
+# two
+# three

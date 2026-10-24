@@ -1,18 +1,4 @@
-//
-//  EmptyStateView.swift
-//  The "no folder open" empty state: a full-bleed overlay on the editor surface
-//  holding a single centered "Open folder…" button.
-//
-//  Shown (as a subview of the `PaneContainerView`, mirroring `PickerView`) when a
-//  window launches with no folder — a fresh first run, a Cmd-N window, or a
-//  restored window whose saved cwd was empty/deleted. Clicking the button runs
-//  the SAME Open Folder path as the menu command; once a folder opens the
-//  controller hides this overlay and reveals the sidebar (see
-//  `WolfWindowController.didOpenFolder`).
-//
-//  Pure AppKit shell (manual smoke only); the empty-vs-folder launch decision is
-//  the headless `WolfKeyMap.StateSeam.launchDecision` seam.
-//
+// The "no folder open" empty-state overlay.
 
 import AppKit
 

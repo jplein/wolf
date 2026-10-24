@@ -111,9 +111,7 @@ fn named_buffer(bufnr: i64, path: &str) -> WinBuffer {
     }
 }
 
-// =========================================================================
-// 1. FEEDBACK-LOOP SUPPRESSION — the locked decision, written FIRST.
-// =========================================================================
+// === 1. Feedback-loop suppression ===
 
 /// **The load-bearing case (Part A, "Feedback-loop suppression").**
 ///
@@ -191,9 +189,8 @@ fn stale_expected_self_heals_in_one_step() {
     assert_eq!(mv.to, 0);
     assert_eq!(h.expected(), Some(&a), "expected is armed with A");
 
-    // The nvim-side move failed silently: the pane is still showing B, so the next
-    // derived change is B — which matches NEITHER `current()` (A) nor `expected`
-    // (A). Branch 4 fires regardless of the stale `expected`.
+    // The nvim-side move failed silently, so the pane still shows B, matching neither `current()`
+    // nor `expected` (both A): branch 4 fires regardless of the stale `expected`.
     h.observe(b.clone());
     assert_eq!(
         stack(&h),
@@ -217,9 +214,7 @@ fn stale_expected_self_heals_in_one_step() {
     assert_eq!(h.cursor(), 2);
 }
 
-// =========================================================================
-// 2. Browser stack semantics.
-// =========================================================================
+// === 2. Browser stack semantics ===
 
 /// Browser semantics: navigating from a mid-stack cursor TRUNCATES everything
 /// ahead of it. `A -> B -> C` with `A` active, then `D`, leaves `A -> D`.
@@ -480,9 +475,7 @@ fn revert_restores_only_when_the_cursor_has_not_moved_on() {
     assert_eq!(stack(&h), vec![a, c], "the reconciled stack is untouched");
 }
 
-// =========================================================================
-// 3. `derive_target` + `NavTarget` identity.
-// =========================================================================
+// === 3. `derive_target` + `NavTarget` identity ===
 
 /// The full `derive_target` precedence matrix (plan §B9). A window present in
 /// NEITHER map yields `None` — the locked "no entry, no push, no prune" clause
@@ -605,9 +598,7 @@ fn edit_and_preview_of_the_same_path_are_distinct_entries() {
     assert_eq!(h.cursor(), 1);
 }
 
-// =========================================================================
-// 4. `NavHistory` — per-window fan-out + pruning.
-// =========================================================================
+// === 4. `NavHistory`: per-window fan-out and pruning ===
 
 /// Two windows keep INDEPENDENT stacks, and `prune` / `prune_many` drop exactly
 /// the named panes (an unknown handle is a silent no-op).
@@ -705,19 +696,8 @@ fn nav_history_forwards_jump_and_revert_per_window() {
     nav.revert(999, 0, 1);
 }
 
-// =========================================================================
-// 4b. `NavHistory::observe` — the emit-level repeat filter (plan §D2).
-//
-// `NavHistory::observe` DROPS a target that repeats the last one already folded
-// for that window, BEFORE it reaches `PaneHistory::observe`. The locked
-// four-branch rule itself is unmodified — this is a filter sitting ABOVE it.
-//
-// It exists because nvim fires the driving autocmds 2-4 times per navigation
-// ACROSS SEVERAL TICKS, so the Lua side's per-tick coalescing cannot merge them
-// all. A late emit still reporting the PRE-move state matches neither `current()`
-// nor `expected` (which names the target we moved TO), so it would hit branch 4
-// and push — truncating away the very entry the move was heading for.
-// =========================================================================
+// === 4b. `NavHistory::observe`: the emit-level repeat filter above the four-branch rule ===
+// It drops a target repeating the last one folded for its window; its doc comment says why.
 
 /// **The D2 case.** A late repeat of the target we just LEFT is DROPPED, not
 /// pushed — and the filter does not swallow the genuine navigation that follows.
@@ -733,9 +713,8 @@ fn a_late_repeat_of_the_target_we_left_is_dropped_not_pushed() {
     let mv = nav.back(WIN).expect("back() must move from B to A");
     assert_eq!((mv.from, mv.to), (1, 0), "the cursor moved off B onto A");
 
-    // The late emit STILL reporting B — the state we just left. Folded into
-    // `PaneHistory` it would hit branch 4 (it matches neither `current()` == A nor
-    // `expected` == A) and PUSH, truncating A's future and destroying the move.
+    // A late emit still reporting B, the state just left: folded into `PaneHistory` it would hit
+    // branch 4 (neither `current()` nor `expected` is B) and push, truncating A's future.
     nav.observe(WIN, b.clone());
 
     {
@@ -792,9 +771,8 @@ fn the_move_landing_reaches_the_stack_and_the_filter_is_not_a_permanent_ban() {
     nav.back(WIN).expect("back() must move from B to A");
     nav.observe(WIN, b.clone()); // the late repeat: dropped
 
-    // Our own move LANDING is a real change since the last fold, so it reaches
-    // `PaneHistory::observe` — where branch 2 (`current() == target`) absorbs it
-    // and clears `expected`.
+    // Our own move landing is a real change since the last fold, so it reaches
+    // `PaneHistory::observe`, where branch 2 absorbs it and clears `expected`.
     nav.observe(WIN, a.clone());
     {
         let pane = nav.pane(WIN).expect("the pane still exists");
@@ -912,9 +890,7 @@ fn the_repeat_filter_is_keyed_per_window() {
     );
 }
 
-// =========================================================================
-// 5. Menu rows — selection, cap, ordering, checkmark.
-// =========================================================================
+// === 5. Menu rows: selection, cap, ordering, checkmark ===
 
 /// Rows are NEWEST-FIRST, carry real stack indices, and exactly ONE is
 /// checkmarked. The indices must be usable verbatim by `jump`.
@@ -1080,9 +1056,7 @@ fn menu_rows_of_an_empty_pane_are_empty() {
     assert!(h.menu_rows(MAX_MENU_ROWS, None).is_empty());
 }
 
-// =========================================================================
-// 6. Label pipeline — PREFIX form, minimal growth.
-// =========================================================================
+// === 6. Label pipeline: prefix form, minimal growth ===
 
 /// **The worked example from the locked decisions.** `foo/README.md`,
 /// `bar/README.md`, `bar/some-other-file.md` render (newest-first) as

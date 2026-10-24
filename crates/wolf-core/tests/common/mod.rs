@@ -244,9 +244,8 @@ fn ensure_hermetic_state_dir() {
     }
     let dir = HERMETIC_STATE_DIR
         .get_or_init(|| tempfile::tempdir().expect("failed to create hermetic state dir"));
-    // Re-check under the (effectively) initialized value: another thread may have
-    // set WOLF_STATE_DIR between the check above and here; set-if-absent is fine
-    // because the process-global value is stable regardless of which we pick.
+    // Re-check: another thread may have set WOLF_STATE_DIR since the check above. Set-if-absent is
+    // fine because the process-global value is stable whichever one wins.
     if std::env::var_os("WOLF_STATE_DIR").is_none() {
         std::env::set_var("WOLF_STATE_DIR", dir.path());
     }
@@ -441,10 +440,8 @@ pub fn start_core_with_temp_md_sized(
     let core = WolfCore::start(config(cols, rows), wake)
         .expect("WolfCore::start failed (is WOLF_NVIM_BIN a valid nvim?)");
 
-    // Wait for the initial attach/flush before opening so we don't race startup.
-    // The attach flush (seq 0 -> 1) lands during WolfCore::start, so this keys on
-    // the absolute threshold (seq >= 1) and returns immediately in the common case;
-    // an advance-based wait would baseline at 1 and block forever.
+    // The attach flush lands during WolfCore::start, so this keys on the absolute seq >= 1; an
+    // advance-based wait would baseline at 1 and block forever.
     waiter.wait_for_initial_flush(&core, FLUSH_TIMEOUT);
 
     // Open the file; nvim will emit a redraw + flush once the buffer is shown.

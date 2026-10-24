@@ -1,36 +1,4 @@
-//
-//  StatusbarTextSpan.swift
-//  Pure, AppKit-/CoreGraphics-free HORIZONTAL span math for the per-pane statusbar
-//  text (plan §1).
-//
-//  This is a headless seam in the `WolfKeyMap` module — Foundation-only, no live
-//  view, no `CGFloat` — and the horizontal sibling of `StatusbarLayout`, which owns
-//  the VERTICAL math (strip height, line tops/heights). Given a pane's ABSOLUTE
-//  grid rect (x origin + width, as produced by `PaneContainerView.gridRect(ofPane:)`),
-//  the grid-centering inset `PaneGeometry.paintOffsetX`, and the pane's CONTENT
-//  KIND, it yields the left edge and width of the statusbar's text span.
-//
-//  The two kinds differ because their CONTENT is painted at different origins:
-//
-//    - `.editor` — the text grid itself is painted at `gridRect.minX + paintOffsetX`
-//      (the 90-column centering inset), so the statusbar text must be indented to
-//      match. This branch reproduces the pre-existing expression EXACTLY
-//      (`textLeft = gRect.minX + offset`, `textWidth = gRect.maxX - textLeft`), so
-//      editor panes are bit-identical; only the clamp below is new, and it is a
-//      no-op for every real input.
-//    - `.preview` — now IDENTICAL to `.editor`. The "Use full width for content"
-//      feature reframes the preview `WKWebView` to the capped+CENTERED `gridRect`
-//      (`PaneContainerView.geometry(…, fullWidth:).gridRect`) in the ~90-char default,
-//      so the content's left edge is `gridRect.minX + paintOffsetX` and the statusbar
-//      must indent to match; in full-width mode `paintOffsetX == 0`, so it lands flush
-//      at `gridLeft`. This REDEFINES the earlier flush-left `.preview` behavior, which
-//      assumed the preview was framed to the UNCENTERED `gridRect` and never indented.
-//
-//  Only `width` clamps to a non-negative floor; `left` is a fixed offset from
-//  `gridLeft` (bounded above by the grid's right edge via the offset clamp). Like
-//  `EditorInset` / `PaneGeometry` / `StatusbarLayout` it is `Double`-based so it
-//  stays headlessly testable (see `StatusbarTextSpanTests.swift`).
-//
+// Pure horizontal span math for the per-pane statusbar text.
 
 import Foundation
 

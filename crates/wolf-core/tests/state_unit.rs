@@ -185,9 +185,7 @@ fn replacement_tree() -> WolfState {
     }
 }
 
-// =========================================================================
-// Tree round-trip: set_snapshot -> flush -> load_state == the whole tree
-// =========================================================================
+// === Tree round-trip: set_snapshot -> flush -> load_state == the whole tree ===
 
 #[test]
 fn tree_round_trips_through_store_and_load() {
@@ -228,18 +226,15 @@ fn tree_round_trips_through_store_and_load() {
     );
 }
 
-// =========================================================================
-// Old (flat, pre-tabs) format is rejected: None + file left untouched
-// =========================================================================
+// === Old (flat, pre-tabs) format is rejected: None, file left untouched ===
 
 #[test]
 fn old_flat_format_is_rejected_and_file_preserved() {
     let dir = tempdir().expect("create temp state dir");
     let path = dir.path().join(STATE_FILE_NAME);
 
-    // A FLAT, pre-tabs version-1 file: window-level `cwd` / `sidebar_visible`,
-    // NO `tabs`. The new schema requires `tabs` (no `#[serde(default)]`), so this
-    // fails deserialization -> load_state returns None (no migration path).
+    // A flat pre-tabs v1 file with window-level `cwd`/`sidebar_visible` and no `tabs`: `tabs` has
+    // no `#[serde(default)]`, so it fails to deserialize and load_state returns None.
     let flat = r#"{
   "version": 1,
   "windows": [
@@ -275,9 +270,7 @@ fn old_flat_format_is_rejected_and_file_preserved() {
     );
 }
 
-// =========================================================================
-// Unchanged snapshot skips a write (no generation bump, no rewrite)
-// =========================================================================
+// === Unchanged snapshot skips a write (no generation bump, no rewrite) ===
 
 #[test]
 fn unchanged_snapshot_skips_a_rewrite() {
@@ -294,9 +287,8 @@ fn unchanged_snapshot_skips_a_rewrite() {
     // Pause so a (buggy) rewrite would land at a strictly later mtime.
     sleep(REWRITE_OBSERVE_DELAY);
 
-    // Re-submit the IDENTICAL tree: set_snapshot must detect equality and NOT
-    // bump the generation, so the writer never re-fires. A behavioral proxy that
-    // reaches into no private fields: the on-disk mtime is unchanged.
+    // Re-submitting the identical tree must not bump the generation, so the writer never re-fires;
+    // the unchanged on-disk mtime observes that without reaching into private fields.
     store.set_snapshot(tree.clone());
     assert!(store.flush(FLUSH_TIMEOUT), "second flush should complete");
     let second_mtime = mtime(&path);
@@ -313,9 +305,7 @@ fn unchanged_snapshot_skips_a_rewrite() {
     );
 }
 
-// =========================================================================
-// A later snapshot fully replaces the prior tree
-// =========================================================================
+// === A later snapshot fully replaces the prior tree ===
 
 #[test]
 fn later_snapshot_replaces_prior_tree() {
@@ -350,9 +340,7 @@ fn later_snapshot_replaces_prior_tree() {
     );
 }
 
-// =========================================================================
-// Silently-ignore matrix: absent / corrupt / wrong-version -> None
-// =========================================================================
+// === Silently-ignore matrix: absent / corrupt / wrong-version -> None ===
 
 #[test]
 fn absent_file_loads_none_and_open_yields_defaults() {
@@ -460,9 +448,7 @@ fn version_must_be_one() {
     );
 }
 
-// =========================================================================
-// state_dir — WOLF_STATE_DIR override (env-mutating: serialized)
-// =========================================================================
+// === state_dir: WOLF_STATE_DIR override (env-mutating, serialized) ===
 
 #[test]
 fn state_dir_honors_env_override() {
@@ -481,10 +467,7 @@ fn state_dir_honors_env_override() {
     );
 }
 
-// =========================================================================
-// swap_dir_for — STABLE per canonical cwd, DISTINCT across cwds (plan §6)
-// (env-mutating: WOLF_STATE_DIR, so serialized behind ENV_LOCK)
-// =========================================================================
+// === swap_dir_for: stable per canonical cwd, distinct across cwds (env-mutating, ENV_LOCK) ===
 
 /// `swap_dir_for(cwd)` resolves the durable per-project swap dir
 /// (`state_dir()/swap/<stable hash of the canonical cwd>`). The property the
@@ -538,9 +521,7 @@ fn swap_dir_for_is_stable_per_cwd_and_distinct_across_cwds() {
     );
 }
 
-// =========================================================================
-// spell / runtime_user / parsers_user resolvers (env-mutating: serialized)
-// =========================================================================
+// === spell / runtime_user / parsers_user resolvers (env-mutating, serialized) ===
 
 /// The three durable-dir resolvers are `state_dir()` joined with a fixed leaf.
 /// The leaf names are the contract with `runtime/nvim/init.lua` and the
@@ -578,9 +559,7 @@ fn spell_runtime_parsers_dirs_resolve_under_state_dir() {
     );
 }
 
-// =========================================================================
-// seed_runtime_user_dir — the one-time-seed contract (no env)
-// =========================================================================
+// === seed_runtime_user_dir: the one-time-seed contract (no env) ===
 
 #[test]
 fn seed_runtime_user_seeds_missing_and_empty_dirs() {
@@ -625,10 +604,8 @@ fn seed_runtime_user_seeds_missing_and_empty_dirs() {
 
 #[test]
 fn seed_runtime_user_never_touches_non_empty_dir() {
-    // Non-empty WITHOUT init_user.lua: nothing is written — not even the
-    // template. Seeding whenever the template is merely absent would write into
-    // a dir the user has claimed (perhaps having deleted the template on
-    // purpose).
+    // Non-empty without init_user.lua: nothing is written, not even the template, since the user
+    // has claimed the dir and may have deleted the template on purpose.
     let root = tempdir().expect("create temp dir");
     let dir = root.path().join("runtime_user");
     std::fs::create_dir_all(&dir).expect("create runtime_user dir");
@@ -671,10 +648,7 @@ fn seed_runtime_user_never_touches_non_empty_dir() {
     );
 }
 
-// =========================================================================
-// NvimConfig::from_env — ephemeral fallback for an empty DurableDirs
-// (env-mutating: WOLF_NVIM_BIN, so serialized)
-// =========================================================================
+// === NvimConfig::from_env: ephemeral fallback for an empty DurableDirs (env-mutating) ===
 
 /// With every `DurableDirs` field `None` (an unresolvable `state_dir()`),
 /// `from_env` must fall back to EPHEMERAL dirs under its private `state_root`

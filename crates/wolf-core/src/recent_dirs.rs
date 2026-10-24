@@ -274,11 +274,8 @@ fn init(db_path: &Path) -> rusqlite::Result<Connection> {
 /// full disks, and every variant that carries no SQLite error code at all — is
 /// `false`: back off and leave the file alone.
 fn warrants_recreate(err: &rusqlite::Error) -> bool {
-    // BOTH error variants must be classified. `rusqlite` splits a failure that
-    // SQLite can attribute to a byte offset in the SQL text out into
-    // `SqlInputError` instead of `SqliteFailure`, and that is exactly the shape
-    // the schema probe's `prepare` raises — matching only `SqliteFailure` here
-    // would silently disable the wrong-schema recreation path.
+    // Classify both variants: rusqlite reports the schema probe's `prepare` failure as
+    // `SqlInputError`, so matching only `SqliteFailure` disables wrong-schema recreation.
     let (ffi_err, msg) = match err {
         rusqlite::Error::SqliteFailure(ffi_err, msg) => (ffi_err, msg.as_deref()),
         rusqlite::Error::SqlInputError { error, msg, .. } => (error, Some(msg.as_str())),

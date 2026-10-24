@@ -1,45 +1,11 @@
-//
-//  KeyMapTests.swift
-//  Pure, headless unit tests for `WolfKeyMap.translate(...)`.
-//
-//  These are the AppKit analog of wolf-gnome's headless `gdk_key` tests: they
-//  exercise the PURE key-translation seam with scalar inputs only — NO NSEvent,
-//  NO window, NO AppKit event loop. The function under test takes the same data
-//  an `NSView.keyDown(_:)` would pull off an `NSEvent` (keyCode, characters,
-//  charactersIgnoringModifiers, and the four modifier booleans) and returns a
-//  generated `FfiKeyEvent?` to hand straight to the Rust bridge.
-//
-//  CONTRACT UNDER TEST (must match wolf-core/src/input.rs exactly):
-//    * For a printable `Char`, the SHIFTED glyph is delivered in `ch` with
-//      `shift = false`. Shift+'a' -> ch='A', shift=false; Shift+'1' -> ch='!',
-//      shift=false. wolf-core ignores `shift` for `Key::Char` and expects the
-//      already-shifted glyph, so Swift must never set the shift flag on a Char.
-//    * The `shift` flag is set ONLY for NAMED keys (Shift+Tab, Shift+Left, ...),
-//      where wolf-core's `S-` notation prefix is meaningful.
-//    * When ctrl/alt/meta are held, the `Char` is taken from
-//      `charactersIgnoringModifiers` (lowercased), never from the
-//      modifier-mangled `characters` (so Ctrl+w -> 'w', not U+0017).
-//    * Bare modifier keys and unmodified control characters map to `nil`.
-//
-//  NOTE to coder: this test references the generated swift-bridge transparent
-//  struct `FfiKeyEvent` and the pure `WolfKeyMap` enum/namespace. Wire the
-//  imports so both are visible to this `swift_test` target (the generated FFI
-//  module + `:wolf_key_map`). If `FfiKeyEvent` lives in a separate generated
-//  module, add that `import` here.
-//
+// See crates/wolf-macos/Tests/WolfKeyMapTests/README.md#keymaptestsswift
 
 import XCTest
 
 @testable import WolfKeyMap
 
 // MARK: - FfiKeyEvent.kind discriminants
-//
-// NOTE to coder: these MUST match the `kind: u8` discriminants of the Rust
-// `FfiKeyEvent` in `wolf-ffi`. They are laid out to mirror the variant order of
-// `wolf_core::input::Key` (Char, Enter, Esc, Tab, Backspace, Delete, Left,
-// Right, Up, Down, Home, End, PageUp, PageDown, F) — the most natural mapping.
-// If the bridge numbers them differently, update BOTH sides together; the Rust
-// `key_event_from_ffi` mapper is the single source of truth.
+// Must match `kind: u8` of the Rust `FfiKeyEvent`; `key_event_from_ffi` is the source of truth.
 private enum Kind {
   static let char: UInt8 = 0
   static let enter: UInt8 = 1
@@ -59,11 +25,7 @@ private enum Kind {
 }
 
 // MARK: - macOS virtual key codes (kVK_*)
-//
-// Standard Carbon `kVK_*` values. NOTE to coder: reconcile against
-// <Carbon/HIToolbox/Events.h> if any differ on the pinned SDK. Crucially on
-// macOS the BACKSPACE key is `kVK_Delete` (0x33) and FORWARD-DELETE is
-// `kVK_ForwardDelete` (0x75) — do not transpose them.
+// Backspace is `kVK_Delete` (0x33) and forward-delete `kVK_ForwardDelete` (0x75): do not swap.
 private enum VK {
   static let returnKey: UInt16 = 0x24  // kVK_Return
   static let tab: UInt16 = 0x30  // kVK_Tab
@@ -89,11 +51,7 @@ private enum VK {
 }
 
 // MARK: - NSEvent function-key unicode scalars
-//
-// Hardcoded `NS*FunctionKey` scalars (AppKit's private-use block) so this test
-// stays AppKit-free. A real NSEvent delivers these in `characters` for the
-// named keys; the coder's translate keys off `keyCode` for named keys, so these
-// are supplied only for fidelity — `keyCode` is authoritative in every case.
+// Hardcoded to stay AppKit-free; fidelity only, since `keyCode` decides every named key.
 private enum FnChar {
   static let upArrow = "\u{F700}"  // NSUpArrowFunctionKey
   static let downArrow = "\u{F701}"  // NSDownArrowFunctionKey
@@ -174,9 +132,8 @@ final class KeyMapTests: XCTestCase {
   }
 
   func testShiftedUppercaseCharDeliversGlyphWithShiftFalse() {
-    // Shift+'a': NSEvent delivers the already-uppercased 'A' in `characters`
-    // (charactersIgnoringModifiers ignores Cmd/Option, NOT Shift, so it is
-    // also 'A'). The Shift contract: glyph 'A', shift flag FALSE.
+    // Shift+'a': `characters` and `charactersIgnoringModifiers` both carry 'A' (the latter ignores
+    // Cmd and Option, not Shift). The contract: glyph 'A', shift flag false.
     let got = WolfKeyMap.translate(
       keyCode: VK.ansiA,
       characters: "A",
@@ -258,9 +215,8 @@ final class KeyMapTests: XCTestCase {
   // MARK: modifier combos on printable chars
 
   func testCtrlComboUsesCharsIgnoringModifiers() {
-    // Ctrl+w: NSEvent puts the control char U+0017 in `characters` but the
-    // bare 'w' in `charactersIgnoringModifiers`. translate must pick 'w'
-    // (lowercased) and set ctrl=true — never deliver the raw control char.
+    // Ctrl+w: `characters` carries U+0017 but `charactersIgnoringModifiers` the bare 'w'; translate
+    // must pick 'w' with ctrl=true, never the raw control char.
     let got = WolfKeyMap.translate(
       keyCode: VK.ansiW,
       characters: "\u{17}",
@@ -301,9 +257,8 @@ final class KeyMapTests: XCTestCase {
   }
 
   func testCtrlComboLowercasesUppercaseInput() {
-    // Ctrl+Shift+w should still deliver a lowercase 'w' with ctrl=true (and
-    // shift=false, since shift never rides a Char). charactersIgnoringModifiers
-    // may carry 'W' when Shift is also held; translate lowercases it.
+    // Ctrl+Shift+w: `charactersIgnoringModifiers` may carry 'W'; translate still delivers lowercase
+    // 'w' with ctrl=true and shift=false (shift never rides a Char).
     let got = WolfKeyMap.translate(
       keyCode: VK.ansiW,
       characters: "\u{17}",
@@ -330,9 +285,8 @@ final class KeyMapTests: XCTestCase {
   }
 
   func testUnmodifiedControlCharIsNil() {
-    // A raw control character with NO modifiers held and NO recognized named
-    // keyCode must not be smuggled through as a Char -> nil. (U+0001 here is a
-    // stand-in for any control scalar that is not one of the named keys.)
+    // A control scalar with no modifiers and no named keyCode must not pass as a Char -> nil.
+    // U+0001 stands in for any control scalar that is not a named key.
     let got = WolfKeyMap.translate(
       keyCode: 0xFFFF,  // deliberately not any named/printable keyCode
       characters: "\u{01}",

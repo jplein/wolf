@@ -355,9 +355,8 @@ fn focus_win_changes_active_and_current_file() {
         |snap| snap.active_win.is_some() && current_file_is(snap, file_b.path()),
     );
 
-    // The currently-active window (showing B); the focus TARGET is the OTHER
-    // window (showing A): the one whose handle differs from active_win. We pick
-    // it by membership, never by literal value.
+    // The focus target is the window other than active_win (showing A), picked by membership,
+    // never by literal handle value.
     let (active_b, target) = {
         let snap = core.read_snapshot();
         let active = snap.active_win.expect("active_win should be Some");
@@ -483,9 +482,8 @@ fn ex_qa_does_not_merely_drop_pane_count() {
         |snap| snap.windows.len() == base + 1,
     );
 
-    // `:qa` routes through WolfQuitAll -> do_quit({ all = true }) -> always-close
-    // branch. It fires `close_window` (asserted in commands.rs), NOT a pane close,
-    // so the nvim pane count must NOT drop back to `base`.
+    // `:qa` reaches do_quit's always-close branch, which fires `close_window` (see commands.rs),
+    // not a pane close, so the nvim pane count must not drop back to `base`.
     ex_command(&core, "qa");
 
     // Let any (erroneous) pane close settle, draining wakes on the interval like the

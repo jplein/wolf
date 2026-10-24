@@ -100,10 +100,8 @@ struct Recorder {
 /// A `WOLF_FRAME_STATS_FILE` that cannot be opened degrades silently to
 /// stderr-only: an unwritable path is not a reason to refuse to run.
 pub fn install() {
-    // The once-only read is FORCED here and answered by `enabled()` below, so that
-    // one function is the single authority on whether the instrument is armed —
-    // including for this function, which would otherwise open a file and write a
-    // header no other call site would honour.
+    // Forced here and answered by `enabled()`, the single authority on whether the instrument is
+    // armed, this function included, which would otherwise write a header no other call honours.
     let _ =
         ENABLED.get_or_init(|| frame_stats::is_enabled(std::env::var(ENABLED_ENV).ok().as_deref()));
     if !enabled() {
@@ -112,9 +110,8 @@ pub fn install() {
     let _ = REPORTER_THREAD.set(std::thread::current().id());
 
     let interval = frame_stats::report_interval(std::env::var(INTERVAL_ENV).ok().as_deref());
-    // Which values name a file, and what the resulting path is, are both the seam's
-    // decision — including the trim, which must apply to the value that is opened and
-    // not only to the one that is tested for emptiness.
+    // The seam decides which values name a file and the path, including the trim, which must apply
+    // to the value that is opened, not only the one tested for emptiness.
     let raw_file = std::env::var(FILE_ENV).ok();
     let file = frame_stats::report_file_path(raw_file.as_deref())
         .and_then(|path| OpenOptions::new().create(true).append(true).open(path).ok());

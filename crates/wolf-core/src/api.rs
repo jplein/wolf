@@ -242,9 +242,8 @@ impl WolfCore {
 
         let cwd = cfg.cwd.clone();
 
-        // Resolve the interactive-RPC timeout budget ONCE. An invalid, unset, or
-        // zero `WOLF_RPC_TIMEOUT_MS` falls back to the default (the `> 0` guard
-        // avoids a `Duration::ZERO` instant-timeout).
+        // An invalid, unset or zero `WOLF_RPC_TIMEOUT_MS` falls back to the default; `> 0` avoids
+        // an instant `Duration::ZERO` timeout.
         let rpc_timeout = std::env::var("WOLF_RPC_TIMEOUT_MS")
             .ok()
             .and_then(|v| v.trim().parse::<u64>().ok())
@@ -260,34 +259,25 @@ impl WolfCore {
         let nav_history: NavHistoryCell =
             Arc::new(Mutex::new(crate::nav_history::NavHistory::default()));
 
-        // The global recent-directories MRU is ALWAYS-ON: construct it once from
-        // state_dir(), or a no-op disabled store when that cannot be resolved.
-        // Cloned into the redraw handler, which records each cwd change into it.
+        // Always on, or a disabled no-op store when state_dir() is unresolvable. The redraw
+        // handler records each cwd change into it.
         let recent_dirs = state_dir()
             .map(|d| RecentDirs::open(&d))
             .unwrap_or_else(RecentDirs::disabled);
 
-        // The global command-palette MRU is ALSO always-on, constructed the same
-        // way from state_dir(). Unlike recent_dirs it is NOT cloned into the redraw
-        // handler: nothing auto-records into it (only palette activation does).
+        // Not cloned into the redraw handler: only palette activation records into it.
         let command_mru = state_dir()
             .map(|d| CommandMru::open(&d))
             .unwrap_or_else(CommandMru::disabled);
 
-        // The global recent-files MRU is ALSO always-on, constructed the same way
-        // from state_dir(). Every row carries the project `directory` it was
-        // recorded under; `recent(directory)` filters to that directory, so a single
-        // global DB keeps every project's recent list isolated. Cloned into the
-        // input pump (below) so opens record under nvim's live cwd.
+        // One global DB; `recent(directory)` keeps each project's list isolated. The input pump
+        // records opens into it under nvim's live cwd.
         let mru = state_dir()
             .map(|d| MruStore::open(&d))
             .unwrap_or_else(MruStore::disabled);
 
-        // The file-search session registry: `start_file_search` registers each
-        // live session; the redraw handler routes `wolf_fs_changed` events into
-        // it, and it debounces + re-walks the registered sessions (see
-        // `files::SearchRegistry`). Built on this runtime's handle so rescan
-        // walks share the traversal's blocking pool.
+        // The redraw handler routes `wolf_fs_changed` into it. Built on this runtime's handle so
+        // rescan walks share the traversal's blocking pool.
         let search_registry = Arc::new(files::SearchRegistry::new(runtime.handle().clone()));
 
         let handler = RedrawHandler::new(
@@ -301,23 +291,17 @@ impl WolfCore {
             wake.clone(),
         );
 
-        // The liveness cell starts Alive; the supervisor / block_on_rpc / restart
-        // transition it. `wake` is cloned so liveness transitions can signal the
-        // front-end (they do not bump `seq`, so the front-end observes them via the
-        // raw-wake seam, not a flush).
+        // Liveness transitions do not bump `seq`, so the front-end observes them through the raw
+        // wake, not a flush.
         let liveness: Arc<AtomicU8> = Arc::new(AtomicU8::new(Liveness::Alive.to_u8()));
 
-        // The durable, per-project swap dir (STABLE across respawns of this cwd).
-        // Canonicalize the cwd first so the hash matches a caller that passes an
-        // already-canonical cwd; `None` (unresolvable state_dir) makes NvimConfig
-        // fall back to an ephemeral swap dir under its temp state root.
+        // Stable across respawns. Canonicalize so the hash matches a caller passing a canonical
+        // cwd; `None` falls back to an ephemeral swap dir.
         let canonical_cwd = std::fs::canonicalize(&cwd).unwrap_or_else(|_| cwd.clone());
         let swap_dir = swap_dir_for(&canonical_cwd);
 
-        // The remaining durable, Wolf-owned dirs (all global, unlike the
-        // per-project swap dir). Seeding runtime_user happens HERE rather than in
-        // spawn so the respawn path carries no new failure surface; a seed failure
-        // is a warning, never fatal — the dofile in init.lua just finds no file.
+        // Seeded here, not in spawn, so the respawn path adds no failure surface; a seed failure
+        // only warns.
         let spell_dir = spell_dir();
         let runtime_user_dir = runtime_user_dir();
         let parsers_user_dir = parsers_user_dir();
@@ -358,19 +342,10 @@ impl WolfCore {
             Ok::<NvimProcess, NvimError>(proc)
         })?;
 
-        // Spawn the single ordered input consumer. It owns its own RPC handle and
-        // applies events strictly in FIFO order, so keystrokes never reorder.
-        //
-        // To match how a front-end delivers a burst (and how nvim coalesces its
-        // redraws), the pump drains all currently-queued events before applying,
-        // and fuses a run of consecutive `Key` events into one `nvim_input` call.
-        // A burst of keys then produces a single RPC and a single redraw `flush`,
-        // which is what callers that "send N keys, then wait for one flush" rely
-        // on. A brief settle yield lets a synchronous burst fully enqueue first.
+        // The single FIFO input consumer fuses consecutive `Key` events into one `nvim_input`.
+        // See notes/wolf-core-decisions.md#threading-and-locking
         let (input_tx, mut input_rx) = mpsc::unbounded_channel::<InputEvent>();
-        // The pump reads a FRESH handle clone per batch from the shared cell, so a
-        // restart (which swaps in the respawned nvim's handle) keeps it working; a
-        // once-captured handle would go stale after a respawn.
+        // A fresh handle clone per batch, because a restart swaps in the respawned nvim's handle.
         let shared_handle: Arc<RwLock<Nvim>> = Arc::new(RwLock::new(nvim.handle()));
         let pump_shared_handle = shared_handle.clone();
         let pump_mru = mru.clone();
@@ -390,12 +365,8 @@ impl WolfCore {
                 // Read the CURRENT handle for this batch (survives a restart swap).
                 let pump_nvim: Nvim = pump_shared_handle.read().clone();
 
-                // Toast-clear-on-input (OD8): if this batch carries any dismissing
-                // input (Key/Mouse/Scroll) and the toast is not a real prompt,
-                // clear it BEFORE applying — so a fresh `msg_show` produced by that
-                // same input repopulates the toast afterward. The write guard is
-                // taken cooperatively and dropped immediately, never across the
-                // apply `.await`.
+                // Clear a non-prompt toast before applying dismissing input, so a `msg_show` that
+                // input produces repopulates it; the guard drops before the apply `.await`.
                 if batch.iter().any(InputEvent::is_toast_dismissing) {
                     let mut snap = pump_snapshot.write_async().await;
                     if !snap.toast.is_prompt() {
@@ -406,12 +377,8 @@ impl WolfCore {
 
                 input::apply_batch(&pump_nvim, &batch).await;
 
-                // Record every opened file into the global MRU under nvim's LIVE
-                // cwd (the tracked cell, falling back to the configured cwd until
-                // nvim first reports) as the `directory` scope. Resolving here, not
-                // at startup, makes the record path follow `:cd`/`:lcd`/`:tcd`.
-                // Reading the cell clones out the path so the brief RwLock guard is
-                // not held across the record. Fire-and-forget.
+                // Record opens under nvim's live cwd, resolved per batch to follow `:cd`/`:tcd`;
+                // the path is cloned out so the guard is not held across the record.
                 for ev in &batch {
                     if let InputEvent::Open { path } | InputEvent::OpenAt { path, .. } = ev {
                         let record_cwd = pump_tracked_cwd
@@ -614,10 +581,8 @@ impl WolfCore {
     /// links against it, and the server serves the linked files.
     #[must_use]
     pub fn open_in_browser(&self) -> String {
-        // Resolve everything from the captive nvim BEFORE taking the
-        // browser_preview lock, so the lock is never held across a block_on. Each
-        // block_on_rpc binds the borrow to a LOCAL that drops before the next, so
-        // no `Ref` guard is ever held across the `.await`.
+        // Resolve everything from nvim before taking the browser_preview lock; each RPC binds its
+        // borrow to a local, so no `Ref` guard is held across the `.await`.
         let bufnr = {
             let nvim = self.nvim.borrow();
             match self.block_on_rpc("current_markdown_bufnr", nvim.current_markdown_bufnr()) {
@@ -1358,10 +1323,8 @@ impl WolfCore {
         let state = Arc::new(RwLock::new(FileSearchState::seeded(seed)));
         let cancel = Arc::new(AtomicBool::new(false));
 
-        // Resolve the traversal caps synchronously on the calling thread (so tests
-        // that set the env vars around this call observe them deterministically),
-        // then prune the known pathological home subtrees so a fallback $HOME walk
-        // never even descends into `~/Library` & friends.
+        // Read the caps on the calling thread so tests setting the env vars see them, then prune
+        // pathological home subtrees such as `~/Library` from a fallback $HOME walk.
         let mut bounds = files::SearchBounds::from_env();
         if let Some(home) = canonical_home() {
             bounds.skip_dirs.insert(home.join("Library"));
@@ -1369,11 +1332,8 @@ impl WolfCore {
             bounds.skip_dirs.insert(home.join(".cache"));
         }
 
-        // Register the session with the fs-event rescan registry BEFORE the
-        // traversal spawns, so no `wolf_fs_changed` event can slip between the
-        // walk and the registration. The entry shares the session's `state` /
-        // `cancel` handles; dropping the returned `FileSearch` sets `cancel`,
-        // which is the registry's cue to prune the entry.
+        // Register before the traversal spawns so no `wolf_fs_changed` slips between walk and
+        // registration; dropping the `FileSearch` sets `cancel`, which prunes the entry.
         self.search_registry.register(files::SessionEntry::new(
             state.clone(),
             cancel.clone(),
@@ -1543,20 +1503,14 @@ impl WolfCore {
     /// guard. Returns `Ok(true)` on an actual respawn, `Ok(false)` on the Alive
     /// no-op, `Err` on a respawn/setup failure (with liveness marked `Dead`).
     fn restart_nvim_inner(&self) -> Result<bool, CoreError> {
-        // A redundant restart on a HEALTHY (Alive) core is a safe no-op: there is
-        // nothing to recover, and tearing down a live nvim would needlessly drop
-        // its open buffers. The real crash/stall flow calls restart ONLY when
-        // liveness is Dead (auto) or NotResponding (the manual button), so this
-        // skip never blocks a genuine recovery.
+        // Restarting a healthy core is a no-op that keeps its buffers; recovery only ever restarts
+        // a Dead or NotResponding core.
         if liveness::get(&self.liveness) == Liveness::Alive {
             return Ok(false);
         }
 
-        // Force-kill + reap the OLD process (works crashed-or-wedged). Its
-        // `shutting_down` is set first, so the old supervisor will NOT re-fire Dead.
-        // The `RefMut` is bound to a LOCAL so the guard lives in this SYNC frame,
-        // never held across an `.await` inside an async block (satisfies
-        // `clippy::await_holding_refcell_ref`).
+        // `shutting_down` is set first so the old supervisor does not re-fire Dead. The `RefMut`
+        // stays in this sync frame, never across an `.await` (`clippy::await_holding_refcell_ref`).
         {
             let mut old = self.nvim.borrow_mut();
             self.runtime.block_on(old.kill_in_place());
@@ -1566,10 +1520,8 @@ impl WolfCore {
         // front-end. This is the ONLY exit from Dead (unconditional store-Alive).
         liveness::reset_alive(&self.liveness, &self.wake);
 
-        // Respawn on the runtime, reusing the config verbatim (same XDG state_root,
-        // same durable swap_dir, same cwd), then re-run ui_attach + the full setup
-        // chain. The grid uses the configured initial size; the next front-end
-        // resize re-establishes the live size.
+        // Reuse the config verbatim (state_root, swap_dir, cwd); the next front-end resize
+        // restores the live grid size.
         let cols = self.nvim_cfg.initial_cols;
         let rows = self.nvim_cfg.initial_rows;
         let handler = self.handler.clone();
@@ -1596,11 +1548,8 @@ impl WolfCore {
         let new_proc = match spawned {
             Ok(proc) => proc,
             Err(e) => {
-                // A failed respawn must NOT leave liveness stale-`Alive` (the
-                // `reset_alive` above optimistically cleared it): mark it `Dead` so
-                // the front-end keeps its crash overlay (and its manual-retry
-                // button). The old process is already reaped; the stale `self.nvim`
-                // handle is inert (its io loop is gone).
+                // Undo the optimistic `reset_alive`, so the front-end keeps its crash overlay and
+                // retry button.
                 liveness::mark_dead(&self.liveness, &self.wake);
                 return Err(CoreError::Nvim(e));
             }
@@ -1725,9 +1674,7 @@ where
     T: Send + 'static,
 {
     let start = std::time::Instant::now();
-    // Spawn the RPC as a task, then wait on its JoinHandle bounded by `timeout`.
-    // The `tokio::time::timeout` future is CONSTRUCTED inside the runtime context
-    // (its timer registers with the reactor on creation).
+    // The `timeout` future is constructed inside the runtime context, where its timer registers.
     let task = runtime.spawn(fut);
     match runtime.block_on(async move { tokio::time::timeout(timeout, task).await }) {
         Ok(Ok(inner)) => {
@@ -1749,10 +1696,8 @@ where
                 ?elapsed,
                 "nvim RPC '{what}' timed out after {timeout:?}"
             );
-            // Dropping `timeout(..)` here drops the inner `JoinHandle`, which
-            // DETACHES the task (it keeps running to completion in the background)
-            // so the pending response is delivered to a LIVE receiver and the io
-            // loop is not killed.
+            // Dropping the `JoinHandle` detaches the task, so the late response reaches a live
+            // receiver and the io loop survives.
             Err(NvimError::Timeout(what, timeout))
         }
     }

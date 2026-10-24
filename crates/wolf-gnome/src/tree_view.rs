@@ -219,9 +219,8 @@ impl TreeInner {
             return;
         }
 
-        // ONE read of the search view per refresh: the VERSION half of the gate and
-        // the entry copy both come out of it, so they cannot disagree. Every guard
-        // taken here is released before the first widget call below.
+        // One read of the search view per refresh, so the version half of the gate and the entry copy
+        // cannot disagree; every guard is released before the first widget call.
         let rebuild = {
             let search = self.search.borrow();
             let Some(fs) = search.as_ref() else {
@@ -293,9 +292,8 @@ impl TreeInner {
     /// `TreeListRow` along with its expanded state, so without this every streamed
     /// file sits under a collapsed row.
     fn expand_root(&self) {
-        // Rule R1: both borrows live inside this one call statement, whose callee
-        // touches no widget. The result is a local, so nothing is borrowed when
-        // `set_expanded` re-enters the create-func below.
+        // Rule R1: both borrows live inside this one call statement, whose callee touches no widget;
+        // the result is a local, so nothing is borrowed when `set_expanded` re-enters the create-func.
         let children = children_for(
             &mut self.memo.borrow_mut(),
             self.entries_version.get(),
@@ -330,9 +328,8 @@ impl TreeInner {
         *self.pending_reveal.borrow_mut() = current.clone();
         *self.current_abs.borrow_mut() = current.clone();
 
-        // A current-file change advances no snapshot version, so the gate suppresses
-        // the rebuild and no row is re-bound: the highlight has to be moved
-        // explicitly.
+        // A current-file change advances no snapshot version, so the gate re-binds no row and the
+        // highlight has to be moved explicitly.
         let (old_rel, new_rel) = {
             let entries = self.entries.borrow();
             (
@@ -384,9 +381,8 @@ impl TreeInner {
             return;
         };
 
-        // The SYNTHETIC ROOT first. Every ancestor row is materialized underneath
-        // it, so without this expansion no `find_row` below can ever match and every
-        // reveal silently fails. (macOS's `expandItem(rootItem)`.)
+        // The synthetic root first: every ancestor row lives under it, so without this no `find_row`
+        // below matches and every reveal silently fails (macOS's `expandItem(rootItem)`).
         if let Some(row) = self.row_at(0) {
             row.set_expanded(true);
         }
@@ -496,15 +492,8 @@ impl TreeInner {
         // is cancelled before the new one starts.
         let _ = self.search.borrow_mut().take();
 
-        // The three that move TOGETHER, before any GTK call. `entries`, the memo and
-        // `entries_version` are one triple: `refresh` states the invariant that the
-        // shared entries and the version the memo keys on advance together, and every
-        // instant between these statements and the next GTK call is an instant a
-        // re-entrant create-func could answer a query. Clearing `entries` while the
-        // memo still holds the PREVIOUS project's index at the old version would
-        // answer that query out of the wrong index. A fresh `FileSearch` restarts
-        // `version` at 1, so a version-keyed memo is only ever valid within one
-        // search session.
+        // `entries`, the memo and `entries_version` are one triple, cleared together before any GTK call.
+        // See notes/crates/wolf-gnome/src/tree_view.rs.md#the-reroot-triple.
         self.entries.borrow_mut().clear();
         *self.memo.borrow_mut() = TreeIndexCache::new();
         self.entries_version.set(0);
@@ -516,9 +505,8 @@ impl TreeInner {
         // root rather than treating it as unchanged.
         *self.last_current.borrow_mut() = None;
         *self.root_label.borrow_mut() = root_label.to_string();
-        // The gate's version tracking is the memo's counterpart and is reset for the
-        // same reason: version 1 of the new search shares nothing but its number with
-        // version 1 of the old one.
+        // Reset for the memo's reason: version 1 of the new search shares only its number with the
+        // old one's version 1.
         self.gate.borrow_mut().reset_version_tracking();
         self.start_search();
         self.refresh();
@@ -755,18 +743,8 @@ fn build_factory(
         let Some(rel_path) = rel_path else {
             return;
         };
-        // **Remove only our own registration.** GTK does not order bind and unbind
-        // across recycled widgets: collapsing a directory shifts rows UP, so the same
-        // file is BOUND onto the surviving list item before the surplus one is
-        // unbound, and both carry that file's rel_path. A blind `remove(&rel_path)`
-        // would delete the live registration the bind just made, leaving that row
-        // bold with no way to clear it — two bold rows until the next version
-        // advance. `gtk::Label`'s `PartialEq` is a glib pointer comparison, so this
-        // asks the only question that distinguishes them: is the mapped label THIS
-        // widget?
-        //
-        // Rule R1: the borrow lives in its own statement, and the removal below takes
-        // a fresh one, so neither is held across a widget call.
+        // Remove only our own registration: GTK may bind a recycled row before unbinding the surplus one.
+        // See notes/crates/wolf-gnome/src/tree_view.rs.md#unbinding-the-current-file-label.
         let is_ours = unbind_labels.borrow().get(&rel_path) == Some(&label);
         if is_ours {
             unbind_labels.borrow_mut().remove(&rel_path);
@@ -828,9 +806,8 @@ pub fn build(
         .child(&list_view)
         .build();
 
-    // Wake plumbing: traversal batches fire `wake` from a tokio worker (Send +
-    // Sync); it only pushes onto the channel. A dropped "full" send is correct (a
-    // refresh is already pending). DROP-SAFE: ignore try_send errors.
+    // Batches fire `wake` from a tokio worker and it only pushes; a full or closed channel means a
+    // refresh is pending or the sidebar is gone, so `try_send` errors are ignored.
     let (wake_tx, wake_rx) = async_channel::bounded::<()>(TREE_WAKE_CHANNEL_CAP);
     let wake: WakeFn = Arc::new(move || {
         let _ = wake_tx.try_send(());
@@ -852,9 +829,8 @@ pub fn build(
         root_label: RefCell::new(root_label.to_string()),
         entries_version,
         memo,
-        // Seeded VISIBLE and corrected by the first `set_empty_state`, which
-        // `window::build` makes after `install_actions` and before `present()` —
-        // so the gate is right before anything renders.
+        // Seeded visible and corrected by the first `set_empty_state`, which `window::build` makes
+        // before `present()`, so the gate is right before anything renders.
         gate: RefCell::new(TreeRefreshGate::new(true)),
         coalescer: RefCell::new(RefreshCoalescer::new()),
         current_abs,
@@ -867,11 +843,8 @@ pub fn build(
         inner.start_search();
     }
 
-    // Drain the wake channel on the GTK main thread. Each traversal batch goes
-    // through the COALESCER rather than refreshing directly, so a burst collapses
-    // into one trailing rebuild. A Weak avoids a reference cycle (inner owns the
-    // wake sender; the task holds only a weak ref so dropping the handle ends the
-    // task).
+    // Drained on the main thread through the coalescer, so a burst collapses into one trailing
+    // rebuild. The task holds only a `Weak`, so dropping the handle ends it.
     {
         let inner_weak = Rc::downgrade(&inner);
         glib::spawn_future_local(async move {
@@ -905,11 +878,8 @@ mod tests {
 
     use wolf_core::tree::TreeIndexCache;
 
-    // --- The fixtures -------------------------------------------------------
-    //
-    // Every entry below is written out by hand, and so is every expected node:
-    // nothing in this module derives an expectation by calling the projection it
-    // is asserting on.
+    // --- The fixtures: every entry and every expected node is written by hand; nothing derives an
+    // expectation from the projection under test.
 
     /// The directory every fixture entry lives under.
     ///
@@ -953,9 +923,7 @@ mod tests {
         }
     }
 
-    // =========================================================================
-    // root_node
-    // =========================================================================
+    // === root_node ===
 
     /// The sidebar's top level is ONE synthetic directory node named after the
     /// working directory, whose rel-path is the cwd sentinel.
@@ -1019,9 +987,7 @@ mod tests {
         );
     }
 
-    // =========================================================================
-    // children_for
-    // =========================================================================
+    // === children_for ===
 
     /// Every per-directory query at one snapshot version shares ONE built index.
     ///
@@ -1050,11 +1016,8 @@ mod tests {
 
         let mut memo = TreeIndexCache::new();
 
-        // --- Four call sites, all at version 1 -------------------------------
-        //
-        // Each result is bound to a local so the `&mut memo` borrow ends at the
-        // end of its own statement — rule R1, which is what keeps a re-entrant
-        // create-func from hitting a RefCell panic in production.
+        // --- Four call sites at version 1, each bound to a local so the `&mut memo` borrow ends with
+        // its statement (rule R1).
 
         let root = children_for(&mut memo, 1, &entries, "");
         assert_eq!(

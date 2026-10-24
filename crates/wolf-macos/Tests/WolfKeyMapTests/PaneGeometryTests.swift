@@ -1,33 +1,4 @@
-//
-//  PaneGeometryTests.swift
-//  Pure, headless unit tests for the AppKit-free `WolfKeyMap.PaneGeometry`.
-//
-//  These exercise the per-pane GRID-RECT-inside-PANE-RECT geometry seam the coder
-//  adds in `Sources/WolfKeyMap/PaneGeometry.swift` (plan §4.1). Like
-//  `PaneTreeTests.swift`, they import ONLY Foundation-level test machinery (no
-//  AppKit / CoreGraphics, no live Neovim) and stay in the headless `WolfKeyMap`
-//  module. They reuse the `eps` / `approx` style from `PaneTreeTests.swift`.
-//
-//  ## CONTRACT UNDER TEST (the API the coder must honor, plan §4.1)
-//
-//    public struct PaneGeometry {
-//        public let paneRect: Rect      // the whole pane area
-//        public let gridRect: Rect      // where the nvim grid is drawn (== paneRect today)
-//        public let cellWidth: Double
-//        public let cellHeight: Double
-//        public let cols: Int           // max(1, floor(gridRect.w / cellWidth))
-//        public let rows: Int           // max(1, floor(gridRect.h / cellHeight))
-//        public var paintOffsetX: Double // gridRect.x - paneRect.x (0 today)
-//        public var paintOffsetY: Double // gridRect.y - paneRect.y (0 today)
-//        public init(paneRect: Rect, cellWidth: Double, cellHeight: Double, maxCols: Int? = nil)
-//        public func cellAt(x: Double, y: Double) -> (row: Int, col: Int)
-//    }
-//
-//  `Rect` is the EXISTING type from `PaneTree.swift` (`Rect(x:y:w:h:)`, `Double`
-//  fields). With `maxCols == nil` (ALWAYS today) `gridRect == paneRect` and both
-//  paint offsets are 0. `cellAt` is CLAMPED into `[0, cols-1] x [0, rows-1]`:
-//  margins/edges map to the nearest edge cell.
-//
+// See crates/wolf-macos/Tests/WolfKeyMapTests/README.md#panegeometrytestsswift
 
 import XCTest
 
@@ -36,7 +7,6 @@ import XCTest
 final class PaneGeometryTests: XCTestCase {
 
   // MARK: - Cell size + bounds constants
-  //
   // A non-square cell (W != H) so column math and row math are distinguishable.
 
   /// Test cell width (px).

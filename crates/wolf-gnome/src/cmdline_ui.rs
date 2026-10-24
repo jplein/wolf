@@ -28,7 +28,7 @@
 //! non-prompt toast, so a key bound to page the toast would destroy the surface it
 //! was paging. The offset is therefore driven by a scroll gesture over the toast, and
 //! that gesture is consumed rather than forwarded — which is the front-end-owned
-//! exemption `architecture.md` already records under "Input: events".
+//! exemption `specs/architecture.md` already records under "Input: events".
 //!
 //! ## The answered-prompt rule belongs to core
 //!
@@ -460,21 +460,11 @@ mod tests {
         assert_eq!(toast_scroll_clamp(2, 5, 4), 0, "nothing to scroll");
     }
 
-    // The premise under the sign, which nothing in this suite can measure: GDK's
-    // smooth-scroll `dy > 0` is `GDK_SCROLL_DOWN`, the viewport moving toward the END
-    // of the buffer. `crate::mouse::scroll_steps` maps that to `ScrollDirection::Down`,
-    // and `crates/wolf-ffi/tests/mouse_scroll.rs` measures against a real Neovim that
-    // `Down` strictly increases `win_viewport.topline` — so the premise is pinned
-    // there, against the real component, rather than assumed here. A toast's newest
-    // line is its end and the offset counts lines BACK from it, so this seam must
-    // invert that sign; that inversion is all this test pins.
+    // The grid's sign is pinned against real Neovim in crates/wolf-ffi/tests/mouse_scroll.rs. A
+    // toast's offset counts back from its end, so this seam inverts that sign; only that is pinned.
     #[test]
     fn toast_scroll_next_inverts_the_grids_sign_and_moves_by_the_earned_magnitude() {
-        // 10 lines in a 2-line budget, so the oldest reachable offset is 8. The first
-        // six rows land strictly inside 0..=8, which is what makes them discriminating:
-        // a seam that added the steps instead of subtracting them lands on the mirror
-        // image rather than saturating to the same answer. The last two are the
-        // deliberate flicks, and they clamp at opposite ends.
+        // 10 lines in a 2-line budget (offsets 0..=8): six interior rows catch a flipped sign; two clamp.
         // (current, steps, total, budget, expected)
         let table: &[(usize, i32, usize, usize, usize)] = &[
             (5, 1, 10, 2, 4),

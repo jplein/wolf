@@ -226,9 +226,8 @@ fn erroring_user_file_warns_but_startup_succeeds() {
          file (spell off means earlier init.lua setup was lost to the error)"
     );
 
-    // Warning half: the startup vim.notify(WARN) is in message history; the
-    // probe command above was itself a toast-dismissing input, so a match here
-    // proves :messages REPOPULATED the toast from history.
+    // Warning half: the probe command above was itself a toast-dismissing input, so a match here
+    // proves :messages repopulated the toast from the startup vim.notify(WARN) history.
     common::send_ex(&core, "messages");
     poll_until(
         &waiter,

@@ -1,25 +1,4 @@
-//
-//  SearchHighlightSeamTests.swift
-//  Pure, headless unit tests for the `WolfKeyMap.SearchHighlightSeam` namespace.
-//
-//  These exercise the display-free seam that maps Rust BYTE offset ranges (the
-//  bold match spans from `context_window`) into UTF-16 `SearchSpan`s suitable for
-//  building an `NSAttributedString` / `NSRange` — scalar inputs only, NO AppKit.
-//
-//  CONTRACT UNDER TEST (search plan §2, `SearchHighlightSeam.swift`):
-//    * struct SearchSpan { utf16Start: Int; utf16Length: Int; bold: Bool }
-//    * SearchHighlightSeam.spans(text:boldByteRanges:) -> [SearchSpan]
-//      — partitions the WHOLE string into consecutive, non-overlapping,
-//      gap-filling spans in order (every character covered by exactly one span),
-//      each flagged `bold` iff it lies inside a bold byte range. Byte offsets are
-//      converted to UTF-16 offsets so multibyte scalars (accented chars, emoji
-//      surrogate pairs) land on the right `utf16Start`/`utf16Length`. Empty
-//      `boldByteRanges` yields a single non-bold span covering the whole string.
-//
-//  NOTE to coder: this test references the pure `WolfKeyMap.SearchHighlightSeam`
-//  enum + `SearchSpan` struct the coder adds in
-//  `Sources/WolfKeyMap/SearchHighlightSeam.swift`.
-//
+// See crates/wolf-macos/Tests/WolfKeyMapTests/README.md#searchhighlightseamtestsswift
 
 import XCTest
 

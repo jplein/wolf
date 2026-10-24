@@ -1,11 +1,6 @@
 #!/usr/bin/env bash
-# swift-format FIX: format Swift sources in place with the host Xcode
-# swift-format binary. Run via `bazel run //tools/lint:swift_format.fix`.
-#
-# Rewrites files in the developer's real workspace (NOT the sandbox), so it uses
-# `$BUILD_WORKSPACE_DIRECTORY` (set by `bazel run`). It formats the wolf-macos
-# Swift sources and tests, and EXCLUDES the machine-generated swift-bridge
-# bindings under crates/wolf-ffi/generated/.
+# `swift-format format -i` over the wolf-macos Swift sources and tests in the developer's
+# checkout ($BUILD_WORKSPACE_DIRECTORY), so it runs only under `bazel run`.
 set -euo pipefail
 
 SF="$(xcrun --find swift-format 2>/dev/null || true)"

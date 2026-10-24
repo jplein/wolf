@@ -41,7 +41,7 @@ use wolf_ffi::wolf_ffi_load_config;
 const CONFIG_FILE_NAME: &str = "wolf-config.yaml";
 
 /// Platform-independent default font family (see `wolf_core::config`).
-// NOTE: must match wolf_core::config::DEFAULT_FONT_FAMILY (the verified iA Writer Mono S CoreText family name).
+// Must match wolf_core::config::DEFAULT_FONT_FAMILY, the verified CoreText family name.
 const EXPECT_DEFAULT_FONT_FAMILY: &str = "iA Writer Mono S";
 /// Platform-independent default line-height (percent).
 const EXPECT_DEFAULT_LINE_HEIGHT: f64 = 180.0;
@@ -228,9 +228,8 @@ fn macos_option_as_alt_round_trips() {
         "`macos-option-as-alt: true` must surface as true over the bridge"
     );
 
-    // Back-compat: a config with NO `macos-option-as-alt` key (only the required
-    // font fields) must parse successfully and surface `false`, NOT fall back to
-    // defaults — the custom font fields must survive.
+    // Back-compat: a config without `macos-option-as-alt` parses, surfaces `false`, and keeps its
+    // custom font fields rather than falling back to defaults.
     let dir = tempdir().expect("create temp dir");
     let yaml = format!(
         "config:\n  font-family: \"{CUSTOM_FONT_FAMILY}\"\n  font-size: {CUSTOM_FONT_SIZE}\n  \

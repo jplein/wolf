@@ -39,15 +39,12 @@ _COMMIT = "514dec2c79701b74082defc19090bd1dae57765b"
 
 _SHA256 = "a452624fee9ce7b82e11877b013f578aa1c3befda6b6564536c3264a40b8e0d2"
 
-# The upstream repo name is `lighthouse.nvim`, so the archive's top directory is
-# `lighthouse.nvim-<commit>` (NOT `lighthouse-<commit>`). Getting this wrong makes
-# the copy_to_directory glob match nothing.
+# The upstream repo is `lighthouse.nvim`, so the archive root is `lighthouse.nvim-<commit>`;
+# any other name makes the copy_to_directory glob match nothing.
 _ARCHIVE_ROOT = "lighthouse.nvim-" + _COMMIT
 
-# BUILD overlay placed at the root of the extracted tarball. `{archive_root}` is
-# the tarball's top directory (`lighthouse.nvim-<commit>`); `copy_to_directory`
-# remaps that prefix to `lighthouse/` so the output TreeArtifact contains
-# `lighthouse/colors/lighthouse.lua` and `lighthouse/LICENSE*`.
+# BUILD overlay for the extracted tarball; `copy_to_directory` remaps `{archive_root}`, the
+# tarball's top directory, to `lighthouse/`.
 _BUILD_FILE_TEMPLATE = """\
 load("@aspect_bazel_lib//lib:copy_to_directory.bzl", "copy_to_directory")
 

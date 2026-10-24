@@ -1,19 +1,4 @@
-//
-//  PreviewClickFocusHandler.swift
-//  The `WKScriptMessageHandler` glue that focuses a clicked preview pane.
-//
-//  A thin AppKit/WebKit adapter (compile + manual-smoke only): the preview
-//  `WKWebView` swallows AppKit mouse events, so the container's `mouseDown` never
-//  fires over a preview pane. The document-start capture-phase `mousedown` user
-//  script (`PreviewSeam.clickFocusJS`) posts to this handler, which dispatches back
-//  into the `PaneContainerView` to focus the pane. ALL of the placement/reload
-//  arithmetic lives in the headless `WolfKeyMap.PreviewSeam`; this file only wires
-//  WebKit's message callback to the container.
-//
-//  The web view's `WKUserContentController` retains this handler STRONGLY; this
-//  handler holds the container WEAKLY, so there is no retain cycle. The callback
-//  fires on the main thread (WebKit's script-message callbacks are main-thread).
-//
+// The `WKScriptMessageHandler` glue that focuses a clicked preview pane.
 
 import WebKit
 

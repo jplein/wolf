@@ -951,10 +951,8 @@ mod tests {
     fn plan_cases() -> [PlanCase; 10] {
         [
             PlanCase {
-                // The compatibility row: with nothing saved, the plan is exactly
-                // today's `launch_decision`, the never-empty tab FLOOR, no size —
-                // and the sidebar DEFAULT, which is `true`: a first launch shows the
-                // file tree.
+                // The compatibility row: nothing saved gives today's `launch_decision`, one layout-less tab, no
+                // size, and the sidebar default `true` (a first launch shows the tree).
                 desc: "no saved state at all => today's launch decision, one layout-less tab, no \
                        size, and the sidebar default of SHOWN",
                 saved: None,
@@ -992,9 +990,8 @@ mod tests {
                 },
             },
             PlanCase {
-                // The saved project was deleted between runs. The layout's leaf paths
-                // point into a directory that no longer exists, so rebuilding it would
-                // ask nvim to `:edit` files that are gone.
+                // The saved project was deleted: its layout's leaves point into a missing directory, so
+                // rebuilding it would `:edit` files that are gone.
                 desc: "saved dir is GONE => EmptyState at home, layout DROPPED, size kept",
                 saved: Some(saved_state(GONE, Some(leaf("/projects/deleted/x.md")))),
                 process_cwd: Some(HOME),
@@ -1025,12 +1022,8 @@ mod tests {
                 },
             },
             PlanCase {
-                // A window with no tabs still carries GEOMETRY, and the geometry is
-                // not the tab's to lose. See `window_size_is_independent_of_the_cwd_decision`.
-                //
-                // The `tabs` FLOOR is what keeps this row a one-window launch rather
-                // than a window with no page at all; `a_window_always_plans_at_least_one_tab`
-                // is where that consequence is named.
+                // A tab-less window keeps its geometry (`window_size_is_independent_of_the_cwd_decision`), and
+                // the tabs floor keeps it one window (`a_window_always_plans_at_least_one_tab`).
                 desc: "saved `tabs: []` => no cwd and no layout, but the window SIZE survives",
                 saved: Some(saved_state_without_tabs()),
                 process_cwd: Some(HOME),
@@ -1075,9 +1068,8 @@ mod tests {
                 },
             },
             PlanCase {
-                // The shared predicate applied to the RESTORED candidate: a
-                // hand-edited state.json naming `/` must not point FileSearch at the
-                // whole filesystem.
+                // The shared predicate on the restored candidate: a hand-edited `/` must not point FileSearch at
+                // the whole filesystem.
                 desc: "a saved cwd of `/` is refused by the SAME predicate the process cwd faces",
                 saved: Some(saved_state("/", Some(leaf("/x.md")))),
                 process_cwd: Some(HOME),
@@ -1092,10 +1084,8 @@ mod tests {
                 },
             },
             PlanCase {
-                // THE READ-BACK ROW. Every row above saved the sidebar SHOWN, so a
-                // `restore_plan` that hardcoded `sidebar_visible: true` and never
-                // looked at the tab would satisfy all eight of them. This is the one
-                // that makes the field a reading rather than an assumption.
+                // The read-back row: every row above saved the sidebar shown, so a hardcoded `true` would pass
+                // them all; this one makes the field a reading.
                 desc: "a tab saved with the sidebar HIDDEN restores hidden",
                 saved: Some(saved_state_with_sidebar(
                     SAVED,
@@ -1119,11 +1109,8 @@ mod tests {
                 },
             },
             PlanCase {
-                // The preference is INDEPENDENT of the launch decision: the empty
-                // state overrides it at APPLY time (`state_seam::sidebar_is_shown`),
-                // not at restore time. Folding the override in here would lose the
-                // user's preference the first time they launched into an empty state,
-                // and the next save would then persist the fold.
+                // The preference is independent of the launch decision: the empty state overrides it at apply
+                // time (`sidebar_is_shown`); folding it in here would lose it, then persist the loss.
                 desc: "a HIDDEN sidebar survives an empty-state launch decision unchanged",
                 saved: Some(saved_state_with_sidebar(GONE, None, false)),
                 process_cwd: Some(HOME),
@@ -1140,15 +1127,12 @@ mod tests {
         ]
     }
 
-    // =====================================================================
-    // one window's launch plan
-    // =====================================================================
+    // --- one window's launch plan ---
 
     #[test]
     fn a_layout_is_never_restored_into_a_different_project() {
-        // A saved layout's leaf paths are ABSOLUTE paths belonging to ONE project.
-        // Rebuilding them inside a different project would open that project's files
-        // in this project's window — and then persist them back over the saved tree.
+        // A saved layout's absolute leaf paths belong to one project: rebuilt elsewhere they open that
+        // project's files in this window, then persist back over the saved tree.
         let saved = saved_state(SAVED, Some(split(vec![leaf(SAVED_FILE), leaf("")])));
         let got = restore_plans(
             Some(&saved),
@@ -1187,10 +1171,8 @@ mod tests {
 
     #[test]
     fn a_layout_is_restored_when_the_process_cwd_is_the_saved_project() {
-        // The positive twin of the guard above, and the ONLY path the S1 / S2
-        // relaunch smokes exercise: both relaunch in the SAME temp cwd they saved
-        // from, so `process_cwd == restored` and the layout must be attached. A guard
-        // that dropped every layout would still pass the negative test alone.
+        // The positive twin, and the only path the S1 / S2 relaunch smokes take (same cwd, layout
+        // attached). A guard dropping every layout passes the negative test alone.
         let layout = split(vec![leaf(SAVED_FILE), leaf("")]);
         let saved = saved_state(SAVED, Some(layout.clone()));
         let got = restore_plans(
@@ -1220,10 +1202,8 @@ mod tests {
 
     #[test]
     fn window_size_is_independent_of_the_cwd_decision() {
-        // DELIBERATE: a saved window whose project is gone still restores its SIZE.
-        // Window geometry is a property of the window, not of the project, and the
-        // user resized it once for their screen. Pinned here so it is not "fixed" in
-        // the wrong direction by someone who reads the layout guard and generalizes.
+        // Deliberate: a window whose project is gone keeps its size, a property of the window, not the
+        // project. Do not generalize the layout guard to it.
         let saved = saved_state(GONE, Some(leaf("/projects/deleted/x.md")));
         let got = restore_plans(
             Some(&saved),
@@ -1252,9 +1232,7 @@ mod tests {
         );
     }
 
-    // =====================================================================
-    // restore_plans — the whole SESSION's launch, rather than one window's
-    // =====================================================================
+    // --- restore_plans: the whole session's launch, rather than one window's ---
 
     /// The behaviour-neutrality proof for the restore half: every single-window save
     /// in [`plan_cases`] comes back through [`restore_plans`] as exactly ONE plan,
@@ -1399,11 +1377,8 @@ mod tests {
         let saved = two_window_tree();
         let is_dir = dirs_predicate(LAUNCH_AND_TWO_SAVED_DIRS);
 
-        // PREMISE, measured rather than assumed. If the injected predicate refused
-        // either saved directory, the window at that index would fall to
-        // `LaunchDecision::EmptyState` and the assertions below would hold because
-        // the directory does not exist rather than because the process cwd was
-        // withheld from it — the test passing for the wrong reason.
+        // Premise, measured: if `is_dir` refused a saved directory the window would fall to EmptyState
+        // and the assertions below would pass for the wrong reason.
         for dir in [LAUNCHED, SAVED, SAVED_B] {
             assert!(
                 is_dir(Path::new(dir)),
@@ -1643,9 +1618,8 @@ mod tests {
              satisfy the count above while silently dropping the windows saved earliest"
         );
 
-        // The cap must be non-vacuous: exactly AT the limit nothing is truncated, so
-        // a `take` that tightened by one — or a cap that reached zero — is caught
-        // here rather than mistaken for correct truncation above.
+        // Non-vacuous cap: exactly at the limit nothing truncates, catching a `take` off by one or a
+        // cap of zero.
         let exactly_at_cap = many_window_tree(MAX_RESTORE_WINDOWS);
         let capped_plans = restore_plans(
             Some(&exactly_at_cap),
@@ -1662,9 +1636,7 @@ mod tests {
         );
     }
 
-    // =====================================================================
-    // restore_plans — every saved TAB, not just the selected one
-    // =====================================================================
+    // --- restore_plans: every saved tab, not just the selected one ---
 
     /// **THE RESTORE KEYSTONE.** A window saved with three tabs plans three tabs, in
     /// saved order, each carrying its own layout.
@@ -1782,9 +1754,8 @@ mod tests {
              user's own"
         );
 
-        // The cap must be non-vacuous: exactly AT the limit nothing is truncated, so
-        // a `take` that tightened by one — or a cap that reached zero — is caught here
-        // rather than mistaken for correct truncation above.
+        // Non-vacuous cap: exactly at the limit nothing truncates, catching a `take` off by one or a
+        // cap of zero.
         let exactly_at_cap = many_tab_state(MAX_RESTORE_TABS);
         let capped = restore_plans(
             Some(&exactly_at_cap),
@@ -1911,9 +1882,7 @@ mod tests {
         );
     }
 
-    // =====================================================================
-    // sidebar_is_shown — the user preference versus the empty state
-    // =====================================================================
+    // --- sidebar_is_shown: the user preference versus the empty state ---
 
     /// One [`sidebar_is_shown`] table row. The expectation is DATA, deliberately
     /// not re-derived from the same boolean expression the function under test uses
@@ -2008,9 +1977,8 @@ mod tests {
             );
         }
 
-        // Non-vacuity: the loop above is an implication over the `empty` half alone,
-        // so a `sidebar_is_shown` of `|_, _| false` would satisfy it while hiding
-        // the tree in every project too.
+        // Non-vacuity: the loop covers only the `empty` half, which `|_, _| false` satisfies while hiding
+        // the tree in every project.
         assert!(
             sidebar_is_shown(true, false),
             "the happy path (the user wants the sidebar, a project is open) MUST show it — \
@@ -2019,9 +1987,7 @@ mod tests {
         );
     }
 
-    // =====================================================================
-    // restored_window_size
-    // =====================================================================
+    // --- restored_window_size ---
 
     /// One [`restored_window_size`] table row.
     struct SizeCase {
@@ -2089,9 +2055,8 @@ mod tests {
                 want: None,
             },
             SizeCase {
-                // `f64 as i64` SATURATES rather than wrapping, so this lands outside
-                // i32 and `try_from` turns it into the documented None instead of a
-                // clamped nonsense size.
+                // `f64 as i64` saturates rather than wrapping, so this leaves i32 and `try_from` answers None
+                // rather than a clamped nonsense size.
                 desc: "an absurd out-of-i32-range dimension is refused, not clamped",
                 width: 1e18,
                 height: SAVED_H,
@@ -2117,9 +2082,7 @@ mod tests {
         }
     }
 
-    // =====================================================================
-    // persistable_layout — the single-pane fix, from the save side
-    // =====================================================================
+    // --- persistable_layout: the single-pane fix, from the save side ---
 
     /// One [`persistable_layout`] table row.
     struct PersistCase {
@@ -2139,9 +2102,8 @@ mod tests {
                 want: None,
             },
             PersistCase {
-                // THE REGRESSION ROW. An arity guard (`leaf_count(..) > 1`) answers
-                // `None` here, and that is exactly the macOS single-pane bug: the file
-                // would not be reopened on relaunch.
+                // The regression row: an arity guard (`leaf_count(..) > 1`) answers `None` here, the macOS
+                // single-pane bug where the file is not reopened on relaunch.
                 desc: "a NAMED lone leaf IS persisted (the single-pane fix)",
                 node: leaf(SAVED_FILE),
                 want: Some(leaf(SAVED_FILE)),
@@ -2169,9 +2131,7 @@ mod tests {
         }
     }
 
-    // =====================================================================
-    // snapshot_cwd
-    // =====================================================================
+    // --- snapshot_cwd ---
 
     /// One [`snapshot_cwd`] table row.
     struct CwdCase {
@@ -2238,11 +2198,8 @@ mod tests {
 
     #[test]
     fn the_empty_state_persists_no_cwd() {
-        // The rule stated on its own so a failure NAMES it. `LaunchDecision::EmptyState`
-        // hands nvim `$HOME` (or `/`) purely because a process needs a working
-        // directory; persisting that would turn every desktop-launcher start into "a
-        // project at $HOME" on the NEXT launch — and then point the sidebar's
-        // FileSearch at the whole home tree.
+        // The rule alone, so a failure names it: EmptyState hands nvim `$HOME` only because a process
+        // needs a cwd; persisting it makes every launcher start a project at `$HOME` next time.
         for live in [None, Some(HOME), Some(PROJECT), Some("/")] {
             assert_eq!(
                 snapshot_cwd(true, Path::new(HOME), live.map(Path::new)),
@@ -2254,9 +2211,7 @@ mod tests {
         }
     }
 
-    // =====================================================================
-    // may_snapshot — the data-loss gate
-    // =====================================================================
+    // --- may_snapshot: the data-loss gate ---
 
     /// One [`may_snapshot`] table row. The expectation is DATA, deliberately not
     /// re-derived from the same boolean expression the function under test uses — a
@@ -2469,9 +2424,7 @@ mod tests {
         );
     }
 
-    // =====================================================================
-    // snapshot_state
-    // =====================================================================
+    // --- snapshot_state ---
 
     #[test]
     #[allow(
@@ -2512,10 +2465,8 @@ mod tests {
              `window_subtree_writes_every_tab_in_order` is where the N-tab claim lives"
         );
 
-        // D7: window POSITION is never persisted on Wayland (a client is given
-        // neither its own position nor any screen geometry), so these are a
-        // DELIBERATE zero rather than a plausible-looking coordinate a later reader
-        // might trust.
+        // Window position is never persisted on Wayland (a client gets no position or screen geometry),
+        // so these are a deliberate zero, not a coordinate to trust.
         assert_eq!(
             window.x, 0.0,
             "window.x must be a deliberate 0.0: Wayland gives the client no position, so anything \
@@ -2561,9 +2512,7 @@ mod tests {
         );
     }
 
-    // =====================================================================
-    // window_subtree — ONE window's persisted subtree, N tabs
-    // =====================================================================
+    // --- window_subtree: one window's persisted subtree, N tabs ---
 
     /// One window's subtree carries EVERY tab it was handed, in tab order, plus a
     /// deliberate `0.0` position and the size it was given.
@@ -2591,9 +2540,8 @@ mod tests {
         const WIDTH: i32 = 1200;
         const HEIGHT: i32 = 640;
 
-        // Three tabs whose LAYOUTS differ, so "the right tabs in the right order" is
-        // decidable from the value alone; the cwd and the sidebar preference are the
-        // same on every tab because both are per WINDOW and fanned to each tab.
+        // Three tabs with differing layouts, so order is decidable from the value; cwd and sidebar
+        // preference match because both are per window, fanned to each tab.
         let tabs: Vec<TabState> = SAVED_TAB_FILES
             .into_iter()
             .map(|file| tab_subtree(SAVED.to_string(), true, Some(leaf(file))))
@@ -2626,10 +2574,8 @@ mod tests {
              happens to line up"
         );
 
-        // D7: window POSITION is never persisted on Wayland (a client is given
-        // neither its own position nor any screen geometry), so these are a
-        // DELIBERATE zero rather than a plausible-looking coordinate a later reader
-        // might trust.
+        // Window position is never persisted on Wayland (a client gets no position or screen geometry),
+        // so these are a deliberate zero, not a coordinate to trust.
         assert_eq!(
             window.x, 0.0,
             "window.x must be a deliberate 0.0: Wayland gives the client no position, so anything \
@@ -2642,9 +2588,8 @@ mod tests {
         assert_eq!(window.width, f64::from(WIDTH), "the width round-trips");
         assert_eq!(window.height, f64::from(HEIGHT), "the height round-trips");
 
-        // `tab_subtree` is the only way a tab reaches this vec, so its own round trip
-        // is stated here rather than in a table of its own: the cwd, the preference
-        // and the layout must all be the values the caller passed.
+        // `tab_subtree` is the only way into this vec, so its round trip is stated here: cwd, preference
+        // and layout are the values passed.
         let tab = &window.tabs[0];
         assert_eq!(tab.cwd, SAVED, "the cwd round-trips verbatim");
         assert!(
@@ -2659,9 +2604,8 @@ mod tests {
             "the layout round-trips verbatim"
         );
 
-        // The other side of `sidebar_visible`, so the field is proven to follow its
-        // argument rather than being hardcoded true — and the suppressed-layout shape
-        // beside it.
+        // The other side of `sidebar_visible`, proving it follows its argument, beside the
+        // suppressed-layout shape.
         let hidden = window_subtree(WIDTH, HEIGHT, vec![tab_subtree(String::new(), false, None)])
             .expect("a window contributing one tab must assemble into a subtree");
         assert!(
@@ -2725,10 +2669,7 @@ mod tests {
         );
     }
 
-    // =====================================================================
-    // seeded_tab_state — what a restored tab contributes before it is ever
-    // selected
-    // =====================================================================
+    // --- seeded_tab_state: what a restored tab contributes before it is ever selected ---
 
     /// One [`seeded_tab_state`] table row. The expectation is DATA — the cwd is a
     /// literal rather than a second call to `snapshot_cwd`, because a mirror
@@ -2783,9 +2724,8 @@ mod tests {
                 }),
             },
             SeedCase {
-                // The preference is read at the SAME instant, so a user who hides the
-                // sidebar and quits without touching the extra tabs does not have it
-                // reappear on the next launch.
+                // The preference is read at the same instant, so hiding the sidebar and quitting without touching
+                // the extra tabs does not bring it back next launch.
                 desc: "the live sidebar preference is carried, not assumed",
                 restored_layout: Some(leaf(SAVED_FILE)),
                 empty: false,
@@ -2812,10 +2752,8 @@ mod tests {
                 }),
             },
             SeedCase {
-                // The EMPTY-state cwd rule, inherited from `snapshot_cwd`: `""`
-                // always, never the fallback directory the launch handed Neovim.
-                // Persisting $HOME here would declare the user's home a project on
-                // the next launch.
+                // The empty-state cwd rule from `snapshot_cwd`: always `""`, never the fallback handed Neovim,
+                // or the next launch declares `$HOME` a project.
                 desc: "an empty-state launch seeds the \"\" cwd sentinel, never $HOME",
                 restored_layout: Some(leaf(SAVED_FILE)),
                 empty: true,
@@ -2828,9 +2766,8 @@ mod tests {
                 }),
             },
             SeedCase {
-                // THE REFUSAL ROW. No restored layout means no seed: this is the tab
-                // whose project has gone, and it must contribute nothing until its
-                // own gather succeeds.
+                // The refusal row: no restored layout, no seed. The tab whose project has gone contributes
+                // nothing until its own gather succeeds.
                 desc: "a tab restored with NO layout takes no seed",
                 restored_layout: None,
                 empty: false,
@@ -2889,11 +2826,8 @@ mod tests {
              empty-state tab over the saved one before a single pane had bound."
         );
 
-        // The JOIN the round trip rests on: the seeded cwd is `snapshot_cwd`'s own
-        // answer for the same window. If the two ever diverge, a launch, a quit before
-        // every tab has gathered, and a relaunch stop being idempotent — the tabs would
-        // come back rooted somewhere the window is not, and each run would persist the
-        // drift.
+        // The join the round trip rests on: the seeded cwd is `snapshot_cwd`'s answer. If they diverge,
+        // launch, early quit and relaunch stop being idempotent and each run persists the drift.
         for (empty, launch_cwd) in [(false, SAVED), (true, HOME), (false, PROJECT)] {
             let seeded =
                 seeded_tab_state(Some(&leaf(SAVED_FILE)), empty, Path::new(launch_cwd), true)
@@ -2917,10 +2851,7 @@ mod tests {
         }
     }
 
-    // =====================================================================
-    // pending_tab_states — what a window contributes for the tabs a launch has
-    // QUEUED but not yet created
-    // =====================================================================
+    // --- pending_tab_states: what a window contributes for tabs queued but not yet created ---
 
     /// One [`pending_tab_states`] table row. The expectation is DATA for the reason
     /// [`SeedCase`] gives: a `want` computed by calling `seeded_tab_state` again would
@@ -2958,10 +2889,8 @@ mod tests {
     fn pending_tab_states_table() {
         let cases = [
             PendingCase {
-                // THE ROW THE SEAM EXISTS FOR: the queued layouts come back as tabs, in
-                // queued order, and the entry carrying no layout is DROPPED rather than
-                // taking a place in the vec — so a `None` in the middle is where a rule
-                // that preserved positions instead of order becomes visible.
+                // The row the seam exists for: queued layouts return in order, and a layout-less entry is
+                // dropped, so a `None` in the middle exposes a position-preserving rule.
                 desc: "two queued layouts around one carrying none => two seeds, in queued order",
                 layouts: vec![tab_layout(0), None, tab_layout(1)],
                 empty: false,
@@ -2981,9 +2910,7 @@ mod tests {
                 ],
             },
             PendingCase {
-                // The steady state: every window past its own materialization has an
-                // empty queue, and a window with nothing queued must contribute nothing
-                // extra — otherwise every later commit grows a tab.
+                // The steady state: an empty queue contributes nothing, or every later commit grows a tab.
                 desc: "an empty queue contributes nothing",
                 layouts: Vec::new(),
                 empty: false,
@@ -2992,9 +2919,8 @@ mod tests {
                 want: Vec::new(),
             },
             PendingCase {
-                // The REFUSAL half, lifted to the vec: a queued tab whose plan carried
-                // no layout is the tab whose project has gone, and it must contribute
-                // nothing at all rather than an empty-state tab.
+                // The refusal half, lifted to the vec: a layout-less queued tab (project gone) contributes
+                // nothing, not an empty-state tab.
                 desc: "a queue of tabs that carry no layout contributes nothing",
                 layouts: vec![None, None],
                 empty: false,
@@ -3003,9 +2929,8 @@ mod tests {
                 want: Vec::new(),
             },
             PendingCase {
-                // The EMPTY-state cwd rule, inherited from `snapshot_cwd`: `""` always,
-                // never the fallback directory the launch handed Neovim. Persisting
-                // $HOME here would declare the user's home a project on the next launch.
+                // The empty-state cwd rule from `snapshot_cwd`: always `""`, never the fallback handed Neovim,
+                // or the next launch declares `$HOME` a project.
                 desc: "an empty-state launch seeds the \"\" cwd sentinel, never $HOME",
                 layouts: vec![Some(leaf(SAVED_FILE))],
                 empty: true,
@@ -3018,9 +2943,8 @@ mod tests {
                 }],
             },
             PendingCase {
-                // The live preference reaches EVERY queued tab, so a user who hid the
-                // sidebar and quit before the restore ran does not have it reappear on
-                // the next launch — on any of the tabs.
+                // The live preference reaches every queued tab, so hiding the sidebar and quitting before the
+                // restore ran keeps it hidden on all of them.
                 desc: "the live sidebar preference is carried to every queued tab",
                 layouts: vec![tab_layout(0), tab_layout(1)],
                 empty: false,
@@ -3095,12 +3019,8 @@ mod tests {
              had bound — the loss `seeded_tab_state`'s refusal half exists to prevent."
         );
 
-        // The JOIN with the per-tab seed: this is `seeded_tab_state` mapped over the
-        // queue and nothing else, so a queued tab and a materialized tab whose own
-        // gather never succeeded contribute the SAME `TabState`. A cwd or a preference
-        // re-derived here instead would let two tabs of one window disagree about where
-        // the project is, and the next launch reads back whichever of them the last wake
-        // wrote.
+        // The join with the per-tab seed: `seeded_tab_state` mapped over the queue, so a queued tab and
+        // an ungathered live one agree; re-deriving here would let one window's tabs disagree on cwd.
         let layouts = [tab_layout(0), tab_layout(1)];
         let pending = pending_tab_states(&layouts, false, Path::new(SAVED), true);
         for (index, layout) in layouts.iter().enumerate() {
@@ -3118,10 +3038,7 @@ mod tests {
         }
     }
 
-    // =====================================================================
-    // ordered_tab_states — the persisted order is PAGE order, which is the
-    // order the user arranged
-    // =====================================================================
+    // --- ordered_tab_states: the persisted order is page order, the user's arrangement ---
 
     /// One [`ordered_tab_states`] row: the `(page position, tab)` pairs as they were
     /// COLLECTED, and the tabs as they must be CONTRIBUTED.
@@ -3177,11 +3094,8 @@ mod tests {
     fn ordered_tab_states_table() {
         let cases = [
             OrderCase {
-                // THE REORDER ROW, and the whole point of the seam: the pairs arrive in
-                // the order their pages were created, after the user has dragged the
-                // tabs into an order of their own. NO element sits where it arrived, so
-                // a function that stripped the positions and returned the pairs
-                // untouched fails at every index rather than at one.
+                // The reorder row: pairs arrive in creation order after a user drag. No element sits where it
+                // arrived, so returning the pairs unsorted fails at every index.
                 desc: "pairs given OUT of page order come back in PAGE order",
                 positioned: vec![
                     (2, positioned_tab(1)),
@@ -3191,9 +3105,8 @@ mod tests {
                 want: vec![positioned_tab(2), positioned_tab(0), positioned_tab(1)],
             },
             OrderCase {
-                // The steady state: nobody has reordered anything, so page order and
-                // collection order agree and the seam must leave them alone. A rule that
-                // reversed, or sorted descending, is visible here and nowhere else.
+                // The steady state: page and collection order agree and must be left alone; a reversing or
+                // descending rule shows here and nowhere else.
                 desc: "pairs already in page order pass through unchanged",
                 positioned: vec![
                     (0, positioned_tab(0)),
@@ -3203,28 +3116,22 @@ mod tests {
                 want: vec![positioned_tab(0), positioned_tab(1), positioned_tab(2)],
             },
             OrderCase {
-                // Every live tab's gate is shut at once — the launch before any pane has
-                // bound. The answer must stay empty rather than becoming a placeholder:
-                // `window_contribution` reads an empty `live` as "this window has only
-                // its queued seeds to say", and `window_subtree` reads an empty result
-                // as "commit nothing".
+                // Every live gate shut (launch, before any pane binds): the answer stays empty, which
+                // `window_contribution` and `window_subtree` read as queued-seeds-only and commit-nothing.
                 desc: "no pairs at all => no tabs at all",
                 positioned: Vec::new(),
                 want: Vec::new(),
             },
             OrderCase {
-                // One tab, at a NON-ZERO position. The position is stripped, never used
-                // as an index: an implementation that placed each tab at `want[position]`
-                // would have to pad this answer with two tabs that do not exist, and a
-                // window's tab count is what the next launch opens.
+                // One tab at a non-zero position: the position is stripped, never an index, or the answer
+                // would pad with tabs that do not exist and the next launch would open them.
                 desc: "a single pair contributes that pair's tab, position stripped",
                 positioned: vec![(2, positioned_tab(1))],
                 want: vec![positioned_tab(1)],
             },
             OrderCase {
-                // THE TIE ROW — see the fn docs for what it does and does not
-                // discriminate. Positions 1 and 1 are given as tab 0 then tab 1, so a
-                // stable sort keeps that pair in that order behind the tab at 0.
+                // The tie row (see the fn docs): positions 1 and 1 given as tab 0 then tab 1 stay in that order
+                // behind the tab at 0, under a stable sort.
                 desc: "two pairs sharing a position keep the order they were GIVEN",
                 positioned: vec![
                     (1, positioned_tab(0)),
@@ -3280,10 +3187,7 @@ mod tests {
         );
     }
 
-    // =====================================================================
-    // window_contribution — one window's WHOLE contribution: its live tabs'
-    // caches, then its queued tabs' seeds
-    // =====================================================================
+    // --- window_contribution: live tabs' caches, then queued tabs' seeds ---
 
     /// One [`window_contribution`] table row. The expectation is DATA — a `want`
     /// assembled by calling the two seams this composes would agree with any bug in
@@ -3325,18 +3229,15 @@ mod tests {
     /// STATE, so committing one destroys that window's project silently.
     #[test]
     fn window_contribution_table() {
-        // The size every row is assembled at. Each `want` carries these as literal
-        // f64s rather than re-deriving them, so a widening that dropped or swapped a
-        // dimension is visible in the expectation rather than agreed with by it.
+        // Each `want` carries these as literal f64s, so a widening that drops or swaps a dimension shows
+        // in the expectation.
         const WIDTH: i32 = 1200;
         const HEIGHT: i32 = 640;
 
         let cases = [
             ContributionCase {
-                // THE ORDERING ROW. The live tab's layout names a file NEITHER queued
-                // layout names, so "the live one first" is decidable from the values
-                // alone: prepending the seeds yields a vec of the same LENGTH carrying
-                // the same three layouts, and nothing but the order tells them apart.
+                // The ordering row: the live layout names a file no queued layout does, so only the order tells
+                // a correct answer from one that prepended the seeds.
                 desc: "one live tab and two queued layouts => three tabs, the LIVE one first",
                 live: vec![tab_subtree(SAVED.to_string(), true, Some(leaf(SAVED_FILE)))],
                 pending: vec![tab_layout(0), tab_layout(1)],
@@ -3368,9 +3269,8 @@ mod tests {
                 }),
             },
             ContributionCase {
-                // THE PRE-MATERIALIZATION LAUNCH: the commit `window::build` drives
-                // happens before the window is presented and can find every live tab's
-                // gate still shut, so the queue is the only thing with anything to say.
+                // The pre-materialization launch: `window::build`'s commit runs before present and can find every
+                // live gate shut, so only the queue has anything to say.
                 desc: "no live tab at all and two queued layouts => the two seeds in queued order",
                 live: Vec::new(),
                 pending: vec![tab_layout(0), tab_layout(1)],
@@ -3397,9 +3297,8 @@ mod tests {
                 }),
             },
             ContributionCase {
-                // THE STEADY STATE, which every wake after materialization is in: the
-                // queue is gone and the window is exactly its live tabs. TWO of them,
-                // so a rule that truncated or duplicated is visible.
+                // The steady state after materialization: no queue, exactly the live tabs. Two of them, so
+                // truncation or duplication shows.
                 desc: "live tabs and an empty queue => exactly the live tabs",
                 live: vec![
                     tab_subtree(SAVED.to_string(), true, Some(leaf(SAVED_TAB_FILES[0]))),
@@ -3429,9 +3328,8 @@ mod tests {
                 }),
             },
             ContributionCase {
-                // THE COMMIT-NOTHING ROW, inherited from `window_subtree`: nothing live
-                // and nothing queued is not "a window with no tabs", it is a window
-                // whose every gate is shut while its panes bind.
+                // The commit-nothing row from `window_subtree`: nothing live or queued is a window whose gates
+                // are all shut while its panes bind, not a window with no tabs.
                 desc: "no live tab and nothing queued => commit NOTHING",
                 live: Vec::new(),
                 pending: Vec::new(),
@@ -3441,11 +3339,8 @@ mod tests {
                 want: None,
             },
             ContributionCase {
-                // Two rules at once. A queued entry carrying NO layout contributes
-                // nothing rather than a place in the vec (`seeded_tab_state`'s refusal
-                // half), and the window-level `sidebar_visible` argument reaches the
-                // SEEDS alone: a live tab's cache is contributed verbatim, because the
-                // preference in it is the one that tab's own gather persisted.
+                // Two rules: a layout-less queued entry is dropped, and the window's `sidebar_visible` reaches
+                // the seeds alone; a live cache passes verbatim, carrying its own gather's preference.
                 desc: "a queued entry with no layout is dropped, and a live cache passes through \
                        verbatim",
                 live: vec![tab_subtree(SAVED.to_string(), true, Some(leaf(SAVED_FILE)))],
@@ -3473,10 +3368,8 @@ mod tests {
                 }),
             },
             ContributionCase {
-                // The window-level values really are the ones the seeds are built from:
-                // `snapshot_cwd`'s `""` sentinel for an empty-state launch, never the
-                // $HOME that launch handed Neovim — which the next launch would read
-                // back as "a project at $HOME".
+                // The seeds use the window-level values: `snapshot_cwd`'s `""` for an empty-state launch,
+                // never the `$HOME` handed Neovim.
                 desc: "an empty-state launch seeds the \"\" cwd sentinel, never $HOME",
                 live: Vec::new(),
                 pending: vec![Some(leaf(SAVED_FILE))],
@@ -3617,9 +3510,8 @@ mod tests {
         const WIDTH: i32 = 1200;
         const HEIGHT: i32 = 640;
 
-        // Tab 0 exists and has gathered; tabs 1 and 2 are queued layouts whose pages
-        // `materialize_restore` has not created yet. Three DISTINCT files, so "the
-        // right tabs in the right order" is decidable from the values alone.
+        // Tab 0 has gathered; tabs 1 and 2 are queued layouts not yet materialized. Three distinct
+        // files, so order is decidable from the values.
         let live = tab_subtree(SAVED.to_string(), true, tab_layout(0));
         let queued = [tab_layout(1), tab_layout(2)];
 
@@ -3634,10 +3526,8 @@ mod tests {
         );
         let window = contributed.expect("one live tab and two queued must contribute a subtree");
 
-        // Every tab carries the same cwd and the same preference — both are per WINDOW
-        // — so the live tab and the two seeds are indistinguishable in the file. That
-        // is the claim: a restored session comes back identical whether or not its tabs
-        // had materialized when the commit happened.
+        // Cwd and preference are per window, so live tab and seeds are indistinguishable in the file:
+        // a session restores identically whether or not its tabs materialized before the commit.
         let want: Vec<TabState> = SAVED_TAB_FILES
             .into_iter()
             .map(|file| tab_subtree(SAVED.to_string(), true, Some(leaf(file))))
@@ -3669,10 +3559,8 @@ mod tests {
              `TabState::layout`."
         );
 
-        // The PREMISE that makes the falsifier's red worth this test: dropping the
-        // queued tabs does not refuse the commit, it commits a smaller one. Asserted
-        // through the SAME function, so the premise is the falsified build's own
-        // answer rather than a model of it.
+        // The premise behind the falsifier: dropping queued tabs commits a smaller tree rather than
+        // refusing, asserted through the same function.
         let live_only = window_contribution(
             WIDTH,
             HEIGHT,
@@ -3722,10 +3610,8 @@ mod tests {
         const WIDTH: i32 = 1200;
         const HEIGHT: i32 = 640;
 
-        // The launch restored four tabs. Tab 0 came up with the window and has
-        // gathered; the first queued layout was created and has gathered too;
-        // `create_tabpage` then answered 0, so the last two were never created. FOUR
-        // distinct files, so which tab is missing is decidable from the values alone.
+        // Four tabs restored: tab 0 and the first queued one gathered, then `create_tabpage` answered 0
+        // for the last two. Four distinct files, so the missing ones are decidable.
         let live = vec![
             tab_subtree(SAVED.to_string(), true, Some(leaf(SAVED_FILE))),
             tab_subtree(SAVED.to_string(), true, Some(leaf(SAVED_TAB_FILES[0]))),
@@ -3787,9 +3673,7 @@ mod tests {
         );
     }
 
-    // =====================================================================
-    // snapshot_state — assembling the whole tree from the live windows
-    // =====================================================================
+    // --- snapshot_state: assembling the whole tree from the live windows ---
 
     /// The committed tree holds EVERY contributing window, in window order.
     ///
@@ -3811,9 +3695,8 @@ mod tests {
         const WIDTH_B: i32 = 900;
         const HEIGHT_B: i32 = 500;
 
-        // Every field that could identify a window differs: geometry, cwd, sidebar
-        // preference and layout. So "the right two windows, in the right order" is
-        // decidable from the value alone.
+        // Every identifying field differs (geometry, cwd, sidebar, layout), so window order is
+        // decidable from the value.
         let first = window_subtree(
             WIDTH_A,
             HEIGHT_A,
@@ -3880,9 +3763,7 @@ mod tests {
         );
     }
 
-    // =====================================================================
-    // close_commit — what closing one window does to the persisted tree
-    // =====================================================================
+    // --- close_commit: what closing one window does to the persisted tree ---
 
     /// One [`close_commit`] table row. The expectation is DATA, deliberately not
     /// re-derived from the same match the function under test uses — a mirror
@@ -3945,9 +3826,8 @@ mod tests {
                 want: CloseCommit::DropSubtree,
             },
             CloseCase {
-                // The LAST window of a quit. An arm order that tested "no other live
-                // windows" first would answer KeepSubtree here and stay green on
-                // every other shutting-down row.
+                // The last window of a quit: testing "no other live windows" first answers KeepSubtree here
+                // while every other shutting-down row stays green.
                 desc: "the last window closing DURING a quit commits nothing; the tree is written",
                 shutting_down: true,
                 other_live_windows: 0,
@@ -4043,9 +3923,8 @@ mod tests {
              a Skip means the last window's final edits are never persisted at all."
         );
 
-        // Non-vacuity: the rule above is satisfied by a `close_commit` that always
-        // answers KeepSubtree, which would resurrect every deliberately closed
-        // window at the next launch.
+        // Non-vacuity: an always-KeepSubtree `close_commit` satisfies the rule above and resurrects every
+        // closed window next launch.
         assert_eq!(
             close_commit(false, 1),
             CloseCommit::DropSubtree,

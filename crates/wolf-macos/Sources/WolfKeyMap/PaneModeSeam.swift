@@ -1,19 +1,4 @@
-//
-//  PaneModeSeam.swift
-//  Pure, AppKit-free per-pane mode decision.
-//
-//  The sibling of `CommandSeam` / `PreviewSeam`: a pure, display-free decision
-//  exercised with scalar inputs only — NO AppKit, NO WKWebView, NO live Neovim.
-//  Each pane is in PREVIEW mode or EDIT mode, derived — never stored — from
-//  whether the pane's nvim window appears in the `previews()` snapshot. The
-//  Preview and Edit commands always act IN PLACE on the active pane, so the only
-//  front-end question left is which action a picker/open-dialog activation routes
-//  to (preview mode → `preview_file` / `preview_buffer`; edit mode → `open` /
-//  `switch_buffer`).
-//
-//  Imports ONLY Foundation, so it lives in the Foundation-only `WolfKeyMap`
-//  module alongside `PreviewSeam.swift` / `CommandSeam.swift`.
-//
+// Pure per-pane preview-or-edit mode decision.
 
 import Foundation
 

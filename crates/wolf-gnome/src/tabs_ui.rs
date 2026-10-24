@@ -65,7 +65,7 @@
 //! [`crate::buffer_picker::open_decision`], [`crate::nav_ui::nav_press`] and
 //! [`crate::clipboard_ui::copy_decision`] are, and for the same reason. The
 //! inventory of this crate's blocking calls and the reasoning behind the gate live
-//! in `crates/wolf-gnome/DECISIONS.md`, "Crash and stall recovery", and are
+//! in `notes/wolf-gnome-decisions.md`, "Crash and stall recovery", and are
 //! deliberately not restated here.
 //!
 //! [`new_tab_press`] matches `Option<Liveness>` with **no `_` arm**, so appending a
@@ -184,9 +184,8 @@ pub fn tab_wake(current_tabpage: i64, my_tabpage: i64, selected: bool) -> TabWak
         // An unbound BACKGROUND page must not adopt: the handle Neovim reports
         // belongs to whichever tab IS current.
         (UNBOUND_TABPAGE, false) => TabWake::Hold,
-        // Launch, before Neovim's first `wolf_tabpage`: there is nothing to adopt
-        // yet, and delaying first paint behind a notification would show an empty
-        // window.
+        // Launch, before Neovim's first `wolf_tabpage`: nothing to adopt yet, and waiting for the
+        // notification would show an empty window.
         (UNBOUND_TABPAGE, true) if current_tabpage == UNBOUND_TABPAGE => TabWake::Refresh,
         // The first bind, and the post-restart re-bind. The handle is passed
         // THROUGH from the snapshot; nothing here derives one.
@@ -361,9 +360,7 @@ mod tests {
 
     use crate::state_seam::snapshot_cwd;
 
-    // =========================================================================
-    // The whole input domain
-    // =========================================================================
+    // === The whole input domain ===
 
     /// The handle a tab carries before it has adopted one, and the handle
     /// `WolfCore::create_tabpage` answers on an RPC error. Neovim reads it as "the
@@ -439,9 +436,7 @@ mod tests {
         first.is_uppercase() && second.is_lowercase()
     }
 
-    // =========================================================================
-    // tab_wake — the selection gate
-    // =========================================================================
+    // === tab_wake: the selection gate ===
 
     /// One [`tab_wake`] table row.
     struct WakeCase {
@@ -679,18 +674,8 @@ mod tests {
             );
         }
 
-        // --- Non-vacuity: all three answers are actually produced -------------
-        //
-        // BACKSTOPS, not the red a source edit produces. The row loop above dominates
-        // all three for every single-arm edit, and dropping the gate's last arm leaves
-        // the unbound-background row still answering Hold, so even the Hold check
-        // survives it. What they catch is the table and the seam moving TOGETHER: a
-        // rewrite that made `tab_wake` a constant function and rewrote every `want`
-        // to agree would satisfy the length check, the coverage sweep and every row,
-        // and only these three would say the gate had stopped deciding anything.
-        //
-        // The Adopt check keeps `matches!` because that variant carries a handle and
-        // so has no single value to look for; the other two are plain membership.
+        // --- Non-vacuity backstops for the table and seam moving together (a constant `tab_wake` with
+        // every `want` rewritten). Adopt uses `matches!` because it carries a handle.
         let answers: Vec<TabWake> = WAKE_CASES
             .iter()
             .map(|case| tab_wake(case.current_tabpage, case.my_tabpage, case.selected))
@@ -842,9 +827,7 @@ mod tests {
         );
     }
 
-    // =========================================================================
-    // switch_target
-    // =========================================================================
+    // === switch_target ===
 
     /// One [`switch_target`] table row.
     struct SwitchCase {
@@ -902,11 +885,8 @@ mod tests {
             );
         }
 
-        // A ROW-DELETION BACKSTOP, not an assertion a source edit can make bite.
-        // MEASURED: a `switch_target` of `|_| None` reddens the table above at its
-        // SECOND row (`1 -> Some(1)`) and execution never reaches here. What is left
-        // for it to catch is a table that kept only its zero row, which would let a
-        // seam refusing everything look measured while every tab click became a no-op.
+        // A row-deletion backstop: `|_| None` already fails row 2 above (measured), so this catches a
+        // table cut to its zero row, where a seam refusing everything would look measured.
         assert_eq!(
             switch_target(TABPAGE_A),
             Some(TABPAGE_A),
@@ -916,9 +896,7 @@ mod tests {
         );
     }
 
-    // =========================================================================
-    // close_outcome
-    // =========================================================================
+    // === close_outcome ===
 
     /// One [`close_outcome`] table row.
     struct CloseCase {
@@ -988,13 +966,8 @@ mod tests {
             );
         }
 
-        // --- Non-vacuity: both answers are produced, and the boundary is real --
-        //
-        // ROW-DELETION BACKSTOPS, not assertions a source edit can make bite.
-        // MEASURED: under a constant-function stub the table above fires at ROW 0 and
-        // execution never reaches here. The first two do not call the seam at all —
-        // they read `case.want` — and the third is reachable only from a table whose
-        // expectations were rewritten to agree with the implementation.
+        // --- Non-vacuity: row-deletion backstops; a constant stub fails the table at row 0 (measured).
+        // The first two read `case.want`; the third bites only if the expectations were rewritten.
         assert!(
             cases.iter().any(|case| case.want == TabClose::CloseWindow),
             "no close_outcome row expects CloseWindow, so the last-tab rule is unmeasured"
@@ -1013,9 +986,7 @@ mod tests {
         );
     }
 
-    // =========================================================================
-    // new_tab_press
-    // =========================================================================
+    // === new_tab_press ===
 
     /// What a [`PressCase`] row expects [`new_tab_press`] to return.
     ///
@@ -1118,10 +1089,8 @@ mod tests {
             }
         }
 
-        // The rule stated over the WHOLE domain rather than row by row, so a failure
-        // names the rule instead of quoting an index — the
-        // `clipboard_ui::copy_decision_table` convention. This is also what catches a
-        // table whose four rows became four copies of one.
+        // Stated over the whole domain so a failure names the rule, as in
+        // `clipboard_ui::copy_decision_table`; it also catches four identical rows.
         let accepting: Vec<Option<Liveness>> = ALL_LIVENESS_INPUTS
             .into_iter()
             .filter(|liveness| new_tab_press(*liveness) == NewTabPress::Open)
@@ -1203,9 +1172,7 @@ mod tests {
         );
     }
 
-    // =========================================================================
-    // restore_press — the launch-path gate on the queued tabs
-    // =========================================================================
+    // === restore_press: the launch-path gate on the queued tabs ===
 
     /// Both readings of the FIRST tab's handle: not yet adopted, and adopted.
     ///
@@ -1470,8 +1437,7 @@ mod tests {
             }
         }
 
-        // Every row is a restore whose creation may still be attempted, which is every
-        // launch that has not aborted; the abandoned half is
+        // Every row is a restore whose creation may still be attempted; the abandoned half is
         // `an_abandoned_restore_never_attempts_creation_again`.
         for case in RESTORE_PRESS_CASES {
             let got = restore_press(case.first_tabpage, case.liveness, case.pending, true);
@@ -1495,12 +1461,8 @@ mod tests {
             );
         }
 
-        // --- Exactly one input may CREATE -------------------------------------
-        //
-        // The rule stated over the whole domain rather than row by row, so a failure
-        // names the rule instead of quoting an index — the `new_tab_press_table`
-        // convention. This is also what catches a table whose sixteen rows became
-        // sixteen copies of one.
+        // --- Exactly one input may create. Stated over the whole domain so a failure names the rule
+        // (the `new_tab_press_table` convention); it also catches sixteen identical rows.
         let mut creating: Vec<(i64, Option<Liveness>, usize)> = Vec::new();
         for first_tabpage in ALL_FIRST_TABPAGE_INPUTS {
             for liveness in ALL_LIVENESS_INPUTS {
@@ -1526,13 +1488,8 @@ mod tests {
              every launch while the file never explains why."
         );
 
-        // --- Non-vacuity: all three answers are produced -----------------------
-        //
-        // BACKSTOPS rather than the red a source edit produces: the row loop above
-        // dominates all three for every single-arm edit. What they catch is the table
-        // and the seam moving TOGETHER — a rewrite that made `restore_press` a
-        // constant function and rewrote every `want` to agree would satisfy the length
-        // check, the coverage sweep and every row.
+        // --- Non-vacuity backstops for the table and seam moving together: a constant `restore_press`
+        // with every `want` rewritten.
         let answers: Vec<RestorePress> = RESTORE_PRESS_CASES
             .iter()
             .map(|case| restore_press(case.first_tabpage, case.liveness, case.pending, true))
@@ -1627,10 +1584,8 @@ mod tests {
              healthy core — the only input that would otherwise answer Create."
         );
 
-        // Non-vacuity, and the premise the rule above rests on: `may_create` is the
-        // ONLY thing that changed. Without this, a gate that refused everything would
-        // satisfy every assertion above — and no restore would ever materialize, so
-        // every relaunch would open one tab while the save promised the rest.
+        // Non-vacuity and premise: only `may_create` changed. A gate refusing everything would pass the
+        // rule above while every relaunch opened one tab of the saved several.
         assert_eq!(
             restore_press(TABPAGE_A, Some(Liveness::Alive), 2, true),
             RestorePress::Create,
@@ -1642,9 +1597,7 @@ mod tests {
         );
     }
 
-    // =========================================================================
-    // new_tab_cwd
-    // =========================================================================
+    // === new_tab_cwd ===
 
     /// One [`new_tab_cwd`] table row.
     struct CwdCase {
@@ -1809,9 +1762,7 @@ mod tests {
         }
     }
 
-    // =========================================================================
-    // tab_title
-    // =========================================================================
+    // === tab_title ===
 
     /// A file several directories deep. None of its directory components is the
     /// basename, so a title that answered with a parent directory — or with the
@@ -1963,10 +1914,8 @@ mod tests {
              close button with nothing to aim at and nothing to tell it from its neighbour."
         );
 
-        // And the fallback obeys the same two rules, since it is drawn in the same
-        // place. Its literal is deliberately NOT pinned here — nothing outside this
-        // crate reads it — but a fallback that were empty, or that were a path,
-        // would break the bar exactly as a bad title would.
+        // The fallback obeys the same two rules, being drawn in the same place; its literal is not
+        // pinned, since nothing outside this crate reads it.
         assert!(
             !TAB_TITLE_FALLBACK.trim().is_empty(),
             "TAB_TITLE_FALLBACK is empty or all whitespace, so a tab holding an unnamed buffer \

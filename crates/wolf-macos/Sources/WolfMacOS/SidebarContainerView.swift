@@ -1,13 +1,4 @@
-//
-//  SidebarContainerView.swift
-//  The sidebar body: a top header strip with two SF-Symbol toggle buttons (folder
-//  / magnifying glass) that swap the content area between the existing
-//  `FileTreeView` and the new `SearchView`. This view becomes the sidebar's hosted
-//  NSView (adopted directly by `HostViewController` in sidebar mode), managing its
-//  own layout so the active child fills the pane below the header.
-//
-//  Compile-verified + manual-smoke only (needs a window server).
-//
+// The sidebar body: a header with two toggles swapping the file tree and search.
 
 import AppKit
 

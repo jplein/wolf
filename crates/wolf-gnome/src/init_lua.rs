@@ -81,9 +81,8 @@ pub fn resolve_init_lua(
         }
     }
 
-    // Branch 2: the installed tree beside the executable. The join is handed to the
-    // predicate and returned VERBATIM, with the `bin/..` step still in it; nothing
-    // here canonicalizes, and nothing needs to.
+    // Branch 2: the installed tree beside the executable, returned verbatim with its `bin/..` step;
+    // nothing here canonicalizes, and nothing needs to.
     if let Some(dir) = exe_dir {
         let candidate = dir.join(INSTALLED_INIT_LUA_RELATIVE);
         if exists(&candidate) {
@@ -145,9 +144,7 @@ mod tests {
         false
     }
 
-    // =====================================================================
-    // Branch 1 — the WOLF_INIT_LUA override
-    // =====================================================================
+    // === Branch 1: the WOLF_INIT_LUA override ===
 
     /// A non-empty override beats an installed tree that really is there.
     ///
@@ -245,9 +242,7 @@ mod tests {
         }
     }
 
-    // =====================================================================
-    // Branch 2 — the installed tree beside the executable
-    // =====================================================================
+    // === Branch 2: the installed tree beside the executable ===
 
     /// With an executable directory and a predicate that finds the file, the answer
     /// is `<exe dir>` joined with [`INSTALLED_INIT_LUA_RELATIVE`].
@@ -376,10 +371,8 @@ mod tests {
 
         let seen = seen.into_inner();
 
-        // --- Assertion 1 (non-vacuity): the predicate was called at all --------
-        //
-        // Without this, a resolver that never probed would leave `seen` empty and
-        // assertion 2 would iterate over nothing and pass.
+        // --- Assertion 1 (non-vacuity): the predicate was called, or a resolver that never probed
+        // would leave `seen` empty and assertion 2 would pass over nothing.
         assert_eq!(
             seen.len(),
             1,
@@ -420,9 +413,7 @@ mod tests {
         );
     }
 
-    // =====================================================================
-    // The order of the three branches
-    // =====================================================================
+    // === The order of the three branches ===
 
     /// With every input available at once, the branches answer in order: the
     /// override, then the installed tree, then the fallback.

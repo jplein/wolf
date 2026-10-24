@@ -1,10 +1,4 @@
-//
-//  WolfWindowController.swift
-//  Owns ONE top-level window's stack: its embedded Neovim core, the window, the
-//  pane container, the file-tree sidebar, the picker, and its state persistence.
-//  One instance per OS window (plan §4); the `AppDelegate` coordinator holds a
-//  collection of them.
-//
+// Owns one top-level window's stack: core binding, window, panes, sidebar, pickers.
 
 import AppKit
 import Foundation
@@ -204,29 +198,18 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
     paneContainer.onLayoutChanged = { [weak self] in
       self?.coordinator?.scheduleStateSnapshot()
     }
-    // Rebuild any saved layout on launch — including a single leaf, which just
-    // re-opens its file (or preview) in the tab's sole window via the shared
-    // rebuild path. (`leafCount` is always >= 1, so no guard is needed.)
+    // Rebuild any saved layout, including a single leaf, which reopens its file or preview in the
+    // tab's sole window.
     if let saved = restoredTab?.layout {
       paneContainer.requestLayoutRebuild(saved)
     }
 
-    // The file-tree sidebar (left pane) owns its OWN long-lived file-search
-    // session; the render wake reveals/bolds the current buffer, the tree
-    // wake rebuilds its rows. It is only STARTED for a window that has a
-    // folder — an empty-state window must not scan `home`; the tree starts
-    // (reroots) when a folder later opens (see `didOpenFolder` / `onRenderWake`).
-    // The `start()` (whose first `refresh()` may `reloadData`) is deferred to
-    // the END of this method, AFTER the sidebar's real initial `isCollapsed` has
-    // seeded the refresh gate (via the `.initial` KVO below) — so a restored,
-    // COLLAPSED sidebar defers its first outline work instead of reloading while
-    // hidden.
+    // The sidebar owns its own file-search session. `start()` waits for the end of this method,
+    // after the `.initial` KVO seeds the refresh gate, so a collapsed sidebar never loads hidden.
     let tree = FileTreeView(handle: handle, paneContainer: paneContainer)
     self.tree = tree
 
-    // The sidebar search panel (its own transient rg-backed session), shown when
-    // the header's magnifying-glass toggle is active. Wrapped alongside the tree
-    // in a `SidebarContainerView` whose header switches the sidebar body.
+    // The sidebar search panel, its own rg-backed session, behind the header's magnifier toggle.
     let search = SearchView(handle: handle, paneContainer: paneContainer)
     self.search = search
     let sidebarContainer = SidebarContainerView(tree: tree, search: search)
@@ -239,17 +222,12 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
       cols: Self.initialCols,
       rows: Self.initialRows
     )
-    // The toolbar's Back / Forward buttons delegate here explicitly: this
-    // controller is NOT an NSWindowController, so it is not in the responder
-    // chain and a `target: nil` action could never reach it.
+    // Back / Forward target this controller explicitly: it is not an NSWindowController, so it is
+    // not in the responder chain and a `target: nil` action could never reach it.
     window.historyNav = self
 
-    // The centered "Open folder…" overlay (a subview of the pane container),
-    // visible only in the empty state (`hasFolder == false`). Added FIRST so it
-    // sits at the BOTTOM of the overlay stack: it is a full-bleed opaque overlay,
-    // so the transient picker/palette overlays (added below) must sit ABOVE it —
-    // otherwise opening the command palette in an empty window would render it
-    // behind this overlay, with no visible effect.
+    // Added first, so this full-bleed opaque overlay sits below the picker and palette overlays;
+    // otherwise a palette opened in an empty window would render behind it.
     let emptyState = EmptyStateView()
     paneContainer.addSubview(emptyState)
     emptyState.onOpenFolder = { [weak self] in self?.presentOpenFolderDialog() }
@@ -260,11 +238,8 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
     // project-wide restart (kill + respawn + reopen the Tier-1 files per view).
     paneContainer.onRestart = { [weak self] in self?.project.restartNeovim() }
 
-    // The top-center picker, hosted in its OWN borderless non-activating child
-    // panel composited IN FRONT of this window (so it renders above the preview
-    // `WKWebView`) — not a pane-container subview. The host is strong-held here;
-    // the view is the panel's `contentView`, dismissed on resign-key via a WEAK
-    // capture.
+    // Hosted in a child panel in front of this window, so it renders above the preview
+    // `WKWebView`. The host is held strongly; resign-key dismisses through a weak capture.
     let picker = PickerView(handle: handle, paneContainer: paneContainer)
     let pickerHost = PickerPanelHost(
       parentWindow: window, paneContainer: paneContainer, contentView: picker,
@@ -274,9 +249,7 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
     paneContainer.onPickerTrigger = { [weak picker] in picker?.open() }
     self.picker = picker
 
-    // The command-palette overlay, hosted in its own child panel (parallel to
-    // the picker). Activation flows back through `onActivate` to
-    // `activatePaletteRow`.
+    // The command palette, in its own child panel; activation flows to `activatePaletteRow`.
     let palette = CommandPaletteView(handle: handle, paneContainer: paneContainer)
     let paletteHost = PickerPanelHost(
       parentWindow: window, paneContainer: paneContainer, contentView: palette,
@@ -286,9 +259,7 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
     palette.onActivate = { [weak self] row in self?.activatePaletteRow(row) }
     self.palette = palette
 
-    // The buffer-picker overlay, hosted in its own child panel (parallel to the
-    // palette). Activation flows back through `onActivate` to switch the active
-    // pane's buffer.
+    // The buffer picker, in its own child panel; activation switches the active pane's buffer.
     let bufferPicker = BufferPickerView(handle: handle, paneContainer: paneContainer)
     let bufferPickerHost = PickerPanelHost(
       parentWindow: window, paneContainer: paneContainer, contentView: bufferPicker,
@@ -298,18 +269,14 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
     bufferPicker.onActivate = { [weak self] row in self?.activateBufferRow(row) }
     self.bufferPicker = bufferPicker
 
-    // Anchor the saved window frame only for the FIRST tab of a restored
-    // group (the coordinator validated it via `StateSeam.restoredWindowFrame`
-    // and passes it here); a joining tab or a fresh window keeps AppKit's
-    // cascade placement.
+    // Only the first tab of a restored group anchors the validated saved frame; a joining tab or a
+    // fresh window keeps AppKit's cascade placement.
     if let anchorFrame {
       window.setFrame(anchorFrame, display: false)
     }
 
-    // Sidebar visibility: an empty-state window (no folder) ALWAYS hides the
-    // sidebar (ignoring any stored `sidebar_visible`); a restored FOLDER tab
-    // honors its stored `sidebar_visible`; a fresh folder keeps the default
-    // (visible). `didOpenFolder()` reveals it on the empty → open transition.
+    // An empty-state window always hides the sidebar, ignoring the stored `sidebar_visible`; a
+    // restored folder tab honors it, and a fresh folder keeps it visible.
     if !hasFolder {
       window.sidebarItem.isCollapsed = true
     } else if let restoredTab {
@@ -324,10 +291,8 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
     NSApp.activate(ignoringOtherApps: true)
     self.window = window
 
-    // Observe geometry / sidebar / tab-group changes; each schedules a
-    // coalesced whole-tree snapshot on the coordinator (which walks every
-    // live window/tab). The coordinator also schedules one right after this
-    // window is added, so the initial layout persists.
+    // Each change schedules a coalesced whole-tree snapshot; the coordinator also schedules one
+    // right after this window is added, so the initial layout persists.
     let persistence = StatePersistence(
       window: window,
       sidebarItem: window.sidebarItem,
@@ -336,29 +301,20 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
     persistence.install()
     statePersistence = persistence
 
-    // Relay the sidebar's collapse state into the file tree's refresh gate so
-    // outline work is deferred while hidden and caught up on reappear. `.initial`
-    // seeds the tree with the current visibility immediately.
+    // Relay the sidebar's collapse state into the refresh gate; `.initial` seeds it immediately.
     sidebarVisibilityObservation = window.sidebarItem.observe(
       \.isCollapsed, options: [.initial, .new]
     ) { [weak self] item, _ in
       self?.sidebarContainer?.setSidebarVisible(!item.isCollapsed)
     }
 
-    // Start the file tree LAST — only for a window that has a folder — now that
-    // the refresh gate has been seeded with the sidebar's real initial
-    // visibility (the `.initial` KVO above fired synchronously on install). A
-    // VISIBLE sidebar does its first refresh + initial root-expand normally; a
-    // restored COLLAPSED sidebar defers, then runs exactly one catch-up refresh
-    // when it is first shown. An empty-state window never scans `home`; the tree
-    // starts (reroots) when a folder later opens (see `didOpenFolder`).
+    // Start the tree last, now that the `.initial` KVO has seeded the gate. An empty-state window
+    // never scans `home`; the tree reroots when a folder opens (see `didOpenFolder`).
     if hasFolder {
       tree.start()
     }
 
-    // Join the project's (weak) view list. The coordinator drives `setCurrent`
-    // (and `windowDidBecomeKey` does too) so the project routes wakes here once
-    // this view is the current one.
+    // Join the project's weak view list; once this view is current, the project routes wakes here.
     project.attach(self)
 
     return true
@@ -371,28 +327,19 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
     defer { FrameMetrics.end(.controllerWake, frameStart) }
 
     paneContainer?.onRenderWake()
-    // Re-enable/disable the Back + Forward toolbar buttons for THIS frame's active
-    // pane (two cheap lock-free snapshot reads, no RPC — the same cost class as the
-    // `handle?.cwd()` read below). Must run AFTER the pane container reconciles
+    // Two lock-free snapshot reads, no RPC. Must run after the pane container reconciles
     // `activePane`, so `historyWin` addresses the pane the user now sees.
     window?.refreshHistoryToolbar(canBack: historyCanBack, canForward: historyCanForward)
-    // The tree is driven only for a window that has a folder — an empty-state
-    // window never scans/reroots (TreeWakeBridge already no-ops while its
-    // search is nil). `didOpenFolder()` flips `hasFolder`, so the FIRST wake
-    // after a folder opens reroots the tree at the opened folder.
+    // An empty-state window never scans or reroots; the first wake after `didOpenFolder()` reroots
+    // the tree at the opened folder.
     if hasFolder {
       tree?.onRenderWake()
     }
 
     let cwd = handle?.cwd().toString() ?? ""
 
-    // Detect an nvim-initiated `:cd` out of the empty state: baseline the first
-    // non-empty observed cwd (nvim reports `home` for an empty-state window),
-    // then transition when a later non-empty cwd differs from that baseline.
-    // The Open Folder button / Open Recent transition optimistically instead
-    // (see `didOpenFolder`); this covers a typed `:cd`. A typed `:cd` to the
-    // SAME launch dir won't transition (no cwd change) — the button is the
-    // intended path and always transitions.
+    // Detect a typed `:cd` out of the empty state against the first observed cwd (nvim reports
+    // `home`). A `:cd` to that same dir does not transition; the Open Folder button always does.
     if !hasFolder, !cwd.isEmpty {
       if let baseline = initialCwd {
         if cwd != baseline {
@@ -403,17 +350,12 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
       }
     }
 
-    // Refresh the tab titles for this window's whole tab group from each
-    // tab's working directory (abbreviating the home prefix to `~`) via the
-    // coordinator. Set unconditionally each wake — a `:cd` changes a tab's cwd
-    // with no separate signal here, so re-derive the titles every wake.
+    // Re-derive tab titles every wake: a `:cd` changes a tab's cwd with no separate signal here.
     if let window {
       coordinator?.refreshTabTitles(forGroupOf: window)
     }
 
-    // Rebuild the dynamic Window menu (its titles are the windows' full cwd
-    // paths) only when THIS window's live cwd actually changed, and persist
-    // the tree (a `:cd` changes a tab's saved cwd).
+    // Rebuild the Window menu, whose titles are cwd paths, and persist only when this cwd changed.
     if lastKnownCwd != cwd {
       lastKnownCwd = cwd
       coordinator?.windowCwdDidChange(self)
@@ -1029,9 +971,8 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
     guard !isTornDown else { return }
     isTornDown = true
 
-    // This tab is going away; persist the remaining tree. Scheduling BEFORE
-    // the deferred `removeController` is fine — the coalesced snapshot fires
-    // after this controller is dropped, so the walk sees the surviving tabs.
+    // Persist the remaining tree; the coalesced snapshot fires after the deferred
+    // `removeController`, so the walk sees only the surviving tabs.
     coordinator?.scheduleStateSnapshot()
 
     statePersistence = nil
@@ -1056,21 +997,14 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
     paletteHost = nil
     bufferPickerHost = nil
 
-    // Close this view's tabpage (a no-op when it is the LAST view — `detach`
-    // then shuts the whole core down), then detach. Order matters: `closeTabpage`
-    // must see this view still attached to know whether it is the last one.
+    // Order matters: `closeTabpage` must see this view still attached to know whether it is the
+    // last one, in which case it no-ops and `detach` shuts the core down.
     project.closeTabpage(for: self)
     project.detach(self)
     handle = nil
 
-    // Drop this controller from the coordinator's collection on the NEXT
-    // main-runloop turn, not synchronously. During `windowWillClose` the
-    // coordinator's array is the last strong reference to `self`, and `self`
-    // owns `window`; removing it here would deallocate the `NSWindow` while
-    // AppKit is still mid-close (its deferred close animation captures the
-    // window), causing a use-after-free. Deferring keeps the window alive
-    // until AppKit's close transaction has finished. Capturing `self`
-    // strongly is intentional — it is what keeps the window alive until then.
+    // Remove on the next runloop turn: the coordinator holds the last strong ref, and removing now
+    // frees the `NSWindow` mid-close, a use-after-free. The strong `self` capture is intentional.
     DispatchQueue.main.async {
       self.coordinator?.removeController(self)
     }

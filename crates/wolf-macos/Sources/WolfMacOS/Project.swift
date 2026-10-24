@@ -1,23 +1,4 @@
-//
-//  Project.swift
-//  One captive Neovim instance shared by N views, each view bound to one nvim
-//  TABPAGE (the project/tabpage-per-view model).
-//
-//  A `Project` owns the single `WolfCoreHandle` (one process, one shared buffer
-//  list) and its per-project wake token; each `WolfWindowController` (a VIEW) is
-//  bound to one of the project's tabpages. RENDER and picker wakes go only to the
-//  focused view — the project fans them out to its `currentView`; other views hold
-//  their last painted frame until refocused. The file-TREE wake is the exception:
-//  it fans out to EVERY attached view's sidebar (each view runs its own file-tree
-//  traversal and the wake token can't say which view a batch is for). The project
-//  stays alive while ANY view
-//  remains and shuts its nvim down only when its LAST view closes.
-//
-//  Ownership (no cycles): the `AppDelegate` coordinator strong-holds `projects`
-//  (and `controllers`); each view holds its `project` STRONG (the core must
-//  outlive a view teardown while a sibling still binds it); the project holds its
-//  views WEAK. The last view's `detach` is the ONLY path that shuts the core down.
-//
+// One captive Neovim shared by N views, each bound to one nvim tabpage.
 
 import AppKit
 import Foundation
@@ -208,10 +189,8 @@ final class Project {
         (view, handle.cwd_for_tabpage(view.tabpageHandle).toString(), view.capturedOpenFiles())
       }
 
-    // Only an ACTUAL restart (Ok(true)) rebinds + reopens. A no-op (`false`) means
-    // the nvim self-recovered to Alive before the click (a race) OR the respawn
-    // failed (liveness Dead): in both cases we must NOT rebind/reopen — instead
-    // refresh the overlay from a FRESH liveness read, mirroring `onWake`'s mapping.
+    // Only an actual restart rebinds and reopens. `false` means nvim self-recovered first or the
+    // respawn failed, so refresh the overlay from a fresh liveness read, as `onWake` does.
     guard handle.restart() else {
       switch handle.liveness() {
       case Liveness.dead:
@@ -251,11 +230,8 @@ final class Project {
     }
     for view in views.allObjects { view.hideNvimOverlay() }
 
-    // Flash a TRANSIENT "Neovim was restarted" banner on every view. This is
-    // independent of the liveness overlay (which the fresh nvim's Alive wake clears
-    // immediately), so the user sees a visible, self-dismissing confirmation over
-    // the now-working editor. Only the SUCCESS path flashes — the no-op/race branch
-    // above does not.
+    // The banner is independent of the liveness overlay, which the fresh nvim's Alive wake clears
+    // at once. Only the success path flashes it.
     for view in views.allObjects { view.flashRestartNotice() }
   }
 

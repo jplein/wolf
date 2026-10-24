@@ -1,17 +1,4 @@
-//
-//  OtherPaneSeam.swift
-//  Pure, AppKit-free "which other pane?" resolution seam.
-//
-//  The sibling of `CommandSeam` / `DrawerFocusSeam`: a pure, display-free
-//  decision exercised with a `PaneTree` and scalar bounds only — NO AppKit, NO
-//  WKWebView, NO live Neovim. It answers the one front-end question behind
-//  "Preview in Another Pane" / "Edit in Another Pane": given the active pane and
-//  a preferred side, which OTHER pane should receive the bind — an existing
-//  pane, or a fresh split? The split+bind mechanics themselves are core + Lua.
-//
-//  Imports ONLY Foundation, so it lives in the Foundation-only `WolfKeyMap`
-//  module alongside `PaneTree.swift` / `CommandSeam.swift`.
-//
+// Pure "which other pane?" resolution for Preview or Edit in Another Pane.
 
 import Foundation
 

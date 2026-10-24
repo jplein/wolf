@@ -4,7 +4,7 @@
 //! listed in the primary menu as "Buffer Picker…". Like the file picker and the
 //! command palette, the chord is resolved from [`crate::actions::ACTION_TABLE`] by
 //! a CAPTURE-phase controller ([`crate::shell`]), so it is guaranteed not to also
-//! be forwarded to Neovim (see `crates/wolf-gnome/DECISIONS.md`, "The accelerator
+//! be forwarded to Neovim (see `notes/wolf-gnome-decisions.md`, "The accelerator
 //! namespace").
 //!
 //! The overlay is a search entry over the captive Neovim's `buflisted` buffers,
@@ -238,12 +238,8 @@ impl BufferPickerInner {
             OpenDecision::Snapshot => {}
         }
 
-        // One of the EIGHT blocking RPCs a running wolf-gnome issues (the ninth,
-        // the layout rebuild, runs before the window is interactive); the others
-        // are a navigation move — see `crate::nav_ui` — the Copy yank, see
-        // `crate::clipboard_ui`, and the five preview calls, see
-        // `crate::preview_ui`. Plus the RPC-free cwd read, under a borrow of
-        // their own.
+        // A blocking RPC, one of those notes/wolf-gnome-decisions.md#crash-and-stall-recovery lists.
+        // The cwd read is RPC-free, under a borrow of its own.
         let snapshot = {
             let core_ref = self.core.borrow();
             core_ref
@@ -271,7 +267,7 @@ impl BufferPickerInner {
     /// if already closed.
     ///
     /// `area` is the persistent cmdline strip, never a pane drawing area, so every
-    /// overlay in this crate leaves focus on the same widget (`DECISIONS.md`,
+    /// overlay in this crate leaves focus on the same widget (`notes/wolf-gnome-decisions.md`,
     /// "Window structure").
     ///
     /// The buffer snapshot is deliberately NOT cleared here: the next `open`
@@ -434,7 +430,7 @@ impl BufferPickerHandle {
 /// it.
 ///
 /// `area` resolves the focus-return widget at CLOSE time — the SELECTED tab's
-/// cmdline strip, never a pane drawing area (`DECISIONS.md`, "Window structure").
+/// cmdline strip, never a pane drawing area (`notes/wolf-gnome-decisions.md`, "Window structure").
 /// See [`crate::picker::FocusTarget`] for why it is a closure.
 #[must_use]
 pub fn build(
@@ -512,10 +508,8 @@ pub fn build(
         });
     }
 
-    // Key handling (Capture phase so the SearchEntry does not swallow these first):
-    // Esc closes; Up/Down move the LIST selection (NOT the entry's text cursor) and
-    // are consumed so the keypress does not also move the caret; every other key
-    // Proceeds to the entry so typing flows normally.
+    // Capture phase so the SearchEntry does not swallow these: Esc closes; Up/Down move the list
+    // selection, not the caret, and are consumed; every other key proceeds to the entry.
     {
         let inner_weak = Rc::downgrade(&inner);
         let key = gtk::EventControllerKey::new();
@@ -555,9 +549,7 @@ mod tests {
 
     use wolf_core::{rank_buffers, BufInfo, BufferRow, Liveness, NO_NAME};
 
-    // =====================================================================
-    // The whole input domain of `open_decision`
-    // =====================================================================
+    // === The whole input domain of `open_decision` ===
 
     /// Every liveness state the core can report. Mirrors
     /// `liveness_ui::tests::ALL_LIVENESS`, which is the other total table over
@@ -770,9 +762,7 @@ mod tests {
         }
     }
 
-    // =====================================================================
-    // initial_selection
-    // =====================================================================
+    // === initial_selection ===
 
     /// One `initial_selection` table row.
     struct InitialCase {
@@ -827,10 +817,8 @@ mod tests {
             );
         }
 
-        // The rule stated once, over every list long enough for it to bite. This is
-        // what a "simplification" to `restored_index(true, None, n)` — always row 0
-        // — would break, and it is the difference between a telescope-style
-        // buffer switcher and a chord that reopens the buffer you are already in.
+        // The rule over every list long enough to bite: `restored_index(true, None, n)` (always row 0)
+        // would reopen the buffer you are already in instead of switching.
         for n_rows in 2..=8 {
             assert_ne!(
                 initial_selection(n_rows),
@@ -849,9 +837,7 @@ mod tests {
         }
     }
 
-    // =====================================================================
-    // switch_target
-    // =====================================================================
+    // === switch_target ===
 
     /// The `bufnr`s of the fixture rows [`SWITCH_CASES`] ranks over.
     ///
@@ -1099,9 +1085,7 @@ mod tests {
         );
     }
 
-    // =====================================================================
-    // row_label
-    // =====================================================================
+    // === row_label ===
 
     /// One `row_label` table row.
     struct LabelCase {
@@ -1142,9 +1126,8 @@ mod tests {
             },
         ];
 
-        // Without this the two halves of the table would be indistinguishable: an
-        // empty suffix makes `modified: true` and `modified: false` produce the
-        // same string, and every row below would pass with the marker deleted.
+        // An empty suffix would make `modified: true` and `false` identical strings, and every row below
+        // would pass with the marker deleted.
         assert!(
             !MODIFIED_SUFFIX.is_empty(),
             "MODIFIED_SUFFIX is empty, so a modified buffer's row is drawn exactly like an \
@@ -1191,9 +1174,7 @@ mod tests {
         }
     }
 
-    // =====================================================================
-    // The cage smoke's premise, made executable in the fast suite
-    // =====================================================================
+    // === The cage smoke's premise, made executable in the fast suite ===
 
     /// The buffer-picker cage smoke's TARGET file (its `BUFPICK_FILE_TARGET`) —
     /// the one `BUFPICK_QUERY` must select, opened FIRST in the scenario.

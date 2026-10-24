@@ -172,9 +172,8 @@ fn comma_state_dir_swap_and_spellfile_escaped() {
         || std::fs::read_to_string(&addfile).is_ok_and(|t| t.contains("zzcommaqx")),
     );
 
-    // Swap half: an unsaved edit plus `:preserve` must produce a swap under
-    // swap_dir_for(cwd), which lives under the comma'd state dir — pinning the
-    // 'directory' escape.
+    // Swap half: an unsaved edit plus `:preserve` must land a swap under swap_dir_for(cwd), inside
+    // the comma'd state dir, pinning the 'directory' escape.
     core.send_input(ch('i'));
     type_str(&core, "WOLFEDIT ");
     core.send_input(key(Key::Esc));

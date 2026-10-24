@@ -251,18 +251,8 @@ fn buffer_picker_lists_switches_and_restores_view() {
         frame.cols()
     );
 
-    // --- 2. Create buffers ---------------------------------------------------
-    // Visit A then B in the single editor window (so lastused(B) > lastused(A)).
-    // `:badd C` adds C to the buffer list as a LISTED buffer WITHOUT displaying it
-    // in this window (so this pane has never shown C — used for the top-of-buffer
-    // case). Then display Z and make it UNLISTED (so it is filtered out).
-    // `getbufinfo().lastused` has 1-SECOND resolution, so A and B must become
-    // current in DIFFERENT wall-clock seconds for B to strictly outrank A on
-    // lastused (otherwise they TIE and the locked bufnr-ascending tie-break returns
-    // [A, B]). `send_ex_command` is fire-and-forget through the async input pump, so
-    // we must AWAIT each buffer actually becoming current around the clock gap —
-    // otherwise A's keystrokes drain together with the post-sleep burst and A/B
-    // still land in the same second.
+    // --- 2. Visit A then B, `:badd` C unshown, show Z then unlist it. A and B must become current
+    // in different seconds: see crates/wolf-ffi/tests/README.md#buffer_pickerrs
     send_ex_command(&handle, &format!(":e {path_a}"));
     wait_for_active_filename(&handle, "buffer_a.md"); // A is current at t0, BEFORE the gap
     sleep(Duration::from_millis(1100));
@@ -272,9 +262,7 @@ fn buffer_picker_lists_switches_and_restores_view() {
     send_ex_command(&handle, &format!(":e {path_z}"));
     send_ex_command(&handle, ":setlocal nobuflisted");
 
-    // --- 3. buflisted-only filtering + snapshot bufnrs ----------------------
-    // Wait until the fresh snapshot lists A, B, and C (all buflisted). The current
-    // buffer Z is UNLISTED and must be excluded.
+    // --- 3. buflisted-only filtering: A, B and C are listed; the unlisted current Z is not.
     let rows = wait_for_ranked(&handle, "A, B, C all listed", |rows| {
         any_display_ends_with(rows, "buffer_a.md")
             && any_display_ends_with(rows, "buffer_b.md")
@@ -290,10 +278,7 @@ fn buffer_picker_lists_switches_and_restores_view() {
     let bufnr_b = bufnr_for_suffix(&rows, "buffer_b.md").expect("buffer_b.md must have a bufnr");
     let bufnr_c = bufnr_for_suffix(&rows, "buffer_c.md").expect("buffer_c.md must have a bufnr");
 
-    // --- 4. lastused MRU ordering -------------------------------------------
-    // B was visited AFTER A, so among the listed buffers B (highest lastused) is
-    // the current/most-recent and sorts to index 0; A sorts ahead of C (never
-    // visited).
+    // --- 4. lastused MRU ordering: B (visited last) first, then A ahead of never-visited C.
     assert!(
         rows.first()
             .is_some_and(|r| r.display().ends_with("buffer_b.md")),
@@ -310,17 +295,12 @@ fn buffer_picker_lists_switches_and_restores_view() {
         "the visited buffer A must sort ahead of the never-visited buffer C"
     );
 
-    // --- 5. switch_buffer switches the ACTIVE pane --------------------------
-    // The active pane currently shows the unlisted Z. Switch it to A (window-scoped
-    // via nvim_win_set_buf) and observe the pane's statusbar follow.
+    // --- 5. switch_buffer switches the active pane (window-scoped); its statusbar follows.
     handle.switch_buffer(bufnr_a);
     wait_for_active_filename(&handle, "buffer_a.md");
 
-    // --- 6. (winid, bufnr) VIEW ROUND-TRIP ----------------------------------
-    // Scroll A to the bottom (`G`) so the pane's topline is NONZERO, capture it,
-    // switch away to B, switch back to A, and assert the saved view is restored.
-    // (An RPC `switch_buffer` leaves the editor in normal mode, so `G` jumps to the
-    // last line.)
+    // --- 6. (winid, bufnr) view round-trip: scroll A to a nonzero topline, visit B, return.
+    // An RPC `switch_buffer` leaves the editor in normal mode, so `G` jumps to the last line.
     handle.send_key(char_key('G'));
 
     let deadline = Instant::now() + FLUSH_TIMEOUT;
@@ -346,10 +326,7 @@ fn buffer_picker_lists_switches_and_restores_view() {
     wait_for_active_filename(&handle, "buffer_a.md");
     wait_for_active_topline(&handle, t_scrolled, "restored view for (win, A)");
 
-    // --- 7. TOP-OF-BUFFER when the pane never showed the buffer -------------
-    // C was `:badd`ed and never displayed in this pane, so it has NO saved view:
-    // switching to it forces the top of the buffer (topline 0). The active topline
-    // is currently t_scrolled (> 0), so the transition to 0 is observable.
+    // --- 7. Top of buffer: this pane never showed C, so it has no saved view and lands on topline 0.
     handle.switch_buffer(bufnr_c);
     wait_for_active_filename(&handle, "buffer_c.md");
     wait_for_active_topline(&handle, 0, "top-of-buffer for a never-shown buffer");
@@ -437,16 +414,8 @@ fn rows_ending_with(rows: &[FfiBufferRow], suffix: &str) -> usize {
 
 #[test]
 fn buffer_picker_lists_the_union_of_edited_and_previewed_files() {
-    // The pane-mode UNION contract (plan Q4): the picker lists one row per FILE —
-    // the deduplicated union of files edited and files previewed — with no
-    // preview/edit distinction. Two shapes are pinned:
-    //   * a file EDITED in one pane and PREVIEWED in another gets ONE row, and
-    //   * a PREVIEW-ONLY file (reached by a link-follow, never `:e`-ed) still gets
-    //     its own row, because `wolf_preview_file` marks the source buflisted.
-    // In both shapes the preview SCRATCH (created unlisted) contributes no
-    // `Preview: ` row.
-    //
-    // Loud SKIP (no-op pass) when no pinned nvim is available, like the siblings.
+    // One row per file, edited or previewed; the unlisted preview scratch adds no row.
+    // Loud skip (no-op pass) without a pinned nvim, like the siblings.
     let Some(nvim_bin) = common::nvim_bin_or_skip() else {
         return;
     };
@@ -484,10 +453,8 @@ fn buffer_picker_lists_the_union_of_edited_and_previewed_files() {
     send_ex_command(&handle, ":vsplit");
     wait_for_window_count(&handle, TWO_PANES, "after the typed :vsplit");
 
-    // --- 2. Preview alpha.md IN PLACE in the active (new split) pane ----------
-    // Layout after this: one pane EDITS alpha.md, the other PREVIEWS alpha.md. The
-    // preview WINDOW is read back from the previews() row rather than from a
-    // pre-captured `active_win()`, which can lag the typed `:vsplit`.
+    // --- 2. Preview alpha.md in place in the new split. Read the preview window from previews(),
+    // not a pre-captured `active_win()`, which can lag the typed `:vsplit`.
     let scratch_bufnr = handle.open_preview();
     assert!(
         scratch_bufnr > 0,
@@ -519,10 +486,7 @@ fn buffer_picker_lists_the_union_of_edited_and_previewed_files() {
         rows.iter().map(FfiBufferRow::display).collect::<Vec<_>>()
     );
 
-    // --- 4. A PREVIEW-ONLY file gets its own row ------------------------------
-    // Repoint the preview pane at beta.md, which no pane has ever edited. The
-    // link-follow buflists the background-loaded source, so the union grows by
-    // exactly that file.
+    // --- 4. A preview-only file gets its own row: the link-follow buflists never-edited beta.md.
     let beta_bufnr = handle.preview_file(preview_win, beta_path);
     assert!(
         beta_bufnr > 0,

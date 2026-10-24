@@ -18,7 +18,7 @@
 //! A pane's `DrawingArea` is larger than its grid: it also carries a two-line
 //! **statusbar strip** along the top and a uniform padding on all four sides, both
 //! painted into the same area by [`PaneInner::draw_pane`] rather than being
-//! widgets of their own (`crates/wolf-gnome/DECISIONS.md` records why). Every
+//! widgets of their own (`notes/wolf-gnome-decisions.md` records why). Every
 //! pixel-to-grid conversion in this file therefore routes through
 //! [`crate::editor_inset`] — the resizer subtracts the chrome before dividing, and
 //! the pointer paths translate a pane-local point into grid-local space before
@@ -163,10 +163,8 @@ use std::time::Instant;
 
 use adw::prelude::*;
 use gtk::{gio, glib};
-// TARGETED, never `webkit6::prelude::*`: that glob re-exports `gtk::prelude::*`,
-// which collides with the `adw::prelude::*` already in scope above and makes every
-// `WidgetExt` method ambiguous. Only the web view's own methods, and the one
-// `PolicyDecision` method the `decide-policy` handler answers with, are wanted here.
+// Targeted, never `webkit6::prelude::*`: that glob re-exports `gtk::prelude::*`, which collides
+// with `adw::prelude::*` and makes every `WidgetExt` method ambiguous.
 use webkit6::prelude::{PolicyDecisionExt, WebViewExt};
 
 use wolf_core::{
@@ -355,13 +353,8 @@ impl PaneWidgets {
     fn new(win: i64, grid: Option<u64>, area: gtk::DrawingArea) -> Self {
         let host = gtk::Overlay::builder().hexpand(true).vexpand(true).build();
         host.set_child(Some(&area));
-        // Focus must not be able to enter this subtree: `focusable(false)` keeps the
-        // host itself out of the focus chain and `can_focus(false)` keeps every
-        // descendant — including a `webkit6::WebView` added later — out of it too.
-        // The pane areas' non-focusability is the invariant
-        // `click_then_close_keeps_keyboard_input_alive_under_cage` executes; a
-        // focusable widget under `pane_area` that a rebuild destroys is the wedge it
-        // exists to prevent.
+        // No focus may enter: `focusable(false)` keeps the host out, `can_focus(false)` every descendant
+        // (a later WebView too). `click_then_close_keeps_keyboard_input_alive_under_cage` pins the wedge.
         host.set_focusable(false);
         host.set_can_focus(false);
         Self {
@@ -554,7 +547,7 @@ struct PaneInner {
     /// back, so no borrow can be held across a [`WolfCore`] call.
     ///
     /// The drawer is deliberately NOT a [`PaneTree`] leaf; `crate::drawer` and
-    /// `crates/wolf-gnome/DECISIONS.md` hold the reasons. It IS an ordinary `panes`
+    /// `notes/wolf-gnome-decisions.md` hold the reasons. It IS an ordinary `panes`
     /// entry, which is what gives it a statusbar, a column cap, a grid resize and a
     /// paint with no drawer branch anywhere on those paths.
     drawer: Cell<DrawerState>,
@@ -583,44 +576,33 @@ impl PaneInner {
             return;
         }
         self.ensure_initial_pane();
-        // A restored layout replaces the whole pane set, so nothing else on this
-        // wake would be looking at the tree it just built. Early-return (macOS
-        // parity) and let the NEXT wake drive the normal path.
+        // A restored layout replaces every pane, so nothing else this wake looks at the new tree:
+        // return early (macOS parity) and let the next wake drive the normal path.
         if self.consume_pending_layout() {
             return;
         }
         self.apply_intents();
         self.detect_closes();
         self.resolve_pending_grids();
-        // AFTER `resolve_pending_grids` — that is the last step that can bind a
-        // grid, and a pane with no grid has no status to read — and BEFORE
-        // `queue_redraw`, or the frame this wake queues paints last wake's filename
-        // in a pane that just changed buffers. Placing it ahead of
-        // `update_active_pane` keeps "read core state" before "decide the active
-        // pane and paint", mirroring the order already here.
+        // After `resolve_pending_grids`, the last step that can bind a grid, and before `queue_redraw`,
+        // or this frame paints last wake's filename in a pane that just changed buffer.
         let state_start = frame_metrics::begin();
         self.refresh_pane_state();
         frame_metrics::end(Bucket::PaneState, state_start);
-        // AFTER `refresh_pane_state`, which is what fills the per-pane `preview` and
-        // `current_load` this reads, and BEFORE `sync_pane_grids`, so a pane that
-        // just became (or stopped being) a preview has its web view attached or gone
-        // before any resize is issued against the frame it shares.
+        // After `refresh_pane_state`, which fills `preview` and `current_load`, and before
+        // `sync_pane_grids`, so a web view attaches or goes before any resize against its frame.
         let prev_start = frame_metrics::begin();
         self.refresh_previews();
         frame_metrics::end(Bucket::PanePrev, prev_start);
-        // BEFORE `sync_pane_grids`, which is what turns an allocation into a
-        // `resize_grid`: re-stating the strip's height request here is what makes a
-        // toplevel resize reach the drawer at all, since a content height set on a
-        // frame is only allocated on the next one.
+        // Before `sync_pane_grids`: re-stating the strip's height here is what lets a toplevel resize
+        // reach the drawer, since a height set on one frame is allocated on the next.
         self.apply_drawer_frame();
-        // AFTER `refresh_pane_state`, because the cap it re-requests against depends
-        // on the flag that call just cached; BEFORE `update_active_pane`, because
-        // "read core state, then decide, then paint" is the order already here.
+        // After `refresh_pane_state`, which caches the flag the cap depends on; before
+        // `update_active_pane`, so the order stays: read core state, then decide, then paint.
         self.sync_pane_grids();
         self.update_active_pane();
-        // AFTER `sync_pane_grids`, because a grid-anchored popup reads the pane
-        // rectangle that call may have just re-requested, and BEFORE `queue_redraw`,
-        // because it decides whether either surface is on screen at all.
+        // After `sync_pane_grids`, whose re-requested rect a grid-anchored popup reads; before
+        // `queue_redraw`, since it decides whether either surface is on screen.
         self.refresh_message_surfaces();
         self.queue_redraw();
     }
@@ -697,7 +679,7 @@ impl PaneInner {
     /// 3. Call `rebuild_layout` under a SHORT borrow in its own statement.
     ///
     ///    **This is a BLOCKING RPC**, one of the ten this crate issues
-    ///    (`crates/wolf-gnome/DECISIONS.md`, "Crash and stall recovery"). Every
+    ///    (`notes/wolf-gnome-decisions.md`, "Crash and stall recovery"). Every
     ///    other core call this crate makes is a snapshot read or a queued input. It
     ///    is acceptable HERE for a reason the others do not share: it happens on
     ///    the LAUNCH path only — at most once per restored tab, bounded by
@@ -748,36 +730,23 @@ impl PaneInner {
         *self.panes.borrow_mut() = new_panes;
         self.next_pane_id
             .set(first_id + u64::try_from(leaf_ids.len()).unwrap_or(0));
-        // `panes` was replaced wholesale, so a bound drawer's pane is gone with it —
-        // and the drawer is never one of the restored leaves, because it is excluded
-        // from the saved layout by construction (see `Self::layout_snapshot`).
-        //
-        // This call is DEFENSIVE, not dead, and it can never actually fire: both
-        // callers run on the LAUNCH path — `consume_pending_layout` while exactly
-        // one pane exists, and `PaneHandle::realize_layout` on a page created
-        // moments earlier by the restore materialization — so no chord has had a
-        // window to open a drawer in yet. It stays because the alternative is a
-        // `panes` replacement that leaves `DrawerState` pointing at a pane id
-        // nothing holds.
+        // Defensive, and unreachable: both callers run at launch, before any drawer can open, and the
+        // drawer is never a restored leaf. Without it `DrawerState` could name a pane nothing holds.
         self.clear_drawer();
 
-        // The guarded path: it samples `focus_inside_pane_area()` BEFORE tearing
-        // anything down, and its `pane_area.remove(..)` loop unparents the old
-        // single pane's area — which, in the guaranteed one-pane pre-state, is
-        // `pane_area`'s only child and is no longer in `panes`.
+        // The guarded path: it samples focus before teardown, and its remove loop unparents the old
+        // single pane's area, `pane_area`'s only child and no longer in `panes`.
         self.rebuild_pane_area();
         self.set_active_pane(leaf_ids.first().copied());
         self.resolve_pending_grids();
         // Without this every restored pane paints `[No Name]` for one frame: this
         // path early-returns from the wake, so the normal refresh never runs.
         self.refresh_pane_state();
-        // Same early return, same reason: a restored preview pane would otherwise
-        // wait a whole wake for its web view, showing the empty scratch grid where
-        // the document belongs.
+        // Same early return, same reason: a restored preview would wait a wake for its web view,
+        // showing the empty scratch grid.
         self.refresh_previews();
-        // Same reason again: a restored pane whose buffer carries the full-width
-        // flag would otherwise spend a frame at the capped width, since nothing else
-        // on this path re-requests a grid size.
+        // Same again: a restored full-width pane would spend a frame capped, since nothing else on this
+        // path re-requests a grid size.
         self.sync_pane_grids();
         self.queue_redraw();
     }
@@ -835,10 +804,8 @@ impl PaneInner {
             let Some(core) = core_ref.as_ref() else {
                 return;
             };
-            // Phase one: the snapshot join, under a guard bound to a local so it is
-            // gone before the guard-free core calls below. `previews` is keyed by the
-            // preview WINDOW handle, which is `PaneWidgets::win`, so this is a map
-            // lookup per pane rather than a scan.
+            // Phase one: the snapshot join, under a guard dropped before the core calls below; `previews`
+            // is keyed by `PaneWidgets::win`, so this is a lookup per pane.
             let joined: Vec<PaneJoin> = {
                 let snap = core.read_snapshot();
                 targets
@@ -847,9 +814,8 @@ impl PaneInner {
                         let preview = snap.previews.get(&win).cloned();
                         let load = preview.as_ref().map(|info| PreviewLoad {
                             source_bufnr: info.source_bufnr,
-                            // A source nvim has never reported a tick for reads 0,
-                            // which is a real key rather than a missing one: the pair
-                            // still changes when the tick arrives.
+                            // A source nvim has not reported a tick for yet reads 0, a real
+                            // key, so the pair still changes when the first tick arrives.
                             source_tick: snap
                                 .markdown_ticks
                                 .get(&info.source_bufnr)
@@ -947,9 +913,7 @@ impl PaneInner {
                                     Some(buf) => pane_layout::WinContent::Buffer(
                                         buf.path
                                             .as_ref()
-                                            // `None` is a real UNNAMED buffer, which is
-                                            // a resolved answer of `""` — never the
-                                            // absent-window case above.
+                                            // `None` is a real unnamed buffer, resolved as `""`, never the absent-window case above.
                                             .map(|path| path.to_string_lossy().into_owned())
                                             .unwrap_or_default(),
                                     ),
@@ -1062,7 +1026,7 @@ impl PaneInner {
     /// not meant to be one — `wolf_core::layout` records that hiding the drawer is a
     /// plain window close, so [`Self::detect_closes`] is what unbinds it. The
     /// drawer's own rulebook is [`crate::drawer`] and its durable constraints are in
-    /// `crates/wolf-gnome/DECISIONS.md`.
+    /// `notes/wolf-gnome-decisions.md`.
     ///
     /// The match stays EXHAUSTIVE rather than taking a `_` wildcard, so adding a
     /// variant to the shared `wolf_core::LayoutIntent` breaks this build rather than
@@ -1256,11 +1220,8 @@ impl PaneInner {
             let mut panes = self.panes.borrow_mut();
             if let Some(drawer_id) = closed_drawer {
                 panes.remove(&drawer_id);
-                // `clear()` drops the remembered EDITOR pane along with the drawer,
-                // where macOS keeps its `lastEditorPane` across a drawer close. A
-                // deliberate simplification: it costs one MRU hop the first time the
-                // drawer is reopened — `drawer_up_target` falls back to the
-                // bottom-most leaf — and removes a second lifetime to reason about.
+                // `clear()` also forgets the editor pane, which macOS keeps as `lastEditorPane`:
+                // a reopen costs one MRU hop (`drawer_up_target` falls back), one less lifetime.
                 self.clear_drawer();
             }
             for id in closed.iter().filter(|id| Some(**id) != closed_drawer) {
@@ -1314,11 +1275,8 @@ impl PaneInner {
                 }
             }
         }
-        // A pane created while its grid was still pending was skipped by
-        // `build_layout_widget` (None-handling), so its DrawingArea was never
-        // parented into the gtk::Paned tree. Now that the grid is bound, rebuild
-        // so the area is inserted. Only rebuild when something actually changed —
-        // an already-bound pane never re-enters `updates`, so this cannot loop.
+        // A pane created with a pending grid was never parented; now bound, rebuild to insert it. Only
+        // on change: a bound pane never re-enters `updates`, so this cannot loop.
         if bound_any {
             self.rebuild_pane_area();
         }
@@ -1399,7 +1357,7 @@ impl PaneInner {
     /// from the weights on the next `max-position` notify, so the handle would snap
     /// back under the user's pointer. That is a control which visibly refuses input,
     /// which is exactly the trade [`crate::scrollbar`] and
-    /// `crates/wolf-gnome/DECISIONS.md` already rule out.
+    /// `notes/wolf-gnome-decisions.md` already rule out.
     ///
     /// ## Two frames to converge on a resize
     ///
@@ -1614,13 +1572,8 @@ impl PaneInner {
     /// off the wake path entirely while the user types with no preview open: a
     /// request on every wake would arm one continuously for nothing.
     fn request_preview_render(self: &Rc<Self>) {
-        // `WolfCore::render_preview` is a BLOCKING RPC on the GTK main thread, so it
-        // carries the same liveness gate the two presses do rather than a weaker one
-        // (`crates/wolf-gnome/DECISIONS.md`, "Crash and stall recovery"). The read is
-        // a lock-free atomic in a borrow of its own.
-        //
-        // Refused HERE, no coalescer state is touched at all — an unrelated wake
-        // against a wedged Neovim must not look like a burst that has begun.
+        // `render_preview` blocks the main thread, so it takes the presses' liveness gate. A refusal
+        // touches no coalescer state. See notes/wolf-gnome-decisions.md#crash-and-stall-recovery
         let liveness = {
             let core_ref = self.core.borrow();
             core_ref.as_ref().map(WolfCore::liveness)
@@ -1632,10 +1585,8 @@ impl PaneInner {
             return;
         }
 
-        // Own statement. Edition 2021 keeps a `match` scrutinee's temporary alive for
-        // the whole match, so the `Render` arm's re-borrow — `run_preview_render_pass`
-        // ends by recording the render — would be a `RefCell` double-borrow panic.
-        // The same rule as `tree_view::TreeInner::refresh_coalesced`.
+        // Own statement: edition 2021 keeps a `match` scrutinee's temporary alive, so the `Render` arm's
+        // re-borrow would double-borrow panic (as in `tree_view::TreeInner::refresh_coalesced`).
         let decision = self.preview_coalescer.borrow_mut().request(Instant::now());
         match decision {
             RenderDecision::Render => self.run_preview_render_pass(),
@@ -1651,11 +1602,8 @@ impl PaneInner {
                     // coalescer as its last act.
                     let performs = inner.preview_coalescer.borrow_mut().fire(generation);
                     if performs {
-                        // A one-shot fires outside every `pane.wake` region, so this
-                        // pass opens its own `pane.prev` — `frame_stats`' nesting
-                        // contract is that a `prev.render` sample always has a
-                        // `pane.prev` parent. The guard is NAMED: `let _ =` drops it
-                        // at once and measures nothing.
+                        // A one-shot fires outside every `pane.wake`, so it opens its own `pane.prev` (`frame_stats`'
+                        // nesting contract). The guard is named: `let _ =` would drop it at once.
                         let _guard = frame_metrics::scope(Bucket::PanePrev);
                         inner.run_preview_render_pass();
                     }
@@ -1708,10 +1656,8 @@ impl PaneInner {
             return;
         }
 
-        // Every field of every row is read inside THIS ONE borrow, at one instant.
-        // `update` in particular is decided here rather than at the load, because it
-        // is a function of `loaded` and of whether a fragment is pending, and the
-        // blocking `render_preview` below sits between this borrow and that load.
+        // Every field is read in this one borrow, at one instant: `update` depends on `loaded` and a
+        // pending fragment, and the blocking `render_preview` sits between here and the load.
         let due: Vec<DueRender> = {
             let panes = self.panes.borrow();
             ids.iter()
@@ -1761,34 +1707,8 @@ impl PaneInner {
             let load_start = frame_metrics::begin();
             self.load_preview_document(id, &html, &source_path, update);
             frame_metrics::end(Bucket::PrevLoad, load_start);
-            // Recorded WHATEVER the HTML was, the empty string included: an RPC
-            // failure answers empty, and leaving `loaded` behind on that would
-            // re-arm the reload and re-issue the blocking render on every wake for
-            // ever. The next real edit bumps the tick and reloads anyway.
-            //
-            // It is also recorded on `load_preview_document`'s no-view early return,
-            // and that is sound only because of an INVARIANT this loop depends on:
-            // every pane that reaches here already has a web view. The argument must
-            // hold on BOTH entry paths — this pass runs inline on a wake and from the
-            // coalescer's one-shot, where nothing whatever precedes it — so it cannot
-            // rest on `sync_preview_view` having just run above:
-            //
-            // - `current_load` is written ONLY by `refresh_pane_state`, and a pane is
-            //   due here only when it is `Some`;
-            // - every wake that runs `refresh_pane_state` runs `refresh_previews` — and
-            //   so `sync_preview_view` over every pane — later in that SAME wake;
-            // - `consume_pending_layout` early-returns from its wake BEFORE
-            //   `refresh_pane_state`, so a pane built by a layout rebuild carries
-            //   `current_load == None` until a wake that does both, and is not due
-            //   until then.
-            //
-            // So a pane cannot be due without a view, whenever this runs. Move any of
-            // those three and this records a document that was loaded into nothing,
-            // leaving the pane blank until the source's tick moves again.
-            //
-            // What this argument replaces is the reason NOT to capture the due set at
-            // arm time: the set is re-derived here precisely so a pane that closed
-            // mid-burst is simply no longer in it.
+            // Recorded whatever the HTML, empty included; sound only because every due pane has a view.
+            // See notes/crates/wolf-gnome/src/pane_view.rs.md#every-due-pane-has-a-view
             if let Some(p) = self.panes.borrow().get(&id) {
                 p.loaded.set(Some(load));
             }
@@ -1829,19 +1749,15 @@ impl PaneInner {
         }
         if wants {
             let view = webkit6::WebView::new();
-            // Focus must not enter the view, matching its host: `focus_inside_pane_area`
-            // guards everything under `pane_area`, and a focusable widget there that a
-            // rebuild destroys is the wedge that guard exists to prevent.
+            // No focus may enter the view, matching its host: a focusable widget under `pane_area` that a
+            // rebuild destroys is the wedge `focus_inside_pane_area` guards against.
             view.set_focusable(false);
             view.set_can_focus(false);
             {
                 let weak = Rc::downgrade(self);
                 view.connect_decide_policy(move |_view, decision, decision_type| {
-                    // `PolicyDecisionType` FIRST, and it is not redundant with the
-                    // downcast below: a `NewWindowAction` decision is the SAME class,
-                    // so a downcast-only filter would treat a `target="_blank"` as an
-                    // in-page navigation. Answering `false` for one is correct — the
-                    // default handler opens it the way WebKit would.
+                    // `PolicyDecisionType` first, not redundant with the downcast: `NewWindowAction` is the same
+                    // class. See notes/wolf-gnome-decisions.md#following-a-link-in-the-preview
                     if decision_type != webkit6::PolicyDecisionType::NavigationAction {
                         return false;
                     }
@@ -1852,9 +1768,8 @@ impl PaneInner {
                     let Some(action) = nav.navigation_action() else {
                         return false;
                     };
-                    // `Other` is what the initial `load_html` itself arrives as, so
-                    // filtering on `LinkClicked` is exactly "anything that is not a
-                    // user click is allowed through untouched".
+                    // `Other` is the initial `load_html`'s type, so filtering on `LinkClicked` lets every non-click
+                    // through untouched.
                     if action.navigation_type() != webkit6::NavigationType::LinkClicked {
                         return false;
                     }
@@ -1862,18 +1777,14 @@ impl PaneInner {
                     let Some(uri) = uri.filter(|u| !u.is_empty()) else {
                         return false;
                     };
-                    // ANSWER FIRST, act second. `on_preview_link` can issue the
-                    // BLOCKING `preview_file`, and running it before `ignore()` would
-                    // hold WebKit's signal emission open for a whole timeout budget.
+                    // Answer first, act second: `on_preview_link` can issue the blocking `preview_file`, which would
+                    // hold WebKit's signal emission open for a timeout budget.
                     decision.ignore();
                     if let Some(inner) = weak.upgrade() {
                         inner.on_preview_link(pane_id, &uri);
                     }
-                    // `true` means "this handler answered the decision"; returning
-                    // `false` here would let the default handler call `use_()` on a
-                    // decision already answered. Returning `true` UNCONDITIONALLY is
-                    // the opposite trap: the initial `load_html`'s own decision would
-                    // never be answered and the preview would be permanently blank.
+                    // `true` means this handler answered; `false` lets the default `use_()` an answered decision, and
+                    // an unconditional `true` leaves the initial load unanswered and the preview blank.
                     true
                 });
             }
@@ -1889,11 +1800,8 @@ impl PaneInner {
                 });
             }
             p.host.add_overlay(&view);
-            // EXPLICIT, even though `false` is GTK's default, because the reason it
-            // must stay false is exactly what gets simplified away: a measured overlay
-            // child adds its own size request to the overlay's, and a `WebView`'s would
-            // inflate the pane minimum this whole crate is calibrated against
-            // (`editor_inset::min_pane_size` and every smoke's window geometry).
+            // Explicit, though `false` is GTK's default: a measured WebView would add its size request to the
+            // overlay's and inflate the pane minimum (`editor_inset::min_pane_size`, every smoke's geometry).
             p.host.set_measure_overlay(&view, false);
             *p.web.borrow_mut() = Some(view);
         } else {
@@ -1902,12 +1810,8 @@ impl PaneInner {
             let existing = p.web.borrow_mut().take();
             if let Some(view) = existing {
                 p.host.remove_overlay(&view);
-                // All three belong to the VIEW, not to the pane: a pane that becomes a
-                // preview again gets a fresh view with an empty document, a surviving
-                // `head_len` would let the first load into it take the body-swap branch
-                // against a `<head>` that is not there, and a surviving
-                // `pending_fragment` would scroll the next document loaded into the
-                // pane to an anchor the previous one named.
+                // All three belong to the view: a fresh view has an empty document, so a stale `head_len` would
+                // body-swap into a missing `<head>` and a stale `pending_fragment` scroll to an old anchor.
                 p.loaded.set(None);
                 p.head_len.set(0);
                 *p.pending_fragment.borrow_mut() = None;
@@ -1958,9 +1862,8 @@ impl PaneInner {
                 self.scroll_preview_to_fragment(pane_id, &fragment);
             }
             PreviewLink::PreviewFile { path, fragment } => {
-                // `preview_file` is a BLOCKING RPC on the GTK main thread, so it
-                // carries the same liveness gate every other one in this crate does
-                // (`crates/wolf-gnome/DECISIONS.md`, "Crash and stall recovery").
+                // `preview_file` blocks the main thread, so it takes the same liveness gate as every other call.
+                // See notes/wolf-gnome-decisions.md#crash-and-stall-recovery
                 let liveness = {
                     let core_ref = self.core.borrow();
                     core_ref.as_ref().map(WolfCore::liveness)
@@ -1977,11 +1880,8 @@ impl PaneInner {
                                 .map_or(0, |core| core.preview_file(win, &path))
                         };
                         if source_bufnr > 0 {
-                            // UNCONDITIONALLY, to `Some` or to `None`. Writing only a
-                            // `Some` leaves a stale fragment behind: click a link
-                            // carrying `#a`, then before the render lands click another
-                            // carrying none, and the second file scrolls to the first
-                            // file's anchor.
+                            // Unconditionally, `Some` or `None`: writing only `Some` lets a later fragment-less link scroll
+                            // to the previous link's anchor.
                             if let Some(p) = self.panes.borrow().get(&pane_id) {
                                 *p.pending_fragment.borrow_mut() = fragment;
                             }
@@ -2194,9 +2094,8 @@ impl PaneInner {
         };
 
         let head = head_offset(html);
-        // The whole in-place branch, or nothing: the caller's strategy must allow it
-        // AND the head must be present AND unmoved AND a body must be carveable out
-        // of the document.
+        // The whole in-place branch or nothing: strategy allows it, head present and unmoved, and a
+        // body carveable from the document.
         let swap = match (head, body_inner(html)) {
             (Some(offset), Some(body))
                 if update == DocumentUpdate::InPlaceEligible
@@ -2217,9 +2116,7 @@ impl PaneInner {
                         None,
                         None,
                         gio::Cancellable::NONE,
-                        // A failed swap leaves the PREVIOUS document on screen and
-                        // prints; it is not re-armed, because the next edit bumps the
-                        // tick and reloads anyway.
+                        // A failed swap leaves the previous document and prints; no re-arm, as the next edit reloads.
                         |result| {
                             if let Err(err) = result {
                                 eprintln!("wolf-gnome: preview body swap failed: {err}");
@@ -2254,12 +2151,8 @@ impl PaneInner {
             .hexpand(true)
             .vexpand(true)
             .build();
-        // A one-cell-OF-GRID minimum so that, with `shrink-*-child(false)` on the
-        // enclosing paneds, a child can never be allocated to zero pixels (a
-        // starved pane). The floor covers the strip and both padding gutters as
-        // well: a floor of one bare cell would let GTK allocate a pane whose grid
-        // rounds down to nothing, and Neovim would reflow that window's whole
-        // buffer to one column.
+        // Floor of one grid cell plus strip and gutters: with `shrink-*-child(false)` no child starves,
+        // and a bare-cell floor could round a grid to nothing, reflowing its buffer to one column.
         let (min_w, min_h) = editor_inset::min_pane_size(
             self.metrics.cell_w,
             self.metrics.cell_h,
@@ -2285,27 +2178,13 @@ impl PaneInner {
                 }
             });
         }
-        // ONE gesture for the whole press -> drag -> release sequence.
-        //
-        // Not a `GestureClick` (+ anything): a `GtkGesture` takes an implicit grab
-        // on the sequence and keeps delivering after the pointer leaves the widget,
-        // which is exactly what drag-past-the-edge selection needs — an
-        // `EventControllerMotion` would silently stop at the pane edge. And one
-        // gesture rather than two removes any question of the pair fighting over
-        // sequence claiming.
-        //
-        // VERIFIED against the GTK 4.22.4 C source (the version this devShell
-        // builds against): `GtkGestureDrag` installs `gesture_class->begin`, and
-        // `GtkGesture::handle_event` emits BEGIN straight from `GDK_BUTTON_PRESS`
-        // once the point count matches `n-points` (default 1). `drag-begin` is
-        // therefore NOT motion-gated — a plain press with no movement fires it, so
-        // the press path (focus + `MouseAction::Press`) is sound.
+        // One `GestureDrag` for press, drag and release: its implicit grab delivers past the pane edge,
+        // unlike `EventControllerMotion`. See notes/crates/wolf-gnome/src/pane_view.rs.md#one-drag-gesture
         {
             let weak = Rc::downgrade(self);
             let gesture = gtk::GestureDrag::new();
-            // Explicit rather than leaning on `GtkGestureSingle`'s default, so the
-            // "primary button only" decision is visible where it is made (the pure
-            // `mouse::mouse_input` seam refuses every other button as well).
+            // Explicit rather than `GtkGestureSingle`'s default, so the primary-only decision is visible
+            // here (`mouse::mouse_input` refuses other buttons too).
             gesture.set_button(gdk::BUTTON_PRIMARY);
             {
                 let weak = weak.clone();
@@ -2331,17 +2210,8 @@ impl PaneInner {
             area.add_controller(gesture);
         }
 
-        // Vertical scroll. `VERTICAL` alone on purpose:
-        //   * NOT `DISCRETE` — that would move the accumulation inside GTK, where
-        //     the sub-cell remainder policy, the per-unit threshold and the
-        //     reset-on-grid-change rule could not be unit-tested. They belong in
-        //     the pure `mouse` seam.
-        //   * NOT `BOTH_AXES` — horizontal scroll is not handled (macOS parity), so
-        //     claiming horizontal events would be dishonest.
-        //   * NOT `KINETIC` — that only adds the `decelerate` momentum signal, which
-        //     macOS does not special-case either.
-        // The handler always stops propagation: a scroll over a pane belongs to that
-        // pane, and no ancestor (Paned -> Overlay -> Paned -> Box) scrolls.
+        // `VERTICAL` alone: no `DISCRETE` (keeps accumulation in the testable `mouse` seam), no
+        // `BOTH_AXES` or `KINETIC` (macOS parity). It always stops propagation: no ancestor scrolls.
         {
             let weak = Rc::downgrade(self);
             let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
@@ -2354,10 +2224,8 @@ impl PaneInner {
             area.add_controller(scroll);
         }
 
-        // Position recording ONLY. GTK's `scroll` signal carries no coordinates, so
-        // this is the sole way to give the scroll handler a cell to aim at. It is
-        // explicitly NOT used for drag — it stops delivering the moment the pointer
-        // leaves the widget, which is precisely what the gesture above avoids.
+        // Position recording only: `scroll` carries no coordinates. Not for drag, since it stops at the
+        // widget edge, which the gesture above avoids.
         {
             let weak = Rc::downgrade(self);
             let motion = gtk::EventControllerMotion::new();
@@ -2387,7 +2255,7 @@ impl PaneInner {
     /// The strip, the padding and the grid are all painted here rather than being
     /// separate widgets, and the background fill is why: the padding must be the
     /// EDITOR's background, a per-frame value out of the snapshot, whereas a GTK
-    /// widget's background is theme-owned. See `crates/wolf-gnome/DECISIONS.md`.
+    /// widget's background is theme-owned. See `notes/wolf-gnome-decisions.md`.
     ///
     /// **`WolfCore::pane_status` must never be called from here**, and neither may
     /// `display_path` or `render_preview` — the same rule, for the same reason, over
@@ -2409,9 +2277,8 @@ impl PaneInner {
     /// layout builder in the widget layer, which is exactly what `render.rs`'s
     /// one-glyph-path rule exists to prevent.
     fn draw_pane(&self, cr: &cairo::Context, pane_id: PaneId, width: f64, height: f64) {
-        // TOP LEVEL of the draw family, and NOT nested inside `wake`: `queue_draw`
-        // only marks the widget dirty, and GTK calls this from the frame clock after
-        // the wake handler has returned (`frame_stats`'s module docs).
+        // Top level of the draw family, not inside `wake`: GTK draws from the frame clock after the
+        // wake handler returns (`frame_stats`'s module docs).
         let _guard = frame_metrics::scope(Bucket::DrawPane);
         let core_ref = self.core.borrow();
         let Some(core) = core_ref.as_ref() else {
@@ -2423,9 +2290,8 @@ impl PaneInner {
         let snap = core.read_snapshot();
         frame_metrics::end(Bucket::DrawRead, read_start);
 
-        // The editor defaults — the same source `draw_cmdline` resolves for its own
-        // band, and the only colour channel this front-end has (it takes no colour
-        // from the GTK theme).
+        // The editor defaults, as `draw_cmdline` resolves them: the only colour source, since this
+        // front-end takes no colour from the GTK theme.
         let style = snap.highlights.resolve(0);
         let fg = style.fg.unwrap_or(FALLBACK_FG);
         let bg = style.bg.unwrap_or(FALLBACK_BG);
@@ -2440,12 +2306,8 @@ impl PaneInner {
         cr.rectangle(0.0, 0.0, width, height);
         cr.fill().expect("cairo pane background fill failed");
 
-        // One borrow, one statement: `PaneStatus` is not `Copy`, so it is cloned
-        // out rather than held, and no core call happens while it is live. The
-        // full-width flag comes out of the same borrow, so the rect this frame is
-        // painted into and the rect its clicks are translated through are one, and
-        // so does the preview predicate, so the strip and the grid cannot disagree
-        // about what kind of pane this is inside one frame.
+        // One borrow, one statement: `PaneStatus` is cloned out, and the full-width flag and preview
+        // predicate come with it, so paint rect, click rect, strip and grid agree within a frame.
         let (grid_id, status, full_width, is_preview) = {
             let panes = self.panes.borrow();
             panes.get(&pane_id).map_or_else(
@@ -2501,16 +2363,8 @@ impl PaneInner {
             .expect("cairo restore failed after the statusbar");
         frame_metrics::end(Bucket::DrawStatus, status_start);
 
-        // A preview pane skips EXACTLY the grid block and the scrollbar thumb, and
-        // nothing else: the whole-allocation background fill above and the entire
-        // statusbar strip are painted for it exactly as for an editor pane, so the
-        // margins around the web view are the editor's background rather than
-        // garbage and the preview's filename and path still read. The cursor goes
-        // with the grid — under an opaque web view it would paint invisibly — and
-        // the thumb goes with it because the web view scrolls itself and a synthetic
-        // thumb would track the scratch buffer instead. The skip needs no
-        // containment test: the preview scratch buffer has no lines, so its grid
-        // would paint background and nothing else anyway.
+        // A preview skips exactly the grid and the thumb; background and strip paint as for an editor.
+        // The web view scrolls itself. See notes/wolf-gnome-decisions.md#window-structure
         if !is_preview {
             cr.save().expect("cairo save failed before the grid");
             cr.rectangle(rect.x, rect.y, rect.w, rect.h);
@@ -2521,9 +2375,8 @@ impl PaneInner {
             let grid = grid_id
                 .and_then(|g| snap.grid(g))
                 .unwrap_or_else(|| snap.active_grid());
-            // The grid paint alone. Skipped, and so never recorded, for a preview
-            // pane; there is deliberately no per-cell bucket inside `render::paint`,
-            // where two clock reads per cell would cost more than the thing measured.
+            // The grid paint alone, never recorded for a preview. No per-cell bucket in `render::paint`:
+            // two clock reads per cell cost more than the thing measured.
             let grid_start = frame_metrics::begin();
             paint(cr, grid, &snap.highlights, &self.metrics);
             frame_metrics::end(Bucket::DrawGrid, grid_start);
@@ -2534,11 +2387,8 @@ impl PaneInner {
             }
             cr.restore().expect("cairo restore failed after the grid");
 
-            // Deliberately OUTSIDE the grid clip: the thumb lives in the pane's right
-            // padding gutter, which the clip above excludes. `Snapshot::windows` is
-            // keyed by GRID id, so an unbound pane — which falls back to the active
-            // grid for its paint — correctly gets no thumb, because no viewport
-            // belongs to it.
+            // Outside the grid clip: the thumb lives in the right padding gutter. `Snapshot::windows` is
+            // keyed by grid id, so an unbound pane gets no thumb.
             let viewport = grid_id
                 .and_then(|g| snap.windows.get(&g))
                 .map(|w| w.viewport);
@@ -2563,11 +2413,8 @@ impl PaneInner {
                 core.resize_grid(grid, cols, rows);
             }
         }
-        // Re-framed HERE as well as on the wake, because the frame is margins in
-        // ABSOLUTE PIXELS: a divider drag that moves the allocation without changing
-        // the cell-rounded grid size issues no `resize_grid`, so no flush and no wake
-        // follow it, and the view would stay framed for the old allocation until some
-        // unrelated redraw arrived. A pane with no web view returns immediately.
+        // Re-framed here as well as on the wake: margins are absolute pixels, and a divider drag that
+        // keeps the cell-rounded grid size issues no `resize_grid`, so no wake follows it.
         self.apply_preview_frame(pane_id);
         self.resize_global();
     }
@@ -2733,9 +2580,8 @@ impl PaneInner {
             (
                 p.drag_grid.get()?,
                 p.drag_button.get()?,
-                // The gesture's coordinates are always widget-local to `pane_id`'s
-                // OWN area, whatever grid is pinned, so the rect — and the cap it
-                // is measured under — are this pane's.
+                // Gesture coordinates are local to `pane_id`'s own area whatever grid is pinned, so the rect
+                // and its cap are this pane's.
                 self.pane_grid_rect(&p.area, self.pane_cap(p.full_width.get())),
             )
         };
@@ -2779,9 +2625,8 @@ impl PaneInner {
         let Some(input) = mouse::mouse_input(button, g.current_event_state()) else {
             return;
         };
-        // GTK delivers PANE-local coordinates; `cell_at` speaks GRID-local ones.
-        // A press in the statusbar strip or a padding gutter translates to a
-        // negative coordinate, which `cell_at` clamps to the nearest edge cell.
+        // GTK gives pane-local coordinates, `cell_at` wants grid-local; a press in the strip or a gutter
+        // goes negative and clamps to the nearest edge cell.
         let (gx, gy) = editor_inset::grid_local(x, y, target.grid_rect);
         let (row, col) = cell_at(
             gx,
@@ -2828,9 +2673,7 @@ impl PaneInner {
         };
         let threshold = mouse::scroll_threshold(unit, self.metrics.cell_h);
 
-        // One scoped borrow: accumulate and read the recorded pointer, then drop it
-        // before touching the core. `PaneScroll` is `Copy`, so this is a
-        // get/modify/set rather than a held borrow.
+        // One scoped borrow, dropped before the core: `PaneScroll` is `Copy`, so get/modify/set.
         let Some((steps, pointer)) = ({
             let panes = self.panes.borrow();
             panes.get(&pane_id).map(|p| {
@@ -2846,9 +2689,8 @@ impl PaneInner {
         let Some((direction, count)) = mouse::scroll_steps(steps) else {
             return;
         };
-        // GTK's `scroll` signal carries no coordinates, so the cell comes from the
-        // position the motion controller recorded — pane-local, and translated into
-        // grid-local space exactly as the mouse path's is.
+        // `scroll` carries no coordinates, so the cell comes from the motion controller's recorded
+        // position, translated to grid-local as the mouse path's is.
         let (px, py) = pointer;
         let (gx, gy) = editor_inset::grid_local(px, py, target.grid_rect);
         let (row, col) = cell_at(
@@ -2987,11 +2829,8 @@ impl PaneInner {
         };
         let snap = core.read_snapshot();
 
-        // A prompt that stops being shown takes its scroll offset with it: core
-        // stashes and hides a confirm toast on EVERY hide, restoring it only for a
-        // matching re-prompt, so the next frame carries either a different message
-        // or a re-prompt — and neither may open part-scrolled into lines the reader
-        // has not seen. Nothing here dismisses a prompt on its own.
+        // A prompt that stops showing drops its scroll: core hides a confirm toast on every hide, so a
+        // new message or re-prompt must not open part-scrolled. Nothing here dismisses a prompt itself.
         if cmdline_ui::prompt_answered(self.toast_was_prompt.get(), snap.toast.visible) {
             self.toast_scroll.set(0);
             self.toast_lines.set(0);
@@ -3295,10 +3134,8 @@ impl PaneInner {
         // gone the root reports no focus at all and there is nothing left to test.
         let had_focus = self.focus_inside_pane_area();
 
-        // Detach every reusable pane HOST from its current parent so it can be
-        // re-inserted into the freshly built widget tree. The host, not the area:
-        // unparenting the area would tear it out of its own overlay and leave a
-        // preview's web view parented to a host that is no longer in the tree.
+        // Detach every pane host for reinsertion. The host, not the area: unparenting the area leaves a
+        // preview's web view on a host no longer in the tree.
         {
             let panes = self.panes.borrow();
             for p in panes.values() {
@@ -3322,11 +3159,8 @@ impl PaneInner {
                 widget.set_vexpand(true);
                 self.pane_area.append(&widget);
             }
-            // The drawer strip, AFTER the tree: `pane_area` is a vertical box, so
-            // appending last is what puts it along the bottom. It is not in the
-            // layout `build_layout_widget` walks and never will be, so this append is
-            // the one place the widget TREE knows the drawer exists. Its height is a
-            // separate matter and `apply_drawer_frame` below owns it.
+            // The drawer strip, appended after the tree so it sits at the bottom: the one place the widget
+            // tree knows the drawer. `apply_drawer_frame` owns its height.
             if let Some(p) = self.drawer.get().id().and_then(|id| panes.get(&id)) {
                 self.pane_area.append(&p.host);
             }
@@ -3351,20 +3185,11 @@ impl PaneInner {
         self.panes.borrow_mut().clear();
         self.next_pane_id.set(FIRST_PANE_ID);
         self.active_pane.set(None);
-        // The drawer is NOT reachable through `panes`, so clearing that map does not
-        // clear it — and nothing else can. `detect_closes` is the drawer's only other
-        // unbind path and it cannot fire here: a restart leaves the dead Neovim's
-        // grid and its `WinInfo` in the snapshot, so the drawer's grid never appears
-        // to vanish. A surviving id would keep `apply_drawer_open`'s `is_open()`
-        // guard true against a pane of a process that no longer exists, and the
-        // drawer could never be opened again for the rest of the session.
+        // Only this can clear the drawer: it is not in `panes`, and `detect_closes` cannot fire since the
+        // dead grid stays in the snapshot. A stale id would block reopening it for the session.
         self.clear_drawer();
-        // Unparents and destroys everything and builds nothing (an empty `panes`
-        // map makes `build_layout_widget` return `None` for the root leaf) — and,
-        // critically, runs its own `focus_inside_pane_area()` guard, parking focus
-        // on the persistent `cmdline_area` BEFORE the widgets go away. Reusing
-        // that path rather than open-coding the teardown is what keeps the
-        // focus-wedge fix intact through a restart.
+        // Tears everything down and builds nothing, through `rebuild_pane_area`'s own focus guard;
+        // reusing it rather than open-coding teardown keeps the focus-wedge fix through a restart.
         self.rebuild_pane_area();
     }
 
@@ -3429,9 +3254,8 @@ impl PaneHandle {
 
     /// Reacts to a render wake (see [`PaneInner::on_render_wake`]).
     pub fn on_render_wake(&self) {
-        // `pane.wake`: once per REFRESHED tab, and reachable from outside the drain
-        // loop by both the launch path and the restart path, so its count may exceed
-        // `wake.tabs`'s. See `frame_stats`'s count identities.
+        // `pane.wake`: once per refreshed tab, also reached from launch and restart, so its count may
+        // exceed `wake.tabs`'s. See `frame_stats`'s count identities.
         let _guard = frame_metrics::scope(Bucket::PaneWake);
         self.inner.on_render_wake();
     }
@@ -3466,11 +3290,8 @@ impl PaneHandle {
     /// budget it belongs to. Exactly ONE per restored tab, which is why the queued
     /// copy is dropped below.
     pub fn realize_layout(&self, saved: &PaneNode) {
-        // `open_tab` stays single-pathed and queues the same layout for every tab
-        // it builds. Dropping that copy here is what keeps this ONE rebuild: left
-        // queued, the first wake this tab is not held for would consume it and
-        // rebuild a second time — a blocking RPC on the SELECTION path, which is
-        // neither the launch path nor anywhere in the blocking-call inventory.
+        // `open_tab` queues the same layout for every tab; dropping that copy keeps this one rebuild,
+        // not a second blocking RPC on the selection path, outside the blocking-call inventory.
         self.inner.pending_layout.borrow_mut().take();
         self.inner.apply_layout_rebuild(saved);
     }
@@ -3557,10 +3378,8 @@ pub fn build(core: &Rc<RefCell<Option<WolfCore>>>, metrics: &Rc<CellMetrics>) ->
         .build();
     cmdline_area.set_content_height(strip_height(metrics.cell_h));
 
-    // Both surfaces are sized to their own content on each wake and start hidden, so
-    // neither covers the buffer or intercepts a pointer event while there is nothing
-    // to show. `halign`/`valign` keep them at their measured size inside the overlay;
-    // filling it would make the toast's pointer target the whole window.
+    // Both surfaces size to their content each wake and start hidden; `halign`/`valign` keep them at
+    // measured size, as filling would make the toast's pointer target the whole window.
     let toast_area = gtk::DrawingArea::builder()
         .halign(gtk::Align::Start)
         .valign(gtk::Align::End)
@@ -3581,12 +3400,8 @@ pub fn build(core: &Rc<RefCell<Option<WolfCore>>>, metrics: &Rc<CellMetrics>) ->
     container.append(&pane_area);
     container.append(&cmdline_area);
 
-    // The strip is measured ONCE: `metrics` never changes for the life of the
-    // process, so nothing here belongs on the paint path. Everything is in DEVICE
-    // PIXELS, which is the unit `statusbar_layout` is called in on this front-end
-    // and the unit Cairo paints in. The desktop UI family is read here too, once per
-    // TAB, so a `gtk-font-name` change reaches tabs opened after it and every tab at
-    // the next launch.
+    // Measured once: `metrics` never changes. Device pixels, the unit of `statusbar_layout` here and
+    // of Cairo. The UI family is read once per tab, so a `gtk-font-name` change reaches new tabs.
     let primary_px = metrics.size_px;
     let secondary_px = statusbar_layout::secondary_font_size(primary_px);
     let statusbar = statusbar_layout::statusbar_layout(
@@ -3653,9 +3468,7 @@ pub fn build(core: &Rc<RefCell<Option<WolfCore>>>, metrics: &Rc<CellMetrics>) ->
         });
     }
     {
-        // The toast's own scroll controller. It always stops propagation, whether or
-        // not the offset moved: the point is that a gesture landing on the toast
-        // never reaches a pane's controller and so never reaches core, where
+        // Always stops propagation: a gesture on the toast must not reach core, where
         // `InputEvent::is_toast_dismissing` would clear the message being read.
         let weak = Rc::downgrade(&inner);
         let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
@@ -3803,10 +3616,8 @@ fn build_chain(
     paned.set_shrink_end_child(false);
     paned.set_start_child(Some(&start));
     paned.set_end_child(Some(&end));
-    // `gtk_orient` rather than a read-back `paned.orientation()`: this function is
-    // where the axis is DECIDED (from the split's own `Orientation`), so passing it
-    // down keeps one source of truth. A read-back would agree today and would be a
-    // second thing to keep in step.
+    // `gtk_orient`, not a read-back `paned.orientation()`: the axis is decided here, so passing it
+    // down keeps one source of truth.
     install_paned_position(&paned, gtk_orient, ctx.tree, path.to_vec(), boundary);
     Some(paned.upcast::<gtk::Widget>())
 }
@@ -3901,10 +3712,8 @@ fn install_paned_position(
         paned.connect_notify_local(Some("max-position"), move |p, _| {
             let max = p.max_position();
             let span = paned_span(p, axis);
-            // BOTH guards come before the staleness gate is armed. A pass that
-            // applied nothing must not record a `last_max`/`last_span`, or the very
-            // next `notify::position` compares against a pair no `set_position` ever
-            // ran with and is accepted as a user drag.
+            // Both guards precede arming the staleness gate: a pass that applied nothing must not record
+            // `last_max`/`last_span`, or the next notify reads as a user drag.
             if max <= 0 || span <= 0 {
                 return;
             }
@@ -3930,18 +3739,15 @@ fn install_paned_position(
     {
         let tree = tree.clone();
         paned.connect_notify_local(Some("position"), move |p, _| {
-            // FIRST, before any borrow: this notify can arrive SYNCHRONOUSLY from
-            // the re-apply's own `set_position`, so a borrow taken above this check
-            // would be taken from inside that call.
+            // First, before any borrow: this notify can arrive synchronously from the re-apply's own
+            // `set_position`.
             if guard.applying.get() {
                 return;
             }
             let max = p.max_position();
             let span = paned_span(p, axis);
-            // The span joins `max` in the staleness gate because it is what the
-            // fraction below is a proportion OF: a notify arriving mid-resize would
-            // otherwise store a weight measured against an extent the re-apply never
-            // used, and the tree would drift by the difference.
+            // The span joins `max` in the staleness gate since the fraction is a proportion of it: a notify
+            // mid-resize would store a weight against an extent the re-apply never used.
             if max <= 0 || max != guard.last_max.get() || span != guard.last_span.get() {
                 return;
             }
@@ -4429,12 +4235,8 @@ mod tests {
         );
     }
 
-    // -----------------------------------------------------------------------------
-    // The head guard. [`PaneInner::load_preview_document`] takes the in-place branch
-    // only when the recorded offset is not the `0` sentinel, `</head>` is present, the
-    // offset is UNMOVED, and a body can be carved out; the two functions below are what
-    // decide three of those four, and nothing else in this crate executes them.
-    // -----------------------------------------------------------------------------
+    // --- The head guard: the two functions below decide three of the four conditions of
+    // `PaneInner::load_preview_document`'s in-place branch, and nothing else executes them.
 
     /// The Markdown fixture the real-renderer tests below render. Prose and a heading:
     /// enough for a non-empty body, and carrying none of the head markers those tests
@@ -4785,9 +4587,8 @@ mod tests {
             )
         }
 
-        // What the carve actually is: the comment's own terminator, the whole
-        // stylesheet, the head's closing tag and the real body start tag, all arriving
-        // as CONTENT — with the document's genuine body tacked on the end.
+        // What the carve is: the comment's terminator, the stylesheet, `</head>` and the real body tag
+        // arriving as content, with the genuine body on the end.
         const CARVED_FROM_THE_HEAD: &str =
             " --><style>@font-face{}</style></head><body class=\"wolf-markdown\"><p>one</p>";
 
@@ -4815,14 +4616,8 @@ mod tests {
         );
     }
 
-    // -----------------------------------------------------------------------------
-    // The statusbar strip's font. [`ui_font_family`] turns the desktop's
-    // `gtk-font-name` into the family the strip paints in, and [`strip_font`] applies
-    // that family, a pixel size and the bold flag to one of the strip's two lines.
-    // Both are pure `pango::FontDescription` calls: no font map is consulted, no
-    // display is opened and nothing is rasterized, so neither family named below has
-    // to be installed on the machine that runs these rows.
-    // -----------------------------------------------------------------------------
+    // --- The statusbar strip's font: `ui_font_family` and `strip_font` are pure
+    // `pango::FontDescription` calls, so neither family named below need be installed.
 
     /// The synthetic base's family — the face the strip keeps when the desktop names
     /// no usable one. A monospace name, because that is what the editor's own
@@ -4888,11 +4683,8 @@ mod tests {
             want: None,
         },
         FamilyCase {
-            // The one measured input that makes the trim-and-empty guard load-bearing.
-            // Pango hands back the NO-BREAK SPACE as a family — `family()` is
-            // `Some("\u{00a0}")` — and Rust's `trim`, whose whitespace is Unicode's
-            // rather than ASCII's, is the only thing that reduces it to nothing before
-            // it reaches `set_family`.
+            // The input that makes the trim-and-empty guard load-bearing: Pango returns a no-break space as
+            // a family, and only Rust's Unicode `trim` reduces it to nothing before `set_family`.
             desc: "a NO-BREAK SPACE, the one blank family Pango really returns",
             gtk_font_name: Some("\u{00a0}"),
             want: None,
@@ -4910,9 +4702,8 @@ mod tests {
             want: Some("Inter"),
         },
         FamilyCase {
-            // The style and weight words are DROPPED rather than folded into the
-            // family: bold-when-active is the strip's active/inactive signal, so a
-            // desktop font naming Bold must not bold an inactive pane's filename.
+            // Style and weight words are dropped: bold marks the active pane, so a Bold desktop font must
+            // not bold an inactive pane's filename.
             desc: "style and weight words are dropped",
             gtk_font_name: Some("Cantarell Bold Italic 11"),
             want: Some("Cantarell"),
@@ -4925,9 +4716,7 @@ mod tests {
             want: Some("DejaVu Sans"),
         },
         FamilyCase {
-            // Measured: Pango trims this itself, giving `Some("Cantarell")` before the
-            // guard sees it. The row pins that the guard duplicates no work Pango
-            // already does — not that the guard is what handles padding.
+            // Measured: Pango trims this itself; the row pins that the guard duplicates none of Pango's work.
             desc: "a padded setting, which Pango trims itself",
             gtk_font_name: Some("  Cantarell  11 "),
             want: Some("Cantarell"),
@@ -4975,9 +4764,8 @@ mod tests {
             size_tol: 0.0,
         },
         StripCase {
-            // The active pane's primary line: overridden AND bold. The only row that
-            // survives a hardcoded `set_weight(Bold)`, which is what makes the other
-            // three name that edit.
+            // The active primary line, overridden and bold: the only row a hardcoded `set_weight(Bold)`
+            // passes, which makes the other three name that edit.
             desc: "the active pane's primary line, overridden and bold",
             family: Some(OVERRIDE_FAMILY),
             size_px: 28.0,
@@ -4987,11 +4775,8 @@ mod tests {
             size_tol: 0.0,
         },
         StripCase {
-            // The secondary line under a 28 px primary: `secondary_font_size` scales by
-            // 0.8, so 22.4 is a size the strip really asks for rather than an invented
-            // one. 22.4 * 1024 is 22937.6, which is not a whole pango unit — hence the
-            // tolerance, one unit wide so it holds whichever way Pango's conversion
-            // breaks the tie. Tuning the literal instead would hide that.
+            // Under a 28 px primary `secondary_font_size` gives 22.4; 22.4 * 1024 is not a whole pango unit,
+            // hence a one-unit tolerance, which tuning the literal would hide.
             desc: "a fractional pixel size, which cannot land on a whole pango unit",
             family: Some(OVERRIDE_FAMILY),
             size_px: 22.4,

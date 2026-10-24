@@ -120,9 +120,8 @@ fn search_projects_files_matches_and_opens_at_line() {
 
     let init_lua = common::init_lua_path();
 
-    // Seed a fresh temp cwd: a top-level markdown file, a nested markdown file, and
-    // a plain-text file (excluded unless all_files). Keep `tmp` alive until after
-    // shutdown so it outlives the session as nvim's cwd + search root.
+    // Seed two markdown files and a plain-text one (excluded unless all_files). The temp dir is
+    // nvim's cwd and search root, so `tmp` stays alive until after shutdown.
     let tmp = tempfile::tempdir().expect("failed to create temp cwd directory");
     std::fs::create_dir_all(tmp.path().join("sub")).expect("failed to create sub/");
     std::fs::write(tmp.path().join(FILE_ALPHA), "needle one\n").expect("seed alpha.md");
@@ -142,9 +141,8 @@ fn search_projects_files_matches_and_opens_at_line() {
     )
     .expect("wolf_ffi_start should return a handle (is WOLF_NVIM_BIN a valid nvim?)");
 
-    // --- ignorecase(): the captive init.lua sets no ignorecase, so nvim's default
-    // (off) applies. Value is one-shot (seeds the case toggle) and stable across
-    // reads.
+    // --- ignorecase(): init.lua leaves nvim's default (off). The one-shot value seeds the case
+    // toggle and is stable across reads.
     let ic1 = handle.ignorecase();
     let ic2 = handle.ignorecase();
     assert_eq!(ic1, ic2, "ignorecase() should be stable across reads");

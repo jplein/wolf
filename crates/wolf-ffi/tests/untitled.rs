@@ -213,9 +213,8 @@ fn basename(path: &str) -> String {
 
 #[test]
 fn startup_names_untitled_markdown_no_auto_write() {
-    // Case 1: a fresh, empty cwd. The startup buffer must be the anonymous
-    // `Untitled.md` — a real, markdown-typed name — yet NOTHING is written to disk
-    // (no auto-save).
+    // Case 1: in a fresh, empty cwd the startup buffer is the markdown-typed `Untitled.md`, and
+    // nothing is written to disk.
     let Some(nvim_bin) = common::nvim_bin_or_skip() else {
         return;
     };
@@ -245,9 +244,7 @@ fn startup_names_untitled_markdown_no_auto_write() {
 
 #[test]
 fn new_buffer_collides_up_the_sequence() {
-    // Case 2: with the startup buffer already holding `Untitled.md`, each Cmd-N
-    // (`new_buffer`) must pick the next free name: Untitled 2.md, then Untitled 3.md
-    // (buffer-name collision, not disk collision).
+    // Case 2: each `new_buffer` picks the next free buffer name: Untitled 2.md, then Untitled 3.md.
     let Some(nvim_bin) = common::nvim_bin_or_skip() else {
         return;
     };
@@ -388,9 +385,8 @@ fn new_buffer_writes_nothing_until_explicit_save() {
 
 #[test]
 fn chdir_rehomes_anonymous_buffer() {
-    // Case 6: opening a folder (a `chdir`) re-homes the untouched anonymous buffer
-    // into the NEW cwd, so its name follows the working directory. Still no file is
-    // written in the new folder.
+    // Case 6: a `chdir` re-homes the untouched anonymous buffer into the new cwd, still writing
+    // nothing there.
     let Some(nvim_bin) = common::nvim_bin_or_skip() else {
         return;
     };
@@ -413,9 +409,8 @@ fn chdir_rehomes_anonymous_buffer() {
     handle.chdir(cwd_b.to_string_lossy().into_owned());
     wait_for_cwd(&handle, &cwd_b);
 
-    // Poll until current_file() is Untitled.md WHOSE PARENT is B (the re-home
-    // landed). `ends_with` basename + canonicalized-parent compare, robust to
-    // `/var`<->`/private/var`.
+    // Poll until current_file() is Untitled.md under B, comparing canonicalized parents
+    // (`/var` vs `/private/var`).
     let deadline = Instant::now() + FLUSH_TIMEOUT;
     let mut current = handle.current_file();
     let mut rehomed = false;
@@ -451,9 +446,8 @@ fn chdir_rehomes_anonymous_buffer() {
 
 #[test]
 fn chdir_leaves_real_file_untouched() {
-    // Case 7: the re-home guard is a no-op for a REAL, named file. Opening a real
-    // markdown file then chdir-ing elsewhere must leave the current buffer pointed
-    // at that real file (no re-home to Untitled.md).
+    // Case 7: the re-home guard leaves a real, named file alone: after a chdir the current buffer
+    // still names it.
     let Some(nvim_bin) = common::nvim_bin_or_skip() else {
         return;
     };

@@ -1,23 +1,4 @@
-//
-//  PickerRefreshCoalescer.swift
-//  A pure, headless debounce/coalescing seam SHARED by BOTH the file picker and
-//  the file-tree sidebar for their streaming refreshes (plan Fix #1). The name is
-//  historical (it was introduced for the picker), but the seam is generic — the
-//  file tree reuses it verbatim because both stream a large traversal and would
-//  otherwise re-do O(N) work per batch.
-//
-//  During a large traversal the file-search / tree-traversal wake fires many
-//  times (once per batch), and each bare `refresh()` re-ranks (picker) or
-//  reloads/rebuilds (tree) the whole accumulated snapshot. This seam collapses a
-//  BURST of `request()` calls into a SINGLE trailing `perform()`, while still
-//  guaranteeing that a later wake reschedules — so the final, complete snapshot
-//  is never dropped.
-//
-//  It is toolkit-free (Foundation only): the caller injects `schedule` (which in
-//  production arms a `DispatchQueue.main.asyncAfter` timer) and `perform` (the
-//  work to run once per coalesced burst), so the seam is unit-testable without a
-//  real run loop — the test drives the "timer fired" edge by hand.
-//
+// Pure debounce that collapses a burst of streaming refreshes into one.
 
 import Foundation
 

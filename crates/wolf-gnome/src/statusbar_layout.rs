@@ -24,7 +24,7 @@
 //! macOS reads its titlebar theme and falls back to AppKit's label tiers.
 //! [`statusbar_text`] takes the editor's own default foreground and background —
 //! `crate::pane_view` resolves highlight 0, the source the cmdline strip already
-//! uses — because `crates/wolf-gnome/DECISIONS.md` records that this front-end
+//! uses — because `notes/wolf-gnome-decisions.md` records that this front-end
 //! takes no colour from the OS theme. macOS's non-themed AppKit-tier branch
 //! therefore has no counterpart here.
 //!
@@ -313,9 +313,8 @@ mod tests {
     fn statusbar_layout_table() {
         let cases = [
             LayoutCase {
-                // pH = ceil(13 * 1.25) = ceil(16.25) = 17;
-                // sH = ceil(10 * 1.25) = ceil(12.5)  = 13;
-                // pTop = 3; sTop = 3 + 17 + 1 = 21; h = 21 + 13 + 3 = 37.
+                // pH = ceil(16.25) = 17; sH = ceil(12.5) = 13; pTop = 3; sTop = 3 + 17 + 1 = 21;
+                // h = 21 + 13 + 3 = 37.
                 desc: "the macOS worked example, case for case",
                 primary: 13.0,
                 secondary: 10.0,
@@ -324,11 +323,8 @@ mod tests {
                 expected: (37.0, 3.0, 17.0, 21.0, 13.0),
             },
             LayoutCase {
-                // pH = ceil(28 * 1.25) = 35; sH = ceil(22.4 * 1.25) = ceil(28) = 28;
-                // sTop = 3 + 35 + 1 = 39; h = 39 + 28 + 3 = 70.
-                // A realistic Linux scale: the strip is called in DEVICE PIXELS here
-                // (see the module doc), so these are the sizes a 22-point-ish font
-                // reaches it as.
+                // pH = ceil(35) = 35; sH = ceil(28) = 28; sTop = 39; h = 70. Device pixels (see the module doc):
+                // the sizes a 22-point-ish font reaches the strip as.
                 desc: "a realistic Linux scale in device pixels",
                 primary: 28.0,
                 secondary: 22.4,
@@ -337,9 +333,8 @@ mod tests {
                 expected: (70.0, 3.0, 35.0, 39.0, 28.0),
             },
             LayoutCase {
-                // pH = ceil(8 * 1.25) = ceil(10) = 10 — an EXACT product, which must
-                // not grow; sH = ceil(4 * 1.25) = ceil(5) = 5;
-                // sTop = 2 + 10 + 0 = 12; h = 12 + 5 + 2 = 19.
+                // pH = ceil(10) = 10, an exact product that must not grow; sH = 5; sTop = 2 + 10 + 0 = 12;
+                // h = 12 + 5 + 2 = 19.
                 desc: "an exact product does not grow",
                 primary: 8.0,
                 secondary: 4.0,
@@ -348,10 +343,8 @@ mod tests {
                 expected: (19.0, 2.0, 10.0, 12.0, 5.0),
             },
             LayoutCase {
-                // pH = sH = ceil(10 * 1.25) = ceil(12.5) = 13; sTop = 0 + 13 + 0 = 13;
-                // h = 13 + 13 + 0 = 26. NOTE: 12.5 is a rounding TIE, so this row
-                // does NOT tell `ceil` from Rust's half-away-from-zero `round`; row 1
-                // is what does.
+                // pH = sH = ceil(12.5) = 13; sTop = 13; h = 26. 12.5 is a rounding tie, so this row cannot tell
+                // `ceil` from half-away-from-zero `round`; row 1 does.
                 desc: "a half-pixel product ceils (and would also round) up",
                 primary: 10.0,
                 secondary: 10.0,
@@ -360,9 +353,8 @@ mod tests {
                 expected: (26.0, 0.0, 13.0, 13.0, 13.0),
             },
             LayoutCase {
-                // pH = sH = ceil(16 * 1.25) = 20; sTop = 0 + 20 + 0 = 20; h = 40.
-                // With no padding and no gap the two line boxes are flush, which is
-                // the arm that proves neither term is added unconditionally.
+                // pH = sH = ceil(20) = 20; sTop = 20; h = 40. No padding or gap puts the line boxes flush, which
+                // proves neither term is added unconditionally.
                 desc: "zero padding and gap put the lines flush",
                 primary: 16.0,
                 secondary: 16.0,
@@ -513,11 +505,8 @@ mod tests {
                 expected: 9.0,
             },
             SecondaryCase {
-                // `+inf * 0.8` is `+inf`, and `9f64.max(f64::INFINITY)` is `+inf` —
-                // so this row is red for any implementation that does not check
-                // `is_finite()` explicitly. See the CONTRACT paragraph above: an
-                // infinity escaping here reaches the strip's font description and
-                // `statusbar_layout`, which collapses the strip entirely.
+                // `+inf * 0.8` is `+inf` and `9f64.max(INFINITY)` is `+inf`, so only an explicit `is_finite()`
+                // passes; an escaping infinity reaches `statusbar_layout`, which collapses the strip.
                 desc: "an infinite primary yields the floor too",
                 primary: f64::INFINITY,
                 expected: 9.0,
@@ -627,9 +616,8 @@ mod tests {
     fn statusbar_text_table() {
         let cases = [
             TextCase {
-                // active => primary alpha 1.0: 0 + (255 - 0) * 1.0 = 255.
-                // secondary alpha 0.7 * 1.0 = 0.7: 0 + 255 * 0.7 = 178.5, and
-                // round-half-away-from-zero gives 179.
+                // Active: primary α 1.0 -> 255; secondary α 0.7 -> 255 * 0.7 = 178.5, rounded half away from
+                // zero to 179.
                 desc: "an active pane is full strength and bold",
                 fg: rgb(255, 255, 255),
                 bg: rgb(0, 0, 0),
@@ -654,18 +642,8 @@ mod tests {
                 },
             },
             TextCase {
-                // inactive over a GREY background, so the blend's direction shows.
-                // primary, alpha 0.5:
-                //   r: 40 + (200 - 40) * 0.5 = 40 + 80 = 120
-                //   g: 40 + (100 - 40) * 0.5 = 40 + 30 = 70
-                //   b: 40 + (  0 - 40) * 0.5 = 40 - 20 = 20
-                // secondary, alpha 0.35:
-                //   r: 40 + 160 * 0.35 = 40 + 56 = 96
-                //   g: 40 +  60 * 0.35 = 40 + 21 = 61
-                //   b: 40 -  40 * 0.35 = 40 - 14 = 26
-                // A composite over black would give (100, 50, 0) and (70, 35, 0):
-                // note the BLUE channel, which rises toward the background here and
-                // falls to zero there.
+                // Inactive over grey, so the blend's direction shows: primary α 0.5 -> (120, 70, 20), secondary
+                // α 0.35 -> (96, 61, 26). Over black they would be (100, 50, 0) and (70, 35, 0): blue falls to 0.
                 desc: "the blend is toward the background, not toward black",
                 fg: rgb(200, 100, 0),
                 bg: rgb(40, 40, 40),
@@ -677,14 +655,8 @@ mod tests {
                 },
             },
             TextCase {
-                // active over the same grey background.
-                // primary, alpha 1.0: bg + (fg - bg) * 1 == fg exactly.
-                // secondary, alpha 0.7:
-                //   r: 40 + 160 * 0.7 = 40 + 112 = 152
-                //   g: 40 +  60 * 0.7 = 40 +  42 =  82
-                //   b: 40 -  40 * 0.7 = 40 -  28 =  12
-                // The blue channel is 12, NOT 28: 28 is what `40 * 0.7` is, and the
-                // channel is `40 - 28`. Derived here rather than copied.
+                // Active over grey: primary α 1.0 is fg exactly; secondary α 0.7 -> 40 + (fg - 40) * 0.7 =
+                // (152, 82, 12), blue being 40 - 28, not 28.
                 desc: "an active pane over a non-black background is untouched",
                 fg: rgb(200, 100, 0),
                 bg: rgb(40, 40, 40),

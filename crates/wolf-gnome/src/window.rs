@@ -451,15 +451,13 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
         metrics,
     } = parts;
 
-    // Read ONCE: a window built while the test-only readiness probe is pending
-    // wires its triggers; any other window (no `WOLF_READY_FILE`, or a later New
-    // Window) wires none and pays one bool test per wake.
+    // Read once: only a window built while the readiness probe is pending wires its triggers; others
+    // pay one bool test per wake.
     let ready_armed = coordinator.ready_pending();
     let coordinator_weak = coordinator.weak();
 
-    // Wake plumbing: the tokio worker fires `wake` (Send + Sync); it only pushes
-    // onto the channel. Dropping a "full" send is correct — a redraw is already
-    // pending. The GTK-side drain task is spawned after the window exists.
+    // Wake plumbing: the tokio worker only `try_send`s; a full-channel drop is correct, a redraw is
+    // pending. See notes/wolf-gnome-decisions.md#threading-and-the-wake
     let (wake_tx, wake_rx) = async_channel::bounded::<()>(WAKE_CHANNEL_CAP);
     let wake: WakeFn = Arc::new(move || {
         let _ = wake_tx.try_send(());
@@ -484,85 +482,31 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
     // draw/key/resize/close closures via Rc, and taken out on close.
     let core = Rc::new(RefCell::new(Some(core)));
 
-    // The configured appearance, resolved and applied: the chrome's colour scheme
-    // and the `background` push into the captive Neovim. AFTER the core exists, so
-    // the push has somewhere to go, and BEFORE any widget is built, so the window
-    // is realized under the resolved scheme with no visible flash.
+    // Applied after the core exists, so the `background` push has a target, and before any widget,
+    // so the window realizes under the resolved scheme with no flash.
     appearance::apply_at_launch(config, &core);
 
-    // The TAB LAYER. Every tab carries its own pane view (one DrawingArea per pane
-    // plus a cmdline strip, a message toast and a completion popup) and its own
-    // empty state and persistence glue, over this window's ONE core. No page exists
-    // yet: tab 0 is opened below, once the toplevel is built. The persistence glue
-    // needs no window — `StateParts` carries none, and the size that reaches
-    // `state.json` is read at commit time by `WindowHandle::cached_subtree`.
+    // The tab layer: each tab has its own pane view, empty state and persistence over this window's
+    // one core. No page exists yet; tab 0 opens below, once the toplevel is built.
     let tabs = tab_view::build(TabsParts {
         core: &core,
         metrics,
     });
 
-    // The tab VIEW is the window overlay's main child, so that overlay keeps its
-    // identity and its allocation — the pane area, not the whole window. That is
-    // load-bearing rather than incidental: `OVERLAY_ORIGIN_X_EXPECTED` /
-    // `OVERLAY_ORIGIN_Y_EXPECTED` in the cage smokes are this overlay's own measured
-    // origin, and the crash overlay's button click and the picker/preview overlap
-    // band are both derived from it. Putting the tab view ABOVE the `gtk::Paned`
-    // would widen this overlay to the full window and move all three.
-    //
-    // Overlay children stack in the order they are added, and this order is a
-    // decision. Per PAGE, in `tab_view::open_tab`:
-    //
-    //   empty_state -> message toast -> completion popup
-    //
-    // then per WINDOW, here, above every page:
-    //
-    //   picker -> command palette -> buffer picker -> project search
-    //   -> crash overlay -> restart banner
-    //
-    // The toast and the popup sit just above the empty state and below all four
-    // transient overlays. Above the empty state because the captive nvim runs in a
-    // project-less window too, so its messages must be readable there; below the
-    // overlays because a picker the user just opened must not have a message drawn
-    // over its rows. They are sized to their own content and hidden when there is
-    // nothing to show, so neither takes layout space or a pointer event at rest.
-    // Those three are per PAGE because the toast belongs to a pane view, so the
-    // empty state has to move with it — otherwise a message in a project-less
-    // window would draw underneath the status page.
-    //
-    // All four transient overlays sit ABOVE the empty state, which is opaque and
-    // full-bleed: below it, opening any one of them in a project-less window would
-    // draw it behind the status page with no visible effect. Being overlay children
-    // of an ANCESTOR overlay is what keeps that true across the tab boundary — the
-    // same GTK stacking rule the preview relies on. Their order RELATIVE
-    // TO EACH OTHER is not observable, because `shell::perform` keeps at most one
-    // of the four open (it closes the other three when it opens one).
-    //
-    // The crash overlay covers all five (the picker's Open, a palette row, a
-    // buffer-picker row and a search row would all send into a dead nvim; the empty
-    // state's Open Folder would `Chdir` one — the captive nvim runs in the empty
-    // state too, so it can crash there). It stays per WINDOW because it is a
-    // property of the CORE, and one core serves every tab. The banner is topmost and
-    // click-through, so it confirms a restart without ever swallowing a click meant
-    // for the editor.
+    // Main child is the tab view so the overlay spans the pane area (`OVERLAY_ORIGIN_*_EXPECTED`);
+    // add order is stacking. See notes/crates/wolf-gnome/src/window.rs.md#overlay-stacking-across-tabs
     let overlay = gtk::Overlay::new();
     overlay.set_child(Some(&tabs.view_widget()));
 
     let crash = crash_overlay::build();
 
-    // Where the four transient overlays and the sidebar return focus when they
-    // close: the SELECTED tab's cmdline strip, resolved at close time. It cannot be
-    // a captured widget, because that strip is per TAB — an overlay holding tab 0's
-    // would, after a switch, grab focus into a widget GTK has unmapped, leaving the
-    // toplevel with no focus widget and killing window-level key dispatch outright.
-    // See `picker::FocusTarget`.
+    // Focus returns to the selected tab's strip, resolved at close time: a captured per-tab strip is
+    // unmapped after a switch and kills key dispatch. See `picker::FocusTarget`.
     let focus_target = tabs.focus_target();
 
     let picker = picker::build(&overlay, focus_target.clone(), &core);
-    // The palette's Switch to Window rows come from the coordinator on each open,
-    // minus this window. Weak, and upgraded per call: the coordinator owns this
-    // window's handle, this window owns the palette, and a strong reference here
-    // would close that cycle and leak the whole graph. A dropped coordinator yields
-    // no rows rather than a panic.
+    // Switch to Window rows, from the coordinator per open. Weak: a strong ref closes the
+    // coordinator -> window -> palette cycle and leaks the graph; a dropped coordinator yields none.
     let palette_windows: palette::WindowSource = {
         let weak = coordinator.weak();
         Rc::new(move || {
@@ -578,18 +522,8 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
     overlay.add_overlay(&crash.widget());
     overlay.add_overlay(&crash.banner_widget());
 
-    // The file-tree sidebar on the left; the tab view (inside the overlay) on the
-    // right. In the empty state there is no project to walk, so no FileSearch
-    // starts. The tree reads no cwd of its own: the synthetic root row's LABEL is
-    // passed in here and again on each `TreeHandle::reroot`, so the shell stays the
-    // one place that knows where the sidebar is rooted.
-    //
-    // The sidebar is per WINDOW, not per tab, and it stays outside the tab view for
-    // the measured reason the overlay comment above gives — plus two more: N tabs
-    // would run N `FileSearch` traversals of ONE project, because a new tab inherits
-    // the window's folder, and `shell::settle_reroot` would re-root N sidebars per
-    // settle. It moves into the page in the unit that gives tabs independent working
-    // directories; `DECISIONS.md` carries that follow-up.
+    // The tree reads no cwd: its root label is passed here and on each `reroot`, so the shell alone
+    // knows the root. Per window, not per tab: see notes/wolf-gnome-decisions.md#window-structure
     let tree = tree_view::build(
         &core,
         focus_target.clone(),
@@ -602,16 +536,8 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
     paned.set_end_child(Some(&overlay));
     paned.set_position(TREE_PANE_WIDTH);
 
-    // The unified toolbar: the sidebar toggle, the linked Back/Forward pair and the
-    // "Open" button at the start; the GNOME primary (hamburger) menu at the end.
-    //
-    // NO TITLE WIDGET IS SET, and that is a decision rather than an omission.
-    // `adw::HeaderBar` renders the window title itself when none is set (which
-    // `shell::refresh_title` keeps current), while setting one changes the header
-    // bar's natural height — and that height IS the smoke suite's measured
-    // `PANE_ORIGIN_Y_EXPECTED`, which seven of the eight pointer smokes derive
-    // their click targets from. The eighth measures its own click point off the
-    // rendered preview link, which the same height moves.
+    // No title widget is deliberate: one changes the header bar's natural height, which is a term of
+    // `PANE_ORIGIN_Y_EXPECTED`. See notes/wolf-gnome-decisions.md#window-structure
     let header = adw::HeaderBar::new();
 
     let sidebar_button = gtk::Button::builder()
@@ -620,12 +546,8 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
         .build();
     header.pack_start(&sidebar_button);
 
-    // Both start INSENSITIVE, and the first `AppShell::refresh_nav_buttons` on the
-    // first render wake settles them. Until that wake there is no `Snapshot`, so
-    // `active_win` is `None` and `nav_ui::nav_press` refuses every press: a
-    // sensitive button in that window offers a navigation that prints a refusal and
-    // does nothing. The sidebar toggle needs no such treatment — its sensitivity
-    // comes from `set_empty_state`, which runs before `present()`.
+    // Both start insensitive until the first render wake's `refresh_nav_buttons`: with no snapshot
+    // `nav_press` refuses every press, so a sensitive button would only print a refusal.
     let nav_back_button = gtk::Button::builder()
         .icon_name(HISTORY_BACK_ICON)
         .tooltip_text("Back (Alt+Left)")
@@ -655,10 +577,8 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
         .build();
     header.pack_end(&menu_button);
 
-    // Header bar, then the TAB BAR, then the sidebar/editor split. The bar
-    // AUTOHIDES at one page, so a one-tab window's geometry is byte-identical to a
-    // window with no tab layer — which is what keeps `PANE_ORIGIN_Y_EXPECTED` and
-    // the eight pointer smokes' derived click targets where they were measured.
+    // Header, tab bar, then the split. The bar autohides at one page, keeping one-tab geometry equal
+    // to no tab layer. See notes/wolf-gnome-decisions.md#window-structure
     let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
     content.append(&header);
     content.append(&tabs.bar_widget());
@@ -677,11 +597,8 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
         .content(&content)
         .build();
 
-    // TAB 0, carrying the FIRST saved tab's layout. Its tabpage handle is 0 — it
-    // ADOPTS the real one on the first wake through `tabs_ui::tab_wake`, which is a
-    // snapshot read rather than `WolfCore::current_tabpage()`'s blocking RPC. The
-    // plan's `tabs` is never empty, so `first()` is a real tab rather than a
-    // fallback.
+    // Tab 0, with the first saved tab's layout. Tabpage 0 adopts the real handle on the first wake
+    // via `tabs_ui::tab_wake`, a snapshot read, not `current_tabpage()`'s blocking RPC.
     if !tabs.open_tab(TabParts {
         tabpage: 0,
         cwd: plan.core_cwd.clone(),
@@ -693,10 +610,8 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
         return None;
     }
 
-    // The `win.*` action namespace, the accelerators, and the command drain.
-    // Actions must exist before `present()` so the menu and the header button
-    // resolve them. The `app.*` rows are the coordinator's and are already
-    // installed.
+    // The `win.*` actions, accelerators and command drain, installed before `present()` so the menu
+    // and header button resolve them; the `app.*` rows are the coordinator's.
     let shell = shell::build(ShellParts {
         core: &core,
         window: &window,
@@ -721,17 +636,13 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
     shell.install_actions(app);
     shell.set_empty_state(empty);
 
-    // The header Open button activates the same action the Ctrl+Shift+O
-    // accelerator does. Explicit activation (rather than the `action-name`
-    // property) sidesteps the ordering footgun where a widget naming an
-    // as-yet-uninstalled action renders insensitive.
+    // Explicit activation rather than the `action-name` property: a widget naming a not-yet-installed
+    // action renders insensitive.
     {
         let window = window.clone();
         open_button.connect_clicked(move |_button| {
-            // Qualified because `adw::ApplicationWindow` implements BOTH
-            // `gio::ActionGroup` (whose `activate_action` takes a bare, unprefixed
-            // name and returns nothing) and `gtk::Widget` (whose takes the full
-            // `win.`-prefixed name and reports failure). We want the latter.
+            // Qualified: `gtk::Widget::activate_action` takes the `win.`-prefixed name and reports failure;
+            // `gio::ActionGroup`'s takes a bare name and returns nothing.
             if let Err(err) =
                 gtk::prelude::WidgetExt::activate_action(&window, GO_TO_FILE_ACTION, None)
             {
@@ -740,11 +651,8 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
         });
     }
 
-    // The three toolbar buttons activate exactly the actions their chords do, in
-    // the same shape as the Open button above (including why the call is
-    // qualified). No smoke clicks any of them — see "Deliberate test gaps" in
-    // `crates/wolf-gnome/tests/README.md` — so keeping the shape identical is what
-    // the coverage rests on.
+    // The toolbar buttons activate their chords' actions in the Open button's shape. No smoke clicks
+    // them, so that shape is the coverage: crates/wolf-gnome/tests/README.md#deliberate-test-gaps
     {
         let window = window.clone();
         sidebar_button.connect_clicked(move |_button| {
@@ -776,18 +684,8 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
         });
     }
 
-    // Drain the wake channel on the main thread. Each signal first asks the shell
-    // to read the captive nvim's LIVENESS (`on_liveness_wake`), which drives the
-    // crash/stall overlay, schedules an automatic restart for a dead core, and
-    // reports whether painting this wake is worth anything at all. Only then does
-    // the TAB LAYER react — every tab is driven and `tabs_ui::tab_wake` decides
-    // which of them may create/split/close panes, consume layout intents and
-    // redraw, so a tab Neovim is not currently on is never touched at all — and the
-    // tree react to a current-file change carried by the same
-    // wake. The shell's command drain runs LAST and UNGATED: a drained
-    // `close_window` shuts the core down, the other two must have had their turn
-    // first, and a `close_window` queued just before a crash must not be stranded
-    // behind the overlay.
+    // Drain order is fixed: liveness first, gating the tab layer and tree; the shell's command drain
+    // last and ungated. See notes/wolf-gnome-decisions.md#threading-and-the-wake
     {
         let tabs = tabs.clone();
         let tree = tree.clone();
@@ -795,9 +693,7 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
         let coordinator_weak = coordinator_weak.clone();
         glib::spawn_future_local(async move {
             while wake_rx.recv().await.is_ok() {
-                // `count(wake) == wakes` exactly, by construction: this counter and
-                // the region below are incremented by the same pass, with nothing
-                // conditional between them.
+                // `count(wake) == wakes` by construction: this counter and the region below share one pass.
                 frame_metrics::note_wake();
                 {
                     let _wake_guard = frame_metrics::scope(Bucket::Wake);
@@ -817,10 +713,8 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
                         shell.on_render_wake();
                     }
                 }
-                // AFTER the `wake` region closes, so the emit's own cost — a
-                // format and two writes, once per interval — is never inside a
-                // measured region. This is the whole report cadence: nothing here
-                // arms a timer (`crates/wolf-gnome/DECISIONS.md`).
+                // After the `wake` region closes, so the emit's cost is never measured. No timer: see
+                // notes/wolf-gnome-decisions.md#frame-time-instrumentation
                 frame_metrics::maybe_emit();
                 // The end of a wake is when a pane binds, a grid is resized and a
                 // restore step lands, so it is one of the readiness triggers.
@@ -832,11 +726,8 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
             }
         });
     }
-    // Every SAVED TAB PAST THE FIRST, queued rather than created: materializing
-    // needs tab 0 to have adopted its tabpage handle, which has not happened yet
-    // (see `tabs_ui::restore_press`). The queue is drained on a later render wake,
-    // with no timer and no polling. Placed BEFORE the synchronous wake pair below
-    // so the earliest wake that may materialize already sees it.
+    // Later saved tabs are queued, not created: materializing needs tab 0's adopted handle (see
+    // `tabs_ui::restore_press`). Queued before the wake pair below so its first wake sees them.
     if plan.tabs.len() > 1 {
         tabs.queue_restore(RestoreTabs {
             launch_cwd: plan.core_cwd.clone(),
@@ -852,11 +743,8 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
         });
     }
 
-    // React to whatever is already there (the initial attached frame), through the
-    // same liveness gate as every later wake. Deliberately UNINSTRUMENTED, here and
-    // at the `shell.on_render_wake()` below: this is the launch path rather than a
-    // wake, so timing it would put a first-frame cost into a `wake` bucket whose
-    // count is meant to equal the wake counter.
+    // React to the initial frame through the liveness gate. Uninstrumented, here and below: this is
+    // launch, and timing it would break `count(wake) == wakes`.
     if shell.on_liveness_wake() {
         tabs.on_render_wake();
     }
@@ -875,9 +763,7 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
         id,
     });
 
-    // Registered BEFORE the first drain below, so a coordinator call the drain
-    // reaches finds this window in the registry rather than acting as though it
-    // did not exist.
+    // Registered before the first drain, so a coordinator call it reaches finds this window.
     let handle = WindowHandle {
         inner: Rc::new(WindowInner {
             id,
@@ -889,13 +775,8 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
     };
     coordinator.register(&handle);
 
-    // The shell's first drain runs only AFTER `wire_close` has installed the
-    // `close-request` handler. A drained `CloseWindow` calls `window.close()`,
-    // which is a no-op teardown-wise until that handler exists — it would tear the
-    // window down without shutting the core down, orphaning the captive nvim. The
-    // queue is empty at this point today (commands are user-triggered only, so a
-    // freshly attached core has none), so this ordering costs nothing and removes
-    // the hazard.
+    // The first drain runs after `wire_close` installs `close-request`: a drained `CloseWindow` before
+    // it would tear the window down without shutting the core, orphaning nvim.
     shell.on_render_wake();
 
     window.present();
@@ -1040,18 +921,13 @@ fn wire_keys(
                     eprintln!("wolf-gnome: commit not forwarded: {reason}");
                 }
                 im_ui::CommitDecision::Send(events) => {
-                    // A commit that finds no core performs nothing: the close handler
-                    // has already taken it out and the window is tearing down. The
-                    // borrow is taken and released in this one statement's scope, per
-                    // `crates/wolf-gnome/DECISIONS.md`.
+                    // A commit with no core performs nothing: the window is tearing down. The borrow lives in this
+                    // one statement, per notes/wolf-gnome-decisions.md#threading-and-the-wake
                     if let Some(core) = core.borrow().as_ref() {
                         for event in events {
                             core.send_input(InputEvent::Key(event));
-                            // One per Key ACTUALLY sent, so a multi-character commit
-                            // counts N: the counter's contract is keys delivered to
-                            // Neovim, and a committed character is how nearly every
-                            // key is delivered, because the input method filters
-                            // plain printables.
+                            // One per Key sent, so an N-character commit counts N: the contract is keys delivered, and most
+                            // keys arrive as commits since the input method filters plain printables.
                             frame_metrics::note_keystroke();
                         }
                     }
@@ -1077,11 +953,8 @@ fn wire_keys(
             // offer cannot be taken back once made.
             let route = match im_ui::key_route(im_ui::KeyPhase::Press, overlay_open, None) {
                 im_ui::KeyRoute::AskInputMethod => {
-                    // No current event is treated as the input method DECLINING,
-                    // never as it having claimed the key. A missing event is a GTK
-                    // anomaly; falling through to `gdk_key` loses at worst a
-                    // composition, while treating it as claimed loses the keystroke
-                    // outright — so `is_some_and` here, never `map_or(true, …)`.
+                    // No current event means the input method declined: falling through loses at most a composition,
+                    // claiming loses the key. So `is_some_and`, never `map_or(true, …)`.
                     let filtered = controller
                         .current_event()
                         .is_some_and(|event| im.filter_keypress(&event));
@@ -1097,21 +970,16 @@ fn wire_keys(
                     Some(event) => {
                         if let Some(core) = core.borrow().as_ref() {
                             core.send_input(InputEvent::Key(event));
-                            // Counted where the key is actually DELIVERED, so a key
-                            // the overlay guard above swallowed, a key the input
-                            // method claimed and a key typed at a window with no core
-                            // are all correctly absent from the denominator of the
-                            // report's `wakes/key`.
+                            // Counted where delivered, so keys the overlay guard swallowed, the input method claimed or that
+                            // reached no core stay out of the report's `wakes/key` denominator.
                             frame_metrics::note_keystroke();
                         }
                         glib::Propagation::Stop
                     }
                     None => glib::Propagation::Proceed,
                 },
-                // Both unreachable on a press, and both spelled out rather than
-                // folded into a `_` so a new `KeyRoute` variant is an E0004 here:
-                // `Ignore` is the RELEASE answer, and the re-ask above was made with
-                // `Some(_)`, which never answers `AskInputMethod`.
+                // Both unreachable on a press and spelled out, not `_`, so a new `KeyRoute` is an E0004 here:
+                // `Ignore` answers a release, and the re-ask passed `Some(_)`, never `AskInputMethod`.
                 im_ui::KeyRoute::Ignore | im_ui::KeyRoute::AskInputMethod => {
                     glib::Propagation::Proceed
                 }
@@ -1130,11 +998,8 @@ fn wire_keys(
                 picker.is_open() || palette.is_open() || buffers.is_open() || search.is_open();
             let route = match im_ui::key_route(im_ui::KeyPhase::Release, overlay_open, None) {
                 im_ui::KeyRoute::AskInputMethod => {
-                    // `is_some_and`, for the press handler's reason and not by copy: a
-                    // missing current event means the input method DECLINED. It matters
-                    // less here, since no release is translated either way, but the two
-                    // handlers disagreeing about what a missing event means is exactly
-                    // the kind of drift that makes the offer sequence unreadable.
+                    // `is_some_and` for the press handler's reason: a missing event means the input method declined.
+                    // It matters less here, but the two handlers must not disagree on it.
                     let filtered = controller
                         .current_event()
                         .is_some_and(|event| im.filter_keypress(&event));
@@ -1142,19 +1007,15 @@ fn wire_keys(
                 }
                 settled => settled,
             };
-            // GTK 4's `key-released` is a VOID signal — there is no `Propagation` to
-            // return — so a release the input method claims cannot be stopped and one
-            // it declines needs no action. The whole point of this handler is
-            // therefore the OFFER above, which the overlay arm withholds; the match
-            // stays total and `_`-free so a new route has to be classified here too.
+            // `key-released` is a void signal: a claimed release cannot be stopped, a declined one needs
+            // nothing. So the offer above is the point; the match stays `_`-free to force classification.
             match route {
                 im_ui::KeyRoute::Overlay
                 | im_ui::KeyRoute::Consumed
                 | im_ui::KeyRoute::Ignore
                 | im_ui::KeyRoute::AskInputMethod => {}
-                // NEVER `crate::gdk_key`: the press for this same physical key was
-                // already translated and forwarded, so translating the release
-                // forwards a second copy of every key the user types.
+                // Never `crate::gdk_key`: the press was already forwarded, so translating the release doubles
+                // every key.
                 im_ui::KeyRoute::Translate => {}
             }
         });
@@ -1229,19 +1090,13 @@ fn wire_close(parts: CloseParts<'_>) {
     let weak = parts.coordinator;
     let id = parts.id;
     parts.window.connect_close_request(move |_window| {
-        // FIRST, while the core and the panes are still alive. Synchronous
-        // gather + commit + blocking flush; every core borrow it takes is
-        // released before it returns, so the `borrow_mut().take()` below cannot
-        // panic.
+        // First, while core and panes live: synchronous gather, commit and flush, releasing every core
+        // borrow so the `borrow_mut().take()` below cannot panic.
         if let Some(coordinator) = coordinator::upgrade(&weak) {
             coordinator.on_window_closing(id);
         }
-        // Close the picker, the project search and the tree first so their
-        // background work is dropped before the core shuts down: the picker's and
-        // the tree's `FileSearch`es cancel an in-flight traversal, and the search
-        // overlay's `SearchSession` kills its `rg` child. Neither the palette nor
-        // the buffer picker holds either, so their closes are teardown symmetry
-        // rather than cancellation — and all five are idempotent.
+        // Close these first so background work drops before the core shuts down: `FileSearch`es cancel,
+        // `rg` dies. The palette and buffer picker closes are symmetry; all five are idempotent.
         picker.close();
         palette.close();
         buffers.close();
@@ -1267,22 +1122,8 @@ fn wire_close(parts: CloseParts<'_>) {
 mod tests {
     use super::WAKE_CHANNEL_CAP;
 
-    // The wake bridge's SAFETY ARGUMENT, made executable.
-    //
-    // The bounded wake channel silently DROPS a wake fired while it is full, and
-    // `wolf_core::liveness::mark_dead` fires exactly once — after which a dead
-    // Neovim produces no further redraw wakes at all. So the crash overlay only
-    // ever appears because of this implication: a dropped wake means an unconsumed
-    // one is still queued, which means a full handler run WILL happen after the
-    // drop, and because `mark_dead` stores `Dead` BEFORE waking and liveness is a
-    // level-triggered atomic read, that later run observes the death. These tests
-    // pin the transport half of that argument against a future change to
-    // `async-channel`'s bounded semantics (e.g. a ring buffer that drops the OLD
-    // item instead of refusing the new one), which would silently invalidate it.
-    //
-    // They deliberately read the production `WAKE_CHANNEL_CAP` rather than a
-    // literal `1`, so raising the capacity cannot quietly turn them into tests of
-    // something else.
+    // Pins the transport half of the wake bridge's safety argument against an `async-channel` change.
+    // See notes/crates/wolf-gnome/src/window.rs.md#wake-bridge-tests
 
     #[test]
     fn a_dropped_wake_implies_a_pending_wake() {
@@ -1336,10 +1177,8 @@ mod tests {
             "the queued wake must be receivable"
         );
 
-        // `recv()` resolves over `try_recv`, which pops the item BEFORE the future
-        // resolves — so the drain loop's handler body runs against an already-empty
-        // slot, and a wake fired DURING a handler run (the `mark_dead` case that
-        // matters most) is accepted rather than dropped.
+        // `recv()` resolves over `try_recv`, popping the item before the future resolves, so a wake fired
+        // during a handler run (the `mark_dead` case) is accepted, not dropped.
         assert!(
             wake_tx.try_send(()).is_ok(),
             "consuming a wake must free its slot BEFORE the handlers run: a death wake fired \

@@ -1,33 +1,4 @@
-//
-//  FontSizeSeamTests.swift
-//  Pure, headless unit tests for the AppKit-/CoreText-free `WolfKeyMap.FontSizeSeam`.
-//
-//  These exercise the per-window font-size stepping + clamping seam the coder adds
-//  in `Sources/WolfKeyMap/FontSizeSeam.swift` (plan §3 View menu). Like
-//  `CellMetricsMathTests` and `ShortcutSeamTests`, they import ONLY Foundation-level
-//  test machinery (no AppKit / CoreText, no live font) and stay in the headless
-//  `WolfKeyMap` module. The on-screen relayout (re-measuring CellMetrics, reflowing
-//  the grid, repainting) is AppKit glue and is explicitly manual-smoke only; only
-//  the pure clamp/step arithmetic is asserted here.
-//
-//  ## CONTRACT UNDER TEST (the API the coder must honor)
-//
-//    public enum FontSizeSeam {
-//        static let minPointSize: Double = 6
-//        static let maxPointSize: Double = 72
-//        static let step: Double = 1
-//        // Clamp into [minPointSize, maxPointSize].
-//        static func clamped(_ pt: Double) -> Double
-//        // clamped(current + step)
-//        static func increased(_ current: Double) -> Double
-//        // clamped(current - step)
-//        static func decreased(_ current: Double) -> Double
-//    }
-//
-//  Reset is NOT in the seam (the controller resets to its stored launch default).
-//  All returns are exact-valued (integers), asserted with a tight `eps` accuracy in
-//  the `approx` style of the sibling headless tests.
-//
+// See crates/wolf-macos/Tests/WolfKeyMapTests/README.md#fontsizeseamtestsswift
 
 import XCTest
 

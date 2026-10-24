@@ -1,29 +1,4 @@
-//
-//  TreeChildrenMemoTests.swift
-//  Pure, headless unit tests for the `WolfKeyMap.TreeChildrenMemo` seam.
-//
-//  This is the per-directory memo behind the file-tree sidebar (plan Layer 1):
-//  AppKit's `NSOutlineView` asks `numberOfChildrenOfItem` then `child:index:`
-//  per child, each of which previously re-invoked the FFI `children_of(dir)`
-//  from scratch — an O(K^2 * N) callback storm. `TreeChildrenMemo` collapses
-//  that so `project(dir)` (the FFI hop) runs AT MOST ONCE per directory per
-//  reload, serving every subsequent lookup from memory. `invalidate()` clears
-//  the memo (called on refresh-reload and reroot).
-//
-//  These tests inject the seam's `project` closure so NO real FFI / outline view
-//  is needed — exactly the headless style of the other WolfKeyMap seam tests
-//  (PickerRefreshCoalescerTests etc.). The injected closure bumps a counter so
-//  the tests assert the exact number of projections.
-//
-//  NOTE to coder: this references the pure generic `WolfKeyMap.TreeChildrenMemo<Item>`
-//  the coder adds in `Sources/WolfKeyMap/TreeChildrenMemo.swift` (plan Layer 1).
-//  The contract asserted below is:
-//    * `init(project: @escaping (String) -> [Item])`
-//    * `func children(ofDir dir: String) -> [Item]` — compute-once-per-dir:
-//      first lookup calls `project(dir)` and caches; later lookups return the
-//      cached array without calling `project`.
-//    * `func invalidate()` — drop all cached per-dir results.
-//
+// See crates/wolf-macos/Tests/WolfKeyMapTests/README.md#treechildrenmemotestsswift
 
 import XCTest
 

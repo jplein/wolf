@@ -80,18 +80,14 @@ fn noop_wake() -> WakeFn {
 /// reintroduces a blocking getcwd.
 #[test]
 fn start_file_search_returns_within_timeout_while_wedged() {
-    // Resolve the timeout deterministically BEFORE the core starts (it is read
-    // once at WolfCore::start). This is a separate test BINARY, so the env var is
-    // isolated to this process.
+    // Set before the core starts, since WolfCore::start reads it once. This is its own test binary,
+    // so the env var is isolated to this process.
     std::env::set_var("WOLF_RPC_TIMEOUT_MS", RPC_TIMEOUT_MS);
 
     let (core, _waiter) = common::start_core_sized(common::DEFAULT_COLS, common::DEFAULT_ROWS);
 
-    // Wedge the captive nvim with a FINITE block: enter cmdline, run a blocking
-    // `vim.uv.sleep` on nvim's main loop, execute with <CR>. The sleep is MANY
-    // times the RPC timeout so nvim is still busy when both RPCs below land.
-    // Deliberately do NOT wait_for_flush here: we want to fire the RPCs WHILE nvim
-    // is parked in the sleep (a flush would only arrive once it recovers).
+    // Wedge nvim with a finite `vim.uv.sleep` many times the RPC timeout. Do not wait_for_flush:
+    // the RPCs below must land while nvim is parked, and a flush only arrives once it recovers.
     core.send_input(common::ch(':'));
     common::type_str(&core, "lua vim.uv.sleep(1500)");
     core.send_input(common::key(Key::Enter));
@@ -99,9 +95,8 @@ fn start_file_search_returns_within_timeout_while_wedged() {
     // Let nvim actually enter the sleep before issuing the bounded RPCs.
     std::thread::sleep(WEDGE_SETTLE);
 
-    // start_file_search -> resolve_search_root is now OUT-OF-BAND (a live_cwd()
-    // read, NO RPC), so this returns promptly regardless of the wedge. Kept as a
-    // cheap guard that the picker path never reintroduces a blocking getcwd.
+    // resolve_search_root is an out-of-band live_cwd() read with no RPC, so this returns promptly;
+    // it guards against the picker path reintroducing a blocking getcwd.
     let start = Instant::now();
     let search = core.start_file_search(noop_wake());
     let elapsed_search = start.elapsed();

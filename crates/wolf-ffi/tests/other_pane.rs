@@ -438,8 +438,7 @@ fn open_alpha(handle: &wolf_ffi::WolfCoreHandle) {
 #[test]
 fn preview_in_other_splits_right_and_keeps_focus() {
     // Case 1 (split-preview) + case 7 (post-shutdown neutrals).
-    //
-    // Loud SKIP (no-op pass) when no pinned nvim is available, like the siblings.
+    // Loud skip (no-op pass) without a pinned nvim, like the siblings.
     let Some(nvim_bin) = common::nvim_bin_or_skip() else {
         return;
     };
@@ -529,11 +528,8 @@ fn preview_in_other_splits_right_and_keeps_focus() {
 
 #[test]
 fn edit_in_other_splits_and_moves_focus_to_the_source_editor() {
-    // Case 2 (split-edit): from an in-place preview pane, edit_in_other(0) splits;
-    // the scratch stays in the NEW (right) window, the SOURCE is bound into the
-    // ORIGINAL (left) window, and focus follows the source editor.
-    //
-    // Loud SKIP (no-op pass) when no pinned nvim is available, like the siblings.
+    // Case 2 (split-edit): the scratch stays in the new right window, the source binds into the
+    // original left one and takes focus. Loud skip (no-op pass) without a pinned nvim.
     let Some(nvim_bin) = common::nvim_bin_or_skip() else {
         return;
     };
@@ -613,10 +609,8 @@ fn edit_in_other_splits_and_moves_focus_to_the_source_editor() {
 
 #[test]
 fn preview_in_other_reuses_an_existing_pane_without_splitting() {
-    // Case 3 (reuse-preview): with a second editor pane already open, passing its
-    // window reuses it — no new Split intent, no focus move.
-    //
-    // Loud SKIP (no-op pass) when no pinned nvim is available, like the siblings.
+    // Case 3 (reuse-preview): passing an open second pane reuses it, with no Split and no focus move.
+    // Loud skip (no-op pass) without a pinned nvim, like the siblings.
     let Some(nvim_bin) = common::nvim_bin_or_skip() else {
         return;
     };
@@ -681,11 +675,8 @@ fn preview_in_other_reuses_an_existing_pane_without_splitting() {
 
 #[test]
 fn edit_in_other_reuses_an_existing_pane_and_focuses_it() {
-    // Case 4 (reuse-edit): from a preview pane with a second pane open, passing
-    // that pane's window binds the source there and FOCUSES it; the original
-    // preview window keeps its preview.
-    //
-    // Loud SKIP (no-op pass) when no pinned nvim is available, like the siblings.
+    // Case 4 (reuse-edit): the source binds into the passed pane and focuses it; the preview stays.
+    // Loud skip (no-op pass) without a pinned nvim, like the siblings.
     let Some(nvim_bin) = common::nvim_bin_or_skip() else {
         return;
     };
@@ -753,11 +744,8 @@ fn edit_in_other_reuses_an_existing_pane_and_focuses_it() {
 
 #[test]
 fn gates_reject_without_splitting_and_invalid_target_falls_back_to_split() {
-    // Case 5 (gates) + case 6 (invalid target). The gate check runs BEFORE any
-    // split, so a rejected call must leave the layout byte-for-byte alone — a
-    // mis-timed palette activation is a pure no-op, never a stray split.
-    //
-    // Loud SKIP (no-op pass) when no pinned nvim is available, like the siblings.
+    // Cases 5 (gates) and 6 (invalid target): the gate runs before any split, so a rejected call
+    // leaves the layout untouched. Loud skip (no-op pass) without a pinned nvim.
     let Some(nvim_bin) = common::nvim_bin_or_skip() else {
         return;
     };
@@ -845,12 +833,8 @@ fn gates_reject_without_splitting_and_invalid_target_falls_back_to_split() {
 
 #[test]
 fn drawer_target_is_rejected_and_falls_back_to_split() {
-    // The terminal drawer is never a bind target: `wolf_other_pane_target_ok`
-    // rejects it via `b:wolf_terminal` / `w:wolf_terminal`, so passing the drawer
-    // window sends `wolf_preview_in_other` down the split path — the preview
-    // lands in a fresh split, and the drawer keeps its terminal buffer.
-    //
-    // Loud SKIP (no-op pass) when no pinned nvim is available, like the siblings.
+    // The drawer is never a bind target (`w:wolf_terminal`), so passing it takes the split path and
+    // the drawer keeps its terminal. Loud skip (no-op pass) without a pinned nvim.
     let Some(nvim_bin) = common::nvim_bin_or_skip() else {
         return;
     };
@@ -869,10 +853,8 @@ fn drawer_target_is_rejected_and_falls_back_to_split() {
     assert_ne!(drawer_win, 0, "the drawer window handle must be nonzero");
     wait_for_window_count(&handle, TWO_PANES, "the drawer window is open");
 
-    // --- 3. Focus back to the markdown pane ----------------------------------
-    // The open drawer is focused in terminal-insert mode: `<C-\><C-n>` leaves it
-    // (the `terminal.rs` idiom), then `:wincmd p` returns to the previous window
-    // — the markdown pane the drawer was opened from.
+    // --- 3. Focus back: `<C-\><C-n>` leaves the drawer's terminal-insert mode, then `:wincmd p`
+    // returns to the markdown pane it was opened from.
     handle.send_key(ctrl_char_key('\\'));
     handle.send_key(ctrl_char_key('n'));
     send_ex_command(&handle, ":wincmd p");
@@ -938,14 +920,8 @@ fn drawer_target_is_rejected_and_falls_back_to_split() {
 
 #[test]
 fn edit_in_other_falls_back_to_edit_when_the_source_bufnr_is_stale() {
-    // The stale-bufnr fallback in `wolf_edit_in_other`'s `bind_source_into`: when
-    // `b:wolf_preview_source_bufnr` no longer names a valid buffer (the source was
-    // wiped), the helper focuses the bound window and `:edit`s the source PATH
-    // instead — and still returns `nvim_win_get_buf` of the bound window, so the
-    // fallback reports non-zero (the deliberate divergence from
-    // `wolf_edit_source`'s `source_bufnr or 0`).
-    //
-    // Loud SKIP (no-op pass) when no pinned nvim is available, like the siblings.
+    // Stale-bufnr fallback: with the source wiped, `wolf_edit_in_other` `:edit`s its path and still
+    // returns non-zero, unlike `wolf_edit_source`. Loud skip (no-op pass) without a pinned nvim.
     let Some(nvim_bin) = common::nvim_bin_or_skip() else {
         return;
     };
@@ -974,10 +950,8 @@ fn edit_in_other_falls_back_to_edit_when_the_source_bufnr_is_stale() {
          {stale_source_bufnr}"
     );
 
-    // --- 2. Wipe the source buffer so the recorded bufnr goes stale ------------
-    // The active pane shows the (normal-mode) scratch, so a typed `:bwipeout N`
-    // wipes the undisplayed, unmodified source buffer. The picker losing its
-    // alpha.md row is the deterministic wipe barrier.
+    // --- 2. Wipe the undisplayed source so the recorded bufnr goes stale. The picker losing its
+    // alpha.md row is the wipe barrier.
     send_ex_command(&handle, &format!(":bwipeout {stale_source_bufnr}"));
     wait_for_ranked(&handle, "the wiped source leaves the picker", |rows| {
         rows_ending_with(rows, "alpha.md") == 0

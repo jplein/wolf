@@ -4,7 +4,7 @@
 //! listed in the primary menu as "Command Palette…". Like the file picker, the
 //! chord is resolved from [`crate::actions::ACTION_TABLE`] by a CAPTURE-phase
 //! controller ([`crate::shell`]), so it is guaranteed not to also be forwarded to
-//! Neovim (see `crates/wolf-gnome/DECISIONS.md`, "The accelerator namespace").
+//! Neovim (see `notes/wolf-gnome-decisions.md`, "The accelerator namespace").
 //!
 //! The overlay is a search entry over a ranked list of the registry commands this
 //! front-end can actually perform. `Esc` closes it, Up/Down move the selection, and
@@ -63,7 +63,7 @@
 //! own cap — and one walk of the coordinator's window registry. All of it happens
 //! at open, never per keystroke, and none of it is an RPC to Neovim, so this
 //! module adds no `block_on_rpc` route at all (see
-//! `crates/wolf-gnome/DECISIONS.md`, "Crash and stall recovery"). The window walk
+//! `notes/wolf-gnome-decisions.md`, "Crash and stall recovery"). The window walk
 //! in particular reads each window's already-cached persisted subtree, so no other
 //! window's core is touched.
 //!
@@ -347,12 +347,8 @@ impl PaletteInner {
         if self.open.get() {
             return;
         }
-        // ONE short core borrow, in its own statement, yielding everything the two
-        // snapshots need. `WolfCore::recent_dirs` is a SQLite `SELECT` and runs
-        // INSIDE this borrow deliberately: it cannot re-enter the `RefCell` (it
-        // touches neither GTK nor this widget), and splitting it out would mean a
-        // second borrow of the same cell for no gain. `shell::capture_open_files`
-        // is the precedent. `WolfCore::live_cwd` is a tracked-cell read, not an RPC.
+        // One short core borrow for both snapshots. `recent_dirs` (a SQLite SELECT) runs inside it: it
+        // cannot re-enter the `RefCell`, and splitting it out costs a second borrow for no gain.
         let (mru, recorded, live) = {
             let core_ref = self.core.borrow();
             match core_ref.as_ref() {
@@ -368,9 +364,8 @@ impl PaletteInner {
         *self.mru_recent.borrow_mut() = recent;
         *self.recent_dirs.borrow_mut() =
             open_recent_candidates(&recorded, live.as_deref(), Path::is_dir);
-        // The third snapshot, and the cheapest: a walk of the coordinator's window
-        // registry reading each window's already-cached subtree. Called with no
-        // borrow of this cell live, because it re-enters the coordinator.
+        // The window snapshot: a walk of cached subtrees, taken with no borrow of this cell live,
+        // because it re-enters the coordinator.
         let windows = (self.window_source)();
         *self.windows.borrow_mut() = windows;
 
@@ -389,7 +384,7 @@ impl PaletteInner {
     ///
     /// The `grab_focus` parks focus back on the persistent cmdline strip, exactly as
     /// [`crate::picker`]'s `close` does, so every overlay in this crate leaves focus
-    /// in the same place — see [DECISIONS.md](../DECISIONS.md), "Window structure",
+    /// in the same place — see [notes/wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md), "Window structure",
     /// for why focus never rests on an ephemeral widget.
     ///
     /// Deleting this call left the command-palette smoke green across three runs.
@@ -449,11 +444,8 @@ impl PaletteInner {
         };
 
         for row in &ranked {
-            // An Open Recent row's label is a full absolute path, so it can be
-            // wider than the box: left-align it and let Pango ellipsize the TAIL
-            // rather than rewriting the string, which would come apart from the
-            // string `rank_matches` ranked. `search_overlay`'s result rows are
-            // built the same way for the same reason.
+            // A full path can be wider than the box: let Pango ellipsize the tail rather than rewrite the
+            // string, which would come apart from the one `rank_matches` ranked (as in `search_overlay`).
             let label = gtk::Label::builder()
                 .label(&row.display)
                 .halign(gtk::Align::Start)
@@ -592,7 +584,7 @@ impl PaletteHandle {
 /// [`PaletteHandle::open`] (which the `win.command-palette` action does) to show it.
 ///
 /// `area` resolves the focus-return widget at CLOSE time — the SELECTED tab's
-/// cmdline strip, never a pane drawing area (`DECISIONS.md`, "Window structure").
+/// cmdline strip, never a pane drawing area (`notes/wolf-gnome-decisions.md`, "Window structure").
 /// See [`crate::picker::FocusTarget`] for why it is a closure.
 ///
 /// `windows` is asked for the OTHER live windows on each open. It is a closure
@@ -679,10 +671,8 @@ pub fn build(
         });
     }
 
-    // Palette key handling (Capture phase so the SearchEntry does not swallow these
-    // first): Esc closes; Up/Down move the LIST selection (NOT the entry's text
-    // cursor) and are consumed so the keypress does not also move the caret; every
-    // other key Proceeds to the entry so typing flows normally.
+    // Capture phase, so the SearchEntry does not swallow these: Esc closes, Up/Down move the list
+    // selection and are consumed so the caret stays; every other key proceeds to the entry.
     {
         let inner_weak = Rc::downgrade(&inner);
         let key = gtk::EventControllerKey::new();
@@ -1139,10 +1129,8 @@ mod tests {
         let window_cwd = PathBuf::from("/proj/live");
         let other = PathBuf::from("/proj/alpha");
 
-        // The store holds the invoking window's own working directory and one other
-        // project. `is_dir` answers true for EVERYTHING, so the only thing that can
-        // drop a row below is the window-cwd rule — the other two refusals are given
-        // no opportunity to explain the result.
+        // The store holds the window's own cwd and one other project; `is_dir` is always true, so only
+        // the window-cwd rule can drop a row.
         let recorded = vec![window_cwd.clone(), other.clone()];
         let offered =
             open_recent_candidates(&recorded, Some(window_cwd.as_path()), |_: &Path| true);
@@ -1161,9 +1149,8 @@ mod tests {
              onto another's project would put a second Neovim on that project's swap directory."
         );
 
-        // (2) The offered directory classifies to an action carrying a directory and
-        //     no window target. The `let … else` is the assertion's mechanical half:
-        //     a variant that grew a window field stops compiling here.
+        // (2) The offered directory classifies to a directory action with no window target; the
+        // `let … else` stops compiling if a variant grows a window field.
         let action = palette_action_for(
             PaletteRowKind::OpenRecent,
             None,
@@ -1324,16 +1311,8 @@ mod tests {
                 path: None,
                 want: WantAction::Dispatch(Command::Copy),
             },
-            // No HARDCODED example of the Deferred class follows, and that is
-            // deliberate rather than an omission. The class is covered in this same
-            // table by the `undispatched_probe()` row below, which resolves from the
-            // registry and therefore cannot go stale, and totally by
-            // `every_registered_command_is_classified_by_the_palette`. A hardcoded
-            // Deferred row adds no coverage and goes red the day someone SHIPS the
-            // feature it names — the false-alarm direction — which is how the Copy
-            // row came to need moving. `HideApplication` below stays hardcoded
-            // because NoGnomeEquivalent means "will never be implemented", so that
-            // one cannot move.
+            // No hardcoded Deferred row: it would go red the day its feature ships.
+            // See notes/crates/wolf-gnome/src/palette.rs.md#no-hardcoded-deferred-row
             PaletteCase {
                 desc: "Static + HideApplication: NoGnomeEquivalent, so unsupported",
                 kind: PaletteRowKind::Static,
@@ -1563,11 +1542,8 @@ mod tests {
     /// sentence of its own.
     #[test]
     fn palette_unsupported_reasons_are_distinct_and_non_empty() {
-        // One probe per arm of `palette_action_for` that can return Unsupported.
-        // The Deferred and NoGnomeEquivalent commands deliberately share ONE probe:
-        // the plan gives both the same "not dispatched by this front-end" reason,
-        // so probing them separately would demand a distinction the design does not
-        // make.
+        // One probe per arm that can return Unsupported; Deferred and NoGnomeEquivalent share one, since
+        // both have the same reason and the design draws no distinction between them.
         let probes = [
             (
                 "a Static row whose command this front-end does not dispatch",
@@ -1849,9 +1825,7 @@ mod tests {
              or that smoke's MRU assertion becomes unfalsifiable."
         );
 
-        // Precondition: the query COLLIDES — three ways, not two — so everything
-        // below is a statement about a tie-break rather than about a query that
-        // happens to be rare.
+        // Precondition: the query collides three ways, so what follows tests a tie-break, not a rare query.
         let unfiltered = rank_palette(&[], &[], &[], SMOKE_QUERY, usize::MAX);
         let candidates: Vec<&str> = unfiltered.iter().map(|row| row.display.as_str()).collect();
         assert_eq!(
@@ -1918,13 +1892,8 @@ mod tests {
             );
         }
 
-        // --- The adversarial MRU, asserted as the inversion it is --------------
-        //
-        // Stated here rather than as a third `mrus` entry, because its expected answer
-        // is the OPPOSITE of the loop's and folding it in would need a per-row
-        // expectation reading as though either answer were acceptable. It is not: it
-        // is a live fragility of the smoke, and this assertion is what keeps it from
-        // being rediscovered as a mystery.
+        // The adversarial MRU, asserted apart from `mrus` because its answer is the inversion: a live
+        // fragility of the smoke, pinned here so it is not rediscovered as a mystery.
         let window_id = Command::NewWindow.spec().id;
         let adversarial: Vec<String> = vec![window_id.to_string()];
         let inverted = palette_rows(&[], &[], &adversarial, SMOKE_QUERY, PALETTE_MAX_ROWS);
@@ -2000,10 +1969,8 @@ mod tests {
     fn the_new_window_palette_query_selects_the_new_window_row() {
         let key = Command::NewWindow.spec().id;
 
-        // Precondition: the query really does what its name says, before any
-        // classification filter runs. If `rank_palette` matched more than one
-        // candidate, the assertions below would be about the filter or about a
-        // tie-break rather than about the query.
+        // Precondition: the query matches exactly one candidate before any classification filter, or the
+        // assertions below would test the filter or a tie-break.
         let unfiltered = rank_palette(&[], &[], &[], NEW_WINDOW_PALETTE_QUERY, usize::MAX);
         assert_eq!(
             unfiltered.len(),
@@ -2021,9 +1988,8 @@ mod tests {
                 .collect::<Vec<_>>()
         );
 
-        // Both MRU states the smoke can meet: a fresh store, and one warmed by an
-        // unrelated activation. A single row cannot be reordered, so the MRU can only
-        // change the answer by changing the SET — which is what these two check.
+        // Both MRU states the smoke meets: fresh, and warmed by an unrelated activation. One row cannot
+        // be reordered, so the MRU can only change the set.
         let mrus: [Vec<String>; 2] = [Vec::new(), vec![Command::ClosePane.spec().id.to_string()]];
         for recent in &mrus {
             let rows = palette_rows(&[], &[], recent, NEW_WINDOW_PALETTE_QUERY, PALETTE_MAX_ROWS);
@@ -2159,9 +2125,8 @@ mod tests {
                     .collect::<Vec<_>>()
             );
 
-            // Both MRU states a smoke can actually meet: a fresh store, and the store
-            // the FIRST activation warmed. `preview_in_browser` is not among them —
-            // see the third block below, which is where that case is pinned.
+            // Both MRU states a smoke meets: fresh, and warmed by the first activation; `preview_in_browser`
+            // is pinned in the third block below.
             let mrus: [Vec<String>; 2] = [Vec::new(), vec![Command::Preview.spec().id.to_string()]];
             for recent in &mrus {
                 let rows = palette_rows(&[], &[], recent, query, PALETTE_MAX_ROWS);
@@ -2211,15 +2176,8 @@ mod tests {
             }
         }
 
-        // --- The adversarial MRU, asserted as the measured inversion it is ----
-        //
-        // Stated here once rather than as a third `mrus` entry, because its expected
-        // answer is the OPPOSITE of the loop's and folding it in would need a per-row
-        // expectation that reads as though either answer were acceptable. It is not: it
-        // is a live fragility of both preview smokes, and the assertion is what keeps
-        // it from being rediscovered as a mystery.
-        // Taken from the table rather than re-typed, so the two blocks can never end up
-        // inverting a query the loop above never ran.
+        // The adversarial MRU, apart from `mrus` because its answer is the inversion: a live fragility
+        // of both preview smokes. The query comes from the table, so it is one the loop above ran.
         let preview_query = PREVIEW_SMOKE_QUERIES
             .iter()
             .find(|case| case.command == Command::Preview)
@@ -2663,9 +2621,8 @@ mod tests {
     /// query.
     #[test]
     fn open_recent_row_is_matched_by_its_visible_label() {
-        // A basename no COMMAND_SPECS title contains as a case-insensitive
-        // subsequence — the property the first assertion below checks rather than
-        // assumes.
+        // A basename no COMMAND_SPECS title contains as a case-insensitive subsequence, which the first
+        // assertion checks.
         const DISTINCTIVE: &str = "zephyrdock";
 
         let dir = PathBuf::from(format!("/proj/{DISTINCTIVE}"));

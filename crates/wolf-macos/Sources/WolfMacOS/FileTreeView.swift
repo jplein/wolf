@@ -1,17 +1,4 @@
-//
-//  FileTreeView.swift
-//  The AppKit file-tree sidebar: an `NSOutlineView` (in an `NSScrollView`) fed by
-//  the Rust file-tree bridge, listing the cwd's files filtered by `.gitignore`
-//  (dotfiles included). Single click opens a file (and returns focus to the
-//  editor) or toggles a directory; the current buffer's row is accented and
-//  revealed.
-//
-//  The macOS analog of wolf-gnome's `tree_view.rs`. The pure hierarchical
-//  projection lives in `wolf-core`'s `tree` module and is reached over FFI
-//  (`FfiFileSearch.children_of` / `rel_path_for`, the free
-//  `wolf_ffi_ancestors_to_reveal`); this file is the AppKit shell that drives it,
-//  exercised by manual smoke only (NSOutlineView needs a window server).
-//
+// The AppKit file-tree sidebar, fed by the Rust file-tree bridge.
 
 import AppKit
 import WolfFFI
@@ -443,12 +430,8 @@ final class FileTreeView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate
     outlineView.delegate = self
     outlineView.target = self
     outlineView.action = #selector(handleClick)
-    // The standard macOS source-list look: `.sourceList` drives the sidebar
-    // row metrics and selection styling. The enclosing `.sidebar` split item
-    // supplies the vibrancy material, so the outline + scroll view draw a
-    // CLEAR background (no own `NSVisualEffectView` — that would double up the
-    // vibrancy). The synthetic cwd root stays a normal selectable/expandable
-    // row (no `isGroupItem` / group-row styling).
+    // The `.sidebar` split item supplies vibrancy, so draw clear: an own `NSVisualEffectView` would
+    // double it. The cwd root is a normal row, not an `isGroupItem` group row.
     outlineView.style = .sourceList
     outlineView.backgroundColor = .clear
 

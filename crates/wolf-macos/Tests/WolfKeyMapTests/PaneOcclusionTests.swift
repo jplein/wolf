@@ -1,55 +1,4 @@
-//
-//  PaneOcclusionTests.swift
-//  Pure, headless unit tests for the AppKit-free `WolfKeyMap.PaneOcclusion`.
-//
-//  These exercise the preview-web-view OCCLUSION seam the coder adds in
-//  `Sources/WolfKeyMap/PaneOcclusion.swift` (phase B of the occlusion plan).
-//  Like `PaneGeometryTests.swift` / `EditorInsetTests.swift` they import ONLY
-//  Foundation-level test machinery (no AppKit, no `WKWebView`, no live Neovim)
-//  and stay in the headless `WolfKeyMap` module.
-//
-//  ## CONTRACT UNDER TEST (the API the coder must honor)
-//
-//    public struct OccluderGeometry {
-//        public let frame: Rect
-//        public let isHidden: Bool
-//        public let isAttached: Bool
-//        public let alpha: Double
-//        public let hasLoadedContent: Bool
-//        public init(frame:isHidden:isAttached:alpha:hasLoadedContent:)
-//    }
-//
-//    public enum PaneOcclusion {
-//        public static func isFullyOccluded(gridRect: Rect, by occluder: OccluderGeometry?) -> Bool
-//    }
-//
-//  `Rect` is the EXISTING type from `PaneTree.swift` (`Rect(x:y:w:h:)`, `Double`
-//  fields, `y` is the TOP edge and grows DOWNWARD). It has no `maxX` / `maxY`
-//  accessors today, so these tests construct every fixture from explicit
-//  `x` / `y` / `w` / `h` and never assume such accessors exist.
-//
-//  `true` means "fully occluded — SAFE TO SKIP PAINTING". `false` means "PAINT".
-//  ALL of the following must hold for `true`; any one failing yields `false`:
-//
-//    1. `occluder != nil`                            (web view does not exist yet)
-//    2. `hasLoadedContent`                           (exists, nothing loaded yet)
-//    3. `isAttached`                                 (detached from the view tree)
-//    4. `!isHidden`                                  (hidden / hidden ancestor)
-//    5. `alpha >= 1.0`                               (transparent)
-//    6. `frame.w > 0 && frame.h > 0`                 (zero-size)
-//    7. `gridRect.w > 0 && gridRect.h > 0`           (degenerate grid rect)
-//    8. containment with TOLERANCE 0.0:
-//         `frame.x <= gridRect.x`, `frame.y <= gridRect.y`,
-//         `frame.x + frame.w >= gridRect.x + gridRect.w`,
-//         `frame.y + frame.h >= gridRect.y + gridRect.h`
-//
-//  Zero tolerance is DELIBERATE, not an oversight: `syncPreviewWebViews`
-//  assigns the web view's frame from the SAME `gridRect(ofPane:)` expression the
-//  painter is handed, so the values are bit-identical when in sync, and when OUT
-//  of sync (mid-live-resize, post-split, pre-close) containment fails and the
-//  grid paints. `testOccluderShortByAHairOnMaxXEdge` PINS that tolerance — do not
-//  "fix" it by introducing an epsilon.
-//
+// See crates/wolf-macos/Tests/WolfKeyMapTests/README.md#paneocclusiontestsswift
 
 import XCTest
 
@@ -58,9 +7,7 @@ import XCTest
 final class PaneOcclusionTests: XCTestCase {
 
   // MARK: - Fixture geometry
-  //
-  // A non-square grid rect at a non-zero origin, so x/y and w/h confusions are
-  // detectable. Derived edges are named rather than recomputed inline.
+  // Non-square, non-zero origin so x/y and w/h confusions fail; edges are named, not inlined.
 
   /// The grid rect's left edge (px).
   private let gridX: Double = 100.0
@@ -147,9 +94,8 @@ final class PaneOcclusionTests: XCTestCase {
   // MARK: - The occluding cases (the only two that may return `true`)
 
   func testExactContainmentIsOccluded() {
-    // THE common case: the web view's frame is assigned from the identical
-    // `gridRect(ofPane:)` expression, so the rects are bit-identical. Zero
-    // tolerance must still treat equality as containment (<= / >=, not < / >).
+    // The common case: the frame comes from the same `gridRect(ofPane:)` expression, so the rects
+    // are bit-identical, and zero tolerance must still count equality as containment.
     assertOcclusion(
       gridRect: gridRect,
       by: occluder(frame: exactFrame),
@@ -193,9 +139,7 @@ final class PaneOcclusionTests: XCTestCase {
   }
 
   // MARK: - Rules 2-5: the per-flag disqualifiers, one at a time
-  //
-  // Each of these uses an EXACTLY-CONTAINING frame, so geometry alone would say
-  // "occluded" — only the toggled flag can be responsible for the `false`.
+  // Each uses an exactly-containing frame, so only the toggled flag can produce `false`.
 
   func testFlagDisqualifiersPaintTable() {
     struct FlagCase {
@@ -277,10 +221,7 @@ final class PaneOcclusionTests: XCTestCase {
   }
 
   // MARK: - Rule 7: degenerate grid rect
-  //
-  // Conservative by design: a zero-area grid rect reports NOT occluded. There is
-  // no paint work to save, and reporting `true` would be a claim about a
-  // rectangle that does not exist.
+  // A zero-area grid rect reports not occluded: there is no paint work to save.
 
   func testDegenerateGridRectPaints() {
     struct GridCase {
@@ -316,14 +257,7 @@ final class PaneOcclusionTests: XCTestCase {
   }
 
   // MARK: - Rule 8: partial coverage
-  //
-  // Named for the `Rect` EDGE that is uncovered rather than for a visual
-  // direction, so the cases stay unambiguous under either y convention:
-  //
-  //   minX edge — the occluder starts to the RIGHT of `gridRect.x`
-  //   maxX edge — the occluder ends to the LEFT of `gridRect.x + gridRect.w`
-  //   minY edge — the occluder starts BELOW `gridRect.y` (larger y)
-  //   maxY edge — the occluder ends ABOVE `gridRect.y + gridRect.h` (smaller y)
+  // Cases name the uncovered `Rect` edge (minX, maxX, minY, maxY), not a visual direction.
 
   func testPartialCoveragePaintsTable() {
     struct CoverageCase {
@@ -390,10 +324,8 @@ final class PaneOcclusionTests: XCTestCase {
   }
 
   func testOccluderShortByAHairOnMaxXEdge() {
-    // TOLERANCE PIN. The occluder covers all but the last HALF PIXEL of the grid
-    // rect's right edge. That is `false` (paint). Any epsilon slack added to the
-    // containment comparison would flip this and break the "geometry changes
-    // restore painting immediately" guarantee that mid-live-resize relies on.
+    // Tolerance pin: the occluder misses the grid's last half pixel on the right, so it paints.
+    // An epsilon would flip this and stop geometry drift from restoring paint mid-live-resize.
     let frame = Rect(x: gridX, y: gridY, w: gridW - hairGap, h: gridH)
 
     assertOcclusion(
@@ -423,11 +355,7 @@ final class PaneOcclusionTests: XCTestCase {
   }
 
   // MARK: - Flag interaction: the rules AND, they do not short-circuit on geometry
-  //
-  // These are the regression guard against an implementation that returns `true`
-  // as soon as containment holds. Every case below is FULLY CONTAINING (the
-  // strictly-larger frame, so geometry is not marginal) with exactly ONE
-  // disqualifying flag set — each must still paint.
+  // Each case fully contains the grid with exactly one disqualifying flag, and must still paint.
 
   func testContainingOccluderWithASingleDisqualifyingFlagPaints() {
     struct InteractionCase {

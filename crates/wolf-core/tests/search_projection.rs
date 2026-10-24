@@ -76,9 +76,8 @@ fn file_label_cases() {
 /// `bar.md` comes first proves the sort folds case.
 #[test]
 fn project_groups_and_sorts_case_insensitively() {
-    // Emission order deliberately interleaves files and lines out of order so the
-    // sort-on-read is actually exercised (rg emits per-file grouped ascending, but
-    // NOT cross-file rel-path ordered).
+    // Emission order interleaves files and lines so the sort-on-read is exercised: rg emits each
+    // file's lines ascending, but does not order files by rel-path.
     let matches = vec![
         mk_match("/r/Foo.md", "Foo.md", 3),         // 0
         mk_match("/r/bar.md", "bar.md", 10),        // 1

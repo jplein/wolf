@@ -314,10 +314,8 @@ impl Grid {
             // Safe: row/col are in bounds here.
             let cell = &self.cells[row * self.cols + col];
             if cell.text.is_empty() {
-                // Empty text means either a never-painted cell or the trailing
-                // placeholder of a wide char. Render a single space so columns
-                // line up; wide-char trailing cells are already accounted for by
-                // the leading wide glyph occupying its own column.
+                // A never-painted cell or a wide char's trailing placeholder: a space keeps
+                // the columns aligned.
                 s.push(' ');
             } else {
                 s.push_str(&cell.text);

@@ -1,15 +1,4 @@
-//
-//  StatusbarLayout.swift
-//  Pure, AppKit-/CoreText-free vertical-layout math for the per-pane statusbar
-//  (plan §6.1).
-//
-//  This is a headless seam in the `WolfKeyMap` module — Foundation-only, no live
-//  font, no NSString drawing. It computes the strip height and the top/height of
-//  the two text lines (primary filename, secondary path) from four inputs, so the
-//  AppKit painter (`PaneContainerView.paintStatusbar`) can lay out the strip
-//  deterministically. The on-screen painting itself is manual-smoke only; only
-//  this arithmetic is unit-tested.
-//
+// Pure vertical-layout math for the per-pane statusbar.
 
 import Foundation
 

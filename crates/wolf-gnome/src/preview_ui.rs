@@ -18,7 +18,7 @@
 //! pane; `preview_in_other` and `edit_in_other` take the target window as an
 //! argument. A pane's mode is derived from whether its window appears in
 //! `Snapshot::previews`, never stored, so there is no placement to choose and no
-//! mode argument to thread — see `architecture.md`. Reintroducing a split-or-reuse
+//! mode argument to thread — see `specs/architecture.md`. Reintroducing a split-or-reuse
 //! rule here would be inventing a decision core does not accept.
 //!
 //! [`preview_press`] therefore gates BOTH Preview entry points and [`edit_press`]
@@ -35,7 +35,7 @@
 //! [`may_render`] are liveness-gated exactly the way
 //! [`crate::nav_ui::nav_press`] and [`crate::clipboard_ui::copy_decision`] are. The
 //! inventory of this crate's blocking calls and the reasoning behind the gate live
-//! in `crates/wolf-gnome/DECISIONS.md`, "Crash and stall recovery", and are
+//! in `notes/wolf-gnome-decisions.md`, "Crash and stall recovery", and are
 //! deliberately not restated here.
 //!
 //! Beyond liveness, three of the five carry a second gate and two deliberately do
@@ -307,7 +307,7 @@ pub fn browser_press(liveness: Option<Liveness>, markdown_active: bool) -> Brows
 ///
 /// There is deliberately NO `http://127.0.0.1:` prefix check here. The loopback-only
 /// bind is core's own hard security requirement, stated in
-/// `crates/wolf-core/DECISIONS.md`, and restating it as a second gate would give one
+/// `notes/wolf-core-decisions.md`, and restating it as a second gate would give one
 /// rule two owners that could drift apart — the more dangerous direction being the
 /// one where this copy is the laxer.
 #[must_use]
@@ -328,10 +328,8 @@ pub fn browser_url(raw: &str) -> Option<&str> {
 /// weaker one.
 #[must_use]
 pub fn may_render(liveness: Option<Liveness>) -> bool {
-    // The three refusing arms are written SEPARATELY rather than as an or-pattern or
-    // a wildcard, so a new `Liveness` variant is an E0004 here — which is the promise
-    // the module docs make and the only thing that keeps a blocking render from
-    // defaulting to "issue it" on a reading nobody has classified.
+    // Refusing arms are separate, never an or-pattern or wildcard, so a new `Liveness` variant is
+    // E0004 here rather than a blocking render defaulting to "issue it".
     match liveness {
         Some(Liveness::Alive) => true,
         Some(Liveness::NotResponding) => false,
@@ -351,9 +349,8 @@ pub fn needs_reload(current: Option<PreviewLoad>, loaded: Option<PreviewLoad>) -
     match (current, loaded) {
         (None, _) => false,
         (Some(_), None) => true,
-        // The WHOLE key, both halves: the tick alone misses a reused preview pane
-        // switching sources (two freshly opened files share a `changedtick`), and the
-        // buffer number alone misses every edit of the file being previewed.
+        // The whole key: the tick alone misses a reused pane switching sources (fresh files share a
+        // `changedtick`), and the bufnr alone misses every edit of the previewed file.
         (Some(current), Some(loaded)) => current != loaded,
     }
 }
@@ -412,10 +409,8 @@ pub fn document_update(
 /// with both paths empty, since there is nothing to name and nothing to persist.
 #[must_use]
 pub fn preview_status(source_path: &str, display_path: &str) -> PaneStatus {
-    // An empty source forces BOTH paths empty, whatever `display_path` was handed in:
-    // there is no source to name and nothing a later launch could reopen, and a
-    // `display_path` beneath a nameless pane would be a second line describing a file
-    // the first line cannot identify.
+    // An empty source forces both paths empty: there is nothing to name or reopen, and a
+    // `display_path` under a nameless pane would describe a file the first line cannot identify.
     if source_path.is_empty() {
         return PaneStatus {
             filename: "Preview".to_string(),
@@ -432,9 +427,8 @@ pub fn preview_status(source_path: &str, display_path: &str) -> PaneStatus {
     PaneStatus {
         filename: format!("{PREVIEW_STATUS_PREFIX}{basename}"),
         display_path: display_path.to_string(),
-        // VERBATIM, never the display path: `pane_view` persists this field as a
-        // pane-layout leaf, and `state.json` records no working directory to resolve
-        // a relativized one against.
+        // Verbatim, never the display path: `pane_view` persists this as a layout leaf, and
+        // `state.json` records no working directory to resolve a relativized one against.
         abs_path: source_path.to_string(),
     }
 }
@@ -446,9 +440,7 @@ mod tests {
     use std::collections::HashSet;
     use std::path::Path;
 
-    // =========================================================================
-    // The whole input domain
-    // =========================================================================
+    // === The whole input domain ===
 
     /// A one-clause name for a liveness reading, used in every failure message
     /// below.
@@ -499,9 +491,7 @@ mod tests {
         first.is_uppercase() && second.is_lowercase()
     }
 
-    // =========================================================================
-    // preview_press
-    // =========================================================================
+    // === preview_press ===
 
     /// What a press-table row expects.
     ///
@@ -666,9 +656,7 @@ mod tests {
         );
     }
 
-    // =========================================================================
-    // edit_press
-    // =========================================================================
+    // === edit_press ===
 
     /// Pins the Edit press for every `(Option<Liveness>, preview_active)` input.
     ///
@@ -733,9 +721,7 @@ mod tests {
         );
     }
 
-    // =========================================================================
-    // preview_file_press
-    // =========================================================================
+    // === preview_file_press ===
 
     /// A followed preview link issues its BLOCKING `preview_file` for a live core and
     /// for nothing else.
@@ -809,9 +795,7 @@ mod tests {
         );
     }
 
-    // =========================================================================
-    // browser_press
-    // =========================================================================
+    // === browser_press ===
 
     /// Pins Preview in Browser for every `(Option<Liveness>, markdown_active)` input.
     ///
@@ -889,9 +873,7 @@ mod tests {
         );
     }
 
-    // =========================================================================
-    // browser_url
-    // =========================================================================
+    // === browser_url ===
 
     /// A loopback URL to hand the launcher, taken from what `WolfCore::open_in_browser`
     /// really answers.
@@ -920,7 +902,7 @@ mod tests {
     ///
     /// The last row is the one that looks wrong and is not. There is deliberately NO
     /// `http://127.0.0.1:` prefix check: the loopback-only bind is core's own hard
-    /// security requirement (`crates/wolf-core/DECISIONS.md`), and restating it here
+    /// security requirement (`notes/wolf-core-decisions.md`), and restating it here
     /// would give one rule two owners that could drift apart — the dangerous direction
     /// being the one where this copy is the laxer, since it is the one the launcher
     /// actually consults. Deleting that row would turn its absence back into something
@@ -1000,9 +982,7 @@ mod tests {
         );
     }
 
-    // =========================================================================
-    // the refusal strings
-    // =========================================================================
+    // === The refusal strings ===
 
     /// How many refusal reasons this module carries, as a LITERAL: four from each of
     /// the three seams that have a buffer-kind gate ([`preview_press`], [`edit_press`],
@@ -1057,9 +1037,8 @@ mod tests {
             ("an absent core, after shutdown took it out", None, true),
         ];
 
-        // The one seam with no second gate: its Alive arm ACTS, which is why it
-        // contributes three reasons rather than four. Measured here so the count below
-        // rests on a check rather than on a belief.
+        // The one seam with no second gate: its Alive arm acts, so it contributes three reasons, not four.
+        // Checked here so the count below rests on a check rather than a belief.
         assert_eq!(
             preview_file_press(Some(Liveness::Alive)),
             PreviewFilePress::Follow,
@@ -1113,9 +1092,8 @@ mod tests {
                 ("preview in browser", browser_reason),
             ];
 
-            // The link seam has no gate, so its `Alive` probe ACTS and contributes no
-            // reason. Skipped by the liveness rather than by the probe index, so a
-            // reordered probe list cannot silently drop a different arm.
+            // The link seam's `Alive` probe acts and gives no reason. Skipped by liveness, not probe index,
+            // so a reordered probe list cannot silently drop a different arm.
             if liveness != Some(Liveness::Alive) {
                 let link = preview_file_press(liveness);
                 let link_shown = format!("{link:?}");
@@ -1178,9 +1156,7 @@ mod tests {
         );
     }
 
-    // =========================================================================
-    // needs_reload
-    // =========================================================================
+    // === needs_reload ===
 
     /// The source buffer a preview pane is bound to first.
     const SOURCE_A: PreviewLoad = PreviewLoad {
@@ -1332,9 +1308,7 @@ mod tests {
         );
     }
 
-    // =========================================================================
-    // document_update
-    // =========================================================================
+    // === document_update ===
 
     /// A source buffer nvim has NEVER reported a `changedtick` for — the `0` sentinel
     /// `refresh_pane_state` produces when `Snapshot::markdown_ticks` carries no entry
@@ -1525,13 +1499,8 @@ mod tests {
             seen.insert(update_name(got));
         }
 
-        // --- Property 2: the range, which no individual row can state --------
-        //
-        // Reached only when every row above passed, so it is a statement about this
-        // TABLE's coverage rather than about `document_update` — see the doc comment.
-        // The two names are typed out as LITERALS rather than derived from a sweep of
-        // the enum, because comparing the observed range against a list computed the
-        // same way would be a tautology.
+        // --- Property 2: the range, a claim about this table's coverage (see the doc comment). The names
+        // are literals, since a list derived from the enum the same way would be a tautology.
         let both: HashSet<&'static str> = ["FullLoad", "InPlaceEligible"].into_iter().collect();
         assert_eq!(
             seen, both,
@@ -1545,9 +1514,8 @@ mod tests {
              base URI, or the load edge a pending cross-file fragment scrolls on."
         );
 
-        // The two fixtures rows 3 and 5 lean on, checked rather than trusted — the
-        // `needs_reload_table` precedent, restated here because a fixture edited for
-        // THAT table would silently disarm this one.
+        // The fixtures rows 3 and 5 lean on, checked here as in `needs_reload_table`, because a fixture
+        // edited for that table would silently disarm this one.
         assert_ne!(
             SOURCE_A.source_bufnr, SOURCE_B_SAME_TICK.source_bufnr,
             "precondition: the two fixtures must name DIFFERENT buffers, or row 5 is an identical \
@@ -1570,9 +1538,7 @@ mod tests {
         );
     }
 
-    // =========================================================================
-    // may_render
-    // =========================================================================
+    // === may_render ===
 
     /// The coalesced `render_preview` runs for a live core and nothing else.
     ///
@@ -1625,9 +1591,7 @@ mod tests {
         );
     }
 
-    // =========================================================================
-    // preview_status
-    // =========================================================================
+    // === preview_status ===
 
     /// A source living under the window's working directory. Its basename shares no
     /// text with any directory segment above it, so a `filename` built from the
@@ -1734,9 +1698,8 @@ mod tests {
                 expected: status("Preview: design.md", "", SOURCE_UNDER_CWD),
             },
             StatusCase {
-                // The display path handed in is deliberately NON-empty, so the rule
-                // being measured is "an empty source forces both paths empty" rather
-                // than "an empty input produced an empty output".
+                // The display path is deliberately non-empty, so this measures "an empty source forces both
+                // paths empty" rather than "an empty input gave an empty output".
                 desc: "an EMPTY source: a bare \"Preview\", with BOTH paths forced empty",
                 source_path: "",
                 display_path: DISPLAY_UNDER_CWD,
@@ -1762,11 +1725,8 @@ mod tests {
             );
         }
 
-        // --- the discriminating negatives ------------------------------------
-        //
-        // Equality above would also be satisfied by several plausible near-misses if
-        // the expectations were ever loosened, so the two that matter are stated
-        // outright against the value the seam really returns.
+        // --- The discriminating negatives: the two near-misses that matter, stated against the value
+        // the seam returns, in case the expectations above are ever loosened.
         let under_cwd = preview_status(SOURCE_UNDER_CWD, DISPLAY_UNDER_CWD);
         assert_ne!(
             under_cwd.filename, "design.md",

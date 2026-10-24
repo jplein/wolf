@@ -70,10 +70,8 @@ fn parsers_user_dir_created_activated_and_first_on_rtp() {
 
     let (core, _waiter) = common::start_core_sized(common::DEFAULT_COLS, common::DEFAULT_ROWS);
 
-    // 1. On disk FIRST: only spawn's create_dir_all can have made this dir —
-    //    the accessor's mkdir side effect has not run yet. Probing the env var
-    //    instead would be redundant with the existence check here, because
-    //    init.lua's gate stats the exported path before activating anything.
+    // 1. On disk first: only spawn's create_dir_all can have made this dir, since the accessor's
+    // mkdir has not run yet. init.lua's gate stats the exported path, so no env probe is needed.
     let parsers_user = state.path().join("parsers_user");
     assert!(
         parsers_user.is_dir(),
@@ -82,9 +80,8 @@ fn parsers_user_dir_created_activated_and_first_on_rtp() {
          init.lua's fs_stat gate then skips the whole activation)"
     );
 
-    // 2 + 3. rtp precedence and :TSInstall, probed BEFORE the accessor below
-    //    (which appends install_dir to rtp itself and would mask a missing
-    //    prepend).
+    // 2 + 3. rtp precedence and :TSInstall, probed before the accessor below, which appends
+    // install_dir to rtp itself and would mask a missing prepend.
     let probe_dir = tempfile::tempdir().expect("create probe dir");
     let vals = common::probe_values(
         &core,
@@ -139,9 +136,8 @@ fn parsers_user_dir_created_activated_and_first_on_rtp() {
         &[r#"luaeval("require('nvim-treesitter.config').get_install_dir('parser')")"#],
         &probe_dir.path().join("install_dir.txt"),
     );
-    // Canonicalize both sides: the Lua side comes back vim.fs.normalize'd and
-    // macOS tempdirs can spell /var vs /private/var; the reported dir exists by
-    // now (the accessor's own mkdir), so canonicalize resolves it.
+    // Canonicalize both sides: the Lua side is vim.fs.normalize'd and macOS spells /var vs
+    // /private/var. The accessor's own mkdir has created the dir by now.
     let got = std::fs::canonicalize(&vals[0]).unwrap_or_else(|e| {
         panic!(
             "canonicalizing the install dir nvim-treesitter reported ({:?}): {e} — the \

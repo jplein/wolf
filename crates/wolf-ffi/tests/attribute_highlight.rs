@@ -135,19 +135,14 @@ fn attribute_highlight_flags_and_special_cross_ffi() {
         frame.cols()
     );
 
-    // --- Put a known glyph in the buffer, define an attribute highlight group,
-    // and apply it to the glyph via matchadd. One `:lua` line, `;`-separated, so it
-    // rides the same send_key path Swift uses. No path interpolation here, so the
-    // lua literal stays simple (single `{`/`}` — NOT doubled, since this is a plain
-    // `&str`, not a Rust `format!`).
+    // Glyph, highlight group and matchadd in one `;`-separated `:lua` line, so it rides the same
+    // send_key path Swift uses. A plain `&str`, not `format!`, so braces stay single.
     let lua_cmd = ":lua vim.api.nvim_buf_set_lines(0,0,-1,false,{'X'}); \
          vim.api.nvim_set_hl(0,'WolfAttr',{bold=true,italic=true,underline=true,special='#00ff00',fg='#ffffff'}); \
          vim.fn.matchadd('WolfAttr','X')";
     send_ex_command(&handle, lua_cmd);
 
-    // --- Poll for the styled repaint: scan the frame for the `X` cell and wait
-    // until its resolved attributes carry BOLD|ITALIC|UNDERLINE and a set special
-    // color (the repaint may lag the command by a frame or two).
+    // Poll for the `X` cell's styled repaint, which may lag the command by a frame or two.
     let want = BOLD | ITALIC | UNDERLINE;
     let mut saw_x = false;
     let mut got_flags: u8 = 0;

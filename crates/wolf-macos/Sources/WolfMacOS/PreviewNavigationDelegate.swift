@@ -1,20 +1,4 @@
-//
-//  PreviewNavigationDelegate.swift
-//  The `WKNavigationDelegate` glue that routes a clicked preview link.
-//
-//  A thin AppKit/WebKit adapter (compile + manual-smoke only): it turns a
-//  `.linkActivated` navigation into a pure `PreviewLinkSeam.Action` and dispatches
-//  that back into the `PaneContainerView`. ALL classification lives in the headless
-//  `WolfKeyMap.PreviewLinkSeam`; this file only wires WebKit's policy callback to it
-//  and calls `NSWorkspace.open` / the container's preview methods. It never lets a
-//  clicked link navigate the web view itself (every clicked link is `.cancel`led and
-//  handled out-of-band), so the pane only ever shows core-rendered HTML.
-//
-//  The container retains this delegate (a web view holds `navigationDelegate`
-//  weakly); this delegate holds the container weakly, so there is no retain cycle.
-//  All callbacks fire on the main thread (WebKit's navigation callbacks are
-//  main-thread).
-//
+// The `WKNavigationDelegate` glue that routes a clicked preview link.
 
 import AppKit
 import WebKit

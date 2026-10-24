@@ -34,7 +34,7 @@ A preview scratch pane (carrying `b:wolf_preview_source`) reports `("", "", true
 
 #### `wolf_setup_buffer_tracking(chan)`
 
-Reports what every window of the current tabpage shows, so the front-end can draw a per-pane statusbar and core can derive a per-pane navigation-history target. Notifies **`wolf_buffers`** with one list of five-element tuples `{ win, nvim_buf_get_name(buf), buf, is_terminal, is_drawer }`, on `BufEnter`/`BufWinEnter`/`BufFilePost`/`WinEnter`/`WinNew`/`WinClosed`/`TermOpen`. Core wholesale-replaces both `Snapshot.buffers` (path only, unnamed windows omitted) and `Snapshot.win_buffers` (every window, `path = nil` when unnamed), so closed windows drop out.
+Reports what every window shows, on every tabpage rather than only the current one, so the front-end can draw a per-pane statusbar and core can derive a per-pane navigation-history target. The sweep is `nvim_list_wins()`; the [architecture spec](../../specs/architecture.md#output-render-state-core--front-end) lists which snapshot maps are global as a result. Notifies **`wolf_buffers`** with one list of five-element tuples `{ win, nvim_buf_get_name(buf), buf, is_terminal, is_drawer }`, on `BufEnter`/`BufWinEnter`/`BufFilePost`/`WinEnter`/`WinNew`/`WinClosed`/`TermOpen`. Core wholesale-replaces both `Snapshot.buffers` (path only, unnamed windows omitted) and `Snapshot.win_buffers` (every window, `path = nil` when unnamed), so closed windows drop out.
 
 `is_drawer` is the buffer tag `b:wolf_terminal` or'd with the window tag `w:wolf_terminal`. It marks the terminal drawer, which navigation history excludes; a `:terminal` in an ordinary split sets neither tag and is not excluded. Windows showing a preview scratch are omitted from the list entirely, which is what keeps `win_buffers` and `previews` disjoint — the history fold relies on that. Emits are coalesced (see Decisions). Exposes `_G.wolf_emit_buffers`.
 
@@ -134,7 +134,7 @@ Runs `tabnew`, roots the new tabpage at `cwd` via `:tcd` when `cwd` is non-empty
 
 Realizes a saved pane-split tree in the current tabpage's single starting window and returns the resulting window handles in depth-first leaf order — the same order as the front-end's `PaneTree.leaves()`, so each handle zips to its rebuilt leaf. A malformed spec returns an empty list.
 
-`spec_json` is a JSON string: a leaf is `{ leaf = true, path, preview }`, a split is `{ orientation = "h"|"v", weights, children }`. Two renderers produce it independently — `wolf_core::state::rebuild_layout_spec` and the Swift `PaneLayoutCodec.specJSON` — so a change here has to land on both; see [wolf-core's DECISIONS.md](../../crates/wolf-core/DECISIONS.md).
+`spec_json` is a JSON string: a leaf is `{ leaf = true, path, preview }`, a split is `{ orientation = "h"|"v", weights, children }`. Two renderers produce it independently — `wolf_core::state::rebuild_layout_spec` and the Swift `PaneLayoutCodec.specJSON` — so a change here has to land on both; see [wolf-core-decisions.md](../../notes/wolf-core-decisions.md).
 
 A preview leaf with a path becomes a preview of that source via `wolf_preview_file`, converting the window rather than replacing it so the handle survives; a plain leaf with a path is `:edit`ed; an empty leaf keeps its inherited buffer. Regions are created child-0-first, left-to-right and top-to-bottom. nvim supplies only the window count, topology, and per-window buffer; the front-end drives pane sizes from its own weights.
 

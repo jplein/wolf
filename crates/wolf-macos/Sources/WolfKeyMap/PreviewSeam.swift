@@ -1,16 +1,4 @@
-//
-//  PreviewSeam.swift
-//  Pure, AppKit-free Markdown-preview reload arithmetic.
-//
-//  The sibling of `CommandSeam` / `FontSizeSeam`: a pure, display-free decision
-//  exercised with scalar inputs only — NO AppKit, NO WKWebView, NO live Neovim. It
-//  decides which preview WINDOWS need their web view reloaded by comparing each
-//  window's last-loaded `(sourceBufnr, sourceTick)` against the live one, and it
-//  owns the click-to-focus script a preview pane's web view injects.
-//
-//  Imports ONLY Foundation, so it lives in the Foundation-only `WolfKeyMap` module
-//  alongside `CommandSeam.swift` / `PaneTree.swift`.
-//
+// Pure Markdown-preview reload arithmetic and the click-to-focus script.
 
 import Foundation
 

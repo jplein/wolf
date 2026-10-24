@@ -1,7 +1,4 @@
-//
-//  Color.swift
-//  Packed-u32 + `set` flag → `CGColor`, with fallbacks mirroring wolf-gnome.
-//
+// Packed-u32 plus `set` flag to `CGColor`, with fallbacks mirroring wolf-gnome.
 
 import CoreGraphics
 import Foundation

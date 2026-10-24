@@ -1,17 +1,4 @@
-//
-//  PickerPanelHost.swift
-//  Drives one picker's `PickerPanel`: presents it as a child window in front of the
-//  owning main window, sizes + positions it top-center via `PickerPanelSeam`, and
-//  funnels every "resign key" (click-outside / Cmd-Tab / Mission Control / another
-//  window) into the picker's `close()` (plan §2c).
-//
-//  One host per picker, owned strongly by `WolfWindowController`; the host owns the
-//  panel strongly, and the panel owns the picker view (its `contentView`) strongly.
-//  The host adds the panel via `addChildWindow(ordered:.above)` so the window server
-//  composites it in front of the parent's content (including the preview
-//  `WKWebView`) and auto-follows the parent on move. Window-server-bound, so
-//  exercised by manual smoke only; the pure positioning is `PickerPanelSeam`.
-//
+// Presents, positions and dismisses one picker's `PickerPanel`.
 
 import AppKit
 import WolfKeyMap
@@ -106,19 +93,15 @@ final class PickerPanelHost: NSObject, PickerPanelHosting, NSWindowDelegate {
       self, name: NSWindow.didResizeNotification, object: parentWindow)
     parentWindow?.removeChildWindow(panel)
     panel.orderOut(nil)
-    // Deliberately NO makeKeyAndOrderFront / NSApp.activate: if the user
-    // Cmd-Tabbed away, do not yank them back — just hand the editor first
-    // responder for when the parent is next key.
+    // No makeKeyAndOrderFront or NSApp.activate: a user who Cmd-Tabbed away is not yanked back.
     parentWindow?.makeFirstResponder(paneContainer)
   }
 
   func refitPanel() {
     guard isPresented, let parentWindow, let paneContainer else { return }
     let width = Self.width
-    // Measure the picker's content height at the fixed 600pt width: AppKit's
-    // `fittingSize` computes the size satisfying the view's constraints, so pin
-    // the width (its vertical constraint chain is a determinate equality chain,
-    // so the returned height is exact) for the duration of the measurement.
+    // Pin the width while measuring, so `fittingSize` returns the exact height of the determinate
+    // vertical constraint chain.
     let widthConstraint = contentView.widthAnchor.constraint(equalToConstant: width)
     widthConstraint.isActive = true
     contentView.layoutSubtreeIfNeeded()
@@ -137,8 +120,7 @@ final class PickerPanelHost: NSObject, PickerPanelHosting, NSWindowDelegate {
       panelHeight: Double(fittingHeight),
       topMargin: Double(Self.topMargin))
 
-    // Map the top-left content rect to a bottom-left screen frame: `r.y` is a
-    // distance DOWN from the content top, so the panel's bottom edge sits at
+    // `r.y` is a distance down from the content top, so the panel's bottom edge is at
     // `maxY - r.y - r.h`.
     let originX = contentInScreen.minX + CGFloat(r.x)
     let originY = contentInScreen.maxY - CGFloat(r.y) - CGFloat(r.h)

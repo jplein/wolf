@@ -143,9 +143,8 @@ fn multi_term_and_order_independent_over_mru_mixed_set() {
 /// n-boundary matches the stable-sort `take(n)`.
 #[test]
 fn tie_group_straddles_n() {
-    // Zero-padded to a fixed width so every display has the same char count: the
-    // score, match_start, span, and len keys all tie, leaving `display` (then
-    // `index`) as the only separators.
+    // Zero-padded to a fixed width so score, match_start, span and len all tie, leaving `display`
+    // (then `index`) as the only separators.
     let entries: Vec<FileEntry> = (0..TIE_GROUP)
         .map(|i| entry(&format!("a{i:03}.md"), None))
         .collect();

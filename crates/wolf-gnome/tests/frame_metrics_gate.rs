@@ -148,9 +148,8 @@ fn every_hot_path_entry_point_is_a_no_op_while_disabled() {
         frame_metrics::end(bucket, None);
         frame_metrics::end(bucket, Some(Instant::now()));
 
-        // Bound to a named guard, never `let _ = …`, which would drop instantly and
-        // exercise a different thing than the shipped call sites do. It drops at the
-        // end of this iteration, which is what calls `end` a third time.
+        // A named guard, never `let _ = …`, which drops instantly unlike the shipped call sites.
+        // Its drop at the end of this iteration calls `end` a third time.
         let _guard = frame_metrics::scope(bucket);
     }
 

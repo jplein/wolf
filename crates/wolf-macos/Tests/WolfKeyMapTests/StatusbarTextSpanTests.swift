@@ -1,49 +1,5 @@
-//
-//  StatusbarTextSpanTests.swift
-//  Pure, headless unit tests for the AppKit-free `WolfKeyMap.StatusbarTextSpan`.
-//
-//  These exercise the per-pane statusbar HORIZONTAL text-span seam the coder adds in
-//  `Sources/WolfKeyMap/StatusbarTextSpan.swift` (plan §1). Like `PaneGeometryTests`,
-//  `EditorInsetTests` and `StatusbarLayoutTests` (the VERTICAL sibling), they import
-//  ONLY Foundation-level test machinery (no AppKit / CoreGraphics, no live window, no
-//  Neovim) and stay in the headless `WolfKeyMap` module. Pane kind arrives as a plain
-//  enum, so no Neovim state participates and the rest is rect arithmetic.
-//
-//  ## CONTRACT UNDER TEST (the API the coder must honor, plan §1)
-//
-//    public enum PaneContentKind { case editor; case preview }
-//
-//    public struct StatusbarTextSpan {
-//        public let left: Double
-//        public let width: Double
-//        public init(gridLeft: Double, gridWidth: Double,
-//                    paintOffsetX: Double, kind: PaneContentKind)
-//    }
-//
-//  Arithmetic (feature plan §8), with `w = max(0, gridWidth)` and
-//  `offset = min(max(0, paintOffsetX), w)`:
-//    .editor  -> left = gridLeft + offset,  width = max(0, gridWidth - offset)
-//    .preview -> left = gridLeft + offset,  width = max(0, gridWidth - offset)
-//
-//  The two kinds are now IDENTICAL: the preview is CENTERED exactly like the editor.
-//  The "Use full width for content" feature reframes the preview `WKWebView` to the
-//  capped+CENTERED `gridRect` in the ~90-char default (so the preview statusbar must
-//  indent by the same `paintOffsetX` the editor grid uses), and to the FULL inset pane
-//  in full-width mode (where `paintOffsetX == 0`, so it lands flush at `gridLeft`).
-//  This REDEFINES the earlier flush-left `.preview` behavior, which assumed the preview
-//  was framed to the UNCENTERED `gridRect` and never indented. The `.editor` branch is
-//  unchanged and stays bit-identical to the pre-refactor expression.
-//
-//  ## WHAT THESE TESTS CANNOT PROVE (feature plan §8)
-//
-//  That the statusbar text origin and the LIVE `WKWebView` frame actually coincide on
-//  screen is an integration property spanning `paintStatusbar`, `syncPreviewWebViews`
-//  and the markdown CSS. No unit test can pin it — these tests pin only the shared
-//  arithmetic both consumers derive from. The remainder rests on visual review: open a
-//  preview in a window wider than 90 columns and confirm the statusbar filename's left
-//  edge sits on the centered content's left edge, and that toggling full width moves it
-//  to the pane's left edge.
-//
+// See crates/wolf-macos/Tests/WolfKeyMapTests/README.md#statusbartextspantestsswift
+// See notes/crates/wolf-macos/Tests/WolfKeyMapTests/StatusbarTextSpanTests.swift.md#manual-check
 
 import XCTest
 
@@ -134,11 +90,8 @@ final class StatusbarTextSpanTests: XCTestCase {
   // MARK: - Case 2: editor, wide pane — REGRESSION GUARD
 
   func testEditorWidePaneKeepsThePaintOffsetAndTheRightEdge() {
-    // The editor branch must reproduce today's expression exactly:
-    //   textLeft  = gRect.minX + paintOffsetX
-    //   textWidth = gRect.maxX - textLeft == gridWidth - paintOffsetX
-    // The offset is the REAL one PaneGeometry derives for this width, not an arbitrary
-    // number: (1400 - 720) / 2 == 340.
+    // The editor span is left = gRect.minX + paintOffsetX, width = gridWidth - paintOffsetX,
+    // using PaneGeometry's real offset for this width: (1400 - 720) / 2 = 340.
     let gridWidth: Double = 1400.0
     let paintOffsetX = expectedPaintOffsetX(gridWidth: gridWidth)
     XCTAssertEqual(
@@ -156,10 +109,8 @@ final class StatusbarTextSpanTests: XCTestCase {
       s.width, gridWidth - paintOffsetX, accuracy: eps,
       "editor wide: width == gridWidth - paintOffsetX == 1060")
 
-    // REGRESSION GUARD (plan §10, top risk): the editor's right edge must remain
-    // gRect.maxX. If this fails, someone has "simplified" the .editor branch to also
-    // drop paintOffsetX (or clamped the right edge). Editor panes must be
-    // BIT-IDENTICAL to today's behavior — this fix is for PREVIEW panes only.
+    // Regression guard: the editor's right edge stays gRect.maxX. Dropping paintOffsetX from the
+    // .editor branch, or clamping its right edge, fails here.
     XCTAssertEqual(
       s.left + s.width, gridLeftAtOrigin + gridWidth, accuracy: eps,
       "REGRESSION: editor textRight must stay at gridLeft + gridWidth. The .editor "
@@ -170,9 +121,8 @@ final class StatusbarTextSpanTests: XCTestCase {
   // MARK: - Case 3: preview, narrow pane — flush with the grid below the cap
 
   func testPreviewNarrowPaneMatchesTheEditorCase() {
-    // Below the cap there is no centering offset, so preview and editor coincide at
-    // the grid's left edge (this is also the FULL-WIDTH preview case: paintOffsetX
-    // == 0 means the whole inset pane is the content area).
+    // Below the cap there is no centering offset, so both kinds sit at the grid's left edge; this
+    // is also the full-width preview case, where paintOffsetX == 0.
     let gridWidth: Double = 600.0
     let s = span(
       gridLeft: gridLeftAtOrigin, gridWidth: gridWidth, paintOffsetX: 0, kind: .preview)
@@ -184,10 +134,8 @@ final class StatusbarTextSpanTests: XCTestCase {
   // MARK: - Case 4: preview, wide pane — centered like the editor, plus full-width
 
   func testPreviewWidePaneIsCenteredAndFullWidthIsFlush() {
-    // REDEFINED behavior: a wide preview in the ~90-char DEFAULT is framed to the
-    // capped+CENTERED gridRect, so the statusbar text must indent by paintOffsetX,
-    // EXACTLY like the editor. (Previously the preview ignored the offset and sat
-    // flush-left; that is the behavior this feature replaces.)
+    // A wide preview at the ~90-char default is framed to the capped, centered gridRect, so its
+    // statusbar text indents by paintOffsetX exactly like the editor's.
     let gridWidth: Double = 1400.0
     let paintOffsetX = expectedPaintOffsetX(gridWidth: gridWidth)
     XCTAssertGreaterThan(
@@ -205,9 +153,8 @@ final class StatusbarTextSpanTests: XCTestCase {
       centered.width, gridWidth - paintOffsetX, accuracy: eps,
       "preview wide default: width == gridWidth - paintOffsetX")
 
-    // FULL-WIDTH preview: the webview is framed to the FULL inset pane, so
-    // paintOffsetX == 0 and the content is flush at the pane's left edge spanning the
-    // whole grid (the ~90-char cap is off for a full-width buffer).
+    // Full-width preview: the web view fills the inset pane, so paintOffsetX == 0 and the text sits
+    // flush at the left edge across the whole grid.
     let full = span(
       gridLeft: gridLeftAtOrigin, gridWidth: gridWidth, paintOffsetX: 0, kind: .preview)
     XCTAssertEqual(
@@ -221,10 +168,8 @@ final class StatusbarTextSpanTests: XCTestCase {
   // MARK: - Case 5: the two kinds are now IDENTICAL (the redefinition)
 
   func testPreviewAndEditorSpansAreIdenticalForTheSameInputs() {
-    // THIS IS THE ASSERTION THAT MOST DIRECTLY ENCODES THE REDEFINITION: because the
-    // preview is now centered exactly like the editor, `.preview` and `.editor` must
-    // produce the SAME span for the same inputs — both on a wide (centered) pane and
-    // on a narrow (flush) one.
+    // Both kinds are centered alike, so `.preview` and `.editor` must give the same span for the
+    // same inputs, on a wide (centered) pane and a narrow (flush) one.
     let wideWidth: Double = 1400.0
     let widePaintOffsetX = expectedPaintOffsetX(gridWidth: wideWidth)
     XCTAssertGreaterThan(
@@ -263,10 +208,8 @@ final class StatusbarTextSpanTests: XCTestCase {
   // MARK: - Case 6: gridLeft is ABSOLUTE, never pane-local
 
   func testNonZeroGridLeftIsAbsoluteForBothKinds() {
-    // `gridLeft` is the ABSOLUTE gRect.minX in the container view's coordinates, not a
-    // pane-local inset: a right-hand split's span is simply shifted right. Each tuple:
-    // (gridLeft, gridWidth); the offset is DERIVED from the width the way PaneGeometry
-    // derives it, so the wide rows pin realistic inputs (1400 -> 340, not a made-up 250).
+    // `gridLeft` is the absolute gRect.minX, so a right-hand split's span just shifts right. Tuples
+    // are (gridLeft, gridWidth), with offsets derived as PaneGeometry does (1400 -> 340).
     let narrowWidth: Double = 600.0
     let wideWidth: Double = 1400.0
     let cases: [(Double, Double)] = [
@@ -313,12 +256,8 @@ final class StatusbarTextSpanTests: XCTestCase {
   // MARK: - Case 8: a pane narrower than the padding
 
   func testPaneNarrowerThanThePaddingProducesNoNegativeWidth() {
-    // `EditorInset` clamps a sub-`2*padding` pane's grid width to 0 (see
-    // `EditorInsetTests.testNarrowPaneClampsGridWidthToZero`), while the grid's x
-    // origin is a FIXED, UNCLAMPED offset — so gridLeft can sit beyond the pane's own
-    // right edge. The span must still degenerate cleanly.
-    // A 10px-wide pane at x == 100: EditorInset gives gridWidth == max(0, 10 - 40) == 0
-    // and gridLeft == 100 + 20 == 120, which is past the pane's right edge (110).
+    // EditorInset clamps a sub-2*padding grid width to 0 but not the x origin: a 10px pane at x 100
+    // gets gridWidth 0 and gridLeft 120, past its right edge, and the span must still degenerate.
     let paneMinX: Double = 100.0
     let paneWidth: Double = 10.0
     let gridLeft = paneMinX + gridLeftAtOrigin
@@ -356,9 +295,8 @@ final class StatusbarTextSpanTests: XCTestCase {
       editor.left, gridLeftAtOrigin + gridWidth, accuracy: eps,
       "editor: left clamps to the grid's right edge, never past it")
 
-    // The preview branch now clamps the SAME way as the editor (it is centered like
-    // the editor), so an over-large offset floors its width at 0 and clamps its left
-    // to the grid's right edge.
+    // The preview branch clamps like the editor's: an over-large offset floors its width at 0 and
+    // clamps its left to the grid's right edge.
     let preview = span(
       gridLeft: gridLeftAtOrigin, gridWidth: gridWidth, paintOffsetX: paintOffsetX,
       kind: .preview)
@@ -394,9 +332,8 @@ final class StatusbarTextSpanTests: XCTestCase {
   // MARK: - Case 11: exactly at the 90-column cap
 
   func testExactCapBoundaryHasNoOffsetAndBothKindsCoincide() {
-    // At gridWidth == 90 * cellWidth the centering inset is max(0, 0/2) == 0, so the
-    // two kinds coincide. paintOffsetX is CONTINUOUS across the threshold: the gap
-    // widens from zero as the window grows, with no jump or flicker.
+    // At gridWidth == 90 * cellWidth the centering inset is 0, so the kinds coincide; paintOffsetX
+    // grows continuously past the threshold, with no jump.
     let capWidth = maxGridCols * cellWidth
     XCTAssertEqual(
       expectedPaintOffsetX(gridWidth: capWidth), 0.0, accuracy: eps,
@@ -447,16 +384,8 @@ final class StatusbarTextSpanTests: XCTestCase {
   // MARK: - Case 13: editor sweep across the cap — REGRESSION GUARD
 
   func testEditorSpanEqualsTheLegacyExpressionAcrossTheCapThreshold() {
-    // Case 2 pins the "bit-identical editor" claim at a single point. This sweeps it
-    // across the whole 90-cell cap threshold: below, exactly at, and well above.
-    //
-    // The expected values below are the LITERAL pre-refactor expression from
-    // `paintStatusbar`, written out longhand rather than reusing the seam's own
-    // arithmetic, so this is an independent check and not a tautology:
-    //
-    //     let p         = geo.paintOffsetX
-    //     let textLeft  = gRect.minX + p
-    //     let textWidth = gRect.maxX - textLeft      // == gridWidth - p
+    // Sweeps case 2's claim across the 90-cell cap. Expectations are `paintStatusbar`'s expression
+    // written longhand (left = minX + p, width = maxX - left), so this is not a tautology.
     let capWidth = maxGridCols * cellWidth
     let widths: [Double] = [
       100.0,  // far below the cap

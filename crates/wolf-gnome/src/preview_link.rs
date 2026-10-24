@@ -69,7 +69,7 @@
 //! never `None` in the first place. Exactly two inputs make it answer `None`, and
 //! neither occurs.
 //!
-//! * An EMPTY source path. `runtime/nvim/init.lua:2229`, inside
+//! * An EMPTY source path. `runtime/nvim/init.lua`, inside
 //!   `wolf_setup_preview`'s `emit_previews`, filters an empty
 //!   `b:wolf_preview_source` out of the `wolf_preview` notification, so a preview of
 //!   a buffer with no name never reaches `Snapshot::previews`, never becomes a
@@ -233,14 +233,8 @@ pub fn classify(uri: &str, source_path: &str) -> PreviewLink {
         };
     };
 
-    // Rows 1 and 2, and they must be tested BEFORE the foreign-scheme row: an
-    // `about` URI has a scheme and it is not `file`, so row 3 would launch it.
-    // `webkit_web_view_load_html` documents `about:blank` as the base a `NULL`
-    // argument defaults to, so this is the shape a FRAGMENT-ONLY href is expected to
-    // take in a document loaded with no base — expected from that documentation, not
-    // observed here. The module docs carry what a RELATIVE href in the same document
-    // was MEASURED to deliver (its raw self, which is row 9) and why neither shape is
-    // reachable from the running application.
+    // Rows 1 and 2, before row 3, which would launch an `about` URI. WebKit's docs (not observation)
+    // imply a fragment-only href in a base-less document arrives as `about:blank#x`; see module docs.
     if scheme.eq_ignore_ascii_case("about") {
         let anchor = fragment.filter(|_| before_fragment.eq_ignore_ascii_case("about:blank"));
         return match anchor {
@@ -253,9 +247,8 @@ pub fn classify(uri: &str, source_path: &str) -> PreviewLink {
         };
     }
 
-    // Schemes are case-insensitive per RFC 3986, and a `FILE:` URI that fell through
-    // to the external launcher would be exactly the row-3 hazard this gate exists to
-    // keep local.
+    // Schemes are case-insensitive (RFC 3986): a `FILE:` URI reaching the external launcher is the
+    // row-3 hazard this gate keeps local.
     if !scheme.eq_ignore_ascii_case("file") {
         // Row 3. The WHOLE uri, fragment included: the handler resolves it, not us.
         return PreviewLink::OpenExternally {
@@ -278,9 +271,8 @@ pub fn classify(uri: &str, source_path: &str) -> PreviewLink {
         );
     }
 
-    // Rows 6, 7 and 8. Lexical normalization on BOTH sides, so `/a/./x.md` and
-    // `/a/x.md` are the same document and a `#anchor` into it scrolls rather than
-    // re-rendering the file that is already on screen.
+    // Rows 6, 7 and 8. Both sides are normalized lexically, so `/a/./x.md` and `/a/x.md` match and a
+    // `#anchor` into the on-screen file scrolls instead of re-rendering.
     if normalize_path(&path) == normalize_path(source_path) {
         return match fragment {
             Some(fragment) => PreviewLink::ScrollToFragment { fragment },
@@ -608,9 +600,7 @@ mod tests {
         })
     }
 
-    // =========================================================================
-    // classify
-    // =========================================================================
+    // === classify ===
 
     /// One [`classify`] table row.
     struct ClassifyCase {
@@ -680,7 +670,8 @@ mod tests {
     /// [`file_uri_for`]'s DOMAIN: it answers `Some` for every source path the running
     /// application can produce, and exactly two inputs make it answer `None`.
     ///
-    /// * An EMPTY source path. `runtime/nvim/init.lua:2229` filters an empty
+    /// * An EMPTY source path. `wolf_setup_preview`'s `emit_previews` in
+    ///   `runtime/nvim/init.lua` filters an empty
     ///   `b:wolf_preview_source` out of the `wolf_preview` notification, so a preview
     ///   of a nameless buffer never reaches `Snapshot::previews`, never becomes a pane
     ///   and never gets a web view at all. MEASURED under `cage` on 2026-08-06:
@@ -980,10 +971,8 @@ mod tests {
             seen.insert(variant_name(&got));
         }
 
-        // --- Property 2: the RANGE, which no individual row can state -------
-        //
-        // Reached only when every row above passed, so it is a statement about this
-        // TABLE's coverage rather than about `classify` — see the doc comment.
+        // --- Property 2: the range, which no row can state. Reached only once every row passed, so it
+        // describes this table's coverage, not `classify` (see the doc comment).
         let want: HashSet<&'static str> = ALL_VARIANTS.into_iter().collect();
         assert_eq!(
             seen, want,
@@ -1076,9 +1065,7 @@ mod tests {
         );
     }
 
-    // =========================================================================
-    // file_uri_for
-    // =========================================================================
+    // === file_uri_for ===
 
     /// One [`file_uri_for`] table row.
     struct BaseUriCase {
@@ -1233,9 +1220,7 @@ mod tests {
         );
     }
 
-    // =========================================================================
-    // scroll_into_view_js
-    // =========================================================================
+    // === scroll_into_view_js ===
 
     /// The identifier the emitted script must call, as a literal.
     ///
@@ -1327,10 +1312,8 @@ mod tests {
             );
         }
 
-        // --- Property 2: encoded ONCE ---------------------------------------
-        //
-        // Stated on its own rather than as a row, because it is a claim about what the
-        // script must NOT contain and every row above is satisfied by a double encode.
+        // --- Property 2: encoded once. A claim about what the script must not contain, which every row
+        // above satisfies even with a double encode.
         let script = scroll_into_view_js("intro").expect("serde_json can encode a &str");
         assert!(
             script.contains("(\"intro\")"),
@@ -1362,9 +1345,7 @@ mod tests {
         );
     }
 
-    // =========================================================================
-    // the private helpers, exercised through their own edges
-    // =========================================================================
+    // === The private helpers, exercised through their own edges ===
 
     /// [`scheme_of`] implements RFC 3986's grammar rather than "the text before the
     /// first colon", and the difference decides whether a LOCAL path is handed to an

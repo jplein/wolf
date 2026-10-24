@@ -1,18 +1,4 @@
-//
-//  PickerPanel.swift
-//  The reusable borderless, non-activating child window that hosts one transient
-//  picker overlay (file picker / command palette / buffer picker) IN FRONT of its
-//  owning main window (plan §2b).
-//
-//  The window server always composites a child window in front of its parent's
-//  content — including the Markdown-preview `WKWebView` (a `PaneContainerView`
-//  subview) that otherwise draws above sibling `NSView`s on Tahoe regardless of
-//  order. Hosting each picker here (rather than as a pane-container subview) is what
-//  puts it above the preview. The ONLY reason for this `NSPanel` subclass is key
-//  eligibility: a borderless panel is not key-eligible by default, but the search
-//  field's field editor needs the panel to be key to accept typing. Constructed +
-//  driven by `PickerPanelHost`; exercised by manual smoke only.
-//
+// The borderless child window that hosts one picker overlay above its main window.
 
 import AppKit
 

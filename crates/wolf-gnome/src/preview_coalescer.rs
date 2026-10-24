@@ -2,7 +2,7 @@
 //!
 //! Typing beside a live preview issues one BLOCKING `render_preview` RPC per
 //! keystroke — the only blocking call this front-end repeats while the user simply
-//! types, and `crates/wolf-gnome/DECISIONS.md` ("Frame-time instrumentation") holds
+//! types, and `notes/wolf-gnome-decisions.md` ("Frame-time instrumentation") holds
 //! what it measured. This collapses a burst into three kinds of render and no
 //! others: one on the FIRST edit after a quiet gap, one whenever the burst has run
 //! [`PREVIEW_MAX_STALENESS`] without a render, and one after the burst ends.
@@ -49,11 +49,11 @@
 //! Every `Arm` answer carries a NEW generation, so the sources armed by a burst's
 //! earlier keystrokes still run their closures and perform nothing. Two shapes were
 //! rejected. A `glib::timeout_add_local` returning `ControlFlow::Continue` is a
-//! genuinely repeating source — exactly the periodic timer `DECISIONS.md` forbids.
+//! genuinely repeating source — exactly the periodic timer `notes/wolf-gnome-decisions.md` forbids.
 //! One live source that re-arms itself for the remaining time makes `fire`
 //! three-way and moves arming into the fire closure, to save a `GSource` attach
 //! that costs microseconds against a multi-millisecond RPC. What the chosen shape
-//! buys is the property `DECISIONS.md` states: live sources are bounded by
+//! buys is the property `notes/wolf-gnome-decisions.md` states: live sources are bounded by
 //! `ceil(PREVIEW_TRAILING_DELAY / inter-key interval)` during a fast burst — a
 //! reader who finds five queued at once has found the design, not a leak — and
 //! there are ZERO of them while the user is idle.
@@ -164,10 +164,8 @@ impl PreviewCoalescer {
             return RenderDecision::Render;
         }
 
-        // Durations only, never `Instant + Duration`: that addition panics on
-        // overflow, and there is no deadline instant here worth the risk. Whichever
-        // of the two budgets is nearer wins, and a spent staleness budget saturates
-        // to zero rather than wrapping.
+        // Durations only: `Instant + Duration` panics on overflow. The nearer budget wins, and a spent
+        // staleness budget saturates to zero rather than wrapping.
         let elapsed = now.saturating_duration_since(pending_since);
         let delay = PREVIEW_TRAILING_DELAY.min(PREVIEW_MAX_STALENESS.saturating_sub(elapsed));
         self.armed = true;
@@ -216,23 +214,8 @@ impl Default for PreviewCoalescer {
 mod tests {
     use super::*;
 
-    // Every test here drives the trailing timer BY HAND: a request hands out a
-    // generation and the test calls `fire` with it, exactly as the armed `glib`
-    // one-shot would, and calls `rendered` where the render pass's last statement
-    // would. NOTHING SLEEPS and no clock is read twice — every `Instant` in this
-    // module is built from ONE `Instant::now()` plus a `Duration`, so no reading can
-    // move under a loaded machine and no test can be timing-dependent.
-    //
-    // No constant is compared against its own literal: a constant that agrees with
-    // itself states nothing. What is asserted is the RULE — which request renders,
-    // which arms, how long it arms for, and which armed fire performs. Two
-    // relations BETWEEN constants are asserted, in tests 3 and 4, and each is the
-    // premise the test under it rests on rather than a restatement of a value.
-    //
-    // Both operands of those two are bound to locals first. `clippy::assertions_on_constants`
-    // rejects an `assert!` whose whole condition is constant, this crate adds no
-    // `#[allow]`, and a local binding puts the condition outside that lint for good
-    // rather than by luck.
+    // The timer is driven by hand and every `Instant` is one `now()` plus a `Duration`; nothing sleeps.
+    // See notes/crates/wolf-gnome/src/preview_coalescer.rs.md#test-clock-and-constants.
 
     /// The `Arm` payload, or a panic naming the request that rendered instead.
     fn armed(decision: RenderDecision, what: &str) -> (u64, Duration) {
@@ -373,19 +356,15 @@ mod tests {
     /// another full trailing delay instead of re-arming for the next main-loop turn.
     #[test]
     fn the_delay_is_capped_by_the_staleness_deadline() {
-        // The burst's cadence and the probe into it, in milliseconds from `t0`. The
-        // burst begins at `BURST_START_MS`, so `pending_since` is `t0 +
-        // BURST_START_MS` for the whole test and every elapsed figure is measured
-        // from there.
+        // Milliseconds from `t0`. The burst begins at `BURST_START_MS`, which is `pending_since` for the
+        // whole test and the origin of every elapsed figure.
         const BURST_START_MS: u64 = 40;
         const BURST_STEP_MS: u64 = 40;
         const BURST_STEPS: u64 = 9;
         const CAP_PROBE_ELAPSED_MS: u64 = 400;
 
-        // The premise the exact-value assertion below rests on: at the probe the
-        // cap's remainder must be BELOW the trailing delay, or the `min` picks the
-        // trailing term there and the probe says nothing about the cap at all. A
-        // relation between two constants, not a constant against its own literal.
+        // Premise: at the probe the cap's remainder is below the trailing delay, or `min` picks the
+        // trailing term and the probe says nothing about the cap.
         let cap_remainder =
             PREVIEW_MAX_STALENESS.saturating_sub(Duration::from_millis(CAP_PROBE_ELAPSED_MS));
         let trailing = PREVIEW_TRAILING_DELAY;
@@ -481,11 +460,8 @@ mod tests {
     /// the other three depend on too.
     #[test]
     fn an_edit_just_after_a_render_does_not_take_a_second_leading_edge() {
-        // The premise the whole test rests on, and the invariant the two constants
-        // carry: the quiet that re-arms the leading edge is never shorter than the
-        // trailing delay. Below it, a keystroke arriving one trailing delay after a
-        // fire is a legitimate second leading edge and this test would be asserting
-        // something false.
+        // Premise, and the invariant the two constants carry: the leading-edge quiet is never shorter
+        // than the trailing delay, or a key one trailing delay after a fire is a real second leading edge.
         let leading = PREVIEW_LEADING_IDLE;
         let trailing = PREVIEW_TRAILING_DELAY;
         assert!(

@@ -250,8 +250,7 @@ fn cmdline_pum_and_toast_over_the_bridge() {
 
     let init_lua = common::init_lua_path();
 
-    // A temp cwd seeded with the three files so `:e Fi` completes against it. It is
-    // nvim's working dir + search root and must outlive the session, so keep the
+    // A temp cwd seeded so `:e Fi` completes against it. It is nvim's working dir, so keep the
     // guard alive until after `shutdown()`.
     let tmp = tempfile::tempdir().expect("failed to create temp cwd directory");
     for name in [FILE_A, FILE_B, FILE_OTHER] {

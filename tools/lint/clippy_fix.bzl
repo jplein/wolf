@@ -63,10 +63,8 @@ def _fix_all_impl(ctx):
         is_executable = True,
     )
 
-    # Stage BOTH toolchains: the rust toolchain (cargo/clippy for `--fix`) and
-    # the SEPARATE rustfmt toolchain, whose `rustfmt` binary is built against a
-    # matching librustc_driver (the rust toolchain's bare `rustfmt` links a
-    # different driver hash and aborts at load time).
+    # Both toolchains: the rust toolchain's bare `rustfmt` links a different librustc_driver hash
+    # and aborts at load time, so rustfmt comes from the separate rustfmt toolchain.
     runfiles = ctx.runfiles(
         transitive_files = depset(
             transitive = [rust_toolchain.all_files, rustfmt_toolchain.all_files],

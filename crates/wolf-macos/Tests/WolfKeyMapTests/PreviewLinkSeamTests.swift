@@ -1,34 +1,4 @@
-//
-//  PreviewLinkSeamTests.swift
-//  Pure, headless unit tests for the AppKit-free `WolfKeyMap.PreviewLinkSeam`.
-//
-//  These exercise the pure link-classification and JS-escaping the coder adds in
-//  `Sources/WolfKeyMap/PreviewLinkSeam.swift` (plan §A). Like `PreviewSeamTests`,
-//  they import ONLY Foundation-level test machinery (no AppKit, no WKWebView, no
-//  live Neovim) and stay in the headless `WolfKeyMap` module. The nav-delegate
-//  routing, `NSWorkspace.open`, and `evaluateJavaScript` are AppKit glue
-//  (compile + manual-smoke only); ALL branching lives here and is unit-tested.
-//
-//  ## CONTRACT UNDER TEST (the API the coder must honor)
-//
-//    public enum PreviewLinkSeam {
-//        public enum Action: Equatable {
-//            case openInBrowser(URL)
-//            case scrollToFragment(String)
-//            case previewFile(path: String, fragment: String?)
-//        }
-//        static func classify(url: URL, sourcePath: String) -> Action
-//        static func scrollIntoViewJS(fragmentId: String) -> String
-//    }
-//
-//  classify rules (plan §A):
-//    * non-`file` scheme (http/https/mailto/...) -> `.openInBrowser(url)`.
-//    * `file` scheme, SAME path as source + fragment -> `.scrollToFragment(frag)`.
-//    * `file` scheme, SAME path + no fragment -> `.previewFile(url.path, nil)`.
-//    * `file` scheme, DIFFERENT path -> `.previewFile(url.path, frag?)`.
-//    * path comparison is via `standardizedFileURL.path`, so `/a/./x.md`
-//      normalizes to `/a/x.md`.
-//
+// See crates/wolf-macos/Tests/WolfKeyMapTests/README.md#previewlinkseamtestsswift
 
 import XCTest
 

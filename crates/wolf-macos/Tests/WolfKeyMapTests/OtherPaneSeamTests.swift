@@ -1,42 +1,4 @@
-//
-//  OtherPaneSeamTests.swift
-//  Pure, headless unit tests for the AppKit-free `WolfKeyMap.OtherPaneSeam`.
-//
-//  Like `PaneModeSeamTests` / `CommandSeamTests`, they import ONLY
-//  Foundation-level test machinery (no AppKit, no WKWebView, no live Neovim) and
-//  stay in the headless `WolfKeyMap` module. The seam answers the ONE pure
-//  front-end question behind "Preview in Another Pane" / "Edit in Another Pane":
-//  given the active pane and a preferred side, which OTHER pane should receive
-//  the bind — an existing pane, or a fresh split? The split+bind mechanics
-//  themselves are core + Lua, covered by the wolf-ffi real-nvim `other_pane`
-//  tests.
-//
-//  ## CONTRACT UNDER TEST (plan D1)
-//
-//    enum Side { case left, right }
-//    enum Target: Equatable { case split; case existing(PaneId) }
-//    static func target(
-//        active: PaneId, prefer: Side, tree: PaneTree,
-//        width: Double, height: Double
-//    ) -> Target?
-//
-//  Rules, in order:
-//    1. `active` is not a leaf of `tree` (unknown pane / the drawer) -> nil.
-//    2. The tree is a single leaf -> `.split` (no other pane exists).
-//    3. `tree.neighbor(active, dir, width:height:)` resolves for the preferred
-//       side (`.right` -> `FocusDir.right`, `.left` -> `FocusDir.left`) ->
-//       `.existing(thatPane)`.
-//    4. Deterministic DFS-adjacent fallback WITH WRAP over `tree.leaves()`:
-//       `.right` -> the next leaf after `active` (wrapping to the first);
-//       `.left` -> the previous leaf (wrapping to the last).
-//  The choice is purely geometric — no buffer-content preference.
-//
-//  NOTE to coder: this references the `OtherPaneSeam` the coder adds in
-//  `Sources/WolfKeyMap/OtherPaneSeam.swift` (Foundation only, no AppKit). The
-//  cases below are written with dot-shorthand (`.split`, `.existing(...)`,
-//  `prefer: .right`), so they compile whether `Side` / `Target` are nested in
-//  `OtherPaneSeam` or top-level, as long as the case names match.
-//
+// See crates/wolf-macos/Tests/WolfKeyMapTests/README.md#otherpaneseamtestsswift
 
 import XCTest
 

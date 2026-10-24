@@ -34,11 +34,8 @@ _SHA256 = "794911361108eb509ab00ec64ed03c229418be32f45ad7a385b6d2d6b057f3c5"
 
 _ARCHIVE_ROOT = "orlando-" + _COMMIT
 
-# BUILD overlay placed at the root of the extracted tarball. `{archive_root}` is
-# the tarball's top directory (`orlando-<commit>`); `copy_to_directory` remaps
-# that prefix to `orlando/` so the output TreeArtifact contains
-# `orlando/plugin/orlando.lua`, `orlando/lua/orlando/init.lua`, `orlando/doc/**`,
-# and `orlando/LICENSE*`.
+# BUILD overlay for the extracted tarball; `copy_to_directory` remaps `{archive_root}`, the
+# tarball's top directory, to `orlando/`.
 _BUILD_FILE_TEMPLATE = """\
 load("@aspect_bazel_lib//lib:copy_to_directory.bzl", "copy_to_directory")
 

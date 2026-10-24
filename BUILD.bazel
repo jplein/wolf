@@ -1,32 +1,46 @@
+load("//tools/lint:defs.bzl", "COMMENT_LINT_PATTERNS", "comment_srcs")
+
 exports_files([
     "Cargo.toml",
     "Cargo.lock",
 ])
 
-# Docs owned by the root package, for `//tools/lint:markdown`. wolf-gnome, tools/
-# and resources/ have no BUILD.bazel of their own, so their Markdown belongs to
-# this package. Sibling `markdown_srcs` filegroups live in each real package
-# because Bazel forbids cross-package globbing.
-#
-# The workspace docs are listed one by one rather than globbed, because most
-# root-level Markdown is deliberately OUT of scope: CLAUDE.md quotes the banned
-# changelog words as rules (it would flag itself), and the plan and decision
-# reports are historical artifacts that legitimately describe past states.
+# Root files plus the dirs with no package of their own; globs stop at package boundaries.
+# CLAUDE.md quotes the changelog words it bans, so it is out of the Markdown check's scope.
 filegroup(
     name = "markdown_srcs",
-    srcs = [
-        "architecture.md",
-        "build.md",
-        "command-lifecycle.md",
-    ] + glob(
+    srcs = glob(
         [
-            "README.md",
-            "crates/wolf-gnome/**/README.md",
-            "crates/wolf-gnome/DECISIONS.md",
-            "resources/README.md",
-            "tools/README.md",
+            "*.md",
+            "notes/**/*.md",
+            "specs/**/*.md",
+            "crates/wolf-gnome/**/*.md",
+            "tools/*.md",
+            "tools/wolf-pointer-inject/**/*.md",
+            "resources/*.md",
         ],
+        exclude = ["CLAUDE.md"],
         allow_empty = True,
     ),
     visibility = ["//tools/lint:__pkg__"],
 )
+
+# Top-level names only: a root `**/` pattern would descend into target/, result/ and other
+# directories that are no package's sources.
+comment_srcs(include = [
+    "BUILD.bazel",
+    "MODULE.bazel",
+    "*.toml",
+    "*.nix",
+    ".bazelrc",
+    ".bazelignore",
+    ".gitignore",
+    ".prettierignore",
+    ".envrc",
+] + [
+    "crates/wolf-gnome/" + p
+    for p in COMMENT_LINT_PATTERNS
+] + [
+    "tools/" + p
+    for p in COMMENT_LINT_PATTERNS
+])

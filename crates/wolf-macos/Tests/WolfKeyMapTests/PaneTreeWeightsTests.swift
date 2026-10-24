@@ -1,44 +1,4 @@
-//
-//  PaneTreeWeightsTests.swift
-//  Pure, headless unit tests for the NEW weight-mutation + divider surface the
-//  coder adds to `WolfKeyMap.PaneTree` (feature plan §3.1).
-//
-//  These are Foundation-only (no AppKit / CoreGraphics, no NSView, no live
-//  Neovim), like `PaneTreeTests.swift`. They pin the macOS-only WEIGHT POLICY
-//  divergence from the gnome 1:1 port (TOPOLOGY is unchanged; only the per-child
-//  weight bookkeeping + the divider API are new):
-//
-//    * `setPairFraction(path:boundary:leftFraction:)` transfers weight between
-//      ONLY the two adjacent children (all other children — and the global
-//      sum-to-1 invariant — are untouched), clamps to (eps, 1-eps), and is a
-//      no-op on an invalid path/boundary.
-//    * A same-orientation sibling split now RE-EQUALIZES the whole row/column
-//      (feature plan ROUND 2: `:vsplit`/`:split` redistribute to equal widths,
-//      reverting round 1's carve-from-target). A fresh two-child split is 0.5/0.5.
-//      The ONLY remaining way to CREATE unequal weights is a drag (setPairFraction).
-//    * A remove RE-NORMALIZES survivors PROPORTIONALLY (relative sizes preserved),
-//      NOT back to equal.
-//    * `dividers(width:height:)` yields one `Divider` per interior boundary with
-//      the correct orientation / path / boundary / lineRect / pairStart / pairSpan
-//      / fraction.
-//
-//  CONTRACT / SIGNATURE ASSUMPTIONS (test-writer report; coder implements to match):
-//    * `func setPairFraction(path: [Int], boundary: Int, leftFraction: Double)`.
-//    * `func dividers(width: Double, height: Double) -> [PaneTree.Divider]`.
-//    * `struct PaneTree.Divider: Equatable` with public stored properties
-//      `orientation: Orientation`, `path: [Int]`, `boundary: Int`, `lineRect: Rect`,
-//      `pairStart: Double`, `pairSpan: Double`, `before: PaneId`, `after: PaneId`,
-//      `fraction: Double`, and a public memberwise-style init.
-//    * A `.vertical` divider's `lineRect` is a ZERO-WIDTH vertical line at the
-//      boundary x spanning the split's full y-range (`w == 0`, `h == splitHeight`);
-//      a `.horizontal` divider's `lineRect` is a ZERO-HEIGHT horizontal line at the
-//      boundary y spanning the split's full x-range (`h == 0`, `w == splitWidth`).
-//    * `pairStart` / `pairSpan` describe the pixel extent of ONLY the two adjacent
-//      children the divider governs (the same pair `setPairFraction` reweights);
-//      `fraction == weights[boundary] / (weights[boundary] + weights[boundary+1])`.
-//    * For a boundary between two LEAF children, `before` / `after` are those two
-//      leaf ids (asserted only in the flat-leaf-row case, where it is unambiguous).
-//
+// See crates/wolf-macos/Tests/WolfKeyMapTests/README.md#panetreeweightstestsswift
 
 import XCTest
 
@@ -130,10 +90,8 @@ final class PaneTreeWeightsTests: XCTestCase {
   // MARK: - setPairFraction: n-ary interior boundary touches ONLY the pair
 
   func testSetPairFractionNaryTouchesOnlyThePair() {
-    // Flat row [P1, P3, P2], each 1/3 after the same-orientation vsplits (ROUND 2:
-    // the second vsplit RE-EQUALIZES to equal thirds). Resize the FIRST boundary
-    // (between P1 and P3) to leftFraction 0.75; P2 (the third child) must be
-    // completely untouched.
+    // Flat row [P1, P3, P2], equal thirds after the vsplits. Resizing the first boundary (P1/P3)
+    // to 0.75 must leave P2 untouched.
     let tree = PaneTree(root: p1)
     tree.split(p1, p2, .vertical)
     tree.split(p1, p3, .vertical)  // re-equalize -> [P1, P3, P2] each 1/3
@@ -184,10 +142,8 @@ final class PaneTreeWeightsTests: XCTestCase {
   // MARK: - setPairFraction: a perpendicular nested split is untouched by a parent resize
 
   func testSetPairFractionLeavesPerpendicularNestingUntouched() {
-    // 2x2 grid: root vertical [colL(P1/P3), colR(P2/P4)]; each column is a fresh
-    // 0.5/0.5 horizontal split. Resizing the ROOT (vertical) divider must change
-    // only the column WIDTHS; the nested horizontal 0.5/0.5 splits (pane HEIGHTS)
-    // stay put.
+    // 2x2 grid: root vertical [P1/P3, P2/P4], each column a fresh 0.5/0.5 split. Resizing the root
+    // divider changes only the column widths; the pane heights stay put.
     let tree = PaneTree(root: p1)
     tree.split(p1, p2, .vertical)
     tree.split(p1, p3, .horizontal)
@@ -229,11 +185,8 @@ final class PaneTreeWeightsTests: XCTestCase {
   // MARK: - split RE-EQUALIZATION: a same-orientation split redistributes the row
 
   func testSameOrientationSplitReEqualizesRow() {
-    // Resize [P1, P2] to 0.8/0.2, THEN same-orientation-split the resized P1.
-    // ROUND 2 policy: `:vsplit` RE-EQUALIZES the whole row, so the prior 0.8/0.2
-    // drag is DISCARDED and all three columns become equal thirds. (This reverts
-    // round 1's carve-from-target, matching the user's "splits redistribute to
-    // equal widths" follow-up.)
+    // Resize [P1, P2] to 0.8/0.2, then vsplit P1: the split re-equalizes the whole row, discarding
+    // the drag, so all three columns become equal thirds.
     let tree = PaneTree(root: p1)
     tree.split(p1, p2, .vertical)
     tree.setPairFraction(path: [], boundary: 0, leftFraction: 0.8)
@@ -250,9 +203,8 @@ final class PaneTreeWeightsTests: XCTestCase {
   }
 
   func testSplittingSiblingReEqualizesRow() {
-    // Resize [P1, P2] to 0.8/0.2, then split the OTHER (non-resized) child P2.
-    // ROUND 2 policy: the same-orientation split RE-EQUALIZES the whole row, so the
-    // resized P1 does NOT keep 0.8 — every column becomes an equal third.
+    // Resize [P1, P2] to 0.8/0.2, then split the other child P2: the row still re-equalizes, so
+    // P1 does not keep 0.8.
     let tree = PaneTree(root: p1)
     tree.split(p1, p2, .vertical)
     tree.setPairFraction(path: [], boundary: 0, leftFraction: 0.8)
@@ -270,12 +222,8 @@ final class PaneTreeWeightsTests: XCTestCase {
   // MARK: - remove weight PRESERVATION: survivors keep RELATIVE sizes
 
   func testRemoveRenormalizesProportionallyNotEqually() {
-    // REMOVE stays PROPORTIONAL even though SPLIT re-equalizes (ROUND 2). Since a
-    // same-orientation split re-equalizes, unequal weights come ONLY from a DRAG:
-    // build equal thirds [P1, P4, P2], then drag the FIRST boundary (P1/P4) to
-    // leftFraction 0.75 of the (1/3 + 1/3) = 2/3 pair -> P1=0.5, P4=1/6; P2 stays
-    // 1/3. Remove the middle P4; survivors [P1, P2] carry [0.5, 1/3], which
-    // renormalize PROPORTIONALLY to [0.6, 0.4] — NOT back to 0.5/0.5.
+    // Remove stays proportional: drag thirds [P1, P4, P2] so P1=0.5 and P4=1/6, then remove P4;
+    // survivors [0.5, 1/3] renormalize to [0.6, 0.4], not 0.5/0.5.
     let tree = PaneTree(root: p1)
     tree.split(p1, p2, .vertical)
     tree.split(p1, p4, .vertical)  // re-equalize -> [P1, P4, P2] each 1/3
@@ -296,10 +244,8 @@ final class PaneTreeWeightsTests: XCTestCase {
   }
 
   func testCollapseKeepsParentWeightNotEqual() {
-    // Resize [P1, P2] to 0.8/0.2, perpendicular-split P1 into a nested column
-    // [P1, P3] (fresh 0.5/0.5) inside the left 0.8. Remove P3: the 1-child column
-    // COLLAPSES back to P1, which keeps the parent's 0.8; P2 keeps 0.2. Proportional
-    // renormalize of an already-summing-to-1 pair is a no-op -> 0.8/0.2 survives.
+    // Resize to 0.8/0.2, nest [P1, P3] in P1, then remove P3: the column collapses back to P1,
+    // which keeps 0.8, so the already-normalized 0.8/0.2 survives.
     let tree = PaneTree(root: p1)
     tree.split(p1, p2, .vertical)
     tree.setPairFraction(path: [], boundary: 0, leftFraction: 0.8)

@@ -1,6 +1,6 @@
 # wolf-core/tests
 
-Integration tests for [`wolf-core`](../README.md). Most of them drive a real, pinned Neovim rather than a mock, because what is under test is a live RPC round-trip — see the testing note in [DECISIONS.md](../DECISIONS.md).
+Integration tests for [`wolf-core`](../README.md). Most of them drive a real, pinned Neovim rather than a mock, because what is under test is a live RPC round-trip — see the testing note in [wolf-core-decisions.md](../../../notes/wolf-core-decisions.md).
 
 ```sh
 cargo test -p wolf-core                     # all of them, on the Linux and Nix path

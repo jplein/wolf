@@ -205,9 +205,8 @@ fn file_search_root_is_out_of_band_and_prompt_when_wedged() {
     let _ = common::require_nvim_bin();
     let (_dir, cwd) = temp_cwd();
 
-    // Start in the tempdir and drive `:cd <tempdir>` so the `wolf_cwd` notify
-    // populates the tracked cwd out-of-band. This is a load-bearing precondition:
-    // the picker root is the tracked `live_cwd()`, so we must confirm it landed.
+    // Load-bearing precondition: the picker root is the tracked `live_cwd()`, so drive `:cd` and
+    // confirm the out-of-band `wolf_cwd` notify landed.
     let (core, waiter) = start_core_in_with_waiter(&cwd);
     drive_cd(&core, &cwd);
     poll_until(
@@ -234,9 +233,8 @@ fn file_search_root_is_out_of_band_and_prompt_when_wedged() {
          (out-of-band live_cwd() read, NOT a ~5s getcwd RPC block); took {elapsed:?}"
     );
 
-    // The finite wedge sleep elapses on its own, so the traversal (which runs off
-    // the main thread) reaches `complete`; the root is the tracked cwd, so the
-    // sentinel is listed — proving the root is NOT a stale/fallback dir.
+    // The root is the tracked cwd, so the sentinel is listed, proving the root is not a stale or
+    // fallback dir.
     let entries = poll_until_complete(&search, &wakes);
     let set = displays(&entries);
     assert!(
@@ -246,9 +244,8 @@ fn file_search_root_is_out_of_band_and_prompt_when_wedged() {
 
     eprintln!("search_root_out_of_band: start_file_search={elapsed:?} (bound={PROMPT_BOUND:?}, wedge={WEDGE_SLEEP_MS}ms)");
 
-    // Let the finite wedge sleep fully elapse so nvim recovers before teardown; a
-    // wedged shutdown could otherwise block. poll_until_complete has likely already
-    // outlasted it, so this over-waits by design (robustness over speed).
+    // Let the whole finite wedge sleep elapse so nvim recovers; a still-wedged shutdown could block.
+    // This over-waits on purpose, since poll_until_complete has likely outlasted it.
     sleep(Duration::from_millis(WEDGE_SLEEP_MS));
     drop(search);
     core.shutdown().expect("shutdown should be Ok");

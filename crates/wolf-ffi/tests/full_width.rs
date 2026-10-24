@@ -320,13 +320,8 @@ fn full_width_toggles_active_buffer_and_routes_the_command() {
         "a fresh buffer must default to the ~90-char content width (is_full_width_active == false)"
     );
 
-    // --- 3. :WolfFullWidth<CR> routes to the command channel -----------------
-    // Proves `:WolfFullWidth` is auto-registered as a COMMAND_SPECS row and drains
-    // the appended discriminant 22. NOTHING acts on this drain (the front-end
-    // dispatcher that would call `toggle_full_width()` back is absent), so it does
-    // NOT itself flip the buffer's flag — mirrors `terminal.rs` driving the toggle
-    // through the handle method rather than the Ex-command. Drain any startup noise
-    // first so we observe THIS command.
+    // --- 3. :WolfFullWidth<CR> only enqueues a command: nothing acts on the drain, so the flag
+    // stays put. Drain startup noise first.
     let _ = handle.drain_commands();
     send_ex_command(&handle, ":WolfFullWidth");
     poll_for_command_kind(&handle, CMD_KIND_FULL_WIDTH, ":WolfFullWidth");
@@ -396,15 +391,12 @@ fn full_width_flag_flows_to_the_preview_source() {
     wait_for_attach(&handle);
     send_ex_command(&handle, ":e alpha.md");
     wait_for_markdown_active(&handle, true, "after :e alpha.md");
-    // Real switch barrier: the startup buffer is now a markdown `Untitled.md`, so
-    // `wait_for_markdown_active(true)` returns IMMEDIATELY (markdown->markdown) and
-    // cannot witness the `:e alpha.md`. Wait until alpha.md is genuinely the ACTIVE
-    // buffer before the SYNC `open_preview` races ahead of the buffered `:e`.
+    // Barrier on alpha.md being current: the startup `Untitled.md` is already markdown, so the
+    // markdown gate returns at once and the sync `open_preview` would race the buffered `:e`.
     wait_for_current_file(&handle, "alpha.md");
 
-    // The in-place open_preview() binds the scratch into the ACTIVE pane, so a
-    // typed `:vsplit` first keeps a second pane editing the alpha.md source for
-    // the toggle below.
+    // open_preview() binds the scratch into the active pane, so `:vsplit` first keeps a second pane
+    // editing alpha.md for the toggle below.
     send_ex_command(&handle, ":vsplit");
     wait_for_window_count(&handle, TWO_PANES, "after the typed :vsplit");
     let preview_bufnr = handle.open_preview();
@@ -428,13 +420,8 @@ fn full_width_flag_flows_to_the_preview_source() {
          source_full_width() must start false"
     );
 
-    // --- 3. Toggle the SOURCE buffer full width; the preview row's flag follows
-    // Focus the markdown SOURCE pane (the in-place bind left the preview pane
-    // active) so the toggle lands on alpha.md, then flip it. The Lua helper
-    // re-emits wolf_preview, so the preview row's source_full_width() must flip
-    // to true. Deterministic barrier first: wait for the markdown gate to go
-    // FALSE (the active pane holds the non-markdown scratch), or
-    // `focus_markdown_source` could read a stale true and skip the cycle.
+    // --- 3. Toggle the source full width; the re-emitted `wolf_preview` row's flag follows.
+    // Wait for the gate to go false first, or `focus_markdown_source` reads a stale true.
     wait_for_markdown_active(
         &handle,
         false,

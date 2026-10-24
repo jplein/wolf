@@ -1,35 +1,4 @@
-//
-//  GlyphStyleTests.swift
-//  Pure, headless unit tests for the AppKit-/CoreText-free `WolfKeyMap.GlyphStyle`
-//  resolution seam.
-//
-//  These exercise `GlyphStyleResolver.resolve(flags:fg:special:)` — the pure seam
-//  the coder extracts into `Sources/WolfKeyMap/GlyphStyle.swift` (plan §B1) that
-//  maps a cell's packed style-flag bits (from `FfiCell.flags()`) plus its fg /
-//  special colors into a `GlyphStyle` value the renderer paints from. Like the
-//  sibling `CellMetricsMathTests`, they import ONLY Foundation-level test machinery
-//  (no AppKit / CoreText, no live font) and stay in the headless `WolfKeyMap`
-//  module; on-screen font-variant selection + decoration stroking are manual-smoke
-//  only.
-//
-//  ## CONTRACT UNDER TEST (the API the coder must honor, plan §B1)
-//
-//    public enum GlyphFace: Equatable { case regular, bold, italic, boldItalic }
-//    public struct GlyphStyle: Equatable {
-//        face; underline: Bool; underlineColor: FfiColor;
-//        strikethrough: Bool; strikethroughColor: FfiColor
-//    }
-//    public enum GlyphStyleResolver {
-//        public static func resolve(flags: UInt8, fg: FfiColor, special: FfiColor)
-//            -> GlyphStyle
-//    }
-//
-//  Resolution rules asserted below:
-//   - face = boldItalic if BOTH bold+italic bits, else bold, else italic, else regular.
-//   - underline = underline-bit OR undercurl-bit (undercurl → straight underline).
-//   - underlineColor = special if `special.set` else fg.
-//   - strikethrough = strikethrough-bit; strikethroughColor = fg.
-//
+// See crates/wolf-macos/Tests/WolfKeyMapTests/README.md#glyphstyletestsswift
 
 import XCTest
 

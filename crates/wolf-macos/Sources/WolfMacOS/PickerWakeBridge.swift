@@ -1,9 +1,4 @@
-//
-//  PickerWakeBridge.swift
-//  Marshals wolf-core's file-search wake (fired on its tokio worker thread,
-//  carrying the firing core's per-window token) onto the AppKit main thread and
-//  refreshes the RIGHT window's picker — the picker analog of `WakeBridge`.
-//
+// Marshals the file-search wake onto the main thread and refreshes that window's picker.
 
 import AppKit
 import WolfFFI

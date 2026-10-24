@@ -55,10 +55,8 @@ fn main() {
     }
     let _ = std::fs::remove_dir(&nested);
 
-    // The generated Swift references the bare `__swift_bridge__$…` C symbols from
-    // the committed headers; prepend an `import` of the C interop module (named in
-    // `generated/module.modulemap`) so those symbols are in scope when the Swift
-    // sources compile as their own module.
+    // Import the C interop module so the bare `__swift_bridge__$…` symbols resolve when the
+    // generated Swift compiles as its own module.
     for name in [
         "SwiftBridgeCore.swift",
         format!("{CRATE_NAME}.swift").as_str(),

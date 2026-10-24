@@ -1,38 +1,13 @@
-# Bazel build for the macOS (AppKit) front-end, `wolf-macos`.
-#
-# Targets:
-#   - wolf_key_map      : the PURE key-translation seam (Foundation + the generated
-#                         FFI glue only, NO AppKit), unit-tested headlessly.
-#   - wolf_macos_lib    : the AppKit application sources (AppKit/CoreText/
-#                         CoreGraphics/Foundation), depending on wolf_key_map and
-#                         the C FFI module.
-#   - wolf_icon_*       : copy_file targets assembling the Tahoe `Wolf.icon/`
-#                         app-icon bundle in the output tree from the committed
-#                         `Wolf.icon.json` + the 1024x1024 masters in
-#                         resources/icons/ (no committed PNG duplicates).
-#   - Wolf              : the macos_application bundle (minimum_os_version 26.0),
-#                         incl. the build-time-assembled `Wolf.icon/` bundle.
-#   - WolfRelease       : the SAME bundle as Wolf, but with the whole graph
-#                         (Swift AND Rust) built at `-c opt` via an outgoing-edge
-#                         transition. Tagged `manual`. Build this for real use.
-#                         Runnable with `bazel run`.
-#   - InstallWolf       : `bazel run` installs WolfRelease to
-#                         ~/Applications/Wolf.app, replacing any existing one.
-#                         Tagged `manual` (it pulls in the opt graph).
-#   - WolfKeyMapTests   : the swift_test over the pure seam.
-#   - xcodeproj         : an UNCOMMITTED Xcode project for debugging/LLDB only.
+# Bazel build for the macOS (AppKit) front-end; targets are in crates/wolf-macos/README.md.
 load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
 load("@build_bazel_rules_apple//apple:macos.bzl", "macos_application")
 load("@build_bazel_rules_swift//swift:swift.bzl", "swift_library", "swift_test")
 load("@rules_xcodeproj//xcodeproj:defs.bzl", "xcodeproj", "top_level_target")
 load("//crates/wolf-macos:release.bzl", "opt_bundle")
+load("//tools/lint:defs.bzl", "comment_srcs")
 
-# All hand-written Swift sources for this package, enumerated HERE because Bazel
-# forbids cross-package globbing (the //tools/lint swift-format check/fix cannot
-# glob into this package). This deliberately covers only WolfKeyMap / WolfMacOS
-# Sources and WolfKeyMapTests — it EXCLUDES the machine-generated swift-bridge
-# bindings under //crates/wolf-ffi:generated (crates/wolf-ffi/generated/*.swift),
-# which are not ours to format.
+# Enumerated here because Bazel forbids cross-package globbing, for //tools/lint's swift-format.
+# Excludes the generated swift-bridge bindings in //crates/wolf-ffi:generated, not ours to format.
 filegroup(
     name = "swift_format_srcs",
     srcs = glob([
@@ -43,25 +18,20 @@ filegroup(
     visibility = ["//tools/lint:__pkg__"],
 )
 
-# This package's docs, for `//tools/lint:markdown`. Same cross-package globbing
-# constraint as `swift_format_srcs` above.
+# This package's sources and docs for //tools/lint, which cannot glob across packages.
+comment_srcs(exclude = ["*.xcodeproj/**"])
+
 filegroup(
     name = "markdown_srcs",
     srcs = glob(
-        [
-            "**/README.md",
-            "DECISIONS.md",
-        ],
+        ["**/*.md"],
         allow_empty = True,
     ),
     visibility = ["//tools/lint:__pkg__"],
 )
 
-# The pure key-translation seam. Compiles `KeyMap.swift` together with the
-# swift-bridge-generated Swift glue (which provides `FfiKeyEvent` and the
-# `WolfCoreHandle` / `FfiFrame` wrappers) into one Foundation-only module — NO
-# AppKit — so it is unit-testable without a window. Depends on the C FFI module
-# (`WolfFFI`) for the underlying symbols.
+# The pure seam: these sources plus the generated swift-bridge glue, as one Foundation-only
+# module with no AppKit, so it is unit-testable without a window.
 swift_library(
     name = "wolf_key_map",
     srcs = [
@@ -127,14 +97,8 @@ swift_library(
     ],
 )
 
-# The Icon Composer bundle `Wolf.icon/` is ASSEMBLED AT BUILD TIME in the
-# output tree: the committed, hand-authored `Wolf.icon.json` becomes
-# `Wolf.icon/icon.json`, and the two full-bleed 1024x1024 light/dark masters
-# are copied straight from `resources/icons/` (their single source of truth —
-# no PNG duplicates are committed here). All THREE files must be generated
-# into the same output-root `Wolf.icon/` dir: rules_apple's actool validation
-# requires every `app_icons` file to resolve to exactly ONE `*.icon`
-# directory, and source-tree + bazel-out paths would count as two.
+# `Wolf.icon/` is assembled in the output tree, all three files in one dir: actool needs every
+# `app_icons` file under exactly one `*.icon` dir, and source and bazel-out paths count as two.
 copy_file(
     name = "wolf_icon_json",
     src = "Wolf.icon.json",
@@ -160,15 +124,8 @@ copy_file(
 
 macos_application(
     name = "Wolf",
-    # The build-time-assembled Icon Composer bundle `Wolf.icon/` (icon.json +
-    # full-bleed 1024x1024 light/dark PNGs; see the copy_file targets above —
-    # sources are the committed `Wolf.icon.json` and the masters in
-    # `resources/icons/`). actool (Xcode 26) compiles it into
-    # Contents/Resources/Assets.car and merges CFBundleIconName = "Wolf" into
-    # the Info.plist; macOS Tahoe swaps the light/dark artwork per the
-    # icon-appearance setting. With minimum_os_version 26.0 the `.icon` bundle
-    # is the ONLY route rules_apple accepts (legacy .appiconset is a hard
-    # build failure).
+    # actool compiles `Wolf.icon/` into Assets.car; at minimum_os_version 26.0 an `.icon` bundle
+    # is the only route rules_apple accepts, and a legacy .appiconset fails the build.
     app_icons = [
         ":wolf_icon_json",
         ":wolf_icon_light",
@@ -178,27 +135,8 @@ macos_application(
     bundle_name = "Wolf",
     infoplists = ["Info.plist"],
     minimum_os_version = "26.0",
-    # The pinned Neovim 0.12.3 tree (structure-preserving `nvim/` TreeArtifact)
-    # lands at `Contents/Resources/nvim/`; the vendored orlando plugin tree
-    # (structure-preserving `orlando/` TreeArtifact) lands at
-    # `Contents/Resources/orlando/`; the vendored lighthouse colorscheme tree
-    # (structure-preserving `lighthouse/` TreeArtifact) lands at
-    # `Contents/Resources/lighthouse/` (both loaded/activated by the captive
-    # init.lua, not Swift); the vendored nvim-treesitter + textobjects plugin
-    # trees land at `Contents/Resources/nvim-treesitter/` and
-    # `Contents/Resources/nvim-treesitter-textobjects/`, and the curated
-    # host-compiled treesitter parsers (structure-preserving `parsers/`
-    # TreeArtifact) land at `Contents/Resources/parsers/parser/<lang>.so` — these
-    # three are VENDORED/SHIPPED and treesitter highlighting + fenced-code injection
-    # are ENABLED on macOS by the captive init.lua; the vendored JetBrains Mono
-    # fonts (structure-preserving `fonts/` TreeArtifact: four TTF faces + OFL.txt)
-    # AND the vendored iA Writer Mono S fonts (structure-preserving `fonts/`
-    # TreeArtifact: four TTF faces + LICENSE.md) BOTH merge into the SAME
-    # `Contents/Resources/fonts/` dir (disjoint file sets), where
-    # `FontRegistration.swift` glob-registers every `*.ttf` with CoreText so both
-    # "JetBrains Mono" and the DEFAULT "iA Writer Mono S" resolve as grid fonts; the
-    # captive `init.lua` lands flat at `Contents/Resources/init.lua` (resolved by
-    # `Bundle.main.path`).
+    # Each tree lands under Contents/Resources/; both font trees merge into one fonts/ dir.
+    # See crates/wolf-macos/README.md#bundle-contents
     resources = [
         "//bazel/ia-writer-mono:ia_writer_mono_tree",
         "//bazel/jetbrains-mono:jetbrains_mono_tree",
@@ -215,29 +153,8 @@ macos_application(
     deps = [":wolf_macos_lib"],
 )
 
-# The OPTIMIZED build of the exact same bundle: `opt_bundle` applies a Starlark
-# outgoing-edge transition setting compilation_mode = opt on the `:Wolf` edge, so
-# the entire subgraph (both Swift modules, all Rust crates, the treesitter
-# parsers) is rebuilt at `-c opt` without `-c opt` on the command line. Build
-# THIS for real use, for installing, and for any performance measurement.
-#
-# `:Wolf` itself is UNCHANGED: it remains the fast-iteration development build
-# (fastbuild, Swift `-Onone`, Rust unoptimized) and is what every test target and
-# the xcodeproj build against.
-#
-# `manual` is deliberate, not boilerplate: without it every `bazel build //...`
-# would silently rebuild the ENTIRE Rust + Swift + treesitter graph a second time
-# at `-c opt`. `//tools/lint` targets use `manual` for the same reason. Explicit
-# `bazel build //crates/wolf-macos:WolfRelease` still works normally.
-#
-# The target is also executable: `bazel run //crates/wolf-macos:WolfRelease`
-# launches the optimized app (`manual` affects only wildcard expansion, never an
-# explicit `run` or `build` on the label).
-#
-# The resulting `.app` path MUST come from
-# `bazel cquery --output=files //crates/wolf-macos:WolfRelease` (see
-# release.bzl and build.md) and NEVER from `bazel-bin/...`, which points at the
-# fastbuild top-level config and will be missing or a stale `-Onone` bundle.
+# `:Wolf` rebuilt at `-c opt` by transition; `manual` stops `//...` building the graph twice.
+# See notes/wolf-macos-decisions.md#why-wolfrelease-is-a-custom-rule
 opt_bundle(
     name = "WolfRelease",
     bundle = ":Wolf",
@@ -245,28 +162,8 @@ opt_bundle(
     visibility = ["//visibility:public"],
 )
 
-# Installs the optimized bundle to `~/Applications/Wolf.app`, replacing any
-# existing one: `bazel run //crates/wolf-macos:InstallWolf`.
-#
-# `data` is `:WolfRelease`, so the installed app is always the `-c opt` build and
-# Bazel builds it as part of the run — there is no separate build step to forget
-# and no way to install a stale `-Onone` bundle by mistake.
-#
-# `manual` is load-bearing for the same reason it is on `:WolfRelease`: this
-# target depends on the transitioned bundle, so without it a plain
-# `bazel build //...` would rebuild the entire Rust + Swift + treesitter graph a
-# second time at `-c opt`. An explicit `run` on the label is unaffected.
-#
-# The script takes the archive path as an argument rather than searching
-# runfiles: `$(rootpath)` resolves against the runfiles root, which is exactly
-# the CWD `bazel run` sets.
-#
-# The path must come through this filegroup, NOT from `$(rootpath :WolfRelease)`
-# directly. `:WolfRelease` is an executable rule, and location expansion on an
-# executable target yields its EXECUTABLE — the runner symlink — instead of its
-# `files`. The filegroup is not executable, so expansion falls back to `files`,
-# which is the opt `Wolf.zip`. The failure is not a build error: the script is
-# simply handed the runner and reports `ditto: Couldn't read PKZip signature`.
+# The archive must reach :InstallWolf through this filegroup, not `$(rootpath :WolfRelease)`.
+# See notes/wolf-macos-decisions.md#why-installwolf-takes-the-archive-through-a-filegroup
 filegroup(
     name = "wolf_release_archive",
     srcs = [":WolfRelease"],
@@ -281,17 +178,7 @@ sh_binary(
     tags = ["manual"],
 )
 
-# Inspects the built `.app`: asserts the pinned nvim tree + captive init.lua
-# landed at the expected resource paths with the exec bit preserved, plus the
-# vendored orlando plugin resource files (checks e/f:
-# Contents/Resources/orlando/plugin/orlando.lua and .../lua/orlando/init.lua),
-# the vendored lighthouse colorscheme file (check g:
-# Contents/Resources/lighthouse/colors/lighthouse.lua), the vendored
-# nvim-treesitter markdown query (check h) + textobjects Lua dir (check i), and
-# the curated host-compiled treesitter parsers (check j:
-# Contents/Resources/parsers/parser/<lang>.so, HARD for go/rust/typescript/tsx/
-# json, SOFT for swift/kotlin/java). These three are VENDORED/SHIPPED and
-# treesitter highlighting + fenced-code injection are ENABLED on macOS by init.lua.
+# Asserts the built `.app`'s bundled resource layout, exec bits included.
 sh_test(
     name = "bundle_layout_test",
     srcs = ["bundle_layout_test.sh"],

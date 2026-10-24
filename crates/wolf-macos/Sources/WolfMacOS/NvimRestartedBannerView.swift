@@ -1,21 +1,4 @@
-//
-//  NvimRestartedBannerView.swift
-//  A small, transient, auto-dismissing "Neovim was restarted" banner shown at the
-//  top-center of the editor after a successful crash/stall restart.
-//
-//  DISTINCTION (do not conflate the two overlays):
-//    * `NvimStatusOverlayView` is a FULL-BLEED, opaque overlay covering a BROKEN /
-//      unusable editor (Neovim crashed `.dead` or stalled `.notResponding`). It is
-//      driven by liveness (`Project.onWake` shows/hides it from `handle.liveness()`).
-//    * `NvimRestartedBannerView` (this) is a SMALL, non-modal, transient banner
-//      shown OVER a WORKING editor to CONFIRM a restart just happened. It is
-//      INDEPENDENT of liveness: it is flashed from `Project.restartNeovim`'s success
-//      path and auto-dismisses on its own timer, so `onWake`'s Alive branch (which
-//      hides the liveness overlay) never clears it.
-//
-//  Pure AppKit shell (manual smoke only), modeled on `NvimStatusOverlayView` /
-//  `EmptyStateView`.
-//
+// The transient "Neovim was restarted" banner.
 
 import AppKit
 

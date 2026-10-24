@@ -22,7 +22,7 @@
 //! `gtk::Paned`, which widens the window-level `gtk::Overlay` from the pane area to
 //! the whole window and moves that overlay's measured left edge, which the crash
 //! smoke's button click and the picker/preview overlap band are both derived from.
-//! `DECISIONS.md` carries the follow-up for the unit that gives tabs independent
+//! `notes/wolf-gnome-decisions.md` carries the follow-up for the unit that gives tabs independent
 //! working directories.
 //!
 //! ## The bar autohides, and that is load-bearing
@@ -82,7 +82,7 @@
 //! frozen forever over a perfectly healthy Neovim. [`TabsHandle::reset_after_restart`]
 //! collapses to the selected tab, clears its handle and DISCARDS any pending restore,
 //! and the next wake's `Adopt` row re-binds it from `Snapshot::current_tabpage`. That
-//! is a SNAPSHOT read: the restart path issues no blocking RPC, which `DECISIONS.md`
+//! is a SNAPSHOT read: the restart path issues no blocking RPC, which `notes/wolf-gnome-decisions.md`
 //! requires and which is why the tab handles are not re-created here — and why the
 //! queue is dropped rather than replayed, since replaying it is `2T-1` blocking calls
 //! on exactly the path that forbids them.
@@ -389,21 +389,14 @@ impl TabsInner {
         }
 
         let panes = pane_view::build(&self.core, &self.metrics);
-        // Realized on the first wake at which a window grid exists. NO arity guard,
-        // for `window::build`'s recorded reason: a single-leaf layout is rebuilt
-        // exactly like a multi-leaf one. This queue is TAB 0's route; a tab the
-        // restore materialization creates realizes its own layout immediately
-        // instead, and `PaneHandle::realize_layout` drops the copy queued here so
-        // the rebuild stays one blocking call.
+        // Realized at the first wake with a window grid, with no arity guard (`window::build`'s reason).
+        // Tab 0's route only: a restored tab realizes at once, and `realize_layout` drops this queued copy.
         if let Some(layout) = parts.layout.clone() {
             panes.request_layout_rebuild(layout);
         }
 
-        // The page's own overlay stack, in the order `window::build` documents for
-        // the three that moved in here: the empty state, then the message toast,
-        // then the completion popup. The four transient overlays and the crash
-        // overlay are the WINDOW overlay's children and therefore paint above every
-        // one of these, which is the same GTK stacking rule the preview relies on.
+        // Stacking per `window::build`: empty state, message toast, completion popup. The transient and
+        // crash overlays are window-overlay children, so they paint above all of these.
         let overlay = gtk::Overlay::new();
         overlay.set_child(Some(&panes.widget()));
         let empty_state = shell::build_empty_state();
@@ -485,10 +478,8 @@ impl TabsInner {
         let liveness = self.core.borrow().as_ref().map(WolfCore::liveness);
 
         match tabs_ui::restore_press(first_tabpage, liveness, pending, may_create) {
-            // `Wait` leaves the queue where it is and a later wake asks again; no
-            // timer and no polling, because this rides the wake that already
-            // exists. `Idle` is the steady state — and, after an abort, the answer
-            // that keeps the retained remainder a seed source rather than work.
+            // `Wait` keeps the queue for a later wake (no timer, no poll). `Idle` is the steady state and,
+            // after an abort, what keeps the retained remainder a seed source rather than work.
             RestorePress::Idle | RestorePress::Wait => return,
             RestorePress::Create => {}
         }
@@ -523,9 +514,8 @@ impl TabsInner {
             created += 1;
         }
         if created < layouts.len() {
-            // The un-created remainder, re-seated as a SEED SOURCE and nothing more.
-            // A statement of its own: the borrow is dropped before
-            // `set_selected_page` below re-enters this module.
+            // The un-created remainder, re-seated as a seed source only. Its own statement: the borrow
+            // drops before `set_selected_page` below re-enters this module.
             *self.pending_restore.borrow_mut() = Some(RestoreTabs {
                 launch_cwd,
                 empty,
@@ -536,9 +526,8 @@ impl TabsInner {
         }
 
         if let Some(page) = first_page {
-            // Back to tab 0. `on_selected_changed` issues the last of this loop's
-            // `set_current_tabpage` calls, all of them fire-and-forget on the
-            // ordered input channel, so the last one wins.
+            // Back to tab 0: `on_selected_changed` issues the loop's last `set_current_tabpage`, and on the
+            // ordered input channel the last one wins.
             self.view.set_selected_page(&page);
         }
     }
@@ -563,11 +552,8 @@ impl TabsInner {
         };
         let cwd = tabs_ui::new_tab_cwd(empty, launch_cwd, live.as_deref());
 
-        // BLOCKING, and it ENTERS the new tabpage: from here until the next
-        // `create_tabpage`, Neovim is current on the page this call just made,
-        // which is what `realize_layout` below depends on. Its core borrow is
-        // taken and dropped in a statement of its own — `open_tab` borrows the
-        // core again.
+        // Blocking, and it enters the new tabpage, which `realize_layout` below depends on. Its core
+        // borrow is dropped in its own statement, because `open_tab` borrows the core again.
         let Some(handle) = ({
             let core_ref = self.core.borrow();
             core_ref
@@ -579,10 +565,8 @@ impl TabsInner {
             );
             return false;
         };
-        // `create_tabpage` answers `0` on an RPC error or timeout, and Neovim reads
-        // `0` as "the current tabpage" — so a page bound to it would aim every
-        // later switch and close at whatever tab happens to be current.
-        // `switch_target` is the one place that refusal is stated.
+        // `create_tabpage` answers `0` on error or timeout, which Neovim reads as "current tabpage", so
+        // a page bound to it would aim every later switch and close at whatever tab is current.
         if tabs_ui::switch_target(handle).is_none() {
             eprintln!(
                 "wolf-gnome: restored tab not opened: create_tabpage answered no handle, so the \
@@ -591,9 +575,8 @@ impl TabsInner {
             return false;
         }
 
-        // The persisted seed, which is a real directory even where the `:tcd` was
-        // deliberately skipped: `state_seam::snapshot_cwd` answers `""` for an
-        // empty-state window regardless of it.
+        // The persisted seed is a real directory even where `:tcd` was skipped: `snapshot_cwd` answers
+        // `""` for an empty-state window regardless.
         let seed = cwd.unwrap_or_else(|| launch_cwd.to_path_buf());
         if !self.open_tab(TabParts {
             tabpage: handle,
@@ -614,9 +597,8 @@ impl TabsInner {
             return false;
         };
         if let Some(layout) = layout {
-            // NOW, while `handle` is still Neovim's current tabpage:
-            // `rebuild_layout` acts on whichever one that is, and this instant is
-            // the only moment this front-end knows for certain which.
+            // Now, while `handle` is Neovim's current tabpage: `rebuild_layout` acts on whichever is
+            // current, and only at this instant is that known for certain.
             created.panes().realize_layout(&layout);
         }
         true
@@ -668,22 +650,17 @@ impl TabsInner {
                         }
                     }
                 }
-                // Synchronously, without waiting for Neovim's `TabClosed`: nothing
-                // in this unit reads anything about the dead handle afterwards, and
-                // the survivor's gate answers `Hold` for exactly the wakes between
-                // here and the next `wolf_tabpage` notification.
+                // Synchronously, not on `TabClosed`: nothing reads the dead handle afterwards, and the
+                // survivor's gate answers `Hold` until the next `wolf_tabpage` notification.
                 self.deregister(page);
                 self.view.close_page_finish(page, true);
             }
             TabClose::CloseWindow => {
-                // The veto is answered with a REFUSAL, so the page survives until
-                // the toplevel tears it down. `close_tabpage` is deliberately NOT
-                // called: on the last tabpage it is a measured no-op, which would
-                // leave a live Neovim behind a page that quietly refuses to close.
+                // Refused, so the page survives until the toplevel tears it down. No `close_tabpage`: on the last
+                // tabpage it is a measured no-op, leaving a live Neovim behind a page that will not close.
                 self.view.close_page_finish(page, false);
-                // No core borrow is held here: `close()` runs the window's
-                // `close-request` handler synchronously, and that takes the core
-                // out with a `borrow_mut`.
+                // No core borrow is held: `close()` runs the `close-request` handler synchronously, and that
+                // takes the core out with a `borrow_mut`.
                 match self
                     .view
                     .root()
@@ -736,9 +713,8 @@ pub fn build(parts: TabsParts<'_>) -> TabsHandle {
         }),
     };
 
-    // Both handlers hold a `Weak` and upgrade per use: the view is owned by
-    // `TabsInner`, and a strong reference from a handler the view owns would close
-    // that cycle and leak every tab's pane view.
+    // Both handlers hold a `Weak`: the view is owned by `TabsInner`, so a strong reference from a
+    // handler the view owns would leak every tab's pane view.
     {
         let weak = Rc::downgrade(&handle.inner);
         view.connect_selected_page_notify(move |_view| {
@@ -751,9 +727,8 @@ pub fn build(parts: TabsParts<'_>) -> TabsHandle {
         let weak = Rc::downgrade(&handle.inner);
         view.connect_close_page(move |view, page| {
             let Some(tabs) = upgrade(&weak) else {
-                // Nothing left to decide with. REFUSE rather than confirm: a
-                // confirmed close here would tear a page down with its tabpage
-                // still live inside Neovim.
+                // Nothing left to decide with. Refuse rather than confirm: confirming would tear a page down
+                // with its tabpage still live inside Neovim.
                 view.close_page_finish(page, false);
                 return glib::Propagation::Stop;
             };
@@ -914,7 +889,7 @@ impl TabsHandle {
     ///
     /// The snapshot read guard is bound to a local and dropped BEFORE any pane call,
     /// because [`crate::pane_view`] takes its own — the borrow discipline
-    /// `DECISIONS.md` records. `Snapshot::current_tabpage` is a plain field, never
+    /// `notes/wolf-gnome-decisions.md` records. `Snapshot::current_tabpage` is a plain field, never
     /// `WolfCore::current_tabpage()`, which is a blocking RPC.
     pub fn on_render_wake(&self) {
         let (current, current_file) = {
@@ -939,9 +914,8 @@ impl TabsHandle {
             }
         }
 
-        // AFTER the loop: tab 0 adopts its handle there, and
-        // `tabs_ui::restore_press` refuses until it has. Steady-state cost is one
-        // `Option::is_none()`.
+        // After the loop: tab 0 adopts its handle there, and `restore_press` refuses until it has.
+        // Steady-state cost is one `Option::is_none()`.
         self.inner.materialize_restore();
     }
 

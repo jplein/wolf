@@ -1,47 +1,4 @@
-//
-//  PaneTreeTests.swift
-//  Pure, headless unit tests for the AppKit-free `WolfKeyMap.PaneTree`.
-//
-//  These are a FAITHFUL 1:1 port of the `#[cfg(test)] mod tests` in
-//  `crates/wolf-gnome/src/layout.rs`: the same pane ids, the same 100x40 bounds,
-//  the same half/third/quarter constants, the same `approx` / `assert_rect` /
-//  `rects_overlap` / `rect_for` helpers, and the same case names (rendered as
-//  XCTest `test...` methods). They exercise the PURE pane-layout tree the coder
-//  will add in `Sources/WolfKeyMap/PaneTree.swift` (Foundation only, no AppKit /
-//  CoreGraphics) — NO NSView, NO NSSplitView, NO live Neovim — exactly the way
-//  the GNOME layout tests stay GTK-free.
-//
-//  CONTRACT UNDER TEST (must match wolf-gnome/src/layout.rs exactly):
-//    * `PaneTree(root:)` is a single leaf filling the bounds.
-//    * `split(_:_:_:)` — a same-orientation split inserts a FLAT sibling AFTER
-//      the target then re-equalizes (the `[P1, P3, P2]` regression); a
-//      PERPENDICULAR split NESTS `[target, newPane]`.
-//    * `remove(_:)` — drops the slot, then normalizes (flatten same-orientation,
-//      collapse a 1-child split, re-equalize); removing the last pane is a no-op.
-//    * `leaves()` / `paneRects(width:height:)` are a stable DFS order; Vertical
-//      divides WIDTH, Horizontal divides HEIGHT.
-//    * `neighbor(_:_:width:height:)` uses STRICTLY positive cross-axis overlap.
-//
-//  NOTE to coder: this references the public `WolfKeyMap.PaneTree` API the coder
-//  will add (`PaneId`, `Orientation`, `FocusDir`, `Rect`, `PaneLayout`). The
-//  signatures asserted below are the contract:
-//    * `PaneTree(root: PaneId)`
-//    * `.split(_ target: PaneId, _ newPane: PaneId, _ orientation: Orientation)`
-//    * `.remove(_ pane: PaneId)`
-//    * `.leaves() -> [PaneId]`
-//    * `.paneRects(width: Double, height: Double) -> [(PaneId, Rect)]`
-//    * `.neighbor(_ from: PaneId, _ dir: FocusDir, width: Double, height: Double)
-//      -> PaneId?`
-//    * `.layout() -> PaneLayout`
-//    * `struct Rect { let x, y, w, h: Double }`
-//    * `enum Orientation { case horizontal, vertical }`
-//    * `enum FocusDir { case left, right, up, down }`
-//  ASSUMPTION (the discriminant test below): the coder adds
-//  `Orientation.init?(ffi: UInt8)` (0 -> .horizontal, 1 -> .vertical, else nil)
-//  and `FocusDir.init?(ffi: UInt8)` (0 -> .left, 1 -> .right, 2 -> .up,
-//  3 -> .down, else nil), per plan §2A / §3.1 (the FFI discriminant contract
-//  shared with `wolf-ffi`).
-//
+// See crates/wolf-macos/Tests/WolfKeyMapTests/README.md#panetreetestsswift
 
 import XCTest
 
@@ -57,7 +14,6 @@ final class PaneTreeTests: XCTestCase {
   private let p4: PaneId = 4
 
   // MARK: - Bounds used across the geometry tests
-  //
   // Non-square (W != H) so width math and height math are distinguishable.
 
   /// Test bounds width (px).
@@ -180,9 +136,8 @@ final class PaneTreeTests: XCTestCase {
   }
 
   func testNestedSplitRects() {
-    // Vertical split (P1 left, P2 right), then split the LEFT child (P1)
-    // horizontally into P1 (top) / P3 (bottom). The three rects must tile the
-    // bounds with no overlap and a union equal to the full area.
+    // Vertical split P1 | P2, then split P1 horizontally into P1 over P3: the three rects tile
+    // the bounds with no overlap.
     let tree = PaneTree(root: p1)
     tree.split(p1, p2, .vertical)
     tree.split(p1, p3, .horizontal)
@@ -211,17 +166,11 @@ final class PaneTreeTests: XCTestCase {
   }
 
   // MARK: - n-ary FLAT (same-orientation) split behavior
-  //
-  // These pin the n-ary frame model: a split whose orientation MATCHES the
-  // containing frame FLATTENS into a flat, equalized sibling row/column (no
-  // nesting); a PERPENDICULAR split still NESTS. The flat cases are THE 3-pane
-  // regression: the old binary always-nest model produced nested 25/25/50
-  // columns, blanking the pre-existing right pane.
+  // A split matching its frame's orientation joins a flat, equalized row; a perpendicular nests.
 
   func testVsplitFlattensIntoRow() {
-    // Start with a row [P1, P2] (Vertical = side by side), then Vertical-split
-    // P1 AGAIN. Because the new split's orientation MATCHES the row, P3 is
-    // inserted as a FLAT sibling AFTER the target P1 — NOT a nested sub-split.
+    // Row [P1, P2] (Vertical = side by side), then Vertical-split P1 again: the same orientation
+    // inserts P3 as a flat sibling after P1, not a nested sub-split.
     let tree = PaneTree(root: p1)
     tree.split(p1, p2, .vertical)
     tree.split(p1, p3, .vertical)
@@ -239,11 +188,8 @@ final class PaneTreeTests: XCTestCase {
     let r3 = rectFor(rects, p3)
     let r2 = rectFor(rects, p2)
 
-    // POLICY (macOS split RE-EQUALIZATION, feature plan ROUND 2): a same-orientation
-    // vsplit RE-EQUALIZES the whole row — the pre-split 0.5/0.5 is discarded and all
-    // three columns become equal thirds (`:vsplit` redistributes to equal widths, per
-    // the user follow-up; this REVERTS round 1's carve-from-target). The TOPOLOGY
-    // (flat [P1, P3, P2]) is unchanged.
+    // A same-orientation vsplit re-equalizes the whole row to thirds, as `:vsplit` does; the
+    // pre-split 0.5/0.5 is discarded.
     assertRect(r1, 0.0, 0.0, w / 3.0, h, "P1 re-equalizes to a left third")
     assertRect(r3, w / 3.0, 0.0, w / 3.0, h, "P3 takes the middle third")
     assertRect(r2, 2.0 * w / 3.0, 0.0, w / 3.0, h, "P2 re-equalizes to the right third")
@@ -265,12 +211,8 @@ final class PaneTreeTests: XCTestCase {
   }
 
   func testVsplitTwiceStaysFlatEqualWeights() {
-    // Repeated same-orientation vsplits of P1 keep the row FLAT (no growing
-    // nesting). POLICY (macOS split RE-EQUALIZATION, feature plan ROUND 2): each
-    // same-orientation vsplit RE-EQUALIZES the whole row, so after three vsplits the
-    // row is FOUR EQUAL QUARTERS (`:vsplit` redistributes to equal widths; this
-    // REVERTS round 1's carve-from-target). The TOPOLOGY (a single flat row of four
-    // leaves) is unchanged.
+    // Repeated vsplits of P1 keep one flat row, each re-equalizing it, so three vsplits leave
+    // four equal quarters.
     let tree = PaneTree(root: p1)
     tree.split(p1, p2, .vertical)  // [P1:0.5, P2:0.5]
     tree.split(p1, p3, .vertical)  // re-equalize -> [P1, P3, P2] each 1/3
@@ -302,10 +244,8 @@ final class PaneTreeTests: XCTestCase {
   }
 
   func testHsplitOfRowMemberNests() {
-    // PERPENDICULAR split still NESTS: row [P1, P2], then HORIZONTAL-split P1.
-    // Horizontal is perpendicular to the Vertical row, so P1 is wrapped in a
-    // stacked sub-frame [P1, P3] occupying the left half; P2 keeps the full-
-    // height right half.
+    // A perpendicular split still nests: Horizontal-splitting P1 in row [P1, P2] wraps it in a
+    // stacked [P1, P3] in the left half; P2 keeps the full-height right half.
     let tree = PaneTree(root: p1)
     tree.split(p1, p2, .vertical)
     tree.split(p1, p3, .horizontal)
@@ -350,9 +290,8 @@ final class PaneTreeTests: XCTestCase {
   }
 
   func testRemoveCollapsesSiblingSubtree() {
-    // Nested case: P1 on the left, and a horizontally-split (P2 top / P3
-    // bottom) subtree on the right. Removing P1 collapses its sibling SUBTREE
-    // up into the root slot, which then fills the whole bounds.
+    // P1 left, a horizontally split P2/P3 subtree right: removing P1 collapses the subtree into
+    // the root slot, which then fills the bounds.
     let tree = PaneTree(root: p1)
     tree.split(p1, p2, .vertical)
     tree.split(p2, p3, .horizontal)
@@ -379,13 +318,8 @@ final class PaneTreeTests: XCTestCase {
   }
 
   func testRemoveProportionallyRenormalizesRow() {
-    // REMOVE stays PROPORTIONAL (survivors keep dragged relative sizes) even though
-    // SPLIT now re-equalizes (feature plan ROUND 2). Since a same-orientation split
-    // re-equalizes, the ONLY way to create unequal weights is a DRAG: build equal
-    // thirds [P1, P3, P2], then drag the P3/P2 boundary so P3=1/6, P2=1/2, P1=1/3.
-    // Removing the middle P3 leaves [P1, P2] whose survivors keep their RELATIVE
-    // sizes (1/3 : 1/2) and renormalize PROPORTIONALLY to [0.4, 0.6] — NOT
-    // re-equalized to 50/50. The TOPOLOGY (flat [P1, P2]) is unchanged.
+    // Remove renormalizes proportionally; since splits re-equalize, a drag makes the unequal
+    // precondition. Survivors 1/3 : 1/2 become [0.4, 0.6], not 50/50.
     let tree = PaneTree(root: p1)
     tree.split(p1, p2, .vertical)
     tree.split(p1, p3, .vertical)  // re-equalize -> [P1, P3, P2] each 1/3
@@ -409,10 +343,8 @@ final class PaneTreeTests: XCTestCase {
   }
 
   func testRemoveCollapsesSingleChild() {
-    // Row [P1, P2], then a PERPENDICULAR (Horizontal) split of P1 nests a
-    // column [P1, P3] in the left half. Removing P3 leaves the column with a
-    // single child P1, which COLLAPSES into the parent slot; P1 then re-
-    // equalizes with P2 into 50/50 halves.
+    // Row [P1, P2], then a perpendicular split of P1 nests column [P1, P3]; removing P3 collapses
+    // the one-child column, and P1 re-equalizes with P2 to 50/50.
     let tree = PaneTree(root: p1)
     tree.split(p1, p2, .vertical)
     tree.split(p1, p3, .horizontal)
@@ -431,16 +363,8 @@ final class PaneTreeTests: XCTestCase {
   }
 
   func testRemoveCollapsesAndMergesSameOrientation() {
-    // The MERGE case:
-    //   PaneTree(root: P1)
-    //   vsplit P1            -> row[P1, P2]
-    //   hsplit P2 (perp)     -> row[P1, col[P2, P3]]
-    //   vsplit P2 (perp to   -> row[P1, col[ row[P2, P4], P3 ]]
-    //     the column)
-    //   remove P3            -> the column drops to a single child row[P2, P4],
-    //                           which COLLAPSES, and because it is the SAME
-    //                           orientation as the root row it MERGES upward:
-    //                           => flat row[P1, P2, P4].
+    // vsplit P1, hsplit P2, vsplit P2 -> row[P1, col[row[P2, P4], P3]]. Removing P3 collapses
+    // the column to row[P2, P4], which merges into the root row as flat row[P1, P2, P4].
     let tree = PaneTree(root: p1)
     tree.split(p1, p2, .vertical)
     tree.split(p2, p3, .horizontal)
@@ -455,11 +379,8 @@ final class PaneTreeTests: XCTestCase {
     let rects = tree.paneRects(width: w, height: h)
     XCTAssertEqual(rects.count, 3, "three flat leaves -> three rects")
 
-    // POLICY CHANGE (macOS weight preservation, feature plan §3.1): the collapsed
-    // + same-orientation-MERGED subtree keeps its PROPORTIONAL share of the parent
-    // slot. The column occupied 0.5 of the row; its two survivors (0.5/0.5) scale
-    // by that 0.5 to 0.25/0.25, while P1 keeps its 0.5. The old gnome 1:1 port
-    // re-equalized to thirds. The TOPOLOGY (flat [P1, P2, P4]) is unchanged.
+    // The merged subtree keeps its proportional slot: P2 and P4 scale 0.5 -> 0.25, P1 keeps 0.5.
+    // This deliberately diverges from wolf-gnome's layout.rs, which re-equalizes to thirds.
     let r1 = rectFor(rects, p1)
     let r2 = rectFor(rects, p2)
     let r4 = rectFor(rects, p4)
@@ -516,13 +437,7 @@ final class PaneTreeTests: XCTestCase {
   }
 
   func testNeighborNested() {
-    // Build a clean 2x2 grid:
-    //   split V (P1 left, P2 right), then split EACH side horizontally:
-    //     split P1 -> P1 (top-left)    / P3 (bottom-left)
-    //     split P2 -> P2 (top-right)   / P4 (bottom-right)
-    // Resulting rects in 100x40:
-    //   P1 (0, 0,50,20)   P2 (50, 0,50,20)
-    //   P3 (0,20,50,20)   P4 (50,20,50,20)
+    // 2x2 grid in 100x40: P1 (0,0,50,20), P2 (50,0,50,20), P3 (0,20,50,20), P4 (50,20,50,20).
     let tree = PaneTree(root: p1)
     tree.split(p1, p2, .vertical)
     tree.split(p1, p3, .horizontal)
@@ -610,12 +525,7 @@ final class PaneTreeTests: XCTestCase {
   }
 
   // MARK: - FFI discriminant contract (NOT in layout.rs)
-  //
-  // Guards the discriminant table shared with `wolf-ffi` (plan §3.1):
-  //   orientation: HORIZONTAL = 0, VERTICAL = 1
-  //   focus_dir:   LEFT = 0, RIGHT = 1, UP = 2, DOWN = 3
-  // ASSUMPTION: the coder adds `Orientation.init?(ffi:)` / `FocusDir.init?(ffi:)`
-  // per plan §2A. An out-of-range discriminant must map to nil.
+  // Shared with wolf-ffi: orientation H=0 V=1, focus_dir L=0 R=1 U=2 D=3; out of range is nil.
 
   func testOrientationFfiDiscriminants() {
     XCTAssertEqual(Orientation(ffi: 0), .horizontal, "ffi 0 -> .horizontal")

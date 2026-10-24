@@ -1,14 +1,4 @@
-//
-//  AppMenu.swift
-//  The native NSMenu app menu bar (net-new; there is no menu bar otherwise).
-//
-//  Wolf-macos hardcodes its own menu description for this cut (it does NOT
-//  read the core registry over FFI yet — only the `command_kind` discriminant
-//  crosses the bridge). Every Wolf item carries the FFI `command_kind` u8 in its
-//  `NSMenuItem.tag`, targets the `AppDelegate`, and fires
-//  `handleCommandMenuItem(_:)`, which decodes the tag and funnels through
-//  `CommandDispatcher` — the SAME dispatcher the nvim-drained command path uses.
-//
+// The native app menu bar; every item's tag is an FFI command kind.
 
 import AppKit
 import WolfKeyMap
@@ -318,9 +308,8 @@ enum AppMenu {
       commandItem(
         title: "Buffer Picker…", tag: Tag.bufferPicker, keyEquivalent: "e",
         target: target))
-    // View > Preview: enabled only on a Markdown buffer (gated in
-    // AppDelegate.validateMenuItem). NO key equivalent this cut (OD2 — ⌘P is
-    // the Command Palette; a shortcut can be assigned later).
+    // View > Preview: enabled only on a Markdown buffer (see AppDelegate.validateMenuItem).
+    // No key equivalent: ⌘P is the Command Palette.
     menu.addItem(
       commandItem(
         title: "Preview", tag: Tag.preview, keyEquivalent: "", target: target))
@@ -329,40 +318,27 @@ enum AppMenu {
     menu.addItem(
       commandItem(
         title: "Edit", tag: Tag.edit, keyEquivalent: "", target: target))
-    // View > Preview in Another Pane: previews the active pane's Markdown file
-    // in another pane (reuse or split right). Enabled only on a Markdown buffer
-    // (gated in AppDelegate.validateMenuItem, mirroring Preview). NO key
-    // equivalent.
+    // View > Preview in Another Pane: reuse or split right. Enabled only on a Markdown buffer.
     menu.addItem(
       commandItem(
         title: "Preview in Another Pane", tag: Tag.previewInOtherPane,
         keyEquivalent: "", target: target))
-    // View > Edit in Another Pane: edits the active preview's source in another
-    // pane (reuse or split, source lands left). Enabled only from a preview
-    // pane (gated in AppDelegate.validateMenuItem, mirroring Edit). NO key
-    // equivalent.
+    // View > Edit in Another Pane: reuse or split, source lands left. Enabled only from a preview.
     menu.addItem(
       commandItem(
         title: "Edit in Another Pane", tag: Tag.editInOtherPane,
         keyEquivalent: "", target: target))
-    // View > Terminal: toggles the per-project terminal drawer. Always enabled
-    // (unlike Preview / Edit it is not gated in
-    // AppDelegate.validateMenuItem).
+    // View > Terminal: toggles the project's terminal drawer. Always enabled.
     menu.addItem(
       commandItem(
         title: "Terminal", tag: Tag.terminal, keyEquivalent: "`",
         target: target, modifiers: .control))
-    // View > Preview in Browser: renders the active Markdown buffer and opens it
-    // in the system default browser. Enabled only on a Markdown buffer (gated in
-    // AppDelegate.validateMenuItem, mirroring Preview). NO key equivalent.
+    // View > Preview in Browser: opens the rendered buffer in the default browser. Markdown only.
     menu.addItem(
       commandItem(
         title: "Preview in Browser", tag: Tag.previewInBrowser, keyEquivalent: "",
         target: target))
-    // View > Use full width for content: toggles the active buffer between the
-    // ~90-char default content width and full pane width. ALWAYS enabled (OQ-2);
-    // its checkmark tracks isFullWidthActive (gated in AppDelegate.validateMenuItem).
-    // NO key equivalent.
+    // View > Use full width for content: always enabled; its checkmark tracks isFullWidthActive.
     menu.addItem(
       commandItem(
         title: "Use full width for content", tag: Tag.fullWidth, keyEquivalent: "",

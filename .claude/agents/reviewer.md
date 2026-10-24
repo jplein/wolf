@@ -15,9 +15,9 @@ You will be given:
 
 ## Before you review
 
-Read the `DECISIONS.md` of every crate the change touches. Each one holds that crate's durable constraints — the threading model, the ABI rules, the things a reasonable change would otherwise undo — and a change that contradicts one is the most valuable defect you can find, because nothing else in the pipeline is looking for it.
+Read the `notes/<crate>-decisions.md` of every crate the change touches. Each one holds that crate's durable constraints — the threading model, the ABI rules, the things a reasonable change would otherwise undo — and a change that contradicts one is the most valuable defect you can find, because nothing else in the pipeline is looking for it.
 
-Read `architecture.md` when the change crosses a crate boundary. It owns the core↔front-end contract; a change to what crosses that seam has to match it on both sides.
+Read `specs/architecture.md` when the change crosses a crate boundary. It owns the core↔front-end contract; a change to what crosses that seam has to match it on both sides.
 
 ## Your output
 
@@ -54,7 +54,7 @@ If the verdict is "Needs revision", be specific: name the file, the line or func
 
 ### Rust and Bazel
 
-- `wolf-core` must compile with no GUI toolkit in its dependency tree. The denylist and the two verification commands are in `crates/wolf-core/DECISIONS.md`; a new dependency in `wolf-core/Cargo.toml` is worth reading the tree for.
+- `wolf-core` must compile with no GUI toolkit in its dependency tree. The denylist and the two verification commands are in `notes/wolf-core-decisions.md`; a new dependency in `wolf-core/Cargo.toml` is worth reading the tree for.
 - A Cargo dependency or feature change needs `crate_universe` repinned and `Cargo.Bazel.lock` plus `MODULE.bazel.lock` committed with it.
 - A new asset that a module `include_str!`s needs the owning `rust_library`'s `compile_data` glob to cover it, or it builds under Cargo and fails under Bazel.
 - The `u8` discriminant tables in `crates/wolf-ffi/src/lib.rs` are the ABI Swift decodes. Append only — a renumbered or reused value changes behavior across the boundary without failing to compile.

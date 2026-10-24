@@ -1,12 +1,4 @@
-//
-//  CommandDispatcher.swift
-//  The single funnel every Wolf command flows through.
-//
-//  Both the native menu-item path (`AppDelegate.handleCommandMenuItem` decodes the
-//  item's `.tag` into a `CommandKind`) and the nvim-drained path
-//  (`WolfWindowController.drainAndDispatchCommands` decodes each `FfiCommand.kind()`)
-//  route here, so a command has ONE native implementation regardless of its face.
-//
+// The single funnel every Wolf command flows through.
 
 import AppKit
 import WolfKeyMap

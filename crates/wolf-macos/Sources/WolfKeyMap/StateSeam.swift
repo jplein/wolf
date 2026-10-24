@@ -1,17 +1,4 @@
-//
-//  StateSeam.swift
-//  Pure, AppKit-free decision seams for the macOS state-restore path.
-//
-//  These take scalar/CGRect inputs only — NO NSWindow, NO NSScreen, NO
-//  NSToolbar, NO AppKit — so they are unit-testable headlessly (see
-//  `StateSeamTests.swift`), exactly like `PaneGeometry`. The AppKit glue
-//  (`StatePersistence.swift` / `AppDelegate.swift` in WolfMacOS) feeds them
-//  real window frames, `NSScreen.screens` visible frames, and a
-//  FileManager-backed `isDirectory` closure.
-//
-//  Imports ONLY Foundation + CoreGraphics, so it lives in the Foundation-only
-//  `WolfKeyMap` module alongside `KeyMap.swift` / `PaneGeometry.swift`.
-//
+// Pure, AppKit-free decision seams for the state-restore path.
 
 import CoreGraphics
 import Foundation

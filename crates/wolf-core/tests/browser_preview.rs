@@ -329,9 +329,8 @@ fn open_in_browser_serves_rendered_markdown_and_live_tick() {
         "the pinned file must be served at its relpath, not the bare root: {url:?}"
     );
 
-    // (3) GET <relpath> -> 200 with the rendered markdown body + the two injected
-    // reload markers. `wolf-markdown` is the render_html body wrapper; `hello` is
-    // the source text; `/tick` + `location.reload` are the injected poller.
+    // (3) GET <relpath> -> 200 with the rendered body: `wolf-markdown` is render_html's body
+    // wrapper, `hello` the source text, and `/tick` + `location.reload` the injected reload poller.
     let (status, body) = http_get(port, &path);
     assert_eq!(
         status, HTTP_OK,

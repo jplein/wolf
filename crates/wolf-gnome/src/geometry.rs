@@ -24,11 +24,6 @@
 //! which one. That second half is `equal_weights_give_equal_widths`'s, and the two
 //! properties are only meaningful together.
 
-// Contract the tests below assert (from the ARCHITECT PLAN):
-//   cols = floor(width_px / cell_w), rows = floor(height_px / cell_h),
-//   each clamped to [1, u16::MAX].
-//   Non-positive dims (<= 0) OR zero/negative/NaN/infinite cell sizes => (1, 1).
-
 /// The minimum grid extent in each axis: the window must always present at least
 /// one cell, so a degenerate or undersized input can never collapse a dimension
 /// below 1.
@@ -122,9 +117,7 @@ fn floor_div_clamped(numer: f64, denom: f64) -> u16 {
 ///   by construction.
 #[must_use]
 pub fn cell_at(x: f64, y: f64, cell_w: f64, cell_h: f64, cols: u16, rows: u16) -> (u32, u32) {
-    // Whole-result collapse, mirroring `grid_size_for`: a degenerate cell size or a
-    // zero-extent grid leaves no cell that could meaningfully be named, so the
-    // whole result is the origin rather than a per-axis partial answer.
+    // Whole-result collapse, as in `grid_size_for`: with no nameable cell the answer is the origin.
     if !cell_w.is_finite() || !cell_h.is_finite() || cell_w <= 0.0 || cell_h <= 0.0 {
         return (0, 0);
     }
@@ -145,14 +138,10 @@ pub fn cell_at(x: f64, y: f64, cell_w: f64, cell_h: f64, cols: u16, rows: u16) -
 /// a `u32`. Callers guarantee `cell` is finite and positive; `coord` may be any
 /// `f64`, including non-finite (see [`cell_at`]'s contract).
 fn floor_clamped(coord: f64, cell: f64, max_index: u16) -> u32 {
-    // A NaN coordinate has no direction, so there is no "nearest edge" to clamp it
-    // to; treat that axis as the origin. (An INFINITE coordinate is left alone: it
-    // does have a direction, and the clamp below maps it to the correct edge.)
+    // NaN has no direction, so that axis reads as the origin; an infinity clamps to its edge below.
     let coord = if coord.is_nan() { 0.0 } else { coord };
-    // Clamp in f64 space FIRST so the value is provably within u32 range before the
-    // cast; this makes the truncating cast saturating-safe by construction, exactly
-    // as `floor_div_clamped` does. `+inf / cell` stays `+inf` and clamps to
-    // `max_index`; `-inf` clamps to 0.
+    // Clamp in f64 space first so the truncating cast is in range by construction;
+    // `+inf / cell` clamps to `max_index`, `-inf` to 0.
     let n = (coord / cell).floor().clamp(0.0, f64::from(max_index));
     // n is finite and in [0.0, 65534.0], so the cast neither wraps nor truncates
     // out of range; `floor` already removed any fractional part.
@@ -473,9 +462,7 @@ mod tests {
                 rows: ROWS,
                 expected: (0, 0),
             },
-            // --- Outside the grid clamps to the NEAREST EDGE cell --------------
-            // This is the drag-past-the-edge behaviour: never rejected, never out
-            // of range.
+            // Outside the grid clamps to the nearest edge cell: drag-past-the-edge, never rejected.
             CellCase {
                 desc: "far negative x and y clamp to the first cell",
                 x: -500.0,
@@ -599,18 +586,8 @@ mod tests {
                 rows: 0,
                 expected: (0, 0),
             },
-            // --- Non-finite COORDINATES (as opposed to cell sizes) -------------
-            // This is TWO rules, not one, and the difference is the whole point of
-            // these three rows:
-            //   * NaN has no direction, so there is no edge to clamp toward: that
-            //     axis is treated as `0.0`.
-            //   * An infinity DOES have a direction, so it is just an
-            //     out-of-range point and clamps to the nearest edge like any other
-            //     one — `+inf` to the LAST row/col, `-inf` to the FIRST.
-            // Do not "simplify" these into a single treat-every-non-finite-as-0.0
-            // guard: that would silently break drag-past-the-edge selection for a
-            // coordinate that overflowed, which is exactly the case the clamp
-            // exists for.
+            // Non-finite coordinates are two rules: NaN reads as 0.0, an infinity clamps to its edge.
+            // Merging them into one treat-as-0.0 guard breaks drag-past-the-edge for an overflowed coordinate.
             CellCase {
                 desc: "NaN x with a valid y treats x as 0.0",
                 x: f64::NAN,
@@ -761,22 +738,8 @@ mod tests {
         }
     }
 
-    // -- divider position / span fraction -----------------------------------
-    //
-    // The integer half of the divider conversion. `pane_view` owns the widget and
-    // the tree owns the weight; these two are the only place the pixel and the
-    // fraction meet, and they must be exact inverses or the `max-position` re-apply
-    // walks the weight a little further on every allocation pass.
-    //
-    // A weight is a proportion of WIDTH — that is what `PaneTree` holds, what
-    // `pane_layout::encode` persists, what `state.json` carries, and what a user
-    // sees — so the quantity these two scale by is the paned's own SPAN, not its
-    // `max_position`. `min`/`max` are the CLAMP. Scaling by `max_position` instead
-    // hands the start child `f * (span - handle - e_min)` and the end child the
-    // rest, so at `f = 0.5` the two differ by the end child's minimum whatever the
-    // fraction was; `equal_weights_give_equal_widths` is the test that says so, and
-    // its old-floor row is there to show that the defect never depended on how big
-    // that minimum happened to be.
+    // Divider conversion: exact inverses, or each `max-position` re-apply walks the weight further.
+    // See notes/wolf-gnome-decisions.md#pane-weights-and-dividers
 
     /// One [`divider_position`] table row.
     struct DividerCase {
@@ -846,10 +809,8 @@ mod tests {
     /// only guard on the rounding.
     #[test]
     fn divider_position_table() {
-        // Guard on the FIXTURE, not on the function: [`SPAN`] and [`TRAVEL`] have to
-        // describe one paned, or "half the span is not half the travel" is a
-        // coincidence between two unrelated numbers rather than a property. The gap
-        // between them is the handle plus the end child's floor, and nothing else.
+        // Guards the fixture, not the function: `SPAN` and `TRAVEL` must describe one paned, differing
+        // only by the handle plus the end child's floor.
         assert_eq!(
             SPAN - TRAVEL,
             END_MIN_PLUS_HANDLE,
@@ -880,14 +841,8 @@ mod tests {
                 fraction: 0.5,
                 expected: 0,
             },
-            // --- A degenerate SPAN collapses it too, and that is a SECOND guard
-            // --- rather than a restatement: the span is the scale, so a paned
-            // --- measured before its first allocation reports a zero one.
-            // ---
-            // --- Both rows carry min = 100, and that is load-bearing. With min = 0
-            // --- the collapse and the clamp agree on 0 and neither row could tell
-            // --- them apart; with a non-zero min, a missing span guard shows up as
-            // --- the MINIMUM (100) rather than as the collapse (0).
+            // A degenerate span is a second guard: an unallocated paned reports a zero span. Both rows carry
+            // min = 100 so a missing span guard shows as the minimum rather than the collapse (0).
             DividerCase {
                 desc: "span == 0 with a real travel and a real minimum -> 0",
                 min: MIN_POS,
@@ -904,10 +859,7 @@ mod tests {
                 fraction: 0.5,
                 expected: 0,
             },
-            // --- The ordinary case, and the whole point of the signature: the
-            // --- fraction is of the SPAN. 1064 * 0.5 = 532, which is NOT 500 —
-            // --- half of `max_position` — and the gap between those two numbers is
-            // --- the end child's minimum plus the handle.
+            // The ordinary case: the fraction is of the span. 1064 * 0.5 = 532, not 500 (half the travel).
             DividerCase {
                 desc: "half the SPAN, not half the travel",
                 min: 0,
@@ -943,9 +895,7 @@ mod tests {
                 fraction: 0.4,
                 expected: 426,
             },
-            // --- The clamp is into [min, max], NOT [0, span]: `min_position` is the
-            // --- far side of the start child's own minimum, so a position below it
-            // --- is one GTK would clamp itself and notify about.
+            // The clamp is into [min, max], not [0, span]: below `min_position` GTK would clamp and notify.
             DividerCase {
                 desc: "0.0 clamps UP to the paned's own minimum position",
                 min: MIN_POS,
@@ -970,12 +920,8 @@ mod tests {
                 fraction: 0.0,
                 expected: 0,
             },
-            // --- The TOP of the range, where the two quantities part company. A
-            // --- fraction of 1 asks for the whole span (1064 px); `max_position`
-            // --- caps it at 1000. What this row proves is that the CLAMP binds, and
-            // --- NOT that the scale reached `max` exactly: the two are
-            // --- indistinguishable at a single fraction of 1, which is why the rows
-            // --- below bracket the crossing at 1000/1064 from both sides.
+            // The top of the range: 1.0 asks for the whole span and `max_position` caps it. This row proves
+            // the clamp binds, not that the scale reached max; the rows below bracket the crossing.
             DividerCase {
                 desc: "1.0 asks for the WHOLE span, and max_position caps it",
                 min: MIN_POS,
@@ -1003,10 +949,8 @@ mod tests {
                 expected: 990,
             },
             DividerCase {
-                // 1064 * 0.95 = 1010.8 -> 1011, which the clamp cuts to 1000. The
-                // pair above and below the crossing is what stops a "fix" that
-                // rescales the fraction into the reachable band from passing: such a
-                // fix moves BOTH of these, not just the clamped one.
+                // 1064 * 0.95 = 1010.8 -> 1011, clamped to 1000. A fix that rescales the fraction into the
+                // reachable band moves both rows of this pair, not just the clamped one.
                 desc: "just above the top of the reachable band IS clamped",
                 min: MIN_POS,
                 max: TRAVEL,
@@ -1014,14 +958,8 @@ mod tests {
                 fraction: 0.95,
                 expected: TRAVEL,
             },
-            // --- An INVERTED range, which is a PANIC GUARD rather than a
-            // --- convention: `f64::clamp` panics outright when its lower bound
-            // --- exceeds its upper one, and `gtk::Paned` can report
-            // --- `min_position > max_position` transiently while an allocation is
-            // --- still settling — the same multi-pass allocation the whole
-            // --- `max-position` re-apply exists for. Capping the lower bound at
-            // --- `max` is what makes the call total, and this row is the cap's
-            // --- only test.
+            // An inverted range is a panic guard: `f64::clamp` panics when min > max, which `gtk::Paned`
+            // reports transiently while allocation settles. Capping min at max makes the call total.
             DividerCase {
                 desc: "min > max caps at max instead of panicking",
                 min: 900,
@@ -1130,9 +1068,8 @@ mod tests {
     fn equal_weights_give_equal_widths() {
         let cases = [
             EqualCase {
-                // 1029 - 1 = 1028 of child span; max(63, max(1, 1028 - 63)) = 965.
-                // round(1029 * 0.5) = round(514.5) = 515, inside [63, 965].
-                // widths 515 and 1029 - 1 - 515 = 513; spread 2, bound 2.
+                // max(63, max(1, 1028 - 63)) = 965; round(1029 * 0.5) = 515, inside [63, 965].
+                // Widths 515 and 1029 - 1 - 515 = 513: spread 2, bound 2.
                 desc: "the raised floor: a 63 px per-pane minimum",
                 span: 1029,
                 handle: 1,
@@ -1143,11 +1080,8 @@ mod tests {
                 clamped: false,
             },
             EqualCase {
-                // The floor that shipped BEFORE the pane chrome: one 22.47 px cell,
-                // ceiled to 23. max(23, max(1, 1028 - 23)) = 1005 — the very
-                // `max_position` the divider smoke has recorded all along.
-                // The answer is the same 515: the position does not depend on
-                // `max_position` at all any more, which is the fix in one line.
+                // A one-cell floor (22.47 px, ceiled to 23) gives max_position 1005, the divider smoke's value;
+                // the answer is still 515 because the position does not depend on `max_position`.
                 desc: "the OLD one-cell floor, which HID the defect",
                 span: 1029,
                 handle: 1,
@@ -1170,9 +1104,7 @@ mod tests {
                 clamped: false,
             },
             EqualCase {
-                // A 5 px handle: widths 515 and 1030 - 5 - 515 = 510. The spread is
-                // the handle's own width and nothing else, which is what says the
-                // handle is the only asymmetry left.
+                // A 5 px handle: widths 515 and 1030 - 5 - 515 = 510; the spread is the handle's own width.
                 desc: "a wide handle costs exactly its own width",
                 span: 1030,
                 handle: 5,
@@ -1183,15 +1115,8 @@ mod tests {
                 clamped: false,
             },
             EqualCase {
-                // 119 of child span against two 63 px floors: max(63, max(1, 56)) =
-                // 63, so min == max and the midpoint (60) is clamped up to 63.
-                //
-                // Equal widths are IMPOSSIBLE here and the clamp is the right answer.
-                // 63 is exactly `editor_inset::min_pane_size(22.4765625, _, _, 20.0).0`
-                // — one whole cell plus two paddings — so averaging through it would
-                // hand BOTH panes less than one column and reflow both buffers to a
-                // single character per line. This row therefore asserts the POSITION
-                // and deliberately does not assert equal widths.
+                // 119 px of child span vs two 63 px floors: min == max, so the midpoint (60) clamps to 63.
+                // Position only, not equal widths. See notes/wolf-gnome-decisions.md#pane-weights-and-dividers
                 desc: "a span too small for two floors keeps the floor, not the average",
                 span: 120,
                 handle: 1,
@@ -1204,9 +1129,8 @@ mod tests {
         ];
 
         for case in &cases {
-            // GTK's own arithmetic, restated here rather than assumed: a paned's
-            // `max_position` is its span less the handle less the end child's
-            // minimum, floored so it can never fall under the start child's.
+            // GTK's own arithmetic, restated rather than assumed: `max_position` is span - handle - end min,
+            // floored at the start child's minimum.
             let child_span = case.span - case.handle;
             let derived_max = case.s_min.max((child_span - case.e_min).max(1));
             assert_eq!(
@@ -1308,11 +1232,8 @@ mod tests {
     #[test]
     fn divider_span_fraction_table() {
         let cases = [
-            // --- No span means there is no fraction to report. `None` rather
-            // --- than `Some(0.0)` is the whole point: a paned notifies `position`
-            // --- before it has been allocated, and writing a 0.0 back into the
-            // --- tree there would persist a collapsed pane the user never asked
-            // --- for.
+            // No span, no fraction: `None`, not `Some(0.0)`, since a paned notifies `position` before
+            // allocation and a 0.0 written back would persist a collapsed pane.
             SpanCase {
                 desc: "span == 0 has nothing to be a fraction OF",
                 position: 0,
@@ -1350,10 +1271,8 @@ mod tests {
                 span: 3,
                 expected: Some(1.0 / 3.0),
             },
-            // --- A REAL paned's numbers: a position of 1030 in a span of 1064 is
-            // --- the weight a drag near the far end stores, and it is deliberately
-            // --- ABOVE that paned's `max_position` of 1000 — this function knows
-            // --- nothing of `max_position` and must not start clamping to it.
+            // A real paned: 1030 in a span of 1064 is above its `max_position` of 1000, and this function
+            // knows nothing of `max_position`; it must not clamp to it.
             SpanCase {
                 // 1030 / 1064 = 0.968045...
                 desc: "a position past max_position is still a fraction of the SPAN",
@@ -1361,10 +1280,8 @@ mod tests {
                 span: SPAN,
                 expected: Some(1030.0 / 1064.0),
             },
-            // --- Out of range clamps rather than escaping [0, 1]: GTK can report a
-            // --- position outside the span during an allocation pass, and a
-            // --- weight outside [0, 1] would be rejected by `from_layout` at the
-            // --- next launch.
+            // Out of range clamps into [0, 1]: GTK can report a position past the span mid-allocation,
+            // and `from_layout` rejects a weight outside [0, 1] at the next launch.
             SpanCase {
                 desc: "a position past the SPAN itself clamps to 1.0",
                 position: 1100,
@@ -1435,11 +1352,8 @@ mod tests {
     /// pixel of a 1064-pixel span) is allowed`.
     #[test]
     fn divider_position_and_span_fraction_round_trip() {
-        // Every forward case must land strictly INSIDE the clamp, and that is a
-        // property of the rows rather than of the function: a clamped position is
-        // deliberately not a round trip (the fraction it reads back is the clamp's,
-        // not the caller's), and `clamped_fraction_snaps_once_and_then_holds` is
-        // where that behaviour is pinned instead.
+        // Forward cases land strictly inside the clamp: a clamped position is not a round trip, and
+        // `clamped_fraction_snaps_once_and_then_holds` pins that instead.
         let cases = [
             ("the midpoint", 0, TRAVEL, SPAN, 0.5),
             ("just past a .5 pixel boundary", 0, TRAVEL, SPAN, 0.5009),
@@ -1477,15 +1391,8 @@ mod tests {
             );
         }
 
-        // The other direction, which is the one the re-apply actually walks: a
-        // position that came OUT of a paned must go back IN unchanged, so a
-        // notify that changes nothing writes nothing back.
-        //
-        // These positions and their expected results are UNCHANGED from the
-        // pre-`span` signature. That is the point of leaving them alone: the inverse
-        // property is about a shared denominator, so changing which quantity the
-        // denominator is cannot move it, and a row that had to be re-tuned here would
-        // have meant the opposite.
+        // The direction the re-apply walks: a position out of a paned goes back in unchanged, so a no-op
+        // notify writes nothing back. These rows hold whichever quantity is the shared denominator.
         for (desc, min, max, span, position) in [
             ("the near end", 0, 998, SPAN, 0),
             ("one pixel in", 0, 998, SPAN, 1),

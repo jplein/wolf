@@ -1,24 +1,4 @@
-//
-//  SidebarMenuSeamTests.swift
-//  Pure, headless unit tests for the `WolfKeyMap.SidebarMenuSeam` namespace.
-//
-//  These exercise the display-free seam that decides whether a View-menu
-//  sidebar entry ("Project" / "Search") shows a checkmark —
-//  scalar inputs only, NO NSMenuItem, NO window, NO AppKit.
-//
-//  CONTRACT UNDER TEST (sidebar-menu plan, `SidebarMenuSeam.swift`):
-//    * SidebarPanel: Equatable { case tree, search }
-//    * SidebarMenuSeam.isChecked(sidebarVisible:current:item:) -> Bool
-//      returns `sidebarVisible && current == item`, i.e. a panel's entry is
-//      checked iff the sidebar is visible AND that panel is the active one.
-//      Hidden sidebar (sidebarVisible == false) ⇒ never checked, regardless of
-//      `current`. No active panel (current == nil) ⇒ never checked.
-//
-//  NOTE to coder: this test references the pure `WolfKeyMap.SidebarMenuSeam`
-//  enum + `SidebarPanel` the coder adds in
-//  `Sources/WolfKeyMap/SidebarMenuSeam.swift`. Until that source file is added
-//  to the `wolf_key_map` `srcs` list, this test target will not compile.
-//
+// See crates/wolf-macos/Tests/WolfKeyMapTests/README.md#sidebarmenuseamtestsswift
 
 import XCTest
 

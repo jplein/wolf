@@ -1,14 +1,4 @@
-//
-//  StatePersistence.swift
-//  Observes ONE window's geometry / sidebar / tab-group changes and fires a
-//  coalesced whole-tree state snapshot on the coordinator whenever any of them
-//  change, so `state.json` tracks the live UI. Owned by a `WolfWindowController`.
-//
-//  This is TRIGGER-ONLY glue: it performs NO file IO and no `state_set_*` calls
-//  (those per-index bridge setters are gone). Persistence is now a whole-tree
-//  snapshot the coordinator walks (`AppDelegate.snapshotNow`); this object's job
-//  is only to notice this window changed and ask for a (coalesced) re-snapshot.
-//
+// Asks the coordinator for a coalesced state snapshot when one window changes.
 
 import AppKit
 
@@ -73,9 +63,8 @@ final class StatePersistence: NSObject {
       center.addObserver(
         forName: NSWindow.didResizeNotification, object: window, queue: .main
       ) { [weak self] _ in
-        // Live-resize spams didResize per frame; skip those (the
-        // end-of-live-resize notification above catches the final size)
-        // and fire only on discrete resizes (zoom, programmatic setFrame).
+        // Skip live-resize didResize spam; the end-of-live-resize notification above catches
+        // the final size, so this fires only on discrete resizes such as zoom or setFrame.
         guard let self, let window = self.window, !window.inLiveResize else {
           return
         }

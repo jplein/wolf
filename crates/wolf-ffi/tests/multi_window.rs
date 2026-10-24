@@ -154,20 +154,17 @@ fn multi_core_identity_snapshots_and_wake_routing() {
 
     let init_lua = common::init_lua_path();
 
-    // Point the state machinery at a private tempdir for the WHOLE test, so the
-    // best-effort shutdown flush lands somewhere hermetic (never the user's real
-    // state dir). Safe to mutate because this binary has exactly one test.
+    // A private state dir for the whole test keeps the shutdown flush hermetic. Safe to mutate
+    // because this binary has exactly one test.
     let state_dir = tempfile::tempdir().expect("failed to create temp state dir");
     std::env::set_var("WOLF_STATE_DIR", state_dir.path());
 
-    // Register the process-global wake callback BEFORE starting either core, so
-    // every wake (including startup redraws) is recorded against its token. This
-    // is the SAME callback for both cores — the whole point of the token ABI.
+    // One process-global wake callback serves both cores, registered before either starts so every
+    // wake, startup redraws included, is recorded against its token.
     wolf_ffi_set_wake(Some(recording_wake));
 
-    // Two distinct cwds so the two cores are unmistakably separate sessions; kept
-    // alive until after both `shutdown()`s (they are nvim's working dirs + search
-    // roots and must outlive the sessions).
+    // Distinct cwds keep the cores separate sessions; they are nvim's working dirs, so they stay
+    // alive until after both `shutdown()`s.
     let cwd_a = tempfile::tempdir().expect("failed to create temp cwd A");
     let cwd_b = tempfile::tempdir().expect("failed to create temp cwd B");
 
@@ -201,11 +198,8 @@ fn multi_core_identity_snapshots_and_wake_routing() {
         "each core must mint a DISTINCT wake token (A={token_a}, B={token_b})"
     );
 
-    // --- 3. Independent snapshots + wake routing into A ----------------------
-    // Capture wake baselines just before driving A: after typing into A, A's
-    // token must advance while B's stays put (a clobbered wake layer would bump
-    // B). B is idle+attached, so it should not redraw on its own during this
-    // window; the robust core assertion is that A's OWN token advanced.
+    // --- 3. Independent snapshots + wake routing: typing into A advances A's token. Idle B's
+    // stays put, since a clobbered wake layer would bump it; A's own advance is the core check.
     let baseline_a = wake_count(token_a);
     let baseline_b = wake_count(token_b);
 

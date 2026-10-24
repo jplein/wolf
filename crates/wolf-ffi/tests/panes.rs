@@ -64,9 +64,6 @@ const FLUSH_TIMEOUT: Duration = Duration::from_secs(10);
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 // -- FfiKeyEvent.kind discriminants (mirror `wolf-ffi/src/lib.rs` `mod kind`) --
-//
-// Char is first, Enter second (the `wolf_core::Key` variant order). These are the
-// only two kinds this test needs to type an Ex command.
 /// A printable character (`ch` carries the Unicode scalar).
 const KIND_CHAR: u8 = 0;
 /// The Enter / Return key (executes the typed Ex command).
@@ -184,9 +181,7 @@ fn panes_split_resize_focus_close() {
         frame.cols()
     );
 
-    // --- 2. Baseline: exactly one window grid >= 2 --------------------------
-    // The single editor window may surface a beat after the first frame, so poll
-    // until at least one live window grid appears.
+    // --- 2. Baseline: exactly one window grid >= 2, which may surface a beat after the first frame.
     let deadline = Instant::now() + FLUSH_TIMEOUT;
     let mut baseline = live_windows(&handle);
     while Instant::now() < deadline {
@@ -231,9 +226,8 @@ fn panes_split_resize_focus_close() {
         "read_frame_for_grid(original_grid) should report a non-empty frame"
     );
 
-    // --- 3. Trigger a vsplit; poll drain_intents() for a SPLIT intent -------
-    // PREFER `:vsplit<CR>` over `<C-w>v`: the Ex-command path also emits the Split
-    // intent and is more deterministic headless.
+    // --- 3. Trigger a vsplit; poll drain_intents() for a SPLIT intent.
+    // `:vsplit` over `<C-w>v`: both emit the intent, but the Ex path is deterministic headless.
     send_ex_command(&handle, ":vsplit");
 
     // drain_intents() DRAINS, so accumulate across polls until a SPLIT appears,
@@ -307,11 +301,8 @@ fn panes_split_resize_focus_close() {
         "read_frame_for_grid(new_grid) should report a non-empty frame"
     );
 
-    // --- 5. resize_grid(newGrid, 40, 20); poll until nvim reflects it -------
-    // nvim is authoritative (it echoes the size back via grid_resize), so the
-    // per-grid frame's cols() should settle to exactly RESIZE_COLS. If exact
-    // equality proves brittle headless, the fallback is `cols() > 0 && cols() <=
-    // RESIZE_COLS` — but we PREFER exact here.
+    // --- 5. resize_grid(newGrid, 40, 20): nvim echoes the size back via grid_resize, so cols()
+    // settles to exactly RESIZE_COLS.
     handle.resize_grid(new_grid, RESIZE_COLS, RESIZE_ROWS);
 
     let deadline = Instant::now() + FLUSH_TIMEOUT;
@@ -348,10 +339,8 @@ fn panes_split_resize_focus_close() {
         "active_win() should follow focus_win(original_win) (got {focused})"
     );
 
-    // --- 7. Close the focused (original) window; poll windows() to ONE ------
-    // We focused original_win in step 6, so `:close` closes THAT window. The close
-    // is observed via the window vanishing from windows() — there is NO close
-    // intent. The survivor is the new window.
+    // --- 7. `:close` the original window focused in step 6. No close intent exists: the close is
+    // observed by the window leaving windows().
     let closed_win = original_win;
     send_ex_command(&handle, ":close");
 

@@ -167,9 +167,8 @@ pub fn launch_readiness(windows: &[WindowReadiness]) -> Result<(), Blocker> {
             return Err(Blocker::NotPainted);
         }
     }
-    // Every window has `panes` and `first_paint` by the loop above, so the max is a
-    // real window; the `else` arm is unreachable but answers a blocker rather than
-    // panicking.
+    // Every window has `panes` and `first_paint` by the loop above; the unreachable `else` answers
+    // a blocker rather than panicking.
     let Some(input) = windows.iter().max_by_key(|window| window.first_paint) else {
         return Err(Blocker::NoLaunchWindow);
     };
@@ -256,12 +255,8 @@ mod tests {
     use super::*;
     use wolf_core::Liveness;
 
-    // Nothing here touches GTK, the environment or a clock, and neither does the
-    // seam: every window is a value built below. Expected values (labels, the
-    // variable name, the prefix, file contents) are re-typed as literals rather than
-    // read back from the seam, because comparing a const with itself holds for
-    // whatever value it takes — including one that silently breaks the harness's
-    // `wait_ready` or a `grep wolf-ready:` over a red run's stderr.
+    // No GTK, environment or clock here or in the seam. Expected values are re-typed literals: a const
+    // compared with itself holds even for a value that breaks `wait_ready` or `grep wolf-ready:`.
 
     /// [`READY_FILE_ENV`] re-typed as a literal. The smoke harness's `cage_command`
     /// sets this exact name; a rename here and not there leaves every smoke waiting

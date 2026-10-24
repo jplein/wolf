@@ -141,9 +141,8 @@ fn attach_creates_window_grid() {
         active.rows
     );
 
-    // win <-> grid mapping is internally consistent: each window entry is keyed by
-    // its own grid id, and grid_for_win round-trips back to that grid. We do NOT
-    // assert any literal win-handle value (encoding is a coder impl detail).
+    // Each window entry is keyed by its own grid id and grid_for_win round-trips to it; literal
+    // win-handle values are an implementation detail and never asserted.
     for (&grid_id, win) in &snap.windows {
         assert_eq!(
             win.grid, grid_id,
@@ -336,9 +335,7 @@ fn active_grid_follows_focus() {
     // Capture the focused grid (grid A) BEFORE switching focus.
     let grid_a = core.read_snapshot().cursor.grid;
 
-    // Move focus to the other window: <C-w>w cycles to the next window. The
-    // harness exposes ctrl-chords via `ctrl(Key::Char('w'))`; the trailing 'w' is
-    // a plain key.
+    // <C-w>w cycles focus to the next window.
     core.send_input(ctrl(Key::Char('w')));
     core.send_input(ch('w'));
 
@@ -403,14 +400,8 @@ fn resize_grid_changes_only_that_grid() {
     // Per-grid resize through the ordered input pump (no race with redraw).
     core.resize_grid(target, RESIZE_GRID_COLS, RESIZE_GRID_ROWS);
 
-    // NOTE to coder: this polls for the EXACT requested dims, matching the plan's
-    // "poll until snap.grid(G) has the new cols/rows". The dims (50x15) are chosen
-    // well inside the 80x24 outer grid so nvim should honor them via
-    // nvim_ui_try_resize_grid. If nvim clamps a window grid to the surrounding
-    // layout instead of honoring the request exactly, relax this to assert the
-    // target grid's dims merely CHANGED from their pre-resize value — the
-    // load-bearing assertion is that ONLY the target grid changes and the global
-    // grid is untouched.
+    // Polls for the exact dims, 50x15 inside the 80x24 outer grid. If nvim clamps them, see
+    // crates/wolf-core/tests/README.md#redraw_multigridrs
     poll_until(
         &core,
         &waiter,

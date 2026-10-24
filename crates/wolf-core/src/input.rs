@@ -440,10 +440,8 @@ pub(crate) async fn apply(nvim: &Nvim, event: &InputEvent) -> Result<(), Box<Cal
             Ok(())
         }
         InputEvent::FocusWin { win } => {
-            // nvim_set_current_win takes a Window handle. nvim-rs accepts the
-            // plain i64 over generic RPC (confirmed by the focus_win test); the
-            // matching id form is what the redraw stream decodes window handles
-            // into (see `crate::redraw::ext_handle`).
+            // Generic RPC accepts a plain i64 as the Window handle, the form the redraw stream
+            // decodes handles into (see `crate::redraw::ext_handle`).
             let _ = nvim
                 .call("nvim_set_current_win", vec![Value::from(*win)])
                 .await?;
@@ -458,9 +456,7 @@ pub(crate) async fn apply(nvim: &Nvim, event: &InputEvent) -> Result<(), Box<Cal
         }
         InputEvent::Chdir { path } => {
             command(nvim, &format!("tcd {}", fnameescape(path))).await?;
-            // Opening a folder from the empty state re-homes the untouched
-            // anonymous buffer into the new cwd (the guard makes this a no-op for
-            // real files / general chdirs).
+            // Re-homes the untouched anonymous buffer into the new cwd; a no-op for real files.
             name_untitled_current(nvim).await
         }
         InputEvent::SetTabpage { handle } => set_current_tabpage(nvim, *handle).await,
@@ -713,9 +709,8 @@ async fn nvim_input_mouse(
     row: u32,
     col: u32,
 ) -> Result<(), Box<CallError>> {
-    // nvim_input_mouse(button, action, modifier, grid, row, col). `grid` targets a
-    // specific UI grid: 0 is the global/default grid, while under `ext_multigrid` a
-    // window grid (`>= 2`) targets that pane with GRID-LOCAL row/col.
+    // `grid` 0 is the default grid; under `ext_multigrid` a window grid (`>= 2`) targets
+    // that pane, and row/col are then grid-local.
     let _ = nvim
         .call(
             "nvim_input_mouse",

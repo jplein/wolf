@@ -9,7 +9,7 @@
 //!
 //! Everything a window is lives in [`mod@crate::window`]; everything the process
 //! owns exactly once lives in [`mod@crate::coordinator`], which calls the five
-//! helpers below. The split is `crates/wolf-gnome/DECISIONS.md`'s to justify.
+//! helpers below. The split is `notes/wolf-gnome-decisions.md`'s to justify.
 //!
 //! The coordinator is held in an `Rc<RefCell<Option<_>>>` captured by the
 //! `connect_activate` closure rather than in a `static`: this crate has no
@@ -45,22 +45,19 @@ const FONT_PT_ENV: &str = "WOLF_FONT_PT";
 /// Runs the windowed `wolf-gnome` application, returning the process exit code.
 #[must_use]
 pub fn run() -> glib::ExitCode {
-    // FIRST, because every other `frame_metrics` entry point branches on the
-    // once-only read this forces. A no-op beyond one environment read when
-    // `WOLF_FRAME_STATS` is unset.
+    // First: every other `frame_metrics` entry point branches on the once-only read this forces.
+    // A no-op beyond one environment read when `WOLF_FRAME_STATS` is unset.
     frame_metrics::install();
     let app = adw::Application::builder().application_id(APP_ID).build();
-    // Built on the first activate, not here: `load_config` and `measure_metrics`
-    // both need a running GTK, and `open_state_store` must not run in a process
-    // that turns out to be a remote instance.
+    // Built on the first activate: `load_config` and `measure_metrics` need a running GTK, and
+    // `open_state_store` must not run in a process that turns out to be a remote instance.
     let coordinator: Rc<RefCell<Option<Coordinator>>> = Rc::new(RefCell::new(None));
     app.connect_activate(move |app| activate(app, &coordinator));
     // The app takes no CLI args; pass an empty list so GTK does not try to parse
     // (and reject) anything from the real argv.
     let code = app.run_with_args::<&str>(&[]);
-    // The one non-periodic flush, covering the final interval of a CLEAN quit. A
-    // process killed by a signal never reaches it, which is why every report is
-    // appended to the file as it is emitted.
+    // The one non-periodic flush, for a clean quit. A signal-killed process never reaches it, which
+    // is why every report is appended to the file as it is emitted.
     frame_metrics::flush_final();
     code
 }
@@ -73,9 +70,7 @@ pub fn run() -> glib::ExitCode {
 /// `DBUS_SESSION_BUS_ADDRESS`, so a second process there becomes its own primary
 /// instance rather than sending `activate`.
 fn activate(app: &adw::Application, cell: &Rc<RefCell<Option<Coordinator>>>) {
-    // Cloned out in its own statement so no borrow is live across the calls
-    // below, which build windows and can re-enter nothing but must not be able
-    // to.
+    // Cloned out in its own statement so no borrow is live across the window-building calls below.
     let existing = cell.borrow().clone();
     if let Some(coordinator) = existing {
         coordinator.open_new_window(app);

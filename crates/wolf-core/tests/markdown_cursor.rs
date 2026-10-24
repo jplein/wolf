@@ -761,13 +761,8 @@ fn background_bufload_of_a_markdown_file_reports_no_cursor() {
          markdown_cursors key before the background load; keys were {keys_before:?}"
     );
 
-    // `:badd` creates the buffer WITHOUT loading it; `bufload(bufadd(...))` then
-    // loads it in the background, exactly the way `wolf_preview_file` loads a
-    // link-navigated preview's source. `bufadd()` returns the number of the buffer
-    // that already exists for that name, so both commands — and the `:edit` at the
-    // end — name one and the same buffer. The `bufadd('…')` form also puts the path
-    // inside a string literal, where nvim's `%`/`#` file-argument expansion cannot
-    // touch it, so the call that actually performs the load is expansion-immune.
+    // Load in the background the way `wolf_preview_file` does; `bufadd('…')` names the existing
+    // buffer and keeps the path in a string, immune to nvim's `%`/`#` file-argument expansion.
     ex(&core, &format!("badd {other_path}"));
     ex(&core, &format!("call bufload(bufadd('{other_path}'))"));
 
@@ -810,9 +805,8 @@ fn background_bufload_of_a_markdown_file_reports_no_cursor() {
         |c| c.line == 2,
     );
 
-    // Now bring that same background buffer into the REAL window. This is how the
-    // test learns the bufnr that had to stay absent, and — because a NORMAL window
-    // DOES carry a real cursor — it must now report one.
+    // Bringing the same buffer into a normal window, which carries a real cursor, reveals the
+    // bufnr that had to stay absent, and it must now report one.
     ex(&core, &format!("edit {other_path}"));
     let other_bufnr = wait_for_source_bufnr(&core, &waiter, other.path());
     assert_ne!(
@@ -874,9 +868,8 @@ fn cursor_and_tick_share_the_source_bufnr_key() {
         |c| c.line >= 1,
     );
 
-    // Open the preview (IN PLACE, in the sole pane) so `previews` carries the SAME
-    // source bufnr as both maps. The maps are UPSERT-only, so losing the source's
-    // window does not disturb the keys asserted below.
+    // Open the preview in place so `previews` carries the same source bufnr as both maps; the maps
+    // are upsert-only, so losing the source's window does not disturb the keys.
     let preview_bufnr = core.open_preview();
     assert!(
         preview_bufnr > 0,

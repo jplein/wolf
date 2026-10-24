@@ -1,43 +1,4 @@
-//
-//  PaneTree.swift
-//  Pure, AppKit-free pane-layout tree for the macOS split-panes UI.
-//
-//  A port of `crates/wolf-gnome/src/layout.rs::PaneTree`, the macOS copy of that
-//  pure seam (like `KeyMap.swift` / `Cursor.swift` / `PickerSeam.swift`). It
-//  imports ONLY Foundation (uses `Double`, never `CGFloat`/CoreGraphics) so it
-//  stays in the headless `WolfKeyMap` module and is unit-tested without a window
-//  (see `PaneTreeTests.swift` / `PaneTreeWeightsTests.swift`). The AppKit glue
-//  (`PaneContainerView`) consumes `paneRects()` (and `layout()`) to paint each
-//  pane into a computed rectangle in a single flat view, and `dividers()` +
-//  `setPairFraction()` to drag interior dividers to resize.
-//
-//  ## N-ary frame model (matches Neovim's window layout)
-//
-//  A `Frame` is either a leaf (one pane) or an n-ary split: an `Orientation` (a ROW
-//  of side-by-side children for `.vertical`, a COLUMN of stacked children for
-//  `.horizontal`) plus per-child `weights` (summing to 1) driving the divider
-//  positions. Invariants (upheld by `PaneTree`'s operations): a split has `>= 2`
-//  children; `weights.count == children.count`; and no split sits directly under a
-//  same-orientation split (those are FLATTENED), so each axis is a single flat row/
-//  column.
-//
-//  ## Intentional divergence from the gnome 1:1 port (macOS-only)
-//
-//  The TOPOLOGY contract still matches `wolf-gnome/src/layout.rs` exactly: a
-//  same-orientation split inserts a FLAT sibling AFTER the target; a perpendicular
-//  split NESTS `[target, newPane]`; remove never empties the tree; neighbor uses
-//  STRICTLY positive cross-axis overlap; `leaves()`/`paneRects()` are a stable DFS
-//  order; `.vertical` divides WIDTH, `.horizontal` divides HEIGHT.
-//
-//  The WEIGHT POLICY and the DIVIDER API are macOS-only additions. A
-//  same-orientation split RE-EQUALIZES the row/column (each child gets `1/n` — this
-//  MATCHES the gnome port: `:vsplit`/`:split` redistributes to equal shares); a
-//  fresh two-child split is 0.5/0.5. The ONE remaining divergence from gnome is
-//  REMOVE: it RE-NORMALIZES survivors PROPORTIONALLY (relative sizes preserved, NOT
-//  re-equalized), so a user-resized layout survives an adjacent pane closing.
-//  Together with `dividers()` / `setPairFraction()` / `rebuilt(from:firstLeafId:)`
-//  these drive divider drag-to-resize and full layout persistence.
-//
+// Pure n-ary pane-layout tree, a port of `crates/wolf-gnome/src/layout.rs`.
 
 import Foundation
 
@@ -376,9 +337,7 @@ private func splitIn(
 
   if let i = children.firstIndex(where: { isLeaf($0, target) }) {
     if own == orientation {
-      // FLAT: insert the new pane immediately after the target, then RE-EQUALIZE the
-      // whole row/column to `1/n` each — `:vsplit`/`:split` redistributes to equal
-      // shares (matches the gnome port).
+      // Flat: insert after the target, then re-equalize the row to `1/n`, as the gnome port does.
       children.insert(.leaf(newPane), at: i + 1)
       weights.insert(0.0, at: i + 1)
       equalize(&weights)
@@ -453,9 +412,7 @@ private func normalize(_ frame: inout Frame) {
   children = newChildren
   weights = newWeights
 
-  // COLLAPSE a 1-child split into its sole child; else RE-NORMALIZE the survivors
-  // PROPORTIONALLY (sum back to 1 while preserving relative sizes) — the macOS
-  // weight-preserving divergence from the gnome re-equalize.
+  // Collapse a 1-child split; else renormalize survivors proportionally, where gnome re-equalizes.
   if children.count == 1 {
     frame = children[0]
   } else {

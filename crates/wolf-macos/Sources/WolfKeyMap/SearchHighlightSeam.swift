@@ -1,17 +1,4 @@
-//
-//  SearchHighlightSeam.swift
-//  Pure, headless mapping of Rust BYTE-offset bold ranges into UTF-16 spans.
-//
-//  wolf-core's `context_window` returns the visible line text plus the bold match
-//  ranges as BYTE `[start, end)` offsets into that text. AppKit's
-//  `NSAttributedString` / `NSRange` are UTF-16-indexed, so this seam partitions the
-//  whole string into consecutive, gap-filling spans (every character covered by
-//  exactly one span), each flagged `bold` iff it lies inside a bold byte range,
-//  with the offsets/lengths converted to UTF-16. The `SearchView` then applies a
-//  bold font to bold spans and a dimmed color to the rest.
-//
-//  Toolkit-free (Foundation only), so it is unit-testable without AppKit.
-//
+// Pure mapping of Rust byte-offset bold ranges into UTF-16 spans.
 
 import Foundation
 

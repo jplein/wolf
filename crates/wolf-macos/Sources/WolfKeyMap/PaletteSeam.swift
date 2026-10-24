@@ -1,21 +1,5 @@
-//
-//  PaletteSeam.swift
-//  Pure, AppKit-free decision seams for the macOS command palette.
-//
-//  The command-palette sibling of `PickerSeam.swift`: pure, display-free seams
-//  taking scalar inputs only — NO NSEvent, NO window, NO AppKit — so they are
-//  unit-testable headlessly (see `PaletteSeamTests.swift`).
-//
-//  NOTE (plan §10): `isPaletteTrigger` is DORMANT/UNWIRED. ⌘P is a menu
-//  key-equivalent that preempts `keyDown` (exactly like ⌘N), so the menu item is
-//  the real trigger and this predicate is NOT called from
-//  `PaneContainerView.keyDown`. It is kept for consistency with `PickerSeam` (and
-//  pinned by a test) so a future reader has the palette chord in the same shape as
-//  the picker chord.
-//
-//  Imports ONLY Foundation, so it lives in the Foundation-only `WolfKeyMap`
-//  module alongside `PickerSeam.swift`.
-//
+// Pure, AppKit-free decision seams for the command palette.
+// `isPaletteTrigger` is dormant: the ⌘P menu key-equivalent preempts `keyDown`.
 
 import Foundation
 

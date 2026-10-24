@@ -1,41 +1,4 @@
-//
-//  EditorInsetTests.swift
-//  Pure, headless unit tests for the AppKit-free `WolfKeyMap.EditorInset`.
-//
-//  These exercise the reshaped PER-PANE text-grid-inset arithmetic seam the coder
-//  reshapes in `Sources/WolfKeyMap/EditorInset.swift` (plan §1, §6). Like
-//  `PaneGeometryTests` and `StatusbarLayoutTests`, they import ONLY Foundation-level
-//  test machinery (no AppKit / CoreGraphics, no live window) and stay in the headless
-//  `WolfKeyMap` module. `PaneContainerView` / `MainWindow` are window-server-bound
-//  AppKit glue and are compile + manual-smoke only; all headless coverage lands here.
-//  They reuse the `eps` / `approx` + `assertRectEqual` style from
-//  `PaneGeometryTests.swift`.
-//
-//  ## CONTRACT UNDER TEST (the API the coder must honor, plan §1)
-//
-//    public struct EditorInset {
-//        public static let padding: Double = 20   // single source of truth (points)
-//        public let paneWidth, paneHeight, statusbarHeight, padding: Double  // echoed inputs
-//        public let gridRect: Rect        // PANE-LOCAL (origin at pane top-left):
-//                                         //   x = padding
-//                                         //   y = statusbarHeight + padding
-//                                         //   w = max(0, paneWidth  - 2*padding)
-//                                         //   h = max(0, paneHeight - statusbarHeight - 2*padding)
-//        public let textLeftInset: Double // == padding (statusbar/cmdline text h-padding)
-//        public init(paneWidth: Double, paneHeight: Double,
-//                    statusbarHeight: Double, padding: Double)
-//    }
-//
-//  The padding is now a PER-PANE inset around each pane's text grid rather than a
-//  uniform OUTER margin around the whole editor: the grid is inset by `padding` on
-//  the left/right, and by `statusbarHeight + padding` on top / `padding` on the
-//  bottom. `Rect` is the EXISTING value type from `PaneTree.swift` (`Rect(x:y:w:h:)`,
-//  `Double` fields). Only `gridRect.w` / `gridRect.h` CLAMP to a non-negative floor
-//  (max(0, ...)); the `x` / `y` origins are FIXED offsets and are NOT clamped. One
-//  EXACT case pins the representative numbers; a second case pins the STRUCTURAL
-//  invariants (additive relationships, origins == padding); the remaining cases pin
-//  the width / height clamp edges.
-//
+// See crates/wolf-macos/Tests/WolfKeyMapTests/README.md#editorinsettestsswift
 
 import XCTest
 
@@ -77,12 +40,8 @@ final class EditorInsetTests: XCTestCase {
   // MARK: - Exact case pinned to the representative numbers (plan §6)
 
   func testExactGridRectForRepresentativePane() {
-    // pane 840 x 600, statusbar 40, padding 20:
-    //   gridRect.x = padding                                = 20
-    //   gridRect.y = statusbarHeight + padding              = 40 + 20  = 60
-    //   gridRect.w = max(0, 840 - 2*20)                     = 800
-    //   gridRect.h = max(0, 600 - 40 - 2*20)                = 520
-    //   textLeftInset = padding                             = 20
+    // pane 840x600, statusbar 40, padding 20: gridRect = (20, 40 + 20, 840 - 40, 600 - 40 - 40)
+    // = (20, 60, 800, 520), and textLeftInset = 20.
     let inset = EditorInset(
       paneWidth: 840, paneHeight: 600, statusbarHeight: 40, padding: 20)
 
@@ -172,9 +131,8 @@ final class EditorInsetTests: XCTestCase {
   // MARK: - Edge: statusbar taller than the pane clamps height, y stays unclamped
 
   func testStatusbarTallerThanPaneClampsGridHeightToZero() {
-    // pane 840 x 50, statusbar 80, padding 20: 50 - 80 - 2*20 == -70, height clamps
-    // to 0. The y origin is a FIXED offset (statusbarHeight + padding == 100) and is
-    // NOT clamped even though it exceeds the pane height.
+    // pane 840x50, statusbar 80, padding 20: height 50 - 80 - 40 clamps to 0, but the fixed
+    // y origin (80 + 20 = 100) stays unclamped even though it exceeds the pane height.
     let inset = EditorInset(
       paneWidth: 840, paneHeight: 50, statusbarHeight: 80, padding: 20)
 

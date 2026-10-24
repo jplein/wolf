@@ -263,20 +263,8 @@ fn start_with_filled_buffer() -> (WolfCore, FlushWaiter, u64) {
         "mouse/scroll must target a WINDOW grid, never grid 0/1 (got {grid})"
     );
 
-    // EMPIRICAL, copied verbatim in substance from
-    // `crates/wolf-ffi/tests/mouse_scroll.rs`: `:put =range(1,200)` yields
-    // 1-CHAR-WIDE lines ("1".."200"), so a click at column 2 clamps to
-    // end-of-line (column 0) and the exact-column assertion below fails. Use
-    // zero-padded 5-char lines instead, so column 2 (the 3rd character) is a REAL
-    // position the cursor can land on.
-    //
-    // EMPIRICAL: a literal double-quote CANNOT appear inside `:put =<expr>`.
-    // Under `:put =` Neovim treats a `"` as the start of an Ex comment and strips
-    // it BEFORE evaluating the expression, so `'printf("%05d", v:val)'` fails with
-    // `E115: Missing quote` and never fills the buffer. Quote the format with
-    // DOUBLED SINGLE QUOTES instead (standard Vimscript single-quoted-string
-    // escaping). Every character below is just a printable `Key::Char` — no shell
-    // escaping and no Rust escaping, because there is no `"` anywhere in it.
+    // Zero-padded 5-char lines make column 2 a real cursor position (1-char lines clamp to col 0).
+    // Doubled single quotes: under `:put =`, a `"` starts an Ex comment (`E115: Missing quote`).
     send_ex_command(&core, ":put =map(range(1,200), 'printf(''%05d'', v:val)')");
 
     let filled = poll_until(|| linecount(&core, grid).is_some_and(|n| n >= LINE_COUNT_TARGET));
@@ -350,11 +338,8 @@ fn mouse_press_drag_release_selects_via_seams() {
         cursor_cell(&core, grid)
     );
 
-    // --- 3. Drag to a DELIBERATELY out-of-bounds pixel -----------------------
-    // In production these coordinates arrive as `start_point() + offset`, and a
-    // drag routinely carries the point outside the widget. Nothing rejects it:
-    // `cell_at` clamps to the nearest edge cell, which is exactly what makes
-    // drag-past-the-edge selection work.
+    // --- 3. Drag to a deliberately out-of-bounds pixel -----------------------
+    // Real drags leave the widget; `cell_at` clamps to the edge cell, so selection past it works.
     let drag_x = (f64::from(cols) + OVERSHOOT_CELLS) * CELL_W;
     let drag_y = (f64::from(rows) + OVERSHOOT_CELLS) * CELL_H;
     let (drag_row, drag_col) = cell_at(drag_x, drag_y, CELL_W, CELL_H, cols, rows);
@@ -377,8 +362,7 @@ fn mouse_press_drag_release_selects_via_seams() {
     });
 
     // --- 4. The drag put nvim into visual mode -------------------------------
-    // Name-based on purpose (the style `crates/wolf-core/tests/input_keys.rs`
-    // uses): do not couple this to nvim's `mode_info_set` ordering.
+    // Name-based, like `crates/wolf-core/tests/input_keys.rs`: not coupled to `mode_info_set` order.
     let in_visual = poll_until(|| mode_name(&core).is_some_and(|n| n.contains("visual")));
     assert!(
         in_visual,
@@ -400,9 +384,8 @@ fn mouse_press_drag_release_selects_via_seams() {
         alt: input.alt,
     });
 
-    // A RELEASE need not produce a redraw flush of its own, so there is nothing
-    // to poll for; give the ordered input channel a brief settle window instead
-    // (the same idiom `tests/roundtrip_nvim.rs` uses) and then re-read.
+    // A release need not flush a redraw, so there is nothing to poll for; settle briefly instead
+    // (the idiom `tests/roundtrip_nvim.rs` uses), then re-read.
     waiter.drain();
     sleep(SETTLE);
     waiter.drain();
@@ -447,9 +430,8 @@ fn scroll_seam_moves_viewport_via_wolfcore() {
     let (cols, rows) =
         grid_dims(&core, grid).expect("the live window grid should be in the snapshot");
 
-    // The pointer cell the scroll events carry. In production this comes from the
-    // `EventControllerMotion`-recorded position, because GTK's `scroll` signal
-    // carries no coordinates of its own.
+    // In production the pointer cell comes from the `EventControllerMotion` position, because
+    // GTK's `scroll` signal carries no coordinates.
     let pointer_x = (f64::from(PRESS_COL) + CELL_CENTRE) * CELL_W;
     let pointer_y = (f64::from(PRESS_ROW) + CELL_CENTRE) * CELL_H;
     let (row, col) = cell_at(pointer_x, pointer_y, CELL_W, CELL_H, cols, rows);

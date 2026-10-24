@@ -1,30 +1,4 @@
-//
-//  PaneContainerView.swift
-//  The editor area: a SINGLE custom `NSView` that paints every split pane itself.
-//
-//  The macOS analog of wolf-gnome's `pane_view.rs`, but realized as ONE flat
-//  painting view (the proven `GridView` pattern) rather than a tree of nested
-//  `NSSplitView`s. It owns the pure `WolfKeyMap.PaneTree` layout, binds each pane to
-//  a Neovim window + grid, and on each `draw(_:)` computes every pane's rectangle
-//  via `PaneTree.paneRects` and paints that pane's window grid into its rect — so
-//  each pane is drawn INDEPENDENTLY of Neovim, leaving room for front-end-only
-//  per-pane treatments (e.g. the active pane's bold statusbar filename). A one-row cmdline strip along
-//  the bottom paints the outer grid (grid 1). This view is the editor area's first
-//  responder and the single global key sink (keys go to nvim's current window).
-//
-//  Painting one flat view avoids the fragile compositing of deeply-nested custom
-//  layer-backed views. Interior dividers ARE draggable: `mouseDown` hit-tests the
-//  pure `PaneTree.dividers()` list (via `DividerHitTest`) BEFORE forwarding to
-//  nvim; a drag reweights the two adjacent panes through
-//  `DividerDragSeam.clampedLeftFraction` + `PaneTree.setPairFraction` (clamped so
-//  no pane drops below 3 rows / 10 columns) and converges the grids via
-//  `syncGridSizes`; `resetCursorRects` shows the resize cursor on hover (and is
-//  invalidated on every layout mutation). The whole layout (topology + weights +
-//  per-leaf buffer path) persists via `layoutSnapshot()` and is rebuilt on launch
-//  via `requestLayoutRebuild(_:)`. The pure layout decisions live in the
-//  headlessly-tested `WolfKeyMap.PaneTree`; this AppKit glue is compile-verified +
-//  manual-smoke only.
-//
+// The editor area: one flat `NSView` that paints every split pane itself.
 
 import AppKit
 import CoreGraphics
@@ -210,24 +184,8 @@ final class PaneContainerView: NSView {
   /// updated only in `setActivePane`.
   private var lastEditorPane: PaneId?
 
-  // -- Markdown-preview web-view hosting ------------------------------------
-  // A preview pane is a SECOND pane content kind (requirement 2): a real
-  // `WKWebView` subview shows core-rendered HTML over the pane's grid rect,
-  // backed by a blank nvim scratch grid. That scratch grid is NOT painted while
-  // the web view fully, opaquely covers it — see `PaneOcclusion` and the
-  // `paintsGrid` parameter of `paintPane`.
-  //
-  // This used to read "the blank scratch grid paints underneath (occluded,
-  // cheap)". It was never cheap, and that wrong assumption is what hid the cost
-  // for so long: nvim's blank cells hold a literal `" "`, not `""`, so every
-  // "blank" cell still ran a full `CTLineCreateWithAttributedString` +
-  // `CTLineDraw` (plus a per-cell Rust `String` clone across the FFI). Measured
-  // with `WOLF_FRAME_STATS=1`, the blank preview grid (`draw.prev`) cost 22 ms
-  // per frame — essentially identical to the text-full editor grid
-  // (`draw.pane`, also 22 ms) — together nearly all of the ~46 ms `draw`.
-  //
-  // These maps are keyed by the preview WINDOW handle (`FfiPreview.win()`), the
-  // stable identity that survives grid-id churn.
+  // -- Markdown-preview hosting. Maps are keyed by window handle, which survives grid-id churn.
+  // See notes/crates/wolf-macos/Sources/WolfMacOS/PaneContainerView.swift.md#preview-scratch-grid
   /// The hosted `WKWebView`s, one per preview window.
   private var previewWebViews: [Int64: WKWebView] = [:]
   /// The `(sourceBufnr, sourceTick)` each preview window's web view was last loaded
@@ -443,11 +401,8 @@ final class PaneContainerView: NSView {
   /// first wake reads it).
   private var lastTitlebarTheme: (rgb: UInt32, set: Bool)?
 
-  // -- Native command-line / completion / toast overlays (OD9) --------------
-  //    Dedicated `NSView` subviews pinned to the bottom of the editor area and
-  //    shown only while active, rather than a permanently-reserved band, so the
-  //    editor grid keeps its full cols×rows when nothing is showing
-  //    (`cmdheight=0` spirit). They replace the old grid-painted cmdline strip.
+  // -- Native cmdline, completion and toast overlays, shown only while active --
+  // No reserved band, so the editor grid keeps its full cols×rows when nothing is showing.
   /// The native command line (`ext_cmdline`).
   private let cmdlineView: CmdlineView
   /// The completion popup (`ext_popupmenu`), rendered above the command line.
@@ -470,9 +425,7 @@ final class PaneContainerView: NSView {
     self.completionPopupView = CompletionPopupView(metrics: metrics)
     self.toastView = ToastView(metrics: metrics)
     super.init(frame: .zero)
-    // Layer-back so a VISIBLE non-key window (two side-by-side windows of the
-    // SAME project) keeps its last-painted layer while it is not the current
-    // view (the project drives wakes only to `currentView`).
+    // Layer-back so a visible non-current window of the same project keeps its last-painted layer.
     wantsLayer = true
     // The bottom overlays composite ON TOP of the flat pane painting; the
     // completion popup is added LAST so it sits above the command line.
@@ -482,17 +435,10 @@ final class PaneContainerView: NSView {
     // The crash/stall overlay composites ON TOP of everything (added last, starts
     // hidden); it is revealed only when the project reads a non-Alive liveness.
     addSubview(nvimOverlay)
-    // The transient restart banner is added ONCE here, above the panes. It is NOT
-    // re-added per flash (that would duplicate its `viewDidMoveToSuperview`
-    // constraints); `flash()` only toggles `isHidden`. This is NOT a permanent
-    // topmost invariant: a later `showNvimOverlay` does removeFromSuperview +
-    // addSubview on `nvimOverlay`, intentionally re-raising the full-bleed overlay
-    // ABOVE the banner — a fresh crash's overlay should cover any stale banner, and
-    // the banner only ever shows while `nvimOverlay` is hidden.
+    // Added once: `flash()` only toggles `isHidden`, since re-adding duplicates its constraints.
+    // `showNvimOverlay` re-raises the crash overlay above this banner on purpose.
     addSubview(restartBanner)
-    // Follow the live "Show scroll bars" setting so the synthetic scrollbars
-    // switch between always-on (`.legacy`) and fade-on-scroll (`.overlay`)
-    // without a relaunch.
+    // Follow the live "Show scroll bars" setting (`.legacy` or `.overlay`) without a relaunch.
     NotificationCenter.default.addObserver(
       self,
       selector: #selector(scrollerStyleChanged),
@@ -676,10 +622,7 @@ final class PaneContainerView: NSView {
   /// (preview mode → `preview_file` / `preview_buffer`; edit mode → `open` /
   /// `switch_buffer`).
   var activePaneIsPreview: Bool {
-    // The set of window handles currently showing a preview. `previews()`
-    // yields borrowed `FfiPreviewRef`s valid only for the loop body, so each
-    // `win()` scalar is copied out INSIDE the iteration (mirror the caution in
-    // `syncPreviewWebViews`).
+    // `previews()` yields borrowed refs valid only in the loop body, so copy `win()` out inside it.
     var previewWins = Set<Int64>()
     for preview in handle.previews() {
       previewWins.insert(preview.win())
@@ -740,9 +683,8 @@ final class PaneContainerView: NSView {
   override func keyDown(with event: NSEvent) {
     let flags = event.modifierFlags
 
-    // Picker trigger (Command+O) is intercepted BEFORE translation so it is
-    // never forwarded to Neovim. While the picker is open its search field is
-    // first responder, so this stops firing — suppression is automatic.
+    // Command+O is intercepted before translation so Neovim never sees it; while the picker is
+    // open its search field is first responder, so this stops firing.
     if PickerSeam.isPickerTrigger(
       charactersIgnoringModifiers: event.charactersIgnoringModifiers ?? "",
       command: flags.contains(.command)
@@ -751,11 +693,8 @@ final class PaneContainerView: NSView {
       return
     }
 
-    // Option-as-option (the default): route every printable-candidate key press
-    // through the dead-key composer so accented characters compose (Option-u then
-    // u → ü). The persisted `deadKeyState` carries composition across the two
-    // keystrokes; a plain key with no pending dead key composes to itself. Named
-    // keys, ctrl/meta combos, and legacy option-as-alt fall through to `translate`.
+    // Option-as-option: route printable candidates through the dead-key composer (Option-u, u → ü);
+    // named keys, ctrl/meta combos and option-as-alt fall through to `translate`.
     if KeyComposition.routesThroughComposer(
       keyCode: event.keyCode,
       ctrl: flags.contains(.control),
@@ -906,11 +845,8 @@ final class PaneContainerView: NSView {
   override func scrollWheel(with event: NSEvent) {
     let point = convert(event.locationInWindow, from: nil)
 
-    // Scroll-over-toast exemption (OD8): a wheel gesture WHILE HOVERING the
-    // visible toast scrolls the TOAST and is NOT forwarded to Neovim — so no
-    // `Scroll` input reaches core and the toast is not dismissed. Every other
-    // scroll (over the editor) falls through to the pane forwarding below, which
-    // DOES send a `Scroll` and therefore dismisses the toast.
+    // A wheel over the visible toast scrolls the toast and is not forwarded, so it stays shown;
+    // any other scroll sends a `Scroll`, which dismisses it.
     if !toastView.isHidden, toastView.frame.contains(point) {
       let cellH = CGFloat(metrics.cellHeight)
       let dy =
@@ -936,9 +872,7 @@ final class PaneContainerView: NSView {
     }
 
     let cellH = Double(metrics.cellHeight)
-    // Precise (trackpad) deltas are already in points; coarse (mouse-wheel)
-    // deltas are in lines, so scale them by the cell height to share the
-    // whole-cell accumulator.
+    // Trackpad deltas are points; mouse-wheel deltas are lines, so scale those by the cell height.
     let dy =
       event.hasPreciseScrollingDeltas
       ? Double(event.scrollingDeltaY)
@@ -946,12 +880,8 @@ final class PaneContainerView: NSView {
     let steps = scrollAccumulator.consume(deltaY: dy, cellHeight: cellH)
     guard steps != 0 else { return }
 
-    // DIRECTION — the SINGLE flip point. `scrollingDeltaY` ALREADY reflects the
-    // user's "natural scroll" preference (the system flips its sign for us, just
-    // like `NSScrollView` sees), so we use its sign directly. Do NOT additionally
-    // consult `isDirectionInvertedFromDevice` — that double-corrects and inverts
-    // scrolling for natural-scroll users. A positive delta shows earlier content,
-    // i.e. the viewport moves UP. If scrolling ever feels inverted, flip this line.
+    // The single flip point. `scrollingDeltaY` already honors natural scrolling; also consulting
+    // `isDirectionInvertedFromDevice` double-corrects. A positive delta moves the viewport up.
     let direction = steps > 0 ? Self.scrollDirUp : Self.scrollDirDown
 
     let cell = geometry(for: gridRect(ofPane: rect), fullWidth: fullWidth(forGrid: grid))
@@ -1006,10 +936,8 @@ final class PaneContainerView: NSView {
   private func syncGridSizes() {
     guard bounds.width > 0, bounds.height > 0 else { return }
 
-    // Grid 1 (the outer/global grid) covers the whole view. Under `ext_messages`
-    // it empties (`cmdheight=0`) and the command line / messages render via the
-    // native overlays, but keeping it view-sized is harmless and preserves its
-    // default-bg used for the editor padding fill.
+    // Grid 1 covers the whole view. Under `ext_messages` it is empty, but keeping it view-sized
+    // preserves its default bg, which fills the editor padding.
     let global = gridCells(width: bounds.width, height: bounds.height)
     let outer = handle.read_frame_for_grid(Self.cmdlineGridId)
     if Int(outer.cols()) != global.cols || Int(outer.rows()) != global.rows {
@@ -1020,9 +948,8 @@ final class PaneContainerView: NSView {
 
     for (id, rect) in paneRects() {
       guard let grid = panes[id]?.boundGrid else { continue }
-      // Size from the pane's GRID RECT (the pane minus the top statusbar
-      // strip) via `PaneGeometry`, so nvim sees the REDUCED rows the grid
-      // actually paints into. Full-width panes lift the 90-column cap.
+      // Size from the grid rect, the pane minus its statusbar, so nvim sees the rows actually
+      // painted. Full-width panes lift the 90-column cap.
       let geo = geometry(for: gridRect(ofPane: rect), fullWidth: fullWidth(forGrid: grid))
       let frame = handle.read_frame_for_grid(grid)
       if Int(frame.cols()) != geo.cols || Int(frame.rows()) != geo.rows {
@@ -1090,9 +1017,8 @@ final class PaneContainerView: NSView {
     let frameStart = FrameMetrics.begin()
     defer { FrameMetrics.end(.containerWake, frameStart) }
 
-    // One-shot launch restore of a multi-pane layout: once this view's tabpage is
-    // current AND its first pane has bound, realize the saved split tree in nvim
-    // and rebuild the pane bindings. Gated like `pendingRefocusRebind`.
+    // One-shot launch restore: once this tabpage is current and its first pane bound, realize the
+    // saved split tree in nvim and rebind the panes. Gated like `pendingRefocusRebind`.
     if let saved = pendingLayoutRebuild,
       handle.active_tabpage() == controllerTabpageHandle
     {
@@ -1283,9 +1209,8 @@ final class PaneContainerView: NSView {
     var currentCursors: [Int64: PreviewScrollSeam.CursorPos] = [:]
     let rects = paneRects()
 
-    // `previews()` yields borrowed `FfiPreviewRef`s valid only for the loop
-    // body, so each preview is fully consumed inside its own iteration (the pane
-    // is found by its stable window handle; scalars/strings are copied out).
+    // `previews()` yields borrowed refs valid only in the loop body, so consume each one inside its
+    // own iteration, copying scalars and strings out.
     for preview in handle.previews() {
       let win = preview.win()
       guard
@@ -1298,16 +1223,8 @@ final class PaneContainerView: NSView {
       let sourceFullWidth = preview.source_full_width()
       previewFullWidthByGrid[grid] = sourceFullWidth
 
-      // Copy the borrowed ref's scalars out into a `PreviewLoad`; only wins that
-      // passed the pane/grid guard land in `current`, preserving the "only
-      // previews with a bound pane arm the coalescer" behavior.
-      //
-      // CRITICAL INVARIANT: `PreviewLoad` is EXACTLY `(sourceBufnr, sourceTick)`.
-      // The cursor accessors must NEVER reach this construction — because
-      // `winsNeedingReload` compares only `PreviewLoad`s, keeping the cursor out of
-      // it makes a cursor-only change STRUCTURALLY incapable of arming the blocking
-      // HTML-reload coalescer. That is precisely the jump-to-top bug the scroll-sync
-      // feature exists to fix; do not "simplify" the two maps into one.
+      // `PreviewLoad` is exactly `(sourceBufnr, sourceTick)`: keeping the cursor out of it means a
+      // cursor-only change cannot arm the blocking reload. Do not merge the two maps into one.
       current[win] = PreviewSeam.PreviewLoad(
         sourceBufnr: preview.source_bufnr(), sourceTick: preview.source_tick())
       // The PARALLEL cursor map, feeding the independent (cheap, JS-only) scroll
@@ -1315,10 +1232,8 @@ final class PaneContainerView: NSView {
       currentCursors[win] = PreviewScrollSeam.CursorPos(
         line: preview.source_cursor_line(), col: preview.source_cursor_col())
 
-      // Frame the web view to the capped+CENTERED grid rect when the source is in
-      // the ~90-char default, or the full inset pane when the source is full-width.
-      // The occlusion test (draw loop) and the preview statusbar span derive from
-      // this SAME `geometry(…, fullWidth:)` — they MUST change together.
+      // The web view frame, the occlusion test and the preview statusbar span all derive from this
+      // same `geometry(…, fullWidth:)`, so they must change together.
       let gRect = geometry(for: gridRect(ofPane: entry.1), fullWidth: sourceFullWidth).gridRect
       let web = ensurePreviewWebView(for: win)
       web.frame = CGRect(
@@ -1326,21 +1241,14 @@ final class PaneContainerView: NSView {
       web.isHidden = false
     }
 
-    // Only the cheap AppKit layout ran per wake above; the BLOCKING reload is
-    // debounced. Requesting when any win's bound source buffer changed (a reused
-    // preview pane switching sources, even at an equal tick) or its tick advanced
-    // coalesces a keystroke burst into one trailing reload. `lastPreviewLoads` is
-    // updated in the coalesced `perform`, not here, so the gate survives the
-    // debounce.
+    // Only cheap layout runs per wake; the blocking reload is debounced. `lastPreviewLoads` updates
+    // in the coalesced `perform`, not here, so the gate survives the debounce.
     if !PreviewSeam.winsNeedingReload(current: current, loaded: lastPreviewLoads).isEmpty {
       previewReloadCoalescer.request()
     }
 
-    // The INDEPENDENT cursor-follow gate. A pure cursor move (a normal-mode motion,
-    // or a keystroke that did not change the tick the coalescer already saw) arms
-    // only this one: no RPC, no `loadHTMLString`, just one `evaluateJavaScript` per
-    // window per debounce window. `lastPreviewCursors` is updated in the coalesced
-    // `perform`, not here, so the gate survives the debounce.
+    // The independent cursor-follow gate: no RPC or reload, one `evaluateJavaScript` per window.
+    // `lastPreviewCursors` updates in the coalesced `perform`, so the gate survives the debounce.
     if !PreviewScrollSeam.winsNeedingScroll(current: currentCursors, applied: lastPreviewCursors)
       .isEmpty
     {
@@ -1409,21 +1317,16 @@ final class PaneContainerView: NSView {
       previewSourcePaths[win] = preview.source_path().toString()
     }
     var needing = PreviewSeam.winsNeedingReload(current: current, loaded: lastPreviewLoads)
-    // Windows re-armed by a FAILED in-place update. Their `(sourceBufnr, sourceTick)`
-    // is unchanged — the tick was recorded when the swap was dispatched — so
-    // `winsNeedingReload` cannot see them, and the alternative of nil'ing
-    // `lastPreviewLoads[win]` would blind `captureDecision` rule 1 (see
-    // `previewForcedReloads`). Consumed (removed) below, once the win is actually
-    // handled; a win with no web view yet stays armed for the next pass.
+    // Windows re-armed by a failed in-place update (see `previewForcedReloads`): their load is
+    // unchanged, so `winsNeedingReload` misses them. Removed below once actually handled.
     needing.append(contentsOf: previewForcedReloads.subtracting(needing).sorted())
     for win in needing {
       // Skip a preview whose web view does not exist yet WITHOUT updating the
       // map, so the next sync re-requests once the web view exists.
       guard let web = previewWebViews[win], let load = current[win] else { continue }
       previewForcedReloads.remove(win)
-      // ORDERING HAZARD: the capture decision below needs the PREVIOUS load to see
-      // whether this window just switched to another SOURCE FILE, so it must be read
-      // BEFORE `lastPreviewLoads[win]` is reassigned. Do not move the assignment up.
+      // Ordering hazard: read the previous load before reassigning it, since the capture decision
+      // needs it to see a switch to another source file.
       let previousLoad = lastPreviewLoads[win]
       lastPreviewLoads[win] = load
       // One sample per preview (explicit start/stop, not `defer`). Deliberately
@@ -1431,32 +1334,12 @@ final class PaneContainerView: NSView {
       let renderStart = FrameMetrics.begin()
       let html = handle.render_preview(load.sourceBufnr).toString()
       FrameMetrics.end(.previewRender, renderStart)
-      // A `file://` baseURL from the win's source path lets relative links (and
-      // #fragments) resolve against the real file location; unknown → nil
-      // (unchanged OD/O4 behavior — no local-subresource loading is added).
+      // A `file://` baseURL lets relative links and #fragments resolve against the real file;
+      // with no path it is nil, and no local-subresource loading is added.
       let path = previewSourcePaths[win] ?? ""
       let base = path.isEmpty ? nil : URL(fileURLWithPath: path)
-      // HOW this render reaches the page. The typing path takes `.inPlace` — a body
-      // swap inside the LIVE document, with no navigation at all — because a
-      // navigation re-ships ~965 KiB of inlined base64 @font-face CSS across the
-      // WKWebView IPC boundary and re-commits the document at the coalescer's ~33ms
-      // cadence, which is what made the preview flicker between the top and its real
-      // offset while typing. Everything that genuinely needs a navigation still gets
-      // one; the whole ordered decision lives in the pure seam and this is a
-      // mechanical switch over it.
-      //
-      // The cached selection dies with the document it was made in, on BOTH branches
-      // below: a body swap and a full load each destroy the DOM selection. Clearing
-      // it HERE, synchronously, buys exactly one thing — independence from a late
-      // CLEAR. Trusting the page to report the collapse would leave Edit > Copy
-      // enabled over text that is no longer on screen for as long as that push takes
-      // to arrive, which is easily long enough to open the Edit menu. It does NOT
-      // make a stale entry impossible: the outgoing document stays live until WebKit
-      // commits the replacement (and the body swap is a separate task), so a
-      // `mouseup`, `keyup` or already-pending rAF push landing in that frame or two
-      // re-populates the entry. That residual is benign — those pushes read the live
-      // selection at call time, so the worst case is text the user genuinely had
-      // selected a moment earlier, the same direction the design already accepts.
+      // `updateStrategy` picks how the render reaches the page; the cached selection is cleared on
+      // both paths. See notes/wolf-macos-decisions.md#how-a-preview-reaches-its-web-view
       previewSelections[win] = nil
       switch PreviewScrollSeam.updateStrategy(
         html: html,
@@ -1469,21 +1352,11 @@ final class PaneContainerView: NSView {
       {
       case .inPlace(let body):
         let cursor = currentCursors[win] ?? PreviewScrollSeam.CursorPos(line: 0, col: 0)
-        // `__wolfUpdate` ENDS with `__wolfFollow`, so the follow has been applied.
-        // Recording it here keeps `followDirtyPreviewCursors` from immediately
-        // re-issuing a redundant `followJS` — exactly mirroring what
-        // `previewDidFinishLoad`'s restore branch does.
+        // `__wolfUpdate` ends with `__wolfFollow`, so record the cursor as applied, as
+        // `previewDidFinishLoad`'s restore branch does, to avoid a redundant `followJS`.
         lastPreviewCursors[win] = cursor
-        // The in-place path touches NONE of the capture/restore machinery: no
-        // `captureDecision`, no `pendingPreviewRestores`, no `previewLoadsInFlight` /
-        // `pendingPreviewDocuments` / `previewLiveDocuments` / `previewScrollStates`.
-        // Strategy rule 2 makes an in-place update and a pending restore mutually
-        // exclusive per window BY CONSTRUCTION.
-        //
-        // Reuses the `prev.html` bucket rather than adding a `FrameStatsBucket` case:
-        // `FrameStatsTests` pins the bucket table exhaustively (rawValues 0..<n), so a
-        // new case is not the cheap change it looks like. Both samples measure the
-        // synchronous DISPATCH of one document update, so the bucket stays coherent.
+        // Touches none of the capture/restore state: strategy rule 2 makes an in-place update and a
+        // pending restore mutually exclusive. Timed in `prev.html`, like the full-load dispatch.
         let updateStart = FrameMetrics.begin()
         web.callAsyncJavaScript(
           PreviewScrollSeam.inPlaceUpdateJS(),
@@ -1493,13 +1366,8 @@ final class PaneContainerView: NSView {
             PreviewScrollSeam.inPlaceUpdateArgumentNames.col: Int(cursor.col),
           ],
           in: nil,
-          // THE CONTENT WORLD MUST BE `.page`. User scripts added via
-          // `addUserScript` WITHOUT an explicit world land in `.page`, so that is
-          // where `__wolfUpdate` lives. A `.defaultClient` world would see a
-          // DIFFERENT `window`, every call would return the `0` sentinel, and the
-          // feature would silently degrade to permanent full reloads — a green test
-          // suite and an unchanged flicker bug. This is the highest-risk line in the
-          // change; do not "tidy" it to the isolated world.
+          // Must be `.page`, where `addUserScript` put `__wolfUpdate`. Another world returns
+          // the 0 sentinel every call and silently pins every window on full reloads.
           in: .page,
           completionHandler: { [weak self] result in
             guard let self else { return }
@@ -1508,9 +1376,8 @@ final class PaneContainerView: NSView {
               // A JS exception, an invalid frame, or a web-process crash.
               self.previewInPlaceUpdateFailed(win: win)
             case .success(let value):
-              // `__wolfUpdate` returns 1 on success and the falsy 0 sentinel on any
-              // refusal. Anything that does not bridge to a non-zero number — NSNull,
-              // undefined, a bare Void — is treated as a refusal too.
+              // `__wolfUpdate` returns 1 on success and 0 on refusal; anything not bridging to
+              // a non-zero number, such as NSNull or undefined, is a refusal too.
               if ((value as? NSNumber)?.intValue ?? 0) == 0 {
                 self.previewInPlaceUpdateFailed(win: win)
               }
@@ -1521,21 +1388,8 @@ final class PaneContainerView: NSView {
       case .fullLoad:
         break
       }
-      // LIMITATION: this measures ONLY the synchronous `loadHTMLString` call.
-      // The WebKit parse / layout / paint it schedules happens asynchronously,
-      // off this call stack, and is NOT included in the `prev.html` bucket.
-      // Capture the scroll restore IMMEDIATELY before the document is replaced.
-      // Fully synchronous — a pure read of the cache the page has been pushing to
-      // (see `previewScrollStates`) — so there is no race with `loadHTMLString` and
-      // nothing to await. Consumed in `previewDidFinishLoad`.
-      //
-      // NOTE (correcting an earlier claim): two reloads CAN straddle one page load.
-      // The coalescer serializes reloads to one per debounce window, but it does NOT
-      // wait for `didFinish` — a long document's load easily outlasts 33ms — so
-      // reload N+1's capture can run while load N's restore is still pending AND the
-      // new document's `.atDocumentStart` seed has already reset the cache. The whole
-      // decision therefore lives in the pure seam; this is a mechanical switch over
-      // it, and `previousLoad` above is read before the reassignment it depends on.
+      // Capture the restore synchronously from the pushed cache just before the load.
+      // Two reloads can straddle one load, so the rules live in `captureDecision`.
       switch PreviewScrollSeam.captureDecision(
         previousLoad: previousLoad,
         currentLoad: load,
@@ -1544,16 +1398,8 @@ final class PaneContainerView: NSView {
         pendingRestore: pendingPreviewRestores[win])
       {
       case .drop:
-        // The window navigated to ANOTHER FILE. Clearing BOTH the cache and the
-        // pending restore is mandatory, not tidiness: it is what makes
-        // `previewDidFinishLoad` fall through to its first-load branch so the new
-        // document opens at its top (or at its own cursor, when that buffer's cursor
-        // is genuinely known) instead of at the previous file's offset.
-        //
-        // The applied-cursor record goes too (F-2): it belongs to the OLD file, and
-        // leaving it means a new file whose cursor happens to be numerically identical
-        // looks "already applied" to `winsNeedingScroll`, so no follow ever fires for
-        // it. Everything this branch touches is stale by definition.
+        // Another file: clearing the cache, pending restore and applied cursor is mandatory, so
+        // the new document opens at its top or own cursor, and an equal-valued cursor follows.
         previewScrollStates[win] = nil
         pendingPreviewRestores[win] = nil
         lastPreviewCursors[win] = nil
@@ -1566,14 +1412,8 @@ final class PaneContainerView: NSView {
       case .capture(let request):
         pendingPreviewRestores[win] = request
       }
-      // One MORE navigation is now outstanding (rule 2 forbids an in-place update
-      // while the count is non-zero), and this is what it WILL commit — moved into
-      // `previewLiveDocuments` by `previewLoadSettled` when the LAST outstanding
-      // navigation lands. Incremented, not set: this reload may well be issued while
-      // the previous one is still navigating, and the callbacks must be able to tell
-      // "the last one landed" from "an earlier, superseded one landed". Assigning
-      // `nil` to the pending descriptor clears it: an unsplittable document must never
-      // become a live document, because a body-only swap could not reproduce it.
+      // One more navigation is outstanding; incremented, not set, since a reload can be issued
+      // while the previous one still navigates. An unsplittable document never becomes live.
       previewLoadsInFlight[win, default: 0] += 1
       pendingPreviewDocuments[win] = PreviewScrollSeam.splitDocument(html).map {
         PreviewScrollSeam.LiveDocument(
@@ -1590,15 +1430,8 @@ final class PaneContainerView: NSView {
   private func ensurePreviewWebView(for win: Int64) -> WKWebView {
     if let existing = previewWebViews[win] { return existing }
 
-    // Build the configuration up front so the click-to-focus user script +
-    // message handler are installed before the web view exists. The preview
-    // `WKWebView` swallows AppKit mouse events, so the container's `mouseDown`
-    // never fires over it; the injected capture-phase `mousedown` listener
-    // (`PreviewSeam.clickFocusJS`) posts to the `PreviewClickFocusHandler`
-    // registered under `PreviewSeam.clickFocusHandlerName`, which focuses the
-    // pane. The controller retains the proxy STRONGLY, so the proxy holds this
-    // container WEAKLY (no retain cycle); the proxy is also retained here for
-    // explicit removal in `removePreviewWebView`.
+    // Install the click-to-focus script and handler before the web view exists: the web view
+    // swallows mouse events. The controller retains the proxy, so the proxy holds `self` weakly.
     let config = WKWebViewConfiguration()
     let proxy = PreviewClickFocusHandler(win: win, container: self)
     previewFocusHandlers[win] = proxy
@@ -1609,13 +1442,8 @@ final class PaneContainerView: NSView {
         injectionTime: .atDocumentStart,
         forMainFrameOnly: true))
 
-    // The scroll-sync pair, exactly parallel to the click-to-focus wiring above and
-    // registered on the SAME content controller under a DIFFERENT name
-    // (`PreviewScrollSeam.stateHandlerName`). The document-start script defines
-    // `__wolfFollow` / `__wolfRestore` and PUSHES the page's scroll state out to the
-    // proxy, which caches it in `previewScrollStates` — the race-free source for the
-    // pre-reload capture. ALL THREE handlers must be removed in
-    // `removePreviewWebView`.
+    // The scroll-state channel, on the same content controller under its own name; its cache is
+    // the race-free source for the pre-reload capture. `removePreviewWebView` removes all three.
     let scrollProxy = PreviewScrollStateHandler(win: win, container: self)
     previewScrollHandlers[win] = scrollProxy
     config.userContentController.add(scrollProxy, name: PreviewScrollSeam.stateHandlerName)
@@ -1625,12 +1453,8 @@ final class PaneContainerView: NSView {
         injectionTime: .atDocumentStart,
         forMainFrameOnly: true))
 
-    // The SELECTION pair — the third channel on this one content controller, again
-    // under its own name (`PreviewCopySeam.selectionHandlerName`). The document-start
-    // script PUSHES the page's selected text out to the proxy, which caches it in
-    // `previewSelections`. It has to be a push for the same reason the scroll state
-    // does: Edit > Copy's enablement is decided in `validateMenuItem`, which is
-    // synchronous and cannot await an `evaluateJavaScript` round trip.
+    // The selection channel, the third on this controller under its own name. A push, because
+    // `validateMenuItem` is synchronous and cannot await `evaluateJavaScript`.
     let selectionProxy = PreviewSelectionHandler(win: win, container: self)
     previewSelectionHandlers[win] = selectionProxy
     config.userContentController.add(
@@ -1643,9 +1467,7 @@ final class PaneContainerView: NSView {
 
     let web = WKWebView(frame: .zero, configuration: config)
     previewWebViews[win] = web
-    // Route clicked links (`.linkActivated`) through PreviewLinkSeam. The web
-    // view holds `navigationDelegate` weakly, so retain the delegate here; the
-    // delegate holds this container weakly (no cycle).
+    // The web view holds `navigationDelegate` weakly, so retain it here; it holds `self` weakly.
     let delegate = PreviewNavigationDelegate(win: win, container: self)
     web.navigationDelegate = delegate
     previewNavDelegates[win] = delegate
@@ -1712,11 +1534,8 @@ final class PaneContainerView: NSView {
         line: preview.source_cursor_line(), col: preview.source_cursor_col())
     }
     for win in PreviewScrollSeam.winsNeedingScroll(current: current, applied: lastPreviewCursors) {
-      // Skip WITHOUT updating `lastPreviewCursors` when the web view does not exist
-      // yet, has never finished a load (the injected script has not run, so
-      // `__wolfFollow` is undefined), or the cursor is still unknown — so the next
-      // sync re-requests once those hold. Same documented skip semantics as
-      // `reloadDirtyPreviews`.
+      // Skip without updating `lastPreviewCursors` until the web view exists, has finished a load
+      // (so `__wolfFollow` is defined) and the cursor is known; the next sync re-requests.
       guard let web = previewWebViews[win], let cursor = current[win], cursor.isKnown,
         previewLoadedWins.contains(win)
       else { continue }
@@ -1729,10 +1548,8 @@ final class PaneContainerView: NSView {
   /// Tears down the hosted web view + last-load entry for window
   /// `win` (it is no longer a preview, or its pane closed).
   private func removePreviewWebView(_ win: Int64) {
-    // Remove the click-to-focus script-message handler on the STILL-LIVE web
-    // view's content controller before dropping it, so the controller releases
-    // its strong ref to the proxy (and the injected script is torn down with the
-    // web view).
+    // Remove each handler on the still-live controller before dropping the web view, so the
+    // controller releases its strong ref to the proxy.
     previewWebViews[win]?.configuration.userContentController
       .removeScriptMessageHandler(forName: PreviewSeam.clickFocusHandlerName)
     // The SECOND handler on that same controller. Missing this removal would leak
@@ -1758,18 +1575,13 @@ final class PaneContainerView: NSView {
     pendingPreviewRestores[win] = nil
     previewSourcePaths[win] = nil
     pendingPreviewFragments[win] = nil
-    // The in-place-update bookkeeping. Leaving a non-zero `previewLoadsInFlight`
-    // count would pin a recreated window on the full path; leaving either document
-    // entry would let a recreated web view be judged against a document it never
-    // committed; leaving a forced-reload entry would arm a reload for a window that
-    // no longer exists.
+    // Leftover in-place bookkeeping would pin a recreated window on the full path, judge it against
+    // a document it never committed, or arm a reload for a window that no longer exists.
     previewLoadsInFlight[win] = nil
     pendingPreviewDocuments[win] = nil
     previewLiveDocuments[win] = nil
     previewForcedReloads.remove(win)
-    // Dropping this is what restores grid painting IMMEDIATELY when a preview
-    // closes: with no web view and no loaded-content flag, `previewOccluder`
-    // returns nil and `isFullyOccluded` is `false` on the very next frame.
+    // Dropping this restores grid painting on the very next frame when a preview closes.
     previewLoadedWins.remove(win)
   }
 
@@ -1867,9 +1679,8 @@ final class PaneContainerView: NSView {
     // on this flag being set on every finished load.
     previewLoadedWins.insert(win)
 
-    // Also before the branches, for the same early-return reason: this navigation is
-    // over, so the in-flight count drops and — IF it was the last one outstanding —
-    // what it was carrying becomes the live document.
+    // Also before the branches, for the same early-return reason: this navigation is over, and if
+    // it was the last outstanding one its document becomes live.
     previewLoadSettled(win: win, succeeded: true)
 
     if let fragment = pendingPreviewFragments.removeValue(forKey: win) {
@@ -2239,9 +2050,8 @@ final class PaneContainerView: NSView {
     }
     if closed.isEmpty { return }
 
-    // The drawer lives OUTSIDE the tree: when its grid dies (a `win_close` hide)
-    // remove it from `panes` and clear `drawerPaneId` WITHOUT the last-leaf guard
-    // or `tree.remove` (it is not a tree leaf).
+    // The drawer is not a tree leaf: when its grid dies, drop it from `panes` and clear
+    // `drawerPaneId` without the last-leaf guard or `tree.remove`.
     var closedDrawer: PaneId?
     if let drawer = drawerPaneId, closed.contains(drawer) {
       closedDrawer = drawer
@@ -2297,17 +2107,13 @@ final class PaneContainerView: NSView {
 
     guard let ctx = NSGraphicsContext.current?.cgContext else { return }
 
-    // Render glyphs with plain grayscale antialiasing and NO font smoothing
-    // (stem darkening). macOS font smoothing thickens light-on-dark text, so a
-    // regular weight reads as bold; disabling it keeps the weight accurate and
-    // matches iA Writer / VS Code / Ghostty on dark backgrounds.
+    // No font smoothing: on dark backgrounds it thickens light text until a regular weight reads as
+    // bold. Plain grayscale antialiasing keeps the weight accurate.
     ctx.setShouldAntialias(true)
     ctx.setShouldSmoothFonts(false)
 
-    // Editor background (the per-pane padding regions around each grid + any
-    // not-yet-tiled gaps). Use the live grid default background (grid 1) so the
-    // padding matches the text area exactly, rather than the static fallback
-    // (which reads darker under a themed background).
+    // Fill padding and untiled gaps with grid 1's live default bg, so the padding matches the text
+    // area; the static fallback reads darker under a themed background.
     let editorBg = WolfColor.cgColor(
       handle.read_frame_for_grid(Self.cmdlineGridId).default_bg(),
       fallback: WolfColor.fallbackBg)
@@ -2317,21 +2123,14 @@ final class PaneContainerView: NSView {
     let rects = paneRects()
     for (id, paneRect) in rects {
       guard let binding = panes[id], let grid = binding.boundGrid else { continue }
-      // Skip the grid paint (and its FFI frame read) when an opaque, loaded
-      // preview web view fully covers this pane's grid rect — those pixels are
-      // never visible. The containment test has tolerance 0.0 against the SAME
-      // capped+centered `geometry(…, fullWidth:).gridRect` expression
-      // `syncPreviewWebViews` assigns to the web view, so any out-of-sync geometry
-      // (live resize, split, pre-close) fails containment and the grid paints. The
-      // statusbar strip is OUTSIDE `gridRect` and always paints.
+      // Skip the grid paint and its FFI frame read when a loaded preview web view fully covers the
+      // grid rect. The statusbar is outside `gridRect` and always paints; see `PaneOcclusion`.
       let occluded = PaneOcclusion.isFullyOccluded(
         gridRect: geometry(
           for: gridRect(ofPane: paneRect), fullWidth: fullWidth(forGrid: grid)
         ).gridRect,
         by: previewOccluder(forWin: binding.win))
-      // Explicit begin/end rather than `defer` so the sample covers exactly the
-      // `paintPane` call and nothing else in the loop body (mirrors the
-      // `previewRender` call site).
+      // Explicit begin/end rather than `defer`, so the sample covers exactly the `paintPane` call.
       let paneStart = FrameMetrics.begin()
       paintPane(
         grid: grid, paneRect: paneRect, active: id == activePane, paintsGrid: !occluded,
@@ -2340,9 +2139,7 @@ final class PaneContainerView: NSView {
         previewNamesByGrid[grid] != nil ? .drawPanePreview : .drawPaneEditor, paneStart)
     }
     drawDividers(rects, ctx: ctx)
-    // The command line / completion popup / toast are dedicated overlay
-    // subviews (they paint themselves on top of this flat view); nothing is
-    // painted for them here.
+    // The cmdline, completion popup and toast are overlay subviews that paint themselves.
     drawScrollbars(rects, ctx: ctx)
   }
 
@@ -2370,21 +2167,15 @@ final class PaneContainerView: NSView {
       active: active, ctx: ctx)
     FrameMetrics.end(.paneStatusbar, statusbarStart)
 
-    // Return BEFORE `read_frame_for_grid`: the FFI frame read (a whole cell
-    // vector across the bridge, one Rust String clone per cell) is a material
-    // part of the saving, so it must NOT be hoisted above this branch.
-    //
-    // This also skips `drawCursor`, which is only reachable from `paintGrid`.
-    // That is CORRECT and not an oversight: an occluded pane is a preview pane,
-    // and its cursor is already invisible under the opaque web view.
+    // Return before `read_frame_for_grid`, whose per-cell clone is much of the saving. Skipping
+    // `drawCursor` too is correct: an occluded pane's cursor is hidden under the web view.
     guard paintsGrid else {
       ctx.restoreGState()
       return
     }
 
-    // `pane.read` sits BELOW the `paintsGrid` guard on purpose: an occluded pane
-    // must record NO sample, which is what preserves the occlusion semantics and
-    // makes `count(pane.read) == count(draw.pane)` a meaningful check.
+    // Below the guard on purpose: an occluded pane records no `pane.read` sample, so
+    // `count(pane.read) == count(draw.pane)` stays a meaningful check.
     let frameReadStart = FrameMetrics.begin()
     let frame = handle.read_frame_for_grid(grid)
     FrameMetrics.end(.paneFrameRead, frameReadStart)
@@ -2417,20 +2208,15 @@ final class PaneContainerView: NSView {
     ctx.translateBy(
       x: rect.minX + CGFloat(geo.paintOffsetX),
       y: rect.minY + CGFloat(geo.paintOffsetY))
-    // `pane.cells` is timed at the CALL SITE, not with a `defer` inside
-    // `paintCells`: `defer` ordering relative to the ARC release of a function's
-    // locals is UNSPECIFIED in Swift, and this bucket exists precisely to capture
-    // the `RustVec<FfiCell>` teardown that happens at that release.
+    // Timed at the call site: `defer` order against ARC release of locals is unspecified in Swift,
+    // and this bucket exists to capture the `RustVec<FfiCell>` teardown at that release.
     let cellsStart = FrameMetrics.begin()
     paintCells(frame, ctx: ctx)
     FrameMetrics.end(.paneCells, cellsStart)
 
     if frame.cursor_visible() {
-      // MOST ERROR-PRONE PLACEMENT IN THIS INSTRUMENTATION: `begin()` MUST precede
-      // the whole `drawCursor(...)` statement INCLUDING its arguments, because the
-      // `frame.cells()` argument is a full deep clone of the cell vector, evaluated
-      // here at the call site. A `defer` inside `drawCursor` would start the clock
-      // AFTER that clone, report near-zero, and silently hide it.
+      // `begin()` must precede the whole statement: the `frame.cells()` argument is a deep clone
+      // evaluated here, which a `defer` inside `drawCursor` would silently miss.
       let cursorStart = FrameMetrics.begin()
       drawCursor(ctx, frame: frame, cells: frame.cells(), cols: Int(frame.cols()))
       FrameMetrics.end(.paneCursor, cursorStart)
@@ -2484,16 +2270,12 @@ final class PaneContainerView: NSView {
     ctx.setFillColor(bgColor)
     ctx.fill(strip)
 
-    // ONE preview lookup for the whole function: it decides both the text span's
-    // pane kind (below) and the filename/path source (further down), so "is this a
-    // preview" has a single source of truth per paint.
+    // One preview lookup decides both the span's pane kind and the name source, so "is this a
+    // preview" has one source of truth per paint.
     let previewName = previewNamesByGrid[grid]
 
-    // The text span is based on the INSET grid rect (not the full pane rect), so
-    // the statusbar text sits inside the per-pane padding, flush with the pane's
-    // CONTENT — which differs by kind: an editor's grid is painted at
-    // `paintOffsetX`, a preview's webview is framed to the uncentered `gRect`.
-    // `StatusbarTextSpan` owns that arithmetic.
+    // The span uses the inset grid rect, so the text sits inside the padding flush with the pane's
+    // content; `StatusbarTextSpan` owns that arithmetic.
     let gRect = gridRect(ofPane: paneRect)
     let geo = geometry(for: gRect, fullWidth: fullWidth(forGrid: grid))
     let span = StatusbarTextSpan(
@@ -2503,10 +2285,8 @@ final class PaneContainerView: NSView {
     let textWidth = CGFloat(span.width)
 
     let layout = statusbarLayout
-    // A preview pane's scratch buffer is SKIPPED by the path-based trackers, so
-    // its pane_status is "[No Name]"; override it with `Preview: <basename>`
-    // (from the core's previews() snapshot) and the source's cwd/home-relative
-    // display path on the secondary line.
+    // Path trackers skip a preview's scratch buffer, so its pane_status is "[No Name]"; show
+    // `Preview: <basename>` and the source's display path instead.
     let filename: String
     let displayPath: String
     if let name = previewName {
@@ -2520,11 +2300,8 @@ final class PaneContainerView: NSView {
       displayPath = status.display_path().toString()
     }
 
-    // Colors: the themed titlebar fg when set (secondary derived at a lower
-    // alpha), else AppKit's label / secondary-label system colors. An INACTIVE
-    // pane dims BOTH lines — the themed alphas are scaled by
-    // `statusbarInactiveAlpha`, the non-themed case steps down one system
-    // label tier (label → secondary, secondary → tertiary).
+    // Themed titlebar fg when set, else system label colors. An inactive pane dims both lines:
+    // themed alphas scale by `statusbarInactiveAlpha`, system colors step down one label tier.
     let titlebarFg = handle.theme_titlebar_fg()
     let primaryColor: NSColor
     let secondaryColor: NSColor
@@ -2593,9 +2370,8 @@ final class PaneContainerView: NSView {
     let cellW = metrics.cellWidth
     let cellH = metrics.cellHeight
 
-    // NOT a `defer`: a `defer` registered here would fire at function exit and
-    // swallow part of the teardown, destroying the very separation `pane.cells`
-    // exists to expose. No timer goes inside a loop body.
+    // Not a `defer`: one registered here fires at function exit and swallows part of the teardown
+    // that `pane.cells` exists to separate out. No timer goes inside a loop body.
     let glyphLoopStart = FrameMetrics.begin()
     for row in 0..<rows {
       for col in 0..<cols {
@@ -2624,8 +2400,7 @@ final class PaneContainerView: NSView {
   /// Strokes a thin separator between adjacent panes (along each pane rect's
   /// interior right/bottom edge).
   private func drawDividers(_ rects: [(PaneId, CGRect)], ctx: CGContext) {
-    // Compare against the pane-area edges (the full view width, and the pane area
-    // above the cmdline strip), so the outermost panes' edges aren't mistaken for
+    // Compare against the pane-area edges, so the outermost panes' edges are not taken for
     // interior dividers.
     let areaW = bounds.width
     let areaH = paneAreaHeight
@@ -2665,12 +2440,8 @@ final class PaneContainerView: NSView {
       let linecount = frame.linecount()
       guard linecount > 0 else { continue }
 
-      // `win_viewport` reports `topline`/`botline` as 0-based buffer line
-      // indices (botline is one-past-last-visible). Convert the UInt64
-      // viewport values to Double BEFORE any subtraction so a
-      // `botline < topline` or `topline == 0` case can never wrap a UInt64.
-      // Skip when nothing is visible or the whole buffer fits (no
-      // scrollbar needed).
+      // `topline`/`botline` are 0-based, botline one past the last visible. Use Double before
+      // subtracting so a UInt64 can never wrap; skip when nothing shows or the buffer fits.
       let total = Double(linecount)
       let topline = Double(frame.topline())
       let botline = Double(frame.botline())

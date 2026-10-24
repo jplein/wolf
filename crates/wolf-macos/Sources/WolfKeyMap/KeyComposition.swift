@@ -1,19 +1,4 @@
-//
-//  KeyComposition.swift
-//  Pure, AppKit-free decision seam for the macOS option-as-option feature.
-//
-//  This brackets the untestable Carbon/`UCKeyTranslate` glue (`KeyComposer`, in
-//  the WolfMacOS module) with two pure decisions that CAN be tested headlessly:
-//
-//    * `routesThroughComposer(keyCode:ctrl:meta:optionAsAlt:)` — whether a key
-//      press should be routed through the dead-key composer (option-as-option)
-//      rather than the existing `WolfKeyMap.translate` path (option-as-alt / any
-//      ctrl/meta combo / a named key).
-//    * `charEvents(for:)` — turns a composed string into one modifier-free
-//      `FfiKeyEvent` per Unicode scalar, filtering C0/DEL control scalars.
-//
-//  It imports ONLY Foundation and the generated `FfiKeyEvent`, so it is
-//  unit-testable with scalar inputs (no `NSEvent`, no Carbon, no window).
+// Pure routing and event decisions for option-as-option key composition.
 
 import Foundation
 

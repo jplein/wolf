@@ -1,30 +1,4 @@
-//
-//  KeyCompositionTests.swift
-//  Pure, headless unit tests for the AppKit-free `KeyComposition` seam (the macOS
-//  option-as-option feature).
-//
-//  These are the sibling of `KeyMapTests` / `AppearanceSeamTests`: a pure,
-//  display-free check exercised with scalar inputs only — NO AppKit, NO Carbon, NO
-//  live Neovim. The Carbon/UCKeyTranslate composition glue (`KeyComposer`) is not
-//  headlessly testable and lives in the WolfMacOS module; the DECISION logic it
-//  brackets is extracted here into `KeyComposition` so it CAN be tested.
-//
-//  CONTRACTS UNDER TEST (plan "Seam boundary"):
-//    * `KeyComposition.routesThroughComposer(keyCode:ctrl:meta:optionAsAlt:) -> Bool`
-//      is true IFF `!optionAsAlt && !ctrl && !meta && !isNamedKey(keyCode)`. In
-//      option-as-option mode EVERY printable-candidate key routes through the
-//      composer (so the committing keystroke of a dead-key pair composes); when
-//      option-as-alt is on, or any of ctrl/meta is held, or the key is a NAMED key
-//      (Return, arrows, F-keys), it does NOT — the existing `translate` path owns it.
-//    * `KeyComposition.charEvents(for:) -> [FfiKeyEvent]` emits ONE modifier-free
-//      Char event per Unicode scalar of the composed string, filtering C0/DEL
-//      controls, with kind=Char(0) and ctrl/shift/alt/meta all false.
-//
-//  NOTE to coder: this references the `KeyComposition` seam (new,
-//  Foundation-only) and `WolfKeyMap.isNamedKey(keyCode:)` (a public wrapper over
-//  the private `namedKey`), both of which the coder adds. The signatures and field
-//  names asserted below are the contract the implementation must satisfy.
-//
+// See crates/wolf-macos/Tests/WolfKeyMapTests/README.md#keycompositiontestsswift
 
 import XCTest
 

@@ -1,14 +1,4 @@
-//
-//  SearchToggleSeam.swift
-//  Pure, headless seeds for the sidebar search panel's three toggle buttons.
-//
-//  Toolkit-free (Foundation only), so it is unit-testable without AppKit: the
-//  `SearchView` reads these when it builds the toggles.
-//    - "case sensitive" starts as the INVERSE of nvim's `:ignorecase` (seeded once
-//      from `handle.ignorecase()`; toggling it never writes back to nvim).
-//    - "use regex" is ON by default.
-//    - "search all files" is OFF by default (Markdown-only).
-//
+// Pure initial states for the sidebar search panel's three toggle buttons.
 
 import Foundation
 

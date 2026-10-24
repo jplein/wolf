@@ -43,9 +43,8 @@ fn launch_cwd_is_not_recorded_but_real_cd_is() {
     // Fail loud if the real nvim binary is missing.
     let _ = common::require_nvim_bin();
 
-    // The always-on recent-dirs store reads state_dir(); pin it to a fresh
-    // tempdir BEFORE starting the core so folder-mru.sqlite lands somewhere we can
-    // inspect (and never in the user's real state dir). Keep the guard alive.
+    // The recent-dirs store reads state_dir() eagerly: pin it to a fresh tempdir before the core
+    // starts, so folder-mru.sqlite is inspectable and never the user's. Keep the guard alive.
     let state_dir = tempfile::tempdir().expect("failed to create temp state dir");
     std::env::set_var("WOLF_STATE_DIR", state_dir.path());
 
@@ -54,12 +53,8 @@ fn launch_cwd_is_not_recorded_but_real_cd_is() {
     let (_dir_x, cwd_x) = temp_cwd();
     let (core, waiter) = start_core_in_with_waiter(&cwd_x);
 
-    // MRU-hygiene regression guard: the launch/initial cwd X is deliberately NOT
-    // recorded into the recent-dirs MRU. The captive nvim's child-workdir launch
-    // fires the one-shot startup `wolf_cwd` emit, which updates the tracked-cwd
-    // cell ONLY (flagged as the initial emit and skipped by `apply_cwd`'s record
-    // path). Against a fresh, hermetic WOLF_STATE_DIR, the MRU must be EMPTY
-    // before any `:cd` (and must not contain X).
+    // The startup `wolf_cwd` emit updates only the tracked-cwd cell (`apply_cwd` skips the initial
+    // emit's record), so the hermetic MRU must be empty before any `:cd`.
     let before_any_cd = core.recent_dirs();
     assert!(
         before_any_cd.is_empty(),
@@ -76,9 +71,7 @@ fn launch_cwd_is_not_recorded_but_real_cd_is() {
     common::type_str(&core, path_y);
     core.send_input(common::key(Key::Enter));
 
-    // Wait for nvim to process the `:cd` and flush, then poll both read paths: the
-    // launch cwd X is NEVER recorded, so the FIRST recorded entry — rank 0 — must
-    // be the user-typed Y.
+    // The launch cwd X is never recorded, so rank 0 must be the user-typed Y.
     waiter.wait_for_flush(&core, common::FLUSH_TIMEOUT);
     wait_for_recent_top(&core, state_dir.path(), &cwd_y);
 

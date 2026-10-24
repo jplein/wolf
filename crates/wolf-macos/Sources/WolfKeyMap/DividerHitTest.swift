@@ -1,14 +1,4 @@
-//
-//  DividerHitTest.swift
-//  Pure, AppKit-free divider picking for the macOS split-panes UI.
-//
-//  Picks, from a PRE-COMPUTED list of `PaneTree.Divider`s (produced by
-//  `PaneTree.dividers(width:height:)`), the NEAREST divider whose zero-thickness
-//  line is within `tolerance` of a point AND whose point falls within the
-//  divider's span. Enumeration lives on `PaneTree` (it needs the private `Frame`);
-//  picking is pure over the public list, so it lives here in a Foundation-only
-//  seam and is unit-tested headlessly (see `DividerHitTestTests.swift`).
-//
+// Pure divider picking over a pre-computed `PaneTree.Divider` list.
 
 import Foundation
 

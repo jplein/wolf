@@ -1,0 +1,18 @@
+# Standalone on purpose: its own workspace and no dependencies keep it out of crate_universe.
+# See tools/doc-lint/README.md for why.
+[package]
+name = "doc-lint"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+publish = false
+
+[lib]
+name = "doc_lint"
+path = "src/lib.rs"
+
+[[bin]]
+name = "doc-lint"
+path = "src/main.rs"
+
+[workspace]

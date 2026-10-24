@@ -405,9 +405,7 @@ fn poll_buffer_modified(core: &WolfCore, waiter: &FlushWaiter, bufnr: i64) {
     }
 }
 
-// =========================================================================
-// 1. Edit navigation: build, back (LOAD-BEARING absorb), forward, truncate.
-// =========================================================================
+// === 1. Edit navigation: build, back (load-bearing absorb), forward, truncate ===
 
 /// The core browser loop over `:e` navigation, including the **load-bearing
 /// feedback-loop assertion**: `history_back` really MOVES the pane, and the
@@ -523,9 +521,7 @@ fn back_moves_the_pane_and_the_resulting_emit_is_absorbed() {
     core.shutdown().expect("shutdown should be Ok");
 }
 
-// =========================================================================
-// 2. Preview transition + preview link-follow.
-// =========================================================================
+// === 2. Preview transition + preview link-follow ===
 
 /// A preview transition adds EXACTLY ONE entry — `Preview(a)` distinct from the
 /// `Edit(a)` before it — with NO spurious entry for the transient frame in which
@@ -639,9 +635,7 @@ fn preview_transition_and_link_follow_are_tracked() {
     core.shutdown().expect("shutdown should be Ok");
 }
 
-// =========================================================================
-// 3. Terminals: a split :terminal IS tracked; the drawer is NOT.
-// =========================================================================
+// === 3. Terminals: a split :terminal is tracked; the drawer is not ===
 
 /// A `:terminal` in a NORMAL split becomes a `Terminal { bufnr }` entry in THAT
 /// pane's history (labeled `Terminal`), while the terminal DRAWER
@@ -732,9 +726,8 @@ fn split_terminal_is_tracked_but_the_drawer_pane_never_gets_history() {
         "the Terminal entry sits on top of the pane's previous rows, unchanged"
     );
 
-    // --- 2. The DRAWER gets no history at all -------------------------------
-    // (`toggle_terminal` ends in `startinsert`, so no further Ex commands are sent
-    // after this point.)
+    // --- 2. The drawer gets no history. `toggle_terminal` ends in `startinsert`, so no Ex commands
+    // are sent after this point.
     let before = win_handles(&core);
     core.toggle_terminal();
     let drawer_win = poll_win_where(&core, &waiter, "the drawer window to appear", |snap| {
@@ -772,9 +765,7 @@ fn split_terminal_is_tracked_but_the_drawer_pane_never_gets_history() {
     core.shutdown().expect("shutdown should be Ok");
 }
 
-// =========================================================================
-// 4. Untitled (unnamed) buffers.
-// =========================================================================
+// === 4. Untitled (unnamed) buffers ===
 
 /// A RAW `:enew` leaves a genuinely UNNAMED buffer, tracked by bufnr and labeled
 /// `Untitled`. Contrast with the startup buffer: `wolf_new_untitled` NAMES it
@@ -823,9 +814,7 @@ fn unnamed_buffers_are_untitled_entries_named_ones_are_edits() {
     core.shutdown().expect("shutdown should be Ok");
 }
 
-// =========================================================================
-// 5. `win_close` pruning.
-// =========================================================================
+// === 5. `win_close` pruning ===
 
 /// Closing a window PRUNES that window's history (the `win_close` collector
 /// resolves the handle from `Snapshot.windows` BEFORE the entry is removed).
@@ -890,9 +879,7 @@ fn closing_a_window_prunes_its_history() {
     core.shutdown().expect("shutdown should be Ok");
 }
 
-// =========================================================================
-// 6. A failed restore reverts the cursor.
-// =========================================================================
+// === 6. A failed restore reverts the cursor ===
 
 /// When the recorded target no longer exists (a WIPED `Terminal` bufnr), the Lua
 /// helper (`_G.wolf_history_set_buf`, which returns `0` for an invalid buffer)
@@ -927,9 +914,8 @@ fn a_failed_back_returns_false_and_reverts_the_cursor() {
     let grid = wait_for_active_window_grid(&core, &waiter);
     let win = wait_for_win_handle(&core, &waiter, grid);
 
-    // `:terminal` in THIS window (no split), recorded as `Terminal { bufnr }`.
-    // A plain `:terminal` does NOT `startinsert` (only the drawer does), so the
-    // Ex commands below still reach the cmdline.
+    // `:terminal` in this window, recorded as `Terminal { bufnr }`. Unlike the drawer it does not
+    // `startinsert`, so the Ex commands below still reach the cmdline.
     ex_command(&core, "terminal");
     poll_until(
         &core,
@@ -1020,9 +1006,7 @@ fn a_failed_back_returns_false_and_reverts_the_cursor() {
     core.shutdown().expect("shutdown should be Ok");
 }
 
-// =========================================================================
-// 7. Two panes keep independent stacks.
-// =========================================================================
+// === 7. Two panes keep independent stacks ===
 
 /// Histories are keyed by WINDOW handle, so two panes navigate independently.
 #[test]
@@ -1096,9 +1080,7 @@ fn two_panes_have_independent_stacks() {
     core.shutdown().expect("shutdown should be Ok");
 }
 
-// =========================================================================
-// 8. `Snapshot.win_buffers` shape.
-// =========================================================================
+// === 8. `Snapshot.win_buffers` shape ===
 
 /// The NEW parallel map: keyed by WINDOW handle, carrying the real bufnr, the
 /// canonicalized path (`None` for an unnamed buffer — unlike `Snapshot.buffers`,
@@ -1194,9 +1176,7 @@ fn win_buffers_carries_bufnrs_unnamed_windows_and_skips_previews() {
     core.shutdown().expect("shutdown should be Ok");
 }
 
-// =========================================================================
-// 9. The §B4 `bufadd` REBIND contract: Back to an UNSAVED buffer.
-// =========================================================================
+// === 9. The `bufadd` rebind contract: Back to an unsaved buffer ===
 
 /// Navigating Back to an unsaved buffer rebinds **that same modified buffer**
 /// instead of reading a file that was never written to disk.
@@ -1351,10 +1331,8 @@ fn back_to_a_symlinked_path_rebinds_the_same_buffer() {
     let grid = wait_for_active_window_grid(&core, &waiter);
     let win = wait_for_win_handle(&core, &waiter, grid);
 
-    // --- 1. Open doc.md THROUGH the symlink ---------------------------------
-    // Core canonicalizes the emitted name to `<cwd>/real/doc.md` before pushing the
-    // `Edit` entry. nvim resolves the directory symlink in the buffer name itself,
-    // so its own name for the buffer is already that same resolved form.
+    // --- 1. Open doc.md through the symlink: core canonicalizes to `<cwd>/real/doc.md`, and nvim
+    // resolves the directory symlink in the buffer name itself, so both names agree.
     ex_command(&core, "e link/doc.md");
     poll_pane_filename(&core, &waiter, grid, "doc.md");
     let doc_bufnr = win_bufnr(&core, win);
@@ -1397,9 +1375,7 @@ fn back_to_a_symlinked_path_rebinds_the_same_buffer() {
     core.shutdown().expect("shutdown should be Ok");
 }
 
-// =========================================================================
-// 10. Drawer toggle ROUND-TRIP leaves a survivor pane's history alone.
-// =========================================================================
+// === 10. Drawer toggle round-trip leaves a survivor pane's history alone ===
 
 /// Opening AND then hiding the terminal drawer must never push into a REAL pane's
 /// history.
@@ -1462,9 +1438,8 @@ fn toggling_the_drawer_never_touches_a_survivor_panes_history() {
         displays(&core.history_entries(drawer_win))
     );
 
-    // --- 2. HIDE the drawer again -------------------------------------------
-    // `toggle_terminal` is an exec_lua RPC, so it works even though the drawer left
-    // nvim in terminal-insert mode; no keystrokes are involved.
+    // --- 2. Hide the drawer: `toggle_terminal` is an exec_lua RPC, so it works from the
+    // terminal-insert mode the drawer left nvim in.
     core.toggle_terminal();
     poll_until(&core, &waiter, "the drawer window to disappear", |snap| {
         snap.windows.values().all(|w| w.win != drawer_win)
@@ -1501,9 +1476,7 @@ fn toggling_the_drawer_never_touches_a_survivor_panes_history() {
     core.shutdown().expect("shutdown should be Ok");
 }
 
-// =========================================================================
-// 11. A failed Back to a PREVIEW target reverts the cursor.
-// =========================================================================
+// === 11. A failed Back to a preview target reverts the cursor ===
 
 /// The OTHER realistic failure plan §B6 names, alongside the wiped `Terminal`
 /// bufnr that [`a_failed_back_returns_false_and_reverts_the_cursor`] covers: a
@@ -1574,11 +1547,8 @@ fn a_failed_back_to_a_deleted_preview_source_reverts_the_cursor() {
     );
     let rows_before = displays(&core.history_entries(win));
 
-    // --- 2. DELETE the previous preview's SOURCE from disk ------------------
-    // The entry behind the cursor is `Preview(a.md)`. Removing the file makes
-    // `wolf_preview_file`'s `filereadable` gate fail, which is the only way a
-    // preview restore can report failure. No settle is needed: deleting a file
-    // behind nvim's back fires no autocmd, and the history was quiesced above.
+    // --- 2. Delete the previous preview's source: `wolf_preview_file`'s `filereadable` gate is the
+    // only way a preview restore fails. No settle: a delete behind nvim's back fires no autocmd.
     std::fs::remove_file(&a_path).expect("failed to delete a.md");
 
     // --- 3. history_back reports FALSE --------------------------------------
@@ -1624,9 +1594,7 @@ fn a_failed_back_to_a_deleted_preview_source_reverts_the_cursor() {
     core.shutdown().expect("shutdown should be Ok");
 }
 
-// =========================================================================
-// 12. A bind that THROWS after the validity checks reverts the cursor.
-// =========================================================================
+// === 12. A bind that throws after the validity checks reverts the cursor ===
 
 /// The THIRD way `apply_nav` can fail, and the one that used to be reported as a
 /// SUCCESS: `_G.wolf_history_set_buf`'s two guards (`nvim_win_is_valid`,
@@ -1677,10 +1645,8 @@ fn a_back_whose_bind_throws_returns_false_and_reverts_the_cursor() {
          nothing"
     );
 
-    // --- 1. PIN the window to its current buffer ----------------------------
-    // 'winfixbuf' is window-local and fires no autocmd in the WolfBuffers augroup,
-    // so the pane's derived target — and therefore its history — is untouched by it.
-    // Both handles stay valid; only the bind will fail.
+    // --- 1. Pin the window: 'winfixbuf' is window-local and fires no WolfBuffers autocmd, so the
+    // history is untouched; both handles stay valid and only the bind fails.
     ex_command(&core, "setlocal winfixbuf");
     settle(&waiter, HISTORY_SETTLE);
     let rows_before = displays(&core.history_entries(win));
@@ -1757,9 +1723,7 @@ fn a_back_whose_bind_throws_returns_false_and_reverts_the_cursor() {
     core.shutdown().expect("shutdown should be Ok");
 }
 
-// =========================================================================
-// 13. Navigating a pane that is NOT nvim's current window.
-// =========================================================================
+// === 13. Navigating a pane that is not nvim's current window ===
 
 /// Back in a BACKGROUND pane lands completely — the pane shows the new file, core's
 /// snapshots agree, and focus never moves — with no further user input.
@@ -1799,10 +1763,8 @@ fn back_in_a_background_pane_updates_it_without_moving_focus() {
     ex_command(&core, "e a.md");
     poll_pane_filename(&core, &waiter, grid_a, "a.md");
 
-    // --- 1. A second pane, still focused, previewing a.md -------------------
-    // `:vsplit` focuses the NEW window, which inherits a.md, so pane B's history
-    // seeds with Edit(a); the in-place `open_preview()` then pushes Preview(a) on
-    // top.
+    // --- 1. A second, focused pane previewing a.md: `:vsplit` focuses the new window, which inherits
+    // a.md and seeds Edit(a); the in-place `open_preview()` then pushes Preview(a).
     ex_command(&core, "vsplit");
     poll_until(&core, &waiter, "two live windows after :vsplit", |snap| {
         snap.windows.len() >= TWO_WINDOWS
@@ -1930,26 +1892,8 @@ fn back_in_a_background_pane_updates_it_without_moving_focus() {
     core.shutdown().expect("shutdown should be Ok");
 }
 
-// =========================================================================
-// 14. What a FRONT-END input path records — one case per InputEvent.
-// =========================================================================
-//
-// Sections 1-13 drive nvim by TYPING. These four drive it the way a front-end
-// does, through the four `InputEvent`s a picker, a sidebar row, a project-search
-// hit, a buffer-picker row and an Open Recent row actually send. The claim each
-// establishes is EMPIRICAL: `crates/wolf-gnome/src/README.md` states which of them
-// record a navigation entry, and until now nothing measured it.
-//
-// ## Why every growth assertion is written against DISTINCT targets
-//
-// `history_entries` -> `PaneHistory::menu_rows` keeps the FIRST occurrence of each
-// distinct `NavTarget` walking newest-first, so a push of a target the pane has
-// ALREADY visited leaves the row COUNT unchanged. Row growth is therefore an
-// observable only when the newly-visited target is new to the pane, and each case
-// below arranges exactly that (and asserts the precondition rather than assuming
-// it). Where a case cannot arrange it -- the buffer-picker one, whose whole point
-// is switching to a buffer another pane listed -- the fixture is a buffer this pane
-// has never shown, built with `:badd`.
+// === 14. Front-end input paths, one case per InputEvent; growth needs a target new to the pane ===
+// See notes/crates/wolf-core/tests/nav_history_live.rs.md#growth-needs-distinct-targets
 
 /// The FILE-PICKER / sidebar / Open-File-dialog path records one navigation entry.
 ///
@@ -1984,9 +1928,7 @@ fn open_records_a_navigation_entry() {
          that has nothing to do with the Open path: {rows_before:?}"
     );
 
-    // The front-end always resolves an ABSOLUTE path before sending: the picker
-    // ranks `FileSearch` entries, the sidebar row carries its own path, and the
-    // Open File dialog returns a `gio::File`.
+    // A front-end always sends an absolute path: picker, sidebar row and Open File dialog alike.
     core.send_input(InputEvent::Open { path: b_abs });
     poll_pane_filename(&core, &waiter, grid, "b.md");
     poll_history(&core, &waiter, win, "a b.md row on top", |rows| {
@@ -2064,21 +2006,16 @@ fn open_records_a_navigation_entry() {
 fn open_at_records_an_entry_for_another_file_but_not_for_another_line_of_the_same_one() {
     let cwd = common::fresh_cwd();
     seed_three_markdown_files(&cwd);
-    // The fixture is MEASURED rather than described: the line count comes from the
-    // bytes actually written to disk, not from [`LONG_DOC_LINES`], so a `long_doc`
-    // that stops honouring that constant is caught by the precondition below instead
-    // of surfacing as a `poll_cursor_line` timeout two hundred lines further down.
+    // Count the fixture's lines from the bytes on disk, not LONG_DOC_LINES, so a drifting `long_doc`
+    // fails the precondition below rather than a later poll_cursor_line timeout.
     let fixture = long_doc();
     let doc_lines = u64::try_from(fixture.lines().count())
         .expect("the fixture is a handful of lines, so its count fits in a u64");
     std::fs::write(cwd.join("long.md"), &fixture).expect("failed to write long.md");
     let long_abs = cwd.join("long.md");
 
-    // Both target lines must EXIST in that fixture, and they must be DIFFERENT
-    // lines. Neovim clamps an out-of-range `nvim_win_set_cursor` line to the end of
-    // the buffer, so either failure lands both jumps on the same row — and the second
-    // half of this case would then assert "another line of the same file records
-    // nothing" about a jump that moved the cursor nowhere.
+    // Both target lines must exist and differ: nvim clamps an out-of-range cursor line to the end,
+    // so either failure lands both jumps on one row and makes the second half vacuous.
     assert!(
         FIRST_JUMP_LINE < SECOND_JUMP_LINE && SECOND_JUMP_LINE <= doc_lines,
         "the two jump targets must be DIFFERENT lines that the fixture actually holds, but \
@@ -2176,12 +2113,8 @@ fn open_at_records_an_entry_for_another_file_but_not_for_another_line_of_the_sam
         "the checkmark has not moved: the pane is on the same entry it was on"
     );
 
-    // --- 3. The SHARP form: Back lands on a.md, not on long.md again --------
-    //
-    // Row count cannot see a spuriously pushed DUPLICATE (menu_rows dedups it
-    // away), and neither can can_back/can_forward (a push at the top of the stack
-    // leaves both where they were). Back is what separates the two: with a
-    // duplicate entry behind the cursor it would land on long.md again.
+    // --- 3. The sharp form: a pushed duplicate is invisible to row count and can_back/can_forward,
+    // but Back would then land on long.md again instead of a.md.
     assert!(
         core.history_back(win),
         "Back must report that the pane moved — a.md is genuinely behind the cursor"
@@ -2234,9 +2167,8 @@ fn switch_buffer_records_a_navigation_entry() {
         !rows.is_empty() && rows[0].display == "a.md"
     });
 
-    // A LISTED buffer this window has never displayed. `:badd` adds it to the
-    // buffer list without loading it and without touching any window, so the pane's
-    // own history is untouched by this line.
+    // A listed buffer this window never displayed: `:badd` loads nothing and touches no window, so
+    // the pane's history is untouched.
     ex_command(&core, "badd c.md");
     settle(&waiter, HISTORY_SETTLE);
 
@@ -2379,9 +2311,8 @@ fn changing_directory_records_no_navigation_entry() {
     // --- 1. The Open Recent activation, verbatim ----------------------------
     core.send_input(InputEvent::Chdir { path: other_dir });
 
-    // The chdir is PROVED before anything is asserted about it: `live_cwd` is fed by
-    // the `wolf_cwd` notification the `DirChanged` autocmd fires, and it is already
-    // canonicalized.
+    // Prove the chdir first: `live_cwd` is fed by the `wolf_cwd` notification `DirChanged` fires,
+    // and is already canonicalized.
     let deadline = Instant::now() + FLUSH_TIMEOUT;
     while Instant::now() < deadline && core.live_cwd().as_deref() != Some(other_canon.as_path()) {
         waiter.drain();
@@ -2427,11 +2358,8 @@ fn changing_directory_records_no_navigation_entry() {
         "a chdir must not move the pane off its buffer either"
     );
 
-    // --- 3. The POSITIVE CONTROL (the discriminator) ------------------------
-    //
-    // Without this, every assertion above would also pass against a core that
-    // recorded nothing at all — a deleted `hist.observe(..)` in `fold_nav_targets`.
-    // This half carries that revert.
+    // --- 3. Positive control (the discriminator): without it, all of the above also passes against
+    // a core that records nothing, e.g. a deleted `hist.observe(..)` in `fold_nav_targets`.
     core.send_input(InputEvent::Open { path: d_abs });
     poll_pane_filename(&core, &waiter, grid, "d.md");
     poll_history(&core, &waiter, win, "a d.md row on top", |rows| {

@@ -102,7 +102,7 @@ pub type WindowId = u16;
 /// or a `thread_local!`, which is what makes two `WolfCore`s in one process
 /// independent. [`mod@crate::frame_metrics`] is the one carve-out — diagnostic
 /// counters no application behaviour reads; see
-/// `crates/wolf-gnome/DECISIONS.md`, "Frame-time instrumentation".
+/// `notes/wolf-gnome-decisions.md`, "Frame-time instrumentation".
 pub struct CoordinatorInner {
     /// The ONE state store, or `None` when no state directory could be resolved
     /// (state is then neither saved nor restored).
@@ -153,13 +153,9 @@ pub struct Coordinator {
 /// then [`Coordinator::restore_session`].
 #[must_use]
 pub fn build() -> Coordinator {
-    // The config is read ONCE here, beside the state store and before any widget
-    // exists — matching macOS's `CellMetrics.measured(config:)` at launch. An
-    // edit to `wolf-config.yaml` therefore takes effect on the next launch.
+    // The config is read once per process; see notes/wolf-gnome-decisions.md#typography.
     let config = app::load_config();
-    // Measure the cell once and share it (by Rc) with every window's draw and
-    // resize closures so it is available even if a resize fires before the first
-    // draw.
+    // Measured once and shared by `Rc`, so a resize that fires before the first draw still has it.
     let metrics = Rc::new(app::measure_metrics(&config));
     Coordinator {
         inner: Rc::new(CoordinatorInner {
@@ -246,10 +242,8 @@ impl Coordinator {
             let Some(("app", name)) = binding.action.split_once('.') else {
                 continue;
             };
-            // A row resolves through its command, exactly as the `win.` half
-            // does; a row that classifies to `Deferred` / `NoGnomeEquivalent` is
-            // never installed, so the primary menu can never show an item that
-            // does nothing.
+            // A row resolves through its command, as the `win.` half does; one classifying to `Deferred` or
+            // `NoGnomeEquivalent` is never installed, so the menu never shows an item that does nothing.
             let Some(command) = binding.command else {
                 eprintln!(
                     "wolf-gnome: app-scoped action {:?} carries no command; not installed",
@@ -267,9 +261,8 @@ impl Coordinator {
 
             let action = gio::SimpleAction::new(name, None);
             let coordinator = self.clone();
-            // The application outlives every window, and it is the application's
-            // action map that owns this closure — so holding the coordinator
-            // STRONGLY here is the direction with no cycle in it.
+            // The application's action map owns this closure and outlives every window, so a strong
+            // coordinator reference here makes no cycle.
             let app_for_action = app.clone();
             action.connect_activate(move |_action, _parameter| {
                 coordinator.perform(ui_action, &app_for_action);
@@ -306,16 +299,12 @@ impl Coordinator {
     /// others. If none opens at all the application has no window and exits,
     /// which is the single-window behaviour unchanged.
     pub fn restore_session(&self, app: &adw::Application) {
-        // Both paths are canonicalized so `launch_decision`'s comparisons mean
-        // what they say (`Path` equality compares components; it resolves no
-        // symlinks).
+        // Canonicalized so `launch_decision`'s comparisons hold: `Path` equality resolves no symlinks.
         let process_cwd = std::env::current_dir()
             .ok()
             .map(|cwd| std::fs::canonicalize(&cwd).unwrap_or(cwd));
         let home = workspace::home_dir();
-        // `state()` is the in-memory tree the store loaded from `state.json`
-        // (defaults on any failure — loading is silently-ignore and never
-        // rewrites the file).
+        // `state()` falls back to defaults on any load failure, and loading never rewrites the file.
         let saved = self.inner.store.as_ref().map(StateStore::state);
         let plans = state_seam::restore_plans(
             saved.as_ref(),
@@ -361,8 +350,7 @@ impl Coordinator {
     pub fn open_new_window(&self, app: &impl IsA<gtk::Application>) {
         let home = workspace::home_dir();
         let plans = state_seam::restore_plans(None, None, home.as_deref(), Path::is_dir);
-        // `restore_plans` never returns an empty vec; this is the floor, not a
-        // fallback, so an empty one would be a broken invariant rather than a
+        // `restore_plans` never returns an empty vec, so an empty one is a broken invariant, not a
         // condition to handle silently.
         let Some(plan) = plans.into_iter().next() else {
             eprintln!("wolf-gnome: restore_plans returned no plan for a new window; none opened");
@@ -547,21 +535,15 @@ impl Coordinator {
         match state_seam::close_commit(self.inner.shutting_down.get(), others) {
             CloseCommit::Skip => {}
             CloseCommit::KeepSubtree => {
-                // While this window's core and panes are still alive: a subtree
-                // gathered after `core.borrow_mut().take()` sees no core, the
-                // gate refuses it, and the session is silently not saved.
+                // Gathered while the core and panes are alive: after `core.borrow_mut().take()` the gate refuses
+                // the subtree and the session is silently not saved.
                 self.refresh(id);
                 self.commit_tree();
                 self.flush();
             }
             CloseCommit::DropSubtree => {
-                // Deregistered BEFORE assembling, so the tree really is committed
-                // without this window. The arm is only ever reached with at least
-                // one other window live, so what is assembled is never empty —
-                // which matters, because an empty contribution set means "commit
-                // nothing" ([`state_seam::snapshot_state`]) rather than "commit an
-                // empty tree", and a drop that emptied the set would leave the
-                // closed window's session in `state.json` instead of removing it.
+                // Deregistered before assembling. Another window is live here, so the set is never empty; an empty
+                // set commits nothing (`state_seam::snapshot_state`), leaving the closed window in `state.json`.
                 self.deregister(id);
                 self.commit_tree();
                 self.flush();

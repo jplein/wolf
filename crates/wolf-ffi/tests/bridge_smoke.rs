@@ -92,10 +92,8 @@ fn frame_text(frame: &FfiFrame) -> String {
 
 #[test]
 fn bridge_smoke() {
-    // Loud SKIP (no-op pass) when no pinned nvim is available. Otherwise export the
-    // resolved binary as `WOLF_NVIM_BIN` so wolf-core (which locates nvim only via
-    // that env var) launches it — the resolved path may come from an explicit
-    // `WOLF_NVIM_BIN` (cargo/devShell) or the Bazel-staged tree.
+    // Loud skip (no-op pass) without a pinned nvim. wolf-core locates nvim only via
+    // `WOLF_NVIM_BIN`, which may name an explicit binary or the Bazel-staged tree.
     let Some(nvim_bin) = common::nvim_bin_or_skip() else {
         return;
     };
@@ -104,11 +102,7 @@ fn bridge_smoke() {
     let init_lua = common::init_lua_path();
     let cwd = common::fresh_cwd();
 
-    // NOTE to coder: `wolf_ffi_start` takes `init_lua: String, cwd: String` per
-    // plan §A. We pass the init.lua PATH and the cwd PATH as strings (wolf-core's
-    // `CoreConfig.init_lua` is itself a path). If the bridge instead expects the
-    // Lua SOURCE TEXT in `init_lua`, the coder must reconcile — but the wolf-core
-    // integration tests pass the PATH, so we mirror that.
+    // `init_lua` is the path to init.lua, not its Lua source, as in the wolf-core tests.
     let handle = wolf_ffi_start(
         init_lua.to_string_lossy().into_owned(),
         cwd.to_string_lossy().into_owned(),
@@ -148,16 +142,11 @@ fn bridge_smoke() {
 
     let before = frame_text(&handle.read_frame());
 
-    // --- Send input: enter insert mode, type 'x' ----------------------------
-    // A bare 'x' in normal mode on an empty buffer is a no-op, so we first enter
-    // insert mode ('i') and then type 'x' (kind=Char, ch='x') so the grid is
-    // guaranteed to change. Both go through the same FfiKeyEvent/send_key path.
+    // --- Send input: insert mode first, since a bare 'x' on an empty buffer is a no-op.
     handle.send_key(char_key('i'));
     handle.send_key(char_key('x'));
 
-    // Poll until the grid reflects the input (some cell changed). Robust: we do
-    // not assert exact coordinates, only that the observable grid moved and that
-    // the typed 'x' shows up somewhere.
+    // Poll until the grid moved and the typed 'x' shows up somewhere; no exact coordinates.
     let deadline = Instant::now() + FLUSH_TIMEOUT;
     let mut after = before.clone();
     while Instant::now() < deadline {
@@ -178,12 +167,8 @@ fn bridge_smoke() {
          (after={after:?})"
     );
 
-    // --- Resize: dims update to the new request -----------------------------
-    // `resize` drives the GLOBAL UI size (`nvim_ui_try_resize`). Under
-    // `ext_multigrid` the ACTIVE WINDOW grid (what `read_frame` reports) is the
-    // requested WIDTH exactly, but the requested HEIGHT MINUS the cmdline row(s):
-    // with `laststatus=0` there is no statusline, leaving ~1 cmdline line, so the
-    // window grid is `RESIZE_ROWS - 1` (allow a small tolerance for chrome).
+    // `resize` sets the global UI size; the active window grid matches its width exactly but its
+    // height minus the cmdline row(s), so the height check has a tolerance.
     const MIN_RESIZE_ROWS: u16 = RESIZE_ROWS - 2;
     handle.resize(RESIZE_COLS, RESIZE_ROWS);
 
@@ -215,8 +200,5 @@ fn bridge_smoke() {
     );
 
     // --- Shutdown: clean teardown -------------------------------------------
-    // NOTE to coder: plan §A specifies `shutdown(&self)` (takes the WolfCore out
-    // of the handle and shuts it down). If the bridge returns a Result here,
-    // adjust to `.expect(..)`.
     handle.shutdown();
 }

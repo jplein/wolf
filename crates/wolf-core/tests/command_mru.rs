@@ -202,10 +202,8 @@ fn wrong_schema_db_is_silently_recreated() {
     let dir = tempfile::tempdir().expect("failed to create tempdir");
     let db = dir.path().join(DB_NAME);
 
-    // Create a VALID sqlite database whose schema is wrong: a `command_mru` table
-    // that is MISSING the `seq` column the store's query relies on. The store's
-    // schema probe (`SELECT key, seq FROM command_mru LIMIT 0`) must detect this
-    // and recreate the DB rather than error.
+    // A valid sqlite DB whose `command_mru` table lacks `seq`: the schema probe (`SELECT key, seq
+    // FROM command_mru LIMIT 0`) must detect this and recreate the DB rather than error.
     {
         let conn = rusqlite::Connection::open(&db).expect("failed to open sqlite for bad schema");
         conn.execute_batch("CREATE TABLE command_mru (key TEXT PRIMARY KEY);")

@@ -269,10 +269,8 @@ fn edit_gates_on_preview_pane_and_neutralizes_on_shutdown() {
     // --- 1. A plain markdown buffer is NOT a preview -------------------------
     send_ex_command(&handle, ":e alpha.md");
     wait_for_markdown_active(&handle, true, "after :e alpha.md");
-    // Real switch barrier: the startup buffer is a markdown `Untitled.md`, so
-    // `wait_for_markdown_active(true)` returns IMMEDIATELY (markdown->markdown) and
-    // cannot witness the `:e alpha.md`. Wait until alpha.md is genuinely the ACTIVE
-    // buffer before the SYNC preview/edit_source RPC races ahead of the buffered `:e`.
+    // Barrier on alpha.md being current: the startup `Untitled.md` is already markdown, so the
+    // markdown gate returns at once and the sync RPC would race the buffered `:e`.
     wait_for_current_file(&handle, "alpha.md");
     wait_for_preview_active(
         &handle,
@@ -280,9 +278,8 @@ fn edit_gates_on_preview_pane_and_neutralizes_on_shutdown() {
         "a plain markdown editor pane is not a preview",
     );
 
-    // --- 2. After the in-place open_preview(), the active pane IS a preview ---
-    // The bind replaces the ACTIVE pane's buffer with the scratch, so no focus
-    // cycling is needed: the pane under the cursor is the preview.
+    // --- 2. open_preview() binds the scratch into the active pane, so it is the preview with no
+    // focus cycling.
     let active_win = handle.active_win();
     assert!(
         active_win > 0,
@@ -309,10 +306,8 @@ fn edit_gates_on_preview_pane_and_neutralizes_on_shutdown() {
         .expect("a preview row for alpha.md must exist")
         .source_bufnr();
 
-    // --- 3. edit_source() replaces the preview with its source, IN PLACE ------
-    // The async wolf_current_file notification (3rd arg = is_preview) must flip
-    // is_preview_active() back to false — and is_markdown_active() back to true —
-    // once the active buffer is the markdown source again.
+    // --- 3. edit_source() restores the source in place; the async `wolf_current_file` report
+    // flips is_preview_active() to false and is_markdown_active() to true.
     let returned = handle.edit_source();
     assert_eq!(
         returned, alpha_source_bufnr,
@@ -359,11 +354,8 @@ fn edit_gates_on_preview_pane_and_neutralizes_on_shutdown() {
 
 #[test]
 fn edit_in_place_leaves_the_other_pane_alone() {
-    // Two panes: one stays an alpha.md EDITOR throughout, the other becomes a
-    // preview and is then edited back in place. Pins that the in-place edit never
-    // creates a pane, never moves focus, and never touches the neighbour.
-    //
-    // Loud SKIP (no-op pass) when no pinned nvim is available, like the siblings.
+    // Two panes: the in-place edit never creates a pane, moves focus, or touches the alpha.md
+    // editor beside it. Loud skip (no-op pass) without a pinned nvim.
     let Some(nvim_bin) = common::nvim_bin_or_skip() else {
         return;
     };
@@ -375,17 +367,14 @@ fn edit_in_place_leaves_the_other_pane_alone() {
     // --- 1. alpha.md, then a typed :vsplit into TWO editor panes -------------
     send_ex_command(&handle, ":e alpha.md");
     wait_for_markdown_active(&handle, true, "after :e alpha.md");
-    // Real switch barrier: the startup buffer is a markdown `Untitled.md`, so
-    // `wait_for_markdown_active(true)` returns IMMEDIATELY (markdown->markdown) and
-    // cannot witness the `:e alpha.md`. Wait until alpha.md is genuinely the ACTIVE
-    // buffer before the SYNC preview/edit_source RPC races ahead of the buffered `:e`.
+    // Barrier on alpha.md being current: the startup `Untitled.md` is already markdown, so the
+    // markdown gate returns at once and the sync RPC would race the buffered `:e`.
     wait_for_current_file(&handle, "alpha.md");
     send_ex_command(&handle, ":vsplit");
     wait_for_window_count(&handle, TWO_PANES, "after the typed :vsplit");
 
-    // --- 2. Preview alpha.md IN PLACE in the active (new split) pane ----------
-    // The preview WINDOW is read back from the previews() row rather than from a
-    // pre-captured `active_win()`, which can lag the typed `:vsplit`.
+    // --- 2. Preview alpha.md in place in the new split. Read the preview window from previews(),
+    // not a pre-captured `active_win()`, which can lag the typed `:vsplit`.
     let preview_bufnr = handle.open_preview();
     assert!(
         preview_bufnr > 0,
@@ -464,10 +453,8 @@ fn edit_source_is_a_noop_off_a_preview_pane() {
     // --- 1. A plain markdown editor pane (NOT a preview) --------------------
     send_ex_command(&handle, ":e alpha.md");
     wait_for_markdown_active(&handle, true, "after :e alpha.md");
-    // Real switch barrier: the startup buffer is a markdown `Untitled.md`, so
-    // `wait_for_markdown_active(true)` returns IMMEDIATELY (markdown->markdown) and
-    // cannot witness the `:e alpha.md`. Wait until alpha.md is genuinely the ACTIVE
-    // buffer before the SYNC edit_source RPC races ahead of the buffered `:e`.
+    // Barrier on alpha.md being current: the startup `Untitled.md` is already markdown, so the
+    // markdown gate returns at once and the sync RPC would race the buffered `:e`.
     wait_for_current_file(&handle, "alpha.md");
     wait_for_preview_active(
         &handle,

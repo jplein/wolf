@@ -96,10 +96,8 @@ fn recent_dirs_reports_chdir_targets_newest_first() {
 
     let init_lua = common::init_lua_path();
 
-    // Point the state machinery at a private tempdir for the WHOLE test, BEFORE
-    // starting the core: the recent-dirs store opens `folder-mru.sqlite` at
-    // `state_dir()` exactly once in `WolfCore::start`. Safe to mutate because this
-    // binary has exactly one test. Keep the guard alive until after `shutdown()`.
+    // Private state dir before start: `folder-mru.sqlite` opens under it once, in `WolfCore::start`.
+    // Safe to mutate because this binary has one test; keep the guard alive past `shutdown()`.
     let state_dir = tempfile::tempdir().expect("failed to create temp state dir");
     std::env::set_var("WOLF_STATE_DIR", state_dir.path());
 
@@ -133,9 +131,8 @@ fn recent_dirs_reports_chdir_targets_newest_first() {
         frame.cols()
     );
 
-    // --- 2. chdir into A, then B; wait for cwd() to follow each -------------
-    // Two fresh temp target dirs, canonicalized so comparisons are robust to
-    // macOS `/var` -> `/private/var` symlinking (as the model tests do).
+    // --- 2. chdir into A, then B; wait for cwd() to follow each. Canonicalized against the
+    // macOS `/var` -> `/private/var` symlink.
     let dir_a = tempfile::tempdir().expect("failed to create temp chdir target A");
     let dir_b = tempfile::tempdir().expect("failed to create temp chdir target B");
     let canonical_a = dir_a
@@ -153,11 +150,8 @@ fn recent_dirs_reports_chdir_targets_newest_first() {
     handle.chdir(dir_b.path().to_string_lossy().into_owned());
     wait_for_cwd(&handle, &canonical_b);
 
-    // --- 3. Poll recent_dirs() until it holds BOTH A and B -----------------
-    // Recording is fire-and-forget (the MRU write can land a beat after cwd()
-    // flips), so poll until the newest-first list contains both targets. Each
-    // returned entry is canonicalize-compared. The list is GLOBAL and also holds
-    // the launch cwd, so we assert membership/order, NOT exact length.
+    // --- 3. The MRU write can land after cwd() flips, so poll until both appear. The list is
+    // global and holds the launch cwd, so assert membership and order, not length.
     let deadline = Instant::now() + FLUSH_TIMEOUT;
     let mut recent: Vec<PathBuf> = Vec::new();
     let mut idx_a = None;

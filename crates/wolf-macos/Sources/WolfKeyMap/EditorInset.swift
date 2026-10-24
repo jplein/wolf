@@ -1,24 +1,4 @@
-//
-//  EditorInset.swift
-//  Pure, AppKit-/CoreGraphics-free arithmetic for the PER-PANE text-grid inset
-//  (plan §1).
-//
-//  This is a headless seam in the `WolfKeyMap` module — Foundation-only, no live
-//  view, no `CGFloat`. Given ONE pane's size and its statusbar-strip height, it
-//  computes the pane-local rectangle the text grid paints into: inset by `padding`
-//  on the left/right, and by `statusbarHeight + padding` on top (the statusbar
-//  strip sits flush at the pane's top) / `padding` on the bottom. The AppKit glue
-//  (`PaneContainerView`) offsets this pane-local `gridRect` into the pane's view
-//  rectangle, and `MainWindow` grows its initial content by `2 * padding` in each
-//  dimension so the grid ends up exactly `cols × rows` cells inside the inset.
-//  `textLeftInset` gives the statusbar/cmdline text the same left h-padding as the
-//  grid text. The padding regions are painted in the editor background by the view
-//  filling its whole `bounds`; only this arithmetic is unit-tested.
-//
-//  It reuses the existing `Rect` value type from `PaneTree.swift` and, like
-//  `PaneGeometry` / `StatusbarLayout`, is `Double`-based so it stays headlessly
-//  testable (see `EditorInsetTests.swift`).
-//
+// Pure arithmetic for the per-pane text-grid inset.
 
 import Foundation
 

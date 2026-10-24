@@ -89,9 +89,8 @@ fn wait_for_cursor_bg(core: &WolfCore, waiter: &FlushWaiter, want: u32, desc: &s
 /// for the expected `&background`. `want_light == true` asserts `&background` is
 /// `light`; `false` asserts `dark`.
 fn assert_background_is(core: &WolfCore, waiter: &FlushWaiter, want_light: bool) {
-    // `:execute` runs legacy Vimscript, so the `?:` ternary + `..` concat pick the
-    // marker from the LIVE `&background`. This is the load-bearing read of the
-    // option — the marker we then observe is a direct function of `&background`.
+    // `:execute` runs legacy Vimscript, so the `?:` ternary picks the marker from the live
+    // `&background`: this is the load-bearing read of the option.
     send_ex(
         core,
         "execute 'hi WolfCursor guibg=' .. \
@@ -130,11 +129,5 @@ fn set_background_flips_vim_background() {
     core.shutdown().expect("shutdown should be Ok");
 }
 
-// NOTE(test-writer): an optional `set_background_reemits_theme` (asserting a
-// dual-variant colorscheme re-emits a DIFFERENT `wolf_theme` payload across the
-// background flip) is intentionally OMITTED here. `theme.rs` stages no colorscheme
-// (it drives runtime `:hi` + `:doautocmd ColorScheme`), so there is no low-friction
-// way to stage a dual-variant scheme in a wolf-core test. The re-emit path
-// (`:set background=…` -> ColorScheme autocmd -> `wolf_theme`) is already exercised
-// end-to-end above (the marker only updates because the ColorScheme re-emit fires),
-// and the lighthouse dual-variant scheme is covered by the wolf-ffi suite.
+// No dual-variant colorscheme re-emit case here: wolf-core stages no colorscheme, the re-emit
+// path is exercised above, and the lighthouse scheme is covered by the wolf-ffi suite.

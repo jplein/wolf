@@ -39,22 +39,16 @@ auto-follows the commit), then regenerate `MODULE.bazel.lock`.
 
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
-# Pinned to a commit on nvim-treesitter's `main` branch (the rewrite). main moved
-# bundled queries under runtime/queries/<lang>/ and its markdown injections.scm uses
-# pure core-supported capture-based injection — the reason for the master→main
-# reversal (master's #set-lang-from-info-string! predicate is incompatible with the
-# query-match API pinned nvim 0.12.3 exposes). See the module docstring above.
+# Pinned to `main`: master's `#set-lang-from-info-string!` predicate fails on nvim 0.12.3.
+# See bazel/nvim-treesitter/README.md and the module docstring.
 _COMMIT = "4916d6592ede8c07973490d9322f187e07dfefac"
 
 _SHA256 = "4e720e38f1a74c07fc8bc9d6264e25ab620df93c6576200f43f2ca0ce5fbdec1"
 
 _ARCHIVE_ROOT = "nvim-treesitter-" + _COMMIT
 
-# BUILD overlay placed at the root of the extracted tarball. `{archive_root}` is
-# the tarball's top directory (`nvim-treesitter-<commit>`); `copy_to_directory`
-# remaps that prefix to `nvim-treesitter/` so the output TreeArtifact contains
-# `nvim-treesitter/queries/**`, `nvim-treesitter/lua/**`, `nvim-treesitter/plugin/**`,
-# and `nvim-treesitter/LICENSE`.
+# BUILD overlay for the extracted tarball; `copy_to_directory` remaps `{archive_root}`, the
+# tarball's top directory, to `nvim-treesitter/`.
 _BUILD_FILE_TEMPLATE = """\
 load("@aspect_bazel_lib//lib:copy_to_directory.bzl", "copy_to_directory")
 

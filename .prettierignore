@@ -1,18 +1,16 @@
-# Build + environment output — never source.
+# Build and environment output, never source.
 target/
 .direnv/
 .worktrees/
 bazel-*/
 node_modules/
 
-# Orchestration scratch, not project documentation. `.claude/current-plan.md`
-# is rewritten every task; formatting it is churn, and a dirty scratch file
-# must never be able to fail the Linux verification gate.
+# Orchestration scratch, rewritten every task: a dirty scratch file must never fail the Linux gate.
 .claude/
 
-# The feat-list workflow's own procedure document. Its formatting is dictated by
-# that workflow rather than by prettier, so reformatting it would fight the tool
-# that owns it. `feat-list.md` -- the document the workflow PRODUCES -- is
-# deliberately NOT excluded: it is maintained project documentation and stays in
-# the format gate's scope.
-feat-list-workflow.md
+# Formatted by the workflow it describes; notes/feat-list.md, which that workflow writes, stays in.
+notes/feat-list-workflow.md
+
+# Fixtures, whose exact bytes are test input.
+tools/doc-lint/tests/fixtures/
+tools/lint/testdata/

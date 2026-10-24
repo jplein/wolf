@@ -109,7 +109,7 @@
 //! Exactly TEN blocking core calls are reachable from this crate, and the restart
 //! path issues none of them. `WolfCore::history_back` and `history_forward` count
 //! as the ONE navigation move they are, one per direction; nothing else is folded
-//! together, and [`crate::window`] and `DECISIONS.md` carry the same ten.
+//! together, and [`crate::window`] and `notes/wolf-gnome-decisions.md` carry the same ten.
 //!
 //! The first is `WolfCore::rebuild_layout`, called at most once per launch from
 //! `pane_view::apply_layout_rebuild`, before the window
@@ -634,24 +634,8 @@ pub fn build(parts: ShellParts<'_>) -> AppShell {
     });
     let shell = AppShell { inner };
 
-    // The button and the automatic `Dead` path call the SAME function. Resetting
-    // the attempt counter first is deliberate: the cap exists to stop an automatic
-    // retry loop, never to refuse a user who asks again.
-    //
-    // KNOWN, DELIBERATE CONSEQUENCE — one button press can cost TWO respawns when
-    // the respawn keeps failing. The reset restores the automatic budget, so if the
-    // button's own restart fails, `WolfCore::restart_nvim`'s `Err` arm re-marks the
-    // core `Dead` and fires a wake; `on_liveness_wake` then sees `restart_attempts
-    // == 0`, classifies as `Crashed { retrying: true }` and schedules one more
-    // AUTOMATIC attempt. The user sees the message flicker
-    // `…restart failed` -> `…restarting…` -> `…restart failed`.
-    //
-    // This is BOUNDED, not a loop: the automatic attempt increments the counter
-    // again, so the sequence terminates after exactly one extra respawn and only
-    // another press can restart it. It is also arguably the desired reading of "the
-    // user asked for a restart" — the alternative (resetting the counter only on an
-    // Alive reading) would refuse a user whose first press raced a failing
-    // automatic attempt. Left as is; the flicker is the price.
+    // The button and the `Dead` path share this; resetting the counter first means the cap stops a
+    // retry loop, never a user. See notes/crates/wolf-gnome/src/shell.rs.md#one-press-two-respawns
     let weak = Rc::downgrade(&shell.inner);
     shell.inner.crash_overlay.connect_restart(move || {
         if let Some(shell) = upgrade(&weak) {
@@ -660,10 +644,8 @@ pub fn build(parts: ShellParts<'_>) -> AppShell {
         }
     });
 
-    // A tab switch closes all four transient overlays. An overlay opened over one
-    // tab and left hanging over the next would keep `window::wire_keys`' guard
-    // suppressing every key to Neovim, and its focus-return would land in whichever
-    // strip it was opened from.
+    // A tab switch closes all four overlays: one left over the next tab keeps `window::wire_keys`'
+    // guard suppressing every key, and its focus-return lands in the strip it opened from.
     let weak_tabs = Rc::downgrade(&shell.inner);
     shell.inner.tabs.connect_selected(move || {
         if let Some(shell) = upgrade(&weak_tabs) {
@@ -671,9 +653,7 @@ pub fn build(parts: ShellParts<'_>) -> AppShell {
         }
     });
 
-    // A palette row hands its whole `PaletteAction` to one function, whose command
-    // arm is the SAME dispatch the drain loop uses, so the two entry paths cannot
-    // classify a command differently.
+    // A palette row's command arm is the drain loop's dispatch, so the two cannot classify differently.
     let weak_palette = Rc::downgrade(&shell.inner);
     shell.inner.palette.connect_activate(move |action| {
         if let Some(shell) = upgrade(&weak_palette) {
@@ -714,18 +694,13 @@ impl AppShell {
     /// Must run AFTER the window is constructed and BEFORE `window.present()`.
     pub fn install_actions(&self, app: &gtk::Application) {
         for binding in actions::ACTION_TABLE {
-            // The coordinator's, not this window's — see the doc comment. Checked
-            // BEFORE the classification below so an `app.` row can never reach
-            // `window.add_action` by any path.
+            // The coordinator's (see the doc comment), checked before classification so an `app.` row never
+            // reaches `window.add_action`.
             if binding.action.starts_with("app.") {
                 continue;
             }
-            // A row resolves in exactly one of two places: through its command, or
-            // — for a FRONT-END-ONLY row, which carries no `wolf_core::Command` at
-            // all — through `ui_action_for_front_end_action`. A row that resolves
-            // in neither is skipped with a printed reason, because its accelerator
-            // IS registered: the chord would then be swallowed in the capture phase
-            // and activate nothing, which is worse than not binding it.
+            // A row resolves through its command or, if front-end-only, `ui_action_for_front_end_action`.
+            // One resolving in neither is skipped loudly: its registered chord would be swallowed silently.
             let ui_action = match binding.command {
                 Some(command) => {
                     let ui_action = ui_action_for(command);
@@ -884,17 +859,14 @@ impl AppShell {
     /// window too, and a drawer there is a working shell rather than a dead
     /// surface.
     pub fn set_empty_state(&self, empty: bool) {
-        // PER TAB: the status page is opaque and full-bleed over ONE tab's panes,
-        // and each tab's persisted `cwd` follows the same flag. Everything below is
-        // per window and is applied once.
+        // Per tab: the status page covers one tab's panes, and each tab's persisted `cwd` follows the
+        // flag. Everything below is per window.
         for tab in self.inner.tabs.entries() {
             tab.set_empty(empty);
         }
         self.inner.empty.set(empty);
-        // Never `sidebar.set_visible` directly: a user toggle and the empty state
-        // are two inputs to ONE rule, and applying either on its own is how the
-        // next `set_empty_state(false)` silently undoes what the user just asked
-        // for.
+        // Never `sidebar.set_visible` directly: a toggle and the empty state are two inputs to one rule,
+        // or the next `set_empty_state(false)` undoes the user's toggle.
         self.apply_sidebar_visibility();
         self.inner.open_button.set_sensitive(!empty);
         self.inner.sidebar_button.set_sensitive(!empty);
@@ -924,8 +896,7 @@ impl AppShell {
         self.inner
             .paned
             .set_position(if shown { TREE_PANE_WIDTH } else { 0 });
-        // Relayed from the ONE site, so the sidebar's refresh gate can never
-        // disagree with what is on screen: a refresh requested while hidden is
+        // Relayed from the one site so the refresh gate matches the screen: a refresh while hidden is
         // deferred, and re-showing owes exactly one catch-up.
         self.inner.tree.set_sidebar_visible(shown);
     }
@@ -939,17 +910,13 @@ impl AppShell {
         let shown = !self.inner.sidebar_shown.get();
         self.inner.sidebar_shown.set(shown);
         self.apply_sidebar_visibility();
-        // The WIDGET is per window (see `window::build` on why the sidebar stays
-        // outside the tab view), but the persisted preference is per tab, so every
-        // tab records it — including the ones that are not selected, each of which
-        // writes its own subtree.
+        // The widget is per window (see `window::build`) but the preference is per tab, so every tab
+        // records it, unselected ones included.
         for tab in self.inner.tabs.entries() {
             tab.set_sidebar_shown(shown);
         }
-        // ...and the tabs a launch has QUEUED but not yet created, which `entries`
-        // does not reach. Theirs is the same preference twice over: the seed each
-        // contributes until it has a page, and the value its own persistence is
-        // opened with when it gets one.
+        // ...and the queued tabs `entries` does not reach: the value is both the seed each contributes
+        // and the one its persistence opens with.
         self.inner.tabs.set_pending_sidebar_shown(shown);
     }
 
@@ -1173,9 +1140,7 @@ impl AppShell {
             PreviewPress::Open => {
                 let core_ref = self.inner.core.borrow();
                 if let Some(core) = core_ref.as_ref() {
-                    // The returned bufnr is deliberately discarded: the front-end
-                    // learns the new bind from the next wake's `wolf_preview`
-                    // notification, never from this answer.
+                    // The bufnr is discarded: the next wake's `wolf_preview` notification carries the new bind.
                     let _ = core.open_preview();
                 }
             }
@@ -1516,23 +1481,16 @@ impl AppShell {
     ///   widget without a focus-return leaves the toplevel with no focus widget at
     ///   all, which kills window-level key dispatch outright.
     fn apply_overlay(&self, mode: OverlayMode) {
-        // Sampled BEFORE `set_mode`, which is what hides the overlay. GTK4 hides
-        // rather than unroots, so the root would still report the focus widget
-        // afterwards today — but `pane_view::rebuild_pane_area` states the
-        // convention for this codebase ("must be sampled BEFORE anything is
-        // unparented: once the focus widget is gone the root reports no focus at
-        // all"), and the moment this overlay is ever unparented instead of hidden
-        // a post-hoc sample would silently stop returning focus. Do not "tidy"
-        // this back below the `set_mode` call.
+        // Sampled before `set_mode` hides the overlay: once a focus widget is unparented the root
+        // reports no focus (see `pane_view::rebuild_pane_area`). Do not move this below `set_mode`.
         let had_focus = self.inner.crash_overlay.focus_is_inside();
         if !self.inner.crash_overlay.set_mode(mode) {
             return;
         }
         if mode == OverlayMode::Hidden {
             if had_focus {
-                // The SELECTED tab's strip: a background tab's is unmapped, and
-                // grabbing focus into an unmapped widget leaves the toplevel with no
-                // focus widget at all.
+                // The selected tab's strip: a background tab's is unmapped, and focusing an unmapped widget
+                // leaves the toplevel with no focus widget.
                 if let Some(tab) = self.inner.tabs.selected() {
                     tab.focus_area().grab_focus();
                 }
@@ -1541,10 +1499,8 @@ impl AppShell {
             self.inner.picker.close();
             self.inner.palette.close();
             self.inner.buffers.close();
-            // A fourth idempotent close, for the same reason as the buffer picker's:
-            // an overlay left flagged open keeps `window::wire_keys`' guard suppressing
-            // every key to Neovim, including after a restart. Here it also cancels
-            // any `rg` still running behind the overlay.
+            // A fourth idempotent close: an overlay left open keeps `window::wire_keys`' guard eating every
+            // key after a restart. It also cancels any `rg` behind the overlay.
             self.inner.search.close();
         }
     }
@@ -1601,27 +1557,18 @@ impl AppShell {
             return;
         };
         match restart_outcome(respawned, fresh) {
-            // No respawn: the core self-recovered before the click, a concurrent
-            // restart held the core's CAS, or the respawn failed. Re-apply the
-            // overlay from the fresh reading and do NOTHING else — no reset, no
-            // reopen, no banner, and above all no rescheduling (the `auto_restart`
-            // field of a `Refresh` is always `false`, and acting on it would be an
-            // infinite respawn loop).
+            // No respawn (self-recovered, a concurrent restart held the CAS, or it failed): re-apply the
+            // overlay and nothing else; acting on a `Refresh`'s `auto_restart` would loop forever.
             RestartOutcome::Refresh(ui) => self.apply_overlay(ui.overlay),
             RestartOutcome::Respawned => {
                 self.inner.restart_attempts.set(0);
-                // Collapses to the SELECTED tab and clears its stale handle. A
-                // respawned Neovim owns exactly ONE tabpage, so leaving N tabs bound
-                // to the dead one's handles would make `tabs_ui::tab_wake` answer
-                // `Hold` for every one of them — a window frozen forever over a
-                // healthy Neovim.
+                // Collapses to the selected tab: a respawned Neovim owns one tabpage, and tabs bound to dead
+                // handles make `tabs_ui::tab_wake` answer `Hold` forever over a healthy Neovim.
                 self.inner.tabs.reset_after_restart();
                 self.reopen_captured(captured.as_ref());
                 self.apply_overlay(OverlayMode::Hidden);
                 self.inner.crash_overlay.flash_banner();
-                // Belt and braces, mirroring `app.rs`'s "react to whatever is
-                // already there" call: a harmless no-op if the fresh nvim has not
-                // reported `win_pos` yet.
+                // Belt and braces, as `app.rs` does: a no-op if the fresh nvim has not reported `win_pos` yet.
                 self.inner.tabs.on_render_wake();
             }
         }
@@ -1703,10 +1650,8 @@ impl AppShell {
     /// because a drained `close_window` tears the core down. Unlike the paint, it
     /// runs in ALL THREE liveness states — see the module docs.
     pub fn on_render_wake(&self) {
-        // ONE read of the tracked-cwd cell per wake, in its own statement, shared by
-        // the re-root settle and the title. `WolfCore::live_cwd` is a `parking_lot`
-        // read of a tracked cell, never an RPC, so the blocking-RPC inventory is
-        // unchanged by the sidebar's re-root — see the module docs.
+        // One read of the tracked-cwd cell per wake, shared by re-root and title; `live_cwd` is a
+        // `parking_lot` read, never an RPC, so the blocking-RPC inventory is unchanged.
         let live = {
             let core_ref = self.inner.core.borrow();
             core_ref.as_ref().and_then(WolfCore::live_cwd)
@@ -1714,9 +1659,8 @@ impl AppShell {
         self.settle_reroot(live.as_deref());
         self.refresh_title(live.as_deref());
         self.refresh_nav_buttons();
-        // This window's subtree is re-gathered and the WHOLE tree committed, both
-        // by the coordinator: one window's wake must not commit a tree that has
-        // forgotten the others.
+        // The coordinator re-gathers this window and commits the whole tree: one window's wake must not
+        // commit a tree that forgot the others.
         if let Some(coordinator) = coordinator::upgrade(&self.inner.coordinator) {
             let _guard = frame_metrics::scope(Bucket::WakeState);
             coordinator.commit(self.inner.window_id);
@@ -1882,13 +1826,10 @@ impl AppShell {
             UiAction::NewTab => self.new_tab(),
             UiAction::NewWindow => self.new_window(),
             UiAction::ClosePane => self.send_input(InputEvent::ClosePane),
-            // Over the shared ordered input channel and not `WolfCore::toggle_full_width`,
-            // which is itself a one-line `send_input` onto the same channel: same path,
-            // and the neighbouring arms' shape wins.
+            // Over the ordered input channel directly: `WolfCore::toggle_full_width` is a one-line
+            // `send_input` onto it, and the neighbouring arms' shape wins.
             UiAction::ToggleFullWidth => self.send_input(InputEvent::ToggleFullWidth),
-            // Same argument as the arm above: `WolfCore::toggle_terminal` is itself a
-            // one-line `send_input` onto this same ordered channel, so going through it
-            // would buy nothing and diverge from the neighbouring arms' shape.
+            // Same as above: `WolfCore::toggle_terminal` is a one-line `send_input` on this channel.
             UiAction::ToggleTerminal => self.send_input(InputEvent::ToggleTerminal),
             UiAction::CloseWindow => self.close_window(),
             UiAction::MinimizeWindow => self.inner.window.minimize(),
@@ -1966,9 +1907,8 @@ impl AppShell {
                     return;
                 };
 
-                // The persisted seed, which is a real directory even where the
-                // `:tcd` was deliberately skipped: `state_seam::snapshot_cwd`
-                // answers `""` for an empty-state window regardless of it.
+                // The persisted seed, a real directory even where `:tcd` was skipped: `snapshot_cwd` answers
+                // `""` for an empty-state window regardless.
                 let seed = cwd.unwrap_or_else(|| self.inner.launch_cwd.clone());
                 if !self.inner.tabs.open_tab(TabParts {
                     tabpage,

@@ -200,10 +200,8 @@ fn restart_respawns_and_reopens_open_files() {
     if let Some(a) = active {
         reopen.push(a);
     }
-    // Three, not two: the two file fixtures PLUS the startup `Untitled.md`. The
-    // never-saved `Untitled.md` is a legitimate Tier-1 member — it is carried across
-    // the crash-restart so the reopen `:e` can drive Neovim's swap-based recovery of
-    // any unsaved edits; excluding it would permanently lose them.
+    // Three: the two fixtures plus the never-saved `Untitled.md`, which must stay in the Tier-1 set;
+    // see crates/wolf-core/tests/README.md#nvim_restartrs
     assert_eq!(
         reopen.len(),
         3,
@@ -229,13 +227,8 @@ fn restart_respawns_and_reopens_open_files() {
         || core.liveness() == Liveness::Dead,
     );
 
-    // Restart from a DEAD state: an ACTUAL respawn, so `restart_nvim()` returns
-    // `Ok(true)` (true = really respawned; false would mean a no-op). Post-restart
-    // contract: Alive, a fresh (valid) current tabpage, and NONE of the
-    // previously-open NAMED files still open (the fresh nvim carries only its
-    // default pristine unnamed buffer — bufnr 1 — which is NOT filtered from
-    // `list_buffers()`, so we assert absence of the named files rather than
-    // emptiness).
+    // A respawn from Dead returns Ok(true). The fresh nvim's unnamed bufnr 1 is not filtered from
+    // list_buffers(), so assert the named files are absent rather than emptiness.
     let restarted = core
         .restart_nvim()
         .expect("restart_nvim should be Ok from a Dead state");
@@ -318,8 +311,8 @@ fn restart_respawns_and_reopens_open_files() {
 /// buffers. The `wolf_open_files` emit that `BufEnter` fires there therefore reports
 /// two files and no active path — byte-identical to the answer the filter produces.
 /// Whether a LATER emit re-reports the buffer once it is named rests on `BufFilePost`
-/// firing at the rename, which `runtime/nvim/init.lua`'s own note above
-/// `wolf_setup_buffer_tracking` records for `:terminal`. That note is a premise this
+/// firing at the rename, which runtime/nvim/README.md#decisions records for
+/// `:terminal` (the `wolf_buffers` coalescing entry). That note is a premise this
 /// test would otherwise be resting on, and no level-triggered predicate could tell
 /// "the terminal was filtered out" from "the emit has not seen the name yet".
 ///
@@ -362,16 +355,12 @@ fn open_files_omits_a_terminal_buffer() {
         },
     );
 
-    // Open the drawer through the PRODUCTION API, exactly as the chord does, rather
-    // than by typing `:terminal` — the drawer is what makes this bug easy to hit,
-    // and `wolf_toggle_terminal` ends in `startinsert`, so no Ex command may be sent
-    // from here on.
+    // Open the drawer through the production API, as the chord does, not `:terminal`. It ends in
+    // `startinsert`, so no Ex command may be sent from here on.
     core.toggle_terminal();
 
-    // Wait for a drawer whose terminal buffer is not merely present but NAMED:
-    // `path` is the `term://<cwd>//<pid>:<cmd>` string, which exists only once
-    // `termopen()` has run. Waiting here also stops the hide toggle below from
-    // racing the open and building a SECOND drawer.
+    // Wait for the `term://` name, which exists only once `termopen()` has run; this also keeps the
+    // hide toggle below from racing the open and building a second drawer.
     poll_until(
         &waiter,
         "win_buffers to report the drawer's terminal buffer carrying its term:// name",
@@ -398,9 +387,8 @@ fn open_files_omits_a_terminal_buffer() {
         },
     );
 
-    // Re-open it. This is the branch that binds the ALREADY-NAMED terminal buffer,
-    // so every autocmd it fires sees `term://…` — which is what makes the assertions
-    // below distinguish "filtered out" from "not reported yet".
+    // Re-opening binds the already-named terminal buffer, so every autocmd sees `term://…`: that
+    // lets the assertions below tell "filtered out" from "not reported yet".
     core.toggle_terminal();
     poll_until(
         &waiter,
@@ -413,9 +401,8 @@ fn open_files_omits_a_terminal_buffer() {
         },
     );
 
-    // The drawer's own live buffer name, read from a DIFFERENT snapshot map than the
-    // one under test, so the assertion below compares two independently reported
-    // values rather than a literal this file typed.
+    // Read the drawer's live name from a different snapshot map, so the assertion compares two
+    // independently reported values rather than a literal typed here.
     let drawer_name: PathBuf = {
         let snap = core.read_snapshot();
         snap.win_buffers

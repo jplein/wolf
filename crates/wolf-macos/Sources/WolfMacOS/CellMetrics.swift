@@ -1,7 +1,4 @@
-//
-//  CellMetrics.swift
-//  Monospaced cell geometry measured from a CoreText font + the user config.
-//
+// Monospaced cell geometry measured from a CoreText font and the user config.
 
 import CoreGraphics
 import CoreText

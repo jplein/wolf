@@ -1,26 +1,4 @@
-//
-//  DividerHitTestTests.swift
-//  Pure, headless unit tests for the NEW `WolfKeyMap.DividerHitTest` seam
-//  (feature plan §2). Foundation-only — no AppKit, no NSView, no live Neovim.
-//
-//  `DividerHitTest.hit(_:point:tolerance:)` picks, from a PRE-COMPUTED list of
-//  `PaneTree.Divider`s (produced by `PaneTree.dividers(width:height:)`), the
-//  NEAREST divider whose line is within `tolerance` of the point AND whose point
-//  falls within the divider's span; else `nil`. This test hand-builds the divider
-//  list (it does not go through `PaneTree`), so it pins the picking contract in
-//  isolation.
-//
-//  CONTRACT / SIGNATURE ASSUMPTIONS (test-writer report; coder implements to match):
-//    * `enum DividerHitTest` with
-//      `static func hit(_ dividers: [PaneTree.Divider],
-//         point: (x: Double, y: Double), tolerance: Double) -> PaneTree.Divider?`.
-//    * A `.vertical` divider is a vertical line segment at `lineRect.x`, spanning
-//      y in `[lineRect.y, lineRect.y + lineRect.h]`; distance is `|point.x - x|`,
-//      and the point must fall within the y-span. A `.horizontal` divider is the
-//      transpose. A point beyond the span (off the ends of the line) does NOT hit.
-//    * `PaneTree.Divider` exposes a public memberwise-style init (see
-//      `PaneTreeWeightsTests`).
-//
+// See crates/wolf-macos/Tests/WolfKeyMapTests/README.md#dividerhittesttestsswift
 
 import XCTest
 
@@ -89,9 +67,8 @@ final class DividerHitTestTests: XCTestCase {
   // MARK: - nearest wins near an intersection
 
   func testNearIntersectionPicksTheNearerDivider() {
-    // A vertical line at x=50 (y 0..40) crossing a horizontal line at y=20
-    // (x 0..100). A point near the crossing but 1pt from the vertical line and
-    // 3pt from the horizontal line must pick the VERTICAL one (nearer).
+    // V at x=50 (y 0..40) crosses H at y=20 (x 0..100); a point 1pt from V and 3pt from H
+    // must pick the nearer, vertical one.
     let v = verticalDivider(x: 50, y0: 0, height: 40, path: [], boundary: 0)
     let hz = horizontalDivider(y: 20, x0: 0, width: 100, path: [0], boundary: 0)
 

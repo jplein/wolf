@@ -129,10 +129,8 @@ fn orlando_loads_from_sibling_dir() {
     };
     std::env::set_var("WOLF_NVIM_BIN", &nvim_bin);
 
-    // SKIP too when the vendored orlando tree is not staged. Bazel stages it in the
-    // runfiles and the Linux devShell exports it from `wolfOrlando`, so this branch
-    // belongs to a run outside BOTH — inside either, reaching it means the export
-    // was lost and this file has stopped proving anything (see the header).
+    // Skip without the orlando tree. Bazel stages it and the devShell exports it from
+    // `wolfOrlando`, so inside either, reaching this skip means the export was lost.
     let Some(orlando_tree) = common::orlando_dir_or_none() else {
         eprintln!(
             "\nSKIP: wolf-ffi orlando_load — WOLF_TEST_ORLANDO_DIR is unset or names no \
@@ -200,13 +198,8 @@ fn orlando_loads_from_sibling_dir() {
         frame.cols()
     );
 
-    // --- Ask nvim to write a sentinel proving orlando loaded ----------------
-    // No exec_lua accessor exists on the FFI surface, so drive a real `:lua`
-    // Ex command (through the same send_key path Swift uses) that writes two
-    // markers: whether `vim.g.loaded_orlando` is truthy (set by
-    // plugin/orlando.lua) and whether `require("orlando")` succeeds (module on
-    // rtp). The path has no spaces/quotes (a tempdir path), so typing it verbatim
-    // inside a Lua double-quoted string is safe.
+    // --- Sentinel: a typed `:lua` (no Lua-eval accessor) writes `loaded_orlando` and whether
+    // `require("orlando")` works. The tempdir path has no spaces or quotes, so it is typed verbatim.
     let sentinel = root.join("orlando_proof.txt");
     let sentinel_str = sentinel.to_string_lossy().into_owned();
     let lua_cmd = format!(

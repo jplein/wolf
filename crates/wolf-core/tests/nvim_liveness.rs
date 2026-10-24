@@ -125,9 +125,8 @@ fn crash_marks_dead() {
         "an unexpected nvim death (SIGKILL) must mark liveness Dead"
     );
 
-    // SEAM: the death transition (and the crash episode) delivered a wake to the
-    // front-end, so `onWake` can re-read `liveness()` and drive recovery. (The wake
-    // does not bump `seq`, so it is observed via the raw-wake seam, not a flush.)
+    // The crash must wake the front-end so `onWake` can re-read `liveness()`. The wake does not bump
+    // `seq`, so it is observed via the raw-wake seam, not a flush.
     assert!(
         waiter.wait_for_wake(FLUSH_TIMEOUT),
         "the crash must fire a front-end wake so onWake can react"
@@ -143,10 +142,8 @@ fn crash_marks_dead() {
 /// `NotResponding` (NO auto-kill — the front-end drives a manual restart).
 #[test]
 fn stall_marks_not_responding() {
-    // Resolve a short RPC timeout BEFORE the core starts (read once at start). This
-    // binary also runs `crash_marks_dead`; that test only reads `liveness()` and
-    // shuts down, both tolerant of a short timeout, so the process-global env var
-    // is harmless there.
+    // Set before the core starts, which reads it once. `crash_marks_dead` in this binary tolerates
+    // a short timeout, so the process-global env var is harmless there.
     std::env::set_var("WOLF_RPC_TIMEOUT_MS", STALL_RPC_TIMEOUT_MS);
 
     let (core, _waiter) = common::start_core_sized(common::DEFAULT_COLS, common::DEFAULT_ROWS);
@@ -156,20 +153,16 @@ fn stall_marks_not_responding() {
         "a freshly started core must report Alive"
     );
 
-    // Wedge nvim's main loop with a long FINITE sleep so it is still parked when the
-    // RPC(s) below land. Do NOT wait_for_flush: a flush only arrives once nvim
-    // recovers, and we want to call the RPC WHILE it is wedged.
+    // Wedge nvim with a long finite sleep. Do not wait_for_flush: the RPCs below must land while
+    // nvim is parked, and a flush only arrives once it recovers.
     ex_command(
         &core,
         &format!("lua (vim.uv or vim.loop).sleep({WEDGE_SLEEP_MS})"),
     );
     sleep(WEDGE_SETTLE);
 
-    // Drive a `block_on_rpc`-backed method against the wedged nvim; each call
-    // elapses to `Timeout`. `list_buffers()` is such a method (getbufinfo RPC); it
-    // degrades to its fallback (empty) on timeout. Repeating it satisfies the
-    // "repeated Timeout" escalation regardless of the exact threshold; the finite
-    // wedge stays parked across the whole poll window.
+    // Each `list_buffers()` (a block_on_rpc getbufinfo, empty on timeout) times out; repeating it
+    // escalates whatever the threshold is, and the finite wedge outlasts the poll window.
     poll_until_no_drain(
         "liveness() to escalate to NotResponding while wedged",
         || {
@@ -214,9 +207,8 @@ fn stall_then_recovery_clears_not_responding() {
     );
     sleep(WEDGE_SETTLE);
 
-    // DURING the sleep: a block_on_rpc call times out and escalates to
-    // NotResponding. The wedge is several multiples of the timeout, so this is
-    // observed well before nvim recovers.
+    // During the sleep a block_on_rpc call times out and escalates to NotResponding, well before
+    // nvim recovers, since the wedge is several multiples of the timeout.
     poll_until_no_drain(
         "liveness() to escalate to NotResponding during the transient stall",
         || {
@@ -229,11 +221,8 @@ fn stall_then_recovery_clears_not_responding() {
     // to the recovery episode.
     waiter.drain();
 
-    // AFTER the sleep elapses: nvim answers again, so a SUCCESSFUL block_on_rpc call
-    // auto-clears NotResponding -> Alive. Poll `list_buffers()` (which succeeds once
-    // nvim recovers) until liveness returns to Alive — this is the load-bearing
-    // assertion. Bounded by FLUSH_TIMEOUT (>> the 1.5s wedge), and NOT draining, so
-    // the auto-clear wake stays queued for the seam assertion.
+    // After the sleep, a successful block_on_rpc auto-clears to Alive: the load-bearing assertion.
+    // No drain, so the auto-clear wake stays queued for the seam assertion.
     poll_until_no_drain(
         "liveness() to auto-clear back to Alive after recovery",
         || {

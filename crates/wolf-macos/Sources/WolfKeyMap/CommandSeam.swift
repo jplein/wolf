@@ -1,15 +1,4 @@
-//
-//  CommandSeam.swift
-//  Pure, AppKit-free command-kind decode seam.
-//
-//  The sibling of `PaneTree`'s `Orientation(ffi:)` / `FocusDir(ffi:)` seams: a
-//  pure, display-free decode exercised with scalar inputs only — NO AppKit, NO
-//  NSMenu, NO live Neovim. It decodes the FFI command-kind `u8` (delivered in an
-//  `NSMenuItem.tag` or by a drained `FfiCommand`) into a typed `CommandKind`.
-//
-//  Imports ONLY Foundation, so it lives in the Foundation-only `WolfKeyMap` module
-//  alongside `PaneTree.swift` / `ShortcutSeam.swift`.
-//
+// Pure, AppKit-free decode of the FFI command-kind discriminant.
 
 import Foundation
 

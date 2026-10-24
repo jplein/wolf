@@ -1,16 +1,4 @@
-//
-//  AppearanceSeam.swift
-//  Pure, AppKit-free appearance-mode decode seam.
-//
-//  The sibling of `CommandSeam`'s `CommandKind(ffi:)` decode: a pure, display-free
-//  mapping exercised with scalar inputs only — NO AppKit, NO NSApp, NO
-//  NSAppearance, NO live Neovim. It mirrors the FFI appearance discriminant that
-//  `FfiConfig::appearance() -> u8` delivers, which `AppDelegate` decodes to resolve
-//  dark/light.
-//
-//  Imports ONLY Foundation, so it lives in the Foundation-only `WolfKeyMap` module
-//  alongside `CommandSeam.swift` / `PaneTree.swift`.
-//
+// Pure, AppKit-free decode of the FFI appearance-mode discriminant.
 
 import Foundation
 

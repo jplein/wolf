@@ -1,109 +1,4 @@
-//
-//  FrameStatsTests.swift
-//  Pure, headless unit tests for the AppKit-free `WolfKeyMap.FrameStats`.
-//
-//  These exercise the frame-time aggregation seam the coder adds in
-//  `Sources/WolfKeyMap/FrameStats.swift` (the frame-time instrumentation plan).
-//  Like `PaneGeometryTests.swift` and `StatusbarLayoutTests.swift`, they import
-//  ONLY Foundation-level test machinery (no AppKit, no Dispatch timers, no live
-//  Neovim, no window server) and stay in the headless `WolfKeyMap` module.
-//
-//  The process-global glue (`Sources/WolfMacOS/FrameMetrics.swift`: the once-only
-//  static `enabled`, `Timer` scheduling, stderr / file emission, the
-//  `dispatchPrecondition` main-thread guard) and every instrumentation call site
-//  are window-server-bound and stay compile-verified + manual-smoke only.
-//
-//  ## CONTRACT UNDER TEST (the API the coder must honor)
-//
-//    public enum FrameStatsBucket: Int, CaseIterable {
-//        case controllerWake = 0   // label "ctrl.wake"
-//        case containerWake  = 1   // label "cont.wake"
-//        case draw           = 2   // label "draw"
-//        case previewReload  = 3   // label "prev.reload"
-//        case previewRender  = 4   // label "prev.render"
-//        case previewLoadHTML = 5  // label "prev.html"
-//        case drawPaneEditor  = 6  // label "draw.pane"
-//        case drawPanePreview = 7  // label "draw.prev"
-//        case paneFrameRead   = 8  // label "pane.read"
-//        case paneCells       = 9  // label "pane.cells"
-//        case paneCellsVec    = 10 // label "pane.vec"
-//        case paneGlyphLoop   = 11 // label "pane.glyphs"
-//        case paneCursor      = 12 // label "pane.cursor"
-//        case paneStatusbar   = 13 // label "pane.status"
-//        public var label: String { ... }
-//    }
-//
-//  The six `pane.*` buckets split `draw.pane` into its phases. They are NOT a
-//  partition: `{pane.read, pane.cells, pane.cursor, pane.status}` are mutually
-//  disjoint, while `{pane.vec, pane.glyphs}` partition the INTERIOR of
-//  `pane.cells` (with a remainder). Summing all six double-counts. That nesting
-//  contract is a call-site property and is verified during the manual capture,
-//  not here — these tests pin only the discriminants, labels, and aggregation.
-//
-//    public struct FrameStats {
-//        public static let sampleCapacity: Int  // 4096
-//
-//        public struct BucketSummary {
-//            public let bucket: FrameStatsBucket
-//            public let count: Int
-//            public let meanNanos: UInt64
-//            public let p50Nanos: UInt64
-//            public let p95Nanos: UInt64
-//            public let maxNanos: UInt64
-//            public let truncated: Bool
-//            public init(bucket:count:meanNanos:p50Nanos:p95Nanos:maxNanos:truncated:)
-//        }
-//
-//        public struct Report {
-//            public let index: Int
-//            public let elapsedSeconds: Double
-//            public let buckets: [BucketSummary]
-//            public let keystrokes: Int
-//            public let wakes: Int
-//            public let wakesPerKeystroke: Double?
-//            public init(index:elapsedSeconds:buckets:keystrokes:wakes:wakesPerKeystroke:)
-//        }
-//
-//        public init()
-//        public mutating func record(_ bucket: FrameStatsBucket, nanos: UInt64)
-//        public mutating func recordKeystroke()
-//        public mutating func recordWake()
-//        public mutating func reset()
-//        public func summarize(index: Int, elapsedSeconds: Double) -> Report
-//        public func retainedSampleCount(_ bucket: FrameStatsBucket) -> Int
-//        public static func percentile(_ sorted: [UInt64], _ p: Double) -> UInt64
-//        public static func delta(start: UInt64, end: UInt64) -> UInt64
-//        public static func format(_ report: Report) -> String
-//        public static func isEnabled(env: [String: String]) -> Bool
-//        public static func reportInterval(env: [String: String]) -> TimeInterval
-//    }
-//
-//  ## Decisions this test PINS (the coder must match the test, not vice versa)
-//
-//  * `meanNanos` is INTEGER division `sumNanos / UInt64(count)`, truncating; a
-//    zero-count bucket yields `0` (and is omitted from `summarize`).
-//  * `percentile` is NEAREST-RANK:
-//        index = clamp(Int(ceil(p * Double(n))) - 1, 0, n - 1)
-//    over the ALREADY-SORTED input; empty input returns `0`.
-//  * `count` / `sumNanos` / `maxNanos` are EXACT and unbounded; only the
-//    percentile window is bounded to the last `sampleCapacity` samples.
-//    `truncated == (count > sampleCapacity)`.
-//  * `format` output layout. The plan's sample report block is internally
-//    inconsistent (its header row and its data rows disagree by one column of
-//    padding), so this test pins ONE self-consistent layout that reproduces the
-//    plan's header line EXACTLY:
-//
-//        prefix         "wolf-frame-stats " on every line
-//        bucket label   left-aligned,  width 14
-//        count          right-aligned, width  5  (with a "*" suffix when truncated)
-//        mean/p50/p95/max  right-aligned, width 9 each, milliseconds, 2 decimals
-//
-//    Header:  "wolf-frame-stats #<index>  window=<elapsed, 1 decimal>s"
-//    Footer:  "wolf-frame-stats keys=<k> wakes=<w> wakes/key=<ratio, 2 decimals>"
-//             with "wakes/key=n/a" when `wakesPerKeystroke` is nil.
-//    Buckets are emitted in ascending `rawValue` order regardless of the order
-//    they appear in `Report.buckets`. Every line (including the last) ends in "\n".
-//
+// See crates/wolf-macos/Tests/WolfKeyMapTests/README.md#framestatstestsswift
 
 import XCTest
 
@@ -123,9 +18,7 @@ final class FrameStatsTests: XCTestCase {
   private let defaultInterval: TimeInterval = 5.0
 
   // MARK: - 0. Bucket discriminants + labels
-  //
-  // The raw values are the storage indices (array-indexed, no dict hashing) and
-  // the labels are the report-time strings, so both are part of the contract.
+  // Raw values are storage indices and labels are the report strings, so both are contract.
 
   func testBucketRawValuesAndLabels() {
     let cases: [(FrameStatsBucket, Int, String)] = [
@@ -157,25 +50,8 @@ final class FrameStatsTests: XCTestCase {
   }
 
   func testBucketLabelsAreUniqueAndFitTheReportColumn() {
-    // WHY UNIQUENESS: `label` is a hand-written `switch`. A copy-paste duplicate
-    // (two cases returning "pane.cells", say) would compile, and would silently
-    // emit two identical report rows that no other test rejects. Worse, it would
-    // FOOL `testFormattedBucketRowsAreInRawValueOrder`: that test's scan is
-    // forward-only, so the second, duplicated label would simply re-match the
-    // first row's text and the ordering assertion would pass while the report was
-    // in fact ambiguous. This test is the guard for exactly that hole.
-    //
-    // NOTE: uniqueness is the strongest check available here — a blanket
-    // "no label is a substring of another" assertion is NOT possible, because
-    // "draw" is legitimately a substring of "draw.pane" and "draw.prev". The
-    // forward-only scan tolerates that only because "draw" has the LOWER raw
-    // value and so is matched first. None of the six new `pane.*` labels is a
-    // substring of any other label (`pane.cells` and `pane.cursor` merely share
-    // the "pane.c" prefix; neither contains the other), so the scan stays sound.
-    //
-    // WHY THE WIDTH: `format` left-aligns the label in a width-14 field. A label
-    // of 14+ chars would consume the whole field and butt directly against the
-    // right-aligned count column, breaking the byte-exact table layout.
+    // Labels must be unique, which guards the ordering test's forward-only scan, and fit width 13.
+    // See notes/crates/wolf-macos/Tests/WolfKeyMapTests/FrameStatsTests.swift.md#label-rules
     let maxLabelWidth = 13
 
     var seen: [String: FrameStatsBucket] = [:]
@@ -369,11 +245,8 @@ final class FrameStatsTests: XCTestCase {
   }
 
   func testEveryBucketRoundTripsThroughRecordAndSummarize() {
-    // Every bucket, one DISTINCT sample each, so a mis-sized accumulator shows up
-    // as a missing row or a value landing in the wrong bucket rather than as a
-    // silently-equal duplicate. This is the tripwire for an off-by-one if the
-    // storage ever stops deriving its size from `allCases.count` (a hard-coded
-    // "8" would trap or drop the six new pane sub-buckets).
+    // One distinct sample per bucket, so a mis-sized store (not derived from `allCases.count`)
+    // shows up as a missing row or a value in the wrong bucket.
     var stats = FrameStats()
     var expected: [FrameStatsBucket: UInt64] = [:]
     for bucket in FrameStatsBucket.allCases {
@@ -410,10 +283,8 @@ final class FrameStatsTests: XCTestCase {
   // MARK: - 5. Ring bound + truncation
 
   func testRingBoundKeepsExactCountAndWindowedPercentiles() {
-    // Feed a DISTINGUISHABLE pattern: `overflow` tiny samples first, then exactly
-    // `sampleCapacity` large samples. If the percentile window were wrong (e.g.
-    // the FIRST capacity samples, or all of them) the p50 would be dragged down
-    // by the tiny prefix, so a wrong window is detectable.
+    // `overflow` tiny samples, then `sampleCapacity` large ones: a window over the first samples,
+    // or over all of them, drags p50 down into the tiny prefix.
     let capacity = FrameStats.sampleCapacity
     let overflow = 100
     let base: UInt64 = 1000
@@ -439,10 +310,8 @@ final class FrameStatsTests: XCTestCase {
       "max is tracked OUTSIDE the ring, so it is exact")
     XCTAssertTrue(wake.truncated, "count > sampleCapacity marks the bucket truncated")
 
-    // The retained window is exactly the LAST `capacity` samples: base ..< base+capacity.
-    // Nearest-rank over that sorted window:
-    //   p50 index = ceil(0.5 * capacity) - 1
-    //   p95 index = ceil(0.95 * capacity) - 1
+    // The retained window is the last `capacity` samples, base ..< base+capacity; the nearest-rank
+    // index for p is ceil(p * capacity) - 1.
     let p50Index = Int((0.5 * Double(capacity)).rounded(.up)) - 1
     let p95Index = Int((0.95 * Double(capacity)).rounded(.up)) - 1
     XCTAssertEqual(
@@ -557,9 +426,8 @@ final class FrameStatsTests: XCTestCase {
   }
 
   func testResetStartsAFreshWindowWithNoLeakage() {
-    // Pre-reset samples are LARGE; post-reset samples are SMALL. If any pre-reset
-    // sample leaked into the post-reset window (a stale writeIndex / wrapped flag)
-    // the max or the percentiles would blow past the small range.
+    // Large samples before reset, small after: a pre-reset sample leaking into the window (a stale
+    // writeIndex or wrapped flag) pushes max or the percentiles past the small range.
     var stats = FrameStats()
     for _ in 0..<50 {
       stats.record(.draw, nanos: 1_000_000_000)
@@ -584,13 +452,8 @@ final class FrameStatsTests: XCTestCase {
   }
 
   func testSummarizeOfUntouchedStatsIsEmpty() {
-    // WHY: `FrameMetrics.emit()` skips output for a fully-idle interval using a
-    // private `recordedAnything` flag, hand-maintained in its three mutator
-    // wrappers (`record`, `recordKeystroke`, `recordWake`) and cleared on reset.
-    // That flag mirrors exactly the condition asserted here: all buckets empty
-    // AND both counters zero. This test pins the seam-side contract, so if
-    // `FrameStats` ever gains a fourth mutator and the flag goes stale, there is
-    // a tripwire on the invariant the flag is standing in for.
+    // Pins the condition `FrameMetrics`' private `recordedAnything` flag mirrors; its mutator
+    // wrappers maintain it by hand, so a new `FrameStats` mutator without a wrapper makes it stale.
 
     // A freshly constructed value is empty on all three counts.
     let fresh = FrameStats()
@@ -620,17 +483,11 @@ final class FrameStatsTests: XCTestCase {
   }
 
   // MARK: - 8. Format stability / diffability
-  //
-  // THIS is the test that guarantees two runs are `diff`-able. The expected
-  // string below is the CONTRACT: the implementation must match it exactly
-  // (fixed column widths, rawValue bucket ordering, the grep-able prefix on
-  // every line, the "*" truncation marker). See the layout note in the file
-  // header for why this differs by one space from the plan's sample data rows.
+  // The expected string is the contract that keeps two runs `diff`-able; match it byte for byte.
 
   func testFormatProducesTheExactPinnedTable() {
-    // Buckets are supplied DELIBERATELY OUT OF ORDER (draw=2, ctrl.wake=0,
-    // prev.render=4) so the test proves `format` sorts by rawValue rather than
-    // echoing the input / dictionary iteration order.
+    // Buckets are supplied out of order (draw=2, ctrl.wake=0, prev.render=4) to prove `format`
+    // sorts by rawValue rather than echoing the input order.
     let report = FrameStats.Report(
       index: 3,
       elapsedSeconds: 5.0,

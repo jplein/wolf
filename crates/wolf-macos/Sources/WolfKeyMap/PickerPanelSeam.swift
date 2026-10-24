@@ -1,21 +1,4 @@
-//
-//  PickerPanelSeam.swift
-//  Pure, AppKit-/CoreGraphics-free arithmetic for POSITIONING a picker panel
-//  top-center over its owning window's content (plan §2a).
-//
-//  This is a headless seam in the `WolfKeyMap` module — Foundation-only, no live
-//  window/panel, no `CGFloat`. Given the parent window's content size, the panel's
-//  desired size, and a fixed top margin, it computes the panel's frame in the
-//  parent's CONTENT space (TOP-LEFT origin): centered horizontally, pinned a fixed
-//  margin below the content top, and clamped so a panel wider/taller than the
-//  content never overflows. The AppKit glue (`PickerPanelHost`) maps this top-left
-//  content rect into a bottom-left SCREEN frame for the child `NSPanel`; only this
-//  arithmetic is unit-tested (see `PickerPanelSeamTests.swift`).
-//
-//  It reuses the existing `Rect` value type from `PaneTree.swift` and, like
-//  `EditorInset` / `PaneGeometry`, is `Double`-based so it stays headlessly
-//  testable.
-//
+// Pure arithmetic positioning a picker panel top-center over its window's content.
 
 import Foundation
 

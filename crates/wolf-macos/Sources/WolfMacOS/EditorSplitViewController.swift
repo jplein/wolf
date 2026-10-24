@@ -1,9 +1,4 @@
-//
-//  EditorSplitViewController.swift
-//  The window's content controller: a standard macOS source-list split of the
-//  file-tree sidebar (a `.sidebar` split item → OS vibrancy + full-height) and the
-//  editor grid, hosted in lightweight `HostViewController`s.
-//
+// The window's content controller: the sidebar and editor split.
 
 import AppKit
 
@@ -35,10 +30,8 @@ final class EditorSplitViewController: NSSplitViewController {
     let sidebarHost = HostViewController(hostedView: sidebar, pinTopToSafeArea: false)
     let contentHost = HostViewController(hostedView: paneContainer, pinTopToSafeArea: true)
 
-    // `sidebarWithViewController:` gives the `.sidebar` behavior: vibrancy,
-    // full-height under the titlebar, collapsibility, and the higher holding
-    // priority that makes the editor pane absorb resizing. DO NOT lower the
-    // holding priority here — that would invert the resize behavior.
+    // `sidebarWithViewController:` gives vibrancy, full height, collapsing, and the higher holding
+    // priority that makes the editor absorb resizing; lowering that priority inverts resizing.
     let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebarHost)
     sidebarItem.canCollapse = true
     sidebarItem.minimumThickness = Self.minThickness

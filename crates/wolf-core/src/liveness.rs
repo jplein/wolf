@@ -1,4 +1,4 @@
-//! Liveness state model for the captive Neovim (architect plan §1).
+//! Liveness state model for the captive Neovim.
 //!
 //! A single, lock-free `Alive` / `NotResponding` / `Dead` state the supervisor
 //! (crash detection) and `block_on_rpc`'s timeout path (stall detection) write
@@ -7,44 +7,6 @@
 //! never contends the snapshot lock, mutated ONLY through the transition helpers
 //! below, each of which fires the `WakeFn` exactly ONCE per real state change so
 //! the front-end can re-read `liveness()` and paint/recover.
-//
-// NOTE(test-writer): the PRODUCTION surface this module's tests exercise is
-// implemented by the CODER, ABOVE this test module, per architect plan §1:
-//
-//   * `pub enum Liveness { Alive, NotResponding, Dead }` with discriminants
-//     `0 / 1 / 2`, deriving `Debug, Clone, Copy, PartialEq, Eq` (the tests
-//     `assert_eq!` on it), plus:
-//       - `pub fn to_u8(self) -> u8` (the FFI mirror value: 0/1/2), and
-//       - `pub fn from_u8(v: u8) -> Liveness` (inverse; the tests assume it
-//         returns `Liveness`, saturating/clamping unknown values as the coder
-//         sees fit).
-//   * The free transition helpers, each over `&AtomicU8` + `&WakeFn`, firing the
-//     wake ONLY on an actual change:
-//       - `pub fn mark_dead(state: &AtomicU8, wake: &WakeFn)` — unconditional
-//         store `Dead`; wake iff it was not already `Dead`. TERMINAL: only
-//         `reset_alive` leaves `Dead`.
-//       - `pub fn mark_not_responding(state: &AtomicU8, wake: &WakeFn)` —
-//         `compare_exchange(Alive -> NotResponding)` ONLY; never downgrades
-//         `Dead`; wake on success.
-//       - `pub fn reset_alive(state: &AtomicU8, wake: &WakeFn)` — unconditional
-//         store `Alive` (the RESTART path — the ONLY exit from `Dead`); wake iff
-//         it changed.
-//       - `pub fn get(state: &AtomicU8) -> Liveness`.
-//
-// The coder must also add `pub mod liveness;` to `lib.rs` and re-export
-// `Liveness` (`pub use liveness::Liveness;`). Until then this file is not part of
-// the crate and the tests below do not compile/run — the expected tests-first
-// state.
-//
-// AMBIGUITY (flagged for the coder): plan §5 step 3 has `restart_nvim` call
-// `reset_alive` to leave `Dead` (`Dead -> Alive`), so `reset_alive` is
-// documented here as an UNCONDITIONAL store-`Alive`. The RESOLVED §11 decision
-// (auto-clear `NotResponding` on a successful `block_on_rpc`, "never touching
-// `Dead`") is therefore NOT `reset_alive`'s own behavior but a CALL-SITE guard in
-// `block_on_rpc` (only clear when currently `NotResponding`). These unit tests
-// pin `reset_alive`'s unconditional contract (incl. `Dead -> Alive` for restart);
-// the "RPC-success auto-clear never resurrects `Dead`" guard is covered
-// separately (see the test-writer report).
 
 use std::sync::atomic::{AtomicU8, Ordering};
 

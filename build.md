@@ -65,7 +65,7 @@ Several cages run at once. `WOLF_SMOKE_JOBS=<n>` sets how many, and `1` runs the
 
 ### The optimized build
 
-From the repository root, for the reason [Activating the dev environment](#activating-the-dev-environment) gives, and because a checkout binary resolves the captive `init.lua` out of the checkout it was compiled in — the last of the three branches [`wolf-gnome/DECISIONS.md`](crates/wolf-gnome/DECISIONS.md) states, and the one [the Nix package](#the-nix-package) does not take:
+From the repository root, for the reason [Activating the dev environment](#activating-the-dev-environment) gives, and because a checkout binary resolves the captive `init.lua` out of the checkout it was compiled in — the last of the three branches [`wolf-gnome-decisions.md`](notes/wolf-gnome-decisions.md) states, and the one [the Nix package](#the-nix-package) does not take:
 
 ```sh
 nix develop --command cargo build --release
@@ -73,11 +73,11 @@ nix develop --command cargo run --release -p wolf-gnome
 nix develop --command ./target/release/wolf-gnome  # no cargo in the process tree; what a profiling session wants
 ```
 
-The profile is optimized, unwinding, and carries the line tables a profiler and a release panic backtrace need to resolve a `file:line`. The per-key reasons, and the list of keys deliberately left unset, belong to the comment above `[profile.release]` in the workspace [`Cargo.toml`](Cargo.toml), which owns that rationale — read it before retuning anything.
+The profile is optimized, unwinding, and carries the line tables a profiler and a release panic backtrace need to resolve a `file:line`. The per-key reasons, and the list of keys deliberately left unset, are in [the `Cargo.toml` notes](notes/Cargo.toml.md#release-profile), which the comment above `[profile.release]` links — read them before retuning anything.
 
 No step of [the verification gate](#the-verification-gate) builds this profile. `cargo test`, `cargo clippy --workspace --all-targets` and `cargo build --workspace --all-targets` all select `dev` and `test`, so an optimized build never sweeps into an ordinary run — the Linux counterpart of `WolfRelease`'s `manual` tag, by a different mechanism to the same end. Measured across a full gate run: every `Finished` line reads `dev` or `test`, and `target/release/wolf-gnome` keeps its timestamp.
 
-`cargo test --release` reuses those same `target/release` artifacts, because the `bench` profile inherits `release`. That reuse is what `panic = "unwind"` buys, for the reason the manifest comment gives.
+`cargo test --release` reuses those same `target/release` artifacts, because the `bench` profile inherits `release`. That reuse is what `panic = "unwind"` buys, for the reason those notes give.
 
 Two commands are the release evidence:
 
@@ -149,28 +149,36 @@ It prints the store path it resolved before it starts, since that path is the su
 
 ### The verification gate
 
-This is the definition of "Linux is green", and unlike the advisory macOS lint targets every step gates: `-D warnings` applies unconditionally and each command must exit 0.
+This is the definition of "Linux is green". Every step gates, as the `//tools/lint` checks do on macOS: `-D warnings` applies unconditionally and each command must exit 0.
 
 ```sh
 nix develop --command bash -c '
   set -euo pipefail
   cargo fmt --all -- --check
+  cargo fmt --manifest-path tools/doc-lint/Cargo.toml -- --check
   prettier --check "**/*.md"
+  ./tools/lint/markdown_all.sh
+  ./tools/lint/markdown_check_test.sh
+  cargo clippy --manifest-path tools/doc-lint/Cargo.toml --all-targets -- -D warnings
+  cargo test --manifest-path tools/doc-lint/Cargo.toml
+  cargo run --quiet --manifest-path tools/doc-lint/Cargo.toml -- --root .
   cargo clippy --workspace --all-targets -- -D warnings
   cargo build --workspace --all-targets
   cargo test --workspace
 '
 ```
 
-The order is deliberate. The two format checks compile nothing, so a stray blank line fails in seconds rather than after a long compile; clippy precedes the build because it compiles the same dependency graph the build then reuses; and the tests run last because they dominate the wall clock. Expect roughly 10-25 minutes cold, most of it compilation and the integration tests that each spawn a real Neovim.
+The order is deliberate, fast to slow. The format and Markdown checks compile nothing, so a stray blank line fails in seconds rather than after a long compile; doc-lint is a small crate with no dependencies, so its lint, tests and tree check come next; clippy precedes the workspace build because it compiles the same dependency graph the build then reuses; and the tests run last because they dominate the wall clock. Expect roughly 10-25 minutes cold, most of it compilation and the integration tests that each spawn a real Neovim.
 
 Three details are load-bearing. `--all-targets` on clippy is what makes it lint `tests/*.rs` and every `#[cfg(test)] mod tests` rather than just `--lib` and `--bins`. `cargo test` omits `--all-targets` deliberately, because that flag silently drops doctests. And running through `nix develop --command` is not optional: after a `flake.nix` edit the loaded direnv environment is stale and lacks any newly added tool.
+
+[doc-lint](tools/doc-lint/README.md) is a Cargo workspace of its own, so `--workspace` never reaches it and its steps name its manifest.
 
 Prettier's scope is `**/*.md` minus [`.prettierignore`](.prettierignore). Quote the glob so the shell does not expand it — prettier expands it internally and only then applies the ignore file. `.direnv/` must stay excluded, because it symlinks into the Nix store and prettier's globber follows symlinks.
 
 ## macOS (Bazel)
 
-None of this can be built or verified from the Linux devShell. Work done on Linux-only branches that still needs re-checking here is logged in [macos-followups.md](macos-followups.md).
+None of this can be built or verified from the Linux devShell. Work done on Linux-only branches that still needs re-checking here is logged in [macos-followups.md](notes/macos-followups.md).
 
 ### Prerequisites
 
@@ -229,7 +237,7 @@ ZIP=$(bazel cquery --output=files //crates/wolf-macos:WolfRelease 2>/dev/null)
 APP="${ZIP%.zip}_archive-root/Wolf.app"
 ```
 
-`:WolfRelease` produces the same bundle as `:Wolf` with the whole graph — Swift, Rust, and the treesitter parsers — built at `-c opt`, without `-c opt` on the command line. Build this for real use, for installing, and for any performance measurement. The rule, and the reason it is a transition rather than an alias, are documented in [`crates/wolf-macos/release.bzl`](crates/wolf-macos/release.bzl) and [`wolf-macos/DECISIONS.md`](crates/wolf-macos/DECISIONS.md).
+`:WolfRelease` produces the same bundle as `:Wolf` with the whole graph — Swift, Rust, and the treesitter parsers — built at `-c opt`, without `-c opt` on the command line. Build this for real use, for installing, and for any performance measurement. The rule, and the reason it is a transition rather than an alias, are documented in [`crates/wolf-macos/release.bzl`](crates/wolf-macos/release.bzl) and [`wolf-macos-decisions.md`](notes/wolf-macos-decisions.md).
 
 **Resolve the path from `cquery` every time; `bazel-bin` is wrong for `WolfRelease`.** `bazel-bin` symlinks the bin directory of the top-level target's configuration, and the transition applies below that edge, so the optimized bundle is never under it. The trap is a build of `:WolfRelease`, a later build of `:Wolf`, and then the habitual `bazel-bin` path, which resolves again and silently hands over the `-Onone` bundle. The `cquery` output resolves under an `-opt-` output directory whose name embeds a platform hash that is not a stable contract, so use the command rather than a literal path.
 
@@ -307,7 +315,7 @@ bazel test //crates/...       # the Rust and Swift crate tests
 bazel test //bazel/...        # the vendored-asset tree tests
 ```
 
-Targets tagged `manual` are excluded from wildcard expansion — the optimized `//crates/wolf-macos:WolfRelease` build and every `//tools/lint` target — so a plain `bazel test //...` never pulls in an opt rebuild or the advisory linters. Run those explicitly.
+Targets tagged `manual` are excluded from wildcard expansion: the optimized `//crates/wolf-macos:WolfRelease` build with `:InstallWolf`, which is built on it, and the `//tools/lint` fix targets. A plain `bazel test //...` therefore never pulls in an opt rebuild or rewrites a file, while it does run every `//tools/lint` check. Run the `manual` targets explicitly.
 
 Tests run in the default configuration, not `-c opt`, and that is deliberate rather than an oversight. `bazel test -c opt //crates/wolf-macos:WolfKeyMapTests` fails to build, because `@testable import` requires `-enable-testing`, which rules_swift passes only in non-opt compilation modes. Test in the default configuration and ship the optimized build. `//crates/wolf-macos:bundle_layout_test` runs against `:Wolf` for a related reason: bundle layout is configuration-independent, so a release variant would add a full opt build to every sweep for no added coverage.
 
@@ -359,7 +367,7 @@ Both front-ends carry an off-by-default measurement of the keystroke-to-pixel pa
 
 ### macOS
 
-The bucket set, the report format and the per-bucket caveats are documented in [`Sources/WolfKeyMap/README.md`](crates/wolf-macos/Sources/WolfKeyMap/README.md); the caveat that applies to a report as a whole, and the pointer to the rest, are in [`wolf-macos/DECISIONS.md`](crates/wolf-macos/DECISIONS.md).
+The bucket set, the report format and the per-bucket caveats are documented in [`Sources/WolfKeyMap/README.md`](crates/wolf-macos/Sources/WolfKeyMap/README.md); the caveat that applies to a report as a whole, and the pointer to the rest, are in [`wolf-macos-decisions.md`](notes/wolf-macos-decisions.md).
 
 **Double-clicking `Wolf.app` shows nothing.** A bundle launched from the Finder is started by `launchd`, so it inherits `launchd`'s stderr, which reaches no terminal, and it does not inherit the shell environment either — so the flag would not even be set.
 
@@ -386,7 +394,7 @@ tail -f /tmp/wolf-frame-stats.txt
 
 ### Linux
 
-The bucket set is [`wolf-gnome/src/README.md`](crates/wolf-gnome/src/README.md#frame_statsrs)'s; the cadence, the `wakes/key` caveat and the measured reading are [`wolf-gnome/DECISIONS.md`](crates/wolf-gnome/DECISIONS.md#frame-time-instrumentation)'s.
+The bucket set is [`wolf-gnome/src/README.md`](crates/wolf-gnome/src/README.md#frame_statsrs)'s; the cadence, the `wakes/key` caveat and the measured reading are [`wolf-gnome-decisions.md`](notes/wolf-gnome-decisions.md#frame-time-instrumentation)'s.
 
 **Measure the release binary, and leave it where cargo put it.** A `dev` build's numbers mean nothing, and a checkout binary reaches its captive `init.lua` through the `CARGO_MANIFEST_DIR` branch, so a copy moved elsewhere — with no installed `share/wolf/nvim/` beside it and no `WOLF_INIT_LUA` naming one — is launched against a path to nothing.
 
@@ -410,36 +418,35 @@ tail -f /tmp/wolf-frame-stats.txt
 
 ## Linting and formatting
 
-The lint and format targets live in [`//tools/lint`](tools/lint/README.md): clippy and rustfmt for Rust, swift-format for Swift, and a markdown checker for the documentation rules in [`CLAUDE.md`](CLAUDE.md). Each has a check target run with `bazel test` and, where a fixer exists, a fix target run with `bazel run`.
+The lint and format targets live in [`//tools/lint`](tools/lint/README.md): clippy and rustfmt for Rust, swift-format for Swift, a markdown checker for the documentation rules in [`CLAUDE.md`](CLAUDE.md), and the comment checks of [doc-lint](tools/doc-lint/README.md). Each has a check target run with `bazel test` and, where a fixer exists, a fix target run with `bazel run`.
 
 ```sh
 bazel test //tools/lint:check   # every check
 bazel run  //tools/lint:fix     # every fixer, in place
 ```
 
-Every one of them is tagged `manual`, which is why `bazel test //...` leaves them alone and why the standard test path is unaffected by them. They are advisory rather than gating, and existing violations across the tree are expected: a check target passing means the linter ran, not that the tree is clean. The per-tool table, the toolchain each one resolves, and the caveats are in [`tools/lint/README.md`](tools/lint/README.md).
+The checks gate on both platforms. On macOS they run under `bazel test //...` and clippy fails on any lint, because `.bazelrc` sets `-Dwarnings`; the fix targets are `manual`. On Linux [the verification gate](#the-verification-gate) runs the same checks directly, through the devShell's clippy and rustfmt, doc-lint's own Cargo workspace and the markdown scripts. The per-tool table, the toolchain each one resolves, and the caveats are in [`tools/lint/README.md`](tools/lint/README.md).
 
-Linux has no Bazel, so the Rust half runs through the devShell's own clippy and rustfmt instead:
+Linux has no Bazel, so the Rust fixers run through the devShell instead:
 
 ```sh
-cargo clippy --workspace   # --fix to apply the suggestions
-cargo fmt --check          # drop --check to rewrite in place
+cargo clippy --workspace --fix   # apply clippy's suggestions
+cargo fmt                        # rewrite in place
 ```
 
 These cover `wolf-gnome` too, which the Bazel targets deliberately skip. swift-format has no Cargo equivalent and needs a macOS host.
 
-The asymmetry between the platforms is deliberate: these targets are advisory on macOS, whereas [the verification gate](#the-verification-gate) runs the stricter `--all-targets` forms on Linux and gates on them.
-
-The markdown checker also runs standalone, which is how to check a document on a host without Bazel:
+The markdown checker runs standalone, which is how to check a document on a host without Bazel, and `markdown_all.sh` runs it over the scope that [`tools/lint/README.md`](tools/lint/README.md#what-markdown-checks) defines:
 
 ```sh
 ./tools/lint/markdown_check.sh <files>
+./tools/lint/markdown_all.sh
 ```
 
-Its Bazel target covers the per-package `README.md` and `DECISIONS.md` files only. The workspace documents — this file, [`architecture.md`](architecture.md), and the decision reports — are outside that filegroup, so check them by hand with the script above.
+doc-lint runs standalone too: `doc-lint --files <files>` checks comments in the named files, and `--root .` runs every rule over the checkout. Its rules and commands are in [`tools/doc-lint/README.md`](tools/doc-lint/README.md).
 
 ## The dependency boundary
 
-`wolf-core` must compile with no GUI toolkit in its dependency tree. That rule, the denylist, and the two commands that verify it under Cargo and under Bazel belong to [`crates/wolf-core/DECISIONS.md`](crates/wolf-core/DECISIONS.md). Re-run both after any dependency change, and repin `crate_universe` as described above.
+`wolf-core` must compile with no GUI toolkit in its dependency tree. That rule, the denylist, and the two commands that verify it under Cargo and under Bazel belong to [`wolf-core-decisions.md`](notes/wolf-core-decisions.md). Re-run both after any dependency change, and repin `crate_universe` as described above.
 
-`wolf-gnome` is deliberately given no Bazel target, which is what keeps the GTK stack out of the Bazel graph; see [`crates/wolf-gnome/DECISIONS.md`](crates/wolf-gnome/DECISIONS.md).
+`wolf-gnome` is deliberately given no Bazel target, which is what keeps the GTK stack out of the Bazel graph; see [`wolf-gnome-decisions.md`](notes/wolf-gnome-decisions.md).

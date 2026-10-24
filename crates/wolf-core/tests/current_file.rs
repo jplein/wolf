@@ -112,17 +112,14 @@ fn open_via_ex_command_keystrokes_sets_current_file() {
 fn unnamed_buffer_has_no_current_file() {
     let (core, waiter) = common::start_core_sized(common::DEFAULT_COLS, common::DEFAULT_ROWS);
 
-    // Create a genuinely unnamed buffer with a RAW `:enew` typed one key at a
-    // time (NOT `InputEvent::NewBuffer`, which would name it `Untitled.md`):
-    // ':' enters command-line mode, `enew` is the ex command, Enter runs it.
+    // A genuinely unnamed buffer needs a raw typed `:enew`; `InputEvent::NewBuffer` would name it
+    // `Untitled.md`.
     core.send_input(ch(':'));
     type_str(&core, "enew");
     core.send_input(key(Key::Enter));
 
-    // current_file starts at Some(.../Untitled.md) after startup and must become
-    // None once the unnamed `:enew` buffer is current. Poll (draining wakes each
-    // iteration, like `wait_for_current_file`) until it does, bounded by the
-    // shared timeout; panic loudly with the last value seen on timeout.
+    // current_file starts at Some(.../Untitled.md) and must become None once the unnamed buffer is
+    // current; poll while draining wakes, and report the last value seen on timeout.
     let deadline = Instant::now() + CURRENT_FILE_TIMEOUT;
     loop {
         let current = core.read_snapshot().current_file.clone();

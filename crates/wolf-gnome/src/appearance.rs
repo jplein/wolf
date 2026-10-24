@@ -70,7 +70,7 @@
 //!
 //! ## A notify is neither a timer nor a poll
 //!
-//! `crates/wolf-gnome/DECISIONS.md`, "Threading and the wake", records that
+//! `notes/wolf-gnome-decisions.md`, "Threading and the wake", records that
 //! nothing in this crate polls and that no timer re-arms while the application is
 //! idle. A `StyleManager` `dark` notification is a GObject property notification:
 //! armed once at launch, in `auto` mode only, and fired only when libadwaita's own
@@ -108,18 +108,15 @@ pub struct ResolvedAppearance {
 #[must_use]
 pub fn appearance_decision(configured: Appearance, os_dark: bool) -> ResolvedAppearance {
     match configured {
-        // `ColorScheme::Default` IS "follow the desktop", which libadwaita already
-        // does live and for free — so the chrome half of `auto` is a deliberate
-        // no-op rather than an omission, and forcing a scheme for a user who never
-        // asked for one is the one thing libadwaita's guidance says not to do.
+        // `ColorScheme::Default` is "follow the desktop", which libadwaita does live, so the chrome half
+        // of `auto` is a deliberate no-op: libadwaita's guidance is never to force an unrequested scheme.
         Appearance::Auto => ResolvedAppearance {
             dark: os_dark,
             color_scheme: adw::ColorScheme::Default,
             observe_os: true,
         },
-        // `Force*` and never `Prefer*`: a `Prefer…` scheme yields to the desktop's
-        // own preference, so it would leave the setting the user wrote the config
-        // line to override in charge after all.
+        // `Force*`, never `Prefer*`: a `Prefer…` scheme yields to the desktop's preference, which is the
+        // setting the user wrote this config line to override.
         Appearance::Dark => ResolvedAppearance {
             dark: true,
             color_scheme: adw::ColorScheme::ForceDark,
@@ -137,7 +134,7 @@ pub fn appearance_decision(configured: Appearance, os_dark: bool) -> ResolvedApp
 /// the core borrow within this call.
 ///
 /// A function rather than an inline `if let` so the borrow's lifetime is the
-/// statement's, per `crates/wolf-gnome/DECISIONS.md`'s borrow discipline: the
+/// statement's, per `notes/wolf-gnome-decisions.md`'s borrow discipline: the
 /// notify handler shares it, and neither caller may hold the `RefCell` across the
 /// call it makes next.
 fn push_background(core: &Rc<RefCell<Option<WolfCore>>>, dark: bool) {
@@ -198,9 +195,7 @@ pub fn apply_at_launch(config: &WolfConfig, core: &Rc<RefCell<Option<WolfCore>>>
 mod tests {
     use super::*;
 
-    // =========================================================================
-    // The whole input domain
-    // =========================================================================
+    // === The whole input domain ===
 
     /// Every `appearance` a `wolf-config.yaml` can carry.
     const ALL_APPEARANCES: [Appearance; 3] =
@@ -300,9 +295,7 @@ mod tests {
         },
     ];
 
-    // =========================================================================
-    // appearance_decision
-    // =========================================================================
+    // === appearance_decision ===
 
     /// Pins all three output fields for EVERY `(configured, os_dark)` input.
     ///
@@ -417,9 +410,8 @@ mod tests {
             );
         }
 
-        // Non-vacuity for the clause above: the two readings really do produce two
-        // different answers, so "follows the desktop" is being measured rather
-        // than satisfied by a seam that returns one row for everything.
+        // Non-vacuity: the two readings give different answers, so "follows the desktop" is measured
+        // rather than satisfied by a seam returning one row for everything.
         assert_ne!(
             appearance_decision(Appearance::Auto, false),
             appearance_decision(Appearance::Auto, true),
@@ -582,9 +574,8 @@ mod tests {
                     saw_light = true;
                 }
 
-                // `adw::ColorScheme` is `#[non_exhaustive]`, so this match needs a
-                // wildcard; the wildcard is a FAILURE arm, because the three
-                // schemes below are the only ones this seam may ever produce.
+                // `adw::ColorScheme` is `#[non_exhaustive]`, so the wildcard is required, and it is a failure
+                // arm: these three schemes are the only ones this seam may produce.
                 let want_dark = match got.color_scheme {
                     adw::ColorScheme::Default => os_dark,
                     adw::ColorScheme::ForceDark => true,

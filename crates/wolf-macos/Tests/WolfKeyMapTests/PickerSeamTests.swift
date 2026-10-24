@@ -1,45 +1,4 @@
-//
-//  PickerSeamTests.swift
-//  Pure, headless unit tests for the `WolfKeyMap.PickerSeam` namespace.
-//
-//  These are the AppKit analog of wolf-gnome's headless picker-seam tests in
-//  `crates/wolf-gnome/src/picker.rs` (`next_selection_table`,
-//  `restored_index_table`). They exercise the THREE PURE, display-free seams of
-//  the macOS picker with scalar inputs only — NO NSEvent, NO window, NO AppKit,
-//  NO NSView. They are the authoritative parity reference: every list-navigation
-//  case here mirrors a case from picker.rs.
-//
-//  CONTRACT UNDER TEST:
-//    * PickerSeam.isPickerTrigger(charactersIgnoringModifiers:command:) -> Bool
-//      — true iff `command && firstScalar.lowercased == "o"`. This is the macOS
-//      Command+O chord. Both platforms now agree on the LETTER: wolf-gnome's
-//      file picker is Ctrl+Shift+O (it was Ctrl+Shift+P until the command-drain
-//      unit moved it and reserved P for the command palette). What still differs
-//      is the modifier — ⌘ on macOS, Ctrl+Shift on Linux, since Linux has no
-//      free modifier — and the MECHANISM: there is no `is_picker_trigger`
-//      predicate in wolf-gnome any more. The Linux chord is a table-driven
-//      `wolf_gnome::actions::action_for_key(keyval, state)` lookup against
-//      `ACTION_TABLE`, resolving to the `win.go-to-file` action, and it is
-//      unit-tested there by `action_for_key_table` rather than here. So this
-//      seam has no one-to-one Rust counterpart to mirror; the `nextSelection`
-//      and `restoredIndex` seams below still are exact parity ports of
-//      picker.rs. Command does not mangle `charactersIgnoringModifiers`, so with
-//      Command held the field carries "o" (or "O" if Shift is also down); the
-//      predicate matches case-insensitively. An empty string (no first scalar)
-//      is false.
-//    * PickerSeam.nextSelection(current:delta:nRows:) -> Int? — exact port of
-//      Rust `next_selection`: `nRows <= 0 -> nil`, else
-//      `clamp(current + delta, 0, nRows - 1)` (NO wrap; out-of-range/negative
-//      `current` handled by clamping the sum). Swift `Int?` is the analog of
-//      Rust `Option<usize>`.
-//    * PickerSeam.restoredIndex(resetToTop:prev:newLen:) -> Int? — exact port of
-//      Rust `restored_index`: `newLen == 0 -> nil` regardless of reset/prev;
-//      else `resetToTop -> 0`; else `min(prev ?? 0, newLen - 1)`.
-//
-//  NOTE to coder: this test references the pure `WolfKeyMap.PickerSeam` enum the
-//  coder will add in `Sources/WolfKeyMap/PickerSeam.swift`. The three function
-//  signatures asserted below are the contract the implementation must satisfy.
-//
+// See crates/wolf-macos/Tests/WolfKeyMapTests/README.md#pickerseamtestsswift
 
 import XCTest
 

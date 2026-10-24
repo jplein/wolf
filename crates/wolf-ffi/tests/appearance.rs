@@ -128,9 +128,8 @@ fn wait_for_attach(handle: &WolfCoreHandle) {
 /// marker for the expected `&background`. `want_light == true` asserts `&background`
 /// is `light`; `false` asserts `dark`.
 fn assert_background_is(handle: &WolfCoreHandle, want_light: bool) {
-    // `:execute` runs legacy Vimscript, so the `?:` ternary + `..` concat pick the
-    // marker from the LIVE `&background`. This is the load-bearing read of the
-    // option — the marker we then observe is a direct function of `&background`.
+    // `:execute` evaluates the ternary against the live `&background`: the marker read back is a
+    // direct function of the option.
     send_ex_command(
         handle,
         ":execute 'hi WolfCursor guibg=' .. (&background ==# 'light' ? '#11ff11' : '#ff1111')",

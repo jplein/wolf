@@ -290,13 +290,8 @@ fn terminal_toggle_persists_and_recreates() {
         "the opened terminal buffer must have a nonzero bufnr"
     );
 
-    // --- 2b. Open emits a DRAWER_OPEN layout intent naming the drawer window -----
-    // The Lua open path calls `wolf_emit_drawer(win)` -> `rpcnotify(chan,
-    // "wolf_layout", {action="drawer_open", win})` -> `LayoutIntent::DrawerOpen` ->
-    // `FfiLayoutIntent { kind: DRAWER_OPEN, win }`. NO front-end drains intents in
-    // this headless test, so they ACCUMULATE across `drain_intents()` polls and are
-    // observable (mirrors `panes.rs`'s SPLIT-intent accumulation). `drain_intents()`
-    // DRAINS, so keep the last DRAWER_OPEN win we see across iterations.
+    // --- 2b. Open emits a DRAWER_OPEN layout intent naming the drawer window.
+    // Nothing else drains intents here, so they accumulate; keep the last DRAWER_OPEN win seen.
     let deadline = Instant::now() + FLUSH_TIMEOUT;
     let mut drawer_win: Option<i64> = None;
     while Instant::now() < deadline {
@@ -317,22 +312,15 @@ fn terminal_toggle_persists_and_recreates() {
         "the DRAWER_OPEN intent's win() should be a nonzero drawer window handle"
     );
 
-    // --- 3. Hide (persist): toggle_terminal() closes the window, buffer survives --
-    // The hide path (`nvim_win_close(w, false)`) emits NO layout intent — the
-    // front-end removes the drawer pane by observing the `win_close` redraw event
-    // (the same close-observation path editor panes use), so there is nothing to
-    // drain here.
-    // The window count returns to base, but the tagged terminal buffer (bufnr ==
-    // first) is STILL listed — closing the window keeps the buffer + job alive.
+    // --- 3. Hide: the window closes with no layout intent (front-ends observe `win_close`), and
+    // the tagged terminal buffer stays listed with its job alive.
     handle.toggle_terminal();
     wait_for_window_count(&handle, base, "drawer hidden");
     wait_for_term_bufnrs(&handle, "terminal buffer persists after hide", |b| {
         b.contains(&first)
     });
 
-    // --- 4. Reopen (reuse): toggle_terminal() re-shows the SAME buffer -----------
-    // The drawer window reappears (base + 1) and the term:// row's bufnr is still
-    // `first` (reused, not recreated).
+    // --- 4. Reopen (reuse): the drawer reappears and the term:// row keeps bufnr `first`.
     handle.toggle_terminal();
     wait_for_window_count(&handle, base + 1, "drawer reopened");
     let reopened = wait_for_term_bufnrs(&handle, "reused terminal buffer after reopen", |b| {
@@ -344,11 +332,8 @@ fn terminal_toggle_persists_and_recreates() {
         "reopening must reuse the single shared terminal buffer (bufnr {first})"
     );
 
-    // --- 5. Recreate-if-gone: wipe the terminal, then toggle spawns a FRESH one --
-    // `<C-\><C-n>` leaves terminal-insert mode; `:bwipeout!` wipes the focused
-    // terminal buffer (the drawer is currently open + focused). No term:// row then
-    // remains. Toggling again finds no terminal buffer and creates a fresh, tagged
-    // one whose bufnr differs from the wiped `first`.
+    // --- 5. Recreate-if-gone: leave terminal mode, `:bwipeout!` the focused terminal, toggle
+    // again; the fresh tagged buffer's bufnr differs from `first`.
     handle.send_key(ctrl_char_key('\\'));
     handle.send_key(ctrl_char_key('n'));
     send_ex_command(&handle, ":bwipeout!");
@@ -444,9 +429,7 @@ fn terminal_drawer_defaults_to_full_width() {
 
     let base = handle.windows().len();
 
-    // --- 3. Open the terminal drawer via the same path terminal.rs uses -------
-    // `toggle_terminal()` opens the drawer window (base + 1) and spawns exactly one
-    // term:// buffer.
+    // --- 3. Open the drawer via `toggle_terminal()`: one more window, one term:// buffer.
     handle.toggle_terminal();
     wait_for_window_count(&handle, base + 1, "drawer opened");
     let opened = wait_for_term_bufnrs(&handle, "exactly one term:// buffer after open", |b| {
@@ -457,10 +440,8 @@ fn terminal_drawer_defaults_to_full_width() {
         "the opened terminal buffer must have a nonzero bufnr"
     );
 
-    // --- 3b. Resolve the drawer WINDOW handle from the DRAWER_OPEN intent ------
-    // The open path emits `LayoutIntent::DrawerOpen { win }` surfaced as an
-    // `FfiLayoutIntent { kind: DRAWER_OPEN, win }`. Nothing drains intents here so
-    // they accumulate; `drain_intents()` DRAINS, so keep the last DRAWER_OPEN win.
+    // --- 3b. Resolve the drawer window from the DRAWER_OPEN intent. Nothing else drains intents
+    // here, so they accumulate; keep the last DRAWER_OPEN win seen.
     let deadline = Instant::now() + FLUSH_TIMEOUT;
     let mut drawer_win: Option<i64> = None;
     while Instant::now() < deadline {
@@ -481,9 +462,8 @@ fn terminal_drawer_defaults_to_full_width() {
         "the DRAWER_OPEN intent's win() should be a nonzero drawer window handle"
     );
 
-    // --- 4. CORE ASSERTION: the drawer defaults to FULL WIDTH -----------------
-    // The drawer window's per-window full-width flag must resolve true by default,
-    // routing `maxCols: nil` (full) into the front-end pane geometry.
+    // --- 4. Core assertion: the drawer's full-width flag defaults true, so front-ends lay it
+    // out with `maxCols: nil`.
     wait_for_win_full_width(
         &handle,
         drawer_win,
@@ -491,9 +471,7 @@ fn terminal_drawer_defaults_to_full_width() {
         "the terminal drawer window defaults to full width",
     );
 
-    // --- 5. The freshly opened drawer is focused, so the active buffer reads on
-    // The open path leaves the terminal buffer focused, so the View-menu checkmark
-    // (is_full_width_active) reads on for the terminal.
+    // --- 5. The fresh drawer is focused, so `is_full_width_active` (the View-menu check) reads on.
     wait_for_full_width_active(
         &handle,
         true,

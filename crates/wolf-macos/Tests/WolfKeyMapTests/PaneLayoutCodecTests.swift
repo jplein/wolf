@@ -1,44 +1,4 @@
-//
-//  PaneLayoutCodecTests.swift
-//  Pure, headless unit tests for the `WolfKeyMap.PaneLayoutCodec` +
-//  `SavedPaneNode` seam and `PaneTree.rebuilt(from:firstLeafId:)` (feature plan
-//  §2 / §3.1, extended in ROUND 2 with a per-leaf PREVIEW marker). Foundation-only
-//  — no AppKit, no live Neovim.
-//
-//  The codec bridges the pure `PaneTree` layout to the persistable + FFI shapes:
-//    * `encode(_:paths:previews:)` maps a `PaneLayout` (whose leaves are `PaneId`s)
-//      into a `SavedPaneNode` tree keyed by per-leaf buffer PATH (an unmapped leaf
-//      -> ""); a leaf whose id is in `previews` is marked `preview: true` and its
-//      `path` is the SOURCE markdown file's path (ROUND 2 — preview restore).
-//    * `postOrderTokens(_:)` flattens a `SavedPaneNode` to the post-order token
-//      stream the FFI push-builder replays (leaf / split, carrying the preview
-//      flag), and `decodeTokens(_:)` is its inverse.
-//    * `specJSON(_:)` renders a `SavedPaneNode` to the single JSON string the nvim
-//      `wolf_rebuild_layout` Lua helper decodes (`{leaf,path,preview}` /
-//      `{orientation:"h"|"v",weights,children}`).
-//    * `PaneTree.rebuilt(from:firstLeafId:)` rebuilds a live tree (topology +
-//      weights) and hands back the DFS-ordered leaf ids.
-//
-//  CONTRACT / SIGNATURE ASSUMPTIONS (test-writer report; coder implements to match):
-//    * `enum SavedPaneNode: Hashable { case leaf(path: String, preview: Bool);
-//        case split(orientation: Orientation, weights: [Double],
-//                   children: [SavedPaneNode]) }`.
-//    * `enum PaneLayoutCodec` with
-//      `static func encode(_ layout: PaneLayout, paths: [PaneId: String],
-//          previews: Set<PaneId>) -> SavedPaneNode`,
-//      `static func postOrderTokens(_ node: SavedPaneNode) -> [LayoutToken]`,
-//      `static func decodeTokens(_ tokens: [LayoutToken]) -> SavedPaneNode?`,
-//      `static func specJSON(_ node: SavedPaneNode) -> String`.
-//    * `LayoutToken.leaf(path:, preview:, weight:)` carries the preview flag through
-//      the token round-trip.
-//    * `PaneTree.rebuilt(from: SavedPaneNode, firstLeafId: PaneId)
-//        -> (tree: PaneTree, leafIds: [PaneId])`.
-//    * `specJSON` uses `"v"` for `.vertical` and `"h"` for `.horizontal`, and the
-//      JSON keys `leaf` / `path` / `preview` / `orientation` / `weights` /
-//      `children` (matching `runtime/nvim/init.lua`'s `wolf_rebuild_layout`). Only
-//      the parsed object graph is asserted, so key ordering / float spelling is not
-//      pinned.
-//
+// See crates/wolf-macos/Tests/WolfKeyMapTests/README.md#panelayoutcodectestsswift
 
 import Foundation
 import XCTest
@@ -155,9 +115,8 @@ final class PaneLayoutCodecTests: XCTestCase {
     let tree = PaneTree(root: p1)
     tree.split(p1, p2, .vertical)
 
-    // P1 is a PREVIEW of its source markdown; P2 is a normal editor leaf. The
-    // preview leaf's path is the SOURCE file's path (the front-end's save path maps
-    // a preview pane's window -> its source_path).
+    // P1 previews its source Markdown and P2 is a normal editor leaf. The preview leaf's path is
+    // the source file's, matching how the save path maps a preview window to its `source_path`.
     let saved = PaneLayoutCodec.encode(
       tree.layout(),
       paths: [p1: "/notes/source.md", p2: "/notes/b.md"],
@@ -280,10 +239,8 @@ final class PaneLayoutCodecTests: XCTestCase {
   // MARK: - specJSON: the preview flag reaches the nvim rebuild spec (ROUND 2)
 
   func testSpecJsonCarriesPreviewFlag() {
-    // A preview leaf serializes `"preview": true` and a normal leaf `"preview":
-    // false`, alongside the existing "v"/"h" orientation + leaf/path keys, so the
-    // Lua `wolf_rebuild_layout` can recreate a preview of the source instead of
-    // `:edit`-ing a blank buffer.
+    // Each leaf serializes `"preview"` beside the "v"/"h" and leaf/path keys, so Lua's
+    // `wolf_rebuild_layout` recreates a preview of the source instead of editing a blank buffer.
     let obj = parseObject(PaneLayoutCodec.specJSON(withPreview()))
 
     XCTAssertEqual(obj["orientation"] as? String, "v", ".vertical serializes as \"v\"")

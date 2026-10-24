@@ -1,40 +1,4 @@
-//
-//  PickerPanelSeamTests.swift
-//  Pure, headless unit tests for the AppKit-free `WolfKeyMap.PickerPanelSeam`.
-//
-//  These exercise the picker-panel POSITIONING seam the coder adds in
-//  `Sources/WolfKeyMap/PickerPanelSeam.swift` (plan §2a). Like `PaneGeometryTests`
-//  and `EditorInsetTests`, they import ONLY Foundation-level test machinery (no
-//  AppKit / CoreGraphics, no live window/panel) and stay in the headless
-//  `WolfKeyMap` module. The AppKit window/panel glue (`PickerPanel`,
-//  `PickerPanelHost`) is window-server-bound and is compile + manual-smoke only;
-//  all headless coverage lands here. They reuse the `eps` / `approx` +
-//  `assertRectEqual` style from `PaneGeometryTests.swift` / `EditorInsetTests.swift`.
-//
-//  ## CONTRACT UNDER TEST (the API the coder must honor, plan §2a)
-//
-//    public enum PickerPanelSeam {
-//        public static func frame(
-//            parentContentWidth: Double,
-//            parentContentHeight: Double,
-//            panelWidth: Double,
-//            panelHeight: Double,
-//            topMargin: Double
-//        ) -> Rect
-//    }
-//
-//  Returns the panel frame in parent CONTENT space, TOP-LEFT origin:
-//    w = min(panelWidth, max(0, parentContentWidth))
-//    x = max(0, (parentContentWidth - w) / 2)   — centered, never negative
-//    y = topMargin                              — FIXED offset from content top, NOT clamped
-//    available = max(0, parentContentHeight - topMargin)
-//    h = min(panelHeight, available)            — clamps a panel taller than content-below-margin
-//
-//  Mirrors the `EditorInset` convention: only the SIZES (`w` / `h`) clamp; the
-//  origins (`x` centers, `y` is a fixed offset) are derived, and `x` / `h` floor at
-//  a non-negative value. `Rect` is the EXISTING value type from `PaneTree.swift`
-//  (`Rect(x:y:w:h:)`, `Double` fields).
-//
+// See crates/wolf-macos/Tests/WolfKeyMapTests/README.md#pickerpanelseamtestsswift
 
 import XCTest
 
@@ -79,12 +43,8 @@ final class PickerPanelSeamTests: XCTestCase {
   // MARK: - Case 1: exact top-center numbers pinned
 
   func testExactTopCenter() {
-    // A 600x300 panel in 1200x800 content, 24pt below the top:
-    //   w = min(600, 1200)              = 600
-    //   x = (1200 - 600) / 2            = 300
-    //   y = topMargin                   = 24
-    //   available = 800 - 24            = 776
-    //   h = min(300, 776)               = 300
+    // A 600x300 panel in 1200x800 content, 24pt from the top: w = 600, x = (1200 - 600) / 2 = 300,
+    // y = 24, h = min(300, 800 - 24) = 300.
     let r = PickerPanelSeam.frame(
       parentContentWidth: 1200, parentContentHeight: 800,
       panelWidth: panelWidth, panelHeight: 300, topMargin: topMargin)

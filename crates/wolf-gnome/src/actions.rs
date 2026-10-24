@@ -3,7 +3,7 @@
 //! One table ([`ACTION_TABLE`]) is the single source of truth for every
 //! `gio::SimpleAction` name, its GTK accelerator, the [`wolf_core::Command`] it
 //! corresponds to, and the one-line justification for the chord it claims under
-//! `crates/wolf-gnome/DECISIONS.md`'s scheme. A second table
+//! `notes/wolf-gnome-decisions.md`'s scheme. A second table
 //! ([`MENU_SECTIONS`]) declares the GNOME primary menu in terms of those same
 //! action names. Because the menu, the accelerators and the command dispatch all
 //! read the same data, they cannot drift apart.
@@ -30,7 +30,7 @@
 //!
 //! [`parse_accel`] + [`forbidden_reason`] enforce that invariant MECHANICALLY over
 //! [`ACTION_TABLE`], so a future accelerator cannot quietly shadow a Neovim key.
-//! See `crates/wolf-gnome/DECISIONS.md`, "The accelerator namespace", for the
+//! See `notes/wolf-gnome-decisions.md`, "The accelerator namespace", for the
 //! reasoning behind the scheme.
 //!
 //! ## The ctrl-folding class
@@ -51,7 +51,7 @@
 //! Single-LETTER keys declare nothing, and the reason is the modifier MASK rather
 //! than the character class: the first rule already refuses a bare `Ctrl+<letter>`,
 //! so every surviving letter row carries Shift, and [`action_for_key`] matches masks
-//! EXACTLY. `DECISIONS.md`'s accelerator section works through what that does and
+//! EXACTLY. `notes/wolf-gnome-decisions.md`'s accelerator section works through what that does and
 //! does not cost Neovim — read it there rather than re-deriving it from which
 //! characters fold.
 //!
@@ -132,7 +132,7 @@ pub struct ActionBinding {
     pub note: &'static str,
 }
 
-/// The COMPLETE Linux accelerator scheme of `crates/wolf-gnome/DECISIONS.md`,
+/// The COMPLETE Linux accelerator scheme of `notes/wolf-gnome-decisions.md`,
 /// "The accelerator namespace": one row per action, covering later units'
 /// reserved chords as well as this unit's bound ones.
 ///
@@ -444,10 +444,8 @@ pub const MENU_SECTIONS: &[MenuSection] = &[
             },
         ],
     },
-    // Both rows carry `command: None`, so `menu_labels_match_the_registry` skips
-    // them and these two labels are free text. They MUST be: the registry has no
-    // Save titles to match against. Giving either row a `wolf_core::Command` later
-    // therefore also pins its label to that command's `CommandSpec::title`.
+    // `command: None` exempts these labels from `menu_labels_match_the_registry`: the registry has no
+    // Save titles. Giving a row a `Command` pins its label to that command's `CommandSpec::title`.
     MenuSection {
         items: &[
             MenuItemSpec {
@@ -693,9 +691,8 @@ pub fn parse_accel(spec: &'static str) -> Option<ParsedAccel> {
         rest = tail;
     }
 
-    // Exactly one key NAME: ASCII letters and digits only. That rejects a bare
-    // symbol (`-` instead of `minus`), an empty key, and a second `<…>` token
-    // appearing after the key.
+    // Exactly one key name of ASCII letters and digits: rejects a bare symbol (`-` for `minus`),
+    // an empty key, and a second `<…>` token after the key.
     if rest.is_empty() || !rest.chars().all(|c| c.is_ascii_alphanumeric()) {
         return None;
     }
@@ -833,14 +830,8 @@ pub fn forbidden_reason(p: &ParsedAccel, declared: Option<u8>) -> Option<&'stati
         );
     }
 
-    // The single-LETTER class declares no fold, and the reason is the modifier MASK
-    // rather than the character class: rule 1 above refuses a bare Ctrl+<letter>, so
-    // every surviving letter row carries Shift, and `action_for_key` compares its
-    // three modifiers EXACTLY — a Shift-carrying accelerator never intercepts the
-    // unshifted event, so consuming 0x09 or 0x0D through Ctrl+Shift+I / Ctrl+Shift+M
-    // costs Neovim nothing. DECISIONS.md's accelerator section carries that bargain.
-    // The gate cannot hide the dangerous class either: `a`..`z` and `A`..`Z` fold
-    // into 0x01..=0x1A, so no ASCII letter reaches CTRL_FOLD_FORBIDDEN.
+    // Letters declare no fold (their rows carry Shift; masks match exactly) and fold into 0x01..=0x1A.
+    // See notes/wolf-gnome-decisions.md#the-accelerator-namespace.
     if single_letter {
         return None;
     }
@@ -1011,7 +1002,7 @@ mod tests {
             with_accel > 0,
             "ACTION_TABLE declares no accelerators at all, so every per-accel test in this module \
              would pass vacuously. Populate it from the scheme in \
-             `crates/wolf-gnome/DECISIONS.md`, \"The accelerator namespace\" (plan section 2.4)."
+             `notes/wolf-gnome-decisions.md`, \"The accelerator namespace\" (plan section 2.4)."
         );
 
         for binding in ACTION_TABLE {
@@ -1119,36 +1110,26 @@ mod tests {
     fn ctrl_fold_table() {
         // (accelerator spelling, what Ctrl-folding makes of it)
         let cases: Vec<(&'static str, CtrlFold)> = vec![
-            // --- No <Control>: nothing folds, whatever the key is --------------
-            //
-            // `<Alt>Left` is a live Bound row whose key NAME `key_symbol` does not
-            // resolve, so it also pins the ORDER of the two checks: the <Control>
-            // test has to run first, or this row would answer UnknownKey.
+            // --- No <Control>: nothing folds. `<Alt>Left`'s key name does not resolve, so it also pins that
+            // the <Control> test runs first, or this row would answer UnknownKey.
             ("<Alt>Left", CtrlFold::NotCtrl),
             ("<Shift>p", CtrlFold::NotCtrl),
-            // --- <Control> over a symbol OUTSIDE 0x40..=0x7F ------------------
-            //
-            // These three are the live Reserved font-size rows. Neovim sees an
-            // ordinary key, not a control byte, which is what makes them legal
-            // while declaring `ctrl_fold: None`.
+            // --- <Control> over a symbol outside 0x40..=0x7F: the Reserved font-size rows. Neovim sees an
+            // ordinary key, not a control byte, so `ctrl_fold: None` is legal.
             ("<Control>0", CtrlFold::NoFold),
             ("<Control>equal", CtrlFold::NoFold),
             ("<Control>minus", CtrlFold::NoFold),
-            // --- <Control> over a symbol that DOES fold -----------------------
-            //
-            // `grave` is the live `win.terminal` row: 0x60 & 0x1F == 0x00, the
-            // BACKTICK spelling of <C-@>.
+            // --- <Control> over a symbol that folds. `grave` is the live `win.terminal` row:
+            // 0x60 & 0x1F == 0x00, the backtick spelling of <C-@>.
             ("<Control>grave", CtrlFold::Byte(0x00)),
             // `at` is Ctrl+Shift+2 — the OTHER spelling of that same byte, and the
             // one this front end deliberately leaves unbound so <C-@> stays typable.
             ("<Control>at", CtrlFold::Byte(0x00)),
-            // `[` is 0x5B, so this folds onto ESCAPE. It is the chord
-            // CTRL_FOLD_FORBIDDEN exists for and the one a vacuous checker waves
-            // through; `no_accel_makes_a_neovim_key_unreachable` refuses it.
+            // `[` is 0x5B and folds onto Escape: the chord CTRL_FOLD_FORBIDDEN exists for, which a vacuous
+            // checker waves through; `no_accel_makes_a_neovim_key_unreachable` refuses it.
             ("<Control>bracketleft", CtrlFold::Byte(0x1B)),
-            // A LETTER folds by the same arithmetic (0x70 & 0x1F == 0x10). The
-            // declaration rule skips that class deliberately, for a reason the
-            // invariant test pins; the fold itself is not special.
+            // A letter folds by the same arithmetic (0x70 & 0x1F == 0x10); the declaration rule skips the
+            // class for a reason the invariant test pins, not because the fold is special.
             ("<Control>p", CtrlFold::Byte(0x10)),
             // `?` is 0x3F, BELOW the folding range, yet Ctrl+? is delivered as DEL.
             // Nothing else in this crate pins that exception.
@@ -1200,7 +1181,7 @@ mod tests {
                 reason.is_none(),
                 "accel {accel:?} for action {:?} is FORBIDDEN: {}. A chord that shadows a Neovim \
                  key is a bug, not a tradeoff — see the invariant in the module docs and in \
-                 `crates/wolf-gnome/DECISIONS.md`, \"The accelerator namespace\".",
+                 `notes/wolf-gnome-decisions.md`, \"The accelerator namespace\".",
                 binding.action,
                 reason.unwrap_or("<no reason given>")
             );
@@ -1240,11 +1221,8 @@ mod tests {
              checker that rejects everything is as useless as one that rejects nothing."
         );
 
-        // --- The ctrl-folding rules, which the loop above cannot exercise ---
-        //
-        // Every live row either holds no <Control> or folds to exactly what it
-        // declares, so the loop passes whatever these arms do. The rows below are
-        // what make them bite.
+        // --- The ctrl-folding rules the loop above cannot exercise: every live row passes whatever these
+        // arms do, so the rows below are what make them bite.
         assert!(
             !accel_is_accepted_with("<Control>grave", None),
             "`<Control>grave` declaring NO ctrl_fold MUST be refused. `nvim_input` folds \
@@ -1261,12 +1239,8 @@ mod tests {
              not paying, and the byte it names is then given up by nothing."
         );
 
-        // `<Control>bracketleft` declares the byte it really consumes, so the
-        // MISSING-declaration rule cannot fire for it and only the
-        // CTRL_FOLD_FORBIDDEN arm can refuse it. Declaring `None` here instead would
-        // be refused too — but by the wrong rule, and deleting the forbidden arm
-        // would then leave this test GREEN while a chord folding to Escape got
-        // through. That is the vacuity this pairing exists to close.
+        // `bracketleft` declares its real byte, so only the CTRL_FOLD_FORBIDDEN arm can refuse it;
+        // declaring `None` would trip the other rule and leave a deleted forbidden arm green.
         let bracketleft_refusal =
             forbidden_reason(&parsed_accel("<Control>bracketleft"), Some(0x1B));
         assert!(
@@ -1709,12 +1683,8 @@ mod tests {
                 ctrl | shift,
                 Some("win.paste"),
             ),
-            // --- The two ARROW chords, which have no letter case --------------
-            //
-            // These are the accelerator namespace's deliberate exception: `<Alt>` is
-            // refused with a single-LETTER key (`forbidden_reason`) and permitted
-            // with a NAMED one, because capturing `<A-Left>` is precisely what stops
-            // it reaching Neovim and splitting into `<Esc>` + `<Left>`.
+            // --- The arrow chords: `<Alt>` is refused with a single letter but allowed with a named key,
+            // because capturing `<A-Left>` stops it reaching Neovim split into `<Esc>` + `<Left>`.
             (
                 "Alt+Left -> win.history-back",
                 gdk::Key::Left,
@@ -1727,12 +1697,8 @@ mod tests {
                 alt,
                 Some("win.history-forward"),
             ),
-            // --- The one PUNCTUATION chord, which has no letter case either ----
-            //
-            // `<Control>grave` is the only Bound row whose key is a punctuation
-            // NAME, so it is the only chord reaching `key_symbol`'s punctuation arm
-            // through the live matcher. Binding it consumes the BACKTICK spelling of
-            // <C-@> (0x60 & 0x1F == 0x00), which is the price stated on the row.
+            // --- The one punctuation chord: `<Control>grave` is the only Bound row reaching `key_symbol`'s
+            // punctuation arm; it consumes the backtick spelling of <C-@> (0x60 & 0x1F == 0x00).
             (
                 "Ctrl+grave -> win.terminal",
                 key_from_char('`'),
@@ -2204,10 +2170,8 @@ mod tests {
     /// renaming it reddens this test and the classification test, and nothing else.
     #[test]
     fn app_scoped_rows_are_performable_without_a_window() {
-        // The namespace is read the way both installers read it — `split_once('.')`
-        // on the action name — rather than by `starts_with("app.")`, so a row named
-        // `"apple.thing"` cannot be counted as app-scoped here while `gio` scopes it
-        // somewhere else entirely.
+        // Read the namespace as both installers do, by `split_once('.')` rather than `starts_with("app.")`,
+        // so `"apple.thing"` cannot be app-scoped here while `gio` scopes it elsewhere.
         let mut app_scoped: Vec<&'static str> = ACTION_TABLE
             .iter()
             .filter(|binding| matches!(binding.action.split_once('.'), Some(("app", _))))
@@ -2445,9 +2409,8 @@ mod tests {
             binding.command
         );
 
-        // MenuOnly means exactly that, and here it means MORE than it does at
-        // `app.new-window`: with no chord AND no registry command, an absent menu item
-        // leaves no route at all — not a palette row, not a `:Wolf` command, nothing.
+        // MenuOnly with no chord and no registry command: an absent menu item leaves no route at all,
+        // not a palette row, not a `:Wolf` command.
         let listed = MENU_SECTIONS
             .iter()
             .flat_map(|section| section.items)
@@ -2463,9 +2426,8 @@ mod tests {
              this."
         );
 
-        // The premise the paragraph above rests on: the chord this row gives up really
-        // IS spent, and spent on Save. Without it, "menu-only because Ctrl+Shift+S is
-        // taken" would be a claim about nothing.
+        // Premise: the chord this row gives up really is spent, and on Save; otherwise "menu-only because
+        // Ctrl+Shift+S is taken" would claim nothing.
         let save = binding_for_action("win.save").unwrap_or_else(|| {
             panic!(
                 "premise: no ACTION_TABLE row declares \"win.save\", so the reason this row spends \

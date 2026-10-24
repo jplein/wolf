@@ -1,13 +1,4 @@
-//
-//  PickerChrome.swift
-//  The shared backdrop chrome behind every picker panel (file picker, command
-//  palette, buffer picker): the rounded panel background and the rounded search
-//  bar background.
-//
-//  Both are `NSVisualEffectView`s rather than flat layer colours, because that is
-//  the only way their background matches the results list they surround. See the
-//  decision note on `panelBackdrop()`.
-//
+// The shared backdrop chrome behind every picker panel.
 
 import AppKit
 
@@ -46,9 +37,8 @@ enum PickerChrome {
     view.translatesAutoresizingMaskIntoConstraints = false
     view.material = material
     view.blendingMode = .behindWindow
-    // `.followsWindowActiveState` would drop the material — and with it the
-    // tint — whenever the picker's panel is not key, which it is not while the
-    // editor behind it holds focus.
+    // `.followsWindowActiveState` would drop the material and tint whenever the picker's panel is
+    // not key, which it is not while the editor behind it holds focus.
     view.state = .active
     view.maskImage = roundedMask(radius: cornerRadius)
     return view

@@ -1,20 +1,4 @@
-//
-//  PickerView.swift
-//  The AppKit file picker: a floating, top-center overlay panel with a search
-//  field and a results list, fed by the Rust file-search bridge.
-//
-//  The macOS analog of wolf-gnome's `picker.rs` widget wiring (an `Overlay` over
-//  the editor, a `SearchEntry` + `ListBox` fed by `start_file_search` /
-//  `rank_matches`). The pure decision logic (trigger chord, list navigation,
-//  selection restore) lives in
-//  the headless `WolfKeyMap.PickerSeam` seam; this file is the AppKit shell that
-//  drives it and is exercised by manual smoke only.
-//
-//  Row rendering is file-agnostic (`PickerRow` + `PickerRowCellView`) so the same
-//  panel can back other selectors; only `refresh()` (which maps `FfiFileEntry`s
-//  into `PickerRow`s) and `activateSelection()` (which opens a row's path) are
-//  file-specific.
-//
+// The AppKit file picker overlay, fed by the Rust file-search bridge.
 
 import AppKit
 import WolfFFI
@@ -212,9 +196,8 @@ final class PickerView: NSView, NSTableViewDataSource, NSTableViewDelegate,
   /// panel out, and returns focus to the editor. Idempotent.
   func close() {
     if !isOpen { return }
-    // Tear down state BEFORE dismissing the panel: `orderOut` inside
-    // `dismissPanel` can re-enter `windowDidResignKey → close()`; the `isOpen`
-    // guard above makes that re-entry a no-op.
+    // Tear down before dismissing: `orderOut` can re-enter `close()` via `windowDidResignKey`,
+    // and the `isOpen` guard above makes that re-entry a no-op.
     isOpen = false
     refreshCoalescer.cancelPending()
     // Dropping the FileSearch cancels the background traversal.
@@ -360,9 +343,8 @@ final class PickerView: NSView, NSTableViewDataSource, NSTableViewDelegate,
     tableView.addTableColumn(column)
     tableView.headerView = nil
     tableView.allowsMultipleSelection = false
-    // Full-width rows flush with the leading edge (the modern inset style would
-    // indent rows and draw a rounded, inset selection), and no horizontal
-    // intercell inset, so a row's icon lines up with the search magnifier.
+    // Plain style: the inset style would indent rows and inset the selection; zero horizontal
+    // spacing lines a row's icon up with the search magnifier.
     tableView.style = .plain
     tableView.intercellSpacing = NSSize(width: 0, height: tableView.intercellSpacing.height)
     tableView.dataSource = self
@@ -386,9 +368,8 @@ final class PickerView: NSView, NSTableViewDataSource, NSTableViewDelegate,
     addSubview(scrollView)
 
     let pad = Self.padding
-    // The results area (`scrollView`) is only present when there are rows: its
-    // top/height/bottom constraints are toggled against `emptyBottomConstraint`
-    // by `updateResultsLayout`, so an empty picker is just the search bar.
+    // `scrollView` is present only when there are rows: `updateResultsLayout` toggles these
+    // constraints against `emptyBottomConstraint`, so an empty picker is just the search bar.
     scrollTopConstraint = scrollView.topAnchor.constraint(
       equalTo: searchContainer.bottomAnchor, constant: pad)
     listHeightConstraint = scrollView.heightAnchor.constraint(equalToConstant: 0)
@@ -446,9 +427,7 @@ final class PickerView: NSView, NSTableViewDataSource, NSTableViewDelegate,
       magnifierView.centerYAnchor.constraint(equalTo: searchContainer.centerYAnchor),
       magnifierView.widthAnchor.constraint(equalToConstant: Self.magnifierSize),
       magnifierView.heightAnchor.constraint(equalToConstant: Self.magnifierSize),
-      // Anchor the search text to the shared text column so it aligns with a
-      // row's title (which sits past the wider row icon), not just past the
-      // magnifier.
+      // Align the search text with a row's title, which sits past the wider row icon.
       searchField.leadingAnchor.constraint(
         equalTo: searchContainer.leadingAnchor, constant: labelLeadingInset),
       searchField.trailingAnchor.constraint(

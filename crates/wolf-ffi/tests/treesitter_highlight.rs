@@ -154,19 +154,14 @@ fn send_ex_command(handle: &WolfCoreHandle, cmd: &str) {
 
 #[test]
 fn markdown_treesitter_highlight_and_go_injection_active() {
-    // Loud SKIP (no-op pass) when no pinned nvim is available, exactly like the
-    // sibling tests. The helper also publishes the resolved binary in
-    // `WOLF_NVIM_BIN` — once per binary, behind a `OnceLock` — which is what makes
-    // wolf-core launch the Bazel-staged nvim. Doing that write HERE instead would
-    // race the other test in this binary, which reads the environment on its own
-    // thread while this one runs.
+    // Loud skip without a pinned nvim. No `set_var` here: the helper publishes `WOLF_NVIM_BIN`
+    // race-free; see crates/wolf-ffi/tests/README.md#the-shared-harness--commonmodrs
     let Some(_nvim_bin) = common::nvim_bin_or_skip() else {
         return;
     };
 
-    // SKIP when no nvim-treesitter tree (the gate + queries provider) resolves from
-    // either provider: the captive treesitter block is a strict no-op without one, so
-    // this test asserts only when there is a real tree to stage.
+    // Skip without an nvim-treesitter tree from either provider: the captive treesitter block is a
+    // strict no-op without one.
     let Some(nt_dir) = common::nvim_treesitter_dir_or_none() else {
         eprintln!(
             "\nSKIP: wolf-ffi treesitter_highlight — no nvim-treesitter queries tree: neither \
@@ -226,10 +221,8 @@ fn markdown_treesitter_highlight_and_go_injection_active() {
     common::copy_dir_recursive(&parsers_src, &parsers_dst)
         .expect("failed to recursively copy the parsers tree into the temp dir");
 
-    // PRE-LAUNCH sanity: catch mis-staging early with clear messages, BEFORE we pay
-    // for an nvim launch. The compiled go parser must resolve at `<rtp>/parser/go.so`
-    // (rtp prepends `T/parsers`), and the markdown injections query must resolve at
-    // `<rtp>/queries/markdown/injections.scm` (rtp prepends `T/nvim-treesitter`).
+    // Catch mis-staging before paying for an nvim launch: go.so and the markdown injections query
+    // must resolve under the `T/parsers` and `T/nvim-treesitter` that rtp prepends.
     let go_so = parsers_dst.join("parser").join("go.so");
     assert!(
         go_so.is_file(),
@@ -246,10 +239,8 @@ fn markdown_treesitter_highlight_and_go_injection_active() {
          (rtp resolves it as <T/nvim-treesitter>/queries/markdown/injections.scm)"
     );
 
-    // Write a deterministic markdown doc with a fenced go block: heading, blank line,
-    // then a ```go fence around a minimal compilable go snippet. Opening this buffer
-    // fires the captive FileType=markdown autocmd → vim.treesitter.start, and the
-    // injections query routes the fenced region to the embedded go parser.
+    // A markdown doc with a fenced go block: opening it starts treesitter, and the injections
+    // query routes the fence to the go parser.
     let doc_md = root.join("doc.md");
     let doc_contents = "# Heading\n\n```go\npackage main\nfunc f() {}\n```\n";
     std::fs::write(&doc_md, doc_contents).expect("failed to write the markdown doc into temp dir");
@@ -280,25 +271,12 @@ fn markdown_treesitter_highlight_and_go_injection_active() {
     );
 
     // --- Open the markdown buffer to trigger FileType=markdown → treesitter.start
-    // CONTRACT: this path (and the sentinel path below) is a tempdir path, so it
-    // contains no spaces or double-quotes — both are interpolated VERBATIM into the
-    // typed Ex command / double-quoted Lua string, exactly as the orlando/lighthouse
-    // sibling tests document and rely on.
+    // Tempdir paths hold no spaces or double quotes, so they are interpolated verbatim into Ex and Lua.
     let doc_md_str = doc_md.to_string_lossy().into_owned();
     send_ex_command(&handle, &format!(":e {doc_md_str}"));
 
-    // --- Ask nvim to write a sentinel proving highlighting is active + injection ---
-    // No exec_lua accessor exists on the FFI surface, so drive a real `:lua` Ex
-    // command (through the same send_key path Swift uses) that writes two markers.
-    // Kept on `;`-separated statements so the whole thing is a single `:lua ...`
-    // line, exactly like treesitter_parser_abi.rs. The `writefile({...})` table
-    // braces are doubled for Rust `format!`; every other token uses `[...]`/`(...)`.
-    //
-    // line 1: highlighter is ACTIVE on the current (markdown) buffer.
-    // line 2: after forcing a full parse (`p:parse(true)`, which resolves injections
-    //         synchronously), the top-level langtree has an injected `go` child.
-    //         PRIMARY check is `children()["go"]`; because `:children()` keying could
-    //         vary, we ALSO iterate the children and match `child:lang() == "go"`.
+    // --- Sentinel: the highlighter is active, and a full parse yields an injected `go` langtree.
+    // See notes/crates/wolf-ffi/tests/treesitter_highlight.rs.md#injection-sentinel
     let sentinel = root.join("treesitter_highlight_proof.txt");
     let sentinel_str = sentinel.to_string_lossy().into_owned();
     let lua_cmd = format!(
@@ -355,28 +333,8 @@ fn markdown_treesitter_highlight_and_go_injection_active() {
     drop(tmp);
 }
 
-// ---------------------------------------------------------------------------
-// How the two vendored trees are RESOLVED, as opposed to what the gate does once
-// they are found.
-//
-// `runtime/nvim/init.lua`'s `resolve_vendored_dir(sibling, env_name)` answers in
-// a fixed order — the sibling directory next to `init.lua` first, the environment
-// variable second, `nil` if neither exists — and BOTH halves of that order are
-// load-bearing in a way no other test reaches:
-//
-//   * SIBLING FIRST is the entire basis of "macOS behaviour is unchanged by
-//     construction": on macOS both siblings exist, so `vim.env` is never read.
-//     Reordering to environment-first would let a developer's devShell exports
-//     replace a signed .app bundle's own Mach-O parsers with a Linux ELF tree,
-//     which has no symptom until a dlopen fails inside a pcall.
-//   * The step-2 `fs_stat` is what makes a VANISHED path (a store path collected
-//     by `nix store gc` under a long-lived shell) degrade to the bare-checkout
-//     no-op instead of putting a dead entry on runtimepath and half-firing the
-//     gate around it.
-//
-// The test above cannot see either: it stages real siblings, so it exercises
-// branch 1 only and would stay green under any reordering.
-// ---------------------------------------------------------------------------
+// -- Resolver: sibling first, then environment, vanished path dropped; see runtime/nvim/README.md
+// The test above stages real siblings, so it would stay green under any reordering.
 
 /// The sibling directory name `init.lua` probes for the queries provider. Fixed
 /// by the resolver's first argument, not by this test.
@@ -512,10 +470,8 @@ fn probe_vendored_gate(
             .unwrap_or_else(|e| panic!("failed to create the probe dir {}: {e}", dir.display()));
     }
 
-    // The probe is a FILE rather than an inline `:lua` one-liner because the
-    // augroup question needs a loop; `format!` doubles every Lua table brace, and
-    // every name it interpolates is a constant above, so the Lua cannot drift
-    // away from what the assertions below compare against.
+    // A probe file, not an inline `:lua` line, because the augroup check needs a loop. Every name it
+    // interpolates is a constant above, so the Lua cannot drift from the assertions.
     let probe_lua = format!(
         "-- Written by crates/wolf-ffi/tests/treesitter_highlight.rs. Reads back the\n\
          -- state runtime/nvim/init.lua's vendored-tree gate left behind.\n\
@@ -682,19 +638,14 @@ fn probe_vendored_gate(
 /// because the environment failed to reach it.
 #[test]
 fn vendored_dirs_resolve_sibling_first_and_a_stale_env_path_is_a_no_op() {
-    // The only skip: without a pinned nvim there is nothing to resolve anything.
-    // Deliberately NOT gated on the vendored trees — every directory below is a
-    // decoy this test creates, so it must run on the cargo/Linux path too.
+    // The only skip. Not gated on the vendored trees: every directory below is a decoy this test
+    // creates, so it runs on the cargo/Linux path too.
     let Some(nvim_bin) = common::nvim_bin_or_skip() else {
         return;
     };
 
-    // --- (a) sibling wins over an environment that also resolves -------------
-    // The root is CANONICALIZED before anything is staged under it, so the path
-    // init.lua reports back through `fnamemodify(':p:h')` is string-identical to
-    // the one staged here: a macOS temp dir resolves `/var` to `/private/var`, and
-    // an entry compared against the unresolved form would never match. The
-    // suite's path assertions canonicalize for the same reason.
+    // --- (a) sibling wins over an environment that also resolves.
+    // Canonicalize the root first so init.lua's `:p:h` report matches it (macOS `/var` symlink).
     let sibling_case = tempfile::tempdir().expect("failed to create the sibling-case temp dir");
     let sibling_root = sibling_case
         .path()
@@ -705,8 +656,7 @@ fn vendored_dirs_resolve_sibling_first_and_a_stale_env_path_is_a_no_op() {
     std::fs::copy(&staged_init, root.join("init.lua"))
         .expect("failed to copy the captive init.lua into the sibling-case temp dir");
 
-    // The siblings must carry the names the resolver probes for. The environment
-    // decoys deliberately do NOT: they sit under their own subdirectory, so an
+    // Siblings carry the probed names; the environment decoys sit in their own subdirectory, so an
     // assertion about one can never be satisfied by the other's path.
     let sibling_queries = root.join(SIBLING_QUERIES_DIR);
     let sibling_parsers = root.join(SIBLING_PARSERS_DIR);

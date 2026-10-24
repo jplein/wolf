@@ -57,19 +57,13 @@ const FLUSH_TIMEOUT: Duration = Duration::from_secs(10);
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 // -- FfiKeyEvent.kind discriminants (mirror `wolf-ffi/src/lib.rs` `mod kind`) --
-//
-// Char is first, Enter second (the `wolf_core::Key` variant order); the only two
-// kinds needed to type an Ex command. Same as `panes.rs`.
 /// A printable character (`ch` carries the Unicode scalar).
 const KIND_CHAR: u8 = 0;
 /// The Enter / Return key (executes the typed Ex command).
 const KIND_ENTER: u8 = 1;
 
-// -- command_kind discriminants (mirror plan §3, `mod command_kind`) -----------
-//
-// The single-source-of-truth contract guard. Declared LOCALLY here, exactly how
-// `panes.rs` re-declares `INTENT_KIND_SPLIT`, and cross-checked below so a future
-// reordering breaks this test rather than silently drifting.
+// -- command_kind discriminants (mirror `wolf-ffi/src/lib.rs` `mod command_kind`) --
+// Declared locally and cross-checked below, so a reordering breaks this test instead of drifting.
 /// `FfiCommand::kind()` for New Window.
 const CMD_KIND_NEW_WINDOW: u8 = 0;
 /// `FfiCommand::kind()` for Close Window.
@@ -203,9 +197,8 @@ fn commands_drain_close_and_minimize() {
     };
     std::env::set_var("WOLF_NVIM_BIN", &nvim_bin);
 
-    // Discriminant-contract guard: the local consts MUST be contiguous 0..=27 in
-    // variant order (mirrors `mod command_kind`). Referencing all twenty-eight
-    // here also keeps them from tripping dead-code lints.
+    // Drift guard: the local consts are contiguous from 0 in variant order. Naming every one here
+    // also keeps them clear of dead-code lints.
     assert_eq!(
         [
             CMD_KIND_NEW_WINDOW,
@@ -250,9 +243,7 @@ fn commands_drain_close_and_minimize() {
     // alive until after `shutdown()`, then dropped explicitly at the end.
     let tmp = tempfile::tempdir().expect("failed to create temp cwd directory");
 
-    // Argument order mirrors the sibling tests exactly: (init_lua, cwd, cols, rows).
-    // `wolf_ffi_start` no longer takes a trailing `window_index` (state moved to
-    // the coordinator-owned snapshot builder).
+    // Argument order mirrors the sibling tests: (init_lua, cwd, cols, rows).
     let handle = wolf_ffi_start(
         init_lua.to_string_lossy().into_owned(),
         tmp.path().to_string_lossy().into_owned(),
@@ -277,9 +268,7 @@ fn commands_drain_close_and_minimize() {
         frame.cols()
     );
 
-    // No emit-on-attach: commands are user-triggered only, so nothing is queued
-    // yet. (Not a hard assertion on timing — we simply discard any accidental
-    // startup drain before triggering the real commands.)
+    // Commands are user-triggered only; discard any accidental startup drain before the real ones.
     let _ = handle.drain_commands();
 
     // --- 2. :WolfCloseWindow<CR> -> an FfiCommand with kind() == CLOSE_WINDOW --
@@ -292,89 +281,49 @@ fn commands_drain_close_and_minimize() {
     poll_for_command_kind(&handle, CMD_KIND_MINIMIZE_WINDOW, ":WolfMinimizeWindow");
 
     // --- 3b. :WolfGoToFile<CR> -> an FfiCommand with kind() == GO_TO_FILE -----
-    // A pure FFI drain: nothing acts on it (the front-end that would open the
-    // file picker is absent), so no overlay is presented here.
     send_ex_command(&handle, ":WolfGoToFile");
     poll_for_command_kind(&handle, CMD_KIND_GO_TO_FILE, ":WolfGoToFile");
 
     // --- 3c. :WolfNewBuffer<CR> -> an FfiCommand with kind() == NEW_BUFFER ----
-    // A pure FFI drain: nothing acts on it here (the front-end that would run
-    // `:enew` in the target window is absent), so no buffer is created.
     send_ex_command(&handle, ":WolfNewBuffer");
     poll_for_command_kind(&handle, CMD_KIND_NEW_BUFFER, ":WolfNewBuffer");
 
     // --- 3d. :WolfCommandPalette<CR> -> an FfiCommand with kind() == COMMAND_PALETTE
-    // A pure FFI drain: nothing acts on it here (the front-end that would open the
-    // command-palette overlay is absent), so no overlay is presented. This proves
-    // `:WolfCommandPalette` is auto-registered as a COMMAND_SPECS row and drains the
-    // appended discriminant 13.
     send_ex_command(&handle, ":WolfCommandPalette");
     poll_for_command_kind(&handle, CMD_KIND_COMMAND_PALETTE, ":WolfCommandPalette");
 
     // --- 3e. :WolfCopy<CR> -> an FfiCommand with kind() == COPY ---------------
-    // A pure FFI drain: nothing acts on it here (the front-end that would write the
-    // yanked selection to NSPasteboard is absent). This proves `:WolfCopy` is
-    // auto-registered as a COMMAND_SPECS row and drains the appended discriminant 14.
     send_ex_command(&handle, ":WolfCopy");
     poll_for_command_kind(&handle, CMD_KIND_COPY, ":WolfCopy");
 
     // --- 3f. :WolfPaste<CR> -> an FfiCommand with kind() == PASTE -------------
-    // A pure FFI drain: nothing acts on it here (the front-end that would read
-    // NSPasteboard and call `paste` is absent). This proves `:WolfPaste` is
-    // auto-registered as a COMMAND_SPECS row and drains the appended discriminant 15.
     send_ex_command(&handle, ":WolfPaste");
     poll_for_command_kind(&handle, CMD_KIND_PASTE, ":WolfPaste");
 
     // --- 3g. :WolfBufferPicker<CR> -> an FfiCommand with kind() == BUFFER_PICKER
-    // A pure FFI drain: nothing acts on it here (the front-end that would open the
-    // buffer-picker overlay is absent), so no overlay is presented. This proves
-    // `:WolfBufferPicker` is auto-registered as a COMMAND_SPECS row and drains the
-    // appended discriminant 16.
     send_ex_command(&handle, ":WolfBufferPicker");
     poll_for_command_kind(&handle, CMD_KIND_BUFFER_PICKER, ":WolfBufferPicker");
 
     // --- 3h. :WolfNewTab<CR> -> an FfiCommand with kind() == NEW_TAB ----------
-    // A pure FFI drain: nothing acts on it here (the front-end that would open a
-    // new native tab is absent), so no tab is created. This proves `:WolfNewTab`
-    // is auto-registered as a COMMAND_SPECS row and drains the appended
-    // discriminant 17.
     send_ex_command(&handle, ":WolfNewTab");
     poll_for_command_kind(&handle, CMD_KIND_NEW_TAB, ":WolfNewTab");
 
     // --- 3i. :WolfPreview<CR> -> an FfiCommand with kind() == PREVIEW ---------
-    // A pure FFI drain: nothing acts on it here (the front-end that would open the
-    // markdown preview pane / web view is absent), so no preview is opened. This
-    // proves `:WolfPreview` is auto-registered as a COMMAND_SPECS row and drains
-    // the appended discriminant 18. (The command channel itself is unconditional;
-    // the "is markdown" gating lives in the front-end menu/palette, not here.)
+    // The channel is unconditional; the "is markdown" gate lives in the front-end menu and palette.
     send_ex_command(&handle, ":WolfPreview");
     poll_for_command_kind(&handle, CMD_KIND_PREVIEW, ":WolfPreview");
 
     // --- 3j. :WolfEdit<CR> -> an FfiCommand with kind() == EDIT ---------------
-    // A pure FFI drain: nothing acts on it here (the front-end that would edit the
-    // preview's source file / place the editor pane is absent), so no pane moves.
-    // This proves `:WolfEdit` is auto-registered as a COMMAND_SPECS row and drains
-    // the appended discriminant 19. (The command channel itself is unconditional;
-    // the "is preview" gating lives in the front-end menu, not here.)
+    // The channel is unconditional; the "is preview" gate lives in the front-end menu.
     send_ex_command(&handle, ":WolfEdit");
     poll_for_command_kind(&handle, CMD_KIND_EDIT, ":WolfEdit");
 
     // --- 3k. :WolfTerminal<CR> -> an FfiCommand with kind() == TERMINAL -------
-    // A pure FFI drain: nothing acts on it here (the front-end that would call
-    // `toggle_terminal` is absent), so no terminal drawer is toggled. This proves
-    // `:WolfTerminal` is auto-registered as a COMMAND_SPECS row and drains the
-    // appended discriminant 20.
     send_ex_command(&handle, ":WolfTerminal");
     poll_for_command_kind(&handle, CMD_KIND_TERMINAL, ":WolfTerminal");
 
-    // --- 3l. :WolfPreviewInBrowser<CR> -> an FfiCommand with kind() ==
-    // PREVIEW_IN_BROWSER. A pure FFI drain: nothing acts on it here (the front-end
-    // that would call `open_in_browser()` and hand the URL to `NSWorkspace` is
-    // absent), so NO browser preview server is started and NO browser tab opens.
-    // This proves ONLY that the discriminant round-trips (`:WolfPreviewInBrowser`
-    // is auto-registered as a COMMAND_SPECS row and drains the appended
-    // discriminant 21) — it deliberately asserts NO HTTP here; the real loopback
-    // server is covered by wolf-core's `browser_preview.rs` integration test.
+    // --- 3l. :WolfPreviewInBrowser<CR> -> an FfiCommand with kind() == PREVIEW_IN_BROWSER
+    // No HTTP is asserted here; wolf-core's `browser_preview.rs` covers the loopback server.
     send_ex_command(&handle, ":WolfPreviewInBrowser");
     poll_for_command_kind(
         &handle,
@@ -383,28 +332,15 @@ fn commands_drain_close_and_minimize() {
     );
 
     // --- 3m. :WolfFullWidth<CR> -> an FfiCommand with kind() == FULL_WIDTH ----
-    // A pure FFI drain: nothing acts on it here (the front-end that would call
-    // `toggle_full_width()` and re-lay out the panes is absent), so NO buffer's
-    // content width is toggled. This proves ONLY that the discriminant round-trips
-    // (`:WolfFullWidth` is auto-registered as a COMMAND_SPECS row and drains the
-    // appended discriminant 22) — the editor-affecting toggle itself is covered by
-    // the `full_width.rs` integration test via `handle.toggle_full_width()`.
+    // The toggle itself is covered by `full_width.rs`.
     send_ex_command(&handle, ":WolfFullWidth");
     poll_for_command_kind(&handle, CMD_KIND_FULL_WIDTH, ":WolfFullWidth");
 
     // --- 3n. :WolfToggleSidebar<CR> -> an FfiCommand with kind() == TOGGLE_SIDEBAR
-    // A pure FFI drain: nothing acts on it here (the front-end that would toggle
-    // `sidebarItem.isCollapsed` is absent), so no sidebar is collapsed/expanded.
-    // This proves `:WolfToggleSidebar` is auto-registered as a COMMAND_SPECS row and
-    // drains the appended discriminant 23.
     send_ex_command(&handle, ":WolfToggleSidebar");
     poll_for_command_kind(&handle, CMD_KIND_TOGGLE_SIDEBAR, ":WolfToggleSidebar");
 
-    // --- 3o. :WolfSidebarShowProject<CR> -> an FfiCommand with kind() ==
-    // SIDEBAR_SHOW_PROJECT. A pure FFI drain: nothing acts on it here (the front-end
-    // that would call `showSidebar(panel: .tree)` is absent), so no sidebar is
-    // revealed. This proves `:WolfSidebarShowProject` is auto-registered as a
-    // COMMAND_SPECS row and drains the appended discriminant 24.
+    // --- 3o. :WolfSidebarShowProject<CR> -> an FfiCommand with kind() == SIDEBAR_SHOW_PROJECT
     send_ex_command(&handle, ":WolfSidebarShowProject");
     poll_for_command_kind(
         &handle,
@@ -412,21 +348,12 @@ fn commands_drain_close_and_minimize() {
         ":WolfSidebarShowProject",
     );
 
-    // --- 3p. :WolfSearchInProject<CR> -> an FfiCommand with kind() ==
-    // SEARCH_IN_PROJECT. A pure FFI drain: nothing acts on it here (the front-end
-    // that would call `showSidebar(panel: .search)` and focus the search field is
-    // absent), so no sidebar is revealed. This proves `:WolfSearchInProject` is
-    // auto-registered as a COMMAND_SPECS row and drains the appended discriminant 25.
+    // --- 3p. :WolfSearchInProject<CR> -> an FfiCommand with kind() == SEARCH_IN_PROJECT
     send_ex_command(&handle, ":WolfSearchInProject");
     poll_for_command_kind(&handle, CMD_KIND_SEARCH_IN_PROJECT, ":WolfSearchInProject");
 
-    // --- 3q. :WolfPreviewInOtherPane<CR> -> an FfiCommand with kind() ==
-    // PREVIEW_IN_OTHER_PANE. A pure FFI drain: nothing acts on it here (the
-    // front-end that would resolve the target pane and call `preview_in_other`
-    // is absent), so NO pane is split or repointed. This proves
-    // `:WolfPreviewInOtherPane` is auto-registered as a COMMAND_SPECS row and
-    // drains the appended discriminant 26 — the split+bind mechanism itself is
-    // covered by the `other_pane.rs` integration test.
+    // --- 3q. :WolfPreviewInOtherPane<CR> -> an FfiCommand with kind() == PREVIEW_IN_OTHER_PANE
+    // The split-and-bind itself is covered by `other_pane.rs`.
     send_ex_command(&handle, ":WolfPreviewInOtherPane");
     poll_for_command_kind(
         &handle,
@@ -434,13 +361,8 @@ fn commands_drain_close_and_minimize() {
         ":WolfPreviewInOtherPane",
     );
 
-    // --- 3r. :WolfEditInOtherPane<CR> -> an FfiCommand with kind() ==
-    // EDIT_IN_OTHER_PANE. A pure FFI drain: nothing acts on it here (the
-    // front-end that would resolve the target pane and call `edit_in_other` is
-    // absent), so NO pane is split or rebound. This proves `:WolfEditInOtherPane`
-    // is auto-registered as a COMMAND_SPECS row and drains the appended
-    // discriminant 27 — the split+bind mechanism itself is covered by the
-    // `other_pane.rs` integration test.
+    // --- 3r. :WolfEditInOtherPane<CR> -> an FfiCommand with kind() == EDIT_IN_OTHER_PANE
+    // The split-and-bind itself is covered by `other_pane.rs`.
     send_ex_command(&handle, ":WolfEditInOtherPane");
     poll_for_command_kind(&handle, CMD_KIND_EDIT_IN_OTHER_PANE, ":WolfEditInOtherPane");
 

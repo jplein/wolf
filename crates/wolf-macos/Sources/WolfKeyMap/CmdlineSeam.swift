@@ -1,18 +1,4 @@
-//
-//  CmdlineSeam.swift
-//  Pure, AppKit-free decision seams for the macOS command line (`ext_cmdline`).
-//
-//  The command-line sibling of `PaletteSeam.swift`: pure, display-free seams
-//  taking scalar inputs only — NO NSView, NO CoreText, NO AppKit — so they are
-//  unit-testable headlessly (see `CmdlineSeamTests.swift`).
-//
-//  Backs the line composition and caret-prefix math painted by
-//  `CmdlineView.draw()`: the drawn line is `prompt + firstc + text` and the caret
-//  sits after `prompt + firstc + bytePrefix(of: text, byteCount: pos)`.
-//
-//  Imports ONLY Foundation, so it lives in the Foundation-only `WolfKeyMap`
-//  module alongside `PaletteSeam.swift`.
-//
+// Pure line-composition and caret-prefix math for the `ext_cmdline` overlay.
 
 import Foundation
 

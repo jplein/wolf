@@ -1,40 +1,6 @@
 #!/usr/bin/env bash
-#
-# nvim_treesitter_tree_test.sh
-#
-# sh_test that inspects the assembled nvim-treesitter plugin TreeArtifact (target
-# //bazel/nvim-treesitter:nvim_treesitter_tree, declared as `data` on the sh_test)
-# and asserts the vendored plugin files landed at the expected paths inside the
-# tree.
-#
-# nvim-treesitter is a pure-Lua plugin carrying bundled queries and Lua modules.
-# It asserts, relative to the tree's inner `nvim-treesitter/` dir:
-#   a. queries/markdown/injections.scm  exists & is a regular file
-#      (fall back to queries/markdown/highlights.scm if injections.scm is not
-#       present at the pinned revision — at least one markdown query file must
-#       exist)
-#   b. lua/nvim-treesitter               exists & is a directory
-#
-# NOTE: this plugin is VENDORED and its queries are ENABLED on macOS — the captive
-# init.lua prepends the tree to runtimepath so markdown highlighting + fenced-code
-# injection are live in the .app. This test only checks the assembled tree layout.
-#
-# The tree comes from an http_archive (external repo `@nvim_treesitter`)
-# assembled by `copy_to_directory` with `replace_prefixes` remapping the archive
-# root to an inner `nvim-treesitter/` dir. The copy_to_directory output
-# TreeArtifact is `nvim_treesitter_tree/`, whose inner dir is `nvim-treesitter/`,
-# so the files land at `<tree>/nvim-treesitter/queries/markdown/injections.scm`
-# etc.
-#
-# Robust runfiles resolution: the exact runfiles layout for a TreeArtifact under
-# aspect_bazel_lib can vary, and the alias routes through the `@nvim_treesitter`
-# external repo, so we try $TEST_SRCDIR, $RUNFILES_DIR, and $0.runfiles, and
-# finally fall back to a `find` for `*/nvim_treesitter_tree/nvim-treesitter`.
-#
-# NOTE (coder): once the workspace/repo name is known, PIN the direct runfiles
-# path (e.g. "$TEST_SRCDIR/_main/bazel/nvim-treesitter/nvim_treesitter_tree/nvim-treesitter")
-# as the first TREE candidate below and keep the `find` fallback only as a
-# safety net.
+# Asserts the tree holds a markdown query (`injections.scm`, else `highlights.scm`) and
+# `lua/nvim-treesitter/`; see bazel/nvim-treesitter/README.md. Runfiles roots are probed.
 
 set -euo pipefail
 
@@ -43,17 +9,13 @@ fail() {
   exit 1
 }
 
-# ---------------------------------------------------------------------------
-# Locate the runfiles roots.
-# ---------------------------------------------------------------------------
+# --- Locate the runfiles roots.
 RUNFILES_ROOTS=""
 [ "${TEST_SRCDIR:-}" != "" ] && RUNFILES_ROOTS="$RUNFILES_ROOTS $TEST_SRCDIR"
 [ "${RUNFILES_DIR:-}" != "" ] && RUNFILES_ROOTS="$RUNFILES_ROOTS $RUNFILES_DIR"
 [ -d "$0.runfiles" ] && RUNFILES_ROOTS="$RUNFILES_ROOTS $0.runfiles"
 
-# ---------------------------------------------------------------------------
-# Locate the assembled nvim-treesitter tree (its inner `nvim-treesitter/` dir).
-# ---------------------------------------------------------------------------
+# --- Locate the assembled nvim-treesitter tree (its inner `nvim-treesitter/` dir).
 TREE=""
 for root in $RUNFILES_ROOTS; do
   [ -d "$root" ] || continue
@@ -84,11 +46,7 @@ done
 
 echo "Located nvim-treesitter tree: $TREE"
 
-# ---------------------------------------------------------------------------
-# (a) queries/markdown/injections.scm is a regular file (HARD assertion), with a
-#     fallback to queries/markdown/highlights.scm — at least one markdown query
-#     file must be present.
-# ---------------------------------------------------------------------------
+# --- (a) queries/markdown/injections.scm, else highlights.scm: one markdown query must exist.
 INJECTIONS="$TREE/queries/markdown/injections.scm"
 HIGHLIGHTS="$TREE/queries/markdown/highlights.scm"
 if [ -f "$INJECTIONS" ]; then
@@ -100,9 +58,7 @@ else
   fail "expected a markdown query file (queries/markdown/injections.scm or queries/markdown/highlights.scm) under $TREE, but none is present"
 fi
 
-# ---------------------------------------------------------------------------
-# (b) lua/nvim-treesitter is a directory.
-# ---------------------------------------------------------------------------
+# --- (b) lua/nvim-treesitter is a directory.
 LUA_DIR="$TREE/lua/nvim-treesitter"
 [ -d "$LUA_DIR" ] || fail "expected Lua module directory at $LUA_DIR, but it is missing or not a directory"
 echo "PASS check (b): $LUA_DIR exists and is a directory"

@@ -39,7 +39,7 @@
 //!
 //! NO BAZEL WIRING, and none is missing. `crates/wolf-gnome` has no `BUILD.bazel` at
 //! all — that absence is deliberate and load-bearing, see
-//! [`crates/wolf-gnome/DECISIONS.md`](../DECISIONS.md) — so there is no `rust_test`
+//! [`notes/wolf-gnome-decisions.md`](../../../notes/wolf-gnome-decisions.md) — so there is no `rust_test`
 //! target for this file to be added to. Do not "fix" the missing target.
 
 use std::path::{Path, PathBuf};
@@ -311,11 +311,8 @@ fn the_packaged_output_carries_the_two_vendored_lua_trees_as_siblings() {
     let orlando = nvim.join("orlando");
     let lighthouse = nvim.join("lighthouse");
 
-    // --- Assertion 1: neither tree is EMPTY -----------------------------------
-    //
-    // First, because an empty tree and a mis-installed one have opposite consequences
-    // in the running app and must not be reported as the same thing. See the doc
-    // comment above for the measured failure an empty `lighthouse/` produces.
+    // --- Assertion 1: neither tree is empty -----------------------------------
+    // First, because an empty tree and a mis-installed one fail the running app in opposite ways.
     for (label, tree) in [("orlando", &orlando), ("lighthouse", &lighthouse)] {
         let names = file_names_under(tree);
         let directory = if tree.is_dir() { "THERE" } else { "absent" };
@@ -372,10 +369,7 @@ fn the_packaged_output_carries_the_two_vendored_lua_trees_as_siblings() {
     }
 
     // --- Assertion 3: each tree carries its licence ---------------------------
-    //
-    // A walk rather than a fixed name: upstream ships `LICENSE` in one repo and
-    // `LICENSE.md` in another, and which one is a compliance fact rather than a
-    // layout this test has an opinion about.
+    // A walk, not a fixed name: one upstream ships `LICENSE` and the other `LICENSE.md`.
     for (label, tree) in [("orlando", &orlando), ("lighthouse", &lighthouse)] {
         let names = file_names_under(tree);
         assert!(
@@ -481,7 +475,7 @@ fn desktop_value<'a>(keys: &'a [(String, String)], wanted: &str) -> Option<&'a s
 /// `app::run` calls `app.run_with_args::<&str>(&[])`, so the process ignores its real
 /// argv entirely. A `%f` or `%U` would make the desktop hand Wolf a path it silently
 /// drops, and a `MimeType=text/markdown` would put Wolf in the "Open With" list for
-/// every `.md` file and then open an empty window. Both are the shape `DECISIONS.md`
+/// every `.md` file and then open an empty window. Both are the shape `notes/wolf-gnome-decisions.md`
 /// rejects: a control that visibly refuses input.
 ///
 /// ## Falsifiers

@@ -175,17 +175,8 @@ fn external_change_reloads_unmodified_buffer() {
     waiter.drain();
     refocus_ui(&core);
 
-    // Poll for the reload: the reload notification is not guaranteed to ride a
-    // single redraw flush, so loop draining wakes with short sleeps, bounded by
-    // FLUSH_TIMEOUT, until the new heading appears (or panic with the last row).
-    //
-    // CRITICAL: never hold a snapshot read-guard across `drain()`/`sleep()`. The
-    // redraw handler applies `grid_line`/`flush` via `write_async()`, which spins
-    // on `try_write()` and FAILS while ANY reader is held — so a guard held across
-    // the sleep STARVES the write-lock exactly when the reload's repaint would
-    // land. We therefore read only OWNED values (`row_text` returns a `String`,
-    // `is_prompt` a `bool`) and let each guard drop at the end of its statement,
-    // BEFORE the drain/sleep.
+    // Poll for the reload, which may span flushes, and never hold a snapshot read guard across
+    // drain() or sleep(): see crates/wolf-core/tests/README.md#autoreadrs
     let deadline = Instant::now() + FLUSH_TIMEOUT;
     loop {
         // Guard drops at the end of this statement (owned String).
@@ -236,10 +227,8 @@ fn modified_buffer_is_not_reloaded_by_checktime() {
     waiter.wait_for_flush(&core, common::FLUSH_TIMEOUT);
     wait_for_row0_contains(&core, &waiter, "# Original");
 
-    // Make an UNSAVED in-editor edit at the start of the heading line: insert the
-    // marker, then leave insert mode. The buffer is now modified (unsaved). Poll
-    // for the marker rather than asserting after a single flush: under parallel
-    // contention that flush can return before the inserted text is on the grid.
+    // Make an unsaved edit at the start of the heading. Poll for the marker: under parallel
+    // contention a single flush can return before the text reaches the grid.
     core.send_input(ch('i'));
     type_str(&core, "ZZUNSAVED ");
     core.send_input(key(Key::Esc));
@@ -255,18 +244,8 @@ fn modified_buffer_is_not_reloaded_by_checktime() {
     waiter.drain();
     refocus_ui(&core);
 
-    // Settle window: throughout, the buffer must remain modified with the marker
-    // intact and the external text must never appear. Because the buffer is
-    // modified AND the file changed, nvim MAY raise the async W12 confirm prompt,
-    // so each iteration sends a dismissing Enter (non-modifying in normal mode —
-    // it just moves down a line — so it cannot corrupt the buffer or assertions).
-    //
-    // CRITICAL: never hold a snapshot read-guard across `send_input`/`drain`/`sleep`.
-    // The redraw handler applies events via `write_async()`, which spins on
-    // `try_write()` and FAILS while ANY reader is held — a guard held across the
-    // sleep starves the write-lock. So we read `row_text(0)` into an OWNED String
-    // and let the guard drop at the end of the statement, BEFORE the Enter send,
-    // drain, and sleep.
+    // Settle: nvim may raise the async W12 prompt, so each pass sends an Enter, harmless in normal
+    // mode. Read owned values only, as above.
     let settle_deadline = Instant::now() + FLUSH_TIMEOUT;
     while Instant::now() < settle_deadline {
         // Guard drops at the end of this statement (owned String).
@@ -301,9 +280,8 @@ fn modified_buffer_is_not_reloaded_by_checktime() {
         "the external change must never be applied to the modified buffer; \
          got row0 = {row0:?}"
     );
-    // Best-effort only: the W12 confirm is acceptable for this collision, so this
-    // is NOT load-bearing — the guard above is the real point. The per-iteration
-    // Enter should have dismissed any prompt by now.
+    // Best-effort: a W12 confirm is acceptable here and the guard above is the real point; the
+    // per-pass Enter should have dismissed any prompt.
     let is_prompt = core.read_snapshot().toast.is_prompt();
     if is_prompt {
         eprintln!(

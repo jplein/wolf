@@ -285,9 +285,8 @@ fn unnamed_buffer_reports_no_name() {
 
     let grid = wait_for_active_window_grid(&core, &waiter);
 
-    // Replace the (now named `Untitled.md`) startup buffer with a genuinely UNNAMED
-    // buffer via a raw `:enew`. This bypasses the `wolf_new_untitled` naming helper,
-    // so the buffer keeps an empty name and must report NO_NAME.
+    // A raw `:enew` bypasses the `wolf_new_untitled` naming helper, so the buffer keeps an empty
+    // name and must report NO_NAME.
     ex_command(&core, "enew");
 
     // Wait until the `wolf_buffers` emit reflects the unnamed buffer (pane_status for
@@ -384,16 +383,8 @@ fn closing_split_drops_that_window_survivor_keeps_file() {
     core.shutdown().expect("shutdown should be Ok");
 }
 
-// =========================================================================
-// REGRESSION GUARDS for the nav-history `wolf_buffers` tuple extension (§B5).
-//
-// `wolf_buffers` grows from a 2-element `{ win, name }` tuple to a 5-element
-// `{ win, name, bufnr, is_terminal, is_drawer }` tuple feeding a NEW parallel
-// `Snapshot.win_buffers` map. `Snapshot.buffers` — and therefore
-// `WolfCore::pane_status(grid)`, its ONLY production consumer — must stay
-// BEHAVIORALLY IDENTICAL. These two tests pin that contract directly, at the map
-// level rather than only through the formatted display strings above.
-// =========================================================================
+// Regression guards: `Snapshot.buffers` and `pane_status(grid)`, its only production consumer,
+// must not depend on the `bufnr`/`is_terminal`/`is_drawer` fields of the `wolf_buffers` tuple.
 
 /// `Snapshot.buffers` still holds CANONICALIZED paths keyed by WINDOW handle and
 /// still OMITS unnamed windows; `pane_status(grid)` is unchanged for a NAMED
@@ -521,10 +512,8 @@ fn buffers_map_skips_preview_panes_and_drops_closed_windows() {
         "the SURVIVING window keeps its buffers entry"
     );
 
-    // (b) A preview scratch pane is still SKIPPED by the emit.
-    // A typed `:vsplit` first (the in-place open_preview() binds into the ACTIVE
-    // pane), so the surviving alpha.md editor window keeps its buffers entry while
-    // the new split pane becomes the preview.
+    // (b) A preview scratch pane is still skipped by the emit. `:vsplit` first, because
+    // open_preview() binds into the active pane, so the alpha.md window keeps its entry.
     ex_command(&core, "vsplit");
     poll_until(&core, &waiter, "two live windows after :vsplit", |snap| {
         snap.windows.len() >= 2

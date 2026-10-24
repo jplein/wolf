@@ -31,11 +31,8 @@ _ARM64_SHA256 = "532da1d00e465a660fa01c3d4991333d09c52107dce7df937368545daca0a14
 
 _X86_64_SHA256 = "4b40e318eb7073321fa5fc06d7f60c3c0de1d7ea50ffbaa8b04286f5484d294f"
 
-# BUILD overlay placed at the root of each extracted tarball. `{archive_root}` is
-# the tarball's top directory (`nvim-macos-<arch>`); `copy_to_directory` remaps
-# that prefix to `nvim/` so the output TreeArtifact contains `nvim/bin/nvim`,
-# `nvim/lib/nvim/parser/*.so`, `nvim/share/nvim/runtime/**` with exec bits
-# preserved.
+# BUILD overlay for each extracted tarball; `copy_to_directory` remaps `{archive_root}` to
+# `nvim/`, preserving exec bits.
 _BUILD_FILE_TEMPLATE = """\
 load("@aspect_bazel_lib//lib:copy_to_directory.bzl", "copy_to_directory")
 

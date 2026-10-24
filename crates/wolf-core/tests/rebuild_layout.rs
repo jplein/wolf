@@ -248,9 +248,8 @@ fn rebuild_perpendicular_tree_with_empty_leaf() {
         |snap| snap.windows.len() == 3,
     );
 
-    // DFS order: [A, inherited, B]. The middle (empty-path) leaf has no file to edit,
-    // so its window keeps the inherited `Untitled.md` startup buffer (basename/suffix
-    // match, robust to absolute-vs-relative paths and `/var`<->`/private/var`).
+    // DFS order [A, inherited, B]: the empty-path leaf keeps the `Untitled.md` startup buffer,
+    // matched by suffix to survive relative paths and `/var` vs `/private/var`.
     poll_win_filename(&core, &waiter, handles[0], name_a);
     poll_win_filename_suffix(&core, &waiter, handles[1], UNTITLED_STARTUP);
     poll_win_filename(&core, &waiter, handles[2], name_b);
@@ -294,10 +293,8 @@ fn rebuild_editor_and_preview_of_same_markdown() {
     // Handle 0 (the editor leaf) shows the md file.
     poll_win_filename(&core, &waiter, handles[0], name);
 
-    // Handle 1 (the preview leaf) was reconstructed as a real preview of the md
-    // SOURCE: previews() reports it, keyed by the preview WINDOW handle (the DFS
-    // correspondence holds under option (b) — preview_file binds the buffer in the
-    // existing window, no window create/destroy).
+    // The preview leaf is a real preview of the md source, keyed by the preview window handle: DFS
+    // order holds because preview_file binds the buffer into the existing window.
     poll_preview_source(&core, &waiter, handles[1], name);
 
     core.shutdown().expect("shutdown should be Ok");

@@ -2,7 +2,7 @@
 
 The modules of [`wolf-core`](../README.md), one entry each. Everything the crate re-exports is listed in the crate README's public API table; this file says what each module is and why it is shaped the way it is.
 
-**Read [DECISIONS.md](../DECISIONS.md) first.** The GUI-free dependency rule, the threading and locking model, liveness and restart, the snapshot-and-wake session pattern, and the browser-preview security requirements all live there and are not repeated here.
+**Read [wolf-core-decisions.md](../../../notes/wolf-core-decisions.md) first.** The GUI-free dependency rule, the threading and locking model, liveness and restart, the snapshot-and-wake session pattern, and the browser-preview security requirements all live there and are not repeated here.
 
 ### The core loop
 
@@ -28,7 +28,7 @@ Crate root. Declares every module and flattens the public surface into root re-e
 
 #### `nvim.rs`
 
-Spawns and supervises the captive Neovim child, and wraps every RPC core issues against it. The launch contract (binary discovery, hermetic isolation, swap files, stderr draining) and the supervisor's role in liveness are in [`DECISIONS.md`](../DECISIONS.md).
+Spawns and supervises the captive Neovim child, and wraps every RPC core issues against it. The launch contract (binary discovery, hermetic isolation, swap files, stderr draining) and the supervisor's role in liveness are in [`wolf-core-decisions.md`](../../../notes/wolf-core-decisions.md).
 
 **Public API**
 
@@ -63,7 +63,7 @@ The `nvim-rs` handler: folds each `redraw` batch into `Snapshot` and routes the 
 
 #### `render.rs`
 
-The toolkit-agnostic render-state model: `Snapshot` is a complete paint-ready frame, and `SharedSnapshot` is the one lock guarding it. Nothing here draws pixels. The locking model is in [`DECISIONS.md`](../DECISIONS.md).
+The toolkit-agnostic render-state model: `Snapshot` is a complete paint-ready frame, and `SharedSnapshot` is the one lock guarding it. Nothing here draws pixels. The locking model is in [`wolf-core-decisions.md`](../../../notes/wolf-core-decisions.md).
 
 **Public API**
 
@@ -81,7 +81,7 @@ The toolkit-agnostic render-state model: `Snapshot` is a complete paint-ready fr
 
 #### `liveness.rs`
 
-The captive nvim's liveness cell: a lock-free `Alive` / `NotResponding` / `Dead` state over an `AtomicU8`, plus the transition helpers that mutate it. The state machine's meaning and who drives each edge are in [`DECISIONS.md`](../DECISIONS.md).
+The captive nvim's liveness cell: a lock-free `Alive` / `NotResponding` / `Dead` state over an `AtomicU8`, plus the transition helpers that mutate it. The state machine's meaning and who drives each edge are in [`wolf-core-decisions.md`](../../../notes/wolf-core-decisions.md).
 
 **Public API**
 
@@ -128,14 +128,14 @@ Persists the application-state tree to `state.json` and renders a saved pane lay
 **Public API**
 
 - `state_dir()` — `WOLF_STATE_DIR` overrides the per-platform default; `swap_dir_for(cwd)` derives a stable per-project swap dir under it, so a fresh nvim finds a dead one's swaps.
-- `spell_dir()` / `runtime_user_dir()` / `parsers_user_dir()` — global (not per-project) subdirs of `state_dir()`, exported as matching `WOLF_*` env vars; `None` when unresolvable. `seed_runtime_user_dir(dir)` seeds the `INIT_USER_FILE_NAME` template into a missing or empty dir only; a non-empty dir is never touched, even without the template ([DECISIONS.md](../DECISIONS.md)).
+- `spell_dir()` / `runtime_user_dir()` / `parsers_user_dir()` — global (not per-project) subdirs of `state_dir()`, exported as matching `WOLF_*` env vars; `None` when unresolvable. `seed_runtime_user_dir(dir)` seeds the `INIT_USER_FILE_NAME` template into a missing or empty dir only; a non-empty dir is never touched, even without the template ([wolf-core-decisions.md](../../../notes/wolf-core-decisions.md)).
 - `load_state(dir)` — read-only and infallible: an absent file is a silent `None`; any other failure warns and leaves the bytes intact.
 - `StateStore::open/state/set_snapshot/flush` — `set_snapshot` compares the submitted whole tree before swapping, so a redundant re-submit costs no disk write.
 - `rebuild_layout_spec(&PaneNode) -> String` — the spec `WolfCore::rebuild_layout` takes; total (non-finite weight becomes `0.0`, serialization error degrades to `"{}"`).
 
 **Decisions**
 
-- The spec is deliberately not `PaneNode`'s serde shape; leaves emit depth-first to zip onto `rebuild_layout`'s returned handles ([DECISIONS.md](../DECISIONS.md); shape in [`runtime/nvim/README.md`](../../../runtime/nvim/README.md)).
+- The spec is deliberately not `PaneNode`'s serde shape; leaves emit depth-first to zip onto `rebuild_layout`'s returned handles ([wolf-core-decisions.md](../../../notes/wolf-core-decisions.md); shape in [`runtime/nvim/README.md`](../../../runtime/nvim/README.md)).
 - One `wolf-state-writer` thread owns every write: coalesce, sibling-tmp, rename — no partial file after a crash. A failed write still advances the generation; `flush` cannot hang.
 - `WindowState.tabs` has no `#[serde(default)]`: a file without it fails deserialization and is ignored rather than half-migrated.
 
@@ -215,7 +215,7 @@ Pure Markdown to themed-HTML rendering for the preview pane: a `&str` to `String
 **Decisions**
 
 - Alignment contract: `code_blocks` and the highlighter concatenate the same `Event::Text` bodies, including pulldown-cmark's trailing newline, so Neovim's `(row, byte column)` indices match `text.split('\n')`; changing either side silently misplaces every span.
-- Marker placement, its byte-identity guard, its exclusions, and the document-order guarantee consumers depend on are one contract with a long half-life: see [the preview position-marker contract](../DECISIONS.md).
+- Marker placement, its byte-identity guard, its exclusions, and the document-order guarantee consumers depend on are one contract with a long half-life: see [the preview position-marker contract](../../../notes/wolf-core-decisions.md).
 - Math and highlighted code are `Event::InlineHtml`, so the writer passes them through verbatim and the injector never reads them as a block start.
 - `CAPPED_WIDTH_CSS` is horizontal-only: the baseline grid depends on the body's vertical box.
 - The head carries [`licenses.rs`](#licensesrs)'s notices as a constant HTML comment — how the inlined faces' attribution reaches a reader. It may not move into the body; see [`markdown/README.md`](markdown/README.md).
@@ -240,7 +240,7 @@ The four bundled fonts' verbatim licence texts, compiled in. Pure data, no GUI a
 
 #### `files.rs`
 
-Purpose: the streaming file-list traversal behind the picker's `FileSearch` session — a synchronous MRU seed, then a background `ignore`-crate walk — plus the `SearchRegistry`, which re-walks live sessions on `wolf_fs_changed`. Traversal rules live in the module doc; the rescan's why is in [DECISIONS.md](../DECISIONS.md).
+Purpose: the streaming file-list traversal behind the picker's `FileSearch` session — a synchronous MRU seed, then a background `ignore`-crate walk — plus the `SearchRegistry`, which re-walks live sessions on `wolf_fs_changed`. Traversal rules live in the module doc; the rescan's why is in [wolf-core-decisions.md](../../../notes/wolf-core-decisions.md).
 
 **Public API**
 
@@ -255,7 +255,7 @@ Purpose: the streaming file-list traversal behind the picker's `FileSearch` sess
 
 **Gotchas**
 
-- The session shape is the shared pattern in [DECISIONS.md](../DECISIONS.md); specific here is the synchronous MRU seed, which also seeds the dedup set so a rediscovered recent file is not listed twice.
+- The session shape is the shared pattern in [wolf-core-decisions.md](../../../notes/wolf-core-decisions.md); specific here is the synchronous MRU seed, which also seeds the dedup set so a rediscovered recent file is not listed twice.
 
 #### `search.rs`
 
@@ -277,7 +277,7 @@ Purpose: the ripgrep-backed content search behind the sidebar panel's `SearchSes
 
 **Gotchas**
 
-- The snapshot-and-wake shape is shared with `files.rs`; see [DECISIONS.md](../DECISIONS.md). What differs here: batches also flush on each per-file `end` event so a file's matches surface as a group, and the child is published into a shared slot so a concurrent `cancel` can kill it.
+- The snapshot-and-wake shape is shared with `files.rs`; see [wolf-core-decisions.md](../../../notes/wolf-core-decisions.md). What differs here: batches also flush on each per-file `end` event so a file's matches surface as a group, and the child is published into a shared slot so a concurrent `cancel` can kill it.
 
 #### `search_tree.rs`
 
@@ -476,7 +476,7 @@ Purpose: The lazily-started loopback HTTP server behind `WolfCore::open_in_brows
 
 **Decisions**
 
-- The loopback-only bind and the path-traversal guard are hard security requirements — see [DECISIONS.md](../DECISIONS.md).
+- The loopback-only bind and the path-traversal guard are hard security requirements — see [wolf-core-decisions.md](../../../notes/wolf-core-decisions.md).
 - Responses are framed as `Vec<u8>` end to end so binary assets are never routed through `from_utf8_lossy`.
 - The injected script's baseline is the render-time tick, which is what keeps the first poll from reloading immediately.
 - `resolve_path` enforces containment with `starts_with`, so `root` must itself be canonical (on macOS `/var` resolves to `/private/var`).

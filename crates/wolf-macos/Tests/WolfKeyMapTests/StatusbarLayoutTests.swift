@@ -1,35 +1,4 @@
-//
-//  StatusbarLayoutTests.swift
-//  Pure, headless unit tests for the AppKit-/CoreText-free `WolfKeyMap.StatusbarLayout`.
-//
-//  These exercise the per-pane statusbar vertical-layout seam the coder adds in
-//  `Sources/WolfKeyMap/StatusbarLayout.swift` (plan §6.1). Like `FontSizeSeamTests`
-//  and `PaneGeometryTests`, they import ONLY Foundation-level test machinery (no
-//  AppKit / CoreText, no live font) and stay in the headless `WolfKeyMap` module.
-//  The on-screen painting (bg fill, NSString drawing, truncation) is AppKit glue
-//  and is explicitly manual-smoke only; only the pure line arithmetic is asserted.
-//
-//  ## CONTRACT UNDER TEST (the API the coder must honor, plan §6.1)
-//
-//    public struct StatusbarLayout {
-//        public let height, primaryLineTop, primaryLineHeight,
-//                   secondaryLineTop, secondaryLineHeight: Double
-//        public init(primaryFontSize: Double, secondaryFontSize: Double,
-//                    verticalPadding: Double, lineGap: Double)
-//    }
-//
-//  Arithmetic (plan §6.1, lineFactor == 1.25):
-//    primaryLineHeight   = ceil(primaryFontSize   * lineFactor)
-//    secondaryLineHeight = ceil(secondaryFontSize * lineFactor)
-//    primaryLineTop      = verticalPadding
-//    secondaryLineTop    = verticalPadding + primaryLineHeight + lineGap
-//    height              = secondaryLineTop + secondaryLineHeight + verticalPadding
-//
-//  At least one EXACT height assertion is pinned to lineFactor == 1.25 so the
-//  contract is explicit; the remaining assertions pin the STRUCTURAL invariants
-//  (ordering, positivity, top == padding, additive relationship) so a mismatch is
-//  meaningful even if the coder tweaks the line factor.
-//
+// See crates/wolf-macos/Tests/WolfKeyMapTests/README.md#statusbarlayouttestsswift
 
 import XCTest
 
@@ -104,12 +73,8 @@ final class StatusbarLayoutTests: XCTestCase {
   // MARK: - Exact height pinned to lineFactor == 1.25
 
   func testExactHeightForRepresentativeInputs() {
-    // primary 13, secondary 10, padding 3, gap 1 (plan's representative inputs):
-    //   primaryLineHeight   = ceil(13 * 1.25) = ceil(16.25) = 17
-    //   secondaryLineHeight = ceil(10 * 1.25) = ceil(12.5)  = 13
-    //   primaryLineTop      = 3
-    //   secondaryLineTop    = 3 + 17 + 1 = 21
-    //   height              = 21 + 13 + 3 = 37
+    // primary 13, secondary 10, padding 3, gap 1: line heights ceil(16.25) = 17, ceil(12.5) = 13,
+    // tops 3 and 3 + 17 + 1 = 21, height 21 + 13 + 3 = 37.
     let l = layout(primary: 13, secondary: 10, padding: 3, gap: 1)
 
     XCTAssertEqual(l.primaryLineHeight, 17.0, accuracy: eps, "ceil(13 * 1.25) == 17")

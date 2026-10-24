@@ -1,7 +1,4 @@
-//
-//  Cursor.swift
-//  Cursor-shape geometry, ported from wolf-gnome's `cursor.rs`.
-//
+// Cursor-shape geometry, ported from wolf-gnome's `cursor.rs`.
 
 import CoreGraphics
 import Foundation

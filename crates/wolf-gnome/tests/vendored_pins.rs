@@ -44,7 +44,7 @@
 //!
 //! NO BAZEL WIRING, and none is missing. `crates/wolf-gnome` has no `BUILD.bazel` at
 //! all — that absence is deliberate and load-bearing, see
-//! [`crates/wolf-gnome/DECISIONS.md`](../DECISIONS.md) — so there is no `rust_test`
+//! [`notes/wolf-gnome-decisions.md`](../../../notes/wolf-gnome-decisions.md) — so there is no `rust_test`
 //! target for this file to be added to, and no silent macOS-only gap for an unwired
 //! file to fall into. Do not "fix" the missing target.
 //!
@@ -402,10 +402,7 @@ fn the_nix_side_pins_exactly_the_three_vendored_assets() {
     }
 
     // --- Assertion 4: the value shapes -----------------------------------------
-    //
-    // Checked here rather than in the mismatch loop so a truncated or upper-cased
-    // hex string reports as a malformed pin instead of as a drift between two
-    // platforms, which is a different investigation entirely.
+    // Checked here, not in the mismatch loop, so a malformed hex string is not reported as drift.
     for pin in &pins {
         assert!(
             is_lowercase_hex(&pin.commit, COMMIT_HEX_LEN),
@@ -535,9 +532,8 @@ fn the_nix_and_bazel_pins_name_the_same_commit_and_sha256_for_every_vendored_ass
     let mut compared = 0usize;
 
     for (asset, relative) in VENDORED_ASSETS {
-        // A missing entry is `the_nix_side_pins_exactly_the_three_vendored_assets`'s
-        // finding, not this one; skipping here keeps the two failures from being
-        // reported as the same thing.
+        // A missing entry is `the_nix_side_pins_exactly_the_three_vendored_assets`'s finding;
+        // skipping keeps the two failures distinct.
         let Some(pin) = pins.iter().find(|p| p.name == asset) else {
             continue;
         };
@@ -568,9 +564,7 @@ fn the_nix_and_bazel_pins_name_the_same_commit_and_sha256_for_every_vendored_ass
     }
 
     // --- Assertion 1 (non-vacuity): all three were really compared ------------
-    //
-    // Without this, a block whose entries were all renamed would compare NOTHING
-    // and the emptiness of `mismatches` below would be a pass.
+    // Without it, a block whose entries were all renamed compares nothing and passes.
     assert!(
         compared == VENDORED_ASSETS.len(),
         "{GUARD}: only {compared} of {} vendored assets were compared at all, so this check is \

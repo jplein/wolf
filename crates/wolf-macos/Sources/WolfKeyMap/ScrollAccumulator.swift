@@ -1,17 +1,4 @@
-//
-//  ScrollAccumulator.swift
-//  Accumulates fractional scroll deltas into discrete whole-cell line steps.
-//
-//  Trackpad / high-resolution wheel events deliver sub-cell `deltaY` values; this
-//  seam accumulates them into a SIGNED whole-cell step count so `PaneContainerView`
-//  can forward the right number of discrete line-scroll events to Neovim. It is
-//  direction-AGNOSTIC: it returns a signed step count (positive = the +deltaY
-//  direction), and the AppKit layer maps the sign to scroll up/down (honoring the
-//  system natural-scroll setting).
-//
-//  Foundation-only and `Double`-based so it is headlessly unit-testable in the
-//  `WolfKeyMap` module.
-//
+// Accumulates fractional scroll deltas into signed whole-cell line steps.
 
 import Foundation
 

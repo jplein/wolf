@@ -42,10 +42,8 @@ _URL = "https://github.com/JetBrains/JetBrainsMono/releases/download/v{v}/JetBra
 
 _SHA256 = "6f6376c6ed2960ea8a963cd7387ec9d76e3f629125bc33d1fdcd7eb7012f7bbf"
 
-# BUILD overlay placed at the root of the extracted (FLAT) release zip. The four
-# static desktop TTF faces live under `fonts/ttf/`; the OFL license is at the
-# root. `copy_to_directory` remaps `fonts/ttf` -> `fonts` and `OFL.txt` ->
-# `fonts/OFL.txt` so the output TreeArtifact's inner dir is `fonts/`.
+# BUILD overlay for the flat release zip; `copy_to_directory` remaps `fonts/ttf` and `OFL.txt`
+# into an inner `fonts/`.
 _BUILD_FILE_CONTENT = """\
 load("@aspect_bazel_lib//lib:copy_to_directory.bzl", "copy_to_directory")
 

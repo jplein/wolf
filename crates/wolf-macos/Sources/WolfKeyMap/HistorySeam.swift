@@ -1,21 +1,4 @@
-//
-//  HistorySeam.swift
-//  Pure, AppKit-free decision seams for the per-pane navigation history
-//  (the History menu + the two toolbar buttons).
-//
-//  Two small concerns share one file because they share the identifier constants:
-//  (a) zipping the three parallel FFI-derived arrays behind
-//  `WolfCoreHandle::history_entries` into ordered menu rows, and (b) owning the
-//  toolbar identifier / SF-Symbol constants plus the LOCKED toolbar ordering.
-//
-//  Takes scalar inputs only — NO NSMenu, NO NSToolbar, NO AppKit — so it is
-//  unit-testable headlessly (see `HistorySeamTests.swift`). Imports ONLY
-//  Foundation, so it lives in the Foundation-only `WolfKeyMap` module alongside
-//  `PickerSeam.swift` / `RestoreSeam.swift`.
-//
-//  Wolf holds NO copy of the history: core is the single source of truth and the
-//  rows are rebuilt from it on every `menuNeedsUpdate`.
-//
+// Pure seams for the per-pane navigation history menu and toolbar buttons.
 
 import Foundation
 

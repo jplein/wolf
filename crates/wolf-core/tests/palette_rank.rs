@@ -117,9 +117,8 @@ fn command_palette_is_excluded_and_static_rows_present() {
         "the BufferPicker static row's display is its registry title"
     );
 
-    // NewTab (the appended discriminant 17) is likewise a REACHABLE palette static
-    // row: it is NOT the palette's own invoking command, so it must be present
-    // (OD4). Its display is the registry title "New Tab".
+    // NewTab is not the palette's own invoking command, so it must be a reachable static row; its
+    // display is the registry title "New Tab".
     let new_tab = row_for_command(&rows, Command::NewTab)
         .expect("NewTab must appear as a palette static row");
     assert_eq!(

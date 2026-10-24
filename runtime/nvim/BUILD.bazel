@@ -1,16 +1,20 @@
-# The captive Neovim config consumed by wolf-core (`-u init.lua`).
-#
-# Exported flat so the macOS app can bundle it as `Contents/Resources/init.lua`,
-# where `Bundle.main.path(forResource:"init", ofType:"lua")` resolves it. The
-# in-repo dev path `runtime/nvim/init.lua` is unchanged.
+load("//tools/lint:defs.bzl", "comment_srcs")
+
+# Exported flat so the macOS app bundles it as `Contents/Resources/init.lua`, where
+# `Bundle.main.path(forResource:"init", ofType:"lua")` resolves it.
 exports_files(
     ["init.lua"],
     visibility = ["//visibility:public"],
 )
 
-# This package's docs, for `//tools/lint:markdown`.
+# This package's sources and docs for //tools/lint, which cannot glob across packages.
+comment_srcs()
+
 filegroup(
     name = "markdown_srcs",
-    srcs = ["README.md"],
+    srcs = glob(
+        ["**/*.md"],
+        allow_empty = True,
+    ),
     visibility = ["//tools/lint:__pkg__"],
 )

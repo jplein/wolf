@@ -1,17 +1,4 @@
-//
-//  NvimStatusOverlayView.swift
-//  The crash/stall overlay: a full-bleed opaque overlay on the editor surface
-//  with a centered status label + a "Restart Neovim" button, shown when the
-//  captive Neovim has crashed (`.dead`) or stalled (`.notResponding`).
-//
-//  Shown (as a subview of the `PaneContainerView`, mirroring `EmptyStateView`)
-//  when `Project.onWake` reads a non-`Alive` `handle.liveness()`. A `.dead` core
-//  auto-restarts (the button is a fallback); a `.notResponding` core waits for the
-//  user to click "Restart Neovim". Once liveness returns to `Alive` the overlay is
-//  hidden (see `PaneContainerView.hideNvimOverlay`).
-//
-//  Pure AppKit shell (manual smoke only), modeled on `EmptyStateView`.
-//
+// The full-bleed overlay shown while the captive Neovim is dead or not responding.
 
 import AppKit
 

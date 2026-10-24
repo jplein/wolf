@@ -389,9 +389,8 @@ fn a_normal_mode_commit_is_a_command_and_not_text() {
 
     let (core, waiter) = start(TEST);
 
-    // Build two known lines. The text goes through the SEAM (it is what the input
-    // method would commit while typing); the mode and newline keys go through
-    // `gdk_key`.
+    // Build two known lines: the text through the seam, as an input method commits it while typing,
+    // and the mode and newline keys through `gdk_key`.
     core.send_input(key_event(TEST, key_from_char('i'), ModifierType::empty()));
     send_commit(&core, false, LINE_ONE);
     core.send_input(key_event(TEST, gdk::Key::Return, ModifierType::empty()));

@@ -157,9 +157,7 @@ fn theme_titlebar_and_cursor_follow_wolf_groups() {
         frame.cols()
     );
 
-    // --- 2. Baseline: no Wolf groups defined -> titlebar channels unset -----
-    // Unset is also the pre-emit default, so this holds whether or not the
-    // helper's emit-once has landed yet.
+    // --- 2. Baseline: no Wolf groups, so titlebar channels are unset, as before the first emit.
     let baseline_bg = handle.theme_titlebar_bg();
     assert!(
         !baseline_bg.set,
@@ -175,9 +173,7 @@ fn theme_titlebar_and_cursor_follow_wolf_groups() {
         baseline_fg.rgb
     );
 
-    // Let startup (default colors + the theme emit-once) settle, then capture
-    // the PRE-THEME reverse-video cursor fill: the value the cursor must return
-    // to after the groups are cleared again in step 5.
+    // Let startup settle, then capture the pre-theme reverse-video fill that step 5 must restore.
     sleep(BASELINE_SETTLE);
     let baseline_fill = handle.read_frame().cursor_fill();
     assert!(
@@ -190,9 +186,8 @@ fn theme_titlebar_and_cursor_follow_wolf_groups() {
          fill, or the revert assertion below would be vacuous"
     );
 
-    // --- 3. Define both groups, then fire ColorScheme ------------------------
-    // A plain `:hi` does NOT fire the ColorScheme autocmd the tracker rides, so
-    // the explicit `:doautocmd ColorScheme` is REQUIRED by design.
+    // --- 3. Define both groups, then fire ColorScheme: a plain `:hi` does not fire the autocmd
+    // the tracker rides.
     send_ex_command(&handle, ":hi WolfCursor guifg=#000000 guibg=#009fce");
     send_ex_command(&handle, ":hi WolfTitlebar guifg=#f1f1f1 guibg=#101010");
     send_ex_command(&handle, ":doautocmd ColorScheme");
@@ -228,9 +223,8 @@ fn theme_titlebar_and_cursor_follow_wolf_groups() {
         "theme_titlebar_fg() should carry the exact packed guifg (#f1f1f1)"
     );
 
-    // --- 4. The WolfCursor override rides the existing frame accessors ------
-    // cursor_fill/cursor_glyph are resolved at frame-pack time from the same
-    // snapshot the titlebar poll just observed, so no further waiting is needed.
+    // --- 4. cursor_fill/cursor_glyph resolve at pack time from the snapshot the titlebar poll
+    // just observed, so no further waiting is needed.
     let themed = handle.read_frame();
     assert_eq!(
         themed.cursor_fill().rgb,

@@ -36,10 +36,8 @@ regenerate `MODULE.bazel.lock`.
 
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
-# Pinned to the textobjects `main` branch (self-named `lua/nvim-treesitter-textobjects/`
-# module layout, bundled per-language `queries/<lang>/textobjects.scm` at the archive
-# root, NO top-level `plugin/`). Re-pinned to `main` for branch-consistency with the
-# sibling //bazel/nvim-treesitter (also on `main`).
+# Pinned to `main`, like //bazel/nvim-treesitter: self-named `lua/` modules, per-language
+# `queries/<lang>/textobjects.scm` at the archive root, and no top-level `plugin/`.
 _COMMIT = "851e865342e5a4cb1ae23d31caf6e991e1c99f1e"
 
 _SHA256 = "8d5fd6d8f48021f941420053389c0b23ccbe136fb2deacc3872e42492fb8b9fa"

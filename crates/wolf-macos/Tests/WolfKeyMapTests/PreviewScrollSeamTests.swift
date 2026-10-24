@@ -1,265 +1,4 @@
-//
-//  PreviewScrollSeamTests.swift
-//  Pure, headless unit tests for the AppKit-free `WolfKeyMap.PreviewScrollSeam`.
-//
-//  These exercise the pure anchor/threshold/JS-synthesis seam the coder adds in
-//  `Sources/WolfKeyMap/PreviewScrollSeam.swift` (plan §5.1-§5.3). Like
-//  `PreviewSeamTests` / `PreviewLinkSeamTests`, they import ONLY Foundation-level
-//  test machinery (no AppKit, no WKWebView, no live Neovim) and stay in the headless
-//  `WolfKeyMap` module. `PaneContainerView` / `PreviewScrollStateHandler` and the
-//  actual on-screen scrolling are AppKit glue (compile + manual-smoke only); ALL the
-//  arithmetic and every emitted JS string lives here and is unit-tested.
-//
-//  ## CONTRACT UNDER TEST (the API the coder must honor)
-//
-//    public enum PreviewScrollSeam {
-//        public struct CursorPos: Equatable, Hashable {
-//            public let line: UInt32   // 1-based; 0 == unknown
-//            public let col: UInt32    // 0-based CHARACTER column
-//            public init(line: UInt32, col: UInt32)
-//            public var isKnown: Bool  // line > 0
-//        }
-//        public struct ScrollState: Equatable {
-//            public let anchorTop: Double?   // viewport-relative Y; nil = unresolved
-//            public let scrollY: Double      // raw window.scrollY fallback
-//            public init(anchorTop: Double?, scrollY: Double)
-//        }
-//        public struct RestoreRequest: Equatable {
-//            public let cursor: CursorPos
-//            public let targetY: Double?
-//            public let fallbackScrollY: Double
-//            public init(cursor: CursorPos, targetY: Double?, fallbackScrollY: Double)
-//        }
-//        public enum FollowDecision: Equatable {
-//            case stay
-//            case scroll(toViewportY: Double)
-//        }
-//        public enum CaptureDecision: Equatable {
-//            case drop                    // source switched — caller ALSO clears the
-//                                         // cached state and any pending restore
-//            case keepPending             // a cache carrying NO position (nil, or the
-//                                         // document-start seed) must not clobber an
-//                                         // in-flight restore
-//            case capture(RestoreRequest)
-//        }
-//        public struct DocumentSplit: Equatable {
-//            public let headLength: Int   // UTF-8 count of everything up to AND
-//                                         // INCLUDING the `<body …>` tag
-//            public let body: String      // the body element's INNER html
-//            public init(headLength: Int, body: String)
-//        }
-//        public struct LiveDocument: Equatable {
-//            public let sourceBufnr: Int64 // what is COMMITTED in the web view — NOT
-//            public let headLength: Int    // PreviewSeam.PreviewLoad, which is what
-//                                          // was last DISPATCHED (D3)
-//            public init(sourceBufnr: Int64, headLength: Int)
-//        }
-//        public enum UpdateStrategy: Equatable {
-//            case fullLoad                // loadHTMLString; didFinish drives
-//                                         // capture/restore
-//            case inPlace(body: String)   // callAsyncJavaScript(__wolfUpdate); NO
-//                                         // navigation
-//        }
-//        public enum LoadCommitOutcome: Equatable {
-//            case stillOutstanding        // more loads pending: leave the live AND
-//                                         // the pending descriptor ALONE
-//            case commit(LiveDocument?)   // the last load, and it SUCCEEDED:
-//                                         // live = pending, then clear pending
-//            case discard                 // the last load, and it FAILED: leave live
-//                                         // UNCHANGED, clear pending
-//        }
-//
-//        public static let markerColumnStride: UInt32      // 100
-//        public static let minEdgeThreshold: Double        // 48
-//        public static let edgeThresholdFraction: Double   // 0.15
-//        public static let maxEdgeThresholdFraction: Double// 0.35
-//        public static let restPositionFraction: Double    // 0.33
-//        public static let maxAnchorScanLines: UInt32      // 200
-//        public static let stateHandlerName: String        // "wolfPreviewScroll"
-//
-//        static func anchorColumn(_ col: UInt32) -> UInt32
-//        static func anchorIds(line: UInt32, col: UInt32) -> [String]
-//        static func edgeThreshold(viewportHeight: Double) -> Double
-//        static func followDecision(anchorTop: Double, viewportHeight: Double) -> FollowDecision
-//        static func winsNeedingScroll(
-//            current: [Int64: CursorPos], applied: [Int64: CursorPos]) -> [Int64]
-//        static func captureDecision(
-//            previousLoad: PreviewSeam.PreviewLoad?,   // lastPreviewLoads[win] BEFORE
-//                                                      // it is reassigned
-//            currentLoad: PreviewSeam.PreviewLoad,
-//            cursor: CursorPos,
-//            cachedState: ScrollState?,
-//            pendingRestore: RestoreRequest?
-//        ) -> CaptureDecision
-//        static func splitDocument(_ html: String) -> DocumentSplit?
-//        static func updateStrategy(
-//            html: String,
-//            currentLoad: PreviewSeam.PreviewLoad,
-//            liveDocument: LiveDocument?,   // previewLiveDocuments[win]
-//            loadInFlight: Bool,            // (previewLoadsInFlight[win] ?? 0) > 0
-//            hasPendingFragment: Bool       // pendingPreviewFragments[win] != nil
-//        ) -> UpdateStrategy
-//        static func loadCommitOutcome(
-//            remaining: Int,                // previewLoadsInFlight[win] AFTER the
-//                                           // callback decremented it
-//            pending: LiveDocument?,        // pendingPreviewDocuments[win]
-//            succeeded: Bool                // didFinish => true, didFail => false
-//        ) -> LoadCommitOutcome
-//        public static let inPlaceUpdateArgumentNames:
-//            (html: String, line: String, col: String)
-//        static func inPlaceUpdateJS() -> String
-//        static func stateScriptJS(handlerName: String = stateHandlerName) -> String
-//        static func followJS(line: UInt32, col: UInt32) -> String
-//        static func restoreJS(_ request: RestoreRequest) -> String
-//    }
-//
-//  ## THE TWO-PATH UPDATE MODEL (the flicker fix)
-//
-//  Navigating the preview web view on every keystroke re-ships ~965 KiB of inlined
-//  base64 `@font-face` CSS across the WKWebView IPC boundary at the reload
-//  coalescer's ~33ms cadence, re-parses it, and commits a whole new document — which
-//  commits at scrollY 0 and only THEN jumps to the restored offset. That visible
-//  round trip is the flicker. So the typing path stops navigating: `updateStrategy`
-//  decides per window between the existing full `loadHTMLString` and an IN-PLACE body
-//  swap, and `splitDocument` carves the `<body>` inner HTML out of `render_html`'s
-//  fixed wrapper so only that ~200 KB travels.
-//
-//  The `<head>` is INVARIANT for the in-app preview: `render_preview` hardcodes
-//  `PreviewTheme::Default` + `WidthMode::Full`, and dark/light is a
-//  `prefers-color-scheme` media query INSIDE that constant CSS, so even an appearance
-//  flip changes only the body's inline `style="color:#…"` highlight spans. That is
-//  what makes a body-only swap correct. `updateStrategy` rule 6 (`headLength`
-//  equality) makes the premise SELF-ENFORCING rather than comment-only — the class of
-//  latent assumption that produced H1/H2.
-//
-//  `updateStrategy`'s six `.fullLoad` rules are ORDERED, and each one is a
-//  correctness rule, not an optimization:
-//
-//   1. a PENDING FRAGMENT — the `#anchor` is delivered from `previewDidFinishLoad`,
-//      which an in-place update never fires, so the fragment would be stranded;
-//   2. a LOAD IN FLIGHT — mutating the outgoing document is pointless and would race
-//      that load's `didFinish` restore. This rule is ALSO what guarantees
-//      `pendingPreviewRestores[win] == nil` on every in-place path, since a pending
-//      restore exists only between `loadHTMLString` and `didFinish`;
-//   3. NO LIVE DOCUMENT — nothing is committed, so `window.__wolfUpdate` may not
-//      exist (first bind, and post-failure recovery);
-//   4. a SOURCE SWITCH — a navigation; the new file must open at its top. This is
-//      H1's guarantee mirrored at the strategy layer;
-//   5. UNSPLITTABLE HTML — e.g. the `""` a failed `render_preview` returns;
-//   6. a CHANGED HEAD LENGTH — a body-only swap would leave stale CSS.
-//
-//  ## TWO NAVIGATIONS CAN STRADDLE ONE PAGE LOAD (M1)
-//
-//  `previewLoadsInFlight` is a per-window COUNT, never a Set, because the reload
-//  coalescer serializes to one reload per ~33ms and does NOT wait for `didFinish` —
-//  the very same straddling window H2 exists to survive. With a Set, `didFinish(N)`
-//  — or `didFail(N)`, since WebKit reports a SUPERSEDED load as a failure — cleared
-//  the flag while load N+1 was still outstanding AND destructively consumed N+1's
-//  pending descriptor into `previewLiveDocuments`. The next coalescer tick then saw
-//  rule 2 false and rule 3 false and chose `.inPlace`, swapping a body into the
-//  document N+1 was about to replace; N+1 then committed, discarded the swap and
-//  restored — a visible flicker, i.e. the exact symptom this whole change exists to
-//  remove — and N+1's own `didFinish` finally nil'd the live descriptor and forced
-//  one more pointless full load.
-//
-//  ``PreviewScrollSeam/loadCommitOutcome(remaining:pending:succeeded:)`` is the pure
-//  decision that closes it, moved into the seam for the same reason `captureDecision`
-//  was: the bug lived in `PaneContainerView` bookkeeping, which is compile +
-//  manual-smoke only. BOTH callbacks decrement the count first and then hand the
-//  REMAINING count, the pending descriptor and whether the navigation succeeded to
-//  the seam:
-//
-//   * `remaining > 0` -> `.stillOutstanding`, which carries NO payload at all, so a
-//     superseded load's callback can neither commit nor discard anything;
-//   * `remaining == 0 && succeeded` -> `.commit(pending)` — including `.commit(nil)`
-//     when the HTML could not be split, since an unsplittable document must never
-//     become a live document;
-//   * `remaining == 0 && !succeeded` -> `.discard`, which is deliberately NOT
-//     `.commit(nil)`: a failed navigation never commits, so WebKit keeps displaying
-//     the PREVIOUS document and the previous live descriptor stays accurate.
-//     Conflating the two would wipe a good live document (M1 step 7).
-//
-//  `updateStrategy`'s own signature is unchanged; only the CALLER changes, deriving
-//  `loadInFlight` as `(previewLoadsInFlight[win] ?? 0) > 0`.
-//
-//  ## `captureDecision` IS UNCHANGED AND IS A FULL-LOAD-ONLY CONCERN
-//
-//  `captureDecision` gains NO case, loses NO rule, and is still called exactly where
-//  it is called today: immediately before `loadHTMLString`. All 12 of its tests below
-//  stay valid VERBATIM — they are the H1/H2 regression guards and the fix must not
-//  silently retire them. The two functions answer DIFFERENT questions at DIFFERENT
-//  times: `captureDecision` keys on `lastPreviewLoads[win]` ("what did we last
-//  DISPATCH"), `updateStrategy` keys on `previewLiveDocuments[win]` ("what is
-//  COMMITTED"). `updateStrategy` rule 4 and `captureDecision` rule 1 are
-//  near-duplicates BY DESIGN and must always agree on a real source switch — which is
-//  what `testASourceSwitchIsBothAFullLoadAndADrop` pins. Both are required because one
-//  runs before the navigation exists and the other before the restore is consumed.
-//
-//  ## WHY THE HTML TRAVELS AS AN ARGUMENT, NOT AS SOURCE
-//
-//  `inPlaceUpdateJS()` is the body handed to
-//  `WKWebView.callAsyncJavaScript(_:arguments:in:contentWorld:)`, whose free
-//  identifiers must be EXACTLY the keys of the caller's `arguments:` dictionary. Both
-//  sides read those names from ``inPlaceUpdateArgumentNames``, so the body and the
-//  dictionary cannot drift; `testInPlaceUpdateJSUsesExactlyTheDeclaredArgumentNames`
-//  is that anti-drift pin. A ~200 KB body string therefore never gets escaped into,
-//  or re-lexed as, JS source — which is why `testInPlaceUpdateJSInterpolatesNoDocument`
-//  asserts the returned string contains no `<` at all.
-//
-//  ## WHY `captureDecision` IS IN THE SEAM AT ALL (plan §16)
-//
-//  Both shipping-blocker defects the reviewer found (§15 H1 and H2) lived in
-//  `PaneContainerView`'s capture ORDERING, which plan §6.3 exempts from automated
-//  testing. Fixing them in place would have shipped two untestable
-//  regressions-in-waiting, so the decision itself moved into this pure seam and
-//  `PaneContainerView` keeps only a mechanical `switch`. The three rules are ORDERED
-//  and the ordering is load-bearing:
-//
-//   1. `.drop` when the source buffer switched (`previousLoad!.sourceBufnr !=
-//      currentLoad.sourceBufnr`) — a source switch is a NAVIGATION, not an edit.
-//      **H1**: clicking a plain `[see](other.md)` link with NO `#fragment` stashes
-//      nothing in `pendingPreviewFragments`, so the restore branch ran with the
-//      PREVIOUS file's cached scrollY and opened the new file thousands of pixels
-//      into its middle — a regression against the pre-feature behavior, where
-//      `loadHTMLString` reset scroll to 0.
-//   2. `.keepPending` when a restore is in flight and the cache carries NO
-//      position — either it is `nil`, or it is the document-start SEED
-//      (`anchorTop == nil && scrollY == 0`). **H2**: the new document's
-//      `.atDocumentStart` `post()` resolves nothing (`__wolfLine == 0`) and pushes
-//      `(nil, 0)`, clobbering the good cache. If a second keystroke fires reload
-//      N+1 before load N's `didFinish` (easily longer than the coalescer's 33ms on
-//      a long document), that seed became the capture and the ORIGINAL
-//      jump-to-top bug returned. The `nil` half of the rule (§16's clarification)
-//      is NOT merely defensive — see
-//      `testCaptureDecisionNilCacheWithAPendingRestoreKeepsIt`.
-//   3. `.capture` otherwise.
-//
-//  Rule 3 is what stops the fix from OVER-applying: a REAL scroll position must
-//  still overwrite an in-flight restore, or the restore would freeze at a stale
-//  offset forever.
-//
-//  ## SINGLE SOURCE OF TRUTH FOR THE TUNING CONSTANTS (orchestrator decision D1)
-//
-//  The six tuning numbers (`48`, `0.15`, `0.35`, `0.33`, `100`, `200`) must exist in
-//  exactly ONE place — the Swift constants above — and be INTERPOLATED into the
-//  generated JS, never duplicated as literals in the JS string. The
-//  `testStateScriptJSCarriesTheSwiftTuningConstants` test below asserts the generated
-//  JS actually CONTAINS each constant's rendered form, so a future constant change
-//  provably reaches the running JS instead of silently leaving the Swift tests green
-//  while the shipped behavior is wrong.
-//
-//  ## FORMATTING ASSUMPTIONS THE CODER MUST MATCH (plan §5.1)
-//
-//   * `Double`s are rendered with `String(format: "%.2f", v)` — no locale argument,
-//     so non-localized: `48` -> "48.00", `0.15` -> "0.15", `123.5` -> "123.50".
-//     (See `jsDouble` below, which is the test's mirror of that rule.)
-//   * `UInt32`s are rendered with `String(v)`: `100` -> "100".
-//   * `followJS(line:col:)` emits `window.__wolfFollow&&window.__wolfFollow(7,200);`
-//     — NO spaces around the argument comma (plan §5.1's literal spec).
-//   * `restoreJS` emits `__wolfRestore(<line>,<col>,<targetY>,<fallback>,<0|1>)` —
-//     again with no spaces around the commas, so the `hasTarget` flag is assertable
-//     as the trailing `,0)` / `,1)`.
-//
+// See crates/wolf-macos/Tests/WolfKeyMapTests/README.md#previewscrollseamtestsswift
 
 import XCTest
 
@@ -611,11 +350,8 @@ final class PreviewScrollSeamTests: XCTestCase {
   // MARK: - THE design-question-6 regression guard: the two gates are independent
 
   func testCursorOnlyChangeDoesNotArmReload() {
-    // The SAME preview window, with an unchanged (sourceBufnr, sourceTick) load but a
-    // MOVED cursor. `PreviewSeam.PreviewLoad` must stay exactly (sourceBufnr,
-    // sourceTick) — no cursor fields — so a cursor-only change is STRUCTURALLY
-    // incapable of arming the HTML-reload coalescer, while still arming the (cheap)
-    // scroll coalescer.
+    // Same window and (sourceBufnr, sourceTick), moved cursor. `PreviewLoad` has no cursor fields,
+    // so a cursor-only change cannot arm the HTML-reload coalescer, only the scroll one.
     let win: Int64 = 10
     let loads: [Int64: PreviewSeam.PreviewLoad] = [
       win: PreviewSeam.PreviewLoad(sourceBufnr: 1, sourceTick: 5)
@@ -786,11 +522,8 @@ final class PreviewScrollSeamTests: XCTestCase {
   // MARK: - T-5: no cached state yet — an empty request, never a crash
 
   func testCaptureDecisionWithNoCachedStateCapturesAnEmptyRequest() {
-    // Reachable before the page's first post() has ever arrived, and again right
-    // after a `.drop` cleared the cache. This test pins only the `pendingRestore ==
-    // nil` half; the OTHER half (`cachedState == nil` TOGETHER with a non-nil
-    // `pendingRestore`) is rule 2's territory and is pinned by
-    // `testCaptureDecisionNilCacheWithAPendingRestoreKeepsIt` below.
+    // Reachable before the first post() and after a `.drop`. Pins only the `pendingRestore == nil`
+    // half; the other is `testCaptureDecisionNilCacheWithAPendingRestoreKeepsIt`.
     let decision = PreviewScrollSeam.captureDecision(
       previousLoad: load(bufnr: sourceBufnr, tick: 5),
       currentLoad: load(bufnr: sourceBufnr, tick: 6),
@@ -1525,9 +1258,8 @@ final class PreviewScrollSeamTests: XCTestCase {
   // MARK: - splitDocument: the LAST `</body>` wins (raw HTML passthrough)
 
   func testSplitDocumentUsesTheLastClosingBodyTag() {
-    // pulldown-cmark passes raw HTML through (there is no disable flag in
-    // `markdown_options()`), so a source file can put a LITERAL `</body>` in the
-    // rendered body. The wrapper's own closing tag is always the last one.
+    // pulldown-cmark passes raw HTML through (`markdown_options()` has no disable flag), so a body
+    // can hold a literal `</body>`; the wrapper's own closing tag is always the last one.
     let body = "<p>before</p></body><p>after</p>"
     let split = PreviewScrollSeam.splitDocument(document(body: body))
     XCTAssertEqual(
@@ -1596,9 +1328,8 @@ final class PreviewScrollSeamTests: XCTestCase {
   // MARK: - splitDocument: MathML and highlight spans survive byte-for-byte
 
   func testSplitDocumentPreservesMathMLAndHighlightSpans() {
-    // Everything the in-place DOMParser path has to reproduce faithfully: the
-    // MathRenderer's inline `<math>` markup, the CodeHighlighter's inline-styled
-    // spans, and the `.wolf-src` position markers the whole anchor scheme depends on.
+    // What the in-place DOMParser path must reproduce: MathRenderer's inline `<math>`, the
+    // CodeHighlighter's inline-styled spans, and the `.wolf-src` position markers.
     let body =
       "<span class=\"wolf-src\" id=\"wl-1-0\" data-line=\"1\" data-col=\"0\"></span>"
       + "<math><mi>x</mi><mo>&#8804;</mo><mn>2</mn></math>"
@@ -1626,9 +1357,8 @@ final class PreviewScrollSeamTests: XCTestCase {
         + "updateStrategy rule 6 has for `the CSS changed, so a body-only swap would "
         + "leave stale styles`")
 
-    // The wrapper is `format!`ed from a Rust `String`, so the length that matters is
-    // the UTF-8 one. A head carrying any non-ASCII character makes the two counts
-    // disagree, which is what pins WHICH count is meant.
+    // The wrapper is `format!`ed from a Rust `String`, so the UTF-8 length matters; a non-ASCII
+    // head makes the UTF-8 and UTF-16 counts disagree.
     let prefix = headPrefix(head: "—")
     let split = PreviewScrollSeam.splitDocument(document(head: "—", body: body))
     XCTAssertEqual(
@@ -2344,9 +2074,8 @@ final class PreviewScrollSeamTests: XCTestCase {
       region.contains("__wolfUserScrolled"),
       "__wolfUpdate must not READ or WRITE the user-scroll flag at all: \(region)")
 
-    // The two legitimate assignment sites, and only those: the document-start
-    // initialization (so the first genuine user scroll is not swallowed) and
-    // __wolfRestore's deliberate clear.
+    // Only the two legitimate assignment sites: the document-start init (so the first real scroll
+    // is not swallowed) and __wolfRestore's deliberate clear.
     let expectedAssignments = 2
     XCTAssertEqual(
       squeezed.components(separatedBy: "__wolfUserScrolled=false").count - 1,
@@ -2573,10 +2302,8 @@ final class PreviewScrollSeamTests: XCTestCase {
         "\(flavor): and it must NOT destructively consume N+1's pending descriptor, "
           + "which N+1's own callback still needs (M1 step 4)")
 
-      // Steps 4-5: the next coalescer tick. Every other full-load rule is satisfied —
-      // same buffer as the live document, matching head length, no pending fragment —
-      // so rule 2 (a load in flight) is the ONLY thing standing between the preview and
-      // the body swap that M1 performed into a doomed document.
+      // Steps 4-5, the next coalescer tick: every other full-load rule passes, so rule 2 (a load in
+      // flight) alone stops M1's body swap into a doomed document.
       XCTAssertEqual(
         strategy(
           html: document(body: "<p>a third keystroke</p>"),

@@ -1,0 +1,17 @@
+/* case: a two-line block passes and a three-line block fails */
+
+/* one
+   two */
+a { color: red; }
+
+/* one
+   two
+   three */
+b { color: blue; }
+
+/* case: a string holding the block opener does not open a block */
+
+c::before { content: "/*"; }
+d { color: green; }
+e::after { content: '*/'; }
+f { color: black; }

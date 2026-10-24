@@ -82,10 +82,8 @@ fn composed_scalar_lands_in_buffer() {
     )
     .expect("wolf_ffi_start should return a handle (is WOLF_NVIM_BIN a valid nvim?)");
 
-    // --- Single composed scalar: enter insert mode, "type" ü -----------------
-    // Enter insert mode ('i') then send the composed "ü" as ONE modifier-free Char
-    // event (kind=Char, ch=0x00FC) — exactly what `KeyComposition.charEvents("ü")`
-    // yields. The scalar must land verbatim in the buffer.
+    // --- Single composed scalar: in insert mode, ü as one modifier-free Char event, exactly what
+    // `KeyComposition.charEvents("ü")` yields, must land verbatim.
     handle.send_key(scalar_key('i' as u32));
     handle.send_key(scalar_key(U_UMLAUT));
 
@@ -103,9 +101,8 @@ fn composed_scalar_lands_in_buffer() {
         "the composed 'ü' scalar should appear in the grid after insert (after={after:?})"
     );
 
-    // --- Two-scalar sequence: é then ü, both modifier-free -------------------
-    // A multi-scalar composition is delivered as one modifier-free event per scalar;
-    // wolf-core fuses the run into one nvim_input. Both glyphs must land, in order.
+    // --- Two-scalar sequence: one modifier-free event per scalar, which wolf-core fuses into one
+    // nvim_input; both glyphs must land, in order.
     handle.send_key(scalar_key(E_ACUTE));
     handle.send_key(scalar_key(U_UMLAUT));
 

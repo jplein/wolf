@@ -1,44 +1,6 @@
 #!/usr/bin/env bash
-#
-# parsers_tree_test.sh
-#
-# sh_test that inspects the assembled compiled-parser TreeArtifact (target
-# //bazel/treesitter-parsers:parsers_tree, declared as `data` on the sh_test) and
-# asserts the curated set of host-compiled treesitter parser shared objects
-# landed at the expected paths inside the tree.
-#
-# It asserts, relative to the tree's inner `parsers/` dir:
-#   HARD (must pass — the low-risk core set):
-#     a. parser/go.so           regular, NON-EMPTY file
-#     b. parser/rust.so         regular, NON-EMPTY file
-#     c. parser/typescript.so   regular, NON-EMPTY file
-#     d. parser/tsx.so          regular, NON-EMPTY file
-#     e. parser/json.so         regular, NON-EMPTY file
-#   SOFT (echo a NOTE, NEVER fail — drop+LOG policy per the plan):
-#     - parser/swift.so, parser/kotlin.so, parser/java.so — these are the
-#       higher-risk grammars that may be dropped if they cannot compile
-#       hermetically. java is low-risk so likely present, but kept soft.
-#     - if `file` is available, SOFT-note whether each present `.so` reports as
-#       Mach-O (the bundle requires signable host-compiled Mach-O, not nix-built).
-#
-# NOTE: these compiled parsers are VENDORED, SHIPPED, and ENABLED on macOS — the
-# captive init.lua prepends them to runtimepath so markdown highlighting +
-# fenced-code injection are live in the .app. This test only checks the assembled
-# tree layout.
-#
-# The tree comes from `copy_to_directory` with `replace_prefixes` remapping each
-# grammar's `parser/<lang>.so` under an inner `parsers/` dir. The copy_to_directory
-# output TreeArtifact is `parsers_tree/`, whose inner dir is `parsers/`, so the
-# files land at `<tree>/parsers/parser/go.so` etc.
-#
-# Robust runfiles resolution: mirror the orlando/lighthouse tree tests — try
-# $TEST_SRCDIR, $RUNFILES_DIR, and $0.runfiles, then fall back to a `find`.
-#
-# NOTE (coder): once the workspace/repo name is known, PIN the direct runfiles
-# path (e.g. "$TEST_SRCDIR/_main/bazel/treesitter-parsers/parsers_tree/parsers")
-# as the first TREE candidate below and keep the `find` fallback only as a safety
-# net. Also confirm the HARD set matches the final compiled set (drop+LOG any
-# grammar that cannot build; hard asserts only cover the low-risk core).
+# Fails unless the go, rust, typescript, tsx and json parsers are non-empty; swift, kotlin, java
+# and Mach-O status are only noted. See bazel/treesitter-parsers/README.md.
 
 set -euo pipefail
 
@@ -47,17 +9,13 @@ fail() {
   exit 1
 }
 
-# ---------------------------------------------------------------------------
-# Locate the runfiles roots.
-# ---------------------------------------------------------------------------
+# --- Locate the runfiles roots.
 RUNFILES_ROOTS=""
 [ "${TEST_SRCDIR:-}" != "" ] && RUNFILES_ROOTS="$RUNFILES_ROOTS $TEST_SRCDIR"
 [ "${RUNFILES_DIR:-}" != "" ] && RUNFILES_ROOTS="$RUNFILES_ROOTS $RUNFILES_DIR"
 [ -d "$0.runfiles" ] && RUNFILES_ROOTS="$RUNFILES_ROOTS $0.runfiles"
 
-# ---------------------------------------------------------------------------
-# Locate the assembled parsers tree (its inner `parsers/` dir).
-# ---------------------------------------------------------------------------
+# --- Locate the assembled parsers tree (its inner `parsers/` dir).
 TREE=""
 for root in $RUNFILES_ROOTS; do
   [ -d "$root" ] || continue
@@ -84,9 +42,7 @@ done
 
 echo "Located parsers tree: $TREE"
 
-# ---------------------------------------------------------------------------
-# Helper: does `file` report this .so as Mach-O? SOFT note only, never fails.
-# ---------------------------------------------------------------------------
+# --- Helper: does `file` report this .so as Mach-O? soft note only, never fails.
 note_macho() {
   so="$1"
   command -v file >/dev/null 2>&1 || return 0
@@ -97,9 +53,7 @@ note_macho() {
   esac
 }
 
-# ---------------------------------------------------------------------------
-# HARD assertions: the low-risk core set must exist and be NON-EMPTY (-s).
-# ---------------------------------------------------------------------------
+# --- Hard assertions: the low-risk core set must exist and be non-empty (-s).
 check_letter="a"
 for lang in go rust typescript tsx json; do
   so="$TREE/parser/$lang.so"
@@ -110,9 +64,7 @@ for lang in go rust typescript tsx json; do
   check_letter=$(printf '%s' "$check_letter" | tr 'a-y' 'b-z')
 done
 
-# ---------------------------------------------------------------------------
-# SOFT notes: higher-risk grammars per drop+LOG policy — never fail on these.
-# ---------------------------------------------------------------------------
+# --- Soft notes: higher-risk grammars per drop+LOG policy — never fail on these.
 for lang in swift kotlin java; do
   so="$TREE/parser/$lang.so"
   if [ -f "$so" ] && [ -s "$so" ]; then

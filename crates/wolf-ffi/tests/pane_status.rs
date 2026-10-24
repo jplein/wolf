@@ -185,12 +185,8 @@ fn pane_status_reports_filename_and_path_per_grid() {
         sleep(POLL_INTERVAL);
     }
 
-    // --- 3b. abs_path() is the opened file's CANONICAL absolute path --------
-    // `PaneStatus.abs_path` is the RAW, never-relativized buffer path core stored
-    // for this window. Core canonicalizes each `nvim_buf_get_name` in
-    // `apply_buffers` (redraw.rs), so it resolves the tempdir symlink (on macOS
-    // `/var/folders/...` -> `/private/var/folders/...`). Canonicalize the expected
-    // path the SAME way so the comparison lines up regardless of that symlink.
+    // --- 3b. abs_path() is raw but canonicalized by core's `apply_buffers`, so compare against a
+    // canonicalized expectation (macOS `/var` -> `/private/var`).
     let expected_abs = std::fs::canonicalize(tmp.path().join("alpha.md"))
         .expect("alpha.md should canonicalize to an absolute path")
         .to_string_lossy()

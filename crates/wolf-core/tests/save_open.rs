@@ -54,10 +54,8 @@ fn open_existing_markdown() {
         "row 0 should contain the heading text; got {row0:?}"
     );
 
-    // Basic syntax-highlight smoke test: the heading row should carry a different
-    // hl_id from a plain body cell. Markdown highlighting is enabled in init.lua.
-    // Pick the first non-space cell on the heading row (row 0) and on the body
-    // row (row 1) and assert their hl_ids differ.
+    // Syntax-highlight smoke test: the first non-space cell of the heading row (row 0) and of the
+    // body row (row 1) must carry different hl_ids.
     let heading_col = first_non_space_col(&row0).expect("heading row should have a non-space char");
     let heading_cell = grid.cell(0, heading_col).expect("expected a heading cell");
 
@@ -322,9 +320,8 @@ fn save_as_refuses_to_overwrite_without_force() {
          on disk means the write landed. Target contents were {after:?}."
     );
 
-    // The POSITIVE half, which is what keeps the two negatives from being a timing
-    // artefact: `:saveas` renames the buffer and fires `BufFilePost`, so a successful
-    // save would have moved `current_file` to the target.
+    // The positive half keeps the two negatives from being a timing artefact: a successful
+    // `:saveas` renames the buffer and fires `BufFilePost`, moving `current_file` to the target.
     let current = core.read_snapshot().current_file.clone();
     assert_eq!(
         current.as_deref(),
@@ -393,13 +390,8 @@ fn save_as_with_force_overwrites() {
          original line must be gone; contents were {contents:?}."
     );
 
-    // The rename half. `:saveas` points the buffer at its new name, so every later
-    // plain `write` goes to the target too — without this, a green above would be
-    // consistent with a one-off write that left the buffer on its old file.
-    //
-    // Compared against the path AS CORE SPELLS IT, not against `tempfile`'s: see
-    // `as_core_spells_it`. The poll returns whatever it last read, so the failure below
-    // names the observed value rather than blaming a timeout on the rename.
+    // Rename half: without it, a green above is consistent with a one-off write. Compare against
+    // the path as core spells it (see `as_core_spells_it`); the failure names the observed value.
     let expected = as_core_spells_it(&target_path);
     let current = wait_for_current_file(&core, &expected);
     assert_eq!(

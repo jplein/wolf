@@ -105,25 +105,18 @@ def _opt_transition_impl(_settings, _attr):
 
 _opt_transition = transition(
     implementation = _opt_transition_impl,
-    # Nothing is read from the incoming configuration: the new value is
-    # unconditional, so `opt_bundle` is opt regardless of `-c` on the command
-    # line (with `-c opt` the transition is simply a no-op).
+    # Reads nothing from the incoming config: the value is unconditional, a no-op under `-c opt`.
     inputs = [],
     outputs = ["//command_line_option:compilation_mode"],
 )
 
 def _opt_bundle_impl(ctx):
-    # OBSERVED on Bazel 8.7.0: an attr carrying a Starlark transition is a LIST
-    # of configured `Target`s even for a 1:1 (non-split) transition, so the
-    # single dep must be indexed. (The plain-`Target` form fails analysis with
-    # "got Provider for sequence index, want int".) `[0]` is safe precisely
-    # because the transition is 1:1 — it always returns exactly one dict.
+    # On Bazel 8.7.0 a transitioned attr is a list of `Target`s even for a 1:1 transition;
+    # `[0]` is safe because this transition always returns exactly one dict.
     bundle = ctx.attr.bundle[0]
 
-    # With `executable = True` Bazel PREDECLARES an output named `ctx.label.name`
-    # and exposes it as `ctx.outputs.executable`. Declaring it again via
-    # `ctx.actions.declare_file(ctx.label.name)` is a duplicate declaration and
-    # fails analysis, so the symlink must be written to the predeclared output.
+    # `executable = True` predeclares `ctx.outputs.executable`; declaring it again with
+    # `declare_file` fails analysis, so the symlink writes to the predeclared output.
     ctx.actions.symlink(
         output = ctx.outputs.executable,
         target_file = bundle[DefaultInfo].files_to_run.executable,
@@ -132,9 +125,8 @@ def _opt_bundle_impl(ctx):
     )
 
     runfiles = bundle[DefaultInfo].default_runfiles.merge_all([
-        # Identical to `default_runfiles` today (`macos_application` sets only
-        # `runfiles=`), merged defensively so an upstream change cannot silently
-        # drop the zip the runner needs.
+        # Identical to `default_runfiles` today, merged defensively so an upstream change cannot
+        # silently drop the zip the runner needs.
         bundle[DefaultInfo].data_runfiles,
         # Belt-and-braces: Bazel adds the executable to an executable rule's
         # runfiles automatically.

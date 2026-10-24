@@ -58,20 +58,13 @@ const FLUSH_TIMEOUT: Duration = Duration::from_secs(10);
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 // -- FfiKeyEvent.kind discriminants (mirror `wolf-ffi/src/lib.rs` `mod kind`) --
-//
-// Char is first, Enter second (the `wolf_core::Key` variant order). These are the
-// only two kinds this test needs to type an Ex command.
 /// A printable character (`ch` carries the Unicode scalar).
 const KIND_CHAR: u8 = 0;
 /// The Enter / Return key (executes the typed Ex command).
 const KIND_ENTER: u8 = 1;
 
-// -- Mouse/scroll discriminants -----------------------------------------------
-//
-// These MIRROR the Rust `mod mouse_button` / `mod mouse_action` / `mod scroll_dir`
-// in `crates/wolf-ffi/src/lib.rs`, which the coder adds as the SINGLE SOURCE OF
-// TRUTH (shared with the Swift `private static let` ports). They follow the
-// `wolf_core::{MouseButton, MouseAction, ScrollDirection}` variant order.
+// -- Mouse/scroll discriminants: mirror `mod mouse_button` / `mouse_action` / `scroll_dir` in
+// `crates/wolf-ffi/src/lib.rs`, in `wolf_core` variant order.
 /// `mouse_button::LEFT` — the left button (the only one this test sends).
 const MOUSE_BUTTON_LEFT: u8 = 0;
 /// `mouse_action::PRESS` — button down (positions the cursor under `mouse=a`).
@@ -252,21 +245,8 @@ fn mouse_scroll_click_drag_and_wheel() {
         "the editor window grid should be >= {WINDOW_GRID_MIN} (got {grid})"
     );
 
-    // --- 3. Fill the buffer with 80 WIDE numbered lines, then go to the top --
-    // EMPIRICAL: `:put =range(1,80)` yields 1-char-wide lines ("1".."80"), so a click
-    // at column 2 clamps to end-of-line (col 0) and the exact-column assertion in
-    // step 4 fails. Use zero-padded 5-char lines instead so column 2 (the 3rd char)
-    // is a REAL position the cursor can land on. A literal double-quote CANNOT appear
-    // in the `:put =<expr>` context: under `:put =` Neovim treats a `"` as the start
-    // of an Ex-comment and strips it BEFORE evaluating the expression, so
-    // `'printf("%05d", v:val)'` errors with `E115: Missing quote` and never fills the
-    // buffer. Instead, quote the format with doubled single-quotes (standard
-    // Vimscript single-quoted-string escaping): `:put =map(range(1,80),
-    // 'printf(''%05d'', v:val)')` appends "00001".."00080" after the (empty) first
-    // line — every char (`%` `'` `(` `)` `,` space) is just a printable Char event
-    // through `send_key`, no shell escaping and no Rust escaping (there is no `"`).
-    // The per-grid `linecount()` accessor should still settle to >= 80 (80 put lines
-    // + the empty first line).
+    // --- 3. Fill 80 zero-padded five-char lines, quoting with doubled single quotes; see
+    // crates/wolf-ffi/tests/README.md#mouse_scrollrs
     send_ex_command(&handle, ":put =map(range(1,80), 'printf(''%05d'', v:val)')");
 
     let deadline = Instant::now() + FLUSH_TIMEOUT;
@@ -284,10 +264,8 @@ fn mouse_scroll_click_drag_and_wheel() {
         filled.linecount()
     );
 
-    // Move the cursor (and the view) to line 1 so `topline` is a known baseline.
-    // EMPIRICAL: Neovim's `win_viewport` reports `topline` 0-BASED, so after `:1`
-    // the viewport's topline settles to 0 (NOT 1) — confirmed by the coder against
-    // real nvim (linecount() shows the real data >= 80 while topline() == 0).
+    // Go to line 1 for a known baseline: `win_viewport` reports `topline` 0-based, so it settles
+    // to 0, not 1.
     send_ex_command(&handle, ":1");
     let deadline = Instant::now() + FLUSH_TIMEOUT;
     let mut top = handle.read_frame_for_grid(grid);
@@ -323,17 +301,8 @@ fn mouse_scroll_click_drag_and_wheel() {
         }
         sleep(POLL_INTERVAL);
     }
-    // EXACT assertion first: the press lands the cursor at the targeted cell — this
-    // is the empirical proof of `nvim_input_mouse` grid-targeting + grid-local
-    // coordinates. The step-3 buffer is filled with WIDE 5-char lines ("00001"..),
-    // and with topline 0-based the empty original first buffer line sits at grid
-    // row 0, so grid row 5 maps to a put line that is >= 3 chars wide at column 2 —
-    // the cursor can land EXACTLY at (row 5, col 2) without clamping.
-    //
-    // DOCUMENTED FALLBACK (coder may relax if flaky): if a buffer formulation ever
-    // produced SHORT lines, the cursor would clamp to end-of-line and the COLUMN
-    // would differ; in that case accept `cursor_row() == press_row` alone. With the
-    // wide put lines above this should not happen.
+    // The press lands exactly on the targeted cell, proving grid targeting with grid-local
+    // coordinates. The five-char lines keep column 2 from clamping to end-of-line.
     assert_eq!(
         u32::from(after_press.cursor_row()),
         press_row,

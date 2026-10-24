@@ -45,7 +45,7 @@
 //!
 //! ## Neither press blocks, and the gate is not the blocking gate
 //!
-//! **The blocking-call inventory in `crates/wolf-gnome/DECISIONS.md` is unchanged by
+//! **The blocking-call inventory in `notes/wolf-gnome-decisions.md` is unchanged by
 //! this module.** `InputEvent::Save` and `InputEvent::SaveAs` are fire-and-forget on
 //! `wolf-core`'s ordered input channel, and the native dialog resolves on a later
 //! main-loop turn, so nothing here can time out and nothing here can mark the core
@@ -331,13 +331,7 @@ mod tests {
 
     use std::collections::HashSet;
 
-    // =========================================================================
-    // The whole input domain
-    // =========================================================================
-    //
-    // Several rules below are stated over EVERY input rather than over one table
-    // row, so that a failure NAMES the rule instead of quoting an index — the
-    // `nav_ui` / `tabs_ui` / `buffer_picker` convention.
+    // === The whole input domain: rules swept over every input so a failure names the rule ===
 
     /// Every input [`save_press`] and [`save_as_press`] are total over on their
     /// LIVENESS axis: the three readings a core can produce, plus the ABSENT core
@@ -537,9 +531,7 @@ mod tests {
         first.is_uppercase() && second.is_lowercase()
     }
 
-    // =========================================================================
-    // save_press
-    // =========================================================================
+    // === save_press ===
 
     /// What a press-table row expects a press seam to return.
     ///
@@ -1046,13 +1038,8 @@ mod tests {
             );
         }
 
-        // --- Non-vacuity: all three answers are produced ----------------------
-        //
-        // BACKSTOPS rather than the red a single-arm edit produces — the row loop
-        // above dominates every one of those. What they catch is the table and the
-        // seam moving TOGETHER: a rewrite that made `save_press` a constant function
-        // and rewrote every `want` to agree would satisfy the length check, the
-        // coverage sweep and every row.
+        // --- Non-vacuity: all three answers are produced. A backstop for the table and seam moving
+        // together: a constant `save_press` with every `want` rewritten would pass everything else.
         let answers: Vec<Want> = cases.iter().map(|case| case.want).collect();
         for (want, consequence) in [
             (
@@ -1121,9 +1108,8 @@ mod tests {
             );
         }
 
-        // Non-vacuity, the same backstop shape as `save_press_table`'s. A `Write`
-        // answer is not among them because `SaveAsPress` has no such variant, which
-        // is the point of the second enum: `shell`'s Save As match has no dead branch.
+        // Non-vacuity, as in `save_press_table`. No `Write` answer: `SaveAsPress` has no such variant,
+        // which is the point of the second enum, so `shell`'s Save As match has no dead branch.
         let answers: Vec<Want> = cases.iter().map(|case| case.want).collect();
         assert!(
             answers.contains(&Want::Choose),
@@ -1262,9 +1248,8 @@ mod tests {
     /// comparison can see an ordering change.
     #[test]
     fn liveness_is_decided_before_the_buffers_shape() {
-        // Both probes carry a PATH on purpose. A pane-shaped refusal over a target
-        // with no name at all would be indistinguishable from the nameless answer,
-        // so the comparison below would not say which check ran first.
+        // Both probes carry a path: a pane-shaped refusal over a nameless target would look like the
+        // nameless answer, hiding which check ran first.
         assert!(
             PREVIEW_WITH_PATH.path.is_some_and(|p| !p.is_empty())
                 && TERMINAL_WITH_PATH.path.is_some_and(|p| !p.is_empty()),
@@ -1326,10 +1311,8 @@ mod tests {
             }
         }
 
-        // The premise the comparison rests on: over a LIVE core the two probes really
-        // do produce a pane-shaped refusal, distinct from the wedged one. Without
-        // this, a seam whose arms all shared one string would satisfy every assertion
-        // above while proving nothing about ordering.
+        // Premise: over a live core the probes give a pane-shaped refusal distinct from the wedged one;
+        // otherwise a seam with one shared string would pass while proving nothing about order.
         for probe in [PREVIEW_WITH_PATH, TERMINAL_WITH_PATH] {
             let SavePress::Refuse(live_reason) = save_press(Some(Liveness::Alive), probe.target())
             else {
@@ -1629,9 +1612,7 @@ mod tests {
         );
     }
 
-    // =========================================================================
-    // save_dialog_proposal
-    // =========================================================================
+    // === save_dialog_proposal ===
 
     /// One [`save_dialog_proposal`] table row.
     struct ProposalCase {
@@ -1861,9 +1842,7 @@ mod tests {
         );
     }
 
-    // =========================================================================
-    // save_as_target
-    // =========================================================================
+    // === save_as_target ===
 
     /// One [`save_as_target`] table row.
     struct TargetCase {
@@ -2024,11 +2003,8 @@ mod tests {
             }
         }
 
-        // --- Behaviour 12, stated over every accepting row --------------------
-        //
-        // The loop above already compares against `force: true`, so this restates the
-        // rule where a failure NAMES it rather than reporting a struct mismatch — and
-        // it carries the honest scope of the claim in its message.
+        // --- Behaviour 12 over every accepting row: the loop above checks `force: true` already; this
+        // names the rule on failure and states the claim's honest scope in its message.
         let mut accepted = 0_usize;
         for case in &cases {
             let Some(request) = save_as_target(Path::new(case.chosen)) else {
@@ -2048,10 +2024,8 @@ mod tests {
             );
         }
 
-        // Non-vacuity in both directions: a seam that refused everything would satisfy
-        // every refusal row and every `force` assertion above while Save As silently
-        // did nothing, and one that accepted everything would satisfy the accepting
-        // rows while smuggling a relative path into core.
+        // Non-vacuity both ways: refusing everything passes the refusal and `force` rows while Save As
+        // does nothing; accepting everything smuggles a relative path into core.
         assert!(
             accepted > 0,
             "NOT ONE of the {NAMED_TARGET_CASES} rows was accepted, so the force rule above held \

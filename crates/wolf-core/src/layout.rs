@@ -1,6 +1,6 @@
 //! Layout intents: the Neovim->shell INTENT CHANNEL types.
 //!
-//! Under the split-panes design (see the crate README and `architecture.md`), the
+//! Under the split-panes design (see the crate README and `specs/architecture.md`), the
 //! SHELL owns the pane layout. Neovim's split/focus chords and Ex-commands are
 //! overridden in `runtime/nvim/init.lua` to `rpcnotify` a `wolf_layout` payload
 //! instead of (or in addition to) performing the native window op. [`crate::redraw`]

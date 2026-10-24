@@ -1,27 +1,4 @@
-//
-//  PreviewScrollStateHandler.swift
-//  The `WKScriptMessageHandler` glue that caches a preview page's scroll state.
-//
-//  A thin AppKit/WebKit adapter (compile + manual-smoke only), the exact structural
-//  sibling of `PreviewClickFocusHandler`. The document-start scroll script
-//  (`PreviewScrollSeam.stateScriptJS`) PUSHES the page's live scroll state out to
-//  this handler — on every cursor follow, on every rAF-throttled user scroll, and
-//  once at document start — and this handler forwards it into the
-//  `PaneContainerView`'s per-window cache.
-//
-//  The push direction is load-bearing. A full `loadHTMLString` DESTROYS `window`, so
-//  nothing can be stashed in the page across a reload, and `evaluateJavaScript` is
-//  asynchronous so the state cannot be PULLED synchronously in the instant before
-//  the reload. Keeping a continuously refreshed copy on the Swift side makes the
-//  pre-reload capture a plain dictionary read with no race and no blocking.
-//
-//  ALL the scroll arithmetic and every JS string live in the headless
-//  `WolfKeyMap.PreviewScrollSeam`; this file only decodes WebKit's message body.
-//
-//  The web view's `WKUserContentController` retains this handler STRONGLY; this
-//  handler holds the container WEAKLY, so there is no retain cycle. The callback
-//  fires on the main thread (WebKit's script-message callbacks are main-thread).
-//
+// The `WKScriptMessageHandler` glue that caches a preview page's scroll state.
 
 import WebKit
 import WolfKeyMap

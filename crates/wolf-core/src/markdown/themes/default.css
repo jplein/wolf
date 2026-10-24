@@ -1,22 +1,5 @@
-/* The single shipped preview theme: PreviewTheme::Default.
- *
- * This file is include_str!'d into the rendered HTML document (AFTER base.css)
- * by crate::markdown::theme_css. It ships a dark default palette PLUS a
- * @media (prefers-color-scheme: light) light palette (light background #f4f4f4),
- * and declares `color-scheme: light dark;`, so the preview follows the app's
- * resolved dark/light appearance (the web view inherits NSApp.effectiveAppearance).
- * It is still NOT wired to the live nvim colorscheme (OD5) — it tracks the app/OS
- * appearance only. It is NOT a Markdown doc and is not prettier-formatted.
- *
- * It layers colors onto the structural rules base.css already established, so it
- * intentionally only sets color/background/border-color properties.
- *
- * One consequence of base.css's 24px baseline grid: `hr` is painted via
- * `border-top-color`, NOT `background-color`. base.css gives the rule an
- * explicit 24px grid height (so the 1px line is absorbed structurally), and this
- * file is emitted AFTER base.css — a `background-color` here would win the
- * cascade and fill that 24px box with a solid bar instead of a hairline.
- */
+/* PreviewTheme::Default: colors only, over base.css. `hr` is painted by `border-top-color`, never
+ * `background-color`. See crates/wolf-core/src/markdown/README.md#themesdefaultcss */
 
 body.wolf-markdown {
   color: #d4d4d4;

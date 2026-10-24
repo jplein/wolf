@@ -41,10 +41,7 @@ const KIND_ENTER: u8 = 1;
 /// The Esc key (leaves insert mode).
 const KIND_ESC: u8 = 2;
 
-// -- seeded layout ----------------------------------------------------------
-//
-// One directory plus one top-level file, so the final-ordering assertion has
-// both node kinds to order, and the delete flow has survivors to check.
+// -- seeded layout: a dir and a top-level file, so ordering has both kinds and delete has survivors
 const DIR_DOCS: &str = "docs";
 const FILE_INTRO: &str = "docs/intro.md";
 const FILE_README: &str = "README.md";
@@ -95,9 +92,7 @@ fn send_ex_command(handle: &WolfCoreHandle, cmd: &str) {
 
 #[test]
 fn tree_search_rescan_reflects_write_and_delete() {
-    // Loud SKIP (no-op pass) when no pinned nvim is available, exactly like
-    // `tree_search`. Otherwise export the resolved binary so wolf-core launches
-    // it.
+    // Loud skip (no-op pass) without a pinned nvim, exactly like `tree_search`.
     let Some(nvim_bin) = common::nvim_bin_or_skip() else {
         return;
     };
@@ -112,9 +107,8 @@ fn tree_search_rescan_reflects_write_and_delete() {
     std::fs::write(tmp.path().join(FILE_INTRO), "# intro\n").expect("failed to seed docs/intro.md");
     std::fs::write(tmp.path().join(FILE_README), "# readme\n").expect("failed to seed README.md");
 
-    // Canonicalize the cwd for path comparisons: on macOS the temp dir under
-    // `/var/folders/...` canonicalizes to `/private/var/folders/...`, and
-    // wolf-core may report either form.
+    // Canonicalize for path comparisons: a macOS temp dir under `/var` resolves to `/private/var`,
+    // and wolf-core may report either form.
     let canonical_cwd = tmp
         .path()
         .canonicalize()
@@ -129,9 +123,8 @@ fn tree_search_rescan_reflects_write_and_delete() {
     )
     .expect("wolf_ffi_start should return a handle (is WOLF_NVIM_BIN a valid nvim?)");
 
-    // Wait for nvim to settle before driving keys: `cwd()` is empty until nvim's
-    // first DirChanged/wolf_cwd notification, so poll it non-empty (the same
-    // readiness gate `tree_search` uses) and pin it to the seeded cwd.
+    // Readiness gate before driving keys: `cwd()` stays empty until nvim's first `wolf_cwd`
+    // report, so poll it non-empty, as `tree_search` does.
     let deadline = Instant::now() + FLUSH_TIMEOUT;
     let mut reported_cwd = handle.cwd();
     while Instant::now() < deadline {
@@ -157,9 +150,7 @@ fn tree_search_rescan_reflects_write_and_delete() {
     // The tree gets its OWN long-lived `FfiFileSearch` via `start_tree_search()`.
     let tree = handle.start_tree_search();
 
-    // --- baseline: root children stream in ----------------------------------
-    // The traversal runs on a background worker; poll until the seeded dir and
-    // the top-level file appear.
+    // --- baseline: root children stream in from a background worker; poll until both appear.
     let deadline = Instant::now() + FLUSH_TIMEOUT;
     let mut top = tree.children_of(String::new());
     while Instant::now() < deadline {
@@ -185,9 +176,8 @@ fn tree_search_rescan_reflects_write_and_delete() {
     // an advance past this point.
     let v_pre: u64 = tree.version();
 
-    // --- write flow: `:e fresh.md`, insert, `:w` through the bridge ---------
-    // The `:w` fires BufWritePost -> wolf_fs_changed -> debounced rescan, which
-    // must surface a new file node at the root.
+    // --- write flow: `:e fresh.md`, insert, `:w`. BufWritePost triggers the debounced rescan,
+    // which must surface a new root node.
     send_ex_command(&handle, &format!(":e {FILE_FRESH}"));
     handle.send_key(char_key('i'));
     type_str(&handle, "hello");
@@ -199,10 +189,8 @@ fn tree_search_rescan_reflects_write_and_delete() {
     while Instant::now() < deadline {
         top = tree.children_of(String::new());
         fresh_seen = top.iter().any(|n| !n.is_dir() && n.name() == FILE_FRESH);
-        // Require BOTH the node and the version advance before declaring the
-        // rescan landed: the version is what wakes the Swift side into
-        // `scheduleRefresh()`, so a node without a version bump would still be
-        // an invisible update in the real UI.
+        // Require the node and a version advance: the version wakes the Swift side into
+        // `scheduleRefresh()`, so a node without a bump is invisible in the real UI.
         if fresh_seen && tree.version() > v_pre {
             break;
         }
@@ -232,9 +220,8 @@ fn tree_search_rescan_reflects_write_and_delete() {
         "the new top-level file's rel_path should be its bare name"
     );
 
-    // --- delete flow: remove from disk, then `:bdelete!` ---------------------
-    // Remove the file BEFORE dropping the buffer so the BufDelete-triggered
-    // rescan walks a tree that no longer holds it.
+    // --- delete flow: remove from disk before `:bdelete!`, so the BufDelete-triggered rescan
+    // walks a tree that no longer holds the file.
     std::fs::remove_file(tmp.path().join(FILE_FRESH)).expect("failed to remove fresh.md");
     send_ex_command(&handle, ":bdelete!");
 

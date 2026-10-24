@@ -1,30 +1,5 @@
-//
-//  PreviewCopySeam.swift
-//  Pure, AppKit-free Markdown-preview COPY seam.
-//
-//  A THIRD file rather than an addition to an existing one: `PreviewSeam` owns the
-//  reload arithmetic plus the click-to-focus channel and `PreviewScrollSeam` owns the
-//  scroll channel, so a third push channel is a third file — which is also what the
-//  one-entry-per-file README rule expects.
-//
-//  It owns EVERY rule behind "Copy from a preview pane": the message-handler name, the
-//  document-start JavaScript that pushes the page's selection out, the decoding of
-//  that push, and the "which source does Copy use" decision that `validateMenuItem`
-//  and `copy()` BOTH consult. The AppKit glue (`PaneContainerView` +
-//  `PreviewSelectionHandler` + `WolfWindowController`) stays mechanical.
-//
-//  Imports ONLY Foundation, so it lives in the Foundation-only `WolfKeyMap` module
-//  alongside `PreviewSeam.swift` / `PreviewScrollSeam.swift`.
-//
-//  ## Why the text rides in the push
-//
-//  Menu validation is SYNCHRONOUS, so "does the preview have a selection" can never be
-//  an `evaluateJavaScript` round trip — a cache is required for the enable decision
-//  regardless. Carrying the text in that same cached snapshot is what makes the enable
-//  decision and the copied bytes structurally incapable of disagreeing, and it keeps
-//  `copy()` fully synchronous: an asynchronous `NSPasteboard` write would let a ⌘C
-//  immediately followed by ⌘V read the PREVIOUS clipboard.
-//
+// Pure rules behind Copy from a Markdown preview pane.
+// See notes/crates/wolf-macos/Sources/WolfKeyMap/PreviewCopySeam.swift.md#synchronous-copy
 
 import Foundation
 

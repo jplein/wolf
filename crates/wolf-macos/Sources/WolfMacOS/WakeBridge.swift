@@ -1,10 +1,4 @@
-//
-//  WakeBridge.swift
-//  Marshals wolf-core's wake (fired on its tokio thread, carrying the firing
-//  core's per-window token) onto the AppKit main thread and triggers a repaint
-//  of the RIGHT window — the macOS realization of the
-//  wake → dispatch-to-main → setNeedsDisplay path.
-//
+// Marshals the render wake onto the main thread and repaints the right window.
 
 import AppKit
 import WolfFFI

@@ -1,23 +1,4 @@
-//
-//  FrameStats.swift
-//  The PURE, AppKit-free frame-time aggregation seam.
-//
-//  This type owns every decision that can be reasoned about without a window
-//  server: which buckets exist, how samples accumulate, how percentiles are
-//  computed, how a report is rendered, and how the environment variables are
-//  parsed. The process-global glue that actually reads the clock, schedules the
-//  report timer and writes to stderr lives in `WolfMacOS/FrameMetrics.swift`.
-//
-//  THREADING: `FrameStats` is a plain value type with NO internal locking. It is
-//  documented MAIN-THREAD-ONLY; the `FrameMetrics` facade owns the single
-//  instance and enforces the invariant with a `dispatchPrecondition` in DEBUG.
-//  Keeping the enforcement out of this file is what lets the type stay pure and
-//  unit-testable off the main thread.
-//
-//  COST MODEL: `record` is O(1) with no allocation after `init` (every bucket's
-//  ring buffer reserves `sampleCapacity` up front). Sorting happens ONLY in
-//  `summarize`, i.e. once per report interval, never per frame.
-//
+// Pure, AppKit-free frame-time aggregation; the clock and timer glue is `FrameMetrics`.
 
 import Foundation
 

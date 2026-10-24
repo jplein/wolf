@@ -41,9 +41,6 @@ const FLUSH_TIMEOUT: Duration = Duration::from_secs(10);
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 // -- FfiKeyEvent.kind discriminants (mirror `wolf-ffi/src/lib.rs` `mod kind`) --
-//
-// These mirror the `wolf_core::Key` variant order (Char = 0, Enter = 1, Esc = 2),
-// same as `multi_window.rs` / `orlando_bg_stress.rs`.
 /// A printable character (`ch` carries the Unicode scalar).
 const KIND_CHAR: u8 = 0;
 /// The Escape key (leaves insert / visual mode).
@@ -171,9 +168,7 @@ fn copy_selection_and_paste_round_trip() {
         "the typed word {SELECT_WORD:?} should appear in the grid after insert"
     );
 
-    // --- 3. Enter a character-wise visual selection of the word -------------
-    // `0` -> first column, `v` -> visual (anchored on 'W'), `e` -> extend to the
-    // word end, giving an inclusive selection of exactly SELECT_WORD.
+    // --- 3. `0`, `v`, `e`: an inclusive character-wise selection of exactly SELECT_WORD.
     handle.send_key(char_key('0'));
     handle.send_key(char_key('v'));
     handle.send_key(char_key('e'));

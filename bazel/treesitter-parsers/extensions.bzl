@@ -52,16 +52,8 @@ scanner extension at the new revision, then regenerate `MODULE.bazel.lock`.
 
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
-# Emits the cc rules for ONE compiled grammar inside a repo overlay BUILD file:
-# a linkshared cc_binary named `<lang>.so`, a copy_file placing it at
-# `parser/<lang>.so`, and a `<lang>_parser` filegroup the main BUILD merges.
-#
-#   archive_root : the tarball's top dir (`<repo>-<rev>`).
-#   lang         : output parser name (`go`, `typescript`, `tsx`, ...).
-#   subdir       : "" for a root grammar, else the in-repo grammar dir (ts/tsx).
-#   scanner      : True if `src/scanner.c` exists and must be compiled in.
-#   common       : True if the scanner `#include`s `../../common/scanner.h`
-#                  (ts/tsx) so `common/**` must be staged as inputs.
+# Emits one grammar's cc rules: a linkshared `<lang>.so`, its copy at `parser/<lang>.so`, and a
+# `<lang>_parser` filegroup. `subdir` is the in-repo grammar dir; `common` stages `common/**`.
 def _cc_block(archive_root, lang, subdir, scanner, common):
     src_dir = archive_root + (("/" + subdir) if subdir else "") + "/src"
     # Glob parser.c, the tree_sitter/ ABI headers, AND any grammar-private headers
@@ -124,12 +116,8 @@ def _typescript_build_file(archive_root):
             _cc_block(archive_root, "tsx", "tsx", True, True))
 
 def _yaml_build_file(archive_root):
-    # tree-sitter-yaml's scanner.c textually `#include`s a `schema.<x>.c` file
-    # (selected by the YAML_SCHEMA macro, default `core`) that sits next to it in
-    # src/. Those `.c` files must be STAGED but NOT compiled as their own
-    # translation units, so they are provided via a cc_library `textual_hdrs` dep
-    # (available on the include path yet never independently compiled), rather than
-    # placed in the cc_binary `srcs`.
+    # yaml's scanner.c `#include`s a `schema.<x>.c`, which must be staged but never compiled alone,
+    # so it comes in through a cc_library's `textual_hdrs`, not the cc_binary's `srcs`.
     src_dir = archive_root + "/src"
     return _BUILD_HEADER + """
 load("@rules_cc//cc:defs.bzl", "cc_library")
@@ -193,13 +181,8 @@ def _treesitter_parsers_impl(_module_ctx):
         ("ts_bash", "tree-sitter/tree-sitter-bash", "0c46d792d54c536be5ff7eb18eb95c70fccdb232", "698387b4d30a32672dc48d6af421a689dd7b9141d259638072d88c95245599cd", True),
         ("ts_java", "tree-sitter/tree-sitter-java", "a7db5227ec40fcfe94489559d8c9bc7c8181e25a", "7402d7b4f4f081569058d3554dad5db718a7496cc2c526c73f949e855b107487", False),
         ("ts_kotlin", "fwcd/tree-sitter-kotlin", "c4ddea359a7ff4d92360b2efcd6cfce5dc25afe6", "42f032cbc1ac701cfd27f23475673d7fa636bdc4a398887237e5fa67c212521e", True),
-        # swift's parser.c is GENERATED and NOT committed on the default branch, so
-        # this pins the `with-generated-files` branch HEAD (an immutable commit sha)
-        # which carries a committed src/parser.c + a C src/scanner.c. This is a
-        # DIFFERENT revision than the nvim-treesitter lockfile (which points at the
-        # default branch); acceptable because tree-sitter grammar ABIs are stable and
-        # we only need a compilable, ABI-compatible parser to ship (no test asserts
-        # swift highlighting).
+        # swift's parser.c is generated, so this pins a `with-generated-files` commit rather than the
+        # nvim-treesitter lockfile's; see bazel/treesitter-parsers/README.md.
         ("ts_swift", "alex-pinkus/tree-sitter-swift", "31d17fe7e818a2048c808b5c6fdc2dc792f4f5b5", "6be61819aca68710dce8a83dae147474d6c2cba37c48a84daa9f442de96f0be8", True),
     ]
     for name, repo, rev, sha256, scanner in root_grammars:

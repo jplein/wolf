@@ -1,10 +1,4 @@
-//
-//  TreeWakeBridge.swift
-//  Marshals wolf-core's file-TREE wake (fired on its tokio worker thread,
-//  carrying the firing core's per-PROJECT token) onto the AppKit main thread and
-//  asks that project to fan a COALESCED refresh out to ALL of its attached views'
-//  sidebars — the tree analog of `PickerWakeBridge`.
-//
+// Marshals the file-tree wake onto the main thread for the owning project.
 
 import AppKit
 import WolfFFI

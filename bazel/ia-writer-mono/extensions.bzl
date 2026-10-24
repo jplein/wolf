@@ -51,23 +51,16 @@ carries the reciprocal note.
 
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
-# BUMP BOTH TOGETHER: `_COMMIT` and `_SHA256` are duplicated verbatim in
-# `flake.nix`'s `iaWriterMono`, which vendors this same tarball into the Linux
-# devShell's pinned fontconfig. Changing them here alone leaves Linux on the old
-# faces with nothing failing anywhere, since each side only checks its own
-# sha256. See the bump procedure in this file's docstring.
+# Bump with flake.nix's `wolfVendoredPins`; each side checks only its own sha256.
+# crates/wolf-gnome/tests/vendored_pins.rs compares the two, reading each pin from its own line.
 _COMMIT = "f32c04c3058a75d7ce28919ce70fe8800817491b"
 
 _SHA256 = "826767eaea4ce43ccb7ca71327a5c63ac31206b99df400699e6744df6104e1b5"
 
 _ARCHIVE_ROOT = "iA-Fonts-" + _COMMIT
 
-# BUILD overlay placed at the root of the extracted tarball. `{archive_root}` is
-# the tarball's top directory (`iA-Fonts-<commit>`). The four static iA Writer
-# Mono S faces live under `<root>/iA Writer Mono/Static/` and the license at
-# `<root>/iA Writer Mono/LICENSE.md`. `copy_to_directory` remaps `iA Writer
-# Mono/Static` -> `fonts` and `iA Writer Mono/LICENSE.md` -> `fonts/LICENSE.md`
-# so the output TreeArtifact's inner dir is `fonts/`.
+# BUILD overlay for the extracted tarball; `{archive_root}` is its top directory, and
+# `copy_to_directory` remaps the faces and licence into an inner `fonts/`.
 _BUILD_FILE_TEMPLATE = """\
 load("@aspect_bazel_lib//lib:copy_to_directory.bzl", "copy_to_directory")
 

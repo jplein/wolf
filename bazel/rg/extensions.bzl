@@ -29,10 +29,8 @@ _ARM64_SHA256 = "3750b2e93f37e0c692657da574d7019a101c0084da05a790c83fd335bad973e
 
 _X86_64_SHA256 = "af7825fcc69a2afc7a7aea55fc9af90e26421d8f20fe59df32e233c0b8a231c1"
 
-# BUILD overlay placed at the root of each extracted tarball. `{archive_root}` is
-# the tarball's top directory (`ripgrep-15.2.0-<triple>`); `copy_to_directory`
-# remaps that prefix to `rg/` so the output TreeArtifact contains `rg/rg` with the
-# exec bit preserved.
+# BUILD overlay for each extracted tarball; `copy_to_directory` remaps `{archive_root}` to `rg/`,
+# preserving the exec bit.
 _BUILD_FILE_TEMPLATE = """\
 load("@aspect_bazel_lib//lib:copy_to_directory.bzl", "copy_to_directory")
 

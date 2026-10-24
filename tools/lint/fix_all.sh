@@ -1,12 +1,6 @@
 #!/usr/bin/env bash
-# Aggregate FIX launcher (template for the `fix_all` rule in clippy_fix.bzl).
-# Run via `bazel run //tools/lint:fix`. Applies all three fixers in place in the
-# developer's real checkout ($BUILD_WORKSPACE_DIRECTORY), using the rules_rust
-# downloaded toolchain (cargo/rustfmt/clippy staged as runfiles) and the host
-# Xcode swift-format (resolved via xcrun).
-#
-# NON-HERMETIC dev convenience: cargo fmt / cargo clippy --fix reach crates.io
-# (network) and the host cc toolchain.
+# Launcher template for the `fix_all` rule: rustfmt, `cargo clippy --fix`, then swift-format,
+# in place. It is not hermetic: see tools/lint/README.md#caveats
 set -euo pipefail
 
 # --- Resolve the staged cargo from the runfiles tree -------------------------
@@ -37,12 +31,8 @@ if [[ -z "${BUILD_WORKSPACE_DIRECTORY:-}" ]]; then
 fi
 cd "${BUILD_WORKSPACE_DIRECTORY}"
 
-# rustfmt comes from the SEPARATE rules_rust rustfmt toolchain (staged as
-# runfiles): its binary links the matching librustc_driver, unlike the rust
-# toolchain's bare `rustfmt`. We invoke it directly over the crate sources
-# (there is no `cargo fmt` subcommand in the downloaded toolchain). Scope to the
-# Bazel-built crates only: wolf-gnome (GTK) is a cargo-workspace member that does
-# NOT build on macOS, so `cargo clippy` must not touch it.
+# The rustfmt toolchain's binary, since the rust toolchain's links the wrong librustc_driver. With
+# no `cargo fmt`, it runs on the files of the crates Bazel builds, never GTK wolf-gnome.
 RUSTFMT_SHORT_PATH="@@RUSTFMT_SHORT_PATH@@"
 RUSTFMT=""
 if [[ -n "${RUNFILES_DIR}" && -x "${RUNFILES_DIR}/_main/${RUSTFMT_SHORT_PATH}" ]]; then

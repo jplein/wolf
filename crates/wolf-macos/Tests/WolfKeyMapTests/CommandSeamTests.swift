@@ -1,30 +1,4 @@
-//
-//  CommandSeamTests.swift
-//  Pure, headless unit tests for the AppKit-free `WolfKeyMap.CommandKind` seam.
-//
-//  These are the sibling of `PaneTreeTests`' `Orientation(ffi:)` / `FocusDir(ffi:)`
-//  discriminant coverage: a pure, display-free decode exercised with scalar inputs
-//  only — NO AppKit, NO NSMenu, NO NSMenuItem, NO live Neovim. The seam decodes the
-//  FFI command-kind `u8` (delivered in an `NSMenuItem.tag` or by a drained
-//  `FfiCommand`) into a typed `CommandKind` case.
-//
-//  DISCRIMINANT CONTRACT UNDER TEST (must match `mod command_kind` in
-//  `wolf-ffi/src/lib.rs` and the `wolf_core::Command` variant order, plan §3):
-//    newWindow = 0, closeWindow = 1, quitApplication = 2, hideApplication = 3,
-//    minimizeWindow = 4, goToFile = 5, openFile = 6, openFolder = 7,
-//    closePane = 8, newBuffer = 9, resetFontSize = 10, increaseFontSize = 11,
-//    decreaseFontSize = 12, commandPalette = 13, copy = 14, paste = 15,
-//    bufferPicker = 16, newTab = 17, preview = 18, edit = 19, terminal = 20,
-//    previewInBrowser = 21, fullWidth = 22, toggleSidebar = 23,
-//    sidebarShowProject = 24, searchInProject = 25, previewInOtherPane = 26,
-//    editInOtherPane = 27 (the range 0..27). Any out-of-range discriminant
-//    decodes to `nil`.
-//
-//  NOTE to coder: this references the pure `WolfKeyMap.CommandKind` enum the coder
-//  adds in `Sources/WolfKeyMap/CommandSeam.swift` (Foundation only, no AppKit),
-//  with a guarded `init?(ffi: UInt8)`. The cases + decode asserted below are the
-//  contract the implementation must satisfy.
-//
+// See crates/wolf-macos/Tests/WolfKeyMapTests/README.md#commandseamtestsswift
 
 import XCTest
 
@@ -83,10 +57,8 @@ final class CommandSeamTests: XCTestCase {
 
   // MARK: - out-of-range discriminants decode to nil
 
-  // The first out-of-range probe tracks the registry's high-water mark: it sits at
-  // 28 while `editInOtherPane` claims 27 (with `previewInOtherPane` = 26). Appending
-  // a command WITHOUT bumping this probe turns the new case's decode into a silent
-  // nil assertion, so it must be updated in lockstep with the enum.
+  // One past the last case (`editInOtherPane` = 27): bump it whenever a command is appended, or
+  // the new case's decode becomes a silently passing nil assertion.
   func testCommandKindOutOfRangeIsNil() {
     XCTAssertNil(CommandKind(ffi: 28), "the first out-of-range discriminant -> nil")
     XCTAssertNil(CommandKind(ffi: 255), "a far out-of-range discriminant -> nil")

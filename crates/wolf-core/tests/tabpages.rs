@@ -519,9 +519,8 @@ fn per_tabpage_cwd_including_non_current() {
         Some(canon_a.as_path()),
         "cwd_for_tabpage(T1) should be dir A while T1 is current"
     );
-    // T2's cwd now arrives via the async wholesale `wolf_tab_cwds` notification, so
-    // the T1 poll above may be satisfied by an earlier emit before T2's entry lands.
-    // Poll for it rather than reading once (was safe under the old on-demand RPC).
+    // T2's cwd arrives via the async wholesale `wolf_tab_cwds` notification, which may land after
+    // the emit that satisfied the T1 poll, so poll for it.
     poll_until(
         &waiter,
         "cwd_for_tabpage(T2) to become dir B for the NON-current tabpage",
@@ -690,9 +689,8 @@ fn win_hide_removes_window_but_keeps_grid_on_tabpage_switch() {
         },
     );
 
-    // The load-bearing dual assertion, from a SINGLE snapshot:
-    //   * WINDOW removed: W1 is absent from `windows` and no longer resolves.
-    //   * GRID kept: W1's original grid G1 is STILL a live entry in `grids`.
+    // From one snapshot: W1 is gone from `windows` and no longer resolves, while its grid G1 is
+    // still live in `grids`.
     let snap = core.read_snapshot();
     assert!(
         snap.grid_for_win(w1).is_none(),
@@ -828,18 +826,12 @@ fn a_second_tabpage_draws_no_neovim_tabline() {
     let _t1 = attach_and_first_tabpage(&core, &waiter);
     let w1 = only_window_handle(&core);
 
-    // Probe ONE is an ORDERING DEVICE first and a premise second. Its `showtabline`
-    // VALUE is deliberately not asserted here: that reading belongs to
-    // `the_captive_config_turns_showtabline_off_at_one_tabpage`, and asserting it
-    // here would put a panic back in front of assertion 4 — the masking this pair of
-    // tests exists to undo. The text is carried into every message below instead.
+    // Probe one orders the readings first and is a premise second. Its `showtabline` value is not
+    // asserted here: a panic here would mask assertion 4 (see the doc comment).
     let probe_one = tabline_probe(&core, &waiter, TABLINE_PROBE_ONE);
 
-    // --- Assertion 1 (PREMISE): the baseline really is ONE tabpage --------
-    //
-    // The expectation stops at `showtabline=` on purpose: it pins the COUNT and
-    // leaves the option's value to assertion 5. The trailing text is what keeps
-    // `tabs=1` from also matching a `tabs=10`.
+    // Assertion 1 (premise): one tabpage. Stopping at `showtabline=` pins the count alone, and the
+    // trailing text keeps `tabs=1` from matching `tabs=10`.
     let want_one_tab = format!("{TABLINE_PROBE_ONE} tabs={ONE_TABPAGE} showtabline=");
     assert!(
         probe_one.contains(&want_one_tab),
@@ -850,9 +842,8 @@ fn a_second_tabpage_draws_no_neovim_tabline() {
          \"nothing below is about `showtabline`\", not as a `showtabline` failure."
     );
 
-    // Read BOTH row counts after the probe's round trip, so this reading and the one
-    // after the second tabpage are taken at the same phase: a cmdline round trip has
-    // completed and nvim has flushed.
+    // Read both row counts after the probe's round trip, so both readings are taken at the same
+    // phase: a cmdline round trip completed and nvim flushed.
     let (global_rows_before, window_rows_before) = grid_rows(&core, w1);
 
     let t2 = core.create_tabpage(None);
@@ -871,11 +862,8 @@ fn a_second_tabpage_draws_no_neovim_tabline() {
         },
     );
 
-    // Probe TWO, the same ordering device on the far side: a full keystroke -> Ex
-    // execution -> `msg_show` -> flush round trip, so by the time it returns nvim has
-    // finished whatever redraw the new tabpage provoked. Reading the row counts before
-    // it would race the resize a tabline causes, and a race that usually loses would
-    // make assertion 4 pass most of the time.
+    // Probe two is a full keystroke-to-flush round trip, so the new tabpage's redraw has finished.
+    // Reading rows before it would race the tabline resize and let assertion 4 pass by luck.
     let probe_two = tabline_probe(&core, &waiter, TABLINE_PROBE_TWO);
 
     let w2 = only_window_handle(&core);
@@ -904,11 +892,8 @@ fn a_second_tabpage_draws_no_neovim_tabline() {
          rather than as a `showtabline` failure."
     );
 
-    // --- Assertion 4 (THE DISCRIMINATOR): the artifact itself -------------
-    //
-    // Ordered ahead of the option read below, and that is the point of the ordering:
-    // this is the row the front-end pays for, so this is the red a future revert must
-    // show.
+    // Assertion 4 (discriminator): ordered ahead of the option read, so a revert reddens on the row
+    // the front-end pays for.
     assert_eq!(
         window_rows_after, window_rows_before,
         "the editor's window grid went from {window_rows_before} rows on the first tabpage to \
@@ -924,12 +909,8 @@ fn a_second_tabpage_draws_no_neovim_tabline() {
          having moved under the second tabpage rather than as a tabline."
     );
 
-    // --- Assertion 5 (premise-guard, deliberately LAST) -------------------
-    //
-    // Under the one revert that exists this is never reached, because assertion 4
-    // reddens first — recorded in the doc table rather than papered over. What it
-    // catches on its own is the option back on with the rows NOT moving, which would
-    // mean assertion 4 had stopped being the artifact's detector.
+    // Assertion 5 (premise guard, last): catches the option back on with the rows not moving; see
+    // the doc comment's table.
     let want_off = format!("{TABLINE_PROBE_TWO} tabs={TWO_TABPAGES} showtabline={SHOWTABLINE_OFF}");
     assert!(
         probe_two.contains(&want_off),
@@ -971,9 +952,9 @@ fn a_second_tabpage_draws_no_neovim_tabline() {
 /// a buffer switch changes a background tab's files, after which it silently persists
 /// an answer that was true minutes ago.
 ///
-/// `crates/wolf-core/src/redraw.rs`'s `win_close` comment asserts the OPPOSITE ("a
-/// window in a non-current tabpage is absent from both maps by construction"). One of
-/// the two is wrong; this test is what says which.
+/// The `win_close` reasoning in notes/crates/wolf-core/src/redraw.rs.md#orphaned-nav-history
+/// depends on this: it states that a background tabpage's window is present in both maps,
+/// and this test is what pins it.
 ///
 /// ## Assertions, classified
 ///

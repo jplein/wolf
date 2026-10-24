@@ -1,34 +1,4 @@
-//
-//  DividerDragSeamTests.swift
-//  Pure, headless unit tests for the NEW `WolfKeyMap.DividerDragSeam` seam
-//  (feature plan §2). Foundation-only — no AppKit, no NSView, no live Neovim.
-//
-//  `DividerDragSeam.clampedLeftFraction(...)` maps a pointer position along the
-//  drag axis to a clamped left-child fraction for the two adjacent panes a divider
-//  governs. The clamp keeps NO pane below the minimum grid size (min columns for a
-//  vertical divider, min rows for a horizontal one), accounting for per-side pixel
-//  OVERHEAD (editor inset + statusbar). The clamp lives HERE (it needs cell size +
-//  pixel spans), NOT in the pixel-free `PaneTree`.
-//
-//  Raw fraction is `(pointerPos - pairStart) / pairSpan`. Per-side minimum pixels:
-//    * vertical:   minCols * cellWidth  + overhead
-//    * horizontal: minRows * cellHeight + overhead
-//  Clamp to `[minLeft / pairSpan, 1 - minRight / pairSpan]`, where `minLeft` uses
-//  `leadingOverhead` and `minRight` uses `trailingOverhead`. A pair too small to
-//  hold both minima yields the midpoint 0.5.
-//
-//  The tests assert the OBSERVABLE contract (the clamped pixel extent of the left
-//  and right panes equals the min-cell pixels + overhead), NOT any internal
-//  epsilon.
-//
-//  CONTRACT / SIGNATURE ASSUMPTION (test-writer report; coder implements to match):
-//    * `enum DividerDragSeam` with
-//      `static func clampedLeftFraction(
-//         pairStart: Double, pairSpan: Double, pointerPos: Double,
-//         orientation: Orientation, cellWidth: Double, cellHeight: Double,
-//         minCols: Int, minRows: Int,
-//         leadingOverhead: Double, trailingOverhead: Double) -> Double`.
-//
+// See crates/wolf-macos/Tests/WolfKeyMapTests/README.md#dividerdragseamtestsswift
 
 import XCTest
 

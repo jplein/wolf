@@ -1,13 +1,4 @@
-//
-//  CellMetricsMath.swift
-//  Pure, AppKit-/CoreText-free line-height + baseline math for the grid cell.
-//
-//  This is the headless-testable seam extracted from `CellMetrics` (plan §2 /
-//  risk 6): given a font size, a line-height percentage, and the raw font metrics
-//  (ascent/descent/leading), it computes the cell height and the vertically
-//  centered text baseline. It imports ONLY Foundation, so it lives in the
-//  Foundation-only `WolfKeyMap` module and is unit-tested without a live font.
-//
+// Pure, CoreText-free line-height and baseline math for the grid cell.
 
 import Foundation
 

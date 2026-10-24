@@ -1514,9 +1514,8 @@ impl NvimProcess {
         )
         .await;
 
-        // Reap the child: give it a bounded chance to exit on its own (stdout EOF
-        // when nvim quits); if it overruns — e.g. a WEDGED nvim that never
-        // processed `qa!` — force-kill it so shutdown never hangs.
+        // Give the child a bounded chance to exit, then force-kill it, so a wedged nvim that
+        // never processed `qa!` cannot hang shutdown.
         match tokio::time::timeout(SHUTDOWN_TIMEOUT, self.child.wait()).await {
             Ok(_status) => {}
             Err(_elapsed) => {
@@ -1605,11 +1604,8 @@ pub(crate) async fn render_source_html(
         .collect::<Vec<_>>()
         .join("\n");
 
-    // Enumerate the fenced/indented code blocks and ask the captive Neovim's
-    // treesitter to highlight each. ANY failure (RPC error, or no parser AND
-    // `highlights` query on the runtimepath for that fence's language) degrades to
-    // `None` per block, i.e. the plain render. The helper is module-level Lua and
-    // runs on every platform; the gate is per LANGUAGE, not per platform.
+    // Any failure (RPC error, or no parser and `highlights` query for that language) degrades
+    // that block to `None`, the plain render; the gate is per language, not per platform.
     let blocks = crate::markdown::code_blocks(&source);
     let highlights = if blocks.is_empty() {
         Vec::new()
@@ -1764,27 +1760,20 @@ pub async fn spawn(
     for d in [&config_home, &data_home, &state_home, &cache_home] {
         std::fs::create_dir_all(d).map_err(NvimError::StateDir)?;
     }
-    // The durable per-project swap dir must exist before nvim points `'directory'`
-    // at it. FATAL on failure: a missing 'directory' makes nvim silently fall back
-    // to its default swap location, degrading crash recovery with no visible error.
+    // Fatal on failure: a missing `'directory'` makes nvim silently fall back to its default
+    // swap location, degrading crash recovery with no visible error.
     std::fs::create_dir_all(&cfg.swap_dir).map_err(NvimError::StateDir)?;
-    // The durable spell dir must exist before init.lua points 'spellfile' into it:
-    // nvim never creates the parent of an EXPLICITLY set 'spellfile' (only of the
-    // runtimepath-derived default), so a missing parent makes `zg` fail with E484
-    // and drop the word silently. FATAL for the same reason as the swap dir.
+    // Fatal too: nvim never creates the parent of an explicitly set 'spellfile', so a missing
+    // one makes `zg` fail with E484 and silently drop the word.
     std::fs::create_dir_all(&cfg.spell_dir).map_err(NvimError::StateDir)?;
-    // The durable user parser dir (:TSInstall's install_dir): init.lua gates the
-    // whole nvim-treesitter activation on an fs_stat of the exported path, so the
-    // dir must exist before launch. FATAL like the two above.
+    // Fatal too: init.lua gates all of nvim-treesitter on an fs_stat of this `:TSInstall` dir,
+    // so it must exist before launch.
     if let Some(d) = &cfg.parsers_user_dir {
         std::fs::create_dir_all(d).map_err(NvimError::StateDir)?;
     }
 
-    // NOTE: the `-n` flag (no swap file) is DELIBERATELY omitted: it forces
-    // `'updatecount' = 0`, which disables swap files entirely — but Wolf now relies
-    // on swap files for crash recovery of unsaved edits (init.lua sets
-    // `swapfile = true` + a durable `'directory'`). Omitting `-n` keeps nvim's
-    // default `updatecount` (200) so the swap is actually written.
+    // No `-n`: it zeroes `'updatecount'` and disables the swap files crash recovery relies on.
+    // See notes/wolf-core-decisions.md#how-core-embeds-neovim
     let mut cmd = Command::new(&cfg.nvim_bin);
     cmd.arg("--embed")
         .arg("--clean")
@@ -1825,9 +1814,8 @@ pub async fn spawn(
         });
     }
 
-    // The supervisor owns the moved io-loop handle: it resolves on stdout EOF
-    // (clean OR crash). Unless the exit was intentional (`shutting_down`), that is
-    // an unexpected death — mark `Dead` and wake the front-end.
+    // The supervisor resolves on stdout EOF, clean or crash, and marks `Dead` unless
+    // `shutting_down` is set.
     let shutting_down = Arc::new(AtomicBool::new(false));
     let sup_shutting = shutting_down.clone();
     let supervisor = tokio::spawn(async move {

@@ -48,9 +48,8 @@ pub fn display_title(cwd: &str, home: &str) -> String {
         return cwd.to_string();
     }
 
-    // Rule 3: strip ONE trailing separator. `"/"` normalizes to `""`, which
-    // disables abbreviation — abbreviating every absolute path to `~/…` would be
-    // actively misleading.
+    // Rule 3: strip one trailing separator. `"/"` normalizes to `""`, which disables abbreviation:
+    // abbreviating every absolute path to `~/…` would mislead.
     let normalized_home = home.strip_suffix('/').unwrap_or(home);
     if normalized_home.is_empty() {
         return cwd.to_string();
@@ -61,9 +60,8 @@ pub fn display_title(cwd: &str, home: &str) -> String {
         return HOME_ABBREVIATION.to_string();
     }
 
-    // Rule 5: under home, on a SEGMENT boundary. Matching `normalized_home + "/"`
-    // rather than `normalized_home` is the whole point: `/Users/janet/x` shares a
-    // character prefix with `/Users/jane` but is not under it.
+    // Rule 5: under home on a segment boundary, hence `normalized_home + "/"`: `/Users/janet/x`
+    // shares a character prefix with `/Users/jane` but is not under it.
     let home_prefix = format!("{normalized_home}/");
     if let Some(rest) = cwd.strip_prefix(home_prefix.as_str()) {
         return format!("{HOME_ABBREVIATION}/{rest}");
@@ -168,9 +166,8 @@ mod tests {
                 want: "~/proj/wolf",
             },
             Case {
-                // THE most important row in this table. `/Users/janet/x` shares the
-                // CHARACTER prefix `/Users/jane` with home but is not under it, so a
-                // `starts_with(home)` implementation would render it as `~t/x`.
+                // The key row: `/Users/janet/x` shares the character prefix `/Users/jane` but is not under it,
+                // so a `starts_with(home)` implementation would render `~t/x`.
                 desc: "a SIBLING sharing a character prefix is NOT abbreviated (segment boundary)",
                 cwd: SIBLING,
                 home: HOME,
@@ -239,11 +236,8 @@ mod tests {
 
     #[test]
     fn home_is_never_read_from_the_environment() {
-        // The determinism property, made executable: `home` is injected, so an EMPTY
-        // injected home disables abbreviation no matter what `$HOME` happens to be in
-        // the process running this test. If this module ever grew a `std::env::var`
-        // fallback, this assertion is what would catch it on a developer machine whose
-        // real `$HOME` is a prefix of the cwd below.
+        // `home` is injected, so an empty home disables abbreviation whatever `$HOME` is; a
+        // `std::env::var` fallback would fail here on a machine whose `$HOME` prefixes the cwd.
         assert_eq!(
             display_title("/x", ""),
             "/x",

@@ -204,11 +204,8 @@ fn cmdline_completion_popup_lifecycle() {
             "`{FILE_OTHER}` does not share the `Fi` prefix and must NOT be a candidate; got {words:?}"
         );
 
-        // Soft / tolerant: with ext_cmdline active the popup anchors to the command
-        // line, which Neovim signals via `popupmenu_show` grid == -1 and a `col`
-        // that is a BYTE offset into the cmdline text. The exact value is
-        // environment-dependent, so we only sanity-check it when it holds rather
-        // than hard-failing (per the plan's "keep this assertion soft" note).
+        // Soft check: anchored to the cmdline (grid == -1), `col` is a byte offset into the cmdline
+        // text whose exact value is environment-dependent, so it is only sanity-checked.
         if snap.pum.grid == CMDLINE_ANCHORED_GRID {
             assert!(
                 snap.pum.col >= 0,

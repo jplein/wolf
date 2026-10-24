@@ -1,24 +1,4 @@
-//
-//  ShortcutSeamTests.swift
-//  Pure, headless unit tests for the `WolfKeyMap.ShortcutSeam` namespace.
-//
-//  These are the sibling of `PickerSeamTests.swift`: a pure, display-free seam
-//  exercised with scalar inputs only — NO NSEvent, NO window, NO AppKit, NO
-//  NSView. The seam decides whether a keystroke is the Command-N "new window"
-//  chord (plan §5). It mirrors the shape of `PickerSeam.isPickerTrigger` but
-//  matches the letter "n" instead of "o".
-//
-//  CONTRACT UNDER TEST:
-//    * ShortcutSeam.isNewWindowTrigger(charactersIgnoringModifiers:command:)
-//      -> Bool — true iff `command && firstScalar.lowercased == "n"`. Command
-//      does not mangle `charactersIgnoringModifiers`, so with Command held the
-//      field carries "n" (or "N" if Shift is also down); the predicate matches
-//      case-insensitively. An empty string (no first scalar) is false.
-//
-//  NOTE to coder: this test references the pure `WolfKeyMap.ShortcutSeam` enum
-//  the coder adds in `Sources/WolfKeyMap/ShortcutSeam.swift`. The single function
-//  signature asserted below is the contract the implementation must satisfy.
-//
+// See crates/wolf-macos/Tests/WolfKeyMapTests/README.md#shortcutseamtestsswift
 
 import XCTest
 

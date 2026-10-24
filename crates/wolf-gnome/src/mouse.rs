@@ -93,9 +93,7 @@ pub fn mouse_input(button: u32, state: gdk::ModifierType) -> Option<MouseInput> 
         ctrl: state.contains(gdk::ModifierType::CONTROL_MASK),
         shift: state.contains(gdk::ModifierType::SHIFT_MASK),
         alt: state.contains(gdk::ModifierType::ALT_MASK),
-        // Every other bit in `state` — SUPER_MASK above all, plus LOCK_MASK and the
-        // button masks — is dropped on purpose: nvim's mouse grammar is only
-        // "C-"/"S-"/"A-".
+        // Every other bit (Super, Lock, button masks) is dropped: nvim's grammar is only C-, S-, A-.
     })
 }
 
@@ -117,13 +115,10 @@ pub fn mouse_input(button: u32, state: gdk::ModifierType) -> Option<MouseInput> 
 #[must_use]
 pub fn scroll_threshold(unit: gdk::ScrollUnit, cell_h: f64) -> f64 {
     match unit {
-        // A SURFACE delta is in pixels, so one cell height is one line step — but
-        // only when that cell height is a usable number; otherwise fall through to
-        // the detent threshold rather than divide by garbage.
+        // A surface delta is in pixels, so one cell height is one line step, if that height is usable.
         gdk::ScrollUnit::Surface if cell_h.is_finite() && cell_h > 0.0 => cell_h,
-        // `gdk::ScrollUnit` is `#[non_exhaustive]` and carries `__Unknown(i32)`, so
-        // this arm is forced. Wheel, a degenerate SURFACE cell height, and any unit
-        // this build does not know about all land here.
+        // `gdk::ScrollUnit` is `#[non_exhaustive]`, so this arm is forced: wheel, a degenerate surface
+        // cell height and any unknown unit land here.
         _ => WHEEL_THRESHOLD,
     }
 }
@@ -181,18 +176,16 @@ impl ScrollAccumulator {
             return 0;
         }
 
-        // (2) Accumulate. Two finite deltas can still sum to an infinity, in which
-        // case the carry is unrecoverable — zero it rather than let a poisoned
-        // remainder kill scrolling for the rest of the session.
+        // (2) Accumulate. Two finite deltas can sum to an infinity: zero the carry rather than let a
+        // poisoned remainder kill scrolling for the session.
         self.remainder += delta;
         if !self.remainder.is_finite() {
             self.remainder = 0.0;
             return 0;
         }
 
-        // (3) Truncate TOWARD ZERO, which is what makes the reversal case
-        // symmetric (and is semantically identical to the macOS two-`while`-loop
-        // form, without its O(delta / threshold) cost).
+        // (3) Truncate toward zero, which makes reversal symmetric; it matches macOS's two-`while`-loop
+        // form without its O(delta / threshold) cost.
         let raw = (self.remainder / threshold).trunc();
         // (4) Clamp in f64 space, BEFORE the cast, so the cast is exact and in
         // range by construction.
@@ -291,18 +284,13 @@ impl PaneScroll {
     /// non-finite guards, the O(1) arithmetic, the `±MAX_STEPS_PER_EVENT` clamp
     /// and the carry are sequenced here, never re-implemented.
     pub fn steps_for(&mut self, grid: u64, delta: f64, threshold: f64) -> i32 {
-        // Record the grid BEFORE `consume` runs and UNCONDITIONALLY, so a call
-        // `consume` goes on to reject still counts as "the previous call" for the
-        // next one. That is not an accident of the ordering: a rejected call named
-        // a grid, and the carry it would have been added to belongs to a DIFFERENT
-        // grid, so keeping the old grid recorded would let that carry leak forward.
+        // Record the grid before `consume`, unconditionally: a rejected call still named a grid, and
+        // the carry it would have joined belongs to a different grid.
         if self.last_grid != Some(grid) {
             self.acc.reset();
             self.last_grid = Some(grid);
         }
-        // Every other rule — the non-finite guards, the O(1) arithmetic, the clamp
-        // and the carry — is `ScrollAccumulator`'s, sequenced here and never
-        // re-implemented.
+        // Every other rule is `ScrollAccumulator`'s, sequenced here and never re-implemented.
         self.acc.consume(delta, threshold)
     }
 }
@@ -329,7 +317,7 @@ impl PaneScroll {
 /// **If scrolling feels inverted, flip THIS line** — and then fix
 /// `scroll_direction_is_inverted_from_macos`, which exists solely to stop this
 /// mapping from being "corrected" back while cross-reading
-/// `PaneContainerView.swift:807`.
+/// `PaneContainerView.scrollWheel(with:)` in `PaneContainerView.swift`.
 #[must_use]
 pub fn scroll_steps(steps: i32) -> Option<(wolf_core::ScrollDirection, u32)> {
     // GDK dy > 0 is GDK_SCROLL_DOWN. This is the INVERSE of the macOS mapping and
@@ -415,9 +403,7 @@ mod tests {
                     .union(ModifierType::ALT_MASK),
                 expected: left(true, true, true),
             },
-            // --- Modifier bits OUTSIDE the nvim mouse grammar are ignored -------
-            // Neovim has no meta mouse modifier, so Super must not leak through as
-            // anything; Caps Lock is not a modifier the grammar knows either.
+            // Modifier bits outside nvim's mouse grammar are ignored: no meta mouse modifier, no Caps Lock.
             MouseCase {
                 desc: "primary button + Super: Super is IGNORED, not forwarded",
                 button: gdk::BUTTON_PRIMARY,
@@ -436,9 +422,7 @@ mod tests {
                 state: ModifierType::LOCK_MASK,
                 expected: left(false, false, false),
             },
-            // --- Every non-primary button is REFUSED ---------------------------
-            // Deliberate parity with macOS: no right-click menu, no middle-click
-            // paste, on either platform.
+            // Every non-primary button is refused: parity with macOS (no right-click menu, no middle paste).
             MouseCase {
                 desc: "middle button is refused",
                 button: gdk::BUTTON_MIDDLE,
@@ -1218,19 +1202,8 @@ mod tests {
         }
     }
 
-    // =========================================================================
-    // The rule `PaneScroll` exists for, stated on its own so a failure NAMES it
-    // rather than pointing at a table row.
-    //
-    // It used to live in `pane_view.rs::on_pane_scroll` — GTK glue, which needs a
-    // live display, so at the time nothing in the suite could execute it. That is
-    // the whole reason it moved: pointer input then had NO end-to-end coverage on
-    // Linux at all. It does now (see `crates/wolf-gnome/tests/README.md`, "Pointer
-    // injection: how it works and why it is built this way"), but no cage smoke can
-    // discriminate THIS rule — that would need two panes and a pointer scrolling
-    // across both — so this test remains the only thing that verifies it. If it is
-    // deleted along with the type, the rule silently becomes unverified again.
-    // =========================================================================
+    // The rule `PaneScroll` exists for, stated alone so a failure names it. No cage smoke can
+    // discriminate it (it needs two panes), so this test is its only verification.
     #[test]
     fn grid_change_discards_the_carry() {
         let mut pane = PaneScroll::new();
@@ -1329,27 +1302,8 @@ mod tests {
         }
     }
 
-    // =========================================================================
-    // READ THIS BEFORE CHANGING `scroll_steps`.
-    //
-    // The GTK scroll sign is INVERTED relative to macOS. This is not a bug and it
-    // is not a copy/paste slip from the Swift:
-    //
-    //   * AppKit: `scrollingDeltaY > 0` means "show EARLIER content", so
-    //     `crates/wolf-macos` maps a positive step count to ScrollDirection::Up.
-    //   * GDK: a smooth-scroll `dy > 0` is GDK_SCROLL_DOWN — the viewport moves
-    //     toward the END of the buffer — so `wolf-gnome` maps a positive step
-    //     count to ScrollDirection::Down.
-    //   * ScrollDirection::Down is pinned against REAL Neovim (by
-    //     `crates/wolf-ffi/tests/mouse_scroll.rs`) to strictly INCREASE
-    //     `win_viewport.topline`, which is precisely what a positive GDK `dy`
-    //     must do.
-    //
-    // If you are here because you were cross-reading `PaneContainerView.swift:807`
-    // and this looked backwards: it is SUPPOSED to look backwards. Flipping it
-    // would make GTK scrolling run the wrong way while every macOS test stayed
-    // green, because macOS never runs this code.
-    // =========================================================================
+    // The GTK scroll sign is inverted from macOS on purpose; `wolf-ffi/tests/mouse_scroll.rs` pins
+    // Down as raising topline against real Neovim. See crates/wolf-gnome/src/README.md#mousers
     #[test]
     fn scroll_direction_is_inverted_from_macos() {
         assert_eq!(

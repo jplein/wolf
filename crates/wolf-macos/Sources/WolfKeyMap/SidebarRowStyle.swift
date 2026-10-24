@@ -1,19 +1,4 @@
-//
-//  SidebarRowStyle.swift
-//  Pure, AppKit-free choices behind the file-tree sidebar's current-file mark:
-//  which file is marked, and the color one row's label is drawn in.
-//
-//  The sidebar marks the current buffer with a COLOR, and that color must not be
-//  a side effect of the row's SELECTION. AppKit tints a selected source-list
-//  label with the accent color only while the row view is emphasized — a key
-//  window whose first responder is the outline — and the sidebar outline never
-//  becomes first responder, so a selection tint holds only until the first app
-//  switch and never comes back. Resolving the color here, from the current-buffer
-//  flag alone, makes the mark independent of window focus.
-//
-//  The one case that still defers to AppKit is an emphasized selection, whose
-//  fill is the accent color itself: accent text on an accent fill is unreadable.
-//
+// Pure choice of which file the sidebar marks and the color of one row's label.
 
 import Foundation
 

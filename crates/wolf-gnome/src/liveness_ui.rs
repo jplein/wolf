@@ -290,9 +290,8 @@ pub fn restart_button_rect(overlay_w: f64, overlay_h: f64) -> (f64, f64, f64, f6
     let h = f64::from(RESTART_BUTTON_HEIGHT);
     let block_h = f64::from(OVERLAY_MESSAGE_HEIGHT) + f64::from(OVERLAY_SPACING) + h;
 
-    // Whole-result collapse: an allocation that is degenerate, or simply too
-    // small to hold the fixed block, leaves no rect that could meaningfully be
-    // named, so the whole result is zeroed rather than a per-axis partial answer.
+    // A degenerate allocation, or one too small for the fixed block, zeroes the whole result rather
+    // than giving a per-axis partial answer.
     if !overlay_w.is_finite()
         || !overlay_h.is_finite()
         || overlay_w <= 0.0
@@ -303,9 +302,6 @@ pub fn restart_button_rect(overlay_w: f64, overlay_h: f64) -> (f64, f64, f64, f6
         return (0.0, 0.0, 0.0, 0.0);
     }
 
-    // The fixed block is centred vertically; the button occupies its bottom
-    // `RESTART_BUTTON_HEIGHT`, i.e. it starts one message-height plus one gap
-    // below the block's own top.
     let block_top = (overlay_h - block_h) / 2.0;
     let x = (overlay_w - w) / 2.0;
     let y = block_top + f64::from(OVERLAY_MESSAGE_HEIGHT) + f64::from(OVERLAY_SPACING);
@@ -316,10 +312,7 @@ pub fn restart_button_rect(overlay_w: f64, overlay_h: f64) -> (f64, f64, f64, f6
 mod tests {
     use super::*;
 
-    // --- The whole input domain --------------------------------------------
-    //
-    // Several rules below are stated over EVERY input rather than over one table
-    // row, so that a failure NAMES the rule instead of quoting an index.
+    // --- The whole input domain: several rules are swept over every input so a failure names the rule.
 
     /// Every liveness state the core can report.
     const ALL_LIVENESS: [Liveness; 3] = [Liveness::Alive, Liveness::NotResponding, Liveness::Dead];
@@ -332,9 +325,7 @@ mod tests {
     /// respawn (`Ok(true)`), or it did not (`Ok(false)` or an `Err`).
     const BOTH_RESPAWN_RESULTS: [bool; 2] = [true, false];
 
-    // =========================================================================
-    // liveness_ui
-    // =========================================================================
+    // === liveness_ui ===
 
     /// One `liveness_ui` table row.
     struct LivenessCase {
@@ -434,10 +425,8 @@ mod tests {
             );
         }
 
-        // The insensitivity of the two NON-dead states to the attempt budget,
-        // stated as its own rule. A regression that made `Alive` stop painting
-        // once the cap was reached would freeze a perfectly healthy editor, and
-        // nothing else in this crate would notice.
+        // The two non-dead states ignore the attempt budget: an `Alive` that stopped painting at the cap
+        // would freeze a healthy editor, and nothing else would notice.
         assert_eq!(
             liveness_ui(Liveness::Alive, true),
             liveness_ui(Liveness::Alive, false),
@@ -504,9 +493,7 @@ mod tests {
         }
     }
 
-    // =========================================================================
-    // overlay_message
-    // =========================================================================
+    // === overlay_message ===
 
     /// One `overlay_message` table row.
     struct MessageCase {
@@ -566,9 +553,8 @@ mod tests {
             );
         }
 
-        // The two crash modes are what the user reads to tell "wait, it is coming
-        // back" apart from "it is not coming back by itself"; an identical string
-        // would make the retrying flag invisible.
+        // The two crash messages tell "it is coming back" from "it is not"; identical strings would hide
+        // the retrying flag.
         assert_ne!(
             overlay_message(OverlayMode::Crashed { retrying: true }),
             overlay_message(OverlayMode::Crashed { retrying: false }),
@@ -576,12 +562,8 @@ mod tests {
              tell an automatic restart that is still coming from one that will not come"
         );
 
-        // --- The OCR cross-satisfaction guard, made executable ---------------
-        //
-        // Smoke A asserts the banner term on a RECOVERED window; smoke B asserts
-        // the overlay term on a DWELLING crash overlay. If either term could be
-        // produced by the other's screen, each smoke could pass for the wrong
-        // reason. Both halves are pinned here rather than left as a comment.
+        // --- OCR cross-satisfaction guard: smoke A reads the banner term on a recovered window, smoke B
+        // the overlay term on a crash overlay; neither term may come from the other's screen.
         for retrying in [true, false] {
             let message = overlay_message(OverlayMode::Crashed { retrying })
                 .expect("a Crashed overlay always carries a message")
@@ -616,10 +598,8 @@ mod tests {
              for the same reason the crash messages must not"
         );
 
-        // The POSITIVE half of the stall term, without which every "must not
-        // contain {STALL_OCR_TERM}" assertion around it is idle: the stall smoke
-        // reads this word off the raised overlay, so the message it reads it from
-        // has to carry it.
+        // The positive half of the stall term, without which the "must not contain" assertions are idle:
+        // the stall smoke reads this word off the raised overlay.
         assert!(
             STALLED_MESSAGE.to_lowercase().contains(STALL_OCR_TERM),
             "the stall message ({STALLED_MESSAGE:?}) must contain {STALL_OCR_TERM:?} once \
@@ -684,9 +664,7 @@ mod tests {
         );
     }
 
-    // =========================================================================
-    // restart_outcome
-    // =========================================================================
+    // === restart_outcome ===
 
     /// One `restart_outcome` table row.
     struct OutcomeCase {
@@ -806,9 +784,7 @@ mod tests {
         }
     }
 
-    // =========================================================================
-    // reopen_order
-    // =========================================================================
+    // === reopen_order ===
 
     /// A file in the captured Tier-1 set.
     const ALPHA: &str = "/w/alpha.md";
@@ -972,9 +948,7 @@ mod tests {
         }
     }
 
-    // =========================================================================
-    // restart_button_rect
-    // =========================================================================
+    // === restart_button_rect ===
 
     /// The button's fixed width in pixels, per the contract. Written as a literal
     /// rather than derived from `RESTART_BUTTON_WIDTH` so that the table is an
@@ -1024,9 +998,8 @@ mod tests {
                 expected: (351.05, 342.0, BUTTON_W, BUTTON_H),
             },
             RectCase {
-                // x = (1029 - 320)/2 = 354.5; y = (674 - 144)/2 + 80 = 345.
-                // The allocation measured under cage during the manual sanity run,
-                // where the rendered button really did occupy this rect.
+                // x = (1029 - 320)/2 = 354.5; y = (674 - 144)/2 + 80 = 345: an allocation measured under cage,
+                // where the rendered button really occupied this rect.
                 desc: "the measured cage allocation, whose rendered button was inspected",
                 overlay_w: 1029.0,
                 overlay_h: 674.0,
@@ -1312,9 +1285,7 @@ mod tests {
         }
     }
 
-    // =========================================================================
-    // The named constants
-    // =========================================================================
+    // === The named constants ===
 
     /// Pins the documented named constants, mirroring
     /// `cursor::tests::named_constants_match_contract`.

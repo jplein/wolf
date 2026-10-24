@@ -94,9 +94,8 @@ fn is_visual_mode_tracks_v_bar_and_ctrl_v() {
 fn copy_visual_selection_yields_the_selected_text() {
     let (core, waiter, _file) = common::start_core_with_temp_md(COPY_FIXTURE);
 
-    // Anchor at the first column of the first line, then character-wise select the
-    // first word: `v` enters visual (anchored on 'W'), `e` extends to the word end
-    // (last char of COPY_WORD), giving an inclusive selection of exactly the word.
+    // Anchor at column 0 of line 1, then `v` (anchored on 'W') and `e` (to the word end) give an
+    // inclusive selection of exactly COPY_WORD.
     waiter.drain();
     core.send_input(ch('g'));
     core.send_input(ch('g'));

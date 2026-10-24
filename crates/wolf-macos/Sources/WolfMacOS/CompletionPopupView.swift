@@ -1,15 +1,4 @@
-//
-//  CompletionPopupView.swift
-//  The native completion popup (`ext_popupmenu`): a dedicated overlay `NSView`
-//  that lists the completion items vertically, highlighting the selected one,
-//  rendered directly ABOVE the command line and anchored at the cmdline byte
-//  column (OD9). A projection of the core's `Snapshot.pum` read across the FFI as
-//  an `FfiPum`.
-//
-//  Per OD2 each row shows `word` primarily with `kind` as a small trailing hint;
-//  `menu` / `info` are unused this pass. This AppKit glue is compile-verified +
-//  manual-smoke only.
-//
+// The native completion popup (`ext_popupmenu`) overlay.
 
 import AppKit
 import CoreText

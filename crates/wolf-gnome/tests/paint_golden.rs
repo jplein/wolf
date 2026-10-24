@@ -20,12 +20,6 @@ use cairo::{Context, Format, ImageSurface};
 use wolf_core::{Cell, DefaultColors, HlAttr, Rgb, Snapshot};
 use wolf_gnome::{paint, CellMetrics};
 
-// NOTE to coder: these tests read `metrics.cell_w` and `metrics.cell_h` directly,
-// so the `cell_w`/`cell_h` fields of `CellMetrics` must be `pub`. If you choose to
-// keep the fields private, expose `pub fn cell_w(&self) -> f64` / `cell_h(&self)`
-// accessors instead and adjust the two `cell_*` reads below — do not change the
-// painting contract to fit the test.
-
 // --- Deterministic test fixture dimensions / font ---------------------------
 
 /// Grid columns in the fixture snapshot.
@@ -244,9 +238,8 @@ fn paint_skips_glyph_for_empty_wide_trailing_cell() {
     let stride = surface.stride() as usize;
     let data = surface.data().expect("surface data");
 
-    // (b) Sample several INTERIOR points of the empty cell, inset from its edges
-    // so that antialiasing from the neighboring glyph ('C') cannot bleed in. Every
-    // sampled interior point must be the pure background (no ink => glyph skipped).
+    // (b) Sample interior points of the empty cell, inset so antialiasing from 'C' cannot bleed in;
+    // each must be pure background (no ink => glyph skipped).
     let fractions = [
         (0.5_f64, 0.5_f64),
         (0.5, 0.3),
@@ -364,10 +357,8 @@ fn a_larger_line_height_yields_a_taller_cell() {
         small.cell_h
     );
 
-    // 160% must be 1.6x the 100% cell, to within the rounding to a whole device
-    // pixel that both calls perform. Without this the assertion above would be
-    // satisfied by any monotonic response, including one that ignored the
-    // magnitude and merely added a constant.
+    // 160% must be 1.6x the 100% cell, to within whole-device-pixel rounding; otherwise any
+    // monotonic response, even a constant offset, passes the assertion above.
     let expected = small.cell_h * 1.6;
     let drift = (large.cell_h - expected).abs();
     assert!(
@@ -385,9 +376,8 @@ fn the_advance_width_is_independent_of_the_line_height() {
     let small = probe_metrics(FONT_FAMILY, FONT_SIZE_PT, 100.0);
     let large = probe_metrics(FONT_FAMILY, FONT_SIZE_PT, 160.0);
 
-    // Bit-equal, not approximately equal: both come from the same
-    // `approximate_char_width` for the same face at the same size, so any
-    // difference at all means the width was derived from the height.
+    // Bit-equal: both come from the same `approximate_char_width` for the same face and size,
+    // so any difference means the width was derived from the height.
     assert_eq!(
         small.cell_w, large.cell_w,
         "cell width moved with the line-height ({} at 100% vs {} at 160%). Line-height is a \
@@ -401,9 +391,8 @@ fn the_advance_width_is_independent_of_the_line_height() {
 fn the_baseline_centres_the_glyph_box_in_the_cell() {
     let m = probe_metrics(FONT_FAMILY, FONT_SIZE_PT, LINE_HEIGHT_PERCENT);
 
-    // Fixture precondition. With a cell exactly as tall as the glyph box the
-    // leftover is zero, the baseline IS the ascent, and the assertion below holds
-    // for the pre-config `baseline: ascent` too — a vacuous pass.
+    // Fixture precondition: in a cell exactly as tall as the glyph box the baseline is the ascent,
+    // and the assertion below passes vacuously.
     assert!(
         m.cell_h > m.ascent + m.descent,
         "fixture precondition: at {FONT_SIZE_PT} pt and {LINE_HEIGHT_PERCENT}% the cell ({}) must \
@@ -438,10 +427,8 @@ fn the_baseline_centres_the_glyph_box_in_the_cell() {
 fn an_unresolvable_family_still_measures_and_is_not_rewritten() {
     let missing = probe_metrics(NO_SUCH_FAMILY, SMOKE_PROBE_SIZE_PT, LINE_HEIGHT_PERCENT);
 
-    // (a) Pango substitutes rather than failing. There is no error path and no
-    // zero-metrics path to detect, which is the premise the crate's
-    // no-fallback-of-our-own decision rests on — so it is measured here rather
-    // than assumed.
+    // (a) Pango substitutes rather than failing. The crate's no-fallback-of-our-own decision
+    // rests on that, so it is measured here.
     assert!(
         missing.cell_w > 0.0 && missing.cell_h > 0.0 && missing.baseline.is_finite(),
         "measuring the unresolvable family {NO_SUCH_FAMILY:?} produced cell_w = {}, cell_h = {}, \
@@ -483,19 +470,8 @@ fn an_unresolvable_family_still_measures_and_is_not_rewritten() {
 
 #[test]
 fn the_measured_cell_height_matches_the_96_dpi_arithmetic() {
-    // `pangocairo::functions::context_get_resolution` returns -1.0 on a context
-    // created over an `ImageSurface` — measured on this host, not inferred — so
-    // `for_font`'s 96.0 dpi arm is the LIVE path on every headless run, not a
-    // defensive guard. Nothing else in the suite pins it: every other cell-metric
-    // assertion here is relative (taller than, equal to, centred within) and would
-    // hold at any dpi applied consistently.
-    //
-    // 44.0 is MEASURED for the pinned DejaVu Sans Mono at 28 pt and 118%, and is
-    // also that face's `ascent + descent` at that size. A change to it means one of
-    // two things and they need different fixes: the dpi fallback stopped firing (a
-    // context that reports a real resolution, or a changed fallback condition), or
-    // the pinned font moved (a different `FONTCONFIG_FILE`, or a nixpkgs bump of
-    // `dejavu_fonts`). Re-measure before touching the literal.
+    // The cell height is measured, and `for_font`'s 96 dpi fallback is live on every headless run.
+    // See notes/crates/wolf-gnome/tests/paint_golden.rs.md#measured-cell-height
     let m = probe_metrics(FONT_FAMILY, SMOKE_PROBE_SIZE_PT, SMOKE_PROBE_LINE_HEIGHT);
 
     assert_eq!(
@@ -509,9 +485,8 @@ fn the_measured_cell_height_matches_the_96_dpi_arithmetic() {
         m.cell_h
     );
 
-    // The property that makes the smoke suite's pixel constants hold: with the cell
-    // exactly as tall as the glyph box, `baseline - ascent` is 0.0 and
-    // `draw_glyph`'s offset moves no glyph at all.
+    // With the cell exactly the glyph box, `baseline - ascent` is 0.0 and `draw_glyph` moves no
+    // glyph, which is what makes the smoke suite's pixel constants hold.
     assert_eq!(
         m.baseline, m.ascent,
         "at the smokes' font size and line-height the cell is exactly the glyph box, so the \
@@ -560,12 +535,7 @@ fn the_natural_line_height_clamps_a_face_whose_recommended_height_is_short() {
 }
 
 // --- Text decorations: undercurl, strikethrough and the `special` colour -----
-//
-// A SECOND fixture and a second render helper, deliberately independent of
-// `fixture_snapshot` / `render_fixture`: the five cases above are calibrated
-// against a 4x2 grid at 16 pt, and widening that grid to carry decorations would
-// put every one of them at risk for nothing. Nothing below reads or modifies the
-// first fixture.
+// A second fixture, independent of `fixture_snapshot`, so the first five cases stay calibrated.
 
 /// Columns in the decoration fixture — control, underline, undercurl,
 /// strikethrough, undercurl-without-special, the leak source, and the trailing
@@ -1012,10 +982,8 @@ fn undercurl_draws_ink_below_the_glyph_box_in_the_special_colour() {
     let rows = sub_baseline_rows(&metrics, height);
     let (y0, y1) = rows;
 
-    // PREMISE, not coverage: a plain underline is what this renderer already drew
-    // before decorations existed, so ink in ITS band is what establishes that the
-    // band is aimed at the rows a decoration lands in. Without it, "no ink in the
-    // undercurl's band" would be equally explained by a mis-placed band.
+    // Premise: ink in the plain underline's band proves the band is aimed at the decoration rows;
+    // otherwise an empty undercurl band could mean a mis-placed band.
     let underline = column_pixels(&data, stride, &metrics, UNDERLINE_COL, rows);
     assert!(
         ink_count(&underline) > 0,
@@ -1093,9 +1061,7 @@ fn undercurl_and_underline_do_not_draw_the_same_thing() {
     let straight = column_pixels(&data, stride, &metrics, UNDERLINE_COL, rows);
     let wavy = column_pixels(&data, stride, &metrics, UNDERCURL_COL, rows);
 
-    // Two EMPTY bands are also identical, and would redden this case for a reason
-    // that has nothing to do with the rule. Name that cause before asserting on
-    // the difference.
+    // Two empty bands are also identical, so name that cause before asserting on the difference.
     assert!(
         ink_count(&straight) > 0 && ink_count(&wavy) > 0,
         "fixture premise: the two bands hold {} and {} inked pixels. A band with no ink means no \
@@ -1105,9 +1071,7 @@ fn undercurl_and_underline_do_not_draw_the_same_thing() {
         ink_count(&wavy)
     );
 
-    // `assert!` rather than `assert_ne!`: the two operands are hundreds of pixels
-    // and printing both twice would bury the message that says what the failure
-    // means.
+    // `assert!`, not `assert_ne!`: printing two operands of hundreds of pixels buries the message.
     assert!(
         straight != wavy,
         "the plain-underline band and the undercurl band are byte-identical over {} sampled \
@@ -1278,9 +1242,8 @@ fn a_decoration_does_not_leak_onto_the_cell_after_it() {
     let rows = sub_baseline_rows(&metrics, height);
     let (y0, y1) = rows;
 
-    // PREMISE: there is something to leak. A source that drew nothing would make
-    // a clean trailing cell prove nothing at all, and both assertions below would
-    // then be green against a build with no clear in it.
+    // Premise: there is something to leak. A source that drew nothing makes a clean trailing cell
+    // prove nothing.
     let source = column_pixels(&data, stride, &metrics, LEAK_SOURCE_COL, rows);
     let source_red = reddish_count(&source);
     assert!(
@@ -1293,10 +1256,8 @@ fn a_decoration_does_not_leak_onto_the_cell_after_it() {
         ink_count(&source)
     );
 
-    // The reference: what an undecorated cell's band holds when nothing has
-    // leaked into it. Asserted, because the ink assertion below is stated as an
-    // absolute zero and would be reading a band full of glyph antialiasing if the
-    // guard, the baseline or the cell height moved.
+    // The reference: an undecorated cell's band holds no ink. Asserted, because the zero below would
+    // read glyph antialiasing if the guard, baseline or cell height moved.
     let control = column_pixels(&data, stride, &metrics, CONTROL_COL, rows);
     let control_ink = ink_count(&control);
     assert_eq!(
@@ -1338,20 +1299,8 @@ fn a_decoration_does_not_leak_onto_the_cell_after_it() {
     );
 }
 
-// --- The face: bold and italic, switched on and back off inside one paint ----
-//
-// A THIRD fixture and a third render helper, for the reason the decoration
-// fixture gives for being a second one, plus one of its own. The cases above are
-// calibrated against a band below the baseline of a row carrying `x`, and the
-// face question is asked with whole-cell ink counts and a left edge — a different
-// glyph and a different band. Keeping the two fixtures apart also keeps the two
-// falsifiers' evidence apart: a decoration leaking forward through the decoration
-// fixture would reach face cells appended to it, so one red run would indict two
-// independent pieces of painter state at once.
-//
-// Everything else is shared: the pixel reader, the band helpers, `ink_count` and
-// the colours, which is why this fixture must keep DEFAULT_FG on DEFAULT_BG —
-// `ink_count` measures against exactly that background.
+// --- Face fixture: bold and italic; keep DEFAULT_FG on DEFAULT_BG -------------
+// See notes/crates/wolf-gnome/tests/paint_golden.rs.md#separate-face-fixture
 
 /// Columns in the face fixture — plain, bold, plain, italic, plain.
 const FACE_COLS: usize = 5;
@@ -1697,9 +1646,8 @@ fn bold_is_applied_and_then_restored_within_one_paint() {
          both sides."
     );
 
-    // The floor under direction two. The bound above is one-sided: a cell that
-    // drew NOTHING is under it too, and would report a restore that never
-    // happened.
+    // The floor under direction two: the bound above is one-sided, and a cell that drew nothing
+    // would report a restore that never happened.
     let restored_floor = plain_before * MIN_RESTORED_INK_PERCENT / 100;
     assert!(
         plain_after >= restored_floor,
@@ -1751,9 +1699,8 @@ fn italic_is_applied_and_then_restored_within_one_paint() {
     let slanted = leftmost_ink_columns(&data, stride, &metrics, ITALIC_COL, rows);
     let restored = leftmost_ink_columns(&data, stride, &metrics, PLAIN_AFTER_ITALIC_COL, rows);
 
-    // PREMISE: each cell drew a stem tall enough for a drift to mean anything. A
-    // sample of one row has a drift of 0 whatever face drew it, which would make
-    // both of the upright assertions below pass vacuously.
+    // Premise: each cell drew a stem tall enough to measure. A one-row sample drifts 0 whatever the
+    // face, so the upright assertions below would pass vacuously.
     for (col, sample) in [
         (PLAIN_BEFORE_COL, &upright),
         (ITALIC_COL, &slanted),

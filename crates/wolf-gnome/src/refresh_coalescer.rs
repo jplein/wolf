@@ -105,12 +105,8 @@ impl Default for RefreshCoalescer {
 mod tests {
     use super::*;
 
-    // Every test here drives "the trailing timer fired" BY HAND, by calling
-    // `fire` with the generation `request` handed out. Nothing sleeps, nothing
-    // reads a clock, and `REFRESH_INTERVAL`'s value is never asserted on: a
-    // constant compared against its own literal states nothing. What is asserted
-    // is the mechanism — how many fires a burst arms, and that a batch arriving
-    // after a fire arms another one.
+    // Fires are driven by hand with the generation `request` handed out; nothing sleeps or reads a
+    // clock, and `REFRESH_INTERVAL` is never asserted: a const against its literal states nothing.
 
     /// A burst of traversal-batch wakes arms exactly ONE trailing fire.
     ///

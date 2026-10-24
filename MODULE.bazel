@@ -1,22 +1,5 @@
-# Bazel module for Wolf.
-#
-# Scope (bootstrap step): build the platform-agnostic `wolf-core` Rust crate on
-# macOS using the host Xcode SDK. The C/link toolchain comes from apple_support
-# (driven by DEVELOPER_DIR -> host Xcode), rustc is downloaded by rules_rust, and
-# crate dependencies are resolved from the existing Cargo workspace via
-# crate_universe (consuming Cargo.toml / Cargo.lock).
-#
-# `wolf-gnome` is deliberately NOT given a Bazel target: it is read by cargo
-# metadata during repin but never built, so its GTK stack never enters the Bazel
-# graph. `wolf-core`'s hard rule (no GUI toolkit in its dependency tree) is
-# verified by the deps denylist query in the build docs.
-#
-# Version note: the direct pins below match the resolved dependency graph
-# (Minimal Version Selection upgrades lower pins anyway). rules_rust 0.71.2
-# requires platforms 1.1.0; apple_support 2.6.1 requires rules_cc 0.2.15.
-# apple_support 2.6.1 declares `bazel_compatibility = [">=7.4.0"]`, and
-# rules_rust 0.71.2 declares no Bazel compatibility restriction, so this set
-# builds on Bazel 8 (.bazelversion pins 8.7.0) with no rule-set re-pinning.
+# Wolf's macOS build. `wolf-gnome` deliberately has no target: repin reads its manifest only.
+# See notes/MODULE.bazel.md#module-scope-and-pins
 module(
     name = "wolf",
     version = "0.1.0",
@@ -28,39 +11,21 @@ bazel_dep(name = "platforms", version = "1.1.0")
 bazel_dep(name = "apple_support", version = "2.6.1", repo_name = "build_bazel_apple_support")
 
 # --- Swift / Apple rule sets for the macOS (AppKit) front-end ----------------
-# Highest BCR stable releases that declare Bazel-8 compatibility; their
-# apple_support floor (1.24.2 / 2.2.0) is upgraded by MVS to our pinned 2.6.1
-# (never regressing it), so the host-Xcode host-SDK cc toolchain still resolves.
-# Xcode 26 / Tahoe (macOS 26) SDK is driven by DEVELOPER_DIR (see .bazelrc).
+# Highest BCR stable releases declaring Bazel 8 support; MVS lifts their apple_support floor.
 bazel_dep(name = "rules_swift", version = "3.6.1", repo_name = "build_bazel_rules_swift")
 bazel_dep(name = "rules_apple", version = "4.5.3", repo_name = "build_bazel_rules_apple")
 bazel_dep(name = "rules_xcodeproj", version = "4.1.0")
 
 # --- Structure-preserving file assembly for bundling --------------------------
-# `copy_to_directory` assembles the extracted Neovim tarball into a single
-# TreeArtifact (`nvim/`) that rules_apple bundles at `Contents/Resources/nvim/`,
-# preserving the directory hierarchy + exec bits (needed for nested code
-# signing). 2.9.4 declares `bazel_compatibility = [">=6.0.0"]` (Bazel 8 OK) and
-# has a lean transitive graph (later 2.x split into bazel_lib/jq.bzl/yq.bzl/...,
-# which would add unnecessary modules for a build-only ruleset). It is a
-# build-time ruleset only; it never enters wolf-core's dependency tree.
+# Build-time only. 2.9.4 because later 2.x splits into extra modules (bazel_lib, jq.bzl, yq.bzl).
 bazel_dep(name = "aspect_bazel_lib", version = "2.9.4")
 
 # --- Build-time single-file copies for the app-icon bundle -------------------
-# `copy_file` re-materializes the committed `Wolf.icon.json` plus the two
-# 1024x1024 icon masters from `resources/icons/` as ONE output-root `Wolf.icon/`
-# Icon Composer bundle for //crates/wolf-macos:Wolf (rules_apple requires every
-# `app_icons` file to resolve to exactly one `*.icon` directory, so source and
-# generated files may not mix). 1.9.0 is the version MVS already resolves
-# transitively, so this direct pin changes no resolved graph.
+# `Wolf.icon/` is all generated, because rules_apple wants every `app_icons` file in one `*.icon`.
 bazel_dep(name = "bazel_skylib", version = "1.9.0")
 
 # --- C/link toolchain from the host Xcode SDK -------------------------------
-# apple_support configures a cc toolchain from the active Xcode (pinned by
-# DEVELOPER_DIR in .bazelrc :macos and the Nix darwin shellHook). With
-# --incompatible_enable_cc_toolchain_resolution (.bazelrc), this toolchain is
-# selected for C compiles/links, including rusqlite/libsqlite3-sys bundled
-# SQLite (compiled via `cc`).
+# Selected for every C compile, including rusqlite's bundled SQLite, via cc toolchain resolution.
 apple_cc_configure = use_extension(
     "@build_bazel_apple_support//crosstool:setup.bzl",
     "apple_cc_configure_extension",
@@ -102,90 +67,42 @@ crate.from_cargo(
 )
 use_repo(crate, "crates")
 
-# --- Pinned, hermetic Neovim 0.12.3 release tarballs ------------------------
-# Downloaded + sha256-verified by the //bazel/nvim module extension; assembled
-# into the `nvim/` TreeArtifact bundled into Wolf.app. See bazel/nvim/README.md.
+# --- Pinned, hermetic Neovim 0.12.3 release tarballs: see bazel/nvim/README.md --------
 nvim = use_extension("//bazel/nvim:extensions.bzl", "nvim")
 use_repo(nvim, "nvim_macos_arm64", "nvim_macos_x86_64")
 
-# --- Pinned, hermetic ripgrep 15.2.0 release tarballs ----------------------
-# Downloaded + sha256-verified by the //bazel/rg module extension; assembled into
-# the `rg/` TreeArtifact bundled into Wolf.app at Contents/Resources/rg/. Powers
-# the sidebar content search (no system `rg` required). See bazel/rg/README.md.
+# --- Pinned ripgrep 15.2.0 for the sidebar content search: see bazel/rg/README.md ---
 rg = use_extension("//bazel/rg:extensions.bzl", "rg")
 use_repo(rg, "rg_macos_arm64", "rg_macos_x86_64")
 
-# --- Vendored orlando Neovim plugin (macOS bundle only) ---------------------
-# Downloaded + sha256-verified by the //bazel/orlando module extension; assembled
-# into the `orlando/` TreeArtifact bundled into Wolf.app at
-# Contents/Resources/orlando/. Pure Lua (arch-independent), so there is a SINGLE
-# repo `orlando` (no per-arch select). See bazel/orlando/README.md.
+# --- Vendored orlando Neovim plugin (macOS bundle only): see bazel/orlando/README.md ---
 orlando = use_extension("//bazel/orlando:extensions.bzl", "orlando")
 use_repo(orlando, "orlando")
 
-# --- Vendored lighthouse.nvim colorscheme (macOS bundle only) ---------------
-# Downloaded + sha256-verified by the //bazel/lighthouse module extension;
-# assembled into the `lighthouse/` TreeArtifact bundled into Wolf.app at
-# Contents/Resources/lighthouse/. Pure Lua (arch-independent), so there is a
-# SINGLE repo `lighthouse` (no per-arch select). Unlike a plugin, a colorscheme is
-# inert on runtimepath until the captive init.lua activates it. See
-# bazel/lighthouse/README.md.
+# --- Vendored lighthouse.nvim colorscheme (macOS bundle only): see bazel/lighthouse/README.md
 lighthouse = use_extension("//bazel/lighthouse:extensions.bzl", "lighthouse")
 use_repo(lighthouse, "lighthouse")
 
-# --- Vendored JetBrains Mono font (macOS bundle only) -----------------------
-# Downloaded + sha256-verified by the //bazel/jetbrains-mono module extension;
-# assembled into the `fonts/` TreeArtifact bundled into Wolf.app at
-# Contents/Resources/fonts/ (four static desktop TTF faces + OFL.txt).
-# FontRegistration.swift registers the TTFs with CoreText so "JetBrains Mono"
-# resolves as the default grid font. DATA (arch-independent), so there is a SINGLE
-# repo `jetbrains_mono` (no per-arch select). See bazel/jetbrains-mono/README.md.
+# --- Vendored JetBrains Mono font (macOS bundle only): see bazel/jetbrains-mono/README.md ---
 jetbrains_mono = use_extension("//bazel/jetbrains-mono:extensions.bzl", "jetbrains_mono")
 use_repo(jetbrains_mono, "jetbrains_mono")
 
-# --- Vendored iA Writer Mono S font (macOS bundle only) ---------------------
-# Downloaded + sha256-verified by the //bazel/ia-writer-mono module extension;
-# assembled into the `fonts/` TreeArtifact bundled into Wolf.app at
-# Contents/Resources/fonts/ (four static iA Writer Mono S TTF faces + LICENSE.md),
-# the SAME dir as JetBrains Mono. FontRegistration.swift registers the TTFs with
-# CoreText so "iA Writer Mono S" resolves as the DEFAULT grid font. Pinned to a
-# COMMIT source tarball (no release assets upstream). DATA (arch-independent), so
-# there is a SINGLE repo `ia_writer_mono` (no per-arch select). See
-# bazel/ia-writer-mono/README.md.
+# --- Vendored iA Writer Mono S font (macOS bundle only): see bazel/ia-writer-mono/README.md ---
 ia_writer_mono = use_extension("//bazel/ia-writer-mono:extensions.bzl", "ia_writer_mono")
 use_repo(ia_writer_mono, "ia_writer_mono")
 
 # --- Vendored nvim-treesitter plugin (macOS bundle only) --------------------
-# Downloaded + sha256-verified by the //bazel/nvim-treesitter module extension;
-# assembled into the `nvim-treesitter/` TreeArtifact bundled into Wolf.app at
-# Contents/Resources/nvim-treesitter/. Pinned to the `main` branch: its markdown
-# injections are core-native / capture-based and work on pinned nvim 0.12.3,
-# unlike master's `#set-lang-from-info-string!` predicate (E5108 on every fenced
-# redraw). Pure Lua (arch-independent), so there is a SINGLE repo `nvim_treesitter`
-# (no per-arch select). Markdown treesitter highlighting + fenced-code injection
-# are ENABLED on macOS via the captive init.lua. See bazel/nvim-treesitter/README.md.
+# Pinned to `main`, whose injections work on nvim 0.12.3; see bazel/nvim-treesitter/README.md.
 nvim_treesitter = use_extension("//bazel/nvim-treesitter:extensions.bzl", "nvim_treesitter")
 use_repo(nvim_treesitter, "nvim_treesitter")
 
 # --- Vendored nvim-treesitter-textobjects plugin (macOS bundle only) --------
-# Downloaded + sha256-verified by the //bazel/nvim-treesitter-textobjects module
-# extension; assembled into the `nvim-treesitter-textobjects/` TreeArtifact bundled
-# into Wolf.app at Contents/Resources/nvim-treesitter-textobjects/. Pure Lua
-# (arch-independent), so there is a SINGLE repo `nvim_treesitter_textobjects` (no
-# per-arch select). VENDORS the plugin only — textobjects are NOT enabled. See
-# bazel/nvim-treesitter-textobjects/README.md.
+# Vendored only; textobjects are not enabled. See bazel/nvim-treesitter-textobjects/README.md.
 nvim_treesitter_textobjects = use_extension("//bazel/nvim-treesitter-textobjects:extensions.bzl", "nvim_treesitter_textobjects")
 use_repo(nvim_treesitter_textobjects, "nvim_treesitter_textobjects")
 
 # --- Vendored, host-compiled treesitter parsers (macOS bundle only) ---------
-# Downloaded + sha256-verified + HOST-COMPILED by the //bazel/treesitter-parsers
-# module extension; assembled into the `parsers/` TreeArtifact bundled into
-# Wolf.app at Contents/Resources/parsers/. Each `ts_<lang>` repo compiles a curated
-# grammar's parser.c (+scanner.c) into a signable Mach-O `parser/<lang>.so` via the
-# apple_support host cc toolchain. These parsers are VENDORED + SHIPPED and
-# ENABLED on macOS via the captive init.lua (markdown highlighting + fenced-code
-# injection). Kept in sync with the set that actually compiles
-# (drop+LOG; see bazel/treesitter-parsers/README.md). See that README for the pins.
+# The set that actually compiles; see bazel/treesitter-parsers/README.md for the pins.
 treesitter_parsers = use_extension("//bazel/treesitter-parsers:extensions.bzl", "treesitter_parsers")
 use_repo(
     treesitter_parsers,

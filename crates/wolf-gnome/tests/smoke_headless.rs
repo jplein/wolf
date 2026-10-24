@@ -137,7 +137,7 @@
 //! dead key followed by `<C-w>v`, against a CONTROL arm driving the identical chord
 //! with nothing pending, in the same launch and the same window: its evidence is the
 //! pair of `winnr('$')` counts the captive Neovim writes back, TWO for the control
-//! and ONE for the subject, which is the executable form of the `DECISIONS.md`
+//! and ONE for the subject, which is the executable form of the `notes/wolf-gnome-decisions.md`
 //! limitation that a plain `Ctrl+<letter>` press does not reach Neovim while a
 //! compose sequence is pending — a claim that otherwise rests on a deleted probe, and
 //! one that no single-armed smoke could state, since "no split" is satisfied for free
@@ -394,7 +394,7 @@
 //! No scenario sends a key, a pointer event or a capture before `wait_ready` returns.
 //! [`cage_command`] sets `WOLF_READY_FILE` and prepends [`READINESS_PRELUDE`], whose
 //! `wait_ready` polls until the app has written its own pid there — which it does
-//! once its launch windows accept keystrokes (`crates/wolf-gnome/DECISIONS.md`, "The
+//! once its launch windows accept keystrokes (`notes/wolf-gnome-decisions.md`, "The
 //! readiness file"). A launch that never gets there exits 40 after 30 s, and the
 //! app's `wolf-ready: waiting on <condition>` stderr lines name the conjunct it was
 //! stuck on. No fixed sleep stands in for this, because launch latency grows with
@@ -843,35 +843,8 @@ const PICKER_OCR: &str = "pickertarget";
 /// `Enter` opens it.
 const PICKER_QUERY: &str = "ptarget";
 
-// ---------------------------------------------------------------------------
-// Keyboard-navigation picker smoke (Up/Down move the list selection).
-//
-// This scenario proves arrow-key navigation: with TWO files both matching the
-// query, pressing `Down` once moves the list selection to the SECOND row, and
-// `Enter` then opens THAT row (not the top one).
-//
-// Deterministic row order (no MRU yet, so order is purely the rank function):
-// both files are created fresh in the temp cwd, so neither is in the MRU cache —
-// `mru_group`/`mru_rank` tie. With query `pick`, both `pick1.md` and `pick2.md`
-// score identically: the single path component (`pick1.md` / `pick2.md`) starts
-// with `pick` (+100), the word before the extension (`pick1` / `pick2`) starts
-// with `pick` (+20), and `pick` is a contiguous substring (+4) => 124 each. The
-// later keys also tie, so the lexicographic `display` tiebreak decides:
-//   - score: 124 => tie
-//   - match_start: 0 => tie
-//   - span: `pick` is contiguous, last-first => tie
-//   - display.len: `pick1.md` and `pick2.md` are equal length => tie
-//   - display lexicographic: `pick1.md` < `pick2.md` => `pick1.md` is ROW 0,
-//     `pick2.md` is ROW 1.
-// So Down (one step) selects row 1 = `pick2.md`, whose heading is `# PICKTWO`;
-// OCR must then contain `picktwo`. We also (loosely) assert OCR does NOT contain
-// `pickone`, proving the selection actually moved off the top row.
-//
-// Note: this relies on (a) the rank tiebreaks resolving these two equal matches by
-// display length then lexicographically (so `pick1.md` is row 0), and (b) `Down`
-// moving the LIST/ListBox selection rather than the SearchEntry text cursor. Both
-// hold in the current picker; if either ever stops holding, the `picktwo` OCR
-// assertion is what catches it.
+// Keyboard-navigation picker smoke. The rank tiebreak alone orders the rows: `pick1.md` is row 0.
+// See notes/crates/wolf-gnome/tests/smoke_headless.rs.md#picker-navigation-row-order
 
 /// First navigation-test markdown file; sorts BEFORE [`PICKER_NAV_FILE_B`] under
 /// the rank tiebreaks (equal-length display, lexicographically smaller), so it is
@@ -901,28 +874,8 @@ const PICKER_NAV_OCR_PRESENT: &str = "picktwo";
 /// proving navigation moved the selection off the top row before activating.
 const PICKER_NAV_OCR_ABSENT: &str = "pickone";
 
-// ---------------------------------------------------------------------------
-// Tree-sidebar population smoke (the left-hand file tree lists cwd files).
-//
-// This scenario proves the S3 tree sidebar POPULATES from the same FileSearch
-// mechanism as the picker: a distinctively-named markdown file dropped into the
-// app's cwd must appear (by FILENAME) in the left-hand tree, with no picker
-// interaction at all. We assert ONLY that the filename text renders in the
-// window (loose OCR contains), which demonstrates the long-lived FileSearch fed
-// the tree projection (`children_of`) and the ListView drew the row.
-//
-// Note: this asserts tree POPULATION only (the filename is visible in the
-// sidebar). Single-click-to-open and the current-file highlight/reveal are NOT
-// verified here — they are covered by S1 (current_file core tests), S2 +
-// `rel_path_for` pure unit tests, and manual/visual checking, because OCR cannot
-// reliably confirm a highlight color and pixel-accurate row clicking is
-// deliberately avoided (too flaky).
-//
-// Note: the gtk::Paned + tree ListView sitting to the left of the editor must not
-// crowd out the editor's own glyphs — `window_renders_typed_text_under_cage` and
-// the `picker_*_under_cage` smokes still assert OCR_WORD / PICKER_OCR render in
-// the right-hand pane, so any future change to the sidebar's width budget that
-// starves the editor pane fails those three tests, not just this one.
+// Tree-sidebar smoke: asserts population only. OCR cannot confirm a highlight and pixel-exact
+// row clicks are too flaky, so click-to-open and the highlight are left to unit tests.
 
 /// Tree-sidebar smoke markdown file dropped into the launched app's temp cwd.
 /// Its NAME is OCR-friendly and unlikely to be misread; the tree shows this
@@ -939,50 +892,8 @@ const TREE_HEADING: &str = "# TREEHEADING";
 /// the distinctive filename word (`treenode.md` contains `treenode`).
 const TREE_OCR: &str = "treenode";
 
-// ---------------------------------------------------------------------------
-// Vertical-split smoke (S3): two panes render two different files side by side.
-//
-// This scenario proves the S3 native-panes feature end to end: open file A in the
-// (single) editor pane, trigger a VERTICAL split (`<C-w>v`), open file B in the
-// new pane, and confirm BOTH files' headings render at once — i.e. the shell built
-// a second pane bound to the new nvim window/grid and painted it beside the first.
-//
-// Two distinctly-named markdown files are dropped into the app's temp cwd by the
-// caller (`pleft.md` => `# PANELEFT`, `pright.md` => `# PANERIGHT`). The OCR
-// assertion is LOOSE (contains BOTH `paneleft` AND `paneright`).
-//
-// Note (why the FILENAMES are not `paneleft.md` / `paneright.md`): they were, and
-// that made this smoke unable to fail for the reason it exists. The tree sidebar
-// renders every cwd file BY NAME, so rows reading `paneleft.md` and `paneright.md`
-// satisfied both `contains` assertions on their own — the editor panes contributed
-// nothing, and the test would have passed green with `<C-w>v` splitting nothing at
-// all. This is the same defect that let `picker_opens_and_loads_selected_file_under_cage`
-// pass while the picker demonstrably never opened (see the note on
-// [`PICKER_FILE_NAME`] for that incident). The fix is the convention the sibling
-// smokes already follow — `htop.md` => `# HTOPFILE`, `ckeep.md` => `# CLOSEKEEP` —
-// put the asserted word in the file's CONTENT and give the file a name whose
-// lowercase does not contain it, so only a rendered BUFFER can satisfy the
-// assertion. Neither assertion nor either OCR term changed: this strengthens the
-// test, it does not weaken it.
-//
-// Note (the `<C-w>v` chord): the scenario sends the window-command chord as
-// `wtype -M ctrl -k w -m ctrl` (hold Ctrl, tap w, release Ctrl) followed by
-// `wtype -k v`, which is what the pinned wtype delivers and what the init.lua
-// keymap expects (S2 wired <C-w>v -> vsplit). The chord delivery is isolated to
-// those two lines; nothing else in the scenario depends on how it is sent.
-//
-// Note (OCR width): both files are opened at WOLF_FONT_PT=28 (matching the other
-// smokes). Two panes SIDE BY SIDE halve the per-pane width, so 28pt glyphs in each
-// pane are near tesseract's legibility floor. If OCR ever misses on width alone
-// (headings clipped/illegible) — NOT on a real rendering bug — a wider window
-// and/or a smaller WOLF_FONT_PT for THIS test are the robustness knobs. The
-// assertion stays loose (contains) either way.
-//
-// Note (cmdline visibility): this relies on the ★ S3 cmdline strip — the typed
-// `:e <file><CR>` Ex-commands live on grid 1, which is rendered as the bottom
-// command strip so the typed text takes effect and is visible. A failure where
-// `:e` does not open the files points at the grid-1 strip or at nvim_input not
-// reaching the cmdline.
+// Vertical-split smoke. Fixture names must not contain the heading words (see `PICKER_FILE_NAME`).
+// See notes/crates/wolf-gnome/tests/smoke_headless.rs.md#split-pane-smokes
 
 /// Vertical-split smoke: file opened in the FIRST (left) pane.
 ///
@@ -1012,31 +923,8 @@ const VSPLIT_HEADING_RIGHT: &str = "# PANERIGHT";
 /// Lowercased substring OCR must find for the RIGHT pane's file.
 const VSPLIT_OCR_RIGHT: &str = "paneright";
 
-// ---------------------------------------------------------------------------
-// Horizontal-split smoke (S3): two panes render two different files STACKED.
-//
-// Mirror of the vertical-split smoke, but for a HORIZONTAL split (`<C-w>s`): open
-// file A in the (single) editor pane, trigger a horizontal split, open file B in
-// the new pane, and confirm BOTH headings render at once — i.e. the shell built a
-// second pane bound to the new nvim window/grid and painted it ABOVE/BELOW the
-// first (stacked, sharing the full editor width).
-//
-// Two distinctly-named markdown files are dropped into the app's temp cwd by the
-// caller (`htop.md` => `# HTOPFILE`, `hbot.md` => `# HBOTFILE`). The OCR assertion
-// is LOOSE (contains BOTH `htopfile` AND `hbotfile`).
-//
-// Note (the `<C-w>s` chord): the scenario sends the window-command chord as
-// `wtype -M ctrl -k w -m ctrl` (hold Ctrl, tap w, release Ctrl) followed by
-// `wtype -k s`, exactly mirroring the vertical-split smoke's `<C-w>v`, and matching
-// what the init.lua keymap expects (S2 wired <C-w>s -> horizontal split). Chord
-// delivery is isolated to those two lines.
-//
-// Note (OCR height): both files are opened at WOLF_FONT_PT=28 (matching the other
-// smokes). Two panes STACKED halve the per-pane HEIGHT, so each pane has fewer rows
-// for tesseract to work with. If OCR ever misses on height alone (a heading
-// clipped/illegible) — NOT on a real rendering bug — a taller window and/or a
-// smaller WOLF_FONT_PT for THIS test are the robustness knobs. The assertion stays
-// loose (contains) either way.
+// Horizontal-split smoke: the vertical-split smoke with the two panes stacked.
+// See notes/crates/wolf-gnome/tests/smoke_headless.rs.md#split-pane-smokes
 
 /// Horizontal-split smoke: file opened in the FIRST (top) pane.
 const HSPLIT_FILE_TOP: &str = "htop.md";
@@ -1058,27 +946,8 @@ const HSPLIT_HEADING_BOTTOM: &str = "# HBOTFILE";
 /// Lowercased substring OCR must find for the BOTTOM pane's file.
 const HSPLIT_OCR_BOTTOM: &str = "hbotfile";
 
-// ---------------------------------------------------------------------------
-// Focus-move smoke (S3): `<C-w>v` then `<C-w>h` returns focus to the LEFT pane,
-// where a typed marker lands.
-//
-// This scenario exercises the PURE focus-move intent end to end (decision D4):
-// open file A in the (single) editor pane, vertical-split (`<C-w>v`) which leaves
-// focus in the NEW (right) pane, open file B there, then move focus back LEFT with
-// `<C-w>h`. With focus on the left pane we enter insert mode and type a distinctive
-// marker (`iZZLEFT<Esc>`); the marker lands in WHICHEVER pane is focused.
-//
-// Assertions (LOOSE): OCR contains `zzleft` (the insert happened) AND still
-// contains BOTH `focusone` and `focustwo` (the split persisted across the focus
-// move and marker insert).
-//
-// Note: this verifies the focus-move PLUMBING end to end (chord -> FocusDir intent
-// -> shell neighbor -> nvim_set_current_win -> keys route to the refocused window).
-// It deliberately does NOT pixel-verify WHICH pane received the marker — positional
-// OCR (proving `zzleft` sits in the LEFT pane's column next to `focusone`) is too
-// fragile to assert here. The pure `layout::neighbor` unit tests cover the geometry
-// of which pane is the left neighbor; this smoke proves the wiring fires and the
-// layout survives.
+// Focus-move smoke: proves the chord reaches `nvim_set_current_win`, not which pane got the
+// marker; positional OCR is too fragile, and `layout::neighbor` unit tests cover the geometry.
 
 /// Focus-move smoke: file opened in the FIRST (left) pane.
 const FOCUS_FILE_LEFT: &str = "fone.md";
@@ -1108,23 +977,8 @@ const FOCUS_MARKER: &str = "ZZLEFT";
 /// the focused buffer.
 const FOCUS_OCR_MARKER: &str = "zzleft";
 
-// ---------------------------------------------------------------------------
-// Close-pane smoke (S3): `<C-w>c` closes the focused pane; the survivor reclaims
-// the full editor width.
-//
-// This scenario proves close end to end (decision D4 — close is PERFORMED by nvim
-// and observed by the shell via the `win_close` redraw event, no intent variant):
-// open file A in the (single) editor pane, vertical-split (`<C-w>v`) which focuses
-// the NEW (right) pane, open file B there, then close the focused (right) pane with
-// `<C-w>c`. The right pane disappears and the left (survivor) reclaims the width.
-//
-// Assertions: OCR contains `closekeep` (the survivor renders) and does NOT contain
-// `closegone` (the closed pane is gone). The NOT-contains assertion is load-bearing
-// — it is the only thing that distinguishes "the pane closed" from "nothing
-// happened" — and is well-founded: after `:e cgone.md` nvim's cmdline toast shows
-// the FILENAME (`cgone.md`), whose lowercase does not contain the HEADING word
-// `closegone`. If it ever fires, that is a finding to diagnose from the retained
-// PNG, not an assertion to loosen.
+// Close-pane smoke. The not-contains on `closegone` is the only proof the pane closed; the `:e`
+// toast shows `cgone.md`, which cannot satisfy it. A failure is a finding, not a loosening.
 
 /// Close-pane smoke: file opened in the FIRST (left) pane — the SURVIVOR.
 const CLOSE_FILE_KEEP: &str = "ckeep.md";
@@ -1146,36 +1000,8 @@ const CLOSE_HEADING_GONE: &str = "# CLOSEGONE";
 /// Lowercased substring OCR must NOT find: the closed pane's file.
 const CLOSE_OCR_GONE: &str = "closegone";
 
-// ---------------------------------------------------------------------------
-// Three-pane regression smoke (S3 n-ary frame): three files stay visible at once.
-//
-// This is the regression for the 3-pane bug (architect's N-ARY frame redesign):
-// open file A, vertical-split (`<C-w>v`) and open file B in the new RIGHT pane
-// (A|B), focus back LEFT (`<C-w>h`), then vertical-split AGAIN and open file C in
-// the new sub-pane. Under the n-ary model this flattens into ONE row of three
-// equal columns [A, C, B]; the OLD binary always-nest model collapsed the pre-
-// existing RIGHT pane (B) to ~0 width, blanking file B.
-//
-// Three distinctly-named markdown files are dropped into the app's temp cwd by the
-// caller (`tri_a.md` => `# TRIAONE`, `tri_b.md` => `# TRIBTWO`, `tri_c.md` =>
-// `# TRICTHREE`). The OCR assertion is LOOSE (contains ALL THREE: `triaone` AND
-// `tribtwo` AND `trictthree`). The load-bearing one is `tribtwo` — the right pane B
-// that the pre-n-ary binary model blanked.
-//
-// This is the regression guard for the n-ary frame model, which HAS landed. Before
-// it, the always-nest binary model collapsed the pre-existing right pane B to ~0
-// width and blanked file B; `PaneTree::split`'s same-orientation flatten plus
-// `pane_view::install_paned_position` (which re-applies the proportional divider on
-// EVERY `max-position` notify, not one-shot) fixed it. This test must PASS. The
-// chords (`<C-w>v`, `<C-w>h`) and `:e <file><CR>` exactly mirror the vsplit/focus
-// smokes.
-//
-// Note (OCR width): three side-by-side panes split the editor width into thirds, so
-// 28pt glyphs in each ~third-width pane can be too narrow for tesseract to read all
-// three headings. If OCR misses on WIDTH alone (headings clipped/illegible) — NOT on
-// a layout regression — the window size and/or WOLF_FONT_PT for THIS test are the
-// robustness knobs to turn. Diagnose from the retained PNG first. The assertion is
-// deliberately loose (contains) and must stay; `tribtwo` is the load-bearing one.
+// Three-pane regression smoke: `tribtwo` is load-bearing, as binary nesting would blank pane B.
+// See notes/crates/wolf-gnome/tests/smoke_headless.rs.md#split-pane-smokes
 
 /// Three-pane smoke: file opened FIRST (becomes the left pane).
 const TRI_FILE_A: &str = "tri_a.md";
@@ -1208,33 +1034,8 @@ const TRI_HEADING_C: &str = "# TRICTHREE";
 /// Lowercased substring OCR must find for the third (middle) pane's file.
 const TRI_OCR_C: &str = "tricthree";
 
-// ---------------------------------------------------------------------------
-// Empty-state smoke: no project open => the "Open Folder…" status page renders.
-//
-// This scenario proves the launch decision end to end. `workspace::launch_decision`
-// returns `EmptyState` when the process cwd IS the home directory (the
-// desktop-launcher shape), so the fixture simply points BOTH at the same fresh
-// temp dir: `cage_command`'s `current_dir` plus this smoke's own `.env("HOME",
-// &cwd)`. That fires the production rule with no test-only env var, and keeps every
-// remaining `$HOME`-derived path inside the temp dir too. (`state_dir` is no longer
-// one of them: `cage_command` pins it with `WOLF_STATE_DIR`, which `state_dir()`
-// resolves ahead of anything `$HOME`-derived, so the MRU sqlite and the swap dir land
-// in the cwd's `-state` sibling — see `smoke_state_dir`.)
-//
-// `cage_command` now sets a DEFAULT `HOME` of its own — the cwd's parent, which pins
-// every other smoke's header-bar title to the constant `~/project` — and this smoke
-// deliberately overrides it. The override is what makes the smoke mean anything: with
-// the default, `cwd != home` and the app would open a `Folder`, so the status page
-// would never be built. It is chained after `cage_command`, so it wins.
-//
-// No keyboard interaction at all: the `gtk::FileDialog` the button opens cannot be
-// driven under `cage` (there is no portal backend) and is deliberately NOT asserted
-// — this smoke covers the empty state's PRESENTATION.
-//
-// The scenario writes NO fixture files. The sidebar is hidden in the empty state,
-// so sidebar filler density is irrelevant here; the asserted text is the
-// `adw::StatusPage`, which is theme-font, dark-on-light and large — the opposite of
-// the sparse light-on-dark editor grid that made `SIDEBAR_FILLER_COUNT` necessary.
+// Empty-state smoke: `HOME` is set to the cwd, chained after `cage_command` to beat its default.
+// See notes/crates/wolf-gnome/tests/smoke_headless.rs.md#empty-state-smoke
 
 /// Lowercased substring OCR must find to prove the empty state rendered.
 ///
@@ -1244,22 +1045,8 @@ const TRI_OCR_C: &str = "tricthree";
 /// chances to match rather than one.
 const EMPTY_STATE_OCR: &str = "folder";
 
-// ---------------------------------------------------------------------------
-// New-untitled-buffer smoke: Ctrl+Shift+N replaces the open file with a fresh
-// untitled Markdown buffer.
-//
-// This proves the accelerator -> gio action -> `InputEvent::NewBuffer` path (which
-// does NOT go through the command queue: the accelerator activates the action
-// directly). Open a known file, fire the chord, then type a distinctive marker and
-// park the cursor off its row; the marker must render while the previous file's
-// heading must NOT.
-//
-// The NOT-contains assertion is load-bearing — it is the only thing that
-// distinguishes "a new buffer replaced the old one" from "nothing happened" — and
-// it is well-founded for the same reason `close_pane_leaves_one_under_cage`'s is:
-// after `:e nbase.md` nvim's cmdline toast shows the FILENAME (`nbase.md`), whose
-// lowercase does not contain the HEADING word `newbufbase`, and the sidebar row
-// shows that same filename. The filename is deliberately UNLIKE the heading word.
+// New-untitled-buffer smoke. The not-contains on `newbufbase` is the only proof of replacement,
+// and `nbase.md` is unlike it so neither the sidebar nor the `:e` toast can satisfy it.
 
 /// New-buffer smoke: the file opened BEFORE the chord (the one that must vanish).
 const NEWBUF_FILE: &str = "nbase.md";
@@ -1282,58 +1069,8 @@ const NEWBUF_MARKER: &str = "ZZFRESH";
 /// received the typed text.
 const NEWBUF_OCR_PRESENT: &str = "zzfresh";
 
-// ---------------------------------------------------------------------------
-// Command-palette smoke: Ctrl+Shift+P opens the palette, a typed query narrows it
-// to ONE row, and Enter runs that row's command.
-//
-// This proves the whole palette path in one shot: the accelerator -> `gio` action ->
-// `UiAction::OpenCommandPalette` -> the overlay maps and takes keyboard focus -> the
-// search entry ranks `COMMAND_SPECS` -> Enter records the row's MRU key, closes the
-// overlay, and hands the command to the shell's `Command -> UiAction` funnel.
-//
-// It is shaped exactly like the new-untitled-buffer smoke above, and for the same
-// reason: the command the palette runs is `NewBuffer`, so "the palette really
-// dispatched something" is observable as the base file's heading DISAPPEARING from
-// the capture. The chord differs (Ctrl+Shift+P, not Ctrl+Shift+N) and the route
-// differs (through the palette's ranked list, not straight to the action), which is
-// what makes this a separate smoke rather than a duplicate.
-//
-// ## Why the fixture NAME and the asserted TERMS are deliberately unlike
-//
-// The tree sidebar renders every cwd entry by name and nvim's `:e` echoes the
-// filename, so a fixture named after an asserted term satisfies that assertion
-// whether or not the feature did anything — the permanent silent pass documented on
-// `PICKER_FILE_NAME` and `SIDEBAR_FILLER_FILES`. `PALETTE_FILE` is therefore
-// `pbase.md` while the term asserted ABSENT is the heading word `palcmdbase`: the
-// filename's lowercase does not contain it, so neither the sidebar row nor the `:e`
-// toast can keep assertion 3 green once the buffer really has been replaced.
-// `restore_fixture_names_cannot_satisfy_their_own_assertions` re-checks that
-// mechanically, in both directions, because this comment and the assertion it
-// protects sit thousands of lines apart.
-//
-// ## Why the query is DETERMINISTIC — it is an ORDER, not a uniqueness
-//
-// The query does NOT narrow the list to one row, and no query can. `score_entry`
-// matches a term as a case-insensitive SUBSEQUENCE of the row's label and `New` is a
-// PREFIX of `New Window`, so every query matching one matches the other — the same
-// shape `prv` has against `Preview` / `Preview in Browser`. Both commands are
-// DISPATCHED, so the palette's classification filter removes neither: the list this
-// smoke sees really holds two actionable rows (`New Tab` is the one the filter
-// drops).
-//
-// What makes it deterministic is the TIE-BREAK. `rank_matches` sorts on
-// `(mru_group, mru_rank, Reverse(score), match_start, span, len, display)`; for the
-// term `new` the two rows tie on the first five and separate at `len` — 3 characters
-// against 10 — so the shorter title wins and `restored_index` preselects it. One MRU
-// state inverts that, since `mru_group` leads the key: a command MRU holding
-// `new_window` would put New Window on top and Enter would open a second WINDOW.
-// The smoke is safe from it only because its per-run `WOLF_STATE_DIR` leaves
-// `command-mru.sqlite` empty and nothing but a palette activation writes that store.
-//
-// Both halves — the ranking and the inversion — are pinned executably by
-// `palette::tests::palette_rows_query_new_ranks_the_new_buffer_row_first` rather
-// than left as prose here, because a screenshot can neither count palette rows nor
-// read their order.
+// Command-palette smoke: Enter runs New Buffer only because the tie-break ranks it first.
+// See notes/crates/wolf-gnome/tests/smoke_headless.rs.md#palette-smoke-query-order
 
 /// Command-palette smoke: the file opened BEFORE the chord (the one that must
 /// vanish when the palette runs New).
@@ -1370,18 +1107,8 @@ const PALETTE_QUERY: &str = "new";
 /// this key can only have come from the palette running the row.
 const PALETTE_MRU_KEY: &str = "new_buffer";
 
-// ---------------------------------------------------------------------------
-// `:q` smoke: the Ex command closes the focused PANE (not the window).
-//
-// `runtime/nvim/init.lua`'s `do_quit` closes the pane with `nvim_win_close` when
-// more than one window is open, and the shell observes that through the `win_close`
-// redraw event exactly as it does for `<C-w>c`. So this mirrors `CLOSE_SCENARIO`
-// step for step and swaps only the closing chord for `:q<CR>`.
-//
-// Assertions: OCR contains `quitkeep` (the survivor renders) and does NOT contain
-// `quitgone` (the closed pane is gone). Same soundness argument as the `<C-w>c`
-// smoke: after `:e qgone.md` the cmdline toast shows the FILENAME, whose lowercase
-// does not contain the HEADING word `quitgone`.
+// `:q` smoke: `do_quit` closes the focused pane; mirrors `CLOSE_SCENARIO` with `:q<CR>`.
+// `qgone.md` is unlike the heading word `quitgone`, so only a rendered buffer satisfies it.
 
 /// `:q` smoke: file opened in the FIRST (left) pane — the SURVIVOR.
 const QUIT_FILE_KEEP: &str = "qkeep.md";
@@ -1403,32 +1130,8 @@ const QUIT_HEADING_GONE: &str = "# QUITGONE";
 /// Lowercased substring OCR must NOT find: the closed pane's file.
 const QUIT_OCR_GONE: &str = "quitgone";
 
-// ---------------------------------------------------------------------------
-// Ctrl+Shift+W close-pane smoke: the ACCELERATOR closes the focused pane.
-//
-// This is the only end-to-end coverage of `UiAction::ClosePane`. The two sibling
-// close smokes exercise different halves of the stack and neither touches this
-// path: `close_pane_leaves_one_under_cage` sends `<C-w>c`, and
-// `colon_q_closes_focused_pane_under_cage` sends `:q` — both are performed by
-// NEOVIM and merely observed by the shell through the `win_close` redraw event.
-// The chord instead travels the FRONT-END path: the capture-phase
-// `EventControllerKey` -> `actions::action_for_key` -> `win.close-pane` ->
-// `UiAction::ClosePane` -> `InputEvent::ClosePane` -> nvim's `:close`. Only the
-// last step is shared, so a break anywhere in the action namespace, the chord
-// matcher or the shell's dispatch shows up here and nowhere else.
-//
-// It otherwise mirrors `CLOSE_SCENARIO` step for step and swaps only the closing
-// chord: open file A in the (single) pane, vertical-split (`<C-w>v`, which focuses
-// the new RIGHT pane), open file B there, then fire Ctrl+Shift+W.
-//
-// Assertions: OCR contains `chordkeep` (the survivor renders) and does NOT contain
-// `chordgone` (the closed pane is gone). The NOT-contains assertion is
-// load-bearing — it is the only thing separating "the pane closed" from "the chord
-// did nothing" — and it is sound for the same reason the sibling smokes' are: the
-// FILENAMES (`wkeep.md` / `wgone.md`) deliberately share no word with the HEADINGS,
-// so neither the sidebar rows nor nvim's `:e` toast can satisfy either assertion.
-// Its own fixture names and OCR terms are used rather than the `:q` smoke's, so a
-// failure names exactly one smoke.
+// Ctrl+Shift+W smoke: the only end-to-end coverage of `UiAction::ClosePane`, the front-end path
+// the `<C-w>c` and `:q` smokes bypass. Its own names and terms keep a failure to one smoke.
 
 /// Ctrl+Shift+W smoke: file opened in the FIRST (left) pane — the SURVIVOR.
 const CHORD_CLOSE_FILE_KEEP: &str = "wkeep.md";
@@ -1451,19 +1154,8 @@ const CHORD_CLOSE_HEADING_GONE: &str = "# CHORDGONE";
 /// Lowercased substring OCR must NOT find: the closed pane's file.
 const CHORD_CLOSE_OCR_GONE: &str = "chordgone";
 
-// ---------------------------------------------------------------------------
-// Click-then-close focus-wedge smoke: fixtures.
-//
-// The two files exist so the smoke can (a) put a CLICKABLE pane on the left, (b)
-// close that same pane, and (c) corroborate with OCR that the close really
-// happened. The load-bearing assertions are the two `ALIVE*` readback files; the
-// OCR pair is corroboration, not the proof.
-//
-// Both obey the file-naming convention the sibling close smokes follow: a
-// fixture's NAME must not contain the word its own assertion needs. After
-// `:e zclick.md` Neovim's toast and the sidebar row both show `zclick.md`, whose
-// lowercase contains neither `wedgeclick` nor `wedgestay`, so only a rendered
-// BUFFER can satisfy either assertion.
+// Click-then-close focus-wedge fixtures. The `ALIVE*` readbacks are the proof; OCR corroborates.
+// Neither name contains `wedgeclick` or `wedgestay`, so only a rendered buffer matches.
 
 /// Wedge smoke: file opened FIRST, so it ends up in the LEFT pane. This is the
 /// pane the smoke CLICKS and then CLOSES.
@@ -1496,22 +1188,8 @@ const WEDGE_ALIVE_MARK_1: &str = "ALIVE1";
 /// close. Its absence IS the click-then-close focus wedge.
 const WEDGE_ALIVE_MARK_2: &str = "ALIVE2";
 
-// ---------------------------------------------------------------------------
-// Crash / restart smokes: fixtures, OCR terms and the failing-respawn wrapper.
-//
-// Two smokes share this block:
-//
-//  * `nvim_crash_recovers_and_reopens_the_file_under_cage` (keyboard only) —
-//    SIGKILLs the captive Neovim and asserts the app auto-restarts it, reopens the
-//    Tier-1 file set with the ACTIVE path last, recovers the UNSAVED edit from the
-//    swap file, flashes the banner, and holds the pane grid at its pre-crash size.
-//  * `crash_overlay_and_restart_button_recover_under_cage` (pointer) — makes the
-//    respawn FAIL so the overlay dwells, asserts the overlay is up and OPAQUE, then
-//    clicks the "Restart Neovim" button and asserts a real recovery.
-//
-// The FOUR OCR terms below are the only new ones this unit adds, and each is
-// listed in `ASSERTED_OCR_TERMS` so
-// `sidebar_filler_names_cannot_satisfy_any_smoke_assertion` guards it.
+// Crash and restart smokes: shared fixtures, OCR terms and the failing-respawn wrapper.
+// Each OCR term is in `ASSERTED_OCR_TERMS`, so the sidebar-filler guard covers it.
 
 /// Crash-smoke fixture file, dropped into both smokes' temp cwd.
 ///
@@ -1790,55 +1468,8 @@ fn restart_fixture_body() -> String {
     body
 }
 
-// ---------------------------------------------------------------------------
-// Buffer-picker smokes: fixtures, the query, and the MRU-order readback.
-//
-// Ctrl+Shift+E snapshots the captive Neovim's listed buffers, ranks them against
-// the typed query, and `Enter` switches the active window to the ranked row's
-// buffer. Three files are opened in a known order so the picker's list has a known
-// shape, and the smoke then types a query that matches exactly ONE of them.
-//
-// ## TWO smokes share this one fixture set, and pull it in opposite directions
-//
-// `buffer_picker_chord_switches_to_the_queried_buffer_under_cage` types
-// `BUFPICK_QUERY` and asserts the TARGET's heading is on screen and the PRESELECT's
-// is not. `buffer_picker_bare_enter_switches_to_the_previous_buffer_under_cage`
-// types nothing at all and asserts the exact opposite for those two terms, plus the
-// absence of the CURRENT file's heading.
-//
-// That opposition is what makes the pair discriminating rather than either alone.
-// `BUFPICK_OCR_ABSENT` is asserted PRESENT by the bare-Enter smoke, so a green run
-// of it is direct evidence that the term is producible on this page at all — and a
-// green run of the query smoke, with the same three fixtures in the same cwd, is
-// direct evidence that no sidebar row, no `:e` echo and no header-bar segment
-// produces it on its own. Neither smoke has to argue that from prose.
-//
-// ## Why THREE files and not two
-//
-// `buffer_picker::initial_selection` preselects ROW 1 — the most-recently-used
-// OTHER buffer — so with two files the target would BE the preselected row and a
-// picker that ignored the typed query entirely would still activate it. The query
-// smoke would pass permanently while proving nothing about filtering, and the
-// bare-Enter smoke's must-be-absent target term would name the row it expects to
-// land on. The third file pushes the target to index 2 or later, which is what
-// makes the query the only thing that can select it. That premise is not assumed:
-// each scenario reads the real `getbufinfo()` order back out of Neovim and the Rust
-// side asserts it (see `BUFPICK_READBACK_NAME`), and the same arithmetic is pinned
-// headlessly by
-// `buffer_picker::tests::buffer_rows_for_the_smoke_query_select_exactly_the_target`.
-//
-// ## Why the fixture NAMES and the asserted TERMS are deliberately unlike
-//
-// The tree sidebar renders every cwd entry by name and nvim's `:e` echoes the
-// filename, so a fixture named after an asserted term satisfies that assertion
-// whether or not the feature did anything — the permanent silent pass documented
-// on `PICKER_FILE_NAME`. The two vocabularies here are therefore disjoint by
-// construction: the files are `bp*` and the asserted words are `bufpick*`, so the
-// QUERY matches the file's NAME while the ASSERTION reads the file's CONTENT. All
-// four filenames are registered in `RELAUNCH_FIXTURE_NAMES` — once each, since the
-// two smokes share them and a duplicate row would trip that guard's own
-// distinct-names check — and all THREE terms in `ASSERTED_OCR_TERMS`, so the three
-// mechanical guards prove that rather than leaving it to this comment.
+// Buffer-picker fixtures: three files, so the queried target is never the preselected row 1.
+// See notes/crates/wolf-gnome/tests/smoke_headless.rs.md#buffer-picker-fixtures
 
 /// Buffer-picker smoke: the file opened FIRST, and the one [`BUFPICK_QUERY`] must
 /// select. Opened first, so it is the OLDEST of the three by `lastused` and lands
@@ -1941,44 +1572,8 @@ const BUFPICK_QUERY: &str = "bpzulu";
 /// asserting on whichever row the collision happened to promote.
 const BUFPICK_READBACK_NAME: &str = "bp_buffers.txt";
 
-// ---------------------------------------------------------------------------
-// Project-search smoke: the fixtures, the query, and the cursor readback.
-//
-// Ctrl+Shift+F opens the project-search overlay. The first Enter starts one
-// ripgrep run over the working directory; the second activates the selected row,
-// which sends `WolfCore::open_at(path, line, col)`. What separates this from every
-// other overlay in the crate is that a result row is a LOCATION, not a file: the
-// editor must land on the matching LINE and COLUMN, not merely on the right file.
-//
-// ## Why the readback carries three values and OCR carries two
-//
-// A screenshot cannot answer "did the cursor land at line 9, column 15". It can
-// only answer "is this file's text on screen", which an `:edit` with no cursor
-// placement satisfies just as well. So the scenario has the captive Neovim write
-// `expand('%:t')`, `line('.')` and `col('.')` in ONE `printf`, and the OCR pair is
-// corroboration that the pane really re-rendered rather than the assertion itself.
-// The line and column are the discriminators, and they are the reason the fixture
-// puts its match below line 1 and past column 1.
-//
-// ## Why the fixture NAMES and the asserted TERMS are deliberately unlike
-//
-// The same rule as every sibling, documented on `PICKER_FILE_NAME`: the tree
-// sidebar renders every cwd entry by name and nvim's `:e` echoes the filename, so
-// a fixture named after an asserted term satisfies that assertion whether or not
-// the feature did anything. The files here are `psr*` and the asserted words are
-// `projsearch*`, so the two vocabularies are disjoint by construction. All three
-// filenames are registered in `RELAUNCH_FIXTURE_NAMES` and both terms in
-// `ASSERTED_OCR_TERMS`, so the three mechanical guards prove that rather than
-// leaving it to this comment.
-//
-// ## Why the QUERY is a third vocabulary again
-//
-// `PROJSEARCH_QUERY` is neither a filename fragment nor an asserted term. It is
-// content of the target file, so it IS drawn in the capture once the jump lands —
-// which is exactly why it must not be (or contain) any `ASSERTED_OCR_TERMS` entry,
-// and why it must appear in exactly one line of exactly one file in the cwd so the
-// row the second Enter activates is deterministic. Both are asserted in
-// `restore_fixture_names_cannot_satisfy_their_own_assertions`.
+// Project-search fixtures: the match sits below line 1 and past column 1 for the cursor readback.
+// See notes/crates/wolf-gnome/tests/smoke_headless.rs.md#project-search-fixtures
 
 /// Project-search smoke: the file the overlay must OPEN — the one holding the sole
 /// line `PROJSEARCH_QUERY` matches.
@@ -2128,19 +1723,8 @@ fn search_target_fixture_body() -> String {
     body
 }
 
-// ---------------------------------------------------------------------------
-// Stall smoke: the fixture, the terms, and the RPC timeout.
-//
-// This is the first end-to-end coverage the STALL half of the crash/stall overlay
-// has, and it is reachable only because the buffer picker exists: `list_buffers`
-// is the blocking RPC a RUNNING wolf-gnome issues from a chord this harness can
-// type, so wedging the captive Neovim with SIGSTOP and then firing Ctrl+Shift+E is
-// what makes `block_on_rpc` elapse its budget, mark the core NotResponding, and
-// raise the overlay.
-//
-// The scenario captures AFTER the block, never during it: no frame is committed
-// while the main loop is blocked, so a capture taken then would return the
-// pre-chord frame and prove nothing.
+// Stall smoke: SIGSTOP, then Ctrl+Shift+E, since `list_buffers` is a blocking RPC a chord reaches.
+// It captures after the block: no frame is committed while the main loop is blocked.
 
 /// Stall smoke: the fixture opened before the wedge, so the editor has something
 /// distinctive on screen for the opaque overlay to cover.
@@ -2197,23 +1781,8 @@ const STALL_OCR_PRESENT: &str = "responding";
 /// `pane_view::apply_layout_rebuild` — the crate's only other one — never runs.
 const STALL_RPC_TIMEOUT_MS: &str = "800";
 
-// ---------------------------------------------------------------------------
-// Pointer smokes: injected geometry.
-//
-// No smoke hardcodes a magic pixel for the cell it means to hit. The Rust side
-// measures `cell_w`/`cell_h` EXACTLY (see `cell_metrics_for_smoke`), clicks once at
-// the PROBE point, reads the resulting `(line, col)` back out of Neovim, and then
-// expresses every later target RELATIVE to the probe:
-//
-//     TARGET = (round(PROBE_X + DX * cell_w), round(PROBE_Y + DY * cell_h))
-//
-// with the assertion on the exact DELTA `C1 - C0 == (DY, DX)`. That is
-// origin-independent, so no unknown constant can make it pass or fail spuriously.
-//
-// The derived pane ORIGIN is then checked as a loud, self-checking precondition —
-// see `assert_probe_cell_and_pane_origin`. It is the tripwire that makes a future
-// GTK / libadwaita / cage geometry change fail these smokes loudly instead of
-// silently retargeting a different cell.
+// Pointer smokes: every target is relative to a probed cell and asserted as a delta, so no origin
+// constant matters; `assert_probe_cell_and_pane_origin` fails loudly on geometry drift.
 
 /// x of the point every pointer smoke probes first, in absolute OUTPUT pixels
 /// (`zwlr_virtual_pointer_v1.motion_absolute` takes output pixels; there is no CSD
@@ -2501,23 +2070,8 @@ const POINTER_HELPER_ERR_NAME: &str = "wolf-pointer.err";
 /// point really is inside the compositor's reported output rather than assuming it.
 const POINTER_READY_NAME: &str = "wolf-pointer.ready";
 
-// ---------------------------------------------------------------------------
-// Divider-drag smokes: finding a `gtk::Paned` handle without hardcoding a pixel.
-//
-// A divider is the one target in this file that NO arithmetic here can predict.
-// Its handle is theme-owned (Adwaita's non-wide `paned > separator` is a single
-// pixel, widened by GTK's own invisible grab area) and its grab area is wider than
-// the pixel it draws, so a position modelled from the pane origin and the cell size
-// can be a handle's width out before anything else goes wrong. The position itself
-// is `round(span * fraction)` clamped into `[min_position, max_position]`, so the
-// model is right in the middle of its range and only approximate at the ends, where
-// the clamp binds.
-//
-// So the two divider smokes BISECT for it, against the only authority available:
-// which Neovim window a click focuses. That is exact and theme-independent. The
-// modelled position below is a SEED and only a seed; see the `bisect_divider` shell
-// function in [`POINTER_DIVIDER_BODY`] for the protocol, including why each probe
-// is preceded by a RESET click.
+// Divider smokes bisect for the theme-owned `gtk::Paned` handle by which window a click focuses;
+// the modelled position is only a seed. See `bisect_divider` in `POINTER_DIVIDER_BODY`.
 
 /// How far either side of the MODELLED divider position each bisection starts.
 ///
@@ -4123,7 +3677,7 @@ exit 0
 /// ## Why `/proc` + `sed` and not `pgrep` / `ps`
 ///
 /// Neither is in the flake devShell, and adding `procps` would mean a `flake.nix`
-/// change, which carries a `macos-followups.md` obligation (the Darwin path must
+/// change, which carries a `notes/macos-followups.md` obligation (the Darwin path must
 /// stay evaluable) for no benefit whatsoever. `sed` is already in every scenario's
 /// toolchain, and `/proc/<pid>/status` carries both fields the scan needs.
 ///
@@ -4488,7 +4042,7 @@ fn with_nvim_pid_helper(scenario: &str) -> String {
 /// proves `:preserve` ran, and only then does step 6 burst-and-kill. That ordering is
 /// load-bearing in both directions:
 ///
-///  * WITHOUT `:preserve`, "the edit survived" would be a race. `architecture.md:22`
+///  * WITHOUT `:preserve`, "the edit survived" would be a race. `specs/architecture.md:22`
 ///    records that a SIGKILL skips `preserve_exit`, leaving "a bounded loss window
 ///    since the last swap sync", and `runtime/nvim/init.lua` deliberately keeps
 ///    Neovim's default `'updatecount'` — 200 TYPED CHARACTERS between automatic swap
@@ -5796,32 +5350,8 @@ hsend quit
 exit 0
 "#;
 
-// ---------------------------------------------------------------------------
-// STATE-PERSISTENCE smokes (five): the pane layout, the lone open file and a
-// dragged divider's WEIGHTS survive a QUIT AND RELAUNCH, TWO WINDOWS and their two
-// sessions survive one, and the window title renders the working directory.
-//
-// The four relaunch smokes run TWO app launches inside ONE `cage` instance — one
-// scenario string with two sequential `"$WOLF_BIN" &` blocks — so each holds one
-// cage slot and no second compositor is ever started. Three of them
-// share this exit-code vocabulary, which is documented once here and referenced
-// from each scenario; the divider one keeps `POINTER_PREAMBLE`'s codes for the
-// helper functions it copies and renumbers these, so it carries its own table:
-//
-// | code | meaning |
-// | --- | --- |
-// | `11` | run 1's app died before it was ready for input |
-// | `12` | run 1 was still alive after the quit poll budget — the drain/close path failed |
-// | `13` | run 1 exited NON-ZERO: it went away, but not cleanly. That implicates a panic in `Coordinator::on_window_closing` (the close path's gather, commit and blocking flush), or a `RefCell` double-borrow against `window::wire_close`'s `core.borrow_mut().take()` |
-// | `14` | run 2's app died before it was ready for input |
-// | `15` | the Neovim readback file never appeared in run 2 |
-// | `16` | (the single-pane and two-window smokes) run 1 wrote no `state.json` at all |
-// | `21`–`26` | the two-window smoke's own; see `TWOWIN_SCENARIO`'s table |
-//
-// Both also poll rather than sleep-and-hope for every observable, and both reap
-// run 1 with `wait` so its EXIT STATUS is checked — "the process is gone" is
-// equally true of a clean shutdown and of a panic in the GTK main loop, and this
-// is the first unit in which the close path does real work.
+// State-persistence smokes: two launches in one cage; each reaps run 1 to check its exit status.
+// See notes/crates/wolf-gnome/tests/smoke_headless.rs.md#relaunch-smoke-exit-codes
 
 /// Extra settle after the two-window smoke's MID-RUN New Window, on top of the usual
 /// `SETTLE`.
@@ -5833,14 +5363,8 @@ exit 0
 /// observable below is polled for.
 const RELAUNCH_RESTORE_SETTLE: &str = "2.0";
 
-// --- S1 fixtures: three files, three panes, one asymmetric tree -------------
-//
-// The names are deliberately UNLIKE their headings, following the convention the
-// sibling smokes already follow (`ckeep.md` => `# CLOSEKEEP`, `nbase.md` =>
-// `# NEWBUFBASE`): the tree sidebar renders every cwd file BY NAME, so a fixture
-// named after the word its own smoke asserts on can satisfy that assertion with
-// the editor drawing nothing. `restore_fixture_names_cannot_satisfy_their_own_assertions`
-// enforces it mechanically.
+// S1 fixtures: three files, three panes, one asymmetric tree. Names are unlike their headings,
+// enforced by `restore_fixture_names_cannot_satisfy_their_own_assertions`.
 
 /// The file opened in the TOP-LEFT pane (`rleft.md`).
 const RESTORE_FILE_LEFT: &str = "rleft.md";
@@ -6200,16 +5724,8 @@ grim "$OUT_PNG"
 exit 0
 "#;
 
-// --- S5 fixtures: THREE TABS, three files, two launches ---------------------
-//
-// This smoke captures NO image and runs `tesseract` nowhere, so — alone with the
-// two-window smoke — its fixtures may be named after the strings its assertions
-// compare against. The tenth block of
-// `restore_fixture_names_cannot_satisfy_their_own_assertions` carries that
-// exemption, states why a `PaneNode::Leaf` path is out of a sidebar row's reach, and
-// asserts the crossing the ordering claim rests on. The names are registered in
-// `RELAUNCH_FIXTURE_NAMES` all the same, so the generic loop still keeps them clear
-// of every OTHER smoke's asserted terms.
+// S5 fixtures: three tabs. No OCR runs, so names may match the compared strings; the fixture
+// guard's exemption block says why. They stay in `RELAUNCH_FIXTURE_NAMES` all the same.
 
 /// The file opened in TAB 0 — the tab the launch selects, and the only one whose
 /// gather is certain to run.
@@ -6545,12 +6061,8 @@ cp "$TABS_STATE_SRC" "$TABS_STATE_COPY_2"
 exit 0
 "#;
 
-// --- S4 fixtures: two files, one dragged divider, two launches --------------
-//
-// Same naming convention as every sibling: the file NAMES contain neither asserted
-// term, so only a rendered buffer can satisfy the OCR corroboration.
-// `restore_fixture_names_cannot_satisfy_their_own_assertions` enforces it over
-// `RELAUNCH_FIXTURE_NAMES`, which these four names are registered in.
+// S4 fixtures: two files, one dragged divider, two launches. Names contain neither asserted term,
+// enforced over `RELAUNCH_FIXTURE_NAMES`.
 
 /// The file opened in the LEFT pane (`dvleft.md`) — the pane the drag widens.
 const DIVIDER_FILE_LEFT: &str = "dvleft.md";
@@ -7019,7 +6531,7 @@ read_widths "$DIV_W2"
 # sparse region from everything in it, so that pane is given as little non-text ink
 # as possible: this moves the active-pane treatment -- the strip's bold,
 # full-strength filename, drawn at the top of the pane directly above the heading --
-# and Neovim's block cursor into the WIDE pane. `crates/wolf-gnome/DECISIONS.md`
+# and Neovim's block cursor into the WIDE pane. `notes/wolf-gnome-decisions.md`
 # records why nothing else is drawn at a pane's edge, and what one would cost this
 # reading.
 #
@@ -7044,18 +6556,8 @@ hsend quit
 exit 0
 "#;
 
-// --- S3 fixtures: the window title renders the working directory ------------
-//
-// Two NESTED temp directories, so the `~` abbreviation is exercised rather than
-// merely "some title was set": the cage command runs with `HOME` set to the
-// PARENT and its working directory set to the CHILD.
-//
-// That is the same SHAPE `cage_command` now applies to every other smoke by default
-// (HOME == the cwd's parent, so the title is a constant `~/<basename>`); the
-// difference here is that the two basenames are chosen to make the abbreviation
-// itself observable, one asserted PRESENT and one asserted ABSENT. This smoke sets
-// its own HOME explicitly rather than relying on the default, so its subject cannot
-// be retargeted by a later change to the helper.
+// S3 fixtures: `HOME` is the parent and the cwd the child, so the `~` abbreviation is asserted.
+// `HOME` is set explicitly, so a change to `cage_command`'s default cannot retarget this smoke.
 
 /// Basename component of the smoke-owned HOME directory. It is deliberately the
 /// term [`TITLE_OCR_ABSENT`] asserts must NOT be readable: the title must render
@@ -7110,56 +6612,8 @@ wait "$app_pid" 2>/dev/null
 exit 0
 "#;
 
-// --- S5 fixtures: two windows, two projects, two saved sessions -------------
-//
-// The one smoke that asserts on MULTI-WINDOW state, and the only one in this file
-// that reads NO pixels of the window it is about. That is forced rather than
-// chosen: `cage(1)` runs "a single, maximized application … only a single one is
-// visible at any point in time", and MEASURED under `cage`, presenting a
-// backgrounded `adw::ApplicationWindow` does not raise it. So no capture can show
-// two windows, and none can bring the first one back — which leaves exactly two
-// observables, both of which this file already proves it can read: the count of
-// live `nvim` children of the app pid (the crash smokes' `/proc` scan) and the
-// `state.json` run 1 wrote, frozen before run 2 can write over it (the solo
-// relaunch smoke's `load_state` on a frozen copy).
-//
-// ## The second window is opened from INSIDE the one process, and it must be
-//
-// The subject is New Window: one process, one coordinator, one `StateStore`, two
-// windows. A second `wolf-gnome` launched under the same compositor would not reach
-// it: every cage has its own private `dbus-run-session` bus, so a second launch while
-// the first is alive hands off to it through single-instance activation, which
-// exercises the launch path instead of New Window. The palette is the route: Ctrl+Shift+P, `TWOWIN_NEW_WINDOW_QUERY`, Enter.
-//
-// ## Two projects, not one, and by construction
-//
-// Window A stays in the temp cwd; window B is `:cd`'d into a SUBDIRECTORY of it and
-// opens a file there. A durable per-project swap directory is keyed on the cwd and
-// deliberately outlives the process, so two windows on ONE project would meet
-// Neovim's own `W325: Ignoring swapfile from Nvim process <pid>` warning. That
-// warning is correct behaviour and is not this smoke's subject, so the fixture
-// layout keeps it unreachable rather than tolerating it and hoping it stays
-// non-blocking.
-//
-// It buys a second thing the assertions need: the two saved `cwd` values are
-// DIFFERENT, so "the two windows were restored in saved order" is a statement two
-// distinct strings can make. On one project it would be unfalsifiable.
-//
-// ## Why the fixture names may be the strings the assertions compare against
-//
-// Every other smoke here obeys "a fixture must not be named after the term its
-// smoke asserts on", because the tree sidebar renders every cwd entry BY NAME and
-// nvim's `:e` echoes the filename, so a rendered row can satisfy an OCR assertion
-// the editor never earned. This smoke reads no page at all — no `grim`, no
-// `tesseract` — and the strings it compares come out of `state.json`'s
-// `TabState::layout` leaves and out of `writefile` calls the captive Neovim makes
-// about its own `getcwd()`. A sidebar row cannot write a `PaneNode::Leaf` path, and
-// neither can a toast. The names are still registered in `RELAUNCH_FIXTURE_NAMES`
-// so the generic loop keeps them clear of every OTHER smoke's terms, and the eighth
-// block of `restore_fixture_names_cannot_satisfy_their_own_assertions` states this
-// exemption executably rather than leaving it here as prose — in particular the
-// CROSSING, which is what makes "window 0 holds the first file and window 1 the
-// second" more than "a file name is in the tree".
+// Two-window fixtures: under cage no capture can show two windows, so this smoke reads no pixels.
+// See notes/crates/wolf-gnome/tests/smoke_headless.rs.md#two-window-smoke-fixtures
 
 /// The file window A opens, in the temp cwd — the first project's.
 const TWOWIN_FIRST_FILE: &str = "wfirst.md";
@@ -7607,56 +7061,8 @@ fi
 exit 0
 "#;
 
-// --- Open Recent fixtures: a palette folder row re-roots the whole window ----
-//
-// The scenario is PALETTE_SCENARIO's, with BUFPICK_SCENARIO's `wait_file` helper
-// bolted on for the readback: launch, open a base file, Ctrl+Shift+P, type the
-// TARGET DIRECTORY'S BASENAME, Enter, then read `getcwd()` back out of the captive
-// Neovim.
-//
-// ## The fixture layout, and why the target is a SIBLING of the cwd
-//
-// `make_temp_cwd` returns `<unique>/project` and `cage_command` hands `<unique>` to
-// the app as HOME. The target directory is therefore `<unique>/orzulu` — a sibling
-// of the launch cwd and a CHILD of the app's HOME — so once the chdir lands
-// `title::display_title` abbreviates it to the constant `~/orzulu` and the captured
-// page is identical on every run, exactly as `~/project` is for every other smoke.
-// A target under `std::env::temp_dir()` directly would draw a run-varying path in
-// the header bar and reintroduce the measured ~2% OCR flake (see `make_temp_cwd`).
-//
-// `SIDEBAR_FILLER_FILES` go into BOTH directories. The sidebar re-roots, so the
-// launch cwd's rows vanish from the page the assertion reads and only the target's
-// remain; page density has to be paid for twice.
-//
-// ## Why the fixture NAMES and the asserted TERM are deliberately unlike
-//
-// Two hazards, not one, and they cross.
-//
-// The subject is `ortango.md`'s NAME — the sidebar row is the observable, exactly as
-// in `tree_sidebar_shows_files_under_cage` — so that file is the one deliberate
-// exception to the "put the asserted word in the CONTENT" rule, and it is NOT listed
-// in RELAUNCH_FIXTURE_NAMES (whose generic loop forbids precisely that property; the
-// same reason TREE_FILE_NAME is absent from it).
-//
-// The one that matters more is the crossed pair. The header bar draws `~/orzulu` on
-// every capture of this smoke, so a TARGET DIRECTORY named after the asserted term
-// would satisfy assertion 5 from the title alone — with the sidebar never re-rooting
-// and `settle_reroot` never firing. Both halves are asserted, not left to
-// this comment: see the exemption block in the third fixture guard.
-//
-// ## Why assertion 5 reads the SIDEBAR and not the title
-//
-// The title only proves `shell::refresh_title` read the new `live_cwd`, which
-// assertion 3's readback already implies. The sidebar row is the only observable that
-// proves `settle_reroot` -> `tree_view::reroot` ran, and `ortango.md` lives
-// OUTSIDE the launch cwd, so it can reach the page only after the re-root.
-//
-// ## No must-NOT-contain assertion, deliberately
-//
-// `InputEvent::Chdir` is `:tcd`, which closes no buffer and reloads nothing, so the
-// pre-chdir buffer is still painted BY DESIGN and the cmdline strip may still carry
-// the earlier `:e` toast. An absence assertion would assert something the feature
-// does not guarantee.
+// Open Recent fixtures: the target is the cwd's sibling, so the title is the constant `~/orzulu`.
+// See notes/crates/wolf-gnome/tests/smoke_headless.rs.md#open-recent-fixtures
 
 /// Open Recent smoke: the file opened in the LAUNCH cwd before the chord fires.
 /// Nothing asserts on it — it exists so the editor pane is not blank and so the
@@ -7841,36 +7247,8 @@ wait "$app_pid" 2>/dev/null
 exit 0
 "#;
 
-// ---------------------------------------------------------------------------
-// Navigation-history smoke: Alt+Left goes BACK to the previously-open file.
-//
-// This is the only end-to-end coverage of the whole per-pane navigation path: the
-// capture-phase chord controller resolving <Alt>Left through
-// `actions::action_for_key` to `win.history-back`, that action being installed from
-// `command_action::ui_action_for_front_end_action` (it has NO wolf_core::Command,
-// so the ordinary command branch never sees it), `shell::perform`'s
-// `UiAction::HistoryBack` arm, `nav_ui::nav_press` accepting against a live core,
-// `WolfCore::history_back` moving the pane through `_G.wolf_history_set_buf`, and
-// the repaint that follows.
-//
-// ## The fixture/term convention, applied
-//
-// Both files' names are deliberately UNLIKE the words asserted on: the tree sidebar
-// renders every cwd entry by name and nvim's `:e` echoes the filename, so a fixture
-// named after its own asserted word satisfies the assertion whether or not anything
-// navigated (the permanent silent pass documented on `PICKER_FILE_NAME`). The
-// asserted words live only in the files' CONTENT, so only a RENDERED BUFFER can
-// produce them. `restore_fixture_names_cannot_satisfy_their_own_assertions` checks
-// that mechanically, in both directions.
-//
-// ## Why the two readbacks exist
-//
-// OCR alone cannot distinguish "Back worked" from "the second `:e` never happened":
-// both leave the FIRST file's heading on screen. The scenario therefore has the
-// captive Neovim write `bufname('%')` before and after the chord, so the failure is
-// ATTRIBUTED rather than merely detected. The BEFORE readback is a PRECONDITION —
-// it proves the second `:e` took effect — and the AFTER readback is the
-// discriminator.
+// Navigation-history smoke: the only end-to-end coverage of Alt+Left through `win.history-back`.
+// See notes/crates/wolf-gnome/tests/smoke_headless.rs.md#navigation-history-smoke
 
 /// Nav-back smoke: the file opened FIRST, which Back must return to.
 ///
@@ -8020,35 +7398,8 @@ wait "$app_pid" 2>/dev/null
 exit 0
 "#;
 
-// ---------------------------------------------------------------------------
-// Sidebar-toggle smoke: Ctrl+Shift+B hides the file tree.
-//
-// The only end-to-end coverage of `win.toggle-sidebar`: the chord resolving through
-// `actions::action_for_key`, `command_action::ui_action_for` classifying
-// `Command::ToggleSidebar` as a dispatched `UiAction::ToggleSidebar` rather than a
-// Deferred one, `shell::perform`'s arm flipping the stored preference, and
-// `AppShell::apply_sidebar_visibility` -- over `state_seam::sidebar_is_shown` --
-// being the single site that touches the widget.
-//
-// ## The observable is a NAME, and that is deliberate
-//
-// The sidebar's only text is the file names it lists, so the honest observable for
-// "the sidebar is gone" is a filename that vanishes. `SIDEBARTOGGLE_FILE` is
-// therefore named AFTER its asserted term -- the same exemption `TREE_FILE_NAME` and
-// `OPENRECENT_TARGET_FILE` carry -- and it is never opened, so nothing but a
-// sidebar row can draw it. Its exemption's preconditions, including the crossed
-// pair against the keep-term, are asserted in
-// `restore_fixture_names_cannot_satisfy_their_own_assertions` rather than left as
-// prose here.
-//
-// ## Why a `!contains` needs three guards
-//
-// A must-NOT-contain assertion is satisfied by a crashed window, a blank one, and
-// one whose sidebar never populated in the first place. All three are closed:
-// capture A must CONTAIN the term (the tree was populated at all), capture B must
-// contain the KEEP term (the window is still drawing, so a crash cannot satisfy the
-// next line), and the fixture/term crossed pair is asserted in guard 3. Do not
-// weaken any of the three.
+// Sidebar-toggle smoke: the observable is a file name that vanishes, guarded three ways.
+// See notes/crates/wolf-gnome/tests/smoke_headless.rs.md#sidebar-toggle-smoke
 
 /// Sidebar-toggle smoke: the file that is NEVER opened. Its NAME is the sidebar
 /// observable, so it deliberately CONTAINS [`SIDEBARTOGGLE_OCR_ABSENT`] — the
@@ -8157,66 +7508,8 @@ wait "$app_pid" 2>/dev/null
 exit 0
 "#;
 
-// --- Typed-`:cd` fixtures: a live `:cd` re-roots the sidebar ----------------
-//
-// One scenario carrying BOTH of the sidebar unit's user-visible correctness rows —
-// the synthetic cwd ROOT NODE and the re-root on Neovim's OWN working directory —
-// with two independently-reverted discriminators. Folding them is FORCED, not
-// convenient, and the reason is worth stating once here rather than being
-// re-derived:
-//
-// A standalone synthetic-root smoke has no discriminating assertion available. The
-// root row draws the cwd's BASENAME, and the `adw::HeaderBar` draws `~/<basename>`
-// on every capture — so `contains(basename)` is satisfied by the TITLE with no root
-// row on screen at all, which is exactly the silent-pass shape `PICKER_FILE_NAME`'s
-// note documents. The only way to stop the title drawing the basename is to make
-// `cwd == home`, which `title::display_title` rule 4 renders as the bare `~` — and
-// `workspace::launch_decision` refuses `home` as a launch project, so the ONLY route
-// into that state is a live `:cd`. Hence one scenario, two ordered discriminators.
-// (The alternative — a `grim -g` region capture of the sidebar strip — introduces a
-// hardcoded geometry this file's conventions reject.)
-//
-// ## The fixture tree, and the three load-bearing facts in it
-//
-// ```text
-// <unique>/project/            base (make_temp_cwd, used ONLY as a base)
-//   cdouterhome/               CD_OUTER_DIR   -- drawn only if the ~ abbreviation fails
-//     cdrootzulu/              CD_ROOT_DIR    -- the app's HOME and the :cd target
-//       cdtango.md             CD_TARGET_FILE -- asserted PRESENT (a sidebar row)
-//       fill*.md               nine fillers, post-re-root page density
-//       startdir/              CD_START_DIR   -- the LAUNCH cwd
-//         cdbase.md            CD_BASE_FILE (# ZZCDBASE) + nine fillers
-//   cdstate/                   CD_STATE_DIR -- the WOLF_STATE_DIR override
-//   cdcwd.txt                  CD_READBACK_NAME
-// ```
-//
-// 1. **`cage_command`'s default `HOME` is `smoke_home(cwd)` == `cwd.parent()`**, and
-//    this smoke's cwd is `.../cdrootzulu/startdir`, so the app's HOME is exactly
-//    `cdrootzulu`. MEASURED against the helper, not assumed: `cage_command` sets
-//    `.env("HOME", smoke_home(cwd))` and `smoke_home` returns `cwd.parent()`. So NO
-//    `HOME` override is needed here, and after `:cd ..` the working directory IS the
-//    home directory — `display_title` rule 4 — so the header bar reads the bare `~`
-//    and the word `cdrootzulu` can reach the page only from a sidebar row.
-// 2. **`WOLF_STATE_DIR` MUST be overridden** to `base/cdstate`, chained after
-//    `cage_command` (the `window_title_shows_the_working_directory_under_cage`
-//    precedent for overriding a helper default). The default is
-//    `smoke_state_dir(cwd)` == `<cwd's parent>/<cwd's name>-state` ==
-//    `cdrootzulu/startdir-state`, which sits INSIDE the post-`:cd` search root.
-//    Neovim's swap files there encode the full buffer path with `%` separators and
-//    therefore literally contain `cdrootzulu`, which would satisfy assertion 6 from a
-//    swap-file sidebar row with no synthetic root on screen. The EMPTY
-//    `startdir-state` directory `cage_command` still creates is harmless:
-//    `wolf_core::tree::TreeIndex::build` derives directory nodes from FILE entries
-//    only, so a directory holding no files yields no row.
-// 3. **The readback lands in `base`**, outside both search roots, so it is never a
-//    sidebar row — and the ABSOLUTE path echoed in the typed `:call writefile(...)`
-//    command line carries no asserted term either.
-//
-// ## Why the `:cd` is RELATIVE
-//
-// `:cd ..` rather than `:cd <absolute path>`. The typed command line is page text and
-// a residual toast can outlive it, so an absolute `:cd` would put `cdrootzulu` on the
-// page with nothing having re-rooted — assertion 6 satisfied by the cmdline strip.
+// Typed-`:cd` fixtures: root node and re-root share one scenario, and the `:cd` is relative.
+// See notes/crates/wolf-gnome/tests/smoke_headless.rs.md#typed-cd-fixtures
 
 /// Typed-`:cd` smoke: the OUTER directory, one level above the `:cd` target.
 ///
@@ -8432,43 +7725,8 @@ wait "$app_pid" 2>/dev/null
 exit 0
 "#;
 
-// --- Per-pane statusbar fixtures: each pane's strip draws its OWN filename ---
-//
-// The asserted terms here are FILENAMES, which inverts this file's usual fixture
-// rule — and it inverts it for the same reason `tree_sidebar_shows_files_under_cage`,
-// `SIDEBARTOGGLE_FILE`, `OPENRECENT_TARGET_FILE` and `CD_TARGET_FILE` do: the
-// rendered NAME is the observable. A per-pane status bar's whole claim is that the
-// strip above each pane carries THAT pane's file, so there is nothing else to read.
-//
-// That leaves three ways a filename could reach the page without the strip drawing
-// it, and each is closed by construction rather than by hope:
-//
-// 1. **The tree sidebar** renders every cwd entry by name. Closed by putting the two
-//    fixtures OUTSIDE the working directory: `make_temp_cwd` returns
-//    `<unique>/project` and `cage_command` hands `<unique>` to the app as HOME, so a
-//    sibling `<unique>/sbfixtures/` is under home, outside the search root, and never
-//    listed. The scenario opens both by ABSOLUTE path.
-// 2. **The cmdline strip** paints the last toast, and `:e <path>` echoes the path it
-//    opened — which spells the second fixture's name. Closed by driving one more Ex
-//    command before the capture: an `:echo` of `STATUS_OCR_MARKER`, whose text carries
-//    neither filename. Without it, assertion 6 would be satisfiable by the cmdline
-//    with no strip drawn at all.
-// 3. **Neovim's own statusline**, which would draw the filename inside the grid.
-//    `runtime/nvim/init.lua` sets `laststatus = 0`, and that premise is measured
-//    rather than trusted: the readback below asks the CAPTIVE NEOVIM for
-//    `&laststatus`, and assertion 3 pins it at 0.
-//
-// The fixture tree:
-//
-// ```text
-// <unique>/                    the app's HOME (cage_command's default)
-//   project/                   TEMP_CWD_BASENAME -- the launch cwd and search root
-//     fill*.md                 nine fillers, page density
-//   sbfixtures/                STATUS_FIXTURE_DIR -- outside the search root
-//     statusalfa.md            STATUS_FILE_A, opened in the FIRST pane
-//     statusbravo.md           STATUS_FILE_B, opened in the SPLIT pane
-//   status_winheight.txt       STATUS_READBACK_NAME -- outside the search root too
-// ```
+// Per-pane statusbar fixtures: the asserted terms are file names, so the files sit outside the cwd.
+// See notes/crates/wolf-gnome/tests/smoke_headless.rs.md#per-pane-statusbar-fixtures
 
 /// Per-pane statusbar smoke: the directory holding the two opened fixtures, a
 /// SIBLING of the temp cwd and a child of the app's `HOME`.
@@ -8695,52 +7953,8 @@ wait "$app_pid" 2>/dev/null
 exit 0
 "#;
 
-// ---------------------------------------------------------------------------
-// MARKDOWN-PREVIEW fixtures: a rendered preview pane, its statusbar, its
-// persisted leaf, a LIVE EDIT of the source, and Edit Source's inverse placement.
-//
-// ## Why the IN-PLACE Preview is the one this leg uses, and what it buys
-//
-// The scenario opens the OTHER file, splits with `<C-w>v`, opens the Markdown
-// SOURCE in the new pane, and drives Preview from there. `wolf_open_preview` binds
-// IN PLACE, so it REPLACES the source pane's buffer with the preview scratch — and
-// the source's raw text is then displayed in NO pane at all.
-//
-// That is the whole soundness argument for the body assertion: nvim cannot draw
-// [`PREVIEW_OCR_BODY`] anywhere, the sidebar and the `:e` toast draw FILENAMES, and
-// neither filename contains it. An OCR hit on the rendered heading can therefore
-// only be WebKit's pixels. A placement that split a THIRD pane instead would leave
-// the source on screen and make that assertion vacuous, which is why the persisted
-// layout is asserted to hold exactly TWO leaves and the readback exactly two
-// windows: two independent statements of the premise, either of which catches it.
-//
-// ## Why the live edit runs AFTER the Edit leg rather than before it
-//
-// Only a SECOND load into a live web view takes the JSON body-swap branch
-// (`pane_view::preview_swap_payload`); the first goes through `load_html` and looks
-// perfect whatever the encoding does. So a smoke that opens a preview and asserts
-// on it, without then editing the source, cannot see a single-encoded payload at
-// all — the measured bug printed `JSON Parse error: Unrecognized token '<'` on every
-// keystroke while the preview silently kept showing the stale document.
-//
-// Editing the source needs the source in a WINDOW, and Edit in Another Pane is what
-// puts it there — in a SPLIT, which is the leg's own discriminator. The in-place
-// `Edit` cannot serve here: it replaces the preview it is fired from, leaving nothing
-// for the live edit to be observed in. The marker is then typed into the new pane,
-// where nvim draws it too, so the scenario opens the other file over it before
-// capturing: at capture B the marker's raw text is off screen again and only the
-// preview pane can draw it. Doing the live edit BEFORE the Edit leg would need a `:e`
-// of the source into another pane, which would satisfy that leg's readback by itself.
-//
-// ## The fixture-naming rule, as everywhere else here
-//
-// Neither filename contains either heading term, so no sidebar row and no `:e`
-// toast can satisfy an assertion on its own, and both are registered in
-// `RELAUNCH_FIXTURE_NAMES` — as are the two readback files, which land in the same
-// temp cwd. [`PREVIEW_OCR_STATUS`] is the one asserted term here that is an ORDINARY
-// WORD rather than a coined one, so it carries an extra content check in
-// `restore_fixture_names_cannot_satisfy_their_own_assertions`: nothing this smoke
-// puts on screen — least of all the rendered document — may spell it.
+// Markdown-preview fixtures: the in-place Preview hides the source, so only WebKit draws the body.
+// See notes/crates/wolf-gnome/tests/smoke_headless.rs.md#markdown-preview-fixtures
 
 /// Markdown-preview smoke: the SOURCE file, opened in the split pane and then
 /// replaced by its own preview.
@@ -9008,7 +8222,7 @@ const PREVIEW_PANE_WAKE_LABEL: &str = "pane.wake";
 /// EIGHT — 7, 7 and 8 over three runs, broken down per leg in
 /// [`PREVIEW_CAP_RENDER_FLOOR`]. With `request_preview_render` calling the render pass
 /// unconditionally — the per-wake render this unit replaced, and the 15.6 % of wall
-/// clock `crates/wolf-gnome/DECISIONS.md` records — the same scenario reads SIXTY-ONE.
+/// clock `notes/wolf-gnome-decisions.md` records — the same scenario reads SIXTY-ONE.
 ///
 /// Twenty sits between the two and excludes each end for its own reason. It is twelve
 /// above the coalesced reading, which no plausible pacing closes: `wtype` running
@@ -9352,36 +8566,8 @@ wait "$app_pid" 2>/dev/null
 exit 0
 "#;
 
-// ============================================================================
-// The PREVIEW-LINK-CLICK smoke's fixtures, measured constants and scenario body
-//
-// A pointer smoke, and the only one whose click target is aimed at something WebKit
-// drew rather than at something this crate painted. It shares POINTER_PREAMBLE with
-// the six other `pointer_scenario` bodies.
-//
-// ## Both fixtures live in a SUBDIRECTORY, and that is what arms a falsifier
-//
-// The cwd is deliberately NOT the directory the link resolves in. A red run measured
-// that with `load_html(html, None)` restored, WebKitGTK hands the handler the RAW
-// relative href (`uri="lnkinto.md"`), `preview_link::classify` takes its schemeless
-// row, and `WolfCore::preview_file` passes that relative path to Lua's
-// `filereadable`, which resolves it against the captive Neovim's WORKING DIRECTORY.
-// With the fixtures at the project root that is the same directory as the source, so
-// the follow succeeded by coincidence and the base URI could not be seen at all.
-// LINK_FIXTURE_DIR is what separates the two answers; LINK_TARGET_HREF carries the
-// arithmetic.
-//
-// ## The fixture naming rule, as everywhere else here
-//
-// No fixture PATH contains any ASSERTED_OCR_TERMS entry — `preview` included, which
-// is the one ordinary English word in that table — and both are registered in
-// RELAUNCH_FIXTURE_NAMES along with the two readback files, which land in the same
-// temp cwd and are drawn as sidebar rows. The registered names carry the
-// LINK_FIXTURE_DIR prefix, so that guard's substring loop covers the DIRECTORY name
-// too and it needs no exemption block of its own. This smoke asserts no OCR term of
-// its own: its two observables are RAW PIXELS inside the preview pane and a
-// `tabpagebuflist()` readback, neither of which a sidebar row can move.
-// ============================================================================
+// Preview-link-click fixtures live in a subdirectory, so a relative href cannot resolve by luck.
+// See notes/crates/wolf-gnome/tests/smoke_headless.rs.md#preview-link-click-fixtures
 
 /// Preview-link smoke: the subdirectory of the temp cwd both fixtures live in.
 ///
@@ -9693,16 +8879,8 @@ hsend quit
 exit 0
 "#;
 
-// ============================================================================
-// The UNSAVED-BUFFER PREVIEW smoke's fixtures and scenario
-//
-// A short keyboard-only scenario of its own, deliberately NOT an extension of
-// NEWBUF_SCENARIO or PREVIEW_SCENARIO: the first's assertions are about the new
-// buffer replacing the old and a preview leg would move its calibrated capture, and
-// the second is already the longest scenario in this file with eleven assertions and
-// a calibrated A/B pair. Two independent features behind one exit code contradicts
-// this file's "exit codes carry meaning" rule.
-// ============================================================================
+// Unsaved-buffer preview smoke: a scenario of its own, so one exit code never covers two features
+// and the calibrated captures of `NEWBUF_SCENARIO` and `PREVIEW_SCENARIO` stay put.
 
 /// Unsaved-preview smoke: the file opened OVER the untitled buffer's pane just before
 /// the capture, so the marker's raw text is off screen and an OCR hit can only have
@@ -9966,10 +9144,8 @@ fn make_temp_cwd() -> PathBuf {
         .expect("system time is before the unix epoch")
         .as_nanos();
     let seq = TEMP_CWD_SEQ.fetch_add(1, Ordering::Relaxed);
-    // The UNIQUE part is the parent, and it is never rendered: `cage_command` makes
-    // it the app's `HOME`, so the title abbreviates it to `~`. Created
-    // non-recursively, so two smokes that ever computed the same name fail here
-    // rather than silently sharing one cwd.
+    // The unique part is the parent, drawn as `~` because it is the app's `HOME`. Created
+    // non-recursively, so two smokes computing the same name fail here instead of sharing a cwd.
     let parent = std::env::temp_dir().join(format!("{TEMP_CWD_PREFIX}{pid}-{nanos}-{seq}"));
     let dir = parent.join(TEMP_CWD_BASENAME);
     for level in [&parent, &dir] {
@@ -10532,7 +9708,7 @@ const SMOKE_GTK_IM_MODULE: &str = "gtk-im-context-simple";
 /// `wait_ready <pid> <died-code> <label>` first PRIMES the seat with a key-free
 /// `wtype ""`, retried until it succeeds (cage may not be up yet), then polls until
 /// `$WOLF_READY_FILE` names `<pid>`. The app writes it once its launch windows
-/// accept keystrokes (see `crates/wolf-gnome/DECISIONS.md`, "The readiness file").
+/// accept keystrokes (see `notes/wolf-gnome-decisions.md`, "The readiness file").
 ///
 /// The priming is load-bearing, not a liveness probe. A headless `cage` seat has no
 /// keyboard until a virtual keyboard exists, and the first key the first virtual
@@ -10873,7 +10049,7 @@ impl Drop for CageRuntime<'_> {
 /// Callers chain only their own scenario-specific `.env(...)` / `.arg(...)`
 /// additions on top. Two per-smoke font notes live at their call sites rather than
 /// on the `WOLF_FONT_PT` line: the vsplit / hsplit / three-pane smokes point at
-/// the "Note (OCR width)" / "Note (OCR height)" paragraphs above their own consts,
+/// the OCR width and height note in notes/crates/wolf-gnome/tests/smoke_headless.rs.md#split-pane-smokes,
 /// because if two or three panes are ever too narrow or too short for 28 pt OCR the
 /// fix is per-test (widen the window, or lower the font for THAT test) and must not
 /// be applied here to all sixty.
@@ -10906,19 +10082,14 @@ fn cage_command(scenario: &str, cwd: &Path, runtime: &CageRuntime<'_>) -> Comman
         .env("WOLF_FONT_PT", SMOKE_FONT_PT)
         .env("WOLF_STATE_DIR", smoke_state_dir(cwd))
         .env("WOLF_CONFIG_DIR", smoke_config_dir(cwd))
-        // Which input method every smoke's typing goes through. Pinned rather than
-        // inherited: see `SMOKE_GTK_IM_MODULE` for the measurement and for what the
-        // pin deliberately does NOT buy.
+        // Pinned rather than inherited: see `SMOKE_GTK_IM_MODULE`.
         .env("GTK_IM_MODULE", SMOKE_GTK_IM_MODULE)
         // The cage's own Wayland socket, and no `bus` for GIO to fall back to.
         .env("XDG_RUNTIME_DIR", &**runtime)
         // Where the app writes its pid once it accepts input; `wait_ready` in
         // `READINESS_PRELUDE` reads it.
         .env("WOLF_READY_FILE", runtime.join(READY_FILE_NAME))
-        // Removed, never set: a DANGLING session-bus address kills the app before its
-        // first frame under WebKit's mandatory sandbox. See the doc comment above for
-        // the three measured cases and for why there is no way to disable the sandbox
-        // instead.
+        // Removed, never set: a dangling session-bus address kills the app under WebKit's sandbox.
         .env_remove("DBUS_SESSION_BUS_ADDRESS")
         // The developer's display, which nothing inside the cage may reach.
         .env_remove("WAYLAND_DISPLAY")
@@ -12114,10 +11285,7 @@ fn the_shared_smoke_config_pins_the_appearance_every_ocr_smoke_assumes() {
          why the expected value is re-typed here instead of read from the pin."
     );
 
-    // --- Assertion 2: the seeded FILE really carries it -----------------------
-    //
-    // Through `smoke_config_dir`, the same call `cage_command` makes, so this
-    // reads the artifact every smoke's app reads rather than a restatement of it.
+    // Assertion 2: the seeded file carries it, read through `smoke_config_dir` like `cage_command`.
     let cwd = make_temp_cwd();
     let dir = smoke_config_dir(&cwd);
     let path = dir.join(CONFIG_FILE_NAME);
@@ -12606,10 +11774,7 @@ fn pixel_target(value: f64, what: &str) -> i64 {
          0.0..={MAX_INJECTED_PIXEL}. Either the measured cell size is wrong or the per-smoke cell \
          delta is far larger than intended."
     );
-    // Exact: `rounded` is an integral f64 already proven to lie in
-    // 0.0..=MAX_INJECTED_PIXEL, so this conversion cannot truncate. The range check
-    // above is what makes the value CORRECT; Rust's float->int `as` merely saturates
-    // rather than being undefined, which is not the same guarantee.
+    // Exact: `rounded` is integral and range-checked above. `as` only saturates, which is no guarantee.
     rounded as i64
 }
 
@@ -13523,14 +12688,8 @@ const ASSERTED_OCR_TERMS: &[(&str, &str, &str)] = &[
         "DRAWER_OCR_EDITOR_ABSENT",
         "terminal_drawer_opens_and_is_not_persisted_under_cage",
     ),
-    // The native-tabs pair. Each is listed once, against a capture that asserts it
-    // PRESENT, and each is ALSO asserted absent from another capture of the same
-    // smoke: TABS_OCR_FIRST is present in captures A and C and absent from B,
-    // TABS_OCR_SECOND present in B and absent from C. That crossing is the smoke's
-    // "exactly one page's pane view is on screen" claim, so a filler row, a temp-cwd
-    // component or a fixture name carrying either term would break one half and
-    // vacuously satisfy the other — which is why one row per term guards both
-    // directions.
+    // Each native-tabs term is present in one capture and absent from another, so one row per term
+    // guards both halves of the "exactly one page on screen" claim.
     (
         TABS_OCR_FIRST,
         "TABS_OCR_FIRST",
@@ -13623,22 +12782,8 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
         "DIVIDER_W2_NAME",
         "dragged_divider_weights_survive_relaunch_under_cage",
     ),
-    // The two-window smoke's two fixtures and its two readbacks. It captures NO
-    // image and runs `tesseract` nowhere, so nothing it writes can satisfy an OCR
-    // assertion of its OWN — the names are registered for the generic loop's sake,
-    // which forbids ANY fixture name from carrying ANY asserted term and so stops a
-    // later rename turning one of these into page text that breaks somebody else's
-    // smoke. The EIGHTH block of
-    // `restore_fixture_names_cannot_satisfy_their_own_assertions` carries the
-    // exemption these names DO need: they are named after the strings their own
-    // smoke compares against, which every other fixture here is forbidden from
-    // being, and that block states why a `PaneNode::Leaf` path is out of a sidebar
-    // row's reach.
-    //
-    // TWOWIN_SECOND_FILE is registered as the PATH carrying TWOWIN_SUBDIR rather
-    // than as a bare filename, the LINK_SOURCE_FILE precedent: it puts the
-    // DIRECTORY name inside the same substring loop instead of buying this smoke a
-    // directory exemption block of its own.
+    // Two-window fixtures and readbacks: no OCR runs, so these rows serve the generic loop only.
+    // TWOWIN_SECOND_FILE is a path, which puts TWOWIN_SUBDIR inside the same substring loop.
     (
         TWOWIN_FIRST_FILE,
         "TWOWIN_FIRST_FILE",
@@ -13659,16 +12804,8 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
         "TWOWIN_READBACK_R2_NAME",
         "two_windows_two_neovims_and_two_saved_sessions_under_cage",
     ),
-    // The three-tab smoke's three fixtures and its two readbacks. It captures NO
-    // image and runs `tesseract` nowhere, so nothing it writes can satisfy an OCR
-    // assertion of its OWN — the names are registered for the generic loop's sake,
-    // which forbids ANY fixture name from carrying ANY asserted term and so stops a
-    // later rename turning one of these into page text that breaks somebody else's
-    // smoke. The TENTH block of
-    // `restore_fixture_names_cannot_satisfy_their_own_assertions` carries the
-    // exemption these names DO need — they are named after the strings their own
-    // smoke compares against — together with the fixture count and the crossing the
-    // tab-ORDER claim rests on.
+    // Three-tab fixtures and readbacks: no OCR runs, so these rows serve the generic loop only; an
+    // exemption block in the guard covers their names.
     (
         TABS_RESTORE_FILE_ONE,
         "TABS_RESTORE_FILE_ONE",
@@ -13769,59 +12906,29 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
         "NAVBACK_READBACK_AFTER",
         "alt_left_navigates_back_to_the_previous_file_under_cage",
     ),
-    // SIDEBARTOGGLE_FILE is DELIBERATELY absent: its NAME is the sidebar-toggle
-    // smoke's assertion subject, so the generic loop below — which forbids a fixture
-    // name from containing any asserted term — would reject it. It carries the same
-    // documented exemption TREE_FILE_NAME and OPENRECENT_TARGET_FILE do, and the
-    // fifth block of `restore_fixture_names_cannot_satisfy_their_own_assertions`
-    // asserts its crossed pair instead.
+    // SIDEBARTOGGLE_FILE is absent: its name is its smoke's subject, so the loop below would reject it.
+    // An exemption block in the guard asserts its crossed pair instead.
     (
         SIDEBARTOGGLE_OPEN_FILE,
         "SIDEBARTOGGLE_OPEN_FILE",
         "sidebar_toggle_chord_hides_the_file_tree_under_cage",
     ),
-    // CD_TARGET_FILE is DELIBERATELY absent, for the fourth time in this table and
-    // for the same reason: its NAME *is* the typed-`:cd` smoke's asserted term
-    // (CD_OCR_ROOTED), because the sidebar row is the observable, so the generic loop
-    // below — which forbids a fixture name from containing any asserted term — would
-    // reject it. It carries the same documented exemption TREE_FILE_NAME,
-    // OPENRECENT_TARGET_FILE and SIDEBARTOGGLE_FILE do, and the SIXTH block of
-    // `restore_fixture_names_cannot_satisfy_their_own_assertions` asserts its
-    // preconditions and its three crossed pairs instead.
-    //
-    // The three DIRECTORY components of that smoke's fixture tree (CD_OUTER_DIR,
-    // CD_ROOT_DIR and CD_START_DIR) are absent for the same structural reason the
-    // title smoke's two directories are: they are not files, and two of them are the
-    // assertion's subject rather than a hazard to it. That sixth block covers them.
+    // CD_TARGET_FILE and the `:cd` tree's directories are absent: the name is the asserted term and the
+    // directories are not files. An exemption block in the guard covers them.
     (
         CD_BASE_FILE,
         "CD_BASE_FILE",
         "typed_cd_reroots_the_sidebar_under_cage",
     ),
-    // CD_READBACK_NAME is page text by a route no other entry in this table takes: it
-    // lands in `base`, OUTSIDE both of that smoke's search roots, so no sidebar row
-    // ever bears it — but its ABSOLUTE path is echoed in the typed
-    // `:call writefile(...)` command line, which is in the cmdline strip of the very
-    // capture assertions 4, 5 and 6 read. A readback renamed to carry an asserted term
-    // would satisfy one of them from the cmdline with the sidebar never re-rooting,
-    // which is the same hazard class the loop below exists for.
+    // CD_READBACK_NAME is never a sidebar row, but its absolute path is echoed in the typed
+    // `:call writefile(...)` line in the cmdline strip, so it must not carry an asserted term.
     (
         CD_READBACK_NAME,
         "CD_READBACK_NAME",
         "typed_cd_reroots_the_sidebar_under_cage",
     ),
-    // STATUS_FILE_A and STATUS_FILE_B are DELIBERATELY absent, for the fifth time in
-    // this table and for the same reason: their NAMES *are* the per-pane statusbar
-    // smoke's asserted terms, because the strip drawing the name is the observable, so
-    // the generic loop below — which forbids a fixture name from containing any
-    // asserted term — would reject them. They carry the same documented exemption
-    // TREE_FILE_NAME, OPENRECENT_TARGET_FILE, SIDEBARTOGGLE_FILE and CD_TARGET_FILE
-    // do, and the SEVENTH block of
-    // `restore_fixture_names_cannot_satisfy_their_own_assertions` asserts their
-    // preconditions, their crossed pair and their shared body instead.
-    //
-    // STATUS_FIXTURE_DIR is absent for the structural reason the title and typed-`:cd`
-    // smokes' directories are: it is not a file. That seventh block covers it too.
+    // STATUS_FILE_A and STATUS_FILE_B are absent: their names are the statusbar smoke's terms. An
+    // exemption block in the guard covers them and STATUS_FIXTURE_DIR.
     (
         STATUS_READBACK_NAME,
         "STATUS_READBACK_NAME",
@@ -13847,19 +12954,8 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
         "PREVIEW_READBACK_B_NAME",
         "preview_pane_renders_and_edit_source_returns_under_cage",
     ),
-    // The preview-link smoke asserts no OCR term of its own — its observables are raw
-    // pixels inside the preview pane and a `tabpagebuflist()` readback — so nothing it
-    // writes could satisfy one of ITS assertions. All four names are registered anyway,
-    // and the reason is the generic loop below rather than this smoke: it forbids a
-    // fixture name from containing ANY asserted term, which is what stops a later
-    // rename from quietly turning one of these into page text that breaks somebody
-    // else's. `preview` is in that table, so `lnk*` is not an aesthetic choice.
-    //
-    // The first two entries are PATHS carrying LINK_FIXTURE_DIR rather than bare
-    // filenames, which is deliberate: the sidebar renders the directory row by name
-    // too, and registering the prefixed path puts it inside the same substring loop
-    // instead of giving this smoke a directory exemption block like the title and
-    // typed-`:cd` smokes carry.
+    // Registered for the generic loop; this smoke reads no OCR term. `preview` is an asserted
+    // term, hence `lnk*`; the paths carry LINK_FIXTURE_DIR so the loop covers the directory too.
     (
         LINK_SOURCE_FILE,
         "LINK_SOURCE_FILE",
@@ -13890,18 +12986,8 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
         "UNSAVED_READBACK_NAME",
         "preview_of_an_unsaved_buffer_renders_under_cage",
     ),
-    // The picker-over-preview smoke's two fixtures and its readback. It asserts no OCR
-    // term at all — its observables are raw pixel counts inside one rectangle of two
-    // captures — so nothing it writes could satisfy an assertion of ITS own. All three
-    // are registered for the generic loop's sake, the LINK_SOURCE_FILE precedent: the
-    // loop forbids a fixture name from carrying ANY asserted term, which is what stops
-    // a later rename turning one of these into page text that breaks somebody else's
-    // smoke. `preview` is in that table, so the `pv`/`pickover` prefixes are not an
-    // aesthetic choice. The readback lands under XDG_RUNTIME_DIR rather than in the
-    // temp cwd — deliberately, so no new sidebar row and no new picker candidate
-    // appears between that smoke's two captures — and is registered anyway for
-    // CD_READBACK_NAME's reason: its ABSOLUTE path is echoed in the typed
-    // `:call writefile(...)` command line the cmdline strip draws.
+    // Registered for the generic loop; this smoke reads no OCR term. The readback lives under
+    // XDG_RUNTIME_DIR, but its path is echoed in the cmdline, as CD_READBACK_NAME's is.
     (
         PICKOVER_SOURCE_FILE,
         "PICKOVER_SOURCE_FILE",
@@ -13917,13 +13003,8 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
         "PICKOVER_WINS_NAME",
         "file_picker_covers_the_live_preview_under_cage",
     ),
-    // The terminal-drawer smoke's fixture, plus its six readbacks. The readbacks
-    // land under XDG_RUNTIME_DIR rather than in the temp cwd, so no tree row ever
-    // bears their names — they are registered for CD_READBACK_NAME's reason instead:
-    // their ABSOLUTE paths are echoed in the typed `:call writefile(...)` command
-    // lines, which the cmdline strip draws in the very capture this smoke reads. The
-    // sampled band stops ABOVE that strip (see `drawer_band_rect`), so this is a
-    // tripwire against a later whole-page assertion rather than a live hazard.
+    // The drawer readbacks live under XDG_RUNTIME_DIR, but their paths are echoed in the cmdline. The
+    // sampled band stops above that strip, so this is a tripwire for a later whole-page assertion.
     (
         DRAWER_FIXTURE_FILE,
         "DRAWER_FIXTURE_FILE",
@@ -13959,11 +13040,7 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
         "DRAWER_BT_SPLITGUARD_NAME",
         "terminal_drawer_opens_and_is_not_persisted_under_cage",
     ),
-    // The two readback-only drawer smokes capture no image at all, so nothing they
-    // write can satisfy an OCR assertion of their own. Their readbacks are registered
-    // for the generic loop's sake — it forbids ANY fixture name from containing ANY
-    // asserted term, which is what stops a later rename turning one of these into
-    // page text that breaks somebody else's smoke.
+    // The two readback-only drawer smokes capture no image; these rows serve the generic loop only.
     (
         DRAWER_GEOMETRY_READBACK_NAME,
         "DRAWER_GEOMETRY_READBACK_NAME",
@@ -13989,22 +13066,8 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
         "DRAWER_RESTART_AFTER_UP_NAME",
         "terminal_drawer_reopens_after_a_neovim_restart_under_cage",
     ),
-    // The native-tabs smoke's two fixtures and its four readbacks. Unlike the five
-    // exempt smokes above, NEITHER fixture is named after anything this smoke
-    // asserts on — every OCR term here is a file's CONTENT — so both go through the
-    // generic loop with no exemption at all, which is the convention rather than the
-    // exception. The crossing that DOES need stating is between the two HEADINGS,
-    // and the ninth block below carries it.
-    //
-    // TABS_SECOND_FILE is registered as the PATH carrying TABS_SUBDIR rather than as
-    // a bare filename, the LINK_SOURCE_FILE precedent: it puts the DIRECTORY name
-    // inside the same substring loop instead of buying this smoke a directory
-    // exemption block of its own.
-    //
-    // The four readbacks land in the temp cwd, so the tree sidebar draws them by
-    // name AND their absolute paths are echoed in the typed `:call writefile(...)`
-    // command lines the cmdline strip renders — two routes onto a page this smoke
-    // OCRs three times.
+    // Native-tabs fixtures need no exemption, as every OCR term is content. TABS_SECOND_FILE is a path
+    // so TABS_SUBDIR is in the loop; the readbacks are drawn as rows and echoed in the cmdline.
     (
         TABS_FIRST_FILE,
         "TABS_FIRST_FILE",
@@ -14035,24 +13098,8 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
         "TABS_READ_F_NAME",
         "native_tabs_open_switch_and_close_under_cage",
     ),
-    // The two SAVE smokes. Neither captures an image and neither runs `tesseract`, so
-    // nothing they write can satisfy an OCR assertion of their OWN — their observables
-    // are files on disk read by the Rust side. The names are registered for the generic
-    // loop's sake, which forbids ANY fixture name from carrying ANY asserted term and
-    // so stops a later rename turning one of these into page text that breaks somebody
-    // else's smoke.
-    //
-    // Three of the four land in the temp cwd, where the tree sidebar draws them by
-    // name: the fixture Ctrl+Shift+S writes, and the file the save DIALOG creates under
-    // the name typed into it. The two readbacks land under XDG_RUNTIME_DIR instead, so
-    // no new sidebar row and no new picker candidate appears mid-run; they are
-    // registered anyway for CD_READBACK_NAME's reason, since their ABSOLUTE paths are
-    // echoed in the typed `:call writefile(...)` command lines.
-    //
-    // SAVEAS_PROPOSED_NAME is deliberately ABSENT from this table: it is not a fixture
-    // this file writes but the name `save_ui::UNTITLED_SAVE_NAME` proposes, asserted
-    // NOT to exist on disk. Registering a name whose whole point is that nothing
-    // creates it would say the opposite of what the assertion does.
+    // The save smokes OCR nothing; these rows serve the generic loop. SAVEAS_PROPOSED_NAME is absent:
+    // it is asserted not to exist on disk, so registering it would say the opposite.
     (
         SAVE_FIXTURE_FILE,
         "SAVE_FIXTURE_FILE",
@@ -14073,18 +13120,8 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
         "SAVEAS_READBACK_NAMELESS_NAME",
         "the_save_dialog_writes_a_named_file_under_cage",
     ),
-    // The COMPOSED-TEXT smoke. It captures no image and runs `tesseract` nowhere, so
-    // nothing it writes can satisfy an OCR assertion of its OWN — its observable is a
-    // file the captive Neovim writes about its own buffer. The names are registered
-    // for the generic loop's sake, which forbids ANY fixture name from carrying ANY
-    // asserted term and so stops a later rename turning one of these into page text
-    // that breaks somebody else's smoke.
-    //
-    // The fixture lands in the temp cwd, where the tree sidebar draws it by name; the
-    // two readbacks land under XDG_RUNTIME_DIR instead, so no new sidebar row and no
-    // new picker candidate appears mid-run. Both are registered anyway for
-    // CD_READBACK_NAME's reason, since their ABSOLUTE paths are echoed into the typed
-    // `:call writefile(...)` command lines.
+    // The composed-text smoke OCRs nothing; these rows serve the generic loop. The readbacks live
+    // under XDG_RUNTIME_DIR, but their paths are echoed in the cmdline.
     (
         COMPOSE_FIXTURE_FILE,
         "COMPOSE_FIXTURE_FILE",
@@ -14100,17 +13137,8 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
         "COMPOSE_READBACK_NAME",
         "composed_text_reaches_neovim_under_cage",
     ),
-    // The COMPOSED-CHORD smoke, registered for the COMPOSED-TEXT smoke's reason: it
-    // captures no image and OCRs nothing, so nothing it writes can satisfy an OCR
-    // assertion of its OWN — its observables are window counts the captive Neovim
-    // writes about its own layout. The rows exist so the generic loop keeps these
-    // names clear of every OTHER smoke's terms, and so a later rename cannot turn one
-    // into page text that breaks somebody else's capture.
-    //
-    // The fixture lands in the temp cwd, where the tree sidebar draws it by name; the
-    // five readbacks land under XDG_RUNTIME_DIR instead, and are registered anyway for
-    // CD_READBACK_NAME's reason — their ABSOLUTE paths are echoed into the typed
-    // `:call writefile(...)` command lines.
+    // The composed-chord smoke OCRs nothing; these rows serve the generic loop. The readbacks live
+    // under XDG_RUNTIME_DIR, but their paths are echoed in the cmdline.
     (
         IMCHORD_FIXTURE_FILE,
         "IMCHORD_FIXTURE_FILE",
@@ -14247,10 +13275,8 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
 /// guards the fixture on a machine where the smoke toolchain is unavailable.
 #[test]
 fn sidebar_filler_names_cannot_satisfy_any_smoke_assertion() {
-    // Guard the guard: both OCR readers — `ocr_to_lowercase` and
-    // `ocr_uniform_block_to_lowercase` — lowercase tesseract's output before every
-    // `contains`, so an OCR const that is not itself lowercase could never match a real
-    // capture — and would make the filename check below vacuous too.
+    // Both OCR readers lowercase tesseract's output, so a term that is not lowercase never matches and
+    // would make the filename check below vacuous.
     for &(term, const_name, smoke) in ASSERTED_OCR_TERMS {
         assert!(
             !term.chars().any(char::is_uppercase),
@@ -14356,11 +13382,8 @@ fn temp_cwd_name_cannot_satisfy_any_smoke_assertion() {
          `sidebar_filler_names_cannot_satisfy_any_smoke_assertion` can protect that smoke."
     );
 
-    // Well-formedness of the basename, because the whole determinism fix rests on it
-    // being exactly ONE ordinary path segment: an empty value (or `.`) would make
-    // `make_temp_cwd` return the unique parent itself, so HOME would become the temp
-    // ROOT and the title would draw the varying name again; an embedded separator
-    // would add a level `smoke_home` does not account for; and `..` would climb out.
+    // The basename is one ordinary segment: empty or `.` makes HOME the temp root, a separator adds
+    // a level `smoke_home` ignores, and `..` climbs out.
     let mut components = Path::new(TEMP_CWD_BASENAME).components();
     let first = components.next();
     let extra = components.next();
@@ -14391,9 +13414,8 @@ fn temp_cwd_name_cannot_satisfy_any_smoke_assertion() {
         );
     }
 
-    // The component that is normally abbreviated away, checked anyway: if
-    // `display_title` ever stops abbreviating, the FULL path is what gets drawn, and
-    // this is what keeps that bug from masquerading as a different smoke's failure.
+    // Checked though abbreviated away: a title that stops abbreviating draws it, and this keeps
+    // that bug from passing for another smoke's failure.
     let lowercased = TEMP_CWD_PREFIX.to_lowercase();
     for &(term, const_name, smoke) in ASSERTED_OCR_TERMS {
         assert!(
@@ -14409,10 +13431,8 @@ fn temp_cwd_name_cannot_satisfy_any_smoke_assertion() {
         );
     }
 
-    // The variable part of the path is `{pid}-{nanos}-{seq}`, so it is ASCII digits and `-`
-    // only. That is safe if and only if no asserted term is spellable in those
-    // characters — which is a property of the terms, so it is checked here rather than
-    // asserted in a comment.
+    // The path's variable part is digits and `-`, safe only if no asserted term is spellable in
+    // them, a property of the terms checked here.
     for &(term, const_name, smoke) in ASSERTED_OCR_TERMS {
         assert!(
             term.chars().any(|c| c.is_ascii_alphabetic()),
@@ -14638,9 +13658,8 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
         }
     }
 
-    // Distinct names, and distinct from the filler files: these all land in ONE temp
-    // cwd per smoke, so a collision would silently overwrite a fixture with another
-    // one's contents.
+    // Distinct names, distinct from the fillers: all land in one temp cwd, so a collision silently
+    // overwrites a fixture.
     let mut seen = std::collections::HashSet::new();
     for &(name, name_const, owner) in RELAUNCH_FIXTURE_NAMES {
         assert!(
@@ -14685,9 +13704,8 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
          assertion on its own, and a broken abbreviation would look like a pass."
     );
 
-    // The Open Recent smoke's exemption, same shape as the title smoke's: one
-    // fixture whose NAME is the subject, and one whose name is drawn beside it on
-    // every capture and must therefore stay clear of the asserted term.
+    // The Open Recent exemption: one fixture whose name is the subject, one drawn beside it on every
+    // capture that must stay clear of the term.
     assert!(
         OPENRECENT_TARGET_FILE
             .to_lowercase()
@@ -14733,15 +13751,8 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
         }
     }
 
-    // The sidebar-toggle smoke's exemption, the same shape as the title smoke's and
-    // the Open Recent one's: one fixture whose NAME is the assertion's subject, and
-    // one that is on screen beside it and must therefore stay clear of both terms.
-    //
-    // The CROSSED half is the one that matters. Capture A asserts the term is
-    // PRESENT, and the only thing that can draw it is the sidebar row for
-    // SIDEBARTOGGLE_FILE — so if the name stops containing the term, capture A's
-    // precondition fails for a fixture reason and the smoke reports it as if the
-    // sidebar had never populated.
+    // The sidebar-toggle exemption. The crossed half matters: only SIDEBARTOGGLE_FILE's row can draw
+    // the term, so a rename fails capture A's precondition as if the sidebar never populated.
     assert!(
         SIDEBARTOGGLE_FILE
             .to_lowercase()
@@ -14813,18 +13824,11 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
         );
     }
 
-    // The typed-`:cd` smoke's exemption — the widest of the five, because THREE fixed
-    // path components of its fixture tree are page text at once and they cross in
-    // both directions. The tree is
-    //
-    //     <base>/cdouterhome/cdrootzulu/{cdtango.md, startdir/}
-    //
-    // with `cdrootzulu` doubling as the app's HOME, so after `:cd ..` the header bar
-    // reads the bare `~` and every asserted term must come from the sidebar.
+    // The typed-`:cd` exemption: three components of `<base>/cdouterhome/cdrootzulu/` are page text
+    // and cross both ways. `cdrootzulu` is HOME, so after `:cd ..` the title is the bare `~`.
 
-    // The SUBJECT of assertion 4. `cdtango.md` exists only inside the `:cd` target, so
-    // a sidebar row is the only thing that can draw its name; that is why it is exempt
-    // from the RELAUNCH_FIXTURE_NAMES loop above.
+    // Assertion 4's subject: `cdtango.md` exists only inside the `:cd` target, so only a sidebar row
+    // draws it, which is why it is exempt from the loop above.
     assert!(
         CD_TARGET_FILE.to_lowercase().contains(CD_OCR_ROOTED),
         "CD_TARGET_FILE = {CD_TARGET_FILE:?} no longer contains CD_OCR_ROOTED = \
@@ -14844,9 +13848,8 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
          missing root node that is in fact present under another name."
     );
 
-    // Assertion 5's non-vacuity. The must-NOT-contain assertion is what proves the
-    // title ABBREVIATED to `~`; if the outer directory is not named after that term,
-    // the assertion holds trivially and assertion 6 loses its guard.
+    // Assertion 5's non-vacuity: unless the outer directory carries that term, the must-not-contain
+    // holds trivially and assertion 6 loses its guard.
     assert!(
         CD_OUTER_DIR.to_lowercase().contains(CD_OCR_UNABBREVIATED),
         "CD_OUTER_DIR = {CD_OUTER_DIR:?} no longer contains CD_OCR_UNABBREVIATED = \
@@ -14857,11 +13860,8 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
          row. A vacuous guard is worse than none, because it reads as coverage."
     );
 
-    // THE CROSSED PAIR THAT MATTERS. A title that failed to abbreviate draws
-    // `.../cdouterhome/cdrootzulu` in the header bar, which contains BOTH terms — so
-    // assertion 5 firing is what tells that state apart from a real root row. If the
-    // outer directory carried the root-node term, a broken abbreviation would satisfy
-    // assertion 6 from the title alone, with the sidebar never re-rooting.
+    // The crossed pair that matters: an unabbreviated title has both terms, so if the outer directory
+    // carried the root term, assertion 6 would pass from the title alone.
     assert!(
         !CD_OUTER_DIR.to_lowercase().contains(CD_OCR_ROOT_NODE),
         "CD_OUTER_DIR = {CD_OUTER_DIR:?} contains CD_OCR_ROOT_NODE = {CD_OCR_ROOT_NODE:?}. This is \
@@ -14874,11 +13874,8 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
          DIRECTORY; do NOT change CD_OCR_ROOT_NODE and do NOT touch the assertion."
     );
 
-    // The `:cd` target's own name must not carry the OTHER two terms. Carrying the
-    // rooted-term would let the root row satisfy assertion 4 with no child row drawn,
-    // i.e. with the synthetic root's auto-expand broken; carrying the unabbreviated-
-    // term would make assertion 5 fire on a perfectly correct abbreviation, since the
-    // root row draws this name on every correct run.
+    // The `:cd` target carries neither other term: the rooted one passes assertion 4 with no child row,
+    // the unabbreviated term fires assertion 5 on a correct run.
     for (term, term_const, why) in [
         (
             CD_OCR_ROOTED,
@@ -14901,12 +13898,8 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
         );
     }
 
-    // The LAUNCH cwd's basename is page text twice over — the header bar reads
-    // `~/startdir` before the `:cd`, and a sidebar `Dir` row bears it after — so it
-    // must stay clear of every asserted term. The REVERSE direction is a drift
-    // tripwire rather than a live hazard: an asserted term built out of this
-    // directory's name means the two are not independent, and a later rename of one
-    // would silently retarget the other.
+    // The launch cwd's basename is page text (title, then a `Dir` row), so it avoids every term. The
+    // reverse direction is a drift tripwire: a term built from it couples the two.
     for &(term, term_const, smoke) in ASSERTED_OCR_TERMS {
         assert!(
             !CD_START_DIR.to_lowercase().contains(term),
@@ -14952,18 +13945,10 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
         }
     }
 
-    // The per-pane statusbar smoke's exemption — the only one whose crossed pair is
-    // two must-CONTAIN terms, because the feature under test is that TWO panes draw
-    // TWO DIFFERENT filenames. The fixtures are
-    //
-    //     <unique>/sbfixtures/{statusalfa.md, statusbravo.md}
-    //
-    // opened by absolute path from outside the app's search root, so no sidebar row
-    // draws either name and each strip is the sole source of its own.
+    // The statusbar exemption: two must-contain terms, since two panes draw two names. The files under
+    // `<unique>/sbfixtures/` are outside the search root, so only each strip draws its name.
 
-    // The SUBJECTS. Each filename is the term its own pane's strip must draw; if a
-    // name stops containing its term, that assertion is vacuous — the term is absent
-    // from the capture whatever the strip did.
+    // The subjects: a name that stops containing its term makes that assertion vacuous.
     for (name, name_const, term, term_const, which) in [
         (
             STATUS_FILE_A,
@@ -14992,10 +13977,8 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
         );
     }
 
-    // THE CROSSED PAIR, and here it is the whole discriminator rather than a
-    // supporting condition. The documented revert for this smoke makes every strip
-    // draw the ACTIVE pane's status; with the two names crossed, the surviving strip
-    // would satisfy BOTH assertions and that revert would leave the smoke green.
+    // The crossed pair is the discriminator: under the revert every strip draws the active pane's name,
+    // and crossed names would leave the smoke green.
     for (name, name_const, other_term, other_const) in [
         (STATUS_FILE_A, "STATUS_FILE_A", STATUS_OCR_B, "STATUS_OCR_B"),
         (STATUS_FILE_B, "STATUS_FILE_B", STATUS_OCR_A, "STATUS_OCR_A"),
@@ -15011,10 +13994,8 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
         );
     }
 
-    // The proof-of-life marker must not be satisfiable by the very thing it exists to
-    // prove was drawn, and the fixture DIRECTORY is page text twice over — the
-    // strip's second line is the display path, and the typed `:e` command line spells
-    // the absolute path — so it must carry none of the three terms.
+    // The marker must not spell any term, nor may the fixture directory, which is drawn in the strip's
+    // display path and in the typed `:e` line.
     for (name, name_const, why) in [
         (
             STATUS_FILE_A,
@@ -15050,10 +14031,8 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
         );
     }
 
-    // The two fixtures are the only exempt ones in this file that a scenario OPENS,
-    // so their shared body renders in the editor grid beside the strips. A body
-    // carrying an asserted term would satisfy that term from the grid with no strip
-    // drawn at all — `PICKER_FILE_NAME`'s failure reached through content.
+    // These two exempt fixtures are opened, so their body renders beside the strips; a body carrying a
+    // term would satisfy it from the grid with no strip drawn.
     for &(term, term_const, smoke) in ASSERTED_OCR_TERMS {
         assert!(
             !STATUS_FIXTURE_BODY.to_lowercase().contains(term),
@@ -15086,15 +14065,8 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
         }
     }
 
-    // Well-formedness of the fixture directory, the same check TEMP_CWD_BASENAME
-    // gets, because the smoke joins this onto the temp cwd's PARENT. Two of the three
-    // malformed shapes have real consequences. An empty value (or `.`) puts both
-    // fixtures directly in the app's HOME, at which point the checks above are about
-    // a path component that is not on the page and the display path they reason about
-    // is a different string. A leading `..` climbs out of the run's unique temp tree
-    // into `std::env::temp_dir()` itself, which is SHARED across runs — the fixtures
-    // would then be whatever a previous run left behind rather than what this one
-    // wrote, which is exactly the order-dependence `make_temp_cwd` exists to prevent.
+    // STATUS_FIXTURE_DIR is one ordinary segment: empty or `.` lands the fixtures in HOME, and `..`
+    // climbs into the shared temp dir, reading another run's files.
     let mut status_components = Path::new(STATUS_FIXTURE_DIR).components();
     let status_first = status_components.next();
     let status_extra = status_components.next();
@@ -15108,13 +14080,8 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
          somewhere the smoke's whole anti-vacuity argument no longer holds."
     );
 
-    // The one relaunch fixture whose CONTENT is more than a heading, checked here
-    // rather than in a guard of its own so the smoke count this file's docs pin
-    // stays put. Its lines are editor text in the very pane whose heading
-    // `dragged_divider_weights_survive_relaunch_under_cage` asserts on, so a body
-    // line carrying an asserted term would satisfy that assertion with the heading
-    // never drawn — the `PICKER_FILE_NAME` failure reached through content instead
-    // of through a name. Both directions matter here exactly as they do above.
+    // This body is editor text in the pane whose heading the divider smoke asserts on, so a body
+    // line carrying a term would satisfy it without the heading. Checked in both directions.
     let fixture = divider_right_fixture_body();
     let lines: Vec<&str> = fixture.lines().collect();
     assert_eq!(
@@ -15159,13 +14126,8 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
         );
     }
 
-    // ---- The project-search fixture, whose content the smoke's three exact -----
-    // ---- assertions are derived from -------------------------------------------
-    //
-    // `project_search_chord_opens_the_matched_line_under_cage` asserts on the file,
-    // the LINE and the COLUMN the cursor landed on. All three are properties of this
-    // body, and two of them are properties of exactly where inside it the query
-    // sits, so the shape below is pinned rather than eyeballed.
+    // The project-search fixture: the smoke's file, line and column assertions derive from this body's
+    // shape, so the shape is pinned here.
     let search_fixture = search_target_fixture_body();
     let search_lines: Vec<&str> = search_fixture.lines().collect();
 
@@ -15188,16 +14150,8 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
          reads, and a body line ahead of it would push it down the pane for no stated reason."
     );
 
-    // Exactly one line matches, and it is the line the smoke's `line('.')` assertion
-    // is written against. More than one match makes which row the second Enter
-    // activates a ranking question, and the smoke stochastic rather than red.
-    //
-    // Compared on the LOWERCASED line, like the sibling checks below and for the same
-    // reason: `search_overlay::search_options_for` leaves `case_sensitive` false and
-    // `wolf_core::search` spawns `rg -i` for that (`crates/wolf-core/src/search.rs`),
-    // so a body line spelling the query in any other case is a second REAL match. A
-    // case-sensitive scan here would not see it, and the guard would be leaning on the
-    // digits-and-`x` clause further down to catch a hazard that is this clause's own.
+    // Exactly one line matches, or the activated row becomes a ranking question. Compared lowercased,
+    // because `search_options_for` leaves `case_sensitive` false and rg runs with `-i`.
     let matching_lines: Vec<usize> = search_lines
         .iter()
         .enumerate()
@@ -15272,11 +14226,8 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
         );
     }
 
-    // A filename is not searched by rg, so a collision there cannot add a match. It
-    // is forbidden for a different reason: the tree sidebar and the overlay's own row
-    // label both DRAW the name, so a name carrying the query makes a post-mortem PNG
-    // ambiguous about which row was selected — the diagnosis costs an hour and the
-    // rule costs nothing.
+    // rg does not search names, but the sidebar and the overlay row draw them, so a name carrying the
+    // query makes a post-mortem PNG ambiguous about which row was selected.
     for name in SIDEBAR_FILLER_FILES {
         assert!(
             !name.to_lowercase().contains(PROJSEARCH_QUERY),
@@ -15295,9 +14246,8 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
         );
     }
 
-    // The query is DRAWN in the capture — it is content of the file the smoke opens
-    // — so a term hidden inside it would satisfy the must-contain assertion, or break
-    // the must-not-contain one, without the search having done anything.
+    // The query is drawn in the capture, so a term in it would satisfy or break an assertion without
+    // the search doing anything.
     for &(term, term_const, smoke) in ASSERTED_OCR_TERMS {
         assert!(
             !PROJSEARCH_QUERY.contains(term),
@@ -15309,9 +14259,7 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
         );
     }
 
-    // The crossed pair the project-search smoke's two OCR terms rest on, made
-    // executable rather than documented — the TITLE_* exemption's shape, aimed at two
-    // headings instead of two directory names.
+    // The crossed pair the project-search smoke's two OCR terms rest on, the TITLE_* exemption's shape.
     assert!(
         PROJSEARCH_HEADING_TARGET
             .to_lowercase()
@@ -15349,9 +14297,7 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
          opened anything at all."
     );
 
-    // Every body line except the heading and the match line is page density and
-    // nothing else. The match line is a word by design and is checked against the
-    // term table separately, below.
+    // Every body line but the heading and the match line is density; the match line is checked below.
     for (index, line) in search_lines.iter().enumerate().skip(1) {
         if index == match_index {
             continue;
@@ -15388,10 +14334,8 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
         );
     }
 
-    // The executable statement of the `all_files: true` premise. Under core's default
-    // SearchOptions the search is restricted to `--glob '*.md' --glob '*.markdown'`,
-    // so a Markdown target would be found either way and the smoke would stop
-    // discriminating that flag at all.
+    // The `all_files: true` premise: core's default search globs only Markdown, so a Markdown target
+    // would be found either way and the smoke would not discriminate that flag.
     let target_extension = Path::new(PROJSEARCH_FILE_TARGET)
         .extension()
         .and_then(OsStr::to_str)
@@ -15406,21 +14350,8 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
          must-contain assertion, would stop reddening anything."
     );
 
-    // ---- The markdown-preview fixture, whose content is RENDERED text ----------
-    //
-    // The third fixture whose body is checked, and the only one whose body reaches a
-    // pixel through WebKit rather than through the editor grid. Two distinct hazards
-    // live here.
-    //
-    // First the ordinary one: the heading and the paragraph render in the same pane
-    // as each other, so a paragraph word carrying an asserted term would satisfy that
-    // assertion with the heading never drawn.
-    //
-    // Second, and the reason this block exists at all: PREVIEW_OCR_STATUS is the
-    // ordinary English word `preview`, not a coined one, so the "no fixture may be
-    // NAMED after the asserted term" rule is not sufficient for it. The word must
-    // appear on that page in exactly one place — the preview pane's statusbar — and
-    // the rendered document is the easiest place for it to appear by accident.
+    // This body reaches pixels through WebKit. `preview` is an ordinary word, so it must
+    // appear on the page only in the preview pane's statusbar, never in the rendered document.
     let preview_body = format!("{PREVIEW_SOURCE_HEADING}\n{PREVIEW_SOURCE_PARAGRAPH}");
     for (label, text) in [
         ("PREVIEW_SOURCE_HEADING", PREVIEW_SOURCE_HEADING),
@@ -15440,9 +14371,7 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
         );
     }
     for &(term, term_const, smoke) in ASSERTED_OCR_TERMS {
-        // The status word is checked by the loop above, with a message about the one
-        // hazard that is peculiar to it; every other term — including this smoke's own
-        // heading words — is an ordinary must-not-appear.
+        // The loop above checks the status word with its own message; any other term is a must-not-appear.
         if term == PREVIEW_OCR_STATUS {
             continue;
         }
@@ -15471,13 +14400,8 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
          if the fixture stops carrying it the smoke fails at its own precondition and says nothing \
          about the preview."
     );
-    // The CROSSED pair, and it is the sharpest check in this block. The two headings
-    // are drawn by DIFFERENT renderers — one by WebKit inside the preview pane, one by
-    // this crate's own painter in the editor pane beside it — and the whole soundness
-    // argument for the web-view assertions is that nvim cannot draw their term. If
-    // either heading carried the other's term, the editor pane would satisfy a
-    // web-view assertion on its own and the smoke would pass against a build whose
-    // preview never rendered at all.
+    // The crossed pair: the headings come from different renderers, so a heading carrying the other's
+    // term lets the editor pane satisfy a web-view assertion with no preview rendered.
     for (label, text, forbidden, forbidden_const) in [
         (
             "PREVIEW_OTHER_HEADING",
@@ -15524,16 +14448,8 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
          this file that covers `preview_swap_payload`."
     );
 
-    // ---- The UNSAVED-BUFFER preview fixture, whose subject is never on disk ----
-    //
-    // The fourth body checked here, and the only one whose asserted text exists in NO
-    // FILE AT ALL: the marker is typed into a never-saved buffer, so no fixture name
-    // and no fixture content can carry it and the RELAUNCH_FIXTURE_NAMES loop above
-    // cannot reach it. What that loop does cover is the cover file's NAME; what this
-    // block adds is its CONTENT and the crossing between the two terms, which are drawn
-    // by two DIFFERENT renderers — one by this crate's painter in the editor pane, one
-    // by WebKit in the preview pane beside it — and the whole soundness argument for
-    // the marker assertion is that nvim cannot draw its term.
+    // The unsaved-buffer marker is in no file, so the loop above cannot reach it; this checks the cover
+    // file's content and the crossing between the editor's term and WebKit's.
     assert!(
         UNSAVED_MARKER.to_lowercase().contains(UNSAVED_OCR_MARKER),
         "UNSAVED_MARKER = {UNSAVED_MARKER:?} no longer contains UNSAVED_OCR_MARKER = \
@@ -15594,15 +14510,8 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
         );
     }
 
-    // ---- The TERMINAL-DRAWER fixture, the fifth body checked here --------------
-    //
-    // Its two asserted terms are drawn by two different things — one by BASH inside
-    // the drawer's terminal, one by this crate's painter in the editor pane — and the
-    // band the smoke OCRs is supposed to contain only the first. So the crossing is
-    // what makes the pair mean anything: a fill line carrying the marker would
-    // satisfy the must-contain assertion from the EDITOR with no drawer painted, and
-    // a marker carrying the fill term would fire the must-not-contain assertion on a
-    // perfectly correct run.
+    // The drawer terms cross: a fill line with the marker passes the must-contain from the editor, no
+    // drawer, and a marker with the fill term fires the must-not-contain on a correct run.
     let drawer_fixture = drawer_fixture_body();
     let drawer_lines: Vec<&str> = drawer_fixture.lines().collect();
     assert_eq!(
@@ -15655,38 +14564,9 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
          — that the drawer's shell wrote to a terminal this front-end painted — and a marker that \
          does not spell the term makes that assertion unfalsifiable."
     );
-    // DRAWER_FIXTURE_FILE's own name needs no assertion here: it is registered in
-    // RELAUNCH_FIXTURE_NAMES, so the generic loop at the top of this test already
-    // forbids it carrying EITHER of this smoke's terms. A restatement would be a line
-    // that can never produce its own red.
 
-    // ---- The TWO-WINDOW smoke's exemption, the eighth block --------------------
-    //
-    // Every other exemption here is about a fixture that must CARRY an asserted OCR
-    // term. This one is the opposite shape: the two-window smoke's fixtures are
-    // named after the strings its assertions compare against — `wfirst.md`,
-    // `wsecond.md`, `wsub`, `project` — which is exactly what the rule at the top of
-    // this file forbids, and it is safe here for a reason no other smoke can claim.
-    //
-    // THE SMOKE CAPTURES NO IMAGE. It invokes `grim` nowhere and `tesseract`
-    // nowhere, so it asserts on no page at all and nothing rendered can satisfy one
-    // of its assertions. What it compares are `TabState::layout` leaf paths read out
-    // of a frozen `state.json` through `wolf_core::load_state`, and `getcwd()` /
-    // `bufname('%')` strings the captive Neovim writes about itself with
-    // `writefile`. A tree-sidebar row is TEXT ON A SURFACE: it cannot put a
-    // `PaneNode::Leaf` into a serialized window tree, and neither can an `:e` toast.
-    // The route by which those two fixture names reach an assertion runs through the
-    // pane view's layout snapshot and the state store, and a file that merely EXISTS
-    // in the working directory contributes to neither.
-    //
-    // The names are registered in RELAUNCH_FIXTURE_NAMES anyway, so the generic loop
-    // still keeps them clear of every OTHER smoke's asserted terms — the hazard a
-    // later rename would create for somebody else.
-    //
-    // What this block adds is the CROSSING, which is where a real mistake would hide:
-    // the smoke claims `windows[0]` holds the FIRST project and `windows[1]` the
-    // SECOND, and that claim is only falsifiable while the two are told apart by
-    // every comparison it makes.
+    // The two-window exemption: its fixtures are named after the compared strings, safe as it reads
+    // no image. See notes/crates/wolf-gnome/tests/smoke_headless.rs.md#two-window-smoke-fixtures
     assert_eq!(
         TWOWIN_SECOND_FILE,
         format!("{TWOWIN_SUBDIR}/{TWOWIN_SECOND_NAME}"),
@@ -15733,14 +14613,8 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
          the durable swap directory and meet Neovim's W325)."
     );
 
-    // The palette query is a literal COPY of `palette::tests::NEW_WINDOW_PALETTE_QUERY`
-    // (separate crates cannot share it), and the join that keeps the two honest is
-    // `palette::tests::the_new_window_palette_query_selects_the_new_window_row`. What
-    // that join cannot see is a copy that picked up a stray space or a capital on the
-    // way across, which `rank_matches` would treat as a third term or a different
-    // string — so the SHAPE is asserted here, where a failure names the constant
-    // rather than surfacing as a palette that lists nothing and an exit 21 twenty
-    // seconds later.
+    // A copy of `palette::tests::NEW_WINDOW_PALETTE_QUERY`; this pins its shape, since a stray space or
+    // capital changes `rank_matches`' terms and surfaces only as an exit 21 much later.
     let query_terms: Vec<&str> = TWOWIN_NEW_WINDOW_QUERY.split(' ').collect();
     assert_eq!(
         query_terms.len(),
@@ -15765,21 +14639,8 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
         );
     }
 
-    // ---- The NATIVE-TABS crossed pair, the ninth block ------------------------
-    //
-    // No exemption here, and that is the point: both fixtures are registered above
-    // and go through the generic loop like every ordinary one, because neither is
-    // named after anything its smoke asserts on. What this block adds is the
-    // crossing between the two HEADINGS — the fixture CONTENT, which the generic loop
-    // never looks at.
-    //
-    // The crossing is the whole discriminator. The smoke's sharpest claim is that
-    // exactly ONE page's pane view is on screen: capture B must carry the second
-    // heading and NOT the first, capture C the first and NOT the second. Let either
-    // heading carry the other's term and both must-not-contain halves hold on a page
-    // showing both panes at once, so "the background page is not drawn" collapses
-    // into "a heading is on screen" — which is true of any build with a working
-    // editor.
+    // The native-tabs crossed pair: if either heading carries the other's term, both must-not-contain
+    // halves hold on a page showing both panes, so "one page on screen" becomes vacuous.
     for (heading, heading_const, term, term_const, which) in [
         (
             TABS_FIRST_HEADING,
@@ -15829,11 +14690,8 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
              and do NOT touch the assertions."
         );
     }
-    // The NAME half of the same crossing. It is enforced by the generic loop above
-    // while both fixtures stay registered in RELAUNCH_FIXTURE_NAMES — and five
-    // fixtures in this file have already been moved OUT of that table under a
-    // documented exemption, so the pair is stated here as well rather than left
-    // resting on a registration a later unit may lift.
+    // The name half of the same crossing, stated here as well, since fixtures do leave the registration
+    // table under documented exemptions.
     for (name, name_const, other_term, other_const) in [
         (
             TABS_FIRST_FILE,
@@ -15858,10 +14716,8 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
              the names stay clear of the terms."
         );
     }
-    // The `:e` leg (d) types is a BARE name resolved against the new tab's own
-    // working directory, so it has to be the second fixture's final component and
-    // nothing else; a disagreement opens an empty scratch buffer and capture B would
-    // fail for a fixture reason while reading like a tab-inheritance failure.
+    // Leg (d)'s `:e` is a bare name resolved in the new tab's cwd, so it is the second fixture's last
+    // component, or capture B fails for a fixture reason that reads as a tab failure.
     assert_eq!(
         TABS_SECOND_FILE,
         format!("{TABS_SUBDIR}/{TABS_SECOND_NAME}"),
@@ -15897,27 +14753,8 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
          thing assertion 5 discriminates is gone."
     );
 
-    // ---- The TAB-PERSISTENCE smoke's exemption, the tenth block ---------------
-    //
-    // The two-window smoke's shape exactly, and safe for the same reason.
-    // `three_tabs_survive_a_relaunch_under_cage` names its three fixtures after the
-    // strings its assertions compare against, which the rule at the top of this file
-    // forbids everywhere else — and it may, because THE SMOKE CAPTURES NO IMAGE. It
-    // invokes `grim` nowhere and `tesseract` nowhere, so it asserts on no page and
-    // nothing rendered can satisfy one of its assertions. What it compares are
-    // `TabState::layout` leaf paths read out of two frozen `state.json` files through
-    // `wolf_core::load_state`, and `bufname()` tails the captive Neovim writes about
-    // itself with `writefile`. A tree-sidebar row is TEXT ON A SURFACE: it cannot put
-    // a `PaneNode::Leaf` into a serialized window tree, and neither can an `:e` echo
-    // or a tab title.
-    //
-    // The names are registered in RELAUNCH_FIXTURE_NAMES anyway, so the generic loop
-    // still keeps them clear of every OTHER smoke's asserted terms — the hazard a
-    // later rename would create for somebody else.
-    //
-    // What this block adds is the CROSSING. The smoke's whole claim is that tab 0,
-    // tab 1 and tab 2 come back in SAVED ORDER, and that claim is falsifiable only
-    // while every comparison it makes can tell the three apart.
+    // The tab-persistence exemption, the two-window shape: its names match the compared strings, which
+    // is safe because it reads no image. This block adds the crossing the saved-order claim needs.
     assert_eq!(
         TABS_RESTORE_FILES.len(),
         3,
@@ -16007,18 +14844,15 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
 fn the_column_cap_cannot_bind_at_the_ocr_smokes_geometry() {
     let cell = cell_metrics_for_smoke();
 
-    // The pane AREA's width: the output minus the sidebar and the paned handle, which
-    // is what OVERLAY_ORIGIN_X_EXPECTED measures. Deliberately NOT derived from
-    // PANE_ORIGIN_X_EXPECTED — that pair is the TEXT GRID's corner, this one is the
-    // widget's, and neither may be derived from the other.
+    // The pane area's width, as OVERLAY_ORIGIN_X_EXPECTED measures; not derived from
+    // PANE_ORIGIN_X_EXPECTED, which is the text grid's corner, not the widget's.
     let pane_area_w =
         exact_f64(CAGE_OUTPUT_W_EXPECTED, "CAGE_OUTPUT_W_EXPECTED") - OVERLAY_ORIGIN_X_EXPECTED;
     let inset_w = pane_area_w - 2.0 * wolf_gnome::editor_inset::EDITOR_PADDING_PX;
     let cap_w = f64::from(wolf_gnome::editor_inset::MAX_GRID_COLS) * cell.cell_w;
 
-    // Non-vacuity: a non-positive inset width satisfies the comparison below for any
-    // cap at all, and would mean the two pinned constants had crossed rather than that
-    // the cap is safely out of reach.
+    // Non-vacuity: a non-positive inset satisfies the comparison for any cap, and means the two pinned
+    // constants crossed.
     assert!(
         inset_w > 0.0,
         "the pane area derived from CAGE_OUTPUT_W_EXPECTED ({CAGE_OUTPUT_W_EXPECTED}) and \
@@ -16057,19 +14891,11 @@ fn window_renders_typed_text_under_cage() {
     // integration tests of a crate that declares a `[[bin]]`).
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
 
-    // A fresh temp cwd, exactly like every other smoke. The app reads
-    // `std::env::current_dir()` for `CoreConfig.cwd`, so we launch cage with this
-    // directory as its working directory (see `cage_command` below). See
-    // `make_temp_cwd` for why isolation is mandatory here: at a fixed cwd this
-    // scenario's own `kill` leaves a stale `Untitled.md` swap that becomes the NEXT
-    // run's fixture.
+    // Isolation is mandatory: at a fixed cwd this scenario's `kill` leaves an `Untitled.md` swap that
+    // becomes the next run's fixture. See `make_temp_cwd`.
     let cwd = make_temp_cwd();
 
-    // Give the tree sidebar rows of text to draw. See `SIDEBAR_FILLER_COUNT`: with an
-    // empty cwd the editor draws `hello` correctly (proven pixel by pixel) but
-    // tesseract misreads its isolated leading `h` as the ligature `ﬁ` on the sparse
-    // page. These files restore the page density this assertion has always implicitly
-    // relied on. They are fixture only — nothing here asserts on them.
+    // Page density for OCR; see `SIDEBAR_FILLER_COUNT`. Nothing asserts on these files.
     for name in SIDEBAR_FILLER_FILES {
         let filler = cwd.join(name);
         std::fs::write(&filler, SIDEBAR_FILLER_BODY)
@@ -16089,10 +14915,6 @@ fn window_renders_typed_text_under_cage() {
         });
     }
 
-    // Run the WHOLE scenario inside cage. cage sets WAYLAND_DISPLAY for the child
-    // tree, so wtype/grim inside the scenario see the headless display. We inherit
-    // the parent environment (WOLF_NVIM_BIN, WLR_BACKENDS, FONTCONFIG_FILE, ...) and
-    // add the scenario-specific vars.
     let status = cage_command(SCENARIO, &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
@@ -16122,10 +14944,7 @@ fn window_renders_typed_text_under_cage() {
         out_png.display()
     );
 
-    // OCR the screenshot and assert the full typed word rendered. The scenario
-    // parks the block cursor on the empty row 1 (via `o`+Escape) so it no longer
-    // sits atop any letter of OCR_WORD on row 0, making the whole word legible to
-    // OCR rather than just a cursor-free prefix.
+    // The scenario parks the cursor on row 1, so it does not sit on a letter of OCR_WORD.
     let ocr_text = ocr_to_lowercase(&out_png);
     assert!(
         ocr_text.contains(OCR_WORD),
@@ -16142,7 +14961,7 @@ fn window_renders_typed_text_under_cage() {
          rendering failure and NOT the swap modal: the scenario typed only after `wait_ready` saw \
          the app's readiness file, so the app declared itself ready while the compositor was \
          still dropping keys, and the readiness predicate is missing a conjunct. Read the app's \
-         `wolf-ready:` stderr lines and `crates/wolf-gnome/DECISIONS.md`, \"The readiness \
+         `wolf-ready:` stderr lines and `notes/wolf-gnome-decisions.md`, \"The readiness \
          file\", and find the condition that held too early. A sleep after `wait_ready` is NOT \
          the fix; it would hide which conjunct is missing.\n\
          \n\
@@ -16191,9 +15010,6 @@ fn picker_opens_and_loads_selected_file_under_cage() {
     // Locate the freshly built binary under test.
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
 
-    // Create a fresh temp cwd and drop the known markdown target into it. The app
-    // reads `std::env::current_dir()` for `CoreConfig.cwd`, so we launch cage with
-    // this directory as its working directory (see `cage_command` below).
     let cwd = make_temp_cwd();
     let target = cwd.join(PICKER_FILE_NAME);
     std::fs::write(&target, format!("{PICKER_HEADING}\n"))
@@ -16240,12 +15056,8 @@ fn picker_opens_and_loads_selected_file_under_cage() {
         out_png.display()
     );
 
-    // OCR the screenshot and assert (loosely) that the target file's HEADING is
-    // present — proving the picker opened, matched `PICKER_QUERY`, selected the
-    // entry, and nvim loaded the file. The heading word appears nowhere but inside
-    // the buffer (the fixture is named `ptarget.md`), so only a rendered buffer can
-    // satisfy this; see the note on `PICKER_FILE_NAME` for the run in which a
-    // filename-shaped term made this assertion pass with the picker never opening.
+    // The heading word appears only inside the buffer, so only a rendered buffer satisfies this; see
+    // `PICKER_FILE_NAME`.
     let ocr_text = ocr_to_lowercase(&out_png);
     assert!(
         ocr_text.contains(PICKER_OCR),
@@ -16267,11 +15079,6 @@ fn picker_arrow_navigation_selects_second_match_under_cage() {
     // Locate the freshly built binary under test.
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
 
-    // Create a fresh temp cwd and drop BOTH known markdown targets into it. The
-    // app reads `std::env::current_dir()` for `CoreConfig.cwd`, so we launch cage
-    // with this directory as its working directory (see `cage_command` below).
-    // Neither file is in the MRU cache, so the picker's row order is determined
-    // purely by the rank tiebreaks: `pick1.md` is row 0, `pick2.md` is row 1.
     let cwd = make_temp_cwd();
     let target_a = cwd.join(PICKER_NAV_FILE_A);
     let target_b = cwd.join(PICKER_NAV_FILE_B);
@@ -16330,9 +15137,6 @@ fn picker_arrow_navigation_selects_second_match_under_cage() {
         out_png.display()
     );
 
-    // OCR the screenshot. The selection started on row 0 (`pick1.md`), `Down`
-    // moved it to row 1 (`pick2.md`), and `Enter` opened that row — so nvim must
-    // have loaded `pick2.md`, whose heading lowercases to contain `picktwo`.
     let ocr_text = ocr_to_lowercase(&out_png);
     assert!(
         ocr_text.contains(PICKER_NAV_OCR_PRESENT),
@@ -16342,9 +15146,7 @@ fn picker_arrow_navigation_selects_second_match_under_cage() {
          OCR output was:\n{ocr_text}",
         out_png.display()
     );
-    // Prove the selection actually moved OFF the top row: row 0's heading
-    // (`pickone`) must not be the opened file. Loose, but a strong signal that
-    // navigation occurred rather than Enter just opening row 0.
+    // Row 0's heading must be absent, so Enter did not just open row 0.
     assert!(
         !ocr_text.contains(PICKER_NAV_OCR_ABSENT),
         "OCR unexpectedly contained {PICKER_NAV_OCR_ABSENT:?}: it looks like row 0 ({PICKER_NAV_FILE_A}) \
@@ -16368,10 +15170,6 @@ fn tree_sidebar_shows_files_under_cage() {
     // Locate the freshly built binary under test.
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
 
-    // Create a fresh temp cwd and drop the distinctively-named markdown file into
-    // it. The app reads `std::env::current_dir()` for `CoreConfig.cwd`, so we
-    // launch cage with this directory as its working directory (see `cage_command`
-    // below); the long-lived FileSearch then populates the tree from this cwd.
     let cwd = make_temp_cwd();
     let target = cwd.join(TREE_FILE_NAME);
     std::fs::write(&target, format!("{TREE_HEADING}\n"))
@@ -16416,12 +15214,7 @@ fn tree_sidebar_shows_files_under_cage() {
         out_png.display()
     );
 
-    // OCR the screenshot and assert (loosely) that the file's NAME rendered in the
-    // sidebar — proving the long-lived FileSearch populated the tree projection
-    // and the ListView drew the row. This verifies tree POPULATION only (same
-    // mechanism as the picker); highlight/reveal and single-click-open are covered
-    // by S1/S2 + `rel_path_for` pure tests and manual checking (see the NOTE to
-    // coder near the TREE_* consts).
+    // Tree population only; see the tree-sidebar comment above the TREE_* consts.
     let ocr_text = ocr_to_lowercase(&out_png);
     assert!(
         ocr_text.contains(TREE_OCR),
@@ -16441,10 +15234,6 @@ fn vertical_split_shows_two_panes_under_cage() {
     // Locate the freshly built binary under test.
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
 
-    // Create a fresh temp cwd and drop BOTH markdown targets into it. The app reads
-    // `std::env::current_dir()` for `CoreConfig.cwd`, so we launch cage with this
-    // directory as its working directory (see `cage_command` below); the scenario
-    // opens file A in the first pane and file B in the new (split) pane by name.
     let cwd = make_temp_cwd();
     let target_left = cwd.join(VSPLIT_FILE_LEFT);
     let target_right = cwd.join(VSPLIT_FILE_RIGHT);
@@ -16473,12 +15262,8 @@ fn vertical_split_shows_two_panes_under_cage() {
         });
     }
 
-    // Run the whole vertical-split scenario inside cage, with the temp dir as the
-    // working directory so the app picks it up as its cwd.
-    // `cage_command` supplies WOLF_FONT_PT (and WOLF_STATE_DIR). See the "Note (OCR
-    // width)" paragraph above the VSPLIT_* consts: if two side-by-side panes are ever
-    // too narrow for 28pt OCR, widen the window or lower the font for THIS test —
-    // never for all twenty by editing the helper.
+    // Two side-by-side panes near OCR's floor: adjust the window or font for this test only, never the
+    // helper. See notes/crates/wolf-gnome/tests/smoke_headless.rs.md#split-pane-smokes
     let status = cage_command(VSPLIT_SCENARIO, &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
@@ -16507,12 +15292,6 @@ fn vertical_split_shows_two_panes_under_cage() {
         out_png.display()
     );
 
-    // OCR the screenshot and assert (loosely) that BOTH files' HEADINGS render at
-    // once — proving the vertical split produced a second pane bound to the new
-    // nvim window/grid and painted it beside the first. Both terms are heading
-    // words that appear nowhere but inside a loaded buffer (the fixtures are named
-    // `pleft.md` / `pright.md`), so neither the sidebar rows nor nvim's `:e` toast
-    // can satisfy either assertion; see the note above the VSPLIT_* consts.
     let ocr_text = ocr_to_lowercase(&out_png);
     assert!(
         ocr_text.contains(VSPLIT_OCR_LEFT),
@@ -16532,28 +15311,13 @@ fn vertical_split_shows_two_panes_under_cage() {
         out_png.display()
     );
 
-    // --- A pane's own edges carry no themed chrome ----------------------------
-    //
-    // Pixels rather than OCR, for the reason `tests/README.md` records: tesseract
-    // cannot tell one colour from another, so no reading of this page is evidence
-    // about what is painted at a pane's edge. This capture is already the right page
-    // for it — two panes, the right one active by construction — so the claim costs
-    // no second `cage` launch.
+    // A pane's own edges carry no themed chrome, read from pixels: tesseract cannot tell colours apart
+    // (see `crates/wolf-gnome/tests/README.md`). This capture already has the right page.
     let capture = decode_capture(&out_png, SMOKE, "the vertical-split capture");
     let (left_probe, right_probe) = pane_edge_probes();
 
-    // The reference is the editor's OWN background, read out of the right pane's
-    // padding gutter rather than named as a constant: the colour comes from the
-    // colorscheme through highlight 0, so a literal here would pin a palette this
-    // smoke takes no position on.
-    //
-    // Its row is the probe's vertical midpoint — 213 at the pinned output, below the
-    // pane's statusbar strip, which is about 92 px tall at SMOKE_FONT_PT (two line
-    // boxes of `STATUSBAR_LINE_FACTOR` times the font in device pixels, two paddings
-    // and a gap). The strip matters because `draw_pane` clips it to its own band
-    // VERTICALLY and not horizontally, so a long secondary line can reach into this
-    // gutter. A reference taken off a glyph reddens the precondition below instead of
-    // passing it quietly, which is the safe direction and the first thing to check.
+    // The reference is the editor's own background, read from the right gutter below the statusbar
+    // strip. See notes/crates/wolf-gnome/tests/smoke_headless.rs.md#pane-edge-reference-colour
     let output_w = exact_f64(CAGE_OUTPUT_W_EXPECTED, "CAGE_OUTPUT_W_EXPECTED");
     let ref_x = pixel_index(
         output_w - PANE_EDGE_GUTTER_REF_INSET_PX,
@@ -16585,14 +15349,8 @@ fn vertical_split_shows_two_panes_under_cage() {
         out_png.display()
     );
 
-    // Precondition, second half: the reference colour is the EDITOR's background rather
-    // than the compositor's. The right probe alone cannot tell them apart — if the window
-    // falls short of the output's right edge, the reference column is outside it too, both
-    // regions read whatever the compositor paints there, and the check above compares that
-    // colour with itself. The left probe's x is OVERLAY_ORIGIN_X_EXPECTED, inside the pane
-    // area by construction and far from the right edge, so a colour read off a shrunken
-    // window's exterior holds no pixel in it. Both panes fill their allocation from the
-    // same highlight 0, so a window of the size it should be satisfies this for free.
+    // The reference must be the editor's background, not the compositor's; the left probe sits inside
+    // the pane area, so a shrunken window's exterior colour holds none of its pixels.
     assert!(
         capture.count_exactly(left_probe, editor_bg) > 0,
         "{SMOKE}: the LEFT-edge probe (x {}..{}, y {}..{}) holds no pixel of {editor_bg:?}, \
@@ -16628,7 +15386,7 @@ fn vertical_split_shows_two_panes_under_cage() {
          highlight 0 and this front-end takes no colour from the GTK theme into a pane, so the \
          per-pane statusbar strip's TEXT is the only active-pane signal — bold at full strength \
          in the active pane, both lines scaled by STATUSBAR_INACTIVE_ALPHA in the others. \
-         `crates/wolf-gnome/DECISIONS.md` records why, and what an edge treatment costs beyond \
+         `notes/wolf-gnome-decisions.md` records why, and what an edge treatment costs beyond \
          the look of it: it lands in the padding gutter `scrollbar.rs`'s thumb hides in, and a \
          long thin high-contrast mark beside a narrow pane's text is what DIVIDER_BODY_LINE_COUNT \
          records corrupting `tesseract --psm 11`'s scale estimate for a whole pane. A non-zero \
@@ -16652,10 +15410,6 @@ fn horizontal_split_shows_two_panes_under_cage() {
     // Locate the freshly built binary under test.
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
 
-    // Create a fresh temp cwd and drop BOTH markdown targets into it. The app reads
-    // `std::env::current_dir()` for `CoreConfig.cwd`, so we launch cage with this
-    // directory as its working directory (see `cage_command` below); the scenario
-    // opens file A in the first pane and file B in the new (stacked) pane by name.
     let cwd = make_temp_cwd();
     let target_top = cwd.join(HSPLIT_FILE_TOP);
     let target_bottom = cwd.join(HSPLIT_FILE_BOTTOM);
@@ -16684,12 +15438,8 @@ fn horizontal_split_shows_two_panes_under_cage() {
         });
     }
 
-    // Run the whole horizontal-split scenario inside cage, with the temp dir as the
-    // working directory so the app picks it up as its cwd.
-    // `cage_command` supplies WOLF_FONT_PT (and WOLF_STATE_DIR). See the "Note (OCR
-    // height)" paragraph above the HSPLIT_* consts: if two stacked panes are ever too
-    // short for 28pt OCR, make the window taller or lower the font for THIS test —
-    // never for all twenty by editing the helper.
+    // Stacked panes near OCR's floor: adjust the window or font for this test only, never the helper.
+    // See notes/crates/wolf-gnome/tests/smoke_headless.rs.md#split-pane-smokes
     let status = cage_command(HSPLIT_SCENARIO, &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
@@ -16718,9 +15468,6 @@ fn horizontal_split_shows_two_panes_under_cage() {
         out_png.display()
     );
 
-    // OCR the screenshot and assert (loosely) that BOTH files' headings render at
-    // once — proving the horizontal split produced a second pane bound to the new
-    // nvim window/grid and painted it stacked with the first.
     let ocr_text = ocr_to_lowercase(&out_png);
     assert!(
         ocr_text.contains(HSPLIT_OCR_TOP),
@@ -16745,9 +15492,6 @@ fn focus_move_returns_to_first_pane_under_cage() {
     // Locate the freshly built binary under test.
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
 
-    // Create a fresh temp cwd and drop BOTH markdown targets into it. The app reads
-    // `std::env::current_dir()` for `CoreConfig.cwd`, so we launch cage with this
-    // directory as its working directory (see `cage_command` below).
     let cwd = make_temp_cwd();
     let target_left = cwd.join(FOCUS_FILE_LEFT);
     let target_right = cwd.join(FOCUS_FILE_RIGHT);
@@ -16807,13 +15551,8 @@ fn focus_move_returns_to_first_pane_under_cage() {
         out_png.display()
     );
 
-    // OCR the screenshot. PRIMARY assertions: the marker was inserted (so the
-    // post-<C-w>h insert reached the focused pane) AND the split persisted (both
-    // file headings still render).
-    //
-    // Note: this proves the focus-move PLUMBING end to end but does NOT
-    // pixel-verify WHICH pane received the marker (positional OCR is too fragile).
-    // The pure `layout::neighbor` unit tests cover which pane is the left neighbor.
+    // Proves the focus-move wiring, not which pane got the marker: positional OCR is too fragile, and
+    // `layout::neighbor` unit tests cover the geometry.
     let ocr_text = ocr_to_lowercase(&out_png);
     assert!(
         ocr_text.contains(FOCUS_OCR_MARKER),
@@ -16843,9 +15582,6 @@ fn close_pane_leaves_one_under_cage() {
     // Locate the freshly built binary under test.
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
 
-    // Create a fresh temp cwd and drop BOTH markdown targets into it. The app reads
-    // `std::env::current_dir()` for `CoreConfig.cwd`, so we launch cage with this
-    // directory as its working directory (see `cage_command` below).
     let cwd = make_temp_cwd();
     let target_keep = cwd.join(CLOSE_FILE_KEEP);
     let target_gone = cwd.join(CLOSE_FILE_GONE);
@@ -16904,10 +15640,7 @@ fn close_pane_leaves_one_under_cage() {
         out_png.display()
     );
 
-    // OCR the screenshot. The survivor (left) pane's file must render, and the
-    // closed (right) pane's file must NOT — proving <C-w>c removed the focused pane
-    // and the survivor reclaimed the width. Both assertions are load-bearing; see
-    // the close-pane scenario notes above for why the NOT-contains one is sound.
+    // Both are load-bearing; the close-pane scenario comment says why the not-contains is sound.
     let ocr_text = ocr_to_lowercase(&out_png);
     assert!(
         ocr_text.contains(CLOSE_OCR_KEEP),
@@ -16931,9 +15664,6 @@ fn three_panes_keep_all_files_visible_under_cage() {
     // Locate the freshly built binary under test.
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
 
-    // Create a fresh temp cwd and drop ALL THREE markdown targets into it. The app
-    // reads `std::env::current_dir()` for `CoreConfig.cwd`, so we launch cage with
-    // this directory as its working directory (see `cage_command` below).
     let cwd = make_temp_cwd();
     let target_a = cwd.join(TRI_FILE_A);
     let target_b = cwd.join(TRI_FILE_B);
@@ -16957,12 +15687,8 @@ fn three_panes_keep_all_files_visible_under_cage() {
         });
     }
 
-    // Run the whole three-pane scenario inside cage, with the temp dir as the
-    // working directory so the app picks it up as its cwd.
-    // `cage_command` supplies WOLF_FONT_PT (and WOLF_STATE_DIR). See the "Note (OCR
-    // width)" paragraph above the TRI_* consts: if three side-by-side panes are ever
-    // too narrow for 28pt OCR, widen the window or lower the font for THIS test —
-    // never for all twenty by editing the helper.
+    // Three side-by-side panes near OCR's floor: adjust the window or font for this test only.
+    // See notes/crates/wolf-gnome/tests/smoke_headless.rs.md#split-pane-smokes
     let status = cage_command(TRISPLIT_SCENARIO, &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
@@ -16992,11 +15718,7 @@ fn three_panes_keep_all_files_visible_under_cage() {
         out_png.display()
     );
 
-    // OCR the screenshot and assert (loosely) that ALL THREE files' headings render
-    // at once — proving the third (same-orientation) split flattened into a row of
-    // three panes WITHOUT collapsing the pre-existing right pane (B). The
-    // load-bearing assertion is `tribtwo`: the pre-n-ary binary model blanked the
-    // right pane B.
+    // `tribtwo` is the load-bearing term: a binary-nest model blanks pane B.
     let ocr_text = ocr_to_lowercase(&out_png);
     assert!(
         ocr_text.contains(TRI_OCR_A),
@@ -17055,20 +15777,8 @@ fn empty_state_shows_open_folder_button_under_cage() {
         });
     }
 
-    // Run the whole empty-state scenario inside cage. Setting HOME to the SAME temp
-    // directory we hand cage as its cwd is what fires `launch_decision`'s
-    // `cwd == home` branch — the production rule, with no test-only env var — and
-    // keeps every remaining $HOME-derived path inside the temp dir too. (The state
-    // dir is no longer one of them: `cage_command` pins it with `WOLF_STATE_DIR`,
-    // which `state_dir()` resolves ahead of anything $HOME-derived, so the MRU sqlite
-    // and the swap dir land in this cwd's `-state` sibling.)
-    //
-    // This `.env("HOME", ...)` DELIBERATELY OVERRIDES the default `cage_command` now
-    // sets (the cwd's PARENT, which would leave this smoke in the `Folder` branch and
-    // defeat it entirely). It is chained AFTER the helper, so it wins — `Command::env`
-    // is last-write-wins per key. The determinism property the default exists for is
-    // preserved: with HOME == cwd, `title::display_title` renders the constant `~`,
-    // so this smoke's page is still byte-identical across runs.
+    // `HOME` equal to the cwd fires `launch_decision`'s `cwd == home` branch. Chained after the helper
+    // so it overrides the default (last write wins); the title is the constant `~`.
     let status = cage_command(EMPTY_STATE_SCENARIO, &cwd, &runtime_dir)
         .env("HOME", &cwd)
         .env("WOLF_BIN", bin)
@@ -17095,9 +15805,7 @@ fn empty_state_shows_open_folder_button_under_cage() {
         out_png.display()
     );
 
-    // OCR the screenshot and assert (loosely) that the status page rendered. The
-    // word appears three times (title, description, button), which is the
-    // OCR-robustness margin.
+    // The word appears three times (title, description, button), which is the OCR margin.
     let ocr_text = ocr_to_lowercase(&out_png);
     assert!(
         ocr_text.contains(EMPTY_STATE_OCR),
@@ -17119,9 +15827,6 @@ fn new_untitled_buffer_replaces_open_file_under_cage() {
     // Locate the freshly built binary under test.
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
 
-    // Create a fresh temp cwd and drop the base markdown file into it. The app reads
-    // `std::env::current_dir()` for `CoreConfig.cwd`, so we launch cage with this
-    // directory as its working directory (see `cage_command` below).
     let cwd = make_temp_cwd();
     let target = cwd.join(NEWBUF_FILE);
     std::fs::write(&target, format!("{NEWBUF_HEADING}\n"))
@@ -17169,12 +15874,7 @@ fn new_untitled_buffer_replaces_open_file_under_cage() {
         out_png.display()
     );
 
-    // OCR the screenshot. The marker typed into the FRESH buffer must render, and
-    // the base file's heading must NOT — together they prove Ctrl+Shift+N created a
-    // new untitled buffer and put it in the focused pane. Both assertions are
-    // load-bearing; see the NEWBUF_* const notes for why the NOT-contains one is
-    // sound (the filename differs from the heading word, so nvim's `:e` toast and
-    // the sidebar row cannot satisfy it).
+    // Both assertions are load-bearing; the NEWBUF_* comment says why the not-contains is sound.
     let ocr_text = ocr_to_lowercase(&out_png);
     assert!(
         ocr_text.contains(NEWBUF_OCR_PRESENT),
@@ -17259,9 +15959,6 @@ fn command_palette_chord_runs_the_selected_command_under_cage() {
     // Locate the freshly built binary under test.
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
 
-    // Create a fresh temp cwd and drop the base markdown file into it. The app reads
-    // `std::env::current_dir()` for `CoreConfig.cwd`, so we launch cage with this
-    // directory as its working directory (see `cage_command` below).
     let cwd = make_temp_cwd();
     let target = cwd.join(PALETTE_FILE);
     std::fs::write(&target, format!("{PALETTE_HEADING}\n")).unwrap_or_else(|e| {
@@ -17271,11 +15968,8 @@ fn command_palette_chord_runs_the_selected_command_under_cage() {
         )
     });
 
-    // Page density. The asserted marker is a short isolated word on an otherwise thin
-    // editor page, which is exactly the `SIDEBAR_FILLER_COUNT` hazard: below the
-    // measured five-file floor tesseract misclassifies isolated glyphs. The fillers
-    // cannot perturb the palette's candidate list, which comes from `COMMAND_SPECS`
-    // and not from a file search.
+    // Page density for a short isolated marker (see `SIDEBAR_FILLER_COUNT`). The palette's candidates
+    // come from `COMMAND_SPECS`, so the fillers cannot perturb them.
     for name in SIDEBAR_FILLER_FILES {
         let filler = cwd.join(name);
         std::fs::write(&filler, SIDEBAR_FILLER_BODY).unwrap_or_else(|e| {
@@ -17288,9 +15982,7 @@ fn command_palette_chord_runs_the_selected_command_under_cage() {
     let out_png = runtime_dir.join("wolf_gnome_palette_smoke.png");
     clear_evidence(&out_png, SMOKE);
 
-    // The state dir `cage_command` hands the app as WOLF_STATE_DIR — the same one
-    // assertion 5 reads the command MRU back out of. No HOME override: this smoke
-    // wants the ordinary `Folder` launch decision and the constant `~/project` title.
+    // No `HOME` override: this smoke wants the `Folder` launch and the constant `~/project` title.
     let smoke_state = smoke_state_dir(&cwd);
 
     let status = cage_command(PALETTE_SCENARIO, &cwd, &runtime_dir)
@@ -17334,14 +16026,8 @@ fn command_palette_chord_runs_the_selected_command_under_cage() {
         out_png.display()
     );
 
-    // --- Assertion 4 (precondition): the marker reached a buffer at all -------
-    //
-    // Assertion 3 above reads as "the editor is showing a buffer, and it is NOT the
-    // base file". Only this assertion carries the first half: an editor drawing no
-    // text at all — a dead session, a blank page, an unreadable capture — satisfies
-    // assertion 3 vacuously. It does NOT discriminate the palette's focus return:
-    // deleting `PaletteInner::close`'s `area.grab_focus()` was measured GREEN here,
-    // so read the revert table above before blaming focus for a failure.
+    // Assertion 4 (precondition): the marker reached a buffer. It does not test focus return; deleting
+    // `PaletteInner::close`'s `area.grab_focus()` stays green, so read the revert table first.
     assert!(
         ocr_text.contains(PALETTE_OCR_PRESENT),
         "{SMOKE}: OCR did not contain the marker {PALETTE_OCR_PRESENT:?} typed after the palette \
@@ -17357,12 +16043,8 @@ fn command_palette_chord_runs_the_selected_command_under_cage() {
         out_png.display()
     );
 
-    // --- Assertion 5 (discriminator): activation recorded the row's MRU key ---
-    //
-    // Independent of the pixels: nothing but a palette activation writes this store
-    // (`WolfCore::command_mru`'s doc states it), so a hit can only mean the row was
-    // activated AND that its opaque key is the canonical registry id the palette's
-    // ranking is keyed on.
+    // Assertion 5 (discriminator): only a palette activation writes this store (see
+    // `WolfCore::command_mru`), so a hit means the row ran with its canonical registry id.
     let recent = CommandMru::open(&smoke_state).recent();
     assert!(
         recent.iter().any(|k| k == PALETTE_MRU_KEY),
@@ -17467,9 +16149,7 @@ fn preview_pane_renders_and_edit_source_returns_under_cage() {
     // Locate the freshly built binary under test.
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
 
-    // A fresh temp cwd holding the two fixtures and the filler files. The source
-    // carries a heading AND a paragraph: the paragraph is page density INSIDE the web
-    // view, which is the one region of this capture the sidebar fillers cannot reach.
+    // The source's paragraph is density inside the web view, which the sidebar fillers cannot reach.
     let cwd = make_temp_cwd();
     let source_body = format!("{PREVIEW_SOURCE_HEADING}\n\n{PREVIEW_SOURCE_PARAGRAPH}");
     write_relaunch_fixtures(
@@ -17486,10 +16166,7 @@ fn preview_pane_renders_and_edit_source_returns_under_cage() {
     let smoke_state = smoke_state_dir(&cwd);
     let smoke_state_file = smoke_state.join(STATE_FILE_NAME);
 
-    // Where the scenario freezes the state file while the preview pane is still live.
-    // A DIRECTORY holding a `state.json`, because `wolf_core::load_state` takes the
-    // directory rather than the file; under XDG_RUNTIME_DIR rather than in the temp
-    // cwd so the app's own `FileSearch` never lists it in the sidebar.
+    // A directory, because `load_state` takes one; under XDG_RUNTIME_DIR so the sidebar never lists it.
     let frozen_state_dir = runtime_dir.join("wolf_gnome_preview_state");
     std::fs::create_dir_all(&frozen_state_dir).unwrap_or_else(|e| {
         panic!(
@@ -17525,20 +16202,15 @@ fn preview_pane_renders_and_edit_source_returns_under_cage() {
         .env("PREVIEW_QUERY", PREVIEW_QUERY)
         .env("EDIT_QUERY", EDIT_QUERY)
         .env("PREVIEW_LIVE_MARKER", PREVIEW_LIVE_MARKER)
-        // The typing pace both bursts run at, from the one place the number lives.
-        // The scenario does not assign it: unset, `set -u` aborts the run rather than
-        // typing at wtype's default rate, which is the rate that would disarm
-        // assertion 11 and shorten step 9's burst below the staleness cap.
+        // The scenario does not assign it, so `set -u` aborts rather than typing at wtype's default rate,
+        // which would disarm assertion 11 and shorten step 9's burst below the staleness cap.
         .env("TYPE_DELAY_MS", PREVIEW_TYPE_DELAY_MS.to_string())
         .env("PREVIEW_CAP_FILLER", PREVIEW_CAP_FILLER)
         .env("PREVIEW_READBACK_A", &readback_a)
         .env("PREVIEW_READBACK_B", &readback_b)
         .env("PREVIEW_STATE_SRC", &smoke_state_file)
         .env("PREVIEW_STATE_COPY", &frozen_state_file)
-        // The frame-time instrument, armed for assertion 12 alone. The interval is
-        // the frame-stats smoke's, and it is shared safely because assertion 12 SUMS
-        // across reports: how many reports the run is cut into does not move the
-        // total, only which report each render lands in.
+        // For assertion 12 alone, which sums across reports, so sharing the frame-stats interval is safe.
         .env("WOLF_FRAME_STATS", "1")
         .env("WOLF_FRAME_STATS_INTERVAL", FRAME_STATS_INTERVAL_SECS)
         .env("WOLF_FRAME_STATS_FILE", &stats_path)
@@ -17564,13 +16236,8 @@ fn preview_pane_renders_and_edit_source_returns_under_cage() {
     assert_png_present(SMOKE, &out_png_before);
     assert_png_present(SMOKE, &out_png);
 
-    // --- Assertion 3 (precondition): both palette rows were ACTIVATED ---------
-    //
-    // `activate_selection` records the row's MRU key BEFORE it dispatches, so this is
-    // a statement about the palette reaching the right rows and about nothing the
-    // shell then did. It is read first because every assertion below rests on it: a
-    // missing key here means the query matched the wrong row (or no row), and the
-    // failures below would be describing a command that never ran.
+    // Assertion 3 (precondition): both palette rows were activated. `activate_selection` records the
+    // key before dispatch, and every assertion below rests on it.
     let recent = CommandMru::open(&smoke_state).recent();
     for key in PREVIEW_MRU_KEYS {
         assert!(
@@ -17588,11 +16255,8 @@ fn preview_pane_renders_and_edit_source_returns_under_cage() {
 
     let ocr_before = ocr_to_lowercase(&out_png_before);
 
-    // --- Assertion 4 (precondition): the editor pane is still drawing ---------
-    //
-    // Two jobs: the window was painting when `grim` ran, and the preview replaced
-    // exactly ONE of the two panes. Without it a blank or dead window would leave
-    // assertion 6's failure ambiguous between "no preview" and "no window".
+    // Assertion 4 (precondition): the window was painting and the preview replaced one of two panes, so
+    // assertion 6 cannot fail ambiguously between "no preview" and "no window".
     assert!(
         ocr_before.contains(PREVIEW_OCR_OTHER),
         "{SMOKE}: capture A did not contain {PREVIEW_OCR_OTHER:?} — the heading of \
@@ -17605,16 +16269,8 @@ fn preview_pane_renders_and_edit_source_returns_under_cage() {
         out_png_before.display()
     );
 
-    // --- Assertion 5 (discriminator): NEOVIM's own view of the two windows ----
-    //
-    // Pixel-independent: the buffer NAMES the captive Neovim reports for its own
-    // windows. The preview scratch is named by `wolf_ensure_preview_buf` after the
-    // SOURCE's cwd-relative path, so this states the pane count, the preview's
-    // existence and the file it previews in one comparison.
-    //
-    // It is read BEFORE the two OCR assertions because it is what establishes their
-    // premise: assertion 6's "only WebKit can draw this term" holds only once the
-    // `active` placement has really taken the source's raw text off the screen.
+    // Assertion 5 (discriminator): Neovim's own window buffer names. Read before the OCR assertions,
+    // because it establishes assertion 6's premise that the source text is off screen.
     let want_open = {
         let mut want = vec![
             format!("{PREVIEW_READBACK_PREFIX}{PREVIEW_SOURCE_FILE}"),
@@ -17635,14 +16291,8 @@ fn preview_pane_renders_and_edit_source_returns_under_cage() {
          means the wrong buffer was previewed."
     );
 
-    // --- Assertion 6 (discriminator): the web view RENDERED the document ------
-    //
-    // The placement is `active`, so `wolf_open_preview` replaced the source pane's
-    // buffer with the preview scratch and the source's raw text is displayed in NO
-    // pane. The sidebar row and the `:e` toast both spell `pvsrc.md`, whose lowercase
-    // does not contain this heading word. So the only thing on this page that can
-    // draw it is WebKit — GIVEN the placement, which assertion 5 above is what
-    // establishes.
+    // Assertion 6 (discriminator): the in-place placement leaves the source in no pane and `pvsrc.md`
+    // lacks the word, so only WebKit can draw it, given assertion 5.
     assert!(
         ocr_before.contains(PREVIEW_OCR_BODY),
         "{SMOKE}: capture A did not contain {PREVIEW_OCR_BODY:?} — the rendered heading of \
@@ -17659,18 +16309,8 @@ fn preview_pane_renders_and_edit_source_returns_under_cage() {
         out_png_before.display()
     );
 
-    // --- Assertion 7 (discriminator): the preview pane's OWN statusbar --------
-    //
-    // `WolfCore::pane_status` answers `[No Name]` for a preview window — preview
-    // windows are omitted from `win_buffers` entirely — so this word can only come
-    // from `preview_ui::preview_status`. Nothing else on the page spells it, and each
-    // half of that is checked by the guard that owns it: the two fixture names by
-    // `restore_fixture_names_cannot_satisfy_their_own_assertions`' generic loop, both
-    // headings and the rendered paragraph by its markdown-preview content block, the
-    // filler filenames by `sidebar_filler_names_cannot_satisfy_any_smoke_assertion`,
-    // and the header-bar title by `temp_cwd_name_cannot_satisfy_any_smoke_assertion`.
-    // The typed palette query is deliberately `prv` rather than the word itself, so a
-    // palette that failed to close cannot satisfy this either.
+    // Assertion 7 (discriminator): `pane_status` answers `[No Name]` for a preview, so only
+    // `preview_status` draws this word. The query is `prv`, so an open palette cannot satisfy it.
     assert!(
         ocr_before.contains(PREVIEW_OCR_STATUS),
         "{SMOKE}: capture A did not contain {PREVIEW_OCR_STATUS:?}, so no pane's statusbar named \
@@ -17683,11 +16323,8 @@ fn preview_pane_renders_and_edit_source_returns_under_cage() {
         out_png_before.display()
     );
 
-    // --- Assertion 8 (discriminator): the PERSISTED preview leaf --------------
-    //
-    // Read from the copy the scenario froze while the preview pane was live: the live
-    // file is rewritten on every wake, and after the Edit leg both leaves name the
-    // source, at which point the editor-leaf half proves nothing.
+    // Assertion 8 (discriminator): read from the frozen copy; the live file is rewritten on every wake
+    // and, after the Edit leg, both leaves name the source.
     let saved = load_state(&frozen_state_dir).unwrap_or_else(|| {
         panic!(
             "{SMOKE}: wolf_core::load_state could not parse the frozen state at {}. `load_state` \
@@ -17724,10 +16361,7 @@ fn preview_pane_renders_and_edit_source_returns_under_cage() {
                  divides WIDTH and must persist as Vertical. File: {}",
                 frozen_state_file.display()
             );
-            // Compared as a SET: which side of the split holds which pane is
-            // `dragged_divider_weights_survive_relaunch_under_cage`'s subject, not
-            // this one's, and pinning it here would add a way to fail that says
-            // nothing about the preview flag.
+            // Compared as a set: which side holds which pane is the divider smoke's subject, not this one's.
             let mut got: Vec<(Option<&str>, Option<bool>)> = children
                 .iter()
                 .map(|child| (leaf_tail(child), leaf_preview(child)))
@@ -17765,13 +16399,8 @@ fn preview_pane_renders_and_edit_source_returns_under_cage() {
         ),
     }
 
-    // --- Assertion 9 (discriminator): Edit-in-another-pane SPLIT, and the -----
-    //     preview SURVIVED
-    //
-    // `edit_in_other(0)` splits and binds the source into the new pane, so all three
-    // buffers stand: the preview scratch, the source it renders, and the file the
-    // first pane still holds. Both facts — a third window appeared, and the preview
-    // was not the thing replaced — are in this one comparison.
+    // Assertion 9 (discriminator): `edit_in_other(0)` splits and binds the source into the new pane, so
+    // a third window appears and the preview survives.
     let want_edit = {
         let mut want = vec![
             format!("{PREVIEW_READBACK_PREFIX}{PREVIEW_SOURCE_FILE}"),
@@ -17797,12 +16426,8 @@ fn preview_pane_renders_and_edit_source_returns_under_cage() {
 
     let ocr_live = ocr_to_lowercase(&out_png);
 
-    // --- Assertion 10 (precondition): the preview still shows a document ------
-    //
-    // What separates the two failure shapes of assertion 11: with this GREEN and 11
-    // red, the preview is frozen at the document it loaded before the edit — the
-    // single-encoding signature. With both red, the pane went blank or the view was
-    // lost, which is a different bug entirely.
+    // Assertion 10 (precondition): green here with 11 red means a frozen preview, the single-encoding
+    // signature; both red means the pane went blank or the view was lost.
     assert!(
         ocr_live.contains(PREVIEW_OCR_BODY),
         "{SMOKE}: capture B did not contain {PREVIEW_OCR_BODY:?}, so the preview pane is not \
@@ -17815,13 +16440,8 @@ fn preview_pane_renders_and_edit_source_returns_under_cage() {
         out_png.display()
     );
 
-    // --- Assertion 11 (discriminator): the LIVE EDIT reached the DOM ----------
-    //
-    // The only assertion in this repository that reaches `preview_swap_payload`. The
-    // first load into a view goes through `load_html` and looks perfect whatever the
-    // encoding does; only this second one takes the swap branch. The marker's raw
-    // text was typed into a pane nvim draws, so step 7 opened the other file over it
-    // — at this capture the marker exists in exactly one place on screen.
+    // Assertion 11 (discriminator): the only one reaching `preview_swap_payload`; step 7 covered the
+    // marker's raw text, so it is on screen in one place only.
     assert!(
         ocr_live.contains(PREVIEW_OCR_LIVE),
         "{SMOKE}: capture B did not contain {PREVIEW_OCR_LIVE:?} — the marker typed into the \
@@ -17838,15 +16458,8 @@ fn preview_pane_renders_and_edit_source_returns_under_cage() {
         out_png.display()
     );
 
-    // --- Assertion 12 (discriminator): the bursts were COALESCED --------------
-    //
-    // Everything above says the preview is CORRECT. This and assertion 13 are the
-    // only things in either suite that say what it COST: the number of blocking
-    // `render_preview` calls the whole run paid, read out of the report the
-    // application itself appended to. Assertion 11 stays green whether the marker
-    // coalesced or rendered per keystroke, which is precisely why these exist. The
-    // file is read once and the total summed once; 12 holds it to a ceiling and 13 to
-    // a floor, and the two failures name different regressions.
+    // Assertion 12 (discriminator): the blocking `render_preview` count's ceiling. 11 is green
+    // either way, so this and 13 are the only measures of what the preview cost.
     let stats_text = std::fs::read_to_string(&stats_path).unwrap_or_else(|e| {
         panic!(
             "{SMOKE}: could not read the frame-stats report {}: {e}. `frame_metrics::install()` \
@@ -17882,7 +16495,7 @@ fn preview_pane_renders_and_edit_source_returns_under_cage() {
          {PREVIEW_LIVE_MARKER:?}, and step 9's sixty-key sustained burst. Coalesced, this scenario \
          reads 7 or 8; a count around sixty is one render PER KEYSTROKE, which is the per-wake \
          render this unit replaced and the 15.6 % of wall clock \
-         `crates/wolf-gnome/DECISIONS.md` records — measured at 61 under exactly that revert. \
+         `notes/wolf-gnome-decisions.md` records — measured at 61 under exactly that revert. \
          Every assertion above stays green under it, so this and assertion 13 are the only things \
          in either suite that can see it. \
          Do NOT raise PREVIEW_RENDER_BUDGET to admit the reading: read its doc comment first, \
@@ -17891,14 +16504,8 @@ fn preview_pane_renders_and_edit_source_returns_under_cage() {
         stats_blocks.len()
     );
 
-    // --- Assertion 13 (discriminator): the STALENESS CAP fired ----------------
-    //
-    // Assertion 12 above cannot see the cap: a burst shorter than the cap is carried
-    // by a leading edge and a trailing fire, which is inside every budget. Step 9's
-    // sustained burst is what makes the cap the only thing that can render during it,
-    // and this floor is what reads the difference. It is also assertion 12's
-    // non-vacuity half — a build that renders nothing reads zero, which no ceiling
-    // can refuse.
+    // Assertion 13 (discriminator): the staleness cap fired. Only step 9's long burst exercises it,
+    // and the floor is also 12's non-vacuity half, since a build that renders nothing reads zero.
     assert!(
         renders >= PREVIEW_CAP_RENDER_FLOOR,
         "{SMOKE}: the report at {} counts {renders} {PREVIEW_RENDER_LABEL:?} sample(s) over all {} \
@@ -17923,34 +16530,8 @@ fn preview_pane_renders_and_edit_source_returns_under_cage() {
         stats_blocks.len()
     );
 
-    // --- Assertion 14 (discriminator): the FIRE opened its own region ---------
-    //
-    // The one claim assertions 12 and 13 cannot make. Both read `prev.render`, whose
-    // rows exist whether or not the sample sat inside a `pane.prev` region, so
-    // deleting the `frame_metrics::scope(Bucket::PanePrev)` guard from the fire
-    // closure leaves every count above unchanged — and silently makes
-    // `frame_stats.rs`'s nesting table false, since `prev.render` would have samples
-    // with no parent.
-    //
-    // The arithmetic, and why the comparison is this pair and not `pane.prev` against
-    // `prev.render`: a pass is opened by every pane wake that reaches it plus every
-    // performing coalescer fire, so `count(pane.prev)` is `count(pane.wake)`, minus
-    // the wakes that early-return before the pass, plus the fires.
-    //
-    // The subtracted term is ZERO here, and that is MEASURED rather than assumed: with
-    // the fire's scope deleted the two counts came out exactly equal (299 against 299),
-    // so every pane wake this scenario runs reaches the pass. The comparison is
-    // therefore STRICT. A `>=` here would be satisfied by the reverted build and would
-    // prove nothing at all — it was written that way first, and the revert passed under
-    // it.
-    //
-    // What the strict margin is: exactly the performing coalescer fires, since nothing
-    // is subtracted. Measured +4 on three consecutive green runs (298/294, 303/299,
-    // 309/305), against +0 with the fire's scope deleted.
-    //
-    // Comparing against `prev.render` instead would prove nothing either: the pass runs
-    // on nearly every wake, so 298 > 7 holds with the scope deleted and with the
-    // coalescer removed entirely.
+    // Assertion 14 (discriminator): the fire opened its own `pane.prev` region, compared strictly.
+    // See notes/crates/wolf-gnome/tests/smoke_headless.rs.md#fire-scope-arithmetic
     let pane_prev =
         sum_frame_stats_counts(&stats_blocks, PREVIEW_PANE_PREV_LABEL, &stats_path, SMOKE);
     let pane_wake =
@@ -18013,11 +16594,8 @@ fn preview_pane_renders_and_edit_source_returns_under_cage() {
 fn preview_burst_delay_stays_below_the_coalescer_trailing_delay() {
     const GUARD: &str = "preview_burst_delay_stays_below_the_coalescer_trailing_delay";
 
-    // Both sides are bound to locals before the comparison. `clippy::assertions_on_constants`
-    // rejects an `assert!` whose whole condition is constant — under `-D warnings` that
-    // is a build failure — and no `#[allow]` may be added here, for the reason
-    // `codehl_chroma_thresholds_are_separated` records. A local binding puts the
-    // condition outside that lint by construction rather than by luck.
+    // Bound to locals because `clippy::assertions_on_constants` rejects a constant condition, and no
+    // `#[allow]` may be added (see `codehl_chroma_thresholds_are_separated`).
     let burst_delay = Duration::from_millis(PREVIEW_TYPE_DELAY_MS);
     let trailing = PREVIEW_TRAILING_DELAY;
     assert!(
@@ -18151,11 +16729,8 @@ fn preview_link_click_repoints_the_pane_under_cage() {
 
     let runtime_dir = require_smoke_env();
 
-    // The fixture's link and the file the readback expects are two halves of one
-    // fact, and the link line cannot interpolate a const. Checked rather than trusted:
-    // a renamed target would leave the click landing on a link to a file that does not
-    // exist, `preview_file` would answer 0, and assertion 4 would fail with no
-    // indication that the FIXTURE was the problem.
+    // The fixture's link cannot interpolate a const, so this checks it: a renamed target makes
+    // `preview_file` answer 0 and assertion 4 fail with no hint at the fixture.
     let markdown_destination = format!("]({LINK_TARGET_HREF})");
     assert!(
         LINK_SOURCE_LINE.contains(&markdown_destination),
@@ -18184,11 +16759,8 @@ fn preview_link_click_repoints_the_pane_under_cage() {
          {LINK_FIXTURE_DIR:?}. The source has to sit somewhere OTHER than the captive Neovim's \
          working directory or the base URI stops being falsifiable — see LINK_FIXTURE_DIR."
     );
-    // The clause that keeps the base URI falsifiable, and the one a later "tidy-up" is
-    // most likely to undo. An href of `lnkdir/lnkinto.md` would resolve correctly BOTH
-    // ways — against the base URI and against the cwd — so restoring
-    // `load_html(html, None)` would leave this smoke green again, which is exactly the
-    // state the red runs found and this fixture layout exists to fix.
+    // Keeps the base URI falsifiable: `lnkdir/lnkinto.md` resolves both ways, so restoring
+    // `load_html(html, None)` would leave this smoke green. Do not tidy this away.
     assert!(
         !LINK_TARGET_HREF.contains('/'),
         "{SMOKE}: LINK_TARGET_HREF = {LINK_TARGET_HREF:?} carries a path separator, so the href \
@@ -18200,10 +16772,7 @@ fn preview_link_click_repoints_the_pane_under_cage() {
     );
 
     let cwd = make_temp_cwd();
-    // `write_relaunch_fixtures` writes with `std::fs::write` and creates no parents, so
-    // the subdirectory has to exist first. It is created HERE rather than inside that
-    // shared helper so the one smoke whose fixture layout is load-bearing says so at
-    // the point where it matters.
+    // `write_relaunch_fixtures` creates no parents. Made here, where this layout is load-bearing.
     let fixture_dir = cwd.join(LINK_FIXTURE_DIR);
     std::fs::create_dir_all(&fixture_dir).unwrap_or_else(|e| {
         panic!(
@@ -18220,12 +16789,8 @@ fn preview_link_click_repoints_the_pane_under_cage() {
         ],
     );
 
-    // The arithmetic of the subdirectory, made executable against the filesystem the
-    // scenario is about to run on rather than argued in prose. The RIGHT answer — the
-    // href resolved against the source's own directory — must exist, or assertion 4
-    // could only ever fail; the WRONG answer — the same href resolved against the
-    // captive Neovim's working directory — must NOT, or the base URI is unfalsifiable
-    // again because both resolutions find a readable Markdown file.
+    // The right resolution (against the source's directory) must exist and the wrong one (against
+    // Neovim's cwd) must not, or the base URI is unfalsifiable.
     let resolved = cwd.join(LINK_TARGET_FILE);
     assert!(
         resolved.is_file(),
@@ -18289,11 +16854,8 @@ fn preview_link_click_repoints_the_pane_under_cage() {
         extents,
     );
 
-    // --- Assertion 3 (calibration): the constant still names the rendered link
-    //
-    // Read out of THIS run's capture A, not out of the measurement record. A failure
-    // here is a LAYOUT finding and says nothing about the click path, which is why it
-    // is stated before assertion 4 rather than beside it.
+    // Assertion 3 (calibration): read from this run's capture A. A failure is a layout finding, not a
+    // click-path one, which is why it comes before assertion 4.
     let before = decode_capture(&out_png_before, SMOKE, "capture A");
     let rect = link_search_rect();
     let cluster = find_link_cluster(&before, rect).unwrap_or_else(|| {
@@ -18357,18 +16919,8 @@ fn preview_link_click_repoints_the_pane_under_cage() {
         out_png_before.display()
     );
 
-    // --- Assertion 4 (discriminator): NEOVIM's own view of the two windows ----
-    //
-    // Pixel-independent, and the whole point of the smoke. The preview scratch is named
-    // by `wolf_ensure_preview_buf` after the bound SOURCE's cwd-relative path, so the
-    // pair of readbacks states which file the pane previewed BEFORE the click and which
-    // it previews after — in strings Neovim produced.
-    //
-    // Both expectations are CWD-RELATIVE, because `POINTER_LINK_BODY` writes
-    // `bufname(b)` rather than its tail. The premise that carries is stated there and
-    // is checked HERE, by the BEFORE readback: if `bufname` ever answered an absolute
-    // path this assertion fails first, with both strings printed, and nothing about the
-    // click is implicated.
+    // Assertion 4 (discriminator): Neovim's buffer names before and after the click, cwd-relative. The
+    // before readback fails first if `bufname` ever answers an absolute path.
     let want_before = {
         let mut want = vec![
             format!("{PREVIEW_READBACK_PREFIX}{LINK_SOURCE_FILE}"),
@@ -18520,14 +17072,8 @@ fn preview_of_an_unsaved_buffer_renders_under_cage() {
     // --- Assertion 2 (precondition): the capture exists -----------------------
     assert_png_present(SMOKE, &out_png);
 
-    // --- Assertion 3 (discriminator): NEOVIM's own view of the two windows ----
-    //
-    // Read BEFORE the OCR assertions because it is what establishes their premise: the
-    // marker reaching a pixel only means something once a preview of the untitled
-    // buffer is known to exist. `Preview: Untitled 2.md` states three facts at once —
-    // the naming autocmd ran (or the name would be `[No Name]`), the markdown filetype
-    // gate passed (or `wolf_open_preview` would have returned 0), and the scratch was
-    // bound into a window.
+    // Assertion 3 (discriminator): `Preview: Untitled 2.md` proves the naming autocmd ran, the filetype
+    // gate passed and the scratch is in a window. Read before the OCR assertions it licenses.
     let want = {
         let mut want = vec![
             format!("{PREVIEW_READBACK_PREFIX}{UNSAVED_BUFFER_NAME}"),
@@ -18556,12 +17102,8 @@ fn preview_of_an_unsaved_buffer_renders_under_cage() {
 
     let ocr_text = ocr_to_lowercase(&out_png);
 
-    // --- Assertion 4 (precondition): the editor pane is drawing the COVER file
-    //
-    // Two jobs, and the second licenses assertion 5: the window was painting when
-    // `grim` ran, and the `:e` of the cover file over the source pane really landed —
-    // so the untitled buffer's raw text is in no pane at all and the only thing left on
-    // the page that can draw the marker is the web view.
+    // Assertion 4 (precondition): the window was painting and the cover file's `:e` landed, so only the
+    // web view can draw the marker, which licenses assertion 5.
     assert!(
         ocr_text.contains(UNSAVED_OCR_COVER),
         "{SMOKE}: the capture did not contain {UNSAVED_OCR_COVER:?} — the heading of \
@@ -18660,13 +17202,10 @@ fn preview_of_an_unsaved_buffer_renders_under_cage() {
 #[test]
 fn buffer_picker_chord_switches_to_the_queried_buffer_under_cage() {
     const SMOKE: &str = "buffer_picker_chord_switches_to_the_queried_buffer_under_cage";
-    // The captive Neovim always holds its startup buffer plus the three fixtures,
-    // so four is the expected count and three is the floor below which the
-    // ordering assertions stop being able to say anything.
+    // Startup buffer plus three fixtures makes four; below three the ordering assertions say nothing.
     const MIN_LISTED_BUFFERS: usize = 3;
-    // The first index at which the target may sit. Row 0 is the buffer the user is
-    // in and row 1 is the one `initial_selection` preselects, so anything below
-    // this makes the query redundant and assertion 4 vacuous.
+    // Row 0 is the current buffer and row 1 the preselected one, so a target above this makes the query
+    // redundant and assertion 4 vacuous.
     const MIN_TARGET_INDEX: usize = 2;
 
     let runtime_dir = require_smoke_env();
@@ -18674,9 +17213,6 @@ fn buffer_picker_chord_switches_to_the_queried_buffer_under_cage() {
     // Locate the freshly built binary under test.
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
 
-    // A fresh temp cwd holding the three fixtures. The app reads
-    // `std::env::current_dir()` for `CoreConfig.cwd`, so cage is launched with this
-    // directory as its working directory (see `cage_command`).
     let cwd = make_temp_cwd();
     for (name, heading) in [
         (BUFPICK_FILE_TARGET, BUFPICK_HEADING_TARGET),
@@ -18688,11 +17224,8 @@ fn buffer_picker_chord_switches_to_the_queried_buffer_under_cage() {
             .unwrap_or_else(|e| panic!("{SMOKE}: failed to write fixture {}: {e}", path.display()));
     }
 
-    // Page density. The asserted heading is a short line on an otherwise thin
-    // editor page, which is exactly the `SIDEBAR_FILLER_COUNT` hazard: below the
-    // measured five-file floor tesseract misclassifies isolated glyphs. The fillers
-    // are never opened, so they never join the picker's candidate list — that list
-    // comes from `getbufinfo`, not from a file search.
+    // Page density (see `SIDEBAR_FILLER_COUNT`). Never opened, so they never join the picker's
+    // candidates, which come from `getbufinfo`.
     for name in SIDEBAR_FILLER_FILES {
         let filler = cwd.join(name);
         std::fs::write(&filler, SIDEBAR_FILLER_BODY).unwrap_or_else(|e| {
@@ -18700,9 +17233,7 @@ fn buffer_picker_chord_switches_to_the_queried_buffer_under_cage() {
         });
     }
 
-    // The premise readback lands in the cwd (the sidebar lists it, which is why its
-    // name is registered in `RELAUNCH_FIXTURE_NAMES`). Cleared first: evidence that
-    // could be a previous run's leftover is not evidence.
+    // Cleared first: evidence that could be a previous run's leftover is not evidence.
     let readback = cwd.join(BUFPICK_READBACK_NAME);
     clear_evidence(&readback, SMOKE);
 
@@ -18740,11 +17271,8 @@ fn buffer_picker_chord_switches_to_the_queried_buffer_under_cage() {
     // --- Assertion 2 (precondition): grim produced an image -------------------
     assert_png_present(SMOKE, &out_png);
 
-    // --- Assertion 3 (precondition): the MRU ORDER the whole smoke rests on ---
-    //
-    // Re-derived from Neovim's own `getbufinfo()` with the production rule
-    // (`lastused` DESC, ties by `bufnr` ASC), never assumed from the order the
-    // scenario typed its `:e`s in.
+    // Assertion 3 (precondition): the MRU order, from `getbufinfo()` with the production rule
+    // (`lastused` desc, ties by `bufnr` asc), never assumed from the typed `:e` order.
     let order = read_buffer_mru_order(&readback, SMOKE);
     let tails: Vec<&str> = order.iter().map(|(_, _, tail)| tail.as_str()).collect();
 
@@ -18832,11 +17360,8 @@ fn buffer_picker_chord_switches_to_the_queried_buffer_under_cage() {
         out_png.display()
     );
 
-    // --- Assertion 5 (discriminator, no isolated red run): WHICH buffer -------
-    //
-    // With one pane two headings cannot both be on screen, so nothing reddens this
-    // alone: its job is to name the wrong buffer when the query is ignored, not to
-    // detect that the switch failed. See the revert table on this test.
+    // Assertion 5 (discriminator, no isolated red run): names the wrong buffer if the query is ignored.
+    // See the revert table on this test.
     assert!(
         !ocr_text.contains(BUFPICK_OCR_ABSENT),
         "{SMOKE}: OCR unexpectedly contained {BUFPICK_OCR_ABSENT:?} — the heading of \
@@ -18863,7 +17388,7 @@ fn buffer_picker_chord_switches_to_the_queried_buffer_under_cage() {
 /// (`initial_selection_table`), but the branch that APPLIES it — `refresh`'s
 /// `initial_open` arm selecting that row in the real `ListBox` — is a rule living
 /// inside a widget closure the fast suite cannot execute at all. That is exactly the
-/// class `crates/wolf-gnome/DECISIONS.md` ("The pure seams") records as having
+/// class `notes/wolf-gnome-decisions.md` ("The pure seams") records as having
 /// "repeatedly meant a rule nothing verified" on this platform.
 ///
 /// [`buffer_picker_chord_switches_to_the_queried_buffer_under_cage`] does not reach
@@ -18924,14 +17449,10 @@ fn buffer_picker_chord_switches_to_the_queried_buffer_under_cage() {
 #[test]
 fn buffer_picker_bare_enter_switches_to_the_previous_buffer_under_cage() {
     const SMOKE: &str = "buffer_picker_bare_enter_switches_to_the_previous_buffer_under_cage";
-    // The captive Neovim always holds its startup buffer plus the three fixtures, so
-    // four is the expected count and three is the floor below which the ordering
-    // assertions stop being able to say anything.
+    // Startup buffer plus three fixtures makes four; below three the ordering assertions say nothing.
     const MIN_LISTED_BUFFERS: usize = 3;
-    // The first index at which the target may sit. Row 0 is the buffer the user is
-    // in and row 1 is the one `initial_selection` preselects, so a target above this
-    // would be the row Enter is EXPECTED to land on and assertion 5 would contradict
-    // assertion 3.
+    // Row 0 is the current buffer and row 1 the preselected one, so a target above this is where Enter
+    // is expected to land and assertion 5 would contradict assertion 3.
     const MIN_TARGET_INDEX: usize = 2;
 
     let runtime_dir = require_smoke_env();
@@ -18939,9 +17460,6 @@ fn buffer_picker_bare_enter_switches_to_the_previous_buffer_under_cage() {
     // Locate the freshly built binary under test.
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
 
-    // A fresh temp cwd holding the same three fixtures the query smoke uses. The app
-    // reads `std::env::current_dir()` for `CoreConfig.cwd`, so cage is launched with
-    // this directory as its working directory (see `cage_command`).
     let cwd = make_temp_cwd();
     for (name, heading) in [
         (BUFPICK_FILE_TARGET, BUFPICK_HEADING_TARGET),
@@ -18953,12 +17471,8 @@ fn buffer_picker_bare_enter_switches_to_the_previous_buffer_under_cage() {
             .unwrap_or_else(|e| panic!("{SMOKE}: failed to write fixture {}: {e}", path.display()));
     }
 
-    // Page density. The asserted heading is a short line on an otherwise thin editor
-    // page, which is exactly the `SIDEBAR_FILLER_COUNT` hazard: below the measured
-    // five-file floor tesseract misclassifies isolated glyphs. The fillers are never
-    // opened, so they never join the picker's candidate list — that list comes from
-    // `getbufinfo`, not from a file search — and therefore cannot shift which row
-    // `initial_selection` picks.
+    // Page density (see `SIDEBAR_FILLER_COUNT`). Never opened, so they never join the picker's
+    // candidates and cannot shift `initial_selection`.
     for name in SIDEBAR_FILLER_FILES {
         let filler = cwd.join(name);
         std::fs::write(&filler, SIDEBAR_FILLER_BODY).unwrap_or_else(|e| {
@@ -18966,9 +17480,7 @@ fn buffer_picker_bare_enter_switches_to_the_previous_buffer_under_cage() {
         });
     }
 
-    // The premise readback lands in the cwd (the sidebar lists it, which is why its
-    // name is registered in `RELAUNCH_FIXTURE_NAMES`). Cleared first: evidence that
-    // could be a previous run's leftover is not evidence.
+    // Cleared first: evidence that could be a previous run's leftover is not evidence.
     let readback = cwd.join(BUFPICK_READBACK_NAME);
     clear_evidence(&readback, SMOKE);
 
@@ -19003,13 +17515,8 @@ fn buffer_picker_bare_enter_switches_to_the_previous_buffer_under_cage() {
     );
     assert_png_present(SMOKE, &out_png);
 
-    // --- Assertion 2 (precondition): the MRU ORDER the preselection lands in ---
-    //
-    // Re-derived from Neovim's own `getbufinfo()` with the production rule
-    // (`lastused` DESC, ties by `bufnr` ASC), never assumed from the order the
-    // scenario typed its `:e`s in. Index 1 is the load-bearing clause here: it is
-    // the row `initial_selection` chooses, so it decides which file assertion 3 is
-    // entitled to name.
+    // Assertion 2 (precondition): the MRU order from `getbufinfo()` with the production rule. Index 1
+    // is load-bearing: it is the row `initial_selection` picks, so it decides assertion 3's file.
     let order = read_buffer_mru_order(&readback, SMOKE);
     let tails: Vec<&str> = order.iter().map(|(_, _, tail)| tail.as_str()).collect();
 
@@ -19066,12 +17573,8 @@ fn buffer_picker_bare_enter_switches_to_the_previous_buffer_under_cage() {
                 readback.display()
             )
         });
-    // Implied by the two clauses above as they stand today — index 0 is CURRENT and
-    // index 1 is PRESELECT, and the three names are distinct — so it is stated as the
-    // DIRECT premise of assertion 5 rather than as an independent check. If either
-    // clause above is ever relaxed (a fourth fixture, a startup buffer that joins the
-    // list differently), this is what still keeps assertion 5's must-be-absent
-    // heading off the row a bare Enter lands on.
+    // Implied by the clauses above, so stated as assertion 5's direct premise; it still holds if
+    // either is relaxed (a fourth fixture, a startup buffer listed differently).
     assert!(
         target_index >= MIN_TARGET_INDEX,
         "{SMOKE}: {BUFPICK_FILE_TARGET:?} sits at index {target_index} of the MRU-ordered buffer \
@@ -19132,10 +17635,8 @@ fn buffer_picker_bare_enter_switches_to_the_previous_buffer_under_cage() {
         out_png.display()
     );
 
-    // --- Assertion 5 (discriminator): the preselection was not TOO DEEP -------
-    //
-    // Not reddened by the revert named for 3 and 4; what it discriminates is the
-    // opposite error, a preselection past row 1. See the revert table on this test.
+    // Assertion 5 (discriminator): the preselection is not past row 1, the opposite error to 3 and 4.
+    // See the revert table on this test.
     assert!(
         !ocr_text.contains(BUFPICK_OCR_PRESENT),
         "{SMOKE}: OCR unexpectedly contained {BUFPICK_OCR_PRESENT:?} — the heading of \
@@ -19220,10 +17721,7 @@ fn project_search_chord_opens_the_matched_line_under_cage() {
     // Locate the freshly built binary under test.
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
 
-    // A fresh temp cwd holding the two fixtures. The app reads
-    // `std::env::current_dir()` for `CoreConfig.cwd`, and `resolve_search_root`
-    // resolves ripgrep's root from the same live cwd, so cage is launched with this
-    // directory as its working directory (see `cage_command`).
+    // `resolve_search_root` takes ripgrep's root from the live cwd, so this is the search root too.
     let cwd = make_temp_cwd();
 
     let target = cwd.join(PROJSEARCH_FILE_TARGET);
@@ -19242,11 +17740,8 @@ fn project_search_chord_opens_the_matched_line_under_cage() {
         )
     });
 
-    // Page density. The asserted heading is a short line, which is exactly the
-    // `SIDEBAR_FILLER_COUNT` hazard: below the measured five-file floor tesseract
-    // misclassifies isolated glyphs. The fillers carry no occurrence of the query
-    // (`restore_fixture_names_cannot_satisfy_their_own_assertions` proves it), so
-    // they never join the search's match set.
+    // Page density (see `SIDEBAR_FILLER_COUNT`). The fillers hold no occurrence of the query, so they
+    // never join the match set.
     for name in SIDEBAR_FILLER_FILES {
         let filler = cwd.join(name);
         std::fs::write(&filler, SIDEBAR_FILLER_BODY).unwrap_or_else(|e| {
@@ -19254,18 +17749,14 @@ fn project_search_chord_opens_the_matched_line_under_cage() {
         });
     }
 
-    // The cursor readback lands in the cwd (the sidebar lists it, which is why its
-    // name is registered in `RELAUNCH_FIXTURE_NAMES`). Cleared first: evidence that
-    // could be a previous run's leftover is not evidence.
+    // Cleared first: evidence that could be a previous run's leftover is not evidence.
     let readback = cwd.join(PROJSEARCH_READBACK_NAME);
     clear_evidence(&readback, SMOKE);
 
     let out_png = runtime_dir.join("wolf_gnome_projsearch_smoke.png");
     clear_evidence(&out_png, SMOKE);
 
-    // `WOLF_RG_BIN` is not set here: it is INHERITED from the devShell, exactly as
-    // `WOLF_NVIM_BIN` is, and `require_smoke_env` above has already failed loud if it
-    // is missing.
+    // `WOLF_RG_BIN` comes from the devShell like `WOLF_NVIM_BIN`; `require_smoke_env` checked it.
     let status = cage_command(PROJSEARCH_SCENARIO, &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
@@ -19296,10 +17787,7 @@ fn project_search_chord_opens_the_matched_line_under_cage() {
     // --- Assertion 2 (precondition): grim produced an image -------------------
     assert_png_present(SMOKE, &out_png);
 
-    // --- Assertions 3-5: WHERE the editor actually landed ---------------------
-    //
-    // One `printf` inside the captive Neovim wrote all three, before the cursor was
-    // parked, so they describe the instant the jump landed.
+    // Assertions 3-5: one `printf` wrote all three before the cursor was parked.
     let (file, line, column) = read_cursor_location(&readback, SMOKE);
 
     // --- Assertion 3 (discriminator): the right FILE --------------------------
@@ -19319,10 +17807,8 @@ fn project_search_chord_opens_the_matched_line_under_cage() {
         out_png.display()
     );
 
-    // --- Assertion 4 (discriminator): the right LINE --------------------------
-    //
-    // This is the assertion the unit exists for. A plain `:edit` lands on line 1, so
-    // any value of 1 here means the cursor was never placed.
+    // Assertion 4 (discriminator): the right line. A plain `:edit` lands on line 1, so 1 here means the
+    // cursor was never placed.
     assert_eq!(
         usize::try_from(line).ok(),
         Some(PROJSEARCH_MATCH_LINE),
@@ -19338,10 +17824,8 @@ fn project_search_chord_opens_the_matched_line_under_cage() {
         out_png.display()
     );
 
-    // --- Assertion 5 (discriminator): the right COLUMN ------------------------
-    //
-    // Derived, never typed: rg's column is a 0-based byte offset and `col('.')` is
-    // 1-based. See PROJSEARCH_EXPECTED_COL.
+    // Assertion 5 (discriminator): the right column, derived because rg's column is a 0-based byte
+    // offset and `col('.')` is 1-based. See PROJSEARCH_EXPECTED_COL.
     assert_eq!(
         usize::try_from(column).ok(),
         Some(PROJSEARCH_EXPECTED_COL),
@@ -19374,11 +17858,8 @@ fn project_search_chord_opens_the_matched_line_under_cage() {
         out_png.display()
     );
 
-    // --- Assertion 7 (discriminator, no isolated red run): WHICH file ---------
-    //
-    // With one pane two headings cannot both be on screen, so nothing reddens this
-    // alone: its job is to name the wrong file when the jump does not happen, not to
-    // detect that it did not. See the revert table on this test.
+    // Assertion 7 (discriminator, no isolated red run): names the wrong file when the jump does not
+    // happen. See the revert table on this test.
     assert!(
         !ocr_text.contains(PROJSEARCH_OCR_ABSENT),
         "{SMOKE}: OCR unexpectedly contained {PROJSEARCH_OCR_ABSENT:?} — the heading of \
@@ -19401,9 +17882,6 @@ fn colon_q_closes_focused_pane_under_cage() {
     // Locate the freshly built binary under test.
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
 
-    // Create a fresh temp cwd and drop BOTH markdown targets into it. The app reads
-    // `std::env::current_dir()` for `CoreConfig.cwd`, so we launch cage with this
-    // directory as its working directory (see `cage_command` below).
     let cwd = make_temp_cwd();
     let target_keep = cwd.join(QUIT_FILE_KEEP);
     let target_gone = cwd.join(QUIT_FILE_GONE);
@@ -19463,9 +17941,6 @@ fn colon_q_closes_focused_pane_under_cage() {
         out_png.display()
     );
 
-    // OCR the screenshot. The survivor (left) pane's file must render, and the
-    // closed (right) pane's file must NOT — proving `:q` removed the focused pane
-    // and the survivor reclaimed the width, exactly as <C-w>c does.
     let ocr_text = ocr_to_lowercase(&out_png);
     assert!(
         ocr_text.contains(QUIT_OCR_KEEP),
@@ -19497,9 +17972,7 @@ fn colon_qa_closes_the_window_under_cage() {
     // buffer stays untouched so init.lua's E37 modified-buffer guard does not trip.
     let cwd = make_temp_cwd();
 
-    // Run the whole :qa scenario inside cage. This smoke deliberately captures NO
-    // PNG and runs neither grim nor tesseract: its assertion is that the app PROCESS
-    // exited, and exited CLEANLY, which no pixel can show.
+    // No PNG: the assertion is that the app process exited cleanly, which no pixel can show.
     let status = cage_command(COLON_QA_SCENARIO, &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
         .status()
@@ -19538,9 +18011,6 @@ fn close_pane_chord_closes_focused_pane_under_cage() {
     // Locate the freshly built binary under test.
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
 
-    // Create a fresh temp cwd and drop BOTH markdown targets into it. The app reads
-    // `std::env::current_dir()` for `CoreConfig.cwd`, so we launch cage with this
-    // directory as its working directory (see `cage_command` below).
     let cwd = make_temp_cwd();
     let target_keep = cwd.join(CHORD_CLOSE_FILE_KEEP);
     let target_gone = cwd.join(CHORD_CLOSE_FILE_GONE);
@@ -19601,12 +18071,7 @@ fn close_pane_chord_closes_focused_pane_under_cage() {
         out_png.display()
     );
 
-    // OCR the screenshot. The survivor (left) pane's file must render, and the
-    // closed (right) pane's file must NOT — proving the chord travelled the whole
-    // front-end path (capture-phase controller -> `actions::action_for_key` ->
-    // `win.close-pane` -> `UiAction::ClosePane` -> `InputEvent::ClosePane`) and
-    // removed the focused pane. Both assertions are load-bearing; see the
-    // CHORD_CLOSE_* const notes for why the NOT-contains one is sound.
+    // Both assertions are load-bearing; the CHORD_CLOSE_* comment says why the not-contains is sound.
     let ocr_text = ocr_to_lowercase(&out_png);
     assert!(
         ocr_text.contains(CHORD_CLOSE_OCR_KEEP),
@@ -19704,9 +18169,7 @@ fn click_positions_the_cursor_under_cage() {
     let out_png = runtime_dir.join("wolf_gnome_pointer_click_smoke.png");
     clear_evidence(&out_png, SMOKE);
 
-    // The target is expressed RELATIVE to the probe, never as a magic pixel, so no
-    // unknown geometry constant can make the delta assertion pass or fail
-    // spuriously.
+    // Relative to the probe, never a magic pixel, so no geometry constant can fake the delta.
     let target_x = pixel_target(
         f64::from(PROBE_X) + exact_f64(CLICK_DX, "CLICK_DX") * metrics.cell_w,
         "the click target x",
@@ -19950,9 +18413,7 @@ fn drag_selects_a_range_under_cage() {
             extents,
         );
     }
-    // Drag B releases over the SIDEBAR — outside the pane, but still inside the
-    // output. That distinction is the whole point of the out-of-widget drag, so the
-    // point still has to be a real output pixel.
+    // Drag B releases over the sidebar: outside the pane but inside the output, which is its point.
     assert_inside_extents(
         SMOKE,
         "the DRAG-B release point",
@@ -19960,15 +18421,8 @@ fn drag_selects_a_range_under_cage() {
         extents,
     );
 
-    // --- Drag Z: the ROUND TRIP, asserted FIRST because it RAN first ---------
-    //
-    // This block, and only this block, discriminates `drag-update`. Its press and
-    // release are at the SAME cell, so `on_pane_release` on its own cannot produce
-    // the state asserted here: with no movement between `<LeftMouse>` and
-    // `<LeftRelease>` Neovim never enters visual mode. MEASURED: with `on_pane_drag`
-    // neutered to an immediate no-op, this smoke as it stood BEFORE Drag Z existed
-    // — i.e. Drag A and Drag B alone — passed 3 runs out of 3. They cover
-    // `on_pane_release`'s reconstruction and clamp paths, not the drag signal.
+    // Only drag Z discriminates `drag-update`: press and release share a cell, so release alone has no
+    // visual mode. With `on_pane_drag` a no-op, drags A and B alone still pass.
     let raw_z = read_readback(&sel_z, SMOKE);
     let (mode_z, marks_z) = read_selection(&sel_z, SMOKE);
     let [z_start_line, z_start_col, z_end_line, z_end_col] = marks_z;
@@ -20013,10 +18467,8 @@ fn drag_selects_a_range_under_cage() {
 
     let grid = read_ints(&dims, 2, SMOKE);
 
-    // Drag Z pressed AND released at the probe point, so its `'<` IS the probe cell —
-    // which makes it the right readback to derive the pane origin from, exactly as
-    // the click smoke derives it from its probe click. This also asserts
-    // `'<`.line >= MIN_PROBE_CELL and `'<`.col >= MIN_PROBE_CELL.
+    // Drag Z pressed and released at the probe, so its `'<` is the probe cell and the origin is derived
+    // from it, as the click smoke does.
     let (origin_x, origin_y) = assert_probe_cell_and_pane_origin(
         SMOKE,
         (z_start_line, z_start_col),
@@ -20026,11 +18478,8 @@ fn drag_selects_a_range_under_cage() {
         &raw_z,
     );
 
-    // --- Drag A: inside the pane, exact delta -------------------------------
-    //
-    // Drag A pins the EXACT (DRAG_DY, DRAG_DX) delta. That is real coverage of
-    // `on_pane_release`'s `drag_point` -> `start_point() + offset` -> `cell_at` path,
-    // and it is NOT a `drag-update` discriminator — see Drag Z above.
+    // Drag A pins the exact delta through `on_pane_release`'s `cell_at` path; it is not a `drag-update`
+    // discriminator (see Drag Z).
     let raw_a = read_readback(&sel_a, SMOKE);
     let (mode_a, marks_a) = read_selection(&sel_a, SMOKE);
     let [a_start_line, a_start_col, a_end_line, a_end_col] = marks_a;
@@ -20183,9 +18632,7 @@ fn drag_selects_a_range_under_cage() {
 #[test]
 fn wheel_scroll_moves_the_viewport_under_cage() {
     const SMOKE: &str = "wheel_scroll_moves_the_viewport_under_cage";
-    // Where `:1` parks the viewport, and therefore what `line('w0')` must read before
-    // any scrolling. A PRECONDITION: without it the increase below would not be
-    // falsifiable.
+    // Where `:1` parks the viewport; a precondition, without which the increase below is unfalsifiable.
     const TOPLINE_AT_REST: i64 = 1;
 
     let runtime_dir = require_smoke_env();
@@ -20268,10 +18715,8 @@ fn wheel_scroll_moves_the_viewport_under_cage() {
         out_png.display()
     );
 
-    // Direction is asserted SEPARATELY from movement: down must strictly INCREASE
-    // `line('w0')` and up must strictly DECREASE it, matching the sign convention
-    // `mouse.rs::scroll_direction_is_inverted_from_macos` pins headlessly and
-    // `crates/wolf-ffi/tests/mouse_scroll.rs` pins against real Neovim.
+    // Direction is asserted separately from movement, matching the sign convention
+    // `scroll_direction_is_inverted_from_macos` and `crates/wolf-ffi/tests/mouse_scroll.rs` pin.
     assert!(
         w0_up < w0_down,
         "{SMOKE}: {SCROLL_DETENTS} UP detents did not move the viewport back UP: `line('w0')` \
@@ -20372,9 +18817,6 @@ fn click_then_close_keeps_keyboard_input_alive_under_cage() {
 
     let runtime_dir = require_smoke_env();
 
-    // Create a fresh temp cwd and drop BOTH markdown targets into it. The app reads
-    // `std::env::current_dir()` for `CoreConfig.cwd`, so cage is launched with this
-    // directory as its working directory.
     let cwd = make_temp_cwd();
     let target_click = cwd.join(WEDGE_FILE_CLICK);
     let target_stay = cwd.join(WEDGE_FILE_STAY);
@@ -20425,9 +18867,8 @@ fn click_then_close_keeps_keyboard_input_alive_under_cage() {
         extents,
     );
 
-    // The scenario deliberately does NOT `exit 14` when either readback is missing:
-    // here their ABSENCE is the observable, so the discrimination happens on this
-    // side, where the message can be a real diagnosis.
+    // The scenario does not `exit 14` on a missing readback: absence is the observable here, diagnosed
+    // on this side.
     let alive2_present = alive2.exists();
     assert!(
         alive1.exists(),
@@ -20487,9 +18928,7 @@ fn click_then_close_keeps_keyboard_input_alive_under_cage() {
         out_png.display()
     );
 
-    // OCR corroboration: the close actually happened, the survivor kept rendering,
-    // and the app was still drawing at all. These two are corroboration; the
-    // `ALIVE*` files above are the load-bearing assertions.
+    // OCR corroboration only; the `ALIVE*` files above are the load-bearing assertions.
     let ocr_text = ocr_to_lowercase(&out_png);
     assert!(
         ocr_text.contains(WEDGE_OCR_STAY),
@@ -20636,20 +19075,14 @@ fn nvim_crash_recovers_and_reopens_the_file_under_cage() {
     std::fs::write(&fixture, restart_fixture_body())
         .unwrap_or_else(|e| panic!("failed to write the fixture {}: {e}", fixture.display()));
 
-    // Give the tree sidebar rows of text to draw. The asserted heading is sparse,
-    // light-on-dark editor text, which is exactly the case `SIDEBAR_FILLER_COUNT`
-    // documents: below the measured five-file floor tesseract misclassifies isolated
-    // glyphs on a nearly-blank page. Fixture only — nothing here asserts on them.
+    // Page density for sparse light-on-dark text (see `SIDEBAR_FILLER_COUNT`). Nothing asserts on them.
     for name in SIDEBAR_FILLER_FILES {
         let filler = cwd.join(name);
         std::fs::write(&filler, SIDEBAR_FILLER_BODY)
             .unwrap_or_else(|e| panic!("failed to write filler {}: {e}", filler.display()));
     }
 
-    // Readback files. `preserve_state.txt` is the observable that proves `:preserve`
-    // ran before the kill; like every other name in this cwd it is checked against the
-    // asserted OCR terms, because the tree sidebar renders it (it contains neither
-    // `unsavedburst` nor `bounceback`, `restarted` or `crashed`).
+    // The sidebar draws the readback names, so they contain none of the asserted OCR terms.
     let before = cwd.join("bufname_before.txt");
     let after = cwd.join("bufname_after.txt");
     let dims_after = cwd.join("dims_after.txt");
@@ -20741,20 +19174,8 @@ fn nvim_crash_recovers_and_reopens_the_file_under_cage() {
         out_png_before.display()
     );
 
-    // --- The wrap derivation on `RESTART_UNSAVED_MARKER`, made EXECUTABLE ---
-    //
-    // The unsaved edit is APPENDED to line 2 — the first filler line — so the
-    // recovered line 2 is that filler line followed by the marker. `opt.wrap` +
-    // `opt.linebreak` would split it across screen rows if it were wider than the
-    // window, and a split could fall inside the asserted word. Rather than trusting a
-    // measured `winwidth(0)` — 45 before the per-pane chrome, 43 after it — assert
-    // the composed width against the width Neovim actually reported. The line is
-    // composed from the SAME consts `restart_fixture_body` writes it from, so the two
-    // cannot drift.
-    //
-    // It passes at exactly `43 <= 43`: zero margin, green, one column from red. See
-    // [`RESTART_UNSAVED_MARKER`] for what to shorten if the chrome grows, and for why
-    // it is not this marker.
+    // Recovered line 2 is a filler line plus the marker; this checks it fits the reported window width
+    // with no wrap, passing at `43 <= 43`. See [`RESTART_UNSAVED_MARKER`] before changing it.
     let composed_line = format!(
         "{:03}{}{RESTART_UNSAVED_MARKER}",
         1,
@@ -20773,15 +19194,8 @@ fn nvim_crash_recovers_and_reopens_the_file_under_cage() {
          `RESTART_FILLER_LINE_PAD`, never the assertions."
     );
 
-    // --- `:preserve` really ran, on a dirty buffer that really has a swap ----
-    //
-    // Without this the "the unsaved edit survived" assertion below would be a race
-    // against Neovim's default 'updatecount' (200 typed characters between swap
-    // syncs) rather than a property — see `CRASH_SCENARIO`'s "Why step 5 exists".
-    // The scenario writes this file with a `:call writefile(...)` issued AFTER the
-    // `:preserve`, and Neovim runs Ex commands in the order it receives them, so the
-    // file's mere existence is the ordering proof; these two flags are the
-    // preconditions that make the flush meaningful.
+    // `:preserve` ran on a dirty buffer with a swap, so the survival below is a property, not a race
+    // against `'updatecount'`. See `CRASH_SCENARIO`'s "Why step 5 exists".
     let preserve = read_ints(&preserved, PRESERVE_TOKENS, SMOKE);
     let (modified_flag, has_swap_flag) = (preserve[0], preserve[1]);
     assert!(
@@ -20825,14 +19239,8 @@ fn nvim_crash_recovers_and_reopens_the_file_under_cage() {
         out_png_before.display()
     );
 
-    // --- The NEGATIVE half of the control, and it is not optional -----------
-    //
-    // The control is captured at scenario step 3, BEFORE the unsaved edit is typed at
-    // step 5, so the marker cannot legitimately be on this page. Without this half the
-    // post-recovery assertion would be satisfiable by a marker that had leaked into the
-    // fixture body, a filler filename, a readback filename or the temp cwd path — the
-    // same silent false positive documented on `PICKER_FILE_NAME`, where a sidebar row
-    // satisfied a smoke whose feature provably never ran.
+    // The negative half of the control: captured before the edit was typed, so a marker here leaked in
+    // through a fixture, filler, readback or path, the `PICKER_FILE_NAME` false positive.
     assert!(
         !ocr_before.contains(RESTART_OCR_UNSAVED),
         "{SMOKE}: the CONTROL capture already contained {RESTART_OCR_UNSAVED:?} — but it was taken \
@@ -20874,14 +19282,8 @@ fn nvim_crash_recovers_and_reopens_the_file_under_cage() {
         out_png.display()
     );
 
-    // --- The UNSAVED EDIT survived the SIGKILL ------------------------------
-    //
-    // The one assertion here that discriminates a SWAP-RECOVERED reopen from a clean
-    // re-read of the file on disk. `bounceback` is in the fixture on disk and renders
-    // under both; this word was never written to disk at all, so it can only have come
-    // back through the dead Neovim's swap file. It is deterministic rather than a race
-    // because the scenario `:preserve`d the buffer and POLLED for proof before killing
-    // — the two preconditions above are that proof.
+    // The unsaved edit survived: this word was never on disk, so only the swap file can bring it back.
+    // It is deterministic because of the `:preserve` proof above.
     assert!(
         ocr_after.contains(RESTART_OCR_UNSAVED),
         "{SMOKE}: after the restart, OCR did not contain {RESTART_OCR_UNSAVED:?} — the unsaved \
@@ -21009,10 +19411,7 @@ fn stalled_nvim_raises_the_stall_overlay_under_cage() {
         clear_evidence(path, SMOKE);
     }
 
-    // `WOLF_RPC_TIMEOUT_MS` is read once at `WolfCore::start` from the process
-    // environment, so setting it here reaches the app through `cage -- sh -c`. It
-    // is a timing knob only; see `STALL_RPC_TIMEOUT_MS` for the two bounds it sits
-    // between and for why shortening it is safe in this scenario.
+    // Read once at `WolfCore::start`; a timing knob only. See `STALL_RPC_TIMEOUT_MS` for its bounds.
     let status = cage_command(&with_nvim_pid_helper(STALL_SCENARIO), &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
@@ -21049,11 +19448,8 @@ fn stalled_nvim_raises_the_stall_overlay_under_cage() {
 
     let ocr_before = ocr_to_lowercase(&out_png_before);
 
-    // --- Assertion 3 (precondition): the fixture RENDERED while healthy -------
-    //
-    // Without this, assertion 6 is vacuous: "the heading is absent" is satisfied by
-    // an editor that drew nothing at all, by a window that never mapped, and by an
-    // unreadable capture just as well as by an opaque overlay.
+    // Assertion 3 (precondition): the fixture rendered while healthy; without it assertion 6 is
+    // satisfied by a blank editor, an unmapped window or an unreadable capture.
     assert!(
         ocr_before.contains(STALL_OCR_ABSENT),
         "{SMOKE}: the CONTROL capture — taken while everything was still healthy, before anything \
@@ -21067,11 +19463,8 @@ fn stalled_nvim_raises_the_stall_overlay_under_cage() {
         out_png_before.display()
     );
 
-    // --- Assertion 4 (control): the overlay was NOT already up ----------------
-    //
-    // Not falsifiable by a source revert, and deliberately so: it says the overlay
-    // seen after the chord was raised BY THE CHORD rather than having been up since
-    // launch. Do not invent a revert for it.
+    // Assertion 4 (control): the overlay was raised by the chord, not up since launch. No source revert
+    // can falsify it, deliberately.
     assert!(
         !ocr_before.contains(STALL_OCR_PRESENT),
         "{SMOKE}: the CONTROL capture already contained {STALL_OCR_PRESENT:?} — the stall \
@@ -21107,11 +19500,8 @@ fn stalled_nvim_raises_the_stall_overlay_under_cage() {
         out_png.display()
     );
 
-    // --- Assertion 6 (discriminator): the overlay is OPAQUE -------------------
-    //
-    // The frozen last frame is still behind it — `liveness_ui` sets `paint: false`,
-    // so nothing repaints, and the fixture's heading is exactly where it was. Only
-    // an opaque, full-bleed overlay hides it.
+    // Assertion 6 (discriminator): `liveness_ui` sets `paint: false`, so the frozen frame stays behind,
+    // and only an opaque full-bleed overlay hides the heading.
     assert!(
         !ocr_after.contains(STALL_OCR_ABSENT),
         "{SMOKE}: the post-stall capture still contained {STALL_OCR_ABSENT:?} — the heading of \
@@ -21270,9 +19660,7 @@ fn crash_overlay_and_restart_button_recover_under_cage() {
 
     let runtime_dir = require_smoke_env();
 
-    // The REAL Neovim, read from THIS process's environment (which `require_smoke_env`
-    // has already proved is set) and baked into the wrapper as a literal. Nothing
-    // below relies on the wrapper inheriting anything.
+    // The real Neovim, baked into the wrapper as a literal; nothing relies on the wrapper's env.
     let real_nvim = std::env::var("WOLF_NVIM_BIN")
         .expect("require_smoke_env proved WOLF_NVIM_BIN is set and non-empty");
 
@@ -21281,16 +19669,8 @@ fn crash_overlay_and_restart_button_recover_under_cage() {
     std::fs::write(&fixture, restart_fixture_body())
         .unwrap_or_else(|e| panic!("failed to write the fixture {}: {e}", fixture.display()));
 
-    // The failing-respawn wrapper. All three absolute paths are LITERALS: there is no
-    // env inheritance to reason about, and `exec` replaces the shell in place so the
-    // app's direct child is still named `nvim` with the same pid, leaving
-    // `find_nvim_pid` unaffected.
-    //
-    // A REFUSED spawn appends one line to `$attempts` before exiting. That log is the
-    // ONLY sound measure of how many automatic restarts the front-end attempted: a
-    // refused wrapper exits before its `exec`, so it is never named `nvim` and a /proc
-    // scan cannot see it at all. See `assert_one_restart_attempt` for the measured
-    // proof that a scan-only check left `MAX_AUTO_RESTART_ATTEMPTS` untested.
+    // Literal paths and `exec`, so the app's child is still `nvim` for `find_nvim_pid`. A refused spawn
+    // logs to `$attempts`, the only count a `/proc` scan cannot miss; see `assert_one_restart_attempt`.
     let fail_marker = cwd.join(RESTART_FAIL_MARKER_NAME);
     let attempts = cwd.join(RESTART_ATTEMPTS_NAME);
     let wrapper = cwd.join(RESTART_WRAPPER_NAME);
@@ -21330,18 +19710,8 @@ fn crash_overlay_and_restart_button_recover_under_cage() {
     // Measure the cell EXACTLY, the same way the app does, BEFORE the run.
     let metrics = cell_metrics_for_smoke();
 
-    // --- Derive the button point (no magic pixel) --------------------------
-    //
-    // The anchor is the OVERLAY origin — the pane area's own top-left corner — and
-    // under cage the window is the output with no CSD offset, so the overlay runs
-    // from that corner to the bottom-right one. It is NOT the pane origin: those
-    // constants come from a click-to-cell readback and name the text grid's corner,
-    // which the per-pane chrome puts a statusbar strip and a padding inside this one.
-    // Both inputs are MEASURED constants, because the click point has to exist before
-    // `cage` is spawned while the authoritative extents only arrive afterwards on the
-    // helper's `ready` line — which is why the run asserts, below, that the reported
-    // extents really are the ones this derivation used, and then redoes the whole
-    // derivation from its own measurements.
+    // The anchor is the overlay origin, not the pane origin. Measured constants are needed before cage
+    // starts, so the run re-checks them against the reported extents.
     let output_w = exact_f64(CAGE_OUTPUT_W_EXPECTED, "the expected cage output width");
     let output_h = exact_f64(CAGE_OUTPUT_H_EXPECTED, "the expected cage output height");
     let overlay_w = output_w - OVERLAY_ORIGIN_X_EXPECTED;
@@ -21350,47 +19720,8 @@ fn crash_overlay_and_restart_button_recover_under_cage() {
     assert_button_rect_is_the_named_size(SMOKE, rect);
     assert_button_rect_fits(SMOKE, rect, (overlay_w, overlay_h));
     let (bx, by, bw, bh) = rect;
-    // X is a tenth of the way IN FROM THE RECT'S LEFT EDGE — NOT the rect's centre —
-    // and that is load-bearing.
-    //
-    // `gtk::Widget::set_size_request` sets a MINIMUM, and the button is
-    // `halign(Center)`, so a builder that requests too little still renders a
-    // natural-width pill centred on exactly the same point the rect's centre
-    // describes. A centre-derived click is therefore blind to the very drift this
-    // smoke exists to catch. MEASURED (pass 5), by scanning the dwell capture:
-    //
-    //   * builder requests `RESTART_BUTTON_WIDTH` (320) -> rendered x 605..924, 320px
-    //   * builder requests 40                           -> rendered x 669..861, 193px
-    //
-    // Both are centred on x 765, so a centre click hits both — and with a centre
-    // click this smoke stayed GREEN with the builder reverted to 40. Even the 3/4
-    // point (x 845) still lands inside the 193px button. A tenth in from the left
-    // edge puts the injected point at x 638 against those measured spans: 33px
-    // inside the CORRECT button and 31px clear of the natural-width one. (Pass 5's
-    // red runs record `the click at (641, 426)` verbatim; that was the same
-    // composition anchored on the pane origin, back when the two origins coincided,
-    // and the 3px is the anchor correction rather than a change of method.)
-    //
-    // Both margins absorb the error left in the derivation, which is now small and
-    // one-sided: the rect agrees with the render to within half a pixel (rendered
-    // x 605..925 y 392..456 against a derived x 605.5..925.5, y 391.5..455.5), and
-    // the anchor is the overlay's own measured origin rather than a proxy for it, so
-    // there is no sub-cell phase term left on this path at all. Nothing here is close
-    // to eating a 31px margin.
-    //
-    // What the left-edge inset discriminates, as a BOUND rather than as an anecdote:
-    // the button is `halign(Center)`, so it renders across [765 - W/2, 765 + W/2]
-    // where W = max(requested, natural ~193), and a click at x 638 misses it iff
-    // W < 254. This point therefore catches any builder width that has shrunk below
-    // ~254px: the documented 40px revert renders W 193, i.e. 61px inside that bound
-    // (the 31px of pixel clearance quoted above). It would NOT catch a shrink from
-    // 320 to, say, 260 — widths in (254, 320) are undiscriminated, and "it catches
-    // the 40px revert" must not be read as more than that.
-    //
-    // Y stays at the rect's vertical CENTRE: the vertical derivation is the
-    // non-trivial half (two `vexpand` spacers splitting the leftover), the centre is
-    // where it is most robust, and no documented revert turns on the button's height —
-    // which is the other axis this click leaves undiscriminated.
+    // A tenth in from the rect's left edge, not its centre: a centred click hits a shrunken button too.
+    // See notes/crates/wolf-gnome/tests/smoke_headless.rs.md#restart-button-click-point
     const BUTTON_HIT_INSET_FRACTION: f64 = 0.1;
     let btn_x = pixel_target(
         OVERLAY_ORIGIN_X_EXPECTED + bx + bw * BUTTON_HIT_INSET_FRACTION,
@@ -21423,10 +19754,7 @@ fn crash_overlay_and_restart_button_recover_under_cage() {
             ("BTN_Y", OsStr::new(&btn_y_env)),
         ],
     );
-    // The crash-specific exit codes get their own message FIRST; everything else —
-    // the shared pointer-harness codes 11-15, a signal on cage itself, and success —
-    // falls through to `assert_pointer_scenario_succeeded`, which also echoes
-    // `wolf-pointer-inject`'s stderr.
+    // Crash-specific exit codes first; the rest fall through to `assert_pointer_scenario_succeeded`.
     assert!(
         !matches!(status.code(), Some(c) if (CRASH_EXIT_FIRST..=CRASH_EXIT_LAST).contains(&c)),
         "{SMOKE}: the cage scenario exited with a CRASH-SPECIFIC code ({status}).\n\
@@ -21485,20 +19813,8 @@ fn crash_overlay_and_restart_button_recover_under_cage() {
     let (origin_x, origin_y) =
         assert_probe_cell_and_pane_origin(SMOKE, (l0, c0), &metrics, extents, &out_png, &raw0);
 
-    // The redo uses this run's own EXTENTS with the pinned OVERLAY origin, and the
-    // limitation in that is worth stating rather than discovering: the only origin
-    // this run measures for itself is the GRID's, from the probe click, and the
-    // overlay is anchored to the pane WIDGET's. Deriving one from the other is
-    // exactly the collapse that has to stay undone, so the overlay origin is pinned
-    // on both sides here.
-    //
-    // The consequence, stated plainly: this check is self-consistent on the anchor
-    // and therefore CANNOT detect an anchor that has drifted — it moves with it. What
-    // it does still catch is a changed output size, a collapsed rect, and a click
-    // derived from a stale button geometry. Detecting anchor drift needs the overlay
-    // origin re-measured the way [`OVERLAY_ORIGIN_X_EXPECTED`]'s provenance was taken,
-    // and the cheap proxy for "someone should" is the scenario's own recovery poll:
-    // a click that misses the button exits 19.
+    // The redo pins the overlay origin on both sides, so it cannot see anchor drift; it catches a new
+    // output size, a collapsed rect and stale button geometry. A missed click exits 19.
     let measured_overlay_w =
         exact_f64(extents.0, "the reported cage output width") - OVERLAY_ORIGIN_X_EXPECTED;
     let measured_overlay_h =
@@ -21692,9 +20008,7 @@ fn pane_layout_survives_relaunch_under_cage() {
     // Locate the freshly built binary under test.
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
 
-    // A fresh temp cwd, exactly like every other smoke; see `make_temp_cwd` for why
-    // isolation is mandatory. BOTH launches use this same directory — relaunching
-    // in the project you saved from is the whole scenario.
+    // Both launches use this one cwd: relaunching in the project you saved from is the scenario.
     let cwd = make_temp_cwd();
     write_relaunch_fixtures(
         SMOKE,
@@ -21713,9 +20027,7 @@ fn pane_layout_survives_relaunch_under_cage() {
     let out_png = runtime_dir.join("wolf_gnome_restore_layout_smoke.png");
     clear_evidence(&out_png, SMOKE);
 
-    // `cage_command` supplies WOLF_FONT_PT and WOLF_STATE_DIR. The state dir is what
-    // makes the two runs share a `state.json` at all — and what keeps them out of the
-    // developer's real one.
+    // The state dir makes both runs share one `state.json` and keeps them out of the developer's.
     let status = cage_command(RESTORE_LAYOUT_SCENARIO, &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
         .env("OUT_PNG", &out_png)
@@ -21864,13 +20176,8 @@ fn pane_layout_survives_relaunch_under_cage() {
 fn single_pane_file_survives_relaunch_under_cage() {
     const SMOKE: &str = "single_pane_file_survives_relaunch_under_cage";
 
-    // --- Assertion 4, first part: this TEST process must be un-overridden -----
-    //
-    // Asserted BEFORE anything runs, because `wolf_core::state_dir()` below resolves
-    // `WOLF_STATE_DIR` ahead of everything else. Were it set here, the "developer's
-    // real state file" this test guards would be whatever that variable points at —
-    // very possibly the smoke's own temp dir — and the whole isolation check would
-    // become self-referential and prove nothing.
+    // Assertion 4, first part: checked first, because `state_dir()` resolves `WOLF_STATE_DIR` ahead of
+    // everything, and an override here would make the isolation check self-referential.
     assert!(
         std::env::var_os("WOLF_STATE_DIR").is_none(),
         "{SMOKE}: WOLF_STATE_DIR is set in the TEST process. `wolf_core::state_dir()` resolves \
@@ -21893,12 +20200,7 @@ fn single_pane_file_survives_relaunch_under_cage() {
     let real_state_file = real_state_dir.join(STATE_FILE_NAME);
     let real_before = state_file_fingerprint(&real_state_file);
 
-    // --- Assertion 5, first part: the same, for the CONFIG directory ----------
-    //
-    // `wolf_core::preferences_dir()` resolves WOLF_CONFIG_DIR ahead of everything
-    // else, so a variable set on the TEST process would make "the developer's real
-    // wolf-config.yaml" resolve to the override and the comparison below would be
-    // against the smoke's own file.
+    // Assertion 5, first part: the same for `WOLF_CONFIG_DIR`, which `preferences_dir()` reads first.
     assert!(
         std::env::var_os("WOLF_CONFIG_DIR").is_none(),
         "{SMOKE}: WOLF_CONFIG_DIR is set in the TEST process. `wolf_core::preferences_dir()` \
@@ -21943,16 +20245,11 @@ fn single_pane_file_survives_relaunch_under_cage() {
     let smoke_state = smoke_state_dir(&cwd);
     let smoke_state_file = smoke_state.join(STATE_FILE_NAME);
 
-    // The smoke's own config dir — the SAME sibling `cage_command` computes and
-    // hands the app as WOLF_CONFIG_DIR, seeded with the wolf-config.yaml both runs
-    // read.
     let smoke_config = smoke_config_dir(&cwd);
     let smoke_config_file = smoke_config.join(CONFIG_FILE_NAME);
 
-    // Where the scenario freezes RUN 1's save before run 2 can write over it. It is
-    // a DIRECTORY holding a `state.json`, because `wolf_core::load_state` takes the
-    // directory rather than the file. It lives under XDG_RUNTIME_DIR rather than in
-    // the temp cwd so the app's own FileSearch never lists it in the sidebar.
+    // Freezes run 1's save before run 2 overwrites it. A directory, because `load_state` takes one;
+    // under XDG_RUNTIME_DIR so the sidebar never lists it.
     let run1_state_dir = runtime_dir.join("wolf_gnome_solo_run1_state");
     std::fs::create_dir_all(&run1_state_dir).unwrap_or_else(|e| {
         panic!(
@@ -22102,29 +20399,8 @@ fn single_pane_file_survives_relaunch_under_cage() {
         out_png.display()
     );
 
-    // --- Assertion 4: state-dir isolation --------------------------------------
-    //
-    // THREE checks, and each one covers a leak the others cannot see.
-    //
-    // 1. The POSITIVE check immediately below — run 1's `state.json` exists and is
-    //    non-empty at the smoke's own `WOLF_STATE_DIR` — is what pins the variable
-    //    directly: drop it and the file is not there (the scenario exits 16 first).
-    // 2. The `$HOME`-FALLBACK check is new, and it exists because `cage_command` now
-    //    redirects the app's `$HOME` into the temp tree. That redirect closed a hole
-    //    and opened a smaller one: with `$XDG_STATE_HOME` unset (this devShell), an
-    //    app that ignored `WOLF_STATE_DIR` would resolve `state_dir()` to
-    //    `$HOME/.local/state/wolf` — i.e. INSIDE the temp tree, where check 3 cannot
-    //    see it. So we assert those exact paths carry no `state.json`. It is a
-    //    positive proof that the variable was honoured, not merely that the real
-    //    directory happened not to change, and the path is derived from the same
-    //    `smoke_home` helper `cage_command` feeds to the child so the check and the
-    //    environment cannot drift apart. On a developer machine WITHOUT that redirect
-    //    this is exactly the leak that would land in their real
-    //    `~/.local/state/wolf/state.json`.
-    // 3. The real-state-file comparison stays exactly as it was. It is the arm that
-    //    bites on a host which DOES export `$XDG_STATE_HOME` / `$XDG_DATA_HOME` — a
-    //    leak there lands outside the temp tree, invisible to check 2 — so 2 and 3
-    //    are complementary and between them cover both environments.
+    // Assertion 4: state-dir isolation, three checks that each see a leak the others cannot.
+    // See notes/crates/wolf-gnome/tests/smoke_headless.rs.md#state-dir-isolation-checks
     let smoke_meta = std::fs::metadata(&smoke_state_file).unwrap_or_else(|e| {
         panic!(
             "{SMOKE}: expected the smoke's own state file {} to exist after the run, but: {e}. Its \
@@ -22139,9 +20415,7 @@ fn single_pane_file_survives_relaunch_under_cage() {
         smoke_state_file.display()
     );
 
-    // Check 2: nothing was written to the app's `$HOME`-derived state directories.
-    // `smoke_home(&cwd)` is the SAME value `cage_command` hands the child as HOME, so
-    // this cannot be looking at a directory the app never had.
+    // Check 2: `smoke_home(&cwd)` is the `HOME` `cage_command` gives the child, so this is the app's.
     let app_home = smoke_home(&cwd);
     assert!(
         app_home.is_dir(),
@@ -22190,12 +20464,8 @@ fn single_pane_file_survives_relaunch_under_cage() {
         real_state_file.display()
     );
 
-    // --- Assertion 5: config-dir isolation -------------------------------------
-    //
-    // The same three remaining checks the state half runs, aimed at a variable whose
-    // failure mode is worse: `load_or_create` CREATES the file it cannot find, so a
-    // missing WOLF_CONFIG_DIR does not merely read the developer's preferences, it
-    // writes them.
+    // Assertion 5: config-dir isolation, the same checks. Worse failure: `load_or_create` writes the
+    // file it cannot find, so a missing WOLF_CONFIG_DIR writes the developer's preferences.
     let config_meta = std::fs::metadata(&smoke_config_file).unwrap_or_else(|e| {
         panic!(
             "{SMOKE}: expected the smoke's own config file {} to exist, but: {e}. \
@@ -22444,10 +20714,7 @@ fn three_tabs_survive_a_relaunch_under_cage() {
     // Locate the freshly built binary under test.
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
 
-    // A fresh temp cwd shared by BOTH launches — relaunching in the project you saved
-    // from is the whole scenario, and it is the only shape in which a saved tab list
-    // is restored at all (`state_seam::plan_for_window` attaches the tabs only when
-    // the chosen project IS the saved one).
+    // One cwd for both launches: `plan_for_window` restores tabs only for the saved project.
     let cwd = make_temp_cwd();
     write_relaunch_fixtures(
         SMOKE,
@@ -22463,15 +20730,8 @@ fn three_tabs_survive_a_relaunch_under_cage() {
     // the app as WOLF_STATE_DIR, so the two runs share one `state.json`.
     let smoke_state_file = smoke_state_dir(&cwd).join(STATE_FILE_NAME);
 
-    // Where the scenario freezes each run's save. Both are DIRECTORIES holding a
-    // `state.json`, because `wolf_core::load_state` takes the directory rather than
-    // the file; both live under XDG_RUNTIME_DIR rather than in the temp cwd so the
-    // app's own FileSearch never lists them in the sidebar.
-    //
-    // TWO copies rather than one, and that is what keeps assertion 1's red apart from
-    // assertion 3's: run 2 re-snapshots on every render wake, so by the time the Rust
-    // side could read the live file it would hold run 2's tree and a save side that
-    // dropped tabs would be indistinguishable from a second run that lost them.
+    // Two frozen copies, so assertion 1's red stays apart from 3's: run 2 re-snapshots every wake, so
+    // the live file would hide which side dropped the tabs.
     let run1_state_dir = runtime_dir.join("wolf_gnome_tabs_run1_state");
     let run2_state_dir = runtime_dir.join("wolf_gnome_tabs_run2_state");
     for dir in [&run1_state_dir, &run2_state_dir] {
@@ -22552,19 +20812,10 @@ fn three_tabs_survive_a_relaunch_under_cage() {
          rather than missing is a different defect again, and the per-tab check names it.",
     );
 
-    // --- Assertion 2: the RESTORE side, from the restored Neovim itself --------
-    //
-    // The scenario POLLED for this file, re-issuing the `writefile` until three tabpages
-    // existed or its budget was spent, so what lands here is the answer Neovim settled
-    // at rather than the answer it happened to hold when a fixed sleep ended. That is
-    // what lets the message below name a missing tab as a missing tab: with a single
-    // timed write, a slow host that had not finished materializing would produce the
-    // same short readback and this assertion would blame `queue_restore` for it.
+    // Assertion 2: the restore side. The scenario polled until three tabpages existed, so a short
+    // readback is a missing tab, not a slow host.
     let raw = read_readback(&readback, SMOKE);
-    // No filtering of empty lines: `writefile` writes exactly one line per tabpage, so
-    // `lines()` yields one entry each — and a tab holding an UNNAMED buffer produces an
-    // empty line that must stay visible rather than being silently dropped into a
-    // shorter list, which would read as a missing tab.
+    // No filtering: an unnamed buffer's tab writes an empty line, which must stay visible.
     let got: Vec<&str> = raw.lines().map(str::trim).collect();
     assert_eq!(
         got.as_slice(),
@@ -22587,15 +20838,8 @@ fn three_tabs_survive_a_relaunch_under_cage() {
         readback.display()
     );
 
-    // --- Assertion 3: the BACKGROUND tabs' gather, on RUN 2's frozen file ------
-    //
-    // Run 2 selected neither tab 1 nor tab 2, so tab 1 was never Neovim-current for a
-    // single wake of that run. Its panes DO exist — `realize_layout` created them
-    // synchronously while its tabpage was current — so it is gathered live on every
-    // wake, and the only way its file reaches this tree is `leaf_contents` resolving
-    // the leaf from `Snapshot::win_buffers` by the pane's own window handle. The
-    // current tabpage's `Snapshot::windows`, which `WolfCore::pane_status` joins
-    // through, never held that tab's windows at all.
+    // Assertion 3: tab 1 was never current in run 2, so its file gets in only by `leaf_contents`
+    // resolving it from `Snapshot::win_buffers` by the pane's window handle.
     assert_frozen_tabs(
         SMOKE,
         "run 2",
@@ -22736,11 +20980,8 @@ fn two_windows_two_neovims_and_two_saved_sessions_under_cage() {
     // A fresh temp cwd shared by BOTH launches, holding window A's file and — in a
     // subdirectory of its own — window B's SECOND project.
     let cwd = make_temp_cwd();
-    // `write_relaunch_fixtures` writes with `std::fs::write` and creates no parents,
-    // so the subdirectory has to exist first. Created here rather than inside that
-    // shared helper, following the preview-link smoke's precedent, because the layout
-    // is load-bearing: two windows on ONE project would share the durable per-project
-    // swap directory and meet Neovim's `W325: Ignoring swapfile from Nvim process`.
+    // `write_relaunch_fixtures` creates no parents. Two projects, since one would share a swap dir and
+    // meet Neovim's `W325` warning.
     let subdir = cwd.join(TWOWIN_SUBDIR);
     std::fs::create_dir_all(&subdir).unwrap_or_else(|e| {
         panic!(
@@ -22757,13 +20998,8 @@ fn two_windows_two_neovims_and_two_saved_sessions_under_cage() {
         ],
     );
 
-    // The exit-22 check compares the FINAL COMPONENT of window B's `getcwd()` against
-    // TEMP_CWD_BASENAME, which is symlink-proof — but only while the app's HOME, which
-    // is window B's CORRECT answer, cannot share that component. `make_temp_cwd`
-    // builds `<tmp>/wolf-gnome-smoke-<pid>-<nanos>/project` and `cage_command` hands
-    // the parent to the app as HOME, so it cannot; asserting it here means a change to
-    // either name reddens with its cause named, rather than turning exit 22 into a
-    // check that fires on a perfectly correct window B.
+    // Exit 22 compares the last component of window B's `getcwd()`, symlink-proof only while HOME (B's
+    // correct answer) cannot share it; asserted so a rename reddens here with its cause named.
     let app_home = smoke_home(&cwd);
     assert_ne!(
         app_home.file_name(),
@@ -22780,10 +21016,8 @@ fn two_windows_two_neovims_and_two_saved_sessions_under_cage() {
     // the app as WOLF_STATE_DIR, so the two runs share one `state.json`.
     let smoke_state_file = smoke_state_dir(&cwd).join(STATE_FILE_NAME);
 
-    // Where the scenario freezes RUN 1's save before run 2 can write over it. A
-    // DIRECTORY holding a `state.json`, because `wolf_core::load_state` takes the
-    // directory rather than the file; under XDG_RUNTIME_DIR rather than in the temp
-    // cwd so the app's own `FileSearch` never lists it in the sidebar.
+    // Freezes run 1's save before run 2 overwrites it. A directory, because `load_state` takes one;
+    // under XDG_RUNTIME_DIR so the sidebar never lists it.
     let run1_state_dir = runtime_dir.join("wolf_gnome_twowin_run1_state");
     std::fs::create_dir_all(&run1_state_dir).unwrap_or_else(|e| {
         panic!(
@@ -22799,9 +21033,7 @@ fn two_windows_two_neovims_and_two_saved_sessions_under_cage() {
         clear_evidence(path, SMOKE);
     }
 
-    // `with_nvim_pid_helper` supplies `pid_is_live`, `app_children`, `find_nvim_pid`
-    // and `wait_nvim_count`; this scenario calls none of that fragment's exiting
-    // functions, so its 16/17/18/20 are unreachable here.
+    // This scenario calls none of the fragment's exiting functions, so its 16/17/18/20 are unreachable.
     let scenario = with_nvim_pid_helper(TWOWIN_SCENARIO);
     let status = cage_command(&scenario, &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
@@ -22897,11 +21129,7 @@ fn two_windows_two_neovims_and_two_saved_sessions_under_cage() {
         );
         let tab = &window.tabs[0];
 
-        // The final component only: /tmp may resolve through a symlink on this host,
-        // so nvim's reported path need not be string-equal to anything this test could
-        // build. The component itself is exact, and the two projects were deliberately
-        // given different ones (asserted in
-        // `restore_fixture_names_cannot_satisfy_their_own_assertions`).
+        // The last component only, since /tmp may resolve through a symlink; the two projects differ there.
         let cwd_name = Path::new(&tab.cwd).file_name().and_then(OsStr::to_str);
         assert_eq!(
             cwd_name,
@@ -23171,9 +21399,7 @@ fn config_font_size_changes_the_grid_under_cage() {
     let cwd = make_temp_cwd();
     write_relaunch_fixtures(SMOKE, &cwd, &[]);
 
-    // Both runs carry SMOKE_APPEARANCE: the font size is the ONE variable this
-    // smoke may have, and an unpinned appearance would let the two launches differ
-    // in a second one — see `write_smoke_config`.
+    // The font size is this smoke's one variable, so both runs pin the appearance too.
     let config_small = smoke_config_dir_at(
         &cwd,
         CONFIG_GRID_SMALL_SUFFIX,
@@ -23208,11 +21434,8 @@ fn config_font_size_changes_the_grid_under_cage() {
         .env("WIDTH_SMALL", &width_small)
         .env("WIDTH_LARGE", &width_large);
 
-    // THE line that makes this smoke mean anything. `WOLF_FONT_PT` wins over the
-    // configured `font-size` everywhere else in this file and in the shipped app,
-    // so leaving it set would have BOTH launches measure at SMOKE_FONT_PT, report
-    // identical widths, and fail assertion 2 for a reason that has nothing to do
-    // with the config being read. It is removed here, and only here, on purpose.
+    // `WOLF_FONT_PT` beats the configured `font-size`, so left set it makes both launches measure alike
+    // and fail assertion 2 for the wrong reason. Removed here only, on purpose.
     cmd.env_remove("WOLF_FONT_PT");
 
     let status = cmd
@@ -23231,11 +21454,8 @@ fn config_font_size_changes_the_grid_under_cage() {
         width_large.display()
     );
 
-    // --- Precondition: both runs came up and reported a real column count -----
-    //
-    // A missing or unparseable file means the app never got far enough to answer,
-    // NOT that the config was ignored — the two failures need different fixes, so
-    // they are separated here rather than folded into the comparison below.
+    // Precondition: a missing or unparseable file means the app never answered, not that the config was
+    // ignored; the two need different fixes.
     let small_raw = read_trimmed(&width_small, SMOKE);
     let large_raw = read_trimmed(&width_large, SMOKE);
     let small_cols = parse_readback_int(&small_raw, &width_small, &small_raw, SMOKE);
@@ -23557,14 +21777,8 @@ fn configured_appearance_reaches_neovims_background_under_cage() {
         config_dark.display()
     );
 
-    // --- Precondition: each seeded file really carries its own appearance -----
-    //
-    // `appearance` is the one seeded key `wolf_core`'s ConfigSection does NOT
-    // require — it has a `#[serde(default)]` of `auto` — so a `write_smoke_config`
-    // that stopped emitting it would leave BOTH launches in `auto`, reading the
-    // same value from the same absent settings portal. That failure is a harness
-    // failure and would otherwise surface as assertion 2, i.e. as a claim about the
-    // front-end. Separated here so the two cannot be confused.
+    // Precondition: `appearance` has a serde default of `auto`, so a harness that stopped writing it
+    // would put both launches in `auto` and fail as a front-end claim.
     for (label, dir, want) in [
         ("run 1", &config_dark, APPEARANCE_FORCED_DARK),
         ("run 2", &config_light, APPEARANCE_FORCED_LIGHT),
@@ -23651,13 +21865,8 @@ fn configured_appearance_reaches_neovims_background_under_cage() {
     );
 }
 
-// --- The PREVIEW DOCUMENT follows the configured appearance ------------------
-//
-// Everything from here down to the column-cap section belongs to ONE smoke,
-// [`preview_document_follows_the_configured_appearance_under_cage`], and it is the
-// only smoke in this file whose evidence is RAW PIXELS: the two theme colours, the
-// derived sampling geometry, the PNG decoder, the two-launch scenario and the smoke
-// itself. Nothing here is OCR'd and nothing here is shared with another smoke.
+// The preview-appearance smoke: everything down to the column-cap section is its alone, and its
+// evidence is raw pixels; nothing is OCR'd or shared.
 
 /// The markdown file both launches open and then preview.
 ///
@@ -23808,8 +22017,8 @@ const BAND_BOTTOM_CLEARANCE_PX: f64 = 6.0 * wolf_gnome::editor_inset::EDITOR_PAD
 /// That the leading `.wolf-src` marker span `markdown.rs` flushes at the top of the
 /// first block costs NO vertical space. It is an empty, zero-size inline anchor, so
 /// per CSS 2.1 §10.8 the anonymous block box around it holds a line box that must be
-/// treated as not existing — but `base.css`'s own header calls that corner
-/// "engine-dependent territory", so it is MEASURED rather than reasoned: against the
+/// treated as not existing — but specs/markdown-stylesheet.md#edge-rules calls that
+/// corner engine-dependent, so it is MEASURED rather than reasoned: against the
 /// real `render_html` output in WebKitGTK 2.52.4, `body` padding read `0px` on all
 /// four sides and the first block's top offset read `0`. If a leading anchor ever
 /// did cost a line box, the first ink would land at row 24 and this band would read
@@ -24025,12 +22234,8 @@ impl Capture {
     }
 }
 
-// --- A pane's own EDGE, which carries no themed chrome ----------------------
-//
-// Four constants and one helper, read by `vertical_split_shows_two_panes_under_cage`
-// and by nothing else. They live here, beside `Capture`, because everything they are
-// built on is here: that smoke is an OCR smoke a thousand lines above, and a colour
-// claim needs pixels rather than a page of text.
+// A pane's own edge carries no themed chrome: constants and a helper for the vertical-split smoke,
+// kept beside `Capture` because a colour claim needs pixels.
 
 /// GNOME's accent colour, `#3584e4`, which no pixel at a pane's own edge may carry.
 ///
@@ -24846,9 +23051,7 @@ fn preview_document_follows_the_configured_appearance_under_cage() {
     let runtime_dir = require_smoke_env();
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
 
-    // A fresh temp cwd shared by both launches, holding the one source fixture and
-    // the usual density fillers. Nothing here is OCR'd; the fillers are kept for
-    // parity so this smoke's page is the same shape as every other smoke's.
+    // Nothing here is OCR'd; the fillers keep this smoke's page the same shape as the others'.
     let cwd = make_temp_cwd();
     write_relaunch_fixtures(
         SMOKE,
@@ -24936,26 +23139,15 @@ fn preview_document_follows_the_configured_appearance_under_cage() {
         wins_light.display()
     );
 
-    // --- Assertion 2 (precondition): both captures decode at the pinned size --
-    //
-    // Presence first, through the shared helper, so "grim wrote nothing" reads as
-    // that rather than as a decode error. `decode_capture` then carries the size
-    // check, the format check and the two PNG gotchas; see its doc comment before
-    // touching anything below, because every rectangle in this smoke is derived from
-    // the size it asserts.
+    // Assertion 2 (precondition): presence first, then `decode_capture`'s checks. Every rectangle here
+    // is derived from the size it asserts, so read its doc comment first.
     assert_png_present(SMOKE, &png_dark);
     assert_png_present(SMOKE, &png_light);
     let dark = decode_capture(&png_dark, SMOKE, "run 1 (appearance: dark)");
     let light = decode_capture(&png_light, SMOKE, "run 2 (appearance: light)");
 
-    // --- Assertion 3 (precondition): a preview pane exists, in each launch ----
-    //
-    // Pixel-independent: the buffer NAMES the captive Neovim reports for its own
-    // windows. The preview scratch is named by `wolf_ensure_preview_buf` after the
-    // SOURCE's cwd-relative path, so this states the pane count, the preview's
-    // existence and the file it previews in one comparison — and it is read before
-    // any pixel, because a band sampled inside a pane that never became a preview
-    // would fail assertion 5 while saying nothing about the appearance.
+    // Assertion 3 (precondition): Neovim's own window buffer names, read before any pixel, since a band
+    // inside a pane that never became a preview fails assertion 5 for nothing.
     let want_windows = {
         let mut want = vec![
             format!("{PREVIEW_READBACK_PREFIX}{PREVIEW_THEME_SOURCE_FILE}"),
@@ -24986,12 +23178,8 @@ fn preview_document_follows_the_configured_appearance_under_cage() {
         );
     }
 
-    // --- Assertions 4, 5 and 6, per launch -----------------------------------
-    //
-    // This loop ASSERTS per launch, so a red run panics on the first failing launch
-    // and reports only that one. The scenario above completes BOTH launches before
-    // any assertion runs, so the second launch's capture is always on disk — read
-    // its number out of the retained PNG rather than concluding it was green.
+    // Asserts per launch, so a red run reports only the first failing one; the second capture is on
+    // disk regardless, so read it before concluding it was green.
     for launch in [
         ThemeLaunch {
             label: "run 1 (appearance: dark)",
@@ -25040,10 +23228,8 @@ fn assert_preview_theme_launch(smoke: &str, launch: &ThemeLaunch<'_>) {
         y1: band_y1,
     };
 
-    // Non-vacuity: every band must lie inside the capture and be non-degenerate.
-    // Without this a rectangle that had collapsed or run off the edge would either
-    // panic deep inside the sampler with an index message, or -- worse -- report
-    // clean percentages over nothing at all.
+    // Non-vacuity: a collapsed or off-edge band would panic in the sampler or report clean percentages
+    // over nothing.
     for (what, rect) in [("control", control), ("sample", sample)] {
         assert!(
             rect.x0 < rect.x1
@@ -25061,12 +23247,8 @@ fn assert_preview_theme_launch(smoke: &str, launch: &ThemeLaunch<'_>) {
         );
     }
 
-    // --- Assertion 4 (control, self-checking) --------------------------------
-    //
-    // Read FIRST. It establishes the premise assertion 6's `web_top` scan rests on:
-    // that the EDITOR's background is not the preview theme's colour, so everything
-    // above the web view in the sampled columns is distinguishable from the document
-    // behind it.
+    // Assertion 4 (control, self-checking): read first, since 6's `web_top` scan needs the editor's
+    // background to differ from the preview theme's colour.
     let control_hits = capture.count_exactly(control, launch.own);
     let control_fraction = band_fraction(
         control_hits,
@@ -25128,11 +23310,8 @@ fn assert_preview_theme_launch(smoke: &str, launch: &ThemeLaunch<'_>) {
         launch.other
     );
 
-    // --- Assertion 6 (discriminator): the document is FLUSH to the view's top -
-    //
-    // `web_top` is self-located, so this says nothing about where the pane puts its
-    // web view and everything about the distance from that view's own top edge to the
-    // document's first ink. See the smoke's doc comment.
+    // Assertion 6 (discriminator): `web_top` is self-located, so this measures the view's top edge to
+    // the first ink. See the smoke's doc comment.
     let scan_rows = preview_theme_scan_rows();
     let web_top = capture
         .first_uniform_row((preview_x0, preview_x1), scan_rows, launch.own)
@@ -25185,20 +23364,8 @@ fn assert_preview_theme_launch(smoke: &str, launch: &ThemeLaunch<'_>) {
     );
 }
 
-// --- SYNTAX-HIGHLIGHTED CODE BLOCKS, and the inline-code BASELINE GRID --------
-//
-// Two smokes and one compositor-free guard, sharing this section's constants and
-// samplers and nothing else. Both smokes read RAW PIXELS out of their own capture,
-// both reuse the preview-appearance smoke's derived geometry verbatim
-// ([`preview_theme_preview_columns`], [`preview_theme_scan_rows`],
-// [`preview_theme_band_rows`]) rather than restating it, and neither OCRs anything.
-//
-// They are deliberately SEPARATE smokes with separate scenarios and separate exit
-// codes, for the reason `tests/README.md` states about exit codes carrying meaning:
-// they are two different feat-list rows, and a shared failure would name the wrong
-// one. Their fixtures are also incompatible — one is two fenced blocks and the other
-// is three inline-code paragraphs above a rule — so a shared document could satisfy
-// neither smoke's geometry.
+// Highlighted code blocks and the inline-code baseline grid: two separate pixel smokes, since
+// a shared exit code would name the wrong feat row and their fixtures are incompatible.
 
 /// The markdown file the code-highlight smoke opens and then previews.
 ///
@@ -25821,11 +23988,8 @@ exit 0
 fn preview_highlights_a_fenced_code_block_under_cage() {
     const SMOKE: &str = "preview_highlights_a_fenced_code_block_under_cage";
 
-    // --- Assertion 0 (tripwire on the fixture) -------------------------------
-    //
-    // Before anything is launched, because it costs microseconds and because the rule
-    // it enforces and the assertion it can disarm sit hundreds of lines apart — the
-    // same distance the three fixture-name guards in this file exist for.
+    // Assertion 0 (tripwire on the fixture): before launch, since the rule and the assertion it can
+    // disarm sit hundreds of lines apart.
     assert!(
         !NVIM_BUILTIN_PARSERS.contains(&CODEHL_HL_LANG),
         "{SMOKE}: the highlighted fence's language {CODEHL_HL_LANG:?} is one of \
@@ -25857,11 +24021,8 @@ fn preview_highlights_a_fenced_code_block_under_cage() {
     let body = codehl_source_body();
     write_relaunch_fixtures(SMOKE, &cwd, &[(CODEHL_SOURCE_FILE, body.as_str())]);
 
-    // Its own config directory, at a FORCED dark appearance. `cage_command` seeds a
-    // shared one that happens to pin the same value today, and this smoke must not
-    // depend on that: `CODEHL_PRE_BG` and `PREVIEW_DARK_BG` are the DARK palette's
-    // colours, so a re-pin of the shared value would leave every rectangle here
-    // sampling a light document while still finding rows.
+    // Its own config at a forced dark appearance: the asserted colours are the dark palette's, so a
+    // re-pin of the shared seeded value would sample a light document while still finding rows.
     let config = smoke_config_dir_at(&cwd, CODEHL_SUFFIX, SMOKE_FONT_PT, APPEARANCE_FORCED_DARK);
 
     let out_png = runtime_dir.join(CODEHL_PNG_NAME);
@@ -25907,11 +24068,8 @@ fn preview_highlights_a_fenced_code_block_under_cage() {
     assert_png_present(SMOKE, &out_png);
     let capture = decode_capture(&out_png, SMOKE, "the code-highlight capture");
 
-    // --- Assertion 3 (precondition): a preview pane exists --------------------
-    //
-    // Pixel-independent: the buffer NAMES the captive Neovim reports for its own
-    // windows. Read before any pixel, because a band sampled inside a pane that never
-    // became a preview would fail claim 6 while saying nothing about highlighting.
+    // Assertion 3 (precondition): Neovim's own window buffer names, read before any pixel, since a band
+    // inside a pane that never became a preview fails claim 6 for nothing.
     let want_windows = {
         let mut want = vec![
             format!("{PREVIEW_READBACK_PREFIX}{CODEHL_SOURCE_FILE}"),
@@ -25939,11 +24097,8 @@ fn preview_highlights_a_fenced_code_block_under_cage() {
     let scan_rows = preview_theme_scan_rows();
     let (_, band_y1) = preview_theme_band_rows();
 
-    // --- Assertion 4 (precondition): the web view's own top edge ---------------
-    //
-    // Self-located from the pixels, exactly as the preview-appearance smoke does it,
-    // so a change to where the pane puts its web view moves every rectangle below WITH
-    // the view rather than reddening anything.
+    // Assertion 4 (precondition): self-located from the pixels, so a moved web view moves every
+    // rectangle below with it.
     let web_top = capture
         .first_uniform_row(preview_columns, scan_rows, PREVIEW_DARK_BG)
         .unwrap_or_else(|| {
@@ -25996,15 +24151,8 @@ fn preview_highlights_a_fenced_code_block_under_cage() {
         out_png.display()
     );
 
-    // Same run count, and the same HEIGHT. A run truncated by the scan limit is still
-    // exactly one run, so `blocks.len()` cannot see it — MEASURED on a rejected six-line
-    // fixture, which produced two runs with the second clipped to 153 rows against the
-    // first's 192. That matters because the shorter rectangle is the CONTROL's: a
-    // control rect smaller than the block it controls samples fewer pixels, and fewer
-    // pixels can only LOWER its chroma count, so claim 7 would read stronger than it is
-    // while nothing went red. Equal height is the guard rather than
-    // `blocks[1].y1 < block_scan.y1`, because it also catches a FIRST block clipped by
-    // something other than the scan limit.
+    // Same run count and same height: a run clipped by the scan limit is still one run, and a clipped
+    // control samples fewer pixels, overstating claim 7 with nothing red.
     assert_eq!(
         blocks[0].rows(),
         blocks[1].rows(),
@@ -26035,17 +24183,8 @@ fn preview_highlights_a_fenced_code_block_under_cage() {
     let raw = read_readback(&langtree, SMOKE);
     let first = raw.split_whitespace().next().unwrap_or("");
 
-    // --- Claims 6, 7 and 8: accumulated, then reported in ONE failure ---------
-    //
-    // Not a chain of asserts, and the reason is in this smoke's doc comment: every edit
-    // that reddens claim 8 reddens claim 6 first (MEASURED — both named falsifiers read
-    // `NO src=2`), so a chain would leave claim 8 with no verbatim red of its own. Claims
-    // 6 and 8 are DIFFERENT feat-list rows, and a failure that named only the first would
-    // name the wrong one.
-    //
-    // Every claim below must push on the failing branch. A claim that is evaluated and
-    // not pushed is a claim that passes silently, which is the one way this shape can go
-    // wrong that a chain of asserts cannot.
+    // Claims 6, 7 and 8 are collected into one failure, since claim 8's falsifiers redden 6 first (see
+    // the doc comment). Every claim must push on its failing branch, or it passes silently.
     let mut unmet: Vec<String> = Vec::new();
 
     // Claim 6 (discriminator, Row A): the HIGHLIGHTED block carries chroma.
@@ -26080,10 +24219,8 @@ fn preview_highlights_a_fenced_code_block_under_cage() {
         ));
     }
 
-    // Claim 7 (in-capture control for claim 6): the PLAIN block carries none. What makes
-    // claim 6 evidence about the HIGHLIGHTER rather than about the renderer — the two
-    // blocks are the same text in the same document in the same run, so any chroma the
-    // engine produced on its own would appear in both.
+    // Claim 7 (in-capture control for claim 6): the plain block is the same text in the same run, so
+    // any chroma the engine made on its own would appear in both.
     if plain.count > CODEHL_MAX_CHROMA_PX {
         unmet.push(format!(
             "CLAIM 7 — the IN-CAPTURE CONTROL that makes claim 6 evidence about the highlighter. \
@@ -26102,9 +24239,7 @@ fn preview_highlights_a_fenced_code_block_under_cage() {
         ));
     }
 
-    // Claim 8 (discriminator, Row B): the injected langtree, from Neovim. The one claim
-    // here no pixel can satisfy, and the only evidence anywhere that the vendored trees
-    // reach the running application.
+    // Claim 8 (discriminator, Row B): the injected langtree, from Neovim; no pixel can satisfy it.
     if first != CODEHL_LANGTREE_OK {
         unmet.push(format!(
             "CLAIM 8 — feat-list row \"Vendored treesitter plugins and parsers\", its EDITOR half. \
@@ -26487,7 +24622,8 @@ exit 0
 /// rests on — an inline box's CONTENT area, which is what its background paints over,
 /// comes from its font's metrics rather than from `line-height`, which governs only the
 /// line box. That is engine behaviour, so it was eyeballed on one capture at one
-/// WebKitGTK version, and `base.css`'s header asserts it as measured fact. An
+/// WebKitGTK version, and specs/markdown-stylesheet.md#inline-code-leading asserts it as
+/// measured fact. An
 /// observation asserted in a document and pinned by nothing is an observation that
 /// stops being true without anybody noticing.
 ///
@@ -26514,9 +24650,7 @@ fn preview_inline_code_keeps_the_baseline_grid_under_cage() {
     let cwd = make_temp_cwd();
     write_relaunch_fixtures(SMOKE, &cwd, &[(CODEGRID_SOURCE_FILE, CODEGRID_SOURCE_BODY)]);
 
-    // Its own config directory, at a FORCED dark appearance: both asserted colours are
-    // the DARK palette's, so a re-pin of the shared seeded value would leave this smoke
-    // sampling a light document and finding neither.
+    // Its own config at a forced dark appearance: both asserted colours are the dark palette's.
     let config = smoke_config_dir_at(&cwd, CODEGRID_SUFFIX, SMOKE_FONT_PT, APPEARANCE_FORCED_DARK);
 
     let out_png = runtime_dir.join(CODEGRID_PNG_NAME);
@@ -26592,10 +24726,7 @@ fn preview_inline_code_keeps_the_baseline_grid_under_cage() {
             )
         });
 
-    // --- Assertion 4b (precondition): the rule's hairline ---------------------
-    //
-    // Searched from the row BELOW `web_top`, so the located top edge itself can never
-    // be reported as the rule.
+    // Assertion 4b (precondition): searched from below `web_top`, so the top edge is never the rule.
     let rule_scan = SampleRect {
         x0: preview_x0,
         x1: preview_x1,
@@ -26655,11 +24786,7 @@ fn preview_inline_code_keeps_the_baseline_grid_under_cage() {
         out_png.display()
     );
 
-    // --- Assertion 6 (discriminator): the chip is still painted ---------------
-    //
-    // Its falsifier is deliberately NOT assertion 5's: removing the chip's background
-    // changes no geometry, so this is the only assertion in either suite that would
-    // notice.
+    // Assertion 6 (discriminator): the chip's background changes no geometry, so only this notices it.
     let chip_columns = codegrid_chip_columns();
     let chip = SampleRect {
         x0: chip_columns.0,
@@ -26702,32 +24829,8 @@ fn preview_inline_code_keeps_the_baseline_grid_under_cage() {
     );
 }
 
-// --- A PICKER over a LIVE PREVIEW --------------------------------------------
-//
-// One smoke, [`file_picker_covers_the_live_preview_under_cage`], plus the fixtures,
-// thresholds and scenario it alone reads. It reuses the preview-appearance smoke's
-// derived pane geometry verbatim ([`preview_theme_pane_area`],
-// [`preview_theme_preview_columns`], [`preview_theme_scan_rows`],
-// [`preview_theme_band_rows`]) rather than restating it, and it OCRs nothing.
-//
-// ## Why this section pins no geometry of its own
-//
-// `picker.rs`'s `PICKER_BOX_MARGIN`, `PICKER_BOX_WIDTH` and `PICKER_BOX_HEIGHT` are
-// private, and an integration test is an external crate. Making them `pub` so this
-// file could import them would pin the very geometry the smoke then asserts on, which
-// is circular: the box would be "where the constants say", and a box that moved
-// together with its constants would keep every assertion green. So the box is LOCATED
-// FROM THE PIXELS on both axes, its surface colour is READ OUT OF the capture rather
-// than named, and NOTHING in `src/` changes for this smoke to exist.
-//
-// ## The one thing it does pin, and why that is safe
-//
-// [`pickover_fill_reference_band`] is four absolute pixel literals. They are inside a
-// region whose extent this file may not import, so there is nowhere honest to derive
-// them from — and the smoke asserts the two properties they exist for (uniform with
-// the picker open, ABSENT with it closed) rather than trusting them, so a band that
-// stopped being inside the box fails loudly instead of quietly reading some other
-// widget's colour.
+// A picker over a live preview: the box is located from the pixels and its colour read from the
+// capture. See notes/crates/wolf-gnome/tests/smoke_headless.rs.md#picker-over-preview-geometry
 
 /// Picker-over-preview smoke: the file opened in the SPLIT pane and then replaced by
 /// its own preview.
@@ -27336,7 +25439,7 @@ exit 0
 /// (`picker.rs`, `palette.rs`, `buffer_picker.rs`, `search_overlay.rs`), while a
 /// preview pane's `webkit6::WebView` is added to that PANE's own overlay
 /// (`pane_view.rs`). The claim that the first therefore paints above the second was an
-/// argument from construction with no test behind it, and `DECISIONS.md` named a
+/// argument from construction with no test behind it, and `notes/wolf-gnome-decisions.md` named a
 /// residual risk beside it — a WebKit rendering through a Wayland subsurface, which
 /// would sit outside GTK's ordering entirely. This smoke is the observation: the same
 /// window, photographed twice, with nothing between the two frames but the chord that
@@ -27491,7 +25594,7 @@ exit 0
 /// it would have been vacuous if it had been.
 ///
 /// **P1a, recorded and NOT taken.** Move the `webkit6::WebView` from the pane's own
-/// overlay to the WINDOW-level one — `DECISIONS.md`'s explicitly rejected alternative.
+/// overlay to the WINDOW-level one — `notes/wolf-gnome-decisions.md`'s explicitly rejected alternative.
 /// That inverts exactly the relation under test, which is what P1b cannot do. It also
 /// changes the view's GEOMETRY, since a window-level overlay child is laid out against
 /// the window rather than against the pane, so its red is not isolated: R would move as
@@ -27583,11 +25686,8 @@ fn file_picker_covers_the_live_preview_under_cage() {
         ],
     );
 
-    // Its own config directory, at a FORCED dark appearance. `cage_command` seeds a
-    // shared one that happens to pin the same value today, and this smoke must not
-    // depend on that: `PREVIEW_DARK_BG` and `PICKOVER_HEADING_INK` are the DARK
-    // palette's colours, so a re-pin of the shared value would leave every rectangle
-    // here sampling a light document while still finding edges.
+    // Its own config at a forced dark appearance: the asserted colours are the dark palette's, so a
+    // re-pin of the shared seeded value would sample a light document while still finding edges.
     let config = smoke_config_dir_at(&cwd, PICKOVER_SUFFIX, SMOKE_FONT_PT, APPEARANCE_FORCED_DARK);
 
     let control_png = runtime_dir.join(PICKOVER_CONTROL_PNG_NAME);
@@ -27630,22 +25730,14 @@ fn file_picker_covers_the_live_preview_under_cage() {
         wins.display()
     );
 
-    // --- Assertion 2 (precondition): both captures decode at the pinned size --
-    //
-    // Presence first, through the shared helper, so "grim wrote nothing" reads as that
-    // rather than as a decode error. `decode_capture` carries the size check, the
-    // format check and the two PNG gotchas.
+    // Assertion 2 (precondition): presence first, so "grim wrote nothing" is not a decode error.
     assert_png_present(SMOKE, &control_png);
     assert_png_present(SMOKE, &sample_png);
     let control = decode_capture(&control_png, SMOKE, CONTROL_LABEL);
     let sample = decode_capture(&sample_png, SMOKE, SAMPLE_LABEL);
 
-    // --- Assertion 3 (precondition): a preview pane exists, in BOTH captures --
-    //
-    // Pixel-independent: the buffer NAMES the captive Neovim reports for its own
-    // windows, written BEFORE either `grim`. Read before any pixel, because a
-    // rectangle sampled inside a pane that never became a preview would fail assertion
-    // 7 while saying nothing about what covers what.
+    // Assertion 3 (precondition): Neovim's buffer names, written before either `grim` and read before
+    // any pixel, since a non-preview pane fails assertion 7 for nothing.
     let want_windows = {
         let mut want = vec![
             format!("{PREVIEW_READBACK_PREFIX}{PICKOVER_SOURCE_FILE}"),
@@ -27669,19 +25761,8 @@ fn file_picker_covers_the_live_preview_under_cage() {
          none of it means anything until this holds."
     );
 
-    // --- Assertion 4 (precondition): the picker's fill colour, read EMPIRICALLY
-    //
-    // Two halves establish the colour, and both are load-bearing. Uniformity says the
-    // band is inside one flat surface rather than straddling an edge, which is what
-    // licenses reading the colour off a single pixel. ABSENCE from the same band in the
-    // control says that surface belongs to the picker rather than to the editor pane
-    // underneath it — without it, a run in which the box never appeared would read the
-    // editor's own background as "the fill colour" and sail through assertion 8.
-    //
-    // Three inequalities then say what the colour may not BE. The first two keep
-    // assertion 8's three counts distinguishable from one another. The third, against
-    // PICKOVER_UNSTYLED_FILL, is the only reading in this smoke that can tell the
-    // overlay CHROME apart from the mere presence of an opaque box.
+    // Assertion 4 (precondition): the fill colour, read empirically from a uniform band that is absent
+    // from the control. See notes/crates/wolf-gnome/tests/smoke_headless.rs.md#picker-fill-colour
     let reference = pickover_fill_reference_band();
     let (area_x, _, area_w, _) = preview_theme_pane_area();
     let pane_left = pixel_index(area_x, "the pane area's left edge");
@@ -27775,20 +25856,8 @@ fn file_picker_covers_the_live_preview_under_cage() {
         sample_png.display()
     );
 
-    // --- Assertion 5 (precondition): locate all four edges of R ---------------
-    //
-    // Each edge is read from the capture in which that boundary is VISIBLE, which is
-    // not the same capture for all four: the box covers the web view's top and left in
-    // the sample, and there is no box at all in the control.
-    //
-    // The two control-side edges are located by PREVIEW_DARK_BG ARRIVING. The two
-    // sample-side ones are located by the box's own fill LEAVING, which is not a
-    // stylistic difference: the box's outset shadow is a band of neither colour, so a
-    // scan for the dark side reports an edge past the surface and R would name pixels
-    // the box never painted. The fill they scan for is the colour assertion 4 read out
-    // of this capture and proved absent from the control, so what these two locate is
-    // where the BOX stops rather than where some flat colour does. The threshold and
-    // the rounded corner it answers are PICKOVER_EDGE_MIN_NON_FILL_PX's.
+    // Assertion 5 (precondition): each edge of R from the capture where it shows; the sample's by the
+    // fill leaving, since the shadow is neither colour. See PICKOVER_EDGE_MIN_NON_FILL_PX.
     let preview_columns = preview_theme_preview_columns();
     let scan_rows = preview_theme_scan_rows();
     let (band_y0, band_y1) = preview_theme_band_rows();
@@ -27866,15 +25935,8 @@ fn file_picker_covers_the_live_preview_under_cage() {
             )
         });
 
-    // --- Assertion 6 (discriminator, geometrical): the box REACHES the view ---
-    //
-    // Read before the box's bottom edge is located, because that scan samples the
-    // columns between these two and an empty column range makes every row read zero
-    // not-fill pixels — the scan would run off the end of its rows and panic about a
-    // bottom edge, which is a true statement about the wrong thing. This is also the
-    // assertion that speaks first when the box is on screen but not over the preview:
-    // its visible right edge is then bounded by the web view's own left edge, and this
-    // width reads 0.
+    // Assertion 6 (discriminator): before the bottom-edge scan, which panics on an empty column range;
+    // this width reads 0 when the box is on screen but not over the preview.
     let overlap_w = box_right.saturating_sub(web_left);
     assert!(
         overlap_w >= PICKOVER_MIN_OVERLAP_W_PX,
@@ -27933,19 +25995,8 @@ fn file_picker_covers_the_live_preview_under_cage() {
         sample_png.display()
     );
 
-    // S, the rectangle assertions 7 and 8 both read: R pulled in from the box's right
-    // and bottom edges by PICKOVER_CORNER_INSET_PX, so that the box's rounded corner —
-    // which the preview genuinely shows through — is outside it. The pair MUST take the
-    // same rectangle: assertion 7 exists to prove the region assertion 8 samples was a
-    // live preview, and if they diverged that guarantee would stop covering that region.
-    //
-    // Built HERE and not one line earlier. Both halves of assertion 6 have run, and each
-    // established a span of at least 200 px against an inset of 12, which is what makes
-    // the two subtractions unconditionally in range. Taken before them the inset is a
-    // hazard rather than a style choice: under the P1b paint-order falsifier
-    // `box_right == web_left`, so an early inset yields `x1 < x0` and panics on the
-    // underflow inside `SampleRect::pixels` — a crash instead of assertion 6's diagnostic
-    // about a box that reaches none of the web view.
+    // S is R inset past the rounded corner, shared by assertions 7 and 8. Built after 6, whose
+    // 200 px spans keep the subtraction in range; earlier, the paint-order falsifier underflows.
     let sampled = SampleRect {
         x0: web_left,
         x1: box_right - PICKOVER_CORNER_INSET_PX,
@@ -27968,17 +26019,8 @@ fn file_picker_covers_the_live_preview_under_cage() {
         sample.height
     );
 
-    // --- Assertion 7 (paired control): S IS the live preview ------------------
-    //
-    // Read before the sample half, because it is what stops that half passing
-    // vacuously: a box drawn over a web view that never rendered would satisfy every
-    // reading below while proving nothing. Two floors, because "the background is
-    // dark" and "the document is on screen" are different claims and a blank view
-    // satisfies the first.
-    //
-    // It reads S rather than R for one structural reason: assertion 8 reads S, and a
-    // control taken over a DIFFERENT rectangle would not cover the region the
-    // discriminator samples.
+    // Assertion 7 (paired control): S is a live preview, so 8 is not vacuous. Two floors, since a blank
+    // view satisfies "dark"; it reads S because assertion 8 does.
     let control_dark = control.count_exactly(sampled, PREVIEW_DARK_BG);
     let control_dark_fraction = band_fraction(
         control_dark,
@@ -28022,17 +26064,8 @@ fn file_picker_covers_the_live_preview_under_cage() {
         sample_png.display()
     );
 
-    // --- Assertion 8 (discriminator): the picker OWNS those pixels ------------
-    //
-    // Three readings of S, the same rectangle assertion 7 just proved is a live preview.
-    // The two zeros are exact and stay exact: a single pixel of the preview surviving
-    // inside S is a real finding about the compositing rather than sampling noise.
-    //
-    // That they CAN be exact is a property of S rather than of the compositor being
-    // tidy. R's right and bottom edges name the box's OPAQUE surface, so the shadow band
-    // outside it is not in R; the corner arc is, and the arc is exactly what S's inset
-    // removes. MEASURED inside S: 0 dark, 0 ink, and a fill fraction of exactly 1.0000
-    // over 79,800 pixels, with the histogram of everything else empty.
+    // Assertion 8 (discriminator): the two zeros stay exact, as S excludes the shadow and the corner.
+    // Measured inside S: 0 dark, 0 ink, a fill fraction of 1.0000 over 79,800 pixels.
     let sample_dark = sample.count_exactly(sampled, PREVIEW_DARK_BG);
     let sample_ink = sample.count_exactly(sampled, PICKOVER_HEADING_INK);
     let sample_fill = sample.count_exactly(sampled, fill);
@@ -28065,7 +26098,7 @@ fn file_picker_covers_the_live_preview_under_cage() {
          full size with the fill near zero: the preview is painted over the box entirely. A partial \
          dark count with a partial fill fraction: the box is above the view for part of the \
          rectangle only, which is what a WebKit rendering through its own Wayland SUBSURFACE would \
-         look like — that is `DECISIONS.md`'s named residual risk, measured NOT to fire on this \
+         look like — that is `notes/wolf-gnome-decisions.md`'s named residual risk, measured NOT to fire on this \
          stack even against a deliberately promoted compositing layer, so a reading of this shape \
          is a finding worth recording rather than a threshold to retune. Both zeros holding with \
          the fill fraction low: the box is on top but is drawing something other than its flat \
@@ -28080,32 +26113,8 @@ fn file_picker_covers_the_live_preview_under_cage() {
         sample_png.display()
     );
 
-    // --- Assertion 9 (discriminator): the selected ROW is menu-sized ----------
-    //
-    // The other half of the appearance the overlay stylesheet exists for. Assertion 4's
-    // PICKOVER_UNSTYLED_FILL inequality reads the box's SURFACE; nothing above it reads a
-    // row metric, so `padding: 8px 10px` on `list > row` could be deleted outright and
-    // every assertion so far would stay green — assertion 8 more comfortably, because a
-    // shorter row leaves more of the box empty fill.
-    //
-    // What is measured is the SELECTED ROW and not the box. The box takes its 600x400
-    // whatever the rows do, so its size is not an observable of this feature at all, while
-    // the selection's highlight is a rectangle exactly one row tall.
-    //
-    // The scan ASSUMES the box holds exactly one row. PICKOVER_QUERY is what guarantees
-    // that: it is a prefix of PICKOVER_SOURCE_FILE and of nothing else in the temp cwd, so
-    // the ranked list narrows to a single row above empty fill. A query matching several
-    // files would break the assumption — with more rows on screen the run this scan finds
-    // is still the selected one, but the empty fill the walk relies on to start would be
-    // pushed off the reference band and the walk would begin inside a row instead.
-    //
-    // The walk goes UP from the reference band, which assertion 4 has just proved is
-    // uniformly the box's own fill, and stops at the first row that is neither that fill
-    // nor the selection. That stop is what keeps the scan inside the BOX without modelling
-    // where the box's top edge is: the search entry above the list is neither colour, so
-    // the walk ends at it, and if the entry ever painted the fill the walk would end at the
-    // box's own top edge instead. Either way nothing outside the box is examined, so an
-    // accent in the tab bar or the header can never be counted as a list row.
+    // Assertion 9 (discriminator): the selected row is menu-sized, the only reading of `list > row`'s
+    // padding. See notes/crates/wolf-gnome/tests/smoke_headless.rs.md#picker-selected-row-scan
     let mut walk_stopped_at = 0;
     let mut selected_row_h = 0;
     let mut run = 0;
@@ -28116,9 +26125,7 @@ fn file_picker_covers_the_live_preview_under_cage() {
         let fill_px = (reference.x0..reference.x1)
             .filter(|&x| sample.pixel(x, y) == fill)
             .count();
-        // The `highlight_px == 0` half of the stop, rather than a threshold on it, so that
-        // a single blended row at the selection's own top or bottom boundary cannot end
-        // the walk before it has seen the run it came for.
+        // `highlight_px == 0`, not a threshold, so one blended boundary row cannot end the walk early.
         if fill_px < PICKOVER_ROW_CLASSIFY_MIN_PX && highlight_px == 0 {
             walk_stopped_at = y + 1;
             break;
@@ -28383,9 +26390,8 @@ fn column_cap_and_full_width_toggle_change_the_grid_under_cage() {
     let runtime_dir = require_smoke_env();
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
 
-    // A fresh temp cwd, mandatory: the captive Neovim's swap directory is keyed on it
-    // and outlives the process, so a fixed cwd would let one run's leftover swap file
-    // raise a blocking prompt that eats the next run's first keystroke.
+    // Mandatory: the swap directory is keyed on the cwd and outlives the process, so a leftover swap
+    // raises a prompt that eats the next run's first keystroke.
     let cwd = make_temp_cwd();
     write_relaunch_fixtures(SMOKE, &cwd, &[]);
 
@@ -28400,10 +26406,8 @@ fn column_cap_and_full_width_toggle_change_the_grid_under_cage() {
         .env("WIDTH_CAPPED", &width_capped)
         .env("WIDTH_FULL", &width_full);
 
-    // THE line that makes this smoke possible. `cage_command` sets WOLF_FONT_PT to
-    // SMOKE_FONT_PT, at which the cap provably cannot bind in a 989 px pane; a later
-    // `.env` on the same key wins, and this one puts the app in the only regime where
-    // the cap is observable at all. Everything else the helper set is left alone.
+    // At SMOKE_FONT_PT the cap cannot bind in a 989 px pane; this later `.env` wins and puts the app in
+    // the one regime where it is observable.
     cmd.env("WOLF_FONT_PT", FULLWIDTH_SMOKE_FONT_PT);
 
     let status = cmd
@@ -28422,11 +26426,8 @@ fn column_cap_and_full_width_toggle_change_the_grid_under_cage() {
         width_full.display()
     );
 
-    // --- Precondition: both readbacks are real column counts ------------------
-    //
-    // A missing or unparseable file means the app never got far enough to answer, NOT
-    // that the cap is wrong — different failures, different fixes, so they are
-    // separated from the comparisons below rather than folded into them.
+    // Precondition: a missing or unparseable file means the app never answered, not that the cap is
+    // wrong; the two need different fixes.
     let capped_raw = read_trimmed(&width_capped, SMOKE);
     let full_raw = read_trimmed(&width_full, SMOKE);
     let capped = parse_readback_int(&capped_raw, &width_capped, &capped_raw, SMOKE);
@@ -28440,11 +26441,7 @@ fn column_cap_and_full_width_toggle_change_the_grid_under_cage() {
         );
     }
 
-    // --- Assertion 2: the cap reaches the grid, EXACTLY -----------------------
-    //
-    // Read from the production constant rather than retyped as 90, so the two cannot
-    // drift: the number this smoke expects is by construction the number the app caps
-    // at, and what is being compared is a live readback from Neovim against it.
+    // Assertion 2: compared against the production constant, not a retyped 90, so the two cannot drift.
     let expected_cap = i64::from(wolf_gnome::editor_inset::MAX_GRID_COLS);
     assert_eq!(
         capped, expected_cap,
@@ -28755,9 +26752,8 @@ fn copy_and_paste_round_trip_through_the_clipboard_under_cage() {
     let runtime_dir = require_smoke_env();
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
 
-    // A fresh temp cwd, mandatory: the captive Neovim's swap directory is keyed on it
-    // and outlives the process, so a fixed cwd would let one run's leftover swap file
-    // raise a blocking prompt that eats the next run's first keystroke.
+    // Mandatory: the swap directory is keyed on the cwd and outlives the process, so a leftover swap
+    // raises a prompt that eats the next run's first keystroke.
     let cwd = make_temp_cwd();
     write_relaunch_fixtures(SMOKE, &cwd, &[]);
 
@@ -28785,10 +26781,7 @@ fn copy_and_paste_round_trip_through_the_clipboard_under_cage() {
         readback.display()
     );
 
-    // --- The assertion: the marker made the round trip ------------------------
-    //
-    // Counted inside a file Neovim wrote out of its own buffer, so the count is a
-    // property of the document and of nothing else on screen.
+    // Counted in a file Neovim wrote from its own buffer, so nothing else on screen affects it.
     let lines = read_readback(&readback, SMOKE);
     let occurrences = lines.matches(CLIP_MARK).count();
     assert_eq!(
@@ -28875,14 +26868,8 @@ fn divider_drag_survives_a_pane_relayout_under_cage() {
     const COLUMNS: i64 = 3;
     // How many windows every width readback must report.
     const EXPECTED_WINDOWS: i64 = 3;
-    // How far the LEFT pane's reported width may move while the INNER divider is
-    // dragged. The inner drag leaves the left pane's ALLOCATION untouched, so
-    // nothing resizes its grid, and `nvim_ui_try_resize_grid` was MEASURED not to
-    // reflow Neovim's own layout — so the honest expectation is that it does not
-    // move at all. The spare cell is slack against Neovim's bookkeeping rather than
-    // against any known effect, and it costs nothing: a drag that hit the OUTER
-    // handle instead would move this pane by the whole drag distance, six cells or
-    // more.
+    // The inner drag leaves the left pane's allocation alone and `nvim_ui_try_resize_grid` does not
+    // reflow, so it should not move; an outer-handle hit moves it six cells or more.
     const UNDISTURBED_CELLS: i64 = 2;
 
     let runtime_dir = require_smoke_env();
@@ -28951,10 +26938,8 @@ fn divider_drag_survives_a_pane_relayout_under_cage() {
     assert_pointer_scenario_succeeded(SMOKE, status, &cwd, &out_png);
     assert_png_present(SMOKE, &out_png);
 
-    // Extents FIRST: a compositor-clamped injection would land somewhere other than
-    // the point this smoke computed and make every message below point at the wrong
-    // thing. The two drag END points are bounded by the seeds, so checking the
-    // extremes covers every injected x.
+    // Extents first: a clamped injection lands elsewhere and misdirects every message below. The drag
+    // end points are bounded by the seeds, so the extremes cover every x.
     let extents = read_output_extents(&cwd, SMOKE);
     for (label, x) in [
         ("the divider-0 LO seed", d0_lo),
@@ -28973,9 +26958,7 @@ fn divider_drag_survives_a_pane_relayout_under_cage() {
         assert_inside_extents(SMOKE, label, (x, i64::from(PROBE_Y)), extents);
     }
 
-    // The window numbers the bisection discovered, purely so every message below can
-    // print them: nvim numbers windows by ITS layout, not by the order this
-    // front-end draws the panes in.
+    // Only for messages: nvim numbers windows by its layout, not by this front-end's pane order.
     let numbering = read_ints(&wins, 3, SMOKE);
     assert!(
         numbering[0] != numbering[1]
@@ -29005,10 +26988,7 @@ fn divider_drag_survives_a_pane_relayout_under_cage() {
         );
     }
 
-    // --- Assertion 1: the baseline really is three roughly equal columns -------
-    //
-    // A PRECONDITION as much as an assertion: it is the equal-share assumption the
-    // bisection seeds are modelled on.
+    // Assertion 1: three roughly equal columns, also the equal-share premise the bisection seeds use.
     let widest = w0[0].max(w0[1]).max(w0[2]);
     let narrowest = w0[0].min(w0[1]).min(w0[2]);
     assert!(
@@ -29273,10 +27253,8 @@ fn dragged_divider_weights_survive_relaunch_under_cage() {
     // A fresh temp cwd shared by BOTH launches — relaunching in the project you
     // saved from is the whole scenario.
     let cwd = make_temp_cwd();
-    // The RIGHT fixture carries a body as well as its heading: the drag leaves that
-    // pane 15 cells wide, and a heading alone above a bare `~` column is a sparse
-    // region tesseract misclassifies. See `DIVIDER_BODY_LINE_COUNT` for the
-    // ablations. The LEFT pane is the wide one and needs none.
+    // The right pane is left 15 cells wide, and a lone heading over `~` is too sparse for tesseract;
+    // see `DIVIDER_BODY_LINE_COUNT`. The wide left pane needs no body.
     let right_fixture = divider_right_fixture_body();
     write_relaunch_fixtures(
         SMOKE,
@@ -29291,9 +27269,8 @@ fn dragged_divider_weights_survive_relaunch_under_cage() {
     // WOLF_STATE_DIR, so the two runs share one `state.json`.
     let smoke_state_file = smoke_state_dir(&cwd).join(STATE_FILE_NAME);
 
-    // Where the scenario freezes RUN 1's save. A DIRECTORY holding a `state.json`,
-    // because `wolf_core::load_state` takes the directory; under XDG_RUNTIME_DIR so
-    // the app's own `FileSearch` never lists it in the sidebar.
+    // Freezes run 1's save. A directory, because `load_state` takes one; under XDG_RUNTIME_DIR so the
+    // sidebar never lists it.
     let run1_state_dir = runtime_dir.join("wolf_gnome_divider_run1_state");
     std::fs::create_dir_all(&run1_state_dir).unwrap_or_else(|e| {
         panic!(
@@ -29436,10 +27413,7 @@ fn dragged_divider_weights_survive_relaunch_under_cage() {
         out_png.display()
     );
 
-    // --- Precondition B: the drag moved the divider ----------------------------
-    //
-    // This is what makes assertion 1 unambiguous. Without it an equal-share pair on
-    // disk could equally mean "the press missed the handle".
+    // Precondition B: the drag moved the divider; without it, equal shares could mean a missed press.
     assert!(
         drag_left > base_left + MIN_DRAG_CELLS && drag_right < base_right - MIN_DRAG_CELLS,
         "{SMOKE}: after dragging the divider {DIVIDER_RELAUNCH_DRAG_PX} px to the RIGHT the panes \
@@ -29570,19 +27544,8 @@ fn dragged_divider_weights_survive_relaunch_under_cage() {
         out_png.display()
     );
 
-    // --- Assertion 3: two panes really bound grids and PAINTED -----------------
-    //
-    // The page is read TWICE, in two page-segmentation modes, and each term is
-    // accepted from either reading. Both readers see the same pixels of the same
-    // capture, so accepting either does not weaken what is demanded — it is still
-    // the literal term, both terms, and no page element other than the two headings
-    // can produce one (see `ocr_uniform_block_to_lowercase` for the mechanical
-    // guards, which cover the extra page text `--psm 6` reads).
-    //
-    // The two `contains` calls are kept SEPARATE rather than run against the two
-    // readings joined: a concatenation would let a `divider` at the tail of one and a
-    // `bravo` at the head of the other satisfy the assertion between them, and no
-    // rendered pane would have produced that.
+    // Assertion 3: each term is accepted from either OCR reading, checked separately, since a joined
+    // string could pair one reading's tail with the other's head. See `ocr_uniform_block_to_lowercase`.
     let ocr_sparse = ocr_to_lowercase(&out_png);
     let ocr_block = ocr_uniform_block_to_lowercase(&out_png);
     for (term, const_name, side) in [
@@ -29696,14 +27659,8 @@ fn window_title_shows_the_working_directory_under_cage() {
     // Locate the freshly built binary under test.
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
 
-    // A fresh temp base, then the two NESTED directories the abbreviation needs.
-    // `smoke_state_dir` will make `<home>/titlezulu-state` a SIBLING of the project,
-    // so the app's own FileSearch (rooted at the project) never lists it.
-    //
-    // `make_temp_cwd` returns `<unique>/project`, and this smoke uses that only as a
-    // BASE — it never launches there — so the extra fixed component is inert here:
-    // the app's cwd is `<base>/titlehome-parent/titlezulu` and its HOME is
-    // `<base>/titlehome-parent`, exactly as before.
+    // `make_temp_cwd` is only a base here; the app's cwd is `<base>/titlehome-parent/titlezulu` and its
+    // HOME `<base>/titlehome-parent`, and the state dir is a sibling FileSearch never lists.
     let base = make_temp_cwd();
     let home = base.join(TITLE_HOME_DIR);
     let project = home.join(TITLE_PROJECT_DIR);
@@ -29725,18 +27682,8 @@ fn window_title_shows_the_working_directory_under_cage() {
     let out_png = runtime_dir.join("wolf_gnome_title_smoke.png");
     clear_evidence(&out_png, SMOKE);
 
-    // HOME is the PARENT of the working directory, which is what makes
-    // `display_title` abbreviate. It also keeps every remaining $HOME-derived path
-    // inside the temp tree; the state dir is not one of them, since `cage_command`
-    // pins it with WOLF_STATE_DIR (resolved ahead of anything $HOME-derived).
-    //
-    // This `.env("HOME", ...)` DELIBERATELY OVERRIDES `cage_command`'s default, and
-    // is kept explicit even though the two now agree: the helper's default is
-    // `smoke_home(cwd)` == the cwd's parent, and this smoke's cwd IS `home/titlezulu`,
-    // so both resolve to `home`. The assertions below are written against THIS value
-    // (`~/titlezulu`, with `titlehome-parent` abbreviated away), so it is stated here
-    // rather than inherited — a later change to the helper's rule must not silently
-    // retarget this smoke's subject. Chained after the helper, so it wins regardless.
+    // HOME is the cwd's parent, which makes `display_title` abbreviate. Stated explicitly though it
+    // matches the default, so a change to `cage_command` cannot retarget `~/titlezulu`.
     let status = cage_command(TITLE_SCENARIO, &project, &runtime_dir)
         .env("HOME", &home)
         .env("WOLF_BIN", bin)
@@ -29871,14 +27818,8 @@ fn window_title_shows_the_working_directory_under_cage() {
 fn open_recent_palette_row_reroots_the_window_under_cage() {
     const SMOKE: &str = "open_recent_palette_row_reroots_the_window_under_cage";
 
-    // --- Assertion 0b, first part: this TEST process must be un-overridden -----
-    //
-    // Asserted BEFORE anything runs, because `wolf_core::state_dir()` below resolves
-    // `WOLF_STATE_DIR` ahead of everything else. Were it set here, the "developer's
-    // real Open Recent history" this test guards would be whatever that variable
-    // points at — very possibly the smoke's own directory — and the isolation check
-    // would become self-referential and prove nothing. The relaunch smoke opens with
-    // the same guard for the same reason.
+    // Assertion 0b, first part: checked first, since `state_dir()` resolves `WOLF_STATE_DIR` ahead of
+    // everything and an override here would make the isolation check self-referential.
     assert!(
         std::env::var_os("WOLF_STATE_DIR").is_none(),
         "{SMOKE}: WOLF_STATE_DIR is set in the TEST process. `wolf_core::state_dir()` resolves \
@@ -29898,12 +27839,8 @@ fn open_recent_palette_row_reroots_the_window_under_cage() {
         )
     });
     let real_recent_file = real_state_dir.join(RECENT_DIRS_DB_NAME);
-    // Bytes, not a length/mtime fingerprint: this is the first smoke that touches
-    // `folder-mru.sqlite` at all, and a `record` that moved an existing path to the
-    // top rewrites one row without necessarily changing the file's size. `None` is a
-    // first-class answer — on a machine that has never run Wolf interactively the
-    // file does not exist, and "absent before, absent after" is exactly as strong an
-    // isolation proof as "unchanged".
+    // Bytes, not a fingerprint: `record` can rewrite one row without changing the size. `None` is a
+    // real answer, since "absent before and after" is as strong as "unchanged".
     let real_before = std::fs::read(&real_recent_file).ok();
 
     let runtime_dir = require_smoke_env();
@@ -29920,14 +27857,8 @@ fn open_recent_palette_row_reroots_the_window_under_cage() {
         &[(OPENRECENT_START_FILE, OPENRECENT_START_HEADING)],
     );
 
-    // The TARGET directory, `<unique>/orzulu` — a SIBLING of the launch cwd and a
-    // CHILD of the app's HOME, so after the chdir `title::display_title` abbreviates
-    // it to the constant `~/orzulu` and the page stays identical across runs. It gets
-    // its own copy of the fillers because the sidebar RE-ROOTS: the launch cwd's rows
-    // leave the page the assertion reads, and page density has to be paid for twice.
-    //
-    // `OPENRECENT_TARGET_FILE` is never opened, so its body is inert; the helper's
-    // trailing newline on top of SIDEBAR_FILLER_BODY's own is harmless.
+    // The target is the cwd's sibling, drawn as `~/orzulu`, with its own fillers since the sidebar
+    // re-roots. See notes/crates/wolf-gnome/tests/smoke_headless.rs.md#open-recent-fixtures
     let target_dir = smoke_home(&cwd).join(OPENRECENT_TARGET_DIR);
     std::fs::create_dir_all(&target_dir).unwrap_or_else(|e| {
         panic!(
@@ -29941,9 +27872,7 @@ fn open_recent_palette_row_reroots_the_window_under_cage() {
         &[(OPENRECENT_TARGET_FILE, SIDEBAR_FILLER_BODY)],
     );
 
-    // The canonical form is what everything downstream compares against: `chdir_to`
-    // canonicalizes before sending, `RecentDirs` stores the string as given, and /tmp
-    // may resolve through a symlink on this host.
+    // Canonical: `chdir_to` canonicalizes, `RecentDirs` stores as given, and /tmp may be a symlink.
     let target_canon = std::fs::canonicalize(&target_dir).unwrap_or_else(|e| {
         panic!(
             "{SMOKE}: failed to canonicalize the Open Recent target dir {}: {e}. Every comparison \
@@ -29957,19 +27886,13 @@ fn open_recent_palette_row_reroots_the_window_under_cage() {
     // test seeds, and the one assertion 4 reads the command MRU back out of.
     let smoke_state = smoke_state_dir(&cwd);
 
-    // Seed the recent-directories store the app will read at palette-open time. The
-    // scoped block drops the connection (and its WAL handle) before the app under
-    // cage opens the very same file.
+    // The scoped block drops the connection and its WAL handle before the app opens the same file.
     {
         RecentDirs::open(&smoke_state).record(&target_canon);
     }
 
-    // --- Assertion 0 (precondition): the seed actually landed -----------------
-    //
-    // `RecentDirs::record` is fire-and-forget and swallows EVERY error — a failed
-    // seed is silent by design. Without this check that failure would surface much
-    // later as "the palette had no rows", i.e. as a red assertion 3 pointing at the
-    // shell instead of at this fixture.
+    // Assertion 0 (precondition): `RecentDirs::record` swallows every error, so a failed seed would
+    // otherwise surface as assertion 3 blaming the shell.
     let seeded = RecentDirs::open(&smoke_state).recent();
     assert!(
         seeded.iter().any(|dir| dir == &target_canon),
@@ -30012,10 +27935,7 @@ fn open_recent_palette_row_reroots_the_window_under_cage() {
     // --- Assertion 2 (precondition): grim produced an image -------------------
     assert_png_present(SMOKE, &out_png);
 
-    // --- Assertion 3 (discriminator): NEOVIM's working directory changed ------
-    //
-    // Neovim's own answer about itself, so no sidebar row, no `:e` toast and no
-    // header-bar title can produce it, and OCR is structurally incapable of it.
+    // Assertion 3 (discriminator): Neovim's own cwd, which no page text or OCR can produce.
     let got_cwd = read_trimmed(&readback, SMOKE);
     let got_canon = std::fs::canonicalize(&got_cwd).unwrap_or_else(|e| {
         panic!(
@@ -30043,11 +27963,8 @@ fn open_recent_palette_row_reroots_the_window_under_cage() {
         out_png.display()
     );
 
-    // --- Assertion 4 (discriminator): activation recorded the row's MRU key ---
-    //
-    // Independent of the pixels: nothing but a palette activation writes this store
-    // (`WolfCore::command_mru`'s doc states it), so a hit can only mean the row was
-    // activated AND that it was an Open Recent row carrying core's key shape.
+    // Assertion 4 (discriminator): only a palette activation writes this store, so a hit means an Open
+    // Recent row ran with core's key shape.
     let want_key = format!("open_recent:{}", target_canon.display());
     let recent = CommandMru::open(&smoke_state).recent();
     assert!(
@@ -30064,15 +27981,8 @@ fn open_recent_palette_row_reroots_the_window_under_cage() {
         smoke_state.join("command-mru.sqlite").display()
     );
 
-    // --- Assertion 5 (discriminator): the FRONT-END re-rooted the sidebar -----
-    //
-    // The one observable that separates "Neovim chdir'd" (assertion 3) from "the
-    // shell settled the pending re-root and restarted the sidebar traversal at the
-    // new root". `ortango.md` lives inside the TARGET directory, outside the launch
-    // cwd, so no sidebar row could draw its name before the re-root — and the header
-    // bar's `~/orzulu` cannot satisfy it either, which
-    // `restore_fixture_names_cannot_satisfy_their_own_assertions` asserts rather than
-    // assumes.
+    // Assertion 5 (discriminator): the front-end re-rooted. `ortango.md` is outside the launch cwd, and
+    // the guard asserts the `~/orzulu` title cannot satisfy it.
     let ocr_text = ocr_to_lowercase(&out_png);
     assert!(
         ocr_text.contains(OPENRECENT_OCR_PRESENT),
@@ -30094,11 +28004,8 @@ fn open_recent_palette_row_reroots_the_window_under_cage() {
         out_png.display()
     );
 
-    // --- Assertion 0b, second part: the developer's real store is untouched ---
-    //
-    // Asserted LAST so it covers the whole run, and read as bytes rather than as a
-    // length: `RecentDirs::record` moves an existing path to the top by rewriting one
-    // row, which need not change the file's size at all.
+    // Assertion 0b, second part: last, so it covers the whole run, and in bytes, since `record` can
+    // rewrite a row without changing the size.
     let real_after = std::fs::read(&real_recent_file).ok();
     assert!(
         real_before == real_after,
@@ -30180,9 +28087,6 @@ fn alt_left_navigates_back_to_the_previous_file_under_cage() {
     // Locate the freshly built binary under test.
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
 
-    // A fresh temp cwd holding the two fixtures plus the sidebar fillers. See
-    // `make_temp_cwd` for why the isolation is mandatory rather than tidy, and
-    // `SIDEBAR_FILLER_COUNT` for why the page needs the density.
     let cwd = make_temp_cwd();
     write_relaunch_fixtures(
         SMOKE,
@@ -30193,9 +28097,7 @@ fn alt_left_navigates_back_to_the_previous_file_under_cage() {
         ],
     );
 
-    // The two readbacks land in the cwd (the sidebar lists them, which is why their
-    // names are registered in `RELAUNCH_FIXTURE_NAMES`). Cleared first: evidence
-    // that could be a previous run's leftover is not evidence.
+    // Cleared first: evidence that could be a previous run's leftover is not evidence.
     let before = cwd.join(NAVBACK_READBACK_BEFORE);
     let after = cwd.join(NAVBACK_READBACK_AFTER);
     let out_png = runtime_dir.join("wolf_gnome_navback_smoke.png");
@@ -30237,12 +28139,8 @@ fn alt_left_navigates_back_to_the_previous_file_under_cage() {
     // --- Assertion 2 (precondition): grim produced an image -------------------
     assert_png_present(SMOKE, &out_png);
 
-    // --- Assertion 3 (PRECONDITION, not a discriminator) ----------------------
-    //
-    // It proves the second `:e` took effect. Without it, a failure of assertion 4
-    // could equally mean "Back did not work" or "the pane was never on the second
-    // file to begin with", and OCR cannot separate those: both leave the FIRST
-    // file's heading on screen.
+    // Assertion 3 (precondition): the second `:e` took effect, so a red 4 means Back failed, not that
+    // the pane never left the first file; OCR cannot tell those apart.
     let before_name = read_trimmed(&before, SMOKE);
     assert_eq!(
         before_name,
@@ -30255,11 +28153,7 @@ fn alt_left_navigates_back_to_the_previous_file_under_cage() {
         before.display()
     );
 
-    // --- Assertion 4 (THE DISCRIMINATOR): the pane moved back -----------------
-    //
-    // An exact buffer name, which no sidebar row, no `:e` toast and no header-bar
-    // segment can forge, and which OCR is structurally incapable of answering
-    // precisely.
+    // Assertion 4 (discriminator): an exact buffer name, which no page text can forge.
     let after_name = read_trimmed(&after, SMOKE);
     assert_eq!(
         after_name, NAVBACK_FILE_FIRST,
@@ -30292,13 +28186,8 @@ fn alt_left_navigates_back_to_the_previous_file_under_cage() {
 
     let ocr_text = ocr_to_lowercase(&out_png);
 
-    // --- Assertion 5 (undiscriminated): the pane really REPAINTED -------------
-    //
-    // The readback proves Neovim's own current buffer changed; only this proves the
-    // GTK side drew the result. A pane view that never rebound the grid would leave
-    // assertion 4 green and this one red — but no revert producing that shape has
-    // been run, so the property is real and the discrimination is unmeasured. See
-    // this test's row 5.
+    // Assertion 5 (undiscriminated): only this proves GTK drew the result. No revert of that shape has
+    // been run, so the discrimination is unmeasured; see this test's row 5.
     assert!(
         ocr_text.contains(NAVBACK_OCR_PRESENT),
         "{SMOKE}: OCR did not contain {NAVBACK_OCR_PRESENT:?} — the HEADING of \
@@ -30311,15 +28200,8 @@ fn alt_left_navigates_back_to_the_previous_file_under_cage() {
         out_png.display()
     );
 
-    // --- Assertion 6 (discriminator, NO isolated red run) ---------------------
-    //
-    // With one pane two headings cannot both be on screen, so no revert reddens this
-    // alone: it is reached only once an earlier assertion has already failed. Under
-    // the recorded revert it is not reached at all — that run aborts at assertion 4,
-    // ahead of both OCR assertions. Its contribution is naming WHICH file is
-    // showing, not detecting that the wrong one is. Recorded rather than dressed up;
-    // the same shape as the bare-Enter buffer-picker smoke's must-not-contain
-    // assertion.
+    // Assertion 6 (discriminator, no isolated red run): it names which file shows and is reached only
+    // after an earlier failure; under the recorded revert, assertion 4 aborts first.
     assert!(
         !ocr_text.contains(NAVBACK_OCR_ABSENT),
         "{SMOKE}: OCR unexpectedly contained {NAVBACK_OCR_ABSENT:?} — the heading of \
@@ -30385,9 +28267,7 @@ fn sidebar_toggle_chord_hides_the_file_tree_under_cage() {
     // Locate the freshly built binary under test.
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
 
-    // A fresh temp cwd holding both fixtures plus the sidebar fillers. The fillers
-    // are page density for capture A and, incidentally, more rows for the toggle to
-    // take away.
+    // The fillers are page density for capture A and more rows for the toggle to take away.
     let cwd = make_temp_cwd();
     write_relaunch_fixtures(
         SMOKE,
@@ -30395,11 +28275,8 @@ fn sidebar_toggle_chord_hides_the_file_tree_under_cage() {
         &[(SIDEBARTOGGLE_OPEN_FILE, SIDEBARTOGGLE_HEADING)],
     );
 
-    // The observable file is written by hand rather than through the helper, because
-    // it is deliberately absent from `RELAUNCH_FIXTURE_NAMES` (its NAME is the
-    // assertion's subject — see the fifth block of
-    // `restore_fixture_names_cannot_satisfy_their_own_assertions`). It is never
-    // opened, so its body is never rendered and exists only so the file is non-empty.
+    // Written by hand: its name is the assertion's subject, so it is absent from
+    // `RELAUNCH_FIXTURE_NAMES`. Never opened; the body only keeps it non-empty.
     let observable = cwd.join(SIDEBARTOGGLE_FILE);
     std::fs::write(&observable, SIDEBAR_FILLER_BODY).unwrap_or_else(|e| {
         panic!(
@@ -30445,11 +28322,7 @@ fn sidebar_toggle_chord_hides_the_file_tree_under_cage() {
     let before_text = ocr_to_lowercase(&out_png_before);
     let after_text = ocr_to_lowercase(&out_png);
 
-    // --- Assertion 3 (PRECONDITION, not a discriminator) ----------------------
-    //
-    // The sidebar was populated at all. Without this, assertion 6 holds for a tree
-    // that never rendered a single row — the classic way a `!contains` assertion
-    // passes while proving nothing.
+    // Assertion 3 (precondition): the sidebar populated, or assertion 6 holds for an empty tree.
     assert!(
         before_text.contains(SIDEBARTOGGLE_OCR_ABSENT),
         "{SMOKE}: the FIRST capture, taken with the sidebar still shown, does not contain \
@@ -30464,10 +28337,7 @@ fn sidebar_toggle_chord_hides_the_file_tree_under_cage() {
         out_png_before.display()
     );
 
-    // --- Assertion 4 (PRECONDITION) -------------------------------------------
-    //
-    // The editor was drawing BEFORE the chord, so assertion 5 measures a state that
-    // survived rather than one that was never there.
+    // Assertion 4 (precondition): the editor was drawing before the chord.
     assert!(
         before_text.contains(SIDEBARTOGGLE_OCR_KEEP),
         "{SMOKE}: the FIRST capture does not contain {SIDEBARTOGGLE_OCR_KEEP:?} — the heading of \
@@ -30478,10 +28348,8 @@ fn sidebar_toggle_chord_hides_the_file_tree_under_cage() {
         out_png_before.display()
     );
 
-    // --- Assertion 5 (ANTI-VACUITY, not a discriminator) ----------------------
-    //
-    // Deliberately insensitive to the toggle: it is what stops a crashed, blank or
-    // frozen window from satisfying assertion 6. No revert reddens it on purpose.
+    // Assertion 5 (anti-vacuity): insensitive to the toggle on purpose; it stops a crashed, blank or
+    // frozen window from satisfying assertion 6.
     assert!(
         after_text.contains(SIDEBARTOGGLE_OCR_KEEP),
         "{SMOKE}: the SECOND capture does not contain {SIDEBARTOGGLE_OCR_KEEP:?} — the heading of \
@@ -30618,22 +28486,8 @@ fn typed_cd_reroots_the_sidebar_under_cage() {
     // Locate the freshly built binary under test.
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
 
-    // --- The fixture tree ------------------------------------------------------
-    //
-    // `make_temp_cwd` returns `<unique>/project`, used here ONLY as a base — this
-    // smoke never launches there (the
-    // `window_title_shows_the_working_directory_under_cage` precedent). The nesting
-    // below is what makes the two discriminators separable:
-    //
-    //     base/cdouterhome/cdrootzulu/startdir   <- the LAUNCH cwd
-    //
-    // `cage_command` hands the app `smoke_home(cwd)` == `cwd.parent()` as HOME, which
-    // is therefore exactly `cdrootzulu` — the `:cd` target. MEASURED against the
-    // helper rather than assumed: `cage_command` sets `.env("HOME", smoke_home(cwd))`
-    // and `smoke_home` returns `cwd.parent()`. So after `:cd ..` the working directory
-    // IS the home directory, `display_title` rule 4 renders the bare `~`, and
-    // `cdrootzulu` can only reach the page from the synthetic root row. No HOME
-    // override is needed here, and adding one would break exactly that.
+    // The launch cwd is `base/cdouterhome/cdrootzulu/startdir`, so the default HOME is `cdrootzulu`.
+    // See notes/crates/wolf-gnome/tests/smoke_headless.rs.md#typed-cd-fixtures
     let base = make_temp_cwd();
     let outer = base.join(CD_OUTER_DIR);
     let root = outer.join(CD_ROOT_DIR);
@@ -30645,20 +28499,11 @@ fn typed_cd_reroots_the_sidebar_under_cage() {
         )
     });
 
-    // The `:cd` TARGET's contents: the nine density fillers, and nothing else through
-    // the helper.
-    //
-    // Density has to be paid for twice, exactly as it does in the Open Recent smoke:
-    // the sidebar RE-ROOTS, so the launch cwd's rows leave the page the assertions
-    // read and only this directory's remain. `tesseract` classifies a word by the
-    // whole page (see [`SIDEBAR_FILLER_COUNT`]).
+    // The `:cd` target gets fillers of its own: the sidebar re-roots, so density is paid twice.
     write_relaunch_fixtures(SMOKE, &root, &[]);
 
-    // The observable is written by hand rather than through the helper, because it is
-    // deliberately absent from `RELAUNCH_FIXTURE_NAMES` (its NAME is assertion 4's
-    // subject — see the sixth block of
-    // `restore_fixture_names_cannot_satisfy_their_own_assertions`). It is never
-    // opened, so its body is never rendered and exists only so the file is non-empty.
+    // Written by hand: its name is assertion 4's subject, so it is absent from
+    // `RELAUNCH_FIXTURE_NAMES`. Never opened; the body only keeps it non-empty.
     let observable = root.join(CD_TARGET_FILE);
     std::fs::write(&observable, SIDEBAR_FILLER_BODY).unwrap_or_else(|e| {
         panic!(
@@ -30670,9 +28515,7 @@ fn typed_cd_reroots_the_sidebar_under_cage() {
     // The LAUNCH cwd's contents: the file the scenario opens, plus its own fillers.
     write_relaunch_fixtures(SMOKE, &cwd, &[(CD_BASE_FILE, CD_BASE_HEADING)]);
 
-    // The canonical form of the `:cd` target: assertion 3 compares against it, because
-    // /tmp may resolve through a symlink on this host and `getcwd()` reports whatever
-    // Neovim resolved.
+    // Canonical, since /tmp may resolve through a symlink and `getcwd()` reports Neovim's resolution.
     let root_canon = std::fs::canonicalize(&root).unwrap_or_else(|e| {
         panic!(
             "{SMOKE}: failed to canonicalize the `:cd` target {}: {e}. Assertion 3 compares against \
@@ -30681,20 +28524,8 @@ fn typed_cd_reroots_the_sidebar_under_cage() {
         )
     });
 
-    // --- Assertion 0 (precondition): the state-dir override is not cosmetic ----
-    //
-    // `cage_command`'s default is `smoke_state_dir(cwd)` == `<cwd's parent>/<cwd's
-    // name>-state`, which for this smoke is `cdrootzulu/startdir-state` — INSIDE the
-    // post-`:cd` search root. Neovim's swap files there encode the full buffer path
-    // with `%` separators, so their NAMES literally contain `cdrootzulu`; a swap-file
-    // row in the sidebar would satisfy assertion 6 with no synthetic root on screen at
-    // all. This is the one premise of this smoke that lives in another function, so it
-    // is asserted rather than commented: a later change to `smoke_state_dir` must
-    // surface here and not as a smoke that passes for the wrong reason.
-    //
-    // The EMPTY `startdir-state` directory `cage_command` still creates is harmless:
-    // `wolf_core::tree::TreeIndex::build` derives directory nodes from FILE entries
-    // only, so a directory holding no files yields no row.
+    // Assertion 0 (precondition): the default state dir is inside the post-`:cd` search root, so this
+    // override matters. See notes/crates/wolf-gnome/tests/smoke_headless.rs.md#typed-cd-fixtures
     let default_state = smoke_state_dir(&cwd);
     assert!(
         default_state.starts_with(&root),
@@ -30729,19 +28560,15 @@ fn typed_cd_reroots_the_sidebar_under_cage() {
         root.display()
     );
 
-    // The readback lands in `base`, outside BOTH search roots, so it is never a
-    // sidebar row — and the absolute path echoed in the typed `:call writefile(...)`
-    // command line carries no asserted term either.
+    // In `base`, outside both search roots; its echoed absolute path carries no asserted term.
     let readback = base.join(CD_READBACK_NAME);
     let out_png = runtime_dir.join("wolf_gnome_typed_cd_smoke.png");
     for path in [&readback, &out_png] {
         clear_evidence(path, SMOKE);
     }
 
-    // `WOLF_STATE_DIR` is chained AFTER `cage_command` so it wins (`Command::env` is
-    // last-write-wins per key), the same way the title and empty-state smokes override
-    // `HOME`. `HOME` itself is deliberately NOT overridden: the helper's default is
-    // already the value every assertion below is written against.
+    // `WOLF_STATE_DIR` is chained after `cage_command` so it wins; `HOME` keeps the helper's default,
+    // which every assertion below is written against.
     let status = cage_command(CD_SCENARIO, &cwd, &runtime_dir)
         .env("WOLF_STATE_DIR", &state_override)
         .env("WOLF_BIN", bin)
@@ -30768,14 +28595,8 @@ fn typed_cd_reroots_the_sidebar_under_cage() {
     // --- Assertion 2 (precondition): grim produced an image -------------------
     assert_png_present(SMOKE, &out_png);
 
-    // --- Assertion 3 (PRECONDITION, not a discriminator) ----------------------
-    //
-    // Neovim's own answer about itself: the typed `:cd ..` reached it and landed in
-    // the target directory. This is deliberately NOT a discriminator and has NO
-    // revert — nothing in `wolf-gnome` sits between `wtype` and Neovim's own `:cd`, so
-    // no front-end change can break it. What it buys is ATTRIBUTION: with it green, a
-    // red assertion 4 or 6 is unambiguously the front-end's, rather than "the
-    // keystroke never landed".
+    // Assertion 3 (precondition): Neovim's own `:cd` landed. No front-end change breaks it, so it has
+    // no revert; it attributes a red 4 or 6 to the front-end.
     let got_cwd = read_trimmed(&readback, SMOKE);
     let got_canon = std::fs::canonicalize(&got_cwd).unwrap_or_else(|e| {
         panic!(
@@ -30802,21 +28623,8 @@ fn typed_cd_reroots_the_sidebar_under_cage() {
 
     let ocr_text = ocr_to_lowercase(&out_png);
 
-    // --- Assertion 4 (DISCRIMINATOR): the window RE-ROOTED on Neovim's cwd ----
-    //
-    // `cdtango.md` lives only inside the `:cd` target, so no sidebar row could draw
-    // its name before the re-root — and it is a CHILD of the synthetic root, so this
-    // assertion also depends on that root auto-expanding. Both candidate causes are
-    // named in the message, in order.
-    //
-    // REVERT (the coder runs this in step 7): in `shell::settle_reroot`, add
-    //   `if self.inner.pending_reroot.borrow().is_none() { return; }`
-    // at the top — restoring "only a front-end chdir re-roots". Assertion 3 stays
-    // green; the sidebar goes on listing `startdir`'s files and `cdtango` never
-    // reaches the page. Note this revert also makes assertion 6 unsatisfiable (the
-    // sidebar keeps the LAUNCH root label), but assertion 6 is never evaluated under
-    // it because this one fails first. The two rows are made independently falsifiable
-    // by the OTHER direction: assertion 6's revert leaves this one green.
+    // Assertion 4 (discriminator): the window re-rooted on Neovim's cwd and the root auto-expanded.
+    // See notes/crates/wolf-gnome/tests/smoke_headless.rs.md#typed-cd-reverts
     assert!(
         ocr_text.contains(CD_OCR_ROOTED),
         "{SMOKE}: OCR did not contain {CD_OCR_ROOTED:?} — the name of {CD_TARGET_FILE}, which \
@@ -30845,18 +28653,8 @@ fn typed_cd_reroots_the_sidebar_under_cage() {
         out_png.display()
     );
 
-    // --- Assertion 5 (PRECONDITION GUARD for assertion 6) ---------------------
-    //
-    // ORDER IS LOAD-BEARING: this MUST be asserted before assertion 6. A title that
-    // failed to abbreviate would render the full path `.../cdouterhome/cdrootzulu`,
-    // which contains BOTH this term and `CD_OCR_ROOT_NODE` — so assertion 6 would be
-    // satisfied by the header bar with no synthetic root row on screen, which is
-    // precisely the silent pass this smoke's whole fixture layout exists to prevent.
-    // Asserting the absence FIRST is what turns that state into a clean, correctly
-    // attributed red. Do not reorder these two and do not fold them into one message.
-    //
-    // No revert of ours: this fires only if `title::display_title` or
-    // `workspace::home_dir` regressed.
+    // Assertion 5 must precede 6: an unabbreviated title contains both terms and would pass 6 from the
+    // header bar. Do not reorder or merge them; only a title regression fires this.
     assert!(
         !ocr_text.contains(CD_OCR_UNABBREVIATED),
         "{SMOKE}: OCR unexpectedly contained {CD_OCR_UNABBREVIATED:?} — the segment of the path \
@@ -30875,20 +28673,8 @@ fn typed_cd_reroots_the_sidebar_under_cage() {
         out_png.display()
     );
 
-    // --- Assertion 6 (DISCRIMINATOR): the SYNTHETIC ROOT NODE is drawn --------
-    //
-    // The sidebar's top level must be a single node named after the working
-    // directory. Assertion 5 above has just proved the header bar is showing `~`, so
-    // this word cannot have come from the title; the launch cwd's basename is
-    // `startdir`; and no fixture is named `cdrootzulu` (asserted mechanically by
-    // `restore_fixture_names_cannot_satisfy_their_own_assertions`). The root row is
-    // the only remaining source.
-    //
-    // REVERT (the coder runs this in step 7): in `tree_view`'s root-store rebuild,
-    // append `tree::children_of(&entries, "")` instead of the single `root_node(..)`.
-    // Assertion 4 stays GREEN, because the children still render, just at top level;
-    // only this row goes red. That is the isolation that makes rows 1 and 2 separately
-    // falsifiable despite sharing one scenario.
+    // Assertion 6 (discriminator): the synthetic root node. With the title proved `~`, the root row is
+    // the only source. See notes/crates/wolf-gnome/tests/smoke_headless.rs.md#typed-cd-reverts
     assert!(
         ocr_text.contains(CD_OCR_ROOT_NODE),
         "{SMOKE}: OCR did not contain {CD_OCR_ROOT_NODE:?} — the basename of the working \
@@ -30973,17 +28759,12 @@ fn pane_status_bar_shows_each_panes_filename_under_cage() {
     // Locate the freshly built binary under test.
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
 
-    // The LAUNCH working directory, `<unique>/project` — the app's search root, and
-    // deliberately EMPTY of the two fixtures. It gets the nine density fillers and
-    // nothing else, so every row the tree sidebar draws is a filler and neither
-    // asserted filename can come from it.
+    // The launch cwd holds only fillers, so neither asserted file name can come from a sidebar row.
     let cwd = make_temp_cwd();
     write_relaunch_fixtures(SMOKE, &cwd, &[]);
 
-    // The fixtures, in a SIBLING of the cwd: `<unique>/sbfixtures`. `cage_command`
-    // hands the app `smoke_home(cwd)` == `cwd.parent()` as HOME, so this directory is
-    // under home (nothing walks home) and outside the search root (the app's
-    // `FileSearch` is rooted at the cwd). The scenario opens both by absolute path.
+    // The fixtures sit in the cwd's sibling, under HOME and outside the search root.
+    // See notes/crates/wolf-gnome/tests/smoke_headless.rs.md#per-pane-statusbar-fixtures
     let fixture_dir = smoke_home(&cwd).join(STATUS_FIXTURE_DIR);
     std::fs::create_dir_all(&fixture_dir).unwrap_or_else(|e| {
         panic!(
@@ -31003,23 +28784,15 @@ fn pane_status_bar_shows_each_panes_filename_under_cage() {
         });
     }
 
-    // The readback lands beside the cwd for the same reason the fixtures do: its name
-    // is drawn by nothing, and its absolute path is echoed in the typed
-    // `:call writefile(...)` command line.
+    // Beside the cwd like the fixtures; its absolute path is echoed in the typed `writefile` line.
     let readback = smoke_home(&cwd).join(STATUS_READBACK_NAME);
     let out_png = runtime_dir.join("wolf_gnome_statusbar_smoke.png");
     for path in [&readback, &out_png] {
         clear_evidence(path, SMOKE);
     }
 
-    // --- Assertion 0 (precondition): the fixtures are outside the search root --
-    //
-    // This smoke's whole anti-vacuity argument is that the tree sidebar cannot draw
-    // either filename, and that argument lives in two other functions —
-    // `make_temp_cwd`, which decides the cwd is a fixed-name CHILD of a unique
-    // parent, and `smoke_home`, which decides HOME is that parent. Both are shared,
-    // so a later change to either must surface here rather than as a smoke that
-    // passes for the wrong reason.
+    // Assertion 0 (precondition): the fixtures are outside the search root. That rests on the shared
+    // `make_temp_cwd` and `smoke_home`, so a change to either surfaces here.
     for (path, what) in [
         (&fixture_dir, "the fixture directory"),
         (&readback, "the readback file"),
@@ -31065,12 +28838,8 @@ fn pane_status_bar_shows_each_panes_filename_under_cage() {
     // --- Assertion 2 (precondition): grim produced an image -------------------
     assert_png_present(SMOKE, &out_png);
 
-    // --- Assertion 3 (PRECONDITION): Neovim draws no statusline of its own ----
-    //
-    // The premise underneath assertions 5 and 6. With `laststatus` non-zero Neovim
-    // paints the filename INSIDE the grid, and both OCR assertions would then hold
-    // for a build that draws no strip at all. `runtime/nvim/init.lua` sets it to 0,
-    // but that file is not this test's to control, so the captive Neovim is asked.
+    // Assertion 3 (precondition): `laststatus` is 0, or Neovim draws the name in the grid and both OCR
+    // assertions pass with no strip. `init.lua` is not this test's to control, so Neovim is asked.
     let readings = read_ints(&readback, 2, SMOKE);
     let (got_winheight, got_laststatus) = (readings[0], readings[1]);
     assert_eq!(
@@ -31085,13 +28854,8 @@ fn pane_status_bar_shows_each_panes_filename_under_cage() {
 
     let ocr_text = ocr_to_lowercase(&out_png);
 
-    // --- Assertion 4 (PRECONDITION, no revert): the capture is alive ----------
-    //
-    // The marker is the last thing the scenario types, so it is the cmdline strip's
-    // message when `grim` fires. Two jobs: it proves the window was still painting,
-    // and it displaces the `:e $STATUS_PATH_B` toast that would otherwise put
-    // assertion 6's term on the page from the cmdline. Nothing in this unit can break
-    // it, so it has NO revert and none may be invented for it.
+    // Assertion 4 (precondition, no revert): the marker proves the window painted and displaces the
+    // `:e` toast that would draw assertion 6's term. Nothing here can break it; invent no revert.
     assert!(
         ocr_text.contains(STATUS_OCR_MARKER),
         "{SMOKE}: OCR did not contain {STATUS_OCR_MARKER:?} — the text the scenario `:echo`s \
@@ -31105,17 +28869,8 @@ fn pane_status_bar_shows_each_panes_filename_under_cage() {
         out_png.display()
     );
 
-    // --- Assertion 5 (THE DISCRIMINATOR): the FIRST pane keeps its own file ---
-    //
-    // `statusalfa.md` is open in the left pane only, lives outside the search root,
-    // and is not what the cmdline is showing (assertion 4). The only thing on the
-    // page that can draw its name is that pane's own status bar.
-    //
-    // REVERT (the coder runs this in step 7): in `draw_pane`, look the cached status
-    // up by `self.active_pane.get()` instead of by the `pane_id` being painted. Both
-    // strips then draw `statusbravo.md`: this assertion goes red and assertion 6
-    // stays green, which is what makes it a test of PER-PANE-ness rather than of
-    // presence.
+    // Assertion 5 (discriminator): only the left pane's own strip can draw `statusalfa.md`.
+    // See notes/crates/wolf-gnome/tests/smoke_headless.rs.md#per-pane-statusbar-reverts
     assert!(
         ocr_text.contains(STATUS_OCR_A),
         "{SMOKE}: OCR did not contain {STATUS_OCR_A:?} — the name of {STATUS_FILE_A}, which is \
@@ -31135,12 +28890,8 @@ fn pane_status_bar_shows_each_panes_filename_under_cage() {
         out_png.display()
     );
 
-    // --- Assertion 6: the SPLIT pane draws its own file -----------------------
-    //
-    // Jointly with assertion 5 this is what proves a strip is painted at all;
-    // separately it names WHICH file the surviving strip is showing. It has no
-    // isolated red run: the revert that deletes `draw_pane`'s two text calls reddens
-    // assertion 5 first.
+    // Assertion 6: with 5, proves a strip is painted; alone, names the surviving strip's file. No
+    // isolated red: deleting `draw_pane`'s text calls reddens 5 first.
     assert!(
         ocr_text.contains(STATUS_OCR_B),
         "{SMOKE}: OCR did not contain {STATUS_OCR_B:?} — the name of {STATUS_FILE_B}, which the \
@@ -31153,16 +28904,8 @@ fn pane_status_bar_shows_each_panes_filename_under_cage() {
         out_png.display()
     );
 
-    // --- Assertion 7 (THE DISCRIMINATOR for the inset and the strip height) ---
-    //
-    // Neovim's own answer about the pane the front-end sized. This is the ONLY place
-    // in this file where `EDITOR_PADDING_PX` and the statusbar's height reach a
-    // number: they cost whole ROWS, and a row count is exact.
-    //
-    // REVERT (the coder runs this in step 7): delete the `- 2 * padding` term from
-    // `editor_inset::grid_rect`'s `h` (the pane keeps one more row) or the
-    // `statusbar_h` term (it keeps several). Either leaves every OCR assertion above
-    // green, which is precisely why this row exists.
+    // Assertion 7 (discriminator): the only exact reading of `EDITOR_PADDING_PX` and the strip height.
+    // See notes/crates/wolf-gnome/tests/smoke_headless.rs.md#per-pane-statusbar-reverts
     assert_eq!(
         got_winheight, STATUS_EXPECTED_WINHEIGHT,
         "{SMOKE}: the focused pane reports winheight(0) = {got_winheight}, expected \
@@ -31179,15 +28922,8 @@ fn pane_status_bar_shows_each_panes_filename_under_cage() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Command line, messages and completion: the completion popup, the multi-line
-// message toast, and a `confirm()` dialog shown then dismissed once answered.
-//
-// All three drive surfaces that did not exist while the GTK deferral stood: the
-// strip drew one row, either an active command line or a message's LAST line, and
-// never both. Each smoke's terms are chosen to be absent from every other surface
-// on the page, so nothing but the feature can satisfy them.
-// ---------------------------------------------------------------------------
+// Command line, messages and completion: the popup, the multi-line toast and a `confirm()` dialog.
+// Each smoke's terms are absent from every other surface, so only the feature satisfies them.
 
 /// The COMPLETION-POPUP scenario: launch, settle, type `:se` and press Tab, then
 /// capture without pressing anything else.
@@ -31517,41 +29253,8 @@ fn confirm_prompt_shows_then_clears_once_answered_under_cage() {
     );
 }
 
-// ============================================================================
-// The THREE TERMINAL-DRAWER smokes: fixtures, the sampled band, three scenarios
-//
-// One feature, three scenarios, because the three questions need three different
-// regimes and two of them need no pixels at all:
-//
-//   * S1 `terminal_drawer_opens_and_is_not_persisted_under_cage` — the only
-//     evidence the drawer reaches a PIXEL, plus the persisted-layout leg and the
-//     six focus/structure readbacks. Runs at the shared SMOKE_FONT_PT.
-//   * S2 `terminal_drawer_defaults_to_full_width_under_cage` — three integers from
-//     one readback, at FULLWIDTH_SMOKE_FONT_PT, because the content-width cap
-//     provably cannot bind at SMOKE_FONT_PT and the full-width row is unobservable
-//     where it cannot.
-//   * S3 `terminal_drawer_reopens_after_a_neovim_restart_under_cage` — the ONLY
-//     falsifier for `reset_after_restart` clearing the drawer, which needs a real
-//     crash and a real in-place restart with the drawer bound BEFORE the kill.
-//
-// ## The three keystroke rules these scenarios follow, each of them load-bearing
-//
-// **1. `wolf_toggle_terminal` ends in `startinsert`, so after the chord the captive
-// Neovim is in TERMINAL-INSERT and every keystroke goes to bash.** An Ex command
-// typed there is run by the SHELL, which writes no readback file and surfaces as
-// exit 14 rather than as an assertion. Every readback below is therefore preceded by
-// `CTRL-\ CTRL-N` (the `to_normal` shell function), which is a no-op in Normal mode
-// and is what makes the RED runs produce a readback at all instead of a timeout.
-//
-// **2. `runtime/nvim/init.lua`'s re-entry autocmd fires `startinsert` on WinEnter
-// into the drawer**, so a `<C-w>j` that SUCCEEDS puts Neovim back in terminal-insert
-// — which is why rule 1 applies after every focus move and not just after the chord.
-//
-// **3. Normal-mode `<C-w>h/j/k/l` are `noremap`ped to a PURE intent** (`init.lua`
-// `do_focus`), so Neovim itself never moves focus for them. Every `bt=[…]` readback
-// after a focus chord is therefore a statement about the FRONT-END's `apply_focus`,
-// not about Neovim's window commands.
-// ============================================================================
+// The three terminal-drawer smokes, one per regime; readbacks follow three keystroke rules.
+// See notes/crates/wolf-gnome/tests/smoke_headless.rs.md#terminal-drawer-smokes
 
 /// Terminal-drawer smoke: the file `:e`d into the editor pane before the chord.
 ///
@@ -32213,11 +29916,8 @@ fn terminal_drawer_opens_and_is_not_persisted_under_cage() {
     );
     assert_png_present(SMOKE, &out_png);
 
-    // --- Assertion 2 (leg b): the drawer's shell reached a PIXEL --------------
-    //
-    // The band is inside the drawer strip by construction (see `drawer_band_rect`),
-    // and the marker is written by BASH into its own terminal — no sidebar row, no
-    // `:e` toast, no header-bar title and no fixture can put that word on the page.
+    // Assertion 2 (leg b): the band is inside the drawer (see `drawer_band_rect`) and bash writes the
+    // marker, so no page text or fixture can draw it.
     let band = drawer_band_rect();
     let band_text = ocr_band_to_lowercase(&out_png, band, &band_png, SMOKE);
     assert!(
@@ -32237,11 +29937,8 @@ fn terminal_drawer_opens_and_is_not_persisted_under_cage() {
         band_png.display()
     );
 
-    // --- Assertion 3 (leg b'): the band is INSIDE the drawer, not the editor ---
-    //
-    // A band-placement guard rather than a second discriminator: an OCR misread
-    // satisfies a must-not-contain assertion. What it catches is the sample landing
-    // in the editor region, which is what an unpainted drawer leaves there.
+    // Assertion 3 (leg b'): a band-placement guard, not a discriminator, since a misread satisfies a
+    // must-not-contain; it catches the band landing in the editor.
     assert!(
         !band_text.contains(DRAWER_OCR_EDITOR_ABSENT),
         "{SMOKE}: the drawer's text band contained {DRAWER_OCR_EDITOR_ABSENT:?} — the word every \
@@ -32254,11 +29951,8 @@ fn terminal_drawer_opens_and_is_not_persisted_under_cage() {
         band_png.display()
     );
 
-    // --- Assertion 4 (leg c): the drawer is ABSENT from `state.json` (O2) ------
-    //
-    // Read from the copy frozen while the drawer was open. `layout_snapshot` iterates
-    // `tree.leaves()` and the drawer lives OUTSIDE the tree, so this holds by
-    // construction — and the construction is what the falsifier changes.
+    // Assertion 4 (leg c): from the frozen copy. `layout_snapshot` iterates `tree.leaves()` and the
+    // drawer is outside the tree; the falsifier changes that construction.
     let saved = load_state(&frozen_state_dir).unwrap_or_else(|| {
         panic!(
             "{SMOKE}: wolf_core::load_state could not parse the frozen state at {}. `load_state` \
@@ -32294,9 +29988,7 @@ fn terminal_drawer_opens_and_is_not_persisted_under_cage() {
     let mut leaves: Vec<&str> = Vec::new();
     collect_leaf_paths(layout, &mut leaves);
 
-    // The `term://` check is FIRST, because it is the one that names P2 by itself.
-    // Under the falsifier the leaf count is wrong too, and a count assertion ahead of
-    // this one would fire first and never mention the scheme string.
+    // The `term://` check first: it names P2 alone, and a count assertion would fire ahead of it.
     for path in &leaves {
         assert!(
             !path.starts_with(TERMINAL_BUFFER_SCHEME),
@@ -32369,14 +30061,8 @@ fn terminal_drawer_opens_and_is_not_persisted_under_cage() {
          that `apply_focus` passes the live `DrawerState` rather than a default one."
     );
 
-    // --- Assertion 7 (leg h, precondition): the chord HID the drawer ----------
-    //
-    // Neovim's own answer, and identical in both builds: `wolf_toggle_terminal` closes
-    // the drawer window with `nvim_win_close` whatever the front-end makes of the
-    // vanished grid. It is asserted because without it leg h's discriminator could be
-    // satisfied by a chord that never arrived at all — focus would still be inside the
-    // ORIGINAL drawer from leg e, and the `<C-w>k` below would then answer `bt=[]`
-    // through the bridge leg d already covers.
+    // Assertion 7 (leg h, precondition): the chord hid the drawer, in both builds; without it a lost
+    // chord leaves focus in leg e's drawer and `<C-w>k` answers `bt=[]` through leg d's bridge.
     let (bt, wins) = read_drawer_probe(&bt_hidden, SMOKE, "after the chord hid the drawer");
     assert_eq!(
         wins, DRAWER_WINS_AFTER_HIDE,
@@ -32390,19 +30076,8 @@ fn terminal_drawer_opens_and_is_not_persisted_under_cage() {
          behind, at which point read leg d's and leg e's failures first."
     );
 
-    // --- Assertion 8 (leg h, precondition): the drawer came BACK --------------
-    //
-    // Neovim's answer again, in both builds: the chord runs
-    // `_G.wolf_toggle_terminal()` INSIDE Neovim, which performs the real
-    // `botright split` regardless of what the front-end does with the intent — S3
-    // measured exactly that shape after a restart. Asserted so that a re-opening
-    // chord which never arrived reports itself here, instead of surfacing as the
-    // discriminator below passing against a drawer that was never re-opened.
-    //
-    // It carries leg f as well: that leg's "before" count is leg e's readback, which
-    // now sits two chords earlier than the `:vsplit`, and this is the count in
-    // between. Without it a drawer that failed to come back would leave leg f
-    // comparing 2 against 2 and blaming a `:vsplit` that had in fact run.
+    // Assertion 8 (leg h, precondition): the drawer came back, Neovim's answer in both builds; a lost
+    // chord reports here. It is also leg f's middle count, so a lost drawer cannot blame `:vsplit`.
     let (bt, wins) = read_drawer_probe(
         &bt_reopen,
         SMOKE,
@@ -32440,14 +30115,8 @@ fn terminal_drawer_opens_and_is_not_persisted_under_cage() {
          one alone does the job."
     );
 
-    // --- Assertion 10 (leg f, O32 leg 1): the drawer survives a rebuild -------
-    //
-    // The window count first, and deliberately as a comparison between two LIVE
-    // readbacks rather than against a literal: what it says is that the `:vsplit`
-    // really added a window, which is the premise "the drawer survived a
-    // `rebuild_pane_area`" rests on. Without it a `cnoreabbrev` that stopped
-    // expanding would leave the buftype assertion below passing against a window
-    // arrangement that never changed at all.
+    // Assertion 10 (leg f): two live readbacks prove the `:vsplit` added a window; otherwise a dead
+    // `cnoreabbrev` leaves the buftype check passing on an unchanged layout.
     let (bt, wins_after_vsplit) =
         read_drawer_probe(&bt_vsplit, SMOKE, "after a :vsplit and <C-w>j");
     assert!(
@@ -32469,12 +30138,8 @@ fn terminal_drawer_opens_and_is_not_persisted_under_cage() {
          rather than merely misplaced."
     );
 
-    // --- Assertion 11 (leg g, O32 leg 2): `apply_split` refuses the drawer ----
-    //
-    // The window count first, as a PRECONDITION. It cannot discriminate the guard —
-    // pass 8 measured four windows in BOTH builds, because `init.lua`'s `do_split`
-    // splits before it emits the intent — so it is here to say the `:split` ran at
-    // all, and the buftype beside it is the discriminator.
+    // Assertion 11 (leg g): the window count only proves `:split` ran, four in both builds since
+    // `do_split` splits before the intent; the buftype is the discriminator.
     let (bt, wins) = read_drawer_probe(&bt_splitguard, SMOKE, "after a :split inside the drawer");
     assert_eq!(
         wins, DRAWER_WINS_AFTER_SPLIT,
@@ -32695,9 +30360,7 @@ fn terminal_drawer_defaults_to_full_width_under_cage() {
     let mut cmd = cage_command(DRAWER_FULLWIDTH_SCENARIO, &cwd, &runtime_dir);
     cmd.env("WOLF_BIN", bin).env("GEOMETRY", &geometry);
 
-    // THE line that makes this smoke possible, chained AFTER `cage_command` so it
-    // wins over the shared `SMOKE_FONT_PT`. Everything else the helper set — the
-    // seeded config's family and line-height included — is left alone.
+    // Chained after `cage_command` so it wins; the rest of the helper's environment stays.
     cmd.env("WOLF_FONT_PT", FULLWIDTH_SMOKE_FONT_PT);
 
     let status = cmd
@@ -32739,10 +30402,7 @@ fn terminal_drawer_defaults_to_full_width_under_cage() {
          cage output size moved."
     );
 
-    // --- Assertion 2 (leg b): the EDITOR is capped, so leg c means something ---
-    //
-    // Read from the production constant rather than retyped, so the number this smoke
-    // expects is by construction the number the app caps at.
+    // Assertion 2 (leg b): the editor is capped (the production constant), so leg c means something.
     let expected_cap = i64::from(wolf_gnome::editor_inset::MAX_GRID_COLS);
     assert_eq!(
         editor_w, expected_cap,
@@ -33065,10 +30725,7 @@ fn terminal_drawer_reopens_after_a_neovim_restart_under_cage() {
          Neovim-side by construction because the chord runs the Lua helper inside Neovim."
     );
 
-    // --- Assertion 2 (precondition): the drawer was bound BEFORE the kill -----
-    //
-    // Without this the scenario proves nothing: the hazard is a STALE drawer id
-    // surviving the restart, so there has to have been one.
+    // Assertion 2 (precondition): the drawer was bound before the kill, so a stale id could survive.
     let (bt, wins) = read_drawer_probe(&bt_before, SMOKE, "before the kill");
     assert_eq!(
         bt, DRAWER_TERMINAL_BUFTYPE,
@@ -33084,14 +30741,8 @@ fn terminal_drawer_reopens_after_a_neovim_restart_under_cage() {
          {DRAWER_WINS_WITH_DRAWER} — the editor pane plus the drawer."
     );
 
-    // --- Assertion 3 (precondition): the restart really happened --------------
-    //
-    // The scenario polled until this file appeared, so its EXISTENCE is what proves
-    // recovery; what the value adds is that the restarted window came back on an
-    // ordinary buffer rather than on a replayed terminal. That second half is
-    // `wolf_core::redraw`'s crash-mirror filter observed from the outside — M23
-    // measured an unfiltered mirror spawning a SECOND shell per crash, with a fresh
-    // pid in the same name and no message anywhere.
+    // Assertion 3 (precondition): the file's existence proves recovery; `bt` shows an ordinary buffer,
+    // `wolf_core::redraw`'s crash-mirror filter, without which a second shell spawns per crash.
     let (bt, wins) = read_drawer_probe(&bt_recovered, SMOKE, "after the restart");
     assert_ne!(
         bt, DRAWER_TERMINAL_BUFTYPE,
@@ -33105,14 +30756,8 @@ fn terminal_drawer_reopens_after_a_neovim_restart_under_cage() {
          covers the same filter headlessly and will be red too."
     );
 
-    // --- Assertion 4 (precondition): the second chord built a drawer ----------
-    //
-    // DISCLOSED: this holds in BOTH builds and discriminates nothing. The chord runs
-    // `_G.wolf_toggle_terminal()` inside Neovim, which performs the real
-    // `botright split` regardless of what the front-end does with the intent, so
-    // `bt=[terminal]` and `wins=2` are Neovim's answer and not the front-end's. It is
-    // asserted so that a chord which never arrived reports itself here instead of
-    // surfacing as the discriminator below failing for an unrelated reason.
+    // Assertion 4 (precondition): holds in both builds, since Neovim does the split itself; it exists
+    // so a chord that never arrived reports here, not as the discriminator below failing.
     let (bt, wins) = read_drawer_probe(&bt_reopened, SMOKE, "after the second chord");
     assert_eq!(
         bt, DRAWER_TERMINAL_BUFTYPE,
@@ -33151,44 +30796,8 @@ fn terminal_drawer_reopens_after_a_neovim_restart_under_cage() {
     );
 }
 
-// ===========================================================================
-// NATIVE TABS: two `adw::TabPage`s over ONE captive Neovim, switched and closed
-// through the `adw::TabBar` with real pointer events.
-//
-// ## The asymmetry this smoke exploits
-//
-// `two_windows_two_neovims_and_two_saved_sessions_under_cage` could photograph
-// nothing, because `cage` shows one toplevel at a time and declines a `present()`
-// on any other. A TAB BAR is inside the ONE toplevel, so the two-tab state IS
-// photographable — which is why this smoke can make a pixel claim where the
-// two-window one had to fall back to `state.json` entirely.
-//
-// ## What it deliberately does NOT assert on
-//
-// **A tab TITLE.** `tabs_ui::tab_title` draws the current file's NAME, and so do
-// the per-pane statusbar strip and nvim's `:e` echo — so no OCR term could tell a
-// title apart from either, and an assertion on one would be satisfied by a build
-// with no tab bar at all. Measured on top of that: `tesseract` read one of two
-// rendered titles and not the other, at the sparse-page calibration this file
-// already documents. Both fixtures' NAMES are therefore ordinary (they carry no
-// asserted term), and every OCR claim here is about a HEADING drawn in an editor
-// grid.
-//
-// **`bar.is_visible()`.** It reads `true` at one page as well as two; see
-// `TAB_BAR_HEIGHT_EXPECTED`.
-//
-// ## The fixture tree
-//
-// ```text
-// <unique>/                     the app's HOME (cage_command's default)
-//   project/                    TEMP_CWD_BASENAME -- the launch cwd and search root
-//     fill*.md                  nine fillers, page density
-//     tbxray.md                 TABS_FIRST_FILE, opened in TAB 1
-//     tbsub/                    TABS_SUBDIR -- the `:tcd` target
-//       tbyankee.md             TABS_SECOND_FILE, opened in TAB 2
-//     tb_read{a,c,e,f}.txt      the four Neovim readbacks
-// ```
-// ===========================================================================
+// Native tabs: two `adw::TabPage`s over one Neovim, switched and closed with real pointer events.
+// See notes/crates/wolf-gnome/tests/smoke_headless.rs.md#native-tabs-smoke
 
 /// Native-tabs smoke: the file opened in the FIRST tab.
 ///
@@ -33676,12 +31285,8 @@ fn native_tabs_open_switch_and_close_under_cage() {
         ],
     );
 
-    // --- Assertion 0 (precondition): the fixture layout the legs depend on ----
-    //
-    // Both halves are checked against the filesystem this run is about to use rather
-    // than argued in prose. The second is the one that keeps leg (c) falsifiable: if
-    // the second fixture also existed at the project root, leg (d)'s bare `:e` would
-    // find a real file whether or not the new tab inherited the subdirectory.
+    // Assertion 0 (precondition): if the second fixture also existed at the root, leg (d)'s bare `:e`
+    // would find it whether or not the new tab inherited the subdirectory.
     let second_in_subdir = cwd.join(TABS_SECOND_FILE);
     assert!(
         second_in_subdir.is_file(),
@@ -33714,15 +31319,8 @@ fn native_tabs_open_switch_and_close_under_cage() {
         clear_evidence(path, SMOKE);
     }
 
-    // --- The click point, derived from two MEASURED constants ----------------
-    //
-    // x: a quarter of the output width, because the bar spans the whole output and
-    // two pages split it evenly. y: half the bar's height below the header bar,
-    // because the bar is appended directly under it. Both inputs are pinned rather
-    // than computed from the run, for `crash_overlay_and_restart_button_recover_under_cage`'s
-    // reason: the point has to exist before `cage` is spawned, while the authoritative
-    // extents only arrive afterwards on the helper's `ready` line — which is why the
-    // run asserts below that the extents really are the ones this derivation used.
+    // x is a quarter of the output, y half the bar below the header bar; pinned because the point must
+    // exist before cage starts, so the run re-checks the reported extents.
     let output_w = exact_f64(CAGE_OUTPUT_W_EXPECTED, "the expected cage output width");
     let click_x = pixel_target(
         output_w * TABS_FIRST_TAB_CENTRE_FRACTION,
@@ -33756,11 +31354,8 @@ fn native_tabs_open_switch_and_close_under_cage() {
         ],
     );
 
-    // --- Assertion 1 (precondition): the scenario ran to completion -----------
-    //
-    // The tab-specific codes get their own message FIRST; the shared pointer-harness
-    // codes 11-15, a signal on cage itself and success all fall through to
-    // `assert_pointer_scenario_succeeded`, which also echoes the helper's stderr.
+    // Assertion 1 (precondition): tab-specific codes first; the rest fall through to
+    // `assert_pointer_scenario_succeeded`.
     assert!(
         !matches!(status.code(), Some(c) if (TABS_EXIT_FIRST..=TABS_EXIT_LAST).contains(&c)),
         "{SMOKE}: the cage scenario exited with a TAB-SPECIFIC code ({status}). The scenario \
@@ -33813,15 +31408,8 @@ fn native_tabs_open_switch_and_close_under_cage() {
     );
     assert_inside_extents(SMOKE, "the FIRST TAB's centre", (click_x, click_y), extents);
 
-    // --- Assertion 3 (PRECONDITION): Neovim draws no tabline of its own ------
-    //
-    // The premise underneath assertion 6. With `showtabline` at Neovim's default of
-    // 1 the editor loses a row the instant a second tabpage exists, for a reason that
-    // has nothing to do with the `adw::TabBar` — so `H2 < H1` would hold with the bar
-    // never appended, and F3 would have no red. `runtime/nvim/init.lua` sets it to 0
-    // and `crates/wolf-core/tests/tabpages.rs::a_second_tabpage_draws_no_neovim_tabline`
-    // is what keeps it there, but that file is not this test's to control, so the
-    // captive Neovim is asked.
+    // Assertion 3 (precondition): `showtabline` is 0, or a second tabpage costs a row with no bar; F3
+    // has no red. `init.lua` is not this test's to control, so Neovim is asked.
     let leg_c = read_readback(&read_c, SMOKE);
     let mut leg_c_lines = leg_c.lines();
     let leg_c_numbers = leg_c_lines.next().unwrap_or_default();
@@ -33868,19 +31456,8 @@ fn native_tabs_open_switch_and_close_under_cage() {
          FIRST tab, making capture B's crossed pair describe the wrong page."
     );
 
-    // --- Assertion 5 (PRECONDITION for leg (d)): where the new tab is rooted -
-    //
-    // NOT a check on `create_tabpage`'s cwd argument, and the doc table records the
-    // measurement rather than the belief: `:tabnew` copies the current window's
-    // EFFECTIVE directory into the tabpage it creates, so leg (b)'s tab-local `:tcd`
-    // is inherited under `create_tabpage(None)` as well — F2 was run and this smoke
-    // stayed GREEN. It is kept because leg (d)'s bare `:e` resolves against exactly
-    // this directory, and because a tab rooted somewhere unrelated has no other
-    // observer in this file.
-    //
-    // Compared on the final path component, the two-window smoke's reason: /tmp may
-    // resolve through a symlink on this host, so `getcwd()` need not be string-equal
-    // to the path this harness built, while the basename survives every symlink.
+    // Assertion 5 (precondition for leg (d)): `:tabnew` inherits the effective cwd, so F2 stays green;
+    // kept because leg (d)'s bare `:e` resolves here. Compared on the last component (symlinks).
     let got_tail = leg_c_cwd.rsplit('/').next().unwrap_or_default();
     assert_eq!(
         got_tail, TABS_SUBDIR,
@@ -33895,14 +31472,8 @@ fn native_tabs_open_switch_and_close_under_cage() {
          this, so reaching the assertion means the readback shape changed."
     );
 
-    // --- Assertion 6 (DISCRIMINATOR): the bar cost the editor a real row -----
-    //
-    // A STRICT INEQUALITY and deliberately no constant: what is claimed is that the
-    // bar takes height out of the window's vertical box, not how much. The measured
-    // pair is H1 = 11 rows at one tab and H2 = 10 at two, on every run, on a 1280x720
-    // output at SMOKE_FONT_PT. Those numbers are provenance and not a threshold —
-    // nothing here compares against either — recorded so a later reader can see the
-    // bar cost a row rather than infer it.
+    // Assertion 6 (discriminator): a strict inequality, no constant. Measured provenance only: H1 = 11
+    // rows at one tab, H2 = 10 at two, 1280x720 at SMOKE_FONT_PT.
     assert!(
         winheight_two < winheight_one,
         "{SMOKE}: the editor pane reports {winheight_two} row(s) with two tabs open against \
@@ -33919,11 +31490,8 @@ fn native_tabs_open_switch_and_close_under_cage() {
          shape changed."
     );
 
-    // --- Assertion 7 (DISCRIMINATOR): the GTK selection reached Neovim -------
-    //
-    // Pixel-independent, and the whole point of leg (e). See the doc comment: capture
-    // C stays green under this row's revert, so nothing but this readback can make
-    // the claim.
+    // Assertion 7 (discriminator): capture C stays green under this row's revert, so only this readback
+    // makes the claim. See the doc comment.
     let leg_e = read_readback(&read_e, SMOKE);
     let mut leg_e_lines = leg_e.lines();
     let nr_after_click = parse_readback_int(
@@ -34019,11 +31587,8 @@ fn native_tabs_open_switch_and_close_under_cage() {
         out_png_b.display()
     );
 
-    // --- Assertion 13: selecting a page changes what is on screen ------------
-    //
-    // Corroboration, NOT the switch's discriminator — see the doc comment. A frozen
-    // background grid is byte-identical, so page 0 repaints its own content whether
-    // or not Neovim switched, and this pair stays green under assertion 7's revert.
+    // Assertion 13: corroboration only; a frozen background grid repaints identically, so this stays
+    // green under assertion 7's revert.
     let ocr_c = ocr_to_lowercase(&out_png);
     assert!(
         ocr_c.contains(TABS_OCR_FIRST),
@@ -34202,10 +31767,8 @@ fn ocr_uniform_block_to_lowercase(png: &Path) -> String {
 fn ocr_band_to_lowercase(png: &Path, band: SampleRect, band_png: &Path, smoke: &str) -> String {
     let capture = decode_capture(png, smoke, "the terminal drawer");
 
-    // Non-vacuity: an empty or out-of-range band would either panic in the copy below
-    // or hand tesseract a blank image, and a blank image satisfies every
-    // must-NOT-contain assertion while failing every must-contain one for a reason
-    // that has nothing to do with the app.
+    // Non-vacuity: an empty band panics below or hands tesseract a blank image, which passes every
+    // must-not-contain.
     assert!(
         band.x0 < band.x1 && band.y0 < band.y1,
         "{smoke}: the sampled band {band:?} is empty or inverted, so there is nothing to read. \
@@ -34238,9 +31801,8 @@ fn ocr_band_to_lowercase(png: &Path, band: SampleRect, band_png: &Path, smoke: &
             for (col, x) in (band.x0..band.x1).enumerate() {
                 let (r, g, b) = capture.pixel(x, y);
                 let i = row * stride + col * CAPTURE_BYTES_PER_PIXEL;
-                // Little-endian `B, G, R, X`, matching `Capture::pixel`. The fourth
-                // byte is PADDING in `Rgb24` and cairo ignores it when writing the
-                // PNG; it is set so the buffer holds no uninitialized bytes.
+                // Little-endian `B, G, R, X`, as `Capture::pixel` reads it; the padding byte is set so the buffer
+                // holds no uninitialized bytes.
                 data[i] = b;
                 data[i + 1] = g;
                 data[i + 2] = r;
@@ -34282,18 +31844,7 @@ fn ocr_band_to_lowercase(png: &Path, band: SampleRect, band_png: &Path, smoke: &
     String::from_utf8_lossy(&output.stdout).to_lowercase()
 }
 
-// ===========================================================================
-// The SAVE smokes
-// ===========================================================================
-//
-// Both are NON-OCR READBACK smokes: the observable is a file on disk, read by the
-// Rust side, which is why neither invokes `grim` or `tesseract` and neither parks the
-// block cursor. That keeps them clear of the block-cursor, page-density and
-// fixture-name-vs-OCR-term rules entirely — but NOT of the fixture rule underneath
-// them, which applies to a readback just as it does to a capture: a fixture whose
-// CONTENT already carried the asserted sentinel would satisfy the assertion whether or
-// not anything saved. Each smoke therefore reads its target back BEFORE launching and
-// asserts the sentinel is absent, which is the on-disk form of the same guard.
+// --- The save smokes: readback, no OCR. Each checks its target lacks the sentinel first. ---
 
 /// SAVE smoke: the file the chord must write. Its NAME is deliberately unlike
 /// [`SAVE_SENTINEL`], which lives only in the buffer the user types into — the
@@ -34502,13 +32053,8 @@ fn ctrl_shift_s_saves_the_focused_buffer_to_disk_under_cage() {
     let before = runtime_dir.join(SAVE_READBACK_BEFORE_NAME);
     clear_evidence(&before, SMOKE);
 
-    // --- Assertion 0 (precondition): the evidence is not pre-satisfied --------
-    //
-    // The on-disk form of this file's fixture rule. A fixture whose own bytes carried
-    // the sentinel would satisfy assertion 3 with nothing having saved — the same
-    // permanent silent pass a fixture NAMED after an OCR term produces, reached through
-    // content instead. Read from the file rather than from the const, because what
-    // assertion 3 reads is the file.
+    // Assertion 0 (precondition): the fixture's own bytes must not carry the sentinel, or assertion 3
+    // passes with nothing saved. Read from the file, since assertion 3 reads the file.
     let seeded = std::fs::read_to_string(&fixture).unwrap_or_else(|e| {
         panic!(
             "{SMOKE}: could not read the fixture {} that `write_relaunch_fixtures` just wrote: {e}",
@@ -34536,9 +32082,8 @@ fn ctrl_shift_s_saves_the_focused_buffer_to_disk_under_cage() {
         .env("SAVE_FILE", SAVE_FIXTURE_FILE)
         .env("SAVE_SENTINEL", SAVE_SENTINEL)
         .env("BEFORE", &before)
-        // Set even though the green path opens no dialog: see this test's "A warning
-        // about the WRONG failure mode" and [`SAVE_AS_GDK_DEBUG`]. It costs nothing on
-        // a green run and keeps a falsifying edit's dialog inside `cage`.
+        // Set though the green path opens no dialog: it keeps a falsifying edit's dialog inside cage. See
+        // [`SAVE_AS_GDK_DEBUG`].
         .env("GDK_DEBUG", SAVE_AS_GDK_DEBUG)
         .status()
         .expect("failed to spawn `cage` for the headless save smoke scenario");
@@ -34608,12 +32153,8 @@ fn ctrl_shift_s_saves_the_focused_buffer_to_disk_under_cage() {
         fixture.display()
     );
 
-    // --- Assertion 4 (corroboration): it was the BUFFER that was written ------
-    //
-    // Not merely "the sentinel is on disk". A file holding the sentinel ALONE would
-    // mean something other than the buffer wrote it, and the pair rules that out: the
-    // buffer holds the typed sentinel and the fixture's original heading, so a correct
-    // `write` puts both there.
+    // Assertion 4 (corroboration): the sentinel and the fixture's heading together prove the buffer
+    // was written, not just the sentinel.
     assert!(
         saved.contains(SAVE_FIXTURE_HEADING),
         "{SMOKE}: the saved file no longer contains its original heading \
@@ -34875,12 +32416,8 @@ exit 0
 fn the_save_dialog_writes_a_named_file_under_cage() {
     const SMOKE: &str = "the_save_dialog_writes_a_named_file_under_cage";
 
-    // --- Assertion 0: the pin, asserted BEFORE anything is spawned ------------
-    //
-    // Loud and first, because wherever a session bus is reachable, getting it wrong
-    // does not fail this test — it opens a modal file dialog on the developer's desktop
-    // and hangs this smoke. The literal is deliberately RE-TYPED rather than read from the
-    // const, since comparing a const against itself would pin nothing.
+    // Assertion 0: the pin, first, because getting it wrong opens a modal dialog on the developer's
+    // desktop and hangs. The literal is retyped, since a const compared with itself pins nothing.
     assert_eq!(
         SAVE_AS_GDK_DEBUG, "no-portals",
         "SAVE_AS_GDK_DEBUG is not \"no-portals\". DO NOT RUN THIS SMOKE until it is. \
@@ -34910,9 +32447,7 @@ fn the_save_dialog_writes_a_named_file_under_cage() {
         clear_evidence(path, SMOKE);
     }
 
-    // The fixture rule, applied to two names that must stay distinguishable: the file
-    // the dialog is TOLD to write and the file it PROPOSED are the whole of assertion
-    // 4's discrimination, so they may not be the same name.
+    // The typed name and the proposed name are assertion 4's whole discrimination, so they must differ.
     assert_ne!(
         SAVEAS_TYPED_NAME, SAVEAS_PROPOSED_NAME,
         "the name typed into the dialog and the name the dialog proposes are identical, so \
@@ -34928,9 +32463,8 @@ fn the_save_dialog_writes_a_named_file_under_cage() {
         .env("SAVEAS_SENTINEL", SAVEAS_SENTINEL)
         .env("SAVEAS_TYPED_NAME", SAVEAS_TYPED_NAME);
 
-    // THE line that makes this smoke possible rather than a desktop-wedging hazard,
-    // chained after `cage_command` so it joins the isolated environment rather than
-    // replacing it. See SAVE_AS_GDK_DEBUG and assertion 0.
+    // Keeps the dialog inside cage rather than on the desktop; chained after `cage_command` to join its
+    // environment. See SAVE_AS_GDK_DEBUG and assertion 0.
     cmd.env("GDK_DEBUG", SAVE_AS_GDK_DEBUG);
 
     let status = cmd
@@ -34952,12 +32486,8 @@ fn the_save_dialog_writes_a_named_file_under_cage() {
         nameless.display()
     );
 
-    // --- Assertion 2 (PRECONDITION, and the sharpest one) ---------------------
-    //
-    // The route this smoke takes exists only for a buffer with NO file name: a named
-    // one is answered `Write` and never sees a dialog. Measuring it rather than
-    // assuming it is the difference between "the dialog wrote the file" and "a plain
-    // Save wrote a file that happened to have the right name".
+    // Assertion 2 (precondition): only a nameless buffer gets the dialog, so this separates "the dialog
+    // wrote it" from "a plain Save wrote a file with the right name".
     let nameless_answer = read_trimmed(&nameless, SMOKE);
     assert!(
         nameless_answer.is_empty(),
@@ -35009,16 +32539,8 @@ fn the_save_dialog_writes_a_named_file_under_cage() {
         typed.display()
     );
 
-    // --- Assertion 4 (a CORROBORATING negative) -------------------------------
-    //
-    // Narrowly: the buffer did not ALSO reach disk under the name nobody typed. That is
-    // the whole of what it discriminates, and the claim is kept that small on purpose.
-    // It does NOT separate "the entry was never edited" from a pass, for two reasons
-    // that compound: assertion 3 reddens first on that run, and even reached it would
-    // pass vacuously, because the proposal is the startup buffer's own name and
-    // `saveas!` against a name another loaded buffer holds raises E139 rather than
-    // writing (see SAVEAS_PROPOSED_NAME for the measurement). An ABSENT file is
-    // therefore a pass here, and deliberately so.
+    // Assertion 4 (corroborating negative): the buffer did not also reach disk under the proposed name.
+    // An absent file passes on purpose; see SAVEAS_PROPOSED_NAME for the E139 measurement.
     let proposed_contents = std::fs::read_to_string(&proposed).unwrap_or_default();
     assert!(
         !proposed_contents.contains(SAVEAS_SENTINEL),
@@ -35032,16 +32554,7 @@ fn the_save_dialog_writes_a_named_file_under_cage() {
     );
 }
 
-// ===========================================================================
-// The COMPOSED-TEXT smoke
-// ===========================================================================
-//
-// A NON-OCR READBACK smoke, the SAVE smokes' family: keyboard only, no
-// `wolf-pointer-inject`, no `grim`, no `tesseract`, and an observable the captive
-// Neovim writes about its own buffer. It is the only smoke in this file whose
-// keystrokes are not characters at all — `dead_acute` and `Multi_key` carry no
-// Unicode value, so `gdk_key` answers None for both and the ONLY route they have
-// into Neovim is the window's `gtk::IMMulticontext`.
+// --- The composed-text smoke: dead keys reach Neovim only through `gtk::IMMulticontext`. ---
 
 /// COMPOSE smoke: the file the scenario opens, so the buffer has a name the
 /// precondition readback can report.
@@ -35317,13 +32830,8 @@ fn composed_text_reaches_neovim_under_cage() {
     clear_evidence(&before, SMOKE);
     clear_evidence(&readback, SMOKE);
 
-    // --- Assertion 0 (precondition): the evidence is not pre-satisfied --------
-    //
-    // The on-disk form of this file's fixture rule. A fixture already carrying a
-    // composed character would satisfy assertion 3 with the input method doing
-    // nothing — the same permanent silent pass a fixture NAMED after an OCR term
-    // produces, reached through content instead. Read from the FILE rather than from
-    // the const, because what the run reads is the file.
+    // Assertion 0 (precondition): a fixture already holding a composed character would pass assertion 3
+    // with the input method idle. Read from the file, since the run reads the file.
     let seeded = std::fs::read_to_string(&fixture).unwrap_or_else(|e| {
         panic!(
             "{SMOKE}: could not read the fixture {} that `write_relaunch_fixtures` just wrote: {e}",
@@ -35390,13 +32898,8 @@ fn composed_text_reaches_neovim_under_cage() {
         before.display()
     );
 
-    // --- Assertion 3 (corroboration): nothing leaked through uncomposed -------
-    //
-    // AHEAD of the equality, and that ordering is the assertion. Behind it, it could
-    // only ever inspect a line already proven equal to [`COMPOSE_EXPECTED`], which
-    // carries no ASCII at all — a check that cannot fail is not a check. Ahead of it,
-    // it fires on every reading in which a compose member arrived as its own base
-    // letter, and names that cause before the equality's more general message.
+    // Assertion 3 (corroboration): ahead of the equality, since behind it the line is already proven
+    // free of ASCII; here it names a compose member that arrived as its base letter.
     let line = read_trimmed(&readback, SMOKE);
     assert!(
         !line.chars().any(|c| c.is_ascii()),
@@ -35433,21 +32936,7 @@ fn composed_text_reaches_neovim_under_cage() {
     );
 }
 
-// ===========================================================================
-// The COMPOSED-CHORD smoke
-// ===========================================================================
-//
-// A NON-OCR READBACK smoke, the COMPOSED-TEXT smoke's family and its immediate
-// neighbour: keyboard only, no `wolf-pointer-inject`, no `grim`, no `tesseract`, and
-// an observable the captive Neovim writes about its own window LAYOUT.
-//
-// It is the only smoke in this file that drives the SAME chord twice in one launch
-// and asserts two DIFFERENT answers. That shape is the whole design: a smoke that
-// only pressed `<C-w>v` while composing and asserted "no split" would pass just as
-// green on a build where `<C-w>v` never splits at anything, which is a permanent
-// silent pass rather than evidence. The CONTROL arm — the identical chord with
-// nothing pending, in the same launch, on the same window — is what makes the
-// SUBJECT arm's answer mean something.
+// --- The composed-chord smoke: one chord, two answers; the control arm gives "no split" meaning.
 
 /// COMPOSED-CHORD smoke: the file the scenario opens, so the buffer has a name the
 /// precondition readback can report.
@@ -35685,7 +33174,7 @@ exit 0
 /// reach Neovim.**
 ///
 /// This is the executable form of one bullet under "Present limitations" in
-/// `crates/wolf-gnome/DECISIONS.md`, the one beginning *"While a compose sequence
+/// `notes/wolf-gnome-decisions.md`, the one beginning *"While a compose sequence
 /// is pending, a plain `Ctrl+<letter>` press is claimed by the input method and does
 /// not reach Neovim, and the sequence survives it"*. That sentence qualifies two
 /// sentences of "The accelerator namespace" — the ones saying a disabled action's
@@ -35725,7 +33214,7 @@ exit 0
 ///
 /// What that costs is precision about the MECHANISM, not about the effect: the effect
 /// — a `<C-w>v` typed between a dead key and the key resolving it does not split — is
-/// exactly what the `DECISIONS.md` bullet says a user pays, and it is what this smoke
+/// exactly what the `notes/wolf-gnome-decisions.md` bullet says a user pays, and it is what this smoke
 /// pins. The recipe for sharpening it is cheap and is recorded rather than taken: send
 /// a SECOND `v` after the first, since by then the unmatched sequence has been
 /// cancelled, and a chord that reached Neovim would still be waiting for its argument
@@ -35758,10 +33247,10 @@ exit 0
 ///
 /// ## What will change this smoke, and it is not a regression
 ///
-/// `DECISIONS.md` names one follow-up for the limitation above: refusing to offer a
+/// `notes/wolf-gnome-decisions.md` names one follow-up for the limitation above: refusing to offer a
 /// press carrying `CONTROL_MASK` to the input method, which owes a measurement that
 /// the pending sequence survives the refusal. The day that lands, the subject arm
-/// splits and assertion 6 goes red **correctly**. The smoke, the `DECISIONS.md`
+/// splits and assertion 6 goes red **correctly**. The smoke, the `notes/wolf-gnome-decisions.md`
 /// bullet and the two "The accelerator namespace" sentences move together in that
 /// commit; assertion 6's expected value is not to be flipped on its own.
 #[test]
@@ -35786,9 +33275,7 @@ fn a_control_chord_while_composing_is_claimed_by_the_input_method_under_cage() {
     let wins_one = runtime_dir.join(IMCHORD_ONE_NAME);
     let wins_after = runtime_dir.join(IMCHORD_AFTER_NAME);
 
-    // Every readback lands under XDG_RUNTIME_DIR, which — unlike the temp cwd — is
-    // NOT fresh per run, so a previous run's file would be read as this run's
-    // evidence.
+    // XDG_RUNTIME_DIR is not fresh per run, so a previous run's file would read as this run's evidence.
     for evidence in [
         &bufname_out,
         &wins_start,
@@ -35848,11 +33335,7 @@ fn a_control_chord_while_composing_is_claimed_by_the_input_method_under_cage() {
         bufname_out.display()
     );
 
-    // --- Assertion 3 (PRECONDITION): the launch has exactly one pane ----------
-    //
-    // Without it, assertion 4 is an absolute value rather than a change: a launch
-    // that somehow started with two windows would satisfy it with `<C-w>v` doing
-    // nothing at all.
+    // Assertion 3 (precondition): one pane at launch, so assertion 4 measures a change.
     let start = read_ints(&wins_start, 1, SMOKE)[0];
     assert!(
         start == IMCHORD_WINDOWS_ONE,
@@ -35865,11 +33348,7 @@ fn a_control_chord_while_composing_is_claimed_by_the_input_method_under_cage() {
         wins_start.display()
     );
 
-    // --- Assertion 4 (THE CONTROL ARM) ----------------------------------------
-    //
-    // Not a discriminator of anything this smoke claims. It is the assertion that
-    // makes assertion 6 evidence rather than a coincidence, so its failure message
-    // says what a red run here costs.
+    // Assertion 4 (control arm): makes assertion 6 evidence rather than coincidence.
     let split = read_ints(&wins_split, 1, SMOKE)[0];
     assert!(
         split == IMCHORD_WINDOWS_SPLIT,
@@ -35912,7 +33391,7 @@ fn a_control_chord_while_composing_is_claimed_by_the_input_method_under_cage() {
          pressed. Classify the reading:\n\
          {IMCHORD_WINDOWS_SPLIT} means the chord and its argument BOTH reached Neovim while a \
          compose sequence was pending. **That is a genuine finding, not a broken test.** It makes \
-         the bullet under \"Present limitations\" in `crates/wolf-gnome/DECISIONS.md` — the one \
+         the bullet under \"Present limitations\" in `notes/wolf-gnome-decisions.md` — the one \
          beginning \"While a compose sequence is pending, a plain `Ctrl+<letter>` press is claimed \
          by the input method and does not reach Neovim, and the sequence survives it\" — FALSE \
          against the shipped glue, together with the qualifying clauses it puts on \"The \
@@ -35921,7 +33400,7 @@ fn a_control_chord_while_composing_is_claimed_by_the_input_method_under_cage() {
          this assertion to agree with it.\n\
          More than {IMCHORD_WINDOWS_SPLIT} means something split twice, which neither arm can \
          produce — suspect a stray keystroke or a doubled key path.\n\
-         One further reading to expect on purpose: the repair `DECISIONS.md` names as a follow-up \
+         One further reading to expect on purpose: the repair `notes/wolf-gnome-decisions.md` names as a follow-up \
          — refusing to offer a press carrying CONTROL_MASK to the input method — makes this \
          assertion read {IMCHORD_WINDOWS_SPLIT} CORRECTLY. If that is the change in flight, the \
          limitation bullet, the accelerator-namespace clauses and this expectation move together \
@@ -35930,9 +33409,7 @@ fn a_control_chord_while_composing_is_claimed_by_the_input_method_under_cage() {
     );
 }
 
-// ===========================================================================
-// The frame-time instrumentation smoke
-// ===========================================================================
+// --- The frame-time instrumentation smoke ---
 
 /// FRAME-STATS smoke: the report file the running application appends to, under the
 /// resolved `XDG_RUNTIME_DIR` rather than in the smoke's cwd.
@@ -36423,11 +33900,7 @@ fn frame_stats_report_covers_the_live_typing_path_under_cage() {
     // Locate the freshly built binary under test.
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
 
-    // A fresh temp cwd, exactly like every other smoke; see `make_temp_cwd` for why
-    // isolation is mandatory. No fixture files: this smoke reads no pixel, so page
-    // density is irrelevant, and an empty project directory still launches into the
-    // editor branch (`cage_command` sets HOME to the cwd's PARENT, so
-    // `workspace::launch_decision` does not take its `cwd == home` empty-state arm).
+    // No fixtures: no pixel is read. The default HOME (the cwd's parent) keeps the editor branch.
     let cwd = make_temp_cwd();
 
     // The app APPENDS to this path; it starts absent because the runtime directory is
@@ -36528,9 +34001,7 @@ fn frame_stats_report_covers_the_live_typing_path_under_cage() {
 
     let blocks = parse_frame_stats_blocks(&text, &stats_path, SMOKE);
 
-    // Non-vacuity for assertions 6 through 11, all of which loop over the blocks and
-    // would hold trivially over none. Assertion 4 already proved a report exists in
-    // the raw text; this proves the parser found it.
+    // Non-vacuity for assertions 6 to 11, which loop over the blocks: the parser found a report.
     assert!(
         !blocks.is_empty(),
         "{SMOKE}: assertion 4 found a `#1` header in {} but the parser assembled NO report blocks \
@@ -36568,11 +34039,7 @@ fn frame_stats_report_covers_the_live_typing_path_under_cage() {
         stats_path.display()
     );
 
-    // --- Assertion 8: every instrumented region was entered -------------------
-    //
-    // A ROW match on the label token, never a `contains` on the file: every `wake.*`
-    // label carries `wake` as a prefix, so a substring test for `wake` is satisfied by
-    // `wake.tabs` alone.
+    // Assertion 8: a row match on the label token, since a substring `wake` matches `wake.tabs` alone.
     for label in FRAME_STATS_REQUIRED_LABELS {
         let found = blocks
             .iter()
@@ -36670,13 +34137,8 @@ fn frame_stats_report_covers_the_live_typing_path_under_cage() {
         }
     }
 
-    // --- Assertion 11: count(wake) == wakes, per report ----------------------
-    //
-    // True BY CONSTRUCTION: the drain-loop body counts one wake and times one `wake`
-    // region, so the two can only disagree if one of them is conditional. The
-    // `unwrap_or(0)` arm is not a loophole — a report with no wakes has a zero-count
-    // `wake` bucket, which `summarize` omits, so "no row" and "wakes=0" are the same
-    // state and any other pairing is a real disagreement.
+    // Assertion 11: true by construction unless one side is conditional. A report with no wakes has no
+    // `wake` row, so `unwrap_or(0)` treats "no row" and "wakes=0" as the same state.
     for block in &blocks {
         let wake_count = block
             .rows
@@ -36702,27 +34164,8 @@ fn frame_stats_report_covers_the_live_typing_path_under_cage() {
     }
 }
 
-// ===========================================================================
-// The PACKAGED-ARTIFACT smokes, and the guard that keeps their scrub honest
-// ===========================================================================
-//
-// Everything below is about `$out/bin/wolf-gnome` — the binary `nix build
-// .#wolf-gnome` installs — rather than about `CARGO_BIN_EXE_wolf-gnome`. A green
-// run of the sixty smokes above says nothing about the store artifact: they are
-// two different binaries, built by two different commands, and only one of them is
-// what a user launches.
-//
-// THEY LIVE IN THIS FILE RATHER THAN A NEW ONE, and that is not a stylistic call. A
-// second file would need a compositor spawn of its own — a `Command::new` naming
-// `cage`, written apart HERE on purpose. A contiguous spelling
-// in this file is counted by [`cage_is_only_spawned_through_the_isolating_helper`] as
-// a SECOND spawn site and turns that guard permanently red, which is the same reason
-// [`CAGE_SPAWN_NEEDLE`] is assembled from fragments; do not rejoin it. That guard
-// exists to forbid exactly the second spawn a second file would need, and could not
-// see one there, because it reads only its own file's source.
-//
-// The store-LAYOUT assertions need no compositor and live in
-// `crates/wolf-gnome/tests/packaged_layout.rs` instead.
+// --- The packaged-artifact smokes test `$out/bin/wolf-gnome`, not the checkout binary. ---
+// See notes/crates/wolf-gnome/tests/smoke_headless.rs.md#packaged-smokes-share-this-file
 
 /// The environment variable carrying the store path under test.
 ///
@@ -37126,9 +34569,7 @@ fn every_shellhook_export_is_scrubbed_or_deliberately_kept() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Guard G2: the shellHook still stages the two vendored Lua trees the wolf-ffi
-//           load tests need to assert at all on Linux.
+// --- Guard G2: the shellHook still stages the vendored Lua trees the wolf-ffi tests need. ---
 
 /// The `shellHook` exports that decide whether three `wolf-ffi` real-Neovim tests
 /// ASSERT on Linux or print a loud SKIP and pass, paired with what each one's absence
@@ -37230,11 +34671,8 @@ fn the_shellhook_still_stages_the_vendored_lua_trees_for_the_ffi_tests() {
 
     let (path, names, _export_lines) = require_linux_shell_hook_exports(GUARD);
 
-    // --- Assertion 1 (non-vacuity): the scanner reads this hook at all --------
-    //
-    // Without it, a scanner that had stopped reading the hook would report the two
-    // names below as DELETED, sending the reader to `flake.nix` to restore lines
-    // that are already there.
+    // Assertion 1 (non-vacuity): a scanner that stopped reading the hook would report both names as
+    // deleted and send the reader to restore lines that are there.
     assert!(
         !names.is_empty(),
         "{GUARD}: no `{EXPORT_PREFIX}NAME=` line was found inside {}'s `{LINUX_SHELL_MARKER}` \
@@ -37272,9 +34710,7 @@ fn the_shellhook_still_stages_the_vendored_lua_trees_for_the_ffi_tests() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// P1: the store binary launches and draws glyphs, carrying none of the
-//     devShell's exports.
+// --- P1: the store binary launches and draws glyphs with none of the devShell's exports. ---
 
 /// P1's capture, under `XDG_RUNTIME_DIR` like every other smoke's.
 const PACKAGED_SMOKE_PNG_NAME: &str = "wolf_gnome_packaged_smoke.png";
@@ -37328,9 +34764,7 @@ fn packaged_binary_renders_typed_text_under_cage() {
     let runtime_dir = require_smoke_env();
     let bin = packaged_binary(SMOKE);
 
-    // A fresh temp cwd plus the density fillers, exactly as
-    // `window_renders_typed_text_under_cage` has them: this smoke OCRs a whole page,
-    // and the measured sparse-page misreads are the same ones.
+    // The fillers, as `window_renders_typed_text_under_cage` has them: this smoke OCRs a whole page.
     let cwd = make_temp_cwd();
     write_relaunch_fixtures(SMOKE, &cwd, &[]);
 
@@ -37383,9 +34817,7 @@ fn packaged_binary_renders_typed_text_under_cage() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// P2: the packaged app's captive Neovim really loads the vendored trees —
-//     against a control launch of the checkout binary, which has neither.
+// --- P2: the packaged Neovim loads the vendored trees, against a checkout-binary control. ---
 
 /// The Markdown fixture both launches open: a fenced block with short lines, and
 /// nothing else.
@@ -38076,9 +35508,7 @@ fn the_packaged_binary_loads_the_vendored_lighthouse_and_orlando_under_cage() {
     let store_bin = packaged_binary(SMOKE);
     let control_bin = env!("CARGO_BIN_EXE_wolf-gnome");
 
-    // The devShell's Neovim, handed to the CONTROL launch under a different name so
-    // the packaged launch demonstrably never sees `WOLF_NVIM_BIN` at all.
-    // `require_smoke_env` has already proved it is set and non-empty.
+    // Given to the control launch under another name, so the packaged one never sees `WOLF_NVIM_BIN`.
     let control_nvim = std::env::var("WOLF_NVIM_BIN").unwrap_or_else(|e| {
         panic!(
             "{SMOKE}: WOLF_NVIM_BIN is not readable ({e}) even though `require_smoke_env` just \
@@ -38181,12 +35611,7 @@ fn the_packaged_binary_loads_the_vendored_lighthouse_and_orlando_under_cage() {
         );
     }
 
-    // --- Assertion 5 (discriminator): the two trees are loaded in B, not in A -
-    //
-    // Asserted as a COLLECTED comparison rather than three separate `assert_eq!`s
-    // per launch, so a run in which two of the three regressed reports both: the
-    // tests README records an observed case where a loop with an assertion inside
-    // reported one failure for a revert that broke two rows.
+    // Assertion 5 (discriminator): collected, so a run where two of three regressed reports both.
     let mut wrong: Vec<String> = Vec::new();
     for line in 0..3 {
         if store_lines[line] != PACKAGED_MARK_OK {
@@ -38296,11 +35721,8 @@ fn the_packaged_binary_loads_the_vendored_lighthouse_and_orlando_under_cage() {
         &store_png,
     );
 
-    // The code band gets no `packaged_band_colour` call — assertion 9 counts a colour
-    // rather than reading one, because the band cannot be uniform — so its
-    // non-degeneracy is checked here instead. Without it a rectangle that had collapsed
-    // would report a clean 0.0000 over no pixels at all, and the ceiling half of
-    // assertion 9 would pass on nothing.
+    // The code band is counted, not read, so its non-degeneracy is checked here; a collapsed band would
+    // report 0.0000 and pass assertion 9's ceiling on nothing.
     for (label, capture) in [
         (PACKAGED_CONTROL_LABEL, &control),
         (PACKAGED_STORE_LABEL, &store),
@@ -38358,16 +35780,11 @@ fn the_packaged_binary_loads_the_vendored_lighthouse_and_orlando_under_cage() {
         control_png.display()
     );
 
-    // --- Assertion 9: the ORLANDO band, presence against absence --------------
-    //
-    // Not a uniformity claim: the per-cell antialiased seams cap the band near 0.961,
-    // so `packaged_band_colour` is deliberately NOT used here. See
-    // PACKAGED_ORLANDO_MIN_FILL_FRACTION for the derivation.
+    // Assertion 9: presence against absence, not uniformity, since antialiased seams cap the band near
+    // 0.961. See PACKAGED_ORLANDO_MIN_FILL_FRACTION.
 
-    // Non-vacuity, checked before anything is counted: if orlando's fill and the
-    // editor's own background were the same colour, the floor below would be satisfied
-    // by a launch in which the plugin drew nothing at all, and the ceiling by the
-    // control's merely having a different colorscheme.
+    // Non-vacuity: if orlando's fill matched the editor background, the floor would pass with nothing
+    // drawn and the ceiling on a mere colorscheme difference.
     assert_ne!(
         PACKAGED_ORLANDO_CODE_FILL, PACKAGED_LIGHTHOUSE_NORMAL_BG,
         "{SMOKE}: PACKAGED_ORLANDO_CODE_FILL and PACKAGED_LIGHTHOUSE_NORMAL_BG are the SAME \
@@ -38422,9 +35839,7 @@ fn the_packaged_binary_loads_the_vendored_lighthouse_and_orlando_under_cage() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// P3: the packaged app opens a Markdown preview, which is the only thing that
-//     would catch WebKit's helper processes failing to resolve in the store.
+// --- P3: the packaged app opens a preview, catching WebKit helpers unresolved in the store. ---
 
 /// P3's capture.
 const PACKAGED_PREVIEW_PNG_NAME: &str = "wolf_gnome_packaged_preview.png";
@@ -38616,9 +36031,9 @@ exit 0
 /// ## Why this smoke exists, and what it settled
 ///
 /// A `WebKitWebView` spawns out-of-process `WebKitNetworkProcess` and
-/// `WebKitWebProcess` helpers. `flake.nix`'s `linuxShell` comment used to assert those
-/// were found through `PATH` — and the wrapper reproduces no `PATH`. If that had been
-/// literally true the packaged preview pane would be blank or the app would die, and
+/// `WebKitWebProcess` helpers. Whether they are found through `PATH` matters, because
+/// the wrapper reproduces no `PATH`. If they needed it,
+/// the packaged preview pane would be blank or the app would die, and
 /// NOTHING else in this repository would have noticed: every other packaged claim is
 /// about the editor grid, which WebKit is not involved in.
 ///
@@ -38627,7 +36042,7 @@ exit 0
 /// path is baked into `libwebkitgtk-6.0.so.4` as an absolute store path, and the token
 /// `WEBKIT_EXEC_PATH` does not appear in the library at all. So the variable is NOT
 /// set by `gappsWrapperArgs` — setting one nothing verified is the thing to avoid in
-/// either direction — and the `flake.nix` comment that claimed `PATH` is corrected.
+/// either direction. The finding is recorded in notes/flake.nix.md#webkitgtk-and-libsoup.
 /// This smoke stays as the thing that would notice if a WebKitGTK bump reintroduced
 /// the dependency.
 ///
@@ -38765,13 +36180,8 @@ fn the_packaged_binary_opens_a_preview_under_cage() {
          side-by-side panes."
     );
 
-    // --- Assertions 4 and 5: the right pane renders the DOCUMENT --------------
-    //
-    // NOT `assert_preview_theme_launch`, and not because that helper is inconvenient:
-    // its control band and its `web_top` scan both need the editor's background to
-    // differ from the preview theme's, and for this binary the two are the same
-    // `#1b1b1b`. See the doc comment above for the measurement. What is left is a
-    // two-sided statement about the preview pane alone.
+    // Assertions 4 and 5: not `assert_preview_theme_launch`, whose control band needs the editor and
+    // preview backgrounds to differ; here both are `#1b1b1b`. See the doc comment above.
     let document = packaged_preview_document_band();
     let ink = packaged_preview_ink_band();
     for (what, rect) in [("document", document), ("ink", ink)] {

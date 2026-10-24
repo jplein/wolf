@@ -1,20 +1,4 @@
-//
-//  TreeChildrenMemo.swift
-//  A pure, headless per-directory memo for the sidebar file tree's child
-//  projection (perf plan Layer 1).
-//
-//  AppKit's `NSOutlineView` asks for a directory's children in a storm: it calls
-//  `numberOfChildrenOfItem` and then `child:index:` once per child, each of which
-//  otherwise re-invokes the FFI `children_of(dir)` from scratch (an O(N) scan of
-//  the flat file list). This seam caches the projected `[Item]` per directory so a
-//  reload's callback storm hits memory: `project` runs at most ONCE per directory
-//  between invalidations.
-//
-//  It is toolkit-free (Foundation only): the caller injects `project` (which in
-//  production maps `search.children_of(dir)` into the outline's `TreeItem`s,
-//  reusing stable identities), so the seam is unit-testable without AppKit or a
-//  live search. `invalidate()` is called on each reload (new snapshot) and reroot.
-//
+// Pure per-directory memo of the sidebar file tree's child projection.
 
 import Foundation
 

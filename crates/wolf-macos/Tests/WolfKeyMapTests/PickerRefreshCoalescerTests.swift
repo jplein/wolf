@@ -1,32 +1,4 @@
-//
-//  PickerRefreshCoalescerTests.swift
-//  Pure, headless unit tests for the `WolfKeyMap.PickerRefreshCoalescer` seam.
-//
-//  This is the debounce/coalescing seam behind the file picker's streaming
-//  refreshes (plan Fix #1): the traversal wakes fire many times during a large
-//  load, and each bare `refresh()` re-ranks the whole accumulated list. The
-//  coalescer collapses a BURST of `request()` calls into a single trailing
-//  `perform()`, while still guaranteeing a later wake reschedules (the final,
-//  complete snapshot is never dropped).
-//
-//  These tests inject the seam's two collaborators so NO real timer / run loop is
-//  needed — exactly the headless style of the other WolfKeyMap seam tests
-//  (PickerSeamTests etc.):
-//    * `schedule`: a closure that would normally arm a `DispatchQueue.main`
-//      timer. Here it CAPTURES the pending work closure instead of firing it, so
-//      the test drives the "timer fired" edge deterministically by invoking the
-//      captured closure by hand.
-//    * `perform`: the work to run once per coalesced burst. Here it just bumps a
-//      counter so the tests can assert the exact number of fires.
-//
-//  NOTE to coder: this references the pure `WolfKeyMap.PickerRefreshCoalescer`
-//  the coder adds in `Sources/WolfKeyMap/PickerRefreshCoalescer.swift` (plan
-//  Fix #1). The contract asserted below is:
-//    * `init(schedule: (@escaping () -> Void) -> Void, perform: () -> Void)`
-//    * `func request()` — coalesce: if a fire is already scheduled, do nothing;
-//      otherwise mark scheduled and call `schedule { <clear-flag>; perform() }`.
-//    * `static let refreshInterval: TimeInterval` — the debounce window (~30fps).
-//
+// See crates/wolf-macos/Tests/WolfKeyMapTests/README.md#pickerrefreshcoalescertestsswift
 
 import XCTest
 

@@ -41,7 +41,7 @@
 //! [`nav_press`] is liveness-gated exactly the way
 //! [`crate::buffer_picker::open_decision`] is, and for the same reason. The
 //! inventory of blocking calls and the reasoning behind the gate live in
-//! `crates/wolf-gnome/DECISIONS.md`, "Crash and stall recovery", and are
+//! `notes/wolf-gnome-decisions.md`, "Crash and stall recovery", and are
 //! deliberately not restated here.
 //!
 //! ## Totality is the contract
@@ -168,13 +168,7 @@ mod tests {
 
     use std::collections::HashSet;
 
-    // =========================================================================
-    // The whole input domain
-    // =========================================================================
-    //
-    // Several rules below are stated over EVERY input rather than over one table
-    // row, so that a failure NAMES the rule instead of quoting an index — the
-    // `liveness_ui` / `buffer_picker` convention.
+    // === The whole input domain: rules swept over every input so a failure names the rule ===
 
     /// A real nvim window handle. Deliberately not `0` (which [`nav_query_win`]
     /// refuses) and not `1` (the outer/global grid id), so a result that had
@@ -263,9 +257,7 @@ mod tests {
         forward: false,
     };
 
-    // =========================================================================
-    // nav_query_win
-    // =========================================================================
+    // === nav_query_win ===
 
     /// One [`nav_query_win`] table row.
     struct QueryCase {
@@ -324,9 +316,7 @@ mod tests {
         );
     }
 
-    // =========================================================================
-    // nav_press
-    // =========================================================================
+    // === nav_press ===
 
     /// What a [`PressCase`] row expects [`nav_press`] to return.
     ///
@@ -622,9 +612,7 @@ mod tests {
         );
     }
 
-    // =========================================================================
-    // nav_buttons
-    // =========================================================================
+    // === nav_buttons ===
 
     /// One [`nav_buttons`] table row.
     struct ButtonCase {
@@ -763,13 +751,8 @@ mod tests {
             );
         }
 
-        // --- The `history: None` rule, stated on its own --------------------
-        //
-        // The decision table's row 1 pairs `history: None` with an ABSENT window, so
-        // it cannot tell "no history was read" apart from "no window to read it
-        // for". This states the rule where the press would be ACCEPTED, which is the
-        // only place it can bite: a caller that skipped the mutex read must not be
-        // able to produce a sensitive button out of nothing.
+        // --- `history: None`, stated where the press is accepted: table row 1 pairs it with no window, and
+        // a caller that skipped the mutex read must not make a sensitive button out of nothing.
         for liveness in ALL_LIVENESS_INPUTS {
             for active_win in ALL_WIN_INPUTS {
                 assert_eq!(
@@ -784,9 +767,7 @@ mod tests {
         }
     }
 
-    // =========================================================================
-    // The two rules stated over the whole domain
-    // =========================================================================
+    // === The two rules stated over the whole domain ===
 
     /// How many inputs the seam is total over: four liveness readings times three
     /// window shapes times five history readings.
@@ -868,14 +849,8 @@ mod tests {
              alongside it."
         );
 
-        // --- The converse, deliberately NOT asserted -------------------------
-        //
-        // Recorded with a witness rather than left as prose. An ACCEPTED press does
-        // NOT imply a sensitive button: a live core focused on a pane whose stack is
-        // empty accepts the press (core's `NavHistory::back` answers None and no RPC
-        // is ever issued) while both buttons stay insensitive, because there is
-        // nothing to offer. Anyone "completing" the equivalence would light both
-        // buttons on every freshly-opened pane.
+        // --- The converse, deliberately not asserted: an accepted press need not light a button (an empty
+        // stack accepts with no RPC); "completing" it would light both on every fresh pane.
         let press = nav_press(Some(Liveness::Alive), Some(WIN));
         assert!(
             matches!(press, NavPress::Move(_)),

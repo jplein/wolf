@@ -2,7 +2,7 @@
 
 The GTK 4 and libadwaita front-end: a runnable multi-window Linux application that consumes [`wolf-core`](../wolf-core/README.md) as an ordinary Rust crate dependency and paints the Neovim grid with Cairo and Pango. Each window carries a captive Neovim of its own. A Markdown preview pane is the one surface it does not paint — those pixels come from a `webkit6::WebView`, which is why the devShell supplies WebKitGTK.
 
-**Read [DECISIONS.md](DECISIONS.md) before changing anything in this crate.** In particular, this crate deliberately has no Bazel target, and that absence is load-bearing.
+**Read [wolf-gnome-decisions.md](../../notes/wolf-gnome-decisions.md) before changing anything in this crate.** In particular, this crate deliberately has no Bazel target, and that absence is load-bearing.
 
 ## Layout
 
@@ -30,7 +30,7 @@ After editing `flake.nix`, use `nix develop --command` explicitly: an already-lo
 
 Running needs a Wayland or X11 session, or the headless compositor the smoke tests launch. Five environment variables matter. `WOLF_FONT_PT` overrides the configured `font-size` and wins over it, as it does on macOS; `WOLF_CONFIG_DIR` overrides where `wolf-config.yaml` is read and created, and belongs to [`config.rs`](../wolf-core/src/README.md#configrs); `WOLF_STATE_DIR` overrides where `state.json`, the MRU databases and the per-project swap directories are kept; `WOLF_INIT_LUA` names the captive `runtime/nvim/init.lua` outright, ahead of both paths the binary would otherwise resolve, and is deliberately not checked for existence, so a typo fails loudly instead of falling through to another file.
 
-`WOLF_READY_FILE` belongs to the smoke harness: the binary writes its pid there once its launch windows accept input ([DECISIONS.md](DECISIONS.md#the-readiness-file)).
+`WOLF_READY_FILE` belongs to the smoke harness: the binary writes its pid there once its launch windows accept input ([wolf-gnome-decisions.md](../../notes/wolf-gnome-decisions.md#the-readiness-file)).
 
 ## Packaging
 

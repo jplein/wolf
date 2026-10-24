@@ -1,47 +1,4 @@
-//
-//  RestoreSeamTests.swift
-//  Pure, headless unit tests for the `WolfKeyMap.RestoreSeam` namespace.
-//
-//  A NEW pure, AppKit-free seam (plan §4.2 + OD5) that groups the saved
-//  (window, tab, cwd) tree into PROJECTS for restore ("group-by-cwd"): one
-//  project per distinct real directory, MERGED across windows; each empty-state
-//  (or since-deleted) tab is its OWN project. It mirrors the existing pure seams
-//  (`StateSeam`, `CwdTitleSeam`) and is exercised with scalar inputs only — NO
-//  AppKit, NO NSWindow, NO live Neovim — so it stays in the headless
-//  `WolfKeyMapTests` bundle.
-//
-//  CONTRACT UNDER TEST (the SIGNATURE + shape the coder implements to satisfy):
-//    * RestoreSeam.plan(windows:home:isDirectory:) -> RestorePlan
-//      - `windows: [RestoreSeam.SavedWindow]` — the saved OS windows in order;
-//        each carries `tabs: [RestoreSeam.SavedTab]` (a per-tab `cwd: String` and
-//        `sidebarVisible: Bool`), in tab order.
-//      - `home: String` — the launch cwd for an empty-state project (mirrors
-//        `StateSeam.launchDecision`'s `home`: nvim always needs a working dir).
-//      - `isDirectory: (String) -> Bool` — injected purity boundary (tests pass a
-//        set lookup). A REAL directory (non-empty cwd AND `isDirectory(cwd)`)
-//        groups by cwd; anything else (empty "", or a since-deleted/plain-file
-//        path) is an empty-state tab and gets a UNIQUE project of its own.
-//      - Returns `RestorePlan { projects: [ProjectPlan] }`.
-//      - `ProjectPlan { launchCwd: String, tabs: [PlannedTab] }` — `launchCwd` is
-//        the real directory for a folder project, or `home` for an empty-state
-//        project (so Phase A can `Project.start(launchCwd:)`).
-//      - `PlannedTab { groupIndex: Int, positionInGroup: Int, cwd: String,
-//        sidebarVisible: Bool }` — every tab retains its (window, position)
-//        placement + its ORIGINAL saved cwd + sidebar flag, so Phase B can drop it
-//        back into the right OS window/tab-group. Must be `Hashable` (+ `Equatable`)
-//        so the (e) test can compare an order-independent `Set` of tabs;
-//        `ProjectPlan` / `RestorePlan` are `Equatable`.
-//
-//  ASSUMPTIONS (stated in the test-writer report; the coder implements to match):
-//    * Grouping is by the cwd STRING as-saved (the AppKit caller persists an
-//      already-canonical cwd); the seam does NOT itself canonicalize (that would
-//      need FileManager and break purity).
-//    * A since-deleted / non-directory non-empty cwd is an empty-state tab (its
-//      own project, `launchCwd == home`) but the `PlannedTab.cwd` still retains the
-//      ORIGINAL saved string (grouping KEY differs from the retained field).
-//    * These tests assert grouping + per-tab metadata ORDER-INDEPENDENTLY (they do
-//      not pin the order of `projects` in the plan).
-//
+// See crates/wolf-macos/Tests/WolfKeyMapTests/README.md#restoreseamtestsswift
 
 import Foundation
 import XCTest
@@ -186,9 +143,8 @@ final class RestoreSeamTests: XCTestCase {
   func testEmptyAndDeletedTabsNeverMergeWithRealProjects() {
     let dir = "/Users/alice/projects/live"
     let deleted = "/Users/alice/projects/gone"
-    // One window: two tabs of the same LIVE dir + one empty + one DELETED dir
-    // (non-empty cwd but NOT a directory). Expected: 1 folder project (2 tabs) +
-    // 1 empty-state project + 1 deleted-dir (empty-state) project = 3 projects.
+    // One window: two tabs of one live dir, one empty, one deleted (non-empty, not a directory):
+    // 1 folder project (2 tabs) + 2 empty-state projects = 3.
     let plan = makePlan(
       [window([(dir, true), (dir, false), ("", true), (deleted, false)])],
       directories: [dir, home])  // `deleted` is deliberately NOT a directory
@@ -256,11 +212,8 @@ final class RestoreSeamTests: XCTestCase {
   // MARK: - (f) a saved tab's pane layout is carried through plan() unchanged
 
   func testLayoutIsCarriedThroughPlanUnchanged() throws {
-    // Feature plan §3.3: `SavedTab.layout: SavedPaneNode?` is a PASSTHROUGH — it
-    // rides into the matching `PlannedTab.layout` verbatim, and it does NOT affect
-    // project grouping (still cwd-only). Two tabs sharing a real cwd but carrying
-    // DIFFERENT layouts must still merge into ONE project, each keeping its own
-    // layout.
+    // `SavedTab.layout` rides into `PlannedTab.layout` verbatim and never affects grouping: two
+    // same-cwd tabs with different layouts still merge, each keeping its own layout.
     let proj = "/Users/alice/projects/notes"
     let splitLayout: SavedPaneNode = .split(
       orientation: .vertical, weights: [0.5, 0.5],

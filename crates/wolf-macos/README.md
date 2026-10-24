@@ -2,7 +2,7 @@
 
 The macOS front-end: a native AppKit application (Swift) that renders the embedded Neovim character grid and forwards keyboard input over the generated [swift-bridge](../wolf-ffi/README.md) surface. It is a thin native shell — native window chrome and a CoreText/CoreGraphics paint backend — over the unchanged, platform-agnostic [`wolf-core`](../wolf-core/README.md).
 
-**Read [DECISIONS.md](DECISIONS.md) before changing anything in this crate.** It holds the constraints that a reasonable-looking refactor would otherwise undo.
+**Read [wolf-macos-decisions.md](../../notes/wolf-macos-decisions.md) before changing anything in this crate.** It holds the constraints that a reasonable-looking refactor would otherwise undo.
 
 ## Layout
 
@@ -14,7 +14,7 @@ The macOS front-end: a native AppKit application (Swift) that renders the embedd
 
 ## Entry point
 
-`Sources/WolfMacOS/main.swift` builds the shared `NSApplication`, installs `AppDelegate`, and runs. `AppDelegate` is the coordinator over the crate's projects and views; see [DECISIONS.md](DECISIONS.md) for that model.
+`Sources/WolfMacOS/main.swift` builds the shared `NSApplication`, installs `AppDelegate`, and runs. `AppDelegate` is the coordinator over the crate's projects and views; see [wolf-macos-decisions.md](../../notes/wolf-macos-decisions.md) for that model.
 
 ## Building
 
@@ -41,11 +41,11 @@ bazel test //crates/wolf-macos:bundle_layout_test  # asserts the .app resource l
 
 `WolfKeyMapTests` lists its sources explicitly rather than globbing, so a new `*Tests.swift` file that is not added to `srcs` never compiles into the test binary and never runs. There is no `cargo`-style fallback here.
 
-The AppKit half of the crate has no automated coverage — see the testing posture in [DECISIONS.md](DECISIONS.md) for what covers it instead.
+The AppKit half of the crate has no automated coverage — see the testing posture in [wolf-macos-decisions.md](../../notes/wolf-macos-decisions.md) for what covers it instead.
 
 ## Formatting
 
-The advisory `swift-format` targets in [`//tools/lint`](../../tools/lint/README.md) cover this package's hand-written Swift, enumerated by the `:swift_format_srcs` filegroup here, and exclude the machine-generated bindings under [`crates/wolf-ffi/generated/`](../wolf-ffi/README.md).
+The swift-format check in [`//tools/lint`](../../tools/lint/README.md), `:swift_format`, gates `bazel test //...` over this package's hand-written Swift, enumerated by the `:swift_format_srcs` filegroup here, and excludes the machine-generated bindings under [`crates/wolf-ffi/generated/`](../wolf-ffi/README.md). The fix target, `:swift_format.fix`, is `manual` and runs only when named.
 
 ```sh
 bazel test //tools/lint:swift_format               # check

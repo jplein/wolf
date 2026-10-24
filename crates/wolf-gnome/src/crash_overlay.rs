@@ -117,11 +117,8 @@ pub fn build() -> CrashOverlay {
     let top_spacer = gtk::Box::new(gtk::Orientation::Vertical, 0);
     top_spacer.set_vexpand(true);
 
-    // No size-changing CSS class and no icon: a larger font would push the button
-    // off the point `restart_button_rect` derives. The initial text is never seen
-    // (the overlay starts hidden and `set_mode` is the only path to visible); it
-    // is a real message rather than the empty string purely so a stray reveal
-    // could never show a blank panel.
+    // No size-changing class or icon: a larger font would move the button off `restart_button_rect`.
+    // The hidden initial text is a real message so a stray reveal never shows a blank panel.
     let message = gtk::Label::new(overlay_message(OverlayMode::Stalled));
     message.set_halign(gtk::Align::Center);
     message.set_vexpand(false);

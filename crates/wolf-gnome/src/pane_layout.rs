@@ -342,15 +342,8 @@ mod tests {
     /// The DFS-third leaf's buffer path.
     const PATH_C: &str = "/proj/c.md";
 
-    // --- Weights ---------------------------------------------------------------
-    //
-    // NON-EQUAL on purpose. `PaneTree::split` and `remove` always equalize, so an
-    // equal-weight round trip could not tell "the saved weights were preserved" from
-    // "they were recomputed to the same numbers". These are hand-written literals,
-    // which keeps the codec's round trip independent of the one thing in this crate
-    // that produces a non-equal vector — `PaneTree::set_divider_fraction`, exercised
-    // against the codec by `encode_carries_a_dragged_weight_vector` and
-    // `decode_restores_a_dragged_weight_vector`.
+    // --- Weights: non-equal literals, since `split`/`remove` equalize and an equal round trip cannot
+    // tell preserved from recomputed; dragged vectors are the `*_dragged_weight_vector` tests' job.
     /// The DFS-first child's share in the non-equal round-trip tree.
     const WEIGHT_SMALL: f64 = 0.25;
     /// The DFS-second child's share in the non-equal round-trip tree.
@@ -472,9 +465,7 @@ mod tests {
         }
     }
 
-    // =====================================================================
-    // encode
-    // =====================================================================
+    // === encode ===
 
     /// `encode` carries each leaf id's [`LeafContent`] — path AND preview flag —
     /// onto the persisted node, and an id it has no entry for becomes the empty,
@@ -496,17 +487,14 @@ mod tests {
     fn encode_maps_ids_to_paths() {
         let mut contents = HashMap::new();
         contents.insert(P0, editor_pane(PATH_A));
-        // P1 is DELIBERATELY absent: an unbound / unnamed pane must encode as an
-        // empty leaf rather than being dropped from the tree (macOS parity), because
-        // dropping it would change the topology and desynchronise the DFS zip.
+        // P1 is deliberately absent: an unnamed pane encodes as an empty leaf, not dropped (macOS
+        // parity), since dropping it changes the topology and desynchronises the DFS zip.
         contents.insert(P2, preview_pane(PATH_C));
 
         let got = encode(&asymmetric_layout(), &contents);
 
-        // The WHOLE value in one comparison: an editor id -> its path with
-        // `preview: false`, an unmapped id -> `Leaf { path: "", preview: false }`, a
-        // preview id -> its path with `preview: true`, and both orientations and
-        // both weight vectors verbatim.
+        // One whole-value comparison: editor, unmapped and preview ids, both orientations and both
+        // weight vectors verbatim.
         assert_eq!(
             got,
             split(
@@ -549,9 +537,7 @@ mod tests {
         );
     }
 
-    // =====================================================================
-    // resolve_leaves — the ALL-OR-NOTHING rule the whole gather rests on
-    // =====================================================================
+    // === resolve_leaves: the all-or-nothing rule the whole gather rests on ===
 
     /// One [`resolve_leaves`] table row.
     ///
@@ -608,19 +594,16 @@ mod tests {
     fn resolve_cases() -> Vec<ResolveCase> {
         vec![
             ResolveCase {
-                // THE ROW T1 EXISTS FOR. Two leaves, two DIFFERENT kinds, two
-                // DIFFERENT paths: one comparison discriminates the preview flag, the
-                // per-id mapping and the path pass-through at once.
+                // The key row: two leaves of different kinds and paths, so one comparison checks the preview
+                // flag, the per-id mapping and the path pass-through at once.
                 desc: "a preview leaf and a buffer leaf resolve side by side, each keeping its \
                        OWN path and its own preview flag",
                 leaves: vec![(P0, preview_win(PATH_A)), (P1, buffer_win(PATH_B))],
                 want: Some(vec![(P0, preview_pane(PATH_A)), (P1, editor_pane(PATH_B))]),
             },
             ResolveCase {
-                // Two leaves of the SAME kind with different paths. Without this, a
-                // seam that answered `leaves[0]`'s content for every id would still
-                // fail the row above only because the two kinds differ, and the
-                // failure would read as a preview-flag bug.
+                // Same kind, different paths: otherwise a seam answering `leaves[0]`'s content for every id fails
+                // the row above only via the kinds, reading as a preview-flag bug.
                 desc: "two buffer leaves keep their own paths — each id is resolved from its own \
                        window, never from the first leaf's",
                 leaves: vec![(P0, buffer_win(PATH_A)), (P1, buffer_win(PATH_B))],
@@ -634,10 +617,8 @@ mod tests {
                 want: Some(vec![(P0, editor_pane("")), (P1, editor_pane(PATH_B))]),
             },
             ResolveCase {
-                // The preview arm's twin of the row above, and the only place the
-                // empty-path rule is stated for a PREVIEW. `is_empty_leaf` reads the
-                // flag as well as the path, so an empty-sourced preview is still
-                // persistable state.
+                // The preview twin of the row above, the only place the empty-path rule is stated for a preview:
+                // `is_empty_leaf` reads the flag too, so an empty-sourced preview is still persistable.
                 desc: "a preview whose source path is empty resolves too, and keeps `preview: \
                        true`",
                 leaves: vec![(P0, preview_win("")), (P1, buffer_win(PATH_B))],
@@ -704,12 +685,8 @@ mod tests {
             );
         }
 
-        // --- The table really covers the domain -------------------------------
-        //
-        // Every WinContent shape must appear as an INPUT somewhere, or an arm of the
-        // seam is whatever it happens to be. The kinds are literals crossed against
-        // `win_content_kind`'s total match, so a new variant is a compile error there
-        // and a missing row is a failure here.
+        // --- The table covers the domain: every WinContent kind appears as an input, crossed against
+        // `win_content_kind`'s total match, so a new variant fails to compile there.
         for kind in ALL_WIN_CONTENT_KINDS {
             assert!(
                 cases.iter().any(|case| case
@@ -773,9 +750,8 @@ mod tests {
              means `contribute the CACHE`, which is last-known-good rather than wrong."
         );
 
-        // The discriminating negative, and the reason the whole design is buildable:
-        // the refusal is about the ABSENT window, never about the empty PATH. Same
-        // leaves, same ids, `Unknown` swapped for a genuinely unnamed buffer.
+        // The discriminating negative: the refusal is about the absent window, never the empty path.
+        // Same leaves and ids, `Unknown` swapped for a genuinely unnamed buffer.
         let with_unnamed = [
             (P0, buffer_win(PATH_A)),
             (P1, buffer_win("")),
@@ -797,10 +773,8 @@ mod tests {
              window is not."
         );
 
-        // A lone Unknown refuses too, stated separately because it is the ONE shape
-        // where the wrong answer looks harmless: a single empty leaf IS suppressed by
-        // `is_empty_leaf`, so the tab would persist `layout: None` and simply forget
-        // its file rather than persisting a visible blank.
+        // A lone Unknown refuses too: there the wrong answer looks harmless, since `is_empty_leaf`
+        // suppresses a single empty leaf and the tab would silently forget its file.
         let alone = [(P0, WinContent::Unknown)];
         assert_eq!(
             resolve_leaves(&alone),
@@ -854,9 +828,7 @@ mod tests {
              launch would start writing a layout it never had."
         );
 
-        // Non-vacuity: the assertions above are satisfied by a seam that answers the
-        // empty leaf for EVERYTHING, which is falsifying edit 3 of `resolve_leaves_table`
-        // wearing a different hat.
+        // Non-vacuity: a seam answering the empty leaf for everything satisfies the assertions above.
         assert_eq!(
             resolve_leaves(&[(P0, WinContent::Buffer(PATH_A.to_string()))]),
             Some(contents_map(&[(P0, editor_pane(PATH_A))])),
@@ -866,9 +838,7 @@ mod tests {
         );
     }
 
-    // =====================================================================
-    // the CONTENT predicate — the single-pane fix
-    // =====================================================================
+    // === is_empty_leaf: suppression by content, never by arity ===
 
     /// One [`is_empty_leaf`] table row.
     struct EmptyLeafCase {
@@ -901,10 +871,8 @@ mod tests {
                 want: false,
             },
             EmptyLeafCase {
-                // THE ANTI-ARITY ROW. Two leaves, both empty: an arity test
-                // (`leaf_count > 1`) and a content test agree on `false` here only by
-                // accident, but a "the tree carries nothing" test would say `true` and
-                // silently drop a real two-pane topology.
+                // Anti-arity row: two empty leaves. An arity test and a content test agree on `false` by accident;
+                // a "the tree carries nothing" test would say `true` and drop a real two-pane topology.
                 desc: "a SPLIT of two empty leaves is NOT an empty leaf (every split is false)",
                 node: split(
                     PaneOrientation::Vertical,
@@ -966,9 +934,7 @@ mod tests {
         );
     }
 
-    // =====================================================================
-    // DFS order — the property the whole restore zip rests on
-    // =====================================================================
+    // === DFS order: the property the whole restore zip rests on ===
 
     #[test]
     fn leaf_paths_dfs_matches_the_spec_order() {
@@ -1020,9 +986,8 @@ mod tests {
 
     #[test]
     fn decode_allocates_contiguous_ids_from_first_leaf_id() {
-        // `pane_view::apply_layout_rebuild` sets `next_pane_id = first_leaf_id +
-        // leaf_ids.len()` after a successful decode. That arithmetic is only correct
-        // if `decode` allocates CONTIGUOUSLY starting at `first_leaf_id`.
+        // `pane_view::apply_layout_rebuild` sets `next_pane_id = first_leaf_id + leaf_ids.len()`, which
+        // is right only if `decode` allocates contiguously from `first_leaf_id`.
         const FIRST_IDS: [PaneId; 4] = [0, 1, 7, 4096];
 
         for first in FIRST_IDS {
@@ -1054,9 +1019,7 @@ mod tests {
         );
     }
 
-    // =====================================================================
-    // round trip, with NON-EQUAL weights
-    // =====================================================================
+    // === Round trip, with non-equal weights ===
 
     #[test]
     #[allow(
@@ -1067,11 +1030,8 @@ mod tests {
                   correct — the `mouse::scroll_threshold_table` precedent"
     )]
     fn decode_round_trips_encode() {
-        // A two-leaf tree whose weights are NOT equal shares, written as literals
-        // rather than dragged, so this asserts the CODEC alone: whatever vector goes
-        // in comes back out. The end-to-end path — a real drag reaching `state.json`
-        // and being reapplied on the next launch — is
-        // `dragged_divider_weights_survive_relaunch_under_cage`.
+        // Literal non-equal weights, so this asserts the codec alone; a real drag reaching `state.json`
+        // and back is `dragged_divider_weights_survive_relaunch_under_cage`.
         let layout = PaneLayout::Split {
             orientation: Orientation::Vertical,
             children: vec![PaneLayout::Leaf(P0), PaneLayout::Leaf(P1)],
@@ -1135,9 +1095,7 @@ mod tests {
         assert_eq!(tri_ids, vec![P0, P1, P2], "three leaves, DFS order");
     }
 
-    // =====================================================================
-    // rejection — a CRASH GUARD, not tidiness
-    // =====================================================================
+    // === Rejection: a crash guard, not tidiness ===
 
     /// One [`decode`] rejection row.
     struct MalformedCase {
@@ -1255,9 +1213,8 @@ mod tests {
             );
         }
 
-        // The caps must be non-vacuous: exactly AT each limit the tree is accepted, so
-        // a `> MAX` that silently became `>= MAX` (or a cap set to 0) is caught here
-        // rather than being mistaken for correct rejection above.
+        // Non-vacuous caps: a tree exactly at each limit is accepted, so `> MAX` turned `>= MAX`, or a
+        // zero cap, is caught here rather than passing as correct rejection.
         assert!(
             decode(&flat_split(MAX_RESTORE_LEAVES), P0).is_some(),
             "a tree with exactly MAX_RESTORE_LEAVES ({MAX_RESTORE_LEAVES}) leaves must be \
@@ -1271,15 +1228,8 @@ mod tests {
         );
     }
 
-    // =====================================================================
-    // a DRAGGED weight vector, through the codec both ways
-    //
-    // The pure twins of the divider-relaunch smoke's first two assertions. The
-    // weights here are not hand-written: they are produced by
-    // `PaneTree::set_divider_fraction`, the same call a `gtk::Paned` drag makes, so
-    // these two tests cover the codec against the exact values the front-end can
-    // really put on disk.
-    // =====================================================================
+    // === A dragged weight vector, through the codec both ways ===
+    // Weights from `PaneTree::set_divider_fraction`, as a drag makes them; the relaunch smoke's twins.
 
     /// The head fraction the drag tests aim at. Not an equal share, and not a value
     /// `PaneTree::split` or `remove` can produce, so seeing it survive a codec hop

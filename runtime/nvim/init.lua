@@ -1,82 +1,23 @@
--- Wolf hermetic Neovim configuration (Markdown-only).
---
--- This file is version-controlled in the Wolf repo and loaded by the captive
--- Neovim that wolf-core spawns, via:
---
---     nvim --embed --clean -u runtime/nvim/init.lua -i NONE
---
--- (`-n` is deliberately absent: it would zero 'updatecount' and disable the
--- swap files crash recovery rests on -- see the swap block below.)
---
--- `--clean` already skips the user's config/plugins/shada; we further pin the
--- XDG_* dirs and NVIM_APPNAME away from the user's from the spawning side. The
--- settings below make the captive editor deterministic for headless rendering
--- tests and tuned for editing Markdown.
---
--- Fenced-code-block INJECTIONS are what the vendored-treesitter gate below buys.
--- Base markdown highlighting is not: the pinned Neovim ships the markdown and
--- markdown_inline parsers and starts treesitter on a markdown buffer BY ITSELF,
--- gate or no gate (measured — see the `syntax on` note further down). What the
--- gate adds is two runtimepath entries: the vendored grammars, and
--- nvim-treesitter's queries/markdown/injections.scm, which is what routes a fenced
--- block to an embedded parser so its own language is highlighted. It resolves each
--- tree from a SIBLING directory next to this init.lua (staged by the macOS .app
--- bundle) and, failing that, from `WOLF_NVIM_TREESITTER_DIR` / `WOLF_PARSERS_DIR`
--- (exported unconditionally by the Linux devShell), so both platforms fire it. A
--- host that provides neither keeps plain markdown highlighting and renders every
--- fenced block unhighlighted. A Markdown LSP (e.g. marksman) and a formatter are
--- DEFERRED to a later phase; the vendored nvim-treesitter-textobjects plugin is
--- bundled-but-INERT (no keymaps wired).
+-- Wolf's captive Neovim config. Contract and decisions: runtime/nvim/README.md.
 
 local opt = vim.opt
 
--- 'directory' and 'spellfile' are comma-separated option LISTS: a literal comma
--- in a path silently splits the value into two bogus, nonexistent entries and
--- the option quietly reverts to nvim's default -- a failure that looks like
--- success from inside nvim. Escape commas before assigning either. Spaces need
--- no escaping through the Lua option API (a macOS "Application Support" path is
--- fine). The parentheses discard gsub's substitution count, which would
--- otherwise ride along as a second value.
+-- 'directory' and 'spellfile' are comma-separated lists, so a raw comma silently splits the value.
+-- Spaces need no escaping; the parentheses drop gsub's second return value.
 local function escape_option_path(p)
 	return (p:gsub(",", "\\,"))
 end
 
--- Swap files are ON (crash-recovery of unsaved edits). They live in a DURABLE,
--- Wolf-owned, per-project swap directory (WOLF_SWAP_DIR, resolved core-side like
--- state_dir() and STABLE across respawns of the same project) rather than next to
--- the user's files, so a fresh nvim can recover a crashed nvim's unsaved edits.
--- The trailing "//" makes nvim encode the full path into the swap file name (so
--- files with the same basename in different dirs never collide) and DROPS the
--- default leading "." entry (which would otherwise put a `.swp` next to the file).
--- Keep nvim's default updatecount/updatetime.
---
--- ORDERING: escape the path FIRST, then append the trailing "//" -- the "//" is
--- nvim's marker, not part of the path, and must stay unescaped.
+-- Swaps: see runtime/nvim/README.md#decisions. Escape the path first, then append
+-- "//": it is nvim's full-path marker, not part of the path, and must stay unescaped.
 opt.swapfile = true
 local swap_dir = vim.env.WOLF_SWAP_DIR
 if swap_dir ~= nil and swap_dir ~= "" then
 	opt.directory = escape_option_path(swap_dir) .. "//"
 end
 
--- Recovery-aware swap policy: a SwapExists must NEVER surface the blocking E325
--- prompt. Decide from the swap's owner:
---   * DEAD owner (stale/unreadable swap, or the owning pid is gone) -> "r": silently
---     RECOVER the unsaved edit, then schedule a delete of the consumed swap.
---   * LIVE / UNCERTAIN owner (owner pid still alive, or the swap was written on a
---     DIFFERENT host so we cannot probe) -> "e": edit the clean on-disk copy anyway.
---
--- LIMIT -- this autocmd does NOT cover every way a swap collision can happen.
--- Neovim raises SwapExists ONLY where it has armed the choice machinery
--- (`swap_exists_action ~= SEA_NONE` in findswapname), i.e. on the FILE-LOAD path:
--- `:edit` -> do_ecmd -> open_buffer -> readfile -> check_need_swap. That covers the
--- Tier-1 reopen and every user-driven open. It does NOT cover:
---   * `nvim_buf_set_name`, which creates the swap INSIDE the rename (ml_setname ->
---     ml_open_file -> findswapname) with the choice machinery unarmed, so a stale
---     swap there goes straight to the blocking do_dialog ATTENTION modal, and
---   * changed()'s first-modification ml_open_file, same story.
--- Both of those are covered instead by NAME AVOIDANCE -- see
--- `_G.wolf_untitled_swap_exists` and the anonymous-buffer naming section below.
--- (Upstream: neovim/neovim#23145.)
+-- Never let SwapExists raise E325: a dead owner gets "r" (recover, then delete the swap), else "e".
+-- Fires only on the file-load path (neovim/neovim#23145); see Anonymous-buffer naming below.
 local swap_group = vim.api.nvim_create_augroup("WolfSwap", { clear = true })
 vim.api.nvim_create_autocmd("SwapExists", {
 	group = swap_group,
@@ -114,16 +55,8 @@ vim.api.nvim_create_autocmd("SwapExists", {
 	end,
 })
 
--- External-file reload: when the file shown in a buffer is changed on disk from
--- OUTSIDE the editor (e.g. `prettier --write`, `git checkout`), reload it into the
--- buffer. `autoread` is Neovim's built-in mechanism, but on its own it only
--- re-reads on certain triggers, so a `WolfAutoRead` augroup runs `:checktime` on
--- focus regain, buffer entry, and after `updatetime` idle (`CursorHold`/`CursorHoldI`).
--- `:checktime` only re-reads a buffer whose in-editor copy is UNMODIFIED (autoread's
--- own guard — an unsaved edit is never clobbered) and is a NO-OP on buffers with no
--- associated file (the terminal `buftype=terminal` drawer and the `buftype=nofile`
--- preview scratch), so it is harmless there. Wrapped in pcall + `silent!` so a
--- special buffer can neither raise nor pollute the grid.
+-- Reload files changed outside the editor; :checktime never clobbers a modified buffer.
+-- pcall + silent! so the terminal and preview buffers can neither raise nor pollute the grid.
 opt.autoread = true
 local autoread_group = vim.api.nvim_create_augroup("WolfAutoRead", { clear = true })
 vim.api.nvim_create_autocmd({ "FocusGained", "BufEnter", "CursorHold", "CursorHoldI" }, {
@@ -152,72 +85,30 @@ opt.signcolumn = "no"
 opt.ruler = false
 opt.showcmd = false
 opt.laststatus = 0
--- Neovim's own tabline, which the default of 1 turns on the moment a SECOND
--- tabpage exists. Neither front-end paints grid 1 -- both attach with
--- ext_messages, which forces cmdheight = 0 and leaves that grid empty -- so the
--- line is invisible while still costing the pane grid a real row (measured: 80x24
--- became 80x23 on the second tabpage) and leaving every WinInfo start_row stale
--- until the front-end's own resize won the row back. Both front-ends draw their
--- own tab chrome.
+-- The default 1 draws an unpainted tabline once a second tabpage exists, stealing a grid row
+-- (80x24 -> 80x23) and staling WinInfo start_row. Both front-ends draw their own tab chrome.
 opt.showtabline = 0
 
 -- Forward mouse to Neovim; the front-end translates OS mouse events to input.
 opt.mouse = "a"
 
--- Present command-line completion as a vertical popup (`popupmenu_show`) rather
--- than the horizontal wildmenu, so the native `ext_popupmenu` completion popup
--- anchors above the command line (Wolf attaches with `ext_popupmenu` +
--- `ext_messages`; the latter implicitly enables `ext_cmdline` + `cmdheight=0`).
+-- Vertical popupmenu_show completion, so the ext_popupmenu popup anchors above the command line
+-- (ext_messages implies ext_cmdline and cmdheight=0).
 opt.wildoptions:append("pum")
 
--- Soft-wrap long lines at WORD BOUNDARIES: Wolf is a Markdown editor, where prose
--- lines routinely exceed the editor width. `wrap` is also nvim's own default;
--- `linebreak` makes the wrap fall on spaces/punctuation (`breakat`) instead of
--- mid-word. Determinism-sensitive rendering tests keep their asserted content
--- within the grid width, so this does not affect their column assertions.
+-- Soft-wrap prose at word boundaries (breakat). Rendering tests keep asserted content within the
+-- grid width, so wrapping does not move their columns.
 opt.wrap = true
 opt.linebreak = true
 
--- With soft-wrap on, `smoothscroll` scrolls by SCREEN line rather than jumping
--- past an entire wrapped logical line, so mouse-wheel / `<C-e>`/`<C-d>` scrolling
--- of long wrapped Markdown lines stays smooth and never skips wrapped fragments.
+-- Scroll wrapped lines by screen line, so wheel / <C-e> / <C-d> never skip a wrapped fragment.
 opt.smoothscroll = true
 
 -- Treat opened files as markdown by default (Wolf is a Markdown editor).
 vim.filetype.add({ extension = { md = "markdown" } })
 
--- Spell checking for PROSE filetypes only (markdown / text / gitcommit).
---
--- Buffer-local, from a FileType autocmd, rather than a global `spell`: a global
--- one would also underline the terminal drawer and every non-prose buffer.
---
--- ORDERING: this MUST be registered BEFORE `vim.cmd("syntax on")` below. Measured
--- against the pinned nvim, a FileType autocmd registered AFTER `syntax on` is
--- never reached for `markdown` when the buffer arrives as a STARTUP FILE
--- ARGUMENT -- the chain stops at the `syntaxset` handler `syntax on` installs, so
--- `text` and `gitcommit` still fire but `markdown` silently does not. Registering
--- first makes all three fire on every open path.
---
--- The pattern is "*" with an EXPLICIT OFF for non-prose filetypes, not a
--- prose-only pattern list. That is determinism hardening, not a leak fix:
--- measured on the pinned nvim, `vim.opt_local.spell` sets only the window-LOCAL
--- value, which nvim resets from the window-global value (off) on a buffer
--- switch, so a prose-only autocmd leaves a code file spell-off too. The
--- explicit off guarantees that outcome regardless of the window-global value --
--- it holds even if some future code sets `vim.o.spell` or `:set spell`, where
--- the reset-from-global behavior would turn every buffer switch spell-ON.
---
--- `spelllang` is pinned to "en" rather than left at its default: the bundled
--- Neovim runtime ships exactly ONE spell file
--- (share/nvim/runtime/spell/en.utf-8.spl), and a language with no .spl anywhere
--- on runtimepath makes the runtime `spellfile.lua` plugin open a BLOCKING
--- "download it?" prompt. Wolf attaches with `ext_messages` (which forces
--- cmdheight = 0), so such a prompt has nowhere to draw and would wedge the UI.
---
--- SPELL_LANG is shared by two consumers: the `spelllang` set in the callback
--- below, and the user-dictionary filename in the `spellfile` block that follows.
--- They MUST agree -- see that block for why. The reason `en` specifically is
--- pinned is the paragraph above; do not restate it.
+-- Register before syntax on, or a markdown startup file never fires it; see the spell entry in
+-- runtime/nvim/README.md#decisions. SPELL_LANG also names the spellfile below, which must match it.
 local SPELL_LANG = "en"
 local spell_prose = { markdown = true, text = true, gitcommit = true }
 local spell_group = vim.api.nvim_create_augroup("WolfSpell", { clear = true })
@@ -233,80 +124,19 @@ vim.api.nvim_create_autocmd("FileType", {
 	end,
 })
 
--- The DURABLE user spell dictionary: `zg` / `zw` write to WOLF_SPELL_DIR (a
--- global, Wolf-owned dir resolved core-side from state_dir()), so a word the
--- user teaches Wolf survives a restart.
---
--- Left unset, nvim derives 'spellfile' from the first writable runtimepath
--- entry, which lands under the XDG_DATA_HOME that wolf-core pins to a private
--- temp dir for hermeticity -- so the word would die with the process.
---
--- GLOBAL (vim.opt), once, at init -- NOT buffer-local and NOT from a new
--- FileType autocmd. 'spellfile' is local-to-buffer, but the global value seeds
--- every new buffer, verified on all three open paths (startup file argument,
--- `:edit`, `:enew` + `set ft=markdown`). The tempting "simplification" is to
--- move this into a FileType autocmd appended at the end of this file: that
--- FAILS for a markdown startup file argument, for exactly the `syntax on`
--- ordering reason documented above. If buffer-local is ever genuinely needed,
--- it has to go inside the EXISTING WolfSpell callback -- do not register a new
--- autocmd for it.
---
--- Core created the dir before launch (a FATAL create_dir_all in spawn): nvim
--- creates the parent of the runtimepath-derived DEFAULT spellfile but never of
--- an explicitly set one, so a missing parent makes `zg` fail with E484 and drop
--- the word silently.
---
--- Commas are escaped because 'spellfile' is a comma-separated LIST -- see
--- escape_option_path above; the swap 'directory' block carries the same guard.
---
--- The filename tracks SPELL_LANG because nvim derives the dictionary name from
--- 'spelllang' and 'encoding': with spelllang = "en" and encoding = "utf-8",
--- `zg` writes <lang>.utf-8.add. A filename that disagreed with 'spelllang'
--- would make `zg` write a file nvim never reads back.
---
--- An absent or empty WOLF_SPELL_DIR is a strict no-op leaving 'spellfile' alone
--- (nvim's default behavior), matching the swap block's shape above.
+-- Global and set once: a new FileType autocmd would miss markdown startup files (syntax on order).
+-- See notes/runtime/nvim/init.lua.md#spellfile-is-global.
 local spell_dir = vim.env.WOLF_SPELL_DIR
 if spell_dir ~= nil and spell_dir ~= "" then
 	opt.spellfile = escape_option_path(spell_dir) .. "/" .. SPELL_LANG .. ".utf-8.add"
 end
 
--- Enable built-in syntax highlighting so the grid carries varied hl_ids. It is the
--- highlight source for every buffer treesitter does NOT attach to, and the
--- fallback where an attach fails.
---
--- It is NOT the markdown highlight source, and assuming it is has misled readers
--- before. MEASURED on the Linux flake's nvim 0.12.6: a markdown buffer under
--- `--clean -u NONE`, with no plugin and no gate below, already reports
--- `vim.treesitter.highlighter.active[buf] ~= nil` — nvim ships the markdown
--- parser and its queries and starts treesitter on markdown itself. So markdown is
--- treesitter-highlighted whether or not the gate below fires, and
--- `vim.treesitter.start` disables regex syntax for a buffer it attaches to
--- (`:h vim.treesitter.start`).
---
--- What the gate below adds for markdown is therefore the nvim-treesitter QUERIES
--- ahead of nvim's own on runtimepath, plus the parsers that let the injections
--- query route a fenced block. `highlighter.active` cannot discriminate those:
--- it reads true with the gate absent. The discriminating readback is an INJECTED
--- child langtree for the fenced language, which is what
--- `crates/wolf-ffi/tests/treesitter_highlight.rs` asserts as its second sentinel.
+-- The highlight source for buffers treesitter does not attach to. Not markdown's: nvim starts
+-- treesitter on markdown itself, gate or no gate; see runtime/nvim/README.md#decisions.
 vim.cmd("syntax on")
 
--- Vendored orlando plugin (Bazel macOS bundle only).
---
--- The macOS .app places a sibling `orlando/` tree next to this init.lua at
--- Contents/Resources/orlando/ (bundled by //bazel/orlando). On Linux/cargo it is
--- ABSENT, so this whole block is a strict NO-OP: no runtimepath change, no error.
--- We self-locate init.lua's own directory (rather than assume a fixed path), look
--- for the sibling `orlando/`, and only if it exists prepend it to runtimepath and
--- deterministically source its plugin file. The explicit source makes orlando's
--- definitions exist DURING init, not merely eventually: measured on the pinned
--- nvim, `--clean` keeps 'loadplugins' on, so an rtp-prepended tree's plugin/*.lua
--- also load in the startup plugin phase AFTER this file finishes — see the
--- matching note in the nvim-treesitter parsers_user block below.
--- orlando itself guards on vim.g.loaded_orlando, so the explicit source is safe.
--- orlando's wrap_indent also sets wrap/linebreak/breakindent; additive & harmless
--- with the wrap/linebreak/smoothscroll set above.
+-- Vendored orlando: macOS bundle sibling only, a no-op elsewhere. Sourced explicitly so it is
+-- defined during init; its vim.g.loaded_orlando guard makes the later plugin phase a no-op.
 local this_file = debug.getinfo(1, "S").source:sub(2) -- strip the leading '@'
 local this_dir = vim.fn.fnamemodify(this_file, ":p:h")
 local orlando_dir = this_dir .. "/orlando"
@@ -316,24 +146,8 @@ if uv and uv.fs_stat(orlando_dir) then
 	vim.cmd.runtime("plugin/orlando.lua")
 end
 
--- Vendored lighthouse colorscheme (Bazel macOS bundle only).
---
--- Like orlando, the macOS .app places a sibling `lighthouse/` tree next to this
--- init.lua at Contents/Resources/lighthouse/ (bundled by //bazel/lighthouse). On
--- Linux/cargo it is ABSENT, so this whole block is a strict NO-OP: no runtimepath
--- change, no colorscheme call, no error. We reuse the already-computed `this_dir`
--- / `uv` locals from the orlando block above.
---
--- Unlike a plugin, a colorscheme on runtimepath does NOTHING on its own: we must
--- ALSO activate it. When the sibling dir exists we prepend it to runtimepath, set
--- the dark background, then run `:colorscheme lighthouse` — `:colorscheme` finds
--- `colors/lighthouse.lua` on rtp itself, so we do NOT need to `runtime()` it.
--- ORDERING: this MUST come AFTER `vim.cmd("syntax on")` above, because both
--- `syntax on` and `:colorscheme` clear/redefine highlight groups — activating
--- last wins. `vim.o.background` is set BEFORE `:colorscheme` so a dual-variant
--- scheme reads it. The front-end now pushes the resolved appearance at launch —
--- and live, in `auto` mode, when the OS toggles — via `:set background=…`; this
--- hardcoded value is only the pre-push fallback for the initial paint.
+-- Vendored lighthouse: macOS bundle sibling only. Must follow syntax on (the last highlight writer
+-- wins); background is set first and is only the fallback until the front-end pushes its own.
 local lighthouse_dir = this_dir .. "/lighthouse"
 if uv and uv.fs_stat(lighthouse_dir) then
 	vim.opt.runtimepath:prepend(lighthouse_dir)
@@ -341,76 +155,8 @@ if uv and uv.fs_stat(lighthouse_dir) then
 	vim.cmd.colorscheme("lighthouse")
 end
 
--- Vendored treesitter highlighting + fenced-code injections.
---
--- Two trees feed this gate: `nvim-treesitter/` (the main-branch queries provider:
--- queries/<lang>/highlights.scm + queries/markdown/injections.scm) and `parsers/`
--- (compiled parser/<lang>.so for the embedded fenced languages). Each resolves
--- from one of TWO sources, and both platforms are served by the same gate:
---
---   1. A SIBLING directory next to this init.lua. The macOS .app stages both at
---      Contents/Resources/ (//bazel/nvim-treesitter, //bazel/treesitter-parsers).
---   2. Failing that, an ENVIRONMENT VARIABLE — `WOLF_NVIM_TREESITTER_DIR` and
---      `WOLF_PARSERS_DIR`, which the Linux devShell exports unconditionally
---      (`flake.nix`). Neither is a `WOLF_TEST_*` variable: those keep their own
---      meaning and their own readers in the Bazel test targets.
---
--- SIBLING FIRST, environment second, and do NOT reorder. A developer inside the
--- devShell has `WOLF_PARSERS_DIR` exported; under env-first, running the macOS
--- .app from that shell would silently swap the bundle's own Mach-O parsers for a
--- Linux ELF tree, and the mis-load has no symptom until a dlopen fails inside a
--- pcall. Sibling-first is also what makes "macOS behaviour is unchanged" a
--- construction rather than a hope: there both siblings exist, so the resolver
--- returns at branch 1 and `vim.env` is never read at all.
---
--- THE ENVIRONMENT FALLBACK IS THE ONLY THING THAT FIRES THIS GATE ON LINUX, since
--- no sibling tree exists there. Deleting it does more than shorten runtimepath: it
--- also removes the FileType=markdown autocmd below. What that costs was MEASURED
--- rather than assumed, and it is narrower than it looks. nvim 0.12.6 (Linux
--- flake) starts treesitter on a markdown buffer by ITSELF — under `--clean -u NONE`, with no
--- plugin and no gate, `vim.treesitter.highlighter.active[buf] ~= nil` already
--- reads true. So that expression CANNOT witness this gate and must not be used as
--- evidence for it.
---
--- What the gate actually buys the EDITOR is nvim-treesitter's queries ahead of
--- nvim's own on runtimepath, plus the parsers that let the injections query route
--- a fenced block to a real grammar. The discriminating readback is an INJECTED
--- child langtree for the fenced language: measured NO with the gate off and OK
--- with it on, whereas `highlighter.active` reads OK in both.
---
--- `nvim-treesitter-textobjects/` (bundled but INERT — no source, no setup, no
--- keymaps) DELIBERATELY has no environment fallback. Nothing on Linux produces
--- such a tree, so the variable would have no producer — dead surface for a later
--- agent to wire up wrongly — and because the tree is inert its absence changes
--- nothing observable, so no test could discriminate a fallback for it.
---
--- `vim.env` is a table view over getenv/setenv and is UNAFFECTED by `--clean`,
--- which suppresses user config, plugins and shada but not the process
--- environment (this file already relies on that at `WOLF_SWAP_DIR` above). The
--- captive nvim inherits it: `nvim.rs` overrides its NVIM_APPNAME / XDG_* /
--- WOLF_* variables on the child and calls no `env_clear`, and `cage` clears
--- nothing either.
---
--- A resolved path that has VANISHED falls through to nil rather than being
--- prepended, so a store path garbage-collected under a long-lived shell degrades
--- to the bare-checkout no-op instead of putting a dead entry on runtimepath.
---
--- GATE on the queries provider. When it resolves we prepend it to runtimepath (so
--- `vim.treesitter.start` finds highlights + injections queries), then prepend the
--- parsers tree (so nvim resolves <rtp>/parser/<lang>.so) and the inert textobjects
--- tree, each only if it independently resolves. markdown / markdown_inline parsers
--- already ship with nvim, so they are NOT re-vendored. The vendored plugin is
--- both a query provider AND — when WOLF_PARSERS_USER_DIR resolves — a real
--- plugin: its plugin file is sourced (registering :TSInstall) and `setup()`
--- receives the durable install_dir, so user-compiled parsers land under
--- state_dir() rather than dying with the hermetic XDG root; see the
--- parsers_user block inside the gate. A FileType=markdown autocmd runs
--- `vim.treesitter.start` on each markdown buffer (wrapped in pcall so a
--- query-loader incompatibility
--- degrades to syntax-on rather than raising). Base markdown highlighting is NOT
--- what that buys — nvim starts treesitter on such a buffer by itself, as above.
--- What the autocmd and the two rtp entries buy is routing a fenced block through
--- the injections query to its own grammar.
+-- Vendored treesitter trees resolve sibling first, then environment. Do not reorder; see
+-- runtime/nvim/README.md and notes/runtime/nvim/init.lua.md#vendored-tree-resolution.
 local function resolve_vendored_dir(sibling, env_name)
 	if uv and uv.fs_stat(sibling) then
 		return sibling
@@ -430,41 +176,14 @@ if nvim_treesitter_dir then
 	if parsers_dir then
 		vim.opt.runtimepath:prepend(parsers_dir)
 	end
-	-- Bare sibling probe, no environment fallback: see the note above.
+	-- Bare sibling probe, no environment fallback: see runtime/nvim/README.md#limitations.
 	local textobjects_dir = this_dir .. "/nvim-treesitter-textobjects"
 	if uv.fs_stat(textobjects_dir) then
 		vim.opt.runtimepath:prepend(textobjects_dir)
 	end
 
-	-- The durable user parser dir (WOLF_PARSERS_USER_DIR, created core-side in
-	-- spawn): activate the vendored nvim-treesitter as a REAL plugin so
-	-- :TSInstall compiles into it, and give user parsers precedence over the
-	-- bundled parsers tree.
-	--
-	-- Placement inside this gate is deliberate: the `require` needs the vendored
-	-- tree's lua/ on runtimepath, which the gate's prepend above provides.
-	--
-	-- The explicit `runtime` call sources plugin/nvim-treesitter.lua, which is
-	-- what registers :TSInstall / :TSUpdate / :TSUninstall / :TSLog (setup()
-	-- does not). MEASURED on the pinned nvim: `--clean` keeps 'loadplugins' on,
-	-- so an rtp-prepended tree's plugin/*.lua also load in the startup plugin
-	-- phase after this file -- the explicit call makes registration happen HERE,
-	-- deterministically, independent of that phase (the plugin guards on
-	-- vim.g.loaded_nvim_treesitter, and all its requires are lazy, so sourcing
-	-- is cheap and the later phase is a no-op for it). Only
-	-- plugin/nvim-treesitter.lua is sourced here: the sibling
-	-- query_predicates.lua registers predicates unused by every bundled language.
-	--
-	-- `setup({ install_dir = ... })` is a pure config merge (no install jobs, no
-	-- network), but it EAGERLY prepends install_dir to rtp by raw string concat.
-	-- Hence the ORDER: setup first, then `vim.opt.runtimepath:prepend` -- the
-	-- option-list prepend dedupes, so the entry lands exactly once and at the
-	-- front whether or not the pcall'd setup succeeded. The pcall degrades a
-	-- version incompatibility to "no :TSInstall" instead of a startup error.
-	--
-	-- The prepend puts the user dir AHEAD of the bundled parsers_dir prepended
-	-- above, so a user-installed parser deliberately shadows the bundled one for
-	-- the same language.
+	-- Inside the gate: require needs the vendored lua/ on rtp. setup() must precede the prepend.
+	-- See notes/runtime/nvim/init.lua.md#user-parser-activation.
 	local parsers_user_dir = vim.env.WOLF_PARSERS_USER_DIR
 	if parsers_user_dir ~= nil and parsers_user_dir ~= "" and uv.fs_stat(parsers_user_dir) then
 		vim.cmd.runtime("plugin/nvim-treesitter.lua")
@@ -499,26 +218,7 @@ if nvim_treesitter_dir then
 	end
 end
 
--- Current-file tracking: wolf-core invokes this over RPC after ui_attach,
--- passing its own RPC channel id. It registers an autocmd that notifies core of
--- the active buffer's absolute path AND its filetype on every buffer switch /
--- rename / FileType detection, and emits once immediately so the startup buffer
--- is reflected. An unnamed buffer yields an empty string from expand('%:p'),
--- which core maps to "no current file". The filetype (2nd arg, vim.bo.filetype)
--- drives core's Snapshot.is_markdown_active (the Preview command's enable gate);
--- FileType is in the event list so the filetype tracks the active buffer even
--- when detection happens after the buffer switch.
---
--- Preview scratch buffers (carrying b:wolf_preview_source) are SKIPPED: focusing
--- one emits an EMPTY path and EMPTY filetype, so core never sees the "Preview:
--- <name>" scratch name as a real current file and never reports markdown-active
--- for the (non-markdown) preview pane. The THIRD arg is a boolean, is_preview:
--- true when the active buffer is a preview scratch (drives core's
--- Snapshot.is_preview_active, the Edit command's enable gate), false otherwise.
--- The FOURTH arg is a boolean, is_full_width: the effective buffer's
--- b:wolf_full_width flag (drives core's Snapshot.is_full_width_active, the View-menu
--- "Use full width for content" checkmark). For a preview scratch this reports the
--- SOURCE buffer's flag (OQ-1), so the checkmark tracks the document, not the scratch.
+-- See runtime/nvim/README.md#wolf_setup_current_file_trackingchan.
 function _G.wolf_setup_current_file_tracking(chan)
 	local group = vim.api.nvim_create_augroup("WolfCurrentFile", { clear = true })
 	local function emit()
@@ -543,10 +243,7 @@ function _G.wolf_setup_current_file_tracking(chan)
 			)
 		end
 	end
-	-- Expose the emit closure so wolf_open_preview can re-assert the active buffer's
-	-- filetype after a reuse bind: a BACKGROUND nvim_win_set_buf into the other
-	-- (preview) window fires BufWinEnter with the preview scratch as the current
-	-- buffer, which would otherwise leave is_markdown_active stuck false.
+	-- Exposed so a background bind, whose autocmd emit describes the wrong pane, can re-assert it.
 	_G.wolf_emit_current_file = emit
 	vim.api.nvim_create_autocmd({ "BufEnter", "BufWinEnter", "BufFilePost", "FileType" }, {
 		group = group,
@@ -556,26 +253,11 @@ function _G.wolf_setup_current_file_tracking(chan)
 	emit()
 end
 
--- Suppression flag for wolf_buffers emits, consulted by wolf_setup_buffer_tracking's
--- emit(). While TRUE, emit() returns immediately without notifying core.
---
--- Needed because a multi-step window build (wolf_toggle_terminal's OPEN path) fires
--- WinNew/WinEnter/BufEnter SYNCHRONOUSLY, mid-build, at points where the new window
--- still shows the PREVIOUS buffer or the drawer's terminal buffer is not yet tagged
--- b:wolf_terminal. Core's history fold pushes on every observed CHANGE, so an
--- intermediate wrong emit persists in the pane's stack even if a later emit is
--- correct -- the emits must be SUPPRESSED, not corrected afterwards.
---
--- LOAD-BEARING: whoever sets this MUST clear it on every exit path (including
--- errors), or per-window buffer tracking dies for the rest of the session. Use
--- wolf_suppress_buffers(fn), which is pcall-guarded, rather than setting it directly.
+-- Set only through wolf_suppress_buffers: a flag left true kills buffer tracking for the session.
+-- See runtime/nvim/README.md#wolf_suppress_buffersfn.
 _G.wolf_buffers_suppressed = false
 
--- Runs `fn` with wolf_buffers emits SUPPRESSED, then restores the previous flag,
--- re-emits ONCE so core sees the fully-built final state, and finally re-raises any
--- error `fn` raised. The flag is cleared even when `fn` errors (the pcall), which is
--- what keeps buffer tracking alive for the rest of the session. Nests safely (the
--- previous value is saved/restored, and only the OUTERMOST call re-emits).
+-- Nests: only the outermost call re-emits, and an error is re-raised after the flag is restored.
 function _G.wolf_suppress_buffers(fn)
 	local prev = _G.wolf_buffers_suppressed
 	_G.wolf_buffers_suppressed = true
@@ -589,53 +271,8 @@ function _G.wolf_suppress_buffers(fn)
 	end
 end
 
--- Per-window buffer tracking: wolf-core invokes this over RPC after ui_attach (and
--- right after the current-file setup), passing its own RPC channel id. It registers
--- autocmds that notify core, via wolf_buffers, of what EVERY window of the whole
--- nvim INSTANCE is showing -- the scan below is nvim_list_wins(), which is global
--- across tabpages, so with two tabpages open both tabpages' windows are in one
--- payload -- a list of five-element tuples
---   { win, nvim_buf_get_name(buf), buf, is_terminal, is_drawer }
--- -- so the front-end can render a per-pane statusbar keyed by window handle AND
--- core can derive a per-pane navigation-history target. It emits once immediately so
--- the startup layout is reflected without a change.
---
--- The tuple elements:
---   1. win          -- the window handle (the map key on both sides).
---   2. name         -- nvim_buf_get_name(buf); absolute for a file buffer, EMPTY for
---                      an unnamed one. Core's legacy `buffers` map SKIPS empty names
---                      (an unnamed pane reports "[No Name]"); the parallel
---                      `win_buffers` map keeps the window with path = nil.
---   3. buf          -- the buffer NUMBER, so core can track an unnamed buffer's
---                      identity (Untitled { bufnr }) across navigation.
---   4. is_terminal  -- vim.bo[buf].buftype == "terminal".
---   5. is_drawer    -- whether this is the per-project terminal DRAWER, which is
---                      EXCLUDED from navigation history (a :terminal in a NORMAL
---                      split is NOT excluded). Read from the BUFFER tag
---                      (b:wolf_terminal, set at drawer creation and carried by the
---                      shared terminal buffer forever) OR'd with the WINDOW tag
---                      (w:wolf_terminal, set on the drawer window right after its
---                      split) -- belt-and-braces, so the drawer stays identifiable
---                      even if the shared terminal buffer is ever surfaced elsewhere.
---
--- The whole current window set is re-emitted on each autocmd; core WHOLESALE-
--- REPLACES both per-window maps, so stale/closed windows drop out. WinClosed fires
--- while the closing window is still listed by nvim_list_wins(), but re-emitting the
--- full current set is still correct: the survivor set replaces the previous one.
---
--- COALESCED, NOT SYNCHRONOUS. Each autocmd only ARMS an emit; the actual scan +
--- rpcnotify runs once, on the next event-loop tick, via vim.schedule. This is
--- LOAD-BEARING for the per-pane navigation history, which pushes an entry on every
--- observed CHANGE and so must never see a half-built window:
---   * `:terminal` fires BufEnter (brand-new UNNAMED buffer), then BufFilePost (name
---     now "term://..."), and only sets buftype = "terminal" by TermOpen. Emitting on
---     each would push Untitled{n}, then Edit("term://..."), then Terminal{n} -- three
---     history entries for one user action. Coalesced, core sees only the settled
---     Terminal{n}.
---   * `botright split` (the terminal drawer) fires WinNew/WinEnter with the new
---     window still showing the PREVIOUS buffer.
--- Coalescing also collapses the 2-4 identical emits a plain `:e file` produces into
--- one, which keeps stale in-flight notifications from racing a back/forward move.
+-- Spans every tabpage (nvim_list_wins). Coalesced through vim.schedule, never synchronous; see
+-- runtime/nvim/README.md#decisions and notes/runtime/nvim/init.lua.md#buffer-tracking-emits.
 function _G.wolf_setup_buffer_tracking(chan)
 	local group = vim.api.nvim_create_augroup("WolfBuffers", { clear = true })
 	-- Scans every window and notifies core. Only ever called from the scheduled
@@ -644,11 +281,8 @@ function _G.wolf_setup_buffer_tracking(chan)
 		local list = {}
 		for _, win in ipairs(vim.api.nvim_list_wins()) do
 			local buf = vim.api.nvim_win_get_buf(win)
-			-- Skip preview scratch panes (b:wolf_preview_source): the front-end
-			-- overlays a web view and paints its own "Preview: <name>" statusbar, so
-			-- core must not track the bogus scratch name as a real per-window path.
-			-- This is also what keeps the two maps (`win_buffers` / `previews`)
-			-- DISJOINT, which the history fold relies on.
+			-- Skip preview scratches: their name is not a real path, and win_buffers / previews must stay
+			-- disjoint for the history fold.
 			if vim.b[buf].wolf_preview_source == nil then
 				list[#list + 1] = {
 					win,
@@ -666,9 +300,7 @@ function _G.wolf_setup_buffer_tracking(chan)
 	-- produces exactly ONE notification, carrying the SETTLED state.
 	local pending = false
 	local function emit()
-		-- Mid-build suppression (see wolf_suppress_buffers): a partially-built
-		-- window must never reach core's history fold. Checked here AND at delivery,
-		-- because a suppressed region may open after the emit was armed.
+		-- Suppression is checked when armed and again at delivery: a suppressed region may open between.
 		if _G.wolf_buffers_suppressed or pending then
 			return
 		end
@@ -697,19 +329,7 @@ function _G.wolf_setup_buffer_tracking(chan)
 	emit()
 end
 
--- Per-window full-width tracking: wolf-core invokes this over RPC after ui_attach
--- (right after buffer tracking), passing its own RPC channel id. It registers
--- autocmds that notify core, via wolf_full_width, of the full-width flag of the
--- buffer shown in EVERY window of the current tabpage -- a list of
--- { win, vim.b[buf].wolf_full_width == true } pairs -- so the front-end can thread a
--- pane's content-width mode (full vs the ~90-char default) into its geometry keyed by
--- window handle. It emits once immediately so the startup layout is reflected.
---
--- Mirrors wolf_setup_buffer_tracking: the whole current window set is re-emitted on
--- each autocmd and core WHOLESALE-REPLACES its per-window map, so stale/closed windows
--- drop out. Unlike buffer tracking, preview scratch panes are NOT skipped -- a window
--- absent from the map defaults to false core-side, and a preview pane's own flag is
--- irrelevant (the front-end frames the preview off the SOURCE flag via wolf_preview).
+-- See runtime/nvim/README.md#wolf_setup_full_widthchan.
 function _G.wolf_setup_full_width(chan)
 	local group = vim.api.nvim_create_augroup("WolfFullWidth", { clear = true })
 	local function emit()
@@ -734,20 +354,7 @@ function _G.wolf_setup_full_width(chan)
 	emit()
 end
 
--- Directory tracking: wolf-core invokes this over RPC after ui_attach (and after
--- the current-file / layout setups), passing its own RPC channel id. It registers
--- a DirChanged autocmd (pattern '*', covering :cd/:lcd/:tcd) that notifies core of
--- the new working directory via wolf_cwd, and emits once immediately so the startup
--- cwd is reflected without a directory change. Core tracks this in a sibling cell
--- (not the render snapshot) and uses it to scope the global MRU store by the live cwd.
---
--- The one-shot INITIAL emit carries a distinguishing `true` second arg; the
--- DirChanged callback carries no second arg (treated as false). Core uses this
--- flag to TRACK the launch/initial cwd (in its sibling cell) WITHOUT persisting
--- it to state.json or recording it in the recent-dirs MRU — the passive launch
--- cwd is not a directory the user opened, so only genuine DirChanged events
--- (every real :cd/:lcd/:tcd, including the Open-Folder chdir) are persisted and
--- recorded.
+-- See runtime/nvim/README.md#wolf_setup_dir_trackingchan.
 function _G.wolf_setup_dir_tracking(chan)
 	local group = vim.api.nvim_create_augroup("WolfDir", { clear = true })
 	vim.api.nvim_create_autocmd("DirChanged", {
@@ -762,19 +369,7 @@ function _G.wolf_setup_dir_tracking(chan)
 	vim.rpcnotify(chan, "wolf_cwd", vim.fn.getcwd(), true)
 end
 
--- Theme tracking: wolf-core invokes this over RPC after ui_attach (and after
--- the current-file / layout / dir setups), passing its own RPC channel id. It
--- registers a ColorScheme autocmd (pattern '*', covering :colorscheme and
--- :set background=..., which re-sources the active scheme) that notifies core
--- of the effective WolfCursor / WolfTitlebar highlight-group colors via
--- wolf_theme, and emits once immediately so the startup colorscheme is
--- reflected without a theme change. The payload is FOUR flat scalars
--- (cursor_fg, cursor_bg, titlebar_fg, titlebar_bg), each a packed 0xRRGGBB
--- color or -1 for an unset channel — flat scalars sidestep the empty-Lua-table
--- map-vs-array msgpack ambiguity a table payload would have for a cleared
--- group. Groups are read with link = false so a linked group resolves to its
--- target's effective attributes; the pcall is defensive (a never-defined name
--- yields {} anyway, but the pcall costs nothing).
+-- See runtime/nvim/README.md#wolf_setup_theme_trackingchan.
 function _G.wolf_setup_theme_tracking(chan)
 	local function group(name)
 		local ok, h = pcall(vim.api.nvim_get_hl, 0, { name = name, link = false })
@@ -807,43 +402,11 @@ function _G.wolf_setup_theme_tracking(chan)
 	emit()
 end
 
--- Batch treesitter highlighter for the Markdown preview's fenced/indented code
--- blocks. wolf-core (crate nvim.rs::highlight_code_blocks) invokes this over
--- `nvim_exec_lua` with ONE argument: an array of { text, lang } pairs (lang is ""
--- when the fence declares none). It returns an array `results` of the SAME length,
--- highlighting the whole batch in one RPC round-trip.
---
--- results[i] is either:
---   * the scalar `false` -- the i-th block is NOT highlightable (no/unknown
---     language, missing parser, missing `highlights` query, a parse failure, or no
---     resolved spans at all), OR
---   * an array of fixed 7-element span tuples
---     { row, start_col, end_col, fg, bold, italic, underline }.
--- A span is a single-line, non-overlapping byte-column run: `row` is 0-based within
--- the block text (text split on "\n"), `start_col`/`end_col` are 0-based half-open
--- BYTE columns, `fg` is a packed 0xRRGGBB integer or -1 (no foreground), and the
--- three attributes are Lua booleans.
---
--- CONTRACT: NEVER return an empty Lua table for a block -- msgpack cannot tell an
--- empty array from an empty map, so a non-highlightable OR empty-result block is the
--- scalar `false`. Each span is always a full 7-element array.
---
--- Defined at MODULE LEVEL (not inside the conditional treesitter block) so it exists
--- on EVERY platform, and the `false` decision above is taken per LANGUAGE rather than
--- per platform. It is deliberately NOT gated on the vendored trees: nvim ships seven
--- parsers of its own -- c, lua, markdown, markdown_inline, query, vim, vimdoc -- and
--- each resolves through get_string_parser AND carries a `highlights` query, so a
--- ```lua or ```c fence highlights on Linux/cargo with nothing vendored at all. What
--- the vendored trees add is every OTHER language: go, rust, python, javascript and
--- the rest find nothing and degrade to `false` until they are staged.
+-- Never return an empty table for a block (msgpack reads it as a map): use false. Module level on
+-- purpose; see runtime/nvim/README.md#wolf_highlight_code_blocksblocks.
 function _G.wolf_highlight_code_blocks(blocks)
-	-- Resolve a treesitter capture NAME (e.g. "function.call") to its effective
-	-- highlight style via an @-prefixed `nvim_get_hl` lookup (link = false so a
-	-- linked group resolves to its target's attributes -- the same pattern
-	-- wolf_setup_theme_tracking uses). On an EMPTY result and a dotted name, retry
-	-- against successively trimmed prefixes ("@function.call" -> "@function"), matching
-	-- treesitter's group fallback. Returns { fg, bold, italic, underline } or nil when
-	-- the group has no foreground AND no emphasis (skip it -- no empty <span style="">).
+	-- Resolve a capture to its style via @name, trimming dotted suffixes like treesitter's fallback.
+	-- nil when there is no fg and no emphasis, so no empty <span style=""> is emitted.
 	local function resolve(name)
 		local hl = nil
 		local candidate = name
@@ -904,9 +467,8 @@ function _G.wolf_highlight_code_blocks(blocks)
 			return cached
 		end
 
-		-- Per-line, per-byte winner map: winners[r][col] = { style, prio, order }.
-		-- `order` is a monotonic counter so a later capture wins a same-priority tie,
-		-- matching nvim's "later capture wins" precedence.
+		-- winners[r][col] = { style, prio, order }; order breaks priority ties so a later capture wins,
+		-- as in nvim.
 		local winners = {}
 		local order = 0
 		for id, node, metadata in query:iter_captures(root, text, 0, -1) do
@@ -993,30 +555,10 @@ function _G.wolf_highlight_code_blocks(blocks)
 	return results
 end
 
--- Split-panes layout overrides: wolf-core invokes this over RPC after ui_attach
--- (and after current-file tracking), passing its own RPC channel id. The SHELL
--- owns the pane layout, so Neovim's split/close/focus chords and the
--- :split/:vsplit/:close Ex-commands are rebound to report layout INTENTS over
--- `rpcnotify` rather than (or in addition to) performing the native window op.
---
--- Asymmetry (decision D4):
---   * SPLIT: nvim PERFORMS the real :split/:vsplit (so it creates the window +
---     grid and emits win_pos) AND reports a wolf_layout{action='split'} intent so
---     the shell learns the orientation, the origin window, and the new window.
---   * CLOSE: nvim PERFORMS a guarded nvim_win_close (refusing to close the last
---     window); the shell observes the removal via the win_close redraw event, so
---     NO intent is emitted for a close.
---   * FOCUS move: a PURE intent — nvim does NOT change focus; it only reports
---     wolf_layout{action='focus_dir'} and the shell drives the focus change.
---
--- A WinEnter autocmd reports the active window via wolf_active_win (emitting once
--- immediately) so core's snapshot tracks the focused pane. BufEnter (current-file
--- tracking, above) already follows focus, so current_file tracks the active pane.
+-- See runtime/nvim/README.md#wolf_setup_layoutchan; split, close and focus are asymmetric.
 function _G.wolf_setup_layout(chan)
-	-- SPLIT: capture the window that is current BEFORE the split, perform the real
-	-- split (the new window becomes current), then report both handles. Orientation
-	-- 'h' = :split (stacked / Horizontal divider), 'v' = :vsplit (side-by-side /
-	-- Vertical divider).
+	-- 'h' = :split (stacked), 'v' = :vsplit (side by side). nvim splits first, then both handles are
+	-- reported.
 	local function do_split(orient)
 		local from = vim.api.nvim_get_current_win()
 		vim.cmd(orient == "h" and "split" or "vsplit")
@@ -1036,24 +578,8 @@ function _G.wolf_setup_layout(chan)
 		end
 	end
 
-	-- QUIT: the :q family (q/quit/wq/x/xit and their banged variants) routed into
-	-- Wolf's pane/window model. `opts = { write = bool, force = bool, all = bool }`.
-	--   * write variants (wq/x/xit) write first; a FAILED write ABORTS the quit
-	--     (native parity -- a failed :wq must not close).
-	--   * multi-pane (NON-all): guarded nvim_win_close(0, force) like do_close;
-	--     force=false refuses to discard unsaved changes, force=true (from :q!)
-	--     discards. No intent -- the shell observes the removal via the win_close
-	--     redraw event.
-	--   * last pane: fire the existing close_window registry command so the
-	--     front-end closes the window -- BUT a plain :q on a modified buffer is
-	--     REFUSED with a native-style E37 (:q! overrides), preventing data loss.
-	--   * all=true (the :qa family: qa/qall/quitall/wqa/wqall/xa/xall + banged):
-	--     SKIP the pane-count check so control ALWAYS reaches the close-window
-	--     branch -- the whole front-end window closes regardless of how many panes
-	--     are open. Same write/force/current-buffer-modified (E37) semantics as
-	--     :q's last-pane branch; the modified guard stays scoped to the current
-	--     buffer (vim.bo.modified), matching :q -- it is not expanded to scan all
-	--     panes.
+	-- A failed write aborts the quit; a plain quit of a modified last pane is refused with E37.
+	-- all=true skips the pane count; the modified guard stays current-buffer only, as for :q.
 	local function do_quit(opts)
 		if opts.write then
 			local ok = pcall(vim.cmd, opts.force and "write!" or "write")
@@ -1085,10 +611,7 @@ function _G.wolf_setup_layout(chan)
 		})
 	end
 
-	-- DRAWER OPEN: report the newly created terminal-drawer window. Unlike a split
-	-- this carries no `from`/`orientation` -- the front-end renders the drawer as a
-	-- full-width, root-bottom pane held OUTSIDE its pure PaneTree. Reached from
-	-- `wolf_toggle_terminal` (a module-level global) once the layout channel is set.
+	-- No from/orientation: the front-end holds the drawer outside its PaneTree as a root-bottom pane.
 	local function emit_drawer(win)
 		vim.rpcnotify(chan, "wolf_layout", {
 			action = "drawer_open",
@@ -1096,9 +619,7 @@ function _G.wolf_setup_layout(chan)
 		})
 	end
 
-	-- Expose the helpers as globals so the cnoreabbrev Ex-command overrides below
-	-- can invoke them from the command line via `lua ...` (and so `wolf_toggle_terminal`
-	-- can emit the drawer intent over this setup's layout channel).
+	-- Globals so the cnoreabbrev overrides and wolf_toggle_terminal can reach this channel.
 	_G.wolf_do_split = do_split
 	_G.wolf_do_close = do_close
 	_G.wolf_do_quit = do_quit
@@ -1124,22 +645,15 @@ function _G.wolf_setup_layout(chan)
 	map("n", "<C-w>l", function() do_focus("right") end, silent)
 	map("n", "<C-w><Right>", function() do_focus("right") end, silent)
 
-	-- Terminal-mode window chords so the drawer is keyboard-navigable WITHOUT first
-	-- leaving terminal-insert. A `t`-mode function RHS fires the pure focus intent
-	-- (`from` = the drawer window) without forwarding `<C-w>` to the shell. TRADEOFF:
-	-- this shadows the shell's `<C-w>` word-erase inside the terminal -- accepted per
-	-- the user's request. `<C-w>k` bridges drawer -> editor; the others are handled
-	-- front-end-side (drawer is full-width, so h/l are no-ops there).
+	-- t-mode chords fire the focus intent without leaving terminal-insert. They shadow the shell's
+	-- <C-w> word-erase, an accepted tradeoff; h/l are no-ops for the full-width drawer.
 	map("t", "<C-w>h", function() do_focus("left") end, silent)
 	map("t", "<C-w>j", function() do_focus("down") end, silent)
 	map("t", "<C-w>k", function() do_focus("up") end, silent)
 	map("t", "<C-w>l", function() do_focus("right") end, silent)
 
-	-- Re-entry: auto-enter terminal-insert when focus lands IN the drawer (via
-	-- `<C-w>j` from the editor, which drives `nvim_set_current_win` and fires
-	-- WinEnter). Matched on the drawer's identity (`b:wolf_terminal` +
-	-- `buftype == 'terminal'`) so it never yanks back from a deliberate
-	-- `<C-\><C-n>` (same window, no WinEnter). VS Code parity.
+	-- Re-enter terminal-insert when focus lands in the drawer; keyed on the drawer's identity so a
+	-- deliberate <C-\><C-n> (same window, no WinEnter) is never undone.
 	local terminsert = vim.api.nvim_create_augroup("WolfTerminalInsert", { clear = true })
 	vim.api.nvim_create_autocmd({ "WinEnter", "BufWinEnter" }, {
 		group = terminsert,
@@ -1150,10 +664,8 @@ function _G.wolf_setup_layout(chan)
 		end,
 	})
 
-	-- Ex-command overrides via cnoreabbrev. A command-line abbreviation expands
-	-- only a WHOLE word, guarded by getcmdtype()==':' so it never fires inside a
-	-- search or a larger command. This is the fragile path (whole-word only); the
-	-- chords above are the robust primary. :new/:vnew are treated as plain splits.
+	-- Whole-word, ':'-only abbreviations: fragile, so the chords above are the primary path.
+	-- :new / :vnew are treated as plain splits.
 	local function abbrev(word, replacement)
 		vim.cmd(string.format(
 			"cnoreabbrev <expr> %s (getcmdtype()==':' && getcmdline()==%q) ? %q : %q",
@@ -1171,19 +683,8 @@ function _G.wolf_setup_layout(chan)
 	abbrev("new", "lua wolf_do_split('h')")
 	abbrev("vnew", "lua wolf_do_split('v')")
 
-	-- QUIT family: the bare word expands to an INTERNAL banged user command (NOT a
-	-- registry command). Typing :q! fires the bare-`q` abbrev (getcmdline()=='q'
-	-- still true), so `q` -> WolfQuit and the trailing `!` rides through to
-	-- :WolfQuit! -- a valid banged invocation whose callback sees o.bang == true.
-	-- The :qa family (qa/qall/quitall -> WolfQuitAll; wqa/wqall/xa/xall ->
-	-- WolfWriteQuitAll) works the same way and passes all=true so do_quit always
-	-- closes the window. `a` is a keyword char, so :qa forms a distinct word and
-	-- never triggers the bare-`q` abbrev. These are internal plumbing user commands,
-	-- NOT registry commands (no command.rs/FFI/Swift changes).
-	-- CRITICAL: do NOT add q!/quit!/wq!/qa!/wqa! etc. abbrevs; `!` is not a keyword
-	-- char and such an abbrev would be dead/broken. For the banged forms the `!`
-	-- rides through to :WolfQuit! / :WolfQuitAll! / :WolfWriteQuitAll! (o.bang ->
-	-- force).
+	-- Never add q! / wq! / qa! abbrevs: '!' is not a keyword char, so the bare-word abbrev fires and
+	-- the '!' rides through to o.bang. See runtime/nvim/README.md#decisions.
 	vim.api.nvim_create_user_command("WolfQuit", function(o)
 		do_quit({ write = false, force = o.bang })
 	end, { bang = true, nargs = 0 })
@@ -1221,20 +722,8 @@ function _G.wolf_setup_layout(chan)
 	vim.rpcnotify(chan, "wolf_active_win", vim.api.nvim_get_current_win())
 end
 
--- Commands: wolf-core invokes this over RPC after ui_attach (last, after the
--- current-file / layout / dir / theme setups), passing its own RPC channel id and
--- the command list. A Command is a no-parameter, no-return user action. Unlike
--- layout intents, commands are ONLY user-triggered: there is no autocmd and no
--- emit-on-attach.
---
--- `commands` is a list of {id, ex_command} pairs (the canonical registry Rust
--- passes in from COMMAND_SPECS). For each pair this:
---   * seeds package.loaded['wolf'][id] = function() rpcnotify(chan,'wolf_command',id) end
---     so `require('wolf').<id>()` resolves under --clean (require consults
---     package.loaded first; a plain global would NOT satisfy `require`); and
---   * creates a :<ex_command> user command (nargs=0, force=true) whose callback
---     rpcnotifies the same wolf_command channel with the id.
--- Core folds the id back into a Command via Command::from_id and drains it.
+-- Seeding package.loaded is what makes require('wolf') resolve under --clean; a global would not.
+-- See runtime/nvim/README.md#wolf_setup_commandschan-commands.
 function _G.wolf_setup_commands(chan, commands)
 	-- Seed the `wolf` module so `require('wolf')` resolves under --clean.
 	local wolf_tbl = package.loaded["wolf"] or {}
@@ -1253,14 +742,9 @@ function _G.wolf_setup_commands(chan, commands)
 	end
 end
 
--- Tabpage helpers: module-level globals wolf-core invokes over `nvim_exec_lua`
--- to realize the project/tabpage-per-view model (one nvim TABPAGE per front-end
--- view). Defined at module level so they exist regardless of setup ordering.
+-- Tabpage helpers (one nvim tabpage per front-end view), at module level so setup order is moot.
 
--- Create a new tabpage, optionally rooting it at `cwd` via `:tcd` (the tab-local
--- cwd -- each view owns its own working directory), and return its STABLE handle
--- (nvim_get_current_tabpage()). An empty/nil cwd leaves the new tab at the global
--- cwd (the empty-state view). The path is fnameescape'd for the command line.
+-- See runtime/nvim/README.md#wolf_create_tabpagecwd.
 function _G.wolf_create_tabpage(cwd)
 	vim.cmd("tabnew")
 	if cwd ~= nil and cwd ~= "" then
@@ -1269,18 +753,8 @@ function _G.wolf_create_tabpage(cwd)
 	return vim.api.nvim_get_current_tabpage()
 end
 
--- Realize a saved pane-split tree (a JSON string, decoded via vim.json.decode) in
--- the current tabpage's single starting window, and return the resulting window
--- handles in DFS/leaf order -- the SAME order as the front-end PaneTree.leaves() /
--- PaneTree.rebuilt, so the front-end can zip each handle to its rebuilt leaf. The
--- spec shape matches PaneLayoutCodec.specJSON:
---   * leaf:  { leaf = true, path = "<abs path or empty>", preview = true|false }
---   * split: { orientation = "h"|"v", weights = {...}, children = {...} }
--- nvim produces only the window COUNT + TOPOLOGY + per-window BUFFER: a preview leaf
--- (preview = true, non-empty path) turns its window into a Markdown preview of that
--- SOURCE file via wolf_preview_file; a non-preview leaf with a non-empty path is
--- :edit'd; an empty leaf keeps its inherited unnamed buffer. Pane SIZES come later
--- from the front-end's weights via syncGridSizes.
+-- Handles come back in DFS leaf order, which must match the front-end's PaneTree.leaves(). See
+-- runtime/nvim/README.md#wolf_rebuild_layoutspec_json.
 function _G.wolf_rebuild_layout(spec_json)
 	local ok, spec = pcall(vim.json.decode, spec_json)
 	if not ok or spec == nil then
@@ -1291,11 +765,8 @@ function _G.wolf_rebuild_layout(spec_json)
 		if node.leaf then
 			local win = vim.api.nvim_get_current_win()
 			if node.preview and node.path ~= nil and node.path ~= "" then
-				-- Recreate a Markdown preview of the saved source file IN this window
-				-- (bufadd/bufload/markdown-gate + nvim_win_set_buf), converting the
-				-- window into a preview without creating/destroying it (handle intact
-				-- for DFS correspondence). A failure (missing/non-md source) leaves the
-				-- inherited buffer -- the handle is still returned.
+				-- Convert this window into a preview in place, keeping its handle for the DFS correspondence;
+				-- on failure the inherited buffer stays and the handle is still returned.
 				wolf_preview_file(win, node.path)
 			elseif node.path ~= nil and node.path ~= "" then
 				vim.cmd("edit " .. vim.fn.fnameescape(node.path))
@@ -1307,10 +778,7 @@ function _G.wolf_rebuild_layout(spec_json)
 		local n = #children
 		local vertical = node.orientation == "v"
 
-		-- Create n region windows in order, starting from the current window. Each
-		-- new window is placed to the right (vsplit) / below (split) of the previous
-		-- one, so regions read left-to-right / top-to-bottom (child 0 first). Pane
-		-- sizes are irrelevant here (the front-end drives them from its weights).
+		-- Regions open rightbelow, so they read left-to-right / top-to-bottom, child 0 first.
 		local regions = { vim.api.nvim_get_current_win() }
 		for _ = 2, n do
 			vim.api.nvim_set_current_win(regions[#regions])
@@ -1332,11 +800,7 @@ function _G.wolf_rebuild_layout(spec_json)
 	return realize(spec)
 end
 
--- Close the tabpage named by its STABLE handle. Tabpage NUMBERS renumber as tabs
--- open/close, so we resolve the handle to its CURRENT number and run `<n>tabclose`
--- inside a pcall: this swallows a last-tabpage E784 (the front-end never closes
--- the last view -- the Project shuts the whole nvim down instead). A stale/invalid
--- handle also degrades to a no-op via the guarding pcall.
+-- See runtime/nvim/README.md#wolf_close_tabpagehandle.
 function _G.wolf_close_tabpage(handle)
 	local ok, n = pcall(vim.api.nvim_tabpage_get_number, handle)
 	if not ok or n == nil then
@@ -1345,10 +809,7 @@ function _G.wolf_close_tabpage(handle)
 	pcall(vim.cmd, n .. "tabclose")
 end
 
--- Toggle the per-project terminal drawer. The terminal BUFFER is a single shared
--- buffer for this nvim instance (tagged b:wolf_terminal); the drawer WINDOW is
--- per-tabpage. Hiding closes the window only -- the terminal buffer/job persist
--- (VS Code behavior). Recreated on demand if the user exited the shell.
+-- See runtime/nvim/README.md#wolf_toggle_terminal.
 function _G.wolf_toggle_terminal()
 	-- 1. Find the tagged terminal buffer (buffers are global to the nvim).
 	local termbuf = nil
@@ -1374,17 +835,8 @@ function _G.wolf_toggle_terminal()
 		end
 	end
 
-	-- 3. Otherwise open a bottom split ~1/3 tall showing the terminal
-	--    (creating + tagging a fresh one if it is gone).
-	--
-	--    The whole build runs with wolf_buffers emits SUPPRESSED. `botright split`
-	--    fires WinNew/WinEnter SYNCHRONOUSLY with the new window still showing the
-	--    PREVIOUS buffer, and on the fresh path `:terminal` fires BufEnter BEFORE
-	--    b:wolf_terminal is set -- both would feed the drawer window into core's
-	--    navigation history (which the drawer is EXCLUDED from), and an intermediate
-	--    wrong push persists even if a later emit is correct. wolf_suppress_buffers
-	--    clears the flag even if a step errors, and re-emits ONCE at the end so core
-	--    sees the fully-tagged final state.
+	-- 3. Otherwise open a bottom split ~1/3 tall, under wolf_suppress_buffers: the build's synchronous
+	-- WinNew / BufEnter would otherwise push untagged drawer states into navigation history.
 	local height = math.max(1, math.floor(vim.o.lines / 3))
 	local termwin_buf
 	wolf_suppress_buffers(function()
@@ -1398,27 +850,16 @@ function _G.wolf_toggle_terminal()
 			vim.cmd("terminal")
 			vim.b.wolf_terminal = true
 		end
-		-- Default the terminal drawer to FULL WIDTH. Capture the buffer actually
-		-- bound into the drawer window (the reused termbuf on the persisted path, or
-		-- the freshly-created terminal buffer entered by `:terminal`) and tag it.
-		-- Still user-toggleable via :WolfFullWidth (this only sets the default).
+		-- Default the drawer's buffer to full width (still toggleable via :WolfFullWidth).
 		termwin_buf = vim.api.nvim_get_current_buf()
 		vim.b[termwin_buf].wolf_full_width = true
 	end)
-	-- Report the new drawer window so the front-end renders it as a full-width
-	-- root-bottom pane (it lives OUTSIDE the pure PaneTree). `botright split`
-	-- performs the real window op; this intent is what makes it VISIBLE. Guarded
-	-- because the emitter only exists once `wolf_setup_layout` has run.
+	-- This intent is what makes the drawer visible; guarded until wolf_setup_layout has run.
 	local w = vim.api.nvim_get_current_win()
 	if _G.wolf_emit_drawer then
 		_G.wolf_emit_drawer(w)
 	end
-	-- Re-emit the full-width state on this same wake so the front-end learns the
-	-- drawer's full-width default immediately -- the per-window `wolf_full_width`
-	-- and current-file autocmds fire when the terminal buffer is ENTERED, BEFORE
-	-- the var is set above, so an explicit re-emit is needed for determinism.
-	-- current_file drives is_full_width_active (the View-menu checkmark for the
-	-- focused terminal); full_width drives the drawer window's pane geometry.
+	-- Explicit re-emit: the autocmds fired on entering the terminal, before wolf_full_width was set.
 	if _G.wolf_emit_current_file then
 		_G.wolf_emit_current_file()
 	end
@@ -1428,14 +869,7 @@ function _G.wolf_toggle_terminal()
 	vim.cmd("startinsert")
 end
 
--- Toggle the active buffer's content width between the ~90-char default and full
--- pane width. Flips b:wolf_full_width on the EFFECTIVE buffer: when the current
--- buffer is a preview scratch (it carries b:wolf_preview_source_bufnr), the SOURCE
--- buffer is targeted (OQ-1) so the visible preview resizes and the document's editor
--- + preview views stay consistent; otherwise the current buffer is targeted. After
--- flipping, re-emits the current-file (menu checkmark), per-window full-width (editor
--- pane geometry), and previews (preview pane framing) notifications so the front-end
--- resizes the content. Defined alongside wolf_toggle_terminal.
+-- See runtime/nvim/README.md#wolf_toggle_full_width.
 function _G.wolf_toggle_full_width()
 	local cur = vim.api.nvim_get_current_buf()
 	-- Resolve the effective buffer: the SOURCE buffer when the current pane is a
@@ -1459,11 +893,7 @@ function _G.wolf_toggle_full_width()
 	end
 end
 
--- Return the tab-local working directory of the tabpage named by its STABLE
--- handle (authoritative for a NON-current view's cwd). Maps the stable handle to
--- its current NUMBER (which getcwd(-1, n) needs) and returns getcwd(-1, n), which
--- falls back to the global cwd for a tab that was never `:tcd`'d. A stale/invalid
--- handle returns "" (core maps that to "no cwd").
+-- See runtime/nvim/README.md#wolf_tab_cwdhandle.
 function _G.wolf_tab_cwd(handle)
 	local ok, n = pcall(vim.api.nvim_tabpage_get_number, handle)
 	if not ok or n == nil then
@@ -1476,30 +906,7 @@ function _G.wolf_tab_cwd(handle)
 	return dir
 end
 
--- Tabpage tracking + navigation/creation lockout: wolf-core invokes this over RPC
--- after the command setup, passing its own RPC channel id. It notifies core of the
--- current tabpage handle via wolf_tabpage on every TabEnter/TabNewEntered (emitting
--- once immediately), so core's snapshot tracks the current tabpage (the cheap
--- refocus gate the front-end uses).
---
--- It ALSO notifies core of EVERY tabpage's tab-local cwd via wolf_tab_cwds on
--- every DirChanged/TabNewEntered/TabClosed (emitting once immediately). The
--- payload is a list of { tabpage_handle, getcwd(-1, n) } pairs for all tabpages
--- (getcwd(-1, n) is the tab-local cwd, falling back to the global cwd for a tab
--- never `:tcd`'d). Core WHOLESALE-REPLACES its per-tabpage cwd map, so a closed
--- tab (TabClosed cannot report the closed handle) drops out. This lets core's
--- cwd_for_tabpage be a cheap snapshot read (no blocking RPC), authoritative even
--- for a NON-current view's cwd.
---
--- LOCKOUT (OD4): Wolf owns ALL tabpage lifecycle (create/close/switch), so the
--- nvim-internal tabpage navigation/creation chords are mapped to <Nop> and the
--- typed :tab* Ex-commands are best-effort intercepted. A user-typed :tabnew would
--- create an ORPHAN tabpage no view is bound to; :tabnext/:tabonly/:tabclose would
--- switch/close a tabpage out from under a view and desync the front-end-authoritative
--- current view. The per-view cwd command :tcd is DELIBERATELY not locked out (it is
--- a different word from the :tab* commands, so the whole-word abbrevs never catch
--- :tcd/:tcd!/:lcd/:cd). Residual gaps (obscure typed variants / abbreviations) are
--- an accepted v1 limitation (documented).
+-- See runtime/nvim/README.md#wolf_setup_tabschan; the tabpage lockout is under Decisions.
 function _G.wolf_setup_tabs(chan)
 	local group = vim.api.nvim_create_augroup("WolfTabs", { clear = true })
 	vim.api.nvim_create_autocmd({ "TabEnter", "TabNewEntered" }, {
@@ -1511,9 +918,7 @@ function _G.wolf_setup_tabs(chan)
 	-- Initial emit so the startup tabpage is reflected without a switch.
 	vim.rpcnotify(chan, "wolf_tabpage", vim.api.nvim_get_current_tabpage())
 
-	-- Emit every tabpage's tab-local cwd as { handle, getcwd(-1, n) } pairs. Core
-	-- wholesale-replaces its per-tabpage cwd map from this, so a closed tab drops
-	-- out (TabClosed cannot report the closed handle).
+	-- Wholesale-replaced core-side: TabClosed cannot name the closed tab, so replacement prunes it.
 	local function emit_tab_cwds()
 		local list = {}
 		for _, tp in ipairs(vim.api.nvim_list_tabpages()) do
@@ -1542,11 +947,7 @@ function _G.wolf_setup_tabs(chan)
 		map("n", lhs, "<Nop>", silent)
 	end
 
-	-- Best-effort intercept of the typed tabpage Ex-commands via cnoreabbrev: a
-	-- command-line abbreviation expands only a WHOLE word, guarded by
-	-- getcmdtype()==':' so it never fires inside a search or a larger command, and
-	-- it expands to an EMPTY command line (a no-op on <CR>). Whole-word matching is
-	-- why :tcd/:tcd!/:lcd/:cd are NOT caught -- they are different words.
+	-- Typed :tab* commands expand to an empty line; whole-word matching leaves :tcd/:lcd/:cd alone.
 	local function lock(word)
 		vim.cmd(string.format(
 			"cnoreabbrev <expr> %s (getcmdtype()==':' && getcmdline()==%q) ? %q : %q",
@@ -1561,20 +962,7 @@ function _G.wolf_setup_tabs(chan)
 	end
 end
 
--- Tier-1 open-file mirror: wolf-core invokes this over RPC after the command
--- setup, passing its own RPC channel id. It notifies core of the file-backed
--- buffers open PER TABPAGE (plus each tabpage's active buffer) via wolf_open_files
--- on every relevant buffer/window/tab event (emitting once immediately). Core
--- mirrors this Rust-side so the open-file set survives nvim death, and the
--- front-end reopens those files after a crash restart.
---
--- The payload is a list of { tp_handle, active_path, files } triples, one per
--- tabpage. `files` is the WHOLE INSTANCE's buflisted file-backed buffer set, not
--- the tabpage's windows: listed_files() below sweeps getbufinfo({ buflisted = 1 }),
--- which is global in nvim, so every triple carries the SAME `files` no matter how
--- many tabpages are open. Preview scratch buffers (b:wolf_preview_source) and
--- unnamed buffers are excluded. Only `active_path` -- the tabpage's active window's
--- buffer name, empty for unnamed -- is genuinely per-tabpage.
+-- See runtime/nvim/README.md#wolf_setup_open_fileschan.
 function _G.wolf_setup_open_files(chan)
 	local group = vim.api.nvim_create_augroup("WolfOpenFiles", { clear = true })
 
@@ -1583,11 +971,7 @@ function _G.wolf_setup_open_files(chan)
 		return ok and val ~= nil
 	end
 
-	-- The whole nvim instance's file-backed (non-empty, non-preview) buflisted
-	-- buffer set. Buffers are GLOBAL in nvim (shared across tabpages), so this is
-	-- the authoritative "what files are open" set — it survives an `:edit` that
-	-- hides (but keeps listed) an earlier buffer, which a per-window scan would
-	-- miss. Preview scratch buffers and unnamed buffers are excluded.
+	-- Instance-wide buflisted set: survives an :edit that hides a listed buffer, unlike a window scan.
 	local function listed_files()
 		local seen = {}
 		local files = {}
@@ -1641,41 +1025,14 @@ function _G.wolf_setup_open_files(chan)
 	emit()
 end
 
--- Filesystem-change events for the file-search rescan: wolf-core invokes this
--- over RPC after the open-file mirror setup, passing its own RPC channel id. It
--- notifies core via wolf_fs_changed whenever the set of files on disk may have
--- changed, so core can re-walk its live file-search sessions (the tree sidebar
--- / picker). The payload is { event_name, abs_path } — core treats BufWritePost
--- as conditional (rescan only for a not-yet-listed path) and every other event
--- as unconditional.
---
--- Two trigger classes, two autocmds:
---
--- 1. Buffer events (BufWritePost/BufFilePost/BufDelete): the event names the
---    file that changed, so the payload carries its absolute path and the
---    callback skips non-file buffers.
--- 2. Refocus-edge events (ShellCmdPost/FocusGained/TermLeave): force catch-ups
---    for mutations nvim never saw as buffer events — a `:!mv`/`:!rm` shell
---    command, an external terminal or Finder while the app was unfocused, a
---    command run in the drawer's shell. The event names no file, so the
---    payload carries an explicit "" (no path semantics).
---
--- TermLeave rather than WinLeave: the drawer auto-startinserts on WinEnter
--- (WolfTerminalInsert augroup), so every drawer-exit path passes a t -> n
--- mode change and TermLeave covers all of them without a buftype guard.
---
--- This is a DEDICATED event rather than a reuse of wolf_open_files because that
--- augroup also fires on BufEnter/WinEnter/TabEnter, which would turn every
--- focus change into a rescan.
+-- See runtime/nvim/README.md#wolf_setup_fs_eventschan.
 function _G.wolf_setup_fs_events(chan)
 	local group = vim.api.nvim_create_augroup("WolfFsEvents", { clear = true })
 	vim.api.nvim_create_autocmd({ "BufWritePost", "BufFilePost", "BufDelete" }, {
 		group = group,
 		callback = function(args)
-			-- Skip non-file buffers (terminals, help, prompt, scratch). The
-			-- buftype read is pcall-guarded because args.buf can already be
-			-- invalid on BufDelete; an unreadable buftype fails OPEN (notify
-			-- anyway — an extra rescan is harmless, a missed one is the bug).
+			-- Skip non-file buffers. pcall because args.buf can be invalid on BufDelete; failing open is safe:
+			-- an extra rescan is harmless, a missed one is the bug.
 			local ok, buftype = pcall(function()
 				return vim.bo[args.buf].buftype
 			end)
@@ -1685,13 +1042,8 @@ function _G.wolf_setup_fs_events(chan)
 			pcall(vim.rpcnotify, chan, "wolf_fs_changed", { args.event, vim.fn.fnamemodify(args.file, ":p") })
 		end,
 	})
-	-- Separate callback, NOT a reuse of the buffer-event one: its buftype guard
-	-- would swallow TermLeave (the current buffer IS the terminal) and
-	-- FocusGained while the drawer is focused. No per-event guards. The path is
-	-- an explicit "" — for these events args.file is only the incidental current
-	-- buffer, and fnamemodify("", ":p") would fabricate the cwd; "" states "no
-	-- path semantics". The element must still be present: core's decode drops a
-	-- 1-element payload.
+	-- Separate callback: the buftype guard would swallow TermLeave. "", not fnamemodify("", ":p"),
+	-- which fabricates the cwd; the element must be present or core drops the 1-element payload.
 	vim.api.nvim_create_autocmd({ "ShellCmdPost", "FocusGained", "TermLeave" }, {
 		group = group,
 		callback = function(args)
@@ -1700,12 +1052,7 @@ function _G.wolf_setup_fs_events(chan)
 	})
 end
 
--- Per-pane view tracking for the buffer picker: wolf-core invokes this over RPC
--- after the command setup. Unlike the other setups it takes NO channel id and
--- emits NO rpcnotify — it only maintains an in-nvim (winid, bufnr) -> winsaveview
--- cache and defines the wolf_switch_buffer helper that reads it, so no
--- view/scroll payload ever crosses the FFI boundary. The cache is an upvalue so
--- wolf_switch_buffer closes over it.
+-- See runtime/nvim/README.md#wolf_setup_view_tracking.
 function _G.wolf_setup_view_tracking()
 	local view_cache = {}
 
@@ -1730,18 +1077,8 @@ function _G.wolf_setup_view_tracking()
 		end,
 	})
 
-	-- Switch window `win` to buffer `buf` (window-scoped, NOT :edit), then restore
-	-- that pane's saved view for that buffer; if the pane never showed the buffer,
-	-- force the top of the buffer. Keyed on (win, buf) so each pane remembers its
-	-- OWN scroll of a shared buffer, and never borrows another pane's scroll.
-	-- Wrapped in pcall so a stale bufnr degrades to a no-op.
-	--
-	-- Returns the pcall's ok flag (true on success, false when the bind or the view
-	-- restore threw). Every pre-existing caller (InputEvent::SwitchBuffer, over a
-	-- bare nvim_exec_lua chunk with no `return`) IGNORES the value, so this only
-	-- ADDS information; wolf_history_set_buf consumes it so a silently failed bind
-	-- (cmdwin, 'winfixbuf', a modified buffer that cannot be abandoned) is reported
-	-- to core as a 0 rather than a false success.
+	-- Keyed on (win, buf) so a pane never borrows another pane's scroll. Returns pcall's ok flag; see
+	-- runtime/nvim/README.md#wolf_switch_bufferwin-buf.
 	function _G.wolf_switch_buffer(win, buf)
 		local ok = pcall(function()
 			vim.api.nvim_win_set_buf(win, buf)
@@ -1760,57 +1097,10 @@ function _G.wolf_setup_view_tracking()
 	end
 end
 
--- ============================================================================
--- Navigation-history helpers (back / forward / jump)
---
--- wolf-core calls these over nvim_exec_lua from WolfCore::history_back /
--- history_forward / history_jump to move ONE pane to a previously-visited target.
--- Defined after wolf_setup_view_tracking so _G.wolf_switch_buffer exists.
---
--- Both are WINDOW-SCOPED (nvim_win_set_buf via wolf_switch_buffer), NEVER `:edit`:
--- no disk re-read, no current_file/file-MRU churn -- exactly like the buffer
--- picker's switch. Both return the bufnr actually bound (> 0) or 0; core turns a 0
--- into a cursor REVERT, so a target that no longer exists never silently drifts the
--- pane.
--- ============================================================================
+-- Navigation-history helpers (back / forward / jump): window-scoped, never :edit.
 
--- Bind buffer `bufnr` into window `win` and restore that pane's saved view.
--- Returns `bufnr` on success, or 0 when either handle is invalid (most commonly a
--- buffer that has been :bwipeout'd since it was recorded in the pane's history) or
--- when the bind itself FAILED.
---
--- The failure case matters: wolf_switch_buffer wraps its whole body in pcall, so a
--- nvim_win_set_buf that throws AFTER the validity checks above (the cmdwin is open,
--- the window is 'winfixbuf', or the outgoing buffer is modified and cannot be
--- abandoned) is silent. Propagating its ok flag as a 0 is what makes core REVERT
--- the history cursor instead of leaving it pointing at a pane that never moved.
---
--- Both re-emits below mirror wolf_preview_file / wolf_edit_source, but they earn
--- their keep for DIFFERENT reasons. Measured against the pinned nvim 0.12.3, not
--- inferred: a bind into a window that is NOT nvim's current one DOES fire
--- BufEnter + BufWinEnter, and it fires them with the TARGET window and buffer
--- temporarily current (inside the callback, nvim_get_current_win/_buf are the
--- BACKGROUND ones); focus is back where it started by the time set_buf returns,
--- and nothing fires again.
---
---   * wolf_emit_current_file is LOAD-BEARING for a background bind. The
---     WolfCurrentFile emit reads nvim_get_current_buf(), so the autocmd-driven
---     emit describes the pane that was just bound in the background -- an empty
---     path + is_preview when that pane holds a preview scratch. Without this
---     re-emit core keeps that wrong current_file / is_markdown_active /
---     is_preview_active until the next real buffer switch.
---   * wolf_emit_previews is HARDENING. It is a full nvim_list_wins() sweep that
---     core wholesale-replaces, it is already on BufWinEnter, and the sweep does
---     not read the current window -- so a stale `previews` entry for this window
---     drops on its own. Kept because it is idempotent, costs one notification,
---     and makes the update independent of autocmd ordering.
---
--- The only bind that fires NOTHING is a no-op rebind, i.e. the window already
--- shows this exact buffer. That is `:help BufWinEnter`'s already-displayed
--- carve-out, and it is per-WINDOW: a buffer already displayed in ANOTHER window
--- still fires (measured). A no-op rebind changes nothing, so both re-emits are
--- merely redundant there rather than needed.
--- wolf_history_open reaches them by delegating here.
+-- The current-file re-emit is load-bearing after a background bind; the previews one is hardening.
+-- See runtime/nvim/README.md#decisions.
 function _G.wolf_history_set_buf(win, bufnr)
 	if win == nil or bufnr == nil or win == 0 or bufnr == 0 then
 		return 0
@@ -1833,29 +1123,8 @@ function _G.wolf_history_set_buf(win, bufnr)
 	return bufnr
 end
 
--- Bind the buffer for absolute `path` into window `win`, loading it if needed, and
--- restore that pane's saved view. Returns the bufnr (> 0) or 0 for an empty path /
--- invalid window.
---
--- LOAD-BEARING: rebinding the EXISTING buffer -- never a fresh one -- is what
--- makes navigating back to an unsaved "Untitled N.md" (which HAS a real cwd-joined
--- name, see wolf_name_untitled) restore that same MODIFIED buffer rather than
--- reading a file that was never written to disk.
---
--- Two steps, in this order:
---   1. Scan nvim_list_bufs() for an ordinary file buffer whose name EQUALS, or
---      SYMLINK-RESOLVES to, `path`. `path` was canonicalized by
---      std::fs::canonicalize on the core side, so under a symlinked project root
---      (~/Projects -> /Volumes/work/projects) it can differ from the name nvim
---      kept. bufadd alone would then bind a DIFFERENT buffer, re-read from disk:
---      unsaved edits invisible, and a bufload against a live swapfile can raise
---      nvim's ATTENTION prompt.
---      (nvim closes most of that gap on its own -- buflist_new matches an existing
---      buffer by FILE ID, so a divergent name still finds the same buffer whenever
---      the file exists on disk -- but a NEVER-WRITTEN buffer has no file id and is
---      matched by name only, which is exactly the unsaved case above. This scan
---      makes the rebind independent of which mechanism happens to apply.)
---   2. Only if no buffer matches, vim.fn.bufadd(path) + bufload.
+-- Rebind an existing buffer before bufadd, so an unsaved Untitled N.md is restored, not re-read.
+-- See runtime/nvim/README.md#wolf_history_openwin-path.
 function _G.wolf_history_open(win, path)
 	if path == nil or path == "" then
 		return 0
@@ -1865,9 +1134,8 @@ function _G.wolf_history_open(win, path)
 	end
 	local ok, buf = pcall(function()
 		for _, b in ipairs(vim.api.nvim_list_bufs()) do
-			-- Only ordinary file buffers: buftype ~= "" skips the preview scratch
-			-- panes (nofile), terminals and quickfix, none of which is ever an
-			-- `Edit` target, and keeps the resolve() calls off non-file names.
+			-- Ordinary file buffers only: skips preview scratches, terminals and quickfix, and keeps resolve()
+			-- off non-file names.
 			if vim.api.nvim_buf_is_valid(b) and vim.bo[b].buftype == "" then
 				local name = vim.api.nvim_buf_get_name(b)
 				if name ~= "" and (name == path or vim.fn.resolve(name) == path) then
@@ -1886,42 +1154,10 @@ function _G.wolf_history_open(win, path)
 	return _G.wolf_history_set_buf(win, buf)
 end
 
--- ============================================================================
--- Anonymous-buffer naming
---
--- Give every new/empty EDITABLE buffer a real, unsaved markdown name --
--- "Untitled.md", then "Untitled 2.md", "Untitled 3.md", ... (index 1 is
--- un-numbered, so "Untitled 1.md" is NEVER generated) -- choosing the first name
--- that collides with neither an existing Neovim buffer NOR a file on disk in cwd.
--- Naming sets filetype=markdown (so the in-app preview gate at wolf_open_preview
--- passes) but NEVER writes the file to disk and NEVER changes
--- buftype/bufhidden/swapfile: an Untitled N.md buffer stays a normal, modifiable,
--- UNSAVED document until the user explicitly :w-saves it. Naming fires
--- BufFilePost + FileType, so the existing current-file / per-window trackers
--- re-emit the new name with no extra wiring.
--- ============================================================================
+-- Anonymous-buffer naming: Untitled.md, Untitled 2.md, ...; see runtime/nvim/README.md#decisions.
 
--- Does the OWNER path recorded inside a swap file denote `abspath`?
---
--- `swapinfo().fname` is the swap header's b0_fname, which nvim writes through
--- home_replace: a path under $HOME is stored HOME-RELATIVE, and on Unix the
--- leading "~/" is further rewritten to "~<username>/". Measured on Linux, the
--- swap for /home/jplein/Git/jplein/wolf/crates/wolf-gnome/Untitled.md reads back
--- as "~jplein/Git/jplein/wolf/crates/wolf-gnome/Untitled.md". A plain
--- `fname == abspath` therefore NEVER matches for a project under $HOME -- which
--- is every real user project, on both Linux and macOS.
---
--- Normalize the STORED value FORWARD to absolute; never normalize the query
--- backward. `fnamemodify(fname, ":p")` expands "~" / "~user" / "$VAR" (expand_env)
--- and then makes the name a full path; it is the identity for an already-absolute
--- path, so branch 3 subsumes branch 2 -- branch 2 is kept because it is the only
--- one every fixture OUTSIDE $HOME (/tmp, /private/var/folders) exercises.
---   * NOT vim.fn.expand(): it also does WILDCARD expansion, so a name containing
---     *, ?, [, { or ` would be mangled.
---   * NOT fnamemodify(abspath, ":~"): that yields "~/..." and never the
---     "~<username>/..." form nvim actually stores, so it would never match.
--- pcall because "~someuser" for a nonexistent user (a swap copied from another
--- machine) can raise.
+-- Normalize the stored home_replace'd owner path forward, never the query backward. pcall because
+-- ~user can raise. See notes/runtime/nvim/init.lua.md#owner-path-matching.
 local function swap_fname_matches(fname, abspath)
 	if type(fname) ~= "string" or fname == "" then
 		return false
@@ -1933,14 +1169,8 @@ local function swap_fname_matches(fname, abspath)
 	return ok and type(full) == "string" and full == abspath
 end
 
--- The swap file nvim ITSELF would pick for a buffer named `abspath`, or nil when
--- WOLF_SWAP_DIR is unset/empty (no Wolf-owned swap dir -> nothing to check).
---
--- Because 'directory' ends in "//" (see the top of this file), makeswapname takes
--- the "use full path" branch: make_percent_swname replaces every path separator in
--- the full name with "%" and joins it under the swap dir, then modname appends
--- ".swp". findswapname only raises the ATTENTION dialog for the FIRST candidate --
--- the ".swp" one -- so this single stat is precisely the test nvim performs.
+-- The swap nvim itself picks: 'directory' ending in "//" selects %-mangled full-path names, and
+-- findswapname raises ATTENTION only for the first (.swp) candidate. nil without WOLF_SWAP_DIR.
 local function untitled_swap_file(abspath)
 	local swap_dir = vim.env.WOLF_SWAP_DIR
 	if type(swap_dir) ~= "string" or swap_dir == "" then
@@ -1957,40 +1187,16 @@ local function untitled_swap_file(abspath)
 		end
 		full = expanded
 	end
-	-- Collapse repeated separators first: cwd == "/" makes `cwd .. "/" .. name`
-	-- yield "//Untitled.md", which nvim would have normalized before mangling.
-	-- gsub returns TWO values, and "%" is the escape char in the REPLACEMENT, so
-	-- "%%" is a literal "%" -- both calls are parenthesized to keep exactly one.
+	-- Collapse "//" (cwd "/" yields "//Untitled.md") as nvim would. Parenthesized to drop gsub's
+	-- count; "%%" in the replacement is a literal "%".
 	full = (full:gsub("//+", "/"))
 	local mangled = (full:gsub("/", "%%"))
 	local dir = (swap_dir:gsub("/+$", ""))
 	return dir .. "/" .. mangled .. ".swp"
 end
 
--- Whether a Wolf-owned swap file already exists for `abspath` (i.e. a crashed
--- nvim left unsaved edits for that exact path in WOLF_SWAP_DIR). TWO criteria,
--- either of which counts:
---
---   (a) EXACT, and O(1): stat the "%"-mangled name nvim's own findswapname would
---       test (see untitled_swap_file). This is the criterion that matters for the
---       blocking dialog, and it cannot be defeated by an unreadable / truncated /
---       b0-less swap file, which the swapinfo() scan below can.
---   (b) BROADER: scan the swap dir and compare each swap's RECORDED owner path
---       (swapinfo().fname, via swap_fname_matches) against `abspath`. Kept because
---       the documented contract is broader than the dialog -- a .swo/.swn leftover
---       still holds recoverable edits though it would not raise a dialog -- and
---       because it is the fallback if the "%"-mangling ever drifts from nvim's
---       (e.g. a symlinked cwd where fix_fname differs from getcwd()).
---
--- NOTE: nvim's own SwapExists machinery matches on the swap FILE NAME derived from
--- b_ffname, NOT on b0_fname; b0_fname is the home_replace'd owner path. The two
--- criteria above are those two identities, in that order.
---
--- Consulted by EVERY naming call site (startup VimEnter, Cmd-N, Chdir) so that
--- naming a buffer can never walk into the ATTENTION modal, and so a fresh restart
--- names its own startup buffer `Untitled 2.md` while the Tier-1 reopen of
--- `<cwd>/Untitled.md` recovers the crashed edit into its own buffer instead of
--- being shadowed.
+-- Two criteria, either sufficient: the exact mangled .swp, then an owner-path scan of the swap dir.
+-- See runtime/nvim/README.md#wolf_untitled_swap_existsabspath.
 function _G.wolf_untitled_swap_exists(abspath)
 	local uv = vim.uv or vim.loop
 	if not uv then
@@ -2023,22 +1229,8 @@ function _G.wolf_untitled_swap_exists(abspath)
 	return false
 end
 
--- Pure name generator. Returns (name, abspath) for the first index i = 1, 2, 3,
--- ... whose name collides with neither a file/dir on disk in `cwd` nor any
--- existing buffer's name (skipping `exclude_buf`, the buffer being (re)named).
---   * i == 1 -> "Untitled.md" (un-numbered); the literal "Untitled 1.md" is
---     never generated.
---   * Disk collision: uv.fs_stat(abspath) ~= nil (file OR dir).
---   * Buffer collision: any valid buffer b ~= exclude_buf (listed OR unlisted,
---     loaded OR unloaded -- all can trigger E95) whose name == abspath.
--- Deliberately does NOT inspect .swp swap files on its own -- only the .md file
--- itself; swap-existence arrives via `extra_collision`.
---
--- `extra_collision` (optional): a predicate `abspath -> bool` treated as an
--- ADDITIONAL collision source on top of the on-disk and in-buffer checks. Every
--- caller now passes `_G.wolf_untitled_swap_exists` (the callers default it, see
--- wolf_name_untitled_current / wolf_new_untitled); it stays a parameter so this
--- generator remains pure and testable.
+-- Pure: swap existence arrives only through extra_collision. See
+-- runtime/nvim/README.md#wolf_next_untitledcwd-exclude_buf-extra_collision.
 function _G.wolf_next_untitled(cwd, exclude_buf, extra_collision)
 	local uv = vim.uv or vim.loop
 	local i = 1
@@ -2070,31 +1262,8 @@ function _G.wolf_next_untitled(cwd, exclude_buf, extra_collision)
 	return name, cwd .. "/" .. name
 end
 
--- Names `buf` with the first free Untitled name in cwd and sets its filetype to
--- markdown. Does NOT write to disk and does NOT touch buftype/bufhidden/swapfile.
--- On an E95 race (the name got taken between the collision walk and the set-name),
--- retries the next index (the now-colliding buffer is picked up by the next
--- collision walk, advancing the index); after a few attempts it bails gracefully
--- (leaves the buffer unnamed rather than raising).
--- `extra_collision` (optional) is forwarded to `wolf_next_untitled` (see there);
--- every caller defaults it to `_G.wolf_untitled_swap_exists`.
---
--- The `pcall` around nvim_buf_set_name protects ONLY against E95 (a duplicate
--- buffer name). It gives ZERO protection against a stale swap: nvim_buf_set_name
--- creates the swap file inside the rename (ml_setname -> ml_open_file ->
--- findswapname) and, finding one, raises a BLOCKING do_dialog ATTENTION prompt --
--- not an error, so pcall returns true while the editor sits in MODE_CONFIRM eating
--- keystrokes. `extra_collision` (name avoidance) is the only defence; see
--- `_G.wolf_untitled_swap_exists`.
---
--- 'swapfile' is deliberately LEFT ON here, so the swap is created EAGERLY at
--- naming time: that atomically CLAIMS the name against a sibling nvim in the same
--- project, and it is what makes an unsaved Untitled buffer crash-recoverable at
--- all. `setlocal noswapfile` on this buffer is FORBIDDEN -- it would break the
--- recovery promise pinned by `crates/wolf-core/tests/swap_recovery.rs`
--- (restart_recovers_unsaved_untitled_buffer) and `crates/wolf-core/tests/
--- nvim_restart.rs`, and it would not even fix the dialog: it merely defers
--- ml_open_file to changed(), i.e. moves the modal onto the user's FIRST keystroke.
+-- pcall covers only E95: a stale swap's ATTENTION dialog is no error. Never setlocal noswapfile;
+-- see notes/runtime/nvim/init.lua.md#swapfile-stays-on.
 function _G.wolf_name_untitled(buf, extra_collision)
 	local cwd = vim.fn.getcwd()
 	for _ = 1, 8 do
@@ -2110,36 +1279,15 @@ function _G.wolf_name_untitled(buf, extra_collision)
 	end)
 end
 
--- Opens a new empty buffer (:enew) and names it the next free Untitled name.
--- Replaces the raw :enew for the NewBuffer input event. The PREVIOUS buffer, if
--- it carried a real name (e.g. an earlier Untitled.md), stays LISTED (a named
--- buffer is buflisted by default and :enew does not wipe it), so the collision
--- walk yields Untitled 2.md, then Untitled 3.md across repeated calls.
---
--- Passes the swap check too (see wolf_name_untitled_current for why that is a
--- no-op in-session): otherwise the mid-session sequence crash -> relaunch (startup
--- correctly takes Untitled 2.md) -> Cmd-N would find `Untitled.md` free by the
--- buffer/disk rules, name it, and walk straight into the same blocking modal.
+-- The previous named buffer stays listed, so repeated calls walk Untitled 2.md, Untitled 3.md.
+-- The swap check matters after a crash relaunch, where Untitled.md is free by buffer/disk rules.
 function _G.wolf_new_untitled()
 	vim.cmd("enew")
 	wolf_name_untitled(vim.api.nvim_get_current_buf(), _G.wolf_untitled_swap_exists)
 end
 
--- GUARDED re-home of the CURRENT buffer into cwd as an Untitled name. Proceeds
--- ONLY when the current buffer is a normal (buftype == ""), UNMODIFIED, non-
--- preview buffer whose name is either empty OR an existing Untitled name that is
--- NOT yet on disk (so a real, saved file is never renamed). Used by the Chdir arm
--- (opening a folder from the empty state names the buffer Untitled.md IN the
--- opened folder) and by the VimEnter autocmd (first-launch / launch-on-folder).
--- `extra_collision` (optional) is forwarded to the naming path; when nil it
--- DEFAULTS to `_G.wolf_untitled_swap_exists`, so Chdir gets the same swap
--- avoidance the VimEnter startup naming has always had.
---
--- Behaviour-preserving in-session: every named `Untitled N.md` buffer owns its own
--- swap, so the swap check only ever adds a collision for a name that ALREADY
--- collides via the buffer-name check, and a :bwipeout'ed buffer has its swap
--- deleted by nvim. The net effect is only against swaps left by a PREVIOUS, dead
--- nvim -- exactly the case that raises the modal.
+-- Never renames a saved file. extra_collision defaults to the swap check; see
+-- runtime/nvim/README.md#wolf_name_untitled_currentextra_collision.
 function _G.wolf_name_untitled_current(extra_collision)
 	local uv = vim.uv or vim.loop
 	if vim.bo.buftype ~= "" or vim.bo.modified then
@@ -2166,37 +1314,8 @@ function _G.wolf_name_untitled_current(extra_collision)
 	end
 end
 
--- On startup (first-launch and launch-on-folder), if there is exactly ONE listed
--- buffer and the current buffer passes the re-home guard, name it Untitled.md.
--- getcwd() at VimEnter is the launch cwd. The guard keeps this off crash-recovery-
--- restored buffers (modified / a non-empty non-Untitled name) and off buffers
--- opened for a real file passed on the command line.
---
--- Swap-collision guard (TWO reasons, both load-bearing after a crash-restart):
---
--- 1. THE BLOCKING MODAL. nvim_buf_set_name does NOT skip the swap check. It
---    renames via setfname -> buf_name_changed -> ml_setname, whose first branch
---    reads: if there is no swapfile yet and 'updatecount' is nonzero and the
---    buffer is swapfile-enabled, call ml_open_file(buf) -- so the swap is CREATED
---    INSIDE the rename, findswapname runs, and a stale `%...%Untitled.md.swp` is
---    found. SwapExists does NOT fire there (nvim only raises it where it has armed
---    the choice machinery, i.e. the file-load path; upstream neovim/neovim#23145),
---    so nvim goes straight to the blocking do_dialog ATTENTION prompt. That prompt
---    is not an error -- the surrounding pcall returns true -- it just sits in
---    MODE_CONFIRM ("r?") swallowing the user's keystrokes until an O/E/R/Q/A/D
---    answer arrives. THIS is why the check exists; without it the first thing a
---    user types after a crash-restart disappears.
--- 2. RESTART SHADOW. If a crashed nvim left a swap for `<cwd>/Untitled.md`, naming
---    THIS buffer that same name would also shadow the Tier-1 reopen
---    `:e <cwd>/Untitled.md` (it would merely switch to the already-named empty
---    buffer, SwapExists never fires, unsaved edits lost).
---
--- So an existing swap for a candidate name counts as a collision, yielding
--- `Untitled 2.md` here and letting the reopen recover cleanly into its own buffer.
--- Cmd-N and Chdir apply the SAME check (they default it, see
--- wolf_new_untitled / wolf_name_untitled_current) -- reason 1 is reachable from
--- them too, and in-session the check adds no collision the buffer-name check does
--- not already produce.
+-- Startup naming with one listed buffer. The swap check avoids the ATTENTION modal and shadowing
+-- the Tier-1 reopen of a crashed Untitled.md; see runtime/nvim/README.md#decisions.
 vim.api.nvim_create_autocmd("VimEnter", {
 	group = vim.api.nvim_create_augroup("WolfUntitled", { clear = true }),
 	callback = function()
@@ -2210,16 +1329,7 @@ vim.api.nvim_create_autocmd("VimEnter", {
 -- so wolf_open_preview reuses one preview buffer per source across invocations.
 _G.wolf_preview_bufs = _G.wolf_preview_bufs or {}
 
--- Creates (or reuses, via the _G.wolf_preview_bufs map) the preview scratch
--- buffer for `source_buf` (whose abs path is `source_path`) and returns its
--- bufnr. Factored out of wolf_open_preview so wolf_preview_file /
--- wolf_preview_buffer can create the same kind of preview buffer. The preview
--- buffer is an UNLISTED scratch (nofile) + nomodifiable buffer named
--- "Preview: <cwd-relative path>" carrying b:wolf_preview_source /
--- b:wolf_preview_source_bufnr. Unlisted is deliberate: the buffer picker lists
--- one row per FILE (the source buffer, which wolf_preview_file marks buflisted),
--- with no separate "Preview: " rows; the scratch keeps its name only for
--- window-title display and debuggability.
+-- See runtime/nvim/README.md#wolf_ensure_preview_bufsource_buf-source_path.
 function _G.wolf_ensure_preview_buf(source_buf, source_path)
 	local preview_buf = _G.wolf_preview_bufs[source_buf]
 	if not preview_buf or not vim.api.nvim_buf_is_valid(preview_buf) then
@@ -2227,13 +1337,8 @@ function _G.wolf_ensure_preview_buf(source_buf, source_path)
 		-- true (nofile / bufhidden=hide / noswapfile defaults).
 		preview_buf = vim.api.nvim_create_buf(false, true)
 		local rel = vim.fn.fnamemodify(source_path, ":.")
-		-- Name the buffer "Preview: <cwd-relative path>". nvim_buf_set_name raises
-		-- E95 when that name is already taken by ANOTHER buffer (two sources sharing
-		-- a cwd-relative path, e.g. two README.md at the same relative location); the
-		-- reuse map above already short-circuits a re-preview of the SAME source, so
-		-- a collision here is only a DIFFERENT source. On collision fall back to a
-		-- bufnr-disambiguated name so the second preview still opens (rather than
-		-- open_preview returning 0).
+		-- E95 here means a different source with the same cwd-relative name (the map catches the same
+		-- source); fall back to a bufnr-suffixed name so the second preview still opens.
 		local wanted = "Preview: " .. rel
 		if not pcall(vim.api.nvim_buf_set_name, preview_buf, wanted) then
 			pcall(vim.api.nvim_buf_set_name, preview_buf, wanted .. " (" .. source_buf .. ")")
@@ -2246,10 +1351,7 @@ function _G.wolf_ensure_preview_buf(source_buf, source_path)
 	return preview_buf
 end
 
--- Previews the ACTIVE source buffer IN PLACE (the active pane becomes a preview
--- pane) and returns the preview scratch buffer's number. wolf-core calls this
--- over nvim_exec_lua from WolfCore::open_preview. No-op (returns 0) unless the
--- active buffer's filetype is markdown (the same gate as the Preview command).
+-- See runtime/nvim/README.md#wolf_open_preview.
 function _G.wolf_open_preview()
 	if vim.bo.filetype ~= "markdown" then
 		return 0
@@ -2257,14 +1359,8 @@ function _G.wolf_open_preview()
 	local source_buf = vim.api.nvim_get_current_buf()
 	local source_path = vim.api.nvim_buf_get_name(source_buf)
 
-	-- Re-emit the SOURCE buffer's cursor BEFORE the bind, while the source buffer
-	-- and its window are still CURRENT.
-	--
-	-- LOAD-BEARING ORDERING: the bind below does nvim_win_set_buf(0, preview_buf),
-	-- making the preview scratch the current buffer. Emitting after that would hit
-	-- emit_cursor's preview-scratch guard and bail, leaving the freshly opened
-	-- preview with no anchor until the user's next cursor move. Emitting first
-	-- means a newly opened preview immediately scrolls to where the user is.
+	-- Emit the source cursor before the bind: afterwards emit_cursor's preview-scratch guard bails,
+	-- leaving the new preview with no scroll anchor.
 	if _G.wolf_emit_markdown_cursor then
 		_G.wolf_emit_markdown_cursor(source_buf)
 	end
@@ -2274,54 +1370,19 @@ function _G.wolf_open_preview()
 	-- In place: replace the current window's buffer with the preview scratch.
 	vim.api.nvim_win_set_buf(0, preview_buf)
 
-	-- Nudge the front-end to re-emit the previews snapshot so it learns the new
-	-- bind (the emit is idempotent -- the handler wholesale-replaces its previews
-	-- snapshot).
-	--
-	-- CORRECTION: this comment used to claim a background-window nvim_win_set_buf
-	-- fires NO window event. It DOES. Probed directly against the pinned nvim
-	-- 0.12.3, binding into a NON-current window leaves focus alone and fires
-	-- BufEnter + BufWinEnter (focus_unchanged=true,
-	-- events_after_background_set_buf=[BufEnter,BufWinEnter]) -- which is what
-	-- wolf_setup_current_file_tracking's comment above already said, so the two
-	-- contradictory claims are settled in ITS favor. BufWinEnter is in both the
-	-- wolf_buffers augroup (see wolf_setup_buffer_tracking) and the WolfPreview
-	-- window-scan augroup, so Snapshot.buffers / win_buffers -- and therefore
-	-- pane_status -- recover on their own after a background bind.
-	--
-	-- The previews re-emit immediately below is therefore HARDENING, and is RETAINED
-	-- regardless: it is idempotent (the handler wholesale-replaces its map), it costs
-	-- one notification, and it makes the update independent of which events a
-	-- particular bind happens to fire and of autocmd ordering. (The one bind that
-	-- fires nothing at all is a no-op rebind of the buffer a window already shows --
-	-- `:help BufWinEnter`'s already-displayed carve-out, which is per-WINDOW: a buffer
-	-- already displayed in ANOTHER window still fires. A no-op rebind changes nothing
-	-- to emit.) The current-file re-emit further below is NOT hardening -- see its own
-	-- comment.
+	-- Hardening: BufWinEnter already re-sweeps after the bind; the explicit emit makes the update
+	-- independent of autocmd ordering. See runtime/nvim/README.md#decisions.
 	if _G.wolf_emit_previews then
 		_G.wolf_emit_previews()
 	end
-	-- Re-assert the active buffer state: the bind fires BufWinEnter with the
-	-- preview scratch as the current buffer, and the explicit re-emit makes the
-	-- tracked current-file snapshot independent of autocmd ordering. Idempotent
-	-- (the current-file emit wholesale-replaces the tracked filetype).
+	-- Load-bearing: the bind's BufWinEnter ran with the scratch current; re-assert the active buffer.
 	if _G.wolf_emit_current_file then
 		_G.wolf_emit_current_file()
 	end
 	return preview_buf
 end
 
--- Navigates from the ACTIVE preview pane back to its SOURCE file IN PLACE (the
--- active pane becomes an edit pane) and returns the source buffer's number. The
--- inverse of wolf_open_preview. wolf-core calls this over nvim_exec_lua from
--- WolfCore::edit_source.
--- Gate: reads b:wolf_preview_source / b:wolf_preview_source_bufnr off the CURRENT
--- buffer; returns 0 (no-op) unless the active buffer is a preview scratch. Binding
--- prefers nvim_win_set_buf(0, source_bufnr) when the bufnr is a valid buffer
--- (window-scoped, no disk re-read, no MRU churn -- like wolf_switch_buffer); else
--- it :edits the source path. No MRU recording. After binding it re-emits the
--- previews + current-file snapshots (both idempotent) so the front-end + core's
--- current_is_preview re-settle. Returns the source bufnr.
+-- See runtime/nvim/README.md#wolf_edit_source.
 function _G.wolf_edit_source()
 	local cur_buf = vim.api.nvim_get_current_buf()
 	local source_path = vim.b[cur_buf].wolf_preview_source
@@ -2346,16 +1407,8 @@ function _G.wolf_edit_source()
 	-- In place: replace the current window's preview with the source.
 	edit_into(0)
 
-	-- Re-emit so the front-end learns the pane now shows the source and core
-	-- re-settles current_is_preview. Both are idempotent, but only one is required.
-	--
-	-- Measured against the pinned nvim 0.12.3: a bind into a background window DOES
-	-- fire BufEnter + BufWinEnter -- it just fires them with the TARGET window and
-	-- buffer temporarily current, then restores focus without firing again. So
-	-- wolf_emit_current_file is LOAD-BEARING (the WolfCurrentFile emit reads
-	-- nvim_get_current_buf() and would leave core describing the background pane),
-	-- while wolf_emit_previews is hardening -- its nvim_list_wins() sweep already
-	-- runs on that BufWinEnter and does not depend on which window is current.
+	-- The current-file re-emit is load-bearing, previews is hardening; see
+	-- runtime/nvim/README.md#decisions.
 	if _G.wolf_emit_previews then
 		_G.wolf_emit_previews()
 	end
@@ -2365,14 +1418,7 @@ function _G.wolf_edit_source()
 	return source_bufnr or 0
 end
 
--- Previews an ALREADY-OPEN buffer `bufnr` in window `win` (0 = current),
--- replacing that pane's buffer with the source's preview scratch. wolf-core
--- calls this over nvim_exec_lua from WolfCore::preview_buffer (the preview-mode
--- buffer-picker activation path).
---
--- Returns the SOURCE bufnr (> 0) on success; 0 when `bufnr` is invalid,
--- unnamed, or not Markdown. On 0 the front-end falls back to a plain
--- switch_buffer (the pane converts to edit mode).
+-- See runtime/nvim/README.md#wolf_preview_bufferwin-bufnr.
 function _G.wolf_preview_buffer(win, bufnr)
 	if bufnr == nil or bufnr == 0 or not vim.api.nvim_buf_is_valid(bufnr) then
 		return 0
@@ -2407,17 +1453,8 @@ function _G.wolf_preview_buffer(win, bufnr)
 		vim.api.nvim_win_set_buf(0, preview_buf)
 	end
 
-	-- Re-emit so the front-end learns the pane's new preview and the ACTIVE
-	-- pane's filetype is re-asserted. Both are idempotent, but only one is
-	-- required.
-	--
-	-- Measured against the pinned nvim 0.12.3: a bind into a background window DOES
-	-- fire BufEnter + BufWinEnter, with the TARGET window and buffer temporarily
-	-- current. The BufWinEnter-driven WolfCurrentFile emit therefore reports this
-	-- preview SCRATCH as the active buffer (empty path, is_preview true) and nothing
-	-- corrects it once focus snaps back -- wolf_emit_current_file is LOAD-BEARING.
-	-- wolf_emit_previews is hardening: its nvim_list_wins() sweep runs on the same
-	-- BufWinEnter and is already accurate.
+	-- The current-file re-emit is load-bearing, previews is hardening; see
+	-- runtime/nvim/README.md#decisions.
 	if _G.wolf_emit_previews then
 		_G.wolf_emit_previews()
 	end
@@ -2428,21 +1465,8 @@ function _G.wolf_preview_buffer(win, bufnr)
 	return bufnr
 end
 
--- Repoints the preview window `win` at the Markdown file `path` (an ABSOLUTE
--- path, resolved by the front-end from a clicked file:// link), replacing that
--- pane's current preview with a preview of the linked file. wolf-core calls this
--- over nvim_exec_lua from WolfCore::preview_file.
---
--- The disk-path front half of wolf_preview_buffer: it bufadd/bufloads `path`,
--- marks the source BUFLISTED (so a preview-only file gets its own buffer-picker
--- row -- the union listing), then delegates the gate + bind + re-emits.
---
--- Returns the linked file's SOURCE bufnr (> 0) on success; 0 when `path` is
--- empty, unreadable, or not Markdown. A 0 always leaves the pane as it was; what
--- the front-end does NEXT is its own policy and the two differ, so this file
--- states neither. This runtime is shared by both.
---
--- Contract: this does NO relative-path resolution -- `path` is already absolute.
+-- path is already absolute; this does no relative-path resolution. See
+-- runtime/nvim/README.md#wolf_preview_filewin-path.
 function _G.wolf_preview_file(win, path)
 	if path == nil or path == "" then
 		return 0
@@ -2456,22 +1480,15 @@ function _G.wolf_preview_file(win, path)
 
 	local result = _G.wolf_preview_buffer(win, source_buf)
 	if result ~= 0 then
-		-- The union listing: a background-loaded (`bufadd`) source is unlisted,
-		-- which would keep a preview-only file out of the buffer picker. List it --
-		-- the picker's one-row-per-file union is the source buffers, never the
-		-- scratch. Only on success: a rejected non-markdown link must not grow a
-		-- picker row.
+		-- List the source only on success: it gives a preview-only file its picker row, and a rejected
+		-- non-markdown path must not gain one.
 		vim.bo[source_buf].buflisted = true
 	end
 	return result
 end
 
--- Whether `target_win` is a usable OTHER-pane bind target for
--- wolf_preview_in_other / wolf_edit_in_other: non-nil, non-zero, a valid window,
--- NOT the current window (binding "elsewhere" into the active pane would be the
--- in-place command), and NOT the terminal drawer (identified by b:wolf_terminal
--- on its buffer or w:wolf_terminal on the window). Any failure sends the caller
--- down the split path instead.
+-- Usable other-pane target: valid, not current (that is the in-place command), not the drawer.
+-- Anything else sends the caller down the split path.
 local function wolf_other_pane_target_ok(target_win)
 	if target_win == nil or target_win == 0 then
 		return false
@@ -2489,20 +1506,7 @@ local function wolf_other_pane_target_ok(target_win)
 	return true
 end
 
--- Previews the ACTIVE pane's Markdown file in ANOTHER pane and returns the
--- SOURCE bufnr (not the scratch bufnr -- the front-end joins previews() rows on
--- the source). wolf-core calls this over nvim_exec_lua from
--- WolfCore::preview_in_other, passing the front-end-resolved target window (0
--- when the front-end wants a split).
---
--- Gate FIRST, before any split: returns 0 unless the active buffer's filetype is
--- markdown, so a mis-timed palette activation is a pure no-op that never splits.
--- With a usable target (wolf_other_pane_target_ok) the scratch is bound into it
--- WITHOUT moving focus; otherwise wolf_do_split("v") creates the new window (the
--- shell's applySplit lands it to the RIGHT of `from`), the scratch is bound into
--- that new window, and focus returns to `from` -- the focus rule is that focus
--- follows the EDIT-mode view of the document, so the source editor stays
--- focused either way. No MRU recording. Re-emits mirror wolf_open_preview.
+-- Gated before any split. See runtime/nvim/README.md#wolf_preview_in_othertarget_win.
 function _G.wolf_preview_in_other(target_win)
 	if vim.bo.filetype ~= "markdown" then
 		return 0
@@ -2510,10 +1514,7 @@ function _G.wolf_preview_in_other(target_win)
 	local source_buf = vim.api.nvim_get_current_buf()
 	local source_path = vim.api.nvim_buf_get_name(source_buf)
 
-	-- Re-emit the SOURCE buffer's cursor BEFORE the bind, while the source buffer
-	-- is still current (same load-bearing ordering as wolf_open_preview: emitting
-	-- after the bind would hit emit_cursor's preview-scratch guard in the split
-	-- path's transient new window).
+	-- Emit the source cursor before the bind, as in wolf_open_preview.
 	if _G.wolf_emit_markdown_cursor then
 		_G.wolf_emit_markdown_cursor(source_buf)
 	end
@@ -2524,19 +1525,14 @@ function _G.wolf_preview_in_other(target_win)
 		-- Reuse: bind into the existing target; focus stays where it is.
 		vim.api.nvim_win_set_buf(target_win, preview_buf)
 	else
-		-- Split: wolf_do_split("v") performs the real :vsplit (the NEW window
-		-- becomes current) and notifies the Split {from, win} intent; bind the
-		-- scratch into the new window, then hand focus back to the source editor.
+		-- wolf_do_split("v") makes the new right window current; bind there, then refocus the editor.
 		local from = vim.api.nvim_get_current_win()
 		_G.wolf_do_split("v")
 		vim.api.nvim_win_set_buf(0, preview_buf)
 		vim.api.nvim_set_current_win(from)
 	end
 
-	-- Same guarded re-emits as wolf_open_preview: previews is hardening (its
-	-- window sweep already runs on the bind's BufWinEnter), current-file is
-	-- LOAD-BEARING for the background bind (the autocmd emit ran with the target
-	-- window temporarily current).
+	-- Re-emits as in wolf_open_preview: current-file is load-bearing, previews is hardening.
 	if _G.wolf_emit_previews then
 		_G.wolf_emit_previews()
 	end
@@ -2546,20 +1542,8 @@ function _G.wolf_preview_in_other(target_win)
 	return source_buf
 end
 
--- Edits the ACTIVE preview pane's SOURCE file in ANOTHER pane and returns the
--- bufnr bound into that pane (nvim_win_get_buf of the bound window, so an :edit
--- fallback still reports non-zero -- a deliberate divergence from
--- wolf_edit_source's `source_bufnr or 0`). wolf-core calls this over
--- nvim_exec_lua from WolfCore::edit_in_other, passing the front-end-resolved
--- target window (0 when the front-end wants a split).
---
--- Gate FIRST, before any split: returns 0 unless the active buffer carries
--- b:wolf_preview_source. With a usable target (wolf_other_pane_target_ok) the
--- source is bound into it and that pane is FOCUSED; otherwise wolf_do_split("v")
--- creates the new window (which keeps showing the scratch, landing the preview
--- to the RIGHT), the source is bound into the ORIGINAL window `from`, and `from`
--- is focused -- focus follows the EDIT-mode view of the document. No MRU
--- recording. Re-emits mirror wolf_edit_source.
+-- Returns the bound window's buffer, deliberately unlike wolf_edit_source; see
+-- runtime/nvim/README.md#wolf_edit_in_othertarget_win.
 function _G.wolf_edit_in_other(target_win)
 	local cur_buf = vim.api.nvim_get_current_buf()
 	local source_path = vim.b[cur_buf].wolf_preview_source
@@ -2568,9 +1552,7 @@ function _G.wolf_edit_in_other(target_win)
 	end
 	local source_bufnr = vim.b[cur_buf].wolf_preview_source_bufnr
 
-	-- Bind the source into window `win`, mirroring wolf_edit_source's edit_into:
-	-- prefer the window-scoped bufnr bind; fall back to focusing the window and
-	-- :editing the path when the bufnr is stale.
+	-- Prefer the window-scoped bufnr bind; :edit the path when the bufnr is stale.
 	local function bind_source_into(win)
 		if source_bufnr ~= nil and vim.api.nvim_buf_is_valid(source_bufnr) then
 			vim.api.nvim_win_set_buf(win, source_bufnr)
@@ -2611,22 +1593,7 @@ function _G.wolf_edit_in_other(target_win)
 	return 0
 end
 
--- Preview tracking + dirty signal: wolf-core invokes this over RPC after ui_attach
--- (last, after view tracking), passing its own RPC channel id. It registers the
--- WolfPreview augroup:
---   * a window-scan (WinEnter/BufWinEnter/WinNew/WinClosed/BufWinLeave) that
---     rpcnotifies wolf_preview with a list of { preview_win, source_bufnr,
---     source_abs_path, source_full_width } tuples -- one per window showing a
---     b:wolf_preview_source scratch buffer -- so the front-end learns which pane
---     previews what source (and, via the source bufnr, joins the live changedtick),
---     and frames the pane capped or full-width by the SOURCE buffer's
---     b:wolf_full_width flag. Emits once immediately so an already-open preview is
---     reflected.
---   * markdown-guarded TextChanged/TextChangedI/BufWritePost autocmds that
---     rpcnotify wolf_markdown_dirty with { source_bufnr, changedtick } so the
---     front-end pulls fresh HTML on the next wake (OD6 live-on-change). The
---     changedtick advances on any buffer change, so a keystroke burst that the
---     shell debounces yields one reload.
+-- See runtime/nvim/README.md#wolf_setup_previewchan.
 function _G.wolf_setup_preview(chan)
 	local group = vim.api.nvim_create_augroup("WolfPreview", { clear = true })
 
@@ -2649,18 +1616,8 @@ function _G.wolf_setup_preview(chan)
 		vim.rpcnotify(chan, "wolf_preview", list)
 	end
 
-	-- Expose the emit closure (it closes over `chan`) so the helpers that change what
-	-- a pane shows can re-emit: wolf_open_preview / wolf_preview_file /
-	-- wolf_edit_source / wolf_history_set_buf after a window bind, and
-	-- wolf_toggle_full_width after flipping b:wolf_full_width.
-	--
-	-- Measured against the pinned nvim 0.12.3: a bind into a NON-current window does
-	-- fire BufWinEnter, and this sweep reads nvim_list_wins() rather than the current
-	-- window, so it is already accurate when the autocmd runs. For the four BIND
-	-- callers the re-emit is therefore HARDENING -- idempotent (core wholesale-
-	-- replaces the map) and independent of autocmd ordering. For wolf_toggle_full_width
-	-- it is LOAD-BEARING: writing a buffer variable fires no autocmd at all, whether
-	-- or not that buffer is current.
+	-- Exposed for re-emits: hardening after a bind, load-bearing after wolf_toggle_full_width, since
+	-- writing a buffer variable fires no autocmd.
 	_G.wolf_emit_previews = emit_previews
 
 	vim.api.nvim_create_autocmd(
@@ -2685,62 +1642,31 @@ function _G.wolf_setup_preview(chan)
 		end,
 	})
 
-	-- Reports the CURRENT window's cursor position for a Markdown SOURCE buffer as
-	-- `wolf_markdown_cursor(bufnr, line, char_col)` -- three FLAT scalars, mirroring
-	-- wolf_markdown_dirty's flat (bufnr, tick) shape rather than a table. Flat
-	-- scalars sidestep the empty-Lua-table map-vs-array msgpack ambiguity that
-	-- wolf_setup_theme_tracking already documents.
-	--
-	-- Core UPSERTS the pair into Snapshot::markdown_cursors keyed by the SOURCE
-	-- bufnr (the same key space as markdown_ticks and PreviewInfo::source_bufnr), so
-	-- the front-end can scroll the preview's `wl-{line}-{col}` marker into view.
+	-- Flat scalars (bufnr, line, char_col), never a table; core upserts them by source bufnr.
 	local function emit_cursor(buf)
 		if not buf or not vim.api.nvim_buf_is_valid(buf) then
 			return
 		end
-		-- LOAD-BEARING: line('.') / charcol('.') read the CURRENT window's cursor, so
-		-- reporting for a non-current buffer would emit the wrong position.
-		-- CursorMoved/CursorMovedI always fire for the current buffer, so this is
-		-- purely defensive -- but it is what makes the un-winid'd charcol('.')
-		-- unambiguous.
+		-- line('.') / charcol('.') read the current window, so only the current buffer may report.
 		if buf ~= vim.api.nvim_get_current_buf() then
 			return
 		end
-		-- LOAD-BEARING, and NOT redundant with the check above: "current buffer" is
-		-- not the same as "displayed in a real window". vim.fn.bufload() (used by
-		-- wolf_preview_file for its background source, and by nvim_buf_call) makes the
-		-- target buffer current inside nvim's synthetic AUTOCMD WINDOW and fires
-		-- BufEnter + BufWinEnter there. Measured against the pinned nvim 0.12.3, that
-		-- window reports win_gettype() == "autocmd" and a fabricated line 1 / col 1
-		-- cursor that belongs to no user window. Emitting it would attribute a bogus
-		-- (1, 0) anchor to a buffer whose cursor is genuinely UNKNOWN, defeating the
-		-- front-end's `source_cursor_line() == 0` sentinel (CursorPos.isKnown), which
-		-- is what tells it to leave a freshly bound preview's scroll position alone.
-		-- Only a NORMAL window (win_gettype() == "") carries a real cursor; this also
-		-- excludes floating/popup, command-line, quickfix and loclist windows.
+		-- Load-bearing: bufload() fires BufEnter in nvim's autocmd window with a fabricated (1, 0) cursor.
+		-- Only a normal window has a real one; see runtime/nvim/README.md#decisions.
 		if vim.fn.win_gettype() ~= "" then
 			return
 		end
 		if vim.bo[buf].filetype ~= "markdown" then
 			return
 		end
-		-- The preview-scratch guard. This is a deliberate ASYMMETRY with the sibling
-		-- wolf_markdown_dirty autocmd above, which excludes preview scratches only
-		-- INCIDENTALLY (a `nofile` scratch never runs filetype detection, so its
-		-- filetype stays ""). Here we are explicit, so a future `:filetype detect` on
-		-- a `Preview: foo.md`-named scratch can never leak a bogus cursor whose line
-		-- numbers describe the RENDERED text rather than the source.
+		-- Explicit, unlike wolf_markdown_dirty's incidental exclusion: a :filetype detect on a scratch
+		-- must never leak a cursor that describes the rendered text.
 		if vim.b[buf].wolf_preview_source ~= nil then
 			return
 		end
 		local line = vim.fn.line(".")
-		-- charcol() is col()'s CHARACTER-index twin: it returns the 1-based CHARACTER
-		-- index of the cursor column, so subtracting 1 yields the 0-based CHARACTER
-		-- column the `wl-{L}-{C}` marker scheme wants, with NO byte->char conversion
-		-- anywhere downstream. In insert mode past end-of-line charcol('.') returns
-		-- char_len + 1, so char_col == char_len (one past the last character); the
-		-- front-end rounds down to a multiple of 100 and falls back, so that is
-		-- benign.
+		-- 0-based character column for the wl-{L}-{C} markers. Past end-of-line in insert mode this is
+		-- char_len, which the front-end tolerates.
 		local char_col = vim.fn.charcol(".") - 1
 		if char_col < 0 then
 			char_col = 0
@@ -2752,16 +1678,8 @@ function _G.wolf_setup_preview(chan)
 	-- re-emit BEFORE it binds the preview scratch into a window -- see the call site.
 	_G.wolf_emit_markdown_cursor = emit_cursor
 
-	-- CursorMoved/CursorMovedI are the steady-state signal. BufEnter/BufWinEnter are
-	-- LOAD-BEARING for FRESHNESS, not redundant: probed against the pinned nvim,
-	-- `:edit foo.md` fires CursorMoved BEFORE filetype detection has run (so
-	-- emit_cursor's `filetype == "markdown"` guard bails), and no further CursorMoved
-	-- fires until the user actually moves. Without a buffer-entry emit, a markdown
-	-- buffer that is opened and simply LOOKED at reports no cursor at all, so a
-	-- preview bound to it would have no anchor (source_cursor_line() == 0) until the
-	-- first motion. BufEnter/BufWinEnter both fire AFTER detection, with the buffer
-	-- current and its filetype set. The emit is idempotent (core upserts), so the
-	-- overlap between the two entry events costs one extra notify per open.
+	-- BufEnter/BufWinEnter are load-bearing: :edit fires CursorMoved before filetype detection, so a
+	-- buffer only looked at would report no cursor. See runtime/nvim/README.md#decisions.
 	vim.api.nvim_create_autocmd({ "CursorMoved", "CursorMovedI", "BufEnter", "BufWinEnter" }, {
 		group = group,
 		callback = function(ev)
@@ -2775,13 +1693,8 @@ function _G.wolf_setup_preview(chan)
 	emit_cursor(vim.api.nvim_get_current_buf())
 end
 
--- The user's own init_user.lua (WOLF_RUNTIME_USER_DIR, seeded once core-side).
---
--- MUST remain the LAST thing in this file: the file is the user's override
--- point, and "loads last" is the contract that makes anything in it win over
--- every Wolf default above. An error in the user's file is theirs, not Wolf's:
--- the pcall keeps startup alive and the vim.notify surfaces a WARN naming
--- init_user.lua in :messages (the notify text must contain that literal name).
+-- Must stay the last statement: loading last lets init_user.lua override every Wolf default.
+-- pcall keeps startup alive; the warning must contain the literal name init_user.lua.
 local runtime_user_dir = vim.env.WOLF_RUNTIME_USER_DIR
 if runtime_user_dir ~= nil and runtime_user_dir ~= "" then
 	local user_init = runtime_user_dir .. "/init_user.lua"

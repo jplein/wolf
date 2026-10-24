@@ -1,0 +1,18 @@
+# case: # inside TOML strings is not a comment, but a trailing comment is
+
+[section]
+a = '''it's # seg01abcd seg02abcd seg03abcd seg04abcd seg05abcd seg06abcd seg07abcd seg08abcd seg09abcd seg10abcd'''
+b = "# seg01abcd seg02abcd seg03abcd seg04abcd seg05abcd seg06abcd seg07abcd seg08abcd seg09abcd seg10abcd"
+d = """one " quote
+# not a comment one
+# not a comment two
+# not a comment three
+"""
+e = 1 # seg01abcd seg02abcd seg03abcd seg04abcd seg05abcd seg06abcd seg07abcd seg08abcd seg09abcd seg10abcd
+
+# case: three # lines fail
+
+# one
+# two
+# three
+f = 2

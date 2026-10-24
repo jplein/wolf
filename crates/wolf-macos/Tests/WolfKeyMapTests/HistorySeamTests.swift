@@ -1,48 +1,4 @@
-//
-//  HistorySeamTests.swift
-//  Pure, headless unit tests for the `WolfKeyMap.HistorySeam` namespace.
-//
-//  A NEW pure, AppKit-free seam (plan §B8) that (a) zips the three parallel
-//  FFI-derived arrays behind `WolfCoreHandle::history_entries` into ordered menu
-//  rows, and (b) owns the toolbar identifier / SF-Symbol constants plus the LOCKED
-//  toolbar ordering. It mirrors the existing pure seams (`PickerSeam`,
-//  `RestoreSeam`, `CwdTitleSeam`) and is exercised with scalar inputs only — NO
-//  AppKit, NO NSToolbar, NO NSMenu, NO live Neovim — so it stays in the headless
-//  `WolfKeyMapTests` bundle.
-//
-//  CONTRACT UNDER TEST (the SIGNATURE + shape the coder implements to satisfy):
-//    * HistorySeam.Row — `Equatable`, with `title: String`, `index: Int`,
-//      `isCurrent: Bool` (the synthesized memberwise init is reachable here via
-//      `@testable import`).
-//    * HistorySeam.rows(displays:indices:currentFlags:) -> [Row]
-//      - zips the three arrays IN ORDER (the FFI hands them over newest-first;
-//        the seam preserves that order verbatim — it never re-sorts).
-//      - mismatched lengths TRUNCATE to the shortest array.
-//      - a NEGATIVE index is DROPPED (it can never address a stack slot).
-//      - at most ONE row keeps `isCurrent`; if several arrive, the FIRST wins.
-//      - empty input yields [].
-//    * HistorySeam.itemIdentifiers(toggleSidebar:trackingSeparator:) -> [String]
-//      - exactly [toggleSidebar, trackingSeparator, back, forward], in that order
-//        (the locked toolbar ordering after the traffic lights).
-//    * The constants `emptyPlaceholderTitle`, `backIdentifier`,
-//      `forwardIdentifier`, `backSymbolName`, `forwardSymbolName`.
-//
-//  ASSUMPTIONS (stated in the test-writer report; the coder implements to match):
-//    * The "drop a negative index" rule and the "keep only the first isCurrent"
-//      rule are asserted INDEPENDENTLY here — the tests deliberately do not pin
-//      how they interact (i.e. whether a dropped row still consumes the
-//      one-checkmark budget), because the plan does not specify it.
-//    * `rows` does NOT clamp or renumber indices; a non-negative index rides
-//      through verbatim (it is a STACK index handed straight back to
-//      `history_jump`).
-//
-//  NOTE to coder: this test references the pure `WolfKeyMap.HistorySeam` enum the
-//  coder adds in `Sources/WolfKeyMap/HistorySeam.swift` (and lists in the
-//  `wolf_key_map` srcs in BUILD.bazel). This file must ALSO be listed in the
-//  hand-maintained `srcs` of `//crates/wolf-macos:WolfKeyMapTests` — that list is
-//  NOT a glob, so an unlisted file never compiles into the test binary and never
-//  runs.
-//
+// See crates/wolf-macos/Tests/WolfKeyMapTests/README.md#historyseamtestsswift
 
 import Foundation
 import XCTest

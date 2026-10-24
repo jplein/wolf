@@ -1,14 +1,4 @@
-//
-//  SearchBudgetSeam.swift
-//  Pure, headless conversion of a sidebar pixel width + per-character advance into
-//  an integer CHARACTER budget for a matched line wrapped across up to two rows.
-//
-//  Toolkit-free (Foundation only), so it is unit-testable without AppKit / NSFont:
-//  the `SearchView` measures its outline width + the monospace advance and passes
-//  the resulting budget to `handle.start_search`'s `files(budget:)`. Keeping the
-//  budget a CHAR count (not pixels) matches wolf-core's `context_window`, whose
-//  char-boundary slicing never splits a multibyte scalar.
-//
+// Pure conversion of a sidebar width into a character budget for a matched line.
 
 import Foundation
 

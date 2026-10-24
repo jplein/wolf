@@ -2,13 +2,13 @@
 
 The AppKit application: windows, views, menus, and the coordinator that owns projects and views. It holds only what genuinely needs a window; the decisions it acts on live in the pure [`WolfKeyMap/`](../WolfKeyMap/README.md) seam.
 
-Nothing in this directory has automated coverage — there is no headless window server. See [DECISIONS.md](../../DECISIONS.md) for that posture and for the project, threading, and persistence models these files implement.
+Nothing in this directory has automated coverage — there is no headless window server. See [wolf-macos-decisions.md](../../../../notes/wolf-macos-decisions.md) for that posture and for the project, threading, and persistence models these files implement.
 
 ## Files
 
 #### `AppDelegate.swift`
 
-Purpose: The application coordinator: once-only launch setup, the live `WolfWindowController` (one per tab) and `Project` collections, window/tab tree restore and persistence, and the dynamic menus (`NSMenuDelegate` / `NSMenuItemValidation`). The one-Neovim-per-project model is described in the crate's `DECISIONS.md`.
+Purpose: The application coordinator: once-only launch setup, the live `WolfWindowController` (one per tab) and `Project` collections, window/tab tree restore and persistence, and the dynamic menus (`NSMenuDelegate` / `NSMenuItemValidation`). The one-Neovim-per-project model is described in [`wolf-macos-decisions.md`](../../../../notes/wolf-macos-decisions.md).
 
 **Public API**
 
@@ -316,7 +316,7 @@ Purpose: The crash/stall overlay — a full-bleed opaque cover over a broken edi
 
 #### `PaneContainerView.swift`
 
-Purpose: The editor area — one flat, flipped `NSView` that paints every split pane, owns the pure `PaneTree`, hosts the preview web views, and is the editor's first responder. [DECISIONS.md](../../DECISIONS.md) covers the flat-view choice and how a preview reaches its web view.
+Purpose: The editor area — one flat, flipped `NSView` that paints every split pane, owns the pure `PaneTree`, hosts the preview web views, and is the editor's first responder. [wolf-macos-decisions.md](../../../../notes/wolf-macos-decisions.md) covers the flat-view choice and how a preview reaches its web view.
 
 **Public API**
 
@@ -465,7 +465,7 @@ Purpose: The `WKNavigationDelegate` that routes a preview web view's clicked lin
 - Every `.linkActivated` navigation is cancelled and handled out of band (open in the browser, scroll to a fragment, or preview another file), so the pane only ever shows core-rendered HTML. Non-link navigations — the initial `loadHTMLString` and programmatic `evaluateJavaScript` scrolls — must keep passing through with `.allow`, so the guard cannot be widened to cancel everything.
 - Link classification lives in `WolfKeyMap.PreviewLinkSeam`; this file only dispatches the resulting action.
 - `container` is weak because the container retains this delegate (`WKWebView.navigationDelegate` is itself weak).
-- The two `didFail…` callbacks are routine bookkeeping, not an error path: they decrement that window's outstanding-navigation count — see [DECISIONS.md](../../DECISIONS.md) for why it is a count. A cancelled policy decision, meaning every clicked link, also arrives here, so the container ignores a callback for which it counted no navigation.
+- The two `didFail…` callbacks are routine bookkeeping, not an error path: they decrement that window's outstanding-navigation count — see [wolf-macos-decisions.md](../../../../notes/wolf-macos-decisions.md) for why it is a count. A cancelled policy decision, meaning every clicked link, also arrives here, so the container ignores a callback for which it counted no navigation.
 
 #### `PreviewScrollStateHandler.swift`
 
@@ -477,7 +477,7 @@ Purpose: The `WKScriptMessageHandler` that forwards a preview page's pushed scro
 
 **Decisions**
 
-- The push direction, and why it cannot be a pull, is in [DECISIONS.md](../../DECISIONS.md).
+- The push direction, and why it cannot be a pull, is in [wolf-macos-decisions.md](../../../../notes/wolf-macos-decisions.md).
 - A body missing `s` degrades to `0` rather than dropping the message, so a partially decodable push still refreshes the cache.
 - `container` is weak: the web view's `WKUserContentController` retains this handler strongly.
 
@@ -491,7 +491,7 @@ Purpose: The `WKScriptMessageHandler` that forwards a preview page's pushed sele
 
 **Decisions**
 
-- The push direction, and why it cannot be a pull, is in [DECISIONS.md](../../DECISIONS.md).
+- The push direction, and why it cannot be a pull, is in [wolf-macos-decisions.md](../../../../notes/wolf-macos-decisions.md).
 - An empty payload is a positive clear and drops the cached entry, while a body `PreviewCopySeam.decodeSelectionMessage` rejects leaves the cache untouched: a malformed message says nothing about the selection, so treating it as a clear would discard a good entry.
 - `container` is weak: the web view's `WKUserContentController` retains this handler strongly.
 

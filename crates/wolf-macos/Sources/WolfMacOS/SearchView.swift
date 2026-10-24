@@ -1,18 +1,4 @@
-//
-//  SearchView.swift
-//  The AppKit sidebar SEARCH panel: a search field + three toggle buttons above an
-//  `NSOutlineView` (in an `NSScrollView`) showing ripgrep-backed content-search
-//  results as a two-level tree — matched files (expanded by default) with their
-//  matching lines beneath, the match portion bold and the surrounding context
-//  dimmed, each line wrapped to at most two rows. Search runs ONLY on Return.
-//  Clicking a line opens the file at the match's line/column.
-//
-//  The pure projection + display math lives in wolf-core (`search_tree`: `project`,
-//  `file_label`, `context_window`) and is reached over FFI (`FfiSearch.files`,
-//  `FfiSearchFile`, `FfiSearchMatch`); the byte→UTF-16 span mapping + char budget
-//  live in the `WolfKeyMap` seams. This file is the AppKit shell that drives them,
-//  exercised by manual smoke only (NSOutlineView needs a window server).
-//
+// The AppKit sidebar search panel over ripgrep-backed content search.
 
 import AppKit
 import WolfFFI

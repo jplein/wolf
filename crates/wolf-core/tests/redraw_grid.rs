@@ -96,11 +96,8 @@ fn type_text_appears_in_grid() {
 
 #[test]
 fn wide_char_grid_line() {
-    // First line: a double-width CJK glyph followed by ASCII. A double-width
-    // character occupies two grid columns: the leading cell carries the glyph's
-    // text, the trailing cell is blank, and any following text keeps its column
-    // alignment. This exercises the highest-risk `grid_line` parser path
-    // (wide-char trailing empty cell + column alignment).
+    // A double-width CJK glyph then ASCII: the leading cell carries the glyph, the trailing cell is
+    // blank, and following text keeps its column. This is the riskiest `grid_line` parser path.
     let (core, _waiter, _file) = common::start_core_with_temp_md("\u{4e2d}ab\n");
 
     let snap = core.read_snapshot();
@@ -115,12 +112,8 @@ fn wide_char_grid_line() {
         "col 0 should carry the double-width glyph's text"
     );
 
-    // Col 1: the trailing cell of the double-width char.
-    // NOTE: per the plan/impl (`src/render` Cell: text = "" for trailing wide
-    // cell) we assert the trailing cell's text is exactly empty (""). If the
-    // implementation instead renders a single space there, the coder must
-    // reconcile this assertion. We additionally assert it is neither the glyph
-    // nor the following ASCII, which holds under either convention.
+    // Col 1, the wide char's trailing cell, has text exactly "" by the `Cell` convention, and is
+    // neither the glyph nor the following ASCII.
     let trailing_cell = snap
         .active_grid()
         .cell(0, WIDE_TRAILING_COL)
@@ -162,17 +155,8 @@ fn wide_char_grid_line() {
 
 #[test]
 fn grid_line_repeat_expansion() {
-    // First line: a long run of the SAME character followed by a single distinct
-    // trailing char, e.g. "========...===X". nvim's ext_linegrid is likely to
-    // emit the run as ONE grid_line cell tuple `[text, hl, repeat]` with a
-    // `repeat` count instead of N separate cells. This exercises the parser's
-    // repeat-expansion / column-advance path: it must write the char into every
-    // column of the run and advance the column cursor by `repeat` (not by 1).
-    //
-    // NOTE: we do not assume how nvim chunks the line. The run could arrive as a
-    // single repeat-tuple OR as several tuples; either way the resulting grid
-    // contents are identical, and these assertions only inspect the grid (cell
-    // text + column alignment), so they hold under either chunking.
+    // A long run of one char then a distinct one, which nvim may send as a `repeat` tuple: every
+    // column of the run is written and the cursor advances by `repeat`, whatever the chunking.
     let mut first_line = REPEAT_CHAR.to_string().repeat(REPEAT_RUN_LEN);
     first_line.push(TRAILING_CHAR);
     first_line.push('\n');
@@ -202,9 +186,8 @@ fn grid_line_repeat_expansion() {
         );
     }
 
-    // Column alignment: the distinct trailing char must land at exactly the run's
-    // length. If repeat expansion advanced columns by 1 instead of by `repeat`,
-    // this char would land in the wrong column (or overwrite part of the run).
+    // The trailing char must land exactly at the run's length; advancing by 1 instead of `repeat`
+    // would misplace it or overwrite the run.
     let trailing_cell = snap
         .active_grid()
         .cell(0, TRAILING_CHAR_COL)
@@ -242,14 +225,8 @@ fn resize_updates_grid() {
     core.resize(RESIZE_COLS, RESIZE_ROWS);
     waiter.wait_for_flush(&core, FLUSH_TIMEOUT);
 
-    // NOTE to coder: `core.resize(..)` is a GLOBAL resize (nvim_ui_try_resize),
-    // which under ext_multigrid resizes GRID 1 to exactly these dims. The active
-    // grid is a WINDOW grid (>= 2) whose size is the window's content area
-    // (outer minus status/cmdline rows), so it would NOT equal RESIZE_ROWS
-    // exactly. To keep asserting REAL behavior, this test inspects the global
-    // grid (`snap.grid(GLOBAL_GRID)`), which is what the global resize actually
-    // drives. Per-grid resize of a window grid is covered separately in
-    // `redraw_multigrid.rs::resize_grid_changes_only_that_grid`.
+    // `core.resize` is global and drives grid 1; the active window grid takes the content area, so
+    // inspect grid 1. Per-grid resize is in redraw_multigrid.rs.
     let snap = core.read_snapshot();
     let global = snap
         .grid(GLOBAL_GRID)
@@ -346,15 +323,8 @@ fn scroll_emits_viewport() {
 
 #[test]
 fn scroll_up_shifts_grid_content_down() {
-    // Companion to `scroll_shifts_grid_content`. That test sends <C-d> (scroll
-    // forward / view moves DOWN, which shifts grid content UP on screen), which
-    // exercises one branch of `Grid::scroll` (render.rs copy_row_range low->high).
-    // This test exercises the OTHER branch: scroll BACKWARD with <C-u>, which
-    // moves the view UP and shifts grid content DOWN on screen (high->low copy).
-    //
-    // To have room to scroll back up, we first jump to the END of a tall buffer
-    // so the top visible line is no longer "line 0", then scroll up and assert
-    // row 0 now shows an EARLIER buffer line than before.
+    // The other `Grid::scroll` branch from `scroll_shifts_grid_content`: <C-u> shifts content down.
+    // Jump to the end of a tall buffer first, so there is room to scroll back.
     let mut content = String::new();
     for i in 0..SCROLL_BUFFER_LINES {
         content.push_str(&format!("line {i}\n"));
@@ -378,12 +348,8 @@ fn scroll_up_shifts_grid_content_down() {
          later line than line 0 (got line {before_num})"
     );
 
-    // Scroll BACKWARD half a screen; <C-u> moves the view up, shifting grid
-    // content DOWN on screen (the down-shift branch of Grid::scroll).
-    //
-    // NOTE: we do not assume how nvim chunks the grid_scroll region or how many
-    // lines <C-u> moves; we only assert row 0 changed and now shows an EARLIER
-    // buffer line, which holds regardless of the exact scroll amount/chunking.
+    // <C-u> shifts grid content down. Assert only that row 0 now shows an earlier buffer line,
+    // whatever the scroll amount or grid_scroll chunking.
     waiter.drain();
     core.send_input(common::ctrl(Key::Char('u')));
     waiter.wait_for_flush(&core, FLUSH_TIMEOUT);
@@ -408,16 +374,8 @@ fn scroll_up_shifts_grid_content_down() {
 
 #[test]
 fn viewport_reports_line_count() {
-    // Guard the positional index the win_viewport handler reads for line_count
-    // (currently params index 6, which is version-fragile). Open a buffer with a
-    // KNOWN number of lines and assert viewport.linecount matches exactly.
-    //
-    // NOTE: the expected linecount is exactly LINE_COUNT (50). We build the
-    // content by JOINING the lines with '\n' and deliberately add NO trailing
-    // newline, so nvim does not append an extra empty final line. With a trailing
-    // '\n' nvim would report LINE_COUNT + 1 (51); by omitting it the count is
-    // unambiguously LINE_COUNT. The coder must confirm this trailing-newline
-    // behavior matches the buffer-open path.
+    // Guards the version-fragile positional index (params 6) win_viewport reads for line_count. No
+    // trailing newline: one would make nvim report LINE_COUNT + 1.
     let content: String = (0..LINE_COUNT)
         .map(|i| format!("line {i}"))
         .collect::<Vec<_>>()
@@ -435,9 +393,7 @@ fn viewport_reports_line_count() {
         viewport.linecount
     );
 
-    // Sanity invariants on the reported viewport window: the top of the visible
-    // window is at or above the bottom, and the bottom does not exceed the buffer
-    // line count (+1 to allow nvim's exclusive/past-the-end botline convention).
+    // Sanity: topline <= botline <= linecount + 1, allowing nvim's past-the-end botline.
     assert!(
         viewport.topline <= viewport.botline,
         "viewport.topline ({}) should be <= botline ({})",

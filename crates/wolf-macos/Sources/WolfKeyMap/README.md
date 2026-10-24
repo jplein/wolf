@@ -1,6 +1,6 @@
 # wolf-macos/Sources/WolfKeyMap
 
-The pure seam: Foundation plus the generated swift-bridge glue, with no AppKit. Everything here is a function of values, which is what makes it unit-testable with no window server — see the testing posture in [DECISIONS.md](../../DECISIONS.md).
+The pure seam: Foundation plus the generated swift-bridge glue, with no AppKit. Everything here is a function of values, which is what makes it unit-testable with no window server — see the testing posture in [wolf-macos-decisions.md](../../../../notes/wolf-macos-decisions.md).
 
 When you add behavior to this crate, the decision belongs here and the wiring belongs in [`WolfMacOS/`](../WolfMacOS/README.md). A decision left inside a view class is a decision with no test.
 
@@ -474,7 +474,7 @@ Purpose: The pure rules behind Copy from a Markdown preview pane — the selecti
 
 **Gotchas**
 
-- `selectionHandlerName` rides the same `WKUserContentController` as the other preview channels, so every name must differ; teardown is in [DECISIONS.md](../../DECISIONS.md).
+- `selectionHandlerName` rides the same `WKUserContentController` as the other preview channels, so every name must differ; teardown is in [wolf-macos-decisions.md](../../../../notes/wolf-macos-decisions.md).
 
 #### `PreviewLinkSeam.swift`
 
@@ -514,8 +514,8 @@ Purpose: Every decision behind Markdown-preview scroll-sync — which marker a c
 
 **Gotchas**
 
-- The fallback sweep filters on `data-col="0"` and must never be widened — see [the position-marker contract](../../../wolf-core/DECISIONS.md).
-- `stateHandlerName` shares one `WKUserContentController` with the other preview channels' handler names, so all of them must differ; teardown is in [DECISIONS.md](../../DECISIONS.md).
+- The fallback sweep filters on `data-col="0"` and must never be widened — see [the position-marker contract](../../../../notes/wolf-core-decisions.md).
+- `stateHandlerName` shares one `WKUserContentController` with the other preview channels' handler names, so all of them must differ; teardown is in [wolf-macos-decisions.md](../../../../notes/wolf-macos-decisions.md).
 
 #### `PreviewSeam.swift`
 
@@ -535,7 +535,7 @@ Purpose: Which preview windows need their web view reloaded, and the click-to-fo
 
 #### `RestoreSeam.swift`
 
-Purpose: The pure restore planner. It rebuilds projects from the saved (window, tab, working directory) tree, because project identity is not persisted — see [DECISIONS.md](../../DECISIONS.md) for that model.
+Purpose: The pure restore planner. It rebuilds projects from the saved (window, tab, working directory) tree, because project identity is not persisted — see [wolf-macos-decisions.md](../../../../notes/wolf-macos-decisions.md) for that model.
 
 **Public API**
 

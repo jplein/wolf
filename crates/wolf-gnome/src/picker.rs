@@ -5,7 +5,7 @@
 //! The picker has no trigger predicate of its own: the chord is resolved from
 //! [`crate::actions::ACTION_TABLE`] by a CAPTURE-phase controller
 //! ([`crate::shell`]), so it is guaranteed not to also be forwarded to Neovim (see
-//! `crates/wolf-gnome/DECISIONS.md`, "The accelerator namespace").
+//! `notes/wolf-gnome-decisions.md`, "The accelerator namespace").
 //!
 //! What that chord costs, precisely: only the terminal-style Ctrl+Shift ALIAS for
 //! `<C-o>`. `wolf-gnome`'s encoder forces `shift: false` on printables, so
@@ -39,7 +39,7 @@
 //! `connect_search_changed`, it carries an extra status label, its `Enter` is a
 //! two-way decision rather than an activation, and its `open` starts nothing. A
 //! shared widget would need those four as configuration hooks, which is more surface
-//! than the code it removes. The decisive argument is risk: `DECISIONS.md` records
+//! than the code it removes. The decisive argument is risk: `notes/wolf-gnome-decisions.md` records
 //! that the widget layer of these modules is covered only by the cage smokes, so
 //! refactoring three working overlays behind a common type would put their five
 //! smokes at risk (two for the file picker, one for the palette, two for the buffer
@@ -73,7 +73,7 @@ const PICKER_WAKE_CHANNEL_CAP: usize = 1;
 /// Every one of the four transient overlays — and the file-tree sidebar — parks
 /// focus back on the persistent cmdline strip when it closes, because a toplevel
 /// left with no focus widget loses window-level key dispatch entirely while Neovim
-/// stays alive and silent (`DECISIONS.md`, the focus regime). That strip belongs to
+/// stays alive and silent (`notes/wolf-gnome-decisions.md`, the focus regime). That strip belongs to
 /// a [`crate::pane_view::PaneHandle`], and a pane view is PER TAB: an overlay
 /// holding tab 0's strip would, after a tab switch, grab focus into a widget GTK
 /// has unmapped.
@@ -268,9 +268,7 @@ impl PickerInner {
         drop(search);
         drop(paths);
 
-        // Choose the selection: top row on a query change / first open, else the
-        // preserved index clamped into the new range. (Empty list => nothing to
-        // select.)
+        // Top row on a query change or first open; otherwise the preserved index, clamped.
         let prev_index = prev_selected.and_then(|i| usize::try_from(i).ok());
         if let Some(idx) = restored_index(reset_to_top, prev_index, new_len) {
             if let Some(row) = self.list.row_at_index(i32::try_from(idx).unwrap_or(0)) {
@@ -343,7 +341,7 @@ impl PickerHandle {
 /// [`PickerHandle::open`] (which the `win.go-to-file` action does) to show it.
 ///
 /// `area` resolves the focus-return widget at CLOSE time — the SELECTED tab's
-/// cmdline strip, never a pane drawing area (`DECISIONS.md`, "Window structure").
+/// cmdline strip, never a pane drawing area (`notes/wolf-gnome-decisions.md`, "Window structure").
 /// See [`FocusTarget`] for why it is a closure.
 #[must_use]
 pub fn build(
@@ -376,10 +374,8 @@ pub fn build(
 
     overlay.add_overlay(&picker_box);
 
-    // Wake plumbing: traversal batches fire `picker_wake` from a tokio worker
-    // (Send + Sync); it only pushes onto the channel. A dropped "full" send is
-    // correct (a refresh is already pending). DROP-SAFE: ignore try_send errors so
-    // a late cancel-path wake after the channel closes is harmless.
+    // Batches fire `picker_wake` from a tokio worker and it only pushes; a full or closed channel
+    // means a refresh is pending or the picker is gone, so `try_send` errors are ignored.
     let (wake_tx, wake_rx) = async_channel::bounded::<()>(PICKER_WAKE_CHANNEL_CAP);
     let wake: WakeFn = Arc::new(move || {
         let _ = wake_tx.try_send(());
@@ -398,9 +394,8 @@ pub fn build(
         last_query: RefCell::new(None),
     });
 
-    // Drain the wake channel on the GTK main thread, refreshing the (open) picker
-    // on each batch signal. A Weak avoids a reference cycle (inner owns the wake's
-    // sender; the task holds only a weak ref so dropping the handle ends the task).
+    // Drained on the main thread. The task holds only a `Weak`, so dropping the handle ends it
+    // instead of leaking a cycle (inner owns the wake's sender).
     {
         let inner_weak = Rc::downgrade(&inner);
         glib::spawn_future_local(async move {
@@ -442,10 +437,8 @@ pub fn build(
         });
     }
 
-    // Picker key handling (Capture phase so the SearchEntry does not swallow these
-    // first): Esc closes; Up/Down move the LIST selection (NOT the entry's text
-    // cursor) and are consumed so the keypress does not also move the caret; every
-    // other key Proceeds to the entry so typing flows normally.
+    // Capture phase so the SearchEntry does not swallow these: Esc closes; Up/Down move the list
+    // selection, not the caret, and are consumed; every other key proceeds to the entry.
     {
         let inner_weak = Rc::downgrade(&inner);
         let key = gtk::EventControllerKey::new();
@@ -497,12 +490,8 @@ mod tests {
         expected: Option<usize>,
     }
 
-    // NOTE to coder: these tests assume `next_selection` computes exactly
-    //   if n_rows <= 0 { None } else { Some(clamp(current + delta, 0, n_rows - 1)) }
-    // i.e. clamp the *sum* (current + delta) into [0, n_rows - 1] with NO wrap.
-    // For a negative/out-of-range `current` the same formula applies (the sum is
-    // clamped), so e.g. next_selection(-5, 1, 5) == Some(0) and
-    // next_selection(99, 1, 5) == Some(4).
+    // `next_selection` clamps `current + delta` into [0, n_rows - 1] with no wrap, None for
+    // n_rows <= 0; so (-5, 1, 5) -> Some(0) and (99, 1, 5) -> Some(4).
     #[test]
     fn next_selection_table() {
         let n: i32 = 5;

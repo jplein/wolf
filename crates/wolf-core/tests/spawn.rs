@@ -76,9 +76,8 @@ fn durable_dirs_created_and_exported() {
          dir is missing or empty (a missing file means the seed call in api.rs is gone)"
     );
 
-    // In-nvim halves — each pins one `.env(…)` export in spawn. `$VAR` reads the
-    // CHILD's environment, so an empty line means that export is gone even
-    // though the dir above exists.
+    // In-nvim halves pin each `.env(…)` export in spawn: `$VAR` reads the child's environment, so
+    // an empty value means that export is gone even though the dir above exists.
     let probe_dir = tempfile::tempdir().expect("create probe dir");
     let vals = common::probe_values(
         &core,

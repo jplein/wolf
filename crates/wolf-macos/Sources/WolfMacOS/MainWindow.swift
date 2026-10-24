@@ -1,14 +1,4 @@
-//
-//  MainWindow.swift
-//  The single editor window. Its content is an `EditorSplitViewController`
-//  (an `NSSplitViewController`) with a `.sidebar` source-list split item for the
-//  file-tree sidebar and a content split item for the editor grid, under a
-//  transparent full-size-content-view titlebar. The sidebar's vibrancy extends
-//  full-height under the titlebar; the editor pane is pinned below the titlebar
-//  (and the unified toolbar) so it keeps its exact `cols` × `rows` cell size.
-//  The window has a `.unified` `NSToolbar` whose only item is the system
-//  toggle-sidebar button (auto-wired to `NSSplitViewController.toggleSidebar`).
-//
+// The editor window: sidebar split, full-size-content titlebar and unified toolbar.
 
 import AppKit
 import WolfKeyMap
@@ -83,16 +73,11 @@ final class MainWindow: NSWindow {
     cols: Int, rows: Int
   ) {
     let splitVC = EditorSplitViewController(sidebar: sidebar, paneContainer: paneContainer)
-    // Each pane's text grid is inset by a uniform 20pt padding on all four sides
-    // (`EditorInset.padding`) — with the statusbar strip flush at the pane top and
-    // the grid inset below it — so the initial content must grow by 2*padding in
-    // each dimension to keep the grid at exactly cols × rows cells (the 80-col OCR
-    // width is preserved) inside that per-pane inset.
+    // Each pane's grid is inset by `EditorInset.padding` on all sides, so the initial content grows
+    // by 2*padding per dimension to keep the grid at exactly cols × rows cells.
     let padding = CGFloat(EditorInset.padding)
     let editorWidth = CGFloat(cols) * metrics.cellWidth + 2 * padding
-    // The grid stays exactly cols × rows cells; the one-row cmdline strip is extra
-    // height beneath the pane area, and the 2*padding reserves the per-pane inset
-    // around the grid (rather than an outer margin around the whole editor).
+    // The one-row cmdline strip is extra height beneath the pane area.
     let cmdlineStripHeight = ceil(metrics.cellHeight)
     let editorHeight = CGFloat(rows) * metrics.cellHeight + cmdlineStripHeight + 2 * padding
     let divider = splitVC.splitView.dividerThickness
@@ -135,39 +120,30 @@ final class MainWindow: NSWindow {
       defer: false
     )
 
-    // ARC owns this window (the `WolfWindowController` holds the strong
-    // reference). AppKit's default `isReleasedWhenClosed == true` would add an
-    // unbalanced release on close, over-releasing the window — the deferred
-    // close-animation dealloc then crashes. Let ARC be the sole owner.
+    // ARC owns this window; the default `isReleasedWhenClosed` adds an unbalanced release on close,
+    // and the deferred close-animation dealloc then crashes.
     isReleasedWhenClosed = false
 
     title = "Wolf"
     titleVisibility = .visible
     titlebarAppearsTransparent = true
 
-    // A shared tabbing identifier lets every Wolf window merge into the same
-    // native Tahoe tab group (Finder/Safari-style): the "+" button, ⌘T, and
-    // drag-to-merge all target this identity. `tabbingMode` stays the default
-    // (`.automatic`) so the OS shows the tab bar once a window has ≥ 2 tabs.
+    // A shared tabbing identifier merges every Wolf window into one native tab group;
+    // `tabbingMode` stays `.automatic`, so the tab bar shows once a window has 2 tabs.
     tabbingIdentifier = "com.wolf.editor"
 
     contentViewController = splitVC
 
-    // Install the unified toolbar (the system toggle-sidebar button pinned to
-    // the sidebar section at the top-left, then a sidebar-tracking separator
-    // aligned to the sidebar divider) BEFORE measuring the chrome height, so the
-    // measured chrome includes the toolbar band and `setContentSize` keeps the
-    // grid at exactly cols × rows cells.
+    // Install the toolbar before measuring the chrome height, so `setContentSize` accounts for the
+    // toolbar band and the grid stays exactly cols × rows cells.
     let toolbar = NSToolbar(identifier: Self.toolbarIdentifier)
     toolbar.delegate = self
     toolbar.displayMode = .iconOnly
     self.toolbar = toolbar
     toolbarStyle = .unified
 
-    // Size the content so the editor pane is exactly `editorWidth` ×
-    // `editorHeight` BELOW the titlebar chrome. `contentLayoutRect` is
-    // the area not obscured by the (now-attached) titlebar + toolbar, so the
-    // chrome height is the difference from the full content height.
+    // Size the content so the editor is `editorWidth` × `editorHeight` below the chrome;
+    // `contentLayoutRect` excludes the titlebar and toolbar.
     let fullHeight = contentView?.bounds.height ?? editorHeight
     let chrome = fullHeight - contentLayoutRect.height
     setContentSize(
@@ -275,9 +251,8 @@ extension MainWindow: NSToolbarDelegate {
     itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
     willBeInsertedIntoToolbar flag: Bool
   ) -> NSToolbarItem? {
-    // The tracking separator is bound to the sidebar/content divider (index 0)
-    // so it — and everything after it, including the toggle button — stays
-    // pinned to the sidebar's right edge.
+    // Bound to the sidebar divider (index 0), so it and every item after it, including the toggle
+    // button, stay pinned to the sidebar's right edge.
     if itemIdentifier == .sidebarTrackingSeparator {
       return NSTrackingSeparatorToolbarItem(
         identifier: itemIdentifier,

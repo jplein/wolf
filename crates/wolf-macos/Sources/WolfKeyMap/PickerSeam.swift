@@ -1,22 +1,4 @@
-//
-//  PickerSeam.swift
-//  Pure, AppKit-free decision seams for the macOS file picker.
-//
-//  These are the macOS analog of wolf-gnome's pure picker seams in
-//  `crates/wolf-gnome/src/picker.rs` (`next_selection`, `restored_index`). They
-//  take scalar inputs only — NO NSEvent, NO window, NO AppKit — so they are
-//  unit-testable headlessly (see `PickerSeamTests.swift`). The semantics of
-//  those two MUST stay identical to the Rust seams they mirror.
-//
-//  `isPickerTrigger` below is the exception: it has no Rust counterpart to
-//  mirror any more. wolf-gnome deleted its `is_picker_trigger` predicate when
-//  the file-picker chord moved to Ctrl+Shift+O, and the Linux chord is now a
-//  table-driven `wolf_gnome::actions::action_for_key` lookup against
-//  `ACTION_TABLE` that resolves to the `win.go-to-file` action.
-//
-//  Imports ONLY Foundation, so it lives in the Foundation-only `WolfKeyMap`
-//  module alongside `KeyMap.swift`.
-//
+// Pure, AppKit-free decision seams for the file picker.
 
 import Foundation
 

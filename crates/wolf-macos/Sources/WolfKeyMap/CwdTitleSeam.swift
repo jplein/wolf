@@ -1,27 +1,5 @@
-//
-//  CwdTitleSeam.swift
-//  Pure, AppKit-free window-title computation seam.
-//
-//  Computes the window/tab title text from a working-directory path,
-//  abbreviating the user's home directory to `~` per the macOS convention (plan
-//  §A). A pure, display-free seam exercised with scalar string inputs only — NO
-//  AppKit, NO window, NO FileManager, NO implicit `$HOME` (the `home` argument
-//  is always injected, which is load-bearing for determinism) — so it lives in
-//  the Foundation-only `WolfKeyMap` module alongside `CommandSeam.swift` /
-//  `PaneTree.swift`.
-//
-//  CONTRACT:
-//    * empty or all-whitespace `cwd` => "" (caller substitutes an app-name
-//      fallback).
-//    * `home` is normalized by stripping ONE trailing "/" before comparison; an
-//      empty `home` disables abbreviation and returns `cwd` unchanged.
-//    * `cwd == normalizedHome` => "~".
-//    * `cwd` begins with `normalizedHome + "/"` => "~/" + <remainder after the
-//      "home/">. Abbreviation happens ONLY on a full path-segment boundary, so
-//      "/Users/janet/x" must NOT be abbreviated against home "/Users/jane".
-//    * otherwise (cwd not under home) => `cwd` returned verbatim (full absolute
-//      path).
-//
+// Pure window-title computation from a working directory, with `~` for home.
+// The exact contract: crates/wolf-macos/Sources/WolfKeyMap/README.md#cwdtitleseamswift
 
 import Foundation
 

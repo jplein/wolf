@@ -1,33 +1,4 @@
-//
-//  StateSeamTests.swift
-//  Pure, headless unit tests for the `WolfKeyMap.StateSeam` namespace.
-//
-//  These exercise the AppKit-FREE seam of the macOS state-restore path
-//  (plan §2, `Sources/WolfKeyMap/StateSeam.swift`) with scalar inputs only —
-//  NO NSWindow, NO NSScreen, NO NSToolbar, NO AppKit. Foundation/CoreGraphics
-//  types (CGRect) only, exactly like PaneGeometry.
-//
-//  CONTRACT UNDER TEST (the signatures the implementation must satisfy):
-//    * StateSeam.restoredWindowFrame(x:y:width:height:screenVisibleFrames:)
-//      -> CGRect? — nil when width or height is non-positive (the "unset"
-//      sentinel, plan §1) and nil when the rect intersects NO screen visible
-//      frame (never restore a window fully offscreen); otherwise the rect
-//      CGRect(x:y:width:height).
-//    * StateSeam.launchDecision(restored:home:isDirectory:) -> LaunchDecision —
-//      the empty-state launch decision (launch-behavior plan). `restored == ""`
-//      OR `restored` is not a directory (deleted / plain file) => the
-//      "no folder open" empty state, with nvim launched at `home`:
-//      `.emptyState(nvimCwd: home)`. A valid restored directory => reopen it:
-//      `.folder(cwd: restored)`. It NEVER returns the process working directory
-//      (the old `launchCwd` fallback that polluted the recent-dirs MRU). The
-//      injected `isDirectory` closure keeps the seam pure (no FileManager in
-//      tests).
-//
-//  NOTE to coder: this test references the pure `WolfKeyMap.StateSeam` enum the
-//  coder will add in `Sources/WolfKeyMap/StateSeam.swift` (and list in the
-//  `wolf_key_map` srcs in BUILD.bazel). The signatures asserted above are the
-//  contract the implementation must satisfy.
-//
+// See crates/wolf-macos/Tests/WolfKeyMapTests/README.md#stateseamtestsswift
 
 import CoreGraphics
 import XCTest
@@ -140,11 +111,8 @@ final class StateSeamTests: XCTestCase {
   func testLaunchDecisionTable() {
     let restoredDir = "/Users/alice/projects/notes"
     let home = "/Users/alice"
-    // A stand-in for `FileManager.default.currentDirectoryPath` (e.g. a
-    // `bazel run` sandbox temp dir). The seam must NEVER return this — that
-    // was the old `launchCwd` fallback that polluted the recent-dirs MRU.
-    // It is deliberately NOT in any `directories` set, so even if a caller
-    // mistakenly treated it as valid it could not leak through.
+    // Stands in for `FileManager.default.currentDirectoryPath`; it is in no `directories` set, and
+    // the seam must never return it, since that pollutes the recent-dirs MRU.
     let processCwd = "/private/var/tmp/bazel-sandbox/execroot/cwd"
 
     let cases: [DecisionCase] = [
@@ -182,9 +150,8 @@ final class StateSeamTests: XCTestCase {
         isDirectory: { c.directories.contains($0) })
       XCTAssertEqual(got, c.expected, "case: \(c.desc)")
 
-      // The key regression guard: whatever the decision, its associated
-      // directory is NEVER the process working directory. The empty-state
-      // branch must use `home`; the folder branch must use the restored dir.
+      // The key regression guard: neither branch's directory is ever the process working directory;
+      // empty state uses `home`, the folder branch the restored dir.
       let resultDir: String
       switch got {
       case .emptyState(let nvimCwd): resultDir = nvimCwd

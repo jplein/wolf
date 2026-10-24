@@ -59,4 +59,4 @@ Return a report to the orchestrator covering:
 - Run lint and tests after every significant change. Do not leave failing lint or tests unreported.
 - If a test fails and you believe the test itself is wrong (not your implementation), explain this clearly in your report and let the orchestrator decide.
 - Do not add lint suppressions (`#[allow(...)]`, `// swift-format-ignore`) speculatively — only when a rule actually fires and the suppression is justified.
-- Do not write documentation. If a change makes a README or `DECISIONS.md` wrong, name the file in your report and leave it to the technical-writer.
+- Do not write documentation. If a change makes a README or `notes/<crate>-decisions.md` wrong, name the file in your report and leave it to the technical-writer.

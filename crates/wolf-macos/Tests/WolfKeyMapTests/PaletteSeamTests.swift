@@ -1,33 +1,4 @@
-//
-//  PaletteSeamTests.swift
-//  Pure, headless unit tests for the `WolfKeyMap.PaletteSeam` namespace.
-//
-//  The command-palette analog of `PickerSeamTests.swift`: it exercises the pure,
-//  display-free seams of the macOS command palette with scalar inputs only — NO
-//  NSEvent, NO window, NO AppKit, NO NSView. Two contracts are under test:
-//
-//    * PaletteSeam.isPaletteTrigger(charactersIgnoringModifiers:command:) -> Bool
-//      — true iff `command && firstScalar.lowercased == "p"`. This is the macOS
-//      Command+P chord, the palette sibling of PickerSeam's Command+O ("o" -> "p").
-//      Command does not mangle `charactersIgnoringModifiers`, so with Command held
-//      the field carries "p" (or "P" if Shift is also down); the predicate matches
-//      case-insensitively. An empty string (no first scalar) is false.
-//
-//      NOTE (plan §10): this seam is DORMANT/UNWIRED — ⌘P is a menu key-equivalent
-//      that preempts keyDown (like ⌘N), so the predicate is kept for consistency
-//      with PickerSeam and tested, but NOT called from keyDown. The test pins the
-//      contract regardless.
-//
-//    * PaletteSeam.PaletteRowKind(ffi:) — decodes the FFI row-kind discriminant
-//      (`0` -> .staticCommand, `1` -> .switchWindow, `2` -> .openRecent, else nil),
-//      mirroring `wolf-ffi`'s `mod palette_row_kind` (STATIC=0, SWITCH_WINDOW=1,
-//      OPEN_RECENT=2). Structurally the sibling of `CommandKind(ffi:)`.
-//
-//  NOTE to coder: this references the pure `WolfKeyMap.PaletteSeam` enum (with a
-//  nested `PaletteRowKind: UInt8` + guarded `init?(ffi:)`) the coder will add in
-//  `Sources/WolfKeyMap/PaletteSeam.swift`. The signatures asserted below are the
-//  contract the implementation must satisfy.
-//
+// See crates/wolf-macos/Tests/WolfKeyMapTests/README.md#paletteseamtestsswift
 
 import XCTest
 

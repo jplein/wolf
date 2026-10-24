@@ -14,7 +14,7 @@
 //! [`copy_decision`] is liveness-gated exactly the way
 //! [`crate::buffer_picker::open_decision`] and [`crate::nav_ui::nav_press`] are.
 //! The inventory of this crate's blocking calls and the reasoning behind the gate
-//! live in `crates/wolf-gnome/DECISIONS.md`, "Crash and stall recovery", and are
+//! live in `notes/wolf-gnome-decisions.md`, "Crash and stall recovery", and are
 //! deliberately not restated here.
 //!
 //! ## PASTE's refusals are NOT about blocking, and must not be simplified away
@@ -187,9 +187,7 @@ mod tests {
         first.is_uppercase() && second.is_lowercase()
     }
 
-    // =========================================================================
-    // copy_decision
-    // =========================================================================
+    // === copy_decision ===
 
     /// What a [`CopyCase`] row expects [`copy_decision`] to return.
     ///
@@ -302,10 +300,8 @@ mod tests {
             }
         }
 
-        // The rule stated over the WHOLE domain rather than row by row, so a
-        // failure names the rule instead of quoting an index — the
-        // `buffer_picker::only_a_live_core_is_snapshotted` convention. This is
-        // also what catches a table whose four rows became four copies of one.
+        // Stated over the whole domain so a failure names the rule, as in
+        // `buffer_picker::only_a_live_core_is_snapshotted`; it also catches four identical rows.
         let accepting: Vec<Option<Liveness>> = ALL_LIVENESS_INPUTS
             .into_iter()
             .filter(|liveness| copy_decision(*liveness) == CopyPress::Copy)
@@ -322,9 +318,7 @@ mod tests {
         );
     }
 
-    // =========================================================================
-    // paste_decision
-    // =========================================================================
+    // === paste_decision ===
 
     /// What a [`PasteCase`] row expects [`paste_decision`] to return.
     #[derive(Clone, Copy)]
@@ -438,9 +432,7 @@ mod tests {
         );
     }
 
-    // =========================================================================
-    // The refusal strings
-    // =========================================================================
+    // === The refusal strings ===
 
     /// All six refusal reasons — three per direction — are non-empty, read as a
     /// mid-sentence clause, and are pairwise DISTINCT.
@@ -532,9 +524,7 @@ mod tests {
         );
     }
 
-    // =========================================================================
-    // What crosses the boundary
-    // =========================================================================
+    // === What crosses the boundary ===
 
     /// One row of either payload table: the same three shapes apply to both
     /// directions, so they share a type.
@@ -626,15 +616,8 @@ mod tests {
              permanently dead. The pass-through rows are what make the refusal rows mean anything."
         );
 
-        // The rule the signature cannot state, recorded where it is read.
-        //
-        // `clipboard_write(None) == None` is an instruction to the caller to
-        // perform NO write. `gdk::Clipboard` also offers `set_text("")`, which is
-        // the call a reader reaches for on seeing an "empty" answer — and it
-        // CLEARS the selection, discarding whatever the user copied from another
-        // application. There is no assertion that can catch that from here: this
-        // seam returns data, and the mistake is made by `shell::copy_selection`
-        // with the data in hand. See the module docs.
+        // `clipboard_write(None)` means perform no write: `set_text("")` would clear another app's
+        // selection. No assertion here can catch that; `shell::copy_selection` is where it would happen.
     }
 
     /// [`paste_payload`]: an absent or empty clipboard read pastes NOTHING, and

@@ -246,9 +246,8 @@ fn search_streams_sorts_and_reports_ranges() {
 
     assert!(!matches.is_empty(), "the search should surface matches");
 
-    // --- projected groups sorted case-insensitively by rel-path --------------
-    // Raw ASCII would put "Zebra.md" (Z=0x5A) before "apple.md" (a=0x61); the
-    // case-insensitive projection must instead order apple < sub/mango < Zebra.
+    // Groups sort case-insensitively by rel-path: raw ASCII would put "Zebra.md" (0x5A) before
+    // "apple.md" (0x61); the projection must order apple < sub/mango < Zebra.
     let groups = project(&matches);
     let order: Vec<&str> = groups.iter().map(|g| g.rel_path.as_str()).collect();
     assert_eq!(

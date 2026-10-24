@@ -1,22 +1,4 @@
-//
-//  SearchBudgetSeamTests.swift
-//  Pure, headless unit tests for the `WolfKeyMap.SearchBudgetSeam` namespace.
-//
-//  These exercise the display-free seam that converts a sidebar pixel width + a
-//  per-character advance into an integer CHARACTER budget for a matched line
-//  wrapped across up to two rows — scalar inputs only, NO AppKit / NSFont.
-//
-//  CONTRACT UNDER TEST (search plan §2, `SearchBudgetSeam.swift`):
-//    * SearchBudgetSeam.charBudget(sidebarWidth:charAdvance:lines:) -> Int
-//      == max(1, floor(width / advance)) * lines, with `lines` defaulting to 2
-//      (the "wrapped to no more than two lines" rule). A degenerate
-//      `charAdvance <= 0` must NOT crash or divide-by-zero and must return a
-//      sensible positive floor (>= lines), never 0.
-//
-//  NOTE to coder: this test references the pure `WolfKeyMap.SearchBudgetSeam` enum
-//  the coder adds in `Sources/WolfKeyMap/SearchBudgetSeam.swift`. The default
-//  `lines: Int = 2` parameter is part of the asserted contract.
-//
+// See crates/wolf-macos/Tests/WolfKeyMapTests/README.md#searchbudgetseamtestsswift
 
 import XCTest
 

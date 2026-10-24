@@ -1,20 +1,4 @@
-//
-//  PaneGeometry.swift
-//  The per-pane GRID-RECT-inside-PANE-RECT coordinate seam (AppKit-free).
-//
-//  Every pixel<->cell mapping in `PaneContainerView` routes through this struct:
-//  pixel->cell (mouse), scroll hit-testing, scrollbar placement, and the paint
-//  offset. It distinguishes the PANE RECT (the whole pane area) from the GRID RECT
-//  (where the Neovim grid is actually drawn). When `maxCols` is set and the pane is
-//  wider than that many columns, the grid is CAPPED to `maxCols` cells and CENTERED
-//  horizontally inside the pane (leaving side margins); a narrower pane is
-//  unaffected (`gridRect == paneRect`, paint offsets 0). `maxCols == nil` disables
-//  the cap entirely (grid always fills the pane).
-//
-//  Foundation-only and `Double`-based (not `CGFloat`) so it is headlessly
-//  unit-testable in the `WolfKeyMap` module alongside `PaneTree`. It reuses the
-//  existing `Rect` value type from `PaneTree.swift`.
-//
+// Pure grid-rect-inside-pane-rect coordinate seam, including the column cap.
 
 import Foundation
 
@@ -54,9 +38,7 @@ public struct PaneGeometry {
     self.cellWidth = cellWidth
     self.cellHeight = cellHeight
 
-    // Cap the grid width to `maxCols` cells and center it inside the pane. When
-    // `maxCols` is nil or the pane is no wider than the cap, the grid fills the
-    // whole pane, so `gridRect == paneRect` (inset 0).
+    // Cap the grid at `maxCols` cells, centered; with no cap or a narrower pane it fills the pane.
     if let maxCols, cellWidth > 0 {
       let cappedWidth = min(paneRect.w, Double(maxCols) * cellWidth)
       let inset = max(0, (paneRect.w - cappedWidth) / 2)

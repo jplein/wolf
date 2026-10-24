@@ -150,10 +150,8 @@ fn command_palette_ranks_static_dynamic_and_mru_rows() {
 
     let init_lua = common::init_lua_path();
 
-    // Point the state machinery at a private tempdir for the WHOLE test, BEFORE
-    // starting the core: the command-MRU + recent-dirs stores open under
-    // `state_dir()` exactly once in `WolfCore::start`. Safe to mutate because this
-    // binary has exactly one test. Keep the guard alive until after `shutdown()`.
+    // Private state dir before start: the MRU stores open under it once, in `WolfCore::start`.
+    // Safe to mutate because this binary has one test; keep the guard alive past `shutdown()`.
     let state_dir = tempfile::tempdir().expect("failed to create temp state dir");
     std::env::set_var("WOLF_STATE_DIR", state_dir.path());
 
@@ -245,9 +243,7 @@ fn command_palette_ranks_static_dynamic_and_mru_rows() {
         open_recent.display()
     );
 
-    // --- 5. MRU round-trip: record(key) then a fresh session ranks it first --
-    // The command-MRU is empty under the fresh WOLF_STATE_DIR, so recording a
-    // single static key makes it the sole MRU row -> rank 0 of ranked("").
+    // --- 5. MRU round-trip: the MRU starts empty here, so one recorded key ranks first.
     session2.record(MINIMIZE_MRU_KEY.to_string());
     let session3 = handle.command_palette();
     let rows3 = session3.ranked(String::new(), RANKED_MAX);

@@ -1,23 +1,6 @@
 #!/bin/bash
-#
-# install_wolf.sh
-#
-# The runner behind `bazel run //crates/wolf-macos:InstallWolf`: installs the
-# optimized bundle to ~/Applications/Wolf.app, replacing whatever is there.
-#
-# $1 is the rootpath of the `:WolfRelease` archive, staged in this target's
-# runfiles. Bazel builds it before the run, so by the time this script executes
-# the optimized bundle already exists.
-#
-# The ZIP is the input, not the `<name>_archive-root/Wolf.app` directory beside
-# it: the directory is an undeclared side effect of the bundling action that
-# nothing tracks and that runfiles therefore cannot carry. `ditto -x -k` is the
-# extractor because it preserves the symlinks, exec bits and code signature that
-# make the bundle launchable; `unzip` does not.
-#
-# Extraction goes to a staging directory FIRST, and the existing app is removed
-# only once a complete new bundle exists. A failed or interrupted extraction
-# then leaves the installed app untouched rather than destroying it.
+# Runner for `bazel run :InstallWolf`: installs the `:WolfRelease` zip to ~/Applications/Wolf.app.
+# See notes/crates/wolf-macos/install_wolf.sh.md#archive-and-staging
 
 set -euo pipefail
 

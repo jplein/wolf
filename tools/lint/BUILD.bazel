@@ -1,134 +1,116 @@
-# Advisory lint/format targets for the macOS host: clippy + rustfmt (Rust, via
-# the rules_rust downloaded 1.85.0 toolchain) and swift-format (the host Xcode
-# binary, resolved via `xcrun --find swift-format`).
-#
-# ADVISORY / NON-GATING: EVERY target here is tagged "manual" so no wildcard
-# build/test (e.g. `bazel test //crates/...`) ever sweeps it in. The pre-existing
-# default suite stays exactly 47/47. Existing lint violations are EXPECTED and
-# out of scope; a CHECK target's job is to RUN, not to report zero findings.
-#
-# Modes per tool:
-#   CHECK (bazel test) — reports/fails on violations.
-#   FIX   (bazel run)  — rewrites files in place under $BUILD_WORKSPACE_DIRECTORY.
-#
-# clippy's `-Dwarnings` (fail on lints) is behind `--config=lint` in .bazelrc so
-# the DEFAULT build/test path is byte-for-byte unchanged; the clippy CHECK may
-# need `bazel test --config=lint //tools/lint:clippy` to actually FAIL on lints.
+# Lint and format checks, which gate `bazel test //...`, and their `manual` fix targets.
+# What each target runs and why: tools/lint/README.md
 load("@rules_rust//rust:defs.bzl", "rust_clippy", "rustfmt_test")
 load(":clippy_fix.bzl", "clippy_fix", "fix_all")
+load(":defs.bzl", "comment_srcs")
 
 package(default_visibility = ["//visibility:public"])
 
-# ---------------------------------------------------------------------------
-# clippy
-# ---------------------------------------------------------------------------
+# ---- clippy ----
 
-# clippy CHECK per crate: `rust_clippy` runs clippy as a BUILD action over the
-# named Rust targets. Building these (as data of `:clippy`) runs clippy.
 rust_clippy(
     name = "clippy_core",
     testonly = True,
-    tags = ["manual"],
     deps = ["//crates/wolf-core:wolf_core"],
 )
 
 rust_clippy(
     name = "clippy_ffi",
     testonly = True,
-    tags = ["manual"],
     deps = ["//crates/wolf-ffi:wolf_ffi"],
 )
 
-# clippy CHECK aggregate: a trivial sh_test whose `data` are the rust_clippy
-# targets. Bazel must BUILD them (running clippy) to stage runfiles, so a clippy
-# failure fails this test. `bazel test //tools/lint:clippy`.
+rust_clippy(
+    name = "clippy_doc_lint",
+    testonly = True,
+    deps = ["//tools/doc-lint:doc_lint_lib"],
+)
+
+# Staging the rust_clippy targets as data builds them, which runs clippy, so a lint fails this.
 sh_test(
     name = "clippy",
     srcs = ["clippy_gate.sh"],
     data = [
         ":clippy_core",
+        ":clippy_doc_lint",
         ":clippy_ffi",
     ],
-    tags = ["manual"],
 )
 
-# clippy FIX: `cargo clippy --fix` via the staged toolchain (custom rule).
 clippy_fix(
     name = "clippy.fix",
     tags = ["manual"],
 )
 
-# ---------------------------------------------------------------------------
-# rustfmt
-# ---------------------------------------------------------------------------
+# ---- rustfmt ----
 
-# rustfmt CHECK per crate: `rustfmt --check` over the crate's sources.
 rustfmt_test(
     name = "rustfmt_core",
-    tags = ["manual"],
     targets = ["//crates/wolf-core:wolf_core"],
 )
 
 rustfmt_test(
     name = "rustfmt_ffi",
-    tags = ["manual"],
     targets = ["//crates/wolf-ffi:wolf_ffi"],
 )
 
-# rustfmt CHECK aggregate: `bazel test //tools/lint:rustfmt`.
+rustfmt_test(
+    name = "rustfmt_doc_lint",
+    targets = [
+        "//tools/doc-lint:doc_lint",
+        "//tools/doc-lint:doc_lint_lib",
+    ],
+)
+
 test_suite(
     name = "rustfmt",
-    tags = ["manual"],
     tests = [
         ":rustfmt_core",
+        ":rustfmt_doc_lint",
         ":rustfmt_ffi",
     ],
 )
 
-# rustfmt FIX: the rules_rust rustfmt writer. `bazel run //tools/lint:rustfmt.fix`.
 alias(
     name = "rustfmt.fix",
     actual = "@rules_rust//:rustfmt",
     tags = ["manual"],
 )
 
-# ---------------------------------------------------------------------------
-# swift-format (host Xcode binary)
-# ---------------------------------------------------------------------------
+# ---- swift-format ----
 
-# swift-format CHECK: `swift-format lint --strict` over the enumerated wolf-macos
-# Swift sources. `no-sandbox` because the binary is host Xcode, not a hermetic
-# input. `bazel test //tools/lint:swift_format`.
+# `no-sandbox`: swift-format is the host Xcode binary, not a hermetic input.
 sh_test(
     name = "swift_format",
     srcs = ["swift_format_check.sh"],
     args = ["$(rootpaths //crates/wolf-macos:swift_format_srcs)"],
     data = ["//crates/wolf-macos:swift_format_srcs"],
-    tags = [
-        "manual",
-        "no-sandbox",
-    ],
+    tags = ["no-sandbox"],
 )
 
-# swift-format FIX: `swift-format format -i` in place. `bazel run //tools/lint:swift_format.fix`.
 sh_binary(
     name = "swift_format.fix",
     srcs = ["swift_format_fix.sh"],
     tags = ["manual"],
 )
 
-# ---------------------------------------------------------------------------
-# markdown (documentation rules from CLAUDE.md)
-# ---------------------------------------------------------------------------
+# ---- markdown ----
 
-# The docs this checker covers, collected from the per-package `markdown_srcs`
-# filegroups (Bazel forbids cross-package globbing, so each package exposes its
-# own). Adding docs to a new package means adding a filegroup there and listing
-# it here.
+comment_srcs()
+
 filegroup(
     name = "markdown_srcs",
+    srcs = glob(
+        ["**/*.md"],
+        exclude = ["testdata/**"],
+    ),
+    visibility = ["//tools/lint:__pkg__"],
+)
+
+# Every package's docs. doc-lint's bazel-coverage rule fails when a package is missing here.
+filegroup(
+    name = "all_markdown_srcs",
     srcs = [
-        "README.md",
         "//:markdown_srcs",
         "//bazel/ia-writer-mono:markdown_srcs",
         "//bazel/jetbrains-mono:markdown_srcs",
@@ -144,38 +126,81 @@ filegroup(
         "//crates/wolf-macos:markdown_srcs",
         "//resources/icons:markdown_srcs",
         "//runtime/nvim:markdown_srcs",
+        "//tools/doc-lint:markdown_srcs",
+        "//tools/lint:markdown_srcs",
     ],
 )
 
-# markdown CHECK: line length, changelog voice, ALL-CAPS emphasis, per-entry word
-# budget, and a size warning. Pure bash + awk, so it needs no toolchain and runs
-# sandboxed. `bazel test //tools/lint:markdown`.
 sh_test(
     name = "markdown",
     srcs = ["markdown_check.sh"],
-    args = ["$(rootpaths :markdown_srcs)"],
-    data = [":markdown_srcs"],
-    tags = ["manual"],
+    args = ["$(rootpaths :all_markdown_srcs)"],
+    data = [":all_markdown_srcs"],
 )
 
-# ---------------------------------------------------------------------------
-# Aggregates
-# ---------------------------------------------------------------------------
+sh_test(
+    name = "markdown_check_test",
+    srcs = ["markdown_check_test.sh"],
+    data = ["markdown_check.sh"] + glob(["testdata/**"]),
+)
 
-# ALL checks: `bazel test //tools/lint:check`.
+# ---- comments ----
+
+# Every package's comment-checked sources; bazel-coverage guards this list too.
+filegroup(
+    name = "all_comment_srcs",
+    srcs = [
+        "//:comment_srcs",
+        "//bazel/ia-writer-mono:comment_srcs",
+        "//bazel/jetbrains-mono:comment_srcs",
+        "//bazel/lighthouse:comment_srcs",
+        "//bazel/nvim:comment_srcs",
+        "//bazel/nvim-treesitter:comment_srcs",
+        "//bazel/nvim-treesitter-textobjects:comment_srcs",
+        "//bazel/orlando:comment_srcs",
+        "//bazel/rg:comment_srcs",
+        "//bazel/treesitter-parsers:comment_srcs",
+        "//crates/wolf-core:comment_srcs",
+        "//crates/wolf-ffi:comment_srcs",
+        "//crates/wolf-macos:comment_srcs",
+        "//resources/icons:comment_srcs",
+        "//runtime/nvim:comment_srcs",
+        "//tools/doc-lint:comment_srcs",
+        "//tools/lint:comment_srcs",
+    ],
+)
+
+# The Markdown is data so that doc-lint can resolve the doc paths written in comments.
+sh_test(
+    name = "comments",
+    srcs = ["doc_lint_check.sh"],
+    args = [
+        "$(rootpath //tools/doc-lint:doc_lint)",
+        "$(rootpaths :all_comment_srcs)",
+    ],
+    data = [
+        ":all_comment_srcs",
+        ":all_markdown_srcs",
+        "//tools/doc-lint:doc_lint",
+    ],
+)
+
+# ---- aggregates ----
+
 test_suite(
     name = "check",
-    tags = ["manual"],
     tests = [
         ":clippy",
+        ":comments",
         ":markdown",
+        ":markdown_check_test",
         ":rustfmt_core",
+        ":rustfmt_doc_lint",
         ":rustfmt_ffi",
         ":swift_format",
     ],
 )
 
-# ALL fixes: `bazel run //tools/lint:fix` (cargo fmt + cargo clippy --fix + swift-format).
 fix_all(
     name = "fix",
     tags = ["manual"],

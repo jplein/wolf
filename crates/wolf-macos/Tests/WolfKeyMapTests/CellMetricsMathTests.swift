@@ -1,39 +1,4 @@
-//
-//  CellMetricsMathTests.swift
-//  Pure, headless unit tests for the AppKit-/CoreText-free `WolfKeyMap.CellMetricsMath`.
-//
-//  These exercise the line-height + baseline math seam the coder extracts into
-//  `Sources/WolfKeyMap/CellMetricsMath.swift` (plan §2). Like `ScrollAccumulatorTests`
-//  and `PaneGeometryTests`, they import ONLY Foundation-level test machinery (no
-//  AppKit / CoreText, no live font), and stay in the headless `WolfKeyMap` module.
-//  This is the ONLY headless-testable slice of the macOS metrics work — font
-//  registration, CTFont family resolution, and on-screen rendering are explicitly
-//  manual-smoke only (plan §4).
-//
-//  ## CONTRACT UNDER TEST (the API the coder must honor, plan §2 / risk 6)
-//
-//    public enum CellMetricsMath {
-//        // Cell height in points. For a POSITIVE line-height percentage this is the
-//        // documented formula, INDEPENDENT of the raw font metrics:
-//        //     round(fontSize * lineHeightPercent / 100)
-//        // For a DEGENERATE lineHeightPercent <= 0 it falls back to the font's
-//        // natural line height: ceil(ascent + descent + leading).
-//        public static func cellHeight(
-//            fontSize: Double, lineHeightPercent: Double,
-//            ascent: Double, descent: Double, leading: Double) -> Double
-//
-//        // Baseline offset (points from the TOP of the cell) that keeps the glyph
-//        // box vertically centered: the extra space (cellHeight - ascent - descent)
-//        // is split evenly above and below, so
-//        //     baseline = ascent + (cellHeight - ascent - descent) / 2
-//        public static func baseline(
-//            cellHeight: Double, ascent: Double, descent: Double) -> Double
-//    }
-//
-//  All returns are exact-valued in these cases (integer or half-integer), so they
-//  are asserted with a tight `eps` accuracy in the `approx` style of the sibling
-//  headless tests.
-//
+// See crates/wolf-macos/Tests/WolfKeyMapTests/README.md#cellmetricsmathtestsswift
 
 import XCTest
 

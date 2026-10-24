@@ -1,8 +1,6 @@
-# Arch-selected, structure-preserving Neovim 0.12.3 TreeArtifact + a smoke test.
-#
-# `nvim_tree` resolves to the assembled `nvim/` directory for the host CPU; the
-# macOS app bundles it at `Contents/Resources/nvim/`. See extensions.bzl and the
-# directory README for the pins and how to bump them.
+# The arch-selected Neovim 0.12.3 `nvim/` TreeArtifact and its smoke test.
+# See bazel/nvim/README.md for the pins and how to bump them.
+load("//tools/lint:defs.bzl", "comment_srcs")
 
 # The host-arch Neovim tree (a `nvim/` TreeArtifact: bin/nvim, lib/nvim/parser,
 # share/nvim/runtime, ...). Selected on @platforms//cpu.
@@ -23,9 +21,14 @@ sh_test(
     data = [":nvim_tree"],
 )
 
-# This package's docs, for `//tools/lint:markdown`.
+# This package's sources and docs for //tools/lint, which cannot glob across packages.
+comment_srcs()
+
 filegroup(
     name = "markdown_srcs",
-    srcs = ["README.md"],
+    srcs = glob(
+        ["**/*.md"],
+        allow_empty = True,
+    ),
     visibility = ["//tools/lint:__pkg__"],
 )

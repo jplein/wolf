@@ -1,23 +1,4 @@
-//
-//  AppearanceSeamTests.swift
-//  Pure, headless unit tests for the AppKit-free `WolfKeyMap.AppearanceMode`
-//  discriminant contract.
-//
-//  These are the sibling of `CommandSeamTests`' `CommandKind(ffi:)` discriminant
-//  coverage: a pure, display-free check exercised with scalar inputs only — NO
-//  AppKit, NO NSApp, NO NSAppearance, NO live Neovim. `AppearanceMode` mirrors the
-//  FFI appearance discriminant that `FfiConfig::appearance() -> u8` delivers, which
-//  `AppDelegate` decodes to resolve dark/light.
-//
-//  DISCRIMINANT CONTRACT UNDER TEST (must match `mod appearance` in
-//  `wolf-ffi/src/lib.rs` and `wolf_core::config::Appearance`, plan OD-a / §3.5):
-//    auto = 0, dark = 1, light = 2. Any other discriminant is out of range.
-//
-//  NOTE to coder: this references the `WolfKeyMap.AppearanceMode` enum the coder
-//  adds (Foundation only, no AppKit), declared `enum AppearanceMode: UInt8 { auto =
-//  0; dark = 1; light = 2 }` (plan §3.7). The raw values + round-trip asserted below
-//  are the contract the implementation must satisfy.
-//
+// See crates/wolf-macos/Tests/WolfKeyMapTests/README.md#appearanceseamtestsswift
 
 import XCTest
 

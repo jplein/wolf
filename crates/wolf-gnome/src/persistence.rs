@@ -222,9 +222,8 @@ impl StateHandle {
             return;
         }
 
-        // The SECOND refusal route: a leaf whose Neovim window is in neither
-        // snapshot map. Returning here contributes the cache, exactly as a shut
-        // gate does.
+        // The second refusal route: a leaf whose window is in neither snapshot map contributes the cache,
+        // as a shut gate does.
         let LayoutGather::Ready(layout) = self.inner.panes.layout_snapshot() else {
             return;
         };
@@ -236,10 +235,8 @@ impl StateHandle {
 
         let empty = self.inner.empty.get();
         let cwd = state_seam::snapshot_cwd(empty, &self.inner.launch_cwd, live.as_deref());
-        // The user's PREFERENCE, never the live empty-state flag. `restore_plans`
-        // reads this field back, so writing `!empty` would make any session that
-        // ended in the empty state hide the sidebar on the next launch into a real
-        // project.
+        // The user's preference, never the live empty-state flag: `restore_plans` reads it back, and
+        // `!empty` would make a session ending empty hide the sidebar in the next real project.
         let tab = state_seam::tab_subtree(cwd, self.inner.sidebar_shown.get(), layout);
         *self.inner.tab.borrow_mut() = Some(tab);
     }

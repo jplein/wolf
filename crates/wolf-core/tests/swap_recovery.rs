@@ -478,9 +478,8 @@ fn restart_recovers_unsaved_untitled_buffer() {
         },
     );
 
-    // Type a distinctive unsaved edit into the Untitled.md buffer (the active buffer),
-    // then force the swap to disk deterministically so the SIGKILL cannot race the
-    // swap sync (mirrors the other swap_recovery tests).
+    // Type an unsaved edit into Untitled.md, then force the swap to disk so the SIGKILL cannot race
+    // the swap sync.
     core.send_input(ch('i'));
     type_str(&core, UNTITLED_MARKER);
     core.send_input(key(Key::Esc));
@@ -538,21 +537,16 @@ fn restart_recovers_unsaved_untitled_buffer() {
         "current_tabpage() must be valid after restart"
     );
 
-    // Drive the reopen the front-end performs off the captured set. Reopening
-    // <cwd>/Untitled.md is what must trigger the dead owner's swap recovery, and it can
-    // only do so because the fresh nvim's VimEnter saw the stale swap and named its own
-    // startup buffer <cwd>/Untitled 2.md instead — so this name is still unclaimed and
-    // the reopen is a real load, not a switch to an already-named empty buffer (the
-    // "shadow" this test exists to catch, prevented by that name avoidance).
+    // Reopening <cwd>/Untitled.md must recover the dead owner's swap. It is a real load only because
+    // the fresh nvim named its startup buffer `Untitled 2.md`; otherwise that buffer would shadow it.
     core.set_current_tabpage(fresh_tab);
     for path in &reopen {
         core.send_input(InputEvent::Open { path: path.clone() });
     }
     waiter.wait_for_flush(&core, FLUSH_TIMEOUT);
 
-    // The recovered Untitled.md buffer must show the unsaved edit on row 0. If the
-    // restart shadow occurred, SwapExists never fired and row 0 is empty — this fails
-    // loudly, which is exactly the risk this test pins.
+    // The recovered buffer must show the edit on row 0; under the restart shadow SwapExists never
+    // fires and row 0 is empty.
     poll_until(
         &waiter,
         "the recovered Untitled.md buffer to show the unsaved edit on row 0",
@@ -624,9 +618,8 @@ fn stale_untitled_swap_does_not_block_a_fresh_start() {
     let tab_a = core_a.current_tabpage();
     assert_ne!(tab_a, 0, "current_tabpage() should be nonzero after attach");
 
-    // 3. PRECONDITION: in a fresh, empty cwd the startup buffer must take the
-    //    UN-NUMBERED name. If it does not, the fixture below would be a swap for
-    //    some other name and the whole test would prove nothing.
+    // 3. Precondition: in a fresh cwd the startup buffer takes the un-numbered name, or the fixture
+    //    below is a swap for some other name and the test proves nothing.
     poll_until(
         &waiter_a,
         "A's Tier-1 mirror to carry the un-numbered startup Untitled.md \
@@ -725,11 +718,8 @@ fn stale_untitled_swap_does_not_block_a_fresh_start() {
         swap_dir_report(&cwd)
     );
 
-    // 11. ASSERTION B — the user-visible symptom, and the primary assertion. Type
-    //     blind, exactly as a user would the instant the window appears. This
-    //     cannot be faked: if the leading `i` is consumed answering the dialog, at
-    //     most len-1 characters can be inserted, and `contains` demands the whole
-    //     marker contiguously.
+    // 11. Assertion B, primary: type blind as a user would. If the leading `i` answers a dialog, at
+    //     most len-1 chars land, and `contains` demands the whole marker.
     core_b.send_input(ch('i'));
     type_str(&core_b, STARTUP_MARKER);
     core_b.send_input(key(Key::Esc));
@@ -759,9 +749,8 @@ fn stale_untitled_swap_does_not_block_a_fresh_start() {
         swap_dir_report(&cwd)
     );
 
-    // 12. ASSERTION C — diagnostic. `do_dialog` under `ext_messages` emits a
-    //     `msg_show` of kind `confirm`, which is exactly what `Toast::is_prompt`
-    //     detects, so this names the cause directly when it fires.
+    // 12. Assertion C, diagnostic: `do_dialog` under `ext_messages` emits a `confirm` `msg_show`,
+    //     which `Toast::is_prompt` detects, naming the cause directly.
     assert!(
         !snap_b.toast.is_prompt(),
         "a fresh start over a stale `Untitled.md` swap must never raise a confirm prompt \
