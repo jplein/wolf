@@ -249,10 +249,11 @@ pub fn parsers_dir_or_none() -> Option<PathBuf> {
 ///    `nvim_treesitter_tree` TreeArtifact whose inner content is `nvim-treesitter/`
 ///    (i.e. `<dir>/nvim-treesitter/queries/markdown/injections.scm`).
 /// 2. `WOLF_NVIM_TREESITTER_DIR`, the Linux devShell's export (`flake.nix`),
-///    pointing at the nvim-treesitter plugin's own `runtime` directory, which
-///    carries `queries/` directly (i.e. `<dir>/queries/markdown/injections.scm`).
-///    It is the same variable `runtime/nvim/init.lua`'s gate falls back to, and the
-///    same upstream revision Bazel pins, so both platforms get identical queries.
+///    pointing at the flake's assembled runtimepath-shaped nvim-treesitter tree,
+///    with `queries/`, `lua/` and `plugin/` as siblings (i.e.
+///    `<dir>/queries/markdown/injections.scm`). It is the same variable
+///    `runtime/nvim/init.lua`'s gate falls back to. Its revision is nixpkgs',
+///    independent of the one Bazel pins, so the platforms' queries can differ.
 ///
 /// **The Bazel variable wins, and the order is load-bearing** — see
 /// [`parsers_dir_or_none`] for why. Callers must accommodate both layouts: probe

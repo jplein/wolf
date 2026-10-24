@@ -8,9 +8,9 @@ These parsers are vendored, shipped, and active on macOS: the captive `runtime/n
 
 ## Why host-compile, rather than nix-built or the parsers inside nvim
 
-The pinned Neovim ships seven parsers carrying `highlights` queries and no more — `c`, `lua`, `markdown`, `markdown_inline`, `query`, `vim`, `vimdoc` — measured with `--clean` against the Linux flake's 0.12.2. To highlight the languages Wolf cares about, the parsers must be present in the bundle, be ABI-compatible with pinned nvim's treesitter runtime, and be signable, relocatable, host-compiled Mach-O.
+The pinned Neovim ships seven parsers carrying `highlights` queries and no more — `c`, `lua`, `markdown`, `markdown_inline`, `query`, `vim`, `vimdoc` — measured with `--clean` against Neovim 0.12.6 from the Linux flake. To highlight the languages Wolf cares about, the parsers must be present in the bundle, be ABI-compatible with pinned nvim's treesitter runtime, and be signable, relocatable, host-compiled Mach-O.
 
-The two platforms are not on the same Neovim: [`bazel/nvim`](../nvim/README.md) pins 0.12.3 for macOS while the flake's `pkgs.neovim` is 0.12.2. That is recorded rather than fixed — grammar ABIs are stable across both, and `:treesitter_parser_abi` proves the pairing on each host it runs on.
+The two platforms are not on the same Neovim: [`bazel/nvim`](../nvim/README.md) pins 0.12.3 for macOS, while the flake takes `pkgs.neovim` from nixos-unstable at the revision `flake.lock` pins, and the two move independently. That is recorded rather than fixed — grammar ABIs are stable across both, and `:treesitter_parser_abi` proves the pairing on each host it runs on.
 
 A nix-built `.so` embeds `/nix/store` install names and is not relocatable inside a signed `.app`, so the parsers are compiled from source with the same apple_support host-Xcode cc toolchain that builds `wolf-core`'s bundled SQLite. The resulting `.so`s are `MH_DYLIB` Mach-O shared libraries with `NOUNDEFS` — self-contained, needing no runtime symbol resolution — which `dlopen` and `vim.treesitter.language.add` accept.
 

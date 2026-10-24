@@ -31,36 +31,23 @@
   description = "Wolf — Linux (NixOS) + macOS dev environment (Rust toolchain + pinned hermetic Neovim; bazelisk on Darwin)";
 
   inputs = {
+    # One input supplies the toolchain, the GTK stack, and the runtime assets
+    # the package ships — Neovim, ripgrep and nvim-treesitter. `flake.lock` pins
+    # it, and `nix flake update` moves all of them together. One input is
+    # deliberate: do not split the runtime assets into an input of their own.
+    # An update that moves Neovim owes the full verification gate in
+    # `build.md`, because `runtime/nvim/init.lua` and the test comments state
+    # measured claims per Neovim version. macOS pins its own Neovim and
+    # nvim-treesitter under `bazel/`; the divergence is tracked in
+    # `macos-followups.md`.
+    #
+    # The input must NOT lag the host. The GTK process dlopens the host's Mesa
+    # from `/run/opengl-driver`, and that Mesa needs a glibc at least as new as
+    # the system's. A `nixpkgs` lock older than the NixOS host leaves the process
+    # on an older glibc, the driver fails to load, and WebKit's web process
+    # aborts with "Could not create default EGL display: EGL_BAD_PARAMETER" — a
+    # blank Markdown preview.
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-
-    # The RUNTIME ASSETS the shipped application carries — Neovim, its
-    # nvim-treesitter grammars and queries, and ripgrep — held apart from the
-    # GTK/toolchain `nixpkgs` above and pinned to an explicit revision, so a
-    # `nix flake update nixpkgs` taken for a GTK fix cannot move what the Linux
-    # suite was run against. The property a packaging unit owes is that the
-    # artifact's Neovim IS the one the evidence was taken from; a floating input
-    # would make a green Linux suite evidence about one Neovim while the shipped
-    # application ran whatever the last update fetched.
-    #
-    # The asymmetry runs the other way for `nixpkgs` itself, which must NOT lag the
-    # host. The GTK process dlopens the host's Mesa from `/run/opengl-driver`, and
-    # that Mesa needs a glibc at least as new as the system's. A `nixpkgs` lock
-    # older than the NixOS host leaves the process on an older glibc, the driver
-    # fails to load, and WebKit's web process aborts with "Could not create
-    # default EGL display: EGL_BAD_PARAMETER" — a blank Markdown preview. Neovim
-    # runs in a process of its own and is unaffected, which is why it can stay
-    # pinned here.
-    #
-    # IT CARRIES NEOVIM 0.12.2, and `bazel/nvim/extensions.bzl` pins 0.12.3 for
-    # macOS. That divergence predates this input and is deliberate rather than
-    # unnoticed: the shared `runtime/nvim/init.lua` states its measured claims per
-    # version (`vim.uv` on 0.12.3, treesitter starting by itself on a markdown
-    # buffer on 0.12.2), and a matching MINOR series is what preserves the API
-    # surface those claims rest on. Closing the patch gap costs either building
-    # Neovim from source on Linux — off the binary cache, taxing every
-    # `nix develop` — or bumping Linux and re-running the whole verification gate
-    # plus re-measuring the treesitter readbacks. Recorded in `macos-followups.md`.
-    nixpkgs-runtime.url = "github:NixOS/nixpkgs/9ae611a455b90cf061d8f332b977e387bda8e1ca";
 
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
@@ -72,7 +59,6 @@
   outputs =
     {
       nixpkgs,
-      nixpkgs-runtime,
       rust-overlay,
       flake-utils,
       ...
@@ -85,29 +71,23 @@
 
         isDarwin = pkgs.stdenv.hostPlatform.isDarwin;
 
-        # The runtime-asset package set, from the rev-pinned second input. Its
-        # reason for existing is on `inputs.nixpkgs-runtime` above. Only Neovim,
-        # ripgrep and nvim-treesitter come from here; every toolchain and GUI
-        # package still comes from `pkgs`.
-        pkgsRuntime = import nixpkgs-runtime { inherit system; };
-
         # NOTE: `rustToolchain`, `wolfPointerInject`, `iaWriterMono`,
         # `wolfTreesitterLanguages` / `wolfTreesitterParsers` /
-        # `wolfTreesitterPlugin`, `pkgsRuntime` and everything taken from it
-        # (`wolfNeovim`, `wolfRipgrep`), `wolfOrlando`, `wolfLighthouse`,
-        # `wolfGnomePackage`, and the GTK/Neovim packages below are only
-        # ever forced when `linuxShell` or the package output is evaluated. On
-        # Darwin `devShells.default` resolves to `darwinShell`, which references
-        # none of them, so Nix's laziness keeps these Linux-only derivations off
-        # the Darwin eval path. `wolfPointerInject` in particular is a Wayland
-        # program that could not build on Darwin at all; it is safe only because
-        # nothing outside `linuxShell` forces the thunk. `iaWriterMono` is
-        # arch-independent data, and the treesitter grammars are ordinary C that
-        # COULD compile on Darwin, so for those the argument is the weaker
-        # "safer there than here" one rather than "could not build" — but the
-        # rule is the same for all of them. Do not add a top-level reference to
-        # any of them, and do not wrap any of them in a `lib.optional` guard: a
-        # guard would imply this laziness argument is unsound.
+        # `wolfTreesitterPlugin`, `wolfNeovim`, `wolfRipgrep`, `wolfOrlando`,
+        # `wolfLighthouse`, `wolfGnomePackage`, and the GTK/Neovim packages
+        # below are only ever forced when `linuxShell` or the package output is
+        # evaluated. On Darwin `devShells.default` resolves to `darwinShell`,
+        # which references none of them, so Nix's laziness keeps these
+        # Linux-only derivations off the Darwin eval path. `wolfPointerInject`
+        # in particular is a Wayland program that could not build on Darwin at
+        # all; it is safe only because nothing outside `linuxShell` forces the
+        # thunk. `iaWriterMono` is arch-independent data, and the treesitter
+        # grammars are ordinary C that COULD compile on Darwin, so for those the
+        # argument is the weaker "safer there than here" one rather than "could
+        # not build" — but the rule is the same for all of them. Do not add a
+        # top-level reference to any of them, and do not wrap any of them in a
+        # `lib.optional` guard: a guard would imply this laziness argument is
+        # unsound.
         #
         # THE ONE DELIBERATE EXCEPTION is the `optionalAttrs` on the `packages`
         # output at the bottom of this file, and it is a different thing from the
@@ -202,11 +182,11 @@
           };
 
         # The captive Neovim the devShell exports and the package wraps in, and
-        # the ripgrep behind `wolf-core`'s content search. Both come from
-        # `pkgsRuntime` so the tested binary and the shipped binary are the same
-        # store path by construction rather than by coincidence.
-        wolfNeovim = pkgsRuntime.neovim;
-        wolfRipgrep = pkgsRuntime.ripgrep;
+        # the ripgrep behind `wolf-core`'s content search. The devShell export
+        # and the package wrapper both read these bindings, so the tested binary
+        # and the shipped binary are one store path by construction.
+        wolfNeovim = pkgs.neovim;
+        wolfRipgrep = pkgs.ripgrep;
 
         # THE ONE PLACE the Nix side writes down what each vendored asset is
         # pinned at. Every `fetchurl` below reads its commit and its sha256 from
@@ -443,17 +423,11 @@
         # would deliver no parsers at all. `withAllGrammars` additionally costs
         # 249.9 MiB and 313 local builds for a set far wider than point 1's.
         #
-        # The plugin comes from `pkgsRuntime`, not from `pkgs`: the grammars and
-        # the queries are runtime assets the application carries, and pinning them
-        # to the same revision as Neovim is what keeps the parity claim on
-        # `wolfTreesitterPlugin` below from being falsifiable by an unrelated
-        # `nix flake update nixpkgs`.
-        #
         # Linux-only in practice — see the NOTE above about the Darwin eval path.
         wolfTreesitterParsers = pkgs.symlinkJoin {
           name = "wolf-treesitter-parsers";
           paths = map (
-            lang: pkgsRuntime.vimPlugins.nvim-treesitter.parsers.${lang}
+            lang: pkgs.vimPlugins.nvim-treesitter.parsers.${lang}
           ) wolfTreesitterLanguages;
         };
 
@@ -464,7 +438,7 @@
         # archive root — and a runtimepath entry must expose all three at its own
         # top level.
         #
-        # Do NOT "simplify" this back to `${pkgsRuntime.vimPlugins.nvim-treesitter}/runtime`.
+        # Do NOT "simplify" this back to `${pkgs.vimPlugins.nvim-treesitter}/runtime`.
         # That path satisfies the query lookup and silently drops the other two,
         # so `vim.cmd.runtime("plugin/nvim-treesitter.lua")` finds nothing,
         # `:TSInstall` never registers, and the pcall'd
@@ -477,17 +451,14 @@
         # to the same end, so both platforms present the same tree shape.
         #
         # Queries stay unfiltered, asymmetric with the curated parser list above
-        # on purpose. This is the same upstream revision that extension pins for
-        # macOS (4916d6592ede8c07973490d9322f187e07dfefac), so the two platforms
-        # get byte-identical queries, and the macOS package globs them with no
+        # on purpose, matching the macOS package, which globs them with no
         # per-language filter. Parsers stay curated because each one is a
-        # compile; queries are data and cost nothing to carry.
-        #
-        # That parity claim is about a REVISION, so the plugin is taken from
-        # `pkgsRuntime` rather than `pkgs`: pinned by the runtime input, it cannot
-        # move under a `nixpkgs` bump taken for something else.
+        # compile; queries are data and cost nothing to carry. The revision is
+        # nixpkgs', independent of the one `bazel/nvim-treesitter/extensions.bzl`
+        # pins, so the two platforms' queries can differ (see
+        # `macos-followups.md`).
         wolfTreesitterPlugin =
-          pkgs.runCommand "wolf-nvim-treesitter" { src = pkgsRuntime.vimPlugins.nvim-treesitter; }
+          pkgs.runCommand "wolf-nvim-treesitter" { src = pkgs.vimPlugins.nvim-treesitter; }
             ''
               mkdir -p "$out"
               cp -R "$src/runtime/queries" "$out/queries"
@@ -1037,7 +1008,7 @@
       // pkgs.lib.optionalAttrs (!isDarwin) {
         # `optionalAttrs` forces its CONDITION, never its value, so the Darwin
         # evaluation path never touches `wolfGnomePackage`. The guard is required
-        # rather than tidy, and the NOTE beside `pkgsRuntime` above explains why it
+        # rather than tidy, and the NOTE above `rustToolchain` explains why it
         # is a different thing from the `lib.optional` guard that block forbids.
         packages.wolf-gnome = wolfGnomePackage;
         packages.default = wolfGnomePackage;

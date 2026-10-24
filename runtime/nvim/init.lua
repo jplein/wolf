@@ -276,7 +276,7 @@ end
 -- fallback where an attach fails.
 --
 -- It is NOT the markdown highlight source, and assuming it is has misled readers
--- before. MEASURED on the pinned nvim 0.12.2: a markdown buffer under
+-- before. MEASURED on the Linux flake's nvim 0.12.6: a markdown buffer under
 -- `--clean -u NONE`, with no plugin and no gate below, already reports
 -- `vim.treesitter.highlighter.active[buf] ~= nil` — nvim ships the markdown
 -- parser and its queries and starts treesitter on markdown itself. So markdown is
@@ -366,8 +366,8 @@ end
 -- THE ENVIRONMENT FALLBACK IS THE ONLY THING THAT FIRES THIS GATE ON LINUX, since
 -- no sibling tree exists there. Deleting it does more than shorten runtimepath: it
 -- also removes the FileType=markdown autocmd below. What that costs was MEASURED
--- rather than assumed, and it is narrower than it looks. nvim 0.12.2 starts
--- treesitter on a markdown buffer by ITSELF — under `--clean -u NONE`, with no
+-- rather than assumed, and it is narrower than it looks. nvim 0.12.6 (Linux
+-- flake) starts treesitter on a markdown buffer by ITSELF — under `--clean -u NONE`, with no
 -- plugin and no gate, `vim.treesitter.highlighter.active[buf] ~= nil` already
 -- reads true. So that expression CANNOT witness this gate and must not be used as
 -- evidence for it.

@@ -2461,9 +2461,9 @@ const POINTER_BUTTON_MIDDLE: &str = "274";
 /// instead means Neovim never entered visual mode at all.
 ///
 /// MEASURED, and NOT what an earlier version of this file assumed: a `<LeftDrag>` is
-/// **not** the only way in. On nvim 0.12.2 a bare `<LeftMouse>` at one cell followed
-/// by a `<LeftRelease>` at a DIFFERENT cell also enters charwise visual mode, with
-/// exactly the same marks:
+/// **not** the only way in. On the Linux flake's nvim 0.12.6 a bare `<LeftMouse>` at
+/// one cell followed by a `<LeftRelease>` at a DIFFERENT cell also enters charwise
+/// visual mode, with exactly the same marks:
 ///
 /// ```text
 /// press+release only : visualmode="v" marks="3 4 8 13" cursor="8 13"
@@ -5052,8 +5052,8 @@ hsend() {
 # moment the call is serviced. Two calls serviced before nvim's main loop has
 # CONSUMED the first key therefore both resolve at the SECOND call's position.
 #
-# MEASURED against nvim 0.12.2, three back-to-back calls (press at one cell, drag and
-# release at another):
+# MEASURED against the Linux flake's nvim 0.12.6, three back-to-back calls (press at
+# one cell, drag and release at another):
 #
 #     rapid : visualmode="" marks="0 0 0 0" cursor=<the RELEASE cell>
 #     paced : visualmode="v" marks=<press cell>..<release cell>
@@ -5248,11 +5248,11 @@ wait_file "$DIMS" || exit 14
 # on its own. Do not reorder these three drags.
 #
 # WHY IT EXISTS: this is the ONLY gesture in this smoke that can discriminate
-# `drag-update`. MEASURED on nvim 0.12.2, a press at one cell and a release at a
-# DIFFERENT cell enters charwise visual mode all by itself -- press+release only and
-# press+drag+release produce byte-identical `visualmode()`, marks and cursor. So
-# Drag A's `v` is real coverage of `on_pane_release` but is NOT evidence that
-# `<LeftDrag>` was ever delivered.
+# `drag-update`. MEASURED on the Linux flake's nvim 0.12.6, a press at one cell and
+# a release at a DIFFERENT cell enters charwise visual mode all by itself --
+# press+release only and press+drag+release produce byte-identical `visualmode()`,
+# marks and cursor. So Drag A's `v` is real coverage of `on_pane_release` but is NOT
+# evidence that `<LeftDrag>` was ever delivered.
 #
 # Here press and release are at the SAME cell. Without `drag-update` Neovim sees
 # `<LeftMouse>` then `<LeftRelease>` with no movement between them, never enters
@@ -6890,13 +6890,14 @@ bisect_divider() {
 # separated, in whatever order Neovim enumerates its windows.
 #
 # `winwidth()`, NEVER `nvim_win_get_width()`, and that difference IS the
-# observable. MEASURED against the pinned nvim 0.12.2 with a real ext_multigrid UI
-# attached: `nvim_ui_try_resize_grid` -- which is what `WolfCore::resize_grid`
+# observable. MEASURED against the Linux flake's nvim 0.12.6 with a real
+# ext_multigrid UI attached: `nvim_ui_try_resize_grid` -- which is what `WolfCore::resize_grid`
 # issues, and the only thing a divider drag ever makes reach Neovim -- changes a
-# window's GRID width and leaves its LAYOUT width untouched:
+# window's GRID width and leaves its LAYOUT width untouched. Read on both sides of
+# this smoke's own drag:
 #
-#     before                         win1 nvim_win_get_width=40 winwidth=40 | win2 nvim_win_get_width=39 winwidth=39
-#     after resizing grids to 30x20  win1 nvim_win_get_width=40 winwidth=30 | win2 nvim_win_get_width=39 winwidth=30
+#     before the drag  dvright nvim_win_get_width=22 winwidth=21 | dvleft nvim_win_get_width=22 winwidth=21
+#     after the drag   dvright nvim_win_get_width=22 winwidth=13 | dvleft nvim_win_get_width=22 winwidth=28
 #
 # So `nvim_win_get_width` is BLIND to every drag this smoke performs: a readback
 # built on it reports identical widths before and after, which is exactly how this
@@ -12419,9 +12420,9 @@ fn read_ints(path: &Path, expected: usize, smoke: &str) -> Vec<i64> {
 /// properly.
 ///
 /// What a NON-empty `"v"` does and does not license is measured, and is documented on
-/// [`VISUAL_CHARWISE`]: on nvim 0.12.2 a press at one cell plus a release at a
-/// DIFFERENT cell enters charwise visual mode on its own, with the same marks a full
-/// press+drag+release produces. So the mode alone discriminates `drag-update` ONLY
+/// [`VISUAL_CHARWISE`]: on the Linux flake's nvim 0.12.6 a press at one cell plus a
+/// release at a DIFFERENT cell enters charwise visual mode on its own, with the same
+/// marks a full press+drag+release produces. So the mode alone discriminates `drag-update` ONLY
 /// for the round-trip gesture (Drag Z), whose press and release are at the same cell.
 fn read_selection(path: &Path, smoke: &str) -> (String, [i64; 4]) {
     let raw = read_readback(path, smoke);
@@ -19821,9 +19822,9 @@ fn click_positions_the_cursor_under_cage() {
 /// ## Three drags, and which one proves what — read this before editing any of them
 ///
 /// A premise this smoke was originally written on is FALSE, and was measured to be
-/// false against nvim 0.12.2: it is NOT the case that "Vim enters visual mode only on
-/// a drag, never on a press+release at two different cells". Both gestures produce
-/// byte-identical state:
+/// false against the Linux flake's nvim 0.12.6: it is NOT the case that "Vim enters
+/// visual mode only on a drag, never on a press+release at two different cells". Both
+/// gestures produce byte-identical state:
 ///
 /// ```text
 /// press+release only : visualmode="v" marks="3 4 8 13" cursor="8 13"
@@ -19983,10 +19984,10 @@ fn drag_selects_a_range_under_cage() {
          fired. Check that the `gtk::GestureDrag` in `pane_view.rs::make_pane_area` still connects \
          `drag-update` to `on_pane_drag`, and that `on_pane_drag` still calls `send_pane_mouse` \
          with `MouseAction::Drag`. Note that Drag A's mode CANNOT stand in for this one: measured \
-         on nvim 0.12.2, a press at one cell plus a release at a DIFFERENT cell enters charwise \
-         visual mode all by itself, with identical marks. A DIFFERENT non-empty mode (`V` \
-         linewise, CTRL-V blockwise) would instead mean the encoded modifiers are wrong. Raw \
-         readback was {raw_z:?}; PNG kept at {}.",
+         on the Linux flake's nvim 0.12.6, a press at one cell plus a release at a DIFFERENT \
+         cell enters charwise visual mode all by itself, with identical marks. A DIFFERENT \
+         non-empty mode (`V` linewise, CTRL-V blockwise) would instead mean the encoded \
+         modifiers are wrong. Raw readback was {raw_z:?}; PNG kept at {}.",
         out_png.display()
     );
 
@@ -20040,13 +20041,13 @@ fn drag_selects_a_range_under_cage() {
          (charwise). Drag Z passed, so `drag-update` IS firing; this instead says the press and \
          release of a plain down-and-right sweep did not put Neovim into visual mode at all. \
          Note that an empty string here is NOT the `drag-update` discriminator it was once \
-         described as: measured on nvim 0.12.2, `<LeftMouse>` at one cell plus `<LeftRelease>` at \
-         a DIFFERENT cell enters charwise visual mode WITHOUT any `<LeftDrag>`, with identical \
-         marks and cursor. So an empty mode here means Neovim received neither the press nor the \
-         release as a mouse event — check `pane_view.rs::on_pane_press` and `on_pane_release` \
-         still call `send_pane_mouse`. A DIFFERENT non-empty mode (`V` linewise, CTRL-V blockwise) \
-         would instead mean the encoded modifiers are wrong. Raw readback was {raw_a:?}; PNG kept \
-         at {}.",
+         described as: measured on the Linux flake's nvim 0.12.6, `<LeftMouse>` at one cell \
+         plus `<LeftRelease>` at a DIFFERENT cell enters charwise visual mode WITHOUT any \
+         `<LeftDrag>`, with identical marks and cursor. So an empty mode here means Neovim \
+         received neither the press nor the release as a mouse event — check \
+         `pane_view.rs::on_pane_press` and `on_pane_release` still call `send_pane_mouse`. A \
+         DIFFERENT non-empty mode (`V` linewise, CTRL-V blockwise) would instead mean the \
+         encoded modifiers are wrong. Raw readback was {raw_a:?}; PNG kept at {}.",
         out_png.display()
     );
 
@@ -38061,9 +38062,10 @@ exit 0
 /// launch A's assertions fire, then remove it — that is the check that the A/B is an
 /// A/B.
 ///
-/// For line 5, point `wolfNeovim` at a different `nixpkgs` revision
-/// and confirm the equality fires; if the two inputs cannot be made to differ
-/// cheaply, record the assertion as unfalsified rather than claiming a red run
+/// For line 5, point the package wrapper's `WOLF_NVIM_BIN` default in `flake.nix` at a
+/// Neovim build other than `wolfNeovim` — not `neovim-unwrapped`, which is the binary
+/// `v:progpath` already resolves to — and confirm the equality fires; if that cannot be
+/// done cheaply, record the assertion as unfalsified rather than claiming a red run
 /// nobody took.
 #[test]
 #[ignore = "drives the installed Nix output; run through ./tools/wolf-package-smoke.sh"]
@@ -38263,9 +38265,10 @@ fn the_packaged_binary_loads_the_vendored_lighthouse_and_orlando_under_cage() {
          WOLF_NVIM_BIN — the binary every test in this repository is run against — and launch B's \
          came from the packaged wrapper, so a difference means the artifact ships a Neovim the \
          Linux evidence was NOT taken against, and every claim `runtime/nvim/init.lua` makes per \
-         version is about a different one. The named cause is `wolfNeovim` and `linuxShell` \
-         resolving to two different `nixpkgs` inputs. Do NOT 'fix' this by comparing against this \
-         process's own WOLF_NVIM_BIN string: `pkgs.neovim` is a wrapper and `v:progpath` resolves \
+         version is about a different one. The named cause is the package wrapper's \
+         `WOLF_NVIM_BIN` default and `linuxShell`'s export not both reading `wolfNeovim`. Do \
+         NOT 'fix' this by comparing against this process's own WOLF_NVIM_BIN string: \
+         `pkgs.neovim` is a wrapper and `v:progpath` resolves \
          through /proc/self/exe to the UNWRAPPED store path, so those two legitimately differ and \
          the comparison would be red on a correct package. Two `v:progpath` readings are \
          comparable; a `v:progpath` and a `lib.getExe` are not.",

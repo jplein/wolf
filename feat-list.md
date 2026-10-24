@@ -24,7 +24,7 @@ Sources of truth for the assessments below: [`architecture.md`](architecture.md)
 | Neovim bundled into the shipped application     | `feat/macos-ui` (`f9fe4b3`) / `linux-feat/nixos-package`  | [x]   | [x]   |
 | Word wrap / editor defaults in `init.lua`       | `f4e104d`                                                 | [x]   | [x]   |
 
-Linux reaches the pinned Neovim two ways. Inside the devShell it comes from `WOLF_NVIM_BIN`; the Nix package's wrapper sets the same variable as a default, pointing at a Neovim held in a second, rev-locked flake input so a `nix flake update` for GTK cannot move what the Linux suite tested.
+Linux reaches the pinned Neovim two ways. Inside the devShell it comes from `WOLF_NVIM_BIN`; the Nix package's wrapper sets the same variable as a default. Both routes read one Neovim from the flake's single `nixpkgs` input, so `nix flake update` moves the tested and the shipped Neovim together.
 
 A packaged smoke launches the store binary under `cage` with every devShell export scrubbed but the three the compositor itself needs, and reads the typed word back by OCR, which is what says the artifact finds its own Neovim and its own `init.lua`. A second smoke reads `v:progpath` from a packaged launch and a checkout launch in one compositor and requires them equal, so the package ships the Neovim the Linux evidence was taken against. The two platforms' Neovim differs at the patch level, which [`macos-followups.md`](macos-followups.md) records.
 

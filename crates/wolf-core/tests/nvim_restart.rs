@@ -289,12 +289,12 @@ fn restart_respawns_and_reopens_open_files() {
 ///
 /// The replay of a terminal buffer does not fail harmlessly. Driven through the
 /// production path (`InputEvent::Open { path: "term://…" }` against a real core,
-/// the post-restart analogue) against the pinned nvim 0.12.2:
+/// the post-restart analogue) against the Linux flake's nvim 0.12.6:
 ///
 /// * **A second shell is spawned.** `ps` bash rows go 1 -> 2 on the replay and back
 ///   to 1 after `shutdown()`; Neovim's own `BufReadCmd term://*` autocmd re-runs
 ///   `termopen()`.
-/// * **The pid inside the name changes** (`//2328133:` -> `//2328211:`) — the
+/// * **The pid inside the name changes** (`//78473:` -> `//78489:`) — the
 ///   conclusive discriminator. It is not the same buffer reopened, it is a NEW job.
 ///   The name otherwise matches byte for byte, including the dead core's cwd, which
 ///   no longer exists after a real crash.

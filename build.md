@@ -28,7 +28,7 @@ The `shellHook` generates that file by substituting store paths into `$PWD/crate
 
 Two more exports name vendored Neovim assets rather than binaries. `WOLF_NVIM_TREESITTER_DIR` points at a runtimepath-shaped nvim-treesitter tree carrying `queries/`, `lua/` and `plugin/` as siblings, assembled because upstream splits the queries under `runtime/` from the modules and the loader at its root, and `WOLF_PARSERS_DIR` at a `symlinkJoin` of sixteen compiled grammars laid out as `parser/<lang>.so`. The captive `init.lua` reads both as the fallback half of its treesitter gate — see [`runtime/nvim`](runtime/nvim/README.md), which owns the resolution order and what the gate delivers.
 
-Both trees are fetched, not compiled. Measured with `nix build --dry-run` against an empty chroot store: 66 paths fetched, 22.2 MiB of download, and the only local builds are the `symlinkJoin` and the tree assembly, neither of which runs a compiler. `nix path-info` against `cache.nixos.org` agrees, every grammar reporting a substitute. No cold wall clock was ever taken — the measuring host's store was already warm — so this document quotes none, and neither should anything derived from it.
+Both trees are fetched, not compiled. Measured with `nix build --dry-run` against an empty chroot store: 66 paths fetched, 23.4 MiB of download, and the only local builds are the `symlinkJoin` and the tree assembly, neither of which runs a compiler. `nix path-info` against `cache.nixos.org` agrees, every grammar reporting a substitute. No cold wall clock was ever taken — the measuring host's store was already warm — so this document quotes none, and neither should anything derived from it.
 
 After editing `flake.nix`, run through `nix develop --command`. An already-loaded direnv environment is stale until the shell is re-entered, and a stale one has no GTK.
 
@@ -133,7 +133,9 @@ A NixOS configuration consumes the flake as an input:
 }
 ```
 
-The `follows` line is not optional in practice. The application loads the host's graphics driver from `/run/opengl-driver`, and that driver needs a glibc at least as new as the system's. Built against an older `nixpkgs` than the host, the window still draws but WebKit's web process aborts with `Could not create default EGL display: EGL_BAD_PARAMETER`, leaving the Markdown preview blank. A `result` built from this repository's own lock has the same exposure, so run `nix flake update nixpkgs` when it falls behind the host. Neovim comes from the separately pinned `nixpkgs-runtime` input and runs in a process of its own, so it is unaffected.
+The `follows` line is not optional in practice. The application loads the host's graphics driver from `/run/opengl-driver`, and that driver needs a glibc at least as new as the system's. Built against an older `nixpkgs` than the host, the window still draws but WebKit's web process aborts with `Could not create default EGL display: EGL_BAD_PARAMETER`, leaving the Markdown preview blank. A `result` built from this repository's own lock has the same exposure, so run `nix flake update nixpkgs` when it falls behind the host.
+
+That update moves Neovim, ripgrep and nvim-treesitter too, so run [the full verification gate](#the-verification-gate) after it. A consumer's `follows` line likewise makes the package take all three from the host's `nixpkgs` rather than the revision this repository tested.
 
 Listing it in `fonts.packages` as well makes the two editor families available system-wide, because they are installed at the layout fontconfig scans. That is a convenience and not a requirement: the application resolves them through its own `FONTCONFIG_FILE` either way.
 

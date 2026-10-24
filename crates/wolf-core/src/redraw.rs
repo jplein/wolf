@@ -223,12 +223,12 @@ const TERMINAL_BUFFER_PREFIX: &str = "term://";
 /// Whether a buffer name denotes a Neovim TERMINAL buffer rather than a file.
 ///
 /// A terminal buffer is not a file to reopen. Replaying one through the crash
-/// mirror does not fail harmlessly: MEASURED against the pinned nvim 0.12.2 by
-/// driving `InputEvent::Open { path: "term://…" }` into a real `WolfCore`, Neovim's
-/// own `BufReadCmd term://*` autocmd re-runs `termopen()`, so the replay SPAWNS A
-/// SECOND SHELL — a new buffer whose name is the same string with a fresh pid, no
-/// error and no message, taking over the window it was opened in. The new name then
-/// re-enters the mirror, so every crash costs another shell.
+/// mirror does not fail harmlessly: MEASURED against the Linux flake's nvim
+/// 0.12.6 by driving `InputEvent::Open { path: "term://…" }` into a real
+/// `WolfCore`, Neovim's own `BufReadCmd term://*` autocmd re-runs `termopen()`, so
+/// the replay SPAWNS A SECOND SHELL — a new buffer whose name is the same string
+/// with a fresh pid, no error and no message, taking over the window it was opened
+/// in. The new name then re-enters the mirror, so every crash costs another shell.
 fn is_terminal_buffer_name(name: &str) -> bool {
     name.starts_with(TERMINAL_BUFFER_PREFIX)
 }
@@ -2177,8 +2177,8 @@ mod tests {
     /// halves of the crash mirror, so a wrong answer in either direction is a real
     /// user-visible defect: a `true` for a real path drops that file from the set
     /// the front-end reopens after a crash, and a `false` for a terminal name puts
-    /// `term://…` back into the replay — which, MEASURED against the pinned nvim
-    /// 0.12.2, spawns a second shell rather than failing.
+    /// `term://…` back into the replay — which, MEASURED against the Linux flake's
+    /// nvim 0.12.6, spawns a second shell rather than failing.
     ///
     /// FALSIFYING EDITS:
     ///

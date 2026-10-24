@@ -13,9 +13,9 @@ structure-preserving `parsers_tree` TreeArtifact bundled into Wolf.app at
 
 The pinned Neovim ships seven parsers carrying `highlights` queries and no more
 (c, lua, markdown, markdown_inline, query, vim, vimdoc) — measured with --clean against
-the Linux flake's 0.12.2, not this package's pin; the directory README records why. To
-highlight the languages Wolf cares about, the parsers must be present in the bundle, be
-ABI-compatible with pinned nvim's treesitter runtime, and — crucially — be
+Neovim 0.12.6 from the Linux flake, not this package's pin; the directory README records
+why. To highlight the languages Wolf cares about, the parsers must be present in the
+bundle, be ABI-compatible with pinned nvim's treesitter runtime, and — crucially — be
 signable, RELOCATABLE host-compiled Mach-O. A nix-built `.so` embeds `/nix/store`
 install names and is not relocatable inside a signed `.app`, so we compile from
 source with the apple_support host-Xcode cc toolchain (the same toolchain that
