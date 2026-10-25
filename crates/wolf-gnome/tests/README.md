@@ -96,6 +96,10 @@ Rules that are decidable from their arguments are pinned in each seam's own `#[c
 - The workspace `Cargo.toml`'s two `[profile.release]` promises: that `panic` is `unwind`, and that debug info is emitted and not stripped. The reader is a line scanner, not a parser: the manifest must keep one key per line, with no inline comment after a value.
 - The artifact those promises are meant to produce: `CARGO_BIN_EXE_wolf-gnome` carries a non-empty `.debug_line`, and this workspace's own source paths appear in the binary's debug strings — found through a section-header walk, because both needles also sit in `.rodata` of a binary carrying no debug info of ours.
 
+**Decisions**
+
+- `std` only: a `toml` or `object` dev-dependency would add a line to `Cargo.lock`, a `crate_universe` input in `MODULE.bazel`, and the `CARGO_BAZEL_REPIN` that forces cannot be run from a Linux host.
+
 **Gotchas**
 
 - The artifact half discriminates the release profile only under `--release`: a plain `cargo test` hands it the dev binary, whose debug info is on by default. `cargo test --release -p wolf-gnome --test release_profile -- --nocapture` prints the path it read.
@@ -130,6 +134,22 @@ Rules that are decidable from their arguments are pinned in each seam's own `#[c
 - A failing smoke keeps its runtime directory, with its captures and `cage.log`, and prints its path and the log's tail; a passing one removes it.
 - Spell checking is off in every smoke, so OCR reads glyphs not undercurls; see `seed_smoke_spell_override`.
 
+#### `state_isolation.rs`
+
+**Covers**
+
+- That [`common::config_in`](#commonmodrs) keeps a real-nvim test off the user's Wolf state dir. The visible test re-executes its own binary twice, each child under a scratch `HOME` holding a planted `.local/state/wolf/runtime_user/init_user.lua` that sets `ignorecase`, with `WOLF_STATE_DIR`, `XDG_STATE_HOME` and `XDG_DATA_HOME` removed.
+- `isolated_payload` asserts that the harness moved `state_dir()` off the plant, that `ignorecase` stays off, and that nothing was written under the plant. `control_payload` aims `WOLF_STATE_DIR` at a second plant and asserts that the harness kept it and `ignorecase` is on.
+
+**Decisions**
+
+- A Linux-only port of wolf-ffi's guard, whose [entry](../../wolf-ffi/tests/README.md#state_isolationrs) gives the reasons for the re-exec and the control payload. The scratch homes come from `common::unique_temp_dir` and are deleted on drop, not from `tempfile`, for [`release_profile.rs`](#release_profilers)'s lock-file reason.
+
+**Gotchas**
+
+- Requires `WOLF_NVIM_BIN`; unlike wolf-ffi's guard, the parent panics through `common::require_nvim_bin` rather than skipping.
+- Both payloads show as ignored and return at once without `WOLF_TEST_PLANTED_HOME`, so `--include-ignored` never runs one against the real `HOME`.
+
 #### `vendored_pins.rs`
 
 **Covers**
@@ -148,12 +168,19 @@ Rules that are decidable from their arguments are pinned in each seam's own `#[c
 
 **Covers**
 
-- Shared helpers for this crate's integration tests: `require_nvim_bin`, `init_lua_path`, `fresh_cwd`, `config`/`config_in`, and `wake_channel` returning a `WakeFn` paired with a `FlushWaiter` (`wait_for_flush`, `drain`).
+- Shared helpers for this crate's integration tests: `require_nvim_bin`, `init_lua_path`, `unique_temp_dir`, `fresh_cwd`, `config`/`config_in`, and `wake_channel` returning a `WakeFn` paired with a `FlushWaiter` (`wait_for_flush`, `drain`).
+- `config_in` is the state-dir funnel: once per test binary, and only if the variable is unset, it points `WOLF_STATE_DIR` at a throwaway `wolf-gnome-test-state-*` temp dir. Otherwise every real-nvim test would source the user's own `~/.local/state/wolf/runtime_user/init_user.lua` and write swap and MRU files beside it. [`state_isolation.rs`](#state_isolationrs) is the guard.
+
+**Decisions**
+
+- Temp dirs are made with `std`, not `tempfile`, for the lock-file reason [`release_profile.rs`](#release_profilers) records.
+- The `WOLF_STATE_DIR` write runs inside a `OnceLock`'s `get_or_init`, because `setenv` races `getenv` on libtest's parallel test threads and `get_or_init` holds them until the write is done.
 
 **Gotchas**
 
 - These duplicate `wolf-core`'s equivalents because Cargo cannot share a `tests/common` module across crates; they are kept in sync by hand.
-- `fresh_cwd` directories are not auto-deleted — the cwd is nvim's working dir and file-search root, so it must outlive the session.
+- Nothing `unique_temp_dir` creates is auto-deleted: a `fresh_cwd` dir is nvim's working dir and file-search root, so it must outlive the session, and the state dir must not vanish under a running core.
+- Build every `CoreConfig` through `config` or `config_in`, since a hand-built literal skips the funnel. A test that sets its own `WOLF_STATE_DIR` first keeps it; one that removes it must be alone in its binary, because nothing sets it again for its neighbours.
 
 #### `../testdata/fonts.conf`
 
