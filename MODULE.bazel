@@ -67,7 +67,7 @@ crate.from_cargo(
 )
 use_repo(crate, "crates")
 
-# --- Pinned, hermetic Neovim 0.12.3 release tarballs: see bazel/nvim/README.md --------
+# --- Pinned, hermetic Neovim release tarballs: see bazel/nvim/README.md --------------
 nvim = use_extension("//bazel/nvim:extensions.bzl", "nvim")
 use_repo(nvim, "nvim_macos_arm64", "nvim_macos_x86_64")
 
@@ -92,7 +92,7 @@ ia_writer_mono = use_extension("//bazel/ia-writer-mono:extensions.bzl", "ia_writ
 use_repo(ia_writer_mono, "ia_writer_mono")
 
 # --- Vendored nvim-treesitter plugin (macOS bundle only) --------------------
-# Pinned to `main`, whose injections work on nvim 0.12.3; see bazel/nvim-treesitter/README.md.
+# Pinned to `main`, whose injections work on the pinned nvim; see bazel/nvim-treesitter/README.md.
 nvim_treesitter = use_extension("//bazel/nvim-treesitter:extensions.bzl", "nvim_treesitter")
 use_repo(nvim_treesitter, "nvim_treesitter")
 

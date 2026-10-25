@@ -1,4 +1,4 @@
-"""Module extension that downloads the pinned Neovim 0.12.3 release tarballs.
+"""Module extension that downloads the pinned Neovim release tarballs.
 
 Two `http_archive` repos (`nvim_macos_arm64`, `nvim_macos_x86_64`) fetch the
 official sha256-pinned release tarballs and overlay a BUILD file that assembles
@@ -17,7 +17,7 @@ and the bundle-layout test expect), robustly even if a future release adds a new
 top-level directory.
 
 Arch selection is done by `//bazel/nvim:nvim_tree` (`select()` on
-`@platforms//cpu`). To bump the pin: change the version in the URLs, recompute
+`@platforms//cpu`). To bump the pin: change `_VERSION`, recompute
 both sha256 sums (`shasum -a 256 <tarball>`), update the per-arch archive root
 names below if the release directory name changes, then regenerate
 `MODULE.bazel.lock`.
@@ -25,11 +25,11 @@ names below if the release directory name changes, then regenerate
 
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
-_VERSION = "0.12.3"
+_VERSION = "0.12.6"
 
-_ARM64_SHA256 = "532da1d00e465a660fa01c3d4991333d09c52107dce7df937368545daca0a14e"
+_ARM64_SHA256 = "1dbd148222b051ba6c307c4d17a318ed083df018a4f6a5a0ce46955ffc9ab87b"
 
-_X86_64_SHA256 = "4b40e318eb7073321fa5fc06d7f60c3c0de1d7ea50ffbaa8b04286f5484d294f"
+_X86_64_SHA256 = "481424f1dbc85f637d57e47d27d042aa9c883e5a4fe9ee64fc4ee9573b221998"
 
 # BUILD overlay for each extracted tarball; `copy_to_directory` remaps `{archive_root}` to
 # `nvim/`, preserving exec bits.
@@ -79,5 +79,5 @@ def _nvim_impl(_module_ctx):
 
 nvim = module_extension(
     implementation = _nvim_impl,
-    doc = "Downloads the pinned Neovim 0.12.3 macOS release tarballs (arm64 + x86_64).",
+    doc = "Downloads the pinned Neovim macOS release tarballs (arm64 + x86_64).",
 )

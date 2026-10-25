@@ -248,7 +248,9 @@
               cp "$src/LICENSE" "$out/LICENSE"
             '';
 
-        darwinShell = pkgs.mkShell {
+        # NoCC: keeps the stdenv cc-wrapper, xcbuild `xcrun` and a Nix SDKROOT out of the shell.
+        # See notes/flake.nix.md#darwin-shell
+        darwinShell = pkgs.mkShellNoCC {
           packages = [
             pkgs.bazelisk
             bazelShim

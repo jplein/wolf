@@ -140,7 +140,7 @@ vim.cmd("syntax on")
 local this_file = debug.getinfo(1, "S").source:sub(2) -- strip the leading '@'
 local this_dir = vim.fn.fnamemodify(this_file, ":p:h")
 local orlando_dir = this_dir .. "/orlando"
-local uv = vim.uv or vim.loop -- vim.uv on nvim 0.12.3; vim.loop fallback
+local uv = vim.uv or vim.loop -- vim.uv since Neovim 0.10; vim.loop fallback
 if uv and uv.fs_stat(orlando_dir) then
 	vim.opt.runtimepath:prepend(orlando_dir)
 	vim.cmd.runtime("plugin/orlando.lua")

@@ -4,28 +4,24 @@ Hermetic, pinned **nvim-treesitter** plugin for bundling into `Wolf.app`.
 
 This package downloads the pinned GitHub source tarball for the pure-Lua nvim-treesitter plugin (sha256-pinned, fetched by Bazel — no system or `PATH` dependency), assembles it into a structure-preserving directory artifact, and exposes it for bundling. `//crates/wolf-macos:Wolf` bundles the result at `Contents/Resources/nvim-treesitter/`.
 
-The bundled `queries/` serve as an on-`runtimepath` query provider for the captive `runtime/nvim/init.lua`. On the macOS `.app`, where the vendored `nvim-treesitter/` and `parsers/` siblings sit next to `init.lua`, treesitter markdown highlighting and fenced-code-block injection are active (`vim.treesitter.start` on markdown buffers).
-
-Nothing here sources the plugin's Lua or calls its `.setup{}`; the plugin is a `runtimepath` query provider and nothing more. On Linux/cargo the siblings are absent, so that block in `init.lua` is a strict no-op. The Linux/Nix vendoring path is deferred.
+The captive `runtime/nvim/init.lua` uses the tree as a `runtimepath` query provider and, when the user parser dir resolves, sources its `plugin/` loader and calls `setup` to give `:TSInstall` a durable `install_dir`. On Linux the devShell's `WOLF_NVIM_TREESITTER_DIR` supplies the same tree shape. [`runtime/nvim`](../../runtime/nvim/README.md) owns the resolution order and the activation.
 
 ## Why the `main` branch and not `master`
 
-The pin tracks nvim-treesitter's `main` branch because `master` is incompatible with the pinned Neovim 0.12.3 query loader:
+The pin tracks nvim-treesitter's `main` branch because `master`'s markdown injections fail on the Neovim query loader:
 
-- **`master` is broken on nvim 0.12.3.** Its `queries/markdown/injections.scm` routes fenced blocks through the custom `#set-lang-from-info-string!` predicate. That predicate's frozen-master handler targets a pre-0.10 query-match API that nvim 0.12.3 removed, so every fenced-block redraw raises `E5108` and injection is broken.
-- **`main` uses core-native injections.** Its `queries/markdown/injections.scm` is pure core-supported, capture-based injection (an `@injection.language` / `@injection.content` capture pair, no custom predicate). It works from the queries on `runtimepath` alone — no `:TSInstall`, no plugin Lua sourced, no `.setup{}` — and `//crates/wolf-ffi:treesitter_highlight` (markdown highlighter active, injected `go` langtree present) passes on it.
-
-On `main` the queries live under `runtime/queries/<lang>/…`, and the overlay remaps them back to `nvim-treesitter/queries/…` (see "How it works"). The classic `lua/nvim-treesitter/` modules and the `plugin/` loader are present in the tree, bundled but never sourced.
-
-The grammar revisions compiled in [`bazel/treesitter-parsers`](../treesitter-parsers/README.md) come from an earlier nvim-treesitter `lockfile.json`, not this commit's, so queries and parsers are not exactly version-matched. Tree-sitter grammar ABIs are stable and the pairing is proven by `//crates/wolf-ffi:treesitter_highlight`; re-deriving the revisions from this commit's `lockfile.json` is a future nicety.
+- **`master` is broken, measured on Neovim 0.12.3.** Its `queries/markdown/injections.scm` routes fenced blocks through the custom `#set-lang-from-info-string!` predicate. That predicate's frozen-master handler targets a pre-0.10 query-match API that Neovim removed, so every fenced-block redraw raises `E5108` and injection is broken.
+- **`main` uses core-native injections.** Its `queries/markdown/injections.scm` is pure core-supported, capture-based injection (an `@injection.language` / `@injection.content` capture pair, no custom predicate). It needs only the queries on `runtimepath` — no plugin Lua and no `setup` — and `//crates/wolf-ffi:treesitter_highlight` (injected `go` langtree present) passes on it.
 
 ## The pin
 
 - Repo: `nvim-treesitter/nvim-treesitter`, branch `main`
-- Commit: `4916d6592ede8c07973490d9322f187e07dfefac`
-- Tarball: https://github.com/nvim-treesitter/nvim-treesitter/archive/4916d6592ede8c07973490d9322f187e07dfefac.tar.gz
-- sha256: `4e720e38f1a74c07fc8bc9d6264e25ab620df93c6576200f43f2ca0ce5fbdec1`
-- Archive root dir: `nvim-treesitter-4916d6592ede8c07973490d9322f187e07dfefac`
+- Commit: `e289100ff98969e118c702199d88b764ce9e7fdf`
+- Tarball: https://github.com/nvim-treesitter/nvim-treesitter/archive/e289100ff98969e118c702199d88b764ce9e7fdf.tar.gz
+- sha256: `f4b626bb41f5408c02dcbd7f40c0236d83248a0822fa872d7c16c0752672cb16`
+- Archive root dir: `nvim-treesitter-e289100ff98969e118c702199d88b764ce9e7fdf`
+
+The commit matches the nvim-treesitter the Linux flake lock builds, so both platforms ship the same queries; the match is kept by hand, and a `nix flake update` that moves it owes the bump below.
 
 ## Targets
 
@@ -36,7 +32,7 @@ The grammar revisions compiled in [`bazel/treesitter-parsers`](../treesitter-par
 
 `extensions.bzl` is a bzlmod module extension that declares a single `http_archive` repo (`nvim_treesitter`) for the pinned source tarball. It gets an overlay `BUILD` file (`build_file_content`) that:
 
-1. globs the vendored subtrees (`runtime/queries/`, `lua/`, `plugin/`, `LICENSE*`) under the archive's top dir, `nvim-treesitter-<commit>/` (deliberately excluding dev-only `tests/`, `scripts/`, `doc/`, `assets/`, the committed `parser/` — Wolf compiles its own curated parsers — `lockfile.json`, `README.md`, `Makefile`, and dotfiles), and
+1. globs the vendored subtrees (`runtime/queries/`, `lua/`, `plugin/`, `LICENSE*`) under the archive's top dir, `nvim-treesitter-<commit>/` (deliberately excluding dev-only `tests/`, `scripts/`, `doc/`, `assets/`, the committed `parser/` — Wolf compiles its own curated parsers — `README.md`, `Makefile`, and dotfiles), and
 2. runs `@aspect_bazel_lib//lib:copy_to_directory` to assemble them into a single TreeArtifact, applying two `replace_prefixes` remaps rather than `http_archive`'s `strip_prefix`: `<root>/runtime/queries` → `nvim-treesitter/queries`, which lifts `main`'s queries back out of `runtime/`, and `<root>` → `nvim-treesitter/` for everything else.
 
 The `nvim-treesitter/` inner directory is deliberate: `rules_apple` strips the bundled TreeArtifact's _own_ top-level directory name when copying it into `Contents/Resources/`. By nesting everything under `nvim-treesitter/`, the app reliably gets `Contents/Resources/nvim-treesitter/...`, and the `queries/` lift lets `init.lua`'s single `runtimepath` prepend (`<this_dir>/nvim-treesitter`) resolve `queries/<lang>/{highlights,injections}.scm`.
@@ -50,9 +46,9 @@ use_repo(nvim_treesitter, "nvim_treesitter")
 
 ## Bumping the pinned nvim-treesitter commit
 
-Bump this **together with** the parser revisions in [`bazel/treesitter-parsers`](../treesitter-parsers/README.md), so queries and parsers stay version-matched.
+Bump this **together with** the parser revisions in [`bazel/treesitter-parsers`](../treesitter-parsers/README.md), which come from this commit's `lua/nvim-treesitter/parsers.lua`, so queries and parsers stay version-matched.
 
-1. Pick the new commit SHA on the `main` branch and update `_COMMIT` in `extensions.bzl`. The archive root name (`nvim-treesitter-<commit>`) auto-follows.
+1. Take the commit the Linux lock's nvim-treesitter is built from and update `_COMMIT` in `extensions.bzl`. The archive root name (`nvim-treesitter-<commit>`) auto-follows.
 2. Recompute the checksum: `curl -L https://github.com/nvim-treesitter/nvim-treesitter/archive/<commit>.tar.gz -o nvts.tar.gz && shasum -a 256 nvts.tar.gz`. Update `_SHA256`.
 3. Regenerate the lockfile (a plain build does this with `--lockfile_mode=update`) and commit `MODULE.bazel.lock`.
-4. Re-run `bazel test //bazel/nvim-treesitter:nvim_treesitter_tree_test` and `//crates/wolf-ffi:treesitter_highlight` (the load-bearing proof that markdown highlighting + go injection are active).
+4. Re-run `bazel test //bazel/nvim-treesitter:nvim_treesitter_tree_test`, `//bazel/treesitter-parsers:queries_compile_test` (every vendored query compiles against its pinned grammar) and `//crates/wolf-ffi:treesitter_highlight` (the proof that fenced-code injection is live).

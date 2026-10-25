@@ -8,13 +8,13 @@ via `@aspect_bazel_lib//lib:copy_to_directory`.
 The pin is on nvim-treesitter's **main** branch. This is a decision reversal from
 the original `master` pin: master's `queries/markdown/injections.scm` uses the custom
 `#set-lang-from-info-string!` predicate, whose frozen-master handler targets a
-pre-0.10 query-match API that pinned nvim 0.12.3 removed → `E5108` on every fenced
+pre-0.10 query-match API that nvim removed (measured on Neovim 0.12.3) → `E5108` on every fenced
 redraw (injection broken). main's markdown `injections.scm` is pure core-supported
 capture-based injection (no custom predicate), which works from the queries on
 `runtimepath` alone. On main the queries live under `runtime/queries/` (remapped back
-to `queries/` below); the classic `lua/nvim-treesitter/` modules and the `plugin/`
-loader are still present (bundled but never sourced — the plugin is used purely as an
-on-rtp query provider, no `.setup{}`).
+to `queries/` below). The `lua/nvim-treesitter/` modules and the `plugin/` loader ship
+too: when the user parser dir resolves, init.lua sources the loader and calls `setup`
+only to set `install_dir` for `:TSInstall`; see `runtime/nvim/README.md`.
 
 Unlike `//bazel/nvim` (which fetches a per-arch native Neovim release and selects
 on `@platforms//cpu`), nvim-treesitter is PURE LUA and therefore arch-independent:
@@ -39,11 +39,11 @@ auto-follows the commit), then regenerate `MODULE.bazel.lock`.
 
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
-# Pinned to `main`: master's `#set-lang-from-info-string!` predicate fails on nvim 0.12.3.
+# Pinned to `main`: master's `#set-lang-from-info-string!` predicate fails (measured, nvim 0.12.3).
 # See bazel/nvim-treesitter/README.md and the module docstring.
-_COMMIT = "4916d6592ede8c07973490d9322f187e07dfefac"
+_COMMIT = "e289100ff98969e118c702199d88b764ce9e7fdf"
 
-_SHA256 = "4e720e38f1a74c07fc8bc9d6264e25ab620df93c6576200f43f2ca0ce5fbdec1"
+_SHA256 = "f4b626bb41f5408c02dcbd7f40c0236d83248a0822fa872d7c16c0752672cb16"
 
 _ARCHIVE_ROOT = "nvim-treesitter-" + _COMMIT
 
@@ -59,8 +59,8 @@ package(default_visibility = ["//visibility:public"])
 # are the reason we pin main), lua/ (the plugin modules), plugin/ (the plugin loader),
 # and LICENSE (kept for compliance). Deliberately EXCLUDE dev-only tests/,
 # scripts/, doc/, assets/, the committed parser/ (Wolf compiles its own curated
-# parsers in //bazel/treesitter-parsers), lockfile.json, README.md, Makefile, and
-# dotfiles — no runtime role for a vendored, highlighting-disabled plugin.
+# parsers in //bazel/treesitter-parsers), README.md, Makefile, and
+# dotfiles — none has a runtime role (init.lua uses only the queries, loader and lua/).
 filegroup(
     name = "runtime_files",
     srcs = glob([

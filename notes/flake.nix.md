@@ -4,7 +4,9 @@ Last verified at commit `cc60afb1257ee0c5474105e363d0d452ba050afb`.
 
 ## Single nixpkgs input
 
-One input supplies the toolchain, the GTK stack and the runtime assets the package ships (Neovim, ripgrep and nvim-treesitter), so `nix flake update` moves all of them together. The single input is deliberate: do not split the runtime assets into an input of their own. An update that moves Neovim owes the full verification gate in `build.md`, because [`runtime/nvim/README.md`](../runtime/nvim/README.md), [the init.lua notes](runtime/nvim/init.lua.md) and the test comments state measured claims per Neovim version. macOS pins its own Neovim and nvim-treesitter under `bazel/`, and [the divergence is tracked](macos-followups.md).
+One input supplies the toolchain, the GTK stack and the runtime assets the package ships (Neovim, ripgrep and nvim-treesitter), so `nix flake update` moves all of them together. The single input is deliberate: do not split the runtime assets into an input of their own. An update that moves Neovim owes the full verification gate in `build.md`, because [`runtime/nvim/README.md`](../runtime/nvim/README.md), [the init.lua notes](runtime/nvim/init.lua.md) and the test comments state measured claims per Neovim version.
+
+macOS pins its own Neovim and nvim-treesitter under `bazel/`, matched by hand to this lock, so an update that moves either also owes the matching `bazel/nvim` or `bazel/nvim-treesitter` bump and a run of `//bazel/treesitter-parsers:queries_compile_test` on the macOS host.
 
 The input must not lag the host. The GTK process dlopens the host's Mesa from `/run/opengl-driver`, and that Mesa needs a glibc at least as new as the system's. A `nixpkgs` lock older than the NixOS host leaves the process on an older glibc, the driver fails to load, and WebKit's web process aborts with `Could not create default EGL display: EGL_BAD_PARAMETER`, which shows as a blank Markdown preview.
 
@@ -15,6 +17,14 @@ The input must not lag the host. The GTK process dlopens the host's Mesa from `/
 Do not add a top-level reference to any of them, and do not wrap any of them in a `lib.optional` guard, which would imply the laziness argument is unsound.
 
 The `optionalAttrs` on the `packages` output is the one deliberate guard, and it is a different thing. The prohibition is about guarding a derivation inside `linuxShell.packages`, where laziness already does the work. The output attribute set is not lazy in the same way: without the guard, `packages.aarch64-darwin.default` would exist as an attribute naming a Wayland GTK application, and `nix flake show` and `nix flake check` would try to evaluate it. The guard is on the attribute's existence, not on the derivation's value.
+
+## Darwin shell
+
+`darwinShell` is `mkShellNoCC` because the C toolchain on macOS is Xcode, which apple_support drives through `DEVELOPER_DIR`; the shell needs only bazelisk, the `bazel` shim, git and starpls. Measured under `mkShell`: `cc`, `ld` and `strip` resolve to the Nix clang-wrapper 21, `xcrun` to xcbuild's, which prints `unhandled Platform key` warnings on `xcrun --find swift-format`, and `SDKROOT` to a Nix apple-sdk 14.4. Under `mkShellNoCC` all four tools resolve under `/usr/bin` and `SDKROOT` is unset.
+
+`.bazelrc`'s `--incompatible_strict_action_env` already keeps the shell's `PATH` out of build actions, so what the shell protects is the client environment: `bazel run` targets run there and call `xcrun`.
+
+Neither is the fix for the macOS 27 `E0463: can't find crate for thiserror_impl`, which comes from rustc's own strip step, not from any tool on `PATH`; see [the `.bazelrc` notes](.bazelrc.md#exec-strip).
 
 ## Vendored Lua trees
 
@@ -44,7 +54,7 @@ Upstream nvim-treesitter keeps its queries at `runtime/queries/` while `lua/` an
 
 The remap mirrors `bazel/nvim-treesitter/extensions.bzl`, which lifts `runtime/queries` back to `queries` and globs `lua/**` and `plugin/**`, so both platforms present the same tree shape.
 
-Queries stay unfiltered, unlike the curated parser list, matching the macOS package, which globs them with no per-language filter: each parser is a compile, while queries are data that cost nothing to carry. The revision is nixpkgs', independent of the one `bazel/nvim-treesitter/extensions.bzl` pins, so the two platforms' queries can differ ([tracked in the macOS follow-ups](macos-followups.md)).
+Queries stay unfiltered, unlike the curated parser list, matching the macOS package, which globs them with no per-language filter: each parser is a compile, while queries are data that cost nothing to carry. The revision is nixpkgs'. `bazel/nvim-treesitter/extensions.bzl` pins the same commit by hand, and [Single nixpkgs input](#single-nixpkgs-input) says what an update that moves it owes.
 
 ## WebKitGTK and libsoup
 

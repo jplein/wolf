@@ -193,7 +193,7 @@ The same `.envrc` selects the Darwin shell:
 direnv allow
 ```
 
-The Darwin shell supplies bazelisk (exposed as both `bazelisk` and a `bazel` shim), git, starpls, and exports `DEVELOPER_DIR`. It deliberately carries no Rust toolchain and no GUI packages: `rules_rust` downloads a pinned rustc (1.85.0), and the Rust dependencies resolve from the workspace `Cargo.toml` and `Cargo.lock` through `crate_universe`. Every command below is written `bazel`, which is the bazelisk shim.
+The Darwin shell supplies bazelisk (exposed as both `bazelisk` and a `bazel` shim), git, starpls, and exports `DEVELOPER_DIR`. It deliberately carries no C toolchain, so `cc`, `strip`, `xcrun` and the SDK all resolve to Xcode ([why](notes/flake.nix.md#darwin-shell)), and no Rust toolchain and no GUI packages: `rules_rust` downloads a pinned rustc (1.85.0), and the Rust dependencies resolve from the workspace `Cargo.toml` and `Cargo.lock` through `crate_universe`. Every command below is written `bazel`, which is the bazelisk shim.
 
 bazelisk reads the Bazel version from `.bazelversion` (8.7.0) and fetches it. `MODULE.bazel` (bzlmod) pins the rule sets and is authoritative for their versions; `MODULE.bazel.lock` and `Cargo.Bazel.lock` are committed, so a clean checkout builds without resolving anything.
 
@@ -335,21 +335,21 @@ What each target covers belongs with the code it tests:
 
 Every bundled third-party asset is downloaded by a bzlmod module extension under `bazel/`, sha256-pinned, with no system or `PATH` dependency. Each package owns its pin, its assembly, and its bump procedure:
 
-| Package                                                                              | Pinned                            | Test                                     |
-| ------------------------------------------------------------------------------------ | --------------------------------- | ---------------------------------------- |
-| [`//bazel/nvim`](bazel/nvim/README.md)                                               | Neovim, per-arch release tarball  | `:nvim_version_test`                     |
-| [`//bazel/rg`](bazel/rg/README.md)                                                   | ripgrep, per-arch release tarball | `:rg_version_test`                       |
-| [`//bazel/orlando`](bazel/orlando/README.md)                                         | The orlando plugin                | `:orlando_tree_test`                     |
-| [`//bazel/lighthouse`](bazel/lighthouse/README.md)                                   | The lighthouse colorscheme        | `:lighthouse_tree_test`                  |
-| [`//bazel/nvim-treesitter`](bazel/nvim-treesitter/README.md)                         | The markdown queries provider     | `:nvim_treesitter_tree_test`             |
-| [`//bazel/nvim-treesitter-textobjects`](bazel/nvim-treesitter-textobjects/README.md) | The textobjects plugin            | `:nvim_treesitter_textobjects_tree_test` |
-| [`//bazel/treesitter-parsers`](bazel/treesitter-parsers/README.md)                   | The host-compiled grammars        | `:parsers_tree_test`                     |
-| [`//bazel/jetbrains-mono`](bazel/jetbrains-mono/README.md)                           | JetBrains Mono                    | `:jetbrains_mono_tree_test`              |
-| [`//bazel/ia-writer-mono`](bazel/ia-writer-mono/README.md)                           | iA Writer Mono S                  | `:ia_writer_mono_tree_test`              |
+| Package                                                                              | Pinned                            | Test                                          |
+| ------------------------------------------------------------------------------------ | --------------------------------- | --------------------------------------------- |
+| [`//bazel/nvim`](bazel/nvim/README.md)                                               | Neovim, per-arch release tarball  | `:nvim_version_test`                          |
+| [`//bazel/rg`](bazel/rg/README.md)                                                   | ripgrep, per-arch release tarball | `:rg_version_test`                            |
+| [`//bazel/orlando`](bazel/orlando/README.md)                                         | The orlando plugin                | `:orlando_tree_test`                          |
+| [`//bazel/lighthouse`](bazel/lighthouse/README.md)                                   | The lighthouse colorscheme        | `:lighthouse_tree_test`                       |
+| [`//bazel/nvim-treesitter`](bazel/nvim-treesitter/README.md)                         | The markdown queries provider     | `:nvim_treesitter_tree_test`                  |
+| [`//bazel/nvim-treesitter-textobjects`](bazel/nvim-treesitter-textobjects/README.md) | The textobjects plugin            | `:nvim_treesitter_textobjects_tree_test`      |
+| [`//bazel/treesitter-parsers`](bazel/treesitter-parsers/README.md)                   | The host-compiled grammars        | `:parsers_tree_test`, `:queries_compile_test` |
+| [`//bazel/jetbrains-mono`](bazel/jetbrains-mono/README.md)                           | JetBrains Mono                    | `:jetbrains_mono_tree_test`                   |
+| [`//bazel/ia-writer-mono`](bazel/ia-writer-mono/README.md)                           | iA Writer Mono S                  | `:ia_writer_mono_tree_test`                   |
 
 Every bump has the same four steps, and each package README gives the exact commands for its own archive layout: change the version or commit in that package's `extensions.bzl`, recompute and update the sha256, regenerate and commit `MODULE.bazel.lock` (a plain build does this, since `.bazelrc` sets `--lockfile_mode=update`), then re-run that package's test.
 
-Two of them move together. `//bazel/nvim-treesitter` and `//bazel/treesitter-parsers` are bumped in one change so the bundled queries and the compiled parsers stay version-matched, and that bump also re-runs `//crates/wolf-ffi:treesitter_parser_abi` and `//crates/wolf-ffi:treesitter_highlight` — the proofs that a shipped parser is ABI-compatible with the pinned Neovim and that markdown highlighting with fenced-code injection is live.
+Two of them move together. `//bazel/nvim-treesitter` and `//bazel/treesitter-parsers` are bumped in one change so the bundled queries and the compiled parsers stay version-matched, and that bump also re-runs `//bazel/treesitter-parsers:queries_compile_test`, `//crates/wolf-ffi:treesitter_parser_abi` and `//crates/wolf-ffi:treesitter_highlight` — the proofs that every vendored query compiles against its pinned grammar, that a shipped parser is ABI-compatible with the pinned Neovim, and that fenced-code injection is live.
 
 ## Logging (`WOLF_LOG`)
 

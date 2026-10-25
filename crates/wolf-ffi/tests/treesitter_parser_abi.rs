@@ -3,7 +3,7 @@
 //!
 //! This drives a REAL, hermetic Neovim — NO mocks, per the project testing policy
 //! — and proves that a host-compiled treesitter parser `.so` shipped in the bundle
-//! is ABI-COMPATIBLE with the pinned Neovim 0.12.3: nvim can `add` the language
+//! is ABI-COMPATIBLE with the pinned Neovim: nvim can `add` the language
 //! from the compiled `.so` and then actually PARSE source with it, producing a
 //! well-formed tree.
 //!
@@ -211,8 +211,8 @@ fn compiled_go_parser_is_abi_compatible_with_pinned_nvim() {
     assert_eq!(
         added, MARK_OK,
         "vim.treesitter.language.add('go', {{path=<compiled .so>}}) should succeed, \
-         proving the shipped parser is a loadable, ABI-compatible module for pinned \
-         nvim 0.12.3 (sentinel line 1 = {added:?})"
+         proving the shipped parser is a loadable, ABI-compatible module for the pinned \
+         Neovim (sentinel line 1 = {added:?})"
     );
     assert_eq!(
         parsed, MARK_OK,

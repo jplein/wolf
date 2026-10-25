@@ -1,4 +1,4 @@
-# The arch-selected Neovim 0.12.3 `nvim/` TreeArtifact and its smoke test.
+# The arch-selected pinned Neovim `nvim/` TreeArtifact and its smoke test.
 # See bazel/nvim/README.md for the pins and how to bump them.
 load("//tools/lint:defs.bzl", "comment_srcs")
 
@@ -13,7 +13,7 @@ alias(
     visibility = ["//visibility:public"],
 )
 
-# Exercises the pinned binary: exists + executable, reports `NVIM v0.12.3`, and
+# Exercises the pinned binary: exists + executable, reports the pinned version, and
 # self-locates its runtime (VIMRUNTIME) INSIDE the bundled tree.
 sh_test(
     name = "nvim_version_test",

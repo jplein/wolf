@@ -5,7 +5,7 @@ exports_files([
     "Cargo.lock",
 ])
 
-# Root files plus the dirs with no package of their own; globs stop at package boundaries.
+# Root files and package-less dirs; globs stop at packages, and `*` skips dotfiles (hence `.*.md`).
 # CLAUDE.md quotes the changelog words it bans, so it is out of the Markdown check's scope.
 filegroup(
     name = "markdown_srcs",
@@ -13,6 +13,7 @@ filegroup(
         [
             "*.md",
             "notes/**/*.md",
+            "notes/**/.*.md",
             "specs/**/*.md",
             "crates/wolf-gnome/**/*.md",
             "tools/*.md",

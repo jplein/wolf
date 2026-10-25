@@ -42,6 +42,20 @@ sh_test(
     data = [":parsers_tree"],
 )
 
+# Runs the pinned nvim to compile each vendored nvim-treesitter highlights/injections query
+# against the parser built here, so a grammar re-pin cannot drift from the queries unnoticed.
+sh_test(
+    name = "queries_compile_test",
+    srcs = ["queries_compile_test.sh"],
+    args = ["$(rootpath :queries_compile_probe.lua)"],
+    data = [
+        ":parsers_tree",
+        ":queries_compile_probe.lua",
+        "//bazel/nvim:nvim_tree",
+        "//bazel/nvim-treesitter:nvim_treesitter_tree",
+    ],
+)
+
 # This package's sources and docs for //tools/lint, which cannot glob across packages.
 comment_srcs()
 

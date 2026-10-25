@@ -23,6 +23,7 @@ The shared harness for every `wolf-ffi` bridge test. It mirrors `crates/wolf-cor
 - `nvim_bin_or_skip()` — the skip gate. An explicit `WOLF_NVIM_BIN` wins, then the staged pinned tree via `WOLF_TEST_NVIM_DIR`. A caller that gets `None` must return from the test; panicking or asserting success instead defeats the policy, and the stderr banner is what keeps a misconfigured environment from reading as real coverage.
 - Publishing the resolved path back into `WOLF_NVIM_BIN` is part of that helper's contract, not a side effect to tidy away: under Bazel the binary comes from the staged tree while `wolf_ffi_start` reads only that variable, so without the publish the whole Bazel path launches nothing. The write is conditional, so the devShell path performs none at all, and it happens once per test binary behind a `OnceLock` that every reader is ordered after — `setenv` is not synchronised against a C-side `getenv`, and `cargo test` runs a binary's tests in parallel.
 - Because the helper publishes, a test body needs no `std::env::set_var("WOLF_NVIM_BIN", …)` of its own — do not copy one from a sibling. Most real-nvim binaries here still carry that redundant write at the top of each test body, which the helper makes a no-op and which races its neighbours' environment reads in any binary holding more than one test. Removing them is pure plumbing that touches no assertion, and nobody has done it.
+- `nvim_bin_or_skip()` is also the state-dir funnel. It first points `WOLF_STATE_DIR` at a throwaway `wolf-ffi-test-state-*` dir, once per binary and only if unset, because otherwise `state_dir()` is the user's real Wolf state dir under both Bazel and cargo, and every test would source their `init_user.lua` and write swap and MRU files there. A test that sets its own `WOLF_STATE_DIR` afterwards wins; one that removes it must be alone in its binary, since nothing sets it again for its neighbours. [`state_isolation.rs`](#state_isolationrs) is the guard.
 - `init_lua_path()` — resolves the captive `runtime/nvim/init.lua`, preferring the staged runfile over the `CARGO_MANIFEST_DIR` fallback. Under Bazel that manifest path is an ephemeral sandbox directory absent at test runtime, and nvim launched with a missing `-u` file blocks forever on its `Press ENTER` prompt, hanging startup.
 - `orlando_dir_or_none()`, `lighthouse_dir_or_none()`, `parsers_dir_or_none()`, `nvim_treesitter_dir_or_none()` — staged vendored-tree resolvers, each over its own `WOLF_TEST_*_DIR`. Bazel wires all four from runfiles; the Linux devShell exports the orlando and lighthouse ones from the same derivations the Nix package installs, so both trees resolve on both platforms and only a `cargo test` run outside the shell reaches the `None` arm, which returns the dependent test as a loud skip rather than a failure.
 - Deleting either `shellHook` export reddens nothing in this suite — three tests would skip and pass — so `crates/wolf-gnome/tests/smoke_headless.rs` carries a guard asserting both lines are still in `flake.nix`.
@@ -349,6 +350,22 @@ Also `preview_buffer(win, bufnr)` — markdown binds and returns the source bufn
 **Covers** — the state-persistence bridge end to end: the snapshot-builder free functions, the pane-layout push-builder, the read side (`wolf_ffi_load_state` through the `FfiState` / `FfiWindowState` / `FfiTabState` / `FfiPaneNode` accessors), and rejection of an old flat file. Headless — the write side is a pure builder over the shared store, so target `//crates/wolf-ffi:state` stages no nvim and carries no `no-sandbox` tag; everything is driven through `WOLF_STATE_DIR` pointed at a tempdir.
 
 **Gotchas** — one `#[test]` only: it mutates the process-global `WOLF_STATE_DIR` and opens the process-wide `SHARED_STORE` `OnceLock`, so extend that test rather than adding a sibling.
+
+#### `state_isolation.rs`
+
+**Covers**
+
+That the harness's state-dir funnel keeps a real-nvim test off the user's Wolf state dir. The visible test re-executes its own binary twice, each child under a scratch `HOME` holding a planted `runtime_user/init_user.lua` that sets `ignorecase`. `isolated_payload` asserts `state_dir()` left the plant, `ignorecase` stays off, and nothing was written there; `control_payload` aims `WOLF_STATE_DIR` at the plant and asserts `ignorecase` is on and the harness kept that dir. Real nvim; target `//crates/wolf-ffi:state_isolation` (staged nvim runfiles, `tags = ["no-sandbox"]`, and a direct `//crates/wolf-core:wolf_core` dep for `state_dir()`).
+
+**Decisions**
+
+- Re-exec, because `HOME` and `WOLF_STATE_DIR` cannot be rewritten safely inside a running test binary: `setenv` races other threads, and the harness publishes once per binary.
+- The control payload is what makes the isolated `!ignorecase` non-vacuous. The parent requires each child to report exactly one passed test, so a renamed payload fails rather than passing on zero tests.
+
+**Gotchas**
+
+- Both payloads show as ignored, return at once without `WOLF_TEST_PLANTED_HOME`, and run only through the parent.
+- `PLATFORM_STATE_REL` must match `state_dir()`'s platform default, or the isolated payload's precondition fails loudly. The Linux arm runs only under `cargo test` on Linux.
 
 #### `tabpages.rs`
 

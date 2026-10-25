@@ -1,8 +1,11 @@
 #!/bin/sh
-# Asserts the bundled nvim is executable, reports `NVIM v0.12.3`, self-locates VIMRUNTIME inside
-# the tree and ships `markdown.so`; see bazel/nvim/README.md. Runfiles roots are probed.
+# Asserts the bundled nvim is executable, reports `EXPECTED_VERSION`, self-locates VIMRUNTIME
+# inside the tree and ships `markdown.so`; see bazel/nvim/README.md. Runfiles roots are probed.
 
 set -eu
+
+# Must equal `_VERSION` in bazel/nvim/extensions.bzl.
+EXPECTED_VERSION="0.12.6"
 
 fail() {
   echo "FAIL: $1" >&2
@@ -71,16 +74,15 @@ echo "Bundle prefix: $NVIM_PREFIX"
 [ -x "$NVIM" ] || fail "nvim binary is not executable (exec bit lost?): $NVIM"
 echo "PASS check (a): nvim binary exists and is executable"
 
-# --- (b) version pin: NVIM v0.12.3
-EXPECTED_VERSION="NVIM v0.12.3"
+# --- (b) version pin. `-x`: a whole line, so `v<pin>-dev` or `v<pin>0` cannot satisfy it.
 VERSION_OUT=$("$NVIM" --version 2>&1 || true)
-if ! printf '%s\n' "$VERSION_OUT" | grep -q 'NVIM v0\.12\.3'; then
+if ! printf '%s\n' "$VERSION_OUT" | grep -qxF "NVIM v$EXPECTED_VERSION"; then
   echo "---- nvim --version output ----" >&2
   printf '%s\n' "$VERSION_OUT" >&2
   echo "-------------------------------" >&2
-  fail "version mismatch: expected output to contain '$EXPECTED_VERSION', got the above"
+  fail "version mismatch: expected a line 'NVIM v$EXPECTED_VERSION', got the above (a different pin in extensions.bzl, or a dev/nightly build)"
 fi
-echo "PASS check (b): nvim reports $EXPECTED_VERSION"
+echo "PASS check (b): nvim reports NVIM v$EXPECTED_VERSION"
 
 # --- (c) Self-location: run with no user config, VIMRUNTIME resolves inside the bundled tree.
 RUNTIME_CAP=$(mktemp 2>/dev/null || echo "${TMPDIR:-/tmp}/nvim_runtime_cap.$$")
@@ -113,4 +115,4 @@ MARKDOWN_SO="$NVIM_PREFIX/lib/nvim/parser/markdown.so"
 [ -f "$MARKDOWN_SO" ] || fail "expected shipped treesitter parser missing: $MARKDOWN_SO"
 echo "PASS check (d): bundled treesitter parser present ($MARKDOWN_SO)"
 
-echo "PASS: bundled nvim is v0.12.3, executable, self-locates its runtime inside the tree, and ships the markdown parser"
+echo "PASS: bundled nvim is v$EXPECTED_VERSION, executable, self-locates its runtime inside the tree, and ships the markdown parser"

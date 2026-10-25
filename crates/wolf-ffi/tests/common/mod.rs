@@ -1,14 +1,13 @@
 //! Shared helpers for `wolf-ffi` bridge integration tests.
 //!
 //! These mirror `crates/wolf-core/tests/common/mod.rs`, but with one deliberate
-//! policy difference: where the wolf-core suite PANICS when `WOLF_NVIM_BIN` is
-//! unset (it is meaningless without a real nvim and CI always provides one), the
-//! wolf-ffi bridge test must **loudly SKIP** instead. Bazel-on-macOS cannot yet
-//! provision a pinned nvim, so this test must be a no-op (not a failure) there,
-//! while still running on Linux/Cargo devShells where `WOLF_NVIM_BIN` is set.
+//! policy difference: where the wolf-core suite PANICS when it finds no nvim, the
+//! wolf-ffi suite **loudly SKIPS** instead. [`nvim_bin_or_skip`] returns `None` only
+//! on a host with neither the Bazel-staged `//bazel/nvim:nvim_tree` nor a
+//! `WOLF_NVIM_BIN`, and every test in the suite then returns as a no-op pass.
 //!
-//! Resolution of nvim, init.lua, and the temp cwd otherwise follows the wolf-core
-//! pattern exactly (real nvim, no mocks).
+//! Resolution of nvim, init.lua, the temp cwd and the hermetic `WOLF_STATE_DIR`
+//! scratch dir otherwise follows the wolf-core pattern (real nvim, no mocks).
 
 #![allow(dead_code)] // Not every helper is used by every test binary.
 
@@ -115,6 +114,40 @@ fn resolve_nvim_bin() -> Option<PathBuf> {
     None
 }
 
+/// Keeps the throwaway state dir published by [`ensure_hermetic_state_dir`] alive for
+/// the whole test binary. `None` records that the caller had already set
+/// `WOLF_STATE_DIR`, which is then left alone. Statics are never dropped, so the
+/// directory is not deleted out from under a running core.
+static HERMETIC_STATE_DIR: OnceLock<Option<tempfile::TempDir>> = OnceLock::new();
+
+/// Points `WOLF_STATE_DIR` at a fresh `wolf-ffi-test-state-*` dir under the system temp
+/// dir, once per test binary and only if the variable is unset.
+///
+/// Without it `wolf_core::state_dir()` is the user's real Wolf state dir on both
+/// platforms: Bazel strips `HOME` from the test env, but `dirs` then falls back to
+/// `getpwuid`, which is the real home, and `cargo test` inherits `HOME` outright. Every
+/// real-nvim test would then source the user's `runtime_user/init_user.lua` (one that
+/// sets `ignorecase` turns `search.rs` red) and write swap and MRU files into their
+/// state dir. `state_isolation.rs` is the guard.
+///
+/// Set-if-absent, so a test that sets its own `WOLF_STATE_DIR` first keeps it. The
+/// publish runs once per binary behind [`HERMETIC_STATE_DIR`], for the same `setenv`
+/// race [`NVIM_BIN`] describes, so a test that removes the variable afterwards must be
+/// alone in its binary: nothing would set it again for its neighbours.
+fn ensure_hermetic_state_dir() {
+    HERMETIC_STATE_DIR.get_or_init(|| {
+        if std::env::var_os("WOLF_STATE_DIR").is_some() {
+            return None;
+        }
+        let dir = tempfile::Builder::new()
+            .prefix("wolf-ffi-test-state-")
+            .tempdir()
+            .expect("failed to create the hermetic WOLF_STATE_DIR");
+        std::env::set_var("WOLF_STATE_DIR", dir.path());
+        Some(dir)
+    });
+}
+
 /// Returns a usable pinned-nvim binary path, or `None` after printing a LOUD skip
 /// banner to stderr. Resolution order is [`resolve_nvim_bin`]'s.
 ///
@@ -124,12 +157,16 @@ fn resolve_nvim_bin() -> Option<PathBuf> {
 /// happens once per binary behind [`NVIM_BIN`] — a per-test write would race the
 /// other tests' environment reads.
 ///
+/// It is also the state-dir funnel: it runs [`ensure_hermetic_state_dir`] first, so
+/// every test must call it before `wolf_ffi_start`, even one that already has a binary.
+///
 /// A caller that gets `None` must `return` from the test (a no-op pass), NOT panic
 /// and NOT silently assert success. The banner makes the skip visible in
 /// `--nocapture` output so a misconfigured env is never mistaken for real coverage,
 /// and it is printed on every skipping call, not just the first.
 #[must_use]
 pub fn nvim_bin_or_skip() -> Option<PathBuf> {
+    ensure_hermetic_state_dir();
     if let Some(bin) = NVIM_BIN.get_or_init(resolve_and_publish_nvim_bin) {
         return Some(bin.clone());
     }
@@ -252,8 +289,10 @@ pub fn parsers_dir_or_none() -> Option<PathBuf> {
 ///    pointing at the flake's assembled runtimepath-shaped nvim-treesitter tree,
 ///    with `queries/`, `lua/` and `plugin/` as siblings (i.e.
 ///    `<dir>/queries/markdown/injections.scm`). It is the same variable
-///    `runtime/nvim/init.lua`'s gate falls back to. Its revision is nixpkgs',
-///    independent of the one Bazel pins, so the platforms' queries can differ.
+///    `runtime/nvim/init.lua`'s gate falls back to. Its revision comes from the
+///    flake's nixpkgs, a pin separate from Bazel's that is matched to it by hand,
+///    so the two queries trees diverge only when one pin is bumped without the
+///    other — see `bazel/nvim-treesitter/README.md#the-pin`.
 ///
 /// **The Bazel variable wins, and the order is load-bearing** — see
 /// [`parsers_dir_or_none`] for why. Callers must accommodate both layouts: probe
@@ -304,8 +343,8 @@ static CWD_COUNTER: AtomicU64 = AtomicU64::new(0);
 /// Creates a fresh, unique temp directory to serve as the core `cwd` and returns
 /// its path. Mirrors wolf-core's `fresh_cwd` (intentionally NOT auto-deleted: it
 /// is nvim's working dir + file-search root, so it must outlive `wolf_ffi_start`;
-/// the recent-files MRU now lives in the global `state_dir()/file-mru.sqlite`, not
-/// under the cwd).
+/// the recent-files MRU is the global `state_dir()/file-mru.sqlite`, not under the
+/// cwd).
 #[must_use]
 pub fn fresh_cwd() -> PathBuf {
     let n = CWD_COUNTER.fetch_add(1, Ordering::Relaxed);

@@ -699,7 +699,7 @@ fn preview_scratch_buffer_reports_no_cursor() {
 /// **The measured fact this pins, and the whole reason the guard exists:**
 /// `vim.fn.bufload()` fires `BufEnter` **and** `BufWinEnter` for the target buffer
 /// inside nvim's synthetic **autocmd window**, with that buffer GENUINELY current.
-/// Probed against the pinned nvim 0.12.3, that window reports
+/// Probed against Neovim 0.12.6, that window reports
 /// `win_gettype() == "autocmd"` and carries a fabricated line 1 / column 1 cursor
 /// belonging to no user pane. Because the buffer really is current, really is a
 /// loaded markdown file (`bufload` runs filetype detection), and really has no

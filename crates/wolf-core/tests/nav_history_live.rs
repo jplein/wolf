@@ -1296,13 +1296,13 @@ fn back_to_an_unsaved_buffer_rebinds_the_same_modified_buffer() {
 /// `vim.fn.resolve(name)` equals the canonicalized stack path before falling back
 /// to `vim.fn.bufadd(path)`. That scan was added as a fix for a suspected
 /// duplicate-buffer bug, but it was then shown empirically NOT to be one: this test
-/// passes with AND without the scan, because the pinned nvim 0.12.3 already covers
-/// this shape twice over.
+/// passes with AND without the scan, because the pinned Neovim already covers this
+/// shape twice over.
 ///
-///   1. nvim resolves DIRECTORY symlinks in buffer names itself — after
-///      `:e link/doc.md`, `nvim_buf_get_name(0)` is already `<cwd>/real/doc.md`,
-///      exactly the canonical form core stores, so the two names never diverge here
-///      at all.
+///   1. nvim resolves DIRECTORY symlinks in buffer names itself (measured on
+///      Neovim 0.12.6) — after `:e link/doc.md`, `nvim_buf_get_name(0)` is already
+///      `<cwd>/real/doc.md`, exactly the canonical form core stores, so the two
+///      names never diverge here at all.
 ///   2. Buffer lookup is by FILE ID (device + inode), not by name (`buflist_new` ->
 ///      `buflist_findname_file_id`), so even a genuinely divergent name (a FILE
 ///      symlink, whose name nvim does keep) still finds the SAME buffer whenever the
@@ -1612,7 +1612,7 @@ fn a_failed_back_to_a_deleted_preview_source_reverts_the_cursor() {
 ///
 /// ## How the throw is arranged
 ///
-/// `'winfixbuf'` (nvim >= 0.10, so present in the pinned 0.12.3) pins a window to
+/// `'winfixbuf'` (nvim >= 0.10, so present in the pinned Neovim) pins a window to
 /// its current buffer: `nvim_win_set_buf` into it raises `E1513` instead of
 /// switching. Both handles stay VALID, so the guards above pass and the failure
 /// lands exactly where this test needs it. (The other route to a throwing bind is
