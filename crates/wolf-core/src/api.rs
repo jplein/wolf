@@ -468,10 +468,11 @@ impl WolfCore {
     /// single consumer task in FIFO order; errors are logged (the front-end gets
     /// no synchronous result, matching the FFI-shaped contract).
     ///
-    /// The event is stamped with the current restart generation. Typing (see
-    /// [`InputEvent::is_typing`]) still queued when a
-    /// [`restart_nvim`](Self::restart_nvim) swaps in the fresh nvim is dropped,
-    /// never delivered to it; state input still applies.
+    /// The event is stamped with the current restart generation. Typing
+    /// ([`Key`](InputEvent::Key), [`Paste`](InputEvent::Paste),
+    /// [`Mouse`](InputEvent::Mouse) or [`Scroll`](InputEvent::Scroll)) still
+    /// queued when a [`restart_nvim`](Self::restart_nvim) swaps in the fresh nvim
+    /// is dropped, never delivered to it; state input still applies.
     pub fn send_input(&self, event: InputEvent) {
         let generation = self.shared_handle.read().generation;
         if self
