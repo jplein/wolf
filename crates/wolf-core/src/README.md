@@ -12,20 +12,21 @@ Crate root. Declares every module and flattens the public surface into root re-e
 
 #### `api.rs`
 
-`WolfCore`, the front-end-facing surface: it owns the tokio runtime, the captive Neovim, and the shared snapshot. The API is FFI-shaped (plain structs, handles, one wake callback) so a single surface serves both front-ends.
+`WolfCore`, the FFI-shaped surface both front-ends share, owning the tokio runtime, the captive Neovim and the snapshot.
 
 **Public API**
 
-- `CoreConfig.cwd` is the captive nvim's launch directory and the fallback search/MRU root until nvim reports its own cwd (`live_cwd`).
-- `SnapshotReadGuard` owns an `Arc` clone of the snapshot lock, so it outlives the `&self` it came from. Hold it for one paint, then drop it.
-- The blocking queries (`list_buffers`, `render_preview`, `open_preview`, and siblings) return a neutral fallback — `""`, `0`, `None`, an empty `Vec` — on any RPC error or timeout, indistinguishable from a genuinely empty answer. Everything else is fire-and-forget through the ordered input channel.
-- `restart_nvim` returns `Ok(false)` when no respawn happened (already `Alive`, or one in flight), and reopens nothing: capture `open_files_for_tabpage` before calling it.
-- `recent_dirs` omits entries that are not directories, a stat each on the calling thread, and never prunes the store, so a returning folder reappears.
+- `CoreConfig.cwd` is nvim's launch directory and the search/MRU root until nvim reports its own cwd (`live_cwd`).
+- `SnapshotReadGuard` owns an `Arc` clone of the snapshot lock, so it outlives the `&self` it came from. Hold it for one paint only.
+- The blocking queries (`list_buffers` and siblings) return an empty or zero fallback on any RPC error or timeout, indistinguishable from an empty answer. Everything else is fire-and-forget through the ordered input channel.
+- `restart_nvim` returns `Ok(false)` when no respawn happened (already `Alive` or in flight), and reopens nothing: capture `open_files_for_tabpage` before calling it. Typing (`Key`, `Paste`, `Mouse`, `Scroll`) sent before the swap never reaches the fresh nvim, so a half-typed Ex command cannot land as keys; state input still applies.
+- `recent_dirs` omits non-directories (a stat each, on the calling thread) and never prunes the store, so a returning folder reappears.
 
 **Decisions**
 
-- Every interactive RPC funnels through `block_on_rpc`, bounded by `WOLF_RPC_TIMEOUT_MS`. On elapse the spawned task is detached rather than aborted, because an `nvim-rs` call whose response receiver is dropped mid-flight kills the io loop — which the supervisor then reports as a crash.
-- `WolfCore` is `!Send` and keeps the process in a `RefCell` so a restart can swap a fresh one in through `&self`. Bind each borrow to a local so no guard is live across an `.await`.
+- Interactive RPCs go through `block_on_rpc`, bounded by `WOLF_RPC_TIMEOUT_MS`. A timed-out task is detached, not aborted: dropping an `nvim-rs` response receiver mid-flight kills the io loop, which reads as a crash.
+- `WolfCore` is `!Send` and keeps the process in a `RefCell` so a restart can swap a fresh one in through `&self`. Bind each borrow to a local, never held across an `.await`.
+- Stale typing is cut by the generation `send_input` stamps, not liveness: input sent while `Alive` can still be queued at the swap.
 
 #### `nvim.rs`
 
@@ -181,11 +182,11 @@ The canonical, platform-agnostic registry of Wolf commands. A command is a no-pa
 
 #### `input.rs`
 
-The toolkit-neutral input vocabulary front-ends speak, and its translation into Neovim keystroke notation and generic RPC.
+The toolkit-neutral input vocabulary and its translation into Neovim keystroke notation and RPC.
 
 **Public API**
 
-- `InputEvent` — the event vocabulary a front-end sends, with `Key`, `KeyEvent`, `MouseButton`, `MouseAction`, `MouseEvent`, `ScrollDirection` and `ScrollEvent`.
+- `InputEvent` — the events a front-end sends, with `Key`, `KeyEvent`, `MouseButton`, `MouseAction`, `MouseEvent`, `ScrollDirection` and `ScrollEvent`.
 - `key_to_notation(&KeyEvent) -> String` — modifier order `C-`, `S-`, `A-`, `D-`; `<` becomes `<lt>`.
 - `InputEvent::is_toast_dismissing()` — whether the event dismisses a showing message toast.
 
@@ -193,14 +194,15 @@ The toolkit-neutral input vocabulary front-ends speak, and its translation into 
 
 - Shift contract: for `Key::Char` the front-end delivers the already-shifted glyph and leaves `shift` false; `S-` is emitted only for named keys, where Neovim gives it meaning.
 - `MouseEvent` and `ScrollEvent` target a grid, with grid-local row and column: under `ext_multigrid` a pane has its own grid, and grid 0 is the global one.
-- `Chdir` applies `:tcd`, not `:cd`: each view is one nvim tabpage with its own working directory, and `:cd` would move every view.
+- `Chdir` applies `:tcd`, not `:cd`: each view is one nvim tabpage with its own cwd, and `:cd` would move every view.
 - `Resize` forwards `nvim_ui_try_resize` and never resizes a local grid: the authoritative size arrives back as `grid_resize`.
-- `SaveAs` carries `force`, applied as `saveas!`, for a caller whose own dialog has already confirmed the overwrite: plain `saveas` fails `E13: File exists`, and the input pump degrades that to a warning nobody sees. Forcing unconditionally would clobber for a front-end that confirms nothing.
+- `is_typing` is an exhaustive match, so each new variant must be classed as typing or state, deciding whether it survives a restart ([`api.rs`](#apirs)).
+- `SaveAs` carries `force`, applied as `saveas!`, for a caller whose dialog already confirmed the overwrite: plain `saveas` fails `E13: File exists`, and the input pump degrades that to a warning nobody sees. Forcing unconditionally would clobber for a front-end that confirms nothing.
 
 **Gotchas**
 
 - A scroll counts as dismissing; the scroll-over-toast exemption lives in the front-end, which never forwards that gesture.
-- Several variants delegate to `runtime/nvim/init.lua` helpers over `nvim_exec_lua`, so their behaviour is defined there, not in this module.
+- Several variants delegate to `runtime/nvim/init.lua` helpers over `nvim_exec_lua`, which define their behaviour.
 
 #### `markdown.rs`
 

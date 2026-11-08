@@ -347,14 +347,17 @@ Real Neovim (`WOLF_NVIM_BIN`, `no-sandbox` target with staged nvim runfiles).
 
 **Covers**
 
-- `restart_nvim()` and Tier-1 restore: from a `Dead` core it respawns (`Ok(true)`), carries none of the files that were open before the crash, and the open-file mirror captured before the crash drives the reopen. On a live core it is a no-op (`Ok(false)`) that leaves nvim undisturbed.
+- `restart_nvim()` and Tier-1 restore: from a `Dead` core it respawns (`Ok(true)`), carries none of the pre-crash files, and the open-file mirror captured before the crash drives the reopen. On a live core it is a no-op (`Ok(false)`) that leaves nvim undisturbed.
 - That the same mirror carries no `term://` entry and no terminal `active` while a drawer is open, so the reopen cannot replay one as `:edit`. What such a replay does instead is [`redraw.rs`](../src/README.md#redrawrs)'s.
+- That typing queued before a restart's handle swap never reaches the fresh nvim, while queued state (a resize) still applies and post-swap typing arrives.
 
 **Gotchas**
 
 - The Tier-1 set includes the never-saved startup `Untitled.md`: reopening it via `:e` is what triggers Neovim's swap-based recovery of unsaved edits, so filtering it out would lose them permanently.
 - The respawn wipes the mirror, so capture it before restarting, and canonicalize every path (macOS `/tmp` and `/var` are symlinks).
 - The drawer case polls `win_buffers` for an `is_terminal` entry before reading the mirror. Reading straight after `toggle_terminal()` races the emit that fills it.
+- The queued-typing case holds a `SnapshotReadGuard` across the restart, parking the input pump on its toast-clear write lock so the keys straddle the swap. Unstalled, they die against the dead handle first and the test cannot fail.
+- That case kills nvim on a timer, not inside its own `:lua` command, so the kill leaves no command line `active` in the snapshot.
 
 #### `palette_rank.rs`
 
