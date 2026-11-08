@@ -77,7 +77,7 @@ Three things `build.md` documents that bite during implementation:
 
 - **Bazel discovers no files.** A new `tests/*.rs` or `*Tests.swift` runs only once it is wired into a target in the owning `BUILD.bazel`. The test writer adds that wiring; verify it landed and that the file actually ran. Under Cargo the file runs either way, so an unwired test is a silent macOS-only gap, not a visible failure.
 - **A new asset that a module `include_str!`s** needs the owning `rust_library`'s `compile_data` glob widened, or it compiles under Cargo and fails under Bazel.
-- **A Cargo dependency or feature change** needs `crate_universe` repinned before Bazel builds again, and the regenerated lockfiles committed. There is no `cargo` on your worker; a `Cargo.lock` change comes from `regina on linux -- sh -c 'cargo update -p <crate> && cat Cargo.lock'`, written back by you, or is a `rejected` naming the gap.
+- **A Cargo dependency or feature change** needs `crate_universe` repinned before Bazel builds again, and the regenerated lockfiles committed. There is no `cargo` on your worker; a `Cargo.lock` change comes from `regina on linux -- sh -c 'cargo update -p <crate> 2>/dev/null && cat Cargo.lock'`, written back by you, or is a `rejected` naming the gap. `regina on linux` prints the command's stderr after its stdout, so the dev shell's `evaluation warning:` lines after the last `[[package]]` entry are not part of the lockfile. The worker has no `jq`; `regina on linux -- sh -c 'cargo fetch --quiet 2>/dev/null; grep -H "^rust-version" "${CARGO_HOME:-$HOME/.cargo}"/registry/src/*/<crate>-<version>/Cargo.toml'` prints a locked crate's `rust-version`, and nothing when the crate declares none.
 
 Run the gate the mechanics mark, exactly as given, in the background, and claim `passed` only on its exit 0. It also warms the output root the gate reuses. When the change reaches code built on Linux — wolf-core, wolf-gnome, `flake.nix`, the Linux branch of `gates.sh` — exercise it with `regina on linux` before the gate does.
 
@@ -89,7 +89,7 @@ Say for each command which worker it ran on, and name what nothing exercised.
 
 A test that has only ever been seen passing is not yet known to be a test. Green proves the suite ran; it does not prove the assertion is attached to the behavior it names. Tests that pass while proving nothing are the most expensive defect this pipeline produces, because they read correctly in review and are indistinguishable from coverage until something breaks unnoticed.
 
-So for every test the test writer adds or materially changes, demonstrate that it fails when the feature is absent:
+So for every new or materially changed test, the `#[cfg(test)]` functions you write included, demonstrate that it fails when the feature is absent:
 
 1. Run it and observe it pass.
 2. Disable the feature under test with the smallest edit that does so — a returned `None`, a skipped call, a no-op arm. Never by touching the test, its fixtures, or its assertions.

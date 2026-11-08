@@ -77,11 +77,11 @@ Name the files and the edits. Do not restate what the task instructions already 
 
 3. **Files to modify**: each with what it must come to hold and the agent that writes it. A test's wiring into its `BUILD.bazel` target is a file of its own in this list.
 
-4. **Test plan**: per behavior, the test, the target that runs it, which worker runs it, and the smallest source edit that would falsify it. Bazel on macOS runs wolf-core, wolf-ffi, wolf-macos and the tools; Cargo on Linux runs everything but wolf-macos, and wolf-gnome runs there alone. A behavior with no such edit is reformulated. Prefer a real Neovim over a mock. New tests go in the test directories; an in-source test only for a private function nothing else reaches, assigned to the coder.
+4. **Test plan**: per behavior, the test, the target that runs it, which worker runs it, and the smallest edit to code that would falsify it: the coder applies it and writes no test file, so it never touches a test, its shared harness such as `tests/common/mod.rs`, or its fixtures. A test that asserts both a true and a false case needs one such edit per direction. Bazel on macOS runs wolf-core, wolf-ffi, wolf-macos and the tools; Cargo on Linux runs everything but wolf-macos, and wolf-gnome runs there alone. A behavior with no such edit is reformulated. Prefer a real Neovim over a mock. New tests go in the test directories; an in-source test only for a private function nothing else reaches, assigned to the coder.
 
 5. **Documentation**: every README, decisions note, mirror and `build.md` passage the change makes wrong, and what each must come to say. A specs/ edit the task opens goes under the coder's files, and so does every doc comment the change makes wrong.
 
-6. **Implementation order.**
+6. **Implementation order**: the test writer runs no test, so a run that shows the new tests red before the code exists is the coder's, made before it writes the code.
 
 7. **Dependencies**: a new crate moves `Cargo.lock`, `Cargo.Bazel.lock` and `MODULE.bazel.lock`. The macOS worker has no `cargo`, so say where `Cargo.lock` comes from; prefer a task of its own.
 
