@@ -11,7 +11,7 @@
 //!
 //! ## What this file contains
 //!
-//! **Sixty cage smokes** — one window-render smoke, two file-picker smokes,
+//! **Sixty-one cage smokes** — one window-render smoke, two file-picker smokes,
 //! one file-tree-sidebar smoke, five split-pane smokes, one empty-state smoke, one
 //! new-untitled-buffer smoke, one command-palette smoke, one OPEN RECENT smoke
 //! (Ctrl+Shift+P, a typed folder query, then Enter — the activated row re-roots the
@@ -113,7 +113,13 @@
 //! capture in this file taken with a transient overlay open on purpose — whose
 //! evidence is the same self-located overlap rectangle read on TWO frames of ONE
 //! launch: the preview's background and its heading's ink in the control, and zero of
-//! either plus the box's own fill in the sample), one COMPLETION-POPUP smoke, one
+//! either plus the box's own fill in the sample), one NEW-VIEW smoke (a live preview
+//! photographed before and after Edit in Another Pane splits its own pane, which leaves
+//! the preview in a web view created after launch on a host not yet allocated — the
+//! view that draws blank when GTK's `gtk-xft-dpi` is unset — whose evidence is the
+//! preview's background and heading ink, located in each frame by the extent of that
+//! background, on a bus the scenario first proves can activate no desktop portal), one
+//! COMPLETION-POPUP smoke, one
 //! MULTI-LINE MESSAGE smoke (a two-line
 //! `:echo`, whose LAST line is the control and whose FIRST line is the assertion),
 //! one CONFIRM-PROMPT smoke (a `:confirm` question drawn and then cleared once
@@ -178,7 +184,7 @@
 //! and the captures carry the one claim they cannot make, that a single page's pane
 //! view is on screen at a time.
 //!
-//! Thirty-seven of the sixty OCR a screenshot of the live window, and exactly one
+//! Thirty-seven of the sixty-one OCR a screenshot of the live window, and exactly one
 //! of those OCRs a CROP of it rather than the whole file: the terminal-drawer smoke
 //! samples a band inside the drawer strip, because the statusbar directly above it
 //! draws a `term://…//<pid>:…` string that differs on every run. Fourteen
@@ -216,7 +222,7 @@
 //! readback and a `state.json` frozen mid-run — because in both cases the surface
 //! under test cannot be read any other way.
 //!
-//! Six of the sixty read RAW PIXELS out of their own captures, which is the
+//! Seven of the sixty-one read RAW PIXELS out of their own captures, which is the
 //! only route this harness has to a claim OCR cannot make — it reads no colour, and
 //! it cannot answer "where on the page is this".
 //! [`preview_document_follows_the_configured_appearance_under_cage`] captures two
@@ -237,12 +243,17 @@
 //! frames differ solely by an overlay, and the only one that reads a widget's fill
 //! colour out of the capture rather than naming it — which is what lets it locate a
 //! private box's geometry without pinning it.
+//! [`preview_created_after_launch_renders_without_a_portal_under_cage`] decodes BOTH of
+//! its captures too, and locates the preview in each by the extent of its own
+//! background, since the split it makes moves the preview: its claim is that a view
+//! created after launch renders its document, and a blank view is a colour reading,
+//! not a word.
 //! [`vertical_split_shows_two_panes_under_cage`] decodes the same capture its two OCR
 //! assertions read and counts the theme accent at each pane's own outer edge. Its claim
 //! is about what is NOT painted there, so no reading of the page could carry it, and it
 //! is the only pixel reading here taken outside a preview or an overlay.
 //!
-//! **Thirteen pure guards**, which mechanically enforce invariants the cage smokes
+//! **Fourteen pure guards**, which mechanically enforce invariants the cage smokes
 //! depend on but cannot check themselves:
 //!
 //! * [`sidebar_filler_names_cannot_satisfy_any_smoke_assertion`] — no
@@ -308,7 +319,15 @@
 //!   would leave the smoke testing the wrong process while passing. The private
 //!   directory separates each cage's Wayland socket, WebKit proxy sockets and
 //!   runtime files, and is defence in depth should the wrapper go: it offers no
-//!   `bus` for GIO's `$XDG_RUNTIME_DIR/bus` fallback.
+//!   `bus` for GIO's `$XDG_RUNTIME_DIR/bus` fallback. The bus reads the configuration
+//!   [`smoke_bus_config`] writes into that directory, which names no service
+//!   directory, so no desktop portal can be activated on it: a portal reachable
+//!   through the host's service directories supplied the `gtk-xft-dpi` whose absence
+//!   blanks a preview view created after launch, and so masked that defect.
+//!   `GSETTINGS_BACKEND` is `memory`; `XDG_CONFIG_DIRS` is a directory in the runtime
+//!   directory whose `gtk-4.0/settings.ini` pins the font and xft settings a portal
+//!   would supply and never the dpi, which the app pins itself; and `XDG_CONFIG_HOME`
+//!   is the smoke home's `.config`, so no user-level GTK settings override them.
 //! * [`cage_slots_bound_concurrency`] — the `WOLF_SMOKE_JOBS` parse
 //!   ([`parse_smoke_jobs`]) and the [`CageSlots`] semaphore behind it: an override is
 //!   honoured above the cap, `0` and garbage are errors, the default is the measured
@@ -346,6 +365,13 @@
 //!   at or above the delay, every keystroke of the burst becomes its own leading edge
 //!   and the marker reaches the page without a trailing fire ever running, so the
 //!   assertion stays green over a coalescer that arms nothing.
+//! * [`row_highlight_tolerance_admits_the_cairo_reading_and_nothing_near`] —
+//!   [`rgb_within`] at [`PICKOVER_ROW_HIGHLIGHT_TOLERANCE`], the comparison the
+//!   picker-over-preview smoke finds its selected row with, admits the one-step
+//!   reading GSK's cairo renderer draws and refuses a two-step miss on any channel
+//!   and the box's own fill, in both argument orders. An exact match fails that smoke
+//!   on a host without GL; a tolerance that reached the fill would let the box's
+//!   empty area count as the selected row.
 //! * [`every_shellhook_export_is_scrubbed_or_deliberately_kept`] — every
 //!   `export NAME=` inside `flake.nix`'s `linuxShell.shellHook` must appear in one of
 //!   the packaged smokes' three scrub lists or in the short
@@ -361,22 +387,24 @@
 //!   tree is not staged, so deleting those two `shellHook` lines turns three
 //!   real-Neovim tests into no-op passes and reddens nothing anywhere.
 //!
-//! All thirteen are compositor-free: none calls `require_smoke_env`, none takes a
+//! All fourteen are compositor-free: none calls `require_smoke_env`, none takes a
 //! global cage slot and none spawns a subprocess, so they still guard on a machine where
-//! the smoke toolchain is unavailable. They live here, next to the consts and
+//! the compositor is unavailable. They live here, next to the consts and
 //! helpers they read, rather than in a file of their own.
 //!
-//! Twelve of the thirteen additionally need NO environment at all. The exception is
-//! [`the_column_cap_cannot_bind_at_the_ocr_smokes_geometry`], and the claim is
-//! stated precisely rather than loosely: it measures a
+//! Thirteen of the fourteen additionally need NO environment at all. There is one
+//! exception, and the claim is stated precisely rather than loosely.
+//! [`the_column_cap_cannot_bind_at_the_ocr_smokes_geometry`] measures a
 //! real cell through [`cell_metrics_for_smoke`], so it needs the devShell's pinned
 //! `FONTCONFIG_FILE`. That is not part of the cage toolchain listed below — it is
 //! the same font pinning `tests/paint_golden.rs` needs — but it is not nothing, and
 //! a run outside the devShell fails it for that reason rather than for the reason
-//! its message names.
+//! its message names. [`every_cage_gets_a_private_runtime_dir_and_no_host_session`]
+//! builds real [`cage_command`]s but looks nothing up on `PATH`: it needs only a
+//! writable `temp_dir()`, where each command writes its bus configuration.
 //!
-//! So this target's summary line reads **`73 passed`**, not `60`: sixty cage
-//! smokes plus those thirteen guards.
+//! So this target's summary line reads **`75 passed`**, not `61`: sixty-one cage
+//! smokes plus those fourteen guards.
 //!
 //! **Three `#[ignore]`d PACKAGED smokes** sit at the end of this file and are NOT in
 //! that count. They drive `$out/bin/wolf-gnome` — the artifact `nix build
@@ -404,10 +432,10 @@
 //!
 //! ## When it runs
 //!
-//! The sixty cage smokes run as part of the STANDARD suite — `cargo test -p
+//! The sixty-one cage smokes run as part of the STANDARD suite — `cargo test -p
 //! wolf-gnome` and `cargo test --workspace` — inside the flake devShell. They are
 //! the Linux verification gate's only end-to-end proof that the GTK front-end draws
-//! a window a human could see (see `build.md`, "The Linux verification gate").
+//! a window a human could see (see `build.md`, "The verification gate").
 //!
 //! They are deliberately NOT `#[ignore]`d. "They are slow" is not a reason to skip
 //! the only real end-to-end test the front-end has; per `CLAUDE.md` a test the
@@ -422,7 +450,7 @@
 //! nix develop --command cargo test -p wolf-gnome --test smoke_headless
 //! ```
 //!
-//! ## Requirements of the sixty cage smokes (from the devShell's smoke toolchain)
+//! ## Requirements of the sixty-one cage smokes (from the devShell's smoke toolchain)
 //!
 //! - `cage` (headless wlroots compositor), `dbus-run-session`, `wtype`, `grim`,
 //!   `tesseract` and `wolf-pointer-inject` on `PATH`. The last one is NOT an upstream package: it is
@@ -430,6 +458,8 @@
 //!   `command -v wolf-pointer-inject` succeeding can only mean the flake provided
 //!   it. Only the nine pointer-driven smokes use it, but it is required
 //!   unconditionally — see [`REQUIRED_TOOLS`].
+//! - No D-Bus configuration from the host or the store: [`smoke_bus_config`] writes
+//!   each cage's own into its runtime directory.
 //! - `WOLF_NVIM_BIN` pointing at the pinned Neovim (same contract as the other
 //!   wolf-gnome tests; nvim is never taken from `PATH`).
 //! - `WOLF_RG_BIN` pointing at the pinned ripgrep. `WolfCore::start_search` resolves
@@ -438,13 +468,20 @@
 //!   [`require_smoke_env`], which fails loud rather than letting that surface as an
 //!   empty result list.
 //!
-//! Per project policy every one of the sixty FAILS LOUD if any of the above is
+//! Per project policy every one of the sixty-one FAILS LOUD if any of the above is
 //! missing rather than silently skipping, mirroring `common::require_nvim_bin` — a
 //! missing precondition means the smoke toolchain was not provisioned, which is a
 //! setup bug we want surfaced, not hidden. Now that these tests run by default, that
 //! hard fail matters more, not less: a missing tool means the suite was invoked
 //! outside the devShell, and softening `require_smoke_env` to a skip would let the
 //! gate pass green on an unprovisioned machine while proving nothing. Do not.
+//!
+//! One smoke needs one tool more:
+//! [`preview_created_after_launch_renders_without_a_portal_under_cage`]
+//! runs `dbus-send`, which the devShell's `pkgs.dbus` installs beside
+//! `dbus-run-session`, to ask its bus what it can activate. It is not in
+//! [`REQUIRED_TOOLS`], because no other smoke runs it; its absence fails that smoke,
+//! loudly, with exit 17.
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -8452,7 +8489,8 @@ cp "$PREVIEW_STATE_SRC" "$PREVIEW_STATE_COPY"
 # the source into the new pane, moving focus there and leaving the preview standing.
 # That is what puts the source in a window the next step can type into WITHOUT losing
 # the preview the rest of this scenario observes — which the in-place `edit_source`
-# would replace.
+# would replace. After the split the preview is shown by a view created then, on a host
+# not yet allocated; capture B is what says that view rendered (assertion 10).
 wtype -M ctrl -M shift -k p -m shift -m ctrl
 sleep "$SETTLE"
 wtype -- "$EDIT_QUERY"
@@ -9351,9 +9389,10 @@ fn seed_smoke_spell_override(state_dir: &Path) {
 ///
 /// `wolf_core::preferences_dir()` resolves `WOLF_CONFIG_DIR` first and otherwise
 /// falls back to `dirs::config_dir()`, which honours **`XDG_CONFIG_HOME`** ahead of
-/// `$HOME/.config`. [`cage_command`] redirects `HOME` but **not**
-/// `XDG_CONFIG_HOME`, so on any host that exports it every smoke would read — and,
-/// on a first run, WRITE — the developer's real `wolf-config.yaml`.
+/// `$HOME/.config`. [`cage_command`] points both at the smoke home's `.config`, so
+/// the developer's real `wolf-config.yaml` is out of reach either way; a smoke that
+/// spawned `cage` without that helper would inherit the developer's `XDG_CONFIG_HOME`
+/// and read — and, on a first run, WRITE — their file.
 ///
 /// Worse, and true on every host: `load_or_create` CREATES the file when it is
 /// absent. An unisolated smoke that found no config would be handed one carrying
@@ -9639,13 +9678,11 @@ const HOME_STATE_DIR_FALLBACKS: [&str; 2] = [".local/state/wolf", ".local/share/
 /// [`HOME_STATE_DIR_FALLBACKS`]' two, because the chain has only one.
 ///
 /// It is spelled out rather than obtained from `dirs`, which `wolf-gnome` does not
-/// depend on and must not gain a dependency on for a test. That makes it a MIRROR
-/// of the XDG default, with the same honest limitation the state constant carries:
-/// it is the right path only while `$XDG_CONFIG_HOME` is unset in the environment
-/// cage inherits, which is the case in this repo's devShell. On a host that DOES
-/// export it, a leak lands outside the temp tree instead — where the sibling check
-/// on the developer's real config file catches it. The two checks are
-/// complementary and between them cover both cases.
+/// depend on and must not gain a dependency on for a test. It is the right path on
+/// every host, unlike the state constant: [`cage_command`] sets `XDG_CONFIG_HOME` to
+/// the `.config` directory under the same `HOME`, so whatever the developer's
+/// environment exports, a leak lands here. The sibling check on the developer's real
+/// config file covers a smoke that bypassed that helper.
 const HOME_CONFIG_DIR_FALLBACK: &str = ".config/wolf";
 
 /// The input-method module every smoke's app is launched with, pinned rather than
@@ -9893,14 +9930,228 @@ impl Drop for CageRuntime<'_> {
     }
 }
 
+/// The session-bus wrapper [`cage_command`] runs every scenario under, by the name it
+/// is spawned with and looked up on `PATH`.
+const DBUS_RUN_SESSION_BIN: &str = "dbus-run-session";
+
+/// The `dbus-run-session` flag that names the bus daemon's configuration file, in the
+/// one-argument `--config-file=FILENAME` form its manual gives.
+const DBUS_CONFIG_FILE_FLAG: &str = "--config-file=";
+
+/// The name [`smoke_bus_config`] gives the configuration it writes into each
+/// [`CageRuntime`] directory.
+///
+/// It is not `bus`, which is the name GIO's `$XDG_RUNTIME_DIR/bus` fallback looks for
+/// and the one entry [`every_cage_gets_a_private_runtime_dir_and_no_host_session`]'s
+/// check 4 forbids in that directory.
+const SMOKE_BUS_CONFIG_NAME: &str = "smoke-bus.conf";
+
+/// The token [`SMOKE_BUS_CONFIG_TEMPLATE`] carries where the runtime directory goes.
+const SMOKE_BUS_LISTEN_DIR_TOKEN: &str = "@LISTEN_DIR@";
+
+/// The configuration every cage's session-bus daemon reads, with
+/// [`SMOKE_BUS_LISTEN_DIR_TOKEN`] standing for that cage's runtime directory.
+///
+/// It is the stock session configuration's semantics minus everything that reaches
+/// outside the cage: a session bus that keeps the caller's umask, authenticates by
+/// `EXTERNAL` (the peer's uid over the socket) and lets every connection own, send and
+/// eavesdrop, which is what a single-user session bus allows. It listens in the
+/// cage's own runtime directory, so the socket is private to the cage and removed with
+/// it; `dbus-daemon` names it `dbus-` plus ten characters, so the path stays inside the
+/// 108-byte `sun_path` that [`RUNTIME_DIR_MAX_BYTES`] budgets for.
+///
+/// **Decisions**
+///
+/// - No `<servicedir>`, no `<standard_session_servicedirs/>`, and no `<include>` or
+///   `<includedir>` that could bring either back. With no service directory nothing on
+///   the bus is activatable: no desktop portal, no dconf writer, no accessibility bus.
+///   `<standard_session_servicedirs/>` expands the inherited `XDG_DATA_DIRS`, which on
+///   a NixOS host reaches `/run/current-system/sw/share`, and through it a cage's
+///   private bus activated the HOST's `xdg-desktop-portal`. That portal masked a real
+///   defect, measured: with no portal reachable GTK leaves `gtk-xft-dpi` unset, and a
+///   preview web view created after launch on a host not yet allocated lays its page
+///   out at a 0×0 viewport and draws blank for good. Forcing `GDK_DEBUG=no-portals` on
+///   the host reproduced it exactly, and a container with no portal showed it on every
+///   run. A user on a minimal desktop has no portal either, so every smoke runs in that
+///   configuration; [`SMOKE_GTK_SETTINGS_INI`] supplies what a portal would otherwise
+///   have, except the dpi.
+/// - Generated per cage rather than taken from an installation. An installed
+///   `session.conf` carries the service directories above, and the host's
+///   `/etc/dbus-1/session.conf`, which the daemon reads when no file is named, does not
+///   exist in a container built from the flake, where `dbus-run-session` then exits 127
+///   before the scenario's first line.
+///
+/// [`every_cage_gets_a_private_runtime_dir_and_no_host_session`] checks 11 and 12 pin
+/// where the file lives and what it may not contain, and
+/// [`preview_created_after_launch_renders_without_a_portal_under_cage`] asks a live
+/// daemon what it can activate.
+const SMOKE_BUS_CONFIG_TEMPLATE: &str = r#"<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+  <type>session</type>
+  <keep_umask/>
+  <listen>unix:dir=@LISTEN_DIR@</listen>
+  <auth>EXTERNAL</auth>
+  <policy context="default">
+    <allow send_destination="*" eavesdrop="true"/>
+    <allow eavesdrop="true"/>
+    <allow own="*"/>
+  </policy>
+</busconfig>
+"#;
+
+/// The GSettings backend every smoke's app is launched with, pinned rather than
+/// inherited: `memory`, which reads no settings database and writes nowhere.
+///
+/// ## Why a pin
+///
+/// GIO's default backend is dconf, which reads the user's database at
+/// `$XDG_CONFIG_HOME/dconf/user` and writes through the `ca.desrt.dconf` service on
+/// the session bus. The cage's bus activates nothing (see
+/// [`SMOKE_BUS_CONFIG_TEMPLATE`]), so a write could only fail, and where GIO has no
+/// dconf module at all it falls back to `memory` by itself and logs that it did.
+/// Leaving the variable unset makes the backend a property of the host.
+///
+/// ## What the pin does NOT buy
+///
+/// It does not pin what GTK renders with. Measured on a cage's bus, which offers no
+/// portal, GTK leaves its font and xft settings unset rather than taking them from
+/// GSettings; [`SMOKE_GTK_SETTINGS_INI`] is what pins those. No smoke is evidence about
+/// a desktop's live settings or about settings persisting. [`SMOKE_GTK_IM_MODULE`] is
+/// the same species of pin.
+const SMOKE_GSETTINGS_BACKEND: &str = "memory";
+
+/// The directory inside each [`CageRuntime`] that [`cage_command`] hands the cage as its
+/// only `XDG_CONFIG_DIRS` entry. [`smoke_gtk_config_dirs`] writes
+/// [`SMOKE_GTK_SETTINGS_INI`] under it.
+const SMOKE_XDG_CONFIG_DIR_NAME: &str = "xdg-config";
+
+/// Where GTK 4 looks for a settings file under each `XDG_CONFIG_DIRS` entry.
+const GTK_SETTINGS_RELATIVE: &str = "gtk-4.0/settings.ini";
+
+/// The GTK settings every smoke's app starts from, read by GTK from
+/// [`GTK_SETTINGS_RELATIVE`] under the cage's `XDG_CONFIG_DIRS`.
+///
+/// ## Why a pin
+///
+/// On a desktop GTK takes these from the portal's Settings interface. A cage's bus
+/// offers no portal, and measured there GTK leaves them unset: xft antialiasing and
+/// hinting at -1, no hint style or subpixel order, and the font `Sans 10`. What it
+/// draws then depends on those defaults, which is host-dependent and visibly so —
+/// [`file_picker_covers_the_live_preview_under_cage`]'s assertion 4 read 27 pixels of
+/// glyph residue inside its reference band that vanish with these keys pinned. The
+/// values are the `org.gnome.desktop.interface` defaults from gsettings-desktop-schemas;
+/// `Adwaita Sans` is not among the pinned fonts, so the pinned fontconfig's last-resort
+/// rule resolves it to DejaVu Sans.
+///
+/// **Decisions**
+///
+/// - It deliberately does NOT set `gtk-xft-dpi`. The app pins that itself in
+///   `crates/wolf-gnome/src/app.rs` when it is unset, because without it WebKitGTK lays
+///   a view created after launch out at a 0×0 page viewport; a dpi here would satisfy
+///   the pin's condition, and every preview smoke would pass with the pin deleted.
+///   [`every_cage_gets_a_private_runtime_dir_and_no_host_session`] check 15 refuses one.
+/// - Through `XDG_CONFIG_DIRS`, which REPLACES the host's system directories, so a
+///   `gtk-4.0/settings.ini` under the host's `/etc/xdg` cannot reach a smoke. GTK lets a
+///   user-level file override the system ones, which is why [`cage_command`] also points
+///   `XDG_CONFIG_HOME` at the smoke home's empty `.config`. GTK's compiled-in
+///   sysconfdir file is the one source this does not replace; [`DPI_PIN_STDERR_PREFIX`]
+///   is what catches a dpi arriving from it.
+const SMOKE_GTK_SETTINGS_INI: &str = "\
+[Settings]
+gtk-font-name=Adwaita Sans 11
+gtk-xft-antialias=1
+gtk-xft-hinting=1
+gtk-xft-hintstyle=hintslight
+gtk-xft-rgba=none
+";
+
+/// The prefix of the stderr line the app prints when its `gtk-xft-dpi` pin in
+/// `crates/wolf-gnome/src/app.rs` fires, i.e. when GTK came up with the dpi unset.
+///
+/// Re-typed rather than imported, for this file's usual reason: an assertion that read
+/// the app's own constant would hold for whatever the line became. The two preview
+/// smokes that discriminate the pin assert their cage log carries it, which is what
+/// makes their green mean "the pin ran" rather than "something else supplied a dpi".
+/// [`SMOKE_GTK_SETTINGS_INI`] carries no dpi, but GTK also reads the `gtk-4.0/settings.ini`
+/// under its compiled-in sysconfdir, which `XDG_CONFIG_DIRS` does not replace, and a
+/// build or host that sets one there leaves the pin idle and both smokes green.
+const DPI_PIN_STDERR_PREFIX: &str = "wolf-xft-dpi-pinned:";
+
+/// Whether `byte` may appear unescaped in a D-Bus address value: the spec's
+/// optionally-escaped set, `[-0-9A-Za-z_/.\*]`.
+///
+/// None of them is special to XML either, so a directory made only of these can be
+/// written into [`SMOKE_BUS_CONFIG_TEMPLATE`]'s `<listen>` element as it is.
+fn is_dbus_address_safe(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || b"-_/.\\*".contains(&byte)
+}
+
+/// Writes [`SMOKE_BUS_CONFIG_TEMPLATE`] for the cage whose runtime directory is
+/// `runtime` into that directory, as [`SMOKE_BUS_CONFIG_NAME`], and returns its path.
+/// [`cage_command`] hands the path to `dbus-run-session`.
+///
+/// Panics when the directory holds a byte a D-Bus address would need escaped, which
+/// can only come from `TMPDIR`; the message says so rather than writing an address the
+/// daemon would misread. Each call rewrites the file, so building several commands
+/// over one runtime is harmless.
+fn smoke_bus_config(runtime: &Path) -> PathBuf {
+    let dir = runtime
+        .to_str()
+        .filter(|dir| dir.bytes().all(is_dbus_address_safe))
+        .unwrap_or_else(|| {
+            panic!(
+                "the cage runtime directory {} holds a byte outside the D-Bus address set \
+                 [-0-9A-Za-z_/.\\*], so it cannot be written unescaped into the session bus's \
+                 `<listen>unix:dir=…</listen>`. It lives under TMPDIR ({}); point TMPDIR at a \
+                 plain path.",
+                runtime.display(),
+                std::env::temp_dir().display()
+            )
+        });
+    let path = runtime.join(SMOKE_BUS_CONFIG_NAME);
+    let text = SMOKE_BUS_CONFIG_TEMPLATE.replace(SMOKE_BUS_LISTEN_DIR_TOKEN, dir);
+    std::fs::write(&path, text).unwrap_or_else(|e| {
+        panic!(
+            "failed to write the cage's session-bus configuration {}: {e}",
+            path.display()
+        )
+    });
+    path
+}
+
+/// Writes [`SMOKE_GTK_SETTINGS_INI`] at [`GTK_SETTINGS_RELATIVE`] under
+/// [`SMOKE_XDG_CONFIG_DIR_NAME`] inside `runtime`, and returns that directory, which
+/// [`cage_command`] hands the cage as `XDG_CONFIG_DIRS`. Each call rewrites the file.
+fn smoke_gtk_config_dirs(runtime: &Path) -> PathBuf {
+    let dir = runtime.join(SMOKE_XDG_CONFIG_DIR_NAME);
+    let file = dir.join(GTK_SETTINGS_RELATIVE);
+    let parent = file
+        .parent()
+        .expect("GTK_SETTINGS_RELATIVE names a file inside a directory");
+    std::fs::create_dir_all(parent).unwrap_or_else(|e| {
+        panic!(
+            "failed to create the cage's GTK settings directory {}: {e}",
+            parent.display()
+        )
+    });
+    std::fs::write(&file, SMOKE_GTK_SETTINGS_INI).unwrap_or_else(|e| {
+        panic!(
+            "failed to write the cage's GTK settings {}: {e}",
+            file.display()
+        )
+    });
+    dir
+}
+
 /// Builds the `cage` invocation every smoke runs its scenario through — and is the
 /// SINGLE place in this file where the compositor is ever spawned.
 ///
-/// It fixes the invocation (`cage -- dbus-run-session -- sh -c
-/// <READINESS_PRELUDE><scenario>`, with `cwd`
+/// It fixes the invocation (`cage -- dbus-run-session --config-file=<smoke-bus.conf>
+/// -- sh -c <READINESS_PRELUDE><scenario>`, with `cwd`
 /// as the working directory, which is how the app comes to derive `CoreConfig.cwd`
 /// from it), its stdout and stderr (appended to the runtime's [`CAGE_LOG_NAME`], so
-/// parallel cages do not interleave), the eight environment variables EVERY smoke
+/// parallel cages do not interleave), the eleven environment variables EVERY smoke
 /// must have, and the four it must NOT have:
 ///
 /// * `WOLF_FONT_PT` = [`SMOKE_FONT_PT`] — a large font, so the rendered glyphs are
@@ -9917,14 +10168,11 @@ impl Drop for CageRuntime<'_> {
 /// * `WOLF_CONFIG_DIR` = [`smoke_config_dir`] — the isolation that keeps a smoke
 ///   run out of the developer's real `~/.config/wolf/`, and the thing that pins the
 ///   app's font family and line-height to what [`cell_metrics_for_smoke`] measures.
-///   Read that function's doc comment before changing anything here. It buys two
-///   distinct properties. Without it `preferences_dir()` falls through to
-///   `XDG_CONFIG_HOME` — which the `HOME` line below does NOT redirect — so a host
-///   exporting that variable would have its real config read and, on a first run,
-///   written. And on ANY host `load_or_create` CREATES an absent file carrying
-///   `default_config()`: family `iA Writer Mono S`, which the pinned
-///   `FONTCONFIG_FILE` resolves, so every glyph in every OCR smoke would change
-///   shape.
+///   Read that function's doc comment before changing anything here. Without it
+///   `preferences_dir()` falls through to `XDG_CONFIG_HOME`, and on ANY host
+///   `load_or_create` CREATES an absent file carrying `default_config()`: family
+///   `iA Writer Mono S`, which the pinned `FONTCONFIG_FILE` resolves, so every glyph
+///   in every OCR smoke would change shape.
 /// * `HOME` = [`smoke_home`] — the cwd's PARENT, which is what pins the rendered
 ///   window title to the constant `~/project`. See below; this one is an OCR
 ///   DETERMINISM control, not tidiness.
@@ -9932,7 +10180,7 @@ impl Drop for CageRuntime<'_> {
 ///   smoke of a `cargo test` invocation, so mesa's shader cache is warm for all of
 ///   them but the first. It does NOT carry into the next invocation: the path is
 ///   under `TMPDIR`, which `nix develop --command` rewrites every time (measured; see
-///   that function). Of the six paths set here it is the only one that is
+///   that function). Of the eight paths set here it is the only one that is
 ///   deliberately NOT per-smoke, and it is the direct counterweight to the `HOME` line above:
 ///   redirecting `HOME` also redirected `$HOME/.cache`, which made every launch
 ///   rebuild ~4.9 MB of shaders. A cold cache costs launch time spent in `wait_ready`,
@@ -9946,6 +10194,20 @@ impl Drop for CageRuntime<'_> {
 ///   comment before changing it: the pin is what stops the suite's typing becoming
 ///   host-dependent, and it does NOT make any smoke evidence about an
 ///   out-of-process input method.
+/// * `GSETTINGS_BACKEND` = [`SMOKE_GSETTINGS_BACKEND`] — so the settings backend is
+///   the same on every host and never reaches for a dconf writer the cage's bus cannot
+///   activate. Read that const's doc comment before changing it.
+/// * `XDG_CONFIG_DIRS` = [`smoke_gtk_config_dirs`] — a directory inside the runtime
+///   directory holding [`SMOKE_GTK_SETTINGS_INI`], the font and xft settings a portal
+///   would otherwise supply, and NOT the dpi. Read that const's doc comment before
+///   changing it: a dpi there masks the app's own pin, which the preview smokes exist
+///   to test.
+/// * `XDG_CONFIG_HOME` = the `.config` directory under [`smoke_home`], which is where
+///   it defaults to anyway and where nothing exists. Inherited, a host exporting it
+///   hands GTK the developer's own `gtk-4.0/settings.ini`, which overrides the pinned
+///   one — `gtk-xft-dpi` included. It is also exactly the directory
+///   [`HOME_CONFIG_DIR_FALLBACK`] is relative to, so a config leak still lands where
+///   [`single_pane_file_survives_relaunch_under_cage`] looks for it.
 /// * `XDG_RUNTIME_DIR` = the [`CageRuntime`]'s private directory, where the cage
 ///   makes its Wayland socket and WebKit its proxy sockets. It holds no `bus`, which
 ///   is defence in depth behind `dbus-run-session`, the thing that keeps a launch off
@@ -9974,19 +10236,28 @@ impl Drop for CageRuntime<'_> {
 ///   every one of them fail at launch (exit 11), reading as a launch failure in
 ///   whatever change happened to be in flight.
 ///
-/// ## Why the scenario runs under `dbus-run-session`
+/// ## Why the scenario runs under `dbus-run-session`, on a bus that activates nothing
 ///
 /// It gives each cage exactly one session bus, private to it and gone when it exits.
 /// The app takes the address `dbus-run-session` sets and never looks for
 /// `$XDG_RUNTIME_DIR/bus`, so this wrapper is what keeps a launch from handing off to
-/// the developer's running `wolf-gnome` (measured; see [`CageRuntime`]). The preview
-/// needs a session bus too: measured, with no bus at all (a dead `bus` socket,
-/// `DBUS_SESSION_BUS_ADDRESS=disabled:`, or `DISPLAY` unset) the WebView draws blank
-/// after the live edit and the markdown-preview smoke fails every time. Without the
+/// the developer's running `wolf-gnome` (measured; see [`CageRuntime`]). Without the
 /// wrapper GIO finds no address and autolaunches a bus through `dbus-launch` on the
 /// cage's own Xwayland `DISPLAY`, starting an Xwayland and a stray `dbus-daemon` per
 /// launch. The `env_remove`s above still apply to the cage itself;
 /// `dbus-run-session` sets its own address for `sh`.
+///
+/// The daemon reads the configuration [`smoke_bus_config`] writes into the runtime
+/// directory, never one installed on the host or in the store, and that file names no
+/// service directory. The cause is measured: a bus configured from an installed
+/// `session.conf` activated the host's desktop portal through the inherited
+/// `XDG_DATA_DIRS`, and the portal supplied the `gtk-xft-dpi` without which a preview
+/// view created after launch draws blank — so the smokes passed on a NixOS host and
+/// failed in every container, as the app does on every minimal desktop.
+/// [`SMOKE_BUS_CONFIG_TEMPLATE`] carries the measurement, and
+/// [`SMOKE_GTK_SETTINGS_INI`] supplies the portal's other settings.
+///
+/// The wrapper itself is there for the hand-off isolation above.
 ///
 /// ## Why `HOME` is set, and why it is the cwd's parent
 ///
@@ -10012,9 +10283,10 @@ impl Drop for CageRuntime<'_> {
 /// `HOME` is safe to move here. Everything else the app resolves from it is either
 /// overridden (`state_dir()` reads `WOLF_STATE_DIR` first; the captive Neovim runs
 /// `--clean -u <init.lua> -i NONE` with all four `XDG_*` dirs pinned under the state
-/// root) or absent-and-defaulted (GTK finds no `$HOME/.config/gtk-4.0`, so it uses
-/// its defaults — which is exactly how
-/// [`empty_state_shows_open_folder_button_under_cage`] has always run). Fontconfig is
+/// root) or absent-and-defaulted (GTK finds no `$HOME/.config/gtk-4.0`, so it takes
+/// only the system settings `XDG_CONFIG_DIRS` names, [`SMOKE_GTK_SETTINGS_INI`] — the
+/// same for every smoke, [`empty_state_shows_open_folder_button_under_cage`] included,
+/// whose `HOME` is the cwd). Fontconfig is
 /// unaffected: `FONTCONFIG_FILE` pins both the font directory and a `/tmp` cache dir.
 ///
 /// One consequence was NOT harmless and had to be paid for separately: `$HOME/.cache`
@@ -10040,7 +10312,7 @@ impl Drop for CageRuntime<'_> {
 /// the OCR width and height note in notes/crates/wolf-gnome/tests/smoke_headless.rs.md#split-pane-smokes,
 /// because if two or three panes are ever too narrow or too short for 28 pt OCR the
 /// fix is per-test (widen the window, or lower the font for THAT test) and must not
-/// be applied here to all sixty.
+/// be applied here to all sixty-one.
 ///
 /// [`cage_is_only_spawned_through_the_isolating_helper`] enforces the "single place"
 /// property mechanically, because a smoke that spawned the compositor directly would
@@ -10056,10 +10328,14 @@ fn cage_command(scenario: &str, cwd: &Path, runtime: &CageRuntime<'_>) -> Comman
     let log_err = log
         .try_clone()
         .unwrap_or_else(|e| panic!("failed to clone the cage log {}: {e}", log_path.display()));
+    let mut session_conf = std::ffi::OsString::from(DBUS_CONFIG_FILE_FLAG);
+    session_conf.push(smoke_bus_config(runtime));
     let mut cmd = Command::new("cage");
     cmd.arg("--")
         // The cage's one private session bus, which dies with it.
-        .arg("dbus-run-session")
+        .arg(DBUS_RUN_SESSION_BIN)
+        // Generated in the runtime dir: no service dirs, so nothing on the bus is activatable.
+        .arg(session_conf)
         .arg("--")
         .arg("sh")
         .arg("-c")
@@ -10072,6 +10348,12 @@ fn cage_command(scenario: &str, cwd: &Path, runtime: &CageRuntime<'_>) -> Comman
         .env("WOLF_CONFIG_DIR", smoke_config_dir(cwd))
         // Pinned rather than inherited: see `SMOKE_GTK_IM_MODULE`.
         .env("GTK_IM_MODULE", SMOKE_GTK_IM_MODULE)
+        // Pinned rather than inherited: see `SMOKE_GSETTINGS_BACKEND`.
+        .env("GSETTINGS_BACKEND", SMOKE_GSETTINGS_BACKEND)
+        // A portal's font and xft settings, never the dpi: see `SMOKE_GTK_SETTINGS_INI`.
+        .env("XDG_CONFIG_DIRS", smoke_gtk_config_dirs(runtime))
+        // Its default, pinned: a host's export would let a user settings.ini override the pin.
+        .env("XDG_CONFIG_HOME", smoke_home(cwd).join(".config"))
         // The cage's own Wayland socket, and no `bus` for GIO to fall back to.
         .env("XDG_RUNTIME_DIR", &**runtime)
         // Where the app writes its pid once it accepts input; `wait_ready` in
@@ -10101,9 +10383,11 @@ const CAGE_SPAWN_NEEDLE: &str = concat!("Command::new(\"", "cage", "\")");
 
 /// Enforces mechanically that the compositor is spawned in exactly ONE place in this
 /// file — [`cage_command`] — which is the only thing that sets `WOLF_STATE_DIR`,
-/// `HOME`, `XDG_CACHE_HOME`, `GTK_IM_MODULE`, `WOLF_READY_FILE` and the private
-/// `XDG_RUNTIME_DIR`, the only thing that prepends [`READINESS_PRELUDE`], and the only
-/// thing that CLEARS `DBUS_SESSION_BUS_ADDRESS` and the host display variables.
+/// `HOME`, `XDG_CACHE_HOME`, `GTK_IM_MODULE`, `GSETTINGS_BACKEND`, `XDG_CONFIG_DIRS`,
+/// `XDG_CONFIG_HOME`, `WOLF_READY_FILE` and the private `XDG_RUNTIME_DIR`, the only
+/// thing that prepends
+/// [`READINESS_PRELUDE`], and the only thing that CLEARS `DBUS_SESSION_BUS_ADDRESS`
+/// and the host display variables.
 ///
 /// ## What an extra occurrence costs
 ///
@@ -10245,8 +10529,9 @@ fn cage_is_only_spawned_through_the_isolating_helper() {
 // ---------------------------------------------------------------------------
 // Guards over the cage slots and the private runtime directory each cage runs in.
 
-/// Every cage runs in a private runtime directory of its own, and nothing in its
-/// environment names the developer's session bus or display.
+/// Every cage runs in a private runtime directory of its own, nothing in its
+/// environment names the developer's session bus or display, its own bus can activate
+/// no service, and GTK reads its settings from the cage alone.
 ///
 /// ## What it closes
 ///
@@ -10301,14 +10586,38 @@ fn cage_is_only_spawned_through_the_isolating_helper() {
 /// 9. Both [`packaged_cage_command`] arms, [`GtkRuntimeEnv::Scrubbed`] and
 ///    [`GtkRuntimeEnv::Inherited`], keep checks 1, 6 and 7. Falsify: add
 ///    `"XDG_RUNTIME_DIR"` to [`PACKAGED_SCRUB_ALWAYS`].
-/// 10. [`cage_command`] and both [`packaged_cage_command`] arms pass `cage` exactly
-///     `--`, `dbus-run-session`, `--`, `sh`, `-c` and then one argument, the script,
-///     so every scenario runs under a private session bus that dies with its cage.
-///     Without it, GIO autolaunches a bus through the cage's own Xwayland `DISPLAY`;
-///     every neutralizer that leaves no bus at all (a dead `bus` socket,
-///     `DBUS_SESSION_BUS_ADDRESS=disabled:`, no `DISPLAY`) was measured to blank the
-///     preview's WebView. Falsify: drop `dbus-run-session` and its `--` from
-///     [`cage_command`].
+/// 10. [`cage_command`] over A and over B, and both [`packaged_cage_command`] arms,
+///     pass `cage` exactly `--`, `dbus-run-session`, one `--config-file=<path>`, `--`,
+///     `sh`, `-c` and then one argument, the script, so every scenario runs under a
+///     private session bus that dies with its cage. Without the wrapper GIO
+///     autolaunches a bus through the cage's own Xwayland `DISPLAY`. Falsify: drop
+///     `dbus-run-session` and its `--` from [`cage_command`]; separately, drop the
+///     `.arg(session_conf)` line, which passes on a host with `/etc/dbus-1` and exits
+///     127 in a container without it.
+/// 11. Each `<path>` is absolute, a regular file rather than a symlink, and a direct
+///     child of the runtime directory its command was built over: A's in A, B's in B.
+///     Falsify: make [`smoke_bus_config`] return the `share/dbus-1/session.conf`
+///     installed beside `dbus-run-session`; separately, write the file under
+///     `std::env::temp_dir()` instead of the runtime directory.
+/// 12. Each file's text listens in its own runtime directory, which also says it is
+///     the generated configuration, and contains no `<servicedir`, no
+///     `<standard_session_servicedirs` and no `<include`. Falsify: add
+///     `<standard_session_servicedirs/>` to [`SMOKE_BUS_CONFIG_TEMPLATE`].
+/// 13. `GSETTINGS_BACKEND` is set to `memory` on [`cage_command`] and on both
+///     [`packaged_cage_command`] arms. Falsify: delete its `.env` line from
+///     [`cage_command`]; separately, add it to [`PACKAGED_SCRUB_ALWAYS`].
+/// 14. `XDG_CONFIG_DIRS` is set, on all four commands, to one absolute directory
+///     directly inside the runtime directory the command was built over, holding a
+///     regular `gtk-4.0/settings.ini`. Falsify: delete its `.env` line from
+///     [`cage_command`]; separately, make [`smoke_gtk_config_dirs`] write under
+///     `std::env::temp_dir()`.
+/// 15. That file's `[Settings]` section holds exactly the five font and xft keys of
+///     [`SMOKE_GTK_SETTINGS_INI`], re-typed here, and nothing outside it; in
+///     particular it does not set `gtk-xft-dpi`. Falsify: add `gtk-xft-dpi=98304` to
+///     [`SMOKE_GTK_SETTINGS_INI`] (the message names the masked pin); separately,
+///     delete its `gtk-font-name` line.
+/// 16. `XDG_CONFIG_HOME` is set to the `.config` directory under the `HOME` the same
+///     command sets. Falsify: delete its `.env` line from [`cage_command`].
 ///
 /// ## The premise, and what it does not cover
 ///
@@ -10318,16 +10627,27 @@ fn cage_is_only_spawned_through_the_isolating_helper() {
 /// measured instead; check 10 pins the wrapper that gives that child its own bus
 /// whatever `cage` exports.
 ///
+/// Check 12 reads the configuration as text and parses no XML, so it says what the
+/// file names and not what a daemon does with it.
+/// [`preview_created_after_launch_renders_without_a_portal_under_cage`] asks a live
+/// daemon started from it what it can activate. Check 15 likewise says what GTK is
+/// handed, not what it applies. A dpi reaching GTK some other way — its compiled-in
+/// sysconfdir `gtk-4.0/settings.ini`, which `XDG_CONFIG_DIRS` does not replace — masks
+/// the app's pin and leaves every preview smoke GREEN, so no pixel can catch it; what
+/// does is that smoke and the markdown-preview smoke asserting their cage log carries
+/// the pin's [`DPI_PIN_STDERR_PREFIX`] line.
+///
 /// A semaphore broken so that two slots cannot be held at once hangs this guard in
 /// `acquire`; [`cage_slots_bound_concurrency`] is the guard that turns that into a
 /// failure.
 ///
 /// ## What it needs
 ///
-/// No compositor, no [`require_smoke_env`], no global cage slot and no subprocess.
-/// It writes a temp cwd and two runtime directories under `temp_dir()`; the runtimes
-/// remove theirs when dropped and the guard removes the cwd's parent, so a passing
-/// run leaves nothing behind.
+/// No compositor, no [`require_smoke_env`], no global cage slot, no subprocess and no
+/// `PATH` lookup. It writes a temp cwd, two runtime directories and the bus and GTK
+/// configuration [`cage_command`] writes into each under `temp_dir()`; the runtimes
+/// remove theirs when dropped and the guard removes the cwd's parent, so a passing run
+/// leaves nothing behind.
 #[test]
 fn every_cage_gets_a_private_runtime_dir_and_no_host_session() {
     const GUARD: &str = "every_cage_gets_a_private_runtime_dir_and_no_host_session";
@@ -10342,8 +10662,32 @@ fn every_cage_gets_a_private_runtime_dir_and_no_host_session() {
     const GIO_BUS_FALLBACK: &str = "bus";
     // Room for both runtimes below to hold a slot at once.
     const LOCAL_LIMIT: usize = 2;
-    // What `cage` must run, ahead of the script: a private session bus around `sh`.
-    const SESSION_WRAPPER: [&str; 5] = ["--", "dbus-run-session", "--", "sh", "-c"];
+    // What `cage` must run, ahead of the script: a private session bus around `sh`,
+    // with the flag naming its configuration between the two halves.
+    const BUS_WRAPPER: [&str; 2] = ["--", "dbus-run-session"];
+    const CONFIG_FLAG: &str = "--config-file=";
+    const SHELL_WRAPPER: [&str; 3] = ["--", "sh", "-c"];
+    // Elements that would make a service activatable on the cage's bus, as text.
+    const SERVICE_DIR_ELEMENTS: [&str; 3] =
+        ["<servicedir", "<standard_session_servicedirs", "<include"];
+    const SETTINGS_VAR: &str = "GSETTINGS_BACKEND";
+    const SETTINGS_BACKEND: &str = "memory";
+    // GTK's settings file under each XDG_CONFIG_DIRS entry, and what it must pin.
+    const CONFIG_DIRS_VAR: &str = "XDG_CONFIG_DIRS";
+    const GTK_SETTINGS_FILE: &str = "gtk-4.0/settings.ini";
+    const GTK_SETTINGS_SECTION: &str = "Settings";
+    const GTK_DPI_KEY: &str = "gtk-xft-dpi";
+    const WANT_GTK_SETTINGS: [(&str, &str); 5] = [
+        ("gtk-font-name", "Adwaita Sans 11"),
+        ("gtk-xft-antialias", "1"),
+        ("gtk-xft-hinting", "1"),
+        ("gtk-xft-hintstyle", "hintslight"),
+        ("gtk-xft-rgba", "none"),
+    ];
+    // The user-level config directory must be the one under the command's own HOME.
+    const HOME_VAR: &str = "HOME";
+    const CONFIG_HOME_VAR: &str = "XDG_CONFIG_HOME";
+    const USER_CONFIG_RELATIVE: &str = ".config";
 
     type EnvMap = std::collections::BTreeMap<std::ffi::OsString, Option<std::ffi::OsString>>;
 
@@ -10581,52 +10925,298 @@ fn every_cage_gets_a_private_runtime_dir_and_no_host_session() {
          longer builds on `cage_command` with the runtime it was handed."
     );
 
-    // --- Check 10: every scenario runs under its cage's own session bus --------
-    let mut argvs: Vec<(String, Vec<std::ffi::OsString>)> = vec![(
-        "cage_command".to_owned(),
-        cage_command("true", &cwd, &rt_a)
-            .get_args()
-            .map(OsStr::to_owned)
-            .collect(),
-    )];
-    for arm in [GtkRuntimeEnv::Scrubbed, GtkRuntimeEnv::Inherited] {
-        argvs.push((
-            format!("packaged_cage_command({arm:?})"),
-            packaged_cage_command("true", &cwd, &rt_a, arm)
-                .get_args()
-                .map(OsStr::to_owned)
-                .collect(),
-        ));
+    // --- Checks 10 to 16 read four commands, each with the directory it was built over
+    let mut built: Vec<(String, &Path, Vec<std::ffi::OsString>, EnvMap)> = Vec::new();
+    for (builder, dir, cmd) in [
+        (
+            "cage_command over runtime A".to_owned(),
+            dir_a,
+            cage_command("true", &cwd, &rt_a),
+        ),
+        (
+            "cage_command over runtime B".to_owned(),
+            dir_b,
+            cage_command("true", &cwd, &rt_b),
+        ),
+        (
+            "packaged_cage_command(Scrubbed) over runtime A".to_owned(),
+            dir_a,
+            packaged_cage_command("true", &cwd, &rt_a, GtkRuntimeEnv::Scrubbed),
+        ),
+        (
+            "packaged_cage_command(Inherited) over runtime A".to_owned(),
+            dir_a,
+            packaged_cage_command("true", &cwd, &rt_a, GtkRuntimeEnv::Inherited),
+        ),
+    ] {
+        let args = cmd.get_args().map(OsStr::to_owned).collect();
+        built.push((builder, dir, args, env_map(&cmd)));
     }
-    let unwrapped: Vec<String> = argvs
+
+    // --- Check 10: every scenario runs under its cage's own session bus --------
+    let config_at = BUS_WRAPPER.len();
+    let want_len = BUS_WRAPPER.len() + 1 + SHELL_WRAPPER.len() + 1;
+    let config_of = |args: &[std::ffi::OsString]| -> Option<PathBuf> {
+        use std::os::unix::ffi::OsStrExt;
+        if args.len() != want_len
+            || args[..config_at]
+                .iter()
+                .map(|arg| arg.as_os_str())
+                .ne(BUS_WRAPPER.into_iter().map(OsStr::new))
+            || args[config_at + 1..want_len - 1]
+                .iter()
+                .map(|arg| arg.as_os_str())
+                .ne(SHELL_WRAPPER.into_iter().map(OsStr::new))
+        {
+            return None;
+        }
+        let rest = args[config_at]
+            .as_bytes()
+            .strip_prefix(CONFIG_FLAG.as_bytes())?;
+        Some(PathBuf::from(OsStr::from_bytes(rest)))
+    };
+    let unwrapped: Vec<String> = built
         .iter()
-        .filter(|(_, args)| {
-            args.len() != SESSION_WRAPPER.len() + 1
-                || !args
-                    .iter()
-                    .zip(SESSION_WRAPPER)
-                    .all(|(arg, want)| arg.as_os_str() == OsStr::new(want))
-        })
+        .filter(|(_, _, args, _)| config_of(args).is_none())
         // The last argument is the whole readiness prelude plus the scenario, so only
         // the leading ones and the count are printed.
-        .map(|(builder, args)| {
-            let head: Vec<_> = args.iter().take(SESSION_WRAPPER.len()).collect();
+        .map(|(builder, _, args, _)| {
+            let head: Vec<_> = args.iter().take(want_len - 1).collect();
             format!("{builder}: {} args, starting {head:?}", args.len())
         })
         .collect();
     assert!(
         unwrapped.is_empty(),
-        "{GUARD}: check 10: these commands do not pass `cage` exactly {SESSION_WRAPPER:?} \
-         followed by the one script argument: {unwrapped:#?}\n\
-         Without `dbus-run-session` around `sh`, each cage's scenario has no session bus of its \
-         own. That wrapper is what blocks a launch from handing off to the developer's running \
-         wolf-gnome; without it GIO finds a bus some other way, autolaunching one through the \
-         cage's own Xwayland `DISPLAY` (a stray `dbus-daemon` and an Xwayland start per launch), \
-         and wherever that route is closed the preview's WebView finds no session bus and draws \
-         blank, so the preview smokes fail with their body text missing. Any other argument count means the script is no longer the \
-         single `sh -c` argument, so `sh` would run something other than the readiness prelude \
-         plus the scenario. Restore `--`, `dbus-run-session`, `--` ahead of `sh -c` in \
+        "{GUARD}: check 10: these commands do not pass `cage` exactly {BUS_WRAPPER:?}, one \
+         `{CONFIG_FLAG}<path>`, {SHELL_WRAPPER:?} and then the one script argument: \
+         {unwrapped:#?}\n\
+         Three distinguishable losses. Without `dbus-run-session` around `sh`, each cage's \
+         scenario has no session bus of its own. That wrapper is what blocks a launch from \
+         handing off to the developer's running wolf-gnome; without it GIO finds a bus some other \
+         way, autolaunching one through the cage's own Xwayland `DISPLAY` (a stray `dbus-daemon` \
+         and an Xwayland start per launch). Without the `{CONFIG_FLAG}` argument the bus daemon \
+         reads whatever configuration the host's /etc/dbus-1 holds: the smokes pass on a NixOS \
+         host, activating whatever its service directories offer, and every one exits 127 in a \
+         container built from the flake, which has no /etc/dbus-1. Any other argument count \
+         means the script is no longer the single `sh -c` argument, so `sh` would run something \
+         other than the readiness prelude plus the scenario. Restore `--`, `dbus-run-session`, \
+         `{CONFIG_FLAG}` plus `smoke_bus_config(runtime)`, `--` ahead of `sh -c` in \
          `cage_command`."
+    );
+
+    // --- Check 11: the configuration is the cage's own file -------------------
+    let mut configs: Vec<(&str, &Path, PathBuf)> = Vec::new();
+    for (builder, dir, args, _) in &built {
+        let conf = config_of(args).expect("check 10 established that every command names one");
+        let kind = match std::fs::symlink_metadata(&conf) {
+            Ok(meta) if meta.is_file() => None,
+            Ok(meta) if meta.file_type().is_symlink() => Some("a SYMLINK".to_owned()),
+            Ok(_) => Some("NOT a regular file".to_owned()),
+            Err(e) => Some(format!("MISSING ({e})")),
+        };
+        let place = if !conf.is_absolute() {
+            Some("RELATIVE, so it resolves against each smoke's cwd")
+        } else if conf.parent() == Some(*dir) {
+            None
+        } else if conf.parent() == Some(dir_a) || conf.parent() == Some(dir_b) {
+            Some("in the OTHER runtime's directory, so one cage's file serves another")
+        } else {
+            Some("OUTSIDE its runtime directory")
+        };
+        assert!(
+            kind.is_none() && place.is_none(),
+            "{GUARD}: check 11: {builder} hands `dbus-run-session` {}, which is {}{}. It must be \
+             an absolute path to a regular file directly inside {}, the runtime directory the \
+             command was built over, as `smoke_bus_config` writes it. A file installed beside \
+             `dbus-run-session` (its share/dbus-1/session.conf) or the host's /etc/dbus-1 carries \
+             service directories, through which a NixOS host's portal supplies the dpi whose \
+             absence blanks a preview created after launch; a file outside the runtime \
+             directory outlives the cage \
+             and is shared between cages; a missing one stops the bus daemon before the scenario \
+             starts.",
+            conf.display(),
+            kind.as_deref().unwrap_or("a regular file"),
+            place.map(|p| format!(", {p}")).unwrap_or_default(),
+            dir.display()
+        );
+        configs.push((builder.as_str(), *dir, conf));
+    }
+
+    // --- Check 12: nothing on the cage's bus is activatable ---------------------
+    for (builder, dir, conf) in &configs {
+        let text = std::fs::read_to_string(conf).unwrap_or_else(|e| {
+            panic!(
+                "{GUARD}: check 12: could not read {builder}'s bus configuration {}: {e}. Check 11 \
+                 just found it a regular file.",
+                conf.display()
+            )
+        });
+        let want_listen = format!("<listen>unix:dir={}</listen>", dir.display());
+        let named: Vec<&str> = SERVICE_DIR_ELEMENTS
+            .into_iter()
+            .filter(|element| text.contains(element))
+            .collect();
+        assert!(
+            text.contains(&want_listen) && named.is_empty(),
+            "{GUARD}: check 12: {builder}'s bus configuration {} {}, and names {named:?} of \
+             {SERVICE_DIR_ELEMENTS:?}. It must carry `{want_listen}` and none of them. Each named \
+             element makes services activatable on the cage's bus: `<standard_session_servicedirs` \
+             expands the inherited XDG_DATA_DIRS, which on a NixOS host activates the HOST's \
+             xdg-desktop-portal, and that portal supplies the `gtk-xft-dpi` the app's own pin \
+             exists for, so `preview_created_after_launch_renders_without_a_portal_under_cage` \
+             passes there with the pin deleted and fails in a container; an `<include` can \
+             bring either element back. A missing listen element \
+             means this is not the file `smoke_bus_config` writes from SMOKE_BUS_CONFIG_TEMPLATE, \
+             or that the socket is made outside the cage's own directory. File contents:\n{text}",
+            conf.display(),
+            if text.contains(&want_listen) {
+                "listens in its own runtime directory"
+            } else {
+                "does NOT listen in its own runtime directory"
+            }
+        );
+    }
+
+    // --- Check 13: GSettings is the in-memory backend, on every builder -------
+    let want_backend = Some(std::ffi::OsString::from(SETTINGS_BACKEND));
+    let wrong_backend: Vec<String> = built
+        .iter()
+        .filter(|(_, _, _, envs)| envs.get(OsStr::new(SETTINGS_VAR)) != Some(&want_backend))
+        .map(|(builder, _, _, envs)| format!("{builder}: {}", reach(envs, SETTINGS_VAR)))
+        .collect();
+    assert!(
+        wrong_backend.is_empty(),
+        "{GUARD}: check 13: {SETTINGS_VAR} must be SET to {SETTINGS_BACKEND:?} on every command, \
+         and is not on {wrong_backend:#?}\n\
+         Inherited or removed, GIO picks dconf where its module is installed, which reads the \
+         user database under XDG_CONFIG_HOME (the smoke home's empty `.config`, check 16) and \
+         writes through a `ca.desrt.dconf` service the cage's bus cannot activate, and falls \
+         back to memory with a log line where it is not — so the backend becomes a property of \
+         the host. It does not decide what GTK renders with: measured on a cage's bus, GTK takes \
+         no font or xft value from GSettings, which is why the GTK settings file of checks 14 \
+         and 15 exists. Restore \
+         `.env(\"{SETTINGS_VAR}\", SMOKE_GSETTINGS_BACKEND)` in `cage_command`, and keep the name \
+         off the packaged scrub lists: it is harness isolation, not a devShell export."
+    );
+
+    // --- Check 14: GTK's system settings come from the cage's own directory ----
+    let mut settings_files: Vec<(&str, PathBuf)> = Vec::new();
+    for (builder, dir, _, envs) in &built {
+        let config_dirs = match envs.get(OsStr::new(CONFIG_DIRS_VAR)) {
+            Some(Some(value)) => Some(PathBuf::from(value)),
+            _ => None,
+        };
+        let file = config_dirs.as_ref().map(|d| d.join(GTK_SETTINGS_FILE));
+        let is_file = file
+            .as_ref()
+            .is_some_and(|f| std::fs::symlink_metadata(f).is_ok_and(|meta| meta.is_file()));
+        let in_runtime = config_dirs
+            .as_ref()
+            .is_some_and(|d| d.is_absolute() && d.parent() == Some(*dir));
+        assert!(
+            in_runtime && is_file,
+            "{GUARD}: check 14: {builder} has {CONFIG_DIRS_VAR} {}, and {GTK_SETTINGS_FILE} under \
+             it is {}. It must be SET to ONE absolute directory directly inside {}, the runtime \
+             directory the command was built over, holding a regular file at {GTK_SETTINGS_FILE}, \
+             as `smoke_gtk_config_dirs` writes it. Inherited, GTK reads the host's system \
+             settings (a NixOS /etc/xdg can carry one) and leaves the font and xft settings unset \
+             where it has none, which put 27 pixels of glyph residue into the picker smoke's \
+             reference band; outside the runtime directory the file outlives the cage and is \
+             shared between cages. Restore `.env(\"{CONFIG_DIRS_VAR}\", \
+             smoke_gtk_config_dirs(runtime))` in `cage_command`.",
+            reach(envs, CONFIG_DIRS_VAR),
+            if is_file {
+                "a regular file"
+            } else {
+                "MISSING or not a regular file"
+            },
+            dir.display()
+        );
+        settings_files.push((
+            builder.as_str(),
+            file.expect("check 14 established the file"),
+        ));
+    }
+
+    // --- Check 15: those settings pin the font and xft keys, and never the dpi --
+    for (builder, file) in &settings_files {
+        let text = std::fs::read_to_string(file).unwrap_or_else(|e| {
+            panic!(
+                "{GUARD}: check 15: could not read {builder}'s GTK settings {}: {e}. Check 14 just \
+                 found it a regular file.",
+                file.display()
+            )
+        });
+        let mut section = None;
+        let mut got = std::collections::BTreeMap::new();
+        let mut outside = Vec::new();
+        for line in text.lines().map(str::trim) {
+            if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+                continue;
+            }
+            if let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+                section = Some(name);
+            } else if let Some((key, value)) = line.split_once('=') {
+                if section == Some(GTK_SETTINGS_SECTION) {
+                    got.insert(key.trim(), value.trim());
+                } else {
+                    outside.push(line);
+                }
+            } else {
+                outside.push(line);
+            }
+        }
+        let want: std::collections::BTreeMap<&str, &str> = WANT_GTK_SETTINGS.into_iter().collect();
+        let verdict = if got.contains_key(GTK_DPI_KEY) {
+            "it SETS gtk-xft-dpi, which satisfies the app's own pin and lets every preview smoke \
+             pass with that pin deleted from crates/wolf-gnome/src/app.rs"
+        } else if !outside.is_empty() {
+            "some lines sit outside the [Settings] section, where GTK ignores them"
+        } else {
+            "its keys or values differ from the pinned set"
+        };
+        assert!(
+            got == want && outside.is_empty(),
+            "{GUARD}: check 15: {builder}'s GTK settings {} hold {got:?} under \
+             [{GTK_SETTINGS_SECTION}] and {outside:?} outside it: {verdict}. They must be exactly \
+             {want:?}, the font and xft settings a portal would otherwise supply, and must NOT \
+             set {GTK_DPI_KEY}: the preview smokes are the end-to-end evidence for the app's \
+             dpi pin, and only an unset dpi reaches it. File contents:\n{text}",
+            file.display()
+        );
+    }
+
+    // --- Check 16: no user-level GTK settings can override them ----------------
+    let wrong_home: Vec<String> = built
+        .iter()
+        .filter(|(_, _, _, envs)| {
+            let home = match envs.get(OsStr::new(HOME_VAR)) {
+                Some(Some(value)) => Some(Path::new(value).join(USER_CONFIG_RELATIVE)),
+                _ => None,
+            };
+            let config_home = match envs.get(OsStr::new(CONFIG_HOME_VAR)) {
+                Some(Some(value)) => Some(PathBuf::from(value)),
+                _ => None,
+            };
+            home.is_none() || home != config_home
+        })
+        .map(|(builder, _, _, envs)| {
+            format!(
+                "{builder}: {CONFIG_HOME_VAR} is {}, {HOME_VAR} is {}",
+                reach(envs, CONFIG_HOME_VAR),
+                reach(envs, HOME_VAR)
+            )
+        })
+        .collect();
+    assert!(
+        wrong_home.is_empty(),
+        "{GUARD}: check 16: {CONFIG_HOME_VAR} must be SET to the `{USER_CONFIG_RELATIVE}` \
+         directory under the {HOME_VAR} the same command sets, and is not on {wrong_home:#?}\n\
+         GTK lets a user-level gtk-4.0/settings.ini override the system ones, so an inherited \
+         {CONFIG_HOME_VAR} hands a smoke the developer's own GTK settings — a gtk-xft-dpi among \
+         them masks the app's pin — and moves where a wolf-config.yaml leak would land away from \
+         the directory `single_pane_file_survives_relaunch_under_cage` checks. Restore \
+         `.env(\"{CONFIG_HOME_VAR}\", smoke_home(cwd).join(\".config\"))` in `cage_command`."
     );
 
     if let Some(parent) = cwd.parent() {
@@ -12197,7 +12787,7 @@ fn assert_button_rect_fits(smoke: &str, rect: (f64, f64, f64, f64), overlay: (f6
 /// [`SIDEBARTOGGLE_OCR_KEEP`] is an ordinary content term and follows the ordinary
 /// rule.
 ///
-/// Thirty-seven of the sixty smokes appear here. TWENTY-THREE contribute no rows
+/// Thirty-seven of the sixty-one smokes appear here. TWENTY-FOUR contribute no rows
 /// at all, on purpose, and it is worth being explicit about which and why:
 ///
 /// * [`colon_qa_closes_the_window_under_cage`] captures no PNG and asserts only that
@@ -12247,7 +12837,7 @@ fn assert_button_rect_fits(smoke: &str, rect: (f64, f64, f64, f64), overlay: (f6
 ///   writes about its own lines, and the assertion is an exact OCCURRENCE COUNT of
 ///   a marker that smoke seeds itself — which no sidebar row and no `:e` toast can
 ///   move in either direction.
-/// * [`preview_document_follows_the_configured_appearance_under_cage`] is one of five
+/// * [`preview_document_follows_the_configured_appearance_under_cage`] is one of six
 ///   entries here that DO capture — two PNGs — and still contribute nothing,
 ///   because it runs `tesseract` over neither. Its observables are pixel COUNTS at
 ///   a derived rectangle inside one pane, so no rendered word can satisfy or break
@@ -12275,6 +12865,10 @@ fn assert_button_rect_fits(smoke: &str, rect: (f64, f64, f64, f64), overlay: (f6
 ///   draws its candidates as filenames and so does the tree sidebar, which is exactly
 ///   why "the picker's rows are on screen" is not an assertion this smoke could make
 ///   — that sentence is true with the picker CLOSED.
+/// * [`preview_created_after_launch_renders_without_a_portal_under_cage`] is the
+///   sixth: two captures, OCRed neither, and its observables are the preview's
+///   background and heading-ink counts inside that background's extent on each frame. It reuses the picker smoke's two fixtures
+///   and registers only its two readbacks, whose paths the cmdline strip echoes.
 /// * [`terminal_drawer_defaults_to_full_width_under_cage`] and
 ///   [`terminal_drawer_reopens_after_a_neovim_restart_under_cage`] capture no image
 ///   at all: the first reads four geometry integers out of one `writefile`, the
@@ -12990,6 +13584,17 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
         "PICKOVER_WINS_NAME",
         "file_picker_covers_the_live_preview_under_cage",
     ),
+    // The new-view smoke reuses the two PICKOVER fixtures above, so only its readbacks are new.
+    (
+        NEWVIEW_WINS_BEFORE_NAME,
+        "NEWVIEW_WINS_BEFORE_NAME",
+        "preview_created_after_launch_renders_without_a_portal_under_cage",
+    ),
+    (
+        NEWVIEW_WINS_AFTER_NAME,
+        "NEWVIEW_WINS_AFTER_NAME",
+        "preview_created_after_launch_renders_without_a_portal_under_cage",
+    ),
     // The drawer readbacks live under XDG_RUNTIME_DIR, but their paths are echoed in the cmdline. The
     // sampled band stops above that strip, so this is a tripwire for a later whole-page assertion.
     (
@@ -13247,7 +13852,7 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
 ///
 /// This test is PURE: no compositor, no `require_smoke_env`, no cage slot, no
 /// subprocess. It reads two const tables and finishes in microseconds, so it adds
-/// nothing to the smoke suite's runtime and — unlike the sixty smokes — still
+/// nothing to the smoke suite's runtime and — unlike the sixty-one smokes — still
 /// guards the fixture on a machine where the smoke toolchain is unavailable.
 #[test]
 fn sidebar_filler_names_cannot_satisfy_any_smoke_assertion() {
@@ -16094,11 +16699,12 @@ fn command_palette_chord_runs_the_selected_command_under_cage() {
 /// | 7 | capture A carries [`PREVIEW_OCR_STATUS`] | **discriminator** — a preview pane's statusbar comes from `preview_ui::preview_status` | in `PaneInner::refresh_pane_state`'s `Some(info)` arm, use `core.pane_status(j.grid)` for a preview pane. Preview windows are omitted from `win_buffers`, so it answers `[No Name]`. NOT isolated: it empties `abs_path` too, so assertion 8 would also fail — but 7 is evaluated first. | RED: `capture A did not contain "preview", so no pane's statusbar named itself a preview`. Assertions 3 through 6 stayed green — the web view still rendered its document — so this reddened the statusbar alone, and assertion 8 went unevaluated exactly as the revert column predicts. |
 /// | 8 | the frozen `state.json`'s two leaves | **discriminator** — `layout_snapshot` persists the per-pane preview flag, against the SOURCE path | set `preview: false` unconditionally in `pane_view::layout_snapshot`'s `LeafContent`. Reddens this alone. | RED, and isolated as claimed: `the frozen state persisted leaves [(Some("pvoth.md"), Some(false)), (Some("pvsrc.md"), Some(false))], not [(Some("pvoth.md"), Some(false)), (Some("pvsrc.md"), Some(true))]`. Assertions 3 through 7 stayed green, so both panes were right on screen and only the PERSISTED flag was wrong — which is the whole reason this one is read from a frozen file rather than from pixels. |
 /// | 9 | readback B is `{Preview: <source>, <source>, <other>}` | **discriminator** — Edit-in-another-pane split and bound the source WITHOUT replacing the preview | point `shell::perform`'s `EditInOtherPane` arm at `AppShell::edit_source`, the in-place command. The source then replaces the preview it was fired from, and the readback loses the preview scratch. | unmeasured: no red run of this revert is recorded. |
-/// | 10 | capture B carries [`PREVIEW_OCR_BODY`] | precondition — the preview pane is still showing a document at all | none; it is what separates "the swap failed and froze the stale document" from "the pane went blank" for assertion 11 | n/a |
+/// | 10 | capture B carries [`PREVIEW_OCR_BODY`] | **discriminator** — the preview RENDERS IN A VIEW CREATED AFTER LAUNCH: after step 5's split the preview is shown by a web view created on a host not yet allocated, which lays its page out at a 0×0 viewport and draws blank wherever GTK's `gtk-xft-dpi` is unset. It is also what separates "the swap failed and froze the stale document" from "the pane went blank" for assertion 11 | remove the `gtk-xft-dpi` pin in `crates/wolf-gnome/src/app.rs`. The view then draws blank after the split, so assertion 11 reddens with it but goes unevaluated. It needs a bus that can activate no portal, which [`smoke_bus_config`] gives every cage, and GTK settings with no dpi, which [`SMOKE_GTK_SETTINGS_INI`] is: with either supplying one the revert stays green. [`preview_created_after_launch_renders_without_a_portal_under_cage`] carries the same claim on pixels rather than OCR | RED with the pin removed: capture B lacked `zzbodyoscar`. Green with it. |
 /// | 11 | capture B carries [`PREVIEW_OCR_LIVE`] | **discriminator** — the LIVE EDIT reached the DOM through the JSON body swap | in `pane_view::preview_swap_payload`, encode ONCE (`Ok(serde_json::to_string(body)?)` plus the two replacements). `JSON.parse` is then handed HTML, throws `Unrecognized token '<'` on every keystroke, and the preview keeps showing the document assertion 10 just found. **A SECOND revert reaches this assertion, and the paced burst is what admits it:** neuter the `RenderDecision::Arm` arm of `PaneInner::request_preview_render` so it arms nothing. The marker's characters then coalesce into a fire nobody ever runs, and the page carries at most the leading edge's `o`. The two reverts are distinguishable from the app's stderr — the single-encoding one prints `preview body swap failed` once per keystroke, the trailing-edge one prints nothing at all — and from assertion 12, which stays inside its budget under the first and reads a count with no trailing fire in it under the second. | RED, isolated, and with the predicted stderr: `capture B did not contain "zzlivekilo" — the marker typed into the SOURCE buffer while the preview pane was live`, beside five copies of `wolf-gnome: preview body swap failed: about:blank:1:68: SyntaxError: JSON Parse error: Unrecognized token '<'`. Assertion 10 stayed green, which is the frozen-stale-document half of the signature this row names. The trailing-edge revert: RED, isolated, and with the OTHER half of the signature — the same `capture B did not contain "zzlivekilo"` failure, and `preview body swap failed` printed NOT ONCE anywhere in the run, which is what tells the two reverts apart from stderr alone. Assertion 10 stayed green and the OCR dump beside the failure still carries the rendered heading and the `preview:` statusbar, so the pane was live and only the trailing edge was missing. Measured against the scenario INCLUDING step 9, whose burst lands after both captures and disturbs this leg not at all; the run's summed `prev.render` was 2, the cold open and the marker burst's leading edge with no trailing fire in it. |
 /// | 12 | the summed `prev.render` count in this run's own frame-stats report is at most [`PREVIEW_RENDER_BUDGET`] | **discriminator** — the bursts were COALESCED: the whole scenario paid a handful of blocking `render_preview` calls rather than one per keystroke | make `PaneInner::request_preview_render` call `run_preview_render_pass()` unconditionally, which is the uncoalesced per-wake render. Assertion 11 stays GREEN under it — every keystroke renders, so the marker certainly reaches the DOM — and that is exactly the point: only this row and row 13 can see the coalescing at all. | RED, isolated: `counts 61 blocking "prev.render" calls over all 14 report block(s), above the budget of 20`. Assertions 1 through 11 stayed green under it — assertion 11 included, which is this row's own claim, and the reason the row exists. Green runs of the same scenario read 7, 7 and 8, so the budget sits at least 12 above the coalesced reading and 41 below the uncoalesced one and needed no moving. |
 /// | 13 | the same sum is at least [`PREVIEW_CAP_RENDER_FLOOR`] | **discriminator** — the STALENESS CAP fired: step 9's ~2.4-second burst rendered several times DURING the typing, not only at its ends. Also row 12's non-vacuity half, since a build that renders nothing reads zero and no ceiling refuses that | drop the `min` against the cap's remainder in `PreviewCoalescer::request`, so the delay is always `PREVIEW_TRAILING_DELAY`. The sustained burst then renders at most twice — its leading edge and the trailing fire after its last key, since every arm inside it is superseded before it elapses — and measured, once. Rows 1 through 12 all stay green under it: the marker leg is shorter than the cap, so nothing else in this scenario can tell the difference. | RED, isolated: the run `counts 4 "prev.render" sample(s) over all 14 report block(s)`, under the floor. Rows 1 through 12 stayed green under it, the budget included, exactly as the revert column claims. Both ends measured: capped reads 7, 7 and 8 across three runs, cap-removed reads 4, and per block step 9's burst pays 4 renders capped against 1 with the cap gone. The floor was moved 7 to 6 on that evidence — two capped runs sat exactly ON seven, with no margin, and the third read 8 — and the derivation in [`PREVIEW_CAP_RENDER_FLOOR`] rewritten to the measured figures. |
 /// | 14 | the summed `pane.prev` count EXCEEDS the summed `pane.wake` count | **discriminator** — the coalescer's FIRE opens a preview-pass region of its own, so every `prev.render` sample has a parent and `frame_stats.rs`'s nesting table stays true | delete the `frame_metrics::scope(Bucket::PanePrev)` guard from the fire closure in `PaneInner::request_preview_render` (or bind it with `let _ =`, which drops it instantly). Rows 1 through 13 ALL stay green under it — the RPC is still timed, so every count they read is unchanged — which is why this row exists at all. Deliberately NOT `pane.prev` against `prev.render`: the pass runs on nearly every wake, so that comparison holds with the scope deleted and with the coalescer removed entirely. | RED, isolated: `counts 291 "pane.prev" region(s) against 291 "pane.wake", so no preview pass ran outside a pane wake`. Rows 1 through 13 stayed green under it, exactly as the revert column claims. Green reads +4 on three consecutive runs (298/294, 303/299, 309/305), which is the performing fires. **The comparison was written `>=` and the revert PASSED under it** — measured 299 against 299 — because the wakes-that-skip-the-pass term this scenario was assumed to have is zero: every pane wake reaches the pass. It was made STRICT on that evidence, and the 188-against-187 reading the row first carried predates step 9. |
+/// | 15 | the cage log carries [`DPI_PIN_STDERR_PREFIX`] | **non-vacuity** — the app's `gtk-xft-dpi` pin ran, so assertion 10's green is the pin's evidence and not a dpi supplied from elsewhere | add `gtk-xft-dpi=98304` to [`SMOKE_GTK_SETTINGS_INI`]: assertion 10 stays green and this row reddens. Removing the pin reddens assertion 10 first, which is why this row comes last | unmeasured |
 ///
 /// Assertion 11 is the highest-value assertion of the set and the reason the scenario
 /// has a second half at all: it is the ONLY one that reaches the body-swap branch, and
@@ -16116,6 +16722,10 @@ fn command_palette_chord_runs_the_selected_command_under_cage() {
 /// Assertion 14 reads the report too, but a different pair of counts, and it is the
 /// only one that says anything about WHERE a render was timed rather than how many
 /// there were. Its own row carries why it cannot be folded into the other two.
+///
+/// Assertion 15 reads the cage log rather than the report: a dpi reaching GTK from
+/// anywhere but the pin leaves assertion 10 green, and only the pin's own line says it
+/// was the pin.
 #[test]
 fn preview_pane_renders_and_edit_source_returns_under_cage() {
     const SMOKE: &str = "preview_pane_renders_and_edit_source_returns_under_cage";
@@ -16402,17 +17012,23 @@ fn preview_pane_renders_and_edit_source_returns_under_cage() {
 
     let ocr_live = ocr_to_lowercase(&out_png);
 
-    // Assertion 10 (precondition): green here with 11 red means a frozen preview, the single-encoding
-    // signature; both red means the pane went blank or the view was lost.
+    // Assertion 10 (discriminator): the view created by the split rendered. Green here with 11
+    // red is a frozen preview, the single-encoding signature; both red is a blank or lost view.
     assert!(
         ocr_live.contains(PREVIEW_OCR_BODY),
         "{SMOKE}: capture B did not contain {PREVIEW_OCR_BODY:?}, so the preview pane is not \
          showing its document at all any more — and assertion 11 below cannot be read, since a \
-         blank pane fails it for a reason that has nothing to do with the body swap. The likely \
-         causes: the pane stopped being a preview (Edit Source bound the source into it — but then \
-         assertion 9 above is red and that is the finding), the web view was unparented by the \
-         pane-tree rebuild the `:e` in step 7 cannot cause but a close would, or the swap replaced \
-         the body with nothing. PNG kept at {}. OCR output was:\n{ocr_live}",
+         blank pane fails it for a reason that has nothing to do with the body swap. The named \
+         cause: after step 5's Edit-in-another-pane SPLIT the preview is shown by a web view \
+         created on a host not yet allocated, and with GTK's `gtk-xft-dpi` unset WebKitGTK lays \
+         that view's page out at a 0×0 viewport — check that the app's `gtk-xft-dpi` pin in \
+         crates/wolf-gnome/src/app.rs still runs before any preview view exists. A cage's bus \
+         offers no portal and its GTK settings carry no dpi, so nothing else supplies one; \
+         `preview_created_after_launch_renders_without_a_portal_under_cage` asserts the same on \
+         pixels, and red there too confirms it. The other causes: the pane \
+         stopped being a preview (Edit Source bound the source into it — but then assertion 9 \
+         above is red and that is the finding), or the swap replaced the body with nothing. PNG \
+         kept at {}. OCR output was:\n{ocr_live}",
         out_png.display()
     );
 
@@ -16532,6 +17148,28 @@ fn preview_pane_renders_and_edit_source_returns_under_cage() {
          against {PREVIEW_RENDER_LABEL:?} either, which holds by construction. File contents \
          were:\n{stats_text}",
         stats_path.display()
+    );
+
+    // Assertion 15 (non-vacuity): the dpi pin ran, so assertion 10 is its evidence. Last, so
+    // removing the pin still reaches assertion 10's own red.
+    let log_path = runtime_dir.join(CAGE_LOG_NAME);
+    let log = std::fs::read_to_string(&log_path).unwrap_or_else(|e| {
+        panic!(
+            "{SMOKE}: could not read the cage log {}: {e}. `cage_command` sends the app's stderr \
+             there, so this smoke cannot say whether the dpi pin ran.",
+            log_path.display()
+        )
+    });
+    assert!(
+        log.contains(DPI_PIN_STDERR_PREFIX),
+        "{SMOKE}: the cage log {} carries no {DPI_PIN_STDERR_PREFIX:?} line, so the app's \
+         `gtk-xft-dpi` pin did NOT fire: GTK came up with a dpi already set, and assertion 10's \
+         green is that dpi's doing, not the pin's. Find where it came from — a portal on the \
+         cage's bus, a `gtk-xft-dpi` in SMOKE_GTK_SETTINGS_INI (guard check 15), a user \
+         settings.ini under XDG_CONFIG_HOME (guard check 16), or GTK's compiled-in sysconfdir \
+         gtk-4.0/settings.ini, which nothing in this harness replaces — or, if the app's line \
+         was renamed, re-type DPI_PIN_STDERR_PREFIX from crates/wolf-gnome/src/app.rs.",
+        log_path.display()
     );
 }
 
@@ -22204,6 +22842,19 @@ impl Capture {
     }
 }
 
+/// Whether every channel of `a` is within `tolerance` steps of the same channel of
+/// `b`, in either direction.
+///
+/// For a colour this file NAMES but the renderer blends, where GSK's renderers round
+/// the blend differently — see [`PICKOVER_ROW_HIGHLIGHT_TOLERANCE`]. A colour read
+/// back out of the same capture, or a flat CSS colour no blend reaches, is compared
+/// exactly instead; [`ADWAITA_ACCENT_RGB`] says why for one of them.
+fn rgb_within(a: Rgb8, b: Rgb8, tolerance: u8) -> bool {
+    a.0.abs_diff(b.0) <= tolerance
+        && a.1.abs_diff(b.1) <= tolerance
+        && a.2.abs_diff(b.2) <= tolerance
+}
+
 // A pane's own edge carries no themed chrome: constants and a helper for the vertical-split smoke,
 // kept beside `Capture` because a colour claim needs pixels.
 
@@ -25109,17 +25760,38 @@ const PICKOVER_CORNER_INSET_PX: usize = 12;
 ///
 /// MEASURED `(54, 74, 101)` off the retained sample capture, bounding box
 /// `x 471..1058, y 117..150`: the full width of the box's 588 px content area, and 34 rows
-/// tall.
+/// tall. That capture was drawn by GSK's GL renderer; under its cairo renderer, which GTK
+/// falls back to where no GL is available, the same row reads `(53, 73, 100)`, one step
+/// low on every channel. Assertion 9 therefore compares within
+/// [`PICKOVER_ROW_HIGHLIGHT_TOLERANCE`] rather than exactly.
 ///
 /// It is a libadwaita value rather than one this crate owns — Adwaita's `:selected`
 /// treatment is the accent blended into the popover background — and the cost of naming it
 /// is stated rather than hidden, the way [`PICKOVER_UNSTYLED_FILL`]'s is. The degradation
 /// runs the OTHER way round from that constant's, which is the useful half of the
-/// difference: a libadwaita that re-tints `:selected` matches no pixel, so assertion 9
-/// reddens with a height of ZERO rather than quietly stopping discriminating. Loud, but
-/// saying nothing about this front end — which is why zero is the first reading that
-/// assertion's message names and tells apart from a padding regression.
+/// difference: a libadwaita that re-tints `:selected` by more than the tolerance matches no
+/// pixel, so assertion 9 reddens with a height of ZERO rather than quietly stopping
+/// discriminating. Loud, but saying nothing about this front end — which is why zero is the
+/// first reading that assertion's message names and tells apart from a padding regression.
 const PICKOVER_ROW_HIGHLIGHT: Rgb8 = (0x36, 0x4a, 0x65);
+
+/// How many steps per channel a pixel may differ from [`PICKOVER_ROW_HIGHLIGHT`] and still
+/// count as the selected row in assertion 9's scan, through [`rgb_within`].
+///
+/// One, because that is the whole of the measured disagreement between GSK's two
+/// renderers on this blend: `(54, 74, 101)` under GL and `(53, 73, 100)` under cairo. The
+/// highlight is a blend of the accent into the popover background, and the two renderers
+/// round it differently; nothing about the row's height depends on which one drew it.
+///
+/// It may not grow to make a run pass. Nothing else the walk crosses is near the
+/// highlight — the box's fill reads `(54, 54, 58)`, twenty steps away on green — but a
+/// wider tolerance starts to accept a re-tinted `:selected` as the row, which is the one
+/// degradation [`PICKOVER_ROW_HIGHLIGHT`] is written to make loud.
+/// [`row_highlight_tolerance_admits_the_cairo_reading_and_nothing_near`] pins both edges.
+///
+/// The fill side of the scan stays EXACT: that colour is read out of the same capture by
+/// assertion 4, so it is already in whichever renderer's rounding drew the frame.
+const PICKOVER_ROW_HIGHLIGHT_TOLERANCE: u8 = 1;
 
 /// The fewest rows tall the picker's SELECTED list row may render.
 ///
@@ -26090,7 +26762,13 @@ fn file_picker_covers_the_live_preview_under_cage() {
     let mut run = 0;
     for y in (0..reference.y0).rev() {
         let highlight_px = (reference.x0..reference.x1)
-            .filter(|&x| sample.pixel(x, y) == PICKOVER_ROW_HIGHLIGHT)
+            .filter(|&x| {
+                rgb_within(
+                    sample.pixel(x, y),
+                    PICKOVER_ROW_HIGHLIGHT,
+                    PICKOVER_ROW_HIGHLIGHT_TOLERANCE,
+                )
+            })
             .count();
         let fill_px = (reference.x0..reference.x1)
             .filter(|&x| sample.pixel(x, y) == fill)
@@ -26111,8 +26789,9 @@ fn file_picker_covers_the_live_preview_under_cage() {
     assert!(
         selected_row_h >= PICKOVER_MIN_SELECTED_ROW_H_PX,
         "{SMOKE}: in {SAMPLE_LABEL}, the picker's selected list row measures \
-         {selected_row_h} row(s) of PICKOVER_ROW_HIGHLIGHT = {PICKOVER_ROW_HIGHLIGHT:?} across \
-         columns {}..{}, below the {PICKOVER_MIN_SELECTED_ROW_H_PX} floor. The measurements are \
+         {selected_row_h} row(s) of PICKOVER_ROW_HIGHLIGHT = {PICKOVER_ROW_HIGHLIGHT:?}, within \
+         {PICKOVER_ROW_HIGHLIGHT_TOLERANCE} per channel, across columns {}..{}, below the \
+         {PICKOVER_MIN_SELECTED_ROW_H_PX} floor. The measurements are \
          34 rows with `padding: 8px 10px` on `list > row` in `overlay_style::OVERLAY_CSS_DATA`, \
          and 22 with that one declaration removed. The walk ran up from row {} and left the box \
          at row {walk_stopped_at}. Four readings, told apart by the number.\n\
@@ -26137,6 +26816,616 @@ fn file_picker_covers_the_live_preview_under_cage() {
         reference.y0,
         control_png.display(),
         sample_png.display()
+    );
+}
+
+/// [`rgb_within`] at [`PICKOVER_ROW_HIGHLIGHT_TOLERANCE`] admits the selected-row colour
+/// GSK's cairo renderer draws, and refuses every colour assertion 9's walk must not
+/// count as the row.
+///
+/// ## What it closes
+///
+/// [`file_picker_covers_the_live_preview_under_cage`]'s assertion 9 finds the selected
+/// row by [`PICKOVER_ROW_HIGHLIGHT`], measured under GL, and a host without GL draws
+/// that row one step lower on every channel. An exact comparison fails the smoke there
+/// with a height of zero while the padding it is about is exactly as declared; a
+/// comparison loose on one channel, or one-sided, counts colours that are not the row.
+/// A smoke run sees one renderer per host, so neither edge is visible from it.
+///
+/// ## What it checks
+///
+/// A table against [`PICKOVER_ROW_HIGHLIGHT`], every row asserted in both argument
+/// orders and every failing row reported together:
+///
+/// - the cairo reading `(53, 73, 100)` is within;
+/// - `(53, 73, 99)`, `(52, 74, 101)` and `(54, 72, 101)`, each two steps off on one
+///   channel, are not;
+/// - the picker box's fill `(54, 54, 58)` is not.
+///
+/// Falsify: compare exactly in [`rgb_within`] (the cairo row fails); drop one channel's
+/// comparison (that channel's two-step row fails); write a channel's comparison as
+/// `a.0.saturating_sub(b.0)`, which is one-sided (the reversed order fails); raise the
+/// tolerance to 2 (all three two-step rows fail).
+///
+/// ## What it needs
+///
+/// No environment at all: no compositor, no [`require_smoke_env`], no subprocess.
+#[test]
+fn row_highlight_tolerance_admits_the_cairo_reading_and_nothing_near() {
+    const GUARD: &str = "row_highlight_tolerance_admits_the_cairo_reading_and_nothing_near";
+    // (other colour, whether it must count as the selected row, what it is)
+    let table: [(Rgb8, bool, &str); 5] = [
+        (
+            (53, 73, 100),
+            true,
+            "the row as GSK's cairo renderer draws it",
+        ),
+        ((53, 73, 99), false, "two steps off on blue"),
+        ((52, 74, 101), false, "two steps off on red"),
+        ((54, 72, 101), false, "two steps off on green"),
+        ((54, 54, 58), false, "the picker box's own fill"),
+    ];
+
+    let mut wrong = Vec::new();
+    for (other, want, what) in table {
+        let forward = rgb_within(
+            PICKOVER_ROW_HIGHLIGHT,
+            other,
+            PICKOVER_ROW_HIGHLIGHT_TOLERANCE,
+        );
+        let reverse = rgb_within(
+            other,
+            PICKOVER_ROW_HIGHLIGHT,
+            PICKOVER_ROW_HIGHLIGHT_TOLERANCE,
+        );
+        if forward != want || reverse != want {
+            wrong.push(format!(
+                "{other:?} ({what}): want {want}, got {forward} as the second argument and \
+                 {reverse} as the first"
+            ));
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "{GUARD}: rgb_within against PICKOVER_ROW_HIGHLIGHT = {PICKOVER_ROW_HIGHLIGHT:?} at \
+         PICKOVER_ROW_HIGHLIGHT_TOLERANCE = {PICKOVER_ROW_HIGHLIGHT_TOLERANCE} classifies these \
+         wrongly: {wrong:#?}\n\
+         The cairo row refused means the picker-over-preview smoke's assertion 9 reads a height \
+         of zero on every host without GL. A two-step row admitted means the tolerance grew or \
+         one channel is not compared, so a re-tinted `:selected` would pass as the row. A row \
+         right in one order and wrong in the other means the comparison is one-sided. The fill \
+         admitted means the box's empty area would join the selected row's run. Fix \
+         `rgb_within` or the tolerance; if PICKOVER_ROW_HIGHLIGHT was re-measured, re-derive \
+         these rows from the new value."
+    );
+}
+
+// --- A preview view created after launch renders without a portal ------------
+
+/// New-view smoke: the window-list readback taken BEFORE the split, with the preview
+/// live in the right of two panes.
+///
+/// Under `XDG_RUNTIME_DIR` for [`PICKOVER_WINS_NAME`]'s reason, and registered in
+/// [`RELAUNCH_FIXTURE_NAMES`] for the same one: the typed `:call writefile(...)` echoes
+/// its absolute path in the cmdline strip.
+const NEWVIEW_WINS_BEFORE_NAME: &str = "wolf_gnome_newview_wins_a.txt";
+
+/// The same readback taken AFTER the split. See [`NEWVIEW_WINS_BEFORE_NAME`].
+const NEWVIEW_WINS_AFTER_NAME: &str = "wolf_gnome_newview_wins_b.txt";
+
+/// Where the scenario writes `dbus-send`'s reply to `ListActivatableNames`, before the
+/// app launches. Under `XDG_RUNTIME_DIR`; written by the shell, so nothing draws it.
+const NEWVIEW_ACTIVATABLE_NAME: &str = "wolf_gnome_newview_activatable.txt";
+
+/// The CONTROL capture: the preview live in the view it opened with, before the split.
+/// Retained after the run, as [`PICKOVER_CONTROL_PNG_NAME`] is.
+const NEWVIEW_CONTROL_PNG_NAME: &str = "wolf_gnome_newview_control.png";
+
+/// The SAMPLE capture: the same preview after the split.
+const NEWVIEW_SAMPLE_PNG_NAME: &str = "wolf_gnome_newview_sample.png";
+
+/// Name suffix of this smoke's config directory sibling.
+const NEWVIEW_SUFFIX: &str = "-newview";
+
+/// How many pixels of exactly [`PREVIEW_DARK_BG`] a row or a column of the pane area
+/// must carry before [`colour_extent`] counts it as part of the preview.
+///
+/// An acceptance criterion rather than a measurement. Nothing but a rendered preview
+/// paints that exact colour — the control capture asserts its extent lies in the
+/// preview's half — so a coincidence would have to line up this many pixels in one
+/// line; and a preview pane after the split, in a half of the 1029-pixel pane area cut
+/// in two either way, is still well over this wide and tall.
+const NEWVIEW_EXTENT_MIN_RUN_PX: usize = 96;
+
+/// The bus daemon's own name, which `ListActivatableNames` may report on a bus with no
+/// service directory. Re-typed, as every bus name in this file is.
+const BUS_DAEMON_NAME: &str = "org.freedesktop.DBus";
+
+/// The desktop portal's well-known name: the one service whose activation supplies the
+/// `gtk-xft-dpi` the app's own pin exists for, and so the one this smoke's bus must not
+/// offer.
+const PORTAL_BUS_NAME: &str = "org.freedesktop.portal.Desktop";
+
+/// The NEW-VIEW scenario, run as a single `sh -c` string inside ONE `cage`:
+/// [`PICKOVER_SCENARIO`]'s split-and-preview opening, a CONTROL capture, then Edit in
+/// Another Pane from the preview — [`PREVIEW_SCENARIO`]'s step 5, which splits the
+/// preview's own pane — and a SAMPLE capture.
+///
+/// ## Why the split is of the preview's pane
+///
+/// The defect needs a preview web view created after launch on a host GTK has not yet
+/// allocated. The view the in-place Preview opens is created in a pane already on
+/// screen and renders whatever the dpi; measured, the preview after a split of its own
+/// pane is shown by a view created with the new layout, first rendered while its host
+/// is 0×0. That is [`PREVIEW_SCENARIO`]'s step 5 exactly, the leg its assertion 10
+/// reads.
+///
+/// ## The bus probe comes first
+///
+/// Before the app launches, `dbus-send` asks this cage's bus what it can activate and
+/// writes the reply under the runtime directory. The defect only shows where no portal
+/// can be activated, so the smoke states that premise from the bus itself rather than
+/// from the configuration file alone.
+///
+/// ## Exit codes
+///
+/// * `11` — the app died before it was ready for input (the shared convention).
+/// * `14` — the readback before the split never appeared.
+/// * `15` — the readback after the split never appeared: the first leg's keys
+///   reached Neovim, so the palette leg is what lost them.
+/// * `17` — `dbus-send` failed or is missing, so nothing below can say which bus the
+///   app ran on.
+const NEWVIEW_SCENARIO: &str = r#"
+set -eu
+
+# SETTLE is the settle between steps; see SCENARIO.
+WAIT_INTERVAL=0.2
+SETTLE=1.0
+FILE_TRIES=100
+# PREVIEW_SETTLE -- budgeted FROM THE CALL; PREVIEW_SCENARIO's doc comment carries the
+# measurement. Spent after the cold open and again after the split.
+PREVIEW_SETTLE=2.0
+
+# --- Step 0: what this cage's private bus can activate -----------------------
+dbus-send --session --print-reply --dest=org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus.ListActivatableNames >"$ACTIVATABLE" || exit 17
+
+"$WOLF_BIN" &
+app_pid=$!
+wait_ready "$app_pid" 11 "wolf-gnome new-view smoke"
+
+wait_file() {
+    f=$1
+    t=0
+    while [ "$t" -lt "$FILE_TRIES" ]; do
+        if [ -s "$f" ]; then
+            return 0
+        fi
+        t=$((t + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    echo "wolf-gnome new-view smoke: readback file $f never appeared (or stayed empty)." >&2
+    return 1
+}
+
+# --- Step 1: the OTHER file in the starting pane -----------------------------
+wtype -- ":e $OTHER_FILE"
+wtype -k Return
+sleep "$SETTLE"
+
+# --- Step 2: split, and open the SOURCE in the new (right) pane --------------
+wtype -M ctrl -k w -m ctrl
+wtype -k v
+sleep "$SETTLE"
+
+wtype -- ":e $SRC_FILE"
+wtype -k Return
+sleep "$SETTLE"
+
+# --- Step 3: the IN-PLACE Preview, into the right pane -----------------------
+wtype -M ctrl -M shift -k p -m shift -m ctrl
+sleep "$SETTLE"
+wtype -- "$PREVIEW_QUERY"
+sleep "$SETTLE"
+wtype -k Return
+sleep "$PREVIEW_SETTLE"
+
+# --- Step 4: NEOVIM's own answer before the split ----------------------------
+wtype -- ":call writefile([join(map(tabpagebuflist(), {_, b -> fnamemodify(bufname(b), ':t')}), ',')], '$WINS_BEFORE')"
+wtype -k Return
+wait_file "$WINS_BEFORE" || exit 14
+
+# Let the cmdline strip clear before the control capture.
+sleep "$SETTLE"
+
+# --- Step 5: the CONTROL capture ---------------------------------------------
+grim "$OUT_PNG_CONTROL"
+
+# --- Step 6: EDIT IN ANOTHER PANE, from the preview --------------------------
+# The active pane IS the preview, so this splits the preview's own pane and binds the
+# source into the new half; the preview after the split is a view created then.
+wtype -M ctrl -M shift -k p -m shift -m ctrl
+sleep "$SETTLE"
+wtype -- "$EDIT_QUERY"
+sleep "$SETTLE"
+wtype -k Return
+sleep "$PREVIEW_SETTLE"
+
+# --- Step 7: NEOVIM's own answer after the split -----------------------------
+wtype -- ":call writefile([join(map(tabpagebuflist(), {_, b -> fnamemodify(bufname(b), ':t')}), ',')], '$WINS_AFTER')"
+wtype -k Return
+wait_file "$WINS_AFTER" || exit 15
+sleep "$SETTLE"
+
+# --- Step 8: the SAMPLE capture ----------------------------------------------
+grim "$OUT_PNG_SAMPLE"
+
+# Best-effort teardown: the app may already be gone.
+set +e
+kill "$app_pid" 2>/dev/null
+wait "$app_pid" 2>/dev/null
+exit 0
+"#;
+
+/// The extent of the rows and columns of `area` that each carry at least `min_run`
+/// pixels of exactly `colour`: from the first such row to the last, and the first such
+/// column to the last. `None` when no row or no column qualifies.
+///
+/// A count per line rather than a run, so the glyphs drawn across a row of a document
+/// lower its count without breaking the extent; and a threshold rather than any pixel,
+/// so a stray coincidence of the colour elsewhere cannot widen it.
+fn colour_extent(
+    capture: &Capture,
+    area: SampleRect,
+    colour: Rgb8,
+    min_run: usize,
+) -> Option<SampleRect> {
+    let rows: Vec<usize> = (area.y0..area.y1)
+        .filter(|&y| {
+            (area.x0..area.x1)
+                .filter(|&x| capture.pixel(x, y) == colour)
+                .count()
+                >= min_run
+        })
+        .collect();
+    let columns: Vec<usize> = (area.x0..area.x1)
+        .filter(|&x| {
+            (area.y0..area.y1)
+                .filter(|&y| capture.pixel(x, y) == colour)
+                .count()
+                >= min_run
+        })
+        .collect();
+    Some(SampleRect {
+        x0: *columns.first()?,
+        x1: *columns.last()? + 1,
+        y0: *rows.first()?,
+        y1: *rows.last()? + 1,
+    })
+}
+
+/// A Markdown preview whose web view is created after launch, on a host GTK has not yet
+/// allocated, renders its document — on a session bus that can activate no desktop
+/// portal.
+///
+/// ## What it proves that nothing else does
+///
+/// Measured: with no portal reachable, GTK leaves `gtk-xft-dpi` unset, and a WebView
+/// created after launch whose host is still 0×0 when it first renders lays its page
+/// out at a 0×0 viewport and stays there — realized, mapped and sized, its DOM present,
+/// and blank. The preview after a split of its own pane is such a view. The app pins
+/// `gtk-xft-dpi` itself when it is unset, in `crates/wolf-gnome/src/app.rs`, and this
+/// smoke is that pin's end-to-end evidence. A NixOS host masked the defect, because a
+/// cage's bus could activate the host's portal through its service directories, while
+/// every container and every minimal desktop showed it; [`smoke_bus_config`] makes
+/// every host the second kind, and [`SMOKE_GTK_SETTINGS_INI`] deliberately sets no dpi.
+///
+/// [`preview_pane_renders_and_edit_source_returns_under_cage`]'s assertion 10 makes the
+/// same claim by OCR after the same split. This smoke makes it on pixels, with a control
+/// taken in the same launch, and with the bus premise asserted rather than assumed.
+///
+/// ## The pair, and the extent
+///
+/// The control capture is taken with the preview live in the view it opened with; the
+/// sample after Edit in Another Pane has split the preview's pane. The split moves the
+/// preview, so neither capture is read at a fixed rectangle: in each, the preview is
+/// the [`colour_extent`] of [`PREVIEW_DARK_BG`] over the pane area above the cmdline
+/// strip, at [`NEWVIEW_EXTENT_MIN_RUN_PX`]. Inside it both captures must clear the
+/// same two floors, [`PICKOVER_CONTROL_MIN_DARK_FRACTION`] of that background and
+/// [`PICKOVER_CONTROL_MIN_INK_PX`] of [`PICKOVER_HEADING_INK`], the `h1`'s pure white.
+///
+/// **Ink is the sole discriminator.** The 0×0-viewport view draws no document but does
+/// show its `PREVIEW_DARK_BG` across the whole pane, so it has an extent and passes the
+/// dark fraction — measured at 0.9994 — and reads ZERO white pixels. The extent only
+/// locates the preview and the dark fraction only says the extent is the preview; zero
+/// ink is the defect, or an empty document, which the control rules out for the same
+/// source. The floors are reused from the picker smoke rather than re-measured, and
+/// the readings below sit far from both.
+///
+/// A green sample does not prove the pin by itself: a dpi from anywhere else renders
+/// the view just as well. Assertion 8 is what ties the green to the pin — the cage log
+/// must carry its [`DPI_PIN_STDERR_PREFIX`] line. It comes LAST, so removing the pin
+/// still reaches assertion 7 and reads the discriminator's own red.
+///
+/// ## Assertions, classified
+///
+/// | # | assertion | kind | falsifying edit | measured |
+/// | --- | --- | --- | --- | --- |
+/// | 1 | `status.success()` | precondition — the scenario ran to completion | none; do not invent one | n/a |
+/// | 2 | the bus's `ListActivatableNames` reply was read, and names nothing but the bus daemon itself — no [`PORTAL_BUS_NAME`] | precondition — the configuration this smoke's red needs: a portal reachable supplies the dpi and masks the defect | add `<standard_session_servicedirs/>` to [`SMOKE_BUS_CONFIG_TEMPLATE`]; on a host whose data directories carry a portal service this row reddens naming it | unmeasured |
+/// | 3 | both PNGs present, each decoding at the pinned output size | precondition | none; do not invent one | n/a |
+/// | 4 | readback before is the preview scratch plus the other file | precondition — a preview exists in one of exactly two panes before the split | none; do not invent one | unmeasured |
+/// | 5 | readback after is the preview scratch, the source and the other file | precondition — Edit in Another Pane split the preview's pane and kept the preview | none; do not invent one | unmeasured |
+/// | 6 | in the CONTROL, the extent lies in the right half and clears both floors | **paired control** — the view the preview opened with rendered the document, so a red sample is about the view created by the split and not the cold open | blank the render (`WolfCore::render_preview` answering the empty string) | unmeasured |
+/// | 7 | in the SAMPLE, an extent exists and clears both floors | **discriminator** — the view created by the split renders its document | remove the `gtk-xft-dpi` pin in `crates/wolf-gnome/src/app.rs` | RED with the pin removed: the sample's extent `SampleRect { x0: 959, x1: 1260, y0: 159, y1: 600 }`, dark fraction 0.9994, ink **0**, against the control's extent at `x0: 787` with ink 1,976. GREEN with the pin: the sample's extent the same rectangle, dark 0.9624, ink 1,976, against floors of 0.8 and 500 |
+/// | 8 | the cage log carries [`DPI_PIN_STDERR_PREFIX`] | **non-vacuity** — the pin ran, so a green assertion 7 is the pin's evidence and not a dpi from elsewhere | add `gtk-xft-dpi=98304` to [`SMOKE_GTK_SETTINGS_INI`]: assertion 7 stays green and this row reddens (as does the guard's check 15). Removing the pin reddens assertion 7 first | unmeasured |
+///
+/// Without that pin, row 7 is red on every host, which is this smoke's expected red
+/// rather than a flake. On a bus that can activate a portal, or with a dpi reaching GTK
+/// any other way, the revert stays green; row 2, the guard's check 15 and row 8 are
+/// what refuse those.
+///
+/// ## The conventions it obeys
+///
+/// A fresh temp working directory; [`require_smoke_env`]'s cage slot and runtime
+/// directory for the whole body; one `sh -c` string through [`cage_command`]; a config
+/// directory of its own pinning the dark appearance the two colours are measured at; and
+/// distinct exit codes for each readback and for the bus probe. It asserts no OCR term,
+/// so it contributes no [`ASSERTED_OCR_TERMS`] row; it reuses the picker smoke's two
+/// fixtures, already in [`RELAUNCH_FIXTURE_NAMES`], and registers its two readbacks.
+#[test]
+fn preview_created_after_launch_renders_without_a_portal_under_cage() {
+    const SMOKE: &str = "preview_created_after_launch_renders_without_a_portal_under_cage";
+    const CONTROL_LABEL: &str = "the control capture (preview live, before the split)";
+    const SAMPLE_LABEL: &str = "the sample capture (after the preview's pane split)";
+    // How `dbus-send --print-reply` prints an array and one string element of it.
+    const REPLY_ARRAY_OPEN: &str = "array [";
+    const REPLY_STRING_HEAD: &str = "string \"";
+
+    let runtime_dir = require_smoke_env();
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+
+    // A fresh temp cwd, mandatory: the captive Neovim's swap directory is keyed on it.
+    let cwd = make_temp_cwd();
+    let source_body = format!("{PICKOVER_SOURCE_HEADING}\n\n{PICKOVER_SOURCE_PARAGRAPH}");
+    write_relaunch_fixtures(
+        SMOKE,
+        &cwd,
+        &[
+            (PICKOVER_SOURCE_FILE, source_body.as_str()),
+            (PICKOVER_OTHER_FILE, PICKOVER_OTHER_HEADING),
+        ],
+    );
+
+    // Forced dark, for the picker smoke's reason: both colours read below are dark-palette values.
+    let config = smoke_config_dir_at(&cwd, NEWVIEW_SUFFIX, SMOKE_FONT_PT, APPEARANCE_FORCED_DARK);
+
+    let control_png = runtime_dir.join(NEWVIEW_CONTROL_PNG_NAME);
+    let sample_png = runtime_dir.join(NEWVIEW_SAMPLE_PNG_NAME);
+    let wins_before = runtime_dir.join(NEWVIEW_WINS_BEFORE_NAME);
+    let wins_after = runtime_dir.join(NEWVIEW_WINS_AFTER_NAME);
+    let activatable = runtime_dir.join(NEWVIEW_ACTIVATABLE_NAME);
+    for path in [
+        &control_png,
+        &sample_png,
+        &wins_before,
+        &wins_after,
+        &activatable,
+    ] {
+        clear_evidence(path, SMOKE);
+    }
+
+    let mut cmd = cage_command(NEWVIEW_SCENARIO, &cwd, &runtime_dir);
+    cmd.env("WOLF_BIN", bin)
+        // Chained AFTER `cage_command`, deliberately winning over the shared config directory.
+        .env("WOLF_CONFIG_DIR", &config)
+        .env("SRC_FILE", PICKOVER_SOURCE_FILE)
+        .env("OTHER_FILE", PICKOVER_OTHER_FILE)
+        .env("PREVIEW_QUERY", PREVIEW_QUERY)
+        .env("EDIT_QUERY", EDIT_QUERY)
+        .env("OUT_PNG_CONTROL", &control_png)
+        .env("OUT_PNG_SAMPLE", &sample_png)
+        .env("WINS_BEFORE", &wins_before)
+        .env("WINS_AFTER", &wins_after)
+        .env("ACTIVATABLE", &activatable);
+
+    let status = cmd
+        .status()
+        .expect("failed to spawn `cage` for the headless new-view scenario");
+
+    // --- Assertion 1 (precondition): the scenario ran to completion -----------
+    assert!(
+        status.success(),
+        "{SMOKE}: the cage new-view scenario exited unsuccessfully ({status}). Exit 17: \
+         `dbus-send` failed or is not on PATH — it comes from the devShell's `pkgs.dbus`, beside \
+         `dbus-run-session` — so nothing says which bus the app ran on. Exit 11: the app died \
+         before it was ready for input, a LAUNCH failure. Exit 14: the readback BEFORE the \
+         split never appeared at {}, so keys are not reaching Neovim at all. Exit 15: the \
+         readback AFTER the split never appeared at {}, although the first one did, so the \
+         Edit in Another Pane leg lost the keyboard. Any OTHER status is `grim` or `wtype` \
+         failing under `set -eu`. This assertion says nothing about what the preview drew.",
+        wins_before.display(),
+        wins_after.display()
+    );
+
+    // --- Assertion 2 (precondition): the bus can activate no portal -------------
+    let reply = read_readback(&activatable, SMOKE);
+    let names: Vec<&str> = reply
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix(REPLY_STRING_HEAD))
+        .map(|rest| rest.trim_end_matches('"'))
+        .collect();
+    let activatable_services: Vec<&str> = names
+        .iter()
+        .copied()
+        .filter(|name| *name != BUS_DAEMON_NAME)
+        .collect();
+    let verdict = if !reply.contains(REPLY_ARRAY_OPEN) {
+        "NOT a `dbus-send --print-reply` array reply at all, so nothing below could say which \
+         services the bus offered"
+    } else if activatable_services.contains(&PORTAL_BUS_NAME) {
+        "a bus that can activate the desktop PORTAL: the configuration carries a service \
+         directory that reaches one, the portal supplies the dpi, and assertion 7 would stay \
+         green with the app's `gtk-xft-dpi` pin deleted"
+    } else if !activatable_services.is_empty() {
+        "a bus with service directories: no portal among them today, but the configuration is \
+         not the service-less one `smoke_bus_config` writes"
+    } else {
+        "a bus that activates nothing, as required"
+    };
+    assert!(
+        reply.contains(REPLY_ARRAY_OPEN) && activatable_services.is_empty(),
+        "{SMOKE}: the cage's bus answered ListActivatableNames with {names:?}, which is {verdict}. \
+         It must name nothing but {BUS_DAEMON_NAME:?}. Check \
+         `every_cage_gets_a_private_runtime_dir_and_no_host_session`'s checks 11 and 12, which \
+         read the same configuration statically. Raw reply at {}:\n{reply}",
+        activatable.display()
+    );
+
+    // Assertion 3 (precondition): presence first, so "grim wrote nothing" is not a decode error.
+    assert_png_present(SMOKE, &control_png);
+    assert_png_present(SMOKE, &sample_png);
+    let control = decode_capture(&control_png, SMOKE, CONTROL_LABEL);
+    let sample = decode_capture(&sample_png, SMOKE, SAMPLE_LABEL);
+
+    // --- Assertion 4 (precondition): a preview in one of two panes, before -----
+    let preview_name = format!("{PREVIEW_READBACK_PREFIX}{PICKOVER_SOURCE_FILE}");
+    let want_before = {
+        let mut want = vec![preview_name.clone(), PICKOVER_OTHER_FILE.to_string()];
+        want.sort();
+        want
+    };
+    let got_before = read_window_buffer_names(&wins_before, SMOKE);
+    assert_eq!(
+        got_before, want_before,
+        "{SMOKE}: before the split the captive Neovim's windows hold {got_before:?}, not \
+         {want_before:?} (both sorted). No preview scratch means no preview was bound — the \
+         palette dispatched nothing or {PREVIEW_QUERY:?} matched no row. A SINGLE entry means \
+         the `<C-w>v` split never happened. The control below assumes exactly two side-by-side \
+         panes with the preview in the RIGHT one."
+    );
+
+    // --- Assertion 5 (precondition): the preview's pane split, the preview kept --
+    let want_after = {
+        let mut want = vec![
+            preview_name.clone(),
+            PICKOVER_SOURCE_FILE.to_string(),
+            PICKOVER_OTHER_FILE.to_string(),
+        ];
+        want.sort();
+        want
+    };
+    let got_after = read_window_buffer_names(&wins_after, SMOKE);
+    let has_preview = got_after.contains(&preview_name);
+    let after_verdict = if got_after == want_before {
+        "the same two windows: Edit in Another Pane did nothing, so no view was created and the \
+         sample proves nothing — check `edit_press`'s preview gate and that EDIT_QUERY still \
+         selects the other-pane row"
+    } else if !has_preview && got_after.len() == 2 {
+        "TWO windows and NO preview: the in-place Edit Source replaced the preview instead of \
+         splitting, so there is no preview left to observe"
+    } else if !has_preview {
+        "NO preview window: the split lost it on Neovim's side, which is a different defect from \
+         a blank view"
+    } else {
+        "an unexpected window set: a missing other file means core reused that window rather \
+         than splitting"
+    };
+    assert_eq!(
+        got_after, want_after,
+        "{SMOKE}: after Edit in Another Pane the captive Neovim's windows hold {got_after:?}, not \
+         {want_after:?} (both sorted): {after_verdict}."
+    );
+
+    // Assertions 6 and 7 find the preview in each capture the same way: the extent of its own
+    // background over the pane area, above the cmdline strip.
+    let (area_x, area_y, area_w, _) = preview_theme_pane_area();
+    let (_, band_y1) = preview_theme_band_rows();
+    let pane_area = SampleRect {
+        x0: pixel_index(area_x, "the pane area's left edge"),
+        x1: control.width,
+        y0: pixel_index(area_y, "the pane area's top edge"),
+        y1: band_y1,
+    };
+    let pane_mid_x = pixel_index(area_x + area_w / 2.0, "the pane area's horizontal midpoint");
+    let read = |capture: &Capture, what: &str| -> Option<(SampleRect, f64, usize)> {
+        let extent = colour_extent(
+            capture,
+            pane_area,
+            PREVIEW_DARK_BG,
+            NEWVIEW_EXTENT_MIN_RUN_PX,
+        )?;
+        let dark = capture.count_exactly(extent, PREVIEW_DARK_BG);
+        let ink = capture.count_exactly(extent, PICKOVER_HEADING_INK);
+        Some((extent, band_fraction(dark, extent.pixels(), what), ink))
+    };
+
+    // --- Assertion 6 (paired control): the opening view rendered the document --
+    let control_reading = read(&control, "the control's dark fraction");
+    assert!(
+        control_reading.is_some_and(|(extent, dark, ink)| {
+            extent.x0 >= pane_mid_x
+                && dark >= PICKOVER_CONTROL_MIN_DARK_FRACTION
+                && ink >= PICKOVER_CONTROL_MIN_INK_PX
+        }),
+        "{SMOKE}: in {CONTROL_LABEL}, the extent of PREVIEW_DARK_BG = {PREVIEW_DARK_BG:?} over \
+         the pane area {pane_area:?}, its dark fraction and its PICKOVER_HEADING_INK count read \
+         {control_reading:?}. It must lie right of the pane midpoint ({pane_mid_x}), be at least \
+         {PICKOVER_CONTROL_MIN_DARK_FRACTION} background and carry at least \
+         {PICKOVER_CONTROL_MIN_INK_PX} white pixels. This is the CONTROL, taken in the view the \
+         preview opened with, before any split, so the sample below would prove nothing whatever \
+         it read. None: no preview background anywhere, so the cold open drew nothing. An extent \
+         reaching LEFT of the midpoint: something besides the preview paints that exact colour, \
+         and the extent cannot be trusted to be the preview. Ink of ZERO: an empty document. \
+         Capture kept at {}.",
+        control_png.display()
+    );
+
+    // --- Assertion 7 (discriminator): the view created by the split renders it --
+    let sample_reading = read(&sample, "the sample's dark fraction");
+    assert!(
+        sample_reading.is_some_and(|(_, dark, ink)| {
+            dark >= PICKOVER_CONTROL_MIN_DARK_FRACTION && ink >= PICKOVER_CONTROL_MIN_INK_PX
+        }),
+        "{SMOKE}: in {SAMPLE_LABEL}, the extent of PREVIEW_DARK_BG, its dark fraction and its \
+         PICKOVER_HEADING_INK count read {sample_reading:?}, against the control's \
+         {control_reading:?}; the floors are {PICKOVER_CONTROL_MIN_DARK_FRACTION} and \
+         {PICKOVER_CONTROL_MIN_INK_PX}. The control passed, so the document rendered before the \
+         split and this is the view the split created.\n\
+         Read the shape of the failure. An extent with a passing dark fraction and ZERO ink is \
+         the named cause — measured exactly so with the pin removed (dark 0.9994, ink 0): GTK's \
+         `gtk-xft-dpi` is unset, which it is wherever no portal answers, and WebKitGTK laid the \
+         new view's page out at a 0×0 viewport because its host was not yet allocated when it \
+         first rendered, so the view's background shows and no document does. Check that the \
+         app's `gtk-xft-dpi` pin in crates/wolf-gnome/src/app.rs still runs before any preview \
+         view exists; an empty document reads the same, but the control drew this source. None \
+         means no preview background anywhere (the view drew white, or the editor's background \
+         shows through). A low dark fraction with ink present is an extent spanning more than \
+         the preview. Captures kept at {} and {}.",
+        control_png.display(),
+        sample_png.display()
+    );
+
+    // --- Assertion 8 (non-vacuity): the pin is what rendered it ----------------
+    // Last, so removing the pin still reaches assertion 7's own red.
+    let log_path = runtime_dir.join(CAGE_LOG_NAME);
+    let log = std::fs::read_to_string(&log_path).unwrap_or_else(|e| {
+        panic!(
+            "{SMOKE}: could not read the cage log {}: {e}. `cage_command` sends the app's stderr \
+             there, so this smoke cannot say whether the dpi pin ran.",
+            log_path.display()
+        )
+    });
+    assert!(
+        log.contains(DPI_PIN_STDERR_PREFIX),
+        "{SMOKE}: the cage log {} carries no {DPI_PIN_STDERR_PREFIX:?} line, so the app's \
+         `gtk-xft-dpi` pin did NOT fire: GTK came up with a dpi already set, and assertion 7's \
+         green is that dpi's doing, not the pin's — the smoke would pass with the pin deleted. \
+         Find where the dpi came from: a portal on the cage's bus (assertion 2 should have \
+         caught it), a `gtk-xft-dpi` in SMOKE_GTK_SETTINGS_INI (guard check 15), a user \
+         settings.ini under XDG_CONFIG_HOME (guard check 16), or GTK's compiled-in sysconfdir \
+         gtk-4.0/settings.ini, which nothing in this harness replaces. If the app's line was \
+         renamed instead, re-type DPI_PIN_STDERR_PREFIX from crates/wolf-gnome/src/app.rs.",
+        log_path.display()
     );
 }
 
@@ -27183,7 +28472,7 @@ fn divider_drag_survives_a_pane_relayout_under_cage() {
 /// | the `~` end-of-buffer column above a lone heading — a sparse region `--psm 11` scales the whole pane from | three ablations on one PNG, one at a time; blanking the `~` column alone fixed it | [`DIVIDER_BODY_LINE_COUNT`] body lines, which fill the pane past `winheight` so no marker is drawn |
 /// | a single misclassified GLYPH at 15 columns | the same pixels read through both segmentation modes, twice over | the second reader, [`ocr_uniform_block_to_lowercase`] |
 ///
-/// The second is why this smoke, alone of the sixty, reads its capture twice.
+/// The second is why this smoke, alone of the sixty-one, reads its capture twice.
 /// With the first answered, on one retained PNG:
 ///
 /// | command | verbatim output |
@@ -32177,15 +33466,16 @@ const SAVEAS_READBACK_NAMELESS_NAME: &str = "wolf_gnome_saveas_nameless.txt";
 /// The value of `GDK_DEBUG` **both** save smokes export: defence in depth against a
 /// dialog opening on the developer's desktop.
 ///
-/// Measured: whenever the app reaches a session bus, `gdk_display_should_use_portal`
-/// answers true. GTK then exports a window handle through `zxdg_exporter_v2`, which
-/// `cage` does not implement, and proceeds to `show_portal_file_chooser(self, NULL)`
-/// anyway — so the request goes to the HOST's `org.freedesktop.portal.Desktop`, **a
-/// modal file dialog opens on the developer's desktop and this smoke hangs** until it
-/// is answered or the app is killed, holding its cage slot the whole time. Each cage's
-/// only bus is its own from [`cage_command`]'s `dbus-run-session`, so the host's
-/// portal is out of reach today; the export keeps GTK's in-process chooser, the one
-/// this smoke was measured against, whatever that private bus can activate, and
+/// Measured on a bus that could activate the host's portal:
+/// `gdk_display_should_use_portal` answered true, GTK exported a window handle through
+/// `zxdg_exporter_v2`, which `cage` does not implement, and proceeded to
+/// `show_portal_file_chooser(self, NULL)` anyway — so the request went to the HOST's
+/// `org.freedesktop.portal.Desktop`, **a modal file dialog opened on the developer's
+/// desktop and this smoke hung** until it was answered or the app was killed, holding
+/// its cage slot the whole time. Each cage's only bus is its own from
+/// [`cage_command`]'s `dbus-run-session`, and [`smoke_bus_config`] gives it no service
+/// directory, so no portal is reachable from it; the export keeps GTK's in-process
+/// chooser, the one this smoke was measured against, without resting on that, and
 /// guards against the isolation regressing.
 ///
 /// `no-portals` forces GTK's in-process fallback, which was measured under `cage` to
@@ -32199,8 +33489,8 @@ const SAVEAS_READBACK_NAMELESS_NAME: &str = "wolf_gnome_saveas_nameless.txt";
 /// run Ctrl+Shift+S over a NAMED buffer answers `Write` and no dialog is ever
 /// constructed, so the variable does nothing. But any falsifying edit that makes
 /// `save_press` answer `Choose` for a named buffer — including the obvious one, dropping
-/// the `save_name` check — reaches `AppShell::open_save_dialog`. Wherever a session
-/// bus is reachable, that opens a modal on the developer's DESKTOP and hangs the smoke.
+/// the `save_name` check — reaches `AppShell::open_save_dialog`. Wherever a portal is
+/// reachable, that opens a modal on the developer's DESKTOP and hangs the smoke.
 /// With it, the same wrong answer opens an unanswered in-process dialog inside `cage`
 /// and the smoke fails on its own assertion. It costs nothing green.
 ///
@@ -34222,7 +35512,11 @@ fn packaged_binary(smoke: &str) -> PathBuf {
 /// which reconstruct their own sibling layout in a temp directory. Scrubbing them
 /// costs nothing and keeps [`KEPT_FOR_THE_COMPOSITOR`] at exactly the two names
 /// `cage` itself needs.
-const PACKAGED_SCRUB_ALWAYS: [&str; 8] = [
+///
+/// `WOLF_DEV_SHELL` is here for the same reason: it is the marker `gates.sh` reads
+/// to know it is already inside the dev shell, so it means nothing to `cage` and no
+/// `wolf-gnome` code reads it. An installed artifact never runs inside that shell.
+const PACKAGED_SCRUB_ALWAYS: [&str; 9] = [
     "WOLF_NVIM_BIN",
     "WOLF_RG_BIN",
     "WOLF_NVIM_TREESITTER_DIR",
@@ -34231,6 +35525,7 @@ const PACKAGED_SCRUB_ALWAYS: [&str; 8] = [
     "WOLF_TEST_ORLANDO_DIR",
     "WOLF_TEST_LIGHTHOUSE_DIR",
     "RUST_SRC_PATH",
+    "WOLF_DEV_SHELL",
 ];
 
 /// The two GTK-runtime variables the `shellHook` exports and `wrapGAppsHook4` is
@@ -34300,8 +35595,9 @@ enum GtkRuntimeEnv {
 /// is mandatory rather than tidy: that helper is the single spawn site
 /// [`cage_is_only_spawned_through_the_isolating_helper`] enforces, and it carries
 /// `WOLF_STATE_DIR`, `WOLF_CONFIG_DIR`, `HOME`, `XDG_CACHE_HOME`, `GTK_IM_MODULE`,
-/// `WOLF_READY_FILE` (with the readiness prelude), the private `XDG_RUNTIME_DIR` of
-/// `runtime`, and the removal of `DBUS_SESSION_BUS_ADDRESS` and the host display
+/// `GSETTINGS_BACKEND`, `XDG_CONFIG_DIRS`, `XDG_CONFIG_HOME`, `WOLF_READY_FILE` (with
+/// the readiness prelude), the private `XDG_RUNTIME_DIR` of `runtime`, the generated
+/// session-bus configuration, and the removal of `DBUS_SESSION_BUS_ADDRESS` and the host display
 /// variables. None of those is a devShell export and none of them may be scrubbed:
 /// they are the harness's own isolation. The runtime directory is what keeps the
 /// store binary from handing its launch off to a copy the developer has installed and

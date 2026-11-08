@@ -8,8 +8,9 @@
 //! the running primary instance over D-Bus — opens one fresh window instead.
 //!
 //! Everything a window is lives in [`mod@crate::window`]; everything the process
-//! owns exactly once lives in [`mod@crate::coordinator`], which calls the five
-//! helpers below. The split is `notes/wolf-gnome-decisions.md`'s to justify.
+//! owns exactly once lives in [`mod@crate::coordinator`], which calls four of the
+//! helpers below; [`mod@crate::window`] calls [`init_lua_path`] once per window.
+//! The split is `notes/wolf-gnome-decisions.md`'s to justify.
 //!
 //! The coordinator is held in an `Rc<RefCell<Option<_>>>` captured by the
 //! `connect_activate` closure rather than in a `static`: this crate has no
@@ -42,6 +43,21 @@ const APP_ID: &str = "org.wolf.Wolf";
 /// precedence rule and its reason live in [`config_seam::resolve_font_pt`].
 const FONT_PT_ENV: &str = "WOLF_FONT_PT";
 
+/// The `gtk-xft-dpi` [`pin_unset_xft_dpi`] supplies when the session sets none: 96 dpi, in
+/// GTK's unit of 1/1024 dot per inch.
+///
+/// A session without a desktop portal leaves the setting at -1, and WebKitGTK then lays a
+/// web view created on a host that is not yet allocated — the preview a split creates — out
+/// at a 0×0 viewport for good, so the pane shows its background and no document.
+const FALLBACK_XFT_DPI: i32 = 96 * 1024;
+
+/// The prefix of the one stderr line [`pin_unset_xft_dpi`] writes when it sets the dpi,
+/// followed by the value it set.
+///
+/// Nothing is printed when the session supplied a dpi, so the cage smokes, whose sessions
+/// supply none, can tell from their own log that the pin ran in their process.
+pub const XFT_DPI_PINNED_PREFIX: &str = "wolf-xft-dpi-pinned: ";
+
 /// Runs the windowed `wolf-gnome` application, returning the process exit code.
 #[must_use]
 pub fn run() -> glib::ExitCode {
@@ -70,6 +86,9 @@ pub fn run() -> glib::ExitCode {
 /// `DBUS_SESSION_BUS_ADDRESS`, so a second process there becomes its own primary
 /// instance rather than sending `activate`.
 fn activate(app: &adw::Application, cell: &Rc<RefCell<Option<Coordinator>>>) {
+    // Before any window, so no web view is created while the dpi is still unset.
+    // See notes/crates/wolf-gnome/src/app.rs.md#pinning-gtk-xft-dpi
+    pin_unset_xft_dpi();
     // Cloned out in its own statement so no borrow is live across the window-building calls below.
     let existing = cell.borrow().clone();
     if let Some(coordinator) = existing {
@@ -82,6 +101,23 @@ fn activate(app: &adw::Application, cell: &Rc<RefCell<Option<Coordinator>>>) {
     // resolve `app.quit` from the first window's first frame.
     coordinator.install_app_actions(app);
     coordinator.restore_session(app);
+}
+
+/// Sets GTK's `gtk-xft-dpi` to [`FALLBACK_XFT_DPI`] when it is unset (≤ 0), and leaves a
+/// value the session supplied — through the desktop portal or GSettings — untouched.
+/// Setting it prints one [`XFT_DPI_PINNED_PREFIX`] line.
+///
+/// Only a value present when this runs is kept. Once pinned, the setting outranks any
+/// value the session supplies later, for the life of the process, because GTK ranks an
+/// application-set value above its settings backends.
+fn pin_unset_xft_dpi() {
+    let Some(settings) = gtk::Settings::default() else {
+        return;
+    };
+    if settings.gtk_xft_dpi() <= 0 {
+        settings.set_gtk_xft_dpi(FALLBACK_XFT_DPI);
+        eprintln!("{XFT_DPI_PINNED_PREFIX}{FALLBACK_XFT_DPI}");
+    }
 }
 
 /// The raw `WOLF_FONT_PT` value, parsed but NOT validated — the sole environment

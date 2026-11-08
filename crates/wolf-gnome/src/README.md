@@ -42,22 +42,23 @@ Purpose: the action namespace as data — one row per `gio` action — plus the 
 
 #### `app.rs`
 
-Purpose: the entry point — activate, and delegate. `run` builds the `adw::Application`; the first activate builds the coordinator, installs the `app.` actions on it and restores the saved session, and any later one opens a fresh window.
+Purpose: the entry point; the first activate builds the coordinator, installs its `app.` actions and restores the saved session, and any later one opens a fresh window.
 
 **Public API**
 
 - `run() -> glib::ExitCode` — hands GTK an empty argv, so the process command line is never parsed or rejected.
-- `load_config`, `measure_metrics`, `open_state_store`, `init_lua_path` and `ready_file_path` are `pub(crate)`, called once each by [`coordinator.rs`](#coordinatorrs). `init_lua_path` and `ready_file_path` are glue alone: they do the reads and leave the rules to [`init_lua.rs`](#init_luars) and [`ready_seam.rs`](#ready_seamrs).
+- `XFT_DPI_PINNED_PREFIX` — begins the stderr line the dpi pin prints only when it fires; [`smoke_headless.rs`](../tests/README.md#smoke_headlessrs) matches its own copy, so retype a rename there.
+- Five `pub(crate)` helpers: [`coordinator.rs`](#coordinatorrs) calls `load_config`, `measure_metrics`, `open_state_store` and `ready_file_path` once each, and [`window.rs`](#windowrs) calls `init_lua_path` per window. [`init_lua.rs`](#init_luars) and [`ready_seam.rs`](#ready_seamrs) own the rules behind `init_lua_path` and `ready_file_path`.
 
 **Decisions**
 
-- The coordinator is held in an `Rc<RefCell<Option<_>>>` captured by the activate closure rather than in a `static`. This crate has no process-global _application_ state, and keeping it that way is what makes two cores in one process independent. [`frame_metrics.rs`](#frame_metricsrs) is the one carve-out: diagnostic counters no application behaviour reads.
-- Nothing is built before the first activate: the config read and the cell measurement both need a running GTK, and the state store must not be opened in a process that turns out to be a remote instance.
-- An unresolvable preferences or state directory degrades with one message — the built-in config defaults, or a store whose every operation is a no-op — never a per-wake stream.
+- The coordinator lives in an `Rc<RefCell<Option<_>>>` captured by the activate closure, not a `static`: no process-global _application_ state is what keeps two cores in one process independent, [`frame_metrics.rs`](#frame_metricsrs)'s counters aside.
+- Nothing is built before the first activate: the config read and cell measurement need a running GTK, and a remote instance must not open the state store.
+- Every activate first sets an unset `gtk-xft-dpi` to `FALLBACK_XFT_DPI`, leaving a session's value alone: without a desktop portal it is unset, and WebKitGTK draws a preview created on a not-yet-allocated host, as a split creates, blank for good ([measured](../../../notes/crates/wolf-gnome/src/app.rs.md#pinning-gtk-xft-dpi)).
 
 **Gotchas**
 
-- The later-activate path is a desktop's "launch it again, get a window". No smoke exercises it, though a second launch into a live cage would reach it over that cage's private bus.
+- Once fired, the pin outranks the session for the process's life, as any app-set `GtkSettings` value does: a dpi a late-starting portal or `xsettingsd` supplies is ignored.
 
 #### `appearance.rs`
 
