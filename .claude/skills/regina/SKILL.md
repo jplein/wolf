@@ -59,7 +59,7 @@ A task file is a header and a body, in the format regina's `crates/regina-cli/RE
 - **One request, one chain.** Give every task after the first a `depends` on the one before it. The run has one slot, and tasks of one request that touch the same crate must not meet as a merge conflict.
 - **Say what the task implements**, citing the specs by heading instead of restating them, and say what it leaves to a later task.
 - **Say what is to be tested and documented.** A task changes a file under `specs/` only when its body names the spec and says what it must come to say. Never ask for an edit to `CLAUDE.md`: the flow protects it, and the user edits it.
-- **End with what done means**: "`./gates.sh` exits 0 on both workers", and whatever else a command can check.
+- **End with what done means**: "`./gates.sh` exits 0 on both workers", and whatever else a command can check. A task that changes a file under `.claude/` also ends with `nix develop --command prettier --ignore-path /dev/null --check <files>`, naming those files: `.prettierignore` and the markdown checker skip `.claude/`, so the gates check none of them.
 - **Size each task for one sitting of each agent.** A task that changes behavior carries its own tests and documentation; a task that cannot leave the gates green on its own is two halves of one task.
 
 ## Rules

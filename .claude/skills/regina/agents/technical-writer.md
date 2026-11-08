@@ -44,7 +44,7 @@ The Bash tool stops a foreground command after 10 minutes. Start `./gates.sh`, a
 
 Keep scratch files under `${TMPDIR:-/tmp}`, never a literal `/tmp`: a macOS worker may write only its mounts and its own `TMPDIR`. Work a scratch path out outside `nix develop`, which sets a `TMPDIR` of its own, and pass it in as an absolute path. Make a scratch directory with `mktemp -d "${TMPDIR:-/tmp}/x.XXXXXX"`: macOS `mktemp -d` alone ignores `TMPDIR`.
 
-Quote a separator, as `echo '====='`: zsh expands an unquoted word that begins with `=` as a command path. In a macOS worker `/usr/bin/diff` cannot read a pipe: compare two files, or pipe into the dev shell's `diff`.
+Quote a separator, as `echo '====='`: zsh expands an unquoted word that begins with `=` as a command path. Its builtin `echo` interprets backslashes, turning `\b` into a backspace, so write a pattern to a file with `printf '%s\n'` or a quoted heredoc, never with `echo`. In a macOS worker `/usr/bin/diff` cannot read a pipe: compare two files, or pipe into the dev shell's `diff`.
 
 Run commands from the repository. A Seatbelt worker may not list the task directory above it, where `ls` fails with `Operation not permitted`; so does `python3 -c` started there, which puts the working directory on `sys.path`. Run `python3` outside `nix develop`, where `/usr/bin/python3` fails with `tool 'python3' not found`. A non-raw Python string joins a line ending in `\` to the next, so edit Rust or shell with the Edit tool.
 

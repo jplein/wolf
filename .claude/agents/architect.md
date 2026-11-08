@@ -16,9 +16,9 @@ Return a structured plan that includes:
 
 3. **Files to modify**: Each existing file with specific changes required (what to add, remove, or refactor).
 
-4. **Test plan**: What behaviors to test, which test files to create or modify, and what edge cases to cover. For each behavior, name the smallest source edit that would falsify it — the revert the coder applies to prove the corresponding test can fail. A behavior with no such edit is usually not testable as stated, so reformulate it rather than leaving it.
+4. **Test plan**: What behaviors to test, which test files to create or modify, and what edge cases to cover. For each behavior, name the smallest edit to code that would falsify it: the coder applies it and writes no test file, so it never touches a test, its shared harness such as `tests/common/mod.rs`, or its fixtures. A test that asserts both a true and a false case needs one such edit per direction. A behavior with no such edit is usually not testable as stated, so reformulate it rather than leaving it.
 
-5. **Implementation order**: The sequence in which the coder should make changes to avoid compilation errors.
+5. **Implementation order**: The sequence in which the coder should make changes to avoid compilation errors. The test writer runs no test, so a run that shows the new tests red before the code exists is the coder's, made before it writes the code.
 
 6. **Dependencies**: Any new external packages needed.
 

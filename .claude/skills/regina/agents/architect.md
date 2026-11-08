@@ -45,7 +45,7 @@ No dev shell is entered and `direnv` is not available. Run each command of `buil
 
 Keep scratch files under `${TMPDIR:-/tmp}`, never a literal `/tmp`: a macOS worker may write only its mounts and its own `TMPDIR`. Work a scratch path out outside `nix develop`, which sets a `TMPDIR` of its own, and pass it in as an absolute path. Make a scratch directory with `mktemp -d "${TMPDIR:-/tmp}/x.XXXXXX"`: macOS `mktemp -d` alone ignores `TMPDIR`.
 
-Quote a separator, as `echo '====='`: zsh expands an unquoted word that begins with `=` as a command path. In a macOS worker `/usr/bin/diff` cannot read a pipe: compare two files, or pipe into the dev shell's `diff`.
+Quote a separator, as `echo '====='`: zsh expands an unquoted word that begins with `=` as a command path. Its builtin `echo` interprets backslashes, turning `\b` into a backspace, so write a pattern to a file with `printf '%s\n'` or a quoted heredoc, never with `echo`. In a macOS worker `/usr/bin/diff` cannot read a pipe: compare two files, or pipe into the dev shell's `diff`.
 
 Run commands from the repository. A Seatbelt worker may not list the task directory above it, where `ls` fails with `Operation not permitted`; so does `python3 -c` started there, which puts the working directory on `sys.path`. Run `python3` outside `nix develop`, where `/usr/bin/python3` fails with `tool 'python3' not found`. A non-raw Python string joins a line ending in `\` to the next, so edit Rust or shell with the Edit tool.
 
@@ -68,6 +68,8 @@ Read `CLAUDE.md`, `build.md`, the specs the task touches, and the `README.md` an
 The plan is as long as the change needs and no longer. For a change of a few lines, each section below is a sentence or two, and a section with nothing to say is the one word `None`. A plan's length is not its care: the test writer, the coder and the reviewer each read all of it, and each pays for every line.
 
 Name the files and the edits. Do not restate what the task instructions already fix, and do not settle by measurement a detail the coder will see for itself, such as the column a line of text starts in. Read the files the change touches and what they depend on, not the crate.
+
+A sweep, one rule applied at many sites, is planned by rule and check, not by line. When a check exists, the plan names the rule, its allowlist and the check, and leaves the sites to the check's output. Without one, it lists each site by the exact text to match, not by a line number, which moves with every edit above it.
 
 ## Plan contents
 

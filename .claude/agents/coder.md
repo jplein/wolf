@@ -29,7 +29,7 @@ Report which platform you tested on. If the plan touches code you cannot exercis
 
 A test that has only ever been seen passing is not yet known to be a test. Green proves the suite ran; it does not prove the assertion is attached to the behavior it names. Tests that pass while proving nothing are the most expensive defect this pipeline produces, because they read correctly in review and are indistinguishable from coverage until something breaks unnoticed.
 
-So for every test the test-writer adds or materially changes, demonstrate that it fails when the feature is absent:
+So for every new or materially changed test, a `#[cfg(test)]` function in `src/` included, demonstrate that it fails when the feature is absent:
 
 1. Run it and observe it pass.
 2. Disable the feature under test with the smallest edit that does so — a returned `None`, a skipped call, a no-op arm. Never by touching the test, its fixtures, or its assertions.
