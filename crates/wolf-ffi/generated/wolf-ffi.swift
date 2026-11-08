@@ -300,8 +300,8 @@ extension WolfCoreHandleRef {
         __swift_bridge__$WolfCoreHandle$create_tabpage(ptr, { let rustString = cwd.intoRustString(); rustString.isOwned = false; return rustString.ptr }())
     }
 
-    public func rebuild_layout<GenericIntoRustString: IntoRustString>(_ spec_json: GenericIntoRustString) -> RustVec<Int64> {
-        RustVec(ptr: __swift_bridge__$WolfCoreHandle$rebuild_layout(ptr, { let rustString = spec_json.intoRustString(); rustString.isOwned = false; return rustString.ptr }()))
+    public func rebuild_layout(_ layout: FfiPaneNodeRef) -> RustVec<Int64> {
+        RustVec(ptr: __swift_bridge__$WolfCoreHandle$rebuild_layout(ptr, layout.ptr))
     }
 
     public func current_tabpage() -> Int64 {

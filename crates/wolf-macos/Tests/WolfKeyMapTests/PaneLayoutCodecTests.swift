@@ -15,8 +15,6 @@ final class PaneLayoutCodecTests: XCTestCase {
   /// mistaken reuse would show).
   private let firstLeaf: PaneId = 10
 
-  private let eps: Double = 1e-9
-
   /// Counts every node (leaves + splits) in a `SavedPaneNode` tree.
   private func nodeCount(_ node: SavedPaneNode) -> Int {
     switch node {
@@ -200,85 +198,5 @@ final class PaneLayoutCodecTests: XCTestCase {
     let (tree, leafIds) = PaneTree.rebuilt(from: saved, firstLeafId: firstLeaf)
     XCTAssertEqual(leafIds, [firstLeaf], "a single-leaf saved tree yields one leaf id")
     XCTAssertEqual(tree.leaves(), [firstLeaf], "the rebuilt single-leaf tree has just that leaf")
-  }
-
-  // MARK: - specJSON: stable, parseable object graph
-
-  func testSpecJsonLeaf() {
-    let json = PaneLayoutCodec.specJSON(.leaf(path: "/tmp/only.md", preview: false))
-    let obj = parseObject(json)
-    XCTAssertEqual(obj["leaf"] as? Bool, true, "a leaf spec carries leaf: true")
-    XCTAssertEqual(obj["path"] as? String, "/tmp/only.md", "a leaf spec carries its path")
-    XCTAssertEqual(obj["preview"] as? Bool, false, "a non-preview leaf spec carries preview: false")
-  }
-
-  func testSpecJsonVerticalSplit() {
-    let saved: SavedPaneNode = .split(orientation: .vertical, weights: [0.5, 0.5],
-      children: [.leaf(path: "/tmp/a.md", preview: false), .leaf(path: "/tmp/b.md", preview: false)])
-    let obj = parseObject(PaneLayoutCodec.specJSON(saved))
-
-    XCTAssertEqual(obj["orientation"] as? String, "v", ".vertical serializes as \"v\"")
-    let weights = obj["weights"] as? [Double] ?? []
-    XCTAssertEqual(weights.count, 2, "two weights")
-    XCTAssertTrue(approxEqual(weights, [0.5, 0.5]), "weights are 0.5 / 0.5")
-
-    let children = obj["children"] as? [[String: Any]] ?? []
-    XCTAssertEqual(children.count, 2, "two children")
-    XCTAssertEqual(children[0]["leaf"] as? Bool, true, "child 0 is a leaf")
-    XCTAssertEqual(children[0]["path"] as? String, "/tmp/a.md", "child 0 path")
-    XCTAssertEqual(children[1]["path"] as? String, "/tmp/b.md", "child 1 path")
-  }
-
-  func testSpecJsonHorizontalOrientation() {
-    let saved: SavedPaneNode = .split(orientation: .horizontal, weights: [0.5, 0.5],
-      children: [.leaf(path: "/a", preview: false), .leaf(path: "/b", preview: false)])
-    let obj = parseObject(PaneLayoutCodec.specJSON(saved))
-    XCTAssertEqual(obj["orientation"] as? String, "h", ".horizontal serializes as \"h\"")
-  }
-
-  // MARK: - specJSON: the preview flag reaches the nvim rebuild spec (ROUND 2)
-
-  func testSpecJsonCarriesPreviewFlag() {
-    // Each leaf serializes `"preview"` beside the "v"/"h" and leaf/path keys, so Lua's
-    // `wolf_rebuild_layout` recreates a preview of the source instead of editing a blank buffer.
-    let obj = parseObject(PaneLayoutCodec.specJSON(withPreview()))
-
-    XCTAssertEqual(obj["orientation"] as? String, "v", ".vertical serializes as \"v\"")
-    let weights = obj["weights"] as? [Double] ?? []
-    XCTAssertTrue(approxEqual(weights, [0.5, 0.5]), "weights are 0.5 / 0.5")
-
-    let children = obj["children"] as? [[String: Any]] ?? []
-    XCTAssertEqual(children.count, 2, "two children")
-
-    // Child 0: the preview leaf.
-    XCTAssertEqual(children[0]["leaf"] as? Bool, true, "child 0 is a leaf")
-    XCTAssertEqual(children[0]["path"] as? String, "/src.md", "child 0 carries the SOURCE path")
-    XCTAssertEqual(
-      children[0]["preview"] as? Bool, true, "the preview leaf serializes preview: true")
-
-    // Child 1: a normal editor leaf.
-    XCTAssertEqual(children[1]["path"] as? String, "/b.md", "child 1 path")
-    XCTAssertEqual(
-      children[1]["preview"] as? Bool, false, "a normal leaf serializes preview: false")
-  }
-
-  // MARK: - JSON helpers
-
-  /// Parses `json` into a `[String: Any]`, failing the test on any error.
-  private func parseObject(
-    _ json: String, file: StaticString = #filePath, line: UInt = #line
-  ) -> [String: Any] {
-    guard let data = json.data(using: .utf8),
-      let obj = try? JSONSerialization.jsonObject(with: data),
-      let dict = obj as? [String: Any]
-    else {
-      XCTFail("specJSON did not produce a JSON object: \(json)", file: file, line: line)
-      return [:]
-    }
-    return dict
-  }
-
-  private func approxEqual(_ a: [Double], _ b: [Double]) -> Bool {
-    a.count == b.count && zip(a, b).allSatisfy { abs($0 - $1) < eps }
   }
 }

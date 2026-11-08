@@ -396,7 +396,7 @@ void* __swift_bridge__$WolfCoreHandle$windows(void* self);
 uint64_t __swift_bridge__$WolfCoreHandle$grid_for_win(void* self, int64_t win);
 int64_t __swift_bridge__$WolfCoreHandle$active_win(void* self);
 int64_t __swift_bridge__$WolfCoreHandle$create_tabpage(void* self, void* cwd);
-void* __swift_bridge__$WolfCoreHandle$rebuild_layout(void* self, void* spec_json);
+void* __swift_bridge__$WolfCoreHandle$rebuild_layout(void* self, void* layout);
 int64_t __swift_bridge__$WolfCoreHandle$current_tabpage(void* self);
 int64_t __swift_bridge__$WolfCoreHandle$active_tabpage(void* self);
 void* __swift_bridge__$WolfCoreHandle$cwd_for_tabpage(void* self, int64_t tab);

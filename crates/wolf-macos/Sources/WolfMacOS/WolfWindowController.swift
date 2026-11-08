@@ -5,9 +5,9 @@ import Foundation
 import WolfFFI
 import WolfKeyMap
 
-/// The scalar facets of one saved TAB, copied OUT of the bridge's
+/// The facets of one saved TAB, copied OUT of the bridge's
 /// `RustVec<FfiTabState>` immediately (element refs must not outlive the vec)
-/// into a plain value that survives launch. Each tab is its own captive Neovim.
+/// into a value that survives launch. Each tab is its own captive Neovim.
 struct RestoredTabState {
   let cwd: String
   let sidebarVisible: Bool
@@ -15,6 +15,9 @@ struct RestoredTabState {
   /// non-preview) lone pane; a lone pane showing a file or preview persists a
   /// single leaf.
   let layout: SavedPaneNode?
+  /// The owned bridge node `layout` was projected from, held so the rebuild hands
+  /// Rust the tree it saved; non-nil exactly when `layout` is.
+  let layoutNode: FfiPaneNode?
 }
 
 /// One saved WINDOW GROUP: its geometry (points; AppKit bottom-left) plus its
@@ -200,8 +203,8 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
     }
     // Rebuild any saved layout, including a single leaf, which reopens its file or preview in the
     // tab's sole window.
-    if let saved = restoredTab?.layout {
-      paneContainer.requestLayoutRebuild(saved)
+    if let saved = restoredTab?.layout, let node = restoredTab?.layoutNode {
+      paneContainer.requestLayoutRebuild(saved, node: node)
     }
 
     // The sidebar owns its own file-search session. `start()` waits for the end of this method,

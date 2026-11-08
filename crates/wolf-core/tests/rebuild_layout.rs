@@ -20,7 +20,8 @@
 //! `runtime/nvim/init.lua` `wolf_rebuild_layout` helper. The
 //! `//crates/wolf-core:rebuild_layout` `rust_test` target runs this file.
 //!
-//! The spec JSON shape matches `PaneLayoutCodec.specJSON`:
+//! The spec JSON shape is the one `wolf_core::state::rebuild_layout_spec` renders,
+//! the document's only renderer:
 //!   * leaf:  `{ "leaf": true, "path": "<abs path or empty>", "preview": <bool> }`
 //!   * split: `{ "orientation": "h"|"v", "weights": [...], "children": [...] }`
 //!

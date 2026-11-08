@@ -143,8 +143,10 @@ final class PaneContainerView: NSView {
   private var activeDivider: PaneTree.Divider?
 
   /// A saved pane-split layout awaiting rebuild once this view's first pane binds
-  /// (consumed once in `onRenderWake`, gated like `pendingRefocusRebind`).
-  private var pendingLayoutRebuild: SavedPaneNode?
+  /// (consumed once in `onRenderWake`, gated like `pendingRefocusRebind`): Rust
+  /// renders and realizes `node`, and `saved` is the same tree projected for the
+  /// Swift `PaneTree`.
+  private var pendingLayoutRebuild: (saved: SavedPaneNode, node: FfiPaneNode)?
 
   /// Invoked whenever the pane layout changes in a way that must be persisted (a
   /// divider drag ends, or a restore rebuild completes). Set by the window
@@ -1016,13 +1018,13 @@ final class PaneContainerView: NSView {
 
     // One-shot launch restore: once this tabpage is current and its first pane bound, realize the
     // saved split tree in nvim and rebind the panes. Gated like `pendingRefocusRebind`.
-    if let saved = pendingLayoutRebuild,
+    if let (saved, node) = pendingLayoutRebuild,
       handle.active_tabpage() == controllerTabpageHandle
     {
       ensureInitialPane()
       if panes.isEmpty { return }  // no window grid yet; retry on the next wake.
       pendingLayoutRebuild = nil
-      rebuildLayout(from: saved)
+      rebuildLayout(from: saved, node: node)
       applyTitlebarTheme()
       syncPreviewWebViews()
       refreshOverlays()
@@ -1871,10 +1873,12 @@ final class PaneContainerView: NSView {
     return (paths, previewIds)
   }
 
-  /// Requests that this view's pane layout be rebuilt from `saved` once its first
-  /// pane binds and its tabpage is current (consumed once in `onRenderWake`).
-  func requestLayoutRebuild(_ saved: SavedPaneNode) {
-    pendingLayoutRebuild = saved
+  /// Requests that this view's pane layout be rebuilt once its first pane binds and
+  /// its tabpage is current (consumed once in `onRenderWake`). `node` is the bridge
+  /// node the launch read returned, which Rust renders and realizes; `saved` is the
+  /// same tree projected for the Swift `PaneTree`.
+  func requestLayoutRebuild(_ saved: SavedPaneNode, node: FfiPaneNode) {
+    pendingLayoutRebuild = (saved, node)
   }
 
   /// Replaces the pure layout tree wholesale (launch restore only).
@@ -1882,12 +1886,13 @@ final class PaneContainerView: NSView {
     tree = newTree
   }
 
-  /// Realizes `saved` in nvim (its window topology) and rebuilds the pane bindings
-  /// from the returned DFS-ordered handles, taking the tree's weights from
-  /// `PaneTree.rebuilt`. On a handle-count mismatch it logs and falls back to the
+  /// Has Rust render and realize `node` in nvim (its window topology), then rebuilds
+  /// the pane bindings from the returned DFS-ordered handles, taking the tree's
+  /// weights from `PaneTree.rebuilt(from: saved)`, `saved` being the same tree
+  /// projected for Swift. On a handle-count mismatch it logs and falls back to the
   /// single already-bound pane (leaving `tree` untouched).
-  private func rebuildLayout(from saved: SavedPaneNode) {
-    let handles = Array(handle.rebuild_layout(PaneLayoutCodec.specJSON(saved)))
+  private func rebuildLayout(from saved: SavedPaneNode, node: FfiPaneNode) {
+    let handles = Array(handle.rebuild_layout(node))
     guard handles.count == saved.leafCount else {
       NSLog(
         "wolf: layout rebuild handle count \(handles.count) != leaf count "

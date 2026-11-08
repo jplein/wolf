@@ -170,7 +170,7 @@ The asymmetry between the three is the load-bearing part. A split and a drawer-o
 
 The non-layout intents — open and save dialogs, the window title, modified-versus-clean state — are designed and deferred.
 
-Rebuilding a saved layout runs the other way and is a three-party contract rather than a two-party one. A front-end hands core a `PaneNode`, core renders it to a JSON document, and `init.lua` decodes that document and recreates the windows, returning their handles in the same depth-first order the leaves were emitted in. The document deliberately differs from `PaneNode`'s own serde shape, so the renderer, the Lua decoder, and the independent Swift renderer on macOS must all agree; changing it on one side silently breaks the others.
+Rebuilding a saved layout runs the other way and is a three-party contract rather than a two-party one. A front-end hands core a `PaneNode`, core renders it to a JSON document, and `init.lua` decodes that document and recreates the windows, returning their handles in the same depth-first order the leaves were emitted in. The document deliberately differs from `PaneNode`'s own serde shape, so core's renderer is its only producer — no front-end renders it, macOS included, which hands core the saved node back across the FFI — and the renderer and the Lua decoder must agree; changing it on one side silently breaks the other.
 
 ### Output: commands (core → front-end)
 

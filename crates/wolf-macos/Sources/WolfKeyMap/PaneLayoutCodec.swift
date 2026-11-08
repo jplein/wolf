@@ -1,6 +1,4 @@
-// Pure codec between the `PaneTree` layout and its persisted, FFI and Lua shapes.
-
-import Foundation
+// Pure codec between the `PaneTree` layout and its persisted and FFI shapes.
 
 /// A persistable, serializable mirror of a pane-split tree keyed by per-leaf
 /// buffer path (the FFI + `state.json` shape). Either a leaf bound to a buffer
@@ -108,20 +106,6 @@ public enum PaneLayoutCodec {
     return stack[0].node
   }
 
-  /// Renders `node` to the JSON string `runtime/nvim/init.lua`'s
-  /// `wolf_rebuild_layout` decodes: a leaf is
-  /// `{ "leaf": true, "path": …, "preview": true|false }`; a split is
-  /// `{ "orientation": "v"|"h", "weights": [...], "children": [...] }`.
-  public static func specJSON(_ node: SavedPaneNode) -> String {
-    let object = jsonObject(node)
-    guard let data = try? JSONSerialization.data(withJSONObject: object),
-      let string = String(data: data, encoding: .utf8)
-    else {
-      return "{}"
-    }
-    return string
-  }
-
   // MARK: - Helpers
 
   /// Emits `node`'s post-order tokens into `out`, tagging it with `weight`.
@@ -137,21 +121,6 @@ public enum PaneLayoutCodec {
       }
       out.append(
         .split(orientation: orientation, childCount: children.count, weight: weight))
-    }
-  }
-
-  /// Builds the `JSONSerialization` object graph for `specJSON`.
-  private static func jsonObject(_ node: SavedPaneNode) -> Any {
-    switch node {
-    case .leaf(let path, let preview):
-      return ["leaf": true, "path": path, "preview": preview]
-    case .split(let orientation, let weights, let children):
-      let tag = orientation == .vertical ? "v" : "h"
-      return [
-        "orientation": tag,
-        "weights": weights,
-        "children": children.map(jsonObject),
-      ]
     }
   }
 }

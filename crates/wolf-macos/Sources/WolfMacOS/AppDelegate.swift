@@ -132,7 +132,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
       windows: Self.savedWindows(from: restoredGroups),
       home: homeDir(),
       isDirectory: isDirectoryCheck())
-    let byGroup = materializeProjects(plan)
+    let byGroup = materializeProjects(plan, groups: restoredGroups)
     assembleWindows(byGroup, groups: restoredGroups)
 
     // Every restored core failed (edge case): quit rather than run windowless.
@@ -149,9 +149,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
   /// to the group's `(positionInGroup, controller)` members, so Phase B can drop
   /// each view back into the right OS window/tab-group. A project whose core
   /// fails to start (or whose every tab fails) is dropped; a failed tab is
-  /// skipped.
+  /// skipped. `groups` is the read `plan` came from, which supplies each tab's
+  /// bridge layout node by the same `(groupIndex, positionInGroup)` lookup.
   private func materializeProjects(
-    _ plan: RestoreSeam.RestorePlan
+    _ plan: RestoreSeam.RestorePlan, groups: [RestoredWindowGroup]
   ) -> [Int: [(pos: Int, controller: WolfWindowController)]] {
     var byGroup: [Int: [(pos: Int, controller: WolfWindowController)]] = [:]
 
@@ -178,7 +179,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
         let (_, hasFolder) = Self.dir(launchDecision(restoredCwd: tab.cwd))
         let restoredTab = RestoredTabState(
-          cwd: tab.cwd, sidebarVisible: tab.sidebarVisible, layout: tab.layout)
+          cwd: tab.cwd, sidebarVisible: tab.sidebarVisible, layout: tab.layout,
+          layoutNode: groups[safe: tab.groupIndex]?.tabs[safe: tab.positionInGroup]?.layoutNode)
         let controller = makeController(
           tabId: mintTabId(), project: project, tabpageHandle: tabpage,
           restoredTab: restoredTab, anchorFrame: nil, hasFolder: hasFolder)
@@ -805,10 +807,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
       var tabs: [RestoredTabState] = []
       for j in 0..<tabsVec.len() {
         guard let t = tabsVec.get(index: UInt(j)) else { continue }
-        let layout: SavedPaneNode? = t.has_layout() ? Self.savedPaneNode(from: t.layout()) : nil
+        let node: FfiPaneNode? = t.has_layout() ? t.layout() : nil
         tabs.append(
           RestoredTabState(
-            cwd: t.cwd().toString(), sidebarVisible: t.sidebar_visible(), layout: layout))
+            cwd: t.cwd().toString(), sidebarVisible: t.sidebar_visible(),
+            layout: node.map(Self.savedPaneNode(from:)), layoutNode: node))
       }
       if tabs.isEmpty { continue }
       result.append(

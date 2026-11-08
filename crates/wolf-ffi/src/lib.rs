@@ -417,9 +417,9 @@ mod ffi {
         // Creates a tabpage (a new view of this project), `:tcd`'d to `cwd` unless empty, and returns
         // its handle. Blocks briefly; 0 when the core is gone (the caller drops the view).
         fn create_tabpage(&self, cwd: String) -> i64;
-        // Realizes a saved split tree (`PaneLayoutCodec.specJSON`) in the current tabpage's lone
-        // window; returns window handles in leaf order. Sizes come from the front-end's weights.
-        fn rebuild_layout(&self, spec_json: String) -> Vec<i64>;
+        // Renders a saved tree (as `FfiTabState::layout` returns it) via `rebuild_layout_spec` and
+        // realizes it in the current tabpage's lone window; returns window handles in leaf order.
+        fn rebuild_layout(&self, layout: &FfiPaneNode) -> Vec<i64>;
         // The current tabpage's stable HANDLE via a blocking RPC (the first-view
         // bind). 0 when the core is gone.
         fn current_tabpage(&self) -> i64;
@@ -1962,22 +1962,23 @@ impl WolfCoreHandle {
         core.create_tabpage(path.as_deref())
     }
 
-    /// Realizes the saved pane-split tree described by `spec_json` (from
-    /// `PaneLayoutCodec.specJSON`) in the current tabpage's single starting window,
-    /// returning the resulting window handles in DFS/leaf order.
+    /// Realizes the saved pane-split tree `layout` (the node [`FfiTabState::layout`]
+    /// returned) in the current tabpage's single starting window, returning the
+    /// resulting window handles in DFS/leaf order.
     ///
-    /// Delegates to [`WolfCore::rebuild_layout`], which drives the
+    /// Rust renders the spec with [`wolf_core::state::rebuild_layout_spec`], so no
+    /// front-end renders it. Delegates to [`WolfCore::rebuild_layout`], which drives the
     /// `wolf_rebuild_layout` Lua helper (`:split`/`:vsplit` + `:edit`). Blocks
     /// briefly on the captive nvim; an empty `Vec` on error / when the core is
     /// gone. nvim produces only the window COUNT + TOPOLOGY + per-window BUFFER;
     /// sizes come from the front-end's weights.
     #[must_use]
-    pub fn rebuild_layout(&self, spec_json: String) -> Vec<i64> {
+    pub fn rebuild_layout(&self, layout: &FfiPaneNode) -> Vec<i64> {
         let borrow = self.core.borrow();
         let Some(core) = borrow.as_ref() else {
             return Vec::new();
         };
-        core.rebuild_layout(&spec_json)
+        core.rebuild_layout(&wolf_core::state::rebuild_layout_spec(&layout.node))
     }
 
     /// The current tabpage's stable HANDLE via a blocking RPC (the first-view
