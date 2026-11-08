@@ -3702,9 +3702,9 @@ exit 0
 /// ## Why `/proc` + `sed` and not `pgrep` / `ps`
 ///
 /// Neither is in the flake devShell, and adding `procps` would mean a `flake.nix`
-/// change, which carries a `notes/macos-followups.md` obligation (the Darwin path must
-/// stay evaluable) for no benefit whatsoever. `sed` is already in every scenario's
-/// toolchain, and `/proc/<pid>/status` carries both fields the scan needs.
+/// change that must keep the Darwin shell evaluable, for no benefit whatsoever.
+/// `sed` is already in every scenario's toolchain, and `/proc/<pid>/status` carries
+/// both fields the scan needs.
 ///
 /// ## The rule these functions exist to enforce: KILL THE NVIM, NEVER THE APP
 ///
@@ -3973,8 +3973,7 @@ assert_one_restart_attempt() {
         echo "  against the refusing WOLF_NVIM_BIN wrapper; MAX_AUTO_RESTART_ATTEMPTS is 1, so" >&2
         echo "  exactly one is the contract." >&2
         echo "  MORE than one means the cap is gone and a permanently failing respawn now" >&2
-        echo "  retries forever -- the exact hazard the cap exists to prevent, and the defect" >&2
-        echo "  notes/macos-followups.md records the Swift side still has." >&2
+        echo "  retries forever -- the exact hazard the cap exists to prevent." >&2
         echo "  ZERO means no automatic restart was attempted at all, so the crash overlay" >&2
         echo "  below is showing CRASHED_RETRYING_MESSAGE for a restart that never ran." >&2
         exit 20
