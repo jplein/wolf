@@ -1,0 +1,10 @@
+wolf-core
+fsevent-sys
+globset
+libc
+notify
+rusqlite
+serde
+serde_json
+tokio
+@@rules_rust++crate+crates__libc-0.2.186//:libc

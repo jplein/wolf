@@ -118,6 +118,18 @@ print_failure() {
   echo "--- end $name ---"
 }
 
+# Crate names only, across every target, so macOS-only deps count. See notes/gates.sh.md#linux-gates
+core_deps_cargo() {
+  cargo tree -e no-dev -p wolf-core --target all --prefix none --format '{p}' \
+    | cut -d ' ' -f 1 | sort -u | ./tools/lint/wolf_core_deps_check.sh
+}
+
+# kind(rule, …) keeps source paths such as libc's glibc/ out. See notes/gates.sh.md#macos-gates
+core_deps_bazel() {
+  bazel query --color=no --curses=no 'kind(rule, deps(//crates/wolf-core:wolf_core))' \
+    | ./tools/lint/wolf_core_deps_check.sh
+}
+
 # Fast to slow, so a formatting slip fails in seconds. See notes/gates.sh.md#gate-order
 if [ "$platform" = linux ]; then
   # See notes/gates.sh.md#linux-gates
@@ -126,10 +138,12 @@ if [ "$platform" = linux ]; then
   run prettier prettier --check "**/*.md"
   run markdown ./tools/lint/markdown_all.sh
   run markdown-check-test ./tools/lint/markdown_check_test.sh
+  run wolf-core-deps-check-test ./tools/lint/wolf_core_deps_check_test.sh
   run clippy-doc-lint cargo clippy --manifest-path tools/doc-lint/Cargo.toml --all-targets \
     -- -D warnings
   run test-doc-lint cargo test --manifest-path tools/doc-lint/Cargo.toml
   run doc-lint cargo run --quiet --manifest-path tools/doc-lint/Cargo.toml -- --root .
+  run wolf-core-deps core_deps_cargo
   run clippy cargo clippy --workspace --all-targets -- -D warnings
   run build cargo build --workspace --all-targets
   run test cargo test --workspace --no-fail-fast
@@ -139,6 +153,7 @@ else
   test_flags=(--test_output=errors --test_summary=terse)
   run prettier prettier --check "**/*.md"
   run doc-lint bazel run --color=no --curses=no //tools/doc-lint:doc_lint -- --root "$PWD"
+  run wolf-core-deps core_deps_bazel
   run lint bazel test "${bazel_flags[@]}" "${test_flags[@]}" //tools/lint:check
   run build bazel build "${bazel_flags[@]}" //...
   run test bazel test "${bazel_flags[@]}" "${test_flags[@]}" //...

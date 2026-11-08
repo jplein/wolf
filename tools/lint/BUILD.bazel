@@ -160,6 +160,17 @@ sh_test(
     data = ["markdown_check.sh"] + glob(["testdata/**"]),
 )
 
+# ---- wolf-core dependencies ----
+
+sh_test(
+    name = "wolf_core_deps_check_test",
+    srcs = ["wolf_core_deps_check_test.sh"],
+    data = [
+        "wolf_core_deps_check.sh",
+        "wolf_core_forbidden_deps.txt",
+    ] + glob(["testdata/wolf_core_deps/*"]),
+)
+
 # ---- comments ----
 
 # Every package's comment-checked sources; bazel-coverage guards this list too.
@@ -216,6 +227,7 @@ test_suite(
         ":swift_format",
         ":swift_format_check_test",
         ":swift_format_fix_test",
+        ":wolf_core_deps_check_test",
     ],
 )
 

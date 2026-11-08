@@ -1,0 +1,16 @@
+# One case-insensitive substring per line, so a stem covers its variants (gtk covers gtk4).
+# Read by wolf_core_deps_check.sh, which gates.sh's wolf-core-deps gate runs on both platforms.
+
+gtk
+gdk
+glib
+cairo
+pango
+adwaita
+objc
+cocoa
+core-graphics
+winit
+wgpu
+skia
+softbuffer
