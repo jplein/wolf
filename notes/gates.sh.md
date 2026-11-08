@@ -1,6 +1,6 @@
 # `gates.sh`
 
-Last verified at commit `d84329823c43b042bcaac6a5f67c496f4bdef51b`.
+Last verified at commit `60aee22234bff75be126d5fd4f4f73897028cd09`.
 
 ## Dev shell entry
 
@@ -47,6 +47,8 @@ doc-lint is a Cargo workspace of its own, so `--workspace` never reaches it and 
 `wolf-core-deps` queries `kind(rule, deps(//crates/wolf-core:wolf_core))`, and the `kind(rule, …)` wrapper is load-bearing. A bare `deps()` also returns every source file in the graph, and `libc` vendors its bindings under `src/new/glibc/…`, whose paths match the `glib` pattern, so the gate would fail on every run. crate_universe resolves only the darwin triples in `MODULE.bazel`, so this gate covers the macOS graph alone, and Linux's `--target all` covers every target.
 
 `--keep_going` reports every failing target rather than the first. `--color=no`, `--curses=no` and a 30-second progress rate keep the log plain and bounded, and `--test_output=errors` copies each failing test's log into the gate log.
+
+`--test_summary=short` lists every test target with its status, `(cached)` included, so `target/gates/test.log` shows that a given target ran and that the `external` swift-format targets executed. `terse` lists only the targets that did not pass, which left an agent reading `bazel-testlogs` to learn whether a target ran at all. The cost is that a failed `test` gate's 150-line tail is mostly that list, while the excerpt still carries the failure.
 
 ## Failure output
 
