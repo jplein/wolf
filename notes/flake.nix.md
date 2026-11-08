@@ -4,7 +4,9 @@ Last verified at commit `cc60afb1257ee0c5474105e363d0d452ba050afb`.
 
 ## Single nixpkgs input
 
-One input supplies the toolchain, the GTK stack and the runtime assets the package ships (Neovim, ripgrep and nvim-treesitter), so `nix flake update` moves all of them together. The single input is deliberate: do not split the runtime assets into an input of their own. An update that moves Neovim owes the full verification gate in `build.md`, because [`runtime/nvim/README.md`](../runtime/nvim/README.md), [the init.lua notes](runtime/nvim/init.lua.md) and the test comments state measured claims per Neovim version.
+nixpkgs supplies the GTK stack and the runtime assets the package ships (Neovim, ripgrep and nvim-treesitter), so `nix flake update nixpkgs` moves them together. The Rust toolchain is rust-overlay's `stable.latest`, at the revision the `rust-overlay` lock node pins, so `nix flake update rust-overlay` moves only the Linux rustc, cargo, clippy and rustfmt, for the devShell and the package alike, and brings new clippy lints with them.
+
+The single input is deliberate: do not split the runtime assets into an input of their own. An update that moves Neovim owes the full verification gate in `build.md`, because [`runtime/nvim/README.md`](../runtime/nvim/README.md), [the init.lua notes](runtime/nvim/init.lua.md) and the test comments state measured claims per Neovim version.
 
 macOS pins its own Neovim and nvim-treesitter under `bazel/`, matched by hand to this lock, so an update that moves either also owes the matching `bazel/nvim` or `bazel/nvim-treesitter` bump and a run of `//bazel/treesitter-parsers:queries_compile_test` on the macOS host.
 
