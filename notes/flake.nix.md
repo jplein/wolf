@@ -20,7 +20,7 @@ The `optionalAttrs` on the `packages` output is the one deliberate guard, and it
 
 ## Darwin shell
 
-`darwinShell` is `mkShellNoCC` because the C toolchain on macOS is Xcode, which apple_support drives through `DEVELOPER_DIR`; the shell needs only bazelisk, the `bazel` shim, git and starpls. Measured under `mkShell`: `cc`, `ld` and `strip` resolve to the Nix clang-wrapper 21, `xcrun` to xcbuild's, which prints `unhandled Platform key` warnings on `xcrun --find swift-format`, and `SDKROOT` to a Nix apple-sdk 14.4. Under `mkShellNoCC` all four tools resolve under `/usr/bin` and `SDKROOT` is unset.
+`darwinShell` is `mkShellNoCC` because the C toolchain on macOS is Xcode, which apple_support drives through `DEVELOPER_DIR`; the shell needs only bazelisk, the `bazel` shim, git, starpls and prettier. Measured under `mkShell`: `cc`, `ld` and `strip` resolve to the Nix clang-wrapper 21, `xcrun` to xcbuild's, which prints `unhandled Platform key` warnings on `xcrun --find swift-format`, and `SDKROOT` to a Nix apple-sdk 14.4. Under `mkShellNoCC` all four tools resolve under `/usr/bin` and `SDKROOT` is unset.
 
 `.bazelrc`'s `--incompatible_strict_action_env` already keeps the shell's `PATH` out of build actions, so what the shell protects is the client environment: `bazel run` targets run there and call `xcrun`.
 

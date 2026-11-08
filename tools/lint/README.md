@@ -48,9 +48,9 @@ Internal targets: `:clippy_core`, `:clippy_ffi` and `:clippy_doc_lint` (`rust_cl
 
 ## Adding a package
 
-Bazel forbids cross-package globbing, so every package collects its own files. A package with a `BUILD.bazel` loads `comment_srcs` from `//tools/lint:defs.bzl`, calls `comment_srcs()`, declares a `markdown_srcs` filegroup visible to this package, and is listed in both `:all_comment_srcs` and `:all_markdown_srcs`. doc-lint's `bazel-coverage` rule fails the Linux gate when a package is missing from either list.
+Bazel forbids cross-package globbing, so every package collects its own files. A package with a `BUILD.bazel` loads `comment_srcs` from `//tools/lint:defs.bzl`, calls `comment_srcs()`, declares a `markdown_srcs` filegroup visible to this package, and is listed in both `:all_comment_srcs` and `:all_markdown_srcs`. doc-lint's `bazel-coverage` rule fails the `doc-lint` gate of [`gates.sh`](../../gates.sh) when a package is missing from either list.
 
-`COMMENT_LINT_PATTERNS` in `defs.bzl` must name the same files as doc-lint's [language table](../doc-lint/README.md#languages). A file type missing from it is checked on Linux and silently skipped here.
+`COMMENT_LINT_PATTERNS` in `defs.bzl` must name the same files as doc-lint's [language table](../doc-lint/README.md#languages). A file type missing from it is silently skipped by `:comments`, so `bazel test //...` passes and only the `--root` run of `gates.sh`'s `doc-lint` gate catches it.
 
 ## What `:markdown` checks
 

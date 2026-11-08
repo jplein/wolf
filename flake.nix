@@ -256,9 +256,15 @@
             bazelShim
             pkgs.git
             pkgs.starpls
+
+            # The gate's Markdown check, the same pinned prettier as linuxShell's.
+            pkgs.prettier
           ];
 
+          # gates.sh reads WOLF_DEV_SHELL to skip entering the shell again.
+          # See notes/gates.sh.md#dev-shell-entry
           shellHook = ''
+            export WOLF_DEV_SHELL=1
             export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
           '';
         };
@@ -306,7 +312,7 @@
             iaWriterMono
 
             # Gate-required: smoke_headless.rs's cage smokes run under plain `cargo test`. `dbus-run-session`
-            # gives each cage a private session bus, without which the preview's WebView draws blank.
+            # keeps each cage on a private bus, off the developer's; one smoke also runs `dbus-send`.
             pkgs.cage
             pkgs.dbus
             pkgs.wtype
@@ -319,7 +325,11 @@
             pkgs.prettier
           ];
 
+          # gates.sh reads WOLF_DEV_SHELL to skip entering the shell again.
+          # See notes/gates.sh.md#dev-shell-entry
           shellHook = ''
+            export WOLF_DEV_SHELL=1
+
             # WOLF_NVIM_BIN is how wolf-core and its tests locate the hermetic,
             # pinned nvim. Do not rely on PATH.
             export WOLF_NVIM_BIN="${pkgs.lib.getExe wolfNeovim}"

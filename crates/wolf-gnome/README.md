@@ -38,6 +38,6 @@ Running needs a Wayland or X11 session, or the headless compositor the smoke tes
 
 ## Testing
 
-`cargo test -p wolf-gnome` runs the whole suite, including the end-to-end smokes that drive the real window under a headless compositor — which is why it is slow. The authoritative full check is the Linux verification gate in [`build.md`](../../build.md).
+`cargo test -p wolf-gnome` runs the whole suite, including the end-to-end smokes that drive the real window under a headless compositor — which is why it is slow. The authoritative full check is `./gates.sh`, described under [the verification gate](../../build.md#the-verification-gate).
 
 What each target covers, what the smokes prove, and what is deliberately left unproven are in [`tests/README.md`](tests/README.md).

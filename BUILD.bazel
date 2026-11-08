@@ -33,6 +33,7 @@ comment_srcs(include = [
     "MODULE.bazel",
     "*.toml",
     "*.nix",
+    "*.sh",
     ".bazelrc",
     ".bazelignore",
     ".gitignore",
