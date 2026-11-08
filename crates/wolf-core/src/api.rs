@@ -228,7 +228,8 @@ pub struct WolfCore {
     /// which routes each `wolf_fs_changed` notification into it;
     /// [`start_file_search`](WolfCore::start_file_search) registers every new
     /// session so the debounced rescan keeps long-lived sessions (the tree
-    /// sidebar) tracking writes/renames/deletes made through the captive nvim.
+    /// sidebar) tracking files created, renamed or deleted through the captive
+    /// nvim or, through the registry's filesystem watcher, by any other process.
     search_registry: Arc<files::SearchRegistry>,
 }
 
@@ -293,9 +294,9 @@ impl WolfCore {
             .map(|d| MruStore::open(&d))
             .unwrap_or_else(MruStore::disabled);
 
-        // The redraw handler routes `wolf_fs_changed` into it. Built on this runtime's handle so
-        // rescan walks share the traversal's blocking pool.
-        let search_registry = Arc::new(files::SearchRegistry::new(runtime.handle().clone()));
+        // Routed `wolf_fs_changed` by the redraw handler; owns the `wolf-fs-watch` thread. Built on
+        // this runtime's handle so rescan walks share the traversal's blocking pool.
+        let search_registry = files::SearchRegistry::new(runtime.handle().clone());
 
         let handler = RedrawHandler::new(
             snapshot.clone_handle(),
@@ -1373,6 +1374,11 @@ impl WolfCore {
     /// `~/.cache`) outright. The three caps are tunable via `WOLF_SEARCH_MAX_ENTRIES`,
     /// `WOLF_SEARCH_BUDGET_MS`, and `WOLF_SEARCH_MAX_DEPTH` (defaults 50_000 / 5s /
     /// 64), read SYNCHRONOUSLY here on the calling thread — once per search.
+    ///
+    /// The session's root is watched for external changes while the session
+    /// lives, unless `WOLF_FS_WATCH=0`, which is read on the calling thread
+    /// beside the caps. Off, a file created, renamed or deleted outside nvim
+    /// reaches the session only through an nvim trigger.
     #[must_use]
     pub fn start_file_search(&self, wake: WakeFn) -> FileSearch {
         let root = self.resolve_search_root();
@@ -1382,9 +1388,10 @@ impl WolfCore {
         let state = Arc::new(RwLock::new(FileSearchState::seeded(seed)));
         let cancel = Arc::new(AtomicBool::new(false));
 
-        // Read the caps on the calling thread so tests setting the env vars see them, then prune
-        // pathological home subtrees such as `~/Library` from a fallback $HOME walk.
+        // Read the caps and `WOLF_FS_WATCH` on the calling thread so tests setting them see them,
+        // then prune pathological home subtrees such as `~/Library` from a fallback $HOME walk.
         let mut bounds = files::SearchBounds::from_env();
+        let watch = files::fs_watch_from_env();
         if let Some(home) = canonical_home() {
             bounds.skip_dirs.insert(home.join("Library"));
             bounds.skip_dirs.insert(home.join(".Trash"));
@@ -1400,6 +1407,7 @@ impl WolfCore {
             bounds.clone(),
             wake.clone(),
             self.mru.clone(),
+            watch,
         ));
 
         files::spawn_traversal(

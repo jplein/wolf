@@ -18,6 +18,9 @@ pulldown-latex = "0.7"
 parking_lot = { version = "0.12", features = ["arc_lock"] }
 rusqlite = { version = "0.31", features = ["bundled"] }
 ignore = "0.4"
+# Exact: 8.2.1 swaps fsevent-sys for objc2-core-* crates, which the GUI-free guard rejects.
+# See notes/wolf-core-decisions.md#the-one-hard-rule
+notify = "=8.2.0"
 thiserror = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

@@ -15,14 +15,28 @@
 //! FORCE events (`ShellCmdPost` / `FocusGained` / `TermLeave`) that catch
 //! filesystem changes no buffer event names — shell commands, external tools,
 //! the terminal drawer.
+//!
+//! The file has two halves. Cases (1) to (8) cover those nvim triggers and run
+//! with core's filesystem watcher OFF (`WOLF_FS_WATCH=0`): with it on, the
+//! watcher would surface the same change and a deleted trigger would fail no
+//! test. Cases (a) to (f) cover the watcher: they touch the tree only through
+//! `std::fs`, with no Ex command and no `set_ui_focus`, so nothing but the
+//! watcher can surface the change.
+//!
+//! `WOLF_FS_WATCH` is process-global and read once per search, on the calling
+//! thread of `start_file_search`. Every case therefore starts its session
+//! through [`start_search`], which sets or clears the variable under
+//! [`WATCH_ENV_LOCK`]; a direct `start_file_search` could read a transient `0`
+//! a parallel case set.
 
 mod common;
 
 use std::collections::HashSet;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use wolf_core::files::FileSearchState;
@@ -50,7 +64,101 @@ const POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// test slow.
 const DEBOUNCE_SETTLE: Duration = Duration::from_millis(1500);
 
+/// Rounds of churn under the ignored tree in
+/// `ignored_churn_leaves_version_unchanged`.
+const CHURN_ROUNDS: usize = 60;
+
+/// Serializes the `{set or clear WOLF_FS_WATCH; start_file_search; clear}`
+/// critical section in [`start_search`]. Mirrors `file_search_bounds.rs`'s
+/// `BOUNDS_ENV_LOCK`.
+static WATCH_ENV_LOCK: Mutex<()> = Mutex::new(());
+
 // --- Helpers ---------------------------------------------------------------
+
+/// Acquires [`WATCH_ENV_LOCK`], recovering from poisoning so a panic in one
+/// case does not cascade into every later one. Mirrors
+/// `file_search_bounds.rs::lock_env`.
+fn lock_env() -> MutexGuard<'static, ()> {
+    WATCH_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Starts a file search on `core` with the filesystem watcher on (`watched`)
+/// or off (`WOLF_FS_WATCH=0`). The only way any case in this binary starts a
+/// session; see the module doc for why.
+fn start_search(core: &WolfCore, wake: WakeFn, watched: bool) -> FileSearch {
+    let _env = lock_env();
+    if watched {
+        std::env::remove_var("WOLF_FS_WATCH");
+    } else {
+        std::env::set_var("WOLF_FS_WATCH", "0");
+    }
+    let search = core.start_file_search(wake);
+    std::env::remove_var("WOLF_FS_WATCH");
+    search
+}
+
+/// Sleeps [`DEBOUNCE_SETTLE`]. Every watcher case calls it right after
+/// `poll_until_complete`, so the catch-up rescan a new watch forwards and any
+/// startup trigger have drained before the case touches the tree. Without it,
+/// a late catch-up walk could surface the change with no live watch at all,
+/// and the falsifier "skip the watch call" would pass (a) and (b).
+fn settle() {
+    std::thread::sleep(DEBOUNCE_SETTLE);
+}
+
+/// Seeds the tree shared by the two negative watcher cases, (c) and (d):
+/// `build/` and `*.log` ignored by `.gitignore`, a listed `keep.md`, and
+/// `primed.md` hidden only by `.git/info/exclude` (which [`prime`] empties).
+fn seed_primed_tree(cwd: &Path) {
+    write_file(&cwd.join(".gitignore"), "build/\n*.log\n");
+    write_file(&cwd.join("build/seed.o"), "o");
+    write_file(&cwd.join("keep.md"), "k");
+    write_file(&cwd.join("primed.md"), "p");
+    write_file(&cwd.join(".git/info/exclude"), "primed.md\n");
+}
+
+/// Proves the watcher is live before a negative assertion relies on its
+/// silence: writes `sentinel.md` with `std::fs`, polls until a watcher-driven
+/// rescan lists it, then [`settle`]s. Without this, a watcher that never
+/// started would pass (c) and (d) vacuously.
+fn prove_watcher_live(cwd: &Path, search: &FileSearch, wakes: &Receiver<()>) {
+    write_file(&cwd.join("sentinel.md"), "s");
+    poll_search_until(
+        search,
+        wakes,
+        "sentinel.md to appear through the watcher (is the watch live?)",
+        |view| view.entries.iter().any(|e| e.display == "sentinel.md"),
+    );
+    settle();
+}
+
+/// Makes the next re-walk's answer differ from the live listing, then returns
+/// the session's `version`. A no-op rescan bumps nothing (the equality skip in
+/// the swap), so without this a wrongly-forwarded event would go unseen.
+///
+/// The difference is made by emptying `.git/info/exclude`, so `primed.md`
+/// becomes listable. The watcher drops that edit by a rule other than the ones
+/// (c) and (d) test (the `.git` component), and a rescan that does run, for
+/// any reason, lists `primed.md` and bumps `version`.
+fn prime(cwd: &Path, search: &FileSearch) -> u64 {
+    let before = search.read().version;
+    fs::write(cwd.join(".git/info/exclude"), "").expect("failed to empty .git/info/exclude");
+    settle();
+    let view = search.read();
+    assert_eq!(
+        view.version, before,
+        "precondition: an edit under `.git` must reach no rescan (the watcher drops `.git` \
+         events); a bump means `.git` paths are forwarded (was {before}, now {})",
+        view.version
+    );
+    assert!(
+        !view.entries.iter().any(|e| e.display == "primed.md"),
+        "precondition: primed.md must stay unlisted until a re-walk runs; listed means a \
+         rescan ran on the `.git/info/exclude` edit; got {:?}",
+        displays(&view.entries)
+    );
+    view.version
+}
 
 /// Creates a fresh temp dir to serve as a core `cwd` and returns both the guard
 /// (kept alive by the caller) and the CANONICAL path to it. Mirrors
@@ -68,6 +176,18 @@ fn write_file(path: &Path, contents: &str) {
         fs::create_dir_all(parent).expect("failed to create parent dir");
     }
     fs::write(path, contents).expect("failed to write file");
+}
+
+/// Appends `contents` to `path` in place (creating it if absent), so the
+/// watcher sees a modify of the same inode rather than a replace.
+fn append_to(path: &Path, contents: &str) {
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .expect("failed to open file for append");
+    file.write_all(contents.as_bytes())
+        .expect("failed to append to file");
 }
 
 /// Builds a `WakeFn` that signals on a channel, paired with the receiver the
@@ -267,7 +387,8 @@ fn refocus_ui(core: &WolfCore) {
 
 /// (1) A NEW file created through nvim (`:e fresh.md`, insert, `:w`) appears in
 /// a live, already-`complete` session: the rescan swaps the list, bumps
-/// `version`, keeps `complete = true`, and does not duplicate any entry.
+/// `version`, keeps `complete = true`, and does not duplicate any entry. The
+/// watcher is off, so only the `:w`'s `BufWritePost` can surface the file.
 #[test]
 fn new_file_appears_after_write() {
     let _ = common::require_nvim_bin();
@@ -276,7 +397,7 @@ fn new_file_appears_after_write() {
 
     let (core, waiter) = start_core_in(&cwd);
     let (wake, wakes) = search_wake();
-    let search = core.start_file_search(wake);
+    let search = start_search(&core, wake, false);
     let baseline = poll_until_complete(&search, &wakes);
     assert!(
         displays(&baseline).contains("existing.md"),
@@ -329,7 +450,8 @@ fn new_file_appears_after_write() {
 /// session. The file is opened first via `InputEvent::Open` — the input pump's
 /// MRU-recording path — so it verifiably lands in the MRU; the rescan re-seeds
 /// from `MruStore::recent(&root)`, which prunes rows for deleted files, so the
-/// MRU seed must NOT resurrect the entry.
+/// MRU seed must NOT resurrect the entry. The watcher is off, so only the
+/// `BufDelete` can surface the delete.
 #[test]
 fn deleted_file_disappears() {
     let _ = common::require_nvim_bin();
@@ -339,7 +461,7 @@ fn deleted_file_disappears() {
 
     let (core, waiter) = start_core_in(&cwd);
     let (wake, wakes) = search_wake();
-    let search = core.start_file_search(wake);
+    let search = start_search(&core, wake, false);
     let baseline = poll_until_complete(&search, &wakes);
     assert!(
         displays(&baseline).contains("doomed.md"),
@@ -384,7 +506,8 @@ fn deleted_file_disappears() {
 /// copy under the new name and re-binds the buffer; it is not an `mv`). The
 /// rescan must reflect the filesystem truthfully: both files exist, both are
 /// listed. Pinning this semantic here keeps a later "fix" from wrongly dropping
-/// the old name.
+/// the old name. The watcher is off, so only nvim's buffer events can surface
+/// the new name.
 #[test]
 fn saveas_lists_new_name_and_keeps_old() {
     let _ = common::require_nvim_bin();
@@ -393,7 +516,7 @@ fn saveas_lists_new_name_and_keeps_old() {
 
     let (core, waiter) = start_core_in(&cwd);
     let (wake, wakes) = search_wake();
-    let search = core.start_file_search(wake);
+    let search = start_search(&core, wake, false);
     let baseline = poll_until_complete(&search, &wakes);
     assert!(
         displays(&baseline).contains("orig.md"),
@@ -435,7 +558,8 @@ fn saveas_lists_new_name_and_keeps_old() {
 
 /// (4) `:w` of an EXISTING, already-listed file triggers no rescan: the
 /// `BufWritePost` path is conditional (rescan only when the written path is not
-/// already in the session's `seen` set), so the version must not move.
+/// already in the session's `seen` set), so the version must not move. The
+/// watcher is off, so the `:w` is the only event the registry sees.
 ///
 /// NEGATIVE-ASSERTION TIMING: we cannot wait for an event that must not happen,
 /// so we sleep [`DEBOUNCE_SETTLE`] (~7x the 200 ms rescan debounce) and then
@@ -450,7 +574,7 @@ fn write_of_existing_file_does_not_bump_version() {
 
     let (core, waiter) = start_core_in(&cwd);
     let (wake, wakes) = search_wake();
-    let search = core.start_file_search(wake);
+    let search = start_search(&core, wake, false);
     let baseline = poll_until_complete(&search, &wakes);
     assert!(
         displays(&baseline).contains("stable.md"),
@@ -488,6 +612,7 @@ fn write_of_existing_file_does_not_bump_version() {
 /// exactly once. Deliberately NO assertion on how many rescans ran (the
 /// debounce may coalesce them into one walk or run several — either is
 /// correct, and counting would be flaky); only the converged result matters.
+/// The watcher is off, so only the `:w`s' `BufWritePost`s can surface them.
 #[test]
 fn burst_of_new_files_all_appear_deduped() {
     let _ = common::require_nvim_bin();
@@ -496,7 +621,7 @@ fn burst_of_new_files_all_appear_deduped() {
 
     let (core, waiter) = start_core_in(&cwd);
     let (wake, wakes) = search_wake();
-    let search = core.start_file_search(wake);
+    let search = start_search(&core, wake, false);
     poll_until_complete(&search, &wakes);
 
     // Three back-to-back `:e` + `:w` pairs inside one another's debounce windows; writing a new
@@ -547,7 +672,8 @@ fn burst_of_new_files_all_appear_deduped() {
 /// (not a bare `:!rm`) because `silent` suppresses the hit-enter prompt that
 /// would wedge the key-driven harness — `ShellCmdPost` still fires for a
 /// `:silent !…`. This exercises both halves at once: the trigger, and the
-/// shell genuinely performing the deletion on disk.
+/// shell genuinely performing the deletion on disk. The watcher is off, so
+/// only `ShellCmdPost` can surface the delete.
 #[test]
 fn shell_cmd_post_rescans() {
     let _ = common::require_nvim_bin();
@@ -557,7 +683,7 @@ fn shell_cmd_post_rescans() {
 
     let (core, waiter) = start_core_in(&cwd);
     let (wake, wakes) = search_wake();
-    let search = core.start_file_search(wake);
+    let search = start_search(&core, wake, false);
     let baseline = poll_until_complete(&search, &wakes);
     assert!(
         displays(&baseline).contains("doomed.md"),
@@ -602,7 +728,8 @@ fn shell_cmd_post_rescans() {
 /// a pathless FORCE trigger, catching changes made in an external terminal /
 /// Finder while the app was in the background. The trigger is driven through
 /// `set_ui_focus`, the same production path the front-end uses on OS
-/// activation (and the same edge `WolfAutoRead`'s `:checktime` rides).
+/// activation (and the same edge `WolfAutoRead`'s `:checktime` rides). The
+/// watcher is off, so only `FocusGained` can surface the delete.
 #[test]
 fn focus_gained_rescans() {
     let _ = common::require_nvim_bin();
@@ -612,7 +739,7 @@ fn focus_gained_rescans() {
 
     let (core, _waiter) = start_core_in(&cwd);
     let (wake, wakes) = search_wake();
-    let search = core.start_file_search(wake);
+    let search = start_search(&core, wake, false);
     let baseline = poll_until_complete(&search, &wakes);
     assert!(
         displays(&baseline).contains("ext.md"),
@@ -652,7 +779,8 @@ fn focus_gained_rescans() {
 /// close ⇒ rescan), not the event name: the drawer auto-`startinsert`s on
 /// WinEnter (the `WolfTerminalInsert` augroup), so the open toggle puts nvim in
 /// Terminal-mode and the close toggle exits it (t → n), firing `TermLeave`, a
-/// pathless FORCE trigger.
+/// pathless FORCE trigger. The watcher is off, so only `TermLeave` can surface
+/// the delete.
 ///
 /// Contingency (spec): if `TermLeave` proves not to fire on the drawer close,
 /// the fix is a `WinLeave` autocmd guarded on `buftype == "terminal"` in
@@ -666,7 +794,7 @@ fn term_leave_rescans() {
 
     let (core, _waiter) = start_core_in(&cwd);
     let (wake, wakes) = search_wake();
-    let search = core.start_file_search(wake);
+    let search = start_search(&core, wake, false);
     let baseline = poll_until_complete(&search, &wakes);
     assert!(
         displays(&baseline).contains("gone.md"),
@@ -704,6 +832,336 @@ fn term_leave_rescans() {
     assert!(
         search.read().complete,
         "the session must stay `complete` across a TermLeave-triggered rescan"
+    );
+
+    drop(search);
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+// --- Watcher cases (WOLF_FS_WATCH unset) -------------------------------------
+
+/// (a) A file created with `std::fs` alone, with no Neovim event and no focus
+/// edge, appears in a live session: the watcher's create event reaches the
+/// registry, the path is new to `seen`, and the rescan lists it.
+#[test]
+fn external_create_appears() {
+    let _ = common::require_nvim_bin();
+    let (_dir, cwd) = temp_cwd();
+    write_file(&cwd.join("existing.md"), "e");
+
+    let (core, _waiter) = start_core_in(&cwd);
+    let (wake, wakes) = search_wake();
+    let search = start_search(&core, wake, true);
+    let baseline = poll_until_complete(&search, &wakes);
+    assert!(
+        displays(&baseline).contains("existing.md") && !displays(&baseline).contains("fresh.md"),
+        "sanity: existing.md listed and fresh.md absent before the create; got {:?}",
+        displays(&baseline)
+    );
+    settle();
+    let v0 = search.read().version;
+
+    write_file(&cwd.join("fresh.md"), "f");
+
+    let entries = poll_search_until(
+        &search,
+        &wakes,
+        "fresh.md to appear after an external create (a timeout means no watch is live \
+         on the root, or its create event never reached the registry)",
+        |view| view.entries.iter().any(|e| e.display == "fresh.md"),
+    );
+
+    {
+        let view = search.read();
+        assert!(
+            view.version > v0,
+            "the watcher-driven swap must bump version past the pre-create value \
+             (was {v0}, now {})",
+            view.version
+        );
+        assert!(
+            view.complete,
+            "the session must stay `complete` across a watcher-driven rescan"
+        );
+    }
+    assert_eq!(
+        count_of(&entries, "fresh.md"),
+        1,
+        "the created file must be listed exactly once; got {:?}",
+        displays(&entries)
+    );
+    assert_eq!(
+        count_of(&entries, "existing.md"),
+        1,
+        "a watcher-driven rescan must not duplicate an already-listed file; got {:?}",
+        displays(&entries)
+    );
+
+    drop(search);
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// (b) A file deleted with `std::fs` alone disappears from a live session. The
+/// path is in `seen`, so only a remove forwarded as `force` rescans: a remove
+/// forwarded as a plain change is skipped by the membership check.
+#[test]
+fn external_delete_disappears() {
+    let _ = common::require_nvim_bin();
+    let (_dir, cwd) = temp_cwd();
+    write_file(&cwd.join("doomed.md"), "d");
+    write_file(&cwd.join("keeper.md"), "k");
+
+    let (core, _waiter) = start_core_in(&cwd);
+    let (wake, wakes) = search_wake();
+    let search = start_search(&core, wake, true);
+    let baseline = poll_until_complete(&search, &wakes);
+    assert!(
+        displays(&baseline).contains("doomed.md"),
+        "sanity: doomed.md should be listed before the external delete; got {:?}",
+        displays(&baseline)
+    );
+    settle();
+
+    fs::remove_file(cwd.join("doomed.md")).expect("failed to remove doomed.md");
+
+    let entries = poll_search_until(
+        &search,
+        &wakes,
+        "doomed.md to disappear after an external delete (a timeout means no watch is \
+         live, or the remove was not forwarded as force)",
+        |view| !view.entries.iter().any(|e| e.display == "doomed.md"),
+    );
+
+    assert!(
+        displays(&entries).contains("keeper.md"),
+        "the surviving file must still be listed; got {:?}",
+        displays(&entries)
+    );
+    assert!(
+        search.read().complete,
+        "the session must stay `complete` across a watcher-driven rescan"
+    );
+
+    drop(search);
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// (c) Many writes, creates and removes inside a gitignored directory, and
+/// writes to a gitignored root-level file, leave `version` unchanged over a
+/// quiet window: the watcher filters each event through the walk's rules and
+/// drops every one of these.
+///
+/// The tree is primed first (see [`prime`]), so any rescan that does run lists
+/// `primed.md` and bumps `version`; and the watcher is proven live first (see
+/// [`prove_watcher_live`]), so its silence here is not a dead watch.
+///
+/// NEGATIVE-ASSERTION TIMING: as in (4), the case sleeps [`DEBOUNCE_SETTLE`]
+/// after the churn and then samples.
+#[test]
+fn ignored_churn_leaves_version_unchanged() {
+    let _ = common::require_nvim_bin();
+    let (_dir, cwd) = temp_cwd();
+    seed_primed_tree(&cwd);
+
+    let (core, _waiter) = start_core_in(&cwd);
+    let (wake, wakes) = search_wake();
+    let search = start_search(&core, wake, true);
+    let baseline = poll_until_complete(&search, &wakes);
+    let listed = displays(&baseline);
+    assert!(
+        listed.contains("keep.md") && !listed.contains("build/seed.o"),
+        "sanity: keep.md listed and the gitignored build/seed.o not; got {listed:?}"
+    );
+    assert!(
+        !listed.contains("primed.md"),
+        "premise: the walk honours `.git/info/exclude` with no git repo (require_git off); \
+         primed.md listed means it does not, and priming cannot work; got {listed:?}"
+    );
+    settle();
+    prove_watcher_live(&cwd, &search, &wakes);
+    let v0 = prime(&cwd, &search);
+
+    let build = cwd.join("build");
+    let sub = build.join("sub");
+    fs::create_dir(&sub).expect("failed to create build/sub");
+    for i in 0..CHURN_ROUNDS {
+        let obj = build.join(format!("churn{i}.o"));
+        fs::write(&obj, "a").expect("failed to create a churn object");
+        append_to(&obj, "b");
+        fs::write(sub.join(format!("deep{i}.o")), "d").expect("failed to write build/sub");
+        if i > 0 {
+            fs::remove_file(build.join(format!("churn{}.o", i - 1)))
+                .expect("failed to remove a churn object");
+        }
+        append_to(&cwd.join("x.log"), "line\n");
+    }
+    fs::remove_dir_all(&sub).expect("failed to remove build/sub");
+    std::thread::sleep(DEBOUNCE_SETTLE);
+
+    let view = search.read();
+    assert_eq!(
+        view.version, v0,
+        "churn under the gitignored build/ and on the ignored x.log must reach no rescan; a \
+         bump means an ignored event was forwarded to the registry (was {v0}, now {})",
+        view.version
+    );
+    assert!(
+        !view.entries.iter().any(|e| e.display == "primed.md"),
+        "primed.md listed with version unchanged means a rescan swapped the listing \
+         without bumping version; got {:?}",
+        displays(&view.entries)
+    );
+    assert!(
+        view.entries.iter().any(|e| e.display == "keep.md"),
+        "keep.md must stay listed; got {:?}",
+        displays(&view.entries)
+    );
+    drop(view);
+
+    drop(search);
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// (d) Rewriting and appending to an already-listed file with `std::fs` leaves
+/// `version` unchanged: a modify is not `force`, and the path is in `seen`, so
+/// the registry's membership check skips it. Primed and proven live as (c) is.
+#[test]
+fn external_modify_of_listed_file_leaves_version_unchanged() {
+    let _ = common::require_nvim_bin();
+    let (_dir, cwd) = temp_cwd();
+    seed_primed_tree(&cwd);
+
+    let (core, _waiter) = start_core_in(&cwd);
+    let (wake, wakes) = search_wake();
+    let search = start_search(&core, wake, true);
+    let baseline = poll_until_complete(&search, &wakes);
+    let listed = displays(&baseline);
+    assert!(
+        listed.contains("keep.md") && !listed.contains("primed.md"),
+        "sanity: keep.md listed and primed.md hidden by `.git/info/exclude`; got {listed:?}"
+    );
+    settle();
+    prove_watcher_live(&cwd, &search, &wakes);
+    let v0 = prime(&cwd, &search);
+
+    let keep = cwd.join("keep.md");
+    fs::write(&keep, "changed").expect("failed to rewrite keep.md");
+    append_to(&keep, "more\n");
+    std::thread::sleep(DEBOUNCE_SETTLE);
+
+    let view = search.read();
+    assert_eq!(
+        view.version, v0,
+        "a modify of the listed keep.md must reach no rescan; a bump means a modify was \
+         forwarded as force (was {v0}, now {})",
+        view.version
+    );
+    assert!(
+        !view.entries.iter().any(|e| e.display == "primed.md"),
+        "primed.md listed with version unchanged means a rescan swapped the listing \
+         without bumping version; got {:?}",
+        displays(&view.entries)
+    );
+    drop(view);
+
+    drop(search);
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// (e) An edit to a listed `.gitignore` refilters the listing: appending a rule
+/// for `hide.md` makes it disappear. `.gitignore` is itself in `seen`, so only
+/// the rule that a `.gitignore` edit forces a rescan can surface it.
+#[test]
+fn gitignore_edit_refilters_listing() {
+    let _ = common::require_nvim_bin();
+    let (_dir, cwd) = temp_cwd();
+    write_file(&cwd.join(".gitignore"), "*.tmp\n");
+    write_file(&cwd.join("hide.md"), "h");
+    write_file(&cwd.join("stay.md"), "s");
+
+    let (core, _waiter) = start_core_in(&cwd);
+    let (wake, wakes) = search_wake();
+    let search = start_search(&core, wake, true);
+    let baseline = poll_until_complete(&search, &wakes);
+    let listed = displays(&baseline);
+    assert!(
+        listed.contains(".gitignore") && listed.contains("hide.md") && listed.contains("stay.md"),
+        "sanity: .gitignore (so its edit is not new to `seen`), hide.md and stay.md must all \
+         be listed; got {listed:?}"
+    );
+    settle();
+
+    append_to(&cwd.join(".gitignore"), "hide.md\n");
+
+    let entries = poll_search_until(
+        &search,
+        &wakes,
+        "hide.md to disappear after `.gitignore` gained a rule for it (a timeout means the \
+         `.gitignore` edit was not forwarded as force)",
+        |view| !view.entries.iter().any(|e| e.display == "hide.md"),
+    );
+
+    assert!(
+        displays(&entries).contains("stay.md"),
+        "a file the new rule does not match must stay listed; got {:?}",
+        displays(&entries)
+    );
+    assert!(
+        search.read().complete,
+        "the session must stay `complete` across a watcher-driven rescan"
+    );
+
+    drop(search);
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// (f) A listed file renamed into a gitignored directory disappears. The
+/// source is in `seen` and the destination is dropped by the filter, so only a
+/// rename forwarded as `force` can surface it.
+#[test]
+fn rename_into_ignored_dir_disappears() {
+    let _ = common::require_nvim_bin();
+    let (_dir, cwd) = temp_cwd();
+    write_file(&cwd.join(".gitignore"), "build/\n");
+    write_file(&cwd.join("build/seed.o"), "o");
+    write_file(&cwd.join("moved.md"), "m");
+    write_file(&cwd.join("keeper.md"), "k");
+
+    let (core, _waiter) = start_core_in(&cwd);
+    let (wake, wakes) = search_wake();
+    let search = start_search(&core, wake, true);
+    let baseline = poll_until_complete(&search, &wakes);
+    let listed = displays(&baseline);
+    assert!(
+        listed.contains("moved.md") && !listed.contains("build/seed.o"),
+        "sanity: moved.md listed and the gitignored build/seed.o not; got {listed:?}"
+    );
+    settle();
+
+    fs::rename(cwd.join("moved.md"), cwd.join("build/moved.md"))
+        .expect("failed to rename moved.md into build/");
+
+    let entries = poll_search_until(
+        &search,
+        &wakes,
+        "moved.md to disappear after a rename into the ignored build/ (a timeout means the \
+         rename was not forwarded as force)",
+        |view| {
+            !view
+                .entries
+                .iter()
+                .any(|e| e.display == "moved.md" || e.display == "build/moved.md")
+        },
+    );
+
+    assert!(
+        displays(&entries).contains("keeper.md"),
+        "the untouched file must still be listed; got {:?}",
+        displays(&entries)
+    );
+    assert!(
+        search.read().complete,
+        "the session must stay `complete` across a watcher-driven rescan"
     );
 
     drop(search);

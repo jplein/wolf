@@ -26,14 +26,26 @@
 //! by [`is_listable_file`]: plain files are kept, a symlink is kept only when its
 //! target is a plain file, and directories / broken or directory symlinks are
 //! dropped.
+//!
+//! ## The filesystem watcher
+//!
+//! [`SearchRegistry`] runs a `notify` watcher on its own `wolf-fs-watch`
+//! thread. It watches the root of every live session started with the watcher
+//! on, judges each event's paths by the walk's own rules ([`WatchFilter`]), and
+//! forwards the survivors to [`SearchRegistry::notify_fs_changed`], so a change
+//! made outside Neovim reaches the sessions with no nvim event at all.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
+use ignore::gitignore::{Gitignore, GitignoreBuilder};
+use notify::event::{CreateKind, ModifyKind, RemoveKind};
+use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use parking_lot::{ArcRwLockReadGuard, Mutex, RawRwLock, RwLock};
 
 use crate::mru::MruStore;
@@ -69,6 +81,15 @@ const SEARCH_MAX_DEPTH_DEFAULT: usize = 64;
 /// burst of `wolf_fs_changed` notifications inside this window coalesces into
 /// one rescan decision. Overridable via `WOLF_RESCAN_DEBOUNCE_MS`.
 const RESCAN_DEBOUNCE_DEFAULT: Duration = Duration::from_millis(200);
+
+/// Whether a new search's session is watched by the filesystem watcher:
+/// `WOLF_FS_WATCH` trimmed equal to `0` turns it off, and anything else, unset
+/// included, leaves it on. Read once per search on the calling thread, like
+/// [`SearchBounds::from_env`]. Off, the session sees an external change only
+/// through an nvim `wolf_fs_changed` trigger.
+pub(crate) fn fs_watch_from_env() -> bool {
+    !matches!(std::env::var("WOLF_FS_WATCH"), Ok(v) if v.trim() == "0")
+}
 
 /// Poll cadence while a rescan waits for a session's INITIAL traversal to
 /// finish (a swap must never race [`append_batch`]). The wait is bounded by the
@@ -446,9 +467,10 @@ fn is_listable_file(path: &Path) -> bool {
 /// The pure rescan decision: should a batch of `wolf_fs_changed` paths trigger
 /// a re-walk of the session rooted at `root`?
 ///
-/// `force` (a `BufFilePost` rename or a `BufDelete`) always rescans — the
-/// filesystem may have LOST a listed file, which no membership check can see.
-/// Otherwise (`BufWritePost`) a rescan runs only when some path lies under
+/// `force` (a `BufFilePost` rename, a `BufDelete`, a watcher remove or rename,
+/// or a `.gitignore` edit) always rescans — the filesystem may have LOST a
+/// listed file, which no membership check can see. Otherwise (`BufWritePost`,
+/// or a watcher create or modify) a rescan runs only when some path lies under
 /// `root` AND is absent from the session's `seen` set, so a `:w` of an
 /// already-listed file costs nothing. `paths` and `seen` hold absolute,
 /// already-canonicalized paths; a canonicalization mismatch upstream fails open
@@ -498,11 +520,16 @@ pub(crate) struct SessionEntry {
     /// Set when a rescan is requested; a walk that finishes with this still set
     /// re-runs once, so a request landing mid-walk is never lost.
     rescan_dirty: AtomicBool,
+    /// `true` when the filesystem watcher keeps `root` watched for this session
+    /// ([`fs_watch_from_env`]). Off, the session still receives every event the
+    /// registry is notified of, but its root adds no watch.
+    watch: bool,
 }
 
 impl SessionEntry {
     /// Assembles a registry entry for a just-started session (the traversal
-    /// having been spawned against the same `state`/`cancel` handles).
+    /// having been spawned against the same `state`/`cancel` handles). `watch`
+    /// asks the registry's watcher to watch `root` while the session lives.
     pub(crate) fn new(
         state: Arc<RwLock<FileSearchState>>,
         cancel: Arc<AtomicBool>,
@@ -510,6 +537,7 @@ impl SessionEntry {
         bounds: SearchBounds,
         wake: WakeFn,
         mru: MruStore,
+        watch: bool,
     ) -> Self {
         Self {
             state,
@@ -520,6 +548,7 @@ impl SessionEntry {
             mru,
             rescan_running: AtomicBool::new(false),
             rescan_dirty: AtomicBool::new(false),
+            watch,
         }
     }
 }
@@ -539,7 +568,8 @@ struct Pending {
 ///
 /// Owned by `WolfCore` (one per core) and cloned into the redraw handler, which
 /// calls [`notify_fs_changed`](Self::notify_fs_changed) for every
-/// `wolf_fs_changed` notification. Sessions self-register from
+/// `wolf_fs_changed` notification; the registry's own filesystem watcher calls
+/// it too, for each event the walk could list. Sessions self-register from
 /// `WolfCore::start_file_search`; an entry whose `cancel` flag is set is dead
 /// and pruned on every notify. Notifications are DEBOUNCED registry-wide
 /// (default 200 ms, `WOLF_RESCAN_DEBOUNCE_MS`), then each surviving session
@@ -557,6 +587,8 @@ pub struct SearchRegistry {
     sessions: Mutex<Vec<Arc<SessionEntry>>>,
     /// The burst being coalesced. A brief `Mutex`, never held across IO.
     pending: Mutex<Pending>,
+    /// The watcher thread's inbox; `None` when the thread could not be spawned.
+    watch_tx: Option<Sender<WatchMsg>>,
 }
 
 impl SearchRegistry {
@@ -564,19 +596,45 @@ impl SearchRegistry {
     /// window read from `WOLF_RESCAN_DEBOUNCE_MS` (unset / unparsable / zero
     /// falls back to [`RESCAN_DEBOUNCE_DEFAULT`] — the `> 0` guard mirrors
     /// [`SearchBounds::from_env`]).
-    pub(crate) fn new(handle: tokio::runtime::Handle) -> Self {
+    ///
+    /// Also spawns the `wolf-fs-watch` thread, which watches the root of every
+    /// live session registered with `watch` set (`WOLF_FS_WATCH`, read per
+    /// search) and exits when the registry drops. The thread holds only a
+    /// `Weak`, so it never keeps the registry alive. If it cannot be spawned,
+    /// one warning is logged and the nvim `wolf_fs_changed` triggers remain the
+    /// only source of rescans.
+    pub(crate) fn new(handle: tokio::runtime::Handle) -> Arc<Self> {
         let debounce = std::env::var("WOLF_RESCAN_DEBOUNCE_MS")
             .ok()
             .and_then(|v| v.trim().parse::<u64>().ok())
             .filter(|&ms| ms > 0)
             .map(Duration::from_millis)
             .unwrap_or(RESCAN_DEBOUNCE_DEFAULT);
-        Self {
-            handle,
-            debounce,
-            sessions: Mutex::new(Vec::new()),
-            pending: Mutex::new(Pending::default()),
-        }
+        Arc::new_cyclic(|registry| {
+            let (tx, rx) = mpsc::channel();
+            let thread_registry = registry.clone();
+            let callback_tx = tx.clone();
+            let spawned = std::thread::Builder::new()
+                .name("wolf-fs-watch".into())
+                .spawn(move || watch_thread(thread_registry, rx, callback_tx));
+            let watch_tx = match spawned {
+                Ok(_) => Some(tx),
+                Err(err) => {
+                    tracing::warn!(
+                        %err,
+                        "fs watcher thread failed to spawn; external changes wait for an nvim trigger"
+                    );
+                    None
+                }
+            };
+            Self {
+                handle,
+                debounce,
+                sessions: Mutex::new(Vec::new()),
+                pending: Mutex::new(Pending::default()),
+                watch_tx,
+            }
+        })
     }
 
     /// Registers a live session, pruning dead ones (cancel flag set) under the
@@ -584,10 +642,16 @@ impl SearchRegistry {
     /// must prune here: without fs events, [`Self::notify_fs_changed`] never
     /// fires, and a browse-only session would otherwise accumulate dead
     /// entries — each holding a strong `Arc` to its search state — unboundedly.
+    ///
+    /// After the lock drops it asks the watcher thread to reconcile its watched
+    /// roots with the live entries; the watch itself happens on that thread.
     pub(crate) fn register(&self, entry: SessionEntry) {
-        let mut sessions = self.sessions.lock();
-        sessions.retain(|s| !s.cancel.load(Ordering::SeqCst));
-        sessions.push(Arc::new(entry));
+        {
+            let mut sessions = self.sessions.lock();
+            sessions.retain(|s| !s.cancel.load(Ordering::SeqCst));
+            sessions.push(Arc::new(entry));
+        }
+        self.send_watch(WatchMsg::Reconcile);
     }
 
     /// Folds one `wolf_fs_changed` event into the pending burst and (on the
@@ -595,14 +659,22 @@ impl SearchRegistry {
     ///
     /// `path` is the reported absolute path (canonicalized by the caller where
     /// possible); `force` is `true` for renames/deletes (`BufFilePost` /
-    /// `BufDelete`), which rescan unconditionally. Dead sessions (cancel flag
-    /// set) are pruned here, on every notify, so a closed picker/tree stops
-    /// costing walks after at most one more event. Each mutex guard is bound to
-    /// its own short scope; nothing slow runs under either lock.
+    /// `BufDelete`, or a watcher remove or rename) and for a `.gitignore` edit,
+    /// which rescan unconditionally. Dead sessions (cancel flag set) are pruned
+    /// here, on every notify, so a closed picker/tree stops costing walks after
+    /// at most one more event; a prune that removes an entry asks the watcher
+    /// to reconcile, which unwatches a root no live session needs. Each mutex
+    /// guard is bound to its own short scope; nothing slow runs under either
+    /// lock.
     pub(crate) fn notify_fs_changed(self: &Arc<Self>, path: PathBuf, force: bool) {
-        {
+        let pruned = {
             let mut sessions = self.sessions.lock();
+            let before = sessions.len();
             sessions.retain(|s| !s.cancel.load(Ordering::SeqCst));
+            sessions.len() != before
+        };
+        if pruned {
+            self.send_watch(WatchMsg::Reconcile);
         }
 
         let schedule = {
@@ -656,6 +728,48 @@ impl SearchRegistry {
                 request_rescan(entry, &self.handle);
             }
         }
+    }
+
+    /// The roots the watcher should cover: each live entry with `watch` set,
+    /// grouped by root, with the bounds merged most permissively (largest
+    /// `max_depth`, intersection of `skip_dirs`) so no session on a root misses
+    /// an event its own walk would list. Takes only the `sessions` lock.
+    fn watched_roots(&self) -> HashMap<PathBuf, SearchBounds> {
+        let sessions = self.sessions.lock();
+        let mut roots: HashMap<PathBuf, SearchBounds> = HashMap::new();
+        for entry in sessions.iter() {
+            if !entry.watch || entry.cancel.load(Ordering::SeqCst) {
+                continue;
+            }
+            match roots.get_mut(&entry.root) {
+                Some(merged) => {
+                    merged.max_depth = merged.max_depth.max(entry.bounds.max_depth);
+                    merged
+                        .skip_dirs
+                        .retain(|d| entry.bounds.skip_dirs.contains(d));
+                }
+                None => {
+                    roots.insert(entry.root.clone(), entry.bounds.clone());
+                }
+            }
+        }
+        roots
+    }
+
+    /// Hands `msg` to the watcher thread. A send never blocks; it fails only
+    /// once the thread has exited, which leaves nothing to tell.
+    fn send_watch(&self, msg: WatchMsg) {
+        if let Some(tx) = &self.watch_tx {
+            let _ = tx.send(msg);
+        }
+    }
+}
+
+impl Drop for SearchRegistry {
+    /// Stops the watcher thread. Its channel never disconnects on its own,
+    /// because the thread keeps a sender for the watcher's callback.
+    fn drop(&mut self) {
+        self.send_watch(WatchMsg::Shutdown);
     }
 }
 
@@ -768,6 +882,506 @@ fn rescan_session(entry: &SessionEntry) {
     };
     if swapped {
         (entry.wake)();
+    }
+}
+
+/// A message to the `wolf-fs-watch` thread.
+enum WatchMsg {
+    /// The live entries changed: re-derive the watched roots from them.
+    Reconcile,
+    /// One event from the `notify` watcher, passed on untouched by its callback.
+    Event(notify::Result<notify::Event>),
+    /// The registry dropped: exit.
+    Shutdown,
+}
+
+/// The body of the `wolf-fs-watch` thread, which makes every `watch` and
+/// `unwatch` call. A recursive inotify watch walks the whole tree, so it must
+/// never run on a front-end's thread or under the registry's locks; and
+/// notify's `watch` waits on the backend thread that runs the callback, which
+/// is why the callback only forwards into this thread's channel.
+///
+/// The thread exits on [`WatchMsg::Shutdown`] or once `registry` no longer
+/// upgrades, and upgrades it only for the brief registry calls, never across a
+/// `watch`.
+fn watch_thread(
+    registry: Weak<SearchRegistry>,
+    rx: Receiver<WatchMsg>,
+    callback_tx: Sender<WatchMsg>,
+) {
+    let mut watching = Watching::new(callback_tx);
+    while let Ok(msg) = rx.recv() {
+        let live = match msg {
+            WatchMsg::Shutdown => false,
+            WatchMsg::Reconcile => watching.reconcile(&registry),
+            WatchMsg::Event(res) => watching.on_event(&registry, res),
+        };
+        if !live {
+            break;
+        }
+    }
+}
+
+/// Forwards each `(path, force)` to the registry's
+/// [`notify_fs_changed`](SearchRegistry::notify_fs_changed); `false` once the
+/// registry is gone.
+fn forward(registry: &Weak<SearchRegistry>, changes: Vec<(PathBuf, bool)>) -> bool {
+    if changes.is_empty() {
+        return true;
+    }
+    let Some(live) = registry.upgrade() else {
+        return false;
+    };
+    for (path, force) in changes {
+        live.notify_fs_changed(path, force);
+    }
+    true
+}
+
+/// Everything the watcher thread owns. Only that thread touches it, so none of
+/// it is locked.
+struct Watching {
+    /// The sender the watcher's callback clones, created lazily with the watcher.
+    callback_tx: Sender<WatchMsg>,
+    /// The backend watcher, created on the first root to watch.
+    watcher: Option<RecommendedWatcher>,
+    /// Set when the watcher could not be created; nothing is watched again.
+    disabled: bool,
+    /// The roots holding a live recursive watch.
+    watched: HashSet<PathBuf>,
+    /// Roots whose watch failed; not retried until they leave the desired set.
+    failed: HashSet<PathBuf>,
+    /// One filter per desired root, judging events by that root's walk rules.
+    filters: HashMap<PathBuf, WatchFilter>,
+    /// Set once an event error has been logged, so a failing backend warns once.
+    warned_event_error: bool,
+}
+
+impl Watching {
+    fn new(callback_tx: Sender<WatchMsg>) -> Self {
+        Self {
+            callback_tx,
+            watcher: None,
+            disabled: false,
+            watched: HashSet::new(),
+            failed: HashSet::new(),
+            filters: HashMap::new(),
+            warned_event_error: false,
+        }
+    }
+
+    /// The watcher, created on first use. A creation failure logs one warning
+    /// and disables watching for the registry's lifetime. Symlinks are not
+    /// followed, as the walk follows none, which also keeps inotify's recursive
+    /// walk out of linked trees.
+    fn watcher(&mut self) -> Option<&mut RecommendedWatcher> {
+        if self.watcher.is_none() && !self.disabled {
+            let tx = self.callback_tx.clone();
+            let handler = move |res: notify::Result<notify::Event>| {
+                let _ = tx.send(WatchMsg::Event(res));
+            };
+            let config = notify::Config::default().with_follow_symlinks(false);
+            match RecommendedWatcher::new(handler, config) {
+                Ok(watcher) => self.watcher = Some(watcher),
+                Err(err) => {
+                    tracing::warn!(
+                        %err,
+                        "fs watcher failed to start; external changes wait for an nvim trigger"
+                    );
+                    self.disabled = true;
+                }
+            }
+        }
+        self.watcher.as_mut()
+    }
+
+    /// Re-derives the watched roots from the registry's live entries
+    /// ([`SearchRegistry::watched_roots`]) rather than counting registrations,
+    /// so the entries stay the one source of truth and the order of watch and
+    /// unwatch requests is immaterial. Returns `false` once the registry is
+    /// gone.
+    ///
+    /// Only the outermost desired roots are watched, since a recursive watch
+    /// covers the roots under it. Every stale watch is dropped before any new
+    /// one is made. See notes/crates/wolf-core/src/files.rs.md#unwatch-before-watch
+    ///
+    /// A watch that goes live forwards each desired root under it once, as a
+    /// non-force path: the session's walk may have started before the watch,
+    /// and a change in that gap would otherwise be lost. A root is a directory,
+    /// never in `seen`, so [`needs_rescan`] rescans the sessions rooted there.
+    fn reconcile(&mut self, registry: &Weak<SearchRegistry>) -> bool {
+        let Some(live) = registry.upgrade() else {
+            return false;
+        };
+        let desired = live.watched_roots();
+        drop(live);
+
+        self.filters.retain(|root, _| desired.contains_key(root));
+        for (root, bounds) in &desired {
+            match self.filters.get_mut(root) {
+                Some(filter) => filter.set_bounds(bounds),
+                None => {
+                    self.filters
+                        .insert(root.clone(), WatchFilter::new(root.clone(), bounds));
+                }
+            }
+        }
+        self.failed.retain(|root| desired.contains_key(root));
+
+        let mut catch_up: Vec<(PathBuf, bool)> = Vec::new();
+        while !self.disabled {
+            let effective = effective_roots(desired.keys().filter(|r| !self.failed.contains(*r)));
+            let stale: Vec<PathBuf> = self.watched.difference(&effective).cloned().collect();
+            for root in stale {
+                self.watched.remove(&root);
+                if let Some(watcher) = self.watcher.as_mut() {
+                    let _ = watcher.unwatch(&root);
+                }
+            }
+            let fresh: Vec<PathBuf> = effective.difference(&self.watched).cloned().collect();
+            let mut newly_failed = false;
+            for root in fresh {
+                let result = match self.watcher() {
+                    Some(watcher) => watcher.watch(&root, RecursiveMode::Recursive),
+                    None => break,
+                };
+                match result {
+                    Ok(()) => {
+                        catch_up.extend(
+                            desired
+                                .keys()
+                                .filter(|r| r.starts_with(&root))
+                                .map(|r| (r.clone(), false)),
+                        );
+                        self.watched.insert(root);
+                    }
+                    Err(err) => {
+                        tracing::warn!(
+                            root = %root.display(),
+                            %err,
+                            "fs watch failed; external changes under this root wait for an nvim trigger"
+                        );
+                        // Releases the watches a recursive inotify watch made before failing.
+                        if let Some(watcher) = self.watcher.as_mut() {
+                            let _ = watcher.unwatch(&root);
+                        }
+                        self.failed.insert(root);
+                        newly_failed = true;
+                    }
+                }
+            }
+            // A failed outer root leaves the roots under it uncovered; the next pass watches them.
+            if !newly_failed {
+                break;
+            }
+        }
+        forward(registry, catch_up)
+    }
+
+    /// Judges one watcher event and forwards each path the walk could list.
+    /// Returns `false` once the registry is gone.
+    ///
+    /// An event that asks for a rescan (inotify queue overflow, FSEvents
+    /// dropped events) names no reliable path, so it forwards one desired root
+    /// as `force`.
+    fn on_event(
+        &mut self,
+        registry: &Weak<SearchRegistry>,
+        res: notify::Result<notify::Event>,
+    ) -> bool {
+        let event = match res {
+            Ok(event) => event,
+            Err(err) => {
+                if !self.warned_event_error {
+                    self.warned_event_error = true;
+                    tracing::warn!(%err, "fs watcher reported an error");
+                }
+                return true;
+            }
+        };
+        if event.need_rescan() {
+            let Some(root) = self.filters.keys().next().cloned() else {
+                return true;
+            };
+            return forward(registry, vec![(root, true)]);
+        }
+        let Some(force) = event_force(&event.kind) else {
+            return true;
+        };
+        let kind_dir = kind_is_dir(&event.kind);
+        let changes: Vec<(PathBuf, bool)> = event
+            .paths
+            .into_iter()
+            .filter_map(|path| self.judge(canonical_event_path(path), force, kind_dir))
+            .collect();
+        forward(registry, changes)
+    }
+
+    /// The verdict on one canonical event `path`: `Some((path, force))` when
+    /// some filter admits it, `None` when every walk would skip it.
+    ///
+    /// A `.gitignore` a filter's walk reads changes what that walk lists, so it
+    /// drops the cached rules of its directory and is forwarded as `force`. A
+    /// force event (a remove or rename) also drops every cached rule at or
+    /// under the path, since a moved directory takes its ignore files with it.
+    /// A path that no longer exists takes its kind from the event, and when the
+    /// event cannot say, either answer admits it.
+    fn judge(
+        &mut self,
+        path: PathBuf,
+        force: bool,
+        kind_dir: Option<bool>,
+    ) -> Option<(PathBuf, bool)> {
+        if force {
+            for filter in self.filters.values_mut() {
+                filter.forget_under(&path);
+            }
+        }
+        let is_dir = std::fs::symlink_metadata(&path)
+            .ok()
+            .map(|m| m.is_dir())
+            .or(kind_dir);
+        let is_gitignore = path.file_name() == Some(OsStr::new(".gitignore"));
+        let mut admitted = false;
+        let mut force = force;
+        for filter in self.filters.values_mut() {
+            if is_gitignore && filter.governs(&path) {
+                if let Some(dir) = path.parent() {
+                    filter.forget_dir(dir);
+                }
+                admitted = true;
+                force = true;
+            } else if !admitted {
+                admitted = match is_dir {
+                    Some(dir) => filter.admits(&path, dir),
+                    None => filter.admits(&path, false) || filter.admits(&path, true),
+                };
+            }
+        }
+        admitted.then_some((path, force))
+    }
+}
+
+/// Canonicalizes an event path the way `seen` holds the walk's paths: the
+/// parent through `canonicalize`, the last component kept as is, so a
+/// symlinked file keeps its own name. A path whose parent is gone stays as
+/// reported.
+fn canonical_event_path(path: PathBuf) -> PathBuf {
+    let canonical = match (path.parent(), path.file_name()) {
+        (Some(parent), Some(name)) => std::fs::canonicalize(parent).ok().map(|p| p.join(name)),
+        _ => None,
+    };
+    canonical.unwrap_or(path)
+}
+
+/// Maps an event kind to the `force` flag it is forwarded with, or `None` to
+/// drop it.
+///
+/// A remove or rename may take a listed file away, which no `seen` check can
+/// see, so it forces. A create or modify does not: [`needs_rescan`]'s `seen`
+/// check already rescans for a path the listing lacks. An access is dropped,
+/// because on inotify a walk's own directory and `.gitignore` opens report
+/// `Access(Open)`, and forwarding them would make each rescan trigger the next.
+fn event_force(kind: &EventKind) -> Option<bool> {
+    match kind {
+        EventKind::Access(_) => None,
+        EventKind::Remove(_) | EventKind::Modify(ModifyKind::Name(_)) => Some(true),
+        _ => Some(false),
+    }
+}
+
+/// Whether an event's kind says its path is a directory, for a path that no
+/// longer exists to be asked. `None` when the kind does not say.
+///
+/// A directory create is forwarded like a file create: notify's inotify
+/// backend misses files made in a new directory before its watch lands, and
+/// the directory, absent from `seen`, rescans them in.
+fn kind_is_dir(kind: &EventKind) -> Option<bool> {
+    match kind {
+        EventKind::Create(CreateKind::Folder) | EventKind::Remove(RemoveKind::Folder) => Some(true),
+        EventKind::Create(CreateKind::File) | EventKind::Remove(RemoveKind::File) => Some(false),
+        _ => None,
+    }
+}
+
+/// The roots that need a watch of their own: each root with no strict ancestor
+/// in the set, compared component-wise, so `/ab` is not under `/a`.
+fn effective_roots<'a>(roots: impl IntoIterator<Item = &'a PathBuf>) -> HashSet<PathBuf> {
+    let roots: Vec<&PathBuf> = roots.into_iter().collect();
+    roots
+        .iter()
+        .filter(|root| {
+            !roots
+                .iter()
+                .any(|other| other != *root && root.starts_with(other))
+        })
+        .map(|root| (*root).clone())
+        .collect()
+}
+
+/// The walk's verdict on a single path under one watched root, without a walk.
+///
+/// [`walk_files`] decides top-down as it descends; an event arrives as one
+/// path, so this replays the same decisions for it: the excluded names, the
+/// depth cap, `skip_dirs`, and `ignore`'s gitignore chain for each directory
+/// on the way down and for the path itself. A `cargo build` under an ignored
+/// `target/` would otherwise cause a stream of re-walks, and the filter can
+/// only ever drop an event for a path the walk would not list.
+///
+/// The per-directory rules are read on first use and cached until a remove,
+/// a rename or a `.gitignore` edit invalidates them.
+/// See notes/crates/wolf-core/src/files.rs.md#the-gitignore-chain
+struct WatchFilter {
+    /// The session root the walk starts from.
+    root: PathBuf,
+    /// The most permissive `max_depth` of the sessions on `root`.
+    max_depth: usize,
+    /// The `skip_dirs` every session on `root` shares.
+    skip_dirs: HashSet<PathBuf>,
+    /// The global git excludes, built as the walk builds them.
+    global: Gitignore,
+    /// Each directory's `.gitignore` and `.git/info/exclude` rules.
+    dirs: HashMap<PathBuf, DirRules>,
+}
+
+/// One directory's ignore rules, as the walk reads them.
+struct DirRules {
+    /// The directory's `.gitignore`.
+    gitignore: Gitignore,
+    /// The directory's `.git/info/exclude`, read whether or not `.git` is a
+    /// repository, as `require_git(false)` has the walk do.
+    exclude: Gitignore,
+}
+
+impl DirRules {
+    fn load(dir: &Path) -> Self {
+        Self {
+            gitignore: load_ignore_file(dir, &dir.join(".gitignore")),
+            exclude: load_ignore_file(dir, &dir.join(".git").join("info").join("exclude")),
+        }
+    }
+}
+
+/// A matcher rooted at `dir` for the ignore file at `file`, empty when the file
+/// is absent or fails to build, as `ignore`'s own `create_gitignore` does.
+fn load_ignore_file(dir: &Path, file: &Path) -> Gitignore {
+    let mut builder = GitignoreBuilder::new(dir);
+    if file.exists() {
+        // A bad line is skipped and the rest kept, as in the walk.
+        let _ = builder.add(file);
+    }
+    builder.build().unwrap_or_else(|_| Gitignore::empty())
+}
+
+/// A gitignore match as `Some(true)` for ignore, `Some(false)` for a whitelist
+/// (`!pattern`), and `None` for no match.
+fn verdict<T>(m: ignore::Match<T>) -> Option<bool> {
+    match m {
+        ignore::Match::None => None,
+        ignore::Match::Ignore(_) => Some(true),
+        ignore::Match::Whitelist(_) => Some(false),
+    }
+}
+
+impl WatchFilter {
+    fn new(root: PathBuf, bounds: &SearchBounds) -> Self {
+        // The walk builds its global matcher relative to the process cwd.
+        let global = std::env::current_dir().map_or_else(
+            |_| Gitignore::empty(),
+            |cwd| GitignoreBuilder::new(cwd).build_global().0,
+        );
+        Self {
+            root,
+            max_depth: bounds.max_depth,
+            skip_dirs: bounds.skip_dirs.clone(),
+            global,
+            dirs: HashMap::new(),
+        }
+    }
+
+    fn set_bounds(&mut self, bounds: &SearchBounds) {
+        self.max_depth = bounds.max_depth;
+        self.skip_dirs.clone_from(&bounds.skip_dirs);
+    }
+
+    /// `true` when a walk of `root` would list `path` if it were a file
+    /// (`is_dir` false), or would descend into it (`is_dir` true).
+    fn admits(&mut self, path: &Path, is_dir: bool) -> bool {
+        let Ok(rel) = path.strip_prefix(&self.root) else {
+            return false;
+        };
+        let depth = rel.components().count();
+        if depth == 0 || depth > self.max_depth || has_excluded_component(path) {
+            return false;
+        }
+        // `path` and each of its ancestors strictly below the root, innermost first.
+        let chain: Vec<PathBuf> = path
+            .ancestors()
+            .take(depth)
+            .map(Path::to_path_buf)
+            .collect();
+        if chain.iter().any(|p| self.skip_dirs.contains(p)) {
+            return false;
+        }
+        for dir in chain.iter().skip(1).rev() {
+            if self.ignored(dir, true) {
+                return false;
+            }
+        }
+        !self.ignored(path, is_dir)
+    }
+
+    /// `true` when the walk of `root` reads `gitignore`: its directory is the
+    /// root or one the walk descends into, within `max_depth`.
+    fn governs(&mut self, gitignore: &Path) -> bool {
+        let Some(dir) = gitignore.parent() else {
+            return false;
+        };
+        let Ok(rel) = gitignore.strip_prefix(&self.root) else {
+            return false;
+        };
+        if rel.components().count() > self.max_depth || has_excluded_component(gitignore) {
+            return false;
+        }
+        dir == self.root || self.admits(dir, true)
+    }
+
+    /// `ignore`'s verdict on `path`: the deepest `.gitignore` match, else the
+    /// deepest `.git/info/exclude` match, else the global excludes, over every
+    /// directory from the path's parent up to `/`.
+    fn ignored(&mut self, path: &Path, is_dir: bool) -> bool {
+        let (mut gitignore, mut exclude) = (None, None);
+        let mut dir = path.parent();
+        while let Some(d) = dir {
+            if gitignore.is_some() && exclude.is_some() {
+                break;
+            }
+            let rules = self
+                .dirs
+                .entry(d.to_path_buf())
+                .or_insert_with(|| DirRules::load(d));
+            if gitignore.is_none() {
+                gitignore = verdict(rules.gitignore.matched(path, is_dir));
+            }
+            if exclude.is_none() {
+                exclude = verdict(rules.exclude.matched(path, is_dir));
+            }
+            dir = d.parent();
+        }
+        gitignore
+            .or(exclude)
+            .or_else(|| verdict(self.global.matched(path, is_dir)))
+            == Some(true)
+    }
+
+    /// Drops the cached rules of every directory at or under `path`.
+    fn forget_under(&mut self, path: &Path) {
+        self.dirs.retain(|dir, _| !dir.starts_with(path));
+    }
+
+    /// Drops the cached rules of `dir`.
+    fn forget_dir(&mut self, dir: &Path) {
+        self.dirs.remove(dir);
     }
 }
 
@@ -899,5 +1513,138 @@ mod append_batch_seen_tests {
             guard.seen.contains(&path),
             "a streamed entry's path must be a member of `seen` after append_batch"
         );
+    }
+}
+
+// Unit tests for the watcher's event judgement: [`WatchFilter`] against the walk, the force
+// mapping, and the outermost-root rule.
+#[cfg(test)]
+mod watch_tests {
+    use super::*;
+    use notify::event::{AccessKind, AccessMode, DataChange, MetadataKind, RenameMode};
+
+    /// Writes `contents` to `root/rel`, creating parent directories.
+    fn put(root: &Path, rel: &str, contents: &str) {
+        let path = root.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, contents).unwrap();
+    }
+
+    /// Every file under `dir`, found with `std::fs` alone.
+    fn all_files(dir: &Path, out: &mut Vec<PathBuf>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                all_files(&path, out);
+            } else {
+                out.push(path);
+            }
+        }
+    }
+
+    #[test]
+    fn watch_filter_admits_exactly_what_the_walk_lists() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(tmp.path()).unwrap();
+        put(&root, ".gitignore", "*.log\n!keep.log\nbuild/\n");
+        put(&root, "sub/.gitignore", "local.md\n");
+        put(&root, ".git/info/exclude", "excluded.md\n");
+        for rel in [
+            "a.md",
+            "x.log",
+            "keep.log",
+            "build/out.o",
+            "build/deep/y.md",
+            "sub/b.md",
+            "sub/local.md",
+            "sub/z.log",
+            "excluded.md",
+            "d1/d2/f.md",
+            "d1/d2/d3/deep.md",
+            "skipme/s.md",
+            ".wolf/c.json",
+            ".git/HEAD",
+        ] {
+            put(&root, rel, "x");
+        }
+        let bounds = SearchBounds {
+            max_entries: usize::MAX,
+            budget: Duration::from_secs(60),
+            max_depth: 3,
+            skip_dirs: HashSet::from([root.join("skipme")]),
+        };
+
+        let mut listed = HashSet::new();
+        let mut seen = HashSet::new();
+        walk_files(&root, &bounds, &AtomicBool::new(false), &mut seen, |e| {
+            listed.insert(e.path);
+        });
+        let mut files = Vec::new();
+        all_files(&root, &mut files);
+        assert!(
+            listed.contains(&root.join("d1/d2/f.md")) && !listed.contains(&root.join("sub/z.log")),
+            "the fixture must exercise the depth cap and the ancestor chain: {listed:?}"
+        );
+
+        let mut filter = WatchFilter::new(root.clone(), &bounds);
+        let verdicts: Vec<(PathBuf, bool)> = files
+            .iter()
+            .map(|f| (f.clone(), filter.admits(f, false)))
+            .collect();
+        for (file, admitted) in &verdicts {
+            assert_eq!(
+                *admitted,
+                listed.contains(file),
+                "filter and walk disagree on {}",
+                file.display()
+            );
+        }
+
+        // A removal is judged by name, so deleting a file leaves its verdict as it was.
+        std::fs::remove_file(root.join("a.md")).unwrap();
+        std::fs::remove_file(root.join("x.log")).unwrap();
+        for (file, admitted) in &verdicts {
+            assert_eq!(
+                filter.admits(file, false),
+                *admitted,
+                "verdict on {} changed after the removals",
+                file.display()
+            );
+        }
+    }
+
+    #[test]
+    fn event_force_maps_each_kind() {
+        assert_eq!(event_force(&EventKind::Remove(RemoveKind::Any)), Some(true));
+        assert_eq!(
+            event_force(&EventKind::Modify(ModifyKind::Name(RenameMode::Any))),
+            Some(true)
+        );
+        assert_eq!(
+            event_force(&EventKind::Create(CreateKind::File)),
+            Some(false)
+        );
+        assert_eq!(
+            event_force(&EventKind::Modify(ModifyKind::Data(DataChange::Content))),
+            Some(false)
+        );
+        assert_eq!(
+            event_force(&EventKind::Modify(ModifyKind::Metadata(MetadataKind::Any))),
+            Some(false)
+        );
+        assert_eq!(
+            event_force(&EventKind::Access(AccessKind::Close(AccessMode::Write))),
+            None
+        );
+    }
+
+    #[test]
+    fn effective_roots_keeps_outermost() {
+        let roots: Vec<PathBuf> = ["/a", "/a/b", "/ab", "/c"]
+            .iter()
+            .map(PathBuf::from)
+            .collect();
+        let expected: HashSet<PathBuf> = ["/a", "/ab", "/c"].iter().map(PathBuf::from).collect();
+        assert_eq!(effective_roots(&roots), expected);
     }
 }
