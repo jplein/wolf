@@ -1,0 +1,23 @@
+# Retrospective: keep the two agent definition sets in line, and close three harness gaps
+
+Last verified at commit `0b1cad6b36c795db8798deaa433578c38000d163`.
+
+The task edited Markdown under `.claude/` only: a done criterion for `.claude/` changes in `SKILL.md`, the `/orchestrate` coder and architect brought into line with the regina falsifier rules, a zsh `echo` warning in the six regina definitions, and a sweep rule for the regina architect. It ran once through, with no rejection, non-zero gate, discrepancy or resume, and `reviewer-1` approved with minor notes. The four invocations cost about $5.22, of which `architect-1` was $2.40 over 34 turns.
+
+## What went well
+
+- **Plan 1 quoted every edit as exact text, and named a grep for each.** `coder-1` made all nine file edits in one scripted exact-match replacement, and its checks were the plan's greps, which `reviewer-1` reran. It took 16 turns and $0.54.
+- **The copy-or-link question is now answered in the repository.** `architect-1` spent most of its cost settling how each harness loads a definition: it read its own system prompt, tried the host regina checkout (refused by the sandbox) and fetched the Claude Code subagent and memory pages. The answer now sits in the `agents/` entry of `.claude/skills/regina/README.md`, so a later task that asks the same question can read it there.
+- **Retrospective recommendations were carried out as written.** The task's items were [retro-fixes-6](retro-fixes-6.md) recommendations 1 and 4 and [retro-fixes-5](retro-fixes-5.md) recommendations 2 and 3, and each named its file and sentence. Plan 1 took their wording nearly verbatim.
+
+## What did not go well
+
+- **No gate checks `.claude/`, so the done criterion was proven by hand and by transcript.** `.prettierignore`, `tools/lint/markdown_all.sh` and doc-lint all skip `.claude/`, so no gate run checked any of the ten changed files. `coder-1`'s first prettier check passed an unsplit zsh `$F`, matched nothing, printed "All matched files use Prettier code style!" and exited 2; the coder caught it and reran with an array. `reviewer-1` then spent about eight of its 35 turns grepping the coder's transcript to confirm the rerun.
+- **The word budget cut the pair that most needs syncing.** `technical-writer-1`'s first `agents/` entry was 249 words against the checker's 250, and trimming it to 231 turned "the reviewer's test and convention checks" into "test checks". Convention checks are the reviewer pair that [retro-fixes-4](retro-fixes-4.md) and [round-3-4](round-3-4.md) found edited in step, and review 1 note 1 flagged the loss. The entry has 19 words of headroom left.
+- **The sync note is reachable from one side only.** As review 1 note 2 says, only `.claude/skills/regina/README.md` says the paired rules are kept in line by hand, and nothing under `.claude/agents/` or in `.claude/commands/orchestrate.md` points back to it. An edit that starts from the `/orchestrate` side gets no reminder that a regina copy exists, which is how the drift [retro-fixes-6](retro-fixes-6.md) recommendation 4 recorded came about.
+- **The full build and test ran four times for a change none of it reads.** `coder-1` ran `./gates.sh` on macOS, as its definition asks, and through `regina on linux`, which its definition asks only when a change reaches code built on Linux. Most of its 309 seconds went to waiting on them, and the implementation gate then ran both again. Only the extra Linux run was the agent's choice; nothing in the repository invited it, so there is no recommendation for it.
+
+## Recommendations
+
+1. **Gate formatting under `.claude/`.** This task wrote [retro-fixes-6](retro-fixes-6.md) recommendation 1's hand check into `SKILL.md`, and the prettier half of [round-3-4](round-3-4.md) recommendation 4, gating it, came up again. Add a step to both sides of `gates.sh` that runs `prettier --ignore-path /dev/null --check` on the Markdown under `.claude/skills/regina/`, `.claude/agents/` and `.claude/commands/` only, which keeps out the orchestration scratch `.prettierignore` exists for. It would have replaced `coder-1`'s hand check, its exit-2 slip and `reviewer-1`'s transcript search.
+2. **Point each paired `/orchestrate` file at the sync note.** Add one line to `.claude/agents/coder.md`, `architect.md`, `test-writer.md` and `reviewer.md` naming the regina definition that repeats its rules, as review 1 note 2 suggests. In the same edit, write "the reviewer's test and convention checks" back into the `agents/` entry of `.claude/skills/regina/README.md`, as review 1 note 1 asks; it fits the entry's 19 words of headroom.
