@@ -25,9 +25,9 @@
 //! ## The thumb sits in the pane's right PADDING GUTTER
 //!
 //! [`scrollbar_thumb`] measures `x` from the PANE's right edge, not from the grid
-//! rectangle's. macOS's `drawScrollbars` documents the former and computes the
-//! latter, so its bar overlaps the last text column in any pane narrower than the
-//! column cap; this module implements the documented rule. With
+//! rectangle's, as macOS's `ScrollbarGeometry` does: measured from the grid
+//! rectangle, the bar would overlap the last text column in any pane narrower than
+//! the column cap. With
 //! [`SCROLLBAR_THICKNESS_PX`] plus [`SCROLLBAR_MARGIN_PX`] no wider than
 //! [`crate::editor_inset::EDITOR_PADDING_PX`], the thumb lies wholly inside padding
 //! that has already been subtracted, so it never covers a glyph at any pane width,
@@ -144,8 +144,8 @@ pub fn scrollbar_thumb(pane_w: f64, grid: GridRect, viewport: Viewport) -> Optio
         return None;
     }
 
-    // The `.min(track_h)` is a deliberate divergence from macOS, which omits it and
-    // so draws a thumb taller than its own track in a pane shorter than the floor.
+    // The `.min(track_h)` keeps a pane shorter than the floor from drawing a thumb
+    // taller than its own track, over the pane below.
     let h = (track_h * (visible / total).min(1.0))
         .max(SCROLLBAR_MIN_THUMB_PX)
         .min(track_h);
@@ -241,8 +241,8 @@ mod tests {
     ///
     /// Every `x` below is 826 — `840 - 6 - 8`, measured from the PANE's right edge —
     /// and never 806, which is what measuring from the grid rectangle's right edge
-    /// (`20 + 800 - 6 - 8`) would give. That difference is the whole of the
-    /// divergence from macOS's `drawScrollbars`, and it is one column of glyphs.
+    /// (`20 + 800 - 6 - 8`) would give. That difference costs one column of glyphs,
+    /// which a bar measured from the grid rectangle covers.
     ///
     /// ## The `None` rows are the interesting half
     ///
@@ -269,8 +269,8 @@ mod tests {
     ///   … = (826.0, 52.0, 8.0, 0.06688000000000001) as (x, y, w, h), want
     ///   (826.0, 52.0, 8.0, 24.0)`.
     /// - Delete `.min(track_h)`: row 8's `h` becomes 24 in a 10 px grid, so the thumb
-    ///   is taller than the track it is drawn in and spills over the pane below. This
-    ///   is a deliberate divergence from macOS, which omits the clamp. MEASURED:
+    ///   is taller than the track it is drawn in and spills over the pane below.
+    ///   MEASURED:
     ///   `case: 8: a grid shorter than the floor clamps the thumb to the grid —
     ///   … = (826.0, 52.0, 8.0, 24.0) as (x, y, w, h), want (826.0, 52.0, 8.0,
     ///   10.0)`.
@@ -420,7 +420,7 @@ mod tests {
             },
             ThumbCase {
                 // The floor would ask for 24 px of thumb in a 10 px track. The clamp
-                // wins, and the thumb is exactly its track. macOS omits this clamp.
+                // wins, and the thumb is exactly its track.
                 desc: "8: a grid shorter than the floor clamps the thumb to the grid",
                 pane_w: 840.0,
                 grid: GridRect {

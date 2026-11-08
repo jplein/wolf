@@ -3,11 +3,11 @@
 //! and what colour and weight each line takes in an active or an inactive pane.
 //!
 //! The vertical half is a port of `WolfKeyMap/StatusbarLayout.swift`, constant for
-//! constant. The colour half has NO macOS counterpart: `PaneContainerView`
-//! leaves that rule inline in its paint function, where the fast suite cannot
-//! execute it. Here it is [`statusbar_text`], a pure function over two colours and
-//! a flag, so the alphas and the bold rule are pinned by a table instead of by a
-//! screenshot.
+//! constant. The colour half, [`statusbar_text`], has the shape of
+//! `WolfKeyMap/StatusbarText.swift`: the same alphas and bold rule, over the
+//! editor's colours where macOS uses the titlebar theme and AppKit's label tiers.
+//! It is a pure function over two colours and a flag, so the alphas and the bold
+//! rule are pinned by a table instead of by a screenshot.
 //!
 //! ## Units: the caller picks
 //!

@@ -369,4 +369,180 @@ final class PaneTreeWeightsTests: XCTestCase {
     XCTAssertTrue(approx(d.fraction, 0.7), "the divider fraction reflects the new 0.7 weight")
     XCTAssertTrue(approx(d.lineRect.x, 0.7 * w), "the divider line moved to x = 0.7 * width")
   }
+
+  // MARK: - dividers(): every pairSpan agrees with the extents paneRects gives
+
+  /// The leaf ids under `layout`, in DFS order.
+  private func leafIds(_ layout: PaneLayout) -> [PaneId] {
+    switch layout {
+    case .leaf(let id):
+      return [id]
+    case .split(_, let children, _):
+      return children.flatMap(leafIds)
+    }
+  }
+
+  /// The node reached from `layout` by the child-index `path`, or `nil` off the tree.
+  private func node(_ layout: PaneLayout, _ path: [Int]) -> PaneLayout? {
+    guard let first = path.first else { return layout }
+    guard case .split(_, let children, _) = layout, children.indices.contains(first) else {
+      return nil
+    }
+    return node(children[first], Array(path.dropFirst()))
+  }
+
+  /// The bounding `(start, end)` of `ids`' pane rects along the axis `orientation` divides.
+  private func extent(
+    of ids: [PaneId], _ rects: [(PaneId, Rect)], _ orientation: Orientation
+  ) -> (start: Double, end: Double) {
+    let mine = rects.filter { ids.contains($0.0) }.map { $0.1 }
+    switch orientation {
+    case .vertical:
+      return (mine.map { $0.x }.min() ?? .nan, mine.map { $0.x + $0.w }.max() ?? .nan)
+    case .horizontal:
+      return (mine.map { $0.y }.min() ?? .nan, mine.map { $0.y + $0.h }.max() ?? .nan)
+    }
+  }
+
+  /// Checks every divider of `tree` at `width` x `height` against `paneRects`: `pairSpan` is
+  /// the two children's summed extents, `pairStart` the first child's start, and children of
+  /// equal weight get equal extents.
+  ///
+  /// The expectations come from `paneRects`, a separate recursion, and never from the formula
+  /// `collectDividers` uses: wolf-gnome's divider round trip stayed green while both of its
+  /// functions shared one wrong denominator. A nested child's extent is the bounding extent of
+  /// its leaves, which tile it. `dividers` and `equalPairs` are asserted first, so a shape that
+  /// yields no dividers, or no equal-weight pair, cannot pass vacuously.
+  private func assertDividerSpansMatchPaneRects(
+    _ tree: PaneTree, dividers expectedCount: Int, equalPairs expectedEqual: Int,
+    width: Double, height: Double, _ desc: String,
+    file: StaticString = #filePath, line: UInt = #line
+  ) {
+    let layout = tree.layout()
+    let rects = tree.paneRects(width: width, height: height)
+    let dividers = tree.dividers(width: width, height: height)
+    let at = "\(desc) at \(width) x \(height)"
+    XCTAssertEqual(
+      dividers.count, expectedCount,
+      "\(at): wrong divider count, so the property below checks the wrong set of boundaries",
+      file: file, line: line)
+
+    var equalChecked = 0
+    for d in dividers {
+      let tag = "\(at), divider path \(d.path) boundary \(d.boundary)"
+      guard case .split(let orientation, let children, let weights)? = node(layout, d.path),
+        d.boundary + 1 < children.count
+      else {
+        XCTFail(
+          "\(tag): the path does not reach a split with that boundary", file: file, line: line)
+        continue
+      }
+      XCTAssertEqual(
+        orientation, d.orientation, "\(tag): orientation differs from its split's",
+        file: file, line: line)
+      let a = extent(of: leafIds(children[d.boundary]), rects, orientation)
+      let b = extent(of: leafIds(children[d.boundary + 1]), rects, orientation)
+      let sum = (a.end - a.start) + (b.end - b.start)
+      XCTAssertTrue(
+        approx(d.pairSpan, sum),
+        "\(tag): pairSpan \(d.pairSpan) != the two children's paneRects extents summed "
+          + "(\(sum)). A drag would then map the pointer over the wrong length, so the divider "
+          + "drifts from the pointer.",
+        file: file, line: line)
+      XCTAssertTrue(
+        approx(d.pairStart, a.start),
+        "\(tag): pairStart \(d.pairStart) != the first child's start \(a.start) in paneRects",
+        file: file, line: line)
+      XCTAssertTrue(
+        approx(d.pairStart + d.pairSpan, b.end),
+        "\(tag): the pair ends at \(d.pairStart + d.pairSpan), the second child at \(b.end)",
+        file: file, line: line)
+      if approx(weights[d.boundary], weights[d.boundary + 1]) {
+        equalChecked += 1
+        XCTAssertTrue(
+          approx(a.end - a.start, b.end - b.start),
+          "\(tag): equal weights gave unequal extents \(a.end - a.start) and "
+            + "\(b.end - b.start); paneRects scales a child by something other than its "
+            + "weight's share of the split's width",
+          file: file, line: line)
+      }
+    }
+    XCTAssertEqual(
+      equalChecked, expectedEqual,
+      "\(at): wrong number of equal-weight pairs, so the equal-extent check ran over the "
+        + "wrong boundaries",
+      file: file, line: line)
+  }
+
+  /// Runs `assertDividerSpansMatchPaneRects` at the file's bounds and at non-integral ones.
+  private func assertAtBothBounds(
+    _ tree: PaneTree, dividers: Int, equalPairs: Int, _ desc: String,
+    file: StaticString = #filePath, line: UInt = #line
+  ) {
+    for (width, height) in [(w, h), (1234.5, 677.25)] {
+      assertDividerSpansMatchPaneRects(
+        tree, dividers: dividers, equalPairs: equalPairs, width: width, height: height, desc,
+        file: file, line: line)
+    }
+  }
+
+  func testDividerSpanMatchesPaneRectsForTwoEqualColumns() {
+    let tree = PaneTree(root: p1)
+    tree.split(p1, p2, .vertical)
+    assertAtBothBounds(tree, dividers: 1, equalPairs: 1, "V[p1, p2] equal")
+  }
+
+  func testDividerSpanMatchesPaneRectsForUnequalRows() {
+    let tree = PaneTree(root: p1)
+    tree.split(p1, p2, .horizontal)
+    tree.setPairFraction(path: [], boundary: 0, leftFraction: 0.3)
+    assertAtBothBounds(tree, dividers: 1, equalPairs: 0, "H[p1, p2] at 0.3")
+  }
+
+  func testDividerSpanMatchesPaneRectsForFlatRowOfThree() {
+    let tree = PaneTree(root: p1)
+    tree.split(p1, p2, .vertical)
+    tree.split(p1, p3, .vertical)  // [P1, P3, P2], equal thirds
+    assertAtBothBounds(tree, dividers: 2, equalPairs: 2, "flat row of three, equal")
+
+    tree.setPairFraction(path: [], boundary: 1, leftFraction: 0.2)
+    assertAtBothBounds(tree, dividers: 2, equalPairs: 0, "flat row of three, boundary 1 at 0.2")
+  }
+
+  func testDividerSpanMatchesPaneRectsForTwoByTwoGrid() {
+    let tree = PaneTree(root: p1)
+    tree.split(p1, p2, .vertical)
+    tree.split(p1, p3, .horizontal)
+    tree.split(p2, p4, .horizontal)  // V[H[P1, P3], H[P2, P4]]
+    tree.setPairFraction(path: [], boundary: 0, leftFraction: 0.65)
+    tree.setPairFraction(path: [1], boundary: 0, leftFraction: 0.4)
+    assertAtBothBounds(tree, dividers: 3, equalPairs: 1, "2x2, root 0.65, [1] 0.4")
+  }
+
+  func testDividerSpanMatchesPaneRectsForThreeLevelNesting() {
+    let tree = PaneTree(root: p1)
+    tree.split(p1, p2, .vertical)
+    tree.split(p2, p3, .horizontal)
+    tree.split(p3, p4, .vertical)  // V[P1, H[P2, V[P3, P4]]]
+    tree.setPairFraction(path: [], boundary: 0, leftFraction: 0.4)
+    tree.setPairFraction(path: [1], boundary: 0, leftFraction: 0.25)
+    XCTAssertEqual(
+      tree.layout(),
+      .split(
+        orientation: .vertical,
+        children: [
+          .leaf(p1),
+          .split(
+            orientation: .horizontal,
+            children: [
+              .leaf(p2),
+              .split(
+                orientation: .vertical, children: [.leaf(p3), .leaf(p4)], weights: [0.5, 0.5]),
+            ],
+            weights: [0.25, 0.75]),
+        ],
+        weights: [0.4, 0.6]),
+      "the shape under test is V[P1, H[P2, V[P3, P4]]]; another layout tests a different tree")
+    assertAtBothBounds(tree, dividers: 3, equalPairs: 1, "V[p1, H[p2, V[p3, p4]]]")
+  }
 }

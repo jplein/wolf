@@ -71,24 +71,8 @@ final class PaneContainerView: NSView {
   private static let statusbarMinSecondaryFontSize: Double = 9
   /// The secondary (path) statusbar font size as a fraction of the primary size.
   private static let statusbarSecondaryFontScale: Double = 0.8
-  /// The secondary (path) statusbar text alpha when derived from the themed
-  /// titlebar foreground (else `secondaryLabelColor` is used directly).
-  private static let statusbarSecondaryThemedAlpha: CGFloat = 0.7
-  /// The statusbar text alpha applied to an INACTIVE pane's filename + path (a
-  /// front-end-only treatment that is awkward to express inside Neovim itself):
-  /// the active pane's filename is bold at full strength, an inactive pane's is
-  /// regular-weight and dimmed. Multiplies the themed alpha for the secondary
-  /// line; for the non-themed case the inactive pane falls back to the
-  /// system `secondaryLabelColor` / `tertiaryLabelColor` instead.
-  private static let statusbarInactiveAlpha: CGFloat = 0.5
 
   // -- Synthetic scrollbar appearance / fade tuning -------------------------
-  /// Scrollbar track/thumb thickness (px).
-  private static let scrollbarThickness: CGFloat = 8
-  /// Inset of the scrollbar from the pane's right/top/bottom edges (px).
-  private static let scrollbarInset: CGFloat = 2
-  /// Minimum thumb length (px) so a tiny viewport fraction stays grabbable-looking.
-  private static let scrollbarMinThumb: CGFloat = 24
   /// Track opacity (`.legacy` only).
   private static let scrollbarTrackAlpha: CGFloat = 0.12
   /// Thumb opacity at full visibility.
@@ -2237,7 +2221,8 @@ final class PaneContainerView: NSView {
   /// The background matches the macOS titlebar: the window's own
   /// `backgroundColor` (kept in sync with the `WolfTitlebar` theme by
   /// `MainWindow.applyTitlebarBackground`), falling back to the themed titlebar
-  /// bg / editor fallback when there is no window.
+  /// bg / editor fallback when there is no window. The text colours and the
+  /// filename's weight come from `WolfKeyMap.StatusbarText`.
   ///
   /// The text span comes from `WolfKeyMap.StatusbarTextSpan`, which aligns the text
   /// with the pane's CONTENT — and the two kinds of content start at different x
@@ -2306,33 +2291,16 @@ final class PaneContainerView: NSView {
       displayPath = status.display_path().toString()
     }
 
-    // Themed titlebar fg when set, else system label colors. An inactive pane dims both lines:
-    // themed alphas scale by `statusbarInactiveAlpha`, system colors step down one label tier.
-    let titlebarFg = handle.theme_titlebar_fg()
-    let primaryColor: NSColor
-    let secondaryColor: NSColor
-    if titlebarFg.set {
-      let themed = NSColor(cgColor: WolfColor.cgColor(packed: titlebarFg.rgb)) ?? .labelColor
-      let primaryAlpha: CGFloat = active ? 1 : Self.statusbarInactiveAlpha
-      let secondaryAlpha =
-        Self.statusbarSecondaryThemedAlpha * (active ? 1 : Self.statusbarInactiveAlpha)
-      primaryColor = themed.withAlphaComponent(primaryAlpha)
-      secondaryColor = themed.withAlphaComponent(secondaryAlpha)
-    } else {
-      primaryColor = active ? .labelColor : .secondaryLabelColor
-      secondaryColor = active ? .secondaryLabelColor : .tertiaryLabelColor
-    }
-
-    // The active pane's filename is BOLD; an inactive pane's is regular weight.
+    let text = StatusbarText(titlebarFg: handle.theme_titlebar_fg(), active: active)
     let primaryFont: NSFont =
-      active
+      text.primaryBold
       ? .boldSystemFont(ofSize: CGFloat(statusbarPrimaryFontSize))
       : .systemFont(ofSize: CGFloat(statusbarPrimaryFontSize))
 
     let primaryRect = CGRect(
       x: textLeft, y: strip.minY + CGFloat(layout.primaryLineTop),
       width: textWidth, height: CGFloat(layout.primaryLineHeight))
-    drawStatusbarText(filename, in: primaryRect, font: primaryFont, color: primaryColor)
+    drawStatusbarText(filename, in: primaryRect, font: primaryFont, color: nsColor(text.primary))
 
     if !displayPath.isEmpty {
       let secondaryRect = CGRect(
@@ -2340,10 +2308,27 @@ final class PaneContainerView: NSView {
         width: textWidth, height: CGFloat(layout.secondaryLineHeight))
       drawStatusbarText(
         displayPath, in: secondaryRect,
-        font: .systemFont(ofSize: CGFloat(statusbarSecondaryFontSize)), color: secondaryColor)
+        font: .systemFont(ofSize: CGFloat(statusbarSecondaryFontSize)),
+        color: nsColor(text.secondary))
     }
 
     ctx.restoreGState()
+  }
+
+  /// Maps a `StatusbarText` colour to AppKit: the themed titlebar fg at its alpha
+  /// (`labelColor` when the packed colour does not convert), or a system label tier.
+  private func nsColor(_ color: StatusbarTextColor) -> NSColor {
+    switch color {
+    case .themed(let rgb, let alpha):
+      return (NSColor(cgColor: WolfColor.cgColor(packed: rgb)) ?? .labelColor)
+        .withAlphaComponent(CGFloat(alpha))
+    case .label(.primary):
+      return .labelColor
+    case .label(.secondary):
+      return .secondaryLabelColor
+    case .label(.tertiary):
+      return .tertiaryLabelColor
+    }
   }
 
   /// Draws one line of statusbar `text` clipped to `rect`, tail-truncated in
@@ -2424,64 +2409,40 @@ final class PaneContainerView: NSView {
 
   // MARK: - Synthetic scrollbars
 
-  /// Draws a synthetic, non-interactive scrollbar at each pane's right edge,
-  /// driven by that grid's `win_viewport` (topline/botline/linecount).
+  /// Draws a synthetic, non-interactive scrollbar in each pane's right padding
+  /// gutter, driven by that grid's `win_viewport` (topline/botline/linecount).
   ///
   /// Custom-drawn (not `NSScroller` subviews) so it composites cleanly into the
-  /// single flat painting view and sits at the PANE's right edge (out in the future
-  /// side margin once the grid is centered). It follows the system "Show scroll
-  /// bars" setting: `.legacy` is always visible (with a faint track); `.overlay`
-  /// fades in on scroll and out after a delay. Thumb-drag is deferred (v1 is
-  /// position-only).
+  /// single flat painting view. The track and thumb rectangles come from
+  /// `WolfKeyMap.ScrollbarGeometry`; the visibility, fade and colours stay here,
+  /// because they read AppKit state. It follows the system "Show scroll bars"
+  /// setting: `.legacy` is always visible (with a faint track); `.overlay` fades in
+  /// on scroll and out after a delay. The bar is position-only, with no thumb-drag.
   private func drawScrollbars(_ rects: [(PaneId, CGRect)], ctx: CGContext) {
     let alpha = currentScrollbarAlpha()
     guard alpha > 0 else { return }
 
-    for (id, rect) in rects {
+    for (id, paneRect) in rects {
       guard let grid = panes[id]?.boundGrid else { continue }
       // A preview pane hosts a WKWebView (with its own scrolling), so suppress
       // the synthetic scrollbar over it.
       if previewNamesByGrid[grid] != nil { continue }
       let frame = handle.read_frame_for_grid(grid)
-      let linecount = frame.linecount()
-      guard linecount > 0 else { continue }
+      guard
+        let bar = ScrollbarGeometry(
+          paneRect: rect(from: paneRect), gridRect: rect(from: gridRect(ofPane: paneRect)),
+          topline: frame.topline(), botline: frame.botline(), linecount: frame.linecount())
+      else { continue }
 
-      // `topline`/`botline` are 0-based, botline one past the last visible. Use Double before
-      // subtracting so a UInt64 can never wrap; skip when nothing shows or the buffer fits.
-      let total = Double(linecount)
-      let topline = Double(frame.topline())
-      let botline = Double(frame.botline())
-      let visible = max(0, botline - topline)
-      guard visible > 0, visible < total else { continue }
-
-      // The scrollbar track spans the GRID rect (the pane minus its top
-      // statusbar strip), so the thumb never rides up over the strip.
-      let gRect = gridRect(ofPane: rect)
-      let inset = Self.scrollbarInset
-      let thickness = Self.scrollbarThickness
-      let track = CGRect(
-        x: gRect.maxX - thickness - inset,
-        y: gRect.minY + inset,
-        width: thickness,
-        height: gRect.height - 2 * inset)
-      guard track.height > 0 else { continue }
-
-      // 0-based: the thumb's top sits at `topline / total` of the track (no
-      // `- 1`), which is 0 at the top of every buffer.
-      let frac = min(1.0, visible / total)
-      let thumbH = max(Self.scrollbarMinThumb, track.height * CGFloat(frac))
-      let offsetFrac = topline / total
-      let maxThumbY = track.maxY - thumbH
-      let rawThumbY = track.minY + CGFloat(offsetFrac) * track.height
-      let thumbY = min(max(rawThumbY, track.minY), max(track.minY, maxThumbY))
-
+      let radius = CGFloat(ScrollbarGeometry.thickness / 2)
       if scrollerStyle == .legacy {
+        let track = CGRect(x: bar.track.x, y: bar.track.y, width: bar.track.w, height: bar.track.h)
         ctx.setFillColor(CGColor(gray: 0.5, alpha: Self.scrollbarTrackAlpha * alpha))
-        fillRounded(track, radius: thickness / 2, ctx: ctx)
+        fillRounded(track, radius: radius, ctx: ctx)
       }
-      let thumb = CGRect(x: track.minX, y: thumbY, width: thickness, height: thumbH)
+      let thumb = CGRect(x: bar.thumb.x, y: bar.thumb.y, width: bar.thumb.w, height: bar.thumb.h)
       ctx.setFillColor(CGColor(gray: 0.5, alpha: Self.scrollbarThumbAlpha * alpha))
-      fillRounded(thumb, radius: thickness / 2, ctx: ctx)
+      fillRounded(thumb, radius: radius, ctx: ctx)
     }
   }
 
