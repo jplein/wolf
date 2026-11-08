@@ -12,7 +12,7 @@ There is one hard rule everything else follows from:
 
 All the Neovim-specific work — and it is the large majority of the work — lives in `wolf-core` and is shared verbatim across platforms. Each platform front-end is a thin shell: native window chrome, native file dialogs, a paint backend, and OS-event translation. If a type from GTK or AppKit ever appears in core, the boundary has leaked.
 
-The rule is checked rather than assumed. Both verification commands, and the list of dependencies chosen because they are toolkit-free, are in [`wolf-core-decisions.md`](../notes/wolf-core-decisions.md).
+The rule is checked rather than assumed, by the `wolf-core-deps` gate of [`gates.sh`](../gates.sh). How the gate checks it, and the dependencies chosen because they are toolkit-free, are in [`wolf-core-decisions.md`](../notes/wolf-core-decisions.md#the-one-hard-rule).
 
 ## Components
 

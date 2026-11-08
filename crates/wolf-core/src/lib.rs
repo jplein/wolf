@@ -9,10 +9,9 @@
 //!
 //! ## The one hard rule
 //!
-//! `wolf-core` must compile with **no GUI toolkit in its dependency tree**. The
-//! `wolf-core-deps` gate of `gates.sh` enforces it on both platforms against
-//! `tools/lint/wolf_core_forbidden_deps.txt`; the rule's reasons are in
-//! `notes/wolf-core-decisions.md`.
+//! `wolf-core` must compile with **no GUI toolkit in its dependency tree**.
+//! How it is checked, and why, is in
+//! `notes/wolf-core-decisions.md#the-one-hard-rule`.
 //!
 //! ## Modules
 //!

@@ -65,7 +65,7 @@ A task file is a header and a body, in the format regina's `crates/regina-cli/RE
 ## Rules
 
 - You write only under `.workspace/<branch>`, besides the remote state root step 2 may create. Never edit the starting directory, the worktree, or a task's workspace under the state root.
-- Do not change the starting directory while a run is open: no commit, no checkout, no edit to a tracked file. That includes the tracked `.claude/current-plan.md` and `.claude/verify-results.md`, so keep notes of your own outside the checkout. The wrapper refuses every command but `status` once it has moved, and the way back is to check the starting commit out again.
+- Do not change the starting directory while a run is open: no commit, no checkout, no edit to a tracked file. Keep notes of your own outside the checkout. The wrapper refuses every command but `status` once it has moved, and the way back is to check the starting commit out again.
 - Run one wolf run at a time on this Mac: they share `nixos.local`'s state root and its lock.
 - Every regina command for a run goes through `.workspace/<branch>/regina`. Any other `regina` is another build, with another flow and other definitions.
 - Never merge to main, and never merge the integration branch into the starting branch. Both are the user's.

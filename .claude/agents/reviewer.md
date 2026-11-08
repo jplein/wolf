@@ -54,7 +54,7 @@ If the verdict is "Needs revision", be specific: name the file, the line or func
 
 ### Rust and Bazel
 
-- `wolf-core` must compile with no GUI toolkit in its dependency tree. The forbidden list is `tools/lint/wolf_core_forbidden_deps.txt`, and `gates.sh`'s `wolf-core-deps` gate checks it on both platforms; a new dependency in `wolf-core/Cargo.toml` is worth reading the tree for.
+- `wolf-core` must compile with no GUI toolkit in its dependency tree; how it is checked is in [`notes/wolf-core-decisions.md#the-one-hard-rule`](../../notes/wolf-core-decisions.md#the-one-hard-rule). A new dependency in `wolf-core/Cargo.toml` is worth reading the tree for.
 - A Cargo dependency or feature change needs `crate_universe` repinned and `Cargo.Bazel.lock` plus `MODULE.bazel.lock` committed with it.
 - A new asset that a module `include_str!`s needs the owning `rust_library`'s `compile_data` glob to cover it, or it builds under Cargo and fails under Bazel.
 - The `u8` discriminant tables in `crates/wolf-ffi/src/lib.rs` are the ABI Swift decodes. Append only — a renumbered or reused value changes behavior across the boundary without failing to compile.

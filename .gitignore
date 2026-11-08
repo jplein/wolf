@@ -23,3 +23,7 @@ Wolf.xcodeproj
 # Regina run directories: config, task files, wrapper, out-link and a link to the state root
 # under ~/.local/state (.claude/skills/regina/README.md).
 /.workspace/
+
+# Working files of /orchestrate runs (.claude/commands/orchestrate.md).
+/.claude/current-plan.md
+/.claude/verify-results.md
