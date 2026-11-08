@@ -231,7 +231,7 @@ The four bundled fonts' verbatim licence texts, compiled in. Pure data, no GUI a
 
 - `FontLicense` — `font`, `license`, `provenance`, `text`. `provenance` names the archive, the path inside it and the pinned sha256, so a bumped text can be re-derived rather than trusted.
 - `FONT_LICENSES` — one row per bundled font, preview faces first.
-- `FONT_LICENSE_NOTICES` — those rows as one plain-text block, and what both consumers read: [`markdown.rs`](#markdownrs)'s document head, and `wolf-gnome`'s About dialog.
+- `FONT_LICENSE_NOTICES` — those rows as one plain-text block, and what all three consumers read: [`markdown.rs`](#markdownrs)'s document head, `wolf-gnome`'s About dialog, and the macOS About panel through `wolf-ffi`.
 
 **Decisions**
 

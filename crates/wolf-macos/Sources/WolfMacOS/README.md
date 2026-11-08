@@ -8,25 +8,26 @@ Nothing in this directory has automated coverage — there is no headless window
 
 #### `AppDelegate.swift`
 
-Purpose: The application coordinator: once-only launch setup, the live `WolfWindowController` (one per tab) and `Project` collections, window/tab tree restore and persistence, and the dynamic menus (`NSMenuDelegate` / `NSMenuItemValidation`). The one-Neovim-per-project model is described in [`wolf-macos-decisions.md`](../../../../notes/wolf-macos-decisions.md).
+Purpose: The application coordinator: launch setup, the live `WolfWindowController` (one per tab) and `Project` collections, window/tab restore and persistence, and the dynamic menus.
 
 **Public API**
 
-- `makeNewWindow(originatingCwd:)` — always opens a fresh project in the empty state; the argument is ignored, and exists only to keep the shared `CommandDispatcher` call site uniform.
+- `makeNewWindow(originatingCwd:)` — opens a fresh project in the empty state, ignoring its argument, which exists for the shared `CommandDispatcher` call site.
 - `makeNewTab(from:)` — reuses the key controller's project, adding a tabpage rather than starting a core.
-- `scheduleStateSnapshot()` / `snapshotNow()` — coalesced versus immediate whole-tree commit to `state.json`. Every geometry, sidebar, cwd and tab-group change routes through the coalesced form.
+- `scheduleStateSnapshot()` / `snapshotNow()` — coalesced versus immediate whole-tree commit to `state.json`. Every geometry, sidebar, cwd and tab-group change uses the coalesced form.
 - `otherWindows(excluding:)`, `controllerForCwd(_:)`, `raiseWindow(tabId:)` — the command palette's candidate sources and raise target.
 
 **Decisions**
 
-- Launch order is fonts, then config, then metrics: measurement needs the config's family, size and line height, and the bundled families must reach CoreText first.
+- Launch order is fonts, config, metrics: measurement needs the config's family, size and line height, and the bundled families must reach CoreText first.
 - `appearanceObservation` must stay stored — an `NSKeyValueObservation` invalidates itself once deallocated, so a discarded token silently stops auto-mode appearance tracking.
-- Both app focus edges are pushed to nvim: `FocusGained` fires only on a real unfocused-to-focused transition, so without the resign-side `false` the `WolfAutoRead` `:checktime` reload fires once and never again.
+- Both app focus edges are pushed to nvim: `FocusGained` fires only on a real unfocused-to-focused transition, so without the resign-side `false` the `WolfAutoRead` `:checktime` reload fires only once.
+- The About panel's credits discharge the fonts' attribution obligation on macOS: Linux's preamble, then `wolf_ffi_font_license_notices()` verbatim. Their `.foregroundColor` stays `labelColor`, since uncoloured credits render black in dark mode.
 
 **Gotchas**
 
 - Owning-controller lookups use `effectiveKeyWindow`, not `NSApp.keyWindow`: while a picker panel is key, no controller owns the key window, so it resolves to that panel's parent.
-- The snapshot records each tab's `persistedCwd` (tabpage-local), not `currentCwd`, which follows the current tabpage and so is wrong for unselected tabs.
+- The snapshot records each tab's `persistedCwd`, not `currentCwd`, which follows the current tabpage and so misnames every other tab.
 
 #### `AppMenu.swift`
 
@@ -45,6 +46,7 @@ Purpose: Builds and installs `NSApp.mainMenu` (App, File, Edit, View, History, W
 
 **Gotchas**
 
+- About Wolf targets the coordinator's `showAboutPanel(_:)` rather than going nil-targeted to `NSApplication`, whose stock action shows no credits.
 - The front-end-only items (History, Project, Search) target the coordinator directly instead of carrying a tag, so `CommandKind.toggleSidebar`, `.sidebarShowProject` and `.searchInProject` never reach `CommandDispatcher` from a menu item. They still reach it from the nvim-drained path and from the command palette, whose static rows dispatch through it.
 
 #### `BufferPickerView.swift`

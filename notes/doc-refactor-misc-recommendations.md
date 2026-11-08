@@ -13,9 +13,9 @@ Each item is marked with how it was established:
 
 ## 1. Font licence obligations — discharged in the Rust tree
 
-**Verified. Closed on `linux-feat/typography`, with one optional macOS-only residual.**
+**Verified. Closed, with no residual.**
 
-The four bundled fonts' licence texts are compiled into `wolf-core` by `src/licenses.rs` and reach a reader two ways: `render_html` emits them as an HTML comment in every rendered preview document's `<head>`, and `wolf-gnome`'s About dialog shows the same block. `crates/wolf-core/BUILD.bazel`'s `compile_data` glob was widened to `src/markdown/assets/*.txt` and `src/licenses/*.txt` to match, which is mandatory rather than tidiness: without it the `rust_library` does not compile under Bazel at all.
+The four bundled fonts' licence texts are compiled into `wolf-core` by `src/licenses.rs` and reach a reader three ways: `render_html` emits them as an HTML comment in every rendered preview document's `<head>`, `wolf-gnome`'s About dialog shows the same block, and the macOS About panel shows it as its credits through `wolf_ffi_font_license_notices()`. `crates/wolf-core/BUILD.bazel`'s `compile_data` glob was widened to `src/markdown/assets/*.txt` and `src/licenses/*.txt` to match, which is mandatory rather than tidiness: without it the `rust_library` does not compile under Bazel at all.
 
 The registry covers Inter and Latin Modern Math, which ship as base64 faces inside every preview document, and JetBrains Mono and iA Writer Mono S, which ship as editor faces. Its tests pin that each text is the licence its row names, that the rendered block carries all four, and that no text can terminate the HTML comment it is emitted inside. What the two preview faces' licences require of anyone shipping Wolf is unchanged, and the two editor faces ship under the same SIL OFL 1.1 as Inter:
 
@@ -24,7 +24,7 @@ The registry covers Inter and Latin Modern Math, which ship as base64 faces insi
 | Inter             | SIL OFL 1.1       | The copyright notice and licence must accompany every copy of the font, including an embedded one. The font may not be sold on its own, and may not be relicensed. |
 | Latin Modern Math | GUST Font Licence | The licence text must accompany redistribution. A modified font must be marked as changed and renamed; GUST also requests a manifest of renamed files.             |
 
-The residual is macOS-only and optional: whether the two preview fonts' texts should _also_ ship as files in `Contents/Resources/` with matching `crates/wolf-macos/bundle_layout_test.sh` checks, given both already ship compiled into the binary. That script checks `Contents/Resources/fonts/OFL.txt` and `Contents/Resources/fonts/LICENSE.md`, which are JetBrains Mono's and iA Writer Mono S's. It is tracked in [`macos-followups.md`](macos-followups.md), on that branch's `licenses`-module row.
+Shipping the two preview fonts' texts as files in `Contents/Resources/` as well, with matching `crates/wolf-macos/bundle_layout_test.sh` checks, is declined by the user: both texts ship compiled into the binary, and every front-end shows them. That script checks only `Contents/Resources/fonts/OFL.txt` and `Contents/Resources/fonts/LICENSE.md`, which are JetBrains Mono's and iA Writer Mono S's.
 
 ## 2. A possible latent test failure
 

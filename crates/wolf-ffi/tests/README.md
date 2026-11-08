@@ -195,6 +195,12 @@ Real-nvim coverage of the file-picker bridge: `start_file_search`, `FfiFileSearc
 - `open` is only checked at the core-stays-responsive level: `FfiFrame` exposes no `current_file` accessor.
 - The bounding case seeds a few hundred matching files on purpose, so the top-N select is observably narrower than the match set.
 
+#### `font_license_notices.rs`
+
+**Covers**
+
+`wolf_ffi_font_license_notices()` returning `wolf_core::FONT_LICENSE_NOTICES` byte for byte, and naming every `FONT_LICENSES` font. Headless — it spawns no Neovim, and the `:font_license_notices` target stages no runfiles and carries no `no-sandbox` tag; it names `//crates/wolf-core:wolf_core` directly to read the constant it compares against.
+
 #### `frame_pack.rs`
 
 Headless, deterministic coverage of `FfiFrame::from_snapshot`: it builds a `wolf_core::Snapshot` by hand — no nvim, no `WolfCore`, no `tests/common/`. Target `//crates/wolf-ffi:frame_pack` needs no runfiles, no env, and no `no-sandbox` tag, so this is the packing coverage that still runs on a host with no nvim.
