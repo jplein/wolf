@@ -16,7 +16,7 @@ Files reach Neovim two ways, and [`README.md`](../crates/wolf-gnome/README.md) s
 
 Linux only, built with Cargo inside the Nix devShell. Run everything through `nix develop --command`, because after a `flake.nix` edit an already-loaded direnv environment is stale and has no GTK.
 
-This crate deliberately has no Bazel target at all. That absence is what keeps the GTK stack out of `wolf-core`'s Bazel dependency graph, so the one hard rule in [`wolf-core-decisions.md`](wolf-core-decisions.md) holds under the macOS Bazel build as well as under `cargo tree`. Adding a `BUILD.bazel` here breaks that guarantee. The verification queries live alongside the rule, in [`wolf-core-decisions.md`](wolf-core-decisions.md).
+This crate deliberately has no Bazel target at all. That absence is what keeps the GTK stack out of `wolf-core`'s Bazel dependency graph, so the one hard rule in [`wolf-core-decisions.md`](wolf-core-decisions.md) holds under the macOS Bazel build as well as under `cargo tree`. Adding a `BUILD.bazel` here breaks that guarantee. The `wolf-core-deps` gate that checks the rule on both platforms is described alongside it, in [`wolf-core-decisions.md`](wolf-core-decisions.md#the-one-hard-rule).
 
 The devShell supplies the toolchain that the gtk-rs and `webkit6` `-sys` crates probe for (gtk4, cairo, pango, glib, gdk-pixbuf, graphene, harfbuzz, webkitgtk and libsoup), exports `WOLF_NVIM_BIN` so the pinned Neovim is never taken from `PATH`, and pins the font stack through a generated `FONTCONFIG_FILE`; [`tests/README.md`](../crates/wolf-gnome/tests/README.md) owns what that file exposes and why it omits every host font directory.
 

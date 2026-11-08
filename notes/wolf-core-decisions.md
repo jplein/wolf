@@ -8,24 +8,9 @@ The durable constraints behind this crate. Read this before changing anything he
 
 > `wolf-core` must compile with no GUI toolkit in its dependency tree.
 
-This is what lets one core serve both front-ends, and it is checked, not assumed. Re-run both checks after any dependency change, and repin `crate_universe` — a feature change moves the Bazel lockfile even when no crate node is added.
+This is what lets one core serve both front-ends, and it is checked, not assumed. The `wolf-core-deps` gate of [`gates.sh`](../gates.sh) lists core's graph with `cargo tree -e no-dev -p wolf-core` on Linux and `bazel query 'kind(rule, deps(//crates/wolf-core:wolf_core))'` on macOS, and fails on any entry that matches a pattern in [`tools/lint/wolf_core_forbidden_deps.txt`](../tools/lint/wolf_core_forbidden_deps.txt). Why each platform lists the graph the way it does is in [the gates notes](gates.sh.md#linux-gates).
 
-```sh
-cargo tree -e no-dev -p wolf-core
-
-bazel query 'kind(rule, deps(//crates/wolf-core:wolf_core))' | grep -iE \
-  'gtk|gdk|glib|cairo|pango|adwaita|objc|cocoa|core-graphics|winit|wgpu|skia|softbuffer' \
-  || echo clean
-```
-
-The `kind(rule, …)` wrapper is load-bearing. A bare `deps()` also returns every source file in the graph, and `libc` vendors its bindings under `src/new/glibc/…`, whose paths match the `glib` pattern — so the guard reports seven `libc` files on every run, `|| echo clean` never fires, and a check that always cries wolf is a check nobody reads. The `cargo tree` check matches on crate names and is unaffected.
-
-No occurrence of any of these is permitted:
-
-```
-gtk gtk4 glib gdk4 cairo cairo-rs pango libadwaita
-objc objc2 cocoa core-graphics winit wgpu skia-safe softbuffer
-```
+The gate does not repin. After any dependency or feature change, repin `crate_universe`, because a feature change moves the Bazel lockfile even when no crate node is added.
 
 `wolf-gnome` is given no Bazel target at all, which is how the GTK stack stays out of the Bazel graph.
 
@@ -35,7 +20,7 @@ Every dependency here was chosen partly because it is GUI-free:
 | --- | --- | --- |
 | MRU cache | `rusqlite` (`bundled`) | Vendors SQLite via `cc`, so no system SQLite to provision |
 | File traversal | `ignore` | ripgrep's pure-Rust walker |
-| File watching | `notify` (`=8.2.0`) | FSEvents through `fsevent-sys` on macOS, inotify on Linux. Pinned exactly because 8.2.1 swaps in `objc2-core-*` bindings, which the guard above rejects. `notify-types` is held at 2.1.0 in `Cargo.lock`, because 2.2.0 needs a newer rustc than Bazel's |
+| File watching | `notify` (`=8.2.0`) | FSEvents through `fsevent-sys` on macOS, inotify on Linux. Pinned exactly because 8.2.1 swaps in `objc2-core-*` bindings, which the `wolf-core-deps` gate rejects. `notify-types` is held at 2.1.0 in `Cargo.lock`, because 2.2.0 needs a newer rustc than Bazel's |
 | Config | `serde` (`derive`), `serde_yaml`, `dirs` |  |
 | State | `serde_json` |  |
 | Markdown preview | `pulldown-cmark`, `pulldown-cmark-escape` |  |
