@@ -92,7 +92,7 @@ Feeds the file-search rescan. Notifies **`wolf_fs_changed`** with `{ event_name,
 
 It is a dedicated event rather than a reuse of `wolf_open_files` because that augroup also fires on `BufEnter`/`WinEnter`/`TabEnter`, which would turn every focus change into a rescan. The refocus-edge autocmd has its own callback because the buffer-event callback's buftype guard would swallow `TermLeave`, whose current buffer is the terminal; that guard is `pcall`-guarded and fails open, since `args.buf` can already be invalid on `BufDelete` and an extra rescan is harmless where a missed one is the bug. `TermLeave` rather than `WinLeave`: the drawer auto-`startinsert`s on `WinEnter`, so every drawer-exit path passes a terminal-to-normal mode change and the one unguarded event covers them all. There is no initial emit: with no event there is nothing to rescan.
 
-`FocusGained` depends on the front-end forwarding OS focus — the same asymmetry as `:checktime` under Limitations — so on GNOME, external changes wait for another trigger.
+`FocusGained` depends on the front-end forwarding OS focus — the same asymmetry as `:checktime` under Limitations — so it never fires on GNOME. There, as everywhere, external changes reach a session through core's filesystem watcher, and these events are its fallback.
 
 #### `wolf_setup_view_tracking()`
 

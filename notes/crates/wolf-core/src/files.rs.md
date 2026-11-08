@@ -1,6 +1,6 @@
 # `crates/wolf-core/src/files.rs`
 
-Last verified at commit `0405bb21a5356bd7adf53deb86308c792d118487`.
+Last verified at commit `7b402656eef2b57aa7b79356f1cc1a16fbed94a3`.
 
 ## Unwatch before watch
 

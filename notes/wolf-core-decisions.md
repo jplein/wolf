@@ -31,16 +31,17 @@ objc objc2 cocoa core-graphics winit wgpu skia-safe softbuffer
 
 Every dependency here was chosen partly because it is GUI-free:
 
-| Need             | Dependency                                | Note                                                              |
-| ---------------- | ----------------------------------------- | ----------------------------------------------------------------- |
-| MRU cache        | `rusqlite` (`bundled`)                    | Vendors SQLite via `cc`, so no system SQLite to provision         |
-| File traversal   | `ignore`                                  | ripgrep's pure-Rust walker                                        |
-| Config           | `serde` (`derive`), `serde_yaml`, `dirs`  |                                                                   |
-| State            | `serde_json`                              |                                                                   |
-| Markdown preview | `pulldown-cmark`, `pulldown-cmark-escape` |                                                                   |
-| Math preview     | `pulldown-latex`                          | Adds only `bumpalo`                                               |
-| Content search   | none                                      | Shells out to a pinned `rg` subprocess located via `WOLF_RG_BIN`  |
-| Browser preview  | none                                      | Hand-rolled HTTP/1.1 on the existing tokio runtime, `net` feature |
+| Need | Dependency | Note |
+| --- | --- | --- |
+| MRU cache | `rusqlite` (`bundled`) | Vendors SQLite via `cc`, so no system SQLite to provision |
+| File traversal | `ignore` | ripgrep's pure-Rust walker |
+| File watching | `notify` (`=8.2.0`) | FSEvents through `fsevent-sys` on macOS, inotify on Linux. Pinned exactly because 8.2.1 swaps in `objc2-core-*` bindings, which the guard above rejects. `notify-types` is held at 2.1.0 in `Cargo.lock`, because 2.2.0 needs a newer rustc than Bazel's |
+| Config | `serde` (`derive`), `serde_yaml`, `dirs` |  |
+| State | `serde_json` |  |
+| Markdown preview | `pulldown-cmark`, `pulldown-cmark-escape` |  |
+| Math preview | `pulldown-latex` | Adds only `bumpalo` |
+| Content search | none | Shells out to a pinned `rg` subprocess located via `WOLF_RG_BIN` |
+| Browser preview | none | Hand-rolled HTTP/1.1 on the existing tokio runtime, `net` feature |
 
 The last two are the pattern to follow when adding a capability: prefer a subprocess or a hand-rolled implementation over a crate that might drag a toolkit in.
 
@@ -75,6 +76,7 @@ The front-end reads liveness on each wake to drive its crash and stall overlay.
 - A single `parking_lot::RwLock` guards the snapshot. The redraw handler takes the write lock once per whole batch, never holds it across an `.await`, and fires the wake only after the lock is dropped, on `flush`.
 - That write lock is acquired cooperatively (a `try_write` retry loop that yields to the scheduler), so a front-end holding a read guard cannot pin a worker thread.
 - Input is delivered through an ordered FIFO channel to a single consumer task, which fuses a run of consecutive `Key` events into one `nvim_input` call. This keeps keystrokes in order and makes a burst produce a single redraw flush.
+- Each `SearchRegistry` owns a `wolf-fs-watch` thread, which makes every `notify` watch and unwatch call. A recursive inotify watch walks the whole tree, so it never runs on a front-end's thread or under the registry's locks. notify's `watch` waits on the backend thread that runs the event callback, so the callback only forwards into the thread's channel and never blocks or locks.
 
 ## The snapshot-and-wake session pattern
 
@@ -82,11 +84,17 @@ The file picker, the content search, and the redraw stream all share one shape, 
 
 Both search sessions resolve their root from the tracked live working directory cell rather than an RPC, so opening a picker never blocks on a wedged nvim. Dropping or cancelling a session stops its traversal, and for content search kills the `rg` subprocess, so no zombie lingers.
 
-## The file-search rescan: nvim events, walk-then-swap
+## The file-search rescan: a watcher and nvim events, walk-then-swap
 
-A live `FileSearch` session rescans on the `wolf_fs_changed` notification rather than on a filesystem watcher: a watcher crate (`notify`) would add a dependency, Bazel lockfile churn, and a watcher thread — see the external-edit limitation below. The `SearchRegistry` is the seam such a watcher plugs into without touching the sessions, and it supersedes both the refocus-edge dependency and the per-refocus walk cost with targeted invalidation.
+A live `FileSearch` session rescans on two sources: a `notify` filesystem watcher, which is the immediate path for any change on disk, and the `wolf_fs_changed` notification from nvim. Both feed `SearchRegistry::notify_fs_changed`, and the registry is the seam the watcher plugs into without touching the sessions. Its targeted invalidation spares the rescan both a refocus-edge dependency and a walk per refocus.
 
-The triggers are two classes. Path-carrying buffer events (`BufWritePost` conditional, `BufFilePost`/`BufDelete` force) cover changes nvim makes itself; path-less refocus-edge force events (`ShellCmdPost`/`FocusGained`/`TermLeave`) catch mutations that fire no buffer event — a `:!git mv`, an external terminal or Finder while the app is unfocused, a command run in the drawer's shell. The edges are human-paced, and the debounce plus the equality skip bound each to at most one no-op walk. `TermLeave` is chosen over `WinLeave` or `TermClose` because the drawer auto-`startinsert`s on `WinEnter`, so every drawer-exit path passes a terminal-to-normal mode change and the one unguarded event covers them all.
+The watcher watches a root recursively while a live registry entry has it. The watched set is re-derived from the live entries on every register and every prune rather than counted separately, for the same reason the registry has no unregister handshake (below). When a root's watch goes live it forwards that root once, because the session's walk may have started before the watch existed and a change in that gap would be lost.
+
+A watcher remove or rename forces a rescan, since it may take a listed file away. A create or modify relies on `needs_rescan`'s `seen` check, and a `.gitignore` edit forces, since it changes what the walk lists. Every event is first judged by the walk's own rules — the excluded names, the depth cap, `skip_dirs` and the gitignore chain ([how the filter replays it](crates/wolf-core/src/files.rs.md#the-gitignore-chain)). A `cargo build` under an ignored `target/` would otherwise cause a stream of re-walks, and judging by the walk's rules means a dropped event is never one the walk would list.
+
+The nvim triggers are two classes. Path-carrying buffer events (`BufWritePost` conditional, `BufFilePost`/`BufDelete` force) cover changes nvim makes itself; path-less refocus-edge force events (`ShellCmdPost`/`FocusGained`/`TermLeave`) catch mutations that fire no buffer event — a `:!git mv`, an external terminal or Finder while the app is unfocused, a command run in the drawer's shell. They stay beside the watcher because the edges are human-paced and the debounce plus the equality skip bound each to at most one no-op walk, and because they are the only path when the watcher cannot run (see the limitations below).
+
+`TermLeave` is chosen over `WinLeave` or `TermClose` because the drawer auto-`startinsert`s on `WinEnter`, so every drawer-exit path passes a terminal-to-normal mode change and the one unguarded event covers them all.
 
 A rescan is walk-then-swap, never streaming: a delete can only be expressed by wholesale replacement, so the re-walk collects into a local vec and replaces the session's list under one short write lock, bumping `version`. A result equal to the current listing skips both the swap and the version bump, so a no-op event — a `:bdelete` of a still-existing file — causes no UI churn.
 
@@ -131,7 +139,8 @@ Leaf order is the other half of the contract. Children are emitted depth-first, 
 - Content search skips a non-UTF-8 path or line, because `rg --json` sends those as a `bytes` payload and decoding it would add a base64 dependency.
 - Linked Markdown pages in the browser preview are static snapshots rendered from disk. The tick endpoint tracks only the pinned buffer, so only that one page live-reloads.
 - The Tier-1 open-file mirror reports the instance-global buflisted file set per tabpage rather than a genuinely per-tabpage set, which over-reopens on restore. The active path is genuinely per-tabpage.
-- A file created, renamed, or deleted by an external process is invisible to a live file-search session until a refocus edge or another trigger fires; there is no immediate watcher-driven update, and GNOME forwards no OS focus, so `FocusGained` never fires there.
+- The file-search watcher does not cover a root it cannot watch, a session started with `WOLF_FS_WATCH=0` whose root no watched session shares, or any root when the watcher cannot start. A recursive inotify watch adds one watch per directory, ignored and skipped trees included, so a root as large as `$HOME` can exhaust `max_user_watches`. An FSEvents stream that fails to start is silent, because notify 8.2.0 ignores `FSEventStreamStart`'s result. An external change under such a root waits for an nvim trigger, and GNOME forwards no OS focus, so `FocusGained` never fires there.
+- An edit to `.git/info/exclude`, to the global excludes file, or to a `.gitignore` above the session root changes what the walk lists without forcing a rescan. The watcher's filter can also go on judging events by the rules it read before such an edit until the root stops being watched.
 
 ## Deferred
 

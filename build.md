@@ -183,7 +183,7 @@ After changing a crate's Cargo dependencies, regenerate the `crate_universe` loc
 CARGO_BAZEL_REPIN=1 bazel build //crates/wolf-core:wolf_core
 ```
 
-Commit the updated `Cargo.Bazel.lock` and `MODULE.bazel.lock`. Repin after a feature change too, not only after adding a crate: enabling a feature moves the Bazel lockfile even when no node joins the graph.
+Commit the updated `Cargo.Bazel.lock`, and `MODULE.bazel.lock` when the repin moves it. Repin after a feature change too, not only after adding a crate: enabling a feature moves the Bazel lockfile even when no node joins the graph.
 
 Bazel discovers no files on its own, which costs two things a Cargo-only change would never notice. A new `tests/*.rs` needs a `rust_test` target (see [Running the tests](#running-the-tests)), and a new non-Rust asset that a module `include_str!`s needs the owning `rust_library`'s `compile_data` glob widened — an asset outside that glob compiles under Cargo and fails under Bazel. See [`crates/wolf-core/src/markdown/README.md`](crates/wolf-core/src/markdown/README.md) for the live example.
 

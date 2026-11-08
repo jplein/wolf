@@ -243,22 +243,23 @@ The four bundled fonts' verbatim licence texts, compiled in. Pure data, no GUI a
 
 #### `files.rs`
 
-Purpose: the streaming file-list traversal behind the picker's `FileSearch` session — a synchronous MRU seed, then a background `ignore`-crate walk — plus the `SearchRegistry`, which re-walks live sessions on `wolf_fs_changed`. Traversal rules live in the module doc; the rescan's why is in [wolf-core-decisions.md](../../../notes/wolf-core-decisions.md).
+Purpose: the streaming file-list traversal behind the picker's `FileSearch` session — a synchronous MRU seed, then a background `ignore`-crate walk — plus the `SearchRegistry`, which re-walks live sessions on `wolf_fs_changed` and on its own `notify` watcher's events. The traversal rules are in the module doc, the rescan's why in [wolf-core-decisions.md](../../../notes/wolf-core-decisions.md).
 
 **Public API**
 
-- `FileEntry` — the canonical definition, re-exported from `mru` and the crate root; `display` is what the UI shows and `rank` ranks.
+- `FileEntry` — the canonical definition, re-exported from `mru` and the crate root.
 - `FileSearch::read` — returns an owned guard, so a reader's borrow may outlive the `FileSearch`.
 
 **Decisions**
 
 - The walk is bounded by `SearchBounds` (the `WOLF_SEARCH_*` caps, each rejecting zero) because the root can fall back to `$HOME`. A capped walk ends `truncated` yet `complete`; only a real `cancel` leaves it incomplete.
 - Both walks share the one `walk_files` helper so their rules cannot drift; a rescan reuses the session's original `SearchBounds` and re-seeds from `MruStore::recent`, which prunes rows for deleted files.
-- `needs_rescan` makes `BufWritePost` conditional (rescan only for a path under the root and absent from `seen`); every other trigger forces a re-walk. Hence `append_batch` folds streamed paths into `seen`: seed-only membership would make every `:w` of a walk-discovered file a spurious walk.
+- A session's root is watched unless `WOLF_FS_WATCH=0`, read per search like the caps. `WatchFilter` drops each event path `walk_files` would not list ([the gitignore chain](../../../notes/crates/wolf-core/src/files.rs.md)).
+- A rename, delete, `.gitignore` edit or refocus edge forces a re-walk; for `BufWritePost` and a watcher create or modify, `needs_rescan` rescans only for a path under the root and absent from `seen`. Hence `append_batch` folds streamed paths into `seen`, or every `:w` of a walk-discovered file would walk.
 
 **Gotchas**
 
-- The session shape is the shared pattern in [wolf-core-decisions.md](../../../notes/wolf-core-decisions.md); specific here is the synchronous MRU seed, which also seeds the dedup set so a rediscovered recent file is not listed twice.
+- The session shape is the shared snapshot-and-wake pattern. The synchronous MRU seed also seeds the dedup set, so a rediscovered recent file is not listed twice.
 
 #### `search.rs`
 

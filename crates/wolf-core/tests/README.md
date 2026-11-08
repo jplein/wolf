@@ -198,14 +198,16 @@ Real Neovim (`//crates/wolf-core:file_search_rescan`: staged nvim runfiles, `WOL
 
 **Covers**
 
-- The fs-event rescan of a live `FileSearch` session: a file written through nvim appears with `version` bumped and the session still `complete`; a deleted file disappears without the MRU seed resurrecting it; `:saveas` lists both names (the original genuinely stays on disk); `:w` of an already-listed file moves nothing; and a burst of writes converges deduplicated. The pure `needs_rescan` decision is covered by the inline `#[cfg(test)]` module in `src/files.rs`, not here.
-- Three refocus-edge cases (`shell_cmd_post_rescans`, `focus_gained_rescans`, `term_leave_rescans`) pin the path-less force triggers: a `:silent !rm`, an external `remove_file` surfaced by pushing both `set_ui_focus` edges (nvim de-dupes `FocusGained`), and a delete under the open drawer surfaced by driving the real `toggle_terminal` flow, never a `doautocmd`.
+- Rescans of a live `FileSearch` session from each nvim trigger alone, with the watcher off: a file written through nvim appears with `version` bumped and the session `complete`; a deleted file stays gone despite the MRU seed; `:saveas` lists both names; `:w` of a listed file moves nothing; a burst converges deduplicated. The refocus-edge cases drive a `:silent !rm`, both `set_ui_focus` edges (nvim de-dupes `FocusGained`), and the real `toggle_terminal` flow, never a `doautocmd`.
+- With the watcher on and changes made only through `std::fs`: a create appears; a delete, and a rename into an ignored directory, disappear; a `.gitignore` edit re-filters; ignored churn and a modify of a listed file bump no `version`.
 
 **Gotchas**
 
-- The no-rescan case is a negative assertion: it sleeps `DEBOUNCE_SETTLE` (about seven times the rescan debounce) and asserts the version unchanged. If it flakes, widen the window; tightening it makes a false pass likelier.
-- The delete case opens its file via `InputEvent::Open` and polls `wait_for_mru_contains` first, because a typed `:e` never records into the MRU — without the record, the MRU-resurrection guard passes vacuously.
-- The burst case asserts only the converged set, never a rescan count: the debounce may run one walk or several, and both are correct.
+- Every case starts its session through `start_search` under `WATCH_ENV_LOCK`, because `WOLF_FS_WATCH` is process-global.
+- A watcher case `settle()`s after its first walk, so the new watch's catch-up rescan cannot satisfy it. The negative watcher cases prove the watch live, then `prime` a difference the next walk would see, since a no-op rescan bumps no `version`.
+- The negative cases sleep `DEBOUNCE_SETTLE` (about seven times the rescan debounce). If one flakes, widen it; tightening makes a false pass likelier.
+- The delete case opens its file via `InputEvent::Open` and polls `wait_for_mru_contains`, because a typed `:e` never records into the MRU and the resurrection guard would pass vacuously.
+- The burst case asserts only the converged set: the debounce may run one walk or several.
 
 #### `input_keys.rs`
 
