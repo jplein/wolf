@@ -316,23 +316,23 @@ Purpose: The crash/stall overlay — a full-bleed opaque cover over a broken edi
 
 #### `PaneContainerView.swift`
 
-Purpose: The editor area — one flat, flipped `NSView` that paints every split pane, owns the pure `PaneTree`, hosts the preview web views, and is the editor's first responder. [wolf-macos-decisions.md](../../../../notes/wolf-macos-decisions.md) covers the flat-view choice and how a preview reaches its web view.
+Purpose: The editor area: one flat, flipped `NSView` that paints every split pane, owns `PaneTree`, hosts preview web views and is first responder. [wolf-macos-decisions.md](../../../../notes/wolf-macos-decisions.md) covers the flat view and preview wiring.
 
 **Public API**
 
-- `markRefocusRebind()` / `rebind(tabpageHandle:)` — arm a grid rebind after a tabpage switch or restart.
+- `markRefocusRebind()` arms a grid rebind after a tabpage switch; `rebind(tabpageHandle:)` does so after a crash-restart and drops the drawer, leaving editor panes bound.
 - `layoutSnapshot()` / `requestLayoutRebuild(_:)` — the snapshot is `nil` for a lone empty pane.
-- `activeWin` — the per-view active window, keying `activePaneSelection` and `activePreviewSourcePath`. Never the tabpage-shared `WolfCoreHandle.active_win()`, which would let a background tab's selection enable Copy here.
-- `activePreviewSourcePath` — the Markdown source the active pane previews, or `nil` in edit mode; the sidebar marks it.
-- `otherPaneTarget(prefer:)` — maps `OtherPaneSeam.target` to the window argument for `preview_in_other` / `edit_in_other`: `0` means split, `nil` means no-op.
+- `activeWin` — the per-view active window behind `activePaneSelection` and `activePreviewSourcePath`; the tabpage-shared `WolfCoreHandle.active_win()` would let a background tab enable Copy.
+- `activePreviewSourcePath` — the Markdown source the active pane previews; `nil` in edit mode.
+- `otherPaneTarget(prefer:)` — `OtherPaneSeam.target` as the window for `preview_in_other` / `edit_in_other`: `0` splits, `nil` is a no-op.
 
 **Decisions**
 
-- The refocus rebind waits for `handle.active_tabpage()` to match this view's tabpage and skips close detection that pass: the vacated tabpage's grids would prune live panes.
-- Web-view frame, occlusion test and statusbar span come from one `geometry(_:fullWidth:)` call, written together before `needsDisplay`, so no frame paints preview alignment without a web view.
-- A grid is skipped only under an opaque, loaded preview web view; the flag survives reloads because WebKit keeps showing the outgoing document.
-- Scroll direction is the sign of `scrollingDeltaY`, which already reflects natural scrolling; `isDirectionInvertedFromDevice` double-corrects.
-- The terminal drawer pane lives in the pane map but outside `tree`, so leaves, neighbours and splits exclude it.
+- The refocus rebind waits until `handle.active_tabpage()` is this view's tabpage and skips close detection that pass: the vacated tabpage's grids would prune live panes.
+- One `geometry(_:fullWidth:)` call sets web-view frame, occlusion test and statusbar span before `needsDisplay`, so no frame paints preview alignment without a web view.
+- Grids are skipped only under an opaque, loaded preview web view; the flag survives reloads, as WebKit keeps showing the outgoing document.
+- Scroll direction is `scrollingDeltaY`'s sign, already natural-scroll aware; `isDirectionInvertedFromDevice` double-corrects.
+- The terminal drawer lives in the pane map, outside `tree`, so leaves, neighbours and splits exclude it. A restart drops it: a killed Neovim's grid stays in the snapshot, so close detection never fires and a kept id blocks reopening.
 
 #### `PickerChrome.swift`
 
