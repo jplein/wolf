@@ -50,8 +50,8 @@
 //!   `line-height` drives — the cell height as a function of the font size alone
 //!   ([`cell_metrics_math::cell_height`]) and the baseline that centres the glyph
 //!   box within it ([`cell_metrics_math::baseline`]). A port of
-//!   `WolfKeyMap/CellMetricsMath.swift`, with two deliberate divergences named in
-//!   that module's docs.
+//!   `WolfKeyMap/CellMetricsMath.swift`, sharing its two guards, which that
+//!   module's docs name.
 //! - [`mod@editor_inset`]: the chrome around a pane's text grid, as arithmetic —
 //!   the pane-local rectangle the grid paints into
 //!   ([`editor_inset::grid_rect`]), the pane-to-grid coordinate map every pointer
@@ -145,7 +145,7 @@
 //!   not a convenience: `<C-w>k` from the drawer is a PURE intent Neovim declines to
 //!   act on, so without an answer here the drawer is a room with no exit. A merge of
 //!   `WolfKeyMap/DrawerLayout.swift` and `WolfKeyMap/DrawerFocusSeam.swift`, with
-//!   three deliberate divergences named in that module's docs.
+//!   one deliberate divergence named in that module's docs.
 //! - [`ui_action_for`]: the TOTAL [`wolf_core::Command`] → [`UiAction`] mapping the
 //!   command drain dispatches through ([`command_action`]).
 //! - [`mod@palette`]: the command-palette rulebook — the candidate list this
