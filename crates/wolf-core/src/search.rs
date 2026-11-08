@@ -21,6 +21,10 @@
 //! at projection time, by [`crate::search_tree::project`]. Dropping (or
 //! [`SearchSession::cancel`]-ing) a session kills the rg subprocess.
 //!
+//! rg runs with `--hidden`, so dot-directories such as `.github/` are searched,
+//! but never descends into the directories the picker walk prunes
+//! ([`crate::files`]'s `EXCLUDED_DIR_NAMES`: `.git/` and `.wolf/`).
+//!
 //! ## Non-UTF-8 limitation
 //!
 //! rg emits a path/line as a `{"bytes": …}` object (base64) rather than
@@ -59,8 +63,8 @@ pub struct SearchOptions {
     /// case-insensitively (rg `-i`). Seeded from nvim's `ignorecase`, then owned
     /// by this search only.
     pub case_sensitive: bool,
-    /// `true` searches every file; `false` (the default) restricts to Markdown
-    /// (`--glob '*.md' --glob '*.markdown'`).
+    /// `true` searches every file outside `.git/` and `.wolf/`; `false` (the
+    /// default) restricts that set to Markdown (`--glob '*.md' --glob '*.markdown'`).
     pub all_files: bool,
 }
 
@@ -237,6 +241,11 @@ pub(crate) fn spawn_search(
                 .arg("*.md")
                 .arg("--glob")
                 .arg("*.markdown");
+        }
+        // Each matches the directory itself, so rg prunes the subtree before an include glob sees
+        // a file. Kept last anyway: where two globs match one path, rg's later glob wins.
+        for name in crate::files::EXCLUDED_DIR_NAMES {
+            cmd.arg("--glob").arg(format!("!{name}"));
         }
         cmd.arg("-e").arg(&opts.query);
         cmd.arg("--").arg(&root);

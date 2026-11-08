@@ -17,6 +17,8 @@
 //!   since `matches` accumulate in rg emission order and are sorted on read.
 //! - `WolfCore::open_at(path, line, col)` -> the buffer is edited and the cursor
 //!   lands at line/col (observed via `read_snapshot().current_file`).
+//! - The `.git/` / `.wolf/` exclusion: in both glob modes rg skips those two
+//!   directories while still searching other dot-directories (`.github/`).
 //!
 //! ## rg-availability guard
 //!
@@ -357,6 +359,66 @@ fn all_files_toggles_the_txt_filter() {
         all.contains("keep.md"),
         "all-files search still includes markdown; got {all:?}"
     );
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// (2b) `.git/` and `.wolf/` are never searched, in either glob mode, while another
+/// dot-directory (`.github/`) still is. `.git/notes.md` and `.wolf/cache.md` are
+/// Markdown, so the Markdown-only mode must exclude them despite its include globs;
+/// `.git/hooks/pre-commit` is not, so only the all-files mode could reach it.
+#[test]
+fn git_and_wolf_dirs_are_excluded() {
+    let Some(_rg) = rg_bin_or_skip() else {
+        return;
+    };
+    let _ = common::require_nvim_bin();
+    let (_dir, cwd) = temp_cwd();
+
+    // Nothing under `.git/info/`: rg treats the root as a repo and reads `info/exclude`.
+    write_file(&cwd.join("keep.md"), "needle in a plain file\n");
+    write_file(
+        &cwd.join(".github").join("ci.md"),
+        "needle in a hidden dir\n",
+    );
+    write_file(
+        &cwd.join(".git").join("hooks").join("pre-commit"),
+        "#!/bin/sh\n# needle in a git hook\n",
+    );
+    write_file(
+        &cwd.join(".git").join("notes.md"),
+        "needle in git metadata\n",
+    );
+    write_file(
+        &cwd.join(".wolf").join("cache.md"),
+        "needle in wolf state\n",
+    );
+
+    let core = start_core_in(&cwd);
+
+    for all_files in [true, false] {
+        let found = rel_paths(&run_search(&core, opts("needle", false, false, all_files)));
+        assert!(
+            found.contains("keep.md"),
+            "all_files={all_files}: keep.md must hit; its absence means the search itself \
+             failed, not that the exclusion works. Got {found:?}"
+        );
+        assert!(
+            found.contains(".github/ci.md"),
+            "all_files={all_files}: .github/ci.md must hit; its absence means the exclusion \
+             is too broad (e.g. every dot-directory, or `--hidden` dropped). Got {found:?}"
+        );
+        let leaked: Vec<&String> = found
+            .iter()
+            .filter(|p| p.starts_with(".git/") || p.starts_with(".wolf/"))
+            .collect();
+        assert!(
+            leaked.is_empty(),
+            "all_files={all_files}: no hit may come from .git/ or .wolf/; these leaked, so rg \
+             is not given the exclusion globs (or the Markdown include globs override them): \
+             {leaked:?}. Got {found:?}"
+        );
+    }
 
     core.shutdown().expect("shutdown should be Ok");
 }

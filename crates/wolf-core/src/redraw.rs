@@ -217,8 +217,10 @@ const FS_CHANGED_EVENT: &str = "wolf_fs_changed";
 /// (`term://<cwd>//<pid>:<command>`).
 ///
 /// A buffer name carrying it is a running job, not a file on disk, so it must not
-/// reach [`Snapshot::open_files`] — see [`is_terminal_buffer_name`].
-const TERMINAL_BUFFER_PREFIX: &str = "term://";
+/// reach [`Snapshot::open_files`] — see [`is_terminal_buffer_name`]. The per-pane
+/// statusbar keys on it too: [`crate::pane_status::pane_status`] shows such a
+/// buffer as its command's name.
+pub(crate) const TERMINAL_BUFFER_PREFIX: &str = "term://";
 
 /// Whether a buffer name denotes a Neovim TERMINAL buffer rather than a file.
 ///
@@ -995,7 +997,7 @@ impl RedrawHandler {
     /// launch cwd is not a directory the user opened, so it must not pollute the
     /// recent-dirs MRU. Only genuine `DirChanged` events (unflagged) record.
     ///
-    /// Per-tab cwd is NO LONGER mirrored core-side into a state store: the
+    /// Per-tab cwd is not mirrored core-side into a state store: the
     /// front-end reads each tab's live cwd (via the FFI `cwd()` accessor) when it
     /// walks the whole window/tab tree at snapshot time.
     fn apply_cwd(&self, args: Vec<Value>) {

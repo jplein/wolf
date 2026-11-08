@@ -6,9 +6,14 @@
 //!     It delegates to `WolfCore::recent_dirs()` and maps each `PathBuf` via
 //!     `to_string_lossy().into_owned()`.
 //!
-//! The store records on EVERY cwd change (including nvim's initial launch cwd),
-//! writes to `<state_dir>/folder-mru.sqlite`, and is GLOBAL — so the returned
-//! list also contains the launch cwd, not only dirs we explicitly `chdir` into.
+//! The store records every cwd change but nvim's initial launch cwd (`apply_cwd`
+//! skips the flagged initial emit), writes to `<state_dir>/folder-mru.sqlite`, and
+//! is GLOBAL, so the test asserts membership and order rather than length.
+//!
+//! `recent_dirs()` omits an entry that is not an existing directory when it is read,
+//! and never prunes the store. After recording A then B, the test deletes A and
+//! asserts it is omitted while B stays, then recreates A and asserts it is listed
+//! again after B: nothing records A in between, so its return proves the row was kept.
 //!
 //! This drives the RUST half against a REAL, hermetic Neovim — NO mocks, per the
 //! project testing policy. It is modeled on `tests/file_actions.rs` (chdir +
@@ -143,7 +148,7 @@ fn recent_dirs_reports_chdir_targets_newest_first() {
     wait_for_cwd(&handle, &canonical_b);
 
     // --- 3. The MRU write can land after cwd() flips, so poll until both appear. The list is
-    // global and holds the launch cwd, so assert membership and order, not length.
+    // global, so assert membership and order, not length.
     let deadline = Instant::now() + FLUSH_TIMEOUT;
     let mut recent: Vec<PathBuf> = Vec::new();
     let mut idx_a = None;
@@ -183,7 +188,47 @@ fn recent_dirs_reports_chdir_targets_newest_first() {
          newest-first, got {recent:?}"
     );
 
-    // --- 5. Shutdown: clean teardown ---------------------------------------
+    // --- 5. Delete A (nvim sits in B): it is omitted on read, B stays -----
+    std::fs::remove_dir(&canonical_a).expect("failed to delete chdir target A");
+    let after_delete: Vec<PathBuf> = handle
+        .recent_dirs()
+        .iter()
+        .map(|p| canonicalize(p))
+        .collect();
+    assert!(
+        after_delete.contains(&canonical_b),
+        "B ({canonical_b:?}) still exists and must stay listed after A is deleted; its \
+         absence means the filter drops existing folders too. Got {after_delete:?}"
+    );
+    assert!(
+        !after_delete.contains(&canonical_a),
+        "A ({canonical_a:?}) no longer exists and must be omitted; its presence means \
+         recent_dirs() does not filter vanished folders on read. Got {after_delete:?}"
+    );
+
+    // --- 6. Recreate A: nothing records it again, so its return proves the store kept it.
+    std::fs::create_dir(&canonical_a).expect("failed to recreate chdir target A");
+    let after_recreate: Vec<PathBuf> = handle
+        .recent_dirs()
+        .iter()
+        .map(|p| canonicalize(p))
+        .collect();
+    let idx_b = after_recreate.iter().position(|p| *p == canonical_b);
+    let idx_a = after_recreate.iter().position(|p| *p == canonical_a);
+    let (Some(idx_a), Some(idx_b)) = (idx_a, idx_b) else {
+        panic!(
+            "after recreating A, both A ({canonical_a:?}) and B ({canonical_b:?}) must be \
+             listed; a missing A means the deleted row was pruned from the store rather \
+             than filtered on read. Got {after_recreate:?}"
+        );
+    };
+    assert!(
+        idx_b < idx_a,
+        "the recreated A ({canonical_a:?}, idx {idx_a}) must keep its place after B \
+         ({canonical_b:?}, idx {idx_b}); A first means it was re-recorded. Got {after_recreate:?}"
+    );
+
+    // --- 7. Shutdown: clean teardown ---------------------------------------
     handle.shutdown();
 
     std::env::remove_var("WOLF_STATE_DIR");

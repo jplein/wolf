@@ -27,6 +27,13 @@
 //! because `apply_buffers` canonicalizes each `nvim_buf_get_name`); and after a
 //! `:vsplit` + opening a SECOND file in the new window, the two window grids report
 //! DISTINCT filenames (per-window, not global).
+//!
+//! A second test opens the terminal drawer with `toggle_terminal()` and asserts
+//! that its grid, whose `abs_path()` is the raw `term://…//<pid>:/bin/sh` name,
+//! reports `filename() == "sh"` and an empty `display_path()`. It sets `SHELL` to
+//! `/bin/sh` before start, because Neovim's default `shell` is `$SHELL` and the
+//! drawer's `:terminal` names its buffer after it. The first test opens no
+//! terminal, so the process-global `SHELL` does not reach what it asserts.
 
 mod common;
 
@@ -241,6 +248,95 @@ fn pane_status_reports_filename_and_path_per_grid() {
     );
 
     // --- 6. Shutdown: clean teardown ----------------------------------------
+    handle.shutdown();
+    drop(tmp);
+}
+
+#[test]
+fn pane_status_reports_shell_name_for_terminal_drawer() {
+    let Some(nvim_bin) = common::nvim_bin_or_skip() else {
+        return;
+    };
+    std::env::set_var("WOLF_NVIM_BIN", &nvim_bin);
+
+    // Neovim's default `shell` is `$SHELL`, so the drawer's buffer name ends in `:/bin/sh`.
+    let shell = std::path::Path::new("/bin/sh");
+    assert!(
+        shell.exists(),
+        "/bin/sh must exist: this test pins the drawer's shell to it so the expected name is fixed"
+    );
+    std::env::set_var("SHELL", shell);
+
+    let init_lua = common::init_lua_path();
+    let tmp = tempfile::tempdir().expect("failed to create temp cwd directory");
+
+    let handle = wolf_ffi_start(
+        init_lua.to_string_lossy().into_owned(),
+        tmp.path().to_string_lossy().into_owned(),
+        common::DEFAULT_COLS,
+        common::DEFAULT_ROWS,
+    )
+    .expect("wolf_ffi_start should return a handle (is WOLF_NVIM_BIN a valid nvim?)");
+
+    // --- 1. Poll read_frame() until attached (cols > 0) ---------------------
+    let deadline = Instant::now() + FLUSH_TIMEOUT;
+    let mut frame = handle.read_frame();
+    while Instant::now() < deadline {
+        frame = handle.read_frame();
+        if frame.cols() > 0 {
+            break;
+        }
+        sleep(POLL_INTERVAL);
+    }
+    assert!(
+        frame.cols() > 0,
+        "core should attach and report a non-empty active frame (got cols {})",
+        frame.cols()
+    );
+
+    // --- 2. Open the drawer; poll for the grid whose raw buffer name is a terminal.
+    handle.toggle_terminal();
+
+    let deadline = Instant::now() + FLUSH_TIMEOUT;
+    let drawer_grid = loop {
+        let grids = live_windows(&handle);
+        let seen: Vec<String> = grids
+            .iter()
+            .map(|(g, _)| handle.pane_status_for_grid(*g).abs_path())
+            .collect();
+        if let Some((g, _)) = grids.iter().find(|(g, _)| {
+            handle
+                .pane_status_for_grid(*g)
+                .abs_path()
+                .starts_with("term://")
+        }) {
+            break *g;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for a window grid whose abs_path() is a `term://` drawer buffer; \
+             without one the terminal arm has no input to act on (abs_paths seen: {seen:?})"
+        );
+        sleep(POLL_INTERVAL);
+    };
+
+    // --- 3. The drawer's statusbar strings ------------------------------------
+    let st = handle.pane_status_for_grid(drawer_grid);
+    let abs = st.abs_path();
+    assert_eq!(
+        st.display_path(),
+        "",
+        "the drawer pane (abs_path {abs:?}) must have an empty display_path, so no path line \
+         is drawn; the raw `term://` name here means pane_status has no terminal arm"
+    );
+    assert_eq!(
+        st.filename(),
+        "sh",
+        "the drawer pane (abs_path {abs:?}) must display as its shell's name; another value \
+         means the arm misparsed the name, or Neovim did not take its shell from $SHELL"
+    );
+
+    // --- 4. Shutdown: clean teardown ----------------------------------------
     handle.shutdown();
     drop(tmp);
 }

@@ -21,10 +21,11 @@
 //! walk outside one: it honors `.gitignore` (in the cwd or any ancestor up to the
 //! repo root), the global git ignore, and git's `info/exclude`, shows dotfiles
 //! (only `.gitignore` filters), does not follow symlinks (so symlink loops cannot
-//! hang it), and never descends into `.git/` or our own `.wolf/` cache. Each
-//! entry is classified by [`is_listable_file`]: plain files are kept, a symlink is
-//! kept only when its target is a plain file, and directories / broken or
-//! directory symlinks are dropped.
+//! hang it), and never descends into [`EXCLUDED_DIR_NAMES`] (`.git/` and our own
+//! `.wolf/` cache), which content search excludes too. Each entry is classified
+//! by [`is_listable_file`]: plain files are kept, a symlink is kept only when its
+//! target is a plain file, and directories / broken or directory symlinks are
+//! dropped.
 
 use std::collections::HashSet;
 use std::ffi::OsStr;
@@ -42,6 +43,10 @@ use crate::redraw::WakeFn;
 /// state (and a wake fired). Keeps lock hold-times short while still streaming
 /// results to the UI promptly.
 const TRAVERSAL_BATCH: usize = 256;
+
+/// The directory names every traversal prunes: the picker walk here and the
+/// content search's `rg` exclusion globs in `search.rs`, so the two cannot drift.
+pub(crate) const EXCLUDED_DIR_NAMES: [&str; 2] = [".git", ".wolf"];
 
 /// Default cap on the number of listable files a single traversal will stream
 /// before it stops early (marking the result [`FileSearchState::truncated`]).
@@ -311,8 +316,7 @@ fn walk_files(
         .max_depth(Some(bounds.max_depth))
         .filter_entry(move |entry| {
             let name = entry.file_name();
-            name != OsStr::new(".git")
-                && name != OsStr::new(".wolf")
+            !EXCLUDED_DIR_NAMES.iter().any(|ex| name == OsStr::new(ex))
                 && !skip.contains(entry.path())
         })
         .build();
@@ -403,11 +407,11 @@ fn append_batch(
     }
 }
 
-/// True if any component of `path` is `.git` or `.wolf` (a defensive backstop in
-/// addition to the walker's `filter_entry` pruning of those subtrees).
+/// True if any component of `path` is one of [`EXCLUDED_DIR_NAMES`] (a defensive
+/// backstop in addition to the walker's `filter_entry` pruning of those subtrees).
 fn has_excluded_component(path: &Path) -> bool {
     path.components().any(|c| {
-        matches!(c, Component::Normal(name) if name == OsStr::new(".git") || name == OsStr::new(".wolf"))
+        matches!(c, Component::Normal(name) if EXCLUDED_DIR_NAMES.iter().any(|ex| name == OsStr::new(ex)))
     })
 }
 

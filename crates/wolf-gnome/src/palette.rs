@@ -170,10 +170,12 @@ pub enum PaletteAction {
 ///   working directory rather than Neovim's, so one could only be a corrupt store
 ///   row.
 ///
-/// The store itself is never pruned. It lives at `<state_dir>/folder-mru.sqlite`
-/// and is shared with the macOS front-end, so deleting a temporarily unmounted
-/// network path would permanently forget it for both; filtering on read lets it
-/// return.
+/// [`WolfCore::recent_dirs`] already omits a directory that has gone, and neither
+/// it nor this seam prunes the store. The store lives at
+/// `<state_dir>/folder-mru.sqlite` and is shared with the macOS front-end, so
+/// deleting a temporarily unmounted network path would permanently forget it for
+/// both; filtering on read lets it return. The `is_dir` conjunct stays because this
+/// seam is correct for any slice it is given, and a stale row wedges a cell.
 ///
 /// Limitation: a directory that exists but is unreadable (mode `000`) still passes
 /// `is_dir` and is still offered.
@@ -347,8 +349,8 @@ impl PaletteInner {
         if self.open.get() {
             return;
         }
-        // One short core borrow for both snapshots. `recent_dirs` (a SQLite SELECT) runs inside it: it
-        // cannot re-enter the `RefCell`, and splitting it out costs a second borrow for no gain.
+        // One short core borrow for both snapshots. `recent_dirs` (a SQLite SELECT plus a stat per row)
+        // runs inside it: it cannot re-enter the `RefCell`; splitting it out costs a second borrow.
         let (mru, recorded, live) = {
             let core_ref = self.core.borrow();
             match core_ref.as_ref() {
@@ -962,11 +964,11 @@ mod tests {
     ///   that window is [`PaletteAction::SwitchWindow`]'s row, and re-rooting this
     ///   one onto another's project would put two Neovims on one swap directory.
     ///   [`open_recent_targets_the_invoking_window`] is where that shape is named.
-    /// * **A directory that has gone.** `RecentDirs::recent` deliberately does not
-    ///   prune vanished paths, and a failed `:tcd` in `wolf_core::input` degrades to
-    ///   a `tracing::warn!` — Neovim never fires `DirChanged`, so `shell`'s
-    ///   `pending_reroot` stays set until the next successful chdir. A stale row is
-    ///   therefore worse than a no-op: it wedges a front-end cell.
+    /// * **A directory that has gone.** `WolfCore::recent_dirs` omits one on read,
+    ///   but this seam takes any slice, and a failed `:tcd` in `wolf_core::input`
+    ///   degrades to a `tracing::warn!` — Neovim never fires `DirChanged`, so
+    ///   `shell`'s `pending_reroot` stays set until the next successful chdir. A
+    ///   stale row is therefore worse than a no-op: it wedges a front-end cell.
     /// * **A relative path.** Nothing here resolves one against anything, so it can
     ///   only be a corrupt store row.
     ///

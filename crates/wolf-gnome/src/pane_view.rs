@@ -785,7 +785,8 @@ impl PaneInner {
     ///
     /// **The terminal drawer takes this path with NO branch of its own**, because it
     /// iterates `panes` and the drawer is an ordinary entry in it. That is how the
-    /// drawer gets a statusbar — `bash` over the raw `term://…` string, which is
+    /// drawer gets a statusbar — the shell's name (`bash`) from core's terminal arm
+    /// of `pane_status`, with an empty display path and so no path line, which is
     /// exactly what macOS shows, since `paintStatusbar` has no drawer case either —
     /// and how it gets the `b:wolf_full_width` flag that makes it span the window.
     fn refresh_pane_state(&self) {

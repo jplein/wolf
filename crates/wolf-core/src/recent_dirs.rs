@@ -14,7 +14,8 @@
 //!   move-or-add-to-top, prunes beyond the cap, and swallows every error, so a
 //!   transient cache problem never blocks a directory change.
 //! - [`RecentDirs::recent`] returns the recorded directories newest-first, capped,
-//!   and returns an empty `Vec` on any failure.
+//!   and returns an empty `Vec` on any failure. It returns vanished directories
+//!   too; [`crate::api::WolfCore::recent_dirs`] filters them out on read.
 //! - Every failure is handled SILENTLY — nothing panics, no error is propagated,
 //!   and the only log is `tracing::debug!` (never `warn!`) — but the RESPONSE
 //!   depends on WHY it failed (see [`warrants_recreate`]):
@@ -132,8 +133,9 @@ impl RecentDirs {
     /// [`RECENT_DIRS_LIMIT`].
     ///
     /// Returns an empty `Vec` on any failure (disabled store, open/query error).
-    /// Unlike [`crate::mru::MruStore::recent`] it does NOT prune paths whose
-    /// directory no longer exists.
+    /// Unlike [`crate::mru::MruStore::recent`] it neither prunes nor filters paths
+    /// whose directory no longer exists: [`crate::api::WolfCore::recent_dirs`]
+    /// omits those on read, leaving the row here so a returning folder reappears.
     #[must_use]
     pub fn recent(&self) -> Vec<PathBuf> {
         let limit = i64::try_from(RECENT_DIRS_LIMIT).unwrap_or(i64::MAX);

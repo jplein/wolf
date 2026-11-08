@@ -1208,9 +1208,18 @@ impl WolfCore {
     /// "open folder" command or a typed `:cd`), recorded from the `wolf_cwd`
     /// notification into the always-on `<state_dir>/folder-mru.sqlite`. Returns an
     /// empty `Vec` when the store is disabled or unreadable.
+    ///
+    /// An entry that is not an existing directory at read time is omitted, but its
+    /// row is never pruned from the store, so a folder that comes back (a remounted
+    /// volume, a recreated directory) reappears in its old place. The cap applies
+    /// before the filter. Each entry is stat'ed on the calling thread.
     #[must_use]
     pub fn recent_dirs(&self) -> Vec<PathBuf> {
-        self.recent_dirs.recent()
+        self.recent_dirs
+            .recent()
+            .into_iter()
+            .filter(|p| p.is_dir())
+            .collect()
     }
 
     /// Returns a clone of the global command-palette MRU handle
@@ -1274,7 +1283,8 @@ impl WolfCore {
     /// ([`live_cwd`](Self::live_cwd)) and the user's home directory. This is the
     /// display path only (the [`PaneStatus::display_path`](crate::pane_status::PaneStatus)
     /// field); the filename is derived separately by the caller. An empty
-    /// `abs_path` yields an empty display path.
+    /// `abs_path` yields an empty display path, and so does a terminal buffer name
+    /// (`term://…`).
     #[must_use]
     pub fn display_path(&self, abs_path: &str) -> String {
         crate::pane_status::pane_status(abs_path, self.live_cwd().as_deref(), canonical_home())

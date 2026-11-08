@@ -186,8 +186,8 @@
 //!
 //! Thirty-seven of the sixty-one OCR a screenshot of the live window, and exactly one
 //! of those OCRs a CROP of it rather than the whole file: the terminal-drawer smoke
-//! samples a band inside the drawer strip, because the statusbar directly above it
-//! draws a `term://…//<pid>:…` string that differs on every run. Fourteen
+//! samples a band inside the drawer strip, below its statusbar, because that band is
+//! the region measured byte-identical across runs (see `drawer_band_rect`). Fourteen
 //! deliberately capture no image at all: the `:qa` smoke asserts on the cage exit
 //! status alone, while the configured-font-size and column-cap smokes add two
 //! integers each, the configured-appearance smoke two exact strings, the
@@ -30642,12 +30642,11 @@ const DRAWER_BAND_STRIP_EXTRA_PX: f64 = 2.0;
 ///
 /// ## Why a band and not the page
 ///
-/// The drawer's statusbar draws `wolf_core::pane_status`'s raw
-/// `term:///<cwd>//<pid>:/nix/store/<hash>/bin/bash`, whose `<pid>` changes every
-/// run. MEASURED, md5 over three runs: the whole page, the drawer strip and the
-/// statusbar alone all differ every run; the band below the statusbar is
-/// BYTE-IDENTICAL, 6/6 and 3/3. An OCR sample of the whole drawer is a flake by
-/// construction.
+/// MEASURED, md5 over repeated runs: the band below the drawer's statusbar is
+/// BYTE-IDENTICAL, 6/6 and 3/3, so it is the one region of the drawer this smoke
+/// samples. The statusbar shows the shell's name from `wolf_core::pane_status`'s
+/// terminal arm; that string is asserted in `crates/wolf-ffi/tests/pane_status.rs`,
+/// not here.
 ///
 /// **The shell PROMPT does not vary per run.**
 /// [`cage_command`] sets `HOME` to the temp cwd's parent, so bash's `\w` renders the
@@ -32987,9 +32986,9 @@ fn ocr_uniform_block_to_lowercase(png: &Path) -> String {
 ///
 /// ## Why it crops instead of taking a second `grim`
 ///
-/// The drawer's statusbar draws a `term:///…//<pid>:…` string that changes every run,
-/// so the sample has to exclude it — [`drawer_band_rect`] owns that derivation and
-/// the md5 evidence behind it. Doing the exclusion with a second, region-limited
+/// The sample is limited to the band below the drawer's statusbar, the region
+/// measured stable across runs — [`drawer_band_rect`] owns that derivation and the
+/// md5 evidence behind it. Doing the limiting with a second, region-limited
 /// `grim` would sample a DIFFERENT INSTANT: the marker leg's capture is deliberately
 /// taken while Neovim is still in terminal-insert (in Normal mode the block cursor
 /// sits on the marker's last character and tesseract misread it), and a second

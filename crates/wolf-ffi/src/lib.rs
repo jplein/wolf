@@ -480,8 +480,8 @@ mod ffi {
         // nvim's live, canonicalized cwd (tracks `:cd`/`DirChanged`); empty until nvim first reports
         // it, and after shutdown.
         fn cwd(&self) -> String;
-        // The global recent-directories MRU, newest first, capped at 20 (File > Open Recent). Empty
-        // when the store is disabled or unreadable, or the core is gone.
+        // The global recent-directories MRU, newest first, capped at 20 (File > Open Recent), minus
+        // folders that no longer exist. Empty when the store is disabled/unreadable or the core is gone.
         fn recent_dirs(&self) -> Vec<String>;
         // The `WolfTitlebar` group's background (the macOS titlebar); unset when the group is absent
         // or cleared, or the core is gone.
@@ -997,11 +997,11 @@ mod ffi {
     extern "Rust" {
         type FfiPaneStatus;
 
-        // The base filename shown in the pane's statusbar (or `[No Name]` for an
-        // unnamed buffer).
+        // The base filename shown in the pane's statusbar (`[No Name]` for an unnamed buffer, the
+        // shell's name for a terminal).
         fn filename(&self) -> String;
-        // The path shown beneath the filename (cwd-relative, `~`-prefixed, or
-        // absolute; empty for an unnamed buffer).
+        // The path shown beneath the filename (cwd-relative, `~`-prefixed, or absolute; empty for
+        // an unnamed buffer or a terminal).
         fn display_path(&self) -> String;
         // The buffer's raw ABSOLUTE path (never relativized; empty for an unnamed
         // buffer). The macOS front-end persists it as a pane-layout leaf path.
@@ -2300,8 +2300,9 @@ impl WolfCoreHandle {
     }
 
     /// The GLOBAL recent-directories MRU, newest-first (capped at 20), as owned
-    /// Strings; an empty `Vec` when the store is disabled/unreadable or the core
-    /// has been shut down.
+    /// Strings, omitting folders that no longer exist (the store keeps them, so a
+    /// returning folder reappears); an empty `Vec` when the store is
+    /// disabled/unreadable or the core has been shut down.
     ///
     /// Delegates to [`WolfCore::recent_dirs`], mapping each `PathBuf` via
     /// `to_string_lossy().into_owned()`. Read lazily at Open-Recent-menu open
@@ -3541,15 +3542,17 @@ pub struct FfiPaneStatus {
 }
 
 impl FfiPaneStatus {
-    /// The base filename shown in the pane's statusbar (or `[No Name]` for an
-    /// unnamed buffer).
+    /// The base filename shown in the pane's statusbar (`[No Name]` for an
+    /// unnamed buffer, the basename of its command, such as `bash`, for a
+    /// terminal buffer).
     #[must_use]
     pub fn filename(&self) -> String {
         self.filename.clone()
     }
 
     /// The path shown beneath the filename (cwd-relative, `~`-prefixed, or
-    /// absolute; empty for an unnamed buffer).
+    /// absolute; empty for an unnamed buffer or a terminal buffer, so no path
+    /// line is drawn).
     #[must_use]
     pub fn display_path(&self) -> String {
         self.display_path.clone()

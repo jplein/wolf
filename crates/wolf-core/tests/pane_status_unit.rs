@@ -15,9 +15,15 @@
 //! The signatures:
 //!
 //! - `pub const NO_NAME: &str = "[No Name]";`
-//! - `pub struct PaneStatus { pub filename: String, pub display_path: String }`
+//! - `pub struct PaneStatus { pub filename: String, pub display_path: String,
+//!    pub abs_path: String }`
 //! - `pub fn pane_status(buf_path: &str, cwd: Option<&Path>, home: Option<&Path>)
 //!    -> PaneStatus`
+//!
+//! A terminal buffer (`term://<cwd>//<pid>:<command>`) has its own arm: `filename`
+//! is the basename of the command's first word, `display_path` is empty and
+//! `abs_path` is the raw name. A `term://` name with no command word, and a path
+//! that merely contains `term://`, fall through to the path rules.
 //!
 //! Paths here are forward-slash POSIX literals — these tests run on macOS/Linux.
 //! The caller (`WolfCore::pane_status`) passes already-canonicalized cwd/home/
@@ -132,4 +138,95 @@ fn no_cwd_no_home_is_absolute_passthrough() {
         s.display_path, buf,
         "cwd=None,home=None -> absolute passthrough"
     );
+}
+
+/// The cwd and home every terminal row is evaluated against.
+const TERM_CWD: &str = "/home/u/proj";
+const TERM_HOME: &str = "/home/u";
+
+/// Asserts the terminal arm for one `term://` buffer name: `filename` is the basename
+/// of the command's first word, `display_path` is empty, and `abs_path` is the raw name.
+fn assert_terminal(buf: &str, expected_name: &str) {
+    let s = status(buf, Some(TERM_CWD), Some(TERM_HOME));
+    assert_eq!(
+        s.display_path, "",
+        "{buf:?} is a terminal, so display_path must be empty (no path line); a non-empty \
+         value means the terminal arm did not fire and the path rules ran instead"
+    );
+    assert_eq!(
+        s.filename, expected_name,
+        "{buf:?} must display as the basename of its command's first word; a different \
+         value means the arm split on the wrong `//<pid>:` or kept the arguments or path"
+    );
+    assert_eq!(
+        s.abs_path, buf,
+        "{buf:?}: abs_path must stay the raw buffer name, which macOS persists"
+    );
+}
+
+/// A terminal whose shell is an absolute path shows the shell's basename.
+#[test]
+fn terminal_absolute_shell_is_its_basename() {
+    assert_terminal("term:///tmp/proj//4242:/bin/bash", "bash");
+}
+
+/// A terminal whose command carries arguments shows only the first word's basename.
+#[test]
+fn terminal_command_arguments_are_dropped() {
+    assert_terminal(
+        "term://~/proj//4242:/nix/store/abc-bash-5.2/bin/bash --login",
+        "bash",
+    );
+}
+
+/// A bare command word (no directory) is shown as is; the path rules would read the
+/// last component of `term://~//7:zsh` as `7:zsh`.
+#[test]
+fn terminal_bare_command_word() {
+    assert_terminal("term://~//7:zsh", "zsh");
+}
+
+/// The split is at the FIRST `//<digits>:` after the prefix: a later one inside the
+/// command (here a URL argument) does not move it.
+#[test]
+fn terminal_split_is_at_the_first_pid_separator() {
+    assert_terminal("term://~//42:bash -c 'curl http://x//1:y'", "bash");
+}
+
+/// Neovim's form for a terminal opened with cwd `/`.
+#[test]
+fn terminal_root_cwd() {
+    assert_terminal("term:///.//9:sh", "sh");
+}
+
+/// A real file whose path merely CONTAINS `term://` is not a terminal: the arm keys on
+/// the prefix, so the path rules apply.
+#[test]
+fn term_scheme_inside_a_path_is_not_a_terminal() {
+    let buf = "/home/u/proj/term://weird.md";
+    let s = status(buf, Some(TERM_CWD), Some(TERM_HOME));
+    assert_eq!(
+        s.filename, "weird.md",
+        "{buf:?} is a file, so filename follows the path rules; another value means the \
+         terminal arm matched `term://` somewhere other than the start"
+    );
+    assert!(
+        !s.display_path.is_empty(),
+        "{buf:?} is a file, so it must keep a path line; an empty display_path means the \
+         terminal arm matched `term://` somewhere other than the start"
+    );
+}
+
+/// A `term://` name with no command word falls through to the path rules, whose
+/// display path for a name under neither cwd nor home is the raw input.
+#[test]
+fn terminal_without_command_word_falls_through() {
+    for buf in ["term://", "term://~//7:"] {
+        let s = status(buf, Some(TERM_CWD), Some(TERM_HOME));
+        assert_eq!(
+            s.display_path, buf,
+            "{buf:?} has no command word, so the path rules must apply and display it raw; \
+             an empty display_path means the arm fired without a command to name"
+        );
+    }
 }
