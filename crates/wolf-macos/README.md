@@ -48,8 +48,9 @@ The AppKit half of the crate has no automated coverage — see the testing postu
 The swift-format check in [`//tools/lint`](../../tools/lint/README.md), `:swift_format`, gates `bazel test //...` over this package's hand-written Swift, enumerated by the `:swift_format_srcs` filegroup here, and excludes the machine-generated bindings under [`crates/wolf-ffi/generated/`](../wolf-ffi/README.md). The fix target, `:swift_format.fix`, is `manual` and runs only when named.
 
 ```sh
-bazel test //tools/lint:swift_format               # check
-bazel run  //tools/lint:swift_format.fix           # format in place
+bazel test //tools/lint:swift_format                     # check
+bazel run  //tools/lint:swift_format.fix                 # format in place
+bazel run  //tools/lint:swift_format.fix -- <file>.swift # format only these
 ```
 
 ## Bundle contents

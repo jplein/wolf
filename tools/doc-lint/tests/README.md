@@ -26,6 +26,7 @@ A sidecar has one `LINE RULE` pair per line, such as `7 comment-lines`, and an e
 
 - No fixture is named `BUILD.bazel`, `BUILD`, `MODULE.bazel`, `Cargo.toml`, `flake.nix`, `.envrc` or `.gitignore`, and no fixture directory is named `target`, because Bazel, Cargo, Nix, direnv or git would treat it as a real file. `api.rs` tests those mappings instead.
 - A fixture file cannot carry trailing whitespace, which editors and formatters strip, so `fixtures.rs` builds that case in code.
+- Fixtures reach their tests through the `:fixtures` and `:files_mode_fixtures` filegroups in [`../BUILD.bazel`](../BUILD.bazel), never a glob in `data`, because [`:rustfmt.fix`](../../lint/README.md#how-each-target-works) rewrites every `.rs` file a Rust target lists directly, and a fixture's bytes are test input. A new test that reads fixtures takes them the same way.
 
 ## Files
 
