@@ -1301,7 +1301,7 @@ impl WolfCore {
     ///
     /// Joins `grid` → [`WinInfo::win`](crate::render::WinInfo) → the per-window
     /// buffer path in [`Snapshot::buffers`](crate::render::Snapshot::buffers), then
-    /// formats it via the pure [`crate::pane_status`] over the live cwd
+    /// formats it via the pure [`crate::pane_status()`] over the live cwd
     /// ([`live_cwd`](Self::live_cwd)) and the user's home directory. A window with
     /// no matching entry (an unnamed buffer, or a grid with no window) yields an
     /// empty buffer path, which the pure function maps to

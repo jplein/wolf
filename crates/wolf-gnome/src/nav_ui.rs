@@ -2,7 +2,7 @@
 //! window a Back/Forward press acts on, whether the press may be issued at all,
 //! and whether each of the two toolbar buttons is sensitive.
 //!
-//! The navigation counterpart of [`crate::liveness_ui`]. Data in, data out — no
+//! The navigation counterpart of [`mod@crate::liveness_ui`]. Data in, data out — no
 //! widget type, no `WolfCore`, no display — which is exactly what lets the whole
 //! rulebook be unit-tested headlessly, the same way [`crate::command_action`],
 //! [`crate::geometry`] and [`crate::cursor`] keep their decisions pure. The widget
@@ -49,7 +49,7 @@
 //! [`nav_press`] matches `Option<Liveness>` with **no `_` arm**, so appending a
 //! variant to [`wolf_core::Liveness`] is an `E0004` compile error here until it is
 //! classified — the same guard [`crate::buffer_picker::open_decision`] and
-//! [`crate::liveness_ui`] rely on. `Option<Liveness>` (not `Liveness`) is the input
+//! [`crate::liveness_ui()`] rely on. `Option<Liveness>` (not `Liveness`) is the input
 //! type precisely so the ABSENT core, which the window's close handler leaves
 //! behind, is a classified arm rather than an early return no headless test could
 //! see.

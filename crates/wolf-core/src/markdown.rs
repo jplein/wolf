@@ -203,7 +203,7 @@
 //!    to the top nor flickers.
 //!
 //!    That body-only swap is sound ONLY because the in-app preview's `<head>` is
-//!    INVARIANT: [`crate::nvim::Nvim::render_preview`] pins
+//!    INVARIANT: [`crate::nvim::NvimProcess::render_preview`] pins
 //!    [`PreviewTheme::Default`] + [`WidthMode::Full`], and everything
 //!    [`render_html`] puts in the head is a compile-time constant — the CSS, the
 //!    two inlined faces, and the HTML comment carrying

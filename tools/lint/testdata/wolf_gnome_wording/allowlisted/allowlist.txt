@@ -1,0 +1,3 @@
+# The scrollbar's divergence, keyed by file and trimmed line text.
+
+crates/wolf-gnome/src/scrollbar.rs:/// Unlike the macOS bar, this one never fades.

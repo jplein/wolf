@@ -332,7 +332,7 @@ pub fn snapshot_cwd(empty: bool, launch_cwd: &Path, live_cwd: Option<&Path>) -> 
 ///
 /// The match over [`Liveness`] is TOTAL with no `_` arm, so a new variant is an
 /// `E0004` here rather than a silent "not alive" — matching
-/// [`crate::liveness_ui`], [`crate::ui_action_for`] and `pane_view::apply_intents`.
+/// [`crate::liveness_ui()`], [`crate::ui_action_for`] and `pane_view::apply_intents`.
 #[must_use]
 pub fn may_snapshot(liveness: Liveness, bound_panes: usize, reported_windows: usize) -> bool {
     match liveness {

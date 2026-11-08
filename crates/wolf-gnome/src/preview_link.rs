@@ -41,7 +41,7 @@
 //! All four cover the document [`file_uri_for`] answers `None` for, which is the
 //! document `load_html` is handed a `NULL` base for. What a click in it delivers
 //! depends on the KIND of href, and only one of the two kinds has been observed on
-//! this port — so they are recorded apart rather than folded into one inference.
+//! this front-end — so they are recorded apart rather than folded into one inference.
 //!
 //! **Rows 1 and 2 rest on the API documentation and are UNMEASURED.**
 //! `webkit_web_view_load_html` (WebKit-6.0) is explicit that a `NULL` base

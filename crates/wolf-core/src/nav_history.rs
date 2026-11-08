@@ -3,7 +3,7 @@
 //!
 //! Pure, GUI-free and IO-free — the label pipeline is path MATH only and never
 //! touches the filesystem — so this module sits beside [`crate::buffer_picker`]
-//! and [`crate::pane_status`] rather than in the redraw fold. The fold in
+//! and [`mod@crate::pane_status`] rather than in the redraw fold. The fold in
 //! [`crate::redraw`] derives a [`NavTarget`] per WINDOW after every `wolf_buffers`
 //! / `wolf_preview` emit and hands it to [`NavHistory::observe`]; the six
 //! `WolfCore::history_*` methods read and move it.

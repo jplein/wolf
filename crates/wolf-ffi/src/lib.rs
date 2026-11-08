@@ -1782,7 +1782,7 @@ pub fn wolf_ffi_state_snapshot_commit() {
 }
 
 /// Blocks until every pending state write has had its disk write attempted
-/// (bounded by [`STATE_FLUSH_TIMEOUT`]). Returns whether everything pending was
+/// (bounded by `STATE_FLUSH_TIMEOUT`). Returns whether everything pending was
 /// flushed in time; `true` when no store exists (there is nothing to flush).
 #[must_use]
 pub fn wolf_ffi_state_flush() -> bool {
@@ -2826,7 +2826,7 @@ impl WolfCoreHandle {
 /// Starts the core. `init_lua` and `cwd` are filesystem paths (mirroring
 /// [`CoreConfig`]). Returns `None` (after logging) on any startup error.
 ///
-/// A fresh wake token is minted (via [`NEXT_WAKE_TOKEN`]) and captured by the
+/// A fresh wake token is minted (via `NEXT_WAKE_TOKEN`) and captured by the
 /// core's [`WakeFn`] so wakes route back to THIS window. State persistence is no
 /// longer wired per-core: the coordinator walks the whole window/tab tree and
 /// commits it via the write-side snapshot builder free fns (see
@@ -3010,7 +3010,7 @@ impl FfiLayoutIntent {
 /// One drained command (opaque to Swift, so a `Vec<FfiCommand>` is supported —
 /// swift-bridge emits Vec support only for opaque types).
 ///
-/// Carries just the [`command_kind`] discriminant of a [`wolf_core::Command`];
+/// Carries just the `command_kind` discriminant of a [`wolf_core::Command`];
 /// the front-end maps it to a native action.
 pub struct FfiCommand {
     kind: u8,
@@ -3145,7 +3145,7 @@ impl FfiCommandRow {
         self.row_kind
     }
 
-    /// For a STATIC row: the [`command_kind`] discriminant to dispatch; 0 for a
+    /// For a STATIC row: the `command_kind` discriminant to dispatch; 0 for a
     /// dynamic row.
     #[must_use]
     pub fn command_kind(&self) -> u8 {
@@ -3953,7 +3953,8 @@ impl FfiToastChunk {
 
 /// A live file-search session handle (opaque to Swift).
 ///
-/// Wraps an `Option<`[`FileSearch`]`>` so [`start_file_search`] stays infallible
+/// Wraps an `Option<`[`FileSearch`]`>` so
+/// [`start_file_search`](WolfCoreHandle::start_file_search) stays infallible
 /// across the bridge: `None` means the core was already gone at start, and
 /// [`ranked`](FfiFileSearch::ranked) then yields no entries. Dropping this handle
 /// drops the inner [`FileSearch`], cancelling its background traversal.
@@ -4500,7 +4501,7 @@ impl FfiFrame {
     /// Builds a frame from a SPECIFIC `grid_id` of a render-state snapshot,
     /// resolving that grid's cells against the highlight table in Rust.
     ///
-    /// An absent grid yields [`FfiFrame::empty`] (`cols()`/`rows()` 0 — the
+    /// An absent grid yields `FfiFrame::empty` (`cols()`/`rows()` 0 — the
     /// front-end treats that as "grid gone"). `cursor_visible` is per-grid
     /// (`snapshot.cursor.grid == grid_id`), and the cursor reverse-video colors are
     /// computed against the REQUESTED grid's cell under the cursor (irrelevant when

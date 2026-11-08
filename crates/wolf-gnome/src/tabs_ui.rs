@@ -6,7 +6,7 @@
 //! The tabs counterpart of [`crate::nav_ui`] and [`crate::clipboard_ui`]. Data in,
 //! data out — no widget type, no `adw::TabView`, no `WolfCore` — which is exactly
 //! what lets the whole rulebook be unit-tested headlessly, the same way
-//! [`crate::command_action`], [`crate::liveness_ui`] and [`crate::title`] keep
+//! [`crate::command_action`], [`mod@crate::liveness_ui`] and [`crate::title`] keep
 //! their decisions pure. The widget work of carrying the answers out lives in
 //! `tab_view.rs` and [`crate::shell`].
 //!

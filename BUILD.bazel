@@ -26,6 +26,14 @@ filegroup(
     visibility = ["//tools/lint:__pkg__"],
 )
 
+# The wording check's input; a filegroup, not a Rust target, so wolf-gnome stays out of the
+# Bazel Rust graph. See notes/wolf-gnome-decisions.md#platform-and-build
+filegroup(
+    name = "wolf_gnome_srcs",
+    srcs = glob(["crates/wolf-gnome/src/**/*.rs"]),
+    visibility = ["//tools/lint:__pkg__"],
+)
+
 # Top-level names only: a root `**/` pattern would descend into target/, result/ and other
 # directories that are no package's sources.
 comment_srcs(include = [

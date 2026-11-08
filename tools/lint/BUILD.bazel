@@ -193,6 +193,24 @@ sh_test(
     ] + glob(["testdata/wolf_core_deps/*"]),
 )
 
+# ---- wolf-gnome wording ----
+
+sh_test(
+    name = "wolf_gnome_wording_check_test",
+    srcs = ["wolf_gnome_wording_check_test.sh"],
+    data = ["wolf_gnome_wording_check.sh"] + glob(["testdata/wolf_gnome_wording/**"]),
+)
+
+# wolf-gnome has no Bazel package, so its sources come from the root's filegroup.
+sh_test(
+    name = "wolf_gnome_wording",
+    srcs = ["wolf_gnome_wording_check.sh"],
+    data = [
+        "wolf_gnome_wording_allowlist.txt",
+        "//:wolf_gnome_srcs",
+    ],
+)
+
 # ---- comments ----
 
 # Every package's comment-checked sources; bazel-coverage guards this list too.
@@ -250,6 +268,8 @@ test_suite(
         ":swift_format_check_test",
         ":swift_format_fix_test",
         ":wolf_core_deps_check_test",
+        ":wolf_gnome_wording",
+        ":wolf_gnome_wording_check_test",
     ],
 )
 

@@ -23,7 +23,7 @@
 //! - [`command_mru`]: the global command-palette MRU cache (SQLite).
 //! - [`buffer_picker`]: pure candidate assembly + ranking for the buffer picker.
 //! - [`palette`]: pure candidate assembly + ranking for the command palette.
-//! - [`pane_status`]: pure display-string math for the per-pane statusbar.
+//! - [`mod@pane_status`]: pure display-string math for the per-pane statusbar.
 //! - [`layout`]: the Neovim->shell layout-intent types ([`LayoutIntent`]).
 //! - [`logging`]: the process-global stderr `tracing` subscriber
 //!   ([`init_tracing`], installed once at startup, gated by `WOLF_LOG`).

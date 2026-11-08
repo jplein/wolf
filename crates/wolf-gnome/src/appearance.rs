@@ -38,7 +38,7 @@
 //! [`appearance_decision`] matches [`wolf_core::Appearance`] with **no `_` arm**,
 //! so a fourth variant added in `wolf-core` is an `E0004` compile error here until
 //! it is classified — the same guard [`crate::nav_ui::nav_press`] and
-//! [`crate::liveness_ui`] rely on. A wildcard arm would silently resolve a future
+//! [`crate::liveness_ui()`] rely on. A wildcard arm would silently resolve a future
 //! `Appearance::HighContrast` to whatever the fallback happened to be.
 //!
 //! ## The applier's step order, which is load-bearing

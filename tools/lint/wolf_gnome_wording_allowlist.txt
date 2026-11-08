@@ -1,0 +1,34 @@
+# Accepted wolf-gnome divergences: <path>:<trimmed line>, one entry per matching line.
+# Each names its macOS counterpart; see tools/lint/README.md#files.
+
+# A1: drawer.rs focus_target, the drawer's editor-height floor.
+crates/wolf-gnome/src/drawer.rs:/// editor height the macOS front-end passes
+crates/wolf-gnome/src/drawer.rs:/// (`crates/wolf-macos/Sources/WolfMacOS/README.md#panecontainerviewswift`).** Here
+
+# A2: editor_inset.rs grid_rect, the floored centring offset.
+crates/wolf-gnome/src/editor_inset.rs:/// **The `.floor()` on the centring offset is deliberate, unlike the macOS offset
+crates/wolf-gnome/src/editor_inset.rs:/// (`crates/wolf-macos/Sources/WolfKeyMap/README.md#panegeometryswift`).** Cairo
+
+# A3: layout.rs set_divider_fraction, the divider reweighting.
+crates/wolf-gnome/src/layout.rs:/// deliberately differs from the macOS pane tree's adjacent-PAIR reweighting
+crates/wolf-gnome/src/layout.rs:/// (`crates/wolf-macos/Sources/WolfKeyMap/README.md#panetreeswift`):
+
+# The scroll-direction test's name and the doc that cites it.
+crates/wolf-gnome/src/mouse.rs:/// `scroll_direction_is_inverted_from_macos`, which exists solely to stop this
+crates/wolf-gnome/src/mouse.rs:fn scroll_direction_is_inverted_from_macos() {
+
+# A6: preview_link.rs, the refused rows.
+crates/wolf-gnome/src/preview_link.rs://! Rows 2, 4, 5 and 10 refuse where the macOS seam launches or reads through
+crates/wolf-gnome/src/preview_link.rs://! (`crates/wolf-macos/Sources/WolfKeyMap/README.md#previewlinkseamswift`), because
+
+# A7: refresh_coalescer.rs, adopted by the sidebar only.
+crates/wolf-gnome/src/refresh_coalescer.rs://! Only the sidebar adopts it, unlike the macOS coalescer the picker shares
+crates/wolf-gnome/src/refresh_coalescer.rs://! (`crates/wolf-macos/Sources/WolfKeyMap/README.md#pickerrefreshcoalescerswift`):
+
+# A4: scrollbar.rs, the bar that never fades.
+crates/wolf-gnome/src/scrollbar.rs://! Unlike the macOS bar
+crates/wolf-gnome/src/scrollbar.rs://! (`crates/wolf-macos/Sources/WolfKeyMap/README.md#scrollbargeometryswift`), this
+
+# A5: statusbar_layout.rs, no label tier.
+crates/wolf-gnome/src/statusbar_layout.rs://! uses — and has no label tier, by the user's decision and unlike the macOS strip
+crates/wolf-gnome/src/statusbar_layout.rs://! (`crates/wolf-macos/Sources/WolfKeyMap/README.md#statusbartextswift`): this

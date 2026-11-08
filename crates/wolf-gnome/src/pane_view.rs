@@ -2047,7 +2047,7 @@ impl PaneInner {
     /// are not children of @base_uri will cause the web process to terminate". Core
     /// passes `Tag::Image` and raw HTML blocks through verbatim, so an ordinary user
     /// document arrives here carrying whatever absolute path its author wrote. Were
-    /// that sentence true on this port, a base URI would be WORSE than none: merely
+    /// that sentence true on this front-end, a base URI would be WORSE than none: merely
     /// previewing a file would kill the pane.
     ///
     /// MEASURED under `cage` against webkitgtk 2.52.4 on 2026-08-06, one run per

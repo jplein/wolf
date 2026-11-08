@@ -53,7 +53,7 @@
 //! Both decisions match `Option<Liveness>` with **no `_` arm**, so appending a
 //! variant to [`wolf_core::Liveness`] is an `E0004` compile error here until it is
 //! classified — the same guard [`crate::nav_ui::nav_press`] and
-//! [`crate::liveness_ui`] rely on. `Option<Liveness>` (not `Liveness`) is the input
+//! [`crate::liveness_ui()`] rely on. `Option<Liveness>` (not `Liveness`) is the input
 //! type precisely so the ABSENT core, which the window's close handler leaves
 //! behind, is a classified arm rather than an early return no headless test could
 //! see.

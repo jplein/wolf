@@ -139,12 +139,16 @@ if [ "$platform" = linux ]; then
   run markdown ./tools/lint/markdown_all.sh
   run markdown-check-test ./tools/lint/markdown_check_test.sh
   run wolf-core-deps-check-test ./tools/lint/wolf_core_deps_check_test.sh
+  run wolf-gnome-wording ./tools/lint/wolf_gnome_wording_check.sh
+  run wolf-gnome-wording-check-test ./tools/lint/wolf_gnome_wording_check_test.sh
   run clippy-doc-lint cargo clippy --manifest-path tools/doc-lint/Cargo.toml --all-targets \
     -- -D warnings
   run test-doc-lint cargo test --manifest-path tools/doc-lint/Cargo.toml
   run doc-lint cargo run --quiet --manifest-path tools/doc-lint/Cargo.toml -- --root .
   run wolf-core-deps core_deps_cargo
   run clippy cargo clippy --workspace --all-targets -- -D warnings
+  run rustdoc-links env RUSTDOCFLAGS='-D rustdoc::broken_intra_doc_links' \
+    cargo doc --workspace --no-deps
   run build cargo build --workspace --all-targets
   run test cargo test --workspace --no-fail-fast
 else

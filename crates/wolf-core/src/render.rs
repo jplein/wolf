@@ -703,9 +703,9 @@ impl Toast {
 /// A `confirm()` dialog resolving (a valid answer or `<Esc>`) and re-prompting
 /// (an invalid key) produce BYTE-IDENTICAL `cmdline_hide` batches that differ
 /// only temporally: on an invalid key Neovim re-emits a matching `cmdline_show`
-/// in a LATER flush. To distinguish the two, [`crate::redraw::cmdline_hide`]
+/// in a LATER flush. To distinguish the two, `crate::redraw::cmdline_hide`
 /// moves the confirm toast's messages here (hiding the toast so a genuine
-/// resolve shows cleared immediately), and [`crate::redraw::cmdline_show`]
+/// resolve shows cleared immediately), and `crate::redraw::cmdline_show`
 /// restores them IFF the re-prompt's prompt string matches the stashed one;
 /// otherwise the stash is dropped.
 ///
