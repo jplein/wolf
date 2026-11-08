@@ -70,7 +70,7 @@ use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use common::{ch, key, type_str, FlushWaiter, FLUSH_TIMEOUT};
+use common::{ch, key, poll_until, type_str, FlushWaiter, FLUSH_TIMEOUT, POLL_INTERVAL};
 use wolf_core::{InputEvent, Key, MenuRow, Snapshot, WolfCore};
 
 /// Placeholder content for the temp markdown files opened by these tests.
@@ -98,9 +98,6 @@ const SECOND_JUMP_LINE: u64 = 9;
 /// The outer/global grid id. Window content lives on grids >= 2.
 const GLOBAL_GRID: u64 = 1;
 
-/// Gap between polls while waiting for a notification-driven change.
-const POLL_INTERVAL: Duration = Duration::from_millis(25);
-
 /// How long to let late `wolf_buffers` / `wolf_preview` emits settle before
 /// asserting that NOTHING was pushed. Generous so a late emit cannot sneak a false
 /// positive past the assertion (mirrors `pane_buffers.rs`'s `UNNAMED_SETTLE`).
@@ -119,25 +116,6 @@ fn start_core_in(cwd: PathBuf) -> (WolfCore, FlushWaiter) {
     .expect("WolfCore::start failed (is WOLF_NVIM_BIN a valid nvim?)");
     waiter.wait_for_initial_flush(&core, FLUSH_TIMEOUT);
     (core, waiter)
-}
-
-/// Polls `core`'s snapshot until `pred` holds, draining wakes each iteration, or
-/// panics after [`FLUSH_TIMEOUT`].
-fn poll_until(core: &WolfCore, waiter: &FlushWaiter, desc: &str, pred: impl Fn(&Snapshot) -> bool) {
-    let deadline = Instant::now() + FLUSH_TIMEOUT;
-    loop {
-        {
-            let snap = core.read_snapshot();
-            if pred(&snap) {
-                return;
-            }
-        }
-        if Instant::now() >= deadline {
-            panic!("timed out after {FLUSH_TIMEOUT:?} waiting for: {desc}");
-        }
-        waiter.drain();
-        std::thread::sleep(POLL_INTERVAL);
-    }
 }
 
 /// Polls the snapshot until `pick` yields a window handle, and returns it.
@@ -234,10 +212,13 @@ fn current_display(rows: &[MenuRow]) -> Option<String> {
 /// Waits for an active WINDOW grid (id != 1) to appear and returns it.
 fn wait_for_active_window_grid(core: &WolfCore, waiter: &FlushWaiter) -> u64 {
     poll_until(
-        core,
         waiter,
         "an active window grid (id != 1) to appear",
-        |snap| !snap.windows.is_empty() && snap.active_grid_id() != GLOBAL_GRID,
+        || {
+            let snap = core.read_snapshot();
+            !snap.windows.is_empty() && snap.active_grid_id() != GLOBAL_GRID
+        },
+        |&ok| ok,
     );
     core.read_snapshot().active_grid_id()
 }
@@ -552,14 +533,15 @@ fn preview_transition_and_link_follow_are_tracked() {
          got {preview_bufnr}"
     );
     poll_until(
-        &core,
         &waiter,
         "previews[win] to report a.md as the source",
-        |snap| {
+        || {
+            let snap = core.read_snapshot();
             snap.previews
                 .get(&win)
                 .is_some_and(|p| p.source_path.ends_with("a.md"))
         },
+        |&ok| ok,
     );
 
     poll_history(&core, &waiter, win, "a Preview: a.md row on top", |rows| {
@@ -590,14 +572,15 @@ fn preview_transition_and_link_follow_are_tracked() {
         "preview_file(win, <abs b.md>) must return b.md's source bufnr, got {src}"
     );
     poll_until(
-        &core,
         &waiter,
         "previews[win] to report b.md as the source",
-        |snap| {
+        || {
+            let snap = core.read_snapshot();
             snap.previews
                 .get(&win)
                 .is_some_and(|p| p.source_path.ends_with("b.md"))
         },
+        |&ok| ok,
     );
     let rows = poll_history(&core, &waiter, win, "a Preview: b.md row on top", |rows| {
         !rows.is_empty() && rows[0].display == "Preview: b.md"
@@ -612,14 +595,15 @@ fn preview_transition_and_link_follow_are_tracked() {
     // --- 3. Back restores Preview(a) ----------------------------------------
     assert!(core.history_back(win), "Back from Preview(b) must move");
     poll_until(
-        &core,
         &waiter,
         "previews[win] to be restored to a.md",
-        |snap| {
+        || {
+            let snap = core.read_snapshot();
             snap.previews
                 .get(&win)
                 .is_some_and(|p| p.source_path.ends_with("a.md"))
         },
+        |&ok| ok,
     );
     settle(&waiter, HISTORY_SETTLE);
     assert!(
@@ -660,9 +644,15 @@ fn split_terminal_is_tracked_but_the_drawer_pane_never_gets_history() {
 
     // --- 1. A :terminal in a NORMAL split IS in that pane's history ---------
     ex_command(&core, "vsplit");
-    poll_until(&core, &waiter, "two live windows after :vsplit", |snap| {
-        snap.windows.len() >= TWO_WINDOWS
-    });
+    poll_until(
+        &waiter,
+        "two live windows after :vsplit",
+        || {
+            let snap = core.read_snapshot();
+            snap.windows.len() >= TWO_WINDOWS
+        },
+        |&ok| ok,
+    );
 
     // `:vsplit` focuses the NEW window, which inherits a.md. Measure that pane's
     // rows BEFORE the `:terminal`, so the growth below is relative.
@@ -737,14 +727,15 @@ fn split_terminal_is_tracked_but_the_drawer_pane_never_gets_history() {
             .find(|w| !before.contains(w))
     });
     poll_until(
-        &core,
         &waiter,
         "win_buffers to mark the drawer window with is_drawer",
-        |snap| {
+        || {
+            let snap = core.read_snapshot();
             snap.win_buffers
                 .get(&drawer_win)
                 .is_some_and(|b| b.is_drawer)
         },
+        |&ok| ok,
     );
 
     settle(&waiter, HISTORY_SETTLE);
@@ -791,10 +782,15 @@ fn unnamed_buffers_are_untitled_entries_named_ones_are_edits() {
     // A raw `:enew` bypasses `wolf_new_untitled`, so the buffer stays UNNAMED.
     ex_command(&core, "enew");
     poll_until(
-        &core,
         &waiter,
         "win_buffers to report an unnamed buffer for this window",
-        |snap| snap.win_buffers.get(&win).is_some_and(|b| b.path.is_none()),
+        || {
+            core.read_snapshot()
+                .win_buffers
+                .get(&win)
+                .is_some_and(|b| b.path.is_none())
+        },
+        |&ok| ok,
     );
 
     let rows = poll_history(&core, &waiter, win, "an Untitled row on top", |rows| {
@@ -832,9 +828,15 @@ fn closing_a_window_prunes_its_history() {
 
     // `:vsplit` focuses the NEW window; `:e b.md` lands there.
     ex_command(&core, "vsplit");
-    poll_until(&core, &waiter, "two live windows after :vsplit", |snap| {
-        snap.windows.len() >= TWO_WINDOWS
-    });
+    poll_until(
+        &waiter,
+        "two live windows after :vsplit",
+        || {
+            let snap = core.read_snapshot();
+            snap.windows.len() >= TWO_WINDOWS
+        },
+        |&ok| ok,
+    );
     ex_command(&core, "e b.md");
 
     let win_b = poll_win_where(&core, &waiter, "the second (split) window", |snap| {
@@ -851,10 +853,15 @@ fn closing_a_window_prunes_its_history() {
     // Close the focused (b.md) window.
     ex_command(&core, "close");
     poll_until(
-        &core,
         &waiter,
         "the split window's grid to drop out",
-        |snap| snap.windows.values().all(|w| w.win != win_b),
+        || {
+            core.read_snapshot()
+                .windows
+                .values()
+                .all(|w| w.win != win_b)
+        },
+        |&ok| ok,
     );
 
     let deadline = Instant::now() + FLUSH_TIMEOUT;
@@ -918,14 +925,15 @@ fn a_failed_back_returns_false_and_reverts_the_cursor() {
     // `startinsert`, so the Ex commands below still reach the cmdline.
     ex_command(&core, "terminal");
     poll_until(
-        &core,
         &waiter,
         "win_buffers to report a non-drawer terminal for this window",
-        |snap| {
+        || {
+            let snap = core.read_snapshot();
             snap.win_buffers
                 .get(&win)
                 .is_some_and(|b| b.is_terminal && !b.is_drawer)
         },
+        |&ok| ok,
     );
     let doomed_bufnr = core
         .read_snapshot()
@@ -1022,9 +1030,15 @@ fn two_panes_have_independent_stacks() {
     poll_pane_filename(&core, &waiter, grid_a, "a.md");
 
     ex_command(&core, "vsplit");
-    poll_until(&core, &waiter, "two live windows after :vsplit", |snap| {
-        snap.windows.len() >= TWO_WINDOWS
-    });
+    poll_until(
+        &waiter,
+        "two live windows after :vsplit",
+        || {
+            let snap = core.read_snapshot();
+            snap.windows.len() >= TWO_WINDOWS
+        },
+        |&ok| ok,
+    );
     ex_command(&core, "e b.md");
     let win_b = poll_win_where(&core, &waiter, "the second (split) window", |snap| {
         snap.windows.values().map(|w| w.win).find(|w| *w != win_a)
@@ -1097,11 +1111,17 @@ fn win_buffers_carries_bufnrs_unnamed_windows_and_skips_previews() {
 
     // --- 1. A named buffer: real bufnr + canonicalized path -----------------
     ex_command(&core, "e a.md");
-    poll_until(&core, &waiter, "win_buffers[win] to report a.md", |snap| {
-        snap.win_buffers
-            .get(&win)
-            .is_some_and(|b| b.path.as_deref() == Some(canon_a.as_path()))
-    });
+    poll_until(
+        &waiter,
+        "win_buffers[win] to report a.md",
+        || {
+            let snap = core.read_snapshot();
+            snap.win_buffers
+                .get(&win)
+                .is_some_and(|b| b.path.as_deref() == Some(canon_a.as_path()))
+        },
+        |&ok| ok,
+    );
     let named_bufnr = {
         let snap = core.read_snapshot();
         let entry = snap
@@ -1122,10 +1142,15 @@ fn win_buffers_carries_bufnrs_unnamed_windows_and_skips_previews() {
     // --- 2. An UNNAMED window is PRESENT (path: None) -----------------------
     ex_command(&core, "enew");
     poll_until(
-        &core,
         &waiter,
         "win_buffers[win] to report the unnamed buffer",
-        |snap| snap.win_buffers.get(&win).is_some_and(|b| b.path.is_none()),
+        || {
+            core.read_snapshot()
+                .win_buffers
+                .get(&win)
+                .is_some_and(|b| b.path.is_none())
+        },
+        |&ok| ok,
     );
     {
         let snap = core.read_snapshot();
@@ -1150,9 +1175,15 @@ fn win_buffers_carries_bufnrs_unnamed_windows_and_skips_previews() {
     // A typed `:vsplit` first: the in-place open_preview() binds into the ACTIVE
     // (new split) pane, so the original a.md window keeps its win_buffers entry.
     ex_command(&core, "vsplit");
-    poll_until(&core, &waiter, "two live windows after :vsplit", |snap| {
-        snap.windows.len() >= TWO_WINDOWS
-    });
+    poll_until(
+        &waiter,
+        "two live windows after :vsplit",
+        || {
+            let snap = core.read_snapshot();
+            snap.windows.len() >= TWO_WINDOWS
+        },
+        |&ok| ok,
+    );
     let preview_bufnr = core.open_preview();
     assert!(
         preview_bufnr > 0,
@@ -1220,15 +1251,16 @@ fn back_to_an_unsaved_buffer_rebinds_the_same_modified_buffer() {
 
     // --- 1. The NAMED, never-saved startup buffer ---------------------------
     poll_until(
-        &core,
         &waiter,
         "win_buffers[win] to report the startup Untitled.md",
-        |snap| {
+        || {
+            let snap = core.read_snapshot();
             snap.win_buffers
                 .get(&win)
                 .and_then(|b| b.path.as_deref())
                 .is_some_and(|p| p.ends_with("Untitled.md"))
         },
+        |&ok| ok,
     );
     let untitled_bufnr = win_bufnr(&core, win);
     assert!(
@@ -1416,14 +1448,15 @@ fn toggling_the_drawer_never_touches_a_survivor_panes_history() {
             .find(|w| !before.contains(w))
     });
     poll_until(
-        &core,
         &waiter,
         "win_buffers to mark the drawer window with is_drawer",
-        |snap| {
+        || {
+            let snap = core.read_snapshot();
             snap.win_buffers
                 .get(&drawer_win)
                 .is_some_and(|b| b.is_drawer)
         },
+        |&ok| ok,
     );
     settle(&waiter, HISTORY_SETTLE);
     assert_eq!(
@@ -1440,9 +1473,15 @@ fn toggling_the_drawer_never_touches_a_survivor_panes_history() {
     // --- 2. Hide the drawer: `toggle_terminal` is an exec_lua RPC, so it works from the
     // terminal-insert mode the drawer left nvim in.
     core.toggle_terminal();
-    poll_until(&core, &waiter, "the drawer window to disappear", |snap| {
-        snap.windows.values().all(|w| w.win != drawer_win)
-    });
+    poll_until(
+        &waiter,
+        "the drawer window to disappear",
+        || {
+            let snap = core.read_snapshot();
+            snap.windows.values().all(|w| w.win != drawer_win)
+        },
+        |&ok| ok,
+    );
     settle(&waiter, HISTORY_SETTLE);
 
     let rows_after = displays(&core.history_entries(win));
@@ -1508,14 +1547,15 @@ fn a_failed_back_to_a_deleted_preview_source_reverts_the_cursor() {
          got {preview_bufnr}"
     );
     poll_until(
-        &core,
         &waiter,
         "previews[win] to report a.md as the source",
-        |snap| {
+        || {
+            let snap = core.read_snapshot();
             snap.previews
                 .get(&win)
                 .is_some_and(|p| p.source_path.ends_with("a.md"))
         },
+        |&ok| ok,
     );
     poll_history(&core, &waiter, win, "a Preview: a.md row on top", |rows| {
         !rows.is_empty() && rows[0].display == "Preview: a.md"
@@ -1527,14 +1567,15 @@ fn a_failed_back_to_a_deleted_preview_source_reverts_the_cursor() {
         "preview_file(win, <abs b.md>) must return b.md's source bufnr, got {src}"
     );
     poll_until(
-        &core,
         &waiter,
         "previews[win] to report b.md as the source",
-        |snap| {
+        || {
+            let snap = core.read_snapshot();
             snap.previews
                 .get(&win)
                 .is_some_and(|p| p.source_path.ends_with("b.md"))
         },
+        |&ok| ok,
     );
     poll_history(&core, &waiter, win, "a Preview: b.md row on top", |rows| {
         !rows.is_empty() && rows[0].display == "Preview: b.md"
@@ -1765,9 +1806,15 @@ fn back_in_a_background_pane_updates_it_without_moving_focus() {
     // --- 1. A second, focused pane previewing a.md: `:vsplit` focuses the new window, which inherits
     // a.md and seeds Edit(a); the in-place `open_preview()` then pushes Preview(a).
     ex_command(&core, "vsplit");
-    poll_until(&core, &waiter, "two live windows after :vsplit", |snap| {
-        snap.windows.len() >= TWO_WINDOWS
-    });
+    poll_until(
+        &waiter,
+        "two live windows after :vsplit",
+        || {
+            let snap = core.read_snapshot();
+            snap.windows.len() >= TWO_WINDOWS
+        },
+        |&ok| ok,
+    );
     let win_b = poll_win_where(&core, &waiter, "the second (split) window", |snap| {
         snap.windows.values().map(|w| w.win).find(|w| *w != win_a)
     });
@@ -1781,14 +1828,15 @@ fn back_in_a_background_pane_updates_it_without_moving_focus() {
          got {preview_bufnr}"
     );
     poll_until(
-        &core,
         &waiter,
         "previews[win_b] to report a.md as the source",
-        |snap| {
+        || {
+            let snap = core.read_snapshot();
             snap.previews
                 .get(&win_b)
                 .is_some_and(|p| p.source_path.ends_with("a.md"))
         },
+        |&ok| ok,
     );
     let rows_b = poll_history(
         &core,
@@ -1805,11 +1853,17 @@ fn back_in_a_background_pane_updates_it_without_moving_focus() {
 
     // --- 2. Move focus AWAY: pane B is now a BACKGROUND window --------------
     core.focus_win(win_a);
-    poll_until(&core, &waiter, "focus to land back on pane A", |snap| {
-        snap.windows
-            .get(&snap.active_grid_id())
-            .is_some_and(|w| w.win == win_a)
-    });
+    poll_until(
+        &waiter,
+        "focus to land back on pane A",
+        || {
+            let snap = core.read_snapshot();
+            snap.windows
+                .get(&snap.active_grid_id())
+                .is_some_and(|w| w.win == win_a)
+        },
+        |&ok| ok,
+    );
     settle(&waiter, HISTORY_SETTLE);
     assert_eq!(
         active_win(&core),
@@ -1834,10 +1888,10 @@ fn back_in_a_background_pane_updates_it_without_moving_focus() {
     // --- 4. ...and it lands COMPLETELY, with no further user input ----------
     poll_pane_filename(&core, &waiter, grid_b, "a.md");
     poll_until(
-        &core,
         &waiter,
         "previews to DROP the now-stale entry for pane B",
-        |snap| !snap.previews.contains_key(&win_b),
+        || !core.read_snapshot().previews.contains_key(&win_b),
+        |&ok| ok,
     );
     settle(&waiter, HISTORY_SETTLE);
     {

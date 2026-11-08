@@ -3,11 +3,14 @@
 //! colors. Run with:
 //!
 //! ```text
-//! cargo run -p wolf-core --example grid_dump
+//! cargo run -p wolf-core --example grid_dump      # Linux, in the flake devShell
+//! bazel run //crates/wolf-core:grid_dump          # macOS, with staged runfiles
 //! ```
 //!
 //! Requires `WOLF_NVIM_BIN` (the flake devShell exports it) and the in-repo
-//! `runtime/nvim/init.lua`.
+//! `runtime/nvim/init.lua`. Under `bazel run` both come from the target's runfiles:
+//! `WOLF_NVIM_BIN` and `WOLF_TEST_INIT_LUA` hold paths relative to the runfiles root,
+//! which is the working directory, and are resolved to absolute paths before start.
 
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender};
@@ -20,7 +23,13 @@ const COLS: u16 = 80;
 const ROWS: u16 = 24;
 const FLUSH_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Prefers `WOLF_TEST_INIT_LUA` (set by the Bazel target), because under Bazel
+/// `CARGO_MANIFEST_DIR` names the compile action's sandbox, gone at run time, and nvim
+/// started with `-u <missing>` hangs on a Press ENTER prompt.
 fn init_lua_path() -> PathBuf {
+    if let Some(p) = env_path("WOLF_TEST_INIT_LUA") {
+        return p;
+    }
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     PathBuf::from(manifest_dir)
         .join("..")
@@ -28,6 +37,13 @@ fn init_lua_path() -> PathBuf {
         .join("runtime")
         .join("nvim")
         .join("init.lua")
+}
+
+/// Reads a non-empty path from `var`, made absolute against the current directory.
+fn env_path(var: &str) -> Option<PathBuf> {
+    let raw = std::env::var_os(var).filter(|v| !v.is_empty())?;
+    let path = PathBuf::from(raw);
+    Some(std::fs::canonicalize(&path).unwrap_or(path))
 }
 
 fn key(k: Key) -> InputEvent {
@@ -47,6 +63,10 @@ fn main() {
     {
         eprintln!("WOLF_NVIM_BIN is not set. Enter the flake devShell (`direnv allow`) first.");
         std::process::exit(1);
+    }
+    // Bazel's WOLF_NVIM_BIN is runfiles-relative: make it absolute, as require_nvim_bin does.
+    if let Some(bin) = env_path("WOLF_NVIM_BIN") {
+        std::env::set_var("WOLF_NVIM_BIN", bin);
     }
 
     let (tx, rx): (Sender<()>, Receiver<()>) = mpsc::channel();

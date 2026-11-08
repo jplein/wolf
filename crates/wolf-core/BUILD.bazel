@@ -1,7 +1,7 @@
 # Bazel build for the GUI-free `wolf-core` crate; deps come from the Cargo workspace via
 # crate_universe. See notes/wolf-core-decisions.md#the-one-hard-rule
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 load("//tools/lint:defs.bzl", "comment_srcs")
 
 exports_files(["Cargo.toml"])
@@ -44,6 +44,23 @@ rust_library(
     proc_macro_deps = all_crate_deps(proc_macro = True),
     visibility = ["//visibility:public"],
     deps = all_crate_deps(normal = True),
+)
+
+# The grid_dump probe, staged like the real-nvim tests. `bazel run` starts it in its runfiles
+# root, where both relative paths resolve; the example makes them absolute.
+rust_binary(
+    name = "grid_dump",
+    srcs = ["examples/grid_dump.rs"],
+    edition = "2021",
+    data = [
+        "//bazel/nvim:nvim_tree",
+        "//runtime/nvim:init.lua",
+    ],
+    env = {
+        "WOLF_NVIM_BIN": "$(rootpath //bazel/nvim:nvim_tree)/nvim/bin/nvim",
+        "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
+    },
+    deps = [":wolf_core"],
 )
 
 # Real-nvim targets stage the pinned nvim tree and init.lua as runfiles, which

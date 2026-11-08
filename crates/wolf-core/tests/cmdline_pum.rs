@@ -16,15 +16,9 @@ mod common;
 
 use std::fs;
 use std::path::Path;
-use std::thread::sleep;
-use std::time::{Duration, Instant};
 
-use common::{ch, key, type_str, wake_channel, FlushWaiter, FLUSH_TIMEOUT};
+use common::{ch, key, poll_until, type_str, wake_channel, FlushWaiter, FLUSH_TIMEOUT};
 use wolf_core::{Key, WolfCore};
-
-/// Gap between `read_snapshot` polls while waiting for cmdline / pum state to
-/// settle.
-const POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 /// The command-line-mode prefix Neovim reports in `cmdline_show.firstc` for an
 /// Ex command (`:`).
@@ -52,23 +46,6 @@ const MULTIBYTE_CONTENT: &str = "eé";
 /// The `grid` value Neovim reports on `popupmenu_show` when the popup is anchored
 /// to the command line (rather than to a buffer window): `-1`.
 const CMDLINE_ANCHORED_GRID: i64 = -1;
-
-/// Polls `pred` until it returns `true`, draining wakes each iteration, or panics
-/// after [`FLUSH_TIMEOUT`]. `desc` describes the awaited condition for the panic
-/// message. Mirrors `tabpages.rs`'s `poll_until`.
-fn poll_until(waiter: &FlushWaiter, desc: &str, mut pred: impl FnMut() -> bool) {
-    let deadline = Instant::now() + FLUSH_TIMEOUT;
-    loop {
-        if pred() {
-            return;
-        }
-        if Instant::now() >= deadline {
-            panic!("timed out after {FLUSH_TIMEOUT:?} waiting for: {desc}");
-        }
-        waiter.drain();
-        sleep(POLL_INTERVAL);
-    }
-}
 
 /// Starts a `WolfCore` rooted at `cwd` (default grid size) and waits for the
 /// initial attach/flush so startup never races the test body. Built inline from
@@ -130,6 +107,7 @@ fn cmdline_completion_popup_lifecycle() {
                 && snap.cmdline.firstc == EX_FIRSTC
                 && snap.cmdline.text() == CMDLINE_TEXT
         },
+        |&ok| ok,
     );
 
     {
@@ -163,6 +141,7 @@ fn cmdline_completion_popup_lifecycle() {
             let words: Vec<String> = snap.pum.items.iter().map(|it| deescape(&it.word)).collect();
             words.iter().any(|w| w.contains(FILE_A)) && words.iter().any(|w| w.contains(FILE_B))
         },
+        |&ok| ok,
     );
 
     {
@@ -215,6 +194,7 @@ fn cmdline_completion_popup_lifecycle() {
             let snap = core.read_snapshot();
             !snap.cmdline.active && !snap.pum.visible
         },
+        |&ok| ok,
     );
 
     {
@@ -251,6 +231,7 @@ fn cmdline_pos_is_a_byte_offset() {
             let snap = core.read_snapshot();
             snap.cmdline.active && snap.cmdline.text() == MULTIBYTE_CONTENT
         },
+        |&ok| ok,
     );
 
     let byte_len = MULTIBYTE_CONTENT.len();

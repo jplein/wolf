@@ -23,19 +23,9 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use wolf_core::{FileEntry, FileSearch, Key, MruStore, WakeFn, WolfCore};
-
-/// Upper bound for a single file search to reach `complete`. Generous because it
-/// includes nvim startup amortized across the test plus a full FS/git walk.
-const SEARCH_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// How long to block on a wake before re-checking `complete` (so we make
-/// progress even if a wake is missed/coalesced).
-const POLL_INTERVAL: Duration = Duration::from_millis(50);
+use wolf_core::{FileEntry, FileSearch, Key, MruStore, WolfCore};
 
 /// Settle window used by the cancel test: time to let any in-flight batch land,
 /// and the window over which we assert the version has stopped advancing.
@@ -80,19 +70,6 @@ fn run_git(cwd: &Path, args: &[&str]) {
     assert!(status.success(), "`git {args:?}` failed with {status:?}");
 }
 
-/// Builds a `WakeFn` that signals on a channel, paired with the receiver the
-/// poll loop waits on. Mirrors `common::wake_channel`, kept local because this
-/// receiver is consumed by [`poll_until_complete`] (not the panic-on-timeout
-/// `FlushWaiter`).
-fn search_wake() -> (WakeFn, Receiver<()>) {
-    let (tx, rx): (Sender<()>, Receiver<()>) = mpsc::channel();
-    let wake: WakeFn = Arc::new(move || {
-        // A send error just means the receiver was dropped (test finished).
-        let _ = tx.send(());
-    });
-    (wake, rx)
-}
-
 /// Starts a `WolfCore` rooted at `cwd` (default grid size) and waits for the
 /// initial attach/flush so startup never races the test body.
 fn start_core_in(cwd: &Path) -> WolfCore {
@@ -134,50 +111,18 @@ fn start_core_in_with_waiter(cwd: &Path) -> (WolfCore, common::FlushWaiter) {
     (core, waiter)
 }
 
-/// Polls `search` until its view reports `complete`, waking on `wakes`, then
-/// returns a snapshot of the collected entries. Panics on timeout.
-fn poll_until_complete(search: &FileSearch, wakes: &Receiver<()>) -> Vec<FileEntry> {
-    let deadline = Instant::now() + SEARCH_TIMEOUT;
-    loop {
-        {
+/// Polls `search` until its view reports `complete`, then returns the collected entries.
+fn wait_for_search_complete(search: &FileSearch, wakes: &common::FlushWaiter) -> Vec<FileEntry> {
+    common::poll_until(
+        wakes,
+        "the file search to reach `complete`",
+        || {
             let view = search.read();
-            if view.complete {
-                return view.entries.to_vec();
-            }
-        }
-        if Instant::now() >= deadline {
-            panic!("file search did not reach `complete` within {SEARCH_TIMEOUT:?}");
-        }
-        // Bounded wait: a wake nudges us promptly; the timeout guarantees we
-        // re-check even if a wake was coalesced/missed.
-        let _ = wakes.recv_timeout(POLL_INTERVAL);
-    }
-}
-
-/// Polls `pred` until it returns `true`, draining wakes each iteration, or panics
-/// after [`common::FLUSH_TIMEOUT`]. `desc` describes the awaited condition.
-///
-/// Used by the `:cd` tests to confirm the tracked `live_cwd()` landed before
-/// searching: the search root (and MRU seed) now derive from that cell, which is
-/// fed by the `wolf_cwd` notify that fires NO wake, so `wait_for_flush` (which
-/// keys on `seq`) does NOT guarantee the cwd arrived. Mirrors
-/// `tabpage_cwd.rs::poll_until`; named to avoid colliding with
-/// [`poll_until_complete`].
-fn poll_until(waiter: &common::FlushWaiter, desc: &str, mut pred: impl FnMut() -> bool) {
-    let deadline = Instant::now() + common::FLUSH_TIMEOUT;
-    loop {
-        if pred() {
-            return;
-        }
-        if Instant::now() >= deadline {
-            panic!(
-                "timed out after {:?} waiting for: {desc}",
-                common::FLUSH_TIMEOUT
-            );
-        }
-        waiter.drain();
-        std::thread::sleep(POLL_INTERVAL);
-    }
+            view.complete.then(|| view.entries.to_vec())
+        },
+        Option::is_some,
+    )
+    .expect("poll_until returned only once the search was complete")
 }
 
 /// The set of `display` strings of `entries` (traversal order is nondeterministic,
@@ -219,9 +164,9 @@ fn non_repo_lists_plain_files_and_dotfiles_but_no_dirs() {
     fs::create_dir_all(cwd.join("emptydir")).expect("failed to create emptydir");
 
     let core = start_core_in(&cwd);
-    let (wake, wakes) = search_wake();
+    let (wake, wakes) = common::wake_channel();
     let search = core.start_file_search(wake);
-    let entries = poll_until_complete(&search, &wakes);
+    let entries = wait_for_search_complete(&search, &wakes);
     let set = displays(&entries);
 
     assert!(
@@ -272,9 +217,9 @@ fn symlinks_only_to_plain_files_are_included() {
     symlink(cwd.join("nonexistent"), cwd.join("link_broken")).expect("broken symlink");
 
     let core = start_core_in(&cwd);
-    let (wake, wakes) = search_wake();
+    let (wake, wakes) = common::wake_channel();
     let search = core.start_file_search(wake);
-    let entries = poll_until_complete(&search, &wakes);
+    let entries = wait_for_search_complete(&search, &wakes);
     let set = displays(&entries);
 
     assert!(
@@ -314,12 +259,12 @@ fn symlink_loop_does_not_hang() {
     symlink(&loopdir, loopdir.join("loop")).expect("loop symlink");
 
     let core = start_core_in(&cwd);
-    let (wake, wakes) = search_wake();
+    let (wake, wakes) = common::wake_channel();
     let search = core.start_file_search(wake);
 
     // The load-bearing assertion is simply that this RETURNS within the timeout
     // (no infinite recursion). We also confirm the real nested file is found.
-    let entries = poll_until_complete(&search, &wakes);
+    let entries = wait_for_search_complete(&search, &wakes);
     let set = displays(&entries);
     assert!(
         set.contains(&rel(&["loopdir", "real.md"])),
@@ -347,9 +292,9 @@ fn git_repo_respects_gitignore_and_excludes_git_dir() {
     run_git(&cwd, &["add", "tracked.md"]);
 
     let core = start_core_in(&cwd);
-    let (wake, wakes) = search_wake();
+    let (wake, wakes) = common::wake_channel();
     let search = core.start_file_search(wake);
-    let entries = poll_until_complete(&search, &wakes);
+    let entries = wait_for_search_complete(&search, &wakes);
     let set = displays(&entries);
 
     assert!(
@@ -400,9 +345,9 @@ fn gitignore_applies_to_nested_subdirs() {
     write_file(&cwd.join("sub").join("keep.md"), "k");
 
     let core = start_core_in(&cwd);
-    let (wake, wakes) = search_wake();
+    let (wake, wakes) = common::wake_channel();
     let search = core.start_file_search(wake);
-    let entries = poll_until_complete(&search, &wakes);
+    let entries = wait_for_search_complete(&search, &wakes);
     let set = displays(&entries);
 
     assert!(
@@ -432,9 +377,9 @@ fn wolf_cache_dir_is_excluded() {
     write_file(&cwd.join(".wolf").join("junk.md"), "j");
 
     let core = start_core_in(&cwd);
-    let (wake, wakes) = search_wake();
+    let (wake, wakes) = common::wake_channel();
     let search = core.start_file_search(wake);
-    let entries = poll_until_complete(&search, &wakes);
+    let entries = wait_for_search_complete(&search, &wakes);
     let set = displays(&entries);
 
     assert!(
@@ -481,7 +426,7 @@ fn mru_seed_is_synchronous_and_not_duplicated() {
     }
 
     let core = start_core_in(&cwd);
-    let (wake, wakes) = search_wake();
+    let (wake, wakes) = common::wake_channel();
     let search = core.start_file_search(wake);
 
     // SYNCHRONOUS seed: immediately after start (traversal may or may not have
@@ -508,7 +453,7 @@ fn mru_seed_is_synchronous_and_not_duplicated() {
         );
     }
 
-    let entries = poll_until_complete(&search, &wakes);
+    let entries = wait_for_search_complete(&search, &wakes);
 
     let seeded: Vec<&FileEntry> = entries
         .iter()
@@ -546,7 +491,7 @@ fn cancel_stops_streaming() {
     }
 
     let core = start_core_in(&cwd);
-    let (wake, wakes) = search_wake();
+    let (wake, wakes) = common::wake_channel();
     let search = core.start_file_search(wake);
 
     // Cancel immediately; the traversal task should stop bumping version.
@@ -604,15 +549,16 @@ fn file_search_root_follows_nvim_cd() {
     // The root derives from `live_cwd()`, fed by the wake-less `wolf_cwd` notify, so
     // `wait_for_flush` alone does not prove the cwd landed: poll until it reports B.
     waiter.wait_for_flush(&core, common::FLUSH_TIMEOUT);
-    poll_until(
+    common::poll_until(
         &waiter,
         "live_cwd() to follow the :cd into dir B before searching",
         || core.live_cwd().as_deref() == Some(cwd_b.as_path()),
+        |&ok| ok,
     );
 
-    let (wake, wakes) = search_wake();
+    let (wake, wakes) = common::wake_channel();
     let search = core.start_file_search(wake);
-    let entries = poll_until_complete(&search, &wakes);
+    let entries = wait_for_search_complete(&search, &wakes);
     let set = displays(&entries);
 
     assert!(
@@ -644,9 +590,9 @@ fn file_search_root_defaults_to_cfg_cwd_without_cd() {
     write_file(&cwd_a.join("gamma.md"), "g");
 
     let core = start_core_in(&cwd_a);
-    let (wake, wakes) = search_wake();
+    let (wake, wakes) = common::wake_channel();
     let search = core.start_file_search(wake);
-    let entries = poll_until_complete(&search, &wakes);
+    let entries = wait_for_search_complete(&search, &wakes);
     let set = displays(&entries);
 
     assert!(
@@ -720,15 +666,16 @@ fn mru_seed_follows_nvim_cd() {
     // The seed root derives from `live_cwd()`, fed by the wake-less `wolf_cwd` notify, so
     // `wait_for_flush` alone does not prove the cwd landed: poll until it reports B.
     waiter.wait_for_flush(&core, common::FLUSH_TIMEOUT);
-    poll_until(
+    common::poll_until(
         &waiter,
         "live_cwd() to follow the :cd into dir B before seeding",
         || core.live_cwd().as_deref() == Some(cwd_b.as_path()),
+        |&ok| ok,
     );
 
-    let (wake, wakes) = search_wake();
+    let (wake, wakes) = common::wake_channel();
     let search = core.start_file_search(wake);
-    let entries = poll_until_complete(&search, &wakes);
+    let entries = wait_for_search_complete(&search, &wakes);
 
     // The MRU entry's display must be RELATIVE to B (the core regression guard):
     // exactly one entry equals `sub/recent_b.md`, carrying an mru_rank from the seed.

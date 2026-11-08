@@ -29,15 +29,12 @@ mod common;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use common::{ch, ctrl, key, FlushWaiter, FLUSH_TIMEOUT};
+use common::{ch, ctrl, key, poll_until, FlushWaiter, FLUSH_TIMEOUT, POLL_INTERVAL};
 use wolf_core::{FocusDir, InputEvent, Key, LayoutIntent, Snapshot, SplitOrientation, WolfCore};
 
 /// The outer/global grid id. Window content lives on grids `>= 2`; grid 1 is
 /// never a window grid in these scenarios.
 const GLOBAL_GRID: u64 = 1;
-
-/// Gap between polls while waiting for a structural change or an intent.
-const POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 /// How long to let a (non-)event settle before asserting that something did NOT
 /// change — long enough that a stray `wolf_active_win` would have arrived if it
@@ -47,25 +44,6 @@ const SETTLE: Duration = Duration::from_secs(1);
 
 /// Placeholder content for temp markdown files.
 const DOC: &str = "# Layout Intents\nbody\n";
-
-/// Polls `core`'s snapshot until `pred` holds, draining wakes each iteration, or
-/// panics after [`FLUSH_TIMEOUT`]. `desc` describes the awaited condition.
-fn poll_until(core: &WolfCore, waiter: &FlushWaiter, desc: &str, pred: impl Fn(&Snapshot) -> bool) {
-    let deadline = Instant::now() + FLUSH_TIMEOUT;
-    loop {
-        {
-            let snap = core.read_snapshot();
-            if pred(&snap) {
-                return;
-            }
-        }
-        if Instant::now() >= deadline {
-            panic!("timed out after {FLUSH_TIMEOUT:?} waiting for: {desc}");
-        }
-        waiter.drain();
-        std::thread::sleep(POLL_INTERVAL);
-    }
-}
 
 /// Polls `core.drain_intents()` until it yields a non-empty batch (or panics
 /// after `timeout`), returning the first non-empty drain. Draining is what wakes
@@ -111,10 +89,13 @@ fn ex_command(core: &WolfCore, cmd: &str) {
 /// initial window count (the per-test baseline).
 fn wait_for_initial_window(core: &WolfCore, waiter: &FlushWaiter) -> usize {
     poll_until(
-        core,
         waiter,
         "the initial editor window grid (id != 1) to appear",
-        |snap| !snap.windows.is_empty() && snap.grids.keys().any(|&id| id != GLOBAL_GRID),
+        || {
+            let snap = core.read_snapshot();
+            !snap.windows.is_empty() && snap.grids.keys().any(|&id| id != GLOBAL_GRID)
+        },
+        |&ok| ok,
     );
     core.read_snapshot().windows.len()
 }
@@ -173,17 +154,17 @@ fn ctrl_w_s_emits_horizontal_split() {
 
     // The split was PERFORMED: a second window now exists...
     poll_until(
-        &core,
         &waiter,
         "windows.len() to grow by one after <C-w>s",
-        |snap| snap.windows.len() == base + 1,
+        || core.read_snapshot().windows.len() == base + 1,
+        |&ok| ok,
     );
     // ...and the intent's new window handle is bound to a grid we know about.
     poll_until(
-        &core,
         &waiter,
         "the split's new window handle to appear via grid_for_win",
-        |snap| snap.grid_for_win(win).is_some(),
+        || core.read_snapshot().grid_for_win(win).is_some(),
+        |&ok| ok,
     );
 
     core.shutdown().expect("shutdown should be Ok");
@@ -207,16 +188,16 @@ fn ctrl_w_v_emits_vertical_split() {
     );
 
     poll_until(
-        &core,
         &waiter,
         "windows.len() to grow by one after <C-w>v",
-        |snap| snap.windows.len() == base + 1,
+        || core.read_snapshot().windows.len() == base + 1,
+        |&ok| ok,
     );
     poll_until(
-        &core,
         &waiter,
         "the split's new window handle to appear via grid_for_win",
-        |snap| snap.grid_for_win(win).is_some(),
+        || core.read_snapshot().grid_for_win(win).is_some(),
+        |&ok| ok,
     );
 
     core.shutdown().expect("shutdown should be Ok");
@@ -247,10 +228,10 @@ fn ex_vsplit_emits_vertical_split() {
     );
 
     poll_until(
-        &core,
         &waiter,
         "windows.len() to grow by one after :vsplit",
-        |snap| snap.windows.len() == base + 1,
+        || core.read_snapshot().windows.len() == base + 1,
+        |&ok| ok,
     );
 
     core.shutdown().expect("shutdown should be Ok");
@@ -271,19 +252,19 @@ fn ctrl_w_l_emits_focus_dir_and_does_not_change_nvim_focus() {
     ctrl_w_then(&core, 'v');
     let _ = drain_until_intent(&core, FLUSH_TIMEOUT, "Split from <C-w>v (setup)");
     poll_until(
-        &core,
         &waiter,
         "two windows after the setup <C-w>v",
-        |snap| snap.windows.len() == base + 1,
+        || core.read_snapshot().windows.len() == base + 1,
+        |&ok| ok,
     );
 
     // Capture the active window AFTER the split settles (call it A). The vsplit
     // moved nvim focus to the new window, which fires WinEnter -> wolf_active_win.
     poll_until(
-        &core,
         &waiter,
         "active_win to be populated after the split",
-        |snap| snap.active_win.is_some(),
+        || core.read_snapshot().active_win.is_some(),
+        |&ok| ok,
     );
     let win_a = core
         .read_snapshot()
@@ -335,10 +316,10 @@ fn focus_win_changes_active_and_current_file() {
     ctrl_w_then(&core, 'v');
     let _ = drain_until_intent(&core, FLUSH_TIMEOUT, "Split from <C-w>v (setup)");
     poll_until(
-        &core,
         &waiter,
         "two windows after the setup <C-w>v",
-        |snap| snap.windows.len() == base + 1,
+        || core.read_snapshot().windows.len() == base + 1,
+        |&ok| ok,
     );
 
     // Open a DIFFERENT file in the focused (new) window so the two panes show
@@ -348,10 +329,13 @@ fn focus_win_changes_active_and_current_file() {
         path: file_b.path().to_path_buf(),
     });
     poll_until(
-        &core,
         &waiter,
         "active_win populated and current_file == file B after :edit in the new window",
-        |snap| snap.active_win.is_some() && current_file_is(snap, file_b.path()),
+        || {
+            let snap = core.read_snapshot();
+            snap.active_win.is_some() && current_file_is(&snap, file_b.path())
+        },
+        |&ok| ok,
     );
 
     // The focus target is the window other than active_win (showing A), picked by membership,
@@ -377,17 +361,17 @@ fn focus_win_changes_active_and_current_file() {
 
     // active_win flips to the requested window...
     poll_until(
-        &core,
         &waiter,
         "active_win to become the focus_win target",
-        |snap| snap.active_win == Some(target),
+        || core.read_snapshot().active_win == Some(target),
+        |&ok| ok,
     );
     // ...and current_file follows to the target window's buffer (file A).
     poll_until(
-        &core,
         &waiter,
         "current_file to follow focus back to file A",
-        |snap| current_file_is(snap, file_a.path()),
+        || current_file_is(&core.read_snapshot(), file_a.path()),
+        |&ok| ok,
     );
 
     core.shutdown().expect("shutdown should be Ok");
@@ -405,19 +389,19 @@ fn ctrl_w_c_closes_pane_when_multiple() {
     ctrl_w_then(&core, 'v');
     let _ = drain_until_intent(&core, FLUSH_TIMEOUT, "Split from <C-w>v (setup)");
     poll_until(
-        &core,
         &waiter,
         "two windows after the setup <C-w>v",
-        |snap| snap.windows.len() == base + 1,
+        || core.read_snapshot().windows.len() == base + 1,
+        |&ok| ok,
     );
 
     // Close the focused window.
     ctrl_w_then(&core, 'c');
     poll_until(
-        &core,
         &waiter,
         "windows.len() to drop back by one after <C-w>c",
-        |snap| snap.windows.len() == base,
+        || core.read_snapshot().windows.len() == base,
+        |&ok| ok,
     );
 
     core.shutdown().expect("shutdown should be Ok");
@@ -437,19 +421,19 @@ fn ex_q_closes_pane_when_multiple() {
     ctrl_w_then(&core, 'v');
     let _ = drain_until_intent(&core, FLUSH_TIMEOUT, "Split from <C-w>v (setup)");
     poll_until(
-        &core,
         &waiter,
         "two windows after the setup <C-w>v",
-        |snap| snap.windows.len() == base + 1,
+        || core.read_snapshot().windows.len() == base + 1,
+        |&ok| ok,
     );
 
     // Close the focused pane via `:q` (routes through WolfQuit -> do_quit).
     ex_command(&core, "q");
     poll_until(
-        &core,
         &waiter,
         "windows.len() to drop back by one after :q",
-        |snap| snap.windows.len() == base,
+        || core.read_snapshot().windows.len() == base,
+        |&ok| ok,
     );
 
     core.shutdown().expect("shutdown should be Ok");
@@ -475,10 +459,10 @@ fn ex_qa_does_not_merely_drop_pane_count() {
     ctrl_w_then(&core, 'v');
     let _ = drain_until_intent(&core, FLUSH_TIMEOUT, "Split from <C-w>v (setup)");
     poll_until(
-        &core,
         &waiter,
         "two windows after the setup <C-w>v",
-        |snap| snap.windows.len() == base + 1,
+        || core.read_snapshot().windows.len() == base + 1,
+        |&ok| ok,
     );
 
     // `:qa` reaches do_quit's always-close branch, which fires `close_window` (see commands.rs),
@@ -532,11 +516,18 @@ fn ctrl_w_c_noop_on_last_window() {
         "the last-window guard must refuse to close the only window"
     );
 
-    // nvim is still alive: a subsequent edit produces a redraw flush.
+    // nvim is still alive: a subsequent edit draws its `x` on row 0. `DOC` holds no `x`, so a
+    // late frame that is not the edit's cannot pass this.
     core.send_input(ch('i'));
     core.send_input(ch('x'));
     core.send_input(key(Key::Esc));
-    waiter.wait_for_flush(&core, FLUSH_TIMEOUT);
+    poll_until(
+        &waiter,
+        "the typed `x` on row 0 of the active grid; never means nvim was not still alive and \
+         taking input after the refused close",
+        || core.read_snapshot().active_grid().row_text(0),
+        |row| row.contains('x'),
+    );
 
     core.shutdown().expect("shutdown should be Ok");
 }
@@ -553,19 +544,20 @@ fn win_enter_updates_active_win() {
     ctrl_w_then(&core, 'v');
     let _ = drain_until_intent(&core, FLUSH_TIMEOUT, "Split from <C-w>v (setup)");
     poll_until(
-        &core,
         &waiter,
         "two windows after the setup <C-w>v",
-        |snap| snap.windows.len() == base + 1,
+        || core.read_snapshot().windows.len() == base + 1,
+        |&ok| ok,
     );
     poll_until(
-        &core,
         &waiter,
         "active_win to be populated and present in windows after the split",
-        |snap| {
+        || {
+            let snap = core.read_snapshot();
             snap.active_win
                 .is_some_and(|a| snap.windows.values().any(|w| w.win == a))
         },
+        |&ok| ok,
     );
 
     // Focus the other window; active_win updates to it (also a WinEnter).
@@ -587,10 +579,13 @@ fn win_enter_updates_active_win() {
 
     core.focus_win(target);
     poll_until(
-        &core,
         &waiter,
         "active_win to update to the focused window via WinEnter",
-        |snap| snap.active_win == Some(target) && snap.windows.values().any(|w| w.win == target),
+        || {
+            let snap = core.read_snapshot();
+            snap.active_win == Some(target) && snap.windows.values().any(|w| w.win == target)
+        },
+        |&ok| ok,
     );
 
     core.shutdown().expect("shutdown should be Ok");

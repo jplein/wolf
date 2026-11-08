@@ -16,10 +16,8 @@
 mod common;
 
 use std::sync::Mutex;
-use std::thread::sleep;
-use std::time::{Duration, Instant};
 
-use common::{FlushWaiter, FLUSH_TIMEOUT};
+use common::poll_until;
 use wolf_core::WolfCore;
 
 /// Serializes the tests in this binary: every one mutates the process-global
@@ -31,25 +29,6 @@ static ENV_LOCK: Mutex<()> = Mutex::new(());
 /// constant.
 const TEMPLATE_SENTENCE: &str =
     "-- Wolf loads this file last, so anything here overrides Wolf's defaults.";
-
-/// Gap between snapshot polls.
-const POLL_INTERVAL: Duration = Duration::from_millis(50);
-
-/// Polls `pred` until `true` (draining wakes each iteration) or panics after
-/// [`FLUSH_TIMEOUT`]. `desc` names the awaited condition.
-fn poll_until(waiter: &FlushWaiter, desc: &str, mut pred: impl FnMut() -> bool) {
-    let deadline = Instant::now() + FLUSH_TIMEOUT;
-    loop {
-        if pred() {
-            return;
-        }
-        if Instant::now() >= deadline {
-            panic!("timed out after {FLUSH_TIMEOUT:?} waiting for: {desc}");
-        }
-        waiter.drain();
-        sleep(POLL_INTERVAL);
-    }
-}
 
 /// Flattens the current toast into one newline-joined string (each line is its
 /// chunk texts concatenated). Mirrors `messages.rs`'s `toast_text`.
@@ -234,6 +213,7 @@ fn erroring_user_file_warns_but_startup_succeeds() {
          vim.notify branch of the dofile error handler is gone, so user-file errors \
          become silent)",
         || toast_text(&core).contains("init_user.lua"),
+        |&ok| ok,
     );
 
     core.shutdown().expect("shutdown should be Ok");

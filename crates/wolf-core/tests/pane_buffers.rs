@@ -25,8 +25,8 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use common::{ch, key, type_str, FlushWaiter, FLUSH_TIMEOUT};
-use wolf_core::{InputEvent, Key, Snapshot, WolfCore, NO_NAME};
+use common::{ch, key, poll_until, type_str, FlushWaiter, FLUSH_TIMEOUT, POLL_INTERVAL};
+use wolf_core::{InputEvent, Key, WolfCore, NO_NAME};
 
 /// Placeholder content for the temp markdown files opened by these tests.
 const DOC: &str = "# Pane Buffers\nbody\n";
@@ -34,9 +34,6 @@ const DOC: &str = "# Pane Buffers\nbody\n";
 /// The outer/global grid id. Window content lives on grids >= 2; grid 1 is never
 /// the active window grid in these scenarios (mirrors `redraw_multigrid.rs`).
 const GLOBAL_GRID: u64 = 1;
-
-/// Gap between polls while waiting for a structural / notification change.
-const POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 /// How long to let the initial `wolf_buffers` emit settle before asserting that an
 /// unnamed buffer reports `[No Name]`. Generous so a late emit can't sneak a false
@@ -54,25 +51,6 @@ fn start_core_in(cwd: PathBuf) -> (WolfCore, FlushWaiter) {
     .expect("WolfCore::start failed (is WOLF_NVIM_BIN a valid nvim?)");
     waiter.wait_for_initial_flush(&core, FLUSH_TIMEOUT);
     (core, waiter)
-}
-
-/// Polls `core`'s snapshot until `pred` holds, draining wakes each iteration, or
-/// panics after [`FLUSH_TIMEOUT`] (mirrors `redraw_multigrid.rs`).
-fn poll_until(core: &WolfCore, waiter: &FlushWaiter, desc: &str, pred: impl Fn(&Snapshot) -> bool) {
-    let deadline = Instant::now() + FLUSH_TIMEOUT;
-    loop {
-        {
-            let snap = core.read_snapshot();
-            if pred(&snap) {
-                return;
-            }
-        }
-        if Instant::now() >= deadline {
-            panic!("timed out after {FLUSH_TIMEOUT:?} waiting for: {desc}");
-        }
-        waiter.drain();
-        std::thread::sleep(POLL_INTERVAL);
-    }
 }
 
 /// Polls `core.pane_status(grid)` until `pred` holds, or panics after
@@ -106,10 +84,13 @@ fn poll_pane_status(
 /// Waits for an active WINDOW grid (id != 1) to appear and returns it.
 fn wait_for_active_window_grid(core: &WolfCore, waiter: &FlushWaiter) -> u64 {
     poll_until(
-        core,
         waiter,
         "an active window grid (id != 1) to appear",
-        |snap| !snap.windows.is_empty() && snap.active_grid_id() != GLOBAL_GRID,
+        || {
+            let snap = core.read_snapshot();
+            !snap.windows.is_empty() && snap.active_grid_id() != GLOBAL_GRID
+        },
+        |&ok| ok,
     );
     core.read_snapshot().active_grid_id()
 }
@@ -164,10 +145,15 @@ fn settle(waiter: &FlushWaiter, dur: Duration) {
 /// Resolves the nvim WINDOW handle backing `grid`, polling until it appears.
 fn wait_for_win_handle(core: &WolfCore, waiter: &FlushWaiter, grid: u64) -> i64 {
     poll_until(
-        core,
         waiter,
         &format!("a window handle for grid {grid}"),
-        |snap| snap.windows.get(&grid).is_some_and(|w| w.win != 0),
+        || {
+            core.read_snapshot()
+                .windows
+                .get(&grid)
+                .is_some_and(|w| w.win != 0)
+        },
+        |&ok| ok,
     );
     core.read_snapshot()
         .windows
@@ -348,10 +334,13 @@ fn closing_split_drops_that_window_survivor_keeps_file() {
     // Close the focused (beta) window; its grid must vanish from `windows`.
     ex_command(&core, "close");
     poll_until(
-        &core,
         &waiter,
         "the closed (beta) window's grid to drop out of windows",
-        |snap| snap.windows.len() == 1 && !snap.windows.contains_key(&beta_grid),
+        || {
+            let snap = core.read_snapshot();
+            snap.windows.len() == 1 && !snap.windows.contains_key(&beta_grid)
+        },
+        |&ok| ok,
     );
 
     // The survivor (alpha) still reports its own file.
@@ -402,10 +391,10 @@ fn buffers_map_stays_canonicalized_and_omits_unnamed_windows() {
 
     // (a) Keyed by WINDOW handle, holding the CANONICAL path.
     poll_until(
-        &core,
         &waiter,
         "buffers[win] to equal the canonical note.md path",
-        |snap| snap.buffers.get(&win) == Some(&canon),
+        || core.read_snapshot().buffers.get(&win) == Some(&canon),
+        |&ok| ok,
     );
 
     // (b) pane_status for a NAMED buffer is unchanged.
@@ -425,10 +414,10 @@ fn buffers_map_stays_canonicalized_and_omits_unnamed_windows() {
     // (c) An UNNAMED window is still ABSENT from the map.
     ex_command(&core, "enew");
     poll_until(
-        &core,
         &waiter,
         "the now-unnamed window to drop out of buffers",
-        |snap| !snap.buffers.contains_key(&win),
+        || !core.read_snapshot().buffers.contains_key(&win),
+        |&ok| ok,
     );
     settle(&waiter, UNNAMED_SETTLE);
     assert!(
@@ -487,18 +476,21 @@ fn buffers_map_skips_preview_panes_and_drops_closed_windows() {
     let (_alpha_grid, beta_grid) = wait_two_grids_by_name(&core, &waiter, "alpha.md", "beta.md");
     let win_b = wait_for_win_handle(&core, &waiter, beta_grid);
     poll_until(
-        &core,
         &waiter,
         "both windows to be present in the buffers map",
-        |snap| snap.buffers.contains_key(&win_a) && snap.buffers.contains_key(&win_b),
+        || {
+            let snap = core.read_snapshot();
+            snap.buffers.contains_key(&win_a) && snap.buffers.contains_key(&win_b)
+        },
+        |&ok| ok,
     );
 
     ex_command(&core, "close");
     poll_until(
-        &core,
         &waiter,
         "the closed window's entry to drop out of buffers",
-        |snap| !snap.buffers.contains_key(&win_b),
+        || !core.read_snapshot().buffers.contains_key(&win_b),
+        |&ok| ok,
     );
     assert!(
         core.read_snapshot().buffers.contains_key(&win_a),
@@ -508,18 +500,30 @@ fn buffers_map_skips_preview_panes_and_drops_closed_windows() {
     // (b) A preview scratch pane is still skipped by the emit. `:vsplit` first, because
     // open_preview() binds into the active pane, so the alpha.md window keeps its entry.
     ex_command(&core, "vsplit");
-    poll_until(&core, &waiter, "two live windows after :vsplit", |snap| {
-        snap.windows.len() >= 2
-    });
+    poll_until(
+        &waiter,
+        "two live windows after :vsplit",
+        || {
+            let snap = core.read_snapshot();
+            snap.windows.len() >= 2
+        },
+        |&ok| ok,
+    );
     let preview_bufnr = core.open_preview();
     assert!(
         preview_bufnr > 0,
         "open_preview() on a markdown buffer must return a scratch bufnr (> 0), \
          got {preview_bufnr}"
     );
-    poll_until(&core, &waiter, "a preview window to appear", |snap| {
-        !snap.previews.is_empty()
-    });
+    poll_until(
+        &waiter,
+        "a preview window to appear",
+        || {
+            let snap = core.read_snapshot();
+            !snap.previews.is_empty()
+        },
+        |&ok| ok,
+    );
     let preview_win = *core
         .read_snapshot()
         .previews
@@ -527,10 +531,15 @@ fn buffers_map_skips_preview_panes_and_drops_closed_windows() {
         .next()
         .expect("a preview window handle must exist");
     poll_until(
-        &core,
         &waiter,
         "the preview window's grid to be known",
-        |snap| snap.windows.values().any(|w| w.win == preview_win),
+        || {
+            core.read_snapshot()
+                .windows
+                .values()
+                .any(|w| w.win == preview_win)
+        },
+        |&ok| ok,
     );
     let preview_grid = core
         .read_snapshot()

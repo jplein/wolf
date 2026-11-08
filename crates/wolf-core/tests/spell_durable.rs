@@ -20,35 +20,13 @@ mod common;
 
 use std::path::Path;
 use std::sync::Mutex;
-use std::thread::sleep;
-use std::time::{Duration, Instant};
 
-use common::{ch, key, type_str, FlushWaiter, FLUSH_TIMEOUT};
+use common::{ch, key, poll_until, type_str, FlushWaiter, FLUSH_TIMEOUT};
 use wolf_core::{InputEvent, Key, WolfCore};
 
 /// Serializes the tests in this binary: every one mutates the process-global
 /// `WOLF_STATE_DIR`, and cargo runs them concurrently within one process.
 static ENV_LOCK: Mutex<()> = Mutex::new(());
-
-/// Gap between polls.
-const POLL_INTERVAL: Duration = Duration::from_millis(50);
-
-/// Polls `pred` until `true` (draining wakes each iteration) or panics after
-/// [`FLUSH_TIMEOUT`]. `desc` names the awaited condition. Mirrors
-/// `swap_recovery.rs`'s `poll_until`.
-fn poll_until(waiter: &FlushWaiter, desc: &str, mut pred: impl FnMut() -> bool) {
-    let deadline = Instant::now() + FLUSH_TIMEOUT;
-    loop {
-        if pred() {
-            return;
-        }
-        if Instant::now() >= deadline {
-            panic!("timed out after {FLUSH_TIMEOUT:?} waiting for: {desc}");
-        }
-        waiter.drain();
-        sleep(POLL_INTERVAL);
-    }
-}
 
 /// Starts a `WolfCore` rooted at `cwd` and waits for the initial attach flush.
 /// Both cores in the restart test go through here with the SAME env, so they
@@ -105,6 +83,7 @@ fn zg_word_survives_core_restart() {
         "zg to append the word to the durable en.utf-8.add (a timeout means 'spellfile' \
          does not point into the durable spell dir, or spell never turned on)",
         || std::fs::read_to_string(&addfile).is_ok_and(|t| t.contains("zzqxwolf")),
+        |&ok| ok,
     );
     core.shutdown().expect("first core shutdown should be Ok");
 
@@ -163,6 +142,7 @@ fn comma_state_dir_swap_and_spellfile_escaped() {
         "zg to append into the comma'd spell dir (an unescaped comma in 'spellfile' \
          splits the path in two and the write lands nowhere)",
         || std::fs::read_to_string(&addfile).is_ok_and(|t| t.contains("zzcommaqx")),
+        |&ok| ok,
     );
 
     // Swap half: an unsaved edit plus `:preserve` must land a swap under swap_dir_for(cwd), inside
@@ -188,6 +168,7 @@ fn comma_state_dir_swap_and_spellfile_escaped() {
                 .flatten()
                 .any(|e| e.path().extension().is_some_and(|x| x == "swp"))
         },
+        |&ok| ok,
     );
 
     core.shutdown().expect("shutdown should be Ok");

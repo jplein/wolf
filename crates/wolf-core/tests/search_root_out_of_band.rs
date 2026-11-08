@@ -39,16 +39,11 @@ mod common;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::Arc;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use common::{FlushWaiter, FLUSH_TIMEOUT};
-use wolf_core::{FileEntry, FileSearch, Key, WakeFn, WolfCore};
-
-/// Gap between polls while waiting for an out-of-band update to arrive.
-const POLL_INTERVAL: Duration = Duration::from_millis(25);
+use common::{poll_until, FlushWaiter, FLUSH_TIMEOUT};
+use wolf_core::{FileEntry, FileSearch, Key, WolfCore};
 
 /// The finite nvim wedge sleep, in milliseconds. Long enough that nvim is still
 /// parked when the timed call lands; finite so nvim recovers on its own for
@@ -65,31 +60,7 @@ const WEDGE_SETTLE: Duration = Duration::from_millis(200);
 /// block", not a tight latency target. Widen (never tighten) if flaky.
 const PROMPT_BOUND: Duration = Duration::from_millis(500);
 
-/// Upper bound for a single file search to reach `complete`. Generous because it
-/// includes nvim recovering from the wedge plus a full FS walk.
-const SEARCH_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// How long to block on a search wake before re-checking `complete`.
-const SEARCH_POLL_INTERVAL: Duration = Duration::from_millis(50);
-
 // --- Helpers ---------------------------------------------------------------
-
-/// Polls `pred` until it returns `true`, draining wakes each iteration, or panics
-/// after [`FLUSH_TIMEOUT`]. `desc` describes the awaited condition. Mirrors
-/// `tabpage_cwd.rs::poll_until` (kept local — it is not a shared helper).
-fn poll_until(waiter: &FlushWaiter, desc: &str, mut pred: impl FnMut() -> bool) {
-    let deadline = Instant::now() + FLUSH_TIMEOUT;
-    loop {
-        if pred() {
-            return;
-        }
-        if Instant::now() >= deadline {
-            panic!("timed out after {FLUSH_TIMEOUT:?} waiting for: {desc}");
-        }
-        waiter.drain();
-        sleep(POLL_INTERVAL);
-    }
-}
 
 /// Creates a fresh temp dir to serve as a core `cwd` and returns both the guard
 /// (kept alive by the caller) and the CANONICAL path to it. Mirrors
@@ -155,34 +126,18 @@ fn wedge_nvim(core: &WolfCore) {
     sleep(WEDGE_SETTLE);
 }
 
-/// Builds a `WakeFn` that signals on a channel, paired with the receiver the
-/// search poll loop waits on. Mirrors `file_search.rs::search_wake`.
-fn search_wake() -> (WakeFn, Receiver<()>) {
-    let (tx, rx): (Sender<()>, Receiver<()>) = mpsc::channel();
-    let wake: WakeFn = Arc::new(move || {
-        // A send error just means the receiver was dropped (test finished).
-        let _ = tx.send(());
-    });
-    (wake, rx)
-}
-
-/// Polls `search` until its view reports `complete`, waking on `wakes`, then
-/// returns a snapshot of the collected entries. Panics on timeout. Mirrors
-/// `file_search.rs::poll_until_complete`.
-fn poll_until_complete(search: &FileSearch, wakes: &Receiver<()>) -> Vec<FileEntry> {
-    let deadline = Instant::now() + SEARCH_TIMEOUT;
-    loop {
-        {
+/// Polls `search` until its view reports `complete`, then returns the collected entries.
+fn wait_for_search_complete(search: &FileSearch, wakes: &FlushWaiter) -> Vec<FileEntry> {
+    poll_until(
+        wakes,
+        "the file search to reach `complete`",
+        || {
             let view = search.read();
-            if view.complete {
-                return view.entries.to_vec();
-            }
-        }
-        if Instant::now() >= deadline {
-            panic!("file search did not reach `complete` within {SEARCH_TIMEOUT:?}");
-        }
-        let _ = wakes.recv_timeout(SEARCH_POLL_INTERVAL);
-    }
+            view.complete.then(|| view.entries.to_vec())
+        },
+        Option::is_some,
+    )
+    .expect("poll_until returned only once the search was complete")
 }
 
 /// The set of `display` strings of `entries` (traversal order is nondeterministic,
@@ -210,6 +165,7 @@ fn file_search_root_is_out_of_band_and_prompt_when_wedged() {
         &waiter,
         "live_cwd() to become the tempdir via the out-of-band wolf_cwd notify",
         || core.live_cwd().as_deref() == Some(cwd.as_path()),
+        |&ok| ok,
     );
 
     // Seed a sentinel BEFORE searching. If the root is the tracked cwd, it appears.
@@ -219,7 +175,7 @@ fn file_search_root_is_out_of_band_and_prompt_when_wedged() {
     // ~5s here; as an out-of-band `live_cwd()` read it must return under the bound.
     wedge_nvim(&core);
 
-    let (wake, wakes) = search_wake();
+    let (wake, wakes) = common::wake_channel();
     let start = Instant::now();
     let search = core.start_file_search(wake);
     let elapsed = start.elapsed();
@@ -232,7 +188,7 @@ fn file_search_root_is_out_of_band_and_prompt_when_wedged() {
 
     // The root is the tracked cwd, so the sentinel is listed, proving the root is not a stale or
     // fallback dir.
-    let entries = poll_until_complete(&search, &wakes);
+    let entries = wait_for_search_complete(&search, &wakes);
     let set = displays(&entries);
     assert!(
         set.contains("wedged_sentinel.md"),
@@ -242,7 +198,7 @@ fn file_search_root_is_out_of_band_and_prompt_when_wedged() {
     eprintln!("search_root_out_of_band: start_file_search={elapsed:?} (bound={PROMPT_BOUND:?}, wedge={WEDGE_SLEEP_MS}ms)");
 
     // Let the whole finite wedge sleep elapse so nvim recovers; a still-wedged shutdown could block.
-    // This over-waits on purpose, since poll_until_complete has likely outlasted it.
+    // This over-waits on purpose, since wait_for_search_complete has likely outlasted it.
     sleep(Duration::from_millis(WEDGE_SLEEP_MS));
     drop(search);
     core.shutdown().expect("shutdown should be Ok");
@@ -270,11 +226,12 @@ fn file_search_root_follows_cd_out_of_band() {
         &waiter,
         "live_cwd() to follow the :cd into dir B via the out-of-band wolf_cwd notify",
         || core.live_cwd().as_deref() == Some(cwd_b.as_path()),
+        |&ok| ok,
     );
 
-    let (wake, wakes) = search_wake();
+    let (wake, wakes) = common::wake_channel();
     let search = core.start_file_search(wake);
-    let entries = poll_until_complete(&search, &wakes);
+    let entries = wait_for_search_complete(&search, &wakes);
     let set = displays(&entries);
 
     assert!(

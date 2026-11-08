@@ -10,10 +10,8 @@
 
 mod common;
 
-use std::time::{Duration, Instant};
-
-use common::{ch, ctrl, key, FlushWaiter, FLUSH_TIMEOUT};
-use wolf_core::{Key, Snapshot, WolfCore};
+use common::{ch, ctrl, key, poll_until};
+use wolf_core::Key;
 
 /// A single-line fixture whose first WORD is a distinctive, space-free token so a
 /// `v` + `e` (extend to word end) selects exactly that word and the yanked text is
@@ -29,29 +27,6 @@ const COPY_WORD: &str = "WOLFCOPY";
 
 /// A distinctive token pasted into an empty buffer; it must show up in the grid.
 const PASTE_TEXT: &str = "WOLFPASTE";
-
-/// How often [`poll_until`] re-reads the snapshot while waiting.
-const POLL_INTERVAL: Duration = Duration::from_millis(25);
-
-/// Polls `core`'s snapshot until `pred` holds, draining wakes each iteration, or panics with
-/// `desc` after [`FLUSH_TIMEOUT`]. A later frame, such as treesitter's asynchronous parse
-/// finishing, can satisfy one `wait_for_flush` before the key's frame lands, so a single read
-/// can measure the wrong frame. Polling the state also cannot miss a frame that lands between a
-/// check and a new baseline. A copy of `redraw_multigrid.rs`'s `poll_until`.
-fn poll_until(core: &WolfCore, waiter: &FlushWaiter, desc: &str, pred: impl Fn(&Snapshot) -> bool) {
-    let deadline = Instant::now() + FLUSH_TIMEOUT;
-    loop {
-        // One statement: the read guard drops before drain/sleep.
-        if pred(&core.read_snapshot()) {
-            return;
-        }
-        if Instant::now() >= deadline {
-            panic!("timed out after {FLUSH_TIMEOUT:?} waiting for: {desc}");
-        }
-        waiter.drain();
-        std::thread::sleep(POLL_INTERVAL);
-    }
-}
 
 #[test]
 fn is_visual_mode_tracks_v_bar_and_ctrl_v() {
@@ -72,24 +47,24 @@ fn is_visual_mode_tracks_v_bar_and_ctrl_v() {
     ] {
         core.send_input(enter);
         poll_until(
-            &core,
             &waiter,
             &format!(
                 "is_visual_mode() true after {name}; never means its mode_change was not folded \
                  as visual"
             ),
-            |s| s.is_visual_mode(),
+            || core.read_snapshot().is_visual_mode(),
+            |&ok| ok,
         );
 
         core.send_input(key(Key::Esc));
         poll_until(
-            &core,
             &waiter,
             &format!(
                 "is_visual_mode() false after <Esc> from {name}; never means the return to \
                  normal mode was not folded"
             ),
-            |s| !s.is_visual_mode(),
+            || !core.read_snapshot().is_visual_mode(),
+            |&ok| ok,
         );
     }
 
@@ -110,11 +85,11 @@ fn copy_visual_selection_yields_the_selected_text() {
     core.send_input(ch('e'));
     // copy_visual_selection() bypasses the input pump, so poll until visual mode lands.
     poll_until(
-        &core,
         &waiter,
         "is_visual_mode() true after gg0ve; never means the keys were not applied, so the copy \
          below would see normal mode",
-        |s| s.is_visual_mode(),
+        || core.read_snapshot().is_visual_mode(),
+        |&ok| ok,
     );
 
     let selection = core.copy_visual_selection();
@@ -153,13 +128,18 @@ fn paste_inserts_text_into_the_active_grid() {
 
     core.paste(PASTE_TEXT.to_string());
     poll_until(
-        &core,
         &waiter,
         &format!(
             "the pasted text {PASTE_TEXT:?} on row 0 of the active grid; never means the paste \
              did not reach the buffer or was drawn elsewhere"
         ),
-        |s| s.active_grid().row_text(0).contains(PASTE_TEXT),
+        || {
+            core.read_snapshot()
+                .active_grid()
+                .row_text(0)
+                .contains(PASTE_TEXT)
+        },
+        |&ok| ok,
     );
 
     core.shutdown().expect("shutdown should be Ok");

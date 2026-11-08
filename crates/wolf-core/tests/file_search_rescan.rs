@@ -35,15 +35,13 @@ use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use wolf_core::files::FileSearchState;
 use wolf_core::{FileEntry, FileSearch, InputEvent, Key, WakeFn, WolfCore};
 
-/// Upper bound for a single file search to reach `complete`. Mirrors
-/// `file_search.rs::SEARCH_TIMEOUT`.
+/// Upper bound for the MRU and settling polls, [`wait_for_mru_contains`] and [`wait_until`].
 const SEARCH_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Upper bound for a triggered rescan to land: covers the registry debounce
@@ -52,7 +50,7 @@ const SEARCH_TIMEOUT: Duration = Duration::from_secs(10);
 const RESCAN_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// How long to block on a wake before re-checking the predicate (so we make
-/// progress even if a wake is missed/coalesced). Mirrors `file_search.rs`.
+/// progress even if a wake is missed/coalesced).
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 /// Settle window for the NEGATIVE assertion (":w of an already-listed file does
@@ -98,7 +96,7 @@ fn start_search(core: &WolfCore, wake: WakeFn, watched: bool) -> FileSearch {
 }
 
 /// Sleeps [`DEBOUNCE_SETTLE`]. Every watcher case calls it right after
-/// `poll_until_complete`, so the catch-up rescan a new watch forwards and any
+/// `wait_for_search_complete`, so the catch-up rescan a new watch forwards and any
 /// startup trigger have drained before the case touches the tree. Without it,
 /// a late catch-up walk could surface the change with no live watch at all,
 /// and the falsifier "skip the watch call" would pass (a) and (b).
@@ -121,7 +119,7 @@ fn seed_primed_tree(cwd: &Path) {
 /// silence: writes `sentinel.md` with `std::fs`, polls until a watcher-driven
 /// rescan lists it, then [`settle`]s. Without this, a watcher that never
 /// started would pass (c) and (d) vacuously.
-fn prove_watcher_live(cwd: &Path, search: &FileSearch, wakes: &Receiver<()>) {
+fn prove_watcher_live(cwd: &Path, search: &FileSearch, wakes: &common::FlushWaiter) {
     write_file(&cwd.join("sentinel.md"), "s");
     poll_search_until(
         search,
@@ -190,17 +188,6 @@ fn append_to(path: &Path, contents: &str) {
         .expect("failed to append to file");
 }
 
-/// Builds a `WakeFn` that signals on a channel, paired with the receiver the
-/// poll loops wait on. Mirrors `file_search.rs::search_wake`.
-fn search_wake() -> (WakeFn, Receiver<()>) {
-    let (tx, rx): (Sender<()>, Receiver<()>) = mpsc::channel();
-    let wake: WakeFn = Arc::new(move || {
-        // A send error just means the receiver was dropped (test finished).
-        let _ = tx.send(());
-    });
-    (wake, rx)
-}
-
 /// Starts a `WolfCore` rooted at `cwd` (default grid size), waits for the
 /// initial attach/flush, and returns the core plus the retained `FlushWaiter`
 /// (every test here drives Ex commands, so the waiter is always needed).
@@ -241,25 +228,18 @@ fn insert_text(core: &WolfCore, waiter: &common::FlushWaiter, text: &str) {
     waiter.wait_for_flush(core, common::FLUSH_TIMEOUT);
 }
 
-/// Polls `search` until its view reports `complete`, waking on `wakes`, then
-/// returns a snapshot of the collected entries. Panics on timeout. Mirrors
-/// `file_search.rs::poll_until_complete`.
-fn poll_until_complete(search: &FileSearch, wakes: &Receiver<()>) -> Vec<FileEntry> {
-    let deadline = Instant::now() + SEARCH_TIMEOUT;
-    loop {
-        {
+/// Polls `search` until its view reports `complete`, then returns the collected entries.
+fn wait_for_search_complete(search: &FileSearch, wakes: &common::FlushWaiter) -> Vec<FileEntry> {
+    common::poll_until(
+        wakes,
+        "the file search to reach `complete`",
+        || {
             let view = search.read();
-            if view.complete {
-                return view.entries.to_vec();
-            }
-        }
-        if Instant::now() >= deadline {
-            panic!("file search did not reach `complete` within {SEARCH_TIMEOUT:?}");
-        }
-        // Bounded wait: a wake nudges us promptly; the timeout guarantees we
-        // re-check even if a wake was coalesced/missed.
-        let _ = wakes.recv_timeout(POLL_INTERVAL);
-    }
+            view.complete.then(|| view.entries.to_vec())
+        },
+        Option::is_some,
+    )
+    .expect("poll_until returned only once the search was complete")
 }
 
 /// Polls `search` until `pred` accepts its state (the rescan-landed check),
@@ -267,7 +247,7 @@ fn poll_until_complete(search: &FileSearch, wakes: &Receiver<()>) -> Vec<FileEnt
 /// [`RESCAN_TIMEOUT`] with `desc` and the entries seen last.
 fn poll_search_until(
     search: &FileSearch,
-    wakes: &Receiver<()>,
+    wakes: &common::FlushWaiter,
     desc: &str,
     mut pred: impl FnMut(&FileSearchState) -> bool,
 ) -> Vec<FileEntry> {
@@ -288,7 +268,7 @@ fn poll_search_until(
                 .collect();
             panic!("timed out after {RESCAN_TIMEOUT:?} waiting for: {desc}; entries={names:?}");
         }
-        let _ = wakes.recv_timeout(POLL_INTERVAL);
+        let _ = wakes.wait_for_wake(POLL_INTERVAL);
     }
 }
 
@@ -396,9 +376,9 @@ fn new_file_appears_after_write() {
     write_file(&cwd.join("existing.md"), "e");
 
     let (core, waiter) = start_core_in(&cwd);
-    let (wake, wakes) = search_wake();
+    let (wake, wakes) = common::wake_channel();
     let search = start_search(&core, wake, false);
-    let baseline = poll_until_complete(&search, &wakes);
+    let baseline = wait_for_search_complete(&search, &wakes);
     assert!(
         displays(&baseline).contains("existing.md"),
         "sanity: the seeded file should be in the baseline; got {:?}",
@@ -460,9 +440,9 @@ fn deleted_file_disappears() {
     write_file(&cwd.join("keeper.md"), "k");
 
     let (core, waiter) = start_core_in(&cwd);
-    let (wake, wakes) = search_wake();
+    let (wake, wakes) = common::wake_channel();
     let search = start_search(&core, wake, false);
-    let baseline = poll_until_complete(&search, &wakes);
+    let baseline = wait_for_search_complete(&search, &wakes);
     assert!(
         displays(&baseline).contains("doomed.md"),
         "sanity: doomed.md should be listed before the delete; got {:?}",
@@ -515,9 +495,9 @@ fn saveas_lists_new_name_and_keeps_old() {
     write_file(&cwd.join("orig.md"), "o");
 
     let (core, waiter) = start_core_in(&cwd);
-    let (wake, wakes) = search_wake();
+    let (wake, wakes) = common::wake_channel();
     let search = start_search(&core, wake, false);
-    let baseline = poll_until_complete(&search, &wakes);
+    let baseline = wait_for_search_complete(&search, &wakes);
     assert!(
         displays(&baseline).contains("orig.md"),
         "sanity: orig.md should be listed before the saveas; got {:?}",
@@ -573,9 +553,9 @@ fn write_of_existing_file_does_not_bump_version() {
     write_file(&cwd.join("stable.md"), "s");
 
     let (core, waiter) = start_core_in(&cwd);
-    let (wake, wakes) = search_wake();
+    let (wake, wakes) = common::wake_channel();
     let search = start_search(&core, wake, false);
-    let baseline = poll_until_complete(&search, &wakes);
+    let baseline = wait_for_search_complete(&search, &wakes);
     assert!(
         displays(&baseline).contains("stable.md"),
         "sanity: stable.md should be listed; got {:?}",
@@ -620,9 +600,9 @@ fn burst_of_new_files_all_appear_deduped() {
     write_file(&cwd.join("base.md"), "b");
 
     let (core, waiter) = start_core_in(&cwd);
-    let (wake, wakes) = search_wake();
+    let (wake, wakes) = common::wake_channel();
     let search = start_search(&core, wake, false);
-    poll_until_complete(&search, &wakes);
+    wait_for_search_complete(&search, &wakes);
 
     // Three back-to-back `:e` + `:w` pairs inside one another's debounce windows; writing a new
     // empty buffer creates the file and fires BufWritePost, so no insert is needed.
@@ -682,9 +662,9 @@ fn shell_cmd_post_rescans() {
     write_file(&cwd.join("keeper.md"), "k");
 
     let (core, waiter) = start_core_in(&cwd);
-    let (wake, wakes) = search_wake();
+    let (wake, wakes) = common::wake_channel();
     let search = start_search(&core, wake, false);
-    let baseline = poll_until_complete(&search, &wakes);
+    let baseline = wait_for_search_complete(&search, &wakes);
     assert!(
         displays(&baseline).contains("doomed.md"),
         "sanity: doomed.md should be listed before the shell delete; got {:?}",
@@ -738,9 +718,9 @@ fn focus_gained_rescans() {
     write_file(&cwd.join("keeper.md"), "k");
 
     let (core, _waiter) = start_core_in(&cwd);
-    let (wake, wakes) = search_wake();
+    let (wake, wakes) = common::wake_channel();
     let search = start_search(&core, wake, false);
-    let baseline = poll_until_complete(&search, &wakes);
+    let baseline = wait_for_search_complete(&search, &wakes);
     assert!(
         displays(&baseline).contains("ext.md"),
         "sanity: ext.md should be listed before the external delete; got {:?}",
@@ -793,9 +773,9 @@ fn term_leave_rescans() {
     write_file(&cwd.join("keeper.md"), "k");
 
     let (core, _waiter) = start_core_in(&cwd);
-    let (wake, wakes) = search_wake();
+    let (wake, wakes) = common::wake_channel();
     let search = start_search(&core, wake, false);
-    let baseline = poll_until_complete(&search, &wakes);
+    let baseline = wait_for_search_complete(&search, &wakes);
     assert!(
         displays(&baseline).contains("gone.md"),
         "sanity: gone.md should be listed before the drawer delete; got {:?}",
@@ -850,9 +830,9 @@ fn external_create_appears() {
     write_file(&cwd.join("existing.md"), "e");
 
     let (core, _waiter) = start_core_in(&cwd);
-    let (wake, wakes) = search_wake();
+    let (wake, wakes) = common::wake_channel();
     let search = start_search(&core, wake, true);
-    let baseline = poll_until_complete(&search, &wakes);
+    let baseline = wait_for_search_complete(&search, &wakes);
     assert!(
         displays(&baseline).contains("existing.md") && !displays(&baseline).contains("fresh.md"),
         "sanity: existing.md listed and fresh.md absent before the create; got {:?}",
@@ -912,9 +892,9 @@ fn external_delete_disappears() {
     write_file(&cwd.join("keeper.md"), "k");
 
     let (core, _waiter) = start_core_in(&cwd);
-    let (wake, wakes) = search_wake();
+    let (wake, wakes) = common::wake_channel();
     let search = start_search(&core, wake, true);
-    let baseline = poll_until_complete(&search, &wakes);
+    let baseline = wait_for_search_complete(&search, &wakes);
     assert!(
         displays(&baseline).contains("doomed.md"),
         "sanity: doomed.md should be listed before the external delete; got {:?}",
@@ -964,9 +944,9 @@ fn ignored_churn_leaves_version_unchanged() {
     seed_primed_tree(&cwd);
 
     let (core, _waiter) = start_core_in(&cwd);
-    let (wake, wakes) = search_wake();
+    let (wake, wakes) = common::wake_channel();
     let search = start_search(&core, wake, true);
-    let baseline = poll_until_complete(&search, &wakes);
+    let baseline = wait_for_search_complete(&search, &wakes);
     let listed = displays(&baseline);
     assert!(
         listed.contains("keep.md") && !listed.contains("build/seed.o"),
@@ -1032,9 +1012,9 @@ fn external_modify_of_listed_file_leaves_version_unchanged() {
     seed_primed_tree(&cwd);
 
     let (core, _waiter) = start_core_in(&cwd);
-    let (wake, wakes) = search_wake();
+    let (wake, wakes) = common::wake_channel();
     let search = start_search(&core, wake, true);
-    let baseline = poll_until_complete(&search, &wakes);
+    let baseline = wait_for_search_complete(&search, &wakes);
     let listed = displays(&baseline);
     assert!(
         listed.contains("keep.md") && !listed.contains("primed.md"),
@@ -1080,9 +1060,9 @@ fn gitignore_edit_refilters_listing() {
     write_file(&cwd.join("stay.md"), "s");
 
     let (core, _waiter) = start_core_in(&cwd);
-    let (wake, wakes) = search_wake();
+    let (wake, wakes) = common::wake_channel();
     let search = start_search(&core, wake, true);
-    let baseline = poll_until_complete(&search, &wakes);
+    let baseline = wait_for_search_complete(&search, &wakes);
     let listed = displays(&baseline);
     assert!(
         listed.contains(".gitignore") && listed.contains("hide.md") && listed.contains("stay.md"),
@@ -1128,9 +1108,9 @@ fn rename_into_ignored_dir_disappears() {
     write_file(&cwd.join("keeper.md"), "k");
 
     let (core, _waiter) = start_core_in(&cwd);
-    let (wake, wakes) = search_wake();
+    let (wake, wakes) = common::wake_channel();
     let search = start_search(&core, wake, true);
-    let baseline = poll_until_complete(&search, &wakes);
+    let baseline = wait_for_search_complete(&search, &wakes);
     let listed = displays(&baseline);
     assert!(
         listed.contains("moved.md") && !listed.contains("build/seed.o"),

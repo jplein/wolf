@@ -36,11 +36,10 @@ use std::path::{Path, PathBuf};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use common::{ch, key, probe_values, temp_md, type_str, FlushWaiter, FLUSH_TIMEOUT};
+use common::{
+    ch, key, poll_until, probe_values, temp_md, type_str, FlushWaiter, FLUSH_TIMEOUT, POLL_INTERVAL,
+};
 use wolf_core::{InputEvent, Key, Liveness, WinBuffer, WolfCore};
-
-/// Gap between polls while waiting for an out-of-band update.
-const POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 /// Distinctive fixture bodies so a wrong buffer cannot fake a pass.
 const DOC_A: &str = "# Alpha fixture\n";
@@ -88,22 +87,6 @@ const CONTROL_MARKER: &str = "freshkeysmike";
 const STALE_COLS: u16 = common::DEFAULT_COLS + 20;
 /// See [`STALE_COLS`].
 const STALE_ROWS: u16 = common::DEFAULT_ROWS + 6;
-
-/// Polls `pred` until `true` (draining wakes each iteration) or panics after
-/// [`FLUSH_TIMEOUT`]. Mirrors `tabpages.rs::poll_until`.
-fn poll_until(waiter: &FlushWaiter, desc: &str, mut pred: impl FnMut() -> bool) {
-    let deadline = Instant::now() + FLUSH_TIMEOUT;
-    loop {
-        if pred() {
-            return;
-        }
-        if Instant::now() >= deadline {
-            panic!("timed out after {FLUSH_TIMEOUT:?} waiting for: {desc}");
-        }
-        waiter.drain();
-        sleep(POLL_INTERVAL);
-    }
-}
 
 /// Burns `dur` draining wakes, so late out-of-band notifications land BEFORE the
 /// assertion that reads what they carry. Mirrors `nav_history_live.rs::settle`.
@@ -168,6 +151,7 @@ fn attach_and_first_tabpage(core: &WolfCore, waiter: &FlushWaiter) -> i64 {
         waiter,
         "the initial editor window to appear after attach",
         || !core.read_snapshot().windows.is_empty(),
+        |&ok| ok,
     );
     let t1 = core.current_tabpage();
     assert_ne!(
@@ -220,6 +204,7 @@ fn restart_respawns_and_reopens_open_files() {
             }
             None => false,
         },
+        |&ok| ok,
     );
 
     // Capture the Tier-1 set the front-end would grab BEFORE restart (respawn wipes
@@ -262,6 +247,7 @@ fn restart_respawns_and_reopens_open_files() {
         &waiter,
         "liveness() to become Dead after the SIGKILL",
         || core.liveness() == Liveness::Dead,
+        |&ok| ok,
     );
 
     // A respawn from Dead returns Ok(true). The fresh nvim's unnamed bufnr 1 is not filtered from
@@ -301,6 +287,7 @@ fn restart_respawns_and_reopens_open_files() {
         &waiter,
         "both fixtures to be listed again after the reopen",
         || listed_has(&core, &canon_a) && listed_has(&core, &canon_b),
+        |&ok| ok,
     );
     assert!(
         listed_has(&core, &canon_a) && listed_has(&core, &canon_b),
@@ -390,6 +377,7 @@ fn open_files_omits_a_terminal_buffer() {
                     && tf.files.iter().any(|p| norm(p) == canon_fixture)
             })
         },
+        |&ok| ok,
     );
 
     // Open the drawer through the production API, as the chord does, not `:terminal`. It ends in
@@ -407,6 +395,7 @@ fn open_files_omits_a_terminal_buffer() {
                 .values()
                 .any(is_named_drawer)
         },
+        |&ok| ok,
     );
 
     // Hide the drawer. The terminal BUFFER and its job survive (only the window
@@ -422,6 +411,7 @@ fn open_files_omits_a_terminal_buffer() {
                 .values()
                 .any(|b| b.is_terminal)
         },
+        |&ok| ok,
     );
 
     // Re-opening binds the already-named terminal buffer, so every autocmd sees `term://…`: that
@@ -436,6 +426,7 @@ fn open_files_omits_a_terminal_buffer() {
                 .values()
                 .any(is_named_drawer)
         },
+        |&ok| ok,
     );
 
     // Read the drawer's live name from a different snapshot map, so the assertion compares two
@@ -620,6 +611,7 @@ fn typing_queued_before_restart_never_reaches_the_fresh_nvim() {
         &waiter,
         "liveness() to become Dead after the deferred SIGKILL",
         || core.liveness() == Liveness::Dead,
+        |&ok| ok,
     );
     {
         let snap = core.read_snapshot();

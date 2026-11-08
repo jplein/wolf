@@ -43,11 +43,8 @@ use std::path::{Path, PathBuf};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use common::{ch, key, type_str, FlushWaiter, FLUSH_TIMEOUT};
+use common::{ch, key, poll_until, type_str, FlushWaiter};
 use wolf_core::{Key, WolfCore};
-
-/// Gap between polls while waiting for an out-of-band update to arrive.
-const POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 /// The finite nvim wedge sleep, in milliseconds. Long enough that nvim is still
 /// parked when the timed reads land; finite so nvim recovers on its own for
@@ -63,23 +60,6 @@ const WEDGE_SETTLE: Duration = Duration::from_millis(200);
 /// old ~5s blocking RPC. Deliberately generous — this proves "not a 5s block",
 /// not a tight latency target. Widen (never tighten) if flaky.
 const PROMPT_BOUND: Duration = Duration::from_millis(500);
-
-/// Polls `pred` until it returns `true`, draining wakes each iteration, or panics
-/// after [`FLUSH_TIMEOUT`]. `desc` describes the awaited condition. Mirrors
-/// `tabpages.rs::poll_until` (kept local — it is not a shared helper).
-fn poll_until(waiter: &FlushWaiter, desc: &str, mut pred: impl FnMut() -> bool) {
-    let deadline = Instant::now() + FLUSH_TIMEOUT;
-    loop {
-        if pred() {
-            return;
-        }
-        if Instant::now() >= deadline {
-            panic!("timed out after {FLUSH_TIMEOUT:?} waiting for: {desc}");
-        }
-        waiter.drain();
-        sleep(POLL_INTERVAL);
-    }
-}
 
 /// Canonicalizes `p` for a symlink-robust comparison (macOS `/var` ->
 /// `/private/var`). `cwd_for_tabpage` is already canonical core-side.
@@ -102,6 +82,7 @@ fn attach_and_first_tabpage(core: &WolfCore, waiter: &FlushWaiter) -> i64 {
         waiter,
         "the initial editor window to appear after attach",
         || !core.read_snapshot().windows.is_empty(),
+        |&ok| ok,
     );
     let t1 = core.current_tabpage();
     assert_ne!(
@@ -147,24 +128,32 @@ fn cwd_for_tabpage_is_out_of_band_and_does_not_block_when_nvim_wedged() {
         &waiter,
         "cwd_for_tabpage(T1) to become dir A via the out-of-band snapshot",
         || core.cwd_for_tabpage(t1).as_deref() == Some(canon_a.as_path()),
+        |&ok| ok,
     );
 
     // Create T2 rooted at dirB and wait for ITS cwd to arrive out-of-band, then
     // switch back to T1 so T2 is NON-current (the case the old blocking RPC served).
     let t2 = core.create_tabpage(Some(dir_b.path()));
     assert_ne!(t2, 0, "create_tabpage(dirB) should return a nonzero handle");
-    poll_until(&waiter, "current_tabpage to become T2", || {
-        core.read_snapshot().current_tabpage == t2
-    });
+    poll_until(
+        &waiter,
+        "current_tabpage to become T2",
+        || core.read_snapshot().current_tabpage == t2,
+        |&ok| ok,
+    );
     poll_until(
         &waiter,
         "cwd_for_tabpage(T2) to become dir B via the out-of-band snapshot",
         || core.cwd_for_tabpage(t2).as_deref() == Some(canon_b.as_path()),
+        |&ok| ok,
     );
     core.set_current_tabpage(t1);
-    poll_until(&waiter, "current_tabpage to return to T1", || {
-        core.read_snapshot().current_tabpage == t1
-    });
+    poll_until(
+        &waiter,
+        "current_tabpage to return to T1",
+        || core.read_snapshot().current_tabpage == t1,
+        |&ok| ok,
+    );
 
     // WEDGE nvim. With the old blocking `tab_cwd` RPC each read below would park
     // ~5s; as an out-of-band snapshot read they must return well under PROMPT_BOUND.

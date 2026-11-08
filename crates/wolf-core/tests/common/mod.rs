@@ -41,6 +41,43 @@ pub const DEFAULT_ROWS: u16 = 24;
 /// well beyond the expected latency before declaring failure.
 pub const FLUSH_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Gap between two tries of [`poll_until`].
+pub const POLL_INTERVAL: Duration = Duration::from_millis(25);
+
+/// Re-runs `observe` every [`POLL_INTERVAL`] until `done` accepts what it returned, and returns
+/// that value. Panics with `desc` and the last observed value after [`FLUSH_TIMEOUT`].
+///
+/// A test polls because one `wait_for_flush` can return on a frame that is not its input's:
+/// Neovim's markdown ftplugin starts treesitter, and a parse that outlasts its budget finishes
+/// through `vim.schedule` and redraws later with no input at all.
+///
+/// `observe` reads into owned values, so no snapshot read guard outlives it: read the snapshot
+/// inside the closure (`|| f(&core.read_snapshot())`). A guard held across a blocking core call
+/// such as `list_buffers()`, or across the drain and sleep, stalls the redraw handler's
+/// `try_write` and parks the input pump on its write lock.
+///
+/// It drains `waiter` between tries, so a test that asserts a wake afterward with
+/// [`FlushWaiter::wait_for_wake`] cannot use it; `nvim_liveness.rs` keeps a non-draining loop.
+pub fn poll_until<T: std::fmt::Debug>(
+    waiter: &FlushWaiter,
+    desc: &str,
+    mut observe: impl FnMut() -> T,
+    done: impl Fn(&T) -> bool,
+) -> T {
+    let deadline = Instant::now() + FLUSH_TIMEOUT;
+    loop {
+        let seen = observe();
+        if done(&seen) {
+            return seen;
+        }
+        if Instant::now() >= deadline {
+            panic!("timed out after {FLUSH_TIMEOUT:?} waiting for {desc}; last observed: {seen:?}");
+        }
+        waiter.drain();
+        std::thread::sleep(POLL_INTERVAL);
+    }
+}
+
 /// Resolves a data file/dir the test needs at RUNTIME from a Bazel-injected env
 /// var holding a runfiles-relative path (set via `$(rootpath …)` in the
 /// `rust_test`'s `env`). Under Bazel the file lives in the test's runfiles tree,
@@ -590,7 +627,8 @@ pub fn start_core_with_temp_md(content: &str) -> (WolfCore, FlushWaiter, tempfil
 /// startup buffer, so nothing a test reads differs.
 ///
 /// It fences off no frame that lands after it returns: a late redraw can satisfy any later single
-/// `wait_for_flush`, so a test that waits for its own input must poll for the state it expects.
+/// `wait_for_flush`, so a test that waits for its own input must poll for the state it expects
+/// with [`poll_until`].
 pub fn start_core_with_temp_md_sized(
     content: &str,
     cols: u16,

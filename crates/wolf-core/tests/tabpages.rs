@@ -45,17 +45,12 @@ mod common;
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::thread::sleep;
-use std::time::{Duration, Instant};
 
-use common::{ch, key, type_str, FlushWaiter, FLUSH_TIMEOUT};
+use common::{ch, key, poll_until, type_str, FlushWaiter};
 use wolf_core::{InputEvent, Key, Snapshot, WolfCore};
 
 /// The outer/global grid id (never carries window content; always present).
 const GLOBAL_GRID: u64 = 1;
-
-/// Gap between polls while waiting for a structural change to settle.
-const POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 /// Expected live window count on a single-window tabpage.
 const ONE_WINDOW: usize = 1;
@@ -114,25 +109,6 @@ const T1_FILE: &str = "a.md";
 /// Basename of the fixture opened on the SECOND tabpage, which is the CURRENT one
 /// while the assertions above are taken. See [`T1_FILE`].
 const T2_FILE: &str = "b.md";
-
-/// Polls `pred` until it returns `true`, draining wakes each iteration, or panics
-/// after [`FLUSH_TIMEOUT`]. `desc` describes the awaited condition for the panic
-/// message. A general-purpose variant of `redraw_multigrid.rs`'s `poll_until`: the
-/// predicate is a plain closure, so it works for BOTH snapshot reads and blocking
-/// core calls (`cwd_for_tabpage`, `list_buffers`).
-fn poll_until(waiter: &FlushWaiter, desc: &str, mut pred: impl FnMut() -> bool) {
-    let deadline = Instant::now() + FLUSH_TIMEOUT;
-    loop {
-        if pred() {
-            return;
-        }
-        if Instant::now() >= deadline {
-            panic!("timed out after {FLUSH_TIMEOUT:?} waiting for: {desc}");
-        }
-        waiter.drain();
-        sleep(POLL_INTERVAL);
-    }
-}
 
 /// The set of live nvim WINDOW handles currently in the snapshot (the `win` field
 /// of every `WinInfo`, which is keyed by grid id). Order-independent.
@@ -196,6 +172,7 @@ fn attach_and_first_tabpage(core: &WolfCore, waiter: &FlushWaiter) -> i64 {
         waiter,
         "the initial editor window to appear after attach",
         || !core.read_snapshot().windows.is_empty(),
+        |&ok| ok,
     );
     let t1 = core.current_tabpage();
     assert_ne!(
@@ -239,6 +216,7 @@ fn tabline_probe(core: &WolfCore, waiter: &FlushWaiter, marker: &str) -> String 
         waiter,
         &format!("the {marker} :echo to surface in Snapshot.toast"),
         || toast_text(core).contains(marker),
+        |&ok| ok,
     );
     toast_text(core)
 }
@@ -302,6 +280,7 @@ fn create_tabpage_adds_window_and_updates_current_tabpage() {
         &waiter,
         "Snapshot.current_tabpage to become the new tabpage T2",
         || core.read_snapshot().current_tabpage == t2,
+        |&ok| ok,
     );
     poll_until(
         &waiter,
@@ -310,6 +289,7 @@ fn create_tabpage_adds_window_and_updates_current_tabpage() {
             let snap = core.read_snapshot();
             !snap.windows.is_empty() && !window_handles(&snap).contains(&w1)
         },
+        |&ok| ok,
     );
 
     let snap = core.read_snapshot();
@@ -348,6 +328,7 @@ fn switch_back_makes_second_tabpage_grids_vanish() {
                 && !snap.windows.is_empty()
                 && !window_handles(&snap).contains(&w1)
         },
+        |&ok| ok,
     );
 
     // Capture T2's window handle + its window grid ids while T2 is current.
@@ -379,6 +360,7 @@ fn switch_back_makes_second_tabpage_grids_vanish() {
             let t1_back = snap.grid_for_win(w1).is_some();
             cur && t2_gone && t1_back
         },
+        |&ok| ok,
     );
 
     let snap = core.read_snapshot();
@@ -418,6 +400,7 @@ fn window_handles_survive_a_tabpage_switch() {
         &waiter,
         "T1 to reach two live windows after :vsplit",
         || core.read_snapshot().windows.len() == TWO_WINDOWS,
+        |&ok| ok,
     );
     let split_handles = window_handles(&core.read_snapshot());
     assert_eq!(
@@ -429,9 +412,12 @@ fn window_handles_survive_a_tabpage_switch() {
     // Switch to a fresh tabpage T2, then back to T1.
     let t2 = core.create_tabpage(None);
     assert_ne!(t2, 0, "create_tabpage should return a nonzero handle");
-    poll_until(&waiter, "current_tabpage to become T2", || {
-        core.read_snapshot().current_tabpage == t2
-    });
+    poll_until(
+        &waiter,
+        "current_tabpage to become T2",
+        || core.read_snapshot().current_tabpage == t2,
+        |&ok| ok,
+    );
 
     core.set_current_tabpage(t1);
     poll_until(
@@ -441,6 +427,7 @@ fn window_handles_survive_a_tabpage_switch() {
             let snap = core.read_snapshot();
             snap.current_tabpage == t1 && snap.windows.len() == TWO_WINDOWS
         },
+        |&ok| ok,
     );
 
     // The load-bearing assertion: the SAME two window handles reappear.
@@ -498,18 +485,25 @@ fn per_tabpage_cwd_including_non_current() {
         &waiter,
         "cwd_for_tabpage(T1) to become dir A after :tcd",
         || core.cwd_for_tabpage(t1).as_deref() == Some(canon_a.as_path()),
+        |&ok| ok,
     );
 
     // Create T2 rooted at dirB, then switch back to T1 so T2 is NON-current.
     let t2 = core.create_tabpage(Some(dir_b.path()));
     assert_ne!(t2, 0, "create_tabpage(dirB) should return a nonzero handle");
-    poll_until(&waiter, "current_tabpage to become T2", || {
-        core.read_snapshot().current_tabpage == t2
-    });
+    poll_until(
+        &waiter,
+        "current_tabpage to become T2",
+        || core.read_snapshot().current_tabpage == t2,
+        |&ok| ok,
+    );
     core.set_current_tabpage(t1);
-    poll_until(&waiter, "current_tabpage to return to T1", || {
-        core.read_snapshot().current_tabpage == t1
-    });
+    poll_until(
+        &waiter,
+        "current_tabpage to return to T1",
+        || core.read_snapshot().current_tabpage == t1,
+        |&ok| ok,
+    );
 
     // T1 current: its cwd is dirA; T2 NOT current: its cwd is still dirB.
     assert_eq!(
@@ -523,6 +517,7 @@ fn per_tabpage_cwd_including_non_current() {
         &waiter,
         "cwd_for_tabpage(T2) to become dir B for the NON-current tabpage",
         || core.cwd_for_tabpage(t2).as_deref() == Some(canon_b.as_path()),
+        |&ok| ok,
     );
 
     core.shutdown().expect("shutdown should be Ok");
@@ -552,21 +547,28 @@ fn buffer_list_is_shared_across_tabpages() {
 
     // Open a.md on T1.
     core.send_input(InputEvent::Open { path: a_md.clone() });
-    poll_until(&waiter, "a.md to appear in list_buffers on T1", || {
-        has_buffer(&core, "a.md")
-    });
+    poll_until(
+        &waiter,
+        "a.md to appear in list_buffers on T1",
+        || has_buffer(&core, "a.md"),
+        |&ok| ok,
+    );
 
     // Create T2 and open b.md there.
     let t2 = core.create_tabpage(None);
     assert_ne!(t2, 0, "create_tabpage should return a nonzero handle");
-    poll_until(&waiter, "current_tabpage to become T2", || {
-        core.read_snapshot().current_tabpage == t2
-    });
+    poll_until(
+        &waiter,
+        "current_tabpage to become T2",
+        || core.read_snapshot().current_tabpage == t2,
+        |&ok| ok,
+    );
     core.send_input(InputEvent::Open { path: b_md.clone() });
     poll_until(
         &waiter,
         "both a.md and b.md to be listed while T2 is current",
         || has_buffer(&core, "a.md") && has_buffer(&core, "b.md"),
+        |&ok| ok,
     );
 
     assert!(
@@ -576,9 +578,12 @@ fn buffer_list_is_shared_across_tabpages() {
 
     // Switch back to T1: the shared list still has both.
     core.set_current_tabpage(t1);
-    poll_until(&waiter, "current_tabpage to return to T1", || {
-        core.read_snapshot().current_tabpage == t1
-    });
+    poll_until(
+        &waiter,
+        "current_tabpage to return to T1",
+        || core.read_snapshot().current_tabpage == t1,
+        |&ok| ok,
+    );
     assert!(
         has_buffer(&core, "a.md") && has_buffer(&core, "b.md"),
         "list_buffers() should still contain BOTH a.md and b.md after switching back to T1"
@@ -601,21 +606,30 @@ fn stable_handle_survives_tabpage_renumber() {
 
     let t2 = core.create_tabpage(None);
     assert_ne!(t2, 0, "create_tabpage(T2) should return a nonzero handle");
-    poll_until(&waiter, "current_tabpage to become T2", || {
-        core.read_snapshot().current_tabpage == t2
-    });
+    poll_until(
+        &waiter,
+        "current_tabpage to become T2",
+        || core.read_snapshot().current_tabpage == t2,
+        |&ok| ok,
+    );
 
     let t3 = core.create_tabpage(Some(dir_c.path()));
     assert_ne!(t3, 0, "create_tabpage(T3) should return a nonzero handle");
     assert_ne!(t3, t1, "T3 handle must differ from T1");
     assert_ne!(t3, t2, "T3 handle must differ from T2");
-    poll_until(&waiter, "current_tabpage to become T3", || {
-        core.read_snapshot().current_tabpage == t3
-    });
+    poll_until(
+        &waiter,
+        "current_tabpage to become T3",
+        || core.read_snapshot().current_tabpage == t3,
+        |&ok| ok,
+    );
     // Sanity: T3's cwd is dirC before the close.
-    poll_until(&waiter, "cwd_for_tabpage(T3) to resolve to dir C", || {
-        core.cwd_for_tabpage(t3).as_deref() == Some(canon_c.as_path())
-    });
+    poll_until(
+        &waiter,
+        "cwd_for_tabpage(T3) to resolve to dir C",
+        || core.cwd_for_tabpage(t3).as_deref() == Some(canon_c.as_path()),
+        |&ok| ok,
+    );
 
     // Close T2 (a NON-current tabpage). Its number is 2; T3's number shifts 3 -> 2.
     core.close_tabpage(t2);
@@ -623,6 +637,7 @@ fn stable_handle_survives_tabpage_renumber() {
         &waiter,
         "T2's handle to become invalid after close_tabpage(T2)",
         || core.cwd_for_tabpage(t2).is_none(),
+        |&ok| ok,
     );
 
     // The invariant: T3's HANDLE is unchanged (we still hold `t3`) and it still
@@ -685,6 +700,7 @@ fn win_hide_removes_window_but_keeps_grid_on_tabpage_switch() {
             let snap = core.read_snapshot();
             snap.current_tabpage == t2 && snap.grid_for_win(w1).is_none()
         },
+        |&ok| ok,
     );
 
     // From one snapshot: W1 is gone from `windows` and no longer resolves, while its grid G1 is
@@ -858,6 +874,7 @@ fn a_second_tabpage_draws_no_neovim_tabline() {
                 && !snap.windows.is_empty()
                 && !window_handles(&snap).contains(&w1)
         },
+        |&ok| ok,
     );
 
     // Probe two is a full keystroke-to-flush round trip, so the new tabpage's redraw has finished.
@@ -997,6 +1014,7 @@ fn per_window_buffers_are_global_across_tabpages() {
         &waiter,
         "win_buffers[w1] to report the T1 fixture while T1 is still current",
         || win_buffer_tail(&core.read_snapshot(), w1).as_deref() == Some(T1_FILE),
+        |&ok| ok,
     );
 
     // --- T2: a fresh tabpage, its own window, its own fixture -------------
@@ -1011,6 +1029,7 @@ fn per_window_buffers_are_global_across_tabpages() {
                 && !snap.windows.is_empty()
                 && !window_handles(&snap).contains(&w1)
         },
+        |&ok| ok,
     );
     let w2 = only_window_handle(&core);
     assert_ne!(
@@ -1023,6 +1042,7 @@ fn per_window_buffers_are_global_across_tabpages() {
         &waiter,
         "win_buffers[w2] to report the T2 fixture while T2 is current",
         || win_buffer_tail(&core.read_snapshot(), w2).as_deref() == Some(T2_FILE),
+        |&ok| ok,
     );
 
     // Everything below comes from ONE snapshot read, so the two maps' disagreement
@@ -1124,6 +1144,7 @@ fn per_window_buffers_are_global_across_tabpages() {
             let snap = core.read_snapshot();
             snap.current_tabpage == t1 && !window_handles(&snap).contains(&w2)
         },
+        |&ok| ok,
     );
 
     let snap = core.read_snapshot();

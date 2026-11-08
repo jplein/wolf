@@ -28,15 +28,12 @@ mod common;
 
 use std::time::{Duration, Instant};
 
-use common::{ch, key, FlushWaiter, FLUSH_TIMEOUT};
-use wolf_core::{Command, Key, MenuGroup, Snapshot, WolfCore, COMMAND_SPECS};
+use common::{ch, key, poll_until, FlushWaiter, FLUSH_TIMEOUT, POLL_INTERVAL};
+use wolf_core::{Command, Key, MenuGroup, WolfCore, COMMAND_SPECS};
 
 /// The outer/global grid id. Window content lives on grids `>= 2`; grid 1 is
 /// never a window grid in these scenarios.
 const GLOBAL_GRID: u64 = 1;
-
-/// Gap between polls while waiting for a structural change or a command.
-const POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 /// How long to let a (non-)event settle before asserting that something did NOT
 /// happen — long enough that a stray `close_window` command would have arrived if
@@ -50,26 +47,6 @@ const DOC: &str = "# Commands\nbody\n";
 /// Distinctive text inserted before writing in the `:wq` test, so we can prove the
 /// buffer's edited contents actually reached disk.
 const WQ_MARKER: &str = "wolfwqmarker";
-
-/// Polls `core`'s snapshot until `pred` holds, draining wakes each iteration, or
-/// panics after [`FLUSH_TIMEOUT`]. `desc` describes the awaited condition.
-/// (Port of `layout_intents.rs`'s `poll_until`.)
-fn poll_until(core: &WolfCore, waiter: &FlushWaiter, desc: &str, pred: impl Fn(&Snapshot) -> bool) {
-    let deadline = Instant::now() + FLUSH_TIMEOUT;
-    loop {
-        {
-            let snap = core.read_snapshot();
-            if pred(&snap) {
-                return;
-            }
-        }
-        if Instant::now() >= deadline {
-            panic!("timed out after {FLUSH_TIMEOUT:?} waiting for: {desc}");
-        }
-        waiter.drain();
-        std::thread::sleep(POLL_INTERVAL);
-    }
-}
 
 /// Polls `core.drain_commands()` until it yields a non-empty batch (or panics
 /// after `timeout`), returning the first non-empty drain. This is the
@@ -108,10 +85,13 @@ fn ex_command(core: &WolfCore, cmd: &str) {
 /// returned count (this suite does not assert on window counts).
 fn wait_for_initial_window(core: &WolfCore, waiter: &FlushWaiter) {
     poll_until(
-        core,
         waiter,
         "the initial editor window grid (id != 1) to appear",
-        |snap| !snap.windows.is_empty() && snap.grids.keys().any(|&id| id != GLOBAL_GRID),
+        || {
+            let snap = core.read_snapshot();
+            !snap.windows.is_empty() && snap.grids.keys().any(|&id| id != GLOBAL_GRID)
+        },
+        |&ok| ok,
     );
 }
 
@@ -532,10 +512,10 @@ fn ex_qa_emits_close_window_when_multiple_panes() {
     // plain `:vsplit` and observe the window count grow (no intent/ctrl imports).
     ex_command(&core, "vsplit");
     poll_until(
-        &core,
         &waiter,
         "windows.len() to grow by one after :vsplit",
-        |snap| snap.windows.len() == base + 1,
+        || core.read_snapshot().windows.len() == base + 1,
+        |&ok| ok,
     );
 
     // Discard anything queued during setup so we observe only `:qa`'s command.

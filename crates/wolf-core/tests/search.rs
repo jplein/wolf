@@ -141,7 +141,7 @@ fn rg_bin_or_skip() -> Option<PathBuf> {
 }
 
 /// A `WakeFn` that signals on a channel, paired with the receiver the poll loop
-/// waits on (mirrors `file_search.rs::search_wake`).
+/// waits on (mirrors `common::wake_channel`).
 fn search_wake() -> (WakeFn, Receiver<()>) {
     let (tx, rx): (Sender<()>, Receiver<()>) = mpsc::channel();
     let wake: WakeFn = Arc::new(move || {

@@ -19,9 +19,8 @@
 mod common;
 
 use std::collections::HashSet;
-use std::time::{Duration, Instant};
 
-use common::{ch, ctrl, key, type_str, FlushWaiter, FLUSH_TIMEOUT};
+use common::{ch, ctrl, key, poll_until, type_str};
 use wolf_core::{Key, Snapshot, WolfCore};
 
 /// The outer/global grid id. Per the multigrid model grid 1 always exists (nvim
@@ -29,38 +28,11 @@ use wolf_core::{Key, Snapshot, WolfCore};
 /// >= 2 and grid 1 is never the active grid in these scenarios.
 const GLOBAL_GRID: u64 = 1;
 
-/// Gap between `read_snapshot` polls while waiting for a structural change.
-const POLL_INTERVAL: Duration = Duration::from_millis(25);
-
 /// Distinct dimensions used by the per-grid resize test. Chosen well inside the
 /// default 80x24 outer grid so nvim can honor them, and different from both the
 /// global grid dims and a freshly-split window grid's dims.
 const RESIZE_GRID_COLS: u16 = 50;
 const RESIZE_GRID_ROWS: u16 = 15;
-
-/// Polls `core`'s snapshot until `pred` holds, draining wakes each iteration, or
-/// panics after [`FLUSH_TIMEOUT`]. `desc` describes the awaited condition for the
-/// panic message. This mirrors `current_file.rs`'s poll-with-timeout pattern,
-/// which is the right tool when the change we await may arrive across multiple
-/// flushes (win_pos / grid creation / grid_destroy) rather than on one.
-fn poll_until(core: &WolfCore, waiter: &FlushWaiter, desc: &str, pred: impl Fn(&Snapshot) -> bool) {
-    let deadline = Instant::now() + FLUSH_TIMEOUT;
-    loop {
-        {
-            let snap = core.read_snapshot();
-            // The guard derefs to `Snapshot`, so `&snap` coerces to the
-            // `&Snapshot` the predicate expects.
-            if pred(&snap) {
-                return;
-            }
-        }
-        if Instant::now() >= deadline {
-            panic!("timed out after {FLUSH_TIMEOUT:?} waiting for: {desc}");
-        }
-        waiter.drain();
-        std::thread::sleep(POLL_INTERVAL);
-    }
-}
 
 /// Types an Ex command `:<cmd><CR>` one key at a time. init.lua's `cnoreabbrev`
 /// overrides route `:split`/`:close` through `wolf_do_split`/`wolf_do_close`,
@@ -87,14 +59,15 @@ fn attach_creates_window_grid() {
     // win_pos / window-grid creation may lag the initial flush, so poll until the
     // window grid is present rather than assuming a single flush carried it.
     poll_until(
-        &core,
         &waiter,
         "a window grid (id != 1) and a non-empty windows map to appear",
-        |snap| {
+        || {
+            let snap = core.read_snapshot();
             snap.grids.contains_key(&GLOBAL_GRID)
                 && snap.grids.keys().any(|&id| id != GLOBAL_GRID)
                 && !snap.windows.is_empty()
         },
+        |&ok| ok,
     );
 
     let snap = core.read_snapshot();
@@ -166,10 +139,13 @@ fn split_adds_grid_and_window() {
 
     // Wait for the first window grid before measuring the baseline.
     poll_until(
-        &core,
         &waiter,
         "the initial window grid to appear before splitting",
-        |snap| !snap.windows.is_empty() && snap.grids.keys().any(|&id| id != GLOBAL_GRID),
+        || {
+            let snap = core.read_snapshot();
+            !snap.windows.is_empty() && snap.grids.keys().any(|&id| id != GLOBAL_GRID)
+        },
+        |&ok| ok,
     );
 
     let (base_grids, base_windows) = {
@@ -181,10 +157,13 @@ fn split_adds_grid_and_window() {
     ex_command(&core, "split");
 
     poll_until(
-        &core,
         &waiter,
         "grids.len() and windows.len() to each increase by one after :split",
-        |snap| snap.grids.len() == base_grids + 1 && snap.windows.len() == base_windows + 1,
+        || {
+            let snap = core.read_snapshot();
+            snap.grids.len() == base_grids + 1 && snap.windows.len() == base_windows + 1
+        },
+        |&ok| ok,
     );
 
     let snap = core.read_snapshot();
@@ -213,10 +192,13 @@ fn grid_line_lands_in_active_grid() {
     let (core, waiter, _file) = common::start_core_with_temp_md("");
 
     poll_until(
-        &core,
         &waiter,
         "the initial window grid to appear before typing",
-        |snap| !snap.windows.is_empty() && snap.active_grid_id() != GLOBAL_GRID,
+        || {
+            let snap = core.read_snapshot();
+            !snap.windows.is_empty() && snap.active_grid_id() != GLOBAL_GRID
+        },
+        |&ok| ok,
     );
 
     // Enter insert mode, type, leave insert mode.
@@ -225,10 +207,15 @@ fn grid_line_lands_in_active_grid() {
     core.send_input(key(Key::Esc));
 
     poll_until(
-        &core,
         &waiter,
         "the typed text to land on the active grid's row 0",
-        |snap| snap.active_grid().row_text(0).contains("hello"),
+        || {
+            core.read_snapshot()
+                .active_grid()
+                .row_text(0)
+                .contains("hello")
+        },
+        |&ok| ok,
     );
 
     let snap = core.read_snapshot();
@@ -256,10 +243,13 @@ fn close_removes_grid_and_window() {
     let (core, waiter, _file) = common::start_core_with_temp_md("# close\nbody\n");
 
     poll_until(
-        &core,
         &waiter,
         "the initial window grid to appear before splitting",
-        |snap| !snap.windows.is_empty() && snap.grids.keys().any(|&id| id != GLOBAL_GRID),
+        || {
+            let snap = core.read_snapshot();
+            !snap.windows.is_empty() && snap.grids.keys().any(|&id| id != GLOBAL_GRID)
+        },
+        |&ok| ok,
     );
 
     let base_windows = core.read_snapshot().windows.len();
@@ -267,10 +257,10 @@ fn close_removes_grid_and_window() {
     // Split so there are two windows to close one of.
     ex_command(&core, "split");
     poll_until(
-        &core,
         &waiter,
         "windows.len() to reach two after :split",
-        |snap| snap.windows.len() == base_windows + 1,
+        || core.read_snapshot().windows.len() == base_windows + 1,
+        |&ok| ok,
     );
 
     // Capture the two window grid ids before closing.
@@ -281,10 +271,13 @@ fn close_removes_grid_and_window() {
     // grid_destroy).
     ex_command(&core, "close");
     poll_until(
-        &core,
         &waiter,
         "grids and windows to each drop back by one after :close",
-        |snap| snap.windows.len() == base_windows && snap.grids.len() == before_grids - 1,
+        || {
+            let snap = core.read_snapshot();
+            snap.windows.len() == base_windows && snap.grids.len() == before_grids - 1
+        },
+        |&ok| ok,
     );
 
     let snap = core.read_snapshot();
@@ -316,10 +309,13 @@ fn active_grid_follows_focus() {
     let (core, waiter, _file) = common::start_core_with_temp_md("# focus\nbody\n");
 
     poll_until(
-        &core,
         &waiter,
         "the initial window grid to appear before splitting",
-        |snap| !snap.windows.is_empty() && snap.active_grid_id() != GLOBAL_GRID,
+        || {
+            let snap = core.read_snapshot();
+            !snap.windows.is_empty() && snap.active_grid_id() != GLOBAL_GRID
+        },
+        |&ok| ok,
     );
 
     let base_windows = core.read_snapshot().windows.len();
@@ -327,10 +323,10 @@ fn active_grid_follows_focus() {
     // Split so there are two windows to move focus between.
     ex_command(&core, "split");
     poll_until(
-        &core,
         &waiter,
         "a second window to appear after :split",
-        |snap| snap.windows.len() == base_windows + 1,
+        || core.read_snapshot().windows.len() == base_windows + 1,
+        |&ok| ok,
     );
 
     // Capture the focused grid (grid A) BEFORE switching focus.
@@ -341,10 +337,10 @@ fn active_grid_follows_focus() {
     core.send_input(ch('w'));
 
     poll_until(
-        &core,
         &waiter,
         "cursor.grid to move to the other window grid",
-        |snap| snap.cursor.grid != grid_a,
+        || core.read_snapshot().cursor.grid != grid_a,
+        |&ok| ok,
     );
 
     let snap = core.read_snapshot();
@@ -384,10 +380,13 @@ fn resize_grid_changes_only_that_grid() {
     let (core, waiter, _file) = common::start_core_with_temp_md("# resize\nbody\n");
 
     poll_until(
-        &core,
         &waiter,
         "the active window grid to appear before resizing",
-        |snap| snap.active_grid_id() != GLOBAL_GRID && snap.grids.contains_key(&GLOBAL_GRID),
+        || {
+            let snap = core.read_snapshot();
+            snap.active_grid_id() != GLOBAL_GRID && snap.grids.contains_key(&GLOBAL_GRID)
+        },
+        |&ok| ok,
     );
 
     // Record the global grid's dims (must stay unchanged) and the active window
@@ -404,14 +403,15 @@ fn resize_grid_changes_only_that_grid() {
     // Polls for the exact dims, 50x15 inside the 80x24 outer grid. If nvim clamps them, see
     // crates/wolf-core/tests/README.md#redraw_multigridrs
     poll_until(
-        &core,
         &waiter,
         "the target window grid to reach the requested dimensions",
-        |snap| {
+        || {
+            let snap = core.read_snapshot();
             snap.grid(target).is_some_and(|g| {
                 g.cols == RESIZE_GRID_COLS as usize && g.rows == RESIZE_GRID_ROWS as usize
             })
         },
+        |&ok| ok,
     );
 
     let snap = core.read_snapshot();

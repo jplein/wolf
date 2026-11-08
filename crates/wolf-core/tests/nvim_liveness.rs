@@ -34,11 +34,8 @@ mod common;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use common::{ch, key, type_str, FLUSH_TIMEOUT};
+use common::{ch, key, type_str, FLUSH_TIMEOUT, POLL_INTERVAL};
 use wolf_core::{Key, Liveness, WolfCore};
-
-/// Gap between liveness polls.
-const POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 /// A small, deterministic RPC timeout (ms) for the STALL core, so a single wedged
 /// `block_on_rpc` call elapses quickly. Large enough to clear real sub-ms
@@ -77,9 +74,11 @@ fn self_sigkill(core: &WolfCore) {
 }
 
 /// Polls `pred` until `true` or panics after [`FLUSH_TIMEOUT`], SLEEPING between
-/// polls WITHOUT draining wakes (so a queued liveness wake survives to be observed
-/// afterward). `desc` names the awaited condition.
-fn poll_until_no_drain(desc: &str, mut pred: impl FnMut() -> bool) {
+/// polls WITHOUT draining wakes. `desc` names the awaited condition.
+///
+/// Not `common::poll_until`: that helper drains the waiter between tries, which would
+/// consume the transition wake each case asserts afterward with `wait_for_wake`.
+fn poll_without_draining(desc: &str, mut pred: impl FnMut() -> bool) {
     let deadline = Instant::now() + FLUSH_TIMEOUT;
     loop {
         if pred() {
@@ -113,7 +112,7 @@ fn crash_marks_dead() {
 
     // DETECTION (load-bearing): the supervisor observes stdout EOF and marks Dead.
     // Poll WITHOUT draining so the death wake stays queued for the seam assertion.
-    poll_until_no_drain("liveness() to become Dead after the SIGKILL", || {
+    poll_without_draining("liveness() to become Dead after the SIGKILL", || {
         core.liveness() == Liveness::Dead
     });
     assert_eq!(
@@ -160,7 +159,7 @@ fn stall_marks_not_responding() {
 
     // Each `list_buffers()` (a block_on_rpc getbufinfo, empty on timeout) times out; repeating it
     // escalates whatever the threshold is, and the finite wedge outlasts the poll window.
-    poll_until_no_drain(
+    poll_without_draining(
         "liveness() to escalate to NotResponding while wedged",
         || {
             let _ = core.list_buffers();
@@ -206,7 +205,7 @@ fn stall_then_recovery_clears_not_responding() {
 
     // During the sleep a block_on_rpc call times out and escalates to NotResponding, well before
     // nvim recovers, since the wedge is several multiples of the timeout.
-    poll_until_no_drain(
+    poll_without_draining(
         "liveness() to escalate to NotResponding during the transient stall",
         || {
             let _ = core.list_buffers();
@@ -220,7 +219,7 @@ fn stall_then_recovery_clears_not_responding() {
 
     // After the sleep, a successful block_on_rpc auto-clears to Alive: the load-bearing assertion.
     // No drain, so the auto-clear wake stays queued for the seam assertion.
-    poll_until_no_drain(
+    poll_without_draining(
         "liveness() to auto-clear back to Alive after recovery",
         || {
             let _ = core.list_buffers();

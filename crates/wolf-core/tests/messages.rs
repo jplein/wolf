@@ -17,13 +17,10 @@
 mod common;
 
 use std::thread::sleep;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use common::{ch, key, type_str, FlushWaiter, FLUSH_TIMEOUT};
+use common::{ch, key, poll_until, type_str};
 use wolf_core::{Key, WolfCore};
-
-/// Gap between `read_snapshot` polls while waiting for toast state to settle.
-const POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 /// How long to let message activity settle before asserting a NEGATIVE property
 /// (e.g. that `search_count` never surfaced). Generous so a late `msg_show`
@@ -63,23 +60,6 @@ fn toast_text(core: &WolfCore) -> String {
         .join("\n")
 }
 
-/// Polls `pred` until it returns `true`, draining wakes each iteration, or panics
-/// after [`FLUSH_TIMEOUT`]. `desc` describes the awaited condition for the panic
-/// message. Mirrors `tabpages.rs`'s `poll_until`.
-fn poll_until(waiter: &FlushWaiter, desc: &str, mut pred: impl FnMut() -> bool) {
-    let deadline = Instant::now() + FLUSH_TIMEOUT;
-    loop {
-        if pred() {
-            return;
-        }
-        if Instant::now() >= deadline {
-            panic!("timed out after {FLUSH_TIMEOUT:?} waiting for: {desc}");
-        }
-        waiter.drain();
-        sleep(POLL_INTERVAL);
-    }
-}
-
 /// A multi-line `nvim_echo` with an explicit `kind` populates `Snapshot.toast`:
 /// `visible == true`, `kind()` reflects the requested kind, and the flattened
 /// `lines()` contain BOTH echoed lines.
@@ -105,6 +85,7 @@ fn multiline_echo_populates_toast_with_kind() {
             let text = toast_text(&core);
             text.contains("line one") && text.contains("line two")
         },
+        |&ok| ok,
     );
 
     let text = toast_text(&core);
@@ -133,10 +114,15 @@ fn messages_command_populates_toast_from_history() {
 
     // `:echomsg` both shows the message AND records it in history.
     send_ex(&core, &format!("echomsg \"{MARKER}\""));
-    poll_until(&waiter, "the :echomsg to surface in the toast", || {
-        let snap = core.read_snapshot();
-        snap.toast.visible && toast_text(&core).contains(MARKER)
-    });
+    poll_until(
+        &waiter,
+        "the :echomsg to surface in the toast",
+        || {
+            let snap = core.read_snapshot();
+            snap.toast.visible && toast_text(&core).contains(MARKER)
+        },
+        |&ok| ok,
+    );
 
     // Typing `:` is itself a dismissing key, so a match proves `:messages` (`msg_history_show`)
     // repopulated the toast from history rather than leaving the earlier echomsg up.
@@ -148,6 +134,7 @@ fn messages_command_populates_toast_from_history() {
             let snap = core.read_snapshot();
             snap.toast.visible && toast_text(&core).contains(MARKER)
         },
+        |&ok| ok,
     );
 
     assert!(
@@ -175,14 +162,18 @@ fn toast_clears_on_next_input() {
             let snap = core.read_snapshot();
             snap.toast.visible && toast_text(&core).contains(MARKER)
         },
+        |&ok| ok,
     );
 
     // A movement key is a dismissing `Key` input; the input pump clears the toast
     // before applying it (and nothing new repopulates), so `visible` goes false.
     core.send_input(key(Key::Left));
-    poll_until(&waiter, "the toast to clear on the next input", || {
-        !core.read_snapshot().toast.visible
-    });
+    poll_until(
+        &waiter,
+        "the toast to clear on the next input",
+        || !core.read_snapshot().toast.visible,
+        |&ok| ok,
+    );
 
     assert!(
         !core.read_snapshot().toast.visible,
@@ -209,10 +200,15 @@ fn consecutive_messages_do_not_accumulate() {
     let (core, waiter) = common::start_core_sized(common::DEFAULT_COLS, common::DEFAULT_ROWS);
 
     send_ex(&core, &format!("echomsg \"{FIRST}\""));
-    poll_until(&waiter, "the first message to become visible", || {
-        let snap = core.read_snapshot();
-        snap.toast.visible && toast_text(&core).contains(FIRST)
-    });
+    poll_until(
+        &waiter,
+        "the first message to become visible",
+        || {
+            let snap = core.read_snapshot();
+            snap.toast.visible && toast_text(&core).contains(FIRST)
+        },
+        |&ok| ok,
+    );
 
     send_ex(&core, &format!("echomsg \"{SECOND}\""));
     poll_until(
@@ -223,6 +219,7 @@ fn consecutive_messages_do_not_accumulate() {
             let text = toast_text(&core);
             snap.toast.visible && text.contains(SECOND) && !text.contains(FIRST)
         },
+        |&ok| ok,
     );
 
     let text = toast_text(&core);
@@ -264,6 +261,7 @@ fn confirm_prompt_is_not_dismissed_by_input() {
             let snap = core.read_snapshot();
             snap.toast.visible && snap.toast.is_prompt()
         },
+        |&ok| ok,
     );
     {
         let snap = core.read_snapshot();
@@ -331,6 +329,7 @@ fn confirm_prompt_cleared_when_answered() {
             let snap = core.read_snapshot();
             snap.toast.visible && snap.toast.is_prompt()
         },
+        |&ok| ok,
     );
     {
         let snap = core.read_snapshot();
@@ -353,6 +352,7 @@ fn confirm_prompt_cleared_when_answered() {
         &waiter,
         "the confirm prompt toast to clear once the dialog is answered",
         || !core.read_snapshot().toast.visible,
+        |&ok| ok,
     );
 
     // Let any trailing message activity settle so a late redraw cannot re-show
@@ -401,12 +401,14 @@ fn confirm_answer_then_message_does_not_resurrect_prompt() {
             let snap = core.read_snapshot();
             snap.toast.visible && snap.toast.is_prompt()
         },
+        |&ok| ok,
     );
     core.send_input(ch('y'));
     poll_until(
         &waiter,
         "the confirm prompt toast to clear once the dialog is answered",
         || !core.read_snapshot().toast.visible,
+        |&ok| ok,
     );
 
     // A fresh, unrelated message must supersede any stashed confirm, not
@@ -419,6 +421,7 @@ fn confirm_answer_then_message_does_not_resurrect_prompt() {
             let snap = core.read_snapshot();
             snap.toast.visible && !snap.toast.is_prompt() && toast_text(&core).contains(AFTER)
         },
+        |&ok| ok,
     );
 
     let text = toast_text(&core);

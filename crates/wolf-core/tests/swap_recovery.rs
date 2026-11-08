@@ -86,7 +86,9 @@ use std::path::{Path, PathBuf};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use common::{ch, key, type_str, FlushWaiter, FLUSH_TIMEOUT, SWAP_NAME_MAX};
+use common::{
+    ch, key, poll_until, type_str, FlushWaiter, FLUSH_TIMEOUT, POLL_INTERVAL, SWAP_NAME_MAX,
+};
 use wolf_core::{InputEvent, Key, Liveness, WolfCore};
 
 /// The clean on-disk fixture. Row 0's heading proves the buffer opened.
@@ -121,9 +123,6 @@ const UNTITLED_MARKER: &str = "UNTITLEDSWAPRECOVER";
 /// so no other fixture in this file can fake a pass.
 const STARTUP_MARKER: &str = "WOLFSTALESWAP";
 
-/// Gap between polls.
-const POLL_INTERVAL: Duration = Duration::from_millis(25);
-
 /// Wall-clock settle after `:preserve<CR>` so nvim flushes the swap to disk on its
 /// own loop BEFORE the next command (the input bursts are otherwise unordered
 /// relative to nvim's execution, and no redraw flush marks the write).
@@ -141,22 +140,6 @@ struct SwapState {
     swapname: String,
     /// `&l:swapfile`: `"1"` or `"0"`.
     swapfile: String,
-}
-
-/// Polls `pred` until `true` (draining wakes each iteration) or panics after
-/// [`FLUSH_TIMEOUT`]. `desc` names the awaited condition.
-fn poll_until(waiter: &FlushWaiter, desc: &str, mut pred: impl FnMut() -> bool) {
-    let deadline = Instant::now() + FLUSH_TIMEOUT;
-    loop {
-        if pred() {
-            return;
-        }
-        if Instant::now() >= deadline {
-            panic!("timed out after {FLUSH_TIMEOUT:?} waiting for: {desc}");
-        }
-        waiter.drain();
-        sleep(POLL_INTERVAL);
-    }
 }
 
 /// Types an Ex command `:<cmd><CR>` one key at a time.
@@ -471,6 +454,7 @@ fn dead_owner_recovers_silently() {
         &waiter,
         "liveness() to become Dead after the SIGKILL",
         || core.liveness() == Liveness::Dead,
+        |&ok| ok,
     );
 
     // Restart in the SAME cwd (=> SAME durable swap dir), so the fresh nvim finds
@@ -494,6 +478,7 @@ fn dead_owner_recovers_silently() {
                 .row_text(0)
                 .contains("WOLFEDIT")
         },
+        |&ok| ok,
     );
 
     let snap = core.read_snapshot();
@@ -544,6 +529,7 @@ fn live_owner_edits_anyway() {
                 .row_text(0)
                 .contains("# Swap Fixture")
         },
+        |&ok| ok,
     );
 
     let snap_b = core_b.read_snapshot();
@@ -591,9 +577,12 @@ fn restart_recovers_unsaved_untitled_buffer() {
     let (core, waiter) = start_core_in(&cwd);
 
     // Wait for the initial editor window, then capture tabpage 1.
-    poll_until(&waiter, "the initial editor window after attach", || {
-        !core.read_snapshot().windows.is_empty()
-    });
+    poll_until(
+        &waiter,
+        "the initial editor window after attach",
+        || !core.read_snapshot().windows.is_empty(),
+        |&ok| ok,
+    );
     let tab = core.current_tabpage();
     assert_ne!(tab, 0, "current_tabpage() should be nonzero after attach");
 
@@ -608,6 +597,7 @@ fn restart_recovers_unsaved_untitled_buffer() {
                 .any(|p| p.file_name().and_then(|s| s.to_str()) == Some("Untitled.md")),
             None => false,
         },
+        |&ok| ok,
     );
 
     // Type an unsaved edit into Untitled.md, then force the swap to disk so the SIGKILL cannot race
@@ -647,6 +637,7 @@ fn restart_recovers_unsaved_untitled_buffer() {
         &waiter,
         "liveness() to become Dead after the SIGKILL",
         || core.liveness() == Liveness::Dead,
+        |&ok| ok,
     );
 
     // Restart in the SAME cwd (=> SAME durable swap dir) from a Dead state: an ACTUAL
@@ -688,6 +679,7 @@ fn restart_recovers_unsaved_untitled_buffer() {
                 .row_text(0)
                 .contains(UNTITLED_MARKER)
         },
+        |&ok| ok,
     );
     let snap = core.read_snapshot();
     let row0 = snap.active_grid().row_text(0);
@@ -744,9 +736,12 @@ fn stale_untitled_swap_does_not_block_a_fresh_start() {
     // 2. Core A: the session that crashes and leaves the fixture behind.
     let (core_a, waiter_a) = start_core_in(&cwd);
 
-    poll_until(&waiter_a, "A's initial editor window after attach", || {
-        !core_a.read_snapshot().windows.is_empty()
-    });
+    poll_until(
+        &waiter_a,
+        "A's initial editor window after attach",
+        || !core_a.read_snapshot().windows.is_empty(),
+        |&ok| ok,
+    );
     let tab_a = core_a.current_tabpage();
     assert_ne!(tab_a, 0, "current_tabpage() should be nonzero after attach");
 
@@ -761,6 +756,7 @@ fn stale_untitled_swap_does_not_block_a_fresh_start() {
                 .iter()
                 .any(|n| n == "Untitled.md")
         },
+        |&ok| ok,
     );
 
     // 4. Type into it and force the swap to disk deterministically, so the SIGKILL
@@ -788,6 +784,7 @@ fn stale_untitled_swap_does_not_block_a_fresh_start() {
         &waiter_a,
         "A's liveness() to become Dead after the SIGKILL",
         || core_a.liveness() == Liveness::Dead,
+        |&ok| ok,
     );
 
     // 7. ASSERT THE FIXTURE SURVIVED THE KILL. A SIGKILLed nvim must leave its swap
@@ -807,9 +804,12 @@ fn stale_untitled_swap_does_not_block_a_fresh_start() {
     //    nvim's VimEnter naming meets the stale swap.
     let (core_b, waiter_b) = start_core_in(&cwd);
 
-    poll_until(&waiter_b, "B's initial editor window after attach", || {
-        !core_b.read_snapshot().windows.is_empty()
-    });
+    poll_until(
+        &waiter_b,
+        "B's initial editor window after attach",
+        || !core_b.read_snapshot().windows.is_empty(),
+        |&ok| ok,
+    );
     let tab_b = core_b.current_tabpage();
     assert_ne!(
         tab_b, 0,
@@ -828,6 +828,7 @@ fn stale_untitled_swap_does_not_block_a_fresh_start() {
                 .iter()
                 .any(|n| n == "Untitled 2.md")
         },
+        |&ok| ok,
     );
     let names_b = mirror_basenames(&core_b, tab_b);
     assert!(
@@ -867,6 +868,7 @@ fn stale_untitled_swap_does_not_block_a_fresh_start() {
                 .row_text(0)
                 .contains(STARTUP_MARKER)
         },
+        |&ok| ok,
     );
     let snap_b = core_b.read_snapshot();
     let row0 = snap_b.active_grid().row_text(0);
@@ -1163,9 +1165,12 @@ fn rename_onto_a_short_path_with_a_stale_swap_keeps_swap_off() {
 
     // Session 1: edit the startup Untitled.md, flush its swap, crash.
     let (core, waiter) = start_core_in(&cwd);
-    poll_until(&waiter, "the initial editor window after attach", || {
-        !core.read_snapshot().windows.is_empty()
-    });
+    poll_until(
+        &waiter,
+        "the initial editor window after attach",
+        || !core.read_snapshot().windows.is_empty(),
+        |&ok| ok,
+    );
     let tab = core.current_tabpage();
     assert_ne!(tab, 0, "current_tabpage() should be nonzero after attach");
     poll_until(
@@ -1177,6 +1182,7 @@ fn rename_onto_a_short_path_with_a_stale_swap_keeps_swap_off() {
                 .iter()
                 .any(|n| n == "Untitled.md")
         },
+        |&ok| ok,
     );
     core.send_input(ch('i'));
     type_str(&core, UNTITLED_MARKER);
@@ -1190,6 +1196,7 @@ fn rename_onto_a_short_path_with_a_stale_swap_keeps_swap_off() {
         &waiter,
         "liveness() to become Dead after the SIGKILL",
         || core.liveness() == Liveness::Dead,
+        |&ok| ok,
     );
     let stale_name = format!("{}.swp", percent_name(&untitled));
     let stale = swap_dir_of(&cwd).join(&stale_name);
@@ -1365,6 +1372,7 @@ fn stale_truncated_swap_survives_a_reload_after_bdelete() {
         &waiter,
         "liveness() to become Dead after the SIGKILL",
         || core.liveness() == Liveness::Dead,
+        |&ok| ok,
     );
     assert!(
         stale.is_file(),
@@ -1419,6 +1427,7 @@ fn stale_truncated_swap_survives_a_reload_after_bdelete() {
                 .row_text(0)
                 .contains("# Swap Fixture")
         },
+        |&ok| ok,
     );
     let snap = core.read_snapshot();
     let row0 = snap.active_grid().row_text(0);
@@ -1467,9 +1476,12 @@ fn startup_untitled_in_a_long_cwd_gets_no_swap() {
     let probe = root.join("probe.txt");
 
     let (core, waiter) = start_core_in(&long);
-    poll_until(&waiter, "the initial editor window after attach", || {
-        !core.read_snapshot().windows.is_empty()
-    });
+    poll_until(
+        &waiter,
+        "the initial editor window after attach",
+        || !core.read_snapshot().windows.is_empty(),
+        |&ok| ok,
+    );
     let tab = core.current_tabpage();
     assert_ne!(tab, 0, "current_tabpage() should be nonzero after attach");
     poll_until(
@@ -1481,6 +1493,7 @@ fn startup_untitled_in_a_long_cwd_gets_no_swap() {
                 .iter()
                 .any(|n| n == "Untitled.md")
         },
+        |&ok| ok,
     );
 
     // Without the guard, the first change opens the cut-name swap if the rename has not already.

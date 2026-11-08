@@ -130,8 +130,15 @@ fn open_after_cd_records_in_nvim_cwd_mru() {
     common::type_str(&core, path_b);
     core.send_input(common::key(Key::Enter));
 
-    // Wait for nvim to process the `:cd` and flush, so the pump's tracked cwd is B.
-    waiter.wait_for_flush(&core, common::FLUSH_TIMEOUT);
+    // The pump records an `Open` under its tracked cwd, fed by the wake-less `wolf_cwd` notify,
+    // so poll until it reports B: a flush alone may be a late frame that is not the `:cd`'s.
+    common::poll_until(
+        &waiter,
+        "live_cwd() to follow the :cd into dir B before the open; never means the `wolf_cwd` \
+         notify did not land, so the open would be recorded under A",
+        || core.live_cwd(),
+        |cwd| cwd.as_deref() == Some(cwd_b.as_path()),
+    );
 
     // Create the file under B, then exercise the pump's record path explicitly.
     let written = cwd_b.join("written.md");

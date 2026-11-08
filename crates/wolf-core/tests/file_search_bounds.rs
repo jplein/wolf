@@ -27,19 +27,9 @@ mod common;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::{Duration, Instant};
+use std::sync::{Mutex, MutexGuard};
 
-use wolf_core::{FileEntry, FileSearch, WakeFn, WolfCore};
-
-/// Upper bound for a single bounded search to reach `complete`. Generous because
-/// it includes nvim startup amortized across the test plus a (bounded) FS walk.
-const SEARCH_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// How long to block on a wake before re-checking `complete` (so we make
-/// progress even if a wake is missed/coalesced).
-const POLL_INTERVAL: Duration = Duration::from_millis(50);
+use wolf_core::{FileEntry, FileSearch, WolfCore};
 
 /// Entry cap driven into `WOLF_SEARCH_MAX_ENTRIES` for the entry-cap test, and
 /// the value asserted against. Single source of truth (the env var is set from
@@ -92,17 +82,6 @@ fn write_file(path: &Path, contents: &str) {
     fs::write(path, contents).expect("failed to write file");
 }
 
-/// Builds a `WakeFn` that signals on a channel, paired with the receiver the poll
-/// loop waits on. Mirrors `file_search.rs`'s local `search_wake`.
-fn search_wake() -> (WakeFn, Receiver<()>) {
-    let (tx, rx): (Sender<()>, Receiver<()>) = mpsc::channel();
-    let wake: WakeFn = Arc::new(move || {
-        // A send error just means the receiver was dropped (test finished).
-        let _ = tx.send(());
-    });
-    (wake, rx)
-}
-
 /// Starts a `WolfCore` rooted at `cwd` (default grid size) and waits for the
 /// initial attach/flush so startup never races the test body.
 fn start_core_in(cwd: &Path) -> WolfCore {
@@ -125,33 +104,28 @@ fn start_core_in(cwd: &Path) -> WolfCore {
 /// A snapshot of a completed search: the collected entries plus the `truncated`
 /// flag, both read from the SAME guard as `complete` (so `truncated` reflects the
 /// state at the moment the walk finished, not a later re-read).
+#[derive(Debug)]
 struct SearchResult {
     entries: Vec<FileEntry>,
     truncated: bool,
 }
 
-/// Polls `search` until its view reports `complete`, waking on `wakes`, then
-/// returns a snapshot of the collected entries and the `truncated` flag. Panics
-/// on timeout.
-fn poll_until_complete(search: &FileSearch, wakes: &Receiver<()>) -> SearchResult {
-    let deadline = Instant::now() + SEARCH_TIMEOUT;
-    loop {
-        {
+/// Polls `search` until its view reports `complete`, then returns the collected entries and the
+/// `truncated` flag.
+fn wait_for_search_complete(search: &FileSearch, wakes: &common::FlushWaiter) -> SearchResult {
+    common::poll_until(
+        wakes,
+        "the bounded file search to reach `complete`",
+        || {
             let view = search.read();
-            if view.complete {
-                return SearchResult {
-                    entries: view.entries.to_vec(),
-                    truncated: view.truncated,
-                };
-            }
-        }
-        if Instant::now() >= deadline {
-            panic!("bounded file search did not reach `complete` within {SEARCH_TIMEOUT:?}");
-        }
-        // Bounded wait: a wake nudges us promptly; the timeout guarantees we
-        // re-check even if a wake was coalesced/missed.
-        let _ = wakes.recv_timeout(POLL_INTERVAL);
-    }
+            view.complete.then(|| SearchResult {
+                entries: view.entries.to_vec(),
+                truncated: view.truncated,
+            })
+        },
+        Option::is_some,
+    )
+    .expect("poll_until returned only once the search was complete")
 }
 
 /// The set of `display` strings of `entries` (traversal order is nondeterministic,
@@ -187,7 +161,7 @@ fn entry_cap_truncates_and_completes() {
     }
 
     let core = start_core_in(&cwd);
-    let (wake, wakes) = search_wake();
+    let (wake, wakes) = common::wake_channel();
 
     // Set the cap, start the search (which reads it synchronously), then clear it
     // — all under the env lock so a concurrent test's caps can't leak in.
@@ -199,7 +173,7 @@ fn entry_cap_truncates_and_completes() {
         s
     };
 
-    let result = poll_until_complete(&search, &wakes);
+    let result = wait_for_search_complete(&search, &wakes);
 
     assert!(
         result.truncated,
@@ -241,7 +215,7 @@ fn max_depth_prunes_deep_files() {
     write_file(&cwd.join("a").join("b").join("c").join("deep.md"), "d");
 
     let core = start_core_in(&cwd);
-    let (wake, wakes) = search_wake();
+    let (wake, wakes) = common::wake_channel();
 
     let search = {
         let _env = lock_env();
@@ -251,7 +225,7 @@ fn max_depth_prunes_deep_files() {
         s
     };
 
-    let result = poll_until_complete(&search, &wakes);
+    let result = wait_for_search_complete(&search, &wakes);
     let set = displays(&result.entries);
 
     assert!(
@@ -290,7 +264,7 @@ fn budget_truncates_quickly() {
     }
 
     let core = start_core_in(&cwd);
-    let (wake, wakes) = search_wake();
+    let (wake, wakes) = common::wake_channel();
 
     let search = {
         let _env = lock_env();
@@ -300,9 +274,9 @@ fn budget_truncates_quickly() {
         s
     };
 
-    // Load-bearing: this RETURNS within SEARCH_TIMEOUT (poll_until_complete panics
-    // otherwise), proving the budget actually stops the walk.
-    let result = poll_until_complete(&search, &wakes);
+    // Load-bearing: this RETURNS within `FLUSH_TIMEOUT` (`common::poll_until` panics otherwise),
+    // proving the budget actually stops the walk.
+    let result = wait_for_search_complete(&search, &wakes);
 
     assert!(
         result.truncated,

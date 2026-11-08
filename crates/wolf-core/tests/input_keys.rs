@@ -3,44 +3,11 @@
 
 mod common;
 
-use std::time::{Duration, Instant};
-
-use common::{ch, key, FlushWaiter, FLUSH_TIMEOUT};
-use wolf_core::{key_to_notation, CursorShape, Key, KeyEvent, Snapshot, WolfCore};
+use common::{ch, key, poll_until};
+use wolf_core::{key_to_notation, CursorShape, Key, KeyEvent};
 
 /// A small multi-line markdown buffer for cursor-movement assertions.
 const MULTILINE: &str = "alpha line one\nbravo line two\ncharlie line three\n";
-
-/// How often [`poll_until`] re-reads the snapshot while waiting.
-const POLL_INTERVAL: Duration = Duration::from_millis(25);
-
-/// Polls `observe` over the snapshot until `done` accepts the observed value, and returns it,
-/// panicking with `desc` and the last value after [`FLUSH_TIMEOUT`]. A later frame, such as
-/// treesitter's asynchronous parse finishing, can satisfy one `wait_for_flush` before the key's
-/// frame lands, so a single read can measure the wrong frame. Polling the state also cannot miss
-/// a frame that lands between a check and a new baseline. A copy of `redraw_grid.rs`'s
-/// `poll_until`.
-fn poll_until<T: std::fmt::Debug>(
-    core: &WolfCore,
-    waiter: &FlushWaiter,
-    desc: &str,
-    observe: impl Fn(&Snapshot) -> T,
-    done: impl Fn(&T) -> bool,
-) -> T {
-    let deadline = Instant::now() + FLUSH_TIMEOUT;
-    loop {
-        // One statement: the read guard drops before drain/sleep (see autoread.rs).
-        let seen = observe(&core.read_snapshot());
-        if done(&seen) {
-            return seen;
-        }
-        if Instant::now() >= deadline {
-            panic!("timed out after {FLUSH_TIMEOUT:?} waiting for {desc}; last observed: {seen:?}");
-        }
-        waiter.drain();
-        std::thread::sleep(POLL_INTERVAL);
-    }
-}
 
 #[test]
 fn cursor_moves() {
@@ -52,13 +19,12 @@ fn cursor_moves() {
     core.send_input(ch('j'));
     core.send_input(ch('l'));
     poll_until(
-        &core,
         &waiter,
         &format!(
             "cursor.row should advance after 'j' and cursor.col after 'l' (start={start:?}); \
              never means a motion was not applied or its cursor_goto was not folded"
         ),
-        |s| s.cursor,
+        || core.read_snapshot().cursor,
         |c| c.row > start.row && c.col > start.col,
     );
 
@@ -67,11 +33,11 @@ fn cursor_moves() {
     // Accept either a mode name containing "insert" or a vertical-bar cursor, so the check does
     // not couple to nvim's mode_info_set ordering or labels.
     poll_until(
-        &core,
         &waiter,
         "after 'i', the selected ModeInfo (name, shape) should denote insert mode; never means \
          the mode_change was not folded, or cursor.mode_idx indexes the wrong mode_infos entry",
-        |s| {
+        || {
+            let s = core.read_snapshot();
             s.mode_infos
                 .get(s.cursor.mode_idx)
                 .map(|m| (m.name.clone(), m.shape))

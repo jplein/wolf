@@ -45,13 +45,14 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use common::{
-    ch, config, key, type_str, wake_channel, FlushWaiter, DEFAULT_COLS, DEFAULT_ROWS, FLUSH_TIMEOUT,
+    ch, config, key, poll_until, type_str, wake_channel, FlushWaiter, DEFAULT_COLS, DEFAULT_ROWS,
+    FLUSH_TIMEOUT,
 };
 use tempfile::TempDir;
 use wolf_core::{InputEvent, Key, WolfCore};
 
 /// Gap between polls while waiting for an out-of-band condition (markdown gate,
-/// tick bump) to settle. Mirrors `theme.rs` / `commands.rs`.
+/// tick bump) to settle. Mirrors `theme.rs`.
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 /// The markdown document opened for the happy-path test.
@@ -229,7 +230,7 @@ fn http_get_bytes(port: u16, path: &str) -> (u16, Vec<u8>, String) {
 
 /// Starts a `WolfCore` on a `test.md` inside a FRESH, DEDICATED temp dir (returned
 /// so the caller can write sibling files that resolve under the server root), waits
-/// for the initial attach flush, opens the file, and waits for its render flush.
+/// for the initial attach flush, opens the file, and waits until it is the current file.
 ///
 /// A dedicated dir (rather than the shared OS temp dir used by
 /// `common::start_core_with_temp_md`) is required here so sibling names like
@@ -246,8 +247,18 @@ fn start_core_in_dir(content: &str) -> (WolfCore, FlushWaiter, TempDir) {
         .expect("WolfCore::start failed (is WOLF_NVIM_BIN a valid nvim?)");
     waiter.wait_for_initial_flush(&core, FLUSH_TIMEOUT);
 
+    // The core canonicalizes `current_file` (macOS `/var` -> `/private/var`).
+    let expected = std::fs::canonicalize(&path).expect("failed to canonicalize test.md");
     core.send_input(InputEvent::Open { path });
-    waiter.wait_for_flush(&core, FLUSH_TIMEOUT);
+    // One flush may be a late frame of the startup `Untitled.md`, also markdown, which would pass
+    // the callers' markdown gate before the open lands and let `open_in_browser()` pin it.
+    poll_until(
+        &waiter,
+        "current_file to become the opened test.md; never means the Open was not applied, so \
+         the startup Untitled.md is still the buffer the preview would pin",
+        || core.read_snapshot().current_file.clone(),
+        |current| current.as_deref() == Some(expected.as_path()),
+    );
 
     (core, waiter, dir)
 }

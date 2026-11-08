@@ -38,10 +38,10 @@
 mod common;
 
 use std::collections::HashSet;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
-use common::{FlushWaiter, FLUSH_TIMEOUT};
-use wolf_core::{Snapshot, WolfCore};
+use common::{poll_until, FlushWaiter, FLUSH_TIMEOUT, POLL_INTERVAL};
+use wolf_core::WolfCore;
 
 /// Placeholder content for the temp markdown files these tests open.
 const DOC: &str = "# Rebuild Layout\nbody\n";
@@ -50,25 +50,6 @@ const DOC: &str = "# Rebuild Layout\nbody\n";
 /// buffer `Untitled.md` instead of leaving a bare `[No Name]`), which an EMPTY-path
 /// rebuilt leaf inherits from the window's current buffer.
 const UNTITLED_STARTUP: &str = "Untitled.md";
-
-/// Gap between polls while waiting for a window/buffer to settle.
-const POLL_INTERVAL: Duration = Duration::from_millis(25);
-
-/// Polls `core`'s snapshot until `pred` holds, draining wakes each iteration, or
-/// panics after [`FLUSH_TIMEOUT`] (mirrors `pane_buffers.rs`).
-fn poll_until(core: &WolfCore, waiter: &FlushWaiter, desc: &str, pred: impl Fn(&Snapshot) -> bool) {
-    let deadline = Instant::now() + FLUSH_TIMEOUT;
-    loop {
-        if pred(&core.read_snapshot()) {
-            return;
-        }
-        if Instant::now() >= deadline {
-            panic!("timed out after {FLUSH_TIMEOUT:?} waiting for: {desc}");
-        }
-        waiter.drain();
-        std::thread::sleep(POLL_INTERVAL);
-    }
-}
 
 /// Resolves a window handle to the base `filename` its pane reports, polling until
 /// the handle is bound to a grid and `pane_status` reports the expected name.
@@ -197,10 +178,10 @@ fn rebuild_vertical_split_of_two_files() {
 
     // Two editor windows now exist.
     poll_until(
-        &core,
         &waiter,
         "two editor windows after the rebuild",
-        |snap| snap.windows.len() == 2,
+        || core.read_snapshot().windows.len() == 2,
+        |&ok| ok,
     );
 
     // Handles are in DFS/leaf order: handle 0 -> file A, handle 1 -> file B.
@@ -242,10 +223,10 @@ fn rebuild_perpendicular_tree_with_empty_leaf() {
     assert_distinct_handles(&handles);
 
     poll_until(
-        &core,
         &waiter,
         "three editor windows after the rebuild",
-        |snap| snap.windows.len() == 3,
+        || core.read_snapshot().windows.len() == 3,
+        |&ok| ok,
     );
 
     // DFS order [A, inherited, B]: the empty-path leaf keeps the `Untitled.md` startup buffer,
@@ -284,10 +265,10 @@ fn rebuild_editor_and_preview_of_same_markdown() {
     assert_distinct_handles(&handles);
 
     poll_until(
-        &core,
         &waiter,
         "two windows after the editor+preview rebuild",
-        |snap| snap.windows.len() == 2,
+        || core.read_snapshot().windows.len() == 2,
+        |&ok| ok,
     );
 
     // Handle 0 (the editor leaf) shows the md file.
@@ -324,10 +305,10 @@ fn rebuild_single_leaf_editor() {
 
     // Still exactly one editor window; the lone leaf reuses the starting window.
     poll_until(
-        &core,
         &waiter,
         "one editor window after the single-leaf rebuild",
-        |snap| snap.windows.len() == 1,
+        || core.read_snapshot().windows.len() == 1,
+        |&ok| ok,
     );
 
     // That one window shows the requested file.
@@ -359,10 +340,10 @@ fn rebuild_single_leaf_preview() {
     assert_distinct_handles(&handles);
 
     poll_until(
-        &core,
         &waiter,
         "one window after the single-leaf preview rebuild",
-        |snap| snap.windows.len() == 1,
+        || core.read_snapshot().windows.len() == 1,
+        |&ok| ok,
     );
 
     // The lone window is a reconstructed preview of the md SOURCE (via previews(),
@@ -392,10 +373,10 @@ fn rebuild_single_empty_leaf() {
     assert_distinct_handles(&handles);
 
     poll_until(
-        &core,
         &waiter,
         "one window after the single empty-leaf rebuild",
-        |snap| snap.windows.len() == 1,
+        || core.read_snapshot().windows.len() == 1,
+        |&ok| ok,
     );
 
     // The empty-path leaf has no file to edit, so its window keeps the inherited
