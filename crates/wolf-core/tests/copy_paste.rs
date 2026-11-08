@@ -10,33 +10,10 @@
 
 mod common;
 
+use std::time::{Duration, Instant};
+
 use common::{ch, ctrl, key, FlushWaiter, FLUSH_TIMEOUT};
-use wolf_core::{Key, WolfCore};
-
-/// Bounded number of redraw flushes to wait through for a mode transition to
-/// settle. `wait_for_flush` returns on ANY `seq` advance, so a stray startup-tail
-/// redraw can satisfy a single wait before the `v`/`V`/`<C-v>`/`<Esc>` mode_change
-/// is applied. Polling `is_visual_mode()` across a few flushes lets the transition
-/// settle before we assert, without inventing a new harness helper.
-const MODE_SETTLE_TRIES: usize = 8;
-
-/// Polls `is_visual_mode()` until it equals `expected`, waiting through up to
-/// [`MODE_SETTLE_TRIES`] redraw flushes (each bounded by [`FLUSH_TIMEOUT`]) so a
-/// stray pre-mode_change flush cannot race the assertion. Returns as soon as the
-/// snapshot settles; asserts once the bound is hit otherwise.
-fn wait_until_visual_mode(core: &WolfCore, waiter: &FlushWaiter, expected: bool) {
-    for _ in 0..MODE_SETTLE_TRIES {
-        if core.read_snapshot().is_visual_mode() == expected {
-            return;
-        }
-        waiter.wait_for_flush(core, FLUSH_TIMEOUT);
-    }
-    assert_eq!(
-        core.read_snapshot().is_visual_mode(),
-        expected,
-        "is_visual_mode() did not settle to {expected} within {MODE_SETTLE_TRIES} flushes"
-    );
-}
+use wolf_core::{Key, Snapshot, WolfCore};
 
 /// A single-line fixture whose first WORD is a distinctive, space-free token so a
 /// `v` + `e` (extend to word end) selects exactly that word and the yanked text is
@@ -53,6 +30,29 @@ const COPY_WORD: &str = "WOLFCOPY";
 /// A distinctive token pasted into an empty buffer; it must show up in the grid.
 const PASTE_TEXT: &str = "WOLFPASTE";
 
+/// How often [`poll_until`] re-reads the snapshot while waiting.
+const POLL_INTERVAL: Duration = Duration::from_millis(25);
+
+/// Polls `core`'s snapshot until `pred` holds, draining wakes each iteration, or panics with
+/// `desc` after [`FLUSH_TIMEOUT`]. A later frame, such as treesitter's asynchronous parse
+/// finishing, can satisfy one `wait_for_flush` before the key's frame lands, so a single read
+/// can measure the wrong frame. Polling the state also cannot miss a frame that lands between a
+/// check and a new baseline. A copy of `redraw_multigrid.rs`'s `poll_until`.
+fn poll_until(core: &WolfCore, waiter: &FlushWaiter, desc: &str, pred: impl Fn(&Snapshot) -> bool) {
+    let deadline = Instant::now() + FLUSH_TIMEOUT;
+    loop {
+        // One statement: the read guard drops before drain/sleep.
+        if pred(&core.read_snapshot()) {
+            return;
+        }
+        if Instant::now() >= deadline {
+            panic!("timed out after {FLUSH_TIMEOUT:?} waiting for: {desc}");
+        }
+        waiter.drain();
+        std::thread::sleep(POLL_INTERVAL);
+    }
+}
+
 #[test]
 fn is_visual_mode_tracks_v_bar_and_ctrl_v() {
     let (core, waiter, _file) = common::start_core_with_temp_md(COPY_FIXTURE);
@@ -65,17 +65,32 @@ fn is_visual_mode_tracks_v_bar_and_ctrl_v() {
 
     // Each of `v`, `V`, and `<C-v>` puts nvim into a visual cursor-mode that the
     // snapshot reports as visual; `<Esc>` returns to normal.
-    for enter in [ch('v'), ch('V'), ctrl(Key::Char('v'))] {
-        waiter.drain();
+    for (name, enter) in [
+        ("v", ch('v')),
+        ("V", ch('V')),
+        ("<C-v>", ctrl(Key::Char('v'))),
+    ] {
         core.send_input(enter);
-        // Poll until the visual mode_change settles: a stray startup-tail redraw
-        // can satisfy a single wait_for_flush before the v/V/<C-v> is applied.
-        wait_until_visual_mode(&core, &waiter, true);
+        poll_until(
+            &core,
+            &waiter,
+            &format!(
+                "is_visual_mode() true after {name}; never means its mode_change was not folded \
+                 as visual"
+            ),
+            |s| s.is_visual_mode(),
+        );
 
-        waiter.drain();
         core.send_input(key(Key::Esc));
-        // Same hazard on the way back: poll until <Esc> returns us to normal mode.
-        wait_until_visual_mode(&core, &waiter, false);
+        poll_until(
+            &core,
+            &waiter,
+            &format!(
+                "is_visual_mode() false after <Esc> from {name}; never means the return to \
+                 normal mode was not folded"
+            ),
+            |s| !s.is_visual_mode(),
+        );
     }
 
     core.shutdown().expect("shutdown should be Ok");
@@ -93,9 +108,14 @@ fn copy_visual_selection_yields_the_selected_text() {
     core.send_input(ch('0'));
     core.send_input(ch('v'));
     core.send_input(ch('e'));
-    // Poll until visual mode settles before copying: a stray pre-mode_change
-    // flush must not let us call copy_visual_selection() while still in normal mode.
-    wait_until_visual_mode(&core, &waiter, true);
+    // copy_visual_selection() bypasses the input pump, so poll until visual mode lands.
+    poll_until(
+        &core,
+        &waiter,
+        "is_visual_mode() true after gg0ve; never means the keys were not applied, so the copy \
+         below would see normal mode",
+        |s| s.is_visual_mode(),
+    );
 
     let selection = core.copy_visual_selection();
     assert!(
@@ -131,16 +151,15 @@ fn paste_inserts_text_into_the_active_grid() {
     // Empty buffer so the pasted token is the only content and is easy to find.
     let (core, waiter, _file) = common::start_core_with_temp_md("");
 
-    waiter.drain();
     core.paste(PASTE_TEXT.to_string());
-    waiter.wait_for_flush(&core, FLUSH_TIMEOUT);
-
-    let snap = core.read_snapshot();
-    let row0 = snap.active_grid().row_text(0);
-    assert!(
-        row0.contains(PASTE_TEXT),
-        "the pasted text {PASTE_TEXT:?} should appear on row 0 of the active grid; \
-         got {row0:?}"
+    poll_until(
+        &core,
+        &waiter,
+        &format!(
+            "the pasted text {PASTE_TEXT:?} on row 0 of the active grid; never means the paste \
+             did not reach the buffer or was drawn elsewhere"
+        ),
+        |s| s.active_grid().row_text(0).contains(PASTE_TEXT),
     );
 
     core.shutdown().expect("shutdown should be Ok");

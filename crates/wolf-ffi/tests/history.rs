@@ -163,6 +163,21 @@ fn wait_for_entries(
     );
 }
 
+/// Types `:e {name}` and blocks until the newest row of `win`'s history is `name`.
+///
+/// `current_file()` is notified during `:edit`, but the history fold runs on the `wolf_buffers`
+/// emit, which `vim.schedule` holds back while typed input is pending. An `:e` sent on
+/// `current_file()` alone can run before that emit, and the earlier file then never gets a row.
+fn edit_and_wait_for_top_row(handle: &wolf_ffi::WolfCoreHandle, win: i64, name: &str) {
+    send_ex_command(handle, &format!(":e {name}"));
+    wait_for_entries(
+        handle,
+        win,
+        &format!("{name} as the newest row after `:e {name}`; never means the fold missed it"),
+        |rows| rows.first().is_some_and(|r| r.display() == name),
+    );
+}
+
 /// Blocks until `handle.active_win()` reports a real (non-zero) handle.
 fn wait_for_active_win(handle: &wolf_ffi::WolfCoreHandle) -> i64 {
     let deadline = Instant::now() + FLUSH_TIMEOUT;
@@ -213,12 +228,9 @@ fn history_bridge_tracks_navigation_back_forward_and_jump() {
     wait_for_attach(&handle);
     let win = wait_for_active_win(&handle);
 
-    send_ex_command(&handle, ":e a.md");
-    wait_for_current_file(&handle, "a.md");
-    send_ex_command(&handle, ":e b.md");
-    wait_for_current_file(&handle, "b.md");
-    send_ex_command(&handle, ":e c.md");
-    wait_for_current_file(&handle, "c.md");
+    edit_and_wait_for_top_row(&handle, win, "a.md");
+    edit_and_wait_for_top_row(&handle, win, "b.md");
+    edit_and_wait_for_top_row(&handle, win, "c.md");
 
     // --- 2. history_entries mirrors core: newest-first, one checkmark --------
     let rows = wait_for_entries(&handle, win, "c.md / b.md / a.md newest-first", |rows| {
@@ -346,11 +358,7 @@ fn history_bridge_is_neutral_for_unknown_windows_the_drawer_and_after_shutdown()
 
     wait_for_attach(&handle);
     let win = wait_for_active_win(&handle);
-    send_ex_command(&handle, ":e a.md");
-    wait_for_current_file(&handle, "a.md");
-    wait_for_entries(&handle, win, "an a.md row on top", |rows| {
-        !rows.is_empty() && rows[0].display() == "a.md"
-    });
+    edit_and_wait_for_top_row(&handle, win, "a.md");
 
     // --- 1. An UNKNOWN window handle is neutral -----------------------------
     assert!(

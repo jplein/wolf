@@ -444,6 +444,73 @@ impl FlushWaiter {
         }
     }
 
+    /// Blocks until `core`'s snapshot has `current_file` equal to `path` (canonicalized), a `seq`
+    /// past `baseline`, and, when `expect_text` is set, text on row 0 of the active grid. Panics
+    /// naming `path` after `timeout`.
+    ///
+    /// `baseline` must be read after a blocking RPC that follows startup, so that no frame nvim
+    /// had already drawn can carry `seq` past it; see [`start_core_with_temp_md_sized`]. That
+    /// fences off no frame from work nvim schedules later, such as treesitter's asynchronous
+    /// parse of the startup buffer finishing, which can push `seq` past the baseline before the
+    /// `:edit` draws. The startup buffer is empty and its row 0 blank, so row 0 showing text
+    /// tells the open's frame apart from such a stray one.
+    fn wait_for_open(
+        &self,
+        core: &WolfCore,
+        path: &Path,
+        baseline: u64,
+        expect_text: bool,
+        timeout: Duration,
+    ) {
+        // The core canonicalizes `current_file` (macOS `/var` → `/private/var`).
+        let expected = std::fs::canonicalize(path).unwrap_or_else(|e| {
+            panic!(
+                "failed to canonicalize the opened file {}: {e}",
+                path.display()
+            )
+        });
+        let deadline = Instant::now() + timeout;
+        loop {
+            // Scoped so the read guard drops before blocking on the channel.
+            let (current, seq, row0) = {
+                let snap = core.read_snapshot();
+                (
+                    snap.current_file.clone(),
+                    snap.seq,
+                    snap.active_grid().row_text(0),
+                )
+            };
+            if seq > baseline
+                && current.as_deref() == Some(expected.as_path())
+                && (!expect_text || !row0.trim().is_empty())
+            {
+                return;
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            // A zero `remaining` is a timeout, so a steady stream of wakes cannot outlast it.
+            let woke = if remaining.is_zero() {
+                Err(RecvTimeoutError::Timeout)
+            } else {
+                self.rx.recv_timeout(remaining)
+            };
+            match woke {
+                // Every snapshot change wakes after it is applied, so re-checking misses none.
+                Ok(()) => {}
+                Err(RecvTimeoutError::Timeout) => panic!(
+                    "timed out after {timeout:?} waiting for {} to open: current_file \
+                     {current:?}, seq {seq} (baseline {baseline}), row 0 {row0:?} (expect_text \
+                     {expect_text}). The file never became the current buffer, no frame landed \
+                     after it did, or its frame never drew the first line on row 0",
+                    path.display()
+                ),
+                Err(RecvTimeoutError::Disconnected) => panic!(
+                    "wake channel disconnected before {} opened (nvim/core gone?)",
+                    path.display()
+                ),
+            }
+        }
+    }
+
     /// Drains any already-queued wake signals without blocking. Useful to
     /// discard wakes that occurred before a test starts observing.
     pub fn drain(&self) {
@@ -501,15 +568,29 @@ pub fn temp_md_path() -> (tempfile::TempDir, PathBuf) {
     (dir, path)
 }
 
-/// Starts a `WolfCore` at default grid size, opens a temp `.md` containing
-/// `content`, and waits for the first flush so the grid reflects the open file.
+/// Starts a `WolfCore` at default grid size and opens a temp `.md` containing
+/// `content`; [`start_core_with_temp_md_sized`] says what it waits for.
 ///
 /// Returns the live core, its flush waiter, and the temp file (kept alive).
 pub fn start_core_with_temp_md(content: &str) -> (WolfCore, FlushWaiter, tempfile::NamedTempFile) {
     start_core_with_temp_md_sized(content, DEFAULT_COLS, DEFAULT_ROWS)
 }
 
-/// Like `start_core_with_temp_md` but with an explicit grid size.
+/// Like [`start_core_with_temp_md`] but with an explicit grid size.
+///
+/// Returns once the snapshot's `current_file` is the opened file, a redraw frame has landed
+/// after a post-startup `seq` baseline, and, when `content`'s first line has text, row 0 of the
+/// active grid shows text, so the grid, cursor and viewport show the file. Panics naming the
+/// path after [`FLUSH_TIMEOUT`].
+///
+/// `seq` alone is not enough: a frame from work nvim schedules later, such as treesitter's
+/// asynchronous parse of the startup buffer, can land after the baseline and before the `:edit`.
+/// `current_file` alone is not enough: it is notified during `:edit`, before the open's frame.
+/// A blank first line gets no text check, because an empty file draws exactly like the empty
+/// startup buffer, so nothing a test reads differs.
+///
+/// It fences off no frame that lands after it returns: a late redraw can satisfy any later single
+/// `wait_for_flush`, so a test that waits for its own input must poll for the state it expects.
 pub fn start_core_with_temp_md_sized(
     content: &str,
     cols: u16,
@@ -525,11 +606,21 @@ pub fn start_core_with_temp_md_sized(
     // advance-based wait would baseline at 1 and block forever.
     waiter.wait_for_initial_flush(&core, FLUSH_TIMEOUT);
 
-    // Open the file; nvim will emit a redraw + flush once the buffer is shown.
+    // nvim flushes what it has drawn before answering a request, so the baseline fences off
+    // those startup frames, but not a frame from work nvim schedules later.
+    assert_ne!(
+        core.current_tabpage(),
+        0,
+        "the startup barrier RPC (nvim_get_current_tabpage) failed, so the baseline taken after \
+         it would not fence off late startup frames"
+    );
+    let baseline = core.read_snapshot().seq;
+
     core.send_input(InputEvent::Open {
         path: file.path().to_path_buf(),
     });
-    waiter.wait_for_flush(&core, FLUSH_TIMEOUT);
+    let expect_text = content.lines().next().is_some_and(|l| !l.trim().is_empty());
+    waiter.wait_for_open(&core, file.path(), baseline, expect_text, FLUSH_TIMEOUT);
 
     (core, waiter, file)
 }

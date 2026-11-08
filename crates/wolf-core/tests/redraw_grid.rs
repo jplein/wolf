@@ -133,15 +133,8 @@ fn type_text_appears_in_grid() {
 fn wide_char_grid_line() {
     // A double-width CJK glyph then ASCII: the leading cell carries the glyph, the trailing cell is
     // blank, and following text keeps its column. This is the riskiest `grid_line` parser path.
-    let (core, waiter, _file) = common::start_core_with_temp_md("\u{4e2d}ab\n");
+    let (core, _waiter, _file) = common::start_core_with_temp_md("\u{4e2d}ab\n");
 
-    poll_until(
-        &core,
-        &waiter,
-        "row 0 to contain the fixture's \"ab\"",
-        |snap| snap.active_grid().row_text(0),
-        |row| row.contains("ab"),
-    );
     let snap = core.read_snapshot();
 
     // Col 0: the wide glyph itself.
@@ -203,15 +196,8 @@ fn grid_line_repeat_expansion() {
     first_line.push(TRAILING_CHAR);
     first_line.push('\n');
 
-    let (core, waiter, _file) = common::start_core_with_temp_md(&first_line);
+    let (core, _waiter, _file) = common::start_core_with_temp_md(&first_line);
 
-    poll_until(
-        &core,
-        &waiter,
-        &format!("row 0 to contain the fixture's trailing {TRAILING_CHAR:?}"),
-        |snap| snap.active_grid().row_text(0),
-        |row| row.contains(TRAILING_CHAR),
-    );
     let snap = core.read_snapshot();
 
     // The grid is wide enough (DEFAULT_COLS = 80) to hold the run + trailing char.
@@ -305,18 +291,6 @@ fn trailing_line_number(row: &str) -> Option<usize> {
         .and_then(|s| s.parse::<usize>().ok())
 }
 
-/// Polls until the active grid's row 0 shows a numbered "line N" of the scroll fixture, so the
-/// opened file is drawn, and returns that row.
-fn fixture_row0(core: &WolfCore, waiter: &FlushWaiter) -> String {
-    poll_until(
-        core,
-        waiter,
-        "row 0 to show the fixture's numbered 'line N'",
-        |snap| snap.active_grid().row_text(0),
-        |row| trailing_line_number(row).is_some(),
-    )
-}
-
 #[test]
 fn scroll_shifts_grid_content() {
     // Build a buffer far taller than the (short) grid so scrolling moves content.
@@ -328,7 +302,7 @@ fn scroll_shifts_grid_content() {
     let (core, waiter, _file) =
         common::start_core_with_temp_md_sized(&content, SHORT_COLS, SHORT_ROWS);
 
-    let before_row0 = fixture_row0(&core, &waiter);
+    let before_row0 = core.read_snapshot().active_grid().row_text(0);
     let before_num = trailing_line_number(&before_row0)
         .expect("row 0 should start as a numbered 'line N' before scrolling");
 
@@ -367,7 +341,6 @@ fn scroll_emits_viewport() {
     let (core, waiter, _file) =
         common::start_core_with_temp_md_sized(&content, SHORT_COLS, SHORT_ROWS);
 
-    fixture_row0(&core, &waiter);
     let initial_topline = core.read_snapshot().active_viewport().topline;
 
     // Scroll down half a screen. Per the InputEvent API, <C-d> moves down.
@@ -401,7 +374,7 @@ fn scroll_up_shifts_grid_content_down() {
     let (core, waiter, _file) =
         common::start_core_with_temp_md_sized(&content, SHORT_COLS, SHORT_ROWS);
 
-    let start_row0 = fixture_row0(&core, &waiter);
+    let start_row0 = core.read_snapshot().active_grid().row_text(0);
 
     // Jump to the end of the buffer so there is content above the viewport to
     // scroll back into. `G` moves to the last line.
@@ -454,18 +427,16 @@ fn viewport_reports_line_count() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    let (core, waiter, _file) =
+    let (core, _waiter, _file) =
         common::start_core_with_temp_md_sized(&content, SHORT_COLS, SHORT_ROWS);
 
-    let viewport = poll_until(
-        &core,
-        &waiter,
-        &format!(
-            "viewport.linecount to equal the {LINE_COUNT} lines in the buffer \
-             (guards the win_viewport line_count field index)"
-        ),
-        |snap| snap.active_viewport(),
-        |viewport| viewport.linecount == LINE_COUNT as u64,
+    // The helper returns after the open's frame, and `win_viewport` precedes `flush` in it.
+    let viewport = core.read_snapshot().active_viewport();
+    assert_eq!(
+        viewport.linecount, LINE_COUNT as u64,
+        "viewport.linecount should equal the {LINE_COUNT} lines in the buffer once the open has \
+         drawn (guards the win_viewport line_count field index); another value means the index \
+         reads a different field, or the open's frame had not landed"
     );
 
     // Sanity: topline <= botline <= linecount + 1, allowing nvim's past-the-end botline.
