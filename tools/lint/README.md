@@ -13,25 +13,26 @@ Every check target runs under `bazel test //...`, and any finding fails it. clip
 ## Toolchains and binaries
 
 - clippy and rustfmt come from the toolchain `rules_rust` downloads (Rust 1.85.0); the Darwin devShell ships no standalone cargo/rustc/clippy/rustfmt.
-- swift-format is the host Xcode 26 binary (v6.3.0), resolved at runtime via `xcrun --find swift-format`, with `xcode-select -p` and the canonical Xcode path as fallbacks, because Bazel test actions run with a scrubbed environment.
+- swift-format is the host Xcode binary, resolved at runtime via `xcrun --find swift-format`, with `xcode-select -p` and the canonical Xcode path as fallbacks, because Bazel test actions run with a scrubbed environment.
 - The markdown checker is bash and awk only, so it needs no toolchain and runs sandboxed.
 - doc-lint is built from `//tools/doc-lint` with plain `rules_rust` rules and has no dependencies.
 
 ## Targets
 
-| Purpose               | Target                 | Command                                       |
-| --------------------- | ---------------------- | --------------------------------------------- |
-| clippy check          | `:clippy`              | `bazel test //tools/lint:clippy`              |
-| clippy fix            | `:clippy.fix`          | `bazel run //tools/lint:clippy.fix`           |
-| rustfmt check         | `:rustfmt`             | `bazel test //tools/lint:rustfmt`             |
-| rustfmt fix           | `:rustfmt.fix`         | `bazel run //tools/lint:rustfmt.fix`          |
-| swift-format check    | `:swift_format`        | `bazel test //tools/lint:swift_format`        |
-| swift-format fix      | `:swift_format.fix`    | `bazel run //tools/lint:swift_format.fix`     |
-| markdown check        | `:markdown`            | `bazel test //tools/lint:markdown`            |
-| markdown checker test | `:markdown_check_test` | `bazel test //tools/lint:markdown_check_test` |
-| comment check         | `:comments`            | `bazel test //tools/lint:comments`            |
-| all checks            | `:check`               | `bazel test //tools/lint:check`               |
-| all fixes             | `:fix`                 | `bazel run //tools/lint:fix`                  |
+| Purpose                   | Target                     | Command                                           |
+| ------------------------- | -------------------------- | ------------------------------------------------- |
+| clippy check              | `:clippy`                  | `bazel test //tools/lint:clippy`                  |
+| clippy fix                | `:clippy.fix`              | `bazel run //tools/lint:clippy.fix`               |
+| rustfmt check             | `:rustfmt`                 | `bazel test //tools/lint:rustfmt`                 |
+| rustfmt fix               | `:rustfmt.fix`             | `bazel run //tools/lint:rustfmt.fix`              |
+| swift-format check        | `:swift_format`            | `bazel test //tools/lint:swift_format`            |
+| swift-format fix          | `:swift_format.fix`        | `bazel run //tools/lint:swift_format.fix`         |
+| markdown check            | `:markdown`                | `bazel test //tools/lint:markdown`                |
+| markdown checker test     | `:markdown_check_test`     | `bazel test //tools/lint:markdown_check_test`     |
+| swift-format checker test | `:swift_format_check_test` | `bazel test //tools/lint:swift_format_check_test` |
+| comment check             | `:comments`                | `bazel test //tools/lint:comments`                |
+| all checks                | `:check`                   | `bazel test //tools/lint:check`                   |
+| all fixes                 | `:fix`                     | `bazel run //tools/lint:fix`                      |
 
 Internal targets: `:clippy_core`, `:clippy_ffi` and `:clippy_doc_lint` (`rust_clippy`, built as `data` of `:clippy` so a clippy failure fails that test), `:rustfmt_core`, `:rustfmt_ffi` and `:rustfmt_doc_lint` (`rustfmt_test`, aggregated by the `:rustfmt` and `:check` suites), `:all_markdown_srcs` and `:all_comment_srcs` (every package's filegroups), and this package's own `:markdown_srcs` and `:comment_srcs`.
 
@@ -40,9 +41,10 @@ Internal targets: `:clippy_core`, `:clippy_ffi` and `:clippy_doc_lint` (`rust_cl
 - `:clippy` is a trivial `sh_test` (`clippy_gate.sh`, `exit 0`) whose `data` are the `rust_clippy` targets. Bazel must build them, which runs clippy, to stage runfiles, so a clippy failure fails the test.
 - `:clippy.fix` is the custom `clippy_fix` rule (`clippy_fix.bzl`): it resolves `@rules_rust//rust:toolchain_type`, stages the toolchain sysroot (cargo/cargo-clippy/clippy-driver/rustc/rust_std) as runfiles, and runs `cargo clippy --fix --allow-dirty --allow-staged -p wolf-core -p wolf-ffi`.
 - `:rustfmt` is a `test_suite` over the three `rustfmt_test` targets (`rustfmt --check` on each crate). `:rustfmt.fix` is an `alias` to the rules_rust writer `@rules_rust//:rustfmt`.
-- `:swift_format` is an `sh_test` (`swift_format_check.sh`, tagged `no-sandbox`) that runs `swift-format lint --strict` over the `//crates/wolf-macos:swift_format_srcs` filegroup. `:swift_format.fix` is an `sh_binary` (`swift_format_fix.sh`) running `swift-format format -i`.
+- `:swift_format` is an `sh_test` (`swift_format_check.sh`, tagged `no-sandbox`) that runs `swift-format lint --strict --follow-symlinks` over the `//crates/wolf-macos:swift_format_srcs` filegroup. The inputs arrive as runfiles symlinks, and swift-format silently skips a symlink argument without that flag, so the check would lint nothing and pass. `:swift_format.fix` is an `sh_binary` (`swift_format_fix.sh`) running `swift-format format -i`.
 - `:markdown` is an `sh_test` (`markdown_check.sh`) over `:all_markdown_srcs`. It has no fixer, by design — see below.
 - `:markdown_check_test` runs `markdown_check_test.sh`, which runs the checker over `testdata/markdown/` and asserts each case's exit status and per-rule finding counts.
+- `:swift_format_check_test` runs `swift_format_check_test.sh`, which runs the checker over `testdata/swift_format/` staged as runfiles symlinks: `misindented.swift` must fail with `Indentation` findings, `formatted.swift` must pass, and both together must fail on the misindented file alone. It is `no-sandbox` and macOS only, like `:swift_format`, and has no Linux `run` line in [`gates.sh`](../../gates.sh), because Linux has neither Bazel nor swift-format.
 - `:comments` is an `sh_test` (`doc_lint_check.sh`) that runs `doc-lint --files` over `:all_comment_srcs`. `:all_markdown_srcs` is staged as data too, so the doc paths written in comments resolve in the runfiles tree. The rules are in [doc-lint's README](../doc-lint/README.md#rules).
 - `:fix` is the custom `fix_all` rule: it stages both the rust toolchain and the separate rules_rust rustfmt toolchain, then runs rustfmt, then `cargo clippy --fix`, then swift-format, all in place.
 
@@ -90,7 +92,7 @@ The scope is every `.md` file except `CLAUDE.md`, which quotes the changelog wor
 
 - The fixers are non-hermetic. `cargo clippy --fix` reaches crates.io (network) and the host cc toolchain. Rust fixers are scoped to `-p wolf-core -p wolf-ffi`, because wolf-gnome's GTK stack does not build on macOS.
 - swift-format scope. Only hand-written `wolf-macos` Swift is covered (Sources/WolfKeyMap, Sources/WolfMacOS, Tests/WolfKeyMapTests). The machine-generated swift-bridge bindings under `crates/wolf-ffi/generated/` are excluded. The file list lives in `//crates/wolf-macos:swift_format_srcs` because Bazel forbids cross-package globbing.
-- swift-format check and fix enforce different things. `:swift_format` (lint) runs `swift-format lint --strict` and checks only swift-format's lint-category rules; `:swift_format.fix` (format) runs `swift-format format -i` and additionally restyles whitespace and indentation. A passing check does not mean the fixer would leave the files unchanged: the lint check can report zero findings on files that `format` would still restyle.
+- swift-format check and fix. `:swift_format` runs `swift-format lint --strict`, which reports the pretty-printer's findings (`Indentation`, `AddLines`, `LineLength`) as well as the lint-category rules, so a file that `format` would re-indent or re-wrap fails it. To check one file as the target does, run `xcrun swift-format lint --strict --follow-symlinks <file>`. `:swift_format.fix` runs `swift-format format -i`.
 - The vendoring notes under `bazel/*` are in scope for style but carry no per-file entries, so only the line-length, changelog and all-caps rules bite there. `entry-budget` fires on `####` headings, which those files do not use.
 - `.bazelignore`. The rustfmt writer (`:rustfmt.fix`) internally evaluates `//...`; the repo's `.bazelignore` excludes `.direnv` so the nix and direnv symlink tree does not break that query.
 
@@ -102,10 +104,12 @@ The scope is every `.md` file except `CLAUDE.md`, which quotes the changelog wor
 - `clippy_fix_launcher.sh.tpl` — launcher template for `clippy_fix`.
 - `fix_all.sh` — launcher template for `fix_all` (the `:fix` aggregate).
 - `clippy_gate.sh` — the `exit 0` body for the `:clippy` gate test.
-- `swift_format_check.sh` — `swift-format lint --strict` over the passed files.
+- `swift_format_check.sh` — `swift-format lint --strict --follow-symlinks` over the passed files.
+- `swift_format_check_test.sh` — the `:swift_format_check_test` body.
 - `swift_format_fix.sh` — `swift-format format -i` over the wolf-macos sources.
 - `markdown_check.sh` — the documentation rule checks over the passed files.
 - `markdown_check_test.sh` — the `:markdown_check_test` body, also a Linux gate step.
 - `markdown_all.sh` — Linux only: the checker over the Linux scope above. It calls the host `git`, which the devShell inherits from the host `PATH` because it is not a pure shell.
 - `doc_lint_check.sh` — the `:comments` body: `doc-lint --files` over the files it is passed.
 - `testdata/markdown/` — the fixtures for `markdown_check_test.sh`.
+- `testdata/swift_format/` — the fixtures for `swift_format_check_test.sh`.
