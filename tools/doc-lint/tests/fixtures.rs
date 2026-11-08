@@ -336,9 +336,10 @@ const THREE_LINE_COMMENT: &str = "// one\n// two\n// three\nfn x() {}\n";
 /// prefixes or symlinks.
 ///
 /// The fixture is copied to a scratch dir first, since Bazel's runfiles are symlinks and the
-/// walk never follows them. The space-named dir, `node_modules/`, the generated dir and the
-/// symlinks are created at run time: Bazel runfiles have historically rejected paths with spaces,
-/// `node_modules/` is commonly ignored by a global gitignore, which would drop it from commits.
+/// walk never follows them. The space-named dir, `node_modules/`, `.workspace/`, the generated
+/// dir and the symlinks are created at run time. Bazel runfiles have historically rejected paths
+/// with spaces, and `node_modules/` is commonly ignored by a global gitignore, which would drop it
+/// from commits.
 #[test]
 fn repo_mode_reports_exactly_the_planted_findings() {
     let scratch = scratch_dir("repo");
@@ -355,6 +356,7 @@ fn repo_mode_reports_exactly_the_planted_findings() {
         "# F\n\nThe target of a percent-encoded link.\n",
     );
     write_file(&root.join("node_modules/x.rs"), THREE_LINE_COMMENT);
+    write_file(&root.join(".workspace/x.rs"), THREE_LINE_COMMENT);
     write_file(
         &root.join("crates/wolf-ffi/generated/g.swift"),
         THREE_LINE_COMMENT,
@@ -394,7 +396,7 @@ fn repo_mode_reports_exactly_the_planted_findings() {
         "check_root findings differ from the planted set (paths are root-relative). An extra \
          src/a.rs doc-anchor or notes-unlinked on a Dup or foo heading means the slug kept \
          backticks or skipped the -1 suffix; a missing src/a.rs:16 means doc comments are not \
-         scanned; anything under node_modules, crates/wolf-ffi/generated, linked or \
+         scanned; anything under node_modules, .workspace, crates/wolf-ffi/generated, linked or \
          src/linked_file.rs means a skip rule or the no-symlink rule is broken; a missing \
          src/history.rs:2 means workflow-ref does not run in root mode, and any workflow-ref in \
          docs/history.md means Markdown is scanned for it. Findings:\n{}",

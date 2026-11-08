@@ -19,3 +19,7 @@ Wolf.xcodeproj
 .DS_Store
 
 .worktrees
+
+# Regina run directories: config, task files, wrapper, out-link and a link to the state root
+# under ~/.local/state (.claude/skills/regina/README.md).
+/.workspace/

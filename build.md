@@ -147,35 +147,6 @@ Nothing about the artifact is checked inside the build sandbox. `doCheck` is off
 
 It prints the store path it resolved before it starts, since that path is the subject of everything the run reports, and it must not overlap another `cargo test`, for the reason [Building and testing](#building-and-testing) gives. What those tests assert belongs with them, in [`wolf-gnome/tests`](crates/wolf-gnome/tests/README.md).
 
-### The verification gate
-
-This is the definition of "Linux is green". Every step gates, as the `//tools/lint` checks do on macOS: `-D warnings` applies unconditionally and each command must exit 0.
-
-```sh
-nix develop --command bash -c '
-  set -euo pipefail
-  cargo fmt --all -- --check
-  cargo fmt --manifest-path tools/doc-lint/Cargo.toml -- --check
-  prettier --check "**/*.md"
-  ./tools/lint/markdown_all.sh
-  ./tools/lint/markdown_check_test.sh
-  cargo clippy --manifest-path tools/doc-lint/Cargo.toml --all-targets -- -D warnings
-  cargo test --manifest-path tools/doc-lint/Cargo.toml
-  cargo run --quiet --manifest-path tools/doc-lint/Cargo.toml -- --root .
-  cargo clippy --workspace --all-targets -- -D warnings
-  cargo build --workspace --all-targets
-  cargo test --workspace
-'
-```
-
-The order is deliberate, fast to slow. The format and Markdown checks compile nothing, so a stray blank line fails in seconds rather than after a long compile; doc-lint is a small crate with no dependencies, so its lint, tests and tree check come next; clippy precedes the workspace build because it compiles the same dependency graph the build then reuses; and the tests run last because they dominate the wall clock. Expect roughly 10-25 minutes cold, most of it compilation and the integration tests that each spawn a real Neovim.
-
-Three details are load-bearing. `--all-targets` on clippy is what makes it lint `tests/*.rs` and every `#[cfg(test)] mod tests` rather than just `--lib` and `--bins`. `cargo test` omits `--all-targets` deliberately, because that flag silently drops doctests. And running through `nix develop --command` is not optional: after a `flake.nix` edit the loaded direnv environment is stale and lacks any newly added tool.
-
-[doc-lint](tools/doc-lint/README.md) is a Cargo workspace of its own, so `--workspace` never reaches it and its steps name its manifest.
-
-Prettier's scope is `**/*.md` minus [`.prettierignore`](.prettierignore). Quote the glob so the shell does not expand it — prettier expands it internally and only then applies the ignore file. `.direnv/` must stay excluded, because it symlinks into the Nix store and prettier's globber follows symlinks.
-
 ## macOS (Bazel)
 
 None of this can be built or verified from the Linux devShell. Work done on Linux-only branches that still needs re-checking here is logged in [macos-followups.md](notes/macos-followups.md).
@@ -193,7 +164,7 @@ The same `.envrc` selects the Darwin shell:
 direnv allow
 ```
 
-The Darwin shell supplies bazelisk (exposed as both `bazelisk` and a `bazel` shim), git, starpls, and exports `DEVELOPER_DIR`. It deliberately carries no C toolchain, so `cc`, `strip`, `xcrun` and the SDK all resolve to Xcode ([why](notes/flake.nix.md#darwin-shell)), and no Rust toolchain and no GUI packages: `rules_rust` downloads a pinned rustc (1.85.0), and the Rust dependencies resolve from the workspace `Cargo.toml` and `Cargo.lock` through `crate_universe`. Every command below is written `bazel`, which is the bazelisk shim.
+The Darwin shell supplies bazelisk (exposed as both `bazelisk` and a `bazel` shim), git, starpls and prettier, and exports `DEVELOPER_DIR`. It deliberately carries no C toolchain, so `cc`, `strip`, `xcrun` and the SDK all resolve to Xcode ([why](notes/flake.nix.md#darwin-shell)), and no Rust toolchain and no GUI packages: `rules_rust` downloads a pinned rustc (1.85.0), and the Rust dependencies resolve from the workspace `Cargo.toml` and `Cargo.lock` through `crate_universe`. Every command below is written `bazel`, which is the bazelisk shim.
 
 bazelisk reads the Bazel version from `.bazelversion` (8.7.0) and fetches it. `MODULE.bazel` (bzlmod) pins the rule sets and is authoritative for their versions; `MODULE.bazel.lock` and `Cargo.Bazel.lock` are committed, so a clean checkout builds without resolving anything.
 
@@ -305,7 +276,7 @@ The `.app` is self-contained, so a double-clicked bundle runs with no shell envi
 
 ## Running the tests
 
-This section is the macOS Bazel path. On Linux the whole suite is `cargo test`, under [Building and testing](#building-and-testing) above.
+This section is the macOS Bazel path. On Linux the whole suite is `cargo test`, under [Building and testing](#building-and-testing) above. On either platform `./gates.sh` runs the suite together with every other gate; see [The verification gate](#the-verification-gate).
 
 Let Bazel expand the pattern rather than naming targets one by one:
 
@@ -425,7 +396,7 @@ bazel test //tools/lint:check   # every check
 bazel run  //tools/lint:fix     # every fixer, in place
 ```
 
-The checks gate on both platforms. On macOS they run under `bazel test //...` and clippy fails on any lint, because `.bazelrc` sets `-Dwarnings`; the fix targets are `manual`. On Linux [the verification gate](#the-verification-gate) runs the same checks directly, through the devShell's clippy and rustfmt, doc-lint's own Cargo workspace and the markdown scripts. The per-tool table, the toolchain each one resolves, and the caveats are in [`tools/lint/README.md`](tools/lint/README.md).
+The checks gate on both platforms. On macOS they run under `bazel test //...` and clippy fails on any lint, because `.bazelrc` sets `-Dwarnings`; the fix targets are `manual`. On Linux [the verification gate](#the-verification-gate) runs the same checks directly, through the devShell's clippy and rustfmt, doc-lint's own Cargo workspace and the markdown scripts, and on macOS it adds the doc-lint checkout rules that no Bazel target runs. The per-tool table, the toolchain each one resolves, and the caveats are in [`tools/lint/README.md`](tools/lint/README.md).
 
 Linux has no Bazel, so the Rust fixers run through the devShell instead:
 
@@ -444,6 +415,31 @@ The markdown checker runs standalone, which is how to check a document on a host
 ```
 
 doc-lint runs standalone too: `doc-lint --files <files>` checks comments in the named files, and `--root .` runs every rule over the checkout. Its rules and commands are in [`tools/doc-lint/README.md`](tools/doc-lint/README.md).
+
+## The verification gate
+
+`./gates.sh`, at the repository root, is the definition of green on both platforms. It detects the host and runs every deterministic gate for it: on Linux the format, Markdown, doc-lint, clippy, build and test commands under Cargo, and on macOS prettier, doc-lint's checkout-wide rules and `bazel test //...`. What each list covers, and why it runs in that order, is in [its notes](notes/gates.sh.md).
+
+```sh
+./gates.sh                          # inside the dev shell, or outside it with nix on PATH
+nix develop --command ./gates.sh    # after a flake.nix edit
+```
+
+Outside the dev shell it needs only `nix`, and enters the shell itself. Inside a direnv environment loaded before a `flake.nix` edit it runs with the stale tools, so after such an edit run it through `nix develop --command`. It takes no arguments.
+
+Every gate runs even after one fails, and stdout carries a `<gate> <exit-status>` line as each one finishes. Then, for each failed gate, a block runs from `--- <gate> (exit <n>): <log> ---` to `--- end <gate> ---`, holding the gate's log, or for a long log an excerpt and its last 150 lines. The last line is `logs: <dir>`, and each gate's whole output is in `target/gates/<gate>.log`.
+
+The exit status is 0 when every gate passed and 1 when any failed. It is 2 for a setup error before any gate ran: an argument, an unknown platform, no `nix` outside the dev shell, a `nix develop` that failed or whose shell does not export the `WOLF_DEV_SHELL` marker, or, on macOS, an Xcode whose `xcrun` cannot find `swift-format`. An interrupt ends it with 130, and a `TERM` with 143.
+
+Expect roughly 10-25 minutes cold on Linux, most of it compilation and the integration tests that each spawn a real Neovim.
+
+### Under regina
+
+`./gates.sh` is the implementation gate of a regina run, and regina starts every gate of a `workflow = nix` project inside `nix develop`, so `gates.sh` runs its gates directly there. The base branch must hold `gates.sh` with mode `100755` and the `WOLF_DEV_SHELL` export in `flake.nix`. The harness that runs this repository's tasks through regina — its configuration, flow and agent definitions — is [`.claude/skills/regina`](.claude/skills/regina/README.md).
+
+On macOS the Xcode a worker reads, regina's `xcode` key or else whatever `xcode-select -p` names, must resolve to `/Applications/Xcode.app`, the one the dev shell and `.bazelrc` name, or `gates.sh` exits 2. Regina gives each task its own Bazel output root, so a task's first gate builds cold, while the repository cache is shared. Bazel's `darwin-sandbox` cannot nest inside Seatbelt and falls back to the process-wrapper sandbox by itself, so no sandbox flag is needed.
+
+On the Linux secondary `gates.sh` runs under rootless Podman with no device nodes.
 
 ## The dependency boundary
 

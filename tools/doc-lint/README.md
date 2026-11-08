@@ -81,7 +81,7 @@ A file with no language is never read. Text inside a string is string content, s
 
 ## Exclusions
 
-The walk never follows symlinks. It skips directories named `.git`, `target`, `.direnv`, `.worktrees`, `.claude`, `node_modules`, `.wolf`, `bazel-*` and `*.xcodeproj`, and the prefixes `crates/wolf-ffi/generated/`, `tools/doc-lint/tests/fixtures/` and `tools/lint/testdata/`, which are not references either. `WalkConfig::repo_default()` holds both lists.
+The walk never follows symlinks. It skips directories named `.git`, `target`, `.direnv`, `.worktrees`, `.workspace`, `.claude`, `node_modules`, `.wolf`, `bazel-*` and `*.xcodeproj`, and the prefixes `crates/wolf-ffi/generated/`, `tools/doc-lint/tests/fixtures/` and `tools/lint/testdata/`, which are not references either. `WalkConfig::repo_default()` holds both lists.
 
 ## Building and testing
 
@@ -95,7 +95,7 @@ cargo fmt --manifest-path tools/doc-lint/Cargo.toml -- --check
 cargo run --quiet --manifest-path tools/doc-lint/Cargo.toml -- --root .
 ```
 
-On macOS, `bazel test //tools/doc-lint/...` runs the tests, and `//tools/lint:comments` runs `doc-lint --files` over every package's `comment_srcs`. Both platforms gate on these; the full gate is in [`build.md`](../../build.md).
+On macOS, `bazel test //tools/doc-lint/...` runs the tests, and `//tools/lint:comments` runs `doc-lint --files` over every package's `comment_srcs`; no Bazel test runs `--root`. [`gates.sh`](../../gates.sh) gates on all of these on both platforms, `--root` included; see [`build.md`](../../build.md#the-verification-gate).
 
 ## Decisions
 

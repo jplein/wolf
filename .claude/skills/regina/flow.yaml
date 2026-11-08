@@ -1,0 +1,181 @@
+# The flow of a regina run on wolf, for the regina skill: regina's five-agent example less its
+# `final` gate, plus a retrospective agent. README.md beside this file has the reasons.
+
+version: 1
+# A cap reached fails the task and its retry starts fresh, which costs more than rounds saved.
+max-iterations: 10
+
+sets:
+  # Test sources, harnesses and fixtures. A README among them is documentation, so it is negated.
+  tests:
+    - "/crates/*/tests/**"
+    - "!/crates/*/tests/README.md"
+    - "/crates/wolf-macos/Tests/**/*.swift"
+    - "/crates/wolf-macos/*_test.sh"
+    - "/bazel/**/*_test.sh"
+    - "/tools/doc-lint/tests/**"
+    - "!/tools/doc-lint/tests/README.md"
+    - "/tools/lint/*_test.sh"
+    - "/tools/lint/testdata/**"
+  # The notes/ mirrors of test files, which hold what a test's comments link to: the test writer's.
+  test-notes:
+    - "/notes/crates/*/tests/**"
+    - "/notes/crates/wolf-macos/Tests/**"
+    - "/notes/crates/wolf-macos/*_test.sh.md"
+    - "/notes/bazel/**/*_test.sh.md"
+    - "/notes/tools/doc-lint/tests/**"
+    - "/notes/tools/lint/*_test.sh.md"
+  # Where a test is wired into the target that runs it: the test writer's and the coder's both.
+  wiring: ["BUILD.bazel"]
+  # The technical writer's files. Not specs/, which only a task that names a spec may change.
+  docs: ["README.md", "/build.md", "/notes/**"]
+  # The retrospective agent's reports, inside `docs` too; the writer's `except` keeps it out.
+  retrospectives: ["/notes/retrospectives/*.md"]
+  # No agent writes this: its edits need the user's approval.
+  protected: ["/CLAUDE.md"]
+
+# Every agent runs on the larger model. Planning and review get the highest effort.
+agents:
+  architect:
+    definition: agents/architect.md
+    model: opus
+    effort: xhigh
+    counter: architect
+    writes: nothing
+    mandated: plan
+    results: [passed, failed]
+    handoff: read
+  test-writer:
+    definition: agents/test-writer.md
+    model: opus
+    effort: high
+    counter: implementation
+    writes: { only: [tests, test-notes, wiring] }
+    results: [passed, rejected, failed]
+    commands: allowed
+  coder:
+    definition: agents/coder.md
+    model: opus
+    effort: high
+    counter: implementation
+    writes: { except: [tests, test-notes, protected] }
+    results: [passed, rejected, failed]
+    commands: allowed
+  technical-writer:
+    definition: agents/technical-writer.md
+    model: opus
+    effort: high
+    counter: documentation
+    writes: { only: docs, except: [tests, retrospectives] }
+    results: [passed, rejected, failed]
+  reviewer:
+    definition: agents/reviewer.md
+    model: opus
+    effort: xhigh
+    counter: review
+    writes: nothing
+    mandated: review
+    results: [passed, rejected, failed]
+  retrospective:
+    definition: agents/retrospective.md
+    model: opus
+    effort: high
+    counter: retrospective
+    writes: { only: retrospectives }
+    results: [passed, failed]
+
+# The commands are the config's `gate-<name>` keys.
+gates:
+  implementation: { scope: everything }
+  documentation: { scope: { only: docs, except: tests } }
+
+start: merge
+
+states:
+  merge:
+    merge: integration
+    next:
+      up-to-date: architect
+      clean: architect
+      conflicted: { to: coder, also-writes: conflicted-paths }
+
+  architect:
+    agent: architect
+    next:
+      failed: attempt-failed
+      passed:
+        handoff:
+          test-writer: test-writer
+          coder: coder
+          technical-writer:
+            to: technical-writer
+            guard: [no-merge-pending, dirty-within-target-writes]
+          reviewer:
+            to: reviewer
+            guard: [no-merge-pending, dirty-within-target-writes]
+          none:
+            to: retrospective
+            guard: [answering-review-rejection, no-merge-pending]
+
+  test-writer:
+    agent: test-writer
+    next: { passed: coder, rejected: architect, failed: architect }
+
+  coder:
+    agent: coder
+    next: { passed: gate-implementation, rejected: architect, failed: architect }
+
+  gate-implementation:
+    gate: implementation
+    next: { zero: commit-implementation, non-zero: architect }
+
+  commit-implementation:
+    commit: all-dirty-files
+    next: technical-writer
+
+  technical-writer:
+    agent: technical-writer
+    next: { passed: gate-documentation, rejected: architect, failed: architect }
+
+  gate-documentation:
+    gate: documentation
+    next: { zero: commit-documentation, non-zero: technical-writer }
+
+  commit-documentation:
+    commit: all-dirty-files
+    next: reviewer
+
+  reviewer:
+    agent: reviewer
+    next: { passed: retrospective, rejected: architect, failed: architect }
+
+  # No agent can act on a failed retrospective, so it ends the attempt, where a person sees it.
+  retrospective:
+    agent: retrospective
+    next: { passed: gate-retrospective, failed: attempt-failed }
+
+  gate-retrospective:
+    gate: documentation
+    next: { zero: commit-retrospective, non-zero: retrospective }
+
+  commit-retrospective:
+    commit: all-dirty-files
+    next: coverage
+
+  coverage:
+    check: changes-covered
+    next: { covered: attempt-complete, uncovered: gate-uncovered }
+
+  gate-uncovered:
+    gate: implementation
+    next: { zero: commit-uncovered, non-zero: architect }
+
+  commit-uncovered:
+    commit: all-dirty-files
+    next: attempt-complete
+
+  attempt-complete:
+    end: complete
+
+  attempt-failed:
+    end: failed

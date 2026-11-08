@@ -148,6 +148,7 @@ impl WalkConfig {
             "target",
             ".direnv",
             ".worktrees",
+            ".workspace",
             ".claude",
             "node_modules",
             ".wolf",

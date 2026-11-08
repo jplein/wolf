@@ -1,0 +1,39 @@
+# A regina run of wolf, for the regina skill. regina-run.sh replaces the four placeholders, each
+# a name between two at signs: SOURCE, BASE, ORIGIN and STATE. README.md beside it has the reasons.
+
+[queue]
+# Short and canonical, because Bazel's TEST_TMPDIR in a macOS worker nests under it; the run
+# directory's state is only a link to it.
+state = @STATE@
+# One slot: two attempts at once would merge changes to the same crates.
+slots = 1
+# Claude Code, nix develop, bazelisk, Bazel's fetches and the remote's cargo all need it.
+network = unrestricted
+# The Xcode the dev shell's DEVELOPER_DIR and .bazelrc name; gates.sh exits 2 under any other.
+xcode = /Applications/Xcode.app
+
+[project wolf]
+# The main checkout, whose branches every worktree shares.
+source = @SOURCE@
+# The integration branch regina-run.sh created for this work.
+base = @BASE@
+workflow = nix
+# Read from the starting checkout, as the definitions it names are: part of the tool.
+flow = @ORIGIN@/.claude/skills/regina/flow.yaml
+# Regina starts it inside nix develop, where gates.sh runs its gates directly.
+gate-implementation = ./gates.sh
+# Prettier, the Markdown rules and doc-lint's checkout-wide rules, each run whatever the last gave.
+gate-documentation = s=0; prettier --check "**/*.md" || s=1; bazel test --color=no --curses=no --test_output=errors //tools/lint:markdown || s=1; bazel run --color=no --curses=no //tools/doc-lint:doc_lint -- --root "$PWD" || s=1; exit $s
+
+[worker wolf linux]
+host = nixos.local
+# A state root of its own, so a regina run on nixos.local never holds the lock these sessions need.
+start = /home/jplein/dev/jplein/regina/result/bin/regina serve --state /home/jplein/.local/state/regina-wolf
+workflow = nix
+# Podman refuses the tasks' seatbelt-default; light's 64 MB /dev/shm crashes cage smokes, and its
+# 2 CPUs and 4 GiB starve them. README.md has the measurements.
+profile = host
+# A cold image build after a flake change plus a cold gate; README.md has the measurements.
+timeout = 3600
+# The same checks without Bazel: every Markdown file git knows of, and doc-lint through Cargo.
+gate-documentation = s=0; prettier --check "**/*.md" || s=1; ./tools/lint/markdown_all.sh || s=1; cargo run --quiet --manifest-path tools/doc-lint/Cargo.toml -- --root . || s=1; exit $s

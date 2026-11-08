@@ -43,7 +43,7 @@ Purpose: the data-driven runner over `fixtures/`, plus the repo-mode, `same-code
 **Gotchas**
 
 - The fixture root comes from `DOC_LINT_FIXTURES` under Bazel, relative to the runfiles root, and from `CARGO_MANIFEST_DIR` otherwise. The CLI tests pass cwd-relative paths, relying on Cargo running tests from the package root.
-- The repo test copies `repo/` to a scratch directory first, because Bazel runfiles are symlinks and the walk never follows them. It creates `docs/dir with space/`, `node_modules/`, `crates/wolf-ffi/generated/` and two symlinks there at run time, which Bazel runfiles or a global gitignore could not carry.
+- The repo test copies `repo/` to a scratch directory first, because Bazel runfiles are symlinks and the walk never follows them. It creates `docs/dir with space/`, `node_modules/`, `.workspace/`, `crates/wolf-ffi/generated/` and two symlinks there at run time, which Bazel runfiles or a global gitignore could not carry.
 
 #### `files_mode.rs`
 

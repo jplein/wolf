@@ -2,10 +2,12 @@
 target/
 .direnv/
 .worktrees/
+.workspace/
 bazel-*/
 node_modules/
 
-# Orchestration scratch, rewritten every task: a dirty scratch file must never fail the Linux gate.
+# Orchestration scratch, whose dirty files must never fail the Linux gate, and the regina harness,
+# committed and formatted by hand (.claude/skills/regina/README.md).
 .claude/
 
 # Formatted by the workflow it describes; notes/feat-list.md, which that workflow writes, stays in.
