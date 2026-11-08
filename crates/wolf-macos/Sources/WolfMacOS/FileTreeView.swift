@@ -4,14 +4,17 @@ import AppKit
 import WolfFFI
 import WolfKeyMap
 
-/// One row of the sidebar outline: a label whose color is re-resolved through
-/// `SidebarRowStyle` whenever the current-buffer flag or AppKit's background
-/// style changes.
+/// One row of the sidebar outline, built by `make()`: a label whose color is
+/// re-resolved through `SidebarRowStyle` whenever the current-buffer flag or
+/// AppKit's background style changes.
 ///
 /// The current-buffer mark is applied HERE, to the label's own color, rather than
 /// being left to the row's selection tint — see `SidebarRowStyle` for why a
 /// selection tint disappears at the first app switch.
 final class TreeCellView: NSTableCellView {
+  /// Reuse identifier for the outline's text cells.
+  static let reuseIdentifier = NSUserInterfaceItemIdentifier("TreeCell")
+
   /// Whether this row's file is the current buffer.
   var isCurrent = false {
     didSet { applyLabelColor() }
@@ -21,17 +24,45 @@ final class TreeCellView: NSTableCellView {
     didSet { applyLabelColor() }
   }
 
+  /// Creates a reusable outline cell with a single-line, vertically centered
+  /// label in the proportional system UI font (the sidebar is chrome, not the
+  /// editor grid). Every row shares the face: the current buffer is marked by
+  /// the label's COLOR, not by a heavier face.
+  static func make() -> TreeCellView {
+    let cell = TreeCellView()
+    cell.identifier = reuseIdentifier
+
+    let label = NSTextField(labelWithString: "")
+    label.translatesAutoresizingMaskIntoConstraints = false
+    label.font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
+    label.lineBreakMode = .byTruncatingMiddle
+    label.drawsBackground = false
+    cell.addSubview(label)
+    cell.textField = label
+
+    NSLayoutConstraint.activate([
+      label.leadingAnchor.constraint(equalTo: cell.leadingAnchor),
+      label.trailingAnchor.constraint(equalTo: cell.trailingAnchor),
+      label.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+    ])
+    return cell
+  }
+
   private func applyLabelColor() {
+    guard let textField else { return }
     switch SidebarRowStyle.labelColor(
       isCurrent: isCurrent, isEmphasized: backgroundStyle == .emphasized)
     {
     case .normal:
-      textField?.textColor = .labelColor
+      textField.textColor = .labelColor
     case .current:
-      textField?.textColor = .controlAccentColor
+      textField.textColor = .controlAccentColor
     case .selected:
-      textField?.textColor = .alternateSelectedControlTextColor
+      textField.textColor = .alternateSelectedControlTextColor
     }
+    // After an emphasized selection AppKit stops carrying `textColor` into the drawn string, which
+    // keeps the old colour; re-setting the string rebuilds it from the present one.
+    textField.stringValue = textField.stringValue
   }
 }
 
@@ -67,18 +98,11 @@ final class TreeItem {
 /// traversal batch (COALESCED to at most one `refresh()` per frame), and the
 /// editor render wake calls `onRenderWake()` to reveal + accent the current
 /// buffer.
-/// All state is plain main-thread properties.
+/// All state is plain main-thread properties. The outline's configuration and
+/// its restyle are static, so a test can drive them over an outline of its own.
 final class FileTreeView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate {
-  /// Reuse identifier for the outline's text cells.
-  private static let cellIdentifier = NSUserInterfaceItemIdentifier("TreeCell")
-
   private let handle: WolfCoreHandle
   private weak var paneContainer: PaneContainerView?
-
-  /// The proportional system UI font for rows (the sidebar is chrome, not the
-  /// editor grid). Every row shares it: the current buffer is marked by the
-  /// label's COLOR, not by a heavier face.
-  private let font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
 
   private let outlineView = NSOutlineView()
   private let scrollView = NSScrollView()
@@ -243,7 +267,36 @@ final class FileTreeView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate
     currentFileAbs = current.isEmpty ? nil : current
     pendingReveal = current.isEmpty ? nil : current
     refresh()
-    restyleVisibleRows()
+    Self.restyleRows(in: outlineView, isCurrent: isCurrent(_:))
+  }
+
+  /// Configures `outlineView` as the sidebar's single-column, headerless,
+  /// single-selection source list, drawn clear. Leaves its data source, delegate
+  /// and action to the caller.
+  static func configureOutline(_ outlineView: NSOutlineView) {
+    let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("file"))
+    column.resizingMask = .autoresizingMask
+    outlineView.addTableColumn(column)
+    outlineView.outlineTableColumn = column
+    outlineView.headerView = nil
+    outlineView.allowsMultipleSelection = false
+    // The `.sidebar` split item supplies vibrancy, so draw clear: an own `NSVisualEffectView` would
+    // double it. The cwd root is a normal row, not an `isGroupItem` group row.
+    outlineView.style = .sourceList
+    outlineView.backgroundColor = .clear
+  }
+
+  /// Moves the current-buffer accent over the rows AppKit already has on screen.
+  /// The version gate skips the reload whenever the snapshot has not advanced —
+  /// which is the common case for a buffer switch — and a skipped reload never
+  /// re-runs `viewFor`, so without this the accent would stay on the old row.
+  static func restyleRows(in outlineView: NSOutlineView, isCurrent: (TreeItem) -> Bool) {
+    outlineView.enumerateAvailableRowViews { rowView, row in
+      guard let item = outlineView.item(atRow: row) as? TreeItem,
+        let cell = rowView.view(atColumn: 0) as? TreeCellView
+      else { return }
+      cell.isCurrent = isCurrent(item)
+    }
   }
 
   /// Reveals `abs` in the outline: expands its ancestor directories (top-down,
@@ -335,8 +388,8 @@ final class FileTreeView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate
     _ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any
   ) -> NSView? {
     let cell =
-      outlineView.makeView(withIdentifier: Self.cellIdentifier, owner: self)
-      as? TreeCellView ?? makeCell()
+      outlineView.makeView(withIdentifier: TreeCellView.reuseIdentifier, owner: self)
+      as? TreeCellView ?? TreeCellView.make()
     guard let treeItem = item as? TreeItem else { return cell }
     cell.textField?.stringValue = treeItem.name
     cell.isCurrent = isCurrent(treeItem)
@@ -349,19 +402,6 @@ final class FileTreeView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate
   /// are).
   private func isCurrent(_ item: TreeItem) -> Bool {
     !item.isDir && item.absPath == currentFileAbs
-  }
-
-  /// Moves the current-buffer accent over the rows AppKit already has on screen.
-  /// The version gate skips the reload whenever the snapshot has not advanced —
-  /// which is the common case for a buffer switch — and a skipped reload never
-  /// re-runs `viewFor`, so without this the accent would stay on the old row.
-  private func restyleVisibleRows() {
-    outlineView.enumerateAvailableRowViews { rowView, row in
-      guard let item = outlineView.item(atRow: row) as? TreeItem,
-        let cell = rowView.view(atColumn: 0) as? TreeCellView
-      else { return }
-      cell.isCurrent = isCurrent(item)
-    }
   }
 
   /// Builds the synthetic root `TreeItem` for `cwd`: a directory node whose name
@@ -420,20 +460,11 @@ final class FileTreeView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate
 
   /// Builds + lays out the outline view inside a scroll view filling the sidebar.
   private func buildSubviews() {
-    let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("file"))
-    column.resizingMask = .autoresizingMask
-    outlineView.addTableColumn(column)
-    outlineView.outlineTableColumn = column
-    outlineView.headerView = nil
-    outlineView.allowsMultipleSelection = false
+    Self.configureOutline(outlineView)
     outlineView.dataSource = self
     outlineView.delegate = self
     outlineView.target = self
     outlineView.action = #selector(handleClick)
-    // The `.sidebar` split item supplies vibrancy, so draw clear: an own `NSVisualEffectView` would
-    // double it. The cwd root is a normal row, not an `isGroupItem` group row.
-    outlineView.style = .sourceList
-    outlineView.backgroundColor = .clear
 
     scrollView.translatesAutoresizingMaskIntoConstraints = false
     scrollView.drawsBackground = false
@@ -448,28 +479,6 @@ final class FileTreeView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate
       scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
       scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
     ])
-  }
-
-  /// Creates a reusable outline cell: a `TreeCellView` with a single-line,
-  /// vertically centered label.
-  private func makeCell() -> TreeCellView {
-    let cell = TreeCellView()
-    cell.identifier = Self.cellIdentifier
-
-    let label = NSTextField(labelWithString: "")
-    label.translatesAutoresizingMaskIntoConstraints = false
-    label.font = font
-    label.lineBreakMode = .byTruncatingMiddle
-    label.drawsBackground = false
-    cell.addSubview(label)
-    cell.textField = label
-
-    NSLayoutConstraint.activate([
-      label.leadingAnchor.constraint(equalTo: cell.leadingAnchor),
-      label.trailingAnchor.constraint(equalTo: cell.trailingAnchor),
-      label.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-    ])
-    return cell
   }
 
   /// Routes a single click on a row to `activate(item:)`.

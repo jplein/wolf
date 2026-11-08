@@ -13,7 +13,9 @@ filegroup(
     srcs = glob([
         "Sources/WolfKeyMap/*.swift",
         "Sources/WolfMacOS/*.swift",
+        "Sources/WolfMain/*.swift",
         "Tests/WolfKeyMapTests/*.swift",
+        "Tests/WolfMacOSTests/*.swift",
     ]),
     visibility = ["//tools/lint:__pkg__"],
 )
@@ -87,8 +89,8 @@ swift_library(
     deps = ["//crates/wolf-ffi:wolf_ffi_cc"],
 )
 
-# The AppKit application sources. Gets `FfiKeyEvent` / `WolfCoreHandle` / `FfiFrame`
-# via `import WolfKeyMap`, and the C wake symbol via `import WolfFFI`.
+# The AppKit application sources, with no entry point so a `swift_test` can link them.
+# Gets the bridge types via `import WolfKeyMap`, and the C wake symbol via `import WolfFFI`.
 swift_library(
     name = "wolf_macos_lib",
     srcs = glob(["Sources/WolfMacOS/*.swift"]),
@@ -98,6 +100,14 @@ swift_library(
         ":wolf_key_map",
         "//crates/wolf-ffi:wolf_ffi_cc",
     ],
+)
+
+# The app's `main`, alone in its module; it calls `WolfApplication.run()`.
+swift_library(
+    name = "wolf_macos_main",
+    srcs = ["Sources/WolfMain/main.swift"],
+    module_name = "WolfMain",
+    deps = [":wolf_macos_lib"],
 )
 
 # `Wolf.icon/` is assembled in the output tree, all three files in one dir: actool needs every
@@ -153,7 +163,7 @@ macos_application(
         "//runtime/nvim:init.lua",
     ],
     visibility = ["//visibility:public"],
-    deps = [":wolf_macos_lib"],
+    deps = [":wolf_macos_main"],
 )
 
 # `:Wolf` rebuilt at `-c opt` by transition; `manual` stops `//...` building the graph twice.
@@ -240,6 +250,18 @@ swift_test(
         "Tests/WolfKeyMapTests/TreeRefreshGateTests.swift",
     ],
     deps = [":wolf_key_map"],
+)
+
+swift_test(
+    name = "WolfMacOSTests",
+    srcs = [
+        "Tests/WolfMacOSTests/FileTreeViewTests.swift",
+        "Tests/WolfMacOSTests/OffscreenRenderer.swift",
+    ],
+    # In its `.xctest/Contents/MacOS/` the binary counts as a bundled app, whose AppKit aborts with
+    # no LaunchServices check-in, which Seatbelt denies; a flat process path needs none.
+    env = {"CFProcessPath": "WolfMacOSTests"},
+    deps = [":wolf_macos_lib"],
 )
 
 xcodeproj(
