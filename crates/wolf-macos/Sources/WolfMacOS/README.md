@@ -2,7 +2,7 @@
 
 The AppKit application: windows, views, menus, and the coordinator that owns projects and views. It holds only what genuinely needs a window; the decisions it acts on live in the pure [`WolfKeyMap/`](../WolfKeyMap/README.md) seam.
 
-Nothing in this directory has automated coverage — there is no headless window server. See [wolf-macos-decisions.md](../../../../notes/wolf-macos-decisions.md) for that posture and for the project, threading, and persistence models these files implement.
+What a view here draws is testable offscreen through [`WolfMacOSTests`](../../Tests/WolfMacOSTests/README.md); event handling, focus and menus have no automated coverage. See [wolf-macos-decisions.md](../../../../notes/wolf-macos-decisions.md) for that posture and for the project, threading, and persistence models these files implement.
 
 ## Files
 
@@ -215,13 +215,14 @@ Purpose: The file-tree sidebar: an `NSOutlineView` driven by a long-lived `FfiFi
 
 **Decisions**
 
-- `NSOutlineView` keys expansion and selection on object identity, so one `TreeItem` per `relPath` is cached and handed back across reloads. Fresh instances would collapse the tree.
-- The outline draws a clear background and adds no `NSVisualEffectView`: the enclosing `.sidebar` split item already supplies the vibrancy.
-- `reveal(abs:)` expands ancestors top-down before locating the row, because a row exists only once its parent is expanded; a not-yet-streamed file leaves the reveal pending.
-- `reroot(to:)` cancels the pending coalesced refresh first — a stale fire would run against the discarded tree.
-- `onRenderWake()`, `reroot(to:)`'s only caller, decides the re-root by comparing `handle.cwd()` with the root it holds, so Neovim's cwd stays the one authority. wolf-gnome re-roots from one settle point ([`shell.rs`](../../../wolf-gnome/src/README.md#shellrs)); the divergence is accepted.
+- `NSOutlineView` keys expansion and selection on object identity, so one cached `TreeItem` per `relPath` is reused across reloads; fresh instances collapse the tree.
+- The outline draws clear, with no `NSVisualEffectView`: the `.sidebar` split item supplies the vibrancy.
+- `reveal(abs:)` expands ancestors top-down first, since a row exists only under an expanded parent; an unstreamed file leaves the reveal pending.
+- `reroot(to:)` first cancels the pending coalesced refresh, whose stale fire would hit the discarded tree.
+- `onRenderWake()`, `reroot(to:)`'s only caller, re-roots when `handle.cwd()` differs from its root: Neovim's cwd is the one authority. wolf-gnome's settle-point re-root ([`shell.rs`](../../../wolf-gnome/src/README.md#shellrs)) is an accepted divergence.
 - `TreeCellView` marks what the active pane shows with a [`SidebarRowStyle`](../WolfKeyMap/README.md#sidebarrowstyleswift) label color, never the selection tint.
-- Activating a file routes on the active pane's mode, as the pickers do: a preview pane gets `preview_file`, falling back to `open` on `0`, which drops the pane to edit mode.
+- `applyLabelColor()` re-sets the label's string, an apparent no-op: after an emphasized click AppKit ignores `textColor`, leaving the formerly current row accented. `WolfMacOSTests` fails without it.
+- Activation routes on the active pane's mode, as the pickers do: a preview pane gets `preview_file`, falling back to `open` on `0`, which drops it to edit mode.
 
 #### `FontRegistration.swift`
 
@@ -666,6 +667,14 @@ Purpose: The process-global map from a core's per-project wake token to the `Pro
 
 - `project(for:)` returns `nil` for a wake that arrives after its project's last view closed; every caller treats that as a no-op rather than an error.
 
+#### `WolfApplication.swift`
+
+Purpose: The app's entry point, called by [`WolfMain`](../WolfMain/README.md): `WolfApplication.run()` builds the shared `NSApplication`, installs `AppDelegate`, sets the regular activation policy, and runs until the app terminates.
+
+**Decisions**
+
+- The delegate is a local kept alive by `withExtendedLifetime` across `run()`. `NSApplication.delegate` is weak, so without it an optimized build may release the delegate as soon as it is assigned.
+
 #### `WolfWindowController.swift`
 
 Purpose: One view — a single tab's whole UI stack, bound to a `(project, tabpageHandle)` pair. A tab is its own OS window; several may share a native tab group.
@@ -684,7 +693,3 @@ Purpose: One view — a single tab's whole UI stack, bound to a `(project, tabpa
 - `teardown()` is idempotent and defers `removeController` one runloop turn, capturing `self` strongly on purpose: during `windowWillClose` the coordinator's collection is the last strong reference, so dropping it synchronously frees the `NSWindow` mid-close.
 - `window.historyNav = self` is wired explicitly: this is not an `NSWindowController`, so a `target: nil` toolbar action could never reach it through the responder chain.
 - The file tree starts at the end of `build()`, once the sidebar's collapse state has seeded its refresh gate, so a restored collapsed sidebar defers its first outline work.
-
-#### `main.swift`
-
-Purpose: Process entry point — builds the shared `NSApplication`, installs `AppDelegate`, sets the regular activation policy, and runs.

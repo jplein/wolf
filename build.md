@@ -292,17 +292,18 @@ Targets tagged `manual` are excluded from wildcard expansion: the optimized `//c
 
 Tests run in the default configuration, not `-c opt`, and that is deliberate rather than an oversight. `bazel test -c opt //crates/wolf-macos:WolfKeyMapTests` fails to build, because `@testable import` requires `-enable-testing`, which rules_swift passes only in non-opt compilation modes. Test in the default configuration and ship the optimized build. `//crates/wolf-macos:bundle_layout_test` runs against `:Wolf` for a related reason: bundle layout is configuration-independent, so a release variant would add a full opt build to every sweep for no added coverage.
 
-Bazel does not discover test files. A new `tests/*.rs` or `*Tests.swift` runs only once it is wired into a target in the owning `BUILD.bazel`, and until then it is a silent macOS-only gap that `cargo test` hides. The rule is in [`CLAUDE.md`](CLAUDE.md); the runfiles and tags each kind of Rust test needs are in the "Adding a test file" sections of [`wolf-core/tests`](crates/wolf-core/tests/README.md) and [`wolf-ffi/tests`](crates/wolf-ffi/tests/README.md), and the Swift `srcs` list is described in [`Tests/WolfKeyMapTests`](crates/wolf-macos/Tests/WolfKeyMapTests/README.md).
+Bazel does not discover test files. A new `tests/*.rs` or Swift test file runs only once it is wired into a target in the owning `BUILD.bazel`, and until then it is a silent macOS-only gap that `cargo test` hides. The rule is in [`CLAUDE.md`](CLAUDE.md); the runfiles and tags each kind of Rust test needs are in the "Adding a test file" sections of [`wolf-core/tests`](crates/wolf-core/tests/README.md) and [`wolf-ffi/tests`](crates/wolf-ffi/tests/README.md), and the Swift `srcs` lists are described in [`Tests/WolfKeyMapTests`](crates/wolf-macos/Tests/WolfKeyMapTests/README.md) and [`Tests/WolfMacOSTests`](crates/wolf-macos/Tests/WolfMacOSTests/README.md).
 
 What each target covers belongs with the code it tests:
 
-| Suite                                                                | Covers                                                             |
-| -------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| [`//crates/wolf-core:*`](crates/wolf-core/tests/README.md)           | Core against a real pinned Neovim, plus the headless pure modules. |
-| [`//crates/wolf-ffi:*`](crates/wolf-ffi/tests/README.md)             | The bridge surface, most of it live across the FFI boundary.       |
-| [`//crates/wolf-macos:WolfKeyMapTests`](crates/wolf-macos/README.md) | The AppKit-free Swift seams, through XCTest.                       |
-| `//crates/wolf-macos:bundle_layout_test`                             | The built `.app`'s resource layout.                                |
-| [`//bazel/...`](#repinning-a-vendored-asset)                         | One test per vendored asset, asserting the assembled tree.         |
+| Suite                                                                                    | Covers                                                                       |
+| ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| [`//crates/wolf-core:*`](crates/wolf-core/tests/README.md)                               | Core against a real pinned Neovim, plus the headless pure modules.           |
+| [`//crates/wolf-ffi:*`](crates/wolf-ffi/tests/README.md)                                 | The bridge surface, most of it live across the FFI boundary.                 |
+| [`//crates/wolf-macos:WolfKeyMapTests`](crates/wolf-macos/README.md)                     | The AppKit-free Swift seams, through XCTest.                                 |
+| [`//crates/wolf-macos:WolfMacOSTests`](crates/wolf-macos/Tests/WolfMacOSTests/README.md) | What AppKit views from `WolfMacOS` draw, rendered offscreen, through XCTest. |
+| `//crates/wolf-macos:bundle_layout_test`                                                 | The built `.app`'s resource layout.                                          |
+| [`//bazel/...`](#repinning-a-vendored-asset)                                             | One test per vendored asset, asserting the assembled tree.                   |
 
 ## Repinning a vendored asset
 

@@ -10,11 +10,13 @@ The macOS front-end: a native AppKit application (Swift) that renders the embedd
 | ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
 | [`Sources/WolfKeyMap/`](Sources/WolfKeyMap/README.md)       | The pure seam: Foundation and the generated FFI glue, no AppKit. Every decision testable without a window. |
 | [`Sources/WolfMacOS/`](Sources/WolfMacOS/README.md)         | The AppKit application: windows, views, menus, and the coordinator.                                        |
+| [`Sources/WolfMain/`](Sources/WolfMain/README.md)           | The process entry point, a module of its own so a test can link `WolfMacOS`.                               |
 | [`Tests/WolfKeyMapTests/`](Tests/WolfKeyMapTests/README.md) | XCTest coverage of the pure seam.                                                                          |
+| [`Tests/WolfMacOSTests/`](Tests/WolfMacOSTests/README.md)   | XCTest coverage of what `WolfMacOS` views draw, rendered offscreen.                                        |
 
 ## Entry point
 
-`Sources/WolfMacOS/main.swift` builds the shared `NSApplication`, installs `AppDelegate`, and runs. `AppDelegate` is the coordinator over the crate's projects and views; see [wolf-macos-decisions.md](../../notes/wolf-macos-decisions.md) for that model.
+`Sources/WolfMain/main.swift` calls `WolfApplication.run()`, which builds the shared `NSApplication`, installs `AppDelegate`, and runs. `AppDelegate` is the coordinator over the crate's projects and views; see [wolf-macos-decisions.md](../../notes/wolf-macos-decisions.md) for that model.
 
 ## Building
 
@@ -36,12 +38,13 @@ Resolve the release `.app` path from `bazel cquery --output=files //crates/wolf-
 
 ```sh
 bazel test //crates/wolf-macos:WolfKeyMapTests     # the pure WolfKeyMap seams
+bazel test //crates/wolf-macos:WolfMacOSTests      # what WolfMacOS views draw, offscreen
 bazel test //crates/wolf-macos:bundle_layout_test  # asserts the .app resource layout
 ```
 
-`WolfKeyMapTests` lists its sources explicitly rather than globbing, so a new `*Tests.swift` file that is not added to `srcs` never compiles into the test binary and never runs. There is no `cargo`-style fallback here.
+Both Swift test targets list their sources explicitly rather than globbing, so a new Swift file that is not added to `srcs` never compiles into the test binary and never runs. There is no `cargo`-style fallback here.
 
-The AppKit half of the crate has no automated coverage — see the testing posture in [wolf-macos-decisions.md](../../notes/wolf-macos-decisions.md) for what covers it instead.
+`WolfMacOSTests` checks pixels, not events: key-window behaviour, event handling, menus and focus have no automated coverage. See the testing posture in [wolf-macos-decisions.md](../../notes/wolf-macos-decisions.md) for what covers them instead.
 
 ## Formatting
 

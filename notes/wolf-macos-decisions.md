@@ -31,9 +31,11 @@ It carries `manual` for the same reason `:WolfRelease` does. It depends on the t
 
 Swift here is split in two, and the split is the single most important structural fact about the crate.
 
-[`Sources/WolfKeyMap/`](../crates/wolf-macos/Sources/WolfKeyMap/README.md) is Foundation plus the generated FFI glue, with no AppKit. Every decision that can be expressed as a function of values lives there, so it can be unit-tested with no window server. [`Sources/WolfMacOS/`](../crates/wolf-macos/Sources/WolfMacOS/README.md) is the AppKit application, and holds only what genuinely needs a window.
+[`Sources/WolfKeyMap/`](../crates/wolf-macos/Sources/WolfKeyMap/README.md) is Foundation plus the generated FFI glue, with no AppKit. Every decision that can be expressed as a function of values lives there, so it can be unit-tested with no window server. [`Sources/WolfMacOS/`](../crates/wolf-macos/Sources/WolfMacOS/README.md) is the AppKit application, and holds only what genuinely needs a window. The process entry point sits apart, in the one-file [`Sources/WolfMain/`](../crates/wolf-macos/Sources/WolfMain/README.md).
 
-The consequence is the crate's testing posture: **AppKit glue is compile-verified and manual-smoke only** — there is no headless window server, so `draw(_:)`, `keyDown:`, view hierarchies, and menu wiring are not covered by an automated test. Coverage comes from three other places instead: the pure seams via [`Tests/WolfKeyMapTests/`](../crates/wolf-macos/Tests/WolfKeyMapTests/README.md), the bridge surface via the real-nvim tests in `//crates/wolf-ffi`, and the core logic via `//crates/wolf-core`. When you add behavior here, put the decision in `WolfKeyMap` and test it there; leaving it in a view class means it is untested.
+The consequence is the crate's testing posture. There is no window server under `bazel test`, but a view in a never-shown window still renders through `cacheDisplay`, so [`Tests/WolfMacOSTests/`](../crates/wolf-macos/Tests/WolfMacOSTests/README.md) checks what a `WolfMacOS` view draws. **Key-window behaviour, event delivery such as `keyDown:`, menus and real focus are compile-verified and manual-smoke only**, and XCUITest is unavailable.
+
+Coverage comes from the pure seams via [`Tests/WolfKeyMapTests/`](../crates/wolf-macos/Tests/WolfKeyMapTests/README.md), the bridge surface via the real-nvim tests in `//crates/wolf-ffi`, and the core logic via `//crates/wolf-core`. When you add behavior here, put the decision in `WolfKeyMap` and test it there; leaving it in a view class means only what it draws can be tested.
 
 ## Key translation lives in Rust
 
