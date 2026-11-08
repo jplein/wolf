@@ -2,31 +2,27 @@
 //! strip is, where its two lines sit inside it, how big the second line's font is,
 //! and what colour and weight each line takes in an active or an inactive pane.
 //!
-//! The vertical half is a port of `WolfKeyMap/StatusbarLayout.swift`, constant for
-//! constant. The colour half, [`statusbar_text`], has the shape of
-//! `WolfKeyMap/StatusbarText.swift`: the same alphas and bold rule, over the
-//! editor's colours where macOS uses the titlebar theme and AppKit's label tiers.
-//! It is a pure function over two colours and a flag, so the alphas and the bold
-//! rule are pinned by a table instead of by a screenshot.
+//! The vertical half is named constants and `ceil` arithmetic over the two font
+//! sizes. The colour half, [`statusbar_text`], is a pure function over the editor's
+//! two colours and an active flag, so the alphas and the bold rule are pinned by a
+//! table instead of by a screenshot.
 //!
 //! ## Units: the caller picks
 //!
 //! Unit-agnostic, exactly like [`crate::cell_metrics_math`] — see that module's
-//! "Units" section for the convention and why the two platforms pick differently.
-//! `crate::pane_view` calls this one in DEVICE PIXELS, feeding
-//! [`crate::render::CellMetrics::size_px`]. The consequence, stated rather than
-//! fixed: at 96 dpi a 3-unit pad is 3 px here and 3 pt (= 3 px at 1x) on macOS, so
-//! above 1x the strip's internal padding is proportionally tighter here by the dpi
-//! ratio.
+//! "Units" section for the convention. `crate::pane_view` calls this one in DEVICE
+//! PIXELS, feeding [`crate::render::CellMetrics::size_px`]. The consequence, stated
+//! rather than fixed: a pad of 3 units is 3 device pixels at every scale, so above
+//! 1x it is physically smaller.
 //!
 //! ## Colours come from the editor, not from the desktop
 //!
-//! macOS reads its titlebar theme and falls back to AppKit's label tiers.
 //! [`statusbar_text`] takes the editor's own default foreground and background —
 //! `crate::pane_view` resolves highlight 0, the source the cmdline strip already
-//! uses — because `notes/wolf-gnome-decisions.md` records that this front-end
-//! takes no colour from the OS theme. macOS's non-themed AppKit-tier branch
-//! therefore has no counterpart here.
+//! uses — and has no label tier, by the user's decision and unlike the macOS strip
+//! (`crates/wolf-macos/Sources/WolfKeyMap/README.md#statusbartextswift`): this
+//! front-end takes no colour from the OS theme
+//! (`notes/wolf-gnome-decisions.md#window-structure`).
 //!
 //! The blend is toward the BACKGROUND rather than toward black, and that is
 //! load-bearing: the strip's background is opaque and known (the painter has just
@@ -92,12 +88,11 @@ const COLLAPSED: StatusbarLayout = StatusbarLayout {
 /// line sits at `vertical_padding`, the secondary a `line_gap` below it, and the
 /// height closes with a second `vertical_padding`.
 ///
-/// **A guard shared with `StatusbarLayout.swift`:** any non-finite or negative
-/// input collapses the WHOLE result to zeros. Unguarded, an infinite font size
-/// yields an infinite strip height, which [`crate::editor_inset::grid_rect`] turns
-/// into a zero-extent grid and `geometry::grid_size_for` into a 1x1 one — an
-/// editor that paints a single cell. A zero-height strip instead leaves a pane that
-/// is all padding and still usable.
+/// **A guard:** any non-finite or negative input collapses the WHOLE result to
+/// zeros. Unguarded, an infinite font size yields an infinite strip height, which
+/// [`crate::editor_inset::grid_rect`] turns into a zero-extent grid and
+/// `geometry::grid_size_for` into a 1x1 one — an editor that paints a single cell.
+/// A zero-height strip instead leaves a pane that is all padding and still usable.
 #[must_use]
 pub fn statusbar_layout(
     primary_font_size: f64,
@@ -260,15 +255,10 @@ mod tests {
         expected: (f64, f64, f64, f64, f64),
     }
 
-    /// Pins [`statusbar_layout`]'s vertical arithmetic, which is
-    /// `WolfKeyMap/StatusbarLayout.swift`'s verbatim: each line box is
+    /// Pins [`statusbar_layout`]'s vertical arithmetic: each line box is
     /// `ceil(font_size * 1.25)`, the primary sits at `vertical_padding`, the
     /// secondary at `vertical_padding + primary + line_gap`, and the height closes
     /// with a second `vertical_padding`.
-    ///
-    /// Row 1 is `StatusbarLayoutTests.swift`'s own worked example, case for case, so
-    /// the two files can be read side by side — the convention
-    /// `cell_metrics_math.rs` already follows for `CellMetricsMathTests.swift`.
     ///
     /// FALSIFYING EDITS. Each names the edit, the row it fires on, and the verbatim
     /// failure measured for it.
@@ -277,35 +267,35 @@ mod tests {
     ///   `13 * 1.25 = 16.25` rounds to 16 and ceils to 17, so row 1 gives
     ///   `(36, 3, 16, 20, 13)`. Row 4's `10 * 1.25 = 12.5` is a TIE, and Rust's
     ///   `f64::round` is half-AWAY-from-zero, so `round` and `ceil` both answer 13
-    ///   there and row 4 stays green under this edit. MEASURED: `case: the macOS
-    ///   worked example, case for case — statusbar_layout(13, 10, 3, 1)`, left
+    ///   there and row 4 stays green under this edit. MEASURED: `case: the worked
+    ///   example, case for case — statusbar_layout(13, 10, 3, 1)`, left
     ///   `(36.0, 3.0, 16.0, 20.0, 13.0)`, right `(37.0, 3.0, 17.0, 21.0, 13.0)`.
     /// - `floor` or `trunc` instead of `ceil`: row 1 gives `(35, 3, 16, 20, 12)` —
     ///   both line boxes shrink, unlike the `round` edit, which shrinks only the
     ///   primary — and row 4 moves too, to `(24, 0, 12, 12, 12)`. MEASURED: `case: the
-    ///   macOS worked example`, left `(35.0, 3.0, 16.0, 20.0, 12.0)`, right
+    ///   worked example`, left `(35.0, 3.0, 16.0, 20.0, 12.0)`, right
     ///   `(37.0, 3.0, 17.0, 21.0, 13.0)`.
     /// - `line_gap` omitted from `secondary_line_top`: row 1 gives sTop 20 and
     ///   height 36. That is the same PAIR the `round` edit produces, and the two are
     ///   told apart by `primary_line_height` — 17 here, 16 there — which is why the
     ///   assertion compares all five fields rather than the height alone. MEASURED,
     ///   and the two captures confirm the discrimination side by side: `case: the
-    ///   macOS worked example`, left `(36.0, 3.0, 17.0, 20.0, 13.0)` against the
+    ///   worked example`, left `(36.0, 3.0, 17.0, 20.0, 13.0)` against the
     ///   `round` edit's `(36.0, 3.0, 16.0, 20.0, 13.0)` — same height, different
     ///   `primary_line_height`.
     /// - `vertical_padding` counted once instead of twice: row 1 gives height 34.
-    ///   MEASURED: `case: the macOS worked example`, left
+    ///   MEASURED: `case: the worked example`, left
     ///   `(34.0, 3.0, 17.0, 21.0, 13.0)`, right `(37.0, 3.0, 17.0, 21.0, 13.0)`.
     /// - [`STATUSBAR_LINE_FACTOR`] changed at all: row 1's `primary_line_height`
-    ///   moves off 17. MEASURED at `1.5`: `case: the macOS worked example`, left
+    ///   moves off 17. MEASURED at `1.5`: `case: the worked example`, left
     ///   `(42.0, 3.0, 20.0, 24.0, 15.0)`, right `(37.0, 3.0, 17.0, 21.0, 13.0)`.
     /// - Delete the non-finite / negative guard: rows 6, 7 and 8 produce NaN,
     ///   infinite or negative fields. MEASURED, firing on row 6: `case: a NaN primary
     ///   font size collapses the whole result — statusbar_layout(NaN, 10, 3, 1)`, left
     ///   `(NaN, 3.0, NaN, NaN, 13.0)`, right `(0.0, 0.0, 0.0, 0.0, 0.0)`.
     ///
-    /// The guard's own reason, so it is not tidied away as defensive noise (it is
-    /// shared with `StatusbarLayout.swift`): an infinite strip height makes
+    /// The guard's own reason, so it is not tidied away as defensive noise: an
+    /// infinite strip height makes
     /// `editor_inset::grid_rect` return a zero grid and `grid_size_for` a 1x1 one —
     /// an editor that paints one cell. Collapsing to a zero-height strip instead
     /// leaves a pane that is all padding and still perfectly usable.
@@ -315,7 +305,7 @@ mod tests {
             LayoutCase {
                 // pH = ceil(16.25) = 17; sH = ceil(12.5) = 13; pTop = 3; sTop = 3 + 17 + 1 = 21;
                 // h = 21 + 13 + 3 = 37.
-                desc: "the macOS worked example, case for case",
+                desc: "the worked example, case for case",
                 primary: 13.0,
                 secondary: 10.0,
                 pad: 3.0,

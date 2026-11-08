@@ -25,19 +25,16 @@
 //! ## The three classes
 //!
 //! - **Dispatched** — the twenty-one commands `wolf-gnome` performs today.
-//! - [`UiAction::Deferred`] — implemented on macOS and planned on GTK; the string
-//!   names the concrete blocker so the deferral is auditable rather than a shrug.
+//! - [`UiAction::Deferred`] — planned on GTK; the string names the concrete
+//!   blocker so the deferral is auditable rather than a shrug.
 //! - [`UiAction::NoGnomeEquivalent`] — has no GNOME counterpart and will never be
 //!   implemented; the string says why.
 //! - **Front-end-only rows** — an [`crate::actions::ACTION_TABLE`] row that carries
 //!   no [`wolf_core::Command`] at all, because the behaviour is the front end's own
 //!   rather than something Neovim can queue: the two navigation rows, whose visit
 //!   log is the front end's own view of the core; About, which the registry has no
-//!   command for; and Save and Save As. The registry carries no Save command
-//!   because adding one is a CROSS-PLATFORM change — the Swift `CommandKind` port
-//!   and `CommandDispatcher`'s `default`-free switch would both need arms, neither
-//!   compilable nor verifiable on the Linux host this was written on, and macOS has
-//!   no save UI to point them at. Those resolve through
+//!   command for; and Save and Save As, since the registry has no Save command
+//!   (`notes/feat-list.md#navigation-and-file-access`). Those resolve through
 //!   [`ui_action_for_front_end_action`], which is the ONLY other way an action is
 //!   installed. The consequence is worth stating: a front-end-only row never
 //!   appears in the command palette, whose rows come from `wolf_core::COMMAND_SPECS`.
@@ -77,9 +74,9 @@ pub enum UiAction {
     /// Open a FRESH, EMPTY application window with its own core, at `$HOME`.
     ///
     /// It inherits nothing from the window it was asked from — not its working
-    /// directory, not its layout, not its size — because that is what macOS's
-    /// `makeNewWindow` does and parity is this row's whole subject. Inheriting a
-    /// project is [`UiAction::NewTab`]'s behaviour.
+    /// directory, not its layout, not its size
+    /// (`notes/wolf-gnome-decisions.md#the-coordinator-and-its-windows`). Inheriting
+    /// a project is [`UiAction::NewTab`]'s behaviour.
     NewWindow,
     /// Close the application window (via `close-request`, never `destroy`).
     CloseWindow,
@@ -136,7 +133,7 @@ pub enum UiAction {
     SaveBuffer,
     /// Open a native `gtk::FileDialog` to choose a new path for the focused buffer.
     SaveBufferAs,
-    /// Implemented on macOS, planned on GTK; the string names the blocker.
+    /// Planned on GTK; the string names the blocker.
     Deferred(&'static str),
     /// Has no GNOME equivalent and will never be implemented.
     NoGnomeEquivalent(&'static str),
@@ -705,10 +702,8 @@ mod tests {
              nothing but `_ => None` would pass it. The front-end-only rows are the two navigation \
              ones (`win.history-back` / `win.history-forward`), whose history lives in the front \
              end's own view of the core; `win.about`, which the registry carries no command for; \
-             and `win.save` / `win.save-as`, which the registry carries no command for either — \
-             adding one is a cross-platform change (the Swift `CommandKind` port and \
-             `CommandDispatcher`'s `default`-free switch would both need arms) that cannot be \
-             compiled or verified on this host, and macOS has no save UI to point it at. If every \
+             and `win.save` / `win.save-as`, which the registry carries no command for either \
+             (notes/feat-list.md#navigation-and-file-access). If every \
              one of them has gained a `wolf_core::Command`, this function has no purpose left and \
              should go rather than be left guarding nothing."
         );

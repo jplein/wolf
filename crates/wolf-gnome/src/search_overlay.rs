@@ -28,10 +28,7 @@
 //!
 //! There is deliberately no `connect_search_changed`: a search runs only when the
 //! user presses Enter, so no keystroke can spawn `rg` and no debounce timer is
-//! needed. The macOS front-end takes the same decision and says so in
-//! `buildSubviews()` in `crates/wolf-macos/Sources/WolfMacOS/SearchView.swift` — the search
-//! field's action fires on Return and `controlTextDidChange` is deliberately not
-//! wired.
+//! needed.
 //!
 //! The FIRST Enter (a query the live session was not started with) runs the search;
 //! the SECOND (the entry unchanged) activates the selected row. [`enter_action`]
@@ -111,10 +108,8 @@ const SEARCH_MAX_ROWS: usize = 200;
 /// The CHARACTER budget handed to [`context_window`] when trimming a matched line
 /// down to a row label.
 ///
-/// Fixed, unlike macOS's `SearchBudgetSeam.charBudget`, which derives its budget
-/// from the measured advance of a resizable sidebar: this overlay's box is a fixed
-/// [`SEARCH_BOX_WIDTH`] wide, so a measurement would return the same number every
-/// time.
+/// Fixed rather than measured: this overlay's box is a fixed [`SEARCH_BOX_WIDTH`]
+/// wide, so a measurement would return the same number every time.
 const SEARCH_CHAR_BUDGET: usize = 90;
 
 /// Capacity of the search's wake channel. One slot is enough: it coalesces a burst
@@ -134,7 +129,7 @@ const SEARCH_LIST_MAX_HEIGHT: i32 = 400;
 
 /// The glyph a row label carries on each side [`context_window`] reported it had
 /// trimmed. Adding it is the front-end's job; see [`wolf_core::ContextWindow`] for
-/// why. The same glyph as `SearchView.swift`'s `ellipsis` (`U+2026`).
+/// why.
 const ELLIPSIS: &str = "…";
 
 /// Separates a row label's `"<file>:<line>"` prefix from its windowed line text.
@@ -219,14 +214,11 @@ pub fn open_decision(liveness: Option<Liveness>, project_open: bool) -> SearchOp
 /// The [`SearchOptions`] this front-end ships for `query`: a LITERAL,
 /// CASE-INSENSITIVE search over EVERY file.
 ///
-/// All three are decisions, and none of them is exposed as a toggle (macOS's three
-/// toggle buttons have no Linux counterpart, and `SearchToggleSeam`'s seeds are
-/// therefore unread here):
+/// All three are decisions, and none of them is exposed as a toggle:
 ///
-/// - `use_regex: false` — macOS defaults regex ON *and gives the user a `.*` button
-///   to turn it off*. Without the button a regex default is a trap: `foo(bar` gives
-///   rg exit code 2, an error status, zero results and no way to recover. A literal
-///   search is total over every query string.
+/// - `use_regex: false` — without a button to turn it off, a regex default is a
+///   trap: `foo(bar` gives rg exit code 2, an error status, zero results and no way
+///   to recover. A literal search is total over every query string.
 /// - `case_sensitive: false` — with no toggle and no `ignorecase()` read (that call
 ///   is a blocking RPC this crate deliberately does not add), the forgiving default
 ///   is the only one a user can reach.

@@ -2,15 +2,12 @@
 //! Edit press may be issued at all, whether a frame may be rendered, when a bound
 //! web view must be reloaded, and what a preview pane's statusbar reads.
 //!
-//! A port of `WolfKeyMap`'s `PreviewSeam` and `EditSeam` (see
-//! `crates/wolf-macos/Sources/WolfKeyMap/README.md`), joined into one module
-//! because Preview and Edit are inverses decided against the same pane mode, and a
-//! reader who has only one of them in front of them is exactly the reader who
-//! inverts the gate's polarity. Data in, data out — no widget type, no
-//! `webkit6::WebView`, no `WolfCore` — which is what lets the whole rulebook be
-//! unit-tested headlessly, the way [`crate::nav_ui`] and [`crate::clipboard_ui`]
-//! are. The widget work of carrying the answers out lives in
-//! [`crate::pane_view`].
+//! Preview and Edit share one module because they are inverses decided against the same
+//! pane mode, and a reader who has only one of them in front of them is exactly the reader
+//! who inverts the gate's polarity. Data in, data out — no widget type, no
+//! `webkit6::WebView`, no `WolfCore` — which is what lets the whole rulebook be unit-tested
+//! headlessly, the way [`crate::nav_ui`] and [`crate::clipboard_ui`] are. The widget work
+//! of carrying the answers out lives in [`crate::pane_view`].
 //!
 //! ## Placement is not this seam's decision
 //!
@@ -66,8 +63,7 @@
 //! because **two freshly opened files share a `changedtick`**. A gate keyed on the
 //! tick alone therefore suppresses the reload exactly when a reused preview pane
 //! switches which source it shows, leaving the previous document on screen under
-//! the new file's statusbar. That is the defect `PreviewSeam.PreviewLoad` records
-//! on macOS, and `needs_reload_table`'s fourth row is the only place in
+//! the new file's statusbar. `needs_reload_table`'s fourth row is the only place in
 //! this crate that can see it.
 //!
 //! Nothing on this path may be gated on `Snapshot::seq`: the `wolf_*` notifications
@@ -1195,9 +1191,8 @@ mod tests {
     ///
     /// **Row 4 is the row that matters, and it is the reason this seam keys on a
     /// pair.** Two freshly opened files share a `changedtick`, so a reused preview
-    /// pane switching sources presents a NEW buffer at the SAME tick. That is the
-    /// defect `PreviewSeam.PreviewLoad` records on macOS, and its symptom is quiet:
-    /// the previous document stays on screen under the new file's statusbar, so the
+    /// pane switching sources presents a NEW buffer at the SAME tick. The symptom is
+    /// quiet: the previous document stays on screen under the new file's statusbar, so the
     /// preview looks alive and is simply wrong.
     ///
     /// Row 6 is what keeps row 4 from being satisfied by the opposite mistake. Rows

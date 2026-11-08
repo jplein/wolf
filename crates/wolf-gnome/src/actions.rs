@@ -141,14 +141,14 @@ pub struct ActionBinding {
 /// chord that would shadow a Neovim key must fail the tests when it is RESERVED,
 /// not later when it is finally bound.
 pub const ACTION_TABLE: &[ActionBinding] = &[
-    // --- File-ish actions (macOS File menu) ---------------------------------
+    // --- File-ish actions ---
     ActionBinding {
         action: "win.go-to-file",
         accel: Some("<Control><Shift>o"),
         ctrl_fold: None,
         command: Some(Command::GoToFile),
         status: BindingStatus::Bound,
-        note: "macOS Cmd+O; gives up only the Ctrl+Shift alias for <C-o>, which is still typed as \
+        note: "gives up only the Ctrl+Shift alias for <C-o>, which is still typed as \
                plain Ctrl+O",
     },
     ActionBinding {
@@ -157,7 +157,7 @@ pub const ACTION_TABLE: &[ActionBinding] = &[
         ctrl_fold: None,
         command: Some(Command::OpenFolder),
         status: BindingStatus::MenuOnly,
-        note: "macOS Shift+Cmd+O; reached from the primary menu and the empty state's button, so \
+        note: "reached from the primary menu and the empty state's button, so \
                no chord is spent on it",
     },
     ActionBinding {
@@ -166,8 +166,7 @@ pub const ACTION_TABLE: &[ActionBinding] = &[
         ctrl_fold: None,
         command: Some(Command::OpenFile),
         status: BindingStatus::MenuOnly,
-        note: "no macOS accelerator either (NSOpenPanel is menu-only there); reached from the \
-               primary menu",
+        note: "menu-only; reached from the primary menu",
     },
     ActionBinding {
         action: "win.new-buffer",
@@ -175,7 +174,7 @@ pub const ACTION_TABLE: &[ActionBinding] = &[
         ctrl_fold: None,
         command: Some(Command::NewBuffer),
         status: BindingStatus::Bound,
-        note: "macOS Cmd+N; gives up only the Ctrl+Shift alias for <C-n>, which is still typed as \
+        note: "gives up only the Ctrl+Shift alias for <C-n>, which is still typed as \
                plain Ctrl+N",
     },
     ActionBinding {
@@ -184,8 +183,7 @@ pub const ACTION_TABLE: &[ActionBinding] = &[
         ctrl_fold: None,
         command: Some(Command::NewWindow),
         status: BindingStatus::MenuOnly,
-        note:
-            "macOS Shift+Cmd+N; menu-only because Ctrl+Shift+N is spent on win.new-buffer and no \
+        note: "menu-only because Ctrl+Shift+N is spent on win.new-buffer and no \
                Ctrl+Shift+<letter> is free, so the menu, the palette and :WolfNewWindow are its \
                routes",
     },
@@ -195,7 +193,7 @@ pub const ACTION_TABLE: &[ActionBinding] = &[
         ctrl_fold: None,
         command: Some(Command::NewTab),
         status: BindingStatus::Bound,
-        note: "macOS Cmd+T; opens a native tab over this window's core, and gives up only the \
+        note: "opens a native tab over this window's core, and gives up only the \
                Ctrl+Shift alias for <C-t>",
     },
     ActionBinding {
@@ -204,7 +202,7 @@ pub const ACTION_TABLE: &[ActionBinding] = &[
         ctrl_fold: None,
         command: None,
         status: BindingStatus::Bound,
-        note: "macOS Cmd+S; front-end-only, since the registry carries no Save command, and gives \
+        note: "front-end-only, since the registry carries no Save command, and gives \
                up only the Ctrl+Shift alias for <C-s> (LSP signature help in i/v/s), which is \
                still typed as plain Ctrl+S",
     },
@@ -214,7 +212,7 @@ pub const ACTION_TABLE: &[ActionBinding] = &[
         ctrl_fold: None,
         command: None,
         status: BindingStatus::MenuOnly,
-        note: "macOS Shift+Cmd+S; menu-only because Ctrl+Shift+S is spent on win.save and no \
+        note: "menu-only because Ctrl+Shift+S is spent on win.save and no \
                Ctrl+Shift+<letter> is free, the app.new-window precedent, so the primary menu is \
                its only route",
     },
@@ -224,7 +222,7 @@ pub const ACTION_TABLE: &[ActionBinding] = &[
         ctrl_fold: None,
         command: Some(Command::ClosePane),
         status: BindingStatus::Bound,
-        note: "macOS Cmd+W; gives up only the Ctrl+Shift alias for <C-w>, the window-command \
+        note: "gives up only the Ctrl+Shift alias for <C-w>, the window-command \
                prefix, which is still typed as plain Ctrl+W",
     },
     ActionBinding {
@@ -233,7 +231,7 @@ pub const ACTION_TABLE: &[ActionBinding] = &[
         ctrl_fold: None,
         command: Some(Command::CloseWindow),
         status: BindingStatus::MenuOnly,
-        note: "macOS Shift+Cmd+W; the GNOME shell already closes a window, so this is menu-only",
+        note: "the GNOME shell already closes a window, so this is menu-only",
     },
     ActionBinding {
         action: "win.minimize-window",
@@ -241,7 +239,7 @@ pub const ACTION_TABLE: &[ActionBinding] = &[
         ctrl_fold: None,
         command: Some(Command::MinimizeWindow),
         status: BindingStatus::MenuOnly,
-        note: "macOS Cmd+M; the GNOME shell owns minimize, so the command is dispatched but no \
+        note: "the GNOME shell owns minimize, so the command is dispatched but no \
                chord is bound",
     },
     ActionBinding {
@@ -250,7 +248,7 @@ pub const ACTION_TABLE: &[ActionBinding] = &[
         ctrl_fold: None,
         command: Some(Command::QuitApplication),
         status: BindingStatus::Bound,
-        note: "macOS Cmd+Q; gives up only the Ctrl+Shift alias for <C-q> (= CTRL-V in \
+        note: "gives up only the Ctrl+Shift alias for <C-q> (= CTRL-V in \
                insert/cmdline), which is still typed as plain Ctrl+Q",
     },
     // --- The command-palette overlay -----------------------------------------
@@ -260,7 +258,7 @@ pub const ACTION_TABLE: &[ActionBinding] = &[
         ctrl_fold: None,
         command: Some(Command::CommandPalette),
         status: BindingStatus::Bound,
-        note: "macOS Cmd+P; the strongest Linux idiom for this chord, and gives up only the \
+        note: "the strongest Linux idiom for this chord, and gives up only the \
                Ctrl+Shift alias for <C-p>",
     },
     // --- The buffer-picker overlay -------------------------------------------
@@ -270,7 +268,7 @@ pub const ACTION_TABLE: &[ActionBinding] = &[
         ctrl_fold: None,
         command: Some(Command::BufferPicker),
         status: BindingStatus::Bound,
-        note: "macOS Cmd+E; gives up only the Ctrl+Shift alias for <C-e> (scroll down one line), \
+        note: "gives up only the Ctrl+Shift alias for <C-e> (scroll down one line), \
                which is still typed as plain Ctrl+E",
     },
     // --- The project-search overlay ------------------------------------------
@@ -280,7 +278,7 @@ pub const ACTION_TABLE: &[ActionBinding] = &[
         ctrl_fold: None,
         command: Some(Command::SearchInProject),
         status: BindingStatus::Bound,
-        note: "macOS Shift+Cmd+F; gives up only the Ctrl+Shift alias for <C-f> (page forward), \
+        note: "gives up only the Ctrl+Shift alias for <C-f> (page forward), \
                which is still typed as plain Ctrl+F",
     },
     // --- The system clipboard -------------------------------------------------
@@ -290,7 +288,7 @@ pub const ACTION_TABLE: &[ActionBinding] = &[
         ctrl_fold: None,
         command: Some(Command::Copy),
         status: BindingStatus::Bound,
-        note: "macOS Cmd+C; the GNOME Terminal spelling, and gives up only the Ctrl+Shift alias \
+        note: "the GNOME Terminal spelling, and gives up only the Ctrl+Shift alias \
                for <C-c>, the INTERRUPT, which is still typed as plain Ctrl+C",
     },
     ActionBinding {
@@ -299,7 +297,7 @@ pub const ACTION_TABLE: &[ActionBinding] = &[
         ctrl_fold: None,
         command: Some(Command::Paste),
         status: BindingStatus::Bound,
-        note: "macOS Cmd+V; the GNOME Terminal spelling, and gives up only the Ctrl+Shift alias \
+        note: "the GNOME Terminal spelling, and gives up only the Ctrl+Shift alias \
                for <C-v>, visual BLOCK, which is still typed as plain Ctrl+V",
     },
     // --- The file-tree sidebar ------------------------------------------------
@@ -309,7 +307,7 @@ pub const ACTION_TABLE: &[ActionBinding] = &[
         ctrl_fold: None,
         command: Some(Command::ToggleSidebar),
         status: BindingStatus::Bound,
-        note: "macOS Ctrl+Cmd+S; B is the cross-platform sidebar letter and gives up only the \
+        note: "B is the cross-platform sidebar letter and gives up only the \
                Ctrl+Shift alias for <C-b>",
     },
     // --- Reserved for later units (declared here so the scheme is auditable) --
@@ -319,7 +317,7 @@ pub const ACTION_TABLE: &[ActionBinding] = &[
         ctrl_fold: None,
         command: Some(Command::IncreaseFontSize),
         status: BindingStatus::Reserved,
-        note: "macOS Cmd+=; <C-=> has no built-in Neovim meaning, so the idiomatic bare-Ctrl \
+        note: "<C-=> has no built-in Neovim meaning, so the idiomatic bare-Ctrl \
                chord is safe here",
     },
     ActionBinding {
@@ -328,7 +326,7 @@ pub const ACTION_TABLE: &[ActionBinding] = &[
         ctrl_fold: None,
         command: Some(Command::DecreaseFontSize),
         status: BindingStatus::Reserved,
-        note: "macOS Cmd+-; <C--> has no built-in Neovim meaning, so the idiomatic bare-Ctrl \
+        note: "<C--> has no built-in Neovim meaning, so the idiomatic bare-Ctrl \
                chord is safe here",
     },
     ActionBinding {
@@ -337,7 +335,7 @@ pub const ACTION_TABLE: &[ActionBinding] = &[
         ctrl_fold: None,
         command: Some(Command::ResetFontSize),
         status: BindingStatus::Reserved,
-        note: "macOS Cmd+0; assumed free because <C-0> has no index.txt entry, which is an \
+        note: "assumed free because <C-0> has no index.txt entry, which is an \
                assumption and not a verified fact",
     },
     ActionBinding {
@@ -346,7 +344,7 @@ pub const ACTION_TABLE: &[ActionBinding] = &[
         ctrl_fold: Some(0x00),
         command: Some(Command::Terminal),
         status: BindingStatus::Bound,
-        note: "macOS Ctrl+`; MEASURED free (nothing maps <C-`> in n/i/v/t/c and helpgrep finds \
+        note: "MEASURED free (nothing maps <C-`> in n/i/v/t/c and helpgrep finds \
                nothing), and the price is the BACKTICK spelling of <C-@>, since Ctrl+backtick \
                folds to NUL — Ctrl+Shift+2 (keyval `at`) survives unbound and still types it",
     },
@@ -356,7 +354,7 @@ pub const ACTION_TABLE: &[ActionBinding] = &[
         ctrl_fold: None,
         command: None,
         status: BindingStatus::Bound,
-        note: "macOS Cmd+[; front-end-only navigation with no Command variant, and capturing \
+        note: "front-end-only navigation with no Command variant, and capturing \
                <A-Left> PREVENTS the destructive <Esc>+<Left> split",
     },
     ActionBinding {
@@ -365,7 +363,7 @@ pub const ACTION_TABLE: &[ActionBinding] = &[
         ctrl_fold: None,
         command: None,
         status: BindingStatus::Bound,
-        note: "macOS Cmd+]; front-end-only navigation with no Command variant, and capturing \
+        note: "front-end-only navigation with no Command variant, and capturing \
                <A-Right> PREVENTS the destructive <Esc>+<Right> split",
     },
     ActionBinding {
@@ -374,7 +372,7 @@ pub const ACTION_TABLE: &[ActionBinding] = &[
         ctrl_fold: None,
         command: None,
         status: BindingStatus::MenuOnly,
-        note: "no macOS counterpart in the registry; About is the one surface on this front-end \
+        note: "no registry command; About is the one surface on this front-end \
                that carries the bundled fonts' licence notices, and it is menu-only so it spends \
                no chord",
     },
@@ -2205,10 +2203,9 @@ mod tests {
     /// accelerator is SKIPPED by all four rather than checked by them, and the
     /// property has to be stated somewhere.
     ///
-    /// **Why this row spends no chord is a collision, not a preference.** macOS
-    /// gives New Window Shift+Cmd+N, and the Linux transliteration of that is
-    /// Ctrl+Shift+N — which `win.new-buffer` already holds (macOS Cmd+N), and
-    /// `Ctrl+Shift+<letter>` is the whole of this front-end's available namespace.
+    /// **Why this row spends no chord is a collision, not a preference.**
+    /// `Ctrl+Shift+N` belongs to `win.new-buffer`, and no `Ctrl+Shift+<letter>` is
+    /// free (`notes/wolf-gnome-decisions.md#the-accelerator-namespace`).
     /// Giving this row that chord would not merely duplicate a binding: GTK
     /// resolves a duplicate to ONE action, so New would silently stop firing.
     ///
@@ -2246,13 +2243,12 @@ mod tests {
 
         assert_eq!(
             binding.accel, None,
-            "the {NEW_WINDOW_ACTION:?} row declares an accelerator ({:?}). The Linux \
-             transliteration of macOS's Shift+Cmd+N is Ctrl+Shift+N, which `win.new-buffer` \
-             already holds, and `Ctrl+Shift+<letter>` is the whole of this front-end's available \
-             namespace — GTK resolves a duplicate chord to ONE action, so spelling it here would \
-             silently stop New from firing rather than give New Window a chord. It would also \
-             start this row being evaluated by `no_accel_makes_a_neovim_key_unreachable`, the \
-             test that decides whether a Neovim key just became unreachable.",
+            "the {NEW_WINDOW_ACTION:?} row declares an accelerator ({:?}). Ctrl+Shift+N belongs to \
+             `win.new-buffer`, and no `Ctrl+Shift+<letter>` is free — GTK resolves a duplicate \
+             chord to ONE action, so spelling it here would silently stop New from firing rather \
+             than give New Window a chord. It would also start this row being evaluated by \
+             `no_accel_makes_a_neovim_key_unreachable`, the test that decides whether a Neovim key \
+             just became unreachable.",
             binding.accel
         );
         assert_eq!(
@@ -2311,13 +2307,12 @@ mod tests {
     /// no accelerator is SKIPPED by all four rather than checked by them, and the
     /// property has to be stated somewhere.
     ///
-    /// **Why this row spends no chord is a collision, not a preference.** macOS gives
-    /// Save As Shift+Cmd+S, whose Linux transliteration is Ctrl+Shift+S — which
-    /// `win.save` holds (macOS Cmd+S), and `Ctrl+Shift+<letter>` is the whole of this
-    /// front-end's available namespace. The table already answers that collision the
-    /// same way twice, at `app.new-window` against `win.new-buffer` and at
-    /// `win.open-folder` against `win.go-to-file`: the plain-Cmd row takes the chord
-    /// and the Shift+Cmd sibling goes to the menu.
+    /// **Why this row spends no chord is a collision, not a preference.**
+    /// `Ctrl+Shift+S` belongs to `win.save`, and no `Ctrl+Shift+<letter>` is free
+    /// (`notes/wolf-gnome-decisions.md#the-accelerator-namespace`). The table already
+    /// answers that collision the same way twice, at `app.new-window` against
+    /// `win.new-buffer` and at `win.open-folder` against `win.go-to-file`: one row
+    /// takes the chord and its sibling goes to the menu.
     ///
     /// **It is sharper here than at New Window**, and that is why the `listed`
     /// assertion below is load-bearing rather than tidy. New Window carries
@@ -2366,16 +2361,15 @@ mod tests {
 
         assert_eq!(
             binding.accel, None,
-            "the {SAVE_AS_ACTION:?} row declares an accelerator ({:?}). The Linux transliteration \
-             of macOS's Shift+Cmd+S is Ctrl+Shift+S, which `win.save` already holds, and \
-             `Ctrl+Shift+<letter>` is the whole of this front-end's available namespace. A chord \
-             here does not give Save As one: both `set_accels_for_action` and `action_for_key` \
-             walk `bound_bindings()`, so a MenuOnly row's spelling is registered by nothing and \
-             matched by nothing — it is a declaration a reviewer reads as a price this row pays \
-             while it pays none. Promoting the row too would not help, since `action_for_key` \
-             returns the FIRST matching row and `win.save` precedes it here. It would also start \
-             this row being evaluated by `no_accel_makes_a_neovim_key_unreachable`, the test that \
-             decides whether a Neovim key just became unreachable.",
+            "the {SAVE_AS_ACTION:?} row declares an accelerator ({:?}). Ctrl+Shift+S belongs to \
+             `win.save`, and no `Ctrl+Shift+<letter>` is free. A chord here does not give Save As \
+             one: both `set_accels_for_action` and `action_for_key` walk `bound_bindings()`, so a \
+             MenuOnly row's spelling is registered by nothing and matched by nothing — it is a \
+             declaration a reviewer reads as a price this row pays while it pays none. Promoting \
+             the row too would not help, since `action_for_key` returns the FIRST matching row and \
+             `win.save` precedes it here. It would also start this row being evaluated by \
+             `no_accel_makes_a_neovim_key_unreachable`, the test that decides whether a Neovim key \
+             just became unreachable.",
             binding.accel
         );
         assert_eq!(

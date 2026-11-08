@@ -25,9 +25,8 @@
 //! ## The thumb sits in the pane's right PADDING GUTTER
 //!
 //! [`scrollbar_thumb`] measures `x` from the PANE's right edge, not from the grid
-//! rectangle's, as macOS's `ScrollbarGeometry` does: measured from the grid
-//! rectangle, the bar would overlap the last text column in any pane narrower than
-//! the column cap. With
+//! rectangle's: measured from the grid rectangle, the bar would overlap the last
+//! text column in any pane narrower than the column cap. With
 //! [`SCROLLBAR_THICKNESS_PX`] plus [`SCROLLBAR_MARGIN_PX`] no wider than
 //! [`crate::editor_inset::EDITOR_PADDING_PX`], the thumb lies wholly inside padding
 //! that has already been subtracted, so it never covers a glyph at any pane width,
@@ -41,20 +40,21 @@
 //!
 //! ## Only the thumb is drawn, and there is no track
 //!
-//! macOS fades its overlay bar out on a repeating 30 Hz timer. `notes/wolf-gnome-decisions.md`
-//! "Threading and the wake" states that nothing polls and no timer is periodic, so
-//! this crate cannot port the fade, and the bar is therefore always visible. A
+//! Unlike the macOS bar
+//! (`crates/wolf-macos/Sources/WolfKeyMap/README.md#scrollbargeometryswift`), this
+//! one never fades: `notes/wolf-gnome-decisions.md` "Threading and the wake" states
+//! that nothing polls and no timer is periodic, so the bar is always visible. A
 //! permanently visible full-height trough is a GNOME-unidiomatic ornament, and it is
 //! a tall thin high-contrast mark on every OCR page whose buffer overflows — an
 //! avoidable risk for no signal. GNOME's own idiom is an overlay indicator with no
-//! visible trough at rest, which is macOS's steady state minus the fade.
+//! visible trough at rest.
 //!
 //! ## `Viewport::curline` is deliberately unread
 //!
 //! The thumb's position comes from `topline` and its height from
 //! `botline - topline`, both against `linecount`. Where the CURSOR sits inside that
-//! range is not a scrollbar's subject — macOS ignores it too — and reading it would
-//! make the thumb jump on a cursor move that scrolled nothing.
+//! range is not a scrollbar's subject, and reading it would make the thumb jump on a cursor
+//! move that scrolled nothing.
 
 use crate::editor_inset::GridRect;
 use crate::statusbar_layout::blend;
@@ -94,7 +94,7 @@ pub struct ScrollbarThumb {
 /// **Every field is widened BEFORE any subtraction**, and that ordering is the
 /// rule rather than a style: `botline - topline` taken in `u64` on a malformed
 /// viewport is an overflow, which is a debug-build PANIC and not merely a wrapped
-/// value. macOS has the same rule for a weaker reason.
+/// value.
 #[allow(
     clippy::cast_precision_loss,
     reason = "a buffer line count above 2^53 is unreachable, and the alternative — subtracting in \
@@ -251,8 +251,9 @@ mod tests {
     /// narrower than its own gutter. **Row 6 is not**: a
     /// `botline` below its `topline` is what a `u64` subtraction panics on in a debug
     /// build, so the rule that every viewport field is widened to `f64` BEFORE any
-    /// subtraction is stricter here than macOS's reason for the same rule. A malformed
-    /// viewport must produce no thumb, not a crashed front-end.
+    /// subtraction is what turns a malformed viewport into `None` rather than a
+    /// debug-build panic. A malformed viewport must produce no thumb, not a crashed
+    /// front-end.
     ///
     /// FALSIFYING EDITS. Each names the edit, the row it fires on, and the verbatim
     /// failure measured for it.

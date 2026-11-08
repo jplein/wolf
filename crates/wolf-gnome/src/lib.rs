@@ -3,326 +3,48 @@
 //! The pure, widget-free *seams* — everything that can be verified headlessly, with
 //! no display server and no window:
 //!
-//! - [`gdk_key`]: translates a GDK keyval + modifier state into a toolkit-neutral
-//!   [`wolf_core::KeyEvent`], honoring the shift-glyph contract.
-//! - [`mod@im_ui`]: the COMPOSED and INPUT-METHOD entry rulebook that stands in
-//!   front of [`gdk_key`] — what one window-level key event is routed to
-//!   ([`im_ui::key_route`], over [`im_ui::KeyPhase`] and [`im_ui::KeyRoute`]), and
-//!   what one `commit` string from the window's `gtk::IMMulticontext` becomes
-//!   ([`im_ui::commit_keys`]: one modifier-free `Key::Char` per `char`, in order,
-//!   with every control character dropped, since a committed `\u{1b}` would reach
-//!   Neovim as a raw ESC). [`im_ui::commit_decision`] is the same overlay guard on
-//!   the commit path, and answers an [`im_ui::CommitDecision`]. The precedence is a
-//!   VALUE rather than prose because offering a key to the input method is a SIDE
-//!   EFFECT — a dead key it accepts is swallowed into a pending compose state — so
-//!   the overlay guard must short-circuit before the offer, which is why the
-//!   answer is staged over an `Option<bool>` the glue fills in only once it has
-//!   been licensed to ask.
-//! - [`paint`]: paints a [`wolf_core::Snapshot`] onto a Cairo context (an offscreen
-//!   `ImageSurface` in tests, a `DrawingArea` context in production).
-//! - [`mod@glyph_style`]: the DECORATION half of that paint, as data — one cell's
-//!   [`wolf_core::ResolvedStyle`] to the underline, undercurl and strikethrough
-//!   Pango is asked for and the colour the first two take
-//!   ([`glyph_style::glyph_decoration`]), plus the 8-bit to 16-bit channel widening
-//!   Pango's colour attributes need ([`glyph_style::pango_channels`]). Pango's
-//!   underline attribute is SINGLE-VALUED per run, so `underline` and `undercurl`
-//!   cannot coexist and undercurl wins; the wave is Pango's own
-//!   `Underline::Error`, never a hand-stroked Cairo path.
-//! - [`grid_size_for`]: the pure pixel-to-grid geometry used by the window's
-//!   resize handler (testable without GTK).
-//! - [`cell_at`]: the POINTER half of that same geometry, in the same file — a
-//!   WIDGET-LOCAL pixel position plus the live grid extent to the grid cell
-//!   `(row, col)` it lands on, clamped to the NEAREST EDGE cell (never rejected),
-//!   which is what makes a drag past the pane edge keep extending.
-//! - [`mouse`]: the pointer-translation rulebook, the analogue of [`gdk_key`] — a
-//!   GDK button number + modifier state to a [`wolf_core::MouseButton`] plus the
-//!   three modifier bools Neovim's mouse grammar carries
-//!   ([`mouse::mouse_input`]); the per-`gdk::ScrollUnit` "one line step"
-//!   threshold ([`mouse::scroll_threshold`]); the carried signed sub-threshold
-//!   scroll remainder ([`mouse::ScrollAccumulator`]) and the per-pane
-//!   remainder-plus-target-grid value that discards the carry when the grid
-//!   changes ([`mouse::PaneScroll`]); and the signed step count to a
-//!   [`wolf_core::ScrollDirection`] plus a POSITIVE repeat count
-//!   ([`mouse::scroll_steps`]).
-//! - [`cursor`]: the pure, GTK-free cursor geometry ([`cursor::cursor_rect`]) and
-//!   mode-aware color logic ([`cursor::cursor_colors`]).
-//! - [`mod@cell_metrics_math`]: the cell-metrics arithmetic the configured
-//!   `line-height` drives — the cell height as a function of the font size alone
-//!   ([`cell_metrics_math::cell_height`]) and the baseline that centres the glyph
-//!   box within it ([`cell_metrics_math::baseline`]). A port of
-//!   `WolfKeyMap/CellMetricsMath.swift`, sharing its two guards, which that
-//!   module's docs name.
-//! - [`mod@editor_inset`]: the chrome around a pane's text grid, as arithmetic —
-//!   the pane-local rectangle the grid paints into
-//!   ([`editor_inset::grid_rect`]), the pane-to-grid coordinate map every pointer
-//!   event routes through ([`editor_inset::grid_local`]), the grid size that
-//!   survives the chrome ([`editor_inset::grid_size_for_pane`], a composition on
-//!   top of the unchanged [`grid_size_for`]), and the pane content floor that
-//!   still leaves one whole cell ([`editor_inset::min_pane_size`]). The
-//!   content-width cap lives here too: [`editor_inset::MAX_GRID_COLS`] columns,
-//!   carried as an [`editor_inset::ColumnCap`] that both the rectangle's width and
-//!   the grid's column count are reduced by, and selected from a window's
-//!   `b:wolf_full_width` flag in the one place that flag becomes geometry
-//!   ([`editor_inset::column_cap`]). The centring offset the cap produces rides in
-//!   the rectangle's `x`, so every consumer reads one origin.
-//! - [`mod@frame_stats`]: the FRAME-TIME rulebook behind the off-by-default
-//!   keystroke-to-pixel measurement — the bucket set and its two families, which
-//!   are `wake` and `draw` rather than one tree ([`frame_stats::Bucket`]); the
-//!   exact counters and the bounded percentile window one report is built from
-//!   ([`frame_stats::FrameStats`]); the nearest-rank percentile, which always
-//!   answers a value some frame actually took ([`frame_stats::percentile`]); the
-//!   byte-exact table the two front-ends are meant to be `diff`ed on
-//!   ([`frame_stats::format_report`]); the three `WOLF_FRAME_STATS*` parsers, which
-//!   take the RAW value rather than an environment map
-//!   ([`frame_stats::is_enabled`], [`frame_stats::report_interval`]); and the emit
-//!   gate ([`frame_stats::interval_elapsed`]). It reads no clock and holds no
-//!   state: the process-global glue that does both is [`mod@frame_metrics`], which
-//!   is deliberately not a seam.
-//! - [`mod@ready_seam`]: the test-only READINESS FILE's predicate — when a
-//!   launch's windows accept keystrokes, as a function of per-window readings
-//!   ([`ready_seam::launch_readiness`], which answers the first unmet
-//!   [`ready_seam::Blocker`]), plus the `WOLF_READY_FILE` parser, the file's
-//!   contents and the report-once-per-change rule ([`ready_seam::next_step`]). The
-//!   coordinator gathers the readings and does the I/O.
-//! - [`mod@scrollbar`]: the projection of a Neovim window's `win_viewport` onto a
-//!   pane-local thumb rectangle ([`scrollbar::scrollbar_thumb`]) and that thumb's
-//!   colour over the editor's own background
-//!   ([`scrollbar::scrollbar_thumb_color`]). The thumb sits in the pane's right
-//!   PADDING gutter rather than at the grid rectangle's right edge, so it covers no
-//!   glyph and costs the grid no column; there is no track, and no widget.
-//! - [`mod@statusbar_layout`]: the per-pane statusbar rulebook — the strip's
-//!   height and its two line boxes ([`statusbar_layout::statusbar_layout`]), the
-//!   second line's font size ([`statusbar_layout::secondary_font_size`]), and the
-//!   colour-and-weight rule that is the WHOLE active/inactive treatment
-//!   ([`statusbar_layout::statusbar_text`]), since the pane body is painted
-//!   identically either way.
-//! - [`mod@cmdline_ui`]: the rulebook behind the command-line strip and the two
-//!   overlay surfaces above it — the column a BYTE offset into the command line
-//!   lands on, which the caret and the popup's cmdline anchor share so the two
-//!   cannot drift apart ([`cmdline_ui::cmdline_columns`]); the toast's height
-//!   budget, the slice that budget shows, the offset a scroll gesture's step count
-//!   lands on and the clamp under it, the width that slice measures, and the offset
-//!   carried into the next frame ([`cmdline_ui::toast_budget_rows`],
-//!   [`cmdline_ui::toast_view`], [`cmdline_ui::toast_scroll_next`],
-//!   [`cmdline_ui::toast_scroll_clamp`], [`cmdline_ui::toast_width_cols`],
-//!   [`cmdline_ui::carried_scroll`]); whether the surface is on screen at all
-//!   ([`cmdline_ui::toast_is_shown`]) and whether a prompt that was showing has
-//!   stopped ([`cmdline_ui::prompt_answered`]); and the completion popup's
-//!   selection, visible slice, row label and width in cells
-//!   ([`cmdline_ui::pum_selection`], [`cmdline_ui::pum_view`],
-//!   [`cmdline_ui::pum_item_label`], [`cmdline_ui::pum_width_cols`]).
-//! - [`mod@config_seam`]: the rules for CONSUMING a [`wolf_core::WolfConfig`] —
-//!   the `WOLF_FONT_PT`-over-`font-size` precedence
-//!   ([`config_seam::resolve_font_pt`], which takes the override as an argument so
-//!   the rule is testable without the process environment).
-//! - [`mod@init_lua`]: where the captive `runtime/nvim/init.lua` lives, as a
-//!   function of values — the `WOLF_INIT_LUA` override
-//!   ([`init_lua::INIT_LUA_ENV`]), then the installed tree beside the executable
-//!   ([`init_lua::INSTALLED_INIT_LUA_RELATIVE`], the contract with the Nix package's
-//!   install layout), then the build-tree fallback the caller supplies
-//!   ([`init_lua::resolve_init_lua`]). The environment read, the `current_exe()`
-//!   read and the existence probe are all `app.rs`'s, injected here as arguments,
-//!   in the same shape [`mod@config_seam`] takes its override.
-//! - [`mod@appearance`]: the OS DARK/LIGHT rulebook — the TOTAL
-//!   `(`[`wolf_core::Appearance`]`, os_dark)` →
-//!   [`appearance::ResolvedAppearance`] resolution
-//!   ([`appearance::appearance_decision`]), which answers all three of what
-//!   `background` is pushed into Neovim, what colour scheme the GTK chrome is set
-//!   to, and whether a live desktop toggle is followed at all. The desktop's
-//!   reading is INJECTED rather than read here, because
-//!   `adw::StyleManager::default()` asserts an initialized main thread;
-//!   [`appearance::apply_at_launch`] is the glue that makes that one call and
-//!   carries the answer out.
-//! - [`layout`] / [`tree`]: the pure pane tree and the hierarchical file-tree
-//!   projection.
-//! - [`mod@drawer`]: the TERMINAL DRAWER's rulebook, for the one pane that lives
-//!   OUTSIDE [`layout`]'s tree — how the pane area divides between the editor
-//!   region and the full-width bottom strip at a fixed
-//!   [`drawer::DRAWER_WEIGHT`] ([`drawer::drawer_split`]), and the whole
-//!   editor <-> drawer focus bridge as one value ([`drawer::focus_target`], over
-//!   [`drawer::drawer_up_target`] / [`drawer::bottom_most_leaf`] and the bound-pane
-//!   plus most-recently-used-editor pair [`drawer::DrawerState`]). That bridge is
-//!   not a convenience: `<C-w>k` from the drawer is a PURE intent Neovim declines to
-//!   act on, so without an answer here the drawer is a room with no exit. A merge of
-//!   `WolfKeyMap/DrawerLayout.swift` and `WolfKeyMap/DrawerFocusSeam.swift`, with
-//!   one deliberate divergence named in that module's docs.
-//! - [`ui_action_for`]: the TOTAL [`wolf_core::Command`] → [`UiAction`] mapping the
-//!   command drain dispatches through ([`command_action`]).
-//! - [`mod@palette`]: the command-palette rulebook — the candidate list this
-//!   front-end may show ([`palette::palette_rows`], which ranks unbounded and
-//!   applies its cap after filtering); the recent directories it may offer as
-//!   Open Recent rows, which refuse the window's own working directory, a path
-//!   whose directory has gone, and a relative one
-//!   ([`palette::open_recent_candidates`]); and the TOTAL
-//!   [`wolf_core::PaletteRowKind`] → [`palette::PaletteAction`] classification that
-//!   keeps a row `wolf-gnome` cannot perform out of the list, and turns a folder row
-//!   into a [`palette::PaletteAction::OpenRecentFolder`] carrying a directory and no
-//!   window target ([`palette::palette_action_for`]).
-//! - [`mod@buffer_picker`]: the buffer-picker rulebook — the TOTAL
-//!   `Option<`[`wolf_core::Liveness`]`>` → [`buffer_picker::OpenDecision`] guard
-//!   that refuses to issue the candidate snapshot's BLOCKING RPC unless the core
-//!   is alive ([`buffer_picker::open_decision`]), the first-open preselection of
-//!   ROW 1 — the most-recently-used OTHER buffer, so a bare `Enter` is a switch
-//!   rather than a no-op — and the `(win, bufnr)` pair `Enter` resolves to
-//!   ([`buffer_picker::switch_target`], which refuses an active window of `0`
-//!   exactly as `wolf-ffi` does), plus the row's display label. Selection movement
-//!   and activation come from [`mod@picker`], whose `next_selection`,
-//!   `restored_index` and `activation_index` all four overlays share.
-//! - [`mod@search_overlay`]: the PROJECT-SEARCH rulebook — the TOTAL
-//!   `(Option<`[`wolf_core::Liveness`]`>, project_open)` →
-//!   [`search_overlay::SearchOpenDecision`] guard, whose no-project arm is what
-//!   stops a `--hidden` ripgrep run being rooted at the user's home directory
-//!   ([`search_overlay::open_decision`]); the fixed
-//!   [`wolf_core::SearchOptions`] this front-end ships — literal,
-//!   case-insensitive, every file, with no toggles and no `ignorecase()` read
-//!   ([`search_overlay::search_options_for`]); the FLAT row assembly over
-//!   [`wolf_core::project`] / [`wolf_core::file_label`] /
-//!   [`wolf_core::context_window`], capped and ellipsised
-//!   ([`search_overlay::result_rows`]); the TWO-WAY `Enter` decision — run the
-//!   search, or open the selected row — which refuses an empty query outright
-//!   ([`search_overlay::enter_action`]); the `(path, line, col)` triple that makes a
-//!   result row a LOCATION rather than a file
-//!   ([`search_overlay::activation_target`]); and the six-arm status line
-//!   ([`search_overlay::search_status`]), which is the only surface core's
-//!   `WOLF_RG_BIN unset` error ever reaches. Selection movement and activation come
-//!   from [`mod@picker`], as they do for the other three.
-//! - [`launch_decision`] / [`workspace::reroot_ready`] /
-//!   [`workspace::reroot_decision`]: whether a project is open, where the captive
-//!   Neovim starts, and whether one settle moves the sidebar's root
-//!   ([`workspace`]). The launch rule is process cwd first, then the cwd restored
-//!   from `state.json`, under one shared predicate. The re-root rule's authority is
-//!   the directory the sidebar is CURRENTLY rooted at, compared against the one nvim
-//!   reports, so a typed `:cd` moves it while a satisfied front-end request cannot
-//!   move it twice; [`workspace::root_label`] is the text its synthetic root row
-//!   draws.
-//! - [`mod@tree_gate`]: the sidebar's refresh gate — a refresh refused while the
-//!   sidebar is hidden and owed exactly ONE catch-up when it returns, and a rebuild
-//!   allowed once per snapshot VERSION, which is what stops a current-file change
-//!   collapsing manual expansion ([`tree_gate::TreeRefreshGate`]). A port of
-//!   `WolfKeyMap/TreeRefreshGate.swift`.
-//! - [`mod@refresh_coalescer`]: the sidebar's TRAILING refresh — a burst of
-//!   traversal batches armed into one fire per
-//!   [`refresh_coalescer::REFRESH_INTERVAL`], with a generation token that turns a
-//!   cancelled fire into a genuine no-op ([`refresh_coalescer::RefreshCoalescer`]).
-//!   A port of `WolfKeyMap/PickerRefreshCoalescer.swift`; unlike macOS the picker
-//!   deliberately does not share it.
-//! - [`window_title`]: the working directory rendered as a window title, with the
-//!   home prefix abbreviated to `~` on a full path-SEGMENT boundary and an
-//!   ALWAYS-INJECTED `home` (never an implicit `$HOME` read) — [`title`].
-//! - [`mod@pane_layout`]: the codec between the live [`layout`] `PaneLayout` (leaf
-//!   IDS) and the persisted `wolf_core::PaneNode`, whose leaves carry a
-//!   [`pane_layout::LeafContent`] — a RAW absolute path plus the flag saying the pane
-//!   shows a Markdown preview of it. Includes [`pane_layout::is_empty_leaf`] — the
-//!   CONTENT predicate that decides whether a layout is persisted at all, and which
-//!   must never be an arity test — and [`pane_layout::resolve_leaves`], whose
-//!   ALL-OR-NOTHING rule refuses a whole tab's gather rather than writing an
-//!   unresolvable window's leaf as `""`.
-//! - [`restore_plans`]: ONE launch plan per saved window (cwd, empty state, one
-//!   [`state_seam::TabPlan`] per saved tab, window size), in saved order and never
-//!   an empty vec, plus the write-side rules — which snapshots may be committed,
-//!   what cwd is persisted, what a restored tab contributes before it has ever
-//!   gathered ([`state_seam::seeded_tab_state`], mapped over the tabs a launch has
-//!   queued but not yet created by [`state_seam::pending_tab_states`]), one window's
-//!   subtree over its tabs, that window's WHOLE contribution — its live tabs' caches
-//!   followed by its queued tabs' seeds, in the order they will materialize
-//!   ([`state_seam::window_contribution`]) — the tree assembled from every window's,
-//!   and what closing one window does to it ([`state_seam`]).
-//! - [`mod@liveness_ui`]: the CRASH/STALL recovery rulebook — the TOTAL
-//!   [`wolf_core::Liveness`] → `(overlay mode, auto_restart, paint)` mapping the
-//!   wake drain gates on ([`liveness_ui()`]), the message each overlay mode
-//!   carries ([`liveness_ui::overlay_message`]), what follows a
-//!   `WolfCore::restart_nvim()` call ([`liveness_ui::restart_outcome`]), the
-//!   Tier-1 reopen order with the ACTIVE file LAST so it lands focused
-//!   ([`reopen_order`]), and the derived geometry of the "Restart Neovim" button
-//!   inside the overlay ([`restart_button_rect`]) — one function shared by the
-//!   widget builder and the cage smoke so the two cannot drift.
-//! - [`mod@nav_ui`]: the PER-PANE NAVIGATION rulebook — the one place the "which
-//!   window does a Back/Forward press act on" question is answered
-//!   ([`nav_ui::nav_query_win`], which refuses an active window of `0` exactly as
-//!   [`buffer_picker::switch_target`] does); the TOTAL
-//!   `Option<`[`wolf_core::Liveness`]`>` → [`nav_ui::NavPress`] guard that refuses
-//!   to issue the BLOCKING history move unless the core is alive
-//!   ([`nav_ui::nav_press`]); and the sensitivity of the two toolbar buttons over
-//!   core's per-pane availability reading ([`nav_ui::nav_buttons`], which answers
-//!   both-insensitive for every input the press path would refuse, never the
-//!   converse).
-//! - [`mod@clipboard_ui`]: the CLIPBOARD rulebook — two TOTAL
-//!   `Option<`[`wolf_core::Liveness`]`>` guards, one refusing the Copy yank's
-//!   BLOCKING RPC ([`clipboard_ui::copy_decision`]) and one refusing a Paste for a
-//!   reason that is NOT about blocking ([`clipboard_ui::paste_decision`]: nothing
-//!   on that path blocks, but a paste queued behind a crash or stall overlay would
-//!   land in a RESTARTED Neovim minutes later). Plus what may cross in each
-//!   direction ([`clipboard_ui::clipboard_write`], whose `None` means write NOTHING
-//!   rather than clear, and [`clipboard_ui::paste_payload`]).
-//! - [`mod@preview_link`]: the URI arithmetic behind a link CLICKED inside the
-//!   preview — the seven-row classification of a resolved link target into an
-//!   external launch, a same-document scroll, a repointed pane or a refusal
-//!   ([`preview_link::classify`], [`preview_link::PreviewLink`]); the `file:` base
-//!   URI a document is loaded against, which names the FILE and carries no trailing
-//!   slash because a relative link REPLACES the last segment, and which is `None`
-//!   for an empty or relative source path rather than a synthesized cwd
-//!   ([`preview_link::file_uri_for`]); and the one-line scroll script, encoded ONCE
-//!   because nothing re-parses it ([`preview_link::scroll_into_view_js`]). A port of
-//!   `WolfKeyMap/PreviewLinkSeam.swift` with two deliberate divergences named in
-//!   that module's docs. It owns URI arithmetic and nothing else; the liveness gates
-//!   and the load strategy are [`mod@preview_ui`]'s.
-//! - [`mod@preview_ui`]: the MARKDOWN PREVIEW rulebook — five
-//!   TOTAL `Option<`[`wolf_core::Liveness`]`>` guards over the five BLOCKING RPCs
-//!   this adds — the two presses, a followed preview link, Preview in Browser, and
-//!   the coalesced render ([`preview_ui::preview_press`], [`preview_ui::edit_press`],
-//!   [`preview_ui::preview_file_press`], [`preview_ui::browser_press`],
-//!   [`preview_ui::may_render`]); whether a bound web view must be reloaded, keyed
-//!   on the source buffer's number AND its `changedtick` because two freshly opened
-//!   files share a tick ([`preview_ui::needs_reload`], [`preview_ui::PreviewLoad`]);
-//!   whether a rendered document may be swapped in place or must go through a full
-//!   load, which is what preserves the reader's scroll offset across an edit
-//!   ([`preview_ui::document_update`]); what may be handed to the URI launcher
-//!   ([`preview_ui::browser_url`], whose `None` means launch NOTHING); and a preview
-//!   pane's two statusbar lines, which come from its own source path rather than
-//!   from `WolfCore::pane_status` ([`preview_ui::preview_status`]).
-//! - [`mod@preview_coalescer`]: WHEN that render runs — the clock-free, GTK-free
-//!   state machine that collapses a typing burst into a LEADING render, one more
-//!   whenever the burst has run [`preview_coalescer::PREVIEW_MAX_STALENESS`] without
-//!   one, and a trailing render after the burst ends
-//!   ([`preview_coalescer::PreviewCoalescer::request`], whose
-//!   [`preview_coalescer::RenderDecision`] is either "render inline" or "arm a
-//!   one-shot carrying this generation"). It owns no widget and reads no clock of
-//!   its own: [`mod@pane_view`] arms the timer, performs the render behind
-//!   [`preview_ui::may_render`], and reports it back through
-//!   [`preview_coalescer::PreviewCoalescer::rendered`]. Same generation-token
-//!   mechanism as [`mod@refresh_coalescer`], a different rule.
-//! - [`mod@tabs_ui`]: the NATIVE TABS rulebook, for the N tabs one window's single
-//!   captive Neovim serves — which tab a render wake may touch
-//!   ([`tabs_ui::tab_wake`]), which is the whole selection gate: a tab whose handle
-//!   is not the one Neovim reports as current is never refreshed, so it is never
-//!   asked for a `pane_status` that would answer `[No Name]` over an EMPTY path,
-//!   which is what `Snapshot::windows` gives for a background tabpage. Plus the
-//!   handle a switch may be aimed at, which refuses `0` because Neovim reads it as
-//!   "the current tabpage" ([`tabs_ui::switch_target`]); what closing one page does,
-//!   whose last-page arm is the WINDOW closing because `close_tabpage` on the final
-//!   tabpage is a measured no-op ([`tabs_ui::close_outcome`]); the TOTAL
-//!   `Option<`[`wolf_core::Liveness`]`>` guard over `create_tabpage`'s blocking RPC
-//!   ([`tabs_ui::new_tab_press`]); whether a launch's QUEUED restore tabs may be
-//!   materialized on this wake, which needs tab 0 already bound and a core reading
-//!   `Alive` and whose refusal must never discard the queue
-//!   ([`tabs_ui::restore_press`]); the directory a new tab inherits, which is the
-//!   window's and is `None` in the empty state ([`tabs_ui::new_tab_cwd`]); and the
-//!   file NAME a tab draws in the bar ([`tabs_ui::tab_title`]).
-//! - [`mod@save_ui`]: the SAVE and SAVE AS rulebook — whether a press may act at
-//!   all and whether it writes or prompts ([`save_ui::save_press`], whose named
-//!   buffer is WRITTEN even when it has never reached disk, because
-//!   `runtime/nvim/init.lua` has already given a fresh buffer a concrete
-//!   `Untitled N.md` name, and whose genuinely NAMELESS buffer is the one case that
-//!   falls through to the dialog); the same guard for Save As, which always prompts
-//!   ([`save_ui::save_as_press`]); what that dialog opens with, folder and name
-//!   ([`save_ui::save_dialog_proposal`]); and what a chosen path becomes, verbatim
-//!   and with no extension appended ([`save_ui::save_as_target`]). Neither press
-//!   blocks — both ride the ordered input channel — so the gate is
-//!   [`clipboard_ui::paste_decision`]'s reason, not [`nav_ui::nav_press`]'s.
-//! - [`actions`]: the action namespace as data — [`actions::ACTION_TABLE`],
-//!   [`actions::MENU_SECTIONS`], and the [`actions::parse_accel`] /
-//!   [`actions::forbidden_reason`] checker that mechanically enforces "no Neovim
-//!   key becomes unreachable".
+//! - [`gdk_key`]: a GDK keyval and modifier state to a [`wolf_core::KeyEvent`].
+//! - [`mod@im_ui`]: what a window-level key event and an input-method `commit` become.
+//! - [`paint`]: paints a [`wolf_core::Snapshot`] onto a Cairo context.
+//! - [`mod@glyph_style`]: one cell's style to the decorations and colours Pango is asked for.
+//! - [`grid_size_for`]: the pixel-to-grid geometry the window's resize handler uses.
+//! - [`cell_at`]: a widget-local pointer position to the grid cell it lands on.
+//! - [`mouse`]: GDK button and scroll events to Neovim's mouse grammar.
+//! - [`cursor`]: the cursor's geometry and mode-aware colours.
+//! - [`mod@cell_metrics_math`]: the cell height and baseline the configured `line-height` drives.
+//! - [`mod@editor_inset`]: the chrome around a pane's text grid, as arithmetic.
+//! - [`mod@frame_stats`]: the off-by-default frame-time measurement's buckets and report.
+//! - [`mod@ready_seam`]: the test-only readiness file's predicate and contents.
+//! - [`mod@scrollbar`]: a window's `win_viewport` projected onto a pane-local thumb.
+//! - [`mod@statusbar_layout`]: the per-pane statusbar's geometry, font size and colours.
+//! - [`mod@cmdline_ui`]: the command-line strip, the message toast and the completion popup.
+//! - [`mod@config_seam`]: the rules for consuming a [`wolf_core::WolfConfig`].
+//! - [`mod@init_lua`]: where the captive `runtime/nvim/init.lua` lives, as a function of values.
+//! - [`mod@appearance`]: the configured appearance resolved against the desktop's dark/light.
+//! - [`layout`] / [`tree`]: the pure pane tree and the hierarchical file-tree projection.
+//! - [`mod@drawer`]: the terminal drawer's split and its focus bridge to the editor panes.
+//! - [`ui_action_for`]: the total [`wolf_core::Command`] → [`UiAction`] mapping
+//!   ([`command_action`]).
+//! - [`mod@palette`]: the command palette's rows, its Open Recent candidates and their actions.
+//! - [`mod@buffer_picker`]: the buffer picker's open guard, preselection and switch target.
+//! - [`mod@search_overlay`]: the project search's guard, options, rows and status line.
+//! - [`launch_decision`] / [`workspace::reroot_ready`] / [`workspace::reroot_decision`]:
+//!   whether a project is open, where Neovim starts, and when the sidebar re-roots.
+//! - [`mod@tree_gate`]: when the sidebar's file tree may refresh and rebuild.
+//! - [`mod@refresh_coalescer`]: the sidebar's trailing refresh over a burst of batches.
+//! - [`window_title`]: the working directory rendered as a window title ([`title`]).
+//! - [`mod@pane_layout`]: the codec between the live pane layout and the persisted tree.
+//! - [`restore_plans`]: one launch plan per saved window, and the write-side rules
+//!   ([`state_seam`]).
+//! - [`mod@liveness_ui`]: the crash and stall recovery rules.
+//! - [`mod@nav_ui`]: which pane a Back or Forward press acts on, and when it may.
+//! - [`mod@clipboard_ui`]: the Copy and Paste guards and what crosses each way.
+//! - [`mod@preview_link`]: the URI arithmetic behind a link clicked inside the preview.
+//! - [`mod@preview_ui`]: the Markdown preview's guards, reloads and statusbar lines.
+//! - [`mod@preview_coalescer`]: when the preview's render runs during a typing burst.
+//! - [`mod@tabs_ui`]: the native tabs one window's captive Neovim serves.
+//! - [`mod@save_ui`]: the Save and Save As rules.
+//! - [`actions`]: the action namespace and accelerator table as data.
 //!
 //! The windowed application restores its state at launch and persists it as it
 //! runs: [`app::run`] activates a [`mod@coordinator`], which opens the ONE
@@ -358,12 +80,11 @@
 //! nameless buffer) presenting a native dialog of its own
 //! ([`mod@save_ui`]). Click-to-position, drag-to-select and
 //! vertical scroll ARE wired (per-pane, in [`pane_view`]); horizontal scroll, the
-//! non-primary buttons and kinetic scrolling are not, matching macOS. Theming is
+//! non-primary buttons and kinetic scrolling are not. Theming is
 //! ONE-DIRECTIONAL: the configured `appearance` is resolved against the desktop's
 //! light/dark preference and pushed into Neovim as `background=dark|light`, with
 //! the GTK chrome's colour scheme set to match ([`mod@appearance`]) — but no OS
-//! COLOUR is read into Neovim's highlight groups, so macOS's `nvim_set_hl` push has
-//! no counterpart here. What remains
+//! COLOUR is read into Neovim's highlight groups. What remains
 //! deferred is a native command line as Adw widgets: the one-row strip,
 //! the message toast and the `ext_popupmenu` completion popup are all painted from
 //! the folded `Snapshot::cmdline` / `Snapshot::toast` / `Snapshot::pum`, never from

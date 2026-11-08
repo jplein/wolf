@@ -1,8 +1,6 @@
 //! The pure, widget-free rulebook for the three text decorations a cell carries
 //! as PANGO ATTRIBUTES — underline, undercurl and strikethrough — plus the colour
-//! the first two are drawn in. The Rust counterpart of
-//! `WolfKeyMap/GlyphStyle.swift`, named for it so the parity obligation stays
-//! legible.
+//! the first two are drawn in.
 //!
 //! Data in, data out: a [`wolf_core::ResolvedStyle`] arrives and a
 //! [`GlyphDecoration`] leaves. `crate::render::draw_glyph` needs a live Cairo
@@ -11,12 +9,12 @@
 //! for the metrics arithmetic, and the reason this is a separate file rather than
 //! three `if`s in the paint loop.
 //!
-//! ## Attributes only, and that IS the whole port
+//! ## Attributes only
 //!
-//! macOS's counterpart also resolves the FACE. Here weight and style ride on the
-//! cloned [`pango::FontDescription`] (`set_weight` / `set_style`) rather than on
-//! attributes, so `draw_glyph` keeps its two `font.set_*` calls and this module
-//! covers exactly the three attribute-borne decorations. Nothing is half-done.
+//! Weight and style ride on the cloned [`pango::FontDescription`] (`set_weight` /
+//! `set_style`) rather than on attributes, so `draw_glyph` keeps its two `font.set_*`
+//! calls and this module covers exactly the three attribute-borne decorations. Nothing
+//! is half-done.
 //!
 //! ## Pango draws the wave; nothing here strokes a Cairo path
 //!
@@ -45,11 +43,9 @@
 //! ## The strikethrough colour is deliberately never named
 //!
 //! `pango::AttrColor::new_strikethrough_color` exists and is deliberately not
-//! called: with no such attribute Pango strikes in the LAYOUT's foreground, which
-//! is exactly what macOS does (`GlyphStyleResolver.resolve` sets
-//! `strikethroughColor: fg` unconditionally, while `underlineColor` is `special`
-//! when set and `fg` otherwise). Not calling it buys that parity for free and one
-//! fewer attribute per decorated cell, which is why [`GlyphDecoration`] carries no
+//! called: with no such attribute Pango strikes in the LAYOUT's foreground, while
+//! the underline takes `special` when set and the foreground otherwise. Not calling
+//! it saves one attribute per decorated cell, which is why [`GlyphDecoration`] carries no
 //! strikethrough-colour field at all. Adding one is a change to argue for, not an
 //! oversight to fix.
 //!
@@ -60,12 +56,6 @@
 //! no initialized main thread — so naming one costs nothing in testability and
 //! lets the seam say exactly what the widget layer will hand to Pango. The whole
 //! of this module, its tests included, runs in the fast unit suite.
-//!
-//! ## Parity with macOS
-//!
-//! macOS's `GlyphStyleResolver` resolves the same three-way underline (none,
-//! straight, wave) with the same precedence, and its renderer strokes the wave
-//! by hand because CoreText has no wavy underline style.
 
 use wolf_core::{ResolvedStyle, Rgb};
 

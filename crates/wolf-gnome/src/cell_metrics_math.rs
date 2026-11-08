@@ -1,21 +1,19 @@
-//! The pure cell-metrics arithmetic the configured `line-height` drives — a Rust
-//! port of `WolfKeyMap/CellMetricsMath.swift`, with no GTK, Pango or Cairo.
+//! The pure cell-metrics arithmetic the configured `line-height` drives, with no
+//! GTK, Pango or Cairo.
 //!
 //! Both functions take plain `f64`s, which is what lets the whole rule run in the
 //! fast unit suite: [`crate::render::CellMetrics::for_font`] needs a live Cairo
 //! context to obtain the metrics it feeds in, and a rule left inside `for_font`
 //! would be a rule only the golden-render target could execute.
 //!
-//! ## Units: the caller picks, and the two platforms pick differently
+//! ## Units: the caller picks
 //!
 //! The arithmetic is unit-agnostic — it rounds in whatever unit its caller uses.
-//! macOS calls it in POINTS, where 1 pt is 1 px at 1x. Linux calls it in DEVICE
-//! PIXELS, because that is the unit Cairo paints in, so `for_font` converts the
-//! configured point size to device pixels before calling. Both platforms therefore
-//! snap the cell to a whole device pixel and a shared `line-height: 130` gives the
-//! same visual ratio; only the sub-pixel snap can differ, and only above 1x.
+//! This crate calls it in DEVICE PIXELS, because that is the unit Cairo paints in,
+//! so `for_font` converts the configured point size to device pixels before
+//! calling and the cell snaps to a whole device pixel.
 //!
-//! ## Two guards, shared with `CellMetricsMath.swift`
+//! ## Two guards
 //!
 //! Both are confined to degenerate inputs, so no in-range result changes:
 //!
@@ -37,8 +35,7 @@ pub const MIN_CELL_PX: f64 = 1.0;
 /// For a positive, finite `line_height_percent` the height is
 /// `round(font_size * line_height_percent / 100)` — driven by the font size alone
 /// and INDEPENDENT of the raw font metrics, so the cell does not change size when
-/// fontconfig substitutes a different face. `round` is half-away-from-zero,
-/// matching Swift's bare `.rounded()`.
+/// fontconfig substitutes a different face. `round` is half-away-from-zero.
 ///
 /// Otherwise it falls back to the font's natural line height,
 /// `ceil(ascent + descent + leading)`.
@@ -98,19 +95,14 @@ mod tests {
     /// second half the case would also pass against an implementation that
     /// returned `ascent + descent`, since the fixture's glyph box happens to be
     /// 10 units tall.
-    ///
-    /// The 14 pt / 130 % row is `CellMetricsMathTests.swift`'s
-    /// `testCellHeightAt130PercentRoundsFontScaledHeight`, and the 16 pt / 100 %
-    /// row is `testCellHeightAt100PercentEqualsRoundedFontSize`, so the two files
-    /// can be read side by side.
     #[test]
     fn a_positive_line_height_drives_cell_height_from_the_font_size_alone() {
         assert_eq!(
             cell_height(10.0, 130.0, 8.0, 2.0, 0.0),
             13.0,
             "round(10 * 130 / 100) == round(13.0) == 13. A different answer means the positive \
-             path is not `round(font_size * percent / 100)`, so a shared `line-height: 130` stops \
-             producing the same ratio it produces on macOS."
+             path is not `round(font_size * percent / 100)`, so `line-height: 130` stops scaling \
+             the cell with the font size."
         );
 
         // Same font size, same percentage, absurd metrics: the answer must not move.
@@ -126,9 +118,8 @@ mod tests {
         assert_eq!(
             cell_height(14.0, 130.0, 11.0, 3.0, 0.0),
             18.0,
-            "round(14 * 130 / 100) == round(18.2) == 18 — the macOS case-for-case counterpart \
-             (`testCellHeightAt130PercentRoundsFontScaledHeight`). A divergence here means the two \
-             front-ends do not lay out a shared config identically."
+            "round(14 * 130 / 100) == round(18.2) == 18. A different answer means the positive \
+             path is not `round(font_size * percent / 100)`."
         );
 
         assert_eq!(
@@ -141,10 +132,9 @@ mod tests {
 
     /// The cell height is rounded to a whole unit, HALF AWAY FROM ZERO.
     ///
-    /// `10 * 125 / 100` is exactly 12.5. Rust's `f64::round` and Swift's bare
-    /// `.rounded()` both take 13; `trunc`, `floor` and a banker's rounding all take
-    /// 12. A cell that is one unit short of macOS's is a whole row of divergence
-    /// over a tall window, which is why the tie case is pinned rather than left to
+    /// `10 * 125 / 100` is exactly 12.5. Rust's `f64::round` takes 13; `trunc`,
+    /// `floor` and a banker's rounding all take 12. A cell one device pixel short is
+    /// a whole row lost over a tall window, which is why the tie case is pinned rather than left to
     /// whichever rounding mode a later edit reaches for.
     #[test]
     fn cell_height_rounds_to_a_whole_unit() {
@@ -152,8 +142,8 @@ mod tests {
             cell_height(10.0, 125.0, 8.0, 2.0, 0.0),
             13.0,
             "10 * 125 / 100 == 12.5, which must round AWAY FROM ZERO to 13. A 12 here means \
-             `round()` was replaced by `trunc()`/`floor()` or by a to-even rounding, and the Linux \
-             cell would then be one device pixel shorter than the macOS one for every tie."
+             `round()` was replaced by `trunc()`/`floor()` or by a to-even rounding, and the cell \
+             would then be one device pixel short on every tie."
         );
         assert_eq!(
             cell_height(10.0, 124.0, 8.0, 2.0, 0.0),
@@ -237,10 +227,10 @@ mod tests {
 
     /// A non-finite line-height takes the natural branch too.
     ///
-    /// This is the first of the two guards shared with `CellMetricsMath.swift`: a
-    /// bare `> 0.0` guard accepts `+inf` and yields an infinite cell height.
-    /// `NaN > 0.0` is already false in both languages, so only the infinity row
-    /// discriminates — and it is the one an `is_finite()` deletion reddens.
+    /// This is the first of the two guards: a bare `> 0.0` guard accepts `+inf` and
+    /// yields an infinite cell height. `NaN > 0.0` is already false, so only the
+    /// infinity row discriminates — and it is the one an `is_finite()` deletion
+    /// reddens.
     #[test]
     fn a_non_finite_line_height_falls_back_to_the_natural_line_height() {
         for percent in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
@@ -259,11 +249,10 @@ mod tests {
     /// A degenerate result is floored at one whole device unit, never zero and
     /// never non-finite.
     ///
-    /// The second guard shared with `CellMetricsMath.swift`; unfloored, this can
-    /// be `0` or `NaN`. A zero cell height makes `grid_size_for`'s division produce an
-    /// infinite row count; a NaN one makes it produce no rows at all. Both are
-    /// silent — the window simply stops drawing — so the floor is asserted from
-    /// both the zero side and the NaN side.
+    /// The second guard; unfloored, this can be `0` or `NaN`. A zero cell height makes
+    /// `grid_size_for`'s division produce an infinite row count; a NaN one makes it
+    /// produce no rows at all. Both are silent — the window simply stops drawing — so
+    /// the floor is asserted from both the zero side and the NaN side.
     #[test]
     fn cell_height_is_never_zero_or_non_finite() {
         assert_eq!(
@@ -291,10 +280,6 @@ mod tests {
     }
 
     /// The baseline splits the leftover space evenly above and below the glyph box.
-    ///
-    /// Case-for-case with `CellMetricsMathTests.swift`'s
-    /// `testBaselineSplitsExtraLeadingEvenly` and
-    /// `testBaselineWithLargerCellCentersGlyphBox`.
     #[test]
     fn the_baseline_splits_the_leftover_space_evenly() {
         assert_eq!(

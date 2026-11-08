@@ -26,8 +26,7 @@
 //! application would look perfectly healthy while ignoring the override entirely.
 //! What replaces that is loud: Neovim launched with a `-u` naming a missing file
 //! never attaches, `WolfCore`'s start fails, and the app prints `failed to start
-//! core` and opens no window. Loud over silent is this repository's rule, and macOS
-//! does not check either (`Project.swift::initLuaPath()`), so it is parity as well.
+//! core` and opens no window. Loud over silent is this repository's rule.
 //!
 //! Branch 2 IS a guess the binary makes about its own surroundings, and it must fall
 //! through in a `cargo run` or `cargo test` build where no such tree exists — every

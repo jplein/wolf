@@ -229,9 +229,9 @@ pub fn restart_outcome(respawned: bool, fresh: Liveness) -> RestartOutcome {
 /// Details that are decisions, not accidents:
 ///
 /// - ALL occurrences of `active` are filtered out of `files`, not just the first.
-/// - `active` is appended even when it was NOT a member of `files` (macOS parity
-///   — `Project.swift` reopens the active path unconditionally).
-/// - Non-active entries are NOT deduplicated (macOS parity; `TabFiles::files` is
+/// - `active` is appended even when it was NOT a member of `files`: the active
+///   path is reopened unconditionally.
+/// - Non-active entries are NOT deduplicated (`TabFiles::files` is
 ///   already unique, and silently collapsing duplicates here would hide a core
 ///   bug rather than fix one).
 /// - `files` empty + `Some(active)` yields `[active]`; `None` active yields

@@ -112,9 +112,9 @@
 //!    so a drag that wanders into another pane still edits the pane it started in —
 //!    and it pins the GDK BUTTON NUMBER in `drag_button` the same way, replayed for
 //!    every later callback of the sequence. The MODIFIERS, by contrast, are re-read
-//!    LIVE each time (macOS parity); see [`PaneInner::send_pane_mouse`] for why the
-//!    two are treated differently. Drag is forwarded UNCONDITIONALLY on every
-//!    callback (no throttling, no "changed cell" dedupe) — macOS parity.
+//!    LIVE each time; see [`PaneInner::send_pane_mouse`] for why the two are
+//!    treated differently. Drag is forwarded UNCONDITIONALLY on every callback (no
+//!    throttling, no "changed cell" dedupe).
 //! 2. A `gtk::EventControllerScroll` with `VERTICAL` only (not `DISCRETE`, so the
 //!    accumulation stays in our own tested seam; not `BOTH_AXES`, because horizontal
 //!    scroll is not handled). It keeps ONE [`crate::mouse::PaneScroll`] per pane —
@@ -251,7 +251,7 @@ struct PaneWidgets {
     /// The pane's drawing area (reused by [`PaneId`] across tree rebuilds).
     area: gtk::DrawingArea,
     /// The grid captured at PRESS, pinning the drag target for the rest of the
-    /// sequence (macOS's `mouseDragGrid`). Set on drag-begin, read on
+    /// sequence. Set on drag-begin, read on
     /// update/end, cleared on end. Pinning is what makes a drag that leaves the
     /// pane keep targeting the pane it STARTED in.
     drag_grid: Cell<Option<u64>>,
@@ -577,7 +577,7 @@ impl PaneInner {
         }
         self.ensure_initial_pane();
         // A restored layout replaces every pane, so nothing else this wake looks at the new tree:
-        // return early (macOS parity) and let the next wake drive the normal path.
+        // return early and let the next wake drive the normal path.
         if self.consume_pending_layout() {
             return;
         }
@@ -689,7 +689,7 @@ impl PaneInner {
     ///    wedged nvim at launch marks the core `NotResponding`, and the crash
     ///    overlay presents it.
     /// 4. A handle count that does not match the decoded leaf count aborts,
-    ///    leaving the single already-bound pane intact (macOS parity).
+    ///    leaving the single already-bound pane intact.
     fn apply_layout_rebuild(self: &Rc<Self>, saved: &PaneNode) {
         let first_id = self.next_pane_id.get();
         let Some((tree, leaf_ids)) = pane_layout::decode(saved, first_id) else {
@@ -785,10 +785,9 @@ impl PaneInner {
     ///
     /// **The terminal drawer takes this path with NO branch of its own**, because it
     /// iterates `panes` and the drawer is an ordinary entry in it. That is how the
-    /// drawer gets a statusbar — the shell's name (`bash`) from core's terminal arm
-    /// of `pane_status`, with an empty display path and so no path line, which is
-    /// exactly what macOS shows, since `paintStatusbar` has no drawer case either —
-    /// and how it gets the `b:wolf_full_width` flag that makes it span the window.
+    /// drawer gets a statusbar — whatever [`mod@wolf_core::pane_status`] answers for
+    /// its terminal buffer — and how it gets the `b:wolf_full_width` flag that makes
+    /// it span the window.
     fn refresh_pane_state(&self) {
         let targets: Vec<(PaneId, u64, i64)> = {
             let panes = self.panes.borrow();
@@ -1056,7 +1055,7 @@ impl PaneInner {
     /// Binds the terminal drawer to Neovim window `win`: a new pane recorded in
     /// [`Self::drawer`] and in `panes`, but NOT in [`PaneTree`].
     ///
-    /// A port of `PaneContainerView.applyDrawerOpen`. The pane is an ordinary
+    /// The pane is an ordinary
     /// `panes` entry, so it picks up its statusbar, its column cap, its own
     /// `resize_grid` and its paint from the existing per-pane paths; what it does
     /// not pick up is a place in the tree, and [`Self::rebuild_pane_area`] is
@@ -1102,8 +1101,8 @@ impl PaneInner {
     /// bind a new pane to `win` (grid resolved now or pending). Idempotent if a pane
     /// already exists for `win`.
     ///
-    /// A split fired from inside the DRAWER is dropped, matching
-    /// `PaneContainerView.applySplit`. The drawer is not a tree leaf, so
+    /// A split fired from inside the DRAWER is dropped. The drawer is not a tree
+    /// leaf, so
     /// [`PaneTree::split`] would no-op on it while the rest of this function still
     /// inserted a [`PaneWidgets`] — an invisible pane bound to a real Neovim window,
     /// which nothing would ever paint, size or close.
@@ -1221,8 +1220,8 @@ impl PaneInner {
             let mut panes = self.panes.borrow_mut();
             if let Some(drawer_id) = closed_drawer {
                 panes.remove(&drawer_id);
-                // `clear()` also forgets the editor pane, which macOS keeps as `lastEditorPane`:
-                // a reopen costs one MRU hop (`drawer_up_target` falls back), one less lifetime.
+                // `clear()` also forgets the editor pane: a reopen costs one MRU hop
+                // (`drawer_up_target` falls back), one less lifetime.
                 self.clear_drawer();
             }
             for id in closed.iter().filter(|id| Some(**id) != closed_drawer) {
@@ -1834,8 +1833,7 @@ impl PaneInner {
     /// repoint a pane the user is no longer looking at.
     ///
     /// A `file:` link core declines is PRINTED and never handed to the desktop's
-    /// default handler; [`crate::preview_link`] states why that divergence from macOS
-    /// is deliberate.
+    /// default handler; [`crate::preview_link`] states why.
     fn on_preview_link(self: &Rc<Self>, pane_id: PaneId, uri: &str) {
         let win = self.panes.borrow().get(&pane_id).map(|p| p.win);
         let Some(win) = win else {
@@ -2009,7 +2007,7 @@ impl PaneInner {
     ///
     /// `crates/wolf-core/src/nvim.rs` documents the rendered `<head>` as
     /// BYTE-IDENTICAL on every call — theme and width mode are fixed, so only the body
-    /// changes — and documents this same guard as the macOS front-end's. A body swap
+    /// changes. A body swap
     /// leaves the committed `<head>` in place, so a head that MOVED would mean stale
     /// CSS. A first load into a view, an absent `</head>`, an offset differing from
     /// the recorded one, a body that cannot be carved out, or a JSON encoding that
@@ -2212,7 +2210,7 @@ impl PaneInner {
         }
 
         // `VERTICAL` alone: no `DISCRETE` (keeps accumulation in the testable `mouse` seam), no
-        // `BOTH_AXES` or `KINETIC` (macOS parity). It always stops propagation: no ancestor scrolls.
+        // `BOTH_AXES` or `KINETIC` (neither is handled). It always stops propagation: no ancestor scrolls.
         {
             let weak = Rc::downgrade(self);
             let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
@@ -2273,10 +2271,9 @@ impl PaneInner {
     /// padding and under the neighbouring pane's strip: the widget bounds are wider
     /// than the grid rectangle, so they do not bound the overflow.
     ///
-    /// The strip's clip bounds a long path to its own pane. There is no ellipsis:
-    /// macOS truncates the tail, and reproducing that here needs a second Pango
-    /// layout builder in the widget layer, which is exactly what `render.rs`'s
-    /// one-glyph-path rule exists to prevent.
+    /// The strip's clip bounds a long path to its own pane, and draws no ellipsis:
+    /// ellipsizing needs a second Pango layout builder in the widget layer, which is
+    /// exactly what `render.rs`'s one-glyph-path rule exists to prevent.
     fn draw_pane(&self, cr: &cairo::Context, pane_id: PaneId, width: f64, height: f64) {
         // Top level of the draw family, not inside `wake`: GTK draws from the frame clock after the
         // wake handler returns (`frame_stats`'s module docs).
@@ -2348,8 +2345,8 @@ impl PaneInner {
             &status.filename,
             text.primary,
         );
-        // An unnamed buffer has no path line at all (macOS parity), rather than a
-        // blank one that still consumes its box.
+        // An unnamed buffer has no path line at all, rather than a blank one that still
+        // consumes its box.
         if !status.display_path.is_empty() {
             draw_text_line(
                 cr,
@@ -2514,9 +2511,9 @@ impl PaneInner {
 
     /// Press: FOCUS FIRST, then the mouse event, then pin the drag grid + button.
     ///
-    /// The ordering is the macOS ordering and it is guaranteed rather than hoped
-    /// for: `focus_win` and `send_mouse` are enqueued on the SAME ordered input
-    /// channel, so nvim sees the focus change before the press.
+    /// The ordering is guaranteed rather than hoped for: `focus_win` and `send_mouse`
+    /// are enqueued on the SAME ordered input channel, so nvim sees the focus change
+    /// before the press.
     fn on_pane_press(self: &Rc<Self>, pane_id: PaneId, x: f64, y: f64, g: &gtk::GestureDrag) {
         // Reusing the existing handler verbatim is what preserves focus-on-click.
         self.on_pane_clicked(pane_id);
@@ -2534,7 +2531,7 @@ impl PaneInner {
     }
 
     /// Drag: forwarded UNCONDITIONALLY on every callback — no throttling and no
-    /// "only when the cell changed" dedupe, matching macOS's `mouseDragged`.
+    /// "only when the cell changed" dedupe.
     fn on_pane_drag(&self, pane_id: PaneId, off_x: f64, off_y: f64, g: &gtk::GestureDrag) {
         let Some((target, button, x, y)) = self.drag_point(pane_id, off_x, off_y, g) else {
             return;
@@ -2601,19 +2598,17 @@ impl PaneInner {
     /// deliberate.** `button` is the number [`Self::on_pane_press`] captured and
     /// stashed in `drag_button`, replayed for every drag/release callback of the
     /// sequence rather than re-read from the gesture. The GTK 4.22.4 source says
-    /// `current_button()` is still valid inside `drag-end` (the button is cleared
-    /// only AFTER the signal emission), but nothing in this repo's harness can
-    /// execute that path (`crates/wolf-gnome/tests/README.md`, "Deliberate test
-    /// gaps"), and if it ever reported `0` the seam would refuse it, the `Release`
-    /// would be dropped silently, and nvim would be stranded mid-drag in visual
-    /// mode. Pinning costs one `Cell` and removes that failure mode entirely. The
-    /// MODIFIERS, by contrast, are re-read LIVE on every callback — macOS parity
-    /// (`PaneContainerView.mouseEvent` reads `event.modifierFlags` per event), so a
-    /// modifier pressed or released mid-drag takes effect at once. Both still go
-    /// through the one pure seam, which is why the pinned value is the raw GDK
-    /// NUMBER rather than an already-translated `wolf_core::MouseButton`: the seam
-    /// stays the single place that decides which buttons are forwarded and how the
-    /// modifier bits map.
+    /// `current_button()` is still valid inside `drag-end` (the button is cleared only
+    /// AFTER the signal emission), but nothing in this repo's harness can execute that
+    /// path (`crates/wolf-gnome/tests/README.md`, "Deliberate test gaps"), and if it
+    /// ever reported `0` the seam would refuse it, the `Release` would be dropped
+    /// silently, and nvim would be stranded mid-drag in visual mode. Pinning costs one
+    /// `Cell` and removes that failure mode entirely. The MODIFIERS, by contrast, are
+    /// re-read LIVE on every callback, so a modifier pressed or released mid-drag takes
+    /// effect at once. Both still go through the one pure seam, which is why the pinned
+    /// value is the raw GDK NUMBER rather than an already-translated
+    /// `wolf_core::MouseButton`: the seam stays the single place that decides which
+    /// buttons are forwarded and how the modifier bits map.
     fn send_pane_mouse(
         &self,
         target: GridTarget,
@@ -4570,8 +4565,6 @@ mod tests {
     /// `markup_in_stylesheet_failure` names the same hazard for the stylesheets, which
     /// it does guard; the licence texts are the half nothing covers.
     ///
-    /// The macOS front-end's `PreviewScrollSeam.splitDocument` scans the same way, so
-    /// this is a shared exposure rather than a regression of this crate's, and
     /// [`body_inner_carves_the_real_documents_body_and_none_of_its_head`] is what
     /// measures that today's head does not trip it.
     ///

@@ -8,21 +8,16 @@
 //!
 //! ## Why the drawer is not a [`PaneTree`] leaf
 //!
-//! It lives OUTSIDE the tree, which is what forces this module to exist at all.
-//! `PaneContainerView.swift` made that choice explicitly *"so the tree keeps its 1:1
-//! parity with wolf-gnome"* — the macOS decision was taken FOR this front-end, and
-//! the durable reasons (a `term://` string kept out of `state.json`, a divider
-//! fraction with nowhere to live, every `neighbor` result left unperturbed) are in
-//! `notes/wolf-gnome-decisions.md`. The price is paid here: a pane the tree cannot
+//! It lives OUTSIDE the tree, which is what forces this module to exist at all. The
+//! durable reasons (a `term://` string kept out of `state.json`, a divider fraction
+//! with nowhere to live, every `neighbor` result left unperturbed) are in
+//! `notes/wolf-gnome-decisions.md#window-structure`. The price is paid here: a pane the tree cannot
 //! see needs its own height rule and its own focus bridge.
 //!
-//! ## This module MERGES two Swift files
+//! ## One module for the height and the bridge
 //!
-//! macOS splits the same rules across `DrawerLayout.swift` (the height) and
-//! `DrawerFocusSeam.swift` (the bridge). Both are about forty lines, neither has a
-//! consumer outside the drawer, and [`focus_target`] needs both halves in one
-//! expression — so they are one module here. A reader diffing against the Swift
-//! should expect one file where macOS has two.
+//! The height split and the focus bridge share a module because [`focus_target`]
+//! needs both in one expression.
 
 use wolf_core::FocusDir;
 
@@ -65,7 +60,7 @@ const COLLAPSED: DrawerSplit = DrawerSplit {
 /// `[min_drawer_height, pane_area_height]` and the editor takes the remainder, so
 /// the two always sum to the input.
 ///
-/// **Two guards, shared with `DrawerLayout.swift`:**
+/// **Two guards:**
 ///
 /// - **The `min_drawer_height` floor.** Without it a short window yields a drawer
 ///   thinner than one grid row — a strip that is allocated, painted and focusable
@@ -202,8 +197,7 @@ impl DrawerState {
 /// larger `y` is lower on screen). Ties on the bottom edge break to the smallest
 /// `x` (left-most), then to the smallest [`PaneId`]. `None` for an empty slice.
 ///
-/// A verbatim port of `DrawerFocusSeam.bottomMostLeaf`, tie-breaks included: it is
-/// the pane physically adjacent to the drawer, so it is where `<C-w>k` lands when
+/// It is the pane physically adjacent to the drawer, so it is where `<C-w>k` lands when
 /// there is no most-recently-used editor pane to prefer.
 ///
 /// The exact `==` comparisons are deliberate rather than an oversight. A tie here is
@@ -273,14 +267,15 @@ pub fn drawer_up_target(
 /// move in any direction would fall into the drawer, so `<C-w>k` from the top row
 /// would jump to the bottom of the window.
 ///
-/// **Deliberate divergence from `PaneContainerView.applyFocus`: `width`/`height` are
-/// the RAW pane-area size, where macOS passes `DrawerLayout.editorHeight`.** Here
+/// **Deliberate divergence: `width`/`height` are the RAW pane-area size, not the
+/// editor height the macOS front-end passes
+/// (`crates/wolf-macos/Sources/WolfMacOS/README.md#panecontainerviewswift`).** Here
 /// [`PaneTree::pane_rects`] feeds only ORDERING — `neighbor`'s cross-axis overlap
 /// and distance comparisons, and [`bottom_most_leaf`]'s maximum — and both consumers
 /// are scale-invariant, because the tiling scales every rect by the same factor.
 /// Threading the reduced height through would be unfalsifiable precision: no input
-/// exists for which it changes an answer. Said here because a reader diffing the two
-/// files would otherwise "fix" it.
+/// exists for which it changes an answer. Said here because a reader would otherwise
+/// "fix" it.
 #[must_use]
 pub fn focus_target(
     tree: &PaneTree,
@@ -480,7 +475,7 @@ mod tests {
                 expected_drawer: 202.0,
                 sums_to_height: true,
             },
-            // --- The floor, shared with `DrawerLayout.swift`: a third of 90 px is under one pane's
+            // --- The floor: a third of 90 px is under one pane's
             // --- minimum, so the strip would be allocated and focusable but show no text.
             SplitCase {
                 desc: "a short pane area floors the drawer at min_drawer_height",
@@ -540,7 +535,7 @@ mod tests {
                 expected_drawer: 0.0,
                 sums_to_height: true,
             },
-            // --- The guard, shared with `DrawerLayout.swift`, covers `weight` and `min_drawer_height`
+            // --- The guard covers `weight` and `min_drawer_height`
             // --- too, though neither is read without a drawer; these five rows make narrowing it visible.
             SplitCase {
                 desc: "a NaN weight collapses BOTH fields rather than poisoning one",
@@ -674,8 +669,7 @@ mod tests {
     ///   carries the GREATER id, so the row cannot come out right through the id
     ///   tie-break instead.
     /// - Delete the `id < best_id` clause: the identical-rect tie returns 9 rather
-    ///   than 3. That clause is a verbatim port of
-    ///   `DrawerFocusSeam.bottomMostLeaf`, and it is unreachable through
+    ///   than 3. That clause is unreachable through
     ///   [`PaneTree::pane_rects`] — which is exactly why it needs a row, or it gets
     ///   deleted as dead the first time somebody reads it.
     #[test]
@@ -776,9 +770,8 @@ mod tests {
     /// The height the editor region is left with while a drawer is open: the pane
     /// area less its third.
     ///
-    /// Two thirds of [`PANE_H`], which is the alternative input
-    /// `PaneContainerView.applyFocus` would pass where [`focus_target`] takes the
-    /// raw pane-area size.
+    /// Two thirds of [`PANE_H`]: the editor height that [`focus_target`]'s doc says
+    /// it deliberately does not take.
     ///
     /// A literal fraction, NOT [`DRAWER_WEIGHT`]. Reading the production constant
     /// would mean a `DRAWER_WEIGHT` of zero silently made this height equal
@@ -826,15 +819,13 @@ mod tests {
     ///
     /// ## The second pass, at [`EDITOR_REGION_H`]
     ///
-    /// Every row runs twice: once at the raw pane-area height and once at two
-    /// thirds of it, the editor region an open drawer leaves. That second pass is
-    /// the only assertion anywhere on this seam's one documented divergence —
-    /// [`focus_target`] takes the raw pane-area size where
-    /// `PaneContainerView.applyFocus` passes `DrawerLayout.editorHeight`, because
+    /// Every row runs twice: once at the raw pane-area height and once at two thirds of
+    /// it, the editor region an open drawer leaves. That second pass is the only
+    /// assertion anywhere on the divergence [`focus_target`]'s doc records — it takes
+    /// the raw pane-area size rather than the editor height, because
     /// [`PaneTree::pane_rects`] feeds only ORDERING here and both consumers are
-    /// scale-invariant. That is exactly the claim a reader diffing the two files
-    /// would "fix" by threading the reduced height through, and nothing was
-    /// measuring it.
+    /// scale-invariant. That is exactly the claim a reader would "fix" by threading the
+    /// reduced height through, and nothing was measuring it.
     ///
     /// **Its falsifier is not an edit to [`focus_target`].** Passing a
     /// proportionally smaller height is precisely the change the divergence says is
@@ -1049,16 +1040,14 @@ mod tests {
                     EDITOR_REGION_H
                 ),
                 case.expected,
-                "case: {} (origin {}, dir {:?}, drawer {:?}, mru {:?}) at the REDUCED \
-                 height {EDITOR_REGION_H}, where the pass above used {PANE_H}. The row \
-                 answered differently at the two heights, so `focus_target` is no \
-                 longer scale-invariant and WHICH height the caller passes has become \
-                 observable. That is the premise the seam's recorded divergence rests \
-                 on — it takes the raw pane-area size where \
-                 `PaneContainerView.applyFocus` passes `DrawerLayout.editorHeight`, on \
-                 the grounds that `pane_rects` feeds only ordering here. Either thread \
-                 the editor height through from `pane_view` and delete that paragraph, \
-                 or restore whatever made the tiling scale with its bounds.",
+                "case: {} (origin {}, dir {:?}, drawer {:?}, mru {:?}) at the REDUCED height \
+                 {EDITOR_REGION_H}, where the pass above used {PANE_H}. The row answered \
+                 differently at the two heights, so `focus_target` is no longer scale-invariant \
+                 and WHICH height the caller passes has become observable. That is the premise \
+                 `focus_target`'s doc rests on — it takes the raw pane-area size rather than the \
+                 editor height, on the grounds that `pane_rects` feeds only ordering here. Either \
+                 thread the editor height through from `pane_view` and delete that paragraph, or \
+                 restore whatever made the tiling scale with its bounds.",
                 case.desc,
                 case.origin,
                 case.dir,

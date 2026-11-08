@@ -1,8 +1,7 @@
 //! The pure, GTK-free APPLICATION-STATE seam: what to restore at launch, and
 //! what to persist on each wake.
 //!
-//! The Rust analogue of the macOS `StateSeam.swift`, plus the write-side rules
-//! macOS keeps inside `AppDelegate.snapshotNow`. GTK-free, IO-free, and it never
+//! The launch plans and the write-side rules. GTK-free, IO-free, and it never
 //! reads `$HOME` or the process cwd — every input is injected, so the whole
 //! restore/persist rulebook is unit-testable headlessly with no temp dirs and no
 //! window, exactly like [`crate::layout`] and [`crate::workspace`].
@@ -10,8 +9,7 @@
 //! ## What is deliberately NOT here
 //!
 //! - **Window POSITION.** Wayland gives a client neither its own position nor
-//!   screen geometry, so there is no Linux analogue of macOS's
-//!   `restoredWindowFrame` "intersects some screen" check.
+//!   screen geometry, so there is no "intersects some screen" check.
 //!   [`window_subtree`] writes `x`/`y` as `0.0` unconditionally and
 //!   [`restored_window_size`] returns SIZE only.
 //! - **Tabs.** Windows are the tree and tabs are its second level:
@@ -240,8 +238,7 @@ pub fn sidebar_is_shown(user_wants: bool, empty: bool) -> bool {
     !empty && user_wants
 }
 
-/// The Linux half of macOS's `StateSeam.restoredWindowFrame`: the saved window
-/// SIZE in pixels, or `None` when it should be ignored.
+/// The saved window SIZE in pixels, or `None` when it should be ignored.
 ///
 /// A non-positive, non-finite, or out-of-`i32`-range dimension is the unset
 /// sentinel and collapses the WHOLE result to `None` (the `geometry.rs`
@@ -262,8 +259,8 @@ pub fn restored_window_size(width: f64, height: f64) -> Option<(i32, i32)> {
 ///
 /// **THIS IS THE SINGLE-PANE FIX.** The predicate is
 /// [`pane_layout::is_empty_leaf`] — a CONTENT test — and never
-/// `pane_layout::leaf_count(..) > 1`. An arity guard here is exactly the macOS
-/// bug: a lone pane showing a file would persist no layout, and since a tab's
+/// `pane_layout::leaf_count(..) > 1`. An arity guard here is the bug this rule
+/// prevents: a lone pane showing a file would persist no layout, and since a tab's
 /// open buffer paths ride only inside the layout, that file would not be
 /// reopened on relaunch. See [`crate::pane_layout`]'s module docs.
 ///
@@ -283,8 +280,7 @@ pub fn persistable_layout(node: PaneNode) -> Option<PaneNode> {
 /// The EMPTY state persists `""` ALWAYS — never the nvim fallback cwd. A
 /// `LaunchDecision::EmptyState` hands nvim `$HOME` (or `/`) purely because a
 /// process needs a working directory; persisting that would turn every
-/// desktop-launcher start into "a project at `$HOME`" on the next launch. macOS
-/// has the same rule (its passive launch cwd is never persisted).
+/// desktop-launcher start into "a project at `$HOME`" on the next launch.
 ///
 /// With a project open it is nvim's LIVE cwd once reported, else the launch cwd —
 /// so quitting before the first `DirChanged` does not forget the project.
@@ -2101,8 +2097,8 @@ mod tests {
                 want: None,
             },
             PersistCase {
-                // The regression row: an arity guard (`leaf_count(..) > 1`) answers `None` here, the macOS
-                // single-pane bug where the file is not reopened on relaunch.
+                // The regression row: an arity guard (`leaf_count(..) > 1`) answers `None` here, so
+                // a lone pane's file is not reopened on relaunch.
                 desc: "a NAMED lone leaf IS persisted (the single-pane fix)",
                 node: leaf(SAVED_FILE),
                 want: Some(leaf(SAVED_FILE)),

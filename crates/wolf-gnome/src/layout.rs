@@ -52,8 +52,7 @@ const DEFAULT_RATIO: f64 = 0.5;
 
 /// The arithmetic floor on a divider fraction: [`PaneTree::set_divider_fraction`]
 /// clamps into `[MIN_DIVIDER_FRACTION, 1 - MIN_DIVIDER_FRACTION]`, so neither side
-/// of a split can be driven to zero weight. Mirrors macOS's `pairFractionEps` in
-/// `crates/wolf-macos/Sources/WolfKeyMap/PaneTree.swift`.
+/// of a split can be driven to zero weight.
 ///
 /// The hazard a zero weight carries is that nothing REJECTS it, so it is durable
 /// rather than loud. [`PaneTree::from_layout`] validates only that each weight is
@@ -311,13 +310,13 @@ impl PaneTree {
     /// `fraction`, and reports whether it applied.
     ///
     /// This is what a `gtk::Paned` drag writes into the tree, and its SUFFIX shape
-    /// is a deliberate divergence from macOS's `PaneTree.setPairFraction`
-    /// (`crates/wolf-macos/Sources/WolfKeyMap/PaneTree.swift`), which reweights the
-    /// adjacent PAIR. `pane_view::build_chain` renders an n-ary split as a
-    /// right-leaning chain of binary paneds, so the divider after child `b` governs
-    /// child `b` against every later child TOGETHER, and GTK keeps that remainder's
-    /// internal proportions. Reweighting only the adjacent pair here would move a
-    /// second divider the user never touched.
+    /// deliberately differs from the macOS pane tree's adjacent-PAIR reweighting
+    /// (`crates/wolf-macos/Sources/WolfKeyMap/README.md#panetreeswift`):
+    /// `pane_view::build_chain` renders an n-ary split as a right-leaning chain of
+    /// binary paneds, so the divider after child `b` governs child `b` against every
+    /// later child TOGETHER, and GTK keeps that remainder's internal proportions.
+    /// Reweighting only the adjacent pair here would move a second divider the user
+    /// never touched.
     ///
     /// Concretely, with `S = sum(weights[boundary..])`: `weights[boundary]` becomes
     /// `clamped * S`, the rest of `S` is spread over `weights[boundary + 1..]` in
@@ -1801,19 +1800,12 @@ mod tests {
         }
     }
 
-    /// **The macOS divergence, pinned.** A divider reweights its head child against
-    /// the WHOLE SUFFIX it spans, and that suffix keeps its internal proportions.
-    ///
-    /// `pane_view::build_chain` renders an n-ary split as a right-leaning chain of
-    /// binary `gtk::Paned`s, so the divider after child 0 of a row of three governs
-    /// child 0 against `[child 1, child 2]` TOGETHER, and GTK keeps the pair's own
-    /// proportion. macOS's `PaneTree.setPairFraction`
-    /// (`crates/wolf-macos/Sources/WolfKeyMap/PaneTree.swift`) reweights only the
-    /// ADJACENT PAIR, which on this front-end would move a second divider the user
-    /// never touched.
+    /// A divider reweights its head child against the WHOLE SUFFIX it spans, and
+    /// that suffix keeps its internal proportions; see
+    /// [`PaneTree::set_divider_fraction`]'s doc for why.
     ///
     /// FALSIFYING EDIT: put all of `(1 - clamped) * S` into `weights[boundary + 1]`
-    /// (macOS pair semantics).
+    /// (pair semantics).
     ///
     /// MEASURED: `dragging the FIRST divider of equal thirds to 0.5 must yield
     /// [0.5, 0.25, 0.25], got [0.375, 0.375, 0.25]` — child 2 was never rescaled,
@@ -1836,10 +1828,10 @@ mod tests {
         );
         assert!(
             approx(w[1], w[2]),
-            "the suffix must keep its internal 1:1 proportion, got {w:?}. This is the macOS \
-             divergence: `setPairFraction` would have pushed the entire remainder into child 1 and \
-             left child 2 where it was, which on GTK moves the SECOND divider — one the user never \
-             touched — because `build_chain` nests [child 1, child 2] inside one paned."
+            "the suffix must keep its internal 1:1 proportion, got {w:?}. Pair semantics would \
+             push the entire remainder into child 1 and leave child 2 where it was, which on GTK \
+             moves the SECOND divider — one the user never touched — because `build_chain` nests \
+             [child 1, child 2] inside one paned."
         );
         let total: f64 = w.iter().sum();
         assert!(

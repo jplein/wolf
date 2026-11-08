@@ -10,7 +10,7 @@
 //!   clobber each other: both report a successful flush, the file ends up
 //!   holding whichever tree was written last, and each store still claims its
 //!   own tree in memory — so one window's entire session is lost with no panic
-//!   and no error. `wolf-ffi` records the same rule for macOS.
+//!   and no error.
 //! - **The config.** One file, one read. N reads are N chances for two windows
 //!   to disagree about the font mid-session.
 //! - **The [`CellMetrics`].** Deterministic given the config, and already shared
@@ -331,10 +331,10 @@ impl Coordinator {
     ///
     /// The plan is built from no saved state AND no process cwd, which by
     /// construction is the empty state at `$HOME` with no layout and no restored
-    /// size — macOS's `makeNewWindow`, which always opens the empty state
-    /// regardless of the originating window's directory. Passing the process cwd
-    /// (or the invoking window's) here would inherit a project, which is what
-    /// New TAB does and is not this row's behaviour.
+    /// size, regardless of the originating window's directory
+    /// (`notes/wolf-gnome-decisions.md#the-coordinator-and-its-windows`). Passing the
+    /// process cwd (or the invoking window's) here would inherit a project, which is
+    /// what New TAB does and is not this row's behaviour.
     ///
     /// **Both `None`s are the behaviour, not an omission to be helpfully filled
     /// in.** `restore_plans(Some(saved), ..)` would reopen the saved session, and
@@ -555,10 +555,9 @@ impl Coordinator {
     /// Quits: commits the WHOLE tree once, while every core and every pane is
     /// still alive, and only then closes the windows.
     ///
-    /// The order is macOS's `applicationWillTerminate`, and every step of it is
-    /// load-bearing. `shutting_down` is latched FIRST so each window's close
-    /// handler answers [`CloseCommit::Skip`] and does not re-commit a tree that
-    /// shrinks by one window per close. The refresh runs BEFORE any window is
+    /// Every step of the order is load-bearing. `shutting_down` is latched FIRST so
+    /// each window's close handler answers [`CloseCommit::Skip`] and does not
+    /// re-commit a tree that shrinks by one window per close. The refresh runs BEFORE any window is
     /// closed, because a window whose core has gone contributes nothing. The
     /// flush runs before the closes so a wedged writer cannot lose the tree that
     /// was just assembled.

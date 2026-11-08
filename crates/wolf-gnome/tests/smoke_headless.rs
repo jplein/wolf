@@ -30643,9 +30643,8 @@ const DRAWER_BAND_STRIP_EXTRA_PX: f64 = 2.0;
 ///
 /// MEASURED, md5 over repeated runs: the band below the drawer's statusbar is
 /// BYTE-IDENTICAL, 6/6 and 3/3, so it is the one region of the drawer this smoke
-/// samples. The statusbar shows the shell's name from `wolf_core::pane_status`'s
-/// terminal arm; that string is asserted in `crates/wolf-ffi/tests/pane_status.rs`,
-/// not here.
+/// samples. The statusbar's text is `wolf_core::pane_status`'s answer for a terminal
+/// buffer, asserted in `crates/wolf-ffi/tests/pane_status.rs`, not here.
 ///
 /// **The shell PROMPT does not vary per run.**
 /// [`cage_command`] sets `HOME` to the temp cwd's parent, so bash's `\w` renders the
@@ -31428,12 +31427,9 @@ const DRAWER_TERMINAL_BUFTYPE: &str = "terminal";
 
 /// The scheme a `:terminal` buffer's name carries, re-typed here as a LITERAL.
 ///
-/// `wolf_core::redraw`'s own `TERMINAL_BUFFER_PREFIX` is private — deliberately, so
-/// only that module's inline tests can reach it — and reading it here would in any
-/// case make the assertion compare the persisted string against whatever prefix the
-/// filter happens to use. What this smoke asserts is that NOTHING NAMED LIKE A
-/// TERMINAL reaches `state.json`, which is a claim about Neovim's naming and not
-/// about core's constant.
+/// What this smoke asserts is that NOTHING NAMED LIKE A TERMINAL reaches `state.json`,
+/// which is a claim about how Neovim names a `:terminal` buffer, so the expected value
+/// is Neovim's scheme rather than whatever prefix a filter happens to use.
 const TERMINAL_BUFFER_SCHEME: &str = "term://";
 
 /// Every leaf path in a persisted layout, in tree order.

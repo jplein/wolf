@@ -49,9 +49,8 @@ public enum LivenessSeam {
     /// Whether the current view runs its render wake. The opaque overlay hides
     /// a frozen frame, so repainting it is waste.
     public let render: Bool
-    /// Whether to drain the core's queued user commands. True in every state:
-    /// the drain issues no RPC and paints nothing, and it is the only route by
-    /// which a close or quit queued just before a crash reaches the window.
+    /// Whether to drain the core's queued user commands: true in every state.
+    /// See `crates/wolf-macos/Sources/WolfKeyMap/README.md#livenessseamswift`.
     public let drain: Bool
 
     /// Builds a decision from its four fields.

@@ -480,8 +480,7 @@ mod ffi {
         // nvim's live, canonicalized cwd (tracks `:cd`/`DirChanged`); empty until nvim first reports
         // it, and after shutdown.
         fn cwd(&self) -> String;
-        // The global recent-directories MRU, newest first, capped at 20 (File > Open Recent), minus
-        // folders that no longer exist. Empty when the store is disabled/unreadable or the core is gone.
+        // `WolfCore::recent_dirs` as strings; empty once the core is gone.
         fn recent_dirs(&self) -> Vec<String>;
         // The `WolfTitlebar` group's background (the macOS titlebar); unset when the group is absent
         // or cleared, or the core is gone.
@@ -1002,11 +1001,9 @@ mod ffi {
     extern "Rust" {
         type FfiPaneStatus;
 
-        // The base filename shown in the pane's statusbar (`[No Name]` for an unnamed buffer, the
-        // shell's name for a terminal).
+        // `PaneStatus::filename` of the pane.
         fn filename(&self) -> String;
-        // The path shown beneath the filename (cwd-relative, `~`-prefixed, or absolute; empty for
-        // an unnamed buffer or a terminal).
+        // `PaneStatus::display_path` of the pane.
         fn display_path(&self) -> String;
         // The buffer's raw ABSOLUTE path (never relativized; empty for an unnamed
         // buffer). The macOS front-end persists it as a pane-layout leaf path.
@@ -2314,14 +2311,12 @@ impl WolfCoreHandle {
             .map_or_else(String::new, |p| p.to_string_lossy().into_owned())
     }
 
-    /// The GLOBAL recent-directories MRU, newest-first (capped at 20), as owned
-    /// Strings, omitting folders that no longer exist (the store keeps them, so a
-    /// returning folder reappears); an empty `Vec` when the store is
-    /// disabled/unreadable or the core has been shut down.
+    /// [`WolfCore::recent_dirs`], each `PathBuf` mapped via
+    /// `to_string_lossy().into_owned()`; an empty `Vec` once the core has been shut
+    /// down.
     ///
-    /// Delegates to [`WolfCore::recent_dirs`], mapping each `PathBuf` via
-    /// `to_string_lossy().into_owned()`. Read lazily at Open-Recent-menu open
-    /// time by the macOS shell to build the File > Open Recent submenu.
+    /// Read lazily at Open-Recent-menu open time by the macOS shell to build the
+    /// File > Open Recent submenu.
     #[must_use]
     pub fn recent_dirs(&self) -> Vec<String> {
         let borrow = self.core.borrow();
@@ -3497,11 +3492,6 @@ impl FfiHistoryEntry {
     }
 }
 
-// --- FfiPaneStatus: one pane's statusbar strings (opaque to Swift) ---
-
-/// One pane's statusbar strings — the base `filename` and the `display_path`
-/// beneath it (opaque to Swift, so its Strings are read back via accessor
-/// methods). A projection of [`wolf_core::PaneStatus`].
 /// The Tier-1 open-file mirror entry for one tabpage, opaque to Swift.
 ///
 /// Built by [`WolfCoreHandle::open_files_for_tabpage`] from
@@ -3550,6 +3540,11 @@ impl FfiOpenFiles {
     }
 }
 
+// --- FfiPaneStatus: one pane's statusbar strings (opaque to Swift) ---
+
+/// One pane's statusbar strings — the base `filename` and the `display_path`
+/// beneath it (opaque to Swift, so its Strings are read back via accessor
+/// methods). A projection of [`wolf_core::PaneStatus`].
 pub struct FfiPaneStatus {
     filename: String,
     display_path: String,
@@ -3557,17 +3552,13 @@ pub struct FfiPaneStatus {
 }
 
 impl FfiPaneStatus {
-    /// The base filename shown in the pane's statusbar (`[No Name]` for an
-    /// unnamed buffer, the basename of its command, such as `bash`, for a
-    /// terminal buffer).
+    /// The pane's [`PaneStatus::filename`].
     #[must_use]
     pub fn filename(&self) -> String {
         self.filename.clone()
     }
 
-    /// The path shown beneath the filename (cwd-relative, `~`-prefixed, or
-    /// absolute; empty for an unnamed buffer or a terminal buffer, so no path
-    /// line is drawn).
+    /// The pane's [`PaneStatus::display_path`].
     #[must_use]
     pub fn display_path(&self) -> String {
         self.display_path.clone()

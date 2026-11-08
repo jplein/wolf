@@ -1,21 +1,20 @@
 //! The pure, GTK-free CODEC between the live pane tree and the persisted one.
 //!
-//! The GTK-side analogue of the macOS `PaneLayoutCodec`: it bridges
-//! [`crate::layout`]'s [`PaneLayout`] / [`PaneId`] (whose leaves are pane IDS)
-//! and [`wolf_core::PaneNode`] (whose leaves are buffer PATHS, the `state.json`
-//! shape). No GTK, no serde, no IO — so every rule here is unit-testable
-//! headlessly, exactly like [`crate::layout`] and [`crate::geometry`].
+//! It bridges [`crate::layout`]'s [`PaneLayout`] / [`PaneId`] (whose leaves are
+//! pane IDS) and [`wolf_core::PaneNode`] (whose leaves are buffer PATHS, the
+//! `state.json` shape). No GTK, no serde, no IO — so every rule here is
+//! unit-testable headlessly, exactly like [`crate::layout`] and
+//! [`crate::geometry`].
 //!
 //! ## The single-pane persistence rule (read this before touching anything)
 //!
 //! A tab's open buffer paths have NO persistence channel of their own: they ride
-//! only inside `TabState::layout`'s leaves. The macOS bug this crate must not
-//! reintroduce was a save side that suppressed the layout by ARITY —
-//! `guard tree.leaves().count > 1 else { return nil }` — so the single most
-//! common shape (one window, one tab, one pane, one file) persisted its cwd and
-//! nothing else, and the file was not reopened on relaunch.
+//! only inside `TabState::layout`'s leaves. A save side that suppressed the layout
+//! by ARITY (`leaf_count(..) > 1`) would persist the single most common shape (one
+//! window, one tab, one pane, one file) as its cwd and nothing else, and the file
+//! would not be reopened on relaunch.
 //!
-//! The fix, on both sides, is a CONTENT predicate: [`is_empty_leaf`] suppresses
+//! The rule, on both sides, is a CONTENT predicate: [`is_empty_leaf`] suppresses
 //! ONLY an unnamed, non-preview lone leaf (the empty-state "no folder" pane,
 //! whose `layout: None` is a pre-existing invariant), and the restore side
 //! rebuilds ANY saved layout with no arity guard at all. **Never gate persistence
@@ -157,7 +156,7 @@ pub fn resolve_leaves(leaves: &[(PaneId, WinContent)]) -> Option<HashMap<PaneId,
 /// PATHS), looking each leaf id up in `contents`.
 ///
 /// A leaf id MISSING from `contents` becomes `Leaf { path: "", preview: false }`
-/// (macOS parity: an unbound or unnamed pane persists as an empty leaf) rather than
+/// (an unbound or unnamed pane persists as an empty leaf) rather than
 /// being dropped, because dropping it would change the topology and desynchronise
 /// the DFS zip the restore path depends on. That fallback is DEFENSIVE: the gather
 /// path builds `contents` from [`resolve_leaves`], which answers one entry per leaf
@@ -487,8 +486,8 @@ mod tests {
     fn encode_maps_ids_to_paths() {
         let mut contents = HashMap::new();
         contents.insert(P0, editor_pane(PATH_A));
-        // P1 is deliberately absent: an unnamed pane encodes as an empty leaf, not dropped (macOS
-        // parity), since dropping it changes the topology and desynchronises the DFS zip.
+        // P1 is deliberately absent: an unnamed pane encodes as an empty leaf, not dropped,
+        // since dropping it changes the topology and desynchronises the DFS zip.
         contents.insert(P2, preview_pane(PATH_C));
 
         let got = encode(&asymmetric_layout(), &contents);
@@ -783,7 +782,7 @@ mod tests {
              the other route to the same loss: `persistable_layout` suppresses a lone empty \
              non-preview leaf, so the tab would persist `layout: None`, and a tab's open buffer \
              paths ride ONLY inside `TabState::layout` — the file would not be reopened at all. \
-             That is the macOS single-pane bug arriving by a new road."
+             That is the arity guard's failure arriving by a new road."
         );
     }
 
@@ -908,10 +907,9 @@ mod tests {
         assert!(
             !is_empty_leaf(&lone_named),
             "a LONE leaf holding a real file ({PATH_A}) must NOT be suppressed from persistence. \
-             This is the exact macOS bug `fix/state-persistence-single-pane-bug` fixed: the save \
-             side gated on `tree.leaves().count > 1`, so the single most common shape — one \
-             window, one tab, one pane, one file — persisted its cwd and NOTHING ELSE, and the \
-             file was not reopened on relaunch (a tab's open buffer paths ride ONLY inside \
+             A save side gated on `leaf_count(..) > 1` persists the single most common shape — \
+             one window, one tab, one pane, one file — as its cwd and NOTHING ELSE, and the \
+             file is not reopened on relaunch (a tab's open buffer paths ride ONLY inside \
              `TabState::layout`'s leaves). The predicate must be CONTENT (`is_empty_leaf`), never \
              `leaf_count(..) > 1`."
         );

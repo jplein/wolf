@@ -223,8 +223,8 @@ pub fn toast_is_shown(visible: bool, lines: usize) -> bool {
 /// resolved dialog most of the time and a transient the rest: an invalid keypress
 /// produces a wake in which the toast is hidden while the dialog is still open, the
 /// front-end forgets the scroll offset, and the surface blinks for one frame until
-/// the re-prompt restores it. Benign, shared with macOS, and the whole of what this
-/// predicate drives is that forgotten offset.
+/// the re-prompt restores it. Benign, and the whole of what this predicate drives
+/// is that forgotten offset.
 ///
 /// Nothing in this crate may dismiss a prompt on its own. The re-prompt is core's,
 /// and a front-end that hid the toast on the keypress would leave the user answering

@@ -1334,7 +1334,7 @@ impl WolfCore {
     /// display path only (the [`PaneStatus::display_path`](crate::pane_status::PaneStatus)
     /// field); the filename is derived separately by the caller. An empty
     /// `abs_path` yields an empty display path, and so does a terminal buffer name
-    /// (`term://…`).
+    /// with a command (`term://…//<pid>:<command>`).
     #[must_use]
     pub fn display_path(&self, abs_path: &str) -> String {
         crate::pane_status::pane_status(abs_path, self.live_cwd().as_deref(), canonical_home())

@@ -1,7 +1,6 @@
 //! The pure, GTK-free gate that decides whether a sidebar refresh is worth doing.
 //!
-//! A deliberate port of `WolfKeyMap/TreeRefreshGate.swift`, holding both halves the
-//! macOS counterpart holds:
+//! It holds two halves:
 //!
 //! - **Visibility.** A refresh requested while the sidebar is hidden is refused and
 //!   REMEMBERED; the sidebar reappearing owes exactly one catch-up. Rebuilding a

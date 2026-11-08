@@ -3,7 +3,9 @@
 //! This module owns every decision that can be made with no display server and no
 //! window: which buckets exist, how samples accumulate, how percentiles are
 //! computed, how a report is rendered, how the `WOLF_FRAME_STATS*` values are
-//! parsed, and whether a report interval has elapsed. **It never reads a clock,
+//! parsed, and whether a report interval has elapsed. The report surface those
+//! decisions produce is the one `notes/wolf-gnome-decisions.md#frame-time-instrumentation`
+//! fixes for both front-ends. **It never reads a clock,
 //! never touches the process environment and holds no process-global state** —
 //! [`crate::frame_metrics`] owns all three, which is what keeps this file
 //! unit-testable in a parallel `cargo test` process.
@@ -69,20 +71,19 @@
 //!   grid is skipped for a preview pane.
 //! - `count(draw.pane)` is NOT `count(wake) * panes`: GTK coalesces frames.
 //!
-//! # `draw.read` is not the macOS `pane.read`
+//! # `draw.read` copies nothing
 //!
-//! macOS's bucket of that name times a deep clone across FFI. Here
-//! `wolf_core::WolfCore::read_snapshot` is a `parking_lot` `read_arc()` that copies
-//! nothing, so a large `draw.read` means lock contention with the tokio writer,
-//! never copying.
+//! `draw.read` times `wolf_core::WolfCore::read_snapshot`'s `parking_lot`
+//! `read_arc()`, which copies nothing, so a large `draw.read` means lock contention
+//! with the tokio writer, never copying.
 
 use std::time::Duration;
 
 /// The grep-able prefix stamped on every emitted line, including the last.
 ///
-/// The macOS front-end emits the same string so the two tables can be `diff`ed;
-/// changing it desynchronizes both front-ends and every `grep` a measurement run
-/// depends on.
+/// Part of the report surface `notes/wolf-gnome-decisions.md#frame-time-instrumentation`
+/// fixes for both front-ends; changing it breaks that surface and every `grep` a
+/// measurement run depends on.
 pub const LINE_PREFIX: &str = "wolf-frame-stats ";
 
 /// The report interval, in seconds, when `WOLF_FRAME_STATS_INTERVAL` is absent or
@@ -600,9 +601,8 @@ pub fn report_interval(raw: Option<&str>) -> Duration {
 /// file whose first and last characters are spaces — created silently, in the
 /// directory the user meant, under a name they did not write.
 ///
-/// macOS resolves the same variable the same way (`FrameMetrics.statsFileHandle`
-/// trims, rejects the empty result and opens the trimmed path), which is what keeps
-/// one documented surface serving both front-ends.
+/// Trimming, rejecting the empty result and opening the trimmed path is the
+/// documented report surface's rule for this variable.
 #[must_use]
 pub fn report_file_path(raw: Option<&str>) -> Option<&str> {
     let trimmed = raw?.trim();
@@ -652,8 +652,7 @@ mod tests {
     ///
     /// Reading the const and comparing it to itself would hold for whatever value it
     /// took, including one that breaks every `grep wolf-frame-stats` a measurement
-    /// run depends on and desynchronizes this table from the macOS one it is meant
-    /// to `diff` against.
+    /// run depends on and breaks the documented report surface.
     const EXPECT_LINE_PREFIX: &str = "wolf-frame-stats ";
 
     /// [`MAX_LABEL_WIDTH`] re-typed as a LITERAL, for the same reason.
@@ -739,8 +738,8 @@ mod tests {
     /// The index is the STORAGE index into [`FrameStats`]'s accumulator array, which
     /// is what keeps the hot path free of hashing and string allocation, so a gap or
     /// a duplicate is a wrong-slot write rather than a cosmetic defect. The label is
-    /// the report-table name, and the macOS front-end's table is meant to `diff`
-    /// against this one, so both halves are contract.
+    /// the report-table name, which the documented report surface fixes, so both
+    /// halves are contract.
     ///
     /// Falsifying edit: change `DrawGrid`'s label to `"draw.cells"`.
     #[test]
@@ -775,8 +774,8 @@ mod tests {
                 bucket.label(),
                 label,
                 "index {index}: label() must be {label:?}. Every report row and every smoke \
-                 assertion names the bucket by this string, and the macOS table is meant to `diff` \
-                 against this one column for column."
+                 assertion names the bucket by this string, and the documented report surface \
+                 fixes it."
             );
         }
 
@@ -847,7 +846,7 @@ mod tests {
                 "label {label:?} is {} characters; the width-14 label column needs at least one \
                  trailing space to separate it from the right-aligned count, so no label may \
                  exceed {EXPECT_MAX_LABEL_WIDTH}. A longer one runs the two columns together and \
-                 the table stops being `diff`-able against the macOS report.",
+                 the table stops matching the documented report surface.",
                 label.len()
             );
         }
@@ -872,9 +871,8 @@ mod tests {
     /// after trimming; anything else — including absent, empty and whitespace — is
     /// false.
     ///
-    /// The spellings are the macOS ones deliberately, so one documented surface
-    /// serves both front-ends. The parser takes the RAW value rather than a map, so
-    /// this test touches no process environment.
+    /// The spellings are the documented report surface's. The parser takes the RAW
+    /// value rather than a map, so this test touches no process environment.
     ///
     /// Falsifying edit: drop the `trim()` (row `" on "` fires) or
     /// drop the lowercasing (rows `"TRUE"` and `"Yes"` fire).
@@ -1099,9 +1097,8 @@ mod tests {
     /// space, in the directory the user meant but under a name they never wrote.
     ///
     /// The empty and whitespace-only rows are the reason the function exists at all:
-    /// `File::open("")` fails with `ENOENT` rather than degrading, and the macOS side
-    /// (`FrameMetrics.statsFileHandle`) rejects both, so accepting them here would put
-    /// the two front-ends' handling of one documented variable out of step.
+    /// `File::open("")` fails with `ENOENT` rather than degrading, and the documented
+    /// report surface rejects both.
     ///
     /// Falsifying edits: return `raw` untrimmed — the surrounding-whitespace row
     /// fires; drop the `is_empty` arm — the empty and whitespace-only rows fire.
@@ -1264,7 +1261,7 @@ mod tests {
             draw.mean_nanos, 20,
             "the mean is truncating integer division: 61 / 3 == 20. A 21 here means the \
              implementation rounds, which is a different statistic from the one the report's \
-             column claims and from the one macOS emits."
+             column claims."
         );
         assert_eq!(
             draw.max_nanos, 31,
@@ -2080,11 +2077,7 @@ mod tests {
     /// OF ORDER.
     ///
     /// THIS is the test that makes two runs — and the two front-ends — `diff`-able.
-    /// The expected string is the CONTRACT, and it is derived from
-    /// `WolfKeyMap/FrameStats.swift`'s `format`/`pad`/`millis` and its
-    /// `FrameStatsTests.testFormatProducesTheExactPinnedTable`, using the same
-    /// counts, nanosecond values, index, window and counters, so the two tables
-    /// differ only in their labels:
+    /// The expected string is the CONTRACT:
     ///
     /// - prefix `"wolf-frame-stats "` on every line, including the last;
     /// - label left-aligned in 14; count right-aligned in 5, with a `*` suffix
@@ -2106,10 +2099,9 @@ mod tests {
         assert_eq!(
             LINE_PREFIX, EXPECT_LINE_PREFIX,
             "LINE_PREFIX is {LINE_PREFIX:?}, want {EXPECT_LINE_PREFIX:?}. Every line of every \
-             report carries it, the cage smoke greps for it, and the macOS front-end emits the \
-             same string so the two tables can be diffed — changing it silently desynchronizes all \
-             three. The expected value is re-typed here rather than read from the const so this \
-             check is not a comparison with itself."
+             report carries it, the cage smoke greps for it, and the documented report surface \
+             fixes it — changing it silently breaks all three. The expected value is re-typed here \
+             rather than read from the const so this check is not a comparison with itself."
         );
 
         let report = Report {
@@ -2165,20 +2157,15 @@ mod tests {
              (draw.pane, wake, prev.render) means the sort by index() is missing, so two runs no \
              longer line up under `diff`; a missing `*` after 142 means the truncation marker is \
              gone and a reader cannot tell a windowed percentile from an exact one; a column \
-             shifted by one space means a field width moved, which breaks alignment against the \
-             macOS table this layout is copied from."
+             shifted by one space means a field width moved, which breaks the documented report \
+             surface."
         );
     }
 
     /// A value too wide for its column OVERFLOWS the field; it is never truncated.
     ///
     /// This is the wide case, and it is a contract rather than an accident of
-    /// `format!`. The macOS `pad(left:)` / `pad(right:)` helpers in
-    /// `WolfKeyMap/FrameStats.swift` return the text unchanged when the field is too
-    /// narrow — `guard deficit > 0 else { return text }` — so the two front-ends
-    /// disagree the moment either starts clipping, and a `diff` between their tables
-    /// stops being readable exactly where the numbers are most interesting. Losing
-    /// digits is also the worse failure on its own terms: a 123456-sample count
+    /// `format!`: losing digits is the worse failure, because a 123456-sample count
     /// clipped to `12345` and a 1234567.89 ms outlier clipped to `1234567.8` both
     /// read as plausible values, so nothing downstream can tell they were cut.
     ///
@@ -2240,10 +2227,9 @@ mod tests {
             expected,
             "a value wider than its column must push the row out, not lose characters. A `12345` \
              count, a `123456.7` p95 or a `1234567.8` max in the diff means the formatter clips to \
-             the field width, which silently reports a smaller number than was measured and \
-             diverges from the macOS `pad` helpers this layout is copied from. The narrow \
-             draw.cmdline row is the control: if it moved too, a field WIDTH changed rather than \
-             the overflow behaviour."
+             the field width, which silently reports a smaller number than was measured. The \
+             narrow draw.cmdline row is the control: if it moved too, a field WIDTH changed rather \
+             than the overflow behaviour."
         );
     }
 

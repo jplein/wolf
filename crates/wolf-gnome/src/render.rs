@@ -86,9 +86,8 @@ impl CellMetrics {
     /// (its surface size is irrelevant).
     ///
     /// The advance width comes from Pango's approximate char width, exact for a
-    /// monospace font and deliberately UNROUNDED — macOS uses `ceil(advance)`
-    /// instead, a pre-existing divergence this function does not close, because
-    /// rounding it would move every pointer smoke's pixel targets.
+    /// monospace font and deliberately UNROUNDED, because rounding it would move
+    /// every pointer smoke's pixel targets.
     ///
     /// The cell height and baseline come from [`cell_metrics_math`], which rounds
     /// in the unit its caller uses — so `size_pt` is converted to DEVICE PIXELS
@@ -97,9 +96,8 @@ impl CellMetrics {
     /// **No family fallback of this crate's own.** `set_family` accepts any
     /// string and fontconfig substitutes per lookup, always yielding usable
     /// metrics, so an unresolvable family measures fine and the description keeps
-    /// the name the caller asked for. macOS needs a fallback because CoreText
-    /// returns a DIFFERENT family rather than substituting; here one could only
-    /// override fontconfig's better answer.
+    /// the name the caller asked for. A fallback could only override fontconfig's
+    /// better answer.
     #[must_use]
     pub fn for_font(
         cr: &cairo::Context,
@@ -120,8 +118,8 @@ impl CellMetrics {
         let cell_w = f64::from(metrics.approximate_char_width()) / scale;
         let ascent = f64::from(metrics.ascent()) / scale;
         let descent = f64::from(metrics.descent()) / scale;
-        // `FontMetrics::height` is Pango's recommended line height, the counterpart of macOS's
-        // `CTFontGetLeading`; clamped so a face whose height is under its glyph box cannot shrink the line.
+        // `FontMetrics::height` is Pango's recommended line height, clamped so a face whose
+        // height is under its glyph box cannot shrink the line.
         let leading = (f64::from(metrics.height()) / scale - ascent - descent).max(0.0);
 
         let dpi = pangocairo::functions::context_get_resolution(&context);
@@ -302,8 +300,8 @@ impl GlyphPainter {
                 attrs.insert(pango::AttrInt::new_underline(decoration.underline));
             }
             if decoration.strikethrough {
-                // No `AttrColor::new_strikethrough_color`: without it Pango strikes in the foreground, as macOS
-                // does. See `glyph_style`'s module docs.
+                // No `AttrColor::new_strikethrough_color`: without it Pango strikes in the foreground.
+                // See `glyph_style`'s module docs.
                 attrs.insert(pango::AttrInt::new_strikethrough(true));
             }
             if let Some(color) = decoration.underline_color {

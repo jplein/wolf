@@ -170,12 +170,9 @@ pub enum PaletteAction {
 ///   working directory rather than Neovim's, so one could only be a corrupt store
 ///   row.
 ///
-/// [`WolfCore::recent_dirs`] already omits a directory that has gone, and neither
-/// it nor this seam prunes the store. The store lives at
-/// `<state_dir>/folder-mru.sqlite` and is shared with the macOS front-end, so
-/// deleting a temporarily unmounted network path would permanently forget it for
-/// both; filtering on read lets it return. The `is_dir` conjunct stays because this
-/// seam is correct for any slice it is given, and a stale row wedges a cell.
+/// What the store keeps and prunes is core's concern ([`WolfCore::recent_dirs`]);
+/// this seam prunes nothing. The `is_dir` conjunct stays because this seam is
+/// correct for any slice it is given, and a stale row wedges a cell.
 ///
 /// Limitation: a directory that exists but is unreadable (mode `000`) still passes
 /// `is_dir` and is still offered.
@@ -486,12 +483,11 @@ impl PaletteInner {
     /// RECORDS its MRU key, CLOSES the palette, then hands the row's
     /// [`PaletteAction`] to the shell's handler. With ZERO rows it is a true no-op.
     ///
-    /// **That order is load-bearing and diverges from macOS's record → dispatch →
-    /// close.** A dispatched `CloseWindow` / `QuitApplication` synchronously runs
-    /// `window::wire_close`'s handler, which takes the core out and tears the window
-    /// down, so nothing may touch palette widgets afterwards. The handler `Rc` is
-    /// cloned OUT of its `RefCell` for the same reason: no borrow may be live across
-    /// a call that can re-enter this widget.
+    /// **That order is load-bearing.** A dispatched `CloseWindow` / `QuitApplication`
+    /// synchronously runs `window::wire_close`'s handler, which takes the core out and
+    /// tears the window down, so nothing may touch palette widgets afterwards. The
+    /// handler `Rc` is cloned OUT of its `RefCell` for the same reason: no borrow may
+    /// be live across a call that can re-enter this widget.
     fn activate_selection(&self) {
         let selected = self.list.selected_row().map(|row| row.index());
         // Everything needed is copied out under a short borrow, which is dropped

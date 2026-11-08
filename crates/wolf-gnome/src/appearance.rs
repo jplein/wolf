@@ -63,8 +63,7 @@
 //! The handler re-runs [`appearance_decision`] against the manager's new reading
 //! and calls `set_background` only. It does **not** call `set_color_scheme` again:
 //! re-applying a property from inside that property's own notify handler is the
-//! shape that loops. No dedup guard is needed either, unlike the macOS
-//! counterpart's `guard nowDark != resolvedDark` — `notify::dark` fires only on a
+//! shape that loops. No dedup guard is needed either: `notify::dark` fires only on a
 //! real property change, and `set_background` is idempotent and fire-and-forget on
 //! the ordered input channel.
 //!
@@ -93,8 +92,7 @@ pub struct ResolvedAppearance {
     /// What `adw::StyleManager::set_color_scheme` is given for the app chrome.
     pub color_scheme: adw::ColorScheme,
     /// Whether to arm the `dark` notify handler, so a live desktop toggle
-    /// re-pushes. The port of macOS's `installAppearanceObserverIfNeeded` /
-    /// `removeAppearanceObserver`: only `auto` follows a live toggle.
+    /// re-pushes. Only `auto` follows a live toggle.
     pub observe_os: bool,
 }
 
@@ -508,8 +506,7 @@ mod tests {
     /// FALSIFYING EDIT: `observe_os: true` in every arm. The handler is then armed
     /// with a forced appearance in effect, so a desktop toggle re-pushes a
     /// `background` that contradicts the user's own config line — the exact reason
-    /// the macOS counterpart REMOVES its observer in the forced arms rather than
-    /// leaving it installed.
+    /// the forced arms leave the handler disarmed.
     ///
     /// COMPLEMENTARY EDIT: `observe_os: false` in every arm. `auto` then becomes a
     /// launch-time snapshot: correct until the desktop changes, and stale
@@ -537,8 +534,8 @@ mod tests {
             "exactly the two `auto` inputs may arm the live OS observer, whatever the desktop \
              currently reads. An EXTRA entry means the `dark` notify handler stays connected while \
              a FORCED appearance is in effect, so the next desktop toggle re-pushes a `background` \
-             that contradicts the user's own `wolf-config.yaml` line — the state macOS avoids by \
-             removing its observer in the forced arms. An entry MISSING means `auto` is resolved \
+             that contradicts the user's own `wolf-config.yaml` line, which the forced arms avoid \
+             by leaving the handler disarmed. An entry MISSING means `auto` is resolved \
              once at launch and never again, which is a snapshot rather than the following the \
              setting's name promises."
         );

@@ -11,8 +11,7 @@
 //!   silently reopening yesterday's project instead would be surprising.
 //! - A desktop-launcher / `.desktop` launch yields `$HOME` or `/`, which is
 //!   exactly "no project" — and THAT is when the cwd restored from `state.json`
-//!   (see [`crate::state_seam::restore_plans`]) gets its turn, which is the macOS
-//!   behaviour (`StateSeam.launchDecision` consults only the restored cwd).
+//!   (see [`crate::state_seam::restore_plans`]) gets its turn.
 //! - With neither usable, the empty state.
 //!
 //! Applying the SAME predicate to the restored cwd is deliberate: it means a
@@ -46,9 +45,9 @@
 //! updates `rooted`, after which the same inputs answer `Stay` forever.
 //!
 //! **No project predicate is applied to a re-root.** [`is_usable_project`] guards a
-//! launch-time GUESS about a directory the user did not choose; a typed `:cd /` is
-//! an explicit act, macOS honours it, and `wolf_core::files::SearchBounds` is the
-//! backstop. Do not re-derive the predicate here.
+//! launch-time GUESS about a directory the user did not choose; a typed `:cd /` is an
+//! explicit act, and `wolf_core::files::SearchBounds` is the backstop. Do not re-derive
+//! the predicate here.
 
 use std::path::{Path, PathBuf};
 
@@ -368,8 +367,7 @@ mod tests {
             },
             // === The restored candidate: tried only once the process cwd is refused, by the same predicate.
             Case {
-                // The desktop-launcher shape, which is the case macOS handles too:
-                // $HOME is not a project, so the saved project opens.
+                // The desktop-launcher shape: $HOME is not a project, so the saved project opens.
                 desc: "process cwd is home => the RESTORED project opens",
                 process_cwd: Some(HOME),
                 restored: Some(RESTORED),
@@ -403,7 +401,7 @@ mod tests {
             },
             Case {
                 // The ordering rule: launching from a directory is the Linux idiom, and silently reopening
-                // yesterday's project would surprise. macOS, which never reads a process cwd, is not mirrored.
+                // yesterday's project would surprise.
                 desc: "a usable process cwd WINS over an equally usable restored cwd",
                 process_cwd: Some(PROJECT),
                 restored: Some(RESTORED),

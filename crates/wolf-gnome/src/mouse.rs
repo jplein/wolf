@@ -4,19 +4,14 @@
 //! values out, with no widget, no display and no event loop — so every rule here
 //! is unit-tested headlessly in this module's own `#[cfg(test)] mod tests`.
 //!
-//! Ported BEHAVIOURALLY (not literally) from
-//! `crates/wolf-macos/Sources/WolfKeyMap/ScrollAccumulator.swift` and
-//! `PaneContainerView.swift`'s `mouseEvent` / `scrollWheel`, with the divergences
-//! noted per item. Two of those divergences are deliberate and load-bearing:
+//! Two rules here are deliberate and load-bearing:
 //!
 //! 1. [`scroll_steps`] maps a POSITIVE step count to
-//!    [`wolf_core::ScrollDirection::Down`] — the OPPOSITE of the macOS mapping.
-//!    Read that function's doc comment before "fixing" it against the Swift.
-//! 2. [`PaneScroll`] pulls the reset-the-carry-when-the-target-grid-changes rule
-//!    DOWN into this module. macOS keeps it in the view
-//!    (`PaneContainerView.scrollWheel`'s `if grid != lastScrollGrid { reset() }`),
-//!    which on this side of the port would put it in `pane_view.rs`, where it
-//!    needs a live display and nothing can reach it.
+//!    [`wolf_core::ScrollDirection::Down`], because a GDK `dy > 0` is
+//!    `GDK_SCROLL_DOWN`. Read that function's doc comment before "fixing" it.
+//! 2. [`PaneScroll`] keeps the reset-the-carry-when-the-target-grid-changes rule
+//!    in this module, so it is reachable headlessly; in `pane_view.rs` it would
+//!    need a live display.
 //!
 //! What this module deliberately does NOT do: it never reads a snapshot and never
 //! converts pixels to cells. The grid comes from the live snapshot and the cell
@@ -65,13 +60,11 @@ pub struct MouseInput {
 /// `None` for a button `wolf-gnome` does not forward.
 ///
 /// Only `gdk::BUTTON_PRIMARY` (1) is forwarded; EVERY other button number returns
-/// `None`. That is deliberate parity with macOS, which overrides only
-/// `mouseDown` / `mouseDragged` / `mouseUp` (the left button): right-click context
-/// menus and middle-click paste are separate, unimplemented features on BOTH
-/// platforms. `GtkGestureSingle`'s default `button` property is already
-/// `GDK_BUTTON_PRIMARY`, so in practice the gesture never fires for another
-/// button — the `None` arm is defence-in-depth, plus the one place this decision
-/// is recorded and tested.
+/// `None`. That is deliberate: right-click context menus and middle-click paste are
+/// separate, unimplemented features. `GtkGestureSingle`'s default `button` property
+/// is already `GDK_BUTTON_PRIMARY`, so in practice the gesture never fires for
+/// another button — the `None` arm is defence-in-depth, plus the one place this
+/// decision is recorded and tested.
 ///
 /// Modifiers: `ctrl` from `CONTROL_MASK`, `shift` from `SHIFT_MASK`, `alt` from
 /// `ALT_MASK`. `SUPER_MASK` is DELIBERATELY IGNORED: Neovim has no meta mouse
@@ -127,7 +120,7 @@ pub fn scroll_threshold(unit: gdk::ScrollUnit, cell_h: f64) -> f64 {
 /// direction reversal is handled symmetrically. Deciding WHEN that carry must be
 /// thrown away is deliberately NOT this type's job: [`PaneScroll`] composes it
 /// with the target grid and [`reset`](ScrollAccumulator::reset)s it on a grid
-/// change (mirroring macOS's `if grid != lastScrollGrid { reset() }`).
+/// change.
 ///
 /// `Copy` on purpose: `pane_view` stores it in a `Cell`, so no borrow is ever held
 /// across a `wolf_core::WolfCore` call.
@@ -160,11 +153,10 @@ impl ScrollAccumulator {
     ///    `[-MAX_STEPS_PER_EVENT, MAX_STEPS_PER_EVENT]`, and when the clamp bites,
     ///    the carry is DROPPED (a delta that large is garbage; carrying it would
     ///    keep firing forever).
-    /// 4. It is O(1), as `ScrollAccumulator.swift` is. A form with two `while`
-    ///    loops is `O(delta / threshold)` and would effectively hang on a
-    ///    pathological delta. The arithmetic form has identical semantics for every
-    ///    realistic input — `scroll_accumulator_table` pins that equivalence, and
-    ///    its `1e300` case would never finish under the loop form.
+    /// 4. It is O(1). A form with two `while` loops is `O(delta / threshold)` and would
+    ///    effectively hang on a pathological delta. The arithmetic form has identical
+    ///    semantics for every realistic input — `scroll_accumulator_table` pins that
+    ///    equivalence, and its `1e300` case would never finish under the loop form.
     pub fn consume(&mut self, delta: f64, threshold: f64) -> i32 {
         // (1) Reject garbage BEFORE touching the carry: a rejected call must be
         // indistinguishable, from the accumulator's point of view, from no call.
@@ -217,19 +209,13 @@ impl ScrollAccumulator {
 ///
 /// This is the whole of `pane_view`'s scroll bookkeeping, expressed as a pure
 /// value. The rule it exists for — **a change of target grid discards the carried
-/// sub-line remainder** — is the macOS `if grid != lastScrollGrid { reset() }`,
-/// which on macOS lives in the VIEW (`PaneContainerView.scrollWheel`). Keeping it
-/// there on this side would put it in `pane_view.rs`, which needs a live display,
-/// so at the time nothing could execute it: pointer input then had NO end-to-end
-/// coverage on Linux at all, and a rule left in the GTK glue was therefore a rule
-/// nothing verified. Pointer input DOES have cage coverage now — four smokes drive
-/// real `wl_pointer` events through the controllers, see
-/// `crates/wolf-gnome/tests/README.md`, "Pointer injection: how it works and why
-/// it is built this way" — but the placement is unchanged and still right, because
-/// discriminating a per-grid carry end to end would need two panes plus a pointer
-/// that scrolls across both, which no smoke does. Here it is decidable from the
-/// arguments, and `pane_scroll_table` / `grid_change_discards_the_carry` pin it
-/// headlessly.
+/// sub-line remainder** — lives here rather than in `pane_view.rs`, which needs a
+/// live display. Four cage smokes drive real `wl_pointer` events through the
+/// controllers (`crates/wolf-gnome/tests/README.md`, "Pointer injection: how it
+/// works and why it is built this way"), but discriminating a per-grid carry end to
+/// end would need two panes plus a pointer that scrolls across both, which no smoke
+/// does. Here it is decidable from the arguments, and `pane_scroll_table` /
+/// `grid_change_discards_the_carry` pin it headlessly.
 ///
 /// The grid id is used ONLY for equality against the previous call; this type
 /// never resolves it against a snapshot.
@@ -299,25 +285,21 @@ impl PaneScroll {
 /// magnitude is `steps.unsigned_abs()`, which is total — a plain `-steps` would
 /// PANIC in debug builds on `i32::MIN`.
 ///
-/// # THIS SIGN CONVENTION IS THE OPPOSITE OF macOS'S. DO NOT "FIX" IT.
+/// # A POSITIVE STEP COUNT IS `Down`. DO NOT "FIX" IT.
 ///
-/// AppKit's `scrollingDeltaY > 0` means "show earlier content" (the viewport moves
-/// toward line 1), so `crates/wolf-macos` maps a positive step count to `Up`.
-/// GDK's smooth-scroll `dy > 0` corresponds to `GDK_SCROLL_DOWN` — the viewport
-/// moves toward the END of the buffer — so GTK maps a positive step count to
-/// `Down`. And `ScrollDirection::Down` is empirically pinned (by
-/// `crates/wolf-ffi/tests/mouse_scroll.rs`, against real Neovim) to strictly
-/// INCREASE `win_viewport.topline`, which is exactly what a positive GDK `dy`
-/// should do.
+/// GDK's smooth-scroll `dy > 0` is `GDK_SCROLL_DOWN` — the viewport moves toward the
+/// END of the buffer — so a positive step count is `Down`. And `ScrollDirection::Down`
+/// is empirically pinned (by `crates/wolf-ffi/tests/mouse_scroll.rs`, against real
+/// Neovim) to strictly INCREASE `win_viewport.topline`, which is exactly what a
+/// positive GDK `dy` should do.
 ///
 /// **If scrolling feels inverted, flip THIS line** — and then fix
 /// `scroll_direction_is_inverted_from_macos`, which exists solely to stop this
-/// mapping from being "corrected" back while cross-reading
-/// `PaneContainerView.scrollWheel(with:)` in `PaneContainerView.swift`.
+/// mapping from being "corrected" back.
 #[must_use]
 pub fn scroll_steps(steps: i32) -> Option<(wolf_core::ScrollDirection, u32)> {
-    // GDK dy > 0 is GDK_SCROLL_DOWN. This is the INVERSE of the macOS mapping and
-    // is correct — read the doc comment above before touching it.
+    // GDK dy > 0 is GDK_SCROLL_DOWN, so a positive count is Down — read the doc comment
+    // above before touching it.
     let direction = match steps {
         0 => return None,
         s if s > 0 => wolf_core::ScrollDirection::Down,
@@ -418,7 +400,7 @@ mod tests {
                 state: ModifierType::LOCK_MASK,
                 expected: left(false, false, false),
             },
-            // Every non-primary button is refused: parity with macOS (no right-click menu, no middle paste).
+            // Every non-primary button is refused (no right-click menu, no middle paste).
             MouseCase {
                 desc: "middle button is refused",
                 button: gdk::BUTTON_MIDDLE,
@@ -600,7 +582,7 @@ mod tests {
     /// `&'static [Op]` slices need a `'static` allocation — the same shape
     /// `actions::MENU_SECTIONS` uses for its nested item slices.
     const ACC_CASES: &[AccCase] = &[
-        // --- The macOS-ported behaviours ------------------------------------
+        // --- The core behaviours --------------------------------------------
         AccCase {
             desc: "one whole cell crosses exactly one step",
             ops: &[Op::Consume {
@@ -710,7 +692,7 @@ mod tests {
                 },
             ],
         },
-        // --- Hardening, shared with `ScrollAccumulator.swift` -----------------
+        // --- Hardening --------------------------------------------------------
         AccCase {
             desc: "a zero threshold returns 0, does not hang, and does not break the next call",
             ops: &[
@@ -1298,7 +1280,7 @@ mod tests {
         }
     }
 
-    // The GTK scroll sign is inverted from macOS on purpose; `wolf-ffi/tests/mouse_scroll.rs` pins
+    // A positive GDK dy is GDK_SCROLL_DOWN, so Down; `wolf-ffi/tests/mouse_scroll.rs` pins
     // Down as raising topline against real Neovim. See crates/wolf-gnome/src/README.md#mousers
     #[test]
     fn scroll_direction_is_inverted_from_macos() {
@@ -1306,7 +1288,7 @@ mod tests {
             scroll_steps(1),
             Some((ScrollDirection::Down, 1)),
             "a POSITIVE GDK dy must scroll DOWN (toward the end of the buffer, increasing \
-             win_viewport.topline). macOS maps positive to Up; GTK must not. See the comment \
+             win_viewport.topline), because a positive dy is GDK_SCROLL_DOWN. See the comment \
              above this test."
         );
         assert_eq!(

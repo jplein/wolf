@@ -46,8 +46,7 @@
 //! path by which a `close_window` / `quit_application` reaches
 //! `window.close()`, so a command queued in the instant before a crash would
 //! otherwise be stranded behind the crash overlay with no way out but the window
-//! manager. The drain issues no RPC and paints nothing, so running it costs
-//! nothing.
+//! manager. Reading the queue issues no RPC; some dispatched commands do.
 //!
 //! ## The restart orchestration
 //!

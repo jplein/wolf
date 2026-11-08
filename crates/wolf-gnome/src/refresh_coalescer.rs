@@ -1,9 +1,9 @@
 //! The pure, GTK-free state machine behind the sidebar's TRAILING refresh.
 //!
-//! A port of `WolfKeyMap/PickerRefreshCoalescer.swift`, with one deliberate
-//! divergence: macOS shares its coalescer between the picker and the file tree,
-//! while on Linux only the sidebar adopts it. The picker's refresh is not part of
-//! this rule and widening it would put the picker's cage smokes at risk for nothing.
+//! Only the sidebar adopts it, unlike the macOS coalescer the picker shares
+//! (`crates/wolf-macos/Sources/WolfKeyMap/README.md#pickerrefreshcoalescerswift`):
+//! widening the rule would put the two picker smokes at risk for nothing this crate
+//! needs.
 //!
 //! A streaming traversal fires a wake per batch. Left alone each wake rebuilds the
 //! whole root store, which on `wolf-gnome` also collapses every manually expanded
@@ -39,8 +39,7 @@ use std::time::Duration;
 
 /// How long a trailing refresh waits before it fires — roughly 30 fps.
 ///
-/// **The one site in this crate where this number lives.** The macOS counterpart is
-/// `PickerRefreshCoalescer.refreshInterval = 0.033`.
+/// **The one site in this crate where this number lives.**
 pub const REFRESH_INTERVAL: Duration = Duration::from_millis(33);
 
 /// The trailing-refresh state machine: at most one armed fire at a time, plus a
@@ -152,10 +151,9 @@ mod tests {
     /// A batch arriving AFTER a fire arms a new fire, so the last batch of a
     /// traversal is never left undrawn.
     ///
-    /// This is what row 3 costs on Linux: a wake routed to one view while another
-    /// view's traversal runs — the macOS defect — has no counterpart here, because
-    /// each window owns its core, its sidebar and its own coalescer, so no wake
-    /// crosses between them. The guarantee this seam carries is therefore that the
+    /// A wake cannot be routed to one view while another view's traversal runs,
+    /// because each window owns its core, its sidebar and its own coalescer, so no
+    /// wake crosses between them. The guarantee this seam carries is therefore that the
     /// coalescer itself cannot drop a traversal's final batch. A wake either
     /// coalesces into an armed fire — which has not run yet, so it will read the
     /// state that batch appended — or it finds nothing armed and arms a new one.

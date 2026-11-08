@@ -20,8 +20,6 @@
 //!   liveness: a successful restart makes the fresh nvim `Alive`, whose wake
 //!   hides the crash overlay immediately, so without a separate channel the user
 //!   would see nothing at all. Only the restart SUCCESS path flashes it.
-//!
-//! Mirrors macOS's `NvimStatusOverlayView` / `NvimRestartedBannerView` pair.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -36,11 +34,9 @@ use crate::liveness_ui::{
 };
 
 /// Gap (px) between the top of the editor area and the top of the banner.
-/// Mirrors macOS's `NvimRestartedBannerView.topMargin`.
 const BANNER_TOP_MARGIN: i32 = 12;
 
 /// Padding (px) around the banner's label, giving the `osd` pill its body.
-/// Mirrors macOS's `NvimRestartedBannerView.labelPadding`.
 const BANNER_LABEL_PADDING: i32 = 8;
 
 /// The crash overlay's shared, interior-mutable state. All access happens on the
@@ -61,7 +57,6 @@ struct CrashInner {
     /// Monotonic token identifying the latest [`CrashOverlay::flash_banner`].
     /// A scheduled hide only fires while its token is still current, so rapid
     /// restarts coalesce into ONE continuous banner rather than a premature hide.
-    /// Exactly macOS's `flashGeneration` scheme.
     flash_generation: Cell<u64>,
 }
 
@@ -161,9 +156,9 @@ pub fn build() -> CrashOverlay {
 /// Builds the transient "Neovim was restarted" banner: a top-centred `osd` pill
 /// that starts hidden and NEVER intercepts a click.
 ///
-/// `set_can_target(false)` is the GTK equivalent of macOS's `hitTest -> nil`. The
-/// banner has no controls of its own and sits over a WORKING editor for several
-/// seconds, so a click landing in its rect belongs to the pane beneath it.
+/// `set_can_target(false)` lets every click pass through. The banner has no controls of its
+/// own and sits over a WORKING editor for several seconds, so a click landing in its rect
+/// belongs to the pane beneath it.
 fn build_banner() -> gtk::Box {
     let label = gtk::Label::new(Some(RESTARTED_BANNER_MESSAGE));
     label.set_margin_top(BANNER_LABEL_PADDING);

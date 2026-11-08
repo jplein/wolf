@@ -2,12 +2,10 @@
 //! what the click means, what base URI the preview document is loaded against, and
 //! the one line of JavaScript that scrolls a fragment into view.
 //!
-//! A port of `WolfKeyMap/PreviewLinkSeam.swift` (see
-//! `crates/wolf-macos/Sources/WolfKeyMap/README.md`). Data in, data out — `std` and
-//! `serde_json` only, no `gtk`, no `gdk`, no `webkit6`, no `WolfCore` — which is
-//! what lets the whole rulebook be unit-tested headlessly, the way [`crate::nav_ui`]
-//! and [`crate::clipboard_ui`] are. The widget work of carrying the answers out
-//! lives in [`crate::pane_view`].
+//! Data in, data out — `std` and `serde_json` only, no `gtk`, no `gdk`, no
+//! `webkit6`, no `WolfCore` — which is what lets the whole rulebook be unit-tested
+//! headlessly, the way [`crate::nav_ui`] and [`crate::clipboard_ui`] are. The
+//! widget work of carrying the answers out lives in [`crate::pane_view`].
 //!
 //! The split against its sibling [`crate::preview_ui`] is deliberate and worth
 //! keeping: **this module owns URI arithmetic; [`crate::preview_ui`] owns the
@@ -90,36 +88,33 @@
 //! saved file.
 //!
 //! Same-path comparison is LEXICAL normalization of both sides (drop `.`, pop on
-//! `..`, keep the root), so `/a/./x.md` and `/a/x.md` are one file — matching
-//! macOS's `standardizedFileURL.path`. There is deliberately **no symlink
-//! resolution**: it would be a filesystem touch in a pure seam, and macOS does not
-//! do it either, so the two front-ends would answer differently for the same click.
+//! `..`, keep the root), so `/a/./x.md` and `/a/x.md` are one file. There is
+//! deliberately **no symlink resolution**: it would be a filesystem touch in a pure
+//! seam.
 //!
-//! ## The divergences from macOS, and why each is deliberate
+//! ## What this seam refuses
 //!
-//! Every one of them narrows what may be launched or opened, and all four share a
-//! reason: on GNOME the "hand it to the default handler" path can start an arbitrary
+//! Rows 2, 4, 5 and 10 refuse where the macOS seam launches or reads through
+//! (`crates/wolf-macos/Sources/WolfKeyMap/README.md#previewlinkseamswift`), because
+//! on GNOME the "hand it to the default handler" path can start an arbitrary
 //! process, the trigger is a string in a document the user merely previewed, and
-//! there is no Gatekeeper/quarantine counterpart to lean on. A refusal is the
-//! conservative end of a decision a later unit can reverse with its own evidence; a
-//! launch is not.
+//! there is no quarantine to lean on. A refusal is the conservative end of a
+//! decision a later unit can reverse with its own evidence; a launch is not.
 //!
-//! **Rows 2, 5 and 10 REFUSE where `PreviewLinkSeam` calls `NSWorkspace.open` or
-//! previews an empty path.** An `about:` URI, a `file:` URI with nothing after the
+//! **Rows 2, 5 and 10 REFUSE.** An `about:` URI, a `file:` URI with nothing after the
 //! scheme, and a target with neither scheme nor path all name no file and no
 //! resource a handler could open.
 //!
-//! **Row 4 REFUSES a non-local `file:` authority**, which macOS reads straight
-//! through to the URL's path. `preview_file` takes a filesystem path, so passing
-//! `file://evil.com/etc/passwd` through would open whatever sits at that path on
-//! THIS machine while the document claimed to name another host's.
+//! **Row 4 REFUSES a non-local `file:` authority.** `preview_file` takes a filesystem
+//! path, so passing `file://evil.com/etc/passwd` through would open whatever sits at
+//! that path on THIS machine while the document claimed to name another host's.
 //!
 //! **A `file:` link that core declines to preview is REFUSED, never handed to the OS
 //! default handler.** That decision is not taken here — this module cannot know
 //! whether the linked file is Markdown without touching the filesystem, and core's
 //! `preview_file` is the one gate that does. Rows 8 and 9 therefore always answer
 //! [`PreviewLink::PreviewFile`], and [`crate::pane_view`] prints when core answers
-//! `0`. Both halves of the rule have to hold for the divergence to mean anything,
+//! `0`. Both halves of the rule have to hold for the refusal to mean anything,
 //! which is why it is stated in the module that produces the input as well as in the
 //! one that consumes the answer.
 //!
@@ -164,10 +159,9 @@
 //! both are legal raw inside a JSON string but are line terminators to a JavaScript
 //! grammar before ES2019, where they would end the literal mid-string.
 //!
-//! macOS's escaper additionally escapes `<` and `/`; this one deliberately does not.
-//! This is JavaScript SOURCE handed to `evaluate_javascript`, never HTML, so a
-//! `</script>` in a fragment has nothing to close. Carrying two escapers that differ
-//! invites the belief that one of the differences is load-bearing.
+//! This escaper deliberately does not escape `<` or `/`. This is JavaScript SOURCE
+//! handed to `evaluate_javascript`, never HTML, so a `</script>` in a fragment has
+//! nothing to close.
 
 use std::path::{Component, Path, PathBuf};
 
@@ -211,7 +205,7 @@ pub enum PreviewLink {
 /// document's base — against `source_path`, the absolute path of the file the pane
 /// is currently previewing.
 ///
-/// The ten rows, their evaluation order, and the divergences from macOS are in the
+/// The ten rows, their evaluation order, and what this seam refuses are in the
 /// module docs. An empty `source_path` (a nameless buffer) can never compare equal
 /// to a link path, which is exactly why rows 6 and 7 are unreachable there.
 #[must_use]
@@ -492,9 +486,7 @@ fn percent_encode_path(path: &str) -> String {
 /// separator is not kept.
 ///
 /// Lexical ONLY — no symlink resolution, no `canonicalize`, no filesystem access of
-/// any kind. This module is pure, and macOS's `standardizedFileURL` is lexical too,
-/// so resolving symlinks here would make the two front-ends disagree about whether
-/// a link points at the file already on screen.
+/// any kind: symlink resolution would be a filesystem touch in a pure seam.
 fn normalize_path(path: &str) -> String {
     let mut kept: Vec<Component<'_>> = Vec::new();
     for component in Path::new(path).components() {
@@ -505,7 +497,7 @@ fn normalize_path(path: &str) -> String {
                     kept.pop();
                 }
                 // `/..` is `/`: the root has no parent, so the component is spent
-                // rather than kept, which is what `standardizedFileURL` answers too.
+                // rather than kept.
                 Some(Component::RootDir) => {}
                 _ => kept.push(component),
             },
@@ -1333,16 +1325,14 @@ mod tests {
              or the id gains quote marks."
         );
 
-        // The two DELIBERATE non-escapes, so nobody "completes" macOS's escaper here.
+        // The two DELIBERATE non-escapes, so nobody "completes" the escaper here.
         let raw_markup = scroll_into_view_js("a</b").expect("serde_json can encode a &str");
         assert!(
             raw_markup.contains("a</b"),
             "the script for a fragment containing `</` escaped it. It was:\n{raw_markup}\nThis \
              is JavaScript SOURCE handed to `evaluate_javascript` and never HTML, so a \
-             `</script>` in a fragment has nothing to close. macOS's escaper does escape `<` \
-             and `/`; carrying two escapers that differ invites the belief that one of the \
-             differences is load-bearing, so the divergence is pinned rather than left to \
-             drift."
+             `</script>` in a fragment has nothing to close, so the non-escape is pinned \
+             rather than left to drift."
         );
     }
 
@@ -1352,7 +1342,7 @@ mod tests {
     /// first colon", and the difference decides whether a LOCAL path is handed to an
     /// external launcher.
     ///
-    /// There is deliberately NO `C:\…` row. Wolf runs on Linux and macOS, so a
+    /// There is deliberately NO `C:\…` row. This crate runs only on Linux, so a
     /// drive letter is not an input this function can receive, and pinning one would
     /// constrain a correct change for a case that cannot occur. `/notes/12:30
     /// standup.md` is the real input with a colon in a path segment, and the grammar
@@ -1389,8 +1379,8 @@ mod tests {
         }
     }
 
-    /// [`normalize_path`] is LEXICAL and touches no filesystem, which is what keeps
-    /// this front end's answer identical to macOS's `standardizedFileURL.path`.
+    /// [`normalize_path`] is LEXICAL and touches no filesystem: symlink resolution
+    /// would be a filesystem touch in a pure seam.
     ///
     /// Falsifier: reach for `std::fs::canonicalize`. Every row below still passes for
     /// paths that exist and the function starts answering differently for paths that
@@ -1427,9 +1417,8 @@ mod tests {
             "/definitely/not/on/this/x.md",
             "normalize_path must answer for a path that does not exist. If it ever consults \
              the filesystem — `canonicalize`, `symlink_metadata`, anything — this module stops \
-             being pure, a click's meaning starts depending on what happens to be on disk, and \
-             the two front ends disagree about whether a link points at the file on screen \
-             (macOS's `standardizedFileURL` is lexical too)."
+             being pure, and a click's meaning starts depending on what happens to be on \
+             disk."
         );
     }
 }

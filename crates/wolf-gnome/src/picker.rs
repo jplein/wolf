@@ -27,9 +27,7 @@
 //! Those three seams are `pub(crate)` and shared with [`crate::palette`]'s,
 //! [`crate::buffer_picker`]'s and [`crate::search_overlay`]'s overlays, so the file
 //! list, the command list, the buffer list and the project-search result list
-//! navigate and activate identically — one arithmetic, one table of tests. The macOS
-//! `PickerSeam` port names this file as its counterpart, which is why the functions
-//! stay here rather than moving to a seam module.
+//! navigate and activate identically — one arithmetic, one table of tests.
 //!
 //! **No shared overlay WIDGET is extracted, and that is a judgement rather than an
 //! omission.** The four overlays already share every rule that is genuinely shared —

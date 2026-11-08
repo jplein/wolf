@@ -31,10 +31,8 @@
 //! `gtk::TreeExpander` + label.
 //!
 //! `remove_all()` destroys the root's `TreeListRow` and with it its expanded state,
-//! so the root is RE-EXPANDED after every root-store rebuild. macOS gets expansion
-//! preservation free from `NSOutlineView`'s identity-keyed `reloadData()` and
-//! carries a `didInitialExpand` flag instead; there is no such flag here and none is
-//! needed.
+//! so the root is RE-EXPANDED after every root-store rebuild. No first-expand flag
+//! is needed.
 //!
 //! **Rule R1 governs every borrow of the shared `entries` and `memo`** — see
 //! [`children_for`], which states it. A `RefCell` borrow held across a GTK call that
@@ -98,7 +96,7 @@ use crate::tree_gate::TreeRefreshGate;
 const CURRENT_FILE_CSS: &str = "wolf-current-file";
 
 /// The sidebar's single top-level node: a synthetic directory named `label` whose
-/// `rel_path` is the CWD SENTINEL — the empty string, the same one macOS uses.
+/// `rel_path` is the CWD SENTINEL — the empty string.
 ///
 /// A `Dir`, which is what makes `TreeInner::activate` structurally unable to reach
 /// `InputEvent::Open` for the root row: only the `File` arm sends one. The empty
@@ -382,7 +380,7 @@ impl TreeInner {
         };
 
         // The synthetic root first: every ancestor row lives under it, so without this no `find_row`
-        // below matches and every reveal silently fails (macOS's `expandItem(rootItem)`).
+        // below matches and every reveal silently fails.
         if let Some(row) = self.row_at(0) {
             row.set_expanded(true);
         }
@@ -481,9 +479,9 @@ impl TreeInner {
     /// directory: `start_file_search` resolves its root from `live_cwd()`, so
     /// re-rooting earlier would re-root at the OLD cwd.
     ///
-    /// The pending reveal is CLEARED rather than re-armed (macOS re-arms). Re-arming
-    /// would make an unresolvable reveal — the ordinary case after a `:cd` away from
-    /// the current file — retry an O(N) row scan on every later refresh forever.
+    /// The pending reveal is CLEARED rather than re-armed. Re-arming would make an
+    /// unresolvable reveal — the ordinary case after a `:cd` away from the current file
+    /// — retry an O(N) row scan on every later refresh forever.
     fn reroot(&self, root_label: &str) {
         // Disarm FIRST. A fire armed against the old root would otherwise refresh
         // the sidebar from the directory the user just left.
@@ -934,7 +932,7 @@ mod tests {
     ///    `InputEvent::Open` for the root row — `activate` matches the node and
     ///    only its `File` arm sends an `Open` — so "clicking the root must not
     ///    open a file" is satisfied by construction rather than by a guard.
-    /// 2. Its `rel_path` is `""`, the same sentinel macOS uses, so the existing
+    /// 2. Its `rel_path` is `""`, the cwd sentinel, so the existing
     ///    create-func resolves the root's children to the cwd's top level with no
     ///    special-casing.
     ///

@@ -460,10 +460,9 @@ fn an_unresolvable_family_still_measures_and_is_not_rewritten() {
         requested.as_deref(),
         Some(NO_SUCH_FAMILY),
         "the measured font description reports family {requested:?}, not the requested \
-         {NO_SUCH_FAMILY:?}. Rewriting the family — a macOS-style `makeFont` fallback to \
-         `DejaVu Sans Mono` or to `monospace` — is the change this crate refuses: CoreText returns \
-         a DIFFERENT family and so must be checked, while Pango substitutes per lookup and always \
-         yields usable metrics, so a hand-rolled fallback here is dead code that can only override \
+         {NO_SUCH_FAMILY:?}. Rewriting the family, a fallback to `DejaVu Sans Mono` or to \
+         `monospace`, is the change this crate refuses: Pango substitutes per lookup and always \
+         yields usable metrics, so a hand-rolled fallback is dead code that can only override \
          fontconfig's better answer."
     );
 }
@@ -1085,15 +1084,14 @@ fn undercurl_and_underline_do_not_draw_the_same_thing() {
 /// A strikethrough adds ink across the glyph, and that ink is NOT the `special`
 /// colour.
 ///
-/// The second half is the macOS-parity half: `AttrColor::new_strikethrough_color`
-/// is deliberately never called, so Pango strikes in the layout foreground exactly
-/// as `GlyphStyleResolver.resolve`'s unconditional `strikethroughColor: fg` does.
+/// The second half is the colour half: `AttrColor::new_strikethrough_color` is
+/// deliberately never called, so Pango strikes in the layout foreground.
 ///
 /// Falsifiers: (a) drop the `AttrInt::new_strikethrough(true)` insert in
 /// `draw_glyph` — the two ink counts converge to within antialiasing noise, well
 /// under [`MIN_STRIKE_INK_PX`]; (b) add
 /// `AttrColor::new_strikethrough_color(special)` — a reddish pixel appears and the
-/// parity half reddens.
+/// colour half reddens.
 #[test]
 fn strikethrough_adds_foreground_ink_across_the_glyph() {
     let (mut surface, metrics) = render_decoration_fixture();
@@ -1125,10 +1123,9 @@ fn strikethrough_adds_foreground_ink_across_the_glyph() {
         reddish_count(&struck),
         0,
         "the struck cell holds {} reddish pixels. Its `special` IS set, and it must not reach the \
-         strike: with no strikethrough-colour attribute Pango strikes in the layout foreground, \
-         which is what gives parity with macOS's unconditional `strikethroughColor: fg`. A reddish \
-         pixel means AttrColor::new_strikethrough_color was added — the constructor exists, and \
-         not calling it is the decision.",
+         strike: with no strikethrough-colour attribute Pango strikes in the layout foreground. \
+         A reddish pixel means AttrColor::new_strikethrough_color was added — the constructor \
+         exists, and not calling it is the decision.",
         reddish_count(&struck)
     );
 }

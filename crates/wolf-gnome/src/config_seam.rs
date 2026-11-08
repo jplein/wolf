@@ -25,10 +25,9 @@ pub const FALLBACK_FONT_PT: f64 = 14.0;
 /// non-finite value are all reachable, and any of them reaching Pango produces a
 /// window that draws nothing with no error anywhere.
 ///
-/// **The override wins on purpose.** That is parity, not a Linux quirk:
-/// `CellMetrics.defaultPointSize` gives `WOLF_FONT_PT` the same precedence on
-/// macOS, `crates/wolf-gnome/README.md` documents the override, and the compositor
-/// smokes drive it.
+/// **The override wins on purpose.** `crates/wolf-gnome/README.md` documents the
+/// override, the compositor smokes drive it, and
+/// `notes/wolf-gnome-decisions.md#typography` fixes the precedence.
 #[must_use]
 pub fn resolve_font_pt(env_override: Option<f64>, config_font_size: f64) -> f64 {
     if let Some(pt) = env_override {
@@ -70,10 +69,9 @@ mod tests {
 
     /// `WOLF_FONT_PT` wins over the configured `font-size`.
     ///
-    /// This is macOS parity, not a Linux quirk: `CellMetrics.defaultPointSize`
-    /// gives the environment the same precedence. Reversing it silently re-sizes
-    /// every compositor smoke, all of which export `WOLF_FONT_PT` and none of
-    /// which would report the configured size instead as an error.
+    /// Reversing it silently re-sizes every compositor smoke, all of which export
+    /// `WOLF_FONT_PT` and none of which would report the configured size instead as an
+    /// error.
     #[test]
     fn env_override_wins_over_the_configured_font_size() {
         assert_eq!(

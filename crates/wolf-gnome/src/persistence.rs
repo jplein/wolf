@@ -1,7 +1,6 @@
 //! The GTK GLUE that commits `wolf-gnome`'s application state to `state.json`.
 //!
-//! Named after (and playing the role of) the macOS `StatePersistence.swift`, and
-//! thin by construction: every decision already lives in the pure
+//! Thin by construction: every decision already lives in the pure
 //! [`crate::state_seam`] / [`crate::pane_layout`] seams, so this module only
 //! gathers live values and hands them over. It follows the same conventions as
 //! `shell.rs` and `crash_overlay.rs` — an `Rc` of shared inner state, interior
@@ -21,13 +20,8 @@
 //! Rebuilding one tab costs a `leaves()` walk and one snapshot read — no RPC and no
 //! `pane_status` — so a resize drag produces at most ~10 disk writes per second.
 //! This preserves the crate's documented zero-polling property (no `glib::timeout`
-//! is added).
-//!
-//! It is also strictly better than macOS, whose snapshot is trigger-driven
-//! (window move / resize-end / sidebar KVO) and therefore does NOT capture a file
-//! opened in an already-open single-pane tab until the next trigger — reliably
-//! only at clean quit. Here it is captured within one frame, and a SIGKILL loses
-//! at most the writer's 100 ms coalesce window.
+//! is added). A file opened in an already-open tab is captured within one frame,
+//! and a SIGKILL loses at most the writer's 100 ms coalesce window.
 //!
 //! Every gather is gated by [`crate::state_seam::may_snapshot`], because a
 //! subtree built while nvim is dead or before the first pane binds would persist

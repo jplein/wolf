@@ -16,8 +16,8 @@
 //!
 //! The same generation-token mechanism, a DIFFERENT rule, and the two must not be
 //! merged. `RefreshCoalescer` is clock-free by construction — "is a fire already
-//! armed?" is the whole of its question — and it is a port of a macOS seam whose
-//! proven tests would all have to be rewritten around a clock to widen it. The
+//! armed?" is the whole of its question — and widening it would mean rewriting
+//! its tests around a clock. The
 //! sidebar wants neither a leading edge nor a staleness cap, and this rule is
 //! nothing but those two.
 //!

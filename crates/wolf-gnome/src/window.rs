@@ -166,7 +166,7 @@
 //! reaches — `background=dark|light` into the captive Neovim and the GTK chrome's
 //! colour scheme — by [`crate::appearance::apply_at_launch`], called once per
 //! window as soon as its core exists. No OS COLOUR is read into Neovim's
-//! highlight groups; that direction is macOS-only. Deferred is a native command
+//! highlight groups. Deferred is a native command
 //! line as Adw widgets: the cmdline strip, the message toast and the
 //! `ext_popupmenu` completion popup are all painted from the folded
 //! `Snapshot::cmdline` / `Snapshot::toast` / `Snapshot::pum`, and none of them paints

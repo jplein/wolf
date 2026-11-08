@@ -85,8 +85,7 @@ final class LivenessSeamTests: XCTestCase {
     }
   }
 
-  /// The drain issues no RPC and is the only route a queued close or quit takes
-  /// to the window, so it runs in every state, behind the crash overlay too.
+  /// `drain` is always true; see crates/wolf-macos/Sources/WolfKeyMap/README.md#livenessseamswift
   func testDrainRunsInEveryLivenessState() {
     for liveness in allLiveness {
       for attempts in attemptCounts {

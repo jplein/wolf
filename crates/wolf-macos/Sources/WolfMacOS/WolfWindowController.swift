@@ -418,9 +418,8 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
   /// in window A acts on window A) — the SAME dispatcher the native menu path
   /// uses. An unknown command kind is skipped.
   ///
-  /// Separate from `onRenderWake()` so `Project.onWake` drains in every liveness
-  /// state, behind the crash overlay too: a close or quit queued just before a
-  /// crash would otherwise be stranded. Issues no RPC.
+  /// Separate from `onRenderWake()` so `Project.onWake` drains in every liveness state;
+  /// see `crates/wolf-macos/Sources/WolfKeyMap/README.md#livenessseamswift`.
   func drainAndDispatchCommands() {
     guard let handle else { return }
     for cmd in handle.drain_commands() {

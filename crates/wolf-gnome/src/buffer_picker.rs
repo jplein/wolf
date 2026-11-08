@@ -129,9 +129,8 @@ pub fn open_decision(liveness: Option<Liveness>) -> OpenDecision {
 /// empty-query open appear to do nothing. Row 1 is the most-recently-used OTHER
 /// buffer, which is what makes Ctrl+Shift+E ⏎ a telescope-style "switch back".
 ///
-/// A faithful port of `BufferPickerView.swift`'s `min(1, rows.count - 1)` behind
-/// its own first-open flag; every LATER refresh falls through to
-/// [`restored_index`], exactly as macOS falls through to `PickerSeam.restoredIndex`.
+/// Only the first open uses this; every LATER refresh falls through to
+/// [`restored_index`].
 #[must_use]
 pub(crate) fn initial_selection(n_rows: usize) -> Option<usize> {
     if n_rows == 0 {
@@ -776,9 +775,7 @@ mod tests {
     /// This is the one selection rule the four overlays do NOT share, and the
     /// reason is the whole point of a buffer picker: row 0 is the buffer the user
     /// is already in, so a bare `Enter` on the empty-query open must switch to the
-    /// most-recently-used OTHER buffer. The macOS `BufferPickerView` does exactly
-    /// `min(1, rows.count - 1)` behind its own first-open flag, and this is that
-    /// port.
+    /// most-recently-used OTHER buffer, which is `min(1, n_rows - 1)`.
     #[test]
     fn initial_selection_table() {
         let cases = [

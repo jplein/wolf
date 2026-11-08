@@ -82,7 +82,7 @@ fn floor_div_clamped(numer: f64, denom: f64) -> u16 {
 /// on, as `(row, col)`.
 ///
 /// The tuple order is `(row, col)` — matching [`wolf_core::MouseEvent`]'s
-/// `row`/`col` field order and macOS's `PaneGeometry.cellAt` — NOT `(x, y)`.
+/// `row`/`col` field order — NOT `(x, y)`.
 ///
 /// Contract the tests below assert:
 ///
@@ -103,8 +103,7 @@ fn floor_div_clamped(numer: f64, denom: f64) -> u16 {
 ///   the composition guarantee below stay a statement about the division alone.
 ///   That holds for the content-width cap and its CENTRING as well: the offset the
 ///   cap produces lives in [`crate::editor_inset::grid_rect`]'s `x`, which
-///   `grid_local` subtracts, so macOS's `paintOffset` machinery still has no
-///   counterpart here and this function still takes no origin. **Do not add one.**
+///   `grid_local` subtracts, so this function takes no origin. **Do not add one.**
 /// - Degenerate guards, mirroring [`grid_size_for`]'s whole-result collapse: if
 ///   `cell_w` or `cell_h` is non-finite or `<= 0.0`, or `cols == 0`, or
 ///   `rows == 0`, the WHOLE result is `(0, 0)`.

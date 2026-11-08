@@ -2,49 +2,32 @@
 //! the grid paints into, the map from a pane-local point into the grid-local space
 //! [`crate::geometry::cell_at`] speaks, and the grid size that survives the chrome.
 //!
-//! A port of `WolfKeyMap/EditorInset.swift`, named for it the way
-//! [`crate::cell_metrics_math`] is named for `CellMetricsMath.swift`. GTK-, Pango-
-//! and Cairo-free, so the whole rulebook runs in the fast unit suite.
+//! GTK-, Pango- and Cairo-free, so the whole rulebook runs in the fast unit suite.
 //!
 //! ## The subtraction and the division stay apart
 //!
-//! macOS keeps `EditorInset` (subtraction) and `PaneGeometry` (division) in
-//! separate files and never merges them. So does this: [`crate::geometry`]'s module
-//! doc states its composition guarantee over the DIVISION alone, and growing
-//! `grid_size_for` into something that also subtracts would force that guarantee to
-//! be restated — and would leave `pane_view::resize_global`, which genuinely wants
-//! the un-inset division for the global grid, with no seam to call.
+//! This module subtracts and [`crate::geometry`] divides, and the two are never merged:
+//! [`crate::geometry`]'s module doc states its composition guarantee over the DIVISION
+//! alone, and growing `grid_size_for` into something that also subtracts would force
+//! that guarantee to be restated — and would leave `pane_view::resize_global`, which
+//! genuinely wants the un-inset division for the global grid, with no seam to call.
 //! [`grid_size_for_pane`] is therefore a composition ON TOP of the unchanged
-//! `grid_size_for`, and `cell_at_over_grid_local_never_exceeds_grid_size_for_pane`
-//! in this module's test block is the inset pipeline's own companion guarantee.
+//! `grid_size_for`, and `cell_at_over_grid_local_never_exceeds_grid_size_for_pane` in
+//! this module's test block is the inset pipeline's own companion guarantee.
 //!
-//! ## There is no `StatusbarTextSpan` counterpart, and no `text_left_inset`
+//! ## There is no `text_left_inset`
 //!
-//! macOS's `StatusbarTextSpan.swift` exists solely to add `PaneGeometry`'s
-//! `paintOffsetX`, the centring inset its column cap produces. This crate has that
-//! cap and that centring — [`ColumnCap`], applied inside [`grid_rect`] — and still
-//! needs no such seam, because ONE rectangle carries the offset: it rides in
-//! `grid_rect(..).x`, and the painter, the strip's text and the pointer translation
-//! all read that one field. macOS needs the seam only because `EditorInset` and
-//! `PaneGeometry` are two structs, with the strip drawn from the first and the grid
-//! from the second, so the offset has to be re-derived for the strip.
-//!
-//! There is no `text_left_inset` function either: a function returning its own
-//! argument names a rule without guaranteeing one, whereas reading `grid_rect(..).x`
-//! makes the strip's text and the grid's text share an origin BY CONSTRUCTION. A
-//! reader porting `StatusbarTextSpan.swift` would find it has no content here.
+//! There is no `text_left_inset`: `grid_rect(..).x` carries the offset, so the
+//! strip and the grid share an origin by construction.
 //!
 //! ## The cmdline strip is deliberately not indented
 //!
-//! macOS's `EditorInset.textLeftInset` serves the statusbar AND the cmdline,
-//! because both are per-pane there. This crate's cmdline is one full-width strip at
-//! the WINDOW bottom, outside every pane, so the inset does not reach it.
+//! This crate's cmdline is one full-width strip at the WINDOW bottom, outside every
+//! pane, so the inset does not reach it.
 
 use crate::geometry;
 
 /// The uniform inset applied around every pane's text grid, in device pixels.
-///
-/// `EditorInset.swift`'s `padding` verbatim.
 pub const EDITOR_PADDING_PX: f64 = 20.0;
 
 /// A pane-local rectangle in device pixels.
@@ -68,7 +51,7 @@ const COLLAPSED: GridRect = GridRect {
     h: 0.0,
 };
 
-/// The default content-width cap, in columns: `PaneContainerView.maxGridCols`.
+/// The default content-width cap, in columns.
 pub const MAX_GRID_COLS: u16 = 90;
 
 /// The column cap a pane's grid is measured against, and the cell width it is
@@ -130,15 +113,14 @@ pub fn column_cap(full_width: bool, cell_w: f64) -> ColumnCap {
 /// The pane-local rectangle a pane's text grid paints into, once the statusbar
 /// strip along the top and the uniform padding on all four sides are removed.
 ///
-/// `EditorInset.swift`'s rule verbatim: `x = padding`,
+/// The rule: `x = padding`,
 /// `y = statusbar_h + padding`, `w = max(0, pane_w - 2 * padding)`,
 /// `h = max(0, pane_h - statusbar_h - 2 * padding)`. **Only `w` and `h` clamp;
 /// `x` and `y` are fixed offsets**, so a pane too small for its own chrome still
 /// reports where the grid WOULD start.
 ///
-/// **A guard shared with `EditorInset.swift`:** any non-finite input collapses the
-/// WHOLE result to zeros — `cap.cell_w` included, a term this crate adds (Swift's
-/// `EditorInset` has no cap), since `x` and `w` are built from it — following
+/// **A guard:** any non-finite input collapses the WHOLE result to zeros —
+/// `cap.cell_w` included, since `x` and `w` are built from it — following
 /// [`crate::geometry`]'s whole-result-collapse convention. A NaN `x` origin would
 /// otherwise poison [`grid_local`] for every pointer event in the pane, and
 /// `cell_at` silently treats a NaN axis as the origin rather than rejecting it.
@@ -151,10 +133,11 @@ pub fn column_cap(full_width: bool, cell_w: f64) -> ColumnCap {
 /// `min(inset_w, 0)` would be a zero-width grid, which hands Neovim a one-column
 /// window and reflows the buffer.
 ///
-/// **The `.floor()` on the centring offset is deliberate and diverges from macOS.**
-/// Cairo rasterizes glyphs at the translated origin, so a half-pixel `cr.translate`
+/// **The `.floor()` on the centring offset is deliberate, unlike the macOS offset
+/// (`crates/wolf-macos/Sources/WolfKeyMap/README.md#panegeometryswift`).** Cairo
+/// rasterizes glyphs at the translated origin, so a half-pixel `cr.translate`
 /// resamples every glyph in the pane, and this crate has neither HiDPI nor
-/// subpixel-positioning handling where macOS runs on a 2x backing store. The cost is
+/// subpixel-positioning handling. The cost is
 /// that the left margin can be one device pixel wider than the right.
 #[must_use]
 pub fn grid_rect(
@@ -191,9 +174,8 @@ pub fn grid_rect(
 /// else.
 ///
 /// A point in the statusbar strip or in one of the four gutters comes back
-/// NEGATIVE, which `cell_at` clamps to the nearest edge cell — exactly macOS's
-/// `PaneGeometry.cellAt`, and exactly what makes a click on the chrome name a real
-/// cell instead of being rejected.
+/// NEGATIVE, which `cell_at` clamps to the nearest edge cell — exactly what makes a
+/// click on the chrome name a real cell instead of being rejected.
 ///
 /// No clamping and no non-finite handling happen here on purpose: a NaN stays NaN
 /// and an infinity keeps its sign, so `cell_at`'s two DIFFERENT non-finite rules —
@@ -341,9 +323,8 @@ mod tests {
     /// `h = max(0, pane_h - statusbar_h - 2 * padding)` — with ONLY `w` and `h`
     /// clamping, and any non-finite input collapsing the WHOLE result.
     ///
-    /// The rule is `WolfKeyMap/EditorInset.swift`'s verbatim, so the two files can be
-    /// compared as values, and so is the whole-result collapse on a non-finite input,
-    /// which follows `geometry.rs`'s convention: a NaN `x` origin would otherwise
+    /// The whole-result collapse on a non-finite input follows `geometry.rs`'s
+    /// convention: a NaN `x` origin would otherwise
     /// poison [`grid_local`] for every pointer event in the pane.
     ///
     /// Rows 1 and 3 leave an `h` of 612 while rows 5 and 6 leave 592, and that is not
@@ -397,9 +378,8 @@ mod tests {
     /// cap is present but names no usable width and the whole thing degenerates to
     /// the uncapped rule.
     ///
-    /// The `floor` on the centring offset is deliberate and diverges from macOS:
-    /// Cairo rasterizes glyphs at the translated origin, so a half-pixel
-    /// `cr.translate` resamples every glyph in the pane. Row 13 is the only row that
+    /// The `floor` on the centring offset is deliberate; [`grid_rect`]'s doc says
+    /// why. Row 13 is the only row that
     /// can see it, because it is the only one whose leftover is odd.
     ///
     /// FALSIFYING EDITS for the cap. Each names the edit, the row it fires on, and
@@ -1334,8 +1314,8 @@ mod tests {
     /// binds on an 800 px inset, and the rect would be `x` 60, `w` 720 instead.
     ///
     /// A point in the strip or in a gutter maps to a NEGATIVE coordinate, which
-    /// `geometry::cell_at` clamps to the nearest edge cell. That is deliberate and is
-    /// exactly macOS's `PaneGeometry.cellAt`; it is also what
+    /// `geometry::cell_at` clamps to the nearest edge cell. That is deliberate; it is
+    /// also what
     /// [`cell_at_over_grid_local_never_exceeds_grid_size_for_pane`] proves can never
     /// escape the grid.
     ///

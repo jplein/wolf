@@ -1,15 +1,14 @@
 //! The pure, GTK-free WINDOW-TITLE seam: the working directory, rendered.
 //!
-//! A 1:1 port of the macOS `CwdTitleSeam.displayTitle(cwd:home:)`, so the two
-//! front-ends abbreviate a path identically. It takes scalar strings only — no
-//! widget, no `PathBuf`, no filesystem, and above all **no implicit `$HOME`**:
+//! It takes scalar strings only — no widget, no `PathBuf`, no filesystem, and
+//! above all **no implicit `$HOME`**:
 //! `home` is ALWAYS injected by the caller, which is what makes the whole rule
 //! decidable from its arguments and unit-testable headlessly, exactly like
 //! [`crate::geometry`] and [`crate::workspace`]. The one impure `$HOME` read in
 //! this crate stays in [`crate::workspace::home_dir`], and [`crate::shell`]
 //! captures its result once at build time.
 //!
-//! [`display_title`]'s contract, mirrored exactly:
+//! [`display_title`]'s contract:
 //!
 //! 1. `cwd` empty or all-whitespace → `""` (the caller substitutes a fallback).
 //! 2. `home` empty → `cwd` verbatim (abbreviation disabled).
