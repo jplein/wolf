@@ -1047,8 +1047,7 @@ fn undercurl_draws_ink_below_the_glyph_box_in_the_special_colour() {
 /// width, and the comparison is elementwise.
 ///
 /// Falsifier: map `undercurl` to `pango::Underline::Single` in
-/// `glyph_style::glyph_decoration` — which is exactly macOS's behaviour — and the
-/// two bands become identical.
+/// `glyph_style::glyph_decoration` and the two bands become identical.
 #[test]
 fn undercurl_and_underline_do_not_draw_the_same_thing() {
     let (mut surface, metrics) = render_decoration_fixture();
@@ -1075,8 +1074,8 @@ fn undercurl_and_underline_do_not_draw_the_same_thing() {
     assert!(
         straight != wavy,
         "the plain-underline band and the undercurl band are byte-identical over {} sampled \
-         pixels. That is what mapping `undercurl` to Underline::Single produces — macOS's own \
-         `hasUnderline = underline || undercurl` — a straight line where Neovim asked for a wave. \
+         pixels. That is what mapping `undercurl` to Underline::Single produces — a straight line \
+         where Neovim asked for a wave. \
          Both columns are sampled at the same inset and the same width, so identical bytes cannot \
          be a sampling artefact: they mean one Pango attribute was used for both.",
         straight.len()
@@ -1197,7 +1196,7 @@ fn the_undercurl_is_wavy_rather_than_straight() {
         "the undercurl's topmost coloured row runs between {min} and {max} across the cell — a \
          spread of {spread} device pixels, under {MIN_WAVE_SPREAD_PX}. A spread of 0 means every \
          column's decoration starts on the same row, which is a horizontal RECTANGLE: exactly what \
-         Underline::Single draws and what macOS folds undercurl into. A spread of 1 is not \
+         Underline::Single draws. A spread of 1 is not \
          evidence of a wave either — an antialiased or one-pixel-offset straight edge produces it \
          — which is why the threshold is 2 and not 1. The measured wave spans about 3, so a 1 here \
          is far likelier to mean the band is clipping the wave's upper half than that the wave \

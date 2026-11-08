@@ -34,7 +34,7 @@ final class GlyphStyleTests: XCTestCase {
   func testFlagsZeroIsRegularWithNoDecorations() {
     let style = GlyphStyleResolver.resolve(flags: 0, fg: fg, special: unsetSpecial)
     XCTAssertEqual(style.face, .regular, "no flags -> the regular face")
-    XCTAssertFalse(style.underline, "no flags -> no underline")
+    XCTAssertNil(style.underline, "no flags -> no underline of either kind")
     XCTAssertFalse(style.strikethrough, "no flags -> no strikethrough")
   }
 
@@ -54,17 +54,34 @@ final class GlyphStyleTests: XCTestCase {
     XCTAssertEqual(style.face, .boldItalic, "bold + italic -> the boldItalic face")
   }
 
-  // MARK: - underline (straight + undercurl)
+  // MARK: - underline kind: straight vs. wave
 
-  func testUnderlineBitEnablesUnderline() {
+  func testUnderlineBitAloneResolvesToStraightUnderline() {
     let style = GlyphStyleResolver.resolve(flags: underline, fg: fg, special: unsetSpecial)
-    XCTAssertTrue(style.underline, "the underline bit enables underline")
+    XCTAssertEqual(
+      style.underline, .straight,
+      "the underline bit alone must draw a straight line and no wave: nil means the bit was"
+        + " dropped, .wave means a plain underline is painted as an undercurl")
   }
 
-  func testUndercurlBitAloneEnablesStraightUnderline() {
+  func testUndercurlBitAloneResolvesToWave() {
     let style = GlyphStyleResolver.resolve(flags: undercurl, fg: fg, special: unsetSpecial)
-    XCTAssertTrue(
-      style.underline, "undercurl maps to a straight underline this pass")
+    XCTAssertEqual(
+      style.underline, .wave,
+      "the undercurl bit alone must draw a wave and no straight underline: .straight means"
+        + " undercurl is folded into a plain underline, nil means the bit was dropped")
+  }
+
+  func testUnderlineAndUndercurlTogetherResolveToWave() {
+    for sp in [special, unsetSpecial] {
+      let style = GlyphStyleResolver.resolve(
+        flags: underline | undercurl, fg: fg, special: sp)
+      XCTAssertEqual(
+        style.underline, .wave,
+        "with both bits set (special.set = \(sp.set)) undercurl must win, as in wolf-gnome's"
+          + " `glyph_decoration` precedence: .straight means the underline bit is tested first"
+          + " or undercurl is folded into it, and the two front-ends disagree")
+    }
   }
 
   // MARK: - strikethrough
@@ -91,5 +108,21 @@ final class GlyphStyleTests: XCTestCase {
     assertColorEqual(
       style.underlineColor, fg,
       "with the special color unset the underline color falls back to fg")
+  }
+
+  func testUndercurlColorIsSpecialWhenSpecialSet() {
+    let style = GlyphStyleResolver.resolve(flags: undercurl, fg: fg, special: special)
+    assertColorEqual(
+      style.underlineColor, special,
+      "a SET special color must drive the undercurl's wave color too; fg here means the wave"
+        + " ignores `guisp` (spell and diagnostic colors are lost)")
+  }
+
+  func testUndercurlColorFallsBackToForegroundWhenSpecialUnset() {
+    let style = GlyphStyleResolver.resolve(flags: undercurl, fg: fg, special: unsetSpecial)
+    assertColorEqual(
+      style.underlineColor, fg,
+      "with the special color unset the wave must fall back to fg; any other value means the"
+        + " unset special (rgb 0, set false) leaked through as a black wave")
   }
 }

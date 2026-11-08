@@ -61,11 +61,11 @@
 //! lets the seam say exactly what the widget layer will hand to Pango. The whole
 //! of this module, its tests included, runs in the fast unit suite.
 //!
-//! ## Divergence from macOS
+//! ## Parity with macOS
 //!
-//! macOS folds `undercurl` into a STRAIGHT underline; this front-end draws the
-//! wave Neovim asked for. `notes/macos-followups.md` records it as a portable
-//! improvement rather than a Linux quirk.
+//! macOS's `GlyphStyleResolver` resolves the same three-way underline (none,
+//! straight, wave) with the same precedence, and its renderer strokes the wave
+//! by hand because CoreText has no wavy underline style.
 
 use wolf_core::{ResolvedStyle, Rgb};
 
@@ -375,8 +375,8 @@ mod tests {
     /// regression names the rule rather than four table rows.
     ///
     /// Falsifier: swap the two arms in `glyph_decoration` so `underline` is tested
-    /// first. This case reddens ahead of the table, and reports `Single` — which
-    /// is precisely macOS's `hasUnderline = underline || undercurl`.
+    /// first. This case reddens ahead of the table, and reports `Single`: a
+    /// straight line where Neovim asked for a wave.
     #[test]
     fn undercurl_wins_over_a_plain_underline() {
         for special in [NO_SPECIAL, SPECIAL] {

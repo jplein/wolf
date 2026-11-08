@@ -24,6 +24,15 @@ public enum GlyphFace: Equatable {
   case boldItalic
 }
 
+/// The kind of underline a cell's glyph is decorated with.
+public enum GlyphUnderline: Equatable {
+  /// A straight horizontal line (Neovim's `underline`).
+  case straight
+  /// A wave (Neovim's `undercurl`), stroked by hand because CoreText has no
+  /// wavy underline style.
+  case wave
+}
+
 /// A paint-ready resolution of one cell's text attributes: which face to draw
 /// the glyph with, plus the underline / strikethrough decorations and the colors
 /// they are stroked in. Decorations are stroked MANUALLY by the renderer (in
@@ -31,8 +40,8 @@ public enum GlyphFace: Equatable {
 public struct GlyphStyle: Equatable {
   /// The font face to draw the glyph with.
   public let face: GlyphFace
-  /// Whether to stroke an underline (straight; undercurl folds in this pass).
-  public let underline: Bool
+  /// The underline to stroke, straight or wave; `nil` when the cell has none.
+  public let underline: GlyphUnderline?
   /// The color the underline is stroked in (special when set, else fg).
   public let underlineColor: FfiColor
   /// Whether to stroke a strikethrough.
@@ -43,7 +52,7 @@ public struct GlyphStyle: Equatable {
   /// Memberwise initializer (exposed so the renderer can build a plain
   /// `.regular` style for the cursor glyph).
   public init(
-    face: GlyphFace, underline: Bool, underlineColor: FfiColor,
+    face: GlyphFace, underline: GlyphUnderline?, underlineColor: FfiColor,
     strikethrough: Bool, strikethroughColor: FfiColor
   ) {
     self.face = face
@@ -70,8 +79,9 @@ public enum GlyphStyleResolver {
   /// colors into a paint-ready `GlyphStyle`:
   ///   - face = boldItalic if BOTH bold+italic bits, else bold, else italic,
   ///     else regular.
-  ///   - underline = underline-bit OR undercurl-bit (undercurl → straight
-  ///     underline this pass).
+  ///   - underline = `.wave` if the undercurl bit is set, else `.straight` if
+  ///     the underline bit is, else `nil`. With both bits set the wave wins,
+  ///     matching `glyph_decoration` in `crates/wolf-gnome/src/glyph_style.rs`.
   ///   - underlineColor = special when `special.set`, else fg.
   ///   - strikethrough = strikethrough-bit; strikethroughColor = fg.
   public static func resolve(flags: UInt8, fg: FfiColor, special: FfiColor)
@@ -90,13 +100,20 @@ public enum GlyphStyleResolver {
       face = .regular
     }
 
-    let hasUnderline = flags & underline != 0 || flags & undercurl != 0
+    let underlineKind: GlyphUnderline?
+    if flags & undercurl != 0 {
+      underlineKind = .wave
+    } else if flags & underline != 0 {
+      underlineKind = .straight
+    } else {
+      underlineKind = nil
+    }
     let underlineColor = special.set ? special : fg
     let hasStrikethrough = flags & strikethrough != 0
 
     return GlyphStyle(
       face: face,
-      underline: hasUnderline,
+      underline: underlineKind,
       underlineColor: underlineColor,
       strikethrough: hasStrikethrough,
       strikethroughColor: fg
