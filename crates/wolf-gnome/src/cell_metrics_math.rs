@@ -134,8 +134,8 @@ mod tests {
     ///
     /// `10 * 125 / 100` is exactly 12.5. Rust's `f64::round` takes 13; `trunc`,
     /// `floor` and a banker's rounding all take 12. A cell one device pixel short is
-    /// a whole row lost over a tall window, which is why the tie case is pinned rather than left to
-    /// whichever rounding mode a later edit reaches for.
+    /// a whole row of drift over a tall window, which is why the tie case is pinned
+    /// rather than left to whichever rounding mode a later edit reaches for.
     #[test]
     fn cell_height_rounds_to_a_whole_unit() {
         assert_eq!(

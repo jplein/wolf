@@ -360,8 +360,7 @@ mod tests {
     ///   `h = 600`.
     /// - Drop the `low` bound from the clamp (`.clamp(0.0, h)`): the floor row
     ///   reports 30.0 rather than 63.0 at `h = 90`. Without this row the
-    ///   `min_drawer_height` floor `DrawerLayout.swift` shares is documented and
-    ///   unasserted.
+    ///   `min_drawer_height` floor is documented and unasserted.
     /// - Drop the `.min(pane_area_height)` cap on that lower bound: the predicted
     ///   red is **a panic from inside the standard library**, not an assertion
     ///   failure — `f64::clamp` refuses an inverted range with `min > max, or
@@ -732,7 +731,7 @@ mod tests {
             },
             BottomCase {
                 // Identical rects: only the id separates them. `pane_rects` never produces this; the row stops
-                // the verbatim-ported clause being deleted as unreachable.
+                // the id tie-break being deleted as unreachable.
                 desc: "a tie on the bottom edge AND on x breaks to the SMALLEST id",
                 rects: vec![
                     (GREATER_ID, rect(0.0, 300.0, PANE_W, 300.0)),

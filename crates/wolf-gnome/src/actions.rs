@@ -2318,10 +2318,10 @@ mod tests {
     /// assertion below is load-bearing rather than tidy. New Window carries
     /// `Command::NewWindow`, so it keeps a command-palette row and `:WolfNewWindow`
     /// when its menu item goes. This row carries **no** `wolf_core::Command` at all
-    /// (there is no Save As command in `COMMAND_SPECS`, and adding one would be a
-    /// cross-platform change), so the palette — whose rows come from the registry —
-    /// never offers it and no `:Wolf` command drains to it. Delete the menu item and
-    /// the feature is reachable from nowhere.
+    /// (there is no Save As command in `COMMAND_SPECS`; see
+    /// `notes/feat-list.md#navigation-and-file-access`), so the palette — whose rows
+    /// come from the registry — never offers it and no `:Wolf` command drains to it.
+    /// Delete the menu item and the feature is reachable from nowhere.
     ///
     /// FALSIFYING EDIT 1: delete the `"Save As…"` item from `MENU_SECTIONS`.
     /// PREDICTED: the `listed` assertion fails.

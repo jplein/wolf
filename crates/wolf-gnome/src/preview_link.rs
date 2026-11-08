@@ -15,8 +15,8 @@
 //!
 //! The input is the resolved link target, not the raw `href`: WebKit has already
 //! applied the document's base URI (see [`file_uri_for`]) by the time a navigation
-//! decision exists. So relative-to-absolute resolution is the browser engine's job
-//! in both front-ends, and this table never has to do it.
+//! decision exists. So relative-to-absolute resolution is the browser engine's job,
+//! and this table never has to do it.
 //!
 //! The rows are in EVALUATION order, which is load-bearing twice: `about` is tested
 //! before the foreign-scheme row, and the same-path comparison before the
