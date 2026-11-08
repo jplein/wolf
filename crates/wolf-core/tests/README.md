@@ -25,6 +25,7 @@ It offers:
 - `require_nvim_bin()` and `init_lua_path()` resolve the pinned nvim and the captive `init.lua` to absolute paths, preferring an existing absolute `WOLF_NVIM_BIN` over the Bazel-staged `WOLF_TEST_NVIM_DIR`.
 - `config(cols, rows)` / `config_in(cwd, cols, rows)` build a `CoreConfig`. `config_in` is the single funnel that points `WOLF_STATE_DIR` at the process-global hermetic temp dir `hermetic_state_dir()` returns, set-if-absent, so a test managing its own state dir wins.
 - `wake_channel() -> (WakeFn, FlushWaiter)`, with `wait_for_flush`, `wait_for_initial_flush`, `wait_for_wake` and `drain`.
+- `poll_until(waiter, desc, observe, done) -> T` re-runs `observe` every `POLL_INTERVAL`, draining `waiter`, until `done` accepts what it returned, and returns that value. It panics with `desc` and the last value after `FLUSH_TIMEOUT`.
 - `start_core_sized`, `temp_md`, `temp_md_path`, `fresh_cwd`, and the input constructors.
 - `start_core_with_temp_md[_sized]` opens a temp `.md` and returns once it is current and drawn: `current_file` is the file, a frame has landed after the startup barrier, and row 0 shows text when the fixture's first line has text. It panics naming the file after `FLUSH_TIMEOUT`.
 - `short_tempdir()` returns an owned, canonical temp dir under the first of the OS temp dir and `/tmp` that is writable and at most `SHORT_TEMP_ROOT_MAX` bytes canonical. A swap-bearing fixture placed in it must keep its name within `SHORT_FIXTURE_NAME_MAX`; `SWAP_NAME_MAX` mirrors init.lua's constant.
@@ -36,7 +37,7 @@ It offers:
 - The relative `WOLF_NVIM_BIN` Bazel injects is deliberately not trusted: nvim is spawned with `current_dir(cfg.cwd)`, a temp dir, so the path must be absolutized first. Likewise `init.lua`, since under Bazel `CARGO_MANIFEST_DIR` is an ephemeral sandbox path and nvim launched with `-u <missing>` hangs forever on a `Press ENTER` prompt.
 - Out-of-band notifications (`wolf_current_file`, liveness) fire a wake without bumping `seq`. The flush waits consume and ignore them; `wait_for_wake` is the way to observe that seam.
 - The open helper takes its `seq` baseline after a blocking `current_tabpage()`, because nvim flushes what it has drawn before it answers. Neither `seq` nor `current_file` alone proves the open drew: nvim's markdown ftplugin starts treesitter, whose asynchronous parse can redraw later and push `seq` past the baseline before the `:edit`, and `current_file` is notified during `:edit`, before its frame. The startup buffer's row 0 is blank, so row 0 showing text tells the open's frame apart. A blank first line gets no text check, because an empty file draws exactly like the startup buffer.
-- The open helper fences off no later frame. That late redraw can satisfy any later single `wait_for_flush`, so a test that waits for its own input polls for the state it expects.
+- The open helper fences off no later frame, and that late redraw can satisfy any later single `wait_for_flush`. So a state a test's own input produces, or one that arrives out of band (`wolf_buffers`, `wolf_current_file`, `wolf_markdown_cursor`, `wolf_theme`, `wolf_cwd`) or across several flushes, is read with `poll_until`, never once after one `wait_for_flush`. `observe` returns owned values, because a snapshot guard held across a blocking core call, the drain or the sleep stalls the redraw handler and the input pump.
 - `fresh_cwd()` leaks its directory by design: `config` returns only a `CoreConfig`, so there is no guard to keep a `TempDir` alive under a running core.
 - A fixture that needs a swap file must sit under `short_tempdir()`. Under a deep `TMPDIR` its path passes `SWAP_NAME_MAX`, where Wolf gives it no swap ([runtime/nvim](../../../runtime/nvim/README.md#decisions)). It panics, listing each refused root, rather than skipping.
 - `SHORT_TEMP_ROOT_MAX` is deliberately derived from `SWAP_NAME_MAX`, not a small fixed cap. A sandboxed Bazel worker can deny `/tmp` while its deep `TEST_TMPDIR` still leaves room, so a small cap would refuse both roots and always panic.
@@ -68,7 +69,6 @@ Real Neovim (`//crates/wolf-core:autoread`: staged nvim runfiles, `WOLF_NVIM_BIN
 
 - The trigger is `set_ui_focus(false)` then `set_ui_focus(true)`; `FocusGained` is edge-triggered, so a lone `true` can be a no-op.
 - An external rewrite must differ in byte length from the original and follow a ~1.1s sleep, so `:checktime`'s size and mtime checks both trip.
-- Never hold a snapshot read guard across `drain()`/`sleep()` — the redraw handler's `write_async` spins on `try_write` and starves. Read owned values.
 
 #### `browser_preview.rs`
 
@@ -151,7 +151,7 @@ Real Neovim (`//crates/wolf-core:current_file`: staged nvim runfiles, `WOLF_NVIM
 **Gotchas**
 
 - The startup buffer is a named `Untitled.md`, so the unnamed case needs a raw typed `:enew`; `InputEvent::NewBuffer` routes through `wolf_new_untitled` and would name the buffer.
-- `wolf_current_file` arrives out of band from redraw flushes, so tests poll, and both sides are canonicalized because `/tmp` entries are often symlinks.
+- Both sides are canonicalized because `/tmp` entries are often symlinks.
 
 #### `empty_state_cwd.rs`
 
@@ -243,7 +243,7 @@ Real Neovim (`//crates/wolf-core:markdown_cursor`: staged nvim runfiles, `WOLF_N
 
 **Gotchas**
 
-- `wolf_markdown_cursor` arrives out of band, so every assertion polls `read_snapshot()` and drains wakes. `seq` invariance is deliberately not asserted: a cursor motion legitimately produces its own redraw batch, so the no-bump property is structural.
+- `seq` invariance is deliberately not asserted: a cursor motion legitimately produces its own redraw batch, so the no-bump property is structural.
 - The startup buffer is a markdown `Untitled.md` that is itself reported, so the map legitimately holds more than one entry; resolve the opened file's bufnr from `Snapshot.win_buffers` rather than assuming a single key.
 - A background `bufload` case is what pins the `win_gettype()` guard; without it nvim's synthetic autocmd window reports a fabricated cursor that passes every other guard.
 
@@ -341,6 +341,7 @@ Real Neovim (`WOLF_NVIM_BIN`, `no-sandbox` target with staged nvim runfiles).
 
 - SIGKILL rather than `qa!` is load-bearing: a clean quit sets `shutting_down`, so the stdout EOF is suppressed instead of reported as `Dead`.
 - The stall cases set the process-global `WOLF_RPC_TIMEOUT_MS` and wedge nvim with a finite `vim.uv.sleep`; teardown force-kills the wedged child, so widen (never tighten) the wedge if a case flakes.
+- It polls with its local `poll_without_draining`, not `poll_until`, because each case asserts the transition's wake afterward with `wait_for_wake`, and a drain would consume it.
 
 #### `nvim_restart.rs`
 
@@ -382,7 +383,6 @@ Real Neovim: needs `WOLF_NVIM_BIN`, the staged nvim runfiles, and `tags = ["no-s
 
 **Gotchas**
 
-- `wolf_buffers` arrives separately from redraw flushes, so every assertion polls while draining wakes — never wait on a single flush.
 - Cases pin an explicit temp cwd and canonicalize both sides so `display_path` survives the macOS `/var` and `/tmp` symlinks.
 - The startup buffer is named `Untitled.md`; reaching the `[No Name]` path needs a raw `:enew`, which bypasses the `wolf_new_untitled` naming helper.
 
@@ -431,7 +431,7 @@ Real Neovim: needs `WOLF_NVIM_BIN`, the staged nvim runfiles, and `tags = ["no-s
 
 **Gotchas**
 
-- Windows and the `wolf_buffers` emit settle across several flushes, so poll while draining wakes. Assert handle count, distinctness and the per-window buffer, never literal handle values.
+- Assert handle count, distinctness and the per-window buffer, never literal handle values.
 - An empty-path leaf inherits the named `Untitled.md` startup buffer, matched by basename suffix so `/var` versus `/private/var` does not break it.
 
 #### `recent_dirs.rs`
@@ -485,7 +485,6 @@ Real Neovim: needs `WOLF_NVIM_BIN`, the staged nvim runfiles, and `tags = ["no-s
 **Gotchas**
 
 - Assert map sizes, membership, and that a `win` round-trips through `grid_for_win`; never literal `WinInfo.win` values or HashMap iteration order.
-- `win_pos`, grid creation and `grid_destroy` can arrive across several flushes, so poll while draining wakes.
 - The per-grid resize case polls for the exact requested dimensions. If nvim clamps a window grid to the surrounding layout, relax it to assert the target grid merely changed — the load-bearing claim is that only it changed.
 
 #### `rpc_timeout.rs`
@@ -626,7 +625,7 @@ Spawns a real Neovim (staged runfiles, wired `WOLF_NVIM_BIN`, `no-sandbox`).
 
 It also measures the tabpage scope of the snapshot maps, which is a property of nvim plus the captive `init.lua` rather than of any Rust type: `win_buffers` and `buffers` hold every window of the whole instance, while `windows` holds the current tabpage's alone. A front-end can therefore resolve a background tabpage's buffers by window handle with no RPC, which is what per-tab persistence rests on. The falsifier is `nvim_tabpage_list_wins(0)` in place of `nvim_list_wins()` in `wolf_setup_buffer_tracking`'s emit.
 
-**Gotchas** — A switch does not churn grid ids: nvim emits `win_hide` for the leaving tabpage's windows rather than `win_close` / `grid_destroy`, and reuses both the grid id and the window handle on the way back. That is an observation about nvim rather than a contract, so assert on window-handle membership and `grid_for_win` round-trips, never on literal grid ids or map order. `win_hide` removes the window from `Snapshot.windows` but keeps its grid in `Snapshot.grids` and its entry in `Snapshot.win_buffers`. Changes land across several flushes, so poll.
+**Gotchas** — A switch does not churn grid ids: nvim emits `win_hide` for the leaving tabpage's windows rather than `win_close` / `grid_destroy`, and reuses both the grid id and the window handle on the way back. That is an observation about nvim rather than a contract, so assert on window-handle membership and `grid_for_win` round-trips, never on literal grid ids or map order. `win_hide` removes the window from `Snapshot.windows` but keeps its grid in `Snapshot.grids` and its entry in `Snapshot.win_buffers`.
 
 #### `theme.rs`
 
@@ -634,4 +633,4 @@ Spawns a real Neovim (staged runfiles, wired `WOLF_NVIM_BIN`, `no-sandbox`), sta
 
 **Covers** — `Snapshot.theme` fed by the `wolf_theme` notification: the startup emit-once reporting all-`None`, runtime `:hi WolfCursor` / `:hi WolfTitlebar` values, a linked group resolving to its target's effective attributes, and `:hi clear` falling back to all-`None`.
 
-**Gotchas** — A plain `:hi` does not fire `ColorScheme`, so every mutation must be followed by an explicit `:doautocmd ColorScheme`; this is required by design, not a test convenience. The notification wakes without bumping `seq`, so poll `read_snapshot().theme` rather than waiting for a flush.
+**Gotchas** — A plain `:hi` does not fire `ColorScheme`, so every mutation must be followed by an explicit `:doautocmd ColorScheme`; this is required by design, not a test convenience.

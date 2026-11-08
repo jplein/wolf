@@ -59,6 +59,7 @@ The front-end reads liveness on each wake to drive its crash and stall overlay.
 
 - Core owns a multi-thread tokio runtime on its own threads; the `nvim-rs` handler receives `redraw` notifications there.
 - A single `parking_lot::RwLock` guards the snapshot. The redraw handler takes the write lock once per whole batch, never holds it across an `.await`, and fires the wake only after the lock is dropped, on `flush`.
+- A flush can arrive with no input: Neovim's markdown ftplugin starts treesitter on every markdown buffer, and a parse that outlasts its budget finishes through `vim.schedule` and redraws later, so a test polls rather than reading once after a flush ([the shared harness](../crates/wolf-core/tests/README.md#the-shared-harness--commonmodrs)).
 - That write lock is acquired cooperatively (a `try_write` retry loop that yields to the scheduler), so a front-end holding a read guard cannot pin a worker thread.
 - Input is delivered through an ordered FIFO channel to a single consumer task, which fuses a run of consecutive `Key` events into one `nvim_input` call. This keeps keystrokes in order and makes a burst produce a single redraw flush.
 - Each `SearchRegistry` owns a `wolf-fs-watch` thread, which makes every `notify` watch and unwatch call. A recursive inotify watch walks the whole tree, so it never runs on a front-end's thread or under the registry's locks. notify's `watch` waits on the backend thread that runs the event callback, so the callback only forwards into the thread's channel and never blocks or locks.

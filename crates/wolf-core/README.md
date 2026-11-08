@@ -53,6 +53,6 @@ cargo run -p wolf-core --example grid_dump   # headless smoke dump
 
 Both need an active flake devShell (`direnv allow`) so `WOLF_NVIM_BIN` is set. See [`tests/README.md`](tests/README.md).
 
-On macOS core builds with Bazel instead, as `//crates/wolf-core:wolf_core`, taking its dependencies from the same `Cargo.toml` and `Cargo.lock` through `rules_rust`'s `crate_universe`. See [`build.md`](../../build.md) for the macOS build and repin workflow.
+On macOS core builds with Bazel instead, as `//crates/wolf-core:wolf_core`, taking its dependencies from the same `Cargo.toml` and `Cargo.lock` through `rules_rust`'s `crate_universe`, and the example runs as `bazel run //crates/wolf-core:grid_dump`. See [`build.md`](../../build.md) for the macOS build and repin workflow.
 
 Bazel does not discover test files. A new `tests/*.rs` needs a matching `rust_test` target in `BUILD.bazel` or it runs only under `cargo test`, making it a silent macOS-only gap.

@@ -53,6 +53,8 @@ cargo run -p wolf-core --example grid_dump    # headless dump of the rendered gr
 nix develop --command cargo run -p wolf-gnome # the GTK application, unoptimized
 ```
 
+On macOS the same example runs as `bazel run //crates/wolf-core:grid_dump`, staged with the pinned nvim and `init.lua` like the real-nvim tests.
+
 These select cargo's default profiles — `dev` for a build or a run, `test` for a test target — and write into `target/debug`; [the optimized build](#the-optimized-build) is a separate command and a separate output directory.
 
 Most tests spawn the pinned Neovim as a real child process rather than a mock, and they stay headless: `nvim --embed` speaks msgpack-RPC over stdio and needs no TTY, so the suite is safe to run unattended. Cargo discovers every `tests/*.rs`, so nothing needs wiring on this path.
