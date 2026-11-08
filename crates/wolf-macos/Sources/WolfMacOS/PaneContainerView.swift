@@ -472,6 +472,23 @@ final class PaneContainerView: NSView {
   /// this area when they appear.
   private var paneAreaHeight: CGFloat { bounds.height }
 
+  /// One pane's minimum height, in points: `minPaneRows` rows plus the statusbar
+  /// strip and both paddings, the floor a horizontal divider drag holds panes to.
+  private var minPaneHeight: Double {
+    Double(Self.minPaneRows) * Double(metrics.cellHeight) + Double(statusbarHeight)
+      + 2 * EditorInset.padding
+  }
+
+  /// The editor/drawer split of the pane area, with the drawer floored at
+  /// `minPaneHeight`. Every caller reads this one value, so their geometry agrees.
+  private var drawerLayout: DrawerLayout {
+    DrawerLayout(
+      paneAreaHeight: Double(paneAreaHeight),
+      hasDrawer: drawerPaneId != nil,
+      weight: DrawerLayout.defaultWeight,
+      minDrawerHeight: minPaneHeight)
+  }
+
   /// Maps a pixel size to a grid `(cols, rows)`, each at least 1.
   private func gridCells(width: CGFloat, height: CGFloat) -> (cols: Int, rows: Int) {
     (max(1, Int(width / metrics.cellWidth)), max(1, Int(height / metrics.cellHeight)))
@@ -489,10 +506,7 @@ final class PaneContainerView: NSView {
   /// it (`DrawerLayout.drawerRect`). The drawer pane lives OUTSIDE `tree`, so it is
   /// appended here rather than produced by `tree.paneRects`.
   private func paneRects() -> [(PaneId, CGRect)] {
-    let dl = DrawerLayout(
-      paneAreaHeight: Double(paneAreaHeight),
-      hasDrawer: drawerPaneId != nil,
-      weight: DrawerLayout.defaultWeight)
+    let dl = drawerLayout
     var rects = tree.paneRects(width: Double(bounds.width), height: dl.editorHeight)
       .map {
         ($0.0, CGRect(x: $0.1.x, y: $0.1.y, width: $0.1.w, height: $0.1.h))
@@ -507,10 +521,7 @@ final class PaneContainerView: NSView {
   /// over the SAME `DrawerLayout.editorHeight` as `paneRects()`. The drawer lives
   /// outside `tree`, so it has no divider here.
   private func editorDividers() -> [PaneTree.Divider] {
-    let dl = DrawerLayout(
-      paneAreaHeight: Double(paneAreaHeight),
-      hasDrawer: drawerPaneId != nil,
-      weight: DrawerLayout.defaultWeight)
+    let dl = drawerLayout
     return tree.dividers(width: Double(bounds.width), height: dl.editorHeight)
   }
 
@@ -1985,10 +1996,7 @@ final class PaneContainerView: NSView {
   private func applyFocus(dir: FocusDir, from: Int64) {
     guard let origin = paneForWin(from) ?? activePane else { return }
     let width = Double(bounds.width)
-    let dl = DrawerLayout(
-      paneAreaHeight: Double(paneAreaHeight),
-      hasDrawer: drawerPaneId != nil,
-      weight: DrawerLayout.defaultWeight)
+    let dl = drawerLayout
 
     if origin == drawerPaneId {
       guard dir == .up else { return }
@@ -2023,10 +2031,7 @@ final class PaneContainerView: NSView {
   /// otherwise.
   func otherPaneTarget(prefer: OtherPaneSeam.Side) -> Int64? {
     guard let active = activePane else { return nil }
-    let dl = DrawerLayout(
-      paneAreaHeight: Double(paneAreaHeight),
-      hasDrawer: drawerPaneId != nil,
-      weight: DrawerLayout.defaultWeight)
+    let dl = drawerLayout
     guard
       let target = OtherPaneSeam.target(
         active: active, prefer: prefer, tree: tree,

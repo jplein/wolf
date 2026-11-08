@@ -7,15 +7,12 @@
 //! Ported BEHAVIOURALLY (not literally) from
 //! `crates/wolf-macos/Sources/WolfKeyMap/ScrollAccumulator.swift` and
 //! `PaneContainerView.swift`'s `mouseEvent` / `scrollWheel`, with the divergences
-//! noted per item. Three of those divergences are deliberate and load-bearing:
+//! noted per item. Two of those divergences are deliberate and load-bearing:
 //!
 //! 1. [`scroll_steps`] maps a POSITIVE step count to
 //!    [`wolf_core::ScrollDirection::Down`] — the OPPOSITE of the macOS mapping.
 //!    Read that function's doc comment before "fixing" it against the Swift.
-//! 2. [`ScrollAccumulator::consume`] is arithmetic (truncate + clamp), not the two
-//!    unbounded `while` loops the Swift original uses, and it guards non-finite
-//!    inputs.
-//! 3. [`PaneScroll`] pulls the reset-the-carry-when-the-target-grid-changes rule
+//! 2. [`PaneScroll`] pulls the reset-the-carry-when-the-target-grid-changes rule
 //!    DOWN into this module. macOS keeps it in the view
 //!    (`PaneContainerView.scrollWheel`'s `if grid != lastScrollGrid { reset() }`),
 //!    which on this side of the port would put it in `pane_view.rs`, where it
@@ -163,10 +160,9 @@ impl ScrollAccumulator {
     ///    `[-MAX_STEPS_PER_EVENT, MAX_STEPS_PER_EVENT]`, and when the clamp bites,
     ///    the carry is DROPPED (a delta that large is garbage; carrying it would
     ///    keep firing forever).
-    /// 4. It is O(1). **Deliberate divergence from macOS:**
-    ///    `ScrollAccumulator.swift` uses two `while` loops that are
-    ///    `O(delta / threshold)` and would effectively hang on a pathological
-    ///    delta. The arithmetic form here has identical semantics for every
+    /// 4. It is O(1), as `ScrollAccumulator.swift` is. A form with two `while`
+    ///    loops is `O(delta / threshold)` and would effectively hang on a
+    ///    pathological delta. The arithmetic form has identical semantics for every
     ///    realistic input — `scroll_accumulator_table` pins that equivalence, and
     ///    its `1e300` case would never finish under the loop form.
     pub fn consume(&mut self, delta: f64, threshold: f64) -> i32 {
@@ -184,7 +180,7 @@ impl ScrollAccumulator {
             return 0;
         }
 
-        // (3) Truncate toward zero, which makes reversal symmetric; it matches macOS's two-`while`-loop
+        // (3) Truncate toward zero, which makes reversal symmetric; it matches a two-`while`-loop
         // form without its O(delta / threshold) cost.
         let raw = (self.remainder / threshold).trunc();
         // (4) Clamp in f64 space, BEFORE the cast, so the cast is exact and in
@@ -569,7 +565,7 @@ mod tests {
     /// One WHEEL detent, used as a threshold.
     const DETENT: f64 = 1.0;
     /// A delta so large the step count must saturate at `MAX_STEPS_PER_EVENT`. Under
-    /// the macOS `while`-loop formulation this single call would iterate 1e300
+    /// a `while`-loop formulation this single call would iterate 1e300
     /// times, i.e. never finish — so this row is also the O(1) regression guard.
     const ENORMOUS: f64 = 1e300;
     /// Roughly half of `f64::MAX`. Two of these overflow the CARRIED REMAINDER to
@@ -714,7 +710,7 @@ mod tests {
                 },
             ],
         },
-        // --- GTK-specific hardening: guards macOS does not have --------------
+        // --- Hardening, shared with `ScrollAccumulator.swift` -----------------
         AccCase {
             desc: "a zero threshold returns 0, does not hang, and does not break the next call",
             ops: &[
@@ -848,7 +844,7 @@ mod tests {
     /// Every scenario in [`ACC_CASES`], each against its own fresh accumulator.
     ///
     /// The `1e300` rows also assert a TIMING property that no `assert!` can state:
-    /// under the macOS `while`-loop formulation those calls would iterate ~1e300
+    /// under a `while`-loop formulation those calls would iterate ~1e300
     /// times and this test would never return. If this test hangs, the arithmetic
     /// form has been replaced by a loop.
     #[test]

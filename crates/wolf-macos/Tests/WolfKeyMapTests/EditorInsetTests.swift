@@ -143,4 +143,40 @@ final class EditorInsetTests: XCTestCase {
       inset.gridRect.y, 100.0, accuracy: eps,
       "gridRect.y == statusbarHeight + padding == 100 (unclamped offset)")
   }
+
+  // MARK: - Edge: a non-finite input collapses the grid rect and the text inset
+
+  /// A non-finite input in any of the four positions collapses `gridRect` to the zero rect
+  /// and `textLeftInset` to 0. The other inputs are the 840/600/40/20 example, so an
+  /// unguarded row shows `x == 20` or a NaN/inf field. The echoed inputs are not asserted.
+  func testNonFiniteInputCollapsesWholeInset() {
+    let rows: [(String, EditorInset)] = [
+      (
+        "NaN paneWidth",
+        EditorInset(paneWidth: .nan, paneHeight: 600, statusbarHeight: 40, padding: 20)
+      ),
+      (
+        "+inf paneHeight",
+        EditorInset(paneWidth: 840, paneHeight: .infinity, statusbarHeight: 40, padding: 20)
+      ),
+      (
+        "-inf statusbarHeight",
+        EditorInset(paneWidth: 840, paneHeight: 600, statusbarHeight: -.infinity, padding: 20)
+      ),
+      (
+        "NaN padding",
+        EditorInset(paneWidth: 840, paneHeight: 600, statusbarHeight: 40, padding: .nan)
+      ),
+    ]
+    for (name, inset) in rows {
+      assertRectEqual(
+        inset.gridRect,
+        Rect(x: 0, y: 0, w: 0, h: 0),
+        "\(name): gridRect must collapse to the zero rect; x == 20 means the guard is missing")
+      XCTAssertEqual(
+        inset.textLeftInset, 0.0,
+        "\(name): textLeftInset must collapse to 0; 20 means the guard missed it, NaN that the "
+          + "non-finite padding was echoed into it")
+    }
+  }
 }

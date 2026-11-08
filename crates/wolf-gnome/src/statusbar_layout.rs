@@ -92,12 +92,12 @@ const COLLAPSED: StatusbarLayout = StatusbarLayout {
 /// line sits at `vertical_padding`, the secondary a `line_gap` below it, and the
 /// height closes with a second `vertical_padding`.
 ///
-/// **Divergence from Swift, deliberate and strictly more defensive:** any
-/// non-finite or negative input collapses the WHOLE result to zeros. Swift has no
-/// guard, so an infinite font size there yields an infinite strip height, which
-/// [`crate::editor_inset::grid_rect`] turns into a zero-extent grid and
-/// `geometry::grid_size_for` into a 1x1 one — an editor that paints a single cell.
-/// A zero-height strip instead leaves a pane that is all padding and still usable.
+/// **A guard shared with `StatusbarLayout.swift`:** any non-finite or negative
+/// input collapses the WHOLE result to zeros. Unguarded, an infinite font size
+/// yields an infinite strip height, which [`crate::editor_inset::grid_rect`] turns
+/// into a zero-extent grid and `geometry::grid_size_for` into a 1x1 one — an
+/// editor that paints a single cell. A zero-height strip instead leaves a pane that
+/// is all padding and still usable.
 #[must_use]
 pub fn statusbar_layout(
     primary_font_size: f64,
@@ -304,11 +304,11 @@ mod tests {
     ///   font size collapses the whole result — statusbar_layout(NaN, 10, 3, 1)`, left
     ///   `(NaN, 3.0, NaN, NaN, 13.0)`, right `(0.0, 0.0, 0.0, 0.0, 0.0)`.
     ///
-    /// The guard's own reason, so it is not tidied away as defensive noise: Swift has
-    /// none, and an infinite strip height there makes `editor_inset::grid_rect`
-    /// return a zero grid and `grid_size_for` a 1x1 one — an editor that paints one
-    /// cell. Collapsing to a zero-height strip instead leaves a pane that is all
-    /// padding and still perfectly usable.
+    /// The guard's own reason, so it is not tidied away as defensive noise (it is
+    /// shared with `StatusbarLayout.swift`): an infinite strip height makes
+    /// `editor_inset::grid_rect` return a zero grid and `grid_size_for` a 1x1 one —
+    /// an editor that paints one cell. Collapsing to a zero-height strip instead
+    /// leaves a pane that is all padding and still perfectly usable.
     #[test]
     fn statusbar_layout_table() {
         let cases = [
@@ -437,7 +437,7 @@ mod tests {
     /// `pango::FontDescription` and [`statusbar_layout`], where it collapses the
     /// whole strip to a zero-height band. Making the seam total instead is strictly
     /// more defensive, in exactly the shape `cell_metrics_math.rs`'s two documented
-    /// divergences from Swift already establish for this crate.
+    /// guards already establish for this crate.
     ///
     /// FALSIFYING EDITS. Each names the edit, the row it fires on, and the verbatim
     /// failure measured for it.

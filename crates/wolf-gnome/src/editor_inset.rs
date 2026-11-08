@@ -136,9 +136,9 @@ pub fn column_cap(full_width: bool, cell_w: f64) -> ColumnCap {
 /// `x` and `y` are fixed offsets**, so a pane too small for its own chrome still
 /// reports where the grid WOULD start.
 ///
-/// **Divergence from Swift, deliberate and strictly more defensive:** any
-/// non-finite input collapses the WHOLE result to zeros — `cap.cell_w` included,
-/// since the cap is one of the terms `x` and `w` are built from — following
+/// **A guard shared with `EditorInset.swift`:** any non-finite input collapses the
+/// WHOLE result to zeros — `cap.cell_w` included, a term this crate adds (Swift's
+/// `EditorInset` has no cap), since `x` and `w` are built from it — following
 /// [`crate::geometry`]'s whole-result-collapse convention. A NaN `x` origin would
 /// otherwise poison [`grid_local`] for every pointer event in the pane, and
 /// `cell_at` silently treats a NaN axis as the origin rather than rejecting it.
@@ -342,10 +342,9 @@ mod tests {
     /// clamping, and any non-finite input collapsing the WHOLE result.
     ///
     /// The rule is `WolfKeyMap/EditorInset.swift`'s verbatim, so the two files can be
-    /// compared as values. The whole-result collapse on a non-finite input is this
-    /// crate's one deliberate divergence from it, following `geometry.rs`'s
-    /// convention: a NaN `x` origin would otherwise poison [`grid_local`] for every
-    /// pointer event in the pane.
+    /// compared as values, and so is the whole-result collapse on a non-finite input,
+    /// which follows `geometry.rs`'s convention: a NaN `x` origin would otherwise
+    /// poison [`grid_local`] for every pointer event in the pane.
     ///
     /// Rows 1 and 3 leave an `h` of 612 while rows 5 and 6 leave 592, and that is not
     /// an inconsistency to be tidied: the four rows drive four DIFFERENT pane heights

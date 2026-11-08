@@ -11,6 +11,10 @@ import Foundation
 /// 2 * padding`) never yields negative grid dimensions. The `gridRect.x` / `.y`
 /// origins are FIXED offsets and are NOT clamped. `gridRect` is PANE-LOCAL (its
 /// origin is the pane's top-left); the caller offsets it into the pane's view rect.
+///
+/// A non-finite input collapses `gridRect` to the zero rect and `textLeftInset` to
+/// 0, as wolf-gnome's `editor_inset` does, so no non-finite origin or size reaches
+/// the grid geometry downstream.
 public struct EditorInset {
   /// The uniform inset, in points, applied around each pane's text grid — the
   /// single source of truth, consumed by both `PaneContainerView` and
@@ -30,21 +34,29 @@ public struct EditorInset {
   /// `x = padding`, `y = statusbarHeight + padding`,
   /// `w = max(0, paneWidth - 2 * padding)`,
   /// `h = max(0, paneHeight - statusbarHeight - 2 * padding)`.
-  /// Only `w` / `h` clamp; `x` / `y` are fixed offsets.
+  /// Only `w` / `h` clamp; `x` / `y` are fixed offsets. The zero rect when any
+  /// input is non-finite.
   public let gridRect: Rect
   /// The horizontal inset for the statusbar / cmdline text (`== padding`), so that
-  /// text left-aligns with the grid text.
+  /// text left-aligns with the grid text; 0 when any input is non-finite.
   public let textLeftInset: Double
 
   /// Computes the per-pane inset from the pane size, the statusbar-strip height,
   /// and the uniform `padding`. Only the grid width/height clamp to a non-negative
-  /// floor so a too-small pane never produces a negative grid dimension.
+  /// floor so a too-small pane never produces a negative grid dimension. A
+  /// non-finite input collapses `gridRect` and `textLeftInset` to zero; the echoed
+  /// inputs keep the values passed in.
   public init(paneWidth: Double, paneHeight: Double, statusbarHeight: Double, padding: Double) {
     self.paneWidth = paneWidth
     self.paneHeight = paneHeight
     self.statusbarHeight = statusbarHeight
     self.padding = padding
 
+    guard [paneWidth, paneHeight, statusbarHeight, padding].allSatisfy(\.isFinite) else {
+      self.gridRect = Rect(x: 0, y: 0, w: 0, h: 0)
+      self.textLeftInset = 0
+      return
+    }
     self.gridRect = Rect(
       x: padding,
       y: statusbarHeight + padding,

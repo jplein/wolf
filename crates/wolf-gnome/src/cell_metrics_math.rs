@@ -15,15 +15,14 @@
 //! snap the cell to a whole device pixel and a shared `line-height: 130` gives the
 //! same visual ratio; only the sub-pixel snap can differ, and only above 1x.
 //!
-//! ## Two deliberate divergences from Swift
+//! ## Two guards, shared with `CellMetricsMath.swift`
 //!
-//! Both are strictly more defensive, and both are confined to inputs macOS also
-//! mishandles, so no in-range result changes:
+//! Both are confined to degenerate inputs, so no in-range result changes:
 //!
-//! - [`cell_height`] additionally requires the percentage to be FINITE. Swift's
-//!   `guard lineHeightPercent > 0` accepts `+inf` and yields an infinite cell.
-//! - [`cell_height`] floors a degenerate result at [`MIN_CELL_PX`]. Swift can
-//!   return `0` or `NaN`, either of which makes `geometry::grid_size_for`'s
+//! - [`cell_height`] requires the percentage to be FINITE as well as positive. A
+//!   bare `> 0` guard accepts `+inf` and yields an infinite cell.
+//! - [`cell_height`] floors a degenerate result at [`MIN_CELL_PX`]. Unfloored, it
+//!   can be `0` or `NaN`, either of which makes `geometry::grid_size_for`'s
 //!   division silently produce an unusable row count and the window paint nothing.
 
 /// The floor a degenerate [`cell_height`] result collapses to: one whole device
@@ -238,10 +237,10 @@ mod tests {
 
     /// A non-finite line-height takes the natural branch too.
     ///
-    /// This is the first of the two deliberate divergences from Swift, whose
-    /// `guard lineHeightPercent > 0` accepts `+inf` and yields an infinite cell
-    /// height. `NaN > 0.0` is already false in both languages, so only the infinity
-    /// row is new — and it is the one an `is_finite()` deletion reddens.
+    /// This is the first of the two guards shared with `CellMetricsMath.swift`: a
+    /// bare `> 0.0` guard accepts `+inf` and yields an infinite cell height.
+    /// `NaN > 0.0` is already false in both languages, so only the infinity row
+    /// discriminates — and it is the one an `is_finite()` deletion reddens.
     #[test]
     fn a_non_finite_line_height_falls_back_to_the_natural_line_height() {
         for percent in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
@@ -260,8 +259,8 @@ mod tests {
     /// A degenerate result is floored at one whole device unit, never zero and
     /// never non-finite.
     ///
-    /// The second deliberate divergence from Swift, which can return `0` or `NaN`
-    /// here. A zero cell height makes `grid_size_for`'s division produce an
+    /// The second guard shared with `CellMetricsMath.swift`; unfloored, this can
+    /// be `0` or `NaN`. A zero cell height makes `grid_size_for`'s division produce an
     /// infinite row count; a NaN one makes it produce no rows at all. Both are
     /// silent — the window simply stops drawing — so the floor is asserted from
     /// both the zero side and the NaN side.

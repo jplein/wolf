@@ -70,6 +70,30 @@ final class StatusbarLayoutTests: XCTestCase {
       "\(desc): height >= secondaryLineTop + secondaryLineHeight", file: file, line: line)
   }
 
+  /// Asserts every field of a collapsed layout is exactly zero. `==` is false for NaN,
+  /// so a poisoned field fails here as surely as an infinite or non-zero one.
+  private func assertCollapsed(
+    _ l: StatusbarLayout,
+    _ desc: String,
+    file: StaticString = #filePath,
+    line: UInt = #line
+  ) {
+    let fields: [(String, Double)] = [
+      ("height", l.height),
+      ("primaryLineTop", l.primaryLineTop),
+      ("primaryLineHeight", l.primaryLineHeight),
+      ("secondaryLineTop", l.secondaryLineTop),
+      ("secondaryLineHeight", l.secondaryLineHeight),
+    ]
+    for (name, value) in fields {
+      XCTAssertEqual(
+        value, 0.0,
+        "\(desc): \(name) must collapse to 0; NaN or inf means the input reached the "
+          + "arithmetic unguarded, a finite non-zero value that the guard let this input through",
+        file: file, line: line)
+    }
+  }
+
   // MARK: - Exact height pinned to lineFactor == 1.25
 
   func testExactHeightForRepresentativeInputs() {
@@ -133,5 +157,24 @@ final class StatusbarLayoutTests: XCTestCase {
     assertInvariants(l, padding: 1, gap: 1, "small font")
     XCTAssertEqual(l.primaryLineHeight, 2.0, accuracy: eps, "ceil(1 * 1.25) == 2")
     XCTAssertEqual(l.secondaryLineHeight, 2.0, accuracy: eps, "ceil(1 * 1.25) == 2")
+  }
+
+  // MARK: - Degenerate input collapses the whole layout
+
+  /// A non-finite input in any of the four positions collapses all five fields, so the
+  /// strip is zero-height rather than infinite. The other inputs are the 13/10/3/1 example.
+  func testNonFiniteInputCollapsesWholeLayout() {
+    assertCollapsed(layout(primary: .nan, secondary: 10, padding: 3, gap: 1), "NaN primary")
+    assertCollapsed(
+      layout(primary: 13, secondary: .infinity, padding: 3, gap: 1), "+inf secondary")
+    assertCollapsed(layout(primary: 13, secondary: 10, padding: .infinity, gap: 1), "+inf padding")
+    assertCollapsed(layout(primary: 13, secondary: 10, padding: 3, gap: .nan), "NaN gap")
+  }
+
+  /// A negative padding or gap collapses the layout too, as wolf-gnome's `statusbar_layout`
+  /// does. Zero stays usable: `testZeroPaddingStillPositiveAndOrdered` pins that.
+  func testNegativeInputCollapsesWholeLayout() {
+    assertCollapsed(layout(primary: 13, secondary: 10, padding: -3, gap: 1), "negative padding")
+    assertCollapsed(layout(primary: 13, secondary: 10, padding: 3, gap: -1), "negative gap")
   }
 }

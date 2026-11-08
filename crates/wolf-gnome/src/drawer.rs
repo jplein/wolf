@@ -65,13 +65,11 @@ const COLLAPSED: DrawerSplit = DrawerSplit {
 /// `[min_drawer_height, pane_area_height]` and the editor takes the remainder, so
 /// the two always sum to the input.
 ///
-/// **Two divergences from `DrawerLayout.swift`, both strictly more defensive, both
-/// deliberate.** They follow [`crate::cell_metrics_math`]'s precedent of naming a
-/// divergence rather than silently carrying it:
+/// **Two guards, shared with `DrawerLayout.swift`:**
 ///
-/// - **The `min_drawer_height` floor.** Swift has none, so a short window yields a
-///   drawer thinner than one grid row — a strip that is allocated, painted and
-///   focusable while showing no text at all. The caller passes
+/// - **The `min_drawer_height` floor.** Without it a short window yields a drawer
+///   thinner than one grid row — a strip that is allocated, painted and focusable
+///   while showing no text at all. The caller passes
 ///   [`crate::editor_inset::min_pane_size`]'s height, which is the same floor every
 ///   other pane already gets.
 /// - **The non-finite guard.** Any non-finite input collapses the WHOLE result to
@@ -367,7 +365,7 @@ mod tests {
     ///   `h = 600`.
     /// - Drop the `low` bound from the clamp (`.clamp(0.0, h)`): the floor row
     ///   reports 30.0 rather than 63.0 at `h = 90`. Without this row the
-    ///   `min_drawer_height` divergence from `DrawerLayout.swift` is documented and
+    ///   `min_drawer_height` floor `DrawerLayout.swift` shares is documented and
     ///   unasserted.
     /// - Drop the `.min(pane_area_height)` cap on that lower bound: the predicted
     ///   red is **a panic from inside the standard library**, not an assertion
@@ -482,8 +480,8 @@ mod tests {
                 expected_drawer: 202.0,
                 sums_to_height: true,
             },
-            // --- The floor, divergence 1 from `DrawerLayout.swift` (which has none): a third of 90 px is
-            // --- under one pane's minimum, so the strip would be allocated and focusable but show no text.
+            // --- The floor, shared with `DrawerLayout.swift`: a third of 90 px is under one pane's
+            // --- minimum, so the strip would be allocated and focusable but show no text.
             SplitCase {
                 desc: "a short pane area floors the drawer at min_drawer_height",
                 height: 90.0,
@@ -542,8 +540,8 @@ mod tests {
                 expected_drawer: 0.0,
                 sums_to_height: true,
             },
-            // --- Divergence 2: the guard covers `weight` and `min_drawer_height` too, though neither is
-            // --- read without a drawer; these five rows make narrowing it visible.
+            // --- The guard, shared with `DrawerLayout.swift`, covers `weight` and `min_drawer_height`
+            // --- too, though neither is read without a drawer; these five rows make narrowing it visible.
             SplitCase {
                 desc: "a NaN weight collapses BOTH fields rather than poisoning one",
                 height: 600.0,
@@ -830,7 +828,7 @@ mod tests {
     ///
     /// Every row runs twice: once at the raw pane-area height and once at two
     /// thirds of it, the editor region an open drawer leaves. That second pass is
-    /// the only assertion anywhere on this seam's THIRD documented divergence —
+    /// the only assertion anywhere on this seam's one documented divergence —
     /// [`focus_target`] takes the raw pane-area size where
     /// `PaneContainerView.applyFocus` passes `DrawerLayout.editorHeight`, because
     /// [`PaneTree::pane_rects`] feeds only ORDERING here and both consumers are

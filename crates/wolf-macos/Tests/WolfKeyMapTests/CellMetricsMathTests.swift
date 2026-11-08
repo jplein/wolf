@@ -60,6 +60,55 @@ final class CellMetricsMathTests: XCTestCase {
       "a negative lineHeightPercent also falls back to the font's natural height")
   }
 
+  /// A non-finite percentage takes the same fallback as a non-positive one. Only the
+  /// `+inf` row discriminates: `NaN > 0` and `-inf > 0` are already false, while a bare
+  /// `> 0` guard lets `+inf` through to `round(10 * inf / 100)`, which the floor then
+  /// turns into 1 rather than the font's natural 12.
+  func testNonFiniteLineHeightFallsBackToFontMetrics() {
+    // ascent + descent + leading == 11.5, so the fallback is ceil(11.5) == 12.
+    let rows: [(String, Double)] = [
+      ("NaN", .nan),
+      ("+inf", .infinity),
+      ("-inf", -.infinity),
+    ]
+    for (name, pct) in rows {
+      XCTAssertEqual(
+        CellMetricsMath.cellHeight(
+          fontSize: 10.0, lineHeightPercent: pct,
+          ascent: 8.0, descent: 2.0, leading: 1.5),
+        12.0,
+        "lineHeightPercent \(name) must fall back to ceil(8 + 2 + 1.5) == 12; 1 means it "
+          + "passed the percentage guard and was floored, inf or NaN that nothing floored it")
+    }
+  }
+
+  // MARK: - degenerate result -> one-point floor
+
+  /// A result that is non-positive or non-finite is floored at one point, so a degenerate
+  /// font can never hand the grid a zero, negative or NaN cell height.
+  func testDegenerateResultIsFlooredAtOnePoint() {
+    XCTAssertEqual(
+      CellMetricsMath.minCellHeight, 1.0,
+      "minCellHeight is pinned at one point")
+
+    // Each row: (name, fontSize, lineHeightPercent, ascent, descent, leading).
+    let rows: [(String, Double, Double, Double, Double, Double)] = [
+      ("all zeros", 0, 0, 0, 0, 0),
+      ("NaN ascent on the fallback path", 10, 0, .nan, 0, 0),
+      ("NaN font size at 130%", .nan, 130, 8, 2, 0),
+      ("negative metrics", 10, 0, -8, -2, 0),
+    ]
+    for (name, fontSize, pct, ascent, descent, leading) in rows {
+      XCTAssertEqual(
+        CellMetricsMath.cellHeight(
+          fontSize: fontSize, lineHeightPercent: pct,
+          ascent: ascent, descent: descent, leading: leading),
+        1.0,
+        "\(name): a degenerate cell height must floor at exactly 1; 0, -10 or NaN means the "
+          + "floor is missing, any other value that the row reached the wrong formula")
+    }
+  }
+
   // MARK: - baseline recenters glyphs within the cell
 
   func testBaselineSplitsExtraLeadingEvenly() {
