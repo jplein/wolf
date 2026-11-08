@@ -4,8 +4,8 @@
   description = "Wolf — Linux (NixOS) + macOS dev environment (Rust toolchain + pinned hermetic Neovim; bazelisk on Darwin)";
 
   inputs = {
-    # One input for the toolchain, GTK and runtime assets, and it must not lag the NixOS host.
-    # See notes/flake.nix.md#single-nixpkgs-input
+    # One input for GTK and runtime assets, and it must not lag the NixOS host; rust-overlay
+    # pins the Rust toolchain. See notes/flake.nix.md#single-nixpkgs-input
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
     rust-overlay = {
