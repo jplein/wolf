@@ -288,6 +288,24 @@ Purpose: Pure key translation for the macOS front end — the fields an `NSView.
 
 - On macOS the Backspace key is `kVK_Delete` and forward-delete is `kVK_ForwardDelete` — easy to transpose.
 
+#### `LivenessSeam.swift`
+
+Purpose: The crash/stall recovery rulebook: what a wake does given the captive Neovim's liveness and the automatic restart count. A port of wolf-gnome's [`liveness_ui.rs`](../../../wolf-gnome/src/README.md#liveness_uirs); `Project.onWake` acts on it.
+
+**Public API**
+
+- `NvimLiveness` — `UInt8`-backed, its raw values the discriminants of `wolf-ffi`'s `mod liveness`. An unknown discriminant decodes to `nil`, which `Project` reads as `.alive`.
+- `LivenessSeam.decision(liveness:autoRestartAttempts:) -> Decision` — `overlay` (`.hidden`, `.crashed(retrying:)`, `.stalled`), `autoRestart`, `render` (only for `.alive`) and `drain`.
+- `maxAutoRestartAttempts` — one automatic attempt per crash.
+
+**Decisions**
+
+- The `switch` has no `default`, so a new liveness case fails to compile until it is classified.
+- `drain` is true in every state. The drain issues no RPC and paints nothing, and it is the only route by which a close or quit queued just before a crash reaches the window.
+- `.notResponding` never auto-restarts: a restart force-kills Neovim and loses whatever is not in a swap file, so that is the user's call.
+- The cap only stops a retry loop against a respawn that keeps failing, and does not limit the user, because the button resets the count. `retrying` means an attempt is still permitted, not that one is running.
+- Unlike `liveness_ui`, the seam takes the count rather than a boolean, so the cap is decided and tested here, and it carries `drain`, which wolf-gnome runs outside its mapping.
+
 #### `OtherPaneSeam.swift`
 
 Purpose: Resolves which other pane receives an other-pane bind — Preview in Another Pane and Edit in Another Pane — as an existing pane or a fresh split. Foundation only, over `PaneTree` and scalar bounds; the split-and-bind mechanics belong to core and the Lua helpers.

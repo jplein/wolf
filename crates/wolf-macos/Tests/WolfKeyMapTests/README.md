@@ -149,6 +149,12 @@ Note that the nearby `swift_format_srcs` glob feeds lint and format only, not te
 
 **Gotchas** — the `Kind` discriminants and `kVK_*` codes are local copies that must stay in lockstep with the Rust `FfiKeyEvent` and `wolf-core/src/input.rs`; note that Backspace is `kVK_Delete` and forward-delete is `kVK_ForwardDelete`, which are easy to transpose. `assertKey` compares field by field because the generated `FfiKeyEvent` is not `Equatable`.
 
+#### `LivenessSeamTests.swift`
+
+**Covers** — `LivenessSeam.decision(liveness:autoRestartAttempts:)`: the whole decision table at zero and one attempts; the cap, which refuses a second automatic attempt and switches the overlay to `crashed(retrying: false)`; the drain in every liveness state; that only a dead core with its attempt unspent auto-restarts; that only an alive core renders, whatever the count; and that `NvimLiveness`'s raw values match `wolf-ffi`'s `mod liveness`.
+
+**Gotchas** — the cases list the liveness states by hand, so a new `NvimLiveness` case must be added here deliberately. The deferral before the automatic respawn and the overlay painting ahead of it are not observable headlessly; they, and the rest of the `Project.onWake` glue, are manual-smoke.
+
 #### `OtherPaneSeamTests.swift`
 
 **Covers** — `OtherPaneSeam.target(active:prefer:tree:width:height:)` over hand-built `PaneTree`s: a single leaf splits on both sides, the preferred-side geometric neighbor wins when it resolves, a missing neighbor falls back to the DFS-adjacent leaf with wrap (edge panes wrap; a vertical stack with no lateral neighbor still finds the other pane), a 2×2 grid resolves the cross-axis-overlap neighbor rather than the diagonal, and a non-leaf active pane — the drawer case, a fresh `PaneId` — yields `nil`.

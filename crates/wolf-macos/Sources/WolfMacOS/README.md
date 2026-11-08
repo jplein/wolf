@@ -304,13 +304,13 @@ Purpose: The crash/stall overlay — a full-bleed opaque cover over a broken edi
 
 **Public API**
 
-- `enum NvimStatusMode` — `dead` / `notResponding`, mirroring the two non-`Alive` `wolf_core::Liveness` states.
+- `enum NvimStatusMode` — `dead(retrying:)` / `notResponding`, mirroring the two non-`Alive` `wolf_core::Liveness` states. `retrying` picks between "restarting…" and "automatic restart failed", so the message never promises a restart the spent automatic budget will not make.
 - `show(mode:)` / `hide()` — toggle visibility and set the message for the mode.
 - `onRestart` — the button action; the controller wires it to `project.restartNeovim()`.
 
 **Decisions**
 
-- The restart button is present in both modes: a fallback while a `dead` core auto-restarts, and the primary action for `notResponding`, which waits on the user.
+- The restart button is present in every mode: a fallback while a `dead` core auto-restarts, and otherwise the primary action, which waits on the user.
 - The opaque layer background is re-resolved against the view's current `effectiveAppearance` on `viewDidChangeEffectiveAppearance()`, because layer `CGColor`s do not follow a runtime dark/light switch.
 - Deliberately never first responder, so keystrokes still reach the editor grid.
 
@@ -497,19 +497,21 @@ Purpose: The `WKScriptMessageHandler` that forwards a preview page's pushed sele
 
 #### `Project.swift`
 
-Purpose: One captive Neovim instance shared by N views, each bound to one nvim tabpage. Owns the single `WolfCoreHandle` and the per-project wake token. Main-thread-only.
+Purpose: One captive Neovim shared by N views, each bound to one nvim tabpage. Owns the single `WolfCoreHandle` and the per-project wake token. Main-thread-only.
 
 **Public API**
 
-- `start(launchCwd:coordinator:)` — the sole caller of `wolf_ffi_start`; `nil` when the core fails to start. Points core at the bundled `nvim` and `rg` with `overwrite=0`, so a developer's `WOLF_NVIM_BIN` / `WOLF_RG_BIN` export wins.
-- `attach(_:)`, `detach(_:)`, `setCurrent(_:)`, `bindFirstTabpage()`, `addTabpage(cwd:)`, `closeTabpage(for:)`; the wakes `onWake()`, `onPickerWake()`, `onTreeWake()`, `onSearchWake()`; plus `restartNeovim()`, `setBackground(dark:)`, `setUiFocus(gained:)`, `shutdown()`.
+- `start(launchCwd:coordinator:)` — the sole caller of `wolf_ffi_start`, `nil` on failure. Points core at the bundled `nvim` and `rg` with `overwrite=0`, so a developer's `WOLF_NVIM_BIN` / `WOLF_RG_BIN` export wins.
+- `restartNeovim()` — the "Restart Neovim" button's entry; it resets the automatic attempt count.
 
 **Decisions**
 
-- Views are held weakly (the coordinator owns their lifetime) and each view holds its project strongly, so the core outlives one view's teardown while a sibling still binds it. `detach` of the last view is the only core-shutdown path.
-- Render and picker wakes go only to `currentView`; tree and content-search wakes fan out to every view, because each view runs its own traversal or search session and the token carries no view discriminator. That is safe because each view's refresh is version-gated.
-- `onWake` reads liveness before rendering, so a dead core auto-restarts and a stalled one waits for the user's button instead of painting a stale frame.
-- `restartNeovim` captures each view's open files and cwd before `handle.restart()`, which wipes the mirror, and reopens the active file last so it lands focused. A `false` return means no restart happened, so nothing is rebound.
+- Views are held weakly and each holds its project strongly, so the core outlives one view's teardown while a sibling binds it; the last view's `detach` is the only core-shutdown path.
+- Render and picker wakes go only to `currentView`; tree and content-search wakes fan out to every view, since the token names no view and each refresh is version-gated.
+- `onWake` acts on [`LivenessSeam`](../WolfKeyMap/README.md#livenessseamswift)'s decision and drains commands last, since a drained close can shut the core down.
+- An automatic restart waits `autoRestartDelay` on `asyncAfter`: `handle.restart()` blocks the main thread, and only a pending timer guarantees the overlay paints first.
+- Attempts count when scheduled and reset on `Alive`, a successful respawn or the button, so a press against a failing respawn can cost two respawns ([why](../../../../notes/crates/wolf-gnome/src/shell.rs.md#one-press-two-respawns)).
+- The respawn captures files and cwds before `handle.restart()` wipes the mirror. On `false` it applies only a fresh decision's overlay: scheduling there would bypass the cap.
 - `closeTabpage` skips the last view: closing nvim's last tabpage fails with E784, and that view's `detach` shuts the core down anyway.
 
 #### `SearchView.swift`
@@ -668,15 +670,16 @@ Purpose: One view — a single tab's whole UI stack, bound to a `(project, tabpa
 
 - `build() -> Bool` — returns `false`, having built nothing, when the tabpage bind is invalid, so the coordinator drops the would-be view.
 - `hasFolder` — false in the empty state, gating the sidebar and file tree, since an empty-state window must never scan `home`.
-- `persistedCwd` — the tabpage-local cwd, correct even when this view is not current, unlike `currentCwd`, which follows whichever tabpage is current.
+- `persistedCwd` — the tabpage-local cwd, correct even when this view is not current, unlike `currentCwd`.
 - `canCopy` — whether Edit > Copy has anything to copy; `copy()` takes the same decision.
+- `drainAndDispatchCommands()` — apart from `onRenderWake()`, so the project drains behind the crash overlay.
 
 **Decisions**
 
 - `project` is held strong so the shared core outlives this view's teardown while a sibling still binds it; the project holds views weakly, so there is no cycle. A view never shuts the core down itself.
 - `teardown()` is idempotent and defers `removeController` one runloop turn, capturing `self` strongly on purpose: during `windowWillClose` the coordinator's collection is the last strong reference, so dropping it synchronously frees the `NSWindow` mid-close.
 - `window.historyNav = self` is wired explicitly: this is not an `NSWindowController`, so a `target: nil` toolbar action could never reach it through the responder chain.
-- The file tree starts at the end of `build()`, after the sidebar's collapse state has seeded the tree's refresh gate, so a restored collapsed sidebar defers its first outline work instead of reloading while hidden.
+- The file tree starts at the end of `build()`, once the sidebar's collapse state has seeded its refresh gate, so a restored collapsed sidebar defers its first outline work.
 
 #### `main.swift`
 
