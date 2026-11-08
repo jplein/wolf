@@ -30,11 +30,25 @@ rust_test(
 )
 
 # The glob must stage dotfile fixtures such as tests/fixtures/lang/hashline/.bazelrc.
+filegroup(
+    name = "fixtures",
+    testonly = True,
+    srcs = glob(["tests/fixtures/**"]),
+)
+
+filegroup(
+    name = "files_mode_fixtures",
+    testonly = True,
+    srcs = glob(["tests/fixtures/files_mode/**"]),
+)
+
 rust_test(
     name = "doc_lint_fixtures_test",
     size = "small",
     srcs = ["tests/fixtures.rs"],
-    data = glob(["tests/fixtures/**"]),
+    # Filegroups, never a glob: :rustfmt.fix formats every .rs file a Rust target lists directly.
+    # See tools/doc-lint/tests/README.md#fixtures
+    data = [":fixtures"],
     edition = "2021",
     env = {"DOC_LINT_FIXTURES": "tools/doc-lint/tests/fixtures"},
     deps = [":doc_lint_lib"],
@@ -53,7 +67,7 @@ rust_test(
     name = "doc_lint_files_mode_test",
     size = "small",
     srcs = ["tests/files_mode.rs"],
-    data = glob(["tests/fixtures/files_mode/**"]),
+    data = [":files_mode_fixtures"],
     edition = "2021",
     env = {"DOC_LINT_FIXTURES": "tools/doc-lint/tests/fixtures"},
     deps = [":doc_lint_lib"],

@@ -96,6 +96,14 @@ sh_test(
     tags = ["no-sandbox"],
 )
 
+# `no-sandbox` and macOS only, like :swift_format: it runs the host Xcode swift-format.
+sh_test(
+    name = "swift_format_fix_test",
+    srcs = ["swift_format_fix_test.sh"],
+    data = ["swift_format_fix.sh"] + glob(["testdata/swift_format/*.swift"]),
+    tags = ["no-sandbox"],
+)
+
 sh_binary(
     name = "swift_format.fix",
     srcs = ["swift_format_fix.sh"],
@@ -207,6 +215,7 @@ test_suite(
         ":rustfmt_ffi",
         ":swift_format",
         ":swift_format_check_test",
+        ":swift_format_fix_test",
     ],
 )
 
