@@ -4,8 +4,10 @@
 
 mod common;
 
-use common::{ch, key, FLUSH_TIMEOUT};
-use wolf_core::Key;
+use std::time::{Duration, Instant};
+
+use common::{ch, key, FlushWaiter, FLUSH_TIMEOUT};
+use wolf_core::{Key, Snapshot, WolfCore};
 
 /// The outer/global grid id. Under ext_multigrid grid 1 is the global grid that
 /// a global `core.resize(..)` drives; window content lives on grids >= 2.
@@ -50,6 +52,35 @@ const SAMPLE_COLS: [usize; 4] = [0, 1, REPEAT_RUN_LEN / 2, REPEAT_RUN_LEN - 1];
 /// line_count field at a known value.
 const LINE_COUNT: usize = 50;
 
+/// How often [`poll_until`] re-reads the snapshot while waiting.
+const POLL_INTERVAL: Duration = Duration::from_millis(25);
+
+/// Polls `observe` over the snapshot until `done` accepts the observed value, and returns it,
+/// panicking with `desc` and the last value after [`FLUSH_TIMEOUT`]. One `wait_for_flush` can
+/// return on a flush that predates the input under test, so a single read can measure that flush
+/// rather than the input. Mirrors `redraw_multigrid.rs`'s `poll_until`, adding the returned value.
+fn poll_until<T: std::fmt::Debug>(
+    core: &WolfCore,
+    waiter: &FlushWaiter,
+    desc: &str,
+    observe: impl Fn(&Snapshot) -> T,
+    done: impl Fn(&T) -> bool,
+) -> T {
+    let deadline = Instant::now() + FLUSH_TIMEOUT;
+    loop {
+        // One statement: the read guard drops before drain/sleep (see autoread.rs).
+        let seen = observe(&core.read_snapshot());
+        if done(&seen) {
+            return seen;
+        }
+        if Instant::now() >= deadline {
+            panic!("timed out after {FLUSH_TIMEOUT:?} waiting for {desc}; last observed: {seen:?}");
+        }
+        waiter.drain();
+        std::thread::sleep(POLL_INTERVAL);
+    }
+}
+
 #[test]
 fn type_text_appears_in_grid() {
     // Open an empty markdown buffer.
@@ -60,12 +91,16 @@ fn type_text_appears_in_grid() {
     common::type_str(&core, "Hello");
     core.send_input(key(Key::Esc));
 
-    // Wait for the resulting redraw to land in the snapshot.
-    waiter.wait_for_flush(&core, FLUSH_TIMEOUT);
-
+    // Poll until the typed text lands in the snapshot.
+    let row0 = poll_until(
+        &core,
+        &waiter,
+        "row 0 to contain \"Hello\"",
+        |snap| snap.active_grid().row_text(0),
+        |row| row.contains("Hello"),
+    );
     let snap = core.read_snapshot();
 
-    let row0 = snap.active_grid().row_text(0);
     assert!(
         row0.trim_start().starts_with("Hello"),
         "row 0 should start with the typed text; got {row0:?}"
@@ -98,8 +133,15 @@ fn type_text_appears_in_grid() {
 fn wide_char_grid_line() {
     // A double-width CJK glyph then ASCII: the leading cell carries the glyph, the trailing cell is
     // blank, and following text keeps its column. This is the riskiest `grid_line` parser path.
-    let (core, _waiter, _file) = common::start_core_with_temp_md("\u{4e2d}ab\n");
+    let (core, waiter, _file) = common::start_core_with_temp_md("\u{4e2d}ab\n");
 
+    poll_until(
+        &core,
+        &waiter,
+        "row 0 to contain the fixture's \"ab\"",
+        |snap| snap.active_grid().row_text(0),
+        |row| row.contains("ab"),
+    );
     let snap = core.read_snapshot();
 
     // Col 0: the wide glyph itself.
@@ -161,8 +203,15 @@ fn grid_line_repeat_expansion() {
     first_line.push(TRAILING_CHAR);
     first_line.push('\n');
 
-    let (core, _waiter, _file) = common::start_core_with_temp_md(&first_line);
+    let (core, waiter, _file) = common::start_core_with_temp_md(&first_line);
 
+    poll_until(
+        &core,
+        &waiter,
+        &format!("row 0 to contain the fixture's trailing {TRAILING_CHAR:?}"),
+        |snap| snap.active_grid().row_text(0),
+        |row| row.contains(TRAILING_CHAR),
+    );
     let snap = core.read_snapshot();
 
     // The grid is wide enough (DEFAULT_COLS = 80) to hold the run + trailing char.
@@ -221,22 +270,26 @@ fn resize_updates_grid() {
     // Start at the default size, then resize to clearly different dims.
     let (core, waiter) = common::start_core_sized(common::DEFAULT_COLS, common::DEFAULT_ROWS);
 
-    waiter.drain();
+    let global_dims = |snap: &Snapshot| snap.grid(GLOBAL_GRID).map(|g| (g.cols, g.rows));
+    let before = global_dims(&core.read_snapshot());
     core.resize(RESIZE_COLS, RESIZE_ROWS);
-    waiter.wait_for_flush(&core, FLUSH_TIMEOUT);
 
     // `core.resize` is global and drives grid 1; the active window grid takes the content area, so
     // inspect grid 1. Per-grid resize is in redraw_multigrid.rs.
-    let snap = core.read_snapshot();
-    let global = snap
-        .grid(GLOBAL_GRID)
-        .expect("global grid must exist after a global resize");
+    let (cols, rows) = poll_until(
+        &core,
+        &waiter,
+        &format!("grid {GLOBAL_GRID}'s (cols, rows) to change from {before:?} after resize"),
+        global_dims,
+        |dims| *dims != before,
+    )
+    .expect("global grid must exist after a global resize");
     assert_eq!(
-        global.cols, RESIZE_COLS as usize,
+        cols, RESIZE_COLS as usize,
         "global grid cols should match the resized width (driven by grid_resize)"
     );
     assert_eq!(
-        global.rows, RESIZE_ROWS as usize,
+        rows, RESIZE_ROWS as usize,
         "global grid rows should match the resized height (driven by grid_resize)"
     );
 
@@ -252,6 +305,18 @@ fn trailing_line_number(row: &str) -> Option<usize> {
         .and_then(|s| s.parse::<usize>().ok())
 }
 
+/// Polls until the active grid's row 0 shows a numbered "line N" of the scroll fixture, so the
+/// opened file is drawn, and returns that row.
+fn fixture_row0(core: &WolfCore, waiter: &FlushWaiter) -> String {
+    poll_until(
+        core,
+        waiter,
+        "row 0 to show the fixture's numbered 'line N'",
+        |snap| snap.active_grid().row_text(0),
+        |row| trailing_line_number(row).is_some(),
+    )
+}
+
 #[test]
 fn scroll_shifts_grid_content() {
     // Build a buffer far taller than the (short) grid so scrolling moves content.
@@ -263,26 +328,24 @@ fn scroll_shifts_grid_content() {
     let (core, waiter, _file) =
         common::start_core_with_temp_md_sized(&content, SHORT_COLS, SHORT_ROWS);
 
-    let before_row0 = core.read_snapshot().active_grid().row_text(0);
+    let before_row0 = fixture_row0(&core, &waiter);
     let before_num = trailing_line_number(&before_row0)
         .expect("row 0 should start as a numbered 'line N' before scrolling");
 
     // Scroll down half a screen; <C-d> moves the view down, shifting grid content.
-    waiter.drain();
     core.send_input(common::ctrl(Key::Char('d')));
-    waiter.wait_for_flush(&core, FLUSH_TIMEOUT);
-
-    let after_row0 = core.read_snapshot().active_grid().row_text(0);
-    let after_num = trailing_line_number(&after_row0)
-        .expect("row 0 should still be a numbered 'line N' after scrolling");
 
     // The grid content itself must have moved (Grid::scroll), not just the
     // viewport number: row 0 now shows a later line in the buffer.
-    assert_ne!(
-        before_row0, after_row0,
-        "grid row 0 text should change after scrolling down \
-         (before={before_row0:?}, after={after_row0:?})"
+    let after_row0 = poll_until(
+        &core,
+        &waiter,
+        &format!("grid row 0 to change from {before_row0:?} to another 'line N' after <C-d>"),
+        |snap| snap.active_grid().row_text(0),
+        |row| *row != before_row0 && trailing_line_number(row).is_some(),
     );
+    let after_num = trailing_line_number(&after_row0)
+        .expect("row 0 should still be a numbered 'line N' after scrolling");
     assert!(
         after_num > before_num,
         "row 0 should show a later buffer line after scrolling down \
@@ -304,14 +367,19 @@ fn scroll_emits_viewport() {
     let (core, waiter, _file) =
         common::start_core_with_temp_md_sized(&content, SHORT_COLS, SHORT_ROWS);
 
+    fixture_row0(&core, &waiter);
     let initial_topline = core.read_snapshot().active_viewport().topline;
 
     // Scroll down half a screen. Per the InputEvent API, <C-d> moves down.
-    waiter.drain();
     core.send_input(common::ctrl(Key::Char('d')));
-    waiter.wait_for_flush(&core, FLUSH_TIMEOUT);
 
-    let new_topline = core.read_snapshot().active_viewport().topline;
+    let new_topline = poll_until(
+        &core,
+        &waiter,
+        &format!("viewport.topline to change from {initial_topline} after <C-d>"),
+        |snap| snap.active_viewport().topline,
+        |topline| *topline != initial_topline,
+    );
     assert!(
         new_topline > initial_topline,
         "viewport.topline should increase after scrolling down \
@@ -333,13 +401,19 @@ fn scroll_up_shifts_grid_content_down() {
     let (core, waiter, _file) =
         common::start_core_with_temp_md_sized(&content, SHORT_COLS, SHORT_ROWS);
 
+    let start_row0 = fixture_row0(&core, &waiter);
+
     // Jump to the end of the buffer so there is content above the viewport to
     // scroll back into. `G` moves to the last line.
-    waiter.drain();
     core.send_input(ch('G'));
-    waiter.wait_for_flush(&core, FLUSH_TIMEOUT);
 
-    let before_row0 = core.read_snapshot().active_grid().row_text(0);
+    let before_row0 = poll_until(
+        &core,
+        &waiter,
+        &format!("grid row 0 to change from {start_row0:?} to another 'line N' after G"),
+        |snap| snap.active_grid().row_text(0),
+        |row| *row != start_row0 && trailing_line_number(row).is_some(),
+    );
     let before_num = trailing_line_number(&before_row0)
         .expect("after jumping to end, row 0 should be a numbered 'line N' that is not line 0");
     assert!(
@@ -350,19 +424,18 @@ fn scroll_up_shifts_grid_content_down() {
 
     // <C-u> shifts grid content down. Assert only that row 0 now shows an earlier buffer line,
     // whatever the scroll amount or grid_scroll chunking.
-    waiter.drain();
     core.send_input(common::ctrl(Key::Char('u')));
-    waiter.wait_for_flush(&core, FLUSH_TIMEOUT);
 
-    let after_row0 = core.read_snapshot().active_grid().row_text(0);
+    let after_row0 = poll_until(
+        &core,
+        &waiter,
+        &format!("grid row 0 to change from {before_row0:?} to another 'line N' after <C-u>"),
+        |snap| snap.active_grid().row_text(0),
+        |row| *row != before_row0 && trailing_line_number(row).is_some(),
+    );
     let after_num = trailing_line_number(&after_row0)
         .expect("after scrolling up, row 0 should still be a numbered 'line N'");
 
-    assert_ne!(
-        before_row0, after_row0,
-        "grid row 0 text should change after scrolling up \
-         (before={before_row0:?}, after={after_row0:?})"
-    );
     assert!(
         after_num < before_num,
         "row 0 should show an EARLIER buffer line after scrolling up \
@@ -381,16 +454,18 @@ fn viewport_reports_line_count() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    let (core, _waiter, _file) =
+    let (core, waiter, _file) =
         common::start_core_with_temp_md_sized(&content, SHORT_COLS, SHORT_ROWS);
 
-    let viewport = core.read_snapshot().active_viewport();
-
-    assert_eq!(
-        viewport.linecount, LINE_COUNT as u64,
-        "viewport.linecount should equal the {LINE_COUNT} lines in the buffer \
-         (guards the win_viewport line_count field index); got {}",
-        viewport.linecount
+    let viewport = poll_until(
+        &core,
+        &waiter,
+        &format!(
+            "viewport.linecount to equal the {LINE_COUNT} lines in the buffer \
+             (guards the win_viewport line_count field index)"
+        ),
+        |snap| snap.active_viewport(),
+        |viewport| viewport.linecount == LINE_COUNT as u64,
     );
 
     // Sanity: topline <= botline <= linecount + 1, allowing nvim's past-the-end botline.
