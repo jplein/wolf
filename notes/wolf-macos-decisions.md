@@ -95,7 +95,6 @@ Recovery is one step and self-limiting. A failed in-place update clears that win
 - A visible non-current window of a project can blank during a live resize until it is refocused. `wantsLayer` mitigates this but does not eliminate it.
 - The grid is capped at a hard-coded 90 columns and centered in a wider pane, with the margins painted in the grid's own background. Making the cap configurable is a possible enhancement.
 - Scrollbar thumbs are non-interactive; thumb-drag is deferred.
-- Undercurl paints as a straight underline.
 - Markdown preview ships one theme. Cursor-follow anchors to the containing block's top inside a fenced code block, an HTML block or a table, and inside a paragraph hard-wrapped across several short source lines; an image's alt text collapses to a single anchor just after the image. The marker rules are in [the preview position-marker contract](wolf-core-decisions.md).
 - Appearance flows one way only: colorscheme to app chrome works, OS theme to Neovim theming does not.
 - Per-pane navigation history is not persisted across launches, and is not cursor-position history — Neovim's own jumplist (`<C-o>` / `<C-i>`) is untouched. Navigating back to a file deleted from disk opens an empty `[New]` buffer, exactly as `:e missing.md` would.

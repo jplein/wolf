@@ -127,9 +127,9 @@ Note that the nearby `swift_format_srcs` glob feeds lint and format only, not te
 
 #### `GlyphStyleTests.swift`
 
-**Covers** — `GlyphStyleResolver.resolve(flags:fg:special:)`: face selection from the bold and italic bits, underline from either the underline or the undercurl bit, strikethrough drawn in `fg`, and the underline color falling back to `fg` when `special` is unset.
+**Covers** — `GlyphStyleResolver.resolve(flags:fg:special:)`: face selection from the bold and italic bits, a straight underline from the underline bit and a wave from the undercurl bit, the wave winning when both are set, strikethrough drawn in `fg`, and, for either underline kind, the color taken from `special` and falling back to `fg` when it is unset.
 
-**Gotchas** — the style-flag bit positions are copied here from `mod flag` in `crates/wolf-ffi/src/lib.rs`, which is the source of truth; a new bit has to be added in both places. Undercurl resolves to a straight underline, so the undercurl-only case asserts `underline == true` rather than a distinct kind. `FfiColor` is compared component-wise, since it is not assumed `Equatable`.
+**Gotchas** — the style-flag bit positions are copied here from `mod flag` in `crates/wolf-ffi/src/lib.rs`, which is the source of truth; a new bit has to be added in both places. `FfiColor` is compared component-wise, since it is not assumed `Equatable`.
 
 #### `HistorySeamTests.swift`
 

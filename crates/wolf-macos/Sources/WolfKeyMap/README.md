@@ -219,14 +219,15 @@ Purpose: Resolves one cell's packed style-flag bits plus its foreground and spec
 **Public API**
 
 - `GlyphFace` — the concrete face a glyph is painted with.
-- `GlyphStyle` — the resolved face, the underline and strikethrough flags, and the colors each is stroked in. Its memberwise init is public so the renderer can build a plain `.regular` style for the cursor glyph.
+- `GlyphUnderline` — `.straight` or `.wave`, the latter for Neovim's undercurl.
+- `GlyphStyle` — the resolved face, the underline as a `GlyphUnderline?` (`nil` for none), the strikethrough flag, and the colors each is stroked in. Its memberwise init is public so the renderer can build a plain `.regular` style for the cursor glyph.
 - `GlyphStyleResolver.resolve(flags:fg:special:)` — `flags` is `FfiCell.flags()`.
 
 **Decisions**
 
 - The flag-bit constants mirror `mod flag` in `crates/wolf-ffi/src/lib.rs`, which is the source of truth; they have to move in lock-step with it.
 - Decorations carry their own colors because the renderer strokes them manually: `CTLineDraw` ignores AppKit decoration-color attributes, so routing them through CoreText attributes instead would silently drop them.
-- Undercurl resolves to a straight underline.
+- With both the underline and undercurl bits set the wave wins, matching `glyph_decoration` in wolf-gnome's [`glyph_style.rs`](../../../wolf-gnome/src/README.md#glyph_stylers), so the two front-ends agree.
 - `extension FfiColor: Equatable` lives here because swift-bridge emits no `Equatable` for transparent structs, and `GlyphStyle` needs one to synthesize its own.
 
 #### `HistorySeam.swift`

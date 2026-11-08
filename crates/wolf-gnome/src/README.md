@@ -355,7 +355,7 @@ Purpose: the pure rulebook for the three attribute-borne decorations — underli
 **Decisions**
 
 - The wave is Pango's (`Underline::Error`), never a hand-stroked Cairo path: the underline's placement comes from face metrics Pango reads and this crate does not.
-- Pango carries one underline attribute per run, so `underline` and `undercurl` cannot coexist and undercurl wins. macOS folds both into a straight underline; the wave is a divergence pinned by [`paint_golden.rs`](../tests/README.md#paint_goldenrs).
+- Pango carries one underline attribute per run, so `underline` and `undercurl` cannot coexist and undercurl wins. macOS's `GlyphStyleResolver` follows the same precedence. The wave is pinned by [`paint_golden.rs`](../tests/README.md#paint_goldenrs).
 - No strikethrough colour is ever set, so Pango strikes in the layout foreground — macOS's behaviour, bought for free.
 
 #### `im_ui.rs`

@@ -56,7 +56,7 @@ The per-pane status bar diverges from macOS in two visible ways, each for its ow
 
 Mouse and vertical scroll input work on both front-ends, as thin GTK glue over pure seams (`geometry::cell_at` and the `mouse` module).
 
-One text-attribute divergence is worth knowing: `undercurl` is drawn as Pango's wave on Linux, where macOS's `GlyphStyleResolver` folds it into a straight underline. Both take the decoration's colour from `special`, and both strike through in the layout foreground.
+Both front-ends draw `undercurl` as a wave, take the underline's colour from `special`, and strike through in the foreground. They differ only under a block cursor, where Linux keeps the cell's decorations and macOS draws the glyph plain.
 
 Horizontal scroll, non-primary buttons and kinetic scrolling are handled on neither platform, so they are gaps against other editors rather than against macOS.
 

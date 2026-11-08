@@ -316,11 +316,11 @@ Purpose: The crash/stall overlay — a full-bleed opaque cover over a broken edi
 
 #### `PaneContainerView.swift`
 
-Purpose: The editor area: one flat, flipped `NSView` that paints every split pane, owns `PaneTree`, hosts preview web views and is first responder. [wolf-macos-decisions.md](../../../../notes/wolf-macos-decisions.md) covers the flat view and preview wiring.
+Purpose: The editor area: one flat, flipped `NSView` that paints every split pane, owns `PaneTree`, hosts preview web views and is first responder.
 
 **Public API**
 
-- `markRefocusRebind()` arms a grid rebind after a tabpage switch; `rebind(tabpageHandle:)` does so after a crash-restart and drops the drawer, leaving editor panes bound.
+- `markRefocusRebind()` arms a grid rebind after a tabpage switch; `rebind(tabpageHandle:)` does so after a crash-restart, dropping only the drawer.
 - `layoutSnapshot()` / `requestLayoutRebuild(_:node:)` — the snapshot is `nil` for a lone empty pane; Rust renders `node`, the loaded bridge node `saved` was projected from.
 - `activeWin` — per-view, behind `activePaneSelection` and `activePreviewSourcePath`, because the tabpage-shared `WolfCoreHandle.active_win()` would let a background tab enable Copy.
 - `activePreviewSourcePath` — `nil` in edit mode.
@@ -333,6 +333,7 @@ Purpose: The editor area: one flat, flipped `NSView` that paints every split pan
 - Grids are skipped only under an opaque, loaded preview web view; the flag survives reloads, as WebKit keeps showing the outgoing document.
 - Scroll direction is `scrollingDeltaY`'s sign, already natural-scroll aware; `isDirectionInvertedFromDevice` double-corrects.
 - The terminal drawer lives in the pane map, outside `tree`, so leaves, neighbours and splits exclude it. A restart drops it: a killed Neovim's grid stays in the snapshot, so close detection never fires and a kept id blocks reopening.
+- Undercurl's wave is hand-stroked in `drawDecorations`: CoreText has no wavy underline.
 
 #### `PickerChrome.swift`
 
