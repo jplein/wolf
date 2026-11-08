@@ -36,7 +36,7 @@ use std::path::{Path, PathBuf};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use common::{ch, key, temp_md, type_str, FlushWaiter, FLUSH_TIMEOUT};
+use common::{ch, key, probe_values, temp_md, type_str, FlushWaiter, FLUSH_TIMEOUT};
 use wolf_core::{InputEvent, Key, Liveness, WinBuffer, WolfCore};
 
 /// Gap between polls while waiting for an out-of-band update.
@@ -60,6 +60,34 @@ const TERMINAL_SCHEME: &str = "term://";
 /// [`open_files_omits_a_terminal_buffer`] for why no level-triggered predicate can
 /// do this job. Mirrors `nav_history_live.rs`'s `HISTORY_SETTLE`.
 const MIRROR_SETTLE: Duration = Duration::from_secs(2);
+
+/// How long to wait after the sacrificial key so the pump has taken it as a batch of its own
+/// and is blocked on the toast-clear write lock. Far above `INPUT_COALESCE_DELAY` (8 ms), so
+/// the events sent after it cannot join that batch.
+const PUMP_STALL_SETTLE: Duration = Duration::from_millis(500);
+
+/// How long to let the queued events land on the fresh nvim, and their redraws on the
+/// snapshot, before the command line is read.
+const STALE_INPUT_SETTLE: Duration = Duration::from_secs(1);
+
+/// Text pasted while the pump is stalled across the restart. Distinct from every other marker
+/// and from anything a fresh nvim's buffer could hold.
+const STALE_PASTE_MARKER: &str = "stalepastekilo";
+
+/// Text typed in insert mode while the pump is stalled across the restart.
+const STALE_KEY_MARKER: &str = "stalekeyslima";
+
+/// An Ex command typed after `:` while the pump is stalled, never followed by Enter.
+const STALE_HALF_TYPED_CMD: &str = "echo 4711";
+
+/// Text typed after the restart, the positive control that post-swap typing is delivered.
+const CONTROL_MARKER: &str = "freshkeysmike";
+
+/// The grid size requested while the pump is stalled. Distinct from the defaults the core
+/// starts and respawns at, so `&columns` tells "applied" from "dropped".
+const STALE_COLS: u16 = common::DEFAULT_COLS + 20;
+/// See [`STALE_COLS`].
+const STALE_ROWS: u16 = common::DEFAULT_ROWS + 6;
 
 /// Polls `pred` until `true` (draining wakes each iteration) or panics after
 /// [`FLUSH_TIMEOUT`]. Mirrors `tabpages.rs::poll_until`.
@@ -114,6 +142,17 @@ fn ex_command(core: &WolfCore, cmd: &str) {
 /// SIGKILLs the captive nvim's own pid via the input pump (a crash).
 fn self_sigkill(core: &WolfCore) {
     ex_command(core, "lua (vim.uv or vim.loop).kill(vim.fn.getpid(), 9)");
+}
+
+/// SIGKILLs the captive nvim 300 ms after the `:lua` command that schedules it has finished.
+///
+/// Unlike [`self_sigkill`], nvim dies after its `cmdline_hide` flush, so the snapshot's
+/// `cmdline` is not left `active`. Nothing resets `Snapshot.cmdline` across a restart.
+fn deferred_sigkill(core: &WolfCore) {
+    ex_command(
+        core,
+        "lua vim.defer_fn(function() (vim.uv or vim.loop).kill(vim.fn.getpid(), 9) end, 300)",
+    );
 }
 
 /// Canonicalizes `p`, falling back to the raw path when it cannot be resolved
@@ -524,6 +563,143 @@ fn restart_on_live_core_is_a_noop_ok_false() {
         "current_tabpage() must still resolve after the no-op restart requests"
     );
     let _ = core.list_buffers();
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// Typing queued before a restart's handle swap never reaches the fresh nvim, so a half-typed
+/// `:` command cannot arrive there as keys. State queued alongside it (a resize) still applies.
+///
+/// ## Why the pump is stalled with a read guard
+///
+/// The simple version of this test (kill, send keys while `Dead`, restart, look) passes with
+/// or without the discard, so it cannot fail. nvim-rs 0.9.2 writes each call straight to the
+/// child's stdin with no buffer, so a call against a dead nvim fails at once with EPIPE. The
+/// pump drains its queue `INPUT_COALESCE_DELAY` (8 ms) after the first event, against
+/// whatever handle it reads, and a respawn takes far longer. Keys sent while `Dead` therefore
+/// die against the dead handle before the swap. Only keys still queued at the swap can reach
+/// the fresh nvim, and the stall puts them there deterministically.
+///
+/// For a batch holding any toast-dismissing event, the pump takes the snapshot write lock
+/// (the toast clear) before applying it. Holding a [`wolf_core::SnapshotReadGuard`] blocks
+/// that, so the sacrificial `Esc` parks the pump and every event sent after it stays queued
+/// until the guard drops after the restart. Holding the guard across `restart_nvim()` is safe:
+/// the redraw handler takes the lock with a `try_write` / `yield_now` loop while nvim-rs keeps
+/// answering RPCs, and no setup step waits on a redraw. Nothing else may read the snapshot
+/// while the guard is held.
+///
+/// ## Why the kill is deferred
+///
+/// [`self_sigkill`] kills nvim inside its own `:lua` command, before the `cmdline_hide`
+/// flush. Nothing resets `Snapshot.cmdline` across a restart, so that command line would stay
+/// `active` and poison the command-line assertion here. [`deferred_sigkill`] lets the command
+/// finish first, and the test asserts that precondition.
+///
+/// ## What `&columns` pins
+///
+/// The resize is queued in the same stall as the typing. `&columns` equal to [`STALE_COLS`]
+/// proves stale state still applies, so the rule drops typing rather than everything queued.
+///
+/// ## Falsifying edits and their predicted reds
+///
+/// * Delete the pump's discard (or run the base code): red at the command-line assertion,
+///   which shows the half-typed [`STALE_HALF_TYPED_CMD`] open on the fresh nvim.
+/// * Drop `Paste` from `InputEvent::is_typing`: red at the buffer assertion, showing
+///   [`STALE_PASTE_MARKER`].
+/// * Discard every stale event, not just typing: red at the `&columns` assertion, showing the
+///   default 80.
+/// * Stamp a constant generation in `send_input`: every post-swap key is dropped too, so the
+///   first probe times out.
+#[test]
+fn typing_queued_before_restart_never_reaches_the_fresh_nvim() {
+    let (core, waiter) = common::start_core_sized(common::DEFAULT_COLS, common::DEFAULT_ROWS);
+    let _tab = attach_and_first_tabpage(&core, &waiter);
+
+    deferred_sigkill(&core);
+    poll_until(
+        &waiter,
+        "liveness() to become Dead after the deferred SIGKILL",
+        || core.liveness() == Liveness::Dead,
+    );
+    {
+        let snap = core.read_snapshot();
+        assert!(
+            !snap.cmdline.active,
+            "precondition: the snapshot's command line must be closed once the old nvim is \
+             dead, or the command-line assertion after the restart would read the dead nvim's \
+             leftover state; got {:?}",
+            snap.cmdline.text()
+        );
+    }
+
+    // Park the pump on the toast-clear write lock: the sacrificial Esc is the batch that blocks.
+    let stall = core.read_snapshot();
+    core.send_input(key(Key::Esc));
+    sleep(PUMP_STALL_SETTLE);
+
+    core.paste(STALE_PASTE_MARKER.into());
+    core.send_input(ch('i'));
+    type_str(&core, STALE_KEY_MARKER);
+    core.send_input(key(Key::Esc));
+    core.send_input(ch(':'));
+    type_str(&core, STALE_HALF_TYPED_CMD);
+    core.resize(STALE_COLS, STALE_ROWS);
+
+    let restarted = core
+        .restart_nvim()
+        .expect("restart_nvim should be Ok from a Dead state");
+    assert!(
+        restarted,
+        "restart_nvim() from a Dead state must report an actual respawn (Ok(true))"
+    );
+    drop(stall);
+
+    // The stale `:` must be checked before any probe, whose own `:call` it would garble.
+    settle(&waiter, STALE_INPUT_SETTLE);
+    {
+        let snap = core.read_snapshot();
+        assert!(
+            !snap.cmdline.active && snap.cmdline.text().is_empty(),
+            "the fresh nvim must show no command line after the restart, but active = {} with \
+             text {:?}. Text {STALE_HALF_TYPED_CMD:?} means typing queued before the handle swap \
+             was delivered to the fresh nvim (the discard is missing); any other open command \
+             line comes from something other than this test's stale input",
+            snap.cmdline.active,
+            snap.cmdline.text()
+        );
+    }
+
+    let dir = tempfile::tempdir().expect("failed to create probe tempdir");
+    let probe = dir.path().join("probe.txt");
+    let values = probe_values(&core, &["join(getline(1, '$'), ',')", "&columns"], &probe);
+    assert_eq!(
+        values[0], "",
+        "the fresh nvim's buffer must be empty: {STALE_PASTE_MARKER:?} in it means a paste \
+         queued before the swap was delivered (Paste is not classified as typing), \
+         {STALE_KEY_MARKER:?} means queued keys were; got {:?}",
+        values[0]
+    );
+    assert_eq!(
+        values[1],
+        STALE_COLS.to_string(),
+        "the resize queued before the swap is state and must still apply to the fresh nvim. \
+         The default {} means stale state was discarded along with the typing; any other \
+         width means the resize was misapplied",
+        common::DEFAULT_COLS
+    );
+
+    // Positive control: typing sent after the swap is delivered, so the empty buffer above
+    // is the discard at work and not a pump that delivers nothing.
+    core.send_input(ch('i'));
+    type_str(&core, CONTROL_MARKER);
+    core.send_input(key(Key::Esc));
+    let after = probe_values(&core, &["join(getline(1, '$'), ',')"], &probe);
+    assert_eq!(
+        after[0], CONTROL_MARKER,
+        "typing sent after the restart must reach the fresh nvim's buffer; anything else means \
+         post-swap input is dropped or misrouted, and the empty buffer asserted above proves \
+         nothing about stale typing"
+    );
 
     core.shutdown().expect("shutdown should be Ok");
 }

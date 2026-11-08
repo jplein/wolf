@@ -53,6 +53,21 @@ const INPUT_COALESCE_DELAY: Duration = Duration::from_millis(8);
 /// `WOLF_RPC_TIMEOUT_MS` env var (invalid / unset / zero → this default).
 const RPC_TIMEOUT_DEFAULT: Duration = Duration::from_secs(5);
 
+/// The handle the input pump applies batches to, and the restart generation it
+/// belongs to. [`WolfCore::restart_nvim`] swaps both in one write-lock section.
+#[derive(Clone)]
+struct PumpTarget {
+    nvim: Nvim,
+    generation: u64,
+}
+
+/// An input event as queued by [`WolfCore::send_input`], stamped with the restart
+/// generation current when it was sent.
+struct QueuedInput {
+    generation: u64,
+    event: InputEvent,
+}
+
 /// Configuration to start a [`WolfCore`].
 #[derive(Clone, Debug)]
 pub struct CoreConfig {
@@ -120,8 +135,9 @@ pub struct WolfCore {
     commands: CommandQueue,
     /// Ordered input queue. Every input event is enqueued here and applied by a
     /// single consumer task in FIFO order, so keystrokes never reorder (which
-    /// would garble typed text).
-    input_tx: UnboundedSender<InputEvent>,
+    /// would garble typed text). Each event carries the restart generation it was
+    /// sent under, so the pump can drop typing that predates a restart.
+    input_tx: UnboundedSender<QueuedInput>,
     /// The always-on GLOBAL recent-files MRU (`<state_dir>/file-mru.sqlite`).
     /// Constructed once at [`WolfCore::start`] from [`state_dir`] (or
     /// [`MruStore::disabled`] when it cannot be resolved). Every row carries the
@@ -191,11 +207,12 @@ pub struct WolfCore {
     /// A clone of the same front-end wake fired on liveness transitions, so the
     /// front-end can re-read [`liveness`](WolfCore::liveness) and paint/recover.
     wake: WakeFn,
-    /// The current RPC handle shared with the input pump. The pump reads a clone
-    /// per batch; [`restart_nvim`](WolfCore::restart_nvim) swaps in the fresh
-    /// nvim's handle so the pump keeps working after a respawn (a fixed captured
-    /// handle would go stale).
-    shared_handle: Arc<RwLock<Nvim>>,
+    /// The current RPC handle and restart generation, shared with the input pump.
+    /// The pump reads a clone per batch; [`restart_nvim`](WolfCore::restart_nvim)
+    /// swaps in the fresh nvim's handle and bumps the generation, so the pump keeps
+    /// working after a respawn (a fixed captured handle would go stale) and can
+    /// tell which queued typing predates it.
+    shared_handle: Arc<RwLock<PumpTarget>>,
     /// The redraw handler (it is `Clone`, carrying the SAME snapshot / intents /
     /// commands / tracked-cwd / recent-dirs / wake). Stored so a restart clones a
     /// fresh handler for the respawned nvim's io loop.
@@ -344,9 +361,12 @@ impl WolfCore {
 
         // The single FIFO input consumer fuses consecutive `Key` events into one `nvim_input`.
         // See notes/wolf-core-decisions.md#threading-and-locking
-        let (input_tx, mut input_rx) = mpsc::unbounded_channel::<InputEvent>();
+        let (input_tx, mut input_rx) = mpsc::unbounded_channel::<QueuedInput>();
         // A fresh handle clone per batch, because a restart swaps in the respawned nvim's handle.
-        let shared_handle: Arc<RwLock<Nvim>> = Arc::new(RwLock::new(nvim.handle()));
+        let shared_handle = Arc::new(RwLock::new(PumpTarget {
+            nvim: nvim.handle(),
+            generation: 0,
+        }));
         let pump_shared_handle = shared_handle.clone();
         let pump_mru = mru.clone();
         let pump_tracked_cwd = tracked_cwd.clone();
@@ -357,13 +377,31 @@ impl WolfCore {
                 // Let any siblings enqueued in the same synchronous burst arrive.
                 tokio::time::sleep(INPUT_COALESCE_DELAY).await;
 
-                let mut batch = vec![first];
+                let mut queued = vec![first];
                 while let Ok(ev) = input_rx.try_recv() {
-                    batch.push(ev);
+                    queued.push(ev);
                 }
 
                 // Read the CURRENT handle for this batch (survives a restart swap).
-                let pump_nvim: Nvim = pump_shared_handle.read().clone();
+                let target: PumpTarget = pump_shared_handle.read().clone();
+
+                // Typing sent before the last restart's swap is dropped, so a half-typed `:` cannot
+                // reach the fresh nvim as normal-mode keys; state input still applies.
+                let queued_len = queued.len();
+                let batch: Vec<InputEvent> = queued
+                    .into_iter()
+                    .filter(|q| q.generation == target.generation || !q.event.is_typing())
+                    .map(|q| q.event)
+                    .collect();
+                if batch.len() < queued_len {
+                    tracing::debug!(
+                        dropped = queued_len - batch.len(),
+                        "dropped typing queued before a restart"
+                    );
+                }
+                if batch.is_empty() {
+                    continue;
+                }
 
                 // Clear a non-prompt toast before applying dismissing input, so a `msg_show` that
                 // input produces repopulates it; the guard drops before the apply `.await`.
@@ -375,7 +413,7 @@ impl WolfCore {
                     drop(snap);
                 }
 
-                input::apply_batch(&pump_nvim, &batch).await;
+                input::apply_batch(&target.nvim, &batch).await;
 
                 // Record opens under nvim's live cwd, resolved per batch to follow `:cd`/`:tcd`;
                 // the path is cloned out so the guard is not held across the record.
@@ -429,8 +467,18 @@ impl WolfCore {
     /// The event is enqueued on the ordered input channel and applied by the
     /// single consumer task in FIFO order; errors are logged (the front-end gets
     /// no synchronous result, matching the FFI-shaped contract).
+    ///
+    /// The event is stamped with the current restart generation. Typing (see
+    /// [`InputEvent::is_typing`]) still queued when a
+    /// [`restart_nvim`](Self::restart_nvim) swaps in the fresh nvim is dropped,
+    /// never delivered to it; state input still applies.
     pub fn send_input(&self, event: InputEvent) {
-        if self.input_tx.send(event).is_err() {
+        let generation = self.shared_handle.read().generation;
+        if self
+            .input_tx
+            .send(QueuedInput { generation, event })
+            .is_err()
+        {
             tracing::warn!("input dropped: core input pump is gone");
         }
     }
@@ -615,7 +663,7 @@ impl WolfCore {
         } else {
             match browser_preview::spawn(
                 &self.runtime,
-                self.shared_handle.read().clone(),
+                self.shared_handle.read().nvim.clone(),
                 self.snapshot.clone_handle(),
                 target.clone(),
             ) {
@@ -1487,6 +1535,10 @@ impl WolfCore {
     ///   and [`list_buffers`](Self::list_buffers) is empty (the respawn starts
     ///   clean). Reopening the Tier-1 files + rebinding views is the FRONT-END's job
     ///   (off the mirror captured before the restart) — this method reopens nothing.
+    ///   Typing [`send_input`](Self::send_input) enqueued before the swap is dropped
+    ///   rather than delivered to the fresh nvim, so a half-typed Ex command cannot
+    ///   arrive as normal-mode keys; state input (resize, focus, tabpage, ...) still
+    ///   applies.
     /// - `Ok(false)` — a NO-OP: either the current liveness is already `Alive` (a
     ///   redundant restart must NOT disturb a live nvim) or a restart is already in
     ///   flight (the `restarting` CAS was set). The process is left untouched.
@@ -1565,10 +1617,15 @@ impl WolfCore {
             }
         };
 
-        // Swap in the fresh process + its handle (so the input pump picks it up).
+        // Swap in the fresh process + its handle (so the input pump picks it up), and bump the
+        // generation under the same lock so the pump drops typing queued before this point.
         let new_handle = new_proc.handle();
         *self.nvim.borrow_mut() = new_proc;
-        *self.shared_handle.write() = new_handle;
+        {
+            let mut target = self.shared_handle.write();
+            target.nvim = new_handle;
+            target.generation += 1;
+        }
         Ok(true)
     }
 

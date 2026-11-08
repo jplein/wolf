@@ -322,6 +322,40 @@ impl InputEvent {
             InputEvent::Key(_) | InputEvent::Mouse(_) | InputEvent::Scroll(_)
         )
     }
+
+    /// Whether this event is user typing: a [`Key`](InputEvent::Key),
+    /// [`Paste`](InputEvent::Paste), [`Mouse`](InputEvent::Mouse) or
+    /// [`Scroll`](InputEvent::Scroll). Every other variant is state.
+    ///
+    /// The input pump drops typing enqueued before a restart's handle swap, so a
+    /// half-typed Ex command never reaches the fresh nvim as normal-mode keys;
+    /// state still applies. The match is exhaustive on purpose: a new variant does
+    /// not compile until it is classified.
+    pub(crate) fn is_typing(&self) -> bool {
+        match self {
+            InputEvent::Key(_)
+            | InputEvent::Paste { .. }
+            | InputEvent::Mouse(_)
+            | InputEvent::Scroll(_) => true,
+            InputEvent::Resize { .. }
+            | InputEvent::ResizeGrid { .. }
+            | InputEvent::FocusWin { .. }
+            | InputEvent::Open { .. }
+            | InputEvent::OpenAt { .. }
+            | InputEvent::Save
+            | InputEvent::SaveAs { .. }
+            | InputEvent::Chdir { .. }
+            | InputEvent::SetTabpage { .. }
+            | InputEvent::CloseTabpage { .. }
+            | InputEvent::ClosePane
+            | InputEvent::NewBuffer
+            | InputEvent::SwitchBuffer { .. }
+            | InputEvent::SetBackground { .. }
+            | InputEvent::ToggleTerminal
+            | InputEvent::ToggleFullWidth
+            | InputEvent::SetUiFocus { .. } => false,
+        }
+    }
 }
 
 /// Translates a [`KeyEvent`] into Neovim keystroke notation.
@@ -764,5 +798,81 @@ fn key_base(key: Key) -> String {
         Key::PageUp => "PageUp".to_string(),
         Key::PageDown => "PageDown".to_string(),
         Key::F(n) => format!("F{n}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Pins [`InputEvent::is_typing`], which decides what survives a restart. The
+    //! end-to-end drop is covered by `tests/nvim_restart.rs`.
+
+    use std::path::PathBuf;
+
+    use super::*;
+
+    /// One value of each typing variant.
+    fn typing_events() -> Vec<InputEvent> {
+        vec![
+            InputEvent::Key(KeyEvent {
+                key: Key::Char('i'),
+                ctrl: false,
+                shift: false,
+                alt: false,
+                meta: false,
+            }),
+            InputEvent::Paste {
+                text: "pasted".to_string(),
+            },
+            InputEvent::Mouse(MouseEvent {
+                button: MouseButton::Left,
+                action: MouseAction::Press,
+                grid: 1,
+                row: 0,
+                col: 0,
+                ctrl: false,
+                shift: false,
+                alt: false,
+            }),
+            InputEvent::Scroll(ScrollEvent {
+                direction: ScrollDirection::Down,
+                grid: 1,
+                row: 0,
+                col: 0,
+            }),
+        ]
+    }
+
+    /// A spread of state variants, which must still apply across a restart.
+    fn state_events() -> Vec<InputEvent> {
+        vec![
+            InputEvent::Resize { cols: 80, rows: 24 },
+            InputEvent::ResizeGrid {
+                grid: 2,
+                cols: 40,
+                rows: 12,
+            },
+            InputEvent::FocusWin { win: 1000 },
+            InputEvent::SetTabpage { handle: 1 },
+            InputEvent::SetBackground { dark: true },
+            InputEvent::SetUiFocus { gained: true },
+            InputEvent::Open {
+                path: PathBuf::from("a.txt"),
+            },
+            InputEvent::Save,
+        ]
+    }
+
+    #[test]
+    fn keys_paste_mouse_and_scroll_are_typing() {
+        for ev in typing_events() {
+            assert!(ev.is_typing(), "{ev:?} must be typing");
+        }
+    }
+
+    #[test]
+    fn resize_focus_tabpage_background_open_and_save_are_state() {
+        for ev in state_events() {
+            assert!(!ev.is_typing(), "{ev:?} must be state, not typing");
+        }
     }
 }
