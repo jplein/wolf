@@ -52,6 +52,8 @@ The gate is Linux only because only Cargo builds wolf-gnome, the macOS dev shell
 
 `wolf-core-deps` queries `kind(rule, deps(//crates/wolf-core:wolf_core))`, and the `kind(rule, …)` wrapper is load-bearing. A bare `deps()` also returns every source file in the graph, and `libc` vendors its bindings under `src/new/glibc/…`, whose paths match the `glib` pattern, so the gate would fail on every run. crate_universe resolves only the darwin triples in `MODULE.bazel`, so this gate covers the macOS graph alone, and Linux's `--target all` covers every target.
 
+`deps()` also follows rules_rust's exec and toolchain edges, so the listing holds rules_rust's own `@@rules_rust++i2+rrc__…` crates and `@rules_rust//…` labels beside core's crates. A match on one of those calls for narrowing the query, not editing the forbidden list. `--notool_deps` is not that narrowing for free: it also drops core's proc-macro and build-script crates, such as `serde_derive` and `cc`, which the Linux `cargo tree` lists.
+
 `--keep_going` reports every failing target rather than the first. `--color=no`, `--curses=no` and a 30-second progress rate keep the log plain and bounded, and `--test_output=errors` copies each failing test's log into the gate log.
 
 `--test_summary=short` lists every test target with its status, `(cached)` included, so `target/gates/test.log` shows that a given target ran and that the `external` swift-format targets executed. `terse` lists only the targets that did not pass, which left an agent reading `bazel-testlogs` to learn whether a target ran at all. The cost is that a failed `test` gate's 150-line tail is mostly that list, while the excerpt still carries the failure.

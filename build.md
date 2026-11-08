@@ -445,6 +445,6 @@ On the Linux secondary `gates.sh` runs under rootless Podman with no device node
 
 ## The dependency boundary
 
-`wolf-core` must compile with no GUI toolkit in its dependency tree. The rule and its reasons belong to [`wolf-core-decisions.md`](notes/wolf-core-decisions.md), and the forbidden names to [`tools/lint/wolf_core_forbidden_deps.txt`](tools/lint/wolf_core_forbidden_deps.txt), which the `wolf-core-deps` gate of `./gates.sh` checks on both platforms. The gate does not repin, so after any dependency or feature change repin `crate_universe` as described above.
+`wolf-core` must compile with no GUI toolkit in its dependency tree; how that is checked, and why, is in [the wolf-core decisions](notes/wolf-core-decisions.md#the-one-hard-rule). After any dependency or feature change, repin `crate_universe` as described above.
 
 `wolf-gnome` is deliberately given no Bazel target, which is what keeps the GTK stack out of the Bazel graph; see [`wolf-gnome-decisions.md`](notes/wolf-gnome-decisions.md).

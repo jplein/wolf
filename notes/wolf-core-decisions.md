@@ -8,7 +8,7 @@ The durable constraints behind this crate. Read this before changing anything he
 
 > `wolf-core` must compile with no GUI toolkit in its dependency tree.
 
-This is what lets one core serve both front-ends, and it is checked, not assumed. The `wolf-core-deps` gate of [`gates.sh`](../gates.sh) lists core's graph with `cargo tree -e no-dev -p wolf-core` on Linux and `bazel query 'kind(rule, deps(//crates/wolf-core:wolf_core))'` on macOS, and fails on any entry that matches a pattern in [`tools/lint/wolf_core_forbidden_deps.txt`](../tools/lint/wolf_core_forbidden_deps.txt). Why each platform lists the graph the way it does is in [the gates notes](gates.sh.md#linux-gates).
+This is what lets one core serve both front-ends, and it is checked, not assumed. The `wolf-core-deps` gate of [`gates.sh`](../gates.sh) lists core's dependency graph on each platform, and fails on any entry that matches a pattern in [`tools/lint/wolf_core_forbidden_deps.txt`](../tools/lint/wolf_core_forbidden_deps.txt). How and why each platform lists the graph is in the gates notes, for [Linux](gates.sh.md#linux-gates) and [macOS](gates.sh.md#macos-gates).
 
 The gate does not repin. After any dependency or feature change, repin `crate_universe`, because a feature change moves the Bazel lockfile even when no crate node is added.
 
