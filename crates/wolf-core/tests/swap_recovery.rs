@@ -44,7 +44,7 @@
 //!
 //! ### Why one test's cwd must live under `$HOME` (read before "simplifying" it)
 //!
-//! Cases c and d use [`owned_cwd`], a plain `tempfile::tempdir()`. Case e uses
+//! Cases c and d use [`owned_cwd`], a temp dir under a short root. Case e uses
 //! [`home_cwd`] instead, and that difference is LOAD-BEARING. Neovim writes the
 //! swap owner's path into the swap header through `home_replace`, which rewrites a
 //! path under `$HOME` to a home-relative form (on Unix additionally rewriting the
@@ -56,6 +56,22 @@
 //! `_G.wolf_untitled_swap_exists` already matched — which is precisely why every
 //! pre-existing test passed while the defence was dead for every real project.
 //! A case-e test at a `/tmp` cwd would be green with OR without the fix.
+//!
+//! ## Long paths
+//!
+//! Neovim cuts a `//`-style swap name to [`SWAP_NAME_MAX`] bytes, dropping the
+//! file-specific tail, while recovery searches for the UNCUT name. So siblings under a
+//! deep directory share one swap name, and a crashed edit there can never be recovered.
+//! `init.lua` therefore gives a buffer whose full path passes that limit no swap file,
+//! and leaves a stale cut swap on disk rather than deleting it. Pinned by
+//! [`long_path_siblings_get_no_swap_while_short_paths_keep_theirs`],
+//! [`save_as_force_between_long_path_siblings_overwrites`],
+//! [`rename_from_long_to_short_path_restores_the_swap`],
+//! [`rename_onto_a_short_path_with_a_stale_swap_keeps_swap_off`],
+//! [`stale_truncated_swap_survives_a_reload_after_bdelete`] and
+//! [`startup_untitled_in_a_long_cwd_gets_no_swap`], all over [`long_dir`]. The
+//! same limit is why every other test roots its cwd short ([`owned_cwd`], and the length
+//! check in [`home_cwd`]): a deep `TMPDIR` or `HOME` would leave them nothing to recover.
 //!
 //! ## Limits
 //!
@@ -70,7 +86,7 @@ use std::path::{Path, PathBuf};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use common::{ch, key, type_str, FlushWaiter, FLUSH_TIMEOUT};
+use common::{ch, key, type_str, FlushWaiter, FLUSH_TIMEOUT, SWAP_NAME_MAX};
 use wolf_core::{InputEvent, Key, Liveness, WolfCore};
 
 /// The clean on-disk fixture. Row 0's heading proves the buffer opened.
@@ -112,6 +128,20 @@ const POLL_INTERVAL: Duration = Duration::from_millis(25);
 /// own loop BEFORE the next command (the input bursts are otherwise unordered
 /// relative to nvim's execution, and no redraw flush marks the write).
 const PRESERVE_SETTLE: Duration = Duration::from_millis(300);
+
+/// What the long-path SaveAs target holds before the save. Absent from [`CLEAN_DOC`] and
+/// [`EDIT_MARKER`], so its survival can only mean the overwrite did not happen.
+const SIBLING_TEXT: &str = "sibling original line";
+
+/// The probed swap state of the focused buffer, as nvim itself reports it.
+struct SwapState {
+    /// `expand('%:p')`: which buffer the probe actually saw.
+    name: String,
+    /// `swapname('%')`: the buffer's swap file, empty when it has none.
+    swapname: String,
+    /// `&l:swapfile`: `"1"` or `"0"`.
+    swapfile: String,
+}
 
 /// Polls `pred` until `true` (draining wakes each iteration) or panics after
 /// [`FLUSH_TIMEOUT`]. `desc` names the awaited condition.
@@ -177,12 +207,14 @@ fn open_fixture(core: &WolfCore, waiter: &FlushWaiter, fixture: &Path) {
     waiter.wait_for_flush(core, FLUSH_TIMEOUT);
 }
 
-/// An owned, canonicalized temp dir to use as a core cwd (macOS `/tmp` ->
-/// `/private/tmp`, so nvim's own view of paths lines up). Returned with its guard.
+/// An owned, canonicalized temp dir under a short root, to use as a core cwd. Returned
+/// with its guard.
+///
+/// Short because every fixture here needs a real swap file, and Wolf gives none to a
+/// file whose full path passes [`SWAP_NAME_MAX`] bytes; a deep `TMPDIR` would put every
+/// fixture there. See `common::short_tempdir`.
 fn owned_cwd() -> (tempfile::TempDir, PathBuf) {
-    let dir = tempfile::tempdir().expect("failed to create tempdir");
-    let cwd = std::fs::canonicalize(dir.path()).expect("failed to canonicalize temp cwd");
-    (dir, cwd)
+    common::short_tempdir()
 }
 
 /// Like [`owned_cwd`], but the temp dir is created **inside `$HOME`**. Returned
@@ -213,6 +245,14 @@ fn owned_cwd() -> (tempfile::TempDir, PathBuf) {
 /// `HOME` unset or empty is a broken environment, not a reason to quietly drop the
 /// only guard for a user-visible input-loss bug. This suite fails loud everywhere
 /// else (`require_nvim_bin`), and a skip here would look like a pass.
+///
+/// # Why it checks the length
+///
+/// Wolf gives no swap file to a buffer whose full path passes [`SWAP_NAME_MAX`] bytes
+/// (see the module's "Long paths"). Under a deep `HOME` the startup `Untitled.md` would
+/// leave no stale swap, the fixture would never exist, and the test would fail on its
+/// precondition for a reason unrelated to startup naming. The longest name the test
+/// uses, `Untitled 2.md`, must therefore fit; it panics otherwise, for the reason above.
 fn home_cwd() -> (tempfile::TempDir, PathBuf) {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
@@ -238,6 +278,17 @@ fn home_cwd() -> (tempfile::TempDir, PathBuf) {
             )
         });
     let cwd = std::fs::canonicalize(dir.path()).expect("failed to canonicalize $HOME temp cwd");
+    let longest = cwd.join("Untitled 2.md");
+    let len = longest.as_os_str().len();
+    assert!(
+        len <= SWAP_NAME_MAX,
+        "HOME is too deep for this test: {} is {len} bytes, over SWAP_NAME_MAX = \
+         {SWAP_NAME_MAX}. Wolf gives a file whose full path passes Neovim's swap-name cut no \
+         swap file at all, so the startup `Untitled.md` here would leave no stale swap and \
+         the test would have no fixture. Point HOME at a shorter writable directory and \
+         re-run. This panics rather than skipping on purpose.",
+        longest.display()
+    );
     (dir, cwd)
 }
 
@@ -305,6 +356,95 @@ fn mirror_basenames(core: &WolfCore, tab: i64) -> Vec<String> {
         .filter_map(|p| p.file_name().and_then(|s| s.to_str()))
         .map(String::from)
         .collect()
+}
+
+/// The `//`-style swap name stem Neovim derives from `path` before cutting it: the full
+/// path with every `/` turned into `%`, one byte for one byte.
+fn percent_name(path: &Path) -> String {
+    path.to_string_lossy().replace('/', "%")
+}
+
+/// [`percent_name`] cut to its first [`SWAP_NAME_MAX`] bytes, as Neovim cuts it.
+fn cut_percent_name(path: &Path) -> String {
+    let full = percent_name(path);
+    let bytes = &full.as_bytes()[..full.len().min(SWAP_NAME_MAX)];
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
+/// A deep directory `<root>/<120 × l>/<120 × m>`, created and canonical.
+///
+/// Every file in it has a full path over [`SWAP_NAME_MAX`] bytes, so any two siblings
+/// share one cut swap name. The length is asserted, so a fixture built on it cannot
+/// silently be short. Each component stays under `NAME_MAX` (255).
+fn long_dir(root: &Path) -> PathBuf {
+    let dir = root.join("l".repeat(120)).join("m".repeat(120));
+    std::fs::create_dir_all(&dir).expect("failed to create the long fixture dir");
+    let dir = std::fs::canonicalize(&dir).expect("failed to canonicalize the long fixture dir");
+    let len = dir.as_os_str().len();
+    assert!(
+        len > SWAP_NAME_MAX,
+        "precondition: long_dir must be over {SWAP_NAME_MAX} bytes so every file in it has a \
+         cut swap name; got {len} bytes at {}",
+        dir.display()
+    );
+    dir
+}
+
+/// Asserts that `a` and `b` are different files whose swap names Neovim cuts to the SAME
+/// stem — the collision the long-path guard exists for. Computed here rather than trusted,
+/// so a long-path test cannot pass on fixtures that never collide.
+fn assert_cut_name_twins(a: &Path, b: &Path) {
+    assert_ne!(
+        percent_name(a),
+        percent_name(b),
+        "precondition: the two long-path fixtures must be different files"
+    );
+    assert_eq!(
+        cut_percent_name(a),
+        cut_percent_name(b),
+        "precondition: {} and {} must share one cut swap name, or nothing here collides",
+        a.display(),
+        b.display()
+    );
+}
+
+/// Probes the focused buffer's name, swap file and `'swapfile'` through [`common::probe_values`].
+fn current_swap_state(core: &WolfCore, probe: &Path) -> SwapState {
+    let values = common::probe_values(
+        core,
+        &["expand('%:p')", "swapname('%')", "&l:swapfile"],
+        probe,
+    );
+    SwapState {
+        name: values[0].clone(),
+        swapname: values[1].clone(),
+        swapfile: values[2].clone(),
+    }
+}
+
+/// Every entry name in `cwd`'s durable swap dir, or an empty vec when it does not exist.
+fn swap_dir_names(cwd: &Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(swap_dir_of(cwd)) else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect()
+}
+
+/// Polls `path` until it contains `needle`, and returns the last contents read whether or
+/// not that ever happened, so the caller's assertion can show what the file held.
+fn wait_for_file_containing(path: &Path, needle: &str) -> String {
+    let deadline = Instant::now() + FLUSH_TIMEOUT;
+    loop {
+        let contents =
+            std::fs::read_to_string(path).unwrap_or_else(|e| format!("<unreadable: {e}>"));
+        if contents.contains(needle) || Instant::now() >= deadline {
+            return contents;
+        }
+        sleep(POLL_INTERVAL);
+    }
 }
 
 /// c. DEAD owner → silent recover: a fixture with an unsaved edit whose owning nvim
@@ -752,4 +892,636 @@ fn stale_untitled_swap_does_not_block_a_fresh_start() {
     drop(snap_b);
 
     core_b.shutdown().expect("core B shutdown should be Ok");
+}
+
+/// LONG PATHS, the core guarantee: two siblings whose swap names Neovim cuts to the same
+/// stem get NO swap file, while a short-path file in the same session keeps its real one.
+///
+/// Without the guard, the first sibling takes the cut `.swp` (254 bytes) and the second
+/// the cut `.swo`, which no later session offers; recovery of either searches the uncut
+/// name and finds nothing. The short file is the discriminating negative: a guard that
+/// turned swap off everywhere would pass the long half and fail here.
+///
+/// FALSIFYING EDIT: make init.lua's `swap_name_truncates` always return false. RED on the
+/// first sibling's `swapname`, and the swap dir then holds 254-byte entries.
+#[test]
+fn long_path_siblings_get_no_swap_while_short_paths_keep_theirs() {
+    let (_dir, cwd) = owned_cwd();
+    let long = long_dir(&cwd);
+    let alpha = long.join("alpha.md");
+    let beta = long.join("beta.md");
+    let short = cwd.join("short.md");
+    for fixture in [&alpha, &beta, &short] {
+        std::fs::write(fixture, CLEAN_DOC).expect("failed to write fixture");
+    }
+    assert_cut_name_twins(&alpha, &beta);
+    assert!(
+        percent_name(&short).len() <= SWAP_NAME_MAX,
+        "precondition: {} must be short enough to keep its swap, or the negative half below \
+         proves nothing",
+        short.display()
+    );
+    let probe = cwd.join("probe.txt");
+
+    let (core, waiter) = start_core_in(&cwd);
+
+    for fixture in [&alpha, &beta] {
+        open_fixture(&core, &waiter, fixture);
+        type_unsaved_edit(&core, &waiter);
+        let state = current_swap_state(&core, &probe);
+        let base = fixture.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        assert!(
+            state.name.ends_with(base),
+            "the probe saw buffer {:?}, not {base}: the open did not land, so the swap \
+             assertions below would be about the wrong buffer",
+            state.name
+        );
+        assert!(
+            state.swapname.is_empty(),
+            "{} ({} bytes) has swap file {:?}. Neovim cuts its swap name to {SWAP_NAME_MAX} \
+             bytes, so it collides with its sibling's, and recovery searches the uncut name and \
+             never finds it. A `.swp` name means the long-path guard did not run for this \
+             file; a `.swo` means a sibling's cut swap was already on disk.",
+            fixture.display(),
+            fixture.as_os_str().len(),
+            state.swapname
+        );
+        assert_eq!(
+            state.swapfile,
+            "0",
+            "{} has no swap file yet but 'swapfile' is still on, so nvim creates the cut-name \
+             swap on its next sync: the guard must turn the option off, not just race it",
+            fixture.display()
+        );
+    }
+
+    open_fixture(&core, &waiter, &short);
+    type_unsaved_edit(&core, &waiter);
+    let state = current_swap_state(&core, &probe);
+    assert!(
+        state.name.ends_with("short.md"),
+        "the probe saw buffer {:?}, not short.md: the open did not land",
+        state.name
+    );
+    assert_eq!(
+        state.swapfile, "1",
+        "a short-path file lost 'swapfile': the long-path guard is disabling swap for paths \
+         under {SWAP_NAME_MAX} bytes, which removes crash recovery from every ordinary file"
+    );
+    let want = format!("{}.swp", percent_name(&short));
+    let swap = Path::new(&state.swapname);
+    assert_eq!(
+        swap.file_name().and_then(|n| n.to_str()),
+        Some(want.as_str()),
+        "the short-path file's swap is {:?}, expected the full `//`-style name {want:?}. Empty \
+         means no swap at all; another name means nvim no longer names swaps by the full path, \
+         which every assumption in this file rests on",
+        state.swapname
+    );
+    assert!(
+        swap.is_file(),
+        "nvim reports swap {:?} for the short-path file but it is not on disk; swap dir is {}",
+        state.swapname,
+        swap_dir_report(&cwd)
+    );
+
+    let names = swap_dir_names(&cwd);
+    // Not by length: a short root may be up to SHORT_TEMP_ROOT_MAX bytes, so an uncut
+    // swap of a short fixture can be 254 bytes long too.
+    let cut = cut_percent_name(&alpha);
+    let cut_entries: Vec<&String> = names.iter().filter(|n| n.starts_with(&cut)).collect();
+    assert!(
+        cut_entries.is_empty(),
+        "the swap dir holds cut-name swaps {cut_entries:?} for the long-path siblings; a guard \
+         that only cleared 'swapfile' after the swap was created leaves these behind. Swap dir \
+         is {}",
+        swap_dir_report(&cwd)
+    );
+    assert!(
+        names.contains(&want),
+        "the swap dir lacks the short-path file's {want:?}; swap dir is {}",
+        swap_dir_report(&cwd)
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// LONG PATHS, the save half: a forcing `SaveAs` from one long-path sibling onto another
+/// overwrites it.
+///
+/// Without the guard, `:saveas!` checks for a swap under the TARGET's name before writing,
+/// finds the source's own live swap there (both cut to one stem) and fails `E768: Swap file
+/// exists`, which the input pump only logs: the save silently never happens.
+///
+/// FALSIFYING EDIT: make init.lua's `swap_name_truncates` always return false. RED: the
+/// target still holds [`SIBLING_TEXT`] after the poll.
+#[test]
+fn save_as_force_between_long_path_siblings_overwrites() {
+    let (_dir, cwd) = owned_cwd();
+    let long = long_dir(&cwd);
+    let source = long.join("alpha.md");
+    let target = long.join("beta.md");
+    std::fs::write(&source, CLEAN_DOC).expect("failed to write the source fixture");
+    std::fs::write(&target, format!("{SIBLING_TEXT}\n")).expect("failed to write the target");
+    assert_cut_name_twins(&source, &target);
+
+    let (core, waiter) = start_core_in(&cwd);
+    open_fixture(&core, &waiter, &source);
+    type_unsaved_edit(&core, &waiter);
+
+    core.send_input(InputEvent::SaveAs {
+        path: target.clone(),
+        force: true,
+    });
+
+    let contents = wait_for_file_containing(&target, EDIT_MARKER);
+    assert!(
+        contents.contains(EDIT_MARKER),
+        "a forcing SaveAs onto a long-path sibling never wrote the buffer: the target holds \
+         {contents:?}. Still holding {SIBLING_TEXT:?} is `E768: Swap file exists`, the \
+         source's own swap found under the target's cut swap name; the user's save is lost \
+         without a word."
+    );
+    assert!(
+        !contents.contains(SIBLING_TEXT),
+        "the forcing SaveAs appended to the target instead of replacing it; contents were \
+         {contents:?}"
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// LONG PATHS, the rename half: a buffer saved from a long path to a short one gets its
+/// swap file back, so the file is recoverable again from that moment on.
+///
+/// The precondition (no swap while long) is what makes this a test of the RESTORE: without
+/// the guard the buffer never lost its swap and the end state would hold trivially.
+///
+/// FALSIFYING EDIT: drop the re-enable branch of init.lua's long-path `BufFilePost` autocmd.
+/// RED: `'swapfile'` stays `0` and `swapname` empty after the rename.
+#[test]
+fn rename_from_long_to_short_path_restores_the_swap() {
+    let (_dir, cwd) = owned_cwd();
+    let long = long_dir(&cwd);
+    let source = long.join("alpha.md");
+    std::fs::write(&source, CLEAN_DOC).expect("failed to write the source fixture");
+    let target = cwd.join("renamed.md");
+    assert!(
+        !target.exists() && percent_name(&target).len() <= SWAP_NAME_MAX,
+        "precondition: {} must not exist yet and must be short enough to keep a swap",
+        target.display()
+    );
+    let probe = cwd.join("probe.txt");
+
+    let (core, waiter) = start_core_in(&cwd);
+    open_fixture(&core, &waiter, &source);
+    let before = current_swap_state(&core, &probe);
+    assert!(
+        before.swapname.is_empty() && before.swapfile == "0",
+        "precondition: the long-path buffer {:?} must start with no swap (saw swapfile={}, \
+         swapname={:?}), or the rename below restores nothing and this test cannot fail. See \
+         long_path_siblings_get_no_swap_while_short_paths_keep_theirs.",
+        before.name,
+        before.swapfile,
+        before.swapname
+    );
+
+    core.send_input(InputEvent::SaveAs {
+        path: target.clone(),
+        force: false,
+    });
+    let written = wait_for_file_containing(&target, "# Swap Fixture");
+    assert!(
+        written.contains("# Swap Fixture"),
+        "SaveAs to the short path never wrote it, so the rename this test is about did not \
+         happen; the target holds {written:?}"
+    );
+
+    let after = current_swap_state(&core, &probe);
+    assert!(
+        after.name.ends_with("renamed.md"),
+        "after the SaveAs the focused buffer is {:?}, not renamed.md: `:saveas` did not rename \
+         it, so the swap assertions below would be about the wrong name",
+        after.name
+    );
+    assert_eq!(
+        after.swapfile, "1",
+        "a buffer renamed from a long path to a short one kept 'noswapfile': the long-path \
+         guard turns swap off but never back on, so the file stays unrecoverable for the rest \
+         of the session"
+    );
+    let want = format!("{}.swp", percent_name(&target));
+    let swap = Path::new(&after.swapname);
+    assert_eq!(
+        swap.file_name().and_then(|n| n.to_str()),
+        Some(want.as_str()),
+        "the renamed buffer's swap is {:?}, expected {want:?}. Empty with 'swapfile' on means \
+         the option was set but no swap was opened",
+        after.swapname
+    );
+    assert!(
+        swap.is_file(),
+        "nvim reports swap {:?} for the renamed buffer but it is not on disk; swap dir is {}",
+        after.swapname,
+        swap_dir_report(&cwd)
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// LONG PATHS, the rename guard: a buffer saved from a long path onto a short name that a
+/// crashed session left a swap for keeps `'noswapfile'`, and that stale swap stays as it was.
+///
+/// Turning `'swapfile'` back on opens a swap at once, and Neovim's own swap search then meets
+/// the stale `.swp` of the same file outside any file load, where `SwapExists` is not raised
+/// (module docs, case e). So the re-enable in init.lua's `sync_long_path_swap` is guarded by
+/// `_G.wolf_untitled_swap_exists`. [`rename_from_long_to_short_path_restores_the_swap`] is the
+/// positive half: with no stale swap the same rename does get its swap back.
+///
+/// Premise, measured with the guard removed: enabling `'swapfile'` inside the rename makes
+/// Neovim deliver the ATTENTION text ("Found a swap file by the name …") as a `wmsg` toast,
+/// not a confirm prompt, and the save is never written. The prompt, `'swapfile'` and `.swo`
+/// assertions below stay as nets for the other outcomes a Neovim upgrade could produce.
+///
+/// FALSIFYING EDIT: drop `not _G.wolf_untitled_swap_exists(...)` from init.lua's
+/// `sync_long_path_swap`. RED, measured: the write assertion, its message naming the
+/// ATTENTION toast.
+#[test]
+fn rename_onto_a_short_path_with_a_stale_swap_keeps_swap_off() {
+    let (_dir, cwd) = owned_cwd();
+    let untitled = cwd.join("Untitled.md");
+    assert!(
+        percent_name(&untitled).len() <= SWAP_NAME_MAX,
+        "precondition: {} must be short enough to have a real swap file, or session 1 leaves \
+         no stale swap and nothing here collides",
+        untitled.display()
+    );
+    let long = long_dir(&cwd);
+    let source = long.join("alpha.md");
+    std::fs::write(&source, CLEAN_DOC).expect("failed to write the source fixture");
+    let probe = cwd.join("probe.txt");
+
+    // Session 1: edit the startup Untitled.md, flush its swap, crash.
+    let (core, waiter) = start_core_in(&cwd);
+    poll_until(&waiter, "the initial editor window after attach", || {
+        !core.read_snapshot().windows.is_empty()
+    });
+    let tab = core.current_tabpage();
+    assert_ne!(tab, 0, "current_tabpage() should be nonzero after attach");
+    poll_until(
+        &waiter,
+        "the Tier-1 mirror to carry the startup Untitled.md (precondition: a fresh cwd must \
+         yield the un-numbered name the stale swap is for)",
+        || {
+            mirror_basenames(&core, tab)
+                .iter()
+                .any(|n| n == "Untitled.md")
+        },
+    );
+    core.send_input(ch('i'));
+    type_str(&core, UNTITLED_MARKER);
+    core.send_input(key(Key::Esc));
+    waiter.wait_for_flush(&core, FLUSH_TIMEOUT);
+    ex_command(&core, "preserve");
+    sleep(PRESERVE_SETTLE);
+
+    self_sigkill(&core);
+    poll_until(
+        &waiter,
+        "liveness() to become Dead after the SIGKILL",
+        || core.liveness() == Liveness::Dead,
+    );
+    let stale_name = format!("{}.swp", percent_name(&untitled));
+    let stale = swap_dir_of(&cwd).join(&stale_name);
+    assert!(
+        stale.is_file(),
+        "precondition: the crashed session must leave {stale_name:?} behind, or the rename \
+         below meets no stale swap and the guard is never exercised. Swap dir is {}",
+        swap_dir_report(&cwd)
+    );
+    let stale_bytes = std::fs::read(&stale).expect("failed to read the stale swap");
+
+    // Session 2, same cwd => same swap dir: a long-path buffer, saved onto Untitled.md.
+    core.restart_nvim().expect("restart_nvim should be Ok");
+    assert_eq!(
+        core.liveness(),
+        Liveness::Alive,
+        "nvim must be Alive after restart"
+    );
+    open_fixture(&core, &waiter, &source);
+    let before = current_swap_state(&core, &probe);
+    let swapless = before.swapname.is_empty() && before.swapfile == "0";
+    assert!(
+        before.name.ends_with("alpha.md") && swapless,
+        "precondition: the long-path buffer must be focused with no swap (saw {:?}, \
+         swapfile={}, swapname={:?}); otherwise the rename below has no 'noswapfile' for the \
+         guard to keep. See long_path_siblings_get_no_swap_while_short_paths_keep_theirs.",
+        before.name,
+        before.swapfile,
+        before.swapname
+    );
+
+    core.send_input(InputEvent::SaveAs {
+        path: untitled.clone(),
+        force: false,
+    });
+    let written = wait_for_file_containing(&untitled, "# Swap Fixture");
+    let snap = core.read_snapshot();
+    let toast_kind = snap.toast.kind();
+    let toast_text: Vec<String> = snap
+        .toast
+        .lines()
+        .iter()
+        .map(|line| line.iter().map(|c| c.text.as_str()).collect())
+        .collect();
+    let prompt = snap.toast.is_prompt();
+    drop(snap);
+    let attention = toast_text
+        .iter()
+        .any(|l| l.contains("Found a swap file") || l.contains("E325"));
+    let diagnosis = if attention {
+        "The toast carries the ATTENTION/E325 text, whatever its kind: the rename turned \
+         'swapfile' back on over the crashed session's stale swap, nvim met it and the save \
+         never landed. The guard in sync_long_path_swap did not keep 'noswapfile'."
+    } else {
+        "The toast carries no ATTENTION/E325 text, so the save failed for another reason and \
+         this test has not reached the guard it pins."
+    };
+    assert!(
+        written.contains("# Swap Fixture"),
+        "SaveAs onto {} never wrote it (file holds {written:?}; toast kind {toast_kind:?}, \
+         text {toast_text:?}). {diagnosis}",
+        untitled.display()
+    );
+    assert!(
+        !prompt,
+        "the rename onto {} raised a confirm prompt (toast {toast_text:?}): turning 'swapfile' \
+         back on met the crashed session's stale swap and opened the blocking ATTENTION dialog, \
+         which swallows the user's next keystroke",
+        untitled.display()
+    );
+
+    let after = current_swap_state(&core, &probe);
+    assert!(
+        after.name.ends_with("Untitled.md"),
+        "after the SaveAs the focused buffer is {:?}, not Untitled.md: `:saveas` did not rename \
+         it, so the swap assertions below would be about the wrong name",
+        after.name
+    );
+    assert_eq!(
+        after.swapfile,
+        "0",
+        "the buffer renamed onto {} turned 'swapfile' back on (swap {:?}) although the crashed \
+         session's swap for that name is still on disk: nvim met that stale swap when opening \
+         its own. Expected the guard to keep 'noswapfile' until the stale swap is gone.",
+        untitled.display(),
+        after.swapname
+    );
+    assert!(
+        after.swapname.is_empty(),
+        "the renamed buffer has 'noswapfile' but reports swap {:?}: a swap was opened before the \
+         option was settled",
+        after.swapname
+    );
+
+    assert_eq!(
+        std::fs::read(&stale).ok().as_deref(),
+        Some(stale_bytes.as_slice()),
+        "the crashed session's swap {stale_name:?} is gone or changed after the rename, so its \
+         unsaved Untitled.md edit can no longer be recovered. Swap dir is {}",
+        swap_dir_report(&cwd)
+    );
+    let stem = percent_name(&untitled);
+    let mut own: Vec<String> = swap_dir_names(&cwd)
+        .into_iter()
+        .filter(|n| n.starts_with(&stem))
+        .collect();
+    own.sort();
+    assert_eq!(
+        own,
+        vec![stale_name.clone()],
+        "the swap dir must hold only the stale swap for {}. A `.swo` beside it means the rename \
+         re-enabled swap and nvim stepped past the stale `.swp` to the next name. Swap dir is {}",
+        untitled.display(),
+        swap_dir_report(&cwd)
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// LONG PATHS, the stale-swap half: a cut-name swap left by a crash survives the next
+/// session reloading the file, even through `:bdelete` and a second `:edit`.
+///
+/// Recovery of a cut-name swap cannot work (Neovim searches the uncut name and fails
+/// `E305`), and without the `SwapExists` guard the dead-owner branch has already scheduled
+/// the swap's deletion — the crashed edit is then gone for good. `:bdelete` resets the
+/// buffer's options to the global ones, so the second `:edit` loads with `'swapfile'` on
+/// again: the reload-time backstop must still leave the buffer swap-less.
+///
+/// Premise, measured before this test was kept: after `:e F`, `:bdelete`, `:e F` with the
+/// `BufReadPost`/`BufNewFile` backstop removed, `&l:swapfile` is `1`. If Neovim stopped
+/// re-initializing options there, falsifier (ii) would no longer turn this test red.
+///
+/// FALSIFYING EDITS: (i) drop the long-path branch of init.lua's `SwapExists` autocmd —
+/// RED, the stale swap is deleted. (ii) drop the backstop autocmd — RED, the reloaded
+/// buffer has a swap.
+#[test]
+fn stale_truncated_swap_survives_a_reload_after_bdelete() {
+    let (_dir, cwd) = owned_cwd();
+    let long = long_dir(&cwd);
+    let fixture = long.join("note.md");
+    std::fs::write(&fixture, CLEAN_DOC).expect("failed to write fixture");
+    let probe = cwd.join("probe.txt");
+
+    // Session 1: force a cut-name swap the guard would otherwise refuse, edit, crash.
+    let (core, waiter) = start_core_in(&cwd);
+    open_fixture(&core, &waiter, &fixture);
+    ex_command(&core, "setlocal swapfile");
+    let forced = current_swap_state(&core, &probe);
+    let stale = PathBuf::from(&forced.swapname);
+    let stale_len = stale.file_name().map_or(0, |n| n.len());
+    assert_eq!(
+        stale_len,
+        SWAP_NAME_MAX + ".swp".len(),
+        "precondition: `:setlocal swapfile` on {} must yield a CUT swap name of {} bytes; got \
+         {:?} (swapfile={}). Without that file this test has no fixture.",
+        fixture.display(),
+        SWAP_NAME_MAX + ".swp".len(),
+        forced.swapname,
+        forced.swapfile
+    );
+    assert!(
+        stale.is_file(),
+        "precondition: the forced swap {} is not on disk; swap dir is {}",
+        stale.display(),
+        swap_dir_report(&cwd)
+    );
+    type_unsaved_edit(&core, &waiter);
+    ex_command(&core, "preserve");
+    sleep(PRESERVE_SETTLE);
+
+    self_sigkill(&core);
+    poll_until(
+        &waiter,
+        "liveness() to become Dead after the SIGKILL",
+        || core.liveness() == Liveness::Dead,
+    );
+    assert!(
+        stale.is_file(),
+        "a SIGKILLed nvim must leave its swap behind — that stale swap IS this test's \
+         fixture; swap dir is {}",
+        swap_dir_report(&cwd)
+    );
+
+    // Session 2, same cwd => same swap dir: load, :bdelete, load again.
+    core.restart_nvim().expect("restart_nvim should be Ok");
+    assert_eq!(
+        core.liveness(),
+        Liveness::Alive,
+        "nvim must be Alive after restart"
+    );
+    open_fixture(&core, &waiter, &fixture);
+    ex_command(&core, "bdelete");
+    waiter.wait_for_flush(&core, FLUSH_TIMEOUT);
+    open_fixture(&core, &waiter, &fixture);
+    let reloaded = current_swap_state(&core, &probe);
+    // Let a SwapExists-scheduled delete run before looking for the stale swap.
+    sleep(PRESERVE_SETTLE);
+
+    assert!(
+        stale.is_file(),
+        "the stale cut-name swap {} was deleted on reload. That is the dead-owner SwapExists \
+         branch choosing recover-then-delete: recovery searches the uncut name and fails \
+         E305, and the scheduled delete then destroys the crashed edit. Swap dir is {}",
+        stale.display(),
+        swap_dir_report(&cwd)
+    );
+    assert!(
+        reloaded.name.ends_with("note.md"),
+        "the probe saw buffer {:?}, not note.md: the reload did not land",
+        reloaded.name
+    );
+    assert!(
+        reloaded.swapname.is_empty() && reloaded.swapfile == "0",
+        "after `:bdelete` and a second `:edit` the long-path buffer has swapfile={} and swap \
+         {:?}. `:bdelete` reset its options to the global 'swapfile', and the reload backstop \
+         did not turn it off again, so it takes another cut-name swap beside the stale one.",
+        reloaded.swapfile,
+        reloaded.swapname
+    );
+
+    poll_until(
+        &waiter,
+        "row 0 to show the reloaded file's on-disk heading",
+        || {
+            core.read_snapshot()
+                .active_grid()
+                .row_text(0)
+                .contains("# Swap Fixture")
+        },
+    );
+    let snap = core.read_snapshot();
+    let row0 = snap.active_grid().row_text(0);
+    assert!(
+        !row0.contains("WOLFEDIT"),
+        "the reload shows the crashed edit, so a recovery ran on a cut-name swap; got row0 = \
+         {row0:?}"
+    );
+    assert!(
+        !snap.toast.is_prompt(),
+        "reloading over a stale cut-name swap must never raise a confirm prompt; toast kind = \
+         {:?}",
+        snap.toast.kind()
+    );
+    drop(snap);
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// LONG PATHS, the startup half: the startup `Untitled.md` of a core whose cwd is deep enough
+/// to cut its swap name gets no swap file, like every other long-path buffer.
+///
+/// `init.lua` names that buffer inside the `WolfUntitled` `VimEnter` callback, which is not
+/// `nested`, so the long-path `BufFilePost` autocmd never sees the rename. The buffer existed
+/// before it was named, so `BufNew` cannot catch it either, and no file is read, so neither
+/// can `BufReadPost`/`BufNewFile`. Only the direct call in `_G.wolf_name_untitled` covers it.
+///
+/// Premise, for the falsifier to measure: without the guard Neovim opens the buffer's swap at
+/// the latest on its first change (`changed()` → `ml_open_file`), if the rename has not already
+/// opened it (module docs, case e). The edit typed below is therefore what puts the cut-name
+/// swap on disk when the guard is missing; `'swapfile'` staying `1` fails the test regardless.
+///
+/// FALSIFYING EDIT: drop the `sync_long_path_swap(buf)` call in init.lua's
+/// `_G.wolf_name_untitled`. RED: `'swapfile'` is `1`, and the swap dir holds the cut name.
+#[test]
+fn startup_untitled_in_a_long_cwd_gets_no_swap() {
+    let (_dir, root) = owned_cwd();
+    let long = long_dir(&root);
+    let expected = long.join("Untitled.md");
+    assert!(
+        percent_name(&expected).len() > SWAP_NAME_MAX,
+        "precondition: the startup buffer's path {} must be over {SWAP_NAME_MAX} bytes, or its \
+         swap name is not cut and this test proves nothing",
+        expected.display()
+    );
+    let probe = root.join("probe.txt");
+
+    let (core, waiter) = start_core_in(&long);
+    poll_until(&waiter, "the initial editor window after attach", || {
+        !core.read_snapshot().windows.is_empty()
+    });
+    let tab = core.current_tabpage();
+    assert_ne!(tab, 0, "current_tabpage() should be nonzero after attach");
+    poll_until(
+        &waiter,
+        "the Tier-1 mirror to carry the startup Untitled.md (precondition: the startup naming \
+         must have run, and an empty cwd yields the un-numbered name)",
+        || {
+            mirror_basenames(&core, tab)
+                .iter()
+                .any(|n| n == "Untitled.md")
+        },
+    );
+
+    // Without the guard, the first change opens the cut-name swap if the rename has not already.
+    type_unsaved_edit(&core, &waiter);
+    let state = current_swap_state(&core, &probe);
+    assert_eq!(
+        state.name,
+        expected.to_string_lossy(),
+        "precondition: the focused buffer must be the startup Untitled.md under the long \
+         cwd. Another name under it means the startup naming changed; a short path means \
+         nvim did not start in the long cwd, so no swap name was ever cut"
+    );
+    assert_eq!(
+        state.swapfile,
+        "0",
+        "the startup Untitled.md in a long cwd ({} bytes) kept 'swapfile' (swap {:?}). It \
+         is named inside the non-nested VimEnter callback, so BufFilePost never fires for \
+         it, and `_G.wolf_name_untitled` did not run the long-path check itself. Its swap \
+         name is cut to {SWAP_NAME_MAX} bytes, so the edit is unrecoverable after a crash.",
+        expected.as_os_str().len(),
+        state.swapname
+    );
+    assert!(
+        state.swapname.is_empty(),
+        "the startup Untitled.md has 'noswapfile' but still reports swap {:?}: the guard turned \
+         the option off without closing the cut-name swap already open",
+        state.swapname
+    );
+
+    let names = swap_dir_names(&long);
+    let cut = cut_percent_name(&expected);
+    let cut_entries: Vec<&String> = names
+        .iter()
+        .filter(|n| n.len() > SWAP_NAME_MAX || n.starts_with(&cut))
+        .collect();
+    assert!(
+        cut_entries.is_empty(),
+        "the swap dir holds cut-name swaps {cut_entries:?} for the startup Untitled.md; a guard \
+         that ran only after the swap was opened would leave these behind. Swap dir is {}",
+        swap_dir_report(&long)
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
 }

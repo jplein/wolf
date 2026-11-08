@@ -26,6 +26,7 @@ It offers:
 - `config(cols, rows)` / `config_in(cwd, cols, rows)` build a `CoreConfig`. `config_in` is the single funnel that points `WOLF_STATE_DIR` at the process-global hermetic temp dir `hermetic_state_dir()` returns, set-if-absent, so a test managing its own state dir wins.
 - `wake_channel() -> (WakeFn, FlushWaiter)`, with `wait_for_flush`, `wait_for_initial_flush`, `wait_for_wake` and `drain`.
 - `start_core_sized`, `start_core_with_temp_md[_sized]`, `temp_md`, `temp_md_path`, `fresh_cwd`, and the input constructors.
+- `short_tempdir()` returns an owned, canonical temp dir under the first of the OS temp dir and `/tmp` that is writable and at most `SHORT_TEMP_ROOT_MAX` bytes canonical. A swap-bearing fixture placed in it must keep its name within `SHORT_FIXTURE_NAME_MAX`; `SWAP_NAME_MAX` mirrors init.lua's constant.
 - `send_ex` types `:{cmd}<CR>` as keystrokes; `probe_values` evaluates expressions inside the live nvim by having it `writefile` them to a probe path and polling that file — the eval channel for a core that exposes no eval RPC. `resolve_test_runfile` resolves extra Bazel-staged runfiles beyond nvim + init.lua.
 
 **Gotchas**
@@ -34,6 +35,8 @@ It offers:
 - The relative `WOLF_NVIM_BIN` Bazel injects is deliberately not trusted: nvim is spawned with `current_dir(cfg.cwd)`, a temp dir, so the path must be absolutized first. Likewise `init.lua`, since under Bazel `CARGO_MANIFEST_DIR` is an ephemeral sandbox path and nvim launched with `-u <missing>` hangs forever on a `Press ENTER` prompt.
 - Out-of-band notifications (`wolf_current_file`, liveness) fire a wake without bumping `seq`. The flush waits consume and ignore them; `wait_for_wake` is the way to observe that seam.
 - `fresh_cwd()` leaks its directory by design: `config` returns only a `CoreConfig`, so there is no guard to keep a `TempDir` alive under a running core.
+- A fixture that needs a swap file must sit under `short_tempdir()`. Under a deep `TMPDIR` its path passes `SWAP_NAME_MAX`, where Wolf gives it no swap ([runtime/nvim](../../../runtime/nvim/README.md#decisions)). It panics, listing each refused root, rather than skipping.
+- `SHORT_TEMP_ROOT_MAX` is deliberately derived from `SWAP_NAME_MAX`, not a small fixed cap. A sandboxed Bazel worker can deny `/tmp` while its deep `TEST_TMPDIR` still leaves room, so a small cap would refuse both roots and always panic.
 - `require_nvim_bin()` panics rather than skipping, unlike the wolf-ffi twin, because the test bodies here do not handle a skip return.
 
 ## Files
@@ -568,7 +571,7 @@ Real Neovim (staged runfiles, wired `WOLF_NVIM_BIN`, `no-sandbox`).
 
 **Covers** — durability of the user dictionary: a `zg`-added word lands in `<state_dir>/spell/en.utf-8.add` and reads back good (`spellbadword`) in a second core over the same state dir; and a state dir with a literal comma in its path still receives both the swap file (under `swap_dir_for(cwd)`) and the `zg` write — pinning init.lua's comma-escaping of `'directory'` and `'spellfile'`, each a comma-separated option list an unescaped comma silently splits.
 
-**Gotchas** — Both tests mutate `WOLF_STATE_DIR` under the file-local `ENV_LOCK`, held for the whole body and never removed. Each fixture's made-up token is its first word so the cursor already sits on it for a bare `zg`, and the buffer must be markdown so the `WolfSpell` autocmd has spell on — `zg` errors with spell off.
+**Gotchas** — Both tests mutate `WOLF_STATE_DIR` under the file-local `ENV_LOCK`, held for the whole body and never removed. Their cwds come from `short_tempdir()`, or under a deep `TMPDIR` the comma case finds no swap file. Each fixture's made-up token is its first word so the cursor already sits on it for a bare `zg`, and the buffer must be markdown so the `WolfSpell` autocmd has spell on — `zg` errors with spell off.
 
 #### `state_layout.rs`
 
@@ -594,13 +597,13 @@ Also the durable user-directory surface: the `spell_dir`/`runtime_user_dir`/`par
 
 Spawns a real Neovim (staged runfiles, wired `WOLF_NVIM_BIN`, `no-sandbox`).
 
-**Covers** — the recovery-aware `SwapExists` autocmd never raising a blocking prompt: a dead owner's unsaved edit is silently recovered (`v:swapchoice = "r"`), a live owner's is not (`"e"`, the clean on-disk copy), and an unsaved `Untitled.md` survives a crash-restart instead of being shadowed by the fresh nvim's own startup buffer.
+**Covers** — `SwapExists` never prompting: a dead owner's unsaved edit is recovered (`"r"`), a live owner's is not (`"e"`), and an unsaved `Untitled.md` survives a crash-restart unshadowed. On the naming path `SwapExists` cannot reach ([`runtime/nvim/README.md`](../../../runtime/nvim/README.md#decisions)), a cold start over a stale `<cwd>/Untitled.md` swap names its buffer `Untitled 2.md` and keeps the first keystroke.
 
-It also covers the naming path, which `SwapExists` cannot reach (see [`runtime/nvim/README.md`](../../../runtime/nvim/README.md)): a cold start over a directory holding a stale swap for `<cwd>/Untitled.md` names its startup buffer `Untitled 2.md`, raises no prompt, and lands the first typed character on the grid.
+Long paths (`long_dir`): files past `SWAP_NAME_MAX` get no swap, the startup `Untitled.md` included, while a short file keeps one; a forcing `SaveAs` between cut-name siblings overwrites; a rename onto a short path restores the swap, but keeps it off when a crashed session left one for that name, with no `E325` prompt and the stale swap untouched; a stale cut-name swap survives a reload after `:bdelete`.
 
-**Gotchas** — The swap dir is never set directly: it derives from `swap_dir_for(cwd)`, so a case controls it by owning a canonicalized cwd, reused across a restart or shared by two cores. SIGKILL skips `preserve_exit`, so a case must `:preserve` and settle before killing or the edit is simply lost.
+**Gotchas** — A case controls its swap dir (`swap_dir_for(cwd)`) by owning a canonical cwd from `short_tempdir()`. SIGKILL skips `preserve_exit`, so a case must `:preserve` and settle before killing.
 
-The stale-swap case pins its cwd under `$HOME`, which is load-bearing rather than incidental: Neovim stores the swap owner's path `home_replace`d as `~<user>/…`, so a fixture under `/tmp` passes whether or not the guard normalizes it. It panics rather than skipping when `HOME` is unset.
+The stale-`Untitled.md` case's cwd (`home_cwd`) sits under `$HOME` on purpose: Neovim stores the owner path as `~<user>/…`, so a `/tmp` fixture passes without the guard's normalization. It panics, never skips, when `HOME` is unset or so deep that `Untitled 2.md` passes `SWAP_NAME_MAX`.
 
 #### `tabpage_cwd.rs`
 

@@ -16,13 +16,85 @@ if swap_dir ~= nil and swap_dir ~= "" then
 	opt.directory = escape_option_path(swap_dir) .. "//"
 end
 
+local swap_group = vim.api.nvim_create_augroup("WolfSwap", { clear = true })
+
+-- Neovim's BASENAMELEN: a "//" swap name is cut to this many bytes, and recovery never finds it.
+-- See notes/runtime/nvim/init.lua.md#long-path-swaps
+local SWAP_NAME_MAX = 250
+
+-- The encoded name is as long as the full path; resolve() too, since nvim names by the real path.
+local function swap_name_truncates(name)
+	if type(name) ~= "string" or name == "" or name:match("^%a[%w+.-]*://") then
+		return false
+	end
+	local full = vim.fn.fnamemodify(name, ":p")
+	local real = vim.fn.resolve(full)
+	return math.max(#full, #real) > SWAP_NAME_MAX
+end
+
+-- The marker records that Wolf, not the user, turned swap off, so a rename may turn it back on.
+local function disable_long_path_swap(buf)
+	if vim.bo[buf].swapfile then
+		vim.bo[buf].swapfile = false
+		vim.b[buf].wolf_long_path_noswap = true
+	end
+end
+
+-- BufNew is the only per-buffer event before nvim names the swap at load.
+vim.api.nvim_create_autocmd("BufNew", {
+	group = swap_group,
+	pattern = "*",
+	callback = function(args)
+		if swap_name_truncates(vim.api.nvim_buf_get_name(args.buf)) then
+			disable_long_path_swap(args.buf)
+		end
+	end,
+})
+
+-- Backstop: :bdelete resets buffer options to the global ones, so a later :edit loads with swap on.
+vim.api.nvim_create_autocmd({ "BufReadPost", "BufNewFile" }, {
+	group = swap_group,
+	pattern = "*",
+	callback = function(args)
+		if swap_name_truncates(vim.api.nvim_buf_get_name(args.buf)) then
+			disable_long_path_swap(args.buf)
+		end
+	end,
+})
+
+-- After a rename. A rename onto a short path restores swap, unless a stale swap there would raise
+-- ATTENTION. Idempotent, so a direct call may also run the BufFilePost one.
+local function sync_long_path_swap(buf)
+	local name = vim.api.nvim_buf_get_name(buf)
+	if swap_name_truncates(name) then
+		disable_long_path_swap(buf)
+	elseif vim.b[buf].wolf_long_path_noswap then
+		if not _G.wolf_untitled_swap_exists(vim.fn.fnamemodify(name, ":p")) then
+			vim.bo[buf].swapfile = true
+			vim.b[buf].wolf_long_path_noswap = nil
+		end
+	end
+end
+
+vim.api.nvim_create_autocmd("BufFilePost", {
+	group = swap_group,
+	pattern = "*",
+	callback = function(args)
+		sync_long_path_swap(args.buf)
+	end,
+})
+
 -- Never let SwapExists raise E325: a dead owner gets "r" (recover, then delete the swap), else "e".
 -- Fires only on the file-load path (neovim/neovim#23145); see Anonymous-buffer naming below.
-local swap_group = vim.api.nvim_create_augroup("WolfSwap", { clear = true })
 vim.api.nvim_create_autocmd("SwapExists", {
 	group = swap_group,
 	pattern = "*",
-	callback = function()
+	callback = function(args)
+		-- A cut-name swap can never be recovered; keep it on disk rather than schedule its delete.
+		if swap_name_truncates(args.match) then
+			vim.v.swapchoice = "e"
+			return
+		end
 		local uv = vim.uv or vim.loop
 		local swapname = vim.v.swapname
 		local info = vim.fn.swapinfo(swapname)
@@ -1190,6 +1262,10 @@ local function untitled_swap_file(abspath)
 	-- Collapse "//" (cwd "/" yields "//Untitled.md") as nvim would. Parenthesized to drop gsub's
 	-- count; "%%" in the replacement is a literal "%".
 	full = (full:gsub("//+", "/"))
+	-- Past the cut, no swap is ever made under the uncut name this would build.
+	if #full > SWAP_NAME_MAX then
+		return nil
+	end
 	local mangled = (full:gsub("/", "%%"))
 	local dir = (swap_dir:gsub("/+$", ""))
 	return dir .. "/" .. mangled .. ".swp"
@@ -1262,8 +1338,8 @@ function _G.wolf_next_untitled(cwd, exclude_buf, extra_collision)
 	return name, cwd .. "/" .. name
 end
 
--- pcall covers only E95: a stale swap's ATTENTION dialog is no error. Never setlocal noswapfile;
--- see notes/runtime/nvim/init.lua.md#swapfile-stays-on.
+-- pcall covers only E95: a stale swap's ATTENTION dialog is no error. Never setlocal noswapfile to
+-- dodge the dialog; see notes/runtime/nvim/init.lua.md#swapfile-stays-on.
 function _G.wolf_name_untitled(buf, extra_collision)
 	local cwd = vim.fn.getcwd()
 	for _ = 1, 8 do
@@ -1272,6 +1348,8 @@ function _G.wolf_name_untitled(buf, extra_collision)
 			break
 		end
 	end
+	-- Autocmds do not nest, so BufFilePost misses the startup rename made inside VimEnter.
+	sync_long_path_swap(buf)
 	-- Filetype makes the in-app preview gate pass. pcall so a transient failure
 	-- never surfaces as an RPC error.
 	pcall(function()

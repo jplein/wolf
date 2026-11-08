@@ -18,7 +18,7 @@
 
 mod common;
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Mutex;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
@@ -76,15 +76,6 @@ fn open_fixture(core: &WolfCore, waiter: &FlushWaiter, fixture: &Path) {
     waiter.wait_for_flush(core, FLUSH_TIMEOUT);
 }
 
-/// An owned, canonicalized temp dir to use as a core cwd (macOS `/tmp` ->
-/// `/private/tmp`, so nvim's own view of paths lines up). Returned with its
-/// guard.
-fn owned_cwd() -> (tempfile::TempDir, PathBuf) {
-    let dir = tempfile::tempdir().expect("failed to create tempdir");
-    let cwd = std::fs::canonicalize(dir.path()).expect("failed to canonicalize temp cwd");
-    (dir, cwd)
-}
-
 /// A `zg`'d word must be readable by a SECOND core over the same state dir:
 /// the durable dictionary is the whole point of `WOLF_SPELL_DIR`. A word that
 /// reads back bad after the restart means the export (or the pre-launch
@@ -95,7 +86,8 @@ fn zg_word_survives_core_restart() {
     let state = tempfile::tempdir().expect("create temp state dir");
     std::env::set_var("WOLF_STATE_DIR", state.path());
 
-    let (_cwd_guard, cwd) = owned_cwd();
+    // Short root: under a deep TMPDIR the fixture's swap name would pass nvim's 250-byte cut.
+    let (_cwd_guard, cwd) = common::short_tempdir();
     let fixture = cwd.join("words.md");
     // The made-up token is the FIRST word, so the cursor already sits on it at
     // open and a bare `zg` targets it.
@@ -154,7 +146,8 @@ fn comma_state_dir_swap_and_spellfile_escaped() {
     std::fs::create_dir_all(&state).expect("create comma'd state dir");
     std::env::set_var("WOLF_STATE_DIR", &state);
 
-    let (_cwd_guard, cwd) = owned_cwd();
+    // Short root, or the swap half below finds no swap under a deep TMPDIR.
+    let (_cwd_guard, cwd) = common::short_tempdir();
     let fixture = cwd.join("probe.md");
     std::fs::write(&fixture, "zzcommaqx body words\n").expect("write fixture");
 

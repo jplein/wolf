@@ -232,9 +232,11 @@ Buffer collisions consider every valid buffer, listed or not and loaded or not, 
 
 #### `wolf_name_untitled(buf, extra_collision)`
 
-Names `buf` with the first free Untitled name in `getcwd()` and sets its filetype to `markdown`, which is what makes the in-app preview gate pass. It never writes to disk and never touches `buftype`, `bufhidden`, or `swapfile`, so the buffer stays a normal, modifiable, unsaved document until the user saves it.
+Names `buf` with the first free Untitled name in `getcwd()` and sets its filetype to `markdown`, which is what makes the in-app preview gate pass. It never writes to disk and never touches `buftype` or `bufhidden`, so the buffer stays a normal, modifiable, unsaved document until the user saves it. `swapfile` changes only through the long-path guard under Decisions.
 
 `nvim_buf_set_name` is retried on an E95 race, since the colliding buffer is picked up by the next collision walk; after a few attempts it leaves the buffer unnamed rather than raising. That retry covers a name race only — the swap dialog described under Decisions is not an error, so no `pcall` around this call can catch it. Naming fires `BufFilePost` and `FileType`, so the existing trackers re-emit the new name with no extra wiring.
+
+Inside a non-nested autocmd, such as the startup `VimEnter` one, only the forced `FileType` fires and `BufFilePost` does not. The function therefore runs the long-path swap sync itself rather than relying on the `WolfSwap` `BufFilePost` autocmd.
 
 #### `wolf_name_untitled_current(extra_collision)`
 
@@ -254,9 +256,13 @@ Two criteria, either sufficient. The first stats the `%`-mangled name nvim's own
 
 ## Decisions
 
-**Swap files are on, and `-n` is deliberately absent from the launch line.** `-n` forces `updatecount = 0`, which disables swap writing entirely and would make crash recovery of unsaved edits impossible. Swaps live in `WOLF_SWAP_DIR`, a durable Wolf-owned per-project directory that is stable across respawns, so a fresh nvim can recover a crashed one's edits. The trailing `//` on `'directory'` makes nvim encode the full path into each swap name, so identical basenames in different directories never collide, and it drops the default leading `.` entry that would otherwise drop a `.swp` next to the user's file.
+**Swap files are on, and `-n` is deliberately absent from the launch line.** `-n` forces `updatecount = 0`, which disables swap writing entirely and would make crash recovery of unsaved edits impossible. Swaps live in `WOLF_SWAP_DIR`, a durable Wolf-owned per-project directory that is stable across respawns, so a fresh nvim can recover a crashed one's edits. The trailing `//` on `'directory'` makes nvim encode the full path into each swap name, so identical basenames in different directories do not collide, and it drops the default leading `.` entry that would otherwise drop a `.swp` next to the user's file.
+
+That encoding holds only while both the full path and its resolved path fit in `SWAP_NAME_MAX`, 250 bytes: nvim cuts a longer name, siblings deep in one directory then share it, and recovery searches for the uncut name and never finds it. A buffer past the limit therefore gets `noswapfile` from the `WolfSwap` autocmds, and gets it back on a rename to a short path. It stays off when a swap for that name already exists, since enabling swap there would raise the E325 prompt outside `SwapExists`; the mechanism is in [the notes](../../notes/runtime/nvim/init.lua.md#long-path-swaps).
 
 **The `SwapExists` autocmd must never surface the blocking E325 prompt**, so it decides from the swap's owner instead. A stale or unreadable swap, or an owner pid that `uv.kill(pid, 0)` cannot find, is dead and sets `v:swapchoice = "r"` to recover silently, then schedules a delete of the consumed swap. A live owner, or a swap written on another host whose pid cannot be probed, sets `"e"` and edits the clean on-disk copy. It fires only on the file-load path, which is where nvim arms the choice machinery; the naming path is defended separately, below.
+
+A swap for a path past the long-path limit always gets `"e"` and is never deleted: recovering a cut name fails, and the delete would destroy the only copy.
 
 **`autoread` alone only re-reads on some triggers**, so the `WolfAutoRead` augroup drives `:checktime` on focus regain, buffer entry, and idle. `:checktime` re-reads only an unmodified buffer, so unsaved edits are never clobbered, and it is a no-op on the terminal and preview scratch buffers; the callback is `pcall`ed and `silent!`ed so a special buffer can neither raise nor pollute the grid.
 
@@ -320,6 +326,7 @@ Name avoidance is the only defence. Yielding `Untitled 2.md` also keeps a fresh 
 - The open-file mirror reports one global file set. `getbufinfo` is global to the nvim instance, so the same set is attached to every tabpage triple and only `active_path` is genuinely per-tabpage. A multi-view project restart therefore reopens every project file in every view, each with the correct focused file.
 - Unnamed buffers are outside the open-file restore; only file-backed buffers are mirrored.
 - Crash recovery of unsaved edits is best-effort. A SIGKILL or OOM skips Neovim's `preserve_exit`, so only edits synced to the swap before the kill are recoverable.
+- A file whose full or resolved path is longer than `SWAP_NAME_MAX` has no swap file. Its unsaved edits are not crash-recoverable, and two Neovim processes on it, such as two GNOME windows on one project, get no `W325` concurrent-edit warning from each other. A startup `Untitled.md` in such a directory is not claimed against a sibling Neovim either. A stale swap under a shared cut name is kept, so a forcing Save As onto an existing sibling with that cut name fails with E768 until the swap is removed by hand.
 - Nothing reaps a stale swap file, because a reaper would be deleting the only copy of someone's unsaved edits and a wrong staleness predicate loses them silently. The one targeted delete is the `SwapExists` recover branch's, which runs after the contents are already in a buffer. Repeated crashes in one project therefore accumulate stale swaps, so a later launch there may name its startup buffer `Untitled 3.md` or `Untitled 4.md`. That is cosmetic and self-correcting once the recovered buffers are opened, which consumes their swaps.
 - Fenced-code injection depends on the two vendored trees resolving. A host with neither the bundle's siblings nor the devShell's exports still gets base markdown highlighting from the pinned Neovim, but no injections, and every fence outside the seven parsers Neovim ships renders plain in the preview.
 - `nvim-treesitter-textobjects` ships bundled and inert: it is on `runtimepath` with no setup and no keymaps. Unlike the other two trees it deliberately has no environment fallback — nothing off the bundle produces such a tree, so the variable would have no producer, and because the tree is inert no test could tell a fallback for it from its absence.

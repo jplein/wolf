@@ -204,6 +204,93 @@ pub fn fresh_cwd() -> PathBuf {
     dir
 }
 
+/// Neovim's `BASENAMELEN` (`NAME_MAX - 5`): the byte length a `//`-style swap name is
+/// cut to before `.swp` is appended, so a cut name is 254 bytes long.
+///
+/// The `//`-style name is the file's full path with every `/` turned into `%`, one
+/// byte for one byte, so it passes this limit exactly when the full path does. Mirrors
+/// `SWAP_NAME_MAX` in `runtime/nvim/init.lua`, which gives such a file no swap at all.
+pub const SWAP_NAME_MAX: usize = 250;
+
+/// The prefix of the dir [`short_tempdir`] creates under its root.
+const SHORT_TEMP_PREFIX: &str = "wolf-";
+
+/// The random characters `tempfile` appends to [`SHORT_TEMP_PREFIX`], set explicitly so
+/// [`SHORT_TEMP_ROOT_MAX`]'s arithmetic does not rest on `tempfile`'s default.
+const SHORT_TEMP_RAND_LEN: usize = 6;
+
+/// Bytes reserved below a [`short_tempdir`] for `/<fixture name>`.
+///
+/// Every swap-bearing fixture its callers place directly in it fits: the longest is the
+/// restarted startup buffer's `/Untitled 2.md` (14 bytes). A test that needs a longer name
+/// there must raise this, which shortens [`SHORT_TEMP_ROOT_MAX`] by the same amount.
+pub const SHORT_FIXTURE_NAME_MAX: usize = 16;
+
+/// Longest canonical temp root, in bytes, that [`short_tempdir`] accepts.
+///
+/// A fixture there has the full path `<root>/wolf-XXXXXX/<name>`, which must stay within
+/// [`SWAP_NAME_MAX`] (250) for the file to keep a real swap file. So the root gets what is
+/// left after `/wolf-XXXXXX` (12 bytes) and [`SHORT_FIXTURE_NAME_MAX`] (16): 222 bytes. A
+/// fixed small cap would refuse a deep but adequate root, such as Bazel's `TEST_TMPDIR`
+/// under a sandboxed worker whose `/tmp` is not writable, leaving no usable candidate.
+pub const SHORT_TEMP_ROOT_MAX: usize =
+    SWAP_NAME_MAX - (1 + SHORT_TEMP_PREFIX.len() + SHORT_TEMP_RAND_LEN) - SHORT_FIXTURE_NAME_MAX;
+
+/// An owned temp dir, canonicalized, under a root of at most
+/// [`SHORT_TEMP_ROOT_MAX`] bytes. Returned with its guard.
+///
+/// Use it as the cwd of any test that needs a fixture to HAVE a swap file, and keep each
+/// such fixture's `/<name>` within [`SHORT_FIXTURE_NAME_MAX`]. The OS temp dir is used
+/// when its canonical form is short enough; otherwise `/tmp`. A deep `TMPDIR` (a nested
+/// `nix develop`'s, a sandboxed worker's) would otherwise push every fixture past
+/// [`SWAP_NAME_MAX`], where Wolf gives the buffer no swap file at all, and a swap-recovery
+/// test would fail for a reason that has nothing to do with recovery.
+///
+/// Canonical because nvim names buffers and swaps by the resolved path (macOS
+/// `/tmp` → `/private/tmp`). Panics, naming every candidate and why it was
+/// refused, when neither root is usable: a skip would read as a pass.
+pub fn short_tempdir() -> (tempfile::TempDir, PathBuf) {
+    let candidates = [std::env::temp_dir(), PathBuf::from("/tmp")];
+    let mut refusals: Vec<String> = Vec::new();
+    for candidate in &candidates {
+        let root = match std::fs::canonicalize(candidate) {
+            Ok(root) => root,
+            Err(e) => {
+                refusals.push(format!("{}: cannot canonicalize: {e}", candidate.display()));
+                continue;
+            }
+        };
+        let len = root.as_os_str().len();
+        if len > SHORT_TEMP_ROOT_MAX {
+            refusals.push(format!(
+                "{} (canonical {}): {len} bytes, over {SHORT_TEMP_ROOT_MAX}",
+                candidate.display(),
+                root.display()
+            ));
+            continue;
+        }
+        let made = tempfile::Builder::new()
+            .prefix(SHORT_TEMP_PREFIX)
+            .rand_bytes(SHORT_TEMP_RAND_LEN)
+            .tempdir_in(&root);
+        let dir = match made {
+            Ok(dir) => dir,
+            Err(e) => {
+                refusals.push(format!("{}: cannot create a temp dir: {e}", root.display()));
+                continue;
+            }
+        };
+        let cwd = std::fs::canonicalize(dir.path()).expect("failed to canonicalize short temp dir");
+        return (dir, cwd);
+    }
+    panic!(
+        "no short temp root is usable, so a fixture's swap name would pass Neovim's \
+         {SWAP_NAME_MAX}-byte limit and Wolf would give it no swap file. A root must be at most \
+         {SHORT_TEMP_ROOT_MAX} bytes canonical and writable. Tried, in order: {refusals:?}. \
+         Point TMPDIR at a shorter writable directory or make /tmp writable."
+    );
+}
+
 /// Builds a `CoreConfig` with the resolved init.lua path, the given grid size,
 /// and a fresh per-call `cwd` (so each core gets its own working directory).
 ///

@@ -51,7 +51,7 @@ The last two are the pattern to follow when adding a capability: prefer a subpro
 - **Binary discovery.** The nvim binary is located only via `WOLF_NVIM_BIN`, never `PATH` and never by scanning the Nix store.
 - **Hermetic launch.** `nvim --embed --clean -u runtime/nvim/init.lua -i NONE`, with `NVIM_APPNAME=wolf` and isolated `XDG_{CONFIG,DATA,STATE,CACHE}_HOME` under a private temp directory, so the captive editor cannot read the user's config or state.
 - **stderr is captured, not discarded.** It is piped and drained to the log by a background `BufReader::lines()` task. Redirecting it to `/dev/null` would hide a crashing nvim's diagnostics, and not draining it would deadlock on a full pipe buffer.
-- **Swap files stay enabled.** The launch deliberately does not pass `-n`, which would zero `updatecount` and disable swap. Swap files are what recover unsaved edits after a crash restart.
+- **Swap files stay enabled.** The launch deliberately does not pass `-n`, which would zero `updatecount` and disable swap. Swap files are what recover unsaved edits after a crash restart. The one exception, a path too long for Neovim's swap name, is in [the runtime README](../runtime/nvim/README.md#decisions).
 
 ## The bundle is Wolf's; `state_dir()` is the user's
 

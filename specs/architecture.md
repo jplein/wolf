@@ -82,7 +82,7 @@ Two contract details bind any presentation. A `confirm()` dialog splits across t
 
 Wolf ships its own Neovim, tuned for Markdown. It must not read the user's `~/.config/nvim`, plugins, or shada, and core locates the binary only through `WOLF_NVIM_BIN`, never through `PATH`. The isolation flags and the private state directories that enforce this belong to core — see [`wolf-core-decisions.md`](../notes/wolf-core-decisions.md).
 
-The captive `init.lua` lives in this repo at `runtime/nvim/init.lua` and is referenced by the build, so editor behavior is version-controlled alongside the code that depends on it. Swap files are deliberately left enabled, because they are what recovers unsaved edits after a crash restart.
+The captive `init.lua` lives in this repo at `runtime/nvim/init.lua` and is referenced by the build, so editor behavior is version-controlled alongside the code that depends on it. Swap files are deliberately left enabled, because they are what recovers unsaved edits after a crash restart. The one exception is a file whose path is too long for Neovim to name its swap uniquely, which gets none ([`runtime/nvim/README.md`](../runtime/nvim/README.md#decisions)).
 
 Each platform pins the binary its own way: the Nix devShell on Linux, and a sha256-pinned Neovim tree bundled into the `.app` on macOS, alongside the vendored plugin, colorscheme, treesitter parsers, and fonts. [Building Wolf](../build.md) holds the pinned versions and how each asset is downloaded and assembled.
 
