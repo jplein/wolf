@@ -766,9 +766,9 @@ Purpose: a Neovim window's `win_viewport` projected onto a pane-local thumb rect
 **Decisions**
 
 - A scrollbar here is a projection and never a control, painted rather than a `gtk::Scrollbar` ([wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md)).
-- `x` is measured from the pane's right edge, not the grid rectangle's, so the thumb lies wholly inside the right padding gutter and covers no glyph at any pane width. macOS's `drawScrollbars` documents that rule and computes the other.
+- `x` is measured from the pane's right edge, not the grid rectangle's, so the thumb lies wholly inside the right padding gutter and covers no glyph at any pane width. macOS's `ScrollbarGeometry` measures it the same way.
 - It never enters `grid_size_for_pane`: a thumb consuming grid width would drop a column the instant a buffer overflowed its window and restore it when it fit, reflowing text on the scroll path.
-- The height clamps to the track as well as to its own floor; macOS omits the upper clamp and draws a thumb taller than its track in a short pane.
+- The height clamps to the track as well as to its own floor, as on macOS, so a pane shorter than the floor never draws a thumb over the pane below.
 - The colour uses [`statusbar_layout.rs`](#statusbar_layoutrs)'s `blend`, which is what keeps the thumb off an alpha-capable draw path.
 
 **Gotchas**

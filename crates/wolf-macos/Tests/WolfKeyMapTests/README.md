@@ -211,12 +211,15 @@ Note that the nearby `swift_format_srcs` glob feeds lint and format only, not te
 
 The macOS-only weight layer on top of `PaneTree`'s ported topology: `setPairFraction(path:boundary:leftFraction:)` (moves weight between only the two adjacent children, clamps at both extremes so neither pane collapses, leaves a perpendicular nesting alone, no-ops on an invalid path or boundary) and `dividers(width:height:)` (one entry per interior boundary, with orientation, `lineRect`, `pairStart` / `pairSpan`, `before` / `after` and `fraction`).
 
+A divider-span property runs over six tree configurations, flat and nested, each at two bounds, one of them non-integral: each divider's `pairSpan` is the summed extent `paneRects` gives its two children, its `pairStart` is the first child's start, and two children of equal weight get equal extents. Each shape first asserts its divider count, so a loop over no dividers cannot pass.
+
 It also pins the two policies that pull in opposite directions: a same-orientation split re-equalizes the whole row, while a remove renormalizes survivors proportionally so dragged relative sizes survive.
 
 **Gotchas**
 
 - A divider's `lineRect` is zero-thickness on its own axis (zero-width for a vertical divider, zero-height for a horizontal one); the pair extent is carried by `pairStart` / `pairSpan`, so assert on those.
 - Since splits re-equalize, any unequal starting weights in a new case must come from a `setPairFraction` call.
+- The divider-span expectations come from `paneRects`, a separate recursion, and never from the formula `collectDividers` uses. wolf-gnome's divider round trip stayed green while both of its functions shared one wrong denominator, so agreement between two functions is not evidence that the quantity is right.
 
 #### `PickerPanelSeamTests.swift`
 
@@ -316,6 +319,19 @@ The `PreviewSeam` reload gate plus the click-to-focus surface. `winsNeedingReloa
 - `testNaNDeltaDoesNotPoisonLaterScrolling` reproduces the bug a user sees, but removing the delta guard or the remainder guard alone leaves it green, because each covers for the other. The single-guard falsifiers are the cases beside it.
 - A hang in `testEnormousDeltaSaturatesAt256` means the step count is computed by a loop: one `1e300` delta would iterate about 1e300 times.
 
+#### `ScrollbarGeometryTests.swift`
+
+**Covers**
+
+- `ScrollbarGeometry`'s projection at the top and the middle of a buffer and in a right-hand split, the thumb's floor and end clamp for a tiny viewport at the buffer's end, and the thumb clamped to its track in a pane shorter than the floor.
+- That the track covers no glyph: it lies between the grid's right edge and the pane's, for two literal panes and across a sweep of pane widths built with `EditorInset`, after asserting that `inset + thickness` fits in `EditorInset.padding`.
+- A table of inputs that must give `nil`: an empty buffer, nothing visible, a malformed viewport with `botline < topline`, a buffer that fits, a track 0 tall, a pane too narrow for the bar, and a non-finite rect.
+
+**Gotchas**
+
+- The base cases use literal rects rather than ones built with `EditorInset`, so a bug in another seam cannot move the inputs. Only the width sweep goes through `EditorInset`.
+- Dropping the widen-before-subtract makes the `botline < topline` row trap, which crashes the test binary rather than failing one test.
+
 #### `SearchBudgetSeamTests.swift`
 
 **Covers**: `SearchBudgetSeam.charBudget` — the floor-then-multiply arithmetic over exact and fractional divisions, the `lines` factor at values other than its default of 2, and the degenerate guard where a zero or negative `charAdvance` still yields a budget of at least `lines` instead of 0 or a divide-by-zero. New rows go in the private `BudgetCase` table with the expected count worked out longhand.
@@ -361,6 +377,12 @@ The `PreviewSeam` reload gate plus the click-to-focus surface. `winsNeedingReloa
 **Covers**: `StatusbarTextSpan`'s horizontal arithmetic for both `PaneContentKind`s — left at `gridLeft` plus the clamped `paintOffsetX`, width the rest of the grid — across narrow, wide and exactly-at-the-cap panes, an absolute `gridLeft` for a right-hand split, and the degenerate inputs (zero or negative grid width, offset past the right edge, negative offset), with a universal invariant that the width stays non-negative and the span stays inside the grid.
 
 **Gotchas**: both kinds produce identical spans and a test asserts that directly; the enum exists for the call sites, not for divergent math. A sweep across the cap threshold checks the editor branch against a longhand copy of the formula, so dropping `paintOffsetX` there — which would un-center every editor pane wider than the cap — fails loudly. Derive offsets for new cases from `expectedPaintOffsetX` rather than inventing numbers.
+
+#### `StatusbarTextTests.swift`
+
+**Covers**: `StatusbarText` across the cross product of a set or unset titlebar foreground and an active or inactive pane, asserting both colours and the bold flag against literals. Two discriminators pin that the branch keys on `set`: a set black foreground is still `.themed`, and an unset one with a non-zero rgb is still `.label`.
+
+**Gotchas**: the themed rows use a distinctive rgb, which must come out unchanged, and compare alphas within a tolerance, because the inactive secondary alpha is a product of two constants.
 
 #### `TreeChildrenMemoTests.swift`
 

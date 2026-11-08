@@ -319,7 +319,7 @@ Purpose: The command palette's pure decision seam, the sibling of `PickerSeam`. 
 
 #### `PaneGeometry.swift`
 
-Purpose: The per-pane pixel/cell coordinate seam — a grid rect positioned inside a pane rect, plus the derived grid dimensions and mapping. Every pixel-to-cell decision in `PaneContainerView` (mouse hit-testing, scroll, scrollbar placement, the paint offset) routes through it.
+Purpose: The per-pane pixel/cell coordinate seam — a grid rect positioned inside a pane rect, plus the derived grid dimensions and mapping. Every pixel-to-cell decision in `PaneContainerView` (mouse hit-testing, scroll, the paint offset) routes through it.
 
 **Public API**
 
@@ -572,6 +572,25 @@ Purpose: Accumulates the sub-cell `deltaY` values that trackpads and high-resolu
 - A carry that overflows to a non-finite value is zeroed, because a NaN carry would kill scrolling for the rest of the session. The step count is a truncating division, not a loop, because a loop would hang on a pathological delta. Both match wolf-gnome's [`mouse.rs`](../../../wolf-gnome/src/README.md#mousers).
 - The seam is direction-agnostic: positive means the `+deltaY` direction and nothing more. Direction belongs to the single flip point in the AppKit caller, where `scrollingDeltaY` already reflects the system natural-scroll setting. A second flip here would double-invert it.
 
+#### `ScrollbarGeometry.swift`
+
+Purpose: The track and thumb rectangles of a pane's synthetic scrollbar, projected from its window's `win_viewport`. `PaneContainerView.drawScrollbars` fills them.
+
+**Public API**
+
+- `init?(paneRect:gridRect:topline:botline:linecount:)` — `gridRect` is the pane's inset grid rect from `PaneContainerView.gridRect(ofPane:)`, in `paneRect`'s space, and so is the result. `nil` when there is nothing to draw: a non-finite rect, nothing visible, a buffer that fits, a pane too narrow for the bar, or a grid too short for a track.
+
+**Decisions**
+
+- The track is measured from the pane's right edge, not the grid rect's. `inset + thickness` fits inside `EditorInset.padding`, so the bar lies wholly in the right padding gutter and covers no glyph at any pane width; measured from the grid rect, it would cover the last text column of every pane narrower than the column cap.
+- The bar never enters grid sizing: one that took grid width would drop a column whenever a buffer overflowed, reflowing the text on scroll.
+- The thumb height is clamped to the track as well as floored at `minThumb`, so a pane shorter than the floor cannot draw a thumb over the pane below.
+- The viewport fields widen to `Double` before any subtraction, because a `UInt64` subtraction on a malformed viewport traps.
+
+**Gotchas**
+
+- `PaneContainerView` keeps the `.legacy` track, the `.overlay` fade and the colours, because each reads AppKit state. wolf-gnome's [`scrollbar.rs`](../../../wolf-gnome/src/README.md#scrollbarrs) places its thumb by the same rules and draws no track.
+
 #### `SearchBudgetSeam.swift`
 
 Purpose: Converts a sidebar pixel width and a monospace per-character advance into an integer character budget for a matched search line wrapped across up to `lines` rows.
@@ -683,8 +702,23 @@ Purpose: The vertical layout math for a pane's statusbar strip — its total hei
 
 **Gotchas**
 
-- This owns only the vertical math; the text's horizontal span is `StatusbarTextSpan`. The two take disjoint inputs — font sizes here, rect scalars and pane kind there — and neither should absorb the other.
-- Only this arithmetic is tested. The strip's background fill, string drawing and truncation are AppKit glue in `PaneContainerView.paintStatusbar`, verified by manual smoke only.
+- This owns only the vertical math; the text's horizontal span is `StatusbarTextSpan`, and its colours and weight are `StatusbarText`. The span takes inputs disjoint from this one's — font sizes here, rect scalars and pane kind there — and neither should absorb the other.
+- The strip's background fill, string drawing and truncation are AppKit glue in `PaneContainerView.paintStatusbar`, verified by manual smoke only.
+
+#### `StatusbarText.swift`
+
+Purpose: The colours and weight of a pane's statusbar text, the filename and path lines, for an active or an inactive pane. `PaneContainerView.paintStatusbar` maps the result to `NSColor`.
+
+**Public API**
+
+- `init(titlebarFg:active:)` — `primary` and `secondary` are each a `StatusbarTextColor`: `.themed(rgb:alpha:)`, the titlebar foreground at an alpha, or `.label(StatusbarLabelTier)`, one of AppKit's three label colours. `primaryBold` is true exactly for the active pane.
+
+**Decisions**
+
+- The text colour and weight are the whole active/inactive treatment. Themed, an inactive pane dims both lines' alpha; unthemed, it steps each line down one label tier.
+- The branch keys on `titlebarFg.set`, never on its rgb, so a theme with a black titlebar foreground stays themed.
+- The band fill is not decided here. It reads the live window's `backgroundColor`, so it stays in `PaneContainerView`, titlebar-matched.
+- wolf-gnome's `statusbar_text`, in [`statusbar_layout.rs`](../../../wolf-gnome/src/README.md#statusbar_layoutrs), takes the editor's colours and has no label tier. That divergence is deliberate, and the user accepted it.
 
 #### `StatusbarTextSpan.swift`
 

@@ -60,7 +60,7 @@ One text-attribute divergence is worth knowing: `undercurl` is drawn as Pango's 
 
 Horizontal scroll, non-primary buttons and kinetic scrolling are handled on neither platform, so they are gaps against other editors rather than against macOS.
 
-The content cap, its centred grid, the full-width toggle and the synthetic scrollbar land together on Linux, with three deliberate divergences from macOS. The thumb sits in the pane's right padding gutter rather than over the last text column, which is what macOS's own `drawScrollbars` prose describes and its code does not implement. Only the thumb is drawn and it never fades, because a fade needs the periodic timer [`wolf-gnome-decisions.md`](wolf-gnome-decisions.md) forbids. And the centring offset is floored to whole device pixels, because a half-pixel `cr.translate` resamples every glyph and this front-end has no HiDPI story.
+The content cap, its centred grid, the full-width toggle and the synthetic scrollbar land together on Linux, with two deliberate divergences from macOS. Only the thumb is drawn and it never fades, because a fade needs the periodic timer [`wolf-gnome-decisions.md`](wolf-gnome-decisions.md) forbids. And the centring offset is floored to whole device pixels, because a half-pixel `cr.translate` resamples every glyph and this front-end has no HiDPI story.
 
 Pointer input is verified at two levels — the seams through a live Neovim, and four cage smokes injecting real pointer events into the running application via [`wolf-pointer-inject`](../tools/wolf-pointer-inject/README.md). What that leaves unproven is listed in [`crates/wolf-gnome/tests/README.md`](../crates/wolf-gnome/tests/README.md).
 
