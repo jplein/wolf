@@ -13,17 +13,29 @@ final class Project {
   /// Initial grid height in rows.
   private static let initialRows: UInt16 = 24
 
-  /// The captive-nvim liveness discriminants, mirroring the FFI `mod liveness`
-  /// (which mirrors `wolf_core::Liveness`). Swift cannot import the Rust module, so
-  /// these are the hand-kept mirror consumed by `onWake`.
-  private enum Liveness {
-    static let alive: UInt8 = 0
-    static let notResponding: UInt8 = 1
-    static let dead: UInt8 = 2
-  }
+  /// How long an automatic restart waits after the `Dead` wake that scheduled it.
+  ///
+  /// `handle.restart()` blocks the main thread for the whole respawn, so the crash
+  /// overlay must be drawn before it runs. A timer that is not yet due makes the
+  /// run loop go through its before-waiting pass, where AppKit displays and Core
+  /// Animation commits; an immediate main-queue block does not guarantee that.
+  /// wolf-gnome measured the same thing: an idle callback never presented the
+  /// overlay, and a 50 ms timer did (`RESTART_DEFER` in
+  /// `crates/wolf-gnome/src/shell.rs`). The latency is cosmetic and paid at most
+  /// once per crash.
+  private static let autoRestartDelay: TimeInterval = 0.05
 
-  /// Reentrancy guard for `restartNeovim` (a nested/concurrent restart is a no-op).
+  /// Reentrancy guard for `respawnNeovim` (a nested/concurrent restart is a no-op).
   private var restarting = false
+
+  /// Automatic restart attempts since the core was last seen `Alive`, capped by
+  /// `LivenessSeam.maxAutoRestartAttempts`. Reset by an `Alive` reading, a
+  /// successful respawn and the button; incremented when an attempt is scheduled.
+  private var autoRestartAttempts = 0
+
+  /// Whether an automatic restart is scheduled but not yet run, so a burst of
+  /// `Dead` wakes schedules exactly one attempt.
+  private var restartScheduled = false
 
   /// The single shared core handle for this project's captive Neovim.
   let handle: WolfCoreHandle
@@ -147,27 +159,71 @@ final class Project {
 
   /// Fans a render wake out to the current view (others hold their last paint).
   ///
-  /// Reads the captive nvim's LIVENESS first: a `Dead` core fans the crash overlay
-  /// to every view and auto-restarts (skipping the stale render); a
-  /// `NotResponding` core fans the stall overlay and waits for the user's manual
-  /// "Restart Neovim" (button-driven); an `Alive` core hides any overlay and
-  /// proceeds with the normal render fan-out.
+  /// Reads the captive nvim's LIVENESS and acts on `LivenessSeam`'s decision: it
+  /// fans the overlay to every view, renders the current view only for an `Alive`
+  /// core, schedules at most one deferred automatic restart for a `Dead` one (see
+  /// `autoRestartDelay`), and drains the current view's queued commands in every
+  /// state. The drain runs last because a drained close can detach the view and
+  /// shut the core down.
   func onWake() {
     // Exactly one core wake through `WakeBridge`, independent of view count.
     FrameMetrics.noteWake()
 
-    switch handle.liveness() {
-    case Liveness.dead:
-      for view in views.allObjects { view.showNvimOverlay(.dead) }
-      restartNeovim()
-      return
-    case Liveness.notResponding:
-      for view in views.allObjects { view.showNvimOverlay(.notResponding) }
-      return
-    default:
-      for view in views.allObjects { view.hideNvimOverlay() }
+    let liveness = currentLiveness()
+    let decision = LivenessSeam.decision(
+      liveness: liveness, autoRestartAttempts: autoRestartAttempts)
+    if liveness == .alive {
+      autoRestartAttempts = 0
+    }
+    applyOverlay(decision.overlay)
+    if decision.render {
       currentView?.onRenderWake()
     }
+    if decision.autoRestart, !restarting, !restartScheduled {
+      scheduleAutoRestart()
+    }
+    if decision.drain {
+      currentView?.drainAndDispatchCommands()
+    }
+  }
+
+  /// The captive nvim's liveness. An unknown discriminant reads as `.alive`.
+  private func currentLiveness() -> NvimLiveness {
+    NvimLiveness(rawValue: handle.liveness()) ?? .alive
+  }
+
+  /// Fans `overlay` out to every view.
+  private func applyOverlay(_ overlay: LivenessSeam.Overlay) {
+    for view in views.allObjects {
+      switch overlay {
+      case .hidden:
+        view.hideNvimOverlay()
+      case .crashed(let retrying):
+        view.showNvimOverlay(.dead(retrying: retrying))
+      case .stalled:
+        view.showNvimOverlay(.notResponding)
+      }
+    }
+  }
+
+  /// Schedules ONE automatic respawn `autoRestartDelay` from now, counting the
+  /// attempt at scheduling time, as wolf-gnome's `schedule_restart` does.
+  private func scheduleAutoRestart() {
+    restartScheduled = true
+    autoRestartAttempts += 1
+    DispatchQueue.main.asyncAfter(deadline: .now() + Self.autoRestartDelay) { [weak self] in
+      guard let self else { return }
+      self.restartScheduled = false
+      self.respawnNeovim()
+    }
+  }
+
+  /// Restarts the captive Neovim IN PLACE: the "Restart Neovim" button's entry.
+  /// An explicit restart resets the automatic attempt count, so the cap never
+  /// refuses the user.
+  func restartNeovim() {
+    autoRestartAttempts = 0
+    respawnNeovim()
   }
 
   /// Restarts the captive Neovim IN PLACE after a crash/stall and reopens the
@@ -178,7 +234,11 @@ final class Project {
   /// tabpage (first view → tabpage 1, the rest → a new `:tcd` tabpage), reopens
   /// the captured files (active LAST so it lands focused), restores the current
   /// view, and hides every overlay. Guarded against re-entry.
-  func restartNeovim() {
+  ///
+  /// When no restart happened, it applies only the overlay of a fresh decision,
+  /// never its `autoRestart`: scheduling is `onWake`'s alone, and scheduling here
+  /// would bypass the cap.
+  private func respawnNeovim() {
     guard !restarting else { return }
     restarting = true
     defer { restarting = false }
@@ -190,18 +250,15 @@ final class Project {
       }
 
     // Only an actual restart rebinds and reopens. `false` means nvim self-recovered first or the
-    // respawn failed, so refresh the overlay from a fresh liveness read, as `onWake` does.
+    // respawn failed, so refresh only the overlay from a fresh liveness read.
     guard handle.restart() else {
-      switch handle.liveness() {
-      case Liveness.dead:
-        for view in views.allObjects { view.showNvimOverlay(.dead) }
-      case Liveness.notResponding:
-        for view in views.allObjects { view.showNvimOverlay(.notResponding) }
-      default:
-        for view in views.allObjects { view.hideNvimOverlay() }
-      }
+      applyOverlay(
+        LivenessSeam.decision(
+          liveness: currentLiveness(), autoRestartAttempts: autoRestartAttempts
+        ).overlay)
       return
     }
+    autoRestartAttempts = 0
 
     // Rebind each view to a fresh tabpage and reopen its Tier-1 files.
     for (index, entry) in snapshot.enumerated() {

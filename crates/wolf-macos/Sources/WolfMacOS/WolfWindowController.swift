@@ -322,6 +322,8 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
 
   /// Drives this window's render wake: apply layout intents + redraw every pane
   /// and the cmdline strip, then reveal/bold the current buffer in the sidebar.
+  /// Paints only: the project calls `drainAndDispatchCommands()` after it, in
+  /// every liveness state.
   func onRenderWake() {
     let frameStart = FrameMetrics.begin()
     defer { FrameMetrics.end(.controllerWake, frameStart) }
@@ -361,7 +363,6 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
       coordinator?.windowCwdDidChange(self)
       coordinator?.scheduleStateSnapshot()
     }
-    drainAndDispatchCommands()
   }
 
   /// Shows this view's crash/stall overlay for `mode` (fanned by the project when
@@ -413,7 +414,11 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
   /// targeting THIS controller's own window/coordinator (so a command triggered
   /// in window A acts on window A) — the SAME dispatcher the native menu path
   /// uses. An unknown command kind is skipped.
-  private func drainAndDispatchCommands() {
+  ///
+  /// Separate from `onRenderWake()` so `Project.onWake` drains in every liveness
+  /// state, behind the crash overlay too: a close or quit queued just before a
+  /// crash would otherwise be stranded. Issues no RPC.
+  func drainAndDispatchCommands() {
     guard let handle else { return }
     for cmd in handle.drain_commands() {
       guard let kind = CommandKind(ffi: cmd.kind()) else { continue }

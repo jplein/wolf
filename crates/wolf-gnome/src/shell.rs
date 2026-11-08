@@ -42,9 +42,8 @@
 //!   UNGATED like the drain: both are cheap, neither issues an RPC, and the
 //!   snapshot's own `state_seam::may_snapshot` gate handles the non-`Alive` case.
 //!
-//! The drain keeps running in ALL THREE liveness states — a deliberate divergence
-//! from macOS, whose `onWake` `return`s before its command drain. On Linux the
-//! drain is the ONLY path by which a `close_window` / `quit_application` reaches
+//! The drain keeps running in ALL THREE liveness states. The drain is the ONLY
+//! path by which a `close_window` / `quit_application` reaches
 //! `window.close()`, so a command queued in the instant before a crash would
 //! otherwise be stranded behind the crash overlay with no way out but the window
 //! manager. The drain issues no RPC and paints nothing, so running it costs
@@ -1512,8 +1511,7 @@ impl AppShell {
     /// [`WolfCore::restart_nvim`] is synchronous — a `runtime.block_on` over a
     /// kill, a spawn and twelve setup RPCs — so calling it from inside the wake
     /// handler would block the GTK main loop for the whole respawn with the crash
-    /// overlay shown-but-never-presented, which is precisely why macOS's `.dead`
-    /// overlay is never drawn on the success path. Deferring also guarantees the
+    /// overlay shown-but-never-presented. Deferring also guarantees the
     /// restart runs with no `RefCell` borrow live anywhere and lets
     /// [`AppShell::on_render_wake`]'s command drain have its turn first.
     fn schedule_restart(&self) {

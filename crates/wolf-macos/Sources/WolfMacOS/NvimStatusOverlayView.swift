@@ -4,8 +4,9 @@ import AppKit
 
 /// The overlay's mode, mirroring the non-`Alive` `wolf_core::Liveness` states.
 enum NvimStatusMode {
-  /// The captive nvim process died (auto-restart is driven by the project).
-  case dead
+  /// The captive nvim process died. `retrying` is whether the project may still
+  /// make an automatic restart attempt (`LivenessSeam.Overlay.crashed`).
+  case dead(retrying: Bool)
   /// The captive nvim stalled (the user drives a manual restart via the button).
   case notResponding
 }
@@ -17,8 +18,14 @@ final class NvimStatusOverlayView: NSView {
   /// The restart button's title.
   private static let buttonTitle = "Restart Neovim"
 
-  /// The status message shown for a crashed (`.dead`) captive nvim.
+  /// The status message shown for a crashed captive nvim while an automatic
+  /// restart is still to come (`.dead(retrying: true)`).
   private static let deadMessage = "Neovim crashed — restarting…"
+
+  /// The status message shown for a crashed captive nvim once the automatic
+  /// attempt is spent and only the button is left (`.dead(retrying: false)`).
+  /// wolf-gnome's `CRASHED_FAILED_MESSAGE`, verbatim.
+  private static let deadRetryFailedMessage = "Neovim crashed — automatic restart failed"
 
   /// The status message shown for a stalled (`.notResponding`) captive nvim.
   private static let notRespondingMessage = "Neovim stopped responding"
@@ -75,12 +82,14 @@ final class NvimStatusOverlayView: NSView {
   }
 
   /// Reveals the overlay for `mode`, updating the status message. The restart
-  /// button is always present (for `.dead` it is a fallback while the project
-  /// auto-restarts; for `.notResponding` it is the primary action).
+  /// button is always present (for `.dead(retrying: true)` it is a fallback while
+  /// the project auto-restarts; otherwise it is the primary action).
   func show(mode: NvimStatusMode) {
     switch mode {
-    case .dead:
+    case .dead(retrying: true):
       messageLabel.stringValue = Self.deadMessage
+    case .dead(retrying: false):
+      messageLabel.stringValue = Self.deadRetryFailedMessage
     case .notResponding:
       messageLabel.stringValue = Self.notRespondingMessage
     }
