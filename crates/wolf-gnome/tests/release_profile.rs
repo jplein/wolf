@@ -69,7 +69,7 @@ const EXPECT_STRIP: &str = "none";
 /// line-tables value.
 ///
 /// This list is complete against cargo's documented set for the toolchain in use
-/// (rustc 1.96.0) and cannot stay complete by itself: a spelling cargo adds later
+/// (rustc 1.99.1) and cannot stay complete by itself: a spelling cargo adds later
 /// would pass this test and be caught only by
 /// [`the_binary_under_test_carries_line_tables`], and only under `--release`. That
 /// is the residual, stated rather than hidden — an allow-list would trade it for
@@ -388,9 +388,9 @@ fn section_extent(bin: &Path, section: &str) -> Option<(u64, u64)> {
         u64_at(name_hdr, SH_SIZE) as usize,
     );
 
-    // `chunks_exact`, not an index range: clippy::needless_range_loop, and the
-    // chunk length is checked by construction rather than by arithmetic.
-    for entry in table.chunks_exact(SHENTSIZE64) {
+    // `as_chunks`, not an index range or `chunks_exact`: clippy's needless_range_loop and
+    // chunks_exact_to_as_chunks, and each entry's length is fixed by its type, not arithmetic.
+    for entry in table.as_chunks::<SHENTSIZE64>().0 {
         let sh_name = u32_at(entry, SH_NAME) as usize;
         if sh_name >= strtab.len() {
             continue;
