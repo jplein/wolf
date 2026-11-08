@@ -396,7 +396,7 @@ bazel test //tools/lint:check   # every check
 bazel run  //tools/lint:fix     # every fixer, in place
 ```
 
-The checks gate on both platforms. On macOS they run under `bazel test //...` and clippy fails on any lint, because `.bazelrc` sets `-Dwarnings`; the fix targets are `manual`. On Linux [the verification gate](#the-verification-gate) runs the same checks directly, through the devShell's clippy and rustfmt, doc-lint's own Cargo workspace and the markdown scripts, and on macOS it adds the doc-lint checkout rules that no Bazel target runs. The per-tool table, the toolchain each one resolves, and the caveats are in [`tools/lint/README.md`](tools/lint/README.md).
+The checks gate on both platforms. On macOS they run under `bazel test //...` and clippy fails on any lint, because `.bazelrc` sets `-Dwarnings`; the fix targets are `manual`. On Linux [the verification gate](#the-verification-gate) runs the same checks directly, through the devShell's clippy and rustfmt, doc-lint's own Cargo workspace and the scripts under `tools/lint`, and on macOS it adds the doc-lint checkout rules that no Bazel target runs. The per-tool table, the toolchain each one resolves, and the caveats are in [`tools/lint/README.md`](tools/lint/README.md).
 
 Linux has no Bazel, so the Rust fixers run through the devShell instead:
 
@@ -418,7 +418,7 @@ doc-lint runs standalone too: `doc-lint --files <files>` checks comments in the 
 
 ## The verification gate
 
-`./gates.sh`, at the repository root, is the definition of green on both platforms. It detects the host and runs every deterministic gate for it: on Linux the format, Markdown, doc-lint, wolf-core dependency, clippy, build and test commands under Cargo, and on macOS prettier, doc-lint's checkout-wide rules, the wolf-core dependency check and `bazel test //...`. What each list covers, and why it runs in that order, is in [its notes](notes/gates.sh.md).
+`./gates.sh`, at the repository root, is the definition of green on both platforms. It detects the host and runs every deterministic gate for it: on Linux the format, Markdown, wolf-gnome wording, doc-lint, wolf-core dependency, clippy, rustdoc link, build and test commands, and on macOS prettier, doc-lint's checkout-wide rules, the wolf-core dependency check and `bazel test //...`. What each list covers, and why it runs in that order, is in [its notes](notes/gates.sh.md).
 
 ```sh
 ./gates.sh                          # inside the dev shell, or outside it with nix on PATH

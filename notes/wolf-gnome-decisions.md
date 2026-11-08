@@ -46,7 +46,7 @@ Every seam is a free function or a plain value type, and [`src/README.md`](../cr
 
 The consequence is this crate's testing posture. Widget construction cannot be unit-tested at all, and is covered only by the smokes below. When you add behavior, put the decision in a seam and test it there: a rule left inside a widget closure is a rule the fast suite cannot execute, and on this platform that has repeatedly meant a rule nothing verified.
 
-Several seams are deliberate ports of a macOS counterpart in [`WolfKeyMap`](../crates/wolf-macos/Sources/WolfKeyMap/README.md), so the two front-ends can be compared as values rather than as prose. Where one diverges, the divergence is stated in that file's entry and pinned by a test.
+Several seams are deliberate ports of a macOS counterpart in [`WolfKeyMap`](../crates/wolf-macos/Sources/WolfKeyMap/README.md), so the two front-ends can be compared as values rather than as prose. Where one diverges, the divergence is stated in that file's entry and pinned by a test. Only such a divergence names the macOS front-end in this crate's sources, and its comment links the counterpart's README entry; [the wording check](../tools/lint/README.md#what-wolf_gnome_wording-checks) enforces that against a closed allowlist.
 
 ## Threading and the wake
 
@@ -262,7 +262,7 @@ Only a `LinkClicked` navigation is touched, and the decision-type check ahead of
 
 **The bound is as load-bearing as the hazard.** This crate sets nothing on `webkit6::Settings`, so `allow-file-access-from-file-urls` and `allow-universal-access-from-file-urls` keep their `FALSE` defaults: script-initiated cross-origin access is gated, the declarative loads above are not. Such a document runs local script and style but cannot read local files back out.
 
-An inline `<script>` runs on the full-load path in any case; what the base URI adds is sourcing one from an arbitrary path, and dropping the base URI to be rid of that takes every relative link with it. `load_preview_document`'s doc comment in [`src/pane_view.rs`](../crates/wolf-gnome/src/pane_view.rs) carries the measurement, including why the termination hazard its own API documentation warns of does not fire on this port.
+An inline `<script>` runs on the full-load path in any case; what the base URI adds is sourcing one from an arbitrary path, and dropping the base URI to be rid of that takes every relative link with it. `load_preview_document`'s doc comment in [`src/pane_view.rs`](../crates/wolf-gnome/src/pane_view.rs) carries the measurement, including why the termination hazard its own API documentation warns of does not fire on this front-end.
 
 **A source switch needs a full load, and the head-offset guard cannot see one.** The rendered `<head>` is byte-identical across files by design, which is exactly why the in-place body swap's own guard is blind to a link follow. `preview_ui::document_update` is a separate conjunct ahead of it, keyed on the source bufnr; without it a linked file's body lands in a document whose base URI still names the previous file's directory.
 

@@ -1,6 +1,6 @@
 # `gates.sh`
 
-Last verified at commit `60aee22234bff75be126d5fd4f4f73897028cd09`.
+Last verified at commit `3b8f9822b005c2fe25a35c7ac10f92e87def79ee`.
 
 ## Dev shell entry
 
@@ -22,7 +22,7 @@ On macOS `gates.sh` leaves `TMPDIR` alone, and `make_tmpdir` must stay Linux-onl
 
 ## Gate order
 
-Every gate runs even after one fails, so one run reports every failure, and they run fast to slow, so a formatting slip shows within seconds. The format and Markdown checks compile nothing. doc-lint is a small crate with no dependencies, so its gates come next. `wolf-core-deps` runs just before the first gate that compiles core's dependency graph, `clippy` on Linux and `lint` on macOS, so a forbidden dependency fails in seconds and the graph it fetches is the one that gate reuses. clippy precedes the build because it compiles the dependency graph the build then reuses, and the tests run last because they dominate the wall clock.
+Every gate runs even after one fails, so one run reports every failure, and they run fast to slow, so a formatting slip shows within seconds. The format and Markdown checks compile nothing, nor do the wolf-gnome wording check and its test. doc-lint is a small crate with no dependencies, so its gates come next. `wolf-core-deps` runs just before the first gate that compiles core's dependency graph, `clippy` on Linux and `lint` on macOS, so a forbidden dependency fails in seconds and the graph it fetches is the one that gate reuses. clippy precedes `rustdoc-links` and the build because it compiles the dependency graph both then reuse, and the tests run last because they dominate the wall clock.
 
 Prettier's scope, on both platforms, is `**/*.md` minus `.prettierignore`. The glob is quoted so prettier expands it rather than the shell, whose `**` without `globstar` descends one directory only. Prettier 3.9.10 follows no symlinked directory while it expands that glob: with the ignore file disabled it reports nothing under `.direnv/` or the `bazel-*` links, whose Markdown it flags when named directly, and the check takes about a second on macOS.
 
@@ -35,6 +35,12 @@ Prettier's scope, on both platforms, is `**/*.md` minus `.prettierignore`. The g
 doc-lint is a Cargo workspace of its own, so `--workspace` never reaches it and its gates name its manifest.
 
 `wolf-core-deps` feeds the checker crate names only: `{p}` prints a path dependency with its checkout path, which `cut` drops so that no pattern can match the worker's directory. `--target all` is there because the one breach this rule has met, notify 8.2.1's `objc2-core-*` crates, is a macOS-only dependency that the Linux host-target tree never lists, at the cost of a cold registry also fetching the Windows and wasm crates in the lock. The checker's own test, which compiles nothing, runs as `wolf-core-deps-check-test` beside the Markdown checker's test, and on macOS under `lint`.
+
+`wolf-gnome-wording` runs [the wording check](../tools/lint/README.md#what-wolf_gnome_wording-checks) over the checkout, and `wolf-gnome-wording-check-test` runs its test. On macOS both are members of `//tools/lint:check`, so they run under `lint`.
+
+`rustdoc-links` denies `rustdoc::broken_intra_doc_links` alone, so an unresolved or ambiguous link fails. `private_intra_doc_links`, a public doc linking a private item, stays a warning: wolf-core and wolf-gnome carry over a hundred each. `env` scopes `RUSTDOCFLAGS` to this one step, since exported for the run it would also reach the rustdoc invocations of `cargo test`'s doctests. `--no-deps` documents only the three workspace crates, whose links are the only ones this repository can fix.
+
+The gate is Linux only because only Cargo builds wolf-gnome, the macOS dev shell has no `cargo`, and no Bazel target runs rustdoc. It compiles nothing after `clippy`: on a warm `target/` it takes about a second, and documenting all three crates into an empty `target/doc` took 1.5 seconds. A cold `target/` was not measured.
 
 `./tools/wolf-package-smoke.sh` stays out of the gate. Its package is input-addressed over everything under `crates/`, so after any source edit it is a cold release compile with no `target/` reuse, on top of the gate's own build. It runs on its own, as [build.md](../build.md#the-nix-package) describes.
 
