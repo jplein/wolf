@@ -94,7 +94,7 @@ Purpose: the buffer-picker overlay — a search entry over the captive Neovim's 
 - Candidates are snapshotted once at open and re-ranked per keystroke. The snapshot is a blocking RPC on the GTK main thread, so [`picker.rs`](#pickerrs)'s wake bridge must not be added for symmetry: re-taking it puts a whole timeout budget of frozen main loop on the typing path.
 - `open_decision` refuses to open, and so refuses the RPC, for every liveness reading but `Alive`. It cannot prevent the first stall, and must not be strengthened into a guard that can never raise one.
 - A refusal returns before any widget is touched, and nothing is shown until the snapshot returns.
-- The first refresh preselects row 1, because row 0 is the buffer the user is already in and a bare Enter must switch. It is the one selection rule the other three overlays do not share, ported from macOS.
+- The first refresh preselects row 1, because row 0 is the buffer the user is already in and a bare Enter must switch. It is the one selection rule the other three overlays do not share.
 - `switch_target` refuses an active window of `0` as firmly as none at all, per `wolf-ffi`'s rule: `0` binds the switch into whichever window Neovim considers current.
 
 **Gotchas**
@@ -103,7 +103,7 @@ Purpose: the buffer-picker overlay — a search entry over the captive Neovim's 
 
 #### `cell_metrics_math.rs`
 
-Purpose: the pure cell-metrics arithmetic the configured `line-height` drives — a port of `WolfKeyMap/CellMetricsMath.swift`, named for its counterpart so the parity obligation is legible. No GTK, Pango or Cairo; every input an `f64`.
+Purpose: the pure cell-metrics arithmetic the configured `line-height` drives. No GTK, Pango or Cairo; every input an `f64`.
 
 **Public API**
 
@@ -114,8 +114,8 @@ Purpose: the pure cell-metrics arithmetic the configured `line-height` drives �
 **Decisions**
 
 - The rule lives here and not in [`render.rs`](#renderrs) because `for_font` needs a live Cairo context, so a rule left inside it could only be executed by the golden-render target.
-- The function is unit-agnostic and rounds in whatever unit its caller uses: points on macOS, device pixels here, since device pixels are what Cairo paints in.
-- Two guards, shared with `CellMetricsMath.swift` and confined to degenerate inputs: the percentage must be finite (a bare `> 0` accepts `+inf`), and a non-finite or non-positive result is floored (unfloored, it can be `0` or `NaN`).
+- The function is unit-agnostic and rounds in whatever unit its caller uses; this crate calls it in device pixels, since device pixels are what Cairo paints in.
+- Two guards, confined to degenerate inputs: the percentage must be finite (a bare `> 0` accepts `+inf`), and a non-finite or non-positive result is floored (unfloored, it can be `0` or `NaN`).
 
 #### `clipboard_ui.rs`
 
@@ -256,8 +256,8 @@ Purpose: the terminal drawer's pure rulebook — how the pane area divides betwe
 
 **Decisions**
 
-- One module where macOS has two files, `DrawerLayout.swift` and `DrawerFocusSeam.swift`: neither has a consumer outside the drawer, and `focus_target` needs both halves in one expression.
-- One divergence from that pair, pinned by a table rather than only stated: `focus_target` takes the raw pane-area size where `applyFocus` passes the editor height, since `PaneTree::pane_rects` feeds only ordering here. The `min_drawer_height` floor and the non-finite guard that collapses the whole result are shared with `DrawerLayout.swift`.
+- The height split and the focus bridge share one module because `focus_target` needs both in one expression.
+- `focus_target` takes the raw pane-area size, not the editor height the [macOS front-end passes](../../wolf-macos/Sources/WolfMacOS/README.md#panecontainerviewswift), since `PaneTree::pane_rects` feeds only ordering and both its consumers are scale-invariant. A table pins it rather than only stating it.
 
 #### `editor_inset.rs`
 
@@ -277,8 +277,8 @@ Purpose: a pane's chrome as arithmetic — the rectangle its grid paints into, t
 - The division stays in [`geometry.rs`](#geometryrs), un-inset for `resize_global`'s grid 1.
 - Only `w` and `h` clamp at zero; a non-finite input collapses the whole rectangle, since a NaN origin would poison every pointer event.
 - The cap is a `min` on the width here and on the column count in `grid_size_for_pane`, which divides the uncapped rectangle: flooring a capped width to whole pixels costs the last column at a non-integral cell width.
-- The centring offset is floored to whole device pixels, unlike macOS: a half-pixel `cr.translate` resamples every glyph and this crate has no HiDPI story.
-- No `StatusbarTextSpan` counterpart and no `text_left_inset`: `grid_rect`'s `x` carries the centring offset and every consumer reads that one field, so strip and grid share an origin by construction. macOS needs the seam only because inset and cap live in two structs.
+- The centring offset is floored to whole device pixels, unlike the [macOS offset](../../wolf-macos/Sources/WolfKeyMap/README.md#panegeometryswift): a half-pixel `cr.translate` resamples every glyph and this crate has no HiDPI story.
+- There is no `text_left_inset`: `grid_rect(..).x` carries the offset and every consumer reads that one field, so the strip and the grid share an origin by construction.
 
 #### `frame_metrics.rs`
 
@@ -341,11 +341,11 @@ Purpose: the pure pixel conversions behind every resize, pointer event, and divi
 
 **Gotchas**
 
-- `cell_at` takes grid-local coordinates, and the cap's centring offset is already in [`editor_inset.rs`](#editor_insetrs)'s `grid_rect(..).x`, which `grid_local` subtracts. So this function takes no origin, and macOS's `paintOffset` machinery has no counterpart. Do not add one.
+- `cell_at` takes grid-local coordinates, and the cap's centring offset is already in [`editor_inset.rs`](#editor_insetrs)'s `grid_rect(..).x`, which `grid_local` subtracts. So this function takes no origin; do not add one.
 
 #### `glyph_style.rs`
 
-Purpose: the pure rulebook for the three attribute-borne decorations — underline, undercurl, strikethrough — and the colour the first two take. A port of `WolfKeyMap/GlyphStyle.swift`; [`render.rs`](#renderrs) applies the answer as Pango attributes.
+Purpose: the pure rulebook for the three attribute-borne decorations — underline, undercurl, strikethrough — and the colour the first two take. [`render.rs`](#renderrs) applies the answer as Pango attributes.
 
 **Public API**
 
@@ -355,8 +355,8 @@ Purpose: the pure rulebook for the three attribute-borne decorations — underli
 **Decisions**
 
 - The wave is Pango's (`Underline::Error`), never a hand-stroked Cairo path: the underline's placement comes from face metrics Pango reads and this crate does not.
-- Pango carries one underline attribute per run, so `underline` and `undercurl` cannot coexist and undercurl wins. macOS's `GlyphStyleResolver` follows the same precedence. The wave is pinned by [`paint_golden.rs`](../tests/README.md#paint_goldenrs).
-- No strikethrough colour is ever set, so Pango strikes in the layout foreground — macOS's behaviour, bought for free.
+- Pango carries one underline attribute per run, so `underline` and `undercurl` cannot coexist and undercurl wins. The wave is pinned by [`paint_golden.rs`](../tests/README.md#paint_goldenrs).
+- No strikethrough colour is ever set, so Pango strikes in the layout foreground, and a decorated cell carries one attribute fewer.
 
 #### `im_ui.rs`
 
@@ -480,11 +480,11 @@ Purpose: the GDK pointer-translation rulebook, the analogue of [`input.rs`](#inp
 
 **Decisions**
 
-- Only the primary button is forwarded; every other number yields `None`, which is parity with macOS.
+- Only the primary button is forwarded; every other number yields `None`, since a context menu and middle-click paste are unimplemented features.
 - Every modifier bit outside `C-`, `S-`, `A-` is dropped rather than translated, because Neovim's mouse grammar has nowhere to put it. Unlike `gdk_key`, which has a meta notation.
 - An unknown scroll unit falls back to the wheel threshold on purpose: guessing wheel for a pixel delta is over-sensitive and recoverable, while guessing surface for a detent delta makes scrolling dead.
 - A rejected `consume` leaves the carry untouched, so it is indistinguishable from no call; a poisoned remainder would kill scrolling for the session. `PaneScroll` discards the carry when the target grid differs from the previous call, accepted or not, because a remainder is a fraction of a line of one grid.
-- **The scroll sign is the opposite of macOS's, deliberately.** A positive AppKit delta shows earlier content while a positive GDK delta moves toward the end of the buffer, so a positive step count maps to `Down` here and `Up` there. A test exists to stop that being "corrected".
+- **A positive step count is `Down`, deliberately.** A GDK `dy > 0` is `GDK_SCROLL_DOWN`, which moves toward the end of the buffer, and [`mouse_scroll.rs`](../../wolf-ffi/tests/README.md#mouse_scrollrs) pins `Down` as raising `topline`. A test exists to stop that being "corrected".
 
 #### `nav_ui.rs`
 
@@ -538,7 +538,7 @@ Purpose: the command-palette overlay — registry commands, one Open Recent row 
 **Decisions**
 
 - One directory can yield both a Switch to Window row and an Open Recent row: the first raises that window, the second re-roots this one.
-- `open_recent_candidates` refuses three directories: the invoking window's own, where re-rooting changes nothing; a relative path, which `chdir_to` would canonicalize against the process cwd rather than Neovim's; and one `is_dir` rejects, since a failed `:tcd` is only a `tracing::warn!` in core. Core's `WolfCore::recent_dirs` already omits it; the seam rechecks because it takes any slice.
+- `open_recent_candidates` refuses three directories: the invoking window's own, where re-rooting changes nothing; a relative path, which `chdir_to` would canonicalize against the process cwd rather than Neovim's; and one `is_dir` rejects, since a failed `:tcd` is only a `tracing::warn!` in core. What the store keeps is [`WolfCore::recent_dirs`](../../wolf-core/src/README.md#apirs)'s concern; the seam rechecks because it takes any slice.
 - The window list is a closure taken fresh at each open over each window's cached subtree, so the open touches no other core and adds no RPC.
 - The label is `PaletteRow::display` unchanged: [`title.rs`](#titlers)'s home abbreviation would rank one string and show another, and a query matching the visible `~` would return nothing.
 - Ranking runs unbounded and `max` applies after the classification filter, since `rank_palette` truncates first and undispatched rows would otherwise eat the budget.
@@ -622,7 +622,7 @@ Purpose: the file-picker overlay — a search entry over a ranked results list. 
 
 **Gotchas**
 
-- `next_selection`, `restored_index` and `activation_index` are `pub(crate)` and shared with [`palette.rs`](#paletters), [`buffer_picker.rs`](#buffer_pickerrs) and [`search_overlay.rs`](#search_overlayrs), so all four overlays navigate and activate identically. They stay here because the macOS `PickerSeam` port names this file as its counterpart.
+- `next_selection`, `restored_index` and `activation_index` are `pub(crate)` and shared with [`palette.rs`](#paletters), [`buffer_picker.rs`](#buffer_pickerrs) and [`search_overlay.rs`](#search_overlayrs), so all four overlays navigate and activate identically.
 - `FocusTarget` is `pub(crate)` and shared by all four overlays and the sidebar; [wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md#window-structure) owns why it is a closure rather than a captured widget.
 
 #### `preview_coalescer.rs`
@@ -645,7 +645,7 @@ Purpose: the pure, GTK-free state machine behind the Markdown preview's coalesce
 
 #### `preview_link.rs`
 
-Purpose: the pure, GTK-free URI rulebook for a link clicked inside the Markdown preview — what the click means, what base URI the document loads against, and the JavaScript that scrolls a fragment into view. A port of macOS's `PreviewLinkSeam`: this module owns URI arithmetic, [`preview_ui.rs`](#preview_uirs) owns liveness gates and load strategy.
+Purpose: the pure, GTK-free URI rulebook for a link clicked inside the Markdown preview — what the click means, what base URI the document loads against, and the JavaScript that scrolls a fragment into view. This module owns URI arithmetic, [`preview_ui.rs`](#preview_uirs) owns liveness gates and load strategy.
 
 **Public API**
 
@@ -655,7 +655,7 @@ Purpose: the pure, GTK-free URI rulebook for a link clicked inside the Markdown 
 
 **Decisions**
 
-- Four shapes are refused where macOS calls `NSWorkspace.open`: a non-anchor `about:` URI, a `file:` URI with an empty path, a target with neither scheme nor path, and a `file:` authority other than empty or `localhost`.
+- Four shapes are refused where the [macOS seam](../../wolf-macos/Sources/WolfKeyMap/README.md#previewlinkseamswift) launches or reads through: a non-anchor `about:` URI, a `file:` URI with an empty path, a target with neither scheme nor path, and a `file:` authority other than empty or `localhost`. [The reason](../../../notes/wolf-gnome-decisions.md#following-a-link-in-the-preview) is the decisions file's.
 - Whether a linked file is Markdown needs the filesystem, so this module never decides it: it always answers `PreviewFile` and core's own gate declines.
 
 #### `preview_ui.rs`
@@ -693,7 +693,7 @@ Purpose: the pure predicate behind the test-only readiness file — whether a la
 
 #### `refresh_coalescer.rs`
 
-Purpose: the pure, GTK-free state machine behind the sidebar's trailing refresh — a burst of streaming traversal batches collapsed into one rebuild per `REFRESH_INTERVAL`. A port of the macOS `PickerRefreshCoalescer`.
+Purpose: the pure, GTK-free state machine behind the sidebar's trailing refresh — a burst of streaming traversal batches collapsed into one rebuild per `REFRESH_INTERVAL`.
 
 **Public API**
 
@@ -705,7 +705,7 @@ Purpose: the pure, GTK-free state machine behind the sidebar's trailing refresh 
 
 - `fire` clears the armed flag before answering, so a batch arriving during a refresh arms a fresh fire rather than coalescing into one that has already performed. That is what puts a traversal's final batch inside some later fire, and why the mechanism is a trailing timer rather than a frame budget, which would drop a wake with nothing armed.
 - `cancel` bumps a generation token instead of removing the GLib source, because removing an already-fired source is a GLib warning; the queued closure still runs and performs nothing. The same pattern as [`crash_overlay.rs`](#crash_overlayrs)'s banner.
-- **The picker deliberately does not share it**, unlike macOS, where one coalescer serves both the picker and the file tree. Widening the rule would put the two picker smokes at risk for nothing this crate needs.
+- **The picker deliberately does not share it**, unlike the [macOS coalescer](../../wolf-macos/Sources/WolfKeyMap/README.md#pickerrefreshcoalescerswift). Widening the rule would put the two picker smokes at risk for nothing this crate needs.
 
 **Gotchas**
 
@@ -766,14 +766,14 @@ Purpose: a Neovim window's `win_viewport` projected onto a pane-local thumb rect
 **Decisions**
 
 - A scrollbar here is a projection and never a control, painted rather than a `gtk::Scrollbar` ([wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md)).
-- `x` is measured from the pane's right edge, not the grid rectangle's, so the thumb lies wholly inside the right padding gutter and covers no glyph at any pane width. macOS's `ScrollbarGeometry` measures it the same way.
+- `x` is measured from the pane's right edge, not the grid rectangle's, so the thumb lies wholly inside the right padding gutter and covers no glyph at any pane width.
 - It never enters `grid_size_for_pane`: a thumb consuming grid width would drop a column the instant a buffer overflowed its window and restore it when it fit, reflowing text on the scroll path.
-- The height clamps to the track as well as to its own floor, as on macOS, so a pane shorter than the floor never draws a thumb over the pane below.
+- The height clamps to the track as well as to its own floor, so a pane shorter than the floor never draws a thumb over the pane below.
 - The colour uses [`statusbar_layout.rs`](#statusbar_layoutrs)'s `blend`, which is what keeps the thumb off an alpha-capable draw path.
 
 **Gotchas**
 
-- `Viewport::curline` is deliberately unread, matching macOS: a cursor move that scrolled nothing must not make the indicator jump.
+- `Viewport::curline` is deliberately unread: a cursor move that scrolled nothing must not make the indicator jump.
 
 #### `search_overlay.rs`
 
@@ -790,7 +790,7 @@ Purpose: the project-search overlay — a `Ctrl+Shift+F` entry over a flat, stre
 - Typing runs nothing: the first Enter runs the search, the second activates the selected row. An empty query is refused, since core would hand `rg` a pattern matching every line of every file.
 - Closing and re-running both cancel: dropping the `SearchSession` kills the `rg` child; see [wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md).
 - `open_decision` refuses without a project, since the search root would otherwise fall back to the home directory.
-- The options shipped are literal, case-insensitive and over all files, with no toggle buttons and no `WolfCore::ignorecase()` read, so macOS's `SearchToggleSeam` seeds have no counterpart.
+- The options shipped are literal, case-insensitive and over all files, with no toggle buttons and no `WolfCore::ignorecase()` read; `search_options_for`'s doc gives each reason.
 - Rows are flat, one per matched line, which is what lets [`picker.rs`](#pickerrs)'s selection seams drive them unchanged; the order and the file labels come from core's projection.
 
 **Gotchas**
@@ -838,7 +838,7 @@ Purpose: the pure application-state seam — what to restore at launch, and what
 
 #### `statusbar_layout.rs`
 
-Purpose: the per-pane statusbar's rulebook, decidable from values. The vertical half ports `WolfKeyMap/StatusbarLayout.swift` constant for constant.
+Purpose: the per-pane statusbar's rulebook, decidable from values.
 
 **Public API**
 
@@ -849,9 +849,9 @@ Purpose: the per-pane statusbar's rulebook, decidable from values. The vertical 
 **Decisions**
 
 - Unit-agnostic ([`cell_metrics_math.rs`](#cell_metrics_mathrs)); [`pane_view.rs`](#pane_viewrs) calls it in device pixels, from `CellMetrics::size_px`.
-- The band is the editor's default background and the text has no label-tier fallback, where macOS takes the window background its titlebar theme sets and falls back to AppKit's label colours. This front-end takes no colour from the GTK theme ([wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md#window-structure)), and the divergence stands by the user's decision.
+- The band is the editor's default background and the text has no label-tier fallback, unlike the [macOS strip](../../wolf-macos/Sources/WolfKeyMap/README.md#statusbartextswift), by the user's decision: this front-end takes no colour from the GTK theme ([wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md#window-structure)).
 - Both colours blend toward the background rather than toward black, which is what compositing over the already-filled band gives, so the strip needs no alpha-capable draw path.
-- A degenerate input collapses the whole layout to zeros, as `StatusbarLayout.swift` does: an infinite strip height leaves an editor painting one cell. Only `secondary_font_size`'s fall to the floor on a non-finite font size is this crate's alone.
+- A degenerate input collapses the whole layout to zeros: an infinite strip height leaves an editor painting one cell. `secondary_font_size` answers the floor for any non-finite font size, so an infinity never reaches the layout.
 
 **Gotchas**
 
@@ -898,7 +898,7 @@ Purpose: the pure, GTK-free rulebook for the N tabs one window's captive Neovim 
 
 #### `title.rs`
 
-Purpose: the pure window-title seam — the working directory, rendered, with the home prefix abbreviated. A port of the macOS title seam, so the two front-ends abbreviate identically.
+Purpose: the pure window-title seam — the working directory, rendered, with the home prefix abbreviated.
 
 **Public API**
 
@@ -917,7 +917,7 @@ Purpose: a re-export shim over `wolf_core::tree`. The hierarchical projection of
 
 #### `tree_gate.rs`
 
-Purpose: the pure, GTK-free gate every sidebar refresh passes — visibility first, snapshot version second. A port of the macOS `TreeRefreshGate`.
+Purpose: the pure, GTK-free gate every sidebar refresh passes — visibility first, snapshot version second.
 
 **Public API**
 

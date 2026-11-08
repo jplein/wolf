@@ -302,7 +302,7 @@ Purpose: The crash/stall recovery rulebook: what a wake does given the captive N
 **Decisions**
 
 - The `switch` has no `default`, so a new liveness case fails to compile until it is classified.
-- `drain` is true in every state. The drain issues no RPC and paints nothing, and it is the only route by which a close or quit queued just before a crash reaches the window.
+- `drain` is true in every state: it is the only route by which a close or quit queued just before a crash reaches the window. Reading the queue issues no RPC; some dispatched commands do.
 - `.notResponding` never auto-restarts: a restart force-kills Neovim and loses whatever is not in a swap file, so that is the user's call.
 - The cap only stops a retry loop against a respawn that keeps failing, and does not limit the user, because the button resets the count. `retrying` means an attempt is still permitted, not that one is running.
 - Unlike `liveness_ui`, the seam takes the count rather than a boolean, so the cap is decided and tested here, and it carries `drain`, which wolf-gnome runs outside its mapping.

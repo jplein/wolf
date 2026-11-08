@@ -88,7 +88,7 @@ The four `extern "C"` wake registrations (`wolf_ffi_set_wake`, `wolf_ffi_set_fil
 - `full_width_for_win(&self, win: i64) -> bool` — The per-window flag the front-end threads into a pane's geometry.
 - `FfiLayoutIntent::kind/orientation/dir/from/win` — A tagged flattening of `wolf_core::LayoutIntent`. Fields a given kind does not use read as 0; a drawer open reuses the `win` field for the new drawer window rather than adding a bridged field.
 - `FfiWinInfo::grid/win/hidden` — `grid` is `>= 2` for editor windows.
-- `FfiPaneStatus::filename/display_path/abs_path` — `filename` is `[No Name]` for an unnamed buffer and the shell's name for a terminal, whose `display_path` is empty; the rules are core's [`pane_status.rs`](../../wolf-core/src/README.md#pane_statusrs). `abs_path` is never relativized — the front-end persists it as a pane-layout leaf path.
+- `FfiPaneStatus::filename/display_path/abs_path` — core's `PaneStatus`, whose rules are [`pane_status.rs`](../../wolf-core/src/README.md#pane_statusrs)'s. `abs_path` is never relativized — the front-end persists it as a pane-layout leaf path.
 
 ### Tabpages
 
@@ -109,7 +109,7 @@ One captive nvim is one project; each of its views binds to a distinct tabpage.
 - `cwd(&self) -> String` — nvim's live canonicalized cwd, tracking `:cd` and `DirChanged`.
 - `current_file(&self) -> String` — `""` for an unnamed buffer.
 - `new_buffer(&self)` — An empty markdown-typed buffer named the next free `Untitled N.md`, not written to disk.
-- `recent_dirs(&self) -> Vec<String>` — The global directory MRU, newest first, capped at 20, minus folders that have gone. Drives File > Open Recent.
+- `recent_dirs(&self) -> Vec<String>` — [`WolfCore::recent_dirs`](../../wolf-core/src/README.md#apirs) as strings, empty once the core is gone. Drives File > Open Recent.
 - `wolf_ffi_ancestors_to_reveal(rel_path: String) -> Vec<String>` — A free function, no session needed: the ancestor directories the sidebar expands before revealing a file.
 
 ### Commands and the command palette

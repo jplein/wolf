@@ -55,8 +55,7 @@
 //! re-root still rebuilds the root store and collapses it. Preserving it across a
 //! version advance means owning every expanded directory's `gio::ListStore` in a
 //! registry and diffing children into it per snapshot — a redesign of the model
-//! layer rather than a memo, and GTK has no `NSOutlineView` equivalent to get it
-//! from.
+//! layer rather than a memo.
 //!
 //! ## Highlight + reveal
 //!

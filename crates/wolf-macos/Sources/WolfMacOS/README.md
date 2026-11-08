@@ -676,7 +676,7 @@ Purpose: One view — a single tab's whole UI stack, bound to a `(project, tabpa
 - `hasFolder` — false in the empty state, gating the sidebar and file tree, since an empty-state window must never scan `home`.
 - `persistedCwd` — the tabpage-local cwd, correct even when this view is not current, unlike `currentCwd`.
 - `canCopy` — whether Edit > Copy has anything to copy; `copy()` takes the same decision.
-- `drainAndDispatchCommands()` — apart from `onRenderWake()`, so the project drains behind the crash overlay.
+- `drainAndDispatchCommands()` — apart from `onRenderWake()`, so the project drains in every state ([why](../WolfKeyMap/README.md#livenessseamswift)).
 
 **Decisions**
 
