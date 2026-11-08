@@ -309,11 +309,12 @@ Real-nvim proof that the captive `runtime/nvim/init.lua` finds a sibling vendore
 
 #### `pane_status.rs`
 
-Real-nvim coverage of the per-pane statusbar bridge: `pane_status_for_grid` and the opaque `FfiPaneStatus` accessors. It opens one file, splits, opens a second, and requires the two grids to report distinct names — the assertion that makes the status per-window rather than global. Target `//crates/wolf-ffi:pane_status` stages the nvim runfiles and runs unsandboxed; loud-skips without a pinned nvim.
+Real-nvim coverage of the per-pane statusbar bridge: `pane_status_for_grid` and the opaque `FfiPaneStatus` accessors. It opens one file, splits, opens a second, and requires the two grids to report distinct names — the assertion that makes the status per-window rather than global. A second case opens the terminal drawer and requires its grid to report `sh` with an empty `display_path()`. Target `//crates/wolf-ffi:pane_status` stages the nvim runfiles and runs unsandboxed; loud-skips without a pinned nvim.
 
 **Gotchas**
 
 - `abs_path()` is the raw, never-relativized buffer path, which core canonicalizes when it applies buffers, so compare against a canonicalized expectation.
+- The drawer case sets the process-global `SHELL` to `/bin/sh` before start, because Neovim's default `shell` is `$SHELL` and the drawer's buffer is named after it; that fixes the expected name. The other case opens no terminal, so `SHELL` does not reach it.
 
 #### `panes.rs`
 
@@ -336,9 +337,9 @@ Also `preview_buffer(win, bufnr)` — markdown binds and returns the source bufn
 
 #### `recent_dirs.rs`
 
-**Covers** — `WolfCoreHandle::recent_dirs()`, the global folder MRU read back newest-first after driving `:cd`. Real nvim; target `//crates/wolf-ffi:recent_dirs` (staged nvim runfiles or `WOLF_NVIM_BIN`, `tags = ["no-sandbox"]`).
+**Covers** — `WolfCoreHandle::recent_dirs()`, the global folder MRU read back newest-first after driving `:cd`; a deleted folder omitted while the other stays, then listed again in its old place once recreated, which proves the store kept its row. Real nvim; target `//crates/wolf-ffi:recent_dirs` (staged nvim runfiles or `WOLF_NVIM_BIN`, `tags = ["no-sandbox"]`).
 
-**Gotchas** — deliberately a single `#[test]`: it sets the process-global `WOLF_STATE_DIR` before start, and the store opens `folder-mru.sqlite` once at core start, so new cases belong inside that test. The MRU is global and records every cwd change, so nvim's launch cwd is in the list alongside the dirs the test chdirs into.
+**Gotchas** — deliberately a single `#[test]`: it sets the process-global `WOLF_STATE_DIR` before start, and the store opens `folder-mru.sqlite` once at core start, so new cases belong inside that test. The MRU is global, so the test asserts membership and order rather than length. nvim's launch cwd is not in it: `apply_cwd` skips the flagged initial emit.
 
 #### `search.rs`
 

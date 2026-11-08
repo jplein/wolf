@@ -389,6 +389,7 @@ Headless: `pane_status` is IO-free string and path math, so the target needs no 
 **Covers**
 
 - The pane statusbar display strings: cwd-relative remainder (nested and direct), the `~` home-relative form, absolute passthrough, `[No Name]` for an empty buffer path, and cwd-over-home precedence.
+- The terminal arm: a `term://` name shows its command's first word's basename with an empty `display_path` and a raw `abs_path`, split at the first `//<pid>:`; a name with no command word, or a path merely containing `term://`, keeps the path rules.
 
 **Gotchas**
 
@@ -521,7 +522,7 @@ Real Neovim: needs `WOLF_NVIM_BIN`, the staged nvim runfiles, and `tags = ["no-s
 
 Spawns a real Neovim **and** a real pinned `rg`: its target stages `//bazel/rg:rg_tree` alongside the nvim runfiles and is tagged `no-sandbox`.
 
-**Covers** — `start_search` streaming into a `SearchSession`, the `all_files` / `use_regex` / `case_sensitive` toggles, `match_ranges` and `column` on a multi-submatch line, and the `open_at(path, line, col)` round-trip.
+**Covers** — `start_search` streaming into a `SearchSession`, the `all_files` / `use_regex` / `case_sensitive` toggles, `match_ranges` and `column` on a multi-submatch line, the `open_at(path, line, col)` round-trip, and the `.git/` / `.wolf/` exclusion in both glob modes while `.github/` is still searched.
 
 **Gotchas** — Without a resolvable `WOLF_RG_BIN` the local `rg_bin_or_skip` turns every case into a no-op pass, so green does not by itself prove rg ran. Matches accumulate in rg emission order, so ordering assertions must go through `project`.
 

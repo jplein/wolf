@@ -16,10 +16,11 @@ Crate root. Declares every module and flattens the public surface into root re-e
 
 **Public API**
 
-- `CoreConfig.cwd` is the captive nvim's launch directory and the fallback search/MRU root. It is used only until nvim first reports its own cwd; `live_cwd` supersedes it thereafter.
-- `SnapshotReadGuard` owns an `Arc` clone of the snapshot lock, so its lifetime is independent of the `&self` it came from. Hold it for one paint, then drop it.
-- The blocking queries (`list_buffers`, `render_preview`, `open_preview`, and siblings) return a neutral fallback — `""`, `0`, `None`, an empty `Vec` — on any RPC error or timeout, so a caller cannot distinguish a wedged nvim from a genuinely empty answer. Everything else is fire-and-forget through the ordered input channel.
-- `restart_nvim` returns `Ok(false)` when no respawn happened (liveness was already `Alive`, or one was in flight), and it reopens nothing: capture `open_files_for_tabpage` before calling it.
+- `CoreConfig.cwd` is the captive nvim's launch directory and the fallback search/MRU root until nvim reports its own cwd (`live_cwd`).
+- `SnapshotReadGuard` owns an `Arc` clone of the snapshot lock, so it outlives the `&self` it came from. Hold it for one paint, then drop it.
+- The blocking queries (`list_buffers`, `render_preview`, `open_preview`, and siblings) return a neutral fallback — `""`, `0`, `None`, an empty `Vec` — on any RPC error or timeout, indistinguishable from a genuinely empty answer. Everything else is fire-and-forget through the ordered input channel.
+- `restart_nvim` returns `Ok(false)` when no respawn happened (already `Alive`, or one in flight), and reopens nothing: capture `open_files_for_tabpage` before calling it.
+- `recent_dirs` omits entries that are not directories, a stat each on the calling thread, and never prunes the store, so a returning folder reappears.
 
 **Decisions**
 
@@ -264,13 +265,14 @@ Purpose: the ripgrep-backed content search behind the sidebar panel's `SearchSes
 **Public API**
 
 - `SearchOptions` — `case_sensitive` selects `rg -s` or `-i` outright; there is no smart-case. `all_files` off restricts the search to Markdown globs.
-- `SearchMatch` — `column` and `match_ranges` are byte offsets into `line_text`; `rel_path` falls back to the absolute path string when the file is not under the root.
+- `SearchMatch` — `column` and `match_ranges` are byte offsets into `line_text`; `rel_path` falls back to the absolute path outside the root.
 - `SearchState::matches` — accumulates in rg emission order; display order is imposed on read by [`search_tree::project`](#search_treers).
 - `SearchSession::cancel` — also kills the rg child, as does `Drop`.
 
 **Decisions**
 
 - `--no-config` keeps results independent of the user's ripgrep config, `-e` protects a query starting with a dash, and `--` separates the root.
+- `--hidden` keeps dot-directories such as `.github/` searchable, while one `--glob '!<name>'` per [`files.rs`](#filesrs)'s `EXCLUDED_DIR_NAMES` keeps rg out of `.git/` and `.wolf/`, which the picker walk prunes too.
 - rg's exit code 1 means "no matches", not failure; only `>= 2` becomes `SearchState::error`.
 - Only the `text` form of rg's data wrapper is deserialized. A non-UTF-8 path or line arrives as a `bytes` payload and is skipped — the deliberate alternative to taking a base64 dependency.
 - A malformed JSON line is skipped rather than ending the stream.
@@ -359,7 +361,7 @@ Purpose: the recent-directories cache — one global SQLite database under the s
 
 - Ordering is a monotonic `seq` column (`MAX(seq)+1` per insert), not a timestamp, so move-to-top and the cap stay deterministic for inserts landing in the same millisecond. That is what lets the tests avoid sleeps.
 - `record` stores the path as given: it arrives already canonical from `apply_cwd`, so canonicalizing again would only add a filesystem hit.
-- `recent` does not check that the directories still exist, unlike `MruStore::recent`.
+- `recent` neither prunes nor filters vanished directories, unlike `MruStore::recent`: [`WolfCore::recent_dirs`](#apirs) filters them on read, so the store keeps a returning folder's row.
 - `init`'s probe query is required for the same reason as in `mru.rs` — a table missing `seq` survives `CREATE TABLE IF NOT EXISTS`.
 
 ### Pickers, panes, and preview
@@ -430,6 +432,7 @@ Purpose: Pure display-string math for a pane's statusbar: the base filename and 
 - `NO_NAME` — the placeholder filename for an unnamed buffer, also reused by `buffer_picker`.
 - `PaneStatus` — `display_path` is relativized (cwd-relative wins, else the `~`-prefixed home form, else absolute), while `abs_path` is the raw buffer path and is never relativized, because the macOS front-end persists it as a pane-layout leaf path.
 - `pane_status(buf_path, cwd, home)`.
+- A terminal buffer, `term://<cwd>//<pid>:<command>`, yields the basename of the command's first word as `filename` (`bash`) and an empty `display_path`, so both front-ends draw the shell's name with no path line; `abs_path` stays the raw name. A `term://` name with no command word falls through to the path rules.
 
 **Decisions**
 

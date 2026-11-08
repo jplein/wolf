@@ -538,7 +538,7 @@ Purpose: the command-palette overlay — registry commands, one Open Recent row 
 **Decisions**
 
 - One directory can yield both a Switch to Window row and an Open Recent row: the first raises that window, the second re-roots this one.
-- `open_recent_candidates` refuses three directories: the invoking window's own, since re-rooting where it already is changes nothing; a relative path, which `chdir_to` would canonicalize against the process cwd rather than Neovim's; and one `is_dir` rejects, since a failed `:tcd` is only a `tracing::warn!` in core. The shared store is never pruned, so a temporarily unmounted path returns.
+- `open_recent_candidates` refuses three directories: the invoking window's own, where re-rooting changes nothing; a relative path, which `chdir_to` would canonicalize against the process cwd rather than Neovim's; and one `is_dir` rejects, since a failed `:tcd` is only a `tracing::warn!` in core. Core's `WolfCore::recent_dirs` already omits it; the seam rechecks because it takes any slice.
 - The window list is a closure taken fresh at each open over each window's cached subtree, so the open touches no other core and adds no RPC.
 - The label is `PaletteRow::display` unchanged: [`title.rs`](#titlers)'s home abbreviation would rank one string and show another, and a query matching the visible `~` would return nothing.
 - Ranking runs unbounded and `max` applies after the classification filter, since `rank_palette` truncates first and undispatched rows would otherwise eat the budget.
@@ -795,7 +795,6 @@ Purpose: the project-search overlay — a `Ctrl+Shift+F` entry over a flat, stre
 
 **Gotchas**
 
-- `all_files: true` reaches everything `rg --hidden` lists, `.git/` included; the measured counts are in [`macos-followups.md`](../../../notes/macos-followups.md).
 - A same-file jump to another line records no history, while a cross-file one does: core folds a `NavTarget` per window, and `NavTarget::Edit` carries no line number.
 
 #### `shell.rs`
