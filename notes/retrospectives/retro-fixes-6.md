@@ -1,0 +1,28 @@
+# Retrospective: regina architect and coder definitions corrected where earlier runs tripped
+
+Last verified at commit `3fde837508236dcafa16e392694c6e2715117dc1`.
+
+The task made four in-place edits to `.claude/skills/regina/agents/architect.md` and `coder.md`, answering recommendations of [open-items-1](open-items-1.md), [open-items-3](open-items-3.md), [open-items-7](open-items-7.md) and [open-items-13](open-items-13.md). The change is `3fde837`, four lines added and four removed. The rest of `git diff 588bdbe` is the work of retro-fixes 1 to 5, which have their own reports.
+
+It took one round. No agent was rejected, no gate failed, and nothing was resumed or flagged as a discrepancy. The four invocations cost about $3.65: `architect-1` $1.14 (23 turns, 2.8 minutes), `coder-1` $0.81 (28 turns, 4.3 minutes), `technical-writer-1` $0.39 (10 turns, 0.7 minutes) and `reviewer-1` $1.31 (23 turns, 3.2 minutes).
+
+## What went well
+
+- **The task cited recommendations by report and number.** Each edit had one source sentence to answer, so plan 1 could give each one a line number and a wording to follow, and the review only had to check four pairs.
+- **The write sets settled the falsifier wording at once.** `flow.yaml` keeps the coder out of `tests`, and `.claude/skills/regina/README.md` makes a `#[cfg(test)]` block in `src/` the coder's. Plan 1 §3, `coder-1` and review 1 each confirmed the new wording against them with one grep.
+- **`.claude/skills/regina/README.md` says on line 5 that nothing under `.claude/` is gated.** `architect-1` found that the task's done criterion was wrong from it, `.prettierignore` and `tools/lint/markdown_all.sh:9`, and plan 1 §8 told the coder to format by hand with `prettier --ignore-path /dev/null`. No round was lost to it.
+- **Regina keeps each `regina on linux` command's output.** Review 1 checked every measurement in `coder-1`'s report against those records, the stderr ordering included, and did not rerun any of them on the Linux worker.
+
+## What did not go well
+
+- **The done criterion checked none of the changed files.** The instructions said that `./gates.sh` passing was enough, "prettier and the markdown checker cover these files", but all three checkers skip `.claude/`. Both gates passed on both workers and proved nothing about the two definitions. The task wording follows `.claude/skills/regina/SKILL.md:62`, which tells every task to end with "`./gates.sh` exits 0 on both workers" and does not cover a task that changes only `.claude/`. The only checks of the result were the ones `coder-1` and review 1 ran by hand.
+- **The committed `Cargo.lock` does not stay unchanged when the Linux worker's cargo re-resolves it.** Plan 1 §4 called `cargo update -p notify --precise 8.2.0` a no-op, but on `nixos.local` it moves `winapi-util` 0.1.11's dependency from `windows-sys 0.61.2` to `0.48.0`. `coder-1` spent one more `regina on linux` command and a diff telling cargo's edit from an artifact of the output. Any coder who writes back a lockfile as `coder.md:80` says will carry that line along, which review 1 also noted.
+- **Every Linux command output carries two nix warnings.** Each `regina on linux` record and each Linux gate log of this task ends with `evaluation warning: stdenv.isLinux is deprecated` and its `isDarwin` twin. `flake.nix` already uses `stdenv.hostPlatform`, so the warnings come from a locked input. They are why the new `coder.md:80` needs a sentence explaining that they are not part of the lockfile.
+- **The `/orchestrate` team's definitions keep the wording this task corrected.** `.claude/agents/coder.md:32` still limits the falsifier rule to "every test the test-writer adds", and `.claude/agents/architect.md:19` still says "smallest source edit". Plan 1 §3 scoped them out because the task opened only the regina definitions. [retro-fixes-4](retro-fixes-4.md) found the same pair-of-definitions duplication for the reviewer, so this has now come up twice.
+
+## Recommendations
+
+1. **Give a `.claude/`-only task a done criterion that checks something.** Add to `.claude/skills/regina/SKILL.md:62` that a task changing only files under `.claude/` ends with `nix develop --command prettier --ignore-path /dev/null --check <files>` instead of relying on the gates alone. This task's instructions claimed coverage that `.prettierignore` rules out, and retro-fixes 4 and 6 both changed agent definitions under that gap.
+2. **Commit the lockfile the Linux worker's cargo resolves.** Run `cargo update -p winapi-util --precise 0.1.11` or a no-op `cargo update -p <crate> --precise <locked version>` on `nixos.local`, check that the macOS `crate_universe` repin accepts the `windows-sys 0.48.0` line, and commit it. A later lockfile write-back then changes only what its task asked for, and no coder has to work out where the extra line came from, as `coder-1` did.
+3. **Silence the deprecation warnings at their source.** Find which input emits `stdenv.isLinux` with `nix develop --show-trace` on the Linux worker and update it in `flake.lock`. Each `regina on linux` output then ends with the command's own output, and the sentence about the warnings in `coder.md:80` can be dropped.
+4. **Make one definition set refer to the other for rules they share.** This came up in [retro-fixes-4](retro-fixes-4.md) for `reviewer.md`, and again here for the falsifier scope and the "smallest source edit" wording. A task that opens `.claude/agents/coder.md` and `architect.md` should bring their rules into line with the regina definitions corrected in `3fde837`. A later edit to one set then cannot leave the other behind.
