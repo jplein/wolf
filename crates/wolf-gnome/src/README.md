@@ -1,6 +1,6 @@
 # wolf-gnome/src
 
-The GTK front-end's modules, one entry each. The pure seams here are the Linux counterparts of the ones in [`wolf-macos/Sources/WolfKeyMap/`](../../wolf-macos/Sources/WolfKeyMap/README.md), and the two are kept deliberately close.
+The GTK front-end's modules, one entry each. The pure seams here are the Linux counterparts of the ones in [`wolf-macos/Sources/WolfKeyMap/`](../../wolf-macos/Sources/WolfKeyMap/README.md).
 
 **Read [wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md) first**: it owns every constraint that spans more than one file here, and most of this directory's rules exist because of one.
 
