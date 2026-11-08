@@ -28,12 +28,14 @@ final class PaneLayoutCodecTests: XCTestCase {
   // MARK: - Sample saved trees (topology + weights)
 
   private func twoChild() -> SavedPaneNode {
-    .split(orientation: .vertical, weights: [0.5, 0.5],
+    .split(
+      orientation: .vertical, weights: [0.5, 0.5],
       children: [.leaf(path: "/a.md", preview: false), .leaf(path: "/b.md", preview: false)])
   }
 
   private func nary() -> SavedPaneNode {
-    .split(orientation: .horizontal, weights: [0.5, 0.25, 0.25],
+    .split(
+      orientation: .horizontal, weights: [0.5, 0.25, 0.25],
       children: [
         .leaf(path: "/a.md", preview: false),
         .leaf(path: "/b.md", preview: false),
@@ -42,10 +44,12 @@ final class PaneLayoutCodecTests: XCTestCase {
   }
 
   private func perpendicular() -> SavedPaneNode {
-    .split(orientation: .vertical, weights: [0.6, 0.4],
+    .split(
+      orientation: .vertical, weights: [0.6, 0.4],
       children: [
         .leaf(path: "/a.md", preview: false),
-        .split(orientation: .horizontal, weights: [0.5, 0.5],
+        .split(
+          orientation: .horizontal, weights: [0.5, 0.5],
           children: [.leaf(path: "/b.md", preview: false), .leaf(path: "/c.md", preview: false)]),
       ])
   }
@@ -53,7 +57,8 @@ final class PaneLayoutCodecTests: XCTestCase {
   /// A split whose FIRST child is a PREVIEW leaf (path = its source markdown file)
   /// and whose second child is a normal editor leaf.
   private func withPreview() -> SavedPaneNode {
-    .split(orientation: .vertical, weights: [0.5, 0.5],
+    .split(
+      orientation: .vertical, weights: [0.5, 0.5],
       children: [.leaf(path: "/src.md", preview: true), .leaf(path: "/b.md", preview: false)])
   }
 
@@ -94,7 +99,8 @@ final class PaneLayoutCodecTests: XCTestCase {
       tree.layout(), paths: [p1: "/notes/a.md"], previews: [])
     XCTAssertEqual(
       saved,
-      .split(orientation: .vertical, weights: [0.5, 0.5],
+      .split(
+        orientation: .vertical, weights: [0.5, 0.5],
         children: [.leaf(path: "/notes/a.md", preview: false), .leaf(path: "", preview: false)]),
       "encode substitutes each leaf id's path; an unmapped leaf becomes an empty path")
   }
@@ -121,7 +127,8 @@ final class PaneLayoutCodecTests: XCTestCase {
       previews: [p1])
     XCTAssertEqual(
       saved,
-      .split(orientation: .vertical, weights: [0.5, 0.5],
+      .split(
+        orientation: .vertical, weights: [0.5, 0.5],
         children: [
           .leaf(path: "/notes/source.md", preview: true),
           .leaf(path: "/notes/b.md", preview: false),

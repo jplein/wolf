@@ -39,4 +39,5 @@ fi
 echo "Using swift-format: ${SF}"
 "${SF}" --version
 echo "Linting $# Swift file(s)..."
-exec "${SF}" lint --strict "$@"
+# Bazel passes runfiles symlinks, which swift-format skips without --follow-symlinks.
+exec "${SF}" lint --strict --follow-symlinks "$@"

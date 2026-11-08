@@ -64,10 +64,11 @@ final class PaneTreeWeightsTests: XCTestCase {
       XCTFail(
         "expected exactly one divider at path \(path) boundary \(boundary); got \(matches)",
         file: file, line: line)
-      return dividers.first ?? PaneTree.Divider(
-        orientation: .vertical, path: [], boundary: 0,
-        lineRect: Rect(x: 0, y: 0, w: 0, h: 0),
-        pairStart: 0, pairSpan: 0, before: 0, after: 0, fraction: 0)
+      return dividers.first
+        ?? PaneTree.Divider(
+          orientation: .vertical, path: [], boundary: 0,
+          lineRect: Rect(x: 0, y: 0, w: 0, h: 0),
+          pairStart: 0, pairSpan: 0, before: 0, after: 0, fraction: 0)
     }
     return d
   }

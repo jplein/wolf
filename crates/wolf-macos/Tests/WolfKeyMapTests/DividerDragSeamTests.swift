@@ -73,7 +73,8 @@ final class DividerDragSeamTests: XCTestCase {
     let rightPixels = (1.0 - f) * pairSpan
     XCTAssertTrue(
       approx(rightPixels, Double(minCols) * cellWidth),
-      "clamped-right keeps exactly minCols columns of pixels for the RIGHT pane; got \(rightPixels)")
+      "clamped-right keeps exactly minCols columns of pixels for the RIGHT pane; got \(rightPixels)"
+    )
   }
 
   func testClampRightKeepsMinRowsHorizontal() {
@@ -85,7 +86,8 @@ final class DividerDragSeamTests: XCTestCase {
     let bottomPixels = (1.0 - f) * pairSpan
     XCTAssertTrue(
       approx(bottomPixels, Double(minRows) * cellHeight),
-      "clamped-bottom keeps exactly minRows rows of pixels for the BOTTOM pane; got \(bottomPixels)")
+      "clamped-bottom keeps exactly minRows rows of pixels for the BOTTOM pane; got \(bottomPixels)"
+    )
   }
 
   // MARK: - overhead shrinks the usable span

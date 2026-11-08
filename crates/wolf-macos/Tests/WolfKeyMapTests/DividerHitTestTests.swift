@@ -77,7 +77,8 @@ final class DividerHitTestTests: XCTestCase {
 
     // Symmetric: closer to the horizontal line picks it.
     let hit2 = DividerHitTest.hit([v, hz], point: (x: 53, y: 21), tolerance: tolerance)
-    XCTAssertEqual(hit2, hz, "1pt from the horizontal vs 3pt from the vertical -> the horizontal wins")
+    XCTAssertEqual(
+      hit2, hz, "1pt from the horizontal vs 3pt from the vertical -> the horizontal wins")
   }
 
   // MARK: - empty list

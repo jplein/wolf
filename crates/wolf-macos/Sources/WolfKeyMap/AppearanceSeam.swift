@@ -10,10 +10,10 @@ import Foundation
 /// `FfiConfig.appearance()` (a `u8`) and maps it via `AppearanceMode(rawValue:)`;
 /// an out-of-range discriminant decodes to `nil`.
 public enum AppearanceMode: UInt8 {
-    /// Follow the macOS system appearance, switching live when the OS changes.
-    case auto = 0
-    /// Force dark mode regardless of the OS setting.
-    case dark = 1
-    /// Force light mode regardless of the OS setting.
-    case light = 2
+  /// Follow the macOS system appearance, switching live when the OS changes.
+  case auto = 0
+  /// Force dark mode regardless of the OS setting.
+  case dark = 1
+  /// Force light mode regardless of the OS setting.
+  case light = 2
 }
