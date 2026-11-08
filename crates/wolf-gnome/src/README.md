@@ -115,7 +115,7 @@ Purpose: the pure cell-metrics arithmetic the configured `line-height` drives �
 
 - The rule lives here and not in [`render.rs`](#renderrs) because `for_font` needs a live Cairo context, so a rule left inside it could only be executed by the golden-render target.
 - The function is unit-agnostic and rounds in whatever unit its caller uses: points on macOS, device pixels here, since device pixels are what Cairo paints in.
-- Two divergences from Swift, both strictly more defensive and both confined to inputs macOS also mishandles: the percentage must be finite (Swift's guard accepts `+inf`), and a non-finite or non-positive result is floored (Swift can return `0` or `NaN`).
+- Two guards, shared with `CellMetricsMath.swift` and confined to degenerate inputs: the percentage must be finite (a bare `> 0` accepts `+inf`), and a non-finite or non-positive result is floored (unfloored, it can be `0` or `NaN`).
 
 #### `clipboard_ui.rs`
 
@@ -257,7 +257,7 @@ Purpose: the terminal drawer's pure rulebook — how the pane area divides betwe
 **Decisions**
 
 - One module where macOS has two files, `DrawerLayout.swift` and `DrawerFocusSeam.swift`: neither has a consumer outside the drawer, and `focus_target` needs both halves in one expression.
-- Three divergences from that pair, each pinned by a table rather than only stated: a `min_drawer_height` floor Swift has none of, a non-finite guard that collapses the whole result, and a `focus_target` taking the raw pane-area size where `applyFocus` passes the editor height, since `PaneTree::pane_rects` feeds only ordering here.
+- One divergence from that pair, pinned by a table rather than only stated: `focus_target` takes the raw pane-area size where `applyFocus` passes the editor height, since `PaneTree::pane_rects` feeds only ordering here. The `min_drawer_height` floor and the non-finite guard that collapses the whole result are shared with `DrawerLayout.swift`.
 
 #### `editor_inset.rs`
 
@@ -275,7 +275,7 @@ Purpose: a pane's chrome as arithmetic — the rectangle its grid paints into, t
 **Decisions**
 
 - The division stays in [`geometry.rs`](#geometryrs), un-inset for `resize_global`'s grid 1.
-- Only `w` and `h` clamp at zero; a non-finite input collapses the whole rectangle, unlike Swift, since a NaN origin would poison every pointer event.
+- Only `w` and `h` clamp at zero; a non-finite input collapses the whole rectangle, since a NaN origin would poison every pointer event.
 - The cap is a `min` on the width here and on the column count in `grid_size_for_pane`, which divides the uncapped rectangle: flooring a capped width to whole pixels costs the last column at a non-integral cell width.
 - The centring offset is floored to whole device pixels, unlike macOS: a half-pixel `cr.translate` resamples every glyph and this crate has no HiDPI story.
 - No `StatusbarTextSpan` counterpart and no `text_left_inset`: `grid_rect`'s `x` carries the centring offset and every consumer reads that one field, so strip and grid share an origin by construction. macOS needs the seam only because inset and cap live in two structs.
@@ -851,7 +851,7 @@ Purpose: the per-pane statusbar's rulebook, decidable from values. The vertical 
 
 - Unit-agnostic ([`cell_metrics_math.rs`](#cell_metrics_mathrs)); [`pane_view.rs`](#pane_viewrs) calls it in device pixels, from `CellMetrics::size_px`.
 - Both colours blend toward the background rather than toward black, which is what compositing over the already-filled band gives, so the strip needs no alpha-capable draw path.
-- A degenerate input collapses the whole layout to zeros and a non-finite font size falls to the floor, where Swift guards neither: an infinite strip height leaves an editor painting one cell.
+- A degenerate input collapses the whole layout to zeros, as `StatusbarLayout.swift` does: an infinite strip height leaves an editor painting one cell. Only `secondary_font_size`'s fall to the floor on a non-finite font size is this crate's alone.
 
 **Gotchas**
 

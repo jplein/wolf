@@ -26,8 +26,13 @@ Purpose: Pure line-height and baseline math for the grid cell, split out of `Cel
 
 **Public API**
 
-- `cellHeight(fontSize:lineHeightPercent:ascent:descent:leading:)` — for a positive `lineHeightPercent` the height is driven purely by the font size and deliberately ignores the passed-in font metrics. Ascent/descent/leading matter only for the degenerate `lineHeightPercent <= 0` fallback to the font's natural line height.
+- `cellHeight(fontSize:lineHeightPercent:ascent:descent:leading:)` — for a positive, finite `lineHeightPercent` the height is driven purely by the font size and deliberately ignores the passed-in font metrics. Ascent/descent/leading matter only for the fallback to the font's natural line height, taken when the percentage is non-positive or non-finite. A non-positive or non-finite result is floored at `minCellHeight`.
+- `minCellHeight` — the one-point floor under every `cellHeight` result.
 - `baseline(cellHeight:ascent:descent:)` — offset measured from the top of the cell, splitting the slack evenly above and below the glyph box so glyphs stay vertically centered in a taller cell.
+
+**Decisions**
+
+- The percentage guard checks `isFinite` as well as `> 0`, because `+inf` passes a bare `> 0` and yields an infinite cell. The floor is one point, not zero, because a zero or NaN cell height traps the `Int` conversion in `PaneContainerView`'s global grid size. Neither guard changes an in-range result, and both are shared with wolf-gnome's [`cell_metrics_math.rs`](../../../wolf-gnome/src/README.md#cell_metrics_mathrs).
 
 **Gotchas**
 
@@ -133,22 +138,25 @@ Purpose: Picks the editor pane that `<C-w>k` from the terminal drawer should foc
 
 #### `DrawerLayout.swift`
 
-Purpose: Pure geometry for the terminal drawer — a full-width strip along the bottom of the pane area, with the editor tree tiling over everything above it. Foundation only (`Double`, reusing `Rect` from `PaneTree.swift`), so it is testable with no view.
+Purpose: Pure geometry for the terminal drawer, a full-width strip along the bottom of the pane area below the editor tree.
 
 **Public API**
 
-- `init(paneAreaHeight:hasDrawer:weight:)` — splits the pane-area height into `editorHeight` and `drawerHeight`. With no drawer the editor takes the whole area and `drawerHeight` is 0.
+- `init(paneAreaHeight:hasDrawer:weight:minDrawerHeight:)` — splits the pane-area height into `editorHeight` and `drawerHeight`. With no drawer the editor takes the whole area.
 - `drawerRect(width:) -> Rect?` — the full-width bottom strip, or `nil` when no drawer is present.
 
 **Decisions**
 
-- The drawer is held outside the `PaneTree` so the tree keeps 1:1 parity with wolf-gnome. That is why this split lives in its own seam rather than as another tree node.
+- The drawer is held outside the `PaneTree` so the tree keeps 1:1 parity with wolf-gnome, which is why this split is a seam of its own.
 - `defaultWeight` is the front-end's copy of the height `_G.wolf_toggle_terminal` gives its `botright` split; the two must agree or the drawer pane and its nvim window disagree about size.
-- Both heights clamp at zero, so a pane area shorter than the rounded drawer strip never yields a negative editor height.
+- The floor exists because a third of a short window is a focusable strip showing no text.
+- A non-finite input or a non-positive `paneAreaHeight` collapses both heights to zero, before the `hasDrawer` branch, as in [`drawer.rs`](../../../wolf-gnome/src/README.md#drawerrs). The checks are explicit: Swift's `min` and `max` keep or drop a NaN by argument order.
+- The cap applies after the floor, with no `ClosedRange`, so a floor above the pane area gives the drawer all of it, not a negative editor or a trap.
 
 **Gotchas**
 
 - The drawer is not a tree leaf, so it has no `PaneTree` divider — its top edge is not drag-resizable — and `PaneTree.neighbor` cannot resolve focus moves out of it. `DrawerFocusSeam` bridges that.
+- `PaneContainerView` passes as the floor one editor pane's minimum height.
 
 #### `EditorInset.swift`
 
@@ -162,6 +170,7 @@ Purpose: Pure arithmetic for the per-pane text-grid inset. Given one pane's size
 **Decisions**
 
 - Only `gridRect.w` and `.h` clamp to a non-negative floor, so a pane narrower or shorter than the insets never yields negative grid dimensions. The `x` / `y` origins are fixed offsets and deliberately are not clamped.
+- A non-finite input collapses `gridRect` and `textLeftInset` to zero, as [`editor_inset.rs`](../../../wolf-gnome/src/README.md#editor_insetrs) does, because a non-finite value reaching `PaneGeometry` traps an `Int` conversion: a size at init, an origin in `cellAt`.
 - `Double` and the `Rect` from `PaneTree.swift` rather than `CGFloat` / `CGRect`, keeping the seam out of CoreGraphics and headlessly testable.
 
 **Gotchas**
@@ -554,12 +563,13 @@ Purpose: Accumulates the sub-cell `deltaY` values that trackpads and high-resolu
 
 **Public API**
 
-- `consume(deltaY:cellHeight:) -> Int` — the signed count of cell boundaries newly crossed. A non-positive `cellHeight` returns 0.
+- `consume(deltaY:cellHeight:) -> Int` — the signed count of cell boundaries newly crossed. A non-finite `deltaY`, or a non-finite or non-positive `cellHeight`, returns 0 and leaves the carry untouched. One call yields at most 256 steps either way, and a call the cap cuts short drops its carry.
 - `reset()` — clears the carry; the caller invokes it when the scroll target pane changes.
 
 **Decisions**
 
 - The remainder is signed and carries between calls, so a run of sub-cell nudges crosses a boundary exactly once and a direction reversal is symmetric.
+- A carry that overflows to a non-finite value is zeroed, because a NaN carry would kill scrolling for the rest of the session. The step count is a truncating division, not a loop, because a loop would hang on a pathological delta. Both match wolf-gnome's [`mouse.rs`](../../../wolf-gnome/src/README.md#mousers).
 - The seam is direction-agnostic: positive means the `+deltaY` direction and nothing more. Direction belongs to the single flip point in the AppKit caller, where `scrollingDeltaY` already reflects the system natural-scroll setting. A second flip here would double-invert it.
 
 #### `SearchBudgetSeam.swift`
@@ -665,7 +675,11 @@ Purpose: The vertical layout math for a pane's statusbar strip — its total hei
 
 **Public API**
 
-- `init(primaryFontSize:secondaryFontSize:verticalPadding:lineGap:)` — `verticalPadding` applies both above the primary line and below the secondary; `lineGap` sits between the two. Each line's height is its font size scaled by a fixed private `lineFactor` and rounded up.
+- `init(primaryFontSize:secondaryFontSize:verticalPadding:lineGap:)` — `verticalPadding` applies both above the primary line and below the secondary; `lineGap` sits between the two. Each line's height is its font size scaled by a fixed private `lineFactor` and rounded up. A non-finite or negative input collapses all five fields to zero; zero stays usable.
+
+**Decisions**
+
+- The collapse matches wolf-gnome's [`statusbar_layout.rs`](../../../wolf-gnome/src/README.md#statusbar_layoutrs): a zero-height strip leaves a usable pane, where an infinite one leaves no grid.
 
 **Gotchas**
 

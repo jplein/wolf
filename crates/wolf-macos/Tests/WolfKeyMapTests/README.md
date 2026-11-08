@@ -26,7 +26,7 @@ Note that the nearby `swift_format_srcs` glob feeds lint and format only, not te
 
 **Covers**
 
-- `CellMetricsMath.cellHeight` and `.baseline`: that a positive line-height percentage drives cell height from the font size alone (the ascent/descent/leading arguments are ignored on that path), that a non-positive percentage falls back to the font's natural line height, and that the baseline splits the leftover space evenly above and below the glyph box.
+- `CellMetricsMath.cellHeight` and `.baseline`: that a positive line-height percentage drives cell height from the font size alone (the ascent/descent/leading arguments are ignored on that path), that a non-positive or non-finite percentage falls back to the font's natural line height, that a degenerate result floors at exactly one point, and that the baseline splits the leftover space evenly above and below the glyph box.
 
 **Gotchas**
 
@@ -100,14 +100,16 @@ Note that the nearby `swift_format_srcs` glob feeds lint and format only, not te
 **Covers**
 
 - `DrawerLayout`: the pinned `defaultWeight`, the no-drawer case (editor fills the pane area, `drawerRect` is `nil`), the drawer as a full-width strip sitting directly below the editor, and the invariant that `editorHeight + drawerHeight` tile the pane area exactly.
+- The `minDrawerHeight` floor, the cap at the pane area when the floor or the weight exceeds it, and the collapse to `(0, 0)` on a non-finite weight, floor or pane-area height or a non-positive pane area.
 
 **Gotchas**
 
 - Two pane-area heights are fixed deliberately — one divisible by three, one not — because the only thing distinguishing them is the rounding in `drawerHeight`. A new case should state which side it exercises.
+- The floor and the non-finite collapse are separate tests because they fail differently: a dropped finite check shows NaN or infinite heights, while a NaN floor is silently dropped by `max`.
 
 #### `EditorInsetTests.swift`
 
-**Covers** — `EditorInset`, the per-pane text-grid inset arithmetic. Pins the padding constant, one exact `gridRect` for a representative pane, the additive invariants tying `gridRect` back to the pane and statusbar dimensions, and the clamp edges.
+**Covers** — `EditorInset`, the per-pane text-grid inset arithmetic. Pins the padding constant, one exact `gridRect` for a representative pane, the additive invariants tying `gridRect` back to the pane and statusbar dimensions, the clamp edges, and the collapse of `gridRect` and `textLeftInset` to zero on a non-finite input.
 
 **Gotchas** — only `gridRect.w` and `gridRect.h` clamp to a non-negative floor; the `x` / `y` origins are fixed offsets and stay unclamped, and one case asserts that explicitly for a pane shorter than its own statusbar, so a "clamp everything" simplification fails here. New cases should reuse the file's `eps` / `approx` / `assertRectEqual` helpers.
 
@@ -307,7 +309,12 @@ The `PreviewSeam` reload gate plus the click-to-focus surface. `winsNeedingReloa
 
 **Covers**
 
-`ScrollAccumulator.consume(deltaY:cellHeight:)`: sub-cell deltas accumulate rather than round away, the signed remainder carries between calls, a direction change crosses back through the remainder to yield a negative step, and a non-positive `cellHeight` short-circuits to zero instead of dividing by zero or looping forever.
+`ScrollAccumulator.consume(deltaY:cellHeight:)`: sub-cell deltas accumulate rather than round away, the signed remainder carries between calls, a direction change crosses back through the remainder to yield a negative step, and a non-finite `deltaY` or a non-finite or non-positive `cellHeight` returns zero with the carry untouched. It also pins the overflowed carry zeroed, the ±256 saturation in O(1), and the carry dropped by a clamped call.
+
+**Gotchas**
+
+- `testNaNDeltaDoesNotPoisonLaterScrolling` reproduces the bug a user sees, but removing the delta guard or the remainder guard alone leaves it green, because each covers for the other. The single-guard falsifiers are the cases beside it.
+- A hang in `testEnormousDeltaSaturatesAt256` means the step count is computed by a loop: one `1e300` delta would iterate about 1e300 times.
 
 #### `SearchBudgetSeamTests.swift`
 
@@ -345,7 +352,7 @@ The `PreviewSeam` reload gate plus the click-to-focus surface. `winsNeedingReloa
 
 #### `StatusbarLayoutTests.swift`
 
-**Covers**: `StatusbarLayout`'s vertical arithmetic. One test pins exact values for representative inputs at the 1.25 line factor; the rest assert structural invariants (positive heights, `primaryLineTop == verticalPadding`, the additive `secondaryLineTop`, a height tall enough for both lines) plus the zero-padding and 1pt-font edges.
+**Covers**: `StatusbarLayout`'s vertical arithmetic. One test pins exact values for representative inputs at the 1.25 line factor; the rest assert structural invariants (positive heights, `primaryLineTop == verticalPadding`, the additive `secondaryLineTop`, a height tall enough for both lines) plus the zero-padding and 1pt-font edges, and the collapse of all five fields to zero on a non-finite or negative input.
 
 **Gotchas**: `assertInvariants` is deliberately factor-independent, so a change to the line factor should fail only the exact-value assertions and leave the structural ones meaningful. Derive new expectations from `expectedLineHeight` rather than fresh literals.
 
