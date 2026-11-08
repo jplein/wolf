@@ -19,7 +19,7 @@ Both front-ends surface it as two toolbar buttons and as Back and Forward items 
 ## Building Wolf
 
 - See [Building Wolf](build.md).
-- See [macOS follow-ups](notes/macos-followups.md) for work done on Linux that still needs re-verification on a macOS host.
+- See [macOS follow-ups](notes/macos-followups.md) for cross-platform findings a task could not close.
 
 ## Architecture
 

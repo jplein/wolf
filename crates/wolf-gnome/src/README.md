@@ -838,7 +838,7 @@ Purpose: the pure application-state seam — what to restore at launch, and what
 
 #### `statusbar_layout.rs`
 
-Purpose: the per-pane statusbar's rulebook, decidable from values. The vertical half ports `WolfKeyMap/StatusbarLayout.swift` constant for constant; the divergences are in [`macos-followups.md`](../../../notes/macos-followups.md).
+Purpose: the per-pane statusbar's rulebook, decidable from values. The vertical half ports `WolfKeyMap/StatusbarLayout.swift` constant for constant.
 
 **Public API**
 
@@ -849,6 +849,7 @@ Purpose: the per-pane statusbar's rulebook, decidable from values. The vertical 
 **Decisions**
 
 - Unit-agnostic ([`cell_metrics_math.rs`](#cell_metrics_mathrs)); [`pane_view.rs`](#pane_viewrs) calls it in device pixels, from `CellMetrics::size_px`.
+- The band is the editor's default background and the text has no label-tier fallback, where macOS takes the window background its titlebar theme sets and falls back to AppKit's label colours. This front-end takes no colour from the GTK theme ([wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md#window-structure)), and the divergence stands by the user's decision.
 - Both colours blend toward the background rather than toward black, which is what compositing over the already-filled band gives, so the strip needs no alpha-capable draw path.
 - A degenerate input collapses the whole layout to zeros, as `StatusbarLayout.swift` does: an infinite strip height leaves an editor painting one cell. Only `secondary_font_size`'s fall to the floor on a non-finite font size is this crate's alone.
 

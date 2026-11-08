@@ -204,12 +204,12 @@ Purpose: The "no folder open" overlay — a full-bleed subview of `PaneContainer
 
 #### `FileTreeView.swift`
 
-Purpose: The file-tree sidebar: an `NSOutlineView` driven by a long-lived `FfiFileSearch`, rooted at a synthetic cwd node. A click opens a file or toggles a directory.
+Purpose: The file-tree sidebar: an `NSOutlineView` driven by a long-lived `FfiFileSearch`, rooted at a synthetic cwd node.
 
 **Public API**
 
-- `start()` / `close()` — open and drop the tree-search session, cancelling its background traversal.
-- `refresh()` is immediate; `scheduleRefresh()`, which `TreeWakeBridge` uses, coalesces traversal batches to about one reload per frame.
+- `start()` / `close()` — open and drop the tree-search session.
+- `refresh()` is immediate; `scheduleRefresh()` coalesces traversal batches to about one reload per frame.
 - `onRenderWake()` — re-roots on a cwd change, then accents and reveals what the active pane shows.
 - `setSidebarVisible(_:)` — relays the split item's `isCollapsed` KVO; refresh defers while collapsed.
 
@@ -219,7 +219,8 @@ Purpose: The file-tree sidebar: an `NSOutlineView` driven by a long-lived `FfiFi
 - The outline draws a clear background and adds no `NSVisualEffectView`: the enclosing `.sidebar` split item already supplies the vibrancy.
 - `reveal(abs:)` expands ancestors top-down before locating the row, because a row exists only once its parent is expanded; a not-yet-streamed file leaves the reveal pending.
 - `reroot(to:)` cancels the pending coalesced refresh first — a stale fire would run against the discarded tree.
-- `TreeCellView` marks what the active pane shows — a preview's source, else the current buffer — with a [`SidebarRowStyle`](../WolfKeyMap/README.md#sidebarrowstyleswift) label color, not the row's selection tint, which AppKit drops at the first app switch.
+- `onRenderWake()`, `reroot(to:)`'s only caller, decides the re-root by comparing `handle.cwd()` with the root it holds, so Neovim's cwd stays the one authority. wolf-gnome re-roots from one settle point ([`shell.rs`](../../../wolf-gnome/src/README.md#shellrs)); the divergence is accepted.
+- `TreeCellView` marks what the active pane shows with a [`SidebarRowStyle`](../WolfKeyMap/README.md#sidebarrowstyleswift) label color, never the selection tint.
 - Activating a file routes on the active pane's mode, as the pickers do: a preview pane gets `preview_file`, falling back to `open` on `0`, which drops the pane to edit mode.
 
 #### `FontRegistration.swift`

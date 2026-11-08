@@ -149,7 +149,7 @@ It prints the store path it resolved before it starts, since that path is the su
 
 ## macOS (Bazel)
 
-None of this can be built or verified from the Linux devShell. Work done on Linux-only branches that still needs re-checking here is logged in [macos-followups.md](notes/macos-followups.md).
+None of this can be built or verified from the Linux devShell. The cross-platform findings a task could not close are in [macos-followups.md](notes/macos-followups.md).
 
 ### Prerequisites
 

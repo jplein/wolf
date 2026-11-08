@@ -28,7 +28,7 @@ Sources of truth for the assessments below: [`architecture.md`](../specs/archite
 
 Linux reaches the pinned Neovim two ways. Inside the devShell it comes from `WOLF_NVIM_BIN`; the Nix package's wrapper sets the same variable as a default. Both routes read one Neovim from the flake's single `nixpkgs` input, so `nix flake update` moves the tested and the shipped Neovim together.
 
-A packaged smoke launches the store binary under `cage` with every devShell export scrubbed but the three the compositor itself needs, and reads the typed word back by OCR, which is what says the artifact finds its own Neovim and its own `init.lua`. A second smoke reads `v:progpath` from a packaged launch and a checkout launch in one compositor and requires them equal, so the package ships the Neovim the Linux evidence was taken against. The two platforms' Neovim differs at the patch level, which [`macos-followups.md`](macos-followups.md) records.
+A packaged smoke launches the store binary under `cage` with every devShell export scrubbed but the three the compositor itself needs, and reads the typed word back by OCR, which is what says the artifact finds its own Neovim and its own `init.lua`. A second smoke reads `v:progpath` from a packaged launch and a checkout launch in one compositor and requires them equal, so the package ships the Neovim the Linux evidence was taken against. Bazel stages the macOS Neovim from its own pin, which [tracks the flake lock](../bazel/nvim/README.md#bumping-the-pinned-neovim-version) by hand.
 
 ## Editor surface
 
