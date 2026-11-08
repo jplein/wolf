@@ -25,7 +25,8 @@ It offers:
 - `require_nvim_bin()` and `init_lua_path()` resolve the pinned nvim and the captive `init.lua` to absolute paths, preferring an existing absolute `WOLF_NVIM_BIN` over the Bazel-staged `WOLF_TEST_NVIM_DIR`.
 - `config(cols, rows)` / `config_in(cwd, cols, rows)` build a `CoreConfig`. `config_in` is the single funnel that points `WOLF_STATE_DIR` at the process-global hermetic temp dir `hermetic_state_dir()` returns, set-if-absent, so a test managing its own state dir wins.
 - `wake_channel() -> (WakeFn, FlushWaiter)`, with `wait_for_flush`, `wait_for_initial_flush`, `wait_for_wake` and `drain`.
-- `start_core_sized`, `start_core_with_temp_md[_sized]`, `temp_md`, `temp_md_path`, `fresh_cwd`, and the input constructors.
+- `start_core_sized`, `temp_md`, `temp_md_path`, `fresh_cwd`, and the input constructors.
+- `start_core_with_temp_md[_sized]` opens a temp `.md` and returns once it is current and drawn: `current_file` is the file, a frame has landed after the startup barrier, and row 0 shows text when the fixture's first line has text. It panics naming the file after `FLUSH_TIMEOUT`.
 - `short_tempdir()` returns an owned, canonical temp dir under the first of the OS temp dir and `/tmp` that is writable and at most `SHORT_TEMP_ROOT_MAX` bytes canonical. A swap-bearing fixture placed in it must keep its name within `SHORT_FIXTURE_NAME_MAX`; `SWAP_NAME_MAX` mirrors init.lua's constant.
 - `send_ex` types `:{cmd}<CR>` as keystrokes; `probe_values` evaluates expressions inside the live nvim by having it `writefile` them to a probe path and polling that file — the eval channel for a core that exposes no eval RPC. `resolve_test_runfile` resolves extra Bazel-staged runfiles beyond nvim + init.lua.
 
@@ -34,6 +35,8 @@ It offers:
 - Use `wait_for_initial_flush` for the attach wait. That flush lands during `WolfCore::start`, so `wait_for_flush` baselines after it and blocks forever.
 - The relative `WOLF_NVIM_BIN` Bazel injects is deliberately not trusted: nvim is spawned with `current_dir(cfg.cwd)`, a temp dir, so the path must be absolutized first. Likewise `init.lua`, since under Bazel `CARGO_MANIFEST_DIR` is an ephemeral sandbox path and nvim launched with `-u <missing>` hangs forever on a `Press ENTER` prompt.
 - Out-of-band notifications (`wolf_current_file`, liveness) fire a wake without bumping `seq`. The flush waits consume and ignore them; `wait_for_wake` is the way to observe that seam.
+- The open helper takes its `seq` baseline after a blocking `current_tabpage()`, because nvim flushes what it has drawn before it answers. Neither `seq` nor `current_file` alone proves the open drew: nvim's markdown ftplugin starts treesitter, whose asynchronous parse can redraw later and push `seq` past the baseline before the `:edit`, and `current_file` is notified during `:edit`, before its frame. The startup buffer's row 0 is blank, so row 0 showing text tells the open's frame apart. A blank first line gets no text check, because an empty file draws exactly like the startup buffer.
+- The open helper fences off no later frame. That late redraw can satisfy any later single `wait_for_flush`, so a test that waits for its own input polls for the state it expects.
 - `fresh_cwd()` leaks its directory by design: `config` returns only a `CoreConfig`, so there is no guard to keep a `TempDir` alive under a running core.
 - A fixture that needs a swap file must sit under `short_tempdir()`. Under a deep `TMPDIR` its path passes `SWAP_NAME_MAX`, where Wolf gives it no swap ([runtime/nvim](../../../runtime/nvim/README.md#decisions)). It panics, listing each refused root, rather than skipping.
 - `SHORT_TEMP_ROOT_MAX` is deliberately derived from `SWAP_NAME_MAX`, not a small fixed cap. A sandboxed Bazel worker can deny `/tmp` while its deep `TEST_TMPDIR` still leaves room, so a small cap would refuse both roots and always panic.
@@ -136,10 +139,6 @@ Real Neovim (`//crates/wolf-core:copy_paste`: staged nvim runfiles, `WOLF_NVIM_B
 **Covers**
 
 - `Snapshot::is_visual_mode` across `v`, `V`, `<C-v>`, and `<Esc>`; `WolfCore::copy_visual_selection` returning the yanked selection and `None` outside visual mode; and `WolfCore::paste` landing text on the active grid.
-
-**Gotchas**
-
-- A stray startup-tail redraw can satisfy a single `wait_for_flush` before the `mode_change` lands, so mode assertions go through `wait_until_visual_mode`, which polls across several flushes.
 
 #### `current_file.rs`
 

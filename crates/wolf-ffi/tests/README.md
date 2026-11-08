@@ -236,6 +236,7 @@ Real-nvim coverage of the per-pane navigation-history bridge — the six `WolfCo
 **Gotchas**
 
 - The startup buffer is a named `Untitled.md`, so every pane's history carries an extra row; assert relative order and prefixes, never an absolute depth.
+- Each `:e` waits until the pane's newest row is that file, not on `current_file()`. `current_file()` is notified during `:edit`, but the history fold runs on the `wolf_buffers` emit, which `vim.schedule` holds back while typed input is pending, so a following `:e` can run first and the skipped file never gets a row.
 - Each move is followed by a settle pause so the self-caused emit is absorbed before the next assertion.
 
 #### `lighthouse_load.rs`
