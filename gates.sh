@@ -150,7 +150,7 @@ if [ "$platform" = linux ]; then
 else
   # See notes/gates.sh.md#macos-gates
   bazel_flags=(--keep_going --color=no --curses=no --show_progress_rate_limit=30)
-  test_flags=(--test_output=errors --test_summary=terse)
+  test_flags=(--test_output=errors --test_summary=short)
   run prettier prettier --check "**/*.md"
   run doc-lint bazel run --color=no --curses=no //tools/doc-lint:doc_lint -- --root "$PWD"
   run wolf-core-deps core_deps_bazel

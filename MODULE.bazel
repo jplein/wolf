@@ -5,6 +5,8 @@ module(
     version = "0.1.0",
 )
 
+# A bump must rerun the :rustfmt.fix fixture query and find no doc-lint fixture.
+# See tools/lint/README.md#how-each-target-works
 bazel_dep(name = "rules_rust", version = "0.71.2")
 bazel_dep(name = "rules_cc", version = "0.2.17")
 bazel_dep(name = "platforms", version = "1.1.0")

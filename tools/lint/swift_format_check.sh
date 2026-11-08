@@ -1,27 +1,10 @@
 #!/usr/bin/env bash
 # `swift-format lint --strict` over the Swift files passed as "$@", with the host Xcode binary,
-# which is why the test is `no-sandbox`.
+# which is why the test is `external` and `no-sandbox`.
 set -euo pipefail
 
-# Bazel tests run with a scrubbed environment, so try xcrun, then xcode-select, then the
-# canonical Xcode path.
-find_swift_format() {
-  local sf
-  sf="$(/usr/bin/xcrun --find swift-format 2>/dev/null || true)"
-  if [[ -n "${sf}" && -x "${sf}" ]]; then echo "${sf}"; return 0; fi
-
-  local dev
-  dev="$(/usr/bin/xcode-select -p 2>/dev/null || true)"
-  if [[ -n "${dev}" ]]; then
-    sf="${dev}/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift-format"
-    if [[ -x "${sf}" ]]; then echo "${sf}"; return 0; fi
-  fi
-
-  sf="/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift-format"
-  if [[ -x "${sf}" ]]; then echo "${sf}"; return 0; fi
-
-  return 1
-}
+# Resolved, since under `bazel run` $0 is a bazel-bin symlink with no library beside it.
+source "$(dirname "$(realpath "${BASH_SOURCE[0]}")")/swift_format_lib.sh"
 
 SF="$(find_swift_format || true)"
 if [[ -z "${SF}" || ! -x "${SF}" ]]; then

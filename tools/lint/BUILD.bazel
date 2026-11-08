@@ -79,34 +79,56 @@ alias(
 
 # ---- swift-format ----
 
-# `no-sandbox`: swift-format is the host Xcode binary, not a hermetic input.
+# swift-format is the host Xcode binary, not a Bazel input: `external` keeps a cached pass from
+# hiding a swift-format change, and `no-sandbox` is there for the same reason.
 sh_test(
     name = "swift_format",
     srcs = ["swift_format_check.sh"],
     args = ["$(rootpaths //crates/wolf-macos:swift_format_srcs)"],
-    data = ["//crates/wolf-macos:swift_format_srcs"],
-    tags = ["no-sandbox"],
+    data = [
+        "swift_format_lib.sh",
+        "//crates/wolf-macos:swift_format_srcs",
+    ],
+    tags = [
+        "external",
+        "no-sandbox",
+    ],
 )
 
-# `no-sandbox` and macOS only, like :swift_format: it runs the host Xcode swift-format.
+# swift-format is the host Xcode binary, not a Bazel input: `external` keeps a cached pass from
+# hiding a swift-format change, and `no-sandbox` is there for the same reason.
 sh_test(
     name = "swift_format_check_test",
     srcs = ["swift_format_check_test.sh"],
-    data = ["swift_format_check.sh"] + glob(["testdata/swift_format/*.swift"]),
-    tags = ["no-sandbox"],
+    data = [
+        "swift_format_check.sh",
+        "swift_format_lib.sh",
+    ] + glob(["testdata/swift_format/*.swift"]),
+    tags = [
+        "external",
+        "no-sandbox",
+    ],
 )
 
-# `no-sandbox` and macOS only, like :swift_format: it runs the host Xcode swift-format.
+# swift-format is the host Xcode binary, not a Bazel input: `external` keeps a cached pass from
+# hiding a swift-format change, and `no-sandbox` is there for the same reason.
 sh_test(
     name = "swift_format_fix_test",
     srcs = ["swift_format_fix_test.sh"],
-    data = ["swift_format_fix.sh"] + glob(["testdata/swift_format/*.swift"]),
-    tags = ["no-sandbox"],
+    data = [
+        "swift_format_fix.sh",
+        "swift_format_lib.sh",
+    ] + glob(["testdata/swift_format/*.swift"]),
+    tags = [
+        "external",
+        "no-sandbox",
+    ],
 )
 
 sh_binary(
     name = "swift_format.fix",
     srcs = ["swift_format_fix.sh"],
+    data = ["swift_format_lib.sh"],
     tags = ["manual"],
 )
 

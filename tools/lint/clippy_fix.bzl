@@ -9,11 +9,12 @@ launcher that puts the toolchain `bin/` on PATH and runs the fixer(s) in
 
 Two rules:
   - `clippy_fix`: runs `cargo clippy --fix --allow-dirty --allow-staged --workspace`.
-  - `fix_all`:    runs `cargo fmt`, then `cargo clippy --fix`, then the host
-                  Xcode swift-format over the wolf-macos Swift sources.
+  - `fix_all`:    runs rustfmt, then `cargo clippy --fix`, then
+                  `:swift_format.fix` with no arguments, which formats the
+                  wolf-macos sources and tests with the host Xcode swift-format.
 
-CAVEAT (documented in build.md / README): `cargo fmt` / `cargo clippy --fix`
-shell out to cargo, which resolves crates from crates.io (network) and links via
+CAVEAT (documented in build.md / README): `cargo clippy --fix` shells out to
+cargo, which resolves crates from crates.io (network) and links via
 the host Xcode cc toolchain. These are NON-HERMETIC developer conveniences, not
 hermetic Bazel build actions.
 """
@@ -51,6 +52,7 @@ clippy_fix = rule(
 def _fix_all_impl(ctx):
     rust_toolchain = ctx.toolchains["@rules_rust//rust:toolchain_type"]
     rustfmt_toolchain = ctx.toolchains["@rules_rust//rust/rustfmt:toolchain_type"]
+    swift_format_fix = ctx.attr._swift_format_fix[DefaultInfo].files_to_run.executable
 
     launcher = ctx.actions.declare_file(ctx.label.name + "_launcher.sh")
     ctx.actions.expand_template(
@@ -59,6 +61,7 @@ def _fix_all_impl(ctx):
         substitutions = {
             "@@CARGO_SHORT_PATH@@": rust_toolchain.cargo.short_path,
             "@@RUSTFMT_SHORT_PATH@@": rustfmt_toolchain.rustfmt.short_path,
+            "@@SWIFT_FORMAT_FIX_SHORT_PATH@@": swift_format_fix.short_path,
         },
         is_executable = True,
     )
@@ -69,7 +72,7 @@ def _fix_all_impl(ctx):
         transitive_files = depset(
             transitive = [rust_toolchain.all_files, rustfmt_toolchain.all_files],
         ),
-    )
+    ).merge(ctx.attr._swift_format_fix[DefaultInfo].default_runfiles)
     return [DefaultInfo(executable = launcher, runfiles = runfiles)]
 
 fix_all = rule(
@@ -79,6 +82,11 @@ fix_all = rule(
         "_launcher_tpl": attr.label(
             default = Label("//tools/lint:fix_all.sh"),
             allow_single_file = True,
+        ),
+        "_swift_format_fix": attr.label(
+            default = Label("//tools/lint:swift_format.fix"),
+            executable = True,
+            cfg = "target",
         ),
     },
     toolchains = [

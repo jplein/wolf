@@ -57,20 +57,13 @@ fi
 echo "==> [2/3] clippy --fix (cargo clippy --fix)"
 "${CARGO}" clippy --fix --allow-dirty --allow-staged -p wolf-core -p wolf-ffi
 
-echo "==> [3/3] swift-format (host Xcode swift-format)"
-SF="$(xcrun --find swift-format 2>/dev/null || true)"
-if [[ -z "${SF}" || ! -x "${SF}" ]]; then
-  echo "ERROR: swift-format not found via 'xcrun --find swift-format'." >&2
+echo "==> [3/3] swift-format (:swift_format.fix over the wolf-macos sources and tests)"
+SWIFT_FORMAT_FIX="${RUNFILES_DIR}/_main/@@SWIFT_FORMAT_FIX_SHORT_PATH@@"
+if [[ ! -x "${SWIFT_FORMAT_FIX}" ]]; then
+  echo "ERROR: could not locate the staged swift_format.fix in the runfiles tree." >&2
+  echo "       RUNFILES_DIR=${RUNFILES_DIR}" >&2
   exit 1
 fi
-mapfile -t SWIFT_FILES < <(find \
-  "${BUILD_WORKSPACE_DIRECTORY}/crates/wolf-macos/Sources" \
-  "${BUILD_WORKSPACE_DIRECTORY}/crates/wolf-macos/Tests" \
-  -type f -name '*.swift' 2>/dev/null | sort)
-if [[ "${#SWIFT_FILES[@]}" -gt 0 ]]; then
-  "${SF}" format -i --parallel "${SWIFT_FILES[@]}"
-else
-  echo "No Swift files found to format."
-fi
+"${SWIFT_FORMAT_FIX}"
 
 echo "All fixers completed."
