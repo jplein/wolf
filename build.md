@@ -210,7 +210,7 @@ APP="${ZIP%.zip}_archive-root/Wolf.app"
 
 `:WolfRelease` produces the same bundle as `:Wolf` with the whole graph — Swift, Rust, and the treesitter parsers — built at `-c opt`, without `-c opt` on the command line. Build this for real use, for installing, and for any performance measurement. The rule, and the reason it is a transition rather than an alias, are documented in [`crates/wolf-macos/release.bzl`](crates/wolf-macos/release.bzl) and [`wolf-macos-decisions.md`](notes/wolf-macos-decisions.md).
 
-**Resolve the path from `cquery` every time; `bazel-bin` is wrong for `WolfRelease`.** `bazel-bin` symlinks the bin directory of the top-level target's configuration, and the transition applies below that edge, so the optimized bundle is never under it. The trap is a build of `:WolfRelease`, a later build of `:Wolf`, and then the habitual `bazel-bin` path, which resolves again and silently hands over the `-Onone` bundle. The `cquery` output resolves under an `-opt-` output directory whose name embeds a platform hash that is not a stable contract, so use the command rather than a literal path.
+**Resolve the path from `cquery` every time; `bazel-bin` holds neither bundle.** `bazel-bin` symlinks the bin directory of the top-level configuration, and `macos_application` builds below a transition of its own, so `:Wolf` resolves under a `-fastbuild-macos-` output directory and `:WolfRelease` under an `-opt-macos-` one. Both names embed a platform hash that is not a stable contract, so use the command rather than a literal path.
 
 For both targets `macos_application` declares `Wolf.zip` as its output; the unzipped bundle under `<name>_archive-root/` is an undeclared sibling that the bundling and signing action leaves in the same directory. Nothing tracks it, so if it is ever missing, `ditto -x -k "$ZIP" "${ZIP%.zip}_archive-root"` recreates it.
 
@@ -431,7 +431,7 @@ Every gate runs even after one fails, and stdout carries a `<gate> <exit-status>
 
 The exit status is 0 when every gate passed and 1 when any failed. It is 2 for a setup error before any gate ran: an argument, an unknown platform, no `nix` outside the dev shell, a `nix develop` that failed or whose shell does not export the `WOLF_DEV_SHELL` marker, or, on macOS, an Xcode whose `xcrun` cannot find `swift-format`. An interrupt ends it with 130, and a `TERM` with 143.
 
-Expect roughly 10-25 minutes cold on Linux, most of it compilation and the integration tests that each spawn a real Neovim.
+Expect roughly 10-25 minutes cold on Linux, most of it compilation and the integration tests that each spawn a real Neovim. On macOS, `bazel test //...` after a `bazel clean` takes about 100 seconds on a regina worker, about 7% of it the `//tools/lint` checks.
 
 ### Under regina
 

@@ -437,7 +437,7 @@ Purpose: Collapses a burst of `request()` calls into a single trailing `perform(
 
 #### `PickerSeam.swift`
 
-Purpose: The pure decision functions behind the macOS file picker — trigger detection and list-selection arithmetic. A port of wolf-gnome's `crates/wolf-gnome/src/picker.rs` seams (`is_picker_trigger`, `next_selection`, `restored_index`), whose semantics it keeps identical.
+Purpose: The pure decision functions behind the macOS file picker — trigger detection and list-selection arithmetic. The selection functions port `next_selection` and `restored_index` from wolf-gnome's `crates/wolf-gnome/src/picker.rs` with identical semantics. The trigger has no Rust counterpart, because wolf-gnome resolves the chord through its action table.
 
 **Public API**
 
@@ -447,7 +447,7 @@ Purpose: The pure decision functions behind the macOS file picker — trigger de
 
 **Decisions**
 
-- The chord is Command+O: the idiomatic macOS open chord and, unlike a Ctrl chord, not a Neovim keybinding, so intercepting it costs Neovim no key. wolf-gnome reaches the same action on Ctrl+Shift+O, because no `Ctrl+<letter>` is free in every Neovim mode — see [`crates/wolf-gnome/README.md`](../../../wolf-gnome/README.md).
+- The chord is Command+O: the idiomatic macOS open chord and, unlike a Ctrl chord, not a Neovim keybinding, so intercepting it costs Neovim no key. wolf-gnome reaches the same action on Ctrl+Shift+O, because no `Ctrl+<letter>` is free in every Neovim mode — see [the accelerator namespace](../../../../notes/wolf-gnome-decisions.md#the-accelerator-namespace).
 - The predicate reads `charactersIgnoringModifiers` because it is layout independent and, unlike when Ctrl is held, Command does not mangle it into a control scalar — it still carries a plain `"o"`.
 
 **Gotchas**
