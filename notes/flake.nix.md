@@ -36,7 +36,7 @@ Neither `wolfOrlando` nor `wolfLighthouse` is in `linuxShell.packages`. The devS
 
 ## Treesitter grammar set
 
-`wolfTreesitterLanguages` is defined by the `srcs` of `bazel/treesitter-parsers/BUILD.bazel`, and the point of vendoring on Linux is cross-platform parity, so a divergence is the bug. It keeps that file's alphabetical order so a side-by-side diff shows a drift. Adding a language means editing this list, that `srcs`, the grammar's pin in that package's `extensions.bzl`, and `MODULE.bazel` in one change.
+`wolfTreesitterLanguages` is defined by the `srcs` of `bazel/treesitter-parsers/BUILD.bazel`, and the point of vendoring on Linux is cross-platform parity, so a divergence is the bug. `crates/wolf-gnome/tests/treesitter_languages.rs` enforces both the membership and that file's alphabetical order, reading this list as one quoted name per line. Adding a language means editing this list, that `srcs`, the grammar's pin in that package's `extensions.bzl`, and `MODULE.bazel` in one change.
 
 `c` stays although the pinned Neovim ships its own `c` parser, because taking the parser and the highlights query from the same nvim-treesitter revision is more consistent, and macOS does the same. `markdown` and `markdown_inline` are absent: Neovim ships both, macOS excludes both, and a second copy would shadow Neovim's. `python` is absent because adding it on one side would make macOS the laggard; it goes to both sides in one change.
 

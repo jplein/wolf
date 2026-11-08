@@ -112,9 +112,9 @@ The tree test and the bundle-layout test fail only on the low-risk core (go, rus
 1. Find the grammar's repo URL and revision in `lua/nvim-treesitter/parsers.lua` at the pinned nvim-treesitter commit. An entry with `generate = true` commits no `src/parser.c`, so pin the nearest later commit that does, as swift does.
 2. Download the tarball and compute `sha256`: `curl -L https://github.com/<repo>/archive/<rev>.tar.gz -o g.tar.gz && shasum -a 256 g.tar.gz`. Confirm whether it carries a `src/scanner.c`, and that the scanner is C rather than C++, at that revision.
 3. Add a `(repo_name, gh_repo, rev, sha256, scanner?)` tuple to `root_grammars` in `extensions.bzl`, or a custom overlay for the odd cases above.
-4. Add its `ts_<lang>` to `use_repo(treesitter_parsers, ...)` in `MODULE.bazel` and its `@ts_<lang>//:<lang>_parser` to the `copy_to_directory` srcs in `BUILD.bazel`.
+4. Add its `ts_<lang>` to `use_repo(treesitter_parsers, ...)` in `MODULE.bazel` and its `@ts_<lang>//:<lang>_parser` to the `copy_to_directory` srcs in `BUILD.bazel`, on a line of its own in alphabetical order of language.
 5. `bazel build @ts_<lang>//:<lang>.so` to verify it compiles; then regenerate `MODULE.bazel.lock` and re-run `bazel test //bazel/treesitter-parsers:parsers_tree_test //bazel/treesitter-parsers:queries_compile_test`.
-6. Add the language to `wolfTreesitterLanguages` in `flake.nix`, which is the Linux half of the same set. The curated set is defined here and the flake mirrors it, so a one-sided edit is a cross-platform divergence rather than a preference — and nothing on either side can see one, since no host runs both builds.
+6. Add the language to `wolfTreesitterLanguages` in `flake.nix`, which is the Linux half of the same set. The curated set is defined here and the flake mirrors it, so a one-sided edit is a cross-platform divergence rather than a preference. No host runs both builds, so neither build can see one; [`crates/wolf-gnome/tests/treesitter_languages.rs`](../../crates/wolf-gnome/tests/README.md#treesitter_languagesrs) fails under `cargo test` on Linux when the two lists differ, or when either is out of alphabetical order.
 
 ## Bumping a pinned grammar
 

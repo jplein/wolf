@@ -150,6 +150,20 @@ Rules that are decidable from their arguments are pinned in each seam's own `#[c
 - Requires `WOLF_NVIM_BIN`; unlike wolf-ffi's guard, the parent panics through `common::require_nvim_bin` rather than skipping.
 - Both payloads show as ignored and return at once without `WOLF_TEST_PLANTED_HOME`, so `--include-ignored` never runs one against the real `HOME`.
 
+#### `treesitter_languages.rs`
+
+**Covers**
+
+- That `flake.nix`'s `wolfTreesitterLanguages` and the `srcs` of `parsers_tree` in `bazel/treesitter-parsers/BUILD.bazel` name the same languages. Neither build reads the other's list, so a one-sided edit otherwise builds green on both platforms while one of them highlights a language the other shows as plain text.
+- That each list is strictly ascending, which also rules out a duplicate, and both scanners' non-vacuity: each list is found, non-empty, and holds no line its scanner cannot read.
+
+**Gotchas**
+
+- Pure and not `#[ignore]`d, so it runs on every `cargo test`. It lives here for [`release_profile.rs`](#release_profilers)'s reason.
+- Each side is a line scanner with a one-entry-per-line contract: a `"<lang>"` line in the flake, a `"@ts_<repo>//:<lang>_parser",` line in Bazel, whose language is the target name, so `@ts_typescript//:tsx_parser` reads as `tsx`. Reformat the file; do not teach the scanner a second shape.
+- It names no language and no count, so a language added to both sides in one change keeps it green untouched.
+- A membership failure lists the languages found on only one side, in both directions, in one assertion.
+
 #### `vendored_pins.rs`
 
 **Covers**

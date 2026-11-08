@@ -48,5 +48,6 @@ use_repo(lighthouse, "lighthouse")
 
 1. Pick the new commit SHA and update `_COMMIT` in `extensions.bzl`. The archive root name (`lighthouse.nvim-<commit>`) auto-follows.
 2. Recompute the checksum: `curl -L https://github.com/jplein/lighthouse.nvim/archive/<commit>.tar.gz -o lighthouse.tar.gz && shasum -a 256 lighthouse.tar.gz`. Update `_SHA256`.
-3. Regenerate the lockfile (a plain build does this with `--lockfile_mode=update`) and commit `MODULE.bazel.lock`.
-4. Re-run `bazel test //bazel/lighthouse:lighthouse_tree_test`.
+3. Set the same `commit` and `sha256` on the `lighthouse` entry of `flake.nix`'s `wolfVendoredPins`, in the same change, or [`crates/wolf-gnome/tests/vendored_pins.rs`](../../crates/wolf-gnome/tests/README.md#vendored_pinsrs) fails on Linux.
+4. Regenerate the lockfile (a plain build does this with `--lockfile_mode=update`) and commit `MODULE.bazel.lock`.
+5. Re-run `bazel test //bazel/lighthouse:lighthouse_tree_test`.
