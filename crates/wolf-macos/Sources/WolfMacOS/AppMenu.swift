@@ -156,11 +156,12 @@ enum AppMenu {
     let item = NSMenuItem()
     let menu = NSMenu(title: "Wolf")
 
-    menu.addItem(
-      NSMenuItem(
-        title: "About Wolf",
-        action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
-        keyEquivalent: ""))
+    let about = NSMenuItem(
+      title: "About Wolf",
+      action: #selector(AppDelegate.showAboutPanel(_:)),
+      keyEquivalent: "")
+    about.target = target
+    menu.addItem(about)
     menu.addItem(.separator())
     menu.addItem(
       commandItem(

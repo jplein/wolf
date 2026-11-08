@@ -497,6 +497,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     controllers.first { $0.owns(effectiveKeyWindow) }?.showSidebar(panel: .search)
   }
 
+  /// The About panel's preamble, Linux's About dialog sentence verbatim.
+  private static let aboutPreamble =
+    "A Markdown editor that embeds Neovim as its editing engine."
+
+  /// Wolf > About Wolf: the standard About panel with the bundled fonts' licence
+  /// notices (`wolf_ffi_font_license_notices()`) as its credits, behind the preamble.
+  /// `.foregroundColor` must stay `labelColor`: an attributed credits string with no
+  /// colour renders black on the dark panel in dark mode.
+  @objc func showAboutPanel(_ sender: NSMenuItem) {
+    let credits = NSAttributedString(
+      string: Self.aboutPreamble + "\n\n" + wolf_ffi_font_license_notices().toString(),
+      attributes: [
+        .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize),
+        .foregroundColor: NSColor.labelColor,
+      ])
+    NSApp.orderFrontStandardAboutPanel(options: [.credits: credits])
+  }
+
   /// The OTHER open tabs (all live controllers EXCEPT `excluding`), as
   /// `(tabId, currentCwd)` pairs — the command palette's "Switch to Window"
   /// candidate source. The current tab is excluded (it cannot switch to itself).

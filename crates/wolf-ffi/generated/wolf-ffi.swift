@@ -8,6 +8,9 @@ public func wolf_ffi_ancestors_to_reveal<GenericIntoRustString: IntoRustString>(
 public func wolf_ffi_load_config() -> FfiConfig {
     FfiConfig(ptr: __swift_bridge__$wolf_ffi_load_config())
 }
+public func wolf_ffi_font_license_notices() -> RustString {
+    RustString(ptr: __swift_bridge__$wolf_ffi_font_license_notices())
+}
 public func wolf_ffi_load_state() -> FfiState {
     FfiState(ptr: __swift_bridge__$wolf_ffi_load_state())
 }

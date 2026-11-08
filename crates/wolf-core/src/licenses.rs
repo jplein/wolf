@@ -300,7 +300,7 @@ mod tests {
     /// licence body.
     ///
     /// `FONT_LICENSE_NOTICES` is what actually reaches a user — through every
-    /// preview document's head and through `wolf-gnome`'s About dialog — so a
+    /// preview document's head and through both front-ends' About surfaces — so a
     /// registry that is complete while the block built from it is not discharges
     /// nothing.
     #[test]
