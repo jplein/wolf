@@ -354,22 +354,22 @@ Purpose: The per-pane pixel/cell coordinate seam — a grid rect positioned insi
 
 #### `PaneLayoutCodec.swift`
 
-Purpose: The pure codec between the live `PaneTree` layout and the shapes that persist or cross the FFI and Lua boundaries.
+Purpose: The pure codec between the live `PaneTree` layout and the shapes that persist or cross the FFI boundary.
 
 **Public API**
 
 - `SavedPaneNode` — a `Hashable` mirror of the split tree keyed by per-leaf buffer path. `leafCount` is how many nvim window handles the rebuild path zips onto the leaves. `isEmptyLeaf` is the suppress-from-persistence predicate for a lone pane: true only for an unnamed, non-preview leaf, so a lone pane bound to a file or a preview still persists.
 - `encode(_:paths:previews:)` — maps leaf ids to buffer paths; a leaf missing from `paths` becomes `""`.
 - `postOrderTokens(_:)` and its inverse `decodeTokens(_:)` — the post-order stream the FFI push-builder replays; `decodeTokens` returns `nil` on a malformed stream.
-- `specJSON(_:)` — the JSON string that `runtime/nvim/init.lua`'s `wolf_rebuild_layout` decodes.
 
 **Decisions**
 
+- There is no Swift renderer for the layout-rebuild document. The restore hands the loaded `FfiPaneNode` back to `WolfCoreHandle.rebuild_layout`, so Rust's `rebuild_layout_spec` stays its only renderer and the format cannot drift between front-ends ([the rebuild-layout wire format](../../../../notes/wolf-core-decisions.md#the-rebuild-layout-wire-format)).
 - A `preview` leaf stores the source Markdown file's absolute path, not the scratch buffer's, because restore reopens it through `wolf_preview_file` rather than `:edit`.
 
 **Gotchas**
 
-- The JSON key names and the `"v"` / `"h"` orientation tags are a contract with the Lua helper, and the token stream is a contract with `wolf-ffi`. Neither can be changed on one side alone.
+- The token stream is a contract with `wolf-ffi`'s push-builder and cannot be changed on one side alone.
 
 #### `PaneModeSeam.swift`
 

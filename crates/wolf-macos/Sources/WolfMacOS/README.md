@@ -321,9 +321,9 @@ Purpose: The editor area: one flat, flipped `NSView` that paints every split pan
 **Public API**
 
 - `markRefocusRebind()` arms a grid rebind after a tabpage switch; `rebind(tabpageHandle:)` does so after a crash-restart and drops the drawer, leaving editor panes bound.
-- `layoutSnapshot()` / `requestLayoutRebuild(_:)` — the snapshot is `nil` for a lone empty pane.
-- `activeWin` — the per-view active window behind `activePaneSelection` and `activePreviewSourcePath`; the tabpage-shared `WolfCoreHandle.active_win()` would let a background tab enable Copy.
-- `activePreviewSourcePath` — the Markdown source the active pane previews; `nil` in edit mode.
+- `layoutSnapshot()` / `requestLayoutRebuild(_:node:)` — the snapshot is `nil` for a lone empty pane; Rust renders `node`, the loaded bridge node `saved` was projected from.
+- `activeWin` — per-view, behind `activePaneSelection` and `activePreviewSourcePath`, because the tabpage-shared `WolfCoreHandle.active_win()` would let a background tab enable Copy.
+- `activePreviewSourcePath` — `nil` in edit mode.
 - `otherPaneTarget(prefer:)` — `OtherPaneSeam.target` as the window for `preview_in_other` / `edit_in_other`: `0` splits, `nil` is a no-op.
 
 **Decisions**

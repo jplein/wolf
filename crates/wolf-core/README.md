@@ -40,7 +40,7 @@ Everything below is re-exported from the crate root as `wolf_core::…`. The own
 | Persisted state    | `StateStore`, `WolfState`, `WindowState`, `TabState`, `PaneNode`              |
 | Logging            | `init_tracing`                                                                |
 
-One public entry point is reached through its module rather than the root: `state::rebuild_layout_spec` renders a saved `PaneNode` into the JSON `WolfCore::rebuild_layout` takes, so a front-end restoring a pane layout never hand-rolls that document. See [`src/README.md`](src/README.md#staters) for the module entry and [wolf-core-decisions.md](../../notes/wolf-core-decisions.md) for the contract it shares with the Swift renderer.
+One public entry point is reached through its module rather than the root: `state::rebuild_layout_spec` renders a saved `PaneNode` into the JSON `WolfCore::rebuild_layout` takes, so a front-end restoring a pane layout never hand-rolls that document. See [`src/README.md`](src/README.md#staters) for the module entry and [wolf-core-decisions.md](../../notes/wolf-core-decisions.md) for the contract it shares with `init.lua`.
 
 ## Building and testing
 

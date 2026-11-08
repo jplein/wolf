@@ -175,9 +175,9 @@ Note that the nearby `swift_format_srcs` glob feeds lint and format only, not te
 
 #### `PaneLayoutCodecTests.swift`
 
-**Covers** — the `PaneLayoutCodec` / `SavedPaneNode` bridge: `encode` (leaf ids to buffer paths, an unmapped leaf to the empty path, preview marking), the `postOrderTokens` / `decodeTokens` round-trip over leaf, two-child, n-ary and perpendicular-nested trees, `isEmptyLeaf`, `PaneTree.rebuilt(from:firstLeafId:)`, and the `specJSON` object shape.
+**Covers** — the `PaneLayoutCodec` / `SavedPaneNode` bridge: `encode` (leaf ids to buffer paths, an unmapped leaf to the empty path, preview marking), the `postOrderTokens` / `decodeTokens` round-trip over leaf, two-child, n-ary and perpendicular-nested trees, `isEmptyLeaf`, and `PaneTree.rebuilt(from:firstLeafId:)`.
 
-**Gotchas** — the `specJSON` cases parse with `JSONSerialization` and assert only the object graph, so key ordering and float spelling stay unpinned on purpose; the key names themselves must match `runtime/nvim/init.lua`'s `wolf_rebuild_layout`. A preview leaf's `path` is its source Markdown file, and `isEmptyLeaf` is false for an empty-path preview leaf because preview-ness has to survive persistence.
+**Gotchas** — a preview leaf's `path` is its source Markdown file, and `isEmptyLeaf` is false for an empty-path preview leaf because preview-ness has to survive persistence.
 
 #### `PaneModeSeamTests.swift`
 

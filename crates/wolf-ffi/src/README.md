@@ -81,7 +81,7 @@ The four `extern "C"` wake registrations (`wolf_ffi_set_wake`, `wolf_ffi_set_fil
 - `active_win(&self) -> i64` — 0 until nvim reports one.
 - `focus_win(&self, win: i64)` — Click-to-focus and resolved focus-direction moves.
 - `close_pane(&self)` — `:close`, which closes the split rather than the buffer.
-- `rebuild_layout(&self, spec_json: String) -> Vec<i64>` — Realizes a saved split tree in the current tabpage's lone window, returning the window handles in leaf order. nvim supplies only count, topology, and per-window buffer; sizes come from the front-end's weights.
+- `rebuild_layout(&self, layout: &FfiPaneNode) -> Vec<i64>` — Realizes a saved split tree, the node `FfiTabState::layout` returned, in the current tabpage's lone window, returning the window handles in leaf order. Rust renders it with `wolf_core::state::rebuild_layout_spec`, so no front-end renders the spec. nvim supplies only count, topology, and per-window buffer; sizes come from the front-end's weights.
 - `pane_status_for_grid(&self, grid: u64) -> FfiPaneStatus` — The statusbar strings for the window drawing into `grid`.
 - `toggle_full_width(&self)` — Flips `b:wolf_full_width` on the effective buffer, which for a preview scratch is the source buffer.
 - `is_full_width_active(&self) -> bool` — Drives the View > Use full width for content checkmark.

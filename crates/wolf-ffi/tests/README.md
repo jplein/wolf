@@ -335,6 +335,12 @@ Also `preview_buffer(win, bufnr)` — markdown binds and returns the source bufn
 
 **Gotchas** — the startup buffer is already a markdown `Untitled.md`, so `wait_for_markdown_active(true)` returns instantly across a markdown-to-markdown `:e`; use `wait_for_current_file` as the switch barrier before a synchronous `open_preview`. The temp cwd is nvim's working dir and search root, so keep it alive until after `shutdown()`.
 
+#### `rebuild_layout.rs`
+
+**Covers** — `WolfCoreHandle::rebuild_layout(&FfiPaneNode)` on a node loaded back from `state.json`: a vertical two-leaf split pushed through the push-builder rebuilds into two distinct window handles in leaf order, each showing its leaf's file. Real nvim; target `//crates/wolf-ffi:rebuild_layout` (staged nvim runfiles, `tags = ["no-sandbox"]`).
+
+**Gotchas** — one `#[test]` only, for the same `SHARED_STORE` / `WOLF_STATE_DIR` reason as `state.rs`. Paths are matched on their basenames, because nvim reports the temp dir under `/private/var` where the test created it under `/var`.
+
 #### `recent_dirs.rs`
 
 **Covers** — `WolfCoreHandle::recent_dirs()`, the global folder MRU read back newest-first after driving `:cd`; a deleted folder omitted while the other stays, then listed again in its old place once recreated, which proves the store kept its row. Real nvim; target `//crates/wolf-ffi:recent_dirs` (staged nvim runfiles or `WOLF_NVIM_BIN`, `tags = ["no-sandbox"]`).

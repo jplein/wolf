@@ -134,7 +134,7 @@ Runs `tabnew`, roots the new tabpage at `cwd` via `:tcd` when `cwd` is non-empty
 
 Realizes a saved pane-split tree in the current tabpage's single starting window and returns the resulting window handles in depth-first leaf order — the same order as the front-end's `PaneTree.leaves()`, so each handle zips to its rebuilt leaf. A malformed spec returns an empty list.
 
-`spec_json` is a JSON string: a leaf is `{ leaf = true, path, preview }`, a split is `{ orientation = "h"|"v", weights, children }`. Two renderers produce it independently — `wolf_core::state::rebuild_layout_spec` and the Swift `PaneLayoutCodec.specJSON` — so a change here has to land on both; see [wolf-core-decisions.md](../../notes/wolf-core-decisions.md).
+`spec_json` is a JSON string: a leaf is `{ leaf = true, path, preview }`, a split is `{ orientation = "h"|"v", weights, children }`. `wolf_core::state::rebuild_layout_spec` is its only producer, on both platforms, so a change here has to land there too; see [wolf-core-decisions.md](../../notes/wolf-core-decisions.md).
 
 A preview leaf with a path becomes a preview of that source via `wolf_preview_file`, converting the window rather than replacing it so the handle survives; a plain leaf with a path is `:edit`ed; an empty leaf keeps its inherited buffer. Regions are created child-0-first, left-to-right and top-to-bottom. nvim supplies only the window count, topology, and per-window buffer; the front-end drives pane sizes from its own weights.
 
