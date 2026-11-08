@@ -161,7 +161,8 @@ final class PaneContainerView: NSView {
   /// hit-tests / sizes via `paneRects()`) but deliberately NOT in `tree` — it is a
   /// full-width, root-bottom pane rendered OUTSIDE the pure `PaneTree` (preserving
   /// its 1:1 parity with wolf-gnome). Bound on a `DrawerOpen` intent; cleared when
-  /// its window closes.
+  /// its window closes, on a layout rebuild, and on a restart rebind
+  /// (`rebind(tabpageHandle:)`).
   private var drawerPaneId: PaneId?
   /// The most-recently-active EDITOR pane (a live tree leaf, never the drawer).
   /// The `<C-w>k` (drawer -> up) bridge targets this when it is still a leaf; it is
@@ -1079,9 +1080,24 @@ final class PaneContainerView: NSView {
   /// Rebinds this container to a FRESH tabpage after a crash-restart, so the
   /// refocus gate (`active_tabpage() == controllerTabpageHandle`) matches the new
   /// nvim's tabpage. The next render wake repaints the rebound panes.
+  ///
+  /// Also drops the terminal drawer (`drawerPaneId`, its `panes` entry, and the active
+  /// pane when it was the drawer). A killed nvim sends no `win_close`, so the dead
+  /// drawer's grid stays in the snapshot and `detectCloses` never drops it; a kept id
+  /// would make `applyDrawerOpen` refuse every later drawer. Editor panes keep their
+  /// bindings. Only the restart path reaches this function: a tab switch uses
+  /// `markRefocusRebind()`, where the drawer survives.
   func rebind(tabpageHandle: Int64) {
     controllerTabpageHandle = tabpageHandle
     pendingRefocusRebind = true
+    if let drawer = drawerPaneId {
+      panes.removeValue(forKey: drawer)
+      drawerPaneId = nil
+      if activePane == drawer {
+        setActivePane(tree.leaves().first)
+      }
+      needsDisplay = true
+    }
   }
 
   /// Refreshes the three bottom overlays from the live snapshot and lays them
