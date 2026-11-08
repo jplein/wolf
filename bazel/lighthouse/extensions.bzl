@@ -29,12 +29,15 @@ top-level directory.
 This is a BUILD-only extension: the vendored colorscheme is bundled into the macOS
 `.app` and activated by the captive `init.lua`; it never enters the `wolf-core`
 dependency graph. To bump the pin: change `_COMMIT`, recompute `_SHA256`
-(`shasum -a 256 <tarball>`; the archive root name auto-follows the commit), then
-regenerate `MODULE.bazel.lock`.
+(`shasum -a 256 <tarball>`; the archive root name auto-follows the commit),
+regenerate `MODULE.bazel.lock`, then set the SAME commit and sha256 on the
+`lighthouse` entry of `flake.nix`'s `wolfVendoredPins`.
 """
 
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
+# Bump with flake.nix's `wolfVendoredPins`; each side checks only its own sha256.
+# crates/wolf-gnome/tests/vendored_pins.rs compares the two, reading each pin from its own line.
 _COMMIT = "514dec2c79701b74082defc19090bd1dae57765b"
 
 _SHA256 = "a452624fee9ce7b82e11877b013f578aa1c3befda6b6564536c3264a40b8e0d2"

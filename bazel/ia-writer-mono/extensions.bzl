@@ -38,15 +38,16 @@ This is a BUILD-only extension: the vendored fonts are bundled into the macOS
 the `wolf-core` dependency graph. To bump the pin: change `_COMMIT`, recompute
 `_SHA256` (`curl -L <url> -o f.tgz && shasum -a 256 f.tgz`; confirm the TTF paths
 with `tar -tzf f.tgz`; the archive root name auto-follows the commit), regenerate
-`MODULE.bazel.lock`, then update `flake.nix`'s `iaWriterMono` to the SAME commit
-and sha256.
+`MODULE.bazel.lock`, then set the SAME commit and sha256 on the `ia-writer-mono`
+entry of `flake.nix`'s `wolfVendoredPins`, which `iaWriterMono` reads.
 
 BUMP BOTH TOGETHER: this file and `flake.nix`. The Linux devShell vendors this
 same tarball into its pinned fontconfig from its OWN copy of the commit and the
-sha256, so the asset has one pin expressed in two files. A bump made here alone
-leaves Linux rendering the OLD faces and nothing catches it — each side fetches
-successfully against its own sha256, and neither reads the other's. `flake.nix`
-carries the reciprocal note.
+sha256, so the asset has one pin expressed in two files. Each side fetches
+successfully against its own sha256 and neither reads the other's, so a bump made
+here alone builds green on both platforms; `crates/wolf-gnome/tests/vendored_pins.rs`
+is what fails it, under `cargo test` on Linux. `flake.nix` carries the reciprocal
+note.
 """
 
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")

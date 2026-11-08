@@ -22,12 +22,15 @@ future revision adds a new top-level directory.
 This is a BUILD-only extension: the vendored plugin is bundled into the macOS
 `.app` and loaded by the captive `init.lua`; it never enters the `wolf-core`
 dependency graph. To bump the pin: change `_COMMIT`, recompute `_SHA256`
-(`shasum -a 256 <tarball>`; the archive root name auto-follows the commit), then
-regenerate `MODULE.bazel.lock`.
+(`shasum -a 256 <tarball>`; the archive root name auto-follows the commit),
+regenerate `MODULE.bazel.lock`, then set the SAME commit and sha256 on the
+`orlando` entry of `flake.nix`'s `wolfVendoredPins`.
 """
 
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
+# Bump with flake.nix's `wolfVendoredPins`; each side checks only its own sha256.
+# crates/wolf-gnome/tests/vendored_pins.rs compares the two, reading each pin from its own line.
 _COMMIT = "c960cf3e1c24fbdd2e6fb30ab9c8022cdc7b2bf9"
 
 _SHA256 = "794911361108eb509ab00ec64ed03c229418be32f45ad7a385b6d2d6b057f3c5"

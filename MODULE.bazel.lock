@@ -223,7 +223,7 @@
   "moduleExtensions": {
     "//bazel/ia-writer-mono:extensions.bzl%ia_writer_mono": {
       "general": {
-        "bzlTransitiveDigest": "pT7BEuwexr72vJL/DUeqdEwx+NLtF0cZCGzgroV2rfI=",
+        "bzlTransitiveDigest": "DKp/lp2LbM1pRd7w8fdd1mElbBQwCfMtrUQwzjWsXHA=",
         "usagesDigest": "oZHNcFnSCrZO1qzEtiyW14hpI9XuqjkeOcx+S0YGJyQ=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -279,7 +279,7 @@
     },
     "//bazel/lighthouse:extensions.bzl%lighthouse": {
       "general": {
-        "bzlTransitiveDigest": "3JOmubH5IpQU08vq5pdcB0JpCQ5qRSueNc4IHkoGYMY=",
+        "bzlTransitiveDigest": "Ws02bOoGYEA7whAwK9ZaR9f+uI0Et8dqjmlEdOTWpIk=",
         "usagesDigest": "DW0TZeZs1t2PTCzwDdqy7gO/+i4hYZxj4KwWdggSSmo=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -401,7 +401,7 @@
     },
     "//bazel/orlando:extensions.bzl%orlando": {
       "general": {
-        "bzlTransitiveDigest": "MogV2vy7LboNJPSBWZZFzQH6uS6rZnudEWDlypgRo28=",
+        "bzlTransitiveDigest": "4LoyJBMgge58C7M/q0sDG8fmLbMOxiLfllj3VeWSHz0=",
         "usagesDigest": "OfvicQHhfFyGeotTdmYMJNmEbjEta5wb9VFiajXcD88=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
