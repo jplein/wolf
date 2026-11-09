@@ -30,20 +30,20 @@ Crate root. Declares every module and flattens the public surface into root re-e
 
 #### `pump.rs`
 
-The input pump, the single consumer of the channel `send_input` feeds. It keeps taking input while a batch's call is unanswered, so the key answering a prompt the call raised reaches Neovim ([why](../../../notes/wolf-core-decisions.md#threading-and-locking)).
+The input pump: the one consumer of `send_input`'s channel. While a batch's call is unanswered it keeps taking input, so a key can answer a prompt the call raised ([why](../../../notes/wolf-core-decisions.md#threading-and-locking)).
 
 **Decisions**
 
 - A batch ends at its first event that is not a fast input (`is_fast_input`), so everything behind a call that may wait stays queued in order.
-- A held fast input is released only when Neovim answers a `nvim_get_mode` probe before the call, one event per answer. Neovim runs typeahead before queued requests, so a key sent behind a merely busy call lands first: measured, behind a queued `:edit` it edits the buffer being left.
-- The call is polled once before the first probe, so the probe follows it to Neovim. Its answer is returned only once no release is in flight, so a later key cannot overtake a released one.
-- A held paste stops releases, so typing keeps its order. State events are never released.
-- Probes and releases are spawned tasks, and the call itself is pinned and never dropped: dropping a pending `nvim-rs` call kills the io loop, while dropping a `JoinHandle` only detaches its task.
-- A prompt showing when the budget elapses means the user is late, not Neovim, so the pump clears the stall rather than marking it.
+- Held fast input is released only on a `nvim_get_mode` probe answered before the call, one per answer: Neovim runs typeahead before queued requests, so a key behind a busy call would land first.
+- The first poll writes the call before any probe, unless nvim-rs's writer lock is held. nvim-rs signals no write, so then a released key can land first. The answer waits out any release in flight, so no later key overtakes it.
+- A paste is never released: `nvim_paste` stays unanswered behind the call and would hold back every key. Nor does it stop a release, or the key ending the wait would wait on it. So a key lands ahead of an earlier paste ([spec](../../../specs/command-lifecycle.md#7-the-editor-affecting-path-back-into-nvim)), even in a wait that ends by itself, such as a pending mapping's.
+- The call is pinned, never dropped ([why](#apirs)); probes and releases are spawned tasks, which dropping only detaches.
+- A prompt showing at the budget's end means the user is late, not Neovim: the stall is cleared, not marked.
 
 **Gotchas**
 
-- Every RPC an `InputEvent` issues in `input.rs` must go through `Rpc::request`, never `Neovim::call`, or the driver never sees that call and input stops behind it.
+- Every RPC an `InputEvent` issues in `input.rs` must go through `Rpc::request`, never `Neovim::call`, or input stops behind it.
 
 #### `nvim.rs`
 

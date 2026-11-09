@@ -420,13 +420,13 @@ Real Neovim plus the vendored nvim-treesitter and parsers trees (`//crates/wolf-
 
 Real Neovim (`//crates/wolf-core:prompt_input`: staged nvim runfiles, `WOLF_NVIM_BIN`, `no-sandbox`).
 
-**Covers** — the key answering a Neovim prompt reaches Neovim while the [pump](../src/README.md#pumprs)'s call that raised it is unanswered: `:write`'s y/n after `Save`, W12's `L` and `O` after a refocus, the key completing a `<C-w>` chord that holds a call, and an ordering guard for typing behind a busy call.
+**Covers** — the key answering a Neovim prompt reaches Neovim while the [pump](../src/README.md#pumprs)'s call that raised it is unanswered: `:write`'s y/n after `Save`, W12's `L` and `O` after a refocus, `L` passing a paste held ahead of it, the key completing a `<C-w>` chord that holds a call, and an ordering guard for typing behind a busy call.
 
 **Gotchas**
 
-- Without the fix each answering key waits behind its call, so the poll for its effect runs out `FLUSH_TIMEOUT` and panics. Each answer is sent only once its prompt shows.
+- If an answering key waits behind its call, the poll for its effect runs out `FLUSH_TIMEOUT` and panics. Each answer is sent only once its prompt shows.
 - Neovim throttles its focus check to once per 2 s and defers a throttled one to the main loop, where W12 never blocked a key. The W12 cases rely on each test's fresh Neovim, which has no check to throttle against.
-- `typing_behind_a_busy_call_waits_for_it` is green with or without the fix: it fails only if held typing is released before Neovim waits for input, and lands in `a.txt`. Widen its `BUSY_STEP_GAP` if it flakes, never tighten it.
+- `typing_behind_a_busy_call_waits_for_it` is green on a pump that never releases held typing: it fails only if held typing is released before Neovim waits for input, and lands in `a.txt`. Widen its `BUSY_STEP_GAP` if it flakes, never tighten it.
 
 #### `rank_bounded.rs`
 
