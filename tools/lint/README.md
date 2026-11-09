@@ -117,7 +117,7 @@ A hit is a line of a `*.rs` file under `crates/wolf-gnome/src/` that matches `ma
 
 `src/README.md` is out of scope because a divergence is stated in its file's entry there, so its mentions are the rule at work. `crates/wolf-gnome/tests/` is out too: it holds about thirty mentions no sweep has reviewed.
 
-An allowlist entry is `<path>:<line text>`, the text trimmed of surrounding whitespace, one entry per matching line of a site. A line number would break on any edit above the site, and the bare match would excuse every later `macOS` in the same file, while an edit to the listed line itself fails, which is the point. An entry that matches no line fails as stale, so the list stays closed. An entry is admitted only for a divergence that links its counterpart, as A1 to A7 and the `scroll_direction_is_inverted_from_macos` test's name and its citing doc are.
+An allowlist entry is `<path>:<line text>`, the text trimmed of surrounding whitespace, one entry per matching line of a site. A line number would break on any edit above the site, and the bare match would excuse every later `macOS` in the same file, while an edit to the listed line itself fails, which is the point. An entry that matches no line fails as stale, so the list stays closed. An entry is admitted only for a divergence that links its counterpart, as A1 to A8 and the `scroll_direction_is_inverted_from_macos` test's name and its citing doc are.
 
 The checker exits 1 on a finding and 2, with an `ERROR:` line, when there is no `src/` directory, no `*.rs` file under it, or no readable allowlist. Under Bazel the sources arrive only through `data`, so a broken data list would otherwise pass an empty tree. It lists files with `find -L`, because runfiles are symlinks.
 

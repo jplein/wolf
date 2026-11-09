@@ -104,6 +104,8 @@ Two divergences from macOS are deliberate. The popup accepts no input at all, ma
 | Project search UI (ripgrep-backed)          | `feat/search-ui` / `linux-feat/project-search`                               | [x]   | [x]   |
 | Native file dialogs (open / save / save-as) | `linux-feat/save-dialogs`                                                    | [x]   | [x]   |
 
+On both platforms project search is a sidebar panel switched with the file tree, and its chord reveals a hidden sidebar. Where the GTK panel differs from the macOS one, the [`search_panel.rs`](../crates/wolf-gnome/src/README.md#search_panelrs) entry says how.
+
 Both front-ends surface the per-pane navigation history as two toolbar buttons and as menu items — `⌘[` / `⌘]` on macOS, `Alt+Left` / `Alt+Right` on Linux. The one difference left is the jump list: the macOS History menu also lists the active pane's recently visited files, where the GTK menu carries Back and Forward alone, for the reason recorded in [`wolf-gnome-decisions.md`](wolf-gnome-decisions.md).
 
 The GTK command palette lists the registry commands `wolf-gnome` performs, one Open Recent row per usable recent directory, and one Switch to Window row per other open window. An Open Recent row re-roots the invoking window through the same path the Open Folder dialog takes; a Switch to Window row leaves that window alone and raises the other one, so a single directory can honestly appear as both. Raising is best-effort on Wayland: a client cannot raise itself, and the headless compositor the smokes run under declines it.
@@ -133,7 +135,7 @@ The GTK sidebar re-roots from one settle point, on the working directory Neovim 
 | `:q` / `:qa` mapped to close pane / window   | `feat/colon-q-remapping`                                  | [x]   | [x]   |
 | ⌘N opens a new untitled Markdown buffer      | `feat/colon-q-remapping` (`0266b96`)                      | [x]   | [x]   |
 
-`wolf-gnome` calls `WolfCore::drain_commands()` on every render wake, behind a total `Command` to `UiAction` mapping in `command_action.rs` with no catch-all arm, so a new core command fails to compile until it is classified. Of the 26 commands, 21 dispatch, 1 has no GNOME equivalent (`HideApplication`, since the shell owns window visibility), and 4 are deferred with a distinct printed reason.
+`wolf-gnome` calls `WolfCore::drain_commands()` on every render wake, behind a total `Command` to `UiAction` mapping in `command_action.rs` with no catch-all arm, so a new core command fails to compile until it is classified. Of the 28 commands, 24 dispatch, 1 has no GNOME equivalent (`HideApplication`, since the shell owns window visibility), and 3 are deferred with a distinct printed reason.
 
 The Linux multiple-windows box means N windows in one process: a coordinator owns the single state store, the one config read and the one cell measurement, while each window carries its own captive Neovim, its own wake and its own subtree of `state.json`. New Window opens a fresh empty window and inherits nothing from the window it was asked from — not the working directory, not the layout, not the size — which is macOS's behaviour for the same row.
 

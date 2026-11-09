@@ -94,7 +94,7 @@ Purpose: the buffer-picker overlay — a search entry over the captive Neovim's 
 - Candidates are snapshotted once at open and re-ranked per keystroke. The snapshot is a blocking RPC on the GTK main thread, so [`picker.rs`](#pickerrs)'s wake bridge must not be added for symmetry: re-taking it puts a whole timeout budget of frozen main loop on the typing path.
 - `open_decision` refuses to open, and so refuses the RPC, for every liveness reading but `Alive`. It cannot prevent the first stall, and must not be strengthened into a guard that can never raise one.
 - A refusal returns before any widget is touched, and nothing is shown until the snapshot returns.
-- The first refresh preselects row 1, because row 0 is the buffer the user is already in and a bare Enter must switch. It is the one selection rule the other three overlays do not share.
+- The first refresh preselects row 1, because row 0 is the buffer the user is already in and a bare Enter must switch. It is the one selection rule the other two overlays do not share.
 - `switch_target` refuses an active window of `0` as firmly as none at all, per `wolf-ffi`'s rule: `0` binds the switch into whichever window Neovim considers current.
 
 **Gotchas**
@@ -508,7 +508,7 @@ Purpose: the pure, GTK-free rulebook for per-pane navigation — which window a 
 
 #### `overlay_style.rs`
 
-Purpose: the shared look of the four transient overlays ([`picker.rs`](#pickerrs), [`palette.rs`](#paletters), [`buffer_picker.rs`](#buffer_pickerrs), [`search_overlay.rs`](#search_overlayrs)) — a GNOME-menu surface with menu-sized rows, as one CSS class.
+Purpose: the shared look of the three transient overlays ([`picker.rs`](#pickerrs), [`palette.rs`](#paletters), [`buffer_picker.rs`](#buffer_pickerrs)) — a GNOME-menu surface with menu-sized rows, as one CSS class.
 
 **Public API**
 
@@ -618,12 +618,12 @@ Purpose: the file-picker overlay — a search entry over a ranked results list. 
 - The picker has no trigger predicate of its own: it opens from the `win.go-to-file` action; see [`actions.rs`](#actionsrs).
 - The key controller runs in the capture phase, so Escape and the arrows are seen before the `SearchEntry` consumes them, and the arrows move the list selection while focus stays in the entry.
 - The selection is preserved across a streaming rebuild unless the query changed, so an arriving batch does not yank the user back to the top row.
-- No shared overlay widget is extracted, and that is a judgement: the four overlays already share the three seams below, and the widget construction left over is covered only by the cage smokes, so a common type would risk three working overlays to remove boilerplate.
+- No shared overlay widget is extracted, and that is a judgement: the three overlays already share the three seams below, and the widget construction left over is covered only by the cage smokes, so a common type would risk three working overlays to remove boilerplate.
 
 **Gotchas**
 
-- `next_selection`, `restored_index` and `activation_index` are `pub(crate)` and shared with [`palette.rs`](#paletters), [`buffer_picker.rs`](#buffer_pickerrs) and [`search_overlay.rs`](#search_overlayrs), so all four overlays navigate and activate identically.
-- `FocusTarget` is `pub(crate)` and shared by all four overlays and the sidebar; [wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md#window-structure) owns why it is a closure rather than a captured widget.
+- `next_selection`, `restored_index` and `activation_index` are `pub(crate)` and shared with [`palette.rs`](#paletters) and [`buffer_picker.rs`](#buffer_pickerrs), so all three overlays navigate and activate identically. `next_selection` also moves [`search_panel.rs`](#search_panelrs)'s selection.
+- `FocusTarget` is `pub(crate)` and shared by the three overlays, the tree and the search panel; [wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md#window-structure) owns why it is a closure rather than a captured widget.
 
 #### `preview_coalescer.rs`
 
@@ -664,7 +664,7 @@ Purpose: the pure, GTK-free rulebook for the Markdown preview pane — its gates
 
 **Public API**
 
-- `preview_press`, `edit_press`, `may_render`, `preview_file_press` and `browser_press` — the gate on every blocking preview RPC, total over `Option<Liveness>` with no `_` arm.
+- `preview_press`, `edit_press`, `may_render`, `preview_file_press` and `browser_press` — the gate on every blocking preview RPC but a search result's repoint, which [`search_panel.rs`](#search_panelrs) gates, total over `Option<Liveness>` with no `_` arm.
 - `browser_url(raw)` — `None` for an empty or all-whitespace address; the loopback-prefix check is core's contract, deliberately not duplicated.
 - `document_update(current, loaded, fragment_pending)` — swap in place, or full load.
 - `PreviewLoad`, `needs_reload(current, loaded)` and `preview_status(source_path, display_path)`.
@@ -775,27 +775,29 @@ Purpose: a Neovim window's `win_viewport` projected onto a pane-local thumb rect
 
 - `Viewport::curline` is deliberately unread: a cursor move that scrolled nothing must not make the indicator jump.
 
-#### `search_overlay.rs`
+#### `search_panel.rs`
 
-Purpose: the project-search overlay — a `Ctrl+Shift+F` entry over a flat, streaming list of ripgrep matches. Activating a row opens a location, not a file.
+Purpose: the project-search panel, [`sidebar.rs`](#sidebarrs)'s Search page — a field over streaming ripgrep matches grouped by file. A line row opens a location, not a file.
 
 **Public API**
 
-- `build(overlay, area, core) -> SearchHandle` — starts hidden; `area` is a [`picker.rs`](#pickerrs) `FocusTarget`.
-- `SearchHandle::open`, `close` (both idempotent), `is_open`, and `set_project_open`, mirrored from the shell's empty-state flag.
-- `open_decision`, `search_options_for`, `result_rows`, `activation_target`, `enter_action` and `search_status` — the pure seams.
+- `build(core, area) -> SearchPanelHandle` — gate shut until the sidebar relays it shown; `area` is a [`picker.rs`](#pickerrs) `FocusTarget`.
+- `SearchPanelHandle::widget`, `focus_entry`, `owns_keyboard`, `set_sidebar_visible`, and `close`, which cancels `rg`.
+- `show_decision`, `search_options_for`, `panel_rows`, `char_budget`, `first_line_row`, `selection_after_rebuild`, `enter_action`, `row_activation`, `activation_route` and `search_status` — the pure seams.
 
 **Decisions**
 
-- Typing runs nothing: the first Enter runs the search, the second activates the selected row. An empty query is refused, since core would hand `rg` a pattern matching every line of every file.
-- Closing and re-running both cancel: dropping the `SearchSession` kills the `rg` child; see [wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md).
-- `open_decision` refuses without a project, since the search root would otherwise fall back to the home directory.
-- The options shipped are literal, case-insensitive and over all files, with no toggle buttons and no `WolfCore::ignorecase()` read; `search_options_for`'s doc gives each reason.
-- Rows are flat, one per matched line, which is what lets [`picker.rs`](#pickerrs)'s selection seams drive them unchanged; the order and the file labels come from core's projection.
+- Typing runs nothing. Enter runs a changed query and activates on an unchanged one; an empty query clears, since core would hand `rg` a pattern matching every line.
+- The list never takes focus: each batch replaces every row, which would destroy a focused one. Up and Down move the selection from the field.
+- `activation_route` reads liveness first, since nothing covers the rows on a crash; that keeps the blocking `preview_file` on `Alive`. A declined repoint falls back to `open_at`.
+- Literal, case-insensitive, all files, no toggles and no blocking `ignorecase()`; `search_options_for`'s doc says why.
+- `focus_entry` grabs synchronously: the palette closes before dispatching, so nothing takes focus back.
+- The list's `navigation-sidebar` class gives a neutral selection tint; under the accent fill the OCR smokes read nothing from the preselected row.
+- Escape, the field keeping focus, the missing toggles and the capped status line diverge from the [macOS panel](../../wolf-macos/Sources/WolfMacOS/README.md#searchviewswift); the module doc says why.
 
 **Gotchas**
 
-- A same-file jump to another line records no history, while a cross-file one does: core folds a `NavTarget` per window, and `NavTarget::Edit` carries no line number.
+- A same-file jump records no history, a cross-file one does: `NavTarget::Edit` carries no line number.
 
 #### `shell.rs`
 
@@ -814,8 +816,27 @@ Purpose: the glue for the action namespace — `gio` actions, the primary menu, 
 - One settle point moves the sidebar's root, over [`workspace.rs`](#workspacers)'s `reroot_decision`, so `chdir_to` and a typed `:cd` cannot diverge.
 - The three Markdown-preview presses read one `preview_shape` pass each: two snapshot reads would describe no window that existed. Each is a blocking RPC gated through [`preview_ui.rs`](#preview_uirs).
 - Save and Save As read one `save_shape` pass each for the same reason, and neither issues a blocking call; the dialog carries [`save_ui.rs`](#save_uirs)'s proposal out and decides nothing, `force` included.
-- `sidebar.set_visible` has one caller, over [`state_seam.rs`](#state_seamrs)'s `sidebar_is_shown`, or `set_empty_state(false)` would undo a user toggle.
+- `sidebar.set_visible` has one caller, over [`state_seam.rs`](#state_seamrs)'s `sidebar_is_shown`, or `set_empty_state(false)` would undo a user toggle. The search chord reveals it through that preference.
 - The per-tab fan-outs go through [`tab_view.rs`](#tab_viewrs), New Tab is gated by [`tabs_ui.rs`](#tabs_uirs)'s `new_tab_press`, and [wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md) owns the boundary.
+
+#### `sidebar.rs`
+
+Purpose: the window's sidebar — a `gtk::StackSwitcher` over a `gtk::Stack` with two pages, Files ([`tree_view.rs`](#tree_viewrs)) and Search ([`search_panel.rs`](#search_panelrs)). The switcher is the GNOME counterpart of the [macOS sidebar's header toggles](../../wolf-macos/Sources/WolfMacOS/README.md#sidebarcontainerviewswift).
+
+**Public API**
+
+- `build(tree, search) -> SidebarHandle` — opens on Files, both pages dormant until the shell relays the sidebar shown.
+- `SidebarHandle::widget`, `page`, `show_page(page)`, `set_sidebar_visible(shown)` and `focus_is_inside`.
+- `panel_visibility(sidebar_shown, page) -> PanelVisibility` — the pure seam: a page is live only when the sidebar is shown and the page is current.
+
+**Decisions**
+
+- Both pages stay built, so a switch keeps the tree's expansion and the panel's query, rows and running `rg`. Every switch and every show or hide is relayed into both pages' refresh gates, so the page nobody can see rebuilds nothing and catches up once.
+- The switcher and `show_page` both land in one `visible-child-name` notify, which also focuses the panel's field on a switch to Search.
+
+**Gotchas**
+
+- The page is not persisted: a relaunched window opens on Files.
 
 #### `state_seam.rs`
 
@@ -917,7 +938,7 @@ Purpose: a re-export shim over `wolf_core::tree`. The hierarchical projection of
 
 #### `tree_gate.rs`
 
-Purpose: the pure, GTK-free gate every sidebar refresh passes — visibility first, snapshot version second.
+Purpose: the pure, GTK-free gate every refresh of the sidebar's two pages passes — visibility first, snapshot version second.
 
 **Public API**
 
@@ -927,7 +948,7 @@ Purpose: the pure, GTK-free gate every sidebar refresh passes — visibility fir
 **Decisions**
 
 - The version half is what stops a current-file change collapsing manual expansion: rebuilding the root store destroys each row's `TreeListRow` along with its expanded state, and a current-file change advances no version.
-- `reset_version_tracking` exists because `wolf_core::files::FileSearchState` numbers versions per `FileSearch` rather than globally. A search started by a re-root begins again at 1, so a gate that kept its tracking would answer "no rebuild" to the new project's first batch and leave the departed project's files on screen.
+- `reset_version_tracking` exists because `wolf_core::files::FileSearchState` numbers versions per `FileSearch` rather than globally. A search started by a re-root begins again at 1, so a gate that kept its tracking would answer "no rebuild" to the new project's first batch and leave the departed project's files on screen. The search panel resets on every run for the same reason: each `SearchSession` numbers its versions from 1.
 
 **Gotchas**
 
@@ -940,7 +961,8 @@ Purpose: the GTK glue for the file-tree sidebar — a `gtk::ListView` over a `gt
 **Public API**
 
 - `build(core, area, start, root_label) -> TreeHandle` — `area` is a [`picker.rs`](#pickerrs) `FocusTarget`; `start` is false in the empty state, where nothing is walked.
-- `widget()`, `on_render_wake()`, `close()`, `set_sidebar_visible(shown)` and `reroot(root_label)`, the last two relayed from [`shell.rs`](#shellrs)'s one visibility site and one settle point; this module reads no cwd.
+- `widget()` — [`sidebar.rs`](#sidebarrs)'s Files page.
+- `on_render_wake()`, `close()`, `set_sidebar_visible(shown)`, relayed through `sidebar.rs` and true only while a shown sidebar is on Files, and `reroot(root_label)`, from [`shell.rs`](#shellrs)'s one settle point; this module reads no cwd.
 
 **Decisions**
 
