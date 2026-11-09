@@ -103,6 +103,7 @@ fn named_buffer(bufnr: i64, path: &str) -> WinBuffer {
         path: Some(PathBuf::from(path)),
         is_terminal: false,
         is_drawer: false,
+        terminal: None,
     }
 }
 
@@ -506,6 +507,7 @@ fn derive_target_precedence_matrix() {
                 path: None,
                 is_terminal: true,
                 is_drawer: true,
+                terminal: None,
             }),
             preview: Some(src),
             want: Some(preview("/p/source.md")),
@@ -523,6 +525,7 @@ fn derive_target_precedence_matrix() {
                 path: None,
                 is_terminal: true,
                 is_drawer: true,
+                terminal: None,
             }),
             preview: None,
             want: None,
@@ -534,6 +537,7 @@ fn derive_target_precedence_matrix() {
                 path: Some(PathBuf::from("/p/a.md")),
                 is_terminal: true,
                 is_drawer: true,
+                terminal: None,
             }),
             preview: None,
             want: None,
@@ -545,6 +549,7 @@ fn derive_target_precedence_matrix() {
                 path: None,
                 is_terminal: true,
                 is_drawer: false,
+                terminal: None,
             }),
             preview: None,
             want: Some(terminal(11)),
@@ -562,6 +567,7 @@ fn derive_target_precedence_matrix() {
                 path: None,
                 is_terminal: false,
                 is_drawer: false,
+                terminal: None,
             }),
             preview: None,
             want: Some(untitled(4)),

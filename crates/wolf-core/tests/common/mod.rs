@@ -29,7 +29,10 @@ use std::time::{Duration, Instant};
 
 use std::io::Write as _;
 
-use wolf_core::{CoreConfig, InputEvent, Key, KeyEvent, WakeFn, WolfCore};
+use wolf_core::{
+    CoreConfig, InputEvent, Key, KeyEvent, TerminalCommand, TerminalFrame, TerminalId,
+    TerminalTarget, WakeFn, WolfCore,
+};
 
 /// Default grid width used by most tests, in columns.
 pub const DEFAULT_COLS: u16 = 80;
@@ -873,4 +876,305 @@ pub fn probe_values(core: &WolfCore, exprs: &[&str], probe: &Path) -> Vec<String
 /// nvim-treesitter and parsers trees `parsers_user.rs` resolves Bazel-first).
 pub fn resolve_test_runfile(env_key: &str) -> Option<PathBuf> {
     resolve_runfile(env_key)
+}
+
+// --- Terminal sessions --------------------------------------------------------
+
+/// The marker a [`cat_command`] session prints once its tty is raw, before `cat` reads.
+pub const CAT_READY: &str = "cat-ready";
+
+/// Starts a `WolfCore` in `cwd` at the default grid size and waits for the first flush.
+pub fn start_core_at(cwd: PathBuf) -> (WolfCore, FlushWaiter) {
+    let (wake, waiter) = wake_channel();
+    let core = WolfCore::start(config_in(cwd, DEFAULT_COLS, DEFAULT_ROWS), wake)
+        .expect("WolfCore::start failed (is WOLF_NVIM_BIN a valid nvim?)");
+    waiter.wait_for_initial_flush(&core, FLUSH_TIMEOUT);
+    (core, waiter)
+}
+
+/// The instants at which a core's wake fired, recorded by [`recording_wake_channel`].
+#[derive(Clone, Default)]
+pub struct WakeLog(Arc<std::sync::Mutex<Vec<Instant>>>);
+
+impl WakeLog {
+    /// Every wake recorded since the last [`clear`](Self::clear), in order.
+    pub fn instants(&self) -> Vec<Instant> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// Forgets every recorded wake.
+    pub fn clear(&self) {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    }
+}
+
+/// Like [`wake_channel`], and also records the instant of every wake in the returned
+/// [`WakeLog`], taken on the thread that fired it.
+pub fn recording_wake_channel() -> (WakeFn, FlushWaiter, WakeLog) {
+    let (tx, rx): (Sender<()>, Receiver<()>) = mpsc::channel();
+    let log = WakeLog::default();
+    let recorder = log.clone();
+    let wake: WakeFn = Arc::new(move || {
+        recorder
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(Instant::now());
+        let _ = tx.send(());
+    });
+    (wake, FlushWaiter { rx }, log)
+}
+
+/// [`start_core_at`] with a [`recording_wake_channel`].
+pub fn start_core_recording(cwd: PathBuf) -> (WolfCore, FlushWaiter, WakeLog) {
+    let (wake, waiter, log) = recording_wake_channel();
+    let core = WolfCore::start(config_in(cwd, DEFAULT_COLS, DEFAULT_ROWS), wake)
+        .expect("WolfCore::start failed (is WOLF_NVIM_BIN a valid nvim?)");
+    waiter.wait_for_initial_flush(&core, FLUSH_TIMEOUT);
+    (core, waiter, log)
+}
+
+/// `/bin/sh -c <script>`, run as a session's program.
+pub fn sh_script(script: &str) -> TerminalCommand {
+    TerminalCommand {
+        program: PathBuf::from("/bin/sh"),
+        args: vec!["-c".to_owned(), script.to_owned()],
+    }
+}
+
+/// An interactive `/bin/sh` with no arguments.
+pub fn interactive_sh() -> TerminalCommand {
+    TerminalCommand {
+        program: PathBuf::from("/bin/sh"),
+        args: Vec::new(),
+    }
+}
+
+/// A byte-inspection session: `prelude` is printed first (a `printf` format, so `\033` is
+/// ESC), then the tty goes raw without echo, [`CAT_READY`] is printed, and `cat -v` shows
+/// every byte the session is sent, ESC as `^[`.
+pub fn cat_command(prelude: &str) -> TerminalCommand {
+    sh_script(&format!(
+        "printf '{prelude}'; stty raw -echo; printf '{CAT_READY}\\r\\n'; exec cat -v"
+    ))
+}
+
+/// Opens a session through `open_terminal`, failing when it returns `None`.
+pub fn open_session(
+    core: &WolfCore,
+    target: TerminalTarget,
+    command: TerminalCommand,
+) -> TerminalId {
+    let shown = format!(
+        "{target:?}, {} {:?}",
+        command.program.display(),
+        command.args
+    );
+    core.open_terminal(target, Some(command))
+        .unwrap_or_else(|| {
+            panic!(
+            "open_terminal({shown}) returned None: the pty or the shell could not be started, or \
+             the placeholder could not be bound."
+        )
+        })
+}
+
+/// The session's current frame, failing when `terminal_frame` returns `None`.
+pub fn frame_of(core: &WolfCore, id: TerminalId) -> Arc<TerminalFrame> {
+    core.terminal_frame(id).unwrap_or_else(|| {
+        panic!("terminal_frame({id:?}) is None, so the session is not in the registry.")
+    })
+}
+
+/// Every row's text, joined with newlines.
+pub fn frame_text(frame: &TerminalFrame) -> String {
+    (0..frame.rows)
+        .map(|row| frame.row_text(row))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// What a [`cat_command`] session's `cat -v` printed: the rows after the [`CAT_READY`] row,
+/// joined with nothing between them, trimmed. Empty until the marker shows.
+pub fn cat_output(frame: &TerminalFrame) -> String {
+    let rows: Vec<String> = (0..frame.rows).map(|row| frame.row_text(row)).collect();
+    match rows.iter().position(|row| row.contains(CAT_READY)) {
+        Some(marker) => rows[marker + 1..].concat().trim().to_owned(),
+        None => String::new(),
+    }
+}
+
+/// Polls the session's frame until `done` accepts it, draining `waiter`, and returns it. Panics
+/// with `desc` and the frame's text after [`FLUSH_TIMEOUT`], or when the session is gone.
+pub fn poll_frame(
+    core: &WolfCore,
+    waiter: &FlushWaiter,
+    id: TerminalId,
+    desc: &str,
+    done: impl Fn(&TerminalFrame) -> bool,
+) -> Arc<TerminalFrame> {
+    let deadline = Instant::now() + FLUSH_TIMEOUT;
+    loop {
+        let frame = core
+            .terminal_frame(id)
+            .unwrap_or_else(|| panic!("session {id:?} left the registry while waiting for {desc}"));
+        if done(&frame) {
+            return frame;
+        }
+        if Instant::now() >= deadline {
+            panic!(
+                "timed out after {FLUSH_TIMEOUT:?} waiting for {desc}; session {id:?}'s frame \
+                 (version {}, {}x{}, exited {:?}) reads:\n{}",
+                frame.version,
+                frame.cols,
+                frame.rows,
+                frame.exited,
+                frame_text(&frame)
+            );
+        }
+        waiter.drain();
+        std::thread::sleep(POLL_INTERVAL);
+    }
+}
+
+/// Polls until the session's frame shows `needle` anywhere, and returns that frame.
+pub fn wait_for_text(
+    core: &WolfCore,
+    waiter: &FlushWaiter,
+    id: TerminalId,
+    needle: &str,
+) -> Arc<TerminalFrame> {
+    poll_frame(
+        core,
+        waiter,
+        id,
+        &format!("the session's frame to show {needle:?}"),
+        |frame| frame_text(frame).contains(needle),
+    )
+}
+
+/// Opens a [`cat_command`] session in `target` and waits for its [`CAT_READY`] marker.
+pub fn open_cat(
+    core: &WolfCore,
+    waiter: &FlushWaiter,
+    target: TerminalTarget,
+    prelude: &str,
+) -> TerminalId {
+    let id = open_session(core, target, cat_command(prelude));
+    wait_for_text(core, waiter, id, CAT_READY);
+    id
+}
+
+/// Waits for a session's shell to print `PID=<n>` and returns `n`.
+pub fn wait_for_pid(core: &WolfCore, waiter: &FlushWaiter, id: TerminalId) -> u32 {
+    let frame = poll_frame(core, waiter, id, "the shell to print PID=<n>", |frame| {
+        parse_pid(&frame_text(frame)).is_some()
+    });
+    parse_pid(&frame_text(&frame)).expect("poll_frame returned only once a PID was printed")
+}
+
+/// The number after the first `PID=` in `text` that is followed by at least one digit.
+fn parse_pid(text: &str) -> Option<u32> {
+    let rest = &text[text.find("PID=")? + "PID=".len()..];
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    digits.parse().ok()
+}
+
+/// Whether `pid` names a process, a zombie included: `kill -0` succeeds on a zombie and fails
+/// only once its parent has reaped it.
+pub fn pid_alive(pid: u32) -> bool {
+    std::process::Command::new("/bin/sh")
+        .args(["-c", &format!("kill -0 {pid} 2>/dev/null")])
+        .status()
+        .expect("failed to run /bin/sh for kill -0")
+        .success()
+}
+
+/// Polls until `pid` is gone (reaped), failing with `desc` after [`FLUSH_TIMEOUT`].
+pub fn wait_for_pid_gone(pid: u32, desc: &str) {
+    let deadline = Instant::now() + FLUSH_TIMEOUT;
+    while pid_alive(pid) {
+        if Instant::now() >= deadline {
+            panic!(
+                "timed out after {FLUSH_TIMEOUT:?} waiting for pid {pid} to be gone: {desc}. \
+                 Still there means the shell was never signalled, or it was killed and never \
+                 reaped (a zombie still answers kill -0)."
+            );
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+}
+
+/// Drains `waiter` for `dur`, so late notifications land before a negative assertion.
+pub fn settle_for(waiter: &FlushWaiter, dur: Duration) {
+    let deadline = Instant::now() + dur;
+    while Instant::now() < deadline {
+        waiter.drain();
+        std::thread::sleep(POLL_INTERVAL);
+    }
+}
+
+/// The session bound to window `win` in the snapshot's `win_buffers`, if any.
+pub fn win_terminal(core: &WolfCore, win: i64) -> Option<TerminalId> {
+    core.read_snapshot()
+        .win_buffers
+        .get(&win)
+        .and_then(|buffer| buffer.terminal)
+}
+
+/// Every window whose `win_buffers` entry carries a session, with its session.
+pub fn terminal_windows(core: &WolfCore) -> Vec<(i64, TerminalId)> {
+    let snap = core.read_snapshot();
+    let mut found: Vec<(i64, TerminalId)> = snap
+        .win_buffers
+        .iter()
+        .filter_map(|(win, buffer)| buffer.terminal.map(|id| (*win, id)))
+        .collect();
+    found.sort();
+    found
+}
+
+/// Polls until the snapshot names an active window and returns it.
+pub fn active_window(core: &WolfCore, waiter: &FlushWaiter) -> i64 {
+    poll_until(
+        waiter,
+        "the snapshot to name an active window",
+        || core.read_snapshot().active_win,
+        Option::is_some,
+    )
+    .expect("poll_until returned only once active_win was set")
+}
+
+/// The grid that shows window `win`, if the snapshot has one.
+pub fn grid_of_win(core: &WolfCore, win: i64) -> Option<u64> {
+    core.read_snapshot()
+        .windows
+        .values()
+        .find(|info| info.win == win && !info.hidden)
+        .map(|info| info.grid)
+}
+
+/// A key press for the session API with no modifier.
+pub fn term_key(key: Key) -> KeyEvent {
+    KeyEvent {
+        key,
+        ctrl: false,
+        shift: false,
+        alt: false,
+        meta: false,
+    }
+}
+
+/// A Ctrl-modified key press for the session API.
+pub fn term_ctrl(key: Key) -> KeyEvent {
+    KeyEvent {
+        ctrl: true,
+        ..term_key(key)
+    }
+}
+
+/// Types `line` into a session as text, then presses Enter through `terminal_key`.
+pub fn run_line(core: &WolfCore, id: TerminalId, line: &str) {
+    core.terminal_text(id, line);
+    core.terminal_key(id, term_key(Key::Enter));
 }

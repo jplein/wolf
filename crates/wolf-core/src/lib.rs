@@ -48,6 +48,8 @@
 //!   into per-file groups plus the balanced-context line-window display math.
 //! - [`tree`]: the pure, toolkit-free hierarchical projection of the flat file
 //!   list into the sidebar's per-directory children (shared by all front-ends).
+//! - [`terminal`]: the terminal sessions core owns (pty, shell, libghostty-vt
+//!   emulator) and the frames they publish.
 //! - [`api`]: the FFI-shaped front-end surface ([`WolfCore`]).
 //! - [`config`]: the GUI-free user-preferences reader ([`WolfConfig`]).
 //! - [`state`]: the GUI-free application-state persistence ([`StateStore`]).
@@ -78,6 +80,7 @@ pub mod render;
 pub mod search;
 pub mod search_tree;
 pub mod state;
+pub mod terminal;
 pub mod tree;
 
 pub use api::{CoreConfig, CoreError, SnapshotReadGuard, WolfCore};
@@ -123,6 +126,12 @@ pub use search_tree::{context_window, file_label, project, ContextWindow, Search
 pub use state::{
     load_state, parsers_user_dir, runtime_user_dir, seed_runtime_user_dir, spell_dir, state_dir,
     PaneNode, PaneOrientation, StateStore, TabState, WindowState, WolfState, INIT_USER_FILE_NAME,
+};
+pub use terminal::{
+    TerminalCell, TerminalCellWidth, TerminalCommand, TerminalCursor, TerminalCursorStyle,
+    TerminalFrame, TerminalId, TerminalMouseEvent, TerminalMouseKind, TerminalScrollEvent,
+    TerminalScrollbar, TerminalTarget, TerminalUnderline, TERMINAL_HANGUP_GRACE,
+    TERMINAL_PREFIX_TIMEOUT, TERMINAL_PUBLISH_INTERVAL, TERMINAL_RENDER_HOLD_MAX,
 };
 pub use tree::{
     ancestors_to_reveal, children_of, node_rel_path, rel_path_for, TreeIndex, TreeIndexCache,

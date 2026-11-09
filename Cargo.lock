@@ -2155,6 +2155,7 @@ dependencies = [
  "async-trait",
  "dirs",
  "ignore",
+ "libc",
  "notify",
  "nvim-rs",
  "parking_lot",
@@ -2170,6 +2171,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "wolf-vt",
 ]
 
 [[package]]

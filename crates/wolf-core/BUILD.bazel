@@ -43,7 +43,8 @@ rust_library(
     edition = "2021",
     proc_macro_deps = all_crate_deps(proc_macro = True),
     visibility = ["//visibility:public"],
-    deps = all_crate_deps(normal = True),
+    # all_crate_deps never lists a workspace member, so wolf-vt is named here.
+    deps = all_crate_deps(normal = True) + ["//crates/wolf-vt:wolf_vt"],
 )
 
 # The grid_dump probe, staged like the real-nvim tests. `bazel run` starts it in its runfiles
@@ -845,6 +846,102 @@ rust_test(
     # run unsandboxed. `no-sandbox` (vs `local`) keeps Bazel test-result caching.
     tags = ["no-sandbox"],
     size = "small",
+    edition = "2021",
+    data = [
+        "//bazel/nvim:nvim_tree",
+        "//runtime/nvim:init.lua",
+    ],
+    env = {
+        "WOLF_NVIM_BIN": "$(rootpath //bazel/nvim:nvim_tree)/nvim/bin/nvim",
+        "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
+        "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
+    },
+    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+)
+
+rust_test(
+    name = "terminal_session",
+    srcs = [
+        "tests/common/mod.rs",
+        "tests/terminal_session.rs",
+    ],
+    crate_root = "tests/terminal_session.rs",
+    # Spawns a real nvim and real shells in ptys, which the macOS build sandbox does not allow.
+    # Medium: the cases wait out real timeouts (prefix, render hold, hang-up grace, debounce).
+    tags = ["no-sandbox"],
+    size = "medium",
+    edition = "2021",
+    data = [
+        "//bazel/nvim:nvim_tree",
+        "//runtime/nvim:init.lua",
+    ],
+    env = {
+        "WOLF_NVIM_BIN": "$(rootpath //bazel/nvim:nvim_tree)/nvim/bin/nvim",
+        "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
+        "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
+    },
+    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+)
+
+rust_test(
+    name = "terminal_input",
+    srcs = [
+        "tests/common/mod.rs",
+        "tests/terminal_input.rs",
+    ],
+    crate_root = "tests/terminal_input.rs",
+    # Spawns a real nvim and real shells in ptys, which the macOS build sandbox does not allow.
+    # Medium: the cases wait out real timeouts (prefix, render hold, hang-up grace, debounce).
+    tags = ["no-sandbox"],
+    size = "medium",
+    edition = "2021",
+    data = [
+        "//bazel/nvim:nvim_tree",
+        "//runtime/nvim:init.lua",
+    ],
+    env = {
+        "WOLF_NVIM_BIN": "$(rootpath //bazel/nvim:nvim_tree)/nvim/bin/nvim",
+        "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
+        "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
+    },
+    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+)
+
+rust_test(
+    name = "terminal_lifecycle",
+    srcs = [
+        "tests/common/mod.rs",
+        "tests/terminal_lifecycle.rs",
+    ],
+    crate_root = "tests/terminal_lifecycle.rs",
+    # Spawns a real nvim and real shells in ptys, which the macOS build sandbox does not allow.
+    # Medium: the cases wait out real timeouts (prefix, render hold, hang-up grace, debounce).
+    tags = ["no-sandbox"],
+    size = "medium",
+    edition = "2021",
+    data = [
+        "//bazel/nvim:nvim_tree",
+        "//runtime/nvim:init.lua",
+    ],
+    env = {
+        "WOLF_NVIM_BIN": "$(rootpath //bazel/nvim:nvim_tree)/nvim/bin/nvim",
+        "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
+        "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
+    },
+    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+)
+
+rust_test(
+    name = "terminal_rescan",
+    srcs = [
+        "tests/common/mod.rs",
+        "tests/terminal_rescan.rs",
+    ],
+    crate_root = "tests/terminal_rescan.rs",
+    # Spawns a real nvim and real shells in ptys, which the macOS build sandbox does not allow.
+    # Medium: the cases wait out real timeouts (prefix, render hold, hang-up grace, debounce).
+    tags = ["no-sandbox"],
+    size = "medium",
     edition = "2021",
     data = [
         "//bazel/nvim:nvim_tree",

@@ -55,6 +55,21 @@ if [[ "${#RS_FILES[@]}" -gt 0 ]]; then
   "${RUSTFMT}" --edition 2021 "${RS_FILES[@]}"
 fi
 
+# wolf-vt's build.rs links lib/libghostty-vt.a from WOLF_GHOSTTY_VT_DIR, so the staged Bazel
+# archive is given a scratch prefix of its own.
+GHOSTTY_VT_ARCHIVE="${RUNFILES_DIR}/_main/@@GHOSTTY_VT_SHORT_PATH@@"
+if [[ ! -f "${GHOSTTY_VT_ARCHIVE}" ]]; then
+  echo "ERROR: could not locate the staged libghostty-vt archive in the runfiles tree." >&2
+  echo "       RUNFILES_DIR=${RUNFILES_DIR}" >&2
+  exit 1
+fi
+GHOSTTY_VT_ARCHIVE="$(cd "$(dirname "${GHOSTTY_VT_ARCHIVE}")" && pwd)/libghostty-vt.a"
+GHOSTTY_VT_PREFIX="$(mktemp -d "${TMPDIR:-/tmp}/wolf-ghostty-vt.XXXXXX")"
+trap 'rm -rf "${GHOSTTY_VT_PREFIX}"' EXIT
+mkdir -p "${GHOSTTY_VT_PREFIX}/lib"
+ln -s "${GHOSTTY_VT_ARCHIVE}" "${GHOSTTY_VT_PREFIX}/lib/libghostty-vt.a"
+export WOLF_GHOSTTY_VT_DIR="${GHOSTTY_VT_PREFIX}"
+
 echo "==> [2/3] clippy --fix (cargo clippy --fix)"
 "${CARGO}" clippy --fix --allow-dirty --allow-staged -p wolf-core -p wolf-ffi
 

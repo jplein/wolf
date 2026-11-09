@@ -26,6 +26,7 @@ use crate::render::{
     ModeInfo, PendingConfirm, PreviewInfo, Pum, PumItem, Rgb, SharedSnapshot, Snapshot, TabFiles,
     ThemeColors, ThemeGroup, ToastChunk, Viewport, WinBuffer, WinInfo,
 };
+use crate::terminal::{TerminalId, TerminalRegistry};
 
 /// A shared, drainable queue of [`LayoutIntent`]s.
 ///
@@ -92,14 +93,15 @@ const CURRENT_FILE_EVENT: &str = "wolf_current_file";
 /// Name of the out-of-band notification carrying what every window is showing,
 /// emitted by the `WolfBuffers` autocmds in `runtime/nvim/init.lua` (and once
 /// immediately at setup). The payload is a single msgpack array of
-/// `[win_id, buf_path, bufnr, is_terminal, is_drawer]` tuples for ALL windows of EVERY
-/// tabpage (`nvim_list_wins()`; preview scratch panes are SKIPPED emit-side, which keeps this
+/// `[win_id, buf_path, bufnr, is_terminal, is_drawer, terminal_id]` tuples for ALL windows of
+/// EVERY tabpage (`nvim_list_wins()`; preview scratch panes are SKIPPED emit-side, which keeps this
 /// map DISJOINT from [`Snapshot::previews`]); core WHOLESALE-REPLACES BOTH
 /// [`Snapshot::buffers`] (named windows only, path-valued — unchanged) and the
 /// parallel [`Snapshot::win_buffers`] (every window, [`WinBuffer`]-valued) with the
 /// reported set. Routed separately from `redraw` in
-/// [`RedrawHandler::handle_notify`]. A legacy 2-element tuple still decodes, with
-/// `bufnr: 0` and both flags `false`.
+/// [`RedrawHandler::handle_notify`]. `terminal_id` is the core terminal session a
+/// placeholder buffer shows, `0` for any other buffer. A legacy 2-element tuple still
+/// decodes, with `bufnr: 0`, both flags `false` and no session.
 const BUFFERS_EVENT: &str = "wolf_buffers";
 
 /// Name of the out-of-band notification carrying the per-window full-width flags,
@@ -143,10 +145,11 @@ const CWD_EVENT: &str = "wolf_cwd";
 /// Name of the out-of-band notification carrying the effective colors of the
 /// optional `WolfCursor` / `WolfTitlebar` app-theme highlight groups, emitted by
 /// the `WolfTheme` `ColorScheme` autocmd in `runtime/nvim/init.lua` (and once
-/// immediately at setup). The payload is FOUR flat integers
-/// (`cursor_fg, cursor_bg, titlebar_fg, titlebar_bg`), each a packed `0xRRGGBB`
-/// color or `-1` for an unset channel. Routed separately from `redraw` in
-/// [`RedrawHandler::handle_notify`] into [`Snapshot::theme`].
+/// immediately at setup). The payload is twenty flat integers
+/// (`cursor_fg, cursor_bg, titlebar_fg, titlebar_bg`, then `g:terminal_color_0` to `_15`),
+/// each a packed `0xRRGGBB` color or `-1` for an unset channel. Routed separately from
+/// `redraw` in [`RedrawHandler::handle_notify`] into [`Snapshot::theme`]; the cursor
+/// background and the sixteen terminal colours also go to the terminal sessions.
 const THEME_EVENT: &str = "wolf_theme";
 
 /// Name of the out-of-band notification carrying the set of preview windows and
@@ -213,6 +216,12 @@ const OPEN_FILES_EVENT: &str = "wolf_open_files";
 /// wake fires when its rescan swaps).
 const FS_CHANGED_EVENT: &str = "wolf_fs_changed";
 
+/// Name of the out-of-band notification carrying the id of a terminal session whose
+/// placeholder buffer Neovim wiped, emitted by the `WolfTerminals` `BufWipeout` autocmd in
+/// `runtime/nvim/init.lua`. Routed into the terminal registry, which hangs the session up.
+/// It touches no snapshot state: no snapshot lock, no `seq` bump and no wake.
+const TERMINAL_WIPED_EVENT: &str = "wolf_terminal_wiped";
+
 /// Name of the one nvim→core request, sent by `_G.wolf_sync_buffers` in
 /// `runtime/nvim/init.lua` straight after a synchronous `wolf_buffers` emit. nvim-rs
 /// applies notifications inline in its handler loop but spawns a request only after every
@@ -252,6 +261,7 @@ pub struct RedrawHandler {
     recent_dirs: RecentDirs,
     nav_history: NavHistoryCell,
     search_registry: Arc<crate::files::SearchRegistry>,
+    terminals: Arc<TerminalRegistry>,
     wake: WakeFn,
 }
 
@@ -260,12 +270,13 @@ impl RedrawHandler {
     /// `intents`, pushing user-triggered commands onto `commands`, tracking nvim's
     /// cwd into `cwd` (recording it into the always-on global `recent_dirs` MRU),
     /// folding per-pane navigation targets into `nav_history`, routing
-    /// `wolf_fs_changed` events into `search_registry`, and waking via `wake`.
+    /// `wolf_fs_changed` events into `search_registry`, pushing the editor's colours and
+    /// placeholder wipes into `terminals`, and waking via `wake`.
     // One parameter per sibling cell the handler folds into; bundling them into a
-    // struct would just rename the same eight things.
+    // struct would just rename the same nine things.
     #[allow(clippy::too_many_arguments)]
     #[must_use]
-    pub fn new(
+    pub(crate) fn new(
         snapshot: SharedSnapshot,
         intents: IntentQueue,
         commands: CommandQueue,
@@ -273,6 +284,7 @@ impl RedrawHandler {
         recent_dirs: RecentDirs,
         nav_history: NavHistoryCell,
         search_registry: Arc<crate::files::SearchRegistry>,
+        terminals: Arc<TerminalRegistry>,
         wake: WakeFn,
     ) -> Self {
         Self {
@@ -283,6 +295,7 @@ impl RedrawHandler {
             recent_dirs,
             nav_history,
             search_registry,
+            terminals,
             wake,
         }
     }
@@ -295,7 +308,11 @@ impl Handler for RedrawHandler {
     async fn handle_notify(&self, name: String, args: Vec<Value>, _neovim: Neovim<Self::Writer>) {
         match name.as_str() {
             "redraw" => {
-                let fired = self.apply_redraw(args).await;
+                let (fired, defaults) = self.apply_redraw(args).await;
+                // Pushed after the snapshot lock dropped, which no session lock may nest in.
+                if let Some(defaults) = defaults {
+                    self.terminals.set_default_colours(defaults.fg, defaults.bg);
+                }
                 if fired {
                     (self.wake)();
                 }
@@ -360,6 +377,11 @@ impl Handler for RedrawHandler {
                 self.apply_theme(args).await;
                 (self.wake)();
             }
+            TERMINAL_WIPED_EVENT => {
+                if let Some(id) = args.first().and_then(Value::as_u64).filter(|id| *id > 0) {
+                    self.terminals.on_wiped(TerminalId(id));
+                }
+            }
             PREVIEW_EVENT => {
                 // Not a redraw frame, so no `seq` bump; wakes after `apply_previews` drops the lock.
                 self.apply_previews(args).await;
@@ -415,7 +437,9 @@ impl Handler for RedrawHandler {
 
 impl RedrawHandler {
     /// Applies a whole `redraw` batch under a single write lock and returns
-    /// whether a `flush` was seen (so the caller can wake AFTER the lock drops).
+    /// whether a `flush` was seen (so the caller can wake AFTER the lock drops), with the
+    /// editor's default colours when the batch set them (so the caller can push them to
+    /// the terminal sessions after the lock drops).
     ///
     /// The write lock is acquired via [`SharedSnapshot::write_async`] so a held
     /// reader cannot pin this worker thread; once acquired it is NOT held across
@@ -426,9 +450,10 @@ impl RedrawHandler {
     /// the entry and pushes it onto a `closed_wins` collector threaded through
     /// [`apply_event`]. After the batch — still under the guard, with no `.await`
     /// in between — those panes' navigation histories are PRUNED.
-    async fn apply_redraw(&self, batch: Vec<Value>) -> bool {
+    async fn apply_redraw(&self, batch: Vec<Value>) -> (bool, Option<DefaultColors>) {
         let mut snap = self.snapshot.write_async().await;
         let mut flushed = false;
+        let mut defaults_set = false;
         let mut closed_wins: Vec<i64> = Vec::new();
 
         for event in batch {
@@ -440,6 +465,7 @@ impl RedrawHandler {
             let Some(name) = name.into_str() else {
                 continue;
             };
+            defaults_set |= name == "default_colors_set";
 
             // The remaining items are one-or-more argument tuples, each an array.
             for call in it {
@@ -458,8 +484,9 @@ impl RedrawHandler {
             // never held across a suspension point.
             self.nav_history.lock().prune_many(&closed_wins);
         }
+        let defaults = defaults_set.then_some(snap.highlights.defaults);
         // Lock drops here as `snap` goes out of scope at function return.
-        flushed
+        (flushed, defaults)
     }
 
     /// Applies a `wolf_current_file` notification: sets the snapshot's
@@ -681,8 +708,8 @@ impl RedrawHandler {
     /// navigation targets.
     ///
     /// The single argument is a msgpack array of
-    /// `[win_id, buf_path, bufnr, is_terminal, is_drawer]` tuples for ALL windows in
-    /// the current tabpage (preview scratch panes are skipped emit-side). Each
+    /// `[win_id, buf_path, bufnr, is_terminal, is_drawer, terminal_id]` tuples for ALL
+    /// windows in the current tabpage (preview scratch panes are skipped emit-side). Each
     /// `win_id` decodes via [`ext_handle`] (a plain integer, or defensively a
     /// msgpack-`Ext`-wrapped integer); each `buf_path` is `nvim_buf_get_name(buf)` —
     /// absolute for a file buffer, empty for an unnamed one.
@@ -698,9 +725,9 @@ impl RedrawHandler {
     /// * [`Snapshot::win_buffers`] gets an entry for EVERY tuple that decodes a
     ///   `win`, including unnamed windows (with `path: None`); it reuses the SAME
     ///   canonicalized value (never canonicalizing twice) and decodes `bufnr` via
-    ///   [`ext_handle`] (defaulting `0`) plus the two booleans (defaulting `false`).
-    ///   A legacy 2-element tuple therefore yields `bufnr: 0` and both flags
-    ///   `false`.
+    ///   [`ext_handle`] (defaulting `0`), the two booleans (defaulting `false`) and the
+    ///   terminal session (a positive integer, anything else `None`). A legacy 2-element
+    ///   tuple therefore yields `bufnr: 0`, both flags `false` and no session.
     ///
     /// Both maps are built in full BEFORE the write guard is taken (so no filesystem
     /// work happens under the lock, sidestepping
@@ -737,6 +764,11 @@ impl RedrawHandler {
                         path: canon,
                         is_terminal: pair.get(3).and_then(Value::as_bool).unwrap_or(false),
                         is_drawer: pair.get(4).and_then(Value::as_bool).unwrap_or(false),
+                        terminal: pair
+                            .get(5)
+                            .and_then(Value::as_u64)
+                            .filter(|id| *id > 0)
+                            .map(TerminalId),
                     },
                 );
             }
@@ -950,20 +982,21 @@ impl RedrawHandler {
     }
 
     /// Applies a `wolf_theme` notification: stores the reported `WolfCursor` /
-    /// `WolfTitlebar` colors in [`Snapshot::theme`].
+    /// `WolfTitlebar` colors in [`Snapshot::theme`], and pushes the cursor background and
+    /// the sixteen terminal colours to the terminal sessions.
     ///
-    /// The payload is four flat integers — `[cursor_fg, cursor_bg, titlebar_fg,
-    /// titlebar_bg]` — each a packed `0xRRGGBB` color or `-1` for an unset
-    /// channel (the `WolfTheme` autocmd in `runtime/nvim/init.lua` sends
-    /// `h.fg or -1` etc.). A value is accepted only when it is a valid 24-bit
+    /// The payload is twenty flat integers — `[cursor_fg, cursor_bg, titlebar_fg,
+    /// titlebar_bg]`, then `g:terminal_color_0` to `_15` — each a packed `0xRRGGBB` color
+    /// or `-1` for an unset channel (the `WolfTheme` autocmd in `runtime/nvim/init.lua`
+    /// sends `h.fg or -1` etc.). A value is accepted only when it is a valid 24-bit
     /// color (`0..=0xFF_FFFF`); anything else — including the `-1` sentinel and
     /// a missing argument — maps to `None`.
     ///
     /// The args are parsed BEFORE the write lock is taken, so the guard is held
     /// only for the bare assignment. The lock is acquired via
     /// [`SharedSnapshot::write_async`], is NOT held across any `.await`, and is
-    /// dropped before returning so the caller's wake fires after the lock is
-    /// released. This is NOT a redraw frame, so `seq` is left unchanged.
+    /// dropped before the colours reach the sessions and before the caller's wake. This
+    /// is NOT a redraw frame, so `seq` is left unchanged.
     async fn apply_theme(&self, args: Vec<Value>) {
         /// Maps one flat payload scalar to a color: in-range 24-bit values are
         /// colors; `-1` (and anything else) means unset.
@@ -986,10 +1019,14 @@ impl RedrawHandler {
                 bg: channel(args.get(3)),
             },
         };
+        let ansi: [Option<Rgb>; 16] = std::array::from_fn(|i| channel(args.get(4 + i)));
 
-        let mut snap = self.snapshot.write_async().await;
-        snap.theme = theme;
-        // Lock drops here as `snap` goes out of scope at function return.
+        {
+            let mut snap = self.snapshot.write_async().await;
+            snap.theme = theme;
+        }
+        // After the snapshot lock dropped, which no session lock may nest in.
+        self.terminals.set_theme_colours(theme.cursor.bg, ansi);
     }
 
     /// Applies a `wolf_cwd` notification: stores the captive nvim's reported

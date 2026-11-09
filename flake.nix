@@ -503,6 +503,9 @@
               # See notes/flake.nix.md#no-check-phase
               doCheck = false;
 
+              # wolf-core links libghostty-vt through wolf-vt's build.rs, which reads this prefix.
+              WOLF_GHOSTTY_VT_DIR = "${wolfGhosttyVt}";
+
               postInstall = ''
                 # --- Captive Neovim tree: init.lua finds its vendored siblings beside itself ----------
                 # The destination must match `INSTALLED_INIT_LUA_RELATIVE` in crates/wolf-gnome/src/init_lua.rs.

@@ -7,7 +7,8 @@
 //!
 //! Output is a snapshot the front-end reads on its UI thread after a wake; input
 //! is plain calls that core hands to the tokio side to issue RPC. There is one
-//! wake callback, fired on `flush`; no per-event callbacks cross the boundary.
+//! wake callback, fired on `flush` and on a terminal session's publish; no per-event
+//! callbacks cross the boundary.
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -38,6 +39,10 @@ use crate::render::{OwnedSnapshotReadGuard, SharedSnapshot, Snapshot, TabFiles};
 use crate::search::{self, SearchOptions, SearchSession, SearchState};
 use crate::state::{
     parsers_user_dir, runtime_user_dir, seed_runtime_user_dir, spell_dir, state_dir, swap_dir_for,
+};
+use crate::terminal::{
+    RegistryParts, TerminalCommand, TerminalFrame, TerminalId, TerminalMouseEvent,
+    TerminalRegistry, TerminalScrollEvent, TerminalTarget,
 };
 
 /// Default budget for a single interactive synchronous nvim RPC issued through
@@ -216,6 +221,9 @@ pub struct WolfCore {
     /// sidebar) tracking files created, renamed or deleted through the captive
     /// nvim or, through the registry's filesystem watcher, by any other process.
     search_registry: Arc<files::SearchRegistry>,
+    /// The terminal sessions. They live beside the Neovim process, never in the snapshot,
+    /// so a crash or [`restart_nvim`](WolfCore::restart_nvim) leaves them running.
+    terminals: Arc<TerminalRegistry>,
 }
 
 /// The process's canonicalized home directory, resolved at most once.
@@ -283,6 +291,17 @@ impl WolfCore {
         // this runtime's handle so rescan walks share the traversal's blocking pool.
         let search_registry = files::SearchRegistry::new(runtime.handle().clone());
 
+        // Built before the handler, which pushes the editor's colours and placeholder wipes in.
+        let terminals = TerminalRegistry::new(RegistryParts {
+            wake: wake.clone(),
+            runtime: runtime.handle().clone(),
+            snapshot: snapshot.clone_handle(),
+            intents: intents.clone(),
+            search_registry: search_registry.clone(),
+            tracked_cwd: tracked_cwd.clone(),
+            fallback_cwd: cwd.clone(),
+        });
+
         let handler = RedrawHandler::new(
             snapshot.clone_handle(),
             intents.clone(),
@@ -291,6 +310,7 @@ impl WolfCore {
             recent_dirs.clone(),
             nav_history.clone(),
             search_registry.clone(),
+            terminals.clone(),
             wake.clone(),
         );
 
@@ -342,6 +362,7 @@ impl WolfCore {
             proc.setup_fs_events().await?;
             proc.setup_view_tracking().await?;
             proc.setup_preview().await?;
+            proc.setup_terminals().await?;
             Ok::<NvimProcess, NvimError>(proc)
         })?;
 
@@ -353,6 +374,7 @@ impl WolfCore {
             nvim: nvim.handle(),
             generation: 0,
         }));
+        terminals.attach_rpc(shared_handle.clone());
         let pump = Pump {
             rx: input_rx,
             shared_handle: shared_handle.clone(),
@@ -388,6 +410,7 @@ impl WolfCore {
             nvim_cfg,
             restarting: AtomicBool::new(false),
             search_registry,
+            terminals,
         })
     }
 
@@ -1247,8 +1270,11 @@ impl WolfCore {
 
     /// Computes the per-pane statusbar strings for the window drawing into `grid`.
     ///
-    /// Joins `grid` → [`WinInfo::win`](crate::render::WinInfo) → the per-window
-    /// buffer path in [`Snapshot::buffers`](crate::render::Snapshot::buffers), then
+    /// A terminal pane, whose window shows a session's placeholder, reports the session's
+    /// shell name with empty paths, read from the session rather than a buffer name.
+    ///
+    /// Otherwise it joins `grid` → [`WinInfo::win`](crate::render::WinInfo) → the
+    /// per-window buffer path in [`Snapshot::buffers`](crate::render::Snapshot::buffers), then
     /// formats it via the pure [`crate::pane_status()`] over the live cwd
     /// ([`live_cwd`](Self::live_cwd)) and the user's home directory. A window with
     /// no matching entry (an unnamed buffer, or a grid with no window) yields an
@@ -1261,15 +1287,29 @@ impl WolfCore {
     /// the raw path) so `strip_prefix` lines up with the canonical buffer path.
     #[must_use]
     pub fn pane_status(&self, grid: u64) -> crate::pane_status::PaneStatus {
-        let buf: String = {
+        let (buf, terminal): (String, Option<TerminalId>) = {
             let snap = self.read_snapshot();
-            snap.windows
-                .get(&grid)
-                .and_then(|w| snap.buffers.get(&w.win))
+            let win = snap.windows.get(&grid).map(|w| w.win);
+            let buf = win
+                .and_then(|win| snap.buffers.get(&win))
                 .map(|p| p.to_string_lossy().into_owned())
-                .unwrap_or_default()
+                .unwrap_or_default();
+            let terminal = win
+                .and_then(|win| snap.win_buffers.get(&win))
+                .and_then(|b| b.terminal);
+            (buf, terminal)
             // Read guard drops here, before `live_cwd()` takes its own lock.
         };
+        if let Some(id) = terminal {
+            return crate::pane_status::PaneStatus {
+                filename: self
+                    .terminals
+                    .shell_name(id)
+                    .unwrap_or_else(|| crate::pane_status::NO_NAME.to_owned()),
+                display_path: String::new(),
+                abs_path: String::new(),
+            };
+        }
 
         let cwd = self.live_cwd();
         crate::pane_status::pane_status(&buf, cwd.as_deref(), canonical_home())
@@ -1438,13 +1478,172 @@ impl WolfCore {
         self.send_input(InputEvent::ResizeGrid { grid, cols, rows });
     }
 
-    /// Cleanly shuts down the captive Neovim and tears down the runtime.
+    /// Starts a terminal session running `command` (the user's shell for `None`) and shows
+    /// it in `target`, returning its id, or `None` when the pty or the program cannot be
+    /// started or the placeholder cannot be bound (the session is then hung up).
     ///
-    /// Reaps the child even when it is WEDGED (the `shutdown` reap force-kills after
+    /// The session starts in the tabpage cwd of the target window, falling back to the
+    /// live and then the configured cwd. Blocks on Neovim through
+    /// [`block_on_rpc`](Self::block_on_rpc); when it returns, the binding is in
+    /// [`Snapshot::win_buffers`](crate::render::Snapshot::win_buffers) and the session's
+    /// first frame is published.
+    #[must_use]
+    pub fn open_terminal(
+        &self,
+        target: TerminalTarget,
+        command: Option<TerminalCommand>,
+    ) -> Option<TerminalId> {
+        let win = match target {
+            TerminalTarget::Window(win) | TerminalTarget::Split { win, .. } => win,
+        };
+        let handle = self.nvim.borrow().handle();
+        let tab = self
+            .block_on_rpc("terminal_tabpage", nvim::win_tabpage(handle, win))
+            .ok();
+        let cwd = self.terminals.tab_cwd(tab);
+        let id = match self.terminals.spawn(command, &cwd) {
+            Ok(id) => id,
+            Err(e) => {
+                tracing::warn!("open_terminal could not start the session: {e}");
+                return None;
+            }
+        };
+        if self.bind_placeholder(id, target) {
+            Some(id)
+        } else {
+            self.terminals.remove(id);
+            None
+        }
+    }
+
+    /// Shows running session `id` in `target`, reusing its placeholder buffer when this
+    /// Neovim has one. Returns whether it was bound; `false` for an id with no running
+    /// session. Front-ends rebind every [`live_terminals`](Self::live_terminals) entry this
+    /// way after a [`restart_nvim`](Self::restart_nvim). Blocks as
+    /// [`open_terminal`](Self::open_terminal) does.
+    #[must_use]
+    pub fn bind_terminal(&self, id: TerminalId, target: TerminalTarget) -> bool {
+        self.terminals.is_live(id) && self.bind_placeholder(id, target)
+    }
+
+    /// Binds session `id`'s placeholder into `target` through `wolf_terminal_bind`.
+    fn bind_placeholder(&self, id: TerminalId, target: TerminalTarget) -> bool {
+        let (win, split) = match target {
+            TerminalTarget::Window(win) => (win, ""),
+            TerminalTarget::Split { win, orientation } => (
+                win,
+                match orientation {
+                    crate::layout::SplitOrientation::Horizontal => "h",
+                    crate::layout::SplitOrientation::Vertical => "v",
+                },
+            ),
+        };
+        let handle = self.nvim.borrow().handle();
+        match self.block_on_rpc(
+            "terminal_bind",
+            nvim::terminal_bind(handle, id.0, win, split),
+        ) {
+            Ok(bound) => bound != 0,
+            Err(e) => {
+                tracing::warn!("binding terminal {} failed: {e}", id.0);
+                false
+            }
+        }
+    }
+
+    /// Session `id`'s latest published frame, or `None` for an id no session has. A
+    /// cheap read: no RPC and no wait on the session.
+    #[must_use]
+    pub fn terminal_frame(&self, id: TerminalId) -> Option<Arc<TerminalFrame>> {
+        self.terminals.frame(id)
+    }
+
+    /// Sends a key press to session `id` through the `<C-w>` prefix router: `<C-w>` then
+    /// `s`, `v`, `c`, `q`, `h`, `j`, `k`, `l` or an arrow splits, closes or moves focus
+    /// from the session's pane, and any other key follows a `^W`. A `meta` chord is
+    /// dropped. Never waits on Neovim.
+    pub fn terminal_key(&self, id: TerminalId, key: crate::input::KeyEvent) {
+        self.terminals.key(id, key);
+    }
+
+    /// Sends text to session `id` as typed, such as an input method's commit.
+    pub fn terminal_text(&self, id: TerminalId, text: &str) {
+        self.terminals.text(id, text);
+    }
+
+    /// Pastes text into session `id`, bracketed when its program set mode 2004, with no
+    /// safety prompt.
+    pub fn terminal_paste(&self, id: TerminalId, text: &str) {
+        self.terminals.paste(id, text);
+    }
+
+    /// A mouse event over session `id`'s pane: reported to a program that tracks the mouse,
+    /// unless Shift is held; otherwise a left drag selects and a press clears it.
+    pub fn terminal_mouse(&self, id: TerminalId, event: TerminalMouseEvent) {
+        self.terminals.mouse(id, event);
+    }
+
+    /// A wheel scroll over session `id`'s pane: reported to a tracking program, arrow keys on
+    /// the alternate screen with mode 1007, else a scroll through the scrollback that the
+    /// next key, text or paste snaps back.
+    pub fn terminal_scroll(&self, id: TerminalId, event: TerminalScrollEvent) {
+        self.terminals.scroll(id, event);
+    }
+
+    /// Reports session `id`'s pane gaining or losing focus, or the window's activation. A
+    /// program that set mode 1004 gets a focus report; a loss also rescans the file tree.
+    pub fn terminal_focus(&self, id: TerminalId, gained: bool) {
+        self.terminals.focus(id, gained);
+    }
+
+    /// Sizes session `id` from its pane's content area: `cols` by `rows` cells of
+    /// `cell_w_px` by `cell_h_px` pixels. A zero size is ignored and a zero cell size keeps
+    /// the previous one.
+    pub fn resize_terminal(
+        &self,
+        id: TerminalId,
+        cols: u16,
+        rows: u16,
+        cell_w_px: u32,
+        cell_h_px: u32,
+    ) {
+        self.terminals
+            .resize(id, (cols, rows), (cell_w_px, cell_h_px));
+    }
+
+    /// Hangs session `id` up, after which its exit closes its panes; forgets an exited one.
+    pub fn close_terminal(&self, id: TerminalId) {
+        self.terminals.close(id);
+    }
+
+    /// The running sessions, ascending.
+    #[must_use]
+    pub fn live_terminals(&self) -> Vec<TerminalId> {
+        self.terminals.live()
+    }
+
+    /// The text of session `id`'s selection, for Copy; `None` when nothing is selected.
+    #[must_use]
+    pub fn terminal_selection_text(&self, id: TerminalId) -> Option<String> {
+        self.terminals.selection_text(id)
+    }
+
+    /// Cleanly shuts down the terminal sessions and the captive Neovim, and tears down the
+    /// runtime.
+    ///
+    /// Every session is hung up first, and this returns only once every shell is reaped,
+    /// within one [`TERMINAL_HANGUP_GRACE`](crate::TERMINAL_HANGUP_GRACE) for all of them.
+    /// Reaps the Neovim child even when it is WEDGED (the `shutdown` reap force-kills after
     /// a bounded `child.wait()`) or already dead (a crashed core still returns
     /// `Ok`).
     pub fn shutdown(self) -> Result<(), CoreError> {
-        let WolfCore { runtime, nvim, .. } = self;
+        let WolfCore {
+            runtime,
+            nvim,
+            terminals,
+            ..
+        } = self;
+        terminals.shutdown();
         let nvim = nvim.into_inner();
         runtime.block_on(async move { nvim.shutdown().await })?;
         Ok(())
@@ -1575,6 +1774,7 @@ impl WolfCore {
             proc.setup_fs_events().await?;
             proc.setup_view_tracking().await?;
             proc.setup_preview().await?;
+            proc.setup_terminals().await?;
             Ok::<NvimProcess, NvimError>(proc)
         });
 

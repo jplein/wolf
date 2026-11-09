@@ -22,6 +22,7 @@ use tokio::task::JoinHandle;
 
 use crate::buffer_picker::BufInfo;
 use crate::command::COMMAND_SPECS;
+use crate::input::Nvim;
 use crate::redraw::{RedrawHandler, WakeFn};
 
 /// Application name pinned for the captive nvim, isolating its state dirs.
@@ -1141,6 +1142,45 @@ impl NvimProcess {
         Ok(())
     }
 
+    /// Installs the terminal placeholder tracking inside the captive nvim.
+    ///
+    /// Calls `_G.wolf_setup_terminals` (defined in `runtime/nvim/init.lua`) with this
+    /// channel's id. Its `BufWipeout` autocmd `rpcnotify`s `wolf_terminal_wiped` with the id
+    /// of a wiped placeholder buffer, which hangs that session up; a quitting Neovim sends
+    /// none.
+    pub async fn setup_terminals(&self) -> Result<(), NvimError> {
+        let info = self
+            .nvim
+            .call("nvim_get_api_info", vec![])
+            .await
+            .map_err(|e| NvimError::Rpc(e.to_string()))?
+            .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+
+        let chan = info
+            .as_array()
+            .and_then(|a| a.first())
+            .and_then(Value::as_i64)
+            .ok_or_else(|| {
+                NvimError::Rpc(format!(
+                    "nvim_get_api_info returned no channel id: {info:?}"
+                ))
+            })?;
+
+        let _ = self
+            .nvim
+            .call(
+                "nvim_exec_lua",
+                vec![
+                    Value::from("wolf_setup_terminals(...)"),
+                    Value::Array(vec![Value::from(chan)]),
+                ],
+            )
+            .await
+            .map_err(|e| NvimError::Rpc(e.to_string()))?
+            .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+        Ok(())
+    }
+
     /// Yanks the current visual-mode selection and returns its text.
     ///
     /// Runs ONE mode-guarded static Lua snippet via `nvim_exec_lua` (no string
@@ -1552,6 +1592,66 @@ impl NvimProcess {
         }
         self.supervisor.abort();
     }
+}
+
+/// Runs `init.lua` helper `name` with `args` and returns its integer result, over a bare
+/// handle so the terminal registry's tasks can call the pump's current Neovim.
+async fn exec_lua_int(nvim: Nvim, name: &str, args: Vec<Value>) -> Result<i64, NvimError> {
+    let value = nvim
+        .call(
+            "nvim_exec_lua",
+            vec![
+                Value::from(format!("return {name}(...)")),
+                Value::Array(args),
+            ],
+        )
+        .await
+        .map_err(|e| NvimError::Rpc(e.to_string()))?
+        .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+    Ok(crate::redraw::ext_handle(&value).unwrap_or(0))
+}
+
+/// Shows terminal session `id` in window `win` (`0` for the current window), splitting it
+/// first when `split` is `"h"` or `"v"`, through `wolf_terminal_bind`. Returns the window
+/// the placeholder went into, `0` on failure; the binding is in the snapshot on return.
+pub(crate) async fn terminal_bind(
+    nvim: Nvim,
+    id: u64,
+    win: i64,
+    split: &'static str,
+) -> Result<i64, NvimError> {
+    exec_lua_int(
+        nvim,
+        "wolf_terminal_bind",
+        vec![Value::from(id), Value::from(win), Value::from(split)],
+    )
+    .await
+}
+
+/// Closes every window showing terminal session `id`, emptying a tabpage's last window
+/// instead, through `wolf_terminal_exited`. Returns how many windows it closed or emptied.
+pub(crate) async fn terminal_exited(nvim: Nvim, id: u64) -> Result<i64, NvimError> {
+    exec_lua_int(nvim, "wolf_terminal_exited", vec![Value::from(id)]).await
+}
+
+/// Closes window `win` unless it is its tabpage's last, through `wolf_terminal_close`.
+pub(crate) async fn terminal_close(nvim: Nvim, win: i64) -> Result<(), NvimError> {
+    exec_lua_int(nvim, "wolf_terminal_close", vec![Value::from(win)]).await?;
+    Ok(())
+}
+
+/// The tabpage of window `win` (`0` for the current window).
+pub(crate) async fn win_tabpage(nvim: Nvim, win: i64) -> Result<i64, NvimError> {
+    let value = nvim
+        .call("nvim_win_get_tabpage", vec![Value::from(win)])
+        .await
+        .map_err(|e| NvimError::Rpc(e.to_string()))?
+        .map_err(|e| NvimError::Rpc(format!("{e:?}")))?;
+    crate::redraw::ext_handle(&value).ok_or_else(|| {
+        NvimError::Rpc(format!(
+            "nvim_win_get_tabpage returned no handle: {value:?}"
+        ))
+    })
 }
 
 /// Renders the Markdown SOURCE buffer `source_bufnr` to a themed HTML preview

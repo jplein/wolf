@@ -362,6 +362,7 @@ function _G.wolf_setup_buffer_tracking(chan)
 					buf,
 					vim.bo[buf].buftype == "terminal",
 					vim.b[buf].wolf_terminal == true or vim.w[win].wolf_terminal == true,
+					vim.b[buf].wolf_terminal_id or 0,
 				}
 			end
 		end
@@ -459,17 +460,27 @@ function _G.wolf_setup_theme_tracking(chan)
 		return h
 	end
 
+	-- g:terminal_color_N as a packed color, -1 when unset or not a color.
+	local function terminal_color(n)
+		local value = vim.g["terminal_color_" .. n]
+		if type(value) ~= "string" or value == "" then
+			return -1
+		end
+		local ok, color = pcall(vim.api.nvim_get_color_by_name, value)
+		if not ok or type(color) ~= "number" or color < 0 then
+			return -1
+		end
+		return color
+	end
+
 	local function emit()
 		local cursor = group("WolfCursor")
 		local titlebar = group("WolfTitlebar")
-		vim.rpcnotify(
-			chan,
-			"wolf_theme",
-			cursor.fg or -1,
-			cursor.bg or -1,
-			titlebar.fg or -1,
-			titlebar.bg or -1
-		)
+		local payload = { cursor.fg or -1, cursor.bg or -1, titlebar.fg or -1, titlebar.bg or -1 }
+		for n = 0, 15 do
+			payload[#payload + 1] = terminal_color(n)
+		end
+		vim.rpcnotify(chan, "wolf_theme", (table.unpack or unpack)(payload))
 	end
 
 	local group_id = vim.api.nvim_create_augroup("WolfTheme", { clear = true })
@@ -952,6 +963,113 @@ function _G.wolf_toggle_terminal()
 		_G.wolf_emit_full_width()
 	end
 	vim.cmd("startinsert")
+end
+
+-- Core terminal sessions show in placeholder windows; core owns the pty and the shell.
+-- See specs/terminal-panes.md#terminal-panes-in-the-pane-tree.
+function _G.wolf_setup_terminals(chan)
+	local group = vim.api.nvim_create_augroup("WolfTerminals", { clear = true })
+	vim.api.nvim_create_autocmd("BufWipeout", {
+		group = group,
+		callback = function(args)
+			local id = vim.b[args.buf].wolf_terminal_id
+			-- A quitting Neovim hangs up no session: core's own shutdown does.
+			if id == nil or vim.v.dying > 0 or vim.v.exiting ~= vim.NIL then
+				return
+			end
+			pcall(vim.rpcnotify, chan, "wolf_terminal_wiped", id)
+		end,
+	})
+end
+
+-- Returns the window the placeholder went into, or 0. Ends with wolf_sync_buffers, so core's
+-- snapshot holds the binding when the RPC answers.
+function _G.wolf_terminal_bind(id, win, split)
+	if win == 0 then
+		win = vim.api.nvim_get_current_win()
+	end
+	if not vim.api.nvim_win_is_valid(win) then
+		return 0
+	end
+	local target = 0
+	local created = nil
+	local ok = pcall(wolf_suppress_buffers, function()
+		local buf = nil
+		for _, b in ipairs(vim.api.nvim_list_bufs()) do
+			if vim.api.nvim_buf_is_valid(b) and vim.b[b].wolf_terminal_id == id then
+				buf = b
+				break
+			end
+		end
+		if buf == nil then
+			buf = vim.api.nvim_create_buf(false, true)
+			created = buf
+			vim.bo[buf].bufhidden = "wipe"
+			vim.bo[buf].modifiable = false
+			vim.bo[buf].swapfile = false
+			vim.b[buf].wolf_terminal_id = id
+			vim.b[buf].wolf_full_width = true
+		end
+		local into = win
+		if split == "h" or split == "v" then
+			vim.api.nvim_set_current_win(win)
+			_G.wolf_do_split(split)
+			into = vim.api.nvim_get_current_win()
+		end
+		vim.api.nvim_win_set_buf(into, buf)
+		target = into
+	end)
+	if not ok then
+		target = 0
+		if created ~= nil and vim.api.nvim_buf_is_valid(created) then
+			pcall(vim.api.nvim_buf_delete, created, { force = true })
+		end
+	end
+	-- The autocmds fired while the build was suppressed, before the buffer was tagged.
+	if _G.wolf_emit_current_file then
+		_G.wolf_emit_current_file()
+	end
+	if _G.wolf_emit_full_width then
+		_G.wolf_emit_full_width()
+	end
+	if _G.wolf_sync_buffers then
+		_G.wolf_sync_buffers()
+	end
+	return target
+end
+
+-- A session's shell exited: close its windows, but give a tabpage's last window an empty buffer.
+function _G.wolf_terminal_exited(id)
+	local count = 0
+	for _, win in ipairs(vim.api.nvim_list_wins()) do
+		if vim.api.nvim_win_is_valid(win) and vim.b[vim.api.nvim_win_get_buf(win)].wolf_terminal_id == id then
+			local tab = vim.api.nvim_win_get_tabpage(win)
+			local ok
+			if #vim.api.nvim_tabpage_list_wins(tab) > 1 then
+				ok = pcall(vim.api.nvim_win_close, win, true)
+			else
+				-- Not :enew, which reuses an empty unnamed buffer in place and so keeps the placeholder.
+				ok = pcall(function()
+					vim.api.nvim_win_set_buf(win, vim.api.nvim_create_buf(true, false))
+				end)
+			end
+			if ok then
+				count = count + 1
+			end
+		end
+	end
+	return count
+end
+
+-- Closes a placeholder window, refusing a tabpage's last as wolf_do_close does.
+function _G.wolf_terminal_close(win)
+	if not vim.api.nvim_win_is_valid(win) then
+		return 0
+	end
+	if #vim.api.nvim_tabpage_list_wins(vim.api.nvim_win_get_tabpage(win)) > 1 then
+		pcall(vim.api.nvim_win_close, win, false)
+	end
+	return 0
 end
 
 -- See runtime/nvim/README.md#wolf_toggle_full_width.

@@ -10,6 +10,8 @@ ghostty_vt_archive(
     name = "libghostty_vt",
     src = "@ghostty_vt_src//file",
     deps_tarball = "@ghostty_vt_deps//file",
+    # The //tools/lint fix launchers stage the archive for cargo's run of wolf-vt's build.rs.
+    visibility = ["//tools/lint:__pkg__"],
 )
 
 cc_import(

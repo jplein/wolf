@@ -525,6 +525,10 @@ pub struct WinBuffer {
     /// the buffer, or `w:wolf_terminal` on the window). The drawer is EXCLUDED from
     /// navigation history; a `:terminal` in a normal split is not.
     pub is_drawer: bool,
+    /// The core terminal session the window shows, when its buffer is a session's
+    /// placeholder (`b:wolf_terminal_id`). A pane is a terminal pane exactly when this is
+    /// `Some`; the front-end paints it from [`crate::WolfCore::terminal_frame`].
+    pub terminal: Option<crate::terminal::TerminalId>,
 }
 
 /// The Tier-1 open-file mirror entry for one tabpage: the instance's file-backed

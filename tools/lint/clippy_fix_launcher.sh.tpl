@@ -38,9 +38,25 @@ if [[ -z "${BUILD_WORKSPACE_DIRECTORY:-}" ]]; then
   exit 1
 fi
 
+# wolf-vt's build.rs links lib/libghostty-vt.a from WOLF_GHOSTTY_VT_DIR, so the staged Bazel
+# archive is given a scratch prefix of its own.
+GHOSTTY_VT_ARCHIVE="${RUNFILES_DIR}/_main/@@GHOSTTY_VT_SHORT_PATH@@"
+if [[ ! -f "${GHOSTTY_VT_ARCHIVE}" ]]; then
+  echo "ERROR: could not locate the staged libghostty-vt archive in the runfiles tree." >&2
+  echo "       RUNFILES_DIR=${RUNFILES_DIR}" >&2
+  exit 1
+fi
+GHOSTTY_VT_ARCHIVE="$(cd "$(dirname "${GHOSTTY_VT_ARCHIVE}")" && pwd)/libghostty-vt.a"
+GHOSTTY_VT_PREFIX="$(mktemp -d "${TMPDIR:-/tmp}/wolf-ghostty-vt.XXXXXX")"
+trap 'rm -rf "${GHOSTTY_VT_PREFIX}"' EXIT
+mkdir -p "${GHOSTTY_VT_PREFIX}/lib"
+ln -s "${GHOSTTY_VT_ARCHIVE}" "${GHOSTTY_VT_PREFIX}/lib/libghostty-vt.a"
+export WOLF_GHOSTTY_VT_DIR="${GHOSTTY_VT_PREFIX}"
+
 cd "${BUILD_WORKSPACE_DIRECTORY}"
 echo "Using cargo: ${CARGO}"
 # Not --workspace: wolf-gnome's GTK stack does not build on macOS, so only the crates Bazel
 # builds are fixed.
 echo "Running: cargo clippy --fix --allow-dirty --allow-staged -p wolf-core -p wolf-ffi $*"
-exec "${CARGO}" clippy --fix --allow-dirty --allow-staged -p wolf-core -p wolf-ffi "$@"
+# Not exec: the EXIT trap removes the scratch prefix once cargo is done.
+"${CARGO}" clippy --fix --allow-dirty --allow-staged -p wolf-core -p wolf-ffi "$@"

@@ -8,10 +8,16 @@ launcher that puts the toolchain `bin/` on PATH and runs the fixer(s) in
 `$BUILD_WORKSPACE_DIRECTORY` (the developer's real checkout).
 
 Two rules:
-  - `clippy_fix`: runs `cargo clippy --fix --allow-dirty --allow-staged --workspace`.
+  - `clippy_fix`: runs `cargo clippy --fix --allow-dirty --allow-staged` on wolf-core and
+                  wolf-ffi.
   - `fix_all`:    runs rustfmt, then `cargo clippy --fix`, then
                   `:swift_format.fix` with no arguments, which formats the
                   wolf-macos sources and tests with the host Xcode swift-format.
+
+Both also stage the Bazel-built `//bazel/ghostty-vt:libghostty_vt` archive. wolf-core
+depends on wolf-vt, whose `build.rs` links `lib/libghostty-vt.a` from the prefix
+`WOLF_GHOSTTY_VT_DIR` names and panics without it, so each launcher makes a scratch
+prefix holding the staged archive and exports the variable before the cargo step.
 
 CAVEAT (documented in build.md / README): `cargo clippy --fix` shells out to
 cargo, which resolves crates from crates.io (network) and links via
@@ -27,10 +33,14 @@ def _toolchain_launcher(ctx, template):
         output = launcher,
         substitutions = {
             "@@CARGO_SHORT_PATH@@": toolchain.cargo.short_path,
+            "@@GHOSTTY_VT_SHORT_PATH@@": ctx.file._ghostty_vt.short_path,
         },
         is_executable = True,
     )
-    runfiles = ctx.runfiles(transitive_files = toolchain.all_files)
+    runfiles = ctx.runfiles(
+        files = [ctx.file._ghostty_vt],
+        transitive_files = toolchain.all_files,
+    )
     return [DefaultInfo(executable = launcher, runfiles = runfiles)]
 
 def _clippy_fix_impl(ctx):
@@ -40,6 +50,10 @@ clippy_fix = rule(
     implementation = _clippy_fix_impl,
     doc = "Runs `cargo clippy --fix` using the rules_rust downloaded toolchain.",
     attrs = {
+        "_ghostty_vt": attr.label(
+            default = Label("//bazel/ghostty-vt:libghostty_vt"),
+            allow_single_file = True,
+        ),
         "_launcher_tpl": attr.label(
             default = Label("//tools/lint:clippy_fix_launcher.sh.tpl"),
             allow_single_file = True,
@@ -62,6 +76,7 @@ def _fix_all_impl(ctx):
             "@@CARGO_SHORT_PATH@@": rust_toolchain.cargo.short_path,
             "@@RUSTFMT_SHORT_PATH@@": rustfmt_toolchain.rustfmt.short_path,
             "@@SWIFT_FORMAT_FIX_SHORT_PATH@@": swift_format_fix.short_path,
+            "@@GHOSTTY_VT_SHORT_PATH@@": ctx.file._ghostty_vt.short_path,
         },
         is_executable = True,
     )
@@ -69,6 +84,7 @@ def _fix_all_impl(ctx):
     # Both toolchains: the rust toolchain's bare `rustfmt` links a different librustc_driver hash
     # and aborts at load time, so rustfmt comes from the separate rustfmt toolchain.
     runfiles = ctx.runfiles(
+        files = [ctx.file._ghostty_vt],
         transitive_files = depset(
             transitive = [rust_toolchain.all_files, rustfmt_toolchain.all_files],
         ),
@@ -79,6 +95,10 @@ fix_all = rule(
     implementation = _fix_all_impl,
     doc = "Runs rustfmt + cargo clippy --fix + swift-format format, all in place.",
     attrs = {
+        "_ghostty_vt": attr.label(
+            default = Label("//bazel/ghostty-vt:libghostty_vt"),
+            allow_single_file = True,
+        ),
         "_launcher_tpl": attr.label(
             default = Label("//tools/lint:fix_all.sh"),
             allow_single_file = True,

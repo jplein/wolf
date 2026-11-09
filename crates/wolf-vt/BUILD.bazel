@@ -24,6 +24,36 @@ rust_test(
     deps = [":wolf_vt"],
 )
 
+# Headless, as `:binding`.
+rust_test(
+    name = "render",
+    srcs = ["tests/render.rs"],
+    crate_root = "tests/render.rs",
+    size = "small",
+    edition = "2021",
+    deps = [":wolf_vt"],
+)
+
+# Headless, as `:binding`.
+rust_test(
+    name = "encoders",
+    srcs = ["tests/encoders.rs"],
+    crate_root = "tests/encoders.rs",
+    size = "small",
+    edition = "2021",
+    deps = [":wolf_vt"],
+)
+
+# Headless, as `:binding`.
+rust_test(
+    name = "effects",
+    srcs = ["tests/effects.rs"],
+    crate_root = "tests/effects.rs",
+    size = "small",
+    edition = "2021",
+    deps = [":wolf_vt"],
+)
+
 # This package's sources and docs for //tools/lint, which cannot glob across packages.
 comment_srcs()
 
