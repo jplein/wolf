@@ -457,13 +457,14 @@ Purpose: the pure, GTK-free rulebook for crash and stall recovery — everything
 
 - `liveness_ui(liveness, may_auto_restart) -> LivenessUi` — the overlay mode, whether to schedule an automatic restart, and whether painting this wake is worth anything.
 - `overlay_message(mode)`, `restart_outcome(respawned, fresh)`, `reopen_order(files, active)`, `restart_button_rect(w, h)`.
+- `terminal_restore(splits, drawer_open, live)` — a restart's `TerminalRestore` steps ([order](../../../specs/terminal-panes.md#when-neovim-dies)).
 - The overlay and banner strings, `MAX_AUTO_RESTART_ATTEMPTS`, and the four geometry constants.
 
 **Decisions**
 
 - Both matches are total, with no catch-all arm, so a new `Liveness` variant fails to compile here until it is classified.
 - `Alive` and `NotResponding` are insensitive to the attempt budget: a spent budget must never stop a healthy editor painting, and a wedged Neovim must never be force-killed automatically.
-- `Crashed { retrying }` means an automatic attempt is still permitted, not that one is in flight — the counter is incremented when the attempt is scheduled.
+- `Crashed { retrying }` means an automatic attempt is still permitted, not that one is in flight — the counter counts scheduled attempts.
 - A `Refresh` outcome never requests an automatic restart, or a persistently failing respawn would retry from inside the restart path and bypass the cap entirely.
 - `reopen_order` appends the active path last, and appends it even when it was absent from the set. Reopening rides one ordered channel, so the last path opened is the one that ends up focused.
 - `restart_button_rect` collapses the whole result on a degenerate or too-small allocation rather than returning a partial rect, so a caller deriving a click point must check the size before trusting the origin.
@@ -553,9 +554,9 @@ Purpose: the pure codec between the live pane tree, whose leaves are pane ids, a
 
 **Public API**
 
-- `resolve_leaves(&[(PaneId, WinContent)]) -> Option<HashMap<PaneId, LeafContent>>` — the step ahead of `encode`. `WinContent` is `Preview(source)`, `Buffer(path)` or `Unknown`, the last for a window in neither snapshot map.
+- `resolve_leaves(&[(PaneId, WinContent)]) -> Option<HashMap<PaneId, LeafContent>>` — the step ahead of `encode`. `WinContent` is `Preview(source)`, `Buffer(path)`, `Terminal(cwd)` or `Unknown`, the last for a window in neither snapshot map.
 - `LayoutGather` — one tab's gather answer: `Ready(Option<PaneNode>)`, whose `None` is content suppression, or `Refuse`.
-- `encode(layout, contents) -> PaneNode` — `contents` maps each leaf id to its `LeafContent`, a raw path plus a preview flag; a missing id becomes an empty, non-preview leaf.
+- `encode(layout, contents) -> PaneNode` — `contents` maps each leaf id to its `LeafContent`, a raw path plus preview and terminal flags; a missing id becomes an empty leaf.
 - `decode(node, first_leaf_id) -> Option<(PaneTree, Vec<PaneId>)>` — leaf `i` is the pane for handle `i`, ids allocated in depth-first order.
 - `is_empty_leaf(node)`, `leaf_count(node)`, `leaf_paths_dfs(node)`, `MAX_RESTORE_LEAVES`, `MAX_RESTORE_DEPTH`.
 
@@ -574,7 +575,7 @@ Purpose: the GTK glue turning `layout`'s pane tree into nested `gtk::Paned`, one
 
 - `build(core, metrics) -> PaneHandle` — panes appear with the first grid.
 - `cmdline_widget()` — the focus-return target for overlays and sidebar; plus `toast_widget()` and `pum_widget()`.
-- `reset_after_restart()`, `request_layout_rebuild(saved)`, `realize_layout(saved)`, `layout_snapshot() -> LayoutGather`, `snapshot_readiness()`, `readiness()`.
+- `reset_after_restart()`, `drawer_is_open()`, `request_terminal_restore(steps)`, `request_layout_rebuild(saved)`, `realize_layout(saved)`, `layout_snapshot() -> LayoutGather`, `snapshot_readiness()`, `readiness()`.
 - `active_terminal()`, `sync_terminal_focus(focused)`, `request_terminal(command)`.
 
 **Decisions**
@@ -744,7 +745,7 @@ Purpose: the pure, GTK-free rulebook for Save and Save As — whether a press wr
 **Public API**
 
 - `save_press(liveness, target) -> SavePress` (`Write`, `Choose`, `Refuse(reason)`) and `save_as_press`, whose accepted arm is always `Choose`. Both are total over `Option<Liveness>` with no `_` arm, and decide liveness ahead of the buffer's shape.
-- `SaveTarget` — path, preview flag and terminal flag, which must come from one snapshot pass.
+- `SaveTarget` — path, preview flag and terminal-pane flag, which must come from one snapshot pass.
 - `save_dialog_proposal(path, cwd)`, `save_as_target(chosen)`, and `UNTITLED_SAVE_NAME`.
 
 **Decisions**
@@ -933,7 +934,7 @@ Purpose: the root of the terminal-pane modules. A pane whose window shows a `wol
 
 **Decisions**
 
-- The hook is the cage smokes' one route to a terminal pane, since nothing user-facing opens a session. [`app.rs`](#apprs) reads the variable, and [`pane_view.rs`](#pane_viewrs) opens the session in the first wake with a pane ([why there](../../../notes/wolf-gnome-decisions.md#terminal-panes)).
+- The hook opens the session before the app reports ready, so a smoke's first typed key reaches its program. [`app.rs`](#apprs) reads the variable, and [`pane_view.rs`](#pane_viewrs) opens the session in the first wake with a pane ([why there](../../../notes/wolf-gnome-decisions.md#terminal-panes)).
 
 #### `title.rs`
 

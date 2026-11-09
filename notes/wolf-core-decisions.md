@@ -63,7 +63,7 @@ A restart starts the render state over. A fresh Neovim numbers its windows from 
 
 The snapshot reset carries four fields. `seq` never goes back, because flush waiters key on it advancing. `open_files`, `tab_cwds` and `current_tabpage` are what a front-end captures before restarting, and a failed respawn must leave them for the next attempt; the fresh Neovim replaces each one wholesale during setup.
 
-Terminal sessions live beside the Neovim process rather than in the snapshot, so neither a crash nor a restart touches them ([When Neovim dies](../specs/terminal-panes.md#when-neovim-dies)).
+Terminal sessions live beside the Neovim process rather than in the snapshot, so neither a crash nor a restart touches them. A front-end puts them back after a respawn through `queue_bind_terminal`, which goes through the input queue ([When Neovim dies](../specs/terminal-panes.md#when-neovim-dies) says why).
 
 The front-end reads liveness on each wake to drive its crash and stall overlay.
 
@@ -90,7 +90,8 @@ The front-end reads liveness on each wake to drive its crash and stall overlay.
 
 - `KeyEvent` carries no physical key. libghostty-vt's key encoder derives control and modifier sequences from the key code, the modifiers and the unshifted text, and core maps a character to the US-layout key that types it. A new field would change every `KeyEvent` literal in both front-ends for nothing the encoder reads.
 - A router split or close runs as a task on core's runtime, so `terminal_key`, called on a front-end thread, never waits on a wedged Neovim. A focus chord pushes its `FocusDir` intent directly. A split runs the origin session's program and arguments again rather than the default shell.
-- A shell's exit is published at once, and the reader then asks Neovim, through `wolf_terminal_exited`, to close every window showing the session. The resulting wipe removes it, so the exited frame stays readable while a pane still shows it. Core removes the session itself only when no window showed it or the call failed.
+- A typed `:terminal` reaches core as the `wolf_terminal_open` notification, whose handler only hands the window to a runtime task, as a router split does. The bind ends with `wolf_sync_buffers`, whose `wolf_barrier` request nvim-rs answers only after the running notification handler returns, so awaiting the bind inline would deadlock.
+- A shell's exit is published at once, and the reader then asks Neovim, through `wolf_terminal_exited`, to close every window showing the session. The resulting wipe removes it, so the exited frame stays readable while a pane still shows it. Core removes the session itself only when no window showed it or the call failed. A hidden drawer's placeholder has no window, so `wolf_terminal_exited` also deletes every buffer still tagged with the session, and that wipe removes it; the next toggle then starts a new shell.
 - `close_terminal` hangs a running session up rather than removing it, so its panes close by that same exit path.
 - A hang-up sends `SIGHUP` to the shell's group, closes the master, polls up to `TERMINAL_HANGUP_GRACE`, then sends `SIGKILL` and reaps. `shutdown` hangs every session up before joining any reader, so it takes one grace for all of them rather than one each.
 - libghostty-vt's callbacks only push onto an effect queue the `wolf_vt::Terminal` owns. They run inside a library call under the session lock, where a pty write or a lock would stall or deadlock, so whoever holds the lock drains the queue after the call and hands any reply to the writer.
@@ -111,11 +112,9 @@ The watcher watches a root recursively while a live registry entry has it. The w
 
 A watcher remove or rename forces a rescan, since it may take a listed file away. A create or modify relies on `needs_rescan`'s `seen` check, and a `.gitignore` edit forces, since it changes what the walk lists. Every event is first judged by the walk's own rules — the excluded names, the depth cap, `skip_dirs` and the gitignore chain ([how the filter replays it](crates/wolf-core/src/files.rs.md#the-gitignore-chain)). A `cargo build` under an ignored `target/` would otherwise cause a stream of re-walks, and judging by the walk's rules means a dropped event is never one the walk would list.
 
-The nvim triggers are two classes. Path-carrying buffer events (`BufWritePost` conditional, `BufFilePost`/`BufDelete` force) cover changes nvim makes itself; path-less refocus-edge force events (`ShellCmdPost`/`FocusGained`/`TermLeave`) catch mutations that fire no buffer event — a `:!git mv`, an external terminal or Finder while the app is unfocused, a command run in the drawer's shell. Core adds a fourth path-less force of its own, a core terminal pane losing focus (`terminal_focus(id, false)`), which covers a command run in a core session as `TermLeave` covers the drawer.
+The nvim triggers are two classes. Path-carrying buffer events (`BufWritePost` conditional, `BufFilePost`/`BufDelete` force) cover changes nvim makes itself; path-less refocus-edge force events (`ShellCmdPost`/`FocusGained`) catch mutations that fire no buffer event — a `:!git mv`, an external terminal or Finder while the app is unfocused. Core adds a path-less force of its own, a terminal pane losing focus (`terminal_focus(id, false)`), which covers a command run in a terminal pane, the drawer's included: every exit from one passes a focus loss.
 
 The refocus-edge triggers stay beside the watcher because the edges are human-paced and the debounce plus the equality skip bound each to at most one no-op walk, and because they are the only path when the watcher cannot run (see the limitations below).
-
-`TermLeave` is chosen over `WinLeave` or `TermClose` because the drawer auto-`startinsert`s on `WinEnter`, so every drawer-exit path passes a terminal-to-normal mode change and the one unguarded event covers them all.
 
 A rescan is walk-then-swap, never streaming: a delete can only be expressed by wholesale replacement, so the re-walk collects into a local vec and replaces the session's list under one short write lock, bumping `version`. A result equal to the current listing skips both the swap and the version bump, so a no-op event — a `:bdelete` of a still-existing file — causes no UI churn.
 

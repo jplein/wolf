@@ -115,6 +115,8 @@ The size takes `fullWidth(forWin:)` rather than `fullWidth(forGrid:)`, because t
 
 A session holds focus while its pane is the active pane of the key window, and `syncTerminalFocus` reports the loss before the gain. It runs on every active-pane change, every wake and both key-window edges, and app deactivation resigns the key window. The loss matters beyond mode 1004: core rescans the project on it, so a restart reports it too.
 
+After a crash-restart, `Project.respawnNeovim` captures each view's terminal-pane sessions and drawer state before `handle.restart()`, and hands each view its own [`terminalRestore`](../crates/wolf-macos/Sources/WolfKeyMap/README.md#livenessseamswift) steps. A view runs them once, from a render wake after `ensureInitialPane` has bound its first pane, while its tabpage is current and no layout rebuild waits ([why](crates/wolf-macos/Sources/WolfMacOS/PaneContainerView.swift.md#terminal-restore)). `rebind(tabpageHandle:)` clears a request made before it.
+
 ## Present limitations
 
 - Only windows opened via the overridden split commands (`<C-w>s`/`v`, `:split`/`:vsplit`) become panes. Help, quickfix, preview, and `:diffsplit` windows do not, and floating or external windows are ignored.

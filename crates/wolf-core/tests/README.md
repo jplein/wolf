@@ -31,6 +31,7 @@ It offers:
 - `start_core_with_temp_md[_sized]` opens a temp `.md` and returns once it is current and drawn: `current_file` is the file, a frame has landed after the startup barrier, and row 0 shows text when the fixture's first line has text. It panics naming the file after `FLUSH_TIMEOUT`.
 - `short_tempdir()` returns an owned, canonical temp dir under the first of the OS temp dir and `/tmp` that is writable and at most `SHORT_TEMP_ROOT_MAX` bytes canonical. A swap-bearing fixture placed in it must keep its name within `SHORT_FIXTURE_NAME_MAX`; `SWAP_NAME_MAX` mirrors init.lua's constant.
 - Terminal sessions: `sh_script`, `interactive_sh` and `cat_command` build the `/bin/sh` commands tests run, never `$SHELL`. `cat_command(prelude)` prints `prelude`, makes its tty raw without echo, prints `CAT_READY` and becomes `cat -v`, so `cat_output` shows each byte the session was sent. `open_session`, `open_cat`, `poll_frame`, `wait_for_text`, `run_line`, `term_key` and `term_ctrl` drive a session; `win_terminal` and `terminal_windows` read the bindings in `win_buffers`; `wait_for_pid`, `pid_alive` and `wait_for_pid_gone` follow a shell's process. `recording_wake_channel` also returns a `WakeLog` of every wake's instant.
+- `pin_default_shell()` sets `SHELL=/bin/sh` once per process, for a test that opens a default-shell session: the drawer, a typed `:terminal` or a terminal leaf.
 - `send_ex` types `:{cmd}<CR>` as keystrokes; `probe_values` evaluates expressions inside the live nvim by having it `writefile` them to a probe path and polling that file — the eval channel for a core that exposes no eval RPC. `resolve_test_runfile` resolves extra Bazel-staged runfiles beyond nvim + init.lua.
 
 **Gotchas**
@@ -199,7 +200,7 @@ Real Neovim (`//crates/wolf-core:file_search_rescan`: staged nvim runfiles, `WOL
 
 **Covers**
 
-- Rescans of a live `FileSearch` session from each nvim trigger alone, with the watcher off: a file written through nvim appears with `version` bumped and the session `complete`; a deleted file stays gone despite the MRU seed; `:saveas` lists both names; `:w` of a listed file moves nothing; a burst converges deduplicated. The refocus-edge cases drive a `:silent !rm`, both `set_ui_focus` edges (nvim de-dupes `FocusGained`), and the real `toggle_terminal` flow, never a `doautocmd`.
+- Rescans of a live `FileSearch` session from each nvim trigger alone, with the watcher off: a file written through nvim appears with `version` bumped and the session `complete`; a deleted file stays gone despite the MRU seed; `:saveas` lists both names; `:w` of a listed file moves nothing; a burst converges deduplicated. The refocus-edge cases drive a `:silent !rm`, both `set_ui_focus` edges (nvim de-dupes `FocusGained`), and the drawer's `terminal_focus(id, false)`, never a `doautocmd`.
 - With the watcher on and changes made only through `std::fs`: a create appears; a delete, and a rename into an ignored directory, disappear; a `.gitignore` edit re-filters; ignored churn and a modify of a listed file bump no `version`.
 
 **Gotchas**
@@ -342,7 +343,7 @@ Real Neovim (`WOLF_NVIM_BIN`, `no-sandbox` target with staged nvim runfiles).
 **Gotchas**
 
 - Never assert an absolute stack depth — the startup buffer is a named `<cwd>/Untitled.md`, so every pane's history opens with an extra `Edit`. Assert relative growth and newest-first row prefixes.
-- The terminal-drawer exclusion cases guard three separate init.lua mechanisms (coalesced `wolf_buffers` emits, `wolf_suppress_buffers` around the drawer open, and the `is_drawer` buffer-or-window tag); a regression in any one shows up here.
+- The terminal cases guard `wolf_suppress_buffers` around the drawer open and core's exclusion of every terminal pane, which prunes a window that becomes one through a typed `:terminal`; a regression in either shows up here.
 
 #### `nvim_liveness.rs`
 
@@ -369,7 +370,7 @@ Real Neovim (`WOLF_NVIM_BIN`, `no-sandbox` target with staged nvim runfiles).
 **Covers**
 
 - `restart_nvim()` from `Dead` respawns (`Ok(true)`) with none of the pre-crash files, and the mirror captured before it drives the reopen; on a live core it is a no-op `Ok(false)`.
-- The mirror carries no `term://` entry or terminal `active` ([why](../src/README.md#redrawrs)).
+- A scripted Neovim terminal is in neither half of the mirror ([why](../../../runtime/nvim/README.md#wolf_setup_open_fileschan)).
 - Typing queued before the handle swap never reaches the fresh nvim; a queued resize does.
 - The reset: no window, command line, intent or history of the dead nvim survives, and `seq` never goes back.
 - Evidence, green on base: four death modes are each seen and restarted on one core, a death releases a waiting call, and a restart leaves a sibling core alone. Its `qa!` is scripted, because a typed `:qa!` closes a window ([`commands.rs`](#commandsrs)).
@@ -378,7 +379,6 @@ Real Neovim (`WOLF_NVIM_BIN`, `no-sandbox` target with staged nvim runfiles).
 
 - The Tier-1 set includes the unsaved startup `Untitled.md`, whose `:e` reopen recovers its edits from swap.
 - Canonicalize every path: macOS `/tmp` and `/var` are symlinks.
-- The drawer case polls `win_buffers` for an `is_terminal` entry first, or the mirror read races its emit.
 - The queued-typing case holds a `SnapshotReadGuard` across the restart, parking the pump so the keys straddle the swap; unstalled, the test cannot fail. Its deferred kill leaves no command line open.
 - The reset case kills nvim from outside, after the snapshot shows an open command line: the notifications queued at a death are dropped ([why](../../../notes/wolf-core-decisions.md#threading-and-locking)).
 - The intents case drains nothing between `:vsplit` and the restart, so the dead split's `Split` stays queued.
@@ -415,7 +415,6 @@ Headless: `pane_status` is IO-free string and path math, so the target needs no 
 **Covers**
 
 - The pane statusbar display strings: cwd-relative remainder (nested and direct), the `~` home-relative form, absolute passthrough, `[No Name]` for an empty buffer path, and cwd-over-home precedence.
-- The terminal arm: a `term://` name shows its command's first word's basename with an empty `display_path` and a raw `abs_path`, split at the first `//<pid>:`; a name with no command word, or a path merely containing `term://`, keeps the path rules.
 
 **Gotchas**
 
@@ -463,6 +462,7 @@ Real Neovim: needs `WOLF_NVIM_BIN`, the staged nvim runfiles, and `tags = ["no-s
 
 - `WolfCore::rebuild_layout(spec_json)` realizing a saved pane-split tree: one handle per spec leaf, distinct, in DFS/leaf order, each bound to the requested buffer — across nested splits, lone leaves, empty-path leaves, and `preview: true` leaves reconstructed as real previews rather than `:edit`.
 - `rebuild_reports_every_leaf_window_on_return`: when the rebuild returns, `win_buffers` already reports every returned window with its leaf's file, and Neovim lists all three files, which rules out the `:edit`s themselves racing startup. It repeats on `BARRIER_ROUNDS` fresh cores.
+- A terminal leaf's session, bound into its window and started in the leaf's directory, else the tabpage cwd.
 
 **Gotchas**
 
@@ -618,7 +618,7 @@ Real Neovim (staged runfiles, wired `WOLF_NVIM_BIN`, `no-sandbox`).
 
 Headless — driven entirely through `tempfile` dirs handed to `StateStore::open` / `load_state`, so its target needs no runfiles and no `no-sandbox` tag.
 
-**Covers** — the per-tab pane tree: `TabState.layout: Option<PaneNode>` round-tripping through `set_snapshot` -> `flush` -> `load_state` for leaf, two-child, n-ary, perpendicular-nested and empty-path shapes; the on-disk serde tags and orientation strings; and that a v1 file missing `layout`, or a leaf missing `preview`, loads with the `serde(default)` value rather than being rejected.
+**Covers** — the per-tab pane tree: `TabState.layout: Option<PaneNode>` round-tripping through `set_snapshot` -> `flush` -> `load_state` for leaf, two-child, n-ary, perpendicular-nested and empty-path shapes; the on-disk serde tags and orientation strings; and that a v1 file missing `layout`, or a leaf missing `preview` or `terminal`, loads with the `serde(default)` value rather than being rejected. Only a terminal leaf writes a `terminal` key.
 
 It also covers `rebuild_layout_spec`, the wire document `wolf_rebuild_layout` decodes: the `Vertical` to `"v"` orientation row, leaf order matching the depth-first order `WolfCore::rebuild_layout` returns handles in, a path carrying a quote, a backslash and a newline surviving intact, and a non-finite weight emitted as `0.0` without breaking the document.
 
@@ -664,6 +664,19 @@ It also measures the tabpage scope of the snapshot maps, which is a property of 
 
 **Gotchas** — A switch does not churn grid ids: nvim emits `win_hide` for the leaving tabpage's windows rather than `win_close` / `grid_destroy`, and reuses both the grid id and the window handle on the way back. That is an observation about nvim rather than a contract, so assert on window-handle membership and `grid_for_win` round-trips, never on literal grid ids or map order. `win_hide` removes the window from `Snapshot.windows` but keeps its grid in `Snapshot.grids` and its entry in `Snapshot.win_buffers`.
 
+#### `terminal_drawer.rs`
+
+Real Neovim and the default shell, pinned to `/bin/sh`, in a pty (`//crates/wolf-core:terminal_drawer`, as `terminal_input`).
+
+**Covers**
+
+- `toggle_terminal` opening the drawer on a core session: the `is_drawer` window carries the session `drawer_terminal` names, a `DrawerOpen` intent names it, and the placeholder is `nofile`, `bufhidden=hide` and full width.
+- Hiding keeping the session and reopening reusing it; the shell's exit closing the drawer and leaving no placeholder, so the next toggle starts a new shell.
+- Split chords in the drawer doing nothing, and `<C-w>c` hiding it.
+- The drawer's session surviving a Neovim kill and `restart_nvim`, and the next toggle showing it again.
+
+**Gotchas** — A hidden placeholder shows in no window, so the exit case counts tagged buffers through `getbufinfo()`. The ignored-chord case waits `NEGATIVE_SETTLE`; widen it if it flakes.
+
 #### `terminal_input.rs`
 
 Real Neovim and real `/bin/sh` sessions in ptys (`//crates/wolf-core:terminal_input`: staged nvim runfiles, `WOLF_NVIM_BIN`, `no-sandbox`, `medium`).
@@ -687,6 +700,7 @@ Real Neovim and real `/bin/sh` sessions in ptys (`//crates/wolf-core:terminal_li
 - A shell's exit reported in `exited` while Neovim is blocked, then its pane closed and the session gone; in a tabpage's last window, an empty buffer in its place.
 - `:close` of the placeholder window and `close_terminal` each hanging the shell up; `shutdown` returning only once every shell is reaped, one that ignores `SIGHUP` included.
 - A session surviving a Neovim kill and `restart_nvim`, taking input while Neovim is `Dead`, and re-bound through `bind_terminal`.
+- After a restart, `queue_bind_terminal` landing behind an `Open` queued before it, and queueing nothing for an id with no session.
 
 **Gotchas**
 
@@ -709,6 +723,7 @@ Real Neovim and real `/bin/sh` sessions in ptys (`//crates/wolf-core:terminal_se
 
 - Output reaching the frame's cells and keys reaching the shell; a resize reaching both the frame and `stty size`; the shell's `TERM`, `COLORTERM`, `TERM_PROGRAM` and tabpage cwd.
 - Ids counting up and never reused, a missing program opening nothing, the placeholder's `win_buffers` binding and buffer options, and `pane_status` reporting the shell name.
+- Typed `:terminal`, `:term` and `:ter` each opening a session in the current window, never Neovim's own terminal.
 - Row versions following the rows that change, a publish waking without bumping `seq`, publishes at least `TERMINAL_PUBLISH_INTERVAL` apart, a render hold deferring the publish until released or until `TERMINAL_RENDER_HOLD_MAX`, and the default, `ANSI` and cursor colours following the editor.
 
 **Gotchas**

@@ -8,7 +8,7 @@ A `wolf_fs_changed` notification is not render state, so the handler takes no sn
 
 The single argument is one msgpack array, the `[event_name, abs_path]` pair, like the other single-payload `wolf_*` events. The path is canonicalized to match the canonical paths in a session's `seen` set, with a raw fallback because canonicalization fails for a just-deleted path; a mismatch only fails open to an extra walk.
 
-`force` marks the unconditional events. Only `BufWritePost` depends on the path being new to a session, so the path-less refocus events (`ShellCmdPost`, `FocusGained`, `TermLeave`, arriving as `[event, ""]`) need no extra decoding: `force` short-circuits before the path matters.
+`force` marks the unconditional events. Only `BufWritePost` depends on the path being new to a session, so the path-less refocus events (`ShellCmdPost` and `FocusGained`, arriving as `[event, ""]`) need no extra decoding: `force` short-circuits before the path matters.
 
 ## Orphaned nav history
 

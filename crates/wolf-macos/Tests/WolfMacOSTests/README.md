@@ -53,8 +53,30 @@ Purpose: Starts a real core over the staged Neovim for the view tests that need 
 
 **Decisions**
 
-- The environment is prepared once per process, before any core or config read: `WOLF_NVIM_BIN` from the staged tree, and fresh `WOLF_STATE_DIR` and `WOLF_CONFIG_DIR`, so no test touches the user's state or preferences. Once, because `setenv` races a concurrent `getenv`.
+- The environment is prepared once per process, before any core or config read: `WOLF_NVIM_BIN` from the staged tree, fresh `WOLF_STATE_DIR` and `WOLF_CONFIG_DIR`, so no test touches the user's state or preferences, and `SHELL=/bin/sh`, so the drawer and a typed `:terminal` run a known shell. Once, because `setenv` races a concurrent `getenv`.
 - A staged tree that does not resolve fails the test, naming the variable, rather than skipping: this target always stages Neovim.
+
+#### `TerminalViewFixture.swift`
+
+Purpose: A `PaneContainerView` over a [`LiveCore`](#livecoreswift), hosted offscreen at a fixed `windowSize` with its first pane bound, for the drawer and terminal-pane flow tests. It asserts nothing.
+
+**Public API**
+
+- `wake(until:)` — runs render wakes until the condition holds or `timeout` passes.
+- `view(showing:)`, `window(showing:)`, `text(of:)` — a session's terminal view, placeholder window and frame text.
+- `isInDrawerStrip(_:)` — whether a view lies in the container's lower half. The drawer's rect is private, and at `windowSize` its strip, a third of the height, lies wholly there.
+- `runLine`, `terminalChord`, `neovimChord`, `typeEx` — input to a session or to Neovim.
+
+#### `TerminalDrawerTests.swift`
+
+**Covers** — `toggle_terminal()` showing a terminal view in the drawer strip on the drawer window's session, painting a truecolour background the shell prints, hiding with the session kept, and showing the same session again on the next toggle.
+
+#### `TerminalPaneFlowTests.swift`
+
+**Covers**
+
+- `<C-w>h` in a terminal pane focusing the editor beside it, `<C-w>l` there focusing the pane again, and `<C-w>v` in the pane splitting it onto a new, focused session.
+- `capturedTerminals()` naming the tree's terminal leaf, not the drawer's session, and the drawer open. After a Neovim kill and restart, `requestTerminalRestore` putting that session back as a terminal leaf beside the editor and reopening the drawer on its own session, both with their output.
 
 #### `TerminalPaneRenderTests.swift`
 

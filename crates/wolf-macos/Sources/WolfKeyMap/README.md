@@ -298,14 +298,14 @@ Purpose: The crash/stall recovery rulebook: what a wake does by liveness and res
 - `NvimLiveness` — its raw values are `wolf-ffi`'s `mod liveness` discriminants; an unknown one decodes to `nil`, read as `.alive`.
 - `decision(liveness:autoRestartAttempts:)` — `overlay` (`.hidden`, `.crashed(retrying:)`, `.stalled`), `autoRestart`, `render` and `persist` (both only for `.alive`), and `drain`.
 - `maxAutoRestartAttempts` — one automatic attempt per crash.
-- `restoreSteps(for:)` — each `CapturedView`'s `RestoreStep`s; an empty `cwd` or `activePath` means none.
+- `restoreSteps(for:)` — each `CapturedView`'s `RestoreStep`s; an empty `cwd` or `activePath` means none; `terminalRestore(splits:drawerOpen:live:)`, the terminal steps ([order](../../../../specs/terminal-panes.md#when-neovim-dies)).
 
 **Decisions**
 
 - The `switch` has no `default`, so a new liveness case fails to compile until classified.
-- `drain` is true in every state, the only route for a close or quit queued just before a crash to reach the window.
+- `drain` is true in every state: it is how a close or quit queued before a crash reaches the window.
 - Only `.alive` persists: a stalled or dead core would write stale tabs.
-- `.notResponding` never auto-restarts: a restart loses whatever is not in a swap file, so that is the user's call.
+- `.notResponding` never auto-restarts: a restart loses what no swap file holds, so that is the user's call.
 - The cap stops a retry loop against a failing respawn, never the user: the button resets the count. `retrying` means an attempt is permitted, not running.
 - Unlike `liveness_ui`, the seam takes the count, so the cap is tested here.
 - View 0 rebinds the fresh first tabpage, which starts in the launch directory, so it is re-rooted with `.chdir`: an empty-state window reached its folder only through one. Later views get a `.newTabpage` in their cwd. The active file opens last, to land focused.
@@ -362,8 +362,8 @@ Purpose: The pure codec between the live `PaneTree` layout and the shapes that p
 
 **Public API**
 
-- `SavedPaneNode` — a `Hashable` mirror of the split tree keyed by per-leaf buffer path. `leafCount` is how many nvim window handles the rebuild path zips onto the leaves. `isEmptyLeaf` is the suppress-from-persistence predicate for a lone pane: true only for an unnamed, non-preview leaf, so a lone pane bound to a file or a preview still persists.
-- `encode(_:paths:previews:)` — maps leaf ids to buffer paths; a leaf missing from `paths` becomes `""`.
+- `SavedPaneNode` — a `Hashable` mirror of the split tree keyed by per-leaf buffer path. `leafCount` is how many nvim window handles the rebuild path zips onto the leaves. `isEmptyLeaf` is the suppress-from-persistence predicate for a lone pane: true only for an unnamed leaf that is neither a preview nor a terminal, so a lone pane bound to a file, a preview or a terminal still persists.
+- `encode(_:paths:previews:terminals:)` — maps leaf ids to buffer paths; a leaf missing from `paths` becomes `""`. A terminal leaf's path is the directory its shell starts in.
 - `postOrderTokens(_:)` and its inverse `decodeTokens(_:)` — the post-order stream the FFI push-builder replays; `decodeTokens` returns `nil` on a malformed stream.
 
 **Decisions**
@@ -659,7 +659,7 @@ Purpose: The write side of state persistence, ported from wolf-gnome's [`state_s
 
 **Public API**
 
-- `gatherTab(...) -> TabGather` — `.refuse` when a folder view's cwd is `""` or any leaf is `.unreported` or missing from `content`.
+- `gatherTab(...) -> TabGather` — `.refuse` when a folder view's cwd is `""` or any leaf is `.unreported` or missing from `content`. A `.terminal(cwd:)` leaf persists as a terminal leaf at `cwd`.
 - `mayGather(...)` and `contribution(mayGather:gather:cache:)` — the gathered tab when the gate is open and the gather ready, otherwise `cache`, which the caller stores as its next cache. `gather` is not evaluated behind a shut gate.
 - `closeCommit(terminating:otherLiveViews:)`, `committedWindows(liveViews:windows:)` and `orphanedSlots(savedTabCounts:materialized:)` — `nil` from `committedWindows` means commit nothing.
 - `CloseBurst(scheduleEnd:read:commit:)` and its `close(terminating:otherLiveViews:)` — `closeCommit` over the closes of one runloop turn, which ends when the closure given to `scheduleEnd` runs.

@@ -153,6 +153,8 @@ Note that the nearby `swift_format_srcs` glob feeds lint and format only, not te
 
 **Covers** — `LivenessSeam.decision(liveness:autoRestartAttempts:)`: the whole decision table at zero and one attempts; the cap, which refuses a second automatic attempt and switches the overlay to `crashed(retrying: false)`; the drain in every liveness state; that only a dead core with its attempt unspent auto-restarts; that only an alive core renders or persists, whatever the count; and that `NvimLiveness`'s raw values match `wolf-ffi`'s `mod liveness`. Also `LivenessSeam.restoreSteps(for:)`: view 0 binds the first tabpage and is re-rooted unless its cwd is empty, later views get a new tabpage and no chdir, and the active file opens last, once, even when the captured files lack it.
 
+It also covers `terminalRestore(splits:drawerOpen:live:)`: live splits once, ascending, dead ones skipped, then `.drawer` last and only when it was open.
+
 **Gotchas** — the cases list the liveness states by hand, so a new `NvimLiveness` case must be added here deliberately. The deferral before the automatic respawn and the overlay painting ahead of it are not observable headlessly; they, the rest of the `Project.onWake` glue, and `Project.respawnNeovim` running the restore steps are manual-smoke.
 
 #### `OtherPaneSeamTests.swift`
@@ -175,9 +177,9 @@ Note that the nearby `swift_format_srcs` glob feeds lint and format only, not te
 
 #### `PaneLayoutCodecTests.swift`
 
-**Covers** — the `PaneLayoutCodec` / `SavedPaneNode` bridge: `encode` (leaf ids to buffer paths, an unmapped leaf to the empty path, preview marking), the `postOrderTokens` / `decodeTokens` round-trip over leaf, two-child, n-ary and perpendicular-nested trees, `isEmptyLeaf`, and `PaneTree.rebuilt(from:firstLeafId:)`.
+**Covers** — the `PaneLayoutCodec` / `SavedPaneNode` bridge: `encode` (leaf ids to buffer paths, an unmapped leaf to the empty path, preview and terminal marking), the `postOrderTokens` / `decodeTokens` round-trip over leaf, two-child, n-ary and perpendicular-nested trees, `isEmptyLeaf`, and `PaneTree.rebuilt(from:firstLeafId:)`.
 
-**Gotchas** — a preview leaf's `path` is its source Markdown file, and `isEmptyLeaf` is false for an empty-path preview leaf because preview-ness has to survive persistence.
+**Gotchas** — a preview leaf's `path` is its source Markdown file, and `isEmptyLeaf` is false for an empty-path preview or terminal leaf because the leaf's kind has to survive persistence.
 
 #### `PaneModeSeamTests.swift`
 
@@ -355,7 +357,7 @@ The `PreviewSeam` reload gate plus the click-to-focus surface. `winsNeedingReloa
 
 #### `SessionSeamTests.swift`
 
-**Covers** — the [`SessionSeam`](../../Sources/WolfKeyMap/README.md#sessionseamswift) write-side decisions: the three close answers; that a walk with no live view or no window commits nothing; `gatherTab` resolving file, preview and unnamed leaves with their weights, an empty-state lone pane persisting no layout, and refusal on an unreported or missing leaf or a folder view's empty cwd; `contribution` keeping or replacing the cache, never gathering behind a shut gate; both `mayGather` gates; `orphanedSlots` in saved order; and `CloseBurst`: a tab group closed in one turn keeps the tree read once, at its first close, a tab closed alone stays dropped once its burst's end has run, and a terminating close reads, commits and schedules nothing.
+**Covers** — the [`SessionSeam`](../../Sources/WolfKeyMap/README.md#sessionseamswift) write-side decisions: the three close answers; that a walk with no live view or no window commits nothing; `gatherTab` resolving file, preview, terminal and unnamed leaves with their weights, a lone terminal pane persisting, an empty-state lone pane persisting no layout, and refusal on an unreported or missing leaf or a folder view's empty cwd; `contribution` keeping or replacing the cache, never gathering behind a shut gate; both `mayGather` gates; `orphanedSlots` in saved order; and `CloseBurst`: a tab group closed in one turn keeps the tree read once, at its first close, a tab closed alone stays dropped once its burst's end has run, and a terminating close reads, commits and schedules nothing.
 
 **Gotchas** — the seed and live fixtures differ in every field, so an assertion that the cache survived cannot pass on a live tab by coincidence. The burst tests hold every end closure and run it only when a test says the turn is over. The `WolfMacOS` glue that feeds these decisions — `Project.onWake`, `teardown`, `AppDelegate.closeBurst`, the live filter in `gatherTree` and `leafContents()` — is compile-verified and manual-smoke.
 

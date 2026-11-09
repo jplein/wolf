@@ -34,9 +34,9 @@ A preview scratch pane (carrying `b:wolf_preview_source`) reports `("", "", true
 
 #### `wolf_setup_buffer_tracking(chan)`
 
-Reports what every window shows, on every tabpage rather than only the current one, so the front-end can draw a per-pane statusbar and core can derive a per-pane navigation-history target. The sweep is `nvim_list_wins()`; the [architecture spec](../../specs/architecture.md#output-render-state-core--front-end) lists which snapshot maps are global as a result. Notifies **`wolf_buffers`** with one list of six-element tuples `{ win, nvim_buf_get_name(buf), buf, is_terminal, is_drawer, terminal_id }`, on `BufEnter`/`BufWinEnter`/`BufFilePost`/`WinEnter`/`WinNew`/`WinClosed`/`TermOpen`. Core wholesale-replaces both `Snapshot.buffers` (path only, unnamed windows omitted) and `Snapshot.win_buffers` (every window, `path = nil` when unnamed), so closed windows drop out.
+Reports what every window shows, on every tabpage rather than only the current one, so the front-end can draw a per-pane statusbar and core can derive a per-pane navigation-history target. The sweep is `nvim_list_wins()`; the [architecture spec](../../specs/architecture.md#output-render-state-core--front-end) lists which snapshot maps are global as a result. Notifies **`wolf_buffers`** with one list of five-element tuples `{ win, nvim_buf_get_name(buf), buf, is_drawer, terminal_id }`, on `BufEnter`/`BufWinEnter`/`BufFilePost`/`WinEnter`/`WinNew`/`WinClosed`. Core wholesale-replaces both `Snapshot.buffers` (path only, unnamed windows omitted) and `Snapshot.win_buffers` (every window, `path = nil` when unnamed), so closed windows drop out.
 
-`terminal_id` is the buffer's `b:wolf_terminal_id`, the core terminal session a placeholder shows, or `0`; core reports it as `WinBuffer.terminal`. `is_drawer` is the buffer tag `b:wolf_terminal` or'd with the window tag `w:wolf_terminal`. It marks the terminal drawer, which navigation history excludes; a `:terminal` in an ordinary split sets neither tag and is not excluded. Windows showing a preview scratch are omitted from the list entirely, which is what keeps `win_buffers` and `previews` disjoint — the history fold relies on that. Emits are coalesced (see Decisions). Exposes `_G.wolf_emit_buffers`.
+`terminal_id` is the buffer's `b:wolf_terminal_id`, the core terminal session a placeholder shows, or `0`; core reports it as `WinBuffer.terminal`. `is_drawer` is the drawer window's tag `w:wolf_drawer`, set by `wolf_toggle_terminal`. Windows showing a preview scratch are omitted from the list entirely, which is what keeps `win_buffers` and `previews` disjoint — the history fold relies on that. Emits are coalesced (see Decisions). Exposes `_G.wolf_emit_buffers`.
 
 It also exposes `_G.wolf_sync_buffers`, which emits at once unless suppressed and then blocks on a `wolf_barrier` request that core answers only once that emit is in the snapshot.
 
@@ -56,7 +56,7 @@ Rebinds Neovim's window chords and the `:split`/`:close`/`:quit` Ex-command fami
 
 It also notifies **`wolf_active_win`** with `nvim_get_current_win()` on `WinEnter`, and **`wolf_command`** with `close_window` when a quit reaches the last pane. Closing a pane emits no intent: the shell observes the `win_close` redraw event. Exposes `_G.wolf_do_split`, `wolf_do_close`, `wolf_do_quit`, `wolf_do_focus`, and `wolf_emit_drawer`, which the `cnoreabbrev` overrides invoke from the command line.
 
-Bindings: normal-mode `<C-w>` with `s`/`v`/`c`/`q` and `h`/`j`/`k`/`l` plus arrows; terminal-mode `<C-w>` with `h`/`j`/`k`/`l`; `cnoreabbrev` for `split`, `sp`, `new`, `vsplit`, `vs`, `vnew`, `close`; and the quit families routed through the internal `:WolfQuit`, `:WolfWriteQuit`, `:WolfQuitAll`, and `:WolfWriteQuitAll` user commands.
+Bindings: normal-mode `<C-w>` with `s`/`v`/`c`/`q` and `h`/`j`/`k`/`l` plus arrows; `cnoreabbrev` for `split`, `sp`, `new`, `vsplit`, `vs`, `vnew`, `close`; and the quit families routed through the internal `:WolfQuit`, `:WolfWriteQuit`, `:WolfQuitAll`, and `:WolfWriteQuitAll` user commands.
 
 #### `wolf_setup_dir_tracking(chan)`
 
@@ -86,13 +86,13 @@ Core wholesale-replaces `Snapshot.tab_cwds`, which makes `cwd_for_tabpage` a che
 
 Backs the crash-restart file restore. Notifies **`wolf_open_files`** with a list of `{ tabpage_handle, active_path, files }` triples, one per tabpage, on `BufEnter`/`BufWinEnter`/`BufWritePost`/`BufFilePost`/`BufDelete`/`WinEnter`/`TabEnter`/`TabNewEntered`/`TabClosed`. Core wholesale-replaces `Snapshot.open_files`, which the front-end reads before a restart and replays after.
 
-`files` is the whole instance's file-backed buflisted buffer set, with preview scratch and unnamed buffers excluded. `active_path` is the tabpage's active window's buffer name, empty for an unnamed buffer. See Limitations for what the global file set costs.
+`files` is the whole instance's file-backed buflisted buffer set, with preview scratch, unnamed buffers and every buffer with a `buftype` excluded. `active_path` is the tabpage's active window's buffer name, empty for an unnamed buffer, a preview scratch or a buffer with a `buftype`. The `buftype` filter keeps a scripted Neovim terminal's `term://` name out of the mirror, since replaying it after a crash would spawn a shell. See Limitations for what the global file set costs.
 
 #### `wolf_setup_fs_events(chan)`
 
-Feeds the file-search rescan. Notifies **`wolf_fs_changed`** with `{ event_name, abs_path }` from two trigger classes in one augroup: the buffer events `BufWritePost`/`BufFilePost`/`BufDelete` (file buffers only) carry the changed file's absolute path, while the refocus-edge events `ShellCmdPost`/`FocusGained`/`TermLeave` carry an explicit `""` — they name no file, and the empty element must still be present or core's pair decode drops the event. Core routes both into the rescan of every live file-search session (see [`files.rs`](../../crates/wolf-core/src/README.md#filesrs)); only `BufWritePost` is conditional — rescan only for a path not already listed — and every other event forces one.
+Feeds the file-search rescan. Notifies **`wolf_fs_changed`** with `{ event_name, abs_path }` from two trigger classes in one augroup: the buffer events `BufWritePost`/`BufFilePost`/`BufDelete` (file buffers only) carry the changed file's absolute path, while the refocus-edge events `ShellCmdPost`/`FocusGained` carry an explicit `""` — they name no file, and the empty element must still be present or core's pair decode drops the event. Core routes both into the rescan of every live file-search session (see [`files.rs`](../../crates/wolf-core/src/README.md#filesrs)); only `BufWritePost` is conditional — rescan only for a path not already listed — and every other event forces one.
 
-It is a dedicated event rather than a reuse of `wolf_open_files` because that augroup also fires on `BufEnter`/`WinEnter`/`TabEnter`, which would turn every focus change into a rescan. The refocus-edge autocmd has its own callback because the buffer-event callback's buftype guard would swallow `TermLeave`, whose current buffer is the terminal; that guard is `pcall`-guarded and fails open, since `args.buf` can already be invalid on `BufDelete` and an extra rescan is harmless where a missed one is the bug. `TermLeave` rather than `WinLeave`: the drawer auto-`startinsert`s on `WinEnter`, so every drawer-exit path passes a terminal-to-normal mode change and the one unguarded event covers them all. There is no initial emit: with no event there is nothing to rescan.
+It is a dedicated event rather than a reuse of `wolf_open_files` because that augroup also fires on `BufEnter`/`WinEnter`/`TabEnter`, which would turn every focus change into a rescan. The refocus-edge autocmd has its own callback because its events name no file. The buffer-event callback's buftype guard is `pcall`-guarded and fails open, since `args.buf` can already be invalid on `BufDelete` and an extra rescan is harmless where a missed one is the bug. A terminal pane's focus loss forces its rescan in core, through `terminal_focus`, as [the file-tree rescan](../../specs/terminal-panes.md#the-file-tree-rescan) says. There is no initial emit: with no event there is nothing to rescan.
 
 `FocusGained` depends on the front-end forwarding OS focus — the same asymmetry as `:checktime` under Limitations — so it never fires on GNOME. There, as everywhere, external changes reach a session through core's filesystem watcher, and these events are its fallback.
 
@@ -115,6 +115,8 @@ Exposes `_G.wolf_emit_previews` and `_G.wolf_emit_markdown_cursor`.
 #### `wolf_setup_terminals(chan)`
 
 A `BufWipeout` autocmd notifies **`wolf_terminal_wiped`** with the id of a wiped buffer carrying `b:wolf_terminal_id`, a core terminal session's placeholder, and core hangs that session up. It is silent while Neovim quits (`v:dying` or `v:exiting` set), so quitting hangs up no session, and it has no initial emit.
+
+It also defines `_G.wolf_open_terminal()`, which notifies **`wolf_terminal_open`** with the current window, and the whole-word `:terminal`, `:term` and `:ter` abbreviations that call it. Core starts a session in that window's tabpage cwd and binds it there. `:terminal <cmd>` is not abbreviated and stays a scripted Neovim terminal.
 
 #### `wolf_emit_current_file`, `wolf_emit_buffers`, `wolf_emit_full_width`, `wolf_emit_previews`, `wolf_emit_markdown_cursor`, `wolf_emit_drawer`
 
@@ -140,9 +142,9 @@ Runs `tabnew`, roots the new tabpage at `cwd` via `:tcd` when `cwd` is non-empty
 
 Realizes a saved pane-split tree in the current tabpage's single starting window and returns the resulting window handles in depth-first leaf order — the same order as the front-end's `PaneTree.leaves()`, so each handle zips to its rebuilt leaf. A malformed spec returns an empty list.
 
-`spec_json` is a JSON string: a leaf is `{ leaf = true, path, preview }`, a split is `{ orientation = "h"|"v", weights, children }`. `wolf_core::state::rebuild_layout_spec` is its only producer, on both platforms, so a change here has to land there too; see [wolf-core-decisions.md](../../notes/wolf-core-decisions.md).
+`spec_json` is a JSON string: a leaf is `{ leaf = true, path, preview, terminal }`, a split is `{ orientation = "h"|"v", weights, children }`. `wolf_core::state::rebuild_layout_spec` is its only producer, on both platforms, so a change here has to land there too; see [wolf-core-decisions.md](../../notes/wolf-core-decisions.md).
 
-A preview leaf with a path becomes a preview of that source via `wolf_preview_file`, converting the window rather than replacing it so the handle survives; a plain leaf with a path is `:edit`ed; an empty leaf keeps its inherited buffer. Regions are created child-0-first, left-to-right and top-to-bottom. nvim supplies only the window count, topology, and per-window buffer; the front-end drives pane sizes from its own weights.
+A preview leaf with a path becomes a preview of that source via `wolf_preview_file`, converting the window rather than replacing it so the handle survives; a plain leaf with a path is `:edit`ed; an empty leaf keeps its inherited buffer. A terminal leaf's window is returned untouched, since its `path` is a directory: core starts the leaf's session and binds it there once the handles return. Regions are created child-0-first, left-to-right and top-to-bottom. nvim supplies only the window count, topology, and per-window buffer; the front-end drives pane sizes from its own weights.
 
 It ends with `_G.wolf_sync_buffers`, so core reports every returned window before the RPC answers. Without it the coalesced emit lands after the caller wakes, and a state commit in that gap persists the startup `Untitled.md`, or no file, in place of each restored one. Why the barrier is a request is in [wolf-core-decisions.md](../../notes/wolf-core-decisions.md#threading-and-locking).
 
@@ -172,11 +174,11 @@ Binds the buffer for absolute `path` into `win`, loading it if needed, and deleg
 
 It first scans `nvim_list_bufs()` for an ordinary file buffer (`buftype == ""`) whose name equals or `resolve()`s to `path`, and only falls back to `bufadd` plus `bufload`. Rebinding the existing buffer is what makes navigating back to an unsaved `Untitled N.md` restore that modified buffer rather than reading a file never written to disk: core canonicalizes `path`, so under a symlinked project root it can differ from the name nvim kept, and a never-written buffer has no file id for nvim's own matching to use.
 
-#### `wolf_toggle_terminal()`
+#### `wolf_toggle_terminal(id)`
 
-Toggles the terminal drawer. The terminal buffer is a single shared buffer per nvim instance, tagged `b:wolf_terminal` and required to have `buftype == "terminal"`; the drawer window is per-tabpage. If a window in the current tabpage shows that buffer, it closes the window only, so the buffer and its shell job survive.
+Toggles the drawer on core session `id`, which [`WolfCore::toggle_terminal`](../../specs/terminal-panes.md#the-drawer) starts before it queues the call. The drawer window is per-tabpage and tagged `w:wolf_drawer`. If the current tabpage's drawer window shows `id`'s placeholder, it closes that window only: the drawer's placeholder is `bufhidden=hide`, so the session survives.
 
-Otherwise it opens a `botright` split roughly one third of the screen tall, tags the window `w:wolf_terminal`, binds the shared buffer or creates a fresh `:terminal` when the user has exited the shell, seeds `b:wolf_full_width = true` on whichever buffer landed in the drawer, and `startinsert`s. The whole build runs inside `wolf_suppress_buffers`. Afterwards it calls `_G.wolf_emit_drawer` (the intent that makes the drawer visible), then `_G.wolf_emit_current_file` and `_G.wolf_emit_full_width`, all guarded.
+Otherwise, inside `wolf_suppress_buffers`, it reuses the drawer window or opens a tagged `botright` split one third of the screen tall, and shows `id`'s placeholder there, creating it with `bufhidden=hide` when none exists. Afterwards it calls `_G.wolf_emit_drawer` (the intent that makes the drawer visible), then `_G.wolf_emit_current_file` and `_G.wolf_emit_full_width`, all guarded.
 
 #### `wolf_terminal_bind(id, win, split)`
 
@@ -184,7 +186,7 @@ Shows core terminal session `id` in window `win` (`0` for the current one), spli
 
 #### `wolf_terminal_exited(id)`
 
-Closes every window showing session `id`, giving a tabpage's last window a new empty buffer instead, and returns how many it closed or emptied. Not `:enew`, which reuses an empty unnamed buffer in place and would keep the placeholder.
+Closes every window showing session `id`, giving a tabpage's last window a new empty buffer instead, and returns how many it closed or emptied. Not `:enew`, which reuses an empty unnamed buffer in place and would keep the placeholder. It then deletes every buffer still tagged with `id`, so a hidden drawer placeholder goes too: its wipe tells core the session is gone, and the next toggle starts a new shell.
 
 #### `wolf_terminal_close(win)`
 
@@ -236,7 +238,7 @@ It `bufadd`s and `bufload`s the source, then delegates the gate, bind, and re-em
 
 Previews the active pane's Markdown file in another pane and returns the source bufnr — not the scratch, since the front-end joins `previews()` rows on the source — or `0` unless the active filetype is `markdown`. The gate runs before any split, so a mis-timed palette activation is a pure no-op that never changes the layout. `target_win` is the front-end-resolved window, `0` when the front-end wants a split.
 
-A usable target — non-nil, non-zero, a valid window, not the current window, and not the terminal drawer (`b:wolf_terminal` / `w:wolf_terminal`) — receives the scratch via `nvim_win_set_buf` with focus untouched. Anything else takes the split path: `wolf_do_split("v")` (the shell's applySplit inserts the new pane after `from`, so it lands to the right), the scratch bound into the new window, focus handed back to `from`. Focus follows the edit-mode view of the document, so the source editor stays focused either way. The cursor pre-emit, the two guarded re-emits, and the no-MRU rule mirror `wolf_open_preview`.
+A usable target — non-nil, non-zero, a valid window, not the current window, and not a terminal pane (a `w:wolf_drawer` window or a buffer with `b:wolf_terminal_id`) — receives the scratch via `nvim_win_set_buf` with focus untouched. Anything else takes the split path: `wolf_do_split("v")` (the shell's applySplit inserts the new pane after `from`, so it lands to the right), the scratch bound into the new window, focus handed back to `from`. Focus follows the edit-mode view of the document, so the source editor stays focused either way. The cursor pre-emit, the two guarded re-emits, and the no-MRU rule mirror `wolf_open_preview`.
 
 #### `wolf_edit_in_other(target_win)`
 
@@ -284,7 +286,7 @@ That encoding holds only while both the full path and its resolved path fit in `
 
 A swap for a path past the long-path limit always gets `"e"` and is never deleted: recovering a cut name fails, and the delete would destroy the only copy.
 
-**`autoread` alone only re-reads on some triggers**, so the `WolfAutoRead` augroup drives `:checktime` on focus regain, buffer entry, and idle. `:checktime` re-reads only an unmodified buffer, so unsaved edits are never clobbered, and it is a no-op on the terminal and preview scratch buffers; the callback is `pcall`ed and `silent!`ed so a special buffer can neither raise nor pollute the grid.
+**`autoread` alone only re-reads on some triggers**, so the `WolfAutoRead` augroup drives `:checktime` on focus regain, buffer entry, and idle. `:checktime` re-reads only an unmodified buffer, so unsaved edits are never clobbered, and it is a no-op on the placeholder and preview scratch buffers; the callback is `pcall`ed and `silent!`ed so a special buffer can neither raise nor pollute the grid.
 
 **The grid is deterministic and chrome-free** — `number`, `signcolumn`, `ruler`, `showcmd`, and `laststatus` are all off, the intro message is suppressed, and `termguicolors` is on so `hl_attr_define` carries RGB the front-ends paint directly. The front-end draws its own chrome.
 
@@ -322,9 +324,9 @@ The durable dictionary is the global `'spellfile'` at `WOLF_SPELL_DIR/en.utf-8.a
 
 **Tabpage navigation and creation chords map to `<Nop>`, and the typed `:tab*` commands expand to an empty command line, because Wolf owns all tabpage lifecycle.** A user-typed `:tabnew` would create an orphan tabpage no view is bound to, and `:tabnext` or `:tabclose` would switch or close a tabpage out from under a view, desyncing the front-end-authoritative current view. `:tcd`, `:lcd`, and `:cd` are left open on purpose: they are different words, so the whole-word abbreviations never catch them, and `:tcd` is how each view sets its own working directory.
 
-**`wolf_buffers` emits are coalesced through `vim.schedule`, and only `wolf_sync_buffers` emits synchronously.** Core's history fold pushes on every observed change, so an intermediate wrong emit persists even if a later emit is correct. A single `:terminal` fires `BufEnter` with a brand-new unnamed buffer, then `BufFilePost` with a `term://` name, and only sets `buftype` at `TermOpen` — three history entries for one user action if emitted eagerly.
+**`wolf_buffers` emits are coalesced through `vim.schedule`, and only `wolf_sync_buffers` emits synchronously.** Core's history fold pushes on every observed change, so an intermediate wrong emit persists even if a later emit is correct. A scripted `:terminal <cmd>` fires `BufEnter` with a brand-new unnamed buffer, then `BufFilePost` with a `term://` name — two history entries for one user action if emitted eagerly.
 
-**Coalescing is not enough for a multi-step window build, which is why `wolf_suppress_buffers` exists.** A `botright split` fires `WinNew` and `WinEnter` synchronously with the new window still showing the previous buffer, and the drawer's buffer is not tagged until after `:terminal` has fired `BufEnter`. Those emits must be suppressed rather than corrected afterwards.
+**Coalescing is not enough for a multi-step window build, which is why `wolf_suppress_buffers` exists.** A `botright split` fires `WinNew` and `WinEnter` synchronously with the new window still showing the previous buffer, before the drawer window is tagged `w:wolf_drawer` or shows its placeholder. Those emits must be suppressed rather than corrected afterwards.
 
 **A background `nvim_win_set_buf` does fire `BufEnter` and `BufWinEnter`**, measured on Neovim 0.12.6, with the target window and buffer temporarily current and focus restored before the call returns. That makes `wolf_emit_current_file` load-bearing after any background bind, because the autocmd-driven emit reads `nvim_get_current_buf()` and would leave core describing the background pane. `wolf_emit_previews` is hardening: its `nvim_list_wins()` sweep does not read the current window, so it is already correct — it is retained because it is idempotent and makes the update independent of autocmd ordering. The one bind that fires nothing is a no-op rebind of the buffer a window already shows, which changes nothing to emit.
 
@@ -332,13 +334,11 @@ The durable dictionary is the global `'spellfile'` at `WOLF_SPELL_DIR/en.utf-8.a
 
 **A preview pane is a real nvim scratch buffer — unlisted, with its source buflisted instead.** Carrying `b:wolf_preview_source` is what lets the path-based trackers skip it and what marks its window as a preview-mode pane. The buffer picker lists the union of edited and previewed files, one row per file: the row is always the source buffer, which `wolf_preview_file` marks buflisted on a successful preview, and the unlisted scratch contributes none of its own.
 
-**The full-width flag lives per buffer and, from a preview, targets the source buffer.** Full width is a property of the document, so toggling from either view resizes both and the menu checkmark tracks the document rather than the scratch. The terminal drawer seeds the same flag to `true` as its default, and remains user-toggleable.
+**The full-width flag lives per buffer and, from a preview, targets the source buffer.** Full width is a property of the document, so toggling from either view resizes both and the menu checkmark tracks the document rather than the scratch. Every terminal placeholder, the drawer's included, seeds the same flag to `true` as its default, and remains user-toggleable.
 
 **Naming a buffer treats an existing swap for the candidate name as a collision, at every naming call site.** `nvim_buf_set_name` does not skip the swap check: the rename reaches `ml_setname`, which calls `ml_open_file` and creates the swap file right there, on a path where nvim has not armed the `SwapExists` choice machinery. A stale swap therefore goes straight to the blocking `ATTENTION` dialog, which is not an error, so no surrounding `pcall` catches it — it simply sits swallowing keystrokes, and the visible symptom is that the first character typed after a crash restart disappears.
 
 Name avoidance is the only defence. Yielding `Untitled 2.md` also keeps a fresh startup buffer from shadowing the Tier-1 reopen of the crashed `<cwd>/Untitled.md`, which would otherwise lose its unsaved edits. In-session behaviour is unaffected, because a live `Untitled N.md` buffer owns its own swap and so already collides by name; only a dead nvim's leftovers add anything.
-
-**Terminal-mode `<C-w>` chords shadow the shell's word-erase inside the drawer.** This is an accepted tradeoff for a keyboard-navigable drawer; `<C-w>k` is what bridges drawer to editor without first leaving terminal-insert. A `WolfTerminalInsert` autocmd re-enters terminal-insert when focus lands in the drawer, matched on the drawer's identity so it never yanks back from a deliberate `<C-\><C-n>`.
 
 ## Limitations
 

@@ -230,14 +230,20 @@ The treesitter trees arrive by a third route: the same gate falls back to two pa
 
 ## Terminal
 
-| Feature                         | Branch or commit                   | macOS | Linux |
-| ------------------------------- | ---------------------------------- | ----- | ----- |
-| Terminal drawer (⌃\`)           | `feat/terminal-drawer`             | [x]   | [x]   |
-| Terminal defaults to full width | `feat/use-whole-width` (`0506e92`) | [x]   | [x]   |
+| Feature                               | Branch or commit                     | macOS | Linux |
+| ------------------------------------- | ------------------------------------ | ----- | ----- |
+| Terminal drawer (⌃\`)                 | `feat/terminal-drawer`               | [x]   | [x]   |
+| Terminal defaults to full width       | `feat/use-whole-width` (`0506e92`)   | [x]   | [x]   |
+| Terminal panes on core sessions       | `eb604cf` (macOS), `9627d9d` (Linux) | [x]   | [x]   |
+| `:terminal` opens a pane              | `0a9181d`                            | [x]   | [x]   |
+| Terminal panes restore after relaunch | `0a9181d`                            | [x]   | [x]   |
+| Terminals survive a Neovim restart    | `0a9181d`                            | [x]   | [x]   |
 
-The drawer is an `init.lua` helper driven by `InputEvent::ToggleTerminal`. On GTK it is a full-width strip below the editor tree, held outside the pane tree exactly as macOS holds it outside its own, bound to `<Control>grave` and reachable from the primary menu. The price is the backtick spelling of `<C-@>`, and `Ctrl+Shift+2` is the spelling that survives it; `notes/wolf-gnome-decisions.md` owns that bargain and the ctrl-folding rule that makes claiming a control byte a declared act.
+Every terminal is a `wolf-core` session over libghostty-vt, shown in a Neovim placeholder window that the front-end paints from the session's frame; [Terminal panes](../specs/terminal-panes.md) owns the contract. A typed `:terminal`, `:term` or `:ter` opens one in the current window. A split terminal pane persists as a terminal leaf and starts a new shell in its directory at the next launch, and after a Neovim restart the live sessions come back as new splits.
 
-Full width costs neither front-end any code: `b:wolf_full_width` is seeded on the drawer buffer in `init.lua` and rides the ordinary `full_width_for_win` path both front-ends already consume, so neither special-cases a terminal. Measured under `cage` at ten-point type, the editor window reports ninety columns against the drawer's hundred and twenty-three.
+The drawer is the core's drawer session, which `WolfCore::toggle_terminal` starts before `init.lua`'s `wolf_toggle_terminal` shows its placeholder in a bottom split; hiding it keeps the session. On GTK it is a full-width strip below the editor tree, held outside the pane tree exactly as macOS holds it outside its own, bound to `<Control>grave` and reachable from the primary menu. The price is the backtick spelling of `<C-@>`, and `Ctrl+Shift+2` is the spelling that survives it; `notes/wolf-gnome-decisions.md` owns that bargain and the ctrl-folding rule that makes claiming a control byte a declared act.
+
+Full width costs neither front-end any code: `init.lua` seeds `b:wolf_full_width` on every terminal placeholder, and it rides the ordinary `full_width_for_win` path both front-ends already consume, so neither special-cases a terminal. Measured under `cage`, the drawer shell's `stty size` reports more columns than the editor window's capped width.
 
 ## Reliability and performance
 

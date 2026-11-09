@@ -290,12 +290,12 @@ Real-nvim coverage of multi-core identity and wake routing, running two cores at
 
 **Covers**
 
-`preview_in_other(target_win)` / `edit_in_other(target_win)`: the split path (a vertical Split intent from the original window; preview binds the scratch into the new right window and keeps focus in the source editor, edit binds the source into the original window and focuses it), reuse of an existing target window with no new intent, the gate-before-split no-ops (non-markdown and off-preview return 0 with no layout change), the fall-back-to-split for an invalid target and for the terminal drawer, the stale-bufnr `:edit` fallback still returning non-zero, and post-shutdown neutrals. Spawns a real Neovim: needs `WOLF_NVIM_BIN`, and the `:other_pane` target stages the nvim runfiles and is tagged `no-sandbox`.
+`preview_in_other(target_win)` / `edit_in_other(target_win)`: the split path (a vertical Split intent from the original window; preview binds the scratch into the new right window and keeps focus in the source editor, edit binds the source into the original window and focuses it), reuse of an existing target window with no new intent, the gate-before-split no-ops (non-markdown and off-preview return 0 with no layout change), the fall-back-to-split for an invalid target, the terminal drawer and a split terminal pane, the stale-bufnr `:edit` fallback still returning non-zero, and post-shutdown neutrals. Spawns a real Neovim: needs `WOLF_NVIM_BIN`, and the `:other_pane` target stages the nvim runfiles and is tagged `no-sandbox`.
 
 **Gotchas**
 
 - The no-split and no-focus-move assertions hold a settle pause before checking, because the failure they guard against arrives asynchronously; a synchronous check passes vacuously.
-- The drawer-rejection case opens the real drawer through `toggle_terminal()` and waits on its `DRAWER_OPEN` intent, so the `w:wolf_terminal` tag is exercised on a live drawer window rather than a hand-set variable.
+- The drawer-rejection case opens the real drawer through `toggle_terminal()` and waits on its `DRAWER_OPEN` intent, so the check runs on a live drawer window rather than a hand-set variable. The drawer's placeholder also carries `b:wolf_terminal_id`, so this case cannot tell the `w:wolf_drawer` clause from the buffer clause.
 
 #### `orlando_bg_stress.rs`
 
@@ -327,7 +327,7 @@ Real-nvim coverage of the per-pane statusbar bridge: `pane_status_for_grid` and 
 **Gotchas**
 
 - `abs_path()` is the raw, never-relativized buffer path, which core canonicalizes when it applies buffers, so compare against a canonicalized expectation.
-- The drawer case sets the process-global `SHELL` to `/bin/sh` before start, because Neovim's default `shell` is `$SHELL` and the drawer's buffer is named after it; that fixes the expected name. The other case opens no terminal, so `SHELL` does not reach it.
+- The drawer case sets the process-global `SHELL` to `/bin/sh` before start, because the drawer runs the default shell and the status names its program; that fixes the expected name. The other case opens no terminal, so `SHELL` does not reach it.
 
 #### `panes.rs`
 
@@ -350,7 +350,7 @@ Also `preview_buffer(win, bufnr)` — markdown binds and returns the source bufn
 
 #### `rebuild_layout.rs`
 
-**Covers** — `WolfCoreHandle::rebuild_layout(&FfiPaneNode)` on a node loaded back from `state.json`: a vertical two-leaf split pushed through the push-builder rebuilds into two distinct window handles in leaf order, each showing its leaf's file. Real nvim; target `//crates/wolf-ffi:rebuild_layout` (staged nvim runfiles, `tags = ["no-sandbox"]`).
+**Covers** — `WolfCoreHandle::rebuild_layout(&FfiPaneNode)` on a node loaded back from `state.json`: a vertical two-leaf split pushed through the push-builder rebuilds into two distinct window handles in leaf order, each showing its leaf's file; a saved split of an editor leaf and a terminal leaf rebuilds with a session bound into the terminal leaf's window only. Real nvim; target `//crates/wolf-ffi:rebuild_layout` (staged nvim runfiles, `tags = ["no-sandbox"]`).
 
 **Gotchas** — one `#[test]` only, for the same `SHARED_STORE` / `WOLF_STATE_DIR` reason as `state.rs`. Paths are matched on their basenames, because nvim reports the temp dir under `/private/var` where the test created it under `/var`.
 
@@ -368,7 +368,7 @@ Also `preview_buffer(win, bufnr)` — markdown binds and returns the source bufn
 
 #### `state.rs`
 
-**Covers** — the state-persistence bridge end to end: the snapshot-builder free functions, the pane-layout push-builder, the read side (`wolf_ffi_load_state` through the `FfiState` / `FfiWindowState` / `FfiTabState` / `FfiPaneNode` accessors), and rejection of an old flat file. Headless — the write side is a pure builder over the shared store, so target `//crates/wolf-ffi:state` stages no nvim and carries no `no-sandbox` tag; everything is driven through `WOLF_STATE_DIR` pointed at a tempdir.
+**Covers** — the state-persistence bridge end to end: the snapshot-builder free functions, the pane-layout push-builder (terminal leaves included), the read side (`wolf_ffi_load_state` through the `FfiState` / `FfiWindowState` / `FfiTabState` / `FfiPaneNode` accessors), and rejection of an old flat file. Headless — the write side is a pure builder over the shared store, so target `//crates/wolf-ffi:state` stages no nvim and carries no `no-sandbox` tag; everything is driven through `WOLF_STATE_DIR` pointed at a tempdir.
 
 **Gotchas** — one `#[test]` only: it mutates the process-global `WOLF_STATE_DIR` and opens the process-wide `SHARED_STORE` `OnceLock`, so extend that test rather than adding a sibling.
 
@@ -396,9 +396,9 @@ That the harness's state-dir funnel keeps a real-nvim test off the user's Wolf s
 
 #### `terminal.rs`
 
-**Covers** — the terminal-drawer surface through `WolfCoreHandle::toggle_terminal()`: open, hide with the buffer surviving, reopen reusing that buffer, recreate after the buffer is wiped, the `DRAWER_OPEN` layout intent, and the drawer's full-width default. Real nvim; target `//crates/wolf-ffi:terminal` (staged nvim runfiles or `WOLF_NVIM_BIN`, `tags = ["no-sandbox"]`).
+**Covers** — the drawer through `WolfCoreHandle::toggle_terminal()`: its `DRAWER_OPEN` window showing a session that answers a typed line, hiding with the session kept, reopening on the same session, closing when its shell exits, a new session on the next toggle, and its full-width default. Also `terminal_cwd` and `queue_bind_terminal`, and both refusing an unknown id or target. Real nvim and the default shell, pinned to `/bin/sh`; target `//crates/wolf-ffi:terminal` (staged nvim runfiles or `WOLF_NVIM_BIN`, `tags = ["no-sandbox"]`, `medium`).
 
-**Gotchas** — drive the handle method, not `:WolfTerminal`; the Ex command only enqueues an `FfiCommand` and there is no front-end dispatcher here to call the method back. Drawer buffers are identified by the `term://` prefix on buffer-picker rows, and because nothing drains layout intents they accumulate, so the test polls `drain_intents()` for the kind it wants.
+**Gotchas** — drive the handle method, not `:WolfTerminal`; the Ex command only enqueues an `FfiCommand` and there is no front-end dispatcher here to call the method back. Nothing drains layout intents, so they accumulate, and the test polls `drain_intents()` for the kind it wants.
 
 #### `terminal_bridge.rs`
 

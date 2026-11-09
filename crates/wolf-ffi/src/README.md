@@ -81,7 +81,7 @@ The four `extern "C"` wake registrations (`wolf_ffi_set_wake`, `wolf_ffi_set_fil
 - `active_win(&self) -> i64` — 0 until nvim reports one.
 - `focus_win(&self, win: i64)` — Click-to-focus and resolved focus-direction moves.
 - `close_pane(&self)` — `:close`, which closes the split rather than the buffer.
-- `rebuild_layout(&self, layout: &FfiPaneNode) -> Vec<i64>` — Realizes a saved split tree, the node `FfiTabState::layout` returned, in the current tabpage's lone window, returning the window handles in leaf order. Rust renders it with `wolf_core::state::rebuild_layout_spec`, so no front-end renders the spec. nvim supplies only count, topology, and per-window buffer; sizes come from the front-end's weights. When it returns, `win_buffer` and `previews` already report every returned window, so a state commit straight after it reads the restored files rather than the startup buffer.
+- `rebuild_layout(&self, layout: &FfiPaneNode) -> Vec<i64>` — Realizes a saved split tree, the node `FfiTabState::layout` returned, in the current tabpage's lone window, returning the window handles in leaf order. Rust renders it with `wolf_core::state::rebuild_layout_spec`, so no front-end renders the spec. nvim supplies only count, topology, and per-window buffer; sizes come from the front-end's weights. When it returns, `win_buffer` and `previews` already report every returned window, so a state commit straight after it reads the restored files rather than the startup buffer. A terminal leaf's window already shows its new session.
 - `pane_status_for_grid(&self, grid: u64) -> FfiPaneStatus` — The statusbar strings for the window drawing into `grid`.
 - `win_buffer(&self, win: i64) -> FfiWinBuffer` — What window `win` shows, read from core's `win_buffers` by handle. That map spans every tabpage, so a background view's window is still reported, where `pane_status_for_grid` joins through the current-tabpage `windows` map and answers `[No Name]`. The front-end reads persisted leaf paths through it for that reason.
 - `toggle_full_width(&self)` — Flips `b:wolf_full_width` on the effective buffer, which for a preview scratch is the source buffer.
@@ -98,6 +98,9 @@ The four `extern "C"` wake registrations (`wolf_ffi_set_wake`, `wolf_ffi_set_fil
 
 - `open_terminal(&self, win: i64, target: u8, command: String) -> u64` — `target` per `mod terminal_target`, and a `win` of 0 is Neovim's current window. `""` runs the user's shell and anything else runs as `/bin/sh -c <command>`, so the session's `shell` reads `sh`. The command is one string because only tests pass one and swift-bridge is not known to accept a `Vec<String>` parameter. Blocks briefly; 0 on failure, for an unknown `target` or after shutdown.
 - `bind_terminal(&self, id: u64, win: i64, target: u8) -> bool` — Shows a running session as `open_terminal` places a new one; false for an unknown id or `target`.
+- `queue_bind_terminal(&self, id: u64, win: i64, target: u8) -> bool` — `bind_terminal` through the input queue, behind everything queued before it, for the rebind after a restart. Never blocks; false for an id with no running session, an unknown `target` or a gone core.
+- `toggle_terminal(&self)` — Opens or hides the drawer, starting its session when none is live.
+- `terminal_cwd(&self, id: u64) -> String` — The directory to persist as a terminal leaf's path; `""` when unknown.
 - `terminal_frame(&self, id: u64) -> FfiTerminalFrame` — The empty frame, version 0 and `0x0`, for an unknown id or after shutdown.
 - `terminal_key(&self, id: u64, ev: FfiKeyEvent)` — Goes through core's `<C-w>` router, so a chord may act on Neovim's windows instead of reaching the program.
 - `terminal_text`, `terminal_paste(&self, id: u64, text: String)` — Text as typed, such as an input method's commit, and a paste, which is bracketed when the program set mode 2004.
@@ -209,7 +212,7 @@ One captive nvim is one project; each of its views binds to a distinct tabpage.
 
 ### Per-pane navigation history
 
-- `history_can_back(&self, win: i64) -> bool` — A snapshot read, no RPC. False for an unknown window, a never-navigated pane, or the terminal drawer.
+- `history_can_back(&self, win: i64) -> bool` — A snapshot read, no RPC. False for an unknown window, a never-navigated pane, or a terminal pane.
 - `history_can_forward(&self, win: i64) -> bool` — Same contract.
 - `history_back(&self, win: i64) -> bool` — Blocks briefly. Returns whether the pane actually moved, not whether the call was accepted.
 - `history_forward(&self, win: i64) -> bool` — Same contract.
@@ -253,12 +256,12 @@ The read side loads a saved tree; the write side pushes a fresh one through free
 - `wolf_ffi_load_state() -> FfiState` — The pre-start restore read. It never creates or modifies the file and never opens the live store; an absent, corrupt, or unresolvable state all yield an empty window list.
 - `FfiState::windows() -> Vec<FfiWindowState>` — Empty when nothing was saved.
 - `FfiWindowState::x/y/width/height/tabs` — Points. A width or height at or below 0 means unset — do not restore it.
-- `FfiTabState::cwd/sidebar_visible/has_layout/layout` — `has_layout` is false only for an empty-state lone pane; a lone pane showing a file or a preview still persists a single leaf.
-- `FfiPaneNode::is_leaf/is_preview/leaf_path/orientation/child_count/weight/child` — Recursion happens through repeated opaque returns from `child`, which keeps the bridge on scalar, String, and opaque returns. A preview leaf's `leaf_path` is the source file's absolute path.
+- `FfiTabState::cwd/sidebar_visible/has_layout/layout` — `has_layout` is false only for an empty-state lone pane; a lone pane showing a file, a preview or a terminal still persists a single leaf.
+- `FfiPaneNode::is_leaf/is_preview/is_terminal/leaf_path/orientation/child_count/weight/child` — Recursion happens through repeated opaque returns from `child`, which keeps the bridge on scalar, String, and opaque returns. A preview leaf's `leaf_path` is the source file's absolute path, and a terminal leaf's the directory its shell starts in.
 - `wolf_ffi_state_snapshot_begin()` — Clears the write-side scratch tree.
 - `wolf_ffi_state_snapshot_add_window(x, y, width, height)` — Pushes a window with an empty tab list; later `add_tab` calls attach to it.
 - `wolf_ffi_state_snapshot_add_tab(cwd, sidebar_visible)` — Attaches to the most recently added window. A no-op when there is none.
-- `wolf_ffi_state_layout_push_leaf(path, preview, weight)` — Part of a post-order token replay that assembles one tab's split tree across the scalar bridge.
+- `wolf_ffi_state_layout_push_leaf(path, preview, terminal, weight)` — Part of a post-order token replay that assembles one tab's split tree across the scalar bridge.
 - `wolf_ffi_state_layout_push_split(orientation, child_count, weight)` — Pops `child_count` nodes, wraps them into a split, and pushes it back. The root split's weight is 1.0.
 - `wolf_ffi_state_layout_commit_to_tab()` — Attaches the single remaining node to the last window's last tab. A no-op unless exactly one node remains.
 - `wolf_ffi_state_snapshot_commit()` — Commits the whole tree at once; an identical tree is a no-op in the store.

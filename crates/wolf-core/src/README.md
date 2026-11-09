@@ -74,7 +74,6 @@ The `nvim-rs` handler: folds each `redraw` batch into `Snapshot` and routes the 
 - In `grid_line`, `repeat` counts columns including the first, so an explicit `0` is a zero-width no-op; clamping it to 1 paints past the span, a wrong-background cell Neovim's shadow grid never repaints. A double-width glyph's trailing half arrives as its own empty-text cell; synthesizing a placeholder shifts the row right.
 - `win_hide` removes the window entry but keeps its grid: Neovim reuses the grid id and may re-`win_pos` it unresized.
 - A resolved `confirm()` and an invalid-key re-prompt produce byte-identical `cmdline_hide` batches, so the toast is stashed with its prompt and restored only on a matching `cmdline_show`.
-- The open-file mirror drops terminal buffers: a front-end replays it as `:edit` after a crash. Measured: Neovim re-runs `termopen()`, spawning another shell per crash.
 
 **Gotchas**
 
@@ -457,8 +456,7 @@ Purpose: Pure display-string math for a pane's statusbar: the base filename and 
 
 - `NO_NAME` — the placeholder filename for an unnamed buffer, also reused by `buffer_picker`.
 - `PaneStatus` — `display_path` is relativized (cwd-relative wins, else the `~`-prefixed home form, else absolute), while `abs_path` is the raw buffer path and is never relativized, because the macOS front-end persists it as a pane-layout leaf path.
-- `pane_status(buf_path, cwd, home)`.
-- A terminal buffer, `term://<cwd>//<pid>:<command>`, yields the basename of the command's first word as `filename` (`bash`) and an empty `display_path`, so both front-ends draw the shell's name with no path line; `abs_path` stays the raw name. A `term://` name with no command word falls through to the path rules.
+- `pane_status(buf_path, cwd, home)` — for a buffer only. A terminal pane's status comes from its session ([`terminal.rs`](#terminalrs)).
 
 **Decisions**
 
@@ -476,7 +474,7 @@ Purpose: Per-pane back/forward navigation history, the single source of truth be
 **Public API**
 
 - `NavTarget` — the module's dedup key. `Edit(X)` and `Preview(X)` are deliberately distinct entries.
-- `derive_target` — `None` for the terminal drawer, which is excluded from history.
+- `derive_target` — `None` for every terminal pane, the drawer included ([why](../../../specs/terminal-panes.md#what-goes-away)).
 - `NavHistory` / `PaneHistory` — `observe` folds one target; `back`/`forward`/`jump` return a `NavMove`, and a failed move is undone with `revert(from: mv.to, to: mv.from)`.
 - `menu_rows(limit, home)` — newest-first distinct targets with minimal-growth prefix labels; the checkmarked row's `index` is the cursor's own, so clicking it is a no-op.
 
@@ -527,6 +525,7 @@ Purpose: the terminal sessions core owns, each a pty, a shell, a `wolf_vt::Termi
 - `live_terminals` lists running sessions only, while an exited session's frame stays readable until its pane closes ([why](../../../notes/wolf-core-decisions.md#terminal-sessions)).
 - Mouse and scroll positions are pixels from the content area's top-left, turned into cells with the cell size of the last `resize_terminal`.
 - `WolfCore::pane_status` of a terminal pane reports the session's shell name, or `NO_NAME` once the session is gone, with empty paths.
+- The drawer, restart and restore methods, `toggle_terminal`, `drawer_terminal`, `queue_bind_terminal` and `terminal_cwd`, are specified in [Terminal panes](../../../specs/terminal-panes.md#the-drawer).
 
 **Decisions**
 
