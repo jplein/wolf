@@ -25,12 +25,13 @@ use crate::buffer_picker::BufInfo;
 use crate::command::Command;
 use crate::command_mru::CommandMru;
 use crate::files::{self, FileSearch, FileSearchState};
-use crate::input::{self, InputEvent, MouseEvent, Nvim, ScrollEvent};
+use crate::input::{InputEvent, MouseEvent, ScrollEvent};
 use crate::layout::LayoutIntent;
 use crate::liveness::{self, Liveness};
 use crate::mru::{FileEntry, MruStore};
 use crate::nav_history::{MenuRow, NavMove, NavTarget, MAX_MENU_ROWS};
 use crate::nvim::{self, DurableDirs, NvimConfig, NvimError, NvimProcess};
+use crate::pump::{Pump, PumpTarget, QueuedInput};
 use crate::recent_dirs::RecentDirs;
 use crate::redraw::{CommandQueue, IntentQueue, NavHistoryCell, RedrawHandler, TrackedCwd, WakeFn};
 use crate::render::{OwnedSnapshotReadGuard, SharedSnapshot, Snapshot, TabFiles};
@@ -38,11 +39,6 @@ use crate::search::{self, SearchOptions, SearchSession, SearchState};
 use crate::state::{
     parsers_user_dir, runtime_user_dir, seed_runtime_user_dir, spell_dir, state_dir, swap_dir_for,
 };
-
-/// How long the input pump waits after the first event of a burst for siblings
-/// to enqueue, so a synchronous run of `send_input` calls coalesces into one
-/// applied batch (one RPC for fused keys, hence one redraw flush).
-const INPUT_COALESCE_DELAY: Duration = Duration::from_millis(8);
 
 /// Default budget for a single interactive synchronous nvim RPC issued through
 /// [`WolfCore::block_on_rpc`]. An RPC that exceeds this elapses to
@@ -52,21 +48,6 @@ const INPUT_COALESCE_DELAY: Duration = Duration::from_millis(8);
 /// Matches `SHUTDOWN_TIMEOUT`. Overridable at [`WolfCore::start`] via the
 /// `WOLF_RPC_TIMEOUT_MS` env var (invalid / unset / zero → this default).
 const RPC_TIMEOUT_DEFAULT: Duration = Duration::from_secs(5);
-
-/// The handle the input pump applies batches to, and the restart generation it
-/// belongs to. [`WolfCore::restart_nvim`] swaps both in one write-lock section.
-#[derive(Clone)]
-struct PumpTarget {
-    nvim: Nvim,
-    generation: u64,
-}
-
-/// An input event as queued by [`WolfCore::send_input`], stamped with the restart
-/// generation current when it was sent.
-struct QueuedInput {
-    generation: u64,
-    event: InputEvent,
-}
 
 /// Configuration to start a [`WolfCore`].
 #[derive(Clone, Debug)]
@@ -134,9 +115,11 @@ pub struct WolfCore {
     /// [`WolfCore::drain_commands`] on wake.
     commands: CommandQueue,
     /// Ordered input queue. Every input event is enqueued here and applied by a
-    /// single consumer task in FIFO order, so keystrokes never reorder (which
-    /// would garble typed text). Each event carries the restart generation it was
-    /// sent under, so the pump can drop typing that predates a restart.
+    /// single consumer task, the input pump, in FIFO order, so keystrokes never
+    /// reorder (which would garble typed text). The one exception: typing may pass
+    /// a state event held behind a call that waits on input. Each event carries the
+    /// restart generation it was sent under, so the pump can drop typing that
+    /// predates a restart.
     input_tx: UnboundedSender<QueuedInput>,
     /// The always-on GLOBAL recent-files MRU (`<state_dir>/file-mru.sqlite`).
     /// Constructed once at [`WolfCore::start`] from [`state_dir`] (or
@@ -200,8 +183,9 @@ pub struct WolfCore {
     /// The captive nvim's liveness state (`Alive` / `NotResponding` / `Dead`),
     /// backed by an atomic. The supervisor marks `Dead` on an unexpected death;
     /// [`block_on_rpc`](WolfCore::block_on_rpc) and the input pump each escalate a
-    /// call or batch that outlasts [`rpc_timeout`](Self::rpc_timeout) to
-    /// `NotResponding`, and clear it back to `Alive` once nvim answers;
+    /// call that outlasts [`rpc_timeout`](Self::rpc_timeout) to `NotResponding`,
+    /// the pump only while no Neovim prompt is showing, and clear it back to
+    /// `Alive` once nvim answers;
     /// [`restart_nvim`](WolfCore::restart_nvim) resets it to `Alive`. Read cheaply
     /// (no RPC) by [`liveness`](WolfCore::liveness).
     liveness: Arc<AtomicU8>,
@@ -213,7 +197,7 @@ pub struct WolfCore {
     /// swaps in the fresh nvim's handle and bumps the generation, so the pump keeps
     /// working after a respawn (a fixed captured handle would go stale), can tell
     /// which queued typing predates it, and ignores the stall or the answer of a
-    /// batch sent to a handle the restart replaced.
+    /// call sent to a handle the restart replaced.
     shared_handle: Arc<RwLock<PumpTarget>>,
     /// The redraw handler (it is `Clone`, carrying the SAME snapshot / intents /
     /// commands / tracked-cwd / recent-dirs / wake). Stored so a restart clones a
@@ -364,89 +348,24 @@ impl WolfCore {
 
         // The single FIFO input consumer fuses consecutive `Key` events into one `nvim_input`.
         // See notes/wolf-core-decisions.md#threading-and-locking
-        let (input_tx, mut input_rx) = mpsc::unbounded_channel::<QueuedInput>();
-        // A fresh handle clone per batch, because a restart swaps in the respawned nvim's handle.
+        let (input_tx, input_rx) = mpsc::unbounded_channel::<QueuedInput>();
+        // A restart swaps the respawned nvim's handle in here, and the pump reads it per batch.
         let shared_handle = Arc::new(RwLock::new(PumpTarget {
             nvim: nvim.handle(),
             generation: 0,
         }));
-        let pump_shared_handle = shared_handle.clone();
-        let pump_mru = mru.clone();
-        let pump_tracked_cwd = tracked_cwd.clone();
-        let pump_fallback_cwd = cwd.clone();
-        let pump_snapshot = snapshot.clone_handle();
-        let pump_liveness = liveness.clone();
-        let pump_wake = wake.clone();
-        runtime.spawn(async move {
-            while let Some(first) = input_rx.recv().await {
-                // Let any siblings enqueued in the same synchronous burst arrive.
-                tokio::time::sleep(INPUT_COALESCE_DELAY).await;
-
-                let mut queued = vec![first];
-                while let Ok(ev) = input_rx.try_recv() {
-                    queued.push(ev);
-                }
-
-                // Read the CURRENT handle for this batch (survives a restart swap).
-                let target: PumpTarget = pump_shared_handle.read().clone();
-
-                // Typing sent before the last restart's swap is dropped, so a half-typed `:` cannot
-                // reach the fresh nvim as normal-mode keys; state input still applies.
-                let queued_len = queued.len();
-                let batch: Vec<InputEvent> = queued
-                    .into_iter()
-                    .filter(|q| q.generation == target.generation || !q.event.is_typing())
-                    .map(|q| q.event)
-                    .collect();
-                if batch.len() < queued_len {
-                    tracing::debug!(
-                        dropped = queued_len - batch.len(),
-                        "dropped typing queued before a restart"
-                    );
-                }
-                if batch.is_empty() {
-                    continue;
-                }
-
-                // Clear a non-prompt toast before applying dismissing input, so a `msg_show` that
-                // input produces repopulates it; the guard drops before the apply `.await`.
-                if batch.iter().any(InputEvent::is_toast_dismissing) {
-                    let mut snap = pump_snapshot.write_async().await;
-                    if !snap.toast.is_prompt() {
-                        snap.clear_toast();
-                    }
-                    drop(snap);
-                }
-
-                // A batch that outlasts the budget marks a stall, unless a restart replaced its
-                // handle; the future is kept, since dropping a pending call kills the io loop.
-                let mut apply = std::pin::pin!(input::apply_batch(&target.nvim, &batch));
-                let answered = match tokio::time::timeout(rpc_timeout, &mut apply).await {
-                    Ok(answered) => answered,
-                    Err(_elapsed) => {
-                        if pump_shared_handle.read().generation == target.generation {
-                            liveness::mark_not_responding(&pump_liveness, &pump_wake);
-                        }
-                        apply.await
-                    }
-                };
-                if answered && pump_shared_handle.read().generation == target.generation {
-                    liveness::clear_not_responding(&pump_liveness, &pump_wake);
-                }
-
-                // Record opens under nvim's live cwd, resolved per batch to follow `:cd`/`:tcd`;
-                // the path is cloned out so the guard is not held across the record.
-                for ev in &batch {
-                    if let InputEvent::Open { path } | InputEvent::OpenAt { path, .. } = ev {
-                        let record_cwd = pump_tracked_cwd
-                            .read()
-                            .clone()
-                            .unwrap_or_else(|| pump_fallback_cwd.clone());
-                        pump_mru.record(&record_cwd, path);
-                    }
-                }
-            }
-        });
+        let pump = Pump {
+            rx: input_rx,
+            shared_handle: shared_handle.clone(),
+            mru: mru.clone(),
+            tracked_cwd: tracked_cwd.clone(),
+            fallback_cwd: cwd.clone(),
+            snapshot: snapshot.clone_handle(),
+            liveness: liveness.clone(),
+            wake: wake.clone(),
+            rpc_timeout,
+        };
+        runtime.spawn(pump.run());
 
         Ok(Self {
             runtime,
@@ -485,7 +404,11 @@ impl WolfCore {
     ///
     /// The event is enqueued on the ordered input channel and applied by the
     /// single consumer task in FIFO order; errors are logged (the front-end gets
-    /// no synchronous result, matching the FFI-shaped contract).
+    /// no synchronous result, matching the FFI-shaped contract). The exception to
+    /// the order: while a call waits on input, such as a Neovim prompt it raised,
+    /// a [`Key`](InputEvent::Key), [`Mouse`](InputEvent::Mouse) or
+    /// [`Scroll`](InputEvent::Scroll) may pass a state event held behind it, so
+    /// the key that answers the prompt reaches Neovim.
     ///
     /// The event is stamped with the current restart generation. Typing
     /// ([`Key`](InputEvent::Key), [`Paste`](InputEvent::Paste),
@@ -1527,9 +1450,9 @@ impl WolfCore {
     /// The captive nvim's current [`Liveness`] — a cheap, lock-free atomic read
     /// (NOT an RPC).
     ///
-    /// `Alive` normally; `NotResponding` after a synchronous RPC or an input batch
-    /// outlasted the timeout budget (a stall — self-clears to `Alive` once nvim
-    /// answers one); `Dead` after the supervisor observed an unexpected process death
+    /// `Alive` normally; `NotResponding` after a synchronous RPC, or an input-pump
+    /// call while no Neovim prompt is showing, outlasted the timeout budget (a
+    /// stall — self-clears to `Alive` once nvim answers one); `Dead` after the supervisor observed an unexpected process death
     /// (terminal until [`restart_nvim`](Self::restart_nvim)).
     #[must_use]
     pub fn liveness(&self) -> Liveness {

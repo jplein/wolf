@@ -13,9 +13,11 @@
 //!   * `wolf_core::Liveness { Alive, NotResponding, Dead }` (re-exported), the
 //!     supervisor marking `Dead` on nvim stdout EOF and `block_on_rpc`'s timeout
 //!     path escalating repeated `Timeout` into `NotResponding`.
-//!   * The input pump's own stall detection: a batch Neovim does not answer within
+//!   * The input pump's own stall detection: a call Neovim does not answer within
 //!     the RPC budget marks `NotResponding`, and its answer clears it, with no
 //!     `block_on_rpc` call involved.
+//!   * The pump's exception to it: a call held open by a Neovim prompt the user
+//!     has not answered yet is not a stall, however long the prompt stays up.
 //!   * `wolf_core::liveness::clear_not_responding`, the shared auto-clear, tested
 //!     headless with a counting `WakeFn`.
 //!
@@ -41,8 +43,8 @@ use std::sync::Arc;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use common::{ch, key, type_str, FLUSH_TIMEOUT, POLL_INTERVAL};
-use wolf_core::{liveness, Key, Liveness, WakeFn, WolfCore};
+use common::{ch, key, type_str, DiskConflict, FLUSH_TIMEOUT, POLL_INTERVAL};
+use wolf_core::{liveness, InputEvent, Key, Liveness, WakeFn, WolfCore};
 
 /// A small, deterministic RPC timeout (ms) for the STALL core, so a single wedged
 /// `block_on_rpc` call elapses quickly. Large enough to clear real sub-ms
@@ -321,6 +323,73 @@ fn typing_into_a_hung_nvim_marks_not_responding_then_clears() {
          stays up over a working editor, Dead means the wedge was taken for a crash"
     );
 
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// How long [`a_prompt_past_the_budget_is_not_a_stall`] samples `liveness()` while the prompt
+/// stays up: five budgets of [`STALL_RPC_TIMEOUT_MS`], so the budget elapses many times over.
+const PROMPT_SAMPLE_WINDOW: Duration = Duration::from_millis(1_000);
+
+/// `:write`'s y/n question is up on the command line.
+fn save_prompt_showing(core: &WolfCore) -> bool {
+    let snap = core.read_snapshot();
+    snap.cmdline.active && snap.cmdline.prompt.contains("(y/n)")
+}
+
+/// A pump call that Neovim holds open on a prompt the user has not answered yet is not a stall:
+/// `liveness()` stays `Alive` across many RPC budgets, so no stall overlay covers the prompt.
+///
+/// `InputEvent::Save` on a modified buffer whose file changed on disk raises `:write`'s y/n
+/// question inside the request, which stays unanswered until the user answers it.
+///
+/// No `block_on_rpc` method may be called anywhere in this test, as in
+/// [`typing_into_a_hung_nvim_marks_not_responding_then_clears`]: one would clear a stall by itself.
+///
+/// ## Falsifying edits and their predicted reds
+///
+/// * Make the pump mark the stall at the budget whether or not a prompt shows (or run the base
+///   code): red at the poll for `Alive` or in the sampling window.
+#[test]
+fn a_prompt_past_the_budget_is_not_a_stall() {
+    // Read once at start; see `stall_marks_not_responding` for why the process-global var is safe.
+    std::env::set_var("WOLF_RPC_TIMEOUT_MS", STALL_RPC_TIMEOUT_MS);
+
+    let c = common::start_core_with_disk_conflict();
+    c.core.send_input(InputEvent::Save);
+
+    poll_without_draining("`:write`'s (y/n) prompt for a file changed on disk", || {
+        save_prompt_showing(&c.core)
+    });
+    poll_without_draining(
+        "liveness() to be Alive while the save waits on the prompt; NotResponding means the pump \
+         took the user's unanswered prompt for a hung Neovim",
+        || c.core.liveness() == Liveness::Alive,
+    );
+
+    let end = Instant::now() + PROMPT_SAMPLE_WINDOW;
+    while Instant::now() < end {
+        let now = c.core.liveness();
+        assert_eq!(
+            now,
+            Liveness::Alive,
+            "the pump marked a stall while Neovim waited on the user's answer to a prompt; the \
+             stall overlay would cover the prompt (Dead means Neovim died instead)"
+        );
+        sleep(POLL_INTERVAL);
+    }
+    assert!(
+        save_prompt_showing(&c.core),
+        "the prompt must still be up after the sampling window, or the samples did not cover a \
+         call held open past the budget"
+    );
+
+    c.core.send_input(ch('n'));
+    poll_without_draining(
+        "the prompt to close after `n`, which must reach Neovim past the open call",
+        || !save_prompt_showing(&c.core),
+    );
+
+    let DiskConflict { core, .. } = c;
     core.shutdown().expect("shutdown should be Ok");
 }
 

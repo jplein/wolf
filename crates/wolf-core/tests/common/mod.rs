@@ -674,6 +674,99 @@ pub fn start_core_sized(cols: u16, rows: u16) -> (WolfCore, FlushWaiter) {
     (core, waiter)
 }
 
+// --- A modified buffer whose file changed on disk ---------------------------
+
+/// What `note.txt` holds when [`start_core_with_disk_conflict`] opens it.
+pub const CONFLICT_ORIGINAL: &str = "first draft line\n";
+
+/// The word [`start_core_with_disk_conflict`] appends to line 1 in Neovim and never saves.
+pub const CONFLICT_EDIT: &str = "EDITED";
+
+/// What [`start_core_with_disk_conflict`] writes to `note.txt` behind Neovim's back.
+///
+/// Its byte length differs from [`CONFLICT_ORIGINAL`]'s, so Neovim's size check sees the change
+/// whatever the filesystem's mtime granularity, and it shares no word with either that text or
+/// [`CONFLICT_EDIT`], so a test can tell the three apart on the grid and on disk.
+pub const CONFLICT_DISK: &str = "rewritten outside Wolf by the test\n";
+
+/// How far ahead of now [`start_core_with_disk_conflict`] sets the rewritten file's mtime, so
+/// Neovim sees it as changed without the test sleeping out a coarse mtime clock.
+const CONFLICT_MTIME_AHEAD: Duration = Duration::from_secs(10);
+
+/// A core whose current buffer, `note.txt`, holds an unsaved edit while its file changed on disk:
+/// what [`start_core_with_disk_conflict`] returns.
+pub struct DiskConflict {
+    /// The live core, with `note.txt` current and modified.
+    pub core: WolfCore,
+    /// The core's flush waiter.
+    pub waiter: FlushWaiter,
+    /// Keeps the core's cwd alive. It holds `note.txt`, and tests may put probe files in it.
+    pub dir: tempfile::TempDir,
+    /// The canonical path of `note.txt`.
+    pub file: PathBuf,
+}
+
+/// Starts a core in a fresh canonical temp dir, opens `note.txt` there, appends
+/// [`CONFLICT_EDIT`] to its line 1 without saving, then rewrites the file on disk with
+/// [`CONFLICT_DISK`] and an mtime [`CONFLICT_MTIME_AHEAD`] in the future.
+///
+/// Neovim has not looked at the file again when this returns, so the next thing that checks it
+/// (`:write`, or the `FocusGained` check of `nvim_ui_set_focus`) finds both sides changed.
+///
+/// It raises `updatetime` first, so `CursorHold`'s `:checktime` from `WolfAutoRead` cannot find
+/// the conflict on Neovim's main loop before the test's own trigger does.
+///
+/// It calls no `block_on_rpc` method of the core (`current_tabpage`, `list_buffers` and the
+/// like), because `nvim_liveness.rs` uses it in a case that asserts the input pump's own stall
+/// handling, which one such call would clear behind its back.
+pub fn start_core_with_disk_conflict() -> DiskConflict {
+    let dir = tempfile::tempdir().expect("failed to create the conflict test's temp dir");
+    let cwd = std::fs::canonicalize(dir.path()).expect("failed to canonicalize the temp dir");
+    let file = cwd.join("note.txt");
+    std::fs::write(&file, CONFLICT_ORIGINAL).expect("failed to write note.txt");
+
+    let (wake, waiter) = wake_channel();
+    let core = WolfCore::start(config_in(cwd, DEFAULT_COLS, DEFAULT_ROWS), wake)
+        .expect("WolfCore::start failed (is WOLF_NVIM_BIN a valid nvim?)");
+    waiter.wait_for_initial_flush(&core, FLUSH_TIMEOUT);
+
+    send_ex(&core, "set updatetime=600000");
+
+    core.send_input(InputEvent::Open { path: file.clone() });
+    let original = CONFLICT_ORIGINAL.trim_end();
+    poll_until(
+        &waiter,
+        "row 0 to show note.txt's original text after the open",
+        || core.read_snapshot().active_grid().row_text(0),
+        |row0| row0.contains(original),
+    );
+
+    core.send_input(ch('A'));
+    type_str(&core, &format!(" {CONFLICT_EDIT}"));
+    core.send_input(key(Key::Esc));
+    let edited = format!("{original} {CONFLICT_EDIT}");
+    poll_until(
+        &waiter,
+        "row 0 to show the unsaved edit appended to line 1",
+        || core.read_snapshot().active_grid().row_text(0),
+        |row0| row0.contains(&edited),
+    );
+
+    std::fs::write(&file, CONFLICT_DISK).expect("failed to rewrite note.txt behind Neovim");
+    std::fs::File::options()
+        .write(true)
+        .open(&file)
+        .and_then(|f| f.set_modified(std::time::SystemTime::now() + CONFLICT_MTIME_AHEAD))
+        .expect("failed to move note.txt's mtime ahead");
+
+    DiskConflict {
+        core,
+        waiter,
+        dir,
+        file,
+    }
+}
+
 // --- Small input constructors to cut repetition ---------------------------
 
 /// A plain (unmodified) key press.

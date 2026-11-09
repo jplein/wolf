@@ -85,7 +85,13 @@ WolfCoreHandle::<method>            (crates/wolf-ffi/src/lib.rs)
         → nvim_command / nvim_exec_lua
 ```
 
-The input channel is ordered, so an editor-affecting command never races pending keystrokes. The `apply` arm is either a plain Ex-command or a call into a `wolf_*` Lua helper, whose behavior is defined in [`runtime/nvim/README.md`](../runtime/nvim/README.md) rather than in Rust. Four worked chains span the range:
+The input channel is ordered, so an editor-affecting command never races pending keystrokes.
+
+An `apply` arm's RPC can wait on the user. Neovim answers a request only when its handler returns, and a prompt raised inside one holds it open: `:write` asks before overwriting a file that changed on disk, and `nvim_ui_set_focus` runs the `FocusGained` file check, whose W12 asks about a buffer changed on both sides. A request can also wait in Neovim's queue behind a half-typed chord such as `<C-w>`.
+
+So the input pump never lets an unanswered call hold back the keystroke that would release it. Typing that arrives meanwhile waits while the pump asks Neovim for its mode; an answer that comes back before the call's means Neovim is waiting for input, and the pump sends it the oldest waiting key, mouse or scroll event. State events keep their place behind the call, and typing keeps its order ([why](../notes/wolf-core-decisions.md#threading-and-locking)).
+
+The `apply` arm is either a plain Ex-command or a call into a `wolf_*` Lua helper, whose behavior is defined in [`runtime/nvim/README.md`](../runtime/nvim/README.md) rather than in Rust. Four worked chains span the range:
 
 - **`NewBuffer`** — `WolfCoreHandle::new_buffer` → `WolfCore::new_buffer` → `InputEvent::NewBuffer` → `nvim_exec_lua("wolf_new_untitled()", [])`.
 - **`SwitchBuffer`** — `WolfCoreHandle::switch_buffer(bufnr)`, which resolves the active window live, → `WolfCore::switch_buffer(win, bufnr)` → `InputEvent::SwitchBuffer { win, bufnr }` → `nvim_exec_lua("wolf_switch_buffer(...)", [win, bufnr])`.

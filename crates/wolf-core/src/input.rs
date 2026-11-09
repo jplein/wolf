@@ -6,6 +6,7 @@
 //! corresponding generic msgpack-RPC calls (`nvim_input`, `nvim_input_mouse`,
 //! `nvim_ui_try_resize`, `nvim_ui_set_focus`, and Ex commands for open/save).
 
+use std::future::Future;
 use std::path::{Path, PathBuf};
 
 use nvim_rs::{compat::tokio::Compat, error::CallError, Neovim};
@@ -14,6 +15,35 @@ use tokio::process::ChildStdin;
 
 /// The Neovim handle type used throughout core (generic untyped RPC only).
 pub(crate) type Nvim = Neovim<Compat<ChildStdin>>;
+
+/// What one untyped RPC call returns: Neovim's answer, an error answer from Neovim, or a
+/// transport failure.
+pub(crate) type CallResult = Result<Result<Value, Value>, Box<CallError>>;
+
+/// Issues one untyped RPC request. Every RPC an [`InputEvent`] issues goes through it.
+///
+/// [`Nvim`] implements it as a plain `Neovim::call`. The input pump implements it with a driver
+/// that keeps taking input while a call waits, so that a key can answer a Neovim prompt the call
+/// itself raised. Named `request`, not `call`, because the inherent `Neovim::call` would shadow
+/// it.
+pub(crate) trait Rpc {
+    /// Sends `method` with `args`, and resolves to Neovim's answer.
+    fn request(
+        &mut self,
+        method: &str,
+        args: Vec<Value>,
+    ) -> impl Future<Output = CallResult> + Send;
+}
+
+impl Rpc for Nvim {
+    fn request(
+        &mut self,
+        method: &str,
+        args: Vec<Value>,
+    ) -> impl Future<Output = CallResult> + Send {
+        self.call(method, args)
+    }
+}
 
 /// A logical key, independent of any platform key-code scheme.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -356,6 +386,37 @@ impl InputEvent {
             | InputEvent::SetUiFocus { .. } => false,
         }
     }
+
+    /// Whether Neovim takes this event through a fast API call (`nvim_input`,
+    /// `nvim_input_mouse`): a [`Key`](InputEvent::Key), [`Mouse`](InputEvent::Mouse) or
+    /// [`Scroll`](InputEvent::Scroll). Neovim runs such a call on arrival, even while it waits on
+    /// a keystroke inside another request, so the input pump may send it past a call that waits.
+    ///
+    /// [`Paste`](InputEvent::Paste) is typing but not fast: `nvim_paste` waits its turn. The
+    /// match is exhaustive for the same reason as [`is_typing`](Self::is_typing)'s.
+    pub(crate) fn is_fast_input(&self) -> bool {
+        match self {
+            InputEvent::Key(_) | InputEvent::Mouse(_) | InputEvent::Scroll(_) => true,
+            InputEvent::Paste { .. }
+            | InputEvent::Resize { .. }
+            | InputEvent::ResizeGrid { .. }
+            | InputEvent::FocusWin { .. }
+            | InputEvent::Open { .. }
+            | InputEvent::OpenAt { .. }
+            | InputEvent::Save
+            | InputEvent::SaveAs { .. }
+            | InputEvent::Chdir { .. }
+            | InputEvent::SetTabpage { .. }
+            | InputEvent::CloseTabpage { .. }
+            | InputEvent::ClosePane
+            | InputEvent::NewBuffer
+            | InputEvent::SwitchBuffer { .. }
+            | InputEvent::SetBackground { .. }
+            | InputEvent::ToggleTerminal
+            | InputEvent::ToggleFullWidth
+            | InputEvent::SetUiFocus { .. } => false,
+        }
+    }
 }
 
 /// Translates a [`KeyEvent`] into Neovim keystroke notation.
@@ -416,16 +477,19 @@ pub fn key_to_notation(ev: &KeyEvent) -> String {
 /// (mouse, scroll, resize, open/save) are applied individually, in order. Errors
 /// are logged, not propagated, matching the fire-and-forget input contract.
 ///
+/// Every call goes through `nvim`'s [`Rpc::request`], so the input pump's driver
+/// sees each one and can keep taking input while it waits.
+///
 /// Returns `true` when every call came back `Ok`, which means nvim answered them
 /// all: a call nvim answers with an error is still `Ok` here, because the helpers
 /// discard the response. Only a transport failure (`SendError`,
 /// `InternalReceiveError`, `DecodeError`) is an `Err`, so `false` means some call
 /// never reached nvim or never got its answer.
-pub(crate) async fn apply_batch(nvim: &Nvim, events: &[InputEvent]) -> bool {
+pub(crate) async fn apply_batch(nvim: &mut impl Rpc, events: &[InputEvent]) -> bool {
     let mut pending_keys = String::new();
     let mut answered = true;
 
-    async fn flush_keys(nvim: &Nvim, keys: &mut String) -> bool {
+    async fn flush_keys(nvim: &mut impl Rpc, keys: &mut String) -> bool {
         if keys.is_empty() {
             return true;
         }
@@ -455,11 +519,11 @@ pub(crate) async fn apply_batch(nvim: &Nvim, events: &[InputEvent]) -> bool {
 
 /// Applies an input event by issuing the appropriate generic RPC to Neovim.
 ///
-/// All calls go through untyped RPC (`Neovim::call`) so we are insulated from
+/// All calls go through untyped RPC ([`Rpc::request`]) so we are insulated from
 /// nvim-rs's older typed wrappers. Resize is forwarded via `nvim_ui_try_resize`;
 /// the authoritative grid size is whatever the resulting `grid_resize` carries,
 /// so we never resize the local grid here.
-pub(crate) async fn apply(nvim: &Nvim, event: &InputEvent) -> Result<(), Box<CallError>> {
+pub(crate) async fn apply(nvim: &mut impl Rpc, event: &InputEvent) -> Result<(), Box<CallError>> {
     match event {
         // Key translation lives in exactly one place — `nvim_input` — shared with
         // the batched live input path (`apply_batch`/`flush_keys`).
@@ -468,7 +532,7 @@ pub(crate) async fn apply(nvim: &Nvim, event: &InputEvent) -> Result<(), Box<Cal
         InputEvent::Scroll(ev) => apply_scroll(nvim, ev).await,
         InputEvent::Resize { cols, rows } => {
             let _ = nvim
-                .call(
+                .request(
                     "nvim_ui_try_resize",
                     vec![Value::from(*cols), Value::from(*rows)],
                 )
@@ -477,7 +541,7 @@ pub(crate) async fn apply(nvim: &Nvim, event: &InputEvent) -> Result<(), Box<Cal
         }
         InputEvent::ResizeGrid { grid, cols, rows } => {
             let _ = nvim
-                .call(
+                .request(
                     "nvim_ui_try_resize_grid",
                     vec![Value::from(*grid), Value::from(*cols), Value::from(*rows)],
                 )
@@ -488,7 +552,7 @@ pub(crate) async fn apply(nvim: &Nvim, event: &InputEvent) -> Result<(), Box<Cal
             // Generic RPC accepts a plain i64 as the Window handle, the form the redraw stream
             // decodes handles into (see `crate::redraw::ext_handle`).
             let _ = nvim
-                .call("nvim_set_current_win", vec![Value::from(*win)])
+                .request("nvim_set_current_win", vec![Value::from(*win)])
                 .await?;
             Ok(())
         }
@@ -529,9 +593,9 @@ pub(crate) async fn apply(nvim: &Nvim, event: &InputEvent) -> Result<(), Box<Cal
 /// nvim-rs accepts the plain `i64` tabpage handle over generic RPC (same form
 /// the redraw stream decodes tabpage handles into; see
 /// [`crate::redraw::apply_tabpage`]).
-async fn set_current_tabpage(nvim: &Nvim, handle: i64) -> Result<(), Box<CallError>> {
+async fn set_current_tabpage(nvim: &mut impl Rpc, handle: i64) -> Result<(), Box<CallError>> {
     let _ = nvim
-        .call("nvim_set_current_tabpage", vec![Value::from(handle)])
+        .request("nvim_set_current_tabpage", vec![Value::from(handle)])
         .await?;
     Ok(())
 }
@@ -542,9 +606,9 @@ async fn set_current_tabpage(nvim: &Nvim, handle: i64) -> Result<(), Box<CallErr
 /// runs `<n>tabclose` inside a `pcall`, so a last-tabpage `E784` is swallowed
 /// (the front-end never closes the last view — the Project shuts the core down
 /// instead).
-async fn close_tabpage(nvim: &Nvim, handle: i64) -> Result<(), Box<CallError>> {
+async fn close_tabpage(nvim: &mut impl Rpc, handle: i64) -> Result<(), Box<CallError>> {
     let _ = nvim
-        .call(
+        .request(
             "nvim_exec_lua",
             vec![
                 Value::from("wolf_close_tabpage(...)"),
@@ -578,8 +642,10 @@ fn fnameescape(path: &Path) -> String {
 /// This is the single key-delivery point shared by both the per-event
 /// [`apply`] path and the batched [`apply_batch`] live-input pump, so key
 /// translation is never duplicated.
-async fn nvim_input(nvim: &Nvim, notation: String) -> Result<(), Box<CallError>> {
-    let _ = nvim.call("nvim_input", vec![Value::from(notation)]).await?;
+async fn nvim_input(nvim: &mut impl Rpc, notation: String) -> Result<(), Box<CallError>> {
+    let _ = nvim
+        .request("nvim_input", vec![Value::from(notation)])
+        .await?;
     Ok(())
 }
 
@@ -588,9 +654,9 @@ async fn nvim_input(nvim: &Nvim, notation: String) -> Result<(), Box<CallError>>
 /// `nvim_paste(data, crlf, phase)` with `crlf = true` (translate CRLF) and
 /// `phase = -1` (a single, non-streamed paste) inserts correctly in normal,
 /// insert, visual, and cmdline modes — no mode branching needed.
-async fn nvim_paste(nvim: &Nvim, text: &str) -> Result<(), Box<CallError>> {
+async fn nvim_paste(nvim: &mut impl Rpc, text: &str) -> Result<(), Box<CallError>> {
     let _ = nvim
-        .call(
+        .request(
             "nvim_paste",
             vec![Value::from(text), Value::from(true), Value::from(-1i64)],
         )
@@ -598,8 +664,8 @@ async fn nvim_paste(nvim: &Nvim, text: &str) -> Result<(), Box<CallError>> {
     Ok(())
 }
 
-async fn command(nvim: &Nvim, cmd: &str) -> Result<(), Box<CallError>> {
-    let _ = nvim.call("nvim_command", vec![Value::from(cmd)]).await?;
+async fn command(nvim: &mut impl Rpc, cmd: &str) -> Result<(), Box<CallError>> {
+    let _ = nvim.request("nvim_command", vec![Value::from(cmd)]).await?;
     Ok(())
 }
 
@@ -612,10 +678,15 @@ async fn command(nvim: &Nvim, cmd: &str) -> Result<(), Box<CallError>> {
 /// convention). Neovim clamps an out-of-range line/column to the buffer, so a
 /// stale match never errors. The two calls happen back-to-back in one
 /// input-pump step so the edit and the cursor placement are ordered.
-async fn open_at(nvim: &Nvim, path: &Path, line: u64, col: u64) -> Result<(), Box<CallError>> {
+async fn open_at(
+    nvim: &mut impl Rpc,
+    path: &Path,
+    line: u64,
+    col: u64,
+) -> Result<(), Box<CallError>> {
     command(nvim, &format!("edit {}", fnameescape(path))).await?;
     let _ = nvim
-        .call(
+        .request(
             "nvim_win_set_cursor",
             vec![
                 Value::from(0),
@@ -630,9 +701,9 @@ async fn open_at(nvim: &Nvim, path: &Path, line: u64, col: u64) -> Result<(), Bo
 /// helper (a window-scoped `nvim_win_set_buf` plus per-pane view restoration),
 /// invoked over `nvim_exec_lua` so the set-buffer and the view restore happen
 /// atomically in one Lua call.
-async fn switch_buffer(nvim: &Nvim, win: i64, bufnr: i64) -> Result<(), Box<CallError>> {
+async fn switch_buffer(nvim: &mut impl Rpc, win: i64, bufnr: i64) -> Result<(), Box<CallError>> {
     let _ = nvim
-        .call(
+        .request(
             "nvim_exec_lua",
             vec![
                 Value::from("wolf_switch_buffer(...)"),
@@ -647,9 +718,9 @@ async fn switch_buffer(nvim: &Nvim, win: i64, bufnr: i64) -> Result<(), Box<Call
 /// `wolf_toggle_terminal` helper, invoked over `nvim_exec_lua`. The helper
 /// opens a bottom `:terminal` split in the current tabpage, or hides that
 /// window if it is already showing the shared terminal buffer (which persists).
-async fn toggle_terminal(nvim: &Nvim) -> Result<(), Box<CallError>> {
+async fn toggle_terminal(nvim: &mut impl Rpc) -> Result<(), Box<CallError>> {
     let _ = nvim
-        .call(
+        .request(
             "nvim_exec_lua",
             vec![Value::from("wolf_toggle_terminal()"), Value::Array(vec![])],
         )
@@ -662,9 +733,9 @@ async fn toggle_terminal(nvim: &Nvim) -> Result<(), Box<CallError>> {
 /// runs `:enew`, then names + markdown-types the buffer (choosing the first name
 /// colliding with neither an existing buffer nor a file on disk in cwd) without
 /// writing it to disk.
-async fn new_untitled(nvim: &Nvim) -> Result<(), Box<CallError>> {
+async fn new_untitled(nvim: &mut impl Rpc) -> Result<(), Box<CallError>> {
     let _ = nvim
-        .call(
+        .request(
             "nvim_exec_lua",
             vec![Value::from("wolf_new_untitled()"), Value::Array(vec![])],
         )
@@ -678,9 +749,9 @@ async fn new_untitled(nvim: &Nvim) -> Result<(), Box<CallError>> {
 /// buffer is a normal, unmodified, non-preview buffer whose name is empty or an
 /// existing (not-yet-saved) Untitled name — so a real, saved file is never
 /// renamed by a `chdir`.
-async fn name_untitled_current(nvim: &Nvim) -> Result<(), Box<CallError>> {
+async fn name_untitled_current(nvim: &mut impl Rpc) -> Result<(), Box<CallError>> {
     let _ = nvim
-        .call(
+        .request(
             "nvim_exec_lua",
             vec![
                 Value::from("wolf_name_untitled_current()"),
@@ -696,9 +767,9 @@ async fn name_untitled_current(nvim: &Nvim) -> Result<(), Box<CallError>> {
 /// `b:wolf_full_width` on the effective buffer (the SOURCE buffer when the active
 /// pane is a preview scratch) and re-emits the current-file / per-window
 /// full-width / previews notifications so the front-end resizes the content.
-async fn toggle_full_width(nvim: &Nvim) -> Result<(), Box<CallError>> {
+async fn toggle_full_width(nvim: &mut impl Rpc) -> Result<(), Box<CallError>> {
     let _ = nvim
-        .call(
+        .request(
             "nvim_exec_lua",
             vec![
                 Value::from("wolf_toggle_full_width()"),
@@ -713,14 +784,14 @@ async fn toggle_full_width(nvim: &Nvim) -> Result<(), Box<CallError>> {
 /// (arity 1, a single bool). `gained = true` makes nvim fire `FocusGained`,
 /// `false` makes it fire `FocusLost`. Inlined like the `Resize` arm — there is no
 /// `NvimProcess::set_focus` wrapper.
-async fn set_ui_focus(nvim: &Nvim, gained: bool) -> Result<(), Box<CallError>> {
+async fn set_ui_focus(nvim: &mut impl Rpc, gained: bool) -> Result<(), Box<CallError>> {
     let _ = nvim
-        .call("nvim_ui_set_focus", vec![Value::from(gained)])
+        .request("nvim_ui_set_focus", vec![Value::from(gained)])
         .await?;
     Ok(())
 }
 
-async fn apply_mouse(nvim: &Nvim, ev: &MouseEvent) -> Result<(), Box<CallError>> {
+async fn apply_mouse(nvim: &mut impl Rpc, ev: &MouseEvent) -> Result<(), Box<CallError>> {
     let button = match ev.button {
         MouseButton::Left => "left",
         MouseButton::Right => "right",
@@ -735,7 +806,7 @@ async fn apply_mouse(nvim: &Nvim, ev: &MouseEvent) -> Result<(), Box<CallError>>
     nvim_input_mouse(nvim, button, action, &modifier, ev.grid, ev.row, ev.col).await
 }
 
-async fn apply_scroll(nvim: &Nvim, ev: &ScrollEvent) -> Result<(), Box<CallError>> {
+async fn apply_scroll(nvim: &mut impl Rpc, ev: &ScrollEvent) -> Result<(), Box<CallError>> {
     let action = match ev.direction {
         ScrollDirection::Up => "up",
         ScrollDirection::Down => "down",
@@ -746,7 +817,7 @@ async fn apply_scroll(nvim: &Nvim, ev: &ScrollEvent) -> Result<(), Box<CallError
 }
 
 async fn nvim_input_mouse(
-    nvim: &Nvim,
+    nvim: &mut impl Rpc,
     button: &str,
     action: &str,
     modifier: &str,
@@ -757,7 +828,7 @@ async fn nvim_input_mouse(
     // `grid` 0 is the default grid; under `ext_multigrid` a window grid (`>= 2`) targets
     // that pane, and row/col are then grid-local.
     let _ = nvim
-        .call(
+        .request(
             "nvim_input_mouse",
             vec![
                 Value::from(button),
@@ -814,8 +885,10 @@ fn key_base(key: Key) -> String {
 
 #[cfg(test)]
 mod tests {
-    //! Pins [`InputEvent::is_typing`], which decides what survives a restart. The
-    //! end-to-end drop is covered by `tests/nvim_restart.rs`.
+    //! Pins [`InputEvent::is_typing`], which decides what survives a restart, and
+    //! [`InputEvent::is_fast_input`], which decides what the pump may send past a waiting
+    //! call. The end-to-end drop is covered by `tests/nvim_restart.rs`, and the release by
+    //! `tests/prompt_input.rs`.
 
     use std::path::PathBuf;
 
@@ -884,6 +957,21 @@ mod tests {
     fn resize_focus_tabpage_background_open_and_save_are_state() {
         for ev in state_events() {
             assert!(!ev.is_typing(), "{ev:?} must be state, not typing");
+        }
+    }
+
+    #[test]
+    fn keys_mouse_and_scroll_are_fast_input_and_paste_is_not() {
+        for ev in typing_events() {
+            let fast = !matches!(ev, InputEvent::Paste { .. });
+            assert_eq!(
+                ev.is_fast_input(),
+                fast,
+                "{ev:?}: is_fast_input must be {fast}"
+            );
+        }
+        for ev in state_events() {
+            assert!(!ev.is_fast_input(), "{ev:?} must not be fast input");
         }
     }
 }

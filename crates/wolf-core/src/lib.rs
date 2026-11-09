@@ -70,6 +70,7 @@ pub mod nav_history;
 pub mod nvim;
 pub mod palette;
 pub mod pane_status;
+mod pump;
 pub mod rank;
 pub mod recent_dirs;
 pub mod redraw;

@@ -23,10 +23,10 @@ use crate::redraw::WakeFn;
 pub enum Liveness {
     /// The captive nvim is responding normally.
     Alive,
-    /// The captive nvim has not answered a synchronous RPC, or an input batch,
-    /// within the timeout budget (a stall). Recoverable: a later answered RPC or
-    /// batch clears it back to `Alive` through [`clear_not_responding`], or the
-    /// user drives a manual restart.
+    /// The captive nvim has not answered a synchronous RPC, or an input-pump call
+    /// while no Neovim prompt is showing, within the timeout budget (a stall).
+    /// Recoverable: a later answered RPC or call clears it back to `Alive` through
+    /// [`clear_not_responding`], or the user drives a manual restart.
     NotResponding,
     /// The captive nvim process has died (stdout EOF, clean or crash). TERMINAL:
     /// only [`reset_alive`] (the restart path) leaves this state.
@@ -96,7 +96,7 @@ pub fn mark_not_responding(state: &AtomicU8, wake: &WakeFn) {
 /// the state actually changed.
 ///
 /// NOTE: the auto-clear of a transient `NotResponding`, after an answered
-/// `block_on_rpc` call or input batch, is [`clear_not_responding`], NOT this
+/// `block_on_rpc` call or input-pump call, is [`clear_not_responding`], NOT this
 /// unconditional store.
 pub fn reset_alive(state: &AtomicU8, wake: &WakeFn) {
     let previous = state.swap(Liveness::Alive.to_u8(), Ordering::SeqCst);
