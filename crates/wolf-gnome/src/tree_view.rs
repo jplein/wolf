@@ -45,8 +45,9 @@
 //! build, a render wake, a re-root, and the visibility catch-up.
 //!
 //! A refresh then passes two gates ([`crate::tree_gate`]): it is refused outright
-//! while the sidebar is hidden (and owed once when it returns), and it rebuilds only
-//! when the snapshot VERSION advanced. A pending reveal is retried either way,
+//! while the tree is off screen, with the sidebar hidden or on its Search page (and
+//! owed once when it returns), and it rebuilds only when the snapshot VERSION
+//! advanced. A pending reveal is retried either way,
 //! because a skipped rebuild still leaves selection and scroll to settle.
 //!
 //! **Present limitation: manual expansion does not survive a version advance.** A
@@ -443,11 +444,11 @@ impl TreeInner {
         let _ = self.search.borrow_mut().take();
     }
 
-    /// Records the sidebar's visibility, refreshing once if a refresh was deferred
-    /// while it was hidden.
+    /// Records whether the tree is on screen, refreshing once if a refresh was
+    /// deferred while it was not.
     ///
-    /// Relayed from `shell::apply_sidebar_visibility`, the ONE site that calls
-    /// `sidebar.set_visible`.
+    /// Relayed through [`crate::sidebar`], which reports the tree visible only while
+    /// the sidebar is shown on its Files page.
     fn set_sidebar_visible(&self, visible: bool) {
         // Own statement: `refresh` consults the same gate.
         let owed = self.gate.borrow_mut().set_visible(visible);
@@ -543,8 +544,8 @@ pub struct TreeHandle {
 }
 
 impl TreeHandle {
-    /// Returns the sidebar's root widget (the scrolled window) for placement in the
-    /// app's `gtk::Paned`.
+    /// Returns the tree's root widget (the scrolled window), the sidebar's Files page
+    /// ([`crate::sidebar`]).
     #[must_use]
     pub fn widget(&self) -> gtk::Widget {
         self.inner.scroller.clone().upcast::<gtk::Widget>()
@@ -567,8 +568,8 @@ impl TreeHandle {
         self.inner.reroot(root_label);
     }
 
-    /// Relays the sidebar's visibility into the refresh gate, catching up once if a
-    /// refresh was deferred while it was hidden.
+    /// Relays whether the tree is on screen into the refresh gate, catching up once
+    /// if a refresh was deferred while it was not.
     pub fn set_sidebar_visible(&self, visible: bool) {
         self.inner.set_sidebar_visible(visible);
     }

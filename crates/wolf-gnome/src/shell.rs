@@ -191,13 +191,15 @@
 //! must not be collapsed into the first — a native modal over the stall overlay
 //! covers the Restart button, which is the only route out of a stall.
 //!
-//! The project-search overlay ([`crate::search_overlay`]) adds NO blocking call
-//! either, and
-//! that is worth stating because the symmetry with the buffer picker suggests
-//! otherwise: `start_search` resolves its root from the tracked-cwd cell and
-//! `spawn_blocking`s, `open_at` is fire-and-forget on the ordered input channel, and
-//! `liveness` is an atomic read. `WolfCore::ignorecase()` IS a `block_on_rpc` and is
-//! deliberately never called from this crate.
+//! The sidebar's search panel ([`crate::search_panel`]) adds NO blocking call of its
+//! own either, and that is worth stating because the symmetry with the buffer picker
+//! suggests otherwise: `start_search` resolves its root from the tracked-cwd cell
+//! and `spawn_blocking`s, `open_at` is fire-and-forget on the ordered input channel,
+//! and `liveness` is an atomic read. A result activated over a preview pane reaches
+//! the already-counted `WolfCore::preview_file`, behind
+//! [`crate::search_panel::activation_route`]'s `Alive` arm.
+//! `WolfCore::ignorecase()` IS a `block_on_rpc` and is deliberately never called
+//! from this crate.
 
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
@@ -228,7 +230,8 @@ use crate::pane_view;
 use crate::picker::PickerHandle;
 use crate::preview_ui::{self, BrowserPress, EditPress, PreviewPress};
 use crate::save_ui::{self, SaveAsPress, SavePress, SaveTarget};
-use crate::search_overlay::SearchHandle;
+use crate::search_panel::{self, SearchPanelHandle, ShowDecision};
+use crate::sidebar::{SidebarHandle, SidebarPage};
 use crate::state_seam;
 use crate::tab_view::{TabParts, TabsHandle};
 use crate::tabs_ui::{self, NewTabPress};
@@ -244,8 +247,8 @@ const OPEN_FOLDER_ACTION: &str = "win.open-folder";
 /// Also the header bar's Open button target.
 pub(crate) const GO_TO_FILE_ACTION: &str = "win.go-to-file";
 
-/// The action that opens the in-window project-search overlay (disabled in the
-/// empty state, where the search root would fall back to the home directory).
+/// The action that shows the sidebar's project-search panel (disabled in the empty
+/// state, where the search root would fall back to the home directory).
 const SEARCH_IN_PROJECT_ACTION: &str = "win.search-in-project";
 
 /// The action that moves the focused pane one entry BACK in its navigation
@@ -364,12 +367,13 @@ pub struct ShellParts<'a> {
     pub palette: &'a PaletteHandle,
     /// The buffer picker, opened by `win.buffer-picker`.
     pub buffers: &'a BufferPickerHandle,
-    /// The project-search overlay, opened by `win.search-in-project`.
-    pub search: &'a SearchHandle,
+    /// The sidebar's search panel, shown and focused by `win.search-in-project`.
+    pub search: &'a SearchPanelHandle,
     /// The file-tree sidebar, re-rooted after a front-end directory change.
     pub tree: &'a TreeHandle,
-    /// The sidebar's root widget, hidden in the empty state.
-    pub sidebar: &'a gtk::Widget,
+    /// The sidebar container, hidden in the empty state and switched between its
+    /// Files and Search pages.
+    pub sidebar: &'a SidebarHandle,
     /// The window's outer `gtk::Paned` (sidebar | editor).
     pub paned: &'a gtk::Paned,
     /// The header bar's Open button, desensitized in the empty state.
@@ -417,12 +421,12 @@ struct ShellInner {
     palette: PaletteHandle,
     /// The buffer picker opened by `win.buffer-picker`.
     buffers: BufferPickerHandle,
-    /// The project-search overlay opened by `win.search-in-project`.
-    search: SearchHandle,
+    /// The sidebar's search panel, shown and focused by `win.search-in-project`.
+    search: SearchPanelHandle,
     /// The file-tree sidebar, re-rooted once a pending re-root settles.
     tree: TreeHandle,
-    /// The sidebar's root widget; hidden in the empty state.
-    sidebar: gtk::Widget,
+    /// The sidebar container; hidden in the empty state.
+    sidebar: SidebarHandle,
     /// The outer `gtk::Paned` whose divider collapses in the empty state.
     paned: gtk::Paned,
     /// The header bar's Open button; insensitive in the empty state.
@@ -440,7 +444,7 @@ struct ShellInner {
     sidebar_shown: Cell<bool>,
     /// The LIVE empty-state flag. Stored because
     /// [`AppShell::apply_sidebar_visibility`] needs both halves of the rule and
-    /// [`AppShell::toggle_sidebar`] is not given the flag.
+    /// [`AppShell::set_sidebar_preference`] is not given the flag.
     empty: Cell<bool>,
     /// The `win.go-to-file` action, stashed by [`AppShell::install_actions`] so the
     /// empty state can disable it.
@@ -642,7 +646,7 @@ pub fn build(parts: ShellParts<'_>) -> AppShell {
         }
     });
 
-    // A tab switch closes all four overlays: one left over the next tab keeps `window::wire_keys`'
+    // A tab switch closes all three overlays: one left over the next tab keeps `window::wire_keys`'
     // guard suppressing every key, and its focus-return lands in the strip it opened from.
     let weak_tabs = Rc::downgrade(&shell.inner);
     shell.inner.tabs.connect_selected(move || {
@@ -846,11 +850,12 @@ impl AppShell {
     /// (identical to `<C-f>`, page forward). That is an accepted wart, recorded in
     /// the README.
     ///
-    /// The project-search overlay is guarded TWICE, and both halves are needed: the
-    /// disabled action is what the chord and the menu item see, while
-    /// [`crate::search_overlay::open_decision`]'s `project_open` arm — fed by the
-    /// `set_project_open` call below — is what the command palette's row sees, since
-    /// the palette offers a live row for every dispatched command.
+    /// The search panel is guarded TWICE, and both halves are needed: the disabled
+    /// action is what the chord and the menu item see, while
+    /// [`crate::search_panel::show_decision`] over this shell's own empty flag is
+    /// what the command palette's row and `:WolfSearchInProject` meet in
+    /// [`AppShell::perform`], since the palette offers a live row for every
+    /// dispatched command.
     ///
     /// `win.terminal` is deliberately NOT among the actions disabled here, for the
     /// buffer picker's recorded reason: the captive Neovim runs in a project-less
@@ -877,7 +882,6 @@ impl AppShell {
         if let Some(action) = self.inner.toggle_sidebar.borrow().as_ref() {
             action.set_enabled(!empty);
         }
-        self.inner.search.set_project_open(!empty);
     }
 
     /// Applies the sidebar-visibility rule to the widgets. The ONE site that calls
@@ -887,25 +891,47 @@ impl AppShell {
     /// divider position is advisory (a start child merely positioned at 0 can still
     /// be re-derived by a later allocation), while an invisible start child is never
     /// allocated at all.
+    ///
+    /// Hiding the sidebar while focus is inside it — in the search panel's field, or
+    /// on the page switcher — first parks focus on the selected tab's strip: hiding
+    /// the focus widget leaves the toplevel with no focus widget at all, which kills
+    /// window-level key dispatch outright.
     fn apply_sidebar_visibility(&self) {
         let shown =
             state_seam::sidebar_is_shown(self.inner.sidebar_shown.get(), self.inner.empty.get());
-        self.inner.sidebar.set_visible(shown);
+        // Sampled before `set_visible`, for `apply_overlay`'s reason: a hidden focus widget reads as none.
+        if !shown && self.inner.sidebar.focus_is_inside() {
+            self.focus_selected_strip();
+        }
+        self.inner.sidebar.widget().set_visible(shown);
         self.inner
             .paned
             .set_position(if shown { TREE_PANE_WIDTH } else { 0 });
-        // Relayed from the one site so the refresh gate matches the screen: a refresh while hidden is
+        // Relayed from the one site so the refresh gates match the screen: a refresh while hidden is
         // deferred, and re-showing owes exactly one catch-up.
-        self.inner.tree.set_sidebar_visible(shown);
+        self.inner.sidebar.set_sidebar_visible(shown);
     }
 
-    /// Flips the user's sidebar preference, applies it, and records it for
+    /// Gives keyboard focus to the SELECTED tab's cmdline strip: a background tab's
+    /// is unmapped, and focusing an unmapped widget leaves the toplevel with no
+    /// focus widget.
+    fn focus_selected_strip(&self) {
+        if let Some(tab) = self.inner.tabs.selected() {
+            tab.focus_area().grab_focus();
+        }
+    }
+
+    /// Flips the user's sidebar preference; see [`AppShell::set_sidebar_preference`].
+    fn toggle_sidebar(&self) {
+        self.set_sidebar_preference(!self.inner.sidebar_shown.get());
+    }
+
+    /// Sets the user's sidebar preference to `shown`, applies it, and records it for
     /// persistence.
     ///
     /// The preference is what is persisted and restored — not what is on screen —
     /// so a session spent in the empty state cannot come back with the tree hidden.
-    fn toggle_sidebar(&self) {
-        let shown = !self.inner.sidebar_shown.get();
+    fn set_sidebar_preference(&self, shown: bool) {
         self.inner.sidebar_shown.set(shown);
         self.apply_sidebar_visibility();
         // The widget is per window (see `window::build`) but the preference is per tab, so every tab
@@ -1466,7 +1492,7 @@ impl AppShell {
     /// closing the picker (or yanking focus back to the cmdline strip) once per
     /// `Alive` frame would make the picker unusable.
     ///
-    /// - hidden -> visible: close ALL FOUR transient overlays. A crashed core must
+    /// - hidden -> visible: close ALL THREE transient overlays. A crashed core must
     ///   not leave the picker's Open reachable underneath, nor a palette row whose
     ///   activation would send into a dead nvim (`New`, `Close`) or open another
     ///   overlay over the crash one (`Go to File…`). The buffer picker is the one
@@ -1497,9 +1523,6 @@ impl AppShell {
             self.inner.picker.close();
             self.inner.palette.close();
             self.inner.buffers.close();
-            // A fourth idempotent close: an overlay left open keeps `window::wire_keys`' guard eating every
-            // key after a restart. It also cancels any `rg` behind the overlay.
-            self.inner.search.close();
         }
     }
 
@@ -1777,38 +1800,35 @@ impl AppShell {
     /// Performs one UI action. Exhaustive with no `_` arm, so a new [`UiAction`]
     /// variant is a compile error here.
     ///
-    /// **There are four transient overlays and at most one is open at a time; this
-    /// is where that is arbitrated**: opening any one of them closes the other three
-    /// first. Every `close()` is idempotent. This module holds all four handles, so
-    /// the rule costs the four overlay modules no knowledge of each other — and it
+    /// **There are three transient overlays and at most one is open at a time; this
+    /// is where that is arbitrated**: opening any one of them closes the other two
+    /// first. Every `close()` is idempotent. This module holds all three handles, so
+    /// the rule costs the three overlay modules no knowledge of each other — and it
     /// is what keeps `window::wire_keys`' open-overlay guard honest and makes "Escape
     /// closes the thing you can see" true.
+    ///
+    /// The sidebar's search panel is not an overlay and stays out of that rule.
+    /// Showing it closes the three, because they would cover the editor it opens
+    /// into, and nothing closes it.
     fn perform(&self, action: UiAction) {
         match action {
             UiAction::OpenFilePicker => {
                 self.inner.palette.close();
                 self.inner.buffers.close();
-                self.inner.search.close();
                 self.inner.picker.open();
             }
             UiAction::OpenCommandPalette => {
                 self.inner.picker.close();
                 self.inner.buffers.close();
-                self.inner.search.close();
                 self.inner.palette.open();
             }
             UiAction::OpenBufferPicker => {
                 self.inner.picker.close();
                 self.inner.palette.close();
-                self.inner.search.close();
                 self.inner.buffers.open();
             }
-            UiAction::OpenSearchOverlay => {
-                self.inner.picker.close();
-                self.inner.palette.close();
-                self.inner.buffers.close();
-                self.inner.search.open();
-            }
+            UiAction::ShowSearchPanel => self.show_search_panel(),
+            UiAction::ShowSidebarProject => self.show_sidebar_project(),
             UiAction::HistoryBack => self.navigate(false),
             UiAction::HistoryForward => self.navigate(true),
             UiAction::ToggleSidebar => self.toggle_sidebar(),
@@ -1844,9 +1864,40 @@ impl AppShell {
         }
     }
 
+    /// Shows the sidebar's search panel and focuses its field, or prints why not:
+    /// [`search_panel::show_decision`] refuses with no project open.
+    ///
+    /// The sidebar is revealed through the PREFERENCE, as a toggle would, so a later
+    /// Ctrl+Shift+B hides it again and the reveal is persisted. Nothing is run; the
+    /// field keeps whatever query it holds.
+    fn show_search_panel(&self) {
+        if let ShowDecision::Refuse(reason) = search_panel::show_decision(!self.inner.empty.get()) {
+            eprintln!("wolf-gnome: project search not shown: {reason}");
+            return;
+        }
+        self.inner.picker.close();
+        self.inner.palette.close();
+        self.inner.buffers.close();
+        self.set_sidebar_preference(true);
+        self.inner.sidebar.show_page(SidebarPage::Search);
+        self.inner.search.focus_entry();
+    }
+
+    /// Shows the sidebar on its Files page.
+    ///
+    /// Focus inside the search panel is parked on the strip first, because hiding a
+    /// focus widget leaves the toplevel with none.
+    fn show_sidebar_project(&self) {
+        if self.inner.search.owns_keyboard() {
+            self.focus_selected_strip();
+        }
+        self.set_sidebar_preference(true);
+        self.inner.sidebar.show_page(SidebarPage::Files);
+    }
+
     /// Closes the window through `close-request` so `window::wire_close` runs (picker,
-    /// palette, buffer picker, project search and tree closed, then
-    /// `WolfCore::shutdown`).
+    /// palette and buffer picker closed, the search panel's `rg` and the tree's
+    /// traversal cancelled, then `WolfCore::shutdown`).
     ///
     /// NEVER `destroy()`: that skips `close-request` entirely and leaks the nvim
     /// child. The `adw::ApplicationWindow` is owned by the application, so the app
@@ -1924,7 +1975,8 @@ impl AppShell {
         }
     }
 
-    /// Closes all four transient overlays after a tab switch.
+    /// Closes all three transient overlays after a tab switch. The sidebar's search
+    /// panel is per window and stays as it is.
     ///
     /// Wired through [`crate::tab_view::TabsHandle::connect_selected`], which fires
     /// only on a REAL selection change. Every `close()` is idempotent, and each
@@ -1938,7 +1990,6 @@ impl AppShell {
         self.inner.picker.close();
         self.inner.palette.close();
         self.inner.buffers.close();
-        self.inner.search.close();
     }
 
     /// Opens a fresh, empty window through

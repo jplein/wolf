@@ -15,7 +15,7 @@
 //! [`crate::persistence::StateHandle`].
 //!
 //! Per window, and deliberately NOT moved in here: the header bar, the `win.`
-//! action namespace, the four transient overlays, the crash/stall overlay — which
+//! action namespace, the three transient overlays, the crash/stall overlay — which
 //! is a property of the CORE, and one core serves every tab — and **the file-tree
 //! sidebar**. The sidebar's placement is a measured constraint rather than a
 //! preference: moving it into a page forces the [`adw::TabView`] above the window's
@@ -605,7 +605,7 @@ impl TabsInner {
     }
 
     /// Reacts to a REAL selection change: tells Neovim to switch tabpage, closes the
-    /// four transient overlays, and parks focus on the newly shown tab's strip.
+    /// three transient overlays, and parks focus on the newly shown tab's strip.
     ///
     /// `connect_selected_page_notify` fires only on an actual change, so nothing
     /// here needs a same-page guard.
@@ -818,7 +818,7 @@ impl TabsHandle {
     /// The preference is per window and every tab persists it, so a queued tab needs
     /// it twice over: it is what [`crate::state_seam::pending_tab_states`] seeds that
     /// tab's contribution with, and what its own [`StateHandle`] is opened with once
-    /// [`TabsInner::materialize_restore`] creates it. `AppShell::toggle_sidebar` calls
+    /// [`TabsInner::materialize_restore`] creates it. `AppShell::set_sidebar_preference` calls
     /// this beside its fan-out over [`TabsHandle::entries`], which reaches the live
     /// tabs alone.
     pub fn set_pending_sidebar_shown(&self, shown: bool) {
@@ -858,8 +858,8 @@ impl TabsHandle {
         self.inner.entries.borrow().is_empty()
     }
 
-    /// Resolves the focus-return target for the four transient overlays and the
-    /// sidebar: the SELECTED tab's cmdline strip, read at CLOSE time.
+    /// Resolves the focus-return target for the three transient overlays and the
+    /// sidebar's two pages: the SELECTED tab's cmdline strip, read at CLOSE time.
     ///
     /// See [`FocusTarget`] for why this is a closure. The `Weak` is upgraded per
     /// call, so an overlay outliving the tab layer grabs nothing rather than

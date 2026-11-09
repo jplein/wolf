@@ -42,9 +42,13 @@ The files are `bp*` and the asserted words `bufpick*`, so the query matches a na
 
 ## Project search fixtures
 
-A result row is a location, so the editor must land on the matching line and column. A screenshot only shows that the file is on screen, which an `:edit` with no cursor placement also satisfies, so the captive Neovim writes `expand('%:t')`, `line('.')` and `col('.')` in one `printf` and OCR only corroborates.
+Two smokes share the `psr*` fixtures. The first reads the capture it takes between its two Enters in two bands, the sidebar's and the pane area's. `zzmango`, the last word of the target's match line, is never typed and its file is not open yet, so only a result row can draw it, and the band it lands in says whether the results are in the sidebar or over the editor.
 
-The files are `psr*` and the asserted words `projsearch*`. `PROJSEARCH_QUERY` is a third vocabulary: content of the target file, drawn once the jump lands, so it must not contain any `ASSERTED_OCR_TERMS` entry, and it must appear on exactly one line of one file so the activated row is deterministic. `restore_fixture_names_cannot_satisfy_their_own_assertions` asserts both.
+The second Enter opens the match. An `:edit` with no cursor placement shows the same file, so the captive Neovim writes `expand('%:t')`, `line('.')` and `col('.')` in one `printf` and OCR only corroborates.
+
+`psrxray`, the starting file's name, is the tree-only term: inside the sidebar band only the Files page draws it, so its absence says the Search page is up and its presence says the tree is back. That file is exempt from `RELAUNCH_FIXTURE_NAMES`, and the guard crosses it against everything the Search page draws.
+
+The content terms are `projsearch*`. `PROJSEARCH_QUERY` is a third vocabulary: it appears on exactly one line of one file, so the activated row is deterministic, and it contains no `ASSERTED_OCR_TERMS` entry. `restore_fixture_names_cannot_satisfy_their_own_assertions` asserts all of this.
 
 ## Relaunch smoke exit codes
 

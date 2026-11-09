@@ -24,20 +24,17 @@
 //! seams are [`next_selection`], [`restored_index`] and [`activation_index`],
 //! unit-tested below.
 //!
-//! Those three seams are `pub(crate)` and shared with [`crate::palette`]'s,
-//! [`crate::buffer_picker`]'s and [`crate::search_overlay`]'s overlays, so the file
-//! list, the command list, the buffer list and the project-search result list
-//! navigate and activate identically — one arithmetic, one table of tests.
+//! Those three seams are `pub(crate)` and shared with [`crate::palette`]'s and
+//! [`crate::buffer_picker`]'s overlays, so the file list, the command list and the
+//! buffer list navigate and activate identically — one arithmetic, one table of
+//! tests. [`next_selection`] also moves the selection of the sidebar's search panel
+//! ([`crate::search_panel`]).
 //!
 //! **No shared overlay WIDGET is extracted, and that is a judgement rather than an
-//! omission.** The four overlays already share every rule that is genuinely shared —
+//! omission.** The three overlays already share every rule that is genuinely shared —
 //! this file's three seams, which is where the duplication actually was. What
-//! remains is ~40 lines of widget construction each, and the fourth instance
-//! diverges from the other three in four places at once: it has no
-//! `connect_search_changed`, it carries an extra status label, its `Enter` is a
-//! two-way decision rather than an activation, and its `open` starts nothing. A
-//! shared widget would need those four as configuration hooks, which is more surface
-//! than the code it removes. The decisive argument is risk: `notes/wolf-gnome-decisions.md` records
+//! remains is ~40 lines of widget construction each, which a shared widget would
+//! trade for configuration hooks. The decisive argument is risk: `notes/wolf-gnome-decisions.md` records
 //! that the widget layer of these modules is covered only by the cage smokes, so
 //! refactoring three working overlays behind a common type would put their five
 //! smokes at risk (two for the file picker, one for the palette, two for the buffer
@@ -68,8 +65,8 @@ const PICKER_WAKE_CHANNEL_CAP: usize = 1;
 /// Where an overlay returns focus when it closes, resolved AT CLOSE TIME rather
 /// than captured at build time.
 ///
-/// Every one of the four transient overlays — and the file-tree sidebar — parks
-/// focus back on the persistent cmdline strip when it closes, because a toplevel
+/// Every one of the three transient overlays — and the file-tree sidebar and its
+/// search panel — parks focus back on the persistent cmdline strip when it closes, because a toplevel
 /// left with no focus widget loses window-level key dispatch entirely while Neovim
 /// stays alive and silent (`notes/wolf-gnome-decisions.md`, the focus regime). That strip belongs to
 /// a [`crate::pane_view::PaneHandle`], and a pane view is PER TAB: an overlay
@@ -129,8 +126,8 @@ pub(crate) fn restored_index(
 /// `Option<i32>` is the shape because `gtk::ListBoxRow::index()` returns an `i32`
 /// that is `-1` for a row not in a list.
 ///
-/// All FOUR overlays resolve their activation through this one function — the file
-/// picker, the command palette, the buffer picker and the project search.
+/// All THREE overlays resolve their activation through this one function — the file
+/// picker, the command palette and the buffer picker.
 #[must_use]
 pub(crate) fn activation_index(selected: Option<i32>, n_rows: usize) -> Option<usize> {
     if n_rows == 0 {
@@ -677,10 +674,9 @@ mod tests {
     /// `gtk::ListBoxRow::index()` returns an `i32` that is `-1` for a row not in a
     /// list.
     ///
-    /// All four overlays resolve their activation through this one function — the
-    /// file picker, the command palette, the buffer picker and the project-search
-    /// overlay — so a row of this table is a user-visible behaviour in four places at
-    /// once.
+    /// All three overlays resolve their activation through this one function — the
+    /// file picker, the command palette and the buffer picker — so a row of this
+    /// table is a user-visible behaviour in three places at once.
     #[test]
     fn activation_index_table() {
         const LEN: usize = 5;

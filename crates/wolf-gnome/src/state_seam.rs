@@ -225,7 +225,7 @@ fn plan_for_window(
 /// Whether the file-tree sidebar is SHOWN: the user wants it AND a project is open.
 ///
 /// The ONE place that rule lives. `crate::shell::AppShell::set_empty_state` and
-/// `AppShell::toggle_sidebar` both apply it through the same private applier, so a
+/// `AppShell::set_sidebar_preference` both apply it through the same private applier, so a
 /// user toggle cannot be silently undone by the next `set_empty_state(false)` and
 /// the empty state cannot draw a file tree for a project that is not open.
 ///

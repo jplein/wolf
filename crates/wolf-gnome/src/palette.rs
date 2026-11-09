@@ -55,7 +55,7 @@
 //! matcher over `display`, so a `~/…` label over a `/home/…` ranked string returns
 //! nothing for a character the user can plainly see. The width is paid in the
 //! widget layer instead, with `xalign` plus a Pango ellipsis, exactly as
-//! [`crate::search_overlay`] pays it.
+//! [`crate::search_panel`] pays it.
 //!
 //! Opening costs two synchronous SQLite reads (the command MRU and the recent
 //! directories), one `live_cwd` lock read, one `stat` per recorded directory
@@ -444,7 +444,7 @@ impl PaletteInner {
 
         for row in &ranked {
             // A full path can be wider than the box: let Pango ellipsize the tail rather than rewrite the
-            // string, which would come apart from the one `rank_matches` ranked (as in `search_overlay`).
+            // string, which would come apart from the one `rank_matches` ranked (as in `search_panel`).
             let label = gtk::Label::builder()
                 .label(&row.display)
                 .halign(gtk::Align::Start)

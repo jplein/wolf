@@ -344,7 +344,7 @@ mod tests {
                 "appearance_decision({:?}, os_dark: {}) must be {:?}, got {got:?} — {}. A wrong \
                  `dark` pushes the opposite `background` into Neovim, so the editor's own \
                  colorscheme inverts against the user's configured choice; a wrong `color_scheme` \
-                 leaves the header bar, the sidebar and the four overlays in the opposite theme \
+                 leaves the header bar, the sidebar and the three overlays in the opposite theme \
                  from the grid they surround; a wrong `observe_os` either freezes `auto` at its \
                  launch-time reading or lets a desktop toggle overwrite a value the user forced in \
                  `wolf-config.yaml`.",
@@ -590,7 +590,7 @@ mod tests {
                     got.dark, want_dark,
                     "appearance_decision({configured:?}, os_dark: {os_dark}) asked for {:?} on the \
                      GTK chrome while pushing background={} into Neovim. Those disagree: the \
-                     header bar, the sidebar rows and the four overlays would be drawn in one \
+                     header bar, the sidebar rows and the three overlays would be drawn in one \
                      theme and the editor grid they surround in the other, in the same window. The \
                      two fields are resolved from the same input and must never be edited apart.",
                     got.color_scheme,

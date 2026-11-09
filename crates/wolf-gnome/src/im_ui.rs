@@ -435,8 +435,8 @@ mod tests {
     /// Stated as a SWEEP rather than as table rows because the rule, not the row,
     /// is what a reader needs named when it breaks: moving the early return below
     /// the `match im_filtered` is a one-line "simplification" that reads as tidier
-    /// and offers every key to the context while the picker, palette, buffer picker
-    /// or project search is up. That offer cannot be taken back — a `dead_acute` the
+    /// and offers every key to the context while the picker, palette or buffer picker
+    /// is up, or focus is in the sidebar's search panel. That offer cannot be taken back — a `dead_acute` the
     /// context accepts reappears inside whatever the window forwards next.
     #[test]
     fn an_open_overlay_wins_over_the_input_method() {

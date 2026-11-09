@@ -88,8 +88,10 @@ pub enum UiAction {
     OpenCommandPalette,
     /// Open the in-window buffer-picker overlay.
     OpenBufferPicker,
-    /// Open the in-window project-search overlay.
-    OpenSearchOverlay,
+    /// Show the sidebar on its project-search page and focus the search field.
+    ShowSearchPanel,
+    /// Show the sidebar on its file-tree page.
+    ShowSidebarProject,
     /// Move the focused pane one entry BACK in its navigation history.
     HistoryBack,
     /// Move the focused pane one entry FORWARD in its navigation history.
@@ -180,11 +182,8 @@ pub fn ui_action_for(command: Command) -> UiAction {
         Command::PreviewInBrowser => UiAction::OpenInBrowser,
         Command::FullWidth => UiAction::ToggleFullWidth,
         Command::ToggleSidebar => UiAction::ToggleSidebar,
-        Command::SidebarShowProject => UiAction::Deferred(
-            "wolf-gnome's sidebar has no panel switcher (there is no search panel to switch away \
-             from)",
-        ),
-        Command::SearchInProject => UiAction::OpenSearchOverlay,
+        Command::SidebarShowProject => UiAction::ShowSidebarProject,
+        Command::SearchInProject => UiAction::ShowSearchPanel,
         Command::PreviewInOtherPane => UiAction::PreviewInOtherPane,
         Command::EditInOtherPane => UiAction::EditInOtherPane,
     }
@@ -230,7 +229,7 @@ mod tests {
     /// The commands `wolf-gnome` DISPATCHES, by canonical `CommandSpec::id`,
     /// sorted. Ids (not variants) so the failure message names the registry row a
     /// reader can grep for.
-    const EXPECTED_DISPATCHED_IDS: [&str; 23] = [
+    const EXPECTED_DISPATCHED_IDS: [&str; 24] = [
         "buffer_picker",
         "close_pane",
         "close_window",
@@ -252,6 +251,7 @@ mod tests {
         "preview_in_other_pane",
         "quit_application",
         "search_in_project",
+        "sidebar_show_project",
         "terminal",
         "toggle_sidebar",
     ];
@@ -411,14 +411,14 @@ mod tests {
             want: Want::Exact(UiAction::ToggleSidebar),
         },
         Case {
-            desc: "24 SidebarShowProject: the sidebar has no panel switcher",
+            desc: "24 SidebarShowProject: switches the sidebar to its file tree",
             command: Command::SidebarShowProject,
-            want: Want::Deferred,
+            want: Want::Exact(UiAction::ShowSidebarProject),
         },
         Case {
-            desc: "25 SearchInProject: opens the in-window project-search overlay",
+            desc: "25 SearchInProject: shows the sidebar's project-search panel",
             command: Command::SearchInProject,
-            want: Want::Exact(UiAction::OpenSearchOverlay),
+            want: Want::Exact(UiAction::ShowSearchPanel),
         },
         Case {
             desc: "26 PreviewInOtherPane: binds the preview into a pane other than the active one",
@@ -550,7 +550,7 @@ mod tests {
 
         assert_eq!(
             dispatched, expected,
-            "the set of DISPATCHED commands changed. wolf-gnome dispatches exactly twenty-one \
+            "the set of DISPATCHED commands changed. wolf-gnome dispatches exactly twenty-four \
              commands; everything else must be Deferred(reason) or NoGnomeEquivalent(reason) so \
              the drain is never silent. If a command was genuinely implemented, tick its feat-list \
              row and update this list with it. A one-element diff naming \"new_window\" \

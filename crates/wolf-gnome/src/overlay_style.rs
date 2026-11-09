@@ -1,6 +1,5 @@
-//! The shared LOOK of the four transient overlays — the file picker, the command
-//! palette, the buffer picker and the project search — as one CSS class installed
-//! once per display.
+//! The shared LOOK of the three transient overlays — the file picker, the command
+//! palette and the buffer picker — as one CSS class installed once per display.
 //!
 //! The target is a GNOME menu: the popover surface colour rather than the window
 //! one, a menu's corner radius and drop shadow, and menu-sized rows. Every value
@@ -11,7 +10,7 @@
 //!
 //! **This shares a stylesheet, not a widget.** [`crate::picker`]'s module docs
 //! record why no common overlay TYPE is extracted; that judgement is unaffected
-//! here, because a CSS class costs each call site one line and removes the four
+//! here, because a CSS class costs each call site one line and removes the three
 //! copies of the appearance that a reader would otherwise have to keep in sync by
 //! eye.
 //!
@@ -66,8 +65,8 @@ const OVERLAY_CSS_DATA: &str = "
 thread_local! {
     /// Whether [`OVERLAY_CSS_DATA`] has already been added to the default display.
     ///
-    /// Four overlays times one window each would otherwise add four identical
-    /// providers, and a second window four more. Identical providers are inert —
+    /// Three overlays times one window each would otherwise add three identical
+    /// providers, and a second window three more. Identical providers are inert —
     /// [`crate::tree_view`] relies on exactly that — but there is no reason to
     /// accumulate them, and everything in this crate runs on the one GTK main
     /// thread, so a thread-local flag is the whole guard.

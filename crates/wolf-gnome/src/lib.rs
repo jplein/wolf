@@ -27,7 +27,8 @@
 //!   ([`command_action`]).
 //! - [`mod@palette`]: the command palette's rows, its Open Recent candidates and their actions.
 //! - [`mod@buffer_picker`]: the buffer picker's open guard, preselection and switch target.
-//! - [`mod@search_overlay`]: the project search's guard, options, rows and status line.
+//! - [`mod@search_panel`]: the search panel's guard, rows, Enter rule, open route and status line.
+//! - [`mod@sidebar`]: which of the sidebar's two pages may refresh.
 //! - [`launch_decision`] / [`workspace::reroot_ready`] / [`workspace::reroot_decision`]:
 //!   whether a project is open, where Neovim starts, and when the sidebar re-roots.
 //! - [`mod@tree_gate`]: when the sidebar's file tree may refresh and rebuild.
@@ -133,8 +134,9 @@ pub mod refresh_coalescer;
 pub mod render;
 pub mod save_ui;
 pub mod scrollbar;
-pub mod search_overlay;
+pub mod search_panel;
 pub mod shell;
+pub mod sidebar;
 pub mod state_seam;
 pub mod statusbar_layout;
 pub mod tab_view;

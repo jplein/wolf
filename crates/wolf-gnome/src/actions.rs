@@ -271,7 +271,7 @@ pub const ACTION_TABLE: &[ActionBinding] = &[
         note: "gives up only the Ctrl+Shift alias for <C-e> (scroll down one line), \
                which is still typed as plain Ctrl+E",
     },
-    // --- The project-search overlay ------------------------------------------
+    // --- The sidebar's project-search panel ----------------------------------
     ActionBinding {
         action: "win.search-in-project",
         accel: Some("<Control><Shift>f"),

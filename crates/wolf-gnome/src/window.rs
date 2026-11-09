@@ -70,19 +70,20 @@
 //!   [`crate::preview_coalescer::PREVIEW_MAX_STALENESS`] while it continues, and one
 //!   trailing render after it ends — plus two
 //!   that need a preview already on screen: `WolfCore::preview_file`, which
-//!   repoints a bound preview at a file linked from the rendered document, and
-//!   `WolfCore::open_in_browser`, which renders that document for the loopback
-//!   server behind Preview in Browser. All five
-//!   are gated through [`mod@crate::preview_ui`] with the buffer picker's argument
-//!   and its limits. Any of the ten can mark the core `Liveness::NotResponding`
-//!   and raise the stall overlay.
+//!   repoints a bound preview at a file linked from the rendered document or at a
+//!   search result activated over it, and `WolfCore::open_in_browser`, which renders
+//!   that document for the loopback server behind Preview in Browser. All five
+//!   are gated with the buffer picker's argument and its limits — through
+//!   [`mod@crate::preview_ui`], and for a search result through
+//!   [`crate::search_panel::activation_route`]. Any of the ten can mark the core
+//!   `Liveness::NotResponding` and raise the stall overlay.
 //!
 //!   PASTE adds none: `gdk::Clipboard::read_text_async` resolves on a later
 //!   main-loop turn and `WolfCore::paste` is fire-and-forget on the ordered input
-//!   channel, so nothing on that path can time out. The project-search overlay adds
-//!   NEITHER a blocking call nor a further stall path: `start_search`
+//!   channel, so nothing on that path can time out. The sidebar's search panel adds
+//!   a trigger for `preview_file` and no call of its own: `start_search`
 //!   `spawn_blocking`s onto the tokio runtime, `open_at` is fire-and-forget, and the
-//!   one blocking call it could have made — `WolfCore::ignorecase()` — is
+//!   one blocking call it could have added — `WolfCore::ignorecase()` — is
 //!   deliberately not made.
 //!
 //!   Writing back is [`crate::persistence`], one instance per TAB: every tab is
@@ -144,7 +145,7 @@
 //!   menu from the same data, matches the accelerators, and drains
 //!   [`WolfCore::drain_commands`] on each wake. A row activated in the command
 //!   palette enters that same dispatch, and the shell keeps at most one of the
-//!   four transient overlays open at a time. The `app.` rows are the
+//!   three transient overlays open at a time. The `app.` rows are the
 //!   coordinator's, installed once for the process.
 //! - **Resize:** per-pane and global grid resizing live in [`crate::pane_view`]
 //!   (each pane's `connect_resize` → [`crate::grid_size_for`] → per-grid/global
@@ -194,11 +195,12 @@ use crate::im_ui;
 use crate::palette::{self, PaletteHandle};
 use crate::picker::{self, PickerHandle};
 use crate::ready_seam;
-use crate::search_overlay::{self, SearchHandle};
+use crate::search_panel::{self, SearchPanelHandle};
 use crate::shell::{
     self, ShellParts, GO_TO_FILE_ACTION, HISTORY_BACK_ACTION, HISTORY_FORWARD_ACTION,
     TOGGLE_SIDEBAR_ACTION,
 };
+use crate::sidebar;
 use crate::state_seam::{self, RestorePlan};
 use crate::tab_view::{self, RestoreTabs, TabParts, TabsHandle, TabsParts};
 use crate::title::WINDOW_TITLE_FALLBACK;
@@ -517,7 +519,6 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
     };
     let palette = palette::build(&overlay, focus_target.clone(), &core, palette_windows);
     let buffers = buffer_picker::build(&overlay, focus_target.clone(), &core);
-    let search = search_overlay::build(&overlay, focus_target.clone(), &core);
 
     overlay.add_overlay(&crash.widget());
     overlay.add_overlay(&crash.banner_widget());
@@ -530,9 +531,10 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
         !empty,
         &workspace::root_label(&plan.core_cwd),
     );
-    let sidebar = tree.widget();
+    let search = search_panel::build(&core, focus_target.clone());
+    let sidebar = sidebar::build(&tree, &search);
     let paned = gtk::Paned::new(gtk::Orientation::Horizontal);
-    paned.set_start_child(Some(&sidebar));
+    paned.set_start_child(Some(&sidebar.widget()));
     paned.set_end_child(Some(&overlay));
     paned.set_position(TREE_PANE_WIDTH);
 
@@ -852,10 +854,10 @@ fn wire_ready_triggers(handle: &WindowHandle, coordinator: Weak<CoordinatorInner
 /// Installs this window's input method and its key controller, and returns the
 /// context so [`wire_close`] can tear it down.
 ///
-/// While any transient overlay (the file picker, the command palette, the buffer
-/// picker or the project search) is open, keys are left for that overlay's focused
-/// widgets: nothing is forwarded to the core, and — the half that is easy to lose —
-/// nothing is OFFERED to the input method either. Otherwise every press is offered
+/// While any transient overlay (the file picker, the command palette or the buffer
+/// picker) is open, or keyboard focus is inside the sidebar's search panel, keys are
+/// left for those focused widgets: nothing is forwarded to the core, and — the half
+/// that is easy to lose — nothing is OFFERED to the input method either. Otherwise every press is offered
 /// to this window's [`gtk::IMMulticontext`] first, and only a press the context
 /// DECLINES is translated via the pure [`crate::gdk_key`] seam into core input; a
 /// press it claims arrives later as a `commit` string, which becomes core input
@@ -898,7 +900,7 @@ fn wire_keys(
     picker: &PickerHandle,
     palette: &PaletteHandle,
     buffers: &BufferPickerHandle,
-    search: &SearchHandle,
+    search: &SearchPanelHandle,
 ) -> gtk::IMMulticontext {
     // Constructed here rather than passed in: nothing above needs to supply it, and
     // returning it keeps this function at six parameters.
@@ -914,8 +916,10 @@ fn wire_keys(
         let buffers = buffers.clone();
         let search = search.clone();
         im.connect_commit(move |_im, text| {
-            let overlay_open =
-                picker.is_open() || palette.is_open() || buffers.is_open() || search.is_open();
+            let overlay_open = picker.is_open()
+                || palette.is_open()
+                || buffers.is_open()
+                || search.owns_keyboard();
             match im_ui::commit_decision(overlay_open, text) {
                 im_ui::CommitDecision::Refuse(reason) => {
                     eprintln!("wolf-gnome: commit not forwarded: {reason}");
@@ -947,8 +951,10 @@ fn wire_keys(
         let search = search.clone();
         let im = im.clone();
         controller.connect_key_pressed(move |controller, keyval, _keycode, state| {
-            let overlay_open =
-                picker.is_open() || palette.is_open() || buffers.is_open() || search.is_open();
+            let overlay_open = picker.is_open()
+                || palette.is_open()
+                || buffers.is_open()
+                || search.owns_keyboard();
             // Asked with `None` FIRST: the answer is what licenses the offer, and the
             // offer cannot be taken back once made.
             let route = match im_ui::key_route(im_ui::KeyPhase::Press, overlay_open, None) {
@@ -994,8 +1000,10 @@ fn wire_keys(
         let search = search.clone();
         let im = im.clone();
         controller.connect_key_released(move |controller, _keyval, _keycode, _state| {
-            let overlay_open =
-                picker.is_open() || palette.is_open() || buffers.is_open() || search.is_open();
+            let overlay_open = picker.is_open()
+                || palette.is_open()
+                || buffers.is_open()
+                || search.owns_keyboard();
             let route = match im_ui::key_route(im_ui::KeyPhase::Release, overlay_open, None) {
                 im_ui::KeyRoute::AskInputMethod => {
                     // `is_some_and` for the press handler's reason: a missing event means the input method declined.
@@ -1042,8 +1050,8 @@ struct CloseParts<'a> {
     palette: &'a PaletteHandle,
     /// The buffer picker, closed for teardown symmetry.
     buffers: &'a BufferPickerHandle,
-    /// The project-search overlay, whose close CANCELS an in-flight `rg`.
-    search: &'a SearchHandle,
+    /// The sidebar's search panel, whose close CANCELS an in-flight `rg`.
+    search: &'a SearchPanelHandle,
     /// The file-tree sidebar, whose close drops its `FileSearch`.
     tree: &'a TreeHandle,
     /// The coordinator, told FIRST — as a `Weak`, because it owns this window's

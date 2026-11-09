@@ -43,7 +43,7 @@
 //! do. A `0` from core IS the refusal, and [`crate::pane_view`] prints it.
 //!
 //! **Liveness is read BEFORE the buffer-kind gate**, and the order is the
-//! [`crate::search_overlay::open_decision`] precedence rather than an accident: a
+//! [`crate::search_panel::activation_route`] precedence rather than an accident: a
 //! user whose Neovim has wedged is told their Neovim has wedged, not that the
 //! buffer they are looking at is not Markdown — a claim that is unverifiable
 //! anyway, since the snapshot behind it stopped advancing when the editor did.

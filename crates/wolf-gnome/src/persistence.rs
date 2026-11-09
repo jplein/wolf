@@ -150,7 +150,7 @@ impl StateHandle {
 
     /// Records the user's sidebar PREFERENCE, mirroring [`StateHandle::set_empty`].
     ///
-    /// Called from [`crate::shell::AppShell::toggle_sidebar`]. The preference is
+    /// Called from [`crate::shell::AppShell::set_sidebar_preference`]. The preference is
     /// what is persisted, deliberately not what is on screen: an empty-state
     /// session shows no sidebar, and persisting that would hand the next launch
     /// into a real project a hidden tree the user never asked for.

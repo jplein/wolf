@@ -11,7 +11,7 @@
 //!
 //! ## What this file contains
 //!
-//! **Sixty-one cage smokes** — one window-render smoke, two file-picker smokes,
+//! **Sixty-two cage smokes** — one window-render smoke, two file-picker smokes,
 //! one file-tree-sidebar smoke, five split-pane smokes, one empty-state smoke, one
 //! new-untitled-buffer smoke, one command-palette smoke, one OPEN RECENT smoke
 //! (Ctrl+Shift+P, a typed folder query, then Enter — the activated row re-roots the
@@ -20,10 +20,13 @@
 //! what prove), two BUFFER-PICKER smokes
 //! (Ctrl+Shift+E then a typed query, switching to the queried buffer; and
 //! Ctrl+Shift+E then a BARE Enter, switching to the most-recently-used OTHER buffer
-//! through the row-1 preselection), one PROJECT-SEARCH smoke (Ctrl+Shift+F, a typed
-//! query, then TWO Enters — the first runs ripgrep, the second opens the matched
-//! LINE, which the captive Neovim's own `expand('%:t')` / `line('.')` / `col('.')`
-//! readback is what proves), one
+//! through the row-1 preselection), two PROJECT-SEARCH smokes (Ctrl+Shift+F, a typed
+//! query, then TWO Enters — the first streams the results into the sidebar's search
+//! panel, read off a sidebar band and a pane band of one capture, and the second
+//! opens the matched LINE, which the captive Neovim's own `expand('%:t')` /
+//! `line('.')` / `col('.')` readback is what proves; and the same chord revealing a
+//! hidden sidebar, Escape handing the keys back to Neovim with the panel left up, and
+//! `:WolfSidebarShowProject` switching back to the file tree), one
 //! Ctrl+Shift+W
 //! close-pane smoke (the accelerator path, as opposed to the split-pane suite's
 //! `<C-w>c`), two quit smokes (`:q`
@@ -184,10 +187,13 @@
 //! and the captures carry the one claim they cannot make, that a single page's pane
 //! view is on screen at a time.
 //!
-//! Thirty-seven of the sixty-one OCR a screenshot of the live window, and exactly one
-//! of those OCRs a CROP of it rather than the whole file: the terminal-drawer smoke
+//! Thirty-eight of the sixty-two OCR a screenshot of the live window, and three of
+//! those OCR a CROP of it rather than the whole file. The terminal-drawer smoke
 //! samples a band inside the drawer strip, below its statusbar, because that band is
-//! the region measured byte-identical across runs (see `drawer_band_rect`). Fourteen
+//! the region measured byte-identical across runs (see `drawer_band_rect`); the two
+//! project-search smokes read the sidebar's band apart from the pane area's, because
+//! which half of the window draws a result is their claim (see
+//! `projsearch_sidebar_band`). Fourteen
 //! deliberately capture no image at all: the `:qa` smoke asserts on the cage exit
 //! status alone, while the configured-font-size and column-cap smokes add two
 //! integers each, the configured-appearance smoke two exact strings, the
@@ -215,14 +221,14 @@
 //! scroll and divider-relayout smokes still capture and still RETAIN a screenshot
 //! for post-mortem, but assert on their readback files rather than on pixels. The
 //! three OCR-ing relaunch smokes OCR **and** assert on a Neovim readback, and two of
-//! them additionally assert on the `state.json` the first launch wrote. The
+//! them additionally assert on the `state.json` the first launch wrote. The first
 //! project-search smoke does both as well, and its readback carries the two values
 //! OCR structurally cannot: the LINE and the COLUMN the cursor landed on. The
 //! markdown-preview and terminal-drawer smokes do all three at once — a capture, a
 //! readback and a `state.json` frozen mid-run — because in both cases the surface
 //! under test cannot be read any other way.
 //!
-//! Seven of the sixty-one read RAW PIXELS out of their own captures, which is the
+//! Seven of the sixty-two read RAW PIXELS out of their own captures, which is the
 //! only route this harness has to a claim OCR cannot make — it reads no colour, and
 //! it cannot answer "where on the page is this".
 //! [`preview_document_follows_the_configured_appearance_under_cage`] captures two
@@ -272,16 +278,18 @@
 //!   because for the four fixtures whose asserted text is a BODY rather than a
 //!   filename a name rule cannot reach the hazard at all: it checks the content of
 //!   [`divider_right_fixture_body`] and [`search_target_fixture_body`], the second
-//!   down to the match's line index and its byte offset, which the project-search
-//!   smoke's line and column assertions are derived from, the markdown-preview
+//!   down to the match's line index, its byte offset and its last word, which the
+//!   project-search smokes' line, column and sidebar assertions are derived from, the markdown-preview
 //!   source, whose rendered text is the one body that reaches a pixel through WebKit
 //!   and the only one checked against an ordinary English word
 //!   ([`PREVIEW_OCR_STATUS`]), and the unsaved-buffer preview smoke's marker and cover
 //!   heading, whose asserted text lives in NO FILE AT ALL — it is typed into a buffer
 //!   that is never written, so the name rule cannot reach it even in principle. It
-//!   also pins SEVEN crossed
+//!   also pins EIGHT crossed
 //!   pairs of OCR preconditions — the window-title smoke's deliberate exemption, the
-//!   project-search smoke's target-versus-starting headings, the Open Recent
+//!   project-search smokes' target-versus-starting headings, their tree-row subject
+//!   versus everything the Search page draws, which would otherwise put the tree's
+//!   term in the panel, the Open Recent
 //!   smoke's target FILE versus target DIRECTORY, where the header bar draws the
 //!   directory on every capture, the sidebar-toggle smoke's tree-row subject
 //!   versus its proof-of-life heading, which must come from opposite halves of the
@@ -342,7 +350,7 @@
 //!   exactly the kind that stops being true when someone changes a font size, and
 //!   nothing else would notice.
 //! * [`the_shared_smoke_config_pins_the_appearance_every_ocr_smoke_assumes`] — the
-//!   SECOND premise those thirty-seven rest on: the seeded `wolf-config.yaml` pins
+//!   SECOND premise those thirty-eight rest on: the seeded `wolf-config.yaml` pins
 //!   `appearance: dark`, which is what keeps the grid light-on-dark for sparse-text
 //!   segmentation. It asserts both halves — the pinned VALUE, re-typed locally so
 //!   the check is not a comparison with itself, and the artifact
@@ -403,7 +411,7 @@
 //! builds real [`cage_command`]s but looks nothing up on `PATH`: it needs only a
 //! writable `temp_dir()`, where each command writes its bus configuration.
 //!
-//! So this target's summary line reads **`75 passed`**, not `61`: sixty-one cage
+//! So this target's summary line reads **`76 passed`**, not `62`: sixty-two cage
 //! smokes plus those fourteen guards.
 //!
 //! **Three `#[ignore]`d PACKAGED smokes** sit at the end of this file and are NOT in
@@ -432,7 +440,7 @@
 //!
 //! ## When it runs
 //!
-//! The sixty-one cage smokes run as part of the STANDARD suite — `cargo test -p
+//! The sixty-two cage smokes run as part of the STANDARD suite — `cargo test -p
 //! wolf-gnome` and `cargo test --workspace` — inside the flake devShell. They are
 //! the Linux verification gate's only end-to-end proof that the GTK front-end draws
 //! a window a human could see (see `build.md`, "The verification gate").
@@ -450,7 +458,7 @@
 //! nix develop --command cargo test -p wolf-gnome --test smoke_headless
 //! ```
 //!
-//! ## Requirements of the sixty-one cage smokes (from the devShell's smoke toolchain)
+//! ## Requirements of the sixty-two cage smokes (from the devShell's smoke toolchain)
 //!
 //! - `cage` (headless wlroots compositor), `dbus-run-session`, `wtype`, `grim`,
 //!   `tesseract` and `wolf-pointer-inject` on `PATH`. The last one is NOT an upstream package: it is
@@ -464,11 +472,11 @@
 //!   wolf-gnome tests; nvim is never taken from `PATH`).
 //! - `WOLF_RG_BIN` pointing at the pinned ripgrep. `WolfCore::start_search` resolves
 //!   it from that variable ALONE and never from `PATH`, so an unset one gives the
-//!   project-search overlay an immediately-complete session with zero matches. See
+//!   project-search panel an immediately-complete session with zero matches. See
 //!   [`require_smoke_env`], which fails loud rather than letting that surface as an
 //!   empty result list.
 //!
-//! Per project policy every one of the sixty-one FAILS LOUD if any of the above is
+//! Per project policy every one of the sixty-two FAILS LOUD if any of the above is
 //! missing rather than silently skipping, mirroring `common::require_nvim_bin` — a
 //! missing precondition means the smoke toolchain was not provisioned, which is a
 //! setup bug we want surfaced, not hidden. Now that these tests run by default, that
@@ -793,7 +801,7 @@ const SIDEBAR_FILLER_COUNT: usize = 9;
 /// `quitkeep`/`quitgone`, `chordkeep`/`chordgone`, `wedgestay`/`wedgeclick`,
 /// `restorealfa`/`restorebravo`/`restorecharlie`, `solozulu`/`soloalfa`,
 /// `titlezulu`/`titlehome`, `bufpickalfa`/`bufpickbravo`, `responding`,
-/// `stallfixture`, `projsearchalfa`/`projsearchdelta`, `ortango`,
+/// `stallfixture`, `projsearchalfa`/`projsearchdelta`/`zzmango`/`psrxray`, `ortango`,
 /// `navbackalfa`/`navbackbravo`, `sbtangoleaf`/`sidebarkeepalfa`,
 /// `cdtango`/`cdrootzulu`/`cdouterhome`, `zzbodyoscar`/`zzothertango`/`zzlivekilo`,
 /// the one ORDINARY WORD in the whole table, `preview`,
@@ -1599,15 +1607,15 @@ const BUFPICK_READBACK_NAME: &str = "bp_buffers.txt";
 // Project-search fixtures: the match sits below line 1 and past column 1 for the cursor readback.
 // See notes/crates/wolf-gnome/tests/smoke_headless.rs.md#project-search-fixtures
 
-/// Project-search smoke: the file the overlay must OPEN — the one holding the sole
-/// line `PROJSEARCH_QUERY` matches.
+/// Project-search smokes: the file a search result must OPEN — the one holding the
+/// sole line `PROJSEARCH_QUERY` matches.
 ///
 /// A `.txt`, and that is load-bearing rather than incidental. `wolf_core`'s default
 /// `SearchOptions` restricts the search to `--glob '*.md' --glob '*.markdown'`, so
-/// under that default this file would never be searched at all: the result list
-/// would stay empty, the second Enter would activate nothing, and the smoke would
-/// go red. That makes `search_overlay::search_options_for`'s `all_files: true` an
-/// end-to-end discriminator instead of a table-tested boolean.
+/// under that default this file would never be searched at all: the panel would
+/// stay empty, the second Enter would activate nothing, and the smokes would go red.
+/// That makes `search_panel::search_options_for`'s `all_files: true` an end-to-end
+/// discriminator instead of a table-tested boolean.
 const PROJSEARCH_FILE_TARGET: &str = "psrzulu.txt";
 
 /// Line 1 of [`PROJSEARCH_FILE_TARGET`]; lowercased, the rendered line contains
@@ -1623,12 +1631,43 @@ const PROJSEARCH_HEADING_TARGET: &str = "# PROJSEARCHALFA";
 /// say "at the right place in it".
 const PROJSEARCH_OCR_PRESENT: &str = "projsearchalfa";
 
-/// Project-search smoke: the file open in the editor when the chord fires, so the
+/// Project-search smokes: the file open in the editor when the chord fires, so the
 /// pane starts somewhere the search must move it away from.
 ///
 /// A `.md`, so it WOULD be searched under core's default glob — but it does not
 /// contain [`PROJSEARCH_QUERY`], which is what keeps the match set at exactly one.
+///
+/// Its NAME is also an observable: it contains [`PROJSEARCH_OCR_TREE_ROW`], the row
+/// only the Files page of the sidebar draws. That is why it is absent from
+/// [`RELAUNCH_FIXTURE_NAMES`] and has an exemption block of its own in
+/// [`restore_fixture_names_cannot_satisfy_their_own_assertions`].
 const PROJSEARCH_FILE_START: &str = "psrxray.md";
+
+/// Lowercased substring of [`PROJSEARCH_FILE_START`]'s tree row: the term that says
+/// which sidebar page is on screen.
+///
+/// Inside the sidebar band only the file tree can draw it. The panel draws the
+/// query, the status line and the ONE matched file, [`PROJSEARCH_FILE_TARGET`], and
+/// the start file never matches; the `:e` echo and the statusbar strip that also
+/// spell the name sit in the pane band. So in the sidebar band its absence means the
+/// Search page replaced the tree, and its presence means the Files page is back.
+const PROJSEARCH_OCR_TREE_ROW: &str = "psrxray";
+
+/// Lowercased word that only a search RESULT can put on screen before the match is
+/// opened: it is the last word of the match line, after [`PROJSEARCH_QUERY`].
+///
+/// It is never typed, it names no file, and the starting file does not contain it,
+/// so until the second Enter opens the target the panel's line row is the one
+/// surface that can draw it. In the sidebar band it proves the results streamed into
+/// the panel; in the pane band its absence proves no overlay drew them over the
+/// editor.
+///
+/// Short on purpose. The panel's line row wraps at word boundaries into at most two
+/// lines and ellipsizes the rest, so the match line is three words that fit two
+/// lines of about eighteen characters: `xxxxxxxxxxxxx`, then `zebracross zzmango`.
+/// That width is an estimate from `Adwaita Sans 11` resolving to DejaVu Sans in a
+/// 250 px sidebar, NOT a measurement; the retained band crop is where to check it.
+const PROJSEARCH_OCR_RESULT: &str = "zzmango";
 
 /// The whole content of [`PROJSEARCH_FILE_START`]; lowercased it contains
 /// [`PROJSEARCH_OCR_ABSENT`].
@@ -1683,9 +1722,9 @@ const PROJSEARCH_MATCH_PREFIX: &str = "xxxxxxxxxxxxx ";
 ///
 /// Writing the number as a literal is the one thing that must not happen here: a
 /// reader who does not know the two conventions differ reads `15` as an off-by-one
-/// bug, and a reader who writes `14` ships one. The same +1 is pinned in the fast
-/// suite by `search_overlay::tests::smoke_fixture_rows_select_exactly_the_target`,
-/// which asserts the seam does NOT apply it.
+/// bug, and a reader who writes `14` ships one. The other half is pinned headlessly
+/// by `sidebar_search.rs`'s `row_activation_toggles_files_and_opens_lines_unadjusted`,
+/// which asserts the seam does NOT apply the +1.
 const PROJSEARCH_EXPECTED_COL: usize = PROJSEARCH_MATCH_PREFIX.len() + 1;
 
 /// How many body lines [`search_target_fixture_body`] writes below
@@ -1713,10 +1752,21 @@ const PROJSEARCH_BODY_LINE_PAD: usize = 9;
 /// a normal-mode `o` moved the cursor a line further down.
 const PROJSEARCH_READBACK_NAME: &str = "psr_cursor.txt";
 
+/// Name of the file the reveal smoke's captive Neovim writes `expand('%:t')` into
+/// after Escape, under `XDG_RUNTIME_DIR` rather than in the cwd.
+///
+/// Outside the cwd so no tree row bears it: capture B's sidebar band is read for a
+/// tree row, and a new one would only add text to it. Registered in
+/// [`RELAUNCH_FIXTURE_NAMES`] anyway, for [`CD_READBACK_NAME`]'s reason: its absolute
+/// path is echoed in the typed `:call writefile(…)` command line, which the cmdline
+/// strip draws, though in the pane band rather than the sidebar's.
+const PROJSEARCH_ESCAPE_READBACK_NAME: &str = "wolf_gnome_psr_escape.txt";
+
 /// Builds the contents of [`PROJSEARCH_FILE_TARGET`]: [`PROJSEARCH_HEADING_TARGET`],
 /// then [`PROJSEARCH_BODY_LINE_COUNT`] lines of a three-digit ordinal followed by
 /// [`PROJSEARCH_BODY_LINE_PAD`] `x`s — except the one at [`PROJSEARCH_MATCH_LINE`],
-/// which is [`PROJSEARCH_MATCH_PREFIX`] followed by [`PROJSEARCH_QUERY`].
+/// which is [`PROJSEARCH_MATCH_PREFIX`], [`PROJSEARCH_QUERY`], a space and
+/// [`PROJSEARCH_OCR_RESULT`].
 ///
 /// The shape [`restart_fixture_body`] and [`divider_right_fixture_body`] already
 /// use, with one line replaced. The trailing newline is the caller's, so the file
@@ -1727,16 +1777,18 @@ const PROJSEARCH_READBACK_NAME: &str = "psr_cursor.txt";
 /// A fixture whose CONTENT carried an asserted term would satisfy an OCR assertion
 /// on its own — the hazard [`PICKER_FILE_NAME`] documents, aimed at content rather
 /// than at a file name. The match line is the deliberate exception and is checked
-/// separately: it carries the query, which is a word, and
-/// [`restore_fixture_names_cannot_satisfy_their_own_assertions`] proves that word
-/// is clear of every asserted term rather than leaving it here as prose.
+/// separately: it carries the query and the result word, and
+/// [`restore_fixture_names_cannot_satisfy_their_own_assertions`] proves both are
+/// clear of every other asserted term rather than leaving it here as prose.
 fn search_target_fixture_body() -> String {
     let mut body = String::from(PROJSEARCH_HEADING_TARGET);
     for line in 1..=PROJSEARCH_BODY_LINE_COUNT {
         // `line` is the body ordinal; the buffer line is one greater, because the
         // heading occupies line 1.
         if line + 1 == PROJSEARCH_MATCH_LINE {
-            body.push_str(&format!("\n{PROJSEARCH_MATCH_PREFIX}{PROJSEARCH_QUERY}"));
+            body.push_str(&format!(
+                "\n{PROJSEARCH_MATCH_PREFIX}{PROJSEARCH_QUERY} {PROJSEARCH_OCR_RESULT}"
+            ));
         } else {
             body.push_str(&format!(
                 "\n{line:03}{}",
@@ -2272,10 +2324,10 @@ fn require_smoke_env() -> CageRuntime<'static> {
              PATH. This is a LOUD failure rather than a skip because the alternative is silent: \
              `WolfCore::start_search` resolves that variable alone and, when it is unset, \
              returns an ALREADY-COMPLETE session carrying zero matches and the error \
-             \"WOLF_RG_BIN unset\". `project_search_chord_opens_the_matched_line_under_cage` \
-             would then find an empty result list, activate nothing, and fail on its file, line \
-             and column readbacks — three assertions pointing at the overlay when the real cause \
-             is an unprovisioned shell. Run via `nix develop --command cargo test -p wolf-gnome`."
+             \"WOLF_RG_BIN unset\". `search_panel_streams_results_and_opens_the_match_under_cage` \
+             would then find an empty panel and fail on its first sidebar assertion, pointing at \
+             the panel when the real cause is an unprovisioned shell. Run via `nix develop \
+             --command cargo test -p wolf-gnome`."
         ),
     }
 
@@ -3302,30 +3354,35 @@ wait "$app_pid" 2>/dev/null
 exit 0
 "#;
 
-/// The PROJECT-SEARCH scenario, run as a single `sh -c` string INSIDE `cage`.
+/// The first PROJECT-SEARCH scenario, run as a single `sh -c` string INSIDE `cage`:
+/// the sidebar panel streams the results, and the second Enter opens the match.
 ///
 /// [`BUFPICK_SCENARIO`]'s preamble, `wait_file` helper, chord line, readback idiom
 /// and cursor parking, copied verbatim with the chord letter and the fixtures
-/// changed. The middle is what differs, and it differs in exactly one way that
-/// matters: **there are TWO Enters, and they do different things.**
+/// changed. The middle is what differs: **there are TWO Enters, they do different
+/// things, and a capture sits between them.**
 ///
 /// Standalone — it does NOT need [`with_nvim_pid_helper`], because nothing here
 /// identifies or signals the Neovim child.
 ///
 /// ## The two Enters are the design, not a retry
 ///
-/// No search runs while the user types: `search_overlay` wires no
+/// No search runs while the user types: the panel's entry has no
 /// `connect_search_changed`, so no keystroke can spawn ripgrep and there is no
-/// debounce timer to tune. The FIRST Enter is what starts the run, and the SECOND —
-/// with the entry text unchanged, which is what `enter_action` compares — activates
-/// the selected row. Collapsing them into one keypress would leave the overlay open
-/// on a list nobody activated, and the `o` / Escape below would then be swallowed by
-/// the search entry instead of reaching Neovim.
+/// debounce timer to tune. The FIRST Enter starts the run, and the SECOND — with the
+/// entry text unchanged, which is what `search_panel::enter_action` compares —
+/// activates the selected row, which a new run puts on the first line row.
 ///
-/// Each Enter therefore gets its own settle, and they buy different things: the
-/// first covers spawning rg, its exit, the wake and the refresh that materializes
-/// the row; the second covers `open_at`'s `:edit` plus `nvim_win_set_cursor` and the
-/// pane redraw that follows.
+/// Each Enter gets its own settle, and they buy different things: the first covers
+/// spawning rg, its exit, the wake and the rebuild that puts the rows in the panel;
+/// the second covers `open_at`'s `:edit` plus `nvim_win_set_cursor` and the pane
+/// redraw that follows.
+///
+/// ## Why capture A is taken between the Enters
+///
+/// It is the one moment at which the result word, [`PROJSEARCH_OCR_RESULT`], can be
+/// drawn by nothing but the search's results: the target file is not open yet, and
+/// the word is never typed. After the second Enter the editor draws it too.
 ///
 /// ## Why the readback comes BEFORE the cursor is parked
 ///
@@ -3340,12 +3397,14 @@ exit 0
 ///
 /// * `11` — the app died before it was ready for input (the shared convention).
 /// * `14` — the cursor readback the captive Neovim was told to write never
-///   appeared, so the three location assertions cannot be checked at all. The most
-///   likely cause is an overlay that stayed open, which means the app is still
+///   appeared, so the location assertions cannot be checked at all. Capture A is
+///   already on disk by then, so the smoke still reads it first. The most likely
+///   cause is focus left in the panel's entry, which means the app is still
 ///   running, so this path runs the `exit 0` path's teardown before it exits.
-///   Measured without that teardown, the surviving app and its `cage` outlive the
-///   scenario and the test never returns — 673.71 s before it was killed by hand. A
-///   hang is not a failure, and a hang can wedge the gate.
+///   Measured without that teardown on this scenario's overlay-era predecessor, the
+///   surviving app and its `cage` outlived the scenario and the test never returned
+///   — 673.71 s before it was killed by hand. A hang is not a failure, and a hang
+///   can wedge the gate.
 const PROJSEARCH_SCENARIO: &str = r#"
 set -eu
 
@@ -3358,7 +3417,7 @@ FILE_TRIES=100
 # Launch the real app in the background; remember its pid.
 "$WOLF_BIN" &
 app_pid=$!
-wait_ready "$app_pid" 11 "wolf-gnome project-search smoke"
+wait_ready "$app_pid" 11 "wolf-gnome project-search panel smoke"
 
 # Poll for a readback file the captive Neovim writes. Nothing downstream may read a
 # file we merely hope is there. (The CRASH_SCENARIO body, verbatim.)
@@ -3372,7 +3431,7 @@ wait_file() {
         t=$((t + 1))
         sleep "$WAIT_INTERVAL"
     done
-    echo "wolf-gnome project-search smoke: readback file $f never appeared (or stayed empty)." >&2
+    echo "wolf-gnome project-search panel smoke: readback file $f never appeared (or stayed empty)." >&2
     return 1
 }
 
@@ -3389,9 +3448,8 @@ sleep "$SETTLE"
 #
 # The capture-phase chord controller resolves it through `actions::action_for_key`,
 # activates `win.search-in-project`, and the shell performs
-# UiAction::OpenSearchOverlay, which shows the overlay and focuses its entry. It
-# starts NO search: `open_decision` is consulted, the widgets are shown, and that is
-# all.
+# UiAction::ShowSearchPanel: the sidebar switches to its Search page and the
+# panel's entry takes focus. It starts NO search.
 #
 # Note: `-M <mod>` / `-m <mod>` press / release a modifier and `-k <key>`
 # presses+releases a key while the held modifiers apply, exactly as in the picker,
@@ -3399,13 +3457,13 @@ sleep "$SETTLE"
 # this single line.
 wtype -M ctrl -M shift -k f -m shift -m ctrl
 
-# Let the overlay map and grab keyboard focus on its search entry.
+# Let the stack switch pages and the entry take keyboard focus.
 sleep "$SETTLE"
 
 # --- Step 4: type the query. NO SEARCH RUNS YET -----------------------------
 #
-# There is no `connect_search_changed` on this overlay, so typing cannot spawn rg
-# however fast or slow it arrives.
+# The entry has no `connect_search_changed`, so typing cannot spawn rg however fast
+# or slow it arrives.
 wtype -- "$PROJSEARCH_QUERY"
 
 # Let the last character land in the entry before Enter reads its text.
@@ -3413,65 +3471,166 @@ sleep "$SETTLE"
 
 # --- Step 5: the FIRST Enter runs the search --------------------------------
 #
-# `enter_action` sees a query that differs from the one the live session was started
-# with (there is no live session at all), so it returns RunSearch.
+# `enter_action` sees a query no search was started with, so it answers RunSearch.
 wtype -k Return
 
-# Let rg spawn, run over the temp cwd, exit, fire the wake, and let the drain task's
-# refresh materialize the row.
+# Let rg spawn, run over the temp cwd, exit, fire the wake, and let the panel's
+# refresh rebuild its rows.
 sleep "$SETTLE"
 
-# --- Step 6: the SECOND Enter activates the selected row --------------------
+# --- Step 6: capture A, with the results in the panel -----------------------
+grim "$OUT_PNG_A"
+
+# --- Step 7: the SECOND Enter activates the selected row --------------------
 #
-# The entry is unchanged, so `enter_action` returns Activate. `activation_target`
-# resolves the row and `WolfCore::open_at(path, line, col)` performs `:edit` then
-# nvim_win_set_cursor in ONE pump step. The overlay closes.
+# The entry is unchanged, so `enter_action` answers Activate. `row_activation`
+# resolves the line row to Open, `activation_route` answers OpenAt over an editor
+# pane, and `WolfCore::open_at(path, line, col)` performs `:edit` then
+# nvim_win_set_cursor in ONE pump step. Focus returns to the editor.
 wtype -k Return
 
 # Let nvim open the file, place the cursor, and let both the pane and the cmdline
 # strip redraw.
 sleep "$SETTLE"
 
-# --- Step 7: the cursor readback, BEFORE the cursor is parked ---------------
+# --- Step 8: the cursor readback, BEFORE the cursor is parked ---------------
 #
-# One printf, so the filename, the line and the column describe ONE instant. Step 8
+# One printf, so the filename, the line and the column describe ONE instant. Step 9
 # moves the cursor, so this cannot be deferred until after it.
 wtype -- ":call writefile([printf('%s %d %d', expand('%:t'), line('.'), col('.'))], '$PROJSEARCH_READBACK')"
 wtype -k Return
 if ! wait_file "$PROJSEARCH_READBACK"; then
-    # The exit 0 path's teardown, run before the failing exit, and it is measured
-    # rather than defensive. Without it, `exit 14` leaves this shell reaped by
-    # nobody while `wolf-gnome` and the `cage` around it keep running, and the
-    # `.status()` call in `project_search_chord_opens_the_matched_line_under_cage`
-    # waits on a compositor that never exits: the run measured that way took 673.71s
-    # and had to be killed by hand, so the smoke HUNG where it should have failed.
-    # An overlay left open is both the regression this exit code reports and the
-    # case that leaves the app alive, so the two coincide exactly. `wait_file` has
-    # already put its diagnostic on stderr, which the test inherits.
+    # The exit 0 path's teardown, run first: with focus left in the entry the app is
+    # still alive, and an unreaped app holds its cage forever.
     set +e
     kill "$app_pid" 2>/dev/null
     wait "$app_pid" 2>/dev/null
     exit 14
 fi
 
-# --- Step 8: park the cursor off every line carrying fixture text -----------
+# --- Step 9: park the cursor off every line carrying fixture text -----------
 #
 # The jump leaves it on the MATCH line, whose inverted block would sit atop the
-# query text; the asserted heading is on line 1 and is clear either way. Parking is
-# the SCENARIO / PALETTE_SCENARIO convention and is applied here for the same reason
-# it is applied there -- an inverted block corrupts the cell it covers, and a
-# scenario that skips it leaves the next reader deriving which cells are safe. In
-# normal mode `o` opens a new line BELOW and enters insert on it; Escape parks the
-# cursor on that empty line. These keystrokes only reach nvim once the overlay has
-# closed, so they also corroborate that it did.
+# query text; the asserted heading is on line 1 and is clear either way. In normal
+# mode `o` opens a new line BELOW and enters insert on it; Escape parks the cursor on
+# that empty line.
 wtype -- o
 wtype -k Escape
 
 # Let the redraw land before capturing.
 sleep "$SETTLE"
 
-# Capture the live window to the output PNG.
-grim "$OUT_PNG"
+# --- Step 10: capture B, with the target open -------------------------------
+grim "$OUT_PNG_B"
+
+# Best-effort teardown: the app may already be gone.
+set +e
+kill "$app_pid" 2>/dev/null
+wait "$app_pid" 2>/dev/null
+exit 0
+"#;
+
+/// The second PROJECT-SEARCH scenario, run as a single `sh -c` string INSIDE `cage`:
+/// Ctrl+Shift+F reveals a HIDDEN sidebar on its Search page, Escape hands the keys
+/// back to Neovim and leaves the panel up, and `:WolfSidebarShowProject` switches
+/// the sidebar back to its Files page.
+///
+/// [`PROJSEARCH_SCENARIO`]'s preamble, `wait_file` helper and chord lines. It runs
+/// one Enter only, because what it reads is where the panel is, not what it opens.
+///
+/// ## Why the readback is the Escape assertion
+///
+/// After Escape the scenario types an Ex command. If focus went back to the editor,
+/// the captive Neovim runs it and writes the file; if focus stayed in the panel's
+/// entry, the command is typed into the entry and nothing is written. The file
+/// holds `expand('%:t')`, which also says that Escape opened nothing.
+///
+/// ## Exit codes
+///
+/// * `11` — the app died before it was ready for input (the shared convention).
+/// * `15` — the readback typed after Escape never appeared: the keys never reached
+///   Neovim. Capture A is on disk; A2 and B are not taken. This path runs the
+///   `exit 0` path's teardown first, for [`PROJSEARCH_SCENARIO`]'s exit-14 reason.
+const PROJSEARCH_REVEAL_SCENARIO: &str = r#"
+set -eu
+
+# SETTLE is the settle between steps; see SCENARIO.
+WAIT_INTERVAL=0.2
+SETTLE=1.0
+# The tree catches up on its first live refresh after the switch back; TREE_SCENARIO's budget.
+TREE_SETTLE=1.5
+# How many WAIT_INTERVAL polls to allow for the readback file.
+FILE_TRIES=100
+
+# Launch the real app in the background; remember its pid.
+"$WOLF_BIN" &
+app_pid=$!
+wait_ready "$app_pid" 11 "wolf-gnome project-search reveal smoke"
+
+# Poll for a readback file the captive Neovim writes. (The CRASH_SCENARIO body, verbatim.)
+wait_file() {
+    f=$1
+    t=0
+    while [ "$t" -lt "$FILE_TRIES" ]; do
+        if [ -s "$f" ]; then
+            return 0
+        fi
+        t=$((t + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    echo "wolf-gnome project-search reveal smoke: readback file $f never appeared (or stayed empty)." >&2
+    return 1
+}
+
+# --- Step 2: open the STARTING file -----------------------------------------
+wtype -- ":e $PROJSEARCH_FILE_START"
+wtype -k Return
+sleep "$SETTLE"
+
+# --- Step 3: HIDE the sidebar with Ctrl+Shift+B -----------------------------
+#
+# `win.toggle-sidebar`. The chord below must bring it back by itself.
+wtype -M ctrl -M shift -k b -m shift -m ctrl
+sleep "$SETTLE"
+
+# --- Step 4: Ctrl+Shift+F, the query, and the one Enter ---------------------
+wtype -M ctrl -M shift -k f -m shift -m ctrl
+sleep "$SETTLE"
+wtype -- "$PROJSEARCH_QUERY"
+sleep "$SETTLE"
+wtype -k Return
+sleep "$SETTLE"
+
+# --- Step 5: capture A, the revealed sidebar on its Search page -------------
+grim "$OUT_PNG_A"
+
+# --- Step 6: Escape, then prove the keys reach Neovim -----------------------
+wtype -k Escape
+sleep "$SETTLE"
+wtype -- ":call writefile([expand('%:t')], '$PROJSEARCH_ESCAPE_READBACK')"
+wtype -k Return
+if ! wait_file "$PROJSEARCH_ESCAPE_READBACK"; then
+    # Focus is still in the entry, so the app is alive: tear it down before failing.
+    set +e
+    kill "$app_pid" 2>/dev/null
+    wait "$app_pid" 2>/dev/null
+    exit 15
+fi
+sleep "$SETTLE"
+
+# --- Step 7: capture A2, the panel still up after Escape --------------------
+grim "$OUT_PNG_A2"
+
+# --- Step 8: switch the sidebar back to its Files page ----------------------
+#
+# The Ex command reaches the shell through the command drain as
+# UiAction::ShowSidebarProject.
+wtype -- ":WolfSidebarShowProject"
+wtype -k Return
+sleep "$TREE_SETTLE"
+
+# --- Step 9: capture B, the file tree back in the sidebar -------------------
+grim "$OUT_PNG_B"
 
 # Best-effort teardown: the app may already be gone.
 set +e
@@ -6732,8 +6891,8 @@ const TWOWIN_READBACK_R2_NAME: &str = "wtwo_run2.txt";
 /// is its whole reason for existing: without it, a build that committed only one
 /// window's subtree would sail past this point and fail later at the restore poll,
 /// where "the tree was written wrong" and "the tree was read wrong" are
-/// indistinguishable. The same masking this file already records for the
-/// project-search smoke's assertion 6.
+/// indistinguishable. The same masking this file records for the first
+/// project-search smoke's assertion 6, which every falsifier reaching it reddens 5 first.
 ///
 /// The count is over LINES, so it rests on the pretty-printer. If it ever reports
 /// `1` for a tree the Rust side then reads back as two windows, the formatter is
@@ -10310,7 +10469,7 @@ fn smoke_gtk_config_dirs(runtime: &Path) -> PathBuf {
 /// the OCR width and height note in notes/crates/wolf-gnome/tests/smoke_headless.rs.md#split-pane-smokes,
 /// because if two or three panes are ever too narrow or too short for 28 pt OCR the
 /// fix is per-test (widen the window, or lower the font for THAT test) and must not
-/// be applied here to all sixty-one.
+/// be applied here to all sixty-two.
 ///
 /// [`cage_is_only_spawned_through_the_isolating_helper`] enforces the "single place"
 /// property mechanically, because a smoke that spawned the compositor directly would
@@ -11798,7 +11957,7 @@ fn every_launch_waits_for_readiness_before_its_first_input() {
 /// Reading the const and comparing it to itself would hold for whatever value it
 /// took, including the one that inverts every OCR page in this file. Stating
 /// `dark` independently means a change to the shared pin fails HERE, loudly and in
-/// microseconds, rather than thirty-seven OCR assertions later.
+/// microseconds, rather than thirty-eight OCR assertions later.
 const EXPECT_SMOKE_APPEARANCE: &str = "dark";
 
 /// Enforces mechanically that the SHARED seeded `wolf-config.yaml` — the one
@@ -11810,7 +11969,7 @@ const EXPECT_SMOKE_APPEARANCE: &str = "dark";
 /// `crates/wolf-gnome/tests/README.md` records as the premise for sparse-text
 /// segmentation. That grid is the captive Neovim's default colorscheme responding
 /// to `&background`, and the front-end pushes `&background` from the configured
-/// `appearance`. So the seeded value sits upstream of all thirty-seven OCR
+/// `appearance`. So the seeded value sits upstream of all thirty-eight OCR
 /// assertions at once — and it is written in [`write_smoke_config`], thousands of
 /// lines from every assertion it can disarm. That distance is the same reason the
 /// three fixture-name guards exist.
@@ -11855,7 +12014,7 @@ fn the_shared_smoke_config_pins_the_appearance_every_ocr_smoke_assumes() {
         "{GUARD}: SMOKE_APPEARANCE is {SMOKE_APPEARANCE:?}, but every OCR smoke in this file is \
          calibrated on a light-on-dark grid and {EXPECT_SMOKE_APPEARANCE:?} is what produces one. \
          It is also what Neovim already defaults to under `--embed`, which is why pinning it moves \
-         no page at all. Re-pinning to \"light\" inverts all thirty-seven OCR pages simultaneously, \
+         no page at all. Re-pinning to \"light\" inverts all thirty-eight OCR pages simultaneously, \
          and no single one of their failures would name this const as the cause — which is exactly \
          why the expected value is re-typed here instead of read from the pin."
     );
@@ -12240,7 +12399,7 @@ fn read_buffer_mru_order(path: &Path, smoke: &str) -> Vec<(i64, i64, String)> {
     rows
 }
 
-/// Reads the project-search smoke's cursor readback — one
+/// Reads the first project-search smoke's cursor readback — one
 /// `<filename tail> <line> <column>` line — and returns the three values.
 ///
 /// All three come from ONE `printf` inside the captive Neovim, so they describe a
@@ -12785,8 +12944,15 @@ fn assert_button_rect_fits(smoke: &str, rect: (f64, f64, f64, f64), overlay: (f6
 /// [`SIDEBARTOGGLE_OCR_KEEP`] is an ordinary content term and follows the ordinary
 /// rule.
 ///
-/// Thirty-seven of the sixty-one smokes appear here. TWENTY-FOUR contribute no rows
-/// at all, on purpose, and it is worth being explicit about which and why:
+/// [`PROJSEARCH_OCR_TREE_ROW`] is the fourth: the sidebar row for
+/// [`PROJSEARCH_FILE_START`], absent while the Search page is up and present once the
+/// Files page is back, so that file has an exemption block too.
+/// [`PROJSEARCH_OCR_RESULT`] is content, the last word of the target's match line.
+///
+/// Thirty-eight of the sixty-two smokes are covered here, the second project-search
+/// smoke through the first's rows, since it asserts on the same terms. TWENTY-FOUR
+/// contribute no rows at all, on purpose, and it is worth being explicit about which
+/// and why:
 ///
 /// * [`colon_qa_closes_the_window_under_cage`] captures no PNG and asserts only that
 ///   the app process is gone, so it has no OCR term a fixture filename could satisfy.
@@ -13035,12 +13201,23 @@ const ASSERTED_OCR_TERMS: &[(&str, &str, &str)] = &[
     (
         PROJSEARCH_OCR_PRESENT,
         "PROJSEARCH_OCR_PRESENT",
-        "project_search_chord_opens_the_matched_line_under_cage",
+        "search_panel_streams_results_and_opens_the_match_under_cage",
     ),
     (
         PROJSEARCH_OCR_ABSENT,
         "PROJSEARCH_OCR_ABSENT",
-        "project_search_chord_opens_the_matched_line_under_cage",
+        "search_panel_streams_results_and_opens_the_match_under_cage",
+    ),
+    // The two project-search smokes share these two terms; each row names the first.
+    (
+        PROJSEARCH_OCR_RESULT,
+        "PROJSEARCH_OCR_RESULT",
+        "search_panel_streams_results_and_opens_the_match_under_cage",
+    ),
+    (
+        PROJSEARCH_OCR_TREE_ROW,
+        "PROJSEARCH_OCR_TREE_ROW",
+        "search_panel_streams_results_and_opens_the_match_under_cage",
     ),
     (
         STALL_OCR_PRESENT,
@@ -13445,20 +13622,22 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
         "BUFPICK_READBACK_NAME",
         "buffer_picker_chord_switches_to_the_queried_buffer_under_cage",
     ),
+    // PROJSEARCH_FILE_START is exempt: its name carries PROJSEARCH_OCR_TREE_ROW. An exemption
+    // block in the guard covers it.
     (
         PROJSEARCH_FILE_TARGET,
         "PROJSEARCH_FILE_TARGET",
-        "project_search_chord_opens_the_matched_line_under_cage",
-    ),
-    (
-        PROJSEARCH_FILE_START,
-        "PROJSEARCH_FILE_START",
-        "project_search_chord_opens_the_matched_line_under_cage",
+        "search_panel_streams_results_and_opens_the_match_under_cage",
     ),
     (
         PROJSEARCH_READBACK_NAME,
         "PROJSEARCH_READBACK_NAME",
-        "project_search_chord_opens_the_matched_line_under_cage",
+        "search_panel_streams_results_and_opens_the_match_under_cage",
+    ),
+    (
+        PROJSEARCH_ESCAPE_READBACK_NAME,
+        "PROJSEARCH_ESCAPE_READBACK_NAME",
+        "search_chord_reveals_the_sidebar_and_escape_returns_to_the_editor_under_cage",
     ),
     (
         STALL_FILE,
@@ -13797,7 +13976,8 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
 /// `bufpickalfa` ([`BUFPICK_OCR_PRESENT`]), `bufpickbravo` ([`BUFPICK_OCR_ABSENT`]),
 /// `bufpickcharlie` ([`BUFPICK_OCR_CURRENT`]), `responding` ([`STALL_OCR_PRESENT`])
 /// and `stallfixture` ([`STALL_OCR_ABSENT`]); `projsearchalfa`
-/// ([`PROJSEARCH_OCR_PRESENT`]) and `projsearchdelta` ([`PROJSEARCH_OCR_ABSENT`]);
+/// ([`PROJSEARCH_OCR_PRESENT`]), `projsearchdelta` ([`PROJSEARCH_OCR_ABSENT`]),
+/// `zzmango` ([`PROJSEARCH_OCR_RESULT`]) and `psrxray` ([`PROJSEARCH_OCR_TREE_ROW`]);
 /// `ortango` ([`OPENRECENT_OCR_PRESENT`]); `navbackalfa` ([`NAVBACK_OCR_PRESENT`]),
 /// `navbackbravo` ([`NAVBACK_OCR_ABSENT`]), `sbtangoleaf`
 /// ([`SIDEBARTOGGLE_OCR_ABSENT`]) and `sidebarkeepalfa` ([`SIDEBARTOGGLE_OCR_KEEP`]);
@@ -13850,7 +14030,7 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
 ///
 /// This test is PURE: no compositor, no `require_smoke_env`, no cage slot, no
 /// subprocess. It reads two const tables and finishes in microseconds, so it adds
-/// nothing to the smoke suite's runtime and — unlike the sixty-one smokes — still
+/// nothing to the smoke suite's runtime and — unlike the sixty-two smokes — still
 /// guards the fixture on a machine where the smoke toolchain is unavailable.
 #[test]
 fn sidebar_filler_names_cannot_satisfy_any_smoke_assertion() {
@@ -14048,7 +14228,7 @@ fn temp_cwd_name_cannot_satisfy_any_smoke_assertion() {
 /// Both directions matter: a must-CONTAIN term in a fixture name makes its smoke
 /// pass vacuously, and a must-NOT-CONTAIN term makes it fail spuriously.
 ///
-/// ## The six deliberate, documented exemptions
+/// ## The seven deliberate, documented exemptions
 ///
 /// The title smoke's two DIRECTORY names are not files and are not in
 /// [`RELAUNCH_FIXTURE_NAMES`], because they are the assertion's subject rather
@@ -14136,6 +14316,15 @@ fn temp_cwd_name_cannot_satisfy_any_smoke_assertion() {
 /// against [`TEMP_CWD_BASENAME`] — without which "the two sessions were saved and
 /// restored in order" is satisfied by either window twice.
 ///
+/// The two project-search smokes are the seventh. [`PROJSEARCH_FILE_START`]'s NAME
+/// carries [`PROJSEARCH_OCR_TREE_ROW`], because a tree row is what says which sidebar
+/// page is up, so it is absent from [`RELAUNCH_FIXTURE_NAMES`]. The crossed half is
+/// everything the Search page draws: the target's name, the query and the match
+/// line must not carry the tree-row term, or the panel itself would draw it. The
+/// block after the project-search fixture checks asserts that, the loop's own checks
+/// on that one name, and that [`PROJSEARCH_HEADING_START`], on screen beside the
+/// panel, lacks [`PROJSEARCH_OCR_RESULT`].
+///
 /// ## The fixtures whose CONTENT is checked too
 ///
 /// Most relaunch fixtures are a bare heading, so the name is the only thing that
@@ -14148,10 +14337,11 @@ fn temp_cwd_name_cannot_satisfy_any_smoke_assertion() {
 /// [`DIVIDER_FILE_RIGHT`] carries [`divider_right_fixture_body`]: page density for a
 /// 15-cell pane, see [`DIVIDER_BODY_LINE_COUNT`].
 /// [`PROJSEARCH_FILE_TARGET`] carries [`search_target_fixture_body`], and its
-/// content is load-bearing in a stronger sense than page density — the
+/// content is load-bearing in a stronger sense than page density — the first
 /// project-search smoke's three exact assertions (the file, the LINE and the COLUMN
-/// the cursor landed on) are all properties of that body, so the block below pins
-/// the match's line index and its byte offset as well as the vocabulary.
+/// the cursor landed on) are all properties of that body, and the result word both
+/// smokes read in the sidebar is its match line's last word, so the block below pins
+/// the match's line index, its byte offset and that word as well as the vocabulary.
 /// [`PREVIEW_SOURCE_FILE`] carries [`PREVIEW_SOURCE_HEADING`] plus
 /// [`PREVIEW_SOURCE_PARAGRAPH`], and it is the only one of the three whose body
 /// reaches a pixel through WebKit rather than through the editor grid. Three rules
@@ -14799,13 +14989,13 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
         assert!(
             !body.to_lowercase().contains(PROJSEARCH_QUERY),
             "{body_const} = {body:?} contains PROJSEARCH_QUERY = {PROJSEARCH_QUERY:?}. That is \
-             file CONTENT in the project-search smoke's working directory, so ripgrep would \
+             file CONTENT in the project-search smokes' working directory, so ripgrep would \
              return it as a second match: the result list would hold two rows, and which one the \
              second Enter activates would stop being a property of the fixture."
         );
     }
 
-    // rg does not search names, but the sidebar and the overlay row draw them, so a name carrying the
+    // rg does not search names, but the tree and the panel's file row draw them, so a name carrying the
     // query makes a post-mortem PNG ambiguous about which row was selected.
     for name in SIDEBAR_FILLER_FILES {
         assert!(
@@ -14838,7 +15028,7 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
         );
     }
 
-    // The crossed pair the project-search smoke's two OCR terms rest on, the TITLE_* exemption's shape.
+    // The crossed pair the project-search headings rest on, the TITLE_* exemption's shape.
     assert!(
         PROJSEARCH_HEADING_TARGET
             .to_lowercase()
@@ -14903,15 +15093,38 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
 
     let lowercased_match = match_line.to_lowercase();
     for &(term, term_const, smoke) in ASSERTED_OCR_TERMS {
+        if term == PROJSEARCH_OCR_RESULT {
+            continue;
+        }
         assert!(
             !lowercased_match.contains(term),
             "the match line {match_line:?} contains {term_const} = {term:?}. It is drawn in the \
-             same pane as PROJSEARCH_HEADING_TARGET once the jump lands, so it would satisfy — or \
-             spuriously break — `{smoke}`'s OCR assertion on its own. It is exempt from the \
-             digits-and-`x` rule above because the query must be a word; it is NOT exempt from \
-             this one."
+             search panel's line row and, once the jump lands, in the same pane as \
+             PROJSEARCH_HEADING_TARGET, so it would satisfy — or spuriously break — `{smoke}`'s \
+             OCR assertion on its own. It is exempt from the digits-and-`x` rule above because \
+             the query and the result word must be words, and from this rule only for \
+             PROJSEARCH_OCR_RESULT itself."
         );
     }
+
+    // The result word is the panel smokes' subject: the match line's last word, after the query.
+    let result_tail = format!("{PROJSEARCH_QUERY} {PROJSEARCH_OCR_RESULT}");
+    assert!(
+        lowercased_match.ends_with(&result_tail),
+        "the match line {match_line:?} does not end with {result_tail:?}. PROJSEARCH_OCR_RESULT \
+         must be ON the match line, or no result row draws it and both panel smokes fail their \
+         first sidebar assertion with no visible cause; and it must sit right after the query, \
+         because `context_window` centres a long line on the match, so a word far from it is \
+         the first thing a narrow panel trims away."
+    );
+    assert_eq!(
+        search_fixture.matches(PROJSEARCH_OCR_RESULT).count(),
+        1,
+        "`search_target_fixture_body` must carry PROJSEARCH_OCR_RESULT = \
+         {PROJSEARCH_OCR_RESULT:?} exactly once, on the match line. Anywhere else in the target \
+         it changes nothing the smokes read before the jump, but it would make the word stop \
+         meaning \"this row is a search result\" to whoever reads a failing capture B."
+    );
 
     // The `all_files: true` premise: core's default search globs only Markdown, so a Markdown target
     // would be found either way and the smoke would not discriminate that flag.
@@ -14924,10 +15137,84 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
         "PROJSEARCH_FILE_TARGET = {PROJSEARCH_FILE_TARGET:?} has extension {target_extension:?}, \
          which must be present and must be neither `md` nor `markdown`. Core's DEFAULT \
          SearchOptions restricts the search to those two globs, so a Markdown target would be \
-         searched whatever `search_overlay::search_options_for` set `all_files` to — and the \
-         `all_files: false` revert, which is one of the two independent reverts for the smoke's \
-         must-contain assertion, would stop reddening anything."
+         searched whatever `search_panel::search_options_for` set `all_files` to — and an \
+         `all_files: false` build, which leaves the panel empty and reddens both panel smokes' \
+         first sidebar assertion, would stop reddening anything."
     );
+
+    // The panel smokes' tree-row exemption: PROJSEARCH_FILE_START's NAME is the subject, so it is
+    // out of RELAUNCH_FIXTURE_NAMES and every check that loop made is made here instead.
+    assert!(
+        PROJSEARCH_FILE_START
+            .to_lowercase()
+            .contains(PROJSEARCH_OCR_TREE_ROW),
+        "PROJSEARCH_FILE_START = {PROJSEARCH_FILE_START:?} no longer contains \
+         PROJSEARCH_OCR_TREE_ROW = {PROJSEARCH_OCR_TREE_ROW:?}. That file's tree row is the only \
+         thing in the sidebar band that draws the term. If the two stop agreeing, the panel \
+         smoke's must-not-contain assertion holds whatever page is up, and the reveal smoke's \
+         switch-back assertion fails on a word nothing draws."
+    );
+    for (name, name_const) in [
+        (PROJSEARCH_FILE_TARGET, "PROJSEARCH_FILE_TARGET"),
+        (PROJSEARCH_QUERY, "PROJSEARCH_QUERY"),
+        (match_line, "the match line"),
+        (PROJSEARCH_OCR_RESULT, "PROJSEARCH_OCR_RESULT"),
+    ] {
+        assert!(
+            !name.to_lowercase().contains(PROJSEARCH_OCR_TREE_ROW),
+            "{name_const} = {name:?} contains PROJSEARCH_OCR_TREE_ROW = \
+             {PROJSEARCH_OCR_TREE_ROW:?}. This is the crossed pair that matters: the search panel \
+             draws the matched file's name, the query and the match line, so the Search page \
+             itself would draw the tree-only term. The panel smoke's must-not-contain assertion \
+             would then fail on a correct run, and the reveal smoke's switch-back assertion \
+             would pass with the panel still showing."
+        );
+    }
+    assert!(
+        !PROJSEARCH_OCR_TREE_ROW.contains(PROJSEARCH_OCR_RESULT),
+        "PROJSEARCH_OCR_TREE_ROW = {PROJSEARCH_OCR_TREE_ROW:?} contains PROJSEARCH_OCR_RESULT = \
+         {PROJSEARCH_OCR_RESULT:?}, so the file tree alone would satisfy every assertion that the \
+         results reached the sidebar."
+    );
+    assert!(
+        !PROJSEARCH_HEADING_START
+            .to_lowercase()
+            .contains(PROJSEARCH_OCR_RESULT),
+        "PROJSEARCH_HEADING_START = {PROJSEARCH_HEADING_START:?} contains PROJSEARCH_OCR_RESULT = \
+         {PROJSEARCH_OCR_RESULT:?}. The starting file is on screen when capture A is taken, so \
+         the panel smoke's no-overlay assertion would fail on a correct run, and with the \
+         sidebar hidden the reveal smoke's band would read the word from the editor."
+    );
+    assert!(
+        !PROJSEARCH_FILE_START
+            .to_lowercase()
+            .contains(PROJSEARCH_QUERY),
+        "PROJSEARCH_FILE_START = {PROJSEARCH_FILE_START:?} contains PROJSEARCH_QUERY = \
+         {PROJSEARCH_QUERY:?}, for the reason the other fixture names may not: the name is drawn \
+         and would make a failing capture ambiguous about which row the query selected."
+    );
+    assert!(
+        !RELAUNCH_FIXTURE_NAMES
+            .iter()
+            .any(|&(name, _, _)| name == PROJSEARCH_FILE_START)
+            && !SIDEBAR_FILLER_FILES.contains(&PROJSEARCH_FILE_START),
+        "PROJSEARCH_FILE_START = {PROJSEARCH_FILE_START:?} collides with a RELAUNCH_FIXTURE_NAMES \
+         or SIDEBAR_FILLER_FILES entry. Both are written into the same temp cwd, so one would \
+         clobber the other."
+    );
+    for &(term, term_const, smoke) in ASSERTED_OCR_TERMS {
+        if term == PROJSEARCH_OCR_TREE_ROW {
+            continue;
+        }
+        assert!(
+            !PROJSEARCH_FILE_START.to_lowercase().contains(term),
+            "PROJSEARCH_FILE_START = {PROJSEARCH_FILE_START:?} contains {term_const} = {term:?}. \
+             It is page text as a tree row in every smoke that writes it, so this word would \
+             satisfy — or, for a must-NOT-contain term, spuriously break — `{smoke}`'s OCR \
+             assertion. This name is EXEMPT from the RELAUNCH_FIXTURE_NAMES loop above only for \
+             PROJSEARCH_OCR_TREE_ROW itself; every other asserted term still applies to it."
+        );
+    }
 
     // This body reaches pixels through WebKit. `preview` is an ordinary word, so it must
     // appear on the page only in the preview pane's statusbar, never in the rendered document.
@@ -18261,24 +18548,84 @@ fn buffer_picker_bare_enter_switches_to_the_previous_buffer_under_cage() {
     );
 }
 
-/// Ctrl+Shift+F, a typed query, then TWO Enters opens the matched LINE of the
-/// matched file.
+/// Writes the project-search smokes' fixtures into `cwd`: the target, the starting
+/// file and the sidebar fillers, which are page density (see `SIDEBAR_FILLER_COUNT`)
+/// and hold no occurrence of the query, so they never join the match set.
+fn write_projsearch_fixtures(cwd: &Path, smoke: &str) {
+    let target = cwd.join(PROJSEARCH_FILE_TARGET);
+    std::fs::write(&target, format!("{}\n", search_target_fixture_body())).unwrap_or_else(|e| {
+        panic!(
+            "{smoke}: failed to write the search target {}: {e}",
+            target.display()
+        )
+    });
+
+    let start = cwd.join(PROJSEARCH_FILE_START);
+    std::fs::write(&start, format!("{PROJSEARCH_HEADING_START}\n")).unwrap_or_else(|e| {
+        panic!(
+            "{smoke}: failed to write the starting file {}: {e}",
+            start.display()
+        )
+    });
+
+    for name in SIDEBAR_FILLER_FILES {
+        let filler = cwd.join(name);
+        std::fs::write(&filler, SIDEBAR_FILLER_BODY).unwrap_or_else(|e| {
+            panic!("{smoke}: failed to write filler {}: {e}", filler.display())
+        });
+    }
+}
+
+/// The SIDEBAR's band of a one-tab capture, in absolute output pixels: x from the
+/// output's left edge to the pane area's ([`OVERLAY_ORIGIN_X_EXPECTED`]), y from the
+/// header bar's bottom edge ([`OVERLAY_ORIGIN_Y_EXPECTED`]) to the output's.
+///
+/// What makes the band discriminate is what it leaves out. The header bar spans the
+/// full width above it, and the command-line strip, the statusbar strip and any
+/// window-level overlay all belong to the pane area to its right, so the `:e` echo,
+/// the statusbar's file name and a floating search box can never reach it. Only the
+/// sidebar's own page draws here, plus the `gtk::Paned` handle, which draws no text.
+fn projsearch_sidebar_band() -> SampleRect {
+    let output_h = exact_f64(CAGE_OUTPUT_H_EXPECTED, "CAGE_OUTPUT_H_EXPECTED");
+    SampleRect {
+        x0: 0,
+        x1: pixel_index(OVERLAY_ORIGIN_X_EXPECTED, "the sidebar band's last column"),
+        y0: pixel_index(OVERLAY_ORIGIN_Y_EXPECTED, "the sidebar band's first row"),
+        y1: pixel_index(output_h, "the sidebar band's last row"),
+    }
+}
+
+/// The PANE AREA's band of a one-tab capture: the rest of the output below the header
+/// bar, from [`OVERLAY_ORIGIN_X_EXPECTED`] to the right edge.
+///
+/// It holds the editor, its statusbar and command-line strips, and every child of
+/// the window-level `gtk::Overlay`, which is where a floating search box would draw.
+fn projsearch_pane_band() -> SampleRect {
+    let output_w = exact_f64(CAGE_OUTPUT_W_EXPECTED, "CAGE_OUTPUT_W_EXPECTED");
+    let output_h = exact_f64(CAGE_OUTPUT_H_EXPECTED, "CAGE_OUTPUT_H_EXPECTED");
+    SampleRect {
+        x0: pixel_index(OVERLAY_ORIGIN_X_EXPECTED, "the pane band's first column"),
+        x1: pixel_index(output_w, "the pane band's last column"),
+        y0: pixel_index(OVERLAY_ORIGIN_Y_EXPECTED, "the pane band's first row"),
+        y1: pixel_index(output_h, "the pane band's last row"),
+    }
+}
+
+/// Ctrl+Shift+F, a typed query and Enter stream the results into the SIDEBAR's search
+/// panel, and a second Enter opens the matched LINE of the matched file.
 ///
 /// ## What it covers that nothing else does
 ///
-/// This is the only test in either suite in which a result row is proved to be a
-/// LOCATION rather than a file. Every other overlay activates something whose whole
-/// identity is a path or a buffer number, so "the right thing opened" is answerable
-/// from pixels. Here it is not: an `:edit` with no cursor placement puts exactly the
-/// same file on screen, with exactly the same heading, and OCR cannot tell the two
-/// apart at all. The captive Neovim's own `line('.')` and `col('.')` can, which is
-/// why they are the load-bearing assertions and the OCR pair is corroboration.
+/// Two claims, read off two captures. Capture A, taken between the Enters, is the
+/// only frame in which [`PROJSEARCH_OCR_RESULT`] can come from nothing but a search
+/// result, so reading it in the sidebar band and not in the pane band says the
+/// results are in the sidebar and that no overlay drew them over the editor.
 ///
-/// It is also the only end-to-end exercise of `search_overlay`'s two-way `Enter`:
-/// the first press runs ripgrep and the second activates. A build in which
-/// `enter_action` always returned `RunSearch` re-runs the search instead of
-/// activating, leaves the overlay open, and swallows the scenario's `o` / Escape —
-/// so the corroborating capture shows the file the smoke started in.
+/// The second claim is that a result row is a LOCATION rather than a file. An
+/// `:edit` with no cursor placement puts the same file on screen with the same
+/// heading, and OCR cannot tell the two apart; the captive Neovim's own `line('.')`
+/// and `col('.')` can, which is why they are the load-bearing assertions and capture
+/// B is corroboration.
 ///
 /// ## The column, which is the one number a reviewer reads as a bug
 ///
@@ -18286,42 +18633,30 @@ fn buffer_picker_bare_enter_switches_to_the_previous_buffer_under_cage() {
 /// `nvim_win_set_cursor` takes a column in the same convention, so `open_at` passes
 /// it through untouched. Vim's `col('.')` — the only thing a readback can observe —
 /// is 1-BASED. [`PROJSEARCH_EXPECTED_COL`] is therefore derived as
-/// `PROJSEARCH_MATCH_PREFIX.len() + 1` and never typed;
-/// `search_overlay::tests::smoke_fixture_rows_select_exactly_the_target` pins the
-/// other half in the fast suite, namely that the seam does NOT apply that +1 itself.
+/// `PROJSEARCH_MATCH_PREFIX.len() + 1` and never typed; `sidebar_search.rs` pins the
+/// other half headlessly, namely that `row_activation` does NOT apply that +1 itself.
 ///
 /// ## Assertions, classified
 ///
-/// A precondition gets NO revert: inventing one would manufacture a discriminator this
-/// smoke does not have. The `measured` column is from an actual red run, per
-/// `tests/README.md`'s "A red-run demonstration is a deliverable, not a formality".
+/// A precondition gets NO falsifier: inventing one would manufacture a discriminator
+/// this smoke does not have.
 ///
-/// | # | assertion | kind | revert | measured |
-/// | --- | --- | --- | --- | --- |
-/// | 1 | `status.success()` | precondition — the cage scenario ran to completion | none; do not invent one | no revert of its own, and RED all the same in two runs, both of them reverts commissioned for row 6. `search_options_for` → `all_files: false`, and `enter_action` → always `RunSearch`: each took scenario `exit 14`, the scenario's readback never appeared, and the run ended HERE, at the exit-status assertion, in 28.7 s wall. Neither reached assertion 6. |
-/// | 2 | [`assert_png_present`] | precondition — grim produced an image | none; do not invent one | n/a — precondition, no revert of its own. |
-/// | 3 | readback `expand('%:t')` is [`PROJSEARCH_FILE_TARGET`] | **discriminator** — the right FILE opened | coarse, because with a one-row list `activation_target` cannot be made to resolve a different path: in `search_overlay.rs`'s `activate_selection`, delete the `WolfCore::open_at` call and keep the `close()`. Assertions 3, 4, 5 and 6 go red together; record it as coarse. | RED at assertion 3, in 8.24 s: `… after the second Enter the captive Neovim reports its current file as "psrxray.md", not the search target "psrzulu.txt".` — `left: "psrxray.md"`, `right: "psrzulu.txt"`. Assertions 4, 5, 6 and 7 were not evaluated under it; the harness aborts at the first failure. |
-/// | 4 | readback `line('.')` is [`PROJSEARCH_MATCH_LINE`] | **discriminator — the right LINE** | in `activate_selection`, send `InputEvent::Open { path }` instead of `core.open_at(path, line, col)`. The right file still opens, so 3, 6 and 7 stay green and only 4 and 5 redden. **This is the smoke's key isolated revert — the whole "a result row is not a file" premise reduced to one line.** | RED at assertion 4, in 8.04 s: `… the cursor landed on line 1, not the matched line 9. Assertion 3 passed, so the right FILE is open …` — `left: Some(1)`, `right: Some(9)`; `test result: FAILED. 0 passed; 1 failed; … 33 filtered out; finished in 8.04s`. **Assertion 3 stayed GREEN**, which is what makes this the isolated one. Assertions 5, 6 and 7 were not evaluated under it; the harness aborts at the first failure. |
-/// | 5 | readback `col('.')` is [`PROJSEARCH_EXPECTED_COL`] | **discriminator — the right COLUMN** | assertion 4's revert reddens this one too, and they are the pair it exists to redden. A second, narrower one: in `activation_target`, return `0` for the column — the 0-based zero whose `col('.')` reading is the plain-open 1 — while keeping the correct line. | RED at assertion 5, in 8.24 s, under the narrower column-only revert: `… the cursor landed in column 1, not the matched column 15.` — `left: Some(1)`, `right: Some(15)`. The run reached assertion 5 at all, so assertions 1-4 passed under it: it is isolated to the column. |
-/// | 6 | OCR contains [`PROJSEARCH_OCR_PRESENT`] | **discriminator** — the pane really re-rendered onto the target | assertion 3's coarse revert. A second, INDEPENDENT one: in `search_options_for`, set `all_files: false` — the `.txt` target is then never searched, the list stays empty, the second Enter does nothing, the overlay stays open and swallows the `o` / Escape, and the capture shows the starting file. That is the `all_files` discriminator, and [`restore_fixture_names_cannot_satisfy_their_own_assertions`] is what keeps the target's extension able to carry it. | NO isolated red run. The `all_files: false` revert was run and did NOT reach this assertion: the scenario's readback never appeared, it took `exit 14`, and the run went red at the exit-status assertion (row 1) in 28.7 s wall. Assertion 3's coarse revert went red at assertion 3, also before this one was evaluated. Recorded as measured rather than as the predicted route. |
-/// | 7 | OCR lacks [`PROJSEARCH_OCR_ABSENT`] | **discriminator with NO isolated red run, by design** | none. With a single pane two headings cannot both be on screen, so every revert that reddens 7 reddens 6 first. Its contribution is naming WHICH file is showing, not detecting that the wrong one is — the same shape as the buffer-picker smoke's assertion 5. Record it verbatim rather than inventing a revert. | none, by design — recorded rather than invented. It was not evaluated in any red run above: those ended at rows 1, 3, 4 and 5. |
-///
-/// Two coarser reverts, for use only if the above are inconclusive: delete
-/// `self.inner.search.open()` from `shell::perform`'s `OpenSearchOverlay` arm
-/// (nothing opens, the query is typed into the starting file as normal-mode keys,
-/// and 3-6 all redden); or make `enter_action` always return `RunSearch` (the second
-/// Enter re-runs the search instead of activating, so nothing opens, the overlay
-/// stays up, and 3-6 redden). No measured run is recorded for the first. The second
-/// WAS run, and went red at the exit-status assertion — scenario `exit 14`, 28.7 s
-/// wall — rather than at 3-6; row 1's `measured` cell carries it.
+/// | # | assertion | kind | falsifier |
+/// | --- | --- | --- | --- |
+/// | 1 | the scenario reached capture A (exit 0, or 14 after it), and capture A exists | precondition | none |
+/// | 2 | the SIDEBAR band of capture A contains [`PROJSEARCH_OCR_RESULT`] | **discriminator** — the results streamed into the panel | route `shell::perform`'s `ShowSearchPanel` arm back to the overlay (the task's falsifier); or skip the row rebuild in the panel's refresh |
+/// | 3 | the SIDEBAR band of capture A lacks [`PROJSEARCH_OCR_TREE_ROW`] | corroboration — the Search page replaced the tree | none of its own: no edit in `src/` makes this fail first. The two pages share one `gtk::Stack`, which draws one child, so the panel's rows and the tree are never in the band together; leaving the stack on Files was measured to fail 2 first, since the Search page's refresh gate stays shut. Its anti-vacuity is the presence half of [`search_chord_reveals_the_sidebar_and_escape_returns_to_the_editor_under_cage`]'s assertion 4 |
+/// | 4 | the PANE band of capture A lacks [`PROJSEARCH_OCR_RESULT`] and contains [`PROJSEARCH_OCR_ABSENT`] | corroboration — no overlay drew the results; the heading is the band's proof that it was readable | none of its own: the task's overlay route was measured to fail 2 first, and an overlay drawn beside the panel would need both to take the typed query, which one keyboard focus cannot do |
+/// | 5 | exit 0, and the readback names [`PROJSEARCH_FILE_TARGET`], line [`PROJSEARCH_MATCH_LINE`] and column [`PROJSEARCH_EXPECTED_COL`] | **discriminator** — the right FILE, LINE and COLUMN | send `InputEvent::Open { path }` in the `OpenAt` arm (the line reads 1); make `row_activation` answer column 0 (the column reads 1) |
+/// | 6 | whole-page OCR of capture B contains [`PROJSEARCH_OCR_PRESENT`] and lacks [`PROJSEARCH_OCR_ABSENT`] | corroboration — the pane re-rendered onto the target | none of its own: with one pane two headings cannot both be drawn, so every falsifier reaching it reddens 5 first |
 ///
 /// ## Exit codes
 ///
 /// * `11` — the app died before it was ready for input.
-/// * `14` — the cursor readback never appeared, so assertions 3, 4 and 5 cannot run.
+/// * `14` — the cursor readback never appeared, so assertion 5 cannot run.
 #[test]
-fn project_search_chord_opens_the_matched_line_under_cage() {
-    const SMOKE: &str = "project_search_chord_opens_the_matched_line_under_cage";
+fn search_panel_streams_results_and_opens_the_match_under_cage() {
+    const SMOKE: &str = "search_panel_streams_results_and_opens_the_match_under_cage";
 
     let runtime_dir = require_smoke_env();
 
@@ -18330,155 +18665,333 @@ fn project_search_chord_opens_the_matched_line_under_cage() {
 
     // `resolve_search_root` takes ripgrep's root from the live cwd, so this is the search root too.
     let cwd = make_temp_cwd();
+    write_projsearch_fixtures(&cwd, SMOKE);
 
-    let target = cwd.join(PROJSEARCH_FILE_TARGET);
-    std::fs::write(&target, format!("{}\n", search_target_fixture_body())).unwrap_or_else(|e| {
-        panic!(
-            "{SMOKE}: failed to write the search target {}: {e}",
-            target.display()
-        )
-    });
-
-    let start = cwd.join(PROJSEARCH_FILE_START);
-    std::fs::write(&start, format!("{PROJSEARCH_HEADING_START}\n")).unwrap_or_else(|e| {
-        panic!(
-            "{SMOKE}: failed to write the starting file {}: {e}",
-            start.display()
-        )
-    });
-
-    // Page density (see `SIDEBAR_FILLER_COUNT`). The fillers hold no occurrence of the query, so they
-    // never join the match set.
-    for name in SIDEBAR_FILLER_FILES {
-        let filler = cwd.join(name);
-        std::fs::write(&filler, SIDEBAR_FILLER_BODY).unwrap_or_else(|e| {
-            panic!("{SMOKE}: failed to write filler {}: {e}", filler.display())
-        });
-    }
-
-    // Cleared first: evidence that could be a previous run's leftover is not evidence.
     let readback = cwd.join(PROJSEARCH_READBACK_NAME);
-    clear_evidence(&readback, SMOKE);
-
-    let out_png = runtime_dir.join("wolf_gnome_projsearch_smoke.png");
-    clear_evidence(&out_png, SMOKE);
+    let png_a = runtime_dir.join("wolf_gnome_projsearch_panel_a.png");
+    let png_b = runtime_dir.join("wolf_gnome_projsearch_panel_b.png");
+    let sidebar_png = runtime_dir.join("wolf_gnome_projsearch_panel_a_sidebar.png");
+    let pane_png = runtime_dir.join("wolf_gnome_projsearch_panel_a_pane.png");
+    // Cleared first: evidence that could be a previous run's leftover is not evidence.
+    for path in [&readback, &png_a, &png_b, &sidebar_png, &pane_png] {
+        clear_evidence(path, SMOKE);
+    }
 
     // `WOLF_RG_BIN` comes from the devShell like `WOLF_NVIM_BIN`; `require_smoke_env` checked it.
     let status = cage_command(PROJSEARCH_SCENARIO, &cwd, &runtime_dir)
         .env("WOLF_BIN", bin)
-        .env("OUT_PNG", &out_png)
+        .env("OUT_PNG_A", &png_a)
+        .env("OUT_PNG_B", &png_b)
         .env("PROJSEARCH_FILE_START", PROJSEARCH_FILE_START)
         .env("PROJSEARCH_QUERY", PROJSEARCH_QUERY)
         .env("PROJSEARCH_READBACK", &readback)
         .status()
-        .expect("failed to spawn `cage` for the headless project-search smoke scenario");
+        .expect("failed to spawn `cage` for the headless project-search panel scenario");
 
-    // --- Assertion 1 (precondition): the scenario ran to completion -----------
+    // --- Assertion 1 (precondition): the scenario reached capture A ------------
     assert!(
-        status.success(),
-        "{SMOKE}: the cage project-search scenario exited unsuccessfully ({status}). Read the exit \
-         code FIRST.\n\
-         Exit 11: the app died before it was ready for input — a LAUNCH failure, and nothing below \
-         is about the project search.\n\
-         Exit 14: the cursor readback the captive Neovim was told to write never appeared, so \
-         assertions 3, 4 and 5 cannot run at all. Either keys are not reaching Neovim — check the \
-         keyboard-only smokes first — or the overlay was still open and swallowed the typed \
-         `:call writefile(...)`, which is what happens when the second Enter did not activate.\n\
-         Any other status means the app failed to map its window, the `:e` did not load, or \
-         wtype/grim failed. Note this assertion says nothing about whether the search ran: the \
-         scenario exits 0 whatever the chord did.\n\
-         Screenshot expected at {}.",
-        out_png.display()
+        status.success() || status.code() == Some(14),
+        "{SMOKE}: the cage project-search scenario exited {status}, which is neither 0 nor the \
+         exit 14 that still leaves capture A to read. Exit 11: the app died before it was ready \
+         for input, a LAUNCH failure, and nothing below is about the search. Exit 40: the app \
+         never became ready; its `wolf-ready:` stderr lines name the condition. Any other status \
+         means the window never mapped, the `:e` did not load, or wtype or grim failed. Capture A \
+         expected at {}.",
+        png_a.display()
+    );
+    assert_png_present(SMOKE, &png_a);
+
+    let sidebar_text =
+        ocr_band_to_lowercase(&png_a, projsearch_sidebar_band(), &sidebar_png, SMOKE);
+
+    // Assertion 2 (discriminator): the word is never typed and its file is not open yet, so only a
+    // result row in the sidebar can draw it.
+    assert!(
+        sidebar_text.contains(PROJSEARCH_OCR_RESULT),
+        "{SMOKE}: the sidebar band of capture A did not contain {PROJSEARCH_OCR_RESULT:?}, the \
+         word only a search result can draw before the match is opened. Three readings, told \
+         apart by the band's text below. (a) It lists the file tree, {PROJSEARCH_OCR_TREE_ROW:?} \
+         among it: the chord did not switch the sidebar to its Search page, and if assertion 4 \
+         then finds the word in the pane band, the chord opened a floating overlay instead. (b) \
+         It shows the query and a status line but no result row: the search ran and the panel \
+         never rebuilt its rows, or rg found nothing; a status of `No matches` with the target \
+         a `.txt` points at `search_options_for`'s `all_files`. (c) The word is there but \
+         misread, e.g. split across a wrapped line: read the crop, and see \
+         PROJSEARCH_OCR_RESULT's doc for the width estimate behind it. Capture kept at {}, band \
+         crop at {}.\n\nBand OCR was:\n{sidebar_text}",
+        png_a.display(),
+        sidebar_png.display()
     );
 
-    // --- Assertion 2 (precondition): grim produced an image -------------------
-    assert_png_present(SMOKE, &out_png);
+    // Assertion 3 (discriminator): inside this band only the Files page draws the start file's name.
+    assert!(
+        !sidebar_text.contains(PROJSEARCH_OCR_TREE_ROW),
+        "{SMOKE}: the sidebar band of capture A contained {PROJSEARCH_OCR_TREE_ROW:?}, the \
+         starting file's tree row. Assertion 2 passed, so results are drawn in the sidebar, yet \
+         the tree is drawn there too: the Search page did not replace the Files page. Check that \
+         `ShowSearchPanel` calls `sidebar.show_page(SidebarPage::Search)` and that the sidebar's \
+         stack really is a `gtk::Stack`, which draws one child, rather than a box holding both. \
+         Band crop kept at {}.\n\nBand OCR was:\n{sidebar_text}",
+        sidebar_png.display()
+    );
 
-    // Assertions 3-5: one `printf` wrote all three before the cursor was parked.
+    let pane_text = ocr_band_to_lowercase(&png_a, projsearch_pane_band(), &pane_png, SMOKE);
+
+    // Assertion 4 (discriminator): the pane band must not draw a result, and must still read.
+    assert!(
+        !pane_text.contains(PROJSEARCH_OCR_RESULT),
+        "{SMOKE}: the pane band of capture A contained {PROJSEARCH_OCR_RESULT:?}. The target file \
+         is not open before the second Enter, so the editor cannot be what drew it: a search \
+         result was drawn over the pane area, which is the floating overlay this task replaced \
+         with the sidebar panel. Check `shell::perform`'s `ShowSearchPanel` arm and that nothing \
+         adds a search box to the window-level `gtk::Overlay`. Band crop kept at {}.\n\nBand OCR \
+         was:\n{pane_text}",
+        pane_png.display()
+    );
+    assert!(
+        pane_text.contains(PROJSEARCH_OCR_ABSENT),
+        "{SMOKE}: the pane band of capture A did not contain {PROJSEARCH_OCR_ABSENT:?}, the \
+         heading of {PROJSEARCH_FILE_START}, which the editor shows from the `:e` until the \
+         second Enter. Without it the must-not-contain half above holds over a band that read \
+         nothing, so this is a precondition failure: the `:e` did not load, something opaque \
+         covers the pane, or the band no longer sits on the pane area (re-derive it from \
+         OVERLAY_ORIGIN_*_EXPECTED). Band crop kept at {}.\n\nBand OCR was:\n{pane_text}",
+        pane_png.display()
+    );
+
+    // Assertion 5 (discriminator): the readback, written by one `printf` before the cursor was parked.
+    assert!(
+        status.success(),
+        "{SMOKE}: the scenario exited {status} after capture A. Exit 14 means the cursor readback \
+         typed after the second Enter never appeared: the keys did not reach Neovim, so focus \
+         stayed in the panel's entry. Assertions 2 to 4 passed, so the panel showed the results; \
+         suspect the second Enter, which `enter_action` must answer with Activate for an \
+         unchanged query, and the focus return to the editor after an open. Readback expected at \
+         {}.",
+        readback.display()
+    );
     let (file, line, column) = read_cursor_location(&readback, SMOKE);
-
-    // --- Assertion 3 (discriminator): the right FILE --------------------------
     assert_eq!(
         file,
         PROJSEARCH_FILE_TARGET,
         "{SMOKE}: after the second Enter the captive Neovim reports its current file as {file:?}, \
-         not the search target {PROJSEARCH_FILE_TARGET:?}. If it is {PROJSEARCH_FILE_START:?}, the \
-         pane never moved: either the Ctrl+Shift+F chord never reached `win.search-in-project` — \
-         check that the ACTION_TABLE row's BindingStatus is Bound rather than Reserved AND that \
-         `command_action::ui_action_for` maps `Command::SearchInProject` to a real UiAction, since \
-         neither alone installs the action — or the overlay opened and `open_decision` refused, in \
-         which case the app's stderr carries \"project search not opened\", or the search found \
-         nothing to activate. An `all_files: false` in `search_options_for` produces exactly that \
-         last case, because the target is a `.txt`. Readback kept at {}; PNG kept at {}.",
+         not the search target {PROJSEARCH_FILE_TARGET:?}. If it is {PROJSEARCH_FILE_START:?}, \
+         nothing was opened: `enter_action` answered something other than Activate, \
+         `row_activation` answered Toggle because the selection sat on the file row rather than \
+         the first line row, or `activation_route` refused, in which case the app's stderr \
+         carries \"search result not opened\". Readback kept at {}; capture B at {}.",
         readback.display(),
-        out_png.display()
+        png_b.display()
     );
-
-    // Assertion 4 (discriminator): the right line. A plain `:edit` lands on line 1, so 1 here means the
-    // cursor was never placed.
     assert_eq!(
         usize::try_from(line).ok(),
         Some(PROJSEARCH_MATCH_LINE),
-        "{SMOKE}: the cursor landed on line {line}, not the matched line \
-         {PROJSEARCH_MATCH_LINE}. Assertion 3 passed, so the right FILE is open — this says the \
-         editor did not jump to the match inside it. A line of 1 is the signature of a plain file \
-         open: check that `activate_selection` calls `WolfCore::open_at(path, line, col)` rather \
-         than sending `InputEvent::Open`, and that `activation_target` returns the row's own \
-         `line_number` rather than a constant. `search_overlay::tests::activation_target_table` \
-         and `result_rows_carries_the_exact_location` pin both halves headlessly, so if either is \
-         also red it is the one to read first. Readback kept at {}; PNG kept at {}.",
-        readback.display(),
-        out_png.display()
+        "{SMOKE}: the cursor landed on line {line}, not the matched line {PROJSEARCH_MATCH_LINE}. \
+         The right FILE is open, so the editor did not jump to the match inside it. A line of 1 \
+         is the signature of a plain file open: check that the `OpenAt` arm calls \
+         `WolfCore::open_at(path, line, col)` rather than sending `InputEvent::Open`. \
+         `sidebar_search.rs`'s `panel_rows_copy_the_match_location_exactly` and \
+         `row_activation_toggles_files_and_opens_lines_unadjusted` pin the seams headlessly; if \
+         either is red, read it first. Readback kept at {}.",
+        readback.display()
     );
-
-    // Assertion 5 (discriminator): the right column, derived because rg's column is a 0-based byte
-    // offset and `col('.')` is 1-based. See PROJSEARCH_EXPECTED_COL.
+    // The column is derived because rg's column is a 0-based byte offset and `col('.')` is 1-based.
+    // See PROJSEARCH_EXPECTED_COL.
     assert_eq!(
         usize::try_from(column).ok(),
         Some(PROJSEARCH_EXPECTED_COL),
         "{SMOKE}: the cursor landed in column {column}, not the matched column \
-         {PROJSEARCH_EXPECTED_COL}. A column of 1 is the plain-file-open signature, exactly as a \
-         line of 1 is. An off-by-one is the other likely cause and it has a definite direction: \
+         {PROJSEARCH_EXPECTED_COL}. A column of 1 is the plain-file-open signature, or a \
+         `row_activation` that dropped the column. An off-by-one has a definite direction: \
          `SearchMatch::column` and `nvim_win_set_cursor`'s column are BOTH 0-based byte offsets, \
-         so `open_at` must pass the value through untouched — while Vim's `col('.')`, which wrote \
-         this number, is 1-based. The expected value is derived as \
-         `PROJSEARCH_MATCH_PREFIX.len() + 1` for that reason; a reading of {} would mean the seam \
-         applied the +1 as well. Readback kept at {}; PNG kept at {}.",
+         so the seam must pass the value through untouched, while Vim's `col('.')`, which wrote \
+         this number, is 1-based. A reading of {} would mean the seam applied the +1 as well. \
+         Readback kept at {}.",
         PROJSEARCH_EXPECTED_COL + 1,
-        readback.display(),
-        out_png.display()
+        readback.display()
     );
 
-    let ocr_text = ocr_to_lowercase(&out_png);
-
-    // --- Assertion 6 (discriminator): the pane really re-rendered -------------
+    // Assertion 6 (corroboration): the pane really re-rendered onto the target.
+    assert_png_present(SMOKE, &png_b);
+    let ocr_text = ocr_to_lowercase(&png_b);
     assert!(
         ocr_text.contains(PROJSEARCH_OCR_PRESENT),
-        "{SMOKE}: OCR did not contain {PROJSEARCH_OCR_PRESENT:?} — the heading of \
-         {PROJSEARCH_FILE_TARGET}, which lives only in that file's CONTENT and so renders only \
-         once the pane really is showing it. Assertions 3, 4 and 5 read the state Neovim reports \
-         about ITSELF; this one is the pixels. If those three passed and this did not, the editor \
-         holds the right buffer at the right place but the front-end drew something else — an \
-         overlay left open over the pane is the first thing to check, since the scenario's `o` and \
-         Escape reach Neovim only once it has closed. PNG kept at {} for inspection. OCR output \
-         was:\n{ocr_text}",
-        out_png.display()
+        "{SMOKE}: OCR of capture B did not contain {PROJSEARCH_OCR_PRESENT:?}, the heading of \
+         {PROJSEARCH_FILE_TARGET}, which lives only in that file's CONTENT. Assertion 5 read the \
+         state Neovim reports about ITSELF and passed; this is the pixels. The editor holds the \
+         right buffer at the right place but the front-end drew something else over it. Capture \
+         kept at {}. OCR output was:\n{ocr_text}",
+        png_b.display()
     );
-
-    // Assertion 7 (discriminator, no isolated red run): names the wrong file when the jump does not
-    // happen. See the revert table on this test.
     assert!(
         !ocr_text.contains(PROJSEARCH_OCR_ABSENT),
-        "{SMOKE}: OCR unexpectedly contained {PROJSEARCH_OCR_ABSENT:?} — the heading of \
-         {PROJSEARCH_FILE_START}, the file the editor was showing when the chord fired. The pane \
-         therefore never left it, so the search overlay opened and found nothing, or never opened \
-         at all and the typed query went to Neovim as normal-mode keys. Assertion 6 above is red \
-         too in that case, and it is the one to read first — this assertion's contribution is \
-         naming WHICH file is showing. The assertion is sound: after `:e {PROJSEARCH_FILE_START}` \
-         both Neovim's toast and the sidebar row show the FILENAME, whose lowercase does not \
-         contain {PROJSEARCH_OCR_ABSENT:?}. PNG kept at {} for inspection. OCR output \
-         was:\n{ocr_text}",
-        out_png.display()
+        "{SMOKE}: OCR of capture B contained {PROJSEARCH_OCR_ABSENT:?}, the heading of \
+         {PROJSEARCH_FILE_START}, the file the editor showed before the search. The assertion \
+         above passed, so both headings are on screen at once, which one pane cannot do: a \
+         second pane or a stale frame is showing the starting file. Capture kept at {}. OCR \
+         output was:\n{ocr_text}",
+        png_b.display()
+    );
+}
+
+/// Ctrl+Shift+F reveals a HIDDEN sidebar on its Search page, Escape hands the keys
+/// back to Neovim and leaves the panel showing, and `:WolfSidebarShowProject` switches
+/// the sidebar back to the file tree.
+///
+/// ## What it covers that nothing else does
+///
+/// The three ways the panel meets the rest of the window. The chord reaches the panel
+/// through the sidebar preference, so a hidden sidebar must come back with it;
+/// Escape is the panel's own key, and the GNOME divergence the panel records; and
+/// `Command::SidebarShowProject` is the one route back to the Files page this smoke
+/// can drive, since no pointer smoke clicks the page switcher.
+///
+/// Every capture is read through [`projsearch_sidebar_band`], for the reason its doc
+/// gives: in that band only the sidebar's current page can draw
+/// [`PROJSEARCH_OCR_RESULT`] or [`PROJSEARCH_OCR_TREE_ROW`].
+///
+/// ## Assertions, classified
+///
+/// | # | assertion | kind | falsifier |
+/// | --- | --- | --- | --- |
+/// | 0 | the scenario reached capture A (exit 0, or 15 after it), and capture A exists | precondition | none |
+/// | 1 | the sidebar band of capture A contains [`PROJSEARCH_OCR_RESULT`] | **discriminator** — the chord revealed the hidden sidebar | make `ShowSearchPanel` skip `set_sidebar_preference(true)`; the task's overlay route |
+/// | 2 | exit 0, and the readback typed after Escape names [`PROJSEARCH_FILE_START`] | **discriminator** — Escape hands the keys to Neovim and opens nothing | delete the panel's Escape arm |
+/// | 3 | the sidebar band of capture A2 contains [`PROJSEARCH_OCR_RESULT`] | **discriminator** — Escape leaves the panel showing | make the panel's Escape arm also switch its ancestor `gtk::Stack` to the `files` page; the panel holds no sidebar handle |
+/// | 4 | the sidebar band of capture B contains [`PROJSEARCH_OCR_TREE_ROW`] and lacks [`PROJSEARCH_OCR_RESULT`] | **discriminator** — `:WolfSidebarShowProject` switches back to Files | map `Command::SidebarShowProject` back to `UiAction::Deferred` |
+///
+/// Assertion 4's presence half is also the anti-vacuity of
+/// [`search_panel_streams_results_and_opens_the_match_under_cage`]'s assertion 3: it
+/// shows the band reads the start file's tree row when the Files page is up.
+///
+/// ## Exit codes
+///
+/// * `11` — the app died before it was ready for input.
+/// * `15` — the readback typed after Escape never appeared, which is assertion 2.
+#[test]
+fn search_chord_reveals_the_sidebar_and_escape_returns_to_the_editor_under_cage() {
+    const SMOKE: &str =
+        "search_chord_reveals_the_sidebar_and_escape_returns_to_the_editor_under_cage";
+
+    let runtime_dir = require_smoke_env();
+
+    // Locate the freshly built binary under test.
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+
+    let cwd = make_temp_cwd();
+    write_projsearch_fixtures(&cwd, SMOKE);
+
+    // Under the runtime dir, so no tree row bears its name; see PROJSEARCH_ESCAPE_READBACK_NAME.
+    let readback = runtime_dir.join(PROJSEARCH_ESCAPE_READBACK_NAME);
+    let png_a = runtime_dir.join("wolf_gnome_projsearch_reveal_a.png");
+    let png_a2 = runtime_dir.join("wolf_gnome_projsearch_reveal_a2.png");
+    let png_b = runtime_dir.join("wolf_gnome_projsearch_reveal_b.png");
+    let band_a = runtime_dir.join("wolf_gnome_projsearch_reveal_a_sidebar.png");
+    let band_a2 = runtime_dir.join("wolf_gnome_projsearch_reveal_a2_sidebar.png");
+    let band_b = runtime_dir.join("wolf_gnome_projsearch_reveal_b_sidebar.png");
+    for path in [
+        &readback, &png_a, &png_a2, &png_b, &band_a, &band_a2, &band_b,
+    ] {
+        clear_evidence(path, SMOKE);
+    }
+
+    let status = cage_command(PROJSEARCH_REVEAL_SCENARIO, &cwd, &runtime_dir)
+        .env("WOLF_BIN", bin)
+        .env("OUT_PNG_A", &png_a)
+        .env("OUT_PNG_A2", &png_a2)
+        .env("OUT_PNG_B", &png_b)
+        .env("PROJSEARCH_FILE_START", PROJSEARCH_FILE_START)
+        .env("PROJSEARCH_QUERY", PROJSEARCH_QUERY)
+        .env("PROJSEARCH_ESCAPE_READBACK", &readback)
+        .status()
+        .expect("failed to spawn `cage` for the headless project-search reveal scenario");
+
+    // --- Precondition: the scenario reached capture A --------------------------
+    assert!(
+        status.success() || status.code() == Some(15),
+        "{SMOKE}: the cage reveal scenario exited {status}, which is neither 0 nor the exit 15 \
+         that still leaves capture A to read. Exit 11: the app died before it was ready for \
+         input, a LAUNCH failure. Exit 40: the app never became ready; its `wolf-ready:` stderr \
+         lines name the condition. Any other status means the window never mapped, the `:e` did \
+         not load, or wtype or grim failed. Capture A expected at {}.",
+        png_a.display()
+    );
+    assert_png_present(SMOKE, &png_a);
+
+    // Assertion 1 (discriminator): the sidebar was hidden, so a result in its band means the chord
+    // brought it back on the Search page.
+    let text_a = ocr_band_to_lowercase(&png_a, projsearch_sidebar_band(), &band_a, SMOKE);
+    assert!(
+        text_a.contains(PROJSEARCH_OCR_RESULT),
+        "{SMOKE}: the sidebar band of capture A did not contain {PROJSEARCH_OCR_RESULT:?}. The \
+         sidebar was hidden with Ctrl+Shift+B before the chord. If the band shows the editor's \
+         text, {PROJSEARCH_OCR_ABSENT:?} among it, the sidebar stayed hidden and the panel ran \
+         its search out of sight: `ShowSearchPanel` must call `set_sidebar_preference(true)` \
+         before it switches the page. If it shows the file tree, the page never switched. If it \
+         shows the panel with no result row, read the first project-search smoke, which checks \
+         the same rows with the sidebar never hidden. Capture kept at {}, band crop at {}.\n\n\
+         Band OCR was:\n{text_a}",
+        png_a.display(),
+        band_a.display()
+    );
+
+    // Assertion 2 (discriminator): Escape handed the keys to Neovim, which ran the typed readback.
+    assert!(
+        status.success(),
+        "{SMOKE}: the scenario exited {status} after capture A. Exit 15 means the readback typed \
+         after Escape never appeared: the keys still went to the panel's entry, so Escape did not \
+         give focus back to the editor. Check the panel's capture-phase Escape arm, which must \
+         call the focus target's `grab_focus()` and stop the event. Readback expected at {}.",
+        readback.display()
+    );
+    let after_escape = read_trimmed(&readback, SMOKE);
+    assert_eq!(
+        after_escape,
+        PROJSEARCH_FILE_START,
+        "{SMOKE}: after Escape the captive Neovim reports its current file as {after_escape:?}, \
+         not the starting file {PROJSEARCH_FILE_START:?}. Escape reached the editor, but the \
+         buffer changed on the way: if it is {PROJSEARCH_FILE_TARGET:?}, Escape activated the \
+         selected result instead of only returning focus. Readback kept at {}.",
+        readback.display()
+    );
+
+    // Assertion 3 (discriminator): Escape moved focus only; the panel and its rows stay.
+    assert_png_present(SMOKE, &png_a2);
+    let text_a2 = ocr_band_to_lowercase(&png_a2, projsearch_sidebar_band(), &band_a2, SMOKE);
+    assert!(
+        text_a2.contains(PROJSEARCH_OCR_RESULT),
+        "{SMOKE}: the sidebar band of capture A2, taken after Escape, did not contain \
+         {PROJSEARCH_OCR_RESULT:?}, which capture A showed. Escape must only return focus to the \
+         editor, leaving the panel, its query and its rows where they are. If the band shows the \
+         file tree, Escape switched the page; if it shows the editor, Escape hid the sidebar; if \
+         it shows the panel with no rows, Escape cleared the search. Capture kept at {}, band \
+         crop at {}.\n\nBand OCR was:\n{text_a2}",
+        png_a2.display(),
+        band_a2.display()
+    );
+
+    // Assertion 4 (discriminator): the Ex command brought the Files page back.
+    assert_png_present(SMOKE, &png_b);
+    let text_b = ocr_band_to_lowercase(&png_b, projsearch_sidebar_band(), &band_b, SMOKE);
+    assert!(
+        text_b.contains(PROJSEARCH_OCR_TREE_ROW),
+        "{SMOKE}: the sidebar band of capture B, taken after `:WolfSidebarShowProject`, did not \
+         contain {PROJSEARCH_OCR_TREE_ROW:?}, the starting file's tree row. If the band still \
+         shows the panel, the command did nothing: `command_action` must map \
+         `Command::SidebarShowProject` to `UiAction::ShowSidebarProject` rather than `Deferred`, \
+         and its arm must call `sidebar.show_page(SidebarPage::Files)`. If it shows a tree \
+         without the row, the tree did not catch up after being off-screen: see \
+         `tree_gate::TreeRefreshGate`. Capture kept at {}, band crop at {}.\n\nBand OCR \
+         was:\n{text_b}",
+        png_b.display(),
+        band_b.display()
+    );
+    assert!(
+        !text_b.contains(PROJSEARCH_OCR_RESULT),
+        "{SMOKE}: the sidebar band of capture B contained {PROJSEARCH_OCR_RESULT:?} beside the \
+         tree row the assertion above found. Both pages are drawn at once, so the sidebar is not \
+         a stack showing one child. Band crop kept at {}.\n\nBand OCR was:\n{text_b}",
+        band_b.display()
     );
 }
 
@@ -26075,8 +26588,8 @@ exit 0
 ///
 /// ## What it proves that nothing else does
 ///
-/// The four transient overlays are children of the WINDOW-level `gtk::Overlay`
-/// (`picker.rs`, `palette.rs`, `buffer_picker.rs`, `search_overlay.rs`), while a
+/// The three transient overlays are children of the WINDOW-level `gtk::Overlay`
+/// (`picker.rs`, `palette.rs`, `buffer_picker.rs`), while a
 /// preview pane's `webkit6::WebView` is added to that PANE's own overlay
 /// (`pane_view.rs`). The claim that the first therefore paints above the second was an
 /// argument from construction with no test behind it, and `notes/wolf-gnome-decisions.md` named a
@@ -26104,11 +26617,11 @@ exit 0
 /// than loudly wrong. The other two are recorded as sharing the structure rather than
 /// asserted separately.
 ///
-/// The macOS half of the same row covers three pickers and not four: `PickerPanel`'s
-/// own header gives the reason (the window server always composites a child window in
+/// The macOS half of the same row covers the same three pickers: `PickerPanel`'s own
+/// header gives the reason (the window server always composites a child window in
 /// front of its parent's content, including the Markdown-preview `WKWebView`), and
 /// `WolfWindowController` holds exactly three hosts. Project search is a sidebar panel
-/// there, so this front-end's project-search overlay is outside the row.
+/// on both platforms, so it is outside the row.
 ///
 /// ## No OCR, and the trap that rules it out
 ///
@@ -26729,7 +27242,7 @@ fn file_picker_covers_the_live_preview_under_cage() {
          above passed, so this rectangle IS a live preview with the document rendered in it, and \
          the only question left is what covers it.\n\
          The named cause is the picker box no longer painting above the preview pane's web view. \
-         Its four transient overlays are children of the WINDOW-level `gtk::Overlay` while a \
+         The three transient overlays are children of the WINDOW-level `gtk::Overlay` while a \
          preview's `webkit6::WebView` is a child of the PANE's own overlay, and it is the ordering \
          between those two that this reading is about — check `picker::build`'s \
          `overlay.add_overlay(&picker_box)` and `pane_view`'s `p.host.add_overlay(&view)` before \
@@ -28470,7 +28983,7 @@ fn divider_drag_survives_a_pane_relayout_under_cage() {
 /// | the `~` end-of-buffer column above a lone heading — a sparse region `--psm 11` scales the whole pane from | three ablations on one PNG, one at a time; blanking the `~` column alone fixed it | [`DIVIDER_BODY_LINE_COUNT`] body lines, which fill the pane past `winheight` so no marker is drawn |
 /// | a single misclassified GLYPH at 15 columns | the same pixels read through both segmentation modes, twice over | the second reader, [`ocr_uniform_block_to_lowercase`] |
 ///
-/// The second is why this smoke, alone of the sixty-one, reads its capture twice.
+/// The second is why this smoke, alone of the sixty-two, reads its capture twice.
 /// With the first answered, on one retained PNG:
 ///
 /// | command | verbatim output |
@@ -29719,9 +30232,9 @@ fn sidebar_toggle_chord_hides_the_file_tree_under_cage() {
 /// Assertion 4's revert is NOT symmetric, and the asymmetry is inherent rather than a
 /// weakness in the fixture: with no re-root at all the sidebar keeps the LAUNCH root
 /// label, so [`CD_OCR_ROOT_NODE`] is absent too. Assertion 4 fails first and
-/// assertion 6 is never evaluated under it — the same shape `tests/README.md` records
-/// for the project-search smoke, whose assertion 6 is unreachable under its own row's
-/// revert. What makes the two rows independently falsifiable is the OTHER direction:
+/// assertion 6 is never evaluated under it — the same shape as the first project-search
+/// smoke's assertion 6, which every falsifier reaching it reddens assertion 5 before.
+/// What makes the two rows independently falsifiable is the OTHER direction:
 /// assertion 6's revert reddens 6 alone.
 ///
 /// ## No must-NOT-contain assertion on the launch cwd's contents, deliberately
@@ -32976,7 +33489,14 @@ fn ocr_uniform_block_to_lowercase(png: &Path) -> String {
 /// returns `tesseract <band_png> stdout --psm 11` lowercased.
 ///
 /// A THIRD reader, used by [`terminal_drawer_opens_and_is_not_persisted_under_cage`]
-/// and by nothing else.
+/// and by the two project-search smokes,
+/// [`search_panel_streams_results_and_opens_the_match_under_cage`] and
+/// [`search_chord_reveals_the_sidebar_and_escape_returns_to_the_editor_under_cage`].
+/// Those two crop for a different reason than the drawer's: their claim is WHICH
+/// half of the window draws a search result, the sidebar or the pane area, and a
+/// whole-page reading cannot say where on the page a word was. Their bands are
+/// [`projsearch_sidebar_band`] and [`projsearch_pane_band`], and their `--psm 11` at
+/// those bands is NOT measured; a misread there is first a question for the crop.
 ///
 /// ## Why it crops instead of taking a second `grim`
 ///
@@ -33014,21 +33534,20 @@ fn ocr_uniform_block_to_lowercase(png: &Path) -> String {
 /// the measured case where a narrow column read correctly in one mode and not the
 /// other.
 fn ocr_band_to_lowercase(png: &Path, band: SampleRect, band_png: &Path, smoke: &str) -> String {
-    let capture = decode_capture(png, smoke, "the terminal drawer");
+    let capture = decode_capture(png, smoke, "the banded capture");
 
     // Non-vacuity: an empty band panics below or hands tesseract a blank image, which passes every
     // must-not-contain.
     assert!(
         band.x0 < band.x1 && band.y0 < band.y1,
         "{smoke}: the sampled band {band:?} is empty or inverted, so there is nothing to read. \
-         Re-derive it from `drawer_band_rect` rather than adjusting the assertion."
+         Re-derive it from the function that built it rather than adjusting the assertion."
     );
     assert!(
         band.x1 <= capture.width && band.y1 <= capture.height,
-        "{smoke}: the sampled band {band:?} runs past the {}x{} capture. Every term in \
-         `drawer_band_rect` comes from CAGE_OUTPUT_*_EXPECTED, OVERLAY_ORIGIN_*_EXPECTED or a \
-         production function, so this means the cage output size has moved and the band is aimed \
-         at pixels that do not exist.",
+        "{smoke}: the sampled band {band:?} runs past the {}x{} capture. Every band is derived \
+         from CAGE_OUTPUT_*_EXPECTED, OVERLAY_ORIGIN_*_EXPECTED or a production function, so this \
+         means the cage output size has moved and the band is aimed at pixels that do not exist.",
         capture.width,
         capture.height
     );
@@ -33080,7 +33599,7 @@ fn ocr_band_to_lowercase(png: &Path, band: SampleRect, band_png: &Path, smoke: &
         .arg("--psm")
         .arg("11")
         .output()
-        .expect("failed to spawn `tesseract` for OCR of the drawer band");
+        .expect("failed to spawn `tesseract` for OCR of a band crop");
     assert!(
         output.status.success(),
         "{smoke}: tesseract failed on the band crop {} ({}): {}. The crop is written by this file \
