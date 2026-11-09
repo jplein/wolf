@@ -24,9 +24,26 @@ Crate root. Declares every module and flattens the public surface into root re-e
 
 **Decisions**
 
-- `block_on_rpc` and the input pump detect stalls under `WOLF_RPC_TIMEOUT_MS`. A timed-out call is detached and a timed-out batch still awaited: dropping an `nvim-rs` response receiver mid-flight kills the io loop, which reads as a crash.
+- `block_on_rpc` detects stalls under `WOLF_RPC_TIMEOUT_MS` and detaches a timed-out call rather than dropping it: dropping an `nvim-rs` response receiver mid-flight kills the io loop, which reads as a crash. The input pump's stall is in [`pump.rs`](#pumprs).
 - `WolfCore` is `!Send` and keeps the process in a `RefCell`, so a restart can swap one in through `&self`. Never hold a borrow across an `.await`.
 - Stale typing is cut by the generation `send_input` stamps, not liveness: input sent while `Alive` can still be queued at the swap.
+
+#### `pump.rs`
+
+The input pump, the single consumer of the channel `send_input` feeds. It keeps taking input while a batch's call is unanswered, so the key answering a prompt the call raised reaches Neovim ([why](../../../notes/wolf-core-decisions.md#threading-and-locking)).
+
+**Decisions**
+
+- A batch ends at its first event that is not a fast input (`is_fast_input`), so everything behind a call that may wait stays queued in order.
+- A held fast input is released only when Neovim answers a `nvim_get_mode` probe before the call, one event per answer. Neovim runs typeahead before queued requests, so a key sent behind a merely busy call lands first: measured, behind a queued `:edit` it edits the buffer being left.
+- The call is polled once before the first probe, so the probe follows it to Neovim. Its answer is returned only once no release is in flight, so a later key cannot overtake a released one.
+- A held paste stops releases, so typing keeps its order. State events are never released.
+- Probes and releases are spawned tasks, and the call itself is pinned and never dropped: dropping a pending `nvim-rs` call kills the io loop, while dropping a `JoinHandle` only detaches its task.
+- A prompt showing when the budget elapses means the user is late, not Neovim, so the pump clears the stall rather than marking it.
+
+**Gotchas**
+
+- Every RPC an `InputEvent` issues in `input.rs` must go through `Rpc::request`, never `Neovim::call`, or the driver never sees that call and input stops behind it.
 
 #### `nvim.rs`
 
@@ -196,9 +213,9 @@ The toolkit-neutral input vocabulary and its translation into Neovim keystroke n
 
 - Shift contract: for `Key::Char` the front-end delivers the already-shifted glyph and leaves `shift` false; `S-` is emitted only for named keys, where Neovim gives it meaning.
 - `MouseEvent` and `ScrollEvent` target a grid, with grid-local row and column: under `ext_multigrid` a pane has its own grid, and grid 0 is the global one.
-- `Chdir` applies `:tcd`, not `:cd`: each view is one nvim tabpage with its own cwd, and `:cd` would move every view.
-- `Resize` forwards `nvim_ui_try_resize` and never resizes a local grid: the authoritative size arrives back as `grid_resize`.
-- `is_typing` is an exhaustive match, so each new variant must be classed as typing or state, deciding whether it survives a restart ([`api.rs`](#apirs)).
+- `Chdir` applies `:tcd`, not `:cd`, which would move every view: each view is one nvim tabpage.
+- `Resize` never resizes a local grid: the authoritative size arrives back as `grid_resize`.
+- `is_typing` is an exhaustive match, so each new variant must be classed as typing or state, deciding whether it survives a restart ([`api.rs`](#apirs)). So is `is_fast_input` ([`pump.rs`](#pumprs)).
 - `SaveAs` carries `force`, applied as `saveas!`, for a caller whose dialog already confirmed the overwrite: plain `saveas` fails `E13: File exists`, and the input pump degrades that to a warning nobody sees. Forcing unconditionally would clobber for a front-end that confirms nothing.
 
 **Gotchas**

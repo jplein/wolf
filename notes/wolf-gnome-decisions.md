@@ -312,7 +312,7 @@ Only the open-file set comes back, reopened with the active file last because re
 
 **Never issue a blocking RPC on the restart path.** Against a dead Neovim it freezes the main loop for the whole timeout budget on every crash. The open-file mirror is read out of the snapshot instead.
 
-Core marks a stall from a synchronous call's timeout arm and from its input pump, when a typed batch outlasts the budget. Ten synchronous calls are reachable from this crate, counting Back and Forward as the one navigation move they are. One is the layout rebuild, which the launch path issues.
+Core marks a stall from a synchronous call's timeout arm and from its input pump, when one of its calls outlasts the budget with no Neovim prompt showing. Ten synchronous calls are reachable from this crate, counting Back and Forward as the one navigation move they are. One is the layout rebuild, which the launch path issues.
 
 **A window restoring `T` tabs carries `2T - 1` of them before it is interactive**: one `create_tabpage` per tab past the first, and one rebuild per tab carrying a layout. The two restore caps bound that product, the calls are all on the launch path, and none is reachable from the restart path, which discards the queue rather than replaying it.
 
@@ -330,7 +330,7 @@ The project search adds none either. `start_search` resolves its root from the t
 
 Save and Save As add none either, so the inventory above stands at ten. Both ride the ordered input channel and the native dialog resolves on a later main-loop turn, so neither can time out. They are gated on `Alive` all the same, for the paste path's reason rather than the blocking one, and Save As carries a second reason of its own: a native modal over the opaque overlay covers the Restart button, which the paragraph below records as the only route out of a stall.
 
-**Nothing in this crate clears `NotResponding`.** Core's input pump clears a stall once Neovim answers a typed batch it was waiting on, and the overlay never takes keyboard focus, so typing into a stalled window dismisses the stall once Neovim recovers, whichever call raised it. With no typing, a stall a blocking call raised stays: core's other clear rides the `Ok` arm of a later synchronous call, the timed-out one is detached, and all nine blocking calls a running window issues refuse to run in that state.
+**Nothing in this crate clears `NotResponding`.** Core's input pump clears a stall once Neovim answers a call or a probe it was waiting on, and the overlay never takes keyboard focus, so typing into a stalled window dismisses the stall once Neovim recovers, whichever call raised it. With no typing, a stall a blocking call raised stays: core's other clear rides the `Ok` arm of a later synchronous call, the timed-out one is detached, and all nine blocking calls a running window issues refuse to run in that state.
 
 Against a Neovim that never recovers, the route back is the stall overlay's Restart button, which force-kills. The honest fix for the untyped case, if that ever becomes a user problem, is a non-blocking liveness probe in core; there is none.
 

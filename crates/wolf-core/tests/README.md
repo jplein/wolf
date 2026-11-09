@@ -27,6 +27,7 @@ It offers:
 - `wake_channel() -> (WakeFn, FlushWaiter)`, with `wait_for_flush`, `wait_for_initial_flush`, `wait_for_wake` and `drain`.
 - `poll_until(waiter, desc, observe, done) -> T` re-runs `observe` every `POLL_INTERVAL`, draining `waiter`, until `done` accepts what it returned, and returns that value. It panics with `desc` and the last value after `FLUSH_TIMEOUT`.
 - `start_core_sized`, `temp_md`, `temp_md_path`, `fresh_cwd`, and the input constructors.
+- `start_core_with_disk_conflict()` returns a core whose current `note.txt` holds an unsaved edit while its file on disk changed under a future mtime, so Neovim's next check finds both sides changed with no sleep. It raises `updatetime` so `CursorHold`'s `:checktime` cannot find the conflict first, and calls no `block_on_rpc` method, for `nvim_liveness.rs`.
 - `start_core_with_temp_md[_sized]` opens a temp `.md` and returns once it is current and drawn: `current_file` is the file, a frame has landed after the startup barrier, and row 0 shows text when the fixture's first line has text. It panics naming the file after `FLUSH_TIMEOUT`.
 - `short_tempdir()` returns an owned, canonical temp dir under the first of the OS temp dir and `/tmp` that is writable and at most `SHORT_TEMP_ROOT_MAX` bytes canonical. A swap-bearing fixture placed in it must keep its name within `SHORT_FIXTURE_NAME_MAX`; `SWAP_NAME_MAX` mirrors init.lua's constant.
 - `send_ex` types `:{cmd}<CR>` as keystrokes; `probe_values` evaluates expressions inside the live nvim by having it `writefile` them to a probe path and polling that file — the eval channel for a core that exposes no eval RPC. `resolve_test_runfile` resolves extra Bazel-staged runfiles beyond nvim + init.lua.
@@ -337,12 +338,13 @@ Real Neovim (`WOLF_NVIM_BIN`, `no-sandbox` target with staged nvim runfiles).
 
 - Crash and stall detection: a self-SIGKILL fed through the input pump flips `liveness()` to `Dead`; a wedged event loop escalates repeated RPC timeouts to `NotResponding`; a successful RPC after recovery auto-clears back to `Alive`. Each transition fires a front-end wake.
 - The pump's own stall: typing into a wedged nvim marks `NotResponding`, and nvim's answer clears it.
+- Its exception: a `Save` held open by `:write`'s y/n prompt stays `Alive` across many budgets, so no overlay covers the prompt.
 - `liveness::clear_not_responding`, headless with a counting wake: one wake per clear, silence on `Alive`, and `Dead` left alone.
 
 **Gotchas**
 
 - A typed `:qa!` cannot stand in for the SIGKILL: `init.lua`'s abbreviation makes it a window close ([`commands.rs`](#commandsrs)).
-- The pump-stall case calls no `block_on_rpc` method, probes included: one would detect and clear the stall itself, so both polls would pass without the pump.
+- The two pump cases call no `block_on_rpc` method, probes included: one would detect and clear the stall itself, so both polls would pass without the pump.
 - The stall cases set the process-global `WOLF_RPC_TIMEOUT_MS` and wedge nvim with a finite `vim.uv.sleep`; teardown force-kills the wedged child, so widen (never tighten) the wedge if a case flakes.
 - It polls with its local `poll_without_draining`, not `poll_until`, because each case asserts the transition's wake afterward with `wait_for_wake`, and a drain would consume it.
 
@@ -413,6 +415,18 @@ Real Neovim plus the vendored nvim-treesitter and parsers trees (`//crates/wolf-
 **Covers** — the durable `:TSInstall` target: core creates `<state_dir>/parsers_user` and exports `WOLF_PARSERS_USER_DIR`; init.lua registers `:TSInstall`, lands the user dir on `runtimepath` strictly ahead of the bundled parsers tree (user parsers shadow bundled), and points nvim-treesitter's `install_dir` at it.
 
 **Gotchas** — Assertion order is load-bearing: `get_install_dir('parser')` mkdirs its target and appends to rtp itself, so the on-disk and rtp assertions must run before that probe. Both sides of the install-dir comparison are canonicalized (macOS `/var` vs `/private/var`; the Lua side is `vim.fs.normalize`d). The vendored trees resolve Bazel-first, devShell-second, and the test panics rather than skipping when neither resolves.
+
+#### `prompt_input.rs`
+
+Real Neovim (`//crates/wolf-core:prompt_input`: staged nvim runfiles, `WOLF_NVIM_BIN`, `no-sandbox`).
+
+**Covers** — the key answering a Neovim prompt reaches Neovim while the [pump](../src/README.md#pumprs)'s call that raised it is unanswered: `:write`'s y/n after `Save`, W12's `L` and `O` after a refocus, the key completing a `<C-w>` chord that holds a call, and an ordering guard for typing behind a busy call.
+
+**Gotchas**
+
+- Without the fix each answering key waits behind its call, so the poll for its effect runs out `FLUSH_TIMEOUT` and panics. Each answer is sent only once its prompt shows.
+- Neovim throttles its focus check to once per 2 s and defers a throttled one to the main loop, where W12 never blocked a key. The W12 cases rely on each test's fresh Neovim, which has no check to throttle against.
+- `typing_behind_a_busy_call_waits_for_it` is green with or without the fix: it fails only if held typing is released before Neovim waits for input, and lands in `a.txt`. Widen its `BUSY_STEP_GAP` if it flakes, never tighten it.
 
 #### `rank_bounded.rs`
 
