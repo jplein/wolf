@@ -14,8 +14,8 @@ Purpose: The application coordinator: launch setup, the live `WolfWindowControll
 
 - `makeNewWindow(originatingCwd:)` — opens a fresh project in the empty state, ignoring its argument, which exists for the shared `CommandDispatcher` call site.
 - `makeNewTab(from:)` — reuses the key controller's project, adding a tabpage rather than starting a core.
-- `scheduleStateSnapshot()` / `snapshotNow()` — throttled versus immediate whole-tree commit to `state.json` ([write model](../../../../notes/wolf-macos-decisions.md#state-is-a-tree-and-the-front-end-owns-every-write)). Every Alive wake and UI change throttles.
-- `closeCommit(for:)` — a closing view's commit; for the last live view it commits at once.
+- `scheduleStateSnapshot()` / `snapshotNow()` — throttled versus immediate whole-tree commit to `state.json` ([write model](../../../../notes/wolf-macos-decisions.md#state-is-a-tree-and-the-front-end-owns-every-write)).
+- `closeCommit(for:)` — a closing view's commit; the last live view's commits at once the tree read at its burst's first close, keeping every tab of its window.
 - `otherWindows(excluding:)`, `controllerForCwd(_:)`, `raiseWindow(tabId:)` — the command palette's candidate sources and raise target.
 
 **Decisions**
@@ -682,16 +682,16 @@ Purpose: One view — a single tab's whole UI stack, bound to a `(project, tabpa
 
 **Public API**
 
-- `build() -> Bool` — returns `false`, having built nothing, when the tabpage bind is invalid, so the coordinator drops the would-be view.
-- `hasFolder` — false in the empty state, gating the sidebar and file tree, since an empty-state window must never scan `home`.
+- `build() -> Bool` — returns `false`, building nothing, when the tabpage bind is invalid, so the coordinator drops the view.
+- `hasFolder` — false in the empty state, gating the sidebar and file tree so an empty-state window never scans `home`.
 - `persistedCwd` — the tabpage-local cwd, correct even when this view is not current, unlike `currentCwd`.
 - `persistedTab()` — this view's [`SessionSeam`](../WolfKeyMap/README.md#sessionseamswift) contribution, seeded from the restored tab.
-- `canCopy` — whether Edit > Copy has anything to copy; `copy()` takes the same decision.
+- `canCopy` — whether Edit > Copy has anything to copy, as `copy()` decides it.
 - `drainAndDispatchCommands()` — apart from `onRenderWake()`, so the project drains in every state ([why](../WolfKeyMap/README.md#livenessseamswift)).
 
 **Decisions**
 
-- `project` is held strong, and views weakly, for the reason in [`Project.swift`](#projectswift). A view never shuts the core down itself.
-- `teardown()` is idempotent and defers `removeController` one runloop turn, capturing `self` strongly on purpose: during `windowWillClose` the coordinator's collection is the last strong reference, so dropping it synchronously frees the `NSWindow` mid-close.
-- `window.historyNav = self` is wired explicitly: this is not an `NSWindowController`, so a `target: nil` toolbar action could never reach it through the responder chain.
-- The file tree starts at the end of `build()`, once the sidebar's collapse state has seeded its refresh gate, so a restored collapsed sidebar defers its first outline work.
+- `project` is held strong, and views weakly, as [`Project.swift`](#projectswift) explains.
+- `teardown()` takes its close commit before setting `isTornDown`, which the burst's read skips: taken after, a last close would commit nothing and a tab group lose its first tab. It is idempotent and defers `removeController` one turn, capturing `self` strongly: during `windowWillClose` the coordinator's collection is the last strong reference, so a synchronous drop frees the `NSWindow` mid-close.
+- `window.historyNav = self` is wired explicitly: this is not an `NSWindowController`, so a `target: nil` toolbar action never reaches it.
+- The file tree starts last in `build()`, after the sidebar's collapse state seeds its refresh gate, so a restored collapsed sidebar defers its outline work.

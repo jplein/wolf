@@ -65,7 +65,9 @@ Every Alive core wake requests a commit, alongside the geometry, sidebar, cwd an
 
 Two restored views never gather and go on contributing their seed. One whose rebuild failed shows a fallback pane rather than its saved split. One restored to the empty state because its saved folder was missing keeps that folder until the user opens another, so remounting a volume brings the session back.
 
-**Closing the last window is quitting, so it commits the tree with that window in it.** The app terminates after its last window closes, and a commit after the close would find no live view. Any other close commits without the closing view, and a close during termination commits nothing over the terminate commit. A walk with no live view or no window commits nothing at all, because it would erase the session.
+**Closing the last window is quitting, so it commits the tree with that window in it.** The app terminates after its last window closes, and a commit after the close would find no live view. The commit writes the tree as it stood at the first close of that runloop turn, because a tabbed window's close button closes each tab's window in turn, and by the last close the earlier tabs are torn down. So the closing window keeps all its tabs, and a close-all keeps every window.
+
+A tab closed alone ends its close burst on the next turn, so it drops, and a later close of the last tab keeps only that tab. That AppKit closes a tab group's windows within one turn is a premise no automated test measures. Any other close commits without the closing view, and a close during termination commits nothing over the terminate commit. A walk with no live view or no window commits nothing at all, because it would erase the session.
 
 Saved tabs that no view took at launch, because a core, tabpage or view build failed, are never retried in that session. They are carried into every commit so the next launch tries them again.
 

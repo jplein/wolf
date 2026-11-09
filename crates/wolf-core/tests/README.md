@@ -434,7 +434,8 @@ Real Neovim: needs `WOLF_NVIM_BIN`, the staged nvim runfiles, and `tags = ["no-s
 
 - Assert handle count, distinctness and the per-window buffer, never literal handle values.
 - An empty-path leaf inherits the named `Untitled.md` startup buffer, matched by basename suffix so `/var` versus `/private/var` does not break it.
-- The reporting test reads the snapshot once, with no poll and no flush wait, because that instant is what a launch-time state commit sees. Do not add a poll: it would pass without the `wolf_barrier` guarantee it pins. The race it catches is a scheduling race, so with the guarantee removed a single run fails only some of the time.
+- The reporting test reads the snapshot once, with no poll and no flush wait, because that instant is what a launch-time state commit sees. Do not add a poll: it would pass without the `wolf_barrier` guarantee it pins.
+- The race it catches is a scheduling race: with the guarantee removed, a single round passes most of the time. Across `BARRIER_ROUNDS` rounds, macOS fails in 33 of 40 runs, in two batches of 20 that fail 13 and 20 times, and Linux in 10 of 10. The rate varies with machine load, so one batch is a noisy measure.
 
 #### `recent_dirs.rs`
 

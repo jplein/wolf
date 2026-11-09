@@ -659,12 +659,13 @@ Purpose: The write side of state persistence, ported from wolf-gnome's [`state_s
 - `gatherTab(...) -> TabGather` — `.refuse` when a folder view's cwd is `""` or any leaf is `.unreported` or missing from `content`.
 - `mayGather(...)` and `contribution(mayGather:gather:cache:)` — the gathered tab when the gate is open and the gather ready, otherwise `cache`, which the caller stores as its next cache. `gather` is not evaluated behind a shut gate.
 - `closeCommit(terminating:otherLiveViews:)`, `committedWindows(liveViews:windows:)` and `orphanedSlots(savedTabCounts:materialized:)` — `nil` from `committedWindows` means commit nothing.
+- `CloseBurst(scheduleEnd:read:commit:)` and its `close(terminating:otherLiveViews:)` — `closeCommit` over the closes of one runloop turn, which ends when the closure given to `scheduleEnd` runs.
 
 **Decisions**
 
 - A partial read refuses the whole tab: a leaf with no reported window would persist `""` over the restored file.
-- The cache starts as the restored tab, so a view not yet read or behind a shut gate still writes its saved files. The gate shuts after a failed rebuild, and while a view whose saved folder was missing at launch has no folder.
-- Closing the last live view is quitting, so it keeps that view; a close while terminating commits nothing; any other close drops the view.
+- The cache starts as the restored tab, so a view not yet read or behind a shut gate still writes its saved files.
+- A keep commits the tree read at its burst's first close, while a tabbed window's earlier tabs are still live: its close button closes each tab in turn, so a later read keeps only the last tab.
 - A walk with no live view or no window would erase the session, so it commits nothing. Orphans are never retried, but are carried into every commit.
 
 #### `ShortcutSeam.swift`
