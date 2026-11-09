@@ -8,7 +8,7 @@ nix develop --command cargo test -p wolf-gnome
 
 The devShell is not optional: it supplies GTK, exports `WOLF_NVIM_BIN` and `WOLF_RG_BIN`, and pins the font stack, which is what makes Pango measurement and Cairo rasterization reproducible enough to assert on pixels.
 
-Rules that are decidable from their arguments are pinned in each seam's own `#[cfg(test)] mod tests` rather than here, which is the point of the seam split in [wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md). The files below cover what a seam cannot reach: a real Neovim, a real window, the built binary together with the manifest that shaped it, and the store output `nix build .#wolf-gnome` installs — a different artifact from the checkout build, making different claims.
+Rules that are decidable from their arguments are pinned in each seam's own `#[cfg(test)] mod tests`, which is the point of the seam split in [wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md); the key seam's and the terminal seams' tables are files here instead, [`gdk_key.rs`](#gdk_keyrs) and [`terminal_seams.rs`](#terminal_seamsrs). The other files below cover what a seam cannot reach: a real Neovim, a real window, the built binary together with the manifest that shaped it, and the store output `nix build .#wolf-gnome` installs — a different artifact from the checkout build, making different claims.
 
 ## Files
 
@@ -143,9 +143,9 @@ Rules that are decidable from their arguments are pinned in each seam's own `#[c
 
 **Covers**
 
-- Sixty-two end-to-end smokes launch the built binary under `cage`: thirty-eight OCR a `grim` screenshot and twenty-four call no OCR helper, asserting instead on raw pixels, values the captive Neovim writes back, a file on disk, or the exit status.
-- The scenarios span text rendering, the sidebar, the three overlays and the sidebar's search panel, splits, pointer input, crash and stall recovery, relaunch and per-tab state, navigation, the clipboard, saving, the appearance, the command line, the terminal drawer, the preview pane, native tabs, composed text, the frame-time instrument, and a second window.
-- Fourteen compositor-free guards over the fixtures, constants and harness, so the target reports `76 passed`, not `62`. Two read `flake.nix`: every `shellHook` export must be scrubbed or keep-listed, and both vendored-tree exports must exist.
+- Sixty-three end-to-end smokes launch the built binary under `cage`: thirty-nine OCR a `grim` screenshot and twenty-four call no OCR helper, asserting instead on raw pixels, values the captive Neovim writes back, a file on disk, or the exit status.
+- The scenarios span text rendering, the sidebar, the three overlays, the search panel, splits, pointer input, crash and stall recovery, relaunch and per-tab state, navigation, the clipboard, saving, the appearance, the command line, the terminal drawer and panes, the preview pane, native tabs, composed text, the frame-time instrument, and a second window.
+- Fourteen compositor-free guards over the fixtures, constants and harness, so the target reports `77 passed`, not `63`. Two read `flake.nix`: every `shellHook` export must be scrubbed or keep-listed, and both vendored-tree exports must exist.
 - Three `#[ignore]`d packaged smokes outside that count drive the store binary, scrubbing every devShell export the artifact supplies itself: a clean OCR launch, an A/B against the checkout binary over the two vendored Lua trees, and a preview pane.
 
 **Gotchas**
@@ -170,6 +170,27 @@ Rules that are decidable from their arguments are pinned in each seam's own `#[c
 
 - Requires `WOLF_NVIM_BIN`; unlike wolf-ffi's guard, the parent panics through `common::require_nvim_bin` rather than skipping.
 - Both payloads show as ignored and return at once without `WOLF_TEST_PLANTED_HOME`, so `--include-ignored` never runs one against the real `HOME`.
+
+#### `terminal_paint.rs`
+
+**Covers**
+
+- `terminal::canvas::TerminalCanvas` painting a real session's frame onto an offscreen ARGB32 surface: truecolour backgrounds exactly and foreground ink within a tolerance; an inverse cell and a drag selection swapped; the block cursor in its fill and a bar after `\033[6 q`; `update` returning every row first, then the echoed row but not row 0 nor every row, then none, then every row for new metrics; and the rect's padding and clipping.
+
+**Gotchas**
+
+- Requires `WOLF_NVIM_BIN` and `/bin/sh`: each case opens a session in a pty that prints a fixture and `exec`s `cat`, and polls the frame until the fixture shows. No display.
+- Each case asserts, as a premise, that its fixture colours differ from the frame's defaults, and samples one pixel inside every cell edge, since cell origins are fractional. A background under a glyph is read in the band above the glyph box, which the 180 % line height leaves empty.
+
+#### `terminal_seams.rs`
+
+**Covers**
+
+- Table-driven cases for the pure seams under [`src/terminal/`](../src/terminal/README.md) (`style`, `damage`, `geometry`, `input`), the `WOLF_SMOKE_TERMINAL` parse, `scrollbar::terminal_viewport`, and `clipboard_ui::copy_decision`'s terminal arm.
+
+**Gotchas**
+
+- Pure: no display, no Neovim and no session. Every expected value is written out by hand rather than computed by the function under test.
 
 #### `treesitter_languages.rs`
 
@@ -204,6 +225,7 @@ Rules that are decidable from their arguments are pinned in each seam's own `#[c
 **Covers**
 
 - Shared helpers for this crate's integration tests: `require_nvim_bin`, `init_lua_path`, `unique_temp_dir`, `fresh_cwd`, `config`/`config_in`, and `wake_channel` returning a `WakeFn` paired with a `FlushWaiter` (`wait_for_flush`, `drain`).
+- Terminal-session helpers: `start_core`, `sh_script`, `open_session`, `frame_of`, `frame_text`, and `poll_frame` with its `wait_for_text` form, which fail with the frame's text rather than hang.
 - `config_in` is the state-dir funnel: once per test binary, and only if the variable is unset, it points `WOLF_STATE_DIR` at a throwaway `wolf-gnome-test-state-*` temp dir. Otherwise every real-nvim test would source the user's own `~/.local/state/wolf/runtime_user/init_user.lua` and write swap and MRU files beside it. [`state_isolation.rs`](#state_isolationrs) is the guard.
 
 **Decisions**
@@ -427,6 +449,8 @@ Being scrupulous about this is the point of the section.
 - **The lighthouse pixel band has no taken red run.** The isolating edit — leave the tree installed and activatable and change what it paints in the installed copy, so `vim.g.colors_name` still reads `lighthouse` — is written down in the smoke and was not executed, and deleting the tree falsifies the readback four assertions earlier without reaching the band. The orlando band's equivalent recipe was taken, by turning `code_block` off in the installed copy, and reddens that band alone.
 - **The `v:progpath` equality has no red run either.** A red run needs the package wrapper pointed at a Neovim build other than `wolfNeovim`, and none was taken. The assertion is live on real data — both launches read the same unwrapped store path — and is recorded as unfalsified rather than claimed.
 - **What that equality does not say is that both platforms run one Neovim.** Linux takes Neovim from the flake's `nixpkgs`, which `nix flake update` moves, while Bazel stages its own pin, which [tracks the flake lock by hand](../../../bazel/nvim/README.md#bumping-the-pinned-neovim-version).
+- **A terminal pane's pointer, clipboard and focus glue.** [`terminal_seams.rs`](#terminal_seamsrs) pins the rules, but no smoke presses a button or turns a wheel over a terminal pane, copies or pastes in one, or watches the window's activation, so the any-button gesture, the pinned session, the Copy and Paste targets and the `terminal_focus` reports reach no assertion.
+- **Damage in the live widget, and HiDPI.** [`terminal_paint.rs`](#terminal_paintrs) shows the canvas repaints only damaged rows, with no widget; the terminal-pane smoke reads final pixels, which a pane repainting every row on every wake paints too. Nothing runs at a device scale above 1.
 
 ## Deliberate test gaps
 

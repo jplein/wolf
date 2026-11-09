@@ -48,7 +48,7 @@ Purpose: the entry point; the first activate builds the coordinator, installs it
 
 - `run() -> glib::ExitCode` — hands GTK an empty argv, so the process command line is never parsed or rejected.
 - `XFT_DPI_PINNED_PREFIX` — begins the stderr line the dpi pin prints only when it fires; [`smoke_headless.rs`](../tests/README.md#smoke_headlessrs) matches its own copy, so retype a rename there.
-- Five `pub(crate)` helpers: [`coordinator.rs`](#coordinatorrs) calls `load_config`, `measure_metrics`, `open_state_store` and `ready_file_path` once each, and [`window.rs`](#windowrs) calls `init_lua_path` per window. [`init_lua.rs`](#init_luars) and [`ready_seam.rs`](#ready_seamrs) own the rules behind `init_lua_path` and `ready_file_path`.
+- Six `pub(crate)` helpers: [`coordinator.rs`](#coordinatorrs) calls `load_config`, `measure_metrics`, `open_state_store` and `ready_file_path` once each, and [`window.rs`](#windowrs) calls `init_lua_path` and `smoke_terminal_command` per window. [`init_lua.rs`](#init_luars), [`ready_seam.rs`](#ready_seamrs) and [`terminal.rs`](#terminalrs) own the rules behind `init_lua_path`, `ready_file_path` and `smoke_terminal_command`.
 
 **Decisions**
 
@@ -123,13 +123,14 @@ Purpose: the pure rulebook for Copy and Paste through the system clipboard. GTK-
 
 **Public API**
 
-- `copy_decision(liveness) -> CopyPress` and `paste_decision(liveness) -> PastePress` — both total over `Option<Liveness>` with no `_` arm; only `Some(Alive)` acts.
+- `copy_decision(liveness, terminal) -> CopyPress` and `paste_decision(liveness) -> PastePress` — both total with no `_` arm. `terminal` is the active pane's session: with one, Copy answers `Terminal(id)` whenever a core exists; otherwise only `Some(Alive)` acts.
 - `clipboard_write(selection)` and `paste_payload(read)` — `None` for an absent or empty string.
 
 **Decisions**
 
 - `clipboard_write`'s `None` means write nothing, never clear. Clearing would destroy whatever the user copied from another application, in answer to a chord that yanked nothing.
 - Copy is a bounded blocking RPC and is gated for that reason ([wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md)). Nothing on the paste path blocks: its refusals are about a paste queued behind an opaque overlay reaching a restarted Neovim minutes later, and the two reasons must not be collapsed.
+- A terminal pane's Copy is ungated on liveness, and must stay so: `terminal_selection_text` reads the session and issues no RPC, so a wedged or dead Neovim cannot cost it a timeout. Paste keeps its gate in a terminal pane, since an opaque overlay hides the terminal too, and [`shell.rs`](#shellrs) captures the target at the press, so a focus change during the read cannot redirect the text.
 
 #### `cmdline_ui.rs`
 
@@ -242,6 +243,7 @@ Purpose: pure, GTK-free cursor geometry and color logic — the pixel rectangle 
 **Gotchas**
 
 - `wolf-ffi` carries a port of `cursor_colors`; the two are kept in lockstep, so change both together.
+- [`terminal/canvas.rs`](terminal/README.md#canvasrs) is a second consumer of `cursor_rect`, passing `Some(0)` so a terminal bar or underline is exactly `MIN_BAR_PX` thick; the floor is load-bearing there too.
 - An out-of-range `mode_idx`, empty `mode_infos`, and an out-of-bounds cursor cell all fall through to inversion rather than panicking.
 
 #### `drawer.rs`
@@ -378,6 +380,7 @@ Purpose: the pure, GTK-free rulebook for composed and input-method text entry �
 **Gotchas**
 
 - The refusal arm is unreachable from this crate's glue, which asks the context only with no overlay open and gets `commit` synchronously from inside that call. It is there for an out-of-process engine committing on a later main-loop turn.
+- In a terminal pane [`window.rs`](#windowrs) routes a `Send` through [`commit_route`](terminal/README.md#inputrs) instead.
 
 #### `input.rs`
 
@@ -480,7 +483,7 @@ Purpose: the GDK pointer-translation rulebook, the analogue of [`input.rs`](#inp
 
 **Decisions**
 
-- Only the primary button is forwarded; every other number yields `None`, since a context menu and middle-click paste are unimplemented features.
+- Only the primary button is forwarded to Neovim; every other number yields `None`, since a context menu and middle-click paste are unimplemented features. Terminal panes map theirs through [`mouse_button`](terminal/README.md#inputrs).
 - Every modifier bit outside `C-`, `S-`, `A-` is dropped rather than translated, because Neovim's mouse grammar has nowhere to put it. Unlike `gdk_key`, which has a meta notation.
 - An unknown scroll unit falls back to the wheel threshold on purpose: guessing wheel for a pixel delta is over-sensitive and recoverable, while guessing surface for a detent delta makes scrolling dead.
 - A rejected `consume` leaves the carry untouched, so it is indistinguishable from no call; a poisoned remainder would kill scrolling for the session. `PaneScroll` discards the carry when the target grid differs from the previous call, accepted or not, because a remainder is a fraction of a line of one grid.
@@ -572,17 +575,18 @@ Purpose: the GTK glue turning `layout`'s pane tree into nested `gtk::Paned`, one
 - `build(core, metrics) -> PaneHandle` — panes appear with the first grid.
 - `cmdline_widget()` — the focus-return target for overlays and sidebar; plus `toast_widget()` and `pum_widget()`.
 - `reset_after_restart()`, `request_layout_rebuild(saved)`, `realize_layout(saved)`, `layout_snapshot() -> LayoutGather`, `snapshot_readiness()`, `readiness()`.
+- `active_terminal()`, `sync_terminal_focus(focused)`, `request_terminal(command)`.
 
 **Decisions**
 
 - A dragged divider is written back into the tree's weights, because a rebuild destroys the paned, and re-applies on every `max-position` notify, since nested allocation reports intermediate values.
 - `realize_layout` rebuilds into Neovim's current tabpage, so restore materialization is its only legal caller; `request_layout_rebuild` defers instead.
 - The preview's render half goes through [`preview_coalescer.rs`](#preview_coalescerrs), whose state sits on `PaneInner`, one per tab: a rebuild replaces `panes` wholesale.
-- Pointer input is one `gtk::GestureDrag`, which delivers outside the widget, so grid and button pin at press.
+- Pointer input is one all-button `gtk::GestureDrag`, delivering outside the widget, so target and button pin at press; editor panes take the primary alone.
+- A terminal pane paints through its own [`TerminalCanvas`](terminal/README.md#canvasrs) ([why](../../../notes/wolf-gnome-decisions.md#terminal-panes)).
 - Each pane's status and `b:wolf_full_width` cache once per wake: reading at use time re-enters `draw_pane`'s guard, and paint, pointer and resize must agree in one frame.
 - One funnel produces every grid resize, against the size the pane last asked for, not the lagging snapshot grid; it runs every wake, since a lifted cap re-divides a still allocation.
 - The drawer strip's height re-applies every wake, so a toplevel resize converges over two frames; `reset_after_restart` clears the drawer `detect_closes` cannot reach.
-- The statusbar strip's family comes from the desktop's `gtk-font-name` and its sizes from the editor's font, so the override moves no [`statusbar_layout.rs`](#statusbar_layoutrs) geometry.
 
 #### `persistence.rs`
 
@@ -730,8 +734,8 @@ Purpose: the Cairo/Pango paint seam — one grid and its highlight table onto an
 
 **Gotchas**
 
-- `GlyphPainter::new(cr)` and `draw(cr, …)` take the context twice with nothing binding them; both call sites pass the same one.
-- `FALLBACK_FG`, `FALLBACK_BG`, `draw_glyph` and `draw_text_line` are `pub(crate)` for [`cursor.rs`](#cursorrs) and [`pane_view.rs`](#pane_viewrs); reimplementing one lets cursor colors, glyph placement or the strip's text drift from the grid paint.
+- `GlyphPainter::new(cr)` and `draw(cr, …)` take the context twice with nothing binding them; every call site passes the same one.
+- `FALLBACK_FG`, `FALLBACK_BG`, `GlyphPainter`, `draw_glyph`, `draw_text_line` and `set_source` are `pub(crate)` for [`cursor.rs`](#cursorrs), [`pane_view.rs`](#pane_viewrs) and [`terminal/canvas.rs`](terminal/README.md#canvasrs); reimplementing one lets their colours or glyph placement drift from the grid paint.
 
 #### `save_ui.rs`
 
@@ -761,6 +765,7 @@ Purpose: a Neovim window's `win_viewport` projected onto a pane-local thumb rect
 
 - `scrollbar_thumb(pane_w, grid, viewport) -> Option<ScrollbarThumb>` — `None` when the whole buffer fits, when the pane is too narrow for the gutter, or on degenerate input.
 - `scrollbar_thumb_color(bg) -> Rgb`, over the editor's own background.
+- `terminal_viewport(bar) -> Viewport` — a terminal frame's scrollbar as the viewport `scrollbar_thumb` projects, so a terminal pane's thumb takes the same path.
 - The five constants those two read, `SCROLLBAR_THICKNESS_PX` through `SCROLLBAR_GREY`.
 
 **Decisions**
@@ -886,6 +891,7 @@ Purpose: the GTK glue for native tabs — an `adw::TabBar` over an `adw::TabView
 
 - `build(TabsParts) -> TabsHandle` — no page exists until `open_tab`.
 - `TabsHandle::open_tab(TabParts) -> bool`, `view_widget`, `bar_widget`, `selected`, `entries`, `len`, `on_render_wake`, `reset_after_restart`, `focus_target`, `connect_selected`, plus `TabHandle`'s per-tab relays.
+- `active_terminal()` and `sync_terminal_focus(window_active)`, per [Terminal panes](../../../notes/wolf-gnome-decisions.md#terminal-panes).
 - `queue_restore(RestoreTabs)`, `pending_restore()` and `set_pending_sidebar_shown(shown)` — the tabs a launch still owes a page, which [`window.rs`](#windowrs) seeds.
 
 **Decisions**
@@ -916,6 +922,18 @@ Purpose: the pure, GTK-free rulebook for the N tabs one window's captive Neovim 
 - `restore_press` refuses until tab 0 has adopted and the core reads `Alive`. A refusal answers `Wait`, not `Idle`: a queued tab has no page and no cache, so declaring the queue empty is tabs that never open. `Idle` is the abandoned queue.
 - `switch_target` and `close_outcome` refuse the two inputs that fail silently: Neovim reads a handle of `0` as "the current tabpage", and `close_tabpage` on the last tabpage does nothing.
 - `new_tab_cwd` answers `None` in the empty state always, so a new tab is never `:tcd`'d into `$HOME`; it must agree with [`state_seam.rs`](#state_seamrs)'s `snapshot_cwd`.
+
+#### `terminal.rs`
+
+Purpose: the root of the terminal-pane modules. A pane whose window shows a `wolf-core` terminal session paints from the session's frame rather than from the placeholder's grid; the seams and the painter are in [`terminal/`](terminal/README.md), and [Terminal panes](../../../specs/terminal-panes.md) owns the contract.
+
+**Public API**
+
+- `SMOKE_TERMINAL_ENV` and `smoke_terminal_command(raw)` — the test-only `WOLF_SMOKE_TERMINAL` hook and its rule: the trimmed value is the program, with no arguments, and an absent or blank value opens nothing.
+
+**Decisions**
+
+- The hook is the cage smokes' one route to a terminal pane, since nothing user-facing opens a session. [`app.rs`](#apprs) reads the variable, and [`pane_view.rs`](#pane_viewrs) opens the session in the first wake with a pane ([why there](../../../notes/wolf-gnome-decisions.md#terminal-panes)).
 
 #### `title.rs`
 
@@ -991,11 +1009,11 @@ Purpose: one window and everything scoped to it — an `adw::ApplicationWindow` 
 - The window registers with the coordinator before its first command drain, or the drain reaches a coordinator unaware of it.
 - `display_cwd` reads the cached subtree, so the palette and `state.json` cannot disagree about where a window is.
 - `WindowInner` does not hold the shell, which the wake-drain future owns for exactly the window's lifetime.
+- Keys, commits and focus reach a terminal pane per [Terminal panes](../../../notes/wolf-gnome-decisions.md#terminal-panes).
 
 **Gotchas**
 
 - The key controller carries no propagation phase and offers each press to the window's `gtk::IMMulticontext` before translating, so a bound chord reaches neither Neovim nor the context — [`shell.rs`](#shellrs)'s capture-phase controller has already stopped it ([wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md#window-structure)).
-- Readiness triggers are wired only in a window built while the probe is pending.
 
 #### `workspace.rs`
 

@@ -1,6 +1,6 @@
 # `crates/wolf-gnome/src/window.rs`
 
-Last verified at commit `cc60afb1257ee0c5474105e363d0d452ba050afb`.
+Last verified at commit `9627d9de77a37544d3d73f9af36c192624f9cbed`.
 
 ## Overlay stacking across tabs
 

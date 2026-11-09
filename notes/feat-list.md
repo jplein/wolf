@@ -58,7 +58,7 @@ Mouse and vertical scroll input work on both front-ends, as thin GTK glue over p
 
 Both front-ends draw `undercurl` as a wave, take the underline's colour from `special`, and strike through in the foreground. They differ only under a block cursor, where Linux keeps the cell's decorations and macOS draws the glyph plain.
 
-Horizontal scroll, non-primary buttons and kinetic scrolling are handled on neither platform, so they are gaps against other editors rather than against macOS.
+Horizontal scroll, non-primary buttons over an editor pane and kinetic scrolling are handled on neither platform, so they are gaps against other editors rather than against macOS. A terminal pane forwards the middle and secondary buttons to its session on both.
 
 The content cap, its centred grid, the full-width toggle and the synthetic scrollbar land together on Linux, with two deliberate divergences from macOS. Only the thumb is drawn and it never fades, because a fade needs the periodic timer [`wolf-gnome-decisions.md`](wolf-gnome-decisions.md) forbids. And the centring offset is floored to whole device pixels, because a half-pixel `cr.translate` resamples every glyph and this front-end has no HiDPI story.
 

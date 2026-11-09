@@ -6,10 +6,11 @@ The GTK 4 and libadwaita front-end: a runnable multi-window Linux application th
 
 ## Layout
 
-| Directory                   | Contents                                            |
-| --------------------------- | --------------------------------------------------- |
-| [`src/`](src/README.md)     | The application and its pure seams, one entry each. |
-| [`tests/`](tests/README.md) | Integration tests, including the headless smoke.    |
+| Directory                                 | Contents                                            |
+| ----------------------------------------- | --------------------------------------------------- |
+| [`src/`](src/README.md)                   | The application and its pure seams, one entry each. |
+| [`src/terminal/`](src/terminal/README.md) | The terminal pane's seams and its painter.          |
+| [`tests/`](tests/README.md)               | Integration tests, including the headless smoke.    |
 
 ## Entry point
 
@@ -30,7 +31,7 @@ After editing `flake.nix`, use `nix develop --command` explicitly: an already-lo
 
 Running needs a Wayland or X11 session, or the headless compositor the smoke tests launch. Five environment variables matter. `WOLF_FONT_PT` overrides the configured `font-size` and wins over it ([typography](../../notes/wolf-gnome-decisions.md#typography)); `WOLF_CONFIG_DIR` overrides where `wolf-config.yaml` is read and created, and belongs to [`config.rs`](../wolf-core/src/README.md#configrs); `WOLF_STATE_DIR` overrides where `state.json`, the MRU databases and the per-project swap directories are kept; `WOLF_INIT_LUA` names the captive `runtime/nvim/init.lua` outright, ahead of both paths the binary would otherwise resolve, and is deliberately not checked for existence, so a typo fails loudly instead of falling through to another file.
 
-`WOLF_READY_FILE` belongs to the smoke harness: the binary writes its pid there once its launch windows accept input ([wolf-gnome-decisions.md](../../notes/wolf-gnome-decisions.md#the-readiness-file)).
+`WOLF_READY_FILE` and `WOLF_SMOKE_TERMINAL` belong to the smoke harness. The binary writes its pid to the first once its launch windows accept input ([wolf-gnome-decisions.md](../../notes/wolf-gnome-decisions.md#the-readiness-file)), and opens a terminal session running the program the second names in each window's first pane ([wolf-gnome-decisions.md](../../notes/wolf-gnome-decisions.md#terminal-panes)).
 
 ## Packaging
 
