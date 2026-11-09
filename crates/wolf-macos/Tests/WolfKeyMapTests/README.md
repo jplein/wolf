@@ -264,6 +264,7 @@ The three pure file-picker seams, each as a table of cases: `isPickerTrigger` (t
 
 - `PreviewCopySeam.decodeSelectionMessage` as a table: copyable text, whitespace preserved verbatim, the empty and whitespace-only clears, and the four malformed shapes (wrong value type, missing key, non-dictionary, `nil`) that must leave the cache alone.
 - The `copySource` matrix and `Selection.isCopyable`, including that a copyable preview selection beats visual mode while a non-copyable one does not mask it, plus a sweep asserting `isCopyEnabled(…) == (copySource(…) != .none)` over the whole matrix.
+- The terminal source: a terminal selection beats visual mode, an empty one copies nothing even in visual mode, and `nil` keeps the editor rules.
 - The emitted JavaScript: the handler it posts to, the `t` key the decoder requires, the `selectionchange` / capture-phase `mouseup` / `keyup` listeners, the rAF throttle, the collapsed early-out, the `try` / `catch` wrapper, the document-start push, and a custom handler name.
 
 **Gotchas**
@@ -395,6 +396,24 @@ The `PreviewSeam` reload gate plus the click-to-focus surface. `winsNeedingReloa
 **Covers**: `StatusbarText` across the cross product of a set or unset titlebar foreground and an active or inactive pane, asserting both colours and the bold flag against literals. Two discriminators pin that the branch keys on `set`: a set black foreground is still `.themed`, and an unset one with a non-zero rgb is still `.label`.
 
 **Gotchas**: the themed rows use a distinctive rgb, which must come out unchanged, and compare alphas within a tolerance, because the inactive secondary alpha is a product of two constants.
+
+#### `TerminalCellStyleTests.swift`
+
+**Covers** — `TerminalCellStyle.resolve`: set and unset colours, inverse, selection and both together, invisible text and spacer cells, faint alpha, each face, each underline kind, decorations in the resolved foreground, and blink ignored. Also `cursorColors` with the cursor colour set and unset, and `cursorSpan`.
+
+**Gotchas** — the `Flag`, `Underline`, `Width` and `TerminalCursorShape` values are asserted against literals copied from the `terminal_*` modules in `crates/wolf-ffi/src/lib.rs`, which is the source of truth; a new value has to be added in both places.
+
+#### `TerminalDamageTests.swift`
+
+**Covers** — `TerminalDamage`: nothing painted repaints every row, only newer rows repaint, an equal version repaints none, a changed or absent key forgets the painted version, and `cursorRows` for a moved, reshaped, unchanged, hidden or appearing cursor.
+
+#### `TerminalGeometryTests.swift`
+
+**Covers** — `TerminalGeometry.size` at scale 1 and 2, the 1-pixel floor and the count clamp; `pointerPixels` landing inside a column's pixels at scale 2 and clamping before the origin; and `sizer`'s preference of the active pane, then the previous sizer, then the lowest id.
+
+#### `TerminalInputSeamTests.swift`
+
+**Covers** — `TerminalInputSeam`: the `routesThroughInputContext` table over named keys, Ctrl, Cmd, option-as-alt and marked text; `committedText` for one ASCII scalar, other text, control scalars and empty text; and `focusReports` for no change, a gain, a move and a loss.
 
 #### `TreeChildrenMemoTests.swift`
 

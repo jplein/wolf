@@ -90,7 +90,40 @@ The four `extern "C"` wake registrations (`wolf_ffi_set_wake`, `wolf_ffi_set_fil
 - `FfiLayoutIntent::kind/orientation/dir/from/win` — A tagged flattening of `wolf_core::LayoutIntent`. Fields a given kind does not use read as 0; a drawer open reuses the `win` field for the new drawer window rather than adding a bridged field.
 - `FfiWinInfo::grid/win/hidden` — `grid` is `>= 2` for editor windows.
 - `FfiPaneStatus::filename/display_path/abs_path` — core's `PaneStatus`, whose rules are [`pane_status.rs`](../../wolf-core/src/README.md#pane_statusrs)'s. `abs_path` is never relativized.
-- `FfiWinBuffer::reported/abs_path` — `reported` is whether `win_buffers` has the window; it is false for an unknown window or a shut-down core. `abs_path` is the canonical path `FfiPaneStatus::abs_path` gives a current-tabpage window, `""` when unnamed or unreported.
+- `FfiWinBuffer::reported/abs_path/terminal` — `reported` is whether `win_buffers` has the window; it is false for an unknown window or a shut-down core. `abs_path` is the canonical path `FfiPaneStatus::abs_path` gives a current-tabpage window, `""` when unnamed or unreported. `terminal` is the session the window shows, and a non-zero value is what makes its pane a terminal pane.
+
+### Terminal sessions
+
+[Terminal panes](../../../specs/terminal-panes.md) owns the contract and core's [`terminal.rs`](../../wolf-core/src/README.md#terminalrs) the behaviour; these are thin maps onto `WolfCore`'s session methods. A session id is a `u64`, and `0` means none.
+
+- `open_terminal(&self, win: i64, target: u8, command: String) -> u64` — `target` per `mod terminal_target`, and a `win` of 0 is Neovim's current window. `""` runs the user's shell and anything else runs as `/bin/sh -c <command>`, so the session's `shell` reads `sh`. The command is one string because only tests pass one and swift-bridge is not known to accept a `Vec<String>` parameter. Blocks briefly; 0 on failure, for an unknown `target` or after shutdown.
+- `bind_terminal(&self, id: u64, win: i64, target: u8) -> bool` — Shows a running session as `open_terminal` places a new one; false for an unknown id or `target`.
+- `terminal_frame(&self, id: u64) -> FfiTerminalFrame` — The empty frame, version 0 and `0x0`, for an unknown id or after shutdown.
+- `terminal_key(&self, id: u64, ev: FfiKeyEvent)` — Goes through core's `<C-w>` router, so a chord may act on Neovim's windows instead of reaching the program.
+- `terminal_text`, `terminal_paste(&self, id: u64, text: String)` — Text as typed, such as an input method's commit, and a paste, which is bracketed when the program set mode 2004.
+- `terminal_mouse(&self, id: u64, kind: u8, button: u8, x: f64, y: f64, mods: u8)` — `kind` per `mod terminal_mouse_kind`, `button` per `mod mouse_button` with `NONE` for motion with nothing held, `mods` per `mod terminal_mods`. `x` and `y` are pixels from the content area's top-left, in the cell pixels of the last `resize_terminal`. An unknown discriminant drops the event.
+- `terminal_scroll(&self, id: u64, direction: u8, lines: u16, x: f64, y: f64, mods: u8)` — `direction` per `mod scroll_dir`, the rest as `terminal_mouse`.
+- `terminal_focus(&self, id: u64, gained: bool)` — Pane focus or window activation, reported to a program that set mode 1004.
+- `resize_terminal(&self, id: u64, cols: u16, rows: u16, cell_w_px: u32, cell_h_px: u32)` — Sizes the session and its pty. The cell pixel size is also the unit of later pointer positions.
+- `close_terminal(&self, id: u64)` — Hangs the session up.
+- `live_terminals(&self) -> Vec<u64>` — Running sessions, ascending. An exited session is not listed, though its frame stays readable.
+- `terminal_selection_text(&self, id: u64) -> String` — `""` when nothing is selected.
+
+Mouse and scroll take scalar arguments and a `mods` bitset rather than transparent structs. That keeps each method at seven inputs counting `self`, inside `clippy::too_many_arguments` without an allow.
+
+`FfiTerminalFrame` shares core's `Arc<TerminalFrame>`, so a read copies no cells until `row_cells`. Every accessor answers 0, `false`, `""` or an unset colour out of range and on the empty frame.
+
+- `version()`, `cols()`, `rows()` — `version` is monotonic per session.
+- `row_version(row: u16) -> u64` — The frame version at which the row last changed, which is what lets a painter repaint only newer rows.
+- `row_cells(row: u16) -> Vec<FfiTerminalCell>` — One row, left to right.
+- `row_has_selection(row)`, `row_selection_start(row)`, `row_selection_end(row) -> u16` — The selected columns, inclusive.
+- `has_cursor`, `cursor_col`, `cursor_row`, `cursor_visible`, `cursor_blinking`, `cursor_style() -> u8` — `has_cursor` is false while the cursor is scrolled out of view, and the rest then read 0, `false` or `BLOCK`. `cursor_style` per `mod terminal_cursor_style`.
+- `default_fg`, `default_bg`, `cursor_color() -> FfiColor` — `cursor_color` is unset when the editor sets none.
+- `scrollbar_total`, `scrollbar_offset`, `scrollbar_len() -> u64` — In rows; the offset is `total - len` at the bottom.
+- `mouse_tracking() -> bool`, `title`, `pwd`, `shell() -> String` — `pwd` is `""` when the shell reported none, and `shell` is the program's basename.
+- `has_exited() -> bool`, `exit_code() -> i32` — The code is 128 plus the signal for a signal death, 0 while running.
+
+`FfiTerminalCell::text/fg/bg/flags/underline/width` — `text` is `""` for an empty cell or a spacer. `fg` and `bg` are unset for the frame's default and never swapped for inverse, which the painter resolves. `flags` per `mod terminal_flag`, `underline` per `mod terminal_underline`, `width` per `mod terminal_cell_width`.
 
 ### Tabpages
 
@@ -237,21 +270,30 @@ All windows share one process-wide store, opened lazily over the platform state 
 
 These `u8` values are the ABI: Swift decodes raw integers, so the numbers are content, not magic. They are append-only — see [`wolf-ffi-decisions.md`](../../../notes/wolf-ffi-decisions.md).
 
-| Module             | Mirrors                       | Values                                                                                                                                                                    |
-| ------------------ | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `kind`             | `wolf_core::Key`              | `CHAR` 0, `ENTER` 1, `ESC` 2, `TAB` 3, `BACKSPACE` 4, `DELETE` 5, `LEFT` 6, `RIGHT` 7, `UP` 8, `DOWN` 9, `HOME` 10, `END` 11, `PAGE_UP` 12, `PAGE_DOWN` 13, `FUNCTION` 14 |
-| `cursor_shape`     | `wolf_core::CursorShape`      | `BLOCK` 0, `HORIZONTAL` 1, `VERTICAL` 2                                                                                                                                   |
-| `appearance`       | `wolf_core::Appearance`       | `AUTO` 0, `DARK` 1, `LIGHT` 2                                                                                                                                             |
-| `intent_kind`      | `wolf_core::LayoutIntent`     | `SPLIT` 0, `FOCUS_DIR` 1, `DRAWER_OPEN` 2                                                                                                                                 |
-| `orientation`      | `wolf_core::SplitOrientation` | `HORIZONTAL` 0, `VERTICAL` 1                                                                                                                                              |
-| `focus_dir`        | `wolf_core::FocusDir`         | `LEFT` 0, `RIGHT` 1, `UP` 2, `DOWN` 3                                                                                                                                     |
-| `mouse_button`     | `wolf_core::MouseButton`      | `LEFT` 0, `RIGHT` 1, `MIDDLE` 2                                                                                                                                           |
-| `mouse_action`     | `wolf_core::MouseAction`      | `PRESS` 0, `RELEASE` 1, `DRAG` 2                                                                                                                                          |
-| `scroll_dir`       | `wolf_core::ScrollDirection`  | `UP` 0, `DOWN` 1, `LEFT` 2, `RIGHT` 3                                                                                                                                     |
-| `liveness`         | `wolf_core::Liveness`         | `ALIVE` 0, `NOT_RESPONDING` 1, `DEAD` 2                                                                                                                                   |
-| `palette_row_kind` | `wolf_core::PaletteRowKind`   | `STATIC` 0, `SWITCH_WINDOW` 1, `OPEN_RECENT` 2                                                                                                                            |
+| Module                  | Mirrors                          | Values                                                                                                                                                                    |
+| ----------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `kind`                  | `wolf_core::Key`                 | `CHAR` 0, `ENTER` 1, `ESC` 2, `TAB` 3, `BACKSPACE` 4, `DELETE` 5, `LEFT` 6, `RIGHT` 7, `UP` 8, `DOWN` 9, `HOME` 10, `END` 11, `PAGE_UP` 12, `PAGE_DOWN` 13, `FUNCTION` 14 |
+| `cursor_shape`          | `wolf_core::CursorShape`         | `BLOCK` 0, `HORIZONTAL` 1, `VERTICAL` 2                                                                                                                                   |
+| `appearance`            | `wolf_core::Appearance`          | `AUTO` 0, `DARK` 1, `LIGHT` 2                                                                                                                                             |
+| `intent_kind`           | `wolf_core::LayoutIntent`        | `SPLIT` 0, `FOCUS_DIR` 1, `DRAWER_OPEN` 2                                                                                                                                 |
+| `orientation`           | `wolf_core::SplitOrientation`    | `HORIZONTAL` 0, `VERTICAL` 1                                                                                                                                              |
+| `focus_dir`             | `wolf_core::FocusDir`            | `LEFT` 0, `RIGHT` 1, `UP` 2, `DOWN` 3                                                                                                                                     |
+| `mouse_button`          | `wolf_core::MouseButton`         | `LEFT` 0, `RIGHT` 1, `MIDDLE` 2, `NONE` 3                                                                                                                                 |
+| `mouse_action`          | `wolf_core::MouseAction`         | `PRESS` 0, `RELEASE` 1, `DRAG` 2                                                                                                                                          |
+| `scroll_dir`            | `wolf_core::ScrollDirection`     | `UP` 0, `DOWN` 1, `LEFT` 2, `RIGHT` 3                                                                                                                                     |
+| `liveness`              | `wolf_core::Liveness`            | `ALIVE` 0, `NOT_RESPONDING` 1, `DEAD` 2                                                                                                                                   |
+| `palette_row_kind`      | `wolf_core::PaletteRowKind`      | `STATIC` 0, `SWITCH_WINDOW` 1, `OPEN_RECENT` 2                                                                                                                            |
+| `terminal_target`       | `wolf_core::TerminalTarget`      | `WINDOW` 0, `SPLIT_HORIZONTAL` 1, `SPLIT_VERTICAL` 2                                                                                                                      |
+| `terminal_mouse_kind`   | `wolf_core::TerminalMouseKind`   | `PRESS` 0, `RELEASE` 1, `MOTION` 2                                                                                                                                        |
+| `terminal_cursor_style` | `wolf_core::TerminalCursorStyle` | `BLOCK` 0, `BAR` 1, `UNDERLINE` 2, `HOLLOW` 3                                                                                                                             |
+| `terminal_underline`    | `wolf_core::TerminalUnderline`   | `NONE` 0, `SINGLE` 1, `DOUBLE` 2, `CURLY` 3, `DOTTED` 4, `DASHED` 5                                                                                                       |
+| `terminal_cell_width`   | `wolf_core::TerminalCellWidth`   | `NARROW` 0, `WIDE` 1, `SPACER_TAIL` 2, `SPACER_HEAD` 3                                                                                                                    |
 
 `mod flag` is a bitset rather than an enum: `BOLD` `1 << 0`, `ITALIC` `1 << 1`, `UNDERLINE` `1 << 2`, `UNDERCURL` `1 << 3`, `STRIKETHROUGH` `1 << 4`, packed into `FfiCell::flags` and `FfiToastChunk::flags`.
+
+`mod terminal_flag` is a bitset too: `BOLD` `1 << 0`, `FAINT` `1 << 1`, `ITALIC` `1 << 2`, `STRIKETHROUGH` `1 << 3`, `INVERSE` `1 << 4`, `INVISIBLE` `1 << 5`, `BLINK` `1 << 6`, packed into `FfiTerminalCell::flags`.
+
+`mod terminal_mods` is the `mods` bitset of `terminal_mouse` and `terminal_scroll`: `SHIFT` `1 << 0`, `CTRL` `1 << 1`, `ALT` `1 << 2`.
 
 `mod command_kind` mirrors `wolf_core::Command` and is contiguous from 0.
 

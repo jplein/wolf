@@ -400,6 +400,12 @@ That the harness's state-dir funnel keeps a real-nvim test off the user's Wolf s
 
 **Gotchas** — drive the handle method, not `:WolfTerminal`; the Ex command only enqueues an `FfiCommand` and there is no front-end dispatcher here to call the method back. Drawer buffers are identified by the `term://` prefix on buffer-picker rows, and because nothing drains layout intents they accumulate, so the test polls `drain_intents()` for the kind it wants.
 
+#### `terminal_bridge.rs`
+
+**Covers** — the [terminal-session surface](../src/README.md#terminal-sessions): opening into a window or a split, re-binding, `FfiWinBuffer::terminal`, every packed colour, flag, underline, width and cursor-style discriminant, text, keys, paste, focus, drag selection, wheel scrollback, resize, close, and the empty answers of a shut-down handle. Real nvim plus a real `/bin/sh` in a pty; target `//crates/wolf-ffi:terminal_bridge` (staged nvim runfiles or `WOLF_NVIM_BIN`, `tags = ["no-sandbox"]`).
+
+**Gotchas** — an interactive `/bin/sh` echoes what it is typed, so a test looks for the result of an expression the typed text does not contain. The byte-level tests run `cat -v` under `stty raw -echo` behind a ready marker and read only the rows after it.
+
 #### `theme.rs`
 
 **Covers** — `theme_titlebar_bg()` / `theme_titlebar_fg()` and the frame's pre-resolved `cursor_fill()` / `cursor_glyph()`, across defining and then clearing the `WolfTitlebar` and `WolfCursor` highlight groups. Real nvim; target `//crates/wolf-ffi:theme` (staged nvim runfiles or `WOLF_NVIM_BIN`, `tags = ["no-sandbox"]`).

@@ -14,6 +14,8 @@ The macOS worker has no GUI session and no screen, so XCUITest, which needs a UI
 
 **Do not drop the target's `CFProcessPath` env.** rules_swift places the test binary at `WolfMacOSTests.xctest/Contents/MacOS/`, where AppKit treats it as a bundled app and aborts, with no message, when it cannot check in with LaunchServices, which Seatbelt denies. A flat process path needs no check-in.
 
+The target stages Neovim, `//bazel/nvim:nvim_tree` and `//runtime/nvim:init.lua` wired as `WOLF_TEST_NVIM_DIR` and `WOLF_TEST_INIT_LUA`, and carries `tags = ["no-sandbox"]`, because a test that starts a core spawns a child Neovim, which the macOS build sandbox does not allow. [`LiveCore.swift`](#livecoreswift) fences the state and config directories before any core or config read.
+
 Captures are taken in Aqua at the host's backing scale, and the accent resolves through the window's appearance, so a test compares against `controlAccentColor` resolved at run time, never a literal. Only the worker's path, at backing scale 1 with a blue accent, gates; a desktop Mac with Retina, dark mode or another accent is untested.
 
 ## Files
@@ -36,6 +38,41 @@ Purpose: The reusable mechanism for view tests: host a view, render it, sample w
 - The window is never key, so a table never emphasizes its selection by itself; `setRowsEmphasized(_:)` sets `isEmphasized` on the row views, as first responder would.
 - `NSApplication.shared` is touched before the window is built, since it sets up AppKit's drawing.
 - The pixel scale is read from the bitmap, never assumed, because a Retina host captures at 2.
+- A pixel is `colorAt`'s components re-tagged in the bitmap's own sRGB `colorSpace`, then converted to sRGB. `colorAt` tags them by the bitmap's `colorSpaceName`, which is calibrated (Generic) RGB for this capture, and converting that shifts saturated and dark colours by up to about 0.12.
+
+#### `LiveCore.swift`
+
+Purpose: Starts a real core over the staged Neovim for the view tests that need one. It asserts nothing, though it fails the calling test when the core cannot start.
+
+**Public API**
+
+- `LiveCore.start()` — a core at 80 × 24 in a fresh working directory, attached, with `metrics` measured from the loaded config; `nil` with the test failed otherwise.
+- `openTerminal(_:)` — a session in Neovim's current window, as the bridge's `open_terminal` runs a command.
+- `waitFor(timeout:_:)` — spins the main run loop, so wakes reach the main queue while the test waits.
+- `shutdown()` — for the end of every test.
+
+**Decisions**
+
+- The environment is prepared once per process, before any core or config read: `WOLF_NVIM_BIN` from the staged tree, and fresh `WOLF_STATE_DIR` and `WOLF_CONFIG_DIR`, so no test touches the user's state or preferences. Once, because `setenv` races a concurrent `getenv`.
+- A staged tree that does not resolve fails the test, naming the variable, rather than skipping: this target always stages Neovim.
+
+#### `TerminalPaneRenderTests.swift`
+
+Purpose: Renders a `PaneContainerView` whose current window shows a real `/bin/sh` session, over [`LiveCore`](#livecoreswift), and checks what its `TerminalPaneView` drew.
+
+**Covers**
+
+- A crimson background and bold blue text the program prints, in the cells it printed them.
+- The session sized from the pane's content area, matching the placeholder grid and off the starting 80 × 24.
+- The cursor cell in the cursor colour, or the default foreground when none is set.
+- A drag selection painting swapped colours.
+- A pane whose shell exited losing its terminal view while the pane stays.
+
+**Gotchas**
+
+- Background checks sample cell interiors, inset 1 point so no pixel straddles a neighbour. Glyph checks count blue pixels within 0.4, since antialiasing blends a glyph's edges.
+- The selected cells have an unset foreground, so swapped they fill with the default foreground, not blue.
+- The cursor test sets a steady block, which fills the whole cell.
 
 #### `FileTreeViewTests.swift`
 

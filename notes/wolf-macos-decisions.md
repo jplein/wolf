@@ -43,7 +43,7 @@ Swift sends a structured `FfiKeyEvent`; `wolf-core` owns nvim notation. Do not a
 
 ## Threading
 
-`wolf-core` runs tokio on its own threads and fires a wake on `flush`. The wake is the registered `extern "C"` callback (see [`wolf-ffi`](../crates/wolf-ffi/README.md)); `WakeBridge` hops it onto the AppKit main thread and calls `setNeedsDisplay`, which triggers a `draw(_:)` that reads the current frame.
+`wolf-core` runs tokio on its own threads and fires a wake on `flush` and on each terminal session's frame publish. The wake is the registered `extern "C"` callback (see [`wolf-ffi`](../crates/wolf-ffi/README.md)); `WakeBridge` hops it onto the AppKit main thread and hands it to the token's project, whose current view runs `onRenderWake` and repaints.
 
 `WolfCoreHandle` is not `Send` and is used only on the main thread. Frame-stats state is main-thread-only too, enforced by a debug-only `dispatchPrecondition`.
 
@@ -101,6 +101,20 @@ Navigations are counted, not flagged. Two can straddle one page load, because th
 
 Recovery is one step and self-limiting. A failed in-place update clears that window's live-document descriptor and re-arms the reload gate, so the next pass takes the full path: at most one extra load, no loop, and normal service resumes as soon as one commits.
 
+## Terminal panes
+
+[Terminal panes](../specs/terminal-panes.md) owns the contract. These are the macOS choices behind it, in `PaneContainerView` and the seams it calls.
+
+A terminal pane's content is painted by its own [`TerminalPaneView`](../crates/wolf-macos/Sources/WolfMacOS/README.md#terminalpaneviewswift) subview, for the reason that entry gives, while the container still paints its statusbar and scrollbar and never reads its placeholder grid.
+
+Input methods reach a terminal pane through `NSTextInputClient`, and only a terminal pane: Neovim panes keep `KeyComposer` unchanged. A key goes through `interpretKeyEvents` unless it is a Ctrl, Cmd or option-as-alt chord or a named key, and a commit of one printable ASCII character is sent as a key, so core's `<C-w>` router still sees it. The rules are [`TerminalInputSeam`](../crates/wolf-macos/Sources/WolfKeyMap/README.md#terminalinputseamswift)'s.
+
+Only the project's current view sizes a session, checked as `active_tabpage()` against the view's own tabpage, and within it [`TerminalGeometry.sizer`](../crates/wolf-macos/Sources/WolfKeyMap/README.md#terminalgeometryswift) picks the active pane, then the last sizer. Together they make the spec's most recently focused pane the sizer; without the view check, a background view would fight the current one.
+
+The size takes `fullWidth(forWin:)` rather than `fullWidth(forGrid:)`, because the pane's grid may still be pending. A size is resent when it or the frame's size differs from what was sent, but an exited session applies no resize, so its frame size is never compared.
+
+A session holds focus while its pane is the active pane of the key window, and `syncTerminalFocus` reports the loss before the gain. It runs on every active-pane change, every wake and both key-window edges, and app deactivation resigns the key window. The loss matters beyond mode 1004: core rescans the project on it, so a restart reports it too.
+
 ## Present limitations
 
 - Only windows opened via the overridden split commands (`<C-w>s`/`v`, `:split`/`:vsplit`) become panes. Help, quickfix, preview, and `:diffsplit` windows do not, and floating or external windows are ignored.
@@ -108,6 +122,7 @@ Recovery is one step and self-limiting. A failed in-place update clears that win
 - The grid is capped at a hard-coded 90 columns and centered in a wider pane, with the margins painted in the grid's own background. Making the cap configurable is a possible enhancement.
 - Scrollbar thumbs are non-interactive; thumb-drag is deferred.
 - Markdown preview ships one theme. Cursor-follow anchors to the containing block's top inside a fenced code block, an HTML block or a table, and inside a paragraph hard-wrapped across several short source lines; an image's alt text collapses to a single anchor just after the image. The marker rules are in [the preview position-marker contract](wolf-core-decisions.md).
+- In a terminal pane, the cursor and blinking text draw steady, and double, dotted and dashed underlines draw as the single straight line.
 - Appearance flows one way only: colorscheme to app chrome works, OS theme to Neovim theming does not.
 - A Neovim crash restart reopens each view's open files into one pane, so its splits collapse, and the next commit records that. Restoring the pane topology across a restart would change the restart model.
 - Only what a pane shows persists: `state.json` carries buffer paths only as layout leaves, so a file the user switched away from in its pane is not reopened at launch.

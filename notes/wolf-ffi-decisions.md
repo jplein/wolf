@@ -1,6 +1,6 @@
 # wolf-ffi decisions
 
-Last verified at commit `f7a53aff023b83e348f874e99fa44efeb33502db`.
+Last verified at commit `eb604cf73c783fdc4a72469a0e0de1022c8a5d34`.
 
 The durable constraints behind the Rust-to-Swift bridge. Read this before changing anything here — most of the surface is an ABI contract, so a change that compiles can still break a consumer silently. Per-file detail lives in [`src/README.md`](../crates/wolf-ffi/src/README.md).
 
@@ -24,18 +24,18 @@ The wake fires on a tokio worker thread and must not touch the `!Send` handle, w
 
 There are four, each independently registered:
 
-| Registration                   | Fires for                |
-| ------------------------------ | ------------------------ |
-| `wolf_ffi_set_wake`            | The editor render stream |
-| `wolf_ffi_set_filesearch_wake` | File-picker traversal    |
-| `wolf_ffi_set_tree_wake`       | File-tree traversal      |
-| `wolf_ffi_set_search_wake`     | Content-search results   |
+| Registration                   | Fires for                                             |
+| ------------------------------ | ----------------------------------------------------- |
+| `wolf_ffi_set_wake`            | The editor render stream and terminal frame publishes |
+| `wolf_ffi_set_filesearch_wake` | File-picker traversal                                 |
+| `wolf_ffi_set_tree_wake`       | File-tree traversal                                   |
+| `wolf_ffi_set_search_wake`     | Content-search results                                |
 
 This distinction governs regeneration. An additive `WolfCoreHandle` method rides an existing wake and its regen touches only `wolf-ffi.swift` and `wolf-ffi.h`, leaving `wolf_ffi_wake.h` byte-identical. Only a genuinely new streaming channel adds a registration, and that is the change worth scrutiny — it means a new callback the front-end must register and a new thread-safety question to answer.
 
 ## Discriminant tables are append-only
 
-The `u8` discriminant modules in `src/lib.rs` (`command_kind`, `palette_row_kind`, `liveness`, the mouse, scroll, split, and focus enums) are the ABI. Swift decodes raw integers, so renumbering an existing value silently changes behavior on the other side of the boundary rather than failing to compile.
+The `u8` discriminant modules in `src/lib.rs` (`command_kind`, `palette_row_kind`, `liveness`, the mouse, scroll, split, and focus enums, the `terminal_*` enums and bitsets) are the ABI. Swift decodes raw integers, so renumbering an existing value silently changes behavior on the other side of the boundary rather than failing to compile.
 
 Append at the end, never renumber or reuse. `command_kind` is contiguous from `0` and its upper bound is pinned by the `//crates/wolf-ffi:commands` test, which is what turns a renumbering into a test failure.
 

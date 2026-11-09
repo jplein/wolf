@@ -252,6 +252,19 @@ Purpose: Process-global glue around the pure `WolfKeyMap.FrameStats` seam: the o
 
 - Measure an optimized release build, from a terminal: debug numbers are meaningless, and a double-clicked bundle inherits launchd's stderr. Recipe in `build.md`.
 
+#### `GlyphPainter.swift`
+
+Purpose: Draws one cell's glyph and its underline and strikethrough with CoreText into a flipped context, for both the Neovim grid and terminal panes.
+
+**Public API**
+
+- `drawGlyph(_:text:x:y:fg:style:)` — at the cell geometry of `metrics`.
+- `plainStyle` — the style of the glyph redrawn under a block cursor, so a bold face cannot overflow the cell.
+
+**Decisions**
+
+- Decorations are stroked by hand in `style`'s colours: `CTLineDraw` draws them only in the foreground colour and has no wavy underline.
+
 #### `KeyComposer.swift`
 
 Purpose: The macOS dead-key and Option-character composition glue for option-as-option mode — a wrapper over Carbon's `UCKeyTranslate` that threads a persisted dead-key state across keystrokes, so Option-u then u composes to "ü" while a plain key with nothing pending composes to itself.
@@ -320,13 +333,13 @@ Purpose: The crash/stall overlay — a full-bleed opaque cover over a broken edi
 
 #### `PaneContainerView.swift`
 
-Purpose: The editor area: one flipped `NSView` that paints every pane, owns `PaneTree`, hosts preview web views and is first responder.
+Purpose: The editor area: one flipped `NSView` that paints every pane, owns `PaneTree`, hosts preview and terminal views and is first responder.
 
 **Public API**
 
 - `markRefocusRebind()` arms a grid rebind after a tabpage switch, and `rebind(tabpageHandle:)` after a crash-restart.
-- `paneLayout`, `leafContents()`, `restoreFailed` — `SessionSeam`'s inputs, leaves read by window: `pane_status_for_grid` misreads a background view.
-- `requestLayoutRebuild(_:node:)` — Rust renders `node`.
+- `paneLayout`, `leafContents()`, `restoreFailed` — `SessionSeam`'s inputs, leaves read by window.
+- `activeTerminal`, `activeTerminalSelection` — `nil` off a terminal pane.
 - `activeWin` — per-view, unlike the tabpage-shared `WolfCoreHandle.active_win()`, which would let a background tab enable Copy.
 - `activePreviewSourcePath` — `nil` in edit mode.
 - `otherPaneTarget(prefer:)` — `OtherPaneSeam.target` for `preview_in_other` / `edit_in_other`: `0` splits, `nil` is a no-op.
@@ -338,8 +351,8 @@ Purpose: The editor area: one flipped `NSView` that paints every pane, owns `Pan
 - Grids are skipped only under an opaque, loaded preview web view; the flag survives reloads, since WebKit shows the outgoing document.
 - Scroll direction is `scrollingDeltaY`'s sign, already natural-scroll aware; `isDirectionInvertedFromDevice` double-corrects.
 - The terminal drawer lives in the pane map, outside `tree`, so leaves, neighbours and splits exclude it.
-- A restart drops every pane and all preview state: a fresh Neovim reuses window handles from 1000, so a kept binding shows a frozen grid, nothing, or a later window. The next wake's `ensureInitialPane` binds the fresh one, as wolf-gnome does.
-- Undercurl is hand-stroked in `drawDecorations`: CoreText has no wavy underline.
+- A restart drops every pane, preview and terminal view: a fresh Neovim reuses window handles from 1000, so a kept binding shows the wrong window. The next wake's `ensureInitialPane` binds the fresh one.
+- A terminal pane's input goes to its session, never Neovim, and `NSTextInputClient` serves terminal panes only; see [Terminal panes](../../../../notes/wolf-macos-decisions.md#terminal-panes).
 
 #### `PickerChrome.swift`
 
@@ -604,6 +617,26 @@ Purpose: Best-effort KVO on one window's native tab group — its `windows` and 
 
 - Deliberately best-effort. The consumer is expected to coalesce, both to absorb the resulting KVO burst and to backstop the transitions KVO misses.
 
+#### `TerminalPaneView.swift`
+
+Purpose: A subview of `PaneContainerView` over one terminal pane's content area, painting its session's frame with CoreText.
+
+**Public API**
+
+- `update(_:scale:)` — stores a frame and invalidates only the rows [`TerminalDamage`](../WolfKeyMap/README.md#terminaldamageswift) picks, so an unchanged frame invalidates nothing.
+- `applyMetrics(_:)` — repaints every row.
+- `markedText` — the input method's uncommitted text, painted underlined at the cursor in its place. `cursorRect` is the cursor cell, for the candidate window.
+
+**Decisions**
+
+- It is a subview rather than painted by the container because every wake dirties the whole container, and a terminal publish shares the wake without bumping `Snapshot.seq`, so the container cannot tell a terminal-only wake apart. The subview keeps its unchanged rows and repaints only damaged ones.
+- `hitTest(_:)` returns `nil`, so every event reaches the container, which routes it to the session.
+- A row fills every cell's background before any glyph, so a spacer's background cannot overpaint the right half of a wide glyph.
+
+**Gotchas**
+
+- A frame larger than the view is clipped and a smaller one padded with the default background, which is the spec's "clipped or padded" while a resize is in flight.
+
 #### `ToastView.swift`
 
 Purpose: The `ext_messages` message toast — an overlay view that `PaneContainerView` pins bottom-left of the editor area and paints the current message's styled chunks into. Content taller than `maxVisibleLines` scrolls in place.
@@ -683,16 +716,17 @@ Purpose: One view — a single tab's whole UI stack, bound to a `(project, tabpa
 
 **Public API**
 
-- `build() -> Bool` — returns `false`, building nothing, when the tabpage bind is invalid, so the coordinator drops the view.
-- `hasFolder` — false in the empty state, gating the sidebar and file tree so an empty-state window never scans `home`.
-- `persistedCwd` — the tabpage-local cwd, correct even when this view is not current, unlike `currentCwd`.
+- `build() -> Bool` — `false`, building nothing, for an invalid tabpage bind; the coordinator then drops the view.
+- `hasFolder` — false in the empty state, so an empty-state window's sidebar never scans `home`.
+- `persistedCwd` — the tabpage-local cwd, right even for a background view, unlike `currentCwd`.
 - `persistedTab()` — this view's [`SessionSeam`](../WolfKeyMap/README.md#sessionseamswift) contribution, seeded from the restored tab.
-- `canCopy` — whether Edit > Copy has anything to copy, as `copy()` decides it.
+- `canCopy` — whether Copy has anything to copy, as `copy()` decides it. Copy and Paste in a terminal pane use its session.
 - `drainAndDispatchCommands()` — apart from `onRenderWake()`, so the project drains in every state ([why](../WolfKeyMap/README.md#livenessseamswift)).
 
 **Decisions**
 
 - `project` is held strong, and views weakly, as [`Project.swift`](#projectswift) explains.
-- `teardown()` takes its close commit before setting `isTornDown`, which the burst's read skips: taken after, a last close would commit nothing and a tab group lose its first tab. It is idempotent and defers `removeController` one turn, capturing `self` strongly: during `windowWillClose` the coordinator's collection is the last strong reference, so a synchronous drop frees the `NSWindow` mid-close.
-- `window.historyNav = self` is wired explicitly: this is not an `NSWindowController`, so a `target: nil` toolbar action never reaches it.
-- The file tree starts last in `build()`, after the sidebar's collapse state seeds its refresh gate, so a restored collapsed sidebar defers its outline work.
+- `teardown()` takes its close commit before setting `isTornDown`, which the burst's read skips: taken after, a last close would commit nothing. It is idempotent and defers `removeController` one turn, capturing `self` strongly: during `windowWillClose` the coordinator holds the last strong reference, so a synchronous drop frees the `NSWindow` mid-close.
+- `window.historyNav = self` is explicit: this is not an `NSWindowController`, so a `target: nil` toolbar action never reaches it.
+- The file tree starts last in `build()`, after the sidebar's collapse state seeds its refresh gate, so a restored collapsed sidebar defers outline work.
+- Both key edges sync terminal focus, `windowDidBecomeKey` before its already-current guard.
