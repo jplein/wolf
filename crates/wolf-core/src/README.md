@@ -70,7 +70,7 @@ The `nvim-rs` handler: folds each `redraw` batch into `Snapshot` and routes the 
 
 **Decisions**
 
-- Only `flush` bumps `seq`; out-of-band notifications wake without bumping it, so a repaint gated on `seq` alone misses them. `wolf_cwd`, `wolf_fs_changed` and `wolf_terminal_wiped` wake nothing — the first rides its `:cd`'s flush, and the others feed a registry whose sessions wake on their own.
+- Only `flush` bumps `seq`; out-of-band notifications wake without bumping it, so a repaint gated on `seq` alone misses them. `wolf_cwd` and `wolf_fs_changed` wake nothing — the first rides its `:cd`'s flush, the second feeds the `SearchRegistry`, whose sessions wake on a swap.
 - In `grid_line`, `repeat` counts columns including the first, so an explicit `0` is a zero-width no-op; clamping it to 1 paints past the span, a wrong-background cell Neovim's shadow grid never repaints. A double-width glyph's trailing half arrives as its own empty-text cell; synthesizing a placeholder shifts the row right.
 - `win_hide` removes the window entry but keeps its grid: Neovim reuses the grid id and may re-`win_pos` it unresized.
 - A resolved `confirm()` and an invalid-key re-prompt produce byte-identical `cmdline_hide` batches, so the toast is stashed with its prompt and restored only on a matching `cmdline_show`.

@@ -24,7 +24,7 @@ Everything wolf-core reaches is a global on `_G`. Channel ids and arguments are 
 
 wolf-core invokes these once after `ui_attach`, in the order listed by [`api.rs`](../../crates/wolf-core/src/api.rs): current-file, buffers, full-width, layout, dir, theme, commands, tabs, open-files, fs-events, view, preview, terminals. Each takes core's own RPC channel id, creates a `clear = true` augroup so re-invoking is idempotent, and emits once immediately so startup state is reflected without an event.
 
-None of the notifications below is a redraw frame, so none bumps the snapshot `seq`. Most wake the front-end; `wolf_cwd`, `wolf_fs_changed` and `wolf_terminal_wiped` do not — the first rides the redraw flush its `:cd` already produces, the second wakes only the file-search sessions whose rescan swaps, and the third only hangs a terminal session up. [`redraw.rs`](../../crates/wolf-core/src/redraw.rs) holds the decoding rules, including the defensive tolerance for a msgpack-`Ext`-wrapped handle where a plain integer is expected.
+None of the notifications below is a redraw frame, so none bumps the snapshot `seq`. Most wake the front-end; `wolf_cwd` and `wolf_fs_changed` do not — the first rides the redraw flush its `:cd` already produces, and the second wakes only the file-search sessions whose rescan swaps. [`redraw.rs`](../../crates/wolf-core/src/redraw.rs) holds the decoding rules, including the defensive tolerance for a msgpack-`Ext`-wrapped handle where a plain integer is expected.
 
 #### `wolf_setup_current_file_tracking(chan)`
 
