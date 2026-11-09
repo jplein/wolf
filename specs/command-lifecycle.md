@@ -89,7 +89,9 @@ The input channel is ordered, so an editor-affecting command never races pending
 
 An `apply` arm's RPC can wait on the user. Neovim answers a request only when its handler returns, and a prompt raised inside one holds it open: `:write` asks before overwriting a file that changed on disk, and `nvim_ui_set_focus` runs the `FocusGained` file check, whose W12 asks about a buffer changed on both sides. A request can also wait in Neovim's queue behind a half-typed chord such as `<C-w>`.
 
-So the input pump never lets an unanswered call hold back the keystroke that would release it. Typing that arrives meanwhile waits while the pump asks Neovim for its mode; an answer that comes back before the call's means Neovim is waiting for input, and the pump sends it the oldest waiting key, mouse or scroll event. State events keep their place behind the call, and typing keeps its order ([why](../notes/wolf-core-decisions.md#threading-and-locking)).
+So the input pump never lets an unanswered call hold back the keystroke that would release it. Typing that arrives meanwhile waits while the pump asks Neovim for its mode; an answer that comes back before the call's means Neovim is waiting for input, and the pump sends it the oldest waiting key, mouse or scroll event ([why](../notes/wolf-core-decisions.md#threading-and-locking)).
+
+Only those pass the call, one per answer and in their order. State events keep their place behind it, and so does a paste, since `nvim_paste` is not a fast call: a key sent past the call lands ahead of any paste sent before it, whether the paste is held or is the waiting call itself. In one narrow race a key also lands ahead of a call that is not waiting, when another writer holds the pipe as the call is sent ([`pump.rs`](../crates/wolf-core/src/README.md#pumprs)).
 
 The `apply` arm is either a plain Ex-command or a call into a `wolf_*` Lua helper, whose behavior is defined in [`runtime/nvim/README.md`](../runtime/nvim/README.md) rather than in Rust. Four worked chains span the range:
 

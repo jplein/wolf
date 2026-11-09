@@ -166,15 +166,17 @@ pub(crate) fn prompt_showing(snap: &Snapshot) -> bool {
     snap.toast.is_prompt() || (snap.cmdline.active && !snap.cmdline.prompt.is_empty())
 }
 
-/// The index in `queue` of the event a probe answer may release: the oldest typing event of
-/// `generation`, when it is a fast input. A held paste stops releases so typing keeps its order;
-/// typing of another generation is stale, and state events are never released.
+/// The index in `queue` of the event a probe answer may release: the oldest fast input of
+/// `generation`, past any state event or paste held ahead of it. Typing of another generation is
+/// stale and skipped, and state events are never released.
+///
+/// A paste is never released: its answer waits on the call, and as the release in flight it
+/// would hold back every key behind it. A paste never stops a release either: the key that ends
+/// Neovim's wait would then wait on the paste, which waits on the call.
 fn releasable(queue: &VecDeque<QueuedInput>, generation: u64) -> Option<usize> {
-    let (index, held) = queue
+    queue
         .iter()
-        .enumerate()
-        .find(|(_, q)| q.generation == generation && q.event.is_typing())?;
-    held.event.is_fast_input().then_some(index)
+        .position(|q| q.generation == generation && q.event.is_fast_input())
 }
 
 /// Awaits the task in `slot`, or never resolves when there is none. `tokio::select!` builds the
@@ -383,17 +385,20 @@ mod tests {
     }
 
     #[test]
-    fn a_held_paste_stops_releases() {
-        let q = queue(vec![
+    fn release_passes_a_held_paste() {
+        let paste = || {
             queued(
                 3,
                 InputEvent::Paste {
                     text: "pasted".to_string(),
                 },
-            ),
-            queued(3, key('y')),
-        ]);
-        assert_eq!(releasable(&q, 3), None);
+            )
+        };
+        assert_eq!(
+            releasable(&queue(vec![paste(), queued(3, key('y'))]), 3),
+            Some(1)
+        );
+        assert_eq!(releasable(&queue(vec![paste()]), 3), None);
     }
 
     #[test]

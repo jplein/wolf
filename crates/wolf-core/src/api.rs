@@ -116,10 +116,9 @@ pub struct WolfCore {
     commands: CommandQueue,
     /// Ordered input queue. Every input event is enqueued here and applied by a
     /// single consumer task, the input pump, in FIFO order, so keystrokes never
-    /// reorder (which would garble typed text). The one exception: typing may pass
-    /// a state event held behind a call that waits on input. Each event carries the
-    /// restart generation it was sent under, so the pump can drop typing that
-    /// predates a restart.
+    /// reorder (which would garble typed text). [`WolfCore::send_input`] gives the
+    /// exceptions to the order. Each event carries the restart generation it was
+    /// sent under, so the pump can drop typing that predates a restart.
     input_tx: UnboundedSender<QueuedInput>,
     /// The always-on GLOBAL recent-files MRU (`<state_dir>/file-mru.sqlite`).
     /// Constructed once at [`WolfCore::start`] from [`state_dir`] (or
@@ -404,11 +403,15 @@ impl WolfCore {
     ///
     /// The event is enqueued on the ordered input channel and applied by the
     /// single consumer task in FIFO order; errors are logged (the front-end gets
-    /// no synchronous result, matching the FFI-shaped contract). The exception to
-    /// the order: while a call waits on input, such as a Neovim prompt it raised,
-    /// a [`Key`](InputEvent::Key), [`Mouse`](InputEvent::Mouse) or
-    /// [`Scroll`](InputEvent::Scroll) may pass a state event held behind it, so
-    /// the key that answers the prompt reaches Neovim.
+    /// no synchronous result, matching the FFI-shaped contract).
+    ///
+    /// The exceptions to the order: while a call waits on input, such as a Neovim
+    /// prompt it raised, a [`Key`](InputEvent::Key), [`Mouse`](InputEvent::Mouse)
+    /// or [`Scroll`](InputEvent::Scroll) may pass the state events and pastes held
+    /// behind the call, so the key that answers the prompt reaches Neovim. When the
+    /// waiting call is itself a [`Paste`](InputEvent::Paste), the key lands before
+    /// it too. In a narrow race a released key also lands before a call that is not
+    /// waiting on input (crates/wolf-core/src/README.md#pumprs).
     ///
     /// The event is stamped with the current restart generation. Typing
     /// ([`Key`](InputEvent::Key), [`Paste`](InputEvent::Paste),

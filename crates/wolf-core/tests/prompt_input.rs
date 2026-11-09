@@ -46,6 +46,10 @@ const STEP_GAP: Duration = Duration::from_millis(100);
 /// flakes; never tighten it.
 const BUSY_STEP_GAP: Duration = Duration::from_millis(150);
 
+/// What [`refocus_w12_answered_load_past_a_held_paste`] pastes. It shares no word with
+/// [`CONFLICT_ORIGINAL`], [`CONFLICT_EDIT`] or [`CONFLICT_DISK`].
+const PASTE_TEXT: &str = "PASTED";
+
 /// How long [`typing_behind_a_busy_call_waits_for_it`] keeps Neovim's main loop busy. It must
 /// outlast both [`BUSY_STEP_GAP`]s, so the open and the typing arrive while Neovim sleeps.
 const BUSY_SLEEP_MS: u64 = 800;
@@ -263,6 +267,49 @@ fn refocus_w12_answered_ok_keeps_the_edit() {
     core.shutdown().expect("shutdown should be Ok");
 }
 
+/// `L` to W12, sent right behind a paste, passes the paste held behind `nvim_ui_set_focus` and
+/// reaches Neovim, which reloads the file; the paste then applies to the reloaded line.
+///
+/// `nvim_paste` is not a fast call, so Neovim cannot apply the paste before the key that ends
+/// W12's wait. A pump that holds `L` behind the paste deadlocks here.
+#[test]
+fn refocus_w12_answered_load_past_a_held_paste() {
+    let c = common::start_core_with_disk_conflict();
+    refocus_and_wait_for_w12(&c);
+
+    c.core.paste(PASTE_TEXT.to_string());
+    c.core.send_input(ch('L'));
+    let seen = poll_until(
+        &c.waiter,
+        "the prompt to close after a paste then `L`, and row 0 to show the pasted text; a \
+         timeout with W12 up means `L` waited behind the held paste, and one with W12 gone means \
+         the paste was lost",
+        || Seen::read(&c.core),
+        |seen| !seen.prompt_showing() && seen.row0.contains(PASTE_TEXT),
+    );
+
+    let probe = c.dir.path().join("probe.out");
+    let values = probe_values(&c.core, &["getline(1)"], &probe);
+    assert_eq!(
+        values[0].replacen(PASTE_TEXT, "", 1),
+        CONFLICT_DISK.trim_end(),
+        "line 1 less one paste must be the file's rewritten text: `{}` still there means `L` was \
+         taken as `O` or never reloaded, and any other difference means the paste did not land \
+         once in the reloaded line; got {:?} (last seen {seen:?})",
+        CONFLICT_EDIT,
+        values[0]
+    );
+    assert_eq!(
+        disk_text(&c.file),
+        CONFLICT_DISK,
+        "the file on disk must keep the outside rewrite; anything else means the buffer was \
+         written"
+    );
+
+    let DiskConflict { core, .. } = c;
+    core.shutdown().expect("shutdown should be Ok");
+}
+
 /// A call sent while Neovim waits on the rest of `<C-w>` stays queued in Neovim, and the `v` that
 /// completes the chord must reach Neovim anyway, which splits the window.
 #[test]
@@ -299,9 +346,9 @@ fn a_key_completes_a_chord_that_holds_a_call() {
 /// Typing sent while a call waits on a busy Neovim, not on input, lands after that call: the
 /// open of `b.txt` happens first, and the typing edits `b.txt`.
 ///
-/// An ordering guard, green with or without the fix: it fails if held typing is sent to Neovim
-/// before the probe says Neovim waits for input, because Neovim runs typeahead before queued
-/// requests and the typing would land in `a.txt`.
+/// An ordering guard, green on a pump that never releases held typing: it fails if held typing
+/// is sent to Neovim before the probe says Neovim waits for input, because Neovim runs typeahead
+/// before queued requests and the typing would land in `a.txt`.
 #[test]
 fn typing_behind_a_busy_call_waits_for_it() {
     let dir = tempfile::tempdir().expect("failed to create temp dir");
