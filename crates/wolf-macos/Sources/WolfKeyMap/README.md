@@ -291,22 +291,24 @@ Purpose: Pure key translation for the macOS front end — the fields an `NSView.
 
 #### `LivenessSeam.swift`
 
-Purpose: The crash/stall recovery rulebook: what a wake does given the captive Neovim's liveness and the automatic restart count. A port of wolf-gnome's [`liveness_ui.rs`](../../../wolf-gnome/src/README.md#liveness_uirs); `Project.onWake` acts on it.
+Purpose: The crash/stall recovery rulebook: what a wake does by liveness and restart count, and the view restore after a restart. A port of wolf-gnome's [`liveness_ui.rs`](../../../wolf-gnome/src/README.md#liveness_uirs); `Project` acts on it.
 
 **Public API**
 
-- `NvimLiveness` — `UInt8`-backed, its raw values the discriminants of `wolf-ffi`'s `mod liveness`. An unknown discriminant decodes to `nil`, which `Project` reads as `.alive`.
-- `LivenessSeam.decision(liveness:autoRestartAttempts:) -> Decision` — `overlay` (`.hidden`, `.crashed(retrying:)`, `.stalled`), `autoRestart`, `render` and `persist` (both only for `.alive`), and `drain`.
+- `NvimLiveness` — its raw values are `wolf-ffi`'s `mod liveness` discriminants; an unknown one decodes to `nil`, read as `.alive`.
+- `decision(liveness:autoRestartAttempts:)` — `overlay` (`.hidden`, `.crashed(retrying:)`, `.stalled`), `autoRestart`, `render` and `persist` (both only for `.alive`), and `drain`.
 - `maxAutoRestartAttempts` — one automatic attempt per crash.
+- `restoreSteps(for:)` — each `CapturedView`'s `RestoreStep`s; an empty `cwd` or `activePath` means none.
 
 **Decisions**
 
-- The `switch` has no `default`, so a new liveness case fails to compile until it is classified.
-- `drain` is true in every state: it is the only route by which a close or quit queued just before a crash reaches the window. Reading the queue issues no RPC; some dispatched commands do.
-- Only `.alive` persists: a stalled or dead core's maps would write stale tabs.
-- `.notResponding` never auto-restarts: a restart force-kills Neovim and loses whatever is not in a swap file, so that is the user's call.
-- The cap only stops a retry loop against a respawn that keeps failing, and does not limit the user, because the button resets the count. `retrying` means an attempt is still permitted, not that one is running.
-- Unlike `liveness_ui`, the seam takes the count rather than a boolean, so the cap is decided and tested here, and it carries `drain`, which wolf-gnome runs outside its mapping.
+- The `switch` has no `default`, so a new liveness case fails to compile until classified.
+- `drain` is true in every state, the only route for a close or quit queued just before a crash to reach the window.
+- Only `.alive` persists: a stalled or dead core would write stale tabs.
+- `.notResponding` never auto-restarts: a restart loses whatever is not in a swap file, so that is the user's call.
+- The cap stops a retry loop against a failing respawn, never the user: the button resets the count. `retrying` means an attempt is permitted, not running.
+- Unlike `liveness_ui`, the seam takes the count, so the cap is tested here.
+- View 0 rebinds the fresh first tabpage, which starts in the launch directory, so it is re-rooted with `.chdir`: an empty-state window reached its folder only through one. Later views get a `.newTabpage` in their cwd. The active file opens last, to land focused.
 
 #### `OtherPaneSeam.swift`
 

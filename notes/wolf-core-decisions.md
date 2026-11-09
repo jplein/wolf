@@ -1,6 +1,6 @@
 # wolf-core decisions
 
-Last verified at commit `5d551e9f97056008be42b4125efdcdd881ef2356`.
+Last verified at commit `1abfb83b013b22dd42b5e13ae533b4f0346c99cd`.
 
 The durable constraints behind this crate. Read this before changing anything here. Per-file detail lives in [`src/README.md`](../crates/wolf-core/src/README.md).
 
@@ -51,7 +51,13 @@ Core keeps a lock-free `Arc<AtomicU8>` liveness cell (`Alive` / `NotResponding` 
 
 A supervisor task owns the io-loop join handle and marks the process `Dead` on stdout EOF, whether clean or a crash — unless the per-process `shutting_down` flag is set, so an intentional shutdown does not report a spurious crash.
 
-Stall detection lives at the `block_on_rpc` chokepoint. A timeout escalates `Alive → NotResponding` and a successful RPC clears it, both by `compare_exchange` so neither can downgrade `Dead`. A crashed core stays `Dead` until `restart_nvim`, which force-kills and reaps the dead child, respawns in the same working directory and config, and re-runs the full setup chain.
+Stall detection has two sites, `block_on_rpc` and the input pump. A call or a batch that outlasts the RPC budget escalates `Alive → NotResponding` and an answer clears it, both by `compare_exchange`, so neither can downgrade `Dead`. The pump keeps awaiting a stalled batch rather than dropping it ([why](../crates/wolf-core/src/README.md#apirs)). It marks and clears only while its batch's handle is still current, so a batch sent to a replaced Neovim cannot report on the fresh one.
+
+A crashed core stays `Dead` until `restart_nvim`, which force-kills and reaps the dead child, respawns in the same working directory and config, and re-runs the full setup chain.
+
+A restart starts the render state over. A fresh Neovim numbers its windows from 1000 and its tabpages from 1 again, so anything keyed by the dead process's handles would be read as the fresh one's: the snapshot is reset, and the layout intents and the navigation history are emptied. The commands queue is kept, because front-ends drain it in every liveness state. `kill_in_place` first waits for the killed process's supervisor, which resolves only once its io loop and handler loop are gone, so no notification from it lands after the reset.
+
+The snapshot reset carries four fields. `seq` never goes back, because flush waiters key on it advancing. `open_files`, `tab_cwds` and `current_tabpage` are what a front-end captures before restarting, and a failed respawn must leave them for the next attempt; the fresh Neovim replaces each one wholesale during setup.
 
 The front-end reads liveness on each wake to drive its crash and stall overlay.
 
@@ -62,6 +68,7 @@ The front-end reads liveness on each wake to drive its crash and stall overlay.
 - A flush can arrive with no input: Neovim's markdown ftplugin starts treesitter on every markdown buffer, and a parse that outlasts its budget finishes through `vim.schedule` and redraws later, so a test polls rather than reading once after a flush ([the shared harness](../crates/wolf-core/tests/README.md#the-shared-harness--commonmodrs)).
 - That write lock is acquired cooperatively (a `try_write` retry loop that yields to the scheduler), so a front-end holding a read guard cannot pin a worker thread.
 - `rebuild_layout` returns only once its windows are in the snapshot, and the barrier that guarantees it is an nvim→core request, `wolf_barrier`. nvim-rs answers an RPC response straight from its io loop but applies notifications in its handler loop, so a `wolf_buffers` emit sent before the response can still land after the caller wakes. The handler loop awaits each notification inline and spawns a request only after it, so the request's answer proves every earlier emit is applied. Folding the RPC's own copy of the list instead would overwrite a newer emit already applied.
+- nvim-rs runs those two loops under one `try_join`, so when the io loop fails at a dying Neovim's stdout EOF, the handler loop is dropped with every notification still queued. The last redraw batches and emits before a death may never land, and nothing may rely on them. The restart's reset covers everything they feed but the commands queue, so a `wolf_command` sent in Neovim's last moment can be lost.
 - Input is delivered through an ordered FIFO channel to a single consumer task, which fuses a run of consecutive `Key` events into one `nvim_input` call. This keeps keystrokes in order and makes a burst produce a single redraw flush.
 - Each `SearchRegistry` owns a `wolf-fs-watch` thread, which makes every `notify` watch and unwatch call. A recursive inotify watch walks the whole tree, so it never runs on a front-end's thread or under the registry's locks. notify's `watch` waits on the backend thread that runs the event callback, so the callback only forwards into the thread's channel and never blocks or locks.
 

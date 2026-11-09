@@ -1,6 +1,6 @@
 # macOS follow-ups
 
-Last verified at commit `f3b145d36e29d4db83d48d86e73e32b51ce6d434`.
+Last verified at commit `1abfb83b013b22dd42b5e13ae533b4f0346c99cd`.
 
 This file holds the cross-platform findings that the task which found them could not close: a divergence between the two front-ends, or a suspected defect on one platform found while working on the other.
 
@@ -8,13 +8,7 @@ New findings are rare. Every task runs `./gates.sh` on a macOS and a Linux worke
 
 ## Ledger
 
-### 2026-08-08: a restart keeps stale editor-pane window handles on macOS
-
-After a crash-restart, `PaneContainerView.rebind(tabpageHandle:)` drops only the terminal drawer, and every editor pane of a split keeps its pre-crash window handle. `resolvePendingGrids` binds an unbound pane to whatever grid `grid_for_win` returns for that handle. A fresh Neovim numbers its windows from 1000 again, so a later window, such as a new drawer or split, can bind into a stale editor pane.
-
-wolf-gnome's `reset_after_restart` resets to one fresh pane instead. The files involved are owned by the [`PaneContainerView.swift`](../crates/wolf-macos/Sources/WolfMacOS/README.md#panecontainerviewswift) and [`pane_view.rs`](../crates/wolf-gnome/src/README.md#pane_viewrs) entries.
-
-Found by reading, and not reproduced. It closes by reproducing it on a macOS host: a two-pane split, kill `nvim --embed`, restart, open the drawer. Then either fix macOS under the gate, or state the divergence as accepted in the `PaneContainerView.swift` entry.
+No finding is open.
 
 ## Adding and closing a finding
 

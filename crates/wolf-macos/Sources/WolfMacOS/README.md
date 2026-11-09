@@ -320,25 +320,26 @@ Purpose: The crash/stall overlay — a full-bleed opaque cover over a broken edi
 
 #### `PaneContainerView.swift`
 
-Purpose: The editor area: one flat, flipped `NSView` that paints every split pane, owns `PaneTree`, hosts preview web views and is first responder.
+Purpose: The editor area: one flipped `NSView` that paints every pane, owns `PaneTree`, hosts preview web views and is first responder.
 
 **Public API**
 
-- `markRefocusRebind()` arms a grid rebind after a tabpage switch; `rebind(tabpageHandle:)` does so after a crash-restart, dropping only the drawer.
-- `paneLayout`, `leafContents()`, `restoreFailed` — `SessionSeam`'s inputs. Leaves are read by window, as `pane_status_for_grid` misreads a background view.
+- `markRefocusRebind()` arms a grid rebind after a tabpage switch, and `rebind(tabpageHandle:)` after a crash-restart.
+- `paneLayout`, `leafContents()`, `restoreFailed` — `SessionSeam`'s inputs, leaves read by window: `pane_status_for_grid` misreads a background view.
 - `requestLayoutRebuild(_:node:)` — Rust renders `node`.
-- `activeWin` — per-view, behind `activePaneSelection` and `activePreviewSourcePath`, because the tabpage-shared `WolfCoreHandle.active_win()` would let a background tab enable Copy.
+- `activeWin` — per-view, unlike the tabpage-shared `WolfCoreHandle.active_win()`, which would let a background tab enable Copy.
 - `activePreviewSourcePath` — `nil` in edit mode.
-- `otherPaneTarget(prefer:)` — `OtherPaneSeam.target` as the window for `preview_in_other` / `edit_in_other`: `0` splits, `nil` is a no-op.
+- `otherPaneTarget(prefer:)` — `OtherPaneSeam.target` for `preview_in_other` / `edit_in_other`: `0` splits, `nil` is a no-op.
 
 **Decisions**
 
-- The refocus rebind waits until `handle.active_tabpage()` is this view's tabpage and skips close detection that pass: the vacated tabpage's grids would prune live panes.
-- One `geometry(_:fullWidth:)` call sets web-view frame, occlusion test and statusbar span before `needsDisplay`, so no frame paints preview alignment without a web view.
-- Grids are skipped only under an opaque, loaded preview web view; the flag survives reloads, as WebKit keeps showing the outgoing document.
+- The refocus rebind waits until `handle.active_tabpage()` is this view's and skips close detection that pass: the vacated tabpage's grids would prune live panes.
+- One `geometry(_:fullWidth:)` call sets web-view frame, occlusion and statusbar span before `needsDisplay`, so no frame paints preview alignment without a web view.
+- Grids are skipped only under an opaque, loaded preview web view; the flag survives reloads, since WebKit shows the outgoing document.
 - Scroll direction is `scrollingDeltaY`'s sign, already natural-scroll aware; `isDirectionInvertedFromDevice` double-corrects.
-- The terminal drawer lives in the pane map, outside `tree`, so leaves, neighbours and splits exclude it. A restart drops it: a killed Neovim's grid stays in the snapshot, so close detection never fires and a kept id blocks reopening.
-- Undercurl's wave is hand-stroked in `drawDecorations`: CoreText has no wavy underline.
+- The terminal drawer lives in the pane map, outside `tree`, so leaves, neighbours and splits exclude it.
+- A restart drops every pane and all preview state: a fresh Neovim reuses window handles from 1000, so a kept binding shows a frozen grid, nothing, or a later window. The next wake's `ensureInitialPane` binds the fresh one, as wolf-gnome does.
+- Undercurl is hand-stroked in `drawDecorations`: CoreText has no wavy underline.
 
 #### `PickerChrome.swift`
 
@@ -507,17 +508,17 @@ Purpose: One captive Neovim shared by N views, each bound to one nvim tabpage. O
 
 **Public API**
 
-- `start(launchCwd:coordinator:)` — the sole caller of `wolf_ffi_start`, `nil` on failure. Points core at the bundled `nvim` and `rg` with `overwrite=0`, so a developer's `WOLF_NVIM_BIN` / `WOLF_RG_BIN` export wins.
-- `restartNeovim()` — the "Restart Neovim" button's entry; it resets the attempt count.
+- `start(launchCwd:coordinator:)` — the sole caller of `wolf_ffi_start`, `nil` on failure. Sets the bundled `nvim` and `rg` with `overwrite=0`, so a developer's export wins.
+- `restartNeovim()` — the "Restart Neovim" button's entry, resetting the attempt count.
 
 **Decisions**
 
-- Views are held weakly and each holds its project strongly, so the core outlives one view's teardown while a sibling binds it; the last view's `detach` is the only core-shutdown path.
-- Render and picker wakes go only to `currentView`; tree and content-search wakes fan out to every view, since the token names no view and each refresh is version-gated.
+- Views are held weakly and hold their project strongly, so the core outlives one view's teardown; the last view's `detach` is the only core-shutdown path.
+- Render and picker wakes go only to `currentView`; tree and content-search wakes fan out to every view, since the token names no view and refreshes are version-gated.
 - `onWake` acts on [`LivenessSeam`](../WolfKeyMap/README.md#livenessseamswift)'s decision, committing on `persist`, and drains commands last, since a drained close can shut the core down.
 - An automatic restart waits `autoRestartDelay` on `asyncAfter`: `handle.restart()` blocks the main thread, and only a pending timer guarantees the overlay paints first.
 - Attempts count when scheduled and reset on `Alive`, a successful respawn or the button, so a press against a failing respawn can cost two respawns ([why](../../../../notes/crates/wolf-gnome/src/shell.rs.md#one-press-two-respawns)).
-- The respawn captures files and cwds before `handle.restart()` wipes the mirror. On `false` it applies only a fresh decision's overlay: scheduling there would bypass the cap.
+- The respawn captures files and cwds before `handle.restart()` replaces the mirror, then runs each view's [`restoreSteps`](../WolfKeyMap/README.md#livenessseamswift); a view whose tabpage fails skips the rest. On `false` it applies only a fresh decision's overlay: scheduling there would bypass the cap.
 - `closeTabpage` skips the last view: closing nvim's last tabpage fails with E784, and that view's `detach` shuts the core down.
 
 #### `SearchView.swift`

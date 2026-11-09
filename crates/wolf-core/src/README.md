@@ -17,69 +17,71 @@ Crate root. Declares every module and flattens the public surface into root re-e
 **Public API**
 
 - `CoreConfig.cwd` is nvim's launch directory and the search/MRU root until nvim reports its own cwd (`live_cwd`).
-- `SnapshotReadGuard` owns an `Arc` clone of the snapshot lock, so it outlives the `&self` it came from. Hold it for one paint only.
-- The blocking queries (`list_buffers` and siblings) return an empty or zero fallback on any RPC error or timeout, indistinguishable from an empty answer. Everything else is fire-and-forget through the ordered input channel.
-- `restart_nvim` returns `Ok(false)` when no respawn happened (already `Alive` or in flight), and reopens nothing: capture `open_files_for_tabpage` before calling it. Typing (`Key`, `Paste`, `Mouse`, `Scroll`) sent before the swap never reaches the fresh nvim, so a half-typed Ex command cannot land as keys; state input still applies.
+- `SnapshotReadGuard` owns an `Arc` clone of the lock, so it outlives `&self`. Hold it for one paint only.
+- The blocking queries (`list_buffers` and siblings) return an empty or zero fallback on any RPC error or timeout, indistinguishable from an empty answer. The rest is fire-and-forget on the ordered input channel.
+- `restart_nvim` returns `Ok(false)` when no respawn happened (already `Alive` or in flight) and reopens nothing: capture `open_files_for_tabpage` first. After `Ok(true)` the snapshot, intents and history start over ([what carries](../../../notes/wolf-core-decisions.md#liveness-and-restart)). Typing sent before the swap never reaches the fresh nvim, so no half-typed Ex command lands as keys; state input still applies.
 - `recent_dirs` omits non-directories (a stat each, on the calling thread) and never prunes the store, so a returning folder reappears.
 
 **Decisions**
 
-- Interactive RPCs go through `block_on_rpc`, bounded by `WOLF_RPC_TIMEOUT_MS`. A timed-out task is detached, not aborted: dropping an `nvim-rs` response receiver mid-flight kills the io loop, which reads as a crash.
-- `WolfCore` is `!Send` and keeps the process in a `RefCell` so a restart can swap a fresh one in through `&self`. Bind each borrow to a local, never held across an `.await`.
+- `block_on_rpc` and the input pump detect stalls under `WOLF_RPC_TIMEOUT_MS`. A timed-out call is detached and a timed-out batch still awaited: dropping an `nvim-rs` response receiver mid-flight kills the io loop, which reads as a crash.
+- `WolfCore` is `!Send` and keeps the process in a `RefCell`, so a restart can swap one in through `&self`. Never hold a borrow across an `.await`.
 - Stale typing is cut by the generation `send_input` stamps, not liveness: input sent while `Alive` can still be queued at the swap.
 
 #### `nvim.rs`
 
-Spawns and supervises the captive Neovim child, and wraps every RPC core issues against it. The launch contract (binary discovery, hermetic isolation, swap files, stderr draining) and the supervisor's role in liveness are in [`wolf-core-decisions.md`](../../../notes/wolf-core-decisions.md).
+Spawns and supervises the captive Neovim child, and wraps every RPC core issues against it. The launch contract and the supervisor's role in liveness are in [`wolf-core-decisions.md`](../../../notes/wolf-core-decisions.md).
 
 **Public API**
 
-- `NvimConfig::from_env` resolves the binary and creates the private state root. The config carries an `Arc<TempDir>` guard, so those directories exist only while some clone of the config is alive.
+- `NvimConfig::from_env` resolves the binary and creates the private state root. Its `Arc<TempDir>` guard keeps those directories only while a clone of the config lives.
 - `NvimProcess::handle` yields a cloned RPC handle usable without borrowing the process; the browser-preview server re-renders through one.
-- The `setup_*` methods install the nvim-side wiring (autocmds, commands, helpers) behind every out-of-band `wolf_*` notification the redraw handler routes. A respawn has to re-run the whole chain; a fresh nvim emits nothing until it does.
+- The `setup_*` methods install the nvim-side wiring behind every out-of-band `wolf_*` notification. A respawn re-runs the whole chain; a fresh nvim emits nothing until it does.
 - `NvimError::Timeout` is never constructed here; it comes from `api`'s RPC chokepoint.
 
 **Decisions**
 
-- Every method reachable from that chokepoint returns `impl Future<..> + Send + 'static` (a cloned handle plus owned arguments) rather than `async fn(&self)`, because the timeout path spawns the future as a task and detaches it. Converting one back to `async fn(&self)` reintroduces a borrow the detached task cannot hold.
+- Every method reachable from that chokepoint returns `impl Future<..> + Send + 'static` (a cloned handle plus owned arguments) never `async fn(&self)`: the timeout path spawns the future as a task and detaches it, and a detached task cannot hold a borrow.
 - Channel ids, modes, and paths reach `nvim_exec_lua` as varargs, never interpolated into the code string.
 - `yank_visual_selection` checks the mode before yanking: a bare `y` outside visual mode leaves nvim in operator-pending and the call never returns.
-- `shutdown` and `kill_in_place` both set `shutting_down` before the process exits, so the supervisor reads the resulting stdout EOF as intentional rather than as a crash.
+- `shutdown` and `kill_in_place` both set `shutting_down` before the process exits, so the supervisor reads the stdout EOF as intentional rather than as a crash.
+- `kill_in_place` then waits, bounded, for the supervisor ([why](../../../notes/wolf-core-decisions.md#liveness-and-restart)). It skips the wait once the supervisor has finished: a failed respawn leaves the same process, and polling a completed `JoinHandle` again panics.
 
 #### `redraw.rs`
 
-The `nvim-rs` handler: folds each `redraw` batch into `Snapshot` and routes the out-of-band `wolf_*` notifications into its sibling cells, queues and the file-search registry. It answers one request, `wolf_barrier` ([why](../../../notes/wolf-core-decisions.md#threading-and-locking)).
+The `nvim-rs` handler: folds each `redraw` batch into `Snapshot` and routes the out-of-band `wolf_*` notifications into its sibling cells, queues and the search registry. It answers one request, `wolf_barrier` ([why](../../../notes/wolf-core-decisions.md#threading-and-locking)).
 
 **Decisions**
 
-- Only `flush` bumps `seq`; out-of-band notifications wake without bumping it, so gating repaint on `seq` alone misses them. `wolf_cwd` and `wolf_fs_changed` wake nothing — the first rides its `:cd`'s redraw flush, the second feeds the `SearchRegistry`, whose sessions wake on a swap.
-- In `grid_line`, `repeat` counts columns including the first, so an explicit `0` is a zero-width no-op; clamping it to 1 paints past the event's span, which Neovim's shadow grid never repaints, leaving a wrong-background cell. A double-width glyph's trailing half arrives as its own empty-text cell, so synthesizing a placeholder shifts the row right.
-- `win_hide` removes the window entry but keeps its grid: Neovim reuses that grid id and may re-`win_pos` without resizing first.
-- A resolved `confirm()` and an invalid-key re-prompt produce byte-identical `cmdline_hide` batches, so the toast is stashed with its prompt and restored only if a later `cmdline_show` matches.
-- The open-file mirror drops terminal buffers: a front-end replays it as `:edit` after a crash. Measured: Neovim re-runs `termopen()`, so each crash spawns another shell.
+- Only `flush` bumps `seq`; out-of-band notifications wake without bumping it, so a repaint gated on `seq` alone misses them. `wolf_cwd` and `wolf_fs_changed` wake nothing — the first rides its `:cd`'s flush, the second feeds the `SearchRegistry`, whose sessions wake on a swap.
+- In `grid_line`, `repeat` counts columns including the first, so an explicit `0` is a zero-width no-op; clamping it to 1 paints past the span, a wrong-background cell Neovim's shadow grid never repaints. A double-width glyph's trailing half arrives as its own empty-text cell; synthesizing a placeholder shifts the row right.
+- `win_hide` removes the window entry but keeps its grid: Neovim reuses the grid id and may re-`win_pos` it unresized.
+- A resolved `confirm()` and an invalid-key re-prompt produce byte-identical `cmdline_hide` batches, so the toast is stashed with its prompt and restored only on a matching `cmdline_show`.
+- The open-file mirror drops terminal buffers: a front-end replays it as `:edit` after a crash. Measured: Neovim re-runs `termopen()`, spawning another shell per crash.
 
 **Gotchas**
 
-- `RedrawHandler` is `Clone`; clones share one snapshot, queues and history cell, so a respawn keeps them.
-- Lock order: the nav-history fold takes the snapshot write lock then the nav mutex, with no `.await` between; `WolfCore` takes the nav mutex alone. Reversing either cycles.
+- `RedrawHandler` is `Clone`; a respawn's clone shares the snapshot, queues and history, which the restart starts over but for the commands queue ([why](../../../notes/wolf-core-decisions.md#liveness-and-restart)).
+- Lock order: the nav-history fold takes the snapshot write lock then the nav mutex, with no `.await` between; `WolfCore` takes the nav mutex alone. Reversing one cycles.
 
 #### `render.rs`
 
-The toolkit-agnostic render-state model: `Snapshot` is a complete paint-ready frame, and `SharedSnapshot` is the one lock guarding it. Nothing here draws pixels. The locking model is in [`wolf-core-decisions.md`](../../../notes/wolf-core-decisions.md).
+The toolkit-agnostic render-state model: `Snapshot` is a complete paint-ready frame, and `SharedSnapshot` is the one lock guarding it. The locking model is in [`wolf-core-decisions.md`](../../../notes/wolf-core-decisions.md).
 
 **Public API**
 
 - A `Cell` with empty `text` is either never-painted or the trailing half of a double-width glyph; `Grid::row_text` renders both as one space to keep columns aligned.
 - `active_grid` falls back to a shared empty `0x0` grid, so a caller never dereferences a missing grid.
 - `Toast::is_prompt` is the dismiss-on-input gate: a `confirm` toast must survive a passing keystroke.
-- `Snapshot.markdown_cursors` is keyed by source buffer number, like `markdown_ticks` and `PreviewInfo.source_bufnr`, so a consumer joins all three on one key. `MarkdownCursor.line` is 1-based, `col` a 0-based character column; an absent entry, or `line == 0`, means the cursor is unknown.
+- `Snapshot.markdown_cursors` is keyed by source buffer number, like `markdown_ticks` and `PreviewInfo.source_bufnr`. `MarkdownCursor.line` is 1-based and `col` a 0-based character column; an absent entry or `line == 0` means unknown.
 
 **Decisions**
 
-- `Grid::resize` preserves the overlapping region rather than clearing. Neovim's `grid_resize` is not a clear (there is a separate `grid_clear`) and it does not re-send `grid_line` for rows it considers unchanged, so a UI that cleared on resize blanks the surviving pane after a split or a close.
-- `WinInfo.hidden` is always `false`: a `win_hide` removes the window from `windows` outright rather than flagging it. The field exists to keep the FFI and Swift surface stable.
-- `ToastChunk` carries its `attr_id` across the FFI while `CmdlineChunk` is flattened to plain text, because message color is load-bearing (error red, warnings, list highlights).
-- `Snapshot::pending_confirm` is internal fold bookkeeping. It is never rendered and never crossed over the FFI.
+- `Grid::resize` preserves the overlap rather than clearing: Neovim's `grid_resize` is not a clear and re-sends no `grid_line` for rows it considers unchanged, so clearing blanks the surviving pane after a split or a close.
+- `WinInfo.hidden` is always `false`, kept only for FFI and Swift stability: a `win_hide` removes the window from `windows` outright.
+- `ToastChunk` carries its `attr_id` across the FFI while `CmdlineChunk` is flattened to plain text, because message color is load-bearing.
+- `Snapshot::pending_confirm` is internal fold bookkeeping, never rendered or crossed over the FFI.
+- `SharedSnapshot::reset_for_respawn` never blocks on the lock, since a caller may hold a read guard across a restart on the same thread: past `RESET_LOCK_WAIT` it leaves the reset pending, for the next `write` or `write_async` to apply first ([what it carries](../../../notes/wolf-core-decisions.md#liveness-and-restart)).
 
 #### `liveness.rs`
 
@@ -88,12 +90,12 @@ The captive nvim's liveness cell: a lock-free `Alive` / `NotResponding` / `Dead`
 **Public API**
 
 - The `Liveness` discriminants `0 / 1 / 2` are stable — `wolf-ffi` mirrors them as its own constants. `from_u8` clamps any unrecognized byte to `Dead`, so a garbled value can never read as `Alive`.
-- `get`, `mark_dead`, `mark_not_responding`, and `reset_alive` take `&AtomicU8` and `&WakeFn` directly rather than a wrapper type, so the cell can live in `WolfCore` and be shared with the supervisor by `Arc`.
+- `get`, `mark_dead`, `mark_not_responding`, `clear_not_responding`, and `reset_alive` take `&AtomicU8` and `&WakeFn` directly rather than a wrapper type, so the cell can live in `WolfCore` and be shared with the supervisor by `Arc`.
 
 **Decisions**
 
 - Each helper fires the wake only on an actual state change, so a repeated call is silent. `mark_not_responding` is a compare-exchange from `Alive` only, so a late stall signal cannot downgrade `Dead`.
-- `reset_alive` is an unconditional store and the only exit from `Dead`. The auto-clear of a transient `NotResponding` after a successful RPC is a separate compare-exchange at the `block_on_rpc` call site, precisely so it can never resurrect a dead process.
+- `reset_alive` is an unconditional store and the only exit from `Dead`. The auto-clear after an answered call or batch is `clear_not_responding`, a compare-exchange from `NotResponding` only, so a late answer from a dying process can never resurrect it.
 
 #### `logging.rs`
 

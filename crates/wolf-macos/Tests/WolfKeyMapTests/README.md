@@ -151,9 +151,9 @@ Note that the nearby `swift_format_srcs` glob feeds lint and format only, not te
 
 #### `LivenessSeamTests.swift`
 
-**Covers** — `LivenessSeam.decision(liveness:autoRestartAttempts:)`: the whole decision table at zero and one attempts; the cap, which refuses a second automatic attempt and switches the overlay to `crashed(retrying: false)`; the drain in every liveness state; that only a dead core with its attempt unspent auto-restarts; that only an alive core renders or persists, whatever the count; and that `NvimLiveness`'s raw values match `wolf-ffi`'s `mod liveness`.
+**Covers** — `LivenessSeam.decision(liveness:autoRestartAttempts:)`: the whole decision table at zero and one attempts; the cap, which refuses a second automatic attempt and switches the overlay to `crashed(retrying: false)`; the drain in every liveness state; that only a dead core with its attempt unspent auto-restarts; that only an alive core renders or persists, whatever the count; and that `NvimLiveness`'s raw values match `wolf-ffi`'s `mod liveness`. Also `LivenessSeam.restoreSteps(for:)`: view 0 binds the first tabpage and is re-rooted unless its cwd is empty, later views get a new tabpage and no chdir, and the active file opens last, once, even when the captured files lack it.
 
-**Gotchas** — the cases list the liveness states by hand, so a new `NvimLiveness` case must be added here deliberately. The deferral before the automatic respawn and the overlay painting ahead of it are not observable headlessly; they, and the rest of the `Project.onWake` glue, are manual-smoke.
+**Gotchas** — the cases list the liveness states by hand, so a new `NvimLiveness` case must be added here deliberately. The deferral before the automatic respawn and the overlay painting ahead of it are not observable headlessly; they, the rest of the `Project.onWake` glue, and `Project.respawnNeovim` running the restore steps are manual-smoke.
 
 #### `OtherPaneSeamTests.swift`
 

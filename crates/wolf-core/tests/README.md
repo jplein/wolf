@@ -336,10 +336,13 @@ Real Neovim (`WOLF_NVIM_BIN`, `no-sandbox` target with staged nvim runfiles).
 **Covers**
 
 - Crash and stall detection: a self-SIGKILL fed through the input pump flips `liveness()` to `Dead`; a wedged event loop escalates repeated RPC timeouts to `NotResponding`; a successful RPC after recovery auto-clears back to `Alive`. Each transition fires a front-end wake.
+- The pump's own stall: typing into a wedged nvim marks `NotResponding`, and nvim's answer clears it.
+- `liveness::clear_not_responding`, headless with a counting wake: one wake per clear, silence on `Alive`, and `Dead` left alone.
 
 **Gotchas**
 
-- SIGKILL rather than `qa!` is load-bearing: a clean quit sets `shutting_down`, so the stdout EOF is suppressed instead of reported as `Dead`.
+- A typed `:qa!` cannot stand in for the SIGKILL: `init.lua`'s abbreviation makes it a window close ([`commands.rs`](#commandsrs)).
+- The pump-stall case calls no `block_on_rpc` method, probes included: one would detect and clear the stall itself, so both polls would pass without the pump.
 - The stall cases set the process-global `WOLF_RPC_TIMEOUT_MS` and wedge nvim with a finite `vim.uv.sleep`; teardown force-kills the wedged child, so widen (never tighten) the wedge if a case flakes.
 - It polls with its local `poll_without_draining`, not `poll_until`, because each case asserts the transition's wake afterward with `wait_for_wake`, and a drain would consume it.
 
@@ -349,17 +352,20 @@ Real Neovim (`WOLF_NVIM_BIN`, `no-sandbox` target with staged nvim runfiles).
 
 **Covers**
 
-- `restart_nvim()` and Tier-1 restore: from a `Dead` core it respawns (`Ok(true)`), carries none of the pre-crash files, and the open-file mirror captured before the crash drives the reopen. On a live core it is a no-op (`Ok(false)`) that leaves nvim undisturbed.
-- That the same mirror carries no `term://` entry and no terminal `active` while a drawer is open, so the reopen cannot replay one as `:edit`. What such a replay does instead is [`redraw.rs`](../src/README.md#redrawrs)'s.
-- That typing queued before a restart's handle swap never reaches the fresh nvim, while queued state (a resize) still applies and post-swap typing arrives.
+- `restart_nvim()` from `Dead` respawns (`Ok(true)`) with none of the pre-crash files, and the mirror captured before it drives the reopen; on a live core it is a no-op `Ok(false)`.
+- The mirror carries no `term://` entry or terminal `active` ([why](../src/README.md#redrawrs)).
+- Typing queued before the handle swap never reaches the fresh nvim; a queued resize does.
+- The reset: no window, command line, intent or history of the dead nvim survives, and `seq` never goes back.
+- Evidence, green on base: four death modes are each seen and restarted on one core, a death releases a waiting call, and a restart leaves a sibling core alone. Its `qa!` is scripted, because a typed `:qa!` closes a window ([`commands.rs`](#commandsrs)).
 
 **Gotchas**
 
-- The Tier-1 set includes the never-saved startup `Untitled.md`: reopening it via `:e` is what triggers Neovim's swap-based recovery of unsaved edits, so filtering it out would lose them permanently.
-- The respawn wipes the mirror, so capture it before restarting, and canonicalize every path (macOS `/tmp` and `/var` are symlinks).
-- The drawer case polls `win_buffers` for an `is_terminal` entry before reading the mirror. Reading straight after `toggle_terminal()` races the emit that fills it.
-- The queued-typing case holds a `SnapshotReadGuard` across the restart, parking the input pump on its toast-clear write lock so the keys straddle the swap. Unstalled, they die against the dead handle first and the test cannot fail.
-- That case kills nvim on a timer, not inside its own `:lua` command, so the kill leaves no command line `active` in the snapshot.
+- The Tier-1 set includes the unsaved startup `Untitled.md`, whose `:e` reopen recovers its edits from swap.
+- Canonicalize every path: macOS `/tmp` and `/var` are symlinks.
+- The drawer case polls `win_buffers` for an `is_terminal` entry first, or the mirror read races its emit.
+- The queued-typing case holds a `SnapshotReadGuard` across the restart, parking the pump so the keys straddle the swap; unstalled, the test cannot fail. Its deferred kill leaves no command line open.
+- The reset case kills nvim from outside, after the snapshot shows an open command line: the notifications queued at a death are dropped ([why](../../../notes/wolf-core-decisions.md#threading-and-locking)).
+- The intents case drains nothing between `:vsplit` and the restart, so the dead split's `Split` stays queued.
 
 #### `palette_rank.rs`
 
