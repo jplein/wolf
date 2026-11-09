@@ -1,6 +1,6 @@
 # wolf-core
 
-The platform-agnostic Rust core of Wolf. Core contains everything Neovim-related and draws no pixels: it spawns a hermetic, pinned `nvim --embed`, attaches as a multigrid UI, folds the entire `redraw` event stream into a render-state snapshot, surfaces a Neovim-to-shell layout-intent channel for native split panes, accepts abstract input events, and signals the front-end through a single wake callback when a new frame is ready.
+The platform-agnostic Rust core of Wolf. Core contains everything Neovim-related and draws no pixels: it spawns a hermetic, pinned `nvim --embed`, attaches as a multigrid UI, folds the entire `redraw` event stream into a render-state snapshot, surfaces a Neovim-to-shell layout-intent channel for native split panes, accepts abstract input events, and signals the front-end through a single wake callback when a new frame is ready. It also owns the terminal sessions, each a shell in a pty emulated through [`wolf-vt`](../wolf-vt/README.md), which Neovim shows as placeholder windows and the front-end paints from their own frames.
 
 **Read [wolf-core-decisions.md](../../notes/wolf-core-decisions.md) before changing anything in this crate.** It holds the one hard rule about the dependency tree, the threading and locking model, and the constraints a refactor would otherwise undo.
 
@@ -26,6 +26,7 @@ Everything below is re-exported from the crate root as `wolf_core::…`. The own
 | Wake               | `WakeFn`                                                                      |
 | Input              | `InputEvent`, `KeyEvent`, `MouseEvent`, `ScrollEvent`, `key_to_notation`      |
 | Layout intents     | `LayoutIntent`, `SplitOrientation`, `FocusDir`                                |
+| Terminal sessions  | `TerminalId`, `TerminalFrame`, the other `Terminal*` types, `TERMINAL_*`      |
 | Commands           | `Command`, `CommandSpec`, `COMMAND_SPECS`, `MenuGroup`                        |
 | File picker        | `FileSearch`, `FileEntry`, `FileSearchReadGuard`, `rank_matches`, `MruStore`  |
 | Content search     | `SearchSession`, `SearchOptions`, `SearchMatch`, `project`, `context_window`  |
@@ -52,7 +53,7 @@ cargo test -p wolf-core                      # spawns a real, pinned nvim
 cargo run -p wolf-core --example grid_dump   # headless smoke dump
 ```
 
-Both need an active flake devShell (`direnv allow`) so `WOLF_NVIM_BIN` is set. See [`tests/README.md`](tests/README.md).
+Both need an active flake devShell (`direnv allow`) so `WOLF_NVIM_BIN` and `WOLF_GHOSTTY_VT_DIR` are set. See [`tests/README.md`](tests/README.md).
 
 On macOS core builds with Bazel instead, as `//crates/wolf-core:wolf_core`, taking its dependencies from the same `Cargo.toml` and `Cargo.lock` through `rules_rust`'s `crate_universe`, and the example runs as `bazel run //crates/wolf-core:grid_dump`. See [`build.md`](../../build.md) for the macOS build and repin workflow.
 

@@ -22,9 +22,9 @@ Everything wolf-core reaches is a global on `_G`. Channel ids and arguments are 
 
 ### Setup helpers
 
-wolf-core invokes these once after `ui_attach`, in the order listed by [`api.rs`](../../crates/wolf-core/src/api.rs): current-file, buffers, full-width, layout, dir, theme, commands, tabs, open-files, fs-events, view, preview. Each takes core's own RPC channel id, creates a `clear = true` augroup so re-invoking is idempotent, and emits once immediately so startup state is reflected without an event.
+wolf-core invokes these once after `ui_attach`, in the order listed by [`api.rs`](../../crates/wolf-core/src/api.rs): current-file, buffers, full-width, layout, dir, theme, commands, tabs, open-files, fs-events, view, preview, terminals. Each takes core's own RPC channel id, creates a `clear = true` augroup so re-invoking is idempotent, and emits once immediately so startup state is reflected without an event.
 
-None of the notifications below is a redraw frame, so none bumps the snapshot `seq`. Most wake the front-end; `wolf_cwd` and `wolf_fs_changed` do not — the first rides the redraw flush its `:cd` already produces, and the second wakes only the file-search sessions whose rescan swaps. [`redraw.rs`](../../crates/wolf-core/src/redraw.rs) holds the decoding rules, including the defensive tolerance for a msgpack-`Ext`-wrapped handle where a plain integer is expected.
+None of the notifications below is a redraw frame, so none bumps the snapshot `seq`. Most wake the front-end; `wolf_cwd`, `wolf_fs_changed` and `wolf_terminal_wiped` do not — the first rides the redraw flush its `:cd` already produces, the second wakes only the file-search sessions whose rescan swaps, and the third only hangs a terminal session up. [`redraw.rs`](../../crates/wolf-core/src/redraw.rs) holds the decoding rules, including the defensive tolerance for a msgpack-`Ext`-wrapped handle where a plain integer is expected.
 
 #### `wolf_setup_current_file_tracking(chan)`
 
@@ -34,9 +34,9 @@ A preview scratch pane (carrying `b:wolf_preview_source`) reports `("", "", true
 
 #### `wolf_setup_buffer_tracking(chan)`
 
-Reports what every window shows, on every tabpage rather than only the current one, so the front-end can draw a per-pane statusbar and core can derive a per-pane navigation-history target. The sweep is `nvim_list_wins()`; the [architecture spec](../../specs/architecture.md#output-render-state-core--front-end) lists which snapshot maps are global as a result. Notifies **`wolf_buffers`** with one list of five-element tuples `{ win, nvim_buf_get_name(buf), buf, is_terminal, is_drawer }`, on `BufEnter`/`BufWinEnter`/`BufFilePost`/`WinEnter`/`WinNew`/`WinClosed`/`TermOpen`. Core wholesale-replaces both `Snapshot.buffers` (path only, unnamed windows omitted) and `Snapshot.win_buffers` (every window, `path = nil` when unnamed), so closed windows drop out.
+Reports what every window shows, on every tabpage rather than only the current one, so the front-end can draw a per-pane statusbar and core can derive a per-pane navigation-history target. The sweep is `nvim_list_wins()`; the [architecture spec](../../specs/architecture.md#output-render-state-core--front-end) lists which snapshot maps are global as a result. Notifies **`wolf_buffers`** with one list of six-element tuples `{ win, nvim_buf_get_name(buf), buf, is_terminal, is_drawer, terminal_id }`, on `BufEnter`/`BufWinEnter`/`BufFilePost`/`WinEnter`/`WinNew`/`WinClosed`/`TermOpen`. Core wholesale-replaces both `Snapshot.buffers` (path only, unnamed windows omitted) and `Snapshot.win_buffers` (every window, `path = nil` when unnamed), so closed windows drop out.
 
-`is_drawer` is the buffer tag `b:wolf_terminal` or'd with the window tag `w:wolf_terminal`. It marks the terminal drawer, which navigation history excludes; a `:terminal` in an ordinary split sets neither tag and is not excluded. Windows showing a preview scratch are omitted from the list entirely, which is what keeps `win_buffers` and `previews` disjoint — the history fold relies on that. Emits are coalesced (see Decisions). Exposes `_G.wolf_emit_buffers`.
+`terminal_id` is the buffer's `b:wolf_terminal_id`, the core terminal session a placeholder shows, or `0`; core reports it as `WinBuffer.terminal`. `is_drawer` is the buffer tag `b:wolf_terminal` or'd with the window tag `w:wolf_terminal`. It marks the terminal drawer, which navigation history excludes; a `:terminal` in an ordinary split sets neither tag and is not excluded. Windows showing a preview scratch are omitted from the list entirely, which is what keeps `win_buffers` and `previews` disjoint — the history fold relies on that. Emits are coalesced (see Decisions). Exposes `_G.wolf_emit_buffers`.
 
 It also exposes `_G.wolf_sync_buffers`, which emits at once unless suppressed and then blocks on a `wolf_barrier` request that core answers only once that emit is in the snapshot.
 
@@ -66,7 +66,7 @@ The one-shot startup emit carries a distinguishing second argument `true`; `DirC
 
 #### `wolf_setup_theme_tracking(chan)`
 
-Notifies **`wolf_theme`** with four flat integers — `cursor_fg`, `cursor_bg`, `titlebar_fg`, `titlebar_bg` — read from the optional `WolfCursor` and `WolfTitlebar` highlight groups, on `ColorScheme`. That event also covers `:set background=…`, which re-sources the active scheme. Each value is a packed `0xRRGGBB` color or `-1` for an unset channel; core accepts only the 24-bit range and maps everything else to unset.
+Notifies **`wolf_theme`** with twenty flat integers on `ColorScheme`: `cursor_fg`, `cursor_bg`, `titlebar_fg` and `titlebar_bg`, read from the optional `WolfCursor` and `WolfTitlebar` highlight groups, then `g:terminal_color_0` to `g:terminal_color_15`, each through `nvim_get_color_by_name`. Core takes the cursor background and the sixteen terminal colours for its terminal sessions. That event also covers `:set background=…`, which re-sources the active scheme. Each value is a packed `0xRRGGBB` color or `-1` for an unset channel; core accepts only the 24-bit range and maps everything else to unset.
 
 Groups are read with `link = false`, so a linked group resolves to its target's effective attributes. Neither group is ever painted on the grid, so this notification is core's only way to learn them: `WolfCursor` colors the app cursor, `WolfTitlebar` the macOS titlebar.
 
@@ -111,6 +111,10 @@ Markdown-guarded `TextChanged`/`TextChangedI`/`BufWritePost` autocmds notify **`
 `CursorMoved`/`CursorMovedI`/`BufEnter`/`BufWinEnter` autocmds notify **`wolf_markdown_cursor`** with three flat scalars `(source_bufnr, line, char_col)` — a 1-based `line('.')` and a 0-based `charcol('.') - 1`. That column is a character index rather than a byte index, which is what lets it pair with the `wl-{L}-{C}` markers with no conversion anywhere downstream; core upserts it into `Snapshot.markdown_cursors`. Five guards decide whether to emit: the buffer must be valid, must be current, its window must be a normal window, its filetype must be `markdown`, and `b:wolf_preview_source` must be nil.
 
 Exposes `_G.wolf_emit_previews` and `_G.wolf_emit_markdown_cursor`.
+
+#### `wolf_setup_terminals(chan)`
+
+A `BufWipeout` autocmd notifies **`wolf_terminal_wiped`** with the id of a wiped buffer carrying `b:wolf_terminal_id`, a core terminal session's placeholder, and core hangs that session up. It is silent while Neovim quits (`v:dying` or `v:exiting` set), so quitting hangs up no session, and it has no initial emit.
 
 #### `wolf_emit_current_file`, `wolf_emit_buffers`, `wolf_emit_full_width`, `wolf_emit_previews`, `wolf_emit_markdown_cursor`, `wolf_emit_drawer`
 
@@ -173,6 +177,18 @@ It first scans `nvim_list_bufs()` for an ordinary file buffer (`buftype == ""`) 
 Toggles the terminal drawer. The terminal buffer is a single shared buffer per nvim instance, tagged `b:wolf_terminal` and required to have `buftype == "terminal"`; the drawer window is per-tabpage. If a window in the current tabpage shows that buffer, it closes the window only, so the buffer and its shell job survive.
 
 Otherwise it opens a `botright` split roughly one third of the screen tall, tags the window `w:wolf_terminal`, binds the shared buffer or creates a fresh `:terminal` when the user has exited the shell, seeds `b:wolf_full_width = true` on whichever buffer landed in the drawer, and `startinsert`s. The whole build runs inside `wolf_suppress_buffers`. Afterwards it calls `_G.wolf_emit_drawer` (the intent that makes the drawer visible), then `_G.wolf_emit_current_file` and `_G.wolf_emit_full_width`, all guarded.
+
+#### `wolf_terminal_bind(id, win, split)`
+
+Shows core terminal session `id` in window `win` (`0` for the current one), splitting it first through `wolf_do_split` when `split` is `"h"` or `"v"`, and returns the window or `0`. It reuses a buffer already tagged with `id`, or creates the placeholder [Terminal panes](../../specs/terminal-panes.md#terminal-panes-in-the-pane-tree) specifies with `bufhidden=wipe`. It builds inside `wolf_suppress_buffers`, re-emits current-file and full-width because their autocmds fired before the tag, and ends with `wolf_sync_buffers`, so core's snapshot holds the binding when the call returns.
+
+#### `wolf_terminal_exited(id)`
+
+Closes every window showing session `id`, giving a tabpage's last window a new empty buffer instead, and returns how many it closed or emptied. Not `:enew`, which reuses an empty unnamed buffer in place and would keep the placeholder.
+
+#### `wolf_terminal_close(win)`
+
+Closes window `win` unless it is its tabpage's last, as `wolf_do_close` does, for core's `<C-w>c` and `<C-w>q` in a terminal pane.
 
 #### `wolf_toggle_full_width()`
 

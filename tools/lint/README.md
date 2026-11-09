@@ -44,7 +44,7 @@ Internal targets: `:clippy_core`, `:clippy_ffi`, `:clippy_vt` and `:clippy_doc_l
 ## How each target works
 
 - `:clippy` is a trivial `sh_test` (`clippy_gate.sh`, `exit 0`) whose `data` are the `rust_clippy` targets. Bazel must build them, which runs clippy, to stage runfiles, so a clippy failure fails the test.
-- `:clippy.fix` is the custom `clippy_fix` rule (`clippy_fix.bzl`): it resolves `@rules_rust//rust:toolchain_type`, stages the toolchain sysroot (cargo/cargo-clippy/clippy-driver/rustc/rust_std) as runfiles, and runs `cargo clippy --fix --allow-dirty --allow-staged -p wolf-core -p wolf-ffi`.
+- `:clippy.fix` is the custom `clippy_fix` rule (`clippy_fix.bzl`): it resolves `@rules_rust//rust:toolchain_type`, stages the toolchain sysroot (cargo/cargo-clippy/clippy-driver/rustc/rust_std) as runfiles, and runs `cargo clippy --fix --allow-dirty --allow-staged -p wolf-core -p wolf-ffi`. It also stages `//bazel/ghostty-vt:libghostty_vt`, for the reason under [Caveats](#caveats).
 - `:rustfmt` is a `test_suite` over the four `rustfmt_test` targets (`rustfmt --check` on each crate).
 - `:rustfmt.fix` is an `alias` to the rules_rust writer `@rules_rust//:rustfmt`, which formats every `.rs` source file that a Rust target in `//...` lists directly, `data` included, and skips targets tagged `no-format`, `no-rustfmt` or `norustfmt`. Target patterns given as arguments narrow that scope. It looks one dependency level deep, so a file reached through a filegroup is out of its reach: a package whose Rust tests read `.rs` fixtures stages them that way, as [doc-lint does](../doc-lint/tests/README.md#fixtures).
 
@@ -67,7 +67,7 @@ Internal targets: `:clippy_core`, `:clippy_ffi`, `:clippy_vt` and `:clippy_doc_l
 - `:wolf_gnome_wording` is an `sh_test` (`wolf_gnome_wording_check.sh`) over the root package's `//:wolf_gnome_srcs` filegroup, since wolf-gnome has no Bazel package, and `wolf_gnome_wording_allowlist.txt`. The rule is [below](#what-wolf_gnome_wording-checks). On Linux the same script runs as the `wolf-gnome-wording` gate, over the checkout.
 - `:wolf_gnome_wording_check_test` runs `wolf_gnome_wording_check_test.sh` over the fake checkouts in `testdata/wolf_gnome_wording/`, with the cases [below](#checker-cases). It is sandboxed and also the Linux gate step `wolf-gnome-wording-check-test`.
 - `:comments` is an `sh_test` (`doc_lint_check.sh`) that runs `doc-lint --files` over `:all_comment_srcs`. `:all_markdown_srcs` is staged as data too, so the doc paths written in comments resolve in the runfiles tree. The rules are in [doc-lint's README](../doc-lint/README.md#rules).
-- `:fix` is the custom `fix_all` rule: it stages the rust toolchain, the separate rules_rust rustfmt toolchain and `:swift_format.fix`, then runs rustfmt over `wolf-core`, `wolf-ffi` and `wolf-vt`, then `cargo clippy --fix`, then that fixer with no arguments, which formats every wolf-macos source and test, all in place.
+- `:fix` is the custom `fix_all` rule: it stages the rust toolchain, the separate rules_rust rustfmt toolchain, `:swift_format.fix` and the libghostty-vt archive, then runs rustfmt over `wolf-core`, `wolf-ffi` and `wolf-vt`, then `cargo clippy --fix`, then that fixer with no arguments, which formats every wolf-macos source and test, all in place.
 
 ## Adding a package
 
@@ -137,7 +137,7 @@ The checker exits 1 on a finding and 2, with an `ERROR:` line, when there is no 
 
 ## Caveats
 
-- The fixers are non-hermetic. `cargo clippy --fix` reaches crates.io (network) and the host cc toolchain. `cargo clippy --fix` is scoped to `-p wolf-core -p wolf-ffi`, because wolf-gnome's GTK stack does not build on macOS, and `wolf-vt`'s `build.rs` panics there with no `WOLF_GHOSTTY_VT_DIR`.
+- The fixers are non-hermetic. `cargo clippy --fix` reaches crates.io (network) and the host cc toolchain. `cargo clippy --fix` is scoped to `-p wolf-core -p wolf-ffi`, because wolf-gnome's GTK stack does not build on macOS. Cargo still builds `wolf-vt` as `wolf-core`'s dependency, and its `build.rs` panics with no `WOLF_GHOSTTY_VT_DIR`, which macOS does not export. So `:clippy.fix` and `:fix` stage the Bazel-built archive, link it into a scratch prefix's `lib/` and export that prefix before the cargo step.
 - swift-format scope. Only hand-written `wolf-macos` Swift is covered: every file under its `Sources/` and `Tests/`. The machine-generated swift-bridge bindings under `crates/wolf-ffi/generated/` are excluded. The file list lives in `//crates/wolf-macos:swift_format_srcs` because Bazel forbids cross-package globbing.
 - swift-format check and fix. `:swift_format` runs `swift-format lint --strict`, which reports the pretty-printer's findings (`Indentation`, `AddLines`, `LineLength`) as well as the lint-category rules, so a file that `format` would re-indent or re-wrap fails it. To check one file as the target does, run `xcrun swift-format lint --strict --follow-symlinks <file>`; to format one, `bazel run //tools/lint:swift_format.fix -- <file>`.
 - The vendoring notes under `bazel/*` are in scope for style but carry no per-file entries, so only the line-length, changelog and all-caps rules bite there. `entry-budget` fires on `####` headings, which those files do not use.

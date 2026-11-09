@@ -25,6 +25,8 @@ Every dependency here was chosen partly because it is GUI-free:
 | State | `serde_json` |  |
 | Markdown preview | `pulldown-cmark`, `pulldown-cmark-escape` |  |
 | Math preview | `pulldown-latex` | Adds only `bumpalo` |
+| Terminal emulation | `wolf-vt` | The workspace binding over libghostty-vt, linked statically; [Building libghostty-vt](../specs/terminal-panes.md#building-libghostty-vt) owns the pin |
+| Ptys and processes | `libc` | `openpty`, `setsid`, `TIOCSCTTY`, `TIOCSWINSZ`, signals, `getpwuid_r` and `proc_pidinfo`, hand-rolled in place of a pty crate |
 | Content search | none | Shells out to a pinned `rg` subprocess located via `WOLF_RG_BIN` |
 | Browser preview | none | Hand-rolled HTTP/1.1 on the existing tokio runtime, `net` feature |
 
@@ -61,6 +63,8 @@ A restart starts the render state over. A fresh Neovim numbers its windows from 
 
 The snapshot reset carries four fields. `seq` never goes back, because flush waiters key on it advancing. `open_files`, `tab_cwds` and `current_tabpage` are what a front-end captures before restarting, and a failed respawn must leave them for the next attempt; the fresh Neovim replaces each one wholesale during setup.
 
+Terminal sessions live beside the Neovim process rather than in the snapshot, so neither a crash nor a restart touches them ([When Neovim dies](../specs/terminal-panes.md#when-neovim-dies)).
+
 The front-end reads liveness on each wake to drive its crash and stall overlay.
 
 ## Threading and locking
@@ -75,23 +79,41 @@ The front-end reads liveness on each wake to drive its crash and stall overlay.
 - A pump call can wait on the user. Neovim answers a request only when its handler returns, and a prompt raised inside one holds it open: `:write` over a file changed on disk asks y/n, and `nvim_ui_set_focus` runs the `FocusGained` file check, whose W12 asks about a buffer changed on both sides. A request also waits in Neovim's queue behind a half-typed chord such as `<C-w>`. A pump that only awaited the call would hold back the key that answers it, a deadlock.
 - So while a call is unanswered the pump keeps receiving, holds what arrives, and probes `nvim_get_mode`. Neovim answers the probe at once while it waits on a keystroke, and in order behind a call that is merely busy, so an answer before the call's means Neovim waits for input; the pump then releases the oldest held key, mouse or scroll event through Neovim's fast input calls ([`pump.rs`](../crates/wolf-core/src/README.md#pumprs)).
 - W12 inside the focus call is intermittent: Neovim throttles its focus check to once per 2 s and defers a throttled one, like `WolfAutoRead`'s autocmd `:checktime`, to its main loop, where keys always flowed.
+- Each terminal session owns two threads, a reader `wolf-term-<id>` and a writer `wolf-term-<id>-w`. Everything a session waits on happens on its reader: the pty, the publish deadlines, the exit, and the hang-up's grace and reap. Every pty write happens on its writer, so no front-end or tokio thread waits on a shell, but for `shutdown`, which joins the readers.
+- A session's terminal lock is never held across a pty write, an RPC, a wake or the frame lock. Neither the registry's map lock nor the snapshot lock is held while a session lock is taken: the registry clones a session's `Arc` out of its map first, and the redraw handler pushes the editor's colours to the sessions only after its write lock drops.
+- A session's threads hold the session's `Arc` and only a `Weak` to the registry, so dropping a `WolfCore` without `shutdown` still drops the registry, whose `Drop` hangs every session up without waiting.
 - Each `SearchRegistry` owns a `wolf-fs-watch` thread, which makes every `notify` watch and unwatch call. A recursive inotify watch walks the whole tree, so it never runs on a front-end's thread or under the registry's locks. notify's `watch` waits on the backend thread that runs the event callback, so the callback only forwards into the thread's channel and never blocks or locks.
+
+## Terminal sessions
+
+[Terminal panes](../specs/terminal-panes.md) owns the contract. These are the decisions behind core's half of it.
+
+- `KeyEvent` carries no physical key. libghostty-vt's key encoder derives control and modifier sequences from the key code, the modifiers and the unshifted text, and core maps a character to the US-layout key that types it. A new field would change every `KeyEvent` literal in both front-ends for nothing the encoder reads.
+- A router split or close runs as a task on core's runtime, so `terminal_key`, called on a front-end thread, never waits on a wedged Neovim. A focus chord pushes its `FocusDir` intent directly. A split runs the origin session's program and arguments again rather than the default shell.
+- A shell's exit is published at once, and the reader then asks Neovim, through `wolf_terminal_exited`, to close every window showing the session. The resulting wipe removes it, so the exited frame stays readable while a pane still shows it. Core removes the session itself only when no window showed it or the call failed.
+- `close_terminal` hangs a running session up rather than removing it, so its panes close by that same exit path.
+- A hang-up sends `SIGHUP` to the shell's group, closes the master, polls up to `TERMINAL_HANGUP_GRACE`, then sends `SIGKILL` and reaps. `shutdown` hangs every session up before joining any reader, so it takes one grace for all of them rather than one each.
+- libghostty-vt's callbacks only push onto an effect queue the `wolf_vt::Terminal` owns. They run inside a library call under the session lock, where a pty write or a lock would stall or deadlock, so whoever holds the lock drains the queue after the call and hands any reply to the writer.
+- A publish is coalesced to one per `TERMINAL_PUBLISH_INTERVAL`, the exit's excepted. A synchronized update defers it for at most `TERMINAL_RENDER_HOLD_MAX`, after which the hold counts as released until the program sets mode 2026 again, so a program that never ends its update cannot freeze its pane.
+- The `BufWipeout` notifier is silent while Neovim quits (`v:dying`, `v:exiting`), so quitting Neovim hangs up no session; core's own shutdown does.
 
 ## The snapshot-and-wake session pattern
 
-The file picker, the content search, and the redraw stream all share one shape, and a new streaming capability should adopt it rather than inventing another: a worker streams results into shared state in batches, bumps a version, and fires the same wake callback the front-end already marshals onto its UI thread. The front-end then reads through an owned guard. No callback ever crosses the FFI boundary mid-stream.
+The file picker, the content search, the redraw stream and the terminal frames all share one shape, and a new streaming capability should adopt it rather than inventing another: a worker streams results into shared state in batches, bumps a version, and fires the same wake callback the front-end already marshals onto its UI thread. The front-end then reads through an owned guard. No callback ever crosses the FFI boundary mid-stream.
 
 Both search sessions resolve their root from the tracked live working directory cell rather than an RPC, so opening a picker never blocks on a wedged nvim. Dropping or cancelling a session stops its traversal, and for content search kills the `rg` subprocess, so no zombie lingers.
 
 ## The file-search rescan: a watcher and nvim events, walk-then-swap
 
-A live `FileSearch` session rescans on two sources: a `notify` filesystem watcher, which is the immediate path for any change on disk, and the `wolf_fs_changed` notification from nvim. Both feed `SearchRegistry::notify_fs_changed`, and the registry is the seam the watcher plugs into without touching the sessions. Its targeted invalidation spares the rescan both a refocus-edge dependency and a walk per refocus.
+A live `FileSearch` session rescans on three sources: a `notify` filesystem watcher, which is the immediate path for any change on disk, the `wolf_fs_changed` notification from nvim, and a core terminal pane losing focus. All three feed `SearchRegistry::notify_fs_changed`, and the registry is the seam the watcher plugs into without touching the sessions. Its targeted invalidation spares the rescan both a refocus-edge dependency and a walk per refocus.
 
 The watcher watches a root recursively while a live registry entry has it. The watched set is re-derived from the live entries on every register and every prune rather than counted separately, for the same reason the registry has no unregister handshake (below). When a root's watch goes live it forwards that root once, because the session's walk may have started before the watch existed and a change in that gap would be lost.
 
 A watcher remove or rename forces a rescan, since it may take a listed file away. A create or modify relies on `needs_rescan`'s `seen` check, and a `.gitignore` edit forces, since it changes what the walk lists. Every event is first judged by the walk's own rules — the excluded names, the depth cap, `skip_dirs` and the gitignore chain ([how the filter replays it](crates/wolf-core/src/files.rs.md#the-gitignore-chain)). A `cargo build` under an ignored `target/` would otherwise cause a stream of re-walks, and judging by the walk's rules means a dropped event is never one the walk would list.
 
-The nvim triggers are two classes. Path-carrying buffer events (`BufWritePost` conditional, `BufFilePost`/`BufDelete` force) cover changes nvim makes itself; path-less refocus-edge force events (`ShellCmdPost`/`FocusGained`/`TermLeave`) catch mutations that fire no buffer event — a `:!git mv`, an external terminal or Finder while the app is unfocused, a command run in the drawer's shell. They stay beside the watcher because the edges are human-paced and the debounce plus the equality skip bound each to at most one no-op walk, and because they are the only path when the watcher cannot run (see the limitations below).
+The nvim triggers are two classes. Path-carrying buffer events (`BufWritePost` conditional, `BufFilePost`/`BufDelete` force) cover changes nvim makes itself; path-less refocus-edge force events (`ShellCmdPost`/`FocusGained`/`TermLeave`) catch mutations that fire no buffer event — a `:!git mv`, an external terminal or Finder while the app is unfocused, a command run in the drawer's shell. Core adds a fourth path-less force of its own, a core terminal pane losing focus (`terminal_focus(id, false)`), which covers a command run in a core session as `TermLeave` covers the drawer.
+
+The refocus-edge triggers stay beside the watcher because the edges are human-paced and the debounce plus the equality skip bound each to at most one no-op walk, and because they are the only path when the watcher cannot run (see the limitations below).
 
 `TermLeave` is chosen over `WinLeave` or `TermClose` because the drawer auto-`startinsert`s on `WinEnter`, so every drawer-exit path passes a terminal-to-normal mode change and the one unguarded event covers them all.
 

@@ -4,7 +4,7 @@ libghostty-vt **1.0.0**, built on macOS from its sha256-pinned release tarballs 
 
 ## Targets
 
-- **`//bazel/ghostty-vt:libghostty_vt`** — a `ghostty_vt_archive` (`defs.bzl`) whose one output is `libghostty-vt.a`.
+- **`//bazel/ghostty-vt:libghostty_vt`** — a `ghostty_vt_archive` (`defs.bzl`) whose one output is `libghostty-vt.a`. It is visible to `//tools/lint` as well, whose fix launchers stage it for Cargo ([why](../../tools/lint/README.md#caveats)).
 - **`//bazel/ghostty-vt:ghostty_vt`** — a `cc_import` over that archive, visible to `//crates/wolf-vt` only.
 
 The package has no test of its own: `//crates/wolf-vt:binding` links the archive and checks the version it reports.
@@ -17,7 +17,7 @@ The package has no test of its own: `//crates/wolf-vt:binding` links the archive
 
 - `http_file`, not `http_archive`. Highway's package in the deps tarball carries its own `BUILD`, `WORKSPACE` and `MODULE.bazel` files, which would split an extracted repo into subpackages that a `glob` silently drops, so the action extracts both tarballs itself.
 - The build calls `/usr/bin/xcrun`, which needs the selected Xcode, and `.bazelrc`'s strict action env passes no client variables. The action therefore takes the resolved C toolchain's environment for a C compile (`use_cc_toolchain()`, `cc_common.get_environment_variables`), whose Xcode keys Bazel turns into `DEVELOPER_DIR` and `SDKROOT`.
-- Not `apple_support.run_shell`, which reaches the same Xcode: its `_xcode_config` attribute puts `@bazel_tools//tools/objc:host_xcodes` in `wolf-vt`'s graph, and the `objc` pattern in `tools/lint/wolf_core_forbidden_deps.txt` rejects that once `wolf-core` depends on `wolf-vt`.
+- Not `apple_support.run_shell`, which reaches the same Xcode: its `_xcode_config` attribute puts `@bazel_tools//tools/objc:host_xcodes` in `wolf-vt`'s graph, and the `objc` pattern in `tools/lint/wolf_core_forbidden_deps.txt` rejects that, because `wolf-core` depends on `wolf-vt`.
 - A `mktemp` shim leads the build's `PATH`. The library's `libsystem_override.sh` calls bare `mktemp -d`, which on macOS ignores `TMPDIR` and uses the user temp directory, which a sandboxed build may not write. The shim sends exactly `mktemp -d` into `TMPDIR` and passes every other call through, so the pinned source stays unpatched.
 - `build_archive.sh` sets its own `PATH=/usr/bin:/bin`, since the action env carries only the Xcode keys, and the action is `requires-darwin`.
 - The empty global cache goes through `ZIG_GLOBAL_CACHE_DIR`, because Zig 0.17's `zig build` has no `--global-cache-dir` flag.

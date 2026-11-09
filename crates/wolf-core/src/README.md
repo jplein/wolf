@@ -66,11 +66,11 @@ Spawns and supervises the captive Neovim child, and wraps every RPC core issues 
 
 #### `redraw.rs`
 
-The `nvim-rs` handler: folds each `redraw` batch into `Snapshot` and routes the out-of-band `wolf_*` notifications into its sibling cells, queues and the search registry. It answers one request, `wolf_barrier` ([why](../../../notes/wolf-core-decisions.md#threading-and-locking)).
+The `nvim-rs` handler: folds each `redraw` batch into `Snapshot` and routes the out-of-band `wolf_*` notifications into its sibling cells, queues and registries. It answers one request, `wolf_barrier` ([why](../../../notes/wolf-core-decisions.md#threading-and-locking)).
 
 **Decisions**
 
-- Only `flush` bumps `seq`; out-of-band notifications wake without bumping it, so a repaint gated on `seq` alone misses them. `wolf_cwd` and `wolf_fs_changed` wake nothing — the first rides its `:cd`'s flush, the second feeds the `SearchRegistry`, whose sessions wake on a swap.
+- Only `flush` bumps `seq`; out-of-band notifications wake without bumping it, so a repaint gated on `seq` alone misses them. `wolf_cwd`, `wolf_fs_changed` and `wolf_terminal_wiped` wake nothing — the first rides its `:cd`'s flush, and the others feed a registry whose sessions wake on their own.
 - In `grid_line`, `repeat` counts columns including the first, so an explicit `0` is a zero-width no-op; clamping it to 1 paints past the span, a wrong-background cell Neovim's shadow grid never repaints. A double-width glyph's trailing half arrives as its own empty-text cell; synthesizing a placeholder shifts the row right.
 - `win_hide` removes the window entry but keeps its grid: Neovim reuses the grid id and may re-`win_pos` it unresized.
 - A resolved `confirm()` and an invalid-key re-prompt produce byte-identical `cmdline_hide` batches, so the toast is stashed with its prompt and restored only on a matching `cmdline_show`.
@@ -513,3 +513,22 @@ Purpose: The lazily-started loopback HTTP server behind `WolfCore::open_in_brows
 **Gotchas**
 
 - Each `open_in_browser` stores a fresh target, so the server re-points per invocation but does not follow the user's buffer between them.
+
+### Terminal sessions
+
+#### `terminal.rs`
+
+Purpose: the terminal sessions core owns, each a pty, a shell, a `wolf_vt::Terminal` and a published `TerminalFrame`, shown in Neovim placeholder windows, and the registry behind `WolfCore`'s session methods. The pty, the router and the session are in [`terminal/`](terminal/README.md); [Terminal panes](../../../specs/terminal-panes.md) owns the contract.
+
+**Public API**
+
+- `open_terminal` and `bind_terminal` block through `block_on_rpc` and return once the binding is in `win_buffers`. The other session methods never wait on Neovim.
+- `TerminalId` counts from 1 per core and is never reused, so a stale id names no session rather than another one.
+- `live_terminals` lists running sessions only, while an exited session's frame stays readable until its pane closes ([why](../../../notes/wolf-core-decisions.md#terminal-sessions)).
+- Mouse and scroll positions are pixels from the content area's top-left, turned into cells with the cell size of the last `resize_terminal`.
+- `WolfCore::pane_status` of a terminal pane reports the session's shell name, or `NO_NAME` once the session is gone, with empty paths.
+
+**Decisions**
+
+- The registry reaches Neovim through free functions in `nvim.rs` over the pump's current handle, never a captured one, because a restart replaces the handle while the sessions live on.
+- A router chord acts on the window showing the session: the active window when it does, else one on the current tabpage, else any. With none, the chord is dropped.

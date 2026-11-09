@@ -30,6 +30,7 @@ It offers:
 - `start_core_with_disk_conflict()` returns a core whose current `note.txt` holds an unsaved edit while its file on disk changed under a future mtime, so Neovim's next check finds both sides changed with no sleep. It raises `updatetime` so `CursorHold`'s `:checktime` cannot find the conflict first, and calls no `block_on_rpc` method, for `nvim_liveness.rs`.
 - `start_core_with_temp_md[_sized]` opens a temp `.md` and returns once it is current and drawn: `current_file` is the file, a frame has landed after the startup barrier, and row 0 shows text when the fixture's first line has text. It panics naming the file after `FLUSH_TIMEOUT`.
 - `short_tempdir()` returns an owned, canonical temp dir under the first of the OS temp dir and `/tmp` that is writable and at most `SHORT_TEMP_ROOT_MAX` bytes canonical. A swap-bearing fixture placed in it must keep its name within `SHORT_FIXTURE_NAME_MAX`; `SWAP_NAME_MAX` mirrors init.lua's constant.
+- Terminal sessions: `sh_script`, `interactive_sh` and `cat_command` build the `/bin/sh` commands tests run, never `$SHELL`. `cat_command(prelude)` prints `prelude`, makes its tty raw without echo, prints `CAT_READY` and becomes `cat -v`, so `cat_output` shows each byte the session was sent. `open_session`, `open_cat`, `poll_frame`, `wait_for_text`, `run_line`, `term_key` and `term_ctrl` drive a session; `win_terminal` and `terminal_windows` read the bindings in `win_buffers`; `wait_for_pid`, `pid_alive` and `wait_for_pid_gone` follow a shell's process. `recording_wake_channel` also returns a `WakeLog` of every wake's instant.
 - `send_ex` types `:{cmd}<CR>` as keystrokes; `probe_values` evaluates expressions inside the live nvim by having it `writefile` them to a probe path and polling that file — the eval channel for a core that exposes no eval RPC. `resolve_test_runfile` resolves extra Bazel-staged runfiles beyond nvim + init.lua.
 
 **Gotchas**
@@ -662,6 +663,59 @@ Spawns a real Neovim (staged runfiles, wired `WOLF_NVIM_BIN`, `no-sandbox`).
 It also measures the tabpage scope of the snapshot maps, which is a property of nvim plus the captive `init.lua` rather than of any Rust type: `win_buffers` and `buffers` hold every window of the whole instance, while `windows` holds the current tabpage's alone. A front-end can therefore resolve a background tabpage's buffers by window handle with no RPC, which is what per-tab persistence rests on. The falsifier is `nvim_tabpage_list_wins(0)` in place of `nvim_list_wins()` in `wolf_setup_buffer_tracking`'s emit.
 
 **Gotchas** — A switch does not churn grid ids: nvim emits `win_hide` for the leaving tabpage's windows rather than `win_close` / `grid_destroy`, and reuses both the grid id and the window handle on the way back. That is an observation about nvim rather than a contract, so assert on window-handle membership and `grid_for_win` round-trips, never on literal grid ids or map order. `win_hide` removes the window from `Snapshot.windows` but keeps its grid in `Snapshot.grids` and its entry in `Snapshot.win_buffers`.
+
+#### `terminal_input.rs`
+
+Real Neovim and real `/bin/sh` sessions in ptys (`//crates/wolf-core:terminal_input`: staged nvim runfiles, `WOLF_NVIM_BIN`, `no-sandbox`, `medium`).
+
+**Covers**
+
+- The `<C-w>` router: `s` and `v` split with a new session in the new window; `c` and `q` close the pane beside another and keep it in a tabpage's last window; `h j k l` and the arrows emit `FocusDir` from the placeholder window and send nothing; any other key follows the held `^W`; a lone `<C-w>` is sent after `TERMINAL_PREFIX_TIMEOUT` and not before; a `meta` chord never arrives.
+- Keys encoded from the program's modes, bracketed paste, mouse reports with tracking and Shift's bypass, a drag selecting without tracking, the wheel's three routes and the snap back on typing, and focus reports under mode 1004.
+- A router split starting in the origin shell's directory, and in an `OSC 7` report's directory when that exists.
+
+**Gotchas**
+
+- Most cases read bytes back through a `cat_command` session, so a key whose bytes have not shown after `NEGATIVE_SETTLE` was not sent. Widen that settle if a negative case flakes; never tighten it.
+
+#### `terminal_lifecycle.rs`
+
+Real Neovim and real `/bin/sh` sessions in ptys (`//crates/wolf-core:terminal_lifecycle`, as `terminal_input`).
+
+**Covers**
+
+- A shell's exit reported in `exited` while Neovim is blocked, then its pane closed and the session gone; in a tabpage's last window, an empty buffer in its place.
+- `:close` of the placeholder window and `close_terminal` each hanging the shell up; `shutdown` returning only once every shell is reaped, one that ignores `SIGHUP` included.
+- A session surviving a Neovim kill and `restart_nvim`, taking input while Neovim is `Dead`, and re-bound through `bind_terminal`.
+
+**Gotchas**
+
+- A pid is checked with `kill -0`, which succeeds on a zombie, so a pid that is gone was both killed and reaped.
+- The exit case blocks Neovim for `WEDGE` with `vim.uv.sleep`, so the timing is racy: widen `WEDGE`, never tighten it.
+
+#### `terminal_rescan.rs`
+
+Real Neovim and a real `/bin/sh` session (`//crates/wolf-core:terminal_rescan`, as `terminal_input`). One test.
+
+**Covers** — a file a session's shell creates reaching a live `FileSearch` only once `terminal_focus(id, false)` reports the pane losing focus, with the watcher off.
+
+**Gotchas** — It is a binary of its own because `WOLF_FS_WATCH=0` is process-global, and it starts its session under `WATCH_ENV_LOCK` as `file_search_rescan.rs` does. The negative half waits `DEBOUNCE_SETTLE`; widen it if it flakes.
+
+#### `terminal_session.rs`
+
+Real Neovim and real `/bin/sh` sessions in ptys (`//crates/wolf-core:terminal_session`, as `terminal_input`).
+
+**Covers**
+
+- Output reaching the frame's cells and keys reaching the shell; a resize reaching both the frame and `stty size`; the shell's `TERM`, `COLORTERM`, `TERM_PROGRAM` and tabpage cwd.
+- Ids counting up and never reused, a missing program opening nothing, the placeholder's `win_buffers` binding and buffer options, and `pane_status` reporting the shell name.
+- Row versions following the rows that change, a publish waking without bumping `seq`, publishes at least `TERMINAL_PUBLISH_INTERVAL` apart, a render hold deferring the publish until released or until `TERMINAL_RENDER_HOLD_MAX`, and the default, `ANSI` and cursor colours following the editor.
+
+**Gotchas**
+
+- The interactive shell echoes what it is typed, so a case looks for an expression's output (`$((6*7))`) the typed text does not contain.
+- Compare paths after `canonicalize` or with `pwd -P`: macOS temp dirs sit behind the `/var` link.
+- A plain `:hi` fires no `ColorScheme`, so the colour case runs `:doautocmd ColorScheme` to make `wolf_theme` emit again.
 
 #### `theme.rs`
 

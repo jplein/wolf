@@ -219,7 +219,8 @@ const FS_CHANGED_EVENT: &str = "wolf_fs_changed";
 /// Name of the out-of-band notification carrying the id of a terminal session whose
 /// placeholder buffer Neovim wiped, emitted by the `WolfTerminals` `BufWipeout` autocmd in
 /// `runtime/nvim/init.lua`. Routed into the terminal registry, which hangs the session up.
-/// It touches no snapshot state: no snapshot lock, no `seq` bump and no wake.
+/// It touches no snapshot state (no snapshot lock, no `seq` bump), and it wakes the front-end
+/// once the registry has dropped the session.
 const TERMINAL_WIPED_EVENT: &str = "wolf_terminal_wiped";
 
 /// Name of the one nvim→core request, sent by `_G.wolf_sync_buffers` in
@@ -378,9 +379,12 @@ impl Handler for RedrawHandler {
                 (self.wake)();
             }
             TERMINAL_WIPED_EVENT => {
+                // No snapshot lock, no `seq` bump; wakes because `live_terminals` and
+                // `terminal_frame` change once `on_wiped` has dropped the session.
                 if let Some(id) = args.first().and_then(Value::as_u64).filter(|id| *id > 0) {
                     self.terminals.on_wiped(TerminalId(id));
                 }
+                (self.wake)();
             }
             PREVIEW_EVENT => {
                 // Not a redraw frame, so no `seq` bump; wakes after `apply_previews` drops the lock.
