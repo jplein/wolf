@@ -100,9 +100,10 @@
 //! Each pane area carries THREE pointer controllers, all of them thin glue over the
 //! pure [`crate::mouse`] and [`crate::cell_at`] seams:
 //!
-//! 1. A `gtk::GestureDrag` (primary button only) for the whole press -> drag ->
-//!    release sequence. ONE gesture, not a `GestureClick` plus something else: a
-//!    gesture takes an implicit grab on the sequence and keeps delivering after the
+//! 1. A `gtk::GestureDrag` (every button; an editor pane acts on the primary alone)
+//!    for the whole press -> drag -> release sequence. ONE gesture, not a
+//!    `GestureClick` plus something else: a gesture takes an implicit grab on the
+//!    sequence and keeps delivering after the
 //!    pointer leaves the widget, which is what makes drag-past-the-edge selection
 //!    work (`EventControllerMotion` stops at the widget edge). Press calls
 //!    [`PaneInner::on_pane_clicked`] FIRST and only then `send_mouse(Press)` —
@@ -125,6 +126,21 @@
 //! 3. A `gtk::EventControllerMotion` whose ONLY job is to record the last
 //!    widget-local pointer position, because GTK's `scroll` signal carries no
 //!    coordinates and the scroll handler needs a cell.
+//!
+//! Over a terminal pane all three send to its session instead: the press, drag and
+//! release of the primary, middle and secondary buttons, at the session's cell pixels
+//! ([`crate::terminal::geometry::pointer_pixels`]); one `terminal_scroll` per wheel
+//! event carrying the whole step count; and, while the program tracks the mouse,
+//! buttonless motion. Only the primary press focuses the pane.
+//!
+//! ## Terminal panes
+//!
+//! A pane whose window `Snapshot::win_buffers` binds to a session paints that session's
+//! frame through its own [`TerminalCanvas`] instead of the placeholder's grid, sizes the
+//! session from its content area each wake ([`PaneInner::sync_terminal_sizes`]), and
+//! reports focus through [`PaneHandle::sync_terminal_focus`]. Keys, committed text, Copy
+//! and Paste reach the session through [`PaneHandle::active_terminal`], which
+//! `crate::window` and `crate::shell` ask.
 //!
 //! While the picker or the empty state is up, the pointer picks the overlay child
 //! rather than a pane `DrawingArea`, so none of these controllers run — no
@@ -157,7 +173,7 @@
 //! focus is returned to `cmdline_area` once the rebuild has settled.
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 use std::time::Instant;
 
@@ -168,8 +184,10 @@ use gtk::{gio, glib};
 use webkit6::prelude::{PolicyDecisionExt, WebViewExt};
 
 use wolf_core::{
-    CursorShape, LayoutIntent, MouseAction, MouseEvent, PaneNode, PaneStatus, PreviewInfo, Rgb,
-    ScrollEvent, Snapshot, SplitOrientation, ToastChunk, WolfCore,
+    CursorShape, LayoutIntent, MouseAction, MouseButton, MouseEvent, PaneNode, PaneStatus,
+    PreviewInfo, Rgb, ScrollEvent, Snapshot, SplitOrientation, TerminalCommand, TerminalId,
+    TerminalMouseEvent, TerminalMouseKind, TerminalScrollEvent, TerminalTarget, ToastChunk,
+    WolfCore,
 };
 
 use crate::cmdline_ui::{self, PumView, ToastView};
@@ -191,6 +209,10 @@ use crate::state_seam;
 use crate::statusbar_layout::{
     self, StatusbarLayout, STATUSBAR_LINE_GAP, STATUSBAR_VERTICAL_PADDING,
 };
+use crate::terminal::canvas::TerminalCanvas;
+use crate::terminal::geometry::{self as terminal_geometry, TerminalSize};
+use crate::terminal::input as terminal_input;
+use crate::terminal::SMOKE_TERMINAL_ENV;
 use crate::{cell_at, cursor, grid_size_for, paint, CellMetrics};
 
 /// The id of the first (root) pane. The [`PaneTree`] is constructed with this as
@@ -342,6 +364,18 @@ struct PaneWidgets {
     /// render lands click another carrying none, and the second file scrolls to the
     /// first file's anchor.
     pending_fragment: RefCell<Option<String>>,
+    /// The terminal session this pane's window shows, from `Snapshot::win_buffers`, or `None`
+    /// for an editor pane. Filled once per wake by [`PaneInner::refresh_pane_state`].
+    ///
+    /// The ONE terminal-pane predicate: the paint, the pointer routing, the sizing and the
+    /// key routing behind [`PaneHandle::active_terminal`] all read it.
+    terminal: Cell<Option<TerminalId>>,
+    /// The painted cells of `terminal`'s frame, created on its first draw and dropped
+    /// whenever `terminal` changes, so a canvas never blits another session's cells.
+    canvas: RefCell<Option<TerminalCanvas>>,
+    /// The session captured at a terminal PRESS, pinned with `drag_button` for the rest of
+    /// the sequence, as `drag_grid` is for an editor pane.
+    drag_terminal: Cell<Option<TerminalId>>,
 }
 
 impl PaneWidgets {
@@ -377,6 +411,9 @@ impl PaneWidgets {
             current_load: Cell::new(None),
             head_len: Cell::new(0),
             pending_fragment: RefCell::new(None),
+            terminal: Cell::new(None),
+            canvas: RefCell::new(None),
+            drag_terminal: Cell::new(None),
         }
     }
 }
@@ -397,6 +434,8 @@ struct PaneJoin {
     /// `previews` joined to `markdown_ticks` on `source_bufnr`, `None` for an editor
     /// pane.
     load: Option<PreviewLoad>,
+    /// The session `Snapshot::win_buffers` binds to `win`, `None` for an editor pane.
+    terminal: Option<TerminalId>,
 }
 
 /// One pane's per-wake state, carried from [`PaneInner::refresh_pane_state`]'s
@@ -419,6 +458,8 @@ struct PaneState {
     /// The `(source_bufnr, source_tick)` join for this wake, `None` for an editor
     /// pane.
     load: Option<PreviewLoad>,
+    /// Its terminal session, or `None` for an editor or preview pane.
+    terminal: Option<TerminalId>,
 }
 
 /// One pane whose preview document has to be re-rendered on this pass, with
@@ -565,6 +606,16 @@ struct PaneInner {
     /// and the rule is about the user's typing, which is not per pane. `RefCell`
     /// mirrors `tree_view::TreeInner::coalescer`.
     preview_coalescer: RefCell<PreviewCoalescer>,
+    /// Per terminal session, the pane that sized it last, for [`terminal_geometry::sizer`].
+    terminal_sizers: RefCell<BTreeMap<TerminalId, PaneId>>,
+    /// Per terminal session, the size last sent through `resize_terminal`. The pointer paths
+    /// read its cell pixels, which are what core divides a pointer position by.
+    sent_terminal_sizes: RefCell<BTreeMap<TerminalId, TerminalSize>>,
+    /// The session last reported focused through `terminal_focus`, if any.
+    reported_focus: Cell<Option<TerminalId>>,
+    /// The test-only [`SMOKE_TERMINAL_ENV`] program, waiting for the first wake with a pane
+    /// ([`Self::open_pending_terminal`]).
+    pending_terminal: RefCell<Option<TerminalCommand>>,
 }
 
 impl PaneInner {
@@ -581,6 +632,8 @@ impl PaneInner {
         if self.consume_pending_layout() {
             return;
         }
+        // Before `refresh_pane_state`, so this very wake binds the session to its pane.
+        self.open_pending_terminal();
         self.apply_intents();
         self.detect_closes();
         self.resolve_pending_grids();
@@ -601,10 +654,135 @@ impl PaneInner {
         // `update_active_pane`, so the order stays: read core state, then decide, then paint.
         self.sync_pane_grids();
         self.update_active_pane();
+        // After `update_active_pane`: the active pane is the one that sizes a session it shows.
+        self.sync_terminal_sizes();
         // After `sync_pane_grids`, whose re-requested rect a grid-anchored popup reads; before
         // `queue_redraw`, since it decides whether either surface is on screen.
         self.refresh_message_surfaces();
         self.queue_redraw();
+    }
+
+    /// Opens the [`SMOKE_TERMINAL_ENV`] session in the active pane's window, once, on the
+    /// first wake that has a pane. Test-only: nothing else sets `pending_terminal`.
+    ///
+    /// `WolfCore::open_terminal` is a blocking RPC, reachable only through this hook. It
+    /// returns with the binding already in `Snapshot::win_buffers`, so the session is this
+    /// pane's before the wake paints, and before any readiness file can be written.
+    fn open_pending_terminal(&self) {
+        if self.pending_terminal.borrow().is_none() {
+            return;
+        }
+        let win = self
+            .active_pane
+            .get()
+            .and_then(|id| self.panes.borrow().get(&id).map(|p| p.win));
+        let Some(win) = win else {
+            return;
+        };
+        let Some(command) = self.pending_terminal.borrow_mut().take() else {
+            return;
+        };
+        let program = command.program.display().to_string();
+        let opened = self
+            .core
+            .borrow()
+            .as_ref()
+            .and_then(|core| core.open_terminal(TerminalTarget::Window(win), Some(command)));
+        if opened.is_none() {
+            eprintln!(
+                "wolf-gnome: {SMOKE_TERMINAL_ENV} could not open a session running {program}"
+            );
+        }
+    }
+
+    /// Sizes every session this tab shows from the content area of the pane that sizes it,
+    /// sending `resize_terminal` only when the size differs from the one sent last or, for a
+    /// running session, from the frame's.
+    ///
+    /// A session shown in several panes is sized by [`terminal_geometry::sizer`]'s pick: the
+    /// active pane, else the previous sizer. Only the current tab's pane view runs on a wake,
+    /// so the current tab's panes size their sessions.
+    fn sync_terminal_sizes(&self) {
+        let mut showing: BTreeMap<TerminalId, Vec<PaneId>> = BTreeMap::new();
+        let mut areas: HashMap<PaneId, (i32, i32, bool)> = HashMap::new();
+        for (id, p) in self.panes.borrow().iter() {
+            if let Some(session) = p.terminal.get() {
+                showing.entry(session).or_default().push(*id);
+                areas.insert(*id, (p.area.width(), p.area.height(), p.full_width.get()));
+            }
+        }
+        self.terminal_sizers
+            .borrow_mut()
+            .retain(|session, _| showing.contains_key(session));
+        self.sent_terminal_sizes
+            .borrow_mut()
+            .retain(|session, _| showing.contains_key(session));
+        let core_ref = self.core.borrow();
+        let Some(core) = core_ref.as_ref() else {
+            return;
+        };
+        for (session, panes) in showing {
+            let previous = self.terminal_sizers.borrow().get(&session).copied();
+            let Some(sizer) = terminal_geometry::sizer(&panes, self.active_pane.get(), previous)
+            else {
+                continue;
+            };
+            self.terminal_sizers.borrow_mut().insert(session, sizer);
+            let Some(&(width, height, full_width)) = areas.get(&sizer) else {
+                continue;
+            };
+            if width <= 0 || height <= 0 {
+                continue;
+            }
+            let (cols, rows) = self.pane_grid_size(width, height, self.pane_cap(full_width));
+            let size =
+                terminal_geometry::size(cols, rows, self.metrics.cell_w, self.metrics.cell_h);
+            let sent = self.sent_terminal_sizes.borrow().get(&session).copied();
+            let stale = core
+                .terminal_frame(session)
+                .is_some_and(|f| f.exited.is_none() && (f.cols, f.rows) != (size.cols, size.rows));
+            if sent != Some(size) || stale {
+                core.resize_terminal(
+                    session,
+                    size.cols,
+                    size.rows,
+                    size.cell_w_px,
+                    size.cell_h_px,
+                );
+                self.sent_terminal_sizes.borrow_mut().insert(session, size);
+            }
+        }
+    }
+
+    /// The session the active pane shows, if it is a terminal pane.
+    fn active_terminal(&self) -> Option<TerminalId> {
+        let id = self.active_pane.get()?;
+        self.panes.borrow().get(&id)?.terminal.get()
+    }
+
+    /// The session pane `pane_id` shows, if it is a terminal pane.
+    fn pane_terminal(&self, pane_id: PaneId) -> Option<TerminalId> {
+        self.panes.borrow().get(&pane_id)?.terminal.get()
+    }
+
+    /// Reports the focused session changing to the active pane's when `focused`, else to
+    /// none: the loss of the session reported last, then the gain.
+    fn sync_terminal_focus(&self, focused: bool) {
+        let current = if focused {
+            self.active_terminal()
+        } else {
+            None
+        };
+        let previous = self.reported_focus.replace(current);
+        let reports = terminal_input::focus_reports(previous, current);
+        if reports.is_empty() {
+            return;
+        }
+        if let Some(core) = self.core.borrow().as_ref() {
+            for report in reports {
+                core.terminal_focus(report.session, report.gained);
+            }
+        }
     }
 
     /// Creates the first pane (reusing [`FIRST_PANE_ID`], the tree root) once a
@@ -828,6 +1006,7 @@ impl PaneInner {
                             win,
                             preview,
                             load,
+                            terminal: snap.win_buffers.get(&win).and_then(|b| b.terminal),
                         }
                     })
                     .collect()
@@ -845,6 +1024,7 @@ impl PaneInner {
                             full_width: info.source_full_width,
                             preview: Some(info),
                             load: j.load,
+                            terminal: j.terminal,
                         }
                     }
                     None => PaneState {
@@ -853,6 +1033,7 @@ impl PaneInner {
                         full_width: core.full_width_for_win(j.win),
                         preview: None,
                         load: None,
+                        terminal: j.terminal,
                     },
                 })
                 .collect()
@@ -865,6 +1046,9 @@ impl PaneInner {
                     p.full_width.set(state.full_width);
                     *p.preview.borrow_mut() = state.preview;
                     p.current_load.set(state.load);
+                    if p.terminal.replace(state.terminal) != state.terminal {
+                        p.canvas.borrow_mut().take();
+                    }
                 }
             }
         }
@@ -1313,8 +1497,10 @@ impl PaneInner {
     ///
     /// Every pane area means the drawer's too: it iterates `panes`, and
     /// [`Self::draw_pane`] resolves whatever grid a pane is bound to without ever
-    /// looking at its buffer type, so a terminal grid paints through the same
-    /// [`crate::paint`] seam an editor grid does.
+    /// looking at its buffer type, so a Neovim terminal buffer's grid paints through
+    /// the same [`crate::paint`] seam an editor grid does. A terminal pane, whose
+    /// window shows a core session, redraws on every wake as well, and its
+    /// [`TerminalCanvas`] repaints only the rows the session's frame damaged.
     fn queue_redraw(&self) {
         {
             let panes = self.panes.borrow();
@@ -2163,9 +2349,10 @@ impl PaneInner {
 
         {
             let weak = Rc::downgrade(self);
-            area.set_draw_func(move |_area, cr, w, h| {
+            area.set_draw_func(move |area, cr, w, h| {
                 if let Some(inner) = weak.upgrade() {
-                    inner.draw_pane(cr, pane_id, f64::from(w), f64::from(h));
+                    let size = (f64::from(w), f64::from(h));
+                    inner.draw_pane(cr, pane_id, size, f64::from(area.scale_factor()));
                 }
             });
         }
@@ -2182,9 +2369,9 @@ impl PaneInner {
         {
             let weak = Rc::downgrade(self);
             let gesture = gtk::GestureDrag::new();
-            // Explicit rather than `GtkGestureSingle`'s default, so the primary-only decision is visible
-            // here (`mouse::mouse_input` refuses other buttons too).
-            gesture.set_button(gdk::BUTTON_PRIMARY);
+            // Every button: a terminal pane forwards three. `on_pane_press` keeps an editor pane
+            // primary-only, and `mouse::mouse_input` refuses other buttons too.
+            gesture.set_button(0);
             {
                 let weak = weak.clone();
                 gesture.connect_drag_begin(move |g, x, y| {
@@ -2216,7 +2403,8 @@ impl PaneInner {
             let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
             scroll.connect_scroll(move |controller, _dx, dy| {
                 if let Some(inner) = weak.upgrade() {
-                    inner.on_pane_scroll(pane_id, dy, controller.unit());
+                    let state = controller.current_event_state();
+                    inner.on_pane_scroll(pane_id, dy, controller.unit(), state);
                 }
                 glib::Propagation::Stop
             });
@@ -2230,15 +2418,15 @@ impl PaneInner {
             let motion = gtk::EventControllerMotion::new();
             {
                 let weak = weak.clone();
-                motion.connect_motion(move |_c, x, y| {
+                motion.connect_motion(move |c, x, y| {
                     if let Some(inner) = weak.upgrade() {
-                        inner.record_pointer(pane_id, x, y);
+                        inner.record_pointer(pane_id, x, y, c.current_event_state());
                     }
                 });
             }
-            motion.connect_enter(move |_c, x, y| {
+            motion.connect_enter(move |c, x, y| {
                 if let Some(inner) = weak.upgrade() {
-                    inner.record_pointer(pane_id, x, y);
+                    inner.record_pointer(pane_id, x, y, c.current_event_state());
                 }
             });
             area.add_controller(motion);
@@ -2271,17 +2459,26 @@ impl PaneInner {
     /// padding and under the neighbouring pane's strip: the widget bounds are wider
     /// than the grid rectangle, so they do not bound the overflow.
     ///
+    /// A terminal pane paints its session's frame through its [`TerminalCanvas`] into the
+    /// grid rectangle, in place of the placeholder's grid and the Neovim cursor, with the
+    /// thumb from the session's scrollbar. Its frame is read before the snapshot guard.
+    ///
     /// The strip's clip bounds a long path to its own pane, and draws no ellipsis:
     /// ellipsizing needs a second Pango layout builder in the widget layer, which is
     /// exactly what `render.rs`'s one-glyph-path rule exists to prevent.
-    fn draw_pane(&self, cr: &cairo::Context, pane_id: PaneId, width: f64, height: f64) {
+    fn draw_pane(&self, cr: &cairo::Context, pane_id: PaneId, size: (f64, f64), scale: f64) {
         // Top level of the draw family, not inside `wake`: GTK draws from the frame clock after the
         // wake handler returns (`frame_stats`'s module docs).
         let _guard = frame_metrics::scope(Bucket::DrawPane);
+        let (width, height) = size;
         let core_ref = self.core.borrow();
         let Some(core) = core_ref.as_ref() else {
             return;
         };
+        // Read before the snapshot guard below, so the session's frame lock never nests in it.
+        let frame = self
+            .pane_terminal(pane_id)
+            .and_then(|session| core.terminal_frame(session));
         // `read_snapshot` is a `parking_lot` `read_arc()` that copies nothing, so a
         // large `draw.read` is lock contention with the tokio writer, never copying.
         let read_start = frame_metrics::begin();
@@ -2361,6 +2558,21 @@ impl PaneInner {
             .expect("cairo restore failed after the statusbar");
         frame_metrics::end(Bucket::DrawStatus, status_start);
 
+        if let Some(frame) = frame.as_deref() {
+            // The session's cells replace the placeholder's grid and the Neovim cursor.
+            if let Some(p) = self.panes.borrow().get(&pane_id) {
+                let mut canvas = p.canvas.borrow_mut();
+                let canvas = canvas.get_or_insert_with(TerminalCanvas::new);
+                canvas.update(cr, frame, &self.metrics, scale);
+                canvas.paint(cr, rect, frame, &self.metrics);
+            }
+            let viewport = scrollbar::terminal_viewport(frame.scrollbar);
+            if let Some(thumb) = scrollbar::scrollbar_thumb(width, rect, viewport) {
+                fill_thumb(cr, thumb, bg);
+            }
+            return;
+        }
+
         // A preview skips exactly the grid and the thumb; background and strip paint as for an editor.
         // The web view scrolls itself. See notes/wolf-gnome-decisions.md#window-structure
         if !is_preview {
@@ -2391,14 +2603,7 @@ impl PaneInner {
                 .and_then(|g| snap.windows.get(&g))
                 .map(|w| w.viewport);
             if let Some(thumb) = viewport.and_then(|v| scrollbar::scrollbar_thumb(width, rect, v)) {
-                let c = scrollbar::scrollbar_thumb_color(bg);
-                cr.set_source_rgb(
-                    f64::from(c.r) / RGB_MAX,
-                    f64::from(c.g) / RGB_MAX,
-                    f64::from(c.b) / RGB_MAX,
-                );
-                cr.rectangle(thumb.x, thumb.y, thumb.w, thumb.h);
-                cr.fill().expect("cairo scrollbar thumb fill failed");
+                fill_thumb(cr, thumb, bg);
             }
         }
     }
@@ -2514,15 +2719,26 @@ impl PaneInner {
     /// The ordering is guaranteed rather than hoped for: `focus_win` and `send_mouse`
     /// are enqueued on the SAME ordered input channel, so nvim sees the focus change
     /// before the press.
+    ///
+    /// The gesture takes every button, for terminal panes ([`Self::on_terminal_press`]); an
+    /// editor pane returns at once on any button but the primary, before focusing anything
+    /// and without pinning, so it stays primary-only.
     fn on_pane_press(self: &Rc<Self>, pane_id: PaneId, x: f64, y: f64, g: &gtk::GestureDrag) {
+        // The press is the ONE callback that reads the live button; every later
+        // one reuses this number (see `send_pane_mouse`).
+        let button = g.current_button();
+        if let Some(session) = self.pane_terminal(pane_id) {
+            self.on_terminal_press(pane_id, session, button, (x, y), g);
+            return;
+        }
+        if button != gdk::BUTTON_PRIMARY {
+            return;
+        }
         // Reusing the existing handler verbatim is what preserves focus-on-click.
         self.on_pane_clicked(pane_id);
         let Some(target) = self.grid_and_dims(pane_id) else {
             return;
         };
-        // The press is the ONE callback that reads the live button; every later
-        // one reuses this number (see `send_pane_mouse`).
-        let button = g.current_button();
         self.send_pane_mouse(target, MouseAction::Press, button, x, y, g);
         if let Some(p) = self.panes.borrow().get(&pane_id) {
             p.drag_grid.set(Some(target.grid));
@@ -2533,6 +2749,13 @@ impl PaneInner {
     /// Drag: forwarded UNCONDITIONALLY on every callback — no throttling and no
     /// "only when the cell changed" dedupe.
     fn on_pane_drag(&self, pane_id: PaneId, off_x: f64, off_y: f64, g: &gtk::GestureDrag) {
+        if let Some((session, button, x, y)) = self.terminal_drag_point(pane_id, off_x, off_y, g) {
+            let button = terminal_input::mouse_button(button);
+            let state = g.current_event_state();
+            let kind = TerminalMouseKind::Motion;
+            self.send_terminal_mouse(pane_id, session, kind, button, (x, y), state);
+            return;
+        }
         let Some((target, button, x, y)) = self.drag_point(pane_id, off_x, off_y, g) else {
             return;
         };
@@ -2541,7 +2764,12 @@ impl PaneInner {
 
     /// Release at the current point, then unpin the drag grid and button.
     fn on_pane_release(&self, pane_id: PaneId, off_x: f64, off_y: f64, g: &gtk::GestureDrag) {
-        if let Some((target, button, x, y)) = self.drag_point(pane_id, off_x, off_y, g) {
+        if let Some((session, button, x, y)) = self.terminal_drag_point(pane_id, off_x, off_y, g) {
+            let button = terminal_input::mouse_button(button);
+            let state = g.current_event_state();
+            let kind = TerminalMouseKind::Release;
+            self.send_terminal_mouse(pane_id, session, kind, button, (x, y), state);
+        } else if let Some((target, button, x, y)) = self.drag_point(pane_id, off_x, off_y, g) {
             self.send_pane_mouse(target, MouseAction::Release, button, x, y, g);
         }
         // Unpin even when the send was skipped, so a failed lookup cannot strand a
@@ -2549,6 +2777,108 @@ impl PaneInner {
         if let Some(p) = self.panes.borrow().get(&pane_id) {
             p.drag_grid.set(None);
             p.drag_button.set(None);
+            p.drag_terminal.set(None);
+        }
+    }
+
+    /// A press on terminal pane `pane_id` showing `session`: the primary button also focuses
+    /// the pane, then primary, middle and secondary each send a press and pin the session and
+    /// the button for the drag. Core decides between the program's mouse tracking and a selection.
+    fn on_terminal_press(
+        &self,
+        pane_id: PaneId,
+        session: TerminalId,
+        button: u32,
+        at: (f64, f64),
+        g: &gtk::GestureDrag,
+    ) {
+        let Some(mouse_button) = terminal_input::mouse_button(button) else {
+            return;
+        };
+        if button == gdk::BUTTON_PRIMARY {
+            self.on_pane_clicked(pane_id);
+        }
+        let state = g.current_event_state();
+        let kind = TerminalMouseKind::Press;
+        self.send_terminal_mouse(pane_id, session, kind, Some(mouse_button), at, state);
+        if let Some(p) = self.panes.borrow().get(&pane_id) {
+            p.drag_terminal.set(Some(session));
+            p.drag_button.set(Some(button));
+        }
+    }
+
+    /// The absolute pane-local point of a terminal drag update or end, with the session and
+    /// the button pinned at press; `None` when no terminal press pinned them.
+    fn terminal_drag_point(
+        &self,
+        pane_id: PaneId,
+        off_x: f64,
+        off_y: f64,
+        g: &gtk::GestureDrag,
+    ) -> Option<(TerminalId, u32, f64, f64)> {
+        let (session, button) = {
+            let panes = self.panes.borrow();
+            let p = panes.get(&pane_id)?;
+            (p.drag_terminal.get()?, p.drag_button.get()?)
+        };
+        let (start_x, start_y) = g.start_point()?;
+        Some((session, button, start_x + off_x, start_y + off_y))
+    }
+
+    /// Pane-local point `x`, `y` of `pane_id` as the pixels `session` divides by its cell
+    /// size: the size last sent to it, else the measured cell's.
+    fn terminal_point(
+        &self,
+        pane_id: PaneId,
+        session: TerminalId,
+        x: f64,
+        y: f64,
+    ) -> Option<(f32, f32)> {
+        let rect = {
+            let panes = self.panes.borrow();
+            let p = panes.get(&pane_id)?;
+            self.pane_grid_rect(&p.area, self.pane_cap(p.full_width.get()))
+        };
+        let (cell_w, cell_h) = (self.metrics.cell_w, self.metrics.cell_h);
+        let size = self
+            .sent_terminal_sizes
+            .borrow()
+            .get(&session)
+            .copied()
+            .unwrap_or_else(|| terminal_geometry::size(1, 1, cell_w, cell_h));
+        Some(terminal_geometry::pointer_pixels(
+            x, y, rect, cell_w, cell_h, size,
+        ))
+    }
+
+    /// Sends `session` a mouse event of `kind` at pane-local `at`, with the modifiers of
+    /// `state`.
+    fn send_terminal_mouse(
+        &self,
+        pane_id: PaneId,
+        session: TerminalId,
+        kind: TerminalMouseKind,
+        button: Option<MouseButton>,
+        at: (f64, f64),
+        state: gdk::ModifierType,
+    ) {
+        let Some((x, y)) = self.terminal_point(pane_id, session, at.0, at.1) else {
+            return;
+        };
+        let mods = terminal_input::pointer_mods(state);
+        if let Some(core) = self.core.borrow().as_ref() {
+            core.terminal_mouse(
+                session,
+                TerminalMouseEvent {
+                    kind,
+                    button,
+                    x,
+                    y,
+                    shift: mods.shift,
+                    ctrl: mods.ctrl,
+                    alt: mods.alt,
+                },
+            );
         }
     }
 
@@ -2663,7 +2993,17 @@ impl PaneInner {
     /// **This method NEVER changes focus** — no `focus_win`, no `set_active_pane`,
     /// no `grab_focus`. Scrolling a background pane must leave the keyboard exactly
     /// where it was.
-    fn on_pane_scroll(&self, pane_id: PaneId, dy: f64, unit: gdk::ScrollUnit) {
+    fn on_pane_scroll(
+        &self,
+        pane_id: PaneId,
+        dy: f64,
+        unit: gdk::ScrollUnit,
+        state: gdk::ModifierType,
+    ) {
+        if let Some(session) = self.pane_terminal(pane_id) {
+            self.on_terminal_scroll(pane_id, session, dy, unit, state);
+            return;
+        }
         let Some(target) = self.grid_and_dims(pane_id) else {
             return;
         };
@@ -2709,10 +3049,80 @@ impl PaneInner {
         }
     }
 
-    /// Records the last widget-local pointer position for the scroll handler.
-    fn record_pointer(&self, pane_id: PaneId, x: f64, y: f64) {
-        if let Some(p) = self.panes.borrow().get(&pane_id) {
+    /// A wheel over terminal pane `pane_id`: the steps [`Self::on_pane_scroll`]'s accumulator
+    /// yields, as ONE `terminal_scroll` carrying the count, at the recorded pointer. Like the
+    /// editor's scroll, it never changes focus.
+    fn on_terminal_scroll(
+        &self,
+        pane_id: PaneId,
+        session: TerminalId,
+        dy: f64,
+        unit: gdk::ScrollUnit,
+        state: gdk::ModifierType,
+    ) {
+        let threshold = mouse::scroll_threshold(unit, self.metrics.cell_h);
+        let Some((steps, pointer)) = ({
+            let panes = self.panes.borrow();
+            panes.get(&pane_id).map(|p| {
+                let mut scroll = p.scroll.get();
+                // The carry's identity token: the placeholder's grid, as for an editor pane.
+                let token = p.grid.get().unwrap_or(session.0);
+                let steps = scroll.steps_for(token, dy, threshold);
+                p.scroll.set(scroll);
+                (steps, p.pointer.get())
+            })
+        }) else {
+            return;
+        };
+        let Some((direction, count)) = mouse::scroll_steps(steps) else {
+            return;
+        };
+        let Some((x, y)) = self.terminal_point(pane_id, session, pointer.0, pointer.1) else {
+            return;
+        };
+        let mods = terminal_input::pointer_mods(state);
+        if let Some(core) = self.core.borrow().as_ref() {
+            core.terminal_scroll(
+                session,
+                TerminalScrollEvent {
+                    direction,
+                    lines: u16::try_from(count).unwrap_or(u16::MAX),
+                    x,
+                    y,
+                    shift: mods.shift,
+                    ctrl: mods.ctrl,
+                    alt: mods.alt,
+                },
+            );
+        }
+    }
+
+    /// Records the last widget-local pointer position for the scroll handler, and over a
+    /// terminal pane whose program tracks the mouse, with no drag pinned, sends the motion.
+    fn record_pointer(&self, pane_id: PaneId, x: f64, y: f64, state: gdk::ModifierType) {
+        let session = {
+            let panes = self.panes.borrow();
+            let Some(p) = panes.get(&pane_id) else {
+                return;
+            };
             p.pointer.set((x, y));
+            if p.drag_terminal.get().is_some() {
+                return;
+            }
+            p.terminal.get()
+        };
+        let Some(session) = session else {
+            return;
+        };
+        let tracking = self
+            .core
+            .borrow()
+            .as_ref()
+            .and_then(|core| core.terminal_frame(session))
+            .is_some_and(|frame| frame.mouse_tracking);
+        if tracking {
+            let kind = TerminalMouseKind::Motion;
+            self.send_terminal_mouse(pane_id, session, kind, None, (x, y), state);
         }
     }
 
@@ -3177,6 +3587,10 @@ impl PaneInner {
     /// [`PaneHandle::reset_after_restart`] for why this is load-bearing rather
     /// than cosmetic.
     fn reset_after_restart(&self) {
+        // Before the panes go: core rescans the file tree on a terminal's focus loss.
+        self.sync_terminal_focus(false);
+        self.terminal_sizers.borrow_mut().clear();
+        self.sent_terminal_sizes.borrow_mut().clear();
         *self.tree.borrow_mut() = PaneTree::new(FIRST_PANE_ID);
         self.panes.borrow_mut().clear();
         self.next_pane_id.set(FIRST_PANE_ID);
@@ -3314,6 +3728,25 @@ impl PaneHandle {
         self.inner.readiness()
     }
 
+    /// The terminal session the active pane shows, or `None` when it is an editor pane:
+    /// where this tab's keys, committed text, Copy and Paste go.
+    #[must_use]
+    pub fn active_terminal(&self) -> Option<TerminalId> {
+        self.inner.active_terminal()
+    }
+
+    /// Reports terminal focus through `terminal_focus`: the active pane's session holds it
+    /// while `focused`, and a change reports the loss before the gain.
+    pub fn sync_terminal_focus(&self, focused: bool) {
+        self.inner.sync_terminal_focus(focused);
+    }
+
+    /// Asks the first wake with a pane to show a new session running `command` in the
+    /// active pane's window. The [`SMOKE_TERMINAL_ENV`] hook's only entry.
+    pub fn request_terminal(&self, command: TerminalCommand) {
+        *self.inner.pending_terminal.borrow_mut() = Some(command);
+    }
+
     /// Resets the pane view to its pre-first-pane state after a SUCCESSFUL in-place
     /// Neovim restart ([`crate::shell::AppShell`] calls this from its restart
     /// orchestration). The next render wake re-creates the first pane against the
@@ -3431,6 +3864,10 @@ pub fn build(core: &Rc<RefCell<Option<WolfCore>>>, metrics: &Rc<CellMetrics>) ->
         drawer: Cell::new(DrawerState::new()),
         pending_layout: RefCell::new(None),
         preview_coalescer: RefCell::new(PreviewCoalescer::new()),
+        terminal_sizers: RefCell::new(BTreeMap::new()),
+        sent_terminal_sizes: RefCell::new(BTreeMap::new()),
+        reported_focus: Cell::new(None),
+        pending_terminal: RefCell::new(None),
     });
 
     {
@@ -3943,6 +4380,18 @@ pub(crate) fn launch_uri(parent: Option<&gtk::Window>, uri: &str, what: &str) {
             eprintln!("wolf-gnome: {what} launch failed for {uri}: {err}");
         }
     });
+}
+
+/// Fills the scrollbar thumb in its colour over the editor background `bg`.
+fn fill_thumb(cr: &cairo::Context, thumb: scrollbar::ScrollbarThumb, bg: Rgb) {
+    let c = scrollbar::scrollbar_thumb_color(bg);
+    cr.set_source_rgb(
+        f64::from(c.r) / RGB_MAX,
+        f64::from(c.g) / RGB_MAX,
+        f64::from(c.b) / RGB_MAX,
+    );
+    cr.rectangle(thumb.x, thumb.y, thumb.w, thumb.h);
+    cr.fill().expect("cairo scrollbar thumb fill failed");
 }
 
 /// Rounds a device-pixel extent up to the `i32` GTK sizing calls take.

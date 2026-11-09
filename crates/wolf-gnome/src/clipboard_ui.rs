@@ -17,6 +17,11 @@
 //! live in `notes/wolf-gnome-decisions.md`, "Crash and stall recovery", and are
 //! deliberately not restated here.
 //!
+//! A terminal pane's Copy is the exception, and must stay ungated: it reads the
+//! session's selection through `WolfCore::terminal_selection_text`, which issues no
+//! RPC, so [`copy_decision`] answers [`CopyPress::Terminal`] under every liveness
+//! reading and refuses only when there is no core at all.
+//!
 //! ## PASTE's refusals are NOT about blocking, and must not be simplified away
 //!
 //! Nothing on the paste path can block: `gdk::Clipboard::read_text_async` resolves
@@ -58,13 +63,15 @@
 //! behind, is a classified arm rather than an early return no headless test could
 //! see.
 
-use wolf_core::Liveness;
+use wolf_core::{Liveness, TerminalId};
 
 /// What pressing the Copy chord does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CopyPress {
     /// Issue the BLOCKING yank on the captive Neovim.
     Copy,
+    /// Copy the selection of this terminal session, which issues no RPC.
+    Terminal(TerminalId),
     /// Do nothing and issue no RPC; the string names why, as a mid-sentence clause
     /// (the [`crate::command_action`] / [`crate::nav_ui`] convention).
     Refuse(&'static str),
@@ -79,24 +86,28 @@ pub enum PastePress {
     Refuse(&'static str),
 }
 
-/// Whether the Copy chord may issue its yank at all, given the core's liveness
-/// reading (or `None` when there is no core).
+/// What the Copy chord does, given the core's liveness reading (or `None` when there
+/// is no core) and the active pane's terminal session, if it shows one.
 ///
 /// TOTAL by construction: a `match` over `Option<Liveness>` with **no `_` arm**
-/// (see the module docs). Only [`Liveness::Alive`] yields [`CopyPress::Copy`];
-/// every other input refuses, prints its reason, and issues no RPC.
+/// (see the module docs). A terminal pane yields [`CopyPress::Terminal`] whenever a
+/// core exists. Otherwise only [`Liveness::Alive`] yields [`CopyPress::Copy`]; every
+/// other input refuses, prints its reason, and issues no RPC.
 #[must_use]
-pub fn copy_decision(liveness: Option<Liveness>) -> CopyPress {
-    match liveness {
-        Some(Liveness::Alive) => CopyPress::Copy,
-        Some(Liveness::NotResponding) => CopyPress::Refuse(
+pub fn copy_decision(liveness: Option<Liveness>, terminal: Option<TerminalId>) -> CopyPress {
+    match (liveness, terminal) {
+        (Some(Liveness::Alive | Liveness::NotResponding | Liveness::Dead), Some(id)) => {
+            CopyPress::Terminal(id)
+        }
+        (Some(Liveness::Alive), None) => CopyPress::Copy,
+        (Some(Liveness::NotResponding), None) => CopyPress::Refuse(
             "the captive Neovim is not responding, and the yank is a blocking RPC that would \
              freeze the window for another whole timeout budget",
         ),
-        Some(Liveness::Dead) => CopyPress::Refuse(
+        (Some(Liveness::Dead), None) => CopyPress::Refuse(
             "the captive Neovim has crashed, so there is no visual selection left to yank",
         ),
-        None => CopyPress::Refuse(
+        (None, _) => CopyPress::Refuse(
             "the window is shutting down and the core has already been taken out, so there is \
              nothing to yank from",
         ),
@@ -275,7 +286,7 @@ mod tests {
         );
 
         for case in &cases {
-            let got = copy_decision(case.liveness);
+            let got = copy_decision(case.liveness, None);
             match case.want {
                 WantCopy::Copy => assert_eq!(
                     got,
@@ -304,7 +315,7 @@ mod tests {
         // `buffer_picker::only_a_live_core_is_snapshotted`; it also catches four identical rows.
         let accepting: Vec<Option<Liveness>> = ALL_LIVENESS_INPUTS
             .into_iter()
-            .filter(|liveness| copy_decision(*liveness) == CopyPress::Copy)
+            .filter(|liveness| copy_decision(*liveness, None) == CopyPress::Copy)
             .collect();
         let only_alive = [Some(Liveness::Alive)];
         assert_eq!(
@@ -468,7 +479,7 @@ mod tests {
         let mut seen: HashSet<&'static str> = HashSet::new();
 
         for (source, liveness) in probes {
-            let copy = copy_decision(liveness);
+            let copy = copy_decision(liveness, None);
             let CopyPress::Refuse(copy_reason) = copy else {
                 panic!(
                     "copy_decision for {source} produced {copy:?} rather than a refusal, so this \

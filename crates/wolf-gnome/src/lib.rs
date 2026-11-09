@@ -44,6 +44,7 @@
 //! - [`mod@preview_ui`]: the Markdown preview's guards, reloads and statusbar lines.
 //! - [`mod@preview_coalescer`]: when the preview's render runs during a typing burst.
 //! - [`mod@tabs_ui`]: the native tabs one window's captive Neovim serves.
+//! - [`mod@terminal`]: how a terminal pane paints its session and routes its input.
 //! - [`mod@save_ui`]: the Save and Save As rules.
 //! - [`actions`]: the action namespace and accelerator table as data.
 //!
@@ -81,7 +82,7 @@
 //! nameless buffer) presenting a native dialog of its own
 //! ([`mod@save_ui`]). Click-to-position, drag-to-select and
 //! vertical scroll ARE wired (per-pane, in [`pane_view`]); horizontal scroll, the
-//! non-primary buttons and kinetic scrolling are not. Theming is
+//! non-primary buttons over an editor pane and kinetic scrolling are not. Theming is
 //! ONE-DIRECTIONAL: the configured `appearance` is resolved against the desktop's
 //! light/dark preference and pushed into Neovim as `background=dark|light`, with
 //! the GTK chrome's colour scheme set to match ([`mod@appearance`]) — but no OS
@@ -141,6 +142,7 @@ pub mod state_seam;
 pub mod statusbar_layout;
 pub mod tab_view;
 pub mod tabs_ui;
+pub mod terminal;
 pub mod title;
 pub mod tree;
 pub mod tree_gate;

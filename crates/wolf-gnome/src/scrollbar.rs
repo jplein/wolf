@@ -58,7 +58,7 @@
 
 use crate::editor_inset::GridRect;
 use crate::statusbar_layout::blend;
-use wolf_core::{Rgb, Viewport};
+use wolf_core::{Rgb, TerminalScrollbar, Viewport};
 
 /// Width of the scrollbar thumb, in device pixels.
 pub const SCROLLBAR_THICKNESS_PX: f64 = 8.0;
@@ -179,6 +179,18 @@ pub fn scrollbar_thumb_color(bg: Rgb) -> Rgb {
         bg,
         SCROLLBAR_THUMB_ALPHA,
     )
+}
+
+/// A terminal frame's scrollbar as the [`Viewport`] [`scrollbar_thumb`] projects: the
+/// viewport's first row is `offset` and its end `offset + len`, saturating, of `total`.
+#[must_use]
+pub fn terminal_viewport(bar: TerminalScrollbar) -> Viewport {
+    Viewport {
+        topline: bar.offset,
+        botline: bar.offset.saturating_add(bar.len),
+        curline: bar.offset,
+        linecount: bar.total,
+    }
 }
 
 #[cfg(test)]

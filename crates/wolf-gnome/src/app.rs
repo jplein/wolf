@@ -25,13 +25,14 @@ use std::rc::Rc;
 
 use adw::prelude::*;
 use gtk::glib;
-use wolf_core::{StateStore, WolfConfig};
+use wolf_core::{StateStore, TerminalCommand, WolfConfig};
 
 use crate::config_seam;
 use crate::coordinator::{self, Coordinator};
 use crate::frame_metrics;
 use crate::init_lua;
 use crate::ready_seam;
+use crate::terminal;
 use crate::CellMetrics;
 
 /// The GApplication id. Adwaita uses it for resource paths, the default window
@@ -202,6 +203,18 @@ pub(crate) fn init_lua_path() -> PathBuf {
 pub(crate) fn ready_file_path() -> Option<PathBuf> {
     let raw = std::env::var(ready_seam::READY_FILE_ENV).ok();
     ready_seam::ready_file_path(raw.as_deref()).map(PathBuf::from)
+}
+
+/// The program the test-only [`terminal::SMOKE_TERMINAL_ENV`] asks each window's first pane
+/// to run as a terminal session, if any.
+///
+/// GLUE only, shaped like [`ready_file_path`]: the environment read lives here and the rule
+/// lives in [`terminal::smoke_terminal_command`]. Read once per window by
+/// [`crate::window::build`].
+#[must_use]
+pub(crate) fn smoke_terminal_command() -> Option<TerminalCommand> {
+    let raw = std::env::var(terminal::SMOKE_TERMINAL_ENV).ok();
+    terminal::smoke_terminal_command(raw.as_deref())
 }
 
 /// Opens the application-state store over the platform state directory.

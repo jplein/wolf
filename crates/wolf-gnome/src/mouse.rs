@@ -61,10 +61,10 @@ pub struct MouseInput {
 ///
 /// Only `gdk::BUTTON_PRIMARY` (1) is forwarded; EVERY other button number returns
 /// `None`. That is deliberate: right-click context menus and middle-click paste are
-/// separate, unimplemented features. `GtkGestureSingle`'s default `button` property
-/// is already `GDK_BUTTON_PRIMARY`, so in practice the gesture never fires for
-/// another button — the `None` arm is defence-in-depth, plus the one place this
-/// decision is recorded and tested.
+/// separate, unimplemented features. The pane's gesture takes every button, for
+/// terminal panes, and `pane_view`'s press handler already returns on any other
+/// button over an editor pane — so the `None` arm is defence-in-depth, plus the one
+/// place this decision is recorded and tested.
 ///
 /// Modifiers: `ctrl` from `CONTROL_MASK`, `shift` from `SHIFT_MASK`, `alt` from
 /// `ALT_MASK`. `SUPER_MASK` is DELIBERATELY IGNORED: Neovim has no meta mouse

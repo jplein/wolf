@@ -94,7 +94,7 @@ use std::rc::{Rc, Weak};
 use adw::prelude::*;
 use gtk::glib;
 
-use wolf_core::{PaneNode, TabState, WolfCore};
+use wolf_core::{PaneNode, TabState, TerminalId, WolfCore};
 
 use crate::pane_view::{self, PaneHandle};
 use crate::persistence::{self, StateHandle, StateParts};
@@ -917,6 +917,27 @@ impl TabsHandle {
         // After the loop: tab 0 adopts its handle there, and `restore_press` refuses until it has.
         // Steady-state cost is one `Option::is_none()`.
         self.inner.materialize_restore();
+    }
+
+    /// The terminal session the selected tab's active pane shows, or `None` for an editor
+    /// pane or no tab: where the window's keys, committed text, Copy and Paste go.
+    #[must_use]
+    pub fn active_terminal(&self) -> Option<TerminalId> {
+        self.selected()
+            .and_then(|entry| entry.panes().active_terminal())
+    }
+
+    /// Reports terminal focus for every tab: the selected tab's active session holds it while
+    /// `window_active`, and no other session does. The other tabs report first, so a tab
+    /// switch sends the loss before the gain.
+    pub fn sync_terminal_focus(&self, window_active: bool) {
+        let entries = self.entries();
+        for entry in entries.iter().filter(|entry| !entry.is_selected()) {
+            entry.panes().sync_terminal_focus(false);
+        }
+        for entry in entries.iter().filter(|entry| entry.is_selected()) {
+            entry.panes().sync_terminal_focus(window_active);
+        }
     }
 
     /// Collapses the window to its selected tab after a SUCCESSFUL in-place Neovim

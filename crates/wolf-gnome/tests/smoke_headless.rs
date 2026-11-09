@@ -11,7 +11,7 @@
 //!
 //! ## What this file contains
 //!
-//! **Sixty-two cage smokes** — one window-render smoke, two file-picker smokes,
+//! **Sixty-three cage smokes** — one window-render smoke, two file-picker smokes,
 //! one file-tree-sidebar smoke, five split-pane smokes, one empty-state smoke, one
 //! new-untitled-buffer smoke, one command-palette smoke, one OPEN RECENT smoke
 //! (Ctrl+Shift+P, a typed folder query, then Enter — the activated row re-roots the
@@ -150,7 +150,10 @@
 //! limitation that a plain `Ctrl+<letter>` press does not reach Neovim while a
 //! compose sequence is pending — a claim that otherwise rests on a deleted probe, and
 //! one that no single-armed smoke could state, since "no split" is satisfied for free
-//! by a build where the chord splits nothing), and
+//! by a build where the chord splits nothing), one TERMINAL-PANE smoke (a shell session
+//! opened in the first pane through the `WOLF_SMOKE_TERMINAL` hook, typed into: an output
+//! word no typed line carries, read by OCR, the session's `stty size` written back by the
+//! shell itself, and a truecolour background counted in exact pixels), and
 //! one FRAME-STATS smoke (four typing bursts with `WOLF_FRAME_STATS` armed at a
 //! one-second interval, whose evidence is the report file the running application
 //! appended to and no pixel anywhere: thirteen bucket labels that must each appear as
@@ -187,7 +190,7 @@
 //! and the captures carry the one claim they cannot make, that a single page's pane
 //! view is on screen at a time.
 //!
-//! Thirty-eight of the sixty-two OCR a screenshot of the live window, and three of
+//! Thirty-nine of the sixty-three OCR a screenshot of the live window, and three of
 //! those OCR a CROP of it rather than the whole file. The terminal-drawer smoke
 //! samples a band inside the drawer strip, below its statusbar, because that band is
 //! the region measured byte-identical across runs (see `drawer_band_rect`); the two
@@ -228,7 +231,7 @@
 //! readback and a `state.json` frozen mid-run — because in both cases the surface
 //! under test cannot be read any other way.
 //!
-//! Seven of the sixty-two read RAW PIXELS out of their own captures, which is the
+//! Eight of the sixty-three read RAW PIXELS out of their own captures, which is the
 //! only route this harness has to a claim OCR cannot make — it reads no colour, and
 //! it cannot answer "where on the page is this".
 //! [`preview_document_follows_the_configured_appearance_under_cage`] captures two
@@ -256,8 +259,10 @@
 //! not a word.
 //! [`vertical_split_shows_two_panes_under_cage`] decodes the same capture its two OCR
 //! assertions read and counts the theme accent at each pane's own outer edge. Its claim
-//! is about what is NOT painted there, so no reading of the page could carry it, and it
-//! is the only pixel reading here taken outside a preview or an overlay.
+//! is about what is NOT painted there, so no reading of the page could carry it.
+//! [`typed_keys_reach_a_terminal_pane_shell_under_cage`] decodes both of its captures and
+//! counts one truecolour a shell session printed, absent before the line ran and present
+//! after: OCR reads the session's text, and only pixels can say its colours were painted.
 //!
 //! **Fourteen pure guards**, which mechanically enforce invariants the cage smokes
 //! depend on but cannot check themselves:
@@ -350,7 +355,7 @@
 //!   exactly the kind that stops being true when someone changes a font size, and
 //!   nothing else would notice.
 //! * [`the_shared_smoke_config_pins_the_appearance_every_ocr_smoke_assumes`] — the
-//!   SECOND premise those thirty-eight rest on: the seeded `wolf-config.yaml` pins
+//!   SECOND premise those thirty-nine rest on: the seeded `wolf-config.yaml` pins
 //!   `appearance: dark`, which is what keeps the grid light-on-dark for sparse-text
 //!   segmentation. It asserts both halves — the pinned VALUE, re-typed locally so
 //!   the check is not a comparison with itself, and the artifact
@@ -411,7 +416,7 @@
 //! builds real [`cage_command`]s but looks nothing up on `PATH`: it needs only a
 //! writable `temp_dir()`, where each command writes its bus configuration.
 //!
-//! So this target's summary line reads **`76 passed`**, not `62`: sixty-two cage
+//! So this target's summary line reads **`77 passed`**, not `63`: sixty-three cage
 //! smokes plus those fourteen guards.
 //!
 //! **Three `#[ignore]`d PACKAGED smokes** sit at the end of this file and are NOT in
@@ -440,7 +445,7 @@
 //!
 //! ## When it runs
 //!
-//! The sixty-two cage smokes run as part of the STANDARD suite — `cargo test -p
+//! The sixty-three cage smokes run as part of the STANDARD suite — `cargo test -p
 //! wolf-gnome` and `cargo test --workspace` — inside the flake devShell. They are
 //! the Linux verification gate's only end-to-end proof that the GTK front-end draws
 //! a window a human could see (see `build.md`, "The verification gate").
@@ -458,7 +463,7 @@
 //! nix develop --command cargo test -p wolf-gnome --test smoke_headless
 //! ```
 //!
-//! ## Requirements of the sixty-two cage smokes (from the devShell's smoke toolchain)
+//! ## Requirements of the sixty-three cage smokes (from the devShell's smoke toolchain)
 //!
 //! - `cage` (headless wlroots compositor), `dbus-run-session`, `wtype`, `grim`,
 //!   `tesseract` and `wolf-pointer-inject` on `PATH`. The last one is NOT an upstream package: it is
@@ -476,7 +481,7 @@
 //!   [`require_smoke_env`], which fails loud rather than letting that surface as an
 //!   empty result list.
 //!
-//! Per project policy every one of the sixty-two FAILS LOUD if any of the above is
+//! Per project policy every one of the sixty-three FAILS LOUD if any of the above is
 //! missing rather than silently skipping, mirroring `common::require_nvim_bin` — a
 //! missing precondition means the smoke toolchain was not provisioned, which is a
 //! setup bug we want surfaced, not hidden. Now that these tests run by default, that
@@ -10469,7 +10474,7 @@ fn smoke_gtk_config_dirs(runtime: &Path) -> PathBuf {
 /// the OCR width and height note in notes/crates/wolf-gnome/tests/smoke_headless.rs.md#split-pane-smokes,
 /// because if two or three panes are ever too narrow or too short for 28 pt OCR the
 /// fix is per-test (widen the window, or lower the font for THAT test) and must not
-/// be applied here to all sixty-two.
+/// be applied here to all sixty-three.
 ///
 /// [`cage_is_only_spawned_through_the_isolating_helper`] enforces the "single place"
 /// property mechanically, because a smoke that spawned the compositor directly would
@@ -11957,7 +11962,7 @@ fn every_launch_waits_for_readiness_before_its_first_input() {
 /// Reading the const and comparing it to itself would hold for whatever value it
 /// took, including the one that inverts every OCR page in this file. Stating
 /// `dark` independently means a change to the shared pin fails HERE, loudly and in
-/// microseconds, rather than thirty-eight OCR assertions later.
+/// microseconds, rather than thirty-nine OCR assertions later.
 const EXPECT_SMOKE_APPEARANCE: &str = "dark";
 
 /// Enforces mechanically that the SHARED seeded `wolf-config.yaml` — the one
@@ -11969,7 +11974,7 @@ const EXPECT_SMOKE_APPEARANCE: &str = "dark";
 /// `crates/wolf-gnome/tests/README.md` records as the premise for sparse-text
 /// segmentation. That grid is the captive Neovim's default colorscheme responding
 /// to `&background`, and the front-end pushes `&background` from the configured
-/// `appearance`. So the seeded value sits upstream of all thirty-eight OCR
+/// `appearance`. So the seeded value sits upstream of all thirty-nine OCR
 /// assertions at once — and it is written in [`write_smoke_config`], thousands of
 /// lines from every assertion it can disarm. That distance is the same reason the
 /// three fixture-name guards exist.
@@ -12014,7 +12019,7 @@ fn the_shared_smoke_config_pins_the_appearance_every_ocr_smoke_assumes() {
         "{GUARD}: SMOKE_APPEARANCE is {SMOKE_APPEARANCE:?}, but every OCR smoke in this file is \
          calibrated on a light-on-dark grid and {EXPECT_SMOKE_APPEARANCE:?} is what produces one. \
          It is also what Neovim already defaults to under `--embed`, which is why pinning it moves \
-         no page at all. Re-pinning to \"light\" inverts all thirty-eight OCR pages simultaneously, \
+         no page at all. Re-pinning to \"light\" inverts all thirty-nine OCR pages simultaneously, \
          and no single one of their failures would name this const as the cause — which is exactly \
          why the expected value is re-typed here instead of read from the pin."
     );
@@ -12949,7 +12954,7 @@ fn assert_button_rect_fits(smoke: &str, rect: (f64, f64, f64, f64), overlay: (f6
 /// Files page is back, so that file has an exemption block too.
 /// [`PROJSEARCH_OCR_RESULT`] is content, the last word of the target's match line.
 ///
-/// Thirty-eight of the sixty-two smokes are covered here, the second project-search
+/// Thirty-nine of the sixty-three smokes are covered here, the second project-search
 /// smoke through the first's rows, since it asserts on the same terms. TWENTY-FOUR
 /// contribute no rows at all, on purpose, and it is worth being explicit about which
 /// and why:
@@ -13455,6 +13460,11 @@ const ASSERTED_OCR_TERMS: &[(&str, &str, &str)] = &[
         TABS_OCR_SECOND,
         "TABS_OCR_SECOND",
         "native_tabs_open_switch_and_close_under_cage",
+    ),
+    (
+        TP_OCR_WORD,
+        "TP_OCR_WORD",
+        "typed_keys_reach_a_terminal_pane_shell_under_cage",
     ),
 ];
 
@@ -14030,7 +14040,7 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
 ///
 /// This test is PURE: no compositor, no `require_smoke_env`, no cage slot, no
 /// subprocess. It reads two const tables and finishes in microseconds, so it adds
-/// nothing to the smoke suite's runtime and — unlike the sixty-two smokes — still
+/// nothing to the smoke suite's runtime and — unlike the sixty-three smokes — still
 /// guards the fixture on a machine where the smoke toolchain is unavailable.
 #[test]
 fn sidebar_filler_names_cannot_satisfy_any_smoke_assertion() {
@@ -28983,7 +28993,7 @@ fn divider_drag_survives_a_pane_relayout_under_cage() {
 /// | the `~` end-of-buffer column above a lone heading — a sparse region `--psm 11` scales the whole pane from | three ablations on one PNG, one at a time; blanking the `~` column alone fixed it | [`DIVIDER_BODY_LINE_COUNT`] body lines, which fill the pane past `winheight` so no marker is drawn |
 /// | a single misclassified GLYPH at 15 columns | the same pixels read through both segmentation modes, twice over | the second reader, [`ocr_uniform_block_to_lowercase`] |
 ///
-/// The second is why this smoke, alone of the sixty-two, reads its capture twice.
+/// The second is why this smoke, alone of the sixty-three, reads its capture twice.
 /// With the first answered, on one retained PNG:
 ///
 /// | command | verbatim output |
@@ -35175,6 +35185,312 @@ fn a_control_chord_while_composing_is_claimed_by_the_input_method_under_cage() {
          limitation bullet, the accelerator-namespace clauses and this expectation move together \
          in one commit. Readback kept at {}.",
         wins_after.display()
+    );
+}
+
+// --- The terminal-pane smoke: typed keys reach a session's shell, which paints its colours. ---
+
+/// TERMINAL-PANE smoke: the program `WOLF_SMOKE_TERMINAL` names, which the app opens as a
+/// session in tab 0's first pane before it reports itself ready.
+const TP_PROGRAM: &str = "/bin/sh";
+
+/// The prompt the session's shell is given through `PS1`, fixed so the page is the same on
+/// every host. The scenario also removes `ENV`, so the shell reads no rc file.
+const TP_PS1: &str = "$ ";
+
+/// The first line typed into the session. Its output, [`TP_OCR_WORD`], is the two values
+/// joined in the other order, so no typed text and no echo of one carries it: only the shell
+/// running the line can put it on screen.
+const TP_ECHO_LINE: &str = "a=lantern; b=foxglove; echo \"$b$a\"";
+
+/// What [`TP_ECHO_LINE`] prints, and the OCR assertion's term.
+const TP_OCR_WORD: &str = "foxglovelantern";
+
+/// The second line typed: the shell writes the session's pty size into `$TP_SIZE_FILE`, which
+/// it inherits from the app. The path itself is never typed, so it is on no page.
+const TP_SIZE_LINE: &str = "stty size > \"$TP_SIZE_FILE\"";
+
+/// The size readback, under `XDG_RUNTIME_DIR` so no sidebar row draws it.
+const TP_SIZE_NAME: &str = "wolf_gnome_terminal_size.txt";
+
+/// The two captures: the colour line typed but not run, and the page after it ran.
+const TP_TYPED_PNG_NAME: &str = "wolf_gnome_terminal_typed.png";
+const TP_FINAL_PNG_NAME: &str = "wolf_gnome_terminal_final.png";
+
+/// The truecolour background [`tp_colour_line`] prints under [`TP_COLOUR_CELLS`] blank cells.
+/// Nothing else Wolf draws uses it, which the first capture asserts rather than assumes.
+const TP_COLOUR: Rgb8 = (17, 201, 113);
+
+/// How many blank cells the colour line prints on [`TP_COLOUR`].
+const TP_COLOUR_CELLS: usize = 9;
+
+/// The share of [`TP_COLOUR_CELLS`] cells' area the final capture must hold of [`TP_COLOUR`]
+/// exactly. Under one because the antialiased seams between fractional cells blend.
+const TP_MIN_COLOUR_FRACTION: f64 = 0.90;
+
+/// The size a session has before any `resize_terminal`, as `stty size` prints it (rows, cols):
+/// core's default. A readback of it means the pane never sized its session.
+const TP_UNSIZED: (i64, i64) = (24, 80);
+
+/// The third line typed: [`TP_COLOUR_CELLS`] spaces on [`TP_COLOUR`], then a reset. Built from
+/// the constants, so the colour asserted and the colour printed cannot drift apart.
+fn tp_colour_line() -> String {
+    format!(
+        "printf '\\033[48;2;{};{};{}m%{TP_COLOUR_CELLS}s\\033[0m\\n' ''",
+        TP_COLOUR.0, TP_COLOUR.1, TP_COLOUR.2
+    )
+}
+
+/// The TERMINAL-PANE scenario, run as a single `sh -c` string inside `cage` (the
+/// [`COMPOSE_SCENARIO`] shape): launch with `WOLF_SMOKE_TERMINAL` set, so tab 0's pane shows a
+/// shell session; type a line whose output is the OCR term; type the size readback; type the
+/// colour line without Return and capture; press Return and capture again.
+///
+/// Every line is typed with `wtype`, so its printables arrive as input-method commits and its
+/// Return through `gdk_key`, the two routes a terminal pane takes keys by.
+///
+/// A size readback that never appears is reported on stderr and does not end the scenario, so
+/// the two captures are still taken and the Rust side names which claim failed.
+///
+/// ## Exit codes
+///
+/// * `11` — the app died before it was ready for input (the shared convention).
+/// * `40` — it never became ready (the shared convention).
+const TERMPANE_SCENARIO: &str = r#"
+set -eu
+
+# SETTLE is the settle between steps; see SCENARIO.
+WAIT_INTERVAL=0.2
+SETTLE=1.0
+# How many WAIT_INTERVAL polls to allow for the size readback.
+FILE_TRIES=100
+
+cleanup() {
+    set +e
+    if [ -n "${app_pid:-}" ]; then
+        kill "$app_pid" 2>/dev/null
+        wait "$app_pid" 2>/dev/null
+    fi
+}
+trap cleanup EXIT INT TERM HUP
+
+"$WOLF_BIN" &
+app_pid=$!
+wait_ready "$app_pid" 11 "wolf-gnome terminal-pane smoke"
+
+wait_file() {
+    f=$1
+    t=0
+    while [ "$t" -lt "$FILE_TRIES" ]; do
+        if [ -s "$f" ]; then
+            return 0
+        fi
+        t=$((t + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    echo "wolf-gnome terminal-pane smoke: readback file $f never appeared (or stayed empty)." >&2
+    return 1
+}
+
+# --- Step 1: a line whose output appears in no typed text ---------------------
+wtype -- "$TP_ECHO_LINE"
+wtype -k Return
+sleep "$SETTLE"
+
+# --- Step 2: the session's size, written by the shell itself ------------------
+wtype -- "$TP_SIZE_LINE"
+wtype -k Return
+wait_file "$TP_SIZE_FILE" || true
+
+# --- Step 3: the colour line, typed and captured, then run and captured --------
+wtype -- "$TP_COLOUR_LINE"
+sleep "$SETTLE"
+grim "$OUT_TYPED"
+wtype -k Return
+sleep "$SETTLE"
+grim "$OUT_FINAL"
+
+exit 0
+"#;
+
+/// **Keys typed into a terminal pane reach its shell, the pane sizes the session, and the
+/// session's own colours reach the screen.**
+///
+/// The only test that joins the window's key routing, the pane's sizing and the canvas in a
+/// running app: `terminal_seams.rs` pins the rules and `terminal_paint.rs` the canvas against a
+/// real session, neither with a widget. A terminal pane exists here only through the
+/// `WOLF_SMOKE_TERMINAL` hook, since nothing user-facing opens one yet.
+///
+/// ## Assertions
+///
+/// | # | assertion | kind | falsifier |
+/// | --- | --- | --- | --- |
+/// | 0 | no typed line carries [`TP_OCR_WORD`] | precondition | none |
+/// | 1 | the scenario exits 0 and both captures exist | precondition | none |
+/// | 2 | OCR of the final capture contains [`TP_OCR_WORD`] | discriminator | in `window.rs`, route keys and commits to Neovim even when a terminal is active |
+/// | 3 | the readback's cols equal the pane's grid width derived from the pinned geometry and [`cell_metrics_for_smoke`]; its rows are at least 1, at most what the pane area could hold, and not [`TP_UNSIZED`]'s | discriminator | skip `resize_terminal` in `sync_terminal_sizes`, so the readback reads `24 80` |
+/// | 4 | the typed capture holds no pixel of exactly [`TP_COLOUR`] | precondition: nothing else draws the colour | none |
+/// | 5 | the final capture holds at least [`TP_MIN_COLOUR_FRACTION`] of [`TP_COLOUR_CELLS`] cells' area of exactly [`TP_COLOUR`] | discriminator | in `draw_pane`, paint the placeholder grid instead of the canvas |
+///
+/// Rows have no exact expectation: the pane's height depends on the statusbar strip and the
+/// cmdline strip, which no constant here pins. The bound still tells a sized session (11 rows
+/// were measured for this pane by `pane_status_bar_shows_each_panes_filename_under_cage`) from
+/// an unsized one.
+#[test]
+fn typed_keys_reach_a_terminal_pane_shell_under_cage() {
+    const SMOKE: &str = "typed_keys_reach_a_terminal_pane_shell_under_cage";
+
+    let runtime_dir = require_smoke_env();
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+
+    // A fresh temp cwd, with the sidebar fillers for page density; see `SIDEBAR_FILLER_COUNT`.
+    let cwd = make_temp_cwd();
+    for name in SIDEBAR_FILLER_FILES {
+        let filler = cwd.join(name);
+        std::fs::write(&filler, SIDEBAR_FILLER_BODY).unwrap_or_else(|e| {
+            panic!("{SMOKE}: failed to write filler {}: {e}", filler.display())
+        });
+    }
+
+    let colour_line = tp_colour_line();
+    // Assertion 0 (precondition): the word must come from the shell, not from an echo.
+    for (what, typed) in [
+        ("TP_ECHO_LINE", TP_ECHO_LINE),
+        ("TP_SIZE_LINE", TP_SIZE_LINE),
+        ("tp_colour_line()", colour_line.as_str()),
+        ("TP_PS1", TP_PS1),
+    ] {
+        assert!(
+            !typed.to_lowercase().contains(TP_OCR_WORD),
+            "{SMOKE}: {what} = {typed:?} contains the OCR term {TP_OCR_WORD:?}, so the echo of \
+             the typed line satisfies assertion 2 whether or not the shell ran it. Change the \
+             line; do NOT change the term to match it."
+        );
+    }
+
+    let size_file = runtime_dir.join(TP_SIZE_NAME);
+    let typed_png = runtime_dir.join(TP_TYPED_PNG_NAME);
+    let final_png = runtime_dir.join(TP_FINAL_PNG_NAME);
+    for path in [&size_file, &typed_png, &final_png] {
+        clear_evidence(path, SMOKE);
+    }
+
+    let status = cage_command(TERMPANE_SCENARIO, &cwd, &runtime_dir)
+        .env("WOLF_BIN", bin)
+        .env("WOLF_SMOKE_TERMINAL", TP_PROGRAM)
+        .env("PS1", TP_PS1)
+        .env_remove("ENV")
+        .env("TP_SIZE_FILE", &size_file)
+        .env("TP_ECHO_LINE", TP_ECHO_LINE)
+        .env("TP_SIZE_LINE", TP_SIZE_LINE)
+        .env("TP_COLOUR_LINE", &colour_line)
+        .env("OUT_TYPED", &typed_png)
+        .env("OUT_FINAL", &final_png)
+        .status()
+        .expect("failed to spawn `cage` for the headless terminal-pane smoke scenario");
+
+    // --- Assertion 1 (precondition): the scenario ran to completion -----------
+    assert!(
+        status.success(),
+        "{SMOKE}: the cage scenario exited unsuccessfully ({status}). Exit 11: the app died \
+         before it was ready for input. Exit 40: it never became ready; its `wolf-ready:` stderr \
+         lines in cage.log name the condition. Any other status means wtype or grim failed."
+    );
+    assert_png_present(SMOKE, &typed_png);
+    assert_png_present(SMOKE, &final_png);
+
+    // --- Assertion 2 (discriminator): the shell ran the typed line ------------
+    let ocr = ocr_to_lowercase(&final_png);
+    assert!(
+        ocr.contains(TP_OCR_WORD),
+        "{SMOKE}: OCR of the final capture does not contain {TP_OCR_WORD:?}, the output of the \
+         typed {TP_ECHO_LINE:?}. Open {} and check, in order:\n\
+         (a) no terminal opened: cage.log holds a `wolf-gnome:` line saying open_terminal \
+         failed, and the pane shows an editor buffer rather than a prompt;\n\
+         (b) the keys reached Neovim instead of the session: the pane shows a prompt with \
+         nothing typed after it, and the size readback is missing too;\n\
+         (c) the shell was slow: the typed line is there with no output under it;\n\
+         (d) the word drew but OCR misread it: add page text, do not weaken the term.\n\
+         OCR output was:\n{ocr}",
+        final_png.display()
+    );
+
+    // --- Assertion 3 (discriminator): the pane sized the session --------------
+    assert!(
+        size_file.exists(),
+        "{SMOKE}: the shell never wrote {}. Assertion 2 passed, so keys reached the shell; the \
+         typed `stty size` line failed, or `TP_SIZE_FILE` did not reach the session's \
+         environment through the app.",
+        size_file.display()
+    );
+    let size = read_ints(&size_file, 2, SMOKE);
+    let (rows, cols) = (size[0], size[1]);
+    let cell = cell_metrics_for_smoke();
+    let padding = wolf_gnome::editor_inset::EDITOR_PADDING_PX;
+    // The pane area's width as `the_column_cap_cannot_bind_at_the_ocr_smokes_geometry` takes it.
+    let pane_area_w =
+        exact_f64(CAGE_OUTPUT_W_EXPECTED, "CAGE_OUTPUT_W_EXPECTED") - OVERLAY_ORIGIN_X_EXPECTED;
+    let expected_cols = ((pane_area_w - 2.0 * padding).floor() / cell.cell_w).floor() as i64;
+    let pane_area_h =
+        exact_f64(CAGE_OUTPUT_H_EXPECTED, "CAGE_OUTPUT_H_EXPECTED") - OVERLAY_ORIGIN_Y_EXPECTED;
+    let max_rows = ((pane_area_h - 2.0 * padding) / cell.cell_h).floor() as i64;
+    assert_eq!(
+        cols,
+        expected_cols,
+        "{SMOKE}: the session is {cols} columns wide, not the {expected_cols} the pane's grid \
+         holds ({pane_area_w} px of pane area less two {padding} px paddings, over a {} px cell). \
+         {} means the session was never resized from core's default; another width means the \
+         pane sized it from a different area than its grid, or the pinned geometry moved \
+         (re-check `the_column_cap_cannot_bind_at_the_ocr_smokes_geometry` first). The count \
+         sits close to a boundary: {expected_cols} cells need {} px, so a pane area one pixel \
+         narrower than OVERLAY_ORIGIN_X_EXPECTED says reads one column fewer; re-measure the \
+         area before blaming the sizing. Readback kept at {}.",
+        cell.cell_w,
+        TP_UNSIZED.1,
+        expected_cols as f64 * cell.cell_w,
+        size_file.display()
+    );
+    assert!(
+        (1..=max_rows).contains(&rows) && rows != TP_UNSIZED.0,
+        "{SMOKE}: the session is {rows} rows tall. A sized session has between 1 and {max_rows} \
+         rows (the pane area's {pane_area_h} px less its paddings, over a {} px cell; 11 were \
+         measured for this pane's grid), and {} is core's default, which means the session was \
+         never resized. Readback kept at {}.",
+        cell.cell_h,
+        TP_UNSIZED.0,
+        size_file.display()
+    );
+
+    // --- Assertion 4 (precondition): nothing else draws the colour ------------
+    let typed = decode_capture(&typed_png, SMOKE, "the typed capture");
+    let whole = SampleRect {
+        x0: 0,
+        x1: typed.width,
+        y0: 0,
+        y1: typed.height,
+    };
+    let before = typed.count_exactly(whole, TP_COLOUR);
+    assert_eq!(
+        before,
+        0,
+        "{SMOKE}: the capture taken with the colour line typed but not run already holds {before} \
+         pixel(s) of exactly {TP_COLOUR:?}, so assertion 5 could count pixels the session never \
+         painted. Change TP_COLOUR. PNG kept at {}.",
+        typed_png.display()
+    );
+
+    // --- Assertion 5 (discriminator): the session's colour reached the screen --
+    let ran = decode_capture(&final_png, SMOKE, "the final capture");
+    let after = ran.count_exactly(whole, TP_COLOUR);
+    let area = TP_COLOUR_CELLS as f64 * cell.cell_w * cell.cell_h;
+    assert!(
+        after as f64 >= TP_MIN_COLOUR_FRACTION * area,
+        "{SMOKE}: the final capture holds {after} pixel(s) of exactly {TP_COLOUR:?}, under \
+         {TP_MIN_COLOUR_FRACTION} of the {area} px {TP_COLOUR_CELLS} cells cover. Assertion 2 \
+         passed, so the shell ran its lines: none means the pane painted something other than \
+         the session's frame (the placeholder grid) or the canvas dropped the cells' \
+         backgrounds; some means part of the cells is painted over. PNG kept at {}.",
+        final_png.display()
     );
 }
 

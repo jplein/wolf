@@ -76,7 +76,10 @@
 //!   are gated with the buffer picker's argument and its limits — through
 //!   [`mod@crate::preview_ui`], and for a search result through
 //!   [`crate::search_panel::activation_route`]. Any of the ten can mark the core
-//!   `Liveness::NotResponding` and raise the stall overlay.
+//!   `Liveness::NotResponding` and raise the stall overlay. Outside the ten, the
+//!   test-only [`crate::terminal::SMOKE_TERMINAL_ENV`] hook issues one
+//!   `WolfCore::open_terminal` per window, on its first wake with a pane; no user
+//!   path reaches it.
 //!
 //!   PASTE adds none: `gdk::Clipboard::read_text_async` resolves on a later
 //!   main-loop turn and `WolfCore::paste` is fire-and-forget on the ordered input
@@ -129,7 +132,9 @@
 //!   what it CLAIMS arrives as a `commit` string and reaches the same call through
 //!   [`mod@crate::im_ui`] — which owns that precedence and the commit rulebook.
 //!   nvim routes the result to its current window, and the cursor renders in
-//!   whichever pane owns that grid.
+//!   whichever pane owns that grid. While the selected tab's active pane is a
+//!   terminal pane, the same key goes to its session through `WolfCore::terminal_key`
+//!   instead, and a commit through [`crate::terminal::input::commit_route`].
 //!   The controller has no propagation phase (i.e. Bubble), so it runs only after
 //!   [`crate::shell`]'s CAPTURE-phase chord controller has had its say — which is
 //!   exactly the guarantee that a bound chord is not also forwarded to Neovim, nor
@@ -183,7 +188,9 @@ use std::sync::Arc;
 
 use adw::prelude::*;
 use gtk::{gdk, glib};
-use wolf_core::{CoreConfig, InputEvent, TabState, WakeFn, WindowState, WolfConfig, WolfCore};
+use wolf_core::{
+    CoreConfig, InputEvent, TabState, TerminalId, WakeFn, WindowState, WolfConfig, WolfCore,
+};
 
 use crate::appearance;
 use crate::buffer_picker::{self, BufferPickerHandle};
@@ -203,6 +210,7 @@ use crate::shell::{
 use crate::sidebar;
 use crate::state_seam::{self, RestorePlan};
 use crate::tab_view::{self, RestoreTabs, TabParts, TabsHandle, TabsParts};
+use crate::terminal::input as terminal_input;
 use crate::title::WINDOW_TITLE_FALLBACK;
 use crate::tree_view::{self, TreeHandle};
 use crate::workspace;
@@ -611,6 +619,12 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
         eprintln!("wolf-gnome: failed to open the window's first tab");
         return None;
     }
+    // Test-only: the cage smokes' one route to a terminal pane, opened in tab 0's first pane.
+    if let Some(command) = crate::app::smoke_terminal_command() {
+        if let Some(entry) = tabs.entries().first() {
+            entry.panes().request_terminal(command);
+        }
+    }
 
     // The `win.*` actions, accelerators and command drain, installed before `present()` so the menu
     // and header button resolve them; the `app.*` rows are the coordinator's.
@@ -692,6 +706,7 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
         let tabs = tabs.clone();
         let tree = tree.clone();
         let shell = shell.clone();
+        let window = window.clone();
         let coordinator_weak = coordinator_weak.clone();
         glib::spawn_future_local(async move {
             while wake_rx.recv().await.is_ok() {
@@ -704,6 +719,7 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
                         {
                             let _guard = frame_metrics::scope(Bucket::WakeTabs);
                             tabs.on_render_wake();
+                            tabs.sync_terminal_focus(window.is_active());
                         }
                         {
                             let _guard = frame_metrics::scope(Bucket::WakeTree);
@@ -749,9 +765,17 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
     // launch, and timing it would break `count(wake) == wakes`.
     if shell.on_liveness_wake() {
         tabs.on_render_wake();
+        tabs.sync_terminal_focus(window.is_active());
+    }
+    // Activation moves terminal focus as a pane change does; mode 1004 programs see both.
+    {
+        let tabs = tabs.clone();
+        window.connect_is_active_notify(move |window| {
+            tabs.sync_terminal_focus(window.is_active());
+        });
     }
 
-    let im = wire_keys(&window, &core, &picker, &palette, &buffers, &search);
+    let im = wire_keys(&window, &core, &tabs, &picker, &palette, &buffers, &search);
     wire_close(CloseParts {
         window: &window,
         core: &core,
@@ -867,6 +891,13 @@ fn wire_ready_triggers(handle: &WindowHandle, coordinator: Weak<CoordinatorInner
 /// overlay guard — see "What is still unproven" in
 /// `crates/wolf-gnome/tests/README.md`.
 ///
+/// Where a key or a commit goes is decided at that moment from
+/// [`TabsHandle::active_terminal`]: a terminal pane's session takes it through
+/// `WolfCore::terminal_key`, or [`crate::terminal::input::commit_route`] for a commit,
+/// whose one-printable rule lets core's `<C-w>` router see the keys an input method
+/// claims; any other pane's goes to Neovim. The overlay guard and the input-method
+/// precedence are the same for both.
+///
 /// The controller carries NO propagation phase (i.e. Bubble), so a chord Wolf
 /// binds — Ctrl+Shift+O opens the picker, Ctrl+Shift+P the palette, Ctrl+Shift+E
 /// the buffer picker, Ctrl+Shift+F the project search — never reaches it:
@@ -897,13 +928,14 @@ fn wire_ready_triggers(handle: &WindowHandle, coordinator: Weak<CoordinatorInner
 fn wire_keys(
     window: &adw::ApplicationWindow,
     core: &Rc<RefCell<Option<WolfCore>>>,
+    tabs: &TabsHandle,
     picker: &PickerHandle,
     palette: &PaletteHandle,
     buffers: &BufferPickerHandle,
     search: &SearchPanelHandle,
 ) -> gtk::IMMulticontext {
     // Constructed here rather than passed in: nothing above needs to supply it, and
-    // returning it keeps this function at six parameters.
+    // returning it keeps this function at seven parameters, clippy's ceiling.
     let im = gtk::IMMulticontext::new();
     // BEFORE `focus_in` below, so the context already has a surface to work against
     // at the moment it is told it is focused.
@@ -911,6 +943,7 @@ fn wire_keys(
 
     {
         let core = core.clone();
+        let tabs = tabs.clone();
         let picker = picker.clone();
         let palette = palette.clone();
         let buffers = buffers.clone();
@@ -925,6 +958,10 @@ fn wire_keys(
                     eprintln!("wolf-gnome: commit not forwarded: {reason}");
                 }
                 im_ui::CommitDecision::Send(events) => {
+                    if let Some(session) = tabs.active_terminal() {
+                        send_terminal_commit(&core, session, text);
+                        return;
+                    }
                     // A commit with no core performs nothing: the window is tearing down. The borrow lives in this
                     // one statement, per notes/wolf-gnome-decisions.md#threading-and-the-wake
                     if let Some(core) = core.borrow().as_ref() {
@@ -945,6 +982,7 @@ fn wire_keys(
     let controller = gtk::EventControllerKey::new();
     {
         let core = core.clone();
+        let tabs = tabs.clone();
         let picker = picker.clone();
         let palette = palette.clone();
         let buffers = buffers.clone();
@@ -974,8 +1012,12 @@ fn wire_keys(
                 im_ui::KeyRoute::Consumed => glib::Propagation::Stop,
                 im_ui::KeyRoute::Translate => match crate::gdk_key(keyval, state) {
                     Some(event) => {
+                        let terminal = tabs.active_terminal();
                         if let Some(core) = core.borrow().as_ref() {
-                            core.send_input(InputEvent::Key(event));
+                            match terminal {
+                                Some(session) => core.terminal_key(session, event),
+                                None => core.send_input(InputEvent::Key(event)),
+                            }
                             // Counted where delivered, so keys the overlay guard swallowed, the input method claimed or that
                             // reached no core stay out of the report's `wakes/key` denominator.
                             frame_metrics::note_keystroke();
@@ -1031,6 +1073,29 @@ fn wire_keys(
 
     window.add_controller(controller);
     im
+}
+
+/// Sends an input method's commit `text` to terminal `session` through
+/// [`crate::terminal::input::commit_route`]: one printable ASCII character as a key, so core's
+/// `<C-w>` router sees it, other text as text, and nothing for a control-only commit.
+fn send_terminal_commit(core: &RefCell<Option<WolfCore>>, session: TerminalId, text: &str) {
+    let core_ref = core.borrow();
+    let Some(core) = core_ref.as_ref() else {
+        return;
+    };
+    match terminal_input::commit_route(text) {
+        terminal_input::TerminalCommit::Nothing => {}
+        terminal_input::TerminalCommit::Key(event) => {
+            core.terminal_key(session, event);
+            frame_metrics::note_keystroke();
+        }
+        terminal_input::TerminalCommit::Text(text) => {
+            core.terminal_text(session, &text);
+            for _ in text.chars() {
+                frame_metrics::note_keystroke();
+            }
+        }
+    }
 }
 
 /// The handles [`wire_close`] needs, as one struct rather than nine positional

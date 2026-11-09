@@ -189,7 +189,7 @@ pub fn paint(cr: &cairo::Context, grid: &Grid, highlights: &HighlightTable, metr
 }
 
 /// Sets the Cairo source to an opaque `Rgb` color.
-fn set_source(cr: &cairo::Context, color: Rgb) {
+pub(crate) fn set_source(cr: &cairo::Context, color: Rgb) {
     cr.set_source_rgb(
         f64::from(color.r) / RGB_MAX,
         f64::from(color.g) / RGB_MAX,

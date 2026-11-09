@@ -134,7 +134,8 @@
 //! `WolfCore::copy_visual_selection` into `block_on_rpc`, so a Ctrl+Shift+C against
 //! a wedged Neovim costs a full RPC timeout budget of frozen main loop.
 //! [`crate::clipboard_ui::copy_decision`] guards it with the buffer picker's
-//! argument and its limits. PASTE adds none: `gdk::Clipboard::read_text_async`
+//! argument and its limits; in a terminal pane Copy reads the session's selection,
+//! which issues no RPC and is not gated on liveness. PASTE adds none: `gdk::Clipboard::read_text_async`
 //! resolves on a later main-loop turn and `WolfCore::paste` is fire-and-forget on
 //! the ordered input channel, so nothing on that path can time out and nothing on
 //! it can mark the core `NotResponding`. [`crate::clipboard_ui::paste_decision`]
@@ -945,12 +946,14 @@ impl AppShell {
     }
 
     /// Yanks the focused Neovim's visual-mode selection and writes it to the
-    /// system clipboard, or prints why it did not.
+    /// system clipboard, or prints why it did not. In a terminal pane it copies the
+    /// session's selection instead.
     ///
     /// **The yank is a BLOCKING RPC on the GTK main thread**
     /// (`WolfCore::copy_visual_selection` over `block_on_rpc`), so it is gated by
     /// [`clipboard_ui::copy_decision`] exactly as the buffer picker's candidate
-    /// snapshot and a navigation move are; see the module docs.
+    /// snapshot and a navigation move are; see the module docs. A terminal's
+    /// `WolfCore::terminal_selection_text` issues no RPC, which is why that arm is not.
     ///
     /// The core borrow is taken and dropped in a statement of its own, BEFORE the
     /// clipboard is touched. `clipboard_write` answering `None` means write
@@ -959,10 +962,22 @@ impl AppShell {
     /// here.
     fn copy_selection(&self) {
         let liveness = self.read_liveness();
+        let terminal = self.inner.tabs.active_terminal();
 
-        match clipboard_ui::copy_decision(liveness) {
+        match clipboard_ui::copy_decision(liveness, terminal) {
             CopyPress::Refuse(reason) => {
                 eprintln!("wolf-gnome: copy not performed: {reason}");
+            }
+            CopyPress::Terminal(session) => {
+                let selection = {
+                    let core_ref = self.inner.core.borrow();
+                    core_ref
+                        .as_ref()
+                        .and_then(|core| core.terminal_selection_text(session))
+                };
+                if let Some(text) = clipboard_ui::clipboard_write(selection.as_deref()) {
+                    self.clipboard().set_text(text);
+                }
             }
             CopyPress::Copy => {
                 let selection = {
@@ -976,8 +991,10 @@ impl AppShell {
         }
     }
 
-    /// Reads the system clipboard and inserts it through `nvim_paste`, or prints
-    /// why it did not.
+    /// Reads the system clipboard and inserts it through `nvim_paste`, or into the
+    /// active terminal pane's session through `WolfCore::terminal_paste`, or prints
+    /// why it did not. The target is captured at the press, so a focus change while
+    /// the read is in flight cannot redirect the text.
     ///
     /// **Nothing on this path blocks**, so it adds no entry to the module docs'
     /// blocking inventory: `gdk::Clipboard::read_text_async` hands GLib a
@@ -999,6 +1016,7 @@ impl AppShell {
                 eprintln!("wolf-gnome: paste not performed: {reason}");
             }
             PastePress::Read => {
+                let terminal = self.inner.tabs.active_terminal();
                 let weak = Rc::downgrade(&self.inner);
                 self.clipboard()
                     .read_text_async(gio::Cancellable::NONE, move |result| {
@@ -1017,7 +1035,10 @@ impl AppShell {
                         };
                         let core_ref = shell.inner.core.borrow();
                         if let Some(core) = core_ref.as_ref() {
-                            core.paste(text.to_owned());
+                            match terminal {
+                                Some(session) => core.terminal_paste(session, text),
+                                None => core.paste(text.to_owned()),
+                            }
                         }
                     });
             }
