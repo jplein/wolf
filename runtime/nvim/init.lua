@@ -343,12 +343,12 @@ function _G.wolf_suppress_buffers(fn)
 	end
 end
 
--- Spans every tabpage (nvim_list_wins). Coalesced through vim.schedule, never synchronous; see
+-- Spans every tabpage (nvim_list_wins). Coalesced via vim.schedule, but for wolf_sync_buffers; see
 -- runtime/nvim/README.md#decisions and notes/runtime/nvim/init.lua.md#buffer-tracking-emits.
 function _G.wolf_setup_buffer_tracking(chan)
 	local group = vim.api.nvim_create_augroup("WolfBuffers", { clear = true })
-	-- Scans every window and notifies core. Only ever called from the scheduled
-	-- callback below, i.e. at a settled point between event-loop iterations.
+	-- Scans every window and notifies core. Called only at a settled point: from the
+	-- scheduled callback below, or from wolf_sync_buffers once a rebuild is realized.
 	local function emit_now()
 		local list = {}
 		for _, win in ipairs(vim.api.nvim_list_wins()) do
@@ -388,6 +388,14 @@ function _G.wolf_setup_buffer_tracking(chan)
 	-- Expose the emit closure so wolf_suppress_buffers can re-emit the final state
 	-- once a multi-step window build finishes.
 	_G.wolf_emit_buffers = emit
+	-- Emits now, then waits on a request core answers only once that emit is applied.
+	-- See runtime/nvim/README.md#wolf_rebuild_layoutspec_json.
+	function _G.wolf_sync_buffers()
+		if not _G.wolf_buffers_suppressed then
+			emit_now()
+		end
+		pcall(vim.rpcrequest, chan, "wolf_barrier")
+	end
 	vim.api.nvim_create_autocmd(
 		-- TermOpen is where a `:terminal` buffer's buftype finally becomes
 		-- "terminal"; the earlier BufEnter/BufFilePost see it as a plain buffer.
@@ -869,7 +877,12 @@ function _G.wolf_rebuild_layout(spec_json)
 		return handles
 	end
 
-	return realize(spec)
+	local handles = realize(spec)
+	-- Core reports every returned window before the RPC answers.
+	if _G.wolf_sync_buffers then
+		_G.wolf_sync_buffers()
+	end
+	return handles
 end
 
 -- See runtime/nvim/README.md#wolf_close_tabpagehandle.

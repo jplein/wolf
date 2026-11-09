@@ -140,8 +140,13 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
   private var sidebarVisibilityObservation: NSKeyValueObservation?
 
   /// Guards `teardown()` against running twice (windowWillClose + the
-  /// terminate-time backstop).
-  private var isTornDown = false
+  /// terminate-time backstop). The coordinator's commit walk skips a torn-down view.
+  private(set) var isTornDown = false
+
+  /// The tab this view last contributed to a commit, seeded from the restored tab, so
+  /// a commit while this view cannot be read still writes its saved files. See
+  /// `persistedTab()`.
+  private var persistedCache: RestoreSeam.SavedTab?
 
   /// The last live cwd observed on a render wake, so the dynamic Window menu is
   /// rebuilt (via the coordinator) ONLY when this window's cwd actually changes
@@ -178,6 +183,9 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
     let seed = CellMetrics.defaultPointSize(config: config)
     self.defaultPointSize = seed
     self.currentPointSize = seed
+    self.persistedCache = restoredTab.map {
+      RestoreSeam.SavedTab(cwd: $0.cwd, sidebarVisible: $0.sidebarVisible, layout: $0.layout)
+    }
     super.init()
   }
 
@@ -757,11 +765,28 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
   /// command on the last split.
   var paneCount: Int { paneContainer?.paneCount ?? 1 }
 
-  /// This tab's persistable pane-split layout (topology + weights + per-leaf buffer
-  /// path), `nil` ONLY for an empty-state (unnamed, non-preview) lone pane; a lone
-  /// pane showing a file or preview persists a single leaf. Read by the
-  /// coordinator's whole-tree snapshot walk (`AppDelegate.snapshotNow`).
-  func layoutSnapshot() -> SavedPaneNode? { paneContainer?.layoutSnapshot() }
+  /// The tab this view contributes to a state commit (`AppDelegate.snapshotNow`):
+  /// its live state when `SessionSeam` can read all of it, otherwise the tab it last
+  /// contributed, which starts as the restored tab. `nil` only for a fresh view that
+  /// has never been readable. Each call stores its answer as the next fallback.
+  func persistedTab() -> RestoreSeam.SavedTab? {
+    let tab = SessionSeam.contribution(
+      mayGather: SessionSeam.mayGather(
+        hasFolder: hasFolder, restoredCwd: restoredTab?.cwd,
+        restoreFailed: paneContainer?.restoreFailed ?? false),
+      gather: liveTab(), cache: persistedCache)
+    persistedCache = tab
+    return tab
+  }
+
+  /// Reads this view's live state into the tab it persists.
+  private func liveTab() -> SessionSeam.TabGather {
+    guard let paneContainer, let handle else { return .refuse }
+    return SessionSeam.gatherTab(
+      hasFolder: hasFolder, cwd: handle.cwd_for_tabpage(tabpageHandle).toString(),
+      sidebarVisible: sidebarVisible, layout: paneContainer.paneLayout,
+      content: paneContainer.leafContents())
+  }
 
   /// Whether this window's active document is in Neovim visual mode
   /// (`v`/`V`/`<C-v>`). One of the two inputs to `canCopy`; it gates only the
@@ -967,8 +992,9 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
     paneContainer?.markRefocusRebind()
   }
 
-  /// Tears this VIEW down: push the final snapshot, drain the state writer, drop
-  /// the sidebar's + picker's file-search sessions and the palette session, close
+  /// Tears this VIEW down: decide its close commit (`AppDelegate.closeCommit(for:)`),
+  /// drop the state writer, the sidebar's + picker's file-search sessions and the
+  /// palette session, close
   /// this view's tabpage on the shared core (non-last close), detach from the
   /// project (which shuts the core down only when THIS was the last view), and ask
   /// the coordinator to drop this controller. Idempotent (windowWillClose +
@@ -976,11 +1002,14 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
   /// the project owns the core's lifetime.
   func teardown() {
     guard !isTornDown else { return }
+    // Decided while this view still counts as live, so closing the last one commits it.
+    let commit = coordinator?.closeCommit(for: self) ?? .skip
     isTornDown = true
 
-    // Persist the remaining tree; the coalesced snapshot fires after the deferred
-    // `removeController`, so the walk sees only the surviving tabs.
-    coordinator?.scheduleStateSnapshot()
+    // The coalesced commit walks only live views, so it persists the tree without this one.
+    if commit == .dropSubtree {
+      coordinator?.scheduleStateSnapshot()
+    }
 
     statePersistence = nil
 

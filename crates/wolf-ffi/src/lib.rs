@@ -491,6 +491,9 @@ mod ffi {
         // The statusbar strings for the window drawing into `grid`. An unnamed buffer, a grid with no
         // window or a shut-down core yields `[No Name]` with an empty display path.
         fn pane_status_for_grid(&self, grid: u64) -> FfiPaneStatus;
+        // What window `win` shows, keyed by handle and global across tabpages, unlike
+        // `pane_status_for_grid`. Not reported for an unknown window or a shut-down core.
+        fn win_buffer(&self, win: i64) -> FfiWinBuffer;
         // Opens `path` (an absolute filesystem path) in Neovim via
         // `InputEvent::Open`; the core's input pump records the MRU.
         fn open(&self, path: String);
@@ -1007,6 +1010,15 @@ mod ffi {
         fn display_path(&self) -> String;
         // The buffer's raw ABSOLUTE path (never relativized; empty for an unnamed
         // buffer). The macOS front-end persists it as a pane-layout leaf path.
+        fn abs_path(&self) -> String;
+    }
+
+    extern "Rust" {
+        type FfiWinBuffer;
+
+        // Whether core's `win_buffers` map has the window.
+        fn reported(&self) -> bool;
+        // The buffer's absolute path; empty when unnamed or not reported.
         fn abs_path(&self) -> String;
     }
 
@@ -1983,6 +1995,10 @@ impl WolfCoreHandle {
     /// briefly on the captive nvim; an empty `Vec` on error / when the core is
     /// gone. nvim produces only the window COUNT + TOPOLOGY + per-window BUFFER;
     /// sizes come from the front-end's weights.
+    ///
+    /// When it returns, [`win_buffer`](Self::win_buffer) and [`previews`](Self::previews)
+    /// already report every returned window, so a state commit straight after it reads
+    /// the restored files rather than the startup buffer.
     #[must_use]
     pub fn rebuild_layout(&self, layout: &FfiPaneNode) -> Vec<i64> {
         let borrow = self.core.borrow();
@@ -2371,6 +2387,32 @@ impl WolfCoreHandle {
             return FfiPaneStatus::empty();
         };
         FfiPaneStatus::from_pane_status(core.pane_status(grid))
+    }
+
+    /// What window `win` shows, read from core's `win_buffers` map by handle.
+    ///
+    /// That map spans every tabpage, so a window on a background tabpage is still
+    /// reported, where [`pane_status_for_grid`](Self::pane_status_for_grid) joins through
+    /// the current-tabpage-only `windows` map and answers `[No Name]`. The path is the
+    /// same string `pane_status_for_grid(..).abs_path()` gives a current-tabpage window.
+    /// Not reported, with an empty path, for an unknown window or a shut-down core.
+    #[must_use]
+    pub fn win_buffer(&self, win: i64) -> FfiWinBuffer {
+        let borrow = self.core.borrow();
+        let Some(core) = borrow.as_ref() else {
+            return FfiWinBuffer::unreported();
+        };
+        let snap = core.read_snapshot();
+        snap.win_buffers
+            .get(&win)
+            .map_or_else(FfiWinBuffer::unreported, |wb| FfiWinBuffer {
+                reported: true,
+                abs_path: wb
+                    .path
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+            })
     }
 
     /// Opens `path` (an absolute filesystem path) in Neovim via
@@ -3587,6 +3629,38 @@ impl FfiPaneStatus {
             filename: status.filename,
             display_path: status.display_path,
             abs_path: status.abs_path,
+        }
+    }
+}
+
+// --- FfiWinBuffer: what one window shows, by handle (opaque to Swift) ---
+
+/// What one window shows, as [`WolfCoreHandle::win_buffer`] reads it from core's
+/// `win_buffers` map. A projection of [`wolf_core::WinBuffer`]'s path.
+pub struct FfiWinBuffer {
+    reported: bool,
+    abs_path: String,
+}
+
+impl FfiWinBuffer {
+    /// Whether core's `win_buffers` map has the window.
+    #[must_use]
+    pub fn reported(&self) -> bool {
+        self.reported
+    }
+
+    /// The buffer's absolute, canonical path; empty for an unnamed buffer and when
+    /// the window is not reported.
+    #[must_use]
+    pub fn abs_path(&self) -> String {
+        self.abs_path.clone()
+    }
+
+    /// The answer for an unknown window or a shut-down core.
+    fn unreported() -> Self {
+        Self {
+            reported: false,
+            abs_path: String::new(),
         }
     }
 }

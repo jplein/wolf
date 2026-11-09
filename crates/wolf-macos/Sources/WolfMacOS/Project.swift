@@ -179,6 +179,9 @@ final class Project {
     if decision.render {
       currentView?.onRenderWake()
     }
+    if decision.persist {
+      coordinator?.scheduleStateSnapshot()
+    }
     if decision.autoRestart, !restarting, !restartScheduled {
       scheduleAutoRestart()
     }

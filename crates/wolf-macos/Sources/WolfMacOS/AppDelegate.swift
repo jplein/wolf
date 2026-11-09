@@ -42,12 +42,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
   /// key, never a `state.json` slot).
   private var nextTabId = 0
 
-  /// The coalesced whole-tree snapshot work item (~150ms debounce), so a KVO /
-  /// observer storm collapses into a single tree walk + commit.
-  private var snapshotWorkItem: DispatchWorkItem?
+  /// Throttles whole-tree snapshots: the first request arms one walk + commit
+  /// `snapshotCoalesceDelay` later, and requests until then join it. A throttle, not a
+  /// debounce, so a steady stream of wakes never starves the commit.
+  private lazy var snapshotCoalescer = PickerRefreshCoalescer(
+    schedule: { fire in
+      DispatchQueue.main.asyncAfter(deadline: .now() + Self.snapshotCoalesceDelay, execute: fire)
+    },
+    perform: { [weak self] in self?.snapshotNow() })
 
   /// The whole-tree snapshot coalesce delay.
   private static let snapshotCoalesceDelay: TimeInterval = 0.15
+
+  /// Set as `applicationWillTerminate` starts, so a view torn down from then on
+  /// commits nothing over the terminate commit (`closeCommit(for:)`).
+  private var isTerminating = false
+
+  /// The saved windows, or the saved tabs of a window, that no live view took at
+  /// launch (a failed core, tabpage or view build). Never retried, but carried into
+  /// every commit so the next launch can try them again.
+  private var orphanWindows: [RestoredWindowGroup] = []
 
   /// The Window submenu (returned by `AppMenu.install`), rebuilt with the
   /// dynamic per-window list on window open/close/cwd-change. `nil` until launch.
@@ -134,6 +148,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
       isDirectory: isDirectoryCheck())
     let byGroup = materializeProjects(plan, groups: restoredGroups)
     assembleWindows(byGroup, groups: restoredGroups)
+    orphanWindows = Self.unmaterializedGroups(byGroup, groups: restoredGroups)
 
     // Every restored core failed (edge case): quit rather than run windowless.
     if controllers.isEmpty {
@@ -198,6 +213,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
       }
     }
     return byGroup
+  }
+
+  /// The saved tabs no view took in `byGroup`, each saved window's in saved order
+  /// under that window's geometry (`SessionSeam.orphanedSlots`).
+  private static func unmaterializedGroups(
+    _ byGroup: [Int: [(pos: Int, controller: WolfWindowController)]],
+    groups: [RestoredWindowGroup]
+  ) -> [RestoredWindowGroup] {
+    var materialized = Set<SessionSeam.TabSlot>()
+    for (groupIndex, members) in byGroup {
+      for member in members {
+        materialized.insert(
+          SessionSeam.TabSlot(groupIndex: groupIndex, positionInGroup: member.pos))
+      }
+    }
+    let orphans = SessionSeam.orphanedSlots(
+      savedTabCounts: groups.map { $0.tabs.count }, materialized: materialized)
+    return orphans.map { orphan in
+      let group = groups[orphan.groupIndex]
+      return RestoredWindowGroup(
+        x: group.x, y: group.y, width: group.width, height: group.height,
+        tabs: orphan.positions.map { group.tabs[$0] })
+    }
   }
 
   /// PHASE B — assembles the OS windows/tab-groups: for each saved window group
@@ -371,6 +409,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
   }
 
   func applicationWillTerminate(_ notification: Notification) {
+    isTerminating = true
+
     // Flush the final partial frame-stats interval. Best-effort: this does not
     // run on a force-quit. No-op unless WOLF_FRAME_STATS is set.
     FrameMetrics.emit()
@@ -538,27 +578,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     controllers.first { $0.tabId == tabId }?.raise()
   }
 
-  /// Schedules a coalesced whole-tree state snapshot (~150ms debounce): a rapid
-  /// burst of geometry / sidebar / tab-group changes collapses into a single
-  /// tree walk + `state.json` write. Every trigger (geometry, sidebar toggle,
-  /// cwd change, tab open/close, tear-off/merge) routes here.
+  /// Schedules a throttled whole-tree state snapshot (`snapshotCoalescer`): a burst
+  /// of triggers collapses into a single tree walk + commit, and the store skips a
+  /// tree identical to the last. Every Alive core wake routes here, as do geometry,
+  /// sidebar, cwd, tab open/close and tear-off/merge changes.
   func scheduleStateSnapshot() {
-    snapshotWorkItem?.cancel()
-    let item = DispatchWorkItem { [weak self] in self?.snapshotNow() }
-    snapshotWorkItem = item
-    DispatchQueue.main.asyncAfter(
-      deadline: .now() + Self.snapshotCoalesceDelay, execute: item)
+    snapshotCoalescer.request()
   }
 
-  /// Walks the WHOLE live window/tab tree and commits it to `state.json` via the
-  /// write-side snapshot builder. Windows are grouped by their native tab group
-  /// (a solo window is its own group); tab order comes from `tabGroup.windows`;
-  /// each group's geometry is its selected tab's frame (fallback: the first
-  /// tab's). Per tab it records the live cwd + sidebar visibility.
+  /// What closing `view` commits, asked by its `teardown` while it still counts as
+  /// live. Closing the last live view quits the app, so it commits the tree with
+  /// that view in it, synchronously, before returning.
+  func closeCommit(for view: WolfWindowController) -> SessionSeam.CloseCommit {
+    let others = controllers.filter { $0 !== view && !$0.isTornDown }.count
+    let commit = SessionSeam.closeCommit(terminating: isTerminating, otherLiveViews: others)
+    if commit == .keepSubtree {
+      snapshotNow()
+    }
+    return commit
+  }
+
+  /// One saved window as a commit writes it: its geometry and its tabs.
+  private struct CommitWindow {
+    let frame: CGRect
+    let tabs: [RestoreSeam.SavedTab]
+  }
+
+  /// Walks the live window/tab tree and commits it to `state.json` via the
+  /// write-side snapshot builder. Only views that are not torn down count. Windows are
+  /// grouped by their native tab group (a solo window is its own group); tab order
+  /// comes from `tabGroup.windows`; each group's geometry is its selected tab's frame
+  /// (fallback: the first tab's). Each tab contributes its `persistedTab()`, a window
+  /// with none is omitted, and `orphanWindows` follow. `SessionSeam.committedWindows`
+  /// decides whether anything is committed at all.
   func snapshotNow() {
-    wolf_ffi_state_snapshot_begin()
+    let live = controllers.filter { !$0.isTornDown }
+    var gathered: [CommitWindow] = []
     var seenGroups = Set<ObjectIdentifier>()
-    for controller in controllers {
+    for controller in live {
       guard let window = controller.nsWindow else { continue }
 
       // The ordered windows of this controller's group (a solo window when
@@ -576,29 +633,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
       let frame =
         window.tabGroup?.selectedWindow?.frame ?? groupWindows.first?.frame
         ?? window.frame
+      let tabs = groupWindows.compactMap { tabWindow in
+        live.first { $0.owns(tabWindow) }?.persistedTab()
+      }
+      if !tabs.isEmpty {
+        gathered.append(CommitWindow(frame: frame, tabs: tabs))
+      }
+    }
+    for orphan in orphanWindows {
+      gathered.append(
+        CommitWindow(
+          frame: CGRect(x: orphan.x, y: orphan.y, width: orphan.width, height: orphan.height),
+          tabs: orphan.tabs.map {
+            RestoreSeam.SavedTab(cwd: $0.cwd, sidebarVisible: $0.sidebarVisible, layout: $0.layout)
+          }))
+    }
+
+    guard let windows = SessionSeam.committedWindows(liveViews: live.count, windows: gathered)
+    else { return }
+    wolf_ffi_state_snapshot_begin()
+    for window in windows {
       wolf_ffi_state_snapshot_add_window(
-        frame.origin.x, frame.origin.y, frame.size.width, frame.size.height)
-
-      for tabWindow in groupWindows {
-        guard let tab = controllers.first(where: { $0.owns(tabWindow) }) else { continue }
-        // `persistedCwd` is the tabpage's `:tcd`, right for a non-current view unlike `currentCwd`,
-        // and `cwd_for_tabpage` reads it out of band, so this walk never blocks on nvim.
-        wolf_ffi_state_snapshot_add_tab(tab.persistedCwd, tab.sidebarVisible)
-
-        // An empty-state lone pane returns nil and pushes nothing; a lone pane bound to a file or
-        // preview pushes a single leaf.
-        if let layout = tab.layoutSnapshot() {
-          for token in PaneLayoutCodec.postOrderTokens(layout) {
-            switch token {
-            case .leaf(let path, let preview, let weight):
-              wolf_ffi_state_layout_push_leaf(path, preview, weight)
-            case .split(let orientation, let childCount, let weight):
-              let orient: UInt8 = orientation == .vertical ? 1 : 0
-              wolf_ffi_state_layout_push_split(orient, UInt32(childCount), weight)
-            }
+        window.frame.origin.x, window.frame.origin.y, window.frame.size.width,
+        window.frame.size.height)
+      for tab in window.tabs {
+        wolf_ffi_state_snapshot_add_tab(tab.cwd, tab.sidebarVisible)
+        // An empty-state lone pane has no layout and pushes nothing.
+        guard let layout = tab.layout else { continue }
+        for token in PaneLayoutCodec.postOrderTokens(layout) {
+          switch token {
+          case .leaf(let path, let preview, let weight):
+            wolf_ffi_state_layout_push_leaf(path, preview, weight)
+          case .split(let orientation, let childCount, let weight):
+            let orient: UInt8 = orientation == .vertical ? 1 : 0
+            wolf_ffi_state_layout_push_split(orient, UInt32(childCount), weight)
           }
-          wolf_ffi_state_layout_commit_to_tab()
         }
+        wolf_ffi_state_layout_commit_to_tab()
       }
     }
     wolf_ffi_state_snapshot_commit()

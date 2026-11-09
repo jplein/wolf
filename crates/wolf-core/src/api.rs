@@ -1062,6 +1062,10 @@ impl WolfCore {
     /// nvim produces only the window COUNT + TOPOLOGY + per-window BUFFER; sizes
     /// come from the front-end's weights. An RPC error (including a
     /// [`NvimError::Timeout`] on a wedged nvim) is logged and returns `vec![]`.
+    ///
+    /// When it returns, [`Snapshot::win_buffers`] and [`Snapshot::previews`] already
+    /// report every returned window: the helper ends with a `wolf_buffers` emit and a
+    /// `wolf_barrier` request core answers only once that emit is applied.
     #[must_use]
     pub fn rebuild_layout(&self, spec_json: &str) -> Vec<i64> {
         let nvim = self.nvim.borrow();

@@ -20,31 +20,35 @@ final class LivenessSeamTests: XCTestCase {
     let rows: [(liveness: NvimLiveness, attempts: Int, expected: LivenessSeam.Decision)] = [
       (
         .alive, 0,
-        LivenessSeam.Decision(overlay: .hidden, autoRestart: false, render: true, drain: true)
+        LivenessSeam.Decision(
+          overlay: .hidden, autoRestart: false, render: true, drain: true, persist: true)
       ),
       (
         .alive, 1,
-        LivenessSeam.Decision(overlay: .hidden, autoRestart: false, render: true, drain: true)
+        LivenessSeam.Decision(
+          overlay: .hidden, autoRestart: false, render: true, drain: true, persist: true)
       ),
       (
         .notResponding, 0,
         LivenessSeam.Decision(
-          overlay: .stalled, autoRestart: false, render: false, drain: true)
+          overlay: .stalled, autoRestart: false, render: false, drain: true, persist: false)
       ),
       (
         .notResponding, 1,
         LivenessSeam.Decision(
-          overlay: .stalled, autoRestart: false, render: false, drain: true)
+          overlay: .stalled, autoRestart: false, render: false, drain: true, persist: false)
       ),
       (
         .dead, 0,
         LivenessSeam.Decision(
-          overlay: .crashed(retrying: true), autoRestart: true, render: false, drain: true)
+          overlay: .crashed(retrying: true), autoRestart: true, render: false, drain: true,
+          persist: false)
       ),
       (
         .dead, 1,
         LivenessSeam.Decision(
-          overlay: .crashed(retrying: false), autoRestart: false, render: false, drain: true)
+          overlay: .crashed(retrying: false), autoRestart: false, render: false, drain: true,
+          persist: false)
       ),
     ]
     XCTAssertEqual(
@@ -57,7 +61,8 @@ final class LivenessSeamTests: XCTestCase {
         row.expected,
         "decision(\(row.liveness), attempts: \(row.attempts)) differs from the plan's table: "
           + "a wrong overlay misreports the core, a wrong autoRestart loops or never recovers, "
-          + "a wrong render paints a dead core, a false drain strands a queued close or quit")
+          + "a wrong render paints a dead core, a false drain strands a queued close or quit, "
+          + "a wrong persist loses files opened since the last commit or saves a dead core")
     }
   }
 
@@ -133,6 +138,24 @@ final class LivenessSeamTests: XCTestCase {
             ? "an alive core must render at \(attempts) attempt(s): the count must not freeze it"
             : "\(liveness) must not render: the frame sits behind the overlay")
       }
+    }
+  }
+
+  /// Only an alive wake commits the session, so a file opened or a pane split is saved before
+  /// a forced quit; a stalled or dead core's maps are stale and must not overwrite it.
+  func testOnlyAnAliveWakePersists() {
+    for attempts in [0, LivenessSeam.maxAutoRestartAttempts] {
+      XCTAssertTrue(
+        LivenessSeam.decision(liveness: .alive, autoRestartAttempts: attempts).persist,
+        "an alive wake at \(attempts) attempt(s) must persist: false leaves every file opened "
+          + "since the last unrelated commit to applicationWillTerminate, which a kill skips")
+      XCTAssertFalse(
+        LivenessSeam.decision(liveness: .notResponding, autoRestartAttempts: attempts).persist,
+        "a stalled wake at \(attempts) attempt(s) must not persist: its maps are frozen")
+      XCTAssertFalse(
+        LivenessSeam.decision(liveness: .dead, autoRestartAttempts: attempts).persist,
+        "a dead wake at \(attempts) attempt(s) must not persist: a dead core reports no "
+          + "windows, and the commit would write every tab without its files")
     }
   }
 

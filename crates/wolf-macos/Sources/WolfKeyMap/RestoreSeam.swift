@@ -6,8 +6,9 @@ import Foundation
 /// mirroring `StateSeam`.
 public enum RestoreSeam {
   /// One saved tab's state: its working directory and sidebar visibility, in
-  /// the shape the AppKit caller reads back from `FfiTabState`.
-  public struct SavedTab {
+  /// the shape the AppKit caller reads back from `FfiTabState`, and the shape a
+  /// live view contributes to a commit (`SessionSeam`).
+  public struct SavedTab: Equatable {
     /// The saved (already-canonical) working directory, or `""` for the
     /// empty state.
     public let cwd: String

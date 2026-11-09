@@ -52,25 +52,29 @@ public enum LivenessSeam {
     /// Whether to drain the core's queued user commands: true in every state.
     /// See `crates/wolf-macos/Sources/WolfKeyMap/README.md#livenessseamswift`.
     public let drain: Bool
+    /// Whether the wake schedules a state commit. Only an alive core's maps are
+    /// current; a stalled or dead core's would write stale or empty tabs.
+    public let persist: Bool
 
-    /// Builds a decision from its four fields.
-    public init(overlay: Overlay, autoRestart: Bool, render: Bool, drain: Bool) {
+    /// Builds a decision from its five fields.
+    public init(overlay: Overlay, autoRestart: Bool, render: Bool, drain: Bool, persist: Bool) {
       self.overlay = overlay
       self.autoRestart = autoRestart
       self.render = render
       self.drain = drain
+      self.persist = persist
     }
   }
 
   /// Decides what a wake does, given `liveness` and the number of automatic
   /// restart attempts made since the core was last seen `Alive`.
   ///
-  /// | liveness | attempts | overlay | autoRestart | render | drain |
-  /// | --- | --- | --- | --- | --- | --- |
-  /// | `alive` | any | `hidden` | false | true | true |
-  /// | `notResponding` | any | `stalled` | false | false | true |
-  /// | `dead` | < max | `crashed(retrying: true)` | true | false | true |
-  /// | `dead` | ≥ max | `crashed(retrying: false)` | false | false | true |
+  /// | liveness | attempts | overlay | autoRestart | render | drain | persist |
+  /// | --- | --- | --- | --- | --- | --- | --- |
+  /// | `alive` | any | `hidden` | false | true | true | true |
+  /// | `notResponding` | any | `stalled` | false | false | true | false |
+  /// | `dead` | < max | `crashed(retrying: true)` | true | false | true | false |
+  /// | `dead` | ≥ max | `crashed(retrying: false)` | false | false | true | false |
   ///
   /// The `switch` has no `default`, so a new `NvimLiveness` case fails to compile
   /// until it is classified. `notResponding` never auto-restarts: a restart
@@ -81,13 +85,15 @@ public enum LivenessSeam {
     let mayAutoRestart = autoRestartAttempts < maxAutoRestartAttempts
     switch liveness {
     case .alive:
-      return Decision(overlay: .hidden, autoRestart: false, render: true, drain: true)
+      return Decision(
+        overlay: .hidden, autoRestart: false, render: true, drain: true, persist: true)
     case .notResponding:
-      return Decision(overlay: .stalled, autoRestart: false, render: false, drain: true)
+      return Decision(
+        overlay: .stalled, autoRestart: false, render: false, drain: true, persist: false)
     case .dead:
       return Decision(
         overlay: .crashed(retrying: mayAutoRestart), autoRestart: mayAutoRestart,
-        render: false, drain: true)
+        render: false, drain: true, persist: false)
     }
   }
 }

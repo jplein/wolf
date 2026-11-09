@@ -640,7 +640,7 @@ final class PaneContainerView: NSView {
     let win = activeWin
     guard win != 0 else { return nil }
     // `previews()` yields borrowed `FfiPreviewRef`s valid only for the loop body,
-    // so the path is copied out INSIDE the iteration (as `leafPaths` does).
+    // so the path is copied out INSIDE the iteration (as `leafContents` does).
     for preview in handle.previews() where preview.win() == win {
       return preview.source_path().toString()
     }
@@ -1834,25 +1834,16 @@ final class PaneContainerView: NSView {
 
   // MARK: - Layout persistence (save + restore)
 
-  /// The tab's persistable pane-split layout (topology + per-child weights +
-  /// per-leaf buffer path). A lone pane persists its single leaf UNLESS it is an
-  /// empty, non-preview buffer — in that empty-state case this returns `nil` so
-  /// the tab stays layout-less. The drawer is excluded — it lives outside `tree`,
-  /// so it never appears in `tree.layout()`.
-  func layoutSnapshot() -> SavedPaneNode? {
-    let (paths, previewIds) = leafPaths()
-    let saved = PaneLayoutCodec.encode(tree.layout(), paths: paths, previews: previewIds)
-    return saved.isEmptyLeaf ? nil : saved
-  }
+  /// The tab's pane-split layout by leaf id (topology + per-child weights). The
+  /// drawer lives outside `tree`, so it never appears here.
+  var paneLayout: PaneLayout { tree.layout() }
 
-  /// Maps each editor leaf id to the ABSOLUTE path to persist plus the set of leaf
-  /// ids that are Markdown PREVIEWS. A preview leaf (its bound window is in the
-  /// `handle.previews()` snapshot, keyed by window like `syncPreviewWebViews`) maps
-  /// to its SOURCE Markdown file's abs path so restore can recreate the preview via
-  /// `wolf_preview_file`; a plain editor leaf maps to its bound buffer's abs path
-  /// (via the bound grid → `pane_status_for_grid().abs_path()`). An unresolved /
-  /// unnamed leaf maps to `""`.
-  private func leafPaths() -> (paths: [PaneId: String], previewIds: Set<PaneId>) {
+  /// What each editor leaf's window shows, read by window handle. A leaf whose
+  /// window is a preview maps to its source file; any other maps through
+  /// `win_buffer`, which spans every tabpage, so a background view still reads its
+  /// files. A leaf with no window yet is omitted, which `SessionSeam.gatherTab`
+  /// treats as unreported.
+  func leafContents() -> [PaneId: SessionSeam.LeafContent] {
     // `previews()` yields borrowed refs valid only for this loop; snapshot the
     // preview-window → source-path map up front.
     var previewByWin: [Int64: String] = [:]
@@ -1860,18 +1851,22 @@ final class PaneContainerView: NSView {
       previewByWin[preview.win()] = preview.source_path().toString()
     }
 
-    var paths: [PaneId: String] = [:]
-    var previewIds: Set<PaneId> = []
+    var contents: [PaneId: SessionSeam.LeafContent] = [:]
     for id in tree.leaves() {
-      if let win = panes[id]?.win, let source = previewByWin[win] {
-        paths[id] = source
-        previewIds.insert(id)
-      } else if let grid = panes[id]?.boundGrid {
-        paths[id] = handle.pane_status_for_grid(grid).abs_path().toString()
+      guard let win = panes[id]?.win, win != 0 else { continue }
+      if let source = previewByWin[win] {
+        contents[id] = .preview(source: source)
+      } else {
+        let buffer = handle.win_buffer(win)
+        contents[id] = buffer.reported() ? .buffer(path: buffer.abs_path().toString()) : .unreported
       }
     }
-    return (paths, previewIds)
+    return contents
   }
+
+  /// Whether this view's restore rebuild failed and it fell back to one pane. Its
+  /// live layout is then not the saved one, so the saved tab keeps persisting.
+  private(set) var restoreFailed = false
 
   /// Requests that this view's pane layout be rebuilt once its first pane binds and
   /// its tabpage is current (consumed once in `onRenderWake`). `node` is the bridge
@@ -1897,6 +1892,7 @@ final class PaneContainerView: NSView {
       NSLog(
         "wolf: layout rebuild handle count \(handles.count) != leaf count "
           + "\(saved.leafCount); falling back to a single pane")
+      restoreFailed = true
       return
     }
     let (newTree, leafIds) = PaneTree.rebuilt(from: saved, firstLeafId: nextPaneId)

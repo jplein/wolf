@@ -4,10 +4,9 @@ import Foundation
 
 /// Coalesces a burst of `request()` calls into one trailing `perform()`.
 ///
-/// Shared by BOTH the file picker (`PickerView`) and the file-tree sidebar
-/// (`FileTreeView`): the name is historical, but the seam is generic (its
-/// `schedule` / `perform` collaborators are injected), so both streaming
-/// traversals reuse it to avoid re-doing O(N) work on every batch wake.
+/// Shared by several consumers: the seam is generic (its `schedule` / `perform`
+/// collaborators are injected), so each reuses it to avoid re-doing expensive work on
+/// every wake of a burst.
 ///
 /// The first `request()` while nothing is pending marks a fire as scheduled and
 /// asks `schedule` to run the fire after the debounce window; subsequent

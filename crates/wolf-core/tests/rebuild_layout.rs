@@ -10,7 +10,9 @@
 //! helpers PANIC loudly if it is unset. Following `pane_buffers.rs` /
 //! `layout_intents.rs`: window creation + the `wolf_buffers` notification arrive
 //! across several flushes, so every assertion POLLS with a generous timeout,
-//! draining wakes as it goes. We never assert literal handle VALUES — only their
+//! draining wakes as it goes. The one exception is
+//! `rebuild_reports_every_leaf_window_on_return`, which pins that the rebuild itself
+//! waits for that notification, and so reads without polling. We never assert literal handle VALUES — only their
 //! count, distinctness, and the per-window buffer each maps to (via
 //! `grid_for_win` -> `pane_status`).
 //!
@@ -38,9 +40,11 @@
 mod common;
 
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::time::Instant;
 
 use common::{poll_until, FlushWaiter, FLUSH_TIMEOUT, POLL_INTERVAL};
+use wolf_core::state::{rebuild_layout_spec, PaneNode, PaneOrientation};
 use wolf_core::WolfCore;
 
 /// Placeholder content for the temp markdown files these tests open.
@@ -50,6 +54,13 @@ const DOC: &str = "# Rebuild Layout\nbody\n";
 /// buffer `Untitled.md` instead of leaving a bare `[No Name]`), which an EMPTY-path
 /// rebuilt leaf inherits from the window's current buffer.
 const UNTITLED_STARTUP: &str = "Untitled.md";
+
+/// Fresh cores [`rebuild_reports_every_leaf_window_on_return`] rebuilds on. The race it pins
+/// depends on when Neovim's coalesced `wolf_buffers` emit lands, so one round may pass by luck.
+const BARRIER_ROUNDS: usize = 3;
+
+/// The files of the three-leaf barrier rebuild, in DFS leaf order.
+const BARRIER_FILES: [&str; 3] = ["a.md", "b.md", "c.md"];
 
 /// Resolves a window handle to the base `filename` its pane reports, polling until
 /// the handle is bound to a grid and `pane_status` reports the expected name.
@@ -384,4 +395,96 @@ fn rebuild_single_empty_leaf() {
     poll_win_filename_suffix(&core, &waiter, handles[0], UNTITLED_STARTUP);
 
     core.shutdown().expect("shutdown should be Ok");
+}
+
+/// (g) When `rebuild_layout` returns, `win_buffers` already reports every returned window
+/// with the buffer its leaf asked for: read once, with no poll and no flush wait.
+///
+/// This is the guarantee a launch-time state commit relies on. Without it, the first leaf's
+/// window still maps to the startup `Untitled.md` and the split windows are absent until the
+/// `vim.schedule`-coalesced `wolf_buffers` emit is applied, and a commit in that gap persists
+/// `Untitled.md` (or nothing) in place of the restored files. The guarantee is unconditional,
+/// so the test calls the rebuild straight after start, with no front-end gate in its premise.
+///
+/// It then checks Neovim's own listing, which rules out the other reading of a lost restore:
+/// that the `:edit`s themselves raced startup and were dropped.
+#[test]
+fn rebuild_reports_every_leaf_window_on_return() {
+    for round in 0..BARRIER_ROUNDS {
+        let (core, _waiter) = common::start_core_sized(common::DEFAULT_COLS, common::DEFAULT_ROWS);
+
+        let dir = tempfile::tempdir().expect("failed to create the barrier temp dir");
+        let files: Vec<PathBuf> = BARRIER_FILES
+            .iter()
+            .map(|name| {
+                let path = dir.path().join(name);
+                std::fs::write(&path, DOC).expect("failed to write a barrier fixture");
+                path.canonicalize()
+                    .expect("a barrier fixture should canonicalize")
+            })
+            .collect();
+        let spec = rebuild_layout_spec(&PaneNode::Split {
+            orientation: PaneOrientation::Vertical,
+            weights: vec![1.0 / 3.0; files.len()],
+            children: files
+                .iter()
+                .map(|path| PaneNode::Leaf {
+                    path: path.to_str().expect("fixture path is UTF-8").to_string(),
+                    preview: false,
+                })
+                .collect(),
+        });
+
+        let handles = core.rebuild_layout(&spec);
+        // One read, straight after the return: what a commit at this instant would see.
+        let observed: Vec<Option<Option<PathBuf>>> = {
+            let snap = core.read_snapshot();
+            handles
+                .iter()
+                .map(|h| snap.win_buffers.get(h).map(|wb| wb.path.clone()))
+                .collect()
+        };
+
+        assert_eq!(
+            handles.len(),
+            files.len(),
+            "round {round}: a {}-leaf split must return one handle per leaf; got {handles:?}",
+            files.len()
+        );
+        assert_distinct_handles(&handles);
+        for (i, ((win, seen), expected)) in handles.iter().zip(&observed).zip(&files).enumerate() {
+            match seen {
+                None => panic!(
+                    "round {round}: leaf {i}'s window {win} is absent from win_buffers when \
+                     rebuild_layout returns: the rebuild returned before the wolf_buffers emit \
+                     reporting its split windows was applied"
+                ),
+                Some(path) => assert_eq!(
+                    path.as_ref(),
+                    Some(expected),
+                    "round {round}: leaf {i}'s window {win} must report {expected:?} when \
+                     rebuild_layout returns. A path ending in {UNTITLED_STARTUP:?} is the \
+                     pre-rebuild startup map, so the emit was not yet applied; None is an \
+                     unnamed buffer; another file means handles and leaves are misordered"
+                ),
+            }
+        }
+
+        let listed: HashSet<PathBuf> = core
+            .list_buffers()
+            .iter()
+            .filter(|b| !b.name.is_empty())
+            .filter_map(|b| std::fs::canonicalize(&b.name).ok())
+            .collect();
+        for expected in &files {
+            assert!(
+                listed.contains(expected),
+                "round {round}: Neovim must list {expected:?} after the rebuild; its absence \
+                 means the :edit itself was lost to startup, not only reported late. \
+                 Listed: {listed:?}"
+            );
+        }
+
+        core.shutdown().expect("shutdown should be Ok");
+    }
 }

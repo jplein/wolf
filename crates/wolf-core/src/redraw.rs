@@ -92,8 +92,8 @@ const CURRENT_FILE_EVENT: &str = "wolf_current_file";
 /// Name of the out-of-band notification carrying what every window is showing,
 /// emitted by the `WolfBuffers` autocmds in `runtime/nvim/init.lua` (and once
 /// immediately at setup). The payload is a single msgpack array of
-/// `[win_id, buf_path, bufnr, is_terminal, is_drawer]` tuples for ALL windows in the
-/// current tabpage (preview scratch panes are SKIPPED emit-side, which keeps this
+/// `[win_id, buf_path, bufnr, is_terminal, is_drawer]` tuples for ALL windows of EVERY
+/// tabpage (`nvim_list_wins()`; preview scratch panes are SKIPPED emit-side, which keeps this
 /// map DISJOINT from [`Snapshot::previews`]); core WHOLESALE-REPLACES BOTH
 /// [`Snapshot::buffers`] (named windows only, path-valued — unchanged) and the
 /// parallel [`Snapshot::win_buffers`] (every window, [`WinBuffer`]-valued) with the
@@ -212,6 +212,13 @@ const OPEN_FILES_EVENT: &str = "wolf_open_files";
 /// snapshot lock, no `seq` bump, and no handler-level wake (each session's own
 /// wake fires when its rescan swaps).
 const FS_CHANGED_EVENT: &str = "wolf_fs_changed";
+
+/// Name of the one nvim→core request, sent by `_G.wolf_sync_buffers` in
+/// `runtime/nvim/init.lua` straight after a synchronous `wolf_buffers` emit. nvim-rs
+/// applies notifications inline in its handler loop but spawns a request only after every
+/// earlier notification is applied, so the answer tells Neovim that emit has landed in
+/// the snapshot. [`RedrawHandler::handle_request`] answers it with `nil`.
+const BARRIER_REQUEST: &str = "wolf_barrier";
 
 /// The scheme prefix Neovim gives every terminal buffer's name
 /// (`term://<cwd>//<pid>:<command>`).
@@ -389,6 +396,19 @@ impl Handler for RedrawHandler {
                 self.apply_cwd(args);
             }
             _ => {}
+        }
+    }
+
+    async fn handle_request(
+        &self,
+        name: String,
+        _args: Vec<Value>,
+        _neovim: Neovim<Self::Writer>,
+    ) -> Result<Value, Value> {
+        if name == BARRIER_REQUEST {
+            Ok(Value::Nil)
+        } else {
+            Err(Value::from(format!("unknown request: {name}")))
         }
     }
 }

@@ -399,6 +399,10 @@ extension WolfCoreHandleRef {
         FfiPaneStatus(ptr: __swift_bridge__$WolfCoreHandle$pane_status_for_grid(ptr, grid))
     }
 
+    public func win_buffer(_ win: Int64) -> FfiWinBuffer {
+        FfiWinBuffer(ptr: __swift_bridge__$WolfCoreHandle$win_buffer(ptr, win))
+    }
+
     public func open<GenericIntoRustString: IntoRustString>(_ path: GenericIntoRustString) {
         __swift_bridge__$WolfCoreHandle$open(ptr, { let rustString = path.intoRustString(); rustString.isOwned = false; return rustString.ptr }())
     }
@@ -2833,6 +2837,90 @@ extension FfiPaneStatus: Vectorizable {
 
     public static func vecOfSelfLen(vecPtr: UnsafeMutableRawPointer) -> UInt {
         __swift_bridge__$Vec_FfiPaneStatus$len(vecPtr)
+    }
+}
+
+
+public class FfiWinBuffer: FfiWinBufferRefMut {
+    var isOwned: Bool = true
+
+    public override init(ptr: UnsafeMutableRawPointer) {
+        super.init(ptr: ptr)
+    }
+
+    deinit {
+        if isOwned {
+            __swift_bridge__$FfiWinBuffer$_free(ptr)
+        }
+    }
+}
+public class FfiWinBufferRefMut: FfiWinBufferRef {
+    public override init(ptr: UnsafeMutableRawPointer) {
+        super.init(ptr: ptr)
+    }
+}
+public class FfiWinBufferRef {
+    var ptr: UnsafeMutableRawPointer
+
+    public init(ptr: UnsafeMutableRawPointer) {
+        self.ptr = ptr
+    }
+}
+extension FfiWinBufferRef {
+    public func reported() -> Bool {
+        __swift_bridge__$FfiWinBuffer$reported(ptr)
+    }
+
+    public func abs_path() -> RustString {
+        RustString(ptr: __swift_bridge__$FfiWinBuffer$abs_path(ptr))
+    }
+}
+extension FfiWinBuffer: Vectorizable {
+    public static func vecOfSelfNew() -> UnsafeMutableRawPointer {
+        __swift_bridge__$Vec_FfiWinBuffer$new()
+    }
+
+    public static func vecOfSelfFree(vecPtr: UnsafeMutableRawPointer) {
+        __swift_bridge__$Vec_FfiWinBuffer$drop(vecPtr)
+    }
+
+    public static func vecOfSelfPush(vecPtr: UnsafeMutableRawPointer, value: FfiWinBuffer) {
+        __swift_bridge__$Vec_FfiWinBuffer$push(vecPtr, {value.isOwned = false; return value.ptr;}())
+    }
+
+    public static func vecOfSelfPop(vecPtr: UnsafeMutableRawPointer) -> Optional<Self> {
+        let pointer = __swift_bridge__$Vec_FfiWinBuffer$pop(vecPtr)
+        if pointer == nil {
+            return nil
+        } else {
+            return (FfiWinBuffer(ptr: pointer!) as! Self)
+        }
+    }
+
+    public static func vecOfSelfGet(vecPtr: UnsafeMutableRawPointer, index: UInt) -> Optional<FfiWinBufferRef> {
+        let pointer = __swift_bridge__$Vec_FfiWinBuffer$get(vecPtr, index)
+        if pointer == nil {
+            return nil
+        } else {
+            return FfiWinBufferRef(ptr: pointer!)
+        }
+    }
+
+    public static func vecOfSelfGetMut(vecPtr: UnsafeMutableRawPointer, index: UInt) -> Optional<FfiWinBufferRefMut> {
+        let pointer = __swift_bridge__$Vec_FfiWinBuffer$get_mut(vecPtr, index)
+        if pointer == nil {
+            return nil
+        } else {
+            return FfiWinBufferRefMut(ptr: pointer!)
+        }
+    }
+
+    public static func vecOfSelfAsPtr(vecPtr: UnsafeMutableRawPointer) -> UnsafePointer<FfiWinBufferRef> {
+        UnsafePointer<FfiWinBufferRef>(OpaquePointer(__swift_bridge__$Vec_FfiWinBuffer$as_ptr(vecPtr)))
+    }
+
+    public static func vecOfSelfLen(vecPtr: UnsafeMutableRawPointer) -> UInt {
+        __swift_bridge__$Vec_FfiWinBuffer$len(vecPtr)
     }
 }
 
