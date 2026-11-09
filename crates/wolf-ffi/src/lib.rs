@@ -311,7 +311,8 @@ mod scroll_dir {
 mod liveness {
     /// The captive nvim is responding normally.
     pub const ALIVE: u8 = 0;
-    /// The captive nvim has stalled (a synchronous RPC elapsed the timeout).
+    /// The captive nvim has stalled (a synchronous RPC or an input batch outlasted
+    /// the timeout).
     pub const NOT_RESPONDING: u8 = 1;
     /// The captive nvim process has died (or the core is gone).
     pub const DEAD: u8 = 2;

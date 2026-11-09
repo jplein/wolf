@@ -233,10 +233,12 @@ final class Project {
   /// Tier-1 file set per view.
   ///
   /// CAPTURES each view's open-file mirror + cwd BEFORE the restart (a respawn
-  /// wipes the mirror), then `handle.restart()`s, rebinds every view to a fresh
-  /// tabpage (first view → tabpage 1, the rest → a new `:tcd` tabpage), reopens
-  /// the captured files (active LAST so it lands focused), restores the current
-  /// view, and hides every overlay. Guarded against re-entry.
+  /// replaces the mirror), then `handle.restart()`s and runs each view's
+  /// `LivenessSeam.restoreSteps(for:)`: the first view rebinds to the fresh
+  /// tabpage 1 and is re-rooted at its cwd, the rest to a new `:tcd` tabpage, and
+  /// the captured files reopen with the active one LAST so it lands focused. Then
+  /// it restores the current view and hides every overlay. Guarded against
+  /// re-entry.
   ///
   /// When no restart happened, it applies only the overlay of a fresh decision,
   /// never its `autoRestart`: scheduling is `onWake`'s alone, and scheduling here
@@ -246,11 +248,15 @@ final class Project {
     restarting = true
     defer { restarting = false }
 
-    // Capture the Tier-1 set + cwd per view BEFORE the restart wipes the mirror.
-    let snapshot: [(view: WolfWindowController, cwd: String, openFiles: FfiOpenFiles?)] =
-      views.allObjects.map { view in
-        (view, handle.cwd_for_tabpage(view.tabpageHandle).toString(), view.capturedOpenFiles())
-      }
+    // Capture the Tier-1 set + cwd per view BEFORE the restart replaces the mirror.
+    let attached = views.allObjects
+    let captured: [LivenessSeam.CapturedView] = attached.map { view in
+      let openFiles = view.capturedOpenFiles()
+      return LivenessSeam.CapturedView(
+        cwd: handle.cwd_for_tabpage(view.tabpageHandle).toString(),
+        files: openFiles?.files().map { $0.as_str().toString() } ?? [],
+        activePath: openFiles?.active_path().toString() ?? "")
+    }
 
     // Only an actual restart rebinds and reopens. `false` means nvim self-recovered first or the
     // respawn failed, so refresh only the overlay from a fresh liveness read.
@@ -263,23 +269,26 @@ final class Project {
     }
     autoRestartAttempts = 0
 
-    // Rebind each view to a fresh tabpage and reopen its Tier-1 files.
-    for (index, entry) in snapshot.enumerated() {
-      let tabpage: Int64 =
-        index == 0 ? bindFirstTabpage() : addTabpage(cwd: entry.cwd)
-      guard tabpage != 0 else { continue }
-      entry.view.rebind(toTabpage: tabpage)
-      handle.set_current_tabpage(tabpage)
-
-      // Reopen the captured file-backed buffers; the active buffer LAST so it
-      // lands focused in the rebound view.
-      if let openFiles = entry.openFiles {
-        let active = openFiles.active_path().toString()
-        for path in openFiles.files() {
-          let p = path.as_str().toString()
-          if p != active { handle.open(p) }
+    // The pump applies these in order, so a chdir or an open lands in the tabpage made current.
+    for (view, steps) in zip(attached, LivenessSeam.restoreSteps(for: captured)) {
+      viewSteps: for step in steps {
+        let tabpage: Int64
+        switch step {
+        case .bindFirstTabpage:
+          tabpage = bindFirstTabpage()
+        case .newTabpage(let cwd):
+          tabpage = addTabpage(cwd: cwd)
+        case .chdir(let path):
+          handle.chdir(path)
+          continue
+        case .open(let path):
+          handle.open(path)
+          continue
         }
-        if !active.isEmpty { handle.open(active) }
+        // A tabpage that could not be made skips the rest of this view's steps.
+        guard tabpage != 0 else { break viewSteps }
+        view.rebind(toTabpage: tabpage)
+        handle.set_current_tabpage(tabpage)
       }
     }
 

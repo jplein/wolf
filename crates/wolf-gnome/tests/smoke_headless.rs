@@ -1431,9 +1431,8 @@ const RESTART_OCR_UNSAVED: &str = "unsavedburst";
 /// remove — and it would make the recovered line the marker rides (and therefore the
 /// wrap derivation on [`RESTART_UNSAVED_MARKER`]) non-deterministic too.
 ///
-/// It is still made of `z`s, and must still contain no [`ASSERTED_OCR_TERMS`] entry:
-/// the GTK cmdline strip may still be showing the dead Neovim's stale text when the
-/// post-recovery capture is taken.
+/// It is still made of `z`s, and must still contain no [`ASSERTED_OCR_TERMS`] entry,
+/// so the burst can never satisfy one of them, whatever a capture catches on screen.
 const RESTART_BURST_TEXT: &str = "zzzz zzzz zzzz zzzz zzzz zzzz zzzz zzzz";
 
 /// Smoke B's `/bin/sh` wrapper, written into the temp cwd and handed to the app as
@@ -4318,10 +4317,10 @@ exit 0
 ///
 /// ## `SIGCONT` is teardown hygiene, not recovery
 ///
-/// The resumed Neovim completes the detached task, but `block_on_rpc` already
-/// returned `Err(Timeout)` and its `Ok` auto-clear arm never runs, so liveness stays
-/// `NotResponding` and the overlay stays up. The capture is taken BEFORE the
-/// `SIGCONT` regardless, so the ordering is not something an assertion rests on.
+/// The resumed Neovim completes the detached task, but `block_on_rpc` already returned
+/// `Err(Timeout)` and its `Ok` clear never runs, and no typed batch waits on Neovim for the
+/// pump to clear it with (the chord is an accelerator; the overlay's key guard sends nothing),
+/// so the overlay stays up. The capture precedes the `SIGCONT`, so no assertion rests on it.
 ///
 /// ## Exit codes owned
 ///
@@ -4430,8 +4429,8 @@ assert_app_alive
 #
 # Teardown hygiene only, and the capture is already taken. The resumed Neovim
 # completes the detached task, but block_on_rpc has already returned Err(Timeout)
-# and never observes it, so the core stays NotResponding -- which is the concrete
-# evidence for the documented claim that a stall on Linux does not self-clear.
+# and no typed batch waits on Neovim, so the core stays NotResponding -- evidence
+# that a stall a blocking call marks does not self-clear while no typing is pending.
 kill -CONT "$nvim_pid" 2>/dev/null || true
 
 # The trap installed above tears the app down on the way out.
@@ -5050,9 +5049,9 @@ exit 0
 /// ## Why this smoke has to make the respawn FAIL
 ///
 /// On the SUCCESS path the crash overlay is a sub-frame transient — shown, then
-/// cleared by the fresh Neovim's `Alive` wake — and `NotResponding` is unreachable
-/// from `wolf-gnome` at all (nothing in the front-end issues a synchronous RPC, so
-/// no timeout can ever mark it). The one state in which the overlay genuinely
+/// cleared by the fresh Neovim's `Alive` wake — and this smoke wedges no Neovim, so
+/// neither the buffer picker's `block_on_rpc` nor core's input pump times out and
+/// marks `NotResponding`. The one state in which the overlay genuinely
 /// DWELLS long enough for `grim` to see it is a FAILED respawn, which is also a real
 /// production scenario: Neovim removed or upgraded mid-session, an `exec` failure,
 /// an OOM kill.

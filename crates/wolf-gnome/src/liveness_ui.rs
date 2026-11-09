@@ -64,7 +64,8 @@ pub enum OverlayMode {
         /// "an attempt is in flight" — see the type's docs.
         retrying: bool,
     },
-    /// The captive Neovim is wedged (a synchronous RPC elapsed its budget).
+    /// The captive Neovim is wedged (a synchronous RPC or an input batch outlasted
+    /// its budget).
     Stalled,
 }
 

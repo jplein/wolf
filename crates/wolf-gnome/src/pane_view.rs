@@ -3181,8 +3181,8 @@ impl PaneInner {
         self.panes.borrow_mut().clear();
         self.next_pane_id.set(FIRST_PANE_ID);
         self.active_pane.set(None);
-        // Only this can clear the drawer: it is not in `panes`, and `detect_closes` cannot fire since the
-        // dead grid stays in the snapshot. A stale id would block reopening it for the session.
+        // The drawer is not in `panes`, so only this drops its id, before the fresh grids arrive.
+        // A stale id would block reopening it for the session.
         self.clear_drawer();
         // Tears everything down and builds nothing, through `rebuild_pane_area`'s own focus guard;
         // reusing it rather than open-coding teardown keeps the focus-wedge fix through a restart.
@@ -3345,12 +3345,6 @@ impl PaneHandle {
     ///
     /// ## Known limitations
     ///
-    /// - A crash while the window was SPLIT leaves the dead nvim's extra
-    ///   window/grid entries in the snapshot: no `win_close`/`grid_destroy` is
-    ///   ever sent for a killed process, and nothing clears the snapshot on
-    ///   restart. The reset binds only the fresh nvim's single window, which is
-    ///   correct; the stale entries linger harmlessly because no pane is bound to
-    ///   them.
     /// - The pane TOPOLOGY is not restored ACROSS A CRASH RESTART — only the
     ///   Tier-1 file set is. Do not confuse this with the QUIT/RELAUNCH case,
     ///   which the layout persistence in this module's "Layout persistence"

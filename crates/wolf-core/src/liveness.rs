@@ -1,9 +1,9 @@
 //! Liveness state model for the captive Neovim.
 //!
-//! A single, lock-free `Alive` / `NotResponding` / `Dead` state the supervisor
-//! (crash detection) and `block_on_rpc`'s timeout path (stall detection) write
-//! from tokio worker threads, and the FFI `liveness` accessor reads from the
-//! AppKit main thread. Backed by an `Arc<std::sync::atomic::AtomicU8>` so it
+//! A single, lock-free `Alive` / `NotResponding` / `Dead` state. The supervisor
+//! (crash detection), and `block_on_rpc`'s timeout path and the input pump (stall
+//! detection), write it from tokio worker threads; the FFI `liveness` accessor
+//! reads it from the AppKit main thread. Backed by an `Arc<std::sync::atomic::AtomicU8>` so it
 //! never contends the snapshot lock, mutated ONLY through the transition helpers
 //! below, each of which fires the `WakeFn` exactly ONCE per real state change so
 //! the front-end can re-read `liveness()` and paint/recover.
@@ -13,8 +13,9 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use crate::redraw::WakeFn;
 
 /// The captive Neovim's liveness state, written by the supervisor (crash
-/// detection) and `block_on_rpc`'s timeout path (stall detection) and read by the
-/// FFI accessor. Backed by an [`AtomicU8`] via the free transition helpers below.
+/// detection), and `block_on_rpc`'s timeout path and the input pump (stall
+/// detection), and read by the FFI accessor. Backed by an [`AtomicU8`] via the
+/// free transition helpers below.
 ///
 /// The discriminants are STABLE (`0 / 1 / 2`): the FFI `liveness` module mirrors
 /// them as its `ALIVE` / `NOT_RESPONDING` / `DEAD` constants.
@@ -22,9 +23,10 @@ use crate::redraw::WakeFn;
 pub enum Liveness {
     /// The captive nvim is responding normally.
     Alive,
-    /// The captive nvim has not answered a synchronous RPC within the timeout
-    /// budget (a stall). Recoverable: a subsequent successful RPC clears it back
-    /// to `Alive`, or the user drives a manual restart.
+    /// The captive nvim has not answered a synchronous RPC, or an input batch,
+    /// within the timeout budget (a stall). Recoverable: a later answered RPC or
+    /// batch clears it back to `Alive` through [`clear_not_responding`], or the
+    /// user drives a manual restart.
     NotResponding,
     /// The captive nvim process has died (stdout EOF, clean or crash). TERMINAL:
     /// only [`reset_alive`] (the restart path) leaves this state.
@@ -93,12 +95,31 @@ pub fn mark_not_responding(state: &AtomicU8, wake: &WakeFn) {
 /// and the ONLY documented exit from the terminal `Dead` state. Fires `wake` iff
 /// the state actually changed.
 ///
-/// NOTE: the RPC-success auto-clear of a transient `NotResponding` is a SEPARATE
-/// call-site guard in `block_on_rpc` (a `compare_exchange(NotResponding ->
-/// Alive)` that never touches `Dead`), NOT this unconditional store.
+/// NOTE: the auto-clear of a transient `NotResponding`, after an answered
+/// `block_on_rpc` call or input batch, is [`clear_not_responding`], NOT this
+/// unconditional store.
 pub fn reset_alive(state: &AtomicU8, wake: &WakeFn) {
     let previous = state.swap(Liveness::Alive.to_u8(), Ordering::SeqCst);
     if previous != Liveness::Alive.to_u8() {
+        wake();
+    }
+}
+
+/// Clears a stall: `compare_exchange(NotResponding -> Alive)` ONLY. Never touches
+/// `Dead`, so a late answer from a dying nvim cannot hide its crash, and is silent
+/// on an `Alive` cell. Fires `wake` only on a successful transition, so the stall
+/// overlay dismisses itself. Called by `block_on_rpc` and the input pump after
+/// nvim answers.
+pub fn clear_not_responding(state: &AtomicU8, wake: &WakeFn) {
+    if state
+        .compare_exchange(
+            Liveness::NotResponding.to_u8(),
+            Liveness::Alive.to_u8(),
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        )
+        .is_ok()
+    {
         wake();
     }
 }

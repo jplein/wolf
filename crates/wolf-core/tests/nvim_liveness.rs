@@ -13,6 +13,11 @@
 //!   * `wolf_core::Liveness { Alive, NotResponding, Dead }` (re-exported), the
 //!     supervisor marking `Dead` on nvim stdout EOF and `block_on_rpc`'s timeout
 //!     path escalating repeated `Timeout` into `NotResponding`.
+//!   * The input pump's own stall detection: a batch Neovim does not answer within
+//!     the RPC budget marks `NotResponding`, and its answer clears it, with no
+//!     `block_on_rpc` call involved.
+//!   * `wolf_core::liveness::clear_not_responding`, the shared auto-clear, tested
+//!     headless with a counting `WakeFn`.
 //!
 //! ## Provocation notes (read before trusting green)
 //!
@@ -31,11 +36,13 @@
 
 mod common;
 
+use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use common::{ch, key, type_str, FLUSH_TIMEOUT, POLL_INTERVAL};
-use wolf_core::{Key, Liveness, WolfCore};
+use wolf_core::{liveness, Key, Liveness, WakeFn, WolfCore};
 
 /// A small, deterministic RPC timeout (ms) for the STALL core, so a single wedged
 /// `block_on_rpc` call elapses quickly. Large enough to clear real sub-ms
@@ -54,6 +61,18 @@ const WEDGE_SLEEP_MS: u64 = 60_000;
 /// later successful `block_on_rpc` auto-clear back to `Alive`. Widen (never
 /// tighten) if flaky. Matches the proven `rpc_timeout.rs` wedge duration.
 const RECOVERY_WEDGE_SLEEP_MS: u64 = 1_500;
+
+/// The finite nvim wedge sleep for the PUMP-STALL test (ms). Many multiples of
+/// [`STALL_RPC_TIMEOUT_MS`], so the pump's stalled batch outlasts its budget long
+/// before nvim recovers, and short enough that nvim recovers within the test's
+/// second poll.
+const PUMP_WEDGE_SLEEP_MS: u64 = 3_000;
+
+/// How long the pump-stall test waits for the `NotResponding` wake once the state
+/// is seen. The wake is fired at the transition, so it is already queued; the window
+/// ends long before nvim recovers and flushes, so a recovery frame cannot stand in
+/// for it.
+const STALL_WAKE_WINDOW: Duration = Duration::from_millis(500);
 
 /// Wall-clock settle after feeding the wedge so nvim has reliably STARTED the
 /// `vim.uv.sleep` (past the input pump's coalesce + apply hop) before the timed
@@ -241,4 +260,138 @@ fn stall_then_recovery_clears_not_responding() {
 
     // nvim recovered on its own, so this shutdown does not block.
     core.shutdown().expect("shutdown should be Ok");
+}
+
+/// STALL seen by TYPING alone: a key sent into a wedged nvim leaves the input pump
+/// waiting on its call, the pump marks `NotResponding` once the batch outlasts the
+/// RPC budget, and clears it back to `Alive` when nvim answers.
+///
+/// No `block_on_rpc` method may be called anywhere in this test: `block_on_rpc`
+/// detects stalls and clears them by itself, so one call would make both polls pass
+/// without the pump. That rules out `list_buffers`, `current_tabpage` and the probe
+/// helpers.
+///
+/// ## Falsifying edits and their predicted reds
+///
+/// * Remove the pump's `mark_not_responding` (or run the base code): red at the
+///   first poll, which times out at `Alive`.
+/// * Remove the pump's `clear_not_responding`: red at the second poll, which times
+///   out at `NotResponding`.
+#[test]
+fn typing_into_a_hung_nvim_marks_not_responding_then_clears() {
+    // Read once at start; see `stall_marks_not_responding` for why the process-global var is safe.
+    std::env::set_var("WOLF_RPC_TIMEOUT_MS", STALL_RPC_TIMEOUT_MS);
+
+    let (core, waiter) = common::start_core_sized(common::DEFAULT_COLS, common::DEFAULT_ROWS);
+    assert_eq!(
+        core.liveness(),
+        Liveness::Alive,
+        "a freshly started core must report Alive"
+    );
+
+    ex_command(
+        &core,
+        &format!("lua (vim.uv or vim.loop).sleep({PUMP_WEDGE_SLEEP_MS})"),
+    );
+    sleep(WEDGE_SETTLE);
+
+    // The key's call now waits on the parked nvim; the drain attributes the next wake to it.
+    waiter.drain();
+    core.send_input(key(Key::Esc));
+
+    poll_without_draining(
+        "liveness() to become NotResponding while the pump waits on a wedged nvim",
+        || core.liveness() == Liveness::NotResponding,
+    );
+    assert!(
+        waiter.wait_for_wake(STALL_WAKE_WINDOW),
+        "the pump's NotResponding transition must fire a front-end wake within \
+         {STALL_WAKE_WINDOW:?}, so onWake shows the stall overlay; no wake means the state \
+         changed silently and the overlay never appears"
+    );
+
+    poll_without_draining(
+        "liveness() to clear back to Alive once nvim answers the pump's call",
+        || core.liveness() == Liveness::Alive,
+    );
+    assert_eq!(
+        core.liveness(),
+        Liveness::Alive,
+        "a pump stall must clear to Alive once nvim answers; NotResponding means the overlay \
+         stays up over a working editor, Dead means the wedge was taken for a crash"
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// A `WakeFn` that counts its calls, paired with the counter.
+fn counting_wake() -> (WakeFn, Arc<AtomicUsize>) {
+    let count = Arc::new(AtomicUsize::new(0));
+    let sink = Arc::clone(&count);
+    let wake: WakeFn = Arc::new(move || {
+        sink.fetch_add(1, Ordering::SeqCst);
+    });
+    (wake, count)
+}
+
+/// HEADLESS: `clear_not_responding` returns a stall to `Alive` with exactly one
+/// wake, and is silent on a cell that is already `Alive`.
+///
+/// FALSIFYING EDIT: drop the helper's wake. Predicted red: zero wakes at the first
+/// count.
+#[test]
+fn clear_not_responding_returns_a_stall_to_alive_with_one_wake() {
+    let state = AtomicU8::new(Liveness::NotResponding.to_u8());
+    let (wake, count) = counting_wake();
+
+    liveness::clear_not_responding(&state, &wake);
+    assert_eq!(
+        liveness::get(&state),
+        Liveness::Alive,
+        "clear_not_responding must move NotResponding to Alive, or the stall overlay never \
+         dismisses itself"
+    );
+    assert_eq!(
+        count.load(Ordering::SeqCst),
+        1,
+        "NotResponding -> Alive must fire exactly one wake: zero leaves the overlay up until an \
+         unrelated wake, more means a transition is reported twice"
+    );
+
+    liveness::clear_not_responding(&state, &wake);
+    assert_eq!(
+        liveness::get(&state),
+        Liveness::Alive,
+        "clearing an Alive cell must leave it Alive"
+    );
+    assert_eq!(
+        count.load(Ordering::SeqCst),
+        1,
+        "clearing an already-Alive cell must not wake: the pump clears after every answered \
+         batch, so a wake here would fire on every keystroke"
+    );
+}
+
+/// HEADLESS: `clear_not_responding` never touches `Dead`, so a late answer from a
+/// dying nvim cannot hide its crash.
+///
+/// FALSIFYING EDIT: make the helper an unconditional store of `Alive`. Predicted
+/// red: the cell reads `Alive`.
+#[test]
+fn clear_not_responding_never_resurrects_dead() {
+    let state = AtomicU8::new(Liveness::Dead.to_u8());
+    let (wake, count) = counting_wake();
+
+    liveness::clear_not_responding(&state, &wake);
+    assert_eq!(
+        liveness::get(&state),
+        Liveness::Dead,
+        "clear_not_responding must leave Dead alone: Alive here hides a crash, and the overlay \
+         and its restart never appear"
+    );
+    assert_eq!(
+        count.load(Ordering::SeqCst),
+        0,
+        "a no-op on a Dead cell must not wake"
+    );
 }

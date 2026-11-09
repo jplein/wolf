@@ -394,8 +394,8 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
   }
 
   /// Rebinds this view to a FRESH tabpage after a crash-restart: updates the
-  /// stored `tabpageHandle` and re-gates the pane container's refocus rebind so
-  /// the next render wake repaints against the new nvim's tabpage.
+  /// stored `tabpageHandle` and resets the pane container to one fresh pane,
+  /// which the next render wake binds to the new nvim's window.
   func rebind(toTabpage handle: Int64) {
     tabpageHandle = handle
     paneContainer?.rebind(tabpageHandle: handle)

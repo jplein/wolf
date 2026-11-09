@@ -1081,25 +1081,48 @@ final class PaneContainerView: NSView {
 
   /// Rebinds this container to a FRESH tabpage after a crash-restart, so the
   /// refocus gate (`active_tabpage() == controllerTabpageHandle`) matches the new
-  /// nvim's tabpage. The next render wake repaints the rebound panes.
+  /// nvim's tabpage, and resets the view to the state before its first pane, as
+  /// wolf-gnome's `reset_after_restart` does.
   ///
-  /// Also drops the terminal drawer (`drawerPaneId`, its `panes` entry, and the active
-  /// pane when it was the drawer). A killed nvim sends no `win_close`, so the dead
-  /// drawer's grid stays in the snapshot and `detectCloses` never drops it; a kept id
-  /// would make `applyDrawerOpen` refuse every later drawer. Editor panes keep their
-  /// bindings. Only the restart path reaches this function: a tab switch uses
-  /// `markRefocusRebind()`, where the drawer survives.
+  /// No pane may keep its window handle: a fresh nvim numbers its windows from
+  /// 1000 again, so a kept binding paints a frozen grid, stays blank, or catches
+  /// a later fresh window that reuses its handle. The tree, every pane including
+  /// the drawer, a divider drag, and every preview web view and per-window
+  /// preview map go. The core's restart empties its snapshot too, so the next
+  /// render wake's `ensureInitialPane` binds the fresh window and nothing of the
+  /// dead nvim. `pendingLayoutRebuild` is kept. Only the restart path reaches this function:
+  /// a tab switch uses `markRefocusRebind()`, where the panes survive.
   func rebind(tabpageHandle: Int64) {
     controllerTabpageHandle = tabpageHandle
-    pendingRefocusRebind = true
-    if let drawer = drawerPaneId {
-      panes.removeValue(forKey: drawer)
-      drawerPaneId = nil
-      if activePane == drawer {
-        setActivePane(tree.leaves().first)
-      }
-      needsDisplay = true
+    tree = PaneTree(root: Self.firstPaneId)
+    activeDivider = nil
+    panes.removeAll()
+    nextPaneId = Self.firstPaneId
+    activePane = nil
+    lastEditorPane = nil
+    drawerPaneId = nil
+    for win in Array(previewWebViews.keys) {
+      removePreviewWebView(win)
     }
+    // Entries can outlive their web view, or precede it, so clear what the removal left.
+    lastPreviewLoads.removeAll()
+    previewNavDelegates.removeAll()
+    previewFocusHandlers.removeAll()
+    previewScrollHandlers.removeAll()
+    previewSelectionHandlers.removeAll()
+    lastPreviewCursors.removeAll()
+    previewScrollStates.removeAll()
+    previewSelections.removeAll()
+    pendingPreviewRestores.removeAll()
+    previewLoadsInFlight.removeAll()
+    pendingPreviewDocuments.removeAll()
+    previewLiveDocuments.removeAll()
+    previewForcedReloads.removeAll()
+    previewSourcePaths.removeAll()
+    pendingPreviewFragments.removeAll()
+    previewLoadedWins.removeAll()
+    pendingRefocusRebind = true
+    needsDisplay = true
   }
 
   /// Refreshes the three bottom overlays from the live snapshot and lays them

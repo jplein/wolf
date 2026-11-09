@@ -72,9 +72,9 @@ pub type TrackedCwd = Arc<parking_lot::RwLock<Option<PathBuf>>>;
 /// ALONE (never while holding the snapshot lock, never across a `block_on_rpc`), so
 /// there is no lock-order cycle.
 ///
-/// A restart clones the SAME handler, so history survives a respawn by
-/// construction — acceptable, because the new nvim issues fresh window handles and
-/// stale panes are never queried.
+/// A restart clones the SAME handler but empties this history first, because a
+/// fresh nvim numbers its windows from 1000 again: a kept stack would become the
+/// history of the fresh window that reuses its handle.
 pub type NavHistoryCell = Arc<Mutex<crate::nav_history::NavHistory>>;
 
 /// The front-end wake callback, invoked once per `flush` (after the lock drops).

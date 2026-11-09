@@ -22,6 +22,15 @@
 //!   * `WolfCore::open_files_for_tabpage(handle: i64) -> Option<TabFiles>` where
 //!     `TabFiles { active: Option<PathBuf>, files: Vec<PathBuf> }` — the
 //!     out-of-band Tier-1 mirror (buflisted file set + active per tabpage).
+//!   * The restart's reset: after `Ok(true)` the snapshot holds none of the dead
+//!     nvim's windows or command line, `seq` never goes back, and no layout intent
+//!     or navigation history of the dead nvim's windows is left. A fresh nvim
+//!     numbers its windows from 1000 again, so anything kept would be read as the
+//!     fresh nvim's.
+//!   * Evidence tests, green on the base code: every death mode (SIGKILL with a
+//!     surviving child, SIGTERM, a scripted `qa!`, `:cq`) is seen and restarted on
+//!     one core; a death releases a call waiting on nvim; a restart leaves a
+//!     sibling core alone.
 //!
 //! ## Conventions (mirroring `tabpages.rs`)
 //!
@@ -39,7 +48,7 @@ use std::time::{Duration, Instant};
 use common::{
     ch, key, poll_until, probe_values, temp_md, type_str, FlushWaiter, FLUSH_TIMEOUT, POLL_INTERVAL,
 };
-use wolf_core::{InputEvent, Key, Liveness, WinBuffer, WolfCore};
+use wolf_core::{InputEvent, Key, LayoutIntent, Liveness, WinBuffer, WolfCore};
 
 /// Distinctive fixture bodies so a wrong buffer cannot fake a pass.
 const DOC_A: &str = "# Alpha fixture\n";
@@ -82,11 +91,74 @@ const STALE_HALF_TYPED_CMD: &str = "echo 4711";
 /// Text typed after the restart, the positive control that post-swap typing is delivered.
 const CONTROL_MARKER: &str = "freshkeysmike";
 
+/// Text typed after `:` and left open, never followed by Enter, while nvim is killed from
+/// outside. Holds no whitespace, so no `init.lua` abbreviation can expand it.
+const OPEN_CMDLINE_MARKER: &str = "opencmdlineoscar";
+
 /// The grid size requested while the pump is stalled. Distinct from the defaults the core
 /// starts and respawns at, so `&columns` tells "applied" from "dropped".
 const STALE_COLS: u16 = common::DEFAULT_COLS + 20;
 /// See [`STALE_COLS`].
 const STALE_ROWS: u16 = common::DEFAULT_ROWS + 6;
+
+/// How long a freshly started core is left alone before its `seq` is read as the number of
+/// flushes a fresh nvim makes by itself, and before its startup history is checked.
+const STARTUP_SETTLE: Duration = Duration::from_secs(1);
+
+/// How many times a fresh nvim's own startup flushes the flushes driven before the kill must
+/// cover; see [`restart_drops_the_dead_nvims_windows_and_command_line`].
+const SEQ_MARGIN_FACTOR: u64 = 4;
+
+/// Flushes driven before the kill on top of [`SEQ_MARGIN_FACTOR`], so a startup measured at
+/// one or two flushes still leaves a clear gap.
+const MIN_FLUSHES_BEFORE_KILL: u64 = 20;
+
+/// How long to let the fresh nvim's late setup emits land after the restart before the
+/// snapshot, the intents or the history are read.
+const RESTART_SETTLE: Duration = Duration::from_secs(1);
+
+/// The four ways the captive nvim can end that the liveness check must see, each as the Ex
+/// commands that end it, typed in order. Round 1's job is a child process that outlives the
+/// SIGKILL, so the round also shows that a surviving child cannot hold nvim's stdout open.
+///
+/// A typed `:qa!` is not a round: `init.lua`'s `qa` abbreviation turns it into
+/// `:WolfQuitAll!`, a window close by design, which `commands.rs`'s
+/// `ex_qa_bang_forces_close_window_when_modified` pins. Round 3 therefore runs `qa!` through
+/// `vim.cmd`, as a script or plugin would; the abbreviation's `getcmdline()` guard leaves the
+/// typed `lua` line alone, and `vim.cmd` takes no abbreviations.
+const DEATH_MODES: [(&str, &[&str]); 4] = [
+    (
+        "SIGKILL with a surviving child job",
+        &[
+            "lua vim.fn.jobstart({'sleep', '30'})",
+            "lua (vim.uv or vim.loop).kill(vim.fn.getpid(), 9)",
+        ],
+    ),
+    (
+        "SIGTERM",
+        &["lua (vim.uv or vim.loop).kill(vim.fn.getpid(), 15)"],
+    ),
+    ("a scripted qa!", &["lua vim.cmd('qa!')"]),
+    (":cq", &["cq"]),
+];
+
+/// How long nvim is wedged in [`a_death_while_requests_wait_on_nvim_releases_them`], far past
+/// the kill, so only the death can end the wait.
+const WEDGE_SLEEP_MS: u64 = 20_000;
+
+/// How long after the wedge starts a child shell SIGKILLs nvim, in seconds. Long enough that
+/// the timed call is surely issued while nvim is alive, short against
+/// [`WAITER_RELEASE_BUDGET`].
+const WEDGE_KILL_DELAY_S: f64 = 1.5;
+
+/// How long after the wedge command the sacrificial key is sent, so that nvim has started
+/// its sleep and the pump's call for the key waits on it.
+const WEDGE_SETTLE: Duration = Duration::from_millis(100);
+
+/// The bound on a call made while nvim is wedged and about to be killed. Under the default
+/// 5 s RPC budget, so a call that returns only at its own timeout was not released by the
+/// death; above [`WEDGE_KILL_DELAY_S`] with a margin for a loaded host.
+const WAITER_RELEASE_BUDGET: Duration = Duration::from_secs(4);
 
 /// Burns `dur` draining wakes, so late out-of-band notifications land BEFORE the
 /// assertion that reads what they carry. Mirrors `nav_history_live.rs::settle`.
@@ -130,7 +202,7 @@ fn self_sigkill(core: &WolfCore) {
 /// SIGKILLs the captive nvim 300 ms after the `:lua` command that schedules it has finished.
 ///
 /// Unlike [`self_sigkill`], nvim dies after its `cmdline_hide` flush, so the snapshot's
-/// `cmdline` is not left `active`. Nothing resets `Snapshot.cmdline` across a restart.
+/// `cmdline` is not left `active`.
 fn deferred_sigkill(core: &WolfCore) {
     ex_command(
         core,
@@ -167,6 +239,105 @@ fn listed_has(core: &WolfCore, want: &Path) -> bool {
     core.list_buffers()
         .iter()
         .any(|b| !b.name.is_empty() && norm(Path::new(&b.name)) == want)
+}
+
+/// The window handles of every entry in the snapshot's `windows`, sorted.
+fn window_handles(core: &WolfCore) -> Vec<i64> {
+    let mut wins: Vec<i64> = core
+        .read_snapshot()
+        .windows
+        .values()
+        .map(|w| w.win)
+        .collect();
+    wins.sort_unstable();
+    wins
+}
+
+/// Waits for the attach to report an active window that `windows` also holds, and returns
+/// its handle.
+fn attach_and_first_window(core: &WolfCore, waiter: &FlushWaiter) -> i64 {
+    poll_until(
+        waiter,
+        "the attach to report an active window that the snapshot's windows also hold",
+        || {
+            let snap = core.read_snapshot();
+            snap.active_win
+                .filter(|a| snap.windows.values().any(|w| w.win == *a))
+        },
+        Option::is_some,
+    )
+    .expect("poll_until returned only once the active window was Some")
+}
+
+/// Sends `event` and blocks until a redraw flush lands after it, read against a `seq` taken
+/// before the send so a flush that lands before the wait starts cannot be missed.
+fn send_and_wait_for_flush(core: &WolfCore, waiter: &FlushWaiter, event: InputEvent) {
+    let before = core.read_snapshot().seq;
+    core.send_input(event);
+    let deadline = Instant::now() + FLUSH_TIMEOUT;
+    while core.read_snapshot().seq <= before {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() || !waiter.wait_for_wake(remaining) {
+            panic!(
+                "timed out after {FLUSH_TIMEOUT:?} waiting for a flush after a key typed in \
+                 insert mode; seq stayed at {before}"
+            );
+        }
+    }
+}
+
+/// Drives at least `n` redraw flushes by typing and erasing one character in insert mode,
+/// then leaves insert mode.
+fn drive_flushes(core: &WolfCore, waiter: &FlushWaiter, n: u64) {
+    core.send_input(ch('i'));
+    for i in 0..n {
+        let event = if i % 2 == 0 {
+            ch('x')
+        } else {
+            key(Key::Backspace)
+        };
+        send_and_wait_for_flush(core, waiter, event);
+    }
+    core.send_input(key(Key::Esc));
+}
+
+/// Types `marker` at the start of the current buffer in insert mode, then leaves it.
+fn type_marker(core: &WolfCore, marker: &str) {
+    core.send_input(ch('i'));
+    type_str(core, marker);
+    core.send_input(key(Key::Esc));
+}
+
+/// Line 1 of the live nvim's current buffer, read through a file probe.
+fn first_line(core: &WolfCore, probe: &Path) -> String {
+    probe_values(core, &["getline(1)"], probe).remove(0)
+}
+
+/// Polls until `core` reports `Dead`, naming `what` killed it in the timeout panic.
+fn wait_for_dead(core: &WolfCore, waiter: &FlushWaiter, what: &str) {
+    poll_until(
+        waiter,
+        &format!("liveness() to become Dead after {what}"),
+        || core.liveness(),
+        |l| *l == Liveness::Dead,
+    );
+}
+
+/// Calls `restart_nvim()` on a dead core and asserts it respawned to `Alive`.
+fn restart_from_dead(core: &WolfCore, what: &str) {
+    let restarted = core
+        .restart_nvim()
+        .unwrap_or_else(|e| panic!("restart_nvim after {what} must be Ok, got {e:?}"));
+    assert!(
+        restarted,
+        "restart_nvim() after {what} must report an actual respawn (Ok(true)); Ok(false) means \
+         it saw an Alive core or a restart already in flight and left the dead nvim in place"
+    );
+    assert_eq!(
+        core.liveness(),
+        Liveness::Alive,
+        "after the restart that followed {what} the captive nvim must be Alive again"
+    );
 }
 
 /// A crashed nvim restarts in place and the front-end reopens the Tier-1 open-file
@@ -582,9 +753,11 @@ fn restart_on_live_core_is_a_noop_ok_false() {
 /// ## Why the kill is deferred
 ///
 /// [`self_sigkill`] kills nvim inside its own `:lua` command, before the `cmdline_hide`
-/// flush. Nothing resets `Snapshot.cmdline` across a restart, so that command line would stay
-/// `active` and poison the command-line assertion here. [`deferred_sigkill`] lets the command
-/// finish first, and the test asserts that precondition.
+/// flush, so the dead nvim's command line is still open when it dies. [`deferred_sigkill`]
+/// lets the command finish first, and the test asserts that precondition. The command-line
+/// assertion after the restart then depends only on the queued input, not on the restart
+/// clearing the dead nvim's command line, which
+/// [`restart_drops_the_dead_nvims_windows_and_command_line`] pins.
 ///
 /// ## What `&columns` pins
 ///
@@ -694,4 +867,425 @@ fn typing_queued_before_restart_never_reaches_the_fresh_nvim() {
     );
 
     core.shutdown().expect("shutdown should be Ok");
+}
+
+/// A restart drops the dead nvim's windows and its open command line from the snapshot, and
+/// `seq` never goes back.
+///
+/// ## Why the handles collide
+///
+/// A fresh nvim numbers its windows from 1000 again, so the dead nvim's first window and the
+/// fresh one share a handle, and the dead split's handle is the one the fresh nvim's next
+/// split will get. A front-end that binds a pane by handle then binds a frozen grid, nothing,
+/// or a later fresh window. The poll for `active_win == Some(first_win)` after the restart
+/// measures that premise: it times out if the fresh nvim's first window has another handle.
+///
+/// ## Why nvim is killed from outside an open command line
+///
+/// nvim-rs drops the notifications still queued when nvim's stdout closes, so the last frames
+/// before a death may never reach the snapshot. The test therefore waits until the snapshot
+/// shows [`OPEN_CMDLINE_MARKER`] on an active command line before it kills nvim.
+///
+/// The SIGKILL comes from the test while nvim waits for input in that line. An Enter would end
+/// the line, and whether its `cmdline_hide` is flushed before a `:lua` kill's body runs is
+/// nvim's internal order, which nothing pins.
+///
+/// The precondition after the death, that the line is still active, keeps the command-line
+/// assertion after the restart from passing because the line was never open.
+///
+/// ## Why so many flushes before the kill
+///
+/// The `seq` check must tell "carried forward" from "started over at 0". A fresh nvim's own
+/// setup flushes bump a restarted counter too, so `seq` before the kill must clearly exceed
+/// them. The test measures them on this core at startup and drives [`SEQ_MARGIN_FACTOR`]
+/// times as many, plus [`MIN_FLUSHES_BEFORE_KILL`].
+///
+/// ## Falsifying edits and their predicted reds
+///
+/// * Skip `reset_for_respawn()` in `restart_nvim_inner` (or run the base code): red at the
+///   windows assertion, showing the split's handle, and at the command-line assertion.
+/// * Build the fresh snapshot with `seq` 0: red at the `seq` assertion.
+#[test]
+fn restart_drops_the_dead_nvims_windows_and_command_line() {
+    let (core, waiter) = common::start_core_sized(common::DEFAULT_COLS, common::DEFAULT_ROWS);
+    let first_win = attach_and_first_window(&core, &waiter);
+    let fresh_windows = window_handles(&core);
+    assert_eq!(
+        fresh_windows,
+        vec![first_win],
+        "premise: a freshly started nvim shows exactly one window, its active one; the \
+         assertion after the restart compares against this shape"
+    );
+
+    settle(&waiter, STARTUP_SETTLE);
+    let startup_seq = core.read_snapshot().seq;
+    drive_flushes(
+        &core,
+        &waiter,
+        startup_seq * SEQ_MARGIN_FACTOR + MIN_FLUSHES_BEFORE_KILL,
+    );
+
+    ex_command(&core, "vsplit");
+    let wins = poll_until(
+        &waiter,
+        "the snapshot to hold two windows after :vsplit",
+        || window_handles(&core),
+        |w| w.len() == 2 && w.contains(&first_win),
+    );
+    let split_win = *wins
+        .iter()
+        .find(|&&w| w != first_win)
+        .expect("two distinct windows, one of them first_win");
+    let seq_before = core.read_snapshot().seq;
+
+    let dir = tempfile::tempdir().expect("failed to create probe tempdir");
+    let probe = dir.path().join("probe.txt");
+    let pid_text = probe_values(&core, &["getpid()"], &probe).remove(0);
+    let pid: u32 = pid_text.parse().unwrap_or_else(|e| {
+        panic!("nvim's getpid() must read back as a u32 pid, got {pid_text:?}: {e}")
+    });
+
+    core.send_input(ch(':'));
+    type_str(&core, OPEN_CMDLINE_MARKER);
+    poll_until(
+        &waiter,
+        "the snapshot to show the open command line, before nvim is killed",
+        || {
+            let snap = core.read_snapshot();
+            snap.cmdline.active && snap.cmdline.text() == OPEN_CMDLINE_MARKER
+        },
+        |&ok| ok,
+    );
+
+    let status = std::process::Command::new("sh")
+        .args(["-c", &format!("kill -9 {pid}")])
+        .status()
+        .expect("failed to run sh for the kill");
+    assert!(
+        status.success(),
+        "`kill -9 {pid}` must succeed on the live captive nvim, got {status}: a failure means \
+         the pid read through getpid() is not a process this test may signal, or it is gone"
+    );
+    wait_for_dead(&core, &waiter, "the SIGKILL");
+    {
+        let snap = core.read_snapshot();
+        assert!(
+            snap.windows.values().any(|w| w.win == split_win),
+            "precondition: the dead nvim's split {split_win} must still be in the snapshot \
+             before the restart, or its absence afterwards proves nothing; got {:?}",
+            snap.windows.values().map(|w| w.win).collect::<Vec<_>>()
+        );
+        assert!(
+            snap.cmdline.active,
+            "precondition: the command line the snapshot showed open with \
+             {OPEN_CMDLINE_MARKER:?} before the kill must still be active after the death, or \
+             the command-line assertion after the restart proves nothing; false means a \
+             cmdline_hide landed, with text now {:?}",
+            snap.cmdline.text()
+        );
+    }
+
+    restart_from_dead(&core, "the SIGKILL");
+    let seq_after = core.read_snapshot().seq;
+    assert!(
+        seq_after >= seq_before,
+        "seq must never go back across a restart, since waiters key on it advancing: it was \
+         {seq_before} before the kill and is {seq_after} right after the restart, so the \
+         fresh snapshot started its counter over (startup alone reached {startup_seq})"
+    );
+
+    poll_until(
+        &waiter,
+        "the fresh nvim to report its first window, which reuses the dead first window's handle",
+        || core.read_snapshot().active_win,
+        |a| *a == Some(first_win),
+    );
+    settle(&waiter, RESTART_SETTLE);
+
+    let (wins, cmdline_active, cmdline_text) = {
+        let snap = core.read_snapshot();
+        let mut wins: Vec<i64> = snap.windows.values().map(|w| w.win).collect();
+        wins.sort_unstable();
+        (wins, snap.cmdline.active, snap.cmdline.text())
+    };
+    assert!(
+        !wins.contains(&split_win),
+        "the dead nvim's split {split_win} must be gone from the snapshot after the restart, \
+         but windows holds {wins:?}: the restart kept the dead nvim's windows, and a pane bound \
+         to that handle shows a frozen grid or catches the fresh nvim's next split"
+    );
+    assert_eq!(
+        wins,
+        vec![first_win],
+        "after the restart the snapshot must hold exactly the fresh nvim's one window, as at \
+         startup; more entries are windows kept from the dead nvim, none means the fresh \
+         window's win_pos never landed"
+    );
+    assert!(
+        !cmdline_active,
+        "the dead nvim's command line must be closed after the restart, but it is active with \
+         text {cmdline_text:?}: the restart kept the dead nvim's command line, which the \
+         front-ends keep painting"
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// A restart drops the layout intents the dead nvim queued and the navigation history of its
+/// windows.
+///
+/// Intents are drained once before the fixture work and never again before the restart, so
+/// the `:vsplit`'s `Split` intent (which `layout_intents.rs` shows `:vsplit` emits) is still
+/// queued when nvim dies. The history check is not vacuous: the test measures that a fresh
+/// nvim's startup leaves its first window nothing to go Back to, and the fresh nvim's first
+/// window reuses `first_win`'s handle, which the poll after the restart measures.
+///
+/// ## Falsifying edits and their predicted reds
+///
+/// * Skip the `intents` clear in `restart_nvim_inner` (or run the base code): red at the
+///   intents assertion, showing the `Split` into the dead split.
+/// * Skip the history reset: red at the history assertion.
+#[test]
+fn restart_drops_the_dead_nvims_layout_intents_and_history() {
+    let (core, waiter) = common::start_core_sized(common::DEFAULT_COLS, common::DEFAULT_ROWS);
+    let first_win = attach_and_first_window(&core, &waiter);
+    settle(&waiter, STARTUP_SETTLE);
+    assert!(
+        !core.history_can_back(first_win),
+        "premise: a fresh nvim's startup must leave its first window nothing to go Back to; \
+         true means the history assertion after the restart is red whatever the restart does"
+    );
+    let _ = core.drain_intents();
+
+    let file_a = temp_md(DOC_A);
+    let file_b = temp_md(DOC_B);
+    let canon_b = norm(file_b.path());
+    core.send_input(InputEvent::Open {
+        path: file_a.path().to_path_buf(),
+    });
+    core.send_input(InputEvent::Open {
+        path: file_b.path().to_path_buf(),
+    });
+    poll_until(
+        &waiter,
+        "the first window to show the second fixture with history to go Back to",
+        || {
+            let current = core.read_snapshot().current_file.clone();
+            (core.history_can_back(first_win), current)
+        },
+        |(back, current)| *back && current.as_deref().map(norm) == Some(canon_b.clone()),
+    );
+
+    ex_command(&core, "vsplit");
+    let wins = poll_until(
+        &waiter,
+        "the snapshot to hold two windows after :vsplit",
+        || window_handles(&core),
+        |w| w.len() == 2 && w.contains(&first_win),
+    );
+    let split_win = *wins
+        .iter()
+        .find(|&&w| w != first_win)
+        .expect("two distinct windows, one of them first_win");
+
+    self_sigkill(&core);
+    wait_for_dead(&core, &waiter, "the SIGKILL");
+    restart_from_dead(&core, "the SIGKILL");
+    poll_until(
+        &waiter,
+        "the fresh nvim to report its first window, which reuses the dead first window's handle",
+        || core.read_snapshot().active_win,
+        |a| *a == Some(first_win),
+    );
+    settle(&waiter, RESTART_SETTLE);
+
+    let intents = core.drain_intents();
+    let stale: Vec<&LayoutIntent> = intents
+        .iter()
+        .filter(|i| match i {
+            LayoutIntent::Split { from, win, .. } => *from == split_win || *win == split_win,
+            LayoutIntent::FocusDir { from, .. } => *from == split_win,
+            LayoutIntent::DrawerOpen { win } => *win == split_win,
+        })
+        .collect();
+    assert!(
+        stale.is_empty(),
+        "no layout intent naming the dead split {split_win} may survive the restart, but \
+         {stale:?} did: the front-end would split a pane for a window of the dead nvim, whose \
+         handle the fresh nvim's next split reuses. All intents drained: {intents:?}"
+    );
+    assert!(
+        !core.history_can_back(first_win),
+        "the fresh nvim's first window {first_win} must have nothing to go Back to after the \
+         restart, but it does: the dead nvim's history for the same handle was kept, and Back \
+         would open the dead nvim's files in the fresh window"
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
+    drop((file_a, file_b));
+}
+
+/// Every way the captive nvim can end is seen as `Dead`, and a restart recovers from each,
+/// several times in a row on one core.
+///
+/// An evidence test, green on the base code. Each death closes the stdout the supervisor
+/// watches; round 1's child job shows that a process outliving nvim cannot hold it open.
+/// Each restart gets its own supervisor on the shared liveness cell, which the later rounds
+/// show by being seen at all. A round that never reaches `Dead` is a finding about that mode.
+///
+/// ## Falsifying edits and their predicted reds
+///
+/// * Remove `mark_dead` from the supervisor in `nvim::spawn`: red in round 1.
+/// * Pass a fresh `Arc<AtomicU8>` to `nvim::spawn` inside `restart_nvim_inner`: red in
+///   round 2, whose death is then never seen.
+#[test]
+fn every_death_mode_is_seen_and_each_restart_recovers() {
+    let (core, waiter) = common::start_core_sized(common::DEFAULT_COLS, common::DEFAULT_ROWS);
+    let _first_win = attach_and_first_window(&core, &waiter);
+    let dir = tempfile::tempdir().expect("failed to create probe tempdir");
+    let probe = dir.path().join("probe.txt");
+
+    for (round, (mode, commands)) in DEATH_MODES.iter().enumerate() {
+        let what = format!("round {} ({mode})", round + 1);
+        for cmd in commands.iter() {
+            ex_command(&core, cmd);
+        }
+        wait_for_dead(&core, &waiter, &what);
+        restart_from_dead(&core, &what);
+
+        let marker = format!("deathround{}marker", round + 1);
+        type_marker(&core, &marker);
+        let line = first_line(&core, &probe);
+        assert_eq!(
+            line, marker,
+            "after {what} and its restart, typing must reach the fresh nvim's buffer: an empty \
+             line means the keys never arrived (the pump kept the dead handle), and an earlier \
+             round's marker means the fresh buffer recovered a swap of a dead one"
+        );
+    }
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// A death while calls wait on nvim releases them: a front-end call made while nvim is
+/// wedged returns once nvim dies, well inside its own budget, and the input pump, waiting on
+/// a key sent into the wedge, delivers typing to the fresh nvim after the restart.
+///
+/// An evidence test, green on the base code, with the default 5 s RPC budget. The release
+/// at EOF is nvim-rs 0.9.2's (`send_error_to_callers`), which no edit in this repository
+/// removes, so the timing half records evidence rather than guarding code here.
+///
+/// FALSIFYING EDIT: skip the pump's handle swap in `restart_nvim_inner`, so the pump keeps
+/// the dead handle. Predicted red: the marker never reaches the fresh buffer, and the probe,
+/// typed through the same pump, times out.
+#[test]
+fn a_death_while_requests_wait_on_nvim_releases_them() {
+    let (core, waiter) = common::start_core_sized(common::DEFAULT_COLS, common::DEFAULT_ROWS);
+    let _first_win = attach_and_first_window(&core, &waiter);
+
+    ex_command(
+        &core,
+        &format!(
+            "lua vim.fn.jobstart({{'sh', '-c', 'sleep {WEDGE_KILL_DELAY_S}; kill -9 ' .. \
+             vim.fn.getpid()}}); (vim.uv or vim.loop).sleep({WEDGE_SLEEP_MS})"
+        ),
+    );
+    sleep(WEDGE_SETTLE);
+    core.send_input(key(Key::Esc));
+    sleep(WEDGE_SETTLE);
+
+    assert_ne!(
+        core.liveness(),
+        Liveness::Dead,
+        "precondition: nvim must still be alive when the timed call is made, or the call fails \
+         on a closed pipe and shows nothing about a waiter being released"
+    );
+    let started = Instant::now();
+    let _ = core.list_buffers();
+    let waited = started.elapsed();
+    assert!(
+        waited < WAITER_RELEASE_BUDGET,
+        "a call waiting on a wedged nvim must return once nvim dies (about \
+         {WEDGE_KILL_DELAY_S} s in), but it took {waited:?}: about 5 s means it ran to its \
+         own RPC timeout and the death did not release it; longer means it was never bounded"
+    );
+
+    wait_for_dead(&core, &waiter, "the SIGKILL during the wedge");
+    restart_from_dead(&core, "the SIGKILL during the wedge");
+
+    let dir = tempfile::tempdir().expect("failed to create probe tempdir");
+    let probe = dir.path().join("probe.txt");
+    let marker = "afterwedgeoscar";
+    type_marker(&core, marker);
+    assert_eq!(
+        first_line(&core, &probe),
+        marker,
+        "typing after the restart must reach the fresh nvim's buffer: anything else means the \
+         pump, released from its wait on the dead nvim, did not move to the fresh handle"
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// Each core owns its liveness, its restart and its nvim: killing and restarting one leaves
+/// a sibling core alive and untouched.
+///
+/// An evidence test, green on the base code.
+///
+/// FALSIFYING EDIT: have `WolfCore::start` take its liveness cell from a process-global
+/// `OnceLock`, so every core shares it. Predicted red: the sibling reads `Dead` while only
+/// the first core's nvim died.
+#[test]
+fn a_restart_leaves_a_sibling_core_alone() {
+    let (core_a, waiter_a) = common::start_core_sized(common::DEFAULT_COLS, common::DEFAULT_ROWS);
+    let (core_b, waiter_b) = common::start_core_sized(common::DEFAULT_COLS, common::DEFAULT_ROWS);
+    let _ = attach_and_first_window(&core_a, &waiter_a);
+    let _ = attach_and_first_window(&core_b, &waiter_b);
+
+    self_sigkill(&core_a);
+    wait_for_dead(&core_a, &waiter_a, "core A's SIGKILL");
+    assert_eq!(
+        core_b.liveness(),
+        Liveness::Alive,
+        "core B must stay Alive while only core A's nvim died: anything else means the two \
+         cores share liveness state, and one project's crash shows on every window"
+    );
+
+    restart_from_dead(&core_a, "core A's SIGKILL");
+    assert_eq!(
+        core_b.liveness(),
+        Liveness::Alive,
+        "core B must stay Alive across core A's restart"
+    );
+    let b_restarted = core_b
+        .restart_nvim()
+        .expect("restart_nvim on the live core B should be Ok");
+    assert!(
+        !b_restarted,
+        "core B's restart_nvim() must be the Alive no-op (Ok(false)): true means B believed its \
+         own nvim dead and tore it down"
+    );
+
+    let dir = tempfile::tempdir().expect("failed to create probe tempdir");
+    let probe_a = dir.path().join("probe-a.txt");
+    let probe_b = dir.path().join("probe-b.txt");
+    let marker_a = "siblingalpha";
+    let marker_b = "siblingbravo";
+    type_marker(&core_a, marker_a);
+    type_marker(&core_b, marker_b);
+    let line_a = first_line(&core_a, &probe_a);
+    let line_b = first_line(&core_b, &probe_b);
+    assert_eq!(
+        line_a, marker_a,
+        "core A's restarted nvim must hold only what was typed into core A; {marker_b:?} in it \
+         means typing crossed between cores, empty means A's input was lost"
+    );
+    assert_eq!(
+        line_b, marker_b,
+        "core B's nvim must hold only what was typed into core B; {marker_a:?} in it means \
+         typing crossed between cores, empty means B's input was lost"
+    );
+
+    core_a.shutdown().expect("core A shutdown should be Ok");
+    core_b.shutdown().expect("core B shutdown should be Ok");
 }

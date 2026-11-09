@@ -9,7 +9,8 @@ import Foundation
 public enum NvimLiveness: UInt8 {
   /// The captive Neovim answers its RPCs.
   case alive = 0
-  /// A synchronous RPC elapsed its budget: Neovim is wedged but may recover.
+  /// A synchronous RPC or an input batch outlasted its budget: Neovim is wedged
+  /// but may recover.
   case notResponding = 1
   /// The captive Neovim process died.
   case dead = 2
@@ -94,6 +95,60 @@ public enum LivenessSeam {
       return Decision(
         overlay: .crashed(retrying: mayAutoRestart), autoRestart: mayAutoRestart,
         render: false, drain: true, persist: false)
+    }
+  }
+
+  /// One view as captured before a restart. An empty `cwd` or `activePath` means
+  /// none.
+  public struct CapturedView: Equatable {
+    /// The view's tab-local working directory.
+    public let cwd: String
+    /// The open file-backed buffers, in captured order.
+    public let files: [String]
+    /// The view's active file.
+    public let activePath: String
+
+    /// Builds a captured view from its three fields.
+    public init(cwd: String, files: [String], activePath: String) {
+      self.cwd = cwd
+      self.files = files
+      self.activePath = activePath
+    }
+  }
+
+  /// One step of restoring a view after a successful restart.
+  public enum RestoreStep: Equatable {
+    /// Bind the view to the fresh Neovim's own first tabpage.
+    case bindFirstTabpage
+    /// Bind the view to a new tabpage made in `cwd`.
+    case newTabpage(cwd: String)
+    /// Change the tabpage just made current to this directory.
+    case chdir(String)
+    /// Open this file in the tabpage just made current.
+    case open(String)
+  }
+
+  /// The restore steps for each captured view, in view order.
+  ///
+  /// View 0 binds the fresh Neovim's first tabpage, which starts in the
+  /// project's launch directory rather than the view's, so it is re-rooted with
+  /// `.chdir` before its files open; a window opened from the empty state reached
+  /// its folder only through a chdir. Each later view gets a tabpage made in its
+  /// own cwd and needs no `.chdir`. The opens follow wolf-gnome's `reopen_order`:
+  /// every file but the active one in captured order, then the active one, even
+  /// when `files` lacks it, so it is left focused.
+  public static func restoreSteps(for views: [CapturedView]) -> [[RestoreStep]] {
+    views.enumerated().map { index, view in
+      var steps: [RestoreStep]
+      if index == 0 {
+        steps = [.bindFirstTabpage]
+        if !view.cwd.isEmpty { steps.append(.chdir(view.cwd)) }
+      } else {
+        steps = [.newTabpage(cwd: view.cwd)]
+      }
+      steps += view.files.filter { $0 != view.activePath }.map { RestoreStep.open($0) }
+      if !view.activePath.isEmpty { steps.append(.open(view.activePath)) }
+      return steps
     }
   }
 }

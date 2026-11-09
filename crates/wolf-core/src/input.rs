@@ -415,31 +415,42 @@ pub fn key_to_notation(ev: &KeyEvent) -> String {
 /// keys and then waits for one flush observes the settled frame. Non-key events
 /// (mouse, scroll, resize, open/save) are applied individually, in order. Errors
 /// are logged, not propagated, matching the fire-and-forget input contract.
-pub(crate) async fn apply_batch(nvim: &Nvim, events: &[InputEvent]) {
+///
+/// Returns `true` when every call came back `Ok`, which means nvim answered them
+/// all: a call nvim answers with an error is still `Ok` here, because the helpers
+/// discard the response. Only a transport failure (`SendError`,
+/// `InternalReceiveError`, `DecodeError`) is an `Err`, so `false` means some call
+/// never reached nvim or never got its answer.
+pub(crate) async fn apply_batch(nvim: &Nvim, events: &[InputEvent]) -> bool {
     let mut pending_keys = String::new();
+    let mut answered = true;
 
-    async fn flush_keys(nvim: &Nvim, keys: &mut String) {
+    async fn flush_keys(nvim: &Nvim, keys: &mut String) -> bool {
         if keys.is_empty() {
-            return;
+            return true;
         }
         let notation = std::mem::take(keys);
         if let Err(e) = nvim_input(nvim, notation).await {
             tracing::warn!("nvim_input failed: {e}");
+            return false;
         }
+        true
     }
 
     for event in events {
         match event {
             InputEvent::Key(ev) => pending_keys.push_str(&key_to_notation(ev)),
             other => {
-                flush_keys(nvim, &mut pending_keys).await;
+                answered &= flush_keys(nvim, &mut pending_keys).await;
                 if let Err(e) = apply(nvim, other).await {
                     tracing::warn!("input apply failed: {e}");
+                    answered = false;
                 }
             }
         }
     }
-    flush_keys(nvim, &mut pending_keys).await;
+    answered &= flush_keys(nvim, &mut pending_keys).await;
+    answered
 }
 
 /// Applies an input event by issuing the appropriate generic RPC to Neovim.

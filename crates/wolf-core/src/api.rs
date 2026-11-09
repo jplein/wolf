@@ -199,10 +199,11 @@ pub struct WolfCore {
     rpc_timeout: Duration,
     /// The captive nvim's liveness state (`Alive` / `NotResponding` / `Dead`),
     /// backed by an atomic. The supervisor marks `Dead` on an unexpected death;
-    /// [`block_on_rpc`](WolfCore::block_on_rpc) escalates a `Timeout` to
-    /// `NotResponding` and auto-clears it back to `Alive` on a subsequent
-    /// successful RPC; [`restart_nvim`](WolfCore::restart_nvim) resets it to
-    /// `Alive`. Read cheaply (no RPC) by [`liveness`](WolfCore::liveness).
+    /// [`block_on_rpc`](WolfCore::block_on_rpc) and the input pump each escalate a
+    /// call or batch that outlasts [`rpc_timeout`](Self::rpc_timeout) to
+    /// `NotResponding`, and clear it back to `Alive` once nvim answers;
+    /// [`restart_nvim`](WolfCore::restart_nvim) resets it to `Alive`. Read cheaply
+    /// (no RPC) by [`liveness`](WolfCore::liveness).
     liveness: Arc<AtomicU8>,
     /// A clone of the same front-end wake fired on liveness transitions, so the
     /// front-end can re-read [`liveness`](WolfCore::liveness) and paint/recover.
@@ -210,8 +211,9 @@ pub struct WolfCore {
     /// The current RPC handle and restart generation, shared with the input pump.
     /// The pump reads a clone per batch; [`restart_nvim`](WolfCore::restart_nvim)
     /// swaps in the fresh nvim's handle and bumps the generation, so the pump keeps
-    /// working after a respawn (a fixed captured handle would go stale) and can
-    /// tell which queued typing predates it.
+    /// working after a respawn (a fixed captured handle would go stale), can tell
+    /// which queued typing predates it, and ignores the stall or the answer of a
+    /// batch sent to a handle the restart replaced.
     shared_handle: Arc<RwLock<PumpTarget>>,
     /// The redraw handler (it is `Clone`, carrying the SAME snapshot / intents /
     /// commands / tracked-cwd / recent-dirs / wake). Stored so a restart clones a
@@ -373,6 +375,8 @@ impl WolfCore {
         let pump_tracked_cwd = tracked_cwd.clone();
         let pump_fallback_cwd = cwd.clone();
         let pump_snapshot = snapshot.clone_handle();
+        let pump_liveness = liveness.clone();
+        let pump_wake = wake.clone();
         runtime.spawn(async move {
             while let Some(first) = input_rx.recv().await {
                 // Let any siblings enqueued in the same synchronous burst arrive.
@@ -414,7 +418,21 @@ impl WolfCore {
                     drop(snap);
                 }
 
-                input::apply_batch(&target.nvim, &batch).await;
+                // A batch that outlasts the budget marks a stall, unless a restart replaced its
+                // handle; the future is kept, since dropping a pending call kills the io loop.
+                let mut apply = std::pin::pin!(input::apply_batch(&target.nvim, &batch));
+                let answered = match tokio::time::timeout(rpc_timeout, &mut apply).await {
+                    Ok(answered) => answered,
+                    Err(_elapsed) => {
+                        if pump_shared_handle.read().generation == target.generation {
+                            liveness::mark_not_responding(&pump_liveness, &pump_wake);
+                        }
+                        apply.await
+                    }
+                };
+                if answered && pump_shared_handle.read().generation == target.generation {
+                    liveness::clear_not_responding(&pump_liveness, &pump_wake);
+                }
 
                 // Record opens under nvim's live cwd, resolved per batch to follow `:cd`/`:tcd`;
                 // the path is cloned out so the guard is not held across the record.
@@ -1509,9 +1527,9 @@ impl WolfCore {
     /// The captive nvim's current [`Liveness`] — a cheap, lock-free atomic read
     /// (NOT an RPC).
     ///
-    /// `Alive` normally; `NotResponding` after a synchronous RPC elapsed the
-    /// timeout budget (a stall — self-clears to `Alive` on the next successful
-    /// RPC); `Dead` after the supervisor observed an unexpected process death
+    /// `Alive` normally; `NotResponding` after a synchronous RPC or an input batch
+    /// outlasted the timeout budget (a stall — self-clears to `Alive` once nvim
+    /// answers one); `Dead` after the supervisor observed an unexpected process death
     /// (terminal until [`restart_nvim`](Self::restart_nvim)).
     #[must_use]
     pub fn liveness(&self) -> Liveness {
@@ -1546,8 +1564,16 @@ impl WolfCore {
     ///   Post-`Ok(true)` contract: [`liveness`](Self::liveness) is `Alive`,
     ///   [`current_tabpage`](Self::current_tabpage) is the fresh nvim's tabpage-1,
     ///   and [`list_buffers`](Self::list_buffers) is empty (the respawn starts
-    ///   clean). Reopening the Tier-1 files + rebinding views is the FRONT-END's job
-    ///   (off the mirror captured before the restart) — this method reopens nothing.
+    ///   clean). The render snapshot starts over as at [`start`](Self::start), so
+    ///   none of the dead nvim's windows, grids or command line is left: a fresh
+    ///   nvim numbers its windows from 1000 again. It carries `seq`, which never goes
+    ///   back, and [`Snapshot::open_files`], [`Snapshot::tab_cwds`] and
+    ///   [`Snapshot::current_tabpage`], which the fresh nvim replaces during setup.
+    ///   The layout intents and the navigation history are emptied. A caller that
+    ///   holds a [`read_snapshot`](Self::read_snapshot) guard across this call gets
+    ///   the reset at the next write instead. Reopening the Tier-1 files +
+    ///   rebinding views is the FRONT-END's job (off the mirror captured before
+    ///   the restart) — this method reopens nothing.
     ///   Typing [`send_input`](Self::send_input) enqueued before the swap is dropped
     ///   rather than delivered to the fresh nvim, so a half-typed Ex command cannot
     ///   arrive as normal-mode keys; state input (resize, focus, tabpage, ...) still
@@ -1590,6 +1616,12 @@ impl WolfCore {
             let mut old = self.nvim.borrow_mut();
             self.runtime.block_on(old.kill_in_place());
         }
+
+        // A fresh nvim numbers its windows from 1000 again, so nothing keyed by the dead one's
+        // handles may survive; the kill above waited for its last notification.
+        self.snapshot.reset_for_respawn();
+        self.intents.lock().clear();
+        *self.nav_history.lock() = crate::nav_history::NavHistory::default();
 
         // Leave the terminal Dead state for the restart (Dead -> Alive), waking the
         // front-end. This is the ONLY exit from Dead (unconditional store-Alive).
@@ -1687,12 +1719,13 @@ impl WolfCore {
     /// unbounded main-thread hang. Deliberately NOT used for startup or shutdown
     /// (those have their own bounds).
     ///
-    /// Liveness is folded in here (the stall detector): a [`NvimError::Timeout`]
-    /// escalates the shared liveness to `NotResponding` (via
-    /// [`liveness::mark_not_responding`], `Alive -> NotResponding` only — never
-    /// downgrading `Dead`); a SUCCESSFUL result auto-clears a transient stall
-    /// (`compare_exchange(NotResponding -> Alive)` ONLY — it must NEVER touch
-    /// `Dead`, so a crashed core stays `Dead` until [`restart_nvim`](Self::restart_nvim)).
+    /// Liveness is folded in here (one of the two stall detectors, with the input
+    /// pump): a [`NvimError::Timeout`] escalates the shared liveness to
+    /// `NotResponding` (via [`liveness::mark_not_responding`], `Alive ->
+    /// NotResponding` only — never downgrading `Dead`); a SUCCESSFUL result
+    /// auto-clears a transient stall through [`liveness::clear_not_responding`],
+    /// which never touches `Dead`, so a crashed core stays `Dead` until
+    /// [`restart_nvim`](Self::restart_nvim).
     fn block_on_rpc<F, T>(&self, what: &'static str, fut: F) -> Result<T, NvimError>
     where
         F: std::future::Future<Output = Result<T, NvimError>> + Send + 'static,
@@ -1701,20 +1734,7 @@ impl WolfCore {
         let result = timeout_block_on(&self.runtime, self.rpc_timeout, what, fut);
         match &result {
             Ok(_) => {
-                // RPC-success auto-clear: NotResponding -> Alive ONLY (never Dead).
-                // Fire the wake on an actual change so the overlay self-dismisses.
-                if self
-                    .liveness
-                    .compare_exchange(
-                        Liveness::NotResponding.to_u8(),
-                        Liveness::Alive.to_u8(),
-                        Ordering::SeqCst,
-                        Ordering::SeqCst,
-                    )
-                    .is_ok()
-                {
-                    (self.wake)();
-                }
+                liveness::clear_not_responding(&self.liveness, &self.wake);
             }
             Err(NvimError::Timeout(_, _)) => {
                 liveness::mark_not_responding(&self.liveness, &self.wake);

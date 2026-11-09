@@ -64,9 +64,9 @@
 //!   The window is sub-millisecond because `WolfCore::history_back` blocks on the
 //!   RPC before returning to the main thread; the worst outcome is slightly odd
 //!   history, never a wedge.
-//! * A `restart_nvim` clones the SAME redraw handler, so the history cell survives
-//!   a respawn by construction. That is acceptable: the new nvim issues fresh
-//!   window handles, so stale panes are never queried.
+//! * A `restart_nvim` clones the SAME redraw handler but empties the history cell
+//!   first: a fresh nvim numbers its windows from 1000 again, so a kept stack would
+//!   become the history of the fresh window that reuses its handle.
 //! * `win_hide` (fired for every window of a tabpage being left) removes the
 //!   `Snapshot::windows` entry, so a later `win_close` for that grid cannot resolve
 //!   its window handle and that pane's history is orphaned. nvim never reuses

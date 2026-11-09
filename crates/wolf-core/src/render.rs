@@ -15,7 +15,9 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 use parking_lot::{ArcRwLockReadGuard, RawRwLock, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
@@ -1131,14 +1133,147 @@ mod tests {
             "a window absent from the full_width map must default to not full width"
         );
     }
+
+    /// A window grid id seeded into a snapshot before a respawn reset.
+    const SEED_GRID: u64 = 4;
+    /// The `seq` seeded before a respawn reset, which the reset must keep.
+    const SEED_SEQ: u64 = 42;
+    /// The tabpage handle seeded as current before a respawn reset.
+    const SEED_TABPAGE: i64 = 3;
+    /// A grid size other than the initial one, so a reset that keeps the live outer
+    /// grid is told apart from one that starts it over.
+    const LIVE_COLS: usize = 120;
+    /// See [`LIVE_COLS`].
+    const LIVE_ROWS: usize = 40;
+
+    /// Fills `snap` with what a dead nvim leaves behind: a window and its grid, a
+    /// resized outer grid, an open command line, a `seq`, and the three capture fields.
+    fn seed_dead_nvim_state(snap: &mut Snapshot) {
+        snap.grids
+            .insert(SEED_GRID, Grid::new(TEST_COLS, TEST_ROWS));
+        snap.grid_mut(OUTER_GRID_ID).resize(LIVE_COLS, LIVE_ROWS);
+        snap.windows.insert(
+            SEED_GRID,
+            WinInfo {
+                grid: SEED_GRID,
+                win: TEST_WIN,
+                ..WinInfo::default()
+            },
+        );
+        snap.active_win = Some(TEST_WIN);
+        snap.cmdline.active = true;
+        snap.seq = SEED_SEQ;
+        snap.open_files.insert(
+            SEED_TABPAGE,
+            TabFiles {
+                active: Some(PathBuf::from("/p/a.md")),
+                files: vec![PathBuf::from("/p/a.md")],
+            },
+        );
+        snap.tab_cwds.insert(SEED_TABPAGE, PathBuf::from("/p"));
+        snap.current_tabpage = SEED_TABPAGE;
+    }
+
+    /// Asserts that `snap` is a fresh snapshot that kept `seq` and the capture fields.
+    fn assert_reset(snap: &Snapshot, how: &str) {
+        assert!(
+            snap.windows.is_empty() && snap.active_win.is_none(),
+            "{how}: the dead nvim's windows must be gone, since a fresh nvim reuses their \
+             handles; got {:?} active {:?}",
+            snap.windows.keys().collect::<Vec<_>>(),
+            snap.active_win
+        );
+        assert!(
+            !snap.cmdline.active,
+            "{how}: the command line must be closed"
+        );
+        let grids: Vec<u64> = snap.grids.keys().copied().collect();
+        assert_eq!(
+            grids,
+            vec![OUTER_GRID_ID],
+            "{how}: only the outer grid may be left"
+        );
+        let outer = &snap.grids[&OUTER_GRID_ID];
+        assert_eq!(
+            (outer.cols, outer.rows),
+            (TEST_COLS, TEST_ROWS),
+            "{how}: the outer grid must start over at the initial size"
+        );
+        assert_eq!(
+            snap.seq, SEED_SEQ,
+            "{how}: seq is monotonic and must be carried"
+        );
+        assert!(
+            snap.open_files.contains_key(&SEED_TABPAGE),
+            "{how}: open_files must be carried for a capture after a failed respawn"
+        );
+        assert!(
+            snap.tab_cwds.contains_key(&SEED_TABPAGE),
+            "{how}: tab_cwds must be carried for a capture after a failed respawn"
+        );
+        assert_eq!(
+            snap.current_tabpage, SEED_TABPAGE,
+            "{how}: current_tabpage must be carried"
+        );
+    }
+
+    /// U1: a respawn reset starts the snapshot over at its initial size, keeping only
+    /// `seq` and the three capture fields.
+    #[test]
+    fn reset_for_respawn_starts_over_and_keeps_seq_and_capture_fields() {
+        let shared = SharedSnapshot::new(TEST_COLS, TEST_ROWS);
+        seed_dead_nvim_state(&mut shared.write());
+
+        shared.reset_for_respawn();
+
+        assert_reset(&shared.read(), "reset with the lock free");
+    }
+
+    /// U2: with a reader holding the lock, the reset returns at once and the next
+    /// writer applies it, through `write()` and through `write_async()`.
+    #[test]
+    fn reset_for_respawn_under_a_reader_is_applied_by_the_next_write() {
+        let shared = SharedSnapshot::new(TEST_COLS, TEST_ROWS);
+        seed_dead_nvim_state(&mut shared.write());
+        {
+            let _reader = shared.read();
+            shared.reset_for_respawn();
+        }
+        assert_reset(&shared.write(), "pending reset applied by write()");
+
+        seed_dead_nvim_state(&mut shared.write());
+        {
+            let _reader = shared.read_arc();
+            shared.reset_for_respawn();
+        }
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("current-thread runtime");
+        rt.block_on(async {
+            let guard = shared.write_async().await;
+            assert_reset(&guard, "pending reset applied by write_async()");
+        });
+    }
 }
+
+/// How long [`SharedSnapshot::reset_for_respawn`] waits for the write lock before it
+/// leaves the reset to the next writer.
+const RESET_LOCK_WAIT: Duration = Duration::from_millis(50);
 
 /// A shared, lock-guarded [`Snapshot`].
 ///
-/// Cloning shares the same underlying lock (it is an `Arc`).
+/// Cloning shares the same underlying lock (it is an `Arc`), the same initial size
+/// and the same pending-reset flag.
 #[derive(Clone)]
 pub struct SharedSnapshot {
     inner: Arc<RwLock<Snapshot>>,
+    /// The size the snapshot was created at, which a respawn reset starts over from.
+    cols: usize,
+    /// See [`cols`](Self::cols).
+    rows: usize,
+    /// Set by [`reset_for_respawn`](Self::reset_for_respawn) when a reader held the lock;
+    /// the next [`write`](Self::write) or [`write_async`](Self::write_async) applies it.
+    reset_pending: Arc<AtomicBool>,
 }
 
 impl SharedSnapshot {
@@ -1147,6 +1282,37 @@ impl SharedSnapshot {
     pub fn new(cols: usize, rows: usize) -> Self {
         Self {
             inner: Arc::new(RwLock::new(Snapshot::new(cols, rows))),
+            cols,
+            rows,
+            reset_pending: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Starts the snapshot over, as at [`new`](Self::new), for a respawned nvim.
+    ///
+    /// A fresh nvim numbers its windows from 1000 and its tabpages from 1 again, so
+    /// anything the dead one left would be read as the fresh one's. Three things carry
+    /// over: `seq`, which is monotonic and which flush waiters key on; and `open_files`,
+    /// `tab_cwds` and `current_tabpage`, which front-ends capture before a restart and
+    /// must still find if this respawn fails. The fresh nvim replaces each of the three
+    /// wholesale during its setup.
+    ///
+    /// Never blocks on the lock: a caller may hold a read guard across a restart on this
+    /// very thread. When a reader keeps the lock past [`RESET_LOCK_WAIT`], the reset is
+    /// left pending and the next writer applies it before anything else.
+    pub(crate) fn reset_for_respawn(&self) {
+        if let Some(mut guard) = self.inner.try_write_for(RESET_LOCK_WAIT) {
+            self.reset_pending.store(false, Ordering::SeqCst);
+            reset_snapshot(&mut guard, self.cols, self.rows);
+        } else {
+            self.reset_pending.store(true, Ordering::SeqCst);
+        }
+    }
+
+    /// Applies a reset that [`reset_for_respawn`](Self::reset_for_respawn) left pending.
+    fn apply_pending_reset(&self, snap: &mut Snapshot) {
+        if self.reset_pending.swap(false, Ordering::SeqCst) {
+            reset_snapshot(snap, self.cols, self.rows);
         }
     }
 
@@ -1164,7 +1330,9 @@ impl SharedSnapshot {
     /// Acquires the write lock. Per the locking invariant, callers must NOT hold
     /// this across an `.await`.
     pub fn write(&self) -> RwLockWriteGuard<'_, Snapshot> {
-        self.inner.write()
+        let mut guard = self.inner.write();
+        self.apply_pending_reset(&mut guard);
+        guard
     }
 
     /// Acquires the write lock from async code WITHOUT blocking the tokio worker
@@ -1179,7 +1347,8 @@ impl SharedSnapshot {
     /// handler applies a whole batch synchronously and drops it before returning).
     pub async fn write_async(&self) -> RwLockWriteGuard<'_, Snapshot> {
         loop {
-            if let Some(guard) = self.inner.try_write() {
+            if let Some(mut guard) = self.inner.try_write() {
+                self.apply_pending_reset(&mut guard);
                 return guard;
             }
             tokio::task::yield_now().await;
@@ -1191,4 +1360,15 @@ impl SharedSnapshot {
     pub fn clone_handle(&self) -> Self {
         self.clone()
     }
+}
+
+/// Replaces `snap` with a fresh `cols * rows` snapshot, keeping `seq` and the three
+/// capture fields; see [`SharedSnapshot::reset_for_respawn`].
+fn reset_snapshot(snap: &mut Snapshot, cols: usize, rows: usize) {
+    let mut fresh = Snapshot::new(cols, rows);
+    fresh.seq = snap.seq;
+    fresh.open_files = std::mem::take(&mut snap.open_files);
+    fresh.tab_cwds = std::mem::take(&mut snap.tab_cwds);
+    fresh.current_tabpage = snap.current_tabpage;
+    *snap = fresh;
 }

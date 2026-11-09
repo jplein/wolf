@@ -1534,12 +1534,22 @@ impl NvimProcess {
     ///
     /// Sets `shutting_down` FIRST (so the old supervisor stays silent and does not
     /// fire a stale `Dead` after the restart), force-kills the child, reaps it with
-    /// a bounded `child.wait()`, then aborts the supervisor. Works for a crashed OR
-    /// wedged nvim (no `qa!` round-trip that a wedged nvim would never answer).
+    /// a bounded `child.wait()`, then waits (bounded) for the supervisor before
+    /// aborting it. Works for a crashed OR wedged nvim (no `qa!` round-trip that a
+    /// wedged nvim would never answer).
+    ///
+    /// The supervisor resolves when the old io loop ends, and that loop's end drops
+    /// its handler loop, so once this returns no notification of the killed process
+    /// can land on the shared state the restart is about to reset. The wait is
+    /// skipped when the supervisor has already finished: a failed respawn leaves the
+    /// same process here, and polling a completed `JoinHandle` again panics.
     pub async fn kill_in_place(&mut self) {
         self.shutting_down.store(true, Ordering::SeqCst);
         let _ = self.child.start_kill();
         let _ = tokio::time::timeout(SHUTDOWN_TIMEOUT, self.child.wait()).await;
+        if !self.supervisor.is_finished() {
+            let _ = tokio::time::timeout(SHUTDOWN_TIMEOUT, &mut self.supervisor).await;
+        }
         self.supervisor.abort();
     }
 }
