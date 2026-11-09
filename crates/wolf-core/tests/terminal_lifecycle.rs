@@ -1,7 +1,8 @@
 //! Integration tests of a terminal session's lifetime in `wolf-core`: the shell exiting, its
-//! placeholder window closing from Neovim, `close_terminal`, `shutdown`, and a session
-//! surviving a Neovim crash and restart. A real `/bin/sh` runs in a real pty beside a real,
-//! hermetic Neovim that holds the placeholder windows.
+//! placeholder window closing from Neovim, `close_terminal`, `shutdown`, a session surviving a
+//! Neovim crash and restart, and a queued rebind landing behind input sent before it. A real
+//! `/bin/sh` runs in a real pty beside a real, hermetic Neovim that holds the placeholder
+//! windows.
 //!
 //! Shells are checked for by pid with `kill -0`, which succeeds on a zombie, so a pid that is
 //! gone was both killed and reaped.
@@ -24,11 +25,13 @@ mod common;
 use std::time::{Duration, Instant};
 
 use common::{
-    active_window, frame_of, interactive_sh, open_session, pid_alive, poll_frame, poll_until,
-    run_line, send_ex, sh_script, start_core_at, term_key, terminal_windows, wait_for_pid,
-    wait_for_pid_gone, wait_for_text, win_terminal, FlushWaiter,
+    active_window, frame_of, frame_text, interactive_sh, open_session, pid_alive, poll_frame,
+    poll_until, run_line, send_ex, settle_for, sh_script, start_core_at, temp_md, term_key,
+    terminal_windows, wait_for_pid, wait_for_pid_gone, wait_for_text, win_terminal, FlushWaiter,
 };
-use wolf_core::{Key, Liveness, SplitOrientation, TerminalId, TerminalTarget, WolfCore};
+use wolf_core::{
+    InputEvent, Key, Liveness, SplitOrientation, TerminalId, TerminalTarget, WolfCore,
+};
 
 /// How long the exit case keeps Neovim's event loop blocked.
 const WEDGE: Duration = Duration::from_secs(3);
@@ -328,4 +331,85 @@ fn a_session_survives_a_neovim_restart() {
     );
 
     core.shutdown().expect("shutdown should be Ok");
+}
+
+/// After a restart, `queue_bind_terminal` puts a live session into a new split through the
+/// input queue, so it lands behind an `Open` sent just before it: one window shows the file,
+/// another the session, which keeps running with its output. An unknown id queues nothing.
+///
+/// A bind that skipped the queue would reach Neovim before the `Open`, whose `:edit` would
+/// then land in the new split, replace the placeholder and wipe it, hanging the session up.
+#[test]
+fn queue_bind_terminal_lands_behind_earlier_input() {
+    let (core, waiter) = start_core();
+    let fixture = temp_md("# queued rebind fixture\n");
+    let canon_fixture =
+        std::fs::canonicalize(fixture.path()).expect("failed to canonicalize the fixture");
+    let id = open_session(&core, TerminalTarget::Window(0), interactive_sh());
+    run_line(&core, id, "echo kept-$((5+6))");
+    wait_for_text(&core, &waiter, id, "kept-11");
+
+    send_ex(&core, "lua (vim.uv or vim.loop).kill(vim.fn.getpid(), 9)");
+    poll_until(
+        &waiter,
+        "the core to report Neovim dead after its SIGKILL",
+        || core.liveness(),
+        |liveness| *liveness == Liveness::Dead,
+    );
+    assert!(
+        matches!(core.restart_nvim(), Ok(true)),
+        "restart_nvim on a dead Neovim must respawn it and return Ok(true)."
+    );
+
+    core.send_input(InputEvent::Open {
+        path: fixture.path().to_path_buf(),
+    });
+    assert!(
+        core.queue_bind_terminal(id, SPLIT_CURRENT),
+        "queue_bind_terminal of a live session must return true."
+    );
+
+    let shown = || {
+        let snap = core.read_snapshot();
+        let file = snap
+            .win_buffers
+            .values()
+            .any(|buffer| buffer.path.as_deref() == Some(canon_fixture.as_path()));
+        let session = snap
+            .win_buffers
+            .values()
+            .filter(|buffer| buffer.terminal == Some(id))
+            .count();
+        (file, session, core.live_terminals().contains(&id))
+    };
+    poll_until(
+        &waiter,
+        "one window to show the fixture and another the session; (true, 0, false) means the \
+         bind reached Neovim before the Open, whose :edit replaced and wiped the placeholder",
+        shown,
+        |state| *state == (true, 1, true),
+    );
+    settle_for(&waiter, RESTART_SETTLE);
+    assert_eq!(
+        shown(),
+        (true, 1, true),
+        "(fixture shown, windows showing the session, session live) must stay (true, 1, true) \
+         once the queue drains; a change means a later event displaced the bound session."
+    );
+    let frame = frame_of(&core, id);
+    assert!(
+        frame_text(&frame).contains("kept-11"),
+        "the rebound session must be the same shell, still showing its output; the frame \
+         reads:\n{}",
+        frame_text(&frame)
+    );
+
+    assert!(
+        !core.queue_bind_terminal(TerminalId(999), SPLIT_CURRENT),
+        "queue_bind_terminal of an id no session has must return false; true means it queues a \
+         bind without checking the session is live."
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
+    drop(fixture);
 }

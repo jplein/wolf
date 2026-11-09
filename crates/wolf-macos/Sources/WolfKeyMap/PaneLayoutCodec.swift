@@ -7,8 +7,10 @@
 public enum SavedPaneNode: Hashable {
   /// A single pane showing the buffer at `path` (`""` for an unnamed buffer). When
   /// `preview` is `true` the pane is a Markdown preview and `path` is the SOURCE
-  /// Markdown file's ABS path (restored via `wolf_preview_file`, not `:edit`).
-  case leaf(path: String, preview: Bool)
+  /// Markdown file's ABS path (restored via `wolf_preview_file`, not `:edit`). When
+  /// `terminal` is `true` the pane is a terminal pane and `path` is the directory its
+  /// session starts in (`""` for the tabpage cwd).
+  case leaf(path: String, preview: Bool, terminal: Bool = false)
   /// An n-ary split of `children` along `orientation`, with parallel per-child
   /// `weights`.
   case split(orientation: Orientation, weights: [Double], children: [SavedPaneNode])
@@ -25,14 +27,14 @@ public enum SavedPaneNode: Hashable {
   }
 
   /// The "suppress from persistence" predicate for a LONE pane: `true` iff this
-  /// node is `.leaf(path: "", preview: false)` — an empty (unnamed), non-preview
-  /// lone buffer. A preview leaf (`preview: true`), a leaf with a non-empty path,
-  /// and any `.split(...)` all return `false`, so multi-pane layouts and lone
-  /// panes bound to a file/preview are never suppressed.
+  /// node is `.leaf(path: "", preview: false, terminal: false)` — an empty (unnamed),
+  /// non-preview lone buffer. A preview or terminal leaf, a leaf with a non-empty
+  /// path, and any `.split(...)` all return `false`, so multi-pane layouts and lone
+  /// panes bound to a file, a preview or a terminal are never suppressed.
   public var isEmptyLeaf: Bool {
     switch self {
-    case .leaf(let path, let preview):
-      return path.isEmpty && !preview
+    case .leaf(let path, let preview, let terminal):
+      return path.isEmpty && !preview && !terminal
     case .split:
       return false
     }
@@ -46,9 +48,10 @@ public enum PaneLayoutCodec {
   /// Each token carries the node's own weight within its parent split (the root's
   /// is `1.0`).
   public enum LayoutToken: Equatable {
-    /// A leaf bound to `path` (a preview of `path` when `preview` is `true`),
-    /// weighing `weight` within its parent split.
-    case leaf(path: String, preview: Bool, weight: Double)
+    /// A leaf bound to `path` (a preview of `path` when `preview` is `true`, a terminal
+    /// pane starting in `path` when `terminal` is `true`), weighing `weight` within its
+    /// parent split.
+    case leaf(path: String, preview: Bool, terminal: Bool = false, weight: Double)
     /// A split along `orientation` of the top `childCount` stack nodes, weighing
     /// `weight` within its parent split.
     case split(orientation: Orientation, childCount: Int, weight: Double)
@@ -56,17 +59,23 @@ public enum PaneLayoutCodec {
 
   /// Maps a `PaneLayout` (leaf ids) into a `SavedPaneNode` (leaf paths), looking
   /// each leaf id up in `paths` (an unmapped leaf becomes an empty path) and marking
-  /// it a `preview` leaf when its id is in `previews`.
+  /// it a `preview` leaf when its id is in `previews` and a `terminal` leaf when it is
+  /// in `terminals`.
   public static func encode(
-    _ layout: PaneLayout, paths: [PaneId: String], previews: Set<PaneId>
+    _ layout: PaneLayout, paths: [PaneId: String], previews: Set<PaneId>,
+    terminals: Set<PaneId> = []
   ) -> SavedPaneNode {
     switch layout {
     case .leaf(let id):
-      return .leaf(path: paths[id] ?? "", preview: previews.contains(id))
+      return .leaf(
+        path: paths[id] ?? "", preview: previews.contains(id),
+        terminal: terminals.contains(id))
     case .split(let orientation, let children, let weights):
       return .split(
         orientation: orientation, weights: weights,
-        children: children.map { encode($0, paths: paths, previews: previews) })
+        children: children.map {
+          encode($0, paths: paths, previews: previews, terminals: terminals)
+        })
     }
   }
 
@@ -84,8 +93,8 @@ public enum PaneLayoutCodec {
     var stack: [(node: SavedPaneNode, weight: Double)] = []
     for token in tokens {
       switch token {
-      case .leaf(let path, let preview, let weight):
-        stack.append((.leaf(path: path, preview: preview), weight))
+      case .leaf(let path, let preview, let terminal, let weight):
+        stack.append((.leaf(path: path, preview: preview, terminal: terminal), weight))
       case .split(let orientation, let childCount, let weight):
         guard childCount >= 0, stack.count >= childCount else {
           return nil
@@ -113,8 +122,8 @@ public enum PaneLayoutCodec {
     _ node: SavedPaneNode, weight: Double, into out: inout [LayoutToken]
   ) {
     switch node {
-    case .leaf(let path, let preview):
-      out.append(.leaf(path: path, preview: preview, weight: weight))
+    case .leaf(let path, let preview, let terminal):
+      out.append(.leaf(path: path, preview: preview, terminal: terminal, weight: weight))
     case .split(let orientation, let weights, let children):
       for (child, childWeight) in zip(children, weights) {
         emit(child, weight: childWeight, into: &out)

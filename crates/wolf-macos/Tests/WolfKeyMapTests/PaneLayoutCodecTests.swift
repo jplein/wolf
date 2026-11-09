@@ -82,6 +82,13 @@ final class PaneLayoutCodecTests: XCTestCase {
       "an empty-path PREVIEW leaf is NOT empty (preview-ness must persist)")
   }
 
+  func testIsEmptyLeafFalseForEmptyTerminalLeaf() {
+    XCTAssertFalse(
+      SavedPaneNode.leaf(path: "", preview: false, terminal: true).isEmptyLeaf,
+      "a lone terminal leaf with no known cwd is NOT empty (the terminal pane must persist); "
+        + "true means isEmptyLeaf ignores `terminal`")
+  }
+
   func testIsEmptyLeafFalseForSplit() {
     XCTAssertFalse(
       twoChild().isEmptyLeaf,
@@ -136,6 +143,30 @@ final class PaneLayoutCodecTests: XCTestCase {
       "the leaf whose id is in `previews` encodes preview: true (path = source); the other false")
   }
 
+  // MARK: - encode: a leaf id in `terminals` is marked terminal: true
+
+  func testEncodeMarksTerminalLeaves() {
+    let tree = PaneTree(root: p1)
+    tree.split(p1, p2, .vertical)
+
+    // P1 is a terminal pane whose path is the directory its session starts in.
+    let saved = PaneLayoutCodec.encode(
+      tree.layout(),
+      paths: [p1: "/notes/sub", p2: "/notes/b.md"],
+      previews: [],
+      terminals: [p1])
+    XCTAssertEqual(
+      saved,
+      .split(
+        orientation: .vertical, weights: [0.5, 0.5],
+        children: [
+          .leaf(path: "/notes/sub", preview: false, terminal: true),
+          .leaf(path: "/notes/b.md", preview: false),
+        ]),
+      "the leaf whose id is in `terminals` encodes terminal: true with its cwd; the other "
+        + "false. terminal: false on the first means encode ignores `terminals`")
+  }
+
   // MARK: - postOrderTokens <-> decodeTokens round-trips
 
   func testTokenRoundTripLeaf() {
@@ -177,6 +208,21 @@ final class PaneLayoutCodecTests: XCTestCase {
     XCTAssertEqual(
       PaneLayoutCodec.decodeTokens(tokens), node,
       "the preview leaf's preview: true survives the token round-trip")
+  }
+
+  func testTokenRoundTripKeepsATerminalLeaf() {
+    let node: SavedPaneNode = .split(
+      orientation: .vertical, weights: [0.5, 0.5],
+      children: [
+        .leaf(path: "/a.md", preview: false),
+        .leaf(path: "/notes/sub", preview: false, terminal: true),
+      ])
+    let tokens = PaneLayoutCodec.postOrderTokens(node)
+    XCTAssertEqual(tokens.count, nodeCount(node), "one token per node")
+    XCTAssertEqual(
+      PaneLayoutCodec.decodeTokens(tokens), node,
+      "a terminal leaf must round-trip through the tokens with terminal: true; false means the "
+        + "token drops the flag, so the pane restores as an editor of its directory")
   }
 
   // MARK: - rebuilt: topology + weights + DFS leaf ids

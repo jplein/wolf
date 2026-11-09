@@ -13,6 +13,8 @@ public enum SessionSeam {
     case preview(source: String)
     /// A buffer at `path`; `""` is an unnamed buffer.
     case buffer(path: String)
+    /// A terminal pane whose shell is in `cwd`; `""` when core cannot read it.
+    case terminal(cwd: String)
     /// The window is in neither map yet, or the leaf has no window yet.
     case unreported
   }
@@ -38,6 +40,7 @@ public enum SessionSeam {
     if hasFolder && cwd.isEmpty { return .refuse }
     var paths: [PaneId: String] = [:]
     var previews: Set<PaneId> = []
+    var terminals: Set<PaneId> = []
     for id in leafIds(layout) {
       switch content[id] {
       case .preview(let source):
@@ -45,11 +48,15 @@ public enum SessionSeam {
         previews.insert(id)
       case .buffer(let path):
         paths[id] = path
+      case .terminal(let cwd):
+        paths[id] = cwd
+        terminals.insert(id)
       case .unreported, nil:
         return .refuse
       }
     }
-    let node = PaneLayoutCodec.encode(layout, paths: paths, previews: previews)
+    let node = PaneLayoutCodec.encode(
+      layout, paths: paths, previews: previews, terminals: terminals)
     return .ready(
       RestoreSeam.SavedTab(
         cwd: hasFolder ? cwd : "", sidebarVisible: sidebarVisible,

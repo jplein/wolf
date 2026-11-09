@@ -81,7 +81,7 @@ pub enum Command {
     /// Navigate from a preview pane back to its source file (the inverse of
     /// `Preview`; only has an effect when the active pane is a preview pane).
     Edit,
-    /// Toggle the terminal drawer (a bottom `:terminal` split, one per project).
+    /// Toggle the terminal drawer (a bottom split showing the core's drawer session).
     Terminal,
     /// Render the active Markdown buffer and open it in the system default web
     /// browser, backed by a lazily-started loopback-only HTTP server owned by the

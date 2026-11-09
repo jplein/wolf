@@ -250,6 +250,7 @@ final class Project {
 
     // Capture the Tier-1 set + cwd per view BEFORE the restart replaces the mirror.
     let attached = views.allObjects
+    let terminals = attached.map { $0.capturedTerminals() }
     let captured: [LivenessSeam.CapturedView] = attached.map { view in
       let openFiles = view.capturedOpenFiles()
       return LivenessSeam.CapturedView(
@@ -290,6 +291,14 @@ final class Project {
         view.rebind(toTabpage: tabpage)
         handle.set_current_tabpage(tabpage)
       }
+    }
+
+    // Sessions outlive Neovim; each view puts its own back once its first pane binds.
+    let live = Set(Array(handle.live_terminals()))
+    for (view, captured) in zip(attached, terminals) {
+      view.requestTerminalRestore(
+        LivenessSeam.terminalRestore(
+          splits: captured.splits, drawerOpen: captured.drawerOpen, live: live))
     }
 
     // Restore the project's current view (its tabpage becomes current again) and

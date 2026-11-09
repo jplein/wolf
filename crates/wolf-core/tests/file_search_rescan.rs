@@ -12,11 +12,11 @@
 //! the session state. Two trigger classes feed that path from
 //! `runtime/nvim/init.lua`: buffer events (`BufWritePost` conditional;
 //! `BufFilePost` / `BufDelete` force) carrying the touched path, and pathless
-//! FORCE events (`ShellCmdPost` / `FocusGained` / `TermLeave`) that catch
-//! filesystem changes no buffer event names — shell commands, external tools,
-//! the terminal drawer.
+//! FORCE events (`ShellCmdPost` / `FocusGained`) that catch filesystem changes
+//! no buffer event names — shell commands and external tools. Case (8) drives
+//! the third pathless trigger, core's own: a terminal pane losing focus.
 //!
-//! The file has two halves. Cases (1) to (8) cover those nvim triggers and run
+//! The file has two halves. Cases (1) to (8) cover those triggers and run
 //! with core's filesystem watcher OFF (`WOLF_FS_WATCH=0`): with it on, the
 //! watcher would surface the same change and a deleted trigger would fail no
 //! test. Cases (a) to (f) cover the watcher: they touch the tree only through
@@ -318,8 +318,8 @@ fn count_of(entries: &[FileEntry], name: &str) -> usize {
 
 /// Blocks (bounded by [`SEARCH_TIMEOUT`]) until `pred` holds, sleeping
 /// [`POLL_INTERVAL`] between checks. Settling helper for async effects that
-/// have no wake channel of their own (the drawer window opening, a mode
-/// change landing in the snapshot). Panics with `desc` on timeout.
+/// have no wake channel of their own (the drawer's session being named).
+/// Panics with `desc` on timeout.
 fn wait_until(desc: &str, mut pred: impl FnMut() -> bool) {
     let deadline = Instant::now() + SEARCH_TIMEOUT;
     while !pred() {
@@ -328,28 +328,6 @@ fn wait_until(desc: &str, mut pred: impl FnMut() -> bool) {
         }
         std::thread::sleep(POLL_INTERVAL);
     }
-}
-
-/// The active cursor mode's short name (e.g. `"normal"`, `"terminal"`) from
-/// the snapshot's cached `mode_info_set`. Returned as an OWNED `String` so the
-/// snapshot read-guard drops before the caller's next poll sleep — a guard
-/// held across a sleep starves the redraw handler's `try_write` (see the lock
-/// discipline notes in `autoread.rs`).
-fn current_mode_name(core: &WolfCore) -> String {
-    let snap = core.read_snapshot();
-    snap.mode_infos
-        .get(snap.cursor.mode_idx)
-        .map(|m| m.name.clone())
-        .unwrap_or_default()
-}
-
-/// Whether any listed buffer is a terminal buffer, detected by Neovim's
-/// `term://` naming convention (terminal buffers are buflisted — mirrors the
-/// detection in `wolf-ffi/tests/terminal.rs`).
-fn has_terminal_buffer(core: &WolfCore) -> bool {
-    core.list_buffers()
-        .iter()
-        .any(|b| b.name.starts_with("term://"))
 }
 
 /// Forces a genuine unfocused→focused transition on the captive nvim UI, which
@@ -754,20 +732,15 @@ fn focus_gained_rescans() {
 }
 
 /// (8) A file removed while the terminal DRAWER is open disappears once the
-/// drawer is toggled closed. The REAL drawer flow is driven — `toggle_terminal`
-/// twice, never a `doautocmd` — because this test asserts the FLOW (drawer
-/// close ⇒ rescan), not the event name: the drawer auto-`startinsert`s on
-/// WinEnter (the `WolfTerminalInsert` augroup), so the open toggle puts nvim in
-/// Terminal-mode and the close toggle exits it (t → n), firing `TermLeave`, a
-/// pathless FORCE trigger. The watcher is off, so only `TermLeave` can surface
-/// the delete.
-///
-/// Contingency (spec): if `TermLeave` proves not to fire on the drawer close,
-/// the fix is a `WinLeave` autocmd guarded on `buftype == "terminal"` in
-/// `init.lua` — and this test stays as-is.
+/// drawer's pane loses focus. The drawer is opened through `toggle_terminal`, as
+/// the chord does, and the focus loss is `terminal_focus(id, false)`, what a
+/// front-end sends when focus leaves the drawer: core forces a pathless rescan
+/// on it. The watcher is off, and a settle shows the delete alone surfaces
+/// nothing, so only the focus loss can.
 #[test]
-fn term_leave_rescans() {
+fn drawer_focus_loss_rescans() {
     let _ = common::require_nvim_bin();
+    common::pin_default_shell();
     let (_dir, cwd) = temp_cwd();
     write_file(&cwd.join("gone.md"), "g");
     write_file(&cwd.join("keeper.md"), "k");
@@ -782,25 +755,35 @@ fn term_leave_rescans() {
         displays(&baseline)
     );
 
-    // Let the drawer settle (term:// buffer listed, Terminal mode reported): only a settled t-mode
-    // drawer makes the close toggle produce the t -> n TermLeave edge.
     core.toggle_terminal();
-    wait_until("the drawer's term:// buffer to be listed", || {
-        has_terminal_buffer(&core)
-    });
-    wait_until("nvim to enter Terminal-mode in the drawer", || {
-        current_mode_name(&core) == "terminal"
-    });
+    let mut drawer = None;
+    wait_until(
+        "drawer_terminal() to name the drawer's session after toggle_terminal",
+        || {
+            drawer = core.drawer_terminal();
+            drawer.is_some()
+        },
+    );
+    let id = drawer.expect("wait_until returned only once the drawer had a session");
+    // Let anything the drawer's opening triggered drain before the tree changes.
+    settle();
 
     // Delete from outside nvim while the drawer is open, standing in for a command run in its
-    // shell, which is too slow and nondeterministic to drive; then close the drawer.
+    // shell; with the watcher off this alone must not surface.
     fs::remove_file(cwd.join("gone.md")).expect("failed to remove gone.md");
-    core.toggle_terminal();
+    settle();
+    assert!(
+        displays(&search.read().entries).contains("gone.md"),
+        "gone.md disappeared before the focus loss, so something other than it rescanned \
+         (is the watcher off?) and the assertion below would prove nothing"
+    );
 
+    core.terminal_focus(id, false);
     let entries = poll_search_until(
         &search,
         &wakes,
-        "gone.md to disappear after the drawer close",
+        "gone.md to disappear after terminal_focus(drawer, false); staying means a terminal \
+         pane's focus loss forces no rescan",
         |view| !view.entries.iter().any(|e| e.display == "gone.md"),
     );
 
@@ -811,7 +794,7 @@ fn term_leave_rescans() {
     );
     assert!(
         search.read().complete,
-        "the session must stay `complete` across a TermLeave-triggered rescan"
+        "the session must stay `complete` across a focus-loss-triggered rescan"
     );
 
     drop(search);

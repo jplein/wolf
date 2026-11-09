@@ -258,6 +258,34 @@ final class SessionSeamTests: XCTestCase {
         + "the panes, and .refuse writes nothing for a fully reported tab")
   }
 
+  func testATerminalPanePersistsAsATerminalLeaf() {
+    let sub = "/Users/alice/projects/notes/sub"
+    XCTAssertEqual(
+      gather(
+        layout: .split(
+          orientation: .vertical, children: [.leaf(p1), .leaf(p2)], weights: [0.5, 0.5]),
+        content: [p1: .buffer(path: fileA), p2: .terminal(cwd: sub)]),
+      .ready(
+        RestoreSeam.SavedTab(
+          cwd: folder, sidebarVisible: true,
+          layout: .split(
+            orientation: .vertical, weights: [0.5, 0.5],
+            children: [
+              .leaf(path: fileA, preview: false),
+              .leaf(path: sub, preview: false, terminal: true),
+            ]))),
+      "a terminal pane must persist as a terminal leaf carrying its cwd; terminal: false means "
+        + ".terminal is mapped like .buffer and the pane restores as an editor of its directory")
+    XCTAssertEqual(
+      gather(layout: .leaf(p1), content: [p1: .terminal(cwd: "")]),
+      .ready(
+        RestoreSeam.SavedTab(
+          cwd: folder, sidebarVisible: true,
+          layout: .leaf(path: "", preview: false, terminal: true))),
+      "a lone terminal pane with no known cwd must still persist its leaf; nil means it was "
+        + "taken for the empty-state lone pane")
+  }
+
   func testAnUnreportedLeafRefusesTheTab() {
     XCTAssertEqual(
       gather(

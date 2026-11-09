@@ -154,7 +154,8 @@ pub use command_action::{ui_action_for, UiAction};
 pub use geometry::{cell_at, grid_size_for};
 pub use input::gdk_key;
 pub use liveness_ui::{
-    liveness_ui, reopen_order, restart_button_rect, LivenessUi, OverlayMode, RestartOutcome,
+    liveness_ui, reopen_order, restart_button_rect, terminal_restore, LivenessUi, OverlayMode,
+    RestartOutcome, TerminalRestore,
 };
 pub use render::{paint, CellMetrics};
 pub use state_seam::{restore_plans, RestorePlan};

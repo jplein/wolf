@@ -22,6 +22,9 @@
 //!   * PREVIEW: a leaf's `preview: bool` round-trips (`"preview": true`
 //!     on disk for a preview leaf); a v1 leaf object with NO `preview` key loads as
 //!     `preview: false` (the field is `#[serde(default)]`; STATE_VERSION stays 1).
+//!   * TERMINAL: a leaf's `terminal: bool` round-trips; only a terminal leaf writes a
+//!     `terminal` key, so files without terminal panes stay byte-stable, and a leaf with
+//!     no `terminal` key loads as `terminal: false`.
 //!
 //! Needs NO nvim and no network: everything is driven through explicit `tempfile`
 //! tempdirs passed to `StateStore::open` / `load_state`.
@@ -60,6 +63,7 @@ fn leaf(path: &str) -> PaneNode {
     PaneNode::Leaf {
         path: path.to_string(),
         preview: false,
+        terminal: false,
     }
 }
 
@@ -70,6 +74,16 @@ fn preview_leaf(path: &str) -> PaneNode {
     PaneNode::Leaf {
         path: path.to_string(),
         preview: true,
+        terminal: false,
+    }
+}
+
+/// A TERMINAL leaf whose `path` is the directory its session starts in.
+fn terminal_leaf(dir: &str) -> PaneNode {
+    PaneNode::Leaf {
+        path: dir.to_string(),
+        preview: false,
+        terminal: true,
     }
 }
 
@@ -340,7 +354,7 @@ fn preview_leaf_round_trips_preserving_the_preview_flag() {
     );
 }
 
-// === Back-compat: a v1 layout leaf with no `preview` key loads as preview: false ===
+// === Back-compat: a v1 layout leaf with no `preview` or `terminal` key loads as false ===
 
 #[test]
 fn v1_layout_leaf_without_preview_defaults_to_false() {
@@ -388,7 +402,79 @@ fn v1_layout_leaf_without_preview_defaults_to_false() {
     assert_eq!(
         loaded.windows[0].tabs[0].layout,
         Some(two_child_split()),
-        "a leaf with no on-disk `preview` field must default to preview: false"
+        "a leaf with no on-disk `preview` or `terminal` field must default both to false; a \
+         load error above means one of them is not `#[serde(default)]`"
+    );
+}
+
+// === Terminal round-trip: only a terminal leaf writes `terminal` ===
+
+/// Collects every leaf object of an on-disk layout, in document order.
+fn disk_leaves(value: &Value, out: &mut Vec<serde_json::Map<String, Value>>) {
+    if value.get("type").and_then(Value::as_str) == Some("leaf") {
+        out.push(value.as_object().cloned().unwrap_or_default());
+        return;
+    }
+    if let Some(children) = value.get("children").and_then(Value::as_array) {
+        for child in children {
+            disk_leaves(child, out);
+        }
+    }
+}
+
+#[test]
+fn terminal_leaf_round_trips_and_only_it_writes_the_key() {
+    let dir = tempdir().expect("create temp state dir");
+    let layout = PaneNode::Split {
+        orientation: PaneOrientation::Vertical,
+        weights: vec![0.5, 0.5],
+        children: vec![leaf("/proj/a.md"), terminal_leaf("/proj/sub")],
+    };
+    let tree = WolfState {
+        windows: vec![WindowState {
+            x: WIN_X,
+            y: WIN_Y,
+            width: WIN_WIDTH,
+            height: WIN_HEIGHT,
+            tabs: vec![tab("/proj", Some(layout))],
+        }],
+    };
+
+    let store = StateStore::open(dir.path());
+    store.set_snapshot(tree.clone());
+    assert!(
+        store.flush(FLUSH_TIMEOUT),
+        "flush after set_snapshot should complete within {FLUSH_TIMEOUT:?}"
+    );
+
+    let loaded = load_state(dir.path()).expect("load_state should parse the written file");
+    assert_eq!(
+        loaded, tree,
+        "the tree must round-trip with the terminal leaf's `terminal: true` and its directory"
+    );
+
+    let text = read(&dir.path().join(STATE_FILE_NAME));
+    let disk: Value = serde_json::from_str(&text)
+        .unwrap_or_else(|e| panic!("state.json is not valid JSON ({e}):\n{text}"));
+    let mut leaves = Vec::new();
+    disk_leaves(&disk["windows"][0]["tabs"][0]["layout"], &mut leaves);
+    assert_eq!(
+        leaves.len(),
+        2,
+        "the on-disk layout must hold two leaves:\n{text}"
+    );
+    assert_eq!(
+        leaves[1].get("terminal"),
+        Some(&Value::Bool(true)),
+        "the terminal leaf must write `\"terminal\": true`; anything else loses the pane's \
+         kind and it restores as an editor of its directory:\n{text}"
+    );
+    assert_eq!(
+        leaves[0].get("terminal"),
+        None,
+        "a non-terminal leaf must write no `terminal` key, so a file without terminal panes \
+         stays byte-stable; a `false` key means the field is not \
+         `skip_serializing_if = Not::not`:\n{text}"
     );
 }
 
@@ -468,6 +554,28 @@ fn rebuild_layout_spec_matches_the_lua_contract() {
         "a preview leaf must render `\"preview\": true`, which routes the Lua side to \
          `wolf_preview_file` instead of `:edit`: a pane saved while showing a preview is restored \
          as a preview of its source file, in the same window, not as the source buffer itself."
+    );
+
+    assert_eq!(
+        doc.get("terminal"),
+        Some(&Value::Bool(false)),
+        "`terminal` must be present and false for an editor leaf, beside `preview`; the Lua side \
+         branches on it before the preview and path branches"
+    );
+
+    // --- a terminal leaf ----------------------------------------------------
+    let terminal_doc = parse_spec(&terminal_leaf("/proj/sub"));
+    assert_eq!(
+        (terminal_doc.get("terminal"), terminal_doc.get("preview")),
+        (Some(&Value::Bool(true)), Some(&Value::Bool(false))),
+        "a terminal leaf must render `\"terminal\": true` and `\"preview\": false`; without the \
+         flag the Lua side `:edit`s the leaf's directory instead of leaving the window for core \
+         to start a session in. Got: {terminal_doc}"
+    );
+    assert_eq!(
+        terminal_doc.get("path").and_then(Value::as_str),
+        Some("/proj/sub"),
+        "a terminal leaf's `path` is the directory its session starts in, rendered verbatim"
     );
 
     // --- an empty-path leaf ------------------------------------------------

@@ -19,3 +19,9 @@ Moving any of the three records a document that was loaded into nothing, leaving
 The whole press, drag and release sequence is one `gtk::GestureDrag` rather than a `GestureClick` plus another controller. A gesture takes an implicit grab on its sequence and keeps delivering after the pointer leaves the widget, which drag-past-the-edge selection needs, where an `EventControllerMotion` stops at the pane edge. One gesture rather than two also removes any question of the pair fighting over sequence claiming.
 
 The press path relies on `drag-begin` firing for a plain press with no movement. Checked against the GTK 4.22.4 C source, the version the devShell builds against: `GtkGestureDrag` installs `gesture_class->begin`, and `GtkGesture::handle_event` emits `begin` straight from `GDK_BUTTON_PRESS` once the point count matches `n-points` (default 1). So `drag-begin` is not motion-gated, and focus plus `MouseAction::Press` on it is sound.
+
+## Terminal restore
+
+After a crash-restart the terminal sessions still run, but no window shows them. The shell computes the steps with `liveness_ui::terminal_restore` and hands them to the selected tab, the one that survives the restart; every live session but the drawer's lands there, because the restart collapses the window to that tab. The tab runs them from a render wake, through `queue_bind_terminal` and `toggle_terminal`, only once `ensure_initial_pane` has bound a pane. Two races rule out anything earlier or blocking.
+
+A blocking `bind_terminal` reaches Neovim ahead of the reopened files `reopen_captured` queued on the input pump, so the next `:edit` lands in the new terminal split and wipes its placeholder. And `pick_initial_window` binds the first pane to Neovim's active window, so a split or drawer opened before the first post-restart wake becomes the first tree leaf and the editor window is lost.

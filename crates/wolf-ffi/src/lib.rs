@@ -17,7 +17,8 @@
 //! - [`FfiTerminalFrame`] — an opaque handle on one terminal session's published
 //!   frame, read row by row through [`FfiTerminalFrame::row_cells`]; the session calls
 //!   are `WolfCoreHandle` methods named `terminal_*`, plus `open_terminal`,
-//!   `bind_terminal`, `resize_terminal`, `close_terminal` and `live_terminals`.
+//!   `bind_terminal`, `queue_bind_terminal`, `resize_terminal`, `close_terminal` and
+//!   `live_terminals`.
 //! - [`FfiKeyEvent`] — a transparent struct Swift fills from an `NSEvent`; mapped
 //!   here into a [`wolf_core::KeyEvent`] so nvim notation stays the single source
 //!   of truth in core.
@@ -200,7 +201,7 @@ mod command_kind {
     pub const PREVIEW: u8 = 18;
     /// Navigate from a preview pane back to its source file (inverse of preview).
     pub const EDIT: u8 = 19;
-    /// Toggle the per-project terminal drawer (a bottom `:terminal` split).
+    /// Toggle the per-project terminal drawer (a bottom split on the core's drawer session).
     pub const TERMINAL: u8 = 20;
     /// Render the active Markdown buffer and open it in the system web browser.
     pub const PREVIEW_IN_BROWSER: u8 = 21;
@@ -612,8 +613,8 @@ mod ffi {
         // Opens an empty buffer named the next free `Untitled N.md` (markdown-typed, never written)
         // via `InputEvent::NewBuffer` (the `wolf_new_untitled` Lua helper).
         fn new_buffer(&self);
-        // Toggles the per-project terminal drawer via
-        // `InputEvent::ToggleTerminal` (the `wolf_toggle_terminal` Lua helper).
+        // Toggles the per-project terminal drawer through `WolfCore::toggle_terminal`, which
+        // starts the drawer's session when none is live.
         fn toggle_terminal(&self);
         // Toggles content width between the ~90-char default and full pane width via the
         // `wolf_toggle_full_width` Lua helper, which targets a preview scratch's source buffer.
@@ -702,6 +703,11 @@ mod ffi {
         // Shows live session `id` in `win` per `mod terminal_target`; false for an unknown id,
         // an unknown target or a gone core. Blocks briefly.
         fn bind_terminal(&self, id: u64, win: i64, target: u8) -> bool;
+        // `bind_terminal` queued behind earlier input; false for an id with no running
+        // session, an unknown target or a gone core. Never blocks.
+        fn queue_bind_terminal(&self, id: u64, win: i64, target: u8) -> bool;
+        // The directory session `id`'s shell is in; "" when unknown or the core is gone.
+        fn terminal_cwd(&self, id: u64) -> String;
         // Session `id`'s latest frame; the empty frame (version 0, 0x0) for an unknown id or a
         // gone core.
         fn terminal_frame(&self, id: u64) -> FfiTerminalFrame;
@@ -1010,6 +1016,9 @@ mod ffi {
         // Whether this leaf is a Markdown preview (its `leaf_path` is the source
         // file's abs path, restored via `wolf_preview_file`); false for a split.
         fn is_preview(&self) -> bool;
+        // Whether this leaf is a terminal pane (its `leaf_path` is the directory its shell
+        // starts in); false for a split.
+        fn is_terminal(&self) -> bool;
         // For a leaf: the buffer path ("" for an unnamed buffer); "" for a split.
         fn leaf_path(&self) -> String;
         // For a split: the orientation discriminant (0 = horizontal, 1 = vertical);
@@ -1038,9 +1047,14 @@ mod ffi {
         // Pushes a tab (its cwd + sidebar visibility) onto the most recently
         // added window. A defensive no-op when no window has been added yet.
         fn wolf_ffi_state_snapshot_add_tab(cwd: String, sidebar_visible: bool);
-        // Pushes a leaf (buffer `path`, a preview when `preview`, `weight` in its parent) onto the
-        // layout stack: a post-order replay that carries one tab's split tree across the bridge.
-        fn wolf_ffi_state_layout_push_leaf(path: String, preview: bool, weight: f64);
+        // Pushes a leaf (`path`, a preview or terminal pane per its flag, `weight` in its parent):
+        // a post-order replay that carries one tab's split tree across the bridge.
+        fn wolf_ffi_state_layout_push_leaf(
+            path: String,
+            preview: bool,
+            terminal: bool,
+            weight: f64,
+        );
         // Pops `child_count` nodes, wraps them in a split (`orientation` 0 = horizontal, 1 =
         // vertical) and pushes it back with `weight` (1.0 for the root split).
         fn wolf_ffi_state_layout_push_split(orientation: u8, child_count: u32, weight: f64);
@@ -1718,6 +1732,7 @@ impl FfiTabState {
             node: self.layout.clone().unwrap_or(PaneNode::Leaf {
                 path: String::new(),
                 preview: false,
+                terminal: false,
             }),
         }
     }
@@ -1753,6 +1768,16 @@ impl FfiPaneNode {
     pub fn is_preview(&self) -> bool {
         match &self.node {
             PaneNode::Leaf { preview, .. } => *preview,
+            PaneNode::Split { .. } => false,
+        }
+    }
+
+    /// Whether this leaf is a terminal pane (its `leaf_path` is the directory its shell
+    /// starts in); `false` for a split.
+    #[must_use]
+    pub fn is_terminal(&self) -> bool {
+        match &self.node {
+            PaneNode::Leaf { terminal, .. } => *terminal,
             PaneNode::Split { .. } => false,
         }
     }
@@ -1809,6 +1834,7 @@ impl FfiPaneNode {
             node: node.unwrap_or(PaneNode::Leaf {
                 path: String::new(),
                 preview: false,
+                terminal: false,
             }),
         }
     }
@@ -1912,13 +1938,20 @@ fn layout_stack() -> &'static Mutex<Vec<(PaneNode, f64)>> {
 }
 
 /// Pushes a LEAF node (buffer `path`, a Markdown preview of `path` when `preview`
-/// is true, weighing `weight` within its parent split) onto the layout
-/// push-builder stack.
-pub fn wolf_ffi_state_layout_push_leaf(path: String, preview: bool, weight: f64) {
+/// is true, a terminal pane starting in the directory `path` when `terminal` is true,
+/// weighing `weight` within its parent split) onto the layout push-builder stack.
+pub fn wolf_ffi_state_layout_push_leaf(path: String, preview: bool, terminal: bool, weight: f64) {
     layout_stack()
         .lock()
         .expect("layout stack mutex poisoned")
-        .push((PaneNode::Leaf { path, preview }, weight));
+        .push((
+            PaneNode::Leaf {
+                path,
+                preview,
+                terminal,
+            },
+            weight,
+        ));
 }
 
 /// Pops the top `child_count` layout-stack nodes (in DFS push order), wraps them
@@ -2677,11 +2710,11 @@ impl WolfCoreHandle {
         }
     }
 
-    /// Toggles the per-project terminal drawer via [`InputEvent::ToggleTerminal`]
-    /// (the `wolf_toggle_terminal` Lua helper). A no-op once the core is gone.
+    /// Toggles the per-project terminal drawer via [`WolfCore::toggle_terminal`], which
+    /// starts the drawer's session when none is live. A no-op once the core is gone.
     pub fn toggle_terminal(&self) {
         if let Some(core) = self.core.borrow().as_ref() {
-            core.send_input(InputEvent::ToggleTerminal);
+            core.toggle_terminal();
         }
     }
 
@@ -3107,6 +3140,33 @@ impl WolfCoreHandle {
             .borrow()
             .as_ref()
             .is_some_and(|core| core.bind_terminal(TerminalId(id), target))
+    }
+
+    /// Queues a [`bind_terminal`](Self::bind_terminal) behind every input queued before it,
+    /// through [`WolfCore::queue_bind_terminal`]. `false`, queueing nothing, for an id with
+    /// no running session, an unknown `target`, or a shut-down core. Never blocks.
+    #[must_use]
+    pub fn queue_bind_terminal(&self, id: u64, win: i64, target: u8) -> bool {
+        let Some(target) = terminal_target_from_ffi(win, target) else {
+            return false;
+        };
+        self.core
+            .borrow()
+            .as_ref()
+            .is_some_and(|core| core.queue_bind_terminal(TerminalId(id), target))
+    }
+
+    /// The directory session `id`'s shell is in, through [`WolfCore::terminal_cwd`], which a
+    /// front-end persists as a terminal leaf's path. `""` for an unknown session, an
+    /// unreadable cwd, or a shut-down core.
+    #[must_use]
+    pub fn terminal_cwd(&self, id: u64) -> String {
+        self.core
+            .borrow()
+            .as_ref()
+            .and_then(|core| core.terminal_cwd(TerminalId(id)))
+            .map(|cwd| cwd.to_string_lossy().into_owned())
+            .unwrap_or_default()
     }
 
     /// Session `id`'s latest published frame, or the empty frame (version `0`, `0x0`)

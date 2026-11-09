@@ -197,6 +197,7 @@ use crate::frame_metrics;
 use crate::frame_stats::Bucket;
 use crate::geometry;
 use crate::layout::{Orientation, PaneId, PaneLayout, PaneTree};
+use crate::liveness_ui::TerminalRestore;
 use crate::mouse::{self, PaneScroll, ScrollAccumulator};
 use crate::pane_layout;
 use crate::preview_coalescer::{PreviewCoalescer, RenderDecision};
@@ -616,6 +617,10 @@ struct PaneInner {
     /// The test-only [`SMOKE_TERMINAL_ENV`] program, waiting for the first wake with a pane
     /// ([`Self::open_pending_terminal`]).
     pending_terminal: RefCell<Option<TerminalCommand>>,
+    /// The terminal restore a crash-restart requested
+    /// ([`PaneHandle::request_terminal_restore`]), run once by the first wake with a pane
+    /// ([`Self::run_pending_terminal_restore`]).
+    pending_terminal_restore: RefCell<Option<Vec<TerminalRestore>>>,
 }
 
 impl PaneInner {
@@ -634,6 +639,7 @@ impl PaneInner {
         }
         // Before `refresh_pane_state`, so this very wake binds the session to its pane.
         self.open_pending_terminal();
+        self.run_pending_terminal_restore();
         self.apply_intents();
         self.detect_closes();
         self.resolve_pending_grids();
@@ -692,6 +698,35 @@ impl PaneInner {
             eprintln!(
                 "wolf-gnome: {SMOKE_TERMINAL_ENV} could not open a session running {program}"
             );
+        }
+    }
+
+    /// Puts a crash-restart's terminals back, once, on the first wake with a pane: each
+    /// split session into a new vertical split, then the drawer. Both are input-pump
+    /// events, so they land behind the files the restart reopened.
+    /// See notes/crates/wolf-gnome/src/pane_view.rs.md#terminal-restore
+    fn run_pending_terminal_restore(&self) {
+        if self.panes.borrow().is_empty() {
+            return;
+        }
+        let Some(steps) = self.pending_terminal_restore.borrow_mut().take() else {
+            return;
+        };
+        let core_ref = self.core.borrow();
+        let Some(core) = core_ref.as_ref() else {
+            return;
+        };
+        for step in steps {
+            match step {
+                TerminalRestore::Split(id) => {
+                    let target = TerminalTarget::Split {
+                        win: 0,
+                        orientation: SplitOrientation::Vertical,
+                    };
+                    let _ = core.queue_bind_terminal(id, target);
+                }
+                TerminalRestore::Drawer => core.toggle_terminal(),
+            }
         }
     }
 
@@ -964,8 +999,8 @@ impl PaneInner {
     /// **The terminal drawer takes this path with NO branch of its own**, because it
     /// iterates `panes` and the drawer is an ordinary entry in it. That is how the
     /// drawer gets a statusbar — whatever [`mod@wolf_core::pane_status`] answers for
-    /// its terminal buffer — and how it gets the `b:wolf_full_width` flag that makes
-    /// it span the window.
+    /// its session — and how it gets the `b:wolf_full_width` flag that makes it span
+    /// the window.
     fn refresh_pane_state(&self) {
         let targets: Vec<(PaneId, u64, i64)> = {
             let panes = self.panes.borrow();
@@ -1075,7 +1110,8 @@ impl PaneInner {
     /// genuinely `None` — a real unnamed buffer. Absence is never mapped onto it;
     /// see [`pane_layout::resolve_leaves`].
     fn leaf_contents(&self) -> Option<HashMap<PaneId, pane_layout::LeafContent>> {
-        let leaves: Vec<(PaneId, pane_layout::WinContent)> = {
+        // A terminal pane's session, beside its content, so its cwd is read once the guard drops.
+        let leaves: Vec<(PaneId, pane_layout::WinContent, Option<TerminalId>)> = {
             let core_ref = self.core.borrow();
             let core = core_ref.as_ref()?;
             // ONE guard, bound to a local, dropped with the tree and panes borrows
@@ -1086,6 +1122,10 @@ impl PaneInner {
             tree.leaves()
                 .into_iter()
                 .map(|id| {
+                    let terminal = panes
+                        .get(&id)
+                        .and_then(|p| snap.win_buffers.get(&p.win))
+                        .and_then(|buf| buf.terminal);
                     let content = panes
                         .get(&id)
                         .map_or(pane_layout::WinContent::Unknown, |p| {
@@ -1105,7 +1145,25 @@ impl PaneInner {
                                 },
                             }
                         });
-                    (id, content)
+                    (id, content, terminal)
+                })
+                .collect()
+        };
+        let leaves: Vec<(PaneId, pane_layout::WinContent)> = {
+            let core_ref = self.core.borrow();
+            let core = core_ref.as_ref()?;
+            leaves
+                .into_iter()
+                .map(|(id, content, terminal)| match terminal {
+                    Some(session) => (
+                        id,
+                        pane_layout::WinContent::Terminal(
+                            core.terminal_cwd(session)
+                                .map(|cwd| cwd.to_string_lossy().into_owned())
+                                .unwrap_or_default(),
+                        ),
+                    ),
+                    None => (id, content),
                 })
                 .collect()
         };
@@ -1125,11 +1183,10 @@ impl PaneInner {
     /// this is affordable for every tab on every render wake.
     ///
     /// **The terminal drawer is excluded BY CONSTRUCTION and needs no branch here.**
-    /// This walks `tree.leaves()`, and the drawer is not a leaf, so its
-    /// `term://<cwd>//<pid>:…` buffer name can never enter `state.json` — where the
-    /// restore path would hand it to `:edit` at the next launch and Neovim would
-    /// spawn a shell for it. Putting the drawer in the tree is what would break
-    /// this, not editing this function.
+    /// This walks `tree.leaves()`, and the drawer is not a leaf, so it never persists:
+    /// `specs/terminal-panes.md` § Session restore keeps the drawer out of `state.json`,
+    /// and a terminal leaf restores as a split pane, never as the drawer. Putting the
+    /// drawer in the tree is what would break this, not editing this function.
     fn layout_snapshot(&self) -> pane_layout::LayoutGather {
         let Some(contents) = self.leaf_contents() else {
             return pane_layout::LayoutGather::Refuse;
@@ -1497,7 +1554,7 @@ impl PaneInner {
     ///
     /// Every pane area means the drawer's too: it iterates `panes`, and
     /// [`Self::draw_pane`] resolves whatever grid a pane is bound to without ever
-    /// looking at its buffer type, so a Neovim terminal buffer's grid paints through
+    /// looking at its buffer type, so a scripted Neovim terminal's grid paints through
     /// the same [`crate::paint`] seam an editor grid does. A terminal pane, whose
     /// window shows a core session, redraws on every wake as well, and its
     /// [`TerminalCanvas`] repaints only the rows the session's frame damaged.
@@ -3595,6 +3652,7 @@ impl PaneInner {
         self.panes.borrow_mut().clear();
         self.next_pane_id.set(FIRST_PANE_ID);
         self.active_pane.set(None);
+        self.pending_terminal_restore.borrow_mut().take();
         // The drawer is not in `panes`, so only this drops its id, before the fresh grids arrive.
         // A stale id would block reopening it for the session.
         self.clear_drawer();
@@ -3788,6 +3846,20 @@ impl PaneHandle {
     pub fn reset_after_restart(&self) {
         self.inner.reset_after_restart();
     }
+
+    /// Whether this tab's terminal drawer is open, which a restart captures before it
+    /// drops every window.
+    #[must_use]
+    pub fn drawer_is_open(&self) -> bool {
+        self.inner.drawer.get().id().is_some()
+    }
+
+    /// Hands this tab the terminal restore a crash-restart computed, replacing any earlier
+    /// one; the first wake with a pane runs it. The shell calls it after
+    /// [`PaneHandle::reset_after_restart`], which drops any pending request.
+    pub fn request_terminal_restore(&self, steps: Vec<TerminalRestore>) {
+        *self.inner.pending_terminal_restore.borrow_mut() = Some(steps);
+    }
 }
 
 /// Builds the pane view (container, pane area host, cmdline strip) and returns a
@@ -3868,6 +3940,7 @@ pub fn build(core: &Rc<RefCell<Option<WolfCore>>>, metrics: &Rc<CellMetrics>) ->
         sent_terminal_sizes: RefCell::new(BTreeMap::new()),
         reported_focus: Cell::new(None),
         pending_terminal: RefCell::new(None),
+        pending_terminal_restore: RefCell::new(None),
     });
 
     {

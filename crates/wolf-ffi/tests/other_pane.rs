@@ -63,18 +63,16 @@ const ONE_PANE: usize = 1;
 /// The two-pane window count reached after a split (typed or helper-driven).
 const TWO_PANES: usize = 2;
 
-/// The three-window count reached when the split fallback fires while the
-/// terminal drawer is also open (source pane + drawer + new split).
+/// The three-window count reached when the split fallback fires beside a
+/// terminal pane (source pane + terminal pane or drawer + new split).
 const THREE_WINDOWS: usize = 3;
 
 /// A `max` large enough that the assembled buffer set is never truncated.
-/// Mirrors `preview.rs` / `terminal.rs`.
+/// Mirrors `preview.rs`.
 const RANKED_MAX: usize = 100;
 
-/// The Neovim naming convention prefix for a terminal buffer's name
-/// (`term://…`), used to detect the drawer buffer in the picker snapshot.
-/// Mirrors `terminal.rs`.
-const TERM_PREFIX: &str = "term://";
+/// `terminal_target::SPLIT_VERTICAL`: show a session in a vertical split of the window.
+const TARGET_SPLIT_VERTICAL: u8 = 2;
 
 // -- FfiKeyEvent.kind discriminants (mirror `wolf-ffi/src/lib.rs` `mod kind`) --
 /// A printable character (`ch` carries the Unicode scalar).
@@ -101,21 +99,6 @@ fn char_key(c: char) -> FfiKeyEvent {
         ch: c as u32,
         fnum: 0,
         ctrl: false,
-        shift: false,
-        alt: false,
-        meta: false,
-    }
-}
-
-/// Builds a CTRL-modified character `FfiKeyEvent` (kind=Char, `ctrl = true`) for
-/// `c` — e.g. `ctrl_char_key('\\')` + `ctrl_char_key('n')` sends `<C-\><C-n>` to
-/// leave terminal-insert mode. Copy of `terminal.rs`.
-fn ctrl_char_key(c: char) -> FfiKeyEvent {
-    FfiKeyEvent {
-        kind: KIND_CHAR,
-        ch: c as u32,
-        fnum: 0,
-        ctrl: true,
         shift: false,
         alt: false,
         meta: false,
@@ -369,16 +352,6 @@ fn wait_for_ranked(
         sleep(POLL_INTERVAL);
     }
     panic!("timed out after {FLUSH_TIMEOUT:?} waiting for a ranked picker snapshot ({desc})");
-}
-
-/// The bufnrs of all ranked rows naming a terminal buffer (the `term://` prefix),
-/// from a fresh picker snapshot. Mirrors `terminal.rs::term_bufnrs`.
-fn term_bufnrs(handle: &wolf_ffi::WolfCoreHandle) -> Vec<i64> {
-    ranked_snapshot(handle)
-        .iter()
-        .filter(|r| r.display().starts_with(TERM_PREFIX))
-        .map(FfiBufferRow::bufnr)
-        .collect()
 }
 
 /// Keeps draining intents for [`NEGATIVE_SETTLE`] and asserts NO Split intent
@@ -831,14 +804,74 @@ fn gates_reject_without_splitting_and_invalid_target_falls_back_to_split() {
     drop(tmp);
 }
 
+/// Calls `preview_in_other(target_win)` from the markdown pane `source_win` and asserts the
+/// terminal pane `target_win`, which shows `session`, is rejected as a target: the call takes
+/// the split path, the preview lands in the new split, the terminal pane keeps its session, and
+/// focus stays in the source pane.
+fn assert_terminal_target_rejected(
+    handle: &wolf_ffi::WolfCoreHandle,
+    source_win: i64,
+    target_win: i64,
+    session: u64,
+    what: &str,
+) {
+    let _ = handle.drain_intents();
+    let source_bufnr = handle.preview_in_other(target_win);
+    assert!(
+        source_bufnr > 0,
+        "preview_in_other(<the {what} win>) must fall back to the split path and return the \
+         SOURCE bufnr (> 0), got {source_bufnr}"
+    );
+    let (orientation, split_from, new_win) =
+        poll_for_split_intent(handle, &format!("the {what}-target split fallback"));
+    assert_eq!(
+        (orientation, split_from),
+        (ORIENTATION_VERTICAL, source_win),
+        "the fallback must split the markdown pane {source_win} VERTICALLY; no split at all \
+         (a timeout above) means the {what} was accepted as the target"
+    );
+    assert_ne!(
+        new_win, target_win,
+        "the split's new window must be DISTINCT from the {what} window"
+    );
+    wait_for_window_count(
+        handle,
+        THREE_WINDOWS,
+        &format!("the {what}-target fallback splits (source + {what} + new split)"),
+    );
+
+    let previews = wait_for_previews(handle, "the preview landed in the new split", |p| {
+        p.len() == 1 && p.iter().any(|row| row.win() == new_win)
+    });
+    assert!(
+        !previews.iter().any(|row| row.win() == target_win),
+        "no preview row may ever bind the {what} window: {:?}",
+        previews.iter().map(FfiPreview::win).collect::<Vec<_>>(),
+    );
+    assert_eq!(
+        handle.win_buffer(target_win).terminal(),
+        session,
+        "the {what} window {target_win} must still show session {session}; another value means \
+         the preview replaced, and wiped, its placeholder"
+    );
+
+    // Focus rule unchanged: the source editor stays focused after the fallback.
+    wait_for_active_win(
+        handle,
+        source_win,
+        "preview_in_other keeps focus in the pane editing the source",
+    );
+}
+
 #[test]
 fn drawer_target_is_rejected_and_falls_back_to_split() {
-    // The drawer is never a bind target (`w:wolf_terminal`), so passing it takes the split path and
-    // the drawer keeps its terminal. Loud skip (no-op pass) without a pinned nvim.
+    // The drawer is never a bind target (`w:wolf_drawer`), so passing it takes the split path and
+    // the drawer keeps its session. Loud skip (no-op pass) without a pinned nvim.
     let Some(nvim_bin) = common::nvim_bin_or_skip() else {
         return;
     };
     std::env::set_var("WOLF_NVIM_BIN", &nvim_bin);
+    common::pin_default_shell();
 
     let tmp = seed_markdown_cwd();
     let handle = start_attached(&tmp);
@@ -852,67 +885,67 @@ fn drawer_target_is_rejected_and_falls_back_to_split() {
     let drawer_win = poll_for_drawer_open_intent(&handle, "toggle_terminal opens the drawer");
     assert_ne!(drawer_win, 0, "the drawer window handle must be nonzero");
     wait_for_window_count(&handle, TWO_PANES, "the drawer window is open");
+    let deadline = Instant::now() + FLUSH_TIMEOUT;
+    while handle.win_buffer(drawer_win).terminal() == 0 {
+        assert!(
+            Instant::now() < deadline,
+            "the drawer window {drawer_win} must show a core session"
+        );
+        sleep(POLL_INTERVAL);
+    }
+    let session = handle.win_buffer(drawer_win).terminal();
 
-    // --- 3. Focus back: `<C-\><C-n>` leaves the drawer's terminal-insert mode, then `:wincmd p`
-    // returns to the markdown pane it was opened from.
-    handle.send_key(ctrl_char_key('\\'));
-    handle.send_key(ctrl_char_key('n'));
-    send_ex_command(&handle, ":wincmd p");
+    // --- 3. Focus back in the markdown pane, as a front-end does on a click ---
+    handle.focus_win(source_win);
     wait_for_active_win(&handle, source_win, "back in the markdown pane");
     wait_for_markdown_active(&handle, true, "the markdown pane is focused again");
-    let _ = handle.drain_intents();
 
     // --- 4. preview_in_other(<drawer win>): rejected target -> split fallback --
-    let source_bufnr = handle.preview_in_other(drawer_win);
-    assert!(
-        source_bufnr > 0,
-        "preview_in_other(<the drawer win>) must fall back to the split path and \
-         return the SOURCE bufnr (> 0), got {source_bufnr}"
-    );
-    let (orientation, split_from, new_win) =
-        poll_for_split_intent(&handle, "the drawer-target split fallback");
-    assert_eq!(
-        orientation, ORIENTATION_VERTICAL,
-        "the fallback split must be VERTICAL ({ORIENTATION_VERTICAL})"
-    );
-    assert_eq!(
-        split_from, source_win,
-        "the fallback Split intent's from() must be the markdown pane"
-    );
+    assert_terminal_target_rejected(&handle, source_win, drawer_win, session, "drawer");
+
+    handle.shutdown();
+    drop(tmp);
+}
+
+#[test]
+fn terminal_pane_target_is_rejected_and_falls_back_to_split() {
+    // A split terminal pane is never a bind target (`b:wolf_terminal_id`), so passing it takes the
+    // split path and the pane keeps its session. Loud skip (no-op pass) without a pinned nvim.
+    let Some(nvim_bin) = common::nvim_bin_or_skip() else {
+        return;
+    };
+    std::env::set_var("WOLF_NVIM_BIN", &nvim_bin);
+
+    let tmp = seed_markdown_cwd();
+    let handle = start_attached(&tmp);
+
+    // --- 1. alpha.md active in the single editor pane ------------------------
+    open_alpha(&handle);
+    let source_win = wait_for_some_active_win(&handle);
+    let _ = handle.drain_intents();
+
+    // --- 2. A terminal pane in a vertical split of it -------------------------
+    let session =
+        handle.open_terminal(source_win, TARGET_SPLIT_VERTICAL, "exec /bin/sh".to_owned());
     assert_ne!(
-        new_win, drawer_win,
-        "the split's new window must be DISTINCT from the drawer window"
+        session, 0,
+        "open_terminal must start the split terminal pane's session"
     );
-    wait_for_window_count(
-        &handle,
-        THREE_WINDOWS,
-        "the drawer-target fallback splits (source + drawer + new split)",
-    );
-
-    // --- 5. The preview landed in the NEW split, never in the drawer ----------
-    let previews = wait_for_previews(&handle, "the preview landed in the new split", |p| {
-        p.len() == 1 && p.iter().any(|row| row.win() == new_win)
-    });
-    assert!(
-        !previews.iter().any(|row| row.win() == drawer_win),
-        "no preview row may ever bind the drawer window: {:?}",
-        previews.iter().map(FfiPreview::win).collect::<Vec<_>>(),
-    );
-
-    // The drawer's buffer is untouched: its single term:// buffer still exists.
-    let terms = term_bufnrs(&handle);
+    let (_, _, terminal_win) = poll_for_split_intent(&handle, "the terminal pane's split");
+    wait_for_window_count(&handle, TWO_PANES, "the terminal pane is open");
     assert_eq!(
-        terms.len(),
-        1,
-        "the drawer must keep its single terminal buffer (got {terms:?})"
+        handle.win_buffer(terminal_win).terminal(),
+        session,
+        "the split's new window must show the session open_terminal started"
     );
 
-    // Focus rule unchanged: the source editor stays focused after the fallback.
-    wait_for_active_win(
-        &handle,
-        source_win,
-        "preview_in_other keeps focus in the pane editing the source",
-    );
+    // --- 3. Focus back in the markdown pane, as a front-end does on a click ---
+    handle.focus_win(source_win);
+    wait_for_active_win(&handle, source_win, "back in the markdown pane");
+    wait_for_markdown_active(&handle, true, "the markdown pane is focused again");
+
+    // --- 4. preview_in_other(<terminal pane win>): rejected -> split fallback -
+    assert_terminal_target_rejected(&handle, source_win, terminal_win, session, "terminal pane");
 
     handle.shutdown();
     drop(tmp);

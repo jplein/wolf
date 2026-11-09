@@ -241,6 +241,40 @@ fn canonical_home() -> Option<&'static Path> {
         .as_deref()
 }
 
+/// The terminal leaves of a rebuild-layout document, as their DFS leaf index (the index of
+/// their window handle) and their non-empty `path`. Empty for a document that does not
+/// parse, which `wolf_rebuild_layout` realizes as no windows.
+fn terminal_leaves(spec_json: &str) -> Vec<(usize, Option<PathBuf>)> {
+    fn walk(
+        node: &serde_json::Value,
+        index: &mut usize,
+        found: &mut Vec<(usize, Option<PathBuf>)>,
+    ) {
+        if node.get("leaf").and_then(serde_json::Value::as_bool) == Some(true) {
+            if node.get("terminal").and_then(serde_json::Value::as_bool) == Some(true) {
+                let path = node
+                    .get("path")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|path| !path.is_empty())
+                    .map(PathBuf::from);
+                found.push((*index, path));
+            }
+            *index += 1;
+            return;
+        }
+        let children = node.get("children").and_then(serde_json::Value::as_array);
+        for child in children.into_iter().flatten() {
+            walk(child, index, found);
+        }
+    }
+
+    let mut found = Vec::new();
+    if let Ok(spec) = serde_json::from_str::<serde_json::Value>(spec_json) {
+        walk(&spec, &mut 0, &mut found);
+    }
+    found
+}
+
 impl WolfCore {
     /// Starts the core: builds a multi-thread tokio runtime, spawns the captive
     /// Neovim, wires `wake` into the redraw handler, and attaches as an
@@ -821,7 +855,7 @@ impl WolfCore {
     ///
     /// A cheap, LOCK-FREE-of-the-snapshot read of the sibling navigation-history
     /// cell (a brief mutex, no RPC) — same cost class as [`Self::cwd`]. `false` for
-    /// an unknown window, a never-navigated pane, or the terminal DRAWER (which is
+    /// an unknown window, a never-navigated pane, or a terminal pane (which is
     /// EXCLUDED from history entirely).
     #[must_use]
     pub fn history_can_back(&self, win: i64) -> bool {
@@ -891,7 +925,7 @@ impl WolfCore {
     ///
     /// Each [`MenuRow::index`] is a real STACK index, usable verbatim with
     /// [`history_jump`](Self::history_jump). Empty for an unknown window, a
-    /// never-navigated pane, or the terminal DRAWER. A brief mutex, no RPC.
+    /// never-navigated pane, or a terminal pane. A brief mutex, no RPC.
     #[must_use]
     pub fn history_entries(&self, win: i64) -> Vec<MenuRow> {
         self.nav_history
@@ -905,8 +939,7 @@ impl WolfCore {
     /// The mechanism is per-target: an [`Edit`](NavTarget::Edit) goes through the
     /// window-scoped `_G.wolf_history_open`, a [`Preview`](NavTarget::Preview)
     /// re-uses the existing `_G.wolf_preview_file` link-follow path, and a
-    /// [`Terminal`](NavTarget::Terminal) / [`Untitled`](NavTarget::Untitled) goes
-    /// through `_G.wolf_history_set_buf`. All three are window-scoped
+    /// [`Untitled`](NavTarget::Untitled) goes through `_G.wolf_history_set_buf`. All three are window-scoped
     /// `nvim_win_set_buf` (never `:edit`), so no disk re-read and no
     /// `current_file`/file-MRU churn.
     ///
@@ -926,7 +959,7 @@ impl WolfCore {
                 let path = source.to_string_lossy().into_owned();
                 self.block_on_rpc("preview_file", nvim.preview_file(win, &path))
             }
-            NavTarget::Terminal { bufnr } | NavTarget::Untitled { bufnr } => {
+            NavTarget::Untitled { bufnr } => {
                 self.block_on_rpc("history_set_buf", nvim.history_set_buf(win, *bufnr))
             }
         };
@@ -1033,16 +1066,49 @@ impl WolfCore {
     /// When it returns, [`Snapshot::win_buffers`] and [`Snapshot::previews`] already
     /// report every returned window: the helper ends with a `wolf_buffers` emit and a
     /// `wolf_barrier` request core answers only once that emit is applied.
+    ///
+    /// `init.lua` opens nothing in a terminal leaf's window. Once the handles return, core
+    /// starts a session of the user's shell for each terminal leaf, in the leaf's `path`
+    /// when that is an existing directory and else in the window's tabpage cwd, and binds
+    /// it into that window, blocking as [`open_terminal`](Self::open_terminal) does. A
+    /// window target moves no focus and emits no intent, so the returned handles still zip
+    /// onto the front-end's leaves; a leaf whose session cannot start keeps an empty window.
     #[must_use]
     pub fn rebuild_layout(&self, spec_json: &str) -> Vec<i64> {
-        let nvim = self.nvim.borrow();
-        match self.block_on_rpc("rebuild_layout", nvim.rebuild_layout(spec_json)) {
-            Ok(handles) => handles,
-            Err(e) => {
-                tracing::warn!("rebuild_layout failed: {e}");
-                Vec::new()
+        let handles = {
+            let nvim = self.nvim.borrow();
+            match self.block_on_rpc("rebuild_layout", nvim.rebuild_layout(spec_json)) {
+                Ok(handles) => handles,
+                Err(e) => {
+                    tracing::warn!("rebuild_layout failed: {e}");
+                    return Vec::new();
+                }
+            }
+        };
+        for (index, path) in terminal_leaves(spec_json) {
+            let Some(&win) = handles.get(index) else {
+                continue;
+            };
+            let cwd = match path.filter(|dir| dir.is_dir()) {
+                Some(dir) => dir,
+                None => {
+                    let handle = self.nvim.borrow().handle();
+                    let tab = self
+                        .block_on_rpc("terminal_tabpage", nvim::win_tabpage(handle, win))
+                        .ok();
+                    self.terminals.tab_cwd(tab)
+                }
+            };
+            match self.terminals.spawn(None, &cwd) {
+                Ok(id) => {
+                    if !self.bind_placeholder(id, TerminalTarget::Window(win)) {
+                        self.terminals.remove(id);
+                    }
+                }
+                Err(e) => tracing::warn!("a terminal leaf could not start its session: {e}"),
             }
         }
+        handles
     }
 
     /// Returns the CANONICALIZED tab-local working directory of tabpage `handle`,
@@ -1116,15 +1182,29 @@ impl WolfCore {
         self.send_input(InputEvent::SwitchBuffer { win, bufnr });
     }
 
-    /// Toggles the per-project terminal drawer (fire-and-forget via
+    /// Opens or hides the terminal drawer in the current tabpage (fire-and-forget via
     /// [`InputEvent::ToggleTerminal`]).
     ///
-    /// Enqueued on the same ordered input channel as keystrokes; applied via the
-    /// init.lua `wolf_toggle_terminal` helper, which opens a bottom `:terminal`
-    /// split in the current tabpage or hides it if already open (the shared
-    /// terminal buffer/job persists across toggles).
+    /// Starts the drawer's session first when none is live: the user's shell, in the
+    /// current tabpage's cwd. That is a pty and a fork/exec on the calling thread, never an
+    /// RPC, so it does not wait on Neovim; the toggle's pump event carries the id because
+    /// the pump has no registry. The toggle is enqueued on the same ordered input channel
+    /// as keystrokes and applied via the init.lua `wolf_toggle_terminal` helper. Hiding the
+    /// drawer keeps its session, which lives until its shell exits; the next toggle after
+    /// that starts a new one.
     pub fn toggle_terminal(&self) {
-        self.send_input(InputEvent::ToggleTerminal);
+        let tab = Some(self.read_snapshot().current_tabpage).filter(|tab| *tab != 0);
+        match self.terminals.drawer_session(tab) {
+            Ok(id) => self.send_input(InputEvent::ToggleTerminal { id }),
+            Err(e) => tracing::warn!("the terminal drawer could not start its session: {e}"),
+        }
+    }
+
+    /// The drawer's session while its shell runs, whether or not the drawer is open.
+    /// A brief lock, no RPC.
+    #[must_use]
+    pub fn drawer_terminal(&self) -> Option<TerminalId> {
+        self.terminals.drawer()
     }
 
     /// Toggles the active buffer's content width between the ~90-char default and
@@ -1321,8 +1401,7 @@ impl WolfCore {
     /// ([`live_cwd`](Self::live_cwd)) and the user's home directory. This is the
     /// display path only (the [`PaneStatus::display_path`](crate::pane_status::PaneStatus)
     /// field); the filename is derived separately by the caller. An empty
-    /// `abs_path` yields an empty display path, and so does a terminal buffer name
-    /// with a command (`term://…//<pid>:<command>`).
+    /// `abs_path` yields an empty display path.
     #[must_use]
     pub fn display_path(&self, abs_path: &str) -> String {
         crate::pane_status::pane_status(abs_path, self.live_cwd().as_deref(), canonical_home())
@@ -1524,6 +1603,30 @@ impl WolfCore {
     #[must_use]
     pub fn bind_terminal(&self, id: TerminalId, target: TerminalTarget) -> bool {
         self.terminals.is_live(id) && self.bind_placeholder(id, target)
+    }
+
+    /// Queues a [`bind_terminal`](Self::bind_terminal) of running session `id` into `target`
+    /// on the input channel, so it lands behind every input queued before it and never
+    /// blocks. Returns `false`, queueing nothing, for an id with no running session.
+    ///
+    /// Front-ends rebind sessions this way after a [`restart_nvim`](Self::restart_nvim):
+    /// a blocking bind would reach Neovim ahead of the reopened files queued before it, and
+    /// the next `:edit` would replace (and wipe) the new placeholder.
+    #[must_use]
+    pub fn queue_bind_terminal(&self, id: TerminalId, target: TerminalTarget) -> bool {
+        if !self.terminals.is_live(id) {
+            return false;
+        }
+        self.send_input(InputEvent::BindTerminal { id, target });
+        true
+    }
+
+    /// The directory session `id`'s shell is in, which a front-end persists as a terminal
+    /// leaf's `path`: its `OSC 7` report, else the operating system's view of the shell's
+    /// cwd. `None` for an unknown session or an unreadable cwd. No RPC.
+    #[must_use]
+    pub fn terminal_cwd(&self, id: TerminalId) -> Option<PathBuf> {
+        self.terminals.shell_cwd(id)
     }
 
     /// Binds session `id`'s placeholder into `target` through `wolf_terminal_bind`.

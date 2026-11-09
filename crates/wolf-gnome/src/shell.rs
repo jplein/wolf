@@ -210,7 +210,7 @@ use std::time::Duration;
 use adw::prelude::*;
 use gtk::{gio, glib};
 
-use wolf_core::{Command, InputEvent, Liveness, TabFiles, WolfCore};
+use wolf_core::{Command, InputEvent, Liveness, TabFiles, TerminalId, WolfCore};
 
 use crate::about;
 use crate::actions::{self, BindingStatus};
@@ -222,7 +222,7 @@ use crate::crash_overlay::CrashOverlay;
 use crate::frame_metrics;
 use crate::frame_stats::Bucket;
 use crate::liveness_ui::{
-    liveness_ui, reopen_order, restart_outcome, OverlayMode, RestartOutcome,
+    liveness_ui, reopen_order, restart_outcome, terminal_restore, OverlayMode, RestartOutcome,
     MAX_AUTO_RESTART_ATTEMPTS,
 };
 use crate::nav_ui::{self, NavAvailability, NavPress};
@@ -350,8 +350,8 @@ struct SaveShape {
     path: Option<PathBuf>,
     /// `Snapshot::is_preview_active` — the focused pane is a preview scratch.
     is_preview: bool,
-    /// `Snapshot::win_buffers[active_win].is_terminal` — the focused pane is a
-    /// terminal buffer.
+    /// `Snapshot::win_buffers[active_win].terminal` — the focused pane is a terminal
+    /// pane.
     is_terminal: bool,
 }
 
@@ -1353,7 +1353,7 @@ impl AppShell {
             is_terminal: snapshot
                 .active_win
                 .and_then(|win| snapshot.win_buffers.get(&win))
-                .is_some_and(|buffer| buffer.is_terminal),
+                .is_some_and(|buffer| buffer.terminal.is_some()),
         })
     }
 
@@ -1587,6 +1587,11 @@ impl AppShell {
         self.inner.restarting.set(true);
 
         let captured = self.capture_open_files();
+        let drawer_open = self
+            .inner
+            .tabs
+            .selected()
+            .is_some_and(|tab| tab.panes().drawer_is_open());
         let respawned = self.perform_restart();
         let fresh = self.read_liveness();
 
@@ -1607,6 +1612,7 @@ impl AppShell {
                 // handles make `tabs_ui::tab_wake` answer `Hold` forever over a healthy Neovim.
                 self.inner.tabs.reset_after_restart();
                 self.reopen_captured(captured.as_ref());
+                self.restore_terminals(drawer_open);
                 self.apply_overlay(OverlayMode::Hidden);
                 self.inner.crash_overlay.flash_banner();
                 // Belt and braces, as `app.rs` does: a no-op if the fresh nvim has not reported `win_pos` yet.
@@ -1635,6 +1641,31 @@ impl AppShell {
         };
         let core_ref = self.inner.core.borrow();
         core_ref.as_ref()?.open_files_for_tabpage(tabpage)
+    }
+
+    /// Hands the selected tab, the one a restart keeps, the steps that put the live terminal
+    /// sessions back: every one but the drawer's as a split, then the drawer when it was
+    /// open. RPC-free; the tab runs them on its first wake with a pane.
+    /// See notes/crates/wolf-gnome/src/pane_view.rs.md#terminal-restore
+    fn restore_terminals(&self, drawer_open: bool) {
+        let (splits, live) = {
+            let core_ref = self.inner.core.borrow();
+            let Some(core) = core_ref.as_ref() else {
+                return;
+            };
+            let live = core.live_terminals();
+            let drawer = core.drawer_terminal();
+            let splits: Vec<TerminalId> = live
+                .iter()
+                .copied()
+                .filter(|id| Some(*id) != drawer)
+                .collect();
+            (splits, live)
+        };
+        if let Some(tab) = self.inner.tabs.selected() {
+            tab.panes()
+                .request_terminal_restore(terminal_restore(&splits, drawer_open, &live));
+        }
     }
 
     /// Calls [`WolfCore::restart_nvim`] under a short borrow and reports whether an
@@ -1867,8 +1898,7 @@ impl AppShell {
             // Over the ordered input channel directly: `WolfCore::toggle_full_width` is a one-line
             // `send_input` onto it, and the neighbouring arms' shape wins.
             UiAction::ToggleFullWidth => self.send_input(InputEvent::ToggleFullWidth),
-            // Same as above: `WolfCore::toggle_terminal` is a one-line `send_input` on this channel.
-            UiAction::ToggleTerminal => self.send_input(InputEvent::ToggleTerminal),
+            UiAction::ToggleTerminal => self.toggle_terminal(),
             UiAction::CloseWindow => self.close_window(),
             UiAction::MinimizeWindow => self.inner.window.minimize(),
             UiAction::QuitApplication => self.quit_application(),
@@ -2189,6 +2219,14 @@ impl AppShell {
     fn send_input(&self, event: InputEvent) {
         if let Some(core) = self.inner.core.borrow().as_ref() {
             core.send_input(event);
+        }
+    }
+
+    /// Opens or hides the terminal drawer through [`WolfCore::toggle_terminal`], which
+    /// starts its session (a pty and a fork, no RPC) before it queues the toggle.
+    fn toggle_terminal(&self) {
+        if let Some(core) = self.inner.core.borrow().as_ref() {
+            core.toggle_terminal();
         }
     }
 }

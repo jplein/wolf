@@ -16,8 +16,8 @@
 //! shell observes it via the `win_close` redraw event — there is no close intent.
 //!
 //! The terminal DRAWER has a matched asymmetry: OPENING the drawer is PERFORMED by
-//! nvim (`wolf_toggle_terminal` really creates the `botright` split window +
-//! terminal buffer) AND reported as a [`LayoutIntent::DrawerOpen`] so the shell
+//! nvim (`wolf_toggle_terminal` really creates the `botright` split window showing
+//! the drawer session's placeholder) AND reported as a [`LayoutIntent::DrawerOpen`] so the shell
 //! renders the drawer as a full-width, root-bottom pane held OUTSIDE its pure
 //! `PaneTree`. HIDING the drawer is a guarded `win_close` the shell observes via
 //! the `win_close` redraw event — there is no drawer-close intent (symmetric with
@@ -73,7 +73,7 @@ pub enum LayoutIntent {
         from: i64,
     },
     /// The terminal drawer was OPENED by nvim. `win` is the newly created drawer
-    /// window (a full-width `botright` split showing the terminal buffer). The
+    /// window (a full-width `botright` split showing the drawer session's placeholder). The
     /// shell renders it as a full-width, root-bottom pane at a fixed ~1/3 height
     /// held OUTSIDE its pure `PaneTree`, and binds it to `win`'s grid. Hiding the
     /// drawer is observed via `win_close` (no drawer-close intent).

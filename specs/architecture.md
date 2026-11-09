@@ -139,7 +139,7 @@ The remaining facets arrive out-of-band, each from its own `wolf_*` notification
 
 - `current_file: Option<PathBuf>`, `current_filetype: String`, `current_is_preview: bool`, `current_is_full_width: bool` — the active buffer, all four from one notification. `is_markdown_active`, `is_preview_active` and `is_full_width_active` read them as command gates.
 - `active_win: Option<i64>`, `current_tabpage: i64` — the focused window and tabpage.
-- `buffers: HashMap<i64, PathBuf>`, `win_buffers: HashMap<i64, WinBuffer>` — per-window buffer state keyed by window handle. `buffers` omits unnamed windows; the parallel `win_buffers` keeps them and adds `bufnr` plus the two terminal flags.
+- `buffers: HashMap<i64, PathBuf>`, `win_buffers: HashMap<i64, WinBuffer>` — per-window buffer state keyed by window handle. `buffers` omits unnamed windows; the parallel `win_buffers` keeps them and adds `bufnr`, plus the drawer flag and the session the window shows.
 - `full_width: HashMap<i64, bool>`, `previews: HashMap<i64, PreviewInfo>` — per-window, keyed by window handle.
 - `markdown_ticks: HashMap<i64, u64>` — a `changedtick` per source buffer number.
 - `tab_cwds: HashMap<i64, PathBuf>`, `open_files: HashMap<i64, TabFiles>` — per tabpage handle.
@@ -171,7 +171,7 @@ The asymmetry between the three is the load-bearing part. A split and a drawer-o
 
 The non-layout intents — open and save dialogs, the window title, modified-versus-clean state — are designed and deferred.
 
-Rebuilding a saved layout runs the other way and is a three-party contract rather than a two-party one. A front-end hands core a `PaneNode`, core renders it to a JSON document, and `init.lua` decodes that document and recreates the windows, returning their handles in the same depth-first order the leaves were emitted in. The document deliberately differs from `PaneNode`'s own serde shape, so core's renderer is its only producer — no front-end renders it, macOS included, which hands core the saved node back across the FFI — and the renderer and the Lua decoder must agree; changing it on one side silently breaks the other.
+Rebuilding a saved layout runs the other way and is a three-party contract rather than a two-party one. A front-end hands core a `PaneNode`, core renders it to a JSON document, and `init.lua` decodes that document and recreates the windows, returning their handles in the same depth-first order the leaves were emitted in. The document deliberately differs from `PaneNode`'s own serde shape, so core's renderer is its only producer — no front-end renders it, macOS included, which hands core the saved node back across the FFI — and the renderer and the Lua decoder must agree; changing it on one side silently breaks the other. Once the handles return, core starts a session for each terminal leaf and binds it into that leaf's window.
 
 ### Output: commands (core → front-end)
 
@@ -195,7 +195,7 @@ Two gotchas fall out of the scratch-buffer design. The path-based trackers skip 
 
 **Content width.** A buffer's content area is capped near 90 columns and centered by default, in both the editor and its preview, and the Use full width for content command flips the buffer-local `b:wolf_full_width` for that one buffer. There is no global default-to-full-width setting; the per-buffer toggle is the only control.
 
-The contract is three fields and one event: `full_width` keyed by window handle, `PreviewInfo.source_full_width` for a preview pane, `current_is_full_width` for the menu checkmark, and `InputEvent::ToggleFullWidth`. Framing a pane to that flag is the front-end's job — see [`wolf-macos-decisions.md`](../notes/wolf-macos-decisions.md) and [`wolf-gnome-decisions.md`](../notes/wolf-gnome-decisions.md). The terminal drawer defaults to full width because nvim seeds the flag on its buffer, and the browser preview is always capped and carries no toggle.
+The contract is three fields and one event: `full_width` keyed by window handle, `PreviewInfo.source_full_width` for a preview pane, `current_is_full_width` for the menu checkmark, and `InputEvent::ToggleFullWidth`. Framing a pane to that flag is the front-end's job — see [`wolf-macos-decisions.md`](../notes/wolf-macos-decisions.md) and [`wolf-gnome-decisions.md`](../notes/wolf-gnome-decisions.md). Terminal panes, the drawer's included, default to full width because `init.lua` seeds the flag on their placeholders, and the browser preview is always capped and carries no toggle.
 
 **Cursor position.** A third out-of-band notification closes the loop from the editor cursor to the preview's scroll position. `wolf_markdown_cursor` carries three flat scalars `(source_bufnr, line, col)`, which core upserts into `Snapshot.markdown_cursors` keyed by the source buffer number — the same key space as `markdown_ticks` and `PreviewInfo.source_bufnr`, so a front-end joins all three on one key. An absent entry, or a `line` of `0`, is the cursor-unknown sentinel, and a front-end must not scroll for it.
 
@@ -203,7 +203,7 @@ The column semantics are the contract: `line` is a 1-based hard buffer line and 
 
 ### Output: terminal sessions (core → front-end)
 
-Terminals emulated in core by libghostty-vt, with Neovim keeping the layout through a placeholder window per terminal pane, are specified in [Terminal panes](terminal-panes.md). Until that spec's g04 delivery lands, every terminal is a Neovim terminal buffer, which reaches the front-end as an ordinary grid.
+Terminals emulated in core by libghostty-vt, with Neovim keeping the layout through a placeholder window per terminal pane, are specified in [Terminal panes](terminal-panes.md). A window whose `win_buffers` entry carries a session is a terminal pane: the front-end paints it from `terminal_frame` and sends its input to the session API, never to the input channel. A session's publish fires the wake without bumping `seq`.
 
 ### Input: events (front-end → core)
 
@@ -213,7 +213,8 @@ The front-end pushes `InputEvent`s onto an ordered FIFO channel that a single co
 - Geometry — `Resize { cols, rows }` for the outer UI, `ResizeGrid { grid, cols, rows }` per pane, and `FocusWin { win }` for click-to-focus and resolved focus moves.
 - Documents — `Open { path }`, `OpenAt { path, line, col }`, `Save`, `SaveAs { path, force }`, `NewBuffer`, `Paste { text }`, `SwitchBuffer { win, bufnr }`, `ClosePane`.
 - Views — `Chdir { path }`, `SetTabpage { handle }`, `CloseTabpage { handle }`. Each view is one nvim tabpage owning its own working directory, so `Chdir` applies `:tcd`; a global `:cd` would move every view of the shared nvim.
-- Toggles — `SetBackground { dark }`, `ToggleTerminal`, `ToggleFullWidth`, `SetUiFocus { gained }`.
+- Toggles — `SetBackground { dark }`, `ToggleTerminal { id }`, `ToggleFullWidth`, `SetUiFocus { gained }`.
+- Terminals — `BindTerminal { id, target }`, which shows a running session in a window behind the input queued before it.
 
 Key translation happens in core, not the front-end: `key_to_notation` is the single source of Neovim notation, and a front-end delivers the already-shifted glyph for a printable character. A `Key`, `Mouse` or `Scroll` also dismisses a showing message toast unless that toast is a `confirm` prompt; the exemption for a scroll gesture landing over the toast lives in the front-end, which never forwards that gesture. Several variants delegate to helpers in `runtime/nvim/init.lua`, so their behaviour is defined there rather than in core ([`input.rs`](../crates/wolf-core/src/README.md#inputrs)).
 

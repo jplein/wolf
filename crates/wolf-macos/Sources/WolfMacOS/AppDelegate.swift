@@ -679,8 +679,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         guard let layout = tab.layout else { continue }
         for token in PaneLayoutCodec.postOrderTokens(layout) {
           switch token {
-          case .leaf(let path, let preview, let weight):
-            wolf_ffi_state_layout_push_leaf(path, preview, weight)
+          case .leaf(let path, let preview, let terminal, let weight):
+            wolf_ffi_state_layout_push_leaf(path, preview, terminal, weight)
           case .split(let orientation, let childCount, let weight):
             let orient: UInt8 = orientation == .vertical ? 1 : 0
             wolf_ffi_state_layout_push_split(orient, UInt32(childCount), weight)
@@ -931,7 +931,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
   /// `SavedPaneNode` value (element refs must not outlive the bridge read).
   private static func savedPaneNode(from node: FfiPaneNode) -> SavedPaneNode {
     if node.is_leaf() {
-      return .leaf(path: node.leaf_path().toString(), preview: node.is_preview())
+      return .leaf(
+        path: node.leaf_path().toString(), preview: node.is_preview(),
+        terminal: node.is_terminal())
     }
     let orientation: Orientation = node.orientation() == 1 ? .vertical : .horizontal
     var weights: [Double] = []

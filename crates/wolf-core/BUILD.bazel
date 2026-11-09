@@ -884,6 +884,30 @@ rust_test(
 )
 
 rust_test(
+    name = "terminal_drawer",
+    srcs = [
+        "tests/common/mod.rs",
+        "tests/terminal_drawer.rs",
+    ],
+    crate_root = "tests/terminal_drawer.rs",
+    # Spawns a real nvim and real shells in ptys, which the macOS build sandbox does not allow.
+    # Medium: the cases restart Neovim and wait out settles for chords that must do nothing.
+    tags = ["no-sandbox"],
+    size = "medium",
+    edition = "2021",
+    data = [
+        "//bazel/nvim:nvim_tree",
+        "//runtime/nvim:init.lua",
+    ],
+    env = {
+        "WOLF_NVIM_BIN": "$(rootpath //bazel/nvim:nvim_tree)/nvim/bin/nvim",
+        "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
+        "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
+    },
+    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+)
+
+rust_test(
     name = "terminal_input",
     srcs = [
         "tests/common/mod.rs",

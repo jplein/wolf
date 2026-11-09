@@ -128,7 +128,7 @@ vim.api.nvim_create_autocmd("SwapExists", {
 })
 
 -- Reload files changed outside the editor; :checktime never clobbers a modified buffer.
--- pcall + silent! so the terminal and preview buffers can neither raise nor pollute the grid.
+-- pcall + silent! so placeholder and preview buffers can neither raise nor pollute the grid.
 opt.autoread = true
 local autoread_group = vim.api.nvim_create_augroup("WolfAutoRead", { clear = true })
 vim.api.nvim_create_autocmd({ "FocusGained", "BufEnter", "CursorHold", "CursorHoldI" }, {
@@ -360,8 +360,7 @@ function _G.wolf_setup_buffer_tracking(chan)
 					win,
 					vim.api.nvim_buf_get_name(buf),
 					buf,
-					vim.bo[buf].buftype == "terminal",
-					vim.b[buf].wolf_terminal == true or vim.w[win].wolf_terminal == true,
+					vim.w[win].wolf_drawer == true,
 					vim.b[buf].wolf_terminal_id or 0,
 				}
 			end
@@ -397,15 +396,10 @@ function _G.wolf_setup_buffer_tracking(chan)
 		end
 		pcall(vim.rpcrequest, chan, "wolf_barrier")
 	end
-	vim.api.nvim_create_autocmd(
-		-- TermOpen is where a `:terminal` buffer's buftype finally becomes
-		-- "terminal"; the earlier BufEnter/BufFilePost see it as a plain buffer.
-		{ "BufEnter", "BufWinEnter", "BufFilePost", "WinEnter", "WinNew", "WinClosed", "TermOpen" },
-		{
-			group = group,
-			callback = emit,
-		}
-	)
+	vim.api.nvim_create_autocmd({ "BufEnter", "BufWinEnter", "BufFilePost", "WinEnter", "WinNew", "WinClosed" }, {
+		group = group,
+		callback = emit,
+	})
 	-- Initial emit so the startup window layout is reflected without a change.
 	emit()
 end
@@ -646,6 +640,17 @@ function _G.wolf_highlight_code_blocks(blocks)
 	return results
 end
 
+-- Whole-word, ':'-only abbreviation of `word` to `replacement`; any other cmdline is left alone.
+local function abbrev(word, replacement)
+	vim.cmd(string.format(
+		"cnoreabbrev <expr> %s (getcmdtype()==':' && getcmdline()==%q) ? %q : %q",
+		word,
+		word,
+		replacement,
+		word
+	))
+end
+
 -- See runtime/nvim/README.md#wolf_setup_layoutchan; split, close and focus are asymmetric.
 function _G.wolf_setup_layout(chan)
 	-- 'h' = :split (stacked), 'v' = :vsplit (side by side). nvim splits first, then both handles are
@@ -736,36 +741,8 @@ function _G.wolf_setup_layout(chan)
 	map("n", "<C-w>l", function() do_focus("right") end, silent)
 	map("n", "<C-w><Right>", function() do_focus("right") end, silent)
 
-	-- t-mode chords fire the focus intent without leaving terminal-insert. They shadow the shell's
-	-- <C-w> word-erase, an accepted tradeoff; h/l are no-ops for the full-width drawer.
-	map("t", "<C-w>h", function() do_focus("left") end, silent)
-	map("t", "<C-w>j", function() do_focus("down") end, silent)
-	map("t", "<C-w>k", function() do_focus("up") end, silent)
-	map("t", "<C-w>l", function() do_focus("right") end, silent)
-
-	-- Re-enter terminal-insert when focus lands in the drawer; keyed on the drawer's identity so a
-	-- deliberate <C-\><C-n> (same window, no WinEnter) is never undone.
-	local terminsert = vim.api.nvim_create_augroup("WolfTerminalInsert", { clear = true })
-	vim.api.nvim_create_autocmd({ "WinEnter", "BufWinEnter" }, {
-		group = terminsert,
-		callback = function()
-			if vim.b.wolf_terminal and vim.bo.buftype == "terminal" then
-				vim.cmd("startinsert")
-			end
-		end,
-	})
-
-	-- Whole-word, ':'-only abbreviations: fragile, so the chords above are the primary path.
+	-- The abbreviations are fragile, so the chords above are the primary path.
 	-- :new / :vnew are treated as plain splits.
-	local function abbrev(word, replacement)
-		vim.cmd(string.format(
-			"cnoreabbrev <expr> %s (getcmdtype()==':' && getcmdline()==%q) ? %q : %q",
-			word,
-			word,
-			replacement,
-			word
-		))
-	end
 	abbrev("split", "lua wolf_do_split('h')")
 	abbrev("sp", "lua wolf_do_split('h')")
 	abbrev("vsplit", "lua wolf_do_split('v')")
@@ -855,6 +832,10 @@ function _G.wolf_rebuild_layout(spec_json)
 	local function realize(node)
 		if node.leaf then
 			local win = vim.api.nvim_get_current_win()
+			if node.terminal then
+				-- Core starts the session and binds it here once the handles return; path is its cwd.
+				return { win }
+			end
 			if node.preview and node.path ~= nil and node.path ~= "" then
 				-- Convert this window into a preview in place, keeping its handle for the DFS correspondence;
 				-- on failure the inherited buffer stays and the handle is still returned.
@@ -905,64 +886,63 @@ function _G.wolf_close_tabpage(handle)
 	pcall(vim.cmd, n .. "tabclose")
 end
 
--- See runtime/nvim/README.md#wolf_toggle_terminal.
-function _G.wolf_toggle_terminal()
-	-- 1. Find the tagged terminal buffer (buffers are global to the nvim).
-	local termbuf = nil
+-- A session's placeholder: unlisted, unnamed and nofile, so the path trackers never see it.
+local function placeholder_buf(id, bufhidden)
+	local buf = vim.api.nvim_create_buf(false, true)
+	vim.bo[buf].bufhidden = bufhidden
+	vim.bo[buf].modifiable = false
+	vim.bo[buf].swapfile = false
+	vim.b[buf].wolf_terminal_id = id
+	vim.b[buf].wolf_full_width = true
+	return buf
+end
+
+-- The buffer bound to session id, or nil.
+local function find_placeholder(id)
 	for _, b in ipairs(vim.api.nvim_list_bufs()) do
-		if
-			vim.api.nvim_buf_is_valid(b)
-			and vim.b[b].wolf_terminal
-			and vim.bo[b].buftype == "terminal"
-		then
-			termbuf = b
+		if vim.api.nvim_buf_is_valid(b) and vim.b[b].wolf_terminal_id == id then
+			return b
+		end
+	end
+	return nil
+end
+
+-- Opens or hides the drawer on session id. See specs/terminal-panes.md#the-drawer.
+function _G.wolf_toggle_terminal(id)
+	local drawer = nil
+	for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+		if vim.w[w].wolf_drawer == true then
+			drawer = w
 			break
 		end
 	end
-
-	-- 2. If a window in the CURRENT tabpage shows it, hide (close) that window.
-	--    Closing the window keeps the terminal buffer + job alive.
-	if termbuf then
-		for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-			if vim.api.nvim_win_get_buf(w) == termbuf then
-				vim.api.nvim_win_close(w, false)
-				return
-			end
-		end
+	-- Hiding keeps the session: the drawer's placeholder is bufhidden=hide.
+	if drawer ~= nil and vim.b[vim.api.nvim_win_get_buf(drawer)].wolf_terminal_id == id then
+		pcall(vim.api.nvim_win_close, drawer, false)
+		return
 	end
-
-	-- 3. Otherwise open a bottom split ~1/3 tall, under wolf_suppress_buffers: the build's synchronous
-	-- WinNew / BufEnter would otherwise push untagged drawer states into navigation history.
-	local height = math.max(1, math.floor(vim.o.lines / 3))
-	local termwin_buf
+	-- Suppressed: the build's synchronous WinNew / BufEnter would report an untagged window.
 	wolf_suppress_buffers(function()
-		vim.cmd("botright " .. height .. "split")
-		-- Tag the drawer WINDOW immediately, so it is identifiable as the drawer
-		-- from this point on regardless of which buffer ends up bound into it.
-		vim.w.wolf_terminal = true
-		if termbuf and vim.api.nvim_buf_is_valid(termbuf) then
-			vim.api.nvim_win_set_buf(0, termbuf)
+		if drawer ~= nil then
+			vim.api.nvim_set_current_win(drawer)
 		else
-			vim.cmd("terminal")
-			vim.b.wolf_terminal = true
+			vim.cmd("botright " .. math.max(1, math.floor(vim.o.lines / 3)) .. "split")
+			vim.w.wolf_drawer = true
 		end
-		-- Default the drawer's buffer to full width (still toggleable via :WolfFullWidth).
-		termwin_buf = vim.api.nvim_get_current_buf()
-		vim.b[termwin_buf].wolf_full_width = true
+		local buf = find_placeholder(id) or placeholder_buf(id, "hide")
+		vim.api.nvim_win_set_buf(0, buf)
 	end)
 	-- This intent is what makes the drawer visible; guarded until wolf_setup_layout has run.
-	local w = vim.api.nvim_get_current_win()
 	if _G.wolf_emit_drawer then
-		_G.wolf_emit_drawer(w)
+		_G.wolf_emit_drawer(vim.api.nvim_get_current_win())
 	end
-	-- Explicit re-emit: the autocmds fired on entering the terminal, before wolf_full_width was set.
+	-- The autocmds fired while the build was suppressed, before the window was tagged.
 	if _G.wolf_emit_current_file then
 		_G.wolf_emit_current_file()
 	end
 	if _G.wolf_emit_full_width then
 		_G.wolf_emit_full_width()
 	end
-	vim.cmd("startinsert")
 end
 
 -- Core terminal sessions show in placeholder windows; core owns the pty and the shell.
@@ -980,6 +960,14 @@ function _G.wolf_setup_terminals(chan)
 			pcall(vim.rpcnotify, chan, "wolf_terminal_wiped", id)
 		end,
 	})
+	-- Core starts a session in this window's tabpage cwd and binds it here.
+	function _G.wolf_open_terminal()
+		pcall(vim.rpcnotify, chan, "wolf_terminal_open", vim.api.nvim_get_current_win())
+	end
+	-- Bare words only: `:terminal <cmd>` stays a scripted Neovim terminal.
+	abbrev("terminal", "lua wolf_open_terminal()")
+	abbrev("term", "lua wolf_open_terminal()")
+	abbrev("ter", "lua wolf_open_terminal()")
 end
 
 -- Returns the window the placeholder went into, or 0. Ends with wolf_sync_buffers, so core's
@@ -994,21 +982,10 @@ function _G.wolf_terminal_bind(id, win, split)
 	local target = 0
 	local created = nil
 	local ok = pcall(wolf_suppress_buffers, function()
-		local buf = nil
-		for _, b in ipairs(vim.api.nvim_list_bufs()) do
-			if vim.api.nvim_buf_is_valid(b) and vim.b[b].wolf_terminal_id == id then
-				buf = b
-				break
-			end
-		end
+		local buf = find_placeholder(id)
 		if buf == nil then
-			buf = vim.api.nvim_create_buf(false, true)
+			buf = placeholder_buf(id, "wipe")
 			created = buf
-			vim.bo[buf].bufhidden = "wipe"
-			vim.bo[buf].modifiable = false
-			vim.bo[buf].swapfile = false
-			vim.b[buf].wolf_terminal_id = id
-			vim.b[buf].wolf_full_width = true
 		end
 		local into = win
 		if split == "h" or split == "v" then
@@ -1056,6 +1033,12 @@ function _G.wolf_terminal_exited(id)
 			if ok then
 				count = count + 1
 			end
+		end
+	end
+	-- A hidden drawer placeholder outlives its windows; the wipe tells core the session is gone.
+	for _, b in ipairs(vim.api.nvim_list_bufs()) do
+		if vim.api.nvim_buf_is_valid(b) and vim.b[b].wolf_terminal_id == id then
+			pcall(vim.api.nvim_buf_delete, b, { force = true })
 		end
 	end
 	return count
@@ -1181,7 +1164,8 @@ function _G.wolf_setup_open_files(chan)
 		for _, info in ipairs(vim.fn.getbufinfo({ buflisted = 1 })) do
 			local buf = info.bufnr
 			local name = info.name
-			if name ~= nil and name ~= "" and not buf_is_preview(buf) and not seen[name] then
+			local special = vim.bo[buf].buftype ~= ""
+			if name ~= nil and name ~= "" and not special and not buf_is_preview(buf) and not seen[name] then
 				seen[name] = true
 				files[#files + 1] = name
 			end
@@ -1198,7 +1182,7 @@ function _G.wolf_setup_open_files(chan)
 			local ok_win, win = pcall(vim.api.nvim_tabpage_get_win, tp)
 			if ok_win then
 				local ok_buf, abuf = pcall(vim.api.nvim_win_get_buf, win)
-				if ok_buf and not buf_is_preview(abuf) then
+				if ok_buf and vim.bo[abuf].buftype == "" and not buf_is_preview(abuf) then
 					local name = vim.api.nvim_buf_get_name(abuf)
 					if name ~= "" then
 						active_path = name
@@ -1245,9 +1229,9 @@ function _G.wolf_setup_fs_events(chan)
 			pcall(vim.rpcnotify, chan, "wolf_fs_changed", { args.event, vim.fn.fnamemodify(args.file, ":p") })
 		end,
 	})
-	-- Separate callback: the buftype guard would swallow TermLeave. "", not fnamemodify("", ":p"),
-	-- which fabricates the cwd; the element must be present or core drops the 1-element payload.
-	vim.api.nvim_create_autocmd({ "ShellCmdPost", "FocusGained", "TermLeave" }, {
+	-- Path-less, so its own callback. "", not fnamemodify("", ":p"), which fabricates the cwd; the
+	-- element must be present or core drops the 1-element payload.
+	vim.api.nvim_create_autocmd({ "ShellCmdPost", "FocusGained" }, {
 		group = group,
 		callback = function(args)
 			pcall(vim.rpcnotify, chan, "wolf_fs_changed", { args.event, "" })
@@ -1696,7 +1680,7 @@ function _G.wolf_preview_file(win, path)
 	return result
 end
 
--- Usable other-pane target: valid, not current (that is the in-place command), not the drawer.
+-- Usable other-pane target: valid, not current (that is the in-place command), not a terminal pane.
 -- Anything else sends the caller down the split path.
 local function wolf_other_pane_target_ok(target_win)
 	if target_win == nil or target_win == 0 then
@@ -1709,7 +1693,7 @@ local function wolf_other_pane_target_ok(target_win)
 		return false
 	end
 	local buf = vim.api.nvim_win_get_buf(target_win)
-	if vim.b[buf].wolf_terminal == true or vim.w[target_win].wolf_terminal == true then
+	if vim.w[target_win].wolf_drawer == true or vim.b[buf].wolf_terminal_id ~= nil then
 		return false
 	end
 	return true

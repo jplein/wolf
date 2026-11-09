@@ -10,7 +10,7 @@
 //! headlessly, the same way [`crate::command_action`], [`crate::geometry`] and
 //! [`crate::cursor`] keep theirs pure.
 //!
-//! Four decisions live here:
+//! Five decisions live here:
 //!
 //! 1. [`liveness_ui`] — the three-state mapping from a liveness reading (plus
 //!    whether an automatic restart attempt is still allowed) to *what the overlay
@@ -20,6 +20,8 @@
 //!    given that an `Ok(false)` is a no-op rather than a failure.
 //! 4. [`reopen_order`] — the order the captured Tier-1 files are reopened in, with
 //!    the ACTIVE path last so it lands focused.
+//! 5. [`terminal_restore`] — which live terminal sessions go back into the restored
+//!    tab, and whether its drawer reopens.
 //!
 //! Plus [`restart_button_rect`], the derived geometry of the "Restart Neovim"
 //! button inside the overlay — the single source of truth shared by the widget
@@ -37,7 +39,7 @@
 
 use std::path::{Path, PathBuf};
 
-use wolf_core::Liveness;
+use wolf_core::{Liveness, TerminalId};
 
 /// What the full-bleed crash/stall overlay is showing.
 ///
@@ -248,6 +250,42 @@ pub fn reopen_order(files: &[PathBuf], active: Option<&Path>) -> Vec<PathBuf> {
         order.push(active.to_path_buf());
     }
     order
+}
+
+/// One step that puts a live terminal session back after a restart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TerminalRestore {
+    /// Show this session in a new vertical split of the restored tab.
+    Split(TerminalId),
+    /// Reopen the drawer, which starts a new shell when its session died.
+    Drawer,
+}
+
+/// The steps that put the restored tab's terminals back after a restart: each of
+/// `splits` still in `live`, once, in ascending id order, then [`TerminalRestore::Drawer`]
+/// when the drawer was open.
+///
+/// Pane topology does not survive a restart, so the splits go back as new vertical
+/// splits, and the drawer comes last so no split lands inside it. A drawer is reopened
+/// even when its session died, because the toggle then starts a new shell.
+#[must_use]
+pub fn terminal_restore(
+    splits: &[TerminalId],
+    drawer_open: bool,
+    live: &[TerminalId],
+) -> Vec<TerminalRestore> {
+    let mut ids: Vec<TerminalId> = splits
+        .iter()
+        .copied()
+        .filter(|id| live.contains(id))
+        .collect();
+    ids.sort_unstable();
+    ids.dedup();
+    let mut steps: Vec<TerminalRestore> = ids.into_iter().map(TerminalRestore::Split).collect();
+    if drawer_open {
+        steps.push(TerminalRestore::Drawer);
+    }
+    steps
 }
 
 /// The restart button's rect — `(x, y, w, h)` — RELATIVE TO THE OVERLAY CHILD's

@@ -13,7 +13,7 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::OnceLock;
+use std::sync::{Once, OnceLock};
 
 /// Default grid width used by the bridge smoke test, in columns.
 pub const DEFAULT_COLS: u16 = 80;
@@ -356,4 +356,12 @@ pub fn fresh_cwd() -> PathBuf {
     let dir = std::env::temp_dir().join(format!("wolf-ffi-test-cwd-{pid}-{nanos}-{n}"));
     std::fs::create_dir_all(&dir).expect("failed to create temp cwd directory");
     dir
+}
+
+/// Sets `SHELL=/bin/sh` for the process, once, so a session started with no explicit command
+/// (the drawer, a restored terminal leaf) runs POSIX `sh`, whose output the tests type for.
+/// Mirrors wolf-core's `pin_default_shell`; call it before `wolf_ffi_start`.
+pub fn pin_default_shell() {
+    static PIN: Once = Once::new();
+    PIN.call_once(|| std::env::set_var("SHELL", "/bin/sh"));
 }

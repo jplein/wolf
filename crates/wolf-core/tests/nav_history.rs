@@ -16,7 +16,7 @@
 //! API surface it exercises:
 //!
 //! - `pub enum NavTarget { Edit { path: PathBuf }, Preview { source: PathBuf },
-//!   Terminal { bufnr: i64 }, Untitled { bufnr: i64 } }`
+//!   Untitled { bufnr: i64 } }`
 //!   (derives `Clone, Debug, PartialEq, Eq, Hash`)
 //! - `pub struct NavMove { pub from: usize, pub to: usize, pub target: NavTarget }`
 //!   (asserted FIELD-WISE here, so it needs no derives)
@@ -39,7 +39,7 @@ use std::path::{Path, PathBuf};
 
 use wolf_core::nav_history::disambiguate;
 use wolf_core::{
-    derive_target, MenuRow, NavHistory, NavTarget, PaneHistory, WinBuffer, MAX_ENTRIES,
+    derive_target, MenuRow, NavHistory, NavTarget, PaneHistory, TerminalId, WinBuffer, MAX_ENTRIES,
     MAX_MENU_ROWS,
 };
 
@@ -57,11 +57,6 @@ fn preview(p: &str) -> NavTarget {
     NavTarget::Preview {
         source: PathBuf::from(p),
     }
-}
-
-/// A `Terminal` target for buffer `bufnr`.
-fn terminal(bufnr: i64) -> NavTarget {
-    NavTarget::Terminal { bufnr }
 }
 
 /// An `Untitled` target for buffer `bufnr`.
@@ -101,7 +96,6 @@ fn named_buffer(bufnr: i64, path: &str) -> WinBuffer {
     WinBuffer {
         bufnr,
         path: Some(PathBuf::from(path)),
-        is_terminal: false,
         is_drawer: false,
         terminal: None,
     }
@@ -505,9 +499,8 @@ fn derive_target_precedence_matrix() {
             buf: Some(WinBuffer {
                 bufnr: 9,
                 path: None,
-                is_terminal: true,
                 is_drawer: true,
-                terminal: None,
+                terminal: Some(TerminalId(1)),
             }),
             preview: Some(src),
             want: Some(preview("/p/source.md")),
@@ -523,9 +516,8 @@ fn derive_target_precedence_matrix() {
             buf: Some(WinBuffer {
                 bufnr: 9,
                 path: None,
-                is_terminal: true,
                 is_drawer: true,
-                terminal: None,
+                terminal: Some(TerminalId(1)),
             }),
             preview: None,
             want: None,
@@ -535,24 +527,23 @@ fn derive_target_precedence_matrix() {
             buf: Some(WinBuffer {
                 bufnr: 9,
                 path: Some(PathBuf::from("/p/a.md")),
-                is_terminal: true,
                 is_drawer: true,
-                terminal: None,
+                terminal: Some(TerminalId(1)),
             }),
             preview: None,
             want: None,
         },
         Case {
-            name: "a :terminal in a NORMAL split IS tracked",
+            name: "a terminal pane in a NORMAL split is excluded too; Untitled means the \
+                   `terminal.is_some()` clause is missing",
             buf: Some(WinBuffer {
                 bufnr: 11,
                 path: None,
-                is_terminal: true,
                 is_drawer: false,
-                terminal: None,
+                terminal: Some(TerminalId(2)),
             }),
             preview: None,
-            want: Some(terminal(11)),
+            want: None,
         },
         Case {
             name: "a named buffer is an Edit target",
@@ -565,7 +556,6 @@ fn derive_target_precedence_matrix() {
             buf: Some(WinBuffer {
                 bufnr: 4,
                 path: None,
-                is_terminal: false,
                 is_drawer: false,
                 terminal: None,
             }),
@@ -1132,15 +1122,14 @@ fn preview_and_edit_of_one_path_contribute_a_single_label_body() {
     );
 }
 
-/// Pathless rows (`Terminal` / `Untitled`) are EXCLUDED from the collision groups
-/// and numbered by first appearance in the newest-first ROW order.
+/// Pathless `Untitled` rows are EXCLUDED from the collision groups and numbered
+/// by first appearance in the newest-first ROW order.
 #[test]
 fn pathless_rows_are_excluded_from_collisions_and_numbered() {
     let mut h = PaneHistory::default();
-    h.observe(terminal(1));
+    h.observe(untitled(1));
     h.observe(untitled(2));
-    h.observe(terminal(3));
-    h.observe(untitled(4));
+    h.observe(untitled(3));
     h.observe(edit("/proj/README.md"));
 
     let rows = h.menu_rows(MAX_MENU_ROWS, None);
@@ -1149,9 +1138,8 @@ fn pathless_rows_are_excluded_from_collisions_and_numbered() {
         vec![
             "README.md".to_string(),
             "Untitled".to_string(),
-            "Terminal".to_string(),
             "Untitled 2".to_string(),
-            "Terminal 2".to_string(),
+            "Untitled 3".to_string(),
         ],
         "numbering follows first appearance NEWEST-FIRST; the lone path stays a \
          bare basename (pathless rows never join a collision group)"

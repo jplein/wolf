@@ -151,4 +151,24 @@ public enum LivenessSeam {
       return steps
     }
   }
+
+  /// One step that puts a live terminal session back after a restart.
+  public enum TerminalRestoreStep: Equatable {
+    /// Show this session in a new vertical split of the restored view.
+    case split(UInt64)
+    /// Reopen the drawer, which starts a new shell when its session died.
+    case drawer
+  }
+
+  /// The steps that put a view's terminals back after a restart: each captured split
+  /// session still in `live`, once, in ascending id order, then `.drawer` when the view
+  /// had the drawer open. Pane topology does not survive a restart, so splits go back as
+  /// new vertical splits; the drawer comes last so no split lands inside it.
+  public static func terminalRestore(splits: [UInt64], drawerOpen: Bool, live: Set<UInt64>)
+    -> [TerminalRestoreStep]
+  {
+    var steps = Set(splits).intersection(live).sorted().map { TerminalRestoreStep.split($0) }
+    if drawerOpen { steps.append(.drawer) }
+    return steps
+  }
 }

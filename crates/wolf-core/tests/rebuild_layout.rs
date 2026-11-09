@@ -24,7 +24,8 @@
 //!
 //! The spec JSON shape is the one `wolf_core::state::rebuild_layout_spec` renders,
 //! the document's only renderer:
-//!   * leaf:  `{ "leaf": true, "path": "<abs path or empty>", "preview": <bool> }`
+//!   * leaf:  `{ "leaf": true, "path": "<abs path or empty>", "preview": <bool>,
+//!     "terminal": <bool> }`
 //!   * split: `{ "orientation": "h"|"v", "weights": [...], "children": [...] }`
 //!
 //! ## Preview leaves
@@ -37,15 +38,24 @@
 //! observability path `crates/wolf-ffi/tests/preview.rs` relies on, so the preview
 //! binding is asserted directly (not reduced).
 
+//!
+//! ## Terminal leaves
+//!
+//! A leaf with `"terminal": true` gets no `:edit`; once the windows exist, core starts a
+//! session for it in the leaf's `path` when that is an existing directory, else in the
+//! window's tabpage cwd, and binds it into the leaf's window. The shell is POSIX `sh`
+//! (`common::pin_default_shell`), and its cwd is read with `pwd -P`, since macOS temp dirs
+//! sit behind the `/var` → `/private/var` link.
+
 mod common;
 
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use common::{poll_until, FlushWaiter, FLUSH_TIMEOUT, POLL_INTERVAL};
+use common::{poll_until, run_line, win_terminal, FlushWaiter, FLUSH_TIMEOUT, POLL_INTERVAL};
 use wolf_core::state::{rebuild_layout_spec, PaneNode, PaneOrientation};
-use wolf_core::WolfCore;
+use wolf_core::{TerminalId, WolfCore};
 
 /// Placeholder content for the temp markdown files these tests open.
 const DOC: &str = "# Rebuild Layout\nbody\n";
@@ -432,6 +442,7 @@ fn rebuild_reports_every_leaf_window_on_return() {
                 .map(|path| PaneNode::Leaf {
                     path: path.to_str().expect("fixture path is UTF-8").to_string(),
                     preview: false,
+                    terminal: false,
                 })
                 .collect(),
         });
@@ -488,4 +499,194 @@ fn rebuild_reports_every_leaf_window_on_return() {
 
         core.shutdown().expect("shutdown should be Ok");
     }
+}
+
+/// Polls until window `win` carries a session and returns it.
+fn poll_win_session(core: &WolfCore, waiter: &FlushWaiter, win: i64, desc: &str) -> TerminalId {
+    poll_until(waiter, desc, || win_terminal(core, win), Option::is_some)
+        .expect("poll_until returned only once the window carried a session")
+}
+
+/// Asserts the session's shell runs in `expected`, a canonical directory.
+///
+/// The shell prints `in-6` or `out-8`, which the typed line does not contain, so the echo of
+/// the command cannot satisfy the wait; on a mismatch it prints its `pwd -P` too.
+fn assert_session_cwd(
+    core: &WolfCore,
+    waiter: &FlushWaiter,
+    id: TerminalId,
+    expected: &Path,
+    why: &str,
+) {
+    run_line(
+        core,
+        id,
+        &format!(
+            "if [ \"$(pwd -P)\" = '{}' ]; then echo in-$((2*3)); else echo out-$((2*4)); pwd -P; fi",
+            expected.display()
+        ),
+    );
+    let frame = poll_frame_any(core, waiter, id, &["in-6", "out-8"]);
+    assert!(
+        frame.contains("in-6"),
+        "{why}: the session must start in {}; out-8 means it started elsewhere (its pwd -P \
+         follows). The frame reads:\n{frame}",
+        expected.display()
+    );
+}
+
+/// Polls the session's frame until it shows one of `needles`, and returns its text.
+fn poll_frame_any(
+    core: &WolfCore,
+    waiter: &FlushWaiter,
+    id: TerminalId,
+    needles: &[&str],
+) -> String {
+    let frame = common::poll_frame(
+        core,
+        waiter,
+        id,
+        &format!("the session to print one of {needles:?}"),
+        |frame| {
+            let text = common::frame_text(frame);
+            needles.iter().any(|needle| text.contains(needle))
+        },
+    );
+    common::frame_text(&frame)
+}
+
+/// A fresh, empty directory for a terminal leaf, outside the core's cwd so the two cannot be
+/// confused, with its canonical path.
+fn leaf_dir() -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().expect("failed to create the terminal leaf's directory");
+    let canon = dir
+        .path()
+        .canonicalize()
+        .expect("the terminal leaf's directory should canonicalize");
+    (dir, canon)
+}
+
+/// (h) A vertical split of [ a.md, terminal leaf at `D` ]: handle 0 shows a.md, and handle 1
+/// carries a session whose shell starts in `D`, a directory that is not the core's cwd.
+#[test]
+fn a_terminal_leaf_starts_a_session_in_its_directory() {
+    common::pin_default_shell();
+    let cwd = std::fs::canonicalize(common::fresh_cwd()).expect("failed to canonicalize the cwd");
+    let (core, waiter) = common::start_core_at(cwd.clone());
+    let file_a = cwd.join("a.md");
+    std::fs::write(&file_a, DOC).expect("failed to write a.md");
+    let (_dir, leaf) = leaf_dir();
+    assert_ne!(
+        leaf, cwd,
+        "precondition: the leaf's directory must not be the core's cwd"
+    );
+
+    let spec = rebuild_layout_spec(&PaneNode::Split {
+        orientation: PaneOrientation::Vertical,
+        weights: vec![0.5, 0.5],
+        children: vec![
+            PaneNode::Leaf {
+                path: file_a.to_str().expect("a.md path is UTF-8").to_string(),
+                preview: false,
+                terminal: false,
+            },
+            PaneNode::Leaf {
+                path: leaf.to_str().expect("leaf dir is UTF-8").to_string(),
+                preview: false,
+                terminal: true,
+            },
+        ],
+    });
+    let handles = core.rebuild_layout(&spec);
+    assert_eq!(
+        handles.len(),
+        2,
+        "a 2-leaf split with a terminal leaf must return 2 window handles; got {handles:?}"
+    );
+    assert_distinct_handles(&handles);
+
+    poll_win_filename(&core, &waiter, handles[0], "a.md");
+    let id = poll_win_session(
+        &core,
+        &waiter,
+        handles[1],
+        "the terminal leaf's window to carry a session; none means core starts no session for a \
+         terminal leaf after the rebuild",
+    );
+    assert_eq!(
+        win_terminal(&core, handles[0]),
+        None,
+        "the editor leaf's window must carry no session."
+    );
+    assert_eq!(
+        core.live_terminals(),
+        vec![id],
+        "one terminal leaf must start exactly one session."
+    );
+    assert_session_cwd(
+        &core,
+        &waiter,
+        id,
+        &leaf,
+        "a terminal leaf whose path is an existing directory",
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// (i) A terminal leaf whose path is not a directory, an empty one or one that no longer
+/// exists, starts its session in the window's tabpage cwd, the core's.
+#[test]
+fn a_terminal_leaf_without_a_directory_starts_in_the_tabpage_cwd() {
+    common::pin_default_shell();
+    let cwd = std::fs::canonicalize(common::fresh_cwd()).expect("failed to canonicalize the cwd");
+    let (core, waiter) = common::start_core_at(cwd.clone());
+    let (dir, gone) = leaf_dir();
+    drop(dir);
+    assert!(
+        !gone.exists(),
+        "precondition: the removed directory must be gone"
+    );
+
+    let spec = rebuild_layout_spec(&PaneNode::Split {
+        orientation: PaneOrientation::Horizontal,
+        weights: vec![0.5, 0.5],
+        children: vec![
+            PaneNode::Leaf {
+                path: String::new(),
+                preview: false,
+                terminal: true,
+            },
+            PaneNode::Leaf {
+                path: gone.to_str().expect("removed dir is UTF-8").to_string(),
+                preview: false,
+                terminal: true,
+            },
+        ],
+    });
+    let handles = core.rebuild_layout(&spec);
+    assert_eq!(
+        handles.len(),
+        2,
+        "a 2-leaf split must return 2 window handles; got {handles:?}"
+    );
+    assert_distinct_handles(&handles);
+
+    for (i, why) in [
+        "a terminal leaf with an empty path",
+        "a terminal leaf whose directory no longer exists",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let id = poll_win_session(
+            &core,
+            &waiter,
+            handles[i],
+            &format!("leaf {i}'s window to carry a session ({why})"),
+        );
+        assert_session_cwd(&core, &waiter, id, &cwd, why);
+    }
+
+    core.shutdown().expect("shutdown should be Ok");
 }

@@ -6,7 +6,8 @@
 //! both the frame and the shell, the shell's environment and cwd, id allocation, a failed
 //! spawn, the placeholder's binding in `Snapshot.win_buffers`, `pane_status` for a terminal
 //! pane, row versions, publishing through the wake without `seq`, the publish coalescing, the
-//! render hold of synchronized output, and the colours taken from the editor.
+//! render hold of synchronized output, the colours taken from the editor, and typed
+//! `:terminal`, `:term` and `:ter` opening a session in the current window.
 //!
 //! ## Premises about the components
 //!
@@ -22,6 +23,8 @@
 //!   `default_colors_set` in its next redraw batch.
 //! - Paths are compared after `canonicalize` or with `pwd -P`, since macOS temp dirs sit
 //!   behind the `/var` → `/private/var` link.
+//! - Neovim's own `:terminal` makes a buffer whose `&buftype` is `terminal`, while a session's
+//!   placeholder is `nofile`, so `&buftype` tells which of the two a typed word opened.
 
 mod common;
 
@@ -266,10 +269,8 @@ fn the_placeholder_is_bound_in_win_buffers() {
         bound.terminal
     );
     assert_eq!(
-        (bound.path.as_ref(), bound.is_terminal),
-        (None, false),
-        "the placeholder is unnamed and not a Neovim terminal buffer, so its WinBuffer must have \
-         no path and is_terminal false."
+        bound.path, None,
+        "the placeholder is unnamed, so its WinBuffer must have no path."
     );
     assert!(
         !core.read_snapshot().buffers.contains_key(&win),
@@ -316,6 +317,69 @@ fn the_placeholder_is_bound_in_win_buffers() {
     );
 
     core.shutdown().expect("shutdown should be Ok");
+}
+
+/// Typing `:terminal`, `:term` or `:ter` opens a core session in the current window: the
+/// window's `WinBuffer` carries a new session, its buffer is the `nofile` placeholder rather
+/// than Neovim's own terminal, and a line typed into the session runs in a shell.
+#[test]
+fn typed_terminal_words_open_a_session_here() {
+    common::pin_default_shell();
+    for word in ["terminal", "term", "ter"] {
+        let (core, waiter, cwd) = start_core();
+        let win = active_window(&core, &waiter);
+        let before = core
+            .read_snapshot()
+            .win_buffers
+            .get(&win)
+            .map(|buffer| buffer.bufnr);
+
+        send_ex(&core, word);
+        poll_until(
+            &waiter,
+            &format!("typed `:{word}` to change window {win}'s buffer"),
+            || core.read_snapshot().win_buffers.get(&win).cloned(),
+            |buffer| {
+                buffer
+                    .as_ref()
+                    .is_some_and(|buffer| buffer.terminal.is_some() || Some(buffer.bufnr) != before)
+            },
+        );
+        // A changed bufnr may be seen before the binding lands; let it settle, then read again.
+        settle_for(&waiter, QUIET_SETTLE);
+        let after = core
+            .read_snapshot()
+            .win_buffers
+            .get(&win)
+            .cloned()
+            .unwrap_or_else(|| panic!("window {win} left win_buffers after typed `:{word}`"));
+
+        let probe = cwd.join("typed-terminal-probe.txt");
+        let buftype = format!("getbufvar(winbufnr({win}), '&buftype')");
+        let values = probe_values(&core, &[buftype.as_str()], &probe);
+        assert_eq!(
+            (after.terminal.is_some(), values[0].as_str()),
+            (true, "nofile"),
+            "typed `:{word}` must open a core session in the current window {win}: its \
+             WinBuffer must carry a session and its buffer be the nofile placeholder. (false, \
+             \"terminal\") means init.lua has no `{word}` abbreviation, so Neovim's own \
+             :terminal ran; (false, \"\") means the abbreviation ran but core opened no \
+             session (no `wolf_terminal_open` handler)."
+        );
+        let id = after
+            .terminal
+            .expect("the assertion above checked the window carries a session");
+        assert_eq!(
+            core.live_terminals(),
+            vec![id],
+            "typed `:{word}` must start exactly one session, the one window {win} shows."
+        );
+
+        run_line(&core, id, "echo typed-$((4+5))");
+        wait_for_text(&core, &waiter, id, "typed-9");
+
+        core.shutdown().expect("shutdown should be Ok");
+    }
 }
 
 /// `pane_status` of a terminal pane's grid reports the session's shell name and empty paths.

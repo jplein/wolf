@@ -407,6 +407,18 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
     handle?.open_files_for_tabpage(tabpageHandle)
   }
 
+  /// This view's terminal panes' sessions and whether its drawer is open, captured
+  /// BEFORE a restart drops the window bindings; nothing when no pane container exists.
+  func capturedTerminals() -> (splits: [UInt64], drawerOpen: Bool) {
+    paneContainer?.capturedTerminals() ?? ([], false)
+  }
+
+  /// Hands a crash-restart's terminal restore to the pane container, which runs it once
+  /// this view's first pane binds.
+  func requestTerminalRestore(_ steps: [LivenessSeam.TerminalRestoreStep]) {
+    paneContainer?.requestTerminalRestore(steps)
+  }
+
   /// Transitions this window from the empty state into an open project: reveals
   /// the sidebar, hides the "Open folder…" overlay, and lets the file tree start
   /// (reroot at the opened folder on the next render wake). Idempotent — the

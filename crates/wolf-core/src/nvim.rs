@@ -743,8 +743,7 @@ impl NvimProcess {
     }
 
     /// Binds buffer `bufnr` into window `win` and restores that pane's saved view,
-    /// for a per-pane navigation-history move to a
-    /// [`Terminal`](crate::nav_history::NavTarget::Terminal) or
+    /// for a per-pane navigation-history move to an
     /// [`Untitled`](crate::nav_history::NavTarget::Untitled) target.
     ///
     /// Runs the `_G.wolf_history_set_buf` helper (defined in

@@ -7,8 +7,9 @@ import XCTest
 @testable import WolfMacOS
 
 /// The process-wide environment a live core needs, prepared once before any core or
-/// config read: `WOLF_NVIM_BIN` from the staged Neovim, and fresh `WOLF_STATE_DIR` and
-/// `WOLF_CONFIG_DIR`, so no test reads or writes the user's state or preferences.
+/// config read: `WOLF_NVIM_BIN` from the staged Neovim, fresh `WOLF_STATE_DIR` and
+/// `WOLF_CONFIG_DIR`, so no test reads or writes the user's state or preferences, and
+/// `SHELL=/bin/sh`, so a session started with no command runs a known shell.
 private struct LiveCoreEnvironment: Sendable {
   /// The staged `init.lua`, or `nil` with `problem` set.
   let initLua: String?
@@ -36,6 +37,8 @@ private struct LiveCoreEnvironment: Sendable {
     }
     setenv("WOLF_STATE_DIR", state, 1)
     setenv("WOLF_CONFIG_DIR", config, 1)
+    // The drawer and a typed `:terminal` run the default shell; tests type POSIX `sh` into it.
+    setenv("SHELL", "/bin/sh", 1)
 
     guard let nvimDir = resolveRunfile("WOLF_TEST_NVIM_DIR", env: env) else {
       return LiveCoreEnvironment(

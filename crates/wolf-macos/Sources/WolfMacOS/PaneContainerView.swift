@@ -30,6 +30,8 @@ final class PaneContainerView: NSView {
   private static let intentKindFocusDir: UInt8 = 1
   /// `FfiLayoutIntent.kind()` for a terminal-DRAWER open (mirrors `wolf-ffi`).
   private static let intentKindDrawerOpen: UInt8 = 2
+  /// `terminal_target::SPLIT_VERTICAL` (mirrors `wolf-ffi`).
+  private static let terminalTargetSplitVertical: UInt8 = 2
   /// Maximum Neovim grid width, in cells. A pane wider than this many columns caps
   /// its grid at `maxGridCols` and CENTERS it horizontally, leaving side margins
   /// (painted in the grid's background); a narrower pane is unaffected. All pixel↔
@@ -167,6 +169,11 @@ final class PaneContainerView: NSView {
   /// renders and realizes `node`, and `saved` is the same tree projected for the
   /// Swift `PaneTree`.
   private var pendingLayoutRebuild: (saved: SavedPaneNode, node: FfiPaneNode)?
+
+  /// The terminal restore a crash-restart requested (`requestTerminalRestore`), run once
+  /// by `onRenderWake` after the first pane binds, while this view's tabpage is current
+  /// and no layout rebuild waits. See `runPendingTerminalRestore`.
+  private var pendingTerminalRestore: [LivenessSeam.TerminalRestoreStep]?
 
   /// Invoked whenever the pane layout changes in a way that must be persisted (a
   /// divider drag ends, or a restore rebuild completes). Set by the window
@@ -1365,6 +1372,7 @@ final class PaneContainerView: NSView {
       // A view that was materialized but never yet current has no panes; make
       // its first pane bind to the now-current tabpage's window.
       ensureInitialPane()
+      runPendingTerminalRestore()
       rebindStaleGrids()
       updateActivePane()
       syncGridSizes()
@@ -1376,6 +1384,7 @@ final class PaneContainerView: NSView {
     }
 
     ensureInitialPane()
+    runPendingTerminalRestore()
     applyIntents()
     detectCloses()
     resolvePendingGrids()
@@ -1429,6 +1438,7 @@ final class PaneContainerView: NSView {
     activePane = nil
     lastEditorPane = nil
     drawerPaneId = nil
+    pendingTerminalRestore = nil
     for win in Array(previewWebViews.keys) {
       removePreviewWebView(win)
     }
@@ -2200,10 +2210,10 @@ final class PaneContainerView: NSView {
   var paneLayout: PaneLayout { tree.layout() }
 
   /// What each editor leaf's window shows, read by window handle. A leaf whose
-  /// window is a preview maps to its source file; any other maps through
-  /// `win_buffer`, which spans every tabpage, so a background view still reads its
-  /// files. A leaf with no window yet is omitted, which `SessionSeam.gatherTab`
-  /// treats as unreported.
+  /// window is a preview maps to its source file, and a terminal pane to its shell's
+  /// cwd; any other maps through `win_buffer`, which spans every tabpage, so a
+  /// background view still reads its files. A leaf with no window yet is omitted,
+  /// which `SessionSeam.gatherTab` treats as unreported.
   func leafContents() -> [PaneId: SessionSeam.LeafContent] {
     // `previews()` yields borrowed refs valid only for this loop; snapshot the
     // preview-window → source-path map up front.
@@ -2219,10 +2229,52 @@ final class PaneContainerView: NSView {
         contents[id] = .preview(source: source)
       } else {
         let buffer = handle.win_buffer(win)
-        contents[id] = buffer.reported() ? .buffer(path: buffer.abs_path().toString()) : .unreported
+        let session = buffer.terminal()
+        if session != 0 {
+          contents[id] = .terminal(cwd: handle.terminal_cwd(session).toString())
+        } else {
+          contents[id] =
+            buffer.reported() ? .buffer(path: buffer.abs_path().toString()) : .unreported
+        }
       }
     }
     return contents
+  }
+
+  /// The terminals a crash-restart puts back: the sessions of the tree's terminal panes,
+  /// in leaf order, and whether the drawer is open. Read before the restart, which drops
+  /// every window binding from the snapshot.
+  func capturedTerminals() -> (splits: [UInt64], drawerOpen: Bool) {
+    let splits = tree.leaves().compactMap { id -> UInt64? in
+      guard let win = panes[id]?.win, win != 0 else { return nil }
+      let session = handle.win_buffer(win).terminal()
+      return session == 0 ? nil : session
+    }
+    return (splits, drawerPaneId != nil)
+  }
+
+  /// Requests the terminal restore `steps` after a crash-restart, replacing any earlier
+  /// request; `onRenderWake` runs it once this view's first pane binds.
+  func requestTerminalRestore(_ steps: [LivenessSeam.TerminalRestoreStep]) {
+    pendingTerminalRestore = steps
+  }
+
+  /// Runs a requested terminal restore once this view's first pane is bound, its tabpage
+  /// is current and no layout rebuild waits.
+  /// See notes/crates/wolf-macos/Sources/WolfMacOS/PaneContainerView.swift.md#terminal-restore
+  private func runPendingTerminalRestore() {
+    guard let steps = pendingTerminalRestore, !panes.isEmpty, pendingLayoutRebuild == nil,
+      handle.active_tabpage() == controllerTabpageHandle
+    else { return }
+    pendingTerminalRestore = nil
+    for step in steps {
+      switch step {
+      case .split(let session):
+        _ = handle.queue_bind_terminal(session, 0, Self.terminalTargetSplitVertical)
+      case .drawer:
+        handle.toggle_terminal()
+      }
+    }
   }
 
   /// Whether this view's restore rebuild failed and it fell back to one pane. Its

@@ -277,4 +277,50 @@ final class LivenessSeamTests: XCTestCase {
         + "is a request to change to no directory")
     XCTAssertFalse(hasChdir(steps.first ?? []), "no .chdir for an empty cwd; got \(steps)")
   }
+
+  // MARK: - Terminal restore after a restart
+
+  /// One `terminalRestore` case.
+  private struct RestoreRow {
+    let name: String
+    let splits: [UInt64]
+    let drawerOpen: Bool
+    let live: Set<UInt64>
+    let expected: [LivenessSeam.TerminalRestoreStep]
+  }
+
+  /// The steps that put live sessions back: the captured splits that are still live, once
+  /// each, in ascending id order, then the drawer when the view had it open.
+  func testTerminalRestorePutsLiveSplitsInOrderThenTheDrawer() {
+    let rows: [RestoreRow] = [
+      RestoreRow(
+        name: "no sessions and no drawer restore nothing", splits: [], drawerOpen: false,
+        live: [], expected: []),
+      RestoreRow(
+        name: "splits come back in ascending id order; another order means they are not sorted",
+        splits: [3, 1, 2], drawerOpen: false, live: [1, 2, 3],
+        expected: [.split(1), .split(2), .split(3)]),
+      RestoreRow(
+        name: "a session captured twice is restored once", splits: [2, 2, 1], drawerOpen: false,
+        live: [1, 2], expected: [.split(1), .split(2)]),
+      RestoreRow(
+        name: "a session that died across the restart is skipped; .split(4) means no live filter",
+        splits: [1, 4, 2], drawerOpen: false, live: [1, 2], expected: [.split(1), .split(2)]),
+      RestoreRow(
+        name: "an open drawer comes back LAST, after every split, so a split never lands in it",
+        splits: [2, 1], drawerOpen: true, live: [1, 2, 5],
+        expected: [.split(1), .split(2), .drawer]),
+      RestoreRow(
+        name: "an open drawer is reopened even with no live session, since the toggle starts one",
+        splits: [], drawerOpen: true, live: [], expected: [.drawer]),
+    ]
+    for row in rows {
+      XCTAssertEqual(
+        LivenessSeam.terminalRestore(
+          splits: row.splits, drawerOpen: row.drawerOpen, live: row.live),
+        row.expected,
+        "terminalRestore(splits: \(row.splits), drawerOpen: \(row.drawerOpen), live: "
+          + "\(row.live.sorted())): \(row.name)")
+    }
+  }
 }

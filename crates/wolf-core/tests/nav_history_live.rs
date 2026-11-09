@@ -42,26 +42,19 @@
 //! RELATIVE growth ("exactly one entry was added") and the newest-first row
 //! prefix, which is robust to that prefix.
 //!
-//! ## Terminal DRAWER exclusion
+//! ## Terminal panes have no history
 //!
-//! [`split_terminal_is_tracked_but_the_drawer_pane_never_gets_history`] and
-//! [`toggling_the_drawer_never_touches_a_survivor_panes_history`] assert the locked
-//! decision "terminal drawer EXCLUDED (no history)". Three mechanisms in
-//! `runtime/nvim/init.lua` deliver it, and a regression in any of them is what
-//! those two tests catch:
+//! [`terminal_panes_and_the_drawer_have_no_history`] and
+//! [`toggling_the_drawer_never_touches_a_survivor_panes_history`] assert that every terminal
+//! pane, the drawer included, is excluded from navigation history. Two mechanisms deliver it,
+//! and a regression in either is what those two tests catch:
 //!
-//!   * `wolf_buffers` emits are COALESCED onto the next event-loop tick
-//!     (`vim.schedule`), so the half-built states a multi-step command passes
-//!     through never reach core's fold as entries of their own — neither the
-//!     `botright split` whose brand-new window still shows the PREVIOUS buffer, nor
-//!     the `:terminal` whose `buftype` only becomes `"terminal"` at `TermOpen`.
-//!   * `_G.wolf_toggle_terminal`'s OPEN path runs inside `_G.wolf_suppress_buffers`,
-//!     which drops emits mid-build and re-emits exactly ONCE at the end, so core
-//!     sees only the fully-tagged final state. It is `pcall`-guarded, so the flag is
-//!     restored even when a build step throws.
-//!   * the `wolf_buffers` tuple's `is_drawer` element ORs the BUFFER tag
-//!     (`b:wolf_terminal`, carried by the shared terminal buffer) with the WINDOW
-//!     tag (`w:wolf_terminal`, set on the drawer window right after its split).
+//!   * core derives no target for a window whose `WinBuffer.terminal` carries a session, and
+//!     prunes that window's stack, so a window that becomes a terminal pane through
+//!     `:terminal` loses the entries it had and Back cannot replace its placeholder;
+//!   * `_G.wolf_toggle_terminal`'s OPEN path runs inside `_G.wolf_suppress_buffers`, which
+//!     drops emits mid-build and re-emits exactly ONCE at the end, so the `botright split`
+//!     whose brand-new window still shows the PREVIOUS buffer never reaches core's fold.
 
 mod common;
 
@@ -619,19 +612,17 @@ fn preview_transition_and_link_follow_are_tracked() {
     core.shutdown().expect("shutdown should be Ok");
 }
 
-// === 3. Terminals: a split :terminal is tracked; the drawer is not ===
+// === 3. Terminals: neither a terminal pane nor the drawer has history ===
 
-/// A `:terminal` in a NORMAL split becomes a `Terminal { bufnr }` entry in THAT
-/// pane's history (labeled `Terminal`), while the terminal DRAWER
-/// (`toggle_terminal`) gets NO history at all.
+/// Typing `:terminal` in a NORMAL split turns that window into a terminal pane, and its
+/// history is dropped: no rows, no Back. The terminal DRAWER (`toggle_terminal`) gets NO
+/// history either.
 ///
-/// The growth assertion guards the emit-coalescing fix: `buftype` only becomes
-/// `"terminal"` at `TermOpen`, so folding every autocmd separately pushes THREE
-/// entries for one `:terminal` (`Untitled{n}` -> `Edit("term://…")` ->
-/// `Terminal{n}`). It is written as RELATIVE growth because the startup buffer
-/// gives every pane an extra `Edit` entry, so absolute depth is not assertable.
+/// The split's `a.md` row is asserted BEFORE the `:terminal`, so the empty stack afterwards
+/// is a prune and not a window that never had history.
 #[test]
-fn split_terminal_is_tracked_but_the_drawer_pane_never_gets_history() {
+fn terminal_panes_and_the_drawer_have_no_history() {
+    common::pin_default_shell();
     let cwd = common::fresh_cwd();
     seed_three_markdown_files(&cwd);
 
@@ -642,7 +633,7 @@ fn split_terminal_is_tracked_but_the_drawer_pane_never_gets_history() {
     ex_command(&core, "e a.md");
     poll_pane_filename(&core, &waiter, grid, "a.md");
 
-    // --- 1. A :terminal in a NORMAL split IS in that pane's history ---------
+    // --- 1. A :terminal in a NORMAL split drops that pane's history ----------
     ex_command(&core, "vsplit");
     poll_until(
         &waiter,
@@ -654,8 +645,7 @@ fn split_terminal_is_tracked_but_the_drawer_pane_never_gets_history() {
         |&ok| ok,
     );
 
-    // `:vsplit` focuses the NEW window, which inherits a.md. Measure that pane's
-    // rows BEFORE the `:terminal`, so the growth below is relative.
+    // `:vsplit` focuses the NEW window, which inherits a.md.
     let split_win = poll_win_where(&core, &waiter, "the second (split) window", |snap| {
         snap.windows.values().map(|w| w.win).find(|w| *w != win_a)
     });
@@ -663,61 +653,46 @@ fn split_terminal_is_tracked_but_the_drawer_pane_never_gets_history() {
         &core,
         &waiter,
         split_win,
-        "an a.md row on top of the split",
+        "an a.md row on top of the split before the :terminal",
         |rows| !rows.is_empty() && rows[0].display == "a.md",
     );
-    settle(&waiter, HISTORY_SETTLE);
-    let rows_before = displays(&core.history_entries(split_win));
 
     ex_command(&core, "terminal");
-
     let term_win = poll_win_where(
         &core,
         &waiter,
-        "a non-drawer terminal window in win_buffers",
+        "a non-drawer window whose WinBuffer carries a session; none means typed `:terminal` \
+         opened no core session (no abbreviation, or no `wolf_terminal_open` handler)",
         |snap| {
             snap.win_buffers
                 .iter()
-                .find(|(_, b)| b.is_terminal && !b.is_drawer)
+                .find(|(_, b)| b.terminal.is_some() && !b.is_drawer)
                 .map(|(w, _)| *w)
         },
     );
     assert_eq!(
         term_win, split_win,
-        "`:terminal` replaces the SPLIT window's buffer in place"
-    );
-    let rows = poll_history(&core, &waiter, term_win, "a Terminal row on top", |rows| {
-        !rows.is_empty() && rows[0].display == "Terminal"
-    });
-    assert!(
-        rows.len() >= 2 && rows[1].display == "a.md",
-        "the split inherited a.md, so Terminal sits ON TOP of an Edit(a) entry: {:?}",
-        displays(&rows)
-    );
-    assert!(
-        core.history_can_back(term_win),
-        "the split-terminal pane can go back to a.md"
+        "`:terminal` must open the session in the current (split) window, not in window \
+         {term_win}"
     );
 
-    // ONE user action => EXACTLY ONE new entry.
     settle(&waiter, HISTORY_SETTLE);
-    let rows_after = displays(&core.history_entries(term_win));
-    assert_eq!(
-        rows_after.len(),
-        rows_before.len() + 1,
-        "one `:terminal` must grow the pane's stack by EXACTLY ONE entry — the \
-         intermediate `Untitled{{n}}` / `Edit(\"term://…\")` states nvim passes \
-         through must never be folded as their own entries. Before: {rows_before:?}, \
-         after: {rows_after:?}"
+    assert!(
+        core.history_entries(term_win).is_empty(),
+        "a window that became a terminal pane must lose its history; rows {:?} mean the fold \
+         does not prune a terminal pane (its a.md row survives) or derives a target for it",
+        displays(&core.history_entries(term_win))
     );
-    assert_eq!(
-        &rows_after[1..],
-        &rows_before[..],
-        "the Terminal entry sits on top of the pane's previous rows, unchanged"
+    assert!(
+        !core.history_can_back(term_win),
+        "a terminal pane can never go back: Back would replace, and wipe, its placeholder"
+    );
+    assert!(
+        !core.history_entries(win_a).is_empty(),
+        "the other pane's history must be untouched by the split's :terminal"
     );
 
-    // --- 2. The drawer gets no history. `toggle_terminal` ends in `startinsert`, so no Ex commands
-    // are sent after this point.
+    // --- 2. The drawer gets no history -----------------------------------------
     let before = win_handles(&core);
     core.toggle_terminal();
     let drawer_win = poll_win_where(&core, &waiter, "the drawer window to appear", |snap| {
@@ -728,12 +703,12 @@ fn split_terminal_is_tracked_but_the_drawer_pane_never_gets_history() {
     });
     poll_until(
         &waiter,
-        "win_buffers to mark the drawer window with is_drawer",
+        "win_buffers to mark the drawer window with is_drawer and a session",
         || {
             let snap = core.read_snapshot();
             snap.win_buffers
                 .get(&drawer_win)
-                .is_some_and(|b| b.is_drawer)
+                .is_some_and(|b| b.is_drawer && b.terminal.is_some())
         },
         |&ok| ok,
     );
@@ -888,7 +863,7 @@ fn closing_a_window_prunes_its_history() {
 
 // === 6. A failed restore reverts the cursor ===
 
-/// When the recorded target no longer exists (a WIPED `Terminal` bufnr), the Lua
+/// When the recorded target no longer exists (a WIPED `Untitled` bufnr), the Lua
 /// helper (`_G.wolf_history_set_buf`, which returns `0` for an invalid buffer)
 /// makes `history_back` report `false`, and the cursor is REVERTED — so Back stays
 /// available and the pane does not silently drift.
@@ -897,21 +872,17 @@ fn closing_a_window_prunes_its_history() {
 /// wiring (revert is otherwise exercised headlessly at the `PaneHistory` level),
 /// so all three properties below are load-bearing.
 ///
-/// ## Why a `Terminal` target and not an `Untitled` one
+/// ## Why a MODIFIED unnamed buffer
 ///
-/// An earlier version of this test wiped the buffer left by a raw `:enew`. That
-/// premise is WRONG against the pinned nvim: `:e a.md` REUSES the empty unnamed
-/// buffer `:enew` created (probed: `after :enew bufnr=1`, `after :e a.md bufnr=1,
-/// reused=true`), so the "doomed" bufnr WAS a.md's buffer. Wiping it therefore
-/// wiped the DISPLAYED buffer, moved the window back to the startup buffer (a
-/// genuine pane change that pushed a fourth entry), and left Back targeting an
-/// `Edit(a.md)` PATH target that `bufadd` happily recreates — so `history_back`
-/// correctly returned `true` and nothing about the revert path was tested.
+/// `:e a.md` REUSES the empty unnamed buffer a raw `:enew` leaves (probed against the
+/// pinned nvim: `after :enew bufnr=1`, `after :e a.md bufnr=1, reused=true`), so wiping
+/// that bufnr would wipe the DISPLAYED buffer, move the window, and leave Back targeting
+/// an `Edit(a.md)` that `bufadd` recreates — testing nothing about the revert path.
 ///
-/// A `:terminal` buffer is immune to both problems: `:e` never reuses it, and
-/// wiping a buffer that is NOT displayed anywhere does not move the window. The
-/// window here is the SAME one throughout, so the pane genuinely cannot drift for
-/// any reason other than a (wrongly) successful Back.
+/// Neovim reuses only a buffer that is empty, unnamed and unmodified, so the buffer here
+/// is given a line with `setline`: `:e` cannot reuse it, and wiping a buffer that is NOT
+/// displayed anywhere does not move the window. The window is the SAME one throughout, so
+/// the pane cannot drift for any reason other than a (wrongly) successful Back.
 #[test]
 fn a_failed_back_returns_false_and_reverts_the_cursor() {
     let cwd = common::fresh_cwd();
@@ -921,17 +892,17 @@ fn a_failed_back_returns_false_and_reverts_the_cursor() {
     let grid = wait_for_active_window_grid(&core, &waiter);
     let win = wait_for_win_handle(&core, &waiter, grid);
 
-    // `:terminal` in this window, recorded as `Terminal { bufnr }`. Unlike the drawer it does not
-    // `startinsert`, so the Ex commands below still reach the cmdline.
-    ex_command(&core, "terminal");
+    // A raw `:enew` bypasses `wolf_new_untitled`, so the buffer is unnamed: `Untitled { bufnr }`.
+    ex_command(&core, "enew");
+    ex_command(&core, "call setline(1, 'doomed')");
     poll_until(
         &waiter,
-        "win_buffers to report a non-drawer terminal for this window",
+        "win_buffers to report an unnamed buffer for this window",
         || {
             let snap = core.read_snapshot();
             snap.win_buffers
                 .get(&win)
-                .is_some_and(|b| b.is_terminal && !b.is_drawer)
+                .is_some_and(|b| b.path.is_none() && b.terminal.is_none())
         },
         |&ok| ok,
     );
@@ -941,18 +912,25 @@ fn a_failed_back_returns_false_and_reverts_the_cursor() {
         .get(&win)
         .map(|b| b.bufnr)
         .expect("the window must have a WinBuffer entry");
-    assert!(doomed_bufnr > 0, "the terminal buffer has a real bufnr");
-    poll_history(&core, &waiter, win, "a Terminal row on top", |rows| {
-        !rows.is_empty() && rows[0].display == "Terminal"
+    assert!(doomed_bufnr > 0, "the unnamed buffer has a real bufnr");
+    poll_history(&core, &waiter, win, "an Untitled row on top", |rows| {
+        !rows.is_empty() && rows[0].display == "Untitled"
     });
 
-    // Navigate away in the SAME window ('hidden' is on, so the terminal buffer
+    // Navigate away in the SAME window ('hidden' is on, so the modified buffer
     // survives as a hidden buffer), then WIPE it out from under history.
     ex_command(&core, "e a.md");
     poll_pane_filename(&core, &waiter, grid, "a.md");
     poll_history(&core, &waiter, win, "an a.md row on top", |rows| {
         !rows.is_empty() && rows[0].display == "a.md"
     });
+    let shown_bufnr = core.read_snapshot().win_buffers.get(&win).map(|b| b.bufnr);
+    assert_ne!(
+        shown_bufnr,
+        Some(doomed_bufnr),
+        "`:e a.md` must open a.md in a NEW buffer; the same bufnr means it reused the doomed \
+         buffer, so the wipe below would move the pane and this test would prove nothing"
+    );
     assert!(
         core.history_can_back(win),
         "Back must be available BEFORE the wipe, or this test proves nothing"
@@ -965,7 +943,7 @@ fn a_failed_back_returns_false_and_reverts_the_cursor() {
     assert_eq!(
         core.pane_status(grid).filename,
         "a.md",
-        "wiping the hidden terminal buffer must not move the pane"
+        "wiping the hidden unnamed buffer must not move the pane"
     );
     let rows_before = displays(&core.history_entries(win));
 
@@ -982,13 +960,15 @@ fn a_failed_back_returns_false_and_reverts_the_cursor() {
         "a.md",
         "the pane must not have moved"
     );
-    let still_showing_a_file = {
+    let still_showing_a_md = {
         let snap = core.read_snapshot();
-        snap.win_buffers.get(&win).is_some_and(|b| !b.is_terminal)
+        snap.win_buffers
+            .get(&win)
+            .is_some_and(|b| b.path.as_ref().is_some_and(|p| p.ends_with("a.md")))
     };
     assert!(
-        still_showing_a_file,
-        "the window is still showing the file buffer, not a terminal"
+        still_showing_a_md,
+        "the window is still showing a.md, not another buffer"
     );
 
     // --- 3. the cursor was REVERTED -----------------------------------------
@@ -1129,7 +1109,7 @@ fn win_buffers_carries_bufnrs_unnamed_windows_and_skips_previews() {
             .get(&win)
             .expect("win_buffers must contain the window");
         assert!(entry.bufnr > 0, "win_buffers carries a real nvim bufnr");
-        assert!(!entry.is_terminal, "a.md is not a terminal buffer");
+        assert_eq!(entry.terminal, None, "a.md is not a terminal pane");
         assert!(!entry.is_drawer, "a.md is not the drawer");
         assert_eq!(
             snap.buffers.get(&win),
@@ -1412,7 +1392,7 @@ fn back_to_a_symlinked_path_rebinds_the_same_buffer() {
 /// Opening AND then hiding the terminal drawer must never push into a REAL pane's
 /// history.
 ///
-/// [`split_terminal_is_tracked_but_the_drawer_pane_never_gets_history`] covers the
+/// [`terminal_panes_and_the_drawer_have_no_history`] covers the
 /// drawer's OWN (empty) history on the open path. This covers the SURVIVOR pane
 /// across the full round trip: the OPEN path needs `wolf_suppress_buffers` (the
 /// `botright split` fires `WinNew`/`WinEnter` while the new window still shows the
@@ -1421,6 +1401,7 @@ fn back_to_a_symlinked_path_rebinds_the_same_buffer() {
 /// unchanged so the fold sees nothing new.
 #[test]
 fn toggling_the_drawer_never_touches_a_survivor_panes_history() {
+    common::pin_default_shell();
     let cwd = common::fresh_cwd();
     seed_three_markdown_files(&cwd);
 
@@ -1470,8 +1451,7 @@ fn toggling_the_drawer_never_touches_a_survivor_panes_history() {
         displays(&core.history_entries(drawer_win))
     );
 
-    // --- 2. Hide the drawer: `toggle_terminal` is an exec_lua RPC, so it works from the
-    // terminal-insert mode the drawer left nvim in.
+    // --- 2. Hide the drawer ---------------------------------------------------
     core.toggle_terminal();
     poll_until(
         &waiter,
@@ -1516,7 +1496,7 @@ fn toggling_the_drawer_never_touches_a_survivor_panes_history() {
 
 // === 11. A failed Back to a preview target reverts the cursor ===
 
-/// The OTHER realistic failure, alongside the wiped `Terminal`
+/// The OTHER realistic failure, alongside the wiped `Untitled`
 /// bufnr that [`a_failed_back_returns_false_and_reverts_the_cursor`] covers: a
 /// `Preview` whose SOURCE file has been deleted from disk.
 ///

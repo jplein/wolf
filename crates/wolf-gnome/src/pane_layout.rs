@@ -70,6 +70,8 @@ pub struct LeafContent {
     pub path: String,
     /// Whether the pane shows a Markdown preview.
     pub preview: bool,
+    /// Whether the pane is a terminal pane, whose `path` is its shell's cwd.
+    pub terminal: bool,
 }
 
 /// What ONE leaf's Neovim window resolves to in the live snapshot.
@@ -86,6 +88,9 @@ pub enum WinContent {
     /// The window holds an ordinary buffer at the carried path
     /// (`Snapshot::win_buffers[win]`), `""` for a genuinely unnamed one.
     Buffer(String),
+    /// The window is a terminal pane (`Snapshot::win_buffers[win].terminal`) whose shell
+    /// is in the carried directory, `""` when core cannot read it.
+    Terminal(String),
     /// The window is in NEITHER map, or the leaf has no live pane at all.
     Unknown,
 }
@@ -115,6 +120,7 @@ pub enum LayoutGather {
 ///
 /// - [`WinContent::Preview`]`(p)` → `{path: p, preview: true}`;
 /// - [`WinContent::Buffer`]`(p)` → `{path: p, preview: false}`;
+/// - [`WinContent::Terminal`]`(cwd)` → `{path: cwd, terminal: true}`;
 /// - **any** [`WinContent::Unknown`] collapses the WHOLE answer to `None`.
 ///
 /// **An empty path is a RESOLVED answer and an absent window is not.** A `""` from
@@ -140,10 +146,17 @@ pub fn resolve_leaves(leaves: &[(PaneId, WinContent)]) -> Option<HashMap<PaneId,
                 WinContent::Preview(path) => LeafContent {
                     path: path.clone(),
                     preview: true,
+                    terminal: false,
                 },
                 WinContent::Buffer(path) => LeafContent {
                     path: path.clone(),
                     preview: false,
+                    terminal: false,
+                },
+                WinContent::Terminal(cwd) => LeafContent {
+                    path: cwd.clone(),
+                    preview: false,
+                    terminal: true,
                 },
                 WinContent::Unknown => return None,
             };
@@ -155,7 +168,7 @@ pub fn resolve_leaves(leaves: &[(PaneId, WinContent)]) -> Option<HashMap<PaneId,
 /// Maps a live [`PaneLayout`] (leaf IDs) into a persistable [`PaneNode`] (leaf
 /// PATHS), looking each leaf id up in `contents`.
 ///
-/// A leaf id MISSING from `contents` becomes `Leaf { path: "", preview: false }`
+/// A leaf id MISSING from `contents` becomes an empty leaf, `Leaf { path: "", .. }`
 /// (an unbound or unnamed pane persists as an empty leaf) rather than
 /// being dropped, because dropping it would change the topology and desynchronise
 /// the DFS zip the restore path depends on. That fallback is DEFENSIVE: the gather
@@ -173,6 +186,7 @@ pub fn encode(layout: &PaneLayout, contents: &HashMap<PaneId, LeafContent>) -> P
             PaneNode::Leaf {
                 path: content.path,
                 preview: content.preview,
+                terminal: content.terminal,
             }
         }
         PaneLayout::Split {
@@ -190,15 +204,19 @@ pub fn encode(layout: &PaneLayout, contents: &HashMap<PaneId, LeafContent>) -> P
 }
 
 /// The "suppress from persistence" CONTENT predicate: `true` **iff** `node` is
-/// `Leaf { path: "", preview: false }`.
+/// `Leaf { path: "", preview: false, terminal: false }`.
 ///
-/// A preview leaf, a leaf with a non-empty path, and EVERY split — including a
+/// A preview leaf, a terminal leaf, a leaf with a non-empty path, and EVERY split — including a
 /// split of two empty leaves — are `false`. **This is NEVER an arity test**; see
 /// the module docs for the bug that arity guard caused.
 #[must_use]
 pub fn is_empty_leaf(node: &PaneNode) -> bool {
     match node {
-        PaneNode::Leaf { path, preview } => path.is_empty() && !preview,
+        PaneNode::Leaf {
+            path,
+            preview,
+            terminal,
+        } => path.is_empty() && !preview && !terminal,
         PaneNode::Split { .. } => false,
     }
 }
@@ -359,6 +377,7 @@ mod tests {
         PaneNode::Leaf {
             path: path.to_string(),
             preview: false,
+            terminal: false,
         }
     }
 
@@ -368,6 +387,7 @@ mod tests {
         PaneNode::Leaf {
             path: path.to_string(),
             preview: true,
+            terminal: false,
         }
     }
 
@@ -376,6 +396,7 @@ mod tests {
         LeafContent {
             path: path.to_string(),
             preview: false,
+            terminal: false,
         }
     }
 
@@ -384,6 +405,7 @@ mod tests {
         LeafContent {
             path: path.to_string(),
             preview: true,
+            terminal: false,
         }
     }
 
@@ -560,6 +582,7 @@ mod tests {
         match content {
             WinContent::Preview(_) => "Preview",
             WinContent::Buffer(_) => "Buffer",
+            WinContent::Terminal(_) => "Terminal",
             WinContent::Unknown => "Unknown",
         }
     }
@@ -571,7 +594,7 @@ mod tests {
     /// tautology: a table that lost its `Unknown` rows would shrink both sides
     /// together. [`win_content_kind`]'s total match is what ties these strings back to
     /// the enum.
-    const ALL_WIN_CONTENT_KINDS: [&str; 3] = ["Preview", "Buffer", "Unknown"];
+    const ALL_WIN_CONTENT_KINDS: [&str; 4] = ["Preview", "Buffer", "Terminal", "Unknown"];
 
     /// A leaf whose Neovim window resolves to an ordinary editable buffer at `path`.
     fn buffer_win(path: &str) -> WinContent {
@@ -622,6 +645,25 @@ mod tests {
                        true`",
                 leaves: vec![(P0, preview_win("")), (P1, buffer_win(PATH_B))],
                 want: Some(vec![(P0, preview_pane("")), (P1, editor_pane(PATH_B))]),
+            },
+            ResolveCase {
+                desc: "a terminal pane resolves to a terminal leaf whose path is its shell's \
+                       cwd, beside a buffer leaf",
+                leaves: vec![
+                    (P0, WinContent::Terminal(PATH_A.to_string())),
+                    (P1, buffer_win(PATH_B)),
+                ],
+                want: Some(vec![
+                    (
+                        P0,
+                        LeafContent {
+                            path: PATH_A.to_string(),
+                            preview: false,
+                            terminal: true,
+                        },
+                    ),
+                    (P1, editor_pane(PATH_B)),
+                ]),
             },
             ResolveCase {
                 // T2's row, and the keystone of the whole design.
@@ -693,9 +735,10 @@ mod tests {
                     .iter()
                     .any(|(_, content)| win_content_kind(content) == kind)),
                 "no resolve_leaves row carries a {kind} leaf, so that arm's answer is untested. \
-                 Every one of the three is reachable from a real snapshot: a converted pane is a \
-                 Preview, an ordinary pane is a Buffer, and a pane whose Neovim window is in \
-                 neither `previews` nor `win_buffers` is Unknown."
+                 Every one of the four is reachable from a real snapshot: a converted pane is a \
+                 Preview, an ordinary pane is a Buffer, a pane showing a session is a Terminal, \
+                 and a pane whose Neovim window is in neither `previews` nor `win_buffers` is \
+                 Unknown."
             );
         }
 
@@ -819,6 +862,7 @@ mod tests {
             &LeafContent {
                 path: String::new(),
                 preview: false,
+                terminal: false,
             },
             "an unnamed buffer must resolve to an EMPTY, non-preview leaf — the value \
              `is_empty_leaf` suppresses when it is alone, which is the pre-existing empty-state \

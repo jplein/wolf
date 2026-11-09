@@ -9,7 +9,7 @@
 //! ## Why the drawer is not a [`PaneTree`] leaf
 //!
 //! It lives OUTSIDE the tree, which is what forces this module to exist at all. The
-//! durable reasons (a `term://` string kept out of `state.json`, a divider fraction
+//! durable reasons (a drawer kept out of `state.json`, a divider fraction
 //! with nowhere to live, every `neighbor` result left unperturbed) are in
 //! `notes/wolf-gnome-decisions.md#window-structure`. The price is paid here: a pane the tree cannot
 //! see needs its own height rule and its own focus bridge.

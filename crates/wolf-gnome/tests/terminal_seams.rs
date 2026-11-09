@@ -1,24 +1,28 @@
 //! Table-driven tests for the pure seams behind a terminal pane: `terminal::style`,
 //! `terminal::damage`, `terminal::geometry`, `terminal::input`, the smoke hook's parse,
-//! `scrollbar::terminal_viewport` and `clipboard_ui::copy_decision`'s terminal arm.
+//! `scrollbar::terminal_viewport`, `clipboard_ui::copy_decision`'s terminal arm,
+//! `liveness_ui::terminal_restore`, and `pane_layout`'s terminal leaf.
 //!
 //! No display, no Neovim and no session: every input is a hand-built `TerminalCell`,
 //! `TerminalFrame` or literal, and every expected value is written out by hand, never
 //! computed by the function under test. What the widgets do with these answers is
 //! `terminal_paint.rs`'s and the terminal-pane cage smoke's.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use gdk::ModifierType;
 
 use wolf_core::{
-    Key, KeyEvent, Liveness, MouseButton, ResolvedStyle, Rgb, TerminalCell, TerminalCellWidth,
-    TerminalCommand, TerminalCursor, TerminalCursorStyle, TerminalFrame, TerminalId,
-    TerminalScrollbar, TerminalUnderline,
+    Key, KeyEvent, Liveness, MouseButton, PaneNode, PaneOrientation, ResolvedStyle, Rgb,
+    TerminalCell, TerminalCellWidth, TerminalCommand, TerminalCursor, TerminalCursorStyle,
+    TerminalFrame, TerminalId, TerminalScrollbar, TerminalUnderline,
 };
 use wolf_gnome::clipboard_ui::{copy_decision, CopyPress};
 use wolf_gnome::editor_inset::GridRect;
-use wolf_gnome::layout::PaneId;
+use wolf_gnome::layout::{Orientation, PaneId, PaneLayout};
+use wolf_gnome::liveness_ui::{terminal_restore, TerminalRestore};
+use wolf_gnome::pane_layout::{encode, is_empty_leaf, resolve_leaves, WinContent};
 use wolf_gnome::scrollbar::terminal_viewport;
 use wolf_gnome::terminal::damage::{effective_painted_version, rows_to_repaint, PaintKey};
 use wolf_gnome::terminal::geometry::{pointer_pixels, size, sizer, TerminalSize};
@@ -886,4 +890,133 @@ fn copy_in_a_terminal_pane_needs_a_core_but_not_a_live_neovim() {
             copy_decision(liveness, None)
         );
     }
+}
+
+#[test]
+fn terminal_restore_puts_live_splits_in_order_then_the_drawer() {
+    use TerminalRestore::{Drawer, Split};
+    let t = TerminalId;
+    struct Case {
+        name: &'static str,
+        splits: Vec<TerminalId>,
+        drawer_open: bool,
+        live: Vec<TerminalId>,
+        want: Vec<TerminalRestore>,
+    }
+    let cases = [
+        Case {
+            name: "no sessions and no drawer restore nothing",
+            splits: vec![],
+            drawer_open: false,
+            live: vec![],
+            want: vec![],
+        },
+        Case {
+            name: "splits come back in ascending id order; another order means they are not sorted",
+            splits: vec![t(3), t(1), t(2)],
+            drawer_open: false,
+            live: vec![t(1), t(2), t(3)],
+            want: vec![Split(t(1)), Split(t(2)), Split(t(3))],
+        },
+        Case {
+            name: "a session captured twice is restored once",
+            splits: vec![t(2), t(2), t(1)],
+            drawer_open: false,
+            live: vec![t(1), t(2)],
+            want: vec![Split(t(1)), Split(t(2))],
+        },
+        Case {
+            name: "a session that died across the restart is skipped (no live filter: Split(4))",
+            splits: vec![t(1), t(4), t(2)],
+            drawer_open: false,
+            live: vec![t(1), t(2)],
+            want: vec![Split(t(1)), Split(t(2))],
+        },
+        Case {
+            name: "an open drawer comes back LAST, after every split, so a split never lands in it",
+            splits: vec![t(2), t(1)],
+            drawer_open: true,
+            live: vec![t(1), t(2), t(5)],
+            want: vec![Split(t(1)), Split(t(2)), Drawer],
+        },
+        Case {
+            name: "an open drawer comes back with no live session: the toggle starts one",
+            splits: vec![],
+            drawer_open: true,
+            live: vec![],
+            want: vec![Drawer],
+        },
+    ];
+    for case in cases {
+        assert_eq!(
+            terminal_restore(&case.splits, case.drawer_open, &case.live),
+            case.want,
+            "terminal_restore({:?}, {}, {:?}): {}",
+            case.splits,
+            case.drawer_open,
+            case.live,
+            case.name
+        );
+    }
+}
+
+#[test]
+fn a_terminal_pane_persists_as_a_terminal_leaf() {
+    let (editor, terminal, lone): (PaneId, PaneId, PaneId) = (1, 2, 3);
+    let contents = resolve_leaves(&[
+        (editor, WinContent::Buffer("/proj/a.md".to_owned())),
+        (terminal, WinContent::Terminal("/proj/sub".to_owned())),
+        (lone, WinContent::Terminal(String::new())),
+    ])
+    .expect("every pane resolves, so resolve_leaves must not refuse");
+    let layout = PaneLayout::Split {
+        orientation: Orientation::Vertical,
+        children: vec![PaneLayout::Leaf(editor), PaneLayout::Leaf(terminal)],
+        weights: vec![0.25, 0.75],
+    };
+    assert_eq!(
+        encode(&layout, &contents),
+        PaneNode::Split {
+            orientation: PaneOrientation::Vertical,
+            weights: vec![0.25, 0.75],
+            children: vec![
+                PaneNode::Leaf {
+                    path: "/proj/a.md".to_owned(),
+                    preview: false,
+                    terminal: false,
+                },
+                PaneNode::Leaf {
+                    path: "/proj/sub".to_owned(),
+                    preview: false,
+                    terminal: true,
+                },
+            ],
+        },
+        "a terminal pane must encode as a terminal leaf carrying its cwd, beside an editor leaf \
+         that is not one; `terminal: false` on the second leaf means WinContent::Terminal \
+         resolves like a buffer"
+    );
+
+    let lone_node = encode(&PaneLayout::Leaf(lone), &contents);
+    assert_eq!(
+        lone_node,
+        PaneNode::Leaf {
+            path: String::new(),
+            preview: false,
+            terminal: true,
+        },
+        "a lone terminal pane with no known cwd must encode as a terminal leaf with an empty path"
+    );
+    assert!(
+        !is_empty_leaf(&lone_node),
+        "a lone terminal leaf is not an empty-state pane and must persist; true means \
+         is_empty_leaf ignores `terminal`"
+    );
+    let empty_contents: HashMap<PaneId, _> =
+        resolve_leaves(&[(lone, WinContent::Buffer(String::new()))])
+            .expect("an unnamed buffer resolves");
+    assert!(
+        is_empty_leaf(&encode(&PaneLayout::Leaf(lone), &empty_contents)),
+        "control: a lone unnamed editor pane is still the empty leaf the predicate suppresses"
+    );
 }

@@ -29,11 +29,11 @@
 //! DISTINCT filenames (per-window, not global).
 //!
 //! A second test opens the terminal drawer with `toggle_terminal()` and asserts
-//! that its grid, whose `abs_path()` is the raw `term://…//<pid>:/bin/sh` name,
-//! reports `filename() == "sh"` and an empty `display_path()`. It sets `SHELL` to
-//! `/bin/sh` before start, because Neovim's default `shell` is `$SHELL` and the
-//! drawer's `:terminal` names its buffer after it. The first test opens no
-//! terminal, so the process-global `SHELL` does not reach what it asserts.
+//! that its grid, which shows a core session's unnamed placeholder, reports the
+//! session's shell, `filename() == "sh"`, with an empty `display_path()` and
+//! `abs_path()`. It pins `SHELL` to `/bin/sh` before start, because the drawer runs
+//! the default shell. The first test opens no terminal, so the process-global
+//! `SHELL` does not reach what it asserts.
 
 mod common;
 
@@ -54,6 +54,9 @@ const POLL_INTERVAL: Duration = Duration::from_millis(50);
 const KIND_CHAR: u8 = 0;
 /// The Enter / Return key (executes the typed Ex command).
 const KIND_ENTER: u8 = 1;
+
+/// `intent_kind::DRAWER_OPEN`, the open path's intent naming the drawer window.
+const INTENT_DRAWER_OPEN: u8 = 2;
 
 // -- Window grids -------------------------------------------------------------
 /// The lowest real WINDOW grid id (grid 1 is the outer global grid / cmdline
@@ -259,13 +262,8 @@ fn pane_status_reports_shell_name_for_terminal_drawer() {
     };
     std::env::set_var("WOLF_NVIM_BIN", &nvim_bin);
 
-    // Neovim's default `shell` is `$SHELL`, so the drawer's buffer name ends in `:/bin/sh`.
-    let shell = std::path::Path::new("/bin/sh");
-    assert!(
-        shell.exists(),
-        "/bin/sh must exist: this test pins the drawer's shell to it so the expected name is fixed"
-    );
-    std::env::set_var("SHELL", shell);
+    // The drawer runs the default shell, so its name is fixed by pinning `SHELL`.
+    common::pin_default_shell();
 
     let init_lua = common::init_lua_path();
     let tmp = tempfile::tempdir().expect("failed to create temp cwd directory");
@@ -294,46 +292,47 @@ fn pane_status_reports_shell_name_for_terminal_drawer() {
         frame.cols()
     );
 
-    // --- 2. Open the drawer; poll for the grid whose raw buffer name is a terminal.
+    // --- 2. Open the drawer; poll for its window's grid and its session.
+    let _ = handle.drain_intents();
     handle.toggle_terminal();
-
     let deadline = Instant::now() + FLUSH_TIMEOUT;
-    let drawer_grid = loop {
-        let grids = live_windows(&handle);
-        let seen: Vec<String> = grids
-            .iter()
-            .map(|(g, _)| handle.pane_status_for_grid(*g).abs_path())
-            .collect();
-        if let Some((g, _)) = grids.iter().find(|(g, _)| {
-            handle
-                .pane_status_for_grid(*g)
-                .abs_path()
-                .starts_with("term://")
-        }) {
-            break *g;
+    let drawer_win = loop {
+        if let Some(intent) = handle
+            .drain_intents()
+            .into_iter()
+            .find(|intent| intent.kind() == INTENT_DRAWER_OPEN)
+        {
+            break intent.win();
         }
         assert!(
             Instant::now() < deadline,
-            "timed out waiting for a window grid whose abs_path() is a `term://` drawer buffer; \
-             without one the terminal arm has no input to act on (abs_paths seen: {seen:?})"
+            "timed out waiting for the DRAWER_OPEN intent after toggle_terminal()"
+        );
+        sleep(POLL_INTERVAL);
+    };
+    let deadline = Instant::now() + FLUSH_TIMEOUT;
+    let drawer_grid = loop {
+        let grid = handle.grid_for_win(drawer_win);
+        if grid != 0 && handle.win_buffer(drawer_win).terminal() != 0 {
+            break grid;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for the drawer window {drawer_win} to have a grid and a session \
+             (grid {grid}, session {}); without a session the status has nothing to name",
+            handle.win_buffer(drawer_win).terminal()
         );
         sleep(POLL_INTERVAL);
     };
 
     // --- 3. The drawer's statusbar strings ------------------------------------
     let st = handle.pane_status_for_grid(drawer_grid);
-    let abs = st.abs_path();
     assert_eq!(
-        st.display_path(),
-        "",
-        "the drawer pane (abs_path {abs:?}) must have an empty display_path, so no path line \
-         is drawn; the raw `term://` name here means pane_status has no terminal arm"
-    );
-    assert_eq!(
-        st.filename(),
-        "sh",
-        "the drawer pane (abs_path {abs:?}) must display as its shell's name; another value \
-         means the arm misparsed the name, or Neovim did not take its shell from $SHELL"
+        (st.filename(), st.display_path(), st.abs_path()),
+        ("sh".to_owned(), String::new(), String::new()),
+        "the drawer pane must display as its session's shell, `sh`, with empty paths. \
+         `[No Name]` means pane_status read the unnamed placeholder instead of the session; a \
+         `term://` path means the drawer is still a Neovim terminal buffer"
     );
 
     // --- 4. Shutdown: clean teardown ----------------------------------------

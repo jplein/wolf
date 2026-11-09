@@ -65,7 +65,7 @@ const TERMINAL_SCHEME: &str = "term://";
 /// How long to let late `wolf_open_files` emits land before the mirror is read.
 ///
 /// Generous, and deliberately a settle rather than another poll — see
-/// [`open_files_omits_a_terminal_buffer`] for why no level-triggered predicate can
+/// [`open_files_omits_special_buffers`] for why no level-triggered predicate can
 /// do this job. Mirrors `nav_history_live.rs`'s `HISTORY_SETTLE`.
 const MIRROR_SETTLE: Duration = Duration::from_secs(2);
 
@@ -170,17 +170,14 @@ fn settle(waiter: &FlushWaiter, dur: Duration) {
     }
 }
 
-/// Whether `b` is the drawer's window AND its terminal buffer already carries its
-/// `term://<cwd>//<pid>:<cmd>` name.
+/// Whether `b` is a window showing a scripted Neovim terminal that already carries its
+/// `term://<cwd>//<pid>:<cmd>` name, and is neither the drawer nor a core session's pane.
 ///
-/// All three clauses matter to [`open_files_omits_a_terminal_buffer`]: `is_drawer`
-/// separates the drawer from a `:terminal` in an ordinary split, `is_terminal` says
-/// a job is really running in it, and the name is what `init.lua`'s `listed_files()`
-/// keys on — an unnamed terminal buffer is dropped from the mirror by a rule that
-/// has nothing to do with the filter under test.
-fn is_named_drawer(b: &WinBuffer) -> bool {
-    b.is_terminal
-        && b.is_drawer
+/// The name is what `init.lua`'s `listed_files()` would report without its `buftype` filter:
+/// an unnamed buffer is dropped from the mirror by a rule that has nothing to do with it.
+fn is_named_scripted_terminal(b: &WinBuffer) -> bool {
+    !b.is_drawer
+        && b.terminal.is_none()
         && b.path
             .as_deref()
             .and_then(|p| p.to_str())
@@ -469,9 +466,9 @@ fn restart_respawns_and_reopens_open_files() {
     drop((file_a, file_b));
 }
 
-/// The Tier-1 crash mirror carries NO terminal buffer: with the drawer open,
-/// `open_files_for_tabpage` reports no `term://` entry and its `active` is not the
-/// terminal, so `liveness_ui::reopen_order` cannot replay one.
+/// The Tier-1 crash mirror carries no special buffer: with a scripted Neovim terminal
+/// focused, `open_files_for_tabpage` reports no `term://` entry and no active path, so
+/// `liveness_ui::reopen_order` cannot replay one.
 ///
 /// ## Why this matters — MEASURED, not assumed
 ///
@@ -484,48 +481,31 @@ fn restart_respawns_and_reopens_open_files() {
 ///   `termopen()`.
 /// * **The pid inside the name changes** (`//78473:` -> `//78489:`) — the
 ///   conclusive discriminator. It is not the same buffer reopened, it is a NEW job.
-///   The name otherwise matches byte for byte, including the dead core's cwd, which
-///   no longer exists after a real crash.
 /// * **No error, no toast, no message.** Nothing surfaces to the user.
-/// * **No new grid or window** — the terminal DISPLACES the file in the pane it
-///   lands in, and `is_drawer` is false: a terminal squatting in an editor pane.
 /// * **It compounds.** The replayed buffer re-enters the mirror immediately, so
 ///   every crash+replay cycle spawns another shell and re-poisons the mirror. And
 ///   because `reopen_order` puts `active` LAST so it lands focused, a post-crash
 ///   window ends up focused on a freshly spawned shell.
-/// * **Control leg**: an ordinary missing path opens an empty named buffer and
-///   spawns nothing, so this is specific to the `term://` scheme.
 ///
-/// ## Why the drawer is opened, hidden and re-opened
+/// Wolf's own terminals are unnamed `nofile` placeholders and never reach the mirror by
+/// name. A script can still make a Neovim terminal (`jobstart({term=true})`), so the
+/// mirror filters on `buftype ~= ""`, which this test drives with one.
 ///
-/// Because the obvious three-line version of this test can pass with the filter
-/// DELETED, and nothing in its output would say so.
+/// ## Why focus leaves the terminal and comes back
 ///
-/// A FIRST open enters the terminal buffer BEFORE `termopen()` gives it its
-/// `term://<cwd>//<pid>:<cmd>` name, and `init.lua`'s `listed_files()` drops unnamed
-/// buffers. The `wolf_open_files` emit that `BufEnter` fires there therefore reports
-/// two files and no active path — byte-identical to the answer the filter produces.
-/// Whether a LATER emit re-reports the buffer once it is named rests on `BufFilePost`
-/// firing at the rename, which runtime/nvim/README.md#decisions records for
-/// `:terminal` (the `wolf_buffers` coalescing entry). That note is a premise this
-/// test would otherwise be resting on, and no level-triggered predicate could tell
-/// "the terminal was filtered out" from "the emit has not seen the name yet".
+/// `botright new` fires `BufEnter` on a buffer that is still unnamed, and `jobstart` names
+/// it afterwards. Whether a LATER emit re-reports the buffer once it is named rests on
+/// `BufFilePost` firing at the rename, and no level-triggered predicate could tell "the
+/// terminal was filtered out" from "the emit has not seen the name yet". Two `wincmd p`
+/// re-enter the named buffer, which fires `WinEnter` and `BufEnter`, both in
+/// `wolf_setup_open_files`' autocmd list, so the emit that follows sees the terminal as
+/// listed and as the tabpage's active buffer. Only the filter can then keep it out.
 ///
-/// Hiding and re-opening removes the premise instead of trusting it.
-/// `wolf_toggle_terminal` keeps the terminal buffer and its job alive across a hide,
-/// so the re-open takes the reuse branch and its `nvim_win_set_buf` fires
-/// `BufEnter` / `BufWinEnter` on a buffer that ALREADY carries its name. Those
-/// events are in `wolf_setup_open_files`'s own autocmd list, so the emit that
-/// follows sees the terminal in `getbufinfo({buflisted = 1})` and as the tabpage's
-/// active buffer — and the only thing that can then keep it out of the mirror is the
-/// filter. [`MIRROR_SETTLE`] absorbs any later emit before the read.
-///
-/// FALSIFYING EDIT: delete the `is_terminal_buffer_name` filter from
-/// `redraw::RedrawHandler::apply_open_files`. Predicted red: the `TabFiles` M20
-/// measured — `active: Some("term://…/bin/bash")` and a third `files` entry naming
-/// the same shell.
+/// FALSIFYING EDIT: drop the `buftype` filter from `listed_files()` and from the active
+/// path in `init.lua`'s `wolf_setup_open_files`. Predicted red: `active:
+/// Some("term://…/bin/sh")` and a third `files` entry naming the same shell.
 #[test]
-fn open_files_omits_a_terminal_buffer() {
+fn open_files_omits_special_buffers() {
     let (core, waiter) = common::start_core_sized(common::DEFAULT_COLS, common::DEFAULT_ROWS);
     let tab = attach_and_first_tabpage(&core, &waiter);
 
@@ -551,79 +531,62 @@ fn open_files_omits_a_terminal_buffer() {
         |&ok| ok,
     );
 
-    // Open the drawer through the production API, as the chord does, not `:terminal`. It ends in
-    // `startinsert`, so no Ex command may be sent from here on.
-    core.toggle_terminal();
-
-    // Wait for the `term://` name, which exists only once `termopen()` has run; this also keeps the
-    // hide toggle below from racing the open and building a second drawer.
+    // A scripted terminal, as a plugin would make one. `botright new | …` is not a whole
+    // cmdline `new`, so init.lua's abbreviation leaves it a raw split.
+    ex_command(
+        &core,
+        "botright new | call jobstart(['/bin/sh'], {'term': v:true})",
+    );
     poll_until(
         &waiter,
-        "win_buffers to report the drawer's terminal buffer carrying its term:// name",
+        "win_buffers to report the scripted terminal carrying its term:// name",
         || {
             core.read_snapshot()
                 .win_buffers
                 .values()
-                .any(is_named_drawer)
+                .any(is_named_scripted_terminal)
         },
         |&ok| ok,
     );
 
-    // Hide the drawer. The terminal BUFFER and its job survive (only the window
-    // closes), so it stays `buflisted` and stays in `listed_files()`.
-    core.toggle_terminal();
-    poll_until(
-        &waiter,
-        "the drawer window to be gone from win_buffers after the hide toggle",
-        || {
-            !core
-                .read_snapshot()
-                .win_buffers
-                .values()
-                .any(|b| b.is_terminal)
-        },
-        |&ok| ok,
-    );
+    // Leave and re-enter the named terminal, so an emit runs with it listed and active.
+    ex_command(&core, "wincmd p");
+    ex_command(&core, "wincmd p");
 
-    // Re-opening binds the already-named terminal buffer, so every autocmd sees `term://…`: that
-    // lets the assertions below tell "filtered out" from "not reported yet".
-    core.toggle_terminal();
-    poll_until(
-        &waiter,
-        "the drawer to come back with its named terminal buffer bound",
-        || {
-            core.read_snapshot()
-                .win_buffers
-                .values()
-                .any(is_named_drawer)
-        },
-        |&ok| ok,
-    );
-
-    // Read the drawer's live name from a different snapshot map, so the assertion compares two
-    // independently reported values rather than a literal typed here.
-    let drawer_name: PathBuf = {
+    // Read the terminal's live name from a different snapshot map, so the assertion compares
+    // two independently reported values rather than a literal typed here.
+    let terminal_name: PathBuf = {
         let snap = core.read_snapshot();
         snap.win_buffers
             .values()
-            .find(|b| is_named_drawer(b))
+            .find(|b| is_named_scripted_terminal(b))
             .and_then(|b| b.path.clone())
-            .expect("the poll above already matched a NAMED drawer terminal buffer")
+            .expect("the poll above already matched a NAMED scripted terminal")
     };
 
     settle(&waiter, MIRROR_SETTLE);
+    let focused_terminal = {
+        let snap = core.read_snapshot();
+        snap.active_win
+            .and_then(|win| snap.win_buffers.get(&win))
+            .is_some_and(is_named_scripted_terminal)
+    };
+    assert!(
+        focused_terminal,
+        "the two `wincmd p` must leave the scripted terminal focused, or the active-path \
+         assertion below proves nothing"
+    );
 
     let mirror = core
         .open_files_for_tabpage(tab)
-        .expect("the open-file mirror must still be present with the drawer open");
+        .expect("the open-file mirror must still be present with the terminal open");
 
     assert_eq!(
         mirror.active, None,
-        "with the drawer focused the tabpage's active buffer IS the terminal, and a \
-         terminal buffer is not a file to reopen — so the mirror must report NO \
-         active file. A `Some(\"term://…\")` here is M20's measured shape with the \
-         filter gone, and it is the worst half of the bug: `liveness_ui::reopen_order` \
-         puts `active` LAST so it lands focused, so a post-crash window would come \
+        "with the scripted terminal focused the tabpage's active buffer IS a terminal, \
+         which is not a file to reopen, so the mirror must report NO active file. A \
+         `Some(\"term://…\")` means the active path is not filtered on `buftype`, and \
+         `liveness_ui::reopen_order` puts `active` LAST so a post-crash window would come \
          back focused on a freshly spawned shell. Full mirror: {:?}",
         mirror.files
     );
@@ -642,11 +605,10 @@ fn open_files_omits_a_terminal_buffer() {
         terminal_entries.len()
     );
     assert!(
-        !mirror.files.contains(&drawer_name),
-        "the drawer's own buffer name, as `win_buffers` reports it ({drawer_name:?}), \
-         must be absent from the mirror. Its presence is the same defect the previous \
-         assertion describes, stated against the live value rather than the scheme, so \
-         a renamed scheme cannot hide it. Mirror: {:?}",
+        !mirror.files.contains(&terminal_name),
+        "the terminal's own buffer name, as `win_buffers` reports it ({terminal_name:?}), \
+         must be absent from the mirror, so a renamed scheme cannot hide the defect the \
+         previous assertion describes. Mirror: {:?}",
         mirror.files
     );
 
@@ -654,7 +616,7 @@ fn open_files_omits_a_terminal_buffer() {
     // terminal — not an empty one that would satisfy the negatives by itself.
     assert!(
         mirror.files.iter().any(|p| norm(p) == canon_fixture),
-        "the fixture opened before the drawer must still be in the mirror ({:?}); \
+        "the fixture opened before the terminal must still be in the mirror ({:?}); \
          without this the assertions above would also pass for a mirror that had gone \
          empty or vanished",
         mirror.files
@@ -671,10 +633,9 @@ fn open_files_omits_a_terminal_buffer() {
     assert_eq!(
         mirror.files.len(),
         2,
-        "a drawer-open session mirrors exactly two FILES — the startup Untitled.md \
-         and the fixture. Three means the terminal buffer leaked in (M20's measured \
-         shape); one means something unrelated to this filter dropped a real file. \
-         Got {:?}",
+        "a session with a scripted terminal mirrors exactly two FILES — the startup \
+         Untitled.md and the fixture. Three means the terminal buffer leaked in; one \
+         means something unrelated to this filter dropped a real file. Got {:?}",
         mirror.files
     );
 

@@ -13,6 +13,9 @@ use nvim_rs::{compat::tokio::Compat, error::CallError, Neovim};
 use rmpv::Value;
 use tokio::process::ChildStdin;
 
+use crate::layout::SplitOrientation;
+use crate::terminal::{TerminalId, TerminalTarget};
+
 /// The Neovim handle type used throughout core (generic untyped RPC only).
 pub(crate) type Nvim = Neovim<Compat<ChildStdin>>;
 
@@ -311,10 +314,23 @@ pub enum InputEvent {
         /// `true` selects `background=dark`, `false` selects `background=light`.
         dark: bool,
     },
-    /// Toggle the per-project terminal drawer (delegated to the init.lua
-    /// `wolf_toggle_terminal` helper, which opens/hides a bottom `:terminal`
-    /// split and recreates the shared terminal buffer if it is gone).
-    ToggleTerminal,
+    /// Open or hide the terminal drawer on session `id` (delegated to the init.lua
+    /// `wolf_toggle_terminal` helper, which shows the session's placeholder in a bottom
+    /// split, or closes that split when it already shows it). Sent by
+    /// [`crate::WolfCore::toggle_terminal`], which starts the session first.
+    ToggleTerminal {
+        /// The drawer's session.
+        id: TerminalId,
+    },
+    /// Show running session `id` in `target` (delegated to the init.lua
+    /// `wolf_terminal_bind` helper). Sent by [`crate::WolfCore::queue_bind_terminal`], so it
+    /// lands behind every input queued before it.
+    BindTerminal {
+        /// The session to show.
+        id: TerminalId,
+        /// Where its placeholder goes.
+        target: TerminalTarget,
+    },
     /// Toggle the active buffer's content width between the ~90-char default and
     /// full pane width (delegated to the init.lua `wolf_toggle_full_width` helper,
     /// which flips `b:wolf_full_width` on the effective buffer — the SOURCE buffer
@@ -381,7 +397,8 @@ impl InputEvent {
             | InputEvent::NewBuffer
             | InputEvent::SwitchBuffer { .. }
             | InputEvent::SetBackground { .. }
-            | InputEvent::ToggleTerminal
+            | InputEvent::ToggleTerminal { .. }
+            | InputEvent::BindTerminal { .. }
             | InputEvent::ToggleFullWidth
             | InputEvent::SetUiFocus { .. } => false,
         }
@@ -412,7 +429,8 @@ impl InputEvent {
             | InputEvent::NewBuffer
             | InputEvent::SwitchBuffer { .. }
             | InputEvent::SetBackground { .. }
-            | InputEvent::ToggleTerminal
+            | InputEvent::ToggleTerminal { .. }
+            | InputEvent::BindTerminal { .. }
             | InputEvent::ToggleFullWidth
             | InputEvent::SetUiFocus { .. } => false,
         }
@@ -582,7 +600,8 @@ pub(crate) async fn apply(nvim: &mut impl Rpc, event: &InputEvent) -> Result<(),
             };
             command(nvim, cmd).await
         }
-        InputEvent::ToggleTerminal => toggle_terminal(nvim).await,
+        InputEvent::ToggleTerminal { id } => toggle_terminal(nvim, *id).await,
+        InputEvent::BindTerminal { id, target } => bind_terminal(nvim, *id, *target).await,
         InputEvent::ToggleFullWidth => toggle_full_width(nvim).await,
         InputEvent::SetUiFocus { gained } => set_ui_focus(nvim, *gained).await,
     }
@@ -714,15 +733,51 @@ async fn switch_buffer(nvim: &mut impl Rpc, win: i64, bufnr: i64) -> Result<(), 
     Ok(())
 }
 
-/// Toggles the per-project terminal drawer via the init.lua
-/// `wolf_toggle_terminal` helper, invoked over `nvim_exec_lua`. The helper
-/// opens a bottom `:terminal` split in the current tabpage, or hides that
-/// window if it is already showing the shared terminal buffer (which persists).
-async fn toggle_terminal(nvim: &mut impl Rpc) -> Result<(), Box<CallError>> {
+/// Toggles the terminal drawer on session `id` via the init.lua `wolf_toggle_terminal`
+/// helper, invoked over `nvim_exec_lua`. The helper shows the session's placeholder in a
+/// bottom split of the current tabpage, or closes that split when it already shows it;
+/// the placeholder is `bufhidden=hide`, so the session outlives the window.
+async fn toggle_terminal(nvim: &mut impl Rpc, id: TerminalId) -> Result<(), Box<CallError>> {
     let _ = nvim
         .request(
             "nvim_exec_lua",
-            vec![Value::from("wolf_toggle_terminal()"), Value::Array(vec![])],
+            vec![
+                Value::from("wolf_toggle_terminal(...)"),
+                Value::Array(vec![Value::from(id.0)]),
+            ],
+        )
+        .await?;
+    Ok(())
+}
+
+/// Shows session `id` in `target` via the init.lua `wolf_terminal_bind` helper, invoked over
+/// `nvim_exec_lua`, as [`crate::WolfCore::bind_terminal`] does but in input order.
+async fn bind_terminal(
+    nvim: &mut impl Rpc,
+    id: TerminalId,
+    target: TerminalTarget,
+) -> Result<(), Box<CallError>> {
+    let (win, split) = match target {
+        TerminalTarget::Window(win) => (win, ""),
+        TerminalTarget::Split { win, orientation } => (
+            win,
+            match orientation {
+                SplitOrientation::Horizontal => "h",
+                SplitOrientation::Vertical => "v",
+            },
+        ),
+    };
+    let _ = nvim
+        .request(
+            "nvim_exec_lua",
+            vec![
+                Value::from("wolf_terminal_bind(...)"),
+                Value::Array(vec![
+                    Value::from(id.0),
+                    Value::from(win),
+                    Value::from(split),
+                ]),
+            ],
         )
         .await?;
     Ok(())
@@ -939,6 +994,14 @@ mod tests {
             InputEvent::SetTabpage { handle: 1 },
             InputEvent::SetBackground { dark: true },
             InputEvent::SetUiFocus { gained: true },
+            InputEvent::ToggleTerminal { id: TerminalId(1) },
+            InputEvent::BindTerminal {
+                id: TerminalId(1),
+                target: TerminalTarget::Split {
+                    win: 0,
+                    orientation: SplitOrientation::Vertical,
+                },
+            },
             InputEvent::Open {
                 path: PathBuf::from("a.txt"),
             },

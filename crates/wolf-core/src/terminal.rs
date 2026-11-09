@@ -230,6 +230,8 @@ pub(crate) struct TerminalColours {
 pub(crate) struct TerminalRegistry {
     me: Weak<TerminalRegistry>,
     sessions: Mutex<BTreeMap<TerminalId, Arc<Session>>>,
+    /// The drawer's session, which may have exited; see [`drawer`](Self::drawer).
+    drawer: Mutex<Option<TerminalId>>,
     next_id: AtomicU64,
     colours: Mutex<TerminalColours>,
     shutting_down: AtomicBool,
@@ -260,6 +262,7 @@ impl TerminalRegistry {
         Arc::new_cyclic(|me| TerminalRegistry {
             me: me.clone(),
             sessions: Mutex::new(BTreeMap::new()),
+            drawer: Mutex::new(None),
             next_id: AtomicU64::new(1),
             colours: Mutex::new(TerminalColours::default()),
             shutting_down: AtomicBool::new(false),
@@ -312,6 +315,30 @@ impl TerminalRegistry {
         )?;
         self.sessions.lock().insert(id, session);
         Ok(id)
+    }
+
+    /// The drawer's running session, or a new one of the user's shell in tabpage `tab`'s
+    /// cwd when it has none. Spawning is `openpty` and fork/exec, never an RPC.
+    pub(crate) fn drawer_session(&self, tab: Option<i64>) -> std::io::Result<TerminalId> {
+        let mut drawer = self.drawer.lock();
+        if let Some(id) = drawer.filter(|id| self.is_live(*id)) {
+            return Ok(id);
+        }
+        let id = self.spawn(None, &self.tab_cwd(tab))?;
+        *drawer = Some(id);
+        Ok(id)
+    }
+
+    /// The drawer's session while it runs.
+    pub(crate) fn drawer(&self) -> Option<TerminalId> {
+        let drawer = *self.drawer.lock();
+        drawer.filter(|id| self.is_live(*id))
+    }
+
+    /// The directory session `id`'s shell is in: its `OSC 7` report, else the operating
+    /// system's view. `None` for an unknown session or an unreadable cwd.
+    pub(crate) fn shell_cwd(&self, id: TerminalId) -> Option<PathBuf> {
+        self.get(id)?.shell_cwd()
     }
 
     fn get(&self, id: TerminalId) -> Option<Arc<Session>> {
@@ -383,8 +410,9 @@ impl TerminalRegistry {
         }
     }
 
-    /// Reports focus to the program, and on a loss forces the file-tree rescan that
-    /// replaces `TermLeave`.
+    /// Reports focus to the program, and on a loss forces a path-less file-tree rescan:
+    /// every exit from a terminal pane passes a focus loss, and its shell may have
+    /// changed files.
     pub(crate) fn focus(&self, id: TerminalId, gained: bool) {
         if let Some(session) = self.get(id) {
             session.focus(gained);
@@ -503,9 +531,37 @@ impl TerminalRegistry {
         on_screen.or_else(|| wins.first().copied())
     }
 
+    /// A typed `:terminal`: a new session of the user's shell in window `win`'s tabpage
+    /// cwd, shown in `win` in place of its buffer. Runs on the runtime, as
+    /// [`router_split`](Self::router_split) does.
+    pub(crate) fn open_in_window(&self, win: i64) {
+        let (Some(registry), Some(nvim)) = (self.me.upgrade(), self.nvim()) else {
+            return;
+        };
+        self.runtime.spawn(async move {
+            let tab = crate::nvim::win_tabpage(nvim.clone(), win).await.ok();
+            let cwd = registry.tab_cwd(tab);
+            let id = match registry.spawn(None, &cwd) {
+                Ok(id) => id,
+                Err(e) => {
+                    tracing::warn!("`:terminal` could not start a session: {e}");
+                    return;
+                }
+            };
+            match crate::nvim::terminal_bind(nvim, id.0, win, "").await {
+                Ok(bound) if bound != 0 => {}
+                _ => registry.remove(id),
+            }
+        });
+    }
+
     /// `<C-w>s` or `<C-w>v`: a new session running the origin's program again, in the
-    /// origin shell's directory, shown in a split of the origin's pane.
+    /// origin shell's directory, shown in a split of the origin's pane. Ignored in the
+    /// drawer, which the front-ends keep outside their pane trees.
     fn router_split(&self, origin: Arc<Session>, orientation: SplitOrientation) {
+        if *self.drawer.lock() == Some(origin.id) {
+            return;
+        }
         let (Some(registry), Some(win), Some(nvim)) = (
             self.me.upgrade(),
             self.placeholder_win(origin.id),

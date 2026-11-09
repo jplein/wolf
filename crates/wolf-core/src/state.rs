@@ -90,19 +90,26 @@ pub enum PaneOrientation {
 /// mirroring the front-end `SavedPaneNode`. A `Leaf`'s `path` is `""` for an
 /// unnamed buffer; when `preview` is `true` the pane is a Markdown preview and
 /// `path` is the SOURCE Markdown file's ABS path (restored via `wolf_preview_file`,
-/// not `:edit`). `preview` is `#[serde(default)]` so an old v1 file without it loads
-/// with `preview = false`.
+/// not `:edit`). When `terminal` is `true` the pane is a terminal pane and `path` is
+/// the directory its shell starts in (`""` for the tabpage cwd). `preview` and
+/// `terminal` are `#[serde(default)]` so an old v1 file without them loads with both
+/// `false`, and `terminal` is written only when `true`, so a file with no terminal leaf
+/// is byte-stable.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PaneNode {
-    /// A single pane showing the buffer at `path` (`""` for an unnamed buffer), or a
-    /// Markdown preview of the source file at `path` when `preview` is `true`.
+    /// A single pane showing the buffer at `path` (`""` for an unnamed buffer), a
+    /// Markdown preview of the source file at `path` when `preview` is `true`, or a
+    /// terminal session started in the directory `path` when `terminal` is `true`.
     Leaf {
         /// The absolute buffer path, or `""` for an unnamed buffer.
         path: String,
         /// Whether this leaf is a Markdown preview of the source file at `path`.
         #[serde(default)]
         preview: bool,
+        /// Whether this leaf is a terminal pane whose shell starts in `path`.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        terminal: bool,
     },
     /// An n-ary split of `children` along `orientation`, with parallel per-child
     /// `weights`.
@@ -130,8 +137,8 @@ pub enum PaneNode {
 /// the file-tree sidebar was showing (defaults to `true`). `layout` is the tab's
 /// full pane-split tree (topology + per-child weights + per-leaf buffer path); it
 /// is `None` ONLY for an empty-state lone pane (an unnamed, non-preview buffer,
-/// e.g. the "no folder" tab) — a lone pane showing a file or a preview persists a
-/// single `leaf`. It is `#[serde(default)]` so an old v1 file without it loads
+/// e.g. the "no folder" tab) — a lone pane showing a file, a preview or a terminal
+/// persists a single `leaf`. It is `#[serde(default)]` so an old v1 file without it loads
 /// with `layout: None` (no version bump).
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct TabState {
@@ -140,8 +147,8 @@ pub struct TabState {
     /// Whether the file-tree sidebar is visible (defaults to `true`).
     pub sidebar_visible: bool,
     /// The tab's pane-split layout, `None` ONLY for an empty-state (unnamed,
-    /// non-preview) lone pane; a lone pane showing a file or preview persists a
-    /// single `leaf`.
+    /// non-preview, non-terminal) lone pane; a lone pane showing a file, a preview or a
+    /// terminal persists a single `leaf`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout: Option<PaneNode>,
 }
@@ -379,7 +386,9 @@ pub fn load_state(dir: &Path) -> Option<WolfState> {
 /// **This is NOT [`PaneNode`]'s serde shape.** The Lua helper reads a different,
 /// terser document:
 ///
-/// - a leaf is `{ "leaf": true, "path": "<abs or empty>", "preview": true|false }`
+/// - a leaf is `{ "leaf": true, "path": "<abs or empty>", "preview": true|false,
+///   "terminal": true|false }`; `init.lua` opens nothing in a terminal leaf's window,
+///   and [`crate::WolfCore::rebuild_layout`] starts its session
 /// - a split is `{ "orientation": "v"|"h", "weights": [...], "children": [...] }`,
 ///   where `"v"` is [`PaneOrientation::Vertical`] (side by side) and `"h"` is
 ///   [`PaneOrientation::Horizontal`] (stacked).
@@ -408,10 +417,15 @@ pub fn rebuild_layout_spec(node: &PaneNode) -> String {
 /// would silently become `null` and change the document's shape.
 fn spec_value(node: &PaneNode) -> serde_json::Value {
     match node {
-        PaneNode::Leaf { path, preview } => serde_json::json!({
+        PaneNode::Leaf {
+            path,
+            preview,
+            terminal,
+        } => serde_json::json!({
             "leaf": true,
             "path": path,
             "preview": preview,
+            "terminal": terminal,
         }),
         PaneNode::Split {
             orientation,

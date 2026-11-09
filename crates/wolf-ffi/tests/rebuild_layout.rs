@@ -12,6 +12,10 @@
 //! renderer that drops a leaf fails the count, and one that reverses the children
 //! fails the per-handle paths.
 //!
+//! A second saved split, of an editor leaf and a TERMINAL leaf, loads back and is
+//! rebuilt on a fresh core: the terminal leaf's handle carries a core session
+//! (`win_buffer(h).terminal() != 0`), and the editor leaf's carries none.
+//!
 //! ## SINGLE #[test]
 //!
 //! Like `state.rs`, the whole flow lives in ONE `#[test]`: it sets the process-global
@@ -60,6 +64,9 @@ const ROOT_WEIGHT: f64 = 1.0;
 /// The two leaves' basenames, in leaf order. Neither is the startup buffer's name.
 const LEFT_NAME: &str = "left.md";
 const RIGHT_NAME: &str = "right.md";
+
+/// The directory, under the core's cwd, the saved terminal leaf carries.
+const TERMINAL_DIR_NAME: &str = "term-dir";
 
 /// The saved geometry of the one window the builder submits (load never validates it).
 const WIN_X: f64 = 100.0;
@@ -149,8 +156,18 @@ fn rebuild_layout_realizes_a_loaded_two_leaf_split() {
     wolf_ffi_state_snapshot_begin();
     wolf_ffi_state_snapshot_add_window(WIN_X, WIN_Y, WIN_WIDTH, WIN_HEIGHT);
     wolf_ffi_state_snapshot_add_tab(cwd_str.clone(), false);
-    wolf_ffi_state_layout_push_leaf(left.to_string_lossy().into_owned(), false, HALF_WEIGHT);
-    wolf_ffi_state_layout_push_leaf(right.to_string_lossy().into_owned(), false, HALF_WEIGHT);
+    wolf_ffi_state_layout_push_leaf(
+        left.to_string_lossy().into_owned(),
+        false,
+        false,
+        HALF_WEIGHT,
+    );
+    wolf_ffi_state_layout_push_leaf(
+        right.to_string_lossy().into_owned(),
+        false,
+        false,
+        HALF_WEIGHT,
+    );
     wolf_ffi_state_layout_push_split(ORIENT_VERTICAL, TWO_LEAVES, ROOT_WEIGHT);
     wolf_ffi_state_layout_commit_to_tab();
     wolf_ffi_state_snapshot_commit();
@@ -232,6 +249,98 @@ fn rebuild_layout_realizes_a_loaded_two_leaf_split() {
     // --- 5. Each handle shows its own leaf's file, in leaf order. -------------------------
     poll_win_basename(&handle, handles[0], 0, LEFT_NAME);
     poll_win_basename(&handle, handles[1], 1, RIGHT_NAME);
+
+    handle.shutdown();
+
+    // --- 6. A saved terminal leaf rebuilds with a session bound into its window. ---------
+    common::pin_default_shell();
+    let term_dir = cwd.path().join(TERMINAL_DIR_NAME);
+    std::fs::create_dir(&term_dir).expect("failed to create the terminal leaf's directory");
+    wolf_ffi_state_snapshot_begin();
+    wolf_ffi_state_snapshot_add_window(WIN_X, WIN_Y, WIN_WIDTH, WIN_HEIGHT);
+    wolf_ffi_state_snapshot_add_tab(cwd.path().to_string_lossy().into_owned(), false);
+    wolf_ffi_state_layout_push_leaf(
+        left.to_string_lossy().into_owned(),
+        false,
+        false,
+        HALF_WEIGHT,
+    );
+    wolf_ffi_state_layout_push_leaf(
+        term_dir.to_string_lossy().into_owned(),
+        false,
+        true,
+        HALF_WEIGHT,
+    );
+    wolf_ffi_state_layout_push_split(ORIENT_VERTICAL, TWO_LEAVES, ROOT_WEIGHT);
+    wolf_ffi_state_layout_commit_to_tab();
+    wolf_ffi_state_snapshot_commit();
+
+    let deadline = Instant::now() + FLUSH_TIMEOUT;
+    let restored = loop {
+        assert!(
+            wolf_ffi_state_flush(),
+            "wolf_ffi_state_flush() must complete within {FLUSH_TIMEOUT:?}"
+        );
+        let restored = wolf_ffi_load_state();
+        let ready = restored.windows().first().is_some_and(|w| {
+            w.tabs().first().is_some_and(|t| {
+                t.has_layout()
+                    && t.layout().child_count() == TWO_LEAVES
+                    && t.layout().child(1).is_terminal()
+            })
+        });
+        if ready || Instant::now() >= deadline {
+            break restored;
+        }
+        sleep(POLL_INTERVAL);
+    };
+    let windows = restored.windows();
+    let node = windows
+        .first()
+        .expect("the committed terminal snapshot must load back with its one window")
+        .tabs()
+        .first()
+        .expect("the loaded window must carry its one tab")
+        .layout();
+    assert!(
+        node.child_count() == TWO_LEAVES && node.child(1).is_terminal(),
+        "premise: the loaded layout must be the editor + terminal split that was saved, its \
+         second leaf terminal; otherwise the rebuild below tests nothing"
+    );
+
+    let handle = wolf_ffi_start(
+        init_lua.to_string_lossy().into_owned(),
+        cwd.path().to_string_lossy().into_owned(),
+        common::DEFAULT_COLS,
+        common::DEFAULT_ROWS,
+    )
+    .expect("wolf_ffi_start should return a second handle");
+    poll("the second core to attach (read_frame cols > 0)", || {
+        handle.read_frame().cols() > 0
+    });
+    poll("a single live editor window at the second startup", || {
+        live_windows(&handle).len() == ONE_WINDOW
+    });
+    let handles = handle.rebuild_layout(&node);
+    assert_eq!(
+        handles.len(),
+        TWO_LEAVES as usize,
+        "rebuilding the editor + terminal split must return one handle per leaf; got {handles:?}"
+    );
+    poll(
+        &format!(
+            "the terminal leaf's window {} to carry a session; 0 means core starts no session \
+             for a rebuilt terminal leaf",
+            handles[1]
+        ),
+        || handle.win_buffer(handles[1]).terminal() != 0,
+    );
+    poll_win_basename(&handle, handles[0], 0, LEFT_NAME);
+    assert_eq!(
+        handle.win_buffer(handles[0]).terminal(),
+        0,
+        "the editor leaf's window must carry no session."
+    );
 
     handle.shutdown();
     std::env::remove_var("WOLF_STATE_DIR");

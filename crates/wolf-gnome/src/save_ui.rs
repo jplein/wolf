@@ -114,9 +114,9 @@ pub struct SaveTarget<'a> {
     /// `Snapshot::is_preview_active()` — whether the focused pane is a Markdown
     /// preview scratch, which has nothing to write.
     pub is_preview: bool,
-    /// `Snapshot::win_buffers[active_win].is_terminal` — whether the focused pane is
-    /// a terminal buffer, whose `term://…` name Neovim will not `write`. `false`
-    /// when the window is absent from the map.
+    /// `Snapshot::win_buffers[active_win].terminal` — whether the focused pane is a
+    /// terminal pane, which has no file to write. `false` when the window is absent
+    /// from the map.
     pub is_terminal: bool,
 }
 
@@ -192,9 +192,8 @@ const PREVIEW_PANE: &str =
     "the focused pane is a Markdown preview scratch, which is rendered output rather than a file \
      and has nothing to write";
 
-/// Refusal reason for a terminal buffer, shared by both presses.
-const TERMINAL_PANE: &str =
-    "the focused pane is a terminal buffer, whose term:// name Neovim refuses to write";
+/// Refusal reason for a terminal pane, shared by both presses.
+const TERMINAL_PANE: &str = "the focused pane is a terminal, which has no file to write";
 
 /// The buffer's usable file NAME, or `None` when it has none.
 ///
@@ -370,10 +369,11 @@ mod tests {
     /// [`NESTED_FILE`]'s basename.
     const NESTED_NAME: &str = "thing.md";
 
-    /// A terminal buffer's name, as Neovim spells it. It HAS a usable file name
-    /// (`Path::file_name` answers `12345:bash`), which is exactly why the terminal
-    /// arm has to be a check of its own: without it this row would answer `Write`.
-    const TERMINAL_FILE: &str = "term://home/u/proj//12345:bash";
+    /// A path beside a terminal pane. A placeholder is unnamed, so no snapshot pairs
+    /// the two, but the struct is public: the path has a usable file name, which is why
+    /// the terminal arm has to be a check of its own, since without it this row would
+    /// answer `Write`.
+    const TERMINAL_FILE: &str = "/home/u/proj/shell.md";
 
     /// One named row of the `SaveTarget` axis.
     ///
@@ -469,11 +469,11 @@ mod tests {
         is_terminal: false,
     };
 
-    /// A terminal buffer, whose `term://` name IS a usable file name — without the
-    /// terminal arm this row answers `Write`.
+    /// A terminal pane carrying a usable file name — without the terminal arm this row
+    /// answers `Write`.
     const TERMINAL_WITH_PATH: NamedTarget = NamedTarget {
         name: "TERMINAL_WITH_PATH",
-        desc: "a terminal buffer, whose term:// name IS a usable file name",
+        desc: "a terminal pane, carrying a usable file name",
         path: Some(TERMINAL_FILE),
         is_preview: false,
         is_terminal: true,
@@ -614,9 +614,8 @@ mod tests {
             want: Want::Refuse,
         },
         PressCase {
-            desc:
-                "a terminal buffer is refused even though its term:// name IS a usable file name \
-                   — without that arm this row answers Write",
+            desc: "a terminal pane is refused even though it carries a usable file name — \
+                   without that arm this row answers Write",
             liveness: Some(Liveness::Alive),
             target: TERMINAL_WITH_PATH,
             want: Want::Refuse,
@@ -800,7 +799,7 @@ mod tests {
             want: Want::Refuse,
         },
         PressCase {
-            desc: "a terminal buffer is refused",
+            desc: "a terminal pane is refused",
             liveness: Some(Liveness::Alive),
             target: TERMINAL_WITH_PATH,
             want: Want::Refuse,
@@ -998,9 +997,9 @@ mod tests {
     /// synthetic, so no row of it can tell "absent from disk" from "present".
     ///
     /// FALSIFYING EDIT 3 (behaviour 5) — delete the `is_terminal` arm. The
-    /// `TERMINAL_WITH_PATH` row under `Alive` answers `Write`, because a `term://`
-    /// name IS a usable file name; Neovim then refuses the write and the failure is
-    /// again a warning nobody sees. MEASURED: red, and **not isolated** — FIVE tests
+    /// `TERMINAL_WITH_PATH` row under `Alive` answers `Write`, because its path IS a
+    /// usable file name; the write then goes to a placeholder with nothing to write,
+    /// and the failure is again a warning nobody sees. MEASURED: red, and **not isolated** — FIVE tests
     /// fail together (362 passed / 5 failed), and the set is the diagnosis. This one;
     /// [`only_a_live_core_may_save`], whose accepting set grows by exactly
     /// `(0, "TERMINAL_WITH_PATH")`; [`save_press_reasons_are_distinct_and_non_empty`]
@@ -1029,7 +1028,7 @@ mod tests {
                  `write` at a buffer with no file name, which raises E32 and is degraded to a \
                  `tracing::warn!` the user never sees — the press looks like it worked. A WRITE or \
                  a CHOOSE where a REFUSAL belongs acts on a pane that cannot be written at all (a \
-                 preview scratch is rendered output; a term:// name Neovim will not write) or \
+                 preview scratch is rendered output; a terminal pane has no file) or \
                  against a core that is wedged, dead or already taken out, where the queued save \
                  would be applied by a RESTARTED instance to whatever buffer it happens to be on. \
                  A REFUSAL where Write belongs makes Ctrl+Shift+S do nothing on a perfectly \
@@ -1377,7 +1376,7 @@ mod tests {
                 PREVIEW_WITH_PATH,
             ),
             (
-                "a live core over a terminal buffer",
+                "a live core over a terminal pane",
                 Some(Liveness::Alive),
                 TERMINAL_WITH_PATH,
             ),
@@ -1433,7 +1432,7 @@ mod tests {
                 PREVIEW_WITH_PATH,
             ),
             (
-                "a live core over a terminal buffer",
+                "a live core over a terminal pane",
                 Some(Liveness::Alive),
                 TERMINAL_WITH_PATH,
             ),
@@ -1494,7 +1493,7 @@ mod tests {
                  reasons must be DISTINCT so the printed line names the real blocker: a wedged \
                  Neovim is recoverable and a dead one restarts itself, an absent core means the \
                  window is already tearing down, a preview scratch is rendered output with nothing \
-                 to write, and a terminal's term:// name Neovim refuses. One shared string \
+                 to write, and a terminal pane has no file. One shared string \
                  collapses them into a message that cannot be acted on."
             );
         }
@@ -1548,10 +1547,10 @@ mod tests {
                 "a preview pane has nothing to write and nothing to rename",
             ),
             (
-                "a terminal buffer",
+                "a terminal pane",
                 Some(Liveness::Alive),
                 TERMINAL_WITH_PATH,
-                "Neovim refuses a term:// name for both",
+                "a terminal pane has no file for either",
             ),
         ];
 

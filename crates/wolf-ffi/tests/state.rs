@@ -20,6 +20,8 @@
 //!   * `wolf_ffi_load_state() -> FfiState`, `FfiState::windows() -> Vec<FfiWindowState>`
 //!   * `FfiWindowState::x()/y()/width()/height() -> f64`, `tabs() -> Vec<FfiTabState>`
 //!   * `FfiTabState::cwd() -> String`, `sidebar_visible() -> bool`
+//!   * the layout's `FfiPaneNode`: `is_leaf()`, `is_preview()`, `is_terminal()`,
+//!     `leaf_path()`, `child_count()`, `child(i)`
 //!
 //! The handle has no state setters and the core does not mirror cwd into the
 //! store, so this test needs NO nvim — it is a pure builder round-trip, driven
@@ -100,6 +102,12 @@ const EDITOR_SIBLING_PATH: &str = "/proj/window-one/editor.md";
 /// The buffer path of a LONE editor leaf pushed with NO surrounding split, proving a
 /// single-pane tab persists its open file as a single top-level leaf layout.
 const SOLO_PATH: &str = "/proj/window-one/solo.md";
+
+// -- Terminal-leaf fixture (terminal-pane restore) ------------------------------
+/// The directory a TERMINAL leaf (terminal: true) carries, where its session restarts.
+const TERMINAL_DIR: &str = "/proj/window-one/term-dir";
+/// The editor sibling's path in the terminal split (terminal: false).
+const TERMINAL_SIBLING_PATH: &str = "/proj/window-one/beside-terminal.md";
 
 #[test]
 fn snapshot_builder_round_trips_the_whole_tree() {
@@ -210,8 +218,8 @@ fn snapshot_builder_round_trips_the_whole_tree() {
     wolf_ffi_state_snapshot_add_tab(W1_TAB0_CWD.to_string(), false);
     // Post-order: leaves first, then the split pops the top two. Both are editor leaves; step 3c
     // covers a preview leaf.
-    wolf_ffi_state_layout_push_leaf(LEAF_LEFT_PATH.to_string(), false, HALF_WEIGHT);
-    wolf_ffi_state_layout_push_leaf(LEAF_RIGHT_PATH.to_string(), false, HALF_WEIGHT);
+    wolf_ffi_state_layout_push_leaf(LEAF_LEFT_PATH.to_string(), false, false, HALF_WEIGHT);
+    wolf_ffi_state_layout_push_leaf(LEAF_RIGHT_PATH.to_string(), false, false, HALF_WEIGHT);
     wolf_ffi_state_layout_push_split(ORIENT_VERTICAL, TWO_CHILDREN, ROOT_WEIGHT);
     wolf_ffi_state_layout_commit_to_tab();
     wolf_ffi_state_snapshot_commit();
@@ -276,8 +284,8 @@ fn snapshot_builder_round_trips_the_whole_tree() {
     wolf_ffi_state_snapshot_add_tab(W1_TAB0_CWD.to_string(), false);
     // Post-order: preview leaf (preview=true), then editor sibling (preview=false),
     // then the split that pops the top two.
-    wolf_ffi_state_layout_push_leaf(PREVIEW_SOURCE_PATH.to_string(), true, HALF_WEIGHT);
-    wolf_ffi_state_layout_push_leaf(EDITOR_SIBLING_PATH.to_string(), false, HALF_WEIGHT);
+    wolf_ffi_state_layout_push_leaf(PREVIEW_SOURCE_PATH.to_string(), true, false, HALF_WEIGHT);
+    wolf_ffi_state_layout_push_leaf(EDITOR_SIBLING_PATH.to_string(), false, false, HALF_WEIGHT);
     wolf_ffi_state_layout_push_split(ORIENT_VERTICAL, TWO_CHILDREN, ROOT_WEIGHT);
     wolf_ffi_state_layout_commit_to_tab();
     wolf_ffi_state_snapshot_commit();
@@ -353,7 +361,7 @@ fn snapshot_builder_round_trips_the_whole_tree() {
     wolf_ffi_state_snapshot_add_tab(W1_TAB0_CWD.to_string(), false);
     // A single editor leaf with NO surrounding split: push the lone leaf, then
     // commit it directly to the tab as the layout's root.
-    wolf_ffi_state_layout_push_leaf(SOLO_PATH.to_string(), false, ROOT_WEIGHT);
+    wolf_ffi_state_layout_push_leaf(SOLO_PATH.to_string(), false, false, ROOT_WEIGHT);
     wolf_ffi_state_layout_commit_to_tab();
     wolf_ffi_state_snapshot_commit();
 
@@ -399,6 +407,70 @@ fn snapshot_builder_round_trips_the_whole_tree() {
         solo_root.leaf_path(),
         SOLO_PATH,
         "the lone leaf's path round-trips as the single-pane tab's open file"
+    );
+
+    // --- 3e. A terminal leaf round-trips `is_terminal()` and its directory, beside an editor leaf.
+    wolf_ffi_state_snapshot_begin();
+    wolf_ffi_state_snapshot_add_window(W0_X, W0_Y, W0_WIDTH, W0_HEIGHT);
+    wolf_ffi_state_snapshot_add_tab(W0_TAB0_CWD.to_string(), true);
+    wolf_ffi_state_snapshot_add_tab(W0_TAB1_CWD.to_string(), false);
+    wolf_ffi_state_snapshot_add_window(W1_X, W1_Y, W1_WIDTH, W1_HEIGHT);
+    wolf_ffi_state_snapshot_add_tab(W1_TAB0_CWD.to_string(), false);
+    wolf_ffi_state_layout_push_leaf(TERMINAL_DIR.to_string(), false, true, HALF_WEIGHT);
+    wolf_ffi_state_layout_push_leaf(TERMINAL_SIBLING_PATH.to_string(), false, false, HALF_WEIGHT);
+    wolf_ffi_state_layout_push_split(ORIENT_VERTICAL, TWO_CHILDREN, ROOT_WEIGHT);
+    wolf_ffi_state_layout_commit_to_tab();
+    wolf_ffi_state_snapshot_commit();
+
+    // Flush + poll until the last tab's layout reports the terminal leaf's directory.
+    let terminal_deadline = Instant::now() + FLUSH_TIMEOUT;
+    let with_terminal = loop {
+        assert!(
+            wolf_ffi_state_flush(),
+            "wolf_ffi_state_flush() must complete after the terminal-layout commit"
+        );
+        let restored = wolf_ffi_load_state();
+        let windows = restored.windows();
+        if windows.len() == TWO_WINDOWS
+            && windows[1].tabs().last().is_some_and(|t| {
+                t.has_layout()
+                    && t.layout().child_count() == TWO_CHILDREN
+                    && t.layout().child(0).leaf_path() == TERMINAL_DIR
+            })
+        {
+            break restored;
+        }
+        if Instant::now() >= terminal_deadline {
+            break restored;
+        }
+        sleep(POLL_INTERVAL);
+    };
+
+    let term_windows = with_terminal.windows();
+    let term_tab = &term_windows[1].tabs()[W1_TABS - 1];
+    assert!(
+        term_tab.has_layout(),
+        "the last tab must report has_layout() == true after the terminal commit"
+    );
+    let term_root = term_tab.layout();
+    let term_left = term_root.child(0);
+    assert_eq!(
+        (
+            term_left.is_leaf(),
+            term_left.is_terminal(),
+            term_left.is_preview(),
+            term_left.leaf_path()
+        ),
+        (true, true, false, TERMINAL_DIR.to_string()),
+        "the terminal child must read back (is_leaf, is_terminal, is_preview, path) as (true, \
+         true, false, its directory); is_terminal false means push_leaf drops the flag or the \
+         load side never reads it, so the pane restores as an editor of its directory"
+    );
+    let term_right = term_root.child(1);
+    assert_eq!(
+        (term_right.is_terminal(), term_right.leaf_path()),
+        (false, TERMINAL_SIBLING_PATH.to_string()),
+        "the editor sibling must read back is_terminal() == false with its own path"
     );
 
     // --- 4. A flat file without `tabs` loads as zero windows. Overwritten after the flush, and no

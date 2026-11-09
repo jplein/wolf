@@ -24,7 +24,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
-use std::sync::{mpsc, Arc, OnceLock};
+use std::sync::{mpsc, Arc, Once, OnceLock};
 use std::time::{Duration, Instant};
 
 use std::io::Write as _;
@@ -932,6 +932,14 @@ pub fn start_core_recording(cwd: PathBuf) -> (WolfCore, FlushWaiter, WakeLog) {
         .expect("WolfCore::start failed (is WOLF_NVIM_BIN a valid nvim?)");
     waiter.wait_for_initial_flush(&core, FLUSH_TIMEOUT);
     (core, waiter, log)
+}
+
+/// Sets `SHELL=/bin/sh` for the process, once, so a session started with no explicit command
+/// (the drawer, typed `:terminal`, a restored terminal leaf) runs POSIX `sh`, whose output the
+/// tests type for. Call it before starting a core, so no session can read `SHELL` first.
+pub fn pin_default_shell() {
+    static PIN: Once = Once::new();
+    PIN.call_once(|| std::env::set_var("SHELL", "/bin/sh"));
 }
 
 /// `/bin/sh -c <script>`, run as a session's program.

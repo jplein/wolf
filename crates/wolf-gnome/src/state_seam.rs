@@ -736,6 +736,7 @@ mod tests {
         PaneNode::Leaf {
             path: path.to_string(),
             preview: false,
+            terminal: false,
         }
     }
 
@@ -744,6 +745,7 @@ mod tests {
         PaneNode::Leaf {
             path: path.to_string(),
             preview: true,
+            terminal: false,
         }
     }
 
@@ -978,6 +980,7 @@ mod tests {
                         layout: Some(PaneNode::Leaf {
                             path: SAVED_FILE.to_string(),
                             preview: false,
+                            terminal: false,
                         }),
                     }],
                     window_size: Some(SAVED_SIZE),
@@ -1097,6 +1100,7 @@ mod tests {
                         layout: Some(PaneNode::Leaf {
                             path: SAVED_FILE.to_string(),
                             preview: false,
+                            terminal: false,
                         }),
                     }],
                     window_size: Some(SAVED_SIZE),

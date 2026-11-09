@@ -93,7 +93,7 @@ const CURRENT_FILE_EVENT: &str = "wolf_current_file";
 /// Name of the out-of-band notification carrying what every window is showing,
 /// emitted by the `WolfBuffers` autocmds in `runtime/nvim/init.lua` (and once
 /// immediately at setup). The payload is a single msgpack array of
-/// `[win_id, buf_path, bufnr, is_terminal, is_drawer, terminal_id]` tuples for ALL windows of
+/// `[win_id, buf_path, bufnr, is_drawer, terminal_id]` tuples for ALL windows of
 /// EVERY tabpage (`nvim_list_wins()`; preview scratch panes are SKIPPED emit-side, which keeps this
 /// map DISJOINT from [`Snapshot::previews`]); core WHOLESALE-REPLACES BOTH
 /// [`Snapshot::buffers`] (named windows only, path-valued — unchanged) and the
@@ -101,7 +101,7 @@ const CURRENT_FILE_EVENT: &str = "wolf_current_file";
 /// reported set. Routed separately from `redraw` in
 /// [`RedrawHandler::handle_notify`]. `terminal_id` is the core terminal session a
 /// placeholder buffer shows, `0` for any other buffer. A legacy 2-element tuple still
-/// decodes, with `bufnr: 0`, both flags `false` and no session.
+/// decodes, with `bufnr: 0`, `is_drawer` `false` and no session.
 const BUFFERS_EVENT: &str = "wolf_buffers";
 
 /// Name of the out-of-band notification carrying the per-window full-width flags,
@@ -207,7 +207,7 @@ const OPEN_FILES_EVENT: &str = "wolf_open_files";
 /// event, emitted by the `WolfFsEvents` autocmds (`BufWritePost`/`BufFilePost`/
 /// `BufDelete`, file buffers only) in `runtime/nvim/init.lua`. The same augroup
 /// also emits the path-less refocus-edge force events (`ShellCmdPost`/
-/// `FocusGained`/`TermLeave`), which arrive as `[event_name, ""]`. The payload
+/// `FocusGained`), which arrive as `[event_name, ""]`. The payload
 /// is `[event_name, abs_path]`. Routed separately from `redraw` in
 /// [`RedrawHandler::handle_notify`] into the sibling
 /// [`SearchRegistry`](crate::files::SearchRegistry), which debounces and
@@ -223,34 +223,19 @@ const FS_CHANGED_EVENT: &str = "wolf_fs_changed";
 /// once the registry has dropped the session.
 const TERMINAL_WIPED_EVENT: &str = "wolf_terminal_wiped";
 
+/// Name of the out-of-band notification `_G.wolf_open_terminal` in `runtime/nvim/init.lua`
+/// sends for a typed `:terminal`, `:term` or `:ter`, carrying the current window. Routed into
+/// the terminal registry, which starts a session in the window's tabpage cwd and binds it
+/// there. It touches no snapshot state, and it wakes the front-end like every notification
+/// but `wolf_cwd` and `wolf_fs_changed`; the binding's own `wolf_buffers` emit wakes it again.
+const TERMINAL_OPEN_EVENT: &str = "wolf_terminal_open";
+
 /// Name of the one nvim→core request, sent by `_G.wolf_sync_buffers` in
 /// `runtime/nvim/init.lua` straight after a synchronous `wolf_buffers` emit. nvim-rs
 /// applies notifications inline in its handler loop but spawns a request only after every
 /// earlier notification is applied, so the answer tells Neovim that emit has landed in
 /// the snapshot. [`RedrawHandler::handle_request`] answers it with `nil`.
 const BARRIER_REQUEST: &str = "wolf_barrier";
-
-/// The scheme prefix Neovim gives every terminal buffer's name
-/// (`term://<cwd>//<pid>:<command>`).
-///
-/// A buffer name carrying it is a running job, not a file on disk, so it must not
-/// reach [`Snapshot::open_files`] — see [`is_terminal_buffer_name`]. The per-pane
-/// statusbar keys on it too: [`crate::pane_status::pane_status`] shows such a
-/// buffer as its command's name.
-pub(crate) const TERMINAL_BUFFER_PREFIX: &str = "term://";
-
-/// Whether a buffer name denotes a Neovim TERMINAL buffer rather than a file.
-///
-/// A terminal buffer is not a file to reopen. Replaying one through the crash
-/// mirror does not fail harmlessly: MEASURED against the Linux flake's nvim
-/// 0.12.6 by driving `InputEvent::Open { path: "term://…" }` into a real
-/// `WolfCore`, Neovim's own `BufReadCmd term://*` autocmd re-runs `termopen()`, so
-/// the replay SPAWNS A SECOND SHELL — a new buffer whose name is the same string
-/// with a fresh pid, no error and no message, taking over the window it was opened
-/// in. The new name then re-enters the mirror, so every crash costs another shell.
-fn is_terminal_buffer_name(name: &str) -> bool {
-    name.starts_with(TERMINAL_BUFFER_PREFIX)
-}
 
 /// `nvim-rs` [`Handler`] that applies redraw batches to a [`SharedSnapshot`].
 #[derive(Clone)]
@@ -383,6 +368,13 @@ impl Handler for RedrawHandler {
                 // `terminal_frame` change once `on_wiped` has dropped the session.
                 if let Some(id) = args.first().and_then(Value::as_u64).filter(|id| *id > 0) {
                     self.terminals.on_wiped(TerminalId(id));
+                }
+                (self.wake)();
+            }
+            TERMINAL_OPEN_EVENT => {
+                // No snapshot lock, no `seq` bump; the registry spawns and binds on the runtime.
+                if let Some(win) = args.first().and_then(ext_handle) {
+                    self.terminals.open_in_window(win);
                 }
                 (self.wake)();
             }
@@ -612,7 +604,9 @@ impl RedrawHandler {
     /// a `for`/`match` scrutinee — `clippy::significant_drop_in_scrutinee`). A
     /// window in NEITHER map is simply not in the union: **no entry, no push, no
     /// prune** — the locked rule realized structurally, which is what makes the two
-    /// notifications' arrival order irrelevant during a preview transition.
+    /// notifications' arrival order irrelevant during a preview transition. A window
+    /// whose [`WinBuffer::terminal`] is set is a terminal pane and is PRUNED, so a window
+    /// that becomes one through `:terminal` loses its stack.
     ///
     /// There is NO `.await` in this function, so `clippy::await_holding_lock` does
     /// not fire (mirroring the note on `apply_buffers`); the mutex is taken after
@@ -632,6 +626,15 @@ impl RedrawHandler {
 
         let mut hist = self.nav_history.lock();
         for win in wins {
+            // A window that became a terminal pane drops its stack, so Back cannot wipe a session.
+            if snap
+                .win_buffers
+                .get(&win)
+                .is_some_and(|buf| buf.terminal.is_some())
+            {
+                hist.prune(win);
+                continue;
+            }
             // An empty source path means "no usable preview", not a preview of "".
             let preview_source = snap
                 .previews
@@ -712,7 +715,7 @@ impl RedrawHandler {
     /// navigation targets.
     ///
     /// The single argument is a msgpack array of
-    /// `[win_id, buf_path, bufnr, is_terminal, is_drawer, terminal_id]` tuples for ALL
+    /// `[win_id, buf_path, bufnr, is_drawer, terminal_id]` tuples for ALL
     /// windows in the current tabpage (preview scratch panes are skipped emit-side). Each
     /// `win_id` decodes via [`ext_handle`] (a plain integer, or defensively a
     /// msgpack-`Ext`-wrapped integer); each `buf_path` is `nvim_buf_get_name(buf)` —
@@ -729,9 +732,9 @@ impl RedrawHandler {
     /// * [`Snapshot::win_buffers`] gets an entry for EVERY tuple that decodes a
     ///   `win`, including unnamed windows (with `path: None`); it reuses the SAME
     ///   canonicalized value (never canonicalizing twice) and decodes `bufnr` via
-    ///   [`ext_handle`] (defaulting `0`), the two booleans (defaulting `false`) and the
+    ///   [`ext_handle`] (defaulting `0`), `is_drawer` (defaulting `false`) and the
     ///   terminal session (a positive integer, anything else `None`). A legacy 2-element
-    ///   tuple therefore yields `bufnr: 0`, both flags `false` and no session.
+    ///   tuple therefore yields `bufnr: 0`, `is_drawer` `false` and no session.
     ///
     /// Both maps are built in full BEFORE the write guard is taken (so no filesystem
     /// work happens under the lock, sidestepping
@@ -766,10 +769,9 @@ impl RedrawHandler {
                     WinBuffer {
                         bufnr: pair.get(2).and_then(ext_handle).unwrap_or_default(),
                         path: canon,
-                        is_terminal: pair.get(3).and_then(Value::as_bool).unwrap_or(false),
-                        is_drawer: pair.get(4).and_then(Value::as_bool).unwrap_or(false),
+                        is_drawer: pair.get(3).and_then(Value::as_bool).unwrap_or(false),
                         terminal: pair
-                            .get(5)
+                            .get(4)
                             .and_then(Value::as_u64)
                             .filter(|id| *id > 0)
                             .map(TerminalId),
@@ -844,19 +846,10 @@ impl RedrawHandler {
     /// canonical paths the rest of core keys on), falling back to the raw path if
     /// canonicalization fails. A triple missing its handle is SKIPPED.
     ///
-    /// TERMINAL buffers are dropped from BOTH halves — an `active` naming one
-    /// becomes `None`, and terminal entries never enter `files` — because the mirror
-    /// exists to be REPLAYED as `:edit` after a crash and a terminal buffer is not a
-    /// file to reopen. See [`is_terminal_buffer_name`] for what the replay was
-    /// measured to do instead. The test is applied BEFORE [`canon`], which also
-    /// spares a pointless `canonicalize` syscall on a scheme string.
-    ///
-    /// **Considered and rejected: filtering in `init.lua`'s `listed_files()` on
-    /// `buftype ~= ""`.** That is more precise at the source and would also drop help
-    /// and quickfix buffers. The fix lives here anyway because core additionally
-    /// protects a front-end running against a mirror an OLDER `init.lua` produced,
-    /// and because a pure fold over the decoded payload is testable in the fast tier
-    /// where a Lua-side filter would need a live Neovim.
+    /// Special buffers never arrive: the `init.lua` emitter drops every buffer whose
+    /// `buftype` is set from `files` and reports an empty `active_path` for one,
+    /// because the mirror is REPLAYED as `:edit` after a crash, and a scripted Neovim
+    /// terminal's `term://` name replayed that way spawns a second shell.
     ///
     /// The new map is built in full BEFORE the write guard is taken (so no
     /// filesystem work happens under the lock), then assigned wholesale. The lock is
@@ -883,18 +876,13 @@ impl RedrawHandler {
                 let Some(tp) = triple.first().and_then(ext_handle) else {
                     continue;
                 };
-                let active = triple
-                    .get(1)
-                    .and_then(Value::as_str)
-                    .filter(|s| !is_terminal_buffer_name(s))
-                    .and_then(canon);
+                let active = triple.get(1).and_then(Value::as_str).and_then(canon);
                 let files = triple
                     .get(2)
                     .and_then(Value::as_array)
                     .map(|arr| {
                         arr.iter()
                             .filter_map(Value::as_str)
-                            .filter(|s| !is_terminal_buffer_name(s))
                             .filter_map(canon)
                             .collect()
                     })
@@ -1770,11 +1758,6 @@ mod tests {
     //! deterministically by feeding synthetic `msg_show`-shaped params straight
     //! through the fold. The real-nvim `tests/messages.rs` covers the observable
     //! push + clear-on-input paths.
-    //!
-    //! Also home to [`is_terminal_buffer_name`]'s table, for the same reason in a
-    //! different shape: the predicate is private, so nothing under
-    //! `crates/wolf-core/tests/` can reach it. Its EFFECT on the open-file mirror is
-    //! covered against a real Neovim by `tests/nvim_restart.rs`.
 
     use super::*;
 
@@ -2089,84 +2072,5 @@ mod tests {
             snap.toast.messages.is_empty(),
             "the dropped confirm leaves no toast messages"
         );
-    }
-
-    /// One [`is_terminal_buffer_name`] row.
-    struct TerminalNameCase {
-        desc: &'static str,
-        name: &'static str,
-        expected: bool,
-    }
-
-    /// Pins [`is_terminal_buffer_name`]: a buffer name denotes a terminal exactly
-    /// when it BEGINS with [`TERMINAL_BUFFER_PREFIX`] — never when it merely
-    /// contains it somewhere.
-    ///
-    /// This is the predicate [`RedrawHandler::apply_open_files`] applies to both
-    /// halves of the crash mirror, so a wrong answer in either direction is a real
-    /// user-visible defect: a `true` for a real path drops that file from the set
-    /// the front-end reopens after a crash, and a `false` for a terminal name puts
-    /// `term://…` back into the replay — which, MEASURED against the Linux flake's
-    /// nvim 0.12.6, spawns a second shell rather than failing.
-    ///
-    /// FALSIFYING EDITS:
-    ///
-    /// - Change [`TERMINAL_BUFFER_PREFIX`] to `"terminal://"`: the first row,
-    ///   `term:///tmp/x//123:/bin/bash`, returns false. That is the shape Neovim
-    ///   actually produces (`term://<cwd>//<pid>:<command>`), so the scheme has no
-    ///   second `al`.
-    /// - "Simplify" `starts_with` to `contains`: the row whose name is a real
-    ///   absolute path with `term://` in the MIDDLE returns true, and that file
-    ///   would then be silently dropped from the crash mirror and never reopened.
-    #[test]
-    fn terminal_buffer_names_are_recognised() {
-        let cases = [
-            TerminalNameCase {
-                desc: "the shape nvim gives a terminal buffer: term://<cwd>//<pid>:<cmd>",
-                name: "term:///tmp/x//123:/bin/bash",
-                expected: true,
-            },
-            TerminalNameCase {
-                desc: "the bare scheme, with nothing after it",
-                name: "term://",
-                expected: true,
-            },
-            TerminalNameCase {
-                desc: "an ordinary absolute path to a file on disk",
-                name: "/home/u/notes/alpha.md",
-                expected: false,
-            },
-            TerminalNameCase {
-                // `//` is legal in a POSIX path and a directory may be called `term:`, so this row
-                // pins `starts_with` against a later `contains`.
-                desc: "a real path containing term:// somewhere other than the start",
-                name: "/home/u/notes/term://weird.md",
-                expected: false,
-            },
-            TerminalNameCase {
-                desc: "a file whose basename merely begins with the letters `term`",
-                name: "/home/u/terminal-notes.md",
-                expected: false,
-            },
-            TerminalNameCase {
-                desc: "an unnamed buffer",
-                name: "",
-                expected: false,
-            },
-        ];
-
-        for case in &cases {
-            assert_eq!(
-                is_terminal_buffer_name(case.name),
-                case.expected,
-                "case: {} (name {:?}). `true` means the mirror DROPS this name, so a \
-                 `true` for a real path loses a file the crash restore was supposed to \
-                 reopen, and a `false` for a `term://` name lets the restore replay it \
-                 as `:edit term://…` — which spawns a fresh shell, with no error and \
-                 no message, once per crash.",
-                case.desc,
-                case.name
-            );
-        }
     }
 }

@@ -386,8 +386,7 @@ fn history_bridge_is_neutral_for_unknown_windows_the_drawer_and_after_shutdown()
         "an unknown window has no rows"
     );
 
-    // --- 2. The terminal drawer window has no history. `toggle_terminal` ends in `startinsert`,
-    // so no Ex commands follow.
+    // --- 2. The terminal drawer window, a core session's pane, has no history.
     let before: HashSet<i64> = handle.windows().iter().map(|w| w.win()).collect();
     handle.toggle_terminal();
     let deadline = Instant::now() + FLUSH_TIMEOUT;

@@ -21,10 +21,12 @@
 //! TRUNCATES everything ahead of it (browser semantics), and the stack is capped
 //! at [`MAX_ENTRIES`] (oldest dropped, cursor shifted).
 //!
-//! The terminal DRAWER is EXCLUDED (it produces no entry at all); a `:terminal` in
-//! a NORMAL split IS tracked as [`NavTarget::Terminal`]. Unnamed buffers are
-//! tracked by bufnr as [`NavTarget::Untitled`]. [`NavTarget`] is the dedup key, so
-//! `Edit(B)` and `Preview(B)` are DISTINCT entries.
+//! Every terminal pane, the drawer included, is EXCLUDED (it produces no entry at all): a
+//! terminal is not a document, and its session may have exited by the time Back reaches it.
+//! A window that becomes a terminal pane loses its stack, so Back can never replace (and
+//! wipe) a session's placeholder. Unnamed buffers are tracked by bufnr as
+//! [`NavTarget::Untitled`]. [`NavTarget`] is the dedup key, so `Edit(B)` and `Preview(B)`
+//! are DISTINCT entries.
 //!
 //! ## The "in NEITHER map" rule
 //!
@@ -85,10 +87,6 @@ pub const MAX_ENTRIES: usize = 100;
 /// The maximum number of DISTINCT rows the History menu renders.
 pub const MAX_MENU_ROWS: usize = 10;
 
-/// The display label used for a pathless terminal row (numbered `Terminal`,
-/// `Terminal 2`, ... by first appearance in the newest-first row order).
-const TERMINAL_LABEL: &str = "Terminal";
-
 /// The display label used for a pathless unnamed-buffer row (numbered `Untitled`,
 /// `Untitled 2`, ... by first appearance in the newest-first row order).
 const UNTITLED_LABEL: &str = "Untitled";
@@ -112,12 +110,6 @@ pub enum NavTarget {
         /// The previewed source file's absolute path.
         source: PathBuf,
     },
-    /// A `:terminal` buffer in a NORMAL split (never the terminal drawer), by
-    /// buffer number.
-    Terminal {
-        /// The terminal buffer's number.
-        bufnr: i64,
-    },
     /// A genuinely UNNAMED buffer, by buffer number.
     Untitled {
         /// The unnamed buffer's number.
@@ -126,8 +118,8 @@ pub enum NavTarget {
 }
 
 impl NavTarget {
-    /// The file path this target is about, or `None` for a pathless target
-    /// ([`Terminal`](NavTarget::Terminal) / [`Untitled`](NavTarget::Untitled)).
+    /// The file path this target is about, or `None` for an
+    /// [`Untitled`](NavTarget::Untitled) target.
     ///
     /// Pathless targets are EXCLUDED from the label-collision groups and numbered
     /// instead (see [`PaneHistory::menu_rows`]).
@@ -136,7 +128,7 @@ impl NavTarget {
         match self {
             Self::Edit { path } => Some(path.as_path()),
             Self::Preview { source } => Some(source.as_path()),
-            Self::Terminal { .. } | Self::Untitled { .. } => None,
+            Self::Untitled { .. } => None,
         }
     }
 }
@@ -337,8 +329,8 @@ impl PaneHistory {
     /// 3. **Minimal-growth prefix labels** — see [`disambiguate`].
     /// 4. **Decorate.** `Edit` renders its label; `Preview` prefixes
     ///    `"Preview: "`. Pathless rows are EXCLUDED from steps 2-3 and numbered by
-    ///    first appearance in the newest-first ROW order (`Terminal`,
-    ///    `Terminal 2`, ...; `Untitled`, `Untitled 2`, ...).
+    ///    first appearance in the newest-first ROW order (`Untitled`,
+    ///    `Untitled 2`, ...).
     #[must_use]
     pub fn menu_rows(&self, limit: usize, home: Option<&Path>) -> Vec<MenuRow> {
         // --- 1. Row selection (newest-first, first occurrence wins) -----------
@@ -370,7 +362,6 @@ impl PaneHistory {
 
         // --- 4. Decorate ------------------------------------------------------
         let current = self.current();
-        let mut terminals = 0_usize;
         let mut untitleds = 0_usize;
         kept.into_iter()
             .map(|(index, target)| {
@@ -378,10 +369,6 @@ impl PaneHistory {
                     NavTarget::Edit { path } => label_for(&labels, path),
                     NavTarget::Preview { source } => {
                         format!("{PREVIEW_PREFIX}{}", label_for(&labels, source))
-                    }
-                    NavTarget::Terminal { .. } => {
-                        terminals += 1;
-                        numbered(TERMINAL_LABEL, terminals)
                     }
                     NavTarget::Untitled { .. } => {
                         untitleds += 1;
@@ -543,11 +530,10 @@ impl NavHistory {
 /// 1. a preview source is present → [`NavTarget::Preview`] (it wins over the
 ///    window's buffer; a preview pane is ABSENT from `win_buffers` anyway);
 /// 2. no [`WinBuffer`] at all → `None`;
-/// 3. the terminal DRAWER (`is_drawer`) → `None` — the drawer is EXCLUDED from
-///    history entirely;
-/// 4. `is_terminal` → [`NavTarget::Terminal`] (a `:terminal` in a normal split);
-/// 5. a named buffer → [`NavTarget::Edit`];
-/// 6. otherwise → [`NavTarget::Untitled`], tracked by bufnr.
+/// 3. a terminal pane, the drawer (`is_drawer`) or any window showing a session
+///    (`terminal`) → `None` — terminal panes are EXCLUDED from history entirely;
+/// 4. a named buffer → [`NavTarget::Edit`];
+/// 5. otherwise → [`NavTarget::Untitled`], tracked by bufnr.
 ///
 /// A window present in NEITHER map yields `None`: **no entry, no push, no prune**.
 /// The fold iterates only the union of the two maps' keys, so such a window is
@@ -561,11 +547,8 @@ pub fn derive_target(buf: Option<&WinBuffer>, preview_source: Option<&Path>) -> 
         });
     }
     let buf = buf?;
-    if buf.is_drawer {
+    if buf.is_drawer || buf.terminal.is_some() {
         return None;
-    }
-    if buf.is_terminal {
-        return Some(NavTarget::Terminal { bufnr: buf.bufnr });
     }
     match &buf.path {
         Some(path) => Some(NavTarget::Edit { path: path.clone() }),

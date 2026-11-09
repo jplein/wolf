@@ -26,8 +26,8 @@ public func wolf_ffi_state_snapshot_add_window(_ x: Double, _ y: Double, _ width
 public func wolf_ffi_state_snapshot_add_tab<GenericIntoRustString: IntoRustString>(_ cwd: GenericIntoRustString, _ sidebar_visible: Bool) {
     __swift_bridge__$wolf_ffi_state_snapshot_add_tab({ let rustString = cwd.intoRustString(); rustString.isOwned = false; return rustString.ptr }(), sidebar_visible)
 }
-public func wolf_ffi_state_layout_push_leaf<GenericIntoRustString: IntoRustString>(_ path: GenericIntoRustString, _ preview: Bool, _ weight: Double) {
-    __swift_bridge__$wolf_ffi_state_layout_push_leaf({ let rustString = path.intoRustString(); rustString.isOwned = false; return rustString.ptr }(), preview, weight)
+public func wolf_ffi_state_layout_push_leaf<GenericIntoRustString: IntoRustString>(_ path: GenericIntoRustString, _ preview: Bool, _ terminal: Bool, _ weight: Double) {
+    __swift_bridge__$wolf_ffi_state_layout_push_leaf({ let rustString = path.intoRustString(); rustString.isOwned = false; return rustString.ptr }(), preview, terminal, weight)
 }
 public func wolf_ffi_state_layout_push_split(_ orientation: UInt8, _ child_count: UInt32, _ weight: Double) {
     __swift_bridge__$wolf_ffi_state_layout_push_split(orientation, child_count, weight)
@@ -548,6 +548,14 @@ extension WolfCoreHandleRef {
 
     public func bind_terminal(_ id: UInt64, _ win: Int64, _ target: UInt8) -> Bool {
         __swift_bridge__$WolfCoreHandle$bind_terminal(ptr, id, win, target)
+    }
+
+    public func queue_bind_terminal(_ id: UInt64, _ win: Int64, _ target: UInt8) -> Bool {
+        __swift_bridge__$WolfCoreHandle$queue_bind_terminal(ptr, id, win, target)
+    }
+
+    public func terminal_cwd(_ id: UInt64) -> RustString {
+        RustString(ptr: __swift_bridge__$WolfCoreHandle$terminal_cwd(ptr, id))
     }
 
     public func terminal_frame(_ id: UInt64) -> FfiTerminalFrame {
@@ -2152,6 +2160,10 @@ extension FfiPaneNodeRef {
 
     public func is_preview() -> Bool {
         __swift_bridge__$FfiPaneNode$is_preview(ptr)
+    }
+
+    public func is_terminal() -> Bool {
+        __swift_bridge__$FfiPaneNode$is_terminal(ptr)
     }
 
     public func leaf_path() -> RustString {

@@ -2,7 +2,7 @@
 
 Wolf's terminals are emulated in `wolf-core` by libghostty-vt, and `wolf-core`, not Neovim, owns each terminal's pty and shell process. Neovim keeps owning layout: a terminal pane is a Neovim window whose content the front-end paints from the terminal session rather than from its grid.
 
-This spec is authoritative for the deliveries g01 to g04 listed under [Delivery](#delivery). Until g04 lands, every terminal is a Neovim terminal buffer, as [`wolf_toggle_terminal`](../runtime/nvim/README.md#wolf_toggle_terminal) describes, and the library is built and linked but drives no pane.
+This spec is authoritative for the deliveries g01 to g04 listed under [Delivery](#delivery). Every terminal pane, the drawer included, is a core session. A Neovim terminal a script makes is not, as [What goes away](#what-goes-away) says.
 
 ## libghostty-vt
 
@@ -88,9 +88,9 @@ Terminal panes default to full width, and the existing full-width command toggle
 
 ## The drawer
 
-There is one drawer session per core: per window on GNOME and per project on macOS. On `ToggleTerminal`, core starts a drawer session if none is live, in the current tabpage's cwd. `wolf_toggle_terminal(id)` then opens or closes the drawer window in the current tabpage: a `botright` split a third of the height, tagged `w:wolf_drawer`, showing the drawer's placeholder, focused, and emitting the `drawer_open` intent. Closing the drawer window never ends the session.
+There is one drawer session per core: per window on GNOME and per project on macOS. `WolfCore::toggle_terminal()` starts a drawer session if none is live, in the current tabpage's cwd, before it queues `ToggleTerminal { id }`; starting one is a pty and a fork, never an RPC, and the event carries the id because the input pump has no registry. `drawer_terminal()` names the live drawer session. `wolf_toggle_terminal(id)` then opens or closes the drawer window in the current tabpage: a `botright` split a third of the height, tagged `w:wolf_drawer`, showing the drawer's placeholder, focused, and emitting the `drawer_open` intent. Closing the drawer window never ends the session.
 
-Both front-ends keep the drawer outside their pane trees, as their existing decisions say. Split chords inside the drawer are ignored, and `<C-w>c` or `<C-w>q` in the drawer closes it.
+Both front-ends keep the drawer outside their pane trees, as their existing decisions say. Core's router ignores split chords from the drawer's session, and `<C-w>c` or `<C-w>q` in the drawer closes it.
 
 ## The render contract
 
@@ -142,7 +142,9 @@ The scroll wheel is encoded when tracking is on. Otherwise, on the alternate scr
 
 Sessions live in the core beside the Neovim process state, never in the snapshot. `kill_in_place` and `restart_nvim` leave them running, and the snapshot reset drops the placeholder bindings along with the windows. The crash overlay covers terminal panes while their sessions keep running and publishing. A dead Neovim sends no wipe, so a crash hangs up no session.
 
-After a respawn, the front-end re-binds every live session through `live_terminals()` and `bind_terminal(id, target)`. It reopens the drawer if the view had it open, and puts each live split session into a new vertical split of the restored view, in id order. Pane topology does not survive a restart, a limitation every pane shares.
+After a respawn, the front-end puts every live session back through `live_terminals()` and `queue_bind_terminal(id, target)`, which queues the bind on the input pump and returns `false` for an id that is not live. Each live split session goes into a new vertical split of the restored view, in id order, and then the drawer reopens through `toggle_terminal()` if the view had it open. Pane topology does not survive a restart, a limitation every pane shares.
+
+The bind is queued rather than blocking because a blocking bind reaches Neovim ahead of the reopened files queued before it, so the next `:edit` lands in the new split and wipes its placeholder. The front-end runs the steps only once the view's first pane is bound, because both front-ends bind their first pane to the active window, and a split or drawer opened before then would become the first pane in place of the editor window. GNOME puts `live_terminals()` minus `drawer_terminal()` into its one restored tab, because a restart collapses the window to its selected tab. macOS captures each view's terminal leaves and drawer state before the restart and restores each view's own.
 
 ## The pane status bar
 
@@ -158,7 +160,7 @@ Shells never survive a quit, and the drawer is not persisted.
 
 A split terminal pane persists as `PaneNode::Leaf { path: <cwd>, preview: false, terminal: true }`. The `terminal` field is serde-defaulted to `false`, and `path` holds the directory to start in, chosen by the cwd rule under [Terminal panes in the pane tree](#terminal-panes-in-the-pane-tree). Its `abs_path` is `""`, so no file path is persisted for it.
 
-The rebuild-layout document gains `{ leaf = true, terminal = true }`, for which `init.lua` leaves an empty window. Once `rebuild_layout` returns the window handles, core starts a session per terminal leaf and binds it.
+The rebuild-layout document gains `{ leaf = true, terminal = true }`, for which `init.lua` opens nothing in the window. Once `rebuild_layout` returns the window handles, core starts a session per terminal leaf and binds it into that window. The session starts in `path` when it is an existing directory, else in the window's tabpage cwd. A front-end reads the cwd it persists through `terminal_cwd(id)`.
 
 ## What goes away
 
@@ -169,14 +171,14 @@ g04 removes the Neovim terminal path. From `init.lua`:
 - `TermOpen` in the buffer tracking and `TermLeave` in the fs events;
 - the `w:wolf_terminal` and `b:wolf_terminal` tags, replaced by `w:wolf_drawer` and `b:wolf_terminal_id`, which `wolf_preview_in_other`'s drawer check reads.
 
-`init.lua` gains `:terminal`, `:term` and `:ter` abbreviations that open a session in the current window.
+`init.lua` gains `:terminal`, `:term` and `:ter` abbreviations that open a session in the current window. Each sends the `wolf_terminal_open` notification with the window, and core starts the session in its tabpage cwd and binds it there.
 
 From core:
 
 - `WinBuffer.is_terminal`, replaced by `terminal`; `is_drawer` stays;
-- `redraw::TERMINAL_BUFFER_PREFIX`, `is_terminal_buffer_name` and the `open_files` `term://` filter; the `init.lua` open-files emitter filters on `buftype ~= ""` instead;
+- `redraw::TERMINAL_BUFFER_PREFIX`, `is_terminal_buffer_name` and the `open_files` `term://` filter; the `init.lua` open-files emitter filters on `buftype ~= ""` instead, for the files and for the tabpage's active path;
 - `pane_status`'s `term://` rule and `terminal_command_name`;
-- `NavTarget::Terminal`. Every terminal pane is excluded from navigation history, as the drawer is, because a terminal is not a document and its session may have exited.
+- `NavTarget::Terminal`. Every terminal pane is excluded from navigation history, as the drawer is, because a terminal is not a document and its session may have exited. A window that becomes a terminal pane loses its stack, so Back never replaces, and so wipes, a session's placeholder.
 
 Scripted paths can still make a Neovim terminal (`termopen`, `jobstart({term=true})`, `:edit term://…`). It paints as an ordinary grid and gets no special treatment, a best-effort lockout like the tabpage one.
 

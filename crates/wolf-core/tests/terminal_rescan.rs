@@ -12,8 +12,8 @@
 //! Each is measured by this test against the real component, not assumed:
 //!
 //! - With the watcher off, only Neovim's triggers (buffer events, `ShellCmdPost`,
-//!   `FocusGained`, `TermLeave`) and core's own force a rescan; a shell writing a file through
-//!   its pty fires none of them.
+//!   `FocusGained`) and core's own force a rescan; a shell writing a file through its pty
+//!   fires none of them.
 //! - `WOLF_FS_WATCH` is read once per search, on the thread that calls `start_file_search`.
 
 mod common;

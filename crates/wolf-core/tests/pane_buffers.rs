@@ -366,7 +366,7 @@ fn closing_split_drops_that_window_survivor_keeps_file() {
 }
 
 // Regression guards: `Snapshot.buffers` and `pane_status(grid)`, its only production consumer,
-// must not depend on the `bufnr`/`is_terminal`/`is_drawer` fields of the `wolf_buffers` tuple.
+// must not depend on the `bufnr`/`is_drawer`/`terminal_id` fields of the `wolf_buffers` tuple.
 
 /// `Snapshot.buffers` still holds CANONICALIZED paths keyed by WINDOW handle and
 /// still OMITS unnamed windows; `pane_status(grid)` is unchanged for a NAMED
