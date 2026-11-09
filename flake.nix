@@ -103,6 +103,54 @@
           lighthouse = { commit = "514dec2c79701b74082defc19090bd1dae57765b"; sha256 = "a452624fee9ce7b82e11877b013f578aa1c3befda6b6564536c3264a40b8e0d2"; };
         };
 
+        # The libghostty-vt release; outside wolfVendoredPins, whose test wants a commit per line.
+        # Bump together with bazel/ghostty-vt/extensions.bzl.
+        wolfGhosttyVtPin = {
+          version = "1.0.0";
+          sha256 = "4a6ef758be721923e1969e7b81b443dcc92d8dd3fb5a39600c03a8817a753676";
+          depsSha256 = "4d5ea5e448e4c7ea8fb55ccbaa8668f2a97d44f438cee831e2b7ecd162d85c29";
+        };
+        wolfGhosttyVtUrl = "https://release.files.ghostty.org/libghostty-vt/${wolfGhosttyVtPin.version}";
+
+        # The release's Zig packages as real directories, since Zig's lexical path logic breaks on a
+        # symlinked `--system` tree. Linux-only: see notes/flake.nix.md#darwin-eval-laziness
+        wolfGhosttyVtDeps =
+          pkgs.runCommand "libghostty-vt-${wolfGhosttyVtPin.version}-deps"
+            {
+              src = pkgs.fetchurl {
+                url = "${wolfGhosttyVtUrl}/libghostty-vt-${wolfGhosttyVtPin.version}-deps.tar.gz";
+                sha256 = wolfGhosttyVtPin.depsSha256;
+              };
+            }
+            ''
+              mkdir -p "$out"
+              tar -xzf "$src" -C "$out" --strip-components=1
+            '';
+
+        # libghostty-vt built offline from its release tarball with nixpkgs' Zig, for crates/wolf-vt.
+        # Linux-only: see notes/flake.nix.md#darwin-eval-laziness
+        wolfGhosttyVt = pkgs.stdenv.mkDerivation {
+          pname = "libghostty-vt";
+          inherit (wolfGhosttyVtPin) version;
+          src = pkgs.fetchurl {
+            url = "${wolfGhosttyVtUrl}/libghostty-vt-${wolfGhosttyVtPin.version}.tar.gz";
+            sha256 = wolfGhosttyVtPin.sha256;
+          };
+
+          __structuredAttrs = true;
+          strictDeps = true;
+
+          # The Zig setup hook supplies the build and install phases and a fresh global cache.
+          nativeBuildInputs = [ pkgs.zig_0_17 ];
+          dontSetZigDefaultFlags = true;
+          zigBuildFlags = [
+            "--system"
+            "${wolfGhosttyVtDeps}"
+            "-Doptimize=ReleaseFast"
+            "-Dcpu=baseline"
+          ];
+        };
+
         # iA Writer Mono S static faces and licence, from the tarball bazel/ia-writer-mono pins too.
         # Linux-only: see notes/flake.nix.md#darwin-eval-laziness
         iaWriterMono =
@@ -345,6 +393,9 @@
             # lighthouse_load.rs. Each is the tree itself, and neither lands beside runtime/nvim/init.lua.
             export WOLF_TEST_ORLANDO_DIR="${wolfOrlando}"
             export WOLF_TEST_LIGHTHOUSE_DIR="${wolfLighthouse}"
+
+            # The libghostty-vt install prefix crates/wolf-vt/build.rs links lib/libghostty-vt.a from.
+            export WOLF_GHOSTTY_VT_DIR="${wolfGhosttyVt}"
 
             export RUST_SRC_PATH="${rustToolchain}/lib/rustlib/src/rust/library"
 

@@ -793,6 +793,19 @@ rust_test(
     ],
 )
 
+# Headless (no nvim). wolf-core is a direct dep so the test can name LIBRARY_LICENSE_NOTICES.
+rust_test(
+    name = "library_license_notices",
+    srcs = ["tests/library_license_notices.rs"],
+    crate_root = "tests/library_license_notices.rs",
+    size = "small",
+    edition = "2021",
+    deps = [
+        ":wolf_ffi",
+        "//crates/wolf-core:wolf_core",
+    ],
+)
+
 rust_test(
     name = "rebuild_layout",
     srcs = [

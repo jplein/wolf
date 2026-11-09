@@ -1,5 +1,5 @@
 {
-  "checksum": "9c73325f620c8d06dd7d634af87fe7e9b1330121244afaf4484d7cc67d2548a3",
+  "checksum": "03c2fd9445b28e8c9e5f870e97542cdc77f57fbb1c7fd90ddd5ea834d06d9e34",
   "crates": {
     "ahash 0.8.12": {
       "name": "ahash",
@@ -14492,6 +14492,73 @@
       ],
       "license_file": null
     },
+    "wolf-vt 0.1.0": {
+      "name": "wolf-vt",
+      "version": "0.1.0",
+      "package_url": null,
+      "repository": null,
+      "targets": [
+        {
+          "Library": {
+            "crate_name": "wolf_vt",
+            "crate_root": "src/lib.rs",
+            "srcs": {
+              "allow_empty": true,
+              "include": [
+                "**/*.rs"
+              ]
+            }
+          }
+        },
+        {
+          "BuildScript": {
+            "crate_name": "build_script_build",
+            "crate_root": "build.rs",
+            "srcs": {
+              "allow_empty": true,
+              "include": [
+                "**/*.rs"
+              ]
+            }
+          }
+        }
+      ],
+      "library_target_name": "wolf_vt",
+      "common_attrs": {
+        "compile_data_glob": [
+          "**"
+        ],
+        "deps": {
+          "common": [
+            {
+              "id": "wolf-vt 0.1.0",
+              "target": "build_script_build"
+            }
+          ],
+          "selects": {}
+        },
+        "edition": "2021",
+        "version": "0.1.0"
+      },
+      "build_script_attrs": {
+        "compile_data_glob": [
+          "**"
+        ],
+        "compile_data_glob_excludes": [
+          "**/*.rs"
+        ],
+        "data_glob": [
+          "**"
+        ],
+        "links": "ghostty-vt"
+      },
+      "license": "MIT OR Apache-2.0",
+      "license_ids": [
+        "Apache-2.0",
+        "MIT"
+      ],
+      "license_file": null
+    },
     "zerocopy 0.8.52": {
       "name": "zerocopy",
       "version": "0.8.52",
@@ -14713,7 +14780,8 @@
   "workspace_members": {
     "wolf-core 0.1.0": "crates/wolf-core",
     "wolf-ffi 0.1.0": "crates/wolf-ffi",
-    "wolf-gnome 0.1.0": "crates/wolf-gnome"
+    "wolf-gnome 0.1.0": "crates/wolf-gnome",
+    "wolf-vt 0.1.0": "crates/wolf-vt"
   },
   "conditions": {
     "aarch64-apple-darwin": [

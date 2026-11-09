@@ -1,12 +1,17 @@
-//! The compiled-in font licence registry: the four bundled fonts' verbatim licence
-//! texts, plus the one plain-text block every front-end and every rendered preview
-//! document carries.
+//! The compiled-in licence registries: the verbatim licence texts of the four bundled
+//! fonts and of the linked libraries, each with the plain-text block built from it.
 //!
 //! Two of the four fonts ship inside every rendered preview document as base64
 //! `@font-face` payloads ([`crate::markdown`]); the other two ship as editor faces
 //! in the same distribution. All four are redistributed, so all four owe
 //! attribution, and the only way to discharge that from a self-contained binary is
-//! to compile the texts in.
+//! to compile the texts in. Every front-end and every rendered preview document
+//! carries [`FONT_LICENSE_NOTICES`].
+//!
+//! [`LIBRARY_LICENSES`] lists libghostty-vt and the third-party code compiled into its
+//! static archive, which Wolf links, so their notices travel with the binary too. Both
+//! front-ends' About surfaces carry [`LIBRARY_LICENSE_NOTICES`] after the font block; the
+//! preview document does not, since it embeds none of that code.
 //!
 //! ## Why [`FONT_LICENSE_NOTICES`] is a `const` and not a function
 //!
@@ -17,11 +22,12 @@
 //!
 //! ## Why the notices are separated with explicit newlines
 //!
-//! `licenses/ia-writer-mono-LICENSE.txt` carries no trailing newline. A `concat!`
-//! that abuts the texts and trusts them to end in one welds `…SOFTWARE.` onto the
-//! next row's header. Three of the four texts do end in a newline, which is
-//! exactly what would make the fourth's omission invisible, so every row is
-//! followed by an explicit `"\n"` here.
+//! `licenses/ia-writer-mono-LICENSE.txt` carries no trailing newline, and neither do
+//! `licenses/highway-LICENSE-BSD3.txt` and `licenses/unicode-LICENSE-V3.txt`. A `concat!`
+//! that abuts the texts and trusts them to end in one welds the last line onto the
+//! next row's header. Most of the texts do end in a newline, which is exactly what
+//! would make the others' omission invisible, so every row in both blocks is followed
+//! by an explicit `"\n"` here.
 
 /// One bundled font's licence: what it is, where its text came from, and the text.
 ///
@@ -137,6 +143,143 @@ pub const FONT_LICENSE_NOTICES: &str = concat!(
     "iA Writer Mono S — SIL Open Font License 1.1\n",
     "================================================================\n",
     include_str!("licenses/ia-writer-mono-LICENSE.txt"),
+    "\n",
+);
+
+/// One linked library's licence: what it is, where its text came from, and the text.
+///
+/// `provenance` records the tarball, the path inside it, the tarball's pinned sha256 and
+/// any rename on the way in, so the committed text can be re-derived from the pin.
+pub struct LibraryLicense {
+    /// The library as a reader knows it, e.g. `"libghostty-vt"`.
+    pub library: &'static str,
+    /// The licence the text grants, e.g. `"MIT License"`. For a library offered under a
+    /// choice of licences, it names the one Wolf takes and the choice.
+    pub license: &'static str,
+    /// Where the text came from: tarball, in-tarball path, pinned sha256, and any rename.
+    pub provenance: &'static str,
+    /// The verbatim licence text, `include_str!`'d from the committed copy.
+    pub text: &'static str,
+}
+
+/// The MIT License, which most of the linked libraries are offered under.
+const MIT: &str = "MIT License";
+
+/// Every library linked into Wolf's binaries whose licence asks for its notice, in the
+/// order [`LIBRARY_LICENSE_NOTICES`] renders them: libghostty-vt, then the third-party
+/// code its static archive compiles in, as its `deps/libghostty-vt-third-party.json`
+/// lists with `"use": "linked"`.
+pub const LIBRARY_LICENSES: &[LibraryLicense] = &[
+    LibraryLicense {
+        library: "libghostty-vt",
+        license: MIT,
+        provenance: "LICENSE at the root of libghostty-vt-1.0.0.tar.gz, tarball sha256 \
+                     4a6ef758be721923e1969e7b81b443dcc92d8dd3fb5a39600c03a8817a753676 — the pin \
+                     in bazel/ghostty-vt/extensions.bzl and flake.nix",
+        text: include_str!("licenses/libghostty-vt-LICENSE.txt"),
+    },
+    LibraryLicense {
+        library: "Highway",
+        license: "BSD 3-Clause License (Highway is offered under Apache-2.0 OR BSD-3-Clause)",
+        provenance: "N-V-__8AAGmZhABbsPJLfbqrh6JTHsXhY6qCaLAQyx25e0XE/LICENSE-BSD3 inside \
+                     libghostty-vt-1.0.0-deps.tar.gz, tarball sha256 \
+                     4d5ea5e448e4c7ea8fb55ccbaa8668f2a97d44f438cee831e2b7ecd162d85c29, renamed to \
+                     highway-LICENSE-BSD3.txt. It has no trailing newline",
+        text: include_str!("licenses/highway-LICENSE-BSD3.txt"),
+    },
+    LibraryLicense {
+        library: "simdutf",
+        license: "MIT License (offered under Apache-2.0 OR MIT)",
+        provenance: "libghostty-vt-1.0.0/pkg/simdutf/vendor/LICENSE-MIT inside \
+                     libghostty-vt-1.0.0.tar.gz, tarball sha256 \
+                     4a6ef758be721923e1969e7b81b443dcc92d8dd3fb5a39600c03a8817a753676, renamed to \
+                     simdutf-LICENSE-MIT.txt",
+        text: include_str!("licenses/simdutf-LICENSE-MIT.txt"),
+    },
+    LibraryLicense {
+        library: "translate-c",
+        license: MIT,
+        provenance: "translate_c-2.0.0-Q_BUWltOBwBYABF84EUL208pIFeUIwbBs29FmVBaafN5/LICENSE inside \
+                     libghostty-vt-1.0.0-deps.tar.gz, tarball sha256 \
+                     4d5ea5e448e4c7ea8fb55ccbaa8668f2a97d44f438cee831e2b7ecd162d85c29, renamed to \
+                     translate-c-LICENSE.txt",
+        text: include_str!("licenses/translate-c-LICENSE.txt"),
+    },
+    LibraryLicense {
+        library: "uucode",
+        license: MIT,
+        provenance: "uucode-0.2.0-ZZjBPm6FVgBcY-79AHV8ckQj86z0JwOyVyj89VeZrEiv/LICENSE.md inside \
+                     libghostty-vt-1.0.0-deps.tar.gz, tarball sha256 \
+                     4d5ea5e448e4c7ea8fb55ccbaa8668f2a97d44f438cee831e2b7ecd162d85c29, committed as \
+                     uucode-LICENSE.txt so prettier's **/*.md gate cannot reformat it",
+        text: include_str!("licenses/uucode-LICENSE.txt"),
+    },
+    LibraryLicense {
+        library: "Unicode Character Database",
+        license: "Unicode License V3",
+        provenance: "uucode compiles Unicode Character Database data in, and its package carries \
+                     no copy of the Unicode licence. The text is the copy aro ships: \
+                     aro-0.0.0-JSD1QtuBNwCASyBtNF3pqTl_W3oAJQGEVyFAtrBSE_Pa/LICENSE-UNICODE inside \
+                     libghostty-vt-1.0.0-deps.tar.gz, tarball sha256 \
+                     4d5ea5e448e4c7ea8fb55ccbaa8668f2a97d44f438cee831e2b7ecd162d85c29, renamed to \
+                     unicode-LICENSE-V3.txt. It has no trailing newline",
+        text: include_str!("licenses/unicode-LICENSE-V3.txt"),
+    },
+    LibraryLicense {
+        library: "Wuffs",
+        license: "MIT License (offered under Apache-2.0 OR MIT)",
+        provenance: "N-V-__8AAP5JWgCGP_AD0teWpa4krRvE9VPZzvviGdbmN4jI/LICENSE-MIT inside \
+                     libghostty-vt-1.0.0-deps.tar.gz, tarball sha256 \
+                     4d5ea5e448e4c7ea8fb55ccbaa8668f2a97d44f438cee831e2b7ecd162d85c29, renamed to \
+                     wuffs-LICENSE-MIT.txt",
+        text: include_str!("licenses/wuffs-LICENSE-MIT.txt"),
+    },
+];
+
+/// Every [`LIBRARY_LICENSES`] row rendered as one plain-text block, in registry order,
+/// with the same header blocks as [`FONT_LICENSE_NOTICES`].
+///
+/// A `concat!` constant like the font block, with an explicit newline after every text
+/// for the reason the module docs give. The headers restate each row's `library` and
+/// `license`; `tests/library_licenses.rs` stops the two copies drifting.
+pub const LIBRARY_LICENSE_NOTICES: &str = concat!(
+    "Wolf includes the following libraries. Each is redistributed under the licence\n",
+    "reproduced beneath its name.\n",
+    "\n",
+    "================================================================\n",
+    "libghostty-vt — MIT License\n",
+    "================================================================\n",
+    include_str!("licenses/libghostty-vt-LICENSE.txt"),
+    "\n",
+    "================================================================\n",
+    "Highway — BSD 3-Clause License (Highway is offered under Apache-2.0 OR BSD-3-Clause)\n",
+    "================================================================\n",
+    include_str!("licenses/highway-LICENSE-BSD3.txt"),
+    "\n",
+    "================================================================\n",
+    "simdutf — MIT License (offered under Apache-2.0 OR MIT)\n",
+    "================================================================\n",
+    include_str!("licenses/simdutf-LICENSE-MIT.txt"),
+    "\n",
+    "================================================================\n",
+    "translate-c — MIT License\n",
+    "================================================================\n",
+    include_str!("licenses/translate-c-LICENSE.txt"),
+    "\n",
+    "================================================================\n",
+    "uucode — MIT License\n",
+    "================================================================\n",
+    include_str!("licenses/uucode-LICENSE.txt"),
+    "\n",
+    "================================================================\n",
+    "Unicode Character Database — Unicode License V3\n",
+    "================================================================\n",
+    include_str!("licenses/unicode-LICENSE-V3.txt"),
+    "\n",
+    "================================================================\n",
+    "Wuffs — MIT License (offered under Apache-2.0 OR MIT)\n",
+    "================================================================\n",
+    include_str!("licenses/wuffs-LICENSE-MIT.txt"),
     "\n",
 );
 

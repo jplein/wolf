@@ -1,0 +1,37 @@
+# Bazel build for `wolf-vt`, the binding over libghostty-vt. Bazel links the static archive
+# from //bazel/ghostty-vt and never runs build.rs, which is Cargo's route to the same archive.
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("//tools/lint:defs.bzl", "comment_srcs")
+
+exports_files(["Cargo.toml"])
+
+rust_library(
+    name = "wolf_vt",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "wolf_vt",
+    edition = "2021",
+    link_deps = ["//bazel/ghostty-vt:ghostty_vt"],
+    visibility = ["//visibility:public"],
+)
+
+# Headless: links the static archive and nothing else, so no runfiles and no `no-sandbox` tag.
+rust_test(
+    name = "binding",
+    srcs = ["tests/binding.rs"],
+    crate_root = "tests/binding.rs",
+    size = "small",
+    edition = "2021",
+    deps = [":wolf_vt"],
+)
+
+# This package's sources and docs for //tools/lint, which cannot glob across packages.
+comment_srcs()
+
+filegroup(
+    name = "markdown_srcs",
+    srcs = glob(
+        ["**/*.md"],
+        allow_empty = True,
+    ),
+    visibility = ["//tools/lint:__pkg__"],
+)

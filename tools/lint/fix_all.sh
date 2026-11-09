@@ -49,6 +49,7 @@ echo "==> [1/3] rustfmt"
 mapfile -t RS_FILES < <(find \
   "${BUILD_WORKSPACE_DIRECTORY}/crates/wolf-core" \
   "${BUILD_WORKSPACE_DIRECTORY}/crates/wolf-ffi" \
+  "${BUILD_WORKSPACE_DIRECTORY}/crates/wolf-vt" \
   -type f -name '*.rs' 2>/dev/null | sort)
 if [[ "${#RS_FILES[@]}" -gt 0 ]]; then
   "${RUSTFMT}" --edition 2021 "${RS_FILES[@]}"

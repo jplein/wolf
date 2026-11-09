@@ -300,6 +300,15 @@ rust_test(
 )
 
 rust_test(
+    name = "library_licenses",
+    srcs = ["tests/library_licenses.rs"],
+    crate_root = "tests/library_licenses.rs",
+    size = "small",
+    edition = "2021",
+    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+)
+
+rust_test(
     name = "nav_history",
     srcs = ["tests/nav_history.rs"],
     crate_root = "tests/nav_history.rs",

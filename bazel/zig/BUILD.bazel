@@ -1,0 +1,45 @@
+# The arch-selected Zig 0.17.0 that builds libghostty-vt, and its smoke test.
+# See specs/terminal-panes.md#building-libghostty-vt
+load("//tools/lint:defs.bzl", "comment_srcs")
+
+alias(
+    name = "zig",
+    actual = select({
+        "@platforms//cpu:arm64": "@zig_macos_arm64//:zig",
+        "@platforms//cpu:x86_64": "@zig_macos_x86_64//:zig",
+    }),
+    visibility = ["//visibility:public"],
+)
+
+# The whole release tree, which Zig needs beside the binary to find its `lib/`.
+alias(
+    name = "zig_files",
+    actual = select({
+        "@platforms//cpu:arm64": "@zig_macos_arm64//:files",
+        "@platforms//cpu:x86_64": "@zig_macos_x86_64//:files",
+    }),
+    visibility = ["//visibility:public"],
+)
+
+# Exercises the pinned Zig: executable, reports `0.17.0`, and finds its `lib/` directory.
+sh_test(
+    name = "zig_version_test",
+    srcs = ["zig_version_test.sh"],
+    args = ["$(rootpath :zig)"],
+    data = [
+        ":zig",
+        ":zig_files",
+    ],
+)
+
+# This package's sources and docs for //tools/lint, which cannot glob across packages.
+comment_srcs()
+
+filegroup(
+    name = "markdown_srcs",
+    srcs = glob(
+        ["**/*.md"],
+        allow_empty = True,
+    ),
+    visibility = ["//tools/lint:__pkg__"],
+)

@@ -61,6 +61,7 @@ crate.from_cargo(
         "//:Cargo.toml",
         "//crates/wolf-core:Cargo.toml",
         "//crates/wolf-ffi:Cargo.toml",
+        "//crates/wolf-vt:Cargo.toml",
     ],
     supported_platform_triples = [
         "aarch64-apple-darwin",
@@ -76,6 +77,16 @@ use_repo(nvim, "nvim_macos_arm64", "nvim_macos_x86_64")
 # --- Pinned ripgrep 15.2.0 for the sidebar content search: see bazel/rg/README.md ---
 rg = use_extension("//bazel/rg:extensions.bzl", "rg")
 use_repo(rg, "rg_macos_arm64", "rg_macos_x86_64")
+
+# --- Pinned Zig 0.17.0, a build tool for libghostty-vt only ------------------
+# See specs/terminal-panes.md#building-libghostty-vt
+zig = use_extension("//bazel/zig:extensions.bzl", "zig")
+use_repo(zig, "zig_macos_arm64", "zig_macos_x86_64")
+
+# --- Pinned libghostty-vt 1.0.0 release and deps tarballs, built by //bazel/ghostty-vt ---
+# See specs/terminal-panes.md#building-libghostty-vt
+ghostty_vt = use_extension("//bazel/ghostty-vt:extensions.bzl", "ghostty_vt")
+use_repo(ghostty_vt, "ghostty_vt_deps", "ghostty_vt_src")
 
 # --- Vendored orlando Neovim plugin (macOS bundle only): see bazel/orlando/README.md ---
 orlando = use_extension("//bazel/orlando:extensions.bzl", "orlando")

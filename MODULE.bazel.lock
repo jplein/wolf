@@ -221,6 +221,44 @@
   },
   "selectedYankedVersions": {},
   "moduleExtensions": {
+    "//bazel/ghostty-vt:extensions.bzl%ghostty_vt": {
+      "general": {
+        "bzlTransitiveDigest": "uElJucQqI0TgC1YNOBHPrLw99OS+ZudUevxe4aTvU70=",
+        "usagesDigest": "5Jc+SER+rcVesrBv7NQDkAa81Gq0BJKmUKzhbQjBdDY=",
+        "recordedFileInputs": {},
+        "recordedDirentsInputs": {},
+        "envVariables": {},
+        "generatedRepoSpecs": {
+          "ghostty_vt_src": {
+            "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_file",
+            "attributes": {
+              "urls": [
+                "https://release.files.ghostty.org/libghostty-vt/1.0.0/libghostty-vt-1.0.0.tar.gz"
+              ],
+              "sha256": "4a6ef758be721923e1969e7b81b443dcc92d8dd3fb5a39600c03a8817a753676",
+              "downloaded_file_path": "libghostty-vt-1.0.0.tar.gz"
+            }
+          },
+          "ghostty_vt_deps": {
+            "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_file",
+            "attributes": {
+              "urls": [
+                "https://release.files.ghostty.org/libghostty-vt/1.0.0/libghostty-vt-1.0.0-deps.tar.gz"
+              ],
+              "sha256": "4d5ea5e448e4c7ea8fb55ccbaa8668f2a97d44f438cee831e2b7ecd162d85c29",
+              "downloaded_file_path": "libghostty-vt-1.0.0-deps.tar.gz"
+            }
+          }
+        },
+        "recordedRepoMappingEntries": [
+          [
+            "",
+            "bazel_tools",
+            "bazel_tools"
+          ]
+        ]
+      }
+    },
     "//bazel/ia-writer-mono:extensions.bzl%ia_writer_mono": {
       "general": {
         "bzlTransitiveDigest": "DKp/lp2LbM1pRd7w8fdd1mElbBQwCfMtrUQwzjWsXHA=",
@@ -621,6 +659,46 @@
               ],
               "sha256": "6548cd059983e8073dfa39f102641f71d045b37f3a05b7ebd799ad17df8471d1",
               "build_file_content": "load(\"@rules_cc//cc:defs.bzl\", \"cc_binary\")\nload(\"@aspect_bazel_lib//lib:copy_file.bzl\", \"copy_file\")\n\npackage(default_visibility = [\"//visibility:public\"])\n\nload(\"@rules_cc//cc:defs.bzl\", \"cc_library\")\n\n# The `schema.*.c` files scanner.c textually includes â staged, never compiled\n# standalone.\ncc_library(\n    name = \"yaml_schema_textual\",\n    textual_hdrs = glob([\"tree-sitter-yaml-a1c4812a73ec5e089de8e441fdea3a921e8d5079/src/schema.*.c\"]),\n    includes = [\"tree-sitter-yaml-a1c4812a73ec5e089de8e441fdea3a921e8d5079/src\"],\n)\n\ncc_binary(\n    name = \"yaml.so\",\n    srcs = glob([\n        \"tree-sitter-yaml-a1c4812a73ec5e089de8e441fdea3a921e8d5079/src/parser.c\",\n        \"tree-sitter-yaml-a1c4812a73ec5e089de8e441fdea3a921e8d5079/src/scanner.c\",\n        \"tree-sitter-yaml-a1c4812a73ec5e089de8e441fdea3a921e8d5079/src/*.h\",\n        \"tree-sitter-yaml-a1c4812a73ec5e089de8e441fdea3a921e8d5079/src/tree_sitter/*.h\",\n    ], allow_empty = True),\n    includes = [\"tree-sitter-yaml-a1c4812a73ec5e089de8e441fdea3a921e8d5079/src\"],\n    copts = [\"-std=c11\", \"-fPIC\", \"-w\"],\n    linkshared = True,\n    linkstatic = True,\n    deps = [\":yaml_schema_textual\"],\n)\n\ncopy_file(\n    name = \"yaml_parser_file\",\n    src = \":yaml.so\",\n    out = \"parser/yaml.so\",\n    allow_symlink = False,\n)\n\nfilegroup(\n    name = \"yaml_parser\",\n    srcs = [\":yaml_parser_file\"],\n)\n"
+            }
+          }
+        },
+        "recordedRepoMappingEntries": [
+          [
+            "",
+            "bazel_tools",
+            "bazel_tools"
+          ]
+        ]
+      }
+    },
+    "//bazel/zig:extensions.bzl%zig": {
+      "general": {
+        "bzlTransitiveDigest": "+eX2rtLBe/n8iI0igyoQAOLiLrtpJqeRb6OIcEGAlL4=",
+        "usagesDigest": "CNFM9ET0uOggBFXstXi2gJamAeFYVlRjMlnAHUOpaj4=",
+        "recordedFileInputs": {},
+        "recordedDirentsInputs": {},
+        "envVariables": {},
+        "generatedRepoSpecs": {
+          "zig_macos_arm64": {
+            "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_archive",
+            "attributes": {
+              "urls": [
+                "https://ziglang.org/download/0.17.0/zig-aarch64-macos-0.17.0.tar.xz"
+              ],
+              "sha256": "b607e9b9234790a008116ae5bdb71c6243b84b9fb42a53a9e70fde41c06c536a",
+              "strip_prefix": "zig-aarch64-macos-0.17.0",
+              "build_file_content": "package(default_visibility = [\"//visibility:public\"])\n\nexports_files([\"zig\"])\n\nfilegroup(\n    name = \"files\",\n    srcs = glob([\"**\"]),\n)\n"
+            }
+          },
+          "zig_macos_x86_64": {
+            "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_archive",
+            "attributes": {
+              "urls": [
+                "https://ziglang.org/download/0.17.0/zig-x86_64-macos-0.17.0.tar.xz"
+              ],
+              "sha256": "4f9a1c5269aa17ebda5e6d3c2b89d6cbf36f7d2b22a0306e9ab98f25f95529c6",
+              "strip_prefix": "zig-x86_64-macos-0.17.0",
+              "build_file_content": "package(default_visibility = [\"//visibility:public\"])\n\nexports_files([\"zig\"])\n\nfilegroup(\n    name = \"files\",\n    srcs = glob([\"**\"]),\n)\n"
             }
           }
         },

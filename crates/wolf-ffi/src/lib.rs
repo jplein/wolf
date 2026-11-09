@@ -769,6 +769,11 @@ mod ffi {
     }
 
     extern "Rust" {
+        // A free fn needing no live core: `wolf_core::LIBRARY_LICENSE_NOTICES`, verbatim.
+        fn wolf_ffi_library_license_notices() -> String;
+    }
+
+    extern "Rust" {
         type FfiState;
 
         // The restored per-window entries (empty when nothing was saved).
@@ -1394,6 +1399,15 @@ pub fn wolf_ffi_load_config() -> FfiConfig {
 #[must_use]
 pub fn wolf_ffi_font_license_notices() -> String {
     wolf_core::FONT_LICENSE_NOTICES.to_owned()
+}
+
+/// Returns [`wolf_core::LIBRARY_LICENSE_NOTICES`] verbatim: the linked libraries'
+/// licence notices, which the macOS About panel shows after the font notices.
+///
+/// A free FFI fn (no live core required).
+#[must_use]
+pub fn wolf_ffi_library_license_notices() -> String {
+    wolf_core::LIBRARY_LICENSE_NOTICES.to_owned()
 }
 
 // --- FfiState / FfiWindowState: the saved application state (opaque to Swift) ---

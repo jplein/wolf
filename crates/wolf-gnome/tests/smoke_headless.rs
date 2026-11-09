@@ -36028,7 +36028,12 @@ fn packaged_binary(smoke: &str) -> PathBuf {
 /// `WOLF_DEV_SHELL` is here for the same reason: it is the marker `gates.sh` reads
 /// to know it is already inside the dev shell, so it means nothing to `cage` and no
 /// `wolf-gnome` code reads it. An installed artifact never runs inside that shell.
-const PACKAGED_SCRUB_ALWAYS: [&str; 9] = [
+///
+/// `WOLF_GHOSTTY_VT_DIR` is here for the same reason: only `crates/wolf-vt/build.rs`
+/// reads it, at Cargo build time, to find the static `libghostty-vt.a` it links, so
+/// no `wolf-gnome` code reads it at run time. An installed artifact carries the
+/// archive inside its binary and never needs the variable.
+const PACKAGED_SCRUB_ALWAYS: [&str; 10] = [
     "WOLF_NVIM_BIN",
     "WOLF_RG_BIN",
     "WOLF_NVIM_TREESITTER_DIR",
@@ -36036,6 +36041,7 @@ const PACKAGED_SCRUB_ALWAYS: [&str; 9] = [
     "WOLF_INIT_LUA",
     "WOLF_TEST_ORLANDO_DIR",
     "WOLF_TEST_LIGHTHOUSE_DIR",
+    "WOLF_GHOSTTY_VT_DIR",
     "RUST_SRC_PATH",
     "WOLF_DEV_SHELL",
 ];

@@ -1,0 +1,13 @@
+[package]
+name = "wolf-vt"
+description = "Safe binding over libghostty-vt, Ghostty's terminal-emulation library: bytes in, cells, cursor and colours out. GUI-free."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish = false
+# Cargo links the static archive through build.rs; Bazel links //bazel/ghostty-vt:ghostty_vt.
+links = "ghostty-vt"
+
+[lib]
+name = "wolf_vt"
+path = "src/lib.rs"

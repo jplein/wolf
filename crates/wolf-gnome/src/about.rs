@@ -1,12 +1,12 @@
-//! The About dialog: the pure text seam that carries the bundled fonts' licence
-//! notices, plus the transient `gtk::Window` that presents it.
+//! The About dialog: the pure text seam that carries the bundled fonts' and the linked
+//! libraries' licence notices, plus the transient `gtk::Window` that presents it.
 //!
-//! This is the one surface on this front-end that discharges the bundled fonts'
-//! attribution obligation, so its content has legal weight rather than cosmetic
-//! weight. [`about_text`] takes no arguments and reads
-//! [`wolf_core::FONT_LICENSE_NOTICES`] itself, deliberately: a version taking the
-//! notices as a parameter would let its test pass them in, which would prove
-//! nothing about what ships.
+//! This is the one surface on this front-end that discharges the bundled fonts' and
+//! the linked libraries' attribution obligations, so its content has legal weight
+//! rather than cosmetic weight. [`about_text`] takes no arguments and reads
+//! [`wolf_core::FONT_LICENSE_NOTICES`] and [`wolf_core::LIBRARY_LICENSE_NOTICES`]
+//! itself, deliberately: a version taking the notices as a parameter would let its
+//! test pass them in, which would prove nothing about what ships.
 //!
 //! ## Plain GTK, not `adw::AboutDialog`
 //!
@@ -41,7 +41,8 @@ const ABOUT_HEIGHT: i32 = 560;
 const ABOUT_MARGIN: i32 = 12;
 
 /// The whole dialog body: a heading naming the application and its version, a
-/// short preamble, then [`wolf_core::FONT_LICENSE_NOTICES`] verbatim.
+/// short preamble, [`wolf_core::FONT_LICENSE_NOTICES`] verbatim, a blank line, then
+/// [`wolf_core::LIBRARY_LICENSE_NOTICES`] verbatim.
 ///
 /// The heading is the first line, and the version comes from
 /// `CARGO_PKG_VERSION`, so a bug report can name the build it is against.
@@ -52,9 +53,11 @@ pub fn about_text() -> String {
          \n\
          A Markdown editor that embeds Neovim as its editing engine.\n\
          \n\
-         {notices}",
+         {fonts}\n\
+         {libraries}",
         version = env!("CARGO_PKG_VERSION"),
-        notices = wolf_core::FONT_LICENSE_NOTICES,
+        fonts = wolf_core::FONT_LICENSE_NOTICES,
+        libraries = wolf_core::LIBRARY_LICENSE_NOTICES,
     )
 }
 

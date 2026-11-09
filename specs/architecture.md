@@ -16,13 +16,14 @@ The rule is checked rather than assumed, by the `wolf-core-deps` gate of [`gates
 
 ## Components
 
-| Crate                                          | Role                                                                                                                                                     | Built with            |
-| ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
-| [`wolf-core`](../crates/wolf-core/README.md)   | Everything Neovim-related, drawing no pixels. Spawns the captive `nvim --embed`, folds `redraw` into a snapshot, accepts abstract input, signals a wake. | Cargo and Bazel       |
-| [`wolf-ffi`](../crates/wolf-ffi/README.md)     | The swift-bridge surface over core, and the only crate swift-bridge touches.                                                                             | Bazel                 |
-| [`wolf-macos`](../crates/wolf-macos/README.md) | The AppKit front-end, over the bridge.                                                                                                                   | Bazel                 |
-| [`wolf-gnome`](../crates/wolf-gnome/README.md) | The GTK 4 front-end, consuming core as an ordinary crate dependency.                                                                                     | Cargo, Linux only     |
-| [`runtime/nvim`](../runtime/nvim/README.md)    | The captive Neovim configuration, and the `_G.wolf_*` RPC contract core drives it through.                                                               | Bundled as a resource |
+| Crate                                          | Role                                                                                                                                                                                                                | Built with            |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
+| [`wolf-core`](../crates/wolf-core/README.md)   | Everything Neovim-related, drawing no pixels. Spawns the captive `nvim --embed`, folds `redraw` into a snapshot, accepts abstract input, signals a wake.                                                            | Cargo and Bazel       |
+| [`wolf-ffi`](../crates/wolf-ffi/README.md)     | The swift-bridge surface over core, and the only crate swift-bridge touches.                                                                                                                                        | Bazel                 |
+| [`wolf-macos`](../crates/wolf-macos/README.md) | The AppKit front-end, over the bridge.                                                                                                                                                                              | Bazel                 |
+| [`wolf-gnome`](../crates/wolf-gnome/README.md) | The GTK 4 front-end, consuming core as an ordinary crate dependency.                                                                                                                                                | Cargo, Linux only     |
+| `wolf-vt`                                      | The binding over libghostty-vt, Ghostty's terminal-emulation library; GUI-free, drawing no pixels. Not yet a dependency of any other crate. See [Building libghostty-vt](terminal-panes.md#building-libghostty-vt). | Cargo and Bazel       |
+| [`runtime/nvim`](../runtime/nvim/README.md)    | The captive Neovim configuration, and the `_G.wolf_*` RPC contract core drives it through.                                                                                                                          | Bundled as a resource |
 
 Both front-ends do the same four things: paint the render state core produces, provide native chrome and dialogs, translate OS input into core's abstract input events, and bridge their native event loop to core's async runtime. They differ in how they reach core — see decision 1 — and in what they have built, which each crate's README states.
 
@@ -200,6 +201,10 @@ The contract is three fields and one event: `full_width` keyed by window handle,
 
 The column semantics are the contract: `line` is a 1-based hard buffer line and `col` a 0-based character column, not a byte offset, so nothing on the path converts. They pair with the `wl-{L}-{C}` position markers `render_html` emits into the preview HTML. Whether a front-end scrolls at all is its own decision, per decision 2.
 
+### Output: terminal sessions (core → front-end)
+
+Terminals emulated in core by libghostty-vt, with Neovim keeping the layout through a placeholder window per terminal pane, are specified in [Terminal panes](terminal-panes.md). Until that spec's g04 delivery lands, every terminal is a Neovim terminal buffer, which reaches the front-end as an ordinary grid.
+
 ### Input: events (front-end → core)
 
 The front-end pushes `InputEvent`s onto an ordered FIFO channel that a single consumer task translates into Neovim RPC. Delivery is fire-and-forget: the channel keeps keystrokes in order and fuses a run of consecutive `Key` events into one `nvim_input` call, so a burst produces one redraw flush.
@@ -239,6 +244,8 @@ The two mechanisms differ and neither is portable. macOS reads `NSApp.effectiveA
 See [Building Wolf](../build.md) for every command and workflow. In outline: on Linux, `wolf-core` and `wolf-gnome` build with Cargo under Nix. On macOS, `wolf-core`, `wolf-ffi` and the `wolf-macos` app all build with Bazel, with `rules_rust` and `crate_universe` consuming the same `Cargo.toml` and `Cargo.lock`.
 
 One cross-cutting choice worth stating here: the C and link toolchain uses the host Xcode SDK rather than the older SDK inside Nix. That matters because `rusqlite` compiles a bundled SQLite through `cc`, and the two SDKs are not interchangeable for it.
+
+Both platforms build libghostty-vt from its release tarball with a pinned Zig and link it statically ([Building libghostty-vt](terminal-panes.md#building-libghostty-vt)).
 
 The `.app` bundles its own pinned Neovim, the captive `init.lua`, the vendored plugin and colorscheme trees, and both font families, so a packaged app runs with no shell environment. The inventory and what consumes each item is in [`crates/wolf-macos/README.md`](../crates/wolf-macos/README.md).
 

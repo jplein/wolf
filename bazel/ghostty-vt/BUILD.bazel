@@ -1,0 +1,31 @@
+# libghostty-vt 1.0.0, built from its release tarballs with the pinned Zig and linked statically.
+# See specs/terminal-panes.md#building-libghostty-vt
+load("@rules_cc//cc:defs.bzl", "cc_import")
+load("//tools/lint:defs.bzl", "comment_srcs")
+load(":defs.bzl", "ghostty_vt_archive")
+
+exports_files(["build_archive.sh"])
+
+ghostty_vt_archive(
+    name = "libghostty_vt",
+    src = "@ghostty_vt_src//file",
+    deps_tarball = "@ghostty_vt_deps//file",
+)
+
+cc_import(
+    name = "ghostty_vt",
+    static_library = ":libghostty_vt",
+    visibility = ["//crates/wolf-vt:__pkg__"],
+)
+
+# This package's sources and docs for //tools/lint, which cannot glob across packages.
+comment_srcs()
+
+filegroup(
+    name = "markdown_srcs",
+    srcs = glob(
+        ["**/*.md"],
+        allow_empty = True,
+    ),
+    visibility = ["//tools/lint:__pkg__"],
+)

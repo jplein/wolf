@@ -541,13 +541,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
   private static let aboutPreamble =
     "A Markdown editor that embeds Neovim as its editing engine."
 
-  /// Wolf > About Wolf: the standard About panel with the bundled fonts' licence
-  /// notices (`wolf_ffi_font_license_notices()`) as its credits, behind the preamble.
+  /// Wolf > About Wolf: the standard About panel whose credits are the preamble, the
+  /// bundled fonts' licence notices (`wolf_ffi_font_license_notices()`) and then the
+  /// linked libraries' (`wolf_ffi_library_license_notices()`).
   /// `.foregroundColor` must stay `labelColor`: an attributed credits string with no
   /// colour renders black on the dark panel in dark mode.
   @objc func showAboutPanel(_ sender: NSMenuItem) {
     let credits = NSAttributedString(
-      string: Self.aboutPreamble + "\n\n" + wolf_ffi_font_license_notices().toString(),
+      string: Self.aboutPreamble + "\n\n" + wolf_ffi_font_license_notices().toString() + "\n"
+        + wolf_ffi_library_license_notices().toString(),
       attributes: [
         .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize),
         .foregroundColor: NSColor.labelColor,

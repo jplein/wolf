@@ -26,6 +26,12 @@ rust_clippy(
     deps = ["//tools/doc-lint:doc_lint_lib"],
 )
 
+rust_clippy(
+    name = "clippy_vt",
+    testonly = True,
+    deps = ["//crates/wolf-vt:wolf_vt"],
+)
+
 # Staging the rust_clippy targets as data builds them, which runs clippy, so a lint fails this.
 sh_test(
     name = "clippy",
@@ -34,6 +40,7 @@ sh_test(
         ":clippy_core",
         ":clippy_doc_lint",
         ":clippy_ffi",
+        ":clippy_vt",
     ],
 )
 
@@ -62,12 +69,18 @@ rustfmt_test(
     ],
 )
 
+rustfmt_test(
+    name = "rustfmt_vt",
+    targets = ["//crates/wolf-vt:wolf_vt"],
+)
+
 test_suite(
     name = "rustfmt",
     tests = [
         ":rustfmt_core",
         ":rustfmt_doc_lint",
         ":rustfmt_ffi",
+        ":rustfmt_vt",
     ],
 )
 
@@ -150,6 +163,7 @@ filegroup(
     name = "all_markdown_srcs",
     srcs = [
         "//:markdown_srcs",
+        "//bazel/ghostty-vt:markdown_srcs",
         "//bazel/ia-writer-mono:markdown_srcs",
         "//bazel/jetbrains-mono:markdown_srcs",
         "//bazel/lighthouse:markdown_srcs",
@@ -159,9 +173,11 @@ filegroup(
         "//bazel/orlando:markdown_srcs",
         "//bazel/rg:markdown_srcs",
         "//bazel/treesitter-parsers:markdown_srcs",
+        "//bazel/zig:markdown_srcs",
         "//crates/wolf-core:markdown_srcs",
         "//crates/wolf-ffi:markdown_srcs",
         "//crates/wolf-macos:markdown_srcs",
+        "//crates/wolf-vt:markdown_srcs",
         "//resources/icons:markdown_srcs",
         "//runtime/nvim:markdown_srcs",
         "//tools/doc-lint:markdown_srcs",
@@ -218,6 +234,7 @@ filegroup(
     name = "all_comment_srcs",
     srcs = [
         "//:comment_srcs",
+        "//bazel/ghostty-vt:comment_srcs",
         "//bazel/ia-writer-mono:comment_srcs",
         "//bazel/jetbrains-mono:comment_srcs",
         "//bazel/lighthouse:comment_srcs",
@@ -227,9 +244,11 @@ filegroup(
         "//bazel/orlando:comment_srcs",
         "//bazel/rg:comment_srcs",
         "//bazel/treesitter-parsers:comment_srcs",
+        "//bazel/zig:comment_srcs",
         "//crates/wolf-core:comment_srcs",
         "//crates/wolf-ffi:comment_srcs",
         "//crates/wolf-macos:comment_srcs",
+        "//crates/wolf-vt:comment_srcs",
         "//resources/icons:comment_srcs",
         "//runtime/nvim:comment_srcs",
         "//tools/doc-lint:comment_srcs",
@@ -264,6 +283,7 @@ test_suite(
         ":rustfmt_core",
         ":rustfmt_doc_lint",
         ":rustfmt_ffi",
+        ":rustfmt_vt",
         ":swift_format",
         ":swift_format_check_test",
         ":swift_format_fix_test",
