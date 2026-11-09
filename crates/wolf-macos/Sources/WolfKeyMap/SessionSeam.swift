@@ -84,7 +84,8 @@ public enum SessionSeam {
   public enum CloseCommit: Equatable {
     /// Commit nothing.
     case skip
-    /// Commit now, with the closing view still in the tree.
+    /// Commit now, with the closing view and every view closed in the same burst
+    /// still in the tree.
     case keepSubtree
     /// Commit later, without the closing view.
     case dropSubtree
@@ -96,6 +97,59 @@ public enum SessionSeam {
   public static func closeCommit(terminating: Bool, otherLiveViews: Int) -> CloseCommit {
     if terminating { return .skip }
     return otherLiveViews == 0 ? .keepSubtree : .dropSubtree
+  }
+
+  /// Groups every view close of one runloop turn into a burst, and makes a keep
+  /// commit in that burst write the tree read at the burst's first close.
+  ///
+  /// The tree is read at the first close because a tabbed window's close button
+  /// closes each tab's window in turn: by the last close, which is the keep, the
+  /// earlier tabs are torn down and have left the group, so a fresh read would
+  /// keep only the last tab. A tab closed alone ends its burst on the next turn,
+  /// so a later close reads afresh and the closed tab stays dropped.
+  ///
+  /// The collaborators are injected: `scheduleEnd` runs the burst's end on the next
+  /// turn (production: `DispatchQueue.main.async`), `read` walks the live tree, and
+  /// `commit` writes a tree.
+  public final class CloseBurst<Tree> {
+    private let scheduleEnd: (@escaping () -> Void) -> Void
+    private let read: () -> Tree
+    private let commit: (Tree) -> Void
+    /// Whether a burst is open. Its own flag, since `Tree` may be optional and a read
+    /// may return `nil`.
+    private var isOpen = false
+    /// The tree read at the open burst's first close.
+    private var tree: Tree?
+
+    public init(
+      scheduleEnd: @escaping (@escaping () -> Void) -> Void, read: @escaping () -> Tree,
+      commit: @escaping (Tree) -> Void
+    ) {
+      self.scheduleEnd = scheduleEnd
+      self.read = read
+      self.commit = commit
+    }
+
+    /// What closing one view commits, as `SessionSeam.closeCommit(terminating:
+    /// otherLiveViews:)` answers. A terminating close does nothing else. Any other
+    /// close opens a burst when none is open, and on `.keepSubtree` commits the
+    /// burst's tree before returning.
+    public func close(terminating: Bool, otherLiveViews: Int) -> CloseCommit {
+      if terminating { return .skip }
+      if !isOpen {
+        isOpen = true
+        tree = read()
+        scheduleEnd { [weak self] in
+          self?.isOpen = false
+          self?.tree = nil
+        }
+      }
+      let decision = SessionSeam.closeCommit(terminating: false, otherLiveViews: otherLiveViews)
+      if decision == .keepSubtree, let tree {
+        commit(tree)
+      }
+      return decision
+    }
   }
 
   /// The windows a commit writes, or `nil` to commit nothing: with no live view

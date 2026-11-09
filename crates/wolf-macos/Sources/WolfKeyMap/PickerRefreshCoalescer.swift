@@ -1,4 +1,4 @@
-// Pure debounce that collapses a burst of streaming refreshes into one.
+// Pure throttle that collapses a burst of streaming refreshes into one.
 
 import Foundation
 
@@ -9,16 +9,16 @@ import Foundation
 /// every wake of a burst.
 ///
 /// The first `request()` while nothing is pending marks a fire as scheduled and
-/// asks `schedule` to run the fire after the debounce window; subsequent
+/// asks `schedule` to run the fire after the throttle window; subsequent
 /// `request()`s during that window are dropped (coalesced). When the fire runs it
 /// FIRST clears the scheduled flag (so a later `request()` can reschedule) and
 /// THEN calls `perform`, which reads the latest snapshot.
 public final class PickerRefreshCoalescer {
-  /// The debounce window (~30fps). A burst of wakes within this window collapses
+  /// The throttle window (~30fps). A burst of wakes within this window collapses
   /// to a single trailing refresh.
   public static let refreshInterval: TimeInterval = 0.033
 
-  /// Arms the trailing fire after the debounce window (production: a
+  /// Arms the trailing fire after the throttle window (production: a
   /// `DispatchQueue.main.asyncAfter`). Receives the fire closure to run.
   private let schedule: (@escaping () -> Void) -> Void
   /// The work to run once per coalesced burst.

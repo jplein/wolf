@@ -586,16 +586,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     snapshotCoalescer.request()
   }
 
+  /// Groups the view closes of one runloop turn (`SessionSeam.CloseBurst`); a keep
+  /// commits the tree read at the burst's first close.
+  private lazy var closeBurst = SessionSeam.CloseBurst<[CommitWindow]?>(
+    scheduleEnd: { DispatchQueue.main.async(execute: $0) },
+    read: { [weak self] in self?.gatherTree() },
+    commit: { [weak self] windows in
+      if let windows { self?.commitTree(windows) }
+    })
+
   /// What closing `view` commits, asked by its `teardown` while it still counts as
-  /// live. Closing the last live view quits the app, so it commits the tree with
-  /// that view in it, synchronously, before returning.
+  /// live. Closing the last live view quits the app, so it commits synchronously,
+  /// before returning, the tree read at the burst's first close: a tabbed window
+  /// closed by its close button closes each tab in turn, and so keeps every tab.
   func closeCommit(for view: WolfWindowController) -> SessionSeam.CloseCommit {
     let others = controllers.filter { $0 !== view && !$0.isTornDown }.count
-    let commit = SessionSeam.closeCommit(terminating: isTerminating, otherLiveViews: others)
-    if commit == .keepSubtree {
-      snapshotNow()
-    }
-    return commit
+    return closeBurst.close(terminating: isTerminating, otherLiveViews: others)
   }
 
   /// One saved window as a commit writes it: its geometry and its tabs.
@@ -604,14 +610,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     let tabs: [RestoreSeam.SavedTab]
   }
 
-  /// Walks the live window/tab tree and commits it to `state.json` via the
-  /// write-side snapshot builder. Only views that are not torn down count. Windows are
-  /// grouped by their native tab group (a solo window is its own group); tab order
-  /// comes from `tabGroup.windows`; each group's geometry is its selected tab's frame
-  /// (fallback: the first tab's). Each tab contributes its `persistedTab()`, a window
-  /// with none is omitted, and `orphanWindows` follow. `SessionSeam.committedWindows`
-  /// decides whether anything is committed at all.
+  /// Walks the live window/tab tree and commits it to `state.json`, when
+  /// `gatherTree()` answers a tree.
   func snapshotNow() {
+    if let windows = gatherTree() { commitTree(windows) }
+  }
+
+  /// Walks the live window/tab tree into the windows a commit writes. Only views that
+  /// are not torn down count. Windows are grouped by their native tab group (a solo
+  /// window is its own group); tab order comes from `tabGroup.windows`; each group's
+  /// geometry is its selected tab's frame (fallback: the first tab's). Each tab
+  /// contributes its `persistedTab()`, a window with none is omitted, and
+  /// `orphanWindows` follow. `SessionSeam.committedWindows` decides whether anything
+  /// is committed at all: `nil` commits nothing.
+  private func gatherTree() -> [CommitWindow]? {
     let live = controllers.filter { !$0.isTornDown }
     var gathered: [CommitWindow] = []
     var seenGroups = Set<ObjectIdentifier>()
@@ -649,8 +661,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
           }))
     }
 
-    guard let windows = SessionSeam.committedWindows(liveViews: live.count, windows: gathered)
-    else { return }
+    return SessionSeam.committedWindows(liveViews: live.count, windows: gathered)
+  }
+
+  /// Commits `windows` to `state.json` via the write-side snapshot builder.
+  private func commitTree(_ windows: [CommitWindow]) {
     wolf_ffi_state_snapshot_begin()
     for window in windows {
       wolf_ffi_state_snapshot_add_window(

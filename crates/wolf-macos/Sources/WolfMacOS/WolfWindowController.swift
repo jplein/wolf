@@ -735,14 +735,10 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
     window?.toggleSidebar()
   }
 
-  /// This view's PERSISTED working directory for the state snapshot + any
-  /// surfaced cwd (Window menu / palette). A folder view reads its tabpage's
-  /// authoritative tab-local `:tcd` cwd via `cwd_for_tabpage` — now a cheap
-  /// out-of-band snapshot read (no RPC; core is fed every tabpage's cwd via the
-  /// `wolf_tab_cwds` notification), correct even when this view is NOT current,
-  /// unlike the live `handle.cwd()` which follows the current tabpage; an
-  /// empty-state view persists `""` (the `hasFolder` gate preserves the
-  /// "empty-state persists ''" contract).
+  /// The tabpage-local `:tcd` cwd this view surfaces, in tab titles, the Window menu
+  /// and the palette. It is read from core's out-of-band `wolf_tab_cwds` map (no RPC),
+  /// so it is right even when this view is not current, unlike `handle.cwd()`, which
+  /// follows the current tabpage. An empty-state view answers `""`.
   var persistedCwd: String {
     guard hasFolder, let handle else { return "" }
     return handle.cwd_for_tabpage(tabpageHandle).toString()
@@ -992,17 +988,18 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
     paneContainer?.markRefocusRebind()
   }
 
-  /// Tears this VIEW down: decide its close commit (`AppDelegate.closeCommit(for:)`),
-  /// drop the state writer, the sidebar's + picker's file-search sessions and the
-  /// palette session, close
-  /// this view's tabpage on the shared core (non-last close), detach from the
-  /// project (which shuts the core down only when THIS was the last view), and ask
-  /// the coordinator to drop this controller. Idempotent (windowWillClose +
-  /// terminate-time backstop). This view NEVER calls `handle.shutdown()` itself —
-  /// the project owns the core's lifetime.
+  /// Tears this VIEW down. It decides its close commit (`AppDelegate.closeCommit(for:)`)
+  /// while it still counts as live, then drops the state writer, the sidebar's and
+  /// picker's file-search sessions and the palette session. It closes this view's
+  /// tabpage on the shared core (non-last close), detaches from the project (which
+  /// shuts the core down only when THIS was the last view), and asks the coordinator
+  /// to drop this controller. Idempotent (windowWillClose + terminate-time backstop).
+  /// This view NEVER calls `handle.shutdown()` itself: the project owns the core's
+  /// lifetime.
   func teardown() {
     guard !isTornDown else { return }
-    // Decided while this view still counts as live, so closing the last one commits it.
+    // Decided while this view still counts as live, so the burst's read and the last-view
+    // count include it.
     let commit = coordinator?.closeCommit(for: self) ?? .skip
     isTornDown = true
 

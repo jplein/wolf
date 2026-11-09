@@ -56,8 +56,9 @@ const DOC: &str = "# Rebuild Layout\nbody\n";
 const UNTITLED_STARTUP: &str = "Untitled.md";
 
 /// Fresh cores [`rebuild_reports_every_leaf_window_on_return`] rebuilds on. The race it pins
-/// depends on when Neovim's coalesced `wolf_buffers` emit lands, so one round may pass by luck.
-const BARRIER_ROUNDS: usize = 3;
+/// depends on when Neovim's coalesced `wolf_buffers` emit lands, so a single round passes by
+/// luck most of the time even with the guarantee removed, which is why the test runs many rounds.
+const BARRIER_ROUNDS: usize = 50;
 
 /// The files of the three-leaf barrier rebuild, in DFS leaf order.
 const BARRIER_FILES: [&str; 3] = ["a.md", "b.md", "c.md"];

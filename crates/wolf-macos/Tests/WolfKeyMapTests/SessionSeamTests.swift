@@ -90,6 +90,116 @@ final class SessionSeamTests: XCTestCase {
     }
   }
 
+  /// What a `CloseBurst` under test did: its reads, commits and scheduled ends.
+  private final class BurstRecord {
+    /// The trees `read` returns, one per call, in order.
+    let reads: [String]
+    var readCount = 0
+    var committed: [String] = []
+    /// The end closures `scheduleEnd` received, held and never run unless a test runs them.
+    var ends: [() -> Void] = []
+
+    init(reads: [String]) { self.reads = reads }
+
+    /// Runs and drops every scheduled end, as the next main-queue turn would.
+    func runEnds() {
+      let pending = ends
+      ends = []
+      for end in pending { end() }
+    }
+  }
+
+  /// The tree read while both tabs of a two-tab window are still live and grouped.
+  private let bothTabs = "a1+a2"
+  /// The tree read once the first tab is torn down: the second tab alone.
+  private let secondTab = "a2"
+
+  private func makeBurst(_ record: BurstRecord) -> SessionSeam.CloseBurst<String> {
+    SessionSeam.CloseBurst<String>(
+      scheduleEnd: { record.ends.append($0) },
+      read: {
+        defer { record.readCount += 1 }
+        guard record.readCount < record.reads.count else { return "read past the list" }
+        return record.reads[record.readCount]
+      },
+      commit: { record.committed.append($0) })
+  }
+
+  func testATabGroupClosedInOneTurnKeepsEveryTab() {
+    let record = BurstRecord(reads: [bothTabs, secondTab])
+    let burst = makeBurst(record)
+
+    XCTAssertEqual(
+      burst.close(terminating: false, otherLiveViews: 1), .dropSubtree,
+      "the first tab of a two-tab window closing by the red button still has a live sibling, "
+        + "so it must drop; .keepSubtree commits before the rest of the group has closed")
+    XCTAssertEqual(
+      record.committed, [], "a dropping close must commit nothing; a commit here wrote a tree")
+
+    XCTAssertEqual(
+      burst.close(terminating: false, otherLiveViews: 0), .keepSubtree,
+      "the group's last tab closing in the same turn is quitting and must keep its subtree")
+    XCTAssertEqual(
+      record.committed, [bothTabs],
+      "the keep must commit the tree read at the burst's first close, with both tabs: "
+        + "[\"\(secondTab)\"] means it read again after the first tab was torn down and "
+        + "lost it, [] means .keepSubtree skipped the commit")
+    XCTAssertEqual(
+      record.readCount, 1,
+      "one burst must read the tree once, at its first close; 2 means every close re-reads")
+    XCTAssertEqual(
+      record.ends.count, 1,
+      "one burst must schedule one end; 0 leaves it open forever, 2 opened a second burst")
+  }
+
+  func testATabClosedAloneDoesNotReturnAfterItsTurn() {
+    let record = BurstRecord(reads: [bothTabs, secondTab])
+    let burst = makeBurst(record)
+
+    XCTAssertEqual(
+      burst.close(terminating: false, otherLiveViews: 1), .dropSubtree,
+      "a tab closed alone while its sibling lives must drop")
+    XCTAssertEqual(
+      record.ends.count, 1, "the lone close must schedule its burst's end on the next turn")
+    record.runEnds()
+
+    XCTAssertEqual(
+      burst.close(terminating: false, otherLiveViews: 0), .keepSubtree,
+      "closing the remaining tab on a later turn quits the app and must keep its subtree")
+    XCTAssertEqual(
+      record.committed, [secondTab],
+      "a later close opens a burst of its own and commits a fresh read, the remaining tab: "
+        + "[\"\(bothTabs)\"] means the end closure did not close the first burst, so the "
+        + "tab the user closed returns at relaunch")
+    XCTAssertEqual(
+      record.readCount, 2,
+      "two bursts must read twice; 1 means the second close reused the first burst's tree")
+  }
+
+  func testATerminatingCloseOpensNoBurst() {
+    let record = BurstRecord(reads: [bothTabs, secondTab])
+    let burst = makeBurst(record)
+
+    XCTAssertEqual(
+      burst.close(terminating: true, otherLiveViews: 0), .skip,
+      "a close during termination must skip: the terminate commit already wrote the tree")
+    XCTAssertEqual(
+      record.readCount, 0,
+      "a terminating close must not read: the read walks views that are being torn down")
+    XCTAssertEqual(record.committed, [], "a terminating close must commit nothing")
+    XCTAssertTrue(
+      record.ends.isEmpty,
+      "a terminating close must open no burst; a scheduled end means it opened one")
+
+    XCTAssertEqual(
+      burst.close(terminating: false, otherLiveViews: 0), .keepSubtree,
+      "a non-terminating last close after it must keep; anything else voids the checks above")
+    XCTAssertEqual(
+      record.committed, [bothTabs],
+      "the first non-terminating close must commit the first read: [\"\(secondTab)\"] means "
+        + "the terminating close consumed a read, [] means the keep skipped its commit")
+  }
+
   func testAWalkWithNoLiveViewOrNoWindowCommitsNothing() {
     XCTAssertNil(
       SessionSeam.committedWindows(liveViews: 0, windows: ["w"]),
