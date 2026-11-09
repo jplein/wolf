@@ -541,6 +541,58 @@ extension WolfCoreHandleRef {
     public func toast() -> FfiToast {
         FfiToast(ptr: __swift_bridge__$WolfCoreHandle$toast(ptr))
     }
+
+    public func open_terminal<GenericIntoRustString: IntoRustString>(_ win: Int64, _ target: UInt8, _ command: GenericIntoRustString) -> UInt64 {
+        __swift_bridge__$WolfCoreHandle$open_terminal(ptr, win, target, { let rustString = command.intoRustString(); rustString.isOwned = false; return rustString.ptr }())
+    }
+
+    public func bind_terminal(_ id: UInt64, _ win: Int64, _ target: UInt8) -> Bool {
+        __swift_bridge__$WolfCoreHandle$bind_terminal(ptr, id, win, target)
+    }
+
+    public func terminal_frame(_ id: UInt64) -> FfiTerminalFrame {
+        FfiTerminalFrame(ptr: __swift_bridge__$WolfCoreHandle$terminal_frame(ptr, id))
+    }
+
+    public func terminal_key(_ id: UInt64, _ ev: FfiKeyEvent) {
+        __swift_bridge__$WolfCoreHandle$terminal_key(ptr, id, ev.intoFfiRepr())
+    }
+
+    public func terminal_text<GenericIntoRustString: IntoRustString>(_ id: UInt64, _ text: GenericIntoRustString) {
+        __swift_bridge__$WolfCoreHandle$terminal_text(ptr, id, { let rustString = text.intoRustString(); rustString.isOwned = false; return rustString.ptr }())
+    }
+
+    public func terminal_paste<GenericIntoRustString: IntoRustString>(_ id: UInt64, _ text: GenericIntoRustString) {
+        __swift_bridge__$WolfCoreHandle$terminal_paste(ptr, id, { let rustString = text.intoRustString(); rustString.isOwned = false; return rustString.ptr }())
+    }
+
+    public func terminal_mouse(_ id: UInt64, _ kind: UInt8, _ button: UInt8, _ x: Double, _ y: Double, _ mods: UInt8) {
+        __swift_bridge__$WolfCoreHandle$terminal_mouse(ptr, id, kind, button, x, y, mods)
+    }
+
+    public func terminal_scroll(_ id: UInt64, _ direction: UInt8, _ lines: UInt16, _ x: Double, _ y: Double, _ mods: UInt8) {
+        __swift_bridge__$WolfCoreHandle$terminal_scroll(ptr, id, direction, lines, x, y, mods)
+    }
+
+    public func terminal_focus(_ id: UInt64, _ gained: Bool) {
+        __swift_bridge__$WolfCoreHandle$terminal_focus(ptr, id, gained)
+    }
+
+    public func resize_terminal(_ id: UInt64, _ cols: UInt16, _ rows: UInt16, _ cell_w_px: UInt32, _ cell_h_px: UInt32) {
+        __swift_bridge__$WolfCoreHandle$resize_terminal(ptr, id, cols, rows, cell_w_px, cell_h_px)
+    }
+
+    public func close_terminal(_ id: UInt64) {
+        __swift_bridge__$WolfCoreHandle$close_terminal(ptr, id)
+    }
+
+    public func live_terminals() -> RustVec<UInt64> {
+        RustVec(ptr: __swift_bridge__$WolfCoreHandle$live_terminals(ptr))
+    }
+
+    public func terminal_selection_text(_ id: UInt64) -> RustString {
+        RustString(ptr: __swift_bridge__$WolfCoreHandle$terminal_selection_text(ptr, id))
+    }
 }
 extension WolfCoreHandle: Vectorizable {
     public static func vecOfSelfNew() -> UnsafeMutableRawPointer {
@@ -588,6 +640,286 @@ extension WolfCoreHandle: Vectorizable {
 
     public static func vecOfSelfLen(vecPtr: UnsafeMutableRawPointer) -> UInt {
         __swift_bridge__$Vec_WolfCoreHandle$len(vecPtr)
+    }
+}
+
+
+public class FfiTerminalFrame: FfiTerminalFrameRefMut {
+    var isOwned: Bool = true
+
+    public override init(ptr: UnsafeMutableRawPointer) {
+        super.init(ptr: ptr)
+    }
+
+    deinit {
+        if isOwned {
+            __swift_bridge__$FfiTerminalFrame$_free(ptr)
+        }
+    }
+}
+public class FfiTerminalFrameRefMut: FfiTerminalFrameRef {
+    public override init(ptr: UnsafeMutableRawPointer) {
+        super.init(ptr: ptr)
+    }
+}
+public class FfiTerminalFrameRef {
+    var ptr: UnsafeMutableRawPointer
+
+    public init(ptr: UnsafeMutableRawPointer) {
+        self.ptr = ptr
+    }
+}
+extension FfiTerminalFrameRef {
+    public func version() -> UInt64 {
+        __swift_bridge__$FfiTerminalFrame$version(ptr)
+    }
+
+    public func cols() -> UInt16 {
+        __swift_bridge__$FfiTerminalFrame$cols(ptr)
+    }
+
+    public func rows() -> UInt16 {
+        __swift_bridge__$FfiTerminalFrame$rows(ptr)
+    }
+
+    public func row_version(_ row: UInt16) -> UInt64 {
+        __swift_bridge__$FfiTerminalFrame$row_version(ptr, row)
+    }
+
+    public func row_cells(_ row: UInt16) -> RustVec<FfiTerminalCell> {
+        RustVec(ptr: __swift_bridge__$FfiTerminalFrame$row_cells(ptr, row))
+    }
+
+    public func row_has_selection(_ row: UInt16) -> Bool {
+        __swift_bridge__$FfiTerminalFrame$row_has_selection(ptr, row)
+    }
+
+    public func row_selection_start(_ row: UInt16) -> UInt16 {
+        __swift_bridge__$FfiTerminalFrame$row_selection_start(ptr, row)
+    }
+
+    public func row_selection_end(_ row: UInt16) -> UInt16 {
+        __swift_bridge__$FfiTerminalFrame$row_selection_end(ptr, row)
+    }
+
+    public func has_cursor() -> Bool {
+        __swift_bridge__$FfiTerminalFrame$has_cursor(ptr)
+    }
+
+    public func cursor_col() -> UInt16 {
+        __swift_bridge__$FfiTerminalFrame$cursor_col(ptr)
+    }
+
+    public func cursor_row() -> UInt16 {
+        __swift_bridge__$FfiTerminalFrame$cursor_row(ptr)
+    }
+
+    public func cursor_visible() -> Bool {
+        __swift_bridge__$FfiTerminalFrame$cursor_visible(ptr)
+    }
+
+    public func cursor_blinking() -> Bool {
+        __swift_bridge__$FfiTerminalFrame$cursor_blinking(ptr)
+    }
+
+    public func cursor_style() -> UInt8 {
+        __swift_bridge__$FfiTerminalFrame$cursor_style(ptr)
+    }
+
+    public func default_fg() -> FfiColor {
+        __swift_bridge__$FfiTerminalFrame$default_fg(ptr).intoSwiftRepr()
+    }
+
+    public func default_bg() -> FfiColor {
+        __swift_bridge__$FfiTerminalFrame$default_bg(ptr).intoSwiftRepr()
+    }
+
+    public func cursor_color() -> FfiColor {
+        __swift_bridge__$FfiTerminalFrame$cursor_color(ptr).intoSwiftRepr()
+    }
+
+    public func scrollbar_total() -> UInt64 {
+        __swift_bridge__$FfiTerminalFrame$scrollbar_total(ptr)
+    }
+
+    public func scrollbar_offset() -> UInt64 {
+        __swift_bridge__$FfiTerminalFrame$scrollbar_offset(ptr)
+    }
+
+    public func scrollbar_len() -> UInt64 {
+        __swift_bridge__$FfiTerminalFrame$scrollbar_len(ptr)
+    }
+
+    public func mouse_tracking() -> Bool {
+        __swift_bridge__$FfiTerminalFrame$mouse_tracking(ptr)
+    }
+
+    public func title() -> RustString {
+        RustString(ptr: __swift_bridge__$FfiTerminalFrame$title(ptr))
+    }
+
+    public func pwd() -> RustString {
+        RustString(ptr: __swift_bridge__$FfiTerminalFrame$pwd(ptr))
+    }
+
+    public func shell() -> RustString {
+        RustString(ptr: __swift_bridge__$FfiTerminalFrame$shell(ptr))
+    }
+
+    public func has_exited() -> Bool {
+        __swift_bridge__$FfiTerminalFrame$has_exited(ptr)
+    }
+
+    public func exit_code() -> Int32 {
+        __swift_bridge__$FfiTerminalFrame$exit_code(ptr)
+    }
+}
+extension FfiTerminalFrame: Vectorizable {
+    public static func vecOfSelfNew() -> UnsafeMutableRawPointer {
+        __swift_bridge__$Vec_FfiTerminalFrame$new()
+    }
+
+    public static func vecOfSelfFree(vecPtr: UnsafeMutableRawPointer) {
+        __swift_bridge__$Vec_FfiTerminalFrame$drop(vecPtr)
+    }
+
+    public static func vecOfSelfPush(vecPtr: UnsafeMutableRawPointer, value: FfiTerminalFrame) {
+        __swift_bridge__$Vec_FfiTerminalFrame$push(vecPtr, {value.isOwned = false; return value.ptr;}())
+    }
+
+    public static func vecOfSelfPop(vecPtr: UnsafeMutableRawPointer) -> Optional<Self> {
+        let pointer = __swift_bridge__$Vec_FfiTerminalFrame$pop(vecPtr)
+        if pointer == nil {
+            return nil
+        } else {
+            return (FfiTerminalFrame(ptr: pointer!) as! Self)
+        }
+    }
+
+    public static func vecOfSelfGet(vecPtr: UnsafeMutableRawPointer, index: UInt) -> Optional<FfiTerminalFrameRef> {
+        let pointer = __swift_bridge__$Vec_FfiTerminalFrame$get(vecPtr, index)
+        if pointer == nil {
+            return nil
+        } else {
+            return FfiTerminalFrameRef(ptr: pointer!)
+        }
+    }
+
+    public static func vecOfSelfGetMut(vecPtr: UnsafeMutableRawPointer, index: UInt) -> Optional<FfiTerminalFrameRefMut> {
+        let pointer = __swift_bridge__$Vec_FfiTerminalFrame$get_mut(vecPtr, index)
+        if pointer == nil {
+            return nil
+        } else {
+            return FfiTerminalFrameRefMut(ptr: pointer!)
+        }
+    }
+
+    public static func vecOfSelfAsPtr(vecPtr: UnsafeMutableRawPointer) -> UnsafePointer<FfiTerminalFrameRef> {
+        UnsafePointer<FfiTerminalFrameRef>(OpaquePointer(__swift_bridge__$Vec_FfiTerminalFrame$as_ptr(vecPtr)))
+    }
+
+    public static func vecOfSelfLen(vecPtr: UnsafeMutableRawPointer) -> UInt {
+        __swift_bridge__$Vec_FfiTerminalFrame$len(vecPtr)
+    }
+}
+
+
+public class FfiTerminalCell: FfiTerminalCellRefMut {
+    var isOwned: Bool = true
+
+    public override init(ptr: UnsafeMutableRawPointer) {
+        super.init(ptr: ptr)
+    }
+
+    deinit {
+        if isOwned {
+            __swift_bridge__$FfiTerminalCell$_free(ptr)
+        }
+    }
+}
+public class FfiTerminalCellRefMut: FfiTerminalCellRef {
+    public override init(ptr: UnsafeMutableRawPointer) {
+        super.init(ptr: ptr)
+    }
+}
+public class FfiTerminalCellRef {
+    var ptr: UnsafeMutableRawPointer
+
+    public init(ptr: UnsafeMutableRawPointer) {
+        self.ptr = ptr
+    }
+}
+extension FfiTerminalCellRef {
+    public func text() -> RustString {
+        RustString(ptr: __swift_bridge__$FfiTerminalCell$text(ptr))
+    }
+
+    public func fg() -> FfiColor {
+        __swift_bridge__$FfiTerminalCell$fg(ptr).intoSwiftRepr()
+    }
+
+    public func bg() -> FfiColor {
+        __swift_bridge__$FfiTerminalCell$bg(ptr).intoSwiftRepr()
+    }
+
+    public func flags() -> UInt8 {
+        __swift_bridge__$FfiTerminalCell$flags(ptr)
+    }
+
+    public func underline() -> UInt8 {
+        __swift_bridge__$FfiTerminalCell$underline(ptr)
+    }
+
+    public func width() -> UInt8 {
+        __swift_bridge__$FfiTerminalCell$width(ptr)
+    }
+}
+extension FfiTerminalCell: Vectorizable {
+    public static func vecOfSelfNew() -> UnsafeMutableRawPointer {
+        __swift_bridge__$Vec_FfiTerminalCell$new()
+    }
+
+    public static func vecOfSelfFree(vecPtr: UnsafeMutableRawPointer) {
+        __swift_bridge__$Vec_FfiTerminalCell$drop(vecPtr)
+    }
+
+    public static func vecOfSelfPush(vecPtr: UnsafeMutableRawPointer, value: FfiTerminalCell) {
+        __swift_bridge__$Vec_FfiTerminalCell$push(vecPtr, {value.isOwned = false; return value.ptr;}())
+    }
+
+    public static func vecOfSelfPop(vecPtr: UnsafeMutableRawPointer) -> Optional<Self> {
+        let pointer = __swift_bridge__$Vec_FfiTerminalCell$pop(vecPtr)
+        if pointer == nil {
+            return nil
+        } else {
+            return (FfiTerminalCell(ptr: pointer!) as! Self)
+        }
+    }
+
+    public static func vecOfSelfGet(vecPtr: UnsafeMutableRawPointer, index: UInt) -> Optional<FfiTerminalCellRef> {
+        let pointer = __swift_bridge__$Vec_FfiTerminalCell$get(vecPtr, index)
+        if pointer == nil {
+            return nil
+        } else {
+            return FfiTerminalCellRef(ptr: pointer!)
+        }
+    }
+
+    public static func vecOfSelfGetMut(vecPtr: UnsafeMutableRawPointer, index: UInt) -> Optional<FfiTerminalCellRefMut> {
+        let pointer = __swift_bridge__$Vec_FfiTerminalCell$get_mut(vecPtr, index)
+        if pointer == nil {
+            return nil
+        } else {
+            return FfiTerminalCellRefMut(ptr: pointer!)
+        }
+    }
+
+    public static func vecOfSelfAsPtr(vecPtr: UnsafeMutableRawPointer) -> UnsafePointer<FfiTerminalCellRef> {
+        UnsafePointer<FfiTerminalCellRef>(OpaquePointer(__swift_bridge__$Vec_FfiTerminalCell$as_ptr(vecPtr)))
+    }
+
+    public static func vecOfSelfLen(vecPtr: UnsafeMutableRawPointer) -> UInt {
+        __swift_bridge__$Vec_FfiTerminalCell$len(vecPtr)
     }
 }
 
@@ -2876,6 +3208,10 @@ extension FfiWinBufferRef {
 
     public func abs_path() -> RustString {
         RustString(ptr: __swift_bridge__$FfiWinBuffer$abs_path(ptr))
+    }
+
+    public func terminal() -> UInt64 {
+        __swift_bridge__$FfiWinBuffer$terminal(ptr)
     }
 }
 extension FfiWinBuffer: Vectorizable {

@@ -613,9 +613,10 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
 
   // MARK: - Edit commands
 
-  /// Copies the current selection to the system clipboard, from whichever of the TWO
-  /// sources the pure `PreviewCopySeam.copySource` picks — the active pane's preview
-  /// page, or the captive Neovim's visual-mode selection. This is a mechanical switch
+  /// Copies the current selection to the system clipboard, from whichever source the
+  /// pure `PreviewCopySeam.copySource` picks — the active terminal pane's session, the
+  /// active pane's preview page, or the captive Neovim's visual-mode selection. This is a
+  /// mechanical switch
   /// over that decision, and `canCopy` (which `AppDelegate.validateMenuItem` reads)
   /// is the same decision, so the menu can never claim enabled while Copy yields
   /// nothing.
@@ -626,9 +627,10 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
   /// and it would touch registers for a selection that is not Neovim's.
   func copy() {
     switch PreviewCopySeam.copySource(
-      previewSelection: activePreviewSelection, isVisualMode: isVisualMode)
+      previewSelection: activePreviewSelection, isVisualMode: isVisualMode,
+      terminalSelection: paneContainer?.activeTerminalSelection)
     {
-    case .previewSelection(let text):
+    case .previewSelection(let text), .terminalSelection(let text):
       writeToPasteboard(text)
     case .neovimVisual:
       // Yanks out of the captive Neovim (blocking briefly), and writes only when the
@@ -648,11 +650,16 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
     pasteboard.setString(text, forType: .string)
   }
 
-  /// Pastes the system clipboard's string into the active document via
-  /// `nvim_paste`. A no-op when the clipboard holds no string.
+  /// Pastes the system clipboard's string into the active terminal pane's session, or
+  /// else into the active document via `nvim_paste`. A no-op when the clipboard holds
+  /// no string.
   func paste() {
     guard let text = NSPasteboard.general.string(forType: .string) else { return }
-    handle?.paste(text)
+    if let session = paneContainer?.activeTerminal {
+      handle?.terminal_paste(session, text)
+    } else {
+      handle?.paste(text)
+    }
   }
 
   // MARK: - View (font size) commands
@@ -796,12 +803,13 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
   /// pane).
   var activePreviewSelection: PreviewCopySeam.Selection? { paneContainer?.activePaneSelection }
 
-  /// Whether Edit > Copy has anything to copy, from EITHER source. Read by the
+  /// Whether Edit > Copy has anything to copy, from any source. Read by the
   /// coordinator's menu validation; `copy()` switches over the same pure decision
-  /// with the same two inputs, so enablement and action cannot drift apart.
+  /// with the same inputs, so enablement and action cannot drift apart.
   var canCopy: Bool {
     PreviewCopySeam.isCopyEnabled(
-      previewSelection: activePreviewSelection, isVisualMode: isVisualMode)
+      previewSelection: activePreviewSelection, isVisualMode: isVisualMode,
+      terminalSelection: paneContainer?.activeTerminalSelection)
   }
 
   /// Whether this window's active buffer is a Markdown file. Read by the
@@ -981,11 +989,19 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
   /// THIS view's tabpage, and arm the pane container's one-shot refocus rebind
   /// (nvim churns grid ids across the switch; the container re-derives its
   /// grid bindings on the next wake reflecting this tabpage). Guarded so a
-  /// redundant key notification for the already-current view is a no-op.
+  /// redundant key notification for the already-current view is a no-op. The active
+  /// terminal pane's focus report goes out first, on every key change.
   func windowDidBecomeKey(_ notification: Notification) {
+    paneContainer?.syncTerminalFocus()
     guard project.currentView !== self else { return }
     project.setCurrent(self)
     paneContainer?.markRefocusRebind()
+  }
+
+  /// This view stopped being key, which app deactivation also causes: the active
+  /// terminal pane's session hears that it lost focus.
+  func windowDidResignKey(_ notification: Notification) {
+    paneContainer?.syncTerminalFocus()
   }
 
   /// Tears this VIEW down. It decides its close commit (`AppDelegate.closeCommit(for:)`)

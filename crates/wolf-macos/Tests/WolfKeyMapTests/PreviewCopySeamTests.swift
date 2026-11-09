@@ -421,6 +421,40 @@ final class PreviewCopySeamTests: XCTestCase {
         + "copyable and enable Copy on a margin drag")
   }
 
+  // MARK: - a terminal pane's selection decides alone
+
+  func testTerminalSelectionWinsOverVisualMode() {
+    XCTAssertEqual(
+      PreviewCopySeam.copySource(
+        previewSelection: nil, isVisualMode: true, terminalSelection: "ls -la\n"),
+      .terminalSelection("ls -la\n"),
+      "the active pane is a terminal, so Copy takes its session's selection verbatim: Neovim's"
+        + " mode is not that pane's, and a yank would copy the wrong text")
+  }
+
+  func testEmptyTerminalSelectionCopiesNothingEvenInVisualMode() {
+    XCTAssertEqual(
+      PreviewCopySeam.copySource(previewSelection: nil, isVisualMode: true, terminalSelection: ""),
+      .none,
+      "a terminal pane with no selection has nothing to copy: .neovimVisual means the rule fell"
+        + " through to a Neovim mode that belongs to another pane")
+    XCTAssertFalse(
+      PreviewCopySeam.isCopyEnabled(
+        previewSelection: nil, isVisualMode: true, terminalSelection: ""),
+      "Edit > Copy must grey out over a terminal pane with no selection")
+  }
+
+  func testNilTerminalSelectionKeepsTheEditorRules() {
+    XCTAssertEqual(
+      PreviewCopySeam.copySource(previewSelection: nil, isVisualMode: true, terminalSelection: nil),
+      .neovimVisual,
+      "nil means the active pane is no terminal, so visual mode still yanks from Neovim")
+    XCTAssertTrue(
+      PreviewCopySeam.isCopyEnabled(
+        previewSelection: nil, isVisualMode: false, terminalSelection: "x"),
+      "a terminal pane with a selection enables Edit > Copy")
+  }
+
   // MARK: - THE anti-drift pin: enabled iff there is a source
 
   func testIsCopyEnabledAgreesWithCopySourceAcrossTheWholeMatrix() {

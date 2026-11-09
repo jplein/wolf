@@ -114,8 +114,28 @@ struct RenderedView {
     min(max(value, 0), limit)
   }
 
+  /// The pixel at bitmap column `x` and row `y`, as an sRGB colour.
+  ///
+  /// `colorAt(x:y:)` tags the samples by the bitmap's `colorSpaceName`, which
+  /// for this capture is calibrated (Generic) RGB, not by its own sRGB
+  /// `colorSpace`; converting that tag to sRGB shifts saturated and dark
+  /// colours by up to about 0.12. So the components `colorAt` decodes are
+  /// re-tagged in `bitmap.colorSpace` before the conversion.
   private func srgb(x: Int, y: Int) -> NSColor {
-    guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else {
+    guard let sample = bitmap.colorAt(x: x, y: y) else {
+      preconditionFailure("RenderedView: pixel (\(x), \(y)) has no sRGB colour")
+    }
+    let space = bitmap.colorSpace
+    let count = sample.numberOfComponents
+    guard count == space.numberOfColorComponents + 1 else {
+      preconditionFailure(
+        "RenderedView: pixel (\(x), \(y)) has \(count) components, but the bitmap's "
+          + "colour space has \(space.numberOfColorComponents) plus alpha")
+    }
+    var components = [CGFloat](repeating: 0, count: count)
+    sample.getComponents(&components)
+    let retagged = NSColor(colorSpace: space, components: components, count: count)
+    guard let color = retagged.usingColorSpace(.sRGB) else {
       preconditionFailure("RenderedView: pixel (\(x), \(y)) has no sRGB colour")
     }
     return color

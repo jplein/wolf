@@ -50,6 +50,8 @@ public enum PreviewCopySeam {
     case previewSelection(String)
     /// The captive Neovim's visual-mode selection, yanked over the blocking RPC.
     case neovimVisual
+    /// The active terminal pane's session selection. The payload is its text.
+    case terminalSelection(String)
     /// Nothing to copy — the item greys out and the action is a no-op.
     case none
   }
@@ -173,11 +175,19 @@ public enum PreviewCopySeam {
   ///     mode.
   ///  3. Otherwise ``CopySource/none``.
   ///
+  /// A non-`nil` `terminalSelection` means the active pane is a terminal pane, and it
+  /// decides alone, before these rules: non-empty gives
+  /// ``CopySource/terminalSelection(_:)`` and empty gives ``CopySource/none``. It never
+  /// falls through to visual mode, because Neovim's mode is not that pane's.
+  ///
   /// The `.previewSelection` payload is the RAW, UNTRIMMED text (see
   /// ``Selection/isCopyable``).
   public static func copySource(
-    previewSelection: Selection?, isVisualMode: Bool
+    previewSelection: Selection?, isVisualMode: Bool, terminalSelection: String? = nil
   ) -> CopySource {
+    if let terminalSelection {
+      return terminalSelection.isEmpty ? .none : .terminalSelection(terminalSelection)
+    }
     if let previewSelection, previewSelection.isCopyable {
       return .previewSelection(previewSelection.text)
     }
@@ -185,14 +195,16 @@ public enum PreviewCopySeam {
     return .none
   }
 
-  /// Whether Edit > Copy has anything to copy from either source.
+  /// Whether Edit > Copy has anything to copy from any source.
   ///
   /// DEFINED as `copySource(…) != .none` rather than re-deriving the rules, so menu
   /// validation and the Copy action are structurally the same decision: if these two
   /// could disagree, the menu would claim enabled while Copy yielded nothing.
   public static func isCopyEnabled(
-    previewSelection: Selection?, isVisualMode: Bool
+    previewSelection: Selection?, isVisualMode: Bool, terminalSelection: String? = nil
   ) -> Bool {
-    copySource(previewSelection: previewSelection, isVisualMode: isVisualMode) != .none
+    copySource(
+      previewSelection: previewSelection, isVisualMode: isVisualMode,
+      terminalSelection: terminalSelection) != .none
   }
 }

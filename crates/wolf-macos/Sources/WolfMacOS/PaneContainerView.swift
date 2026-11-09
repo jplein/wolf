@@ -50,6 +50,26 @@ final class PaneContainerView: NSView {
   private static let scrollDirUp: UInt8 = 0
   /// `scroll_dir::DOWN` (increases the viewport topline).
   private static let scrollDirDown: UInt8 = 1
+  /// `mouse_button::RIGHT`.
+  private static let mouseButtonRight: UInt8 = 1
+  /// `mouse_button::MIDDLE`.
+  private static let mouseButtonMiddle: UInt8 = 2
+  /// `mouse_button::NONE`, motion with no button held (terminal panes only).
+  private static let mouseButtonNone: UInt8 = 3
+  /// `NSEvent.buttonNumber` of the middle button.
+  private static let middleButtonNumber = 2
+  /// `terminal_mouse_kind::PRESS`.
+  private static let terminalMousePress: UInt8 = 0
+  /// `terminal_mouse_kind::RELEASE`.
+  private static let terminalMouseRelease: UInt8 = 1
+  /// `terminal_mouse_kind::MOTION`.
+  private static let terminalMouseMotion: UInt8 = 2
+  /// `terminal_mods::SHIFT`.
+  private static let terminalModShift: UInt8 = 1 << 0
+  /// `terminal_mods::CTRL`.
+  private static let terminalModCtrl: UInt8 = 1 << 1
+  /// `terminal_mods::ALT`.
+  private static let terminalModAlt: UInt8 = 1 << 2
 
   // -- Divider drag-to-resize tuning ----------------------------------------
   /// The clickable half-width around a divider line, in points: a `mouseDown`
@@ -361,6 +381,26 @@ final class PaneContainerView: NSView {
     },
     perform: { [weak self] in self?.followDirtyPreviewCursors() })
 
+  // -- Terminal panes: a pane whose window shows a session gets a `TerminalPaneView`.
+  /// The terminal view of each terminal pane, kept by `syncTerminalViews`.
+  private var terminalViews: [PaneId: TerminalPaneView] = [:]
+  /// The session each terminal pane shows, rebuilt by `syncTerminalViews`.
+  private var terminalByPane: [PaneId: UInt64] = [:]
+  /// The pane that last sized each session, the `previous` of `TerminalGeometry.sizer`.
+  private var terminalSizers: [UInt64: PaneId] = [:]
+  /// The size last sent to each session through `resize_terminal`.
+  private var sentTerminalSizes: [UInt64: TerminalSize] = [:]
+  /// The session last reported focused through `terminal_focus`; `nil` for none.
+  private var reportedTerminalFocus: UInt64?
+  /// The input method's uncommitted text in the active terminal pane.
+  private var markedText = ""
+  /// The key down `interpretKeyEvents` is handling, which `doCommand(by:)` sends on.
+  private var pendingTerminalKey: NSEvent?
+  /// The terminal pane and button a press started a drag with, until its release.
+  private var terminalDrag: (pane: PaneId, button: UInt8)?
+  /// The area that reports pointer motion, for a program tracking the mouse.
+  private var motionTrackingArea: NSTrackingArea?
+
   /// The grid a press/drag is targeting, set on `mouseDown` and cleared on
   /// `mouseUp`, so a drag keeps targeting the pane the press started in even when
   /// the pointer leaves that pane's rect.
@@ -663,6 +703,17 @@ final class PaneContainerView: NSView {
     return previewSelections[win]
   }
 
+  /// The session the ACTIVE pane shows, or `nil` when it is not a terminal pane. Input,
+  /// Paste and Copy for that pane go to this session, never to Neovim.
+  var activeTerminal: UInt64? { activePane.flatMap { terminalByPane[$0] } }
+
+  /// The text of the active terminal pane's selection, `""` when nothing is selected,
+  /// or `nil` when the active pane is not a terminal pane.
+  var activeTerminalSelection: String? {
+    guard let session = activeTerminal else { return nil }
+    return handle.terminal_selection_text(session).toString()
+  }
+
   /// Re-measures against `newMetrics` (a per-window font-size change): swaps the
   /// cell geometry, re-syncs every grid's cell size to the new metrics, and
   /// repaints. The OS window frame is deliberately UNCHANGED — the grid reflows
@@ -672,6 +723,9 @@ final class PaneContainerView: NSView {
     cmdlineView.applyMetrics(newMetrics)
     completionPopupView.applyMetrics(newMetrics)
     toastView.applyMetrics(newMetrics)
+    for view in terminalViews.values {
+      view.applyMetrics(newMetrics)
+    }
     syncGridSizes()
     refreshOverlays()
     needsDisplay = true
@@ -689,6 +743,11 @@ final class PaneContainerView: NSView {
       command: flags.contains(.command)
     ) {
       onPickerTrigger?()
+      return
+    }
+
+    if let session = activeTerminal {
+      terminalKeyDown(event, session: session)
       return
     }
 
@@ -741,7 +800,169 @@ final class PaneContainerView: NSView {
   override func resignFirstResponder() -> Bool {
     let resigned = super.resignFirstResponder()
     keyComposer.reset()
+    inputContext?.discardMarkedText()
+    showMarkedText("")
     return resigned
+  }
+
+  /// A key down in a terminal pane: through the input method for printable candidates,
+  /// so dead keys and input methods compose, else straight to the session.
+  private func terminalKeyDown(_ event: NSEvent, session: UInt64) {
+    let flags = event.modifierFlags
+    if TerminalInputSeam.routesThroughInputContext(
+      keyCode: event.keyCode, ctrl: flags.contains(.control), meta: flags.contains(.command),
+      alt: flags.contains(.option), optionAsAlt: optionAsAlt, hasMarkedText: !markedText.isEmpty)
+    {
+      pendingTerminalKey = event
+      interpretKeyEvents([event])
+      pendingTerminalKey = nil
+      return
+    }
+    sendTerminalKey(event, session: session)
+  }
+
+  /// Translates `event` as the Neovim path does and sends it to `session`.
+  private func sendTerminalKey(_ event: NSEvent, session: UInt64) {
+    let flags = event.modifierFlags
+    guard
+      let ev = WolfKeyMap.translate(
+        keyCode: event.keyCode,
+        characters: event.characters ?? "",
+        charactersIgnoringModifiers: event.charactersIgnoringModifiers ?? "",
+        ctrl: flags.contains(.control),
+        shift: flags.contains(.shift),
+        alt: flags.contains(.option),
+        meta: flags.contains(.command)
+      )
+    else { return }
+    FrameMetrics.noteKeystroke()
+    handle.terminal_key(session, ev)
+  }
+
+  /// Keeps `text` as the marked text and shows it in the active terminal pane.
+  private func showMarkedText(_ text: String) {
+    markedText = text
+    for (pane, view) in terminalViews {
+      view.markedText = pane == activePane ? text : ""
+    }
+  }
+
+  /// The `terminal_mods` bits of `event`'s Shift, Control and Option.
+  private func terminalMods(_ event: NSEvent) -> UInt8 {
+    let flags = event.modifierFlags
+    var mods: UInt8 = 0
+    if flags.contains(.shift) { mods |= Self.terminalModShift }
+    if flags.contains(.control) { mods |= Self.terminalModCtrl }
+    if flags.contains(.option) { mods |= Self.terminalModAlt }
+    return mods
+  }
+
+  /// `event`'s pointer as pixels from terminal pane `pane`'s content origin, in the cell
+  /// pixels its session was last sized in; `nil` when the pane has no terminal view.
+  private func terminalPointer(_ event: NSEvent, pane: PaneId) -> (x: Double, y: Double)? {
+    guard let session = terminalByPane[pane], let view = terminalViews[pane] else { return nil }
+    let point = convert(event.locationInWindow, from: nil)
+    let size =
+      sentTerminalSizes[session]
+      ?? TerminalGeometry.size(
+        cols: 1, rows: 1, cellWidth: Double(metrics.cellWidth),
+        cellHeight: Double(metrics.cellHeight), scale: Double(window?.backingScaleFactor ?? 1))
+    return TerminalGeometry.pointerPixels(
+      x: Double(point.x), y: Double(point.y), originX: Double(view.frame.minX),
+      originY: Double(view.frame.minY), cellWidth: Double(metrics.cellWidth),
+      cellHeight: Double(metrics.cellHeight), size: size)
+  }
+
+  /// Sends a `terminal_mouse` of `kind` and `button` at `event`'s pointer to the session
+  /// terminal pane `pane` shows.
+  private func sendTerminalMouse(_ kind: UInt8, button: UInt8, pane: PaneId, event: NSEvent) {
+    guard let session = terminalByPane[pane], let px = terminalPointer(event, pane: pane)
+    else { return }
+    handle.terminal_mouse(session, kind, button, px.x, px.y, terminalMods(event))
+  }
+
+  /// The terminal pane under `event`'s pointer, if the pane there is one.
+  private func terminalPane(at event: NSEvent) -> PaneId? {
+    let point = convert(event.locationInWindow, from: nil)
+    guard let pane = paneRects().first(where: { $0.1.contains(point) })?.0,
+      terminalByPane[pane] != nil
+    else { return nil }
+    return pane
+  }
+
+  /// Starts a non-left drag over a terminal pane; `false` when the pointer is elsewhere.
+  private func terminalPress(_ event: NSEvent, button: UInt8) -> Bool {
+    guard let pane = terminalPane(at: event) else { return false }
+    sendTerminalMouse(Self.terminalMousePress, button: button, pane: pane, event: event)
+    terminalDrag = (pane, button)
+    return true
+  }
+
+  /// Continues a terminal drag of `button`; `false` when none is in progress.
+  private func terminalMotion(_ event: NSEvent, button: UInt8) -> Bool {
+    guard let drag = terminalDrag, drag.button == button else { return false }
+    sendTerminalMouse(Self.terminalMouseMotion, button: button, pane: drag.pane, event: event)
+    return true
+  }
+
+  /// Ends a terminal drag of `button`; `false` when none is in progress.
+  private func terminalRelease(_ event: NSEvent, button: UInt8) -> Bool {
+    guard let drag = terminalDrag, drag.button == button else { return false }
+    sendTerminalMouse(Self.terminalMouseRelease, button: button, pane: drag.pane, event: event)
+    terminalDrag = nil
+    return true
+  }
+
+  override func rightMouseDown(with event: NSEvent) {
+    if !terminalPress(event, button: Self.mouseButtonRight) { super.rightMouseDown(with: event) }
+  }
+
+  override func rightMouseDragged(with event: NSEvent) {
+    if !terminalMotion(event, button: Self.mouseButtonRight) {
+      super.rightMouseDragged(with: event)
+    }
+  }
+
+  override func rightMouseUp(with event: NSEvent) {
+    if !terminalRelease(event, button: Self.mouseButtonRight) { super.rightMouseUp(with: event) }
+  }
+
+  override func otherMouseDown(with event: NSEvent) {
+    guard event.buttonNumber == Self.middleButtonNumber,
+      terminalPress(event, button: Self.mouseButtonMiddle)
+    else { return super.otherMouseDown(with: event) }
+  }
+
+  override func otherMouseDragged(with event: NSEvent) {
+    guard event.buttonNumber == Self.middleButtonNumber,
+      terminalMotion(event, button: Self.mouseButtonMiddle)
+    else { return super.otherMouseDragged(with: event) }
+  }
+
+  override func otherMouseUp(with event: NSEvent) {
+    guard event.buttonNumber == Self.middleButtonNumber,
+      terminalRelease(event, button: Self.mouseButtonMiddle)
+    else { return super.otherMouseUp(with: event) }
+  }
+
+  override func updateTrackingAreas() {
+    super.updateTrackingAreas()
+    if let area = motionTrackingArea { removeTrackingArea(area) }
+    let area = NSTrackingArea(
+      rect: .zero, options: [.mouseMoved, .activeInKeyWindow, .inVisibleRect], owner: self,
+      userInfo: nil)
+    addTrackingArea(area)
+    motionTrackingArea = area
+  }
+
+  /// Reports pointer motion with no button held to a terminal pane's program that tracks
+  /// the mouse.
+  override func mouseMoved(with event: NSEvent) {
+    guard let pane = terminalPane(at: event), let session = terminalByPane[pane],
+      handle.terminal_frame(session).mouse_tracking()
+    else { return }
+    sendTerminalMouse(
+      Self.terminalMouseMotion, button: Self.mouseButtonNone, pane: pane, event: event)
   }
 
   /// Click-to-focus AND position the cursor: focus the window of the pane under
@@ -766,6 +987,12 @@ final class PaneContainerView: NSView {
       handle.focus_win(binding.win)
       setActivePane(id)
       needsDisplay = true
+      if terminalByPane[id] != nil {
+        sendTerminalMouse(
+          Self.terminalMousePress, button: Self.mouseButtonLeft, pane: id, event: event)
+        terminalDrag = (id, Self.mouseButtonLeft)
+        return
+      }
       if let grid = binding.boundGrid {
         let cell = geometry(for: gridRect(ofPane: rect), fullWidth: fullWidth(forGrid: grid))
           .cellAt(x: Double(point.x), y: Double(point.y))
@@ -810,6 +1037,7 @@ final class PaneContainerView: NSView {
       return
     }
 
+    if terminalMotion(event, button: Self.mouseButtonLeft) { return }
     guard let grid = mouseDragGrid, let rect = paneRect(forGrid: grid) else { return }
     let cell = geometry(for: gridRect(ofPane: rect), fullWidth: fullWidth(forGrid: grid))
       .cellAt(x: Double(point.x), y: Double(point.y))
@@ -825,6 +1053,7 @@ final class PaneContainerView: NSView {
       return
     }
 
+    if terminalRelease(event, button: Self.mouseButtonLeft) { return }
     guard let grid = mouseDragGrid else { return }
     if let rect = paneRect(forGrid: grid) {
       let point = convert(event.locationInWindow, from: nil)
@@ -856,14 +1085,14 @@ final class PaneContainerView: NSView {
       return
     }
 
-    var hit: (grid: UInt64, rect: CGRect)?
+    var hit: (pane: PaneId, grid: UInt64, rect: CGRect)?
     for (id, rect) in paneRects() where rect.contains(point) {
       if let grid = panes[id]?.boundGrid {
-        hit = (grid, rect)
+        hit = (id, grid, rect)
       }
       break
     }
-    guard let (grid, rect) = hit else { return }
+    guard let (pane, grid, rect) = hit else { return }
 
     if grid != lastScrollGrid {
       scrollAccumulator.reset()
@@ -882,6 +1111,14 @@ final class PaneContainerView: NSView {
     // The single flip point. `scrollingDeltaY` already honors natural scrolling; also consulting
     // `isDirectionInvertedFromDevice` double-corrects. A positive delta moves the viewport up.
     let direction = steps > 0 ? Self.scrollDirUp : Self.scrollDirDown
+
+    // A terminal pane takes the whole step count in one call, at the pointer's pixels.
+    if let session = terminalByPane[pane], let px = terminalPointer(event, pane: pane) {
+      handle.terminal_scroll(
+        session, direction, UInt16(clamping: abs(steps)), px.x, px.y, terminalMods(event))
+      scrollbarActivity()
+      return
+    }
 
     let cell = geometry(for: gridRect(ofPane: rect), fullWidth: fullWidth(forGrid: grid))
       .cellAt(x: Double(point.x), y: Double(point.y))
@@ -962,6 +1199,95 @@ final class PaneContainerView: NSView {
     // The divider lines moved with the panes, so the hover resize-cursor rects are
     // now stale — rebuild them on the next tracking pass.
     window?.invalidateCursorRects(for: self)
+    syncTerminalViews()
+  }
+
+  override func viewDidChangeBackingProperties() {
+    super.viewDidChangeBackingProperties()
+    syncGridSizes()
+  }
+
+  /// Gives every terminal pane a `TerminalPaneView` over its content area, fed its
+  /// session's latest frame, and drops the view of a pane that closed or whose window
+  /// no longer shows that session. Then sizes the sessions and reports focus.
+  /// Idempotent, so every wake and resize runs it.
+  private func syncTerminalViews() {
+    terminalByPane.removeAll(keepingCapacity: true)
+    for (id, binding) in panes {
+      let session = handle.win_buffer(binding.win).terminal()
+      if session != 0 { terminalByPane[id] = session }
+    }
+    for (id, view) in terminalViews where terminalByPane[id] != view.session {
+      view.removeFromSuperview()
+      terminalViews.removeValue(forKey: id)
+    }
+    let scale = window?.backingScaleFactor ?? 1
+    for (id, rect) in paneRects() {
+      guard let session = terminalByPane[id], let win = panes[id]?.win else { continue }
+      let view: TerminalPaneView
+      if let existing = terminalViews[id] {
+        view = existing
+      } else {
+        view = TerminalPaneView(session: session, metrics: metrics)
+        view.markedText = id == activePane ? markedText : ""
+        // Below the overlays, so the cmdline, toast, crash overlay and banner stay on top.
+        addSubview(view, positioned: .below, relativeTo: toastView)
+        terminalViews[id] = view
+      }
+      let g = geometry(for: gridRect(ofPane: rect), fullWidth: fullWidth(forWin: win)).gridRect
+      view.frame = backingAlignedRect(
+        CGRect(x: g.x, y: g.y, width: g.w, height: g.h), options: .alignAllEdgesNearest)
+      view.update(handle.terminal_frame(session), scale: scale)
+    }
+    syncTerminalSizes()
+    syncTerminalFocus()
+  }
+
+  /// Sizes each session from the content area of the pane `TerminalGeometry.sizer` picks
+  /// among this view's panes showing it, sending `resize_terminal` when that size or the
+  /// frame's differs from what was sent. Only the project's current view sizes, which
+  /// with the in-view choice makes the most recently focused pane the sizer.
+  private func syncTerminalSizes() {
+    guard handle.active_tabpage() == controllerTabpageHandle else { return }
+    var showing: [UInt64: [PaneId]] = [:]
+    for (pane, session) in terminalByPane {
+      showing[session, default: []].append(pane)
+    }
+    let rects = Dictionary(paneRects(), uniquingKeysWith: { first, _ in first })
+    let scale = Double(window?.backingScaleFactor ?? 1)
+    for (session, shown) in showing {
+      guard
+        let sizer = TerminalGeometry.sizer(
+          showing: shown, active: activePane, previous: terminalSizers[session]),
+        let rect = rects[sizer], let win = panes[sizer]?.win
+      else { continue }
+      terminalSizers[session] = sizer
+      let geo = geometry(for: gridRect(ofPane: rect), fullWidth: fullWidth(forWin: win))
+      let size = TerminalGeometry.size(
+        cols: geo.cols, rows: geo.rows, cellWidth: Double(metrics.cellWidth),
+        cellHeight: Double(metrics.cellHeight), scale: scale)
+      let frame = handle.terminal_frame(session)
+      // An exited session publishes no resize, so its frame is never compared.
+      let frameDiffers =
+        !frame.has_exited() && (frame.cols() != size.cols || frame.rows() != size.rows)
+      if sentTerminalSizes[session] != size || frameDiffers {
+        handle.resize_terminal(
+          session, size.cols, size.rows, size.cellWidthPx, size.cellHeightPx)
+        sentTerminalSizes[session] = size
+      }
+    }
+  }
+
+  /// Reports terminal focus: the active pane's session holds it while this window is
+  /// key, and a change reports the loss and then the gain through `terminal_focus`. Run
+  /// on every active-pane change, every sync, and on the window's key changes.
+  func syncTerminalFocus() {
+    let current = window?.isKeyWindow == true ? activeTerminal : nil
+    for report in TerminalInputSeam.focusReports(previous: reportedTerminalFocus, current: current)
+    {
+      handle.terminal_focus(report.session, report.gained)
+    }
+    reportedTerminalFocus = current
   }
 
   /// Registers a resize-cursor rect around each interior divider line so hovering
@@ -1015,6 +1341,8 @@ final class PaneContainerView: NSView {
   func onRenderWake() {
     let frameStart = FrameMetrics.begin()
     defer { FrameMetrics.end(.containerWake, frameStart) }
+    // Every path below ends here, the early returns included, so terminal views follow the wake.
+    defer { syncTerminalViews() }
 
     // One-shot launch restore: once this tabpage is current and its first pane bound, realize the
     // saved split tree in nvim and rebind the panes. Gated like `pendingRefocusRebind`.
@@ -1121,6 +1449,16 @@ final class PaneContainerView: NSView {
     previewSourcePaths.removeAll()
     pendingPreviewFragments.removeAll()
     previewLoadedWins.removeAll()
+    // Sessions outlive Neovim, but their panes went with its windows.
+    for view in terminalViews.values {
+      view.removeFromSuperview()
+    }
+    terminalViews.removeAll()
+    terminalByPane.removeAll()
+    terminalSizers.removeAll()
+    sentTerminalSizes.removeAll()
+    terminalDrag = nil
+    syncTerminalFocus()
     pendingRefocusRebind = true
     needsDisplay = true
   }
@@ -2162,9 +2500,10 @@ final class PaneContainerView: NSView {
         by: previewOccluder(forWin: binding.win))
       // Explicit begin/end rather than `defer`, so the sample covers exactly the `paintPane` call.
       let paneStart = FrameMetrics.begin()
+      // A terminal pane's view paints its content, so the placeholder's grid is never read.
       paintPane(
-        grid: grid, paneRect: paneRect, active: id == activePane, paintsGrid: !occluded,
-        ctx: ctx)
+        grid: grid, paneRect: paneRect, active: id == activePane,
+        paintsGrid: !occluded && terminalByPane[id] == nil, ctx: ctx)
       FrameMetrics.end(
         previewNamesByGrid[grid] != nil ? .drawPanePreview : .drawPaneEditor, paneStart)
     }
@@ -2400,6 +2739,7 @@ final class PaneContainerView: NSView {
     FrameMetrics.end(.paneCellsVec, cellsVecStart)
     let cellW = metrics.cellWidth
     let cellH = metrics.cellHeight
+    let glyphPainter = GlyphPainter(metrics: metrics)
 
     // Not a `defer`: one registered here fires at function exit and swallows part of the teardown
     // that `pane.cells` exists to separate out. No timer goes inside a loop body.
@@ -2421,7 +2761,7 @@ final class PaneContainerView: NSView {
           let fg = WolfColor.cgColor(cell.fg(), fallback: WolfColor.fallbackFg)
           let style = GlyphStyleResolver.resolve(
             flags: cell.flags(), fg: cell.fg(), special: cell.special())
-          drawGlyph(ctx, text: text, x: x, y: y, fg: fg, style: style)
+          glyphPainter.drawGlyph(ctx, text: text, x: x, y: y, fg: fg, style: style)
         }
       }
     }
@@ -2467,11 +2807,19 @@ final class PaneContainerView: NSView {
       // A preview pane hosts a WKWebView (with its own scrolling), so suppress
       // the synthetic scrollbar over it.
       if previewNamesByGrid[grid] != nil { continue }
-      let frame = handle.read_frame_for_grid(grid)
+      let viewport: (top: UInt64, bottom: UInt64, count: UInt64)
+      if let session = terminalByPane[id] {
+        let frame = handle.terminal_frame(session)
+        let offset = frame.scrollbar_offset()
+        viewport = (offset, offset + frame.scrollbar_len(), frame.scrollbar_total())
+      } else {
+        let frame = handle.read_frame_for_grid(grid)
+        viewport = (frame.topline(), frame.botline(), frame.linecount())
+      }
       guard
         let bar = ScrollbarGeometry(
           paneRect: rect(from: paneRect), gridRect: rect(from: gridRect(ofPane: paneRect)),
-          topline: frame.topline(), botline: frame.botline(), linecount: frame.linecount())
+          topline: viewport.top, botline: viewport.bottom, linecount: viewport.count)
       else { continue }
 
       let radius = CGFloat(ScrollbarGeometry.thickness / 2)
@@ -2535,119 +2883,6 @@ final class PaneContainerView: NSView {
     needsDisplay = true
   }
 
-  /// A plain regular glyph style (no face variant, no decorations) used for the
-  /// glyph redrawn under a block cursor — avoids a bold face overflowing the
-  /// reverse-video cell.
-  private static let cursorGlyphStyle = GlyphStyle(
-    face: .regular, underline: nil, underlineColor: FfiColor(rgb: 0, set: false),
-    strikethrough: false, strikethroughColor: FfiColor(rgb: 0, set: false))
-
-  /// Underline stroke offset below the baseline, in points; it also places the
-  /// undercurl wave's centre line.
-  private static let underlineOffset: CGFloat = 2
-  /// Undercurl wave amplitude (centre to crest), in points.
-  private static let undercurlAmplitude: CGFloat = 1
-  /// Undercurl wave period (crest to crest), in points.
-  private static let undercurlPeriod: CGFloat = 4
-  /// Polyline segments per undercurl period; 8 keeps the sampled sine smooth at
-  /// the 1-point stroke.
-  private static let undercurlSamplesPerPeriod: CGFloat = 8
-  /// Underline / strikethrough stroke thickness, in points.
-  private static let decorationThickness: CGFloat = 1
-  /// Strikethrough height above the baseline as a fraction of the cell height
-  /// (roughly the x-height midline).
-  private static let strikethroughRatio: CGFloat = 0.3
-
-  /// Draws one cell's glyph in `fg` using CoreText at the cell baseline, in the
-  /// face `style.face` selects, and strokes any underline (straight or undercurl
-  /// wave) / strikethrough decorations MANUALLY (in `style`'s resolved colors) —
-  /// `CTLineDraw` paints decorations only in the foreground color, ignores AppKit
-  /// decoration-color attributes and has no wavy underline style, so the special
-  /// (underline) color and the wave must be stroked by hand.
-  private func drawGlyph(
-    _ ctx: CGContext, text: String, x: CGFloat, y: CGFloat, fg: CGColor,
-    style: GlyphStyle
-  ) {
-    let attrs: [NSAttributedString.Key: Any] = [
-      .font: metrics.font(for: style.face),
-      .foregroundColor: fg,
-    ]
-    let line = CTLineCreateWithAttributedString(
-      NSAttributedString(string: text, attributes: attrs))
-    ctx.saveGState()
-    // The view is flipped; flip the text matrix so glyphs are upright.
-    ctx.textMatrix = CGAffineTransform(scaleX: 1, y: -1)
-    ctx.textPosition = CGPoint(x: x, y: y + metrics.baseline)
-    CTLineDraw(line, ctx)
-    ctx.restoreGState()
-
-    drawDecorations(ctx, x: x, y: y, style: style)
-  }
-
-  /// Strokes the underline / strikethrough for one cell in the resolved
-  /// decoration colors, drawn separately from the glyph because CoreText
-  /// ignores decoration-color attributes and has no wavy underline style.
-  ///
-  /// A straight underline and the strikethrough are horizontal lines. An
-  /// undercurl is a sine wave (`undercurlAmplitude`, `undercurlPeriod`) centred
-  /// on the underline position, with two rules:
-  ///   - Its phase is a function of the grid-local `x`, never of the cell's
-  ///     start. Cells are drawn one at a time, and this is what joins
-  ///     consecutive undercurled cells into one continuous wave even when
-  ///     `cellWidth` is not a multiple of the period.
-  ///   - When the trough would fall below the cell's bottom edge (as at a
-  ///     100 % `line_height`), the centre line is lifted to keep it inside: the
-  ///     row below paints its background after this row and would overpaint it.
-  private func drawDecorations(
-    _ ctx: CGContext, x: CGFloat, y: CGFloat, style: GlyphStyle
-  ) {
-    guard style.underline != nil || style.strikethrough else { return }
-    let width = metrics.cellWidth
-    ctx.saveGState()
-    ctx.setLineWidth(Self.decorationThickness)
-    if let underline = style.underline {
-      let uy = y + metrics.baseline + Self.underlineOffset
-      ctx.setStrokeColor(
-        WolfColor.cgColor(style.underlineColor, fallback: WolfColor.fallbackFg))
-      switch underline {
-      case .straight:
-        ctx.move(to: CGPoint(x: x, y: uy))
-        ctx.addLine(to: CGPoint(x: x + width, y: uy))
-      case .wave:
-        addUndercurlPath(ctx, x: x, width: width, centre: uy, cellBottom: y + metrics.cellHeight)
-      }
-      ctx.strokePath()
-    }
-    if style.strikethrough {
-      let sy = y + metrics.cellHeight * Self.strikethroughRatio
-      ctx.setStrokeColor(
-        WolfColor.cgColor(style.strikethroughColor, fallback: WolfColor.fallbackFg))
-      ctx.move(to: CGPoint(x: x, y: sy))
-      ctx.addLine(to: CGPoint(x: x + width, y: sy))
-      ctx.strokePath()
-    }
-    ctx.restoreGState()
-  }
-
-  /// Adds the undercurl wave across `[x, x + width]` to the current path, under the
-  /// phase and lift rules `drawDecorations` documents.
-  private func addUndercurlPath(
-    _ ctx: CGContext, x: CGFloat, width: CGFloat, centre: CGFloat, cellBottom: CGFloat
-  ) {
-    let amplitude = Self.undercurlAmplitude
-    let lowest = cellBottom - amplitude - Self.decorationThickness / 2
-    let cy = min(centre, lowest)
-    let step = Self.undercurlPeriod / Self.undercurlSamplesPerPeriod
-    let segments = max(1, Int((width / step).rounded(.up)))
-    func point(_ px: CGFloat) -> CGPoint {
-      CGPoint(x: px, y: cy + amplitude * sin(2 * .pi * px / Self.undercurlPeriod))
-    }
-    ctx.move(to: point(x))
-    for i in 1...segments {
-      ctx.addLine(to: point(min(x + CGFloat(i) * step, x + width)))
-    }
-  }
-
   /// Overlays the mode-aware cursor (reverse-video colors resolved in Rust) at
   /// grid-local coordinates.
   private func drawCursor(
@@ -2675,12 +2910,12 @@ final class PaneContainerView: NSView {
       let text = cells[index].text().toString()
       if !text.isEmpty {
         let glyph = WolfColor.cgColor(frame.cursor_glyph(), fallback: WolfColor.fallbackBg)
-        drawGlyph(
+        GlyphPainter(metrics: metrics).drawGlyph(
           ctx, text: text,
           x: CGFloat(col) * metrics.cellWidth,
           y: CGFloat(row) * metrics.cellHeight,
           fg: glyph,
-          style: Self.cursorGlyphStyle)
+          style: GlyphPainter.plainStyle)
       }
     }
   }
@@ -2713,6 +2948,7 @@ final class PaneContainerView: NSView {
       activePane = pane
       needsDisplay = true
     }
+    syncTerminalFocus()
   }
 
   /// Picks the window to bind the first pane to: the active window if it is a
@@ -2733,5 +2969,83 @@ final class PaneContainerView: NSView {
       }
     }
     return best
+  }
+}
+
+// MARK: - NSTextInputClient
+
+/// Input-method text for terminal panes only: `terminalKeyDown` alone calls
+/// `interpretKeyEvents`, so a Neovim pane never reaches these methods.
+extension PaneContainerView: NSTextInputClient {
+  func insertText(_ string: Any, replacementRange: NSRange) {
+    let text = (string as? NSAttributedString)?.string ?? (string as? String) ?? ""
+    showMarkedText("")
+    guard let session = activeTerminal else { return }
+    switch TerminalInputSeam.committedText(text) {
+    case .none:
+      return
+    case .key(let scalar):
+      // One printable ASCII character is a key, so core's `<C-w>` router sees it.
+      guard let char = Unicode.Scalar(scalar) else { return }
+      FrameMetrics.noteKeystroke()
+      for ev in KeyComposition.charEvents(for: String(Character(char))) {
+        handle.terminal_key(session, ev)
+      }
+    case .text(let committed):
+      FrameMetrics.noteKeystroke()
+      handle.terminal_text(session, committed)
+    }
+  }
+
+  override func doCommand(by selector: Selector) {
+    guard let event = pendingTerminalKey, let session = activeTerminal else { return }
+    sendTerminalKey(event, session: session)
+  }
+
+  func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+    showMarkedText((string as? NSAttributedString)?.string ?? (string as? String) ?? "")
+  }
+
+  func unmarkText() {
+    showMarkedText("")
+  }
+
+  func selectedRange() -> NSRange {
+    markedText.isEmpty
+      ? NSRange(location: NSNotFound, length: 0)
+      : NSRange(location: markedText.utf16.count, length: 0)
+  }
+
+  func markedRange() -> NSRange {
+    markedText.isEmpty
+      ? NSRange(location: NSNotFound, length: 0)
+      : NSRange(location: 0, length: markedText.utf16.count)
+  }
+
+  func hasMarkedText() -> Bool {
+    !markedText.isEmpty
+  }
+
+  func attributedSubstring(forProposedRange range: NSRange, actualRange: NSRangePointer?)
+    -> NSAttributedString?
+  {
+    nil
+  }
+
+  func validAttributesForMarkedText() -> [NSAttributedString.Key] {
+    []
+  }
+
+  /// The active terminal pane's cursor cell in screen coordinates, where the input
+  /// method places its candidate window.
+  func firstRect(forCharacterRange range: NSRange, actualRange: NSRangePointer?) -> NSRect {
+    guard let pane = activePane, let view = terminalViews[pane], let cursor = view.cursorRect,
+      let window
+    else { return .zero }
+    return window.convertToScreen(view.convert(cursor, to: nil))
+  }
+
+  func characterIndex(for point: NSPoint) -> Int {
+    NSNotFound
   }
 }

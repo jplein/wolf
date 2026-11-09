@@ -14,6 +14,10 @@
 //! - [`FfiFrame`] — an opaque, per-frame snapshot of the active grid, with the
 //!   highlight table already resolved in Rust (never re-resolved in Swift). Scalar
 //!   accessors plus one flat [`FfiFrame::cells`] handoff (row-major).
+//! - [`FfiTerminalFrame`] — an opaque handle on one terminal session's published
+//!   frame, read row by row through [`FfiTerminalFrame::row_cells`]; the session calls
+//!   are `WolfCoreHandle` methods named `terminal_*`, plus `open_terminal`,
+//!   `bind_terminal`, `resize_terminal`, `close_terminal` and `live_terminals`.
 //! - [`FfiKeyEvent`] — a transparent struct Swift fills from an `NSEvent`; mapped
 //!   here into a [`wolf_core::KeyEvent`] so nvim notation stays the single source
 //!   of truth in core.
@@ -48,8 +52,10 @@ use wolf_core::{
     InputEvent, Key, KeyEvent, LayoutIntent, Liveness, MarkdownCursor, MouseAction, MouseButton,
     MouseEvent, PaletteRow, PaletteRowKind, PaletteWindow, PaneNode, PaneOrientation, PaneStatus,
     PreviewInfo, Pum, ResolvedStyle, Rgb, ScrollDirection, ScrollEvent, SearchMatch, SearchOptions,
-    SearchSession, SplitOrientation, StateStore, TabFiles, TabState, Toast, WakeFn, WinInfo,
-    WindowState, WolfCore, WolfState,
+    SearchSession, SplitOrientation, StateStore, TabFiles, TabState, TerminalCell,
+    TerminalCellWidth, TerminalCommand, TerminalCursor, TerminalCursorStyle, TerminalFrame,
+    TerminalId, TerminalMouseEvent, TerminalMouseKind, TerminalScrollEvent, TerminalTarget,
+    TerminalUnderline, Toast, WakeFn, WinInfo, WindowState, WolfCore, WolfState,
 };
 
 // Re-export the bridge's transparent structs so rlib consumers (the Rust tests) can name them;
@@ -265,6 +271,8 @@ mod mouse_button {
     pub const RIGHT: u8 = 1;
     /// The middle mouse button.
     pub const MIDDLE: u8 = 2;
+    /// No button: motion with nothing held, for [`WolfCoreHandle::terminal_mouse`] only.
+    pub const NONE: u8 = 3;
 }
 
 /// The mouse-action discriminants packed into [`FfiMouseEvent::action`], mirroring
@@ -316,6 +324,100 @@ mod liveness {
     pub const NOT_RESPONDING: u8 = 1;
     /// The captive nvim process has died (or the core is gone).
     pub const DEAD: u8 = 2;
+}
+
+/// The `target` discriminants of [`WolfCoreHandle::open_terminal`] and
+/// [`WolfCoreHandle::bind_terminal`], mapped to [`wolf_core::TerminalTarget`].
+mod terminal_target {
+    /// Show the session in the window, replacing its buffer.
+    pub const WINDOW: u8 = 0;
+    /// Split the window, stacked, and show the session in the new window.
+    pub const SPLIT_HORIZONTAL: u8 = 1;
+    /// Split the window side by side and show the session in the new window.
+    pub const SPLIT_VERTICAL: u8 = 2;
+}
+
+/// The `kind` discriminants of [`WolfCoreHandle::terminal_mouse`], mirroring
+/// [`wolf_core::TerminalMouseKind`].
+mod terminal_mouse_kind {
+    /// A button pressed.
+    pub const PRESS: u8 = 0;
+    /// A button released.
+    pub const RELEASE: u8 = 1;
+    /// The pointer moved, with or without a button held.
+    pub const MOTION: u8 = 2;
+}
+
+/// The modifier bits of [`WolfCoreHandle::terminal_mouse`] and
+/// [`WolfCoreHandle::terminal_scroll`]'s `mods`.
+mod terminal_mods {
+    /// Shift, which bypasses the program's mouse tracking.
+    pub const SHIFT: u8 = 1 << 0;
+    /// Control.
+    pub const CTRL: u8 = 1 << 1;
+    /// Alt (Option).
+    pub const ALT: u8 = 1 << 2;
+}
+
+/// The cursor-style discriminants of [`FfiTerminalFrame::cursor_style`], mirroring
+/// [`wolf_core::TerminalCursorStyle`].
+mod terminal_cursor_style {
+    /// A filled block.
+    pub const BLOCK: u8 = 0;
+    /// A vertical bar.
+    pub const BAR: u8 = 1;
+    /// An underline.
+    pub const UNDERLINE: u8 = 2;
+    /// An outlined block.
+    pub const HOLLOW: u8 = 3;
+}
+
+/// The underline discriminants of [`FfiTerminalCell::underline`], mirroring
+/// [`wolf_core::TerminalUnderline`].
+mod terminal_underline {
+    /// No underline.
+    pub const NONE: u8 = 0;
+    /// A single line.
+    pub const SINGLE: u8 = 1;
+    /// A double line.
+    pub const DOUBLE: u8 = 2;
+    /// A curly line.
+    pub const CURLY: u8 = 3;
+    /// A dotted line.
+    pub const DOTTED: u8 = 4;
+    /// A dashed line.
+    pub const DASHED: u8 = 5;
+}
+
+/// The cell-width discriminants of [`FfiTerminalCell::width`], mirroring
+/// [`wolf_core::TerminalCellWidth`].
+mod terminal_cell_width {
+    /// An ordinary one-column cell.
+    pub const NARROW: u8 = 0;
+    /// The first column of a wide character, holding its grapheme.
+    pub const WIDE: u8 = 1;
+    /// The second column of a wide character, painted by nothing.
+    pub const SPACER_TAIL: u8 = 2;
+    /// The last column of a row whose wide character wrapped to the next row.
+    pub const SPACER_HEAD: u8 = 3;
+}
+
+/// The style bits of [`FfiTerminalCell::flags`].
+mod terminal_flag {
+    /// Bold text.
+    pub const BOLD: u8 = 1 << 0;
+    /// Faint (dim) text.
+    pub const FAINT: u8 = 1 << 1;
+    /// Italic text.
+    pub const ITALIC: u8 = 1 << 2;
+    /// Strikethrough text.
+    pub const STRIKETHROUGH: u8 = 1 << 3;
+    /// The painter swaps the foreground and background.
+    pub const INVERSE: u8 = 1 << 4;
+    /// The painter draws no glyph.
+    pub const INVISIBLE: u8 = 1 << 5;
+    /// Blinking text.
+    pub const BLINK: u8 = 1 << 6;
 }
 
 // swift-bridge's expansion fails this crate's stricter lints; the allow is scoped to the bridge
@@ -594,6 +696,94 @@ mod ffi {
         // The message toast (`ext_messages`); chunk colors are resolved in Rust against the frame's
         // highlight table. Hidden when the core is gone.
         fn toast(&self) -> FfiToast;
+        // Starts a session in `win` (0 = current) per `mod terminal_target`; "" runs the user's
+        // shell, else `/bin/sh -c command`. Blocks briefly; 0 on failure or a gone core.
+        fn open_terminal(&self, win: i64, target: u8, command: String) -> u64;
+        // Shows live session `id` in `win` per `mod terminal_target`; false for an unknown id,
+        // an unknown target or a gone core. Blocks briefly.
+        fn bind_terminal(&self, id: u64, win: i64, target: u8) -> bool;
+        // Session `id`'s latest frame; the empty frame (version 0, 0x0) for an unknown id or a
+        // gone core.
+        fn terminal_frame(&self, id: u64) -> FfiTerminalFrame;
+        // A key through core's `<C-w>` router to session `id`; an unknown kind is dropped.
+        fn terminal_key(&self, id: u64, ev: FfiKeyEvent);
+        // Text as typed, such as an input method's commit.
+        fn terminal_text(&self, id: u64, text: String);
+        // A paste, bracketed when the program set mode 2004.
+        fn terminal_paste(&self, id: u64, text: String);
+        // `kind` per `mod terminal_mouse_kind`, `button` per `mod mouse_button` (NONE included),
+        // `mods` per `mod terminal_mods`; x and y in the cell pixels of the last resize.
+        fn terminal_mouse(&self, id: u64, kind: u8, button: u8, x: f64, y: f64, mods: u8);
+        // A wheel scroll of `lines`; `direction` per `mod scroll_dir`, the rest as terminal_mouse.
+        fn terminal_scroll(&self, id: u64, direction: u8, lines: u16, x: f64, y: f64, mods: u8);
+        // Pane focus or window activation, reported to a program that set mode 1004.
+        fn terminal_focus(&self, id: u64, gained: bool);
+        // Sizes session `id` and its pty from the pane's content area, in cells and pixels.
+        fn resize_terminal(&self, id: u64, cols: u16, rows: u16, cell_w_px: u32, cell_h_px: u32);
+        // Hangs session `id` up.
+        fn close_terminal(&self, id: u64);
+        // The running sessions, ascending; empty when the core is gone.
+        fn live_terminals(&self) -> Vec<u64>;
+        // The text of session `id`'s selection; "" when nothing is selected.
+        fn terminal_selection_text(&self, id: u64) -> String;
+    }
+
+    extern "Rust" {
+        type FfiTerminalFrame;
+
+        // Monotonic per session; 0 for the empty frame.
+        fn version(&self) -> u64;
+        fn cols(&self) -> u16;
+        fn rows(&self) -> u16;
+        // The frame version at which `row` last changed; 0 out of range.
+        fn row_version(&self, row: u16) -> u64;
+        // Row `row`'s cells, left to right; empty out of range.
+        fn row_cells(&self, row: u16) -> Vec<FfiTerminalCell>;
+        // Whether `row` has selected columns, from `row_selection_start` to `_end` inclusive.
+        fn row_has_selection(&self, row: u16) -> bool;
+        fn row_selection_start(&self, row: u16) -> u16;
+        fn row_selection_end(&self, row: u16) -> u16;
+        // False while the cursor is scrolled out of view; the cursor accessors then read 0.
+        fn has_cursor(&self) -> bool;
+        fn cursor_col(&self) -> u16;
+        fn cursor_row(&self) -> u16;
+        fn cursor_visible(&self) -> bool;
+        fn cursor_blinking(&self) -> bool;
+        // `mod terminal_cursor_style`.
+        fn cursor_style(&self) -> u8;
+        fn default_fg(&self) -> FfiColor;
+        fn default_bg(&self) -> FfiColor;
+        // Unset when the editor sets no cursor colour.
+        fn cursor_color(&self) -> FfiColor;
+        fn scrollbar_total(&self) -> u64;
+        fn scrollbar_offset(&self) -> u64;
+        fn scrollbar_len(&self) -> u64;
+        // Whether the program tracks the mouse.
+        fn mouse_tracking(&self) -> bool;
+        fn title(&self) -> String;
+        // The directory the shell last reported; "" for none.
+        fn pwd(&self) -> String;
+        // The basename of the session's program.
+        fn shell(&self) -> String;
+        fn has_exited(&self) -> bool;
+        // The exit code, or 128 plus the signal; 0 while running.
+        fn exit_code(&self) -> i32;
+    }
+
+    extern "Rust" {
+        type FfiTerminalCell;
+
+        // The grapheme cluster; "" for an empty cell or a spacer.
+        fn text(&self) -> String;
+        // Unset for the frame's default; never swapped for inverse.
+        fn fg(&self) -> FfiColor;
+        fn bg(&self) -> FfiColor;
+        // `mod terminal_flag` bits.
+        fn flags(&self) -> u8;
+        // `mod terminal_underline`.
+        fn underline(&self) -> u8;
+        // `mod terminal_cell_width`.
+        fn width(&self) -> u8;
     }
 
     extern "Rust" {
@@ -1026,6 +1216,8 @@ mod ffi {
         fn reported(&self) -> bool;
         // The buffer's absolute path; empty when unnamed or not reported.
         fn abs_path(&self) -> String;
+        // The session the window shows as a terminal pane; 0 for none or not reported.
+        fn terminal(&self) -> u64;
     }
 
     extern "Rust" {
@@ -2427,6 +2619,7 @@ impl WolfCoreHandle {
                     .as_ref()
                     .map(|p| p.to_string_lossy().into_owned())
                     .unwrap_or_default(),
+                terminal: wb.terminal.map_or(0, |id| id.0),
             })
     }
 
@@ -2877,6 +3070,185 @@ impl WolfCoreHandle {
         };
         let snapshot = core.read_snapshot();
         FfiToast::from_toast(&snapshot.toast, &snapshot.highlights)
+    }
+
+    /// Starts a terminal session and shows it in `target` (a [`terminal_target`]
+    /// discriminant) of window `win`, `0` meaning Neovim's current window. An empty
+    /// `command` runs the user's shell; any other runs as `/bin/sh -c <command>`.
+    ///
+    /// Returns the session id, or `0` when the session could not be started or bound,
+    /// for an unknown `target`, or once the core is shut down. Blocks as
+    /// [`WolfCore::open_terminal`] does.
+    #[must_use]
+    pub fn open_terminal(&self, win: i64, target: u8, command: String) -> u64 {
+        let Some(target) = terminal_target_from_ffi(win, target) else {
+            return 0;
+        };
+        let command = (!command.is_empty()).then(|| TerminalCommand {
+            program: PathBuf::from("/bin/sh"),
+            args: vec!["-c".to_owned(), command],
+        });
+        self.core
+            .borrow()
+            .as_ref()
+            .and_then(|core| core.open_terminal(target, command))
+            .map_or(0, |id| id.0)
+    }
+
+    /// Shows running session `id` in `target` of window `win`, as
+    /// [`open_terminal`](Self::open_terminal) places a new one. `false` for an id with no
+    /// running session, an unknown `target`, or a shut-down core.
+    #[must_use]
+    pub fn bind_terminal(&self, id: u64, win: i64, target: u8) -> bool {
+        let Some(target) = terminal_target_from_ffi(win, target) else {
+            return false;
+        };
+        self.core
+            .borrow()
+            .as_ref()
+            .is_some_and(|core| core.bind_terminal(TerminalId(id), target))
+    }
+
+    /// Session `id`'s latest published frame, or the empty frame (version `0`, `0x0`)
+    /// for an unknown id or a shut-down core. Shares the frame rather than copying it.
+    #[must_use]
+    pub fn terminal_frame(&self, id: u64) -> FfiTerminalFrame {
+        FfiTerminalFrame {
+            frame: self
+                .core
+                .borrow()
+                .as_ref()
+                .and_then(|core| core.terminal_frame(TerminalId(id))),
+        }
+    }
+
+    /// Maps `ev` into a [`wolf_core::KeyEvent`] and sends it to session `id` through
+    /// core's `<C-w>` router. A no-op on an unrecognized kind or a shut-down core.
+    pub fn terminal_key(&self, id: u64, ev: FfiKeyEvent) {
+        if let Some(key) = key_event_from_ffi(&ev) {
+            if let Some(core) = self.core.borrow().as_ref() {
+                core.terminal_key(TerminalId(id), key);
+            }
+        }
+    }
+
+    /// Sends `text` to session `id` as typed. A no-op once the core is shut down.
+    pub fn terminal_text(&self, id: u64, text: String) {
+        if let Some(core) = self.core.borrow().as_ref() {
+            core.terminal_text(TerminalId(id), &text);
+        }
+    }
+
+    /// Pastes `text` into session `id`, bracketed when its program set mode 2004. A
+    /// no-op once the core is shut down.
+    pub fn terminal_paste(&self, id: u64, text: String) {
+        if let Some(core) = self.core.borrow().as_ref() {
+            core.terminal_paste(TerminalId(id), &text);
+        }
+    }
+
+    /// A mouse event over session `id`'s pane. `kind` is a [`terminal_mouse_kind`]
+    /// discriminant, `button` a [`mouse_button`] one ([`mouse_button::NONE`] for motion
+    /// with nothing held) and `mods` a [`terminal_mods`] bitset. `x` and `y` are pixels
+    /// from the content area's top-left, in the cell pixels of the last
+    /// [`resize_terminal`](Self::resize_terminal). An unknown discriminant drops it.
+    pub fn terminal_mouse(&self, id: u64, kind: u8, button: u8, x: f64, y: f64, mods: u8) {
+        let kind = match kind {
+            terminal_mouse_kind::PRESS => TerminalMouseKind::Press,
+            terminal_mouse_kind::RELEASE => TerminalMouseKind::Release,
+            terminal_mouse_kind::MOTION => TerminalMouseKind::Motion,
+            _ => return,
+        };
+        let button = match button {
+            mouse_button::LEFT => Some(MouseButton::Left),
+            mouse_button::RIGHT => Some(MouseButton::Right),
+            mouse_button::MIDDLE => Some(MouseButton::Middle),
+            mouse_button::NONE => None,
+            _ => return,
+        };
+        if let Some(core) = self.core.borrow().as_ref() {
+            core.terminal_mouse(
+                TerminalId(id),
+                TerminalMouseEvent {
+                    kind,
+                    button,
+                    x: x as f32,
+                    y: y as f32,
+                    shift: mods & terminal_mods::SHIFT != 0,
+                    ctrl: mods & terminal_mods::CTRL != 0,
+                    alt: mods & terminal_mods::ALT != 0,
+                },
+            );
+        }
+    }
+
+    /// A wheel scroll of `lines` over session `id`'s pane, `direction` a [`scroll_dir`]
+    /// discriminant and the rest as [`terminal_mouse`](Self::terminal_mouse). An unknown
+    /// direction drops it.
+    pub fn terminal_scroll(&self, id: u64, direction: u8, lines: u16, x: f64, y: f64, mods: u8) {
+        let direction = match direction {
+            scroll_dir::UP => ScrollDirection::Up,
+            scroll_dir::DOWN => ScrollDirection::Down,
+            scroll_dir::LEFT => ScrollDirection::Left,
+            scroll_dir::RIGHT => ScrollDirection::Right,
+            _ => return,
+        };
+        if let Some(core) = self.core.borrow().as_ref() {
+            core.terminal_scroll(
+                TerminalId(id),
+                TerminalScrollEvent {
+                    direction,
+                    lines,
+                    x: x as f32,
+                    y: y as f32,
+                    shift: mods & terminal_mods::SHIFT != 0,
+                    ctrl: mods & terminal_mods::CTRL != 0,
+                    alt: mods & terminal_mods::ALT != 0,
+                },
+            );
+        }
+    }
+
+    /// Reports session `id`'s pane gaining or losing focus, or the window's activation.
+    /// A no-op once the core is shut down.
+    pub fn terminal_focus(&self, id: u64, gained: bool) {
+        if let Some(core) = self.core.borrow().as_ref() {
+            core.terminal_focus(TerminalId(id), gained);
+        }
+    }
+
+    /// Sizes session `id` and its pty to `cols` by `rows` cells of `cell_w_px` by
+    /// `cell_h_px` pixels. A no-op once the core is shut down.
+    pub fn resize_terminal(&self, id: u64, cols: u16, rows: u16, cell_w_px: u32, cell_h_px: u32) {
+        if let Some(core) = self.core.borrow().as_ref() {
+            core.resize_terminal(TerminalId(id), cols, rows, cell_w_px, cell_h_px);
+        }
+    }
+
+    /// Hangs session `id` up. A no-op once the core is shut down.
+    pub fn close_terminal(&self, id: u64) {
+        if let Some(core) = self.core.borrow().as_ref() {
+            core.close_terminal(TerminalId(id));
+        }
+    }
+
+    /// The running sessions' ids, ascending; empty once the core is shut down.
+    #[must_use]
+    pub fn live_terminals(&self) -> Vec<u64> {
+        self.core.borrow().as_ref().map_or_else(Vec::new, |core| {
+            core.live_terminals().into_iter().map(|id| id.0).collect()
+        })
+    }
+
+    /// The text of session `id`'s selection, for Copy; empty when nothing is selected,
+    /// for an unknown id, or once the core is shut down.
+    #[must_use]
+    pub fn terminal_selection_text(&self, id: u64) -> String {
+        self.core
+            .borrow()
+            .as_ref()
+            .and_then(|core| core.terminal_selection_text(TerminalId(id)))
+            .unwrap_or_default()
     }
 }
 
@@ -3651,10 +4023,11 @@ impl FfiPaneStatus {
 // --- FfiWinBuffer: what one window shows, by handle (opaque to Swift) ---
 
 /// What one window shows, as [`WolfCoreHandle::win_buffer`] reads it from core's
-/// `win_buffers` map. A projection of [`wolf_core::WinBuffer`]'s path.
+/// `win_buffers` map. A projection of [`wolf_core::WinBuffer`]'s path and session.
 pub struct FfiWinBuffer {
     reported: bool,
     abs_path: String,
+    terminal: u64,
 }
 
 impl FfiWinBuffer {
@@ -3671,11 +4044,315 @@ impl FfiWinBuffer {
         self.abs_path.clone()
     }
 
+    /// The id of the terminal session the window shows, which makes its pane a terminal
+    /// pane; `0` for none and when the window is not reported.
+    #[must_use]
+    pub fn terminal(&self) -> u64 {
+        self.terminal
+    }
+
     /// The answer for an unknown window or a shut-down core.
     fn unreported() -> Self {
         Self {
             reported: false,
             abs_path: String::new(),
+            terminal: 0,
+        }
+    }
+}
+
+// --- FfiTerminalFrame: one session's published frame (opaque to Swift) ---
+
+/// One terminal session's published frame, as [`WolfCoreHandle::terminal_frame`] reads
+/// it, with flat per-row accessors mirroring the grid read path. Shares core's
+/// [`TerminalFrame`] rather than copying its cells. Every accessor answers `0`, `false`,
+/// `""` or an unset colour out of range and on the empty frame.
+pub struct FfiTerminalFrame {
+    frame: Option<Arc<TerminalFrame>>,
+}
+
+impl FfiTerminalFrame {
+    /// The frame's version, monotonic per session; `0` for the empty frame.
+    #[must_use]
+    pub fn version(&self) -> u64 {
+        self.frame.as_ref().map_or(0, |f| f.version)
+    }
+
+    /// The width in cells.
+    #[must_use]
+    pub fn cols(&self) -> u16 {
+        self.frame.as_ref().map_or(0, |f| f.cols)
+    }
+
+    /// The height in cells.
+    #[must_use]
+    pub fn rows(&self) -> u16 {
+        self.frame.as_ref().map_or(0, |f| f.rows)
+    }
+
+    /// The frame version at which row `row` last changed.
+    #[must_use]
+    pub fn row_version(&self, row: u16) -> u64 {
+        self.frame
+            .as_ref()
+            .and_then(|f| f.row_versions.get(usize::from(row)).copied())
+            .unwrap_or(0)
+    }
+
+    /// Row `row`'s cells, left to right; empty out of range.
+    #[must_use]
+    pub fn row_cells(&self, row: u16) -> Vec<FfiTerminalCell> {
+        let Some(f) = self.frame.as_ref().filter(|f| row < f.rows) else {
+            return Vec::new();
+        };
+        let cols = usize::from(f.cols);
+        let start = usize::from(row) * cols;
+        f.cells
+            .get(start..start + cols)
+            .unwrap_or_default()
+            .iter()
+            .map(FfiTerminalCell::from_cell)
+            .collect()
+    }
+
+    /// Row `row`'s selected columns, inclusive.
+    fn selection(&self, row: u16) -> Option<(u16, u16)> {
+        self.frame
+            .as_ref()
+            .and_then(|f| f.selection.get(usize::from(row)).copied().flatten())
+    }
+
+    /// Whether row `row` has selected columns.
+    #[must_use]
+    pub fn row_has_selection(&self, row: u16) -> bool {
+        self.selection(row).is_some()
+    }
+
+    /// Row `row`'s first selected column.
+    #[must_use]
+    pub fn row_selection_start(&self, row: u16) -> u16 {
+        self.selection(row).map_or(0, |(start, _)| start)
+    }
+
+    /// Row `row`'s last selected column, inclusive.
+    #[must_use]
+    pub fn row_selection_end(&self, row: u16) -> u16 {
+        self.selection(row).map_or(0, |(_, end)| end)
+    }
+
+    /// The cursor, `None` while it is scrolled out of view.
+    fn cursor(&self) -> Option<TerminalCursor> {
+        self.frame.as_ref().and_then(|f| f.cursor)
+    }
+
+    /// Whether the frame has a cursor; `false` while it is scrolled out of view.
+    #[must_use]
+    pub fn has_cursor(&self) -> bool {
+        self.cursor().is_some()
+    }
+
+    /// The cursor's column.
+    #[must_use]
+    pub fn cursor_col(&self) -> u16 {
+        self.cursor().map_or(0, |c| c.col)
+    }
+
+    /// The cursor's row.
+    #[must_use]
+    pub fn cursor_row(&self) -> u16 {
+        self.cursor().map_or(0, |c| c.row)
+    }
+
+    /// Whether the program shows the cursor.
+    #[must_use]
+    pub fn cursor_visible(&self) -> bool {
+        self.cursor().is_some_and(|c| c.visible)
+    }
+
+    /// Whether the cursor blinks.
+    #[must_use]
+    pub fn cursor_blinking(&self) -> bool {
+        self.cursor().is_some_and(|c| c.blinking)
+    }
+
+    /// The cursor's [`terminal_cursor_style`] discriminant.
+    #[must_use]
+    pub fn cursor_style(&self) -> u8 {
+        self.cursor()
+            .map_or(terminal_cursor_style::BLOCK, |c| match c.style {
+                TerminalCursorStyle::Block => terminal_cursor_style::BLOCK,
+                TerminalCursorStyle::Bar => terminal_cursor_style::BAR,
+                TerminalCursorStyle::Underline => terminal_cursor_style::UNDERLINE,
+                TerminalCursorStyle::BlockHollow => terminal_cursor_style::HOLLOW,
+            })
+    }
+
+    /// The default foreground; unset only for the empty frame.
+    #[must_use]
+    pub fn default_fg(&self) -> FfiColor {
+        FfiColor::from_opt(self.frame.as_ref().map(|f| f.default_fg))
+    }
+
+    /// The default background; unset only for the empty frame.
+    #[must_use]
+    pub fn default_bg(&self) -> FfiColor {
+        FfiColor::from_opt(self.frame.as_ref().map(|f| f.default_bg))
+    }
+
+    /// The cursor colour; unset when the editor sets none.
+    #[must_use]
+    pub fn cursor_color(&self) -> FfiColor {
+        FfiColor::from_opt(self.frame.as_ref().and_then(|f| f.cursor_color))
+    }
+
+    /// The scrollable area's height in rows.
+    #[must_use]
+    pub fn scrollbar_total(&self) -> u64 {
+        self.frame.as_ref().map_or(0, |f| f.scrollbar.total)
+    }
+
+    /// The viewport's first row; `total - len` at the bottom.
+    #[must_use]
+    pub fn scrollbar_offset(&self) -> u64 {
+        self.frame.as_ref().map_or(0, |f| f.scrollbar.offset)
+    }
+
+    /// The viewport's height in rows.
+    #[must_use]
+    pub fn scrollbar_len(&self) -> u64 {
+        self.frame.as_ref().map_or(0, |f| f.scrollbar.len)
+    }
+
+    /// Whether the program tracks the mouse.
+    #[must_use]
+    pub fn mouse_tracking(&self) -> bool {
+        self.frame.as_ref().is_some_and(|f| f.mouse_tracking)
+    }
+
+    /// The title the program set.
+    #[must_use]
+    pub fn title(&self) -> String {
+        self.frame
+            .as_ref()
+            .map(|f| f.title.clone())
+            .unwrap_or_default()
+    }
+
+    /// The directory the shell last reported; empty for none.
+    #[must_use]
+    pub fn pwd(&self) -> String {
+        self.frame
+            .as_ref()
+            .and_then(|f| f.pwd.as_ref())
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    }
+
+    /// The basename of the session's program, such as `zsh`.
+    #[must_use]
+    pub fn shell(&self) -> String {
+        self.frame
+            .as_ref()
+            .map(|f| f.shell.clone())
+            .unwrap_or_default()
+    }
+
+    /// Whether the session's program has exited.
+    #[must_use]
+    pub fn has_exited(&self) -> bool {
+        self.frame.as_ref().is_some_and(|f| f.exited.is_some())
+    }
+
+    /// The exit code, or 128 plus the signal for a signal death; `0` while running.
+    #[must_use]
+    pub fn exit_code(&self) -> i32 {
+        self.frame.as_ref().and_then(|f| f.exited).unwrap_or(0)
+    }
+}
+
+// --- FfiTerminalCell: one cell of a terminal frame (opaque to Swift) ---
+
+/// One cell of an [`FfiTerminalFrame`], with its style packed into discriminants and
+/// bits. Opaque so a `Vec<FfiTerminalCell>` crosses the bridge.
+pub struct FfiTerminalCell {
+    text: String,
+    fg: Option<Rgb>,
+    bg: Option<Rgb>,
+    flags: u8,
+    underline: u8,
+    width: u8,
+}
+
+impl FfiTerminalCell {
+    /// The grapheme cluster; empty for an empty cell or a spacer.
+    #[must_use]
+    pub fn text(&self) -> String {
+        self.text.clone()
+    }
+
+    /// The foreground, unset for the frame's default. Not swapped for inverse.
+    #[must_use]
+    pub fn fg(&self) -> FfiColor {
+        FfiColor::from_opt(self.fg)
+    }
+
+    /// The background, unset for the frame's default. Not swapped for inverse.
+    #[must_use]
+    pub fn bg(&self) -> FfiColor {
+        FfiColor::from_opt(self.bg)
+    }
+
+    /// The [`terminal_flag`] bits.
+    #[must_use]
+    pub fn flags(&self) -> u8 {
+        self.flags
+    }
+
+    /// The [`terminal_underline`] discriminant.
+    #[must_use]
+    pub fn underline(&self) -> u8 {
+        self.underline
+    }
+
+    /// The [`terminal_cell_width`] discriminant.
+    #[must_use]
+    pub fn width(&self) -> u8 {
+        self.width
+    }
+
+    /// Packs one of core's cells.
+    fn from_cell(cell: &TerminalCell) -> Self {
+        let bits = [
+            (cell.bold, terminal_flag::BOLD),
+            (cell.faint, terminal_flag::FAINT),
+            (cell.italic, terminal_flag::ITALIC),
+            (cell.strikethrough, terminal_flag::STRIKETHROUGH),
+            (cell.inverse, terminal_flag::INVERSE),
+            (cell.invisible, terminal_flag::INVISIBLE),
+            (cell.blink, terminal_flag::BLINK),
+        ];
+        Self {
+            text: cell.text.clone(),
+            fg: cell.fg,
+            bg: cell.bg,
+            flags: bits
+                .iter()
+                .filter(|(on, _)| *on)
+                .fold(0, |acc, (_, bit)| acc | bit),
+            underline: match cell.underline {
+                TerminalUnderline::None => terminal_underline::NONE,
+                TerminalUnderline::Single => terminal_underline::SINGLE,
+                TerminalUnderline::Double => terminal_underline::DOUBLE,
+                TerminalUnderline::Curly => terminal_underline::CURLY,
+                TerminalUnderline::Dotted => terminal_underline::DOTTED,
+                TerminalUnderline::Dashed => terminal_underline::DASHED,
+            },
+            width: match cell.width {
+                TerminalCellWidth::Narrow => terminal_cell_width::NARROW,
+                TerminalCellWidth::Wide => terminal_cell_width::WIDE,
+                TerminalCellWidth::SpacerTail => terminal_cell_width::SPACER_TAIL,
+                TerminalCellWidth::SpacerHead => terminal_cell_width::SPACER_HEAD,
+            },
         }
     }
 }
@@ -4827,6 +5504,18 @@ fn key_event_from_ffi(ev: &FfiKeyEvent) -> Option<KeyEvent> {
         alt: ev.alt,
         meta: ev.meta,
     })
+}
+
+/// Maps a [`terminal_target`] discriminant and window into a [`TerminalTarget`], or
+/// `None` for an unknown discriminant.
+fn terminal_target_from_ffi(win: i64, target: u8) -> Option<TerminalTarget> {
+    let orientation = match target {
+        terminal_target::WINDOW => return Some(TerminalTarget::Window(win)),
+        terminal_target::SPLIT_HORIZONTAL => SplitOrientation::Horizontal,
+        terminal_target::SPLIT_VERTICAL => SplitOrientation::Vertical,
+        _ => return None,
+    };
+    Some(TerminalTarget::Split { win, orientation })
 }
 
 /// Maps an [`FfiMouseEvent`] into a [`wolf_core::MouseEvent`], or `None` if the

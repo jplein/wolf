@@ -82,6 +82,10 @@ swift_library(
         "Sources/WolfKeyMap/StatusbarLayout.swift",
         "Sources/WolfKeyMap/StatusbarText.swift",
         "Sources/WolfKeyMap/StatusbarTextSpan.swift",
+        "Sources/WolfKeyMap/TerminalCellStyle.swift",
+        "Sources/WolfKeyMap/TerminalDamage.swift",
+        "Sources/WolfKeyMap/TerminalGeometry.swift",
+        "Sources/WolfKeyMap/TerminalInputSeam.swift",
         "Sources/WolfKeyMap/TreeChildrenMemo.swift",
         "Sources/WolfKeyMap/TreeRefreshGate.swift",
     ] + ["//crates/wolf-ffi:generated_swift"],
@@ -248,6 +252,10 @@ swift_test(
         "Tests/WolfKeyMapTests/StatusbarLayoutTests.swift",
         "Tests/WolfKeyMapTests/StatusbarTextSpanTests.swift",
         "Tests/WolfKeyMapTests/StatusbarTextTests.swift",
+        "Tests/WolfKeyMapTests/TerminalCellStyleTests.swift",
+        "Tests/WolfKeyMapTests/TerminalDamageTests.swift",
+        "Tests/WolfKeyMapTests/TerminalGeometryTests.swift",
+        "Tests/WolfKeyMapTests/TerminalInputSeamTests.swift",
         "Tests/WolfKeyMapTests/TreeChildrenMemoTests.swift",
         "Tests/WolfKeyMapTests/TreeRefreshGateTests.swift",
     ],
@@ -258,11 +266,24 @@ swift_test(
     name = "WolfMacOSTests",
     srcs = [
         "Tests/WolfMacOSTests/FileTreeViewTests.swift",
+        "Tests/WolfMacOSTests/LiveCore.swift",
         "Tests/WolfMacOSTests/OffscreenRenderer.swift",
+        "Tests/WolfMacOSTests/TerminalPaneRenderTests.swift",
+    ],
+    # Spawning a real nvim child does not work under the macOS build sandbox, so
+    # run unsandboxed. `no-sandbox` (vs `local`) keeps Bazel test-result caching.
+    tags = ["no-sandbox"],
+    data = [
+        "//bazel/nvim:nvim_tree",
+        "//runtime/nvim:init.lua",
     ],
     # In its `.xctest/Contents/MacOS/` the binary counts as a bundled app, whose AppKit aborts with
     # no LaunchServices check-in, which Seatbelt denies; a flat process path needs none.
-    env = {"CFProcessPath": "WolfMacOSTests"},
+    env = {
+        "CFProcessPath": "WolfMacOSTests",
+        "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
+        "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
+    },
     deps = [":wolf_macos_lib"],
 )
 
