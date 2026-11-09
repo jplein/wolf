@@ -48,7 +48,7 @@ Spawns and supervises the captive Neovim child, and wraps every RPC core issues 
 
 #### `redraw.rs`
 
-The `nvim-rs` handler: folds each `redraw` batch into `Snapshot` and routes the out-of-band `wolf_*` notifications into its sibling cells, queues and the file-search registry.
+The `nvim-rs` handler: folds each `redraw` batch into `Snapshot` and routes the out-of-band `wolf_*` notifications into its sibling cells, queues and the file-search registry. It answers one request, `wolf_barrier` ([why](../../../notes/wolf-core-decisions.md#threading-and-locking)).
 
 **Decisions**
 
@@ -56,7 +56,7 @@ The `nvim-rs` handler: folds each `redraw` batch into `Snapshot` and routes the 
 - In `grid_line`, `repeat` counts columns including the first, so an explicit `0` is a zero-width no-op; clamping it to 1 paints past the event's span, which Neovim's shadow grid never repaints, leaving a wrong-background cell. A double-width glyph's trailing half arrives as its own empty-text cell, so synthesizing a placeholder shifts the row right.
 - `win_hide` removes the window entry but keeps its grid: Neovim reuses that grid id and may re-`win_pos` without resizing first.
 - A resolved `confirm()` and an invalid-key re-prompt produce byte-identical `cmdline_hide` batches, so the toast is stashed with its prompt and restored only if a later `cmdline_show` matches.
-- The open-file mirror drops terminal buffers: a front-end replays it as `:edit` after a crash. Measured: the replay does not fail — Neovim re-runs `termopen()`, so each crash spawns another shell.
+- The open-file mirror drops terminal buffers: a front-end replays it as `:edit` after a crash. Measured: Neovim re-runs `termopen()`, so each crash spawns another shell.
 
 **Gotchas**
 

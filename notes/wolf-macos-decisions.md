@@ -59,7 +59,15 @@ Each view's working directory is its tabpage's `:tcd`, so it is per-view rather 
 
 Window frames, ordered tabs, each tab's working directory, sidebar visibility, and full pane-split layout persist to `state.json` and restore at launch before the windows are shown. The coordinator walks its live windows and tabs and commits the whole tree through the `wolf-ffi` snapshot builder. Core does not mirror the working directory into a store, and there is no per-window slot.
 
-Committing an identical tree is a no-op, so redundant snapshots cause no disk churn.
+Every Alive core wake requests a commit, alongside the geometry, sidebar, cwd and tab-group triggers. Opening, splitting or closing a pane fires nothing else, and a force quit or crash skips the terminate commit, so without it those files are lost. The request is throttled rather than debounced, so continuous wakes cannot starve the commit, and committing an identical tree is a no-op, so the frequent commits cause no disk churn.
+
+**Each view contributes only a tab it can read whole, and otherwise its cache.** Leaves are read by window handle from `previews` and `win_buffers`, which span every tabpage; `pane_status_for_grid` joins the current-tabpage `windows` map, so it would persist a background view's files as `""`. A view whose cwd or any leaf is not yet reported refuses, and contributes its last tab, which starts as the restored one. The launch commit runs before any pane binds, and a background view does not rebuild until it is visited, so a partial tab there would replace the saved files with nothing.
+
+Two restored views never gather and go on contributing their seed. One whose rebuild failed shows a fallback pane rather than its saved split. One restored to the empty state because its saved folder was missing keeps that folder until the user opens another, so remounting a volume brings the session back.
+
+**Closing the last window is quitting, so it commits the tree with that window in it.** The app terminates after its last window closes, and a commit after the close would find no live view. Any other close commits without the closing view, and a close during termination commits nothing over the terminate commit. A walk with no live view or no window commits nothing at all, because it would erase the session.
+
+Saved tabs that no view took at launch, because a core, tabpage or view build failed, are never retried in that session. They are carried into every commit so the next launch tries them again.
 
 Only directories the user actually opened persist. The passive launch working directory is deliberately not written and not recorded in the recent-directories list, which is what keeps Open Recent clean. A frame restores only when it still intersects a live screen, and a tab's working directory only when it is still a directory; an empty or deleted one restores to the empty state rather than falling back to the process working directory.
 
@@ -99,6 +107,8 @@ Recovery is one step and self-limiting. A failed in-place update clears that win
 - Scrollbar thumbs are non-interactive; thumb-drag is deferred.
 - Markdown preview ships one theme. Cursor-follow anchors to the containing block's top inside a fenced code block, an HTML block or a table, and inside a paragraph hard-wrapped across several short source lines; an image's alt text collapses to a single anchor just after the image. The marker rules are in [the preview position-marker contract](wolf-core-decisions.md).
 - Appearance flows one way only: colorscheme to app chrome works, OS theme to Neovim theming does not.
+- A Neovim crash restart reopens each view's open files into one pane, so its splits collapse, and the next commit records that. Restoring the pane topology across a restart would change the restart model.
+- Only what a pane shows persists: `state.json` carries buffer paths only as layout leaves, so a file the user switched away from in its pane is not reopened at launch.
 - Per-pane navigation history is not persisted across launches, and is not cursor-position history — Neovim's own jumplist (`<C-o>` / `<C-i>`) is untouched. Navigating back to a file deleted from disk opens an empty `[New]` buffer, exactly as `:e missing.md` would.
 
 ## Frame-time instrumentation

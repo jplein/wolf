@@ -151,7 +151,7 @@ Note that the nearby `swift_format_srcs` glob feeds lint and format only, not te
 
 #### `LivenessSeamTests.swift`
 
-**Covers** — `LivenessSeam.decision(liveness:autoRestartAttempts:)`: the whole decision table at zero and one attempts; the cap, which refuses a second automatic attempt and switches the overlay to `crashed(retrying: false)`; the drain in every liveness state; that only a dead core with its attempt unspent auto-restarts; that only an alive core renders, whatever the count; and that `NvimLiveness`'s raw values match `wolf-ffi`'s `mod liveness`.
+**Covers** — `LivenessSeam.decision(liveness:autoRestartAttempts:)`: the whole decision table at zero and one attempts; the cap, which refuses a second automatic attempt and switches the overlay to `crashed(retrying: false)`; the drain in every liveness state; that only a dead core with its attempt unspent auto-restarts; that only an alive core renders or persists, whatever the count; and that `NvimLiveness`'s raw values match `wolf-ffi`'s `mod liveness`.
 
 **Gotchas** — the cases list the liveness states by hand, so a new `NvimLiveness` case must be added here deliberately. The deferral before the automatic respawn and the overlay painting ahead of it are not observable headlessly; they, and the rest of the `Project.onWake` glue, are manual-smoke.
 
@@ -351,6 +351,12 @@ The `PreviewSeam` reload gate plus the click-to-focus surface. `winsNeedingReloa
 #### `SearchToggleSeamTests.swift`
 
 **Covers**: the three seeds for the sidebar search panel's toggle buttons — `initialCaseSensitive` is the inverse of nvim's `:ignorecase`, `defaultUseRegex` is on, and `defaultAllFiles` is off (Markdown-only).
+
+#### `SessionSeamTests.swift`
+
+**Covers** — the [`SessionSeam`](../../Sources/WolfKeyMap/README.md#sessionseamswift) write-side decisions: the three close answers; that a walk with no live view or no window commits nothing; `gatherTab` resolving file, preview and unnamed leaves with their weights, an empty-state lone pane persisting no layout, and refusal on an unreported or missing leaf or a folder view's empty cwd; `contribution` keeping or replacing the cache, never gathering behind a shut gate; both `mayGather` gates; and `orphanedSlots` in saved order.
+
+**Gotchas** — the seed and live fixtures differ in every field, so an assertion that the cache survived cannot pass on a live tab by coincidence. The `WolfMacOS` glue that feeds these decisions — `Project.onWake`, `teardown`, the live filter in `snapshotNow` and `leafContents()` — is compile-verified and manual-smoke.
 
 #### `ShortcutSeamTests.swift`
 

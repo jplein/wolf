@@ -437,3 +437,9 @@ Real nvim plus queries and parsers trees from either provider, so both platforms
 **Covers** — anonymous-buffer naming over the existing `new_buffer` / `chdir` / `open` / `current_file` / `is_markdown_active` surface: the un-numbered first `Untitled.md`, the collision walk over both live buffers and files on disk, the absence of any write before an explicit `:w`, and chdir re-homing an untouched anonymous buffer while leaving a real file alone. Real nvim; target `//crates/wolf-ffi:untitled` (staged nvim runfiles or `WOLF_NVIM_BIN`, `tags = ["no-sandbox"]`).
 
 **Gotchas** — each `#[test]` starts its own core through the local `start_core` on a fresh temp cwd, and the on-disk-collision case depends on that cwd being empty except for the file it seeds.
+
+#### `win_buffer.rs`
+
+**Covers** — `win_buffer(win)` reading a window on a background tabpage, the read the macOS state commit resolves every pane leaf through: a window opened on one tabpage still reports its file after a second tabpage becomes current, while an unknown window and a shut-down core report nothing with an empty path. Real nvim; target `//crates/wolf-ffi:win_buffer` (staged nvim runfiles or `WOLF_NVIM_BIN`, `tags = ["no-sandbox"]`).
+
+**Gotchas** — one `#[test]`, because it sets the process-global `WOLF_STATE_DIR` for the shutdown flush and a sibling in the binary would race it. The test polls `grid_for_win(win1) == 0` before the read, so the premise that the window left the current-tabpage `windows` map is measured: if Neovim ever kept it bound, the premise fails rather than the read passing vacuously.

@@ -428,11 +428,13 @@ Real Neovim: needs `WOLF_NVIM_BIN`, the staged nvim runfiles, and `tags = ["no-s
 **Covers**
 
 - `WolfCore::rebuild_layout(spec_json)` realizing a saved pane-split tree: one handle per spec leaf, distinct, in DFS/leaf order, each bound to the requested buffer — across nested splits, lone leaves, empty-path leaves, and `preview: true` leaves reconstructed as real previews rather than `:edit`.
+- `rebuild_reports_every_leaf_window_on_return`: when the rebuild returns, `win_buffers` already reports every returned window with its leaf's file, and Neovim lists all three files, which rules out the `:edit`s themselves racing startup. It repeats on `BARRIER_ROUNDS` fresh cores.
 
 **Gotchas**
 
 - Assert handle count, distinctness and the per-window buffer, never literal handle values.
 - An empty-path leaf inherits the named `Untitled.md` startup buffer, matched by basename suffix so `/var` versus `/private/var` does not break it.
+- The reporting test reads the snapshot once, with no poll and no flush wait, because that instant is what a launch-time state commit sees. Do not add a poll: it would pass without the `wolf_barrier` guarantee it pins. The race it catches is a scheduling race, so with the guarantee removed a single run fails only some of the time.
 
 #### `recent_dirs.rs`
 

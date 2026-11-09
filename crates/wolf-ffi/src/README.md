@@ -81,14 +81,16 @@ The four `extern "C"` wake registrations (`wolf_ffi_set_wake`, `wolf_ffi_set_fil
 - `active_win(&self) -> i64` — 0 until nvim reports one.
 - `focus_win(&self, win: i64)` — Click-to-focus and resolved focus-direction moves.
 - `close_pane(&self)` — `:close`, which closes the split rather than the buffer.
-- `rebuild_layout(&self, layout: &FfiPaneNode) -> Vec<i64>` — Realizes a saved split tree, the node `FfiTabState::layout` returned, in the current tabpage's lone window, returning the window handles in leaf order. Rust renders it with `wolf_core::state::rebuild_layout_spec`, so no front-end renders the spec. nvim supplies only count, topology, and per-window buffer; sizes come from the front-end's weights.
+- `rebuild_layout(&self, layout: &FfiPaneNode) -> Vec<i64>` — Realizes a saved split tree, the node `FfiTabState::layout` returned, in the current tabpage's lone window, returning the window handles in leaf order. Rust renders it with `wolf_core::state::rebuild_layout_spec`, so no front-end renders the spec. nvim supplies only count, topology, and per-window buffer; sizes come from the front-end's weights. When it returns, `win_buffer` and `previews` already report every returned window, so a state commit straight after it reads the restored files rather than the startup buffer.
 - `pane_status_for_grid(&self, grid: u64) -> FfiPaneStatus` — The statusbar strings for the window drawing into `grid`.
+- `win_buffer(&self, win: i64) -> FfiWinBuffer` — What window `win` shows, read from core's `win_buffers` by handle. That map spans every tabpage, so a background view's window is still reported, where `pane_status_for_grid` joins through the current-tabpage `windows` map and answers `[No Name]`. The front-end reads persisted leaf paths through it for that reason.
 - `toggle_full_width(&self)` — Flips `b:wolf_full_width` on the effective buffer, which for a preview scratch is the source buffer.
 - `is_full_width_active(&self) -> bool` — Drives the View > Use full width for content checkmark.
 - `full_width_for_win(&self, win: i64) -> bool` — The per-window flag the front-end threads into a pane's geometry.
 - `FfiLayoutIntent::kind/orientation/dir/from/win` — A tagged flattening of `wolf_core::LayoutIntent`. Fields a given kind does not use read as 0; a drawer open reuses the `win` field for the new drawer window rather than adding a bridged field.
 - `FfiWinInfo::grid/win/hidden` — `grid` is `>= 2` for editor windows.
-- `FfiPaneStatus::filename/display_path/abs_path` — core's `PaneStatus`, whose rules are [`pane_status.rs`](../../wolf-core/src/README.md#pane_statusrs)'s. `abs_path` is never relativized — the front-end persists it as a pane-layout leaf path.
+- `FfiPaneStatus::filename/display_path/abs_path` — core's `PaneStatus`, whose rules are [`pane_status.rs`](../../wolf-core/src/README.md#pane_statusrs)'s. `abs_path` is never relativized.
+- `FfiWinBuffer::reported/abs_path` — `reported` is whether `win_buffers` has the window; it is false for an unknown window or a shut-down core. `abs_path` is the canonical path `FfiPaneStatus::abs_path` gives a current-tabpage window, `""` when unnamed or unreported.
 
 ### Tabpages
 

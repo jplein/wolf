@@ -22,7 +22,7 @@ Only that plugin file is sourced: the sibling `query_predicates.lua` registers p
 
 ## Buffer tracking emits
 
-Coalescing also collapses the two to four identical emits a plain `:e file` produces into one, which keeps stale in-flight notifications from racing a back or forward move. `WinClosed` fires while the closing window is still listed by `nvim_list_wins()`, which is harmless: core wholesale-replaces both per-window maps, so the next emit's survivor set drops it.
+Coalescing also collapses the two to four identical emits a plain `:e file` produces into one, which keeps stale in-flight notifications from racing a back or forward move. The one synchronous emit, `wolf_sync_buffers`, is safe for the history fold because it runs only once a rebuild is fully realized: it carries the settled state, and the scheduled emit that follows is identical. `WinClosed` fires while the closing window is still listed by `nvim_list_wins()`, which is harmless: core wholesale-replaces both per-window maps, so the next emit's survivor set drops it.
 
 ## Owner path matching
 

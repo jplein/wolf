@@ -14,7 +14,8 @@ Purpose: The application coordinator: launch setup, the live `WolfWindowControll
 
 - `makeNewWindow(originatingCwd:)` — opens a fresh project in the empty state, ignoring its argument, which exists for the shared `CommandDispatcher` call site.
 - `makeNewTab(from:)` — reuses the key controller's project, adding a tabpage rather than starting a core.
-- `scheduleStateSnapshot()` / `snapshotNow()` — coalesced versus immediate whole-tree commit to `state.json`. Every geometry, sidebar, cwd and tab-group change uses the coalesced form.
+- `scheduleStateSnapshot()` / `snapshotNow()` — throttled versus immediate whole-tree commit to `state.json` ([write model](../../../../notes/wolf-macos-decisions.md#state-is-a-tree-and-the-front-end-owns-every-write)). Every Alive wake and UI change throttles.
+- `closeCommit(for:)` — a closing view's commit; for the last live view it commits at once.
 - `otherWindows(excluding:)`, `controllerForCwd(_:)`, `raiseWindow(tabId:)` — the command palette's candidate sources and raise target.
 
 **Decisions**
@@ -27,7 +28,6 @@ Purpose: The application coordinator: launch setup, the live `WolfWindowControll
 **Gotchas**
 
 - Owning-controller lookups use `effectiveKeyWindow`, not `NSApp.keyWindow`: while a picker panel is key, no controller owns the key window, so it resolves to that panel's parent.
-- The snapshot records each tab's `persistedCwd`, not `currentCwd`, which follows the current tabpage and so misnames every other tab.
 
 #### `AppMenu.swift`
 
@@ -325,7 +325,8 @@ Purpose: The editor area: one flat, flipped `NSView` that paints every split pan
 **Public API**
 
 - `markRefocusRebind()` arms a grid rebind after a tabpage switch; `rebind(tabpageHandle:)` does so after a crash-restart, dropping only the drawer.
-- `layoutSnapshot()` / `requestLayoutRebuild(_:node:)` — the snapshot is `nil` for a lone empty pane; Rust renders `node`, the loaded bridge node `saved` was projected from.
+- `paneLayout`, `leafContents()`, `restoreFailed` — `SessionSeam`'s inputs. Leaves are read by window, as `pane_status_for_grid` misreads a background view.
+- `requestLayoutRebuild(_:node:)` — Rust renders `node`.
 - `activeWin` — per-view, behind `activePaneSelection` and `activePreviewSourcePath`, because the tabpage-shared `WolfCoreHandle.active_win()` would let a background tab enable Copy.
 - `activePreviewSourcePath` — `nil` in edit mode.
 - `otherPaneTarget(prefer:)` — `OtherPaneSeam.target` as the window for `preview_in_other` / `edit_in_other`: `0` splits, `nil` is a no-op.
@@ -507,17 +508,17 @@ Purpose: One captive Neovim shared by N views, each bound to one nvim tabpage. O
 **Public API**
 
 - `start(launchCwd:coordinator:)` — the sole caller of `wolf_ffi_start`, `nil` on failure. Points core at the bundled `nvim` and `rg` with `overwrite=0`, so a developer's `WOLF_NVIM_BIN` / `WOLF_RG_BIN` export wins.
-- `restartNeovim()` — the "Restart Neovim" button's entry; it resets the automatic attempt count.
+- `restartNeovim()` — the "Restart Neovim" button's entry; it resets the attempt count.
 
 **Decisions**
 
 - Views are held weakly and each holds its project strongly, so the core outlives one view's teardown while a sibling binds it; the last view's `detach` is the only core-shutdown path.
 - Render and picker wakes go only to `currentView`; tree and content-search wakes fan out to every view, since the token names no view and each refresh is version-gated.
-- `onWake` acts on [`LivenessSeam`](../WolfKeyMap/README.md#livenessseamswift)'s decision and drains commands last, since a drained close can shut the core down.
+- `onWake` acts on [`LivenessSeam`](../WolfKeyMap/README.md#livenessseamswift)'s decision, committing on `persist`, and drains commands last, since a drained close can shut the core down.
 - An automatic restart waits `autoRestartDelay` on `asyncAfter`: `handle.restart()` blocks the main thread, and only a pending timer guarantees the overlay paints first.
 - Attempts count when scheduled and reset on `Alive`, a successful respawn or the button, so a press against a failing respawn can cost two respawns ([why](../../../../notes/crates/wolf-gnome/src/shell.rs.md#one-press-two-respawns)).
 - The respawn captures files and cwds before `handle.restart()` wipes the mirror. On `false` it applies only a fresh decision's overlay: scheduling there would bypass the cap.
-- `closeTabpage` skips the last view: closing nvim's last tabpage fails with E784, and that view's `detach` shuts the core down anyway.
+- `closeTabpage` skips the last view: closing nvim's last tabpage fails with E784, and that view's `detach` shuts the core down.
 
 #### `SearchView.swift`
 
@@ -684,12 +685,13 @@ Purpose: One view — a single tab's whole UI stack, bound to a `(project, tabpa
 - `build() -> Bool` — returns `false`, having built nothing, when the tabpage bind is invalid, so the coordinator drops the would-be view.
 - `hasFolder` — false in the empty state, gating the sidebar and file tree, since an empty-state window must never scan `home`.
 - `persistedCwd` — the tabpage-local cwd, correct even when this view is not current, unlike `currentCwd`.
+- `persistedTab()` — this view's [`SessionSeam`](../WolfKeyMap/README.md#sessionseamswift) contribution, seeded from the restored tab.
 - `canCopy` — whether Edit > Copy has anything to copy; `copy()` takes the same decision.
 - `drainAndDispatchCommands()` — apart from `onRenderWake()`, so the project drains in every state ([why](../WolfKeyMap/README.md#livenessseamswift)).
 
 **Decisions**
 
-- `project` is held strong so the shared core outlives this view's teardown while a sibling still binds it; the project holds views weakly, so there is no cycle. A view never shuts the core down itself.
+- `project` is held strong, and views weakly, for the reason in [`Project.swift`](#projectswift). A view never shuts the core down itself.
 - `teardown()` is idempotent and defers `removeController` one runloop turn, capturing `self` strongly on purpose: during `windowWillClose` the coordinator's collection is the last strong reference, so dropping it synchronously frees the `NSWindow` mid-close.
 - `window.historyNav = self` is wired explicitly: this is not an `NSWindowController`, so a `target: nil` toolbar action could never reach it through the responder chain.
 - The file tree starts at the end of `build()`, once the sidebar's collapse state has seeded its refresh gate, so a restored collapsed sidebar defers its first outline work.

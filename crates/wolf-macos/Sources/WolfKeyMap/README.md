@@ -296,13 +296,14 @@ Purpose: The crash/stall recovery rulebook: what a wake does given the captive N
 **Public API**
 
 - `NvimLiveness` — `UInt8`-backed, its raw values the discriminants of `wolf-ffi`'s `mod liveness`. An unknown discriminant decodes to `nil`, which `Project` reads as `.alive`.
-- `LivenessSeam.decision(liveness:autoRestartAttempts:) -> Decision` — `overlay` (`.hidden`, `.crashed(retrying:)`, `.stalled`), `autoRestart`, `render` (only for `.alive`) and `drain`.
+- `LivenessSeam.decision(liveness:autoRestartAttempts:) -> Decision` — `overlay` (`.hidden`, `.crashed(retrying:)`, `.stalled`), `autoRestart`, `render` and `persist` (both only for `.alive`), and `drain`.
 - `maxAutoRestartAttempts` — one automatic attempt per crash.
 
 **Decisions**
 
 - The `switch` has no `default`, so a new liveness case fails to compile until it is classified.
 - `drain` is true in every state: it is the only route by which a close or quit queued just before a crash reaches the window. Reading the queue issues no RPC; some dispatched commands do.
+- Only `.alive` persists: a stalled or dead core's maps would write stale tabs.
 - `.notResponding` never auto-restarts: a restart force-kills Neovim and loses whatever is not in a swap file, so that is the user's call.
 - The cap only stops a retry loop against a respawn that keeps failing, and does not limit the user, because the button resets the count. `retrying` means an attempt is still permitted, not that one is running.
 - Unlike `liveness_ui`, the seam takes the count rather than a boolean, so the cap is decided and tested here, and it carries `drain`, which wolf-gnome runs outside its mapping.
@@ -447,7 +448,7 @@ Purpose: The pure positioning arithmetic for a floating picker panel over its ow
 
 #### `PickerRefreshCoalescer.swift`
 
-Purpose: Collapses a burst of `request()` calls into a single trailing `perform()`. Callers stream a large traversal that wakes once per batch, and each bare refresh would re-rank or rebuild the whole accumulated snapshot.
+Purpose: Collapses a burst of `request()` calls into a single trailing `perform()`, so a caller woken once per batch or per frame does its expensive work once per window rather than once per wake.
 
 **Public API**
 
@@ -458,10 +459,11 @@ Purpose: Collapses a burst of `request()` calls into a single trailing `perform(
 **Decisions**
 
 - The fire clears the scheduled flag before calling `perform`, so a wake arriving during the work reschedules and the final, complete snapshot is never dropped.
+- It is a throttle, not a debounce: a request never pushes the armed fire back, so a steady stream of wakes cannot starve `perform`.
 
 **Gotchas**
 
-- Despite the name the seam is generic and shared: the file picker, the sidebar file tree, the sidebar search panel and the preview reload path all own one.
+- Despite the name the seam is generic and shared: the file picker, the sidebar file tree, the sidebar search panel, the preview reload path and the coordinator's state commit all own one.
 
 #### `PickerSeam.swift`
 
@@ -568,7 +570,7 @@ Purpose: The pure restore planner. It rebuilds projects from the saved (window, 
 **Public API**
 
 - `plan(windows:home:isDirectory:) -> RestorePlan` — `isDirectory` is the seam's only injected impurity (the app passes a `FileManager` check, tests pass a set lookup). Projects come back in first-encounter order.
-- `SavedTab` and `SavedWindow` are the inputs; `PlannedTab`, `ProjectPlan` and `RestorePlan` the outputs. A `PlannedTab` retains its `groupIndex` and `positionInGroup` so the window-assembly phase can drop it back into the right OS window and tab group.
+- `SavedTab` and `SavedWindow` are the inputs; `SavedTab` is also what a live view contributes to a commit, through [`SessionSeam`](#sessionseamswift); `PlannedTab`, `ProjectPlan` and `RestorePlan` the outputs. A `PlannedTab` retains its `groupIndex` and `positionInGroup` so the window-assembly phase can drop it back into the right OS window and tab group.
 
 **Decisions**
 
@@ -647,6 +649,23 @@ Purpose: The initial states for the sidebar search panel's three toggle buttons.
 **Decisions**
 
 - Case sensitivity is seeded from Neovim once, when the panel is first shown; toggling the button never writes back, so the search panel cannot change the editor's `:ignorecase`.
+
+#### `SessionSeam.swift`
+
+Purpose: The write side of state persistence, ported from wolf-gnome's [`state_seam.rs`](../../../wolf-gnome/src/README.md#state_seamrs): what each live view contributes to `state.json`, and whether a commit or a close writes anything. The rules are in [wolf-macos-decisions.md](../../../../notes/wolf-macos-decisions.md#state-is-a-tree-and-the-front-end-owns-every-write).
+
+**Public API**
+
+- `gatherTab(...) -> TabGather` — `.refuse` when a folder view's cwd is `""` or any leaf is `.unreported` or missing from `content`.
+- `mayGather(...)` and `contribution(mayGather:gather:cache:)` — the gathered tab when the gate is open and the gather ready, otherwise `cache`, which the caller stores as its next cache. `gather` is not evaluated behind a shut gate.
+- `closeCommit(terminating:otherLiveViews:)`, `committedWindows(liveViews:windows:)` and `orphanedSlots(savedTabCounts:materialized:)` — `nil` from `committedWindows` means commit nothing.
+
+**Decisions**
+
+- A partial read refuses the whole tab: a leaf with no reported window would persist `""` over the restored file.
+- The cache starts as the restored tab, so a view not yet read or behind a shut gate still writes its saved files. The gate shuts after a failed rebuild, and while a view whose saved folder was missing at launch has no folder.
+- Closing the last live view is quitting, so it keeps that view; a close while terminating commits nothing; any other close drops the view.
+- A walk with no live view or no window would erase the session, so it commits nothing. Orphans are never retried, but are carried into every commit.
 
 #### `ShortcutSeam.swift`
 

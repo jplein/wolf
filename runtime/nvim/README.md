@@ -38,6 +38,8 @@ Reports what every window shows, on every tabpage rather than only the current o
 
 `is_drawer` is the buffer tag `b:wolf_terminal` or'd with the window tag `w:wolf_terminal`. It marks the terminal drawer, which navigation history excludes; a `:terminal` in an ordinary split sets neither tag and is not excluded. Windows showing a preview scratch are omitted from the list entirely, which is what keeps `win_buffers` and `previews` disjoint — the history fold relies on that. Emits are coalesced (see Decisions). Exposes `_G.wolf_emit_buffers`.
 
+It also exposes `_G.wolf_sync_buffers`, which emits at once unless suppressed and then blocks on a `wolf_barrier` request that core answers only once that emit is in the snapshot.
+
 #### `wolf_setup_full_width(chan)`
 
 Notifies **`wolf_full_width`** with one list of `{ win, vim.b[buf].wolf_full_width == true }` pairs covering every window, on `BufEnter`/`BufWinEnter`/`WinEnter`/`WinNew`/`WinClosed`. Core wholesale-replaces `Snapshot.full_width`; a window absent from the map defaults to false. The front-end threads each pane's content-width mode — full versus the capped default — into its geometry, keyed by window handle.
@@ -137,6 +139,8 @@ Realizes a saved pane-split tree in the current tabpage's single starting window
 `spec_json` is a JSON string: a leaf is `{ leaf = true, path, preview }`, a split is `{ orientation = "h"|"v", weights, children }`. `wolf_core::state::rebuild_layout_spec` is its only producer, on both platforms, so a change here has to land there too; see [wolf-core-decisions.md](../../notes/wolf-core-decisions.md).
 
 A preview leaf with a path becomes a preview of that source via `wolf_preview_file`, converting the window rather than replacing it so the handle survives; a plain leaf with a path is `:edit`ed; an empty leaf keeps its inherited buffer. Regions are created child-0-first, left-to-right and top-to-bottom. nvim supplies only the window count, topology, and per-window buffer; the front-end drives pane sizes from its own weights.
+
+It ends with `_G.wolf_sync_buffers`, so core reports every returned window before the RPC answers. Without it the coalesced emit lands after the caller wakes, and a state commit in that gap persists the startup `Untitled.md`, or no file, in place of each restored one. Why the barrier is a request is in [wolf-core-decisions.md](../../notes/wolf-core-decisions.md#threading-and-locking).
 
 #### `wolf_close_tabpage(handle)`
 
@@ -302,7 +306,7 @@ The durable dictionary is the global `'spellfile'` at `WOLF_SPELL_DIR/en.utf-8.a
 
 **Tabpage navigation and creation chords map to `<Nop>`, and the typed `:tab*` commands expand to an empty command line, because Wolf owns all tabpage lifecycle.** A user-typed `:tabnew` would create an orphan tabpage no view is bound to, and `:tabnext` or `:tabclose` would switch or close a tabpage out from under a view, desyncing the front-end-authoritative current view. `:tcd`, `:lcd`, and `:cd` are left open on purpose: they are different words, so the whole-word abbreviations never catch them, and `:tcd` is how each view sets its own working directory.
 
-**`wolf_buffers` emits are coalesced through `vim.schedule`, never synchronous.** Core's history fold pushes on every observed change, so an intermediate wrong emit persists even if a later emit is correct. A single `:terminal` fires `BufEnter` with a brand-new unnamed buffer, then `BufFilePost` with a `term://` name, and only sets `buftype` at `TermOpen` — three history entries for one user action if emitted eagerly.
+**`wolf_buffers` emits are coalesced through `vim.schedule`, and only `wolf_sync_buffers` emits synchronously.** Core's history fold pushes on every observed change, so an intermediate wrong emit persists even if a later emit is correct. A single `:terminal` fires `BufEnter` with a brand-new unnamed buffer, then `BufFilePost` with a `term://` name, and only sets `buftype` at `TermOpen` — three history entries for one user action if emitted eagerly.
 
 **Coalescing is not enough for a multi-step window build, which is why `wolf_suppress_buffers` exists.** A `botright split` fires `WinNew` and `WinEnter` synchronously with the new window still showing the previous buffer, and the drawer's buffer is not tagged until after `:terminal` has fired `BufEnter`. Those emits must be suppressed rather than corrected afterwards.
 
