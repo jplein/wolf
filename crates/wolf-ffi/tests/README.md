@@ -239,6 +239,12 @@ Real-nvim coverage of the per-pane navigation-history bridge — the six `WolfCo
 - Each `:e` waits until the pane's newest row is that file, not on `current_file()`. `current_file()` is notified during `:edit`, but the history fold runs on the `wolf_buffers` emit, which `vim.schedule` holds back while typed input is pending, so a following `:e` can run first and the skipped file never gets a row.
 - Each move is followed by a settle pause so the self-caused emit is absorbed before the next assertion.
 
+#### `library_license_notices.rs`
+
+**Covers**
+
+`wolf_ffi_library_license_notices()` returning `wolf_core::LIBRARY_LICENSE_NOTICES` byte for byte, and naming every `LIBRARY_LICENSES` library. Headless, with a target shaped like [`font_license_notices.rs`](#font_license_noticesrs)'s.
+
 #### `lighthouse_load.rs`
 
 Real-nvim proof that the captive `runtime/nvim/init.lua` both finds and activates a sibling vendored `lighthouse/` colorscheme. Target `//crates/wolf-ffi:lighthouse_load` stages the nvim runfiles plus `//bazel/lighthouse:lighthouse_tree` (`WOLF_TEST_LIGHTHOUSE_DIR`) and runs unsandboxed; the Linux devShell exports the same variable from its own lighthouse derivation, so the test asserts on both platforms and loud-skips only where the pinned nvim or the tree is absent.

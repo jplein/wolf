@@ -208,9 +208,10 @@ One captive nvim is one project; each of its views binds to a distinct tabpage.
 - `FfiConfig::appearance() -> u8` — `mod appearance`.
 - `FfiConfig::macos_option_as_alt() -> bool` — Whether Option produces `<M-…>` rather than composing accented characters. Defaults to false.
 
-### Font licences
+### Licences
 
-- `wolf_ffi_font_license_notices() -> String` — A free function, no live core needed. Returns `wolf_core::FONT_LICENSE_NOTICES` verbatim; the macOS About panel shows it as its credits.
+- `wolf_ffi_font_license_notices() -> String` — A free function, no live core needed. Returns `wolf_core::FONT_LICENSE_NOTICES` verbatim; the macOS About panel's credits carry it.
+- `wolf_ffi_library_license_notices() -> String` — The same for `wolf_core::LIBRARY_LICENSE_NOTICES`, which the credits carry after the font notices.
 
 ### Saved state
 

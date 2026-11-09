@@ -244,19 +244,23 @@ Pure Markdown to themed-HTML rendering for the preview pane: a `&str` to `String
 
 #### `licenses.rs`
 
-The four bundled fonts' verbatim licence texts, compiled in. Pure data, no GUI and no filesystem: Inter and Latin Modern Math ship as base64 faces inside every preview document, JetBrains Mono and iA Writer Mono S as editor faces. All four are redistributed, so all four owe attribution.
+Two registries of verbatim licence texts, compiled in. The four bundled fonts ship as preview and editor faces, and the libraries are statically linked into Wolf's binaries, so all of them owe attribution.
 
 **Public API**
 
-- `FontLicense` — `font`, `license`, `provenance`, `text`. `provenance` names the archive, the path inside it and the pinned sha256, so a bumped text can be re-derived rather than trusted.
+- `FontLicense` — `font`, `license`, `provenance`, `text`. `provenance` names the archive, the path inside it and its pinned sha256, so a bumped text is re-derived rather than trusted.
 - `FONT_LICENSES` — one row per bundled font, preview faces first.
-- `FONT_LICENSE_NOTICES` — those rows as one plain-text block, and what all three consumers read: [`markdown.rs`](#markdownrs)'s document head, `wolf-gnome`'s About dialog, and the macOS About panel through `wolf-ffi`.
+- `FONT_LICENSE_NOTICES` — those rows as one plain-text block, which [`markdown.rs`](#markdownrs)'s document head and both About surfaces carry.
+- `LibraryLicense` — `library`, `license`, `provenance` (as above), `text`. For a library offered under a choice, `license` names the licence Wolf takes.
+- `LIBRARY_LICENSES` — libghostty-vt, then the code its static archive compiles in.
+- `LIBRARY_LICENSE_NOTICES` — those rows as one block, which both About surfaces carry after the font block and the preview document does not, embedding none of that code.
 
 **Decisions**
 
-- The block is a `const` built with `concat!` rather than a function, because the preview head it lands in must be byte-identical on every render.
-- Every row carries an explicit trailing newline. `licenses/ia-writer-mono-LICENSE.txt` ends without one, and the three files that do end in one are exactly what would hide that.
-- The two texts under `licenses/` are committed as `.txt`, so prettier's Markdown gate cannot reformat a third party's licence. That directory has no README: per `CLAUDE.md`, a helper directory with no consumer of its own is documented by its parent's entry, which is this one.
+- The blocks are `concat!` `const`s, not functions, because the preview head must be byte-identical on every render.
+- Every row carries an explicit trailing newline: three texts end without one, which the others would hide.
+- The Unicode Character Database row is there because uucode compiles its data in. uucode ships no copy of that licence, so the text is aro's.
+- The texts under `licenses/` are committed as `.txt`, so prettier's Markdown gate cannot reformat a third party's licence. This entry documents that directory, which has no README of its own.
 
 ### Search, traversal, and ranking
 

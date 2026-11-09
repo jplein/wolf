@@ -8,11 +8,11 @@ The GTK front-end's modules, one entry each. The pure seams here are the Linux c
 
 #### `about.rs`
 
-Purpose: the About dialog — a pure text seam over the bundled fonts' licence notices, plus the transient window that shows it. This is the one surface on this front-end that discharges the fonts' attribution obligation, so its content has legal weight rather than cosmetic weight.
+Purpose: the About dialog — a pure text seam over the bundled fonts' and the linked libraries' licence notices, plus the transient window that shows it. This is the one surface on this front-end that discharges their attribution obligations, so its content has legal weight rather than cosmetic weight.
 
 **Public API**
 
-- `about_text() -> String` — the whole dialog body. It takes no arguments and reads `wolf_core::FONT_LICENSE_NOTICES` itself, deliberately: a version taking the notices as a parameter would let its test pass them in, which proves nothing about what ships.
+- `about_text() -> String` — the whole dialog body. It takes no arguments and reads `wolf_core::FONT_LICENSE_NOTICES` and then `wolf_core::LIBRARY_LICENSE_NOTICES` itself, deliberately: a version taking the notices as a parameter would let its test pass them in, which proves nothing about what ships.
 - `present(parent)` — a modal `gtk::Window` transient for the main window, titled `ABOUT_TITLE`.
 
 **Decisions**

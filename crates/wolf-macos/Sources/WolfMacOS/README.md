@@ -23,7 +23,7 @@ Purpose: The application coordinator: launch setup, the live `WolfWindowControll
 - Launch order is fonts, config, metrics: measurement needs the config's family, size and line height, and the bundled families must reach CoreText first.
 - `appearanceObservation` must stay stored — an `NSKeyValueObservation` invalidates itself once deallocated, so a discarded token silently stops auto-mode appearance tracking.
 - Both app focus edges are pushed to nvim: `FocusGained` fires only on a real unfocused-to-focused transition, so without the resign-side `false` the `WolfAutoRead` `:checktime` reload fires only once.
-- The About panel's credits discharge the fonts' attribution obligation on macOS: Linux's preamble, then `wolf_ffi_font_license_notices()` verbatim. Their `.foregroundColor` stays `labelColor`, since uncoloured credits render black in dark mode.
+- The About panel's credits discharge the fonts' and libraries' attribution: Linux's preamble, then `wolf_ffi_font_license_notices()` and `wolf_ffi_library_license_notices()` verbatim. Their `.foregroundColor` stays `labelColor`, since uncoloured credits render black in dark mode.
 
 **Gotchas**
 

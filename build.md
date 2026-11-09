@@ -1,6 +1,6 @@
 # Building Wolf
 
-Wolf builds one way per platform. On Linux (NixOS) Cargo builds the [`wolf-core`](crates/wolf-core/README.md) Rust core and the [`wolf-gnome`](crates/wolf-gnome/README.md) GTK front-end inside the flake devShell. On macOS, Bazel — driven by bazelisk against the host Xcode SDK — builds `wolf-core`, the [`wolf-ffi`](crates/wolf-ffi/README.md) swift-bridge crate, and the [`wolf-macos`](crates/wolf-macos/README.md) AppKit `.app`, which requires macOS Tahoe (26) or newer and Xcode 26+.
+Wolf builds one way per platform. On Linux (NixOS) Cargo builds the [`wolf-core`](crates/wolf-core/README.md) Rust core and the [`wolf-gnome`](crates/wolf-gnome/README.md) GTK front-end inside the flake devShell. On macOS, Bazel — driven by bazelisk against the host Xcode SDK — builds `wolf-core`, the [`wolf-ffi`](crates/wolf-ffi/README.md) swift-bridge crate, and the [`wolf-macos`](crates/wolf-macos/README.md) AppKit `.app`, which requires macOS Tahoe (26) or newer and Xcode 26+. Both platforms also build [`wolf-vt`](crates/wolf-vt/README.md), the binding over libghostty-vt.
 
 Bazel is authoritative for everything it builds. The generated Xcode project is a debugging aid and never the build of record.
 
@@ -29,6 +29,8 @@ The `shellHook` generates that file by substituting store paths into `$PWD/crate
 Two more exports name vendored Neovim assets rather than binaries. `WOLF_NVIM_TREESITTER_DIR` points at a runtimepath-shaped nvim-treesitter tree carrying `queries/`, `lua/` and `plugin/` as siblings, assembled because upstream splits the queries under `runtime/` from the modules and the loader at its root, and `WOLF_PARSERS_DIR` at a `symlinkJoin` of sixteen compiled grammars laid out as `parser/<lang>.so`. The captive `init.lua` reads both as the fallback half of its treesitter gate — see [`runtime/nvim`](runtime/nvim/README.md), which owns the resolution order and what the gate delivers.
 
 Both trees are fetched, not compiled. Measured with `nix build --dry-run` against an empty chroot store: 66 paths fetched, 23.4 MiB of download, and the only local builds are the `symlinkJoin` and the tree assembly, neither of which runs a compiler. `nix path-info` against `cache.nixos.org` agrees, every grammar reporting a substitute. No cold wall clock was ever taken — the measuring host's store was already warm — so this document quotes none, and neither should anything derived from it.
+
+`WOLF_GHOSTTY_VT_DIR` names the libghostty-vt install prefix that `crates/wolf-vt/build.rs` links `lib/libghostty-vt.a` from, and unset, that build script panics. Unlike the two trees it is compiled: no binary cache holds it, so the first `nix develop` builds it locally with nixpkgs' Zig, which is an input of that derivation only and not of the shell. [Building libghostty-vt](specs/terminal-panes.md#building-libghostty-vt) owns the pin and the flags.
 
 After editing `flake.nix`, run through `nix develop --command`. An already-loaded direnv environment is stale until the shell is re-entered, and a stale one has no GTK.
 
@@ -166,7 +168,7 @@ The same `.envrc` selects the Darwin shell:
 direnv allow
 ```
 
-The Darwin shell supplies bazelisk (exposed as both `bazelisk` and a `bazel` shim), git, starpls and prettier, and exports `DEVELOPER_DIR`. It deliberately carries no C toolchain, so `cc`, `strip`, `xcrun` and the SDK all resolve to Xcode ([why](notes/flake.nix.md#darwin-shell)), and no Rust toolchain and no GUI packages: `rules_rust` downloads a pinned rustc (1.85.0), and the Rust dependencies resolve from the workspace `Cargo.toml` and `Cargo.lock` through `crate_universe`. Every command below is written `bazel`, which is the bazelisk shim.
+The Darwin shell supplies bazelisk (exposed as both `bazelisk` and a `bazel` shim), git, starpls and prettier, and exports `DEVELOPER_DIR`. It deliberately carries no C toolchain, so `cc`, `strip`, `xcrun` and the SDK all resolve to Xcode ([why](notes/flake.nix.md#darwin-shell)), and no Rust toolchain and no GUI packages: `rules_rust` downloads a pinned rustc (1.85.0), and the Rust dependencies resolve from the workspace `Cargo.toml` and `Cargo.lock` through `crate_universe`. It carries no Zig either: Bazel downloads the pinned Zig and builds libghostty-vt with it in a build action, [`//bazel/ghostty-vt`](bazel/ghostty-vt/README.md). Every command below is written `bazel`, which is the bazelisk shim.
 
 bazelisk reads the Bazel version from `.bazelversion` (8.7.0) and fetches it. `MODULE.bazel` (bzlmod) pins the rule sets and is authoritative for their versions; `MODULE.bazel.lock` and `Cargo.Bazel.lock` are committed, so a clean checkout builds without resolving anything.
 
@@ -292,7 +294,7 @@ Targets tagged `manual` are excluded from wildcard expansion: the optimized `//c
 
 Tests run in the default configuration, not `-c opt`, and that is deliberate rather than an oversight. `bazel test -c opt //crates/wolf-macos:WolfKeyMapTests` fails to build, because `@testable import` requires `-enable-testing`, which rules_swift passes only in non-opt compilation modes. Test in the default configuration and ship the optimized build. `//crates/wolf-macos:bundle_layout_test` runs against `:Wolf` for a related reason: bundle layout is configuration-independent, so a release variant would add a full opt build to every sweep for no added coverage.
 
-Bazel does not discover test files. A new `tests/*.rs` or Swift test file runs only once it is wired into a target in the owning `BUILD.bazel`, and until then it is a silent macOS-only gap that `cargo test` hides. The rule is in [`CLAUDE.md`](CLAUDE.md); the runfiles and tags each kind of Rust test needs are in the "Adding a test file" sections of [`wolf-core/tests`](crates/wolf-core/tests/README.md) and [`wolf-ffi/tests`](crates/wolf-ffi/tests/README.md), and the Swift `srcs` lists are described in [`Tests/WolfKeyMapTests`](crates/wolf-macos/Tests/WolfKeyMapTests/README.md) and [`Tests/WolfMacOSTests`](crates/wolf-macos/Tests/WolfMacOSTests/README.md).
+Bazel does not discover test files. A new `tests/*.rs` or Swift test file runs only once it is wired into a target in the owning `BUILD.bazel`, and until then it is a silent macOS-only gap that `cargo test` hides. The rule is in [`CLAUDE.md`](CLAUDE.md); the runfiles and tags each kind of Rust test needs are in the "Adding a test file" sections of [`wolf-core/tests`](crates/wolf-core/tests/README.md), [`wolf-ffi/tests`](crates/wolf-ffi/tests/README.md) and [`wolf-vt/tests`](crates/wolf-vt/tests/README.md), and the Swift `srcs` lists are described in [`Tests/WolfKeyMapTests`](crates/wolf-macos/Tests/WolfKeyMapTests/README.md) and [`Tests/WolfMacOSTests`](crates/wolf-macos/Tests/WolfMacOSTests/README.md).
 
 What each target covers belongs with the code it tests:
 
@@ -300,6 +302,7 @@ What each target covers belongs with the code it tests:
 | ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
 | [`//crates/wolf-core:*`](crates/wolf-core/tests/README.md)                               | Core against a real pinned Neovim, plus the headless pure modules.           |
 | [`//crates/wolf-ffi:*`](crates/wolf-ffi/tests/README.md)                                 | The bridge surface, most of it live across the FFI boundary.                 |
+| [`//crates/wolf-vt:*`](crates/wolf-vt/tests/README.md)                                   | The libghostty-vt binding, headless.                                         |
 | [`//crates/wolf-macos:WolfKeyMapTests`](crates/wolf-macos/README.md)                     | The AppKit-free Swift seams, through XCTest.                                 |
 | [`//crates/wolf-macos:WolfMacOSTests`](crates/wolf-macos/Tests/WolfMacOSTests/README.md) | What AppKit views from `WolfMacOS` draw, rendered offscreen, through XCTest. |
 | `//crates/wolf-macos:bundle_layout_test`                                                 | The built `.app`'s resource layout.                                          |
@@ -307,23 +310,27 @@ What each target covers belongs with the code it tests:
 
 ## Repinning a vendored asset
 
-Every bundled third-party asset is downloaded by a bzlmod module extension under `bazel/`, sha256-pinned, with no system or `PATH` dependency. Each package owns its pin, its assembly, and its bump procedure:
+Every third-party asset the app bundles or links, and the Zig that builds libghostty-vt, is downloaded by a bzlmod module extension under `bazel/`, sha256-pinned, with no system or `PATH` dependency. Each package owns its pin, its assembly, and its bump procedure:
 
-| Package                                                                              | Pinned                            | Test                                          |
-| ------------------------------------------------------------------------------------ | --------------------------------- | --------------------------------------------- |
-| [`//bazel/nvim`](bazel/nvim/README.md)                                               | Neovim, per-arch release tarball  | `:nvim_version_test`                          |
-| [`//bazel/rg`](bazel/rg/README.md)                                                   | ripgrep, per-arch release tarball | `:rg_version_test`                            |
-| [`//bazel/orlando`](bazel/orlando/README.md)                                         | The orlando plugin                | `:orlando_tree_test`                          |
-| [`//bazel/lighthouse`](bazel/lighthouse/README.md)                                   | The lighthouse colorscheme        | `:lighthouse_tree_test`                       |
-| [`//bazel/nvim-treesitter`](bazel/nvim-treesitter/README.md)                         | The markdown queries provider     | `:nvim_treesitter_tree_test`                  |
-| [`//bazel/nvim-treesitter-textobjects`](bazel/nvim-treesitter-textobjects/README.md) | The textobjects plugin            | `:nvim_treesitter_textobjects_tree_test`      |
-| [`//bazel/treesitter-parsers`](bazel/treesitter-parsers/README.md)                   | The host-compiled grammars        | `:parsers_tree_test`, `:queries_compile_test` |
-| [`//bazel/jetbrains-mono`](bazel/jetbrains-mono/README.md)                           | JetBrains Mono                    | `:jetbrains_mono_tree_test`                   |
-| [`//bazel/ia-writer-mono`](bazel/ia-writer-mono/README.md)                           | iA Writer Mono S                  | `:ia_writer_mono_tree_test`                   |
+| Package                                                                              | Pinned                                           | Test                                          |
+| ------------------------------------------------------------------------------------ | ------------------------------------------------ | --------------------------------------------- |
+| [`//bazel/nvim`](bazel/nvim/README.md)                                               | Neovim, per-arch release tarball                 | `:nvim_version_test`                          |
+| [`//bazel/rg`](bazel/rg/README.md)                                                   | ripgrep, per-arch release tarball                | `:rg_version_test`                            |
+| [`//bazel/orlando`](bazel/orlando/README.md)                                         | The orlando plugin                               | `:orlando_tree_test`                          |
+| [`//bazel/lighthouse`](bazel/lighthouse/README.md)                                   | The lighthouse colorscheme                       | `:lighthouse_tree_test`                       |
+| [`//bazel/nvim-treesitter`](bazel/nvim-treesitter/README.md)                         | The markdown queries provider                    | `:nvim_treesitter_tree_test`                  |
+| [`//bazel/nvim-treesitter-textobjects`](bazel/nvim-treesitter-textobjects/README.md) | The textobjects plugin                           | `:nvim_treesitter_textobjects_tree_test`      |
+| [`//bazel/treesitter-parsers`](bazel/treesitter-parsers/README.md)                   | The host-compiled grammars                       | `:parsers_tree_test`, `:queries_compile_test` |
+| [`//bazel/jetbrains-mono`](bazel/jetbrains-mono/README.md)                           | JetBrains Mono                                   | `:jetbrains_mono_tree_test`                   |
+| [`//bazel/ia-writer-mono`](bazel/ia-writer-mono/README.md)                           | iA Writer Mono S                                 | `:ia_writer_mono_tree_test`                   |
+| [`//bazel/zig`](bazel/zig/README.md)                                                 | Zig, per-arch release tarball, a build tool only | `:zig_version_test`                           |
+| [`//bazel/ghostty-vt`](bazel/ghostty-vt/README.md)                                   | libghostty-vt, source and deps tarballs          | `//crates/wolf-vt:binding`                    |
 
 Every bump has the same four steps, and each package README gives the exact commands for its own archive layout: change the version or commit in that package's `extensions.bzl`, recompute and update the sha256, regenerate and commit `MODULE.bazel.lock` (a plain build does this, since `.bazelrc` sets `--lockfile_mode=update`), then re-run that package's test.
 
-Two of them move together. `//bazel/nvim-treesitter` and `//bazel/treesitter-parsers` are bumped in one change so the bundled queries and the compiled parsers stay version-matched, and that bump also re-runs `//bazel/treesitter-parsers:queries_compile_test`, `//crates/wolf-ffi:treesitter_parser_abi` and `//crates/wolf-ffi:treesitter_highlight` — the proofs that every vendored query compiles against its pinned grammar, that a shipped parser is ABI-compatible with the pinned Neovim, and that fenced-code injection is live.
+Some of them move together. `//bazel/nvim-treesitter` and `//bazel/treesitter-parsers` are bumped in one change so the bundled queries and the compiled parsers stay version-matched, and that bump also re-runs `//bazel/treesitter-parsers:queries_compile_test`, `//crates/wolf-ffi:treesitter_parser_abi` and `//crates/wolf-ffi:treesitter_highlight` — the proofs that every vendored query compiles against its pinned grammar, that a shipped parser is ABI-compatible with the pinned Neovim, and that fenced-code injection is live.
+
+The libghostty-vt release is pinned twice, in `//bazel/ghostty-vt` and as `wolfGhosttyVtPin` in `flake.nix`, and a bump changes both. A bump to a release that needs another Zig minor also moves `//bazel/zig` and the flake's `zig_0_17`; [Building libghostty-vt](specs/terminal-panes.md#building-libghostty-vt) owns that rule.
 
 ## Logging (`WOLF_LOG`)
 
@@ -434,7 +441,7 @@ Every gate runs even after one fails, and stdout carries a `<gate> <exit-status>
 
 The exit status is 0 when every gate passed and 1 when any failed. It is 2 for a setup error before any gate ran: an argument, an unknown platform, no `nix` outside the dev shell, a `nix develop` that failed or whose shell does not export the `WOLF_DEV_SHELL` marker, or, on macOS, an Xcode whose `xcrun` cannot find `swift-format`. An interrupt ends it with 130, and a `TERM` with 143.
 
-Expect roughly 10-25 minutes cold on Linux, most of it compilation and the integration tests that each spawn a real Neovim. On macOS, `bazel test //...` after a `bazel clean` takes about 100 seconds on a regina worker, about 7% of it the `//tools/lint` checks.
+Expect roughly 10-25 minutes cold on Linux, most of it compilation and the integration tests that each spawn a real Neovim.
 
 ### Under regina
 

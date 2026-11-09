@@ -12,6 +12,16 @@ Rules that are decidable from their arguments are pinned in each seam's own `#[c
 
 ## Files
 
+#### `about_notices.rs`
+
+**Covers**
+
+- `about::about_text()` carrying each linked library's licence phrase, re-typed locally, and `wolf_core::LIBRARY_LICENSE_NOTICES` verbatim. The font phrases are pinned by [`about.rs`](../src/README.md#aboutrs)'s own tests.
+
+**Gotchas**
+
+- Pure: no display, no Neovim and no compositor.
+
 #### `frame_metrics_gate.rs`
 
 **Covers**
@@ -423,7 +433,7 @@ Being scrupulous about this is the point of the section.
 Behavior this front-end has that is deliberately not smoked, with what covers it instead.
 
 - **The primary menu popover.** The keystroke injector cannot click a header-bar menu button, and keyboard-navigating to it is too fragile to be worth the flake. The action namespace's own tests cover every item referencing a declared, implemented, non-reserved action and every label matching the command registry. Ten of the menu's items have their action activated end to end by the accelerator smokes, and the `:qa` smoke performs Close Window's action through the command drain rather than through the menu's own action. The two-window smoke reaches New Window's action through the palette and Quit's through Ctrl+Shift+Q, so the two `app.`-scoped rows are exercised by a route of their own.
-- **The About dialog.** Its widget layer is covered by nothing, and cannot be: the row is reachable only from the primary menu popover, itself a gap above. What covers it instead is where the weight is — the dialog's text is asserted from the compiled artifact, against four licence phrases re-typed locally rather than imported, so the assertion is about what ships; the row's status is pinned by `actions.rs`, and its `UiAction` by `command_action.rs`.
+- **The About dialog.** Its widget layer is covered by nothing, and cannot be: the row is reachable only from the primary menu popover, itself a gap above. What covers it instead is where the weight is — the dialog's text is asserted from the compiled artifact, against the four fonts' licence phrases and, in [`about_notices.rs`](#about_noticesrs), the seven libraries', all re-typed locally rather than imported, so the assertion is about what ships; the row's status is pinned by `actions.rs`, and its `UiAction` by `command_action.rs`.
 - **The header-bar buttons' click path**, all four: no pointer smoke clicks the sidebar toggle, Back, Forward or Open. Every pointer smoke derives its target from a probe click Neovim reports back and a header-bar button offers no such probe, so the honest alternatives are a theme-owned inset pinned as a second measured constant with nothing to cross-check it, or distorting the buttons to buy hit margin. What covers them instead: the two chord smokes drive the same `gio` actions end to end, and [`nav_ui.rs`](../src/README.md#nav_uirs)'s tables cover the sensitivity and per-pane rules.
 - **Open File and Open Folder, including Open Folder's own path into a re-root.** Neither is driven: their callback bodies are trivial and the empty state's presentation is smoked. The re-root is not a gap either — an Open Recent palette row records the same pending re-root through the same `chdir_to`, and `open_recent_palette_row_reroots_the_window_under_cage` drives that settle into a re-rooted sidebar end to end. The save dialog is driven, under the in-process fallback [Smoke conventions](#smoke-conventions) requires.
 - **The search panel's other routes**: a result activated over a preview pane, a mouse click on a row, a file row's collapse toggle, and the page switcher's click path. `activation_route`'s table covers the preview route, and `row_activation` and `panel_rows` cover the toggle. No pointer smoke clicks the sidebar, for the header-bar buttons' reason above; the search-chord smoke reaches the stack's `visible-child-name` notify, which a switcher click also lands in, through `:WolfSidebarShowProject`.

@@ -1,10 +1,10 @@
 # `flake.nix`
 
-Last verified at commit `cc60afb1257ee0c5474105e363d0d452ba050afb`.
+Last verified at commit `546f1872c6b8bacd2000f0fd11692cb0bc7931f7`.
 
 ## Single nixpkgs input
 
-nixpkgs supplies the GTK stack and the runtime assets the package ships (Neovim, ripgrep and nvim-treesitter), so `nix flake update nixpkgs` moves them together. The Rust toolchain is rust-overlay's `stable.latest`, at the revision the `rust-overlay` lock node pins, so `nix flake update rust-overlay` moves only the Linux rustc, cargo, clippy and rustfmt, for the devShell and the package alike, and brings new clippy lints with them.
+nixpkgs supplies the GTK stack, the runtime assets the package ships (Neovim, ripgrep and nvim-treesitter), and the Zig 0.17 that builds libghostty-vt, so `nix flake update nixpkgs` moves them together. An update that drops `zig_0_17`, like a libghostty-vt bump that needs another Zig minor, moves both `wolfGhosttyVt`'s Zig and `//bazel/zig`. The Rust toolchain is rust-overlay's `stable.latest`, at the revision the `rust-overlay` lock node pins, so `nix flake update rust-overlay` moves only the Linux rustc, cargo, clippy and rustfmt, for the devShell and the package alike, and brings new clippy lints with them.
 
 The single input is deliberate: do not split the runtime assets into an input of their own. An update that moves Neovim owes the full verification gate in `build.md`, because [`runtime/nvim/README.md`](../runtime/nvim/README.md), [the init.lua notes](runtime/nvim/init.lua.md) and the test comments state measured claims per Neovim version.
 
@@ -14,7 +14,7 @@ The input must not lag the host. The GTK process dlopens the host's Mesa from `/
 
 ## Darwin eval laziness
 
-`rustToolchain`, `wolfPointerInject`, `iaWriterMono`, the three treesitter bindings, `wolfNeovim`, `wolfRipgrep`, `wolfOrlando`, `wolfLighthouse`, `wolfGnomePackage` and the GTK and Neovim packages are forced only when `linuxShell` or the package output is evaluated. On Darwin `devShells.default` resolves to `darwinShell`, which references none of them, so laziness keeps them off the Darwin eval path. `wolfPointerInject` is a Wayland program that cannot build on Darwin at all; `iaWriterMono` is arch-independent data and the grammars are ordinary C, so for those the argument is the weaker "safer there than here", but the rule is the same.
+`rustToolchain`, `wolfPointerInject`, `iaWriterMono`, the three treesitter bindings, `wolfNeovim`, `wolfRipgrep`, `wolfOrlando`, `wolfLighthouse`, `wolfGhosttyVtDeps`, `wolfGhosttyVt`, `wolfGnomePackage` and the GTK and Neovim packages are forced only when `linuxShell` or the package output is evaluated. On Darwin `devShells.default` resolves to `darwinShell`, which references none of them, so laziness keeps them off the Darwin eval path. `wolfPointerInject` is a Wayland program that cannot build on Darwin at all; `iaWriterMono` is arch-independent data and the grammars are ordinary C, so for those the argument is the weaker "safer there than here", but the rule is the same.
 
 Do not add a top-level reference to any of them, and do not wrap any of them in a `lib.optional` guard, which would imply the laziness argument is unsound.
 

@@ -234,6 +234,19 @@ Real Neovim (`WOLF_NVIM_BIN`, `no-sandbox` target with staged nvim runfiles).
 - Focus is a pure intent — the core never acts on `FocusDir`, so `<C-w>l` must leave nvim focus and `active_win` unchanged. That negative assertion needs the `SETTLE` delay to be meaningful.
 - Assert on membership and relative change, never literal window or grid handle values, and never HashMap order.
 
+#### `library_licenses.rs`
+
+Headless: the registry is compiled-in data, so the target needs no nvim, no runfiles, and no `no-sandbox` tag.
+
+**Covers**
+
+- `LIBRARY_LICENSES` has exactly seven rows with non-empty fields and texts above a size floor, and each text carries its own library's copyright phrase and no other row's.
+- `LIBRARY_LICENSE_NOTICES` names every library and licence, carries every phrase, keeps registry order, and follows every text with a newline. Library names are unique.
+
+**Gotchas**
+
+- The phrases are re-typed locally and come from each text's copyright line, because five of the seven texts are MIT boilerplate that a mis-wired `include_str!` would still match.
+
 #### `markdown_cursor.rs`
 
 Real Neovim (`//crates/wolf-core:markdown_cursor`: staged nvim runfiles, `WOLF_NVIM_BIN`, `no-sandbox`).
