@@ -24,15 +24,16 @@ Purpose: starts and finishes a run, keeping the binary, the flow and the definit
 
 #### `regina.conf.template`
 
-Purpose: the configuration `start` writes into the run directory, with the main checkout, the branch, the starting checkout and the state root filled in. Its comments give the reasons for `network` and `xcode`.
+Purpose: the configuration `start` writes into the run directory.
 
 **Decisions**
 
-- `start` gives the remote its own `--state`: a `serve` session holds that root's lock, so a `run` on `nixos.local` with the default root would refuse every wolf session. Every wolf run shares it, so one runs at a time.
-- `profile = host`: Podman refuses a task's `seatbelt-default`, and `light` keeps Podman's 64 MB `/dev/shm`, on which 3 to 6 cage smokes die of `SIGBUS`; `host` lifts it from regina 7b72b1e. `light`'s 2 CPUs and 4 GiB starve the smokes too.
-- `timeout = 3600` covers session, push and image provisioning as well as the gate. Measured: about 2 minutes for the first image build, 3m51s for a cold Linux gate on the host. Too tight costs an `interrupted` attempt and a `retry`, too loose only a slower detection of a hang.
-- Two documentation gates. macOS runs prettier, `//tools/lint:markdown` and `doc-lint --root` through Bazel on the task's warm output root, since its shell has no Cargo and `markdown_all.sh` is Linux only. Linux keeps its own line: there gawk checks every Markdown file git knows of, where Bazel's filegroups and the macOS awk see less, and no implementation gate follows a documentation-only round.
-- The comments never spell a placeholder, because `start`'s `sed` would replace it there too.
+- `start` gives the remote its own `--state`, whose lock a `serve` session needs and a `run` on `nixos.local` would otherwise hold. Every wolf run shares it, so one runs at a time.
+- `profile = host`: Podman refuses `seatbelt-default`, and under `light` 3 to 6 cage smokes die of `SIGBUS` on Podman's 64 MB `/dev/shm`, which `host` lifts from regina 7b72b1e, and starve on 2 CPUs and 4 GiB.
+- `timeout = 3600` covers session, push and image provisioning besides the gate, measured at about 2 minutes for the first image build and 3m51s for a cold Linux gate. Too tight costs a `retry`, too loose only a slower hang detection.
+- `ssh` gives the session and the push `ConnectTimeout=30`, ample for a local banner's second, and `ServerAliveInterval=30` with `ServerAliveCountMax=4`. A host sending no banner hung requests 20 minutes; against a silent listener ssh failed in 30.00 s, and without `ConnectTimeout` waited past 120 s. `sshd` answers ServerAlive whatever the gate prints, so a lost host fails in 2 minutes, a silent gate never; four misses ride out a blip.
+- Two documentation gates: macOS, with no Cargo and a Linux-only `markdown_all.sh`, runs Bazel on the task's warm output root. Linux's gawk checks every Markdown file git knows of, more than Bazel's filegroups and the macOS awk see, and no implementation gate follows a documentation-only round.
+- The comments never spell a placeholder, which `start`'s `sed` would replace.
 
 #### `flow.yaml`
 
@@ -58,4 +59,4 @@ Purpose: the six agent definitions the flow names.
 - The protocol sections are copied verbatim from regina's shipped `res/definitions/<agent>.md`, and the retrospective's from regina's `.claude/agents/retrospective.md`, at regina 7b72b1e. They name the `reason`s regina's flows send, so re-copy them whenever regina is upgraded.
 - A rule two definitions share is copied into each, never linked: both harnesses send a definition's body verbatim as the system prompt and expand no link, so a linked rule reaches only an agent that reads it. A regina agent would read it from the task's branch, not the checkout [`SKILL.md`](SKILL.md#the-two-sides-of-a-run) fixes for the run.
 - The worker sections come in two versions, each word for word: the four writing agents' and the read-only architect's and reviewer's. The zsh paragraph is the same in all six. Nothing checks that here.
-- The `/orchestrate` team in `.claude/agents/` states some of the same rules, kept in line by hand in the same task: proving a test can fail (`coder.md`), falsifying edits and the red run (`architect.md`), assertions that can fail (`test-writer.md`), and the reviewer's test checks (`reviewer.md`). The copies differ where the harnesses do: a `#[cfg(test)]` block is the coder's here, since write sets go by path, and the test writer's under `/orchestrate`.
+- The `/orchestrate` team in `.claude/agents/` states some of the same rules on tests, in its `coder.md`, `architect.md`, `test-writer.md` and `reviewer.md`, kept in line by hand in the same task. The copies differ where the harnesses do. A `#[cfg(test)]` block is the coder's here, since write sets go by path, and the test writer's under `/orchestrate`. Falsifier IDs exist only here: the reviewer joins the plan and the coder's report, written in separate invocations, by ID and by reading alone, where `/orchestrate`'s orchestrator checks the evidence itself in its step 7.
