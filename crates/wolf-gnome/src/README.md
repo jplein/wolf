@@ -2,7 +2,7 @@
 
 The GTK front-end's modules, one entry each. The pure seams here are the Linux counterparts of the ones in [`wolf-macos/Sources/WolfKeyMap/`](../../wolf-macos/Sources/WolfKeyMap/README.md).
 
-**Read [wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md) first**: it owns every constraint that spans more than one file here, and most of this directory's rules exist because of one.
+**Read [wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md) first**, with the topic files it links: they own every constraint that spans more than one file here, and most of this directory's rules exist because of one.
 
 ## Files
 
@@ -26,7 +26,7 @@ Purpose: the action namespace as data — one row per `gio` action — plus the 
 
 **Public API**
 
-- `ACTION_TABLE` and `MENU_SECTIONS` — the one table the menu, the accelerators and the command dispatch all read; see [wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md).
+- `ACTION_TABLE` and `MENU_SECTIONS` — the one table the menu, the accelerators and the command dispatch all read; see [The accelerator namespace](../../../notes/wolf-gnome/the-accelerator-namespace.md).
 - `action_for_key(keyval, state)` — the matcher the chord controller calls. It scans `Bound` rows only: matching a reserved row would swallow the key and do nothing.
 - `parse_accel`, `ctrl_fold` and `forbidden_reason(&ParsedAccel, declared)` — the invariant checker, run over every row by this module's tests. It takes the declaration as a parameter so no caller can run half of it.
 
@@ -38,7 +38,7 @@ Purpose: the action namespace as data — one row per `gio` action — plus the 
 **Gotchas**
 
 - Whether an action is installed follows from its command's classification, not from `status`: a command-less row installs through `command_action::ui_action_for_front_end_action` instead. Promoting a reserved row means flipping `status` too, and declaring the byte a `Ctrl+<symbol>` chord folds onto, or the chord stays inert or the checker refuses the row.
-- A row's `win.` or `app.` prefix decides who installs it: [`coordinator.rs`](#coordinatorrs) the `app.` rows once per process, each window's [`shell.rs`](#shellrs) the `win.` ones ([wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md#the-coordinator-and-its-windows)).
+- A row's `win.` or `app.` prefix decides who installs it: [`coordinator.rs`](#coordinatorrs) the `app.` rows once per process, each window's [`shell.rs`](#shellrs) the `win.` ones ([The coordinator and its windows](../../../notes/wolf-gnome/the-coordinator-and-its-windows.md)).
 
 #### `app.rs`
 
@@ -129,7 +129,7 @@ Purpose: the pure rulebook for Copy and Paste through the system clipboard. GTK-
 **Decisions**
 
 - `clipboard_write`'s `None` means write nothing, never clear. Clearing would destroy whatever the user copied from another application, in answer to a chord that yanked nothing.
-- Copy is a bounded blocking RPC and is gated for that reason ([wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md)). Nothing on the paste path blocks: its refusals are about a paste queued behind an opaque overlay reaching a restarted Neovim minutes later, and the two reasons must not be collapsed.
+- Copy is a bounded blocking RPC and is gated for that reason ([Crash and stall recovery](../../../notes/wolf-gnome/crash-and-stall-recovery.md)). Nothing on the paste path blocks: its refusals are about a paste queued behind an opaque overlay reaching a restarted Neovim minutes later, and the two reasons must not be collapsed.
 - A terminal pane's Copy is ungated on liveness, and must stay so: `terminal_selection_text` reads the session and issues no RPC, so a wedged or dead Neovim cannot cost it a timeout. Paste keeps its gate in a terminal pane, since an opaque overlay hides the terminal too, and [`shell.rs`](#shellrs) captures the target at the press, so a focus change during the read cannot redirect the text.
 
 #### `cmdline_ui.rs`
@@ -189,7 +189,7 @@ Purpose: the pure configuration seam — every rule about consuming a `wolf_core
 
 #### `coordinator.rs`
 
-Purpose: the process-scoped layer above the windows, and the ordered registry of live windows. [wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md#the-coordinator-and-its-windows) owns what lives there, why, and the state protocol.
+Purpose: the process-scoped layer above the windows, and their ordered registry. [Its note](../../../notes/wolf-gnome/the-coordinator-and-its-windows.md) owns what lives there, why, and the state protocol.
 
 **Public API**
 
@@ -248,7 +248,7 @@ Purpose: pure, GTK-free cursor geometry and color logic — the pixel rectangle 
 
 #### `drawer.rs`
 
-Purpose: the terminal drawer's pure rulebook — how the pane area divides between the editor tree and the drawer strip below it, and which pane a `<C-w>h/j/k/l` intent focuses once a drawer exists. GTK-free, so it runs in the fast tier. Why the drawer sits outside the pane tree at all is in [wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md).
+Purpose: the terminal drawer's pure rulebook — how the pane area divides between the editor tree and the drawer strip below it, and which pane a `<C-w>h/j/k/l` intent focuses once a drawer exists. GTK-free, so it runs in the fast tier. Why the drawer sits outside the pane tree at all is in [Window structure](../../../notes/wolf-gnome/window-structure.md).
 
 **Public API**
 
@@ -284,7 +284,7 @@ Purpose: a pane's chrome as arithmetic — the rectangle its grid paints into, t
 
 #### `frame_metrics.rs`
 
-Purpose: the process-global glue behind [`frame_stats.rs`](#frame_statsrs) — the once-only environment read, the monotonic clock, the accumulator and the writes. [wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md#frame-time-instrumentation) owns the cadence and the process-global carve-out.
+Purpose: the process-global glue behind [`frame_stats.rs`](#frame_statsrs) — the once-only environment read, the monotonic clock, the accumulator and the writes. [Frame-time instrumentation](../../../notes/wolf-gnome/frame-time-instrumentation.md) owns the cadence and the process-global carve-out.
 
 **Public API**
 
@@ -339,7 +339,7 @@ Purpose: the pure pixel conversions behind every resize, pointer event, and divi
 - Any degenerate input collapses the whole result rather than only the offending axis, because a partial result would send Neovim a nonsense size for the good axis.
 - A point outside the grid clamps to the nearest edge cell rather than being rejected, which makes drag-past-the-edge selection work.
 - Non-finite coordinates are two rules: a NaN axis reads as zero, an infinity clamps to the far edge. Collapsing both to zero would invert an overshooting drag.
-- `divider_position` and `divider_span_fraction` must share one denominator, and which one it is decides whether a fresh split is even; see [wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md).
+- `divider_position` and `divider_span_fraction` must share one denominator, and which one it is decides whether a fresh split is even; see [Pane weights and dividers](../../../notes/wolf-gnome/pane-weights-and-dividers.md).
 
 **Gotchas**
 
@@ -398,7 +398,7 @@ Purpose: translates a GDK keyval plus modifier state into a `wolf_core::KeyEvent
 
 **Gotchas**
 
-- `SUPER_MASK` maps to `meta`, so an unmapped Super chord is forwarded for Neovim to mangle ([wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md)); the chord controller intercepts only the ones this crate binds.
+- `SUPER_MASK` maps to `meta`, so an unmapped Super chord is forwarded for Neovim to mangle ([The accelerator namespace](../../../notes/wolf-gnome/the-accelerator-namespace.md)); the chord controller intercepts only the ones this crate binds.
 - A plain printable normally reaches Neovim through the input method's `commit` rather than through this function, since the window's context claims one even with no sequence pending. What `gdk_key` carries is the named keys, the modifier chords and whatever the context declines ([`im_ui.rs`](#im_uirs)).
 
 #### `init_lua.rs`
@@ -430,7 +430,7 @@ Purpose: the pure, GTK-free n-ary pane-layout tree behind the split-panes UI, mi
 - `PaneTree::leaves()` and `pane_rects(w, h)` — the same deterministic depth-first order; the rects tile the bounds exactly.
 - `PaneTree::neighbor(from, dir, w, h)` — the nearest pane in `dir` overlapping `from` on the cross axis.
 - `PaneTree::layout()` and `from_layout(&PaneLayout)` — a read-only mirror for the widget layer and its inverse; the frame type stays private.
-- `PaneTree::divider_fraction(path, boundary)` and `set_divider_fraction(path, boundary, f)` — one divider, addressed by its split's path and the child it follows; the fraction is that child's share of the whole remainder, per [wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md).
+- `PaneTree::divider_fraction(path, boundary)` and `set_divider_fraction(path, boundary, f)` — one divider, addressed by its split's path and the child it follows; the fraction is that child's share of the whole remainder, per [Pane weights and dividers](../../../notes/wolf-gnome/pane-weights-and-dividers.md).
 - `Orientation` — `Vertical` divides width, `Horizontal` height, matching `wolf_core::SplitOrientation`.
 
 **Decisions**
@@ -508,7 +508,7 @@ Purpose: the pure, GTK-free rulebook for per-pane navigation — which window a 
 
 **Gotchas**
 
-- The buttons desensitize while the `gio` actions stay enabled — the opposite of `win.go-to-file`'s empty-state treatment, for the reason in [wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md).
+- The buttons desensitize while the `gio` actions stay enabled — the opposite of `win.go-to-file`'s empty-state treatment, for the reason in [The accelerator namespace](../../../notes/wolf-gnome/the-accelerator-namespace.md).
 
 #### `overlay_style.rs`
 
@@ -522,7 +522,7 @@ Purpose: the shared look of the three transient overlays ([`picker.rs`](#pickerr
 
 - Colours are libadwaita named colours, never literals, so the overlays follow whichever scheme [`appearance.rs`](#appearancers) resolves.
 - The scroller, its viewport and the list are forced transparent: GTK gives a bare `list` the view background, which would punch a panel through the popover surface. The viewport paints nothing under Adwaita dark (captures are byte-identical either way) and is named for the light path and future themes.
-- A thread-local flag installs the provider once per process rather than once per overlay per window; [wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md#the-coordinator-and-its-windows) compares that with the crate's other display-global provider.
+- A thread-local flag installs the provider once per process rather than once per overlay per window; [The coordinator and its windows](../../../notes/wolf-gnome/the-coordinator-and-its-windows.md) compares that with the crate's other display-global provider.
 - `mod overlay_style;` is private, alone in [`lib.rs`](#librs): nothing outside the crate consumes or tests it, so `pub mod` would widen the crate's public surface for no gain.
 
 **Gotchas**
@@ -563,7 +563,7 @@ Purpose: the pure codec between the live pane tree, whose leaves are pane ids, a
 **Decisions**
 
 - `resolve_leaves` is all-or-nothing: an empty path is a resolved answer and an absent window is not, so one `Unknown` refuses the whole tab's gather. Mapping absence onto `""` writes a well-formed `state.json` over the user's files, which no arity guard catches.
-- `is_empty_leaf` is the content predicate the save path gates on, and `leaf_count` must never be it; [wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md) owns why.
+- `is_empty_leaf` is the content predicate the save path gates on, and `leaf_count` must never be it; [Application state](../../../notes/wolf-gnome/application-state.md) owns why.
 - `decode` validates before anything is rendered, so Neovim is never asked to realize a malformed tree. The two caps are restore policy, not a limit on the tree type.
 - The orientation mapping lives here in both directions, so an inversion is one edit and one test rather than two half-inversions that cancel.
 
@@ -584,7 +584,7 @@ Purpose: the GTK glue turning `layout`'s pane tree into nested `gtk::Paned`, one
 - `realize_layout` rebuilds into Neovim's current tabpage, so restore materialization is its only legal caller; `request_layout_rebuild` defers instead.
 - The preview's render half goes through [`preview_coalescer.rs`](#preview_coalescerrs), whose state sits on `PaneInner`, one per tab: a rebuild replaces `panes` wholesale.
 - Pointer input is one all-button `gtk::GestureDrag`, delivering outside the widget, so target and button pin at press; editor panes take the primary alone.
-- A terminal pane paints through its own [`TerminalCanvas`](terminal/README.md#canvasrs) ([why](../../../notes/wolf-gnome-decisions.md#terminal-panes)).
+- A terminal pane paints through its own [`TerminalCanvas`](terminal/README.md#canvasrs) ([why](../../../notes/wolf-gnome/terminal-panes.md)).
 - Each pane's status and `b:wolf_full_width` cache once per wake: reading at use time re-enters `draw_pane`'s guard, and paint, pointer and resize must agree in one frame.
 - One funnel produces every grid resize, against the size the pane last asked for, not the lagging snapshot grid; it runs every wake, since a lifted cap re-divides a still allocation.
 - The drawer strip's height re-applies every wake, so a toplevel resize converges over two frames; `reset_after_restart` clears the drawer `detect_closes` cannot reach.
@@ -628,7 +628,7 @@ Purpose: the file-picker overlay — a search entry over a ranked results list. 
 **Gotchas**
 
 - `next_selection`, `restored_index` and `activation_index` are `pub(crate)` and shared with [`palette.rs`](#paletters) and [`buffer_picker.rs`](#buffer_pickerrs), so all three overlays navigate and activate identically. `next_selection` also moves [`search_panel.rs`](#search_panelrs)'s selection.
-- `FocusTarget` is `pub(crate)` and shared by the three overlays, the tree and the search panel; [wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md#window-structure) owns why it is a closure rather than a captured widget.
+- `FocusTarget` is `pub(crate)` and shared by the three overlays, the tree and the search panel; [Window structure](../../../notes/wolf-gnome/window-structure.md) owns why it is a closure rather than a captured widget.
 
 #### `preview_coalescer.rs`
 
@@ -655,12 +655,12 @@ Purpose: the pure, GTK-free URI rulebook for a link clicked inside the Markdown 
 **Public API**
 
 - `classify(uri, source_path) -> PreviewLink` — total over the URI WebKit has already resolved against the base, so no relative-to-absolute arithmetic happens here. The variants are `OpenExternally`, `ScrollToFragment`, `PreviewFile` and `Refuse`.
-- `file_uri_for(source_path) -> Option<String>` — the base URI, percent-encoded; `None` for an empty or relative path. Its exact form is load-bearing, and [wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md#following-a-link-in-the-preview) states it.
+- `file_uri_for(source_path) -> Option<String>` — the base URI, percent-encoded; `None` for an empty or relative path. Its exact form is load-bearing, and [Following a link in the preview](../../../notes/wolf-gnome/following-a-link-in-the-preview.md) states it.
 - `scroll_into_view_js(fragment) -> Result<String, serde_json::Error>`.
 
 **Decisions**
 
-- Four shapes are refused where the [macOS seam](../../wolf-macos/Sources/WolfKeyMap/README.md#previewlinkseamswift) launches or reads through: a non-anchor `about:` URI, a `file:` URI with an empty path, a target with neither scheme nor path, and a `file:` authority other than empty or `localhost`. [The reason](../../../notes/wolf-gnome-decisions.md#following-a-link-in-the-preview) is the decisions file's.
+- Four shapes are refused where the [macOS seam](../../wolf-macos/Sources/WolfKeyMap/README.md#previewlinkseamswift) launches or reads through: a non-anchor `about:` URI, a `file:` URI with an empty path, a target with neither scheme nor path, and a `file:` authority other than empty or `localhost`. [Following a link in the preview](../../../notes/wolf-gnome/following-a-link-in-the-preview.md) gives the reason.
 - Whether a linked file is Markdown needs the filesystem, so this module never decides it: it always answers `PreviewFile` and core's own gate declines.
 
 #### `preview_ui.rs`
@@ -756,7 +756,7 @@ Purpose: the pure, GTK-free rulebook for Save and Save As — whether a press wr
 
 **Gotchas**
 
-- The `Alive` gate is not the blocking-call gate: neither press blocks ([wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md#crash-and-stall-recovery)).
+- The `Alive` gate is not the blocking-call gate: neither press blocks ([Crash and stall recovery](../../../notes/wolf-gnome/crash-and-stall-recovery.md)).
 
 #### `scrollbar.rs`
 
@@ -771,7 +771,7 @@ Purpose: a Neovim window's `win_viewport` projected onto a pane-local thumb rect
 
 **Decisions**
 
-- A scrollbar here is a projection and never a control, painted rather than a `gtk::Scrollbar` ([wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md)).
+- A scrollbar here is a projection and never a control, painted rather than a `gtk::Scrollbar` ([Window structure](../../../notes/wolf-gnome/window-structure.md)).
 - `x` is measured from the pane's right edge, not the grid rectangle's, so the thumb lies wholly inside the right padding gutter and covers no glyph at any pane width.
 - It never enters `grid_size_for_pane`: a thumb consuming grid width would drop a column the instant a buffer overflowed its window and restore it when it fit, reflowing text on the scroll path.
 - The height clamps to the track as well as to its own floor, so a pane shorter than the floor never draws a thumb over the pane below.
@@ -823,7 +823,7 @@ Purpose: the glue for the action namespace — `gio` actions, the primary menu, 
 - The three Markdown-preview presses read one `preview_shape` pass each: two snapshot reads would describe no window that existed. Each is a blocking RPC gated through [`preview_ui.rs`](#preview_uirs).
 - Save and Save As read one `save_shape` pass each for the same reason, and neither issues a blocking call; the dialog carries [`save_ui.rs`](#save_uirs)'s proposal out and decides nothing, `force` included.
 - `sidebar.set_visible` has one caller, over [`state_seam.rs`](#state_seamrs)'s `sidebar_is_shown`, or `set_empty_state(false)` would undo a user toggle. The search chord reveals it through that preference.
-- The per-tab fan-outs go through [`tab_view.rs`](#tab_viewrs), New Tab is gated by [`tabs_ui.rs`](#tabs_uirs)'s `new_tab_press`, and [wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md) owns the boundary.
+- The per-tab fan-outs go through [`tab_view.rs`](#tab_viewrs), New Tab is gated by [`tabs_ui.rs`](#tabs_uirs)'s `new_tab_press`, and [Window structure](../../../notes/wolf-gnome/window-structure.md) owns the boundary.
 
 #### `sidebar.rs`
 
@@ -846,7 +846,7 @@ Purpose: the window's sidebar — a `gtk::StackSwitcher` over a `gtk::Stack` wit
 
 #### `state_seam.rs`
 
-Purpose: the pure application-state seam — what to restore at launch, and what each tab persists per wake. GTK-free, IO-free, every input injected. [wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md#application-state) owns the rules.
+Purpose: the pure application-state seam — what to restore at launch, and what each tab persists per wake. GTK-free, IO-free, every input injected. [Application state](../../../notes/wolf-gnome/application-state.md) owns the rules.
 
 **Public API**
 
@@ -876,7 +876,7 @@ Purpose: the per-pane statusbar's rulebook, decidable from values.
 **Decisions**
 
 - Unit-agnostic ([`cell_metrics_math.rs`](#cell_metrics_mathrs)); [`pane_view.rs`](#pane_viewrs) calls it in device pixels, from `CellMetrics::size_px`.
-- The band is the editor's default background and the text has no label-tier fallback, unlike the [macOS strip](../../wolf-macos/Sources/WolfKeyMap/README.md#statusbartextswift), by the user's decision: this front-end takes no colour from the GTK theme ([wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md#window-structure)).
+- The band is the editor's default background and the text has no label-tier fallback, unlike the [macOS strip](../../wolf-macos/Sources/WolfKeyMap/README.md#statusbartextswift), by the user's decision: this front-end takes no colour from the GTK theme ([Window structure](../../../notes/wolf-gnome/window-structure.md)).
 - Both colours blend toward the background rather than toward black, which is what compositing over the already-filled band gives, so the strip needs no alpha-capable draw path.
 - A degenerate input collapses the whole layout to zeros: an infinite strip height leaves an editor painting one cell. `secondary_font_size` answers the floor for any non-finite font size, so an infinity never reaches the layout.
 
@@ -892,14 +892,14 @@ Purpose: the GTK glue for native tabs — an `adw::TabBar` over an `adw::TabView
 
 - `build(TabsParts) -> TabsHandle` — no page exists until `open_tab`.
 - `TabsHandle::open_tab(TabParts) -> bool`, `view_widget`, `bar_widget`, `selected`, `entries`, `len`, `on_render_wake`, `reset_after_restart`, `focus_target`, `connect_selected`, plus `TabHandle`'s per-tab relays.
-- `active_terminal()` and `sync_terminal_focus(window_active)`, per [Terminal panes](../../../notes/wolf-gnome-decisions.md#terminal-panes).
+- `active_terminal()` and `sync_terminal_focus(window_active)` ([how](../../../notes/wolf-gnome/terminal-panes.md)).
 - `queue_restore(RestoreTabs)`, `pending_restore()` and `set_pending_sidebar_shown(shown)` — the tabs a launch still owes a page, which [`window.rs`](#windowrs) seeds.
 
 **Decisions**
 
 - `TabParts::tabpage` is `0` for tab 0 and `create_tabpage`'s answer for every later one: `Snapshot::current_tabpage` lags, so a page left to adopt binds to the tab it was opened from.
 - The restore materialization realizes each queued tab's layout before leaving its tabpage, because `rebuild_layout` acts on whichever tabpage is current. An abort retains the layouts it never reached as a seed source with creation disabled, so those tabs keep their place in `state.json`.
-- `close-page` is a veto: every arm must answer `close_page_finish` and return `Propagation::Stop`, or the page stays on screen forever with no error. Closing the last page closes the window ([wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md)). Both handlers hold a `Weak`; a strong reference from a handler the view owns leaks every tab's pane view.
+- `close-page` is a veto: every arm must answer `close_page_finish` and return `Propagation::Stop`, or the page stays on screen forever with no error. Closing the last page closes the window ([Present limitations](../../../notes/wolf-gnome/present-limitations.md)). Both handlers hold a `Weak`; a strong reference from a handler the view owns leaks every tab's pane view.
 
 **Gotchas**
 
@@ -934,7 +934,7 @@ Purpose: the root of the terminal-pane modules. A pane whose window shows a `wol
 
 **Decisions**
 
-- The hook opens the session before the app reports ready, so a smoke's first typed key reaches its program. [`app.rs`](#apprs) reads the variable, and [`pane_view.rs`](#pane_viewrs) opens the session in the first wake with a pane ([why there](../../../notes/wolf-gnome-decisions.md#terminal-panes)).
+- The hook opens the session before the app reports ready, so a smoke's first typed key reaches its program. [`app.rs`](#apprs) reads the variable, and [`pane_view.rs`](#pane_viewrs) opens the session in the first wake with a pane ([why there](../../../notes/wolf-gnome/terminal-panes.md)).
 
 #### `title.rs`
 
@@ -992,11 +992,11 @@ Purpose: the GTK glue for the file-tree sidebar — a `gtk::ListView` over a `gt
 
 **Gotchas**
 
-- Manual expansion below the root does not survive a root-store rebuild; [wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md) owns that limitation and what preserving it would cost.
+- Manual expansion below the root does not survive a root-store rebuild; [Present limitations](../../../notes/wolf-gnome/present-limitations.md) owns that limitation and what preserving it would cost.
 
 #### `window.rs`
 
-Purpose: one window and everything scoped to it — an `adw::ApplicationWindow` over a live `WolfCore`, with its own wake channel, tab layer, overlays and state subtree. Its widget structure and overlay stacking are [wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md#window-structure)'s.
+Purpose: one window and everything scoped to it — an `adw::ApplicationWindow` over a live `WolfCore`, with its own wake channel, tab layer, overlays and state subtree. Its widget structure and overlay stacking are [Window structure](../../../notes/wolf-gnome/window-structure.md)'s.
 
 **Public API**
 
@@ -1010,11 +1010,11 @@ Purpose: one window and everything scoped to it — an `adw::ApplicationWindow` 
 - The window registers with the coordinator before its first command drain, or the drain reaches a coordinator unaware of it.
 - `display_cwd` reads the cached subtree, so the palette and `state.json` cannot disagree about where a window is.
 - `WindowInner` does not hold the shell, which the wake-drain future owns for exactly the window's lifetime.
-- Keys, commits and focus reach a terminal pane per [Terminal panes](../../../notes/wolf-gnome-decisions.md#terminal-panes).
+- Keys, commits and focus reach a terminal pane per [Terminal panes](../../../notes/wolf-gnome/terminal-panes.md).
 
 **Gotchas**
 
-- The key controller carries no propagation phase and offers each press to the window's `gtk::IMMulticontext` before translating, so a bound chord reaches neither Neovim nor the context — [`shell.rs`](#shellrs)'s capture-phase controller has already stopped it ([wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md#window-structure)).
+- The key controller carries no propagation phase and offers each press to the window's `gtk::IMMulticontext` before translating, so a bound chord reaches neither Neovim nor the context — [`shell.rs`](#shellrs)'s capture-phase controller has already stopped it ([Window structure](../../../notes/wolf-gnome/window-structure.md)).
 
 #### `workspace.rs`
 

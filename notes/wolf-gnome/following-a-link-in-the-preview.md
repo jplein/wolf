@@ -1,6 +1,6 @@
 # Following a link in the preview
 
-Last verified at commit `24af6404466d9cc099af52ccec8d7c89155bc6f5`.
+Last verified at commit `6298d01fb761da1bfdd64a0a25671a40b9d4e525`.
 
 Every link a user clicks inside a preview is cancelled, and the web view never navigates itself. The `decide-policy` handler answers the decision with `ignore()`, acts out of band — repointing the pane through core, scrolling to an anchor, or handing a foreign scheme to the platform launcher — and returns `true`. The decision is answered before anything else runs, because `preview_file` is a blocking RPC and holding WebKit's signal emission open for a whole timeout budget would freeze the frame.
 

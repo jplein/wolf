@@ -1,6 +1,6 @@
 # The coordinator and its windows
 
-Last verified at commit `24af6404466d9cc099af52ccec8d7c89155bc6f5`.
+Last verified at commit `6298d01fb761da1bfdd64a0a25671a40b9d4e525`.
 
 A process-scoped coordinator sits above the window-scoped shell, and exactly six things live up there, each because a second copy of it would be wrong rather than merely wasteful: the one `StateStore`, the one config read, the one `CellMetrics` measurement, the `app.`-namespace actions, the session's launch plans, and the test-only [readiness probe](../wolf-gnome-decisions.md#the-readiness-file), whose condition spans every window a launch restores. Everything else is per-window and stays there.
 

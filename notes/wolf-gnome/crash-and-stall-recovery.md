@@ -1,6 +1,6 @@
 # Crash and stall recovery
 
-Last verified at commit `24af6404466d9cc099af52ccec8d7c89155bc6f5`.
+Last verified at commit `6298d01fb761da1bfdd64a0a25671a40b9d4e525`.
 
 Core reports the captive Neovim's health as `Alive`, `NotResponding`, or `Dead`, and this front-end reads it at the top of every wake, before any painting. `Alive` paints and resets the attempt budget. `Dead` shows an opaque crash overlay, skips the paint, and schedules one automatic in-place restart. `NotResponding` shows a stall overlay and does nothing else.
 

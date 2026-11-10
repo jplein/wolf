@@ -13,6 +13,19 @@ The package has no test of its own: `//crates/wolf-vt:binding` links the archive
 
 `extensions.bzl` declares two `http_file` repos, `ghostty_vt_src` and `ghostty_vt_deps`, for the source tarball and its companion tarball of Zig packages from `release.files.ghostty.org`. The `ghostty_vt_archive` action runs `build_archive.sh`, which extracts both into a scratch directory, runs `zig build` offline against the deps, and copies out `lib/libghostty-vt.a`.
 
+## Reading the pinned source
+
+Nothing needs downloading again to read the release's C headers. On macOS the source tarball sits under the output base once a build reaching `//bazel/ghostty-vt:libghostty_vt` or a fetch has run, and only then. No build leaves it extracted, because the action extracts into its own scratch directory and removes it, so read a header straight out of the tarball:
+
+```sh
+nix develop --command bazel fetch --repo=@ghostty_vt_src   # only if no build has run
+src="$(nix develop --command bazel info output_base)/external/+ghostty_vt+ghostty_vt_src/file/libghostty-vt-1.0.0.tar.gz"
+tar -tzf "$src" | grep '/include/ghostty/vt/'
+tar -xzOf "$src" libghostty-vt-1.0.0/include/ghostty/vt/render.h
+```
+
+On Linux, inside `nix develop`, the built library installs the same headers under `$WOLF_GHOSTTY_VT_DIR/include/ghostty/vt/`, file for file. The tarball itself is in the store, at the path `nix-store --print-fixed-path sha256 <_SRC_SHA256> libghostty-vt-1.0.0.tar.gz` prints.
+
 ## Decisions
 
 - `http_file`, not `http_archive`. Highway's package in the deps tarball carries its own `BUILD`, `WORKSPACE` and `MODULE.bazel` files, which would split an extracted repo into subpackages that a `glob` silently drops, so the action extracts both tarballs itself.

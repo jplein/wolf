@@ -1,6 +1,6 @@
 # Application state
 
-Last verified at commit `24af6404466d9cc099af52ccec8d7c89155bc6f5`.
+Last verified at commit `6298d01fb761da1bfdd64a0a25671a40b9d4e525`.
 
 `state.json` is the shared `wolf_core::state` schema, unchanged. Its shape is common to this crate and the macOS front-end, so a Linux-only change to it is a macOS re-verification obligation. `wolf_core::state_dir()` is the single resolution point, and `WOLF_STATE_DIR` overrides it.
 

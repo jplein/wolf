@@ -468,7 +468,7 @@ Purpose: The pure decision functions behind the macOS file picker — trigger de
 
 **Decisions**
 
-- The chord is Command+O: the idiomatic macOS open chord and, unlike a Ctrl chord, not a Neovim keybinding, so intercepting it costs Neovim no key. wolf-gnome reaches the same action on Ctrl+Shift+O, because no `Ctrl+<letter>` is free in every Neovim mode — see [the accelerator namespace](../../../../notes/wolf-gnome-decisions.md#the-accelerator-namespace).
+- The chord is Command+O: the idiomatic macOS open chord and, unlike a Ctrl chord, not a Neovim keybinding, so intercepting it costs Neovim no key. wolf-gnome reaches the same action on Ctrl+Shift+O, because no `Ctrl+<letter>` is free in every Neovim mode — see [the accelerator namespace](../../../../notes/wolf-gnome/the-accelerator-namespace.md).
 - The predicate reads `charactersIgnoringModifiers` because it is layout independent and, unlike when Ctrl is held, Command does not mangle it into a control scalar — it still carries a plain `"o"`.
 
 **Gotchas**

@@ -1,6 +1,6 @@
 # The accelerator namespace
 
-Last verified at commit `24af6404466d9cc099af52ccec8d7c89155bc6f5`.
+Last verified at commit `6298d01fb761da1bfdd64a0a25671a40b9d4e525`.
 
 Every action name, its accelerator, its `Command` correspondence, and its menu placement live in one table, so the menu, the accelerators, and the command dispatch cannot drift apart. Chords spoken for by a later unit are declared and marked reserved rather than omitted, which is what lets the invariant below be checked before anything binds them. A reserved row exists to hold a chord, so one whose chord a bound row takes is deleted rather than kept declaring nothing.
 
@@ -10,7 +10,7 @@ Every action name, its accelerator, its `Command` correspondence, and its menu p
 
 **A `Ctrl+<symbol>` chord consumes a control code, not merely a key.** Neovim receives a chord as bytes and folds `Ctrl+<symbol>` to `symbol & 0x1F`, so `<Control>grave` eats `0x00` — the backtick spelling of `<C-@>` — while `<Control>bracketleft` would eat `0x1B`, Escape. Every row therefore declares the byte its chord folds onto; Escape and DEL are refused whatever a row declares, and a `<Control>` chord over a key name the crate cannot resolve to a symbol is refused rather than waved through. `<Control>grave` is bound at a measured price: `Ctrl+Shift+2` survives it and still reaches Neovim as `<C-@>`.
 
-Single-letter rows declare no fold, and the reason is the modifier mask rather than the character class. The rule above already refuses a bare `Ctrl+<letter>`, so every surviving letter row carries Shift, and `action_for_key` matches masks exactly: plain `Ctrl+I` and `Ctrl+M` still reach Neovim as `<C-I>` and `<C-M>` while `Ctrl+Shift+I` and `Ctrl+Shift+M` are bound. `<Control>grave` carries no Shift, which is precisely why it does consume the byte it folds to.
+Single-letter rows declare no fold, and the reason is the modifier mask rather than the character class. The rule above already refuses a bare `Ctrl+<letter>`, so every surviving letter row carries Shift, and `action_for_key` matches masks exactly: were `Ctrl+Shift+I` or `Ctrl+Shift+M` bound, plain `Ctrl+I` and `Ctrl+M` would still reach Neovim as `<C-I>` and `<C-M>`. `<Control>grave` carries no Shift, which is precisely why it does consume the byte it folds to.
 
 `Ctrl+Shift+<letter>` is the namespace because nothing else is available. There is effectively no free `Ctrl+<letter>` across all Neovim modes, and in a terminal pane every key but core's `<C-w>` router chords reaches the shell. New Window is where that scarcity bites: `Ctrl+Shift+N` is spent on the new-buffer row (macOS Cmd+N) and no `Ctrl+Shift+<letter>` is free, so the row carries no chord at all and declares no fold, reaching the user through the primary menu, the command palette and `:WolfNewWindow`.
 

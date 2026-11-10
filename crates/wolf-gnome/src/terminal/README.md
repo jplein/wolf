@@ -1,6 +1,6 @@
 # wolf-gnome/src/terminal
 
-The submodules of [`terminal.rs`](../README.md#terminalrs): the pure seams a terminal pane decides by, and the display-free painter it paints through. [Terminal panes](../../../../specs/terminal-panes.md) is authoritative for what a pane does, and the decisions spanning the widget glue are in [wolf-gnome-decisions.md](../../../../notes/wolf-gnome-decisions.md#terminal-panes).
+The submodules of [`terminal.rs`](../README.md#terminalrs): the pure seams a terminal pane decides by, and the display-free painter it paints through. [Terminal panes](../../../../specs/terminal-panes.md) is authoritative for what a pane does, and the decisions spanning the widget glue are in [`notes/wolf-gnome/terminal-panes.md`](../../../../notes/wolf-gnome/terminal-panes.md).
 
 Four of these port a seam in [`WolfKeyMap`](../../../wolf-macos/Sources/WolfKeyMap/README.md), and each entry states where it diverges. [`terminal_seams.rs`](../../tests/README.md#terminal_seamsrs) pins the seams and [`terminal_paint.rs`](../../tests/README.md#terminal_paintrs) the painter.
 
@@ -17,7 +17,7 @@ Purpose: `TerminalCanvas`, one terminal pane's backing surface: its session's pa
 
 **Decisions**
 
-- Why the pane paints through a backing surface, and why the cursor is drawn over the blit, is in [Terminal panes](../../../../notes/wolf-gnome-decisions.md#terminal-panes).
+- Why the pane paints through a backing surface, and why the cursor is drawn over the blit, is in [Terminal panes](../../../../notes/wolf-gnome/terminal-panes.md).
 - A block cursor redraws its glyph without bold or italic, which cannot overflow the cell.
 - A row fills every cell's background before any glyph, so a spacer's background cannot cover the right half of a wide glyph. Fills are not antialiased, because adjacent antialiased fills leave a seam.
 - The surface is made at the target's device scale and blitted at a whole-pixel origin, so its pixels map 1:1.
@@ -34,7 +34,7 @@ Purpose: which rows of a frame the canvas repaints. Pure; the port of [`Terminal
 
 **Decisions**
 
-- There is no `cursorRows`, unlike macOS, because of where the canvas draws the cursor ([Terminal panes](../../../../notes/wolf-gnome-decisions.md#terminal-panes)).
+- There is no `cursorRows`, unlike macOS, because of where the canvas draws the cursor ([Terminal panes](../../../../notes/wolf-gnome/terminal-panes.md)).
 
 #### `geometry.rs`
 

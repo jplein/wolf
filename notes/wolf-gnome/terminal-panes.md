@@ -1,6 +1,6 @@
 # Terminal panes
 
-Last verified at commit `24af6404466d9cc099af52ccec8d7c89155bc6f5`.
+Last verified at commit `6298d01fb761da1bfdd64a0a25671a40b9d4e525`.
 
 [Terminal panes](../../specs/terminal-panes.md) owns the contract, and [`src/terminal/`](../../crates/wolf-gnome/src/terminal/README.md) the seams and the painter. These are the choices the GTK glue makes behind them, mostly in `pane_view.rs` and `window.rs`.
 

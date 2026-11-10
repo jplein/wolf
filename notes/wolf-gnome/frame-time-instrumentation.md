@@ -1,12 +1,12 @@
 # Frame-time instrumentation
 
-Last verified at commit `24af6404466d9cc099af52ccec8d7c89155bc6f5`.
+Last verified at commit `6298d01fb761da1bfdd64a0a25671a40b9d4e525`.
 
 `WOLF_FRAME_STATS` arms an off-by-default measurement of the keystroke-to-pixel path, split the way everything here is split: a pure seam and a process-global glue module, both described in [`src/README.md`](../../crates/wolf-gnome/src/README.md#frame_statsrs). [`build.md`](../../build.md) owns how to run one.
 
 **The bucket set is derived from the GTK draw path rather than transliterated from macOS, and it has two top-level families rather than one tree.** `queue_draw` only marks a widget dirty; GTK invokes the draw funcs from the frame clock after the wake handler has returned, so the `draw.*` buckets sit beside `wake` and not inside it. Summing the two families double-counts nothing; summing a parent with its own children counts those children twice.
 
-**No timer, and one flush at exit.** "Threading and the wake" says nothing polls, and a periodic report would break that whenever the flag was set. The emit check is the last statement of the drain-loop body, after the `wake` region closes so the emit's own cost is never inside a measured region, plus one non-periodic flush after `Application::run_with_args` returns.
+**No timer, and one flush at exit.** "Threading and the wake" says nothing polls, and a periodic report would break that whenever the flag was set. The emit check runs in the drain-loop body after the `wake` region closes, so the emit's own cost is never inside a measured region, plus one non-periodic flush after `Application::run_with_args` returns.
 
 Two consequences, stated rather than hidden. A report covering the final interval before the application goes idle waits for the next wake. And a process killed by a signal — which is what every `cage` smoke's teardown does — never reaches the exit flush, which is why `WOLF_FRAME_STATS_FILE` is appended to per report rather than buffered. With N windows there are N drain loops over one accumulator, and whichever wakes first after the interval elapses emits the process-wide report.
 

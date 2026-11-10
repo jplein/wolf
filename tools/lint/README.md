@@ -12,7 +12,8 @@ Every check target runs under `bazel test //...`, and any finding fails it. clip
 
 ## Toolchains and binaries
 
-- clippy and rustfmt come from the toolchain `rules_rust` downloads (Rust 1.85.0); the Darwin devShell ships no standalone cargo/rustc/clippy/rustfmt.
+- clippy comes from the toolchain `rules_rust` downloads (Rust 1.85.0), and rustfmt from its separate rustfmt toolchain, a nightly that reports `rustfmt 1.9.0-nightly (57d06900fd 2026-05-27)`. The Darwin devShell ships no standalone cargo/rustc/clippy/rustfmt.
+- `:fix` and `:rustfmt_files.fix` run that rustfmt toolchain's binary, which `:rustfmt_files.fix` stages through `@rules_rust//rust/toolchain:current_rustfmt_toolchain`. The `rust_toolchain`'s own `rustfmt` aborts at load time, unable to find its `librustc_driver`, and `@rules_rust//tools/upstream_wrapper:rustfmt` passes no `--edition`, so rustfmt's default of 2015 rejects `async fn`.
 - swift-format is the host Xcode binary, resolved at runtime by `find_swift_format` in `swift_format_lib.sh`: `xcrun --find swift-format`, then `xcode-select -p`, then the canonical Xcode path, because Bazel test actions run with a scrubbed environment. `swift_format_check.sh` and `swift_format_fix.sh` source it, and `:fix` reaches it through `:swift_format.fix`.
 - The host swift-format is not a Bazel input, so `:swift_format`, `:swift_format_check_test` and `:swift_format_fix_test` are tagged `external`, and Bazel reruns them on every `bazel test`. Without the tag an Xcode upgrade would leave a cached pass standing. The cost is about two seconds a run.
 - The markdown checker, the wolf-core dependency checker and the wolf-gnome wording checker are bash, awk and grep only, so they need no toolchain and run sandboxed.
@@ -20,24 +21,26 @@ Every check target runs under `bazel test //...`, and any finding fails it. clip
 
 ## Targets
 
-| Purpose                         | Target                           | Command                                                      |
-| ------------------------------- | -------------------------------- | ------------------------------------------------------------ |
-| clippy check                    | `:clippy`                        | `bazel test //tools/lint:clippy`                             |
-| clippy fix                      | `:clippy.fix`                    | `bazel run //tools/lint:clippy.fix`                          |
-| rustfmt check                   | `:rustfmt`                       | `bazel test //tools/lint:rustfmt`                            |
-| rustfmt fix                     | `:rustfmt.fix`                   | `bazel run //tools/lint:rustfmt.fix [-- <target pattern>…]`  |
-| swift-format check              | `:swift_format`                  | `bazel test //tools/lint:swift_format`                       |
-| swift-format fix                | `:swift_format.fix`              | `bazel run //tools/lint:swift_format.fix [-- <file.swift>…]` |
-| markdown check                  | `:markdown`                      | `bazel test //tools/lint:markdown`                           |
-| markdown checker test           | `:markdown_check_test`           | `bazel test //tools/lint:markdown_check_test`                |
-| swift-format checker test       | `:swift_format_check_test`       | `bazel test //tools/lint:swift_format_check_test`            |
-| swift-format fixer test         | `:swift_format_fix_test`         | `bazel test //tools/lint:swift_format_fix_test`              |
-| wolf-core deps checker test     | `:wolf_core_deps_check_test`     | `bazel test //tools/lint:wolf_core_deps_check_test`          |
-| wolf-gnome wording check        | `:wolf_gnome_wording`            | `bazel test //tools/lint:wolf_gnome_wording`                 |
-| wolf-gnome wording checker test | `:wolf_gnome_wording_check_test` | `bazel test //tools/lint:wolf_gnome_wording_check_test`      |
-| comment check                   | `:comments`                      | `bazel test //tools/lint:comments`                           |
-| all checks                      | `:check`                         | `bazel test //tools/lint:check`                              |
-| all fixes                       | `:fix`                           | `bazel run //tools/lint:fix`                                 |
+| Purpose                         | Target                           | Command                                                            |
+| ------------------------------- | -------------------------------- | ------------------------------------------------------------------ |
+| clippy check                    | `:clippy`                        | `bazel test //tools/lint:clippy`                                   |
+| clippy fix                      | `:clippy.fix`                    | `bazel run //tools/lint:clippy.fix`                                |
+| rustfmt check                   | `:rustfmt`                       | `bazel test //tools/lint:rustfmt`                                  |
+| rustfmt fix                     | `:rustfmt.fix`                   | `bazel run //tools/lint:rustfmt.fix [-- <target pattern>…]`        |
+| rustfmt_files fix               | `:rustfmt_files.fix`             | `bazel run //tools/lint:rustfmt_files.fix -- [--check] <file.rs>…` |
+| rustfmt fixer test              | `:rustfmt_files_test`            | `bazel test //tools/lint:rustfmt_files_test`                       |
+| swift-format check              | `:swift_format`                  | `bazel test //tools/lint:swift_format`                             |
+| swift-format fix                | `:swift_format.fix`              | `bazel run //tools/lint:swift_format.fix [-- <file.swift>…]`       |
+| markdown check                  | `:markdown`                      | `bazel test //tools/lint:markdown`                                 |
+| markdown checker test           | `:markdown_check_test`           | `bazel test //tools/lint:markdown_check_test`                      |
+| swift-format checker test       | `:swift_format_check_test`       | `bazel test //tools/lint:swift_format_check_test`                  |
+| swift-format fixer test         | `:swift_format_fix_test`         | `bazel test //tools/lint:swift_format_fix_test`                    |
+| wolf-core deps checker test     | `:wolf_core_deps_check_test`     | `bazel test //tools/lint:wolf_core_deps_check_test`                |
+| wolf-gnome wording check        | `:wolf_gnome_wording`            | `bazel test //tools/lint:wolf_gnome_wording`                       |
+| wolf-gnome wording checker test | `:wolf_gnome_wording_check_test` | `bazel test //tools/lint:wolf_gnome_wording_check_test`            |
+| comment check                   | `:comments`                      | `bazel test //tools/lint:comments`                                 |
+| all checks                      | `:check`                         | `bazel test //tools/lint:check`                                    |
+| all fixes                       | `:fix`                           | `bazel run //tools/lint:fix`                                       |
 
 Internal targets: `:clippy_core`, `:clippy_ffi`, `:clippy_test_support`, `:clippy_vt` and `:clippy_doc_lint` (`rust_clippy`, built as `data` of `:clippy` so a clippy failure fails that test), `:rustfmt_core`, `:rustfmt_ffi`, `:rustfmt_test_support`, `:rustfmt_vt` and `:rustfmt_doc_lint` (`rustfmt_test`, aggregated by the `:rustfmt` and `:check` suites), `:all_markdown_srcs` and `:all_comment_srcs` (every package's filegroups), and this package's own `:markdown_srcs` and `:comment_srcs`.
 
@@ -57,6 +60,11 @@ Internal targets: `:clippy_core`, `:clippy_ffi`, `:clippy_test_support`, `:clipp
 
   It is a superset of the writer's own query at the same `deps(…, 1)` depth: the writer, `tools/rustfmt/src/main.rs` in rules_rust, queries each edition and the unset one, and drops the tagged targets above and those with a `crate` attribute. If a bump changes that depth or target set, run the changed form instead.
 
+- `:rustfmt_files.fix` is an `sh_binary` (`rustfmt_files.sh`) that runs rustfmt over the `.rs` files given, outside any Bazel target, so it reaches `crates/wolf-gnome/`, which no target builds. Each path is absolute or relative to the checkout root, never to the shell's cwd. Each must be a regular `.rs` file under the checkout, and one refusal exits 1 before any file is formatted; no file at all, or no `BUILD_WORKSPACE_DIRECTORY`, exits 2. `--check` reports without writing, with rustfmt's own exit status.
+
+  It passes `--edition 2021`, as `fix_all.sh` does and as the workspace's `Cargo.toml` sets. rustfmt also formats the out-of-line modules a given file declares, so naming `lib.rs` reaches every `mod foo;` below it.
+
+- `:rustfmt_files_test` runs `rustfmt_files_test.sh` over a scratch checkout of `testdata/rustfmt_files/` copies: a relative and an absolute argument each format only that file into `formatted.rs`, `--check` leaves a file unchanged and exits 1 only on a misformatted one, each bad argument after a good one exits 1 and formats nothing, and a missing file list, rustfmt or `BUILD_WORKSPACE_DIRECTORY` exits 2. It is sandboxed and also the Linux gate step `rustfmt-files-test`, where it runs the devShell's `rustfmt` from `PATH`.
 - `:swift_format` is an `sh_test` (`swift_format_check.sh`, tagged `external` and `no-sandbox`) that runs `swift-format lint --strict --follow-symlinks` over the `//crates/wolf-macos:swift_format_srcs` filegroup. The inputs arrive as runfiles symlinks, and swift-format silently skips a symlink argument without that flag, so the check would lint nothing and pass.
 - `:swift_format.fix` is an `sh_binary` (`swift_format_fix.sh`) running `swift-format format -i` over the paths given as arguments, each relative to the checkout root rather than the shell's cwd, or absolute. Each must be a `.swift` file under the checkout, and one refusal exits 1 before any file is formatted. With no arguments it formats every wolf-macos source and test.
 - `:markdown` is an `sh_test` (`markdown_check.sh`) over `:all_markdown_srcs`. It has no fixer, by design — see below.
@@ -90,6 +98,8 @@ The documentation rules live in [CLAUDE.md](../../CLAUDE.md); this target enforc
 
 Text inside backticks and fenced code blocks is exempt from the `changelog` and `allcaps` rules, so a doc can name a banned word by writing it as code.
 
+`markdown_check.sh --entry-words <files>` prints one `<file>:<line>: <words>/<budget> words: <heading>` line per `####` entry, in file order, and nothing else. It counts as `entry-budget` does: the whitespace-separated words of every line after the heading, inline code and link targets included and fenced code blocks excluded, up to the next heading of level 1 to 4 or the end of the file. It runs no rule and exits 0 even for an entry over budget, so it is how to see how close an entry is before the check fails it.
+
 `long-line` exists because `.prettierrc` sets `proseWrap: never` for Markdown: a paragraph is stored as exactly one line, so line length is paragraph length, and prettier will never split it. That is also why there is no `:markdown.fix` — shortening a paragraph is an authorial act, not a formatting one.
 
 The scope is every `.md` file except `CLAUDE.md`, which quotes the changelog words it bans, the agent definitions under `.claude/`, and the test fixtures. Here that is the union of every package's `markdown_srcs`; on Linux, `markdown_all.sh` runs the checker over every such file git knows of, tracked or untracked, skipping any deleted from the worktree.
@@ -98,16 +108,17 @@ The scope is every `.md` file except `CLAUDE.md`, which quotes the changelog wor
 
 `markdown_check_test.sh` runs the checker over `testdata/markdown/`, passing paths as `./notes/…` so a `notes/` match anchored at the start of the path would fail it.
 
-| Fixture                   | Expected                                                   |
-| ------------------------- | ---------------------------------------------------------- |
-| `notes/good.md`           | No findings: a valid header, and `now` in prose.           |
-| `notes/missing.md`        | One `notes-header`, at line 3.                             |
-| `notes/short-sha.md`      | One `notes-header`: a 7-digit SHA is not enough.           |
-| `notes/no-h1.md`          | No findings: the header line is line 1.                    |
-| `notes/nested/deep.md`    | No findings: a nested `notes/` file follows the same rule. |
-| `notes/empty-after-h1.md` | One `notes-header` at line 1, reported when the file ends. |
-| `other/changelog.md`      | One `changelog`: outside `notes/` the rule applies.        |
-| `other/no-sha.md`         | No findings: outside `notes/` no header is needed.         |
+| Fixture                   | Expected                                                                                                                                                                                           |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `notes/good.md`           | No findings: a valid header, and `now` in prose.                                                                                                                                                   |
+| `notes/missing.md`        | One `notes-header`, at line 3.                                                                                                                                                                     |
+| `notes/short-sha.md`      | One `notes-header`: a 7-digit SHA is not enough.                                                                                                                                                   |
+| `notes/no-h1.md`          | No findings: the header line is line 1.                                                                                                                                                            |
+| `notes/nested/deep.md`    | No findings: a nested `notes/` file follows the same rule.                                                                                                                                         |
+| `notes/empty-after-h1.md` | One `notes-header` at line 1, reported when the file ends.                                                                                                                                         |
+| `other/changelog.md`      | One `changelog`: outside `notes/` the rule applies.                                                                                                                                                |
+| `other/no-sha.md`         | No findings: outside `notes/` no header is needed.                                                                                                                                                 |
+| `other/entries.md`        | The `--entry-words` cases: each count printed, a fenced `####` line not an entry, a `###` heading ending one, and the count matching the `entry-budget` finding at a budget one below the largest. |
 
 ## What `:wolf_gnome_wording` checks
 
@@ -141,6 +152,7 @@ The checker exits 1 on a finding and 2, with an `ERROR:` line, when there is no 
 - swift-format scope. Only hand-written `wolf-macos` Swift is covered: every file under its `Sources/` and `Tests/`. The machine-generated swift-bridge bindings under `crates/wolf-ffi/generated/` are excluded. The file list lives in `//crates/wolf-macos:swift_format_srcs` because Bazel forbids cross-package globbing.
 - swift-format check and fix. `:swift_format` runs `swift-format lint --strict`, which reports the pretty-printer's findings (`Indentation`, `AddLines`, `LineLength`) as well as the lint-category rules, so a file that `format` would re-indent or re-wrap fails it. To check one file as the target does, run `xcrun swift-format lint --strict --follow-symlinks <file>`; to format one, `bazel run //tools/lint:swift_format.fix -- <file>`.
 - The vendoring notes under `bazel/*` are in scope for style but carry no per-file entries, so only the line-length, changelog and all-caps rules bite there. `entry-budget` fires on `####` headings, which those files do not use.
+- Two rustfmts. `:rustfmt_files.fix` runs the rules_rust nightly above, while Linux's `fmt` gate runs the devShell's `rustfmt 1.10.0-stable`, and the Linux gate is the judge of wolf-gnome's formatting. Run with `--check` over every tracked `crates/wolf-gnome/*.rs` file, the fixer exits 0 with no diff, so the two agree on the tree as it stands.
 - `.bazelignore`. The rustfmt writer (`:rustfmt.fix`) internally evaluates `//...`; the repo's `.bazelignore` excludes `.direnv` so the nix and direnv symlink tree does not break that query.
 
 ## Files
@@ -166,7 +178,10 @@ The checker exits 1 on a finding and 2, with an `ERROR:` line, when there is no 
 - `wolf_gnome_wording_check.sh` — `wolf_gnome_wording_check.sh [ROOT [ALLOWLIST]]` checks the root's `crates/wolf-gnome/src/` against the allowlist [above](#what-wolf_gnome_wording-checks). The root defaults to two directories above the script, not resolved through symlinks, so under Bazel it is the runfiles tree, and the allowlist to the one beside the script. It prints `FAIL: <path>:<line>: <text>` per unexcused hit and `FAIL: stale allowlist entry: <entry>` per stale entry, then a count. It must run under macOS `/bin/bash` 3.2.
 - `wolf_gnome_wording_allowlist.txt` — the accepted sites, each entry under a `#` line naming it. Generate an entry from the checker's `FAIL:` line by dropping the line number, never by retyping it.
 - `wolf_gnome_wording_check_test.sh` — the `:wolf_gnome_wording_check_test` body, also a Linux gate step.
+- `rustfmt_files.sh` — `rustfmt_files.sh RUSTFMT [--check] FILE...`, the `:rustfmt_files.fix` body. It must run under macOS `/bin/bash` 3.2.
+- `rustfmt_files_test.sh` — the `:rustfmt_files_test` body, also a Linux gate step. It takes the rustfmt binary as its argument, or else the one on `PATH`.
 - `testdata/markdown/` — the fixtures for `markdown_check_test.sh`.
+- `testdata/rustfmt_files/` — `misformatted.rs`, holding an `async fn`, and `formatted.rs`, its rustfmt output under both toolchains. `//tools/lint:comments` lexes them, so they carry no comments.
 - `testdata/swift_format/` — the fixtures for both swift-format tests.
 - `testdata/wolf_core_deps/` — the clean and forbidden listings for `wolf_core_deps_check_test.sh`, crate names plus one Bazel label.
 - `testdata/wolf_gnome_wording/` — fake checkouts for `wolf_gnome_wording_check_test.sh`, each a `crates/wolf-gnome/src/` and its own `allowlist.txt`. `//tools/lint:comments` lexes their `.rs` files, so a plain `//` comment there keeps to the two-line limit; nothing compiles them.

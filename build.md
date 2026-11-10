@@ -375,7 +375,7 @@ tail -f /tmp/wolf-frame-stats.txt
 
 ### Linux
 
-The bucket set is [`wolf-gnome/src/README.md`](crates/wolf-gnome/src/README.md#frame_statsrs)'s; the cadence, the `wakes/key` caveat and the measured reading are [`wolf-gnome-decisions.md`](notes/wolf-gnome-decisions.md#frame-time-instrumentation)'s.
+The bucket set is [`wolf-gnome/src/README.md`](crates/wolf-gnome/src/README.md#frame_statsrs)'s; the cadence, the `wakes/key` caveat and the measured reading are [Frame-time instrumentation](notes/wolf-gnome/frame-time-instrumentation.md)'s.
 
 **Measure the release binary, and leave it where cargo put it.** A `dev` build's numbers mean nothing, and a checkout binary reaches its captive `init.lua` through the `CARGO_MANIFEST_DIR` branch, so a copy moved elsewhere — with no installed `share/wolf/nvim/` beside it and no `WOLF_INIT_LUA` naming one — is launched against a path to nothing.
 
@@ -417,10 +417,17 @@ cargo fmt                        # rewrite in place
 
 These cover `wolf-gnome` too, which the Bazel targets deliberately skip. swift-format has no Cargo equivalent and needs a macOS host.
 
+On macOS, wolf-gnome files are formatted by naming them to the Bazel toolchain's rustfmt, with paths relative to the repository root. Linux's `fmt` gate stays the judge, since it runs a different rustfmt; [`tools/lint/README.md`](tools/lint/README.md#caveats) says how far the two agree.
+
+```sh
+bazel run //tools/lint:rustfmt_files.fix -- [--check] <file.rs>…
+```
+
 The markdown checker runs standalone, which is how to check a document on a host without Bazel, and `markdown_all.sh` runs it over the scope that [`tools/lint/README.md`](tools/lint/README.md#what-markdown-checks) defines:
 
 ```sh
 ./tools/lint/markdown_check.sh <files>
+./tools/lint/markdown_check.sh --entry-words <files>   # each #### entry's word count
 ./tools/lint/markdown_all.sh
 ```
 

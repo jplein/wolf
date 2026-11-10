@@ -1,6 +1,6 @@
 # Pane weights and dividers
 
-Last verified at commit `24af6404466d9cc099af52ccec8d7c89155bc6f5`.
+Last verified at commit `6298d01fb761da1bfdd64a0a25671a40b9d4e525`.
 
 **A weight is a proportion of width**, and it is that everywhere it appears: in the pure tree, in `pane_layout::encode`, in `state.json`, and on screen. `geometry::divider_position` therefore scales it by the paned's own span — its width for a horizontal paned, its height for a vertical one — so equal weights give equal widths, and `min_position` / `max_position` are the clamp and never the scale. Scaling by the travel instead spends the end child's minimum size at every fraction, so even a fresh, undragged split comes out lopsided by exactly that minimum.
 
