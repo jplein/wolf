@@ -37500,8 +37500,8 @@ const VENDORED_TREE_EXPORTS: [(&str, &str); 2] = [
 ///
 /// The export's NAME, not its value. An export left in place but pointed at an empty
 /// string, or at a path that does not exist, returns all three tests to the SKIP
-/// branch with this guard still green, because `common::resolve_runfile` treats both
-/// as "not staged". Nothing in either suite would notice that; it is recorded here
+/// branch with this guard still green, because `wolf_test_support::resolve_test_runfile`
+/// treats both as "not staged". Nothing in either suite would notice that; it is recorded here
 /// rather than papered over, and a value shape is not asserted because the value in
 /// the file is a Nix interpolation (`"${wolfOrlando}"`) whose resolution this scanner
 /// cannot see.

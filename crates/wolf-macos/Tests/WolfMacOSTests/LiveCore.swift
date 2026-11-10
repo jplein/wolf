@@ -69,7 +69,7 @@ private struct LiveCoreEnvironment: Sendable {
   }
 
   /// Resolves the runfiles-relative path in `key` against the bases Bazel may use, as
-  /// `resolve_runfile` in `crates/wolf-ffi/tests/common/mod.rs` does.
+  /// `resolve_runfile_value` in `crates/wolf-test-support/src/resolve.rs` does.
   private static func resolveRunfile(_ key: String, env: [String: String]) -> String? {
     guard let rel = env[key], !rel.isEmpty else { return nil }
     let fm = FileManager.default

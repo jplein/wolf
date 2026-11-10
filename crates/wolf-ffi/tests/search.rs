@@ -19,15 +19,15 @@
 //!
 //! Like `tree_search`, this test needs a pinned nvim (`WOLF_NVIM_BIN` /
 //! `WOLF_TEST_NVIM_DIR`) — resolved via `common::nvim_bin_or_skip` — AND a pinned
-//! `rg` (`WOLF_RG_BIN`), resolved by the local [`rg_bin_or_skip`]. It **loudly
+//! `rg` (`WOLF_RG_BIN`), resolved by the shared `common::rg_bin_or_skip`. It **loudly
 //! SKIPS** (no-op pass) when either is unavailable. The Bazel `rust_test` injects
 //! `WOLF_RG_BIN` as `$(rootpath //bazel/rg:rg_tree)/rg/rg` (RUNFILES-RELATIVE);
-//! [`rg_bin_or_skip`] resolves it to an ABSOLUTE path and re-exports it so the
+//! `common::rg_bin_or_skip` resolves it to an ABSOLUTE path and re-exports it so the
 //! bridged `start_search` spawns the right binary regardless of the child's cwd.
 
 mod common;
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
@@ -54,58 +54,6 @@ const FILE_NOTES: &str = "notes.txt";
 /// `all_files` is set.
 const QUERY: &str = "needle";
 
-/// Resolves a runfiles-relative or absolute path against the usual bases, mirroring
-/// `common::resolve_runfile` (which is private to the common module).
-fn resolve_runfile_value(value: &str) -> Option<PathBuf> {
-    let relp = PathBuf::from(value);
-    if relp.is_absolute() {
-        return relp.exists().then_some(relp);
-    }
-    let mut bases: Vec<PathBuf> = Vec::new();
-    if let Ok(srcdir) = std::env::var("TEST_SRCDIR") {
-        if let Ok(wsp) = std::env::var("TEST_WORKSPACE") {
-            bases.push(PathBuf::from(&srcdir).join(&wsp));
-        }
-        bases.push(PathBuf::from(&srcdir).join("_main"));
-        bases.push(PathBuf::from(&srcdir));
-    }
-    if let Ok(rfdir) = std::env::var("RUNFILES_DIR") {
-        bases.push(PathBuf::from(&rfdir).join("_main"));
-        bases.push(PathBuf::from(&rfdir));
-    }
-    if let Ok(cwd) = std::env::current_dir() {
-        bases.push(cwd);
-    }
-    bases
-        .into_iter()
-        .map(|b| b.join(&relp))
-        .find(|c| c.exists())
-}
-
-/// Resolves `rg` to an ABSOLUTE path and re-exports it into `WOLF_RG_BIN`, or
-/// prints a loud SKIP banner and returns `None`. Mirrors `common::nvim_bin_or_skip`.
-#[must_use]
-fn rg_bin_or_skip() -> Option<PathBuf> {
-    if let Ok(raw) = std::env::var("WOLF_RG_BIN") {
-        let trimmed = raw.trim();
-        if !trimmed.is_empty() {
-            if let Some(bin) = resolve_runfile_value(trimmed) {
-                std::env::set_var("WOLF_RG_BIN", &bin);
-                return Some(bin);
-            }
-        }
-    }
-    eprintln!(
-        "\n========================================================================\n\
-         SKIP: wolf-ffi search — no pinned ripgrep (rg) available.\n\
-         This test drives a REAL pinned rg subprocess through the FFI bridge.\n\
-         It runs when WOLF_RG_BIN is set (Nix/Cargo devShell) or when the Bazel\n\
-         `rust_test` stages //bazel/rg:rg_tree via WOLF_RG_BIN.\n\
-         ========================================================================\n"
-    );
-    None
-}
-
 #[test]
 fn search_projects_files_matches_and_opens_at_line() {
     // Loud SKIP (no-op pass) when either the pinned nvim or the pinned rg is
@@ -113,7 +61,7 @@ fn search_projects_files_matches_and_opens_at_line() {
     let Some(nvim_bin) = common::nvim_bin_or_skip() else {
         return;
     };
-    let Some(_rg_bin) = rg_bin_or_skip() else {
+    let Some(_rg_bin) = common::rg_bin_or_skip() else {
         return;
     };
     std::env::set_var("WOLF_NVIM_BIN", &nvim_bin);

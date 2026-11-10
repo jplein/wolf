@@ -54,8 +54,8 @@ fn type_word_via_gdk_key_appears_in_grid() {
     let core = WolfCore::start(config(COLS, ROWS), wake)
         .expect("WolfCore::start failed (is WOLF_NVIM_BIN a valid nvim?)");
 
-    // Wait for the initial attach flush.
-    waiter.wait_for_flush(FLUSH_TIMEOUT);
+    // Wait for the initial attach flush, which lands during WolfCore::start.
+    waiter.wait_for_initial_flush(&core, FLUSH_TIMEOUT);
 
     // Enter insert mode: 'i'.
     core.send_input(key_event(key_from_char('i'), ModifierType::empty()));
@@ -76,7 +76,7 @@ fn type_word_via_gdk_key_appears_in_grid() {
 
     // Wait for the first post-typing flush, then drain brief follow-ups so we
     // observe the settled frame (insert -> normal emits a few flushes).
-    waiter.wait_for_flush(FLUSH_TIMEOUT);
+    waiter.wait_for_flush(&core, FLUSH_TIMEOUT);
     waiter.drain();
     std::thread::sleep(SETTLE);
     waiter.drain();

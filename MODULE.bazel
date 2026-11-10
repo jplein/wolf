@@ -61,6 +61,7 @@ crate.from_cargo(
         "//:Cargo.toml",
         "//crates/wolf-core:Cargo.toml",
         "//crates/wolf-ffi:Cargo.toml",
+        "//crates/wolf-test-support:Cargo.toml",
         "//crates/wolf-vt:Cargo.toml",
     ],
     supported_platform_triples = [

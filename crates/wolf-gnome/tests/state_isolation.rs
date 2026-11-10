@@ -183,7 +183,7 @@ fn ignorecase_of_a_fresh_core(name: &str, cfg: wolf_core::CoreConfig) -> bool {
     let core = WolfCore::start(cfg, wake).unwrap_or_else(|e| {
         panic!("{name}: WolfCore::start failed ({e}) — is WOLF_NVIM_BIN a valid nvim?")
     });
-    waiter.wait_for_flush(common::FLUSH_TIMEOUT);
+    waiter.wait_for_initial_flush(&core, common::FLUSH_TIMEOUT);
     let ignorecase = core.ignorecase();
     core.shutdown().expect("shutdown should be Ok");
     ignorecase

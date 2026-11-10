@@ -38,3 +38,6 @@ async-channel = "2"
 # Encodes the preview's body swap as a JS string literal (see `pane_view::preview_swap_payload`).
 # Same spec as wolf-core's, so the workspace lock does not move.
 serde_json = "1"
+
+[dev-dependencies]
+wolf-test-support = { path = "../wolf-test-support" }

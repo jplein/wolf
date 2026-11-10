@@ -1,51 +1,33 @@
 //! Shared helpers for `wolf-core` integration tests.
 //!
-//! These tests drive a REAL, hermetic Neovim process (no mocks). The nvim binary
-//! and the captive `init.lua` are resolved in one of two ways:
+//! These tests drive a real, hermetic Neovim process (no mocks). The helpers the wolf-ffi and
+//! wolf-gnome tests share live in the `wolf_test_support` crate and are re-exported here: the
+//! nvim, `init.lua` and runfile resolution, the temp cwd and the hermetic `WOLF_STATE_DIR`,
+//! [`config`] and [`config_in`], [`FlushWaiter`] and the wake channels, [`start_core_sized`],
+//! and the terminal-session helpers. [`require_nvim_bin`] panics when no pinned Neovim
+//! resolves, because these test bodies handle no skip.
 //!
-//! 1. **Cargo / Linux devShell:** the flake devShell exports an explicit,
-//!    ALREADY-ABSOLUTE `WOLF_NVIM_BIN`, and `init.lua` is found relative to
-//!    `CARGO_MANIFEST_DIR`. This path always wins when present.
-//! 2. **Bazel (`bazel test //crates/wolf-core:file_search`):** the `rust_test`
-//!    stages the pinned `//bazel/nvim:nvim_tree` and `//runtime/nvim:init.lua` as
-//!    runfiles and injects RUNFILES-RELATIVE paths via `WOLF_TEST_NVIM_DIR` /
-//!    `WOLF_TEST_INIT_LUA` (and a relative `WOLF_NVIM_BIN`). These are resolved to
-//!    ABSOLUTE paths against `TEST_SRCDIR` / `RUNFILES_DIR` (see [`resolve_runfile`]).
-//!
-//! This mirrors `crates/wolf-ffi/tests/common/mod.rs` (`resolve_runfile`,
-//! `nvim_bin_or_skip`, `init_lua_path`). The one deliberate difference: wolf-ffi
-//! returns `None` so its caller can SKIP, whereas the wolf-core test bodies do not
-//! handle a skip return, so [`require_nvim_bin`] still PANICS as the last resort
-//! when nothing resolves. On both real environments (cargo devShell, Bazel host)
-//! resolution always succeeds, so the panic never fires there.
+//! The helpers defined below are wolf-core's own: [`poll_until`], [`short_tempdir`], the temp
+//! `.md` files and the `start_core_with_*` starters, the input constructors, [`send_ex`] and
+//! [`probe_values`], and the terminal extras built on the shared session helpers.
 
-#![allow(dead_code)] // Not every helper is used by every test binary.
+#![allow(dead_code, unused_imports)] // Not every helper is used by every test binary.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
-use std::sync::{mpsc, Arc, Once, OnceLock};
 use std::time::{Duration, Instant};
 
 use std::io::Write as _;
 
 use wolf_core::{
-    CoreConfig, InputEvent, Key, KeyEvent, TerminalCommand, TerminalFrame, TerminalId,
-    TerminalTarget, WakeFn, WolfCore,
+    InputEvent, Key, KeyEvent, TerminalCommand, TerminalFrame, TerminalId, TerminalTarget, WolfCore,
 };
 
-/// Default grid width used by most tests, in columns.
-pub const DEFAULT_COLS: u16 = 80;
-/// Default grid height used by most tests, in rows.
-pub const DEFAULT_ROWS: u16 = 24;
-
-/// Generous timeout to absorb nvim `--embed` startup + first redraw flush.
-/// nvim startup is not instantaneous and redraw is never synchronous, so we wait
-/// well beyond the expected latency before declaring failure.
-pub const FLUSH_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// Gap between two tries of [`poll_until`].
-pub const POLL_INTERVAL: Duration = Duration::from_millis(25);
+pub use wolf_test_support::{
+    config, config_in, frame_of, frame_text, fresh_cwd, hermetic_state_dir, init_lua_path,
+    open_session, pin_default_shell, poll_frame, recording_wake_channel, require_nvim_bin,
+    resolve_test_runfile, rg_bin_or_skip, sh_script, start_core_sized, wait_for_text, wake_channel,
+    FlushWaiter, WakeLog, DEFAULT_COLS, DEFAULT_ROWS, FLUSH_TIMEOUT, POLL_INTERVAL,
+};
 
 /// Re-runs `observe` every [`POLL_INTERVAL`] until `done` accepts what it returned, and returns
 /// that value. Panics with `desc` and the last observed value after [`FLUSH_TIMEOUT`].
@@ -80,170 +62,6 @@ pub fn poll_until<T: std::fmt::Debug>(
         std::thread::sleep(POLL_INTERVAL);
     }
 }
-
-/// Resolves a data file/dir the test needs at RUNTIME from a Bazel-injected env
-/// var holding a runfiles-relative path (set via `$(rootpath …)` in the
-/// `rust_test`'s `env`). Under Bazel the file lives in the test's runfiles tree,
-/// whose root differs by Bazel version and (for external repos) carries a repo
-/// segment — so we probe the known bases (`TEST_SRCDIR`, `+ TEST_WORKSPACE`,
-/// `+ _main`, `RUNFILES_DIR`, the cwd) and return the first that exists.
-///
-/// Returns `None` when the env var is unset (the cargo / Linux-devShell path,
-/// where callers fall back to `CARGO_MANIFEST_DIR` or an explicit `WOLF_NVIM_BIN`)
-/// or when nothing resolves.
-///
-/// This is a byte-for-byte port of `crates/wolf-ffi/tests/common/mod.rs`'s
-/// `resolve_runfile`, so the two harnesses resolve staged runfiles identically.
-fn resolve_runfile(env_key: &str) -> Option<PathBuf> {
-    let rel = std::env::var(env_key).ok().filter(|v| !v.is_empty())?;
-    let relp = PathBuf::from(&rel);
-    if relp.is_absolute() {
-        return relp.exists().then_some(relp);
-    }
-
-    let mut bases: Vec<PathBuf> = Vec::new();
-    if let Ok(srcdir) = std::env::var("TEST_SRCDIR") {
-        if let Ok(wsp) = std::env::var("TEST_WORKSPACE") {
-            bases.push(PathBuf::from(&srcdir).join(&wsp));
-        }
-        bases.push(PathBuf::from(&srcdir).join("_main"));
-        bases.push(PathBuf::from(&srcdir));
-    }
-    if let Ok(rfdir) = std::env::var("RUNFILES_DIR") {
-        bases.push(PathBuf::from(&rfdir).join("_main"));
-        bases.push(PathBuf::from(&rfdir));
-    }
-    if let Ok(cwd) = std::env::current_dir() {
-        bases.push(cwd);
-    }
-
-    bases
-        .into_iter()
-        .map(|b| b.join(&relp))
-        .find(|c| c.exists())
-}
-
-/// Resolves a usable pinned-nvim binary as an ABSOLUTE path, mirroring
-/// `crates/wolf-ffi/tests/common/mod.rs`'s `nvim_bin_or_skip` resolution order:
-///
-/// 1. An explicit `WOLF_NVIM_BIN` that is non-empty, ABSOLUTE, and EXISTS — the
-///    cargo / Linux-devShell path. It wins so a developer can point at a specific
-///    nvim. (Unlike wolf-ffi we require absolute-and-existing here: the wolf-core
-///    Bazel `rust_test` injects a RUNFILES-RELATIVE `WOLF_NVIM_BIN`, which would
-///    fail to spawn once nvim is launched with `current_dir(cfg.cwd)`; so a
-///    relative/non-existent value is NOT trusted and we fall through to the staged
-///    tree below.)
-/// 2. The Bazel-staged pinned Neovim tree (`WOLF_TEST_NVIM_DIR` → the
-///    `//bazel/nvim:nvim_tree` runfiles dir), whose binary is `nvim/bin/nvim`
-///    (the `replace_prefixes` inner `nvim/`), with `bin/nvim` as a fallback.
-///
-/// Returns `None` when neither is available. The caller ([`require_nvim_bin`])
-/// turns that into a loud panic, since the wolf-core test bodies do not handle a
-/// skip return; on both real environments resolution always succeeds.
-fn resolve_nvim_bin() -> Option<PathBuf> {
-    if let Ok(v) = std::env::var("WOLF_NVIM_BIN") {
-        let p = PathBuf::from(v.trim());
-        if p.is_absolute() && p.exists() {
-            return Some(p);
-        }
-    }
-
-    if let Some(dir) = resolve_runfile("WOLF_TEST_NVIM_DIR") {
-        // The tree is `nvim_tree/nvim/bin/nvim` (the `replace_prefixes` inner
-        // `nvim/`); accept a flat `bin/nvim` too, defensively.
-        let candidates = [
-            dir.join("nvim").join("bin").join("nvim"),
-            dir.join("bin").join("nvim"),
-        ];
-        if let Some(bin) = candidates.into_iter().find(|b| b.exists()) {
-            return Some(bin);
-        }
-    }
-
-    None
-}
-
-/// Resolves the pinned nvim binary to an ABSOLUTE path and EXPORTS it back into
-/// `WOLF_NVIM_BIN`, then returns it. Panics with a clear, actionable message when
-/// no nvim can be resolved.
-///
-/// wolf-core locates nvim ONLY through the `WOLF_NVIM_BIN` env var (read by
-/// `NvimConfig::from_env`), and the captive nvim is now spawned with
-/// `current_dir(cfg.cwd)` (a temp dir). A relative `WOLF_NVIM_BIN` (as injected by
-/// the Bazel `rust_test`) would therefore resolve against that temp dir and fail
-/// to spawn. So — exactly like `wolf-ffi`'s `bridge_smoke` does with the result of
-/// `nvim_bin_or_skip` — we resolve an absolute path here and `set_var` it so the
-/// core spawns the right binary regardless of cwd. This is idempotent: once set,
-/// subsequent calls take the absolute-and-existing fast path in [`resolve_nvim_bin`].
-///
-/// Returns the resolved binary path for convenience.
-pub fn require_nvim_bin() -> PathBuf {
-    match resolve_nvim_bin() {
-        Some(bin) => {
-            std::env::set_var("WOLF_NVIM_BIN", &bin);
-            bin
-        }
-        None => panic!(
-            "No pinned Neovim could be resolved. These integration tests require a \
-             real, pinned Neovim binary. Provide one of:\n\
-             - an ABSOLUTE, existing WOLF_NVIM_BIN (exported by the flake devShell; \
-             enter it via `direnv allow`), or\n\
-             - the Bazel-staged tree via WOLF_TEST_NVIM_DIR (run via \
-             `bazel test //crates/wolf-core:file_search`).\n\
-             nvim is NOT taken from PATH."
-        ),
-    }
-}
-
-/// Resolves the captive `runtime/nvim/init.lua`.
-///
-/// Prefers the Bazel-staged runfile (`WOLF_TEST_INIT_LUA` → `$(rootpath
-/// //runtime/nvim:init.lua)`, resolved to an ABSOLUTE path); under cargo it falls
-/// back to `CARGO_MANIFEST_DIR` (which points at `crates/wolf-core`), i.e.
-/// `<manifest>/../../runtime/nvim/init.lua`.
-///
-/// This matters: under Bazel, `CARGO_MANIFEST_DIR` is an EPHEMERAL build-sandbox
-/// path that does not exist at test runtime, so launching nvim with `-u <that>`
-/// makes nvim fail to read its init and block on a "Press ENTER" prompt forever
-/// (hanging `WolfCore::start`). Resolving the staged runfile fixes that. Mirrors
-/// `crates/wolf-ffi/tests/common/mod.rs`'s `init_lua_path`.
-pub fn init_lua_path() -> PathBuf {
-    if let Some(p) = resolve_runfile("WOLF_TEST_INIT_LUA") {
-        return p;
-    }
-    let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    PathBuf::from(manifest_dir)
-        .join("..")
-        .join("..")
-        .join("runtime")
-        .join("nvim")
-        .join("init.lua")
-}
-
-/// Monotonic counter to disambiguate temp `cwd`s created within one process.
-static CWD_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-/// Creates a fresh, unique directory under the OS temp dir to serve as a core
-/// `cwd`, and returns its path.
-///
-/// The directory is intentionally NOT auto-deleted: [`config`] returns only a
-/// `CoreConfig`, so there is no `TempDir` guard to keep alive. The recent-files
-/// MRU now lives in a single global DB at `state_dir()/file-mru.sqlite`
-/// (directory-filtered), NOT under the cwd; this dir is still leaked so it does
-/// not vanish out from under `WolfCore::start` (nvim's working dir + search root).
-/// Leaking one small temp dir per test is acceptable for this hermetic suite.
-pub fn fresh_cwd() -> PathBuf {
-    let n = CWD_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let pid = std::process::id();
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("system time is before the unix epoch")
-        .as_nanos();
-    let dir = std::env::temp_dir().join(format!("wolf-test-cwd-{pid}-{nanos}-{n}"));
-    std::fs::create_dir_all(&dir).expect("failed to create temp cwd directory");
-    dir
-}
-
 /// Neovim's `BASENAMELEN` (`NAME_MAX - 5`): the byte length a `//`-style swap name is
 /// cut to before `.swp` is appended, so a cut name is 254 bytes long.
 ///
@@ -331,261 +149,6 @@ pub fn short_tempdir() -> (tempfile::TempDir, PathBuf) {
     );
 }
 
-/// Builds a `CoreConfig` with the resolved init.lua path, the given grid size,
-/// and a fresh per-call `cwd` (so each core gets its own working directory).
-///
-/// [`config_in`] holds the single `CoreConfig` literal.
-pub fn config(cols: u16, rows: u16) -> CoreConfig {
-    config_in(fresh_cwd(), cols, rows)
-}
-
-/// Process-global hermetic state dir, created ONCE per test process.
-///
-/// The global recent-directories store is always-on: it reads `state_dir()` and
-/// writes `folder-mru.sqlite` there. Without an override that would be the user's
-/// real `~/Library/Application Support/Wolf`, polluting it (and racing) across the
-/// whole real-nvim suite. We therefore point `WOLF_STATE_DIR` at a fresh temp dir
-/// for the process (see [`ensure_hermetic_state_dir`]).
-///
-/// The `TempDir` guard is stored in the `OnceLock` so it lives for the entire
-/// process: statics are NOT dropped at process exit, so the directory is never
-/// auto-deleted out from under a running core.
-static HERMETIC_STATE_DIR: OnceLock<tempfile::TempDir> = OnceLock::new();
-
-/// Exports a process-global temp `WOLF_STATE_DIR` **only if it is unset**, so the
-/// always-on recent-directories store writes into a throwaway dir instead of the
-/// user's real state dir.
-///
-/// Set-if-absent: a test that sets its own `WOLF_STATE_DIR` first (e.g. the
-/// recent-dirs real-nvim test, which needs to inspect the physical DB) is never
-/// clobbered. The value is stable for the process, so there is no cross-test race.
-fn ensure_hermetic_state_dir() {
-    if std::env::var_os("WOLF_STATE_DIR").is_some() {
-        return;
-    }
-    let dir = HERMETIC_STATE_DIR
-        .get_or_init(|| tempfile::tempdir().expect("failed to create hermetic state dir"));
-    // Re-check: another thread may have set WOLF_STATE_DIR since the check above. Set-if-absent is
-    // fine because the process-global value is stable whichever one wins.
-    if std::env::var_os("WOLF_STATE_DIR").is_none() {
-        std::env::set_var("WOLF_STATE_DIR", dir.path());
-    }
-}
-
-/// Resolves the process-global hermetic state dir as a `PathBuf`, ensuring
-/// `WOLF_STATE_DIR` first points at a throwaway dir (see
-/// [`ensure_hermetic_state_dir`]) and then returning `wolf_core::state_dir()`.
-///
-/// The recent-files MRU now lives in a SINGLE global DB at
-/// `state_dir()/file-mru.sqlite` (directory-filtered), so real-nvim tests that
-/// must pre-seed or inspect the MRU open a `MruStore` against THIS dir — the same
-/// dir the core resolves via `state_dir()` — rather than a per-cwd `.wolf`.
-pub fn hermetic_state_dir() -> PathBuf {
-    ensure_hermetic_state_dir();
-    wolf_core::state_dir().expect("state_dir() should resolve once WOLF_STATE_DIR is set")
-}
-
-/// Like [`config`] but with an explicit `cwd`, for tests that must control nvim's
-/// working directory — the search root and the `directory` scope under which
-/// opens are recorded into the single global MRU at `state_dir()/file-mru.sqlite`
-/// — so they can drive it and inspect the results.
-pub fn config_in(cwd: PathBuf, cols: u16, rows: u16) -> CoreConfig {
-    require_nvim_bin();
-    // Keep the always-on recent-directories store off the user's real state dir
-    // (set-if-absent, so a test's own WOLF_STATE_DIR wins).
-    ensure_hermetic_state_dir();
-    CoreConfig {
-        init_lua: init_lua_path(),
-        cols,
-        rows,
-        cwd,
-    }
-}
-
-/// A wait handle backed by an mpsc channel. The wake callback sends `()` on
-/// EVERY wake — both real redraw flushes and out-of-band wakes such as the
-/// `wolf_current_file` notification. To distinguish a genuine redraw flush from
-/// an out-of-band wake, `wait_for_flush` keys on the snapshot's `seq` (the redraw
-/// frame counter, bumped only on a real flush) ADVANCING, not on the raw wake
-/// count. A `current_file` change wakes but does NOT bump `seq`, so it is ignored
-/// here while still letting `current_file.rs` observe it by polling directly.
-pub struct FlushWaiter {
-    rx: Receiver<()>,
-}
-
-impl FlushWaiter {
-    /// Blocks until a genuine redraw flush lands, i.e. until `core`'s snapshot
-    /// `seq` advances beyond its value at the moment of this call. Out-of-band
-    /// wakes (e.g. `wolf_current_file`, which does not bump `seq`) are consumed
-    /// and ignored so they cannot be mistaken for a flush. Panics after `timeout`.
-    pub fn wait_for_flush(&self, core: &WolfCore, timeout: Duration) {
-        let baseline = core.read_snapshot().seq;
-        let deadline = Instant::now() + timeout;
-        loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            match self.rx.recv_timeout(remaining) {
-                Ok(()) => {
-                    // A wake arrived; it is only a real flush if seq advanced.
-                    if core.read_snapshot().seq > baseline {
-                        return;
-                    }
-                    // Out-of-band wake (e.g. current_file): keep waiting.
-                }
-                Err(RecvTimeoutError::Timeout) => panic!(
-                    "timed out after {timeout:?} waiting for a redraw flush from nvim \
-                     (snapshot seq never advanced past {baseline})"
-                ),
-                Err(RecvTimeoutError::Disconnected) => {
-                    panic!("wake channel disconnected before a flush arrived (nvim/core gone?)")
-                }
-            }
-        }
-    }
-
-    /// Blocks until the FIRST redraw flush has landed, i.e. until `core`'s
-    /// snapshot `seq` reaches at least 1.
-    ///
-    /// Unlike [`wait_for_flush`](Self::wait_for_flush), this keys on an ABSOLUTE
-    /// threshold (`seq >= 1`) rather than on `seq` advancing from a captured
-    /// baseline. That is required for the startup/attach wait: the attach redraw
-    /// flush (`seq` 0 -> 1) lands DURING `WolfCore::start` (it `block_on`s
-    /// `ui_attach` before returning), so by the time a test calls this the snapshot
-    /// is already at `seq == 1`. An advance-based wait would baseline at 1 and then
-    /// block forever for `seq > 1`. This method therefore RETURNS IMMEDIATELY when
-    /// `seq >= 1` already (the common case), and only otherwise blocks on the wake
-    /// channel. Out-of-band wakes (e.g. `wolf_current_file`, which does not bump
-    /// `seq`) are consumed and ignored. Panics after `timeout`.
-    pub fn wait_for_initial_flush(&self, core: &WolfCore, timeout: Duration) {
-        const INITIAL_FLUSH_SEQ: u64 = 1;
-        // Common case: the attach flush already landed during WolfCore::start.
-        if core.read_snapshot().seq >= INITIAL_FLUSH_SEQ {
-            return;
-        }
-        let deadline = Instant::now() + timeout;
-        loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            match self.rx.recv_timeout(remaining) {
-                Ok(()) => {
-                    // A wake arrived; the attach flush only counts once seq >= 1.
-                    if core.read_snapshot().seq >= INITIAL_FLUSH_SEQ {
-                        return;
-                    }
-                    // Out-of-band wake (e.g. current_file): keep waiting.
-                }
-                Err(RecvTimeoutError::Timeout) => panic!(
-                    "timed out after {timeout:?} waiting for the initial redraw flush \
-                     from nvim (snapshot seq never reached {INITIAL_FLUSH_SEQ})"
-                ),
-                Err(RecvTimeoutError::Disconnected) => panic!(
-                    "wake channel disconnected before the initial flush arrived \
-                     (nvim/core gone?)"
-                ),
-            }
-        }
-    }
-
-    /// Blocks until `core`'s snapshot has `current_file` equal to `path` (canonicalized), a `seq`
-    /// past `baseline`, and, when `expect_text` is set, text on row 0 of the active grid. Panics
-    /// naming `path` after `timeout`.
-    ///
-    /// `baseline` must be read after a blocking RPC that follows startup, so that no frame nvim
-    /// had already drawn can carry `seq` past it; see [`start_core_with_temp_md_sized`]. That
-    /// fences off no frame from work nvim schedules later, such as treesitter's asynchronous
-    /// parse of the startup buffer finishing, which can push `seq` past the baseline before the
-    /// `:edit` draws. The startup buffer is empty and its row 0 blank, so row 0 showing text
-    /// tells the open's frame apart from such a stray one.
-    fn wait_for_open(
-        &self,
-        core: &WolfCore,
-        path: &Path,
-        baseline: u64,
-        expect_text: bool,
-        timeout: Duration,
-    ) {
-        // The core canonicalizes `current_file` (macOS `/var` → `/private/var`).
-        let expected = std::fs::canonicalize(path).unwrap_or_else(|e| {
-            panic!(
-                "failed to canonicalize the opened file {}: {e}",
-                path.display()
-            )
-        });
-        let deadline = Instant::now() + timeout;
-        loop {
-            // Scoped so the read guard drops before blocking on the channel.
-            let (current, seq, row0) = {
-                let snap = core.read_snapshot();
-                (
-                    snap.current_file.clone(),
-                    snap.seq,
-                    snap.active_grid().row_text(0),
-                )
-            };
-            if seq > baseline
-                && current.as_deref() == Some(expected.as_path())
-                && (!expect_text || !row0.trim().is_empty())
-            {
-                return;
-            }
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            // A zero `remaining` is a timeout, so a steady stream of wakes cannot outlast it.
-            let woke = if remaining.is_zero() {
-                Err(RecvTimeoutError::Timeout)
-            } else {
-                self.rx.recv_timeout(remaining)
-            };
-            match woke {
-                // Every snapshot change wakes after it is applied, so re-checking misses none.
-                Ok(()) => {}
-                Err(RecvTimeoutError::Timeout) => panic!(
-                    "timed out after {timeout:?} waiting for {} to open: current_file \
-                     {current:?}, seq {seq} (baseline {baseline}), row 0 {row0:?} (expect_text \
-                     {expect_text}). The file never became the current buffer, no frame landed \
-                     after it did, or its frame never drew the first line on row 0",
-                    path.display()
-                ),
-                Err(RecvTimeoutError::Disconnected) => panic!(
-                    "wake channel disconnected before {} opened (nvim/core gone?)",
-                    path.display()
-                ),
-            }
-        }
-    }
-
-    /// Drains any already-queued wake signals without blocking. Useful to
-    /// discard wakes that occurred before a test starts observing.
-    pub fn drain(&self) {
-        while self.rx.try_recv().is_ok() {}
-    }
-
-    /// Blocks until ANY raw wake signal arrives, returning `true` on success or
-    /// `false` after `timeout`.
-    ///
-    /// Unlike [`wait_for_flush`](Self::wait_for_flush), this does NOT require the
-    /// snapshot `seq` to advance: it observes the wake SEAM directly. It exists
-    /// for the liveness tests, where a state transition (e.g. nvim death, marked
-    /// `Dead` by the supervisor) fires a wake so the front-end can re-read
-    /// `liveness()`, but does NOT bump `seq` (it is not a redraw frame). Callers
-    /// that want to attribute the wake to a specific episode should [`drain`]
-    /// first.
-    pub fn wait_for_wake(&self, timeout: Duration) -> bool {
-        matches!(self.rx.recv_timeout(timeout), Ok(()))
-    }
-}
-
-/// Builds a `WakeFn` (`Arc<dyn Fn() + Send + Sync>`) that signals on each flush,
-/// paired with the `FlushWaiter` that observes it.
-///
-/// The wake may fire on a tokio worker thread, so the closure must be
-/// `Send + Sync`; an mpsc `Sender<()>` is both.
-pub fn wake_channel() -> (WakeFn, FlushWaiter) {
-    let (tx, rx): (Sender<()>, Receiver<()>) = mpsc::channel();
-    let wake: WakeFn = Arc::new(move || {
-        // A send error only means the receiver was dropped (test finished); ignore.
-        let _ = tx.send(());
-    });
-    (wake, FlushWaiter { rx })
-}
-
 /// Writes `content` to a fresh temp file with a `.md` extension and returns it.
 /// The returned `NamedTempFile` keeps the file alive for the test's duration.
 pub fn temp_md(content: &str) -> tempfile::NamedTempFile {
@@ -664,17 +227,6 @@ pub fn start_core_with_temp_md_sized(
     waiter.wait_for_open(&core, file.path(), baseline, expect_text, FLUSH_TIMEOUT);
 
     (core, waiter, file)
-}
-
-/// Starts a bare `WolfCore` (no file opened) at the given grid size and waits
-/// for the first flush.
-pub fn start_core_sized(cols: u16, rows: u16) -> (WolfCore, FlushWaiter) {
-    let (wake, waiter) = wake_channel();
-    let core = WolfCore::start(config(cols, rows), wake)
-        .expect("WolfCore::start failed (is WOLF_NVIM_BIN a valid nvim?)");
-    // Attach flush (seq 0 -> 1) lands during WolfCore::start; key on seq >= 1.
-    waiter.wait_for_initial_flush(&core, FLUSH_TIMEOUT);
-    (core, waiter)
 }
 
 // --- A modified buffer whose file changed on disk ---------------------------
@@ -871,13 +423,6 @@ pub fn probe_values(core: &WolfCore, exprs: &[&str], probe: &Path) -> Vec<String
     }
 }
 
-/// Public wrapper over the private [`resolve_runfile`], for test binaries that
-/// stage EXTRA runfiles beyond nvim + init.lua (e.g. the vendored
-/// nvim-treesitter and parsers trees `parsers_user.rs` resolves Bazel-first).
-pub fn resolve_test_runfile(env_key: &str) -> Option<PathBuf> {
-    resolve_runfile(env_key)
-}
-
 // --- Terminal sessions --------------------------------------------------------
 
 /// The marker a [`cat_command`] session prints once its tty is raw, before `cat` reads.
@@ -892,39 +437,6 @@ pub fn start_core_at(cwd: PathBuf) -> (WolfCore, FlushWaiter) {
     (core, waiter)
 }
 
-/// The instants at which a core's wake fired, recorded by [`recording_wake_channel`].
-#[derive(Clone, Default)]
-pub struct WakeLog(Arc<std::sync::Mutex<Vec<Instant>>>);
-
-impl WakeLog {
-    /// Every wake recorded since the last [`clear`](Self::clear), in order.
-    pub fn instants(&self) -> Vec<Instant> {
-        self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
-    }
-
-    /// Forgets every recorded wake.
-    pub fn clear(&self) {
-        self.0.lock().unwrap_or_else(|e| e.into_inner()).clear();
-    }
-}
-
-/// Like [`wake_channel`], and also records the instant of every wake in the returned
-/// [`WakeLog`], taken on the thread that fired it.
-pub fn recording_wake_channel() -> (WakeFn, FlushWaiter, WakeLog) {
-    let (tx, rx): (Sender<()>, Receiver<()>) = mpsc::channel();
-    let log = WakeLog::default();
-    let recorder = log.clone();
-    let wake: WakeFn = Arc::new(move || {
-        recorder
-            .0
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push(Instant::now());
-        let _ = tx.send(());
-    });
-    (wake, FlushWaiter { rx }, log)
-}
-
 /// [`start_core_at`] with a [`recording_wake_channel`].
 pub fn start_core_recording(cwd: PathBuf) -> (WolfCore, FlushWaiter, WakeLog) {
     let (wake, waiter, log) = recording_wake_channel();
@@ -932,22 +444,6 @@ pub fn start_core_recording(cwd: PathBuf) -> (WolfCore, FlushWaiter, WakeLog) {
         .expect("WolfCore::start failed (is WOLF_NVIM_BIN a valid nvim?)");
     waiter.wait_for_initial_flush(&core, FLUSH_TIMEOUT);
     (core, waiter, log)
-}
-
-/// Sets `SHELL=/bin/sh` for the process, once, so a session started with no explicit command
-/// (the drawer, typed `:terminal`, a restored terminal leaf) runs POSIX `sh`, whose output the
-/// tests type for. Call it before starting a core, so no session can read `SHELL` first.
-pub fn pin_default_shell() {
-    static PIN: Once = Once::new();
-    PIN.call_once(|| std::env::set_var("SHELL", "/bin/sh"));
-}
-
-/// `/bin/sh -c <script>`, run as a session's program.
-pub fn sh_script(script: &str) -> TerminalCommand {
-    TerminalCommand {
-        program: PathBuf::from("/bin/sh"),
-        args: vec!["-c".to_owned(), script.to_owned()],
-    }
 }
 
 /// An interactive `/bin/sh` with no arguments.
@@ -967,41 +463,6 @@ pub fn cat_command(prelude: &str) -> TerminalCommand {
     ))
 }
 
-/// Opens a session through `open_terminal`, failing when it returns `None`.
-pub fn open_session(
-    core: &WolfCore,
-    target: TerminalTarget,
-    command: TerminalCommand,
-) -> TerminalId {
-    let shown = format!(
-        "{target:?}, {} {:?}",
-        command.program.display(),
-        command.args
-    );
-    core.open_terminal(target, Some(command))
-        .unwrap_or_else(|| {
-            panic!(
-            "open_terminal({shown}) returned None: the pty or the shell could not be started, or \
-             the placeholder could not be bound."
-        )
-        })
-}
-
-/// The session's current frame, failing when `terminal_frame` returns `None`.
-pub fn frame_of(core: &WolfCore, id: TerminalId) -> Arc<TerminalFrame> {
-    core.terminal_frame(id).unwrap_or_else(|| {
-        panic!("terminal_frame({id:?}) is None, so the session is not in the registry.")
-    })
-}
-
-/// Every row's text, joined with newlines.
-pub fn frame_text(frame: &TerminalFrame) -> String {
-    (0..frame.rows)
-        .map(|row| frame.row_text(row))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 /// What a [`cat_command`] session's `cat -v` printed: the rows after the [`CAT_READY`] row,
 /// joined with nothing between them, trimmed. Empty until the marker shows.
 pub fn cat_output(frame: &TerminalFrame) -> String {
@@ -1010,55 +471,6 @@ pub fn cat_output(frame: &TerminalFrame) -> String {
         Some(marker) => rows[marker + 1..].concat().trim().to_owned(),
         None => String::new(),
     }
-}
-
-/// Polls the session's frame until `done` accepts it, draining `waiter`, and returns it. Panics
-/// with `desc` and the frame's text after [`FLUSH_TIMEOUT`], or when the session is gone.
-pub fn poll_frame(
-    core: &WolfCore,
-    waiter: &FlushWaiter,
-    id: TerminalId,
-    desc: &str,
-    done: impl Fn(&TerminalFrame) -> bool,
-) -> Arc<TerminalFrame> {
-    let deadline = Instant::now() + FLUSH_TIMEOUT;
-    loop {
-        let frame = core
-            .terminal_frame(id)
-            .unwrap_or_else(|| panic!("session {id:?} left the registry while waiting for {desc}"));
-        if done(&frame) {
-            return frame;
-        }
-        if Instant::now() >= deadline {
-            panic!(
-                "timed out after {FLUSH_TIMEOUT:?} waiting for {desc}; session {id:?}'s frame \
-                 (version {}, {}x{}, exited {:?}) reads:\n{}",
-                frame.version,
-                frame.cols,
-                frame.rows,
-                frame.exited,
-                frame_text(&frame)
-            );
-        }
-        waiter.drain();
-        std::thread::sleep(POLL_INTERVAL);
-    }
-}
-
-/// Polls until the session's frame shows `needle` anywhere, and returns that frame.
-pub fn wait_for_text(
-    core: &WolfCore,
-    waiter: &FlushWaiter,
-    id: TerminalId,
-    needle: &str,
-) -> Arc<TerminalFrame> {
-    poll_frame(
-        core,
-        waiter,
-        id,
-        &format!("the session's frame to show {needle:?}"),
-        |frame| frame_text(frame).contains(needle),
-    )
 }
 
 /// Opens a [`cat_command`] session in `target` and waits for its [`CAT_READY`] marker.

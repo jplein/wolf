@@ -120,13 +120,15 @@ print_failure() {
 
 # Crate names only, across every target, so macOS-only deps count. See notes/gates.sh.md#linux-gates
 core_deps_cargo() {
-  cargo tree -e no-dev -p wolf-core --target all --prefix none --format '{p}' \
+  cargo tree -e no-dev -p wolf-core -p wolf-test-support --target all --prefix none \
+    --format '{p}' \
     | cut -d ' ' -f 1 | sort -u | ./tools/lint/wolf_core_deps_check.sh
 }
 
 # kind(rule, …) keeps source paths such as libc's glibc/ out. See notes/gates.sh.md#macos-gates
 core_deps_bazel() {
-  bazel query --color=no --curses=no 'kind(rule, deps(//crates/wolf-core:wolf_core))' \
+  bazel query --color=no --curses=no \
+    'kind(rule, deps(//crates/wolf-core:wolf_core) + deps(//crates/wolf-test-support:wolf_test_support))' \
     | ./tools/lint/wolf_core_deps_check.sh
 }
 

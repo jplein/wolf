@@ -36,6 +36,7 @@ wolf-vt = { path = "../wolf-vt" }
 [dev-dependencies]
 tempfile = "3"
 tokio = { version = "1", features = ["test-util", "macros", "rt-multi-thread"] }
+wolf-test-support = { path = "../wolf-test-support" }
 
 [[example]]
 name = "grid_dump"

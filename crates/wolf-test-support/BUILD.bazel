@@ -1,0 +1,28 @@
+# Bazel build for `wolf-test-support`, the test harness the wolf-core and wolf-ffi `rust_test`
+# targets list. `testonly`, so no shipped target can depend on it.
+load("@rules_rust//rust:defs.bzl", "rust_library")
+load("//tools/lint:defs.bzl", "comment_srcs")
+
+exports_files(["Cargo.toml"])
+
+rust_library(
+    name = "wolf_test_support",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "wolf_test_support",
+    edition = "2021",
+    testonly = True,
+    visibility = ["//visibility:public"],
+    deps = ["//crates/wolf-core:wolf_core"],
+)
+
+# This package's sources and docs for //tools/lint, which cannot glob across packages.
+comment_srcs()
+
+filegroup(
+    name = "markdown_srcs",
+    srcs = glob(
+        ["**/*.md"],
+        allow_empty = True,
+    ),
+    visibility = ["//tools/lint:__pkg__"],
+)

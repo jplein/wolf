@@ -250,7 +250,7 @@ fn start_with_filled_buffer() -> (WolfCore, FlushWaiter, u64) {
     let (wake, waiter) = wake_channel();
     let core = WolfCore::start(config(COLS, ROWS), wake)
         .expect("WolfCore::start failed (is WOLF_NVIM_BIN a valid nvim?)");
-    waiter.wait_for_flush(FLUSH_TIMEOUT);
+    waiter.wait_for_initial_flush(&core, FLUSH_TIMEOUT);
 
     let found_grid = poll_until(|| live_window_grid(&core).is_some());
     assert!(

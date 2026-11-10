@@ -30,7 +30,8 @@ use wolf_gnome::terminal::style::cursor_colors;
 use wolf_gnome::CellMetrics;
 
 use common::{
-    frame_of, open_session, poll_frame, sh_script, start_core, wait_for_text, FlushWaiter,
+    frame_of, open_session, poll_frame, sh_script, start_core_sized, wait_for_text, FlushWaiter,
+    DEFAULT_COLS, DEFAULT_ROWS,
 };
 
 /// Pinned family, the one the devShell's `FONTCONFIG_FILE` exposes.
@@ -281,7 +282,7 @@ fn assert_defaults_unlike(frame: &TerminalFrame, colours: &[(Rgb, &str)]) {
 
 #[test]
 fn a_sessions_truecolor_text_paints_its_colours() {
-    let (core, waiter) = start_core();
+    let (core, waiter) = start_core_sized(DEFAULT_COLS, DEFAULT_ROWS);
     let script = format!(
         "printf '\\033[48;2;{};{};{}m\\033[38;2;{};{};{}m  {BLOCK}{BLOCK}  \\033[0m  zz'; exec cat",
         FIXTURE_BG.r, FIXTURE_BG.g, FIXTURE_BG.b, FIXTURE_FG.r, FIXTURE_FG.g, FIXTURE_FG.b
@@ -404,7 +405,7 @@ fn a_sessions_truecolor_text_paints_its_colours() {
 
 #[test]
 fn inverse_and_a_drag_selection_paint_swapped_colours() {
-    let (core, waiter) = start_core();
+    let (core, waiter) = start_core_sized(DEFAULT_COLS, DEFAULT_ROWS);
     let id = open_with(
         &core,
         &waiter,
@@ -507,7 +508,7 @@ fn inverse_and_a_drag_selection_paint_swapped_colours() {
 
 #[test]
 fn the_cursor_paints_in_its_colour_and_shape() {
-    let (core, waiter) = start_core();
+    let (core, waiter) = start_core_sized(DEFAULT_COLS, DEFAULT_ROWS);
 
     // A block cursor, the default style, after `ab` on row 0.
     let block = open_with(&core, &waiter, "printf 'ab'; exec cat", "ab");
@@ -588,7 +589,7 @@ fn the_cursor_paints_in_its_colour_and_shape() {
 
 #[test]
 fn a_new_frame_repaints_only_its_damaged_rows() {
-    let (core, waiter) = start_core();
+    let (core, waiter) = start_core_sized(DEFAULT_COLS, DEFAULT_ROWS);
     let id = open_with(
         &core,
         &waiter,
@@ -647,7 +648,7 @@ fn a_new_frame_repaints_only_its_damaged_rows() {
 
 #[test]
 fn a_frame_is_padded_and_clipped_to_its_rect() {
-    let (core, waiter) = start_core();
+    let (core, waiter) = start_core_sized(DEFAULT_COLS, DEFAULT_ROWS);
     let id = open_with(&core, &waiter, "printf 'pad\\n'; exec cat", "pad");
     core.resize_terminal(id, 20, 6, 0, 0);
     let frame = poll_frame(&core, &waiter, id, "the 20x6 resize", |frame| {

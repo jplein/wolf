@@ -27,6 +27,12 @@ rust_clippy(
 )
 
 rust_clippy(
+    name = "clippy_test_support",
+    testonly = True,
+    deps = ["//crates/wolf-test-support:wolf_test_support"],
+)
+
+rust_clippy(
     name = "clippy_vt",
     testonly = True,
     deps = ["//crates/wolf-vt:wolf_vt"],
@@ -40,6 +46,7 @@ sh_test(
         ":clippy_core",
         ":clippy_doc_lint",
         ":clippy_ffi",
+        ":clippy_test_support",
         ":clippy_vt",
     ],
 )
@@ -70,6 +77,11 @@ rustfmt_test(
 )
 
 rustfmt_test(
+    name = "rustfmt_test_support",
+    targets = ["//crates/wolf-test-support:wolf_test_support"],
+)
+
+rustfmt_test(
     name = "rustfmt_vt",
     targets = ["//crates/wolf-vt:wolf_vt"],
 )
@@ -80,6 +92,7 @@ test_suite(
         ":rustfmt_core",
         ":rustfmt_doc_lint",
         ":rustfmt_ffi",
+        ":rustfmt_test_support",
         ":rustfmt_vt",
     ],
 )
@@ -177,6 +190,7 @@ filegroup(
         "//crates/wolf-core:markdown_srcs",
         "//crates/wolf-ffi:markdown_srcs",
         "//crates/wolf-macos:markdown_srcs",
+        "//crates/wolf-test-support:markdown_srcs",
         "//crates/wolf-vt:markdown_srcs",
         "//resources/icons:markdown_srcs",
         "//runtime/nvim:markdown_srcs",
@@ -248,6 +262,7 @@ filegroup(
         "//crates/wolf-core:comment_srcs",
         "//crates/wolf-ffi:comment_srcs",
         "//crates/wolf-macos:comment_srcs",
+        "//crates/wolf-test-support:comment_srcs",
         "//crates/wolf-vt:comment_srcs",
         "//resources/icons:comment_srcs",
         "//runtime/nvim:comment_srcs",
@@ -283,6 +298,7 @@ test_suite(
         ":rustfmt_core",
         ":rustfmt_doc_lint",
         ":rustfmt_ffi",
+        ":rustfmt_test_support",
         ":rustfmt_vt",
         ":swift_format",
         ":swift_format_check_test",

@@ -23,13 +23,13 @@
 //! ## rg-availability guard
 //!
 //! `nvim` is required (the whole wolf-core real-nvim suite panics without it via
-//! `common::require_nvim_bin`). `rg` is guarded SEPARATELY by [`rg_bin_or_skip`],
-//! which mirrors `common::nvim_bin_or_skip`'s loud-SKIP banner: on a host with no
+//! `common::require_nvim_bin`). `rg` is guarded SEPARATELY by the shared
+//! `common::rg_bin_or_skip`, which prints a loud SKIP banner: on a host with no
 //! pinned rg staged the test is a no-op pass rather than a failure. The Bazel
 //! `rust_test` injects `WOLF_RG_BIN` as `$(rootpath //bazel/rg:rg_tree)/rg/rg`
-//! (a RUNFILES-RELATIVE path); [`rg_bin_or_skip`] resolves it to an ABSOLUTE path
-//! and re-exports it so `start_search` spawns the right binary regardless of the
-//! child's `current_dir`.
+//! (a RUNFILES-RELATIVE path); `common::rg_bin_or_skip` resolves it to an ABSOLUTE
+//! path and re-exports it so `start_search` spawns the right binary regardless of
+//! the child's `current_dir`.
 
 mod common;
 
@@ -68,76 +68,6 @@ fn write_file(path: &Path, contents: &str) {
         fs::create_dir_all(parent).expect("failed to create parent dir");
     }
     fs::write(path, contents).expect("failed to write file");
-}
-
-/// Resolves a usable pinned `rg` binary as an ABSOLUTE path, mirroring
-/// `common::nvim_bin_or_skip`'s resolution + loud-SKIP shape:
-///
-/// 1. An explicit `WOLF_RG_BIN` that is absolute-and-existing (the cargo / Nix
-///    devShell path, where the flake exports `pkgs.ripgrep`).
-/// 2. Otherwise, a RUNFILES-RELATIVE `WOLF_RG_BIN` (the Bazel `rust_test`, which
-///    sets it to `$(rootpath //bazel/rg:rg_tree)/rg/rg`) resolved against the
-///    usual runfiles bases (`TEST_SRCDIR` [+ `TEST_WORKSPACE` / `_main`],
-///    `RUNFILES_DIR`, the cwd) — the same probe `common::resolve_runfile` uses.
-///
-/// Returns `None` after printing a loud SKIP banner when neither resolves.
-fn resolve_rg_bin() -> Option<PathBuf> {
-    let raw = std::env::var("WOLF_RG_BIN").ok()?;
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    let relp = PathBuf::from(trimmed);
-    if relp.is_absolute() {
-        return relp.exists().then_some(relp);
-    }
-
-    // Bazel: WOLF_RG_BIN is runfiles-relative; probe the known bases.
-    let mut bases: Vec<PathBuf> = Vec::new();
-    if let Ok(srcdir) = std::env::var("TEST_SRCDIR") {
-        if let Ok(wsp) = std::env::var("TEST_WORKSPACE") {
-            bases.push(PathBuf::from(&srcdir).join(&wsp));
-        }
-        bases.push(PathBuf::from(&srcdir).join("_main"));
-        bases.push(PathBuf::from(&srcdir));
-    }
-    if let Ok(rfdir) = std::env::var("RUNFILES_DIR") {
-        bases.push(PathBuf::from(&rfdir).join("_main"));
-        bases.push(PathBuf::from(&rfdir));
-    }
-    if let Ok(cwd) = std::env::current_dir() {
-        bases.push(cwd);
-    }
-
-    bases
-        .into_iter()
-        .map(|b| b.join(&relp))
-        .find(|c| c.exists())
-}
-
-/// Resolves `rg` to an ABSOLUTE path and re-exports it into `WOLF_RG_BIN`, or
-/// prints a loud SKIP banner and returns `None`. A caller that gets `None` must
-/// `return` (a no-op pass), exactly like `common::nvim_bin_or_skip`.
-#[must_use]
-fn rg_bin_or_skip() -> Option<PathBuf> {
-    match resolve_rg_bin() {
-        Some(bin) => {
-            std::env::set_var("WOLF_RG_BIN", &bin);
-            Some(bin)
-        }
-        None => {
-            eprintln!(
-                "\n========================================================================\n\
-                 SKIP: wolf-core search — no pinned ripgrep (rg) available.\n\
-                 This test drives a REAL pinned rg subprocess (no mocks). It runs when\n\
-                 WOLF_RG_BIN is an absolute path (Nix/Cargo devShell) or when the Bazel\n\
-                 `rust_test` stages //bazel/rg:rg_tree via a runfiles-relative WOLF_RG_BIN.\n\
-                 ========================================================================\n"
-            );
-            None
-        }
-    }
 }
 
 /// A `WakeFn` that signals on a channel, paired with the receiver the poll loop
@@ -219,7 +149,7 @@ fn opts(query: &str, use_regex: bool, case_sensitive: bool, all_files: bool) -> 
 /// `match_ranges` + `column`.
 #[test]
 fn search_streams_sorts_and_reports_ranges() {
-    let Some(_rg) = rg_bin_or_skip() else {
+    let Some(_rg) = common::rg_bin_or_skip() else {
         return;
     };
     let _ = common::require_nvim_bin();
@@ -322,7 +252,7 @@ fn search_streams_sorts_and_reports_ranges() {
 /// a matching `.txt`; `all_files=true` removes the glob and INCLUDES it.
 #[test]
 fn all_files_toggles_the_txt_filter() {
-    let Some(_rg) = rg_bin_or_skip() else {
+    let Some(_rg) = common::rg_bin_or_skip() else {
         return;
     };
     let _ = common::require_nvim_bin();
@@ -369,7 +299,7 @@ fn all_files_toggles_the_txt_filter() {
 /// `.git/hooks/pre-commit` is not, so only the all-files mode could reach it.
 #[test]
 fn git_and_wolf_dirs_are_excluded() {
-    let Some(_rg) = rg_bin_or_skip() else {
+    let Some(_rg) = common::rg_bin_or_skip() else {
         return;
     };
     let _ = common::require_nvim_bin();
@@ -427,7 +357,7 @@ fn git_and_wolf_dirs_are_excluded() {
 /// itself); `use_regex=true` honors a real regex.
 #[test]
 fn use_regex_literal_vs_regex() {
-    let Some(_rg) = rg_bin_or_skip() else {
+    let Some(_rg) = common::rg_bin_or_skip() else {
         return;
     };
     let _ = common::require_nvim_bin();
@@ -464,7 +394,7 @@ fn use_regex_literal_vs_regex() {
 /// exact case, false matches both.
 #[test]
 fn case_sensitive_differs_on_mixed_case() {
-    let Some(_rg) = rg_bin_or_skip() else {
+    let Some(_rg) = common::rg_bin_or_skip() else {
         return;
     };
     let _ = common::require_nvim_bin();
@@ -502,7 +432,7 @@ fn case_sensitive_differs_on_mixed_case() {
 /// stays responsive afterward.
 #[test]
 fn open_at_round_trip() {
-    let Some(_rg) = rg_bin_or_skip() else {
+    let Some(_rg) = common::rg_bin_or_skip() else {
         return;
     };
     let _ = common::require_nvim_bin();

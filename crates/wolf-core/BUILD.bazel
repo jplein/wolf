@@ -64,8 +64,8 @@ rust_binary(
     deps = [":wolf_core"],
 )
 
-# Real-nvim targets stage the pinned nvim tree and init.lua as runfiles, which
-# tests/common/mod.rs resolves to absolute paths.
+# Real-nvim targets stage the pinned nvim tree and init.lua as runfiles, which the
+# wolf-test-support harness resolves to absolute paths.
 rust_test(
     name = "file_search",
     srcs = [
@@ -91,7 +91,10 @@ rust_test(
     },
     # `normal = True` too: crate_universe drops tempfile, both a normal and a dev dep, from the
     # dev map.
-    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+    deps = [
+        ":wolf_core",
+        "//crates/wolf-test-support:wolf_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True),
 )
 
 rust_test(
@@ -118,7 +121,10 @@ rust_test(
     },
     # Same dep shape as `file_search`: `normal = True` too, because crate_universe
     # omits tempfile from the dev map when it is also a normal dep.
-    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+    deps = [
+        ":wolf_core",
+        "//crates/wolf-test-support:wolf_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True),
 )
 
 rust_test(
@@ -144,7 +150,10 @@ rust_test(
         "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
         "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
     },
-    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+    deps = [
+        ":wolf_core",
+        "//crates/wolf-test-support:wolf_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True),
 )
 
 # Own binary: it unsets the process-global `WOLF_RG_BIN`, which would race `search`'s
@@ -170,7 +179,10 @@ rust_test(
         "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
         "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
     },
-    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+    deps = [
+        ":wolf_core",
+        "//crates/wolf-test-support:wolf_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True),
 )
 
 rust_test(
@@ -204,7 +216,10 @@ rust_test(
         "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
         "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
     },
-    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+    deps = [
+        ":wolf_core",
+        "//crates/wolf-test-support:wolf_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True),
 )
 
 rust_test(
@@ -228,7 +243,10 @@ rust_test(
         "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
         "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
     },
-    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+    deps = [
+        ":wolf_core",
+        "//crates/wolf-test-support:wolf_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True),
 )
 
 rust_test(
@@ -252,7 +270,10 @@ rust_test(
         "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
         "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
     },
-    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+    deps = [
+        ":wolf_core",
+        "//crates/wolf-test-support:wolf_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True),
 )
 
 rust_test(
@@ -366,7 +387,10 @@ rust_test(
         "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
         "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
     },
-    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+    deps = [
+        ":wolf_core",
+        "//crates/wolf-test-support:wolf_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True),
 )
 
 rust_test(
@@ -399,7 +423,10 @@ rust_test(
         "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
         "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
     },
-    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+    deps = [
+        ":wolf_core",
+        "//crates/wolf-test-support:wolf_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True),
 )
 
 rust_test(
@@ -423,7 +450,10 @@ rust_test(
         "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
         "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
     },
-    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+    deps = [
+        ":wolf_core",
+        "//crates/wolf-test-support:wolf_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True),
 )
 
 rust_test(
@@ -447,7 +477,10 @@ rust_test(
         "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
         "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
     },
-    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+    deps = [
+        ":wolf_core",
+        "//crates/wolf-test-support:wolf_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True),
 )
 
 rust_test(
@@ -471,7 +504,10 @@ rust_test(
         "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
         "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
     },
-    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+    deps = [
+        ":wolf_core",
+        "//crates/wolf-test-support:wolf_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True),
 )
 
 rust_test(
@@ -495,7 +531,10 @@ rust_test(
         "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
         "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
     },
-    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+    deps = [
+        ":wolf_core",
+        "//crates/wolf-test-support:wolf_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True),
 )
 
 rust_test(
@@ -519,7 +558,10 @@ rust_test(
         "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
         "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
     },
-    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+    deps = [
+        ":wolf_core",
+        "//crates/wolf-test-support:wolf_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True),
 )
 
 rust_test(
@@ -543,7 +585,10 @@ rust_test(
         "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
         "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
     },
-    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+    deps = [
+        ":wolf_core",
+        "//crates/wolf-test-support:wolf_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True),
 )
 
 rust_test(
@@ -567,7 +612,10 @@ rust_test(
         "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
         "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
     },
-    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+    deps = [
+        ":wolf_core",
+        "//crates/wolf-test-support:wolf_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True),
 )
 
 rust_test(
@@ -591,7 +639,10 @@ rust_test(
         "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
         "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
     },
-    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+    deps = [
+        ":wolf_core",
+        "//crates/wolf-test-support:wolf_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True),
 )
 
 rust_test(
@@ -615,7 +666,10 @@ rust_test(
         "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
         "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
     },
-    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+    deps = [
+        ":wolf_core",
+        "//crates/wolf-test-support:wolf_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True),
 )
 
 # Unsandboxed also for the loopback socket the preview server binds.
@@ -640,7 +694,10 @@ rust_test(
         "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
         "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
     },
-    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+    deps = [
+        ":wolf_core",
+        "//crates/wolf-test-support:wolf_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True),
 )
 
 rust_test(
@@ -664,7 +721,10 @@ rust_test(
         "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
         "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
     },
-    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+    deps = [
+        ":wolf_core",
+        "//crates/wolf-test-support:wolf_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True),
 )
 
 rust_test(
@@ -688,7 +748,10 @@ rust_test(
         "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
         "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
     },
-    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+    deps = [
+        ":wolf_core",
+        "//crates/wolf-test-support:wolf_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True),
 )
 
 rust_test(
@@ -712,7 +775,10 @@ rust_test(
         "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
         "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
     },
-    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+    deps = [
+        ":wolf_core",
+        "//crates/wolf-test-support:wolf_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True),
 )
 
 rust_test(
@@ -736,7 +802,10 @@ rust_test(
         "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
         "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
     },
-    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+    deps = [
+        ":wolf_core",
+        "//crates/wolf-test-support:wolf_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True),
 )
 
 rust_test(
@@ -760,7 +829,10 @@ rust_test(
         "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
         "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
     },
-    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+    deps = [
+        ":wolf_core",
+        "//crates/wolf-test-support:wolf_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True),
 )
 
 rust_test(
@@ -784,7 +856,10 @@ rust_test(
         "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
         "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
     },
-    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+    deps = [
+        ":wolf_core",
+        "//crates/wolf-test-support:wolf_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True),
 )
 
 rust_test(
@@ -808,7 +883,10 @@ rust_test(
         "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
         "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
     },
-    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+    deps = [
+        ":wolf_core",
+        "//crates/wolf-test-support:wolf_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True),
 )
 
 rust_test(
@@ -832,7 +910,10 @@ rust_test(
         "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
         "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
     },
-    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+    deps = [
+        ":wolf_core",
+        "//crates/wolf-test-support:wolf_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True),
 )
 
 rust_test(
@@ -856,7 +937,10 @@ rust_test(
         "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
         "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
     },
-    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+    deps = [
+        ":wolf_core",
+        "//crates/wolf-test-support:wolf_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True),
 )
 
 rust_test(
@@ -880,7 +964,10 @@ rust_test(
         "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
         "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
     },
-    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+    deps = [
+        ":wolf_core",
+        "//crates/wolf-test-support:wolf_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True),
 )
 
 rust_test(
@@ -904,7 +991,10 @@ rust_test(
         "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
         "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
     },
-    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+    deps = [
+        ":wolf_core",
+        "//crates/wolf-test-support:wolf_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True),
 )
 
 rust_test(
@@ -928,7 +1018,10 @@ rust_test(
         "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
         "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
     },
-    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+    deps = [
+        ":wolf_core",
+        "//crates/wolf-test-support:wolf_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True),
 )
 
 rust_test(
@@ -952,7 +1045,10 @@ rust_test(
         "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
         "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
     },
-    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+    deps = [
+        ":wolf_core",
+        "//crates/wolf-test-support:wolf_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True),
 )
 
 rust_test(
@@ -976,7 +1072,10 @@ rust_test(
         "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
         "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
     },
-    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+    deps = [
+        ":wolf_core",
+        "//crates/wolf-test-support:wolf_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True),
 )
 
 rust_test(
@@ -1000,7 +1099,10 @@ rust_test(
         "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
         "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
     },
-    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+    deps = [
+        ":wolf_core",
+        "//crates/wolf-test-support:wolf_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True),
 )
 
 rust_test(
@@ -1024,7 +1126,10 @@ rust_test(
         "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
         "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
     },
-    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+    deps = [
+        ":wolf_core",
+        "//crates/wolf-test-support:wolf_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True),
 )
 
 rust_test(
@@ -1048,7 +1153,10 @@ rust_test(
         "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
         "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
     },
-    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+    deps = [
+        ":wolf_core",
+        "//crates/wolf-test-support:wolf_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True),
 )
 
 rust_test(
@@ -1076,7 +1184,10 @@ rust_test(
         "WOLF_TEST_NVIM_TREESITTER_DIR": "$(rootpath //bazel/nvim-treesitter:nvim_treesitter_tree)",
         "WOLF_TEST_PARSERS_DIR": "$(rootpath //bazel/treesitter-parsers:parsers_tree)",
     },
-    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+    deps = [
+        ":wolf_core",
+        "//crates/wolf-test-support:wolf_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True),
 )
 
 rust_test(
@@ -1103,7 +1214,10 @@ rust_test(
         "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
         "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
     },
-    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+    deps = [
+        ":wolf_core",
+        "//crates/wolf-test-support:wolf_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True),
 )
 
 # Real-nvim: the active-buffer path/filetype/preview/full-width tracking that
@@ -1129,7 +1243,10 @@ rust_test(
         "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
         "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
     },
-    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+    deps = [
+        ":wolf_core",
+        "//crates/wolf-test-support:wolf_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True),
 )
 
 # Real-nvim: key input forwarding (cursor motion, mode changes) reflected in the
@@ -1155,7 +1272,10 @@ rust_test(
         "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
         "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
     },
-    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+    deps = [
+        ":wolf_core",
+        "//crates/wolf-test-support:wolf_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True),
 )
 
 rust_test(
@@ -1190,7 +1310,10 @@ rust_test(
         "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
         "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
     },
-    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+    deps = [
+        ":wolf_core",
+        "//crates/wolf-test-support:wolf_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True),
 )
 
 # Real-nvim: the multi-grid (`ext_multigrid`) redraw path — per-window grids,
@@ -1216,7 +1339,10 @@ rust_test(
         "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
         "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
     },
-    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+    deps = [
+        ":wolf_core",
+        "//crates/wolf-test-support:wolf_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True),
 )
 
 # Real-nvim: the save / open round-trip through the captive editor.
@@ -1241,7 +1367,10 @@ rust_test(
         "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
         "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
     },
-    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+    deps = [
+        ":wolf_core",
+        "//crates/wolf-test-support:wolf_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True),
 )
 
 # Real-nvim: spawn a real nvim, attach as an ext_linegrid UI, verify the live
@@ -1267,5 +1396,8 @@ rust_test(
         "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
         "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
     },
-    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+    deps = [
+        ":wolf_core",
+        "//crates/wolf-test-support:wolf_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True),
 )

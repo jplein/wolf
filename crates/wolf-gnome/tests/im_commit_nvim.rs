@@ -91,7 +91,7 @@ fn start(test: &str) -> (WolfCore, FlushWaiter) {
     let core = WolfCore::start(config(COLS, ROWS), wake).unwrap_or_else(|e| {
         panic!("{test}: WolfCore::start failed ({e}) — is WOLF_NVIM_BIN a valid nvim?")
     });
-    waiter.wait_for_flush(FLUSH_TIMEOUT);
+    waiter.wait_for_initial_flush(&core, FLUSH_TIMEOUT);
     (core, waiter)
 }
 
@@ -131,10 +131,10 @@ fn send_commit(core: &WolfCore, overlay_open: bool, text: &str) -> usize {
     }
 }
 
-/// Waits for the first flush after the last input, then drains brief follow-ups so
+/// Waits for a redraw flush after the last input, then drains brief follow-ups so
 /// the snapshot read afterwards is the SETTLED frame.
-fn settle(waiter: &FlushWaiter) {
-    waiter.wait_for_flush(FLUSH_TIMEOUT);
+fn settle(core: &WolfCore, waiter: &FlushWaiter) {
+    waiter.wait_for_flush(core, FLUSH_TIMEOUT);
     waiter.drain();
     std::thread::sleep(SETTLE);
     waiter.drain();
@@ -175,7 +175,7 @@ fn a_committed_character_reaches_the_buffer() {
          about the rulebook."
     );
     core.send_input(key_event(TEST, gdk::Key::Escape, ModifierType::empty()));
-    settle(&waiter);
+    settle(&core, &waiter);
 
     let row = row0(&core);
     assert_eq!(
@@ -217,7 +217,7 @@ fn a_multi_character_commit_arrives_in_order() {
          character. A PRECONDITION, as in the single-character case."
     );
     core.send_input(key_event(TEST, gdk::Key::Escape, ModifierType::empty()));
-    settle(&waiter);
+    settle(&core, &waiter);
 
     let row = row0(&core);
     assert_ne!(
@@ -271,7 +271,7 @@ fn a_control_character_in_a_commit_never_reaches_neovim() {
          than 2 means a printable was dropped with it."
     );
     core.send_input(key_event(TEST, gdk::Key::Escape, ModifierType::empty()));
-    settle(&waiter);
+    settle(&core, &waiter);
 
     let row = row0(&core);
     assert_eq!(
@@ -340,7 +340,7 @@ fn a_commit_behind_an_open_overlay_sends_nothing() {
     );
 
     core.send_input(key_event(TEST, gdk::Key::Escape, ModifierType::empty()));
-    settle(&waiter);
+    settle(&core, &waiter);
 
     let row = row0(&core);
     assert!(
@@ -399,7 +399,7 @@ fn a_normal_mode_commit_is_a_command_and_not_text() {
     // Back to the first line, so the command below acts on a known one.
     core.send_input(key_event(TEST, key_from_char('g'), ModifierType::empty()));
     core.send_input(key_event(TEST, key_from_char('g'), ModifierType::empty()));
-    settle(&waiter);
+    settle(&core, &waiter);
 
     // --- Precondition: the buffer really holds the two lines, first one on top ----
     let before = row0(&core);
@@ -417,7 +417,7 @@ fn a_normal_mode_commit_is_a_command_and_not_text() {
         sent, 2,
         "{TEST}: the seam produced {sent} event(s) for the commit {COMMAND:?} rather than 2."
     );
-    settle(&waiter);
+    settle(&core, &waiter);
 
     let after = row0(&core);
     assert!(
