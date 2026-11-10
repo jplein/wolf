@@ -6,4 +6,4 @@ Swift sources for the macOS front-end, split into two load-bearing modules — s
 - [`WolfMacOS/`](WolfMacOS/README.md) — the AppKit application. Windows, views, menus, and the coordinator.
 - [`WolfMain/`](WolfMain/README.md) — the process entry point, apart so that a test can link `WolfMacOS`.
 
-Each directory's README owns the entries for the files in that directory, and nothing else describes them.
+Each directory's README owns the entries for the files in that directory, and nothing else describes them. A module directory's subdirectories, such as `WolfKeyMap/Terminal/`, compile into that module, and each has its own README, linked from the module's README.

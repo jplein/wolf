@@ -6,6 +6,14 @@ When you add behavior to this crate, the decision belongs here and the wiring be
 
 Coverage lives in [`Tests/WolfKeyMapTests/`](../../Tests/WolfKeyMapTests/README.md).
 
+## Subdirectories
+
+Each compiles into this module and has its own README with the entries for its files.
+
+- [`Terminal/`](Terminal/README.md) — a terminal pane's cell styles, damage, sizing and input routing.
+- [`Sidebar/`](Sidebar/README.md) — the file-tree and search panels and their View menu checkmarks.
+- [`Persistence/`](Persistence/README.md) — what `state.json` holds, and how it restores.
+
 ## Files
 
 #### `AppearanceSeam.swift`
@@ -356,25 +364,6 @@ Purpose: The per-pane pixel/cell coordinate seam — a grid rect positioned insi
 
 - `paintOffsetX` is non-zero exactly when the cap centers the grid. The preview web view's frame, the statusbar text span (via `StatusbarTextSpan`) and the occlusion test all add that same offset, so they must derive from one shared `PaneGeometry` or the pane's contents will disagree about where the left edge is.
 
-#### `PaneLayoutCodec.swift`
-
-Purpose: The pure codec between the live `PaneTree` layout and the shapes that persist or cross the FFI boundary.
-
-**Public API**
-
-- `SavedPaneNode` — a `Hashable` mirror of the split tree keyed by per-leaf buffer path. `leafCount` is how many nvim window handles the rebuild path zips onto the leaves. `isEmptyLeaf` is the suppress-from-persistence predicate for a lone pane: true only for an unnamed leaf that is neither a preview nor a terminal, so a lone pane bound to a file, a preview or a terminal still persists.
-- `encode(_:paths:previews:terminals:)` — maps leaf ids to buffer paths; a leaf missing from `paths` becomes `""`. A terminal leaf's path is the directory its shell starts in.
-- `postOrderTokens(_:)` and its inverse `decodeTokens(_:)` — the post-order stream the FFI push-builder replays; `decodeTokens` returns `nil` on a malformed stream.
-
-**Decisions**
-
-- There is no Swift renderer for the layout-rebuild document. The restore hands the loaded `FfiPaneNode` back to `WolfCoreHandle.rebuild_layout`, so Rust's `rebuild_layout_spec` stays its only renderer and the format cannot drift between front-ends ([the rebuild-layout wire format](../../../../notes/wolf-core-decisions.md#the-rebuild-layout-wire-format)).
-- A `preview` leaf stores the source Markdown file's absolute path, not the scratch buffer's, because restore reopens it through `wolf_preview_file` rather than `:edit`.
-
-**Gotchas**
-
-- The token stream is a contract with `wolf-ffi`'s push-builder and cannot be changed on one side alone.
-
 #### `PaneModeSeam.swift`
 
 Purpose: The pure per-pane mode decision. A pane is in preview mode or edit mode, derived — never stored — from whether its nvim window appears in the `previews()` snapshot, and the mode decides whether a picker or open-dialog activation previews or edits its target. Foundation only.
@@ -566,21 +555,6 @@ Purpose: Which preview windows need their web view reloaded, and the click-to-fo
 - `PreviewLoad` is a struct rather than a tuple so `Optional` inequality compiles, which is what lets the gate be one dictionary comparison.
 - `clickFocusJS` registers `mousedown` in the capture phase. The hosting `WKWebView` swallows AppKit mouse events, so the container's `mouseDown` never fires over a preview pane, and capture stops an inner element that halts propagation from suppressing the focus notification.
 
-#### `RestoreSeam.swift`
-
-Purpose: The pure restore planner. It rebuilds projects from the saved (window, tab, working directory) tree, because project identity is not persisted — see [wolf-macos-decisions.md](../../../../notes/wolf-macos-decisions.md) for that model.
-
-**Public API**
-
-- `plan(windows:home:isDirectory:) -> RestorePlan` — `isDirectory` is the seam's only injected impurity (the app passes a `FileManager` check, tests pass a set lookup). Projects come back in first-encounter order.
-- `SavedTab` and `SavedWindow` are the inputs; `SavedTab` is also what a live view contributes to a commit, through [`SessionSeam`](#sessionseamswift); `PlannedTab`, `ProjectPlan` and `RestorePlan` the outputs. A `PlannedTab` retains its `groupIndex` and `positionInGroup` so the window-assembly phase can drop it back into the right OS window and tab group.
-
-**Decisions**
-
-- An empty-state tab (`cwd == ""`) and a tab whose saved directory has since been deleted each get a single-tab project of their own rather than sharing one, matching "a new window is a new project". Their `launchCwd` is `home`, while `PlannedTab.cwd` still carries the original saved string.
-- The seam does not canonicalize. The caller persists an already-canonical working directory via `cwd_for_tabpage`, so grouping is on the string exactly as saved.
-- `layout` is a passthrough: it rides from `SavedTab` into the matching `PlannedTab` untouched and never affects grouping, which is by working directory alone.
-
 #### `ScrollAccumulator.swift`
 
 Purpose: Accumulates the sub-cell `deltaY` values that trackpads and high-resolution wheels deliver into discrete whole-cell line steps, so the caller can forward a whole number of line-scroll events to Neovim.
@@ -615,62 +589,6 @@ Purpose: The track and thumb rectangles of a pane's synthetic scrollbar, project
 
 - `PaneContainerView` keeps the `.legacy` track, the `.overlay` fade and the colours, because each reads AppKit state. wolf-gnome's [`scrollbar.rs`](../../../wolf-gnome/src/README.md#scrollbarrs) places its thumb by the same rules and draws no track.
 
-#### `SearchBudgetSeam.swift`
-
-Purpose: Converts a sidebar pixel width and a monospace per-character advance into an integer character budget for a matched search line wrapped across up to `lines` rows.
-
-**Public API**
-
-- `charBudget(sidebarWidth:charAdvance:lines:) -> Int` — an unmeasurable font (`charAdvance <= 0`) floors the per-row count to 1 rather than dividing by zero.
-
-**Decisions**
-
-- The budget is a character count rather than a pixel width because it is consumed by wolf-core's `context_window`, which slices on character boundaries and so never splits a multibyte scalar.
-
-#### `SearchHighlightSeam.swift`
-
-Purpose: Maps wolf-core's byte-offset bold match ranges onto the UTF-16 spans that `NSAttributedString` and `NSRange` need.
-
-**Public API**
-
-- `SearchSpan` — one run of the display line with a uniform `bold` flag, measured in UTF-16 units.
-- `spans(text:boldByteRanges:) -> [SearchSpan]` — `boldByteRanges` are byte `[start, end)` offsets into `text`'s UTF-8, the shape core returns. The result is ordered, contiguous and gap-filling, covering every UTF-16 unit with exactly one span, so a caller can style the whole line by walking the array and needs no fallback for an uncovered remainder. Empty ranges yield a single non-bold span, and an empty string yields none.
-
-**Decisions**
-
-- The seam exists because the two sides index differently: Rust returns byte offsets while AppKit's text ranges are UTF-16, and a scalar outside the basic multilingual plane occupies two UTF-16 units, so the offsets cannot be reused as-is.
-
-#### `SearchToggleSeam.swift`
-
-Purpose: The initial states for the sidebar search panel's three toggle buttons.
-
-**Public API**
-
-- `initialCaseSensitive(ignorecase:) -> Bool` — the inverse of Neovim's `:ignorecase`.
-- `defaultUseRegex` — regex search is on by default. `defaultAllFiles` — off by default, so search covers Markdown only.
-
-**Decisions**
-
-- Case sensitivity is seeded from Neovim once, when the panel is first shown; toggling the button never writes back, so the search panel cannot change the editor's `:ignorecase`.
-
-#### `SessionSeam.swift`
-
-Purpose: The write side of state persistence, ported from wolf-gnome's [`state_seam.rs`](../../../wolf-gnome/src/README.md#state_seamrs): what each live view contributes to `state.json`, and whether a commit or a close writes anything. The rules are in [wolf-macos-decisions.md](../../../../notes/wolf-macos-decisions.md#state-is-a-tree-and-the-front-end-owns-every-write).
-
-**Public API**
-
-- `gatherTab(...) -> TabGather` — `.refuse` when a folder view's cwd is `""` or any leaf is `.unreported` or missing from `content`. A `.terminal(cwd:)` leaf persists as a terminal leaf at `cwd`.
-- `mayGather(...)` and `contribution(mayGather:gather:cache:)` — the gathered tab when the gate is open and the gather ready, otherwise `cache`, which the caller stores as its next cache. `gather` is not evaluated behind a shut gate.
-- `closeCommit(terminating:otherLiveViews:)`, `committedWindows(liveViews:windows:)` and `orphanedSlots(savedTabCounts:materialized:)` — `nil` from `committedWindows` means commit nothing.
-- `CloseBurst(scheduleEnd:read:commit:)` and its `close(terminating:otherLiveViews:)` — `closeCommit` over the closes of one runloop turn, which ends when the closure given to `scheduleEnd` runs.
-
-**Decisions**
-
-- A partial read refuses the whole tab: a leaf with no reported window would persist `""` over the restored file.
-- The cache starts as the restored tab, so a view not yet read or behind a shut gate still writes its saved files.
-- A keep commits the tree read at its burst's first close, while a tabbed window's earlier tabs are still live: its close button closes each tab in turn, so a later read keeps only the last tab.
-- A walk with no live view or no window would erase the session, so it commits nothing. Orphans are never retried, but are carried into every commit.
-
 #### `ShortcutSeam.swift`
 
 Purpose: The pure decision seam for the new-window chord, the sibling of `PickerSeam`. Foundation only, so it is unit-testable headlessly.
@@ -687,48 +605,6 @@ Purpose: The pure decision seam for the new-window chord, the sibling of `Picker
 
 - Dormant and unwired: menu key equivalents preempt `keyDown`, and both chords are menu items (File > New is ⌘N, File > New Window is ⇧⌘N), so nothing in the app calls this. It is kept, and pinned by `ShortcutSeamTests`, so the window chord has the same shape as the picker chord — do not delete it as dead code.
 - Because shift is not consulted, the predicate is true for ⇧⌘N as well as ⌘N. Wiring it into a `keyDown` path as-is would not distinguish New from New Window.
-
-#### `SidebarMenuSeam.swift`
-
-Purpose: The pure decision behind the View menu's Project and Search checkmarks. Foundation only, so it is testable without an `NSMenuItem` or a window.
-
-**Public API**
-
-- `SidebarPanel` — names one sidebar panel, the file tree or the content search. Also used by `WolfWindowController` to name the live panel.
-- `isChecked(sidebarVisible:current:item:) -> Bool` — at most one entry is checked; a hidden sidebar or a nil `current` checks nothing.
-
-**Gotchas**
-
-- Checked and enabled are separate concerns. `AppDelegate.validateMenuItem` uses this seam only for the checkmark and always leaves both items enabled, since choosing either while the sidebar is hidden is what reveals it.
-
-#### `SidebarRowStyle.swift`
-
-Purpose: The pure choice of label color for one file-tree sidebar row — the current buffer's mark. Foundation only, so it is testable without an outline view.
-
-**Public API**
-
-- `SidebarLabelColor` — the color role of one row's label: `.normal`, `.current` (the current buffer's accent), or `.selected` (an emphasized selection's contrasting text).
-- `labelColor(isCurrent:isEmphasized:) -> SidebarLabelColor` — an emphasized selection wins, because accent text on an accent fill is unreadable; otherwise only the current buffer is accented.
-- `markedFile(previewSource:currentFile:) -> String` — which file the sidebar marks. A previewing pane's source wins; an empty or nil source falls back to the edited buffer, and `""` marks nothing.
-
-**Decisions**
-
-- A preview pane's scratch buffer is unnamed, and nvim's `wolf_current_file` reports `""` for it, so `currentFile` alone cannot name what a preview shows. The front-end supplies the per-pane source through `PaneContainerView.activePreviewSourcePath`.
-- The accent depends on the current-buffer flag alone, never on the row's selection. AppKit tints a selected source-list label only while the row view is emphasized — a key window whose first responder is the outline — and the sidebar outline never becomes first responder, so a selection tint holds until the first app switch and never returns.
-
-#### `StateSeam.swift`
-
-Purpose: The pure decision seams for the macOS state-restore path — validating a saved window frame, and deciding whether a window opens a folder or the empty state. Foundation and CoreGraphics only; the AppKit glue feeds it real window frames, `NSScreen` visible frames and a `FileManager`-backed directory check.
-
-**Public API**
-
-- `restoredWindowFrame(x:y:width:height:screenVisibleFrames:) -> CGRect?` — `nil` means discard the saved geometry and fall back to the default centered placement. It rejects two cases: a non-positive width or height, which is the "geometry never reported" sentinel; and a frame intersecting no screen's visible frame, which would restore the window fully offscreen after a display is disconnected.
-- `launchDecision(restored:home:isDirectory:) -> LaunchDecision` — `.folder(cwd:)` only when `restored` is non-empty and still names a directory, since it may have been deleted or replaced by a plain file since the last run; otherwise `.emptyState(nvimCwd: home)`.
-
-**Decisions**
-
-- `launchDecision` never returns the process working directory. Nvim always needs a cwd, so the empty state launches it at `home`; that is a passive cwd the caller deliberately does not persist or record in the recent-dirs MRU, and a process-cwd fallback would pollute it.
-- `isDirectory` is injected rather than reaching for `FileManager`, which is what keeps the seam pure; tests pass a set lookup.
 
 #### `StatusbarLayout.swift`
 
@@ -779,96 +655,3 @@ Purpose: The horizontal sibling of `StatusbarLayout` — the absolute left edge 
 **Gotchas**
 
 - The preview web view's frame, this span, and the draw loop's occlusion test all derive from the same `geometry(_:fullWidth:)` applied to `gridRect(ofPane:)`, and must change together.
-
-#### `TerminalCellStyle.swift`
-
-Purpose: Resolves one terminal cell's packed style, from [`FfiTerminalCell`](../../../wolf-ffi/src/README.md#terminal-sessions), into the colours, opacity and `GlyphStyle` a terminal pane paints.
-
-**Public API**
-
-- `resolve(fg:bg:flags:underline:width:selected:defaultFg:defaultBg:) -> TerminalCellPaint` — colours packed `0x00RRGGBB`.
-- `cursorColors(cursorColor:defaultFg:defaultBg:)`, `cursorSpan(width:)`, `TerminalCursorShape`.
-- `Flag`, `Underline`, `Width` — the `terminal_flag`, `terminal_underline` and `terminal_cell_width` values.
-
-**Decisions**
-
-- The colours swap when exactly one of inverse and selected holds, so a selected reverse-video cell draws plain.
-- Blink is ignored and every underline but curly draws straight; these are present limitations in [wolf-macos-decisions.md](../../../../notes/wolf-macos-decisions.md#terminal-panes).
-
-#### `TerminalDamage.swift`
-
-Purpose: Chooses the rows a terminal pane repaints for a new frame, from the frame's per-row versions, the version the pane last painted and the cursor.
-
-**Public API**
-
-- `effectivePaintedVersion(previous:current:painted:)` — `nil`, meaning repaint everything, when the `PaintKey` changed.
-- `rowsToRepaint(rowVersions:paintedVersion:)`, `cursorRows(previous:current:)` — ascending row indices.
-
-**Decisions**
-
-- `PaintKey` holds everything besides the cells that changes every row's pixels: the size, the default background, the cell metrics and the backing scale.
-- The cursor is not in the row versions, so a moved cursor damages its old and new rows separately.
-
-#### `TerminalGeometry.swift`
-
-Purpose: Sizes a terminal session from its pane, and maps a pointer into the cell pixels core expects.
-
-**Public API**
-
-- `size(cols:rows:cellWidth:cellHeight:scale:) -> TerminalSize` — the `resize_terminal` arguments, the cell in backing pixels.
-- `pointerPixels(x:y:originX:originY:cellWidth:cellHeight:size:)` — pixels in `size`'s cell pixels, clamped at 0.
-- `sizer(showing:active:previous:)` — the pane that sizes a session within one view.
-
-**Decisions**
-
-- Counts clamp to at least 1 and pixel sizes to at least 1, because core ignores a zero size and keeps the previous cell size for a zero cell.
-- The pointer is scaled by the sent cell pixels rather than the backing scale, so core's `floor(px / cell_px)` names the cell under the pointer even after rounding.
-- `sizer` prefers the active pane, then the last sizer, then the lowest id: the spec's "most recently focused of its panes", within one view.
-
-#### `TerminalInputSeam.swift`
-
-Purpose: Routes a terminal pane's keys, input-method commits and focus changes.
-
-**Public API**
-
-- `routesThroughInputContext(keyCode:ctrl:meta:alt:optionAsAlt:hasMarkedText:)` — whether a key goes through `interpretKeyEvents` rather than straight to `terminal_key`.
-- `committedText(_:) -> TextRoute` — `.key`, `.text` or `.none`.
-- `focusReports(previous:current:) -> [FocusReport]` — the loss, then the gain.
-
-**Decisions**
-
-- A commit of exactly one printable ASCII scalar is a key, so core's `<C-w>` router sees the chord's second key; any other commit is text, with C0 and DEL removed, as the spec requires for input-method text.
-- Marked text keeps every key in the input method, even a Ctrl chord or a named key.
-
-#### `TreeChildrenMemo.swift`
-
-Purpose: A per-directory memo for the sidebar file tree's child projection, so the injected `project` runs at most once per directory per invalidation window. Generic over `Item` and Foundation only, so it is testable without AppKit or a live search.
-
-**Public API**
-
-- `init(project:)` — the injected projection from a directory rel-path to its immediate children.
-- `children(ofDir:)` and `invalidate()` — `invalidate` drops every cached array, keeping the dictionary's capacity.
-
-**Decisions**
-
-- It exists because `NSOutlineView` asks for one directory's children in a storm — `numberOfChildrenOfItem`, then `child:index:` once per child — and each callback would otherwise re-run the FFI `children_of(dir)`, an O(N) scan of the flat file list.
-
-**Gotchas**
-
-- `FileTreeView` projects the same `TreeItem` instances it hands out from `itemsByRelPath`, so memoizing does not disturb the outline's stable item identity.
-- `FileTreeView` invalidates only inside the `TreeRefreshGate.shouldReload` branch and on reroot. A version-unchanged refresh — an expand, a collapse, a cursor move — keeps serving from the still-valid memo, which is the point; invalidating more eagerly reinstates the storm.
-
-#### `TreeRefreshGate.swift`
-
-Purpose: A refresh gate for a sidebar panel on two axes, visibility and file-search snapshot version. Foundation only, so it is testable without AppKit; `FileTreeView` and `SearchView` each own one, relaying the sidebar's real `isCollapsed` KVO into `setVisible` and `search.version()` into `shouldReload`.
-
-**Public API**
-
-- `requestRefresh() -> Bool` — true while visible. While hidden it records that a catch-up is owed and returns false, and the caller does nothing.
-- `setVisible(_:) -> Bool` — true only on a hidden-to-visible transition that has deferred work, so exactly one catch-up refresh runs on reappear.
-- `shouldReload(version:) -> Bool` — true only when `version` differs from the last reloaded one, which it then records. The initial last-reloaded version is nil, so the first call at any version, including 0, reloads.
-- `resetReloadTracking()` — forgets that version so the next `shouldReload` reloads unconditionally. Called on reroot, where the outline is rebuilt wholesale.
-
-**Decisions**
-
-- Both gates guard the same expense, the outline reload and reveal. Without the visibility gate that work runs while the sidebar is collapsed, so hiding the sidebar does not relieve a freeze; without the version gate a full `reloadData()` runs on every render wake even when nothing structural changed.

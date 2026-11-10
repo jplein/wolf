@@ -49,17 +49,17 @@ Per CLAUDE.md, a divergence between documentation and implementation is a bug. T
 
 ### Others — reported
 
-| Location                                                         | Contradiction                                                                                                                                                 |
-| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `crates/wolf-macos/Sources/WolfMacOS/PickerWakeBridge.swift`     | Same per-window claim, and says the wake refreshes "the right window's picker".                                                                               |
-| `crates/wolf-gnome/src/lib.rs`, `src/pane_view.rs`               | Say the cmdline strip paints grid 1. `draw_cmdline` reads `snap.cmdline` / `snap.toast` and never touches grid 1.                                             |
-| `crates/wolf-gnome/src/lib.rs`                                   | Says a native command line remains deferred. One exists.                                                                                                      |
-| `crates/wolf-gnome/src/cursor.rs`                                | Says `app.rs` is the only GTK glue. `draw_cursor` lives in `pane_view.rs`.                                                                                    |
-| `crates/wolf-macos/Sources/WolfKeyMap/PaneGeometry.swift`        | Property docs say `gridRect == paneRect` and the paint offsets are zero. Both are false whenever the column cap centres the grid.                             |
-| `crates/wolf-macos/Sources/WolfKeyMap/TreeRefreshGate.swift`     | Header names `FileTreeView` as the only owner. `SearchView.swift` also constructs one and uses all four methods.                                              |
-| `crates/wolf-macos/Sources/WolfMacOS/WolfWindowController.swift` | Says `EmptyStateView` is added first so the picker overlays sit above it. The pickers are `PickerPanelHost` child panels, so that ordering carries no weight. |
-| `bazel/nvim-treesitter/extensions.bzl`                           | Overlay comment calls the plugin highlighting-disabled. Its own `BUILD.bazel` and `init.lua` enable highlighting.                                             |
-| `crates/wolf-ffi/tests/commands.rs`                              | Const docs carry `renumbered from 18 to 20` and `renamed from Close File`.                                                                                    |
+| Location                                                             | Contradiction                                                                                                                                                 |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `crates/wolf-macos/Sources/WolfMacOS/PickerWakeBridge.swift`         | Same per-window claim, and says the wake refreshes "the right window's picker".                                                                               |
+| `crates/wolf-gnome/src/lib.rs`, `src/pane_view.rs`                   | Say the cmdline strip paints grid 1. `draw_cmdline` reads `snap.cmdline` / `snap.toast` and never touches grid 1.                                             |
+| `crates/wolf-gnome/src/lib.rs`                                       | Says a native command line remains deferred. One exists.                                                                                                      |
+| `crates/wolf-gnome/src/cursor.rs`                                    | Says `app.rs` is the only GTK glue. `draw_cursor` lives in `pane_view.rs`.                                                                                    |
+| `crates/wolf-macos/Sources/WolfKeyMap/PaneGeometry.swift`            | Property docs say `gridRect == paneRect` and the paint offsets are zero. Both are false whenever the column cap centres the grid.                             |
+| `crates/wolf-macos/Sources/WolfKeyMap/Sidebar/TreeRefreshGate.swift` | Header names `FileTreeView` as the only owner. `SearchView.swift` also constructs one and uses all four methods.                                              |
+| `crates/wolf-macos/Sources/WolfMacOS/WolfWindowController.swift`     | Says `EmptyStateView` is added first so the picker overlays sit above it. The pickers are `PickerPanelHost` child panels, so that ordering carries no weight. |
+| `bazel/nvim-treesitter/extensions.bzl`                               | Overlay comment calls the plugin highlighting-disabled. Its own `BUILD.bazel` and `init.lua` enable highlighting.                                             |
+| `crates/wolf-ffi/tests/commands.rs`                                  | Const docs carry `renumbered from 18 to 20` and `renamed from Close File`.                                                                                    |
 
 ## 4. Stale planning scaffolding in source files
 

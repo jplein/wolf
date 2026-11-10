@@ -357,7 +357,9 @@ The `PreviewSeam` reload gate plus the click-to-focus surface. `winsNeedingReloa
 
 #### `SessionSeamTests.swift`
 
-**Covers** — the [`SessionSeam`](../../Sources/WolfKeyMap/README.md#sessionseamswift) write-side decisions: the three close answers; that a walk with no live view or no window commits nothing; `gatherTab` resolving file, preview, terminal and unnamed leaves with their weights, a lone terminal pane persisting, an empty-state lone pane persisting no layout, and refusal on an unreported or missing leaf or a folder view's empty cwd; `contribution` keeping or replacing the cache, never gathering behind a shut gate; both `mayGather` gates; `orphanedSlots` in saved order; and `CloseBurst`: a tab group closed in one turn keeps the tree read once, at its first close, a tab closed alone stays dropped once its burst's end has run, and a terminating close reads, commits and schedules nothing.
+**Covers** — the [`SessionSeam`](../../Sources/WolfKeyMap/Persistence/README.md#sessionseamswift) write-side decisions: the three close answers; that a walk with no live view or no window commits nothing; `gatherTab` resolving file, preview, terminal and unnamed leaves with their weights, a lone terminal pane persisting, an empty-state lone pane persisting no layout, and refusal on an unreported or missing leaf or a folder view's empty cwd; `contribution` keeping or replacing the cache, never gathering behind a shut gate; both `mayGather` gates; and `orphanedSlots` in saved order.
+
+Of `CloseBurst`, it covers that a tab group closed in one turn keeps the tree read once, at its first close, a tab closed alone stays dropped once its burst's end has run, and a terminating close reads, commits and schedules nothing.
 
 **Gotchas** — the seed and live fixtures differ in every field, so an assertion that the cache survived cannot pass on a live tab by coincidence. The burst tests hold every end closure and run it only when a test says the turn is over. The `WolfMacOS` glue that feeds these decisions — `Project.onWake`, `teardown`, `AppDelegate.closeBurst`, the live filter in `gatherTree` and `leafContents()` — is compile-verified and manual-smoke.
 

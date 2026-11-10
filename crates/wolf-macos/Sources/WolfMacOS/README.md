@@ -4,6 +4,13 @@ The AppKit application: windows, views, menus, and the coordinator that owns pro
 
 What a view here draws is testable offscreen through [`WolfMacOSTests`](../../Tests/WolfMacOSTests/README.md); event handling, focus and menus have no automated coverage. See [wolf-macos-decisions.md](../../../../notes/wolf-macos-decisions.md) for that posture and for the project, threading, and persistence models these files implement.
 
+## Subdirectories
+
+Each compiles into this module and has its own README with the entries for its files.
+
+- [`Terminal/`](Terminal/README.md) — the terminal pane view and the glyph painter.
+- [`Preview/`](Preview/README.md) — a Markdown preview web view's delegate and script-message handlers.
+
 ## Files
 
 #### `AppDelegate.swift`
@@ -220,7 +227,7 @@ Purpose: The file-tree sidebar: an `NSOutlineView` driven by a long-lived `FfiFi
 - `reveal(abs:)` expands ancestors top-down first, since a row exists only under an expanded parent; an unstreamed file leaves the reveal pending.
 - `reroot(to:)` first cancels the pending coalesced refresh, whose stale fire would hit the discarded tree.
 - `onRenderWake()`, `reroot(to:)`'s only caller, re-roots when `handle.cwd()` differs from its root: Neovim's cwd is the one authority. wolf-gnome's settle-point re-root ([`shell.rs`](../../../wolf-gnome/src/README.md#shellrs)) is an accepted divergence.
-- `TreeCellView` marks what the active pane shows with a [`SidebarRowStyle`](../WolfKeyMap/README.md#sidebarrowstyleswift) label color, never the selection tint.
+- `TreeCellView` marks what the active pane shows with a [`SidebarRowStyle`](../WolfKeyMap/Sidebar/README.md#sidebarrowstyleswift) label color, never the selection tint.
 - `applyLabelColor()` re-sets the label's string, an apparent no-op: after an emphasized click AppKit ignores `textColor`, leaving the formerly current row accented. `WolfMacOSTests` fails without it.
 - Activation routes on the active pane's mode, as the pickers do: a preview pane gets `preview_file`, falling back to `open` on `0`, which drops it to edit mode.
 
@@ -251,19 +258,6 @@ Purpose: Process-global glue around the pure `WolfKeyMap.FrameStats` seam: the o
 **Gotchas**
 
 - Measure an optimized release build, from a terminal: debug numbers are meaningless, and a double-clicked bundle inherits launchd's stderr. Recipe in `build.md`.
-
-#### `GlyphPainter.swift`
-
-Purpose: Draws one cell's glyph and its underline and strikethrough with CoreText into a flipped context, for both the Neovim grid and terminal panes.
-
-**Public API**
-
-- `drawGlyph(_:text:x:y:fg:style:)` — at the cell geometry of `metrics`.
-- `plainStyle` — the style of the glyph redrawn under a block cursor, so a bold face cannot overflow the cell.
-
-**Decisions**
-
-- Decorations are stroked by hand in `style`'s colours: `CTLineDraw` draws them only in the foreground colour and has no wavy underline.
 
 #### `KeyComposer.swift`
 
@@ -460,62 +454,6 @@ Purpose: Installs the process-global file-search wake callback so wolf-core's tr
 
 - Core fires this on a tokio worker thread; the thunk hops to the main thread before touching AppKit. A wake arriving after the picker has closed is a harmless no-op.
 
-#### `PreviewClickFocusHandler.swift`
-
-Purpose: The `WKScriptMessageHandler` that turns a preview web view's capture-phase `mousedown` (posted by `PreviewSeam.clickFocusJS`) into `PaneContainerView.focusPreviewPane(win:)`.
-
-**Public API**
-
-- `init(win:container:)` — `win` is the Neovim window handle identifying the pane in the container's per-window maps.
-
-**Decisions**
-
-- It exists because a `WKWebView` swallows AppKit mouse events, so the container's `mouseDown` never fires over a preview pane. The injected script message is the only signal that a preview pane was clicked.
-- `container` is weak: the web view's `WKUserContentController` retains this handler strongly, so a strong back-reference would be a cycle.
-
-#### `PreviewNavigationDelegate.swift`
-
-Purpose: The `WKNavigationDelegate` that routes a preview web view's clicked links through `PreviewLinkSeam` back into the owning `PaneContainerView`.
-
-**Public API**
-
-- `init(win:container:)` — `win` is the Neovim window handle identifying the pane in the container's per-window maps.
-
-**Decisions**
-
-- Every `.linkActivated` navigation is cancelled and handled out of band (open in the browser, scroll to a fragment, or preview another file), so the pane only ever shows core-rendered HTML. Non-link navigations — the initial `loadHTMLString` and programmatic `evaluateJavaScript` scrolls — must keep passing through with `.allow`, so the guard cannot be widened to cancel everything.
-- Link classification lives in `WolfKeyMap.PreviewLinkSeam`; this file only dispatches the resulting action.
-- `container` is weak because the container retains this delegate (`WKWebView.navigationDelegate` is itself weak).
-- The two `didFail…` callbacks are routine bookkeeping, not an error path: they decrement that window's outstanding-navigation count — see [wolf-macos-decisions.md](../../../../notes/wolf-macos-decisions.md) for why it is a count. A cancelled policy decision, meaning every clicked link, also arrives here, so the container ignores a callback for which it counted no navigation.
-
-#### `PreviewScrollStateHandler.swift`
-
-Purpose: The `WKScriptMessageHandler` that forwards a preview page's pushed scroll state, posted by `PreviewScrollSeam.stateScriptJS`, into its `PaneContainerView`'s per-window cache.
-
-**Public API**
-
-- `init(win:container:)` — `win` is the Neovim window handle identifying the pane in the container's per-window maps.
-
-**Decisions**
-
-- The push direction, and why it cannot be a pull, is in [wolf-macos-decisions.md](../../../../notes/wolf-macos-decisions.md).
-- A body missing `s` degrades to `0` rather than dropping the message, so a partially decodable push still refreshes the cache.
-- `container` is weak: the web view's `WKUserContentController` retains this handler strongly.
-
-#### `PreviewSelectionHandler.swift`
-
-Purpose: The `WKScriptMessageHandler` that forwards a preview page's pushed selected text, posted by `PreviewCopySeam.selectionScriptJS`, into its `PaneContainerView`'s per-window cache, where Edit > Copy reads it synchronously.
-
-**Public API**
-
-- `init(win:container:)` — `win` is the Neovim window handle identifying the pane in the container's per-window maps.
-
-**Decisions**
-
-- The push direction, and why it cannot be a pull, is in [wolf-macos-decisions.md](../../../../notes/wolf-macos-decisions.md).
-- An empty payload is a positive clear and drops the cached entry, while a body `PreviewCopySeam.decodeSelectionMessage` rejects leaves the cache untouched: a malformed message says nothing about the selection, so treating it as a clear would discard a good entry.
-- `container` is weak: the web view's `WKUserContentController` retains this handler strongly.
-
 #### `Project.swift`
 
 Purpose: One captive Neovim shared by N views, each bound to one nvim tabpage. Owns the single `WolfCoreHandle` and the per-project wake token. Main-thread-only.
@@ -618,27 +556,6 @@ Purpose: Best-effort KVO on one window's native tab group — its `windows` and 
 
 - Deliberately best-effort. The consumer is expected to coalesce, both to absorb the resulting KVO burst and to backstop the transitions KVO misses.
 
-#### `TerminalPaneView.swift`
-
-Purpose: A subview of `PaneContainerView` over one terminal pane's content area, painting its session's frame with CoreText.
-
-**Public API**
-
-- `update(_:scale:)` — stores a frame and invalidates only the rows [`TerminalDamage`](../WolfKeyMap/README.md#terminaldamageswift) picks, so an unchanged frame invalidates nothing.
-- `applyMetrics(_:)` — repaints every row.
-- `markedText` — the input method's uncommitted text, painted underlined at the cursor in its place. `cursorRect` is the cursor cell, for the candidate window.
-
-**Decisions**
-
-- It is a subview rather than painted by the container because every wake dirties the whole container, and a terminal publish shares the wake without bumping `Snapshot.seq`, so the container cannot tell a terminal-only wake apart. The subview keeps its unchanged rows and repaints only damaged ones.
-- `hitTest(_:)` returns `nil`, so every event reaches the container, which routes it to the session.
-- It sets `clipsToBounds = true`. The macOS 14 and later SDK default is `false`, and `draw(_:)` fills its dirty rect, which can then reach past the bounds and cover every Neovim pane the container has painted.
-- A row fills every cell's background before any glyph, so a spacer's background cannot overpaint the right half of a wide glyph.
-
-**Gotchas**
-
-- A frame larger than the view is clipped and a smaller one padded with the default background, which is the spec's "clipped or padded" while a resize is in flight.
-
 #### `ToastView.swift`
 
 Purpose: The `ext_messages` message toast — an overlay view that `PaneContainerView` pins bottom-left of the editor area and paints the current message's styled chunks into. Content taller than `maxVisibleLines` scrolls in place.
@@ -721,7 +638,7 @@ Purpose: One view — a single tab's whole UI stack, bound to a `(project, tabpa
 - `build() -> Bool` — `false`, building nothing, for an invalid tabpage bind; the coordinator then drops the view.
 - `hasFolder` — false in the empty state, so an empty-state window's sidebar never scans `home`.
 - `persistedCwd` — the tabpage-local cwd, right even for a background view, unlike `currentCwd`.
-- `persistedTab()` — this view's [`SessionSeam`](../WolfKeyMap/README.md#sessionseamswift) contribution, seeded from the restored tab.
+- `persistedTab()` — this view's [`SessionSeam`](../WolfKeyMap/Persistence/README.md#sessionseamswift) contribution, seeded from the restored tab.
 - `canCopy` — whether Copy has anything to copy, as `copy()` decides it. Copy and Paste in a terminal pane use its session.
 - `drainAndDispatchCommands()` — apart from `onRenderWake()`, so the project drains in every state ([why](../WolfKeyMap/README.md#livenessseamswift)).
 

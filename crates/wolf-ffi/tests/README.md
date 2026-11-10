@@ -402,6 +402,8 @@ That the harness's state-dir funnel keeps a real-nvim test off the user's Wolf s
 
 **Gotchas** — an interactive `/bin/sh` echoes what it is typed, so a test looks for the result of an expression the typed text does not contain. The byte-level tests run `cat -v` under `stty raw -echo` behind a ready marker and read only the rows after it.
 
+To print a session's cells and colours while debugging, add a scratch `#[test]` here that opens the session with `start`, `open` and `wait_frame`, as `open_terminal_binds_the_window_and_publishes_styled_cells` does. `frame_text` and `row_text` give the text, and each `FfiTerminalCell` of `row_cells(row)` gives `fg()` and `bg()`, an `FfiColor` with a packed `rgb` and a `set` bit, and its `flags()`. Run it with `--nocapture`, which Bazel takes as `--test_arg=--nocapture`, then delete it.
+
 #### `theme.rs`
 
 **Covers** — `theme_titlebar_bg()` / `theme_titlebar_fg()` and the frame's pre-resolved `cursor_fill()` / `cursor_glyph()`, across defining and then clearing the `WolfTitlebar` and `WolfCursor` highlight groups. Real nvim; target `//crates/wolf-ffi:theme` (staged nvim runfiles or `WOLF_NVIM_BIN`, `tags = ["no-sandbox"]`).

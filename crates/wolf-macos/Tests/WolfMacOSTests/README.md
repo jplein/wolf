@@ -38,7 +38,7 @@ Purpose: The reusable mechanism for view tests: host a view, render it, sample w
 - The window is never key, so a table never emphasizes its selection by itself; `setRowsEmphasized(_:)` sets `isEmphasized` on the row views, as first responder would.
 - `NSApplication.shared` is touched before the window is built, since it sets up AppKit's drawing.
 - The pixel scale is read from the bitmap, never assumed, because a Retina host captures at 2.
-- A pixel is `colorAt`'s components re-tagged in the bitmap's own sRGB `colorSpace`, then converted to sRGB. `colorAt` tags them by the bitmap's `colorSpaceName`, which is calibrated (Generic) RGB for this capture, and converting that shifts saturated and dark colours by up to about 0.12.
+- A pixel is `colorAt`'s components re-tagged in the bitmap's own sRGB `colorSpace`, then converted to sRGB. `colorAt` tags them by the bitmap's `colorSpaceName`, which is calibrated (Generic) RGB for this capture, and converting that shifts saturated and dark colours by up to about 0.2.
 
 #### `LiveCore.swift`
 
@@ -70,6 +70,12 @@ Purpose: A `PaneContainerView` over a [`LiveCore`](#livecoreswift), hosted offsc
 - `hostContainer(tabpage:)` — a second container over another tabpage, in its own offscreen window. Wake it only while its tabpage is current, as the app wakes only its current view.
 
 **Decisions** — the mark is a highlight group of its own, not `Normal`, because core pushes Neovim's default colours into every session, so a `Normal` mark would also match a terminal view.
+
+#### `OffscreenRendererTests.swift`
+
+**Covers** — [`OffscreenRenderer`](#offscreenrendererswift) reading a plain view's sRGB crimson, pure blue and dark grey stripes back within 0.01 at every pixel sampled inside each stripe. No core and no Neovim.
+
+**Gotchas** — compare in sRGB, through `colorDistance` or after `usingColorSpace(.sRGB)`. A raw component read of `colorAt`'s calibrated-tagged sample shows the stored bytes, so it would hide the misread this test exists to catch.
 
 #### `TerminalDrawerTests.swift`
 

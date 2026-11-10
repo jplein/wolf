@@ -8,7 +8,7 @@ Four of these port a seam in [`WolfKeyMap`](../../../wolf-macos/Sources/WolfKeyM
 
 #### `canvas.rs`
 
-Purpose: `TerminalCanvas`, one terminal pane's backing surface: its session's painted cells, repainted row by row as the frame's damage asks, and blitted with the cursor over it on every draw. Display-free Cairo and Pango, like [`render.rs`](../README.md#renderrs); the counterpart of macOS's [`TerminalPaneView`](../../../wolf-macos/Sources/WolfMacOS/README.md#terminalpaneviewswift).
+Purpose: `TerminalCanvas`, one terminal pane's backing surface: its session's painted cells, repainted row by row as the frame's damage asks, and blitted with the cursor over it on every draw. Display-free Cairo and Pango, like [`render.rs`](../README.md#renderrs); the counterpart of macOS's [`TerminalPaneView`](../../../wolf-macos/Sources/WolfMacOS/Terminal/README.md#terminalpaneviewswift).
 
 **Public API**
 
@@ -24,7 +24,7 @@ Purpose: `TerminalCanvas`, one terminal pane's backing surface: its session's pa
 
 #### `damage.rs`
 
-Purpose: which rows of a frame the canvas repaints. Pure; the port of [`TerminalDamage`](../../../wolf-macos/Sources/WolfKeyMap/README.md#terminaldamageswift).
+Purpose: which rows of a frame the canvas repaints. Pure; the port of [`TerminalDamage`](../../../wolf-macos/Sources/WolfKeyMap/Terminal/README.md#terminaldamageswift).
 
 **Public API**
 
@@ -38,7 +38,7 @@ Purpose: which rows of a frame the canvas repaints. Pure; the port of [`Terminal
 
 #### `geometry.rs`
 
-Purpose: sizes a session from its pane, and maps a pointer into the cell pixels core expects. Pure; the port of [`TerminalGeometry`](../../../wolf-macos/Sources/WolfKeyMap/README.md#terminalgeometryswift).
+Purpose: sizes a session from its pane, and maps a pointer into the cell pixels core expects. Pure; the port of [`TerminalGeometry`](../../../wolf-macos/Sources/WolfKeyMap/Terminal/README.md#terminalgeometryswift).
 
 **Public API**
 
@@ -54,7 +54,7 @@ Purpose: sizes a session from its pane, and maps a pointer into the cell pixels 
 
 #### `input.rs`
 
-Purpose: where a terminal pane's committed text, focus changes and pointer events go. GDK value types in, `wolf-core` values out; the port of [`TerminalInputSeam`](../../../wolf-macos/Sources/WolfKeyMap/README.md#terminalinputseamswift), less its key routing.
+Purpose: where a terminal pane's committed text, focus changes and pointer events go. GDK value types in, `wolf-core` values out; the port of [`TerminalInputSeam`](../../../wolf-macos/Sources/WolfKeyMap/Terminal/README.md#terminalinputseamswift), less its key routing.
 
 **Public API**
 
@@ -71,7 +71,7 @@ Purpose: where a terminal pane's committed text, focus changes and pointer event
 
 #### `style.rs`
 
-Purpose: how one cell paints: its colours after inverse, selection and faint, whether it draws a glyph, and the style the glyph painter takes; also the cursor's colours and span. Pure; the port of [`TerminalCellStyle`](../../../wolf-macos/Sources/WolfKeyMap/README.md#terminalcellstyleswift).
+Purpose: how one cell paints: its colours after inverse, selection and faint, whether it draws a glyph, and the style the glyph painter takes; also the cursor's colours and span. Pure; the port of [`TerminalCellStyle`](../../../wolf-macos/Sources/WolfKeyMap/Terminal/README.md#terminalcellstyleswift).
 
 **Public API**
 
