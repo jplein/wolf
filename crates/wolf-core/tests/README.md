@@ -11,7 +11,7 @@ bazel test //crates/wolf-core:file_search   # one target, on the macOS Bazel hos
 
 Cargo discovers every `tests/*.rs`. **Bazel does not.** A new file needs a matching `rust_test` target in [`../BUILD.bazel`](../BUILD.bazel) or it runs under `cargo test` alone, which makes it a silent macOS-only gap. Mirror an existing sibling of the same kind:
 
-- **Real-nvim** — stages `//bazel/nvim:nvim_tree` and `//runtime/nvim:init.lua` as `data`, wires the `WOLF_*` env vars via `$(rootpath)`, and carries `tags = ["no-sandbox"]`, because spawning a child process does not work under the macOS build sandbox. Results are still cached.
+- **Real-nvim** — lists `tests/common/mod.rs` in `srcs` and `//crates/wolf-test-support:wolf_test_support` in `deps`, stages `//bazel/nvim:nvim_tree` and `//runtime/nvim:init.lua` as `data`, wires the `WOLF_*` env vars via `$(rootpath)`, and carries `tags = ["no-sandbox"]`, because spawning a child process does not work under the macOS build sandbox. Results are still cached.
 - **Headless** — needs none of that: no `data`, no env, no tag.
 
 Each entry below says which kind it is. Under Cargo, a real-nvim test needs `WOLF_NVIM_BIN`, which the flake devShell exports.
@@ -20,31 +20,24 @@ Each entry below says which kind it is. Under Cargo, a real-nvim test needs `WOL
 
 Not a test — the shared harness compiled into every real-nvim target in this directory (each such target lists it in `srcs`). Headless targets do not include it.
 
-It offers:
+It re-exports the helpers the three crates' tests share from [`wolf-test-support`](../../wolf-test-support/README.md), whose [`src/README.md`](../../wolf-test-support/src/README.md) owns their rules: the nvim, `init.lua` and runfile resolution, including why a relative `WOLF_NVIM_BIN` is not trusted; the temp cwd and the hermetic `WOLF_STATE_DIR`; `config` and `config_in`; `FlushWaiter` and its waits; `start_core_sized`; and the terminal-session helpers. `require_nvim_bin()` is the one used here, since these test bodies handle no skip.
 
-- `require_nvim_bin()` and `init_lua_path()` resolve the pinned nvim and the captive `init.lua` to absolute paths, preferring an existing absolute `WOLF_NVIM_BIN` over the Bazel-staged `WOLF_TEST_NVIM_DIR`.
-- `config(cols, rows)` / `config_in(cwd, cols, rows)` build a `CoreConfig`. `config_in` is the single funnel that points `WOLF_STATE_DIR` at the process-global hermetic temp dir `hermetic_state_dir()` returns, set-if-absent, so a test managing its own state dir wins.
-- `wake_channel() -> (WakeFn, FlushWaiter)`, with `wait_for_flush`, `wait_for_initial_flush`, `wait_for_wake` and `drain`.
+Its own helpers:
+
 - `poll_until(waiter, desc, observe, done) -> T` re-runs `observe` every `POLL_INTERVAL`, draining `waiter`, until `done` accepts what it returned, and returns that value. It panics with `desc` and the last value after `FLUSH_TIMEOUT`.
-- `start_core_sized`, `temp_md`, `temp_md_path`, `fresh_cwd`, and the input constructors.
+- `temp_md`, `temp_md_path`, `start_core_at`, `start_core_recording`, and the input constructors.
 - `start_core_with_disk_conflict()` returns a core whose current `note.txt` holds an unsaved edit while its file on disk changed under a future mtime, so Neovim's next check finds both sides changed with no sleep. It raises `updatetime` so `CursorHold`'s `:checktime` cannot find the conflict first, and calls no `block_on_rpc` method, for `nvim_liveness.rs`.
-- `start_core_with_temp_md[_sized]` opens a temp `.md` and returns once it is current and drawn: `current_file` is the file, a frame has landed after the startup barrier, and row 0 shows text when the fixture's first line has text. It panics naming the file after `FLUSH_TIMEOUT`.
+- `start_core_with_temp_md[_sized]` opens a temp `.md` and returns once `FlushWaiter::wait_for_open` sees it current and drawn. It panics naming the file after `FLUSH_TIMEOUT`.
 - `short_tempdir()` returns an owned, canonical temp dir under the first of the OS temp dir and `/tmp` that is writable and at most `SHORT_TEMP_ROOT_MAX` bytes canonical. A swap-bearing fixture placed in it must keep its name within `SHORT_FIXTURE_NAME_MAX`; `SWAP_NAME_MAX` mirrors init.lua's constant.
-- Terminal sessions: `sh_script`, `interactive_sh` and `cat_command` build the `/bin/sh` commands tests run, never `$SHELL`. `cat_command(prelude)` prints `prelude`, makes its tty raw without echo, prints `CAT_READY` and becomes `cat -v`, so `cat_output` shows each byte the session was sent. `open_session`, `open_cat`, `poll_frame`, `wait_for_text`, `run_line`, `term_key` and `term_ctrl` drive a session; `win_terminal` and `terminal_windows` read the bindings in `win_buffers`; `wait_for_pid`, `pid_alive` and `wait_for_pid_gone` follow a shell's process. `recording_wake_channel` also returns a `WakeLog` of every wake's instant.
-- `pin_default_shell()` sets `SHELL=/bin/sh` once per process, for a test that opens a default-shell session: the drawer, a typed `:terminal` or a terminal leaf.
-- `send_ex` types `:{cmd}<CR>` as keystrokes; `probe_values` evaluates expressions inside the live nvim by having it `writefile` them to a probe path and polling that file — the eval channel for a core that exposes no eval RPC. `resolve_test_runfile` resolves extra Bazel-staged runfiles beyond nvim + init.lua.
+- Terminal extras over the shared session helpers: `interactive_sh` and `cat_command` build `/bin/sh` commands. `cat_command(prelude)` prints `prelude`, makes its tty raw without echo, prints `CAT_READY` and becomes `cat -v`, so `cat_output` shows each byte the session was sent. `open_cat`, `run_line`, `term_key`, `term_ctrl` and `settle_for` drive a session; `win_terminal`, `terminal_windows`, `active_window` and `grid_of_win` read the bindings in `win_buffers`; `wait_for_pid`, `pid_alive` and `wait_for_pid_gone` follow a shell's process.
+- `send_ex` types `:{cmd}<CR>` as keystrokes; `probe_values` evaluates expressions inside the live nvim by having it `writefile` them to a probe path and polling that file — the eval channel for a core that exposes no eval RPC.
 
 **Gotchas**
 
-- Use `wait_for_initial_flush` for the attach wait. That flush lands during `WolfCore::start`, so `wait_for_flush` baselines after it and blocks forever.
-- The relative `WOLF_NVIM_BIN` Bazel injects is deliberately not trusted: nvim is spawned with `current_dir(cfg.cwd)`, a temp dir, so the path must be absolutized first. Likewise `init.lua`, since under Bazel `CARGO_MANIFEST_DIR` is an ephemeral sandbox path and nvim launched with `-u <missing>` hangs forever on a `Press ENTER` prompt.
-- Out-of-band notifications (`wolf_current_file`, liveness) fire a wake without bumping `seq`. The flush waits consume and ignore them; `wait_for_wake` is the way to observe that seam.
-- The open helper takes its `seq` baseline after a blocking `current_tabpage()`, because nvim flushes what it has drawn before it answers. Neither `seq` nor `current_file` alone proves the open drew: nvim's markdown ftplugin starts treesitter, whose asynchronous parse can redraw later and push `seq` past the baseline before the `:edit`, and `current_file` is notified during `:edit`, before its frame. The startup buffer's row 0 is blank, so row 0 showing text tells the open's frame apart. A blank first line gets no text check, because an empty file draws exactly like the startup buffer.
-- The open helper fences off no later frame, and that late redraw can satisfy any later single `wait_for_flush`. So a state a test's own input produces, or one that arrives out of band (`wolf_buffers`, `wolf_current_file`, `wolf_markdown_cursor`, `wolf_theme`, `wolf_cwd`) or across several flushes, is read with `poll_until`, never once after one `wait_for_flush`. `observe` returns owned values, because a snapshot guard held across a blocking core call, the drain or the sleep stalls the redraw handler and the input pump.
-- `fresh_cwd()` leaks its directory by design: `config` returns only a `CoreConfig`, so there is no guard to keep a `TempDir` alive under a running core.
+- The open helper takes its `seq` baseline after a blocking `current_tabpage()`, because nvim flushes what it has drawn before it answers. A fixture with a blank first line gets no row-0 text check, because an empty file draws exactly like the startup buffer.
+- The open helper fences off no later frame, and a late treesitter redraw can satisfy any later single `wait_for_flush`. So a state a test's own input produces, or one that arrives out of band (`wolf_buffers`, `wolf_current_file`, `wolf_markdown_cursor`, `wolf_theme`, `wolf_cwd`) or across several flushes, is read with `poll_until`, never once after one `wait_for_flush`. `observe` returns owned values, because a snapshot guard held across a blocking core call, the drain or the sleep stalls the redraw handler and the input pump.
 - A fixture that needs a swap file must sit under `short_tempdir()`. Under a deep `TMPDIR` its path passes `SWAP_NAME_MAX`, where Wolf gives it no swap ([runtime/nvim](../../../runtime/nvim/README.md#decisions)). It panics, listing each refused root, rather than skipping.
 - `SHORT_TEMP_ROOT_MAX` is deliberately derived from `SWAP_NAME_MAX`, not a small fixed cap. A sandboxed Bazel worker can deny `/tmp` while its deep `TEST_TMPDIR` still leaves room, so a small cap would refuse both roots and always panic.
-- `require_nvim_bin()` panics rather than skipping, unlike the wolf-ffi twin, because the test bodies here do not handle a skip return.
 
 ## Files
 
@@ -564,7 +557,7 @@ Spawns a real Neovim **and** a real pinned `rg`: its target stages `//bazel/rg:r
 
 **Covers** — `start_search` streaming into a `SearchSession`, the `all_files` / `use_regex` / `case_sensitive` toggles, `match_ranges` and `column` on a multi-submatch line, the `open_at(path, line, col)` round-trip, and the `.git/` / `.wolf/` exclusion in both glob modes while `.github/` is still searched.
 
-**Gotchas** — Without a resolvable `WOLF_RG_BIN` the local `rg_bin_or_skip` turns every case into a no-op pass, so green does not by itself prove rg ran. Matches accumulate in rg emission order, so ordering assertions must go through `project`.
+**Gotchas** — Without a resolvable `WOLF_RG_BIN` the shared `rg_bin_or_skip` turns every case into a no-op pass, so green does not by itself prove rg ran. Matches accumulate in rg emission order, so ordering assertions must go through `project`.
 
 #### `search_no_rg.rs`
 

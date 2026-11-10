@@ -93,7 +93,6 @@ This is the single largest cleanup available and it is almost entirely deletion.
 - **`STATIC_COMMAND_COUNT` is a hand-maintained mirror.** `STATIC_COMMAND_COUNT` in `crates/wolf-core/tests/palette_rank.rs` hardcodes `27`, which matches `COMMAND_SPECS.len() - 1` (28 specs, one excluded) — so this is a latent hazard, not a live failure. Adding a command breaks two assertions until someone bumps it. Deriving it from `COMMAND_SPECS.len() - 1` removes the trap.
 - **Sidebar search toggles may be seeded inconsistently.** Reported: `WolfWindowController.showSidebar(panel: .search)` focuses the field but never calls `seedToggles()`, which only the header magnifier action does. Worth confirming the intent.
 - **`DividerDragSeam` takes `leadingOverhead` and `trailingOverhead` separately**, but `PaneContainerView.mouseDragged` passes the same value to both. Reported. If the asymmetry is deliberate, it needs a comment; otherwise it reads as dead generality a future refactor would collapse.
-- **`nvim_bin_or_skip()` in `crates/wolf-ffi/tests/common/mod.rs` hardcodes its skip banner** to `SKIP: wolf-ffi bridge_smoke`. Verified. Roughly thirty real-nvim tests share the helper, so every one of them prints the wrong test name when it skips, which makes a skipped suite hard to read.
 - **`crates/wolf-gnome/testdata/fonts.conf` is a template, not a usable config.** Reported: `flake.nix` substitutes `@DEJAVU_FONTS@` and points `FONTCONFIG_FILE` at a temporary copy, so editing the committed file has no effect until the next `nix develop`.
 
 ## 7. Verification still owed

@@ -1,6 +1,6 @@
 # `gates.sh`
 
-Last verified at commit `3b8f9822b005c2fe25a35c7ac10f92e87def79ee`.
+Last verified at commit `8f5cdbfe0630e09ab44713a3e970a81808f2746f`.
 
 ## Dev shell entry
 
@@ -34,13 +34,13 @@ Prettier's scope, on both platforms, is `**/*.md` minus `.prettierignore`. The g
 
 doc-lint is a Cargo workspace of its own, so `--workspace` never reaches it and its gates name its manifest.
 
-`wolf-core-deps` feeds the checker crate names only: `{p}` prints a path dependency with its checkout path, which `cut` drops so that no pattern can match the worker's directory. `--target all` is there because the one breach this rule has met, notify 8.2.1's `objc2-core-*` crates, is a macOS-only dependency that the Linux host-target tree never lists, at the cost of a cold registry also fetching the Windows and wasm crates in the lock. The checker's own test, which compiles nothing, runs as `wolf-core-deps-check-test` beside the Markdown checker's test, and on macOS under `lint`.
+`wolf-core-deps` lists the graphs of `wolf-core` and [`wolf-test-support`](../crates/wolf-test-support/README.md) and feeds the checker crate names only: `{p}` prints a path dependency with its checkout path, which `cut` drops so that no pattern can match the worker's directory. `--target all` is there because the one breach this rule has met, notify 8.2.1's `objc2-core-*` crates, is a macOS-only dependency that the Linux host-target tree never lists, at the cost of a cold registry also fetching the Windows and wasm crates in the lock. The checker's own test, which compiles nothing, runs as `wolf-core-deps-check-test` beside the Markdown checker's test, and on macOS under `lint`.
 
 `wolf-gnome-wording` runs [the wording check](../tools/lint/README.md#what-wolf_gnome_wording-checks) over the checkout, and `wolf-gnome-wording-check-test` runs its test. On macOS both are members of `//tools/lint:check`, so they run under `lint`.
 
-`rustdoc-links` denies `rustdoc::broken_intra_doc_links` alone, so an unresolved or ambiguous link fails. `private_intra_doc_links`, a public doc linking a private item, stays a warning: wolf-core and wolf-gnome carry over a hundred each. `env` scopes `RUSTDOCFLAGS` to this one step, since exported for the run it would also reach the rustdoc invocations of `cargo test`'s doctests. `--no-deps` documents only the three workspace crates, whose links are the only ones this repository can fix.
+`rustdoc-links` denies `rustdoc::broken_intra_doc_links` alone, so an unresolved or ambiguous link fails. `private_intra_doc_links`, a public doc linking a private item, stays a warning: wolf-core and wolf-gnome carry over a hundred each. `env` scopes `RUSTDOCFLAGS` to this one step, since exported for the run it would also reach the rustdoc invocations of `cargo test`'s doctests. `--no-deps` documents only the workspace's own crates, whose links are the only ones this repository can fix.
 
-The gate is Linux only because only Cargo builds wolf-gnome, the macOS dev shell has no `cargo`, and no Bazel target runs rustdoc. It compiles nothing after `clippy`: on a warm `target/` it takes about a second, and documenting all three crates into an empty `target/doc` took 1.5 seconds. A cold `target/` was not measured.
+The gate is Linux only because only Cargo builds wolf-gnome, the macOS dev shell has no `cargo`, and no Bazel target runs rustdoc. It compiles nothing after `clippy`: on a warm `target/` it takes about a second, and documenting the workspace into an empty `target/doc` took 1.5 seconds. A cold `target/` was not measured.
 
 `./tools/wolf-package-smoke.sh` stays out of the gate. Its package is input-addressed over everything under `crates/`, so after any source edit it is a cold release compile with no `target/` reuse, on top of the gate's own build. It runs on its own, as [build.md](../build.md#the-nix-package) describes.
 
@@ -50,7 +50,7 @@ The gate is Linux only because only Cargo builds wolf-gnome, the macOS dev shell
 
 `lint` runs `//tools/lint:check` alone, so a lint failure is named as one, and `build` separates a compile failure from a test failure; `test` reuses both. `WolfRelease` and `InstallWolf` stay out: both are `manual`, and the first rebuilds the whole graph at `-c opt`.
 
-`wolf-core-deps` queries `kind(rule, deps(//crates/wolf-core:wolf_core))`, and the `kind(rule, …)` wrapper is load-bearing. A bare `deps()` also returns every source file in the graph, and `libc` vendors its bindings under `src/new/glibc/…`, whose paths match the `glib` pattern, so the gate would fail on every run. crate_universe resolves only the darwin triples in `MODULE.bazel`, so this gate covers the macOS graph alone, and Linux's `--target all` covers every target.
+`wolf-core-deps` queries `kind(rule, deps(//crates/wolf-core:wolf_core) + deps(//crates/wolf-test-support:wolf_test_support))`, and the `kind(rule, …)` wrapper is load-bearing. A bare `deps()` also returns every source file in the graph, and `libc` vendors its bindings under `src/new/glibc/…`, whose paths match the `glib` pattern, so the gate would fail on every run. crate_universe resolves only the darwin triples in `MODULE.bazel`, so this gate covers the macOS graph alone, and Linux's `--target all` covers every target.
 
 `deps()` also follows rules_rust's exec and toolchain edges, so the listing holds rules_rust's own `@@rules_rust++i2+rrc__…` crates and `@rules_rust//…` labels beside core's crates. A match on one of those calls for narrowing the query, not editing the forbidden list. `--notool_deps` is not that narrowing for free: it also drops core's proc-macro and build-script crates, such as `serde_derive` and `cc`, which the Linux `cargo tree` lists.
 

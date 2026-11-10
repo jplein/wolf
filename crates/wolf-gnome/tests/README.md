@@ -224,20 +224,11 @@ Rules that are decidable from their arguments are pinned in each seam's own `#[c
 
 **Covers**
 
-- Shared helpers for this crate's integration tests: `require_nvim_bin`, `init_lua_path`, `unique_temp_dir`, `fresh_cwd`, `config`/`config_in`, and `wake_channel` returning a `WakeFn` paired with a `FlushWaiter` (`wait_for_flush`, `drain`).
-- Terminal-session helpers: `start_core`, `sh_script`, `open_session`, `frame_of`, `frame_text`, and `poll_frame` with its `wait_for_text` form, which fail with the frame's text rather than hang.
-- `config_in` is the state-dir funnel: once per test binary, and only if the variable is unset, it points `WOLF_STATE_DIR` at a throwaway `wolf-gnome-test-state-*` temp dir. Otherwise every real-nvim test would source the user's own `~/.local/state/wolf/runtime_user/init_user.lua` and write swap and MRU files beside it. [`state_isolation.rs`](#state_isolationrs) is the guard.
-
-**Decisions**
-
-- Temp dirs are made with `std`, not `tempfile`, for the lock-file reason [`release_profile.rs`](#release_profilers) records.
-- The `WOLF_STATE_DIR` write runs inside a `OnceLock`'s `get_or_init`, because `setenv` races `getenv` on libtest's parallel test threads and `get_or_init` holds them until the write is done.
+- Re-exports, for this crate's integration tests, the helpers the three crates' tests share from [`wolf-test-support`](../../wolf-test-support/README.md), whose [`src/README.md`](../../wolf-test-support/src/README.md) owns their rules: `require_nvim_bin`, `unique_temp_dir`, `config`/`config_in`, `FlushWaiter` and `wake_channel`, `start_core_sized`, the terminal-session helpers, and the grid and timeout constants. It defines nothing of its own.
 
 **Gotchas**
 
-- These duplicate `wolf-core`'s equivalents because Cargo cannot share a `tests/common` module across crates; they are kept in sync by hand.
-- Nothing `unique_temp_dir` creates is auto-deleted: a `fresh_cwd` dir is nvim's working dir and file-search root, so it must outlive the session, and the state dir must not vanish under a running core.
-- Build every `CoreConfig` through `config` or `config_in`, since a hand-built literal skips the funnel. A test that sets its own `WOLF_STATE_DIR` first keeps it; one that removes it must be alone in its binary, because nothing sets it again for its neighbours.
+- `config_in` is the state-dir funnel, so build every `CoreConfig` through `config` or `config_in`. [`state_isolation.rs`](#state_isolationrs) is the guard.
 
 #### `../testdata/fonts.conf`
 

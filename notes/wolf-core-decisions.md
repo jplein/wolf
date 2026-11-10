@@ -10,6 +10,8 @@ The durable constraints behind this crate. Read this before changing anything he
 
 This is what lets one core serve both front-ends, and it is checked, not assumed. The `wolf-core-deps` gate of [`gates.sh`](../gates.sh) lists core's dependency graph on each platform, and fails on any entry that matches a pattern in [`tools/lint/wolf_core_forbidden_deps.txt`](../tools/lint/wolf_core_forbidden_deps.txt). How and why each platform lists the graph is in the gates notes, for [Linux](gates.sh.md#linux-gates) and [macOS](gates.sh.md#macos-gates).
 
+The gate lists the graph of [`wolf-test-support`](../crates/wolf-test-support/README.md) too, though core does not depend on it. Every wolf-core and wolf-ffi Bazel test links it, so a GUI crate in its graph would enter the Bazel graph, which the GTK stack is kept out of.
+
 The gate does not repin. After any dependency or feature change, repin `crate_universe`, because a feature change moves the Bazel lockfile even when no crate node is added.
 
 `wolf-gnome` is given no Bazel target at all, which is how the GTK stack stays out of the Bazel graph.

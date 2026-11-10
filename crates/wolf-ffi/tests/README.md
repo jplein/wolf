@@ -11,26 +11,22 @@ bazel test //crates/wolf-ffi:bridge_smoke  # one target, on the macOS Bazel host
 
 Cargo discovers every `tests/*.rs`. **Bazel does not.** A new file needs a matching `rust_test` target in [`../BUILD.bazel`](../BUILD.bazel) or it runs under `cargo test` alone, which makes it a silent macOS-only gap. Mirror an existing sibling of the same kind:
 
-- **Real-nvim** — stages `//bazel/nvim:nvim_tree` and `//runtime/nvim:init.lua` as `data`, wires `WOLF_TEST_NVIM_DIR` / `WOLF_TEST_INIT_LUA` via `$(rootpath)`, lists `tests/common/mod.rs` in `srcs`, and carries `tags = ["no-sandbox"]` because spawning a child nvim does not work under the macOS build sandbox. Results are still cached.
+- **Real-nvim** — stages `//bazel/nvim:nvim_tree` and `//runtime/nvim:init.lua` as `data`, wires `WOLF_TEST_NVIM_DIR` / `WOLF_TEST_INIT_LUA` via `$(rootpath)`, lists `tests/common/mod.rs` in `srcs` and `//crates/wolf-test-support:wolf_test_support` in `deps`, and carries `tags = ["no-sandbox"]` because spawning a child nvim does not work under the macOS build sandbox. Results are still cached.
 - **Headless** — none of that: no `data`, no env, no tag, no `common/`.
 
 Some targets stage more: `search` adds `//bazel/rg:rg_tree` and wires `WOLF_RG_BIN`; `orlando_load` and `lighthouse_load` add their vendored plugin trees; the `treesitter_*` targets add the parser and `nvim-treesitter` trees. Each entry below says which kind it is and what it needs.
 
 ## The shared harness — `common/mod.rs`
 
-The shared harness for every `wolf-ffi` bridge test. It mirrors `crates/wolf-core/tests/common/mod.rs` with one deliberate policy difference: where the wolf-core suite panics without a real nvim, these tests skip loudly, so a host that cannot provision the pinned Neovim is a no-op pass rather than a failure.
+The shared harness for every real-nvim `wolf-ffi` bridge test. It re-exports the helpers the three crates' tests share from [`wolf-test-support`](../../wolf-test-support/README.md), whose [`src/README.md`](../../wolf-test-support/src/README.md) owns their rules: `nvim_bin_or_skip()`, `rg_bin_or_skip()`, `init_lua_path()`, `fresh_cwd()`, `pin_default_shell()`, `DEFAULT_COLS` and `DEFAULT_ROWS`.
 
-- `nvim_bin_or_skip()` — the skip gate. An explicit `WOLF_NVIM_BIN` wins, then the staged pinned tree via `WOLF_TEST_NVIM_DIR`. A caller that gets `None` must return from the test; panicking or asserting success instead defeats the policy, and the stderr banner is what keeps a misconfigured environment from reading as real coverage.
-- Publishing the resolved path back into `WOLF_NVIM_BIN` is part of that helper's contract, not a side effect to tidy away: under Bazel the binary comes from the staged tree while `wolf_ffi_start` reads only that variable, so without the publish the whole Bazel path launches nothing. The write is conditional, so the devShell path performs none at all, and it happens once per test binary behind a `OnceLock` that every reader is ordered after — `setenv` is not synchronised against a C-side `getenv`, and `cargo test` runs a binary's tests in parallel.
-- Because the helper publishes, a test body needs no `std::env::set_var("WOLF_NVIM_BIN", …)` of its own — do not copy one from a sibling. Most real-nvim binaries here still carry that redundant write at the top of each test body, which the helper makes a no-op and which races its neighbours' environment reads in any binary holding more than one test. Removing them is pure plumbing that touches no assertion, and nobody has done it.
-- `nvim_bin_or_skip()` is also the state-dir funnel. It first points `WOLF_STATE_DIR` at a throwaway `wolf-ffi-test-state-*` dir, once per binary and only if unset, because otherwise `state_dir()` is the user's real Wolf state dir under both Bazel and cargo, and every test would source their `init_user.lua` and write swap and MRU files there. A test that sets its own `WOLF_STATE_DIR` afterwards wins; one that removes it must be alone in its binary, since nothing sets it again for its neighbours. [`state_isolation.rs`](#state_isolationrs) is the guard.
-- `init_lua_path()` — resolves the captive `runtime/nvim/init.lua`, preferring the staged runfile over the `CARGO_MANIFEST_DIR` fallback. Under Bazel that manifest path is an ephemeral sandbox directory absent at test runtime, and nvim launched with a missing `-u` file blocks forever on its `Press ENTER` prompt, hanging startup.
+Where the wolf-core suite panics without a real nvim, these tests skip loudly through `nvim_bin_or_skip()`, so a host that cannot provision the pinned Neovim is a no-op pass rather than a failure. That helper is also the state-dir funnel, so every test calls it before `wolf_ffi_start`; [`state_isolation.rs`](#state_isolationrs) is the guard.
+
+- Because the helper publishes `WOLF_NVIM_BIN`, a test body needs no `std::env::set_var("WOLF_NVIM_BIN", …)` of its own — do not copy one from a sibling. Most real-nvim binaries here still carry that redundant write at the top of each test body, which the helper makes a no-op and which races its neighbours' environment reads in any binary holding more than one test. Removing them is pure plumbing that touches no assertion, and nobody has done it.
 - `orlando_dir_or_none()`, `lighthouse_dir_or_none()`, `parsers_dir_or_none()`, `nvim_treesitter_dir_or_none()` — staged vendored-tree resolvers, each over its own `WOLF_TEST_*_DIR`. Bazel wires all four from runfiles; the Linux devShell exports the orlando and lighthouse ones from the same derivations the Nix package installs, and the two treesitter resolvers fall back to its `WOLF_PARSERS_DIR` and `WOLF_NVIM_TREESITTER_DIR`. So every tree resolves on both platforms, and only a `cargo test` run outside the shell reaches the `None` arm, which returns the dependent test as a loud skip rather than a failure.
 - The treesitter resolvers' `WOLF_TEST_*`-first order is load-bearing, as their doc comments explain, and untested: each host sets only one of the two variables, so no run reaches both arms. That gap is accepted rather than closed.
 - Deleting either `shellHook` export reddens nothing in this suite — three tests would skip and pass — so `crates/wolf-gnome/tests/smoke_headless.rs` carries a guard asserting both lines are still in `flake.nix`.
 - `copy_dir_recursive()` — stages a sibling tree next to a temp `init.lua` for the tests whose Lua self-locates its siblings. It classifies entries with `std::fs::metadata`, which follows symlinks, because Bazel runfiles entries are symlinks that `DirEntry::file_type` would skip.
-- `fresh_cwd()` — a unique temp dir that is deliberately not auto-deleted: it is nvim's working directory and file-search root, so it must outlive `wolf_ffi_start`.
-- `DEFAULT_COLS` / `DEFAULT_ROWS` — the starting grid size the smoke-style tests attach with.
 
 ## Files
 
@@ -364,7 +360,7 @@ Also `preview_buffer(win, bufnr)` — markdown binds and returns the source bufn
 
 **Covers** — the content-search bridge: `start_search(query, use_regex, case_sensitive, all_files) -> FfiSearch`, the `files(budget)` file and match rows with their truncation flags and highlight ranges, `ignorecase()`, and `open_at(path, line, col)`. Real nvim plus a real `rg` child; target `//crates/wolf-ffi:search`, which additionally stages `//bazel/rg:rg_tree` and wires `WOLF_RG_BIN`, and skips loudly when either binary is missing.
 
-**Gotchas** — the local `rg_bin_or_skip` re-exports `WOLF_RG_BIN` as an absolute path because Bazel injects it runfiles-relative, which the spawned `rg` could not resolve from a different cwd. The seeded `notes.txt` is there to prove the non-`all_files` filter drops it.
+**Gotchas** — The seeded `notes.txt` is there to prove the non-`all_files` filter drops it.
 
 #### `state.rs`
 
