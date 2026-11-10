@@ -269,6 +269,7 @@ swift_test(
         "Tests/WolfMacOSTests/LiveCore.swift",
         "Tests/WolfMacOSTests/OffscreenRenderer.swift",
         "Tests/WolfMacOSTests/TerminalDrawerTests.swift",
+        "Tests/WolfMacOSTests/TerminalNeighbourPaneTests.swift",
         "Tests/WolfMacOSTests/TerminalPaneFlowTests.swift",
         "Tests/WolfMacOSTests/TerminalPaneRenderTests.swift",
         "Tests/WolfMacOSTests/TerminalViewFixture.swift",

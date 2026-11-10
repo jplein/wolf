@@ -16,6 +16,22 @@ final class TerminalViewFixture {
   /// How long a wake, a publish, a split or a focus move gets to take effect.
   static let timeout: TimeInterval = 15
 
+  /// The background `markEditor()` gives the marked rows. No default colour core gives
+  /// Neovim or a session is near it.
+  static let mark = NSColor(srgbRed: 220.0 / 255, green: 20.0 / 255, blue: 60.0 / 255, alpha: 1)
+
+  /// The `:lua` line `markEditor()` types: 80 lines in the current buffer, each with a
+  /// `line_hl_group` extmark in `mark`, so every window showing the buffer paints `mark`
+  /// across its whole grid width. Not `Normal`, whose colours core pushes into every session
+  /// too. It holds no `|`, which would end the `:lua` command.
+  private static let markLine =
+    "lua local b=vim.api.nvim_get_current_buf()"
+    + " local ns=vim.api.nvim_create_namespace('wolf_test_mark')"
+    + " vim.api.nvim_set_hl(0,'WolfTestMark',{bg='#DC143C'})"
+    + " local l={} for i=1,80 do l[i]='' end vim.api.nvim_buf_set_lines(b,0,-1,false,l)"
+    + " for i=0,79 do vim.api.nvim_buf_set_extmark(b,ns,i,0,{line_hl_group='WolfTestMark'}) end"
+    + " vim.bo[b].modified=false"
+
   /// `FfiKeyEvent.kind` of a printable character.
   private static let kindChar: UInt8 = 0
   /// `FfiKeyEvent.kind` of the Return key.
@@ -54,12 +70,31 @@ final class TerminalViewFixture {
 
   /// The terminal views the container hosts.
   var terminalViews: [TerminalPaneView] {
-    container.subviews.compactMap { $0 as? TerminalPaneView }
+    terminalViews(in: container)
+  }
+
+  /// The terminal views `host` hosts.
+  func terminalViews(in host: PaneContainerView) -> [TerminalPaneView] {
+    host.subviews.compactMap { $0 as? TerminalPaneView }
   }
 
   /// The terminal view showing `session`, if one is hosted.
   func view(showing session: UInt64) -> TerminalPaneView? {
-    terminalViews.first { $0.session == session }
+    view(showing: session, in: container)
+  }
+
+  /// The terminal view of `host` showing `session`, if one is hosted.
+  func view(showing session: UInt64, in host: PaneContainerView) -> TerminalPaneView? {
+    terminalViews(in: host).first { $0.session == session }
+  }
+
+  /// A second container over `tabpage`, hosted in its own offscreen window at `windowSize`.
+  /// Wake it only while `tabpage` is current, as the app wakes only its current view.
+  func hostContainer(tabpage: Int64) -> (container: PaneContainerView, renderer: OffscreenRenderer)
+  {
+    let other = PaneContainerView(
+      handle: handle, metrics: live.metrics, tabpageHandle: tabpage, optionAsAlt: false)
+    return (other, OffscreenRenderer(hosting: other, size: Self.windowSize))
   }
 
   /// Whether `view` lies in the lower half of the container, where the drawer strip is:
@@ -88,11 +123,28 @@ final class TerminalViewFixture {
   /// it held.
   @discardableResult
   func wake(until condition: () -> Bool) -> Bool {
-    let container = self.container
-    return live.waitFor(timeout: Self.timeout) {
-      container.onRenderWake()
+    wake(container, until: condition)
+  }
+
+  /// Runs render wakes of `host` until `condition` holds or the timeout passes, and returns
+  /// whether it held.
+  @discardableResult
+  func wake(_ host: PaneContainerView, until condition: () -> Bool) -> Bool {
+    live.waitFor(timeout: Self.timeout) {
+      host.onRenderWake()
       return condition()
     }
+  }
+
+  /// How many pixels of `rect`, in `view`'s coordinates, `capture` drew within 0.05 of
+  /// `mark`.
+  func markedPixels(in rect: NSRect, of view: NSView, _ capture: RenderedView) -> Int {
+    capture.colors(in: rect, of: view).filter { colorDistance($0, Self.mark) <= 0.05 }.count
+  }
+
+  /// Four cells' area: a `markedPixels` count at or above it means marked rows paint there.
+  var markThreshold: Int {
+    Int(4 * live.metrics.cellWidth * live.metrics.cellHeight)
   }
 
   /// A key event: a printable character, or Return for `"\r"`.
@@ -128,6 +180,12 @@ final class TerminalViewFixture {
   func typeEx(_ command: String) {
     for char in ":" + command { handle.send_key(key(char)) }
     handle.send_key(key("\r"))
+  }
+
+  /// Marks Neovim's current buffer with `markLine`: every window showing it then paints rows
+  /// in `mark`.
+  func markEditor() {
+    typeEx(Self.markLine)
   }
 
   /// One more wake, then a capture.

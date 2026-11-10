@@ -11,7 +11,7 @@
 //!
 //! ## What this file contains
 //!
-//! **Sixty-four cage smokes** — one window-render smoke, two file-picker smokes,
+//! **Sixty-five cage smokes** — one window-render smoke, two file-picker smokes,
 //! one file-tree-sidebar smoke, five split-pane smokes, one empty-state smoke, one
 //! new-untitled-buffer smoke, one command-palette smoke, one OPEN RECENT smoke
 //! (Ctrl+Shift+P, a typed folder query, then Enter — the activated row re-roots the
@@ -139,7 +139,10 @@
 //! evidence is both markers back on screen with no key pressed and a typed line reaching
 //! the drawer's own shell), one TERMINAL-PANE FLOW smoke (`:vsplit` and a typed
 //! `:terminal`, then `<C-w>h`, `<C-w>l` and `<C-w>v` in and out of the terminal pane,
-//! whose evidence is which program answers each readback: a shell's pid or Neovim), two
+//! whose evidence is which program answers each readback: a shell's pid or Neovim), one
+//! NEIGHBOUR-PANE smoke (the drawer, a `:terminal` split and a `:terminal` split in a
+//! second tab, each open and then closed, whose evidence is the editor's own fill word
+//! OCR'd out of all eight captures, so a terminal painting over its neighbours shows), two
 //! SAVE smokes (Ctrl+Shift+S over a NAMED buffer, whose evidence is exact bytes on
 //! disk in a file the scenario never writes any other way; and the same chord over a
 //! NAMELESS one, which is the only route to the save dialog and types a name into
@@ -178,7 +181,7 @@
 //! [`two_windows_two_neovims_and_two_saved_sessions_under_cage`] for why a second
 //! overlapping process is not an alternative.
 //!
-//! Nine of them additionally run **`wolf-pointer-inject`** inside cage —
+//! Ten of them additionally run **`wolf-pointer-inject`** inside cage —
 //! this repo's own long-lived `zwlr_virtual_pointer_v1` client, see
 //! `tools/wolf-pointer-inject/README.md` — started BEFORE the app so the seat
 //! already carries `WL_SEAT_CAPABILITY_POINTER` when GTK does its first `wl_seat`
@@ -193,9 +196,10 @@
 //! assert on nothing else; the native-tabs one also OCRs three captures, and the
 //! division of labour there is explicit — the readbacks carry every discriminator
 //! and the captures carry the one claim they cannot make, that a single page's pane
-//! view is on screen at a time.
+//! view is on screen at a time. The tenth, the neighbour-pane smoke, clicks the tab
+//! bar only to switch tabs: its readbacks are preconditions and its OCR is the claim.
 //!
-//! Forty of the sixty-four OCR a screenshot of the live window, and four of
+//! Forty-one of the sixty-five OCR a screenshot of the live window, and four of
 //! those OCR a CROP of it rather than the whole file. The terminal-drawer and terminal
 //! restart smokes sample a band inside the drawer strip, below its statusbar, because that
 //! band is the region measured byte-identical across runs (see `drawer_band_rect`); the two
@@ -237,7 +241,7 @@
 //! readback and a `state.json` frozen mid-run — because in both cases the surface
 //! under test cannot be read any other way.
 //!
-//! Eight of the sixty-four read RAW PIXELS out of their own captures, which is the
+//! Eight of the sixty-five read RAW PIXELS out of their own captures, which is the
 //! only route this harness has to a claim OCR cannot make — it reads no colour, and
 //! it cannot answer "where on the page is this".
 //! [`preview_document_follows_the_configured_appearance_under_cage`] captures two
@@ -422,7 +426,7 @@
 //! builds real [`cage_command`]s but looks nothing up on `PATH`: it needs only a
 //! writable `temp_dir()`, where each command writes its bus configuration.
 //!
-//! So this target's summary line reads **`78 passed`**, not `64`: sixty-four cage
+//! So this target's summary line reads **`79 passed`**, not `65`: sixty-five cage
 //! smokes plus those fourteen guards.
 //!
 //! **Three `#[ignore]`d PACKAGED smokes** sit at the end of this file and are NOT in
@@ -451,7 +455,7 @@
 //!
 //! ## When it runs
 //!
-//! The sixty-four cage smokes run as part of the STANDARD suite — `cargo test -p
+//! The sixty-five cage smokes run as part of the STANDARD suite — `cargo test -p
 //! wolf-gnome` and `cargo test --workspace` — inside the flake devShell. They are
 //! the Linux verification gate's only end-to-end proof that the GTK front-end draws
 //! a window a human could see (see `build.md`, "The verification gate").
@@ -469,13 +473,13 @@
 //! nix develop --command cargo test -p wolf-gnome --test smoke_headless
 //! ```
 //!
-//! ## Requirements of the sixty-four cage smokes (from the devShell's smoke toolchain)
+//! ## Requirements of the sixty-five cage smokes (from the devShell's smoke toolchain)
 //!
 //! - `cage` (headless wlroots compositor), `dbus-run-session`, `wtype`, `grim`,
 //!   `tesseract` and `wolf-pointer-inject` on `PATH`. The last one is NOT an upstream package: it is
 //!   built from this repo's own `tools/wolf-pointer-inject/` by `flake.nix`, so
 //!   `command -v wolf-pointer-inject` succeeding can only mean the flake provided
-//!   it. Only the nine pointer-driven smokes use it, but it is required
+//!   it. Only the ten pointer-driven smokes use it, but it is required
 //!   unconditionally — see [`REQUIRED_TOOLS`].
 //! - No D-Bus configuration from the host or the store: [`smoke_bus_config`] writes
 //!   each cage's own into its runtime directory.
@@ -487,7 +491,7 @@
 //!   [`require_smoke_env`], which fails loud rather than letting that surface as an
 //!   empty result list.
 //!
-//! Per project policy every one of the sixty-four FAILS LOUD if any of the above is
+//! Per project policy every one of the sixty-five FAILS LOUD if any of the above is
 //! missing rather than silently skipping, mirroring `common::require_nvim_bin` — a
 //! missing precondition means the smoke toolchain was not provisioned, which is a
 //! setup bug we want surfaced, not hidden. Now that these tests run by default, that
@@ -2261,7 +2265,7 @@ const WEIGHT_SUM_EPS: f64 = 1e-9;
 /// put on the devShell `PATH`. The name is repo-namespaced precisely so that
 /// `command -v wolf-pointer-inject` succeeding can only mean the flake provided it —
 /// a bare `pointer-inject` could be shadowed by something on the host. It is
-/// required unconditionally, not just by the nine pointer-driven smokes: a devShell missing
+/// required unconditionally, not just by the ten pointer-driven smokes: a devShell missing
 /// it is an unprovisioned devShell, and the project policy is to fail loud rather
 /// than let the gate pass green while proving less than it claims.
 const REQUIRED_TOOLS: [&str; 6] = [
@@ -10484,7 +10488,7 @@ fn smoke_gtk_config_dirs(runtime: &Path) -> PathBuf {
 /// the OCR width and height note in notes/crates/wolf-gnome/tests/smoke_headless.rs.md#split-pane-smokes,
 /// because if two or three panes are ever too narrow or too short for 28 pt OCR the
 /// fix is per-test (widen the window, or lower the font for THAT test) and must not
-/// be applied here to all sixty-four.
+/// be applied here to all sixty-five.
 ///
 /// [`cage_is_only_spawned_through_the_isolating_helper`] enforces the "single place"
 /// property mechanically, because a smoke that spawned the compositor directly would
@@ -11972,7 +11976,7 @@ fn every_launch_waits_for_readiness_before_its_first_input() {
 /// Reading the const and comparing it to itself would hold for whatever value it
 /// took, including the one that inverts every OCR page in this file. Stating
 /// `dark` independently means a change to the shared pin fails HERE, loudly and in
-/// microseconds, rather than forty OCR assertions later.
+/// microseconds, rather than forty-one OCR assertions later.
 const EXPECT_SMOKE_APPEARANCE: &str = "dark";
 
 /// Enforces mechanically that the SHARED seeded `wolf-config.yaml` — the one
@@ -11984,7 +11988,7 @@ const EXPECT_SMOKE_APPEARANCE: &str = "dark";
 /// `crates/wolf-gnome/tests/README.md` records as the premise for sparse-text
 /// segmentation. That grid is the captive Neovim's default colorscheme responding
 /// to `&background`, and the front-end pushes `&background` from the configured
-/// `appearance`. So the seeded value sits upstream of all forty OCR
+/// `appearance`. So the seeded value sits upstream of all forty-one OCR
 /// assertions at once — and it is written in [`write_smoke_config`], thousands of
 /// lines from every assertion it can disarm. That distance is the same reason the
 /// three fixture-name guards exist.
@@ -12029,7 +12033,7 @@ fn the_shared_smoke_config_pins_the_appearance_every_ocr_smoke_assumes() {
         "{GUARD}: SMOKE_APPEARANCE is {SMOKE_APPEARANCE:?}, but every OCR smoke in this file is \
          calibrated on a light-on-dark grid and {EXPECT_SMOKE_APPEARANCE:?} is what produces one. \
          It is also what Neovim already defaults to under `--embed`, which is why pinning it moves \
-         no page at all. Re-pinning to \"light\" inverts all forty OCR pages simultaneously, \
+         no page at all. Re-pinning to \"light\" inverts all forty-one OCR pages simultaneously, \
          and no single one of their failures would name this const as the cause — which is exactly \
          why the expected value is re-typed here instead of read from the pin."
     );
@@ -12175,6 +12179,18 @@ fn run_pointer_scenario(
     out_png: &Path,
     extra_env: &[(&str, &OsStr)],
 ) -> ExitStatus {
+    let mut cmd = pointer_command(body, cwd, runtime, out_png);
+    for &(key, value) in extra_env {
+        cmd.env(key, value);
+    }
+    cmd.status()
+        .expect("failed to spawn `cage` for a headless pointer smoke scenario")
+}
+
+/// The `cage` command [`run_pointer_scenario`] runs — [`POINTER_PREAMBLE`] plus `body`,
+/// with the environment the preamble reads — for a smoke that must chain more onto it
+/// than an environment slice carries, such as [`pin_terminal_smoke_shell`].
+fn pointer_command(body: &str, cwd: &Path, runtime: &CageRuntime<'_>, out_png: &Path) -> Command {
     // Cargo sets this for integration tests of a crate that declares a `[[bin]]`.
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
     let mut cmd = cage_command(&pointer_scenario(body), cwd, runtime);
@@ -12187,11 +12203,7 @@ fn run_pointer_scenario(
         .env("PROBE_X", PROBE_X.to_string())
         .env("PROBE_Y", PROBE_Y.to_string())
         .env("BTN_LEFT", POINTER_BUTTON_LEFT);
-    for &(key, value) in extra_env {
-        cmd.env(key, value);
-    }
-    cmd.status()
-        .expect("failed to spawn `cage` for a headless pointer smoke scenario")
+    cmd
 }
 
 /// Asserts cage exited 0, spelling out the pointer scenarios' exit-code table and
@@ -12964,7 +12976,7 @@ fn assert_button_rect_fits(smoke: &str, rect: (f64, f64, f64, f64), overlay: (f6
 /// Files page is back, so that file has an exemption block too.
 /// [`PROJSEARCH_OCR_RESULT`] is content, the last word of the target's match line.
 ///
-/// Forty of the sixty-four smokes are covered here, the second project-search
+/// Forty-one of the sixty-five smokes are covered here, the second project-search
 /// smoke through the first's rows, since it asserts on the same terms. TWENTY-FOUR
 /// contribute no rows at all, on purpose, and it is worth being explicit about which
 /// and why:
@@ -13081,7 +13093,7 @@ fn assert_button_rect_fits(smoke: &str, rect: (f64, f64, f64, f64), overlay: (f6
 ///   rendered word cannot put a row in a file the application wrote, so no fixture
 ///   filename can reach either half.
 ///
-/// The other three pointer smokes DO OCR and their terms are listed below. For
+/// The other four pointer smokes DO OCR and their terms are listed below. For
 /// [`click_then_close_keeps_keyboard_input_alive_under_cage`] the OCR pair is
 /// corroboration (the close really happened, the survivor kept rendering, the app
 /// was still drawing at all) and the load-bearing assertions are its two `ALIVE*`
@@ -13091,6 +13103,8 @@ fn assert_button_rect_fits(smoke: &str, rect: (f64, f64, f64, f64), overlay: (f6
 /// [`native_tabs_open_switch_and_close_under_cage`] the split is explicit — its four
 /// Neovim readbacks carry every discriminator, and the OCR pair carries the one
 /// claim they cannot make, that exactly ONE page's pane view is on screen at a time.
+/// [`neovim_panes_stay_visible_beside_terminals_under_cage`] is the reverse: its
+/// readbacks are preconditions, and its OCR term is the whole claim.
 const ASSERTED_OCR_TERMS: &[(&str, &str, &str)] = &[
     (OCR_WORD, "OCR_WORD", "window_renders_typed_text_under_cage"),
     (
@@ -13486,6 +13500,11 @@ const ASSERTED_OCR_TERMS: &[(&str, &str, &str)] = &[
         TP_OCR_WORD,
         "TP_OCR_WORD",
         "typed_keys_reach_a_terminal_pane_shell_under_cage",
+    ),
+    (
+        NEAR_OCR_FILL,
+        "NEAR_OCR_FILL",
+        "neovim_panes_stay_visible_beside_terminals_under_cage",
     ),
 ];
 
@@ -14000,6 +14019,58 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
         "IMCHORD_AFTER_NAME",
         "a_control_chord_while_composing_is_claimed_by_the_input_method_under_cage",
     ),
+    // The neighbour-pane readbacks live under XDG_RUNTIME_DIR, but their paths are typed on screen
+    // before later captures, so they are checked like the fixture they sit beside.
+    (
+        NEAR_FIXTURE_FILE,
+        "NEAR_FIXTURE_FILE",
+        "neovim_panes_stay_visible_beside_terminals_under_cage",
+    ),
+    (
+        NEAR_G1_PID_NAME,
+        "NEAR_G1_PID_NAME",
+        "neovim_panes_stay_visible_beside_terminals_under_cage",
+    ),
+    (
+        NEAR_G2_NVIM_NAME,
+        "NEAR_G2_NVIM_NAME",
+        "neovim_panes_stay_visible_beside_terminals_under_cage",
+    ),
+    (
+        NEAR_G3_PID_NAME,
+        "NEAR_G3_PID_NAME",
+        "neovim_panes_stay_visible_beside_terminals_under_cage",
+    ),
+    (
+        NEAR_G4_NVIM_NAME,
+        "NEAR_G4_NVIM_NAME",
+        "neovim_panes_stay_visible_beside_terminals_under_cage",
+    ),
+    (
+        NEAR_G5_TAB_NAME,
+        "NEAR_G5_TAB_NAME",
+        "neovim_panes_stay_visible_beside_terminals_under_cage",
+    ),
+    (
+        NEAR_G5_PID_NAME,
+        "NEAR_G5_PID_NAME",
+        "neovim_panes_stay_visible_beside_terminals_under_cage",
+    ),
+    (
+        NEAR_G6_NVIM_NAME,
+        "NEAR_G6_NVIM_NAME",
+        "neovim_panes_stay_visible_beside_terminals_under_cage",
+    ),
+    (
+        NEAR_G7_PID_NAME,
+        "NEAR_G7_PID_NAME",
+        "neovim_panes_stay_visible_beside_terminals_under_cage",
+    ),
+    (
+        NEAR_G7_NVIM_NAME,
+        "NEAR_G7_NVIM_NAME",
+        "neovim_panes_stay_visible_beside_terminals_under_cage",
+    ),
 ];
 
 /// Mechanically enforces the naming invariant documented on [`SIDEBAR_FILLER_FILES`]:
@@ -14093,7 +14164,7 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
 ///
 /// This test is PURE: no compositor, no `require_smoke_env`, no cage slot, no
 /// subprocess. It reads two const tables and finishes in microseconds, so it adds
-/// nothing to the smoke suite's runtime and — unlike the sixty-four smokes — still
+/// nothing to the smoke suite's runtime and — unlike the sixty-five smokes — still
 /// guards the fixture on a machine where the smoke toolchain is unavailable.
 #[test]
 fn sidebar_filler_names_cannot_satisfy_any_smoke_assertion() {
@@ -14442,6 +14513,10 @@ fn temp_cwd_name_cannot_satisfy_any_smoke_assertion() {
 /// [`TABS_SUBDIR`] being a single component that is not [`TEMP_CWD_BASENAME`], which
 /// is what keeps a new tab rooted where the window was distinguishable from one left
 /// at the project root.
+///
+/// [`NEAR_FIXTURE_FILE`] carries [`near_fixture_body`], whose word the neighbour-pane
+/// smoke asserts PRESENT in every capture, so the block that checks it pins the line
+/// count and the word on every line: a row without it would read as an unpainted editor.
 ///
 /// All of them are checked here rather than from guards of their own, so the guard
 /// count this file's module docs pin does not move.
@@ -15493,6 +15568,39 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
          — that the drawer's shell wrote to a terminal this front-end painted — and a marker that \
          does not spell the term makes that assertion unfalsifiable."
     );
+
+    // The neighbour-pane body: the term on every line, so any editor row a leg shows can answer it,
+    // and no other smoke's term, which those captures would then satisfy or break.
+    let near_fixture = near_fixture_body();
+    let near_lines: Vec<&str> = near_fixture.lines().collect();
+    assert_eq!(
+        near_lines.len(),
+        NEAR_FIXTURE_LINE_COUNT,
+        "`near_fixture_body` produced {} line(s), expected NEAR_FIXTURE_LINE_COUNT = \
+         {NEAR_FIXTURE_LINE_COUNT}. Fewer lines than the editor has rows leave rows with no term, \
+         and a leg whose capture shows only those would read as an unpainted editor.",
+        near_lines.len()
+    );
+    for (index, line) in near_lines.iter().enumerate() {
+        assert!(
+            line.to_lowercase().contains(NEAR_OCR_FILL),
+            "line {index} of `near_fixture_body` ({line:?}) does not contain NEAR_OCR_FILL = \
+             {NEAR_OCR_FILL:?}. Every line must carry it: which rows a leg shows depends on the \
+             drawer, the split and the cursor, and the neighbour-pane smoke asserts the term in \
+             every capture."
+        );
+    }
+    for &(term, term_const, smoke) in ASSERTED_OCR_TERMS {
+        if term == NEAR_OCR_FILL {
+            continue;
+        }
+        assert!(
+            !near_fixture.to_lowercase().contains(term),
+            "`near_fixture_body` contains {term_const} = {term:?}. It is EDITOR text in every \
+             capture of the neighbour-pane smoke, so it would satisfy, or for a must-NOT-contain \
+             term spuriously break, `{smoke}`'s OCR assertion if that smoke ever drew it."
+        );
+    }
 
     // The two-window exemption: its fixtures are named after the compared strings, safe as it reads
     // no image. See notes/crates/wolf-gnome/tests/smoke_headless.rs.md#two-window-smoke-fixtures
@@ -29046,7 +29154,7 @@ fn divider_drag_survives_a_pane_relayout_under_cage() {
 /// | the `~` end-of-buffer column above a lone heading — a sparse region `--psm 11` scales the whole pane from | three ablations on one PNG, one at a time; blanking the `~` column alone fixed it | [`DIVIDER_BODY_LINE_COUNT`] body lines, which fill the pane past `winheight` so no marker is drawn |
 /// | a single misclassified GLYPH at 15 columns | the same pixels read through both segmentation modes, twice over | the second reader, [`ocr_uniform_block_to_lowercase`] |
 ///
-/// The second is why this smoke, alone of the sixty-four, reads its capture twice.
+/// The second is why this smoke, alone of the sixty-five, reads its capture twice.
 /// With the first answered, on one retained PNG:
 ///
 /// | command | verbatim output |
@@ -33568,6 +33676,462 @@ fn native_tabs_open_switch_and_close_under_cage() {
          exactly one page is drawn; a term from the deselected page means both are. PNG kept at \
          {}. OCR output was:\n{ocr_c}",
         out_png.display()
+    );
+}
+
+// Neovim panes beside terminals: the drawer, a split and a new tab, each open and then closed.
+
+/// The file every editor pane of [`neovim_panes_stay_visible_beside_terminals_under_cage`]
+/// shows.
+///
+/// Its name carries no asserted term, per this file's fixture rule: [`NEAR_OCR_FILL`] is
+/// its CONTENT, so the sidebar row, the statusbar strip and the `:e` echo that spell the
+/// name can satisfy nothing. `restore_fixture_names_cannot_satisfy_their_own_assertions`
+/// enforces that, and its neighbour-pane block checks the body.
+const NEAR_FIXTURE_FILE: &str = "nbrbase.md";
+
+/// The word every line of [`near_fixture_body`] carries.
+///
+/// All-caps and `ZZ`-prefixed like the other in-buffer markers ([`DRAWER_FILL_LINE`]) so
+/// nothing Neovim, the chrome, a shell or another fixture puts on screen can spell it.
+const NEAR_FILL_WORD: &str = "ZZNEARPANE";
+
+/// Lowercased [`NEAR_FILL_WORD`]: what OCR must find in every capture.
+///
+/// Only an editor pane showing [`NEAR_FIXTURE_FILE`] draws it. Nothing typed spells it,
+/// and the shells print only their prompt, their pid readbacks and the echo of those.
+const NEAR_OCR_FILL: &str = "zznearpane";
+
+/// How many lines [`near_fixture_body`] writes: more than the editor's rows at
+/// [`SMOKE_FONT_PT`] with no drawer open, so every editor row a leg shows carries the word,
+/// and one corrupted by the block cursor leaves others to read.
+const NEAR_FIXTURE_LINE_COUNT: usize = 16;
+
+/// Builds the contents of [`NEAR_FIXTURE_FILE`]: [`NEAR_FIXTURE_LINE_COUNT`] lines, each a
+/// three-digit ordinal followed by [`NEAR_FILL_WORD`].
+///
+/// The ordinal is a diagnostic, as in [`drawer_fixture_body`]: a failing leg prints its OCR
+/// text, and the ordinals say which buffer rows were read.
+fn near_fixture_body() -> String {
+    let mut body = String::new();
+    for line in 1..=NEAR_FIXTURE_LINE_COUNT {
+        if line > 1 {
+            body.push('\n');
+        }
+        body.push_str(&format!("{line:03}{NEAR_FILL_WORD}"));
+    }
+    body
+}
+
+/// Fraction of the output WIDTH at which the SECOND tab's centre sits with two tabs open.
+///
+/// [`TABS_FIRST_TAB_CENTRE_FRACTION`] records the measurement: two pages split the
+/// 1280 px bar evenly, with centres at x = 320 and x = 960. Three quarters is the second,
+/// as far from the boundary between them as the first.
+const NEAR_SECOND_TAB_CENTRE_FRACTION: f64 = 0.75;
+
+/// Leg g1: the drawer's shell writes its pid here once the drawer is open. Every readback
+/// of this smoke lives under `XDG_RUNTIME_DIR`, out of the sidebar, and is registered in
+/// [`RELAUNCH_FIXTURE_NAMES`] anyway because its absolute path is typed on screen.
+const NEAR_G1_PID_NAME: &str = "wolf_gnome_near_g1_pid.txt";
+
+/// Leg g2: Neovim's `tabpagenr() winnr('$') b:wolf_terminal_id` once the drawer is hidden.
+/// See [`NEAR_G1_PID_NAME`].
+const NEAR_G2_NVIM_NAME: &str = "wolf_gnome_near_g2_nvim.txt";
+
+/// Leg g3: the split terminal pane's shell writes its pid here. See [`NEAR_G1_PID_NAME`].
+const NEAR_G3_PID_NAME: &str = "wolf_gnome_near_g3_pid.txt";
+
+/// Leg g4: Neovim's readback after `<C-w>c` closed the split terminal pane. See
+/// [`NEAR_G1_PID_NAME`].
+const NEAR_G4_NVIM_NAME: &str = "wolf_gnome_near_g4_nvim.txt";
+
+/// Leg g5: Neovim's readback right after Ctrl+Shift+T, before anything is opened in the
+/// new tab. See [`NEAR_G1_PID_NAME`].
+const NEAR_G5_TAB_NAME: &str = "wolf_gnome_near_g5_tab.txt";
+
+/// Leg g5: the new tab's terminal pane's shell writes its pid here. See
+/// [`NEAR_G1_PID_NAME`].
+const NEAR_G5_PID_NAME: &str = "wolf_gnome_near_g5_pid.txt";
+
+/// Leg g6: Neovim's readback after the click on the first tab. See [`NEAR_G1_PID_NAME`].
+const NEAR_G6_NVIM_NAME: &str = "wolf_gnome_near_g6_nvim.txt";
+
+/// Leg g7: the focused shell writes its pid here after the click on the second tab, before
+/// `<C-w>c`. See [`NEAR_G1_PID_NAME`].
+const NEAR_G7_PID_NAME: &str = "wolf_gnome_near_g7_pid.txt";
+
+/// Leg g7: Neovim's readback after `<C-w>c` closed the second tab's terminal pane. See
+/// [`NEAR_G1_PID_NAME`].
+const NEAR_G7_NVIM_NAME: &str = "wolf_gnome_near_g7_nvim.txt";
+
+/// The legs of [`neovim_panes_stay_visible_beside_terminals_under_cage`], in scenario order:
+/// the name its capture's env var and file carry, and what is on screen when it is taken.
+const NEAR_LEGS: [(&str, &str); 8] = [
+    ("g0", "before any terminal"),
+    ("g1", "the drawer open below the editor"),
+    ("g2", "the drawer hidden again by the same chord"),
+    ("g3", "a terminal split right of the editor"),
+    ("g4", "after <C-w>c closed that terminal split"),
+    ("g5", "a terminal split right of the editor in a new tab"),
+    ("g6", "back in the first tab, by a click on its bar entry"),
+    (
+        "g7",
+        "back in the second tab, after <C-w>c closed its terminal split",
+    ),
+];
+
+/// Body of [`neovim_panes_stay_visible_beside_terminals_under_cage`], appended to
+/// [`POINTER_PREAMBLE`].
+///
+/// One `grim` capture per leg of [`NEAR_LEGS`], each taken before that leg's readback is
+/// typed. A readback typed where focus is not never appears, and its exit code names the
+/// leg, so a step that did not happen cannot leave a later capture vacuously green.
+///
+/// The tab switches are clicks on the `adw::TabBar`, as in [`POINTER_TABS_BODY`]: no key
+/// switches a tab, since `init.lua` maps Neovim's own tab chords to nothing.
+///
+/// ## Exit codes it adds to [`POINTER_PREAMBLE`]'s 11-15
+///
+/// | code | leg | meaning |
+/// | --- | --- | --- |
+/// | `61` | g1 | no shell answered with the drawer open: the chord opened no focused drawer |
+/// | `62` | g2 | Neovim did not answer once the drawer was hidden |
+/// | `63` | g3 | no shell answered after `:vsplit` and `:terminal` |
+/// | `64` | g4 | Neovim did not answer after `<C-w>c` in the terminal pane |
+/// | `65` | g5 | Neovim did not answer after Ctrl+Shift+T |
+/// | `66` | g5 | no shell answered after `:vsplit` and `:terminal` in the new tab |
+/// | `67` | g6 | Neovim did not answer after the click on the first tab |
+/// | `68` | g7 | no shell answered after the click on the second tab |
+/// | `69` | g7 | Neovim did not answer after `<C-w>c` in the second tab's terminal pane |
+const NEAR_BODY: &str = r#"
+# The drawer chord's and a :terminal's round trip; see DRAWER_SCENARIO.
+DRAWER_SETTLE=2.0
+# The adw::TabBar animates its height in over about a second; see POINTER_TABS_BODY.
+TABS_BAR_SETTLE=2.0
+
+# $1 is the readback file, $2 the exit code. Only a shell writes it.
+shell_probe() {
+    wtype -- "echo \$\$ > '$1'"
+    wtype -k Return
+    wait_file "$1" || exit "$2"
+}
+
+# $1 is the readback file, $2 the exit code. Only Neovim writes it.
+nvim_probe() {
+    wtype -- ":call writefile([printf('%d %d %d', tabpagenr(), winnr('\$'), getbufvar('%', 'wolf_terminal_id', 0))], '$1')"
+    wtype -k Return
+    wait_file "$1" || exit "$2"
+}
+
+chord_w() {
+    wtype -M ctrl -k w -m ctrl
+    wtype -k "$1"
+}
+
+# $1 and $2 are a point on the tab bar.
+click_tab() {
+    hsend motion "$1" "$2"
+    hsend press "$BTN_LEFT"
+    hsend release "$BTN_LEFT"
+    sleep "$SETTLE"
+}
+
+# --- g0: the fixture, before any terminal -----------------------------------
+wtype -- ":e $NEAR_FIXTURE"
+wtype -k Return
+sleep "$SETTLE"
+# Park the block cursor on a new line of its own: it corrupts the cell it covers.
+wtype -- o
+wtype -k Escape
+sleep "$SETTLE"
+grim "$OUT_G0"
+
+# --- g1: the drawer open ------------------------------------------------------
+wtype -M ctrl -k grave -m ctrl
+sleep "$DRAWER_SETTLE"
+grim "$OUT_G1"
+shell_probe "$NEAR_G1_PID" 61
+
+# --- g2: the drawer hidden by the same chord; its session stays live ----------
+wtype -M ctrl -k grave -m ctrl
+sleep "$DRAWER_SETTLE"
+grim "$OUT_G2"
+nvim_probe "$NEAR_G2_NVIM" 62
+
+# --- g3: a split, and a terminal pane in its new (right) window ---------------
+wtype -- ":vsplit"
+wtype -k Return
+sleep "$SETTLE"
+wtype -- ":terminal"
+wtype -k Return
+sleep "$DRAWER_SETTLE"
+grim "$OUT_G3"
+shell_probe "$NEAR_G3_PID" 63
+
+# --- g4: <C-w>c in the terminal pane, through core's router -------------------
+chord_w c
+sleep "$DRAWER_SETTLE"
+grim "$OUT_G4"
+nvim_probe "$NEAR_G4_NVIM" 64
+
+# --- g5: a new tab, the fixture, a split and a terminal pane ------------------
+wtype -M ctrl -M shift -k t -m shift -m ctrl
+sleep "$TABS_BAR_SETTLE"
+nvim_probe "$NEAR_G5_TAB" 65
+wtype -- ":e $NEAR_FIXTURE"
+wtype -k Return
+sleep "$SETTLE"
+wtype -- ":vsplit"
+wtype -k Return
+sleep "$SETTLE"
+wtype -- ":terminal"
+wtype -k Return
+sleep "$DRAWER_SETTLE"
+grim "$OUT_G5"
+shell_probe "$NEAR_G5_PID" 66
+
+# --- g6: back to the first tab ------------------------------------------------
+click_tab "$NEAR_TAB1_X" "$NEAR_TAB_Y"
+grim "$OUT_G6"
+nvim_probe "$NEAR_G6_NVIM" 67
+
+# --- g7: back to the second tab, and <C-w>c in its terminal pane --------------
+click_tab "$NEAR_TAB2_X" "$NEAR_TAB_Y"
+shell_probe "$NEAR_G7_PID" 68
+chord_w c
+sleep "$DRAWER_SETTLE"
+grim "$OUT_G7"
+nvim_probe "$NEAR_G7_NVIM" 69
+
+hsend quit
+exit 0
+"#;
+
+/// Neovim panes stay drawn beside every kind of terminal pane, and where a closed one was:
+/// the drawer, a terminal split, and a terminal split in a second tab, each while it is
+/// open and again once it is hidden or closed.
+///
+/// ## What it is evidence for
+///
+/// A terminal pane that paints over its neighbours, or a front-end that stops painting
+/// the editor grid while any session is live, hides the editor's text with every terminal
+/// smoke still green: they read the terminal's own output, never the editor beside it.
+/// The macOS front-end's `TerminalPaneView` did the first. Each GTK pane is its own
+/// `DrawingArea`, whose draw is clipped to its allocation, so this smoke is expected
+/// GREEN on the GTK front-end and is the evidence that it does not show that defect.
+///
+/// Every capture is OCR'd whole and one assertion names every leg missing
+/// [`NEAR_OCR_FILL`], so a single run shows each red leg. The scenario's readbacks are
+/// preconditions: each says its leg's step happened, so no capture is green because a
+/// terminal never opened.
+///
+/// ## Assertions
+///
+/// | # | assertion | kind | falsifying edit | predicted red |
+/// | --- | --- | --- | --- | --- |
+/// | 1 | the scenario exits 0 | precondition | none | n/a |
+/// | 2 | eight captures, both click points inside the reported output | precondition | none | n/a |
+/// | 3 | the Neovim readbacks name one editor window in the expected tab, and the shell pids say a new session answered in g3 and g5 and the second tab's own in g7 | precondition | none | n/a |
+/// | 4 | capture g0 carries [`NEAR_OCR_FILL`] | precondition: OCR reads the fixture with no terminal open | none | n/a |
+/// | 5 | captures g1 to g7 each carry [`NEAR_OCR_FILL`] | **discriminator** | in `PaneInner::draw_pane`, skip the editor grid branch while `core.live_terminals()` is not empty | g1 to g7: the hidden drawer's session stays live through every later leg |
+#[test]
+fn neovim_panes_stay_visible_beside_terminals_under_cage() {
+    const SMOKE: &str = "neovim_panes_stay_visible_beside_terminals_under_cage";
+    // The inclusive band of exit codes NEAR_BODY adds to POINTER_PREAMBLE's 11-15.
+    const NEAR_EXIT_FIRST: i32 = 61;
+    const NEAR_EXIT_LAST: i32 = 69;
+    // A Neovim readback's `tabpagenr() winnr('$') b:wolf_terminal_id`: one editor window.
+    const ONE_EDITOR_IN_TAB_1: [i64; 3] = [1, 1, 0];
+    const ONE_EDITOR_IN_TAB_2: [i64; 3] = [2, 1, 0];
+
+    let runtime_dir = require_smoke_env();
+    let cwd = make_temp_cwd();
+    let fixture_body = near_fixture_body();
+    write_relaunch_fixtures(SMOKE, &cwd, &[(NEAR_FIXTURE_FILE, fixture_body.as_str())]);
+
+    let captures: Vec<(&str, &str, PathBuf)> = NEAR_LEGS
+        .iter()
+        .map(|&(leg, what)| {
+            (
+                leg,
+                what,
+                runtime_dir.join(format!("wolf_gnome_near_{leg}.png")),
+            )
+        })
+        .collect();
+    let pid_g1 = runtime_dir.join(NEAR_G1_PID_NAME);
+    let nvim_g2 = runtime_dir.join(NEAR_G2_NVIM_NAME);
+    let pid_g3 = runtime_dir.join(NEAR_G3_PID_NAME);
+    let nvim_g4 = runtime_dir.join(NEAR_G4_NVIM_NAME);
+    let tab_g5 = runtime_dir.join(NEAR_G5_TAB_NAME);
+    let pid_g5 = runtime_dir.join(NEAR_G5_PID_NAME);
+    let nvim_g6 = runtime_dir.join(NEAR_G6_NVIM_NAME);
+    let pid_g7 = runtime_dir.join(NEAR_G7_PID_NAME);
+    let nvim_g7 = runtime_dir.join(NEAR_G7_NVIM_NAME);
+    let readbacks = [
+        &pid_g1, &nvim_g2, &pid_g3, &nvim_g4, &tab_g5, &pid_g5, &nvim_g6, &pid_g7, &nvim_g7,
+    ];
+    for path in captures.iter().map(|(_, _, png)| png).chain(readbacks) {
+        clear_evidence(path, SMOKE);
+    }
+
+    // The tab centres, pinned before cage starts as the native-tabs smoke's click is.
+    let output_w = exact_f64(CAGE_OUTPUT_W_EXPECTED, "the expected cage output width");
+    let tab1_x = pixel_target(
+        output_w * TABS_FIRST_TAB_CENTRE_FRACTION,
+        "the first tab's centre x",
+    );
+    let tab2_x = pixel_target(
+        output_w * NEAR_SECOND_TAB_CENTRE_FRACTION,
+        "the second tab's centre x",
+    );
+    let tab_y = pixel_target(
+        OVERLAY_ORIGIN_Y_EXPECTED + TAB_BAR_HEIGHT_EXPECTED / 2.0,
+        "the tab bar's centre y",
+    );
+
+    let (_, _, last_png) = &captures[captures.len() - 1];
+    let mut cmd = pointer_command(NEAR_BODY, &cwd, &runtime_dir, last_png);
+    pin_terminal_smoke_shell(&mut cmd)
+        .env("NEAR_FIXTURE", NEAR_FIXTURE_FILE)
+        .env("NEAR_TAB1_X", tab1_x.to_string())
+        .env("NEAR_TAB2_X", tab2_x.to_string())
+        .env("NEAR_TAB_Y", tab_y.to_string())
+        .env("NEAR_G1_PID", &pid_g1)
+        .env("NEAR_G2_NVIM", &nvim_g2)
+        .env("NEAR_G3_PID", &pid_g3)
+        .env("NEAR_G4_NVIM", &nvim_g4)
+        .env("NEAR_G5_TAB", &tab_g5)
+        .env("NEAR_G5_PID", &pid_g5)
+        .env("NEAR_G6_NVIM", &nvim_g6)
+        .env("NEAR_G7_PID", &pid_g7)
+        .env("NEAR_G7_NVIM", &nvim_g7);
+    for (leg, _, png) in &captures {
+        cmd.env(format!("OUT_{}", leg.to_uppercase()), png);
+    }
+    let status = cmd
+        .status()
+        .expect("failed to spawn `cage` for the headless neighbour-pane scenario");
+
+    // --- Assertion 1 (precondition): the scenario ran to completion -----------
+    assert!(
+        !matches!(status.code(), Some(c) if (NEAR_EXIT_FIRST..=NEAR_EXIT_LAST).contains(&c)),
+        "{SMOKE}: the cage scenario exited with a leg-specific code ({status}); NEAR_BODY's table \
+         names each. Exit 61: no shell answered with the drawer open, so the chord opened no \
+         focused drawer. Exit 62: Neovim did not answer once the drawer hid, so focus stayed in a \
+         terminal. Exit 63 or 66: no shell answered after `:vsplit` and `:terminal`, so no \
+         focused terminal pane opened. Exit 64 or 69: Neovim did not answer after `<C-w>c` in a \
+         terminal pane, so focus stayed in a terminal. Exit 65: Neovim did not answer after \
+         Ctrl+Shift+T. Exit 67: Neovim did not answer after the click on the first tab, so keys \
+         went to a terminal. Exit 68: no shell answered after the click on the second tab, so \
+         that tab's terminal pane did not get focus back and the `<C-w>c` would have gone to \
+         Neovim. None of these is the painting this smoke is about."
+    );
+    assert_pointer_scenario_succeeded(SMOKE, status, &cwd, last_png);
+
+    // --- Assertion 2 (precondition): the captures and the click points ---------
+    for (_, _, png) in &captures {
+        assert_png_present(SMOKE, png);
+    }
+    let extents = read_output_extents(&cwd, SMOKE);
+    assert_inside_extents(SMOKE, "the FIRST TAB's centre", (tab1_x, tab_y), extents);
+    assert_inside_extents(SMOKE, "the SECOND TAB's centre", (tab2_x, tab_y), extents);
+
+    // --- Assertion 3 (precondition): every leg's step happened ----------------
+    for (path, want, leg, step) in [
+        (
+            &nvim_g2,
+            ONE_EDITOR_IN_TAB_1,
+            "g2",
+            "the chord hid the drawer",
+        ),
+        (
+            &nvim_g4,
+            ONE_EDITOR_IN_TAB_1,
+            "g4",
+            "`<C-w>c` closed the terminal split",
+        ),
+        (
+            &tab_g5,
+            ONE_EDITOR_IN_TAB_2,
+            "g5",
+            "Ctrl+Shift+T opened and entered a second tab",
+        ),
+        (
+            &nvim_g6,
+            ONE_EDITOR_IN_TAB_1,
+            "g6",
+            "the click made the first tab current",
+        ),
+        (
+            &nvim_g7,
+            ONE_EDITOR_IN_TAB_2,
+            "g7",
+            "`<C-w>c` closed the second tab's split",
+        ),
+    ] {
+        let got = read_ints(path, want.len(), SMOKE);
+        assert_eq!(
+            got,
+            want,
+            "{SMOKE}: leg {leg}'s readback {} reads {got:?} as `tabpagenr() winnr('$') \
+             b:wolf_terminal_id`, want {want:?}: one editor window in that tab, which is what \
+             says {step}. A wrong tab means the switch or the new tab did not happen; a second \
+             window means the drawer or the terminal pane is still open; a nonzero id means \
+             Neovim's current buffer is a terminal placeholder. The capture of this leg would \
+             then show something other than its row in NEAR_LEGS.",
+            path.display()
+        );
+    }
+    let drawer_pid = read_ints(&pid_g1, 1, SMOKE)[0];
+    let split_pid = read_ints(&pid_g3, 1, SMOKE)[0];
+    let tab_pid = read_ints(&pid_g5, 1, SMOKE)[0];
+    let tab_back_pid = read_ints(&pid_g7, 1, SMOKE)[0];
+    assert!(
+        split_pid != drawer_pid && tab_pid != drawer_pid && tab_pid != split_pid,
+        "{SMOKE}: the shells answering in g1, g3 and g5 have pids {drawer_pid}, {split_pid} and \
+         {tab_pid}; each must be its own session. A repeated pid means a `:terminal` started no \
+         session and the keys reached an earlier shell, so that leg's capture shows no new \
+         terminal pane."
+    );
+    assert_eq!(
+        tab_back_pid, tab_pid,
+        "{SMOKE}: after the click on the second tab, the shell with pid {tab_back_pid} answered, \
+         not that tab's terminal pane's {tab_pid}, so the `<C-w>c` of leg g7 did not close the \
+         pane this smoke opened there."
+    );
+
+    // --- Assertions 4 and 5: the editor's word in every capture ---------------
+    let pages: Vec<(&str, &str, &PathBuf, String)> = captures
+        .iter()
+        .map(|(leg, what, png)| (*leg, *what, png, ocr_to_lowercase(png)))
+        .collect();
+    let (_, _, before_png, before_text) = &pages[0];
+    assert!(
+        before_text.contains(NEAR_OCR_FILL),
+        "{SMOKE}: capture g0, before any terminal, does not contain {NEAR_OCR_FILL:?}. Every \
+         editor row carries it, so either the `:e {NEAR_FIXTURE_FILE}` never opened the fixture \
+         or OCR cannot read the word at SMOKE_FONT_PT; nothing after this is about terminals. \
+         PNG kept at {}. OCR was:\n{before_text}",
+        before_png.display()
+    );
+    let missing: Vec<String> = pages[1..]
+        .iter()
+        .filter(|(_, _, _, text)| !text.contains(NEAR_OCR_FILL))
+        .map(|(leg, what, png, text)| format!("{leg}, {what} ({}):\n{text}", png.display()))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "{SMOKE}: {} of the seven terminal legs lost the editor's {NEAR_OCR_FILL:?}, which g0 \
+         read with no terminal open. Every leg from g1 on means the editor grid is not painted \
+         while any session is live, the hidden drawer's included. The open legs alone (g1, g3, \
+         g5) mean a terminal pane paints over its neighbours. The closing legs alone (g2, g4, \
+         g7) mean a closed or hidden terminal's view or paint stays where it was. g6 alone \
+         means a tab switch leaves the first tab's editor unpainted. The legs and their OCR:\n\n\
+         {}",
+        missing.len(),
+        missing.join("\n\n")
     );
 }
 

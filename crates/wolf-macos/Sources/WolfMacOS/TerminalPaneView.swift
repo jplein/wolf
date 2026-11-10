@@ -36,6 +36,9 @@ final class TerminalPaneView: NSView {
     self.session = session
     self.metrics = metrics
     super.init(frame: .zero)
+    // The SDK default is false, and draw(_:) fills its dirty rect, which can then reach
+    // past the bounds and cover the container's Neovim panes.
+    clipsToBounds = true
   }
 
   @available(*, unavailable)
