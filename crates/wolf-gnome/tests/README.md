@@ -143,9 +143,9 @@ Rules that are decidable from their arguments are pinned in each seam's own `#[c
 
 **Covers**
 
-- Sixty-four end-to-end smokes launch the built binary under `cage`: forty OCR a `grim` screenshot and twenty-four call no OCR helper, asserting instead on raw pixels, values the captive Neovim writes back, a file on disk, or the exit status.
-- The scenarios span text rendering, the sidebar, the three overlays, the search panel, splits, pointer input, crash and stall recovery, relaunch and per-tab state, navigation, the clipboard, saving, the appearance, the command line, the terminal drawer and panes, the preview pane, native tabs, composed text, the frame-time instrument, and a second window.
-- Fourteen compositor-free guards over the fixtures, constants and harness, so the target reports `78 passed`, not `64`. Two read `flake.nix`: every `shellHook` export must be scrubbed or keep-listed, and both vendored-tree exports must exist.
+- Sixty-five end-to-end smokes launch the built binary under `cage`: forty-one OCR a `grim` screenshot and twenty-four call no OCR helper, asserting instead on raw pixels, values Neovim writes back, a file on disk, or the exit status.
+- The scenarios span text rendering, the sidebar, the three overlays, the search panel, splits, pointer input, crash and stall recovery, relaunch and per-tab state, navigation, the clipboard, saving, the appearance, the command line, terminal drawers and panes beside Neovim panes, the preview pane, native tabs, composed text, the frame-time instrument, and a second window.
+- Fourteen compositor-free guards over the fixtures, constants and harness, so the target reports `79 passed`, not `65`. Two read `flake.nix`: every `shellHook` export must be scrubbed or keep-listed, and both vendored-tree exports must exist.
 - Three `#[ignore]`d packaged smokes outside that count drive the store binary, scrubbing every devShell export the artifact supplies itself: a clean OCR launch, an A/B against the checkout binary over the two vendored Lua trees, and a preview pane.
 
 **Gotchas**
@@ -317,7 +317,7 @@ The directory is a sibling of the working directory rather than a child, for the
 
 Real pointer events reach the GTK controllers through [`wolf-pointer-inject`](../../../tools/wolf-pointer-inject/README.md), this repo's own long-lived virtual-pointer client, built by `flake.nix`. Its README owns the reasons it must be long-lived, why the off-the-shelf tools cannot work, and its command grammar; do not restate them here.
 
-Nine smokes use it, including the crash-overlay one, which needs a real click on the restart button, the preview-link one, whose click is the only injected point aimed at something WebKit drew, and the native-tabs one, whose middle-click is the only injected button-2 press. Each starts the helper inside `cage` before the app, so the seat already carries pointer capability when GTK binds, waits for its readiness line, and then drives it over a FIFO with a poll-for-ack protocol: an ack means the compositor has processed the event, not that the bytes left a buffer.
+Ten smokes use it, including the crash-overlay one, which needs a real click on the restart button, the preview-link one, whose click is the only injected point aimed at something WebKit drew, and the native-tabs one, whose middle-click is the only injected button-2 press. Each starts the helper inside `cage` before the app, so the seat already carries pointer capability when GTK binds, waits for its readiness line, and then drives it over a FIFO with a poll-for-ack protocol: an ack means the compositor has processed the event, not that the bytes left a buffer.
 
 The scenarios hold the FIFO's write end open on a dedicated descriptor for their whole lifetime, since each write would otherwise close it and hand the helper a spurious end of file, and a trapped cleanup kills the helper before the app so shutdown never races an event.
 

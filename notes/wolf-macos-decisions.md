@@ -107,6 +107,8 @@ Recovery is one step and self-limiting. A failed in-place update clears that win
 
 A terminal pane's content is painted by its own [`TerminalPaneView`](../crates/wolf-macos/Sources/WolfMacOS/README.md#terminalpaneviewswift) subview, for the reason that entry gives, while the container still paints its statusbar and scrollbar and never reads its placeholder grid.
 
+Any drawing subview of `PaneContainerView` must clip to its bounds or fill only its bounds. Under the SDK's default `clipsToBounds == false` a dirty-rect fill reaches past the view and covers the panes the container painted, so an unclipped terminal pane blanks every Neovim pane beside it; [`TerminalPaneView`](../crates/wolf-macos/Sources/WolfMacOS/README.md#terminalpaneviewswift) sets the clip.
+
 Input methods reach a terminal pane through `NSTextInputClient`, and only a terminal pane: Neovim panes keep `KeyComposer` unchanged. A key goes through `interpretKeyEvents` unless it is a Ctrl, Cmd or option-as-alt chord or a named key, and a commit of one printable ASCII character is sent as a key, so core's `<C-w>` router still sees it. The rules are [`TerminalInputSeam`](../crates/wolf-macos/Sources/WolfKeyMap/README.md#terminalinputseamswift)'s.
 
 Only the project's current view sizes a session, checked as `active_tabpage()` against the view's own tabpage, and within it [`TerminalGeometry.sizer`](../crates/wolf-macos/Sources/WolfKeyMap/README.md#terminalgeometryswift) picks the active pane, then the last sizer. Together they make the spec's most recently focused pane the sizer; without the view check, a background view would fight the current one.

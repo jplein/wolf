@@ -62,14 +62,28 @@ Purpose: A `PaneContainerView` over a [`LiveCore`](#livecoreswift), hosted offsc
 
 **Public API**
 
-- `wake(until:)` — runs render wakes until the condition holds or `timeout` passes.
-- `view(showing:)`, `window(showing:)`, `text(of:)` — a session's terminal view, placeholder window and frame text.
+- `wake(until:)` — runs render wakes until the condition holds or `timeout` passes; `wake(_:until:)` wakes another container.
+- `view(showing:)`, `window(showing:)`, `text(of:)` — a session's terminal view, placeholder window and frame text. `terminalViews(in:)` and `view(showing:in:)` read another container.
 - `isInDrawerStrip(_:)` — whether a view lies in the container's lower half. The drawer's rect is private, and at `windowSize` its strip, a third of the height, lies wholly there.
 - `runLine`, `terminalChord`, `neovimChord`, `typeEx` — input to a session or to Neovim.
+- `markEditor()` — fills Neovim's current buffer with rows whose `line_hl_group` paints `mark` across the window's grid. `markedPixels(in:of:_:)` counts those pixels in a rect, and `markThreshold` is four cells' area.
+- `hostContainer(tabpage:)` — a second container over another tabpage, in its own offscreen window. Wake it only while its tabpage is current, as the app wakes only its current view.
+
+**Decisions** — the mark is a highlight group of its own, not `Normal`, because core pushes Neovim's default colours into every session, so a `Normal` mark would also match a terminal view.
 
 #### `TerminalDrawerTests.swift`
 
 **Covers** — `toggle_terminal()` showing a terminal view in the drawer strip on the drawer window's session, painting a truecolour background the shell prints, hiding with the session kept, and showing the same session again on the next toggle.
+
+#### `TerminalNeighbourPaneTests.swift`
+
+**Covers** — the Neovim panes staying painted while a terminal view is open and after it hides or closes, in the drawer, in a split beside an editor pane, and in a split in a new tab, with the first tab checked again after switching back to it.
+
+**Gotchas**
+
+- Each test marks the editor with `markEditor()` and fails as a premise if the container never paints the mark. It then samples only where the editor alone paints: beside the terminal view while it is open, and inside the view's last frame once it has closed.
+- A close leg waits for Neovim's side of the close, not for the view to go, so a view `syncTerminalViews` wrongly keeps still reaches the pixel check.
+- Every check polls until `TerminalViewFixture.timeout`, so each red leg costs that long.
 
 #### `TerminalPaneFlowTests.swift`
 
