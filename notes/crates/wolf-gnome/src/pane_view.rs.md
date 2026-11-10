@@ -22,6 +22,6 @@ The press path relies on `drag-begin` firing for a plain press with no movement.
 
 ## Terminal restore
 
-After a crash-restart the terminal sessions still run, but no window shows them. The shell computes the steps with `liveness_ui::terminal_restore` and hands them to the selected tab, the one that survives the restart; every live session but the drawer's lands there, because the restart collapses the window to that tab. The tab runs them from a render wake, through `queue_bind_terminal` and `toggle_terminal`, only once `ensure_initial_pane` has bound a pane. Two races rule out anything earlier or blocking.
+After a crash-restart the terminal sessions still run, but no window shows them. The shell's `restore_terminals` computes the steps with `liveness_ui::terminal_restore` and hands them to the selected tab. The tab runs them from its first render wake with a pane bound, through `queue_bind_terminal` and `toggle_terminal`, both input-pump events.
 
-A blocking `bind_terminal` reaches Neovim ahead of the reopened files `reopen_captured` queued on the input pump, so the next `:edit` lands in the new terminal split and wipes its placeholder. And `pick_initial_window` binds the first pane to Neovim's active window, so a split or drawer opened before the first post-restart wake becomes the first tree leaf and the editor window is lost.
+Nothing earlier or blocking is safe, for the two races [When Neovim dies](../../../../specs/terminal-panes.md#when-neovim-dies) states. Here a blocking bind would overtake the files `reopen_captured` queued, and a bind before the first wake would change the window `pick_initial_window` gives the first pane.

@@ -10,6 +10,6 @@ Painting the scratch grid is not cheap, even though it looks empty. Nvim's blank
 
 ## Terminal restore
 
-After a crash-restart, terminal sessions are still running but no window shows them. The view puts them back through `queue_bind_terminal` and `toggle_terminal`, both input-pump events, and only from a render wake after `ensureInitialPane` has bound its first pane. Two races rule out anything earlier or blocking.
+After a crash-restart, terminal sessions are still running but no window shows them. `Project.respawnNeovim` reads each view's terminals with `capturedTerminals()` before the restart, computes the steps with `LivenessSeam.terminalRestore` and hands them over through `requestTerminalRestore`. The view runs them through `queue_bind_terminal` and `toggle_terminal`, both input-pump events, and only from a render wake after `ensureInitialPane` has bound its first pane.
 
-A blocking `bind_terminal` reaches Neovim ahead of the reopened files `Project.respawnNeovim` queued on the pump, so the next `:edit` lands in the new terminal split and wipes its placeholder. And `pickInitialWindow` binds the first pane to Neovim's active window, so a split or drawer opened before the first post-restart wake becomes the first tree leaf and the editor window is lost.
+Nothing earlier or blocking is safe, for the two races [When Neovim dies](../../../../../specs/terminal-panes.md#when-neovim-dies) states. Here a blocking bind would overtake the files `Project.respawnNeovim` queued, and a bind before the first wake would change the window `pickInitialWindow` gives the first pane.

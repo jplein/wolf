@@ -116,7 +116,7 @@ Exposes `_G.wolf_emit_previews` and `_G.wolf_emit_markdown_cursor`.
 
 A `BufWipeout` autocmd notifies **`wolf_terminal_wiped`** with the id of a wiped buffer carrying `b:wolf_terminal_id`, a core terminal session's placeholder, and core hangs that session up. It is silent while Neovim quits (`v:dying` or `v:exiting` set), so quitting hangs up no session, and it has no initial emit.
 
-It also defines `_G.wolf_open_terminal()`, which notifies **`wolf_terminal_open`** with the current window, and the whole-word `:terminal`, `:term` and `:ter` abbreviations that call it. Core starts a session in that window's tabpage cwd and binds it there. `:terminal <cmd>` is not abbreviated and stays a scripted Neovim terminal.
+It also defines `_G.wolf_open_terminal()`, which notifies **`wolf_terminal_open`** with the current window, and the whole-word abbreviations that call it: `:terminal` and every shorter form down to `:te`. Core starts a session in that window's tabpage cwd and binds it there. The word expands even when arguments follow, so a typed `:terminal <cmd>` fails as Lua and opens nothing. Only a scripted `:terminal`, which no abbreviation reaches, makes a Neovim terminal.
 
 #### `wolf_emit_current_file`, `wolf_emit_buffers`, `wolf_emit_full_width`, `wolf_emit_previews`, `wolf_emit_markdown_cursor`, `wolf_emit_drawer`
 

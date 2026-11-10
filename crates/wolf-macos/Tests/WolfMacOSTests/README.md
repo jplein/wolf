@@ -78,6 +78,8 @@ Purpose: A `PaneContainerView` over a [`LiveCore`](#livecoreswift), hosted offsc
 - `<C-w>h` in a terminal pane focusing the editor beside it, `<C-w>l` there focusing the pane again, and `<C-w>v` in the pane splitting it onto a new, focused session.
 - `capturedTerminals()` naming the tree's terminal leaf, not the drawer's session, and the drawer open. After a Neovim kill and restart, `requestTerminalRestore` putting that session back as a terminal leaf beside the editor and reopening the drawer on its own session, both with their output.
 
+**Gotchas** — the test calls `capturedTerminals()` and `requestTerminalRestore` itself, so `Project.respawnNeovim`'s loop around them and `leafContents()`'s terminal arm reach no test here; they are manual-smoke, as [`LivenessSeamTests.swift`](../WolfKeyMapTests/README.md#livenessseamtestsswift) and [`SessionSeamTests.swift`](../WolfKeyMapTests/README.md#sessionseamtestsswift) record.
+
 #### `TerminalPaneRenderTests.swift`
 
 Purpose: Renders a `PaneContainerView` whose current window shows a real `/bin/sh` session, over [`LiveCore`](#livecoreswift), and checks what its `TerminalPaneView` drew.

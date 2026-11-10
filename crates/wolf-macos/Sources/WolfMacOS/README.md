@@ -333,25 +333,26 @@ Purpose: The crash/stall overlay — a full-bleed opaque cover over a broken edi
 
 #### `PaneContainerView.swift`
 
-Purpose: The editor area: one flipped `NSView` that paints every pane, owns `PaneTree`, hosts preview and terminal views and is first responder.
+Purpose: The editor area: one flipped `NSView` painting every pane, owns `PaneTree`, hosts preview and terminal views and is first responder.
 
 **Public API**
 
 - `markRefocusRebind()` arms a grid rebind after a tabpage switch, and `rebind(tabpageHandle:)` after a crash-restart.
-- `paneLayout`, `leafContents()`, `restoreFailed` — `SessionSeam`'s inputs, leaves read by window.
+- `paneLayout`, `leafContents()`, `restoreFailed` — `SessionSeam`'s inputs, leaves read by window, terminal panes included.
+- `capturedTerminals()`, `requestTerminalRestore(_:)` — a restart's capture and restore, for `Project.respawnNeovim`.
 - `activeTerminal`, `activeTerminalSelection` — `nil` off a terminal pane.
-- `activeWin` — per-view, unlike the tabpage-shared `WolfCoreHandle.active_win()`, which would let a background tab enable Copy.
+- `activeWin` — per-view: the tabpage-shared `WolfCoreHandle.active_win()` would let a background tab enable Copy.
 - `activePreviewSourcePath` — `nil` in edit mode.
-- `otherPaneTarget(prefer:)` — `OtherPaneSeam.target` for `preview_in_other` / `edit_in_other`: `0` splits, `nil` is a no-op.
+- `otherPaneTarget(prefer:)` — `OtherPaneSeam.target` for the other-pane commands: `0` splits, `nil` is a no-op.
 
 **Decisions**
 
 - The refocus rebind waits until `handle.active_tabpage()` is this view's and skips close detection that pass: the vacated tabpage's grids would prune live panes.
 - One `geometry(_:fullWidth:)` call sets web-view frame, occlusion and statusbar span before `needsDisplay`, so no frame paints preview alignment without a web view.
 - Grids are skipped only under an opaque, loaded preview web view; the flag survives reloads, since WebKit shows the outgoing document.
-- Scroll direction is `scrollingDeltaY`'s sign, already natural-scroll aware; `isDirectionInvertedFromDevice` double-corrects.
+- Scroll direction is `scrollingDeltaY`'s natural-scroll-aware sign; `isDirectionInvertedFromDevice` double-corrects.
 - The terminal drawer lives in the pane map, outside `tree`, so leaves, neighbours and splits exclude it.
-- A restart drops every pane, preview and terminal view: a fresh Neovim reuses window handles from 1000, so a kept binding shows the wrong window. The next wake's `ensureInitialPane` binds the fresh one.
+- A restart drops every pane, preview and terminal view: a fresh Neovim reuses window handles, so a kept binding shows the wrong window.
 - A terminal pane's input goes to its session, never Neovim, and `NSTextInputClient` serves terminal panes only; see [Terminal panes](../../../../notes/wolf-macos-decisions.md#terminal-panes).
 
 #### `PickerChrome.swift`
