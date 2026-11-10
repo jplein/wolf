@@ -17,8 +17,8 @@ Purpose: `TerminalCanvas`, one terminal pane's backing surface: its session's pa
 
 **Decisions**
 
-- A surface rather than painting cells in the draw: a `gtk::DrawingArea` redraws its whole area and every wake redraws every pane, so the surface keeps undamaged rows.
-- The cursor is drawn over the blit, never into the surface, so a cursor move damages no row. A block redraws its glyph without bold or italic, which cannot overflow the cell.
+- Why the pane paints through a backing surface, and why the cursor is drawn over the blit, is in [Terminal panes](../../../../notes/wolf-gnome-decisions.md#terminal-panes).
+- A block cursor redraws its glyph without bold or italic, which cannot overflow the cell.
 - A row fills every cell's background before any glyph, so a spacer's background cannot cover the right half of a wide glyph. Fills are not antialiased, because adjacent antialiased fills leave a seam.
 - The surface is made at the target's device scale and blitted at a whole-pixel origin, so its pixels map 1:1.
 
@@ -34,7 +34,7 @@ Purpose: which rows of a frame the canvas repaints. Pure; the port of [`Terminal
 
 **Decisions**
 
-- There is no `cursorRows`, unlike macOS: the canvas draws the cursor over its surface, so a moved cursor needs no row damage.
+- There is no `cursorRows`, unlike macOS, because of where the canvas draws the cursor ([Terminal panes](../../../../notes/wolf-gnome-decisions.md#terminal-panes)).
 
 #### `geometry.rs`
 

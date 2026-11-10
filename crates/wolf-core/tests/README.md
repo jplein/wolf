@@ -721,7 +721,7 @@ Real Neovim and real `/bin/sh` sessions in ptys (`//crates/wolf-core:terminal_se
 
 **Covers**
 
-- Output reaching the frame's cells and keys reaching the shell; a resize reaching both the frame and `stty size`; the shell's `TERM`, `COLORTERM`, `TERM_PROGRAM` and tabpage cwd.
+- Output reaching the frame's cells and keys reaching the shell; a resize reaching both the frame and `stty size`; a resize to the size and cell size a session already has publishing no frame, while a change of the cell size alone still reaches the shell as `SIGWINCH`; the shell's `TERM`, `COLORTERM`, `TERM_PROGRAM` and tabpage cwd.
 - Ids counting up and never reused, a missing program opening nothing, the placeholder's `win_buffers` binding and buffer options, and `pane_status` reporting the shell name.
 - Typed `:terminal` and every shorter form down to `:te` each opening a session in the current window, never Neovim's own terminal.
 - Row versions following the rows that change, a publish waking without bumping `seq`, publishes at least `TERMINAL_PUBLISH_INTERVAL` apart, a render hold deferring the publish until released or until `TERMINAL_RENDER_HOLD_MAX`, and the default, `ANSI` and cursor colours following the editor.
