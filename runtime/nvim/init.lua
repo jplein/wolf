@@ -964,10 +964,15 @@ function _G.wolf_setup_terminals(chan)
 	function _G.wolf_open_terminal()
 		pcall(vim.rpcnotify, chan, "wolf_terminal_open", vim.api.nvim_get_current_win())
 	end
-	-- Bare words only: `:terminal <cmd>` stays a scripted Neovim terminal.
+	-- Every prefix down to `te`; `:terminal <cmd>` expands too and fails as Lua, so only a
+	-- scripted `:terminal` still makes a Neovim terminal.
 	abbrev("terminal", "lua wolf_open_terminal()")
+	abbrev("termina", "lua wolf_open_terminal()")
+	abbrev("termin", "lua wolf_open_terminal()")
+	abbrev("termi", "lua wolf_open_terminal()")
 	abbrev("term", "lua wolf_open_terminal()")
 	abbrev("ter", "lua wolf_open_terminal()")
+	abbrev("te", "lua wolf_open_terminal()")
 end
 
 -- Returns the window the placeholder went into, or 0. Ends with wolf_sync_buffers, so core's

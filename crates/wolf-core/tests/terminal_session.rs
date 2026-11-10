@@ -7,7 +7,8 @@
 //! spawn, the placeholder's binding in `Snapshot.win_buffers`, `pane_status` for a terminal
 //! pane, row versions, publishing through the wake without `seq`, the publish coalescing, the
 //! render hold of synchronized output, the colours taken from the editor, and typed
-//! `:terminal`, `:term` and `:ter` opening a session in the current window.
+//! `:terminal`, and every shorter form Neovim accepts for it down to `:te`, opening a session
+//! in the current window.
 //!
 //! ## Premises about the components
 //!
@@ -319,13 +320,16 @@ fn the_placeholder_is_bound_in_win_buffers() {
     core.shutdown().expect("shutdown should be Ok");
 }
 
-/// Typing `:terminal`, `:term` or `:ter` opens a core session in the current window: the
-/// window's `WinBuffer` carries a new session, its buffer is the `nofile` placeholder rather
-/// than Neovim's own terminal, and a line typed into the session runs in a shell.
+/// Typing `:terminal`, or any shorter form Neovim accepts for it down to `:te`, opens a core
+/// session in the current window: the window's `WinBuffer` carries a new session, its buffer
+/// is the `nofile` placeholder rather than Neovim's own terminal, and a line typed into the
+/// session runs in a shell.
 #[test]
 fn typed_terminal_words_open_a_session_here() {
     common::pin_default_shell();
-    for word in ["terminal", "term", "ter"] {
+    for word in [
+        "terminal", "term", "ter", "te", "termi", "termin", "termina",
+    ] {
         let (core, waiter, cwd) = start_core();
         let win = active_window(&core, &waiter);
         let before = core

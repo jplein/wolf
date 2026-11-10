@@ -619,7 +619,8 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
         eprintln!("wolf-gnome: failed to open the window's first tab");
         return None;
     }
-    // Test-only: the cage smokes' one route to a terminal pane, opened in tab 0's first pane.
+    // Test-only (WOLF_SMOKE_TERMINAL): a terminal pane in tab 0's first pane before the app
+    // reports ready.
     if let Some(command) = crate::app::smoke_terminal_command() {
         if let Some(entry) = tabs.entries().first() {
             entry.panes().request_terminal(command);

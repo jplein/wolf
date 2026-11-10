@@ -224,10 +224,10 @@ const FS_CHANGED_EVENT: &str = "wolf_fs_changed";
 const TERMINAL_WIPED_EVENT: &str = "wolf_terminal_wiped";
 
 /// Name of the out-of-band notification `_G.wolf_open_terminal` in `runtime/nvim/init.lua`
-/// sends for a typed `:terminal`, `:term` or `:ter`, carrying the current window. Routed into
-/// the terminal registry, which starts a session in the window's tabpage cwd and binds it
-/// there. It touches no snapshot state, and it wakes the front-end like every notification
-/// but `wolf_cwd` and `wolf_fs_changed`; the binding's own `wolf_buffers` emit wakes it again.
+/// sends for a typed `:terminal` or any shorter form down to `:te`, carrying the current window.
+/// Routed into the terminal registry, which starts a session in the window's tabpage cwd and
+/// binds it there. It touches no snapshot state, and it wakes the front-end like every
+/// notification but `wolf_cwd` and `wolf_fs_changed`; the binding's own `wolf_buffers` emit wakes it again.
 const TERMINAL_OPEN_EVENT: &str = "wolf_terminal_open";
 
 /// Name of the one nvim→core request, sent by `_G.wolf_sync_buffers` in

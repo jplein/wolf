@@ -171,7 +171,7 @@ g04 removes the Neovim terminal path. From `init.lua`:
 - `TermOpen` in the buffer tracking and `TermLeave` in the fs events;
 - the `w:wolf_terminal` and `b:wolf_terminal` tags, replaced by `w:wolf_drawer` and `b:wolf_terminal_id`, which `wolf_preview_in_other`'s drawer check reads.
 
-`init.lua` gains `:terminal`, `:term` and `:ter` abbreviations that open a session in the current window. Each sends the `wolf_terminal_open` notification with the window, and core starts the session in its tabpage cwd and binds it there.
+`init.lua` abbreviates `:terminal` and every shorter form Neovim accepts for it, `:te` through `:termina`, to open a session in the current window. Each sends the `wolf_terminal_open` notification with the window, and core starts the session in its tabpage cwd and binds it there.
 
 From core:
 
@@ -180,7 +180,7 @@ From core:
 - `pane_status`'s `term://` rule and `terminal_command_name`;
 - `NavTarget::Terminal`. Every terminal pane is excluded from navigation history, as the drawer is, because a terminal is not a document and its session may have exited. A window that becomes a terminal pane loses its stack, so Back never replaces, and so wipes, a session's placeholder.
 
-Scripted paths can still make a Neovim terminal (`termopen`, `jobstart({term=true})`, `:edit term://…`). It paints as an ordinary grid and gets no special treatment, a best-effort lockout like the tabpage one.
+Scripted paths can still make a Neovim terminal (`termopen`, `jobstart({term=true})`, `:edit term://…`, and a scripted `:terminal` such as `vim.cmd("terminal")`, which no abbreviation reaches). It paints as an ordinary grid and gets no special treatment, a best-effort lockout like the tabpage one.
 
 ## Present limitations
 
