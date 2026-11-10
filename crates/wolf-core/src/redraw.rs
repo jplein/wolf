@@ -78,7 +78,8 @@ pub type TrackedCwd = Arc<parking_lot::RwLock<Option<PathBuf>>>;
 /// history of the fresh window that reuses its handle.
 pub type NavHistoryCell = Arc<Mutex<crate::nav_history::NavHistory>>;
 
-/// The front-end wake callback, invoked once per `flush` (after the lock drops).
+/// The front-end wake callback, invoked after each redraw `flush` and after each out-of-band
+/// change a front-end reads, always with no lock held.
 ///
 /// May run on a tokio worker thread, hence `Send + Sync`; the front-end is
 /// responsible for marshalling onto its UI thread.
@@ -226,8 +227,9 @@ const TERMINAL_WIPED_EVENT: &str = "wolf_terminal_wiped";
 /// Name of the out-of-band notification `_G.wolf_open_terminal` in `runtime/nvim/init.lua`
 /// sends for a typed `:terminal` or any shorter form down to `:te`, carrying the current window.
 /// Routed into the terminal registry, which starts a session in the window's tabpage cwd and
-/// binds it there. It touches no snapshot state, and it wakes the front-end like every
-/// notification but `wolf_cwd` and `wolf_fs_changed`; the binding's own `wolf_buffers` emit wakes it again.
+/// binds it there. It touches no snapshot state and fires no wake, because nothing a front-end
+/// reads changes before the handler returns; the binding's own `wolf_buffers` emit wakes it.
+/// Which notifications wake is the condition in specs/architecture.md#the-corefront-end-contract
 const TERMINAL_OPEN_EVENT: &str = "wolf_terminal_open";
 
 /// Name of the one nvim→core request, sent by `_G.wolf_sync_buffers` in
@@ -372,11 +374,11 @@ impl Handler for RedrawHandler {
                 (self.wake)();
             }
             TERMINAL_OPEN_EVENT => {
-                // No snapshot lock, no `seq` bump; the registry spawns and binds on the runtime.
+                // No snapshot lock, no `seq` bump, no wake: the registry spawns and binds on the
+                // runtime, and the bind's `wolf_buffers` emit wakes the front-end.
                 if let Some(win) = args.first().and_then(ext_handle) {
                     self.terminals.open_in_window(win);
                 }
-                (self.wake)();
             }
             PREVIEW_EVENT => {
                 // Not a redraw frame, so no `seq` bump; wakes after `apply_previews` drops the lock.
@@ -409,8 +411,8 @@ impl Handler for RedrawHandler {
                 }
             }
             CWD_EVENT => {
-                // No wake: the `:cd` that triggered this flushes its own redraw. Only `TrackedCwd`
-                // changes, which the input pump reads to scope the MRU by nvim's live cwd.
+                // No wake: the `:cd` that fired this flushes a redraw after it, and that flush's
+                // wake shows the new `live_cwd` to the front-ends.
                 self.apply_cwd(args);
             }
             _ => {}

@@ -3,12 +3,13 @@
 //! Neovim that holds the placeholder windows.
 //!
 //! Covered: output reaching the frame's cells and keys reaching the shell, a resize reaching
-//! both the frame and the shell, the shell's environment and cwd, id allocation, a failed
-//! spawn, the placeholder's binding in `Snapshot.win_buffers`, `pane_status` for a terminal
-//! pane, row versions, publishing through the wake without `seq`, the publish coalescing, the
-//! render hold of synchronized output, the colours taken from the editor, and typed
-//! `:terminal`, and every shorter form Neovim accepts for it down to `:te`, opening a session
-//! in the current window.
+//! both the frame and the shell, an unchanged resize publishing no frame while a change of the
+//! cell size alone still signals the shell, the shell's environment and cwd, id allocation, a
+//! failed spawn, the placeholder's binding in `Snapshot.win_buffers`, `pane_status` for a
+//! terminal pane, row versions, publishing through the wake without `seq`, the publish
+//! coalescing, the render hold of synchronized output, the colours taken from the editor, and
+//! typed `:terminal`, and every shorter form Neovim accepts for it down to `:te`, opening a
+//! session in the current window.
 //!
 //! ## Premises about the components
 //!
@@ -19,6 +20,9 @@
 //!   output of an expression (`$((6*7))`) that the typed text does not contain.
 //! - `stty -echo` stops the tty echoing input, and with `ICRNL` still on a CR ends a `read`.
 //! - `sleep` accepts a fractional argument (`sleep 0.2`) on both platforms.
+//! - The kernel sends `SIGWINCH` for a `TIOCSWINSZ` that changes only the pixel fields, and a
+//!   `trap … WINCH` in `sh -c` runs once the foreground `sleep` returns. `winch-1` and
+//!   `winch-2` measure both.
 //! - A plain `:hi` changes no `ColorScheme` state, so `:doautocmd ColorScheme` is what makes
 //!   `wolf_theme` emit again, as `theme.rs` does. Changing `Normal` makes Neovim send
 //!   `default_colors_set` in its next redraw batch.
@@ -133,6 +137,73 @@ fn resize_reaches_the_frame_and_the_shell() {
         "`stty size` must print `30 100` once the session is 100x30; `24 80` means the pty was \
          never given the size (no TIOCSWINSZ). The frame reads:\n{}",
         frame_text(&frame)
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// A resize to the size and cell size the session already has publishes no frame, a zero cell
+/// size at the same size counts as unchanged, and a change of the cell size alone still reaches
+/// the shell as `SIGWINCH`. The equal case is watched through the frame's version, which gates a
+/// front-end's repaint, because the kernel already drops a `TIOCSWINSZ` that changes nothing.
+#[test]
+fn equal_resizes_publish_nothing_and_a_cell_size_change_signals_the_shell() {
+    let (core, waiter, _cwd) = start_core();
+    let script = "n=0; trap 'n=$((n+1)); printf \"winch-%d \" \"$n\"' WINCH; printf ready; \
+                  while :; do sleep 0.05; done";
+    let id = open_session(&core, TerminalTarget::Window(0), sh_script(script));
+    wait_for_text(&core, &waiter, id, "ready");
+
+    // Standard signals coalesce, so each SIGWINCH is seen before the next resize is sent.
+    core.resize_terminal(id, 100, 30, 9, 18);
+    poll_frame(
+        &core,
+        &waiter,
+        id,
+        "the frame to be 100x30 and the shell's trap to print `winch-1` after resizing from \
+         80x24 at 8x16; a 100x30 frame without it means the pty got no TIOCSWINSZ",
+        |frame| (frame.cols, frame.rows) == (100, 30) && frame_text(frame).contains("winch-1"),
+    );
+    settle_for(&waiter, QUIET_SETTLE);
+    let v1 = frame_of(&core, id).version;
+
+    core.resize_terminal(id, 100, 30, 9, 18);
+    settle_for(&waiter, QUIET_SETTLE);
+    let after_equal = frame_of(&core, id);
+    assert_eq!(
+        after_equal.version, v1,
+        "resize_terminal(100, 30, 9, 18) on a session already 100x30 at 9x18 must publish no \
+         frame, but the version moved from {v1} to {}: an unchanged resize stamps every row and \
+         makes a front-end repaint the whole pane.",
+        after_equal.version
+    );
+
+    core.resize_terminal(id, 100, 30, 0, 0);
+    settle_for(&waiter, QUIET_SETTLE);
+    let after_zero = frame_of(&core, id);
+    assert_eq!(
+        after_zero.version, v1,
+        "resize_terminal(100, 30, 0, 0) keeps the current 9x18 cell size, so at the same size it \
+         is unchanged and must publish no frame, but the version moved from {v1} to {}: the \
+         guard compares the cell size as passed rather than the one it resolves to.",
+        after_zero.version
+    );
+    assert!(
+        !frame_text(&after_zero).contains("winch-2"),
+        "the shell saw a second SIGWINCH from resizes that changed nothing, so the `winch-2` \
+         awaited below would not show that a cell-size change reaches the pty. The frame \
+         reads:\n{}",
+        frame_text(&after_zero)
+    );
+
+    core.resize_terminal(id, 100, 30, 10, 20);
+    poll_frame(
+        &core,
+        &waiter,
+        id,
+        "the shell's trap to print `winch-2` after the cell size alone changed from 9x18 to \
+         10x20; without it the pty got no TIOCSWINSZ, as when a guard compares only the size",
+        |frame| frame_text(frame).contains("winch-2"),
     );
 
     core.shutdown().expect("shutdown should be Ok");

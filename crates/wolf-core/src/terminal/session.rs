@@ -375,7 +375,9 @@ impl Session {
     }
 
     /// Resizes the emulator, then the pty. A zero size is ignored, and a zero cell size
-    /// keeps the previous one.
+    /// keeps the previous one. A size and cell size the session already has do nothing,
+    /// neither repainting every row nor sending `SIGWINCH`, because front-ends resend a
+    /// size on wakes until the frame shows it.
     pub(super) fn resize(&self, (cols, rows): (u16, u16), cell_px: (u32, u32)) {
         if cols == 0 || rows == 0 {
             return;
@@ -387,6 +389,9 @@ impl Session {
             } else {
                 cell_px
             };
+            if (state.size, state.cell_px) == ((cols, rows), cell_px) {
+                return;
+            }
             if state.vt.resize(cols, rows, cell_px.0, cell_px.1).is_err() {
                 return;
             }

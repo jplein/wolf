@@ -1701,7 +1701,9 @@ impl WolfCore {
 
     /// Sizes session `id` from its pane's content area: `cols` by `rows` cells of
     /// `cell_w_px` by `cell_h_px` pixels. A zero size is ignored and a zero cell size keeps
-    /// the previous one.
+    /// the previous one. A size and cell size the session already has change nothing, so no
+    /// frame is published and the shell gets no `SIGWINCH`: a front-end may resend a size
+    /// freely.
     pub fn resize_terminal(
         &self,
         id: TerminalId,

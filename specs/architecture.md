@@ -115,7 +115,13 @@ The boundary is narrow and FFI-shaped (decision 1): only plain data crosses it, 
 - **A drainable queue.** Core enqueues discrete requests — layout intents, commands — in arrival order, and the front-end drains them on each wake.
 - **A blocking query.** A few calls need an answer from Neovim before the front-end can act. Each returns a neutral fallback (`""`, `0`, `None`, an empty `Vec`) on any error or timeout, so no error channel crosses the boundary and a wedged nvim is indistinguishable from an empty answer.
 
-One rule governs every wake: only a redraw `flush` bumps `Snapshot.seq`. The snapshot-facing out-of-band `wolf_*` notifications fire the same wake without bumping it, so a front-end that gates its repaint on `seq` alone misses every buffer, theme and preview update ([`redraw.rs`](../crates/wolf-core/src/README.md#redrawrs)). Two notifications fire no handler wake at all: `wolf_cwd`, whose triggering `:cd` already produces its own redraw flush, and `wolf_fs_changed`, which only feeds the file-search rescan — each affected session fires its own wake when a rescan swaps its list.
+One rule governs every wake: only a redraw `flush` bumps `Snapshot.seq`. The snapshot-facing out-of-band `wolf_*` notifications fire the same wake without bumping it, so a front-end that gates its repaint on `seq` alone misses every buffer, theme and preview update ([`redraw.rs`](../crates/wolf-core/src/README.md#redrawrs)).
+
+A `wolf_*` notification wakes the front-end when it changes something a front-end reads: the snapshot, a drainable queue, or the state behind a `WolfCore` accessor such as `live_cwd`, `live_terminals` or `terminal_frame`. A new notification is checked against this condition rather than against a list. Its handler fires the wake once the change is in place, unless the change brings a later wake of its own, and fires none when it changes nothing a front-end reads. The notifications whose handler fires no wake are examples:
+
+- `wolf_fs_changed` only feeds the file-search rescan, and each affected session fires its own wake when a rescan swaps its list.
+- `wolf_terminal_open` only hands the window to a runtime task, whose bind wakes the front-end through its own `wolf_buffers` emit.
+- `wolf_cwd` changes `live_cwd`, but the `:cd` that fires it produces its own redraw flush, which arrives after it and wakes.
 
 The FFI-level shape of each contract — the Swift-facing signatures, the opaque handle types, and the discriminant tables that are the ABI — is in [`crates/wolf-ffi/src/README.md`](../crates/wolf-ffi/src/README.md). What follows is the language-neutral form both front-ends consume.
 
