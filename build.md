@@ -65,7 +65,7 @@ Most tests spawn the pinned Neovim as a real child process rather than a mock, a
 
 What each target covers lives with the tests: [`wolf-core/tests`](crates/wolf-core/tests/README.md), [`wolf-ffi/tests`](crates/wolf-ffi/tests/README.md), [`wolf-gnome/tests`](crates/wolf-gnome/tests/README.md). The GTK end-to-end smokes run in that suite rather than opting in: they launch the real window under `cage`, a headless Wayland compositor, and drive it with `wtype`, `grim`, `tesseract` and [`wolf-pointer-inject`](tools/wolf-pointer-inject/README.md), each scenario under `dbus-run-session`. All of them come from the devShell, and the smokes fail loudly rather than skipping when one is missing, since absence means the suite is running outside `nix develop`.
 
-Several cages run at once. `WOLF_SMOKE_JOBS=<n>` sets how many, and `1` runs them serially; unset, the count is `available_parallelism` divided by `DEFAULT_SMOKE_JOBS_CPUS_PER_CAGE`, clamped to between 1 and `DEFAULT_SMOKE_JOBS_CAP`, whose doc comment in `smoke_headless.rs` carries the measured wall times. Two `cargo test` runs share no socket or file, but each sizes its slots for the whole host, so never overlap them: together they oversubscribe the CPU and stretch the scenarios' fixed settles.
+Several cages run at once. `WOLF_SMOKE_JOBS=<n>` sets how many, and `1` runs them serially; unset, the count is `available_parallelism` divided by `DEFAULT_SMOKE_JOBS_CPUS_PER_CAGE`, clamped to between 1 and `DEFAULT_SMOKE_JOBS_CAP`, whose doc comment in `crates/wolf-gnome/tests/smoke_headless/main.rs` carries the measured wall times. Two `cargo test` runs share no socket or file, but each sizes its slots for the whole host, so never overlap them: together they oversubscribe the CPU and stretch the scenarios' fixed settles.
 
 ### The optimized build
 
@@ -88,8 +88,8 @@ Two commands are the release evidence:
 ```sh
 nix develop --command cargo test --release -p wolf-gnome --test release_profile -- --nocapture
 nix develop --command cargo test --release -p wolf-gnome --test smoke_headless -- \
-  --exact window_renders_typed_text_under_cage \
-          preview_pane_renders_and_edit_source_returns_under_cage
+  --exact editor::window_renders_typed_text_under_cage \
+          preview::preview_pane_renders_and_edit_source_returns_under_cage
 ```
 
 What each of them covers belongs with the tests, in [`wolf-gnome/tests`](crates/wolf-gnome/tests/README.md).

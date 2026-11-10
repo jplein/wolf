@@ -34,7 +34,7 @@ Neither is the fix for the macOS 27 `E0463: can't find crate for thiserror_impl`
 
 The output root is the tree itself (`$out/plugin/orlando.lua`), with no inner `orlando/` directory. That differs from the Bazel TreeArtifact on purpose: `rules_apple` strips a TreeArtifact's own top-level name when copying it into `Contents/Resources/`, so Bazel has to nest, while `wolfGnomePackage`'s `postInstall` names the destination directory explicitly.
 
-Neither `wolfOrlando` nor `wolfLighthouse` is in `linuxShell.packages`. The devShell must keep running the compositor smokes with neither tree beside the checkout's `runtime/nvim/init.lua`, because that binary is the control leg of the packaged-artifact comparison in `smoke_headless.rs::the_packaged_binary_loads_the_vendored_lighthouse_and_orlando_under_cage`. Adding either tree to the shell looks like a convenience and silently destroys that control. Both are Linux-only bindings under the [Darwin eval laziness](#darwin-eval-laziness) rule.
+Neither `wolfOrlando` nor `wolfLighthouse` is in `linuxShell.packages`. The devShell must keep running the compositor smokes with neither tree beside the checkout's `runtime/nvim/init.lua`, because that binary is the control leg of the packaged-artifact comparison in `crates/wolf-gnome/tests/smoke_headless/packaged.rs`'s `the_packaged_binary_loads_the_vendored_lighthouse_and_orlando_under_cage`. Adding either tree to the shell looks like a convenience and silently destroys that control. Both are Linux-only bindings under the [Darwin eval laziness](#darwin-eval-laziness) rule.
 
 ## shellHook exports
 
@@ -70,7 +70,7 @@ Queries stay unfiltered, unlike the curated parser list, matching the macOS pack
 
 webkitgtk does two jobs. At build time it supplies `webkitgtk-6.0.pc`, which `webkit6-sys`'s `system-deps` probe resolves; at run time it supplies the out-of-process `WebKitNetworkProcess` and `WebKitWebProcess` helpers a `WebKitWebView` spawns, and a web view that cannot spawn them renders nothing.
 
-The helpers are found through an absolute path compiled into `libwebkitgtk-6.0.so.4`, not through `PATH` and not through `WEBKIT_EXEC_PATH`, a name that does not appear in the library at all. So the packaged wrapper needs no `PATH` entry and no execution variable of its own. That is measured: `smoke_headless.rs`'s packaged preview smoke launches the store binary with the devShell's exports scrubbed and gets a rendered document.
+The helpers are found through an absolute path compiled into `libwebkitgtk-6.0.so.4`, not through `PATH` and not through `WEBKIT_EXEC_PATH`, a name that does not appear in the library at all. So the packaged wrapper needs no `PATH` entry and no execution variable of its own. That is measured: `smoke_headless/packaged.rs`'s preview smoke launches the store binary with the devShell's exports scrubbed and gets a rendered document.
 
 `libsoup_3` is required and not transitive here. `webkitgtk-6.0.pc` declares `Requires: glib-2.0 gtk4 libsoup-3.0 javascriptcoregtk-6.0`, and `libsoup-3.0.pc` is otherwise absent from the devShell, so without it `soup3-sys` fails to configure and the build breaks.
 
@@ -78,7 +78,7 @@ The helpers are found through an absolute path compiled into `libwebkitgtk-6.0.s
 
 The suite `cargo test -p wolf-gnome` runs is not a headless unit suite, and running it in the Nix build is impossible, not merely slow. Most tests launch `cage`, a wlroots compositor needing a writable `XDG_RUNTIME_DIR` at mode 0700, alongside `wtype`, `grim`, `tesseract` and `wolf-pointer-inject`; every real-nvim test needs `WOLF_NVIM_BIN`; and `wolf-core`'s swap-recovery test needs a writable `$HOME`. The sandbox has no `/run/user/<uid>`, no `/dev/dri` for GTK's GL renderer, and no session bus.
 
-A curated subset would run only the pure seams the checkout's `cargo test` already covers and would say nothing about the artifact. Every piece of evidence about the artifact therefore comes from outside the sandbox, through `./tools/wolf-package-smoke.sh`: `crates/wolf-gnome/tests/packaged_layout.rs` and the ignored packaged smokes in `crates/wolf-gnome/tests/smoke_headless.rs`.
+A curated subset would run only the pure seams the checkout's `cargo test` already covers and would say nothing about the artifact. Every piece of evidence about the artifact therefore comes from outside the sandbox, through `./tools/wolf-package-smoke.sh`: `crates/wolf-gnome/tests/packaged_layout.rs` and the ignored packaged smokes in `crates/wolf-gnome/tests/smoke_headless/packaged.rs`.
 
 ## Wrapper environment
 

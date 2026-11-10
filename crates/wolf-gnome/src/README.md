@@ -47,7 +47,7 @@ Purpose: the entry point; the first activate builds the coordinator, installs it
 **Public API**
 
 - `run() -> glib::ExitCode` — hands GTK an empty argv, so the process command line is never parsed or rejected.
-- `XFT_DPI_PINNED_PREFIX` — begins the stderr line the dpi pin prints only when it fires; [`smoke_headless.rs`](../tests/README.md#smoke_headlessrs) matches its own copy, so retype a rename there.
+- `XFT_DPI_PINNED_PREFIX` — begins the stderr line the dpi pin prints only when it fires; [`smoke_headless/preview.rs`](../tests/README.md#smoke_headlesspreviewrs) matches its own copy, so retype a rename there.
 - Six `pub(crate)` helpers: [`coordinator.rs`](#coordinatorrs) calls `load_config`, `measure_metrics`, `open_state_store` and `ready_file_path` once each, and [`window.rs`](#windowrs) calls `init_lua_path` and `smoke_terminal_command` per window. [`init_lua.rs`](#init_luars), [`ready_seam.rs`](#ready_seamrs) and [`terminal.rs`](#terminalrs) own the rules behind `init_lua_path`, `ready_file_path` and `smoke_terminal_command`.
 
 **Decisions**

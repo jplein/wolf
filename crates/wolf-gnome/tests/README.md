@@ -22,6 +22,16 @@ Rules that are decidable from their arguments are pinned in each seam's own `#[c
 
 - Pure: no display, no Neovim and no compositor.
 
+#### `flake_exports.rs`
+
+**Covers**
+
+- That every `export` in `flake.nix`'s `linuxShell.shellHook` is on a packaged smoke's scrub list or on `KEPT_FOR_THE_COMPOSITOR`, and that the hook still exports the vendored-tree variables the `wolf-ffi` tests need. The [`flake.nix` notes](../../../notes/flake.nix.md#shellhook-exports) say which list takes which export.
+
+**Gotchas**
+
+- Pure: it reads only `flake.nix`, so it runs in seconds with no compositor. It is a binary of its own so that a `flake.nix` change can be checked without the smokes, with `cargo test -p wolf-gnome --test flake_exports`.
+
 #### `frame_metrics_gate.rs`
 
 **Covers**
@@ -137,23 +147,88 @@ Rules that are decidable from their arguments are pinned in each seam's own `#[c
 **Gotchas**
 
 - Every input is a hand-built `SearchMatch` or a literal, and every expected value is written out by hand, never computed by the function under test.
-- What the widgets do with these answers is the two search smokes' in [`smoke_headless.rs`](#smoke_headlessrs).
+- What the widgets do with these answers is the two search smokes' in [`smoke_headless/sidebar.rs`](#smoke_headlesssidebarrs).
 
-#### `smoke_headless.rs`
+#### `smoke_headless/main.rs`
 
 **Covers**
 
-- Sixty-five end-to-end smokes launch the built binary under `cage`: forty-one OCR a `grim` screenshot and twenty-four call no OCR helper, asserting instead on raw pixels, values Neovim writes back, a file on disk, or the exit status.
-- The scenarios span text rendering, the sidebar, the three overlays, the search panel, splits, pointer input, crash and stall recovery, relaunch and per-tab state, navigation, the clipboard, saving, the appearance, the command line, terminal drawers and panes beside Neovim panes, the preview pane, native tabs, composed text, the frame-time instrument, and a second window.
-- Fourteen compositor-free guards over the fixtures, constants and harness, so the target reports `79 passed`, not `65`. Two read `flake.nix`: every `shellHook` export must be scrubbed or keep-listed, and both vendored-tree exports must exist.
-- Three `#[ignore]`d packaged smokes outside that count drive the store binary, scrubbing every devShell export the artifact supplies itself: a clean OCR launch, an A/B against the checkout binary over the two vendored Lua trees, and a preview pane.
+- The crate root and shared harness of the `smoke_headless` binary, whose smokes launch the built application under `cage` and assert on OCR, raw pixels, Neovim readbacks, files on disk or the exit status. Each feature's smokes are a module beside it.
+- The harness guards: `cage` spawns only through `cage_command`, each cage is isolated from the host session, the slots bound concurrency, every launch waits for readiness, the appearance pin holds, and the column cap cannot bind at the OCR geometry.
+
+**Decisions**
+
+- `CAGE_SLOTS` is per process, so a cage smoke belongs in this binary, where the slot bound counts it.
+- `leaf_fields` holds the smokes' only `PaneNode::Leaf` pattern, so a new leaf field touches that function alone.
 
 **Gotchas**
 
-- Run only these with `cargo test -p wolf-gnome --test smoke_headless`, inside the devShell; the packaged three run only through `./tools/wolf-package-smoke.sh`.
-- Read [Smoke conventions](#smoke-conventions) first; several of those rules exist because a smoke passed while proving nothing.
-- A failing smoke keeps its runtime directory, with its captures and `cage.log`, and prints its path and the log's tail; a passing one removes it.
+- Run with `cargo test -p wolf-gnome --test smoke_headless` inside the devShell. `--exact` takes `<module>::<name>`, as in `editor::window_renders_typed_text_under_cage`; the guards here keep bare names.
+- Every `*_under_cage` test is a cage smoke and every other test a compositor-free guard; `passed` counts both.
+- The source-scanning guards read the crate's test sources at run time: a `cage` spawned under `tests/` outside `cage_command` fails one, and a declared module left unread fails both.
+- Read [Smoke conventions](#smoke-conventions) first.
+- A failing smoke keeps its runtime directory, with its captures and `cage.log`, and prints its path and the log's tail.
 - Spell checking is off in every smoke, so OCR reads glyphs not undercurls; see `seed_smoke_spell_override`.
+
+#### `smoke_headless/compose.rs`
+
+Input-method smokes: composed text reaching Neovim, and a control chord typed while a compose sequence is pending.
+
+#### `smoke_headless/config.rs`
+
+Configuration smokes: `wolf-config.yaml`'s font size and appearance reaching the grid and Neovim, and the column cap with the full-width toggle.
+
+#### `smoke_headless/editor.rs`
+
+Editor smokes: typed text, the file and buffer pickers, the empty state, a new untitled buffer, the command palette, navigation history, completion, messages and the confirm prompt, the clipboard, and saving.
+
+#### `smoke_headless/fixture_guards.rs`
+
+The guards behind the fixture-naming rule in [Smoke conventions](#smoke-conventions). A smoke that OCRs a capture registers each term it asserts on in `ASSERTED_OCR_TERMS`, which the guards check every fixture against; a smoke that OCRs nothing registers none.
+
+#### `smoke_headless/frame_stats.rs`
+
+The frame-time instrument's smoke: typing bursts with `WOLF_FRAME_STATS` armed, read from the report file the application appends to.
+
+#### `smoke_headless/packaged.rs`
+
+The `#[ignore]`d packaged smokes, which drive the store binary `nix build .#wolf-gnome` installs, scrubbing every devShell export the artifact supplies itself: a clean OCR launch, an A/B against the checkout binary over the two vendored Lua trees, and a preview pane. They run only through `./tools/wolf-package-smoke.sh`, which selects them with the filter `packaged::`.
+
+#### `smoke_headless/panes.rs`
+
+Pane and layout smokes: splits, focus moves, closing panes, `:q` and `:qa`, the per-pane status bar, and native tabs.
+
+#### `smoke_headless/pointer.rs`
+
+Pointer smokes, driven through [Pointer injection](#pointer-injection) and read back from Neovim: click, drag, wheel scroll, click-then-close keyboard focus, and a divider drag across a relayout.
+
+#### `smoke_headless/preview.rs`
+
+Markdown preview smokes: opening a preview and returning to the source, a link click, an unsaved buffer, the configured appearance, and a view created after launch. Its guard keeps the smokes' burst delay below the coalescer's trailing delay.
+
+#### `smoke_headless/preview_render.rs`
+
+Preview rendering smokes read from raw pixels: fenced-code highlighting, the inline-code baseline grid, and the file picker drawn over a live preview, with guards on the thresholds those pixel readings use.
+
+#### `smoke_headless/recovery.rs`
+
+Recovery smokes: a crashed Neovim restarted with its file, a stalled one raising the stall overlay, and the crash overlay's Restart button.
+
+#### `smoke_headless/restore.rs`
+
+Session-restore smokes, each two launches in one cage, the second reading what the first saved: the pane layout, a lone file, tabs, two windows, and dragged divider weights.
+
+#### `smoke_headless/scrub_lists.rs`
+
+The packaged smokes' scrub lists, the devShell exports removed from a packaged launch. [`flake_exports.rs`](#flake_exportsrs) compiles this file through `#[path]`, so its guard reads the lists the packaged smokes use; which list takes which export is in the [`flake.nix` notes](../../../notes/flake.nix.md#shellhook-exports).
+
+#### `smoke_headless/sidebar.rs`
+
+Sidebar and search smokes: the file tree, the project-search panel and its chord, the sidebar toggle, a typed `:cd` and an Open Recent row re-rooting the window, and the window title.
+
+#### `smoke_headless/terminal.rs`
+
+Terminal smokes: the terminal drawer, terminals across a Neovim restart, terminal panes beside Neovim panes, and typed keys reaching a pane's shell.
 
 #### `state_isolation.rs`
 
@@ -244,13 +319,15 @@ The cage slots and private runtime directories, the per-cage session bus that ac
 
 **A fixture must not be named after the term its smoke asserts on.** The sidebar renders every file in the working directory by name and nvim's `:e` echoes the filename, so a fixture carrying the asserted word satisfies the assertion whether or not the feature did anything — a permanent silent pass, not a flake. Fixture names and asserted terms are therefore deliberately unlike: a heading lives only in a file's content. The one exception is the sidebar-population smoke, where the rendered row is the feature under test.
 
-That rule has three mechanical guards, because the fixture and the assertion it can disarm sit a thousand lines apart: one over the sidebar filler names, one over the temp working directory's fixed path components, which the header bar renders as page text, and one over the smoke-owned relaunch fixtures.
+That rule has three mechanical guards, because the fixture and the assertion it can disarm sit in different files: one over the sidebar filler names, one over the temp working directory's fixed path components, which the header bar renders as page text, and one over the smoke-owned relaunch fixtures.
 
 The third reaches past names to the fixture bodies an assertion's line, column or rendered text is derived from, and to the crossed pairs behind every exemption, in which neither member may carry the other's term. Each guard's tables are built from the assertion constants rather than retyped, so they cannot drift, and every term is checked lowercase because the OCR output is lowercased before comparison.
 
 **A fixture must not sit where something other than the feature would answer for it.** The preview-link smoke's source and target live in a subdirectory, not at the project root, because the captive Neovim resolves a relative path against its working directory: with both at the root, a missing base URI resolves the raw href to the same file the correct base does, and the smoke stays green with the feature reverted. Moving either fixture back to the root silently disarms it, which is why a guard asserts the subdirectory.
 
 **A red-run demonstration is a deliverable, not a formality.** A check can be aimed at the right property and still look somewhere the defect cannot appear: a press-and-release at two different cells enters visual mode by itself, so a drag assertion needs a round trip whose press and release are at the same cell to discriminate drag events at all; a wrapper that refuses to exec is never named `nvim`, so a child-name scan cannot see an uncapped retry loop; and a centered button spans the same midpoint whatever width it requests, so a center-derived click point is blind to a width regression. Only running the revert exposes any of them.
+
+**A scenario ends at its first failed readback, so a falsifier's red leg is measured, not predicted.** A scenario exits as soon as a readback it waits for fails to appear, and the Rust side stops at its first failing assertion, so later legs are never evaluated and an edit aimed at one leg can go red at an earlier one. A falsifier's leg table therefore names the disabling edit, and the coder records which leg went red after running it.
 
 **Exit codes carry meaning, and folding two causes into one code destroys evidence.** A process that vanishes because the main loop panicked looks exactly like one that shut down cleanly, so "exited non-zero" gets its own code rather than joining "still alive"; likewise "the app died with its Neovim", "not exactly one live child", and "the killed child never left the process table" are each distinct.
 
@@ -282,6 +359,8 @@ The other two preview queries carry no such dependency: `prvan` and `ednap` each
 
 **The block cursor corrupts the cell it covers, and the default page-segmentation mode reads nothing here.** A new scenario parks the cursor off the asserted row with a normal-mode `o` then Escape, because the inverted block turns the glyph beneath it into noise, and keeps the sparse-text segmentation the helpers pass, because the default mode reads nothing at all on the light-on-dark grid.
 
+**A terminal marker must not share a row with the shell prompt.** Resizing a pane, whether by a drawer opening below it or a split halving it, makes readline redraw its prompt row from column 0 and clear it, erasing a marker printed there. End the marker's line, as `; echo` does, so it sits on a row of its own.
+
 **A colour claim needs pixels, not OCR.** `tesseract` cannot tell light-on-dark from dark-on-light, so no OCR assertion is evidence about a colour whatever its page says. A colour smoke decodes its own `grim` capture with `cairo::ImageSurface::create_from_png`.
 
 Its sample band must be derived from the pane-area constants rather than hardcoded, and must be paired with a control band in the counterpart pane. Without the control, a coincidence between the editor's own background and the theme's would satisfy the assertion.
@@ -308,7 +387,7 @@ The directory is a sibling of the working directory rather than a child, for the
 
 Real pointer events reach the GTK controllers through [`wolf-pointer-inject`](../../../tools/wolf-pointer-inject/README.md), this repo's own long-lived virtual-pointer client, built by `flake.nix`. Its README owns the reasons it must be long-lived, why the off-the-shelf tools cannot work, and its command grammar; do not restate them here.
 
-Ten smokes use it, including the crash-overlay one, which needs a real click on the restart button, the preview-link one, whose click is the only injected point aimed at something WebKit drew, and the native-tabs one, whose middle-click is the only injected button-2 press. Each starts the helper inside `cage` before the app, so the seat already carries pointer capability when GTK binds, waits for its readiness line, and then drives it over a FIFO with a poll-for-ack protocol: an ack means the compositor has processed the event, not that the bytes left a buffer.
+Every smoke that injects a pointer event uses it, among them the crash-overlay one, which needs a real click on the restart button, the preview-link one, whose click is the only injected point aimed at something WebKit drew, and the native-tabs one, whose middle-click is the only injected button-2 press. Each starts the helper inside `cage` before the app, so the seat already carries pointer capability when GTK binds, waits for its readiness line, and then drives it over a FIFO with a poll-for-ack protocol: an ack means the compositor has processed the event, not that the bytes left a buffer.
 
 The scenarios hold the FIFO's write end open on a dedicated descriptor for their whole lifetime, since each write would otherwise close it and hand the helper a spurious end of file, and a trapped cleanup kills the helper before the app so shutdown never races an event.
 

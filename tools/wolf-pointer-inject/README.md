@@ -100,7 +100,7 @@ The derivation is a thunk forced only by `linuxShell.packages`, so Nix's lazines
 
 ## Who uses it
 
-The pointer smokes in [`crates/wolf-gnome/tests/smoke_headless/`](../../crates/wolf-gnome/tests/smoke_headless/), which start it inside `cage` before the app, drive it over a FIFO with a poll-for-ack protocol, and assert on files the captive Neovim writes about its own state. It is listed in that file's `REQUIRED_TOOLS`, so a devShell without it fails the suite loudly rather than skipping.
+The pointer smokes in [`crates/wolf-gnome/tests/smoke_headless/`](../../crates/wolf-gnome/tests/smoke_headless/), which start it inside `cage` before the app, drive it over a FIFO with a poll-for-ack protocol, and assert on files the captive Neovim writes about its own state. It is listed in `REQUIRED_TOOLS` in that binary's `main.rs`, so a devShell without it fails the suite loudly rather than skipping.
 
 ## Files
 

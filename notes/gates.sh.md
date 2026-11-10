@@ -14,7 +14,7 @@ The marker is trusted, never checked against `flake.nix`, so a direnv environmen
 
 ## Temporary directory
 
-On Linux the gates run with `TMPDIR` set to a fresh `/tmp/wolf-gates.XXXXXX`, removed on exit. The cage smokes in `crates/wolf-gnome/tests/smoke_headless.rs` make each compositor's runtime directory under `TMPDIR` and assert that its path fits `RUNTIME_DIR_MAX_BYTES`, because the Wayland socket inside it must fit `sun_path`. `nix develop` nests `TMPDIR` under its own `nix-shell.XXXXXX`, 17 bytes of that budget, so the base is always `/tmp` and never the inherited `TMPDIR`.
+On Linux the gates run with `TMPDIR` set to a fresh `/tmp/wolf-gates.XXXXXX`, removed on exit. The cage smokes in `crates/wolf-gnome/tests/smoke_headless/` make each compositor's runtime directory under `TMPDIR` and assert that its path fits `RUNTIME_DIR_MAX_BYTES`, because the Wayland socket inside it must fit `sun_path`. `nix develop` nests `TMPDIR` under its own `nix-shell.XXXXXX`, 17 bytes of that budget, so the base is always `/tmp` and never the inherited `TMPDIR`.
 
 The outer run makes the directory before entering the shell, so the directories `nix develop` leaves behind land inside it and go with it. It passes the path on as `WOLF_GATES_TMPDIR`, from which the inner run restores `TMPDIR`. An inner run started without one, as under regina, makes its own.
 
