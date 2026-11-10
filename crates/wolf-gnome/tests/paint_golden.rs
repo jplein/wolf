@@ -136,7 +136,7 @@ fn fixture_snapshot() -> Snapshot {
 ///
 /// The probe surface's pixel size is irrelevant — it exists only to obtain a Pango
 /// context — which is the same idiom `wolf_gnome::app::measure_metrics` and
-/// `tests/smoke_headless.rs::cell_metrics_for_smoke` use, so all three measure the
+/// `tests/smoke_headless/main.rs`'s `cell_metrics_for_smoke` use, so all three measure the
 /// same way.
 fn probe_metrics(family: &str, size_pt: f64, line_height_percent: f64) -> CellMetrics {
     let probe = ImageSurface::create(Format::ARgb32, 1, 1).expect("probe surface");

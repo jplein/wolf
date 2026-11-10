@@ -433,7 +433,7 @@ fn the_nix_side_pins_exactly_the_three_vendored_assets() {
 /// two platforms disagree, but that this file can no longer see one of them. A
 /// comparison that silently treated an unreadable Bazel pin as "no finding" would
 /// accept any Nix value at all — the shape
-/// `smoke_headless.rs::cage_is_only_spawned_through_the_isolating_helper` records as
+/// `smoke_headless/main.rs`'s `cage_is_only_spawned_through_the_isolating_helper` records as
 /// a guard that stopped guarding.
 ///
 /// ## Falsifier

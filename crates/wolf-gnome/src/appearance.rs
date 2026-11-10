@@ -153,7 +153,7 @@ fn push_background(core: &Rc<RefCell<Option<WolfCore>>>, dark: bool) {
 /// [`appearance_decision`]'s six-row table.
 ///
 /// Both effects this function applies are observed end to end, by two compositor
-/// smokes in `tests/smoke_headless.rs`:
+/// smokes, in `tests/smoke_headless/config.rs` and `tests/smoke_headless/preview.rs`:
 ///
 /// - `configured_appearance_reaches_neovims_background_under_cage` observes the
 ///   `push_background` call — that the configured value reaches Neovim's

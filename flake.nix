@@ -359,7 +359,7 @@
             pkgs.jetbrains-mono
             iaWriterMono
 
-            # Gate-required: smoke_headless.rs's cage smokes run under plain `cargo test`. `dbus-run-session`
+            # Gate-required: the smoke_headless cage smokes run under plain `cargo test`. `dbus-run-session`
             # keeps each cage on a private bus, off the developer's; one smoke also runs `dbus-send`.
             pkgs.cage
             pkgs.dbus
@@ -375,6 +375,9 @@
 
           # gates.sh reads WOLF_DEV_SHELL to skip entering the shell again.
           # See notes/gates.sh.md#dev-shell-entry
+
+          # crates/wolf-gnome/tests/flake_exports.rs fails unless every export below is scrubbed or kept.
+          # See notes/flake.nix.md#shellhook-exports
           shellHook = ''
             export WOLF_DEV_SHELL=1
 

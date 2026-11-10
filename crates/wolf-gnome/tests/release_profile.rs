@@ -3,7 +3,7 @@
 //!
 //! Two of the three tests read `<CARGO_MANIFEST_DIR>/../../Cargo.toml`: the
 //! profile is a promise, and those two are a tripwire on it, the same shape as
-//! `smoke_headless.rs`'s
+//! `smoke_headless/main.rs`'s
 //! `the_shared_smoke_config_pins_the_appearance_every_ocr_smoke_assumes`. The
 //! third reads the built binary instead, so it is evidence rather than a
 //! restatement — but it only DISCRIMINATES the release profile when the binary

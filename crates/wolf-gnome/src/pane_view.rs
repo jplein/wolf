@@ -157,7 +157,7 @@
 //!
 //! That invariant is more than a structural argument: it is executed end to
 //! end by the cage smoke `click_then_close_keeps_keyboard_input_alive_under_cage`
-//! in `crates/wolf-gnome/tests/smoke_headless.rs`, which CLICKS a pane, closes that
+//! in `crates/wolf-gnome/tests/smoke_headless/pointer.rs`, which CLICKS a pane, closes that
 //! same pane, and asserts keys still reach Neovim afterwards. Read its doc comment
 //! before touching any of this: making it red takes a THREE-part revert (restore
 //! `focusable(true)`, restore `area.grab_focus()` in `on_pane_clicked`, AND neuter
@@ -3041,7 +3041,7 @@ impl PaneInner {
     /// unit-tested headlessly. That move was made when pointer input had no
     /// end-to-end coverage on Linux at all, so a rule left in this file was a rule
     /// nothing verified. This method IS covered end to end now —
-    /// `smoke_headless.rs`'s `wheel_scroll_moves_the_viewport_under_cage` drives it
+    /// `smoke_headless/pointer.rs`'s `wheel_scroll_moves_the_viewport_under_cage` drives it
     /// from a real `wl_pointer.axis` frame and pins one detent to exactly one line
     /// — but the rule stays in `PaneScroll`: discriminating a per-grid carry would
     /// need two panes and a pointer that scrolls across both, which no smoke does,

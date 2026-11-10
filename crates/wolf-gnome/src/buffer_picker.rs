@@ -1176,8 +1176,8 @@ mod tests {
     /// The buffer-picker cage smoke's TARGET file (its `BUFPICK_FILE_TARGET`) —
     /// the one `BUFPICK_QUERY` must select, opened FIRST in the scenario.
     ///
-    /// The four consts below are duplicated from `tests/smoke_headless.rs` rather
-    /// than shared, because that file is a separate crate — the
+    /// The four consts below are duplicated from `tests/smoke_headless/editor.rs` rather
+    /// than shared, because that binary is a separate crate — the
     /// `palette.rs::SMOKE_QUERY` precedent.
     /// [`buffer_rows_for_the_smoke_query_select_exactly_the_target`] is what keeps
     /// the two from drifting: it proves in the FAST suite that this query still

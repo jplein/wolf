@@ -60,7 +60,7 @@
 //! `about:blank`. That is row 9 exactly, and row 10 is the empty-href sibling it
 //! shares a branch with. **Do not write down that nothing produces a schemeless
 //! target**: one `load_html` argument does, which is what the second falsifier on
-//! `smoke_headless::preview_link_click_repoints_the_pane_under_cage` exercises.
+//! `smoke_headless::preview::preview_link_click_repoints_the_pane_under_cage` exercises.
 //!
 //! What makes those two unreachable is [`file_uri_for`]'s DOMAIN instead: it answers
 //! `Some` for every source path the running application can produce, so the base is
@@ -682,7 +682,7 @@ mod tests {
     /// handler RAW — `uri="lnkinto.md"` — rather than resolved against `about:blank`,
     /// which is row 9 exactly. Row 9 is one `load_html` argument away from being live,
     /// and it is what the second falsifier on
-    /// `smoke_headless::preview_link_click_repoints_the_pane_under_cage` exercises. The
+    /// `smoke_headless::preview::preview_link_click_repoints_the_pane_under_cage` exercises. The
     /// five rows are kept because a guard whose reachability rests on one Lua `if` and
     /// one function argument is worth keeping — not because nothing could ever reach
     /// them, and not because they are "the nameless-buffer path", which they are not.

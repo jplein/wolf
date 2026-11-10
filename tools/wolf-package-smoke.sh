@@ -26,8 +26,8 @@ echo "==> WOLF_PACKAGE_OUT=${WOLF_PACKAGE_OUT}"
 echo "==> packaged layout assertions"
 nix develop --command cargo test -p wolf-gnome --test packaged_layout -- --ignored --nocapture
 
-# The `packaged_` filter selects exactly the ignored packaged tests in `smoke_headless.rs`.
+# The `packaged::` filter selects the ignored `packaged` module of the `smoke_headless` binary.
 echo "==> packaged compositor smokes"
-nix develop --command cargo test -p wolf-gnome --test smoke_headless -- --ignored --nocapture packaged_
+nix develop --command cargo test -p wolf-gnome --test smoke_headless -- --ignored --nocapture packaged::
 
 echo "==> packaged-artifact evidence complete for ${WOLF_PACKAGE_OUT}"

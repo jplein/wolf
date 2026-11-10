@@ -13,8 +13,8 @@
 //! **Pointer injection under cage now EXISTS**, and this file is deliberately not
 //! made redundant by it. The repo builds its own long-lived Wayland
 //! `zwlr_virtual_pointer_v1` client, `wolf-pointer-inject` (see
-//! `tools/wolf-pointer-inject/README.md`), and four cage smokes in
-//! `smoke_headless.rs` use it to drive real `wl_pointer` events into the running
+//! `tools/wolf-pointer-inject/README.md`), and the pointer-driven cage smokes in
+//! `smoke_headless/` use it to drive real `wl_pointer` events into the running
 //! GTK app.
 //!
 //! The split of responsibility is the point, and neither half duplicates the

@@ -36,7 +36,7 @@ const RGB_MAX: f64 = 255.0;
 /// `pangocairo::functions::context_get_resolution` returns `-1.0` on a context
 /// created over an `ImageSurface` — measured on this host — and the probe surface
 /// `app::measure_metrics`, `tests/paint_golden.rs` and
-/// `tests/smoke_headless.rs::cell_metrics_for_smoke` all measure against is
+/// `tests/smoke_headless/main.rs::cell_metrics_for_smoke` all measure against is
 /// exactly such a surface. `notes/wolf-gnome-decisions.md` records that this crate has
 /// no HiDPI handling and assumes 96 dpi; this constant is where that assumption
 /// stops being implicit.

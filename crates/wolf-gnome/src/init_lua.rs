@@ -295,7 +295,7 @@ mod tests {
     /// ## Falsifier
     ///
     /// Delete the `exists` guard on branch 2. Every smoke in
-    /// `crates/wolf-gnome/tests/smoke_headless.rs` then launches Neovim with a `-u`
+    /// `crates/wolf-gnome/tests/smoke_headless/` then launches Neovim with a `-u`
     /// naming a file inside `target/`, none of them attaches, and the whole suite
     /// goes red at once with no failure naming this branch.
     #[test]

@@ -306,7 +306,7 @@ mod tests {
     /// `0.0` and the offset `render::draw_glyph` applies, `baseline - ascent`, is
     /// exactly `0.0` — it moves no glyph by a single device pixel.
     ///
-    /// That zero is what the compositor smokes rest on. `smoke_headless.rs` pins
+    /// That zero is what the compositor smokes rest on. `smoke_headless/main.rs` pins
     /// `SMOKE_LINE_HEIGHT = 118`, and its doc comment carries the measurement
     /// behind the number: at the smoke's font size the app's cell height is
     /// `round(37.3333 * 1.18) == 44`, which is exactly `ascent + descent` for the

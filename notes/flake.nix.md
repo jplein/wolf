@@ -36,6 +36,14 @@ The output root is the tree itself (`$out/plugin/orlando.lua`), with no inner `o
 
 Neither `wolfOrlando` nor `wolfLighthouse` is in `linuxShell.packages`. The devShell must keep running the compositor smokes with neither tree beside the checkout's `runtime/nvim/init.lua`, because that binary is the control leg of the packaged-artifact comparison in `smoke_headless.rs::the_packaged_binary_loads_the_vendored_lighthouse_and_orlando_under_cage`. Adding either tree to the shell looks like a convenience and silently destroys that control. Both are Linux-only bindings under the [Darwin eval laziness](#darwin-eval-laziness) rule.
 
+## shellHook exports
+
+Every `export` in `linuxShell.shellHook` must be on one of the lists below, and `cargo test -p wolf-gnome --test flake_exports` checks it in seconds, with no compositor. The packaged smokes' scrub lists are in `crates/wolf-gnome/tests/smoke_headless/scrub_lists.rs`: `PACKAGED_SCRUB_ALWAYS` takes a variable the packaged artifact must supply for itself, `PACKAGED_SCRUB_GTK_RUNTIME` the GTK runtime data `wrapGAppsHook4` replaces, and `PACKAGED_SCRUB_FONT_STACK` the pinned font stack. `KEPT_FOR_THE_COMPOSITOR`, in `crates/wolf-gnome/tests/flake_exports.rs`, takes a variable `cage` itself needs.
+
+The packaged smokes launch the store binary under `cage`, so an export they inherit turns a claim about the store artifact into a claim about the devShell, and the smoke stays green either way. Classify a new export by asking whether the artifact must supply it, and never put one on the keep list to silence the guard. The GTK and font lists stand apart from `PACKAGED_SCRUB_ALWAYS` because some packaged smokes keep them, each for the reason its doc comment gives.
+
+`VENDORED_TREE_EXPORTS`, in the same test file, names the exports that must stay, `WOLF_TEST_ORLANDO_DIR` and `WOLF_TEST_LIGHTHOUSE_DIR`: without them the `wolf-ffi` tests that load the vendored Lua trees pass as no-ops.
+
 ## Treesitter grammar set
 
 `wolfTreesitterLanguages` is defined by the `srcs` of `bazel/treesitter-parsers/BUILD.bazel`, and the point of vendoring on Linux is cross-platform parity, so a divergence is the bug. `crates/wolf-gnome/tests/treesitter_languages.rs` enforces both the membership and that file's alphabetical order, reading this list as one quoted name per line. Adding a language means editing this list, that `srcs`, the grammar's pin in that package's `extensions.bzl`, and `MODULE.bazel` in one change.

@@ -205,7 +205,7 @@ fn toast_text(core: &WolfCore) -> String {
 ///
 /// `len(gettabinfo())` rather than the idiomatic `tabpagenr('$')`: identical value,
 /// and it keeps the typed command free of a `$` for the twin of this probe in
-/// `crates/wolf-gnome/tests/smoke_headless.rs`, which types the same shape through a
+/// `crates/wolf-gnome/tests/smoke_headless/panes.rs`, which types the same shape through a
 /// double-quoted shell word.
 fn tabline_probe(core: &WolfCore, waiter: &FlushWaiter, marker: &str) -> String {
     ex_command(
@@ -826,7 +826,7 @@ fn the_captive_config_turns_showtabline_off_at_one_tabpage() {
 ///
 /// ## What depends on this elsewhere
 ///
-/// `crates/wolf-gnome/tests/smoke_headless.rs`'s
+/// `crates/wolf-gnome/tests/smoke_headless/panes.rs`'s
 /// `native_tabs_open_switch_and_close_under_cage` asserts `H2 < H1` — that opening
 /// a second GTK tab costs the editor a row — and attributes that row to the
 /// `adw::TabBar`. That attribution is only sound while nvim draws no tabline of its

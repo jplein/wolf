@@ -6,7 +6,7 @@
 //! No display, no Neovim and no ripgrep: every input is a hand-built
 //! `wolf_core::SearchMatch` or a literal, and every expected value is written out by
 //! hand rather than computed by the function under test. What the widgets do with
-//! these answers is the cage smokes' business, in `smoke_headless.rs`.
+//! these answers is the cage smokes' business, in `smoke_headless/sidebar.rs`.
 //!
 //! The fixture paths are absolute and Unix-shaped (`/proj/...`), which is fine
 //! because this crate builds only on Linux.

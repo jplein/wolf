@@ -95,7 +95,7 @@ pub struct CrashOverlay {
 /// between EVERY pair of children (including the two spacers), so either change
 /// silently invalidates `restart_button_rect` — and with it the pixel that
 /// `crash_overlay_and_restart_button_recover_under_cage` in
-/// `crates/wolf-gnome/tests/smoke_headless.rs` clicks. The gap between the
+/// `crates/wolf-gnome/tests/smoke_headless/recovery.rs` clicks. The gap between the
 /// message and the button lives in the LABEL's `margin_bottom`, deliberately.
 #[must_use]
 pub fn build() -> CrashOverlay {

@@ -53,7 +53,7 @@
 //! state: it silently turns this file into a no-op pass and leaves the colorscheme
 //! activation branch unproven.
 //! `the_shellhook_still_stages_the_vendored_lua_trees_for_the_ffi_tests` in
-//! `crates/wolf-gnome/tests/smoke_headless.rs` fails if either vendored-tree export
+//! `crates/wolf-gnome/tests/flake_exports.rs` fails if either vendored-tree export
 //! is deleted from the `shellHook`.
 
 mod common;

@@ -303,10 +303,10 @@ mod tests {
     ///
     /// That is why every capped row below writes `Some(90)` by hand instead of
     /// naming [`MAX_GRID_COLS`]. The constant's own VALUE is pinned where it can be
-    /// pinned against something independent — `smoke_headless.rs`'s
+    /// pinned against something independent — `smoke_headless/config.rs`'s
     /// `column_cap_and_full_width_toggle_change_the_grid_under_cage`, which compares
     /// it against a column count the captive Neovim reports about itself, and
-    /// `the_column_cap_cannot_bind_at_the_ocr_smokes_geometry`, which measures it
+    /// `smoke_headless/main.rs`'s `the_column_cap_cannot_bind_at_the_ocr_smokes_geometry`, which measures it
     /// against a real cell. Neither belongs here.
     struct RectCase {
         desc: &'static str,
@@ -701,7 +701,7 @@ mod tests {
     /// table claims is which cap the flag SELECTS — the default one, or none at all
     /// — and that claim is true whatever number the default happens to be. It
     /// therefore claims nothing about the number itself: 90's own value is pinned in
-    /// `smoke_headless.rs`, against a column count the captive Neovim reports and
+    /// `smoke_headless/config.rs` and `smoke_headless/main.rs`, against a column count the captive Neovim reports and
     /// against a real measured cell.
     ///
     /// The `cell_w` echo is not decoration. `column_cap` is the only constructor the
@@ -1855,7 +1855,7 @@ mod tests {
                 expected_i32: (8, 16),
             },
             MinPaneCase {
-                // The 28 pt DejaVu Sans Mono cell `tests/smoke_headless.rs` records (22.4765625 x 44.0), under
+                // The 28 pt DejaVu Sans Mono cell `tests/smoke_headless/main.rs` records (22.4765625 x 44.0), under
                 // a tall strip: (ceil(22.4765625) + 40, 44 + 92 + 40) = (63, 176).
                 desc: "the smoke's measured cell under a tall strip",
                 cell_w: 22.4765625,

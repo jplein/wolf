@@ -45,7 +45,7 @@
 //! BOTH environments takes. A SKIP inside either is a LOST EXPORT rather than the
 //! expected state, and costs this regression its whole reproduction;
 //! `the_shellhook_still_stages_the_vendored_lua_trees_for_the_ffi_tests` in
-//! `crates/wolf-gnome/tests/smoke_headless.rs` fails if either vendored-tree export
+//! `crates/wolf-gnome/tests/flake_exports.rs` fails if either vendored-tree export
 //! is deleted from the `shellHook`. The lighthouse colorscheme tree is staged too
 //! when available (the real bundle has it), but its absence does not skip the test
 //! — the default colorscheme also gives `CursorLine` (the group `OrlandoCodeBlock`

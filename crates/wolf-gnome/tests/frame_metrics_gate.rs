@@ -28,7 +28,7 @@
 //!
 //! The enabled path belongs to a separate process:
 //! `frame_stats_report_covers_the_live_typing_path_under_cage` in
-//! `smoke_headless.rs` launches the built binary under `cage` with
+//! `smoke_headless/frame_stats.rs` launches the built binary under `cage` with
 //! `WOLF_FRAME_STATS=1` and reads back the report file the application appends to.
 //!
 //! # What a green run establishes, and what it does not

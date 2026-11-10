@@ -715,7 +715,7 @@ mod tests {
     /// The query the cage smoke `command_palette_chord_runs_the_selected_command_under_cage`
     /// types into the palette's search entry (its `PALETTE_QUERY`).
     ///
-    /// Duplicated here rather than shared because `tests/smoke_headless.rs` is a
+    /// Duplicated here rather than shared because `tests/smoke_headless/editor.rs` is in a
     /// separate crate; [`palette_rows_query_new_ranks_the_new_buffer_row_first`] is
     /// what keeps the two from drifting, by proving in the FAST suite that this
     /// query still puts the New row at the TOP of the list. It matches more than
@@ -753,7 +753,7 @@ mod tests {
     /// comes from.
     ///
     /// The smoke carries its own copy of the literal for the reason [`SMOKE_QUERY`]
-    /// does — `tests/smoke_headless.rs` is a separate crate — and that test is the
+    /// does — `tests/smoke_headless/restore.rs` is in a separate crate — and that test is the
     /// join that keeps the two from drifting.
     const NEW_WINDOW_PALETTE_QUERY: &str = "new window";
 
@@ -761,8 +761,8 @@ mod tests {
     /// types into the palette's search entry (its `OPENRECENT_QUERY`, which that file
     /// defines AS its `OPENRECENT_TARGET_DIR` so the two cannot drift there).
     ///
-    /// Duplicated here for the same reason [`SMOKE_QUERY`] is — `tests/smoke_headless.rs`
-    /// is a separate crate and cannot import these — and
+    /// Duplicated here for the same reason [`SMOKE_QUERY`] is — `tests/smoke_headless/sidebar.rs`
+    /// is in a separate crate and cannot import these — and
     /// [`palette_rows_query_orzulu_selects_exactly_the_recent_folder_row`] is the join
     /// that keeps the two files honest.
     const SMOKE_RECENT_QUERY: &str = "orzulu";
@@ -1818,7 +1818,7 @@ mod tests {
             key, SMOKE_MRU_KEY,
             "`Command::NewBuffer`'s registry id is {key:?}, but the cage smoke asserts the \
              palette activation recorded the literal {SMOKE_MRU_KEY:?} in the command MRU. \
-             Update `PALETTE_MRU_KEY` in `tests/smoke_headless.rs` and the const above together, \
+             Update `PALETTE_MRU_KEY` in `tests/smoke_headless/editor.rs` and the const above together, \
              or that smoke's MRU assertion becomes unfalsifiable."
         );
 
@@ -2100,7 +2100,7 @@ mod tests {
                 id,
                 "{command:?}'s registry id is {:?}, but the cage smokes assert the palette \
                  activation recorded the literal {id:?} in the command MRU. Update \
-                 `PREVIEW_MRU_KEYS` in `tests/smoke_headless.rs` and PREVIEW_SMOKE_QUERIES here \
+                 `PREVIEW_MRU_KEYS` in `tests/smoke_headless/preview.rs` and PREVIEW_SMOKE_QUERIES here \
                  together, or those smokes' MRU precondition becomes unfalsifiable.",
                 command.spec().id
             );

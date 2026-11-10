@@ -283,7 +283,7 @@ fn the_packaged_output_carries_the_captive_init_lua_at_the_resolvers_own_path() 
 /// only one of them can kill the application. MEASURED with an empty `orlando/`:
 /// `vim.cmd.runtime("plugin/orlando.lua")` finds nothing to source and returns
 /// silently, `init.lua` runs to its end, and the app behaves normally — nothing but the
-/// vendored-tree readbacks in `smoke_headless.rs` observes that the plugin is missing.
+/// vendored-tree readbacks in `smoke_headless/packaged.rs` observes that the plugin is missing.
 /// The empty-lighthouse case is the fatal one and the empty-orlando case the silent
 /// one; this assertion is what reports either.
 ///

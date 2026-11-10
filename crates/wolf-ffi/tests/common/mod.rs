@@ -34,7 +34,7 @@ pub use wolf_test_support::{
 /// either environment a `None` is a LOST EXPORT, silently turning those tests into
 /// no-op passes.
 /// `the_shellhook_still_stages_the_vendored_lua_trees_for_the_ffi_tests` in
-/// `crates/wolf-gnome/tests/smoke_headless.rs` is the guard against that deletion.
+/// `crates/wolf-gnome/tests/flake_exports.rs` is the guard against that deletion.
 /// Mirrors the `*_or_none` / `*_or_skip` convention of the other runfile helpers and
 /// reuses the same [`resolve_test_runfile`] mechanism as [`init_lua_path`] /
 /// [`nvim_bin_or_skip`].
@@ -56,7 +56,7 @@ pub fn orlando_dir_or_none() -> Option<PathBuf> {
 /// its colorscheme overlay; inside either environment a `None` is a LOST EXPORT,
 /// silently turning `lighthouse_load` into a no-op pass.
 /// `the_shellhook_still_stages_the_vendored_lua_trees_for_the_ffi_tests` in
-/// `crates/wolf-gnome/tests/smoke_headless.rs` is the guard against that deletion.
+/// `crates/wolf-gnome/tests/flake_exports.rs` is the guard against that deletion.
 /// Mirrors the `*_or_none` / `*_or_skip` convention of the other runfile helpers and
 /// reuses the same [`resolve_test_runfile`] mechanism as [`init_lua_path`] /
 /// [`nvim_bin_or_skip`].

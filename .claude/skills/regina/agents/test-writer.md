@@ -54,7 +54,7 @@ Your own worker is macOS. The secondary `linux`, a NixOS machine reached over `s
 
 The task keeps one workspace there, so `target/` survives between your commands and the gate's runs, but the task's first cargo command compiles the workspace cold. Prefer narrow commands: `regina on linux -- cargo clippy -p wolf-gnome --all-targets -- -D warnings`, `regina on linux -- cargo test -p wolf-gnome --test <binary> -- --exact <name>`. `regina on linux -- ./gates.sh` is the whole Linux gate, and can outlast the limit while `target/` is cold.
 
-The cage smokes in `crates/wolf-gnome/tests/smoke_headless.rs` need a short `TMPDIR` under `/tmp`, which `gates.sh` makes for itself (`notes/gates.sh.md`, Temporary directory). Run one directly as `regina on linux -- sh -c 'TMPDIR=$(mktemp -d /tmp/w.XXXXXX) cargo test -p wolf-gnome --test smoke_headless -- --exact <name>'`. To format a Linux-only file, read `regina on linux -- cargo fmt --all -- --check` and apply the diff it prints.
+The cage smokes in `crates/wolf-gnome/tests/smoke_headless/` need a short `TMPDIR` under `/tmp`, which `gates.sh` makes for itself (`notes/gates.sh.md`, Temporary directory). Run one directly as `regina on linux -- sh -c 'TMPDIR=$(mktemp -d /tmp/w.XXXXXX) cargo test -p wolf-gnome --test smoke_headless -- --exact <module>::<name>'`. To format a Linux-only file, read `regina on linux -- cargo fmt --all -- --check` and apply the diff it prints.
 
 ## The project
 
