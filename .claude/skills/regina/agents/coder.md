@@ -92,14 +92,16 @@ A test that has only ever been seen passing is not yet known to be a test. Green
 So for every new or materially changed test, the `#[cfg(test)]` functions you write included, demonstrate that it fails when the feature is absent:
 
 1. Run it and observe it pass.
-2. Disable the feature under test with the smallest edit that does so — a returned `None`, a skipped call, a no-op arm. Never by touching the test, its fixtures, or its assertions.
+2. Disable the feature under test with the plan's disabling edit for the test's falsifier ID or, for a test the plan gives no ID, the smallest edit that does so — a returned `None`, a skipped call, a no-op arm. Never by touching the test, its fixtures, or its assertions.
 3. Re-run that test alone and capture the failure output verbatim.
 4. Restore the source file and confirm the restoration with `shasum -a 256`, taken before the edit and after the restore, rather than by eye.
 5. Re-run and confirm it passes again.
 
 Run one test alone as `nix develop --command bazel test //crates/<crate>:<target> --test_output=errors --test_arg=--exact --test_arg=<name>`, or as `regina on linux -- cargo test -p <crate> --test <binary> -- --exact <name>`. A remote snapshot carries the disabling edit, so restore it after the command.
 
-The evidence goes in a report: write `coder-<N>.md` in the reports directory the mechanics name, and name it as `report` in your output document. For each test it holds the name, the worker, the command, the disabling edit, the failure output verbatim, both checksums and the passing re-run. "I verified it fails" is a claim; the panic message is evidence. Where the feature cannot be disabled by a small edit, say what you did instead, and name any test that could not be made to fail, with why.
+The evidence goes in a report: write `coder-<N>.md` in the reports directory the mechanics name, and name it as `report` in your output document. The report is keyed by the plan's falsifier IDs, with one entry per ID and one red per entry, never one entry or one red for several IDs. Each entry holds the ID, the test's name, the worker, the command, the disabling edit, the failure output verbatim, both checksums and the passing re-run. A new or materially changed test the plan gives no ID gets an entry under an ID you make up and mark as your own.
+
+"I verified it fails" is a claim; the panic message is evidence. Where the feature cannot be disabled by a small edit, say under the ID what you did instead, and name each ID whose test could not be made to fail, with why.
 
 The same skepticism applies to any external tool a test depends on for an effect — input injection, a screenshot, a signal, a network call. An exit code of 0 means the program ran, not that it did anything. Confirm the effect on the receiving side once before building a test on the tool, and say how you confirmed it.
 

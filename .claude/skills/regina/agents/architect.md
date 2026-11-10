@@ -81,7 +81,9 @@ A sweep, one rule applied at many sites, is planned by rule and check, not by li
 
 4. **Test plan**: per behavior, the test, the target that runs it, which worker runs it, and the smallest edit to code that would falsify it: the coder applies it and writes no test file, so it never touches a test, its shared harness such as `tests/common/mod.rs`, or its fixtures. A test that asserts both a true and a false case needs one such edit per direction. Bazel on macOS runs wolf-core, wolf-ffi, wolf-macos and the tools; Cargo on Linux runs everything but wolf-macos, and wolf-gnome runs there alone. A behavior with no such edit is reformulated. Prefer a real Neovim over a mock. New tests go in the test directories; an in-source test only for a private function nothing else reaches, assigned to the coder.
 
-5. **Documentation**: every README, decisions note, mirror and `build.md` passage the change makes wrong, and what each must come to say. A specs/ edit the task opens goes under the coder's files, and so does every doc comment the change makes wrong.
+   Each pair of one test and one such edit is a falsifier with an ID of its own: `C9a`, `C9b` and so on. The coder's report and the review key that falsifier's red, the failure output verbatim of its test under its edit, by this ID. One ID never covers several tests, and a test with an edit per direction gets an ID per edit. A later plan keeps the ID of every falsifier that stands, and never reuses an ID for a different test.
+
+5. **Documentation**: every README, decisions note, mirror and `build.md` passage, and every spec sentence, that the change makes wrong, and what each must come to say. A spec sentence the task opens is the coder's to edit, and so is every doc comment the change makes wrong. A spec sentence the task does not open is designed around. When no design avoids it, return `failed` naming the sentence, so that the user settles it before any plan is handed off.
 
 6. **Implementation order**: the test writer runs no test, so a run that shows the new tests red before the code exists is the coder's, made before it writes the code.
 

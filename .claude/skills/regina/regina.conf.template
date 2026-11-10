@@ -27,6 +27,9 @@ gate-documentation = s=0; prettier --check "**/*.md" || s=1; bazel test --color=
 
 [worker wolf linux]
 host = nixos.local
+# Fails a host that takes the connection but never answers, without cutting a silent gate.
+# README.md has the reasons and the measurement.
+ssh = ssh -o ConnectTimeout=30 -o ServerAliveInterval=30 -o ServerAliveCountMax=4
 # A state root of its own, so a regina run on nixos.local never holds the lock these sessions need.
 start = /home/jplein/dev/jplein/regina/result/bin/regina serve --state /home/jplein/.local/state/regina-wolf
 workflow = nix

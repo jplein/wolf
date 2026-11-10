@@ -79,7 +79,13 @@ Write a structured review:
    - Mocks where a real Neovim would work. The application exists to drive a Neovim process, so integration and end-to-end coverage is the norm and a mock needs a stated reason.
    - Behavior and contracts asserted rather than implementation details.
 
-4. **Evidence that the tests can fail**: a new or materially changed test without verbatim failure output in a coder report makes the verdict "Needs revision", naming the test. For each test that has it, ask whether the disabling edit breaks what the test claims to check.
+4. **Evidence that the tests can fail**: every falsifier ID of the plan in force, those it keeps from an earlier plan included, needs its own red in a coder report. A red is the failure output verbatim of the ID's one test under its one disabling edit. Each of these makes the verdict "Needs revision", naming the ID or the test:
+
+   - an ID with no red
+   - an entry or a red that stands for several IDs
+   - a new or materially changed test with neither an ID nor a red
+
+   For each red, ask whether the disabling edit breaks what the test claims to check.
 
 5. **Convention violations**: Anything that violates `CLAUDE.md`. Check these in particular:
 
