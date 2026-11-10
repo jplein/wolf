@@ -79,6 +79,8 @@ struct TermState {
     vt: Terminal,
     /// libghostty-vt's built-in palette, which the theme's 16 colours are laid over.
     base_palette: [wolf_vt::Rgb; 256],
+    /// The pty's size as `resize` last set it. A program's DECCOLM changes the grid's size,
+    /// `vt.size()`, without changing this one.
     size: (u16, u16),
     cell_px: (u32, u32),
     version: u64,
@@ -375,9 +377,11 @@ impl Session {
     }
 
     /// Resizes the emulator, then the pty. A zero size is ignored, and a zero cell size
-    /// keeps the previous one. A size and cell size the session already has do nothing,
-    /// neither repainting every row nor sending `SIGWINCH`, because front-ends resend a
-    /// size on wakes until the frame shows it.
+    /// keeps the previous one. A request does nothing, neither repainting every row nor
+    /// sending `SIGWINCH`, only when it matches the emulator's grid, the pty's size and the
+    /// cell size, because front-ends resend a size on wakes until the frame shows it. The
+    /// grid is compared because a program's DECCOLM resizes it alone, and the pty's size
+    /// because the grid can match a size the pty never had.
     pub(super) fn resize(&self, (cols, rows): (u16, u16), cell_px: (u32, u32)) {
         if cols == 0 || rows == 0 {
             return;
@@ -389,7 +393,9 @@ impl Session {
             } else {
                 cell_px
             };
-            if (state.size, state.cell_px) == ((cols, rows), cell_px) {
+            if state.vt.size() == (cols, rows)
+                && (state.size, state.cell_px) == ((cols, rows), cell_px)
+            {
                 return;
             }
             if state.vt.resize(cols, rows, cell_px.0, cell_px.1).is_err() {

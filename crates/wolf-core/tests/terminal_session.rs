@@ -4,7 +4,8 @@
 //!
 //! Covered: output reaching the frame's cells and keys reaching the shell, a resize reaching
 //! both the frame and the shell, an unchanged resize publishing no frame while a change of the
-//! cell size alone still signals the shell, the shell's environment and cwd, id allocation, a
+//! cell size alone still signals the shell, a resize undoing a program's DECCOLM grid and
+//! reaching the pty that grid left behind, the shell's environment and cwd, id allocation, a
 //! failed spawn, the placeholder's binding in `Snapshot.win_buffers`, `pane_status` for a
 //! terminal pane, row versions, publishing through the wake without `seq`, the publish
 //! coalescing, the render hold of synchronized output, the colours taken from the editor, and
@@ -23,6 +24,8 @@
 //! - The kernel sends `SIGWINCH` for a `TIOCSWINSZ` that changes only the pixel fields, and a
 //!   `trap … WINCH` in `sh -c` runs once the foreground `sleep` returns. `winch-1` and
 //!   `winch-2` measure both.
+//! - libghostty-vt resizes its grid to 132 columns on `ESC[?3h` once mode 40 is set, and a
+//!   resize leaves mode 40 set. The two 132-column polls of the DECCOLM test measure both.
 //! - A plain `:hi` changes no `ColorScheme` state, so `:doautocmd ColorScheme` is what makes
 //!   `wolf_theme` emit again, as `theme.rs` does. Changing `Normal` makes Neovim send
 //!   `default_colors_set` in its next redraw batch.
@@ -204,6 +207,77 @@ fn equal_resizes_publish_nothing_and_a_cell_size_change_signals_the_shell() {
         "the shell's trap to print `winch-2` after the cell size alone changed from 9x18 to \
          10x20; without it the pty got no TIOCSWINSZ, as when a guard compares only the size",
         |frame| frame_text(frame).contains("winch-2"),
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// A program's DECCOLM resizes the grid alone: a resize to the pane's size undoes it although
+/// the pty already has that size, and a resize to the grid's size still reaches the pty.
+#[test]
+fn a_resize_undoes_a_deccolm_grid_and_reaches_the_pty_it_left_behind() {
+    let (core, waiter, _cwd) = start_core();
+    let script = "stty -echo; printf ready; read x; printf '\\033[?40h\\033[?3h'; read y; \
+                  printf '\\033[?3h'; read z; stty size; exec sleep 1000";
+    let id = open_session(&core, TerminalTarget::Window(0), sh_script(script));
+    wait_for_text(&core, &waiter, id, "ready");
+
+    core.resize_terminal(id, 100, 30, 9, 18);
+    poll_frame(
+        &core,
+        &waiter,
+        id,
+        "the frame to be 100x30 after resize_terminal(100, 30) from the default 80x24",
+        |frame| (frame.cols, frame.rows) == (100, 30),
+    );
+
+    core.terminal_key(id, term_key(Key::Enter));
+    poll_frame(
+        &core,
+        &waiter,
+        id,
+        "the frame to be 132x30 after the shell printed `ESC[?40h ESC[?3h`; a 100x30 frame means \
+         libghostty-vt ignored DECCOLM under mode 40, so the test's premise failed and the \
+         resize guard is not at fault",
+        |frame| (frame.cols, frame.rows) == (132, 30),
+    );
+
+    core.resize_terminal(id, 100, 30, 9, 18);
+    poll_frame(
+        &core,
+        &waiter,
+        id,
+        "the frame to return to 100x30 after resize_terminal(100, 30) undid the program's 132x30 \
+         grid; a frame still at 132 columns means the resize was skipped because it matched the \
+         size last sent to the pty rather than the grid's",
+        |frame| (frame.cols, frame.rows) == (100, 30),
+    );
+
+    core.terminal_key(id, term_key(Key::Enter));
+    poll_frame(
+        &core,
+        &waiter,
+        id,
+        "the frame to be 132x30 after a second `ESC[?3h`; a 100x30 frame means the resize to \
+         100x30 cleared mode 40, so the test's premise failed and the guard is not at fault",
+        |frame| (frame.cols, frame.rows) == (132, 30),
+    );
+
+    core.resize_terminal(id, 132, 30, 9, 18);
+    core.terminal_key(id, term_key(Key::Enter));
+    let frame = poll_frame(
+        &core,
+        &waiter,
+        id,
+        "`stty size` to print the pty's size",
+        |frame| frame_text(frame).contains("30 132") || frame_text(frame).contains("30 100"),
+    );
+    assert!(
+        frame_text(&frame).contains("30 132"),
+        "`stty size` must print `30 132` after resize_terminal(132, 30); `30 100` means the pty \
+         kept its old size because the resize was skipped for matching the grid, which DECCOLM \
+         had already made 132x30. The frame reads:\n{}",
+        frame_text(&frame)
     );
 
     core.shutdown().expect("shutdown should be Ok");
