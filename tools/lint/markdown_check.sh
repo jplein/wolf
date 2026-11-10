@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Checks Markdown files, passed as "$@", against the documentation rules in CLAUDE.md.
-# The rules, thresholds and exemptions: tools/lint/README.md#what-markdown-checks
+# Checks Markdown files, passed as "$@", against the documentation rules in CLAUDE.md, or with
+# --entry-words prints each entry's word count. tools/lint/README.md#what-markdown-checks
 set -euo pipefail
 
 MAX_LINE="${WOLF_MD_MAX_LINE:-800}"
@@ -11,26 +11,35 @@ MAX_ENTRY_WORDS="${WOLF_MD_MAX_ENTRY_WORDS:-250}"
 # Keep sorted.
 ACRONYMS="ABI ANSI API APIs ARC ARGB ASCII BMP BSD BUILD CJK CLAUDE CLI CPU CRLF CSS CWD DECISIONS DEL DFS DOM EOF EOL ESC FFI FIFO GDK GNOME GNU GTK GUI GUST HTML HTTP HTTPS IDE IME JSON KVO LLDB LOC LSP MIT MODULE MRU NTP NVIM OCR OFL OOM PID PNG POSIX README RGB RHS RPC RRGGBB RTL SDK SHA SIGKILL SIGTERM SIL SVG TCC TCP TLS TMPDIR TODO TOML TSM TTF TTY URI URL URLs UTF VIMRUNTIME XDG XML YAML ZIP"
 
+WORDS_ONLY=0
+if [[ "${1:-}" == "--entry-words" ]]; then
+  WORDS_ONLY=1
+  shift
+fi
+
 if [[ "$#" -eq 0 ]]; then
   echo "ERROR: no Markdown files were passed to the checker." >&2
   exit 1
 fi
 
-echo "Checking $# Markdown file(s)..."
-echo "  max line: ${MAX_LINE} chars | max entry: ${MAX_ENTRY_WORDS} words | size warning: ${MAX_BYTES} bytes"
-echo
-
 status=0
 
-# The size ceiling only warns: a directory with many source files legitimately needs a long README.
-for f in "$@"; do
-  bytes=$(wc -c <"${f}")
-  if [[ "${bytes}" -gt "${MAX_BYTES}" ]]; then
-    echo "${f}: warning: [big-file] ${bytes} bytes exceeds the ${MAX_BYTES}-byte ceiling"
-  fi
-done
+if [[ "${WORDS_ONLY}" -eq 0 ]]; then
+  echo "Checking $# Markdown file(s)..."
+  echo "  max line: ${MAX_LINE} chars | max entry: ${MAX_ENTRY_WORDS} words | size warning: ${MAX_BYTES} bytes"
+  echo
+
+  # The size ceiling only warns: a directory with many source files legitimately needs a long README.
+  for f in "$@"; do
+    bytes=$(wc -c <"${f}")
+    if [[ "${bytes}" -gt "${MAX_BYTES}" ]]; then
+      echo "${f}: warning: [big-file] ${bytes} bytes exceeds the ${MAX_BYTES}-byte ceiling"
+    fi
+  done
+fi
 
 awk \
+  -v words_only="${WORDS_ONLY}" \
   -v max_line="${MAX_LINE}" \
   -v max_entry_words="${MAX_ENTRY_WORDS}" \
   -v acronyms="${ACRONYMS}" \
@@ -43,15 +52,18 @@ BEGIN {
 }
 
 function report(file, line, rule, msg) {
+  if (words_only) return
   printf "%s:%d: [%s] %s\n", file, line, rule, msg
   findings++
 }
 
-# Close the open #### entry and report it if it blew the word budget.
+# Close the open #### entry: print its count in words mode, else report it if it blew the budget.
 function close_entry() {
   # Blame entry_file, not FILENAME: the FNR == 1 caller runs after awk has
   # advanced to the next file.
-  if (entry != "" && entry_words > max_entry_words)
+  if (entry != "" && words_only)
+    printf "%s:%d: %d/%d words: %s\n", entry_file, entry_line, entry_words, max_entry_words, entry
+  else if (entry != "" && entry_words > max_entry_words)
     report(entry_file, entry_line, "entry-budget", \
            "entry " entry " is " entry_words " words (budget " max_entry_words ")")
   entry = ""
@@ -161,6 +173,7 @@ length($0) > max_line && $0 !~ /^[ \t]*\|/ {
 END {
   close_entry()
   close_note()
+  if (words_only) exit 0
   if (findings > 0) {
     printf "\n%d finding(s).\n", findings
     exit 1

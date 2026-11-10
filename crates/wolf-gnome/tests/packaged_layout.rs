@@ -475,8 +475,8 @@ fn desktop_value<'a>(keys: &'a [(String, String)], wanted: &str) -> Option<&'a s
 /// `app::run` calls `app.run_with_args::<&str>(&[])`, so the process ignores its real
 /// argv entirely. A `%f` or `%U` would make the desktop hand Wolf a path it silently
 /// drops, and a `MimeType=text/markdown` would put Wolf in the "Open With" list for
-/// every `.md` file and then open an empty window. Both are the shape `notes/wolf-gnome-decisions.md`
-/// rejects: a control that visibly refuses input.
+/// every `.md` file and then open an empty window. Both are the shape
+/// `notes/wolf-gnome/window-structure.md` rejects: a control that visibly refuses input.
 ///
 /// ## Falsifiers
 ///

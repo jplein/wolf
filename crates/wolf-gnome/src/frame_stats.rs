@@ -4,7 +4,7 @@
 //! window: which buckets exist, how samples accumulate, how percentiles are
 //! computed, how a report is rendered, how the `WOLF_FRAME_STATS*` values are
 //! parsed, and whether a report interval has elapsed. The report surface those
-//! decisions produce is the one `notes/wolf-gnome-decisions.md#frame-time-instrumentation`
+//! decisions produce is the one `notes/wolf-gnome/frame-time-instrumentation.md`
 //! fixes for both front-ends. **It never reads a clock,
 //! never touches the process environment and holds no process-global state** —
 //! [`crate::frame_metrics`] owns all three, which is what keeps this file
@@ -81,7 +81,7 @@ use std::time::Duration;
 
 /// The grep-able prefix stamped on every emitted line, including the last.
 ///
-/// Part of the report surface `notes/wolf-gnome-decisions.md#frame-time-instrumentation`
+/// Part of the report surface `notes/wolf-gnome/frame-time-instrumentation.md`
 /// fixes for both front-ends; changing it breaks that surface and every `grep` a
 /// measurement run depends on.
 pub const LINE_PREFIX: &str = "wolf-frame-stats ";

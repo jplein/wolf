@@ -20,7 +20,7 @@
 //! ## Why a separate toplevel
 //!
 //! The dialog is its own window, so the main window's focus widget is untouched
-//! and `notes/wolf-gnome-decisions.md`'s focus regime — which is about widgets INSIDE the main
+//! and `notes/wolf-gnome/window-structure.md`'s focus regime — which is about widgets INSIDE the main
 //! window being destroyed and taking the toplevel's focus with them — does not
 //! apply. That is why a transient window was chosen over a fifth in-window
 //! overlay.

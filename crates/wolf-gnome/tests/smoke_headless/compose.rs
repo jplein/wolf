@@ -623,7 +623,7 @@ exit 0
 /// reach Neovim.**
 ///
 /// This is the executable form of one bullet under "Present limitations" in
-/// `notes/wolf-gnome-decisions.md`, the one beginning *"While a compose sequence
+/// `notes/wolf-gnome/present-limitations.md`, the one beginning *"While a compose sequence
 /// is pending, a plain `Ctrl+<letter>` press is claimed by the input method and does
 /// not reach Neovim, and the sequence survives it"*. That sentence qualifies two
 /// sentences of "The accelerator namespace" — the ones saying a disabled action's
@@ -663,9 +663,9 @@ exit 0
 ///
 /// What that costs is precision about the MECHANISM, not about the effect: the effect
 /// — a `<C-w>v` typed between a dead key and the key resolving it does not split — is
-/// exactly what the `notes/wolf-gnome-decisions.md` bullet says a user pays, and it is what this smoke
-/// pins. The recipe for sharpening it is cheap and is recorded rather than taken: send
-/// a SECOND `v` after the first, since by then the unmatched sequence has been
+/// exactly what the `notes/wolf-gnome/present-limitations.md` bullet says a user pays, and it is
+/// what this smoke pins. The recipe for sharpening it is cheap and is recorded rather than taken:
+/// send a SECOND `v` after the first, since by then the unmatched sequence has been
 /// cancelled, and a chord that reached Neovim would still be waiting for its argument
 /// and would split on it. That leg owes a measurement first — that GTK cancels the
 /// unmatched sequence rather than holding it, and passes the next key through — and
@@ -696,12 +696,13 @@ exit 0
 ///
 /// ## What will change this smoke, and it is not a regression
 ///
-/// `notes/wolf-gnome-decisions.md` names one follow-up for the limitation above: refusing to offer a
-/// press carrying `CONTROL_MASK` to the input method, which owes a measurement that
-/// the pending sequence survives the refusal. The day that lands, the subject arm
-/// splits and assertion 6 goes red **correctly**. The smoke, the `notes/wolf-gnome-decisions.md`
-/// bullet and the two "The accelerator namespace" sentences move together in that
-/// commit; assertion 6's expected value is not to be flipped on its own.
+/// `notes/wolf-gnome/present-limitations.md` names one follow-up for the limitation above:
+/// refusing to offer a press carrying `CONTROL_MASK` to the input method, which owes a
+/// measurement that the pending sequence survives the refusal. The day that lands, the subject
+/// arm splits and assertion 6 goes red **correctly**. The smoke, the
+/// `notes/wolf-gnome/present-limitations.md` bullet and the two
+/// `notes/wolf-gnome/the-accelerator-namespace.md` sentences move together in that commit;
+/// assertion 6's expected value is not to be flipped on its own.
 #[test]
 fn a_control_chord_while_composing_is_claimed_by_the_input_method_under_cage() {
     const SMOKE: &str = "a_control_chord_while_composing_is_claimed_by_the_input_method_under_cage";
@@ -840,7 +841,8 @@ fn a_control_chord_while_composing_is_claimed_by_the_input_method_under_cage() {
          pressed. Classify the reading:\n\
          {IMCHORD_WINDOWS_SPLIT} means the chord and its argument BOTH reached Neovim while a \
          compose sequence was pending. **That is a genuine finding, not a broken test.** It makes \
-         the bullet under \"Present limitations\" in `notes/wolf-gnome-decisions.md` — the one \
+         the bullet under \"Present limitations\" in `notes/wolf-gnome/present-limitations.md` \
+         — the one \
          beginning \"While a compose sequence is pending, a plain `Ctrl+<letter>` press is claimed \
          by the input method and does not reach Neovim, and the sequence survives it\" — FALSE \
          against the shipped glue, together with the qualifying clauses it puts on \"The \
@@ -849,7 +851,8 @@ fn a_control_chord_while_composing_is_claimed_by_the_input_method_under_cage() {
          this assertion to agree with it.\n\
          More than {IMCHORD_WINDOWS_SPLIT} means something split twice, which neither arm can \
          produce — suspect a stray keystroke or a doubled key path.\n\
-         One further reading to expect on purpose: the repair `notes/wolf-gnome-decisions.md` names as a follow-up \
+         One further reading to expect on purpose: the repair \
+         `notes/wolf-gnome/present-limitations.md` names as a follow-up \
          — refusing to offer a press carrying CONTROL_MASK to the input method — makes this \
          assertion read {IMCHORD_WINDOWS_SPLIT} CORRECTLY. If that is the change in flight, the \
          limitation bullet, the accelerator-namespace clauses and this expectation move together \

@@ -532,7 +532,7 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
     overlay.add_overlay(&crash.banner_widget());
 
     // The tree reads no cwd: its root label is passed here and on each `reroot`, so the shell alone
-    // knows the root. Per window, not per tab: see notes/wolf-gnome-decisions.md#window-structure
+    // knows the root. Per window, not per tab: see notes/wolf-gnome/window-structure.md
     let tree = tree_view::build(
         &core,
         focus_target.clone(),
@@ -547,7 +547,7 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
     paned.set_position(TREE_PANE_WIDTH);
 
     // No title widget is deliberate: one changes the header bar's natural height, which is a term of
-    // `PANE_ORIGIN_Y_EXPECTED`. See notes/wolf-gnome-decisions.md#window-structure
+    // `PANE_ORIGIN_Y_EXPECTED`. See notes/wolf-gnome/window-structure.md
     let header = adw::HeaderBar::new();
 
     let sidebar_button = gtk::Button::builder()
@@ -588,7 +588,7 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
     header.pack_end(&menu_button);
 
     // Header, tab bar, then the split. The bar autohides at one page, keeping one-tab geometry equal
-    // to no tab layer. See notes/wolf-gnome-decisions.md#window-structure
+    // to no tab layer. See notes/wolf-gnome/window-structure.md
     let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
     content.append(&header);
     content.append(&tabs.bar_widget());
@@ -733,7 +733,7 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
                     }
                 }
                 // After the `wake` region closes, so the emit's cost is never measured. No timer: see
-                // notes/wolf-gnome-decisions.md#frame-time-instrumentation
+                // notes/wolf-gnome/frame-time-instrumentation.md
                 frame_metrics::maybe_emit();
                 // The end of a wake is when a pane binds, a grid is resized and a
                 // restore step lands, so it is one of the readiness triggers.

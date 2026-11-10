@@ -143,6 +143,7 @@ if [ "$platform" = linux ]; then
   run wolf-core-deps-check-test ./tools/lint/wolf_core_deps_check_test.sh
   run wolf-gnome-wording ./tools/lint/wolf_gnome_wording_check.sh
   run wolf-gnome-wording-check-test ./tools/lint/wolf_gnome_wording_check_test.sh
+  run rustfmt-files-test ./tools/lint/rustfmt_files_test.sh
   run clippy-doc-lint cargo clippy --manifest-path tools/doc-lint/Cargo.toml --all-targets \
     -- -D warnings
   run test-doc-lint cargo test --manifest-path tools/doc-lint/Cargo.toml

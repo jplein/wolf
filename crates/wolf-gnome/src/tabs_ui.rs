@@ -65,7 +65,7 @@
 //! [`crate::buffer_picker::open_decision`], [`crate::nav_ui::nav_press`] and
 //! [`crate::clipboard_ui::copy_decision`] are, and for the same reason. The
 //! inventory of this crate's blocking calls and the reasoning behind the gate live
-//! in `notes/wolf-gnome-decisions.md`, "Crash and stall recovery", and are
+//! in `notes/wolf-gnome/crash-and-stall-recovery.md`, and are
 //! deliberately not restated here.
 //!
 //! [`new_tab_press`] matches `Option<Liveness>` with **no `_` arm**, so appending a

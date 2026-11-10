@@ -41,7 +41,7 @@
 //! [`nav_press`] is liveness-gated exactly the way
 //! [`crate::buffer_picker::open_decision`] is, and for the same reason. The
 //! inventory of blocking calls and the reasoning behind the gate live in
-//! `notes/wolf-gnome-decisions.md`, "Crash and stall recovery", and are
+//! `notes/wolf-gnome/crash-and-stall-recovery.md`, and are
 //! deliberately not restated here.
 //!
 //! ## Totality is the contract

@@ -14,7 +14,7 @@
 //! [`copy_decision`] is liveness-gated exactly the way
 //! [`crate::buffer_picker::open_decision`] and [`crate::nav_ui::nav_press`] are.
 //! The inventory of this crate's blocking calls and the reasoning behind the gate
-//! live in `notes/wolf-gnome-decisions.md`, "Crash and stall recovery", and are
+//! live in `notes/wolf-gnome/crash-and-stall-recovery.md`, and are
 //! deliberately not restated here.
 //!
 //! A terminal pane's Copy is the exception, and must stay ungated: it reads the

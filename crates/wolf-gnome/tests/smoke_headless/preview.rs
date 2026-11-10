@@ -281,7 +281,8 @@ const PREVIEW_PANE_WAKE_LABEL: &str = "pane.wake";
 /// EIGHT — 7, 7 and 8 over three runs, broken down per leg in
 /// [`PREVIEW_CAP_RENDER_FLOOR`]. With `request_preview_render` calling the render pass
 /// unconditionally — the uncoalesced per-wake render, and the 15.6 % of wall
-/// clock `notes/wolf-gnome-decisions.md` records — the same scenario reads SIXTY-ONE.
+/// clock `notes/wolf-gnome/frame-time-instrumentation.md` records — the same scenario
+/// reads SIXTY-ONE.
 ///
 /// Twenty sits between the two and excludes each end for its own reason. It is twelve
 /// above the coalesced reading, which no plausible pacing closes: `wtype` running
@@ -1579,7 +1580,8 @@ fn preview_pane_renders_and_edit_source_returns_under_cage() {
          {PREVIEW_LIVE_MARKER:?}, and step 9's sixty-key sustained burst. Coalesced, this scenario \
          reads 7 or 8; a count around sixty is one render PER KEYSTROKE, which is the uncoalesced \
          per-wake render and the 15.6 % of wall clock \
-         `notes/wolf-gnome-decisions.md` records — measured at 61 under exactly that revert. \
+         `notes/wolf-gnome/frame-time-instrumentation.md` records — measured at 61 under \
+         exactly that revert. \
          Every assertion above stays green under it, so this and assertion 13 are the only things \
          in either suite that can see it. \
          Do NOT raise PREVIEW_RENDER_BUDGET to admit the reading: read its doc comment first, \

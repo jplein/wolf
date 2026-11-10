@@ -22,7 +22,7 @@
 //! `gtk::Paned`, which widens the window-level `gtk::Overlay` from the pane area to
 //! the whole window and moves that overlay's measured left edge, which the crash
 //! smoke's button click and the picker/preview overlap band are both derived from.
-//! `notes/wolf-gnome-decisions.md` carries the follow-up for the unit that gives tabs independent
+//! `notes/wolf-gnome/window-structure.md` carries the follow-up for the unit that gives tabs independent
 //! working directories.
 //!
 //! ## The bar autohides, and that is load-bearing
@@ -82,7 +82,7 @@
 //! frozen forever over a perfectly healthy Neovim. [`TabsHandle::reset_after_restart`]
 //! collapses to the selected tab, clears its handle and DISCARDS any pending restore,
 //! and the next wake's `Adopt` row re-binds it from `Snapshot::current_tabpage`. That
-//! is a SNAPSHOT read: the restart path issues no blocking RPC, which `notes/wolf-gnome-decisions.md`
+//! is a SNAPSHOT read: the restart path issues no blocking RPC, which `notes/wolf-gnome/crash-and-stall-recovery.md`
 //! requires and which is why the tab handles are not re-created here — and why the
 //! queue is dropped rather than replayed, since replaying it is `2T-1` blocking calls
 //! on exactly the path that forbids them.

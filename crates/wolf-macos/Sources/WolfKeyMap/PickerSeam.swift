@@ -31,7 +31,7 @@ public enum PickerSeam {
   /// The mechanism difference: this is a Swift predicate, whereas the Linux side
   /// is a table lookup (`actions::action_for_key` -> `win.go-to-file`), so there
   /// is no Rust predicate for this function to be a parity port of. See
-  /// `notes/wolf-gnome-decisions.md#the-accelerator-namespace`.
+  /// `notes/wolf-gnome/the-accelerator-namespace.md`.
   public static func isPickerTrigger(
     charactersIgnoringModifiers: String,
     command: Bool

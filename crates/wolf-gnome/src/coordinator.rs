@@ -102,7 +102,7 @@ pub type WindowId = u16;
 /// or a `thread_local!`, which is what makes two `WolfCore`s in one process
 /// independent. [`mod@crate::frame_metrics`] is the one carve-out — diagnostic
 /// counters no application behaviour reads; see
-/// `notes/wolf-gnome-decisions.md`, "Frame-time instrumentation".
+/// `notes/wolf-gnome/frame-time-instrumentation.md`.
 pub struct CoordinatorInner {
     /// The ONE state store, or `None` when no state directory could be resolved
     /// (state is then neither saved nor restored).
@@ -332,7 +332,7 @@ impl Coordinator {
     /// The plan is built from no saved state AND no process cwd, which by
     /// construction is the empty state at `$HOME` with no layout and no restored
     /// size, regardless of the originating window's directory
-    /// (`notes/wolf-gnome-decisions.md#the-coordinator-and-its-windows`). Passing the
+    /// (`notes/wolf-gnome/the-coordinator-and-its-windows.md`). Passing the
     /// process cwd (or the invoking window's) here would inherit a project, which is
     /// what New TAB does and is not this row's behaviour.
     ///

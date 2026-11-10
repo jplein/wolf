@@ -1206,7 +1206,7 @@ read_widths "$DIV_W2"
 # sparse region from everything in it, so that pane is given as little non-text ink
 # as possible: this moves the active-pane treatment -- the strip's bold,
 # full-strength filename, drawn at the top of the pane directly above the heading --
-# and Neovim's block cursor into the WIDE pane. `notes/wolf-gnome-decisions.md`
+# and Neovim's block cursor into the WIDE pane. `notes/wolf-gnome/window-structure.md`
 # records why nothing else is drawn at a pane's edge, and what one would cost this
 # reading.
 #

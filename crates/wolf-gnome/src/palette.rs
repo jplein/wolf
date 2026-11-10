@@ -4,7 +4,7 @@
 //! listed in the primary menu as "Command Palette…". Like the file picker, the
 //! chord is resolved from [`crate::actions::ACTION_TABLE`] by a CAPTURE-phase
 //! controller ([`crate::shell`]), so it is guaranteed not to also be forwarded to
-//! Neovim (see `notes/wolf-gnome-decisions.md`, "The accelerator namespace").
+//! Neovim (see `notes/wolf-gnome/the-accelerator-namespace.md`).
 //!
 //! The overlay is a search entry over a ranked list of the registry commands this
 //! front-end can actually perform. `Esc` closes it, Up/Down move the selection, and
@@ -63,7 +63,7 @@
 //! own cap — and one walk of the coordinator's window registry. All of it happens
 //! at open, never per keystroke, and none of it is an RPC to Neovim, so this
 //! module adds no `block_on_rpc` route at all (see
-//! `notes/wolf-gnome-decisions.md`, "Crash and stall recovery"). The window walk
+//! `notes/wolf-gnome/crash-and-stall-recovery.md`). The window walk
 //! in particular reads each window's already-cached persisted subtree, so no other
 //! window's core is touched.
 //!
@@ -383,7 +383,7 @@ impl PaletteInner {
     ///
     /// The `grab_focus` parks focus back on the persistent cmdline strip, exactly as
     /// [`crate::picker`]'s `close` does, so every overlay in this crate leaves focus
-    /// in the same place — see [notes/wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md), "Window structure",
+    /// in the same place — see [notes/wolf-gnome/window-structure.md](../../../notes/wolf-gnome/window-structure.md),
     /// for why focus never rests on an ephemeral widget.
     ///
     /// Deleting this call left the command-palette smoke green across three runs.
@@ -582,7 +582,7 @@ impl PaletteHandle {
 /// [`PaletteHandle::open`] (which the `win.command-palette` action does) to show it.
 ///
 /// `area` resolves the focus-return widget at CLOSE time — the SELECTED tab's
-/// cmdline strip, never a pane drawing area (`notes/wolf-gnome-decisions.md`, "Window structure").
+/// cmdline strip, never a pane drawing area (`notes/wolf-gnome/window-structure.md`).
 /// See [`crate::picker::FocusTarget`] for why it is a closure.
 ///
 /// `windows` is asked for the OTHER live windows on each open. It is a closure

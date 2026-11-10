@@ -3,7 +3,7 @@
 //! One table ([`ACTION_TABLE`]) is the single source of truth for every
 //! `gio::SimpleAction` name, its GTK accelerator, the [`wolf_core::Command`] it
 //! corresponds to, and the one-line justification for the chord it claims under
-//! `notes/wolf-gnome-decisions.md`'s scheme. A second table
+//! `notes/wolf-gnome/the-accelerator-namespace.md`'s scheme. A second table
 //! ([`MENU_SECTIONS`]) declares the GNOME primary menu in terms of those same
 //! action names. Because the menu, the accelerators and the command dispatch all
 //! read the same data, they cannot drift apart.
@@ -30,7 +30,7 @@
 //!
 //! [`parse_accel`] + [`forbidden_reason`] enforce that invariant MECHANICALLY over
 //! [`ACTION_TABLE`], so a future accelerator cannot quietly shadow a Neovim key.
-//! See `notes/wolf-gnome-decisions.md`, "The accelerator namespace", for the
+//! See `notes/wolf-gnome/the-accelerator-namespace.md` for the
 //! reasoning behind the scheme.
 //!
 //! ## The ctrl-folding class
@@ -51,7 +51,7 @@
 //! Single-LETTER keys declare nothing, and the reason is the modifier MASK rather
 //! than the character class: the first rule already refuses a bare `Ctrl+<letter>`,
 //! so every surviving letter row carries Shift, and [`action_for_key`] matches masks
-//! EXACTLY. `notes/wolf-gnome-decisions.md`'s accelerator section works through what that does and
+//! EXACTLY. `notes/wolf-gnome/the-accelerator-namespace.md` works through what that does and
 //! does not cost Neovim — read it there rather than re-deriving it from which
 //! characters fold.
 //!
@@ -132,8 +132,8 @@ pub struct ActionBinding {
     pub note: &'static str,
 }
 
-/// The COMPLETE Linux accelerator scheme of `notes/wolf-gnome-decisions.md`,
-/// "The accelerator namespace": one row per action, covering reserved chords as
+/// The COMPLETE Linux accelerator scheme of
+/// `notes/wolf-gnome/the-accelerator-namespace.md`: one row per action, covering reserved chords as
 /// well as bound ones.
 ///
 /// Reserved rows are present so the namespace is auditable in one place and so
@@ -829,7 +829,7 @@ pub fn forbidden_reason(p: &ParsedAccel, declared: Option<u8>) -> Option<&'stati
     }
 
     // Letters declare no fold (their rows carry Shift; masks match exactly) and fold into 0x01..=0x1A.
-    // See notes/wolf-gnome-decisions.md#the-accelerator-namespace.
+    // See notes/wolf-gnome/the-accelerator-namespace.md.
     if single_letter {
         return None;
     }
@@ -1000,7 +1000,7 @@ mod tests {
             with_accel > 0,
             "ACTION_TABLE declares no accelerators at all, so every per-accel test in this module \
              would pass vacuously. Populate it from the scheme in \
-             `notes/wolf-gnome-decisions.md`, \"The accelerator namespace\"."
+             `notes/wolf-gnome/the-accelerator-namespace.md`."
         );
 
         for binding in ACTION_TABLE {
@@ -1179,7 +1179,7 @@ mod tests {
                 reason.is_none(),
                 "accel {accel:?} for action {:?} is FORBIDDEN: {}. A chord that shadows a Neovim \
                  key is a bug, not a tradeoff — see the invariant in the module docs and in \
-                 `notes/wolf-gnome-decisions.md`, \"The accelerator namespace\".",
+                 `notes/wolf-gnome/the-accelerator-namespace.md`.",
                 binding.action,
                 reason.unwrap_or("<no reason given>")
             );
@@ -2205,7 +2205,7 @@ mod tests {
     ///
     /// **Why this row spends no chord is a collision, not a preference.**
     /// `Ctrl+Shift+N` belongs to `win.new-buffer`, and no `Ctrl+Shift+<letter>` is
-    /// free (`notes/wolf-gnome-decisions.md#the-accelerator-namespace`).
+    /// free (`notes/wolf-gnome/the-accelerator-namespace.md`).
     /// Giving this row that chord would not merely duplicate a binding: GTK
     /// resolves a duplicate to ONE action, so New would silently stop firing.
     ///
@@ -2309,7 +2309,7 @@ mod tests {
     ///
     /// **Why this row spends no chord is a collision, not a preference.**
     /// `Ctrl+Shift+S` belongs to `win.save`, and no `Ctrl+Shift+<letter>` is free
-    /// (`notes/wolf-gnome-decisions.md#the-accelerator-namespace`). The table already
+    /// (`notes/wolf-gnome/the-accelerator-namespace.md`). The table already
     /// answers that collision the same way twice, at `app.new-window` against
     /// `win.new-buffer` and at `win.open-folder` against `win.go-to-file`: one row
     /// takes the chord and its sibling goes to the menu.

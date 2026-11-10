@@ -75,7 +75,7 @@ pub enum UiAction {
     ///
     /// It inherits nothing from the window it was asked from — not its working
     /// directory, not its layout, not its size
-    /// (`notes/wolf-gnome-decisions.md#the-coordinator-and-its-windows`). Inheriting
+    /// (`notes/wolf-gnome/the-coordinator-and-its-windows.md`). Inheriting
     /// a project is [`UiAction::NewTab`]'s behaviour.
     NewWindow,
     /// Close the application window (via `close-request`, never `destroy`).

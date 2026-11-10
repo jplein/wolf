@@ -4,8 +4,8 @@
 //! listed in the primary menu as "Buffer Picker…". Like the file picker and the
 //! command palette, the chord is resolved from [`crate::actions::ACTION_TABLE`] by
 //! a CAPTURE-phase controller ([`crate::shell`]), so it is guaranteed not to also
-//! be forwarded to Neovim (see `notes/wolf-gnome-decisions.md`, "The accelerator
-//! namespace").
+//! be forwarded to Neovim (see
+//! `notes/wolf-gnome/the-accelerator-namespace.md`).
 //!
 //! The overlay is a search entry over the captive Neovim's `buflisted` buffers,
 //! ranked by [`wolf_core::rank_buffers`]. `Esc` closes it, Up/Down move the
@@ -237,7 +237,7 @@ impl BufferPickerInner {
             OpenDecision::Snapshot => {}
         }
 
-        // A blocking RPC, one of those notes/wolf-gnome-decisions.md#crash-and-stall-recovery lists.
+        // A blocking RPC, one of those notes/wolf-gnome/crash-and-stall-recovery.md lists.
         // The cwd read is RPC-free, under a borrow of its own.
         let snapshot = {
             let core_ref = self.core.borrow();
@@ -266,8 +266,8 @@ impl BufferPickerInner {
     /// if already closed.
     ///
     /// `area` is the persistent cmdline strip, never a pane drawing area, so every
-    /// overlay in this crate leaves focus on the same widget (`notes/wolf-gnome-decisions.md`,
-    /// "Window structure").
+    /// overlay in this crate leaves focus on the same widget
+    /// (`notes/wolf-gnome/window-structure.md`).
     ///
     /// The buffer snapshot is deliberately NOT cleared here: the next `open`
     /// overwrites both fields before anything reads them. Clearing them "for
@@ -429,7 +429,7 @@ impl BufferPickerHandle {
 /// it.
 ///
 /// `area` resolves the focus-return widget at CLOSE time — the SELECTED tab's
-/// cmdline strip, never a pane drawing area (`notes/wolf-gnome-decisions.md`, "Window structure").
+/// cmdline strip, never a pane drawing area (`notes/wolf-gnome/window-structure.md`).
 /// See [`crate::picker::FocusTarget`] for why it is a closure.
 #[must_use]
 pub fn build(

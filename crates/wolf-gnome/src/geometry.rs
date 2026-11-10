@@ -738,7 +738,7 @@ mod tests {
     }
 
     // Divider conversion: exact inverses, or each `max-position` re-apply walks the weight further.
-    // See notes/wolf-gnome-decisions.md#pane-weights-and-dividers
+    // See notes/wolf-gnome/pane-weights-and-dividers.md
 
     /// One [`divider_position`] table row.
     struct DividerCase {
@@ -1114,7 +1114,7 @@ mod tests {
             },
             EqualCase {
                 // 119 px of child span vs two 63 px floors: min == max, so the midpoint (60) clamps to 63.
-                // Position only, not equal widths. See notes/wolf-gnome-decisions.md#pane-weights-and-dividers
+                // Position only, not equal widths. See notes/wolf-gnome/pane-weights-and-dividers.md
                 desc: "a span too small for two floors keeps the floor, not the average",
                 span: 120,
                 handle: 1,

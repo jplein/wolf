@@ -107,7 +107,7 @@
 //! Exactly TEN blocking core calls are reachable from this crate, and the restart
 //! path issues none of them. `WolfCore::history_back` and `history_forward` count
 //! as the ONE navigation move they are, one per direction; nothing else is folded
-//! together, and [`crate::window`] and `notes/wolf-gnome-decisions.md` carry the same ten.
+//! together, and [`crate::window`] and `notes/wolf-gnome/crash-and-stall-recovery.md` carry the same ten.
 //!
 //! The first is `WolfCore::rebuild_layout`, called at most once per launch from
 //! `pane_view::apply_layout_rebuild`, before the window

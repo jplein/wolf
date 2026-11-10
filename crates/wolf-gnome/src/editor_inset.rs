@@ -1145,7 +1145,7 @@ mod tests {
     /// [`grid_rect_table`] and [`grid_size_for_pane_table`] are what pin the values;
     /// a pair that agreed on the wrong quantity — both capping at 80 columns, say —
     /// satisfies this property perfectly at every row. That is the same lesson
-    /// `notes/wolf-gnome-decisions.md` records under "Pane weights and dividers" for
+    /// `notes/wolf-gnome/pane-weights-and-dividers.md` records for
     /// `divider_position` and `divider_span_fraction`, where the round trip agreed
     /// for the defect's whole life; it is cross-referenced here rather than
     /// restated.

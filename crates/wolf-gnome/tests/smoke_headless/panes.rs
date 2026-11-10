@@ -1119,10 +1119,10 @@ fn vertical_split_shows_two_panes_under_cage() {
          highlight 0 and this front-end takes no colour from the GTK theme into a pane, so the \
          per-pane statusbar strip's TEXT is the only active-pane signal — bold at full strength \
          in the active pane, both lines scaled by STATUSBAR_INACTIVE_ALPHA in the others. \
-         `notes/wolf-gnome-decisions.md` records why, and what an edge treatment costs beyond \
-         the look of it: it lands in the padding gutter `scrollbar.rs`'s thumb hides in, and a \
-         long thin high-contrast mark beside a narrow pane's text is what DIVIDER_BODY_LINE_COUNT \
-         records corrupting `tesseract --psm 11`'s scale estimate for a whole pane. A non-zero \
+         `notes/wolf-gnome/window-structure.md` records why, and what an edge treatment costs \
+         beyond the look of it: it lands in the padding gutter `scrollbar.rs`'s thumb hides in, \
+         and a long thin high-contrast mark beside a narrow pane's text is what \
+         DIVIDER_BODY_LINE_COUNT records corrupting `tesseract --psm 11`'s scale estimate for a whole pane. A non-zero \
          count means themed chrome is being drawn inside the pane area — an outline, a border or \
          a tint on a pane's `DrawingArea` — rather than a colour that drifted, so do NOT turn \
          this into a threshold. PNG kept at {}.",

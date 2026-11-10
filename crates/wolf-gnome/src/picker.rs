@@ -5,7 +5,7 @@
 //! The picker has no trigger predicate of its own: the chord is resolved from
 //! [`crate::actions::ACTION_TABLE`] by a CAPTURE-phase controller
 //! ([`crate::shell`]), so it is guaranteed not to also be forwarded to Neovim (see
-//! `notes/wolf-gnome-decisions.md`, "The accelerator namespace").
+//! `notes/wolf-gnome/the-accelerator-namespace.md`).
 //!
 //! What that chord costs, precisely: only the terminal-style Ctrl+Shift ALIAS for
 //! `<C-o>`. `wolf-gnome`'s encoder forces `shift: false` on printables, so
@@ -68,7 +68,7 @@ const PICKER_WAKE_CHANNEL_CAP: usize = 1;
 /// Every one of the three transient overlays — and the file-tree sidebar and its
 /// search panel — parks focus back on the persistent cmdline strip when it closes, because a toplevel
 /// left with no focus widget loses window-level key dispatch entirely while Neovim
-/// stays alive and silent (`notes/wolf-gnome-decisions.md`, the focus regime). That strip belongs to
+/// stays alive and silent (`notes/wolf-gnome/window-structure.md`, the focus regime). That strip belongs to
 /// a [`crate::pane_view::PaneHandle`], and a pane view is PER TAB: an overlay
 /// holding tab 0's strip would, after a tab switch, grab focus into a widget GTK
 /// has unmapped.
@@ -336,7 +336,7 @@ impl PickerHandle {
 /// [`PickerHandle::open`] (which the `win.go-to-file` action does) to show it.
 ///
 /// `area` resolves the focus-return widget at CLOSE time — the SELECTED tab's
-/// cmdline strip, never a pane drawing area (`notes/wolf-gnome-decisions.md`, "Window structure").
+/// cmdline strip, never a pane drawing area (`notes/wolf-gnome/window-structure.md`).
 /// See [`FocusTarget`] for why it is a closure.
 #[must_use]
 pub fn build(

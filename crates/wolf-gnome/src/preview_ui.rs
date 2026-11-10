@@ -32,7 +32,7 @@
 //! [`may_render`] are liveness-gated exactly the way
 //! [`crate::nav_ui::nav_press`] and [`crate::clipboard_ui::copy_decision`] are. The
 //! inventory of this crate's blocking calls and the reasoning behind the gate live
-//! in `notes/wolf-gnome-decisions.md`, "Crash and stall recovery", and are
+//! in `notes/wolf-gnome/crash-and-stall-recovery.md`, and are
 //! deliberately not restated here.
 //!
 //! Beyond liveness, three of the five carry a second gate and two deliberately do

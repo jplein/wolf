@@ -1025,7 +1025,7 @@ impl SearchPanelHandle {
 /// the sidebar relays that it is shown.
 ///
 /// `area` resolves the focus-return widget when it is used — the SELECTED tab's
-/// cmdline strip (`notes/wolf-gnome-decisions.md`, "Window structure"). See
+/// cmdline strip (`notes/wolf-gnome/window-structure.md`). See
 /// [`crate::picker::FocusTarget`] for why it is a closure.
 #[must_use]
 pub fn build(core: &Rc<RefCell<Option<WolfCore>>>, area: FocusTarget) -> SearchPanelHandle {

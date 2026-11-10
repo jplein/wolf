@@ -103,6 +103,24 @@ alias(
     tags = ["manual"],
 )
 
+sh_binary(
+    name = "rustfmt_files.fix",
+    srcs = ["rustfmt_files.sh"],
+    args = ["$(rootpath @rules_rust//rust/toolchain:current_rustfmt_toolchain)"],
+    data = ["@rules_rust//rust/toolchain:current_rustfmt_toolchain"],
+    tags = ["manual"],
+)
+
+sh_test(
+    name = "rustfmt_files_test",
+    srcs = ["rustfmt_files_test.sh"],
+    args = ["$(rootpath @rules_rust//rust/toolchain:current_rustfmt_toolchain)"],
+    data = [
+        "rustfmt_files.sh",
+        "@rules_rust//rust/toolchain:current_rustfmt_toolchain",
+    ] + glob(["testdata/rustfmt_files/*.rs"]),
+)
+
 # ---- swift-format ----
 
 # swift-format is the host Xcode binary, not a Bazel input: `external` keeps a cached pass from
@@ -298,6 +316,7 @@ test_suite(
         ":rustfmt_core",
         ":rustfmt_doc_lint",
         ":rustfmt_ffi",
+        ":rustfmt_files_test",
         ":rustfmt_test_support",
         ":rustfmt_vt",
         ":swift_format",

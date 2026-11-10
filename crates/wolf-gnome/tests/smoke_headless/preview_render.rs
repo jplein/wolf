@@ -2118,10 +2118,10 @@ exit 0
 /// (`picker.rs`, `palette.rs`, `buffer_picker.rs`), while a
 /// preview pane's `webkit6::WebView` is added to that PANE's own overlay
 /// (`pane_view.rs`). The claim that the first therefore paints above the second was an
-/// argument from construction with no test behind it, and `notes/wolf-gnome-decisions.md` named a
-/// residual risk beside it — a WebKit rendering through a Wayland subsurface, which
-/// would sit outside GTK's ordering entirely. This smoke is the observation: the same
-/// window, photographed twice, with nothing between the two frames but the chord that
+/// argument from construction with no test behind it, and
+/// `notes/wolf-gnome/window-structure.md` named a residual risk beside it — a WebKit rendering
+/// through a Wayland subsurface, which would sit outside GTK's ordering entirely. This smoke is
+/// the observation: the same window, photographed twice, with nothing between the two frames but the chord that
 /// opens the box.
 ///
 /// MEASURED against that residual risk before this smoke was written, on a fixture
@@ -2273,7 +2273,8 @@ exit 0
 /// it would have been vacuous if it had been.
 ///
 /// **P1a, recorded and NOT taken.** Move the `webkit6::WebView` from the pane's own
-/// overlay to the WINDOW-level one — `notes/wolf-gnome-decisions.md`'s explicitly rejected alternative.
+/// overlay to the WINDOW-level one — `notes/wolf-gnome/window-structure.md`'s explicitly
+/// rejected alternative.
 /// That inverts exactly the relation under test, which is what P1b cannot do. It also
 /// changes the view's GEOMETRY, since a window-level overlay child is laid out against
 /// the window rather than against the pane, so its red is not isolated: R would move as
@@ -2777,7 +2778,8 @@ fn file_picker_covers_the_live_preview_under_cage() {
          full size with the fill near zero: the preview is painted over the box entirely. A partial \
          dark count with a partial fill fraction: the box is above the view for part of the \
          rectangle only, which is what a WebKit rendering through its own Wayland SUBSURFACE would \
-         look like — that is `notes/wolf-gnome-decisions.md`'s named residual risk, measured NOT to fire on this \
+         look like — that is `notes/wolf-gnome/window-structure.md`'s named residual risk, \
+         measured NOT to fire on this \
          stack even against a deliberately promoted compositing layer, so a reading of this shape \
          is a finding worth recording rather than a threshold to retune. Both zeros holding with \
          the fill fraction low: the box is on top but is drawing something other than its flat \

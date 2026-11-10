@@ -45,7 +45,7 @@
 //!
 //! ## Neither press blocks, and the gate is not the blocking gate
 //!
-//! **The blocking-call inventory in `notes/wolf-gnome-decisions.md` is unchanged by
+//! **The blocking-call inventory in `notes/wolf-gnome/crash-and-stall-recovery.md` is unchanged by
 //! this module.** `InputEvent::Save` and `InputEvent::SaveAs` are fire-and-forget on
 //! `wolf-core`'s ordered input channel, and the native dialog resolves on a later
 //! main-loop turn, so nothing here can time out and nothing here can mark the core

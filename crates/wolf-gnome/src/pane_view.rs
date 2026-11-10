@@ -18,7 +18,7 @@
 //! A pane's `DrawingArea` is larger than its grid: it also carries a two-line
 //! **statusbar strip** along the top and a uniform padding on all four sides, both
 //! painted into the same area by [`PaneInner::draw_pane`] rather than being
-//! widgets of their own (`notes/wolf-gnome-decisions.md` records why). Every
+//! widgets of their own (`notes/wolf-gnome/window-structure.md` records why). Every
 //! pixel-to-grid conversion in this file therefore routes through
 //! [`crate::editor_inset`] — the resizer subtracts the chrome before dividing, and
 //! the pointer paths translate a pane-local point into grid-local space before
@@ -589,7 +589,7 @@ struct PaneInner {
     /// back, so no borrow can be held across a [`WolfCore`] call.
     ///
     /// The drawer is deliberately NOT a [`PaneTree`] leaf; `crate::drawer` and
-    /// `notes/wolf-gnome-decisions.md` hold the reasons. It IS an ordinary `panes`
+    /// `notes/wolf-gnome/window-structure.md` hold the reasons. It IS an ordinary `panes`
     /// entry, which is what gives it a statusbar, a column cap, a grid resize and a
     /// paint with no drawer branch anywhere on those paths.
     drawer: Cell<DrawerState>,
@@ -892,7 +892,7 @@ impl PaneInner {
     /// 3. Call `rebuild_layout` under a SHORT borrow in its own statement.
     ///
     ///    **This is a BLOCKING RPC**, one of the ten this crate issues
-    ///    (`notes/wolf-gnome-decisions.md`, "Crash and stall recovery"). Every
+    ///    (`notes/wolf-gnome/crash-and-stall-recovery.md`). Every
     ///    other core call this crate makes is a snapshot read or a queued input. It
     ///    is acceptable HERE for a reason the others do not share: it happens on
     ///    the LAUNCH path only — at most once per restored tab, bounded by
@@ -1267,7 +1267,7 @@ impl PaneInner {
     /// not meant to be one — `wolf_core::layout` records that hiding the drawer is a
     /// plain window close, so [`Self::detect_closes`] is what unbinds it. The
     /// drawer's own rulebook is [`crate::drawer`] and its durable constraints are in
-    /// `notes/wolf-gnome-decisions.md`.
+    /// `notes/wolf-gnome/window-structure.md`.
     ///
     /// The match stays EXHAUSTIVE rather than taking a `_` wildcard, so adding a
     /// variant to the shared `wolf_core::LayoutIntent` breaks this build rather than
@@ -1600,7 +1600,7 @@ impl PaneInner {
     /// from the weights on the next `max-position` notify, so the handle would snap
     /// back under the user's pointer. That is a control which visibly refuses input,
     /// which is exactly the trade [`crate::scrollbar`] and
-    /// `notes/wolf-gnome-decisions.md` already rule out.
+    /// `notes/wolf-gnome/window-structure.md` already rule out.
     ///
     /// ## Two frames to converge on a resize
     ///
@@ -1816,7 +1816,7 @@ impl PaneInner {
     /// request on every wake would arm one continuously for nothing.
     fn request_preview_render(self: &Rc<Self>) {
         // `render_preview` blocks the main thread, so it takes the presses' liveness gate. A refusal
-        // touches no coalescer state. See notes/wolf-gnome-decisions.md#crash-and-stall-recovery
+        // touches no coalescer state. See notes/wolf-gnome/crash-and-stall-recovery.md
         let liveness = {
             let core_ref = self.core.borrow();
             core_ref.as_ref().map(WolfCore::liveness)
@@ -2000,7 +2000,7 @@ impl PaneInner {
                 let weak = Rc::downgrade(self);
                 view.connect_decide_policy(move |_view, decision, decision_type| {
                     // `PolicyDecisionType` first, not redundant with the downcast: `NewWindowAction` is the same
-                    // class. See notes/wolf-gnome-decisions.md#following-a-link-in-the-preview
+                    // class. See notes/wolf-gnome/following-a-link-in-the-preview.md
                     if decision_type != webkit6::PolicyDecisionType::NavigationAction {
                         return false;
                     }
@@ -2105,7 +2105,7 @@ impl PaneInner {
             }
             PreviewLink::PreviewFile { path, fragment } => {
                 // `preview_file` blocks the main thread, so it takes the same liveness gate as every other call.
-                // See notes/wolf-gnome-decisions.md#crash-and-stall-recovery
+                // See notes/wolf-gnome/crash-and-stall-recovery.md
                 let liveness = {
                     let core_ref = self.core.borrow();
                     core_ref.as_ref().map(WolfCore::liveness)
@@ -2499,7 +2499,7 @@ impl PaneInner {
     /// The strip, the padding and the grid are all painted here rather than being
     /// separate widgets, and the background fill is why: the padding must be the
     /// EDITOR's background, a per-frame value out of the snapshot, whereas a GTK
-    /// widget's background is theme-owned. See `notes/wolf-gnome-decisions.md`.
+    /// widget's background is theme-owned. See `notes/wolf-gnome/window-structure.md`.
     ///
     /// **`WolfCore::pane_status` must never be called from here**, and neither may
     /// `display_path` or `render_preview` — the same rule, for the same reason, over
@@ -2631,7 +2631,7 @@ impl PaneInner {
         }
 
         // A preview skips exactly the grid and the thumb; background and strip paint as for an editor.
-        // The web view scrolls itself. See notes/wolf-gnome-decisions.md#window-structure
+        // The web view scrolls itself. See notes/wolf-gnome/window-structure.md
         if !is_preview {
             cr.save().expect("cairo save failed before the grid");
             cr.rectangle(rect.x, rect.y, rect.w, rect.h);

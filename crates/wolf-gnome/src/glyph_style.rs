@@ -21,7 +21,7 @@
 //! `undercurl` maps to [`pango::Underline::Error`], Pango's wavy underline, for
 //! three reasons. A hand-stroked Cairo wave would give `draw_glyph` a SECOND
 //! drawing mechanism with its own thickness, amplitude and vertical placement,
-//! which is exactly what `notes/wolf-gnome-decisions.md`'s one-glyph-path rule
+//! which is exactly what `render.rs`'s one-glyph-path rule
 //! exists to prevent. The placement is Pango's to know in any case: the underline
 //! position and thickness come from the face's own `OS/2` / `post` metrics, which
 //! Pango already reads and this crate does not, so a hand-stroked wave would need

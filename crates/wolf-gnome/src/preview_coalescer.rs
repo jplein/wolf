@@ -2,7 +2,7 @@
 //!
 //! Typing beside a live preview issues one BLOCKING `render_preview` RPC per
 //! keystroke — the only blocking call this front-end repeats while the user simply
-//! types, and `notes/wolf-gnome-decisions.md` ("Frame-time instrumentation") holds
+//! types, and `notes/wolf-gnome/frame-time-instrumentation.md` holds
 //! what it measured. This collapses a burst into three kinds of render and no
 //! others: one on the FIRST edit after a quiet gap, one whenever the burst has run
 //! [`PREVIEW_MAX_STALENESS`] without a render, and one after the burst ends.

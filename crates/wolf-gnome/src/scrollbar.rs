@@ -18,9 +18,9 @@
 //! Two further reasons hold independently of that one. The gutter the thumb sits in
 //! is painted in the editor's own background, a per-frame value out of the snapshot,
 //! while a widget's background is theme-owned — the same reason the statusbar strip
-//! is painted, per `notes/wolf-gnome-decisions.md` "Window structure". And a widget child would ride
+//! is painted, per `notes/wolf-gnome/window-structure.md`. And a widget child would ride
 //! the pane's host `gtk::Overlay`, re-parented into a freshly rebuilt tree on every
-//! layout change, inside the pane area `notes/wolf-gnome-decisions.md`'s focus regime warns about.
+//! layout change, inside the pane area `notes/wolf-gnome/window-structure.md`'s focus regime warns about.
 //!
 //! ## The thumb sits in the pane's right PADDING GUTTER
 //!

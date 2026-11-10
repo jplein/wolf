@@ -37,7 +37,7 @@ const RGB_MAX: f64 = 255.0;
 /// created over an `ImageSurface` — measured on this host — and the probe surface
 /// `app::measure_metrics`, `tests/paint_golden.rs` and
 /// `tests/smoke_headless/main.rs::cell_metrics_for_smoke` all measure against is
-/// exactly such a surface. `notes/wolf-gnome-decisions.md` records that this crate has
+/// exactly such a surface. `notes/wolf-gnome/present-limitations.md` records that this crate has
 /// no HiDPI handling and assumes 96 dpi; this constant is where that assumption
 /// stops being implicit.
 const PANGO_DEFAULT_DPI: f64 = 96.0;
