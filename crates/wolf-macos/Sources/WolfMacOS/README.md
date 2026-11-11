@@ -460,7 +460,7 @@ Purpose: One captive Neovim shared by N views, each bound to one nvim tabpage. O
 
 **Public API**
 
-- `start(launchCwd:coordinator:)` — the sole caller of `wolf_ffi_start`, `nil` on failure. Sets the bundled `nvim` and `rg` with `overwrite=0`, so a developer's export wins.
+- `start(launchCwd:coordinator:)` — the sole caller of `wolf_ffi_start`, `nil` on failure. Defaults `WOLF_NVIM_BIN`, `WOLF_RG_BIN` and `WOLF_TERMINFO_DIR` to the bundle's (`overwrite=0`), so an export wins.
 - `restartNeovim()` — the "Restart Neovim" button's entry, resetting the attempt count.
 
 **Decisions**

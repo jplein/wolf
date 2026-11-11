@@ -28,16 +28,7 @@ Shipping the two preview fonts' texts as files in `Contents/Resources/` as well,
 
 ## 2. A possible latent test failure
 
-**Verified that the mismatch exists; the consequence is unconfirmed.**
-
-`bazel/lighthouse/extensions.bzl` pins commit `514dec2c79701b74082defc19090bd1dae57765b`. `crates/wolf-ffi/tests/lighthouse_load.rs` asserts concrete colours and attributes them, in five comments, to commit `9da2bba190305b2c8d5d300c254a48c487dd4a1e`:
-
-- titlebar bg `#1b1b1b`, fg `#f1f1f1`
-- cursor fill `#009fce`, glyph `#000000`
-
-Either those highlight groups are unchanged between the two commits and the comments are merely mislabelled, or the assertions are stale and the test fails. This cannot be settled on a Linux host — it needs a real Neovim with the staged lighthouse tree, so run `bazel test //crates/wolf-ffi:lighthouse_load` on the macOS host to find out.
-
-The same stale hash was removed from `bazel/lighthouse/README.md` and `build.md` during the refactor. The test file is the only place it survives.
+**Resolved.** `crates/wolf-ffi/tests/lighthouse_load.rs` reads its expected cursor colours from the pinned `colors/lighthouse.lua` through `common::Lighthouse`, and asserts that the pinned scheme leaves `WolfTitlebar` unset. It holds no colour constant and no commit label that a pin bump could leave stale.
 
 ## 3. Source comments that contradict the code
 

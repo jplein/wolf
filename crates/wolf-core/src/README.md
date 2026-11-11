@@ -522,6 +522,7 @@ Purpose: the terminal sessions core owns, each a pty, a shell, a `wolf_vt::Termi
 
 - `open_terminal` and `bind_terminal` block through `block_on_rpc` and return once the binding is in `win_buffers`. The other session methods never wait on Neovim.
 - `TerminalId` counts from 1 per core and is never reused, so a stale id names no session rather than another one.
+- `terminfo_dir_from_env()` reads `WOLF_TERMINFO_DIR` for `CoreConfig.terminfo_dir`, which reaches a shell verbatim as `TERMINFO` and must be absolute ([why](../../../notes/wolf-core-decisions.md#terminal-sessions)).
 - `live_terminals` lists running sessions only, while an exited session's frame stays readable until its pane closes ([why](../../../notes/wolf-core-decisions.md#terminal-sessions)).
 - Mouse and scroll positions are pixels from the content area's top-left, turned into cells with the cell size of the last `resize_terminal`.
 - `WolfCore::pane_status` of a terminal pane reports the session's shell name, or `NO_NAME` once the session is gone, with empty paths.

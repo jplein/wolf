@@ -725,6 +725,21 @@ Real Neovim and real `/bin/sh` sessions in ptys (`//crates/wolf-core:terminal_se
 - Compare paths after `canonicalize` or with `pwd -P`: macOS temp dirs sit behind the `/var` link.
 - A plain `:hi` fires no `ColorScheme`, so the colour case runs `:doautocmd ColorScheme` to make `wolf_theme` emit again.
 
+#### `terminal_terminfo.rs`
+
+Real Neovim and real `/bin/sh` sessions in ptys (`//crates/wolf-core:terminal_terminfo`, as `terminal_input`, plus `//bazel/ghostty-vt:ghostty_terminfo` as `data`).
+
+**Covers**
+
+- A core whose `terminfo_dir` holds the compiled entry giving its shell `TERM=xterm-ghostty` and that `TERMINFO` over inherited decoys, and `infocmp -x xterm-ghostty` there succeeding with `setrgbf`.
+- A directory without the entry falling back to `xterm-256color` and leaving the inherited `TERMINFO` alone. A core with no directory at all is `terminal_session.rs`' case.
+
+**Gotchas**
+
+- The entry is staged in `WOLF_TEST_TERMINFO_DIR`: the target's `data` on macOS, the devShell's export of `wolfGhosttyVt`'s `share/terminfo` on Linux. The tests panic rather than skip when it does not resolve.
+- `infocmp` is `/usr/bin/infocmp` on macOS, which Bazel's test `PATH` keeps, and the devShell's ncurses on Linux.
+- The decoy `TERM` and `TERMINFO` are set once per binary, before any core starts, so no `setenv` races a neighbouring test's `getenv`.
+
 #### `theme.rs`
 
 Spawns a real Neovim (staged runfiles, wired `WOLF_NVIM_BIN`, `no-sandbox`), started with the plain repo `init.lua` so nothing defines the Wolf highlight groups at startup.

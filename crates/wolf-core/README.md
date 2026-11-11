@@ -26,7 +26,7 @@ Everything below is re-exported from the crate root as `wolf_core::…`. The own
 | Wake               | `WakeFn`                                                                      |
 | Input              | `InputEvent`, `KeyEvent`, `MouseEvent`, `ScrollEvent`, `key_to_notation`      |
 | Layout intents     | `LayoutIntent`, `SplitOrientation`, `FocusDir`                                |
-| Terminal sessions  | `TerminalId`, `TerminalFrame`, the other `Terminal*` types, `TERMINAL_*`      |
+| Terminal sessions  | `Terminal*` types, `TERMINAL_*`, `terminfo_dir_from_env`, `TERMINFO_DIR_ENV`  |
 | Commands           | `Command`, `CommandSpec`, `COMMAND_SPECS`, `MenuGroup`                        |
 | File picker        | `FileSearch`, `FileEntry`, `FileSearchReadGuard`, `rank_matches`, `MruStore`  |
 | Content search     | `SearchSession`, `SearchOptions`, `SearchMatch`, `project`, `context_window`  |

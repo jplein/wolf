@@ -87,7 +87,7 @@ Rules that are decidable from their arguments are pinned in each seam's own `#[c
 **Covers**
 
 - The tree `nix build .#wolf-gnome` installs, read out of the store path `WOLF_PACKAGE_OUT` names. The captive `init.lua` is byte-identical to the checkout's and sits at `<out>/bin` joined with the resolver's own `INSTALLED_INIT_LUA_RELATIVE`; both vendored Lua trees are non-empty beside it, carrying what the Bazel filegroups keep and none of what they exclude.
-- The desktop entry's `Exec` as the absolute wrapped path, with no field code and no `MimeType`; each icon decoding to the pixel size its hicolor directory names; the wrapper naming every variable it must supply and never `WOLF_INIT_LUA`; both editor font families beside an additive `fonts.conf`.
+- The desktop entry's `Exec` as the absolute wrapped path, with no field code and no `MimeType`; each icon decoding to the pixel size its hicolor directory names; the wrapper naming every variable it must supply and never `WOLF_INIT_LUA`; both editor font families beside an additive `fonts.conf`; the compiled `xterm-ghostty` entry at `share/wolf/terminfo/x/xterm-ghostty`, in ncurses' compiled format, naming `xterm-ghostty` first and carrying the extended `setrgbf` that only `tic -x` keeps.
 
 **Gotchas**
 
@@ -190,9 +190,13 @@ The guards behind the fixture-naming rule in [Smoke conventions](#smoke-conventi
 
 The frame-time instrument's smoke: typing bursts with `WOLF_FRAME_STATS` armed, read from the report file the application appends to.
 
+#### `smoke_headless/lighthouse.rs`
+
+Not a smoke: the oracle that reads expected colours from the pinned `colors/lighthouse.lua` in the tree `WOLF_TEST_LIGHTHOUSE_DIR` names, a copy of wolf-ffi's `common::Lighthouse` that parses the same shapes ([`//bazel/lighthouse`](../../../bazel/lighthouse/README.md#the-pin)). It panics when the variable is unset, since the devShell always exports it, and is read in the test process only: the packaged smokes scrub the variable from the cage.
+
 #### `smoke_headless/packaged.rs`
 
-The `#[ignore]`d packaged smokes, which drive the store binary `nix build .#wolf-gnome` installs, scrubbing every devShell export the artifact supplies itself: a clean OCR launch, an A/B against the checkout binary over the two vendored Lua trees, and a preview pane. They run only through `./tools/wolf-package-smoke.sh`, which selects them with the filter `packaged::`.
+The `#[ignore]`d packaged smokes, which drive the store binary `nix build .#wolf-gnome` installs, scrubbing every devShell export the artifact supplies itself: a clean OCR launch, an A/B against the checkout binary over the two vendored Lua trees, a preview pane, and a terminal pane whose shell gets `TERM=xterm-ghostty` and the package's `TERMINFO`, with `infocmp -x xterm-ghostty` succeeding there. The A/B reads Lighthouse's colours through [`lighthouse.rs`](#smoke_headlesslighthousers). They run only through `./tools/wolf-package-smoke.sh`, which selects them with the filter `packaged::`.
 
 #### `smoke_headless/panes.rs`
 
@@ -229,6 +233,14 @@ Sidebar and search smokes: the file tree, the project-search panel and its chord
 #### `smoke_headless/terminal.rs`
 
 Terminal smokes: the terminal drawer, terminals across a Neovim restart, terminal panes beside Neovim panes, and typed keys reaching a pane's shell.
+
+#### `smoke_headless/terminal_colours.rs`
+
+The terminal-colours smoke: two launches of the checkout binary in one cage, over a staged `init.lua` beside a copy of the vendored Lighthouse, with `appearance` set to `dark` then `light`. In each, a pane's 16 ANSI background cells must paint Lighthouse's colours for that background, read through [`lighthouse.rs`](#smoke_headlesslighthousers), and every run prints a table of expected and measured colours. The cells' pixel rects are derived from the pane geometry, with no pixel literal.
+
+#### `smoke_headless/terminal_terminfo.rs`
+
+The terminfo smoke: the checkout binary, given `WOLF_TERMINFO_DIR` from the devShell's `WOLF_TEST_TERMINFO_DIR` and decoy `TERM` and `TERMINFO`, opens a pane by typed `:terminal` whose shell reports `TERM=xterm-ghostty` and that `TERMINFO`. It proves that `window.rs` hands core the directory; core's choice is wolf-core's `terminal_terminfo.rs`. Its shell script, scenario and readback are shared with the packaged terminfo smoke.
 
 #### `state_isolation.rs`
 

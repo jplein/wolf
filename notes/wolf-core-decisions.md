@@ -99,6 +99,7 @@ The front-end reads liveness on each wake to drive its crash and stall overlay.
 - libghostty-vt's callbacks only push onto an effect queue the `wolf_vt::Terminal` owns. They run inside a library call under the session lock, where a pty write or a lock would stall or deadlock, so whoever holds the lock drains the queue after the call and hands any reply to the writer.
 - A publish is coalesced to one per `TERMINAL_PUBLISH_INTERVAL`, the exit's excepted. A synchronized update defers it for at most `TERMINAL_RENDER_HOLD_MAX`, after which the hold counts as released until the program sets mode 2026 again, so a program that never ends its update cannot freeze its pane.
 - The `BufWipeout` notifier is silent while Neovim quits (`v:dying`, `v:exiting`), so quitting Neovim hangs up no session; core's own shutdown does.
+- Core learns Wolf's terminfo directory from `CoreConfig.terminfo_dir`, never from its own environment or a path relative to the executable. A per-core field lets one test process run a core with the directory and another without it, where changing the environment per test would race `getenv` on libtest's other threads. Core assumes no install layout, which differs per platform and is a test binary's under `cargo test` and `bazel test`. The front-ends fill the field from `WOLF_TERMINFO_DIR`, which packaging sets only as a default, following the `WOLF_NVIM_BIN` rule, so a developer's export wins.
 
 ## The snapshot-and-wake session pattern
 

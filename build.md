@@ -119,12 +119,13 @@ nix build .#wolf-gnome --no-link --print-out-paths
 | `bin/`                  | the wrapper and the binary it execs                                     |
 | `share/wolf/nvim/`      | the captive `init.lua`, with sibling `orlando/` and `lighthouse/` trees |
 | `share/wolf/fonts.conf` | the additive fontconfig fragment `FONTCONFIG_FILE` defaults to          |
+| `share/wolf/terminfo/`  | the compiled `xterm-ghostty` entry `WOLF_TERMINFO_DIR` defaults to      |
 | `share/applications/`   | `org.wolf.Wolf.desktop`                                                 |
 | `share/icons/hicolor/`  | `org.wolf.Wolf` at 48, 64, 128 and 256 px, plus a scalable SVG          |
 | `share/fonts/truetype/` | iA Writer Mono S and JetBrains Mono                                     |
 | `share/licenses/`       | iA Writer Mono S's licence                                              |
 
-The wrapper sets `WOLF_NVIM_BIN`, `WOLF_RG_BIN`, `WOLF_NVIM_TREESITTER_DIR`, `WOLF_PARSERS_DIR` and `FONTCONFIG_FILE` as defaults, so an exported value of any of them still wins — the rule `Project.swift` follows on macOS with `setenv(…, 0)`, and what keeps the devShell's pinned font stack winning inside `nix develop`. It never sets `WOLF_INIT_LUA`, which would make the installed runtime unreachable and the development override useless on the packaged binary.
+The wrapper sets `WOLF_NVIM_BIN`, `WOLF_RG_BIN`, `WOLF_NVIM_TREESITTER_DIR`, `WOLF_PARSERS_DIR`, `WOLF_TERMINFO_DIR` and `FONTCONFIG_FILE` as defaults, so an exported value of any of them still wins — the rule `Project.swift` follows on macOS with `setenv(…, 0)`, and what keeps the devShell's pinned font stack winning inside `nix develop`. It never sets `WOLF_INIT_LUA`, which would make the installed runtime unreachable and the development override useless on the packaged binary.
 
 A NixOS configuration consumes the flake as an input:
 
@@ -276,7 +277,7 @@ The output `.xcodeproj` is uncommitted and `.gitignore`d, and exists for LLDB an
 
 ### What the bundle ships
 
-The `.app` is self-contained, so a double-clicked bundle runs with no shell environment: it carries its own pinned Neovim and `init.lua`, ripgrep, the vendored Neovim plugins and colorscheme, the compiled treesitter parsers, both font families, and the app icon. [`crates/wolf-macos/README.md`](crates/wolf-macos/README.md) has the inventory, with a link to the `//bazel` package behind each entry, and `bundle_layout_test` asserts it. Exported `WOLF_NVIM_BIN`, `WOLF_RG_BIN` and `WOLF_INIT_LUA` values override their bundled counterparts, so a development override still wins.
+The `.app` is self-contained, so a double-clicked bundle runs with no shell environment: it carries its own pinned Neovim and `init.lua`, ripgrep, the vendored Neovim plugins and colorscheme, the compiled treesitter parsers, the `xterm-ghostty` terminfo entry its terminal panes use, both font families, and the app icon. [`crates/wolf-macos/README.md`](crates/wolf-macos/README.md) has the inventory, with a link to the `//bazel` package behind each entry, and `bundle_layout_test` asserts it. Exported `WOLF_NVIM_BIN`, `WOLF_RG_BIN`, `WOLF_TERMINFO_DIR` and `WOLF_INIT_LUA` values override their bundled counterparts, so a development override still wins.
 
 ## Running the tests
 

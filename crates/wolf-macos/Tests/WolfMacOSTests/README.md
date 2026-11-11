@@ -14,7 +14,7 @@ The macOS worker has no GUI session and no screen, so XCUITest, which needs a UI
 
 **Do not drop the target's `CFProcessPath` env.** rules_swift places the test binary at `WolfMacOSTests.xctest/Contents/MacOS/`, where AppKit treats it as a bundled app and aborts, with no message, when it cannot check in with LaunchServices, which Seatbelt denies. A flat process path needs no check-in.
 
-The target stages Neovim, `//bazel/nvim:nvim_tree` and `//runtime/nvim:init.lua` wired as `WOLF_TEST_NVIM_DIR` and `WOLF_TEST_INIT_LUA`, and carries `tags = ["no-sandbox"]`, because a test that starts a core spawns a child Neovim, which the macOS build sandbox does not allow. [`LiveCore.swift`](#livecoreswift) fences the state and config directories before any core or config read.
+The target stages Neovim, `//bazel/nvim:nvim_tree` and `//runtime/nvim:init.lua` wired as `WOLF_TEST_NVIM_DIR` and `WOLF_TEST_INIT_LUA`, and the vendored Lighthouse, `//bazel/lighthouse:lighthouse_tree` as `WOLF_TEST_LIGHTHOUSE_DIR`. It carries `tags = ["no-sandbox"]`, because a test that starts a core spawns a child Neovim, which the macOS build sandbox does not allow. [`LiveCore.swift`](#livecoreswift) fences the state and config directories before any core or config read.
 
 Captures are taken in Aqua at the host's backing scale, and the accent resolves through the window's appearance, so a test compares against `controlAccentColor` resolved at run time, never a literal. Only the worker's path, at backing scale 1 with a blue accent, gates; a desktop Mac with Retina, dark mode or another accent is untested.
 
@@ -46,7 +46,9 @@ Purpose: Starts a real core over the staged Neovim for the view tests that need 
 
 **Public API**
 
-- `LiveCore.start()` — a core at 80 × 24 in a fresh working directory, attached, with `metrics` measured from the loaded config; `nil` with the test failed otherwise.
+- `LiveCore.start(initLua:)` — a core at 80 × 24 in a fresh working directory, attached, with `metrics` measured from the loaded config; `nil` with the test failed otherwise. `initLua` replaces the staged `init.lua`, such as a copy beside a vendored tree it self-locates.
+- `stagedInitLua()` — the staged `init.lua`, to copy; `nil` with the test failed when it does not resolve.
+- `runfile(_:)` — the existing path a runfiles-relative variable names, resolved as `LiveCore` resolves its own; `nil` when unset or missing.
 - `openTerminal(_:)` — a session in Neovim's current window, as the bridge's `open_terminal` runs a command.
 - `waitFor(timeout:_:)` — spins the main run loop, so wakes reach the main queue while the test waits.
 - `shutdown()` — for the end of every test.
@@ -114,9 +116,25 @@ Purpose: Renders a `PaneContainerView` whose current window shows a real `/bin/s
 
 **Gotchas**
 
+- Its `TerminalPaneFixture` is internal rather than private because `TerminalLighthouseColourTests.swift` reuses it, over its own `init.lua`.
 - Background checks sample cell interiors, inset 1 point so no pixel straddles a neighbour. Glyph checks count blue pixels within 0.4, since antialiasing blends a glyph's edges.
 - The selected cells have an unset foreground, so swapped they fill with the default foreground, not blue.
 - The cursor test sets a steady block, which fills the whole cell.
+
+#### `TerminalLighthouseColourTests.swift`
+
+Purpose: Checks that a terminal pane's 16 ANSI colours are the vendored Lighthouse's, in the session's cells and in the pixels its `TerminalPaneView` paints, for the dark background and, after `set_background(false)`, the light one.
+
+**Covers**
+
+- Every foreground and background cell of the 16 colours matching Lighthouse's `g:terminal_color_0` to `_15`, and at least 0.9 of each background cell's interior painting that colour in sRGB, within `OffscreenRendererTests`' 0.01.
+- An open pane repainting in the light colours when the background switches.
+
+**Gotchas**
+
+- The expected colours come from the pinned `colors/lighthouse.lua`, parsed by the `LighthouseColours` reader in this file the way `crates/wolf-ffi/tests/common/mod.rs` parses it, so a pin bump needs no constant.
+- `init.lua` self-locates the colorscheme, so the test copies it beside `lighthouse/colors/lighthouse.lua` in a fresh directory and starts the core over the copy.
+- Every run prints a table of expected, cell and pixel colours.
 
 #### `FileTreeViewTests.swift`
 

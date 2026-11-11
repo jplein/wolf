@@ -2,7 +2,7 @@
 
 Hermetic, pinned **orlando** Neovim plugin for bundling into `Wolf.app`.
 
-This package downloads the pinned GitHub source tarball for the pure-Lua orlando plugin (sha256-pinned, fetched by Bazel — no system or `PATH` dependency), assembles it into a structure-preserving directory artifact, and exposes it for bundling. `//crates/wolf-macos:Wolf` bundles the result at `Contents/Resources/orlando/`, and the captive `runtime/nvim/init.lua` conditionally prepends it to `runtimepath` and sources `plugin/orlando.lua`. The load is a strict no-op when the tree is absent (Linux/cargo).
+This package downloads the pinned GitHub source tarball for the pure-Lua orlando plugin (sha256-pinned, fetched by Bazel — no system or `PATH` dependency), assembles it into a structure-preserving directory artifact, and exposes it for bundling. `//crates/wolf-macos:Wolf` bundles the result at `Contents/Resources/orlando/`, and the captive `runtime/nvim/init.lua` conditionally prepends it to `runtimepath` and sources `plugin/orlando.lua`. The wolf-gnome package installs the same tree under `share/wolf/nvim/orlando/`. The load is a strict no-op when the tree is absent, as in a checkout.
 
 ## The pin
 

@@ -14,7 +14,7 @@ Cargo discovers every `tests/*.rs`. **Bazel does not.** A new file needs a match
 - **Real-nvim** — stages `//bazel/nvim:nvim_tree` and `//runtime/nvim:init.lua` as `data`, wires `WOLF_TEST_NVIM_DIR` / `WOLF_TEST_INIT_LUA` via `$(rootpath)`, lists `tests/common/mod.rs` in `srcs` and `//crates/wolf-test-support:wolf_test_support` in `deps`, and carries `tags = ["no-sandbox"]` because spawning a child nvim does not work under the macOS build sandbox. Results are still cached.
 - **Headless** — none of that: no `data`, no env, no tag, no `common/`.
 
-Some targets stage more: `search` adds `//bazel/rg:rg_tree` and wires `WOLF_RG_BIN`; `orlando_load` and `lighthouse_load` add their vendored plugin trees; the `treesitter_*` targets add the parser and `nvim-treesitter` trees. Each entry below says which kind it is and what it needs.
+Some targets stage more: `search` adds `//bazel/rg:rg_tree` and wires `WOLF_RG_BIN`; `orlando_load`, `lighthouse_load` and `terminal_lighthouse` add their vendored plugin trees; `terminal_terminfo` adds `//bazel/ghostty-vt:ghostty_terminfo` as `WOLF_TEST_TERMINFO_DIR`; the `treesitter_*` targets add the parser and `nvim-treesitter` trees. Each entry below says which kind it is and what it needs.
 
 ## The shared harness — `common/mod.rs`
 
@@ -25,8 +25,9 @@ Where the wolf-core suite panics without a real nvim, these tests skip loudly th
 - Because the helper publishes `WOLF_NVIM_BIN`, a test body needs no `std::env::set_var("WOLF_NVIM_BIN", …)` of its own — do not copy one from a sibling. Most real-nvim binaries here still carry that redundant write at the top of each test body, which the helper makes a no-op and which races its neighbours' environment reads in any binary holding more than one test. Removing them is pure plumbing that touches no assertion, and nobody has done it.
 - `orlando_dir_or_none()`, `lighthouse_dir_or_none()`, `parsers_dir_or_none()`, `nvim_treesitter_dir_or_none()` — staged vendored-tree resolvers, each over its own `WOLF_TEST_*_DIR`. Bazel wires all four from runfiles; the Linux devShell exports the orlando and lighthouse ones from the same derivations the Nix package installs, and the two treesitter resolvers fall back to its `WOLF_PARSERS_DIR` and `WOLF_NVIM_TREESITTER_DIR`. So every tree resolves on both platforms, and only a `cargo test` run outside the shell reaches the `None` arm, which returns the dependent test as a loud skip rather than a failure.
 - The treesitter resolvers' `WOLF_TEST_*`-first order is load-bearing, as their doc comments explain, and untested: each host sets only one of the two variables, so no run reaches both arms. That gap is accepted rather than closed.
-- Deleting either `shellHook` export reddens nothing in this suite — three tests would skip and pass — so `crates/wolf-gnome/tests/flake_exports.rs` carries a guard asserting both lines are still in `flake.nix`.
+- Deleting either `shellHook` export reddens nothing in this suite — the tests over that tree would skip and pass — so `crates/wolf-gnome/tests/flake_exports.rs` carries a guard asserting both lines are still in `flake.nix`.
 - `copy_dir_recursive()` — stages a sibling tree next to a temp `init.lua` for the tests whose Lua self-locates its siblings. It classifies entries with `std::fs::metadata`, which follows symlinks, because Bazel runfiles entries are symlinks that `DirEntry::file_type` would skip.
+- `Lighthouse` — the oracle that reads expected colours from the pinned `colors/lighthouse.lua` of a staged tree: `colour(background, key)` for a palette key and `ansi(background)` for `g:terminal_color_0` to `_15`, packed `0x00RRGGBB`. It parses the shapes [`//bazel/lighthouse`](../../../bazel/lighthouse/README.md#the-pin) lists and panics naming the missing one, so a pin bump needs no test constant.
 
 ## Files
 
@@ -247,13 +248,13 @@ Real-nvim proof that the captive `runtime/nvim/init.lua` both finds and activate
 
 **Covers**
 
-- `vim.g.colors_name` / `vim.o.background`, and the startup pickup of the scheme's `WolfTitlebar` / `WolfCursor` groups through the theme and frame accessors.
+- `vim.g.colors_name` / `vim.o.background`, and the startup pickup of the scheme's `WolfCursor` group through the frame's cursor accessors, against values `common::Lighthouse` reads from the pinned file.
+- The pinned scheme leaving `WolfTitlebar` unset, so `theme_titlebar_bg()` and `theme_titlebar_fg()` stay unset.
 
 **Gotchas**
 
 - `init.lua` self-locates the colorscheme relative to its own file, so the test rebuilds the bundle layout (`init.lua` beside `lighthouse/`) in a temp dir; pointing at the staged tree would skip the real code path.
 - The bridge has no Lua-eval accessor, so activation is read back from a sentinel file written by a typed `:lua vim.fn.writefile(...)`.
-- The expected colors are pinned to the vendored commit; a lighthouse bump means updating those constants.
 
 #### `mouse_scroll.rs`
 
@@ -403,6 +404,18 @@ That the harness's state-dir funnel keeps a real-nvim test off the user's Wolf s
 **Gotchas** — an interactive `/bin/sh` echoes what it is typed, so a test looks for the result of an expression the typed text does not contain. The byte-level tests run `cat -v` under `stty raw -echo` behind a ready marker and read only the rows after it.
 
 To print a session's cells and colours while debugging, add a scratch `#[test]` here that opens the session with `start`, `open` and `wait_frame`, as `open_terminal_binds_the_window_and_publishes_styled_cells` does. `frame_text` and `row_text` give the text, and each `FfiTerminalCell` of `row_cells(row)` gives `fg()` and `bg()`, an `FfiColor` with a packed `rgb` and a `set` bit, and its `flags()`. Run it with `--nocapture`, which Bazel takes as `--test_arg=--nocapture`, then delete it.
+
+#### `terminal_lighthouse.rs`
+
+**Covers** — a session's 16 ANSI colours under the vendored Lighthouse: every foreground and background cell matching Lighthouse's dark `g:terminal_color_0` to `_15`, then, after `set_background(false)`, the same open session matching the light ones. Real nvim over a temp `init.lua` beside a copy of the tree, as `lighthouse_load.rs` stages it, and a real `/bin/sh`; target `//crates/wolf-ffi:terminal_lighthouse` (nvim runfiles plus `//bazel/lighthouse:lighthouse_tree` as `WOLF_TEST_LIGHTHOUSE_DIR`, `tags = ["no-sandbox"]`). It skips as `lighthouse_load.rs` does.
+
+**Gotchas** — every run prints a table of index, escape code, expected and measured colours, which `--nocapture` shows. No printed cell is bold, so no brightening enters the comparison.
+
+#### `terminal_terminfo.rs`
+
+**Covers** — `wolf_ffi_start` reading `WOLF_TERMINFO_DIR`, so a session's shell gets `TERM=xterm-ghostty` and that `TERMINFO` over an inherited decoy. Core's choice itself is `crates/wolf-core/tests/terminal_terminfo.rs`' case. Real nvim and a real `/bin/sh`; target `//crates/wolf-ffi:terminal_terminfo` (nvim runfiles plus `//bazel/ghostty-vt:ghostty_terminfo` as `WOLF_TEST_TERMINFO_DIR`, `tags = ["no-sandbox"]`).
+
+**Gotchas** — it sets `WOLF_TERMINFO_DIR`, `TERM` and `TERMINFO` in its own process, so it stays the only test in its binary. It panics when `WOLF_TEST_TERMINFO_DIR` does not resolve, and skips only without a pinned Neovim.
 
 #### `theme.rs`
 

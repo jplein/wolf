@@ -16,7 +16,7 @@ Read [`wolf-ffi-decisions.md`](../../../notes/wolf-ffi-decisions.md) first. It h
 
 ### Lifecycle
 
-- `wolf_ffi_start(init_lua: String, cwd: String, cols: u16, rows: u16) -> Option<WolfCoreHandle>` — `init_lua` and `cwd` are filesystem paths. Logs and returns `None` on any startup error. Mints this core's wake token.
+- `wolf_ffi_start(init_lua: String, cwd: String, cols: u16, rows: u16) -> Option<WolfCoreHandle>` — `init_lua` and `cwd` are filesystem paths. Logs and returns `None` on any startup error. Mints this core's wake token. Takes the core's terminfo directory from `WOLF_TERMINFO_DIR` through `wolf_core::terminfo_dir_from_env()` rather than a parameter, so the Swift signature is unchanged; `Project.swift` defaults that variable to the bundle's.
 - `WolfCoreHandle` — Opaque and main-thread-only: `WolfCore` is not `Send`. Its `RefCell<Option<WolfCore>>` lets `shutdown` take the core by value while the bridge only ever hands Swift a `&self`.
 - `wake_token(&self) -> u64` — Routing identity for this core's wakes. Tokens start at 1, leaving 0 free as the front-end's "no core" sentinel.
 - `shutdown(&self)` — Takes the core out of the handle and drops it; every method afterwards returns its empty-backed value.
