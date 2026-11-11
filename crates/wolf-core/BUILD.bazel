@@ -971,6 +971,33 @@ rust_test(
 )
 
 rust_test(
+    name = "terminal_terminfo",
+    srcs = [
+        "tests/common/mod.rs",
+        "tests/terminal_terminfo.rs",
+    ],
+    crate_root = "tests/terminal_terminfo.rs",
+    # Spawns a real nvim and real shells in ptys, which the macOS build sandbox does not allow.
+    tags = ["no-sandbox"],
+    edition = "2021",
+    data = [
+        "//bazel/ghostty-vt:ghostty_terminfo",
+        "//bazel/nvim:nvim_tree",
+        "//runtime/nvim:init.lua",
+    ],
+    env = {
+        "WOLF_NVIM_BIN": "$(rootpath //bazel/nvim:nvim_tree)/nvim/bin/nvim",
+        "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
+        "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
+        "WOLF_TEST_TERMINFO_DIR": "$(rootpath //bazel/ghostty-vt:ghostty_terminfo)/terminfo",
+    },
+    deps = [
+        ":wolf_core",
+        "//crates/wolf-test-support:wolf_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True),
+)
+
+rust_test(
     name = "terminal_drawer",
     srcs = [
         "tests/common/mod.rs",

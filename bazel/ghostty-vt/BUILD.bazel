@@ -1,10 +1,13 @@
-# libghostty-vt 1.0.0, built from its release tarballs with the pinned Zig and linked statically.
+# libghostty-vt 1.0.0, built with the pinned Zig and linked statically, and its terminfo entry.
 # See specs/terminal-panes.md#building-libghostty-vt
 load("@rules_cc//cc:defs.bzl", "cc_import")
 load("//tools/lint:defs.bzl", "comment_srcs")
-load(":defs.bzl", "ghostty_vt_archive")
+load(":defs.bzl", "ghostty_terminfo", "ghostty_vt_archive")
 
-exports_files(["build_archive.sh"])
+exports_files([
+    "build_archive.sh",
+    "build_terminfo.sh",
+])
 
 ghostty_vt_archive(
     name = "libghostty_vt",
@@ -12,6 +15,18 @@ ghostty_vt_archive(
     deps_tarball = "@ghostty_vt_deps//file",
     # The //tools/lint fix launchers stage the archive for cargo's run of wolf-vt's build.rs.
     visibility = ["//tools/lint:__pkg__"],
+)
+
+# The compiled xterm-ghostty entry, as the tree `terminfo/78/xterm-ghostty`, for the app bundle.
+ghostty_terminfo(
+    name = "ghostty_terminfo",
+    src = "@ghostty_vt_src//file",
+    generator = "terminfo.zig",
+    visibility = [
+        "//crates/wolf-core:__pkg__",
+        "//crates/wolf-ffi:__pkg__",
+        "//crates/wolf-macos:__pkg__",
+    ],
 )
 
 cc_import(

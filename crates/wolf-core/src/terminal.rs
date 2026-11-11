@@ -52,6 +52,17 @@ const DEFAULT_SIZE: (u16, u16) = (80, 24);
 /// The cell size in pixels before the first `resize_terminal`.
 const DEFAULT_CELL_PX: (u32, u32) = (8, 16);
 
+/// The variable a front-end reads Wolf's terminfo directory from; packaging sets it as a
+/// default, so a developer's export wins.
+pub const TERMINFO_DIR_ENV: &str = "WOLF_TERMINFO_DIR";
+
+/// The non-empty value of [`TERMINFO_DIR_ENV`], for [`crate::CoreConfig::terminfo_dir`].
+pub fn terminfo_dir_from_env() -> Option<PathBuf> {
+    std::env::var_os(TERMINFO_DIR_ENV)
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from)
+}
+
 /// Names a terminal session: allocated from 1 per core, never reused, and stable across
 /// Neovim restarts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -242,6 +253,7 @@ pub(crate) struct TerminalRegistry {
     search_registry: Arc<SearchRegistry>,
     tracked_cwd: TrackedCwd,
     fallback_cwd: PathBuf,
+    terminfo_dir: Option<PathBuf>,
     /// The pump's current Neovim handle, which a restart swaps; set once after spawn.
     rpc: OnceLock<Arc<RwLock<PumpTarget>>>,
 }
@@ -255,6 +267,7 @@ pub(crate) struct RegistryParts {
     pub(crate) search_registry: Arc<SearchRegistry>,
     pub(crate) tracked_cwd: TrackedCwd,
     pub(crate) fallback_cwd: PathBuf,
+    pub(crate) terminfo_dir: Option<PathBuf>,
 }
 
 impl TerminalRegistry {
@@ -273,6 +286,7 @@ impl TerminalRegistry {
             search_registry: parts.search_registry,
             tracked_cwd: parts.tracked_cwd,
             fallback_cwd: parts.fallback_cwd,
+            terminfo_dir: parts.terminfo_dir,
             rpc: OnceLock::new(),
         })
     }
@@ -309,6 +323,7 @@ impl TerminalRegistry {
             id,
             command,
             cwd,
+            self.terminfo_dir.as_deref(),
             &colours,
             self.wake.clone(),
             self.me.clone(),

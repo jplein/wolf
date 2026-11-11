@@ -5,10 +5,15 @@
 //! `CAGE_SLOTS` slot like every other smoke.
 
 use super::editor::{OCR_WORD, SCENARIO};
+use super::lighthouse::{Background, Lighthouse};
 use super::preview::{
     preview_theme_band_rows, preview_theme_pane_area, preview_theme_preview_columns,
     PREVIEW_DARK_BG, PREVIEW_OTHER_PANE_QUERY, PREVIEW_READBACK_PREFIX, PREVIEW_THEME_SOURCE_BODY,
     PREVIEW_THEME_SOURCE_FILE,
+};
+use super::terminal_terminfo::{
+    TerminfoFiles, DECOY_TERM, DECOY_TERMINFO, GHOSTTY_TERM, LETTER_LAYOUT_ENTRY, TERMINFO_DIR_ENV,
+    TERMINFO_SCENARIO,
 };
 use super::*;
 
@@ -275,44 +280,53 @@ const PACKAGED_BAND_MIN_UNIFORM_FRACTION: f64 = 0.98;
 /// could not tell a loaded colorscheme from an unloaded one.
 const PACKAGED_CONTROL_MAX_LIGHTHOUSE_FRACTION: f64 = 0.01;
 
-/// The `Normal` background the vendored lighthouse colorscheme sets in its DARK
-/// variant, at the commit `flake.nix`'s `wolfVendoredPins` pins.
-///
-/// RE-TYPED here as a literal, never imported and never read out of the capture: the
-/// claim is that the packaged app's captive Neovim is running THIS colorscheme, and
-/// reading the value out of the thing under test would make the assertion a
-/// comparison with itself. [`PREVIEW_DARK_BG`] sets the same precedent.
-///
-/// ONE constant behind TWO independent observables, deliberately: the captive
-/// Neovim's own `nvim_get_hl(0, {name = 'Normal'}).bg` readback and the pixels the
-/// front-end painted. A single edit re-pins both, and a run in which the readback
-/// agrees and the pixels do not is a front-end that is not painting what Neovim
-/// reports.
-///
-/// If a lighthouse bump moves it, RE-MEASURE and re-pin here rather than deleting the
-/// assertion — the readback's failure message prints the value it actually saw.
-const PACKAGED_LIGHTHOUSE_NORMAL_BG: Rgb8 = (0x1b, 0x1b, 0x1b);
+/// The palette key whose dark value the vendored lighthouse colorscheme sets `Normal`'s
+/// background from.
+const PACKAGED_LIGHTHOUSE_NORMAL_BG_KEY: &str = "background";
 
-/// The colour orlando's `code_block` feature fills a fenced block's rows with, at the
-/// two commits `flake.nix`'s `wolfVendoredPins` pins.
+/// The `Normal` background the vendored lighthouse colorscheme sets in its DARK
+/// variant, read from the pinned `lighthouse.lua` in the TEST process through
+/// [`Lighthouse::from_env`].
+///
+/// Never read out of the capture or out of the launch under test: the claim is that the
+/// packaged app's captive Neovim is running THIS colorscheme, and reading the value out
+/// of the thing under test would make the assertion a comparison with itself. The
+/// devShell's tree is built from the same `wolfVendoredPins` entry as the package's, so
+/// a pin bump moves both together and needs no edit here.
+///
+/// ONE value behind TWO independent observables, deliberately: the captive Neovim's own
+/// `nvim_get_hl(0, {name = 'Normal'}).bg` readback and the pixels the front-end painted.
+/// A run in which the readback agrees and the pixels do not is a front-end that is not
+/// painting what Neovim reports.
+fn packaged_lighthouse_normal_bg(smoke: &str) -> Rgb8 {
+    Lighthouse::from_env(smoke).rgb8(Background::Dark, PACKAGED_LIGHTHOUSE_NORMAL_BG_KEY)
+}
+
+/// The palette key whose dark value orlando's `code_block` fill takes: the vendored
+/// Lighthouse defines `OrlandoCodeBlock` itself, from this key's dark value.
+const PACKAGED_ORLANDO_CODE_FILL_KEY: &str = "slightHighlightBG";
+
+/// The colour orlando's `code_block` feature fills a fenced block's rows with, read from
+/// the pinned `lighthouse.lua` as [`packaged_lighthouse_normal_bg`] is.
+///
+/// It is the composition of TWO pins: orlando names the highlight group, and Lighthouse
+/// defines it. orlando's own definition is a `default = true` link to `CursorLine`, which
+/// gives way to the colorscheme's. So a Lighthouse that stops defining `OrlandoCodeBlock`
+/// hands the fill to `CursorLine`, and a bump like that re-derives the key, not a colour.
 ///
 /// MEASURED off launch B's retained capture, as the dominant colour of
-/// [`packaged_code_band`]: `#252525` over 0.9443 of the band, against `#14161b` over
-/// 1.0000 of the same rectangle in launch A.
+/// [`packaged_code_band`]: the fill, `#252525`, over 0.9443 of the band, against
+/// `#14161b` over 1.0000 of the same rectangle in launch A.
 ///
-/// It is the composition of TWO pins — orlando names the highlight group, the
-/// lighthouse palette gives it a value — so a bump to EITHER re-measures it. Re-pin it
-/// from the capture the failure message names; do not delete the assertion, and do not
-/// substitute a colour read out of the launch under test, which would make the
-/// assertion a comparison with itself.
-///
-/// It must differ from [`PACKAGED_LIGHTHOUSE_NORMAL_BG`], and assertion 9 checks that
+/// It must differ from [`packaged_lighthouse_normal_bg`], and assertion 9 checks that
 /// before it counts anything: if the fill and the editor's own background ever
 /// coincided, "the code band carries the fill" would be satisfied by a launch in which
 /// orlando drew nothing at all.
-const PACKAGED_ORLANDO_CODE_FILL: Rgb8 = (0x25, 0x25, 0x25);
+fn packaged_orlando_code_fill(smoke: &str) -> Rgb8 {
+    Lighthouse::from_env(smoke).rgb8(Background::Dark, PACKAGED_ORLANDO_CODE_FILL_KEY)
+}
 
-/// The least of [`packaged_code_band`] that must be [`PACKAGED_ORLANDO_CODE_FILL`] in
+/// The least of [`packaged_code_band`] that must be [`packaged_orlando_code_fill`] in
 /// the PACKAGED launch.
 ///
 /// ## Why this is not 0.98, and must never be "tightened" to it
@@ -324,8 +338,7 @@ const PACKAGED_ORLANDO_CODE_FILL: Rgb8 = (0x25, 0x25, 0x25);
 /// [`PANE_ORIGIN_X_EXPECTED`] + 16 * `cell_w` = 640 gives `cell_w` = 22.477 at
 /// [`SMOKE_FONT_PT`] — so a row every one of whose cells is filled tops out at about
 /// 0.961, and the whole band at the 0.9443 actually measured (the remainder is the
-/// seams themselves: `#232323` at 0.0176, `#1b1b1b` at 0.0170, `#242424` at 0.0105 and
-/// `#222222` at 0.0105, every one of them an intermediate between the fill and the
+/// seams themselves, every one of them an intermediate between the fill and the
 /// background).
 ///
 /// 0.961 is therefore a HARD CEILING that no correct run can exceed, and 0.98 is
@@ -341,7 +354,7 @@ const PACKAGED_ORLANDO_CODE_FILL: Rgb8 = (0x25, 0x25, 0x25);
 /// the fill, not a reason to lower this floor.
 const PACKAGED_ORLANDO_MIN_FILL_FRACTION: f64 = 0.90;
 
-/// The most of [`packaged_code_band`] that may be [`PACKAGED_ORLANDO_CODE_FILL`] in
+/// The most of [`packaged_code_band`] that may be [`packaged_orlando_code_fill`] in
 /// the CONTROL launch.
 ///
 /// The half that makes the floor above a DISCRIMINATOR rather than a presence check: a
@@ -783,19 +796,19 @@ exit 0
 /// ## The two pixel bands
 ///
 /// [`packaged_prose_band`] samples the editor's own `Normal` background below the
-/// fixture, and its assertion is against [`PACKAGED_LIGHTHOUSE_NORMAL_BG`] — a
-/// re-typed literal, present in launch B and essentially absent in launch A.
+/// fixture, and its assertion is against [`packaged_lighthouse_normal_bg`] — read from
+/// the pinned `lighthouse.lua`, present in launch B and essentially absent in launch A.
 ///
 /// [`packaged_code_band`] samples the right margin of the fenced block, which
 /// orlando's `code_block` feature fills to the grid edge. Its assertion is PRESENCE
-/// AGAINST ABSENCE of [`PACKAGED_ORLANDO_CODE_FILL`]: a floor of it in launch B and a
+/// AGAINST ABSENCE of [`packaged_orlando_code_fill`]: a floor of it in launch B and a
 /// ceiling in launch A, both directions required. It is not a uniformity claim and
 /// cannot be made one — the front-end draws one background rectangle per cell, and the
 /// antialiased seam between them caps the band near 0.961 whatever orlando does. That
 /// derivation, with the measured seam spacing, is in
 /// [`PACKAGED_ORLANDO_MIN_FILL_FRACTION`].
 ///
-/// **The orlando band's discriminating power is MEASURED, not inferred**: `#252525`
+/// **The orlando band's discriminating power is MEASURED, not inferred**: the fill
 /// over 0.9443 of the band in the packaged launch against `#14161b` over 1.0000 of the
 /// same rectangle in the control. So the feature row rests on pixels as well as on
 /// readback lines 2 and 3, and neither is ticked on what the `hl_eol` mechanism
@@ -862,7 +875,7 @@ exit 0
 /// ```text
 /// launch B (the store binary): only 0.0000 of the code band
 /// SampleRect { x0: 640, x1: 1200, y0: 206, y1: 382 } is
-/// PACKAGED_ORLANDO_CODE_FILL = (37, 37, 37), below the 0.9 floor;
+/// … (37, 37, 37), below the 0.9 floor;
 /// the prose band beside it reads (27, 27, 27).
 /// ```
 ///
@@ -883,6 +896,9 @@ fn the_packaged_binary_loads_the_vendored_lighthouse_and_orlando_under_cage() {
     let runtime_dir = require_smoke_env();
     let store_bin = packaged_binary(SMOKE);
     let control_bin = env!("CARGO_BIN_EXE_wolf-gnome");
+    // Read in this process: the cage scrubs WOLF_TEST_LIGHTHOUSE_DIR, and no capture is consulted.
+    let normal_bg = packaged_lighthouse_normal_bg(SMOKE);
+    let code_fill = packaged_orlando_code_fill(SMOKE);
 
     // Given to the control launch under another name, so the packaged one never sees `WOLF_NVIM_BIN`.
     let control_nvim = std::env::var("WOLF_NVIM_BIN").unwrap_or_else(|e| {
@@ -1033,18 +1049,18 @@ fn the_packaged_binary_loads_the_vendored_lighthouse_and_orlando_under_cage() {
     );
 
     // --- Assertion 6 (discriminator): the colorscheme's own palette -----------
-    let (r, g, b) = PACKAGED_LIGHTHOUSE_NORMAL_BG;
+    let (r, g, b) = normal_bg;
     let want_bg = format!("{r:02x}{g:02x}{b:02x}");
     assert_eq!(
         store_lines[3], want_bg,
         "{SMOKE}: {PACKAGED_STORE_LABEL}'s `{}` readback is {:?}, expected {want_bg:?} — \
-         PACKAGED_LIGHTHOUSE_NORMAL_BG, the vendored colorscheme's dark `Normal` background at the \
-         pinned commit. Assertion 5 is green, so `vim.g.colors_name` IS `lighthouse`; what this \
-         says is that the palette behind that name is not the one this file pins. The likely cause \
-         is a lighthouse pin bump in `flake.nix`'s `wolfVendoredPins` — in which case RE-MEASURE \
-         the value and re-pin the constant, which also re-pins the pixel band derived from it. Do \
-         not delete the assertion: the name alone is satisfied by a colorscheme that loaded and \
-         then failed to set a single highlight.",
+         the dark `{PACKAGED_LIGHTHOUSE_NORMAL_BG_KEY}` of the pinned lighthouse.lua in \
+         WOLF_TEST_LIGHTHOUSE_DIR. Assertion 5 is green, so `vim.g.colors_name` IS `lighthouse`; \
+         what this says is that the palette behind that name is not the devShell's. Either the \
+         package installs a lighthouse other than `wolfLighthouse`, or the colorscheme no longer \
+         sets `Normal` from `{PACKAGED_LIGHTHOUSE_NORMAL_BG_KEY}`, in which case re-derive the \
+         key, not a colour. Do not delete the assertion: the name alone is satisfied by a \
+         colorscheme that loaded and then failed to set a single highlight.",
         PACKAGED_READBACK_FIELDS[3], store_lines[3]
     );
     assert_ne!(
@@ -1119,7 +1135,7 @@ fn the_packaged_binary_loads_the_vendored_lighthouse_and_orlando_under_cage() {
     }
 
     // --- Assertion 8: the LIGHTHOUSE band, both directions --------------------
-    let store_hits = store.count_exactly(prose, PACKAGED_LIGHTHOUSE_NORMAL_BG);
+    let store_hits = store.count_exactly(prose, normal_bg);
     let store_fraction = band_fraction(
         store_hits,
         prose.pixels(),
@@ -1128,15 +1144,15 @@ fn the_packaged_binary_loads_the_vendored_lighthouse_and_orlando_under_cage() {
     assert!(
         store_fraction >= PACKAGED_BAND_MIN_UNIFORM_FRACTION,
         "{SMOKE}: {PACKAGED_STORE_LABEL}: only {store_fraction:.4} of the prose band {prose:?} is \
-         PACKAGED_LIGHTHOUSE_NORMAL_BG = {PACKAGED_LIGHTHOUSE_NORMAL_BG:?}; the band's own colour \
-         reads {store_prose:?}. Readback line 4 already agreed with the constant, so Neovim \
+         Lighthouse's dark `{PACKAGED_LIGHTHOUSE_NORMAL_BG_KEY}` {normal_bg:?}; the band's own \
+         colour reads {store_prose:?}. Readback line 4 already agreed with that value, so Neovim \
          BELIEVES `Normal` is that colour and the front-end painted something else — which is a \
          claim about `render::paint` and the snapshot's default background rather than about the \
-         package. If readback line 4 is ALSO red, fix that first: the two share one constant on \
+         package. If readback line 4 is ALSO red, fix that first: the two share one value on \
          purpose. Capture kept at {}.",
         store_png.display()
     );
-    let control_hits = control.count_exactly(prose, PACKAGED_LIGHTHOUSE_NORMAL_BG);
+    let control_hits = control.count_exactly(prose, normal_bg);
     let control_fraction = band_fraction(
         control_hits,
         prose.pixels(),
@@ -1145,7 +1161,7 @@ fn the_packaged_binary_loads_the_vendored_lighthouse_and_orlando_under_cage() {
     assert!(
         control_fraction <= PACKAGED_CONTROL_MAX_LIGHTHOUSE_FRACTION,
         "{SMOKE}: {PACKAGED_CONTROL_LABEL}: {control_fraction:.4} of the prose band {prose:?} is \
-         PACKAGED_LIGHTHOUSE_NORMAL_BG = {PACKAGED_LIGHTHOUSE_NORMAL_BG:?}, above the \
+         Lighthouse's dark `{PACKAGED_LIGHTHOUSE_NORMAL_BG_KEY}` {normal_bg:?}, above the \
          {PACKAGED_CONTROL_MAX_LIGHTHOUSE_FRACTION} ceiling; the band's own colour reads \
          {control_prose:?}. This is the half that makes the assertion above a DISCRIMINATOR: a \
          control that paints the same background as lighthouse would satisfy the packaged \
@@ -1162,15 +1178,15 @@ fn the_packaged_binary_loads_the_vendored_lighthouse_and_orlando_under_cage() {
     // Non-vacuity: if orlando's fill matched the editor background, the floor would pass with nothing
     // drawn and the ceiling on a mere colorscheme difference.
     assert_ne!(
-        PACKAGED_ORLANDO_CODE_FILL, PACKAGED_LIGHTHOUSE_NORMAL_BG,
-        "{SMOKE}: PACKAGED_ORLANDO_CODE_FILL and PACKAGED_LIGHTHOUSE_NORMAL_BG are the SAME \
-         colour, so assertion 9 cannot tell orlando's `code_block` fill from the editor's own \
-         `Normal` background and would pass on a package carrying no orlando at all. One of the \
-         two constants was re-pinned against the wrong band; re-measure both off the retained \
-         captures."
+        code_fill, normal_bg,
+        "{SMOKE}: Lighthouse's dark `{PACKAGED_ORLANDO_CODE_FILL_KEY}` and \
+         `{PACKAGED_LIGHTHOUSE_NORMAL_BG_KEY}` are the SAME colour {code_fill:?}, so assertion 9 \
+         cannot tell orlando's `code_block` fill from the editor's own `Normal` background and \
+         would pass on a package carrying no orlando at all. The pinned Lighthouse gives the two \
+         keys one value; this smoke then needs a fixture whose fill differs from `Normal`."
     );
 
-    let store_fill_hits = store.count_exactly(code, PACKAGED_ORLANDO_CODE_FILL);
+    let store_fill_hits = store.count_exactly(code, code_fill);
     let store_fill_fraction = band_fraction(
         store_fill_hits,
         code.pixels(),
@@ -1179,7 +1195,7 @@ fn the_packaged_binary_loads_the_vendored_lighthouse_and_orlando_under_cage() {
     assert!(
         store_fill_fraction >= PACKAGED_ORLANDO_MIN_FILL_FRACTION,
         "{SMOKE}: {PACKAGED_STORE_LABEL}: only {store_fill_fraction:.4} of the code band {code:?} \
-         is PACKAGED_ORLANDO_CODE_FILL = {PACKAGED_ORLANDO_CODE_FILL:?}, below the \
+         is Lighthouse's dark `{PACKAGED_ORLANDO_CODE_FILL_KEY}` {code_fill:?}, below the \
          {PACKAGED_ORLANDO_MIN_FILL_FRACTION} floor; the prose band beside it reads \
          {store_prose:?}. Three readings are distinguishable and the retained capture separates \
          them. NEAR ZERO with the code band the same colour as the prose band: orlando's \
@@ -1193,7 +1209,7 @@ fn the_packaged_binary_loads_the_vendored_lighthouse_and_orlando_under_cage() {
          Capture kept at {}.",
         store_png.display()
     );
-    let control_fill_hits = control.count_exactly(code, PACKAGED_ORLANDO_CODE_FILL);
+    let control_fill_hits = control.count_exactly(code, code_fill);
     let control_fill_fraction = band_fraction(
         control_fill_hits,
         code.pixels(),
@@ -1202,7 +1218,7 @@ fn the_packaged_binary_loads_the_vendored_lighthouse_and_orlando_under_cage() {
     assert!(
         control_fill_fraction <= PACKAGED_CONTROL_MAX_ORLANDO_FRACTION,
         "{SMOKE}: {PACKAGED_CONTROL_LABEL}: {control_fill_fraction:.4} of the code band {code:?} \
-         is PACKAGED_ORLANDO_CODE_FILL = {PACKAGED_ORLANDO_CODE_FILL:?}, above the \
+         is Lighthouse's dark `{PACKAGED_ORLANDO_CODE_FILL_KEY}` {code_fill:?}, above the \
          {PACKAGED_CONTROL_MAX_ORLANDO_FRACTION} ceiling; the prose band beside it reads \
          {control_prose:?}. This is the half that makes the floor above a DISCRIMINATOR: the \
          checkout binary has no orlando, so its fenced block must be painted exactly like the rows \
@@ -1239,7 +1255,7 @@ const PACKAGED_PREVIEW_MIN_DOC_BG_FRACTION: f64 = 0.90;
 /// The other half of "the right pane renders the document": a pane that is dark but
 /// EMPTY reads zero here. That is exactly what an editor grid over the preview scratch
 /// buffer would look like — the scratch holds no text, and under the vendored
-/// colorscheme its background is [`PACKAGED_LIGHTHOUSE_NORMAL_BG`], the same
+/// colorscheme its background is [`packaged_lighthouse_normal_bg`], the same
 /// `#1b1b1b` — so without this count the background floor above would be satisfied by
 /// a launch whose web view never rendered anything at all.
 ///
@@ -1430,7 +1446,7 @@ exit 0
 /// chrome above the web view is a different colour from the document behind it.
 ///
 /// For the PACKAGED binary those two colours COINCIDE BY CONSTRUCTION. The vendored
-/// colorscheme's `Normal` background is [`PACKAGED_LIGHTHOUSE_NORMAL_BG`] and the dark
+/// colorscheme's `Normal` background is [`packaged_lighthouse_normal_bg`] and the dark
 /// preview theme's is [`PREVIEW_DARK_BG`], and both are `#1b1b1b`. MEASURED in this
 /// smoke's own capture: the editor pane's band reads 0.8177 of that colour and the
 /// preview pane's 1.0000, so the control band cannot discriminate anything and the
@@ -1617,5 +1633,115 @@ fn the_packaged_binary_opens_a_preview_under_cage() {
          `packaged_binary_renders_typed_text_under_cage` would also have caught in the editor. \
          Capture kept at {}.",
         out_png.display()
+    );
+}
+
+// --- P4: the packaged terminal pane gets Wolf's own xterm-ghostty entry. ---
+
+/// Where the package installs its compiled terminfo database, relative to the store root:
+/// private to Wolf, so it cannot collide with Ghostty's `share/terminfo` in a profile.
+const PACKAGED_TERMINFO_RELATIVE: &str = "share/wolf/terminfo";
+
+/// **The STORE binary's terminal pane gets `TERM=xterm-ghostty` and the package's own
+/// `TERMINFO`, and `infocmp` finds the entry there.**
+///
+/// `$out/bin/wolf-gnome` runs under `cage` with the always-scrub, GTK-runtime and font-stack
+/// lists removed, as [`packaged_binary_renders_typed_text_under_cage`] runs it, so the
+/// wrapper's `WOLF_TERMINFO_DIR` default is the only source of the directory. The decoys
+/// `TERM=dumb` and `TERMINFO=/nonexistent/…` are set on the launch. A typed `:terminal` opens
+/// a session on the shared terminfo `SHELL` script, which writes what it sees, and this smoke
+/// prints the readback and `infocmp`'s output on every run: that is the Linux evidence that
+/// a packaged pane's shell has the entry.
+///
+/// `infocmp` is the devShell's ncurses, on the `PATH` the cage inherits. It reads
+/// `TERMINFO` like any ncurses program the user runs in the pane would.
+///
+/// ## Assertions
+///
+/// | # | assertion | kind | falsifier |
+/// | --- | --- | --- | --- |
+/// | 1 | the scenario exits 0 | precondition | none |
+/// | 2 | the shell's `TERM` is `xterm-ghostty` | discriminator | delete `preFixup`'s `--set-default WOLF_TERMINFO_DIR …` |
+/// | 3 | the shell's `TERMINFO` is `<out>/share/wolf/terminfo` | discriminator | the same edit |
+/// | 4 | `infocmp -x xterm-ghostty` exits 0 there | discriminator | delete `postInstall`'s copy into `$out/share/wolf/terminfo` |
+/// | 5 | its output names `setrgbf` | discriminator | `wolfGhosttyVt`'s `postInstall` runs `tic` without `-x` |
+#[test]
+#[ignore = "drives the installed Nix output; run through ./tools/wolf-package-smoke.sh"]
+fn the_packaged_terminal_pane_gets_wolfs_xterm_ghostty_under_cage() {
+    const SMOKE: &str = "the_packaged_terminal_pane_gets_wolfs_xterm_ghostty_under_cage";
+
+    let runtime_dir = require_smoke_env();
+    let bin = packaged_binary(SMOKE);
+    // Canonical, since the wrapper names the store path and a `result` link would differ.
+    let out = std::fs::canonicalize(packaged_out(SMOKE))
+        .unwrap_or_else(|e| panic!("{SMOKE}: failed to canonicalize {PACKAGE_OUT_ENV}: {e}"));
+    let expected_terminfo = out.join(PACKAGED_TERMINFO_RELATIVE);
+
+    let cwd = make_temp_cwd();
+    write_relaunch_fixtures(SMOKE, &cwd, &[]);
+    let files = TerminfoFiles::prepare(&runtime_dir, SMOKE);
+
+    let mut cmd = packaged_cage_command(
+        TERMINFO_SCENARIO,
+        &cwd,
+        &runtime_dir,
+        GtkRuntimeEnv::Scrubbed,
+    );
+    files.apply(&mut cmd).env("WOLF_BIN", &bin);
+    let status = cmd
+        .status()
+        .expect("failed to spawn `cage` for the packaged terminfo scenario");
+
+    // --- Assertion 1 (precondition): the scenario ran to completion -----------
+    assert!(
+        status.success(),
+        "{SMOKE}: the cage scenario exited unsuccessfully ({status}) for the PACKAGED binary at \
+         {}. Exit 11: the app died before it was ready for input, which \
+         `packaged_binary_renders_typed_text_under_cage` diagnoses. Exit 40: it never became \
+         ready. Exit 31: the shell's readback never appeared at {}, so no session opened on \
+         `:terminal` or its SHELL never ran.",
+        bin.display(),
+        files.readback.display()
+    );
+    let readback = files.read(SMOKE);
+    let infocmp = std::fs::read_to_string(&files.infocmp).unwrap_or_default();
+    eprintln!(
+        "{SMOKE}: the packaged pane's shell saw TERM={:?} TERMINFO={:?}; `infocmp -x \
+         {GHOSTTY_TERM}` exited {} with setrgbf={}, printing:\n{infocmp}",
+        readback.term, readback.terminfo, readback.infocmp_status, readback.setrgbf
+    );
+
+    // --- Assertions 2 and 3 (discriminators): the wrapper's directory reached the pane --
+    assert_eq!(
+        readback.term,
+        GHOSTTY_TERM,
+        "{SMOKE}: the packaged pane's shell sees TERM={:?}. xterm-256color means the app had no \
+         directory holding the entry: the wrapper sets no {TERMINFO_DIR_ENV} default, or the \
+         package installs no {LETTER_LAYOUT_ENTRY} under {}. {DECOY_TERM:?} means TERM was \
+         inherited rather than set. Readback: {readback:?}",
+        readback.term,
+        expected_terminfo.display()
+    );
+    assert_eq!(
+        Path::new(&readback.terminfo),
+        expected_terminfo,
+        "{SMOKE}: the packaged pane's shell sees TERMINFO={:?}, not the package's own directory. \
+         {DECOY_TERMINFO:?} means the inherited TERMINFO was not replaced; another store path \
+         means the wrapper's default names another output. Readback: {readback:?}",
+        readback.terminfo
+    );
+
+    // --- Assertions 4 and 5 (discriminators): the entry is there and compiled with -x --
+    assert_eq!(
+        readback.infocmp_status, "0",
+        "{SMOKE}: `infocmp -x {GHOSTTY_TERM}` exited {} in the packaged pane. 1 means the database \
+         TERMINFO names holds no entry ncurses can read; 127 means no infocmp on the PATH the cage \
+         inherits, which the devShell's ncurses provides. It printed:\n{infocmp}",
+        readback.infocmp_status
+    );
+    assert_eq!(
+        readback.setrgbf, "yes",
+        "{SMOKE}: `infocmp -x {GHOSTTY_TERM}` found the entry but printed no setrgbf, so it was \
+         compiled without `tic -x`, which drops the extended capabilities. It printed:\n{infocmp}"
     );
 }

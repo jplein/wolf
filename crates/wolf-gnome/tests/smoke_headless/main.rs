@@ -159,6 +159,7 @@ mod config;
 mod editor;
 mod fixture_guards;
 mod frame_stats;
+mod lighthouse;
 mod packaged;
 mod panes;
 mod pointer;
@@ -169,6 +170,8 @@ mod restore;
 mod scrub_lists;
 mod sidebar;
 mod terminal;
+mod terminal_colours;
+mod terminal_terminfo;
 
 use scrub_lists::{PACKAGED_SCRUB_ALWAYS, PACKAGED_SCRUB_FONT_STACK, PACKAGED_SCRUB_GTK_RUNTIME};
 

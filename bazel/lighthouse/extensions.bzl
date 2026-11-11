@@ -38,9 +38,9 @@ load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
 # Bump with flake.nix's `wolfVendoredPins`; each side checks only its own sha256.
 # crates/wolf-gnome/tests/vendored_pins.rs compares the two, reading each pin from its own line.
-_COMMIT = "514dec2c79701b74082defc19090bd1dae57765b"
+_COMMIT = "431d3f6c4034af4155a9b2a9a810faa28f92be70"
 
-_SHA256 = "a452624fee9ce7b82e11877b013f578aa1c3befda6b6564536c3264a40b8e0d2"
+_SHA256 = "55a4c72e071a2dcab60a4d69b0b8a0051bb6176ac0001581f7866598081ed1d5"
 
 # The upstream repo is `lighthouse.nvim`, so the archive root is `lighthouse.nvim-<commit>`;
 # any other name makes the copy_to_directory glob match nothing.

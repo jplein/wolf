@@ -207,8 +207,8 @@ end
 -- treesitter on markdown itself, gate or no gate; see runtime/nvim/README.md#decisions.
 vim.cmd("syntax on")
 
--- Vendored orlando: macOS bundle sibling only, a no-op elsewhere. Sourced explicitly so it is
--- defined during init; its vim.g.loaded_orlando guard makes the later plugin phase a no-op.
+-- Vendored orlando: a sibling in the bundle and the package, absent from a checkout. Sourced so
+-- it is defined during init; its vim.g.loaded_orlando guard makes the later plugin phase a no-op.
 local this_file = debug.getinfo(1, "S").source:sub(2) -- strip the leading '@'
 local this_dir = vim.fn.fnamemodify(this_file, ":p:h")
 local orlando_dir = this_dir .. "/orlando"
@@ -218,8 +218,8 @@ if uv and uv.fs_stat(orlando_dir) then
 	vim.cmd.runtime("plugin/orlando.lua")
 end
 
--- Vendored lighthouse: macOS bundle sibling only. Must follow syntax on (the last highlight writer
--- wins); background is set first and is only the fallback until the front-end pushes its own.
+-- Vendored lighthouse: a bundle and package sibling. Must follow syntax on (the last highlight
+-- writer wins); background is set first and is only a fallback until the front-end pushes its own.
 local lighthouse_dir = this_dir .. "/lighthouse"
 if uv and uv.fs_stat(lighthouse_dir) then
 	vim.opt.runtimepath:prepend(lighthouse_dir)

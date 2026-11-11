@@ -80,6 +80,11 @@ final class Project {
     if let rg = Self.rgBinPath() {
       setenv("WOLF_RG_BIN", rg, 0)
     }
+    // Give terminal panes the bundled `xterm-ghostty` entry unless a developer has
+    // exported `WOLF_TERMINFO_DIR`, which `wolf_ffi_start` reads.
+    if let terminfo = Self.terminfoDirPath() {
+      setenv("WOLF_TERMINFO_DIR", terminfo, 0)
+    }
     guard
       let handle = wolf_ffi_start(
         Self.initLuaPath(), launchCwd, Self.initialCols, Self.initialRows)
@@ -374,6 +379,21 @@ final class Project {
     guard let resourcePath = Bundle.main.resourcePath else { return nil }
     let candidate = resourcePath + "/rg/rg"
     guard FileManager.default.isExecutableFile(atPath: candidate) else {
+      return nil
+    }
+    return candidate
+  }
+
+  /// Resolves the bundled terminfo database at `Contents/Resources/terminfo`, or
+  /// `nil` when absent (an unbundled dev build, whose panes fall back to
+  /// `xterm-256color`).
+  static func terminfoDirPath() -> String? {
+    guard let resourcePath = Bundle.main.resourcePath else { return nil }
+    let candidate = resourcePath + "/terminfo"
+    var isDirectory: ObjCBool = false
+    guard FileManager.default.fileExists(atPath: candidate, isDirectory: &isDirectory),
+      isDirectory.boolValue
+    else {
       return nil
     }
     return candidate

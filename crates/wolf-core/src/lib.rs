@@ -128,10 +128,11 @@ pub use state::{
     PaneNode, PaneOrientation, StateStore, TabState, WindowState, WolfState, INIT_USER_FILE_NAME,
 };
 pub use terminal::{
-    TerminalCell, TerminalCellWidth, TerminalCommand, TerminalCursor, TerminalCursorStyle,
-    TerminalFrame, TerminalId, TerminalMouseEvent, TerminalMouseKind, TerminalScrollEvent,
-    TerminalScrollbar, TerminalTarget, TerminalUnderline, TERMINAL_HANGUP_GRACE,
-    TERMINAL_PREFIX_TIMEOUT, TERMINAL_PUBLISH_INTERVAL, TERMINAL_RENDER_HOLD_MAX,
+    terminfo_dir_from_env, TerminalCell, TerminalCellWidth, TerminalCommand, TerminalCursor,
+    TerminalCursorStyle, TerminalFrame, TerminalId, TerminalMouseEvent, TerminalMouseKind,
+    TerminalScrollEvent, TerminalScrollbar, TerminalTarget, TerminalUnderline,
+    TERMINAL_HANGUP_GRACE, TERMINAL_PREFIX_TIMEOUT, TERMINAL_PUBLISH_INTERVAL,
+    TERMINAL_RENDER_HOLD_MAX, TERMINFO_DIR_ENV,
 };
 pub use tree::{
     ancestors_to_reveal, children_of, node_rel_path, rel_path_for, TreeIndex, TreeIndexCache,

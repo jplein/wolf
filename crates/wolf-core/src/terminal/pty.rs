@@ -1,5 +1,6 @@
 //! The operating-system half of a terminal session: the pty pair, the shell process in its
-//! own session, the window size, signals and reaping, and the shell's working directory.
+//! own session and its terminal type, the window size, signals and reaping, and the shell's
+//! working directory.
 //!
 //! There is no pty crate; this module holds every `libc` call the sessions make. See
 //! `specs/terminal-panes.md#terminal-sessions`.
@@ -15,6 +16,16 @@ use std::ptr;
 
 use super::TerminalCommand;
 
+/// The terminal type of Wolf's own terminfo entry, compiled from the pinned libghostty-vt.
+const GHOSTTY_TERM: &str = "xterm-ghostty";
+
+/// The terminal type a session gets without that entry, which every host database knows.
+const FALLBACK_TERM: &str = "xterm-256color";
+
+/// The entry inside a terminfo directory: ncurses' letter layout, then the hex layout that
+/// macOS's ncurses writes and reads.
+const GHOSTTY_ENTRY_PATHS: [&str; 2] = ["x/xterm-ghostty", "78/xterm-ghostty"];
+
 /// A spawned shell: its process and the pty master it talks through.
 pub(crate) struct Spawned {
     pub(crate) child: Child,
@@ -23,10 +34,13 @@ pub(crate) struct Spawned {
 }
 
 /// Starts `command` in `cwd` on a fresh pty of `cols` by `rows` cells, each `cell_px` pixels,
-/// as the leader of a new session whose controlling terminal is the pty.
+/// as the leader of a new session whose controlling terminal is the pty. The shell is
+/// `xterm-ghostty` with `TERMINFO` set to `terminfo` when that directory holds the entry, else
+/// `xterm-256color` with the inherited `TERMINFO`.
 pub(crate) fn spawn(
     command: &TerminalCommand,
     cwd: &Path,
+    terminfo: Option<&Path>,
     (cols, rows): (u16, u16),
     cell_px: (u32, u32),
 ) -> io::Result<Spawned> {
@@ -53,10 +67,13 @@ pub(crate) fn spawn(
     set_cloexec(&slave)?;
 
     let mut cmd = Command::new(&command.program);
-    cmd.args(&command.args)
-        .current_dir(cwd)
-        .env("TERM", "xterm-256color")
-        .env("COLORTERM", "truecolor")
+    cmd.args(&command.args).current_dir(cwd);
+    // Setting TERMINFO replaces one the app inherited, such as a Ghostty shell's.
+    match ghostty_terminfo(terminfo) {
+        Some(dir) => cmd.env("TERM", GHOSTTY_TERM).env("TERMINFO", dir),
+        None => cmd.env("TERM", FALLBACK_TERM),
+    };
+    cmd.env("COLORTERM", "truecolor")
         .env("TERM_PROGRAM", "Wolf")
         .stdin(Stdio::from(slave.try_clone()?))
         .stdout(Stdio::from(slave.try_clone()?))
@@ -79,6 +96,15 @@ pub(crate) fn spawn(
     drop(cmd);
     set_nonblocking(&master)?;
     Ok(Spawned { child, master })
+}
+
+/// `dir` when it holds the compiled `xterm-ghostty` entry in either layout.
+fn ghostty_terminfo(dir: Option<&Path>) -> Option<&Path> {
+    dir.filter(|dir| {
+        GHOSTTY_ENTRY_PATHS
+            .iter()
+            .any(|entry| dir.join(entry).is_file())
+    })
 }
 
 /// The command a session without an explicit one runs: `$SHELL` when set and non-empty, else

@@ -102,5 +102,6 @@ pub fn config_in(cwd: PathBuf, cols: u16, rows: u16) -> CoreConfig {
         cols,
         rows,
         cwd,
+        terminfo_dir: None,
     }
 }

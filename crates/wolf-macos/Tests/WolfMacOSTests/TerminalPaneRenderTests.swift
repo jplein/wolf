@@ -7,13 +7,13 @@ import XCTest
 @testable import WolfMacOS
 
 /// A `PaneContainerView` over a live core whose current window shows one terminal session,
-/// hosted offscreen.
+/// hosted offscreen. `TerminalLighthouseColourTests` reuses it over its own `init.lua`.
 ///
 /// Premises, each checked where a test depends on it rather than assumed: the session's
 /// default colours are far from the colours its program prints, a session starts at 80 x 24,
 /// and the window size below gives a content area of another size.
 @MainActor
-private final class TerminalPaneFixture {
+final class TerminalPaneFixture {
   /// The hosting window's size in points: well over 80 x 24 cells of any monospace font.
   static let windowSize = NSSize(width: 960, height: 640)
   /// How long a wake, a publish or a resize gets to take effect.
@@ -25,10 +25,12 @@ private final class TerminalPaneFixture {
   let container: PaneContainerView
   let renderer: OffscreenRenderer
 
-  /// Starts a core, opens `command` in its current window and hosts a container; `nil`, with
-  /// the test failed, when any step does not happen.
-  init?(command: String, file: StaticString = #filePath, line: UInt = #line) {
-    guard let live = LiveCore.start(file: file, line: line) else { return nil }
+  /// Starts a core, over `initLua` when given, opens `command` in its current window and hosts
+  /// a container; `nil`, with the test failed, when any step does not happen.
+  init?(
+    command: String, initLua: String? = nil, file: StaticString = #filePath, line: UInt = #line
+  ) {
+    guard let live = LiveCore.start(initLua: initLua, file: file, line: line) else { return nil }
     self.live = live
     let handle = live.handle
     guard live.waitFor(timeout: Self.timeout, { handle.active_win() != 0 }) else {

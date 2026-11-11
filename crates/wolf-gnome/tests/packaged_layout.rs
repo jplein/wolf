@@ -654,7 +654,7 @@ fn the_packaged_icons_are_installed_at_the_sizes_their_directories_name() {
 
 /// Every variable the wrapper must name for the running application.
 ///
-/// The first four are Wolf's own and are set by `gappsWrapperArgs`; `FONTCONFIG_FILE`
+/// The first five are Wolf's own and are set by `gappsWrapperArgs`; `FONTCONFIG_FILE`
 /// is the additive font config the package generates; `XDG_DATA_DIRS` is
 /// `wrapGAppsHook4`'s own contribution from `buildInputs`, and it is listed because
 /// dropping a runtime dependency from that list changes it silently.
@@ -671,11 +671,12 @@ fn the_packaged_icons_are_installed_at_the_sizes_their_directories_name() {
 /// `activate` and draws readable glyphs without it. No sixth `--set-default` is added
 /// to make this list come true: setting a variable nothing verified is the thing to
 /// avoid, and that rule cuts both ways.
-const REQUIRED_WRAPPER_VARS: [&str; 6] = [
+const REQUIRED_WRAPPER_VARS: [&str; 7] = [
     "WOLF_NVIM_BIN",
     "WOLF_RG_BIN",
     "WOLF_NVIM_TREESITTER_DIR",
     "WOLF_PARSERS_DIR",
+    "WOLF_TERMINFO_DIR",
     "FONTCONFIG_FILE",
     "XDG_DATA_DIRS",
 ];
@@ -705,7 +706,7 @@ fn contains_bytes(haystack: &[u8], needle: &str) -> bool {
 /// by name. So a test pointed at the wrapped binary would fire the last assertion on
 /// a perfectly good package. If a future hook stops wrapping at all, the positive
 /// assertions fire first, which is the right order: an unwrapped binary carries none
-/// of the six.
+/// of them.
 ///
 /// ## Falsifiers
 ///
@@ -741,7 +742,9 @@ fn the_packaged_wrapper_carries_every_variable_the_running_app_needs() {
          search returns an already-complete session with zero matches — silently. Without \
          WOLF_NVIM_TREESITTER_DIR or WOLF_PARSERS_DIR the captive init.lua's treesitter gate is a \
          strict no-op, so injected fenced-language highlighting disappears from the editor and the \
-         preview. Without FONTCONFIG_FILE the bundled editor faces are unresolvable. \
+         preview. Without WOLF_TERMINFO_DIR a terminal pane's shell gets xterm-256color and \
+         never the package's own xterm-ghostty entry. Without FONTCONFIG_FILE the bundled editor \
+         faces are unresolvable. \
          XDG_DATA_DIRS is `wrapGAppsHook4`'s own contribution from `buildInputs` — and the way it \
          supplies the GSettings schemas, which is why no GSETTINGS_SCHEMA_DIR appears in this \
          list — so its absence means the hook did not run at all rather than that a \
@@ -867,5 +870,99 @@ fn the_packaged_output_carries_both_editor_font_families() {
          them and both families are unresolvable in the packaged app however many files are \
          installed. Its contents were:\n{text}",
         conf.display()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 7: the compiled xterm-ghostty terminfo entry.
+
+/// The entry inside the package, in ncurses' letter layout, which nixpkgs' `tic` writes. The
+/// directory is private to Wolf, so it cannot collide with Ghostty's `share/terminfo` in a
+/// profile.
+const TERMINFO_ENTRY_RELATIVE: &str = "share/wolf/terminfo/x/xterm-ghostty";
+
+/// The first two bytes of a compiled terminfo entry, little-endian: ncurses' legacy magic
+/// (octal 0432) and its extended-number magic (octal 01036).
+const TERMINFO_MAGICS: [[u8; 2]; 2] = [[0x1a, 0x01], [0x1e, 0x02]];
+
+/// The length of a compiled entry's header, after which its names section begins.
+const TERMINFO_HEADER_LEN: usize = 12;
+
+/// The extended capability a `tic` run without `-x` drops, stored by name in the entry.
+const TERMINFO_EXTENDED_CAP: &str = "setrgbf";
+
+/// The package carries Wolf's compiled `xterm-ghostty` entry at
+/// `share/wolf/terminfo/x/xterm-ghostty`, as a non-empty regular file in ncurses' compiled
+/// format, naming `xterm-ghostty` first and carrying the extended `setrgbf`.
+///
+/// ## Premises, each checked against the file rather than assumed
+///
+/// A compiled entry opens with one of [`TERMINFO_MAGICS`] and a twelve-byte header, after
+/// which the names section is the definition's first line, `xterm-ghostty|…`. An entry
+/// compiled with `tic -x` stores each extended capability's name as a string, so
+/// [`TERMINFO_EXTENDED_CAP`] appears in its bytes; without `-x` it does not.
+///
+/// ## Falsifiers
+///
+/// Delete `postInstall`'s copy into `$out/share/wolf/terminfo`: assertion 1 fires. Run
+/// `wolfGhosttyVt`'s `tic` without `-x`: assertion 4 fires.
+#[test]
+#[ignore = "reads the installed Nix output; run through ./tools/wolf-package-smoke.sh"]
+fn the_packaged_output_carries_the_compiled_xterm_ghostty_entry() {
+    const TEST: &str = "the_packaged_output_carries_the_compiled_xterm_ghostty_entry";
+
+    let out = packaged_out(TEST);
+    let entry = out.join(TERMINFO_ENTRY_RELATIVE);
+
+    // --- Assertion 1: a regular, non-empty file -------------------------------
+    let meta = std::fs::symlink_metadata(&entry).unwrap_or_else(|e| {
+        panic!(
+            "{TEST}: {} does not exist ({e}). The package installs no compiled xterm-ghostty \
+             entry, so a terminal pane's shell falls back to xterm-256color: `postInstall` must \
+             copy `wolfGhosttyVt`'s share/terminfo into share/wolf/terminfo.",
+            entry.display()
+        )
+    });
+    assert!(
+        meta.is_file() && meta.len() > 0,
+        "{TEST}: {} is not a non-empty regular file (file type {:?}, {} bytes). A symlink means the \
+         package points outside itself; zero bytes means `tic` wrote nothing.",
+        entry.display(),
+        meta.file_type(),
+        meta.len()
+    );
+    let bytes = read_bytes(TEST, "the compiled xterm-ghostty entry", &entry);
+
+    // --- Assertion 2: ncurses' compiled format -------------------------------
+    assert!(
+        bytes.len() > TERMINFO_HEADER_LEN
+            && TERMINFO_MAGICS
+                .iter()
+                .any(|magic| bytes.starts_with(magic)),
+        "{TEST}: {} does not open with a compiled terminfo magic {TERMINFO_MAGICS:02x?}; its first \
+         bytes are {:02x?}. A source definition copied in place of `tic`'s output looks like \
+         this.",
+        entry.display(),
+        &bytes[..bytes.len().min(TERMINFO_HEADER_LEN)]
+    );
+
+    // --- Assertion 3: the entry it names --------------------------------------
+    let names = &bytes[TERMINFO_HEADER_LEN..];
+    assert!(
+        names.starts_with(b"xterm-ghostty|"),
+        "{TEST}: {}'s names section starts {:?}, not `xterm-ghostty|`. The file at this name is \
+         some other terminal's entry.",
+        entry.display(),
+        String::from_utf8_lossy(&names[..names.len().min(40)])
+    );
+
+    // --- Assertion 4: compiled with -x ----------------------------------------
+    assert!(
+        contains_bytes(&bytes, TERMINFO_EXTENDED_CAP),
+        "{TEST}: {} ({} bytes) carries no {TERMINFO_EXTENDED_CAP:?}, so it was compiled without \
+         `tic -x`, which drops every extended capability: programs in the pane lose truecolour, \
+         styled underlines and the rest of Ghostty's extensions.",
+        entry.display(),
+        bytes.len()
     );
 }

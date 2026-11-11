@@ -57,7 +57,7 @@ Core spawns the shell with `libc::openpty` and `std::process::Command`, whose `p
 
 - The program is `$SHELL`, else the shell in the user's passwd entry, else `/bin/sh`. The API takes an explicit command as well, so tests run `/bin/sh`.
 - macOS starts a login shell (`-l`), as its terminals do; Linux starts an interactive non-login shell, as GNOME's do.
-- The environment is the app's own plus `TERM=xterm-256color`, `COLORTERM=truecolor` and `TERM_PROGRAM=Wolf`. The terminal type is `xterm-256color` because Wolf installs no terminfo entry of its own.
+- The environment is the app's own plus `COLORTERM=truecolor`, `TERM_PROGRAM=Wolf` and a terminal type. When the terminfo directory the front-end configures holds the `xterm-ghostty` entry, the type is `xterm-ghostty` and `TERMINFO` names that directory, replacing any inherited one; the front-ends read it from `WOLF_TERMINFO_DIR`, which the bundle and the package wrapper default. Otherwise the type is `xterm-256color` and Wolf sets no `TERMINFO`, because test binaries and runs outside a bundle or package have no entry, and every host database knows `xterm-256color`. The entry is compiled at build time from the pinned libghostty-vt release's terminfo source and ships at `Wolf.app/Contents/Resources/terminfo` and the package's `share/wolf/terminfo`, so no host database is relied on.
 - The working directory is the requesting view's tabpage cwd.
 
 The reader thread feeds the pty's bytes into the terminal under a `parking_lot::Mutex`. Every write to the pty goes through the writer: none comes from a front-end thread, and none happens while the terminal lock is held. libghostty-vt's `WRITE_PTY` replies are queued to the same writer, so a full pty buffer cannot deadlock the reader.
@@ -185,6 +185,8 @@ Scripted paths can still make a Neovim terminal (`termopen`, `jobstart({term=tru
 ## Present limitations
 
 Wolf's terminals have no unsafe-paste prompt, no `OSC 52` clipboard, no bell, no title display, no kitty graphics painting, no `OSC 8` link clicks, no scrollback search, and no use of `OSC 133` prompt marks.
+
+The `xterm-ghostty` type does not travel. `ssh` to a host without the entry hands the remote programs a terminal type that host cannot look up, and `sudo` clears `TERMINFO` by default, so a program under it does not find Wolf's entry. Wolf works around neither.
 
 ## Delivery
 

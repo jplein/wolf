@@ -533,6 +533,62 @@ rust_test(
 )
 
 rust_test(
+    name = "terminal_terminfo",
+    srcs = [
+        "tests/common/mod.rs",
+        "tests/terminal_terminfo.rs",
+    ],
+    crate_root = "tests/terminal_terminfo.rs",
+    # Spawning a real nvim child does not work under the macOS build sandbox, so
+    # run unsandboxed. `no-sandbox` (vs `local`) keeps Bazel test-result caching.
+    tags = ["no-sandbox"],
+    size = "small",
+    edition = "2021",
+    data = [
+        "//bazel/ghostty-vt:ghostty_terminfo",
+        "//bazel/nvim:nvim_tree",
+        "//runtime/nvim:init.lua",
+    ],
+    env = {
+        "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
+        "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
+        "WOLF_TEST_TERMINFO_DIR": "$(rootpath //bazel/ghostty-vt:ghostty_terminfo)/terminfo",
+    },
+    deps = [
+        ":wolf_ffi",
+        "//crates/wolf-test-support:wolf_test_support",
+    ] + all_crate_deps(normal_dev = True),
+)
+
+rust_test(
+    name = "terminal_lighthouse",
+    srcs = [
+        "tests/common/mod.rs",
+        "tests/terminal_lighthouse.rs",
+    ],
+    crate_root = "tests/terminal_lighthouse.rs",
+    # Spawning a real nvim child does not work under the macOS build sandbox, so
+    # run unsandboxed. `no-sandbox` (vs `local`) keeps Bazel test-result caching.
+    tags = ["no-sandbox"],
+    size = "small",
+    edition = "2021",
+    data = [
+        "//bazel/lighthouse:lighthouse_tree",
+        "//bazel/nvim:nvim_tree",
+        "//runtime/nvim:init.lua",
+    ],
+    env = {
+        "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
+        "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
+        "WOLF_TEST_LIGHTHOUSE_DIR": "$(rootpath //bazel/lighthouse:lighthouse_tree)",
+    },
+    deps = [
+        ":wolf_ffi",
+        "//crates/wolf-test-support:wolf_test_support",
+    ] + all_crate_deps(normal_dev = True),
+)
+
+rust_test(
     name = "terminal_bridge",
     srcs = [
         "tests/common/mod.rs",

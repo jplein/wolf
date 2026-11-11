@@ -317,7 +317,7 @@
     },
     "//bazel/lighthouse:extensions.bzl%lighthouse": {
       "general": {
-        "bzlTransitiveDigest": "Ws02bOoGYEA7whAwK9ZaR9f+uI0Et8dqjmlEdOTWpIk=",
+        "bzlTransitiveDigest": "gBzFdVBbLm/WUZX/ZVDvMYQ010etPMFIymiSE+nu+R8=",
         "usagesDigest": "DW0TZeZs1t2PTCzwDdqy7gO/+i4hYZxj4KwWdggSSmo=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -327,10 +327,10 @@
             "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_archive",
             "attributes": {
               "urls": [
-                "https://github.com/jplein/lighthouse.nvim/archive/514dec2c79701b74082defc19090bd1dae57765b.tar.gz"
+                "https://github.com/jplein/lighthouse.nvim/archive/431d3f6c4034af4155a9b2a9a810faa28f92be70.tar.gz"
               ],
-              "sha256": "a452624fee9ce7b82e11877b013f578aa1c3befda6b6564536c3264a40b8e0d2",
-              "build_file_content": "load(\"@aspect_bazel_lib//lib:copy_to_directory.bzl\", \"copy_to_directory\")\n\npackage(default_visibility = [\"//visibility:public\"])\n\n# The vendored subtrees Wolf ships: colors/ (the colorscheme itself) and LICENSE*\n# (kept for compliance). lighthouse is a COLORSCHEME, so there is NO plugin/, lua/,\n# or doc/ dir. Deliberately EXCLUDE dev-only build/, flake.nix, flake.lock,\n# Makefile, README.md, .gitignore, .prettierrc â no runtime role.\nfilegroup(\n    name = \"runtime_files\",\n    srcs = glob([\n        \"lighthouse.nvim-514dec2c79701b74082defc19090bd1dae57765b/colors/**\",\n        \"lighthouse.nvim-514dec2c79701b74082defc19090bd1dae57765b/LICENSE*\",\n    ]),\n)\n\n# Assemble under a single inner `lighthouse/` dir, remapping the archive root via\n# replace_prefixes (NOT http_archive strip_prefix). Output TreeArtifact contains\n# lighthouse/colors/lighthouse.lua and lighthouse/LICENSE*. The inner `lighthouse/`\n# is deliberate: rules_apple strips the bundled TreeArtifact's OWN top-level dir\n# name when copying into Contents/Resources/, so nesting under `lighthouse/` lands\n# it at Contents/Resources/lighthouse/ robustly.\ncopy_to_directory(\n    name = \"lighthouse_tree\",\n    srcs = [\":runtime_files\"],\n    out = \"lighthouse_tree\",\n    replace_prefixes = {\"lighthouse.nvim-514dec2c79701b74082defc19090bd1dae57765b\": \"lighthouse\"},\n)\n"
+              "sha256": "55a4c72e071a2dcab60a4d69b0b8a0051bb6176ac0001581f7866598081ed1d5",
+              "build_file_content": "load(\"@aspect_bazel_lib//lib:copy_to_directory.bzl\", \"copy_to_directory\")\n\npackage(default_visibility = [\"//visibility:public\"])\n\n# The vendored subtrees Wolf ships: colors/ (the colorscheme itself) and LICENSE*\n# (kept for compliance). lighthouse is a COLORSCHEME, so there is NO plugin/, lua/,\n# or doc/ dir. Deliberately EXCLUDE dev-only build/, flake.nix, flake.lock,\n# Makefile, README.md, .gitignore, .prettierrc â no runtime role.\nfilegroup(\n    name = \"runtime_files\",\n    srcs = glob([\n        \"lighthouse.nvim-431d3f6c4034af4155a9b2a9a810faa28f92be70/colors/**\",\n        \"lighthouse.nvim-431d3f6c4034af4155a9b2a9a810faa28f92be70/LICENSE*\",\n    ]),\n)\n\n# Assemble under a single inner `lighthouse/` dir, remapping the archive root via\n# replace_prefixes (NOT http_archive strip_prefix). Output TreeArtifact contains\n# lighthouse/colors/lighthouse.lua and lighthouse/LICENSE*. The inner `lighthouse/`\n# is deliberate: rules_apple strips the bundled TreeArtifact's OWN top-level dir\n# name when copying into Contents/Resources/, so nesting under `lighthouse/` lands\n# it at Contents/Resources/lighthouse/ robustly.\ncopy_to_directory(\n    name = \"lighthouse_tree\",\n    srcs = [\":runtime_files\"],\n    out = \"lighthouse_tree\",\n    replace_prefixes = {\"lighthouse.nvim-431d3f6c4034af4155a9b2a9a810faa28f92be70\": \"lighthouse\"},\n)\n"
             }
           }
         },

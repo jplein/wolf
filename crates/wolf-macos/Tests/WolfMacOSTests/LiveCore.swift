@@ -70,7 +70,7 @@ private struct LiveCoreEnvironment: Sendable {
 
   /// Resolves the runfiles-relative path in `key` against the bases Bazel may use, as
   /// `resolve_runfile_value` in `crates/wolf-test-support/src/resolve.rs` does.
-  private static func resolveRunfile(_ key: String, env: [String: String]) -> String? {
+  fileprivate static func resolveRunfile(_ key: String, env: [String: String]) -> String? {
     guard let rel = env[key], !rel.isEmpty else { return nil }
     let fm = FileManager.default
     if rel.hasPrefix("/") { return fm.fileExists(atPath: rel) ? rel : nil }
@@ -111,13 +111,19 @@ final class LiveCore {
   /// Starts a core in a fresh working directory at 80 x 24 and waits for it to attach.
   /// Fails the calling test and returns `nil` when the staged Neovim or `init.lua` does not
   /// resolve, the core does not start, or it does not attach.
-  static func start(file: StaticString = #filePath, line: UInt = #line) -> LiveCore? {
+  ///
+  /// `initLua`, when given, replaces the staged `init.lua`, such as a copy staged beside a
+  /// vendored tree it self-locates.
+  static func start(
+    initLua override: String? = nil, file: StaticString = #filePath, line: UInt = #line
+  ) -> LiveCore? {
     let env = LiveCoreEnvironment.shared
-    guard let initLua = env.initLua else {
+    guard let staged = env.initLua else {
       XCTFail(
         "LiveCore: \(env.problem ?? "the environment was not prepared")", file: file, line: line)
       return nil
     }
+    let initLua = override ?? staged
     let cwd = (env.scratch as NSString).appendingPathComponent("cwd-\(UUID().uuidString)")
     do {
       try FileManager.default.createDirectory(atPath: cwd, withIntermediateDirectories: true)
@@ -140,6 +146,24 @@ final class LiveCore {
       return nil
     }
     return core
+  }
+
+  /// The staged `init.lua`, or `nil` after failing the calling test when it does not resolve.
+  static func stagedInitLua(file: StaticString = #filePath, line: UInt = #line) -> String? {
+    let env = LiveCoreEnvironment.shared
+    guard let initLua = env.initLua else {
+      XCTFail(
+        "LiveCore: \(env.problem ?? "the environment was not prepared")", file: file, line: line)
+      return nil
+    }
+    return initLua
+  }
+
+  /// Resolves the runfiles-relative path in the variable `key` to an existing path, after the
+  /// shared environment is prepared; `nil` when the variable is unset or names nothing.
+  static func runfile(_ key: String) -> String? {
+    _ = LiveCoreEnvironment.shared
+    return LiveCoreEnvironment.resolveRunfile(key, env: ProcessInfo.processInfo.environment)
   }
 
   /// Opens a session running `command` in Neovim's current window, returning its id or 0.

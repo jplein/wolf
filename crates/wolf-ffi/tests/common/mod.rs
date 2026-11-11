@@ -9,11 +9,12 @@
 //! `wolf_ffi_start`.
 //!
 //! The helpers defined below are wolf-ffi's own: the vendored-tree resolvers, which read their
-//! variables through `wolf_test_support::resolve_test_runfile`, and [`copy_dir_recursive`].
+//! variables through `wolf_test_support::resolve_test_runfile`, [`copy_dir_recursive`], and
+//! [`Lighthouse`], the oracle that reads expected colours from the pinned `lighthouse.lua`.
 
 #![allow(dead_code, unused_imports)] // Not every helper is used by every test binary.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use wolf_test_support::resolve_test_runfile;
 
@@ -151,4 +152,143 @@ pub fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::
         }
     }
     Ok(())
+}
+
+/// One of Lighthouse's two variants, as `vim.o.background` names it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Background {
+    Dark,
+    Light,
+}
+
+impl Background {
+    /// The variant's name, which is also the name of its palette table in `lighthouse.lua`.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Dark => "dark",
+            Self::Light => "light",
+        }
+    }
+}
+
+/// The expected colours of the pinned Lighthouse, read from its `colors/lighthouse.lua` so a
+/// test needs no constants a pin bump would leave stale.
+///
+/// It reads three shapes of the file, and panics naming the file and the missing piece when
+/// one is absent:
+///
+/// - each palette is the `local dark = {` or `local light = {` table, one `key = "#rrggbb",` per
+///   line, closed by a line that is exactly `}`; other lines inside, such as comments, are
+///   skipped;
+/// - the ANSI order is the `local ansi = {` list, `[0] = p.<key>,` then fifteen `p.<key>,`
+///   lines, closed by `}`, which the file assigns to `g:terminal_color_0` to `_15`;
+/// - colours are packed `0x00RRGGBB`, as `FfiColor.rgb` holds them.
+pub struct Lighthouse {
+    path: PathBuf,
+    text: String,
+}
+
+impl Lighthouse {
+    /// Reads the colorscheme file of a staged tree: `<tree>/lighthouse/colors/lighthouse.lua`
+    /// when the inner `lighthouse/` of Bazel's TreeArtifact exists, else the flat
+    /// `<tree>/colors/lighthouse.lua` of the devShell's `wolfLighthouse`.
+    #[must_use]
+    pub fn load(tree: &Path) -> Self {
+        let inner = tree.join("lighthouse");
+        let root = if inner.is_dir() {
+            inner
+        } else {
+            tree.to_path_buf()
+        };
+        let path = root.join("colors").join("lighthouse.lua");
+        let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+            panic!(
+                "failed to read the pinned Lighthouse colorscheme at {}: {e}",
+                path.display()
+            )
+        });
+        Self { path, text }
+    }
+
+    /// The lines strictly between the line `opener` and the next line that is exactly `}`.
+    fn table(&self, opener: &str, what: &str) -> Vec<&str> {
+        let mut lines = self.text.lines();
+        if !lines.any(|line| line.trim_end() == opener) {
+            panic!(
+                "{} has no `{opener}` line, so it has no {what}",
+                self.path.display()
+            );
+        }
+        lines.take_while(|line| line.trim_end() != "}").collect()
+    }
+
+    /// The `background` palette's colour for `key`, such as `cursorBG` or `ansiRed`.
+    #[must_use]
+    pub fn colour(&self, background: Background, key: &str) -> u32 {
+        let opener = format!("local {} = {{", background.name());
+        let what = format!("{} palette", background.name());
+        let prefix = format!("{key} = \"#");
+        let hex = self
+            .table(&opener, &what)
+            .into_iter()
+            .find_map(|line| line.trim().strip_prefix(prefix.as_str()))
+            .and_then(|rest| rest.strip_suffix("\","))
+            .unwrap_or_else(|| {
+                panic!(
+                    "{}'s {what} has no `{key} = \"#rrggbb\",` line",
+                    self.path.display()
+                )
+            });
+        u32::from_str_radix(hex, 16).unwrap_or_else(|e| {
+            panic!(
+                "{}'s {what} gives {key} the colour #{hex}, which is not hex: {e}",
+                self.path.display()
+            )
+        })
+    }
+
+    /// The palette keys of `g:terminal_color_0` to `_15`, in order.
+    #[must_use]
+    pub fn ansi_keys(&self) -> [String; 16] {
+        let mut keys = Vec::new();
+        let opener = "local ansi = {";
+        if !self.text.lines().any(|line| line.trim_end() == opener) {
+            panic!(
+                "{} has no `{opener}` list, so this Lighthouse sets no g:terminal_color_N and a \
+                 terminal pane keeps libghostty-vt's built-in palette",
+                self.path.display()
+            );
+        }
+        for line in self.table(opener, "ANSI list") {
+            let item = line.trim();
+            if item.is_empty() || item.starts_with("--") {
+                continue;
+            }
+            let item = item.strip_prefix("[0] = ").unwrap_or(item);
+            let key = item
+                .strip_prefix("p.")
+                .and_then(|rest| rest.strip_suffix(','))
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{}'s ANSI list has the line {line:?}, not `p.<key>,`",
+                        self.path.display()
+                    )
+                });
+            keys.push(key.to_owned());
+        }
+        keys.try_into().unwrap_or_else(|keys: Vec<String>| {
+            panic!(
+                "{}'s ANSI list names {} colours, not 16: {keys:?}",
+                self.path.display(),
+                keys.len()
+            )
+        })
+    }
+
+    /// The colours of `g:terminal_color_0` to `_15` for `background`.
+    #[must_use]
+    pub fn ansi(&self, background: Background) -> [u32; 16] {
+        self.ansi_keys().map(|key| self.colour(background, &key))
+    }
 }

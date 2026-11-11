@@ -100,7 +100,7 @@
         wolfVendoredPins = {
           ia-writer-mono = { commit = "f32c04c3058a75d7ce28919ce70fe8800817491b"; sha256 = "826767eaea4ce43ccb7ca71327a5c63ac31206b99df400699e6744df6104e1b5"; };
           orlando = { commit = "c960cf3e1c24fbdd2e6fb30ab9c8022cdc7b2bf9"; sha256 = "794911361108eb509ab00ec64ed03c229418be32f45ad7a385b6d2d6b057f3c5"; };
-          lighthouse = { commit = "514dec2c79701b74082defc19090bd1dae57765b"; sha256 = "a452624fee9ce7b82e11877b013f578aa1c3befda6b6564536c3264a40b8e0d2"; };
+          lighthouse = { commit = "431d3f6c4034af4155a9b2a9a810faa28f92be70"; sha256 = "55a4c72e071a2dcab60a4d69b0b8a0051bb6176ac0001581f7866598081ed1d5"; };
         };
 
         # The libghostty-vt release; outside wolfVendoredPins, whose test wants a commit per line.
@@ -141,7 +141,10 @@
           strictDeps = true;
 
           # The Zig setup hook supplies the build and install phases and a fresh global cache.
-          nativeBuildInputs = [ pkgs.zig_0_17 ];
+          nativeBuildInputs = [
+            pkgs.zig_0_17
+            pkgs.ncurses
+          ];
           dontSetZigDefaultFlags = true;
           zigBuildFlags = [
             "--system"
@@ -149,6 +152,18 @@
             "-Doptimize=ReleaseFast"
             "-Dcpu=baseline"
           ];
+
+          # Ghostty's xterm-ghostty entry, which a libghostty-vt build skips, in ncurses' letter layout.
+          # See notes/flake.nix.md#terminfo-entry
+          postInstall = ''
+            export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/terminfo-zig-global"
+            export ZIG_LOCAL_CACHE_DIR="$TMPDIR/terminfo-zig-local"
+            zig run --dep ghostty -Mroot=${./bazel/ghostty-vt/terminfo.zig} \
+              -Mghostty=src/terminfo/ghostty.zig >"$TMPDIR/ghostty.terminfo"
+            mkdir -p "$out/share/terminfo"
+            tic -x -o "$out/share/terminfo" "$TMPDIR/ghostty.terminfo"
+            test -f "$out/share/terminfo/x/xterm-ghostty"
+          '';
         };
 
         # iA Writer Mono S static faces and licence, from the tarball bazel/ia-writer-mono pins too.
@@ -371,6 +386,9 @@
             # prettier backs the gate's Markdown check, pinned so a host prettier of another version never
             # runs against `.prettierrc`.
             pkgs.prettier
+
+            # `infocmp`, which the terminfo tests run in a pane's shell to look the entry up.
+            pkgs.ncurses
           ];
 
           # gates.sh reads WOLF_DEV_SHELL to skip entering the shell again.
@@ -399,6 +417,8 @@
 
             # The libghostty-vt install prefix crates/wolf-vt/build.rs links lib/libghostty-vt.a from.
             export WOLF_GHOSTTY_VT_DIR="${wolfGhosttyVt}"
+            # Test staging for wolf-core's and wolf-ffi's terminal_terminfo.rs: the compiled entry.
+            export WOLF_TEST_TERMINFO_DIR="${wolfGhosttyVt}/share/terminfo"
 
             export RUST_SRC_PATH="${rustToolchain}/lib/rustlib/src/rust/library"
 
@@ -520,6 +540,11 @@
                 cp -R ${wolfLighthouse}/. "$out/share/wolf/nvim/lighthouse/"
                 chmod -R u+w "$out/share/wolf/nvim"
 
+                # --- Terminal panes' xterm-ghostty entry, private so it never collides with Ghostty's ---
+                mkdir -p "$out/share/wolf/terminfo"
+                cp -R ${wolfGhosttyVt}/share/terminfo/. "$out/share/wolf/terminfo/"
+                chmod -R u+w "$out/share/wolf/terminfo"
+
                 # --- Desktop entry: an absolute `Exec`, so PATH cannot launch an unwrapped `target/release` build
                 # No `%f`, `%U` or `MimeType`: `app::run` ignores argv. `StartupWMClass` is `app.rs`'s APP_ID.
                 mkdir -p "$out/share/applications"
@@ -587,6 +612,7 @@
                   --set-default WOLF_NVIM_TREESITTER_DIR "${wolfTreesitterPlugin}"
                   --set-default WOLF_PARSERS_DIR "${wolfTreesitterParsers}"
                   --set-default FONTCONFIG_FILE "$out/share/wolf/fonts.conf"
+                  --set-default WOLF_TERMINFO_DIR "$out/share/wolf/terminfo"
                 )
               '';
 

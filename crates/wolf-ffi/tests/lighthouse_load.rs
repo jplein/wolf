@@ -9,11 +9,13 @@
 //! (`vim.g.colors_name == "lighthouse"`, `vim.o.background == "dark"`), not merely
 //! present on the runtimepath.
 //!
-//! It ALSO proves STARTUP theme pickup: the pinned scheme defines the
-//! `WolfCursor` / `WolfTitlebar` groups, and because activation happens before
-//! core installs the `wolf_theme` tracking helper over RPC, the helper's
-//! emit-once must still surface the themed titlebar (`theme_titlebar_bg()` /
-//! `theme_titlebar_fg()`) and cursor (`cursor_fill()` / `cursor_glyph()`) colors.
+//! It ALSO proves STARTUP theme pickup: the pinned scheme defines `WolfCursor`
+//! and leaves `WolfTitlebar` unset, and because activation happens before core
+//! installs the `wolf_theme` tracking helper over RPC, the helper's emit-once
+//! must still surface the themed cursor (`cursor_fill()` / `cursor_glyph()`),
+//! while the titlebar (`theme_titlebar_bg()` / `theme_titlebar_fg()`) stays
+//! unset so the front-ends keep the system colour. The expected cursor colours
+//! are read from the pinned `lighthouse.lua` through `common::Lighthouse`.
 //!
 //! ## How this proves activation (no exec_lua seam on the FFI surface)
 //!
@@ -43,9 +45,9 @@
 //!     wires `WOLF_TEST_LIGHTHOUSE_DIR` from the `rust_test` target's `env`.
 //!   * `flake.nix`'s `linuxShell.shellHook` exports the same variable from the
 //!     `wolfLighthouse` derivation, which builds the commit
-//!     `bazel/lighthouse/extensions.bzl` pins — the same commit the pinned color
-//!     constants below are read from, and `crates/wolf-gnome/tests/vendored_pins.rs`
-//!     is what keeps those two pins equal.
+//!     `bazel/lighthouse/extensions.bzl` pins, and
+//!     `crates/wolf-gnome/tests/vendored_pins.rs` is what keeps those two pins
+//!     equal.
 //!
 //! The SKIP branch is therefore what a run OUTSIDE both environments takes — a
 //! bare `cargo test` on a host with no devShell — and it is correct behaviour
@@ -82,16 +84,10 @@ const EXPECTED_SENTINEL_LINES: usize = 2;
 /// The marker the `:lua` command writes for a satisfied condition.
 const MARK_OK: &str = "OK";
 
-// -- Dark-variant WolfCursor / WolfTitlebar values at the commit in bazel/lighthouse/README.md.
-// A lighthouse bump that changes them means updating these pins.
-/// `WolfTitlebar guibg=#1b1b1b` at the pinned commit (dark).
-const LIGHTHOUSE_TITLEBAR_BG: u32 = 0x001B_1B1B;
-/// `WolfTitlebar guifg=#f1f1f1` at the pinned commit (dark).
-const LIGHTHOUSE_TITLEBAR_FG: u32 = 0x00F1_F1F1;
-/// `WolfCursor guibg=#009fce` at the pinned commit (dark) — the cursor FILL.
-const LIGHTHOUSE_CURSOR_FILL: u32 = 0x0000_9FCE;
-/// `WolfCursor guifg=#000000` at the pinned commit (dark) — the cursor GLYPH.
-const LIGHTHOUSE_CURSOR_GLYPH: u32 = 0x0000_0000;
+/// The dark palette key Lighthouse sets `WolfCursor`'s `bg`, the cursor fill, from.
+const CURSOR_FILL_KEY: &str = "cursorBG";
+/// The dark palette key Lighthouse sets `WolfCursor`'s `fg`, the cursor glyph, from.
+const CURSOR_GLYPH_KEY: &str = "cursorFG";
 
 /// Builds a printable-character `FfiKeyEvent` (kind=Char) for `c`, all modifiers
 /// false (the already-resolved glyph rides in `ch`, per the Shift contract).
@@ -253,48 +249,48 @@ fn lighthouse_colorscheme_active_from_sibling_dir() {
     );
 
     // --- Startup pickup: init.lua activates lighthouse before core installs the theme helper, so
-    // this proves the helper's emit-once sees it. `wolf_theme` is async, so poll.
+    // this proves the helper's emit-once sees it. `wolf_theme` is async, so poll the cursor fill.
+    let lighthouse = common::Lighthouse::load(&lighthouse_tree);
+    let cursor_fill = lighthouse.colour(common::Background::Dark, CURSOR_FILL_KEY);
+    let cursor_glyph = lighthouse.colour(common::Background::Dark, CURSOR_GLYPH_KEY);
     let deadline = Instant::now() + FLUSH_TIMEOUT;
-    let mut titlebar_bg = handle.theme_titlebar_bg();
+    let mut themed_frame = handle.read_frame();
     while Instant::now() < deadline {
-        titlebar_bg = handle.theme_titlebar_bg();
-        if titlebar_bg.set {
+        themed_frame = handle.read_frame();
+        if themed_frame.cursor_fill().rgb == cursor_fill {
             break;
         }
         sleep(POLL_INTERVAL);
     }
-    assert!(
-        titlebar_bg.set,
-        "theme_titlebar_bg() should become set at startup from the vendored \
-         lighthouse colorscheme's WolfTitlebar group"
-    );
-    assert_eq!(
-        titlebar_bg.rgb, LIGHTHOUSE_TITLEBAR_BG,
-        "titlebar bg should be lighthouse@514dec2's dark WolfTitlebar guibg (#1b1b1b)"
-    );
-
-    let titlebar_fg = handle.theme_titlebar_fg();
-    assert!(
-        titlebar_fg.set,
-        "theme_titlebar_fg() should be set once the theme notification landed"
-    );
-    assert_eq!(
-        titlebar_fg.rgb, LIGHTHOUSE_TITLEBAR_FG,
-        "titlebar fg should be lighthouse@514dec2's dark WolfTitlebar guifg (#f1f1f1)"
-    );
-
-    // The WolfCursor override rides the EXISTING frame accessors (resolved at
-    // frame-pack time from the same snapshot the poll above just observed).
-    let themed_frame = handle.read_frame();
     assert_eq!(
         themed_frame.cursor_fill().rgb,
-        LIGHTHOUSE_CURSOR_FILL,
-        "cursor_fill() should be lighthouse@514dec2's dark WolfCursor guibg (#009fce)"
+        cursor_fill,
+        "cursor_fill() should become the pinned Lighthouse's dark WolfCursor bg ({CURSOR_FILL_KEY}, \
+         #{cursor_fill:06x}) at startup; anything else means the helper's emit-once did not see \
+         the colorscheme init.lua activated"
     );
     assert_eq!(
         themed_frame.cursor_glyph().rgb,
-        LIGHTHOUSE_CURSOR_GLYPH,
-        "cursor_glyph() should be lighthouse@514dec2's dark WolfCursor guifg (#000000)"
+        cursor_glyph,
+        "cursor_glyph() should be the pinned Lighthouse's dark WolfCursor fg ({CURSOR_GLYPH_KEY}, \
+         #{cursor_glyph:06x})"
+    );
+
+    // The theme has landed, so an unset titlebar now is Lighthouse's, not a theme still on its way.
+    let titlebar_bg = handle.theme_titlebar_bg();
+    assert!(
+        !titlebar_bg.set,
+        "theme_titlebar_bg() must stay unset, since the pinned Lighthouse leaves WolfTitlebar \
+         unset so the titlebar keeps the system colour; set to #{:06x} means the pin defines \
+         WolfTitlebar (a Lighthouse older than 52f49c3) or core invents a titlebar colour",
+        titlebar_bg.rgb
+    );
+    let titlebar_fg = handle.theme_titlebar_fg();
+    assert!(
+        !titlebar_fg.set,
+        "theme_titlebar_fg() must stay unset, since the pinned Lighthouse leaves WolfTitlebar \
+         unset; set to #{:06x} means the pin defines WolfTitlebar or core invents one",
+        titlebar_fg.rgb
     );
 
     // --- Shutdown: clean teardown -------------------------------------------

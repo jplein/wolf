@@ -220,13 +220,13 @@ fn every_shellhook_export_is_scrubbed_or_deliberately_kept() {
 
 // --- Guard G2: the shellHook still stages the vendored Lua trees the wolf-ffi tests need. ---
 
-/// The `shellHook` exports that decide whether three `wolf-ffi` real-Neovim tests
+/// The `shellHook` exports that decide whether the `wolf-ffi` real-Neovim tests named here
 /// ASSERT on Linux or print a loud SKIP and pass, paired with what each one's absence
 /// costs — the sentence a failure has to hand the reader.
 ///
-/// Measured: `common::orlando_dir_or_none` and `common::lighthouse_dir_or_none` have
-/// exactly four call sites in this repository, all in the files named here, so this
-/// table is the whole blast radius of the two exports rather than a sample of it.
+/// Measured: `common::orlando_dir_or_none` and `common::lighthouse_dir_or_none` are
+/// called only from the files named here, so this table is the whole blast radius of
+/// the two exports rather than a sample of it.
 ///
 /// The two names are deliberately NOT re-derived from [`PACKAGED_SCRUB_ALWAYS`],
 /// where they also appear: that list says the packaged smokes must not INHERIT them,
@@ -246,25 +246,27 @@ const VENDORED_TREE_EXPORTS: [(&str, &str); 2] = [
         "crates/wolf-ffi/tests/lighthouse_load.rs returns a no-op pass without it, by the same \
          route through `common::lighthouse_dir_or_none()`, so the vendored lighthouse \
          colorscheme loses its only Linux evidence that `runtime/nvim/init.lua` ACTIVATES it \
-         rather than merely putting it on the runtimepath; and \
+         rather than merely putting it on the runtimepath; \
+         crates/wolf-ffi/tests/terminal_lighthouse.rs returns a no-op pass the same way, so a \
+         terminal session's 16 ANSI colours lose their only Linux check against Lighthouse's; and \
          crates/wolf-ffi/tests/orlando_bg_stress.rs still runs, but stages no colorscheme at \
          all, so its background-uniformity churn is measured against Neovim's defaults instead",
     ),
 ];
 
 /// Enforces that `flake.nix`'s `linuxShell.shellHook` still exports both variables
-/// that make the three `wolf-ffi` vendored-tree tests assert on Linux.
+/// that make the `wolf-ffi` vendored-tree tests assert on Linux.
 ///
 /// ## What deleting either export costs, and why nothing else would say so
 ///
-/// Those three tests are written to SKIP rather than fail when their tree is not
+/// Those tests are written to SKIP rather than fail when their tree is not
 /// staged, because on the Bazel/macOS path the trees arrive as `rust_test` runfiles
 /// and on the plain-cargo path they do not exist at all. That policy is right and is
 /// not what this guard argues with. What it means is that deleting an export line
 /// reddens NOTHING: the tests that lose their tree return early, print a SKIP banner
 /// into output nobody reads on a green run, and pass. Deleting the orlando line does
-/// that to two of them and deleting the lighthouse line to the third, so with both
-/// gone three real-Neovim tests are no-op passes at once and the two vendored Lua
+/// that to the orlando tests and deleting the lighthouse line to the lighthouse ones,
+/// so with both gone every one of them is a no-op pass at once and the two vendored Lua
 /// trees have no Linux load evidence left — precisely the state the derivations and
 /// these exports were added to end. The Linux suite stays green throughout, proving
 /// strictly less than it did the day before.
@@ -293,7 +295,7 @@ const VENDORED_TREE_EXPORTS: [(&str, &str); 2] = [
 /// ## What it does NOT check
 ///
 /// The export's NAME, not its value. An export left in place but pointed at an empty
-/// string, or at a path that does not exist, returns all three tests to the SKIP
+/// string, or at a path that does not exist, returns those tests to the SKIP
 /// branch with this guard still green, because `wolf_test_support::resolve_test_runfile`
 /// treats both as "not staged". Nothing in either suite would notice that; it is recorded here
 /// rather than papered over, and a value shape is not asserted because the value in
@@ -346,9 +348,9 @@ fn the_shellhook_still_stages_the_vendored_lua_trees_for_the_ffi_tests() {
         missing.is_empty(),
         "{GUARD}: {}'s `{LINUX_SHELL_MARKER}` hook no longer exports {missing_names:?}:\n{cost}\n\
          DELETING ONE OF THESE LINES REDDENS NOTHING ELSE, which is the whole reason this guard \
-         exists. The three tests are `crates/wolf-ffi/tests/orlando_load.rs`, \
-         `crates/wolf-ffi/tests/lighthouse_load.rs` and \
-         `crates/wolf-ffi/tests/orlando_bg_stress.rs`; every one of them is written to SKIP rather \
+         exists. The tests are `crates/wolf-ffi/tests/orlando_load.rs`, \
+         `crates/wolf-ffi/tests/lighthouse_load.rs`, `crates/wolf-ffi/tests/terminal_lighthouse.rs` \
+         and `crates/wolf-ffi/tests/orlando_bg_stress.rs`; every one of them is written to SKIP rather \
          than fail when its tree is not staged, so they would go on PASSING — as loud no-ops whose \
          banner nobody reads on a green run — while the vendored orlando and lighthouse trees lose \
          their only Linux proof that the captive `runtime/nvim/init.lua` loads either one. Restore \

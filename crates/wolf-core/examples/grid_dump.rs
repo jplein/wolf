@@ -79,6 +79,7 @@ fn main() {
         cols: COLS,
         rows: ROWS,
         cwd: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+        terminfo_dir: None,
     };
 
     let core = WolfCore::start(cfg, wake).expect("WolfCore::start failed");

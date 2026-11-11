@@ -69,6 +69,11 @@ pub struct CoreConfig {
     /// tracked `live_cwd()`; this configured cwd is used only before nvim first
     /// reports its cwd.
     pub cwd: PathBuf,
+    /// The directory of Wolf's compiled terminfo database, which a session's shell gets
+    /// verbatim as `TERMINFO`, so it must be absolute. A session runs as `xterm-ghostty` only
+    /// when it holds that entry, else as `xterm-256color`; see
+    /// [`terminfo_dir_from_env`](crate::terminfo_dir_from_env).
+    pub terminfo_dir: Option<PathBuf>,
 }
 
 /// Errors from starting or driving the core.
@@ -334,6 +339,7 @@ impl WolfCore {
             search_registry: search_registry.clone(),
             tracked_cwd: tracked_cwd.clone(),
             fallback_cwd: cwd.clone(),
+            terminfo_dir: cfg.terminfo_dir.clone(),
         });
 
         let handler = RedrawHandler::new(

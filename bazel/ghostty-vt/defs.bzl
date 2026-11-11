@@ -1,15 +1,20 @@
-"""`ghostty_vt_archive`: builds libghostty-vt's static archive with the pinned Zig.
+"""Rules that build from the pinned libghostty-vt release with the pinned Zig.
 
-The action runs `build_archive.sh`, which extracts the release and deps tarballs into a
-scratch directory beside the output and runs `zig build` offline (`--system`) with an
-empty Zig cache.
+`ghostty_vt_archive` builds the static archive. Its action runs `build_archive.sh`, which
+extracts the release and deps tarballs into a scratch directory beside the output and runs
+`zig build` offline (`--system`) with an empty Zig cache.
 
-The build calls `/usr/bin/xcrun`, which needs the selected Xcode, and the strict action
-env passes no client variables. The action therefore takes the environment the resolved
-C toolchain gives its compile actions, whose Xcode version and SDK keys Bazel turns into
-`DEVELOPER_DIR` and `SDKROOT`. It does not use `apple_support.run_shell`: that needs an
-`_xcode_config` attribute, which puts `@bazel_tools//tools/objc:host_xcodes` in the
-dependency graph, where the wolf-core-deps gate's `objc` pattern matches it once
+`ghostty_terminfo` compiles Ghostty's `xterm-ghostty` terminfo entry. Its action runs
+`build_terminfo.sh`, which runs `terminfo.zig` over the release's `src/terminfo/` and
+compiles the output with the system `/usr/bin/tic -x`, into an inner `terminfo/` directory
+that `macos_application.resources` places at `Contents/Resources/terminfo/`.
+
+Both actions run Zig on the host, which may call `/usr/bin/xcrun`. That needs the selected
+Xcode, and the strict action env passes no client variables. Each action therefore takes the
+environment the resolved C toolchain gives its compile actions, whose Xcode version and SDK
+keys Bazel turns into `DEVELOPER_DIR` and `SDKROOT`. Neither uses `apple_support.run_shell`:
+that needs an `_xcode_config` attribute, which puts `@bazel_tools//tools/objc:host_xcodes` in
+the dependency graph, where the wolf-core-deps gate's `objc` pattern matches it once
 wolf-core depends on wolf-vt. The cc toolchain type is already in that graph.
 """
 
@@ -75,6 +80,62 @@ ghostty_vt_archive = rule(
         ),
         "_script": attr.label(
             default = Label("//bazel/ghostty-vt:build_archive.sh"),
+            allow_single_file = True,
+        ),
+        "_zig": attr.label(
+            default = Label("//bazel/zig:zig"),
+            allow_single_file = True,
+            cfg = "exec",
+        ),
+        "_zig_files": attr.label(
+            default = Label("//bazel/zig:zig_files"),
+            cfg = "exec",
+        ),
+    },
+    fragments = ["cpp"],
+    toolchains = use_cc_toolchain(),
+)
+
+def _ghostty_terminfo_impl(ctx):
+    out = ctx.actions.declare_directory(ctx.label.name)
+    zig = ctx.file._zig
+    ctx.actions.run_shell(
+        inputs = depset(
+            [ctx.file.src, ctx.file.generator, ctx.file._script, zig],
+            transitive = [ctx.attr._zig_files[DefaultInfo].files],
+        ),
+        outputs = [out],
+        command = "/bin/sh \"$1\" \"$2\" \"$3\" \"$4\" \"$5\"",
+        arguments = [
+            ctx.file._script.path,
+            ctx.file.src.path,
+            ctx.file.generator.path,
+            zig.path,
+            out.path,
+        ],
+        env = _xcode_env(ctx),
+        execution_requirements = {"requires-darwin": ""},
+        mnemonic = "GhosttyTerminfo",
+        progress_message = "Compiling the xterm-ghostty terminfo entry %{output}",
+    )
+    return [DefaultInfo(files = depset([out]))]
+
+ghostty_terminfo = rule(
+    implementation = _ghostty_terminfo_impl,
+    doc = "Compiles `xterm-ghostty` from the pinned release into a tree holding `terminfo/`.",
+    attrs = {
+        "src": attr.label(
+            allow_single_file = [".tar.gz"],
+            mandatory = True,
+            doc = "The libghostty-vt release source tarball.",
+        ),
+        "generator": attr.label(
+            allow_single_file = [".zig"],
+            mandatory = True,
+            doc = "The Zig program that writes the entry's terminfo source to stdout.",
+        ),
+        "_script": attr.label(
+            default = Label("//bazel/ghostty-vt:build_terminfo.sh"),
             allow_single_file = True,
         ),
         "_zig": attr.label(

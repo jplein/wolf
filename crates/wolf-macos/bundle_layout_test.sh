@@ -201,4 +201,12 @@ RG="$RES/rg/rg"
 [ -x "$RG" ] || fail "bundled rg binary is not executable (exec bit lost?): $RG"
 echo "PASS check (u): $RG exists and is executable"
 
-echo "PASS: Wolf.app bundles nvim/bin/nvim (executable), the markdown parser, the runtime tree, init.lua, the vendored orlando plugin, the vendored lighthouse colorscheme, the vendored nvim-treesitter + textobjects plugins, the curated compiled treesitter parsers, the JetBrains Mono fonts (4 TTFs + OFL.txt), the iA Writer Mono S fonts (4 TTFs + LICENSE.md), and rg/rg (executable)"
+# (v) terminfo/78/xterm-ghostty, the entry sessions get through TERMINFO, in the hex layout macOS's
+# ncurses reads; a regular file, so no symlink out of the bundle stands in for it.
+TERMINFO_ENTRY="$RES/terminfo/78/xterm-ghostty"
+[ -f "$TERMINFO_ENTRY" ] || fail "expected the compiled xterm-ghostty entry at $TERMINFO_ENTRY, but it is missing"
+[ ! -L "$TERMINFO_ENTRY" ] || fail "the compiled xterm-ghostty entry $TERMINFO_ENTRY is a symlink, not a regular file"
+[ -s "$TERMINFO_ENTRY" ] || fail "the compiled xterm-ghostty entry $TERMINFO_ENTRY exists but is EMPTY (zero bytes)"
+echo "PASS check (v): $TERMINFO_ENTRY exists and is a non-empty regular file"
+
+echo "PASS: Wolf.app bundles nvim/bin/nvim (executable), the markdown parser, the runtime tree, init.lua, the vendored orlando plugin, the vendored lighthouse colorscheme, the vendored nvim-treesitter + textobjects plugins, the curated compiled treesitter parsers, the JetBrains Mono fonts (4 TTFs + OFL.txt), the iA Writer Mono S fonts (4 TTFs + LICENSE.md), rg/rg (executable), and terminfo/78/xterm-ghostty"

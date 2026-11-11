@@ -28,14 +28,24 @@
 /// reads it, at Cargo build time, to find the static `libghostty-vt.a` it links, so
 /// no `wolf-gnome` code reads it at run time. An installed artifact carries the
 /// archive inside its binary and never needs the variable.
-pub(crate) const PACKAGED_SCRUB_ALWAYS: [&str; 10] = [
+///
+/// `WOLF_TEST_TERMINFO_DIR` is here for the same reason: it stages the compiled
+/// terminfo entry for the `terminal_terminfo` tests and smoke, and no `wolf-gnome`
+/// code reads it.
+///
+/// `WOLF_TERMINFO_DIR` is here for `WOLF_INIT_LUA`'s reason: the wrapper defaults it to
+/// the package's own `share/wolf/terminfo`, so a developer's export would mask that
+/// default and the packaged terminal pane would never be shown the package's entry.
+pub(crate) const PACKAGED_SCRUB_ALWAYS: [&str; 12] = [
     "WOLF_NVIM_BIN",
     "WOLF_RG_BIN",
     "WOLF_NVIM_TREESITTER_DIR",
     "WOLF_PARSERS_DIR",
     "WOLF_INIT_LUA",
+    "WOLF_TERMINFO_DIR",
     "WOLF_TEST_ORLANDO_DIR",
     "WOLF_TEST_LIGHTHOUSE_DIR",
+    "WOLF_TEST_TERMINFO_DIR",
     "WOLF_GHOSTTY_VT_DIR",
     "RUST_SRC_PATH",
     "WOLF_DEV_SHELL",

@@ -101,12 +101,13 @@ struct TermState {
 }
 
 impl Session {
-    /// Spawns `command` in `cwd`, publishes the first frame and starts the reader and
-    /// writer.
+    /// Spawns `command` in `cwd`, its terminal type chosen by `terminfo`, publishes the first
+    /// frame and starts the reader and writer.
     pub(super) fn start(
         id: TerminalId,
         command: TerminalCommand,
         cwd: &Path,
+        terminfo: Option<&Path>,
         colours: &TerminalColours,
         wake: WakeFn,
         registry: Weak<TerminalRegistry>,
@@ -146,7 +147,7 @@ impl Session {
             .ok_or_else(|| io::Error::other("libghostty-vt could not read the first frame"))?;
         let (wake_r, wake_w) = pty::pipe()?;
 
-        let spawned = pty::spawn(&command, cwd, DEFAULT_SIZE, DEFAULT_CELL_PX)?;
+        let spawned = pty::spawn(&command, cwd, terminfo, DEFAULT_SIZE, DEFAULT_CELL_PX)?;
         let pid = spawned.child.id();
         let child = spawned.child;
         let master = spawned.master;

@@ -480,6 +480,7 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
         cols: INITIAL_COLS,
         rows: INITIAL_ROWS,
         cwd: plan.core_cwd.clone(),
+        terminfo_dir: wolf_core::terminfo_dir_from_env(),
     };
     let core = match WolfCore::start(cfg, wake) {
         Ok(core) => core,

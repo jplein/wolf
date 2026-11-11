@@ -3315,6 +3315,9 @@ impl WolfCoreHandle {
 /// Starts the core. `init_lua` and `cwd` are filesystem paths (mirroring
 /// [`CoreConfig`]). Returns `None` (after logging) on any startup error.
 ///
+/// The terminfo directory comes from `WOLF_TERMINFO_DIR`, which `Project.swift` defaults to
+/// the bundle's `Contents/Resources/terminfo`; see [`wolf_core::terminfo_dir_from_env`].
+///
 /// A fresh wake token is minted (via `NEXT_WAKE_TOKEN`) and captured by the
 /// core's [`WakeFn`] so wakes route back to THIS window. State persistence is no
 /// longer wired per-core: the coordinator walks the whole window/tab tree and
@@ -3333,6 +3336,7 @@ pub fn wolf_ffi_start(
         cols,
         rows,
         cwd: PathBuf::from(cwd),
+        terminfo_dir: wolf_core::terminfo_dir_from_env(),
     };
     let wake_token = NEXT_WAKE_TOKEN.fetch_add(1, Ordering::Relaxed);
     match WolfCore::start(cfg, registered_wake(wake_token)) {
