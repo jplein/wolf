@@ -32,6 +32,16 @@ final class TerminalPaneView: NSView {
     }
   }
 
+  /// Whether this view's pane is the focused pane, which the container sets. Only a focused
+  /// pane paints the frame's cursor style, and any other a hollow block. The cursor is in no
+  /// row version, so a change repaints the cursor's row itself.
+  var focused = false {
+    didSet {
+      guard focused != oldValue, let row = cursorMark?.row else { return }
+      setNeedsDisplay(rowRect(row))
+    }
+  }
+
   init(session: UInt64, metrics: CellMetrics) {
     self.session = session
     self.metrics = metrics
@@ -187,8 +197,9 @@ final class TerminalPaneView: NSView {
     }
   }
 
-  /// Draws the cursor, or the marked text in its place. A block redraws the glyph it
-  /// covers in the cursor's glyph colour; a hollow cursor strokes the block's outline.
+  /// Draws the cursor, or the marked text in its place, in the frame's style while
+  /// `focused` and else hollow. A block redraws the glyph it covers in the cursor's glyph
+  /// colour; a hollow cursor strokes the block's outline.
   private func drawCursor(
     of frame: FfiTerminalFrame, defaultFg: FfiColor, defaultBg: FfiColor, ctx: CGContext
   ) {
@@ -200,7 +211,7 @@ final class TerminalPaneView: NSView {
     let colors = TerminalCellStyle.cursorColors(
       cursorColor: frame.cursor_color(), defaultFg: defaultFg, defaultBg: defaultBg)
     let cell = cellRect(col: mark.col, row: mark.row, span: mark.span)
-    let shape = TerminalCursorShape(rawValue: mark.style) ?? .block
+    let shape = TerminalCellStyle.cursorShape(style: mark.style, focused: focused)
     ctx.saveGState()
     ctx.setFillColor(WolfColor.cgColor(packed: colors.fill))
     switch shape {

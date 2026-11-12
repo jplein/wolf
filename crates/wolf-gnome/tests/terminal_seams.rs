@@ -30,7 +30,9 @@ use wolf_gnome::terminal::input::{
     commit_route, focus_reports, mouse_button, pointer_mods, FocusReport, PointerMods,
     TerminalCommit,
 };
-use wolf_gnome::terminal::style::{cursor_colors, cursor_span, is_selected, resolve, CellPaint};
+use wolf_gnome::terminal::style::{
+    cursor_colors, cursor_span, cursor_style, is_selected, resolve, CellPaint,
+};
 use wolf_gnome::terminal::{smoke_terminal_command, SMOKE_TERMINAL_ENV};
 
 const DEFAULT_FG: Rgb = Rgb {
@@ -404,6 +406,30 @@ fn cursor_colours_and_span() {
             span,
             "a cursor on a {width:?} cell must cover {span} cell(s); a block over a wide lead \
              that covers one leaves the glyph's right half uncovered"
+        );
+    }
+}
+
+#[test]
+fn cursor_style_is_hollow_unless_focused() {
+    use TerminalCursorStyle::{Bar, Block, BlockHollow, Underline};
+    let cases = [
+        (Block, true, Block),
+        (Bar, true, Bar),
+        (Underline, true, Underline),
+        (BlockHollow, true, BlockHollow),
+        (Block, false, BlockHollow),
+        (Bar, false, BlockHollow),
+        (Underline, false, BlockHollow),
+        (BlockHollow, false, BlockHollow),
+    ];
+    for (style, focused, expected) in cases {
+        assert_eq!(
+            cursor_style(style, focused),
+            expected,
+            "a {style:?} cursor with focused {focused} must paint {expected:?}: a focused pane \
+             paints the frame's style and any other pane a hollow block. The frame's style \
+             unfocused means focus is ignored; a hollow block focused means the style is"
         );
     }
 }

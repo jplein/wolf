@@ -111,6 +111,10 @@ A publish fires the core's existing wake, routed by project token on macOS, and 
 
 The default foreground and background come from the editor's highlight defaults. The 16 `ANSI` colours come from the colorscheme's `g:terminal_color_0` to `g:terminal_color_15`, which an extended `wolf_theme` carries. The cursor colour comes from `WolfCursor` when set. Core re-applies them on `ColorScheme`; palette entries 16 to 255 keep libghostty-vt's defaults.
 
+The frame carries the cursor style the program set, and the front-end decides how each pane paints it. Only the focused terminal pane paints the frame's style: the active pane of the key window on macOS, or of the selected tab of the active window on GNOME, which is the pane whose session `terminal_focus` reports focused. Every other terminal pane, the drawer included, paints a hollow block at the cursor whatever style the program set, and a cursor the program hid stays hidden.
+
+Focus needs the window as well as the pane, as in Ghostty, which hollows the cursor when its window loses focus: the cursor shows where typed keys go, and keys reach no pane of a window that is not key or active. It also keeps the cursor in step with the focus reports a mode-1004 program receives.
+
 On the bridge, from g02, a frame is an opaque handle with flat per-row accessors mirroring the grid read path, and no callback crosses it mid-stream. Kitty graphics are not painted.
 
 ## Input

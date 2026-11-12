@@ -14,7 +14,8 @@
 //! Premises about the emulator, each asserted where it is used rather than assumed: a truecolour
 //! SGR reaches the frame as that exact `Rgb`; a left drag with mouse tracking off selects the
 //! columns it crossed, inclusive (as `crates/wolf-core/tests/terminal_input.rs` measures); `\033[6
-//! q` makes the cursor a bar; and the tty echoes text sent to a cooked `cat` on the cursor row.
+//! q` makes the cursor a bar; `\033[?25l` hides the cursor while the frame keeps its position; and
+//! the tty echoes text sent to a cooked `cat` on the cursor row.
 
 mod common;
 
@@ -140,12 +141,14 @@ fn frame_rect(frame: &TerminalFrame, metrics: &CellMetrics) -> GridRect {
 }
 
 /// Paints `frame` with `canvas` into `rect` on a sentinel-filled surface with [`MARGIN`] on its
-/// right and bottom, returning the rows `update` repainted and the pixels.
+/// right and bottom, as the focused pane when `focused`, returning the rows `update` repainted
+/// and the pixels.
 fn paint(
     canvas: &mut TerminalCanvas,
     frame: &TerminalFrame,
     metrics: &CellMetrics,
     rect: GridRect,
+    focused: bool,
 ) -> (Vec<u16>, Painted) {
     let width = (rect.x + rect.w + MARGIN).ceil() as i32;
     let height = (rect.y + rect.h + MARGIN).ceil() as i32;
@@ -158,7 +161,7 @@ fn paint(
     );
     cr.paint().expect("sentinel fill");
     let repainted = canvas.update(&cr, frame, metrics, 1.0);
-    canvas.paint(&cr, rect, frame, metrics);
+    canvas.paint(&cr, rect, frame, metrics, focused);
     drop(cr);
     surface.flush();
     let stride = surface.stride() as usize;
@@ -350,7 +353,13 @@ fn a_sessions_truecolor_text_paints_its_colours() {
 
     let metrics = metrics();
     let mut canvas = TerminalCanvas::new();
-    let (_, painted) = paint(&mut canvas, &frame, &metrics, frame_rect(&frame, &metrics));
+    let (_, painted) = paint(
+        &mut canvas,
+        &frame,
+        &metrics,
+        frame_rect(&frame, &metrics),
+        true,
+    );
 
     let bg = rgb8(FIXTURE_BG);
     let bg_causes = "The default background here means the canvas fills every cell with \
@@ -468,7 +477,13 @@ fn inverse_and_a_drag_selection_paint_swapped_colours() {
 
     let metrics = metrics();
     let mut canvas = TerminalCanvas::new();
-    let (_, painted) = paint(&mut canvas, &frame, &metrics, frame_rect(&frame, &metrics));
+    let (_, painted) = paint(
+        &mut canvas,
+        &frame,
+        &metrics,
+        frame_rect(&frame, &metrics),
+        true,
+    );
 
     for &col in &inverse {
         assert_all(
@@ -536,7 +551,13 @@ fn the_cursor_paints_in_its_colour_and_shape() {
     );
     let metrics = metrics();
     let mut canvas = TerminalCanvas::new();
-    let (_, painted) = paint(&mut canvas, &frame, &metrics, frame_rect(&frame, &metrics));
+    let (_, painted) = paint(
+        &mut canvas,
+        &frame,
+        &metrics,
+        frame_rect(&frame, &metrics),
+        true,
+    );
     assert_all(
         &painted,
         interior(&metrics, cursor.col, cursor.row),
@@ -555,7 +576,13 @@ fn the_cursor_paints_in_its_colour_and_shape() {
     let cursor = frame.cursor.expect("polled for above");
     let (fill, _) = cursor_colors(&frame);
     let mut canvas = TerminalCanvas::new();
-    let (_, painted) = paint(&mut canvas, &frame, &metrics, frame_rect(&frame, &metrics));
+    let (_, painted) = paint(
+        &mut canvas,
+        &frame,
+        &metrics,
+        frame_rect(&frame, &metrics),
+        true,
+    );
     let cell = interior(&metrics, cursor.col, cursor.row);
     let (left, _) = cell_origin(&metrics, cursor.col, cursor.row);
     // The bar is at least MIN_BAR_PX (2) wide from the cell's left edge, so this column is covered.
@@ -587,6 +614,174 @@ fn the_cursor_paints_in_its_colour_and_shape() {
     core.shutdown().expect("shutdown should be Ok");
 }
 
+/// The top pixel row of cell `(col, 0)` across its inner columns. A rect at [`ORIGIN`] puts it
+/// on whole pixels, so a 1 px hollow stroke along the cell's top edge covers it whole.
+fn top_row(metrics: &CellMetrics, col: u16) -> Span {
+    let (x0, x1) = inner_columns(metrics, col, 0);
+    Span {
+        x0,
+        x1,
+        y0: ORIGIN as usize,
+        y1: ORIGIN as usize + 1,
+    }
+}
+
+/// Asserts that every pixel of `span` is within [`INK_TOLERANCE`] of `colour`.
+fn assert_near(painted: &Painted, span: Span, colour: Rgb8, what: &str, causes: &str) {
+    let wrong: Vec<((usize, usize), Rgb8)> = span
+        .points()
+        .map(|(x, y)| ((x, y), painted.pixel(x, y)))
+        .filter(|&(_, got)| !within(got, colour, INK_TOLERANCE))
+        .take(8)
+        .collect();
+    assert!(
+        wrong.is_empty(),
+        "{what}: every pixel of {span:?} must be within {INK_TOLERANCE} of {colour:?}, but these \
+         are not (position, colour): {wrong:?}. {causes}"
+    );
+}
+
+#[test]
+fn the_cursor_paints_hollow_unless_its_pane_is_focused() {
+    let (core, waiter) = start_core_sized(DEFAULT_COLS, DEFAULT_ROWS);
+    let metrics = metrics();
+
+    // A block cursor after `ab`, painted unfocused and then focused.
+    let block = open_with(&core, &waiter, "printf 'ab'; exec cat", "ab");
+    let frame = poll_frame(
+        &core,
+        &waiter,
+        block,
+        "a visible block cursor at (2, 0)",
+        |frame| {
+            frame.cursor.is_some_and(|c| {
+                c.visible && (c.col, c.row) == (2, 0) && c.style == TerminalCursorStyle::Block
+            })
+        },
+    );
+    let (fill, _) = cursor_colors(&frame);
+    assert!(
+        !within(rgb8(fill), rgb8(frame.default_bg), INK_TOLERANCE),
+        "premise: the cursor fill {fill:?} is within {INK_TOLERANCE} of default_bg {:?}, so a \
+         cell with no cursor would pass for one with a cursor's outline",
+        frame.default_bg
+    );
+    let bg = rgb8(frame.default_bg);
+    let mut canvas = TerminalCanvas::new();
+    let (_, painted) = paint(
+        &mut canvas,
+        &frame,
+        &metrics,
+        frame_rect(&frame, &metrics),
+        false,
+    );
+    assert_all(
+        &painted,
+        interior(&metrics, 2, 0),
+        bg,
+        "the interior of an unfocused pane's block cursor cell",
+        "The cursor fill here means the frame's block is painted although the pane is not \
+         focused, where a hollow block belongs",
+    );
+    assert_near(
+        &painted,
+        top_row(&metrics, 2),
+        rgb8(fill),
+        "the top pixel row of an unfocused pane's block cursor cell",
+        "default_bg here means no cursor is drawn at all, where a hollow block's outline belongs",
+    );
+    let (_, painted) = paint(
+        &mut canvas,
+        &frame,
+        &metrics,
+        frame_rect(&frame, &metrics),
+        true,
+    );
+    assert_all(
+        &painted,
+        interior(&metrics, 2, 0),
+        rgb8(fill),
+        "the interior of a focused pane's block cursor cell",
+        "default_bg here means the focused pane's cursor is hollow or not drawn, where the frame's \
+         block belongs",
+    );
+
+    // A steady bar, set with DECSCUSR 6, painted unfocused.
+    let bar = open_with(&core, &waiter, "printf 'ab\\033[6 q'; exec cat", "ab");
+    let frame = poll_frame(&core, &waiter, bar, "a bar cursor at (2, 0)", |frame| {
+        frame.cursor.is_some_and(|c| {
+            c.visible && (c.col, c.row) == (2, 0) && c.style == TerminalCursorStyle::Bar
+        })
+    });
+    let (fill, _) = cursor_colors(&frame);
+    let mut canvas = TerminalCanvas::new();
+    let (_, painted) = paint(
+        &mut canvas,
+        &frame,
+        &metrics,
+        frame_rect(&frame, &metrics),
+        false,
+    );
+    assert_all(
+        &painted,
+        interior(&metrics, 2, 0),
+        rgb8(frame.default_bg),
+        "the interior of an unfocused pane's bar cursor cell",
+        "The cursor fill here means the program's bar, or a block, is painted although the pane is \
+         not focused",
+    );
+    assert_near(
+        &painted,
+        top_row(&metrics, 2),
+        rgb8(fill),
+        "the top pixel row of an unfocused pane's bar cursor cell",
+        "default_bg across the middle of the row means the program's bar is painted, where a \
+         hollow block's outline belongs; across the whole row, no cursor is drawn",
+    );
+
+    // A cursor the program hid, painted unfocused and focused.
+    let hidden = open_with(&core, &waiter, "printf 'ab\\033[?25l'; exec cat", "ab");
+    let frame = poll_frame(
+        &core,
+        &waiter,
+        hidden,
+        "a hidden cursor at (2, 0)",
+        |frame| {
+            frame
+                .cursor
+                .is_some_and(|c| !c.visible && (c.col, c.row) == (2, 0))
+        },
+    );
+    let bg = rgb8(frame.default_bg);
+    let mut canvas = TerminalCanvas::new();
+    for focused in [false, true] {
+        let (_, painted) = paint(
+            &mut canvas,
+            &frame,
+            &metrics,
+            frame_rect(&frame, &metrics),
+            focused,
+        );
+        let causes = "The cursor fill here means a cursor the program hid is drawn";
+        assert_all(
+            &painted,
+            interior(&metrics, 2, 0),
+            bg,
+            &format!("the interior of the hidden cursor's cell, focused {focused}"),
+            causes,
+        );
+        assert_all(
+            &painted,
+            top_row(&metrics, 2),
+            bg,
+            &format!("the top pixel row of the hidden cursor's cell, focused {focused}"),
+            causes,
+        );
+    }
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
 #[test]
 fn a_new_frame_repaints_only_its_damaged_rows() {
     let (core, waiter) = start_core_sized(DEFAULT_COLS, DEFAULT_ROWS);
@@ -604,7 +799,7 @@ fn a_new_frame_repaints_only_its_damaged_rows() {
     let rect = frame_rect(&first, &metrics);
     let mut canvas = TerminalCanvas::new();
 
-    let (repainted, _) = paint(&mut canvas, &first, &metrics, rect);
+    let (repainted, _) = paint(&mut canvas, &first, &metrics, rect, true);
     assert_eq!(
         repainted, all,
         "a canvas's first update must repaint every row, ascending; fewer means rows of the \
@@ -615,7 +810,7 @@ fn a_new_frame_repaints_only_its_damaged_rows() {
     let second = poll_frame(&core, &waiter, id, "the echoed x on row 2", |frame| {
         frame.row_text(2).contains('x')
     });
-    let (repainted, _) = paint(&mut canvas, &second, &metrics, rect);
+    let (repainted, _) = paint(&mut canvas, &second, &metrics, rect, true);
     assert!(
         repainted.contains(&2) && !repainted.contains(&0) && repainted.len() < all.len(),
         "after the tty echoed one character on row 2, update must repaint row 2 and not row 0 \
@@ -624,7 +819,7 @@ fn a_new_frame_repaints_only_its_damaged_rows() {
         all.len()
     );
 
-    let (repainted, _) = paint(&mut canvas, &second, &metrics, rect);
+    let (repainted, _) = paint(&mut canvas, &second, &metrics, rect, true);
     assert!(
         repainted.is_empty(),
         "an update with the frame already painted must repaint nothing; it repainted \
@@ -636,7 +831,13 @@ fn a_new_frame_repaints_only_its_damaged_rows() {
         other.cell_w != metrics.cell_w && other.cell_h != metrics.cell_h,
         "premise: {OTHER_FONT_SIZE_PT} pt must give a different cell than {FONT_SIZE_PT} pt"
     );
-    let (repainted, _) = paint(&mut canvas, &second, &other, frame_rect(&second, &other));
+    let (repainted, _) = paint(
+        &mut canvas,
+        &second,
+        &other,
+        frame_rect(&second, &other),
+        true,
+    );
     assert_eq!(
         repainted, all,
         "a change of cell metrics changes the paint key, so update must repaint every row; \
@@ -665,7 +866,7 @@ fn a_frame_is_padded_and_clipped_to_its_rect() {
         ..covered
     };
     let mut canvas = TerminalCanvas::new();
-    let (_, painted) = paint(&mut canvas, &frame, &metrics, wide);
+    let (_, painted) = paint(&mut canvas, &frame, &metrics, wide, true);
     let frame_right = (ORIGIN + covered.w) as usize + 1;
     let frame_bottom = (ORIGIN + covered.h) as usize + 1;
     let rect_right = (wide.x + wide.w) as usize - 1;
@@ -704,7 +905,7 @@ fn a_frame_is_padded_and_clipped_to_its_rect() {
         ..covered
     };
     let mut canvas = TerminalCanvas::new();
-    let (_, painted) = paint(&mut canvas, &frame, &metrics, small);
+    let (_, painted) = paint(&mut canvas, &frame, &metrics, small, true);
     let (x_end, y_end) = ((small.x + small.w) as usize, (small.y + small.h) as usize);
     let outside: Vec<((usize, usize), Rgb8)> = (0..painted.height)
         .flat_map(|y| (0..painted.width).map(move |x| (x, y)))

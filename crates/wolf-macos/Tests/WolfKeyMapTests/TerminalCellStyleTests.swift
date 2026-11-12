@@ -240,4 +240,21 @@ final class TerminalCellStyleTests: XCTestCase {
       TerminalCellStyle.cursorSpan(width: TerminalCellStyle.Width.narrow), 1,
       "a cursor over a narrow character covers one cell")
   }
+
+  func testCursorShapeIsHollowUnlessFocused() {
+    let cases: [(style: UInt8, focused: Bool, shape: TerminalCursorShape)] = [
+      (0, true, .block), (1, true, .bar), (2, true, .underline), (3, true, .hollow),
+      (9, true, .block),
+      (0, false, .hollow), (1, false, .hollow), (2, false, .hollow), (3, false, .hollow),
+      (9, false, .hollow),
+    ]
+    for c in cases {
+      XCTAssertEqual(
+        TerminalCellStyle.cursorShape(style: c.style, focused: c.focused), c.shape,
+        "style \(c.style) with focused \(c.focused) must paint \(c.shape): a focused pane paints"
+          + " the frame's style, an unknown one as a block, and any other pane a hollow block."
+          + " The frame's style unfocused means focus is ignored; hollow focused means the"
+          + " style is")
+    }
+  }
 }

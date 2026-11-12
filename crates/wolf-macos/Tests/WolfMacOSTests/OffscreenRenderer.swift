@@ -2,21 +2,33 @@
 
 import AppKit
 
-/// Hosts a view as the content of an `NSWindow` that is never ordered front or
-/// made key, and captures what it draws through `cacheDisplay(in:to:)`, which
-/// needs no window server or display session.
+/// An `NSWindow` whose `isKeyWindow` is whatever a test sets in `reportsKey`.
+///
+/// AppKit never makes it key and sends no key notifications, so only code that reads
+/// `isKeyWindow` sees the change, on its next read.
+final class OffscreenWindow: NSWindow {
+  /// What `isKeyWindow` returns; false until a test sets it.
+  var reportsKey = false
+
+  override var isKeyWindow: Bool { reportsKey }
+}
+
+/// Hosts a view as the content of an `OffscreenWindow` that is never ordered front
+/// and reports key only when a test sets `reportsKey`, and captures what it draws
+/// through `cacheDisplay(in:to:)`, which needs no window server or display session.
 @MainActor
 final class OffscreenRenderer {
-  /// The hosting window. It is never key, so nothing in it takes emphasis by
-  /// itself: see `NSTableView.setRowsEmphasized(_:)`.
-  let window: NSWindow
+  /// The hosting window. AppKit never makes it key, so nothing in it takes emphasis
+  /// by itself: see `NSTableView.setRowsEmphasized(_:)`. Setting `reportsKey` changes
+  /// `isKeyWindow` alone.
+  let window: OffscreenWindow
 
   /// Hosts `view` as the content of a `size`-point window drawn in the Aqua
   /// (light) appearance, so captures do not depend on the host's dark mode.
   init(hosting view: NSView, size: NSSize) {
     // AppKit's drawing machinery is set up by the shared application.
     _ = NSApplication.shared
-    window = NSWindow(
+    window = OffscreenWindow(
       contentRect: NSRect(origin: .zero, size: size), styleMask: [.titled],
       backing: .buffered, defer: false)
     window.isReleasedWhenClosed = false

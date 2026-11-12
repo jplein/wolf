@@ -1,9 +1,10 @@
 //! How one terminal cell paints: its background and foreground after inverse, selection and
 //! faint, whether it draws a glyph, and the style the glyph painter takes. Also the cursor's
-//! colours and span. Pure: no GTK, no Cairo.
+//! colours, span and style. Pure: no GTK, no Cairo.
 
 use wolf_core::{
-    ResolvedStyle, Rgb, TerminalCell, TerminalCellWidth, TerminalFrame, TerminalUnderline,
+    ResolvedStyle, Rgb, TerminalCell, TerminalCellWidth, TerminalCursorStyle, TerminalFrame,
+    TerminalUnderline,
 };
 
 use crate::statusbar_layout::blend;
@@ -93,6 +94,17 @@ pub fn cursor_colors(frame: &TerminalFrame) -> (Rgb, Rgb) {
         frame.cursor_color.unwrap_or(frame.default_fg),
         frame.default_bg,
     )
+}
+
+/// The style a pane paints its cursor in: the frame's `style` while the pane is focused, and a
+/// hollow block in every other pane whatever the program set.
+#[must_use]
+pub fn cursor_style(style: TerminalCursorStyle, focused: bool) -> TerminalCursorStyle {
+    if focused {
+        style
+    } else {
+        TerminalCursorStyle::BlockHollow
+    }
 }
 
 /// How many cells a cursor on a cell of `width` covers: two over a wide character's lead.

@@ -271,6 +271,7 @@ swift_test(
         "Tests/WolfMacOSTests/OffscreenRenderer.swift",
         "Tests/WolfMacOSTests/OffscreenRendererTests.swift",
         "Tests/WolfMacOSTests/TerminalClosePaneTests.swift",
+        "Tests/WolfMacOSTests/TerminalCursorFocusTests.swift",
         "Tests/WolfMacOSTests/TerminalDrawerTests.swift",
         "Tests/WolfMacOSTests/TerminalLighthouseColourTests.swift",
         "Tests/WolfMacOSTests/TerminalNeighbourPaneTests.swift",

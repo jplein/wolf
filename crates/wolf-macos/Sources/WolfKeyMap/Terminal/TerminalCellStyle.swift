@@ -106,6 +106,13 @@ public enum TerminalCellStyle {
     (cursorColor.set ? cursorColor.rgb : defaultFg.rgb, defaultBg.rgb)
   }
 
+  /// The shape a pane paints its cursor in: the frame's `style` while the pane is focused,
+  /// an unknown style as a block, and a hollow block in every other pane whatever the
+  /// program set.
+  public static func cursorShape(style: UInt8, focused: Bool) -> TerminalCursorShape {
+    focused ? (TerminalCursorShape(rawValue: style) ?? .block) : .hollow
+  }
+
   /// How many cells the cursor covers: both cells of a wide character, else one.
   public static func cursorSpan(width: UInt8) -> Int {
     width == Width.wide ? 2 : 1

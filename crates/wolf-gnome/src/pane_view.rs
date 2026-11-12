@@ -614,6 +614,10 @@ struct PaneInner {
     sent_terminal_sizes: RefCell<BTreeMap<TerminalId, TerminalSize>>,
     /// The session last reported focused through `terminal_focus`, if any.
     reported_focus: Cell<Option<TerminalId>>,
+    /// Whether this tab is the selected tab of an active window: the `focused` of the last
+    /// [`Self::sync_terminal_focus`]. Only the active pane of such a tab paints its terminal
+    /// cursor in the frame's style.
+    tab_focused: Cell<bool>,
     /// The test-only [`SMOKE_TERMINAL_ENV`] program, waiting for the first wake with a pane
     /// ([`Self::open_pending_terminal`]).
     pending_terminal: RefCell<Option<TerminalCommand>>,
@@ -801,8 +805,12 @@ impl PaneInner {
     }
 
     /// Reports the focused session changing to the active pane's when `focused`, else to
-    /// none: the loss of the session reported last, then the gain.
+    /// none: the loss of the session reported last, then the gain. Keeps `focused` for
+    /// [`Self::draw_pane`]'s cursor and redraws the panes when it changes.
     fn sync_terminal_focus(&self, focused: bool) {
+        if self.tab_focused.replace(focused) != focused {
+            self.queue_redraw();
+        }
         let current = if focused {
             self.active_terminal()
         } else {
@@ -2518,7 +2526,9 @@ impl PaneInner {
     ///
     /// A terminal pane paints its session's frame through its [`TerminalCanvas`] into the
     /// grid rectangle, in place of the placeholder's grid and the Neovim cursor, with the
-    /// thumb from the session's scrollbar. Its frame is read before the snapshot guard.
+    /// thumb from the session's scrollbar. Its cursor takes the frame's style only in the
+    /// active pane of a focused tab, and is hollow elsewhere. Its frame is read before the
+    /// snapshot guard.
     ///
     /// The strip's clip bounds a long path to its own pane, and draws no ellipsis:
     /// ellipsizing needs a second Pango layout builder in the widget layer, which is
@@ -2621,7 +2631,8 @@ impl PaneInner {
                 let mut canvas = p.canvas.borrow_mut();
                 let canvas = canvas.get_or_insert_with(TerminalCanvas::new);
                 canvas.update(cr, frame, &self.metrics, scale);
-                canvas.paint(cr, rect, frame, &self.metrics);
+                let focused = self.tab_focused.get() && self.active_pane.get() == Some(pane_id);
+                canvas.paint(cr, rect, frame, &self.metrics, focused);
             }
             let viewport = scrollbar::terminal_viewport(frame.scrollbar);
             if let Some(thumb) = scrollbar::scrollbar_thumb(width, rect, viewport) {
@@ -3794,7 +3805,8 @@ impl PaneHandle {
     }
 
     /// Reports terminal focus through `terminal_focus`: the active pane's session holds it
-    /// while `focused`, and a change reports the loss before the gain.
+    /// while `focused`, and a change reports the loss before the gain. The same focus picks
+    /// which terminal pane paints its cursor in the frame's style; every other one is hollow.
     pub fn sync_terminal_focus(&self, focused: bool) {
         self.inner.sync_terminal_focus(focused);
     }
@@ -3939,6 +3951,7 @@ pub fn build(core: &Rc<RefCell<Option<WolfCore>>>, metrics: &Rc<CellMetrics>) ->
         terminal_sizers: RefCell::new(BTreeMap::new()),
         sent_terminal_sizes: RefCell::new(BTreeMap::new()),
         reported_focus: Cell::new(None),
+        tab_focused: Cell::new(false),
         pending_terminal: RefCell::new(None),
         pending_terminal_restore: RefCell::new(None),
     });

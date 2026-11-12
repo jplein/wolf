@@ -1306,15 +1306,21 @@ final class PaneContainerView: NSView {
   }
 
   /// Reports terminal focus: the active pane's session holds it while this window is
-  /// key, and a change reports the loss and then the gain through `terminal_focus`. Run
-  /// on every active-pane change, every sync, and on the window's key changes.
+  /// key, and a change reports the loss and then the gain through `terminal_focus`. Also
+  /// tells each terminal view whether its pane is that focused pane, which picks the
+  /// cursor's shape. Run on every active-pane change, every sync, and on the window's key
+  /// changes.
   func syncTerminalFocus() {
-    let current = window?.isKeyWindow == true ? activeTerminal : nil
+    let isKey = window?.isKeyWindow == true
+    let current = isKey ? activeTerminal : nil
     for report in TerminalInputSeam.focusReports(previous: reportedTerminalFocus, current: current)
     {
       handle.terminal_focus(report.session, report.gained)
     }
     reportedTerminalFocus = current
+    for (pane, view) in terminalViews {
+      view.focused = isKey && pane == activePane
+    }
   }
 
   /// Registers a resize-cursor rect around each interior divider line so hovering

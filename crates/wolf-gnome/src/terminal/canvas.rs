@@ -11,7 +11,7 @@ use crate::editor_inset::GridRect;
 use crate::render::{draw_glyph, set_source, CellMetrics, GlyphPainter};
 
 use super::damage::{effective_painted_version, rows_to_repaint, PaintKey};
-use super::style::{cursor_colors, cursor_span, is_selected, resolve};
+use super::style::{cursor_colors, cursor_span, cursor_style, is_selected, resolve};
 
 /// The width of a hollow cursor's outline, in pixels.
 const HOLLOW_LINE_PX: f64 = 1.0;
@@ -82,14 +82,16 @@ impl TerminalCanvas {
     }
 
     /// Paints into `rect`: the frame's default background over the whole rect, the backing
-    /// surface at the rect's origin rounded to whole pixels, then the cursor. Nothing reaches
-    /// outside `rect`, so a frame larger than it is clipped.
+    /// surface at the rect's origin rounded to whole pixels, then the cursor, in the frame's
+    /// style only while `focused` says the pane is the focused pane and else as a hollow block.
+    /// Nothing reaches outside `rect`, so a frame larger than it is clipped.
     pub fn paint(
         &self,
         cr: &cairo::Context,
         rect: GridRect,
         frame: &TerminalFrame,
         metrics: &CellMetrics,
+        focused: bool,
     ) {
         cr.save().expect("cairo save failed before the terminal");
         cr.rectangle(rect.x, rect.y, rect.w, rect.h);
@@ -102,7 +104,7 @@ impl TerminalCanvas {
                 .expect("cairo terminal canvas source failed");
             cr.paint().expect("cairo terminal canvas blit failed");
         }
-        draw_cursor(cr, x, y, frame, metrics);
+        draw_cursor(cr, x, y, frame, metrics, focused);
         cr.restore()
             .expect("cairo restore failed after the terminal");
     }
@@ -182,13 +184,22 @@ fn paint_rows(cr: &cairo::Context, frame: &TerminalFrame, metrics: &CellMetrics,
     }
 }
 
-/// Draws `frame`'s cursor with the frame's origin at `x`, `y`: a block fills its cells and
-/// redraws the covered glyph plainly, a bar or underline fills a strip at least
-/// [`crate::cursor::MIN_BAR_PX`] thick, and a hollow cursor strokes the block's outline.
-fn draw_cursor(cr: &cairo::Context, x: f64, y: f64, frame: &TerminalFrame, metrics: &CellMetrics) {
+/// Draws `frame`'s cursor with the frame's origin at `x`, `y`, in the style
+/// [`cursor_style`] gives for `focused`: a block fills its cells and redraws the covered glyph
+/// plainly, a bar or underline fills a strip at least [`crate::cursor::MIN_BAR_PX`] thick, and
+/// a hollow cursor strokes the block's outline. A hidden cursor draws nothing.
+fn draw_cursor(
+    cr: &cairo::Context,
+    x: f64,
+    y: f64,
+    frame: &TerminalFrame,
+    metrics: &CellMetrics,
+    focused: bool,
+) {
     let Some(cursor) = frame.cursor.filter(|c| c.visible) else {
         return;
     };
+    let style = cursor_style(cursor.style, focused);
     let cell = frame.cell(cursor.col, cursor.row);
     let span = cursor_span(cell.map_or(TerminalCellWidth::Narrow, |c| c.width));
     let (fill, glyph) = cursor_colors(frame);
@@ -196,7 +207,7 @@ fn draw_cursor(cr: &cairo::Context, x: f64, y: f64, frame: &TerminalFrame, metri
     let cell_y = y + f64::from(cursor.row) * metrics.cell_h;
     let cell_w = f64::from(span) * metrics.cell_w;
     set_source(cr, fill);
-    match cursor.style {
+    match style {
         TerminalCursorStyle::Block => {
             cr.rectangle(cell_x, cell_y, cell_w, metrics.cell_h);
             cr.fill().expect("cairo terminal cursor fill failed");
@@ -206,7 +217,7 @@ fn draw_cursor(cr: &cairo::Context, x: f64, y: f64, frame: &TerminalFrame, metri
             }
         }
         TerminalCursorStyle::Bar | TerminalCursorStyle::Underline => {
-            let shape = if cursor.style == TerminalCursorStyle::Bar {
+            let shape = if style == TerminalCursorStyle::Bar {
                 CursorShape::Vertical
             } else {
                 CursorShape::Horizontal

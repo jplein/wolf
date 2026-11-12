@@ -26,7 +26,8 @@ final class TerminalPaneFixture {
   let renderer: OffscreenRenderer
 
   /// Starts a core, over `initLua` when given, opens `command` in its current window and hosts
-  /// a container; `nil`, with the test failed, when any step does not happen.
+  /// a container; `nil`, with the test failed, when any step does not happen. The window
+  /// reports key, so the session's pane is the focused pane and paints the frame's cursor.
   init?(
     command: String, initLua: String? = nil, file: StaticString = #filePath, line: UInt = #line
   ) {
@@ -51,6 +52,7 @@ final class TerminalPaneFixture {
       handle: handle, metrics: live.metrics, tabpageHandle: handle.current_tabpage(),
       optionAsAlt: false)
     renderer = OffscreenRenderer(hosting: container, size: Self.windowSize)
+    renderer.window.reportsKey = true
   }
 
   var handle: WolfCoreHandle { live.handle }
