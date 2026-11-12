@@ -105,7 +105,9 @@ Recovery is one step and self-limiting. A failed in-place update clears that win
 
 A click in a preview leaves its `WKWebView` the window's first responder, and while it is, WebKit claims every key equivalent and sends it to the page. When the page leaves the key unhandled, WebKit sends the binding's command up the web view's responder chain with its own sink, `WKResponderChainSink`, at the end. An unbound ⌘ or ⌃ chord's command is `noop:`. Only when the sink receives the command does WebKit resend the event through `NSApp.sendEvent`, where the main menu sees a ⌘ chord and `PaneContainerView.keyDown` passes an unbound ⌃ chord to Neovim.
 
-So `PaneContainerView`, the web view's next responder, and any responder placed between the web view and the window must pass every command it does not handle on to `super`. One that returns without passing it on drops every shortcut over a clicked preview, Close and Command Palette… among them, while a preview made active with `<C-w>l` keeps them, because the container stays first responder. Commands WebCore executes itself, such as Copy, Select All and scrolling by arrow keys and space, never go up the chain, so the preview keeps them either way.
+So `PaneContainerView`, the web view's next responder, and any responder placed between the web view and the window must pass every command it does not handle on to `super`. One that returns without passing it on drops every shortcut over a clicked preview, Close and Command Palette… among them, while a preview made active with `<C-w>l` keeps them, because the container stays first responder.
+
+Arrow keys and space scroll the page through WebCore's own key handlers and never reach the chain, so the preview keeps them whatever the chain does. ⌘C is not among them: Edit > Copy is a menu item, and over a clicked preview ⌘C reaches it only through the same resend, so Copy depends on this rule as Close and Command Palette… do.
 
 ## Terminal panes
 
