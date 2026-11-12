@@ -1101,7 +1101,7 @@ final class PaneContainerView: NSView {
     let point = convert(event.locationInWindow, from: nil)
 
     // A wheel over the visible toast scrolls the toast and is not forwarded, so it stays shown;
-    // any other scroll sends a `Scroll`, which dismisses it.
+    // any other scroll goes to Neovim or a terminal session, either of which dismisses it.
     if !toastView.isHidden, toastView.frame.contains(point) {
       let cellH = CGFloat(metrics.cellHeight)
       let dy =

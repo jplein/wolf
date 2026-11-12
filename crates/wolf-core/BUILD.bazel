@@ -1134,6 +1134,33 @@ rust_test(
 )
 
 rust_test(
+    name = "terminal_toast",
+    srcs = [
+        "tests/common/mod.rs",
+        "tests/terminal_toast.rs",
+    ],
+    crate_root = "tests/terminal_toast.rs",
+    # Spawns a real nvim and real shells in ptys, which the macOS build sandbox does not allow.
+    # Medium: the negative legs wait out settles before asserting the toast still shows.
+    tags = ["no-sandbox"],
+    size = "medium",
+    edition = "2021",
+    data = [
+        "//bazel/nvim:nvim_tree",
+        "//runtime/nvim:init.lua",
+    ],
+    env = {
+        "WOLF_NVIM_BIN": "$(rootpath //bazel/nvim:nvim_tree)/nvim/bin/nvim",
+        "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
+        "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
+    },
+    deps = [
+        ":wolf_core",
+        "//crates/wolf-test-support:wolf_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True),
+)
+
+rust_test(
     name = "spell",
     srcs = [
         "tests/common/mod.rs",

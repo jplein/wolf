@@ -222,7 +222,11 @@ The front-end pushes `InputEvent`s onto an ordered FIFO channel that a single co
 - Toggles — `SetBackground { dark }`, `ToggleTerminal { id }`, `ToggleFullWidth`, `SetUiFocus { gained }`.
 - Terminals — `BindTerminal { id, target }`, which shows a running session in a window behind the input queued before it.
 
-Key translation happens in core, not the front-end: `key_to_notation` is the single source of Neovim notation, and a front-end delivers the already-shifted glyph for a printable character. A `Key`, `Mouse` or `Scroll` also dismisses a showing message toast unless that toast is a `confirm` prompt; the exemption for a scroll gesture landing over the toast lives in the front-end, which never forwards that gesture. Several variants delegate to helpers in `runtime/nvim/init.lua`, so their behaviour is defined there rather than in core ([`input.rs`](../crates/wolf-core/src/README.md#inputrs)).
+Key translation happens in core, not the front-end: `key_to_notation` is the single source of Neovim notation, and a front-end delivers the already-shifted glyph for a printable character.
+
+A `Key`, `Mouse` or `Scroll` also dismisses a showing message toast unless that toast is a `confirm` prompt, and so does the same deliberate action aimed at a terminal pane: a key, text, paste, mouse press or scroll sent to its session, a `ToggleTerminal` in either direction, or a `FocusWin` into a terminal pane. A `confirm` prompt is never dismissed this way. A dismissal by a terminal pane's action fires the wake without bumping `seq`, since no redraw flush need follow it. The exemption for a scroll gesture landing over the toast lives in the front-end, which never forwards that gesture.
+
+Several variants delegate to helpers in `runtime/nvim/init.lua`, so their behaviour is defined there rather than in core ([`input.rs`](../crates/wolf-core/src/README.md#inputrs)).
 
 ## Threading and event-loop model
 

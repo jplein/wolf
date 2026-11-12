@@ -2753,3 +2753,195 @@ fn typed_keys_reach_a_terminal_pane_shell_under_cage() {
         final_png.display()
     );
 }
+
+// --- The terminal-toast smoke: opening the drawer dismisses a showing message toast. ---
+
+/// The Ex command the toast smoke types. It echoes [`TOAST_OCR_TERM`] joined from two quoted
+/// halves, so the typed command line never carries the term: only the `:echo` running can.
+const TOAST_ECHO_LINE: &str = ":echo 'zzhush' . 'yankee'";
+
+/// What [`TOAST_ECHO_LINE`] puts on the toast, and the OCR term: present in the capture before
+/// the drawer chord, absent from the one after it.
+pub(crate) const TOAST_OCR_TERM: &str = "zzhushyankee";
+
+/// What the drawer's shell writes to the readback, proving the chord opened the drawer and
+/// gave it focus.
+const TOAST_SHELL_READBACK: &str = "in-toast-drawer";
+
+/// The drawer shell's readback, under `XDG_RUNTIME_DIR`. Its path is typed only after both
+/// captures.
+pub(crate) const TOAST_PROBE_NAME: &str = "wolf_gnome_toast_drawer.txt";
+
+/// The two captures: the toast showing, then the page after the drawer chord.
+const TOAST_BEFORE_PNG_NAME: &str = "wolf_gnome_toast_before.png";
+const TOAST_AFTER_PNG_NAME: &str = "wolf_gnome_toast_after.png";
+
+/// The TERMINAL-TOAST scenario: launch, park the cursor, `:echo` the term and capture, press
+/// Ctrl+` and capture, then have the drawer's shell write the readback.
+///
+/// No key reaches Neovim between the `:echo`'s Return and the second capture, since any key
+/// would dismiss the toast by itself; the chord is a window accelerator, not a key to Neovim.
+///
+/// ## Exit codes
+///
+/// * `11` — the app died before it was ready for input (the shared convention).
+/// * `40` — it never became ready (the shared convention).
+/// * `15` — the drawer shell's readback never appeared: the chord opened no drawer, or the
+///   drawer did not take focus, so the typed `echo` went to Neovim.
+const TOAST_SCENARIO: &str = r#"
+set -eu
+
+# SETTLE is the settle between steps; see SCENARIO.
+WAIT_INTERVAL=0.2
+SETTLE=1.0
+# The chord's round trip, as DRAWER_SCENARIO's DRAWER_SETTLE.
+DRAWER_SETTLE=2.0
+FILE_TRIES=100
+
+cleanup() {
+    set +e
+    if [ -n "${app_pid:-}" ]; then
+        kill "$app_pid" 2>/dev/null
+        wait "$app_pid" 2>/dev/null
+    fi
+}
+trap cleanup EXIT INT TERM HUP
+
+"$WOLF_BIN" &
+app_pid=$!
+wait_ready "$app_pid" 11 "wolf-gnome terminal-toast smoke"
+
+wtype -k o
+wtype -k Escape
+sleep "$SETTLE"
+
+# --- Step 1: the toast, captured as the control ------------------------------
+wtype -- "$TOAST_ECHO_LINE"
+wtype -k Return
+sleep "$SETTLE"
+grim "$OUT_BEFORE"
+
+# --- Step 2: the chord under test, then the capture --------------------------
+wtype -M ctrl -k grave -m ctrl
+sleep "$DRAWER_SETTLE"
+grim "$OUT_AFTER"
+
+# --- Step 3: the drawer's shell answers, so the chord opened the drawer -------
+wtype -- "echo $TOAST_SHELL_READBACK > '$TOAST_PROBE'"
+wtype -k Return
+t=0
+while [ ! -s "$TOAST_PROBE" ]; do
+    t=$((t + 1))
+    if [ "$t" -ge "$FILE_TRIES" ]; then
+        echo "wolf-gnome terminal-toast smoke: the drawer shell's readback $TOAST_PROBE never appeared." >&2
+        exit 15
+    fi
+    sleep "$WAIT_INTERVAL"
+done
+
+# The trap tears the app down on the way out.
+exit 0
+"#;
+
+/// **Opening the terminal drawer with Ctrl+` hides a showing message toast.**
+///
+/// The toast is an overlay above the pane area, the drawer strip included, so the drawer does
+/// not cover it: only a dismissal in core takes it off the page.
+///
+/// ## Assertions
+///
+/// | # | assertion | kind | falsifier |
+/// | --- | --- | --- | --- |
+/// | 0 | neither typed line carries [`TOAST_OCR_TERM`] | precondition | none |
+/// | 1 | the scenario exits 0, so the drawer's shell wrote the readback, and both captures exist | precondition | none |
+/// | 2 | OCR of the first capture contains [`TOAST_OCR_TERM`] | control | none |
+/// | 3 | OCR of the second capture does not contain [`TOAST_OCR_TERM`] | discriminator | `enters_terminal`'s `ToggleTerminal` arm in `wolf_core::pump` returns `false` |
+/// | 4 | the readback holds [`TOAST_SHELL_READBACK`] | precondition | none |
+#[test]
+fn terminal_drawer_hides_a_message_toast_under_cage() {
+    const SMOKE: &str = "terminal_drawer_hides_a_message_toast_under_cage";
+
+    let probe_line = format!("echo {TOAST_SHELL_READBACK} > '{TOAST_PROBE_NAME}'");
+    // Assertion 0 (precondition): the term must come from the `:echo` running, not from a typed line.
+    for (what, typed) in [
+        ("TOAST_ECHO_LINE", TOAST_ECHO_LINE),
+        ("the readback line", probe_line.as_str()),
+    ] {
+        assert!(
+            !typed.to_lowercase().contains(TOAST_OCR_TERM),
+            "{SMOKE}: {what} = {typed:?} contains the OCR term {TOAST_OCR_TERM:?}, so a typed \
+             line could put the term on the page whether or not the toast showed. Change the \
+             line; do NOT change the term to match it."
+        );
+    }
+
+    let runtime_dir = require_smoke_env();
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+    let cwd = make_temp_cwd();
+    write_relaunch_fixtures(SMOKE, &cwd, &[]);
+
+    let probe = runtime_dir.join(TOAST_PROBE_NAME);
+    let before_png = runtime_dir.join(TOAST_BEFORE_PNG_NAME);
+    let after_png = runtime_dir.join(TOAST_AFTER_PNG_NAME);
+    for path in [&probe, &before_png, &after_png] {
+        clear_evidence(path, SMOKE);
+    }
+
+    let mut cmd = cage_command(TOAST_SCENARIO, &cwd, &runtime_dir);
+    pin_terminal_smoke_shell(&mut cmd)
+        .env("WOLF_BIN", bin)
+        .env("TOAST_ECHO_LINE", TOAST_ECHO_LINE)
+        .env("TOAST_SHELL_READBACK", TOAST_SHELL_READBACK)
+        .env("TOAST_PROBE", &probe)
+        .env("OUT_BEFORE", &before_png)
+        .env("OUT_AFTER", &after_png);
+    let status = cmd
+        .status()
+        .expect("failed to spawn `cage` for the headless terminal-toast scenario");
+
+    // --- Assertion 1 (precondition): the scenario ran to completion -----------
+    assert!(
+        status.success(),
+        "{SMOKE}: the cage scenario exited unsuccessfully ({status}). Exit 11: the app died \
+         before it was ready for input. Exit 40: it never became ready; its `wolf-ready:` stderr \
+         lines in cage.log name the condition. Exit 15: the drawer's shell never wrote {}, so \
+         Ctrl+` opened no drawer or the drawer never took focus; the second capture then says \
+         nothing about the drawer. Any other status means wtype or grim failed.",
+        probe.display()
+    );
+    assert_png_present(SMOKE, &before_png);
+    assert_png_present(SMOKE, &after_png);
+
+    // --- Assertion 2 (control): the toast showed the term ---------------------
+    let before = ocr_to_lowercase(&before_png);
+    assert!(
+        before.contains(TOAST_OCR_TERM),
+        "{SMOKE}: OCR of the capture taken before the chord does not contain {TOAST_OCR_TERM:?}. \
+         This is the control: the `:echo` never ran, the toast never drew, or OCR misread it, \
+         and the next assertion would pass for any of those reasons. PNG kept at {}.\n\nOCR \
+         output was:\n{before}",
+        before_png.display()
+    );
+
+    // --- Assertion 3 (discriminator): the drawer chord dismissed it -----------
+    let after = ocr_to_lowercase(&after_png);
+    assert!(
+        !after.contains(TOAST_OCR_TERM),
+        "{SMOKE}: OCR of the capture taken after Ctrl+` still contains {TOAST_OCR_TERM:?}, so the \
+         message toast stayed up over the opened drawer. Two causes: opening the drawer does not \
+         dismiss the toast in core (`InputEvent::ToggleTerminal` in the pump), or the chord \
+         never opened the drawer, which assertion 1's readback rules out once it passed. PNG \
+         kept at {}.\n\nOCR output was:\n{after}",
+        after_png.display()
+    );
+
+    // --- Assertion 4 (precondition): the drawer's shell wrote the readback -----
+    let readback = read_trimmed(&probe, SMOKE);
+    assert_eq!(
+        readback,
+        TOAST_SHELL_READBACK,
+        "{SMOKE}: the readback {} holds {readback:?}, not {TOAST_SHELL_READBACK:?}, so something \
+         other than the drawer's shell wrote it.",
+        probe.display()
+    );
+}

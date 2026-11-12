@@ -80,7 +80,8 @@ use super::terminal::{
     TERMCLOSE_PID_REOPEN_NAME, TERMCLOSE_PID_SPLIT_NAME, TERMFLOW_NVIM_NAME,
     TERMFLOW_PID_BACK_NAME, TERMFLOW_PID_OPENED_NAME, TERMFLOW_PID_SPLIT_NAME,
     TERMRESTART_OCR_DRAWER, TERMRESTART_OCR_PANE, TERMRESTART_PID_AFTER_NAME,
-    TERMRESTART_PID_DRAWER_NAME, TERMRESTART_PID_SPLIT_NAME, TP_OCR_WORD,
+    TERMRESTART_PID_DRAWER_NAME, TERMRESTART_PID_SPLIT_NAME, TOAST_OCR_TERM, TOAST_PROBE_NAME,
+    TP_OCR_WORD,
 };
 use super::*;
 
@@ -681,6 +682,11 @@ const ASSERTED_OCR_TERMS: &[(&str, &str, &str)] = &[
         NEAR_OCR_FILL,
         "NEAR_OCR_FILL",
         "neovim_panes_stay_visible_beside_terminals_under_cage",
+    ),
+    (
+        TOAST_OCR_TERM,
+        "TOAST_OCR_TERM",
+        "terminal_drawer_hides_a_message_toast_under_cage",
     ),
 ];
 
@@ -1298,6 +1304,12 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
         NEAR_G7_NVIM_NAME,
         "NEAR_G7_NVIM_NAME",
         "neovim_panes_stay_visible_beside_terminals_under_cage",
+    ),
+    // Under XDG_RUNTIME_DIR, but typed into the drawer's shell after both captures: a tripwire.
+    (
+        TOAST_PROBE_NAME,
+        "TOAST_PROBE_NAME",
+        "terminal_drawer_hides_a_message_toast_under_cage",
     ),
 ];
 

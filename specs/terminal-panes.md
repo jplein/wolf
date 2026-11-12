@@ -119,7 +119,7 @@ On the bridge, from g02, a frame is an opaque handle with flat per-row accessors
 
 ## Input
 
-The front-end decides where input goes, because it knows its focused pane synchronously. A terminal pane's input goes to the session API and never to Neovim's input pump. Routing by `active_win` in core would race the asynchronous `wolf_active_win` that follows a focus move.
+The front-end decides where input goes, because it knows its focused pane synchronously. A terminal pane's input goes to the session API and never to Neovim's input pump. It still dismisses a showing message toast, by the rule in [Input: events](architecture.md#input-events-front-end--core). Routing by `active_win` in core would race the asynchronous `wolf_active_win` that follows a focus move.
 
 A prefix router in core, shared by both front-ends, replaces the terminal-mode `tnoremap` chords. `<C-w>` is held, and the next key decides:
 

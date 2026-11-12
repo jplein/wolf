@@ -353,14 +353,18 @@ pub enum InputEvent {
 }
 
 impl InputEvent {
-    /// Whether this event is a deliberate user action that should DISMISS a
-    /// showing message toast: a [`Key`](InputEvent::Key),
-    /// [`Mouse`](InputEvent::Mouse), or [`Scroll`](InputEvent::Scroll).
+    /// Whether this event is Neovim input that DISMISSES a showing message toast
+    /// that is not a prompt, dropping a stashed confirm too: a
+    /// [`Key`](InputEvent::Key), [`Mouse`](InputEvent::Mouse), or
+    /// [`Scroll`](InputEvent::Scroll).
     ///
     /// A scroll IS dismissing here; the scroll-over-toast exemption is realized
     /// entirely in the front-end (it simply never forwards that wheel gesture, so
-    /// no `Scroll` reaches core). Resize / focus / open / tabpage events are NOT
-    /// user-facing input and never dismiss.
+    /// no `Scroll` reaches core). A [`ToggleTerminal`](InputEvent::ToggleTerminal),
+    /// a [`FocusWin`](InputEvent::FocusWin) into a terminal pane and input to a
+    /// terminal session dismiss too, through `Snapshot::dismiss_toast`, which keeps
+    /// a stashed confirm: the pump's `enters_terminal` and the terminal registry
+    /// apply them.
     #[must_use]
     pub fn is_toast_dismissing(&self) -> bool {
         matches!(

@@ -118,6 +118,13 @@ impl Pump {
             if batch.iter().any(InputEvent::is_toast_dismissing) {
                 clear_dismissable_toast(&self.snapshot).await;
             }
+            let entering = {
+                let snap = self.snapshot.read();
+                batch.iter().any(|event| enters_terminal(event, &snap))
+            };
+            if entering {
+                dismiss_toast_and_wake(&self.snapshot, &self.wake).await;
+            }
 
             let mut driver = Driver {
                 target: &target,
@@ -157,6 +164,28 @@ async fn clear_dismissable_toast(snapshot: &SharedSnapshot) {
     let mut snap = snapshot.write_async().await;
     if !snap.toast.is_prompt() {
         snap.clear_toast();
+    }
+}
+
+/// Dismisses a toast that is not a `confirm` prompt, keeping a stashed confirm, and fires the
+/// wake when it hid one, since no redraw flush need follow. It leaves `seq` alone.
+pub(crate) async fn dismiss_toast_and_wake(snapshot: &SharedSnapshot, wake: &WakeFn) {
+    let dismissed = snapshot.write_async().await.dismiss_toast();
+    if dismissed {
+        wake();
+    }
+}
+
+/// Whether `event` takes the user into a terminal pane: a drawer toggle, either way, or a
+/// `FocusWin` into a window that shows a session.
+fn enters_terminal(event: &InputEvent, snap: &Snapshot) -> bool {
+    match event {
+        InputEvent::ToggleTerminal { .. } => true,
+        InputEvent::FocusWin { win } => snap
+            .win_buffers
+            .get(win)
+            .is_some_and(|buffer| buffer.terminal.is_some()),
+        _ => false,
     }
 }
 

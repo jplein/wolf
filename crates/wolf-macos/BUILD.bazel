@@ -279,6 +279,7 @@ swift_test(
         "Tests/WolfMacOSTests/TerminalNeighbourPaneTests.swift",
         "Tests/WolfMacOSTests/TerminalPaneFlowTests.swift",
         "Tests/WolfMacOSTests/TerminalPaneRenderTests.swift",
+        "Tests/WolfMacOSTests/TerminalToastTests.swift",
         "Tests/WolfMacOSTests/TerminalViewFixture.swift",
     ],
     # Spawning a real nvim child does not work under the macOS build sandbox, so

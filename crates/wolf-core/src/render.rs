@@ -871,7 +871,8 @@ pub struct Snapshot {
     pub pum: Pum,
     /// The message toast (`ext_messages`), folded from `msg_show` /
     /// `msg_clear` / `msg_history_show`. Empty by default; cleared on the next
-    /// dismissing input (Key/Mouse/Scroll) unless it is a prompt.
+    /// dismissing input unless it is a prompt (see
+    /// [`InputEvent::is_toast_dismissing`](crate::input::InputEvent::is_toast_dismissing)).
     pub toast: Toast,
     /// A confirm() prompt's toast messages stashed across the one-flush window
     /// between the dialog's `cmdline_hide` and a possible re-prompt
@@ -1028,6 +1029,20 @@ impl Snapshot {
         self.toast.messages.clear();
         self.toast.visible = false;
         self.pending_confirm = None;
+    }
+
+    /// Hides a toast that is not a `confirm` prompt and empties its messages, returning whether
+    /// it hid anything. Unlike [`clear_toast`](Self::clear_toast) it keeps
+    /// [`pending_confirm`](Self::pending_confirm): its callers are a terminal pane's input, the
+    /// drawer toggle and focus, none of which can answer a `confirm()`, so an invalid answer's
+    /// re-prompt must still find its stash. It does not bump `seq`.
+    pub(crate) fn dismiss_toast(&mut self) -> bool {
+        if self.toast.is_prompt() || (!self.toast.visible && self.toast.messages.is_empty()) {
+            return false;
+        }
+        self.toast.messages.clear();
+        self.toast.visible = false;
+        true
     }
 
     /// Returns the grid id bound to window handle `win`, if any window maps to it.
@@ -1254,6 +1269,57 @@ mod tests {
             let guard = shared.write_async().await;
             assert_reset(&guard, "pending reset applied by write_async()");
         });
+    }
+
+    /// A message of `kind` holding one line of `text`.
+    fn message(kind: &str, text: &str) -> Message {
+        Message {
+            kind: kind.to_string(),
+            id: 0,
+            lines: vec![vec![ToastChunk {
+                text: text.to_string(),
+                ..ToastChunk::default()
+            }]],
+        }
+    }
+
+    /// F10: `dismiss_toast` keeps a stashed confirm, whether or not a toast shows, and leaves a
+    /// showing `confirm` prompt alone.
+    #[test]
+    fn dismiss_toast_keeps_a_stashed_confirm() {
+        let stash = PendingConfirm {
+            messages: vec![message("confirm", "Keep it?")],
+            prompt: "[y]es, (n)o: ".to_string(),
+        };
+
+        let mut snap = Snapshot::new(TEST_COLS, TEST_ROWS);
+        snap.pending_confirm = Some(stash.clone());
+        assert!(
+            !snap.dismiss_toast(),
+            "a hidden, empty toast has nothing to dismiss"
+        );
+        assert_eq!(
+            snap.pending_confirm.as_ref(),
+            Some(&stash),
+            "dismissing a hidden toast must keep the stashed confirm"
+        );
+
+        snap.toast.visible = true;
+        snap.toast.messages.push(message("echo", "written"));
+        assert!(snap.dismiss_toast(), "a showing echo toast is dismissed");
+        assert!(!snap.toast.visible && snap.toast.messages.is_empty());
+        assert_eq!(
+            snap.pending_confirm.as_ref(),
+            Some(&stash),
+            "dismissing a showing toast must keep the stashed confirm"
+        );
+
+        let mut prompt = Snapshot::new(TEST_COLS, TEST_ROWS);
+        prompt.toast.visible = true;
+        prompt.toast.messages.push(message("confirm", "Keep it?"));
+        let before = prompt.toast.clone();
+        assert!(!prompt.dismiss_toast(), "a confirm prompt is not dismissed");
+        assert_eq!(prompt.toast, before, "a confirm prompt must stay as it was");
     }
 }
 
