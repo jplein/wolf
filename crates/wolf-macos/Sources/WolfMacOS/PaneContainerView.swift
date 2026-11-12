@@ -3075,8 +3075,18 @@ extension PaneContainerView: NSTextInputClient {
     }
   }
 
+  /// Sends the key being composed to the active terminal, and passes every other command on
+  /// to the next responder.
+  ///
+  /// The container is the next responder of a preview's `WKWebView`. WebKit resends a key
+  /// equivalent the page leaves unhandled to the menu, and an unbound ⌃ chord to `keyDown`,
+  /// only when the binding's command reaches the end of the web view's responder chain.
+  /// Swallowing it here drops every shortcut over a clicked preview.
   override func doCommand(by selector: Selector) {
-    guard let event = pendingTerminalKey, let session = activeTerminal else { return }
+    guard let event = pendingTerminalKey, let session = activeTerminal else {
+      super.doCommand(by: selector)
+      return
+    }
     sendTerminalKey(event, session: session)
   }
 

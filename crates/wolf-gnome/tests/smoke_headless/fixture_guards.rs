@@ -30,9 +30,10 @@ use super::panes::{
 };
 use super::pointer::{WEDGE_OCR_CLICK, WEDGE_OCR_STAY};
 use super::preview::{
-    LINK_READBACK_AFTER_NAME, LINK_READBACK_BEFORE_NAME, LINK_SOURCE_FILE, LINK_TARGET_FILE,
-    NEWVIEW_WINS_AFTER_NAME, NEWVIEW_WINS_BEFORE_NAME, PREVIEW_LIVE_MARKER, PREVIEW_OCR_BODY,
-    PREVIEW_OCR_LIVE, PREVIEW_OCR_OTHER, PREVIEW_OCR_STATUS, PREVIEW_OTHER_FILE,
+    KC_CUR_CLICKED_NAME, KC_CUR_FOCUSED_NAME, KC_SOURCE_FILE, KC_WINS_AFTER_NAME,
+    KC_WINS_BEFORE_NAME, LINK_READBACK_AFTER_NAME, LINK_READBACK_BEFORE_NAME, LINK_SOURCE_FILE,
+    LINK_TARGET_FILE, NEWVIEW_WINS_AFTER_NAME, NEWVIEW_WINS_BEFORE_NAME, PREVIEW_LIVE_MARKER,
+    PREVIEW_OCR_BODY, PREVIEW_OCR_LIVE, PREVIEW_OCR_OTHER, PREVIEW_OCR_STATUS, PREVIEW_OTHER_FILE,
     PREVIEW_OTHER_HEADING, PREVIEW_READBACK_A_NAME, PREVIEW_READBACK_B_NAME, PREVIEW_SOURCE_FILE,
     PREVIEW_SOURCE_HEADING, PREVIEW_SOURCE_PARAGRAPH, UNSAVED_BUFFER_NAME, UNSAVED_COVER_FILE,
     UNSAVED_COVER_HEADING, UNSAVED_MARKER, UNSAVED_OCR_COVER, UNSAVED_OCR_MARKER,
@@ -958,6 +959,33 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
         LINK_READBACK_AFTER_NAME,
         "LINK_READBACK_AFTER_NAME",
         "preview_link_click_repoints_the_pane_under_cage",
+    ),
+    // Registered for the generic loop; this smoke reads no OCR term. `preview` is an asserted
+    // term, hence `kc*`.
+    (
+        KC_SOURCE_FILE,
+        "KC_SOURCE_FILE",
+        "preview_click_keeps_window_chords_under_cage",
+    ),
+    (
+        KC_WINS_BEFORE_NAME,
+        "KC_WINS_BEFORE_NAME",
+        "preview_click_keeps_window_chords_under_cage",
+    ),
+    (
+        KC_CUR_FOCUSED_NAME,
+        "KC_CUR_FOCUSED_NAME",
+        "preview_click_keeps_window_chords_under_cage",
+    ),
+    (
+        KC_CUR_CLICKED_NAME,
+        "KC_CUR_CLICKED_NAME",
+        "preview_click_keeps_window_chords_under_cage",
+    ),
+    (
+        KC_WINS_AFTER_NAME,
+        "KC_WINS_AFTER_NAME",
+        "preview_click_keeps_window_chords_under_cage",
     ),
     (
         UNSAVED_COVER_FILE,

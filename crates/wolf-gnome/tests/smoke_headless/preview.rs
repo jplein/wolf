@@ -3818,3 +3818,303 @@ fn preview_created_after_launch_renders_without_a_portal_under_cage() {
         log_path.display()
     );
 }
+
+// Click-then-chords fixtures: a preview pane that a click lands in, and the chords that follow it.
+
+/// Click-then-chords smoke: the source previewed beside itself. Its name carries no
+/// `ASSERTED_OCR_TERMS` entry (`preview` is one), though this smoke OCRs nothing.
+pub(crate) const KC_SOURCE_FILE: &str = "kcsrc.md";
+
+/// How many paragraphs [`kc_source_body`] writes under its heading: enough that the
+/// rendered page runs past the pane's lower half, where the click lands, so the click
+/// meets document text rather than the page's empty tail.
+const KC_PARAGRAPHS: usize = 60;
+
+/// Typed into the palette's search entry to reach `Use full width for content`, a command
+/// that leaves the preview pane in place, so leg B still has a preview to close.
+///
+/// It must match exactly ONE command title as a case-insensitive subsequence, which the
+/// smoke checks against `wolf_core::COMMAND_SPECS` before it launches anything: `full`
+/// then `w` appears in no other title. No ranking is involved, unlike [`PREVIEW_QUERY`].
+const KC_PALETTE_QUERY: &str = "fullw";
+
+/// The command MRU key the palette row records on activation, the `CommandSpec::id` of
+/// the command [`KC_PALETTE_QUERY`] matches.
+const KC_MRU_KEY: &str = "full_width";
+
+/// The window-buffer readback after the preview opens beside its source.
+pub(crate) const KC_WINS_BEFORE_NAME: &str = "kcwina.txt";
+
+/// The current window's buffer name after `<C-w>l` moves into the preview.
+pub(crate) const KC_CUR_FOCUSED_NAME: &str = "kccura.txt";
+
+/// The current window's buffer name after the click in the preview.
+pub(crate) const KC_CUR_CLICKED_NAME: &str = "kccurb.txt";
+
+/// The window-buffer readback after leg B's Ctrl+Shift+W.
+pub(crate) const KC_WINS_AFTER_NAME: &str = "kcwinb.txt";
+
+/// The source's contents: a heading and [`KC_PARAGRAPHS`] paragraphs of plain prose with
+/// no link, so a click anywhere in the page is a click on text and never a navigation.
+fn kc_source_body() -> String {
+    let mut body = String::from("# Click Then Chords");
+    for n in 1..=KC_PARAGRAPHS {
+        body.push_str(&format!(
+            "\n\nParagraph {n} is plain prose that wraps across the pane and carries no link."
+        ));
+    }
+    body
+}
+
+/// The point the scenario clicks, in absolute output pixels: the centre of the band
+/// [`preview_document_follows_the_configured_appearance_under_cage`] samples inside the
+/// preview (right) pane, which that smoke measures as the web view's own background.
+fn kc_click_point() -> (i64, i64) {
+    let (x0, x1) = preview_theme_preview_columns();
+    let (y0, y1) = preview_theme_band_rows();
+    let x = i64::try_from((x0 + x1) / 2).expect("the click column fits in an i64");
+    let y = i64::try_from((y0 + y1) / 2).expect("the click row fits in an i64");
+    (x, y)
+}
+
+/// Body of [`preview_click_keeps_window_chords_under_cage`], appended to
+/// [`POINTER_PREAMBLE`].
+///
+/// Open the source, put its preview beside it with `:WolfPreviewInOtherPane`, move into
+/// the preview with `<C-w>l`, click plain text in it, then run leg A (Ctrl+Shift+P, the
+/// query, Return) and leg B (another click, then Ctrl+Shift+W), reading Neovim back
+/// between the steps.
+///
+/// The preview opens through its Ex command rather than the palette, so the only palette
+/// activation, and the only chord, before leg A's readback is leg A's own. A chord
+/// path that is broken therefore fails leg A, not the set-up.
+///
+/// ## Exit codes it adds to [`POINTER_PREAMBLE`]'s 11-15
+///
+/// None. A missing readback is the preamble's own `exit 14`.
+const KC_BODY: &str = r#"
+# PREVIEW_SETTLE -- the cold-open budget POINTER_LINK_BODY documents: the blocking
+# open RPC, the WebProcess spawn, the blocking render and the full load.
+PREVIEW_SETTLE=2.0
+
+# Every buffer in the current tabpage, comma-joined: a preview scratch's own name
+# contains a space. The Rust side splits on the comma and sorts.
+read_wins() {
+    wtype -- ":call writefile([join(map(tabpagebuflist(), {_, b -> bufname(b)}), ',')], '$1')"
+    wtype -k Return
+    wait_file "$1" || exit 14
+}
+
+# The current window's buffer name.
+read_cur() {
+    wtype -- ":call writefile([bufname('%')], '$1')"
+    wtype -k Return
+    wait_file "$1" || exit 14
+}
+
+# A left click at the derived point in the preview. The pointer is parked at (1, 1)
+# first so the motion crosses into the pane and delivers a real enter and motion.
+click_preview() {
+    hsend motion 1 1
+    sleep "$SETTLE"
+    hsend motion "$KC_CLICK_X" "$KC_CLICK_Y"
+    hsend press "$BTN_LEFT"
+    hsend release "$BTN_LEFT"
+    sleep "$SETTLE"
+}
+
+# --- Step 1: the source, and its preview beside it ---------------------------
+wtype -- ":e $KC_SOURCE_FILE"
+wtype -k Return
+sleep "$SETTLE"
+wtype -- ":WolfPreviewInOtherPane"
+wtype -k Return
+sleep "$PREVIEW_SETTLE"
+read_wins "$KC_WINS_BEFORE"
+
+# --- Step 2: into the preview -------------------------------------------------
+# Ctrl+W without Shift is no Wolf chord, so it reaches Neovim as <C-w>.
+wtype -M ctrl -k w -m ctrl
+wtype -k l
+sleep "$SETTLE"
+read_cur "$KC_CUR_FOCUSED"
+
+# --- Step 3: click plain text in the preview ----------------------------------
+click_preview
+read_cur "$KC_CUR_CLICKED"
+
+# --- Leg A: Ctrl+Shift+P, the query, Return ------------------------------------
+wtype -M ctrl -M shift -k p -m shift -m ctrl
+sleep "$SETTLE"
+wtype -- "$KC_PALETTE_QUERY"
+sleep "$SETTLE"
+wtype -k Return
+sleep "$SETTLE"
+
+# --- Leg B: click the preview again, then Ctrl+Shift+W -------------------------
+click_preview
+wtype -M ctrl -M shift -k w -m shift -m ctrl
+sleep "$SETTLE"
+read_wins "$KC_WINS_AFTER"
+
+hsend quit
+exit 0
+"#;
+
+/// After a click in a Markdown preview, the window's chords still fire: Ctrl+Shift+P
+/// opens the palette and runs the chosen row, and Ctrl+Shift+W closes the preview pane.
+///
+/// ## Why it holds on GNOME, and what it checks
+///
+/// On macOS a click leaves the preview's `WKWebView` first responder, and WebKit claims
+/// every key equivalent before the menu sees it. The GTK front-end cannot meet that
+/// shape: the WebKitGTK view is `set_focusable(false)` and `set_can_focus(false)`, so a
+/// click never gives it keyboard focus, and Wolf's chord controller runs in the window's
+/// CAPTURE phase, before any child widget sees the key. This smoke checks that end to end
+/// with a real pointer click into the page, rather than trusting either property.
+///
+/// ## Assertions, classified
+///
+/// A precondition gets NO revert. The falsifier for both discriminators is one edit:
+/// delete the `self.install_chord_controller();` call in `AppShell::install_actions`
+/// (`crates/wolf-gnome/src/shell.rs`). Under `cage` no chord then fires at all (see that
+/// function's doc comment), and leg A is expected to go red first. The Rust side stops
+/// at its first failing assertion, so a red leg A hides leg B's result.
+///
+/// | # | assertion | kind | revert |
+/// | --- | --- | --- | --- |
+/// | 1 | the palette query matches exactly the full-width title | precondition, checked before launch | none |
+/// | 2 | `status.success()`, and the click point inside the reported output | precondition | none |
+/// | 3 | after the open, the tabpage holds the source and its preview | precondition | none |
+/// | 4 | after `<C-w>l` and after the click, the current window is the preview | precondition: the click landed in a focused preview and moved nothing | none |
+/// | 5 | the command MRU holds exactly [`KC_MRU_KEY`] | **discriminator**, leg A: Ctrl+Shift+P opened the palette over the clicked preview and Enter ran the row | delete `self.install_chord_controller();` |
+/// | 6 | after Ctrl+Shift+W the tabpage holds the source alone | **discriminator**, leg B: the close chord fired over the clicked preview | the same |
+#[test]
+fn preview_click_keeps_window_chords_under_cage() {
+    const SMOKE: &str = "preview_click_keeps_window_chords_under_cage";
+
+    // --- Assertion 1 (precondition): the query names one command ---------------
+    let is_subsequence = |query: &str, title: &str| {
+        let mut chars = title.chars().map(|c| c.to_ascii_lowercase());
+        query.chars().all(|q| chars.any(|c| c == q))
+    };
+    let matched: Vec<(&str, &str)> = wolf_core::COMMAND_SPECS
+        .iter()
+        .filter(|spec| is_subsequence(KC_PALETTE_QUERY, spec.title))
+        .map(|spec| (spec.id, spec.title))
+        .collect();
+    assert!(
+        matched.len() == 1 && matched[0].0 == KC_MRU_KEY,
+        "{SMOKE}: the palette query {KC_PALETTE_QUERY:?} must match exactly the {KC_MRU_KEY:?} \
+         command's title as a case-insensitive subsequence; it matches {matched:?}. With more \
+         than one match, which row Enter runs depends on a ranking, and leg A's MRU assertion \
+         could fail with the chord working. Pick a query unique in COMMAND_SPECS."
+    );
+
+    let runtime_dir = require_smoke_env();
+    let cwd = make_temp_cwd();
+    let body = kc_source_body();
+    write_relaunch_fixtures(SMOKE, &cwd, &[(KC_SOURCE_FILE, body.as_str())]);
+
+    let wins_before = cwd.join(KC_WINS_BEFORE_NAME);
+    let cur_focused = cwd.join(KC_CUR_FOCUSED_NAME);
+    let cur_clicked = cwd.join(KC_CUR_CLICKED_NAME);
+    let wins_after = cwd.join(KC_WINS_AFTER_NAME);
+    // No assertion reads a capture; the preamble's OUT_PNG is never written.
+    let out_png = runtime_dir.join("wolf_gnome_preview_click_chords.png");
+    for path in [
+        &wins_before,
+        &cur_focused,
+        &cur_clicked,
+        &wins_after,
+        &out_png,
+    ] {
+        clear_evidence(path, SMOKE);
+    }
+
+    let (click_x, click_y) = kc_click_point();
+    let click_x_arg = click_x.to_string();
+    let click_y_arg = click_y.to_string();
+    let smoke_state = smoke_state_dir(&cwd);
+
+    let status = run_pointer_scenario(
+        KC_BODY,
+        &cwd,
+        &runtime_dir,
+        &out_png,
+        &[
+            ("KC_SOURCE_FILE", OsStr::new(KC_SOURCE_FILE)),
+            ("KC_PALETTE_QUERY", OsStr::new(KC_PALETTE_QUERY)),
+            ("KC_WINS_BEFORE", wins_before.as_os_str()),
+            ("KC_CUR_FOCUSED", cur_focused.as_os_str()),
+            ("KC_CUR_CLICKED", cur_clicked.as_os_str()),
+            ("KC_WINS_AFTER", wins_after.as_os_str()),
+            ("KC_CLICK_X", OsStr::new(&click_x_arg)),
+            ("KC_CLICK_Y", OsStr::new(&click_y_arg)),
+        ],
+    );
+
+    // --- Assertion 2 (precondition): the scenario ran; the point is on screen ---
+    assert_pointer_scenario_succeeded(SMOKE, status, &cwd, &out_png);
+    let extents = read_output_extents(&cwd, SMOKE);
+    assert_inside_extents(SMOKE, "the preview click", (click_x, click_y), extents);
+
+    // --- Assertion 3 (precondition): the preview opened beside its source ------
+    let preview_name = format!("{PREVIEW_READBACK_PREFIX}{KC_SOURCE_FILE}");
+    let want_before = {
+        let mut want = vec![preview_name.clone(), KC_SOURCE_FILE.to_string()];
+        want.sort();
+        want
+    };
+    let got_before = read_window_buffer_names(&wins_before, SMOKE);
+    assert_eq!(
+        got_before, want_before,
+        "{SMOKE}: after `:WolfPreviewInOtherPane` the tabpage holds {got_before:?}, not \
+         {want_before:?} (sorted). One entry means no preview opened, so neither leg below \
+         has a preview to click in; check the Ex command and the Markdown filetype gate."
+    );
+
+    // --- Assertion 4 (precondition): the preview is current, before and after the click
+    for (path, when) in [
+        (&cur_focused, "after <C-w>l"),
+        (&cur_clicked, "after the click"),
+    ] {
+        let current = read_trimmed(path, SMOKE);
+        assert_eq!(
+            current, preview_name,
+            "{SMOKE}: {when} Neovim's current window shows {current:?}, not the preview \
+             {preview_name:?}. After <C-w>l, a miss means the keys never moved focus, and \
+             the legs below would run over the source. After the click, it means the click \
+             changed Neovim's window, so the chords below would not be measured over a \
+             clicked preview: GNOME has no preview click-to-focus, so look for a pane gesture \
+             that refocuses on a press."
+        );
+    }
+
+    // --- Assertion 5 (discriminator, leg A): Ctrl+Shift+P ran the palette row --
+    let recent = CommandMru::open(&smoke_state).recent();
+    assert_eq!(
+        recent,
+        vec![KC_MRU_KEY.to_string()],
+        "{SMOKE}: leg A: the command MRU at {} holds {recent:?}, not just {KC_MRU_KEY:?}. Only \
+         a palette activation writes that store, and this scenario activates the palette \
+         once, with Ctrl+Shift+P over the clicked preview. EMPTY means the chord never \
+         opened the palette: the key went to the web view or to Neovim instead of the \
+         window's capture-phase chord controller, which is the bug this smoke guards \
+         against. A DIFFERENT key means the palette opened and Enter ran another row, \
+         which assertion 1 should have prevented.",
+        smoke_state.join("command-mru.sqlite").display()
+    );
+
+    // --- Assertion 6 (discriminator, leg B): Ctrl+Shift+W closed the preview ---
+    let got_after = read_window_buffer_names(&wins_after, SMOKE);
+    assert_eq!(
+        got_after,
+        vec![KC_SOURCE_FILE.to_string()],
+        "{SMOKE}: leg B: after a second click in the preview and Ctrl+Shift+W, the tabpage \
+         holds {got_after:?}, not the source alone. Both entries still present means the \
+         close chord never fired over the clicked preview. The source gone and the preview \
+         kept means the chord closed the wrong pane, so the click moved Neovim's focus after \
+         all."
+    );
+}
