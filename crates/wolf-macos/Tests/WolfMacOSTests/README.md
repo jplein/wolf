@@ -90,13 +90,13 @@ Purpose: A `PaneContainerView` over a [`LiveCore`](#livecoreswift), hosted offsc
 
 #### `TerminalCursorFocusTests.swift`
 
-**Covers** — a terminal pane's cursor painting the frame's block while its pane is the key window's active pane, and a hollow block while `<C-w>h` focuses the editor beside it, while the window is not key, and in the drawer once `<C-w>k` leaves it; and the block again once focus returns.
+**Covers** — a terminal pane's cursor painting the frame's block while its pane is the key window's active pane, and a hollow block while `<C-w>h` focuses the editor beside it, while the window is not key, and in the drawer once `<C-w>k` leaves it; the block again once focus returns; and a focus change alone, with no wake, marking the view for display.
 
 **Gotchas**
 
-- Focus needs a key window, which each test sets through `OffscreenWindow.reportsKey`; `syncTerminalFocus` sees it on the next render wake.
+- Focus needs a key window, which each test sets through `OffscreenWindow.reportsKey`; `syncTerminalFocus` sees it on the next render wake, or when a test calls it directly.
 - A hollow cursor is told from a block by its interior, which keeps the default background, and from no cursor by its top band in the cursor colour. Every checked cursor sits in row 0, so that 1-point band covers whole pixels.
-- `render()` redraws the whole view, so whether a focus change alone repaints the cursor's row reaches no test here; it is manual-smoke.
+- `render()` redraws the whole view whatever was invalidated, so a pixel check cannot show the invalidation. `testAFocusChangeAloneMarksTheViewForDisplay` checks it instead, through the backing layer's `needsDisplay()`, with no wake. It reads the layer's flag because a layer-backed view's own `needsDisplay` stays true in a window never ordered front.
 
 #### `TerminalDrawerTests.swift`
 
