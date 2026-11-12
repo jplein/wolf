@@ -748,6 +748,22 @@ Real Neovim and real `/bin/sh` sessions in ptys (`//crates/wolf-core:terminal_te
 - `infocmp` is `/usr/bin/infocmp` on macOS, which Bazel's test `PATH` keeps, and the devShell's ncurses on Linux.
 - The decoy `TERM` and `TERMINFO` are set once per binary, before any core starts, so no `setenv` races a neighbouring test's `getenv`.
 
+#### `terminal_toast.rs`
+
+Real Neovim and real `/bin/sh` sessions in ptys (`//crates/wolf-core:terminal_toast`, as `terminal_input`).
+
+**Covers**
+
+- A non-prompt toast dismissed by a key, text, a paste, a mouse press and a scroll sent to a session, by `toggle_terminal`, and by a `focus_win` into a terminal pane; a motion, a release and a `focus_win` into an editor pane leaving it up.
+- A `confirm()` prompt surviving all of those inputs and the toggle.
+- A dismissal by terminal input firing the wake without bumping `seq`, and the same input with no toast firing none.
+
+**Gotchas**
+
+- Dismissed means hidden and empty, still so after `NEGATIVE_SETTLE`, and `show_toast` first watches the toast for `CONTROL_SETTLE` so a toast that would have gone anyway cannot pass. Widen either settle if a case flakes; never tighten it.
+- The wake case's input is a right-button press over an idle shell with tracking off, which publishes no frame by itself. If its no-toast leg fires a wake, choose another such input.
+- The prompt case ends by sending `Esc` to Neovim, which aborts the dialog the queued toggle waits on, so the core can shut down.
+
 #### `theme.rs`
 
 Spawns a real Neovim (staged runfiles, wired `WOLF_NVIM_BIN`, `no-sandbox`), started with the plain repo `init.lua` so nothing defines the Wolf highlight groups at startup.

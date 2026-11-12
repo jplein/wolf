@@ -122,6 +122,12 @@ Purpose: A [`TerminalViewFixture`](#terminalviewfixtureswift) whose container sh
 
 **Covers** — `toggle_terminal()` showing a terminal view in the drawer strip on the drawer window's session, painting a truecolour background the shell prints, hiding with the session kept, and showing the same session again on the next toggle.
 
+#### `TerminalToastTests.swift`
+
+**Covers** — `toggle_terminal()`, which the palette's Terminal row runs, hiding the container's `ToastView` once the drawer shows its session, after a typed `:echo` showed it. A failure message tells a toast core never dismissed from a view the container never refreshed.
+
+**Gotchas** — the echoed marker is typed as two quoted halves, so only the `:echo` running puts it on the toast, never the typed command line.
+
 #### `TerminalNeighbourPaneTests.swift`
 
 **Covers** — the Neovim panes staying painted while a terminal view is open and after it hides or closes, in the drawer, in a split beside an editor pane, and in a split in a new tab, with the first tab checked again after switching back to it.

@@ -207,7 +207,7 @@ The toolkit-neutral input vocabulary and its translation into Neovim keystroke n
 
 - `InputEvent` — the events a front-end sends, with `Key`, `KeyEvent`, `MouseButton`, `MouseAction`, `MouseEvent`, `ScrollDirection` and `ScrollEvent`.
 - `key_to_notation(&KeyEvent) -> String` — modifier order `C-`, `S-`, `A-`, `D-`; `<` becomes `<lt>`.
-- `InputEvent::is_toast_dismissing()` — whether the event dismisses a showing message toast.
+- `InputEvent::is_toast_dismissing()` — whether the event is Neovim input that dismisses a showing message toast. The whole rule is in [Input: events](../../../specs/architecture.md#input-events-front-end--core).
 
 **Decisions**
 
@@ -220,7 +220,6 @@ The toolkit-neutral input vocabulary and its translation into Neovim keystroke n
 
 **Gotchas**
 
-- A scroll counts as dismissing; the scroll-over-toast exemption lives in the front-end, which never forwards that gesture.
 - Several variants delegate to `runtime/nvim/init.lua` helpers over `nvim_exec_lua`, which define their behaviour.
 
 #### `markdown.rs`

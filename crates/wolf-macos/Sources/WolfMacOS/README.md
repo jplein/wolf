@@ -571,7 +571,7 @@ Purpose: The `ext_messages` message toast — an overlay view that `PaneContaine
 **Decisions**
 
 - Chunk foreground colors arrive already resolved in Rust against the highlight table. Message color is load-bearing, so do not re-resolve or override it here.
-- `acceptsFirstResponder` is false: the container decides whether a wheel gesture reaches `scrollBy`. Scrolling while hovering the toast is the single gesture that must not reach Neovim, because any input dismisses the toast core-side — making this view a responder-chain scroll target would defeat that.
+- `acceptsFirstResponder` is false: the container decides whether a wheel gesture reaches `scrollBy`. Scrolling while hovering the toast is the single gesture that must not reach Neovim or a terminal session, because any input dismisses the toast core-side — making this view a responder-chain scroll target would defeat that.
 - The scroll offset resets only when the line count changes, so a repeat wake carrying the same message keeps the user's position.
 
 #### `TreeWakeBridge.swift`

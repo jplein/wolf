@@ -232,7 +232,7 @@ Sidebar and search smokes: the file tree, the project-search panel and its chord
 
 #### `smoke_headless/terminal.rs`
 
-Terminal smokes: the terminal drawer, terminals across a Neovim restart, terminal panes beside Neovim panes, typed keys reaching a pane's shell, and Ctrl+Shift+W closing the drawer with its session kept and a terminal split with its session hung up.
+Terminal smokes: the terminal drawer, terminals across a Neovim restart, terminal panes beside Neovim panes, typed keys reaching a pane's shell, Ctrl+` hiding a showing message toast as it opens the drawer, and Ctrl+Shift+W closing the drawer with its session kept and a terminal split with its session hung up.
 
 #### `smoke_headless/terminal_colours.rs`
 
@@ -343,7 +343,7 @@ The third reaches past names to the fixture bodies an assertion's line, column o
 
 **Exit codes carry meaning, and folding two causes into one code destroys evidence.** A process that vanishes because the main loop panicked looks exactly like one that shut down cleanly, so "exited non-zero" gets its own code rather than joining "still alive"; likewise "the app died with its Neovim", "not exactly one live child", and "the killed child never left the process table" are each distinct.
 
-**A message smoke may press no key after the one that produced the message.** Any `Key`, `Mouse` or `Scroll` is dismissing input for a non-prompt toast in `wolf_core`, so a stray keystroke between the command and the capture clears the surface the smoke exists to read. The completion popup has the same shape for a different reason: the next key closes it.
+**A message smoke may press no key after the one that produced the message.** Any `Key`, `Mouse` or `Scroll` is dismissing input for a non-prompt toast in `wolf_core`, and so are the drawer toggle, a focus move into a terminal pane and input to one, so a stray keystroke or chord between the command and the capture clears the surface the smoke exists to read. The completion popup has the same shape for a different reason: the next key closes it.
 
 **No scenario sends input before `wait_ready`.** The environment helper prepends one shell prelude to every scenario and sets `WOLF_READY_FILE`; after each launch the scenario calls `wait_ready "$app_pid" <died-code> "<label>"`, which primes the seat's keyboard with a key-free `wtype ""` and returns once the file holds that pid — the app writes it when its windows accept keystrokes ([wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md#the-readiness-file)). A dead app exits with the scenario's own died-early code, and a launch that never gets ready exits 40 after 30 s; the app's `wolf-ready:` stderr lines then name the condition it was stuck on.
 
