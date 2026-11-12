@@ -20,6 +20,10 @@ private func srgb(_ packed: UInt32) -> NSColor {
 /// A hollow cursor is told from a block by its interior, which keeps the default background,
 /// and from no cursor by its top band, which is the cursor colour. Every checked cursor sits in
 /// row 0 of a backing-aligned view, so that 1-point band covers whole pixels.
+///
+/// `render()` redraws the whole view whatever was invalidated, so no pixel check shows that a
+/// focus change repaints the cursor; `testAFocusChangeAloneMarksTheViewForDisplay` checks that
+/// invalidation through its backing layer's `needsDisplay()`, with no wake.
 @MainActor
 final class TerminalCursorFocusTests: XCTestCase {
 
@@ -220,6 +224,75 @@ final class TerminalCursorFocusTests: XCTestCase {
     capture = fixture.render()
     assertBlock(
       capture, view: view, cell: cell, cursor: cursor, bg: bg, "with the window key again")
+  }
+
+  /// A focus change alone marks the terminal view for display, both when the pane loses focus
+  /// and when it gains it back. No render wake runs between the change and the check, so no
+  /// new frame or damage can have marked the view; on a display, nothing else repaints the
+  /// cursor's row when only focus changes.
+  ///
+  /// A layer-backed view's own `needsDisplay` stays true in a window never ordered front, so
+  /// the test reads its backing layer's `needsDisplay()` instead. `setNeedsDisplay(_:)` sets
+  /// that flag, and `cacheDisplay(in:to:)`, which ends `render()`, clears it; the clearing is a
+  /// premise measured here rather than assumed.
+  func testAFocusChangeAloneMarksTheViewForDisplay() {
+    guard let fixture = TerminalPaneFixture(command: blockCommand) else { return }
+    defer { fixture.shutdown() }
+    XCTAssertTrue(
+      fixture.converge(),
+      "premise: the container must host a terminal view and size the session: \(fixture.state)")
+    let stands = fixture.live.waitFor(timeout: TerminalPaneFixture.timeout) {
+      blockCursor(fixture.frame, at: 2)
+    }
+    XCTAssertTrue(
+      stands,
+      "premise: the cursor must stand after `AB` at (2, 0) as a block:"
+        + " \(describeCursor(fixture.frame))")
+    guard stands else { return }
+
+    _ = fixture.render()
+    guard let view = fixture.terminalViews.first else {
+      XCTFail("no TerminalPaneView after a render wake: syncTerminalViews created none")
+      return
+    }
+    XCTAssertTrue(
+      view.focused,
+      "premise: with the window key, the active terminal pane's view must be focused")
+    XCTAssertNotNil(
+      view.layer,
+      "premise: the terminal view must be layer-backed under the layer-backed container,"
+        + " or there is no layer whose needsDisplay() can show an invalidation")
+    guard view.layer != nil else { return }
+    XCTAssertEqual(
+      view.layer?.needsDisplay(), false,
+      "premise: render()'s cacheDisplay(in:to:) must leave the view's layer needing no display,"
+        + " or a later needsDisplay() cannot tell a focus change's invalidation from a stale one")
+
+    fixture.renderer.window.reportsKey = false
+    fixture.container.syncTerminalFocus()
+    XCTAssertFalse(
+      view.focused,
+      "premise: syncTerminalFocus() with the window not key must unfocus the view")
+    XCTAssertEqual(
+      view.layer?.needsDisplay(), true,
+      "losing focus must mark the view for display. No wake ran, so only the change of"
+        + " `focused` can have marked it; unmarked, a display never repaints the cursor hollow")
+
+    // The renderer's render(), not the fixture's, so that no wake runs.
+    _ = fixture.renderer.render()
+    XCTAssertEqual(
+      view.layer?.needsDisplay(), false,
+      "premise: render()'s cacheDisplay(in:to:) must leave the view's layer needing no display"
+        + " again")
+    fixture.renderer.window.reportsKey = true
+    fixture.container.syncTerminalFocus()
+    XCTAssertTrue(
+      view.focused, "premise: syncTerminalFocus() with the window key must focus the view again")
+    XCTAssertEqual(
+      view.layer?.needsDisplay(), true,
+      "gaining focus must mark the view for display. No wake ran, so only the change of"
+        + " `focused` can have marked it; unmarked, a display keeps the hollow cursor although"
+        + " the pane is focused again")
   }
 
   /// The drawer's cursor paints as the frame's block while the drawer is focused, and hollow

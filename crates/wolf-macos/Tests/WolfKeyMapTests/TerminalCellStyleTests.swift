@@ -254,7 +254,7 @@ final class TerminalCellStyleTests: XCTestCase {
         "style \(c.style) with focused \(c.focused) must paint \(c.shape): a focused pane paints"
           + " the frame's style, an unknown one as a block, and any other pane a hollow block."
           + " The frame's style unfocused means focus is ignored; hollow focused means the"
-          + " style is")
+          + " style is ignored")
     }
   }
 }

@@ -429,7 +429,7 @@ fn cursor_style_is_hollow_unless_focused() {
             expected,
             "a {style:?} cursor with focused {focused} must paint {expected:?}: a focused pane \
              paints the frame's style and any other pane a hollow block. The frame's style \
-             unfocused means focus is ignored; a hollow block focused means the style is"
+             unfocused means focus is ignored; a hollow block focused means the style is ignored"
         );
     }
 }
