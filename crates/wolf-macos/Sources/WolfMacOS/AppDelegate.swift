@@ -782,10 +782,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
   ///    showing that panel) and ALWAYS return `true`, since choosing either
   ///    while the sidebar is hidden reveals it.
   ///
-  /// For tagged Wolf commands it then disables the Close (`.closePane`) command
-  /// when the key window is on its LAST split (`:close` would error, E444),
-  /// disables the Copy (`.copy`) command unless the key window has something to
-  /// copy from EITHER source — its active pane is a preview holding a non-empty
+  /// For tagged Wolf commands it then enables the Close (`.closePane`) command
+  /// only when the key window's `canClosePane` holds (its active pane is the
+  /// drawer, or a split that is not the tree's last leaf), disables the Copy
+  /// (`.copy`) command unless the key window has something to copy from
+  /// EITHER source — its active pane is a preview holding a non-empty
   /// selection, or the window is in visual mode — and disables the Preview
   /// (`.preview`) command unless the key window's active buffer is Markdown.
   /// Every other item stays enabled.
@@ -822,7 +823,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     let keyController = controllers.first { $0.owns(effectiveKeyWindow) }
     switch kind {
     case .closePane:
-      return (keyController?.paneCount ?? 0) > 1
+      return keyController?.canClosePane ?? false
     case .copy:
       // Both Copy sources, via the decision `copy()` also uses; `isVisualMode` alone would grey the
       // item out over a live preview selection.

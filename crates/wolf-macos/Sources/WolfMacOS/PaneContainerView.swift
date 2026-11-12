@@ -649,9 +649,29 @@ final class PaneContainerView: NSView {
   }
 
   /// The number of live panes (`PaneTree` leaf count); 1 for a single unsplit
-  /// window. Read by the window controller to disable the Close command on the
-  /// last split.
+  /// window. The drawer is outside `tree` and never counted.
   var paneCount: Int { tree.leaves().count }
+
+  /// Whether Close Pane may close the active pane: true for the drawer, or when the tree has
+  /// more than one leaf. The drawer is outside `tree` but is never its tabpage's last window;
+  /// the tree's last leaf is refused even beside the drawer, because Neovim counts the
+  /// drawer's window and `:close` would leave the drawer as the tabpage's only window.
+  var canClosePane: Bool {
+    // Spelled out: with no drawer, `activePane == drawerPaneId` is `nil == nil`, true.
+    (drawerPaneId != nil && activePane == drawerPaneId) || tree.leaves().count > 1
+  }
+
+  /// Close Pane: closes the active pane with `:close`, or does nothing when `canClosePane`
+  /// is false. It focuses the active pane's window first, on core's ordered input channel,
+  /// so `:close` closes the pane the gate read even while a focus move is still in flight.
+  func closeActivePane() {
+    guard canClosePane else { return }
+    let win = activeWin
+    if win != 0 {
+      handle.focus_win(win)
+    }
+    handle.close_pane()
+  }
 
   /// The nvim WINDOW handle of the ACTIVE pane, or `0` when there is none (or it
   /// is not bound yet).

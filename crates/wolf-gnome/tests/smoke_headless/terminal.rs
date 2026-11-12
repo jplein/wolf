@@ -1,12 +1,13 @@
 //! Terminal smokes: the terminal drawer, terminals across a Neovim restart, terminal panes
-//! beside Neovim panes, and typed keys reaching a pane's shell.
+//! beside Neovim panes, typed keys reaching a pane's shell, and Ctrl+Shift+W closing the drawer
+//! and a terminal split.
 
 use super::config::FULLWIDTH_SMOKE_FONT_PT;
 use super::panes::TABS_FIRST_TAB_CENTRE_FRACTION;
 use super::recovery::with_nvim_pid_helper;
 use super::*;
 
-// The terminal smokes: three drawer regimes and one split pane; each readback follows the focus.
+// Terminal smokes: three drawer regimes, one split pane and a close chord; readbacks follow focus.
 // See notes/crates/wolf-gnome/tests/smoke_headless/terminal.rs.md#terminal-drawer-smokes
 
 /// Terminal-drawer smoke: the file `:e`d into the editor pane before the chord.
@@ -1678,6 +1679,312 @@ fn terminal_pane_splits_and_focus_under_cage() {
         "{SMOKE}: after `<C-w>v` in the terminal pane the original shell (pid {opened}) answered \
          again, so focus stayed where it was: the router's split started no session in a new \
          pane, or the front-end never focused the pane its `Split` intent made."
+    );
+}
+
+/// S5: the file the drawer's shell writes its pid into once the chord opened it.
+pub(crate) const TERMCLOSE_PID_DRAWER_NAME: &str = "wolf_gnome_termclose_pid_drawer.txt";
+
+/// S5: Neovim's readback after Ctrl+Shift+W in the drawer.
+pub(crate) const TERMCLOSE_NVIM_DRAWER_NAME: &str = "wolf_gnome_termclose_nvim_drawer.txt";
+
+/// S5: the file the split terminal pane's shell writes its pid into.
+pub(crate) const TERMCLOSE_PID_SPLIT_NAME: &str = "wolf_gnome_termclose_pid_split.txt";
+
+/// S5: Neovim's readback after Ctrl+Shift+W in the split terminal pane.
+pub(crate) const TERMCLOSE_NVIM_SPLIT_NAME: &str = "wolf_gnome_termclose_nvim_split.txt";
+
+/// S5: the file the re-opened drawer's shell writes its pid into.
+pub(crate) const TERMCLOSE_PID_REOPEN_NAME: &str = "wolf_gnome_termclose_pid_reopen.txt";
+
+/// What both of S5's Neovim readbacks must read: one window, and it is neither the drawer
+/// nor a terminal placeholder.
+const TERMCLOSE_NVIM_CLOSED: &str = "1 0";
+
+/// The TERMINAL CLOSE scenario for
+/// [`terminal_close_chord_closes_the_drawer_and_a_split_under_cage`], composed with
+/// [`with_nvim_pid_helper`] for its `pid_is_live`, which treats a zombie as gone.
+///
+/// Readbacks follow the focus as in [`TERMFLOW_SCENARIO`]: a shell readback writes the
+/// shell's pid, a Neovim one writes the expression it is given. Neovim's readback after a
+/// close only appears once the front-end has moved focus to an editor pane, since a
+/// terminal pane's keys go to its shell.
+///
+/// ## Exit codes
+///
+/// * `11` — the app died before it was ready for input (the shared convention).
+/// * `41` — no shell answered after Ctrl+`: the drawer did not open focused.
+/// * `42` — Neovim did not answer after Ctrl+Shift+W in the drawer: focus stayed in it.
+/// * `43` — the drawer's shell was gone after the close: its session was hung up.
+/// * `44` — no shell answered after `:vsplit` and `:terminal`.
+/// * `45` — Neovim did not answer after Ctrl+Shift+W in the split terminal pane.
+/// * `46` — the split's shell was still alive after its pane closed: no hang-up.
+/// * `47` — no `state.json` existed to freeze.
+/// * `48` — no shell answered after Ctrl+` re-opened the drawer.
+const TERMCLOSE_SCENARIO: &str = r#"
+set -eu
+
+# SETTLE is the settle between steps; see SCENARIO.
+WAIT_INTERVAL=0.2
+SETTLE=1.0
+DRAWER_SETTLE=2.0
+FILE_TRIES=100
+
+cleanup() {
+    set +e
+    if [ -n "${app_pid:-}" ]; then
+        kill "$app_pid" 2>/dev/null
+        wait "$app_pid" 2>/dev/null
+    fi
+}
+trap cleanup EXIT INT TERM HUP
+
+"$WOLF_BIN" &
+app_pid=$!
+wait_ready "$app_pid" 11 "wolf-gnome terminal close smoke"
+
+wait_file() {
+    f=$1
+    t=0
+    while [ "$t" -lt "$FILE_TRIES" ]; do
+        if [ -s "$f" ]; then
+            return 0
+        fi
+        t=$((t + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    echo "wolf-gnome terminal close smoke: readback file $f never appeared." >&2
+    return 1
+}
+
+# $1 is the readback file, $2 the exit code. Only a shell writes it.
+shell_pid() {
+    wtype -- "echo \$\$ > '$1'"
+    wtype -k Return
+    wait_file "$1" || exit "$2"
+}
+
+# $1 is the readback file, $2 a Vimscript string expression, $3 the exit code.
+nvim_read() {
+    wtype -- ":call writefile([$2], '$1')"
+    wtype -k Return
+    wait_file "$1" || exit "$3"
+}
+
+close_chord() {
+    wtype -M ctrl -M shift -k w -m shift -m ctrl
+    sleep "$DRAWER_SETTLE"
+}
+
+# --- Step 1: Ctrl+` opens the drawer, focused -------------------------------
+wtype -M ctrl -k grave -m ctrl
+sleep "$DRAWER_SETTLE"
+shell_pid "$PID_DRAWER" 41
+read -r drawer_pid < "$PID_DRAWER"
+
+# --- Step 2: Ctrl+Shift+W in the drawer closes it and keeps its shell -------
+close_chord
+nvim_read "$NVIM_DRAWER" "printf('%d %d', winnr('\$'), get(w:, 'wolf_drawer', 0))" 42
+sleep "$SETTLE"
+if ! pid_is_live "$drawer_pid"; then
+    echo "wolf-gnome terminal close smoke: the drawer's shell $drawer_pid is gone." >&2
+    exit 43
+fi
+
+# --- Step 3: a split, and a terminal pane in its new (right) window ---------
+wtype -- ":vsplit"
+wtype -k Return
+sleep "$SETTLE"
+wtype -- ":terminal"
+wtype -k Return
+sleep "$DRAWER_SETTLE"
+shell_pid "$PID_SPLIT" 44
+read -r split_pid < "$PID_SPLIT"
+
+# --- Step 4: Ctrl+Shift+W in the split closes it and hangs up its shell -----
+close_chord
+nvim_read "$NVIM_SPLIT" "printf('%d %d', winnr('\$'), getbufvar('%', 'wolf_terminal_id', 0))" 45
+t=0
+while pid_is_live "$split_pid"; do
+    t=$((t + 1))
+    if [ "$t" -ge "$FILE_TRIES" ]; then
+        echo "wolf-gnome terminal close smoke: the split's shell $split_pid is still alive." >&2
+        exit 46
+    fi
+    sleep "$WAIT_INTERVAL"
+done
+
+# --- Step 5: freeze the persisted layout ------------------------------------
+sleep "$SETTLE"
+if [ ! -s "$STATE_SRC" ]; then
+    echo "wolf-gnome terminal close smoke: no state.json at $STATE_SRC." >&2
+    exit 47
+fi
+cp "$STATE_SRC" "$STATE_COPY"
+
+# --- Step 6: Ctrl+` re-opens the drawer --------------------------------------
+wtype -M ctrl -k grave -m ctrl
+sleep "$DRAWER_SETTLE"
+shell_pid "$PID_REOPEN" 48
+
+exit 0
+"#;
+
+/// Ctrl+Shift+W (`win.close-pane`) closes the focused drawer with its session kept, and a
+/// focused split terminal pane with its session hung up, leaving one editor pane.
+///
+/// It reads no pixel: where the keys go after each close, the shells' liveness and the
+/// persisted layout say everything the assertions need.
+///
+/// ## Assertions
+///
+/// | # | assertion | kind | falsifying edit | predicted red |
+/// | --- | --- | --- | --- | --- |
+/// | 1 | the scenario exits 0 | precondition | `UiAction::ClosePane => {}` in `shell.rs` | exit 42: the drawer keeps focus, so its shell gets Neovim's readback |
+/// | 1 | the scenario exits 0 | discriminator | `placeholder_buf(id, "wipe")` in `wolf_toggle_terminal` | exit 43: the drawer's shell is hung up |
+/// | 1 | the scenario exits 0 | discriminator | `placeholder_buf(id, "hide")` in `wolf_terminal_bind` | exit 46: the split's shell outlives its pane |
+/// | 2 | after closing the drawer, Neovim reads `1 0` | discriminator | as for exit 42 | exit 42 first |
+/// | 3 | after closing the split, Neovim reads `1 0` | discriminator | as for exit 42 | exit 42 first |
+/// | 4 | the frozen layout holds one leaf, not a terminal leaf | discriminator | delete `tree.remove(*id);` in `pane_view::detect_closes` | a terminal leaf persists, or exit 45 when focus stays on the closed pane |
+/// | 5 | the re-opened drawer runs the first drawer's shell | discriminator | as for exit 43 | exit 43 first |
+///
+/// The exit status is asserted first, so an edit goes red at the first step that notices it.
+#[test]
+fn terminal_close_chord_closes_the_drawer_and_a_split_under_cage() {
+    const SMOKE: &str = "terminal_close_chord_closes_the_drawer_and_a_split_under_cage";
+
+    let runtime_dir = require_smoke_env();
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+    let cwd = make_temp_cwd();
+    write_relaunch_fixtures(SMOKE, &cwd, &[]);
+
+    let smoke_state_file = smoke_state_dir(&cwd).join(STATE_FILE_NAME);
+    let frozen_state_dir = runtime_dir.join("wolf_gnome_termclose_state");
+    std::fs::create_dir_all(&frozen_state_dir).unwrap_or_else(|e| {
+        panic!(
+            "{SMOKE}: failed to create the frozen-state dir {}: {e}",
+            frozen_state_dir.display()
+        )
+    });
+    let frozen_state_file = frozen_state_dir.join(STATE_FILE_NAME);
+
+    let pid_drawer = runtime_dir.join(TERMCLOSE_PID_DRAWER_NAME);
+    let nvim_drawer = runtime_dir.join(TERMCLOSE_NVIM_DRAWER_NAME);
+    let pid_split = runtime_dir.join(TERMCLOSE_PID_SPLIT_NAME);
+    let nvim_split = runtime_dir.join(TERMCLOSE_NVIM_SPLIT_NAME);
+    let pid_reopen = runtime_dir.join(TERMCLOSE_PID_REOPEN_NAME);
+    for path in [
+        &pid_drawer,
+        &nvim_drawer,
+        &pid_split,
+        &nvim_split,
+        &pid_reopen,
+        &frozen_state_file,
+    ] {
+        clear_evidence(path, SMOKE);
+    }
+
+    let mut cmd = cage_command(
+        &with_nvim_pid_helper(TERMCLOSE_SCENARIO),
+        &cwd,
+        &runtime_dir,
+    );
+    pin_terminal_smoke_shell(&mut cmd)
+        .env("WOLF_BIN", bin)
+        .env("PID_DRAWER", &pid_drawer)
+        .env("NVIM_DRAWER", &nvim_drawer)
+        .env("PID_SPLIT", &pid_split)
+        .env("NVIM_SPLIT", &nvim_split)
+        .env("PID_REOPEN", &pid_reopen)
+        .env("STATE_SRC", &smoke_state_file)
+        .env("STATE_COPY", &frozen_state_file);
+    let status = cmd
+        .status()
+        .expect("failed to spawn `cage` for the headless terminal close scenario");
+
+    // --- Assertion 1: the scenario ran to completion --------------------------
+    assert!(
+        status.success(),
+        "{SMOKE}: the cage terminal close scenario exited unsuccessfully ({status}); cage.log's \
+         stderr names the step. Exit 11: the app died before it was ready for input. Exit 41: no \
+         shell answered after Ctrl+`, so the drawer did not open focused. Exit 42: Neovim did \
+         not answer after Ctrl+Shift+W in the drawer, so focus stayed in it: `win.close-pane` \
+         never reached `InputEvent::ClosePane`, `:close` closed another window, or the \
+         front-end never unbound the closed drawer. Exit 43: the drawer's shell died with the \
+         close, so its placeholder was wiped rather than hidden. Exit 44: no shell answered \
+         after `:vsplit` and `:terminal`. Exit 45: Neovim did not answer after Ctrl+Shift+W in \
+         the split terminal pane, so focus stayed in it. Exit 46: the split's shell outlived \
+         its closed pane, so its placeholder was hidden rather than wiped and the session was \
+         never hung up. Exit 47: the app persisted no state.json at all. Exit 48: no shell \
+         answered after Ctrl+` re-opened the drawer."
+    );
+
+    let drawer = read_ints(&pid_drawer, 1, SMOKE)[0];
+    let split = read_ints(&pid_split, 1, SMOKE)[0];
+    assert_ne!(
+        split, drawer,
+        "{SMOKE}: the split terminal pane's readback came from the drawer's shell (pid \
+         {drawer}), so the drawer still had focus after `:vsplit` and `:terminal` and the \
+         split's close below proves nothing about a split."
+    );
+
+    // --- Assertion 2: Ctrl+Shift+W closed the drawer --------------------------
+    let after_drawer = read_trimmed(&nvim_drawer, SMOKE);
+    assert_eq!(
+        after_drawer, TERMCLOSE_NVIM_CLOSED,
+        "{SMOKE}: after Ctrl+Shift+W in the drawer, Neovim's (window count, w:wolf_drawer) reads \
+         {after_drawer:?}, want {TERMCLOSE_NVIM_CLOSED:?}. Two windows mean the drawer window \
+         is still open, so `:close` never ran on it; a drawer flag of 1 means Neovim's current \
+         window is still the drawer."
+    );
+
+    // --- Assertion 3: Ctrl+Shift+W closed the split terminal pane -------------
+    let after_split = read_trimmed(&nvim_split, SMOKE);
+    assert_eq!(
+        after_split, TERMCLOSE_NVIM_CLOSED,
+        "{SMOKE}: after Ctrl+Shift+W in the split terminal pane, Neovim's (window count, \
+         b:wolf_terminal_id) reads {after_split:?}, want {TERMCLOSE_NVIM_CLOSED:?}. Two windows \
+         mean the split was not closed; a nonzero id means Neovim's current window is still a \
+         terminal placeholder."
+    );
+
+    // --- Assertion 4: the pane tree holds one editor leaf ---------------------
+    let saved = load_state(&frozen_state_dir).unwrap_or_else(|| {
+        panic!(
+            "{SMOKE}: wolf_core::load_state could not parse the frozen state at {}; the scenario \
+             proved it non-empty, so suspect its shape.",
+            frozen_state_file.display()
+        )
+    });
+    let layout = saved
+        .windows
+        .first()
+        .and_then(|window| window.tabs.first())
+        .and_then(|tab| tab.layout.as_ref())
+        .unwrap_or_else(|| {
+            panic!(
+                "{SMOKE}: the frozen state.json carries no window, tab or layout, so no pane \
+                 tree was persisted. File: {}",
+                frozen_state_file.display()
+            )
+        });
+    let mut leaves: Vec<(&str, bool)> = Vec::new();
+    collect_leaves(layout, &mut leaves);
+    assert!(
+        leaves.len() == 1 && !leaves[0].1,
+        "{SMOKE}: after both closes the persisted pane tree must hold one editor leaf; it holds \
+         {leaves:?} (path, terminal). A terminal leaf means the closed split stayed in the \
+         front-end's `PaneTree` after Neovim closed its window. File: {}",
+        frozen_state_file.display()
+    );
+
+    // --- Assertion 5: the re-opened drawer runs the same shell ----------------
+    let reopened = read_ints(&pid_reopen, 1, SMOKE)[0];
+    assert_eq!(
+        reopened, drawer,
+        "{SMOKE}: the re-opened drawer's shell is pid {reopened}, not the first drawer's \
+         {drawer} (the split's was {split}). Another pid means closing the drawer ended its \
+         session and Ctrl+` started a new shell."
     );
 }
 

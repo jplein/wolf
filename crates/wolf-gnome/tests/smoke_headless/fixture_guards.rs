@@ -74,7 +74,9 @@ use super::terminal::{
     DRAWER_SPLITCHORD_NAME, DRAWER_SPLITCHORD_STAY_NAME, DRAWER_UP_NAME, DRAWER_VSPLIT_NAME,
     DRAWER_VSPLIT_WINS_NAME, NEAR_FIXTURE_FILE, NEAR_FIXTURE_LINE_COUNT, NEAR_G1_PID_NAME,
     NEAR_G2_NVIM_NAME, NEAR_G3_PID_NAME, NEAR_G4_NVIM_NAME, NEAR_G5_PID_NAME, NEAR_G5_TAB_NAME,
-    NEAR_G6_NVIM_NAME, NEAR_G7_NVIM_NAME, NEAR_G7_PID_NAME, NEAR_OCR_FILL, TERMFLOW_NVIM_NAME,
+    NEAR_G6_NVIM_NAME, NEAR_G7_NVIM_NAME, NEAR_G7_PID_NAME, NEAR_OCR_FILL,
+    TERMCLOSE_NVIM_DRAWER_NAME, TERMCLOSE_NVIM_SPLIT_NAME, TERMCLOSE_PID_DRAWER_NAME,
+    TERMCLOSE_PID_REOPEN_NAME, TERMCLOSE_PID_SPLIT_NAME, TERMFLOW_NVIM_NAME,
     TERMFLOW_PID_BACK_NAME, TERMFLOW_PID_OPENED_NAME, TERMFLOW_PID_SPLIT_NAME,
     TERMRESTART_OCR_DRAWER, TERMRESTART_OCR_PANE, TERMRESTART_PID_AFTER_NAME,
     TERMRESTART_PID_DRAWER_NAME, TERMRESTART_PID_SPLIT_NAME, TP_OCR_WORD,
@@ -1072,6 +1074,31 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
         TERMFLOW_PID_SPLIT_NAME,
         "TERMFLOW_PID_SPLIT_NAME",
         "terminal_pane_splits_and_focus_under_cage",
+    ),
+    (
+        TERMCLOSE_PID_DRAWER_NAME,
+        "TERMCLOSE_PID_DRAWER_NAME",
+        "terminal_close_chord_closes_the_drawer_and_a_split_under_cage",
+    ),
+    (
+        TERMCLOSE_NVIM_DRAWER_NAME,
+        "TERMCLOSE_NVIM_DRAWER_NAME",
+        "terminal_close_chord_closes_the_drawer_and_a_split_under_cage",
+    ),
+    (
+        TERMCLOSE_PID_SPLIT_NAME,
+        "TERMCLOSE_PID_SPLIT_NAME",
+        "terminal_close_chord_closes_the_drawer_and_a_split_under_cage",
+    ),
+    (
+        TERMCLOSE_NVIM_SPLIT_NAME,
+        "TERMCLOSE_NVIM_SPLIT_NAME",
+        "terminal_close_chord_closes_the_drawer_and_a_split_under_cage",
+    ),
+    (
+        TERMCLOSE_PID_REOPEN_NAME,
+        "TERMCLOSE_PID_REOPEN_NAME",
+        "terminal_close_chord_closes_the_drawer_and_a_split_under_cage",
     ),
     // The restart smoke's pid readback paths are typed into shells the capture shows.
     (

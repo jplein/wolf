@@ -2,14 +2,14 @@
 //! `/bin/sh` in a real pty, driven through the `WolfCore` session API, beside a real, hermetic
 //! Neovim that holds the placeholder windows.
 //!
-//! Covered: output reaching the frame's cells and keys reaching the shell, a resize reaching
-//! both the frame and the shell, an unchanged resize publishing no frame while a change of the
-//! cell size alone still signals the shell, a resize undoing a program's DECCOLM grid and
-//! reaching the pty that grid left behind, the shell's environment and cwd, id allocation, a
-//! failed spawn, the placeholder's binding in `Snapshot.win_buffers`, `pane_status` for a
-//! terminal pane, row versions, publishing through the wake without `seq`, the publish
-//! coalescing, the render hold of synchronized output, the colours taken from the editor, and
-//! typed `:terminal`, and every shorter form Neovim accepts for it down to `:te`, opening a
+//! Covered: output reaching the frame's cells and keys reaching the shell, a resize reaching both
+//! the frame and the shell, an unchanged resize publishing no frame while a change of the cell size
+//! alone still signals the shell, a resize undoing a program's DECCOLM grid and reaching the pty
+//! that grid left behind, the shell's environment and cwd, the shell starting with `SIGPIPE` at its
+//! default, id allocation, a failed spawn, the placeholder's binding in `Snapshot.win_buffers`,
+//! `pane_status` for a terminal pane, row versions, publishing through the wake without `seq`, the
+//! publish coalescing, the render hold of synchronized output, the colours taken from the editor,
+//! and typed `:terminal`, and every shorter form Neovim accepts for it down to `:te`, opening a
 //! session in the current window.
 //!
 //! ## Premises about the components
@@ -313,6 +313,31 @@ fn the_shell_gets_the_terminal_environment_and_the_tabpage_cwd() {
         "the shell must start in the tabpage's cwd, {}; cwd-mismatch means `current_dir` was not \
          set (the printed path follows it). The frame reads:\n{text}",
         cwd.display()
+    );
+
+    core.shutdown().expect("shutdown should be Ok");
+}
+
+/// The shell starts with `SIGPIPE` at its default action, although the process running core
+/// ignores it, through libtest here and through `WolfCore::start` in any host. Otherwise every
+/// `yes | head` in a terminal pane would end with `Broken pipe` rather than quietly.
+///
+/// `yes` killed by `SIGPIPE` exits with 141 (128 + 13) in both platforms' `/bin/sh`; a `yes`
+/// that inherited an ignored `SIGPIPE` gets `EPIPE` and exits 1 on both. The status is printed
+/// with a closing `=end`, so a frame torn inside the number cannot be read as a status.
+#[test]
+fn the_shell_starts_with_sigpipe_at_its_default() {
+    let (core, waiter, _cwd) = start_core();
+    let script = "(yes; echo \"yes-exit=$?=end\" >&2) | head -n 1 >/dev/null; exec sleep 1000";
+    let id = open_session(&core, TerminalTarget::Window(0), sh_script(script));
+
+    let frame = wait_for_text(&core, &waiter, id, "=end");
+    let text = frame_text(&frame);
+    assert!(
+        text.contains("yes-exit=141=end"),
+        "`yes` writing into a closed pipe must be killed by SIGPIPE, status 141; `yes-exit=1` \
+         means the shell inherited an ignored SIGPIPE, so `yes` exited on EPIPE, and any other \
+         status means the script did not run as written. The frame reads:\n{text}"
     );
 
     core.shutdown().expect("shutdown should be Ok");

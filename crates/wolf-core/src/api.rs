@@ -284,7 +284,16 @@ impl WolfCore {
     /// Starts the core: builds a multi-thread tokio runtime, spawns the captive
     /// Neovim, wires `wake` into the redraw handler, and attaches as an
     /// `ext_linegrid` + `ext_multigrid` UI at the configured size.
+    ///
+    /// `start` ignores `SIGPIPE` for the whole process, as Rust's runtime does before `main`.
+    /// Without that, a host that keeps the default, such as the Swift app, is killed by the first
+    /// write to a dead Neovim's stdin, before the supervisor can mark it [`Liveness::Dead`].
+    /// Children spawned through `std::process::Command` start with the default again.
+    /// See notes/wolf-core-decisions.md#liveness-and-restart
     pub fn start(cfg: CoreConfig, wake: WakeFn) -> Result<Self, CoreError> {
+        // SAFETY: setting a disposition to `SIG_IGN` installs no handler.
+        unsafe { libc::signal(libc::SIGPIPE, libc::SIG_IGN) };
+
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()

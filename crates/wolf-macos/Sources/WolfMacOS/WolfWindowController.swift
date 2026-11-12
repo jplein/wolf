@@ -596,11 +596,10 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
     refocusEditor()
   }
 
-  /// Closes this window's current split, i.e. the pane (`:close`). On the last
-  /// split `:close` errors harmlessly (E444); the menu item is additionally
-  /// disabled there via `AppDelegate.validateMenuItem`.
+  /// Closes this window's active pane, a split or the drawer, through
+  /// `PaneContainerView.closeActivePane()`, which refuses what `canClosePane` refuses.
   func closePane() {
-    handle?.close_pane()
+    paneContainer?.closeActivePane()
   }
 
   /// Opens a new empty buffer in this window's current Neovim window (`:enew`).
@@ -775,10 +774,9 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
     window === candidate
   }
 
-  /// This window's live pane count (`PaneTree` leaf count); 1 for an unsplit
-  /// window. Read by the coordinator's menu validation to disable the Close
-  /// command on the last split.
-  var paneCount: Int { paneContainer?.paneCount ?? 1 }
+  /// Whether Close Pane may close this window's active pane
+  /// (`PaneContainerView.canClosePane`). Read by the coordinator's menu validation.
+  var canClosePane: Bool { paneContainer?.canClosePane ?? false }
 
   /// The tab this view contributes to a state commit (`AppDelegate.snapshotNow`):
   /// its live state when `SessionSeam` can read all of it, otherwise the tab it last
