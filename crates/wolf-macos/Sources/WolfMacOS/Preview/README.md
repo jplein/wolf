@@ -17,6 +17,8 @@ Purpose: The `WKScriptMessageHandler` that turns a preview web view's capture-ph
 - It exists because a `WKWebView` swallows AppKit mouse events, so the container's `mouseDown` never fires over a preview pane. The injected script message is the only signal that a preview pane was clicked.
 - `container` is weak: the web view's `WKUserContentController` retains this handler strongly, so a strong back-reference would be a cycle.
 
+**Gotchas** — the click also leaves the web view first responder, so keys reach WebKit before the container, and a key equivalent reaches the menu only if the container passes WebKit's `noop:` on ([why](../../../../../notes/wolf-macos-decisions.md#key-equivalents-over-a-preview)).
+
 #### `PreviewNavigationDelegate.swift`
 
 Purpose: The `WKNavigationDelegate` that routes a preview web view's clicked links through `PreviewLinkSeam` back into the owning `PaneContainerView`.

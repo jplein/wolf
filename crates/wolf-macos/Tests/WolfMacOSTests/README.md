@@ -1,6 +1,6 @@
 # wolf-macos/Tests/WolfMacOSTests
 
-XCTest coverage of what [`WolfMacOS`](../../Sources/WolfMacOS/README.md) views draw. A test builds a production view in a window that is never shown, renders it offscreen and samples its pixels:
+XCTest coverage of what [`WolfMacOS`](../../Sources/WolfMacOS/README.md) views draw. A test builds a production view in a window that is never shown, renders it offscreen and samples its pixels. [`PreviewKeyEquivalentTests.swift`](#previewkeyequivalenttestsswift) instead calls AppKit's responder and menu dispatch directly:
 
 ```sh
 bazel test //crates/wolf-macos:WolfMacOSTests
@@ -10,7 +10,9 @@ bazel test //crates/wolf-macos:WolfMacOSTests
 
 ## What renders under `bazel test`
 
-The macOS worker has no GUI session and no screen, so XCUITest, which needs a UI-test runner app and a display session, is unavailable. AppKit still works offscreen: a window that is never ordered front lays out its views, and `cacheDisplay(in:to:)` renders their glyphs with no window server. Event delivery, menus and real focus are not reachable this way, and key-window behaviour only as `isKeyWindow`, which [`OffscreenWindow.reportsKey`](#offscreenrendererswift) sets.
+The macOS worker has no GUI session and no screen, so XCUITest, which needs a UI-test runner app and a display session, is unavailable. AppKit still works offscreen: a window that is never ordered front lays out its views, and `cacheDisplay(in:to:)` renders their glyphs with no window server. A test can set the window's first responder and call a responder's or the main menu's `performKeyEquivalent(with:)` itself, but AppKit routes no event there, real focus is not reachable, and key-window behaviour only as `isKeyWindow`, which [`OffscreenWindow.reportsKey`](#offscreenrendererswift) sets.
+
+**No page loads in a `WKWebView`.** One can be hosted and its responder methods called, but inside the worker's Seatbelt profile WebKit cannot issue the sandbox extensions its WebContent process needs, so no page loads and no script runs. A test must not wait on a page; [`PreviewViewFixture.swift`](#previewviewfixtureswift) never does.
 
 **Do not drop the target's `CFProcessPath` env.** rules_swift places the test binary at `WolfMacOSTests.xctest/Contents/MacOS/`, where AppKit treats it as a bundled app and aborts, with no message, when it cannot check in with LaunchServices, which Seatbelt denies. A flat process path needs no check-in.
 
@@ -60,7 +62,7 @@ Purpose: Starts a real core over the staged Neovim for the view tests that need 
 
 #### `TerminalViewFixture.swift`
 
-Purpose: A `PaneContainerView` over a [`LiveCore`](#livecoreswift), hosted offscreen at a fixed `windowSize` with its first pane bound, for the drawer and terminal-pane flow tests. It asserts nothing.
+Purpose: A `PaneContainerView` over a [`LiveCore`](#livecoreswift), hosted offscreen at a fixed `windowSize` with its first pane bound, for the drawer and terminal-pane flow tests and [`PreviewViewFixture`](#previewviewfixtureswift). It asserts nothing.
 
 **Public API**
 
@@ -72,6 +74,14 @@ Purpose: A `PaneContainerView` over a [`LiveCore`](#livecoreswift), hosted offsc
 - `hostContainer(tabpage:)` — a second container over another tabpage, in its own offscreen window. Wake it only while its tabpage is current, as the app wakes only its current view.
 
 **Decisions** — the mark is a highlight group of its own, not `Normal`, because core pushes Neovim's default colours into every session, so a `Normal` mark would also match a terminal view.
+
+#### `PreviewViewFixture.swift`
+
+Purpose: A [`TerminalViewFixture`](#terminalviewfixtureswift) whose container shows a short Markdown file's preview as the active pane of a two-pane split, beside its source, in a real `WKWebView`. It fails the calling test on a `premise:` and asserts nothing else.
+
+**Public API** — `PreviewViewFixture()`, `nil` once a premise has failed; `web`, `previewWin`, `probePath`; `container`, `handle` and `window` from the base fixture; `shutdown()`.
+
+**Gotchas** — the page never loads, for the reason [What renders under `bazel test`](#what-renders-under-bazel-test) gives, so a test may use the web view's responder chain but nothing the page would draw or answer.
 
 #### `OffscreenRendererTests.swift`
 
@@ -85,7 +95,7 @@ Purpose: A `PaneContainerView` over a [`LiveCore`](#livecoreswift), hosted offsc
 
 **Gotchas**
 
-- The menu, `validateMenuItem` and `WolfWindowController`'s forwards reach no test here, for the reason [What renders under `bazel test`](#what-renders-under-bazel-test) gives.
+- `validateMenuItem` and `WolfWindowController`'s forwards reach no test here: AppKit routes no event offscreen, and [`PreviewKeyEquivalentTests.swift`](#previewkeyequivalenttestsswift) retargets the menu's items.
 - The lag test sends `focus_win` with no wake before the close, which recreates a focus move in flight.
 
 #### `TerminalCursorFocusTests.swift`
@@ -97,6 +107,16 @@ Purpose: A `PaneContainerView` over a [`LiveCore`](#livecoreswift), hosted offsc
 - Focus needs a key window, which each test sets through `OffscreenWindow.reportsKey`; `syncTerminalFocus` sees it on the next render wake, or when a test calls it directly.
 - A hollow cursor is told from a block by its interior, which keeps the default background, and from no cursor by its top band in the cursor colour. Every checked cursor sits in row 0, so that 1-point band covers whole pixels.
 - `render()` redraws the whole view whatever was invalidated, so a pixel check cannot show the invalidation. `testAFocusChangeAloneMarksTheViewForDisplay` checks it instead, through the backing layer's `needsDisplay()`, with no wake. It reads the layer's flag because a layer-backed view's own `needsDisplay` stays true in a window never ordered front.
+
+#### `PreviewKeyEquivalentTests.swift`
+
+**Covers** — with a preview's web view first responder, as a click leaves it: `noop:` sent to the web view reaching a sink hung at the end of its responder chain, and ⌘W and ⌘P firing Close and Command Palette… from the production `AppMenu`. Both are red when `PaneContainerView.doCommand(by:)` swallows the command ([why](../../../../notes/wolf-macos-decisions.md#key-equivalents-over-a-preview)).
+
+**Gotchas**
+
+- WebKit's web-process step is modelled, since no page loads: the page leaves the chord unhandled and its binding is `noop:`. If the sink receives `noop:`, the test resends the event to `NSApp.mainMenu`, as WebKit's resend through `NSApp.sendEvent` would.
+- Every item with a key equivalent is retargeted to a recorder that enables everything, so `validateMenuItem` and `AppDelegate`'s actions reach no test. A `control:` leg first fires each chord with the container first responder, so a later miss is the chain's.
+- Each delivery prints a `KEYROUTE` line: responder, chord, whether the window claimed it, whether the chain passed `noop:`, and the item fired. Whether the window claims it is printed, not asserted, because without a web process the value is WebKit's.
 
 #### `TerminalDrawerTests.swift`
 

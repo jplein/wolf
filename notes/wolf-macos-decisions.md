@@ -33,7 +33,7 @@ Swift here is split in two, and the split is the single most important structura
 
 [`Sources/WolfKeyMap/`](../crates/wolf-macos/Sources/WolfKeyMap/README.md) is Foundation plus the generated FFI glue, with no AppKit. Every decision that can be expressed as a function of values lives there, so it can be unit-tested with no window server. [`Sources/WolfMacOS/`](../crates/wolf-macos/Sources/WolfMacOS/README.md) is the AppKit application, and holds only what genuinely needs a window. The process entry point sits apart, in the one-file [`Sources/WolfMain/`](../crates/wolf-macos/Sources/WolfMain/README.md).
 
-The consequence is the crate's testing posture. There is no window server under `bazel test`, but a view in a never-shown window still renders through `cacheDisplay`, so [`Tests/WolfMacOSTests/`](../crates/wolf-macos/Tests/WolfMacOSTests/README.md) checks what a `WolfMacOS` view draws. **Key-window behaviour beyond reading `isKeyWindow`, event delivery such as `keyDown:`, menus and real focus are compile-verified and manual-smoke only**, and XCUITest is unavailable.
+The consequence is the crate's testing posture. There is no window server under `bazel test`, but a view in a never-shown window still renders through `cacheDisplay`, so [`Tests/WolfMacOSTests/`](../crates/wolf-macos/Tests/WolfMacOSTests/README.md) checks what a `WolfMacOS` view draws. It also calls a responder-chain step and the main menu's key-equivalent matching directly, over a real `WKWebView` whose page never loads ([why](../crates/wolf-macos/Tests/WolfMacOSTests/README.md#what-renders-under-bazel-test)). **Key-window routing, event delivery such as `keyDown:`, menu validation and dispatch, WebKit's web-process step and real clicks are compile-verified and manual-smoke only**, and XCUITest is unavailable.
 
 Coverage comes from the pure seams via [`Tests/WolfKeyMapTests/`](../crates/wolf-macos/Tests/WolfKeyMapTests/README.md), the bridge surface via the real-nvim tests in `//crates/wolf-ffi`, and the core logic via `//crates/wolf-core`. When you add behavior here, put the decision in `WolfKeyMap` and test it there; leaving it in a view class means only what it draws can be tested.
 
@@ -100,6 +100,12 @@ Edit > Copy reads the pushed selection cache for the same reason the pre-reload 
 Navigations are counted, not flagged. Two can straddle one page load, because the reload coalescer does not wait for `didFinish`, and WebKit reports the superseded one as a failure — so a failure callback is a routine part of the typing path, not an error path. A count lets a superseded callback decline to commit anything; a flag would let one clear the gate out from under a still-navigating load, which flickers the pane.
 
 Recovery is one step and self-limiting. A failed in-place update clears that window's live-document descriptor and re-arms the reload gate, so the next pass takes the full path: at most one extra load, no loop, and normal service resumes as soon as one commits.
+
+## Key equivalents over a preview
+
+A click in a preview leaves its `WKWebView` the window's first responder, and while it is, WebKit claims every key equivalent and sends it to the page. When the page leaves the key unhandled, WebKit sends the binding's command up the web view's responder chain with its own sink, `WKResponderChainSink`, at the end. An unbound ⌘ or ⌃ chord's command is `noop:`. Only when the sink receives the command does WebKit resend the event through `NSApp.sendEvent`, where the main menu sees a ⌘ chord and `PaneContainerView.keyDown` passes an unbound ⌃ chord to Neovim.
+
+So `PaneContainerView`, the web view's next responder, and any responder placed between the web view and the window must pass every command it does not handle on to `super`. One that returns without passing it on drops every shortcut over a clicked preview, Close and Command Palette… among them, while a preview made active with `<C-w>l` keeps them, because the container stays first responder. Commands WebCore executes itself, such as Copy, Select All and scrolling by arrow keys and space, never go up the chain, so the preview keeps them either way.
 
 ## Terminal panes
 

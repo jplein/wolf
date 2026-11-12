@@ -208,7 +208,7 @@ Pointer smokes, driven through [Pointer injection](#pointer-injection) and read 
 
 #### `smoke_headless/preview.rs`
 
-Markdown preview smokes: opening a preview and returning to the source, a link click, an unsaved buffer, the configured appearance, and a view created after launch. Its guard keeps the smokes' burst delay below the coalescer's trailing delay.
+Markdown preview smokes: opening a preview and returning to the source, a link click, an unsaved buffer, the configured appearance, a view created after launch, and Ctrl+Shift+P and Ctrl+Shift+W still firing after a click in the preview. Its guard keeps the smokes' burst delay below the coalescer's trailing delay.
 
 #### `smoke_headless/preview_render.rs`
 

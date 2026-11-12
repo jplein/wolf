@@ -12,7 +12,7 @@ The macOS front-end: a native AppKit application (Swift) that renders the embedd
 | [`Sources/WolfMacOS/`](Sources/WolfMacOS/README.md)         | The AppKit application: windows, views, menus, and the coordinator.                                        |
 | [`Sources/WolfMain/`](Sources/WolfMain/README.md)           | The process entry point, a module of its own so a test can link `WolfMacOS`.                               |
 | [`Tests/WolfKeyMapTests/`](Tests/WolfKeyMapTests/README.md) | XCTest coverage of the pure seam.                                                                          |
-| [`Tests/WolfMacOSTests/`](Tests/WolfMacOSTests/README.md)   | XCTest coverage of what `WolfMacOS` views draw, rendered offscreen.                                        |
+| [`Tests/WolfMacOSTests/`](Tests/WolfMacOSTests/README.md)   | XCTest coverage of what `WolfMacOS` views draw, rendered offscreen, and of key equivalents over a preview. |
 
 ## Entry point
 
@@ -44,7 +44,7 @@ bazel test //crates/wolf-macos:bundle_layout_test  # asserts the .app resource l
 
 Both Swift test targets list their sources explicitly rather than globbing, so a new Swift file that is not added to `srcs` never compiles into the test binary and never runs. There is no `cargo`-style fallback here.
 
-`WolfMacOSTests` checks pixels, not events: key-window behaviour, event handling, menus and focus have no automated coverage. See the testing posture in [wolf-macos-decisions.md](../../notes/wolf-macos-decisions.md) for what covers them instead.
+`WolfMacOSTests` checks pixels, and calls responder and menu dispatch directly only for key equivalents over a preview: key-window routing, event handling, menu validation and real focus have no automated coverage. See the testing posture in [wolf-macos-decisions.md](../../notes/wolf-macos-decisions.md) for what covers them instead.
 
 ## Formatting
 
