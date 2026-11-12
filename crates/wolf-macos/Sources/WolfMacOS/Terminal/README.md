@@ -28,10 +28,11 @@ Purpose: A subview of `PaneContainerView` over one terminal pane's content area,
 - `update(_:scale:)` — stores a frame and invalidates only the rows [`TerminalDamage`](../../WolfKeyMap/Terminal/README.md#terminaldamageswift) picks, so an unchanged frame invalidates nothing.
 - `applyMetrics(_:)` — repaints every row.
 - `markedText` — the input method's uncommitted text, painted underlined at the cursor in its place. `cursorRect` is the cursor cell, for the candidate window.
+- `focused` — set by the container: the cursor takes the frame's style only while it holds, else hollow. A change repaints the cursor's row itself.
 
 **Decisions**
 
-- It is a subview rather than painted by the container because every wake dirties the whole container, and a terminal publish shares the wake without bumping `Snapshot.seq`, so the container cannot tell a terminal-only wake apart. The subview keeps its unchanged rows and repaints only damaged ones.
+- It is a subview rather than painted by the container because every wake dirties the whole container, and a terminal publish shares the wake without bumping `Snapshot.seq`, so the container cannot tell a terminal-only wake apart. The subview repaints only damaged rows.
 - `hitTest(_:)` returns `nil`, so every event reaches the container, which routes it to the session.
 - It sets `clipsToBounds = true`. The macOS 14 and later SDK default is `false`, and `draw(_:)` fills its dirty rect, which can then reach past the bounds and cover every Neovim pane the container has painted.
 - A row fills every cell's background before any glyph, so a spacer's background cannot overpaint the right half of a wide glyph.

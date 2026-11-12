@@ -403,7 +403,7 @@ Of `CloseBurst`, it covers that a tab group closed in one turn keeps the tree re
 
 #### `TerminalCellStyleTests.swift`
 
-**Covers** — `TerminalCellStyle.resolve`: set and unset colours, inverse, selection and both together, invisible text and spacer cells, faint alpha, each face, each underline kind, decorations in the resolved foreground, and blink ignored. Also `cursorColors` with the cursor colour set and unset, and `cursorSpan`.
+**Covers** — `TerminalCellStyle.resolve`: set and unset colours, inverse, selection and both together, invisible text and spacer cells, faint alpha, each face, each underline kind, decorations in the resolved foreground, and blink ignored. Also `cursorColors` with the cursor colour set and unset, `cursorSpan`, and `cursorShape` focused and unfocused for each shape and an unknown value.
 
 **Gotchas** — the `Flag`, `Underline`, `Width` and `TerminalCursorShape` values are asserted against literals copied from the `terminal_*` modules in `crates/wolf-ffi/src/lib.rs`, which is the source of truth; a new value has to be added in both places.
 

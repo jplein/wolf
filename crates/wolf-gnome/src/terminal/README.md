@@ -13,7 +13,7 @@ Purpose: `TerminalCanvas`, one terminal pane's backing surface: its session's pa
 **Public API**
 
 - `update(target, frame, metrics, scale) -> Vec<u16>` — repaints the rows the surface lacks and returns them ascending: every row after a paint-key change, none for a frame already painted. The glyphs take `target`'s font options, and `scale` is its device scale.
-- `paint(cr, rect, frame, metrics)` — the default background over `rect`, the surface at `rect`'s origin rounded to whole pixels, then the cursor, all clipped to `rect`.
+- `paint(cr, rect, frame, metrics, focused)` — the default background over `rect`, the surface at `rect`'s origin rounded to whole pixels, then the cursor, in the frame's style only while `focused`, all clipped to `rect`.
 
 **Decisions**
 
@@ -71,13 +71,14 @@ Purpose: where a terminal pane's committed text, focus changes and pointer event
 
 #### `style.rs`
 
-Purpose: how one cell paints: its colours after inverse, selection and faint, whether it draws a glyph, and the style the glyph painter takes; also the cursor's colours and span. Pure; the port of [`TerminalCellStyle`](../../../wolf-macos/Sources/WolfKeyMap/Terminal/README.md#terminalcellstyleswift).
+Purpose: how one cell paints: its colours after inverse, selection and faint, whether it draws a glyph, and the style the glyph painter takes; also the cursor's colours, span and style. Pure; the port of [`TerminalCellStyle`](../../../wolf-macos/Sources/WolfKeyMap/Terminal/README.md#terminalcellstyleswift).
 
 **Public API**
 
 - `resolve(cell, selected, default_fg, default_bg) -> CellPaint`.
 - `is_selected(frame, col, row)` — the selection's ends are inclusive.
 - `cursor_colors(frame)` — `(fill, glyph)`; `cursor_span(width)` — two cells over a wide lead.
+- `cursor_style(style, focused)` — `style` while `focused`, else `BlockHollow`.
 
 **Decisions**
 

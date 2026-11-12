@@ -10,7 +10,7 @@ bazel test //crates/wolf-macos:WolfMacOSTests
 
 ## What renders under `bazel test`
 
-The macOS worker has no GUI session and no screen, so XCUITest, which needs a UI-test runner app and a display session, is unavailable. AppKit still works offscreen: a window that is never ordered front lays out its views, and `cacheDisplay(in:to:)` renders their glyphs with no window server. Event delivery, key-window behaviour, menus and real focus are not reachable this way.
+The macOS worker has no GUI session and no screen, so XCUITest, which needs a UI-test runner app and a display session, is unavailable. AppKit still works offscreen: a window that is never ordered front lays out its views, and `cacheDisplay(in:to:)` renders their glyphs with no window server. Event delivery, menus and real focus are not reachable this way, and key-window behaviour only as `isKeyWindow`, which [`OffscreenWindow.reportsKey`](#offscreenrendererswift) sets.
 
 **Do not drop the target's `CFProcessPath` env.** rules_swift places the test binary at `WolfMacOSTests.xctest/Contents/MacOS/`, where AppKit treats it as a bundled app and aborts, with no message, when it cannot check in with LaunchServices, which Seatbelt denies. A flat process path needs no check-in.
 
@@ -22,20 +22,20 @@ Captures are taken in Aqua at the host's backing scale, and the accent resolves 
 
 #### `OffscreenRenderer.swift`
 
-Purpose: The reusable mechanism for view tests: host a view, render it, sample what it drew. It holds no assertions.
+Purpose: Hosts a view for view tests, renders it and samples what it drew, asserting nothing.
 
 **Public API**
 
-- `OffscreenRenderer(hosting:size:)`, its `window`, and `render() -> RenderedView`.
+- `OffscreenRenderer(hosting:size:)`, its `window`, an `OffscreenWindow` whose `reportsKey` sets `isKeyWindow`, and `render() -> RenderedView`.
 - `RenderedView.color(at:in:)`, `colors(in:of:)` and `ink(in:of:minAlpha:)`. Each takes a point or rect in the coordinates of any view under the root and reads un-premultiplied sRGB. `ink` is the mean colour and count of the pixels at least `minAlpha` opaque, which over a clear background is the colour of the text drawn there.
 - `colorDistance(_:_:)`, the sRGB distance ignoring alpha; pass resolved colours.
 - `NSTableView.setRowsEmphasized(_:)`.
 
 **Decisions**
 
-- `render()` runs `displayIfNeeded()` before every capture. Without it the capture shows stale layer contents and a change made since the last capture never reaches the bitmap, even with `needsDisplay` set.
+- `render()` runs `displayIfNeeded()` before every capture. Without it a change made since the last capture never reaches the bitmap, even with `needsDisplay` set.
 - The window is pinned to Aqua, so captures do not follow the host's dark mode.
-- The window is never key, so a table never emphasizes its selection by itself; `setRowsEmphasized(_:)` sets `isEmphasized` on the row views, as first responder would.
+- AppKit never makes the window key, so a table never emphasizes its selection by itself; `setRowsEmphasized(_:)` sets `isEmphasized` on the row views, as first responder would. `reportsKey` sends no key notification.
 - `NSApplication.shared` is touched before the window is built, since it sets up AppKit's drawing.
 - The pixel scale is read from the bitmap, never assumed, because a Retina host captures at 2.
 - A pixel is `colorAt`'s components re-tagged in the bitmap's own sRGB `colorSpace`, then converted to sRGB. `colorAt` tags them by the bitmap's `colorSpaceName`, which is calibrated (Generic) RGB for this capture, and converting that shifts saturated and dark colours by up to about 0.2.
@@ -88,6 +88,16 @@ Purpose: A `PaneContainerView` over a [`LiveCore`](#livecoreswift), hosted offsc
 - The menu, `validateMenuItem` and `WolfWindowController`'s forwards reach no test here, for the reason [What renders under `bazel test`](#what-renders-under-bazel-test) gives.
 - The lag test sends `focus_win` with no wake before the close, which recreates a focus move in flight.
 
+#### `TerminalCursorFocusTests.swift`
+
+**Covers** — a terminal pane's cursor painting the frame's block while its pane is the key window's active pane, and a hollow block while `<C-w>h` focuses the editor beside it, while the window is not key, and in the drawer once `<C-w>k` leaves it; and the block again once focus returns.
+
+**Gotchas**
+
+- Focus needs a key window, which each test sets through `OffscreenWindow.reportsKey`; `syncTerminalFocus` sees it on the next render wake.
+- A hollow cursor is told from a block by its interior, which keeps the default background, and from no cursor by its top band in the cursor colour. Every checked cursor sits in row 0, so that 1-point band covers whole pixels.
+- `render()` redraws the whole view, so whether a focus change alone repaints the cursor's row reaches no test here; it is manual-smoke.
+
 #### `TerminalDrawerTests.swift`
 
 **Covers** — `toggle_terminal()` showing a terminal view in the drawer strip on the drawer window's session, painting a truecolour background the shell prints, hiding with the session kept, and showing the same session again on the next toggle.
@@ -128,7 +138,7 @@ Purpose: Renders a `PaneContainerView` whose current window shows a real `/bin/s
 - Its `TerminalPaneFixture` is internal rather than private because `TerminalLighthouseColourTests.swift` reuses it, over its own `init.lua`.
 - Background checks sample cell interiors, inset 1 point so no pixel straddles a neighbour. Glyph checks count blue pixels within 0.4, since antialiasing blends a glyph's edges.
 - The selected cells have an unset foreground, so swapped they fill with the default foreground, not blue.
-- The cursor test sets a steady block, which fills the whole cell.
+- The fixture's window reports key, so its pane is the focused pane and paints the frame's cursor style. The cursor test sets a steady block, which fills the whole cell.
 
 #### `TerminalLighthouseColourTests.swift`
 

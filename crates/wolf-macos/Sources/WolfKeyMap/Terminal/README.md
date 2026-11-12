@@ -14,6 +14,7 @@ Purpose: Resolves one terminal cell's packed style, from [`FfiTerminalCell`](../
 
 - `resolve(fg:bg:flags:underline:width:selected:defaultFg:defaultBg:) -> TerminalCellPaint` — colours packed `0x00RRGGBB`.
 - `cursorColors(cursorColor:defaultFg:defaultBg:)`, `cursorSpan(width:)`, `TerminalCursorShape`.
+- `cursorShape(style:focused:)` — the frame's style, an unknown one as a block, while `focused`; else `.hollow`.
 - `Flag`, `Underline`, `Width` — the `terminal_flag`, `terminal_underline` and `terminal_cell_width` values.
 
 **Decisions**
