@@ -3052,8 +3052,11 @@ final class PaneContainerView: NSView {
 
 // MARK: - NSTextInputClient
 
-/// Input-method text for terminal panes only: `terminalKeyDown` alone calls
-/// `interpretKeyEvents`, so a Neovim pane never reaches these methods.
+/// Input-method text for terminal panes: `terminalKeyDown` alone calls `interpretKeyEvents`,
+/// so a Neovim pane never reaches these methods.
+///
+/// `doCommand(by:)` is also reached as the next responder of a preview's `WKWebView`, and
+/// passes those commands on. See notes/wolf-macos-decisions.md#key-equivalents-over-a-preview
 extension PaneContainerView: NSTextInputClient {
   func insertText(_ string: Any, replacementRange: NSRange) {
     let text = (string as? NSAttributedString)?.string ?? (string as? String) ?? ""
