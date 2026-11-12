@@ -8,7 +8,11 @@ New findings are rare. Every task runs `./gates.sh` on a macOS and a Linux worke
 
 ## Ledger
 
-No finding is open.
+### 2026-11-12: closing the last editor pane beside the drawer
+
+Found by reading. With one editor pane and the drawer open, `<C-w>c` and `:close` in the editor on both platforms, and GNOME's Ctrl+Shift+W, close the editor window: `wolf_do_close` and Neovim's `:close` both count the drawer's window, so neither sees the editor as the tabpage's last. That leaves the drawer as the tabpage's only window, which both front-ends hold outside their pane trees. macOS's Close Pane refuses it.
+
+The owners are [`runtime/nvim/README.md`](../runtime/nvim/README.md) for `wolf_do_close` and [Terminal panes](../specs/terminal-panes.md) for the last-window rule. A decision on whether that rule counts the drawer closes it.
 
 ## Adding and closing a finding
 

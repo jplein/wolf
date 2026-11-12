@@ -55,6 +55,10 @@ Core keeps a lock-free `Arc<AtomicU8>` liveness cell (`Alive` / `NotResponding` 
 
 A supervisor task owns the io-loop join handle and marks the process `Dead` on stdout EOF, whether clean or a crash — unless the per-process `shutting_down` flag is set, so an intentional shutdown does not report a spurious crash.
 
+`WolfCore::start` ignores `SIGPIPE` for the whole process. nvim-rs writes each call straight to Neovim's stdin, so the first write after Neovim dies meets a closed pipe: a pump batch, a blocking query, or a resize still queued at shutdown. Rust's runtime ignores `SIGPIPE` before `main`, so a Rust host gets `EPIPE` and the supervisor's `Dead`, but a Swift host keeps the default action, under which the same write kills Wolf.app or the XCTest runner.
+
+Core sets the disposition rather than each host, because core is what writes the pipe, and the app and the test host would each need the call. `std::process::Command` restores the default in every child it spawns, so Neovim, `rg` and the terminal sessions' shells keep the usual `SIGPIPE`.
+
 Stall detection has two sites, `block_on_rpc` and the input pump, and both judge one call at a time. A call that outlasts the RPC budget escalates `Alive → NotResponding` and an answer clears it, both by `compare_exchange`, so neither can downgrade `Dead`. The pump keeps awaiting a stalled call rather than dropping it ([why](../crates/wolf-core/src/README.md#pumprs)). It marks and clears only while its batch's handle is still current, so a call sent to a replaced Neovim cannot report on the fresh one.
 
 The pump's budget re-arms each time it elapses, and when a Neovim prompt is showing then, the pump clears rather than marks, because the user is late, not Neovim, and the overlay would cover the prompt. A probe that Neovim answers while the call waits clears it too.

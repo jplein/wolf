@@ -79,6 +79,15 @@ Purpose: A `PaneContainerView` over a [`LiveCore`](#livecoreswift), hosted offsc
 
 **Gotchas** — compare in sRGB, through `colorDistance` or after `usingColorSpace(.sRGB)`. A raw component read of `colorAt`'s calibrated-tagged sample shows the stored bytes, so it would hide the misread this test exists to catch.
 
+#### `TerminalClosePaneTests.swift`
+
+**Covers** — Close Pane through `PaneContainerView.canClosePane` and `closeActivePane()`: a focused terminal split closing and leaving the tree with its session hung up; the focused drawer closing with its session kept, which the next toggle shows again; the gate refusing a lone terminal pane and the last editor pane beside the drawer; and the close acting on the view's active pane while Neovim's current window lags it.
+
+**Gotchas**
+
+- The menu, `validateMenuItem` and `WolfWindowController`'s forwards reach no test here, for the reason [What renders under `bazel test`](#what-renders-under-bazel-test) gives.
+- The lag test sends `focus_win` with no wake before the close, which recreates a focus move in flight.
+
 #### `TerminalDrawerTests.swift`
 
 **Covers** — `toggle_terminal()` showing a terminal view in the drawer strip on the drawer window's session, painting a truecolour background the shell prints, hiding with the session kept, and showing the same session again on the next toggle.

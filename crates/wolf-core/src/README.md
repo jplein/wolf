@@ -20,11 +20,12 @@ Crate root. Declares every module and flattens the public surface into root re-e
 - `SnapshotReadGuard` owns an `Arc` clone of the lock, so it outlives `&self`. Hold it for one paint only.
 - The blocking queries (`list_buffers` and siblings) return an empty or zero fallback on any RPC error or timeout, indistinguishable from an empty answer. The rest is fire-and-forget on the ordered input channel.
 - `restart_nvim` returns `Ok(false)` when no respawn happened (already `Alive` or in flight) and reopens nothing: capture `open_files_for_tabpage` first. After `Ok(true)` the snapshot, intents and history start over ([what carries](../../../notes/wolf-core-decisions.md#liveness-and-restart)). Typing sent before the swap never reaches the fresh nvim, so no half-typed Ex command lands as keys; state input still applies.
+- `start` ignores `SIGPIPE` process-wide ([why](../../../notes/wolf-core-decisions.md#liveness-and-restart)).
 - `recent_dirs` omits non-directories (a stat each, on the calling thread) and never prunes the store, so a returning folder reappears.
 
 **Decisions**
 
-- `block_on_rpc` detects stalls under `WOLF_RPC_TIMEOUT_MS` and detaches a timed-out call rather than dropping it: dropping an `nvim-rs` response receiver mid-flight kills the io loop, which reads as a crash. The input pump's stall is in [`pump.rs`](#pumprs).
+- `block_on_rpc` detects stalls under `WOLF_RPC_TIMEOUT_MS` and detaches a timed-out call rather than dropping it: dropping an `nvim-rs` response receiver mid-flight kills the io loop, which reads as a crash.
 - `WolfCore` is `!Send` and keeps the process in a `RefCell`, so a restart can swap one in through `&self`. Never hold a borrow across an `.await`.
 - Stale typing is cut by the generation `send_input` stamps, not liveness: input sent while `Alive` can still be queued at the swap.
 

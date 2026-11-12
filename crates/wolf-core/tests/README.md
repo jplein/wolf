@@ -583,6 +583,14 @@ Spawns a real Neovim (staged nvim runfiles, wired `WOLF_NVIM_BIN`, `no-sandbox`)
 
 **Gotchas** — The wedge is a finite `vim.uv.sleep` fed through the input pump, so there is an inherent race between nvim actually sleeping and the timed call. If a case proves flaky, widen `WEDGE_SLEEP_MS` or `PROMPT_BOUND`; tightening them re-introduces the exact race the file exists to pin.
 
+#### `sigpipe.rs`
+
+Real Neovim, in a binary of its own because it sets the process-wide `SIGPIPE` disposition back to the default, as [`search_no_rg.rs`](#search_no_rgrs) owns its environment.
+
+**Covers** — a host with `SIGPIPE` at its default, as the Swift app keeps it, surviving input sent after Neovim crashed, still reporting `Dead`, and restarting Neovim.
+
+**Gotchas** — its red is the binary killed by signal 13, with no assertion message: no assertion can report the death.
+
 #### `spawn.rs`
 
 Spawns a real Neovim (staged runfiles, wired `WOLF_NVIM_BIN`, `no-sandbox`). The suite's smoke test — if this fails, nothing else in the real-nvim set is meaningful.
@@ -714,7 +722,7 @@ Real Neovim and real `/bin/sh` sessions in ptys (`//crates/wolf-core:terminal_se
 
 **Covers**
 
-- Output reaching the frame's cells and keys reaching the shell; a resize reaching both the frame and `stty size`; a resize to the size and cell size a session already has publishing no frame, while a change of the cell size alone still reaches the shell as `SIGWINCH`; a resize undoing the 132-column grid a program set with `ESC[?40h ESC[?3h` and reaching the pty that grid left behind; the shell's `TERM`, `COLORTERM`, `TERM_PROGRAM` and tabpage cwd.
+- Output reaching the frame's cells and keys reaching the shell; a resize reaching both the frame and `stty size`; a resize to the size and cell size a session already has publishing no frame, while a change of the cell size alone still reaches the shell as `SIGWINCH`; a resize undoing the 132-column grid a program set with `ESC[?40h ESC[?3h` and reaching the pty that grid left behind; the shell's `TERM`, `COLORTERM`, `TERM_PROGRAM` and tabpage cwd, and its `SIGPIPE` at the default although core's process ignores it.
 - Ids counting up and never reused, a missing program opening nothing, the placeholder's `win_buffers` binding and buffer options, and `pane_status` reporting the shell name.
 - Typed `:terminal` and every shorter form down to `:te` each opening a session in the current window, never Neovim's own terminal.
 - Row versions following the rows that change, a publish waking without bumping `seq`, publishes at least `TERMINAL_PUBLISH_INTERVAL` apart, a render hold deferring the publish until released or until `TERMINAL_RENDER_HOLD_MAX`, and the default, `ANSI` and cursor colours following the editor.

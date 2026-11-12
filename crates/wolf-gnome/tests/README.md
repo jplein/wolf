@@ -232,7 +232,7 @@ Sidebar and search smokes: the file tree, the project-search panel and its chord
 
 #### `smoke_headless/terminal.rs`
 
-Terminal smokes: the terminal drawer, terminals across a Neovim restart, terminal panes beside Neovim panes, and typed keys reaching a pane's shell.
+Terminal smokes: the terminal drawer, terminals across a Neovim restart, terminal panes beside Neovim panes, typed keys reaching a pane's shell, and Ctrl+Shift+W closing the drawer with its session kept and a terminal split with its session hung up.
 
 #### `smoke_headless/terminal_colours.rs`
 

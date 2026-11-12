@@ -117,6 +117,8 @@ The size takes `fullWidth(forWin:)` rather than `fullWidth(forGrid:)`, because t
 
 A session holds focus while its pane is the active pane of the key window, and `syncTerminalFocus` reports the loss before the gain. It runs on every active-pane change, every wake and both key-window edges, and app deactivation resigns the key window. The loss matters beyond mode 1004: core rescans the project on it, so a restart reports it too.
 
+Close Pane closes the drawer although the drawer is outside `tree`, and refuses the tree's last leaf even beside the drawer: Neovim counts the drawer's window, so `:close` there would leave the drawer as the tabpage's only window, which the pane tree cannot hold. `closeActivePane()` sends `focus_win` for the active pane's window before `close_pane()`, both on core's ordered input channel, so `:close` closes the pane `canClosePane` read even while a focus move is in flight. `WolfWindowController.closePane()` goes through it, so a dispatched Close Pane is refused wherever the menu item is disabled.
+
 After a crash-restart, `Project.respawnNeovim` captures each view's terminal-pane sessions and drawer state before `handle.restart()`, and hands each view its own [`terminalRestore`](../crates/wolf-macos/Sources/WolfKeyMap/README.md#livenessseamswift) steps. A view runs them once, from a render wake after `ensureInitialPane` has bound its first pane, while its tabpage is current and no layout rebuild waits ([why](crates/wolf-macos/Sources/WolfMacOS/PaneContainerView.swift.md#terminal-restore)). `rebind(tabpageHandle:)` clears a request made before it.
 
 ## Present limitations

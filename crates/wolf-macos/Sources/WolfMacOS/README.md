@@ -332,12 +332,13 @@ Purpose: The editor area: one flipped `NSView` painting every pane, owns `PaneTr
 **Public API**
 
 - `markRefocusRebind()` arms a grid rebind after a tabpage switch, and `rebind(tabpageHandle:)` after a crash-restart.
-- `paneLayout`, `leafContents()`, `restoreFailed` — `SessionSeam`'s inputs, leaves read by window, terminal panes included.
+- `paneLayout`, `leafContents()`, `restoreFailed` — `SessionSeam`'s inputs, leaves read by window, terminals included.
 - `capturedTerminals()`, `requestTerminalRestore(_:)` — a restart's capture and restore, for `Project.respawnNeovim`.
 - `activeTerminal`, `activeTerminalSelection` — `nil` off a terminal pane.
 - `activeWin` — per-view: the tabpage-shared `WolfCoreHandle.active_win()` would let a background tab enable Copy.
 - `activePreviewSourcePath` — `nil` in edit mode.
 - `otherPaneTarget(prefer:)` — `OtherPaneSeam.target` for the other-pane commands: `0` splits, `nil` is a no-op.
+- `canClosePane`, `closeActivePane()` — Close Pane's gate and action, reached through `WolfWindowController` ([why](../../../../notes/wolf-macos-decisions.md#terminal-panes)).
 
 **Decisions**
 
@@ -346,8 +347,8 @@ Purpose: The editor area: one flipped `NSView` painting every pane, owns `PaneTr
 - Grids are skipped only under an opaque, loaded preview web view; the flag survives reloads, since WebKit shows the outgoing document.
 - Scroll direction is `scrollingDeltaY`'s natural-scroll-aware sign; `isDirectionInvertedFromDevice` double-corrects.
 - The terminal drawer lives in the pane map, outside `tree`, so leaves, neighbours and splits exclude it.
-- A restart drops every pane, preview and terminal view: a fresh Neovim reuses window handles, so a kept binding shows the wrong window.
-- A terminal pane's input goes to its session, never Neovim, and `NSTextInputClient` serves terminal panes only; see [Terminal panes](../../../../notes/wolf-macos-decisions.md#terminal-panes).
+- A restart drops every pane, preview and terminal view, because a fresh Neovim reuses window handles.
+- A terminal pane's input goes to its session, never Neovim, and only it gets `NSTextInputClient` ([why](../../../../notes/wolf-macos-decisions.md#terminal-panes)).
 
 #### `PickerChrome.swift`
 
