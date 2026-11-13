@@ -2558,12 +2558,12 @@ final class PaneContainerView: NSView {
     ctx.setShouldAntialias(true)
     ctx.setShouldSmoothFonts(false)
 
-    // Fill padding and untiled gaps with grid 1's live default bg, so the padding matches the text
-    // area; the static fallback reads darker under a themed background.
-    let editorBg = WolfColor.cgColor(
-      handle.read_frame_for_grid(Self.cmdlineGridId).default_bg(),
-      fallback: WolfColor.fallbackBg)
-    ctx.setFillColor(editorBg)
+    // Grid 1's live defaults fill the padding, untiled gaps and every statusbar strip, so all match
+    // the text area; the static fallback reads darker under a themed background.
+    let outer = handle.read_frame_for_grid(Self.cmdlineGridId)
+    let editorFg = WolfColor.packed(outer.default_fg(), fallback: WolfColor.fallbackFgRgb)
+    let editorBg = WolfColor.packed(outer.default_bg(), fallback: WolfColor.fallbackBgRgb)
+    ctx.setFillColor(WolfColor.cgColor(packed: editorBg))
     ctx.fill(bounds)
 
     let rects = paneRects()
@@ -2581,7 +2581,8 @@ final class PaneContainerView: NSView {
       // A terminal pane's view paints its content, so the placeholder's grid is never read.
       paintPane(
         grid: grid, paneRect: paneRect, active: id == activePane,
-        paintsGrid: !occluded && terminalByPane[id] == nil, ctx: ctx)
+        paintsGrid: !occluded && terminalByPane[id] == nil, editorFg: editorFg,
+        editorBg: editorBg, ctx: ctx)
       FrameMetrics.end(
         previewNamesByGrid[grid] != nil ? .drawPanePreview : .drawPaneEditor, paneStart)
     }
@@ -2602,8 +2603,12 @@ final class PaneContainerView: NSView {
   /// Sub-buckets recorded here: `pane.status` (the statusbar strip, recorded even
   /// for an occluded pane) and `pane.read` (the `read_frame_for_grid` FFI call,
   /// deliberately BELOW the `paintsGrid` guard so an occluded pane records none).
+  ///
+  /// `editorFg` and `editorBg` are the packed editor defaults `draw` read from grid 1,
+  /// for the statusbar strip.
   private func paintPane(
-    grid: UInt64, paneRect: CGRect, active: Bool, paintsGrid: Bool, ctx: CGContext
+    grid: UInt64, paneRect: CGRect, active: Bool, paintsGrid: Bool, editorFg: UInt32,
+    editorBg: UInt32, ctx: CGContext
   ) {
     ctx.saveGState()
     ctx.clip(to: paneRect)
@@ -2611,7 +2616,7 @@ final class PaneContainerView: NSView {
     let statusbarStart = FrameMetrics.begin()
     paintStatusbar(
       into: statusbarRect(ofPane: paneRect), grid: grid, paneRect: paneRect,
-      active: active, ctx: ctx)
+      active: active, fg: editorFg, bg: editorBg, ctx: ctx)
     FrameMetrics.end(.paneStatusbar, statusbarStart)
 
     // Return before `read_frame_for_grid`, whose per-cell clone is much of the saving. Skipping
@@ -2672,50 +2677,45 @@ final class PaneContainerView: NSView {
     ctx.restoreGState()
   }
 
-  /// Paints the per-pane statusbar strip: a titlebar-matched background, the
-  /// pane's base filename (primary line), and its display path (secondary line).
+  /// Paints the per-pane statusbar strip: the background, the pane's base filename
+  /// (primary line), and its display path (secondary line).
   ///
-  /// The background matches the macOS titlebar: the window's own
-  /// `backgroundColor` (kept in sync with the `WolfTitlebar` theme by
-  /// `MainWindow.applyTitlebarBackground`), falling back to the themed titlebar
-  /// bg / editor fallback when there is no window. The text colours and the
-  /// filename's weight come from `WolfKeyMap.StatusbarText`.
+  /// The fill and the text take `fg` and `bg`, the editor defaults (`Normal`) that
+  /// `draw` reads from grid 1 once per draw: the same value the grid and the padding
+  /// fill with. The text colours and the filename's weight come from
+  /// `WolfKeyMap.StatusbarText`.
+  ///
+  /// - Not the titlebar colour: an unset `WolfTitlebar`, as Lighthouse leaves it,
+  ///   keeps the titlebar at the system colour, and the strip must match the grid it
+  ///   sits on.
+  /// - Not the pane's own frame: an occluded preview and a terminal pane never read
+  ///   theirs, and their strips must still follow the theme.
   ///
   /// The text span comes from `WolfKeyMap.StatusbarTextSpan`, which aligns the text
-  /// with the pane's CONTENT — and the two kinds of content start at different x
-  /// origins:
+  /// with the pane's CONTENT:
   ///
   /// - EDITOR panes: the grid is painted at `gRect.minX + PaneGeometry.paintOffsetX`
   ///   (the 90-column centering inset), so the text is indented by the same offset
-  ///   and its right edge stays at `gRect.maxX`. This is bit-identical to the
-  ///   pre-existing behavior.
-  /// - PREVIEW panes: `syncPreviewWebViews` now frames the `WKWebView` to the SAME
+  ///   and its right edge stays at `gRect.maxX`.
+  /// - PREVIEW panes: `syncPreviewWebViews` frames the `WKWebView` to the SAME
   ///   capped+CENTERED `geometry(…, fullWidth:).gridRect`, so a preview's statusbar is
-  ///   indented by `paintOffsetX` exactly like an editor's (`StatusbarTextSpan`'s two
-  ///   kinds are now identical). In full-width mode `paintOffsetX == 0`, so the text
-  ///   lands flush at `gRect.minX`. The webview frame, this span, and the draw loop's
-  ///   occlusion test all derive from the same `geometry(…, fullWidth:)` and must
-  ///   change together.
+  ///   indented by `paintOffsetX` exactly like an editor's. In full-width mode
+  ///   `paintOffsetX == 0`, so the text lands flush at `gRect.minX`. The webview
+  ///   frame, this span, and the draw loop's occlusion test all derive from the same
+  ///   `geometry(…, fullWidth:)` and must change together.
   ///
   /// The kind comes from `previewNamesByGrid` (looked up ONCE, and reused for the
   /// filename/path override below) — the same predicate `drawScrollbars` uses.
   /// Text is truncated with a tail ellipsis; an unnamed buffer shows `[No Name]`
   /// with no path line.
   private func paintStatusbar(
-    into strip: CGRect, grid: UInt64, paneRect: CGRect, active: Bool, ctx: CGContext
+    into strip: CGRect, grid: UInt64, paneRect: CGRect, active: Bool, fg: UInt32, bg: UInt32,
+    ctx: CGContext
   ) {
     ctx.saveGState()
     ctx.clip(to: strip)
 
-    // Background: the window's (themed) titlebar background when available,
-    // else the themed titlebar bg, else the editor fallback.
-    let bgColor: CGColor
-    if let mainWindow = window as? MainWindow {
-      bgColor = mainWindow.backgroundColor.cgColor
-    } else {
-      bgColor = WolfColor.cgColor(handle.theme_titlebar_bg(), fallback: WolfColor.fallbackBg)
-    }
-    ctx.setFillColor(bgColor)
+    ctx.setFillColor(WolfColor.cgColor(packed: bg))
     ctx.fill(strip)
 
     // One preview lookup decides both the span's pane kind and the name source, so "is this a
@@ -2748,7 +2748,7 @@ final class PaneContainerView: NSView {
       displayPath = status.display_path().toString()
     }
 
-    let text = StatusbarText(titlebarFg: handle.theme_titlebar_fg(), active: active)
+    let text = StatusbarText(fg: fg, bg: bg, active: active)
     let primaryFont: NSFont =
       text.primaryBold
       ? .boldSystemFont(ofSize: CGFloat(statusbarPrimaryFontSize))
@@ -2757,7 +2757,8 @@ final class PaneContainerView: NSView {
     let primaryRect = CGRect(
       x: textLeft, y: strip.minY + CGFloat(layout.primaryLineTop),
       width: textWidth, height: CGFloat(layout.primaryLineHeight))
-    drawStatusbarText(filename, in: primaryRect, font: primaryFont, color: nsColor(text.primary))
+    drawStatusbarText(
+      filename, in: primaryRect, font: primaryFont, color: nsColor(packed: text.primary))
 
     if !displayPath.isEmpty {
       let secondaryRect = CGRect(
@@ -2766,26 +2767,18 @@ final class PaneContainerView: NSView {
       drawStatusbarText(
         displayPath, in: secondaryRect,
         font: .systemFont(ofSize: CGFloat(statusbarSecondaryFontSize)),
-        color: nsColor(text.secondary))
+        color: nsColor(packed: text.secondary))
     }
 
     ctx.restoreGState()
   }
 
-  /// Maps a `StatusbarText` colour to AppKit: the themed titlebar fg at its alpha
-  /// (`labelColor` when the packed colour does not convert), or a system label tier.
-  private func nsColor(_ color: StatusbarTextColor) -> NSColor {
-    switch color {
-    case .themed(let rgb, let alpha):
-      return (NSColor(cgColor: WolfColor.cgColor(packed: rgb)) ?? .labelColor)
-        .withAlphaComponent(CGFloat(alpha))
-    case .label(.primary):
-      return .labelColor
-    case .label(.secondary):
-      return .secondaryLabelColor
-    case .label(.tertiary):
-      return .tertiaryLabelColor
-    }
+  /// The opaque sRGB `NSColor` of a packed `StatusbarText` colour, in the colour space
+  /// the strip fill uses (see `WolfColor`).
+  private func nsColor(packed: UInt32) -> NSColor {
+    NSColor(
+      srgbRed: CGFloat((packed >> 16) & 0xFF) / 255, green: CGFloat((packed >> 8) & 0xFF) / 255,
+      blue: CGFloat(packed & 0xFF) / 255, alpha: 1)
   }
 
   /// Draws one line of statusbar `text` clipped to `rect`, tail-truncated in

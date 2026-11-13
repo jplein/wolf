@@ -6,121 +6,6 @@ import XCTest
 
 @testable import WolfMacOS
 
-/// A failure reading the pinned Lighthouse, naming the file and the missing piece.
-private struct LighthouseError: LocalizedError {
-  let message: String
-  var errorDescription: String? { message }
-}
-
-/// One of Lighthouse's two variants, named as `vim.o.background` and its palette table are.
-private enum LighthouseBackground: String {
-  case dark
-  case light
-}
-
-/// The expected colours of the pinned Lighthouse, read from its `colors/lighthouse.lua` as the
-/// Rust oracle in `crates/wolf-ffi/tests/common/mod.rs` reads them: each palette is the
-/// `local dark = {` or `local light = {` table of `key = "#rrggbb",` lines closed by a line
-/// that is exactly `}`, and the ANSI order is the `local ansi = {` list of `[0] = p.<key>,`
-/// then fifteen `p.<key>,` lines. Colours are packed `0x00RRGGBB`.
-private struct LighthouseColours {
-  let path: String
-  let lines: [String]
-
-  /// Reads `<tree>/lighthouse/colors/lighthouse.lua`, or the flat `<tree>/colors/…`.
-  init(tree: String) throws {
-    var isDirectory: ObjCBool = false
-    let inner = (tree as NSString).appendingPathComponent("lighthouse")
-    let root =
-      FileManager.default.fileExists(atPath: inner, isDirectory: &isDirectory)
-        && isDirectory.boolValue ? inner : tree
-    path = (root as NSString).appendingPathComponent("colors/lighthouse.lua")
-    do {
-      lines = try String(contentsOfFile: path, encoding: .utf8).components(separatedBy: "\n")
-    } catch {
-      throw LighthouseError(
-        message: "failed to read the pinned Lighthouse colorscheme at \(path): \(error)")
-    }
-  }
-
-  /// `line` without trailing whitespace.
-  private static func trimmedEnd(_ line: String) -> String {
-    String(line.reversed().drop(while: { $0.isWhitespace }).reversed())
-  }
-
-  /// The lines strictly between the line `opener` and the next line that is exactly `}`.
-  private func table(_ opener: String, _ what: String) throws -> [String] {
-    guard let start = lines.firstIndex(where: { Self.trimmedEnd($0) == opener }) else {
-      throw LighthouseError(message: "\(path) has no `\(opener)` line, so it has no \(what)")
-    }
-    var body: [String] = []
-    for line in lines[(start + 1)...] {
-      if Self.trimmedEnd(line) == "}" { break }
-      body.append(line)
-    }
-    return body
-  }
-
-  /// The `background` palette's colour for `key`.
-  func colour(_ background: LighthouseBackground, _ key: String) throws -> UInt32 {
-    let what = "\(background.rawValue) palette"
-    let prefix = "\(key) = \"#"
-    for line in try table("local \(background.rawValue) = {", what) {
-      let item = line.trimmingCharacters(in: .whitespaces)
-      guard item.hasPrefix(prefix), item.hasSuffix("\",") else { continue }
-      let hex = item.dropFirst(prefix.count).dropLast(2)
-      guard let value = UInt32(hex, radix: 16) else {
-        throw LighthouseError(message: "\(path)'s \(what) gives \(key) #\(hex), which is not hex")
-      }
-      return value
-    }
-    throw LighthouseError(message: "\(path)'s \(what) has no `\(key) = \"#rrggbb\",` line")
-  }
-
-  /// The palette keys of `g:terminal_color_0` to `_15`, in order.
-  func ansiKeys() throws -> [String] {
-    let opener = "local ansi = {"
-    guard lines.contains(where: { Self.trimmedEnd($0) == opener }) else {
-      throw LighthouseError(
-        message: "\(path) has no `\(opener)` list, so this Lighthouse sets no g:terminal_color_N"
-          + " and a terminal pane keeps libghostty-vt's built-in palette")
-    }
-    var keys: [String] = []
-    for line in try table(opener, "ANSI list") {
-      var item = line.trimmingCharacters(in: .whitespaces)
-      if item.isEmpty || item.hasPrefix("--") { continue }
-      if item.hasPrefix("[0] = ") { item = String(item.dropFirst("[0] = ".count)) }
-      guard item.hasPrefix("p."), item.hasSuffix(",") else {
-        throw LighthouseError(
-          message: "\(path)'s ANSI list has the line \(line.debugDescription), not `p.<key>,`")
-      }
-      keys.append(String(item.dropFirst(2).dropLast()))
-    }
-    guard keys.count == 16 else {
-      throw LighthouseError(
-        message: "\(path)'s ANSI list names \(keys.count) colours, not 16: \(keys)")
-    }
-    return keys
-  }
-
-  /// The colours of `g:terminal_color_0` to `_15` for `background`.
-  func ansi(_ background: LighthouseBackground) throws -> [UInt32] {
-    try ansiKeys().map { try colour(background, $0) }
-  }
-}
-
-/// A packed `0x00RRGGBB` colour as an sRGB `NSColor`.
-private func srgbColour(_ packed: UInt32) -> NSColor {
-  NSColor(
-    srgbRed: CGFloat((packed >> 16) & 0xFF) / 255, green: CGFloat((packed >> 8) & 0xFF) / 255,
-    blue: CGFloat(packed & 0xFF) / 255, alpha: 1)
-}
-
-/// `#rrggbb` for a colour the bridge says is set, else `unset`.
-private func hex(_ colour: FfiColor) -> String {
-  colour.set ? String(format: "#%06x", colour.rgb) : "unset"
-}
-
 /// The 16 ANSI colours of a terminal pane over the captive `init.lua` beside a copy of the
 /// vendored Lighthouse, so `init.lua` activates the real colorscheme: the session's cells, and
 /// the pixels the pane paints for them through `OffscreenRenderer`, in sRGB.
@@ -153,35 +38,14 @@ final class TerminalLighthouseColourTests: XCTestCase {
     return "printf '\(fg)\\r\\n\(bg)\\r\\n'; exec sleep 600"
   }
 
-  /// Copies `init.lua` and Lighthouse's colorscheme, by content, into a fresh directory as
-  /// `init.lua` beside `lighthouse/colors/lighthouse.lua`, and returns the copy of `init.lua`.
-  private func stage(initLua: String, colours: LighthouseColours) throws -> String {
-    let base = ProcessInfo.processInfo.environment["TEST_TMPDIR"] ?? NSTemporaryDirectory()
-    let root = (base as NSString).appendingPathComponent("lighthouse-\(UUID().uuidString)")
-    let colors = (root as NSString).appendingPathComponent("lighthouse/colors")
-    try FileManager.default.createDirectory(atPath: colors, withIntermediateDirectories: true)
-    let staged = (root as NSString).appendingPathComponent("init.lua")
-    try Data(contentsOf: URL(fileURLWithPath: initLua)).write(to: URL(fileURLWithPath: staged))
-    try Data(contentsOf: URL(fileURLWithPath: colours.path)).write(
-      to: URL(fileURLWithPath: (colors as NSString).appendingPathComponent("lighthouse.lua")))
-    return staged
-  }
-
   /// The pinned Lighthouse and a converged pane running the colour script over it; `nil`, with
   /// the test failed, when any step does not happen.
   private func start() throws -> (TerminalPaneFixture, LighthouseColours)? {
-    let key = "WOLF_TEST_LIGHTHOUSE_DIR"
-    guard let tree = LiveCore.runfile(key) else {
-      let raw = ProcessInfo.processInfo.environment[key] ?? "unset"
-      XCTFail(
-        "\(key) (\(raw)) resolves to no staged tree: the WolfMacOSTests target must stage"
-          + " //bazel/lighthouse:lighthouse_tree")
-      return nil
-    }
-    let colours = try LighthouseColours(tree: tree)
-    guard let initLua = LiveCore.stagedInitLua() else { return nil }
-    let staged = try stage(initLua: initLua, colours: colours)
-    guard let fixture = TerminalPaneFixture(command: Self.colourScript, initLua: staged) else {
+    guard let lighthouse = try stageLighthouse() else { return nil }
+    let colours = lighthouse.colours
+    guard
+      let fixture = TerminalPaneFixture(command: Self.colourScript, initLua: lighthouse.initLua)
+    else {
       return nil
     }
     guard fixture.converge() else {
@@ -241,7 +105,7 @@ final class TerminalLighthouseColourTests: XCTestCase {
       let pixels = capture.colors(in: fixture.interior(col: i, row: Int(Self.bgRow)), of: view)
       let near = pixels.filter { colorDistance($0, want) <= Self.tolerance }.count
       let share = pixels.isEmpty ? 0 : Double(near) / Double(pixels.count)
-      let mean = pixels.isEmpty ? "none" : Self.describe(Self.mean(pixels))
+      let mean = pixels.isEmpty ? "none" : describeColour(meanColour(pixels))
       let fg = i < fgCells.count ? hex(fgCells[i].fg()) : "absent"
       let bg = i < bgCells.count ? hex(bgCells[i].bg()) : "absent"
       table +=
@@ -284,29 +148,6 @@ final class TerminalLighthouseColourTests: XCTestCase {
   private static func pad(_ text: String, _ width: Int, right: Bool = false) -> String {
     let fill = String(repeating: " ", count: max(0, width - text.count))
     return right ? fill + text : text + fill
-  }
-
-  /// The mean of `pixels` in sRGB.
-  private static func mean(_ pixels: [NSColor]) -> NSColor {
-    var red: CGFloat = 0
-    var green: CGFloat = 0
-    var blue: CGFloat = 0
-    for pixel in pixels {
-      let c = pixel.usingColorSpace(.sRGB) ?? pixel
-      red += c.redComponent
-      green += c.greenComponent
-      blue += c.blueComponent
-    }
-    let n = CGFloat(pixels.count)
-    return NSColor(srgbRed: red / n, green: green / n, blue: blue / n, alpha: 1)
-  }
-
-  /// `colour` as `#rrggbb` in sRGB.
-  private static func describe(_ colour: NSColor) -> String {
-    guard let c = colour.usingColorSpace(.sRGB) else { return "\(colour)" }
-    func byte(_ v: CGFloat) -> Int { Int((v * 255).rounded()) }
-    return String(
-      format: "#%02x%02x%02x", byte(c.redComponent), byte(c.greenComponent), byte(c.blueComponent))
   }
 
   /// With the vendored Lighthouse active on the dark background, the pane's 16 ANSI colours

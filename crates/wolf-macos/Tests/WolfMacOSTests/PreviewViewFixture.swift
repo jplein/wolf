@@ -30,9 +30,12 @@ final class PreviewViewFixture {
   var handle: WolfCoreHandle { base.handle }
   var window: OffscreenWindow { base.renderer.window }
 
-  /// Splits the editor and previews `probe.md` in the new pane, which becomes the active pane.
-  init?(file: StaticString = #filePath, line: UInt = #line) {
-    guard let base = TerminalViewFixture(file: file, line: line) else { return nil }
+  /// Splits the editor and previews `probe.md` in the new pane, which becomes the active pane,
+  /// over `initLua` when given.
+  init?(initLua: String? = nil, file: StaticString = #filePath, line: UInt = #line) {
+    guard let base = TerminalViewFixture(initLua: initLua, file: file, line: line) else {
+      return nil
+    }
     let handle = base.handle
     let container = base.container
     var cwd = ""

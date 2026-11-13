@@ -29,10 +29,6 @@ crates/wolf-gnome/src/refresh_coalescer.rs://! (`crates/wolf-macos/Sources/WolfK
 crates/wolf-gnome/src/scrollbar.rs://! Unlike the macOS bar
 crates/wolf-gnome/src/scrollbar.rs://! (`crates/wolf-macos/Sources/WolfKeyMap/README.md#scrollbargeometryswift`), this
 
-# A5: statusbar_layout.rs, no label tier.
-crates/wolf-gnome/src/statusbar_layout.rs://! uses — and has no label tier, by the user's decision and unlike the macOS strip
-crates/wolf-gnome/src/statusbar_layout.rs://! (`crates/wolf-macos/Sources/WolfKeyMap/README.md#statusbartextswift`): this
-
 # A8: search_panel.rs, the sidebar search panel's divergences.
 crates/wolf-gnome/src/search_panel.rs://! It follows the macOS sidebar's search panel and switcher
 crates/wolf-gnome/src/search_panel.rs://! (`crates/wolf-macos/Sources/WolfMacOS/README.md#searchviewswift`) except in four

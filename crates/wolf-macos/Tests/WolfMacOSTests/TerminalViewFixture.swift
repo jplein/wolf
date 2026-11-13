@@ -41,10 +41,11 @@ final class TerminalViewFixture {
   private(set) var container: PaneContainerView
   private(set) var renderer: OffscreenRenderer
 
-  /// Starts a core and hosts a container over its current tabpage, then wakes it until its
-  /// first pane is bound; `nil`, with the test failed, when any step does not happen.
-  init?(file: StaticString = #filePath, line: UInt = #line) {
-    guard let live = LiveCore.start(file: file, line: line) else { return nil }
+  /// Starts a core, over `initLua` when given, and hosts a container over its current
+  /// tabpage, then wakes it until its first pane is bound; `nil`, with the test failed, when
+  /// any step does not happen.
+  init?(initLua: String? = nil, file: StaticString = #filePath, line: UInt = #line) {
+    guard let live = LiveCore.start(initLua: initLua, file: file, line: line) else { return nil }
     self.live = live
     let handle = live.handle
     container = PaneContainerView(

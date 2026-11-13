@@ -6,111 +6,78 @@ import XCTest
 
 final class StatusbarTextTests: XCTestCase {
 
-  /// Tolerance for the alpha comparisons, which are products of two constants.
-  private let eps: Double = 1e-9
-
-  /// A distinctive themed colour, so a rule that substitutes any other rgb is caught.
-  private let themedRgb: UInt32 = 0x0012_3456
-
-  // MARK: - Helpers
-
-  /// Asserts `got` is `.themed` with exactly `rgb` and `alpha` (within `eps`).
-  private func assertThemed(
-    _ got: StatusbarTextColor, rgb: UInt32, alpha: Double, _ desc: String,
-    file: StaticString = #filePath, line: UInt = #line
-  ) {
-    guard case .themed(let gotRgb, let gotAlpha) = got else {
-      XCTFail(
-        "\(desc): want .themed(rgb: \(rgb), alpha: \(alpha)), got \(got). A .label here means "
-          + "the rule ignored the set titlebar foreground and fell back to AppKit's tiers.",
-        file: file, line: line)
-      return
-    }
-    XCTAssertEqual(
-      gotRgb, rgb,
-      "\(desc): the themed rgb must be the titlebar fg passed in, unchanged; another value "
-        + "means the rule rewrote or dropped the theme colour",
-      file: file, line: line)
-    XCTAssertEqual(
-      gotAlpha, alpha, accuracy: eps,
-      "\(desc): wrong alpha. 1 / 0.7 are the active primary / secondary, 0.5 / 0.35 the "
-        + "inactive ones; any other value means the active or secondary scaling changed",
-      file: file, line: line)
+  /// One `StatusbarText(fg:bg:active:)` row: packed `0x00RRGGBB` editor defaults in, the
+  /// blended packed colours and the weight out.
+  private struct Row {
+    let desc: String
+    let fg: UInt32
+    let bg: UInt32
+    let active: Bool
+    let primary: UInt32
+    let secondary: UInt32
+    let primaryBold: Bool
   }
 
-  // MARK: - The 2x2 cross product: titlebar fg set/unset x active/inactive
+  /// The three fields of a `StatusbarText`, compared as one value.
+  private struct Treatment: Equatable, CustomStringConvertible {
+    let primary: UInt32
+    let secondary: UInt32
+    let primaryBold: Bool
 
-  func testThemedActiveIsFullStrengthAndBold() {
-    let text = StatusbarText(titlebarFg: FfiColor(rgb: themedRgb, set: true), active: true)
-    assertThemed(text.primary, rgb: themedRgb, alpha: 1.0, "themed active primary")
-    assertThemed(text.secondary, rgb: themedRgb, alpha: 0.7, "themed active secondary")
-    XCTAssertTrue(
-      text.primaryBold,
-      "the active pane's filename must be bold; regular weight here means the active pane lost "
-        + "its only weight cue")
-  }
-
-  func testThemedInactiveIsDimmedAndRegular() {
-    let text = StatusbarText(titlebarFg: FfiColor(rgb: themedRgb, set: true), active: false)
-    assertThemed(text.primary, rgb: themedRgb, alpha: 0.5, "themed inactive primary")
-    assertThemed(text.secondary, rgb: themedRgb, alpha: 0.35, "themed inactive secondary")
-    XCTAssertFalse(
-      text.primaryBold,
-      "an inactive pane's filename must be regular weight; bold here makes every pane look "
-        + "active")
-  }
-
-  func testUnsetActiveUsesPrimaryAndSecondaryLabels() {
-    let text = StatusbarText(titlebarFg: FfiColor(rgb: 0, set: false), active: true)
-    XCTAssertEqual(
-      text.primary, .label(.primary),
-      "unset titlebar fg, active: the filename must be labelColor; another tier means the "
-        + "active pane is dimmed, a .themed value means the rule ignored `set`")
-    XCTAssertEqual(
-      text.secondary, .label(.secondary),
-      "unset titlebar fg, active: the path must be secondaryLabelColor")
-    XCTAssertTrue(text.primaryBold, "the active pane's filename must be bold without a theme too")
-  }
-
-  func testUnsetInactiveStepsDownOneLabelTier() {
-    let text = StatusbarText(titlebarFg: FfiColor(rgb: 0, set: false), active: false)
-    XCTAssertEqual(
-      text.primary, .label(.secondary),
-      "unset titlebar fg, inactive: the filename must step down to secondaryLabelColor; "
-        + ".primary means the inactive pane is not dimmed at all")
-    XCTAssertEqual(
-      text.secondary, .label(.tertiary),
-      "unset titlebar fg, inactive: the path must step down to tertiaryLabelColor; .secondary "
-        + "means the path line is not dimmed with its pane")
-    XCTAssertFalse(text.primaryBold, "an inactive pane's filename must be regular weight")
-  }
-
-  // MARK: - Discriminators: the branch keys on `set`, never on the rgb value
-
-  func testSetBlackIsStillThemed() {
-    for active in [true, false] {
-      let text = StatusbarText(titlebarFg: FfiColor(rgb: 0, set: true), active: active)
-      let a = active ? 1.0 : 0.5
-      assertThemed(
-        text.primary, rgb: 0, alpha: a,
-        "set black titlebar fg (active \(active)) primary; a .label means the rule keys on a "
-          + "non-zero rgb instead of `set`, so a black theme falls back to AppKit's colours")
-      assertThemed(
-        text.secondary, rgb: 0, alpha: 0.7 * a,
-        "set black titlebar fg (active \(active)) secondary")
+    var description: String {
+      "primary \(StatusbarTextTests.hex(primary)), secondary"
+        + " \(StatusbarTextTests.hex(secondary)), bold \(primaryBold)"
     }
   }
 
-  func testUnsetWithNonZeroRgbIsStillLabel() {
-    for active in [true, false] {
-      let text = StatusbarText(titlebarFg: FfiColor(rgb: 0x00AB_CDEF, set: false), active: active)
+  /// The rows of `statusbar_text_table` in `crates/wolf-gnome/src/statusbar_layout.rs`, verbatim
+  /// and in its order, so the two front-ends give one theme the same strip text. Change the two
+  /// tables together. Each channel is `round(bg + (fg - bg) * alpha)`, half away from zero, with
+  /// a primary alpha of 1 in an active pane and 0.5 in an inactive one, and a secondary alpha of
+  /// a further 0.7 of the primary's.
+  func testMatchesWolfGnomeStatusbarTextTable() {
+    let rows = [
+      // Primary α 1 -> 255. Secondary α 0.7: 255 * 0.7 = 178.5, a tie that rounds away to 179.
+      Row(
+        desc: "an active pane is full strength and bold", fg: 0x00FF_FFFF, bg: 0x0000_0000,
+        active: true, primary: 0x00FF_FFFF, secondary: 0x00B3_B3B3, primaryBold: true),
+      // Primary α 0.5: 255 * 0.5 = 127.5 -> 128. Secondary α 0.35: 255 * 0.35 = 89.25 -> 89.
+      Row(
+        desc: "an inactive pane dims both lines and is not bold", fg: 0x00FF_FFFF,
+        bg: 0x0000_0000, active: false, primary: 0x0080_8080, secondary: 0x0059_5959,
+        primaryBold: false),
+      // Over grey α 0.5 gives (120, 70, 20) and α 0.35 (96, 61, 26); over black blue would be 0.
+      Row(
+        desc: "the blend is toward the background, not toward black", fg: 0x00C8_6400,
+        bg: 0x0028_2828, active: false, primary: 0x0078_4614, secondary: 0x0060_3D1A,
+        primaryBold: false),
+      // Primary α 1 is fg exactly. Secondary α 0.7: 40 + (fg - 40) * 0.7 = (152, 82, 12).
+      Row(
+        desc: "an active pane over a non-black background is untouched", fg: 0x00C8_6400,
+        bg: 0x0028_2828, active: true, primary: 0x00C8_6400, secondary: 0x0098_520C,
+        primaryBold: true),
+    ]
+    for row in rows {
+      let text = StatusbarText(fg: row.fg, bg: row.bg, active: row.active)
+      let got = Treatment(
+        primary: text.primary, secondary: text.secondary, primaryBold: text.primaryBold)
+      let want = Treatment(
+        primary: row.primary, secondary: row.secondary, primaryBold: row.primaryBold)
+      let call =
+        "StatusbarText(fg: \(Self.hex(row.fg)), bg: \(Self.hex(row.bg)), active: \(row.active))"
       XCTAssertEqual(
-        text.primary, .label(active ? .primary : .secondary),
-        "unset titlebar fg with a stale non-zero rgb (active \(active)) must still use the "
-          + "label tier; a .themed value means the rule keys on the rgb instead of `set`")
-      XCTAssertEqual(
-        text.secondary, .label(active ? .secondary : .tertiary),
-        "unset titlebar fg with a stale non-zero rgb (active \(active)): secondary tier")
+        got, want, "\(row.desc): \(call) must give \(want), but gives \(got). \(Self.drift)")
     }
+  }
+
+  /// What a mismatch in the table means.
+  private static let drift =
+    "A changed alpha moves the dimmed lines; a channel at 0 over the grey background means a"
+    + " composite over black; 178 for 178.5 means ties round to even; a wrong bold means the"
+    + " weight no longer follows `active`. Each is a drift from wolf-gnome's statusbar_text."
+
+  /// `#rrggbb` for a packed colour.
+  private static func hex(_ packed: UInt32) -> String {
+    String(format: "#%06x", packed)
   }
 }

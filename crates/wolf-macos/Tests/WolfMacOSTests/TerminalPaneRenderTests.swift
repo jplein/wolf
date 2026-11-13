@@ -7,7 +7,7 @@ import XCTest
 @testable import WolfMacOS
 
 /// A `PaneContainerView` over a live core whose current window shows one terminal session,
-/// hosted offscreen. `TerminalLighthouseColourTests` reuses it over its own `init.lua`.
+/// hosted offscreen. Other test files reuse it over their own `init.lua`.
 ///
 /// Premises, each checked where a test depends on it rather than assumed: the session's
 /// default colours are far from the colours its program prints, a session starts at 80 x 24,

@@ -19,10 +19,8 @@
 //!
 //! [`statusbar_text`] takes the editor's own default foreground and background —
 //! `crate::pane_view` resolves highlight 0, the source the cmdline strip already
-//! uses — and has no label tier, by the user's decision and unlike the macOS strip
-//! (`crates/wolf-macos/Sources/WolfKeyMap/README.md#statusbartextswift`): this
-//! front-end takes no colour from the OS theme
-//! (`notes/wolf-gnome/window-structure.md`).
+//! uses — and has no label tier, by the user's decision: this front-end takes no
+//! colour from the OS theme (`notes/wolf-gnome/window-structure.md`).
 //!
 //! The blend is toward the BACKGROUND rather than toward black, and that is
 //! load-bearing: the strip's background is opaque and known (the painter has just

@@ -18,11 +18,15 @@ enum WolfColor {
   /// keeps the two paths pixel-identical.
   private static let srgb = CGColorSpace(name: CGColorSpace.sRGB)!
 
-  /// Fallback foreground (white) when neither a highlight nor the defaults set
-  /// one. Mirrors wolf-gnome's `FALLBACK_FG`.
-  static let fallbackFg = cgColor(packed: 0x00FF_FFFF)
-  /// Fallback background (black). Mirrors wolf-gnome's `FALLBACK_BG`.
-  static let fallbackBg = cgColor(packed: 0x0000_0000)
+  /// Fallback foreground (white), packed, when neither a highlight nor the defaults
+  /// set one. Mirrors wolf-gnome's `FALLBACK_FG`.
+  static let fallbackFgRgb: UInt32 = 0x00FF_FFFF
+  /// Fallback background (black), packed. Mirrors wolf-gnome's `FALLBACK_BG`.
+  static let fallbackBgRgb: UInt32 = 0x0000_0000
+  /// `fallbackFgRgb` as a `CGColor`.
+  static let fallbackFg = cgColor(packed: fallbackFgRgb)
+  /// `fallbackBgRgb` as a `CGColor`.
+  static let fallbackBg = cgColor(packed: fallbackBgRgb)
 
   /// Divisor turning an 8-bit channel (0–255) into the 0.0–1.0 `CGColor` range.
   private static let channelMax: CGFloat = 255
@@ -31,6 +35,11 @@ enum WolfColor {
   static func cgColor(_ color: FfiColor, fallback: CGColor) -> CGColor {
     guard color.set else { return fallback }
     return cgColor(packed: color.rgb)
+  }
+
+  /// Resolves `color` to its packed `0x00RRGGBB` value, `fallback` when `color.set` is false.
+  static func packed(_ color: FfiColor, fallback: UInt32) -> UInt32 {
+    color.set ? color.rgb : fallback
   }
 
   /// Unpacks a `0x00RRGGBB` value into an opaque sRGB `CGColor` (see `srgb`).
