@@ -83,6 +83,8 @@ Weight policy: a same-orientation split re-equalizes the row or column to equal 
 
 Every pane's body paints identically whether active or inactive. The only active/inactive treatment is statusbar text weight and dimming, because that distinction is awkward to express inside Neovim itself.
 
+The statusbar strip takes the editor's default colours, `Normal`, as wolf-gnome's does, and never the titlebar colour. An unset `WolfTitlebar`, as Lighthouse leaves it, keeps the titlebar at the system colour, and the strip must match the grid it sits on. `PaneContainerView.draw` reads them from grid 1's frame once per draw, not from each pane's frame, because an occluded preview and a terminal pane never read their own.
+
 ## How a preview reaches its web view
 
 Four files jointly honor one model, so do not change any of them without reading this section: `WolfKeyMap/PreviewScrollSeam` owns the rules, `PaneContainerView` the bookkeeping, `PreviewScrollStateHandler` the state channel, and `PreviewNavigationDelegate` the navigation count.

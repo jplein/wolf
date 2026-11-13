@@ -621,22 +621,22 @@ Purpose: The vertical layout math for a pane's statusbar strip — its total hei
 **Gotchas**
 
 - This owns only the vertical math; the text's horizontal span is `StatusbarTextSpan`, and its colours and weight are `StatusbarText`. The span takes inputs disjoint from this one's — font sizes here, rect scalars and pane kind there — and neither should absorb the other.
-- The strip's background fill, string drawing and truncation are AppKit glue in `PaneContainerView.paintStatusbar`, verified by manual smoke only.
+- The strip's string drawing and truncation are AppKit glue in `PaneContainerView.paintStatusbar`, verified by manual smoke only. Its background fill is pixel-tested by [`StatusbarStripColourTests.swift`](../../Tests/WolfMacOSTests/README.md#statusbarstripcolourtestsswift).
 
 #### `StatusbarText.swift`
 
-Purpose: The colours and weight of a pane's statusbar text, the filename and path lines, for an active or an inactive pane. `PaneContainerView.paintStatusbar` maps the result to `NSColor`.
+Purpose: The colours and weight of a pane's statusbar text, the filename and path lines, for an active or an inactive pane. `PaneContainerView.paintStatusbar` draws the result.
 
 **Public API**
 
-- `init(titlebarFg:active:)` — `primary` and `secondary` are each a `StatusbarTextColor`: `.themed(rgb:alpha:)`, the titlebar foreground at an alpha, or `.label(StatusbarLabelTier)`, one of AppKit's three label colours. `primaryBold` is true exactly for the active pane.
+- `init(fg:bg:active:)` — `fg` and `bg` are the editor's default colours, packed `0x00RRGGBB` after the caller's fallbacks. `primary` and `secondary` are opaque packed colours, already blended, and `primaryBold` is true exactly for the active pane.
 
 **Decisions**
 
-- The text colour and weight are the whole active/inactive treatment. Themed, an inactive pane dims both lines' alpha; unthemed, it steps each line down one label tier.
-- The branch keys on `titlebarFg.set`, never on its rgb, so a theme with a black titlebar foreground stays themed.
-- The band fill is not decided here. It reads the live window's `backgroundColor`, so it stays in `PaneContainerView`, titlebar-matched.
-- wolf-gnome's `statusbar_text`, in [`statusbar_layout.rs`](../../../wolf-gnome/src/README.md#statusbar_layoutrs), takes the editor's colours and has no label tier. That divergence is deliberate, and the user accepted it.
+- The text colour and weight are the whole active/inactive treatment: an inactive pane dims both lines.
+- Each line blends the foreground toward `bg`, the opaque strip fill, which is the pixel compositing would give, so the strip needs no alpha drawing.
+- The alphas, the blend and its half-away-from-zero rounding are wolf-gnome's [`statusbar_text`](../../../wolf-gnome/src/README.md#statusbar_layoutrs), so both front-ends paint one theme's strip alike. The tests repeat its table; change the two together.
+- The colours are the editor's, never the titlebar's, for the reason [One flat pane view](../../../../notes/wolf-macos-decisions.md#one-flat-pane-view-not-nested-split-views) gives.
 
 #### `StatusbarTextSpan.swift`
 

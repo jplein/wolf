@@ -52,7 +52,7 @@ A packaged smoke launches the store binary under `cage` with every devShell expo
 
 Divider drag on GTK is the stock `gtk::Paned` handle drag, and the position it lands on is written back into the pure tree's weights, which is what makes it survive a re-layout and reach `state.json`. One divergence from macOS is real and deliberate: GTK renders an n-ary split as a right-leaning paned chain, so a divider governs its head child against the whole remainder, which is rescaled proportionally, where macOS's `setPairFraction` reweights only the adjacent pair.
 
-The per-pane status bar diverges from macOS in two visible ways, each for its own reason: its band is the editor's per-frame background out of the snapshot rather than a titlebar match, since a theme-owned widget background cannot be that colour, and a path too long for its pane is clipped rather than ellipsized, since ellipsizing needs a second Pango layout builder in the widget layer, which is what the one-glyph-path rule exists to prevent.
+The per-pane status bar diverges from macOS in one visible way: a path too long for its pane is clipped rather than ellipsized, since ellipsizing needs a second Pango layout builder in the widget layer, which is what the one-glyph-path rule exists to prevent.
 
 Mouse and vertical scroll input work on both front-ends, as thin GTK glue over pure seams (`geometry::cell_at` and the `mouse` module).
 

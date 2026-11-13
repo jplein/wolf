@@ -66,6 +66,7 @@ Purpose: A `PaneContainerView` over a [`LiveCore`](#livecoreswift), hosted offsc
 
 **Public API**
 
+- `TerminalViewFixture(initLua:)` — passes `initLua` to `LiveCore.start(initLua:)`.
 - `wake(until:)` — runs render wakes until the condition holds or `timeout` passes; `wake(_:until:)` wakes another container.
 - `view(showing:)`, `window(showing:)`, `text(of:)` — a session's terminal view, placeholder window and frame text. `terminalViews(in:)` and `view(showing:in:)` read another container.
 - `isInDrawerStrip(_:)` — whether a view lies in the container's lower half. The drawer's rect is private, and at `windowSize` its strip, a third of the height, lies wholly there.
@@ -79,9 +80,25 @@ Purpose: A `PaneContainerView` over a [`LiveCore`](#livecoreswift), hosted offsc
 
 Purpose: A [`TerminalViewFixture`](#terminalviewfixtureswift) whose container shows a short Markdown file's preview as the active pane of a two-pane split, beside its source, in a real `WKWebView`. It fails the calling test on a `premise:` and asserts nothing else.
 
-**Public API** — `PreviewViewFixture()`, `nil` once a premise has failed; `web`, `previewWin`, `probePath`; `container`, `handle` and `window` from the base fixture; `shutdown()`.
+**Public API** — `PreviewViewFixture(initLua:)`, `nil` once a premise has failed, with `initLua` passed to the base fixture; `web`, `previewWin`, `probePath`; `container`, `handle` and `window` from the base fixture; `shutdown()`.
 
 **Gotchas** — the page never loads, for the reason [What renders under `bazel test`](#what-renders-under-bazel-test) gives, so a test may use the web view's responder chain but nothing the page would draw or answer.
+
+#### `LighthouseColours.swift`
+
+Purpose: The vendored Lighthouse's expected colours, for the tests that render under it. It asserts nothing, though staging fails the calling test.
+
+**Public API**
+
+- `LighthouseColours(tree:)` — reads the pinned `colors/lighthouse.lua`. `colour(_:_:)` is one palette key's colour and `ansi(_:)` the 16 ANSI colours, packed `0x00RRGGBB`.
+- `normal(_:)` — `Normal`'s foreground and background for a `LighthouseBackground`.
+- `stageLighthouse()` — `init.lua` copied beside `lighthouse/colors/lighthouse.lua` in a fresh directory, since `init.lua` self-locates the colorscheme, and the colours; `nil` with the test failed when `WOLF_TEST_LIGHTHOUSE_DIR` or `init.lua` does not resolve.
+- `srgbColour`, `hex`, `meanColour`, `describeColour` — conversions for assertions and the printed tables.
+
+**Decisions**
+
+- The reader parses the file as `crates/wolf-ffi/tests/common/mod.rs` does, so a pin bump needs no constant.
+- `normal(_:)` throws, naming the line, unless the file sets `Normal` to the palette's `foreground` on its `background`, so a pin that rewires `Normal` fails as a broken premise rather than as a wrong colour.
 
 #### `OffscreenRendererTests.swift`
 
@@ -161,7 +178,7 @@ Purpose: Renders a `PaneContainerView` whose current window shows a real `/bin/s
 
 **Gotchas**
 
-- Its `TerminalPaneFixture` is internal rather than private because `TerminalLighthouseColourTests.swift` reuses it, over its own `init.lua`.
+- Its `TerminalPaneFixture` is internal rather than private because other test files reuse it, over their own `init.lua`.
 - Background checks sample cell interiors, inset 1 point so no pixel straddles a neighbour. Glyph checks count blue pixels within 0.4, since antialiasing blends a glyph's edges.
 - The selected cells have an unset foreground, so swapped they fill with the default foreground, not blue.
 - The fixture's window reports key, so its pane is the focused pane and paints the frame's cursor style. The cursor test sets a steady block, which fills the whole cell.
@@ -177,9 +194,25 @@ Purpose: Checks that a terminal pane's 16 ANSI colours are the vendored Lighthou
 
 **Gotchas**
 
-- The expected colours come from the pinned `colors/lighthouse.lua`, parsed by the `LighthouseColours` reader in this file the way `crates/wolf-ffi/tests/common/mod.rs` parses it, so a pin bump needs no constant.
-- `init.lua` self-locates the colorscheme, so the test copies it beside `lighthouse/colors/lighthouse.lua` in a fresh directory and starts the core over the copy.
+- The expected colours and the staged `init.lua` come from [`LighthouseColours.swift`](#lighthousecoloursswift).
 - Every run prints a table of expected, cell and pixel colours.
+
+#### `StatusbarStripColourTests.swift`
+
+Purpose: Checks that a pane's statusbar strip paints Lighthouse's `Normal` background, the colour of the grid below it, in dark and, after `set_background(false)`, in light. It renders over [`LighthouseColours.swift`](#lighthousecoloursswift)'s staged `init.lua`.
+
+**Covers**
+
+- An editor pane's strip and a blank block of its grid, both `Normal`'s background, with means that agree.
+- A terminal pane's strip and its view's blank cells, the same way, and the strip's pixel farthest from the background nearer `Normal`'s foreground than its background.
+- A preview's strip while its web view occludes its grid, against a blank block of the source pane.
+
+**Gotchas**
+
+- The strip band is the top 2 points of a pane, inset 2 from its sides, above the text's vertical padding, so it holds no glyph.
+- `previewDidFinishLoad(win:)` stands in for WebKit's `didFinish`, which never comes here, so `PaneOcclusion` skips the preview's grid and its frame is never read.
+- The window is no `MainWindow` and Lighthouse leaves `WolfTitlebar` unset, so a strip that follows the titlebar paints the black fallback.
+- Every stage prints a table row of the expected colour, `read_frame()`'s default background, and each region's mean and share.
 
 #### `FileTreeViewTests.swift`
 

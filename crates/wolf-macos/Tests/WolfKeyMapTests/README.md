@@ -397,9 +397,9 @@ Of `CloseBurst`, it covers that a tab group closed in one turn keeps the tree re
 
 #### `StatusbarTextTests.swift`
 
-**Covers**: `StatusbarText` across the cross product of a set or unset titlebar foreground and an active or inactive pane, asserting both colours and the bold flag against literals. Two discriminators pin that the branch keys on `set`: a set black foreground is still `.themed`, and an unset one with a non-zero rgb is still `.label`.
+**Covers**: `StatusbarText` against the four rows of wolf-gnome's `statusbar_text_table` in `crates/wolf-gnome/src/statusbar_layout.rs`, verbatim, comparing both packed colours and the bold flag exactly. A changed alpha, a blend toward black, ties rounded to even, or a weight that stops following `active` each fails a row.
 
-**Gotchas**: the themed rows use a distinctive rgb, which must come out unchanged, and compare alphas within a tolerance, because the inactive secondary alpha is a product of two constants.
+**Gotchas**: the two tables change together. The active white-on-black secondary is exactly 178.5, which is what pins half-away-from-zero rounding, and the grey-background rows are what tell a blend toward the background from one toward black.
 
 #### `TerminalCellStyleTests.swift`
 

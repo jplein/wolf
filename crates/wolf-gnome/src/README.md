@@ -876,7 +876,7 @@ Purpose: the per-pane statusbar's rulebook, decidable from values.
 **Decisions**
 
 - Unit-agnostic ([`cell_metrics_math.rs`](#cell_metrics_mathrs)); [`pane_view.rs`](#pane_viewrs) calls it in device pixels, from `CellMetrics::size_px`.
-- The band is the editor's default background and the text has no label-tier fallback, unlike the [macOS strip](../../wolf-macos/Sources/WolfKeyMap/README.md#statusbartextswift), by the user's decision: this front-end takes no colour from the GTK theme ([Window structure](../../../notes/wolf-gnome/window-structure.md)).
+- The band is the editor's default background and the text has no label-tier fallback, by the user's decision: this front-end takes no colour from the GTK theme ([Window structure](../../../notes/wolf-gnome/window-structure.md)). The macOS [`StatusbarText.swift`](../../wolf-macos/Sources/WolfKeyMap/README.md#statusbartextswift) applies the same constants, blend and rounding, and its tests repeat `statusbar_text_table`, so change both together.
 - Both colours blend toward the background rather than toward black, which is what compositing over the already-filled band gives, so the strip needs no alpha-capable draw path.
 - A degenerate input collapses the whole layout to zeros: an infinite strip height leaves an editor painting one cell. `secondary_font_size` answers the floor for any non-finite font size, so an infinity never reaches the layout.
 
