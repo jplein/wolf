@@ -226,6 +226,7 @@ use crate::liveness_ui::{
     MAX_AUTO_RESTART_ATTEMPTS,
 };
 use crate::nav_ui::{self, NavAvailability, NavPress};
+use crate::other_pane_seam::Side;
 use crate::palette::{PaletteAction, PaletteHandle};
 use crate::pane_view;
 use crate::picker::PickerHandle;
@@ -311,14 +312,8 @@ const SAVE_DIALOG_TITLE: &str = "Save As";
 /// genuinely dwells.
 const RESTART_DEFER: Duration = Duration::from_millis(50);
 
-/// The `target_win` this shell passes to `WolfCore::preview_in_other` and
-/// `WolfCore::edit_in_other`: `0`, core's documented request to SPLIT rather than
-/// to reuse a named window.
-///
-/// Nominating a live window instead would displace whatever that pane already
-/// holds, and the GTK pane tree carries no rule for which document is safe to
-/// evict. Splitting always adds rather than replaces, so the answer is never wrong.
-const SPLIT_FOR_OTHER_PANE: i64 = 0;
+/// Why an other-pane press issued nothing: the active pane is no leaf of the pane tree.
+const NO_OTHER_PANE_REASON: &str = "the active pane is not an editor pane of the pane tree";
 
 /// Everything the two Markdown-preview presses are decided against, read from ONE
 /// snapshot pass by [`AppShell::preview_shape`].
@@ -1229,10 +1224,12 @@ impl AppShell {
     /// is gated by, because the two differ only in which pane receives the bind and
     /// not in whether the buffer can be previewed at all.
     ///
-    /// A `target_win` of `0` asks core to SPLIT. This front end always passes `0`
-    /// rather than nominating a live window, so the preview lands in a pane of its
-    /// own and never displaces a document the user already has open. Core's split
-    /// surfaces here as an ordinary vertical `Split` layout intent on the next wake.
+    /// The pane is [`crate::other_pane_seam::target`]'s with [`Side::Right`], resolved by the
+    /// selected tab's pane view: the pane to the right of the active one, else the next
+    /// leaf, else a `target_win` of `0`, which asks core to split a lone pane. With no
+    /// tree leaf active, such as the terminal drawer, it prints why and issues nothing.
+    /// Core's helper returns focus to the source; a split surfaces as an ordinary
+    /// vertical `Split` layout intent on the next wake.
     fn preview_in_other_pane(&self) {
         let liveness = self.read_liveness();
         let shape = self.preview_shape();
@@ -1244,11 +1241,17 @@ impl AppShell {
                 eprintln!("wolf-gnome: preview not opened in another pane: {reason}");
             }
             PreviewPress::Open => {
+                let Some(target) = self.other_pane_target(Side::Right) else {
+                    eprintln!(
+                        "wolf-gnome: preview not opened in another pane: {NO_OTHER_PANE_REASON}"
+                    );
+                    return;
+                };
                 let core_ref = self.inner.core.borrow();
                 if let Some(core) = core_ref.as_ref() {
-                    // Discarded for `open_preview`'s reason: the new pane and its
-                    // bind both arrive with the next wake's notifications.
-                    let _ = core.preview_in_other(SPLIT_FOR_OTHER_PANE);
+                    // Discarded for `open_preview`'s reason: the pane's new contents, or
+                    // the new pane, arrive with the next wake's notifications.
+                    let _ = core.preview_in_other(target);
                 }
             }
         }
@@ -1258,7 +1261,9 @@ impl AppShell {
     /// leaving the preview on screen, or prints why it did not.
     ///
     /// [`AppShell::preview_in_other_pane`]'s inverse, gated by
-    /// [`preview_ui::edit_press`] and passing the same `0` for the same reason.
+    /// [`preview_ui::edit_press`]: the same target rule with [`Side::Left`], so the pane
+    /// to the left, else the previous leaf, else a split. Core's helper moves focus to the
+    /// pane that receives the source.
     fn edit_in_other_pane(&self) {
         let liveness = self.read_liveness();
         let shape = self.preview_shape();
@@ -1270,12 +1275,27 @@ impl AppShell {
                 eprintln!("wolf-gnome: source not edited in another pane: {reason}");
             }
             EditPress::Edit => {
+                let Some(target) = self.other_pane_target(Side::Left) else {
+                    eprintln!(
+                        "wolf-gnome: source not edited in another pane: {NO_OTHER_PANE_REASON}"
+                    );
+                    return;
+                };
                 let core_ref = self.inner.core.borrow();
                 if let Some(core) = core_ref.as_ref() {
-                    let _ = core.edit_in_other(SPLIT_FOR_OTHER_PANE);
+                    let _ = core.edit_in_other(target);
                 }
             }
         }
+    }
+
+    /// The `target_win` an other-pane press passes to core, from the selected tab's pane
+    /// view, or `None` when the press must be a no-op.
+    fn other_pane_target(&self, prefer: Side) -> Option<i64> {
+        self.inner
+            .tabs
+            .selected()
+            .and_then(|tab| tab.panes().other_pane_target(prefer))
     }
 
     /// Serves the active Markdown buffer from core's loopback preview server and

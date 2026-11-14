@@ -2727,8 +2727,8 @@ fn cage_is_only_spawned_through_the_isolating_helper() {
 /// handed, not what it applies. A dpi reaching GTK some other way — its compiled-in
 /// sysconfdir `gtk-4.0/settings.ini`, which `XDG_CONFIG_DIRS` does not replace — masks
 /// the app's pin and leaves every preview smoke GREEN, so no pixel can catch it; what
-/// does is that smoke and the markdown-preview smoke asserting their cage log carries
-/// the pin's `DPI_PIN_STDERR_PREFIX` line.
+/// does is that smoke asserting its cage log carries the pin's `DPI_PIN_STDERR_PREFIX`
+/// line.
 ///
 /// A semaphore broken so that two slots cannot be held at once hangs this guard in
 /// `acquire`; [`cage_slots_bound_concurrency`] is the guard that turns that into a

@@ -1,5 +1,6 @@
 //! Markdown-preview smokes: opening a preview and returning to the source, a link click,
-//! an unsaved buffer's preview, the configured appearance, and a view created after launch.
+//! an unsaved buffer's preview, the configured appearance, a view created after launch, and
+//! Preview and Edit in Another Pane reusing the other pane.
 
 use super::config::{APPEARANCE_FORCED_DARK, APPEARANCE_FORCED_LIGHT};
 use super::frame_stats::{
@@ -519,12 +520,11 @@ cp "$PREVIEW_STATE_SRC" "$PREVIEW_STATE_COPY"
 
 # --- Step 5: drive EDIT IN ANOTHER PANE through the same palette -------------
 #
-# The active pane IS the preview. `edit_in_other` with a target of 0 SPLITS and binds
-# the source into the new pane, moving focus there and leaving the preview standing.
-# That is what puts the source in a window the next step can type into WITHOUT losing
-# the preview the rest of this scenario observes — which the in-place `edit_source`
-# would replace. After the split the preview is shown by a view created then, on a host
-# not yet allocated; capture B is what says that view rendered (assertion 10).
+# The active pane IS the preview, with the other file's pane on its left, so the shell
+# targets that pane: `edit_in_other` binds the source into it over the other file, moves
+# focus there and leaves the preview standing. That puts the source in a window the next
+# step can type into WITHOUT losing the preview the rest of this scenario observes —
+# which the in-place `edit_source` would replace. Step 7's `:e` lands in that same pane.
 wtype -M ctrl -M shift -k p -m shift -m ctrl
 sleep "$SETTLE"
 wtype -- "$EDIT_QUERY"
@@ -1006,13 +1006,13 @@ pub(crate) const UNSAVED_READBACK_NAME: &str = "unwins.txt";
 /// through the palette; read the window list back; move to the SOURCE pane and open
 /// the cover file over it; capture.
 ///
-/// ## Why the focus move before the `:e` is load-bearing
+/// ## Why there is a focus move before the `:e`
 ///
-/// `wolf_preview_in_other` splits and then binds the preview into the NEW window, so
-/// the current window after the Preview leg is the PREVIEW. A `:e` typed
-/// there would replace the preview scratch itself and the smoke would be capturing an
-/// ordinary editor pane. `<C-w>h` moves to the original pane — the one still holding
-/// the untitled buffer — which is the pane the cover file must land in.
+/// `wolf_preview_in_other` splits, binds the preview into the NEW (right) window and
+/// hands focus back to the source, so the current window after the Preview leg is
+/// already the original pane, the one the cover file must land in. `<C-w>h` is a
+/// guard: should focus ever land on the preview, a `:e` typed there would replace the
+/// preview scratch itself and the smoke would be capturing an ordinary editor pane.
 ///
 /// ## Exit codes
 ///
@@ -1090,8 +1090,8 @@ wait_file "$UNSAVED_READBACK" || exit 14
 
 # --- Step 5: move to the SOURCE pane -----------------------------------------
 #
-# The Preview leg left the current window on the PREVIEW (the other-pane bind lands in
-# the new split), so without this the :e below would replace the preview scratch itself.
+# The Preview leg hands focus back to the source; this guards the :e below against
+# focus on the preview, where it would replace the preview scratch itself.
 wtype -M ctrl -k w -m ctrl
 wtype -k h
 sleep "$SETTLE"
@@ -1126,12 +1126,12 @@ exit 0
 /// `crates/wolf-gnome/src/app.rs` fires, i.e. when GTK came up with the dpi unset.
 ///
 /// Re-typed rather than imported, for this binary's usual reason: an assertion that read
-/// the app's own constant would hold for whatever the line became. The two preview
-/// smokes that discriminate the pin assert their cage log carries it, which is what
-/// makes their green mean "the pin ran" rather than "something else supplied a dpi".
+/// the app's own constant would hold for whatever the line became. The new-view smoke,
+/// the one that discriminates the pin, asserts its cage log carries it, which is what
+/// makes its green mean "the pin ran" rather than "something else supplied a dpi".
 /// [`SMOKE_GTK_SETTINGS_INI`] carries no dpi, but GTK also reads the `gtk-4.0/settings.ini`
 /// under its compiled-in sysconfdir, which `XDG_CONFIG_DIRS` does not replace, and a
-/// build or host that sets one there leaves the pin idle and both smokes green.
+/// build or host that sets one there leaves the pin idle and the smoke green.
 const DPI_PIN_STDERR_PREFIX: &str = "wolf-xft-dpi-pinned:";
 
 /// A Markdown preview pane RENDERS its source, names it in its statusbar, persists
@@ -1191,13 +1191,12 @@ const DPI_PIN_STDERR_PREFIX: &str = "wolf-xft-dpi-pinned:";
 /// | 6 | capture A carries [`PREVIEW_OCR_BODY`] | **discriminator** — the web view rendered the document | delete the `self.load_preview_document(id, &html);` call in `PaneInner::refresh_previews`, leaving the `loaded.set(..)` beneath it so nothing re-arms. The pane still becomes a preview and still gets a view; the view is simply never given a document. | RED, isolated: `capture A did not contain "zzbodyoscar" — the rendered heading of pvsrc.md`. Assertions 3, 4 and 5 stayed green, so the preview really was bound and only the DOCUMENT was missing; the OCR dump beside the failure still carries the `preview:` statusbar line, which is assertion 7 passing over an empty view. |
 /// | 7 | capture A carries [`PREVIEW_OCR_STATUS`] | **discriminator** — a preview pane's statusbar comes from `preview_ui::preview_status` | in `PaneInner::refresh_pane_state`'s `Some(info)` arm, use `core.pane_status(j.grid)` for a preview pane. Preview windows are omitted from `win_buffers`, so it answers `[No Name]`. NOT isolated: it empties `abs_path` too, so assertion 8 would also fail — but 7 is evaluated first. | RED: `capture A did not contain "preview", so no pane's statusbar named itself a preview`. Assertions 3 through 6 stayed green — the web view still rendered its document — so this reddened the statusbar alone, and assertion 8 went unevaluated exactly as the revert column predicts. |
 /// | 8 | the frozen `state.json`'s two leaves | **discriminator** — `layout_snapshot` persists the per-pane preview flag, against the SOURCE path | set `preview: false` unconditionally in `pane_view::layout_snapshot`'s `LeafContent`. Reddens this alone. | RED, and isolated as claimed: `the frozen state persisted leaves [(Some("pvoth.md"), Some(false)), (Some("pvsrc.md"), Some(false))], not [(Some("pvoth.md"), Some(false)), (Some("pvsrc.md"), Some(true))]`. Assertions 3 through 7 stayed green, so both panes were right on screen and only the PERSISTED flag was wrong — which is the whole reason this one is read from a frozen file rather than from pixels. |
-/// | 9 | readback B is `{Preview: <source>, <source>, <other>}` | **discriminator** — Edit-in-another-pane split and bound the source WITHOUT replacing the preview | point `shell::perform`'s `EditInOtherPane` arm at `AppShell::edit_source`, the in-place command. The source then replaces the preview it was fired from, and the readback loses the preview scratch. | unmeasured: no red run of this revert is recorded. |
-/// | 10 | capture B carries [`PREVIEW_OCR_BODY`] | **discriminator** — the preview RENDERS IN A VIEW CREATED AFTER LAUNCH: after step 5's split the preview is shown by a web view created on a host not yet allocated, which lays its page out at a 0×0 viewport and draws blank wherever GTK's `gtk-xft-dpi` is unset. It is also what separates "the swap failed and froze the stale document" from "the pane went blank" for assertion 11 | remove the `gtk-xft-dpi` pin in `crates/wolf-gnome/src/app.rs`. The view then draws blank after the split, so assertion 11 reddens with it but goes unevaluated. It needs a bus that can activate no portal, which [`smoke_bus_config`] gives every cage, and GTK settings with no dpi, which [`SMOKE_GTK_SETTINGS_INI`] is: with either supplying one the revert stays green. [`preview_created_after_launch_renders_without_a_portal_under_cage`] carries the same claim on pixels rather than OCR | RED with the pin removed: capture B lacked `zzbodyoscar`. Green with it. |
+/// | 9 | readback B is `{Preview: <source>, <source>}` | **discriminator** — Edit-in-another-pane bound the source into the OTHER pane, over the other file, WITHOUT replacing the preview or splitting | in `AppShell::preview_in_other_pane` and `AppShell::edit_in_other_pane`, pass `0` instead of the resolved target: core then splits, and the readback holds three windows with [`PREVIEW_OTHER_FILE`] still among them. A second revert: point `shell::perform`'s `EditInOtherPane` arm at `AppShell::edit_source`, the in-place command; the source then replaces the preview it was fired from, and the readback loses the preview scratch. | unmeasured |
+/// | 10 | capture B carries [`PREVIEW_OCR_BODY`] | precondition — the preview still shows its document after the Edit leg, so a red assertion 11 is about the body swap and not a blank or lost pane | none; do not invent one | n/a |
 /// | 11 | capture B carries [`PREVIEW_OCR_LIVE`] | **discriminator** — the LIVE EDIT reached the DOM through the JSON body swap | in `pane_view::preview_swap_payload`, encode ONCE (`Ok(serde_json::to_string(body)?)` plus the two replacements). `JSON.parse` is then handed HTML, throws `Unrecognized token '<'` on every keystroke, and the preview keeps showing the document assertion 10 just found. **A SECOND revert reaches this assertion, and the paced burst is what admits it:** neuter the `RenderDecision::Arm` arm of `PaneInner::request_preview_render` so it arms nothing. The marker's characters then coalesce into a fire nobody ever runs, and the page carries at most the leading edge's `o`. The two reverts are distinguishable from the app's stderr — the single-encoding one prints `preview body swap failed` once per keystroke, the trailing-edge one prints nothing at all — and from assertion 12, which stays inside its budget under the first and reads a count with no trailing fire in it under the second. | RED, isolated, and with the predicted stderr: `capture B did not contain "zzlivekilo" — the marker typed into the SOURCE buffer while the preview pane was live`, beside five copies of `wolf-gnome: preview body swap failed: about:blank:1:68: SyntaxError: JSON Parse error: Unrecognized token '<'`. Assertion 10 stayed green, which is the frozen-stale-document half of the signature this row names. The trailing-edge revert: RED, isolated, and with the OTHER half of the signature — the same `capture B did not contain "zzlivekilo"` failure, and `preview body swap failed` printed NOT ONCE anywhere in the run, which is what tells the two reverts apart from stderr alone. Assertion 10 stayed green and the OCR dump beside the failure still carries the rendered heading and the `preview:` statusbar, so the pane was live and only the trailing edge was missing. Measured against the scenario INCLUDING step 9, whose burst lands after both captures and disturbs this leg not at all; the run's summed `prev.render` was 2, the cold open and the marker burst's leading edge with no trailing fire in it. |
 /// | 12 | the summed `prev.render` count in this run's own frame-stats report is at most [`PREVIEW_RENDER_BUDGET`] | **discriminator** — the bursts were COALESCED: the whole scenario paid a handful of blocking `render_preview` calls rather than one per keystroke | make `PaneInner::request_preview_render` call `run_preview_render_pass()` unconditionally, which is the uncoalesced per-wake render. Assertion 11 stays GREEN under it — every keystroke renders, so the marker certainly reaches the DOM — and that is exactly the point: only this row and row 13 can see the coalescing at all. | RED, isolated: `counts 61 blocking "prev.render" calls over all 14 report block(s), above the budget of 20`. Assertions 1 through 11 stayed green under it — assertion 11 included, which is this row's own claim, and the reason the row exists. Green runs of the same scenario read 7, 7 and 8, so the budget sits at least 12 above the coalesced reading and 41 below the uncoalesced one and needed no moving. |
 /// | 13 | the same sum is at least [`PREVIEW_CAP_RENDER_FLOOR`] | **discriminator** — the STALENESS CAP fired: step 9's ~2.4-second burst rendered several times DURING the typing, not only at its ends. Also row 12's non-vacuity half, since a build that renders nothing reads zero and no ceiling refuses that | drop the `min` against the cap's remainder in `PreviewCoalescer::request`, so the delay is always `PREVIEW_TRAILING_DELAY`. The sustained burst then renders at most twice — its leading edge and the trailing fire after its last key, since every arm inside it is superseded before it elapses — and measured, once. Rows 1 through 12 all stay green under it: the marker leg is shorter than the cap, so nothing else in this scenario can tell the difference. | RED, isolated: the run `counts 4 "prev.render" sample(s) over all 14 report block(s)`, under the floor. Rows 1 through 12 stayed green under it, the budget included, exactly as the revert column claims. Both ends measured: capped reads 7, 7 and 8 across three runs, cap-removed reads 4, and per block step 9's burst pays 4 renders capped against 1 with the cap gone. The floor was moved 7 to 6 on that evidence — two capped runs sat exactly ON seven, with no margin, and the third read 8 — and the derivation in [`PREVIEW_CAP_RENDER_FLOOR`] rewritten to the measured figures. |
 /// | 14 | the summed `pane.prev` count EXCEEDS the summed `pane.wake` count | **discriminator** — the coalescer's FIRE opens a preview-pass region of its own, so every `prev.render` sample has a parent and `frame_stats.rs`'s nesting table stays true | delete the `frame_metrics::scope(Bucket::PanePrev)` guard from the fire closure in `PaneInner::request_preview_render` (or bind it with `let _ =`, which drops it instantly). Rows 1 through 13 ALL stay green under it — the RPC is still timed, so every count they read is unchanged — which is why this row exists at all. Deliberately NOT `pane.prev` against `prev.render`: the pass runs on nearly every wake, so that comparison holds with the scope deleted and with the coalescer removed entirely. | RED, isolated: `counts 291 "pane.prev" region(s) against 291 "pane.wake", so no preview pass ran outside a pane wake`. Rows 1 through 13 stayed green under it, exactly as the revert column claims. Green reads +4 on three consecutive runs (298/294, 303/299, 309/305), which is the performing fires. **The comparison was written `>=` and the revert PASSED under it** — measured 299 against 299 — because the wakes-that-skip-the-pass term this scenario was assumed to have is zero: every pane wake reaches the pass. It was made STRICT on that evidence, and the 188-against-187 reading the row first carried predates step 9. |
-/// | 15 | the cage log carries [`DPI_PIN_STDERR_PREFIX`] | **non-vacuity** — the app's `gtk-xft-dpi` pin ran, so assertion 10's green is the pin's evidence and not a dpi supplied from elsewhere | add `gtk-xft-dpi=98304` to [`SMOKE_GTK_SETTINGS_INI`]: assertion 10 stays green and this row reddens. Removing the pin reddens assertion 10 first, which is why this row comes last | unmeasured |
 ///
 /// Assertion 11 is the highest-value assertion of the set and the reason the scenario
 /// has a second half at all: it is the ONLY one that reaches the body-swap branch, and
@@ -1215,10 +1214,6 @@ const DPI_PIN_STDERR_PREFIX: &str = "wolf-xft-dpi-pinned:";
 /// Assertion 14 reads the report too, but a different pair of counts, and it is the
 /// only one that says anything about WHERE a render was timed rather than how many
 /// there were. Its own row carries why it cannot be folded into the other two.
-///
-/// Assertion 15 reads the cage log rather than the report: a dpi reaching GTK from
-/// anywhere but the pin leaves assertion 10 green, and only the pin's own line says it
-/// was the pin.
 #[test]
 fn preview_pane_renders_and_edit_source_returns_under_cage() {
     const SMOKE: &str = "preview_pane_renders_and_edit_source_returns_under_cage";
@@ -1478,13 +1473,12 @@ fn preview_pane_renders_and_edit_source_returns_under_cage() {
         ),
     }
 
-    // Assertion 9 (discriminator): `edit_in_other(0)` splits and binds the source into the new pane, so
-    // a third window appears and the preview survives.
+    // Assertion 9 (discriminator): the preview's left neighbour is the other file's pane, so
+    // `edit_in_other` binds the source over the other file there; no third window appears.
     let want_edit = {
         let mut want = vec![
             format!("{PREVIEW_READBACK_PREFIX}{PREVIEW_SOURCE_FILE}"),
             PREVIEW_SOURCE_FILE.to_string(),
-            PREVIEW_OTHER_FILE.to_string(),
         ];
         want.sort();
         want
@@ -1493,35 +1487,30 @@ fn preview_pane_renders_and_edit_source_returns_under_cage() {
     assert_eq!(
         got_edit, want_edit,
         "{SMOKE}: after the Edit-in-another-pane leg the captive Neovim's windows hold \
-         {got_edit:?}, not {want_edit:?} (both sorted). TWO entries with the preview scratch GONE \
-         means the IN-PLACE `edit_source` ran instead of `edit_in_other`: the source replaced the \
-         preview it was fired from, and steps 6 onward have no preview left to observe — check \
-         `shell::perform`'s `EditInOtherPane` arm and that {EDIT_QUERY:?} still selects the \
-         other-pane row. TWO entries with the preview scratch PRESENT means the leg did nothing at \
-         all — check `edit_press`'s preview gate. A missing {PREVIEW_OTHER_FILE:?} means core \
-         reused that window rather than splitting, i.e. a `target_win` other than \
-         `shell::SPLIT_FOR_OTHER_PANE` reached `edit_in_other`."
+         {got_edit:?}, not {want_edit:?} (both sorted). THREE entries with {PREVIEW_OTHER_FILE:?} \
+         among them mean the shell asked core to split (a target of 0) although the other file's \
+         pane sat beside the preview, rather than reusing that pane. TWO entries with \
+         {PREVIEW_OTHER_FILE:?} and the preview scratch mean the leg did nothing at all — check \
+         `edit_press`'s preview gate and the shell's no-target refusal. TWO entries \
+         `{{{PREVIEW_OTHER_FILE}, {PREVIEW_SOURCE_FILE}}}` mean the IN-PLACE `edit_source` ran \
+         instead of `edit_in_other`: the source replaced the preview it was fired from, and \
+         steps 6 onward have no preview left to observe — check `shell::perform`'s \
+         `EditInOtherPane` arm and that {EDIT_QUERY:?} still selects the other-pane row."
     );
 
     let ocr_live = ocr_to_lowercase(&out_png);
 
-    // Assertion 10 (discriminator): the view created by the split rendered. Green here with 11
-    // red is a frozen preview, the single-encoding signature; both red is a blank or lost view.
+    // Assertion 10 (precondition): the preview still shows its document. Green here with 11 red
+    // is a frozen preview, the single-encoding signature; both red is a blank or lost view.
     assert!(
         ocr_live.contains(PREVIEW_OCR_BODY),
         "{SMOKE}: capture B did not contain {PREVIEW_OCR_BODY:?}, so the preview pane is not \
          showing its document at all any more — and assertion 11 below cannot be read, since a \
-         blank pane fails it for a reason that has nothing to do with the body swap. The named \
-         cause: after step 5's Edit-in-another-pane SPLIT the preview is shown by a web view \
-         created on a host not yet allocated, and with GTK's `gtk-xft-dpi` unset WebKitGTK lays \
-         that view's page out at a 0×0 viewport — check that the app's `gtk-xft-dpi` pin in \
-         crates/wolf-gnome/src/app.rs still runs before any preview view exists. A cage's bus \
-         offers no portal and its GTK settings carry no dpi, so nothing else supplies one; \
-         `preview_created_after_launch_renders_without_a_portal_under_cage` asserts the same on \
-         pixels, and red there too confirms it. The other causes: the pane \
-         stopped being a preview (Edit Source bound the source into it — but then assertion 9 \
-         above is red and that is the finding), or the swap replaced the body with nothing. PNG \
-         kept at {}. OCR output was:\n{ocr_live}",
+         blank pane fails it for a reason that has nothing to do with the body swap. The likely \
+         causes: the pane stopped being a preview (Edit bound the source into it — but then \
+         assertion 9 above is red and that is the finding), the Edit leg's relayout unparented \
+         or blanked the view, or the swap replaced the body with nothing. PNG kept at {}. OCR \
+         output was:\n{ocr_live}",
         out_png.display()
     );
 
@@ -1642,28 +1631,6 @@ fn preview_pane_renders_and_edit_source_returns_under_cage() {
          against {PREVIEW_RENDER_LABEL:?} either, which holds by construction. File contents \
          were:\n{stats_text}",
         stats_path.display()
-    );
-
-    // Assertion 15 (non-vacuity): the dpi pin ran, so assertion 10 is its evidence. Last, so
-    // removing the pin still reaches assertion 10's own red.
-    let log_path = runtime_dir.join(CAGE_LOG_NAME);
-    let log = std::fs::read_to_string(&log_path).unwrap_or_else(|e| {
-        panic!(
-            "{SMOKE}: could not read the cage log {}: {e}. `cage_command` sends the app's stderr \
-             there, so this smoke cannot say whether the dpi pin ran.",
-            log_path.display()
-        )
-    });
-    assert!(
-        log.contains(DPI_PIN_STDERR_PREFIX),
-        "{SMOKE}: the cage log {} carries no {DPI_PIN_STDERR_PREFIX:?} line, so the app's \
-         `gtk-xft-dpi` pin did NOT fire: GTK came up with a dpi already set, and assertion 10's \
-         green is that dpi's doing, not the pin's. Find where it came from — a portal on the \
-         cage's bus, a `gtk-xft-dpi` in SMOKE_GTK_SETTINGS_INI (guard check 15), a user \
-         settings.ini under XDG_CONFIG_HOME (guard check 16), or GTK's compiled-in sysconfdir \
-         gtk-4.0/settings.ini, which nothing in this harness replaces — or, if the app's line \
-         was renamed, re-type DPI_PIN_STDERR_PREFIX from crates/wolf-gnome/src/app.rs.",
-        log_path.display()
     );
 }
 
@@ -2885,9 +2852,9 @@ exit 0
 /// The whole geometry rests on this and it is not obvious, so it is written out
 /// rather than assumed. Each launch opens the source in the window's ONE pane, so:
 ///
-/// 1. Preview in Another Pane passes `shell::SPLIT_FOR_OTHER_PANE` (`0`), so core
-///    SPLITS rather than reusing a window. Nothing about what the pane holds can
-///    change that: this front end never nominates a target window.
+/// 1. From a one-pane window `other_pane_seam::target` answers `Split`, so the shell
+///    passes `0` and core SPLITS rather than reusing a window: there is no other pane
+///    to reuse, whatever the one pane holds.
 /// 2. The Lua's `wolf_do_split('v')` emits a Split intent naming the ORIGINAL window
 ///    as `from`.
 /// 3. `pane_view::apply_split` builds `Frame::Split { children: [Leaf(target),
@@ -3303,6 +3270,10 @@ pub(crate) const NEWVIEW_WINS_BEFORE_NAME: &str = "wolf_gnome_newview_wins_a.txt
 /// The same readback taken AFTER the split. See [`NEWVIEW_WINS_BEFORE_NAME`].
 pub(crate) const NEWVIEW_WINS_AFTER_NAME: &str = "wolf_gnome_newview_wins_b.txt";
 
+/// The same readback taken once the other file's pane is closed, with the preview the
+/// only pane. See [`NEWVIEW_WINS_BEFORE_NAME`].
+pub(crate) const NEWVIEW_WINS_ALONE_NAME: &str = "wolf_gnome_newview_wins_alone.txt";
+
 /// Where the scenario writes `dbus-send`'s reply to `ListActivatableNames`, before the
 /// app launches. Under `XDG_RUNTIME_DIR`; written by the shell, so nothing draws it.
 const NEWVIEW_ACTIVATABLE_NAME: &str = "wolf_gnome_newview_activatable.txt";
@@ -3337,9 +3308,9 @@ const BUS_DAEMON_NAME: &str = "org.freedesktop.DBus";
 const PORTAL_BUS_NAME: &str = "org.freedesktop.portal.Desktop";
 
 /// The NEW-VIEW scenario, run as a single `sh -c` string inside ONE `cage`:
-/// `PICKOVER_SCENARIO`'s split-and-preview opening, a CONTROL capture, then Edit in
-/// Another Pane from the preview — [`PREVIEW_SCENARIO`]'s step 5, which splits the
-/// preview's own pane — and a SAMPLE capture.
+/// `PICKOVER_SCENARIO`'s split-and-preview opening, a CONTROL capture, the other file's
+/// pane closed so the preview is the only pane, then Edit in Another Pane from the
+/// preview, which splits the preview's own pane, and a SAMPLE capture.
 ///
 /// ## Why the split is of the preview's pane
 ///
@@ -3347,8 +3318,14 @@ const PORTAL_BUS_NAME: &str = "org.freedesktop.portal.Desktop";
 /// allocated. The view the in-place Preview opens is created in a pane already on
 /// screen and renders whatever the dpi; measured, the preview after a split of its own
 /// pane is shown by a view created with the new layout, first rendered while its host
-/// is 0×0. That is [`PREVIEW_SCENARIO`]'s step 5 exactly, the leg its assertion 10
-/// reads.
+/// is 0×0.
+///
+/// ## Why the other file's pane is closed first
+///
+/// Edit in Another Pane reuses a pane already beside the preview, which binds the
+/// source there and creates no view. From a lone pane `other_pane_seam::target` answers
+/// `Split`, so core splits the preview's own pane: the new right window keeps the
+/// preview and the original one takes the source.
 ///
 /// ## The bus probe comes first
 ///
@@ -3363,6 +3340,8 @@ const PORTAL_BUS_NAME: &str = "org.freedesktop.portal.Desktop";
 /// * `14` — the readback before the split never appeared.
 /// * `15` — the readback after the split never appeared: the first leg's keys
 ///   reached Neovim, so the palette leg is what lost them.
+/// * `16` — the readback with the preview alone never appeared: the `<C-w>h` and
+///   `<C-w>c` chords lost the keyboard, or the app died closing the pane.
 /// * `17` — `dbus-send` failed or is missing, so nothing below can say which bus the
 ///   app ran on.
 const NEWVIEW_SCENARIO: &str = r#"
@@ -3430,9 +3409,22 @@ sleep "$SETTLE"
 # --- Step 5: the CONTROL capture ---------------------------------------------
 grim "$OUT_PNG_CONTROL"
 
+# --- Step 5a: close the other file's pane, leaving the preview alone ----------
+# With a pane beside it, Edit in Another Pane reuses that pane and creates no view.
+wtype -M ctrl -k w -m ctrl
+wtype -k h
+sleep "$SETTLE"
+wtype -M ctrl -k w -m ctrl
+wtype -k c
+sleep "$SETTLE"
+wtype -- ":call writefile([join(map(tabpagebuflist(), {_, b -> fnamemodify(bufname(b), ':t')}), ',')], '$WINS_ALONE')"
+wtype -k Return
+wait_file "$WINS_ALONE" || exit 16
+sleep "$SETTLE"
+
 # --- Step 6: EDIT IN ANOTHER PANE, from the preview --------------------------
-# The active pane IS the preview, so this splits the preview's own pane and binds the
-# source into the new half; the preview after the split is a view created then.
+# The preview is the active and only pane, so this splits the preview's own pane: the new
+# right half keeps the preview, shown by a view created then, and the original takes the source.
 wtype -M ctrl -M shift -k p -m shift -m ctrl
 sleep "$SETTLE"
 wtype -- "$EDIT_QUERY"
@@ -3509,9 +3501,8 @@ fn colour_extent(
 /// every container and every minimal desktop showed it; [`smoke_bus_config`] makes
 /// every host the second kind, and [`SMOKE_GTK_SETTINGS_INI`] deliberately sets no dpi.
 ///
-/// [`preview_pane_renders_and_edit_source_returns_under_cage`]'s assertion 10 makes the
-/// same claim by OCR after the same split. This smoke makes it on pixels, with a control
-/// taken in the same launch, and with the bus premise asserted rather than assumed.
+/// The claim is made on pixels, with a control taken in the same launch, and with the
+/// bus premise asserted rather than assumed.
 ///
 /// ## The pair, and the extent
 ///
@@ -3532,9 +3523,9 @@ fn colour_extent(
 /// the readings below sit far from both.
 ///
 /// A green sample does not prove the pin by itself: a dpi from anywhere else renders
-/// the view just as well. Assertion 8 is what ties the green to the pin — the cage log
+/// the view just as well. Assertion 9 is what ties the green to the pin — the cage log
 /// must carry its [`DPI_PIN_STDERR_PREFIX`] line. It comes LAST, so removing the pin
-/// still reaches assertion 7 and reads the discriminator's own red.
+/// still reaches assertion 8 and reads the discriminator's own red.
 ///
 /// ## Assertions, classified
 ///
@@ -3544,14 +3535,15 @@ fn colour_extent(
 /// | 2 | the bus's `ListActivatableNames` reply was read, and names nothing but the bus daemon itself — no [`PORTAL_BUS_NAME`] | precondition — the configuration this smoke's red needs: a portal reachable supplies the dpi and masks the defect | add `<standard_session_servicedirs/>` to [`SMOKE_BUS_CONFIG_TEMPLATE`]; on a host whose data directories carry a portal service this row reddens naming it | unmeasured |
 /// | 3 | both PNGs present, each decoding at the pinned output size | precondition | none; do not invent one | n/a |
 /// | 4 | readback before is the preview scratch plus the other file | precondition — a preview exists in one of exactly two panes before the split | none; do not invent one | unmeasured |
-/// | 5 | readback after is the preview scratch, the source and the other file | precondition — Edit in Another Pane split the preview's pane and kept the preview | none; do not invent one | unmeasured |
-/// | 6 | in the CONTROL, the extent lies in the right half and clears both floors | **paired control** — the view the preview opened with rendered the document, so a red sample is about the view created by the split and not the cold open | blank the render (`WolfCore::render_preview` answering the empty string) | unmeasured |
-/// | 7 | in the SAMPLE, an extent exists and clears both floors | **discriminator** — the view created by the split renders its document | remove the `gtk-xft-dpi` pin in `crates/wolf-gnome/src/app.rs` | RED with the pin removed: the sample's extent `SampleRect { x0: 959, x1: 1260, y0: 159, y1: 600 }`, dark fraction 0.9994, ink **0**, against the control's extent at `x0: 787` with ink 1,976. GREEN with the pin: the sample's extent the same rectangle, dark 0.9624, ink 1,976, against floors of 0.8 and 500 |
-/// | 8 | the cage log carries [`DPI_PIN_STDERR_PREFIX`] | **non-vacuity** — the pin ran, so a green assertion 7 is the pin's evidence and not a dpi from elsewhere | add `gtk-xft-dpi=98304` to [`SMOKE_GTK_SETTINGS_INI`]: assertion 7 stays green and this row reddens (as does the guard's check 15). Removing the pin reddens assertion 7 first | unmeasured |
+/// | 5 | readback alone is the preview scratch only | precondition — the other file's pane is closed, so the preview is a lone pane and the Edit leg must split it | none; do not invent one | unmeasured |
+/// | 6 | readback after is the preview scratch and the source | precondition — Edit in Another Pane split the preview's pane and kept the preview | none; do not invent one | unmeasured |
+/// | 7 | in the CONTROL, the extent lies in the right half and clears both floors | **paired control** — the view the preview opened with rendered the document, so a red sample is about the view created by the split and not the cold open | blank the render (`WolfCore::render_preview` answering the empty string) | unmeasured |
+/// | 8 | in the SAMPLE, an extent exists and clears both floors | **discriminator** — the view created by the split renders its document | remove the `gtk-xft-dpi` pin in `crates/wolf-gnome/src/app.rs` | measured with the preview in the right third of three panes: RED with the pin removed: the sample's extent `SampleRect { x0: 959, x1: 1260, y0: 159, y1: 600 }`, dark fraction 0.9994, ink **0**, against the control's extent at `x0: 787` with ink 1,976. GREEN with the pin: the sample's extent the same rectangle, dark 0.9624, ink 1,976, against floors of 0.8 and 500 |
+/// | 9 | the cage log carries [`DPI_PIN_STDERR_PREFIX`] | **non-vacuity** — the pin ran, so a green assertion 8 is the pin's evidence and not a dpi from elsewhere | add `gtk-xft-dpi=98304` to [`SMOKE_GTK_SETTINGS_INI`]: assertion 8 stays green and this row reddens (as does the guard's check 15). Removing the pin reddens assertion 8 first | unmeasured |
 ///
-/// Without that pin, row 7 is red on every host, which is this smoke's expected red
+/// Without that pin, row 8 is red on every host, which is this smoke's expected red
 /// rather than a flake. On a bus that can activate a portal, or with a dpi reaching GTK
-/// any other way, the revert stays green; row 2, the guard's check 15 and row 8 are
+/// any other way, the revert stays green; row 2, the guard's check 15 and row 9 are
 /// what refuse those.
 ///
 /// ## The conventions it obeys
@@ -3561,7 +3553,7 @@ fn colour_extent(
 /// directory of its own pinning the dark appearance the two colours are measured at; and
 /// distinct exit codes for each readback and for the bus probe. It asserts no OCR term,
 /// so it contributes no `ASSERTED_OCR_TERMS` row; it reuses the picker smoke's two
-/// fixtures, already in `RELAUNCH_FIXTURE_NAMES`, and registers its two readbacks.
+/// fixtures, already in `RELAUNCH_FIXTURE_NAMES`, and registers its three readbacks.
 #[test]
 fn preview_created_after_launch_renders_without_a_portal_under_cage() {
     const SMOKE: &str = "preview_created_after_launch_renders_without_a_portal_under_cage";
@@ -3592,12 +3584,14 @@ fn preview_created_after_launch_renders_without_a_portal_under_cage() {
     let control_png = runtime_dir.join(NEWVIEW_CONTROL_PNG_NAME);
     let sample_png = runtime_dir.join(NEWVIEW_SAMPLE_PNG_NAME);
     let wins_before = runtime_dir.join(NEWVIEW_WINS_BEFORE_NAME);
+    let wins_alone = runtime_dir.join(NEWVIEW_WINS_ALONE_NAME);
     let wins_after = runtime_dir.join(NEWVIEW_WINS_AFTER_NAME);
     let activatable = runtime_dir.join(NEWVIEW_ACTIVATABLE_NAME);
     for path in [
         &control_png,
         &sample_png,
         &wins_before,
+        &wins_alone,
         &wins_after,
         &activatable,
     ] {
@@ -3615,6 +3609,7 @@ fn preview_created_after_launch_renders_without_a_portal_under_cage() {
         .env("OUT_PNG_CONTROL", &control_png)
         .env("OUT_PNG_SAMPLE", &sample_png)
         .env("WINS_BEFORE", &wins_before)
+        .env("WINS_ALONE", &wins_alone)
         .env("WINS_AFTER", &wins_after)
         .env("ACTIVATABLE", &activatable);
 
@@ -3629,11 +3624,14 @@ fn preview_created_after_launch_renders_without_a_portal_under_cage() {
          `dbus-send` failed or is not on PATH — it comes from the devShell's `pkgs.dbus`, beside \
          `dbus-run-session` — so nothing says which bus the app ran on. Exit 11: the app died \
          before it was ready for input, a LAUNCH failure. Exit 14: the readback BEFORE the \
-         split never appeared at {}, so keys are not reaching Neovim at all. Exit 15: the \
-         readback AFTER the split never appeared at {}, although the first one did, so the \
-         Edit in Another Pane leg lost the keyboard. Any OTHER status is `grim` or `wtype` \
-         failing under `set -eu`. This assertion says nothing about what the preview drew.",
+         split never appeared at {}, so keys are not reaching Neovim at all. Exit 16: the \
+         readback with the preview ALONE never appeared at {}, so closing the other file's \
+         pane lost the keyboard or killed the app. Exit 15: the readback AFTER the split never \
+         appeared at {}, although the earlier ones did, so the Edit in Another Pane leg lost \
+         the keyboard. Any OTHER status is `grim` or `wtype` failing under `set -eu`. This \
+         assertion says nothing about what the preview drew.",
         wins_before.display(),
+        wins_alone.display(),
         wins_after.display()
     );
 
@@ -3654,7 +3652,7 @@ fn preview_created_after_launch_renders_without_a_portal_under_cage() {
          services the bus offered"
     } else if activatable_services.contains(&PORTAL_BUS_NAME) {
         "a bus that can activate the desktop PORTAL: the configuration carries a service \
-         directory that reaches one, the portal supplies the dpi, and assertion 7 would stay \
+         directory that reaches one, the portal supplies the dpi, and assertion 8 would stay \
          green with the app's `gtk-xft-dpi` pin deleted"
     } else if !activatable_services.is_empty() {
         "a bus with service directories: no portal among them today, but the configuration is \
@@ -3694,31 +3692,38 @@ fn preview_created_after_launch_renders_without_a_portal_under_cage() {
          panes with the preview in the RIGHT one."
     );
 
-    // --- Assertion 5 (precondition): the preview's pane split, the preview kept --
+    // --- Assertion 5 (precondition): the preview alone, so the Edit leg must split --
+    let want_alone = vec![preview_name.clone()];
+    let got_alone = read_window_buffer_names(&wins_alone, SMOKE);
+    assert_eq!(
+        got_alone, want_alone,
+        "{SMOKE}: with the other file's pane closed the captive Neovim's windows hold \
+         {got_alone:?}, not the preview alone. {got_before:?} again means `<C-w>c` closed \
+         nothing, so the Edit leg below would reuse that pane and create no view, and the sample \
+         would prove nothing. The other file alone means `<C-w>h` never left the preview and the \
+         close took the preview's pane instead."
+    );
+
+    // --- Assertion 6 (precondition): the preview's pane split, the preview kept --
     let want_after = {
-        let mut want = vec![
-            preview_name.clone(),
-            PICKOVER_SOURCE_FILE.to_string(),
-            PICKOVER_OTHER_FILE.to_string(),
-        ];
+        let mut want = vec![preview_name.clone(), PICKOVER_SOURCE_FILE.to_string()];
         want.sort();
         want
     };
     let got_after = read_window_buffer_names(&wins_after, SMOKE);
     let has_preview = got_after.contains(&preview_name);
-    let after_verdict = if got_after == want_before {
-        "the same two windows: Edit in Another Pane did nothing, so no view was created and the \
-         sample proves nothing — check `edit_press`'s preview gate and that EDIT_QUERY still \
-         selects the other-pane row"
-    } else if !has_preview && got_after.len() == 2 {
-        "TWO windows and NO preview: the in-place Edit Source replaced the preview instead of \
+    let after_verdict = if got_after == want_alone {
+        "the preview alone, as before the leg: Edit in Another Pane did nothing, so no view was \
+         created and the sample proves nothing — check `edit_press`'s preview gate and the shell's \
+         no-target refusal, and that EDIT_QUERY still selects the other-pane row"
+    } else if !has_preview && got_after.len() == 1 {
+        "ONE window and NO preview: the in-place Edit Source replaced the preview instead of \
          splitting, so there is no preview left to observe"
     } else if !has_preview {
         "NO preview window: the split lost it on Neovim's side, which is a different defect from \
          a blank view"
     } else {
-        "an unexpected window set: a missing other file means core reused that window rather \
-         than splitting"
+        "no split of the preview's pane as expected: an unexpected window set"
     };
     assert_eq!(
         got_after, want_after,
@@ -3726,7 +3731,7 @@ fn preview_created_after_launch_renders_without_a_portal_under_cage() {
          {want_after:?} (both sorted): {after_verdict}."
     );
 
-    // Assertions 6 and 7 find the preview in each capture the same way: the extent of its own
+    // Assertions 7 and 8 find the preview in each capture the same way: the extent of its own
     // background over the pane area, above the cmdline strip.
     let (area_x, area_y, area_w, _) = preview_theme_pane_area();
     let (_, band_y1) = preview_theme_band_rows();
@@ -3749,7 +3754,7 @@ fn preview_created_after_launch_renders_without_a_portal_under_cage() {
         Some((extent, band_fraction(dark, extent.pixels(), what), ink))
     };
 
-    // --- Assertion 6 (paired control): the opening view rendered the document --
+    // --- Assertion 7 (paired control): the opening view rendered the document --
     let control_reading = read(&control, "the control's dark fraction");
     assert!(
         control_reading.is_some_and(|(extent, dark, ink)| {
@@ -3770,7 +3775,7 @@ fn preview_created_after_launch_renders_without_a_portal_under_cage() {
         control_png.display()
     );
 
-    // --- Assertion 7 (discriminator): the view created by the split renders it --
+    // --- Assertion 8 (discriminator): the view created by the split renders it --
     let sample_reading = read(&sample, "the sample's dark fraction");
     assert!(
         sample_reading.is_some_and(|(_, dark, ink)| {
@@ -3795,8 +3800,8 @@ fn preview_created_after_launch_renders_without_a_portal_under_cage() {
         sample_png.display()
     );
 
-    // --- Assertion 8 (non-vacuity): the pin is what rendered it ----------------
-    // Last, so removing the pin still reaches assertion 7's own red.
+    // --- Assertion 9 (non-vacuity): the pin is what rendered it ----------------
+    // Last, so removing the pin still reaches assertion 8's own red.
     let log_path = runtime_dir.join(CAGE_LOG_NAME);
     let log = std::fs::read_to_string(&log_path).unwrap_or_else(|e| {
         panic!(
@@ -3808,7 +3813,7 @@ fn preview_created_after_launch_renders_without_a_portal_under_cage() {
     assert!(
         log.contains(DPI_PIN_STDERR_PREFIX),
         "{SMOKE}: the cage log {} carries no {DPI_PIN_STDERR_PREFIX:?} line, so the app's \
-         `gtk-xft-dpi` pin did NOT fire: GTK came up with a dpi already set, and assertion 7's \
+         `gtk-xft-dpi` pin did NOT fire: GTK came up with a dpi already set, and assertion 8's \
          green is that dpi's doing, not the pin's — the smoke would pass with the pin deleted. \
          Find where the dpi came from: a portal on the cage's bus (assertion 2 should have \
          caught it), a `gtk-xft-dpi` in SMOKE_GTK_SETTINGS_INI (guard check 15), a user \
@@ -4116,5 +4121,523 @@ fn preview_click_keeps_window_chords_under_cage() {
          close chord never fired over the clicked preview. The source gone and the preview \
          kept means the chord closed the wrong pane, so the click moved Neovim's focus after \
          all."
+    );
+}
+
+// Other-pane reuse fixtures: two Markdown files per smoke, and window-handle readbacks.
+// No name carries an `ASSERTED_OCR_TERMS` entry, though neither smoke OCRs anything.
+
+/// Preview-reuse smoke: the file opened and previewed first. Its preview is the one
+/// the second press must displace.
+pub(crate) const OPR_FIRST_FILE: &str = "oprone.md";
+
+/// Preview-reuse smoke: the file opened over the first in the editor pane, and
+/// previewed by the second press.
+pub(crate) const OPR_SECOND_FILE: &str = "oprtwo.md";
+
+/// Preview-reuse smoke: the readback after the first press.
+///
+/// Under `XDG_RUNTIME_DIR` as [`NEWVIEW_WINS_BEFORE_NAME`] is, and registered in
+/// `RELAUNCH_FIXTURE_NAMES` for its reason: the typed `writefile` echoes its path.
+pub(crate) const OPR_WINS_1_NAME: &str = "wolf_gnome_opr_wins_1.txt";
+
+/// Preview-reuse smoke: the readback after `:e` opens the second file.
+pub(crate) const OPR_WINS_2_NAME: &str = "wolf_gnome_opr_wins_2.txt";
+
+/// Preview-reuse smoke: the readback after the second press.
+pub(crate) const OPR_WINS_3_NAME: &str = "wolf_gnome_opr_wins_3.txt";
+
+/// Edit-reuse smoke: the file opened and previewed first, which stays in the editor pane
+/// until Edit in Another Pane displaces it.
+pub(crate) const OED_FIRST_FILE: &str = "oedone.md";
+
+/// Edit-reuse smoke: the file the preview pane is repointed at, and whose source Edit in
+/// Another Pane binds.
+pub(crate) const OED_SECOND_FILE: &str = "oedtwo.md";
+
+/// Edit-reuse smoke: the readback after the preview pane is repointed.
+pub(crate) const OED_WINS_1_NAME: &str = "wolf_gnome_oed_wins_1.txt";
+
+/// Edit-reuse smoke: the readback after Edit in Another Pane.
+pub(crate) const OED_WINS_2_NAME: &str = "wolf_gnome_oed_wins_2.txt";
+
+/// The shell function both other-pane scenarios share, prepended to each body.
+///
+/// `read_wins <file> <exit>` has the captive Neovim write two lines: every window of
+/// the tabpage as `<handle>=<buffer tail>`, comma-joined in no particular order, then
+/// the current window's handle. A missing file exits with `<exit>`.
+///
+/// Windows are named by HANDLE, not by Neovim's window order or a sorted buffer set,
+/// because both scenarios' claims are about which existing window a press reused: a
+/// sorted set of names cannot tell "the preview moved into the other window" from "it
+/// stayed", and init.lua sets no `splitright`, so window order says nothing stable.
+const OTHER_PANE_PRELUDE: &str = r#"
+set -eu
+
+# SETTLE is the settle between steps; see SCENARIO.
+WAIT_INTERVAL=0.2
+SETTLE=1.0
+FILE_TRIES=100
+# PREVIEW_SETTLE -- budgeted FROM THE CALL; PREVIEW_SCENARIO's doc comment carries the
+# measurement. Spent after every preview open or repoint.
+PREVIEW_SETTLE=2.0
+
+wait_file() {
+    f=$1
+    t=0
+    while [ "$t" -lt "$FILE_TRIES" ]; do
+        if [ -s "$f" ]; then
+            return 0
+        fi
+        t=$((t + 1))
+        sleep "$WAIT_INTERVAL"
+    done
+    echo "wolf-gnome other-pane smoke: readback file $f never appeared (or stayed empty)." >&2
+    return 1
+}
+
+# Every window as <handle>=<buffer tail>, then the current window's handle.
+read_wins() {
+    wtype -- ":call writefile([join(map(nvim_tabpage_list_wins(0), {_, win -> win . '=' . fnamemodify(bufname(winbufnr(win)), ':t')}), ','), string(win_getid())], '$1')"
+    wtype -k Return
+    wait_file "$1" || exit "$2"
+}
+
+"$WOLF_BIN" &
+app_pid=$!
+wait_ready "$app_pid" 11 "wolf-gnome other-pane smoke"
+"#;
+
+/// Body of [`preview_in_another_pane_reuses_the_other_pane_under_cage`], appended to
+/// [`OTHER_PANE_PRELUDE`]: open the first file, preview it in another pane, open the
+/// second file over the first, and preview again, reading the windows back after each.
+///
+/// Every press is the `:WolfPreviewInOtherPane` Ex command, which reaches
+/// `shell::perform` through the command drain as the palette row does, with no palette
+/// and no command MRU in between.
+///
+/// ## Exit codes
+///
+/// * `11` — the app died before it was ready for input (the shared convention).
+/// * `14`, `15`, `16` — readback 1, 2 or 3 never appeared, so the leg before it lost the
+///   keyboard.
+const OPR_BODY: &str = r#"
+# --- Step 1: the first file, and its preview in another pane -------------------
+wtype -- ":e $OPR_FIRST_FILE"
+wtype -k Return
+sleep "$SETTLE"
+wtype -- ":WolfPreviewInOtherPane"
+wtype -k Return
+sleep "$PREVIEW_SETTLE"
+read_wins "$OPR_WINS_1" 14
+
+# --- Step 2: the second file over the first, in the editor pane ----------------
+# Core's other-pane preview leaves focus on the source, so this :e lands in the editor.
+wtype -- ":e $OPR_SECOND_FILE"
+wtype -k Return
+sleep "$SETTLE"
+read_wins "$OPR_WINS_2" 15
+
+# --- Step 3: preview again, with the other pane already on screen -------------
+wtype -- ":WolfPreviewInOtherPane"
+wtype -k Return
+sleep "$PREVIEW_SETTLE"
+read_wins "$OPR_WINS_3" 16
+
+# Best-effort teardown: the app may already be gone.
+set +e
+kill "$app_pid" 2>/dev/null
+wait "$app_pid" 2>/dev/null
+exit 0
+"#;
+
+/// Body of [`edit_in_another_pane_reuses_the_other_pane_under_cage`], appended to
+/// [`OTHER_PANE_PRELUDE`]: open the first file, preview it in another pane, move into
+/// the preview, repoint it at the second file, then Edit in Another Pane from it.
+///
+/// ## Why the preview is repointed through `wolf_preview_file`
+///
+/// The user's scenario repoints the preview from the file tree or a picker. Every
+/// front-end route that does so ends in core's `preview_file`, which runs this Lua
+/// helper on the preview's window; driving a search result or a link click instead
+/// would add a page and a pointer to a claim about the shell's choice of target, which
+/// depends on the tree and the active pane alone.
+///
+/// ## Exit codes
+///
+/// * `11` — the app died before it was ready for input (the shared convention).
+/// * `14`, `15` — readback 1 or 2 never appeared, so the leg before it lost the keyboard.
+const OED_BODY: &str = r#"
+# --- Step 1: the first file, and its preview in another pane -------------------
+wtype -- ":e $OED_FIRST_FILE"
+wtype -k Return
+sleep "$SETTLE"
+wtype -- ":WolfPreviewInOtherPane"
+wtype -k Return
+sleep "$PREVIEW_SETTLE"
+
+# --- Step 2: into the preview, through the front-end's focus resolution --------
+# Ctrl+W without Shift is no Wolf chord, so it reaches Neovim as <C-w>.
+wtype -M ctrl -k w -m ctrl
+wtype -k l
+sleep "$SETTLE"
+
+# --- Step 3: repoint the preview at the second file -----------------------------
+wtype -- ":lua wolf_preview_file(0, vim.fn.fnamemodify('$OED_SECOND_FILE', ':p'))"
+wtype -k Return
+sleep "$PREVIEW_SETTLE"
+read_wins "$OED_WINS_1" 14
+
+# --- Step 4: Edit in Another Pane, from the preview -----------------------------
+wtype -- ":WolfEditInOtherPane"
+wtype -k Return
+sleep "$SETTLE"
+read_wins "$OED_WINS_2" 15
+
+# Best-effort teardown: the app may already be gone.
+set +e
+kill "$app_pid" 2>/dev/null
+wait "$app_pid" 2>/dev/null
+exit 0
+"#;
+
+/// One [`OTHER_PANE_PRELUDE`] readback: every window as `(handle, buffer tail)`, sorted
+/// by handle, and the current window's handle.
+#[derive(Debug, PartialEq, Eq)]
+struct WinReadback {
+    wins: Vec<(i64, String)>,
+    current: i64,
+}
+
+impl WinReadback {
+    /// The buffer tail window `handle` shows, if it is among the windows.
+    fn shows(&self, handle: i64) -> Option<&str> {
+        self.wins
+            .iter()
+            .find(|(h, _)| *h == handle)
+            .map(|(_, name)| name.as_str())
+    }
+
+    /// The handle of the one window showing `name`; `None` for none or several.
+    fn showing(&self, name: &str) -> Option<i64> {
+        let mut found = self.wins.iter().filter(|(_, n)| n == name);
+        match (found.next(), found.next()) {
+            (Some((h, _)), None) => Some(*h),
+            _ => None,
+        }
+    }
+}
+
+/// The readback [`WinReadback`] a test expects: `wins` sorted by handle, as the parser
+/// sorts them.
+fn win_readback(wins: &[(i64, &str)], current: i64) -> WinReadback {
+    let mut wins: Vec<(i64, String)> = wins.iter().map(|(h, n)| (*h, (*n).to_string())).collect();
+    wins.sort();
+    WinReadback { wins, current }
+}
+
+/// Parses a `read_wins` readback (see [`OTHER_PANE_PRELUDE`]), panicking with the raw
+/// contents when it is not two lines of the written shape.
+fn read_window_handles(path: &Path, smoke: &str) -> WinReadback {
+    fn malformed(path: &Path, raw: &str, smoke: &str, why: &str) -> ! {
+        panic!(
+            "{smoke}: the window-handle readback {} is malformed: {why}. Raw contents were \
+             {raw:?}. It must be two lines, `<handle>=<tail>` entries comma-joined and then the \
+             current window's handle; anything else means the typed `writefile` did not run as \
+             written, so suspect a keystroke that landed in a buffer instead of the cmdline.",
+            path.display()
+        )
+    }
+    let raw = read_readback(path, smoke);
+    let lines: Vec<&str> = raw.lines().collect();
+    let [list, current] = lines.as_slice() else {
+        malformed(path, &raw, smoke, "not exactly two lines")
+    };
+    let mut wins = Vec::new();
+    for entry in list.split(',') {
+        let Some((handle, name)) = entry.split_once('=') else {
+            malformed(path, &raw, smoke, "an entry carries no `=`")
+        };
+        let Ok(handle) = handle.trim().parse::<i64>() else {
+            malformed(path, &raw, smoke, "a window handle is not an integer")
+        };
+        if name.trim().is_empty() {
+            malformed(path, &raw, smoke, "a window shows an unnamed buffer");
+        }
+        wins.push((handle, name.trim().to_string()));
+    }
+    wins.sort();
+    let Ok(current) = current.trim().parse::<i64>() else {
+        malformed(
+            path,
+            &raw,
+            smoke,
+            "the current window's handle is not an integer",
+        )
+    };
+    WinReadback { wins, current }
+}
+
+/// The Preview in Another Pane command REUSES the other pane: with the editor and a
+/// preview side by side, previewing a second file puts its preview into the existing
+/// preview pane, the window keeps two panes, and focus stays on the source.
+///
+/// This is the user's first scenario, end to end through the GTK shell's choice of
+/// target window: `other_pane_seam::target` answers the preview pane, the shell passes
+/// its window, and core binds into it rather than splitting.
+///
+/// ## Assertions, classified
+///
+/// A precondition gets NO revert. `E` and `P` are the editor and preview windows'
+/// handles, read off readback 1 by the buffer each shows.
+///
+/// | # | assertion | kind | revert | measured |
+/// | --- | --- | --- | --- | --- |
+/// | 1 | `status.success()` | precondition — every readback was written | none; do not invent one | n/a |
+/// | 2 | readback 1 is two windows, `E` showing the first file and `P` its preview, `E` current | precondition — a press from one pane still splits, and leaves focus on the source | none; do not invent one | n/a |
+/// | 3 | readback 2 is `E` showing the second file and `P` still the first preview, `E` current | precondition — the `:e` landed in the editor pane and the layout did not move | none; do not invent one | n/a |
+/// | 4 | readback 3 is exactly `{E, P}`, `E` showing the second file and `P` its preview | **discriminator** — the second press reused the other pane | in `AppShell::preview_in_other_pane` and `AppShell::edit_in_other_pane`, pass `0` instead of the resolved target | unmeasured |
+/// | 5 | readback 3's current window is `E` | end state — focus stays on the source; core's Lua sets it, and `crates/wolf-ffi/tests/other_pane.rs` pins that | none here | n/a |
+#[test]
+fn preview_in_another_pane_reuses_the_other_pane_under_cage() {
+    const SMOKE: &str = "preview_in_another_pane_reuses_the_other_pane_under_cage";
+
+    let runtime_dir = require_smoke_env();
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+
+    let cwd = make_temp_cwd();
+    write_relaunch_fixtures(
+        SMOKE,
+        &cwd,
+        &[
+            (OPR_FIRST_FILE, "# Other Pane First"),
+            (OPR_SECOND_FILE, "# Other Pane Second"),
+        ],
+    );
+
+    let wins_1 = runtime_dir.join(OPR_WINS_1_NAME);
+    let wins_2 = runtime_dir.join(OPR_WINS_2_NAME);
+    let wins_3 = runtime_dir.join(OPR_WINS_3_NAME);
+    for path in [&wins_1, &wins_2, &wins_3] {
+        clear_evidence(path, SMOKE);
+    }
+
+    let scenario = format!("{OTHER_PANE_PRELUDE}{OPR_BODY}");
+    let status = cage_command(&scenario, &cwd, &runtime_dir)
+        .env("WOLF_BIN", bin)
+        .env("OPR_FIRST_FILE", OPR_FIRST_FILE)
+        .env("OPR_SECOND_FILE", OPR_SECOND_FILE)
+        .env("OPR_WINS_1", &wins_1)
+        .env("OPR_WINS_2", &wins_2)
+        .env("OPR_WINS_3", &wins_3)
+        .status()
+        .expect("failed to spawn `cage` for the headless preview-reuse scenario");
+
+    // --- Assertion 1 (precondition): the scenario ran to completion -----------
+    assert!(
+        status.success(),
+        "{SMOKE}: the cage preview-reuse scenario exited unsuccessfully ({status}). Exit 11: the \
+         app died before it was ready for input; exit 40: it never became ready. Exit 14, 15 or \
+         16: readback 1, 2 or 3 never appeared ({}, {}, {}), so the step before it lost the \
+         keyboard or the app died there. Any other status is `wtype` failing under `set -eu`.",
+        wins_1.display(),
+        wins_2.display(),
+        wins_3.display()
+    );
+
+    let first_preview = format!("{PREVIEW_READBACK_PREFIX}{OPR_FIRST_FILE}");
+    let second_preview = format!("{PREVIEW_READBACK_PREFIX}{OPR_SECOND_FILE}");
+
+    // --- Assertion 2 (precondition): a one-pane press split, focus on the source --
+    let r1 = read_window_handles(&wins_1, SMOKE);
+    let (editor, preview) = match (r1.showing(OPR_FIRST_FILE), r1.showing(&first_preview)) {
+        (Some(editor), Some(preview)) if r1.wins.len() == 2 => (editor, preview),
+        _ => panic!(
+            "{SMOKE}: after the first `:WolfPreviewInOtherPane` from a one-pane window the \
+             captive Neovim's windows are {r1:?}, not two windows showing {OPR_FIRST_FILE:?} and \
+             {first_preview:?}. ONE window showing the file means no preview opened: the Ex \
+             command never reached the shell, or the shell issued nothing because it found no \
+             tree leaf active. ONE window showing the preview means the in-place Preview ran. \
+             This is the single-pane case, which must still ask core to split."
+        ),
+    };
+    assert_eq!(
+        r1.current, editor,
+        "{SMOKE}: after the first press the current window is {}, not the editor {editor} \
+         ({r1:?}). Core's other-pane preview hands focus back to the source; the preview's \
+         window {preview} current means it no longer does, and the `:e` of step 2 would \
+         replace the preview instead of the file.",
+        r1.current
+    );
+
+    // --- Assertion 3 (precondition): the second file opened in the editor pane ----
+    let r2 = read_window_handles(&wins_2, SMOKE);
+    let want_2 = win_readback(
+        &[(editor, OPR_SECOND_FILE), (preview, first_preview.as_str())],
+        editor,
+    );
+    assert_eq!(
+        r2, want_2,
+        "{SMOKE}: after `:e {OPR_SECOND_FILE}` the windows are {r2:?}, not {want_2:?} (editor \
+         {editor}, preview {preview}). The `:e` must replace the first file in the editor pane \
+         and leave the preview and the layout alone, or the second press below starts from the \
+         wrong state. The preview window showing {OPR_SECOND_FILE:?} means focus was on the \
+         preview; different handles mean a window was closed or opened."
+    );
+
+    // --- Assertion 4 (discriminator): the second press reused the preview pane ----
+    let r3 = read_window_handles(&wins_3, SMOKE);
+    let verdict = if r3.wins.len() == 3 {
+        "THREE windows: the shell asked core to split (a target of 0) although a pane was \
+         already beside the editor — the always-split behaviour this smoke exists to refuse"
+    } else if r3 == r2 {
+        "the windows are unchanged: the press did nothing, so the shell resolved no target and \
+         issued no RPC, or the Ex command never reached it"
+    } else if r3.shows(editor) == Some(second_preview.as_str()) {
+        "the preview landed in the EDITOR's window: the in-place Preview ran, or the shell \
+         passed the editor's own window as the target"
+    } else {
+        "an unexpected window set"
+    };
+    let want_3 = win_readback(
+        &[
+            (editor, OPR_SECOND_FILE),
+            (preview, second_preview.as_str()),
+        ],
+        r3.current,
+    );
+    assert_eq!(
+        r3.wins, want_3.wins,
+        "{SMOKE}: after the second `:WolfPreviewInOtherPane` the windows are {r3:?}, not the \
+         editor {editor} showing {OPR_SECOND_FILE:?} and the existing preview window {preview} \
+         showing {second_preview:?}: {verdict}. Readback 2 was {r2:?}."
+    );
+
+    // --- Assertion 5 (end state): focus stayed on the source ----------------------
+    assert_eq!(
+        r3.current, editor,
+        "{SMOKE}: after the second press the current window is {}, not the editor {editor} \
+         ({r3:?}). Preview in Another Pane leaves the source focused; {preview} current means \
+         focus followed the preview into the reused pane.",
+        r3.current
+    );
+}
+
+/// The Edit in Another Pane command REUSES the other pane: with the editor beside a
+/// preview of a different file, Edit from the preview puts that file's source into the
+/// existing editor pane, the window keeps two panes, and focus moves to the editor.
+///
+/// This is the user's second scenario, end to end through the GTK shell's choice of
+/// target window: from the right-hand preview `other_pane_seam::target` answers the
+/// editor on its left, the shell passes its window, and core binds the source there.
+///
+/// ## Assertions, classified
+///
+/// A precondition gets NO revert. `E` and `P` are the editor and preview windows'
+/// handles, read off readback 1 by the buffer each shows.
+///
+/// | # | assertion | kind | revert | measured |
+/// | --- | --- | --- | --- | --- |
+/// | 1 | `status.success()` | precondition — both readbacks were written | none; do not invent one | n/a |
+/// | 2 | readback 1 is two windows, `E` showing the first file and `P` the second file's preview, `P` current | precondition — the preview was repointed and is the active pane | none; do not invent one | n/a |
+/// | 3 | readback 2 is exactly `{E, P}`, `E` showing the second file and `P` still its preview | **discriminator** — Edit reused the editor pane | in `AppShell::preview_in_other_pane` and `AppShell::edit_in_other_pane`, pass `0` instead of the resolved target; three windows result, `E` still showing the first file | unmeasured |
+/// | 4 | readback 2's current window is `E` | end state — focus moves to the pane that received the source; core's Lua sets it, and `crates/wolf-ffi/tests/other_pane.rs` pins that | none here | n/a |
+#[test]
+fn edit_in_another_pane_reuses_the_other_pane_under_cage() {
+    const SMOKE: &str = "edit_in_another_pane_reuses_the_other_pane_under_cage";
+
+    let runtime_dir = require_smoke_env();
+    let bin = env!("CARGO_BIN_EXE_wolf-gnome");
+
+    let cwd = make_temp_cwd();
+    write_relaunch_fixtures(
+        SMOKE,
+        &cwd,
+        &[
+            (OED_FIRST_FILE, "# Edit Pane First"),
+            (OED_SECOND_FILE, "# Edit Pane Second"),
+        ],
+    );
+
+    let wins_1 = runtime_dir.join(OED_WINS_1_NAME);
+    let wins_2 = runtime_dir.join(OED_WINS_2_NAME);
+    for path in [&wins_1, &wins_2] {
+        clear_evidence(path, SMOKE);
+    }
+
+    let scenario = format!("{OTHER_PANE_PRELUDE}{OED_BODY}");
+    let status = cage_command(&scenario, &cwd, &runtime_dir)
+        .env("WOLF_BIN", bin)
+        .env("OED_FIRST_FILE", OED_FIRST_FILE)
+        .env("OED_SECOND_FILE", OED_SECOND_FILE)
+        .env("OED_WINS_1", &wins_1)
+        .env("OED_WINS_2", &wins_2)
+        .status()
+        .expect("failed to spawn `cage` for the headless edit-reuse scenario");
+
+    // --- Assertion 1 (precondition): the scenario ran to completion -----------
+    assert!(
+        status.success(),
+        "{SMOKE}: the cage edit-reuse scenario exited unsuccessfully ({status}). Exit 11: the \
+         app died before it was ready for input; exit 40: it never became ready. Exit 14 or 15: \
+         readback 1 or 2 never appeared ({}, {}), so the step before it lost the keyboard or the \
+         app died there. Any other status is `wtype` failing under `set -eu`.",
+        wins_1.display(),
+        wins_2.display()
+    );
+
+    let second_preview = format!("{PREVIEW_READBACK_PREFIX}{OED_SECOND_FILE}");
+
+    // --- Assertion 2 (precondition): the repointed preview is the active pane -----
+    let r1 = read_window_handles(&wins_1, SMOKE);
+    let (editor, preview) = match (r1.showing(OED_FIRST_FILE), r1.showing(&second_preview)) {
+        (Some(editor), Some(preview)) if r1.wins.len() == 2 && r1.current == preview => {
+            (editor, preview)
+        }
+        _ => panic!(
+            "{SMOKE}: before Edit in Another Pane the captive Neovim's windows are {r1:?}, not \
+             two windows, one showing {OED_FIRST_FILE:?} and the CURRENT one showing \
+             {second_preview:?}. A preview of {OED_FIRST_FILE:?} instead means \
+             `wolf_preview_file` did not repoint it — check the helper's Markdown gate. The \
+             editor current means `<C-w>l` never moved focus into the preview, so the Edit below \
+             would find no preview active. One window means the first preview never opened."
+        ),
+    };
+
+    // --- Assertion 3 (discriminator): the source went into the existing editor pane --
+    let r2 = read_window_handles(&wins_2, SMOKE);
+    let verdict = if r2.wins.len() == 3 {
+        "THREE windows: the shell asked core to split (a target of 0) although the editor pane \
+         was beside the preview — the always-split behaviour this smoke exists to refuse"
+    } else if r2 == r1 {
+        "the windows are unchanged: the press did nothing, so the shell resolved no target and \
+         issued no RPC, `edit_press` refused the preview, or the Ex command never reached it"
+    } else if r2.shows(preview) == Some(OED_SECOND_FILE) {
+        "the source replaced the PREVIEW: the in-place Edit Source ran, or the shell passed the \
+         preview's own window as the target"
+    } else {
+        "an unexpected window set"
+    };
+    let want_2 = win_readback(
+        &[
+            (editor, OED_SECOND_FILE),
+            (preview, second_preview.as_str()),
+        ],
+        r2.current,
+    );
+    assert_eq!(
+        r2.wins, want_2.wins,
+        "{SMOKE}: after `:WolfEditInOtherPane` the windows are {r2:?}, not the existing editor \
+         window {editor} showing {OED_SECOND_FILE:?} and the preview window {preview} still \
+         showing {second_preview:?}: {verdict}. Readback 1 was {r1:?}."
+    );
+
+    // --- Assertion 4 (end state): focus moved to the pane that received the source --
+    assert_eq!(
+        r2.current, editor,
+        "{SMOKE}: after Edit in Another Pane the current window is {}, not the editor {editor} \
+         that received the source ({r2:?}). Edit in Another Pane moves focus to that pane; the \
+         preview {preview} current means focus stayed where the command was fired.",
+        r2.current
     );
 }
