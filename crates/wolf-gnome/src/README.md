@@ -510,6 +510,22 @@ Purpose: the pure, GTK-free rulebook for per-pane navigation — which window a 
 
 - The buttons desensitize while the `gio` actions stay enabled — the opposite of `win.go-to-file`'s empty-state treatment, for the reason in [The accelerator namespace](../../../notes/wolf-gnome/the-accelerator-namespace.md).
 
+#### `other_pane_seam.rs`
+
+Purpose: the pure, GTK-free rule for which pane Preview or Edit in Another Pane binds into: an existing pane of the pane tree, or a split core makes for the bind. [`pane_view.rs`](#pane_viewrs) resolves the answer to a Neovim window, and [`shell.rs`](#shellrs) passes it to core.
+
+**Public API**
+
+- `Side` — the preferred side: Preview prefers `Right`, Edit `Left`.
+- `Target` — `Split`, or `Existing(PaneId)`.
+- `target(active, prefer, tree, width, height) -> Option<Target>` — rules in order: an `active` that is no leaf of `tree` (the drawer, an unknown pane) yields `None`, so the press is a no-op rather than a stray split; a single leaf yields `Split`; a `PaneTree::neighbor` on the preferred side yields that pane; otherwise the next leaf in `leaves()` order for `Right`, the previous for `Left`, wrapping.
+
+**Decisions**
+
+- A port of [`OtherPaneSeam.swift`](../../wolf-macos/Sources/WolfKeyMap/README.md#otherpaneseamswift) with no divergence; [`tests/other_pane_seam.rs`](../tests/README.md#other_pane_seamrs) mirrors its tests case for case.
+- Purely geometric, with no preference for what a pane shows, so a fallback target that is itself a preview is repointed under ordinary bind semantics.
+- The caller passes the bounds `drawer::focus_target` gets, the raw pane-area size, for the reason the [`drawer.rs`](#drawerrs) entry gives, so the preferred neighbour is the pane `<C-w>h/l` reaches.
+
 #### `overlay_style.rs`
 
 Purpose: the shared look of the three transient overlays ([`picker.rs`](#pickerrs), [`palette.rs`](#paletters), [`buffer_picker.rs`](#buffer_pickerrs)) — a GNOME-menu surface with menu-sized rows, as one CSS class.
@@ -577,16 +593,17 @@ Purpose: the GTK glue turning `layout`'s pane tree into nested `gtk::Paned`, one
 - `cmdline_widget()` — the focus-return target for overlays and sidebar; plus `toast_widget()` and `pum_widget()`.
 - `reset_after_restart()`, `drawer_is_open()`, `request_terminal_restore(steps)`, `request_layout_rebuild(saved)`, `realize_layout(saved)`, `layout_snapshot() -> LayoutGather`, `snapshot_readiness()`, `readiness()`.
 - `active_terminal()`, `sync_terminal_focus(focused)`, `request_terminal(command)`.
+- `other_pane_target(prefer)` — [`other_pane_seam.rs`](#other_pane_seamrs)'s window: `Some(0)` splits, `None` no-ops.
 
 **Decisions**
 
-- A dragged divider is written back into the tree's weights, because a rebuild destroys the paned, and re-applies on every `max-position` notify, since nested allocation reports intermediate values.
+- A dragged divider is written into the tree's weights, because a rebuild destroys the paned, and re-applies on every `max-position` notify, since nested allocation reports intermediate values.
 - `realize_layout` rebuilds into Neovim's current tabpage, so restore materialization is its only legal caller; `request_layout_rebuild` defers instead.
 - The preview's render half goes through [`preview_coalescer.rs`](#preview_coalescerrs), whose state sits on `PaneInner`, one per tab: a rebuild replaces `panes` wholesale.
-- Pointer input is one all-button `gtk::GestureDrag`, delivering outside the widget, so target and button pin at press; editor panes take the primary alone.
+- Pointer input is one all-button `gtk::GestureDrag` ([why](../../../notes/crates/wolf-gnome/src/pane_view.rs.md#one-drag-gesture)), pinning target and button at press; editor panes take only the primary.
 - A terminal pane paints through its own [`TerminalCanvas`](terminal/README.md#canvasrs) ([why](../../../notes/wolf-gnome/terminal-panes.md)).
-- Each pane's status and `b:wolf_full_width` cache once per wake: reading at use time re-enters `draw_pane`'s guard, and paint, pointer and resize must agree in one frame.
-- One funnel produces every grid resize, against the size the pane last asked for, not the lagging snapshot grid; it runs every wake, since a lifted cap re-divides a still allocation.
+- Each pane's status and `b:wolf_full_width` cache once per wake: a use-time read re-enters `draw_pane`'s guard, and paint, pointer and resize must agree in one frame.
+- One funnel produces every grid resize, against the size the pane last requested, not the lagging snapshot grid; it runs every wake, since a lifted cap re-divides a still allocation.
 - The drawer strip's height re-applies every wake, so a toplevel resize converges over two frames; `reset_after_restart` clears the drawer `detect_closes` cannot reach.
 
 #### `persistence.rs`
@@ -676,7 +693,7 @@ Purpose: the pure, GTK-free rulebook for the Markdown preview pane — its gates
 
 **Decisions**
 
-- Placement is not decided here. Both presses act in place on the active pane, and a pane's mode is derived from `Snapshot::previews` rather than stored, so there is no split-or-reuse rule to state and no mode argument to thread.
+- Placement is not decided here. Both presses act in place on the active pane, the other-pane commands bind where [`other_pane_seam.rs`](#other_pane_seamrs) says, and a pane's mode is derived from `Snapshot::previews` rather than stored, so no mode argument is threaded.
 - Liveness is read before the buffer-kind gate, so a wedged Neovim is reported as wedged rather than as a non-Markdown buffer. `preview_file_press` has no buffer-kind gate at all: a linked file's Markdown-ness is core's, unanswerable here without the filesystem.
 - Both `PreviewLoad` comparisons key on the source bufnr, never the `changedtick`: two freshly opened files share a tick, so a tick-keyed source switch would swap a linked file's body under the previous file's base URI.
 - `preview_status`'s `abs_path` is the source path verbatim: [`pane_view.rs`](#pane_viewrs) persists it as a pane-layout leaf, and `state.json` records no working directory to resolve a relative one against.

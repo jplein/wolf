@@ -8,7 +8,7 @@ nix develop --command cargo test -p wolf-gnome
 
 The devShell is not optional: it supplies GTK, exports `WOLF_NVIM_BIN` and `WOLF_RG_BIN`, and pins the font stack, which is what makes Pango measurement and Cairo rasterization reproducible enough to assert on pixels.
 
-Rules that are decidable from their arguments are pinned in each seam's own `#[cfg(test)] mod tests`, which is the point of the seam split in [wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md); the key seam's and the terminal seams' tables are files here instead, [`gdk_key.rs`](#gdk_keyrs) and [`terminal_seams.rs`](#terminal_seamsrs). The other files below cover what a seam cannot reach: a real Neovim, a real window, the built binary together with the manifest that shaped it, and the store output `nix build .#wolf-gnome` installs — a different artifact from the checkout build, making different claims.
+Rules that are decidable from their arguments are pinned in each seam's own `#[cfg(test)] mod tests`, which is the point of the seam split in [wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md); the key seam's, the terminal seams' and the other-pane seam's tables are files here instead, [`gdk_key.rs`](#gdk_keyrs), [`terminal_seams.rs`](#terminal_seamsrs) and [`other_pane_seam.rs`](#other_pane_seamrs). The other files below cover what a seam cannot reach: a real Neovim, a real window, the built binary together with the manifest that shaped it, and the store output `nix build .#wolf-gnome` installs — a different artifact from the checkout build, making different claims.
 
 ## Files
 
@@ -81,6 +81,17 @@ Rules that are decidable from their arguments are pinned in each seam's own `#[c
 - No GTK controller is involved, so this file cannot say whether a controller ever fires. That is the smokes' question, and the two deliberately do not overlap.
 - Cell sizes are locally declared rather than measured, because the seams are pure arithmetic and need no font.
 - The buffer fixture's lines must stay five characters wide, or a click at column 2 clamps to end-of-line and the exact-column assertion means nothing. A literal double quote cannot appear inside a `:put =` expression, which is why the format string is quoted with doubled single quotes.
+
+#### `other_pane_seam.rs`
+
+**Covers**
+
+- `other_pane_seam::target`'s rules over hand-built `PaneTree`s, in a table that mirrors [`OtherPaneSeamTests.swift`](../../wolf-macos/Tests/WolfKeyMapTests/README.md#otherpaneseamtestsswift) case for case, with the same trees, ids and bounds.
+
+**Gotchas**
+
+- Pure: no display, no Neovim and no compositor.
+- A case added on either side belongs on both, or the two ports can drift silently.
 
 #### `packaged_layout.rs`
 
@@ -208,7 +219,7 @@ Pointer smokes, driven through [Pointer injection](#pointer-injection) and read 
 
 #### `smoke_headless/preview.rs`
 
-Markdown preview smokes: opening a preview and returning to the source, a link click, an unsaved buffer, the configured appearance, a view created after launch, and Ctrl+Shift+P and Ctrl+Shift+W still firing after a click in the preview. Its guard keeps the smokes' burst delay below the coalescer's trailing delay.
+Markdown preview smokes: opening a preview and returning to the source, a link click, an unsaved buffer, the configured appearance, a view created after launch, Ctrl+Shift+P and Ctrl+Shift+W still firing after a click in the preview, and Preview and Edit in Another Pane reusing the other pane, where a press from a lone pane splits. Its guard keeps the smokes' burst delay below the coalescer's trailing delay.
 
 #### `smoke_headless/preview_render.rs`
 
@@ -534,6 +545,7 @@ Being scrupulous about this is the point of the section.
 - **A terminal pane's pointer, clipboard and focus glue.** [`terminal_seams.rs`](#terminal_seamsrs) pins the rules, but no smoke presses a button or turns a wheel over a terminal pane, copies or pastes in one, or watches the window's activation, so the any-button gesture, the pinned session, the Copy and Paste targets and the `terminal_focus` reports reach no assertion. Nor does which pane `draw_pane` paints as focused, or its redraw when the window's activation changes: [`terminal_paint.rs`](#terminal_paintrs) passes `focused` to the canvas itself.
 - **A terminal pane's persistence in the live widget.** No smoke persists a terminal pane and relaunches, so `PaneInner::leaf_contents`' `WinContent::Terminal` arm reaches no assertion, and deleting it fails nothing. The terminal-leaf rows in [`terminal_seams.rs`](#terminal_seamsrs) and wolf-core's [`rebuild_layout.rs`](../../wolf-core/tests/README.md#rebuild_layoutrs) cover the layers below it.
 - **Damage in the live widget, and HiDPI.** [`terminal_paint.rs`](#terminal_paintrs) shows the canvas repaints only damaged rows, with no widget; the terminal-pane smoke reads final pixels, which a pane repainting every row on every wake paints too. Nothing runs at a device scale above 1.
+- **The other-pane no-op in the live widget.** No smoke presses Preview or Edit in Another Pane with the drawer focused, so the shell's mapping of `PaneHandle::other_pane_target`'s `None` to no RPC reaches no assertion. Only the `None` row in [`other_pane_seam.rs`](#other_pane_seamrs) pins the rule beneath it.
 
 ## Deliberate test gaps
 

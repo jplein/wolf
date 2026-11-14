@@ -161,7 +161,7 @@ It also covers `terminalRestore(splits:drawerOpen:live:)`: live splits once, asc
 
 **Covers** — `OtherPaneSeam.target(active:prefer:tree:width:height:)` over hand-built `PaneTree`s: a single leaf splits on both sides, the preferred-side geometric neighbor wins when it resolves, a missing neighbor falls back to the DFS-adjacent leaf with wrap (edge panes wrap; a vertical stack with no lateral neighbor still finds the other pane), a 2×2 grid resolves the cross-axis-overlap neighbor rather than the diagonal, and a non-leaf active pane — the drawer case, a fresh `PaneId` — yields `nil`.
 
-**Gotchas** — fixtures reuse `PaneTreeTests`' vocabulary (explicit pane ids, the same non-square 100×40 bounds) so width and height math stay distinguishable; the AppKit glue that maps a `Target` to a window handle (`PaneContainerView.otherPaneTarget`) is manual-smoke, with the nvim-side bind covered by the real-nvim `//crates/wolf-ffi:other_pane` test.
+**Gotchas** — fixtures reuse `PaneTreeTests`' vocabulary (explicit pane ids, the same non-square 100×40 bounds) so width and height math stay distinguishable; the AppKit glue that maps a `Target` to a window handle (`PaneContainerView.otherPaneTarget`) is covered by [`OtherPaneFlowTests.swift`](../WolfMacOSTests/README.md#otherpaneflowtestsswift), and the nvim-side bind by the real-nvim `//crates/wolf-ffi:other_pane` test. wolf-gnome's [`tests/other_pane_seam.rs`](../../../wolf-gnome/tests/README.md#other_pane_seamrs) mirrors these cases one for one, so a case added here belongs there too.
 
 #### `PaletteSeamTests.swift`
 
