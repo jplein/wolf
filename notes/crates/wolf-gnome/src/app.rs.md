@@ -14,4 +14,4 @@ Where a portal answers, the pin stays idle and the desktop's text scaling surviv
 
 A dpi that arrives after the pin is ignored. A value the app sets on `GtkSettings` outranks every later backend or `XSETTINGS` value, so once the pin fires, which it does only in a session that supplied no dpi by `activate`, a dpi a late-starting portal or `xsettingsd` supplies does not apply for the life of the process.
 
-The pin prints its one `XFT_DPI_PINNED_PREFIX` line on stderr when it fires and nothing otherwise. A preview renders the same whether the pin or the session supplied the dpi, so the cage smokes assert that line in their own log to show the pin ran: without it, a dpi reaching GTK from the host would keep them green with the pin deleted.
+The pin prints its one `XFT_DPI_PINNED_PREFIX` line on stderr when it fires and nothing otherwise. A preview renders the same whether the pin or the session supplied the dpi, so the new-view smoke, `preview_created_after_launch_renders_without_a_portal_under_cage`, asserts that line in its own log to show the pin ran: without it, a dpi reaching GTK from the host would keep the preview smokes green with the pin deleted.

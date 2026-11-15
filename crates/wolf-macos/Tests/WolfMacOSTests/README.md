@@ -136,6 +136,15 @@ Purpose: The vendored Lighthouse's expected colours, for the tests that render u
 - Every item with a key equivalent is retargeted to a recorder that enables everything, so `validateMenuItem` and `AppDelegate`'s actions reach no test. A `control:` leg first fires each chord with the container first responder, so a later miss is the chain's.
 - Each delivery prints a `KEYROUTE` line: responder, chord, whether the window claimed it, whether the chain passed `noop:`, and the item fired. Whether the window claims it is printed, not asserted, because without a web process the value is WebKit's.
 
+#### `OtherPaneFlowTests.swift`
+
+**Covers** — Preview and Edit in Another Pane reusing the other pane, over a live core through `PaneContainerView.otherPaneTarget(prefer:)` and the bridge. With an editor beside a preview, previewing a second file binds into the existing preview pane and leaves the editor focused; with the preview repointed at a second file, Edit binds its source into the existing editor pane and focuses it. Both keep two panes, and the first press, from a lone pane, splits.
+
+**Gotchas**
+
+- Each test repeats `WolfWindowController`'s composition, target then bridge call then wake, over a [`TerminalViewFixture`](#terminalviewfixtureswift), because AppKit routes no event to an offscreen window; the controller itself reaches no test here. No page loads, and nothing waits on one.
+- A wait for an opened file checks the file the window shows: the startup buffer is the markdown-named `Untitled.md`, so a Markdown buffer being active proves nothing. `otherPaneTarget` resolves from the container's active pane, which follows Neovim only on a wake, so each read first waits for `container.activeWin` to match.
+
 #### `TerminalDrawerTests.swift`
 
 **Covers** — `toggle_terminal()` showing a terminal view in the drawer strip on the drawer window's session, painting a truecolour background the shell prints, hiding with the session kept, and showing the same session again on the next toggle.

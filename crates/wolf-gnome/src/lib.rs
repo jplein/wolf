@@ -39,6 +39,7 @@
 //!   ([`state_seam`]).
 //! - [`mod@liveness_ui`]: the crash and stall recovery rules.
 //! - [`mod@nav_ui`]: which pane a Back or Forward press acts on, and when it may.
+//! - [`mod@other_pane_seam`]: which pane Preview or Edit in Another Pane binds into, or a split.
 //! - [`mod@clipboard_ui`]: the Copy and Paste guards and what crosses each way.
 //! - [`mod@preview_link`]: the URI arithmetic behind a link clicked inside the preview.
 //! - [`mod@preview_ui`]: the Markdown preview's guards, reloads and statusbar lines.
@@ -121,6 +122,7 @@ pub mod layout;
 pub mod liveness_ui;
 pub mod mouse;
 pub mod nav_ui;
+pub mod other_pane_seam;
 mod overlay_style;
 pub mod palette;
 pub mod pane_layout;

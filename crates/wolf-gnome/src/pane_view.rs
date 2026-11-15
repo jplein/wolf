@@ -199,6 +199,7 @@ use crate::geometry;
 use crate::layout::{Orientation, PaneId, PaneLayout, PaneTree};
 use crate::liveness_ui::TerminalRestore;
 use crate::mouse::{self, PaneScroll, ScrollAccumulator};
+use crate::other_pane_seam::{self, Side, Target};
 use crate::pane_layout;
 use crate::preview_coalescer::{PreviewCoalescer, RenderDecision};
 use crate::preview_link::{self, PreviewLink};
@@ -223,6 +224,9 @@ const FIRST_PANE_ID: PaneId = 1;
 /// The lowest grid id that is an editor WINDOW grid. Grid 1 is the outer/global
 /// grid (cmdline + messages); window content lives on grids `>= 2`.
 const MIN_WINDOW_GRID: u64 = 2;
+
+/// The `target_win` that is core's request to split rather than to reuse a named window.
+const SPLIT_TARGET_WIN: i64 = 0;
 
 /// Height of the cmdline strip, in grid rows.
 const CMDLINE_STRIP_ROWS: f64 = 1.0;
@@ -797,6 +801,27 @@ impl PaneInner {
     fn active_terminal(&self) -> Option<TerminalId> {
         let id = self.active_pane.get()?;
         self.panes.borrow().get(&id)?.terminal.get()
+    }
+
+    /// The window Preview or Edit in Another Pane binds into from the active pane:
+    /// [`other_pane_seam::target`]'s answer as a Neovim window, [`SPLIT_TARGET_WIN`] for a
+    /// split, or `None` when no tree leaf is active or the target pane has no window yet.
+    fn other_pane_target(&self, prefer: Side) -> Option<i64> {
+        let active = self.active_pane.get()?;
+        // The bounds `apply_focus` resolves `<C-w>h/l` over; `drawer::focus_target`'s doc
+        // says why the raw pane-area size is right.
+        let width = f64::from(self.pane_area.width());
+        let height = f64::from(self.pane_area.height());
+        let target = other_pane_seam::target(active, prefer, &self.tree.borrow(), width, height)?;
+        match target {
+            Target::Split => Some(SPLIT_TARGET_WIN),
+            Target::Existing(pane) => self
+                .panes
+                .borrow()
+                .get(&pane)
+                .map(|p| p.win)
+                .filter(|w| *w != 0),
+        }
     }
 
     /// The session pane `pane_id` shows, if it is a terminal pane.
@@ -3802,6 +3827,15 @@ impl PaneHandle {
     #[must_use]
     pub fn active_terminal(&self) -> Option<TerminalId> {
         self.inner.active_terminal()
+    }
+
+    /// The `target_win` Preview (`prefer` [`Side::Right`]) or Edit ([`Side::Left`]) in
+    /// Another Pane passes to core, chosen by [`other_pane_seam::target`] over this tab's
+    /// pane tree. `Some(0)` asks core to split, and `None` is a no-op: the active pane is
+    /// not an editor pane of the tree.
+    #[must_use]
+    pub fn other_pane_target(&self, prefer: Side) -> Option<i64> {
+        self.inner.other_pane_target(prefer)
     }
 
     /// Reports terminal focus through `terminal_focus`: the active pane's session holds it

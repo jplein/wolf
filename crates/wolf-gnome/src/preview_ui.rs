@@ -12,11 +12,10 @@
 //! ## Placement is not this seam's decision
 //!
 //! `WolfCore::open_preview` and `WolfCore::edit_source` act IN PLACE on the active
-//! pane; `preview_in_other` and `edit_in_other` take the target window as an
-//! argument. A pane's mode is derived from whether its window appears in
-//! `Snapshot::previews`, never stored, so there is no placement to choose and no
-//! mode argument to thread — see `specs/architecture.md`. Reintroducing a split-or-reuse
-//! rule here would be inventing a decision core does not accept.
+//! pane; `preview_in_other` and `edit_in_other` take a target window, which
+//! [`crate::other_pane_seam`] chooses from the pane tree. A pane's mode is derived from
+//! whether its window appears in `Snapshot::previews`, never stored, so there is no mode
+//! argument to thread — see `specs/architecture.md`.
 //!
 //! [`preview_press`] therefore gates BOTH Preview entry points and [`edit_press`]
 //! both Edit ones: which pane receives the bind is not part of the question either

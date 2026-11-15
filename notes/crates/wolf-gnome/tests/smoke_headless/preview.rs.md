@@ -8,7 +8,7 @@ The scenario opens the other file, splits with `<C-w>v`, opens the Markdown sour
 
 The live edit runs after the Edit leg because only a second load into a live web view takes the JSON body-swap branch (`pane_view::preview_swap_payload`); the first goes through `load_html` whatever the encoding does. A single-encoded payload prints `JSON Parse error: Unrecognized token '<'` on every keystroke while the preview keeps the stale document.
 
-Editing needs the source in a window, and Edit in Another Pane puts it in a split, the leg's own discriminator; the in-place Edit replaces the preview it is fired from. The marker is typed there, so the other file is opened over it before capture B, leaving only the preview to draw it. A live edit before the Edit leg needs a `:e` of the source that would satisfy that leg's readback alone.
+Editing needs the source in a window. Edit in Another Pane binds it into the other pane, over the other file, and that reuse is the leg's discriminator; the in-place Edit replaces the preview it is fired from. The marker is typed there, so the other file is opened over it again before capture B, leaving only the preview to draw it. A live edit before the Edit leg needs a `:e` of the source that would satisfy that leg's readback alone.
 
 Neither file name contains a heading term, and both names and the two readbacks are in `RELAUNCH_FIXTURE_NAMES`. `PREVIEW_OCR_STATUS` is an ordinary word, so the fixture guard also checks that nothing this smoke puts on screen spells it.
 

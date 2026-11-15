@@ -32,7 +32,9 @@ use super::pointer::{WEDGE_OCR_CLICK, WEDGE_OCR_STAY};
 use super::preview::{
     KC_CUR_CLICKED_NAME, KC_CUR_FOCUSED_NAME, KC_SOURCE_FILE, KC_WINS_AFTER_NAME,
     KC_WINS_BEFORE_NAME, LINK_READBACK_AFTER_NAME, LINK_READBACK_BEFORE_NAME, LINK_SOURCE_FILE,
-    LINK_TARGET_FILE, NEWVIEW_WINS_AFTER_NAME, NEWVIEW_WINS_BEFORE_NAME, PREVIEW_LIVE_MARKER,
+    LINK_TARGET_FILE, NEWVIEW_WINS_AFTER_NAME, NEWVIEW_WINS_ALONE_NAME, NEWVIEW_WINS_BEFORE_NAME,
+    OED_FIRST_FILE, OED_SECOND_FILE, OED_WINS_1_NAME, OED_WINS_2_NAME, OPR_FIRST_FILE,
+    OPR_SECOND_FILE, OPR_WINS_1_NAME, OPR_WINS_2_NAME, OPR_WINS_3_NAME, PREVIEW_LIVE_MARKER,
     PREVIEW_OCR_BODY, PREVIEW_OCR_LIVE, PREVIEW_OCR_OTHER, PREVIEW_OCR_STATUS, PREVIEW_OTHER_FILE,
     PREVIEW_OTHER_HEADING, PREVIEW_READBACK_A_NAME, PREVIEW_READBACK_B_NAME, PREVIEW_SOURCE_FILE,
     PREVIEW_SOURCE_HEADING, PREVIEW_SOURCE_PARAGRAPH, UNSAVED_BUFFER_NAME, UNSAVED_COVER_FILE,
@@ -236,7 +238,12 @@ use super::*;
 /// * `preview_created_after_launch_renders_without_a_portal_under_cage` is
 ///   another: two captures, OCRed neither, and its observables are the preview's
 ///   background and heading-ink counts inside that background's extent on each frame. It reuses the picker smoke's two fixtures
-///   and registers only its two readbacks, whose paths the cmdline strip echoes.
+///   and registers only its three readbacks, whose paths the cmdline strip echoes.
+/// * `preview_in_another_pane_reuses_the_other_pane_under_cage` and
+///   `edit_in_another_pane_reuses_the_other_pane_under_cage` capture nothing: their
+///   observables are the window handles and buffer names the captive Neovim writes
+///   about its own windows. Their fixtures and readbacks are registered in
+///   [`RELAUNCH_FIXTURE_NAMES`] for the generic loop's sake.
 /// * `terminal_drawer_defaults_to_full_width_under_cage` and
 ///   `terminal_pane_splits_and_focus_under_cage` capture no image at all: the first
 ///   reads integers its shell and Neovim write, the second the pids and marks each
@@ -1030,6 +1037,58 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
         NEWVIEW_WINS_AFTER_NAME,
         "NEWVIEW_WINS_AFTER_NAME",
         "preview_created_after_launch_renders_without_a_portal_under_cage",
+    ),
+    (
+        NEWVIEW_WINS_ALONE_NAME,
+        "NEWVIEW_WINS_ALONE_NAME",
+        "preview_created_after_launch_renders_without_a_portal_under_cage",
+    ),
+    // Registered for the generic loop; these smokes read no OCR term. The readbacks live under
+    // XDG_RUNTIME_DIR, but their paths are echoed in the cmdline, as the NEWVIEW ones are.
+    (
+        OPR_FIRST_FILE,
+        "OPR_FIRST_FILE",
+        "preview_in_another_pane_reuses_the_other_pane_under_cage",
+    ),
+    (
+        OPR_SECOND_FILE,
+        "OPR_SECOND_FILE",
+        "preview_in_another_pane_reuses_the_other_pane_under_cage",
+    ),
+    (
+        OPR_WINS_1_NAME,
+        "OPR_WINS_1_NAME",
+        "preview_in_another_pane_reuses_the_other_pane_under_cage",
+    ),
+    (
+        OPR_WINS_2_NAME,
+        "OPR_WINS_2_NAME",
+        "preview_in_another_pane_reuses_the_other_pane_under_cage",
+    ),
+    (
+        OPR_WINS_3_NAME,
+        "OPR_WINS_3_NAME",
+        "preview_in_another_pane_reuses_the_other_pane_under_cage",
+    ),
+    (
+        OED_FIRST_FILE,
+        "OED_FIRST_FILE",
+        "edit_in_another_pane_reuses_the_other_pane_under_cage",
+    ),
+    (
+        OED_SECOND_FILE,
+        "OED_SECOND_FILE",
+        "edit_in_another_pane_reuses_the_other_pane_under_cage",
+    ),
+    (
+        OED_WINS_1_NAME,
+        "OED_WINS_1_NAME",
+        "edit_in_another_pane_reuses_the_other_pane_under_cage",
+    ),
+    (
+        OED_WINS_2_NAME,
+        "OED_WINS_2_NAME",
+        "edit_in_another_pane_reuses_the_other_pane_under_cage",
     ),
     // The drawer readbacks live under XDG_RUNTIME_DIR, but their paths are typed into the cmdline or
     // a shell. The capture precedes them, so this is a tripwire for a later whole-page assertion.
