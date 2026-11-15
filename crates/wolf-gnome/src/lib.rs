@@ -34,6 +34,8 @@
 //! - [`mod@tree_gate`]: when the sidebar's file tree may refresh and rebuild.
 //! - [`mod@refresh_coalescer`]: the sidebar's trailing refresh over a burst of batches.
 //! - [`window_title`]: the working directory rendered as a window title ([`title`]).
+//! - [`mod@titlebar_background`]: the header bar's and tab bar's background from `WolfTitlebar`
+//!   and `Normal`.
 //! - [`mod@pane_layout`]: the codec between the live pane layout and the persisted tree.
 //! - [`restore_plans`]: one launch plan per saved window, and the write-side rules
 //!   ([`state_seam`]).
@@ -86,8 +88,9 @@
 //! non-primary buttons over an editor pane and kinetic scrolling are not. Theming is
 //! ONE-DIRECTIONAL: the configured `appearance` is resolved against the desktop's
 //! light/dark preference and pushed into Neovim as `background=dark|light`, with
-//! the GTK chrome's colour scheme set to match ([`mod@appearance`]) — but no OS
-//! COLOUR is read into Neovim's highlight groups. What remains
+//! the GTK chrome's colour scheme set to match ([`mod@appearance`]), and Neovim's
+//! colours reach the header bar and the tab bar ([`mod@titlebar_background`]) — but
+//! no OS COLOUR is read into Neovim's highlight groups. What remains
 //! deferred is a native command line as Adw widgets: the one-row strip,
 //! the message toast and the `ext_popupmenu` completion popup are all painted from
 //! the folded `Snapshot::cmdline` / `Snapshot::toast` / `Snapshot::pum`, never from
@@ -146,6 +149,7 @@ pub mod tab_view;
 pub mod tabs_ui;
 pub mod terminal;
 pub mod title;
+pub mod titlebar_background;
 pub mod tree;
 pub mod tree_gate;
 pub mod tree_view;

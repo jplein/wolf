@@ -451,8 +451,9 @@ pub struct ThemeGroup {
 pub struct ThemeColors {
     /// `WolfCursor`: bg drives the app cursor fill, fg the glyph color.
     pub cursor: ThemeGroup,
-    /// `WolfTitlebar`: bg is the macOS titlebar background when set, ahead of
-    /// `Normal`'s; fg is carried and applied by no front-end.
+    /// `WolfTitlebar`: bg is the titlebar background on both front-ends when set,
+    /// ahead of `Normal`'s, and on `wolf-gnome` the tab bar's too; fg is carried and
+    /// applied by no front-end.
     pub titlebar: ThemeGroup,
 }
 

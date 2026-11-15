@@ -21,8 +21,8 @@
 //!   [`crate::tabs_ui::tab_wake`], which decides per tab whether its pane view
 //!   redraws and consumes split/close/focus intent),
 //!   `tree_view::TreeHandle::on_render_wake`, and finally
-//!   `shell::AppShell::on_render_wake` (the window title, the application-state
-//!   contribution, then the command drain). The shell runs LAST: a drained
+//!   `shell::AppShell::on_render_wake` (the window title, the header bar's and tab
+//!   bar's colour, the application-state contribution, then the command drain). The shell runs LAST: a drained
 //!   `close_window` tears the core down. One core per window means one wake
 //!   closure per core, carrying no window token.
 //! - **Application state (`state.json`):** the [`RestorePlan`] arrives already
@@ -212,6 +212,7 @@ use crate::state_seam::{self, RestorePlan};
 use crate::tab_view::{self, RestoreTabs, TabParts, TabsHandle, TabsParts};
 use crate::terminal::input as terminal_input;
 use crate::title::WINDOW_TITLE_FALLBACK;
+use crate::titlebar_background::TitlebarStyle;
 use crate::tree_view::{self, TreeHandle};
 use crate::workspace;
 use crate::CellMetrics;
@@ -587,6 +588,7 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
         .menu_model(&shell::build_menu_model())
         .build();
     header.pack_end(&menu_button);
+    let titlebar = TitlebarStyle::install(id, &header, &tabs.bar_widget());
 
     // Header, tab bar, then the split. The bar autohides at one page, keeping one-tab geometry equal
     // to no tab layer. See notes/wolf-gnome/window-structure.md
@@ -648,6 +650,7 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
         launch_cwd: plan.core_cwd.clone(),
         crash_overlay: &crash,
         tabs: &tabs,
+        titlebar: &titlebar,
         coordinator: coordinator.weak(),
         window_id: id,
     });
@@ -787,6 +790,7 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
         buffers: &buffers,
         search: &search,
         tree: &tree,
+        titlebar: &titlebar,
         coordinator: coordinator.weak(),
         id,
     });
@@ -1121,6 +1125,8 @@ struct CloseParts<'a> {
     search: &'a SearchPanelHandle,
     /// The file-tree sidebar, whose close drops its `FileSearch`.
     tree: &'a TreeHandle,
+    /// The header bar's and tab bar's provider, removed from the display at close.
+    titlebar: &'a TitlebarStyle,
     /// The coordinator, told FIRST — as a `Weak`, because it owns this window's
     /// handle and this closure is owned by the window.
     coordinator: Weak<CoordinatorInner>,
@@ -1162,6 +1168,7 @@ fn wire_close(parts: CloseParts<'_>) {
     let buffers = parts.buffers.clone();
     let search = parts.search.clone();
     let tree = parts.tree.clone();
+    let titlebar = parts.titlebar.clone();
     let weak = parts.coordinator;
     let id = parts.id;
     parts.window.connect_close_request(move |_window| {
@@ -1177,6 +1184,8 @@ fn wire_close(parts: CloseParts<'_>) {
         buffers.close();
         search.close();
         tree.close();
+        // An id is minted again after its window closes, and a stale provider would restyle that window.
+        titlebar.uninstall();
         // Take in its own statement so the RefCell borrow is released before
         // shutdown() (which consumes the core and blocks on teardown).
         let taken = core.borrow_mut().take();

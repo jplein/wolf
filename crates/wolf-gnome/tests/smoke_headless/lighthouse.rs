@@ -37,6 +37,47 @@ impl Background {
             Self::Light => "light",
         }
     }
+
+    /// The other variant.
+    pub(crate) fn other(self) -> Self {
+        match self {
+            Self::Dark => Self::Light,
+            Self::Light => Self::Dark,
+        }
+    }
+}
+
+/// Stages the checkout's `runtime/nvim/init.lua` beside a copy of `lighthouse`'s colorscheme,
+/// both copied by content into `<runtime_dir>/<stage_name>`, and returns the staged
+/// `init.lua` a smoke hands the app as `WOLF_INIT_LUA`, so `init.lua` activates the real
+/// colorscheme. The stage sits under `XDG_RUNTIME_DIR`, so no sidebar row draws it.
+pub(crate) fn stage_init_lua(
+    smoke: &str,
+    runtime_dir: &Path,
+    stage_name: &str,
+    lighthouse: &Lighthouse,
+) -> PathBuf {
+    let stage = runtime_dir.join(stage_name);
+    let colors = stage.join("lighthouse").join("colors");
+    std::fs::create_dir_all(&colors)
+        .unwrap_or_else(|e| panic!("{smoke}: failed to create {}: {e}", colors.display()));
+    let checkout_init = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../runtime/nvim/init.lua");
+    let init_lua = stage.join("init.lua");
+    std::fs::copy(&checkout_init, &init_lua).unwrap_or_else(|e| {
+        panic!(
+            "{smoke}: failed to copy {} to {}: {e}",
+            checkout_init.display(),
+            init_lua.display()
+        )
+    });
+    std::fs::copy(lighthouse.path(), colors.join("lighthouse.lua")).unwrap_or_else(|e| {
+        panic!(
+            "{smoke}: failed to copy {} into {}: {e}",
+            lighthouse.path().display(),
+            colors.display()
+        )
+    });
+    init_lua
 }
 
 /// The pinned `lighthouse.lua`, read once.

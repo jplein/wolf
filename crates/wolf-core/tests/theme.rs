@@ -176,7 +176,7 @@ fn linked_wolf_cursor_resolves_to_effective_attributes() {
 }
 
 /// Clearing the groups falls back to the all-`None` theme (the documented
-/// fallback: cursor reverts to reverse-video logic, titlebar to system color).
+/// fallback: cursor reverts to reverse-video logic, titlebar to the `Normal` background).
 /// First defines both groups and waits for them, so the clear is observed as a
 /// genuine Some -> None transition rather than a never-set default.
 #[test]

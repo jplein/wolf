@@ -1,7 +1,7 @@
 //! The terminal-colours smoke: under the vendored Lighthouse, a terminal pane paints the 16 ANSI
 //! colours as Lighthouse's, for the dark appearance and for the light one.
 
-use super::lighthouse::{rgb8, Background, Lighthouse};
+use super::lighthouse::{rgb8, stage_init_lua, Background, Lighthouse};
 use super::*;
 
 /// The `SHELL` a typed `:terminal` runs: `X` in SGR 30–37 and 90–97 on row 0, a space in SGR
@@ -324,27 +324,7 @@ fn terminal_pane_paints_lighthouses_ansi_colours_under_cage() {
     let bin = env!("CARGO_BIN_EXE_wolf-gnome");
     let lighthouse = Lighthouse::from_env(SMOKE);
 
-    // The captive init.lua beside the vendored colorscheme, both copied by content.
-    let stage = runtime_dir.join(TC_STAGE_NAME);
-    let colors = stage.join("lighthouse").join("colors");
-    std::fs::create_dir_all(&colors)
-        .unwrap_or_else(|e| panic!("{SMOKE}: failed to create {}: {e}", colors.display()));
-    let checkout_init = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../runtime/nvim/init.lua");
-    let init_lua = stage.join("init.lua");
-    std::fs::copy(&checkout_init, &init_lua).unwrap_or_else(|e| {
-        panic!(
-            "{SMOKE}: failed to copy {} to {}: {e}",
-            checkout_init.display(),
-            init_lua.display()
-        )
-    });
-    std::fs::copy(lighthouse.path(), colors.join("lighthouse.lua")).unwrap_or_else(|e| {
-        panic!(
-            "{SMOKE}: failed to copy {} into {}: {e}",
-            lighthouse.path().display(),
-            colors.display()
-        )
-    });
+    let init_lua = stage_init_lua(SMOKE, &runtime_dir, TC_STAGE_NAME, &lighthouse);
 
     let shell = runtime_dir.join(TC_SHELL_NAME);
     std::fs::write(&shell, colour_shell())

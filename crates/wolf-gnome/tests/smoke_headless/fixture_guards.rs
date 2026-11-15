@@ -85,6 +85,7 @@ use super::terminal::{
     TERMRESTART_PID_DRAWER_NAME, TERMRESTART_PID_SPLIT_NAME, TOAST_OCR_TERM, TOAST_PROBE_NAME,
     TP_OCR_WORD,
 };
+use super::titlebar::TB_READ_NAME;
 use super::*;
 
 /// Every lowercased substring the OCR-asserting cage smokes must — or must not —
@@ -270,6 +271,10 @@ use super::*;
 ///   remove a window. It reads no buffer text on purpose — see its scenario — so
 ///   there is not even a page for a term to sit on. Its six names are registered in
 ///   [`RELAUNCH_FIXTURE_NAMES`] for the generic loop's sake.
+/// * `header_bar_and_tab_bar_take_the_editor_background_dark_under_cage` and its light
+///   twin capture four PNGs each and OCR none: their observables are exact-colour shares
+///   and ink counts in bands derived from the geometry constants. Their readback is
+///   registered in [`RELAUNCH_FIXTURE_NAMES`] for the generic loop's sake.
 /// * `frame_stats_report_covers_the_live_typing_path_under_cage` captures nothing
 ///   at all: its observable is the report file the running application appended to,
 ///   and its assertions are bucket LABELS matched as rows of that file —
@@ -1369,6 +1374,13 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
         TOAST_PROBE_NAME,
         "TOAST_PROBE_NAME",
         "terminal_drawer_hides_a_message_toast_under_cage",
+    ),
+    // Registered for the generic loop; the titlebar smokes read no OCR term. The readback lives
+    // under XDG_RUNTIME_DIR, but its path is echoed in the cmdline.
+    (
+        TB_READ_NAME,
+        "TB_READ_NAME",
+        "header_bar_and_tab_bar_take_the_editor_background_dark_under_cage",
     ),
 ];
 

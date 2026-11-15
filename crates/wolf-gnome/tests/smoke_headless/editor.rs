@@ -3453,8 +3453,8 @@ const SAVEAS_PROPOSED_NAME: &str = wolf_gnome::save_ui::UNTITLED_SAVE_NAME;
 /// Under `XDG_RUNTIME_DIR` for [`SAVE_READBACK_BEFORE_NAME`]'s reason.
 pub(crate) const SAVEAS_READBACK_NAMELESS_NAME: &str = "wolf_gnome_saveas_nameless.txt";
 
-/// The value of `GDK_DEBUG` **both** save smokes export: defence in depth against a
-/// dialog opening on the developer's desktop.
+/// The value of `GDK_DEBUG` that every smoke able to reach a native file dialog exports:
+/// defence in depth against a dialog opening on the developer's desktop.
 ///
 /// Measured on a bus that could activate the host's portal:
 /// `gdk_display_should_use_portal` answered true, GTK exported a window handle through
@@ -3485,7 +3485,7 @@ pub(crate) const SAVEAS_READBACK_NAMELESS_NAME: &str = "wolf_gnome_saveas_namele
 /// and the smoke fails on its own assertion. It costs nothing green.
 ///
 /// This is PER-SMOKE SCENARIO ENVIRONMENT and never production behaviour.
-const SAVE_AS_GDK_DEBUG: &str = "no-portals";
+pub(crate) const SAVE_AS_GDK_DEBUG: &str = "no-portals";
 
 /// The SAVE AS scenario, run as a single `sh -c` string inside `cage`.
 ///

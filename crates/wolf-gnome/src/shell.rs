@@ -29,7 +29,9 @@
 //!   ONCE, settles the sidebar's root against it ([`AppShell::settle_reroot`] over
 //!   the pure [`workspace::reroot_decision`]), refreshes the window
 //!   TITLE from that same value ([`AppShell::refresh_title`] over the pure
-//!   [`crate::title`] seam), refreshes the two navigation buttons' sensitivity from
+//!   [`crate::title`] seam), refreshes the header bar's and tab bar's background
+//!   ([`AppShell::refresh_titlebar`] over the pure [`mod@crate::titlebar_background`]
+//!   seam), refreshes the two navigation buttons' sensitivity from
 //!   the FOCUSED pane ([`AppShell::refresh_nav_buttons`] over the pure
 //!   [`crate::nav_ui`] seam — the wake a `WinEnter` fires bumps no `seq`, so this is
 //!   what makes the toolbar follow the focus), asks [`crate::persistence`] for an
@@ -38,8 +40,8 @@
 //!   dispatches each command. A command `wolf-gnome` does not implement is
 //!   PRINTED with its recorded reason — never silently dropped. The drain runs
 //!   LAST because a drained `close_window` shuts the core down, and the state
-//!   snapshot must happen before that. The title refresh and the snapshot run
-//!   UNGATED like the drain: both are cheap, neither issues an RPC, and the
+//!   snapshot must happen before that. The title and titlebar refreshes and the
+//!   snapshot run UNGATED like the drain: all are cheap, none issues an RPC, and the
 //!   snapshot's own `state_seam::may_snapshot` gate handles the non-`Alive` case.
 //!
 //! The drain keeps running in ALL THREE liveness states. The drain is the ONLY
@@ -238,6 +240,7 @@ use crate::state_seam;
 use crate::tab_view::{TabParts, TabsHandle};
 use crate::tabs_ui::{self, NewTabPress};
 use crate::title;
+use crate::titlebar_background::{titlebar_background, TitlebarStyle};
 use crate::tree_view::TreeHandle;
 use crate::window::TREE_PANE_WIDTH;
 use crate::workspace;
@@ -396,6 +399,9 @@ pub struct ShellParts<'a> {
     /// through here, and so does the New Tab press. No cycle:
     /// [`crate::tab_view`] does not reference the shell.
     pub tabs: &'a TabsHandle,
+    /// The header bar's and tab bar's provider, fed on every render wake by
+    /// [`AppShell::refresh_titlebar`].
+    pub titlebar: &'a TitlebarStyle,
     /// The process-scoped coordinator, as a `Weak`: it owns this window's handle,
     /// and this shell is owned by that window. See [`mod@crate::coordinator`].
     pub coordinator: Weak<CoordinatorInner>,
@@ -471,6 +477,8 @@ struct ShellInner {
     crash_overlay: CrashOverlay,
     /// This window's tabs; see [`ShellParts::tabs`].
     tabs: TabsHandle,
+    /// The header bar's and tab bar's provider; see [`ShellParts::titlebar`].
+    titlebar: TitlebarStyle,
     /// The cwd the captive nvim was LAUNCHED in, retained beside
     /// [`ShellInner::rooted_cwd`] rather than consumed into it.
     ///
@@ -620,6 +628,7 @@ pub fn build(parts: ShellParts<'_>) -> AppShell {
         launch_cwd: parts.launch_cwd,
         crash_overlay: parts.crash_overlay.clone(),
         tabs: parts.tabs.clone(),
+        titlebar: parts.titlebar.clone(),
         coordinator: parts.coordinator,
         window_id: parts.window_id,
         home: workspace::home_dir()
@@ -1750,6 +1759,7 @@ impl AppShell {
         };
         self.settle_reroot(live.as_deref());
         self.refresh_title(live.as_deref());
+        self.refresh_titlebar();
         self.refresh_nav_buttons();
         // The coordinator re-gathers this window and commits the whole tree: one window's wake must not
         // commit a tree that forgot the others.
@@ -1785,6 +1795,24 @@ impl AppShell {
         }
         self.inner.window.set_title(Some(&title));
         *self.inner.last_title.borrow_mut() = title;
+    }
+
+    /// Gives the header bar and the tab bar the background
+    /// [`titlebar_background`] picks from the snapshot's `WolfTitlebar` and `Normal`.
+    ///
+    /// `Normal` is `resolve(0)`'s background, the one `PaneView::draw_pane` fills the grid
+    /// from, so the bars match the grid. The snapshot guard and the core borrow are dropped
+    /// before the provider is touched. With no core the bars keep their last colour.
+    fn refresh_titlebar(&self) {
+        let wanted = {
+            let core_ref = self.inner.core.borrow();
+            let Some(core) = core_ref.as_ref() else {
+                return;
+            };
+            let snap = core.read_snapshot();
+            titlebar_background(snap.theme.titlebar.bg, snap.highlights.resolve(0).bg)
+        };
+        self.inner.titlebar.apply(wanted);
     }
 
     /// Drains the core's command queue and dispatches each command.
