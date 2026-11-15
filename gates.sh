@@ -162,6 +162,7 @@ else
   run doc-lint bazel run --color=no --curses=no //tools/doc-lint:doc_lint -- --root "$PWD"
   run wolf-core-deps core_deps_bazel
   run lint bazel test "${bazel_flags[@]}" "${test_flags[@]}" //tools/lint:check
+  run bazelignore ./tools/lint/bazelignore_check.sh
   run build bazel build "${bazel_flags[@]}" //...
   run test bazel test "${bazel_flags[@]}" "${test_flags[@]}" //...
 fi
