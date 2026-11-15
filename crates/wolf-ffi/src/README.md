@@ -234,8 +234,8 @@ One captive nvim is one project; each of its views binds to a distinct tabpage.
 ### Appearance and theme
 
 - `set_background(&self, dark: bool)` — `:set background=dark|light`. The macOS front-end pushes the resolved appearance at launch and on every system change while in auto mode.
-- `theme_titlebar_bg(&self) -> FfiColor` — The `WolfTitlebar` group's background. Unset when the group is absent or cleared.
-- `theme_titlebar_fg(&self) -> FfiColor` — The same group's foreground, carried for title-text coloring. Same unset convention.
+- `theme_titlebar_bg(&self) -> FfiColor` — The `WolfTitlebar` group's background, which macOS prefers to `Normal`'s for the titlebar. Unset when the group is absent or cleared.
+- `theme_titlebar_fg(&self) -> FfiColor` — The same group's foreground, carried and applied by no front-end. Same unset convention.
 
 ### Config
 

@@ -29,18 +29,19 @@ Purpose: Hosts a view for view tests, renders it and samples what it drew, asser
 **Public API**
 
 - `OffscreenRenderer(hosting:size:)`, its `window`, an `OffscreenWindow` whose `reportsKey` sets `isKeyWindow`, and `render() -> RenderedView`.
-- `RenderedView.color(at:in:)`, `colors(in:of:)` and `ink(in:of:minAlpha:)`. Each takes a point or rect in the coordinates of any view under the root and reads un-premultiplied sRGB. `ink` is the mean colour and count of the pixels at least `minAlpha` opaque, which over a clear background is the colour of the text drawn there.
+- `static capture(_:) -> RenderedView` — captures one view in any window, such as a production `MainWindow`.
+- `RenderedView.color(at:in:)`, `colors(in:of:)` and `ink(in:of:minAlpha:)`. Each takes a point or rect in the coordinates of any view under the root and reads un-premultiplied sRGB. `ink` is the mean colour and count of the pixels at least `minAlpha` opaque: over a clear background, the text's colour.
 - `colorDistance(_:_:)`, the sRGB distance ignoring alpha; pass resolved colours.
 - `NSTableView.setRowsEmphasized(_:)`.
 
 **Decisions**
 
-- `render()` runs `displayIfNeeded()` before every capture. Without it a change made since the last capture never reaches the bitmap, even with `needsDisplay` set.
+- Every capture runs `displayIfNeeded()` first, or a change made since the last capture never reaches the bitmap, even with `needsDisplay` set.
 - The window is pinned to Aqua, so captures do not follow the host's dark mode.
-- AppKit never makes the window key, so a table never emphasizes its selection by itself; `setRowsEmphasized(_:)` sets `isEmphasized` on the row views, as first responder would. `reportsKey` sends no key notification.
+- AppKit never makes the window key, so a table never emphasizes its selection by itself; `setRowsEmphasized(_:)` sets the row views' `isEmphasized`, as first responder would. `reportsKey` sends no key notification.
 - `NSApplication.shared` is touched before the window is built, since it sets up AppKit's drawing.
-- The pixel scale is read from the bitmap, never assumed, because a Retina host captures at 2.
-- A pixel is `colorAt`'s components re-tagged in the bitmap's own sRGB `colorSpace`, then converted to sRGB. `colorAt` tags them by the bitmap's `colorSpaceName`, which is calibrated (Generic) RGB for this capture, and converting that shifts saturated and dark colours by up to about 0.2.
+- The pixel scale is read from the bitmap, never assumed: a Retina host captures at 2.
+- A pixel is `colorAt`'s components re-tagged in the bitmap's own sRGB `colorSpace`, then converted to sRGB. `colorAt` tags them by the bitmap's `colorSpaceName`, calibrated (Generic) RGB here, and converting that shifts saturated and dark colours by up to about 0.2.
 
 #### `LiveCore.swift`
 
@@ -213,6 +214,23 @@ Purpose: Checks that a pane's statusbar strip paints Lighthouse's `Normal` backg
 - `previewDidFinishLoad(win:)` stands in for WebKit's `didFinish`, which never comes here, so `PaneOcclusion` skips the preview's grid and its frame is never read.
 - The window is no `MainWindow` and Lighthouse leaves `WolfTitlebar` unset, so a strip that follows the titlebar paints the black fallback.
 - Every stage prints a table row of the expected colour, `read_frame()`'s default background, and each region's mean and share.
+
+#### `TitlebarColourTests.swift`
+
+Purpose: Checks the titlebar of a real `MainWindow`, never shown, hosting a `PaneContainerView` over [`LighthouseColours.swift`](#lighthousecoloursswift)'s staged `init.lua`. The window's `backgroundColor` is what shows through the transparent titlebar.
+
+**Covers**
+
+- The window's background is Lighthouse's `Normal` background in sRGB, and matches a blank block of the grid, in dark and, after `set_background(false)`, in light.
+- Three wakes with an unchanged theme leave a colour set on the window alone.
+- A `WolfTitlebar` defined at runtime colours the window, and `hi clear` restores `Normal`'s.
+- Under each forced mode's `AppDelegate.appAppearance(for:)`, the window's effective appearance is the one `resolvesDark` gives, whatever the host's.
+
+**Gotchas**
+
+- The window is deliberately not pinned to Aqua, unlike `OffscreenRenderer`'s, so the appearance test sees what it inherits from `NSApp`.
+- The appearance test sets `NSApp.appearance` and restores it on exit. The window is never key, so the active and inactive title colours are manual-smoke.
+- Each background stage prints a table row of the computed `TitlebarBackground`, the window colour and the grid's mean and share. The appearance test prints the host appearance and each mode's resolved `windowFrameTextColor`.
 
 #### `FileTreeViewTests.swift`
 

@@ -83,7 +83,15 @@ Weight policy: a same-orientation split re-equalizes the row or column to equal 
 
 Every pane's body paints identically whether active or inactive. The only active/inactive treatment is statusbar text weight and dimming, because that distinction is awkward to express inside Neovim itself.
 
-The statusbar strip takes the editor's default colours, `Normal`, as wolf-gnome's does, and never the titlebar colour. An unset `WolfTitlebar`, as Lighthouse leaves it, keeps the titlebar at the system colour, and the strip must match the grid it sits on. `PaneContainerView.draw` reads them from grid 1's frame once per draw, not from each pane's frame, because an occluded preview and a terminal pane never read their own.
+The statusbar strip takes the editor's default colours, `Normal`, as wolf-gnome's does, and never the titlebar colour. A colorscheme's `WolfTitlebar` colours the titlebar and never the grid, and the strip must match the grid it sits on. `PaneContainerView.draw` reads them from grid 1's frame once per draw, not from each pane's frame, because an occluded preview and a terminal pane never read their own.
+
+## The titlebar
+
+The window's `backgroundColor` shows through its transparent titlebar. It takes a set `WolfTitlebar` background, else `Normal`'s, read from grid 1 once per wake as the statusbar strip reads it and built in sRGB as the grid is, so the titlebar matches the grid below it. Only before the first frame, when neither is known, does it keep the system colour. The rule is [`TitlebarBackground`](../crates/wolf-macos/Sources/WolfKeyMap/README.md#titlebarbackgroundswift).
+
+The title text is AppKit's, drawn in the title colours of the window's effective appearance, active or inactive. It follows Wolf's resolved appearance and not the OS's, because an OS in light mode under `appearance: dark` would otherwise draw the light-mode title, nearly invisible on the dark titlebar. It takes no colour from the colorscheme, by the user's decision.
+
+So no window or view sets its own `appearance`: every window inherits the `NSApp.appearance` that `AppDelegate` forces from Wolf's resolved appearance, which in `auto` is the OS's. Setting one per window, whether from `Normal`'s luminance as Ghostty does or by pinning Aqua as the tests' `OffscreenRenderer` does, would let the title and Neovim's `background` disagree.
 
 ## How a preview reaches its web view
 

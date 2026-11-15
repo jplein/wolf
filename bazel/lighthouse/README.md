@@ -19,7 +19,7 @@ The hardcoded `"dark"` is only the pre-push fallback for the initial paint: the 
 - sha256: `55a4c72e071a2dcab60a4d69b0b8a0051bb6176ac0001581f7866598081ed1d5`
 - Archive root dir: `lighthouse.nvim-431d3f6c4034af4155a9b2a9a810faa28f92be70` (the upstream repo name includes `.nvim`)
 
-Of the two optional Wolf app-theme highlight groups that core tracks through the `wolf_theme` notification ([`runtime/nvim`](../../runtime/nvim/README.md#wolf_setup_theme_trackingchan)), this pin defines `WolfCursor` and leaves `WolfTitlebar` unset, so the titlebar keeps the system colour. It sets `g:terminal_color_0` to `g:terminal_color_15` for both backgrounds, which become a terminal pane's 16 ANSI colours.
+Of the two optional Wolf app-theme highlight groups that core tracks through the `wolf_theme` notification ([`runtime/nvim`](../../runtime/nvim/README.md#wolf_setup_theme_trackingchan)), this pin defines `WolfCursor` and leaves `WolfTitlebar` unset, so the macOS titlebar takes its `Normal` background. It sets `g:terminal_color_0` to `g:terminal_color_15` for both backgrounds, which become a terminal pane's 16 ANSI colours.
 
 The tests that check these colours read their expected values from the pinned `colors/lighthouse.lua` rather than from constants, so a bump needs no test edit unless it changes the shapes they parse: the `local dark = {` and `local light = {` palette tables of `key = "#rrggbb",` lines, and the `local ansi = {` list of `p.<key>,` lines, each closed by a line that is exactly `}`. The Swift reader also needs the lines that set `Normal` to the palette's `foreground` on its `background`. A bump that changes a shape fails those tests naming the missing piece.
 

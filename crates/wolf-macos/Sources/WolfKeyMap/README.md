@@ -20,7 +20,14 @@ Each compiles into this module and has its own README with the entries for its f
 
 Purpose: `AppearanceMode`, the user's configured appearance (auto / dark / light) decoded from the FFI discriminant. Foundation only, no AppKit.
 
+**Public API**
+
+- `forcedDark` — the appearance the mode forces on the whole app, `true` for dark; `nil` under `auto`, which follows the OS.
+- `resolvesDark(systemDark:)` — Wolf's resolved appearance, pushed to Neovim, and the one every window title draws in.
+
 **Decisions**
+
+- `resolvesDark` is `forcedDark ?? systemDark`, so Neovim's `background` and the title's appearance cannot diverge. A forced mode ignores the OS, so an OS in light mode under `appearance: dark` draws the dark-appearance title ([why](../../../../notes/wolf-macos-decisions.md#the-titlebar)).
 
 - The enum is `UInt8`-backed and its case order is the contract shared with `wolf-ffi`'s `mod appearance` and `wolf_core::config::Appearance`, so decoding is plain `AppearanceMode(rawValue:)`. Reordering the cases or dropping the raw type breaks the decode silently.
 
@@ -655,3 +662,16 @@ Purpose: The horizontal sibling of `StatusbarLayout` — the absolute left edge 
 **Gotchas**
 
 - The preview web view's frame, this span, and the draw loop's occlusion test all derive from the same `geometry(_:fullWidth:)` applied to `gridRect(ofPane:)`, and must change together.
+
+#### `TitlebarBackground.swift`
+
+Purpose: The window titlebar's background: a set `WolfTitlebar` background, else the `Normal` background the grid fills with, else the system colour. `PaneContainerView.applyTitlebarTheme` feeds it on every render wake and `MainWindow.applyTitlebarBackground(_:)` applies it.
+
+**Public API**
+
+- `init(titlebar:normal:)` — takes `theme_titlebar_bg()` and grid 1's `default_bg()`. The `rgb` of an unset colour is never read.
+- `.colour(UInt32)` is packed `0x00RRGGBB`, drawn in sRGB as the grid is; `.system` is the window's own colour, for when neither is known.
+
+**Decisions**
+
+- `WolfTitlebar` comes first because a colorscheme that defines it is asking for it. `Normal` comes next so a colorscheme that does not, such as Lighthouse, still gets a titlebar that matches the grid ([why](../../../../notes/wolf-macos-decisions.md#the-titlebar)).

@@ -19,17 +19,18 @@ Purpose: The application coordinator: launch setup, the live `WolfWindowControll
 
 **Public API**
 
-- `makeNewWindow(originatingCwd:)` — opens a fresh project in the empty state, ignoring its argument, which exists for the shared `CommandDispatcher` call site.
-- `makeNewTab(from:)` — reuses the key controller's project, adding a tabpage rather than starting a core.
+- `makeNewWindow(originatingCwd:)` — a fresh project in the empty state; the unused argument serves `CommandDispatcher`'s shared call site.
+- `makeNewTab(from:)` — adds a tabpage to the key controller's project, starting no core.
 - `scheduleStateSnapshot()` / `snapshotNow()` — throttled versus immediate whole-tree commit to `state.json` ([write model](../../../../notes/wolf-macos-decisions.md#state-is-a-tree-and-the-front-end-owns-every-write)).
 - `closeCommit(for:)` — a closing view's commit; the last live view's commits at once the tree read at its burst's first close, keeping every tab of its window.
 - `otherWindows(excluding:)`, `controllerForCwd(_:)`, `raiseWindow(tabId:)` — the command palette's candidate sources and raise target.
+- `appAppearance(for:)` — a mode's forced `NSApp.appearance`; `nil` under `auto`.
 
 **Decisions**
 
-- Launch order is fonts, config, metrics: measurement needs the config's family, size and line height, and the bundled families must reach CoreText first.
+- Launch order is fonts, config, metrics: measuring needs the config's font settings, and the bundled families must reach CoreText first.
 - `appearanceObservation` must stay stored — an `NSKeyValueObservation` invalidates itself once deallocated, so a discarded token silently stops auto-mode appearance tracking.
-- Both app focus edges are pushed to nvim: `FocusGained` fires only on a real unfocused-to-focused transition, so without the resign-side `false` the `WolfAutoRead` `:checktime` reload fires only once.
+- Both app focus edges reach nvim: `FocusGained` fires only on a real unfocused-to-focused transition, so without the resign-side `false` the `WolfAutoRead` `:checktime` reload fires once.
 - The About panel's credits discharge the fonts' and libraries' attribution: Linux's preamble, then `wolf_ffi_font_license_notices()` and `wolf_ffi_library_license_notices()` verbatim. Their `.foregroundColor` stays `labelColor`, since uncoloured credits render black in dark mode.
 
 **Gotchas**
@@ -283,17 +284,18 @@ Purpose: The single editor window. Its content view controller is an `EditorSpli
 
 **Public API**
 
-- `protocol HistoryNavigating` — the Back / Forward actions the toolbar needs from `WolfWindowController`. Explicit delegation rather than a `target: nil` responder-chain hop, because that controller is not an `NSWindowController` and so is not in the chain.
+- `protocol HistoryNavigating` — the Back / Forward actions the toolbar needs from `WolfWindowController`. Explicit delegation, not a `target: nil` responder-chain hop: that controller is no `NSWindowController`, so it is not in the chain.
 - `init(sidebar:paneContainer:metrics:cols:rows:)` — sizes the content so the editor pane keeps exactly `cols` × `rows` cells below the chrome.
-- `applyTitlebarBackground(rgb:set:)` — idempotent; the first themed call captures the pristine `backgroundColor`, so `set: false` restores the system default exactly.
+- `applyTitlebarBackground(_:)` — idempotent; the first `.colour` captures the pristine `backgroundColor`, so `.system` restores the system default exactly.
 
 **Decisions**
 
-- `isReleasedWhenClosed = false`: the window controller holds the strong reference, and AppKit's default adds an unbalanced release that over-releases the window — the deferred close-animation dealloc then crashes.
+- `isReleasedWhenClosed = false`: the window controller holds the strong reference, and AppKit's default adds an unbalanced release, which crashes the deferred close-animation dealloc.
 - The toolbar is installed before the chrome is measured, so `contentLayoutRect` accounts for the toolbar band; measuring first silently costs the grid rows.
 - The navigation items set `autovalidates = false`, which is what makes an `isEnabled` set by `refreshHistoryToolbar(canBack:canForward:)` stick instead of being overwritten by AppKit's own validation pass.
 - Item order lives in the pure `HistorySeam.itemIdentifiers` so it is testable without AppKit. The system `.toggleSidebar` must precede the tracking separator, or the visible title claims the content-leading slot and pushes the toggle to the trailing edge.
 - The delegate returns `nil` for `.toggleSidebar` so AppKit supplies its built-in item, auto-wired to `NSSplitViewController.toggleSidebar(_:)`.
+- `appearance` stays `nil`, so the window and its title inherit the app appearance `AppDelegate` forces ([why](../../../../notes/wolf-macos-decisions.md#the-titlebar)).
 
 #### `NvimRestartedBannerView.swift`
 

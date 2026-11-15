@@ -16,7 +16,9 @@ Note that the nearby `swift_format_srcs` glob feeds lint and format only, not te
 
 **Covers**
 
-- `AppearanceMode`'s raw values and `init?(rawValue:)`, keeping the Swift enum in lockstep with `mod appearance` in `crates/wolf-ffi/src/lib.rs` and `wolf_core::config::Appearance`. Scalar inputs only — the `NSApp` appearance forcing and `effectiveAppearance` KVO that consume the decode are manual-smoke.
+- `AppearanceMode`'s raw values and `init?(rawValue:)`, keeping the Swift enum in lockstep with `mod appearance` in `crates/wolf-ffi/src/lib.rs` and `wolf_core::config::Appearance`.
+- `forcedDark` and `resolvesDark(systemDark:)` for each mode on a dark and a light OS, including an OS in light mode under `appearance: dark`, which must resolve dark.
+- A window inheriting the forced appearance is covered by [`TitlebarColourTests.swift`](../WolfMacOSTests/README.md#titlebarcolourtestsswift); the `effectiveAppearance` KVO of `auto` stays manual-smoke.
 
 **Gotchas**
 
@@ -418,6 +420,12 @@ Of `CloseBurst`, it covers that a tab group closed in one turn keeps the tree re
 #### `TerminalInputSeamTests.swift`
 
 **Covers** — `TerminalInputSeam`: the `routesThroughInputContext` table over named keys, Ctrl, Cmd, option-as-alt and marked text; `committedText` for one ASCII scalar, other text, control scalars and empty text; and `focusReports` for no change, a gain, a move and a loss.
+
+#### `TitlebarBackgroundTests.swift`
+
+**Covers** — `TitlebarBackground(titlebar:normal:)`: a set `WolfTitlebar` beating a set or unset `Normal`, `Normal` used when `WolfTitlebar` is unset, and `.system` when neither is set.
+
+**Gotchas** — every unset colour carries a non-zero `rgb` that no row expects, so code reading `rgb` without checking `set` fails rather than passing by coincidence.
 
 #### `TreeChildrenMemoTests.swift`
 
