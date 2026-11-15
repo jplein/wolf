@@ -1,6 +1,6 @@
 # `gates.sh`
 
-Last verified at commit `8f5cdbfe0630e09ab44713a3e970a81808f2746f`.
+Last verified at commit `ce93069ef6cfb37ee498af5b00dcf3b8ee9aff21`.
 
 ## Dev shell entry
 
@@ -51,6 +51,8 @@ The gate is Linux only because only Cargo builds wolf-gnome, the macOS dev shell
 `bazel test //...` runs every target not tagged `manual`: the `//tools/lint` checks, the crate tests, and `:Wolf` through `bundle_layout_test`. Prettier has no Bazel target, so it is a gate of its own. The `:comments` target runs doc-lint per file, and its checkout-wide rules — `md-link`, `md-anchor`, `notes-orphan`, `notes-unlinked`, `bazel-coverage` — run only from the `doc-lint` gate's `--root`.
 
 `lint` runs `//tools/lint:check` alone, so a lint failure is named as one, and `build` separates a compile failure from a test failure; `test` reuses both. `WolfRelease` and `InstallWolf` stay out: both are `manual`, and the first rebuilds the whole graph at `-c opt`.
+
+`bazelignore` fails when `//...` lists a probe package under `.worktrees/`, which [`.bazelignore`](../tools/lint/README.md#caveats) keeps out. `.bazelignore` names paths of the workspace, so the probe has to be a package of the checkout itself, gitignored like `target/gates` and the `bazel-*` links, and the script removes it on exit. Why it is a gate step and not a target is in [tools/lint](../tools/lint/README.md). It runs just before `build`, which loads every package of `//...` anyway, so on the warm server the query adds only the probe and takes under a second.
 
 `wolf-core-deps` queries `kind(rule, deps(//crates/wolf-core:wolf_core) + deps(//crates/wolf-test-support:wolf_test_support))`, and the `kind(rule, …)` wrapper is load-bearing. A bare `deps()` also returns every source file in the graph, and `libc` vendors its bindings under `src/new/glibc/…`, whose paths match the `glib` pattern, so the gate would fail on every run. crate_universe resolves only the darwin triples in `MODULE.bazel`, so this gate covers the macOS graph alone, and Linux's `--target all` covers every target.
 

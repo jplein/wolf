@@ -6,6 +6,8 @@ Each tool has a check target (`bazel test`, reports and fails on violations) and
 
 These targets need Bazel and Xcode, neither of which the Linux devShell has. Linux runs the same checks directly in its verification gate — see [`build.md`](../../build.md#the-verification-gate). The wolf-core dependency checker has no target of its own: the `wolf-core-deps` gate of [`gates.sh`](../../gates.sh) runs it on both platforms, and only its test is a target.
 
+The `.bazelignore` checker has neither: only the macOS `bazelignore` gate runs it, because Linux has no Bazel, and a test action can neither write its probe into the source tree nor query its own workspace, whose server is busy running that test.
+
 ## Policy: checks gate
 
 Every check target runs under `bazel test //...`, and any finding fails it. clippy runs with `-Dwarnings` by default, set in `.bazelrc`, and runs as a build action of the `rust_clippy` targets, so a clippy warning fails `bazel build //...` as well. The fix targets are tagged `manual`, because they rewrite the developer's checkout and must run only when named by label.
@@ -153,7 +155,10 @@ The checker exits 1 on a finding and 2, with an `ERROR:` line, when there is no 
 - swift-format check and fix. `:swift_format` runs `swift-format lint --strict`, which reports the pretty-printer's findings (`Indentation`, `AddLines`, `LineLength`) as well as the lint-category rules, so a file that `format` would re-indent or re-wrap fails it. To check one file as the target does, run `xcrun swift-format lint --strict --follow-symlinks <file>`; to format one, `bazel run //tools/lint:swift_format.fix -- <file>`.
 - The vendoring notes under `bazel/*` are in scope for style but carry no per-file entries, so only the line-length, changelog and all-caps rules bite there. `entry-budget` fires on `####` headings, which those files do not use.
 - Two rustfmts. `:rustfmt_files.fix` runs the rules_rust nightly above, while Linux's `fmt` gate runs the devShell's `rustfmt 1.10.0-stable`, and the Linux gate is the judge of wolf-gnome's formatting. Run with `--check` over every tracked `crates/wolf-gnome/*.rs` file, the fixer exits 0 with no diff, so the two agree on the tree as it stands.
-- `.bazelignore`. The rustfmt writer (`:rustfmt.fix`) internally evaluates `//...`; the repo's `.bazelignore` excludes `.direnv` so the nix and direnv symlink tree does not break that query.
+- `.bazelignore`. Each entry keeps a tree that is not this repository's source out of `//...`, which `bazel build`, `bazel test` and the rustfmt writer's (`:rustfmt.fix`) internal query expand. `.workspace` and `.worktrees` belong to the regina harness, [`.claude/skills/regina`](../../.claude/skills/regina/README.md).
+  - `.direnv`: the nix and direnv symlink tree, whose links into the Nix store break the rustfmt writer's query.
+  - `.workspace`: regina's run directories. The `state` link in each reaches the run's state root, which holds every task's full checkout.
+  - `.worktrees`: regina's integration-branch worktrees, nested in the main checkout at `.worktrees/<branch>`. Each is a full copy of the repo with its own `BUILD.bazel` files, and after a build there it also holds Bazel's convenience symlinks into another output base's execroot, external repositories included. Without the entry, `//...` in the main checkout picks up duplicate targets and those of external repositories, such as rules_rust's integration tests, which fail. `bazelignore_check.sh` checks this entry.
 
 ## Files
 
@@ -171,6 +176,7 @@ The checker exits 1 on a finding and 2, with an `ERROR:` line, when there is no 
 - `markdown_check.sh` — the documentation rule checks over the passed files.
 - `markdown_check_test.sh` — the `:markdown_check_test` body, also a Linux gate step.
 - `markdown_all.sh` — Linux only: the checker over the Linux scope above. It calls the host `git`, which the devShell inherits from the host `PATH` because it is not a pure shell.
+- `bazelignore_check.sh` — macOS only, the `bazelignore` gate. It writes a probe package under `.worktrees/` of the checkout, creating `.worktrees` if absent, runs `bazel query --output=package //...`, and on exit removes the probe, and `.worktrees` too if it created it. It prints `FAIL: <package>` per package under `.worktrees/` and exits 1, whatever the query's status, and otherwise prints the package count and exits 0. It exits 2 with an `ERROR:` line on any argument, a probe it cannot write, or a query that failed or listed no package, and it must run under macOS `/bin/bash` 3.2.
 - `doc_lint_check.sh` — the `:comments` body: `doc-lint --files` over the files it is passed.
 - `wolf_core_forbidden_deps.txt` — the patterns no entry of the dependency listing of `wolf-core` and `wolf-test-support` may contain, one per line, with `#` comment lines and blank lines skipped. Each is a case-insensitive substring, so a stem covers its variants: `gtk` covers `gtk4`, and `objc` covers the `objc2-core-*` crates an exact name would miss. It is the one copy both platforms' gates read.
 - `wolf_core_deps_check.sh` — `wolf_core_deps_check.sh [LISTING]` matches a listing, the file or else stdin, against `wolf_core_forbidden_deps.txt` beside it. It prints a `FAIL: <line> matches forbidden pattern <pattern>` line per match and exits 1, or prints a count of the clean lines and exits 0. It exits 2 with an `ERROR:` line on a usage error, an unreadable listing or list, a list with no pattern, or a listing with no non-blank line, so a producer that printed nothing never passes. It must run under macOS `/bin/bash` 3.2.

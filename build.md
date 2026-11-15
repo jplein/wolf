@@ -436,7 +436,7 @@ doc-lint runs standalone too: `doc-lint --files <files>` checks comments in the 
 
 ## The verification gate
 
-`./gates.sh`, at the repository root, is the definition of green on both platforms. It detects the host and runs every deterministic gate for it: on Linux the format, Markdown, wolf-gnome wording, doc-lint, wolf-core dependency, clippy, rustdoc link, build and test commands, and on macOS prettier, doc-lint's checkout-wide rules, the wolf-core dependency check and `bazel test //...`. What each list covers, and why it runs in that order, is in [its notes](notes/gates.sh.md).
+`./gates.sh`, at the repository root, is the definition of green on both platforms. It detects the host and runs every deterministic gate for it: on Linux the format, Markdown, wolf-gnome wording, doc-lint, wolf-core dependency, clippy, rustdoc link, build and test commands, and on macOS prettier, doc-lint's checkout-wide rules, the wolf-core dependency check, a check that `.bazelignore` keeps the regina worktrees out of `//...`, and `bazel test //...`. What each list covers, and why it runs in that order, is in [its notes](notes/gates.sh.md).
 
 ```sh
 ./gates.sh                          # inside the dev shell, or outside it with nix on PATH
