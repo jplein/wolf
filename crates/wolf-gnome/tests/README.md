@@ -8,7 +8,7 @@ nix develop --command cargo test -p wolf-gnome
 
 The devShell is not optional: it supplies GTK, exports `WOLF_NVIM_BIN` and `WOLF_RG_BIN`, and pins the font stack, which is what makes Pango measurement and Cairo rasterization reproducible enough to assert on pixels.
 
-Rules that are decidable from their arguments are pinned in each seam's own `#[cfg(test)] mod tests`, which is the point of the seam split in [wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md); the key seam's, the terminal seams' and the other-pane seam's tables are files here instead, [`gdk_key.rs`](#gdk_keyrs), [`terminal_seams.rs`](#terminal_seamsrs) and [`other_pane_seam.rs`](#other_pane_seamrs). The other files below cover what a seam cannot reach: a real Neovim, a real window, the built binary together with the manifest that shaped it, and the store output `nix build .#wolf-gnome` installs — a different artifact from the checkout build, making different claims.
+Rules that are decidable from their arguments are pinned in each seam's own `#[cfg(test)] mod tests`, which is the point of the seam split in [wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md); the key seam's, the terminal seams', the other-pane seam's and the titlebar seam's tables are files here instead, [`gdk_key.rs`](#gdk_keyrs), [`terminal_seams.rs`](#terminal_seamsrs), [`other_pane_seam.rs`](#other_pane_seamrs) and [`titlebar_background.rs`](#titlebar_backgroundrs). The other files below cover what a seam cannot reach: a real Neovim, a real window, the built binary together with the manifest that shaped it, and the store output `nix build .#wolf-gnome` installs — a different artifact from the checkout build, making different claims.
 
 ## Files
 
@@ -203,7 +203,7 @@ The frame-time instrument's smoke: typing bursts with `WOLF_FRAME_STATS` armed, 
 
 #### `smoke_headless/lighthouse.rs`
 
-Not a smoke: the oracle that reads expected colours from the pinned `colors/lighthouse.lua` in the tree `WOLF_TEST_LIGHTHOUSE_DIR` names, a copy of wolf-ffi's `common::Lighthouse` that parses the same shapes ([`//bazel/lighthouse`](../../../bazel/lighthouse/README.md#the-pin)). It panics when the variable is unset, since the devShell always exports it, and is read in the test process only: the packaged smokes scrub the variable from the cage.
+Not a smoke: the oracle that reads expected colours from the pinned `colors/lighthouse.lua` in the tree `WOLF_TEST_LIGHTHOUSE_DIR` names, a copy of wolf-ffi's `common::Lighthouse` that parses the same shapes ([`//bazel/lighthouse`](../../../bazel/lighthouse/README.md#the-pin)). It panics when the variable is unset, since the devShell always exports it, and is read in the test process only: the packaged smokes scrub the variable from the cage. Its `stage_init_lua` stages the checkout's `init.lua` beside a copy of the pinned colorscheme, for a smoke that runs the real Lighthouse.
 
 #### `smoke_headless/packaged.rs`
 
@@ -253,6 +253,12 @@ The terminal-colours smoke: two launches of the checkout binary in one cage, ove
 
 The terminfo smoke: the checkout binary, given `WOLF_TERMINFO_DIR` from the devShell's `WOLF_TEST_TERMINFO_DIR` and decoy `TERM` and `TERMINFO`, opens a pane by typed `:terminal` whose shell reports `TERM=xterm-ghostty` and that `TERMINFO`. It proves that `window.rs` hands core the directory; core's choice is wolf-core's `terminal_terminfo.rs`. Its shell script, scenario and readback are shared with the packaged terminfo smoke.
 
+#### `smoke_headless/titlebar.rs`
+
+The titlebar smokes, one per Lighthouse background: the checkout binary over a staged Lighthouse, with `appearance` forced to that background while `ADW_DEBUG_COLOR_SCHEME` makes the desktop prefer the other. One launch opens a second tab and takes four captures: focused, after `:set background` to the other, after a runtime `WolfTitlebar`, and in backdrop with GTK's in-process save dialog up, so the smoke exports `GDK_DEBUG=no-portals`. The header bar and the tab bar must match the grid's `Normal`, then `WolfTitlebar`, and the title and the tabs' text must be drawn on the forced scheme's side. The bands derive from the geometry constants, and every run prints a table of expected and measured colours.
+
+The dialog is the route to backdrop: `cage` activates every toplevel it maps and deactivates one only when another takes focus, so no launch starts inactive. A toplevel with a parent is centred at its own size, so the main window and both bars stay visible beside it. A precondition proves the dimming: the title's contrast over `WolfTitlebar` must reach a floor while focused, and be at most a share of it in backdrop.
+
 #### `state_isolation.rs`
 
 **Covers**
@@ -289,6 +295,17 @@ The terminfo smoke: the checkout binary, given `WOLF_TERMINFO_DIR` from the devS
 **Gotchas**
 
 - Pure: no display, no Neovim and no session. Every expected value is written out by hand rather than computed by the function under test.
+
+#### `titlebar_background.rs`
+
+**Covers**
+
+- `titlebar_background::titlebar_background`'s precedence: a set `WolfTitlebar` beats `Normal`, `Normal` fills in when it is unset, and `Libadwaita` holds while neither is known.
+- `titlebar_css` writing lowercase `#rrggbb` in channel order, declaring no `color`, and giving `""` for `Libadwaita`; `stylesheet_update` answering `None` for equal inputs and the wanted stylesheet for each change.
+
+**Gotchas**
+
+- Pure: no display, no Neovim and no compositor. Whether the window paints the answer is [`smoke_headless/titlebar.rs`](#smoke_headlesstitlebarrs)'s question.
 
 #### `treesitter_languages.rs`
 
@@ -370,7 +387,7 @@ There is no fixed launch budget before `wait_ready` and no delivery margin after
 
 **A smoke that can reach a native `gtk::FileDialog` must export `GDK_DEBUG=no-portals`.** Whenever the app reaches a session bus GTK takes the desktop-portal route, and `cage` implements no `zxdg_exporter_v2` to export a window handle through, so the request goes to whichever portal that bus offers. Each cage's bus is private and activates no portal, and the export keeps GTK's in-process chooser, the one the smokes were measured against, without resting on that; if the isolation ever regresses, it is what stops a modal file dialog opening on the developer's own desktop and hanging the smoke.
 
-`no-portals` forces GTK's in-process fallback, which was measured to present under `cage` and to answer its callback. It is per-smoke scenario environment and never production behaviour, and it belongs on every smoke whose red path could open a dialog, not only on the one whose green path does.
+`no-portals` forces GTK's in-process fallback, which was measured to present under `cage` and to answer its callback. It is per-smoke scenario environment and never production behaviour, and it belongs on every smoke whose red path could open a dialog, as well as on every smoke whose green path does.
 
 **A palette-driven smoke depends on a ranking it cannot see, and one such dependency is live.** `prv` matches `Preview`, `Preview in Browser` and `Preview in Another Pane` alike, and no query can separate them: `rank_matches` is subsequence-based and the first title is a prefix of the other two. The empty-MRU tie-break puts `Preview` on top, but `mru_group` leads the sort key, so a command MRU carrying `preview_in_browser` inverts the order and Enter would hand the document to a browser instead.
 
@@ -492,11 +509,13 @@ Being scrupulous about this is the point of the section.
 - **Nothing proves the clipboard reaches another Wayland client.** A `gdk::Clipboard` can serve a `read_text_async` from its own local content provider when the same client owns the selection, so `copy_and_paste_round_trip_through_the_clipboard_under_cage`'s round trip may never leave the process. Adding `wl-clipboard` would not settle it either: wlroots offers the selection to the keyboard-focused client, and a second client started under `cage` beside the app has no focus. Proving the compositor half needs a focus dance no smoke performs.
 - **`shell::copy_selection`'s write-nothing-never-clear branch, and the paste callback's ordering.** That an absent or empty yank writes nothing rather than clearing whatever the user copied from another application, and that the callback upgrades its `Weak` before it borrows the core, are widget-layer facts neither suite can execute. `clipboard_ui`'s tables cover the rules; what is unobserved is the glue carrying them out.
 - **Anything a desktop portal supplies.** Every cage's bus activates no portal, so every smoke runs GTK's portal-less path: font and xft settings from the pinned `settings.ini`, the dpi from the app's own pin, and the in-process file chooser. What a real desktop's portal hands GTK in their place is observed by nothing.
+- **The titlebar provider's per-window scoping and its removal at close.** No smoke runs two windows on different colorschemes, or closes a window and opens another under its id, so neither `TitlebarStyle`'s class nor `uninstall` reaches a pixel. Every titlebar capture exercises `install`.
+- **Backdrop reached any other way than through a transient dialog, and the bars after it closes.** The titlebar smokes deactivate the window only by opening the save dialog, and kill the app with it still up. GTK's `:backdrop` state is the same when focus moves to another application, which a person checks on a GNOME desktop.
 - **The portal route the save dialog takes on a real desktop.** `the_save_dialog_writes_a_named_file_under_cage` drives GTK's in-process fallback, forced by the `GDK_DEBUG` export the conventions above require, so what it proves is bounded by that widget: the seam's `Choose` answer reaches a real `gtk::FileDialog`, the dialog's `Ok(GFile)` reaches the callback, and the resulting `InputEvent::SaveAs` writes the file. `gdk_display_should_use_portal` answers true wherever GDBus reaches a session bus, so a real session gets a different widget, a different confirmation and a different `GFile` producer, none of them observed here.
 - **The overwrite confirmation, and the front-end's `force: true` end to end.** The save smoke's target does not exist, so neither is exercised; driving GTK's confirmation alert from the keyboard is fragile enough that the recipe is recorded rather than written. What covers the effect is the pair in `crates/wolf-core/tests/save_open.rs`, `save_as_refuses_to_overwrite_without_force` and `save_as_with_force_overwrites`, each of which discriminates the other against a real Neovim.
 - **`AppShell::save_buffer_as` is executed by no test at all.** Measured twice: replacing `shell::perform`'s `UiAction::SaveBufferAs` arm with a no-op leaves the suite green, this file's default tests included. Save As's only surface is the primary-menu popover, the deliberate gap below, so nothing can reach it; its decision is covered by `save_ui::save_as_press`'s table and the dialog glue it shares with Save is driven by the save smoke.
 - **The `auto` appearance arm under `cage`.** Measured on the development host: `adw::StyleManager::default().is_dark()` reported `true`. It tracks the host's own colour-scheme preference, so the reading is host-dependent, and it is constant for a whole run — no smoke can vary it, and none may assert a particular value.
-- **The live OS-toggle re-push.** `connect_dark_notify` fires only on a real change of libadwaita's `dark` property, which nothing under `cage` can produce. `observe_os` is table-tested and `apply_at_launch` demonstrably reads it; that the handler is ever invoked is unobserved on this platform.
+- **The live OS-toggle re-push.** `connect_dark_notify` fires only on a real change of libadwaita's `dark` property, which nothing under `cage` can produce. `observe_os` is table-tested and `apply_at_launch` demonstrably reads it; that the handler is ever invoked is unobserved on this platform, and so are the header bar and the tab bar following the background it re-pushes. The titlebar smokes move the background with a typed `:set background` instead.
 - **The GTK version gate under the preview's colour scheme.** Nothing can observe that libadwaita is performing the `gtk-application-prefer-dark-theme` write it makes only below GTK 4.23.1; `preview_document_follows_the_configured_appearance_under_cage` observes the outcome alone. See [wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md#the-previews-light-and-dark).
 - **`apply_at_launch`'s step order and its `Weak`.** The preview-appearance smoke above reaches that function end to end, and its `set_color_scheme` call carries a measured red run; the step order and the `Weak` do not. The derivation is what stands in: every smoke forces its appearance, so `observe_os` is false and the notify handler is never connected — which means neither connecting it ahead of `set_color_scheme` nor trading the `Weak` for a strong `Rc` can change any observable the suite has. The reasons each must hold anyway are in [`src/README.md`](../src/README.md).
 - **The preview's scroll offset reaches no assertion.** No smoke can read `window.scrollY` out of a web view, so what the JSON body swap buys over a full `load_html` rests on the measurement recorded in `load_preview_document`'s doc comment in [`pane_view.rs`](../src/pane_view.rs) rather than on a test. What the live-edit leg does catch is the single-encoding defect, which freezes the document while looking perfect on the first load.

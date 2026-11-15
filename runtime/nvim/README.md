@@ -68,7 +68,7 @@ The one-shot startup emit carries a distinguishing second argument `true`; `DirC
 
 Notifies **`wolf_theme`** with twenty flat integers on `ColorScheme`: `cursor_fg`, `cursor_bg`, `titlebar_fg` and `titlebar_bg`, read from the optional `WolfCursor` and `WolfTitlebar` highlight groups, then `g:terminal_color_0` to `g:terminal_color_15`, each through `nvim_get_color_by_name`. Core takes the cursor background and the sixteen terminal colours for its terminal sessions. That event also covers `:set background=…`, which re-sources the active scheme. Each value is a packed `0xRRGGBB` color or `-1` for an unset channel; core accepts only the 24-bit range and maps everything else to unset.
 
-Groups are read with `link = false`, so a linked group resolves to its target's effective attributes. Neither group is ever painted on the grid, so this notification is core's only way to learn them: `WolfCursor` colors the app cursor, `WolfTitlebar` the macOS titlebar background, ahead of `Normal`'s.
+Groups are read with `link = false`, so a linked group resolves to its target's effective attributes. Neither group is ever painted on the grid, so this notification is core's only way to learn them: `WolfCursor` colors the app cursor, `WolfTitlebar` the titlebar background on both front-ends, ahead of `Normal`'s.
 
 #### `wolf_setup_commands(chan, commands)`
 

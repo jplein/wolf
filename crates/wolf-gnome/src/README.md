@@ -538,7 +538,7 @@ Purpose: the shared look of the three transient overlays ([`picker.rs`](#pickerr
 
 - Colours are libadwaita named colours, never literals, so the overlays follow whichever scheme [`appearance.rs`](#appearancers) resolves.
 - The scroller, its viewport and the list are forced transparent: GTK gives a bare `list` the view background, which would punch a panel through the popover surface. The viewport paints nothing under Adwaita dark (captures are byte-identical either way) and is named for the light path and future themes.
-- A thread-local flag installs the provider once per process rather than once per overlay per window; [The coordinator and its windows](../../../notes/wolf-gnome/the-coordinator-and-its-windows.md) compares that with the crate's other display-global provider.
+- A thread-local flag installs the provider once per process rather than once per overlay per window; [The coordinator and its windows](../../../notes/wolf-gnome/the-coordinator-and-its-windows.md) compares that with the crate's other display-global providers.
 - `mod overlay_style;` is private, alone in [`lib.rs`](#librs): nothing outside the crate consumes or tests it, so `pub mod` would widen the crate's public surface for no gain.
 
 **Gotchas**
@@ -828,8 +828,8 @@ Purpose: the glue for the action namespace — `gio` actions, the primary menu, 
 
 **Public API**
 
-- `build_menu_model()`, `build_empty_state()`, `build(parts) -> AppShell`; `ShellParts` carries a `Weak` coordinator and this window's id.
-- `install_actions(app)` — the `win.` rows only, after the window is constructed and before `present()`, so the menu and header button resolve their actions.
+- `build_menu_model()`, `build_empty_state()`, `build(parts) -> AppShell`; `ShellParts` carries a `Weak` coordinator, the window id and [`TitlebarStyle`](#titlebar_backgroundrs).
+- `install_actions(app)` — the `win.` rows only, after the window is constructed and before `present()`, so the menu and header button resolve them.
 - `set_empty_state(empty)`, `on_liveness_wake() -> bool`, `on_render_wake()`.
 
 **Decisions**
@@ -967,6 +967,23 @@ Purpose: the pure window-title seam — the working directory, rendered, with th
 - Abbreviation matches on a full path-segment boundary only. A directory sharing a character prefix with home is not under it and must be returned verbatim.
 - A home of `/` disables abbreviation entirely, because abbreviating every absolute path would be actively misleading.
 - The window builder seeds the same fallback constant as the initial title, so the title never flickers between two spellings before the first directory is reported.
+
+#### `titlebar_background.rs`
+
+Purpose: the background of the header bar and the tab bar, by the rule [Theming](../../../specs/architecture.md#theming) states: the pure decision, the stylesheet that carries it, and the per-window provider that applies it. The counterpart of [`TitlebarBackground.swift`](../../wolf-macos/Sources/WolfKeyMap/README.md#titlebarbackgroundswift).
+
+**Public API**
+
+- `titlebar_background(titlebar, normal) -> TitlebarBackground` — `normal` is the resolved default background before the grid's fallback colour, so an unknown `Normal` keeps libadwaita's colour rather than painting the fallback.
+- `titlebar_css(class, background)`, `""` for `Libadwaita`, and `stylesheet_update(applied, wanted, class)`, `None` when the two are equal, so a wake that changes nothing does no CSS work.
+- `TitlebarStyle::install(id, header, tab_bar)`, `apply(wanted)` and `uninstall()` — [`shell.rs`](#shellrs) applies on every render wake and [`window.rs`](#windowrs)'s close handler uninstalls.
+
+**Decisions**
+
+- One provider per window, since each window may run its own colorscheme, scoped by a class on the header bar and the tab bar themselves. A descendant selector under the window would also match a header bar that a child widget brings.
+- `uninstall` at close is required: a closed window's id is minted again, and its provider would restyle the new window.
+- The rule declares `background-color` alone, at application priority and with no state selector ([why](../../../notes/wolf-gnome/window-structure.md)).
+- The tab bar's node is its `box.box`, the one libadwaita colours; the `tabbar` node paints nothing.
 
 #### `tree.rs`
 
