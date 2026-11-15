@@ -14,8 +14,9 @@
 //! installs the `wolf_theme` tracking helper over RPC, the helper's emit-once
 //! must still surface the themed cursor (`cursor_fill()` / `cursor_glyph()`),
 //! while the titlebar (`theme_titlebar_bg()` / `theme_titlebar_fg()`) stays
-//! unset so the front-ends keep the system colour. The expected cursor colours
-//! are read from the pinned `lighthouse.lua` through `common::Lighthouse`.
+//! unset, so the macOS titlebar takes Lighthouse's `Normal` background. The
+//! expected cursor colours are read from the pinned `lighthouse.lua` through
+//! `common::Lighthouse`.
 //!
 //! ## How this proves activation (no exec_lua seam on the FFI surface)
 //!
@@ -281,8 +282,9 @@ fn lighthouse_colorscheme_active_from_sibling_dir() {
     assert!(
         !titlebar_bg.set,
         "theme_titlebar_bg() must stay unset, since the pinned Lighthouse leaves WolfTitlebar \
-         unset so the titlebar keeps the system colour; set to #{:06x} means the pin defines \
-         WolfTitlebar (a Lighthouse older than 52f49c3) or core invents a titlebar colour",
+         unset, so the macOS titlebar takes Lighthouse's Normal background; set to #{:06x} \
+         means the pin defines WolfTitlebar (a Lighthouse older than 52f49c3) or core invents a \
+         titlebar colour",
         titlebar_bg.rgb
     );
     let titlebar_fg = handle.theme_titlebar_fg();

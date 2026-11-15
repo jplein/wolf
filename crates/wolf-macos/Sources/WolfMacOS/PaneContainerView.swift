@@ -431,10 +431,9 @@ final class PaneContainerView: NSView {
   /// picker.
   var onPickerTrigger: (() -> Void)?
 
-  /// The last `WolfTitlebar` background applied to the window, so a render
-  /// wake only touches AppKit when the theme actually changed (`nil` until the
-  /// first wake reads it).
-  private var lastTitlebarTheme: (rgb: UInt32, set: Bool)?
+  /// The last titlebar background applied to the window, so a render wake only
+  /// touches AppKit when it actually changed (`nil` until the first wake reads it).
+  private var lastTitlebarBackground: TitlebarBackground?
 
   // -- Native cmdline, completion and toast overlays, shown only while active --
   // No reserved band, so the editor grid keeps its full cols×rows when nothing is showing.
@@ -2351,17 +2350,21 @@ final class PaneContainerView: NSView {
     onLayoutChanged?()
   }
 
-  /// Applies the `WolfTitlebar` theme background to the window when it
-  /// changed since the last wake (cached in `lastTitlebarTheme`, so there is
-  /// no per-wake AppKit churn). The cursor needs no equivalent here: its
-  /// themed colors arrive pre-resolved via `cursor_fill()`/`cursor_glyph()`.
+  /// Applies the titlebar background to the window when it changed since the
+  /// last wake (cached in `lastTitlebarBackground`, so there is no per-wake
+  /// AppKit churn). `TitlebarBackground` picks a set `WolfTitlebar` background,
+  /// else `Normal`'s, read from grid 1 as the grid fill and the statusbar strips
+  /// read it, so a live `:colorscheme` or `:set background` reaches the titlebar.
+  /// The cursor needs no equivalent here: its themed colors arrive pre-resolved
+  /// via `cursor_fill()`/`cursor_glyph()`.
   private func applyTitlebarTheme() {
     guard let win = window as? MainWindow else { return }
-    let bg = handle.theme_titlebar_bg()
-    let current = (rgb: bg.rgb, set: bg.set)
-    if let last = lastTitlebarTheme, last == current { return }
-    lastTitlebarTheme = current
-    win.applyTitlebarBackground(rgb: current.rgb, set: current.set)
+    let current = TitlebarBackground(
+      titlebar: handle.theme_titlebar_bg(),
+      normal: handle.read_frame_for_grid(Self.cmdlineGridId).default_bg())
+    if current == lastTitlebarBackground { return }
+    lastTitlebarBackground = current
+    win.applyTitlebarBackground(current)
   }
 
   /// Creates the first pane (reusing `firstPaneId`, the tree root) once a window
@@ -2685,9 +2688,8 @@ final class PaneContainerView: NSView {
   /// fill with. The text colours and the filename's weight come from
   /// `WolfKeyMap.StatusbarText`.
   ///
-  /// - Not the titlebar colour: an unset `WolfTitlebar`, as Lighthouse leaves it,
-  ///   keeps the titlebar at the system colour, and the strip must match the grid it
-  ///   sits on.
+  /// - Not the titlebar colour: a set `WolfTitlebar` colours the titlebar and never
+  ///   the grid, and the strip must match the grid it sits on.
   /// - Not the pane's own frame: an occluded preview and a terminal pane never read
   ///   theirs, and their strips must still follow the theme.
   ///

@@ -23,6 +23,10 @@ protocol HistoryNavigating: AnyObject {
 /// The main "Wolf" window. Its `contentViewController` is an
 /// `EditorSplitViewController`; the window uses a transparent
 /// `.fullSizeContentView` titlebar.
+///
+/// The window's `appearance` stays `nil`, so it and its title inherit the app
+/// appearance `AppDelegate` forces from Wolf's resolved appearance; see
+/// specs/architecture.md#theming.
 final class MainWindow: NSWindow {
   /// The Back toolbar item's identifier, derived from the pure seam so the
   /// ordering and the identifier strings have exactly one source of truth.
@@ -43,8 +47,9 @@ final class MainWindow: NSWindow {
   private static let toolbarIdentifier = NSToolbar.Identifier("com.wolf.editor.toolbar")
 
   /// The window's pristine `backgroundColor`, captured on the FIRST themed
-  /// titlebar application so an unset `WolfTitlebar` can restore the exact
-  /// system default. `nil` until a theme color has ever been applied.
+  /// titlebar application so `TitlebarBackground.system`, when neither
+  /// `WolfTitlebar` nor `Normal` is known, can restore the exact system default.
+  /// `nil` until a theme color has ever been applied.
   private var defaultBackgroundColor: NSColor?
 
   /// The content split-view controller, retained so the sidebar split item is
@@ -159,17 +164,20 @@ final class MainWindow: NSWindow {
     initialFirstResponder = paneContainer
   }
 
-  /// Applies (or reverts) the `WolfTitlebar` theme background.
+  /// Applies (or reverts) the titlebar background that `TitlebarBackground`
+  /// picked: `WolfTitlebar`'s, else `Normal`'s, else the system colour.
   ///
   /// The window uses `.fullSizeContentView` + `titlebarAppearsTransparent`,
   /// so `backgroundColor` shows through the titlebar over the editor pane
   /// (the sidebar keeps its own vibrancy material) — setting it is the
-  /// minimal, reversible lever for a themed titlebar. On the first themed
-  /// application the pristine `backgroundColor` is captured; `set == false`
-  /// (group absent or cleared) restores that captured default. Idempotent:
-  /// re-applying the same state is harmless.
-  func applyTitlebarBackground(rgb: UInt32, set: Bool) {
-    if set {
+  /// minimal, reversible lever for a themed titlebar. A `.colour` is built in
+  /// sRGB, as the grid is, so the titlebar and the grid are pixel-identical.
+  /// On the first `.colour` the pristine `backgroundColor` is captured;
+  /// `.system` restores that captured default. Idempotent: re-applying the
+  /// same value is harmless.
+  func applyTitlebarBackground(_ background: TitlebarBackground) {
+    switch background {
+    case .colour(let rgb):
       if defaultBackgroundColor == nil {
         defaultBackgroundColor = backgroundColor
       }
@@ -179,8 +187,10 @@ final class MainWindow: NSWindow {
         blue: CGFloat(rgb & 0xFF) / 255,
         alpha: 1
       )
-    } else if let defaultBackgroundColor {
-      backgroundColor = defaultBackgroundColor
+    case .system:
+      if let defaultBackgroundColor {
+        backgroundColor = defaultBackgroundColor
+      }
     }
   }
 

@@ -904,7 +904,19 @@ if [ "$recovered" -ne 1 ]; then
     exit 19
 fi
 
-# --- Step 9: the AFTER grid size -------------------------------------------
+# --- Step 9: capture IMMEDIATELY -------------------------------------------
+#
+# The banner auto-dismisses after liveness_ui::BANNER_VISIBLE_SECS, so the capture
+# follows the recovery poll, the first observable that proves the reopen landed,
+# with nothing in between. If the banner assertion ever flakes, SHORTEN this gap --
+# do NOT raise BANNER_VISIBLE_SECS, which is a product constant a user sees.
+#
+# The grid-size readback comes AFTER the capture because no OCR term needs the pane
+# resize to have landed: the revert table's pane-view-reset row measured all three
+# OCR terms passing at 80x24.
+grim "$OUT_PNG"
+
+# --- Step 10: the AFTER grid size ------------------------------------------
 #
 # One settle first: the pane resize is enqueued BEHIND the reopen on the same
 # ordered input channel, so reading immediately would race it.
@@ -912,14 +924,6 @@ sleep "$SETTLE"
 wtype -- ":call writefile([printf('%d %d', winwidth(0), winheight(0))], '$DIMS_AFTER')"
 wtype -k Return
 wait_file "$DIMS_AFTER" || exit 14
-
-# --- Step 10: capture IMMEDIATELY ------------------------------------------
-#
-# The banner auto-dismisses after liveness_ui::BANNER_VISIBLE_SECS, so the capture
-# follows the step-9 observable with nothing in between. If the banner assertion
-# ever flakes, SHORTEN this gap -- do NOT raise BANNER_VISIBLE_SECS, which is a
-# product constant a user sees.
-grim "$OUT_PNG"
 
 # The trap installed above tears the app down on the way out.
 exit 0
@@ -1600,7 +1604,7 @@ fn nvim_crash_recovers_and_reopens_the_file_under_cage() {
          it), so its absence is a real user-facing regression, not a cosmetic one. Check that the \
          restart path still calls `CrashOverlay::flash_banner()` on the SUCCESS branch only, and \
          that the generation-token timeout has not been made to fire early. If this flakes rather \
-         than failing outright, SHORTEN the gap between the scenario's step-9 readback and its \
+         than failing outright, SHORTEN the gap between the scenario's recovery poll and its \
          `grim` — do NOT raise `liveness_ui::BANNER_VISIBLE_SECS`, which is a product constant. \
          PNG kept at {}. OCR output was:\n{ocr_after}",
         out_png.display()

@@ -9,7 +9,7 @@ import WolfKeyMap
 /// macOS analog of wolf-gnome's `render::FALLBACK_FG` / `FALLBACK_BG`.
 enum WolfColor {
   /// The sRGB color space that packed colors are unpacked into. Neovim / terminal
-  /// hex colors (and the `WolfTitlebar` window `backgroundColor`, set via
+  /// hex colors (and the titlebar's window `backgroundColor`, set via
   /// `NSColor(srgbRed:...)`) are sRGB, so the grid MUST use sRGB too. The
   /// convenience `CGColor(red:green:blue:alpha:)` initializer instead builds
   /// `kCGColorSpaceGenericRGB` colors, whose different gamma renders the SAME

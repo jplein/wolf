@@ -16,4 +16,26 @@ public enum AppearanceMode: UInt8 {
   case dark = 1
   /// Force light mode regardless of the OS setting.
   case light = 2
+
+  /// The appearance this mode forces on the whole app (`true` == dark), which
+  /// every window and its title inherit; `nil` for `auto`, which follows the OS.
+  ///
+  /// The window title is drawn by AppKit in the title colours of this resolved
+  /// appearance, not the OS's: an OS in light mode under `appearance: dark` must
+  /// not draw the light-mode title, which is nearly invisible on Wolf's dark
+  /// titlebar. The colorscheme never chooses it.
+  public var forcedDark: Bool? {
+    switch self {
+    case .auto: return nil
+    case .dark: return true
+    case .light: return false
+    }
+  }
+
+  /// The resolved appearance (`true` == dark) given the OS's: the forced one, or
+  /// `systemDark` under `auto`. Defined as `forcedDark ?? systemDark`, so the
+  /// appearance pushed to Neovim and the one every title draws in cannot diverge.
+  public func resolvesDark(systemDark: Bool) -> Bool {
+    forcedDark ?? systemDark
+  }
 }

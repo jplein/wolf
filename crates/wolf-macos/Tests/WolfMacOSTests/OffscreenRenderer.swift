@@ -37,20 +37,27 @@ final class OffscreenRenderer {
   }
 
   /// Lays out and displays the window, then captures its content view.
+  func render() -> RenderedView {
+    guard let root = window.contentView else {
+      preconditionFailure("OffscreenRenderer: the window has no content view to capture")
+    }
+    return Self.capture(root)
+  }
+
+  /// Lays out and displays `view`'s window, then captures `view` alone, in any window, such
+  /// as a view deep in a production window that no `OffscreenRenderer` hosts.
   ///
   /// The display pass is required: without `displayIfNeeded()` the capture
   /// shows stale layer contents, and a property change made since the last
   /// capture never reaches the bitmap, even with `needsDisplay` set.
-  func render() -> RenderedView {
-    window.layoutIfNeeded()
-    window.displayIfNeeded()
-    guard let root = window.contentView,
-      let bitmap = root.bitmapImageRepForCachingDisplay(in: root.bounds)
-    else {
-      preconditionFailure("OffscreenRenderer: the window has no content view to capture")
+  static func capture(_ view: NSView) -> RenderedView {
+    view.window?.layoutIfNeeded()
+    view.window?.displayIfNeeded()
+    guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else {
+      preconditionFailure("OffscreenRenderer: \(view) has no bitmap to capture into")
     }
-    root.cacheDisplay(in: root.bounds, to: bitmap)
-    return RenderedView(root: root, bitmap: bitmap)
+    view.cacheDisplay(in: view.bounds, to: bitmap)
+    return RenderedView(root: view, bitmap: bitmap)
   }
 }
 

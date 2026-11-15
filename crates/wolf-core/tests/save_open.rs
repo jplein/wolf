@@ -43,31 +43,35 @@ fn wait_for_file_contains(path: &std::path::Path, needle: &str) -> String {
 
 #[test]
 fn open_existing_markdown() {
-    let (core, _waiter, _file) = common::start_core_with_temp_md(HEADING_DOC);
+    let (core, waiter, _file) = common::start_core_with_temp_md(HEADING_DOC);
 
-    let snap = core.read_snapshot();
-    let grid = snap.active_grid();
+    // Treesitter's highlights can land after the open's frame, so the hl_ids of the first
+    // non-space cells of the heading (row 0) and the body (row 1) are polled until they differ.
+    let (row0, _, _) = common::poll_until(
+        &waiter,
+        "the heading's first non-space cell to carry a different hl_id from the body's \
+         (markdown syntax highlighting)",
+        || {
+            let snap = core.read_snapshot();
+            let grid = snap.active_grid();
+            let row0 = grid.row_text(0);
+            let row1 = grid.row_text(1);
+            let heading_hl = first_non_space_col(&row0)
+                .and_then(|c| grid.cell(0, c))
+                .map(|cell| cell.hl_id);
+            let body_hl = first_non_space_col(&row1)
+                .and_then(|c| grid.cell(1, c))
+                .map(|cell| cell.hl_id);
+            (row0, heading_hl, body_hl)
+        },
+        |(_, heading_hl, body_hl)| {
+            heading_hl.is_some() && body_hl.is_some() && heading_hl != body_hl
+        },
+    );
 
-    let row0 = grid.row_text(0);
     assert!(
         row0.contains("# Title"),
         "row 0 should contain the heading text; got {row0:?}"
-    );
-
-    // Syntax-highlight smoke test: the first non-space cell of the heading row (row 0) and of the
-    // body row (row 1) must carry different hl_ids.
-    let heading_col = first_non_space_col(&row0).expect("heading row should have a non-space char");
-    let heading_cell = grid.cell(0, heading_col).expect("expected a heading cell");
-
-    let row1 = grid.row_text(1);
-    let body_col = first_non_space_col(&row1).expect("body row should have a non-space char");
-    let body_cell = grid.cell(1, body_col).expect("expected a body cell");
-
-    assert_ne!(
-        heading_cell.hl_id, body_cell.hl_id,
-        "heading cell hl_id ({}) should differ from body cell hl_id ({}) \
-         (markdown syntax highlighting)",
-        heading_cell.hl_id, body_cell.hl_id
     );
 
     core.shutdown().expect("shutdown should be Ok");

@@ -586,11 +586,11 @@ mod ffi {
         fn cwd(&self) -> String;
         // `WolfCore::recent_dirs` as strings; empty once the core is gone.
         fn recent_dirs(&self) -> Vec<String>;
-        // The `WolfTitlebar` group's background (the macOS titlebar); unset when the group is absent
-        // or cleared, or the core is gone.
+        // The `WolfTitlebar` group's background, which macOS prefers to `Normal`'s for the titlebar;
+        // unset when the group is absent or cleared, or the core is gone.
         fn theme_titlebar_bg(&self) -> FfiColor;
-        // The `WolfTitlebar` group's foreground, carried for title-text coloring, which macOS does
-        // not apply. Same unset convention as `theme_titlebar_bg`.
+        // The `WolfTitlebar` group's foreground, carried and applied by no front-end. Same unset
+        // convention as `theme_titlebar_bg`.
         fn theme_titlebar_fg(&self) -> FfiColor;
         // The statusbar strings for the window drawing into `grid`. An unnamed buffer, a grid with no
         // window or a shut-down core yields `[No Name]` with an empty display path.
@@ -2585,13 +2585,13 @@ impl WolfCoreHandle {
             .collect()
     }
 
-    /// The `WolfTitlebar` theme group's background color (the macOS titlebar
-    /// background), from `Snapshot.theme.titlebar.bg`.
+    /// The `WolfTitlebar` theme group's background color, from
+    /// `Snapshot.theme.titlebar.bg`.
     ///
     /// Follows the `default_fg`/`default_bg` unset convention: `set == false`
     /// when the group is absent or cleared, or once the core has been shut
-    /// down. Read on each render wake by the macOS shell, which applies it to
-    /// (or reverts) `NSWindow.backgroundColor`.
+    /// down. Read on each render wake by the macOS shell, which prefers it to
+    /// the `Normal` background for the titlebar's `NSWindow.backgroundColor`.
     #[must_use]
     pub fn theme_titlebar_bg(&self) -> FfiColor {
         let borrow = self.core.borrow();
@@ -2602,7 +2602,8 @@ impl WolfCoreHandle {
     }
 
     /// The `WolfTitlebar` theme group's foreground color, carried across the
-    /// bridge for future title-text coloring (not applied on macOS this pass).
+    /// bridge and applied by no front-end: the macOS title follows the resolved
+    /// appearance.
     ///
     /// Same unset convention as [`theme_titlebar_bg`](Self::theme_titlebar_bg).
     #[must_use]

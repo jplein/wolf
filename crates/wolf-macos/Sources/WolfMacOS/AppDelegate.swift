@@ -297,27 +297,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
   // MARK: - Appearance (OS dark/light resolution + observation)
 
+  /// The `NSApp.appearance` that `mode` forces on the whole app: Dark Aqua or
+  /// Aqua for a forced mode, `nil` (follow the system) for `auto`. Every window,
+  /// and so its title, inherits it.
+  static func appAppearance(for mode: AppearanceMode) -> NSAppearance? {
+    mode.forcedDark.flatMap { NSAppearance(named: $0 ? .darkAqua : .aqua) }
+  }
+
   /// Resolves the configured appearance to `resolvedDark` and applies it to the
-  /// app chrome, then pushes it to every live project. In `auto` mode it clears
-  /// any forced `NSApp.appearance` (following the system), reads the effective
-  /// appearance, and installs the OS-toggle observer; in `dark`/`light` it forces
-  /// `NSApp.appearance` (the whole app, not just the grid) and removes the
-  /// observer. An unknown discriminant falls back to `auto`.
+  /// app chrome, then pushes it to every live project. It forces
+  /// `NSApp.appearance` (the whole app, not just the grid) from the mode, and
+  /// installs the OS-toggle observer only in `auto`, which follows the system.
+  /// An unknown discriminant falls back to `auto`.
   private func applyResolvedAppearance() {
     let raw = config?.appearance() ?? AppearanceMode.auto.rawValue
-    switch AppearanceMode(rawValue: raw) ?? .auto {
-    case .auto:
-      NSApp.appearance = nil
-      resolvedDark =
-        NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+    let mode = AppearanceMode(rawValue: raw) ?? .auto
+    NSApp.appearance = Self.appAppearance(for: mode)
+    // Read after the assignment: in `auto` this is the system's; a forced mode ignores it.
+    let systemDark = NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+    resolvedDark = mode.resolvesDark(systemDark: systemDark)
+    if mode == .auto {
       installAppearanceObserverIfNeeded()
-    case .dark:
-      NSApp.appearance = NSAppearance(named: .darkAqua)
-      resolvedDark = true
-      removeAppearanceObserver()
-    case .light:
-      NSApp.appearance = NSAppearance(named: .aqua)
-      resolvedDark = false
+    } else {
       removeAppearanceObserver()
     }
     pushAppearanceToAllProjects()
