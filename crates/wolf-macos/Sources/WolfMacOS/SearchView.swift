@@ -128,7 +128,7 @@ final class SearchView: NSView, NSOutlineViewDataSource, NSOutlineViewDelegate {
   /// which ends with `makeFirstResponder(paneContainer)` and would clobber a
   /// synchronous focus here. Hopping one tick lets that dismissal-refocus run
   /// first, so the search field wins. For the other invocation paths (View
-  /// menu, ⇧⌘F, the magnifier button) there is no competing refocus, so the
+  /// menu, ⇧⌘F, the toolbar's search segment) there is no competing refocus, so the
   /// deferral is harmless — the field is focused uniformly across all paths.
   func focusSearchField() {
     DispatchQueue.main.async { [weak self] in

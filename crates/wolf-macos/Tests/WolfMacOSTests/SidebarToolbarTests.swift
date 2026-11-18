@@ -305,7 +305,9 @@ final class SidebarToolbarTests: XCTestCase {
     expect(
       fixture, control, step: "click search while tree shows", visible: true, mode: .search,
       selected: [false, true],
-      meaning: "Tree still selected means a switch from the toolbar does not refresh the control",
+      meaning: "The click selects search itself, so a missing refresh does not show here; any"
+        + " other selection means a refresh overwrote the click's with one derived from the mode"
+        + " before the switch",
       unreached: "Hidden on tree means the action acted on the tree panel instead of the clicked"
         + " segment's, and took the click for one on the active segment")
 
@@ -321,7 +323,9 @@ final class SidebarToolbarTests: XCTestCase {
     expect(
       fixture, control, step: "click tree while hidden", visible: true, mode: .tree,
       selected: [true, false],
-      meaning: "Neither means showing from the toolbar does not refresh the control",
+      meaning: "The click selects tree itself, so a missing refresh does not show here; any"
+        + " other selection means a refresh overwrote the click's with one derived from the"
+        + " sidebar still counted as hidden, which clears the control",
       unreached: "Still hidden means a click while hidden is taken for a click on the active"
         + " segment instead of showing the clicked panel")
 
@@ -329,7 +333,9 @@ final class SidebarToolbarTests: XCTestCase {
     expect(
       fixture, control, step: "click search while tree shows again", visible: true,
       mode: .search, selected: [false, true],
-      meaning: "Tree still selected means a switch from the toolbar does not refresh the control",
+      meaning: "The click selects search itself, so a missing refresh does not show here; any"
+        + " other selection means a refresh overwrote the click's with one derived from the mode"
+        + " before the switch",
       unreached: "Any other state means a click on the other segment does not switch to it")
   }
 
