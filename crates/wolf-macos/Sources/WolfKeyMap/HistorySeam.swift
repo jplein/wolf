@@ -75,15 +75,13 @@ public enum HistorySeam {
     return result
   }
 
-  /// The LOCKED toolbar ordering, after the traffic lights: the sidebar toggle,
-  /// the sidebar tracking separator, then Back and Forward.
+  /// The LOCKED toolbar ordering, after the traffic lights: the sidebar tracking
+  /// separator, Back, Forward, then the sidebar panel control
+  /// (``SidebarToolbarSeam/identifier``).
   ///
   /// Returned as raw identifier strings so this stays AppKit-free; the caller maps
   /// them back to `NSToolbarItem.Identifier`.
-  public static func itemIdentifiers(
-    toggleSidebar: String,
-    trackingSeparator: String
-  ) -> [String] {
-    [toggleSidebar, trackingSeparator, backIdentifier, forwardIdentifier]
+  public static func itemIdentifiers(trackingSeparator: String) -> [String] {
+    [trackingSeparator, backIdentifier, forwardIdentifier, SidebarToolbarSeam.identifier]
   }
 }

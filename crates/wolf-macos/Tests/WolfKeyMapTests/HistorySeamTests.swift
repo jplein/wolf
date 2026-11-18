@@ -108,16 +108,19 @@ final class HistorySeamTests: XCTestCase {
   // MARK: - itemIdentifiers(): the locked toolbar ordering
 
   func testItemIdentifiersFollowTheLockedToolbarOrder() {
-    let toggle = "com.wolf.editor.toolbar.toggleSidebar"
     let separator = "com.wolf.editor.toolbar.sidebarSeparator"
 
-    let ids = HistorySeam.itemIdentifiers(toggleSidebar: toggle, trackingSeparator: separator)
+    let ids = HistorySeam.itemIdentifiers(trackingSeparator: separator)
 
     XCTAssertEqual(
       ids,
-      [toggle, separator, HistorySeam.backIdentifier, HistorySeam.forwardIdentifier],
-      "locked order: toggle sidebar -> sidebar tracking separator -> back -> forward")
-    XCTAssertEqual(ids.count, 4, "exactly the four toolbar items")
+      [
+        separator, HistorySeam.backIdentifier, HistorySeam.forwardIdentifier,
+        SidebarToolbarSeam.identifier,
+      ],
+      "locked order: sidebar tracking separator -> back -> forward -> sidebar panel control;"
+        + " the control ahead of Back means it does not sit immediately right of Back/Forward")
+    XCTAssertEqual(ids.count, 4, "exactly the four toolbar items, with no system toggle")
   }
 
   // MARK: - constants

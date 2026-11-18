@@ -111,7 +111,7 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
   /// Accessed by `SearchWakeBridge` (via `WindowRegistry`) to refresh the sidebar
   /// search panel on content-search wakes.
   private(set) var search: SearchView?
-  /// The sidebar body container (header toggle + tree/search switch).
+  /// The sidebar body container (tree/search switch).
   private var sidebarContainer: SidebarContainerView?
   /// Accessed by `PickerWakeBridge` (via `WindowRegistry`) to refresh the picker
   /// on file-search wakes.
@@ -220,7 +220,7 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
     let tree = FileTreeView(handle: handle, paneContainer: paneContainer)
     self.tree = tree
 
-    // The sidebar search panel, its own rg-backed session, behind the header's magnifier toggle.
+    // The sidebar search panel, its own rg-backed session, behind the toolbar's search segment.
     let search = SearchView(handle: handle, paneContainer: paneContainer)
     self.search = search
     let sidebarContainer = SidebarContainerView(tree: tree, search: search)
@@ -725,25 +725,18 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
     return !window.sidebarItem.isCollapsed
   }
 
-  /// The active sidebar panel (file tree vs. content search), or `nil` when there
-  /// is no sidebar container yet. Drives the View-menu "Project" /
-  /// "Search" checkmarks via `SidebarMenuSeam`.
+  /// The active sidebar panel (file tree vs. content search), or `nil` before the
+  /// window is built. Drives the View-menu "Project" / "Search" checkmarks via
+  /// `SidebarMenuSeam`.
   var sidebarPanel: SidebarPanel? {
-    guard let container = sidebarContainer else { return nil }
-    switch container.mode {
-    case .tree: return .tree
-    case .search: return .search
-    }
+    window?.sidebarPanel
   }
 
-  /// Reveals the sidebar (if collapsed) and switches it to `panel`. The
-  /// `isCollapsed = false` write relays visibility to the container via KVO; the
-  /// `setMode` call swaps the active child (and re-relays visibility so the
-  /// newly-shown panel catches up any deferred refresh).
+  /// Reveals the sidebar (if collapsed), switches it to `panel` and focuses the
+  /// search field for `.search`, through `MainWindow.showSidebar(panel:)`, which
+  /// also refreshes the toolbar's sidebar control.
   func showSidebar(panel: SidebarPanel) {
-    window?.sidebarItem.isCollapsed = false
-    sidebarContainer?.setMode(panel == .tree ? .tree : .search)
-    if panel == .search { sidebarContainer?.search.focusSearchField() }
+    window?.showSidebar(panel: panel)
   }
 
   /// Toggles the sidebar (collapse/expand) via the window's animated

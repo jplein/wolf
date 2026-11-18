@@ -35,6 +35,9 @@ final class MainWindow: NSWindow {
   /// The Forward toolbar item's identifier. See ``backItemIdentifier``.
   static let forwardItemIdentifier = NSToolbarItem.Identifier(HistorySeam.forwardIdentifier)
 
+  /// The sidebar panel control's toolbar item identifier, from ``SidebarToolbarSeam``.
+  static let sidebarPanelsItemIdentifier = NSToolbarItem.Identifier(SidebarToolbarSeam.identifier)
+
   /// The window controller that owns this window's panes, for the Back / Forward
   /// toolbar buttons. Weak — the controller owns the window, not the reverse.
   /// Assigned in `WolfWindowController.build()` right after construction.
@@ -42,8 +45,8 @@ final class MainWindow: NSWindow {
   /// Fixed initial width of the file-tree sidebar pane in points.
   static let treePaneWidth: CGFloat = 240
 
-  /// The window's `NSToolbar` identifier (a unified toolbar whose only item is
-  /// the system toggle-sidebar button).
+  /// The window's `NSToolbar` identifier (a unified toolbar holding Back, Forward
+  /// and the sidebar panel control).
   private static let toolbarIdentifier = NSToolbar.Identifier("com.wolf.editor.toolbar")
 
   /// The window's pristine `backgroundColor`, captured on the FIRST themed
@@ -56,6 +59,13 @@ final class MainWindow: NSWindow {
   /// reachable for state restore/persistence.
   private let splitViewController: EditorSplitViewController
 
+  /// The sidebar body, whose mode the toolbar control shows and switches.
+  private let sidebar: SidebarContainerView
+
+  /// KVO on the sidebar item's `isCollapsed`, refreshing the toolbar control on every
+  /// collapse or expand. Stored, because a discarded token stops observing.
+  private var sidebarCollapseObservation: NSKeyValueObservation?
+
   /// The sidebar `NSSplitViewItem`, exposed so state restore can set — and
   /// `StatePersistence` can observe — `isCollapsed`.
   var sidebarItem: NSSplitViewItem {
@@ -67,6 +77,27 @@ final class MainWindow: NSWindow {
   /// `isCollapsed` (so `StatePersistence`'s KVO on it still fires).
   func toggleSidebar() {
     splitViewController.toggleSidebar(nil)
+  }
+
+  /// The sidebar's active panel, whether or not the sidebar is visible.
+  var sidebarPanel: SidebarPanel {
+    switch sidebar.mode {
+    case .tree: return .tree
+    case .search: return .search
+    }
+  }
+
+  /// Reveals the sidebar (if collapsed), switches it to `panel`, and focuses the
+  /// search field for `.search`. The `isCollapsed = false` write relays visibility
+  /// to the container via KVO; `setMode` swaps the active child.
+  ///
+  /// The toolbar control is refreshed last, because the `isCollapsed` KVO refresh
+  /// runs before the mode switch and sees the old mode.
+  func showSidebar(panel: SidebarPanel) {
+    sidebarItem.isCollapsed = false
+    sidebar.setMode(panel == .tree ? .tree : .search)
+    if panel == .search { sidebar.search.focusSearchField() }
+    refreshSidebarToolbar()
   }
 
   /// Builds the window around `sidebar` (the tree/search container) and
@@ -97,6 +128,7 @@ final class MainWindow: NSWindow {
 
     self.init(
       splitVC: splitVC,
+      sidebar: sidebar,
       contentRect: contentRect,
       editorWidth: editorWidth,
       editorHeight: editorHeight,
@@ -110,6 +142,7 @@ final class MainWindow: NSWindow {
   /// titlebar chrome.
   private init(
     splitVC: EditorSplitViewController,
+    sidebar: SidebarContainerView,
     contentRect: NSRect,
     editorWidth: CGFloat,
     editorHeight: CGFloat,
@@ -117,6 +150,7 @@ final class MainWindow: NSWindow {
     paneContainer: PaneContainerView
   ) {
     splitViewController = splitVC
+    self.sidebar = sidebar
 
     super.init(
       contentRect: contentRect,
@@ -162,6 +196,11 @@ final class MainWindow: NSWindow {
     splitVC.pinDivider()
 
     initialFirstResponder = paneContainer
+
+    sidebarCollapseObservation = sidebarItem.observe(\.isCollapsed, options: [.new]) {
+      [weak self] _, _ in
+      self?.refreshSidebarToolbar()
+    }
   }
 
   /// Applies (or reverts) the titlebar background that `TitlebarBackground`
@@ -221,29 +260,53 @@ final class MainWindow: NSWindow {
   @objc func historyForwardToolbarAction(_ sender: Any?) {
     historyNav?.historyForward()
   }
+
+  /// Toolbar sidebar control action. A `.selectOne` click has already selected the
+  /// clicked segment; ``SidebarToolbarSeam/click(_:sidebarVisible:current:)`` decides
+  /// whether it hides the sidebar or shows that panel. Showing search from here seeds
+  /// the search toggles first, which the sidebar commands do not do.
+  @objc func sidebarPanelsToolbarAction(_ sender: NSSegmentedControl) {
+    guard let panel = SidebarToolbarSeam.panel(atSegment: sender.selectedSegment) else { return }
+    switch SidebarToolbarSeam.click(
+      panel, sidebarVisible: !sidebarItem.isCollapsed, current: sidebarPanel)
+    {
+    case .hide:
+      toggleSidebar()
+    case .show(.tree):
+      showSidebar(panel: .tree)
+    case .show(.search):
+      sidebar.search.seedToggles()
+      showSidebar(panel: .search)
+    }
+  }
+
+  /// The sidebar control's selected segment, derived from the sidebar's visibility
+  /// and mode; nothing selected while the sidebar is hidden.
+  private var sidebarSelectedSegment: Int {
+    SidebarToolbarSeam.selectedSegment(
+      sidebarVisible: !sidebarItem.isCollapsed, current: sidebarPanel) ?? -1
+  }
+
+  /// Sets the toolbar sidebar control's selection from the sidebar's state. A no-op
+  /// until the toolbar has built the item.
+  private func refreshSidebarToolbar() {
+    let item = toolbar?.items.first { $0.itemIdentifier == Self.sidebarPanelsItemIdentifier }
+    guard let control = item?.view as? NSSegmentedControl else { return }
+    control.selectedSegment = sidebarSelectedSegment
+  }
 }
 
-/// The window's toolbar delegate. Two items in the Apple-standard order: the
-/// SYSTEM `.toggleSidebar` button FIRST (so it lands in the toolbar's SIDEBAR
-/// section — the top-left, just right of the traffic lights, at the LEFT of the
-/// toolbar), then a `.sidebarTrackingSeparator` that stays aligned with the
-/// sidebar/content split divider (the window title / cwd renders in the content
-/// section to its right). Placing the toggle AFTER the separator instead pushes
-/// it to the trailing edge, because the visible title claims the content-leading
-/// slot. AppKit auto-wires `.toggleSidebar` to
-/// `NSSplitViewController.toggleSidebar(_:)` up the responder chain (the same
-/// mechanism as the View-menu Toggle Sidebar item), so returning `nil` for it
-/// lets AppKit supply the built-in item; the separator is constructed here bound
-/// to the split view's first divider.
-/// The Back / Forward navigation buttons follow the separator, giving the LOCKED
-/// toolbar order `traffic lights → toggle sidebar → sidebar separator → back →
-/// forward → title`. That ordering lives in the pure `HistorySeam.itemIdentifiers`
-/// so it is unit-testable without AppKit.
+/// The window's toolbar delegate, in the LOCKED order `traffic lights → sidebar
+/// separator → back → forward → sidebar control → title`, which lives in the pure
+/// `HistorySeam.itemIdentifiers` so it is unit-testable without AppKit.
+///
+/// The `.sidebarTrackingSeparator` comes first and is bound to the split view's
+/// first divider, so the navigational items after it ride the sidebar's trailing
+/// edge, with the window title / cwd in the content section to their right.
 extension MainWindow: NSToolbarDelegate {
   /// The locked ordering, mapped back from the pure seam's raw identifiers.
   private static var orderedItemIdentifiers: [NSToolbarItem.Identifier] {
     HistorySeam.itemIdentifiers(
-      toggleSidebar: NSToolbarItem.Identifier.toggleSidebar.rawValue,
       trackingSeparator: NSToolbarItem.Identifier.sidebarTrackingSeparator.rawValue
     ).map(NSToolbarItem.Identifier.init(_:))
   }
@@ -261,8 +324,8 @@ extension MainWindow: NSToolbarDelegate {
     itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
     willBeInsertedIntoToolbar flag: Bool
   ) -> NSToolbarItem? {
-    // Bound to the sidebar divider (index 0), so it and every item after it, including the toggle
-    // button, stay pinned to the sidebar's right edge.
+    // Bound to the sidebar divider (index 0), so it and every item after it stay pinned to the
+    // sidebar's right edge.
     if itemIdentifier == .sidebarTrackingSeparator {
       return NSTrackingSeparatorToolbarItem(
         identifier: itemIdentifier,
@@ -283,9 +346,40 @@ extension MainWindow: NSToolbarDelegate {
         symbolName: HistorySeam.forwardSymbolName,
         action: #selector(historyForwardToolbarAction(_:)))
     }
-    // Return nil for the system `.toggleSidebar` identifier so AppKit supplies
-    // the built-in item (auto-wired to `toggleSidebar(_:)`).
+    if itemIdentifier == Self.sidebarPanelsItemIdentifier {
+      return sidebarPanelsItem(identifier: itemIdentifier)
+    }
     return nil
+  }
+
+  /// Builds the sidebar panel control: one SF-Symbol segment per panel, already showing
+  /// the derived selection.
+  ///
+  /// An `NSSegmentedControl` item rather than an `NSToolbarItemGroup`, because a
+  /// `.selectOne` group cannot show nothing selected, which a hidden sidebar needs.
+  private func sidebarPanelsItem(identifier: NSToolbarItem.Identifier) -> NSToolbarItem {
+    let panels = SidebarToolbarSeam.panels
+    let control = NSSegmentedControl(
+      images: panels.map {
+        NSImage(
+          systemSymbolName: SidebarToolbarSeam.symbolName(for: $0),
+          accessibilityDescription: SidebarToolbarSeam.label(for: $0)) ?? NSImage()
+      },
+      trackingMode: .selectOne,
+      target: self,
+      action: #selector(sidebarPanelsToolbarAction(_:)))
+    for (segment, panel) in panels.enumerated() {
+      control.setToolTip(SidebarToolbarSeam.toolTip(for: panel), forSegment: segment)
+    }
+    control.selectedSegment = sidebarSelectedSegment
+
+    let item = NSToolbarItem(itemIdentifier: identifier)
+    item.view = control
+    item.label = "Sidebar"
+    item.paletteLabel = "Sidebar"
+    // Navigational, so it joins Back and Forward ahead of the title.
+    item.isNavigational = true
+    return item
   }
 
   /// Builds one SF-Symbol navigation toolbar item targeting this window.
