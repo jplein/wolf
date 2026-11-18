@@ -375,13 +375,13 @@ Of `CloseBurst`, it covers that a tab group closed in one turn keeps the tree re
 
 **Covers**: `SidebarMenuSeam.isChecked` across the cross product of `sidebarVisible` and `current` (`.tree` / `.search` / `nil`) against both menu items: only the active panel's entry is checked, a hidden sidebar checks nothing whatever `current` says, and a `nil` current checks nothing.
 
-#### `SidebarToolbarSeamTests.swift`
-
-**Covers**: `SidebarToolbarSeam`'s selection across the cross product of `sidebarVisible` and `current` (`.tree` / `.search` / `nil`), the visible panel's segment while shown and none while hidden. The click rule: clicking the selected panel hides, clicking the other switches, and clicking either while hidden shows it. Also the segment order with `nil` for an out-of-range index, the symbols, the exact tooltips, and an identifier distinct from Back's and Forward's.
-
 #### `SidebarRowStyleTests.swift`
 
 **Covers**: `SidebarRowStyle.labelColor` across the cross product of `isCurrent` and `isEmphasized`: the current buffer is accented and every other row plain, and an emphasized selection overrides both. Plus `markedFile`: a preview source wins over the edited buffer, and a nil or empty one falls back to it.
+
+#### `SidebarToolbarSeamTests.swift`
+
+**Covers**: `SidebarToolbarSeam`'s selection across the cross product of `sidebarVisible` and `current` (`.tree` / `.search` / `nil`), the visible panel's segment while shown and none while hidden. The click rule: clicking the selected panel hides, clicking the other switches, and clicking either while hidden shows it. Also the segment order with `nil` for an out-of-range index, the symbols, the exact tooltips, and an identifier distinct from Back's and Forward's.
 
 #### `StateSeamTests.swift`
 
