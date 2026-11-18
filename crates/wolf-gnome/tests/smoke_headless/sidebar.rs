@@ -1245,7 +1245,7 @@ fn write_projsearch_fixtures(cwd: &Path, smoke: &str) {
 /// window-level overlay all belong to the pane area to its right, so the `:e` echo,
 /// the statusbar's file name and a floating search box can never reach it. Only the
 /// sidebar's own page draws here, plus the `gtk::Paned` handle, which draws no text.
-fn projsearch_sidebar_band() -> SampleRect {
+pub(crate) fn projsearch_sidebar_band() -> SampleRect {
     let output_h = exact_f64(CAGE_OUTPUT_H_EXPECTED, "CAGE_OUTPUT_H_EXPECTED");
     SampleRect {
         x0: 0,
@@ -1503,8 +1503,8 @@ fn search_panel_streams_results_and_opens_the_match_under_cage() {
 /// The three ways the panel meets the rest of the window. The chord reaches the panel
 /// through the sidebar preference, so a hidden sidebar must come back with it;
 /// Escape is the panel's own key, and the GNOME divergence the panel records; and
-/// `Command::SidebarShowProject` is the one route back to the Files page this smoke
-/// can drive, since no pointer smoke clicks the page switcher.
+/// `Command::SidebarShowProject` is the keyboard's route back to the Files page. The
+/// header bar's Files toggle, the pointer's route, is `sidebar_toggles.rs`'s.
 ///
 /// Every capture is read through [`projsearch_sidebar_band`], for the reason its doc
 /// gives: in that band only the sidebar's current page can draw
@@ -2092,14 +2092,15 @@ fn open_recent_palette_row_reroots_the_window_under_cage() {
 ///
 /// ## What it covers that nothing else does
 ///
-/// The only end-to-end coverage of `win.toggle-sidebar`, whose `BindingStatus` is
-/// `Bound` and which is therefore visible to the chord matcher at all: the chord
-/// resolving through `actions::action_for_key`, `command_action::ui_action_for`
-/// classifying `Command::ToggleSidebar` as a DISPATCHED
-/// `UiAction::ToggleSidebar` rather than a `Deferred` one,
-/// `shell::perform`'s arm flipping the stored preference, and
-/// `AppShell::apply_sidebar_visibility` — over `state_seam::sidebar_is_shown` —
-/// being the single site that touches the widget.
+/// `win.toggle-sidebar` end to end, read off the whole page with no band, whose
+/// `BindingStatus` is `Bound` and which is therefore visible to the chord matcher at
+/// all: the chord resolving through `actions::action_for_key`,
+/// `command_action::ui_action_for` classifying `Command::ToggleSidebar` as a DISPATCHED
+/// `UiAction::ToggleSidebar` rather than a `Deferred` one, `shell::perform`'s arm
+/// flipping the stored preference, and `AppShell::apply_sidebar_visibility` — over
+/// `state_seam::sidebar_is_shown` — being the single site that touches the widget.
+/// `sidebar_toggles.rs`'s chord smoke presses the same chord from both pages and reads
+/// the header bar's toggle group as well.
 ///
 /// It does NOT cover the RESTORE half: no smoke hides the sidebar, quits and
 /// relaunches. That gap is recorded in `tests/README.md`, "What is still unproven",

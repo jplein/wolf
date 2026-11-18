@@ -69,7 +69,7 @@
 //!
 //! ## Where this panel differs from its counterpart
 //!
-//! It follows the macOS sidebar's search panel and switcher
+//! It follows the macOS sidebar's search panel
 //! (`crates/wolf-macos/Sources/WolfMacOS/README.md#searchviewswift`) except in four
 //! ways, each a GNOME convention or a GTK constraint:
 //!

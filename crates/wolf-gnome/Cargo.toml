@@ -21,9 +21,9 @@ wolf-core = { path = "../wolf-core" }
 # See notes/crates/wolf-gnome/Cargo.toml.md#gtk-rs-release-set
 gdk = { version = "0.11", package = "gdk4", features = ["v4_8"] }
 # Same release set as gdk4 0.11 (libadwaita 0.9 needs gtk4 0.11, gdk4 0.11, cairo-pango 0.22).
-# No version feature on adw: Wolf targets the system GTK, not a newer pinned ABI.
+# adw's `v1_7` is for `adw::ToggleGroup`, the header bar's sidebar control; the flake pins 1.9.
 gtk = { version = "0.11", package = "gtk4", features = ["v4_12"] }
-adw = { version = "0.9", package = "libadwaita" }
+adw = { version = "0.9", package = "libadwaita", features = ["v1_7"] }
 # `v2_52` matches the flake's webkitgtk; gtk4 must keep `v4_10` or above for `gtk::Accessible`.
 # See notes/crates/wolf-gnome/Cargo.toml.md#webkit6-features
 webkit6 = { version = "0.6", features = ["v2_52"] }

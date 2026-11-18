@@ -169,6 +169,7 @@ mod recovery;
 mod restore;
 mod scrub_lists;
 mod sidebar;
+mod sidebar_toggles;
 mod terminal;
 mod terminal_colours;
 mod terminal_terminfo;

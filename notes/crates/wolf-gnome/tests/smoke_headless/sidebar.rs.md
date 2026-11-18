@@ -24,7 +24,7 @@ There is no must-not-contain assertion: `InputEvent::Chdir` is `:tcd`, which clo
 
 ## Sidebar toggle smoke
 
-This is the only end-to-end coverage of `win.toggle-sidebar`: the chord through `actions::action_for_key`, `command_action::ui_action_for` classifying `Command::ToggleSidebar` as a dispatched `UiAction::ToggleSidebar`, `shell::perform` flipping the preference, and `AppShell::apply_sidebar_visibility` as the one site that touches the widget.
+This smoke reads `win.toggle-sidebar` off the whole page: the chord through `actions::action_for_key`, `command_action::ui_action_for` classifying `Command::ToggleSidebar` as a dispatched `UiAction::ToggleSidebar`, `shell::perform` flipping the preference, and `AppShell::apply_sidebar_visibility` as the one site that touches the widget. The toggle-group chord smoke in `sidebar_toggles.rs` presses the same chord from both pages and reads the sidebar band and the header bar's toggle group instead.
 
 The sidebar's only text is file names, so the observable is a name that vanishes. `SIDEBARTOGGLE_FILE` is named after its term, the exemption `TREE_FILE_NAME` and `OPENRECENT_TARGET_FILE` carry, and is never opened, so only a sidebar row draws it. The fixture guard asserts the exemption's preconditions.
 

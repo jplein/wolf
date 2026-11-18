@@ -29,6 +29,7 @@
 //! - [`mod@buffer_picker`]: the buffer picker's open guard, preselection and switch target.
 //! - [`mod@search_panel`]: the search panel's guard, rows, Enter rule, open route and status line.
 //! - [`mod@sidebar`]: which of the sidebar's two pages may refresh.
+//! - [`mod@sidebar_toggles`]: the header bar's Files/Search toggle state and its click rule.
 //! - [`launch_decision`] / [`workspace::reroot_ready`] / [`workspace::reroot_decision`]:
 //!   whether a project is open, where Neovim starts, and when the sidebar re-roots.
 //! - [`mod@tree_gate`]: when the sidebar's file tree may refresh and rebuild.
@@ -143,6 +144,7 @@ pub mod scrollbar;
 pub mod search_panel;
 pub mod shell;
 pub mod sidebar;
+pub mod sidebar_toggles;
 pub mod state_seam;
 pub mod statusbar_layout;
 pub mod tab_view;

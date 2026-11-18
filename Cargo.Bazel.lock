@@ -1,5 +1,5 @@
 {
-  "checksum": "a496149b6c04a58d719034ebe7f74a63753aff96e0a00cbd2e97924bebd36270",
+  "checksum": "97e597a8e43780fcb794851de7661a20e8dcf4743733041e8aa8fc7e9b469f57",
   "crates": {
     "ahash 0.8.12": {
       "name": "ahash",
@@ -5405,6 +5405,18 @@
         "compile_data_glob": [
           "**"
         ],
+        "crate_features": {
+          "common": [
+            "v1_1",
+            "v1_2",
+            "v1_3",
+            "v1_4",
+            "v1_5",
+            "v1_6",
+            "v1_7"
+          ],
+          "selects": {}
+        },
         "deps": {
           "common": [
             {
@@ -5491,6 +5503,18 @@
         "compile_data_glob": [
           "**"
         ],
+        "crate_features": {
+          "common": [
+            "v1_1",
+            "v1_2",
+            "v1_3",
+            "v1_4",
+            "v1_5",
+            "v1_6",
+            "v1_7"
+          ],
+          "selects": {}
+        },
         "deps": {
           "common": [
             {

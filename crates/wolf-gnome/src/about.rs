@@ -10,12 +10,11 @@
 //!
 //! ## Plain GTK, not `adw::AboutDialog`
 //!
-//! `adw::AboutDialog` needs `libadwaita`'s `v1_5` feature and `adw::AboutWindow`
-//! needs `v1_2`. `notes/wolf-gnome-decisions.md` records that this crate's `libadwaita` carries no
-//! version feature on purpose — the target is the system GTK already present, not
-//! a newer pinned ABI — so adding one for a single dialog would change the crate's
-//! build contract and put the whole smoke suite on the devShell's libadwaita
-//! version. A `gtk::Window` over a `gtk::TextView` needs neither.
+//! `adw::AboutDialog` is an `adw::Dialog`, drawn inside the main window rather than
+//! as a toplevel of its own, which the next section rules out. `adw::AboutWindow` is
+//! deprecated since libadwaita 1.6, and under the crate's `v1_7` feature that is a
+//! warning, which `-D warnings` refuses. A `gtk::Window` over a `gtk::TextView` is
+//! neither.
 //!
 //! ## Why a separate toplevel
 //!

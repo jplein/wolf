@@ -236,6 +236,7 @@ use crate::preview_ui::{self, BrowserPress, EditPress, PreviewPress};
 use crate::save_ui::{self, SaveAsPress, SavePress, SaveTarget};
 use crate::search_panel::{self, SearchPanelHandle, ShowDecision};
 use crate::sidebar::{SidebarHandle, SidebarPage};
+use crate::sidebar_toggles::{self, ToggleClick};
 use crate::state_seam;
 use crate::tab_view::{TabParts, TabsHandle};
 use crate::tabs_ui::{self, NewTabPress};
@@ -265,9 +266,8 @@ pub(crate) const HISTORY_BACK_ACTION: &str = "win.history-back";
 pub(crate) const HISTORY_FORWARD_ACTION: &str = "win.history-forward";
 
 /// The action that shows or hides the file-tree sidebar (disabled in the empty
-/// state, where there is no project to list). Also the header bar's sidebar
-/// button target.
-pub(crate) const TOGGLE_SIDEBAR_ACTION: &str = "win.toggle-sidebar";
+/// state, where there is no project to list).
+const TOGGLE_SIDEBAR_ACTION: &str = "win.toggle-sidebar";
 
 /// Title of the empty state's status page.
 const EMPTY_STATE_TITLE: &str = "No folder open";
@@ -382,8 +382,6 @@ pub struct ShellParts<'a> {
     pub nav_back_button: &'a gtk::Button,
     /// The header bar's Forward button; see [`ShellParts::nav_back_button`].
     pub nav_forward_button: &'a gtk::Button,
-    /// The header bar's sidebar-toggle button, desensitized in the empty state.
-    pub sidebar_button: &'a gtk::Button,
     /// The user's restored sidebar PREFERENCE
     /// ([`crate::state_seam::RestorePlan::sidebar_visible`]). The empty state
     /// overrides it at apply time, never at restore time.
@@ -438,8 +436,6 @@ struct ShellInner {
     nav_back_button: gtk::Button,
     /// The header bar's Forward button; see [`ShellInner::nav_back_button`].
     nav_forward_button: gtk::Button,
-    /// The header bar's sidebar-toggle button; insensitive in the empty state.
-    sidebar_button: gtk::Button,
     /// The user's sidebar PREFERENCE — what they last asked for, NOT what is on
     /// screen. [`state_seam::sidebar_is_shown`] combines it with
     /// [`ShellInner::empty`] to decide the latter.
@@ -611,7 +607,6 @@ pub fn build(parts: ShellParts<'_>) -> AppShell {
         open_button: parts.open_button.clone(),
         nav_back_button: parts.nav_back_button.clone(),
         nav_forward_button: parts.nav_forward_button.clone(),
-        sidebar_button: parts.sidebar_button.clone(),
         sidebar_shown: Cell::new(parts.sidebar_shown),
         // Pessimistic until `set_empty_state` says otherwise, which `window::build`
         // does immediately after `install_actions`. Nothing reads it before then.
@@ -657,6 +652,13 @@ pub fn build(parts: ShellParts<'_>) -> AppShell {
     shell.inner.tabs.connect_selected(move || {
         if let Some(shell) = upgrade(&weak_tabs) {
             shell.on_tab_selected();
+        }
+    });
+
+    let weak_toggles = Rc::downgrade(&shell.inner);
+    shell.inner.sidebar.toggles().connect_click(move |clicked| {
+        if let Some(shell) = upgrade(&weak_toggles) {
+            shell.on_sidebar_toggle_click(clicked);
         }
     });
 
@@ -877,7 +879,7 @@ impl AppShell {
         // or the next `set_empty_state(false)` undoes the user's toggle.
         self.apply_sidebar_visibility();
         self.inner.open_button.set_sensitive(!empty);
-        self.inner.sidebar_button.set_sensitive(!empty);
+        self.inner.sidebar.toggles().set_sensitive(!empty);
         if let Some(action) = self.inner.go_to_file.borrow().as_ref() {
             action.set_enabled(!empty);
         }
@@ -897,10 +899,10 @@ impl AppShell {
     /// be re-derived by a later allocation), while an invisible start child is never
     /// allocated at all.
     ///
-    /// Hiding the sidebar while focus is inside it — in the search panel's field, or
-    /// on the page switcher — first parks focus on the selected tab's strip: hiding
-    /// the focus widget leaves the toplevel with no focus widget at all, which kills
-    /// window-level key dispatch outright.
+    /// Hiding the sidebar while focus is inside it, in the search panel's field, first
+    /// parks focus on the selected tab's strip: hiding the focus widget leaves the
+    /// toplevel with no focus widget at all, which kills window-level key dispatch
+    /// outright.
     fn apply_sidebar_visibility(&self) {
         let shown =
             state_seam::sidebar_is_shown(self.inner.sidebar_shown.get(), self.inner.empty.get());
@@ -1992,6 +1994,21 @@ impl AppShell {
         }
         self.set_sidebar_preference(true);
         self.inner.sidebar.show_page(SidebarPage::Files);
+    }
+
+    /// Applies a click on the header bar's `clicked` toggle through
+    /// [`sidebar_toggles::toggle_click`], over the sidebar's own shown flag and page, into the
+    /// arms the chords take.
+    fn on_sidebar_toggle_click(&self, clicked: SidebarPage) {
+        match sidebar_toggles::toggle_click(
+            self.inner.sidebar.is_shown(),
+            self.inner.sidebar.page(),
+            clicked,
+        ) {
+            ToggleClick::Hide => self.set_sidebar_preference(false),
+            ToggleClick::Show(SidebarPage::Files) => self.show_sidebar_project(),
+            ToggleClick::Show(SidebarPage::Search) => self.show_search_panel(),
+        }
     }
 
     /// Closes the window through `close-request` so `window::wire_close` runs (picker,

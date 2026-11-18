@@ -70,6 +70,9 @@ use super::sidebar::{
     SIDEBARTOGGLE_OPEN_FILE, TITLE_HOME_DIR, TITLE_OCR_ABSENT, TITLE_OCR_PRESENT,
     TITLE_PROJECT_DIR, TREE_OCR,
 };
+use super::sidebar_toggles::{
+    TG_HEADING, TG_OCR_KEEP, TG_OCR_TREE_ROW, TG_OPEN_FILE, TG_TREE_FILE,
+};
 use super::terminal::{
     drawer_fixture_body, near_fixture_body, DRAWER_DOWN_NAME, DRAWER_FIXTURE_FILE,
     DRAWER_FIXTURE_LINE_COUNT, DRAWER_GEOMETRY_READBACK_NAME, DRAWER_HIDDEN_NAME, DRAWER_MARKER,
@@ -154,6 +157,12 @@ use super::*;
 /// [`PROJSEARCH_FILE_START`], absent while the Search page is up and present once the
 /// Files page is back, so that file has an exemption block too.
 /// [`PROJSEARCH_OCR_RESULT`] is content, the last word of the target's match line.
+///
+/// [`TG_OCR_TREE_ROW`] is the fifth: the sidebar row for [`TG_TREE_FILE`], which the
+/// toggle-group smokes read as "the Files page is up", so that file has an exemption block
+/// as well. [`TG_OCR_KEEP`] is content, the heading the sidebar band reads only while the
+/// sidebar is hidden. The chord smoke asserts on the same terms as the click smoke, so it is
+/// covered through the click smoke's rows.
 ///
 /// Every smoke that OCRs a capture registers each term it asserts on here, and a
 /// smoke that OCRs nothing registers none; the second project-search smoke is covered
@@ -563,6 +572,17 @@ const ASSERTED_OCR_TERMS: &[(&str, &str, &str)] = &[
         "SIDEBARTOGGLE_OCR_KEEP",
         "sidebar_toggle_chord_hides_the_file_tree_under_cage",
     ),
+    // The toggle-group smokes share these two terms; each row names the first.
+    (
+        TG_OCR_TREE_ROW,
+        "TG_OCR_TREE_ROW",
+        "toggle_clicks_show_switch_and_hide_the_sidebar_under_cage",
+    ),
+    (
+        TG_OCR_KEEP,
+        "TG_OCR_KEEP",
+        "toggle_clicks_show_switch_and_hide_the_sidebar_under_cage",
+    ),
     (
         CD_OCR_ROOTED,
         "CD_OCR_ROOTED",
@@ -882,6 +902,13 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
         PROJSEARCH_ESCAPE_READBACK_NAME,
         "PROJSEARCH_ESCAPE_READBACK_NAME",
         "search_chord_reveals_the_sidebar_and_escape_returns_to_the_editor_under_cage",
+    ),
+    // TG_TREE_FILE is exempt: its name carries TG_OCR_TREE_ROW. An exemption block in the guard
+    // covers it.
+    (
+        TG_OPEN_FILE,
+        "TG_OPEN_FILE",
+        "toggle_clicks_show_switch_and_hide_the_sidebar_under_cage",
     ),
     (
         STALL_FILE,
@@ -1769,6 +1796,15 @@ fn temp_cwd_name_cannot_satisfy_any_smoke_assertion() {
 /// block after the project-search fixture checks asserts that, the loop's own checks
 /// on that one name, and that [`PROJSEARCH_HEADING_START`], on screen beside the
 /// panel, lacks [`PROJSEARCH_OCR_RESULT`].
+///
+/// The two toggle-group smokes add one more. [`TG_TREE_FILE`]'s NAME carries
+/// [`TG_OCR_TREE_ROW`], the reading "the Files page is up", so it is absent from
+/// [`RELAUNCH_FIXTURE_NAMES`]. Their sidebar band reads three states from two terms, so both
+/// cross everything else the band can show: the Search page's target name, query and match
+/// line, and, once a hidden sidebar lets the pane slide under the band, [`TG_OPEN_FILE`]'s
+/// name and [`TG_HEADING`]. The tree-row term in any of those makes Search or Hidden read as
+/// Files; the keep term anywhere but the heading makes Files or Search read as Hidden. The
+/// block after the project-search one asserts all of that.
 ///
 /// ## The fixtures whose CONTENT is checked too
 ///
@@ -2661,6 +2697,90 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
              satisfy — or, for a must-NOT-contain term, spuriously break — `{smoke}`'s OCR \
              assertion. This name is EXEMPT from the RELAUNCH_FIXTURE_NAMES loop above only for \
              PROJSEARCH_OCR_TREE_ROW itself; every other asserted term still applies to it."
+        );
+    }
+
+    // The toggle-group smokes' tree-row exemption: TG_TREE_FILE's NAME is the subject, so it is
+    // out of RELAUNCH_FIXTURE_NAMES and every check that loop made is made here instead.
+    assert!(
+        TG_TREE_FILE.to_lowercase().contains(TG_OCR_TREE_ROW),
+        "TG_TREE_FILE = {TG_TREE_FILE:?} no longer contains TG_OCR_TREE_ROW = \
+         {TG_OCR_TREE_ROW:?}. That file's tree row is the only thing in the sidebar band that \
+         draws the term, and the toggle-group smokes read it as \"the Files page is up\". If the \
+         two stop agreeing, every Files capture reads as Search and both smokes fail at their \
+         launch capture with no visible cause."
+    );
+    assert!(
+        TG_HEADING.to_lowercase().contains(TG_OCR_KEEP),
+        "TG_HEADING = {TG_HEADING:?} does not contain TG_OCR_KEEP = {TG_OCR_KEEP:?}. That \
+         heading is the only place the term exists, so a hidden sidebar would read as Search \
+         and both toggle-group smokes would fail at their first hide."
+    );
+    for (name, name_const) in [
+        (TG_OPEN_FILE, "TG_OPEN_FILE"),
+        (TG_HEADING, "TG_HEADING"),
+        (PROJSEARCH_FILE_TARGET, "PROJSEARCH_FILE_TARGET"),
+        (PROJSEARCH_QUERY, "PROJSEARCH_QUERY"),
+        (match_line, "the match line"),
+        (PROJSEARCH_OCR_RESULT, "PROJSEARCH_OCR_RESULT"),
+    ] {
+        assert!(
+            !name.to_lowercase().contains(TG_OCR_TREE_ROW),
+            "{name_const} = {name:?} contains TG_OCR_TREE_ROW = {TG_OCR_TREE_ROW:?}. The \
+             toggle-group smokes' sidebar band draws this text while the Files page is NOT up: \
+             the Search page draws the target's name, the query and the match line, and a \
+             hidden sidebar lets the pane's statusbar and heading slide under the band. The \
+             tree-row term there makes a Search or Hidden capture read as Files, so a click \
+             that did nothing would pass as one that showed Files."
+        );
+    }
+    for (name, name_const) in [
+        (TG_OPEN_FILE, "TG_OPEN_FILE"),
+        (TG_TREE_FILE, "TG_TREE_FILE"),
+        (PROJSEARCH_FILE_TARGET, "PROJSEARCH_FILE_TARGET"),
+        (PROJSEARCH_QUERY, "PROJSEARCH_QUERY"),
+        (match_line, "the match line"),
+    ] {
+        assert!(
+            !name.to_lowercase().contains(TG_OCR_KEEP),
+            "{name_const} = {name:?} contains TG_OCR_KEEP = {TG_OCR_KEEP:?}. The toggle-group \
+             smokes read that term as \"the sidebar is hidden\", and this text is drawn in the \
+             sidebar band while it is shown, as a tree row or on the Search page. A shown \
+             sidebar would then read as hidden, or, beside the tree row, as neither."
+        );
+    }
+    for (name, name_const) in [(TG_HEADING, "TG_HEADING"), (TG_OPEN_FILE, "TG_OPEN_FILE")] {
+        assert!(
+            !name.to_lowercase().contains(PROJSEARCH_QUERY)
+                && !name.to_lowercase().contains(PROJSEARCH_OCR_RESULT),
+            "{name_const} = {name:?} contains PROJSEARCH_QUERY = {PROJSEARCH_QUERY:?} or \
+             PROJSEARCH_OCR_RESULT = {PROJSEARCH_OCR_RESULT:?}. With the query in the open file \
+             the panel draws its heading as a second result, putting TG_OCR_KEEP on the Search \
+             page; with the result word there, a hidden sidebar's band reads it from the editor \
+             and the smokes' result assertions hold with no search run."
+        );
+    }
+    assert!(
+        !RELAUNCH_FIXTURE_NAMES
+            .iter()
+            .any(|&(name, _, _)| name == TG_TREE_FILE)
+            && !SIDEBAR_FILLER_FILES.contains(&TG_TREE_FILE)
+            && TG_TREE_FILE != PROJSEARCH_FILE_TARGET,
+        "TG_TREE_FILE = {TG_TREE_FILE:?} collides with a RELAUNCH_FIXTURE_NAMES, \
+         SIDEBAR_FILLER_FILES or PROJSEARCH_FILE_TARGET entry. All are written into the same \
+         temp cwd, so one would clobber the other."
+    );
+    for &(term, term_const, smoke) in ASSERTED_OCR_TERMS {
+        if term == TG_OCR_TREE_ROW {
+            continue;
+        }
+        assert!(
+            !TG_TREE_FILE.to_lowercase().contains(term),
+            "TG_TREE_FILE = {TG_TREE_FILE:?} contains {term_const} = {term:?}. It is page text as \
+             a tree row in every smoke that writes it, so this word would satisfy — or, for a \
+             must-NOT-contain term, spuriously break — `{smoke}`'s OCR assertion. This name is \
+             EXEMPT from the RELAUNCH_FIXTURE_NAMES loop above only for TG_OCR_TREE_ROW itself; \
+             every other asserted term still applies to it."
         );
     }
 

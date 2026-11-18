@@ -205,7 +205,6 @@ use crate::ready_seam;
 use crate::search_panel::{self, SearchPanelHandle};
 use crate::shell::{
     self, ShellParts, GO_TO_FILE_ACTION, HISTORY_BACK_ACTION, HISTORY_FORWARD_ACTION,
-    TOGGLE_SIDEBAR_ACTION,
 };
 use crate::sidebar;
 use crate::state_seam::{self, RestorePlan};
@@ -240,15 +239,12 @@ pub(crate) const TREE_PANE_WIDTH: i32 = 250;
 /// pending).
 const WAKE_CHANNEL_CAP: usize = 1;
 
-/// Icon of the header bar's sidebar-toggle button. From `adwaita-icon-theme`,
-/// which the flake supplies and `XDG_DATA_DIRS` exposes; a missing icon renders as
-/// `image-missing` and breaks no assertion.
-const SIDEBAR_TOGGLE_ICON: &str = "sidebar-show-symbolic";
-
-/// Icon of the header bar's Back button (see [`SIDEBAR_TOGGLE_ICON`]).
+/// Icon of the header bar's Back button. From `adwaita-icon-theme`, which the flake
+/// supplies and `XDG_DATA_DIRS` exposes; a missing icon renders as `image-missing` and
+/// breaks no assertion.
 const HISTORY_BACK_ICON: &str = "go-previous-symbolic";
 
-/// Icon of the header bar's Forward button (see [`SIDEBAR_TOGGLE_ICON`]).
+/// Icon of the header bar's Forward button (see [`HISTORY_BACK_ICON`]).
 const HISTORY_FORWARD_ICON: &str = "go-next-symbolic";
 
 /// Everything [`build`] needs, as one struct rather than six positional
@@ -552,12 +548,6 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
     // `PANE_ORIGIN_Y_EXPECTED`. See notes/wolf-gnome/window-structure.md
     let header = adw::HeaderBar::new();
 
-    let sidebar_button = gtk::Button::builder()
-        .icon_name(SIDEBAR_TOGGLE_ICON)
-        .tooltip_text("Toggle sidebar (Ctrl+Shift+B)")
-        .build();
-    header.pack_start(&sidebar_button);
-
     // Both start insensitive until the first render wake's `refresh_nav_buttons`: with no snapshot
     // `nav_press` refuses every press, so a sensitive button would only print a refusal.
     let nav_back_button = gtk::Button::builder()
@@ -575,6 +565,7 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
     nav_box.append(&nav_back_button);
     nav_box.append(&nav_forward_button);
     header.pack_start(&nav_box);
+    header.pack_start(&sidebar.toggles().widget());
 
     let open_button = gtk::Button::builder()
         .icon_name("document-open-symbolic")
@@ -645,7 +636,6 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
         open_button: &open_button,
         nav_back_button: &nav_back_button,
         nav_forward_button: &nav_forward_button,
-        sidebar_button: &sidebar_button,
         sidebar_shown: plan.sidebar_visible,
         launch_cwd: plan.core_cwd.clone(),
         crash_overlay: &crash,
@@ -674,16 +664,6 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
 
     // The toolbar buttons activate their chords' actions in the Open button's shape. No smoke clicks
     // them, so that shape is the coverage: crates/wolf-gnome/tests/README.md#deliberate-test-gaps
-    {
-        let window = window.clone();
-        sidebar_button.connect_clicked(move |_button| {
-            if let Err(err) =
-                gtk::prelude::WidgetExt::activate_action(&window, TOGGLE_SIDEBAR_ACTION, None)
-            {
-                eprintln!("wolf-gnome: failed to activate {TOGGLE_SIDEBAR_ACTION}: {err}");
-            }
-        });
-    }
     {
         let window = window.clone();
         nav_back_button.connect_clicked(move |_button| {

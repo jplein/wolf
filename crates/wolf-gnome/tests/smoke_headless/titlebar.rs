@@ -30,20 +30,20 @@ const ADW_COLOR_SCHEME_ENV: &str = "ADW_DEBUG_COLOR_SCHEME";
 
 /// How far inside the header bar's top edge, and above its bottom shade, the header rows start
 /// and stop, so the rows are clear of the bar's edges.
-const TB_HEADER_ROW_INSET_PX: f64 = 3.0;
+pub(crate) const TB_HEADER_ROW_INSET_PX: f64 = 3.0;
 
 /// The header bar's bottom row, its shade rather than its background: libadwaita 1.9.3's
 /// `headerbar { box-shadow: inset 0 -1px var(--headerbar-shade-color) }`, kept on purpose.
-const TB_HEADER_SHADE_PX: f64 = 1.0;
+pub(crate) const TB_HEADER_SHADE_PX: f64 = 1.0;
 
 /// How far in from each side of the output the two header spans start, past the start buttons
-/// (the sidebar toggle, the Back/Forward pair and Open) and the end ones (the primary menu and
-/// any window controls).
+/// (the Back/Forward pair, the sidebar's toggle group and Open) and the end ones (the primary
+/// menu and any window controls).
 ///
-/// libadwaita 1.9.3 pads the bar's box by 7 px and spaces each group by 6 px, and an image
-/// button is about 34 px wide, so the start group ends near 170 px. The rest is room for a
-/// window control more at the end.
-const TB_HEADER_BUTTON_CLEARANCE_PX: f64 = 240.0;
+/// libadwaita 1.9.3 pads the bar's box by 7 px and spaces each group by 6 px, an image button
+/// is about 34 px wide and the toggle group about 75 px, so the start group ends near 196 px:
+/// 7 + 68 + 6 + 75 + 6 + 34. The rest is room for a window control more at the end.
+pub(crate) const TB_HEADER_BUTTON_CLEARANCE_PX: f64 = 240.0;
 
 /// Half the width of the title band, centred on the output. It holds `~/project` in
 /// libadwaita's bold title with its 12 px side padding, about 100 px in all, and stops short of

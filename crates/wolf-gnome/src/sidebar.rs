@@ -1,16 +1,15 @@
-//! The window's SIDEBAR container for `wolf-gnome`: a `gtk::StackSwitcher` over a
-//! `gtk::Stack` of two pages, Files ([`crate::tree_view`]) and Search
-//! ([`crate::search_panel`]).
+//! The window's SIDEBAR container for `wolf-gnome`: a `gtk::Stack` of two pages, Files
+//! ([`crate::tree_view`]) and Search ([`crate::search_panel`]). The page is chosen from the
+//! header bar's toggle group ([`crate::sidebar_toggles`]), whose state the relay derives.
 //!
 //! Both pages stay built for the window's lifetime, so switching keeps the tree's
 //! expansion and the panel's query, rows and running `rg`. Only the CURRENT page of
 //! a SHOWN sidebar is live: [`panel_visibility`] decides, and every change — a page
-//! switch, by the switcher or by [`SidebarHandle::show_page`], and the sidebar
-//! being shown or hidden — is relayed into each page's refresh gate, so the page
-//! nobody can see rebuilds nothing and catches up once when it returns.
+//! switch by [`SidebarHandle::show_page`], and the sidebar being shown or hidden — is
+//! relayed into each page's refresh gate, so the page nobody can see rebuilds nothing
+//! and catches up once when it returns. The same relay sets the toggle group.
 //!
-//! Switching to Search focuses the panel's field, as the switcher's search button
-//! does on the other front-end. The page is not persisted.
+//! Switching to Search focuses the panel's field. The page is not persisted.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -18,6 +17,7 @@ use std::rc::Rc;
 use adw::prelude::*;
 
 use crate::search_panel::SearchPanelHandle;
+use crate::sidebar_toggles::SidebarToggles;
 use crate::tree_view::TreeHandle;
 
 /// The stack's name for the Files page.
@@ -56,10 +56,10 @@ pub fn panel_visibility(sidebar_shown: bool, page: SidebarPage) -> PanelVisibili
 
 /// The sidebar's shared state. All access happens on the single GTK main thread.
 struct SidebarInner {
-    /// The switcher above the stack, as one vertical box.
-    root: gtk::Box,
-    /// The two pages.
+    /// The two pages, and the sidebar's root widget.
     stack: gtk::Stack,
+    /// The header bar's toggle group, which shows this sidebar's state.
+    toggles: SidebarToggles,
     /// The Files page's handle.
     tree: TreeHandle,
     /// The Search page's handle.
@@ -78,16 +78,18 @@ impl SidebarInner {
         }
     }
 
-    /// Relays [`panel_visibility`] into both pages' refresh gates.
+    /// Relays [`panel_visibility`] into both pages' refresh gates, and the shown flag and
+    /// page into the toggle group. The one site that sets the group.
     fn relay(&self) {
         let live = panel_visibility(self.shown.get(), self.page());
         self.tree.set_sidebar_visible(live.files);
         self.search.set_sidebar_visible(live.search);
+        self.toggles.show_state(self.shown.get(), self.page());
     }
 }
 
-/// A handle to the built sidebar, used by the window to place it and by the shell
-/// to switch its page and relay its visibility.
+/// A handle to the built sidebar, used by the window to place it and its toggle group, and
+/// by the shell to switch its page, relay its visibility and take the group's clicks.
 #[derive(Clone)]
 pub struct SidebarHandle {
     inner: Rc<SidebarInner>,
@@ -97,7 +99,19 @@ impl SidebarHandle {
     /// The sidebar's root widget, the `gtk::Paned`'s start child.
     #[must_use]
     pub fn widget(&self) -> gtk::Widget {
-        self.inner.root.clone().upcast()
+        self.inner.stack.clone().upcast()
+    }
+
+    /// The header bar's toggle group, whose state this sidebar's relay sets.
+    #[must_use]
+    pub fn toggles(&self) -> SidebarToggles {
+        self.inner.toggles.clone()
+    }
+
+    /// Whether the shell last relayed the sidebar as shown: the flag the toggle group shows.
+    #[must_use]
+    pub fn is_shown(&self) -> bool {
+        self.inner.shown.get()
     }
 
     /// The current page.
@@ -124,17 +138,18 @@ impl SidebarHandle {
         self.inner.relay();
     }
 
-    /// Whether keyboard focus is inside the sidebar, either page or the switcher.
+    /// Whether keyboard focus is inside the sidebar, on either page.
     /// `false` while the sidebar is not rooted.
     #[must_use]
     pub fn focus_is_inside(&self) -> bool {
-        let Some(root) = self.inner.root.root() else {
+        let Some(root) = self.inner.stack.root() else {
             return false;
         };
         let Some(focus) = root.focus() else {
             return false;
         };
-        focus.is_ancestor(&self.inner.root) || &focus == self.inner.root.upcast_ref::<gtk::Widget>()
+        focus.is_ancestor(&self.inner.stack)
+            || &focus == self.inner.stack.upcast_ref::<gtk::Widget>()
     }
 }
 
@@ -146,30 +161,20 @@ pub fn build(tree: &TreeHandle, search: &SearchPanelHandle) -> SidebarHandle {
         .transition_type(gtk::StackTransitionType::None)
         .vexpand(true)
         .build();
-    stack
-        .add_titled(&tree.widget(), Some(FILES_PAGE), "Files")
-        .set_icon_name("folder-symbolic");
-    stack
-        .add_titled(&search.widget(), Some(SEARCH_PAGE), "Search")
-        .set_icon_name("system-search-symbolic");
+    stack.add_named(&tree.widget(), Some(FILES_PAGE));
+    stack.add_named(&search.widget(), Some(SEARCH_PAGE));
     stack.set_visible_child_name(FILES_PAGE);
 
-    let switcher = gtk::StackSwitcher::builder().stack(&stack).build();
-
-    let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    root.append(&switcher);
-    root.append(&stack);
-
     let inner = Rc::new(SidebarInner {
-        root,
         stack: stack.clone(),
+        toggles: SidebarToggles::build(),
         tree: tree.clone(),
         search: search.clone(),
         shown: Cell::new(false),
     });
 
-    // Both switch paths, the switcher and `show_page`, land here; a `Weak`, so the stack does not
-    // keep the sidebar alive.
+    // `show_page`, the only writer of the page, lands here; a `Weak`, so the stack does not keep
+    // the sidebar alive.
     let weak = Rc::downgrade(&inner);
     stack.connect_visible_child_name_notify(move |_stack| {
         let Some(inner) = weak.upgrade() else {
