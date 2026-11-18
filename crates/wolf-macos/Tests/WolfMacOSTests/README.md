@@ -1,6 +1,6 @@
 # wolf-macos/Tests/WolfMacOSTests
 
-XCTest coverage of what [`WolfMacOS`](../../Sources/WolfMacOS/README.md) views draw. A test builds a production view in a window that is never shown, renders it offscreen and samples its pixels. [`PreviewKeyEquivalentTests.swift`](#previewkeyequivalenttestsswift) instead calls AppKit's responder and menu dispatch directly:
+XCTest coverage of what [`WolfMacOS`](../../Sources/WolfMacOS/README.md) views draw. A test builds a production view in a window that is never shown, renders it offscreen and samples its pixels. [`PreviewKeyEquivalentTests.swift`](#previewkeyequivalenttestsswift) instead calls AppKit's responder and menu dispatch directly, and [`SidebarToolbarTests.swift`](#sidebartoolbartestsswift) sends a toolbar control its action and reads its selection:
 
 ```sh
 bazel test //crates/wolf-macos:WolfMacOSTests
@@ -240,6 +240,25 @@ Purpose: Checks the titlebar of a real `MainWindow`, never shown, hosting a `Pan
 - The window is deliberately not pinned to Aqua, unlike `OffscreenRenderer`'s, so the appearance test sees what it inherits from `NSApp`.
 - The appearance test sets `NSApp.appearance` and restores it on exit. The window is never key, so the active and inactive title colours are manual-smoke.
 - Each background stage prints a table row of the computed `TitlebarBackground`, the window colour and the grid's mean and share. The appearance test prints the host appearance and each mode's resolved `windowFrameTextColor`.
+
+#### `SidebarToolbarTests.swift`
+
+Purpose: Checks the toolbar's sidebar control in a production `MainWindow`, never shown, over a [`LiveCore`](#livecoreswift). The core is real because a search click seeds the search toggles from Neovim's `ignorecase`.
+
+**Covers**
+
+- The toolbar running tracking separator, Back, Forward, then the control, with no system `.toggleSidebar`; the item navigational, and each segment carrying its seam tooltip.
+- `showSidebar(panel:)` and `toggleSidebar()`, the paths of the `toggleSidebar`, `sidebarShowProject` and `searchInProject` commands, leaving only the visible panel's segment selected, and none while hidden.
+- A direct `isCollapsed` write, as a restore or a divider drag makes, clearing and restoring the selection.
+- Clicks switching, hiding and showing as `SidebarToolbarSeam.click` decides.
+- Both panels' tops at the sidebar's safe-area top.
+
+**Gotchas**
+
+- `WolfWindowController` cannot be built offscreen: its `build()` needs a `Project` started against `AppDelegate`, and orders its window front. The tests enter at the `MainWindow` members it forwards to, so the forwarders and the `CommandDispatcher` arms are compile-verified only.
+- A click is `selectedSegment` set, then `sendAction`, as a `.selectOne` click does.
+- Selection is read with `isSelected(forSegment:)`, because `selectedSegment` keeps its old value after a segment is deselected.
+- Search seeding and field focus touch private `SearchView` state, so they are manual-smoke.
 
 #### `FileTreeViewTests.swift`
 

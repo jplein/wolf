@@ -844,7 +844,7 @@ Purpose: the glue for the action namespace — `gio` actions, the primary menu, 
 
 #### `sidebar.rs`
 
-Purpose: the window's sidebar — a `gtk::StackSwitcher` over a `gtk::Stack` with two pages, Files ([`tree_view.rs`](#tree_viewrs)) and Search ([`search_panel.rs`](#search_panelrs)). The switcher is the GNOME counterpart of the [macOS sidebar's header toggles](../../wolf-macos/Sources/WolfMacOS/README.md#sidebarcontainerviewswift).
+Purpose: the window's sidebar — a `gtk::StackSwitcher` over a `gtk::Stack` with two pages, Files ([`tree_view.rs`](#tree_viewrs)) and Search ([`search_panel.rs`](#search_panelrs)). The switcher is the GNOME counterpart of the [macOS toolbar's sidebar control](../../wolf-macos/Sources/WolfMacOS/README.md#mainwindowswift).
 
 **Public API**
 

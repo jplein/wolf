@@ -11,7 +11,7 @@ Coverage lives in [`Tests/WolfKeyMapTests/`](../../Tests/WolfKeyMapTests/README.
 Each compiles into this module and has its own README with the entries for its files.
 
 - [`Terminal/`](Terminal/README.md) — a terminal pane's cell styles, damage, sizing and input routing.
-- [`Sidebar/`](Sidebar/README.md) — the file-tree and search panels and their View menu checkmarks.
+- [`Sidebar/`](Sidebar/README.md) — the file-tree and search panels, their View menu checkmarks and their toolbar control.
 - [`Persistence/`](Persistence/README.md) — what `state.json` holds, and how it restores.
 
 ## Files
@@ -253,7 +253,7 @@ Purpose: The pure decisions behind the per-pane navigation history — the Histo
 
 - `Row.index` is a stack index handed straight back to `history_jump`, not a row number.
 - `rows(displays:indices:currentFlags:)` — zips the three parallel arrays from `WolfCoreHandle.history_entries`. Mismatched lengths truncate to the shortest; a negative index is dropped; at most one row keeps `isCurrent`, the first if several arrive; empty input yields `[]` and the caller substitutes `emptyPlaceholderTitle`.
-- `itemIdentifiers(toggleSidebar:trackingSeparator:)` — the locked toolbar order after the traffic lights, as raw strings so the seam stays AppKit-free.
+- `itemIdentifiers(trackingSeparator:)` — the locked toolbar order: separator, Back, Forward, [`SidebarToolbarSeam.identifier`](Sidebar/README.md#sidebartoolbarseamswift). Raw strings keep the seam AppKit-free.
 
 **Decisions**
 

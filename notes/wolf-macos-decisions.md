@@ -93,6 +93,14 @@ The title text is AppKit's, drawn in the title colours of the window's effective
 
 So no window or view sets its own `appearance`: every window inherits the `NSApp.appearance` that `AppDelegate` forces from Wolf's resolved appearance, which in `auto` is the OS's. Setting one per window, whether from `Normal`'s luminance as Ghostty does or by pinning Aqua as the tests' `OffscreenRenderer` does, would let the title and Neovim's `background` disagree.
 
+## The toolbar
+
+After the traffic lights the toolbar runs the sidebar tracking separator, Back, Forward, then the sidebar control, with the window title after them; the order is [`HistorySeam.itemIdentifiers`](../crates/wolf-macos/Sources/WolfKeyMap/README.md#historyseamswift). The separator comes first and is bound to the split's divider, so the items after it ride the sidebar's trailing edge.
+
+The control's selected segment is derived in one place, [`SidebarToolbarSeam`](../crates/wolf-macos/Sources/WolfKeyMap/Sidebar/README.md#sidebartoolbarseamswift), from the sidebar's visibility and mode. `MainWindow` applies it whenever the split item's `isCollapsed` changes and at the end of `showSidebar(panel:)`. No path that changes the sidebar sets it: not the commands and their shortcuts, the View menu, a divider drag, the launch restore, nor the control's own click. Set from each path, the control goes stale after any path that forgets, a later one included; observing the state misses none.
+
+Each tab is its own `MainWindow`, with its own toolbar and observer, so a tab switch needs no refresh of its own.
+
 ## How a preview reaches its web view
 
 Four files jointly honor one model, so do not change any of them without reading this section: `WolfKeyMap/PreviewScrollSeam` owns the rules, `PaneContainerView` the bookkeeping, `PreviewScrollStateHandler` the state channel, and `PreviewNavigationDelegate` the navigation count.

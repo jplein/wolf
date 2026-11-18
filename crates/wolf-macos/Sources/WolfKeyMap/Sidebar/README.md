@@ -1,6 +1,6 @@
 # wolf-macos/Sources/WolfKeyMap/Sidebar
 
-The pure decisions behind the sidebar's two panels, the file tree and the content search, and the View menu checkmarks that name the visible one. The directory compiles into the [`WolfKeyMap`](../README.md) module, not a module of its own.
+The pure decisions behind the sidebar's two panels, the file tree and the content search, and the View menu checkmarks and toolbar control that name the visible one. The directory compiles into the [`WolfKeyMap`](../README.md) module, not a module of its own.
 
 Coverage lives in [`Tests/WolfKeyMapTests/`](../../../Tests/WolfKeyMapTests/README.md).
 
@@ -50,8 +50,8 @@ Purpose: The pure decision behind the View menu's Project and Search checkmarks.
 
 **Public API**
 
-- `SidebarPanel` — names one sidebar panel, the file tree or the content search. Also used by `WolfWindowController` to name the live panel.
-- `isChecked(sidebarVisible:current:item:) -> Bool` — at most one entry is checked; a hidden sidebar or a nil `current` checks nothing.
+- `SidebarPanel` — names one sidebar panel, the file tree or the content search. Also names the live panel in `MainWindow` and `WolfWindowController`, and the toolbar control's segments.
+- `isChecked(sidebarVisible:current:item:) -> Bool` — true when `item` is [`SidebarToolbarSeam`](#sidebartoolbarseamswift)'s `selectedPanel`, so the checkmarks and the toolbar control cannot disagree. At most one entry is checked; a hidden sidebar or a nil `current` checks nothing.
 
 **Gotchas**
 
@@ -71,6 +71,26 @@ Purpose: The pure choice of label color for one file-tree sidebar row — the cu
 
 - A preview pane's scratch buffer is unnamed, and nvim's `wolf_current_file` reports `""` for it, so `currentFile` alone cannot name what a preview shows. The front-end supplies the per-pane source through `PaneContainerView.activePreviewSourcePath`.
 - The accent depends on the current-buffer flag alone, never on the row's selection. AppKit tints a selected source-list label only while the row view is emphasized — a key window whose first responder is the outline — and the sidebar outline never becomes first responder, so a selection tint holds until the first app switch and never returns.
+
+#### `SidebarToolbarSeam.swift`
+
+Purpose: The pure rules behind the toolbar's two-segment sidebar control, Project then Search: which segment is selected, what a click does, and each segment's symbol, label and tooltip. Foundation only; `MainWindow` builds and refreshes the control from it.
+
+**Public API**
+
+- `identifier` — the toolbar item's raw identifier, which `HistorySeam.itemIdentifiers` places.
+- `panels`, `segment(of:)` and `panel(atSegment:)` — the segment order. `panel(atSegment:)` is `nil` out of range, `-1`, a control with nothing selected, included.
+- `selectedPanel(sidebarVisible:current:)` — `current` while the sidebar is visible, else `nil`; `selectedSegment` is its index.
+- `click(_:sidebarVisible:current:) -> Click` — `.hide` for a click on the selected panel, else `.show(panel)`, so any click while hidden shows the clicked panel.
+- `symbolName(for:)`, `label(for:)` and `toolTip(for:)`.
+
+**Decisions**
+
+- The selection is a function of visibility and mode, applied by whoever observes them, and never set by the path that changed the sidebar ([why](../../../../../notes/wolf-macos-decisions.md#the-toolbar)).
+
+**Gotchas**
+
+- The tooltips spell out ⇧⌘E and ⇧⌘F, and the labels repeat the View menu's titles. `AppMenu` does not read them from here, so a rebound shortcut or a renamed item needs both changed.
 
 #### `TreeChildrenMemo.swift`
 

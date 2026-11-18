@@ -280,21 +280,23 @@ Purpose: The macOS dead-key and Option-character composition glue for option-as-
 
 #### `MainWindow.swift`
 
-Purpose: The single editor window. Its content view controller is an `EditorSplitViewController` under a transparent full-size-content titlebar with a unified `NSToolbar`; the class is its own toolbar delegate.
+Purpose: The single editor window: an `EditorSplitViewController` under a transparent full-size-content titlebar and a unified `NSToolbar`, whose delegate it is.
 
 **Public API**
 
-- `protocol HistoryNavigating` — the Back / Forward actions the toolbar needs from `WolfWindowController`. Explicit delegation, not a `target: nil` responder-chain hop: that controller is no `NSWindowController`, so it is not in the chain.
+- `protocol HistoryNavigating` — Back and Forward from `WolfWindowController`, delegated explicitly because that controller is no `NSWindowController` and so is not in the responder chain.
 - `init(sidebar:paneContainer:metrics:cols:rows:)` — sizes the content so the editor pane keeps exactly `cols` × `rows` cells below the chrome.
-- `applyTitlebarBackground(_:)` — idempotent; the first `.colour` captures the pristine `backgroundColor`, so `.system` restores the system default exactly.
+- `showSidebar(panel:)`, `toggleSidebar()` and `sidebarPanel`, which `WolfWindowController` forwards to; `sidebarPanelsItemIdentifier` names the sidebar control's toolbar item.
+- `applyTitlebarBackground(_:)` — idempotent; `.system` restores the pristine `backgroundColor` the first `.colour` captured.
 
 **Decisions**
 
-- `isReleasedWhenClosed = false`: the window controller holds the strong reference, and AppKit's default adds an unbalanced release, which crashes the deferred close-animation dealloc.
-- The toolbar is installed before the chrome is measured, so `contentLayoutRect` accounts for the toolbar band; measuring first silently costs the grid rows.
-- The navigation items set `autovalidates = false`, which is what makes an `isEnabled` set by `refreshHistoryToolbar(canBack:canForward:)` stick instead of being overwritten by AppKit's own validation pass.
-- Item order lives in the pure `HistorySeam.itemIdentifiers` so it is testable without AppKit. The system `.toggleSidebar` must precede the tracking separator, or the visible title claims the content-leading slot and pushes the toggle to the trailing edge.
-- The delegate returns `nil` for `.toggleSidebar` so AppKit supplies its built-in item, auto-wired to `NSSplitViewController.toggleSidebar(_:)`.
+- `isReleasedWhenClosed = false`: the controller holds the window, and the default's unbalanced release crashes the deferred close-animation dealloc.
+- The toolbar is installed before the chrome is measured, or `contentLayoutRect` misses the toolbar band and the grid silently loses rows.
+- The navigation items set `autovalidates = false`, so an `isEnabled` set by `refreshHistoryToolbar(canBack:canForward:)` sticks rather than being overwritten by AppKit's validation.
+- Item order lives in the pure `HistorySeam.itemIdentifiers` ([why](../../../../notes/wolf-macos-decisions.md#the-toolbar)). The sidebar control's item is navigational, placing it beside Back and Forward, not after the title.
+- The sidebar control is an `NSSegmentedControl`, not an `NSToolbarItemGroup`, whose `.selectOne` mode cannot show nothing selected.
+- No caller sets the control's selection: `SidebarToolbarSeam` derives it on the `isCollapsed` KVO and at the end of `showSidebar(panel:)`, after the mode switch the KVO fires too early to see.
 - `appearance` stays `nil`, so the window and its title inherit the app appearance `AppDelegate` forces ([why](../../../../notes/wolf-macos-decisions.md#the-titlebar)).
 
 #### `NvimRestartedBannerView.swift`
@@ -512,7 +514,7 @@ Purpose: Installs the process-global content-search wake so each streamed ripgre
 
 #### `SidebarContainerView.swift`
 
-Purpose: The sidebar body — a header strip whose folder and magnifier toggles swap the content area between `FileTreeView` and `SearchView`. Adopted directly as the sidebar's hosted view.
+Purpose: The sidebar body — `FileTreeView` or `SearchView`, one shown at a time, chosen by the toolbar's sidebar control in [`MainWindow.swift`](#mainwindowswift). Adopted directly as the sidebar's hosted view.
 
 **Public API**
 
@@ -523,10 +525,11 @@ Purpose: The sidebar body — a header strip whose folder and magnifier toggles 
 
 - Both children stay in the view hierarchy and the inactive one is hidden, so switching modes preserves each panel's state.
 - `setSidebarVisible` passes `visible && mode == …` down, so the inactive child's refresh gate stays closed and it does no work while off-screen.
+- Both children are pinned to the top of the safe area, not of the view, which keeps them clear of the transparent full-size-content titlebar.
 
 **Gotchas**
 
-- `setMode(_:)` only swaps which child is shown. Seeding the search toggles and focusing its field is the caller's job; the header magnifier button does both.
+- `setMode(_:)` only swaps which child is shown. Seeding the search toggles and focusing its field is the caller's job: `MainWindow.showSidebar(panel:)` focuses, and the toolbar control's action also seeds.
 
 #### `StatePersistence.swift`
 
