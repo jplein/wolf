@@ -800,27 +800,28 @@ Purpose: a Neovim window's `win_viewport` projected onto a pane-local thumb rect
 
 #### `search_panel.rs`
 
-Purpose: the project-search panel, [`sidebar.rs`](#sidebarrs)'s Search page — a field over streaming ripgrep matches grouped by file. A line row opens a location, not a file.
+Purpose: [`sidebar.rs`](#sidebarrs)'s Search page — a field and two toggles over streaming ripgrep matches grouped by file, whose line rows open locations, not files.
 
 **Public API**
 
 - `build(core, area) -> SearchPanelHandle` — gate shut until the sidebar relays it shown; `area` is a [`picker.rs`](#pickerrs) `FocusTarget`.
 - `SearchPanelHandle::widget`, `focus_entry`, `owns_keyboard`, `set_sidebar_visible`, and `close`, which cancels `rg`.
-- `show_decision`, `search_options_for`, `panel_rows`, `char_budget`, `first_line_row`, `selection_after_rebuild`, `enter_action`, `row_activation`, `activation_route` and `search_status` — the pure seams.
+- Pure seams, among them `SearchToggles` (`INITIAL`), `search_options_for`, `enter_action`, `activation_route` and `search_status`; the module doc lists them all.
 
 **Decisions**
 
-- Typing runs nothing. Enter runs a changed query and activates on an unchanged one; an empty query clears, since core would hand `rg` a pattern matching every line.
-- The list never takes focus: each batch replaces every row, which would destroy a focused one. Up and Down move the selection from the field.
-- `activation_route` reads liveness first, since nothing covers the rows on a crash; that keeps the blocking `preview_file` on `Alive`. A declined repoint falls back to `open_at`.
-- Literal, case-insensitive, all files, no toggles and no blocking `ignorecase()`; `search_options_for`'s doc says why.
-- `focus_entry` grabs synchronously: the palette closes before dispatching, so nothing takes focus back.
-- The list's `navigation-sidebar` class gives a neutral selection tint; under the accent fill the OCR smokes read nothing from the preselected row.
-- Escape, the field keeping focus, the missing toggles and the capped status line diverge from the [macOS panel](../../wolf-macos/Sources/WolfMacOS/README.md#searchviewswift); the module doc says why.
+- Typing and toggling run nothing; a toggle stales the status line. Enter runs a changed query or toggles, activating on unchanged ones; an empty query clears, since `rg` would match every line.
+- The list never takes focus, since each batch replaces every row; Up and Down move the selection from the field.
+- `activation_route` reads liveness first, as nothing covers the rows on a crash, keeping the blocking `preview_file` on `Alive`; a declined repoint falls back to `open_at`.
+- Regex starts on and case off, unseeded: `ignorecase()` blocks. `search_options_for` says why every file is searched.
+- Toggles never take focus on click: a focused one would take Enter and flip back.
+- `focus_entry` grabs synchronously: the palette closes before dispatching, so nothing retakes focus.
+- The list's `navigation-sidebar` class keeps the selection tint neutral, so OCR can read the preselected row.
+- Escape, focus, toggles and the status line diverge from the [macOS panel](../../wolf-macos/Sources/WolfMacOS/README.md#searchviewswift); the module doc says why.
 
 **Gotchas**
 
-- A same-file jump records no history, a cross-file one does: `NavTarget::Edit` carries no line number.
+- Only a cross-file jump records history: `NavTarget::Edit` carries no line number.
 
 #### `shell.rs`
 

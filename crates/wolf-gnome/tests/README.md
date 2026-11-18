@@ -155,12 +155,12 @@ The other files below cover what a seam cannot reach: a real Neovim, a real wind
 
 **Covers**
 
-- The pure seams behind the sidebar's search panel, with no display, Neovim or ripgrep: `search_panel`'s show guard and options; its rows' projection order, exact location, collapse, line cap, windowing and bold shift past an ellipsis; `char_budget`; the selection kept by identity across a rebuild; the Enter rule; row activation; the liveness-first open route; and the status line's arms. Also `sidebar::panel_visibility`.
+- The pure seams behind the sidebar's search panel, with no display, Neovim or ripgrep: `search_panel`'s show guard, initial toggles and the options they give; its rows' projection order, exact location, collapse, line cap, windowing and bold shift past an ellipsis; `char_budget`; the selection kept by identity across a rebuild; the Enter rule, with toggles changed under an unchanged query; row activation; the liveness-first open route; and the status line's arms, the stale-toggles one and rg's error exit among them. Also `sidebar::panel_visibility`.
 
 **Gotchas**
 
 - Every input is a hand-built `SearchMatch` or a literal, and every expected value is written out by hand, never computed by the function under test.
-- What the widgets do with these answers is the two search smokes' in [`smoke_headless/sidebar.rs`](#smoke_headlesssidebarrs).
+- What the widgets do with these answers is the search smokes' in [`smoke_headless/sidebar.rs`](#smoke_headlesssidebarrs) and [`smoke_headless/search_toggles.rs`](#smoke_headlesssearch_togglesrs).
 
 #### `sidebar_toggles.rs`
 
@@ -249,6 +249,12 @@ Session-restore smokes, each two launches in one cage, the second reading what t
 #### `smoke_headless/scrub_lists.rs`
 
 The packaged smokes' scrub lists, the devShell exports removed from a packaged launch. [`flake_exports.rs`](#flake_exportsrs) compiles this file through `#[path]`, so its guard reads the lists the packaged smokes use; which list takes which export is in the [`flake.nix` notes](../../../notes/flake.nix.md#shellhook-exports).
+
+#### `smoke_headless/search_toggles.rs`
+
+The search panel's toggle smokes, one each for case, regex and an invalid regex such as `foo(bar`, which must show rg's error in the status line and then be found literally with regex off. What a search found and what the status line says are OCR of the sidebar band. Where the toggles sit, left-aligned below the field and above the results, is the changed rows and columns between captures of one run, read from the band's raw pixels. Every capture is taken after Escape has handed focus back to the editor, so neither the field's caret nor its focus ring is in the band.
+
+The click targets are estimated from libadwaita 1.9.3's stylesheet and a measured label width, not from a probe, which is safe only because a click that misses a toggle changes no option and fails.
 
 #### `smoke_headless/sidebar.rs`
 
@@ -424,7 +430,7 @@ The other two preview queries carry no such dependency: `prvan` and `ednap` each
 
 Its sample band must be derived from the pane-area constants rather than hardcoded, and must be paired with a control band in the counterpart pane. Without the control, a coincidence between the editor's own background and the theme's would satisfy the assertion.
 
-**No pointer smoke hardcodes a pixel inside a pane.** The cell size is measured through the same metrics path, font size and line height the app is launched with, one probe click establishes the origin, and every later target is expressed as a delta from it. The header bar's toggle group is the exception, clicked at targets built from libadwaita's metrics, which [its smokes' entry](#smoke_headlesssidebar_togglesrs) says is safe there. The derived pane origin is checked as a loud, self-checking precondition whose failure message names the candidate causes in order.
+**No pointer smoke hardcodes a pixel inside a pane.** The cell size is measured through the same metrics path, font size and line height the app is launched with, one probe click establishes the origin, and every later target is expressed as a delta from it. The header bar's [toggle group](#smoke_headlesssidebar_togglesrs) and the search panel's [toggles](#smoke_headlesssearch_togglesrs) are the exceptions, clicked at targets built from libadwaita's metrics, which their smokes' entries say is safe there. The derived pane origin is checked as a loud, self-checking precondition whose failure message names the candidate causes in order.
 
 What a green run establishes is band membership, not equality: the derived origin need only land within `PANE_ORIGIN_TOLERANCE_PX` plus one cell, a band wider than a cell, so it cannot tell a stale constant from a current one. `PANE_ORIGIN_X_EXPECTED` and `PANE_ORIGIN_Y_EXPECTED` are bit-identical to an origin derived from a solo pointer-smoke run: its persisted probe readback from the smoke's temp working directory, crossed with a cell measured through the same `CellMetrics::for_font` path the app uses. Any change that could move a pane's chrome owes that derivation by hand, not a green tick.
 
