@@ -34,7 +34,7 @@ This crate also has a package output, `packages.wolf-gnome` in `flake.nix`, whos
 
 The gtk-rs crates form one coherent release set: `gtk4` 0.11.x, `gdk4` 0.11.x, `libadwaita` 0.9.x, with `cairo-rs`, `pango`, and `pangocairo` at 0.22.x. `webkit6` 0.6.x belongs to that set too, requiring `gtk4` and `gdk4` at ^0.11 and `glib` and `gio` at ^0.22 — exactly what this workspace already locks. In the gtk-rs ecosystem the gtk4-rs repo and the core repo release together but carry different minor numbers, so the invariant is one coherent release set rather than one identical minor. Mismatched `-sys` minors fail to link.
 
-`libadwaita` carries no version feature, because the target is the system GTK already present rather than a newer pinned ABI. The set builds against the flake's GTK 4.22, cairo 1.18, and pango 1.57.
+`libadwaita` enables `v1_7`, which `adw::ToggleGroup`, the header bar's sidebar control, requires. That raises the minimum system libadwaita to 1.7; the flake pins 1.9.3, and the feature is scoped to this crate. The set builds against the flake's GTK 4.22, cairo 1.18, and pango 1.57.
 
 `gtk4` enables `v4_12`, which the sidebar's `ListView::scroll_to` requires and which `webkit6` silently depends on as well: it names `gtk::Accessible`, a type `gtk4` gates behind `v4_10` from 0.11.4 onward, so trimming the feature below that breaks the build with an error naming accessibility and pointing at neither the feature nor `webkit6`. That raises the minimum system GTK to 4.12; the flake satisfies it, and the feature is scoped to this crate. `cairo-rs` enables `png` for two consumers, and the second gates the suite: the ignored golden-regeneration dev aid writes a PNG with it, and the preview-appearance smoke decodes its `grim` captures with it.
 

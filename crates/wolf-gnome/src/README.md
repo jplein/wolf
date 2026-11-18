@@ -17,7 +17,7 @@ Purpose: the About dialog — a pure text seam over the bundled fonts' and the l
 
 **Decisions**
 
-- Plain GTK over `adw::AboutDialog` or `adw::AboutWindow`, which need `libadwaita` version features this crate deliberately carries none of ([wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md)): adding one for a single dialog would change the build contract and put the whole smoke suite on the devShell's libadwaita version.
+- Plain GTK over `adw::AboutDialog` or `adw::AboutWindow`. `adw::AboutDialog` is an `adw::Dialog`, drawn inside the main window rather than as a toplevel of its own, which the next bullet rules out. `adw::AboutWindow` is deprecated since libadwaita 1.6, which the crate's `v1_7` feature ([gtk-rs versions](../../../notes/wolf-gnome-decisions.md#gtk-rs-versions)) turns into a warning that `-D warnings` refuses.
 - A separate toplevel rather than a fifth in-window overlay, so the main window's focus widget is untouched and the focus regime does not apply to it at all.
 
 #### `actions.rs`
@@ -829,7 +829,7 @@ Purpose: the glue for the action namespace — `gio` actions, the primary menu, 
 **Public API**
 
 - `build_menu_model()`, `build_empty_state()`, `build(parts) -> AppShell`; `ShellParts` carries a `Weak` coordinator, the window id and [`TitlebarStyle`](#titlebar_backgroundrs).
-- `install_actions(app)` — the `win.` rows only, after the window is constructed and before `present()`, so the menu and header button resolve them.
+- `install_actions(app)` — the `win.` rows only, between building the window and `present()`, so the menu and header buttons resolve them.
 - `set_empty_state(empty)`, `on_liveness_wake() -> bool`, `on_render_wake()`.
 
 **Decisions**
@@ -837,29 +837,49 @@ Purpose: the glue for the action namespace — `gio` actions, the primary menu, 
 - The chord controller matches keys itself: GTK's keymap-aware matching does not fire under the smokes' keystroke injector. Accelerators are registered only so the menu renders their labels, `app.` rows included ([`coordinator.rs`](#coordinatorrs)).
 - The controller lives on the window, so it runs ahead of any overlay's and needs no open-overlay guard: no overlay's keys are bound chords.
 - One settle point moves the sidebar's root, over [`workspace.rs`](#workspacers)'s `reroot_decision`, so `chdir_to` and a typed `:cd` cannot diverge.
-- The three Markdown-preview presses read one `preview_shape` pass each: two snapshot reads would describe no window that existed. Each is a blocking RPC gated through [`preview_ui.rs`](#preview_uirs).
-- Save and Save As read one `save_shape` pass each for the same reason, and neither issues a blocking call; the dialog carries [`save_ui.rs`](#save_uirs)'s proposal out and decides nothing, `force` included.
-- `sidebar.set_visible` has one caller, over [`state_seam.rs`](#state_seamrs)'s `sidebar_is_shown`, or `set_empty_state(false)` would undo a user toggle. The search chord reveals it through that preference.
+- Each Markdown-preview press reads one `preview_shape` pass, since two reads would describe no window that existed, and is a blocking RPC gated by [`preview_ui.rs`](#preview_uirs).
+- Save and Save As read one `save_shape` pass each for the same reason and issue no blocking call; the dialog carries out [`save_ui.rs`](#save_uirs)'s proposal, `force` included.
+- `sidebar.set_visible` has one caller, over [`state_seam.rs`](#state_seamrs)'s `sidebar_is_shown`, or `set_empty_state(false)` would undo a user toggle. The search chord and a [toggle click](#sidebar_togglesrs), taking the chords' arms, reveal it through that preference.
 - The per-tab fan-outs go through [`tab_view.rs`](#tab_viewrs), New Tab is gated by [`tabs_ui.rs`](#tabs_uirs)'s `new_tab_press`, and [Window structure](../../../notes/wolf-gnome/window-structure.md) owns the boundary.
 
 #### `sidebar.rs`
 
-Purpose: the window's sidebar — a `gtk::StackSwitcher` over a `gtk::Stack` with two pages, Files ([`tree_view.rs`](#tree_viewrs)) and Search ([`search_panel.rs`](#search_panelrs)). The switcher is the GNOME counterpart of the [macOS toolbar's sidebar control](../../wolf-macos/Sources/WolfMacOS/README.md#mainwindowswift).
+Purpose: the window's sidebar — a `gtk::Stack` with two pages, Files ([`tree_view.rs`](#tree_viewrs)) and Search ([`search_panel.rs`](#search_panelrs)), and no switcher. It owns the header bar's [toggle group](#sidebar_togglesrs), which chooses the page.
 
 **Public API**
 
-- `build(tree, search) -> SidebarHandle` — opens on Files, both pages dormant until the shell relays the sidebar shown.
-- `SidebarHandle::widget`, `page`, `show_page(page)`, `set_sidebar_visible(shown)` and `focus_is_inside`.
+- `build(tree, search) -> SidebarHandle` — opens on Files, both pages dormant and no toggle active until the shell relays the sidebar shown.
+- `SidebarHandle::widget`, `toggles`, `page`, `show_page(page)`, `set_sidebar_visible(shown)`, `is_shown` and `focus_is_inside`.
 - `panel_visibility(sidebar_shown, page) -> PanelVisibility` — the pure seam: a page is live only when the sidebar is shown and the page is current.
 
 **Decisions**
 
 - Both pages stay built, so a switch keeps the tree's expansion and the panel's query, rows and running `rg`. Every switch and every show or hide is relayed into both pages' refresh gates, so the page nobody can see rebuilds nothing and catches up once.
-- The switcher and `show_page` both land in one `visible-child-name` notify, which also focuses the panel's field on a switch to Search.
+- The same relay is the only site that sets the toggle group, from `active_toggle`, so the chords, the palette, the empty state and launch keep the group right with no sync of their own.
+- `show_page` is the only writer of the page, and lands in the stack's `visible-child-name` notify, which relays and focuses the panel's field on a switch to Search.
 
 **Gotchas**
 
 - The page is not persisted: a relaunched window opens on Files.
+
+#### `sidebar_toggles.rs`
+
+Purpose: the header bar's sidebar control, an `adw::ToggleGroup` of a Files and a Search toggle between Back/Forward and Open, which shows the sidebar's page, switches it and hides the sidebar. The counterpart of [`SidebarToolbarSeam.swift`](../../wolf-macos/Sources/WolfKeyMap/Sidebar/README.md#sidebartoolbarseamswift).
+
+**Public API**
+
+- `active_toggle(shown, page)`, `toggle_click(shown, page, clicked) -> ToggleClick` and `toggle_at(x, width, rtl)` — the pure seams: the active toggle, the click rule (the active toggle hides, any other click shows its page), and which toggle a group-local `x` falls on.
+- `SidebarToggles::build`, `widget`, `show_state(shown, page)`, `set_sensitive` and `connect_click(f)`.
+
+**Decisions**
+
+- `adw::ToggleGroup` emits nothing for a click on its active toggle, which must hide the sidebar. So a capture-phase `gtk::GestureClick` claims every primary press before the toggles see it and maps the release to a half with `toggle_at`, which holds only while the group is homogeneous. The claim costs the toggles their pressed look.
+- Nothing may connect to the group's `active` or `active-name` notify: the relay's `show_state` would then re-enter the click path.
+- The group never takes focus, so Space and Enter stay with Neovim and keyboard activation cannot run the group's own logic around the rule.
+
+**Gotchas**
+
+- The Files tooltip names no chord: Ctrl+Shift+B toggles whichever page is current.
 
 #### `state_seam.rs`
 

@@ -145,7 +145,7 @@ A window persists every tab, in tab order, and a launch restores each saved wind
 
 The GNOME counterpart to the macOS menu bar is a header-bar primary menu driven by the same `gio` action namespace as the accelerators, so menu, chords and drained commands cannot drift apart. The accelerator scheme is documented in [The accelerator namespace](wolf-gnome/the-accelerator-namespace.md).
 
-That header bar is also the unified toolbar: the sidebar toggle, Back and Forward, and Open at the start, the primary menu at the end, and the window title between them.
+That header bar is also the unified toolbar: Back and Forward, the sidebar's Files and Search toggles, and Open at the start, the primary menu at the end, and the window title between them.
 
 The `state` module is read and written. `wolf-gnome` snapshots on every wake without a timer or debounce, which is affordable because `StateStore::set_snapshot` ignores an unchanged tree and the writer thread coalesces; the tree carries every open window and every tab of it, and a launch restores each saved window's working directory, size, sidebar preference and per-tab pane layouts in saved order.
 

@@ -8,7 +8,9 @@ nix develop --command cargo test -p wolf-gnome
 
 The devShell is not optional: it supplies GTK, exports `WOLF_NVIM_BIN` and `WOLF_RG_BIN`, and pins the font stack, which is what makes Pango measurement and Cairo rasterization reproducible enough to assert on pixels.
 
-Rules that are decidable from their arguments are pinned in each seam's own `#[cfg(test)] mod tests`, which is the point of the seam split in [wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md); the key seam's, the terminal seams', the other-pane seam's and the titlebar seam's tables are files here instead, [`gdk_key.rs`](#gdk_keyrs), [`terminal_seams.rs`](#terminal_seamsrs), [`other_pane_seam.rs`](#other_pane_seamrs) and [`titlebar_background.rs`](#titlebar_backgroundrs). The other files below cover what a seam cannot reach: a real Neovim, a real window, the built binary together with the manifest that shaped it, and the store output `nix build .#wolf-gnome` installs — a different artifact from the checkout build, making different claims.
+Rules that are decidable from their arguments are pinned in each seam's own `#[cfg(test)] mod tests`, which is the point of the seam split in [wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md); the key seam's, the terminal seams', the other-pane seam's, the sidebar toggles' and the titlebar seam's tables are files here instead, [`gdk_key.rs`](#gdk_keyrs), [`terminal_seams.rs`](#terminal_seamsrs), [`other_pane_seam.rs`](#other_pane_seamrs), [`sidebar_toggles.rs`](#sidebar_togglesrs) and [`titlebar_background.rs`](#titlebar_backgroundrs).
+
+The other files below cover what a seam cannot reach: a real Neovim, a real window, the built binary together with the manifest that shaped it, and the store output `nix build .#wolf-gnome` installs — a different artifact from the checkout build, making different claims.
 
 ## Files
 
@@ -160,6 +162,17 @@ Rules that are decidable from their arguments are pinned in each seam's own `#[c
 - Every input is a hand-built `SearchMatch` or a literal, and every expected value is written out by hand, never computed by the function under test.
 - What the widgets do with these answers is the two search smokes' in [`smoke_headless/sidebar.rs`](#smoke_headlesssidebarrs).
 
+#### `sidebar_toggles.rs`
+
+**Covers**
+
+- The pure half of the header bar's toggle group: `active_toggle` for each shown flag and page, `toggle_click` for every combination of shown, page and clicked, and `toggle_at` either side of the group's middle, left to right and mirrored right to left.
+
+**Gotchas**
+
+- Pure: no display, no Neovim and no compositor. Every expected value is written out by hand.
+- Whether the window wires the answers up is [`smoke_headless/sidebar_toggles.rs`](#smoke_headlesssidebar_togglesrs)'s question.
+
 #### `smoke_headless/main.rs`
 
 **Covers**
@@ -240,6 +253,12 @@ The packaged smokes' scrub lists, the devShell exports removed from a packaged l
 #### `smoke_headless/sidebar.rs`
 
 Sidebar and search smokes: the file tree, the project-search panel and its chord, the sidebar toggle, a typed `:cd` and an Open Recent row re-rooting the window, and the window title.
+
+#### `smoke_headless/sidebar_toggles.rs`
+
+The header bar's toggle-group smokes. One clicks the toggles through [Pointer injection](#pointer-injection) to switch, hide and show the sidebar, a Search click putting typed keys in the field; the other moves the group with Ctrl+Shift+B, Ctrl+Shift+F and `:WolfSidebarShowProject`. The sidebar's state is OCR of the sidebar band, and the group's is the raw pixels of the header bar's start, compared between captures of one run, so neither smoke navigates after its first capture.
+
+The click targets are derived from libadwaita 1.9.3's header metrics, not from a probe, which is safe only because a click that misses the group moves no sidebar and fails.
 
 #### `smoke_headless/terminal.rs`
 
@@ -405,7 +424,7 @@ The other two preview queries carry no such dependency: `prvan` and `ednap` each
 
 Its sample band must be derived from the pane-area constants rather than hardcoded, and must be paired with a control band in the counterpart pane. Without the control, a coincidence between the editor's own background and the theme's would satisfy the assertion.
 
-**No pointer smoke hardcodes a pixel.** The cell size is measured through the same metrics path, font size and line height the app is launched with, one probe click establishes the origin, and every later target is expressed as a delta from it. The derived pane origin is checked as a loud, self-checking precondition whose failure message names the candidate causes in order.
+**No pointer smoke hardcodes a pixel inside a pane.** The cell size is measured through the same metrics path, font size and line height the app is launched with, one probe click establishes the origin, and every later target is expressed as a delta from it. The header bar's toggle group is the exception, clicked at targets built from libadwaita's metrics, which [its smokes' entry](#smoke_headlesssidebar_togglesrs) says is safe there. The derived pane origin is checked as a loud, self-checking precondition whose failure message names the candidate causes in order.
 
 What a green run establishes is band membership, not equality: the derived origin need only land within `PANE_ORIGIN_TOLERANCE_PX` plus one cell, a band wider than a cell, so it cannot tell a stale constant from a current one. `PANE_ORIGIN_X_EXPECTED` and `PANE_ORIGIN_Y_EXPECTED` are bit-identical to an origin derived from a solo pointer-smoke run: its persisted probe readback from the smoke's temp working directory, crossed with a cell measured through the same `CellMetrics::for_font` path the app uses. Any change that could move a pane's chrome owes that derivation by hand, not a green tick.
 
@@ -572,9 +591,13 @@ Behavior this front-end has that is deliberately not smoked, with what covers it
 
 - **The primary menu popover.** The keystroke injector cannot click a header-bar menu button, and keyboard-navigating to it is too fragile to be worth the flake. The action namespace's own tests cover every item referencing a declared, implemented, non-reserved action and every label matching the command registry. Ten of the menu's items have their action activated end to end by the accelerator smokes, and the `:qa` smoke performs Close Window's action through the command drain rather than through the menu's own action. The two-window smoke reaches New Window's action through the palette and Quit's through Ctrl+Shift+Q, so the two `app.`-scoped rows are exercised by a route of their own.
 - **The About dialog.** Its widget layer is covered by nothing, and cannot be: the row is reachable only from the primary menu popover, itself a gap above. What covers it instead is where the weight is — the dialog's text is asserted from the compiled artifact, against the four fonts' licence phrases and, in [`about_notices.rs`](#about_noticesrs), the seven libraries', all re-typed locally rather than imported, so the assertion is about what ships; the row's status is pinned by `actions.rs`, and its `UiAction` by `command_action.rs`.
-- **The header-bar buttons' click path**, all four: no pointer smoke clicks the sidebar toggle, Back, Forward or Open. Every pointer smoke derives its target from a probe click Neovim reports back and a header-bar button offers no such probe, so the honest alternatives are a theme-owned inset pinned as a second measured constant with nothing to cross-check it, or distorting the buttons to buy hit margin. What covers them instead: the two chord smokes drive the same `gio` actions end to end, and [`nav_ui.rs`](../src/README.md#nav_uirs)'s tables cover the sensitivity and per-pane rules.
+- **The header-bar buttons' click path**, all three: no pointer smoke clicks Back, Forward or Open. A header-bar button offers no probe click for Neovim to report back, so the honest alternatives are a theme-owned inset pinned as a second measured constant with nothing to cross-check it, or distorting the buttons to buy hit margin. What covers them instead: the two chord smokes drive the same `gio` actions end to end, and [`nav_ui.rs`](../src/README.md#nav_uirs)'s tables cover the sensitivity and per-pane rules.
+
+  [`smoke_headless/sidebar_toggles.rs`](#smoke_headlesssidebar_togglesrs) does click the sidebar's toggle group from such an inset, because the group's state shows in its own pixels and its effect in the sidebar band, so a wrong target fails instead of passing.
+
+- **The toggle group's insensitivity in the empty state.** No smoke clicks the group in a project-less window. A Search click there would be refused by `search_panel::show_decision` either way, and a Files click would leave the sidebar hidden, but would set the preference a later folder shows; only `set_empty_state` desensitizing the group stops that, and nothing asserts it.
 - **Open File and Open Folder, including Open Folder's own path into a re-root.** Neither is driven: their callback bodies are trivial and the empty state's presentation is smoked. The re-root is not a gap either — an Open Recent palette row records the same pending re-root through the same `chdir_to`, and `open_recent_palette_row_reroots_the_window_under_cage` drives that settle into a re-rooted sidebar end to end. The save dialog is driven, under the in-process fallback [Smoke conventions](#smoke-conventions) requires.
-- **The search panel's other routes**: a result activated over a preview pane, a mouse click on a row, a file row's collapse toggle, and the page switcher's click path. `activation_route`'s table covers the preview route, and `row_activation` and `panel_rows` cover the toggle. No pointer smoke clicks the sidebar, for the header-bar buttons' reason above; the search-chord smoke reaches the stack's `visible-child-name` notify, which a switcher click also lands in, through `:WolfSidebarShowProject`.
+- **The search panel's other routes**: a result activated over a preview pane, a mouse click on a row, and a file row's collapse toggle. `activation_route`'s table covers the preview route, and `row_activation` and `panel_rows` cover the toggle. No pointer smoke clicks inside the sidebar, for the header-bar buttons' reason above.
 - **Unsaved-edit recovery as a separate scenario.** `crates/wolf-core/tests/swap_recovery.rs` covers the mechanism headlessly and deterministically. Rather than duplicate it with a flakier compositor version, the crash smoke — which already makes an unsaved edit and kills Neovim — asserts the marker on a pixel after recovery and its absence in the pre-crash control, which adds the one thing a core test structurally cannot have: the front-end driving the reopen itself.
 
 ## The `key_from_char` helper
