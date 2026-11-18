@@ -6,7 +6,8 @@
 //! No display, no Neovim and no ripgrep: every input is a hand-built
 //! `wolf_core::SearchMatch` or a literal, and every expected value is written out by
 //! hand rather than computed by the function under test. What the widgets do with
-//! these answers is the cage smokes' business, in `smoke_headless/sidebar.rs`.
+//! these answers is the cage smokes' business, in `smoke_headless/sidebar.rs` and
+//! `smoke_headless/search_toggles.rs`.
 //!
 //! The fixture paths are absolute and Unix-shaped (`/proj/...`), which is fine
 //! because this crate builds only on Linux.
@@ -18,7 +19,7 @@ use wolf_core::{Liveness, SearchMatch};
 use wolf_gnome::search_panel::{
     activation_route, char_budget, enter_action, first_line_row, panel_rows, row_activation,
     search_options_for, search_status, selection_after_rebuild, show_decision, EnterAction,
-    OpenRoute, PanelRow, RowActivation, ShowDecision,
+    OpenRoute, PanelRow, RowActivation, SearchToggles, ShowDecision,
 };
 use wolf_gnome::sidebar::{panel_visibility, PanelVisibility, SidebarPage};
 
@@ -123,28 +124,56 @@ fn show_decision_needs_an_open_project() {
 }
 
 #[test]
-fn search_options_are_literal_case_insensitive_over_all_files() {
+fn search_options_follow_the_toggles_over_all_files() {
     let query = " Zebra(cross ";
-    let options = search_options_for(query);
+    for case_sensitive in [false, true] {
+        for use_regex in [false, true] {
+            let toggles = SearchToggles {
+                case_sensitive,
+                use_regex,
+            };
+            let options = search_options_for(query, toggles);
+            assert_eq!(
+                options.query, query,
+                "with {toggles:?} the query must reach rg verbatim, surrounding spaces and case \
+                 included, because enter_action compares the raw entry text against the query a \
+                 search was started with"
+            );
+            assert_eq!(
+                options.use_regex, use_regex,
+                "with {toggles:?} use_regex must be the regex toggle's state. A constant here means \
+                 `.*` changes nothing rg is asked: with it stuck on, `foo(bar` stays an rg error \
+                 after the toggle is turned off; with it stuck off, `fo+bar` never matches \
+                 `foooobar`"
+            );
+            assert_eq!(
+                options.case_sensitive, case_sensitive,
+                "with {toggles:?} case_sensitive must be the case toggle's state. A constant here \
+                 means `Aa` changes nothing rg is asked: rg keeps `-i`, or keeps `-s`, whichever \
+                 way the toggle is set"
+            );
+            assert!(
+                options.all_files,
+                "with {toggles:?} all_files must be true: core's default searches only Markdown, \
+                 while the tree and the file picker list every file, so a .txt match would \
+                 silently never appear. No toggle widens it, so no toggle may narrow it either"
+            );
+        }
+    }
+}
+
+#[test]
+fn initial_toggles_are_regex_on_and_case_off() {
     assert_eq!(
-        options.query, query,
-        "the query must reach rg verbatim, surrounding spaces and case included, because \
-         enter_action compares the raw entry text against the query a search was started with"
-    );
-    assert!(
-        !options.use_regex,
-        "use_regex must be false: with no toggle, a regex default turns `(` into an rg error \
-         with no way back"
-    );
-    assert!(
-        !options.case_sensitive,
-        "case_sensitive must be false: with no toggle and no ignorecase() read, the forgiving \
-         default is the only one a user can reach"
-    );
-    assert!(
-        options.all_files,
-        "all_files must be true: core's default searches only Markdown, while the tree and the \
-         file picker list every file, so a .txt match would silently never appear"
+        SearchToggles::INITIAL,
+        SearchToggles {
+            case_sensitive: false,
+            use_regex: true,
+        },
+        "the panel must open with regex on and case off. Regex off departs from the \
+         counterpart's default, which is on. Case on makes a lowercase query miss every \
+         capitalised match; the counterpart seeds it from nvim's `ignorecase`, a blocking RPC \
+         this front-end never calls, so off is the forgiving answer"
     );
 }
 
@@ -496,6 +525,8 @@ fn selection_after_rebuild_follows_the_row_not_the_index() {
 #[test]
 fn enter_action_clears_runs_or_activates() {
     let rows = all_rows();
+    // Every run below used the toggles the panel holds now, so only the query decides rule 2.
+    let toggles = SearchToggles::INITIAL;
     // (query, ran_query, selected, want, why), every case over `all_rows()`.
     let cases = [
         ("", None, None, EnterAction::Clear, "an empty query clears"),
@@ -557,17 +588,19 @@ fn enter_action_clears_runs_or_activates() {
             "no selection activates the first line row, not row 0",
         ),
     ];
-    for (query, ran, selected, want, why) in cases {
+    for (query, ran_query, selected, want, why) in cases {
+        let ran = ran_query.map(|ran_query| (ran_query, toggles));
         assert_eq!(
-            enter_action(query, ran, selected, &rows),
+            enter_action(query, toggles, ran, selected, &rows),
             want,
-            "enter_action({query:?}, {ran:?}, {selected:?}) over the fixture rows: {why}"
+            "enter_action({query:?}, {toggles:?}, {ran:?}, {selected:?}) over the fixture rows: \
+             {why}"
         );
     }
 
     for selected in [None, Some(0)] {
         assert_eq!(
-            enter_action("zebra", Some("zebra"), selected, &[]),
+            enter_action("zebra", toggles, Some(("zebra", toggles)), selected, &[]),
             EnterAction::Nothing,
             "a search that found nothing must do nothing on Enter, selection {selected:?}; \
              Activate(0) would index an empty row list"
@@ -581,11 +614,86 @@ fn enter_action_clears_runs_or_activates() {
         &collapsed(&["A.md", "b/x.md", "c.md"]),
     );
     assert_eq!(
-        enter_action("zebra", Some("zebra"), None, &only_files),
+        enter_action(
+            "zebra",
+            toggles,
+            Some(("zebra", toggles)),
+            None,
+            &only_files
+        ),
         EnterAction::Nothing,
         "with every file collapsed and nothing selected there is no line to open, so Enter must \
          do nothing rather than toggle row 0"
     );
+}
+
+#[test]
+fn enter_action_reruns_an_unchanged_query_whose_toggles_changed() {
+    let rows = all_rows();
+    let initial = SearchToggles::INITIAL;
+    let case_flipped = SearchToggles {
+        case_sensitive: !initial.case_sensitive,
+        ..initial
+    };
+    let regex_flipped = SearchToggles {
+        use_regex: !initial.use_regex,
+        ..initial
+    };
+    // Both toggles away from their initial states, so a rule that compares against INITIAL
+    // rather than against the current toggles answers differently here.
+    let neither_initial = SearchToggles {
+        case_sensitive: true,
+        use_regex: false,
+    };
+    assert_ne!(
+        neither_initial, initial,
+        "the fixture toggles must differ from SearchToggles::INITIAL, or case (c) below cannot \
+         tell a rule that reads the current toggles from one that assumes the initial ones"
+    );
+
+    // (toggles now, toggles the live search ran with, want, why), all over "zebra" with row 3
+    // selected.
+    let cases = [
+        (
+            case_flipped,
+            initial,
+            EnterAction::RunSearch,
+            "(a) the case toggle changed since the run, so Enter re-runs; Activate(3) means rule 2 \
+             compares the query alone and Enter opens a row of a search the toggles no longer \
+             describe",
+        ),
+        (
+            regex_flipped,
+            initial,
+            EnterAction::RunSearch,
+            "(b) the regex toggle changed since the run, so Enter re-runs; Activate(3) means rule \
+             2 ignores use_regex, and turning `.*` off after an rg error could never search the \
+             query literally",
+        ),
+        (
+            neither_initial,
+            neither_initial,
+            EnterAction::Activate(3),
+            "(c) nothing changed since a run with non-initial toggles, so Enter opens the selected \
+             row; RunSearch means rule 2 compares the run against SearchToggles::INITIAL rather \
+             than against the toggles the panel holds",
+        ),
+        (
+            initial,
+            neither_initial,
+            EnterAction::RunSearch,
+            "(d) both toggles were set back to their initial states since the run, so Enter \
+             re-runs; Activate(3) means rule 2 compares the query alone",
+        ),
+    ];
+    for (now, ran, want, why) in cases {
+        assert_eq!(
+            enter_action("zebra", now, Some(("zebra", ran)), Some(3), &rows),
+            want,
+            "enter_action(\"zebra\", {now:?}, Some((\"zebra\", {ran:?})), Some(3)) over the \
+             fixture rows: {why}"
+        );
+    }
 }
 
 #[test]
@@ -657,7 +765,10 @@ fn activation_route_checks_liveness_before_the_preview() {
 
 #[test]
 fn search_status_arms_and_precedence() {
-    let idle = search_status(false, 0, 0, false, None);
+    // The toggles a run used are the toggles the panel holds, so no case below is stale.
+    let toggles = SearchToggles::INITIAL;
+    let ran = Some(toggles);
+    let idle = search_status(toggles, None, 0, 0, false, None);
     assert!(
         !idle.trim().is_empty(),
         "the idle status must say something"
@@ -668,7 +779,7 @@ fn search_status_arms_and_precedence() {
         (2, 2, false, None),
     ] {
         assert_eq!(
-            search_status(false, total, shown, complete, error),
+            search_status(toggles, None, total, shown, complete, error),
             idle,
             "before anything has run the status is the idle line whatever a stale session \
              reports ({total}, {shown}, {complete}, {error:?})"
@@ -676,31 +787,31 @@ fn search_status_arms_and_precedence() {
     }
 
     let error = "WOLF_RG_BIN unset";
-    let failed_complete = search_status(true, 0, 0, true, Some(error));
+    let failed_complete = search_status(toggles, ran, 0, 0, true, Some(error));
     assert!(
         failed_complete.contains(error),
         "a complete session carrying an error must show the error, got {failed_complete:?}; a \
          no-matches line here sends the user after a better query instead of a missing ripgrep"
     );
-    let failed_running = search_status(true, 3, 3, false, Some(error));
+    let failed_running = search_status(toggles, ran, 3, 3, false, Some(error));
     assert!(
         failed_running.contains(error),
         "the error arm precedes the running arm, so an error shows even before completion, got \
          {failed_running:?}"
     );
 
-    let running = search_status(true, 7, 7, false, None);
+    let running = search_status(toggles, ran, 7, 7, false, None);
     assert!(
         running.contains("7 matches"),
         "a running search shows its count so far, got {running:?}"
     );
     assert_ne!(
         running,
-        search_status(true, 7, 7, true, None),
+        search_status(toggles, ran, 7, 7, true, None),
         "a running search and a finished one with the same count must read differently"
     );
 
-    let none_found = search_status(true, 0, 0, true, None);
+    let none_found = search_status(toggles, ran, 0, 0, true, None);
     assert!(
         !none_found.trim().is_empty(),
         "a finished empty search must say so"
@@ -710,21 +821,129 @@ fn search_status_arms_and_precedence() {
         "a finished search with no matches must not read as a search never run"
     );
 
-    let capped = search_status(true, 250, 200, true, None);
+    let capped = search_status(toggles, ran, 250, 200, true, None);
     assert!(
         capped.contains("200") && capped.contains("250 matches"),
         "a capped result must name both the shown count and the total, got {capped:?}"
     );
 
-    let one = search_status(true, 1, 1, true, None);
+    let one = search_status(toggles, ran, 1, 1, true, None);
     assert!(
         one.contains("1 match") && !one.contains("1 matches"),
         "one result is spelled `1 match`, got {one:?}"
     );
-    let three = search_status(true, 3, 3, true, None);
+    let three = search_status(toggles, ran, 3, 3, true, None);
     assert!(
         three.contains("3 matches"),
         "several results are spelled `N matches`, got {three:?}"
+    );
+}
+
+#[test]
+fn search_status_says_when_the_toggles_changed_since_the_run() {
+    // R is what the live search ran with; each T differs from it in one toggle.
+    let ran = SearchToggles::INITIAL;
+    let case_changed = SearchToggles {
+        case_sensitive: !ran.case_sensitive,
+        ..ran
+    };
+    let regex_changed = SearchToggles {
+        use_regex: !ran.use_regex,
+        ..ran
+    };
+
+    let stale = search_status(case_changed, Some(ran), 3, 3, true, None);
+    let current = search_status(ran, Some(ran), 3, 3, true, None);
+    let idle = search_status(ran, None, 0, 0, false, None);
+    let none_found = search_status(ran, Some(ran), 0, 0, true, None);
+    assert!(
+        !stale.trim().is_empty(),
+        "a status whose toggles changed since the run must say something"
+    );
+    assert_ne!(
+        stale, current,
+        "with the case toggle changed since the run, the status must not read as the run's own \
+         count {current:?}: the rows below it answer a search the toggles no longer describe, \
+         and only the status line can say so. Equal lines mean the stale arm is missing, or it \
+         fires on a run having happened rather than on the toggles differing"
+    );
+    assert!(
+        !stale.contains("3 matches"),
+        "the stale status must not carry the run's count, got {stale:?}: a count reads as the \
+         answer to the toggles now shown"
+    );
+    assert_ne!(
+        stale, idle,
+        "the stale status must not read as the idle line, which says nothing has run; rows are \
+         still drawn under it"
+    );
+    assert_ne!(
+        stale, none_found,
+        "the stale status must not read as a search that found nothing"
+    );
+    assert_eq!(
+        search_status(regex_changed, Some(ran), 3, 3, true, None),
+        stale,
+        "a changed regex toggle must turn the status stale as a changed case toggle does; a \
+         different line means the comparison reads case_sensitive alone"
+    );
+    assert_eq!(
+        search_status(
+            case_changed,
+            Some(ran),
+            0,
+            0,
+            true,
+            Some("rg exited with code 2")
+        ),
+        stale,
+        "the stale arm must come before the error arm: rg's error belongs to a search the \
+         toggles no longer describe, and turning `.*` off is exactly how a user recovers from it. \
+         An error line here means the stale arm sits below the error arm"
+    );
+    assert_eq!(
+        search_status(case_changed, Some(ran), 7, 7, false, None),
+        stale,
+        "the stale arm must come before the running arm: a count so far describes the old \
+         toggles too"
+    );
+    assert_eq!(
+        search_status(case_changed, None, 3, 3, true, None),
+        idle,
+        "with nothing run the status is the idle line whatever the toggles are; the stale line \
+         here means the stale arm sits above the idle arm, and a cleared panel would say \
+         `press Enter` over no search at all"
+    );
+    assert!(
+        current.contains("3 matches"),
+        "with the toggles unchanged since the run the status is the run's count, got \
+         {current:?}; the stale line here means the stale arm fires without comparing"
+    );
+}
+
+#[test]
+fn search_status_reports_rg_s_error_exit() {
+    let toggles = SearchToggles::INITIAL;
+    let failed = search_status(
+        toggles,
+        Some(toggles),
+        0,
+        0,
+        true,
+        Some("rg exited with code 2"),
+    );
+    assert!(
+        failed.contains("rg exited with code 2"),
+        "a regex rg cannot parse, such as `foo(bar`, makes rg exit 2 with no match, and core \
+         reports that as a complete session carrying this error. The status must show it, got \
+         {failed:?}"
+    );
+    assert_ne!(
+        failed,
+        search_status(toggles, Some(toggles), 0, 0, true, None),
+        "rg's error exit must not read as a search that found nothing: that sends the user after \
+         a different query when the pattern itself is invalid. Equal lines mean the no-matches \
+         arm comes before the error arm"
     );
 }
 

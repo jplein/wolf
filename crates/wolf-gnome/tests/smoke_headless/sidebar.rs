@@ -64,8 +64,8 @@ pub(crate) const PROJSEARCH_FILE_START: &str = "psrxray.md";
 /// which sidebar page is on screen.
 ///
 /// Inside the sidebar band only the file tree can draw it. The panel draws the
-/// query, the status line and the ONE matched file, [`PROJSEARCH_FILE_TARGET`], and
-/// the start file never matches; the `:e` echo and the statusbar strip that also
+/// query, its toggles' labels `Aa` and `.*`, the status line and the ONE matched
+/// file, [`PROJSEARCH_FILE_TARGET`], and the start file never matches; the `:e` echo and the statusbar strip that also
 /// spell the name sit in the pane band. So in the sidebar band its absence means the
 /// Search page replaced the tree, and its presence means the Files page is back.
 pub(crate) const PROJSEARCH_OCR_TREE_ROW: &str = "psrxray";

@@ -18,6 +18,21 @@
 //! CLEARS the panel and is never run, because core builds `rg -F -e ''`, which
 //! matches every line of every file under the search root.
 //!
+//! A toggle runs nothing either. It turns the status line stale while the rows stay
+//! drawn and clickable, and the next Enter re-runs, because [`enter_action`] compares
+//! the toggles as well as the query against the live session's.
+//!
+//! ## The toggles
+//!
+//! Under the field, left-aligned and above the status line, sit `Aa` (match case)
+//! and `.*` (regular expression), the counterpart's labels, each with a tooltip
+//! saying so. [`SearchToggles::INITIAL`] gives their states on opening, and says
+//! why. Every file is still searched; see [`search_options_for`].
+//!
+//! Neither toggle takes focus on click. A focused toggle takes Enter as its own
+//! activation and flips itself back, so the Enter after a click must still reach the
+//! field.
+//!
 //! ## A line row is a LOCATION, not a file
 //!
 //! Activating a line row calls [`WolfCore::open_at`](wolf_core::WolfCore::open_at)
@@ -49,8 +64,8 @@
 //! ordered input channel; `liveness` is a lock-free atomic read. `preview_file` is
 //! one of the ten blocking calls `crate::window` inventories, and this panel adds a
 //! trigger for it rather than a call. `WolfCore::ignorecase()`, which IS a blocking
-//! RPC, is deliberately never called: it would buy only the seed for a
-//! case-sensitivity toggle this front-end does not ship.
+//! RPC, is deliberately never called, so the case toggle starts off instead of being
+//! seeded from it.
 //!
 //! ## Streaming, and what a stale `rg` cannot do
 //!
@@ -77,17 +92,17 @@
 //!   its rows and any running `rg` alone. The counterpart's field has no Escape
 //!   behaviour of its own.
 //! - **Focus stays in the field.** Up and Down move the selection, and a second
-//!   Enter on an unchanged query opens it. There, Return always re-runs and the
-//!   outline is reached with Tab; here a streaming rebuild replaces every row, so a
-//!   focused row would be destroyed.
-//! - **No case, regex or file-type toggles**, the existing GTK decision; see
-//!   [`search_options_for`]. The case toggle's seed would be the blocking
-//!   `ignorecase()`.
+//!   Enter on an unchanged query and unchanged toggles opens it. There, Return always
+//!   re-runs and the outline is reached with Tab; here a streaming rebuild replaces
+//!   every row, so a focused row would be destroyed.
+//! - **No file-type toggle, and the case toggle starts off.** Every file is searched,
+//!   as [`search_options_for`] says, and the case toggle is not seeded from the
+//!   blocking `ignorecase()`.
 //! - **A status line and a `SEARCH_MAX_ROWS` cap on line rows**, which the
 //!   counterpart does not have.
 //!
-//! Its pure, display-free seams are [`show_decision`], [`search_options_for`],
-//! [`panel_rows`], [`char_budget`], [`first_line_row`], [`selection_after_rebuild`],
+//! Its pure, display-free seams are [`show_decision`], [`SearchToggles`],
+//! [`search_options_for`], [`panel_rows`], [`char_budget`], [`first_line_row`], [`selection_after_rebuild`],
 //! [`enter_action`], [`row_activation`], [`activation_route`] and [`search_status`],
 //! tested in `crates/wolf-gnome/tests/sidebar_search.rs`.
 
@@ -101,7 +116,8 @@ use adw::prelude::*;
 use gtk::glib;
 
 use wolf_core::{
-    context_window, project, Liveness, SearchMatch, SearchOptions, SearchSession, WakeFn, WolfCore,
+    context_window, project, Liveness, SearchMatch, SearchOptions, SearchReadGuard, SearchSession,
+    WakeFn, WolfCore,
 };
 
 use crate::picker::{next_selection, FocusTarget};
@@ -171,6 +187,21 @@ const SEARCH_ERROR_PREFIX: &str = "Search failed: ";
 /// Prefix of the status line while `rg` is still running.
 const SEARCH_RUNNING_PREFIX: &str = "Searching… ";
 
+/// The status line while a toggle differs from the one the live search ran with.
+const SEARCH_STALE_STATUS: &str = "Options changed: press Enter";
+
+/// The case toggle's label.
+const CASE_TOGGLE_LABEL: &str = "Aa";
+
+/// The case toggle's tooltip.
+const CASE_TOGGLE_TOOLTIP: &str = "Match case";
+
+/// The regex toggle's label.
+const REGEX_TOGGLE_LABEL: &str = ".*";
+
+/// The regex toggle's tooltip.
+const REGEX_TOGGLE_TOOLTIP: &str = "Use regular expression";
+
 /// Whether the panel may be shown at all.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShowDecision {
@@ -204,17 +235,34 @@ pub fn show_decision(project_open: bool) -> ShowDecision {
     }
 }
 
-/// The [`SearchOptions`] this front-end ships for `query`: a LITERAL,
-/// CASE-INSENSITIVE search over EVERY file.
+/// The states of the panel's two toggles, which decide how the next search treats
+/// its query.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SearchToggles {
+    /// Match case (rg `-s`) rather than ignore it (rg `-i`).
+    pub case_sensitive: bool,
+    /// Treat the query as a regular expression rather than a literal (rg `-F`).
+    pub use_regex: bool,
+}
+
+impl SearchToggles {
+    /// The states the panel opens with: regex on and case off.
+    ///
+    /// Regex on matches the counterpart's default. The counterpart seeds case from
+    /// nvim's `ignorecase`, which is a blocking RPC this crate never calls, so case
+    /// starts off, the forgiving answer.
+    pub const INITIAL: Self = Self {
+        case_sensitive: false,
+        use_regex: true,
+    };
+}
+
+/// The [`SearchOptions`] this front-end ships for `query` under `toggles`: the
+/// toggles decide `case_sensitive` and `use_regex`, over EVERY file.
 ///
-/// All three are decisions, and none of them is exposed as a toggle:
-///
-/// - `use_regex: false` — without a button to turn it off, a regex default is a
-///   trap: `foo(bar` gives rg exit code 2, an error status, zero results and no way
-///   to recover. A literal search is total over every query string.
-/// - `case_sensitive: false` — with no toggle and no `ignorecase()` read (that call
-///   is a blocking RPC this crate deliberately does not add), the forgiving default
-///   is the only one a user can reach.
+/// - `use_regex` and `case_sensitive` are the toggles'. An invalid pattern such as
+///   `foo(bar` makes rg exit 2, which [`search_status`] reports as an error; turning
+///   the regex toggle off and pressing Enter then searches it literally.
 /// - `all_files: true` — core's DEFAULT restricts to `--glob '*.md' --glob
 ///   '*.markdown'`, while this front-end's file picker and tree sidebar list every
 ///   file in the project. A "Search in project" that silently searched only
@@ -225,11 +273,11 @@ pub fn show_decision(project_open: bool) -> ShowDecision {
 /// because [`enter_action`] compares the RAW field text against the query the live
 /// session was started with.
 #[must_use]
-pub fn search_options_for(query: &str) -> SearchOptions {
+pub fn search_options_for(query: &str, toggles: SearchToggles) -> SearchOptions {
     SearchOptions {
         query: query.to_string(),
-        use_regex: false,
-        case_sensitive: false,
+        use_regex: toggles.use_regex,
+        case_sensitive: toggles.case_sensitive,
         all_files: true,
     }
 }
@@ -430,9 +478,10 @@ pub enum EnterAction {
 ///
 /// 1. A query whose `trim()` is empty CLEARS, and is never run: core builds
 ///    `rg -F -e ''`, which matches every line of every file under the search root.
-/// 2. A query the live session was not started with runs a fresh search. The
-///    comparison is RAW, so a trailing space is a different literal search, exactly
-///    as it is to `rg -F`.
+/// 2. A query or toggles the live session was not started with runs a fresh
+///    search; `ran` is that session's query and toggles, or `None`. The query
+///    comparison is RAW, so a trailing space is a different search, exactly as it
+///    is to rg.
 /// 3. An in-range `selected` row is activated, a file row included (which toggles
 ///    it).
 /// 4. Otherwise the first line row is activated, so "type a query, Enter, Enter"
@@ -441,14 +490,15 @@ pub enum EnterAction {
 #[must_use]
 pub fn enter_action(
     query: &str,
-    ran_query: Option<&str>,
+    toggles: SearchToggles,
+    ran: Option<(&str, SearchToggles)>,
     selected: Option<usize>,
     rows: &[PanelRow],
 ) -> EnterAction {
     if query.trim().is_empty() {
         return EnterAction::Clear;
     }
-    if ran_query != Some(query) {
+    if ran != Some((query, toggles)) {
         return EnterAction::RunSearch;
     }
     if let Some(index) = selected.filter(|index| *index < rows.len()) {
@@ -547,25 +597,36 @@ pub fn activation_route(liveness: Option<Liveness>, preview_win: Option<i64>) ->
 
 /// The one-line status drawn under the field.
 ///
-/// Arms in precedence order: nothing run yet; the session carries an error; `rg` is
-/// still running; finished with nothing found; finished but capped; finished and
-/// complete.
+/// `toggles` is the panel's current toggles, and `ran` the toggles the live search
+/// ran with, or `None` when nothing has run or the panel was cleared.
+///
+/// Arms in precedence order: nothing run yet; the toggles changed since the run;
+/// the session carries an error; `rg` is still running; finished with nothing
+/// found; finished but capped; finished and complete.
 ///
 /// **The error arm precedes the completeness arms deliberately**: a session that
 /// failed before it started is ALSO `complete`, and reporting it as "no matches"
 /// would send a user looking for a better query when what they need is a
 /// provisioned ripgrep. The `ran` guard comes first for the mirror-image reason: a
 /// stale session's counts and error must not be reported over a cleared panel.
+///
+/// The stale arm sits above the error and count arms because they describe a search
+/// the toggles no longer match; turning regex off is how a user recovers from rg's
+/// error, and its message must not outlive that.
 #[must_use]
 pub fn search_status(
-    ran: bool,
+    toggles: SearchToggles,
+    ran: Option<SearchToggles>,
     total_matches: usize,
     shown_rows: usize,
     complete: bool,
     error: Option<&str>,
 ) -> String {
-    if !ran {
+    let Some(ran) = ran else {
         return SEARCH_IDLE_STATUS.to_string();
+    };
+    if ran != toggles {
+        return SEARCH_STALE_STATUS.to_string();
     }
     if let Some(error) = error {
         return format!("{SEARCH_ERROR_PREFIX}{error}");
@@ -598,15 +659,37 @@ fn match_count(total_matches: usize) -> String {
     }
 }
 
+/// What [`search_status`] needs of a session, read under one guard.
+struct SessionSummary {
+    /// Every match so far.
+    total: usize,
+    /// Whether `rg` has finished.
+    complete: bool,
+    /// The session's error, if any.
+    error: Option<String>,
+}
+
+impl SessionSummary {
+    /// Reads the summary out of a session's read guard.
+    fn of(view: &SearchReadGuard) -> Self {
+        Self {
+            total: view.matches.len(),
+            complete: view.complete,
+            error: view.error.clone(),
+        }
+    }
+}
+
 /// The panel's shared, interior-mutable state. All access happens on the single
 /// GTK main thread, so `Cell`/`RefCell` (not a `Mutex`) is sufficient.
 struct PanelInner {
     /// The live content-search session, or `None` when nothing has been run or the
     /// panel was cleared. **The DROP is the cancellation**: it kills the `rg` child.
     search: RefCell<Option<SearchSession>>,
-    /// The query [`PanelInner::search`] was started with, or `None`.
-    /// [`enter_action`] compares the field's raw text against it.
-    ran_query: RefCell<Option<String>>,
+    /// The query and toggles [`PanelInner::search`] was started with, or `None`.
+    /// [`enter_action`] compares the field's raw text and the current toggles against
+    /// them, and [`search_status`] the toggles.
+    ran: RefCell<Option<(String, SearchToggles)>>,
     /// Set by a run and consumed by the next rebuild, so a new search preselects
     /// its first line row.
     reset_selection: Cell<bool>,
@@ -622,7 +705,11 @@ struct PanelInner {
     panel: gtk::Box,
     /// The search field. It has NO `connect_search_changed`: typing runs nothing.
     entry: gtk::SearchEntry,
-    /// The one-line status under the field, drawn from [`search_status`].
+    /// The match-case toggle, the source of [`SearchToggles::case_sensitive`].
+    case_toggle: gtk::ToggleButton,
+    /// The regular-expression toggle, the source of [`SearchToggles::use_regex`].
+    regex_toggle: gtk::ToggleButton,
+    /// The one-line status under the toggles, drawn from [`search_status`].
     status: gtk::Label,
     /// The scrolled window over [`PanelInner::list`].
     scroller: gtk::ScrolledWindow,
@@ -688,8 +775,7 @@ impl PanelInner {
     /// discipline).
     fn rebuild(&self, budget: usize) {
         self.budget.set(budget);
-        let ran = self.ran_query.borrow().is_some();
-        let (rows, status) = {
+        let (rows, summary) = {
             let search = self.search.borrow();
             match search.as_ref() {
                 Some(session) => {
@@ -700,17 +786,12 @@ impl PanelInner {
                         SEARCH_MAX_ROWS,
                         &self.collapsed.borrow(),
                     );
-                    let total = view.matches.len();
-                    let complete = view.complete;
-                    let error = view.error.clone();
-                    drop(view);
-                    let shown = total.min(SEARCH_MAX_ROWS);
-                    let status = search_status(ran, total, shown, complete, error.as_deref());
-                    (rows, status)
+                    (rows, Some(SessionSummary::of(&view)))
                 }
-                None => (Vec::new(), search_status(false, 0, 0, false, None)),
+                None => (Vec::new(), None),
             }
         };
+        let status = self.status_text(summary.as_ref());
 
         // Captured before the rows are replaced, so the selection follows its row.
         let previous = self.selected_row();
@@ -728,6 +809,43 @@ impl PanelInner {
         if let Some(index) = selection {
             self.select_index(index, false);
         }
+    }
+
+    /// The toggles' current states.
+    fn toggles(&self) -> SearchToggles {
+        SearchToggles {
+            case_sensitive: self.case_toggle.is_active(),
+            use_regex: self.regex_toggle.is_active(),
+        }
+    }
+
+    /// The status line for the session `summary` describes (`None` when there is no
+    /// session), through [`search_status`].
+    fn status_text(&self, summary: Option<&SessionSummary>) -> String {
+        let toggles = self.toggles();
+        let Some(summary) = summary else {
+            return search_status(toggles, None, 0, 0, false, None);
+        };
+        let ran = self.ran.borrow().as_ref().map(|(_, ran)| *ran);
+        search_status(
+            toggles,
+            ran,
+            summary.total,
+            summary.total.min(SEARCH_MAX_ROWS),
+            summary.complete,
+            summary.error.as_deref(),
+        )
+    }
+
+    /// Redraws the status line alone, leaving the rows and the selection as they are.
+    fn update_status(&self) {
+        let summary = {
+            let search = self.search.borrow();
+            search
+                .as_ref()
+                .map(|session| SessionSummary::of(&session.read()))
+        };
+        self.status.set_text(&self.status_text(summary.as_ref()));
     }
 
     /// The row under the list's selection, cloned out of [`PanelInner::rows`].
@@ -779,30 +897,33 @@ impl PanelInner {
     /// Routes one `Enter` through [`enter_action`].
     fn on_enter(&self) {
         let query = self.entry.text().to_string();
-        let ran_query = self.ran_query.borrow().clone();
+        let toggles = self.toggles();
+        let ran = self.ran.borrow().clone();
         let selected = self
             .list
             .selected_row()
             .and_then(|row| usize::try_from(row.index()).ok());
         let action = {
             let rows = self.rows.borrow();
-            enter_action(&query, ran_query.as_deref(), selected, &rows)
+            let ran = ran.as_ref().map(|(query, ran)| (query.as_str(), *ran));
+            enter_action(&query, toggles, ran, selected, &rows)
         };
         match action {
-            EnterAction::RunSearch => self.run_search(query),
+            EnterAction::RunSearch => self.run_search(query, toggles),
             EnterAction::Clear => self.clear(),
             EnterAction::Activate(index) => self.activate(index),
             EnterAction::Nothing => {}
         }
     }
 
-    /// Starts a fresh [`SearchSession`] for `query`, killing the previous one first.
+    /// Starts a fresh [`SearchSession`] for `query` under `toggles`, killing the
+    /// previous one first.
     ///
     /// **The statement order is load-bearing.** The old session is taken in a
     /// statement of its own (so no `RefCell` borrow is live afterwards) and dropped
     /// BEFORE `start_search` is called, because the drop is what kills the old `rg`
     /// child — otherwise two ripgreps would run over the same tree at once.
-    fn run_search(&self, query: String) {
+    fn run_search(&self, query: String, toggles: SearchToggles) {
         let previous = self.search.borrow_mut().take();
         drop(previous);
 
@@ -811,10 +932,10 @@ impl PanelInner {
             let Some(core) = core_ref.as_ref() else {
                 return;
             };
-            core.start_search(search_options_for(&query), self.wake.clone())
+            core.start_search(search_options_for(&query, toggles), self.wake.clone())
         };
         *self.search.borrow_mut() = Some(session);
-        *self.ran_query.borrow_mut() = Some(query);
+        *self.ran.borrow_mut() = Some((query, toggles));
         self.reset_selection.set(true);
         self.gate.borrow_mut().reset_version_tracking();
         // An errored run's first refresh comes from here: `start_search` fires `wake()` before returning
@@ -826,7 +947,7 @@ impl PanelInner {
     fn clear(&self) {
         let previous = self.search.borrow_mut().take();
         drop(previous);
-        *self.ran_query.borrow_mut() = None;
+        *self.ran.borrow_mut() = None;
         let budget = self.current_budget();
         self.rebuild(budget);
     }
@@ -971,6 +1092,17 @@ fn row_widget(row: &PanelRow) -> gtk::ListBoxRow {
     list_row
 }
 
+/// One of the panel's toggles, in the default button style. It never takes focus on
+/// click, so the next Enter still reaches the field (see the module docs).
+fn search_toggle(label: &str, tooltip: &str, active: bool) -> gtk::ToggleButton {
+    gtk::ToggleButton::builder()
+        .label(label)
+        .tooltip_text(tooltip)
+        .active(active)
+        .focus_on_click(false)
+        .build()
+}
+
 /// A handle to the built search panel, used by [`crate::sidebar`] to place and
 /// relay it, by the shell to focus it, and by the window to gate key forwarding and
 /// to cancel `rg` on close.
@@ -1034,6 +1166,24 @@ pub fn build(core: &Rc<RefCell<Option<WolfCore>>>, area: FocusTarget) -> SearchP
         .hexpand(true)
         .build();
 
+    let case_toggle = search_toggle(
+        CASE_TOGGLE_LABEL,
+        CASE_TOGGLE_TOOLTIP,
+        SearchToggles::INITIAL.case_sensitive,
+    );
+    let regex_toggle = search_toggle(
+        REGEX_TOGGLE_LABEL,
+        REGEX_TOGGLE_TOOLTIP,
+        SearchToggles::INITIAL.use_regex,
+    );
+    let toggle_row = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(SEARCH_PANEL_SPACING)
+        .halign(gtk::Align::Start)
+        .build();
+    toggle_row.append(&case_toggle);
+    toggle_row.append(&regex_toggle);
+
     let status = gtk::Label::builder()
         .label(SEARCH_IDLE_STATUS)
         .halign(gtk::Align::Start)
@@ -1058,6 +1208,7 @@ pub fn build(core: &Rc<RefCell<Option<WolfCore>>>, area: FocusTarget) -> SearchP
     panel.set_margin_start(SEARCH_PANEL_SPACING);
     panel.set_margin_end(SEARCH_PANEL_SPACING);
     panel.append(&entry);
+    panel.append(&toggle_row);
     panel.append(&status);
     panel.append(&scroller);
 
@@ -1070,7 +1221,7 @@ pub fn build(core: &Rc<RefCell<Option<WolfCore>>>, area: FocusTarget) -> SearchP
 
     let inner = Rc::new(PanelInner {
         search: RefCell::new(None),
-        ran_query: RefCell::new(None),
+        ran: RefCell::new(None),
         reset_selection: Cell::new(false),
         // Seeded hidden: the sidebar relays the real visibility before the window is presented.
         gate: RefCell::new(TreeRefreshGate::new(false)),
@@ -1079,6 +1230,8 @@ pub fn build(core: &Rc<RefCell<Option<WolfCore>>>, area: FocusTarget) -> SearchP
         rows: RefCell::new(Vec::new()),
         panel,
         entry: entry.clone(),
+        case_toggle: case_toggle.clone(),
+        regex_toggle: regex_toggle.clone(),
         status,
         scroller,
         list: list.clone(),
@@ -1107,6 +1260,16 @@ pub fn build(core: &Rc<RefCell<Option<WolfCore>>>, area: FocusTarget) -> SearchP
         entry.connect_activate(move |_entry| {
             if let Some(inner) = inner_weak.upgrade() {
                 inner.on_enter();
+            }
+        });
+    }
+
+    // A toggle runs nothing: it only redraws the status line, which turns stale until Enter re-runs.
+    for toggle in [&case_toggle, &regex_toggle] {
+        let inner_weak = Rc::downgrade(&inner);
+        toggle.connect_toggled(move |_toggle| {
+            if let Some(inner) = inner_weak.upgrade() {
+                inner.update_status();
             }
         });
     }

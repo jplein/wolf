@@ -168,6 +168,7 @@ mod preview_render;
 mod recovery;
 mod restore;
 mod scrub_lists;
+mod search_toggles;
 mod sidebar;
 mod sidebar_toggles;
 mod terminal;
@@ -470,8 +471,9 @@ const SIDEBAR_FILLER_COUNT: usize = 9;
 /// `stallfixture`, `projsearchalfa`/`projsearchdelta`/`zzmango`/`psrxray`, `ortango`,
 /// `navbackalfa`/`navbackbravo`, `sbtangoleaf`/`sidebarkeepalfa`,
 /// `cdtango`/`cdrootzulu`/`cdouterhome`, `zzbodyoscar`/`zzothertango`/`zzlivekilo`,
-/// the one ORDINARY WORD in the whole table, `preview`,
-/// `zzunsavedromeo`/`zzcoversierra`, `zzdrawermark`/`zzeditorfill`, and
+/// the ordinary words `preview`, `changed`, `exited` and `no matches`,
+/// `zzunsavedromeo`/`zzcoversierra`, `zzdrawermark`/`zzeditorfill`,
+/// `zzlemur`/`zzbison`/`zzheron`/`zzwalrus`, and
 /// `zztabalfa`/`zztabbravo` — so a stray filler can never satisfy one of those
 /// either. `sidebar_filler_names_cannot_satisfy_any_smoke_assertion`
 /// enforces this mechanically against `ASSERTED_OCR_TERMS`, which holds the consts

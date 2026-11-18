@@ -51,7 +51,7 @@ use crate::redraw::WakeFn;
 const SEARCH_BATCH: usize = 128;
 
 /// The knobs that shape a single content search, set by the search panel's text
-/// field + three toggle buttons.
+/// field and its toggle buttons.
 #[derive(Clone, Debug)]
 pub struct SearchOptions {
     /// The search text (a literal when `use_regex` is `false`, else a regex).
@@ -60,8 +60,8 @@ pub struct SearchOptions {
     /// treats it literally (rg `-F`).
     pub use_regex: bool,
     /// `true` matches case-sensitively (rg `-s`); `false` matches
-    /// case-insensitively (rg `-i`). Seeded from nvim's `ignorecase`, then owned
-    /// by this search only.
+    /// case-insensitively (rg `-i`). A front-end may seed it from nvim's
+    /// `ignorecase`.
     pub case_sensitive: bool,
     /// `true` searches every file outside `.git/` and `.wolf/`; `false` (the
     /// default) restricts that set to Markdown (`--glob '*.md' --glob '*.markdown'`).

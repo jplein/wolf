@@ -43,7 +43,8 @@ pub(crate) const TG_HEADING: &str = "# HOLDFIR";
 /// heading of the file the editor holds.
 ///
 /// Neither page of the sidebar draws it. The tree draws file names, and the search panel draws
-/// the query, its status line and the one matching line, which [`TG_HEADING`] is not.
+/// the query, its toggles' labels `Aa` and `.*`, its status line and the one matching line,
+/// which [`TG_HEADING`] is not.
 pub(crate) const TG_OCR_KEEP: &str = "holdfir";
 
 /// libadwaita 1.9.3's padding of the header bar's box at its start edge.

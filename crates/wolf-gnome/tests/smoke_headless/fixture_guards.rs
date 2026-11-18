@@ -57,6 +57,11 @@ use super::restore::{
     TWOWIN_NEW_WINDOW_QUERY, TWOWIN_READBACK_B_NAME, TWOWIN_READBACK_R2_NAME, TWOWIN_SECOND_FILE,
     TWOWIN_SECOND_NAME, TWOWIN_SUBDIR,
 };
+use super::search_toggles::{
+    ST_CASE_LOWER_FILE, ST_CASE_UPPER_FILE, ST_OCR_CASE_LOWER, ST_OCR_CASE_UPPER,
+    ST_OCR_NO_MATCHES, ST_OCR_PAREN, ST_OCR_REGEX, ST_OCR_RG_EXITED, ST_OCR_STALE, ST_PAREN_FILE,
+    ST_REGEX_FILE,
+};
 use super::sidebar::{
     search_target_fixture_body, CD_BASE_FILE, CD_OCR_ROOTED, CD_OCR_ROOT_NODE,
     CD_OCR_UNABBREVIATED, CD_OUTER_DIR, CD_READBACK_NAME, CD_ROOT_DIR, CD_START_DIR,
@@ -584,6 +589,43 @@ const ASSERTED_OCR_TERMS: &[(&str, &str, &str)] = &[
         "toggle_clicks_show_switch_and_hide_the_sidebar_under_cage",
     ),
     (
+        ST_OCR_CASE_LOWER,
+        "ST_OCR_CASE_LOWER",
+        "case_toggle_sits_under_the_field_and_narrows_the_match_under_cage",
+    ),
+    (
+        ST_OCR_CASE_UPPER,
+        "ST_OCR_CASE_UPPER",
+        "case_toggle_sits_under_the_field_and_narrows_the_match_under_cage",
+    ),
+    // The search-toggle smokes share the status terms; each row names the smoke that reads it
+    // present.
+    (
+        ST_OCR_REGEX,
+        "ST_OCR_REGEX",
+        "regex_toggle_switches_between_pattern_and_literal_under_cage",
+    ),
+    (
+        ST_OCR_STALE,
+        "ST_OCR_STALE",
+        "regex_toggle_switches_between_pattern_and_literal_under_cage",
+    ),
+    (
+        ST_OCR_NO_MATCHES,
+        "ST_OCR_NO_MATCHES",
+        "regex_toggle_switches_between_pattern_and_literal_under_cage",
+    ),
+    (
+        ST_OCR_PAREN,
+        "ST_OCR_PAREN",
+        "invalid_regex_fails_in_the_status_line_until_regex_is_off_under_cage",
+    ),
+    (
+        ST_OCR_RG_EXITED,
+        "ST_OCR_RG_EXITED",
+        "invalid_regex_fails_in_the_status_line_until_regex_is_off_under_cage",
+    ),
+    (
         CD_OCR_ROOTED,
         "CD_OCR_ROOTED",
         "typed_cd_reroots_the_sidebar_under_cage",
@@ -909,6 +951,26 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
         TG_OPEN_FILE,
         "TG_OPEN_FILE",
         "toggle_clicks_show_switch_and_hide_the_sidebar_under_cage",
+    ),
+    (
+        ST_CASE_LOWER_FILE,
+        "ST_CASE_LOWER_FILE",
+        "case_toggle_sits_under_the_field_and_narrows_the_match_under_cage",
+    ),
+    (
+        ST_CASE_UPPER_FILE,
+        "ST_CASE_UPPER_FILE",
+        "case_toggle_sits_under_the_field_and_narrows_the_match_under_cage",
+    ),
+    (
+        ST_REGEX_FILE,
+        "ST_REGEX_FILE",
+        "regex_toggle_switches_between_pattern_and_literal_under_cage",
+    ),
+    (
+        ST_PAREN_FILE,
+        "ST_PAREN_FILE",
+        "invalid_regex_fails_in_the_status_line_until_regex_is_off_under_cage",
     ),
     (
         STALL_FILE,
@@ -1456,9 +1518,13 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
 /// `cdouterhome` ([`CD_OCR_UNABBREVIATED`]); `statusalfa` ([`STATUS_OCR_A`]),
 /// `statusbravo` ([`STATUS_OCR_B`]) and `statusready` ([`STATUS_OCR_MARKER`]);
 /// `zzbodyoscar` ([`PREVIEW_OCR_BODY`]), `zzothertango` ([`PREVIEW_OCR_OTHER`]),
-/// `zzlivekilo` ([`PREVIEW_OCR_LIVE`]) and `preview` ([`PREVIEW_OCR_STATUS`]), the
-/// only ordinary English word in the table and therefore the only one a filler could
-/// plausibly acquire by accident; `zzunsavedromeo` ([`UNSAVED_OCR_MARKER`]) and
+/// `zzlivekilo` ([`PREVIEW_OCR_LIVE`]) and `preview` ([`PREVIEW_OCR_STATUS`]), an
+/// ordinary English word and so one a filler could plausibly acquire by accident;
+/// `zzlemur` ([`ST_OCR_CASE_LOWER`]), `zzbison` ([`ST_OCR_CASE_UPPER`]), `zzheron`
+/// ([`ST_OCR_REGEX`]) and `zzwalrus` ([`ST_OCR_PAREN`]), with the search panel's
+/// status words `changed` ([`ST_OCR_STALE`]), `no matches` ([`ST_OCR_NO_MATCHES`])
+/// and `exited` ([`ST_OCR_RG_EXITED`]), ordinary words for the same reason;
+/// `zzunsavedromeo` ([`UNSAVED_OCR_MARKER`]) and
 /// `zzcoversierra` ([`UNSAVED_OCR_COVER`]); `zzdrawermark` ([`DRAWER_OCR_MARKER`])
 /// and `zzeditorfill` ([`DRAWER_OCR_EDITOR_ABSENT`]); `zzpanekilo`
 /// ([`TERMRESTART_OCR_PANE`]) and `zzdrawerlima` ([`TERMRESTART_OCR_DRAWER`]); and `zztabalfa`
@@ -2404,7 +2470,7 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
     );
 
     // Exactly one line matches, or the activated row becomes a ranking question. Compared lowercased,
-    // because `search_options_for` leaves `case_sensitive` false and rg runs with `-i`.
+    // because the case toggle starts off and rg runs with `-i`.
     let matching_lines: Vec<usize> = search_lines
         .iter()
         .enumerate()
