@@ -180,7 +180,7 @@ It also covers `terminalRestore(splits:drawerOpen:live:)`: live splits once, asc
 
 #### `PaneLayoutCodecTests.swift`
 
-**Covers** — the `PaneLayoutCodec` / `SavedPaneNode` bridge: `encode` (leaf ids to buffer paths, an unmapped leaf to the empty path, preview and terminal marking), the `postOrderTokens` / `decodeTokens` round-trip over leaf, two-child, n-ary and perpendicular-nested trees, `isEmptyLeaf`, and `PaneTree.rebuilt(from:firstLeafId:)`.
+**Covers** — the `PaneLayoutCodec` / `SavedPaneNode` bridge: `encode` (leaf ids to buffer paths, an unmapped leaf to the empty path, preview and terminal marking, and the zoom mark on the zoomed leaf alone, none for the drawer's id), `zoomedLeafIndex` as the depth-first index of the first marked leaf, the `postOrderTokens` / `decodeTokens` round-trip over leaf, two-child, n-ary and perpendicular-nested trees and a zoomed leaf, `isEmptyLeaf`, and `PaneTree.rebuilt(from:firstLeafId:)`.
 
 **Gotchas** — a preview leaf's `path` is its source Markdown file, and `isEmptyLeaf` is false for an empty-path preview or terminal leaf because the leaf's kind has to survive persistence.
 
@@ -234,7 +234,9 @@ It also pins the two policies that pull in opposite directions: a same-orientati
 
 #### `PaneZoomTests.swift`
 
-**Covers** — every `PaneZoom` rule, one decision per test: a toggle zooming the active pane, the drawer included, and unzooming when zoomed; a lone pane staying unzoomed; a split and a drawer open unzooming; only the zoomed pane's close unzooming; the frozen layout; Toggle Terminal acting unzoomed or on a zoomed drawer; the other-pane target; Neovim on a hidden pane being sent back; and `visibleRects` over two pane areas, unzoomed, and with a zoomed id that is gone.
+**Covers** — every `PaneZoom` rule, one decision per test: a toggle zooming the active pane, the drawer included, and unzooming when zoomed; a lone pane staying unzoomed; a split and a drawer open unzooming; only the zoomed pane's close unzooming; the frozen dividers and drawer edge; Toggle Terminal unzooming unless the drawer is zoomed, with the drawer closed, open and hidden, or zoomed; the other-pane target; a focus move to another pane unzooming, and one with no target keeping the zoom; a restore zooming only a restored pane with something to hide; and `visibleRects` over two pane areas, unzoomed, and with a zoomed id that is gone.
+
+The focus cases compose `focusOrigin`, `DrawerFocusSeam.focusTarget` and `.focusMove` as the container does, over a plus-shaped tree above a drawer: a target in each direction, the down-into-drawer and drawer-up bridges, and moves with no target from an edge pane and from the drawer.
 
 **Gotchas** — `visibleRects` results are compared as their id and rect arrays apart, since a tuple is not `Equatable`. The container's glue is [`ZoomPaneTests.swift`](../WolfMacOSTests/README.md#zoompanetestsswift)'s.
 
@@ -366,7 +368,7 @@ The `PreviewSeam` reload gate plus the click-to-focus surface. `winsNeedingReloa
 
 #### `SessionSeamTests.swift`
 
-**Covers** — the [`SessionSeam`](../../Sources/WolfKeyMap/Persistence/README.md#sessionseamswift) write-side decisions: the three close answers; that a walk with no live view or no window commits nothing; `gatherTab` resolving file, preview, terminal and unnamed leaves with their weights, a lone terminal pane persisting, an empty-state lone pane persisting no layout, and refusal on an unreported or missing leaf or a folder view's empty cwd; `contribution` keeping or replacing the cache, never gathering behind a shut gate; both `mayGather` gates; and `orphanedSlots` in saved order.
+**Covers** — the [`SessionSeam`](../../Sources/WolfKeyMap/Persistence/README.md#sessionseamswift) write-side decisions: the three close answers; that a walk with no live view or no window commits nothing; `gatherTab` resolving file, preview, terminal and unnamed leaves with their weights, a lone terminal pane persisting, an empty-state lone pane persisting no layout, the zoomed leaf persisting marked while a zoomed drawer marks none, and refusal on an unreported or missing leaf or a folder view's empty cwd; `contribution` keeping or replacing the cache, never gathering behind a shut gate; both `mayGather` gates; and `orphanedSlots` in saved order.
 
 Of `CloseBurst`, it covers that a tab group closed in one turn keeps the tree read once, at its first close, a tab closed alone stays dropped once its burst's end has run, and a terminating close reads, commits and schedules nothing.
 

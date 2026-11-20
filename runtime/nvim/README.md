@@ -142,13 +142,15 @@ Runs `tabnew`, roots the new tabpage at `cwd` via `:tcd` when `cwd` is non-empty
 
 #### `wolf_rebuild_layout(spec_json)`
 
-Realizes a saved pane-split tree in the current tabpage's single starting window and returns the resulting window handles in depth-first leaf order — the same order as the front-end's `PaneTree.leaves()`, so each handle zips to its rebuilt leaf. A malformed spec returns an empty list.
+Realizes a saved pane-split tree in the current tabpage's lone window and returns the window handles in depth-first leaf order, the front-end's `PaneTree.leaves()` order, so each handle zips to its rebuilt leaf. A malformed spec returns an empty list.
 
-`spec_json` is a JSON string: a leaf is `{ leaf = true, path, preview, terminal }`, a split is `{ orientation = "h"|"v", weights, children }`. `wolf_core::state::rebuild_layout_spec` is its only producer, on both platforms, so a change here has to land there too; see [wolf-core-decisions.md](../../notes/wolf-core-decisions.md).
+`spec_json` is a JSON string: a leaf is `{ leaf = true, path, preview, terminal, zoomed }`, a split is `{ orientation = "h"|"v", weights, children }`. `wolf_core::state::rebuild_layout_spec` is its only producer, so a change here lands there too; see [wolf-core-decisions.md](../../notes/wolf-core-decisions.md).
 
 A preview leaf with a path becomes a preview of that source via `wolf_preview_file`, converting the window rather than replacing it so the handle survives; a plain leaf with a path is `:edit`ed; an empty leaf keeps its inherited buffer. A terminal leaf's window is returned untouched, since its `path` is a directory: core starts the leaf's session and binds it there once the handles return. Regions are created child-0-first, left-to-right and top-to-bottom. nvim supplies only the window count, topology, and per-window buffer; the front-end drives pane sizes from its own weights.
 
-It ends with `_G.wolf_sync_buffers`, so core reports every returned window before the RPC answers. Without it the coalesced emit lands after the caller wakes, and a state commit in that gap persists the startup `Untitled.md`, or no file, in place of each restored one. Why the barrier is a request is in [wolf-core-decisions.md](../../notes/wolf-core-decisions.md#threading-and-locking).
+It then makes the first zoomed leaf's window current, whose `WinEnter` reports it active ahead of the barrier below, leaving no focus move in flight to unzoom the restore ([why](../../notes/wolf-core-decisions.md#the-persisted-zoom-mark)).
+
+It ends with `_G.wolf_sync_buffers`, so core reports every returned window before the RPC answers ([why a request](../../notes/wolf-core-decisions.md#threading-and-locking)). Without it the coalesced emit lands after the caller wakes, and a state commit in that gap persists the startup `Untitled.md`, or no file, in place of each restored one.
 
 #### `wolf_close_tabpage(handle)`
 

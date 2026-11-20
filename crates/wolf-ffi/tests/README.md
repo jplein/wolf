@@ -365,9 +365,9 @@ Also `preview_buffer(win, bufnr)` — markdown binds and returns the source bufn
 
 #### `state.rs`
 
-**Covers** — the state-persistence bridge end to end: the snapshot-builder free functions, the pane-layout push-builder (terminal leaves included), the read side (`wolf_ffi_load_state` through the `FfiState` / `FfiWindowState` / `FfiTabState` / `FfiPaneNode` accessors), and rejection of an old flat file. Headless — the write side is a pure builder over the shared store, so target `//crates/wolf-ffi:state` stages no nvim and carries no `no-sandbox` tag; everything is driven through `WOLF_STATE_DIR` pointed at a tempdir.
+**Covers** — the state-persistence bridge end to end: the snapshot-builder free functions, the pane-layout push-builder (terminal and zoomed leaves included), the read side (`wolf_ffi_load_state` through the `FfiState` / `FfiWindowState` / `FfiTabState` / `FfiPaneNode` accessors), and rejection of an old flat file. Headless — the write side is a pure builder over the shared store, so target `//crates/wolf-ffi:state` stages no nvim and carries no `no-sandbox` tag; everything is driven through `WOLF_STATE_DIR` pointed at a tempdir.
 
-**Gotchas** — one `#[test]` only: it mutates the process-global `WOLF_STATE_DIR` and opens the process-wide `SHARED_STORE` `OnceLock`, so extend that test rather than adding a sibling.
+**Gotchas** — one `#[test]` only: it mutates the process-global `WOLF_STATE_DIR` and opens the process-wide `SHARED_STORE` `OnceLock`, so extend that test rather than adding a sibling. The zoomed leaf is the terminal leaf, because the fixture's file paths do not exist and `load_state` would clear a zoom on one of them.
 
 #### `state_isolation.rs`
 

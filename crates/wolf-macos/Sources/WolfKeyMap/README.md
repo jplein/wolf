@@ -136,10 +136,11 @@ Purpose: Picks the divider under a point from a pre-computed list of `PaneTree.D
 
 #### `DrawerFocusSeam.swift`
 
-Purpose: Picks the editor pane that `<C-w>k` from the terminal drawer should focus. Reuses `Rect` / `PaneId` from `PaneTree.swift` and is `Double`-based, so it stays headlessly testable.
+Purpose: Resolves the pane a `<C-w>` focus move reaches across the tree and the terminal drawer, including the editor pane `<C-w>k` from the drawer should focus. Reuses `Rect` / `PaneId` from `PaneTree.swift` and is `Double`-based, so it stays headlessly testable.
 
 **Public API**
 
+- `focusTarget(from:dir:tree:drawer:lastEditorPane:width:editorHeight:) -> PaneId?` — the move's target, or `nil` when it has none. From the drawer only `.up` resolves, to `drawerUpTarget`; from a tree pane it is `PaneTree.neighbor`, else the open drawer for `.down`. `editorHeight` must be the drawer-reduced height the view lays its tree out in, so the neighbour matches what the user sees.
 - `bottomMostLeaf(_:)` — greatest `y + h` under a top-left origin, so the leaf lowest on screen. Ties break to the smallest `x`, then the smallest `PaneId`.
 - `drawerUpTarget(lastEditorPane:leaves:rects:)` — the most-recently-used editor pane when it is still a live leaf, otherwise `bottomMostLeaf`, which is the pane adjacent to the drawer.
 
@@ -431,12 +432,14 @@ Purpose: The n-ary pane-layout tree behind the macOS split-panes UI, matching Ne
 
 #### `PaneZoom.swift`
 
-Purpose: The rules of Zoom Pane: which pane a toggle zooms, which events unzoom, and what a zoom freezes or redirects. Foundation only, over `PaneId` and `Rect`.
+Purpose: The rules of Zoom Pane: which pane a toggle or a restore zooms, which events unzoom, and what a zoom freezes or redirects. Foundation only, over `PaneId` and `Rect`.
 
 **Public API**
 
 - `zoomed(after:zoomed:active:panes:) -> PaneId?` — the zoomed pane after an `Event`. `panes` must be every pane of the view, the drawer included, or the drawer cannot be zoomed and a lone leaf beside the drawer reads as nothing to hide.
-- `freezesLayout(zoomed:)`, `allowsToggleTerminal(zoomed:drawer:)`, `refocuses(resolved:zoomed:)` — the inert actions and the focus move sent back.
+- `Event.focusMove(target:)` unzooms for another pane, not for `nil`; `.toggleTerminal(drawer:)` unzooms unless the drawer is zoomed; `.restore(_:)` zooms its pane when it is in `panes` and not alone.
+- `focusOrigin(zoomed:from:)` — the zoomed pane while zoomed, so a move resolves from the pane the user sees.
+- `freezesLayout(zoomed:)` — the hidden dividers and drawer edge, never a focus move.
 - `otherPaneTarget(zoomed:drawer:)` — read only while zoomed, in place of `OtherPaneSeam.target`.
 - `visibleRects(zoomed:rects:bounds:)` — the panes the view shows and where.
 
@@ -447,7 +450,7 @@ Purpose: The rules of Zoom Pane: which pane a toggle zooms, which events unzoom,
 
 **Gotchas**
 
-- `PaneContainerView` applies `.panesChanged` right after close detection, `.split` and `.drawerOpen` in the intents that add a pane, and `.toggle` from Zoom Pane ([why](../../../../notes/wolf-macos-decisions.md#zoom-pane)).
+- `PaneContainerView` applies `.panesChanged` right after close detection, `.split` and `.drawerOpen` in the intents that add a pane, `.focusMove` from both `applyFocus` and Neovim's reported window, `.toggleTerminal` before every drawer toggle, `.restore` after a launch rebuild, and `.toggle` from Zoom Pane ([why](../../../../notes/wolf-macos-decisions.md#zoom-pane)).
 
 #### `PickerPanelSeam.swift`
 

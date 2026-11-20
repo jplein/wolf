@@ -12,8 +12,8 @@ Purpose: The pure codec between the live `PaneTree` layout and the shapes that p
 
 **Public API**
 
-- `SavedPaneNode` — a `Hashable` mirror of the split tree keyed by per-leaf buffer path. `leafCount` is how many nvim window handles the rebuild path zips onto the leaves. `isEmptyLeaf` is the suppress-from-persistence predicate for a lone pane: true only for an unnamed leaf that is neither a preview nor a terminal, so a lone pane bound to a file, a preview or a terminal still persists.
-- `encode(_:paths:previews:terminals:)` — maps leaf ids to buffer paths; a leaf missing from `paths` becomes `""`. A terminal leaf's path is the directory its shell starts in.
+- `SavedPaneNode` — a `Hashable` mirror of the split tree keyed by per-leaf buffer path. `leafCount` is how many nvim window handles the rebuild path zips onto the leaves. `isEmptyLeaf` is the suppress-from-persistence predicate for a lone pane: true only for an unnamed leaf that is neither a preview nor a terminal, so a lone pane bound to a file, a preview or a terminal still persists. `zoomedLeafIndex` is the first zoomed leaf's depth-first index into the rebuilt leaf ids.
+- `encode(_:paths:previews:terminals:zoomed:)` — maps leaf ids to buffer paths; a leaf missing from `paths` becomes `""`. A terminal leaf's path is the directory its shell starts in. It marks the leaf whose id is `zoomed`, and the drawer's id marks none, so a zoomed drawer persists unzoomed.
 - `postOrderTokens(_:)` and its inverse `decodeTokens(_:)` — the post-order stream the FFI push-builder replays; `decodeTokens` returns `nil` on a malformed stream.
 
 **Decisions**
@@ -46,8 +46,8 @@ Purpose: The write side of state persistence, ported from wolf-gnome's [`state_s
 
 **Public API**
 
-- `gatherTab(...) -> TabGather` — `.refuse` when a folder view's cwd is `""` or any leaf is `.unreported` or missing from `content`. A `.terminal(cwd:)` leaf persists as a terminal leaf at `cwd`.
-- `mayGather(...)` and `contribution(mayGather:gather:cache:)` — the gathered tab when the gate is open and the gather ready, otherwise `cache`, which the caller stores as its next cache. `gather` is not evaluated behind a shut gate.
+- `gatherTab(...) -> TabGather` — `.refuse` when a folder view's cwd is `""` or any leaf is `.unreported` or missing from `content`. A `.terminal(cwd:)` leaf persists as a terminal leaf at `cwd`. `zoomed` is [`encode`](#panelayoutcodecswift)'s.
+- `mayGather(...)`, `contribution(mayGather:gather:cache:)` — the gathered tab when the gate is open and the gather ready, otherwise `cache`, which the caller stores as its next cache. `gather` is not evaluated behind a shut gate.
 - `closeCommit(terminating:otherLiveViews:)`, `committedWindows(liveViews:windows:)` and `orphanedSlots(savedTabCounts:materialized:)` — `nil` from `committedWindows` means commit nothing.
 - `CloseBurst(scheduleEnd:read:commit:)` and its `close(terminating:otherLiveViews:)` — `closeCommit` over the closes of one runloop turn, which ends when the closure given to `scheduleEnd` runs.
 

@@ -14,6 +14,8 @@ The macOS worker has no GUI session and no screen, so XCUITest, which needs a UI
 
 **No page loads in a `WKWebView`.** One can be hosted and its responder methods called, but inside the worker's Seatbelt profile WebKit cannot issue the sandbox extensions its WebContent process needs, so no page loads and no script runs. A test must not wait on a page; [`PreviewViewFixture.swift`](#previewviewfixtureswift) never does.
 
+**A live test's own fixture files go under `TEST_TMPDIR`**, as `LiveCore.swift` and `LighthouseColours.swift` place theirs, falling back to `NSTemporaryDirectory()`. `FileManager.default.temporaryDirectory` resolves to the per-user `/var/folders/…/T` on the worker, and its Seatbelt profile denies the test a write there.
+
 **Do not drop the target's `CFProcessPath` env.** rules_swift places the test binary at `WolfMacOSTests.xctest/Contents/MacOS/`, where AppKit treats it as a bundled app and aborts, with no message, when it cannot check in with LaunchServices, which Seatbelt denies. A flat process path needs no check-in.
 
 The target stages Neovim, `//bazel/nvim:nvim_tree` and `//runtime/nvim:init.lua` wired as `WOLF_TEST_NVIM_DIR` and `WOLF_TEST_INIT_LUA`, the vendored Lighthouse, `//bazel/lighthouse:lighthouse_tree` as `WOLF_TEST_LIGHTHOUSE_DIR`, and the three font trees the app bundles: `//bazel/ia-writer-mono:ia_writer_mono_tree`, `//bazel/jetbrains-mono:jetbrains_mono_tree` and `//bazel/nerd-fonts-symbols:nerd_fonts_symbols_tree` as `WOLF_TEST_IA_WRITER_MONO_DIR`, `WOLF_TEST_JETBRAINS_MONO_DIR` and `WOLF_TEST_NERD_FONTS_SYMBOLS_DIR`. It carries `tags = ["no-sandbox"]`, because a test that starts a core spawns a child Neovim, which the macOS build sandbox does not allow. [`LiveCore.swift`](#livecoreswift) fences the state and config directories, and registers the fonts, before any core or config read.
@@ -168,13 +170,16 @@ Purpose: The vendored Lighthouse's expected colours, for the tests that render u
 
 #### `ZoomPaneTests.swift`
 
-**Covers** — Zoom Pane through `PaneContainerView.toggleZoom()` over a live core and `/bin/sh`, from two editor panes and a terminal pane with the drawer open. A zoomed pane fills the area and its grid or session grows, while the others keep their windows, sessions and sizes, and unzoom restores every frame and weight after drags and a window resize while zoomed. A split, a close, the shell exiting and Toggle Terminal on a zoomed drawer each unzoom, while Toggle Terminal on another zoomed pane, `<C-w>l` and `:wincmd w` change nothing. A hidden preview keeps its web view, hidden, and shows it again on unzoom.
+**Covers** — Zoom Pane through `PaneContainerView.toggleZoom()` over a live core and `/bin/sh`, from two editor panes and a terminal pane with the drawer open. A zoomed pane fills the area and its grid or session grows, while the others keep their windows, sessions and sizes, and unzoom restores every frame and weight after drags and a window resize while zoomed. A hidden preview keeps its web view, hidden, until unzoom.
+
+A split, a close and the shell exiting each unzoom, and so does Toggle Terminal, closing an open drawer or opening and focusing a closed one, or closing a zoomed drawer. `<C-w>l` unzooms onto the neighbour with every frame and weight restored, `:wincmd w` unzooms, the view following Neovim, and `<C-w>h` from the leftmost pane changes nothing. A zoom survives a save and restore through `gatherTab`, `AppDelegate.pushLayout`, `AppDelegate.savedPaneNode` and the layout rebuild.
 
 **Gotchas**
 
 - The palette, `CommandDispatcher` and `WolfWindowController` reach no test, so `toggleZoom()` and `toggleTerminal()` are called directly.
 - A hidden pane's sizes are compared after a settle, because a wrong resize lands a round trip later.
-- The inert-action tests sample every wake: the view sends Neovim back to the zoomed pane within a round trip, which would hide a wrong focus move from a check made only at the end.
+- A move that must change nothing and a restored zoom are sampled at every wake, because Neovim reporting another pane a round trip later unzooms the view, which a check at the start or end would miss.
+- The save and restore test writes the process-wide `WOLF_STATE_DIR` `LiveCore` sets, which no other test here touches.
 - The drags while zoomed land in the zoomed pane and reach Neovim as clicks.
 
 #### `TerminalDrawerTests.swift`

@@ -22,14 +22,15 @@ Purpose: The application coordinator: launch setup, the live `WolfWindowControll
 - `makeNewWindow(originatingCwd:)` — a fresh project in the empty state; the unused argument serves `CommandDispatcher`'s shared call site.
 - `makeNewTab(from:)` — adds a tabpage to the key controller's project, starting no core.
 - `scheduleStateSnapshot()` / `snapshotNow()` — throttled versus immediate whole-tree commit to `state.json` ([write model](../../../../notes/wolf-macos-decisions.md#state-is-a-tree-and-the-front-end-owns-every-write)).
-- `closeCommit(for:)` — a closing view's commit; the last live view's commits at once the tree read at its burst's first close, keeping every tab of its window.
-- `otherWindows(excluding:)`, `controllerForCwd(_:)`, `raiseWindow(tabId:)` — the command palette's candidate sources and raise target.
+- `closeCommit(for:)` — a closing view's commit; the last live view's commits at once the tree read at its burst's first close, keeping its window's tabs.
+- `otherWindows(excluding:)`, `controllerForCwd(_:)`, `raiseWindow(tabId:)` — the palette's candidates and raise target.
 - `appAppearance(for:)` — a mode's forced `NSApp.appearance`; `nil` under `auto`.
+- `savedPaneNode(from:)`, `pushLayout(_:)` — the restore read's and the commit's layout halves.
 
 **Decisions**
 
 - Launch order is fonts, config, metrics: measuring needs the config's font settings, and the bundled families must reach CoreText first.
-- `appearanceObservation` must stay stored — an `NSKeyValueObservation` invalidates itself once deallocated, so a discarded token silently stops auto-mode appearance tracking.
+- `appearanceObservation` must stay stored: a deallocated `NSKeyValueObservation` invalidates itself, silently ending auto-mode appearance tracking.
 - Both app focus edges reach nvim: `FocusGained` fires only on a real unfocused-to-focused transition, so without the resign-side `false` the `WolfAutoRead` `:checktime` reload fires once.
 - The About panel's credits discharge the fonts' and libraries' attribution: Linux's preamble, then `wolf_ffi_font_license_notices()` and `wolf_ffi_library_license_notices()` verbatim. Their `.foregroundColor` stays `labelColor`, since uncoloured credits render black in dark mode.
 
@@ -351,7 +352,7 @@ Purpose: The editor area: one flipped first-responder `NSView` painting every pa
 - `activePreviewSourcePath` — `nil` in edit mode.
 - `otherPaneTarget(prefer:)` — `0` splits, `nil` is a no-op.
 - `canClosePane`, `closeActivePane()`, `splitActivePane(_:)` — Close Pane's gate and action, and the splits' ([why](../../../../notes/wolf-macos-decisions.md#terminal-panes)).
-- `toggleZoom()`, `toggleTerminal()`, `isZoomed`, `visiblePaneFrames` — Zoom Pane, and Toggle Terminal, refused by another pane's zoom; frames by window ([why](../../../../notes/wolf-macos-decisions.md#zoom-pane)).
+- `toggleZoom()`, `toggleTerminal()`, `isZoomed`, `zoomedPaneId`, `visiblePaneFrames` — Zoom Pane, Toggle Terminal unzooming first, the saved zoom, frames by window ([why](../../../../notes/wolf-macos-decisions.md#zoom-pane)).
 
 **Decisions**
 

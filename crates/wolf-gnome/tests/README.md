@@ -138,12 +138,12 @@ The other files below cover what a seam cannot reach: a real Neovim, a real wind
 
 **Covers**
 
-- `pane_zoom`'s rules, K1 to K10, in tests that mirror [`PaneZoomTests.swift`](../../wolf-macos/Tests/WolfKeyMapTests/README.md#panezoomtestsswift) case for case, with the same ids. K6 tests `freezes_focus` and K10 `shown_alone` over bound ids, the two divergences [`src/README.md`](../src/README.md#pane_zoomrs) states.
+- `pane_zoom`'s rules, K1 to K10, with the ids of [`PaneZoomTests.swift`](../../wolf-macos/Tests/WolfKeyMapTests/README.md#panezoomtestsswift). K1 to K5 and K8 mirror it case for case. K6 tests `freezes_focus`, K7 the refused Toggle Terminal, K9 the send-back and K10 `shown_alone` over bound ids, the rules [`src/README.md`](../src/README.md#pane_zoomrs) states this front-end keeps. The Swift K11 to K14 test rules it does not apply.
 
 **Gotchas**
 
 - Pure: no display, no Neovim and no compositor. What the pane area shows for an answer is [`smoke_headless/zoom_pane.rs`](#smoke_headlesszoom_paners)'s question.
-- A case added on either side belongs on both, or the two ports can drift silently.
+- A case for a rule both front-ends apply belongs on both, or the two ports can drift silently.
 
 #### `release_profile.rs`
 

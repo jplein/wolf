@@ -620,7 +620,7 @@ Purpose: the pure, GTK-free Zoom Pane rules: which pane a toggle zooms, which ev
 
 **Decisions**
 
-- A port of [`PaneZoom.swift`](../../wolf-macos/Sources/WolfKeyMap/README.md#panezoomswift) with two divergences: `freezes_focus` covers focus moves only, since no divider exists while zoomed, and `shown_alone` takes the place of `visibleRects`, since GTK allocates the one host shown and needs no rects. [`tests/pane_zoom.rs`](../tests/README.md#pane_zoomrs) mirrors its tests case for case.
+- Ported from [`PaneZoom.swift`](../../wolf-macos/Sources/WolfKeyMap/README.md#panezoomswift), but it keeps the inert focus move and Toggle Terminal and the send-back where the contract unzooms ([limitation](../../../notes/wolf-gnome/present-limitations.md)). No divider exists while zoomed, so nothing freezes one, and `shown_alone` takes the place of `visibleRects`, since GTK allocates the one host shown and needs no rects.
 
 **Gotchas**
 

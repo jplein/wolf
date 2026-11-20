@@ -144,15 +144,15 @@ Reads the user-preferences file `wolf-config.yaml` and resolves the per-platform
 
 #### `state.rs`
 
-Persists the application-state tree to `state.json` and renders a saved pane layout into the spec Neovim's rebuild helper decodes.
+Persists the application-state tree to `state.json` and renders a saved layout into the spec Neovim's rebuild helper decodes.
 
 **Public API**
 
-- `state_dir()` — `WOLF_STATE_DIR` overrides the per-platform default; `swap_dir_for(cwd)` derives a stable per-project swap dir under it, so a fresh nvim finds a dead one's swaps.
-- `spell_dir()` / `runtime_user_dir()` / `parsers_user_dir()` — global (not per-project) subdirs of `state_dir()`, exported as matching `WOLF_*` env vars; `None` when unresolvable. `seed_runtime_user_dir(dir)` seeds the `INIT_USER_FILE_NAME` template into a missing or empty dir only; a non-empty dir is never touched, even without the template ([wolf-core-decisions.md](../../../notes/wolf-core-decisions.md)).
-- `load_state(dir)` — read-only and infallible: an absent file is a silent `None`; any other failure warns and leaves the bytes intact.
-- `StateStore::open/state/set_snapshot/flush` — `set_snapshot` compares the submitted whole tree before swapping, so a redundant re-submit costs no disk write.
-- `rebuild_layout_spec(&PaneNode) -> String` — the spec `WolfCore::rebuild_layout` takes; total (non-finite weight becomes `0.0`, serialization error degrades to `"{}"`).
+- `state_dir()` — `WOLF_STATE_DIR` overrides the platform default; `swap_dir_for(cwd)` derives a stable per-project swap dir under it, so a fresh nvim finds a dead one's swaps.
+- `spell_dir()` / `runtime_user_dir()` / `parsers_user_dir()` — global subdirs of `state_dir()`, not per-project, exported as matching `WOLF_*` env vars; `None` when unresolvable. `seed_runtime_user_dir(dir)` seeds the `INIT_USER_FILE_NAME` template into a missing or empty dir only; a non-empty dir is never touched, even without the template ([wolf-core-decisions.md](../../../notes/wolf-core-decisions.md)).
+- `load_state(dir)` — read-only and infallible: an absent file is a silent `None`; any other failure warns, leaving the bytes intact. An editor or preview leaf whose file is gone loads unzoomed ([why](../../../notes/wolf-core-decisions.md#the-persisted-zoom-mark)).
+- `StateStore::open/state/set_snapshot/flush` — an unchanged `set_snapshot` writes nothing.
+- `rebuild_layout_spec(&PaneNode) -> String` — the spec `WolfCore::rebuild_layout` takes; total: a non-finite weight renders `0.0`, a serialization error `"{}"`.
 
 **Decisions**
 

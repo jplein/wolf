@@ -162,6 +162,14 @@ The wire document is deliberately not `PaneNode`'s serde shape, so nothing can b
 
 Leaf order is the other half of the contract. Children are emitted depth-first, the order `WolfCore::rebuild_layout` returns nvim window handles in, so a front-end zips those handles onto its own depth-first leaf list. Reordering either side transposes every restored pane while every count-based assertion stays green.
 
+## The persisted zoom mark
+
+A tab's zoomed pane persists as `zoomed: true` on its `PaneNode::Leaf`, not as a tab-level index. The mark travels with its leaf through the depth-first handle zip, so a leaf that is not restored takes its zoom with it, where an index would land on the wrong leaf. The field has the same serde attributes as `terminal`, so a file without it loads unzoomed and an unzoomed file stays byte-identical, and `STATE_VERSION` does not change. Several marks come only from a hand edit, and every reader, `init.lua` and the macOS restore alike, takes the first in depth-first order.
+
+`load_state` clears the mark of an editor or preview leaf whose path is gone, because the restore cannot rebuild that pane, and the contract then restores the tab unzoomed. It keeps the mark on a terminal leaf, which restores whether or not its directory exists, and on an unnamed leaf, which restores as an empty buffer. The clearing drops no leaf and never writes the file.
+
+The rebuild document carries `zoomed` on every leaf, and `wolf_rebuild_layout` ends with Neovim's current window on the first zoomed leaf. Under the contract, Neovim reporting another pane is a focus move, which unzooms. A `focus_win` sent after the rebuild would leave a round trip in which a wake reads the last rebuilt window and unzooms the restore; making the window current inside the rebuild leaves no focus move in flight when `rebuild_layout` returns.
+
 ## Present limitations
 
 - A browser-preview server spawned before a `restart_nvim` keeps the RPC handle it captured at spawn time, so its live render goes blank after a restart until the command is run again.

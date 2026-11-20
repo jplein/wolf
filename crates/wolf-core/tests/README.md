@@ -453,16 +453,17 @@ Real Neovim: needs `WOLF_NVIM_BIN`, the staged nvim runfiles, and `tags = ["no-s
 
 **Covers**
 
-- `WolfCore::rebuild_layout(spec_json)` realizing a saved pane-split tree: one handle per spec leaf, distinct, in DFS/leaf order, each bound to the requested buffer — across nested splits, lone leaves, empty-path leaves, and `preview: true` leaves reconstructed as real previews rather than `:edit`.
+- `WolfCore::rebuild_layout(spec_json)` realizing a saved pane-split tree: one handle per spec leaf, distinct, in DFS/leaf order, each bound to the requested buffer — across nested splits, lone leaves, empty-path leaves, and `preview: true` leaves reopened as previews, not `:edit`ed.
 - `rebuild_reports_every_leaf_window_on_return`: when the rebuild returns, `win_buffers` already reports every returned window with its leaf's file, and Neovim lists all three files, which rules out the `:edit`s themselves racing startup. It repeats on `BARRIER_ROUNDS` fresh cores.
 - A terminal leaf's session, bound into its window and started in the leaf's directory, else the tabpage cwd.
+- `rebuild_ends_on_the_zoomed_leaf`: `active_win` on return is the zoomed middle leaf's window, where an unzoomed control rebuild ends on the last leaf.
 
 **Gotchas**
 
 - Assert handle count, distinctness and the per-window buffer, never literal handle values.
 - An empty-path leaf inherits the named `Untitled.md` startup buffer, matched by basename suffix so `/var` versus `/private/var` does not break it.
-- The reporting test reads the snapshot once, with no poll and no flush wait, because that instant is what a launch-time state commit sees. Do not add a poll: it would pass without the `wolf_barrier` guarantee it pins.
-- The race it catches is a scheduling race: with the guarantee removed, a single round passes most of the time. Across `BARRIER_ROUNDS` rounds, macOS fails in 33 of 40 runs, in two batches of 20 that fail 13 and 20 times, and Linux in 10 of 10. The rate varies with machine load, so one batch is a noisy measure.
+- The reporting and zoom tests read the snapshot once, with no poll and no flush wait, because that instant is what a launch-time state commit sees. Do not add a poll: it would pass without the `wolf_barrier` guarantee they pin.
+- The race it catches is a scheduling race: with the guarantee removed, a single round passes most of the time. Across `BARRIER_ROUNDS` rounds, macOS fails in 33 of 40 runs and Linux in 10 of 10, at a rate that varies with machine load.
 
 #### `recent_dirs.rs`
 
@@ -625,13 +626,15 @@ Real Neovim and real `/bin/sh` sessions in ptys (`//crates/wolf-core:split_comma
 
 #### `state_layout.rs`
 
-Headless — driven entirely through `tempfile` dirs handed to `StateStore::open` / `load_state`, so its target needs no runfiles and no `no-sandbox` tag.
+Headless — driven through `tempfile` dirs handed to `StateStore::open` / `load_state`, so its target needs no runfiles and no `no-sandbox` tag.
 
-**Covers** — the per-tab pane tree: `TabState.layout: Option<PaneNode>` round-tripping through `set_snapshot` -> `flush` -> `load_state` for leaf, two-child, n-ary, perpendicular-nested and empty-path shapes; the on-disk serde tags and orientation strings; and that a v1 file missing `layout`, or a leaf missing `preview` or `terminal`, loads with the `serde(default)` value rather than being rejected. Only a terminal leaf writes a `terminal` key.
+**Covers** — the per-tab pane tree: `TabState.layout: Option<PaneNode>` round-tripping through `set_snapshot` -> `flush` -> `load_state` for leaf, two-child, n-ary, perpendicular-nested and empty-path shapes; the on-disk serde tags and orientation strings; and that a v1 file missing `layout`, or a leaf missing `preview`, `terminal` or `zoomed`, loads with the `serde(default)` value. Only a terminal or zoomed leaf writes that key.
 
-It also covers `rebuild_layout_spec`, the wire document `wolf_rebuild_layout` decodes: the `Vertical` to `"v"` orientation row, leaf order matching the depth-first order `WolfCore::rebuild_layout` returns handles in, a path carrying a quote, a backslash and a newline surviving intact, and a non-finite weight emitted as `0.0` without breaking the document.
+The zoom mark round-trips. `load_state` clears it from an editor or preview leaf whose path is gone, changing nothing else, in the tree or the file, and keeps it on an existing file, a terminal leaf whose directory is gone, and an unnamed leaf.
 
-**Gotchas** — `STATE_VERSION` stays 1, so a new field means a new `serde(default)` back-compat case here, not a version bump. The spec cases parse the rendered string back into a `serde_json::Value` instead of comparing text, because key order is not part of the contract; one target asserting both the wire shape and the unrelated serde shape is deliberate.
+It also covers `rebuild_layout_spec`, the document `wolf_rebuild_layout` decodes: the `Vertical` to `"v"` orientation row, leaf order matching the depth-first order `WolfCore::rebuild_layout` returns handles in, each leaf's `zoomed` key, a path carrying a quote, a backslash and a newline surviving intact, and a non-finite weight emitted as `0.0`.
+
+**Gotchas** — `STATE_VERSION` stays 1, so a new field means a new `serde(default)` back-compat case here, not a version bump. A zoomed editor leaf that must keep its mark names a real `tempfile` file, not a `/proj/…` path. The spec cases parse the rendered string back into a `serde_json::Value` instead of comparing text, because key order is not part of the contract; one target asserting both the wire shape and the unrelated serde shape is deliberate.
 
 #### `state_unit.rs`
 
