@@ -1951,6 +1951,7 @@ impl AppShell {
             UiAction::SplitVertical => self.send_input(InputEvent::SplitPane {
                 orientation: SplitOrientation::Vertical,
             }),
+            UiAction::ZoomPane => self.zoom_pane(),
             // Over the ordered input channel directly: `WolfCore::toggle_full_width` is a one-line
             // `send_input` onto it, and the neighbouring arms' shape wins.
             UiAction::ToggleFullWidth => self.send_input(InputEvent::ToggleFullWidth),
@@ -2293,9 +2294,29 @@ impl AppShell {
         }
     }
 
+    /// Toggles the zoom of the selected tab's active pane ([`pane_view::PaneHandle::toggle_zoom`]).
+    fn zoom_pane(&self) {
+        if let Some(tab) = self.inner.tabs.selected() {
+            tab.panes().toggle_zoom();
+        }
+    }
+
     /// Opens or hides the terminal drawer through [`WolfCore::toggle_terminal`], which
-    /// starts its session (a pty and a fork, no RPC) before it queues the toggle.
+    /// starts its session (a pty and a fork, no RPC) before it queues the toggle. Refused
+    /// while a pane other than the drawer is zoomed, since the drawer is hidden or would
+    /// open hidden.
     fn toggle_terminal(&self) {
+        let allowed = self
+            .inner
+            .tabs
+            .selected()
+            .is_none_or(|tab| tab.panes().allows_toggle_terminal());
+        if !allowed {
+            eprintln!(
+                "wolf-gnome: Toggle Terminal not performed: a pane other than the drawer is zoomed"
+            );
+            return;
+        }
         if let Some(core) = self.inner.core.borrow().as_ref() {
             core.toggle_terminal();
         }

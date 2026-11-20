@@ -201,6 +201,7 @@ use crate::liveness_ui::TerminalRestore;
 use crate::mouse::{self, PaneScroll, ScrollAccumulator};
 use crate::other_pane_seam::{self, Side, Target};
 use crate::pane_layout;
+use crate::pane_zoom::{self, ZoomEvent};
 use crate::preview_coalescer::{PreviewCoalescer, RenderDecision};
 use crate::preview_link::{self, PreviewLink};
 use crate::preview_ui::{self, DocumentUpdate, PreviewFilePress, PreviewLoad};
@@ -605,6 +606,12 @@ struct PaneInner {
     /// The drawer's divider and its guard, while both an editor widget and a drawer are bound;
     /// set by [`Self::rebuild_pane_area`] and read by [`Self::apply_drawer_frame`].
     drawer_divider: RefCell<Option<(gtk::Paned, Rc<DividerGuard>)>>,
+    /// The pane this tab shows alone over the pane area, or `None` for the whole layout.
+    ///
+    /// Per tab and never persisted. A zoom touches neither [`Self::tree`], its weights,
+    /// [`Self::drawer_share`] nor [`Self::drawer`], so the layout a snapshot saves is the
+    /// unzoomed one and an unzoom rebuilds it exactly. The rules are [`crate::pane_zoom`]'s.
+    zoomed: Cell<Option<PaneId>>,
     /// A saved pane tree awaiting realization, set ONCE at launch by
     /// [`PaneHandle::request_layout_rebuild`] and consumed by the first wake at
     /// which a window grid exists (see [`PaneInner::consume_pending_layout`]).
@@ -820,7 +827,10 @@ impl PaneInner {
         // says why the raw pane-area size is right.
         let width = f64::from(self.pane_area.width());
         let height = f64::from(self.pane_area.height());
-        let target = other_pane_seam::target(active, prefer, &self.tree.borrow(), width, height)?;
+        let target = match self.zoomed.get() {
+            Some(zoomed) => pane_zoom::other_pane_target(zoomed, self.drawer.get().id())?,
+            None => other_pane_seam::target(active, prefer, &self.tree.borrow(), width, height)?,
+        };
         match target {
             Target::Split => Some(SPLIT_TARGET_WIN),
             Target::Existing(pane) => self
@@ -987,6 +997,7 @@ impl PaneInner {
         // Defensive, and unreachable: both callers run at launch, before any drawer can open, and the
         // drawer is never a restored leaf. Without it `DrawerState` could name a pane nothing holds.
         self.clear_drawer();
+        self.zoomed.set(None);
 
         // The guarded path: it samples focus before teardown, and its remove loop unparents the old
         // single pane's area, `pane_area`'s only child and no longer in `panes`.
@@ -1359,6 +1370,7 @@ impl PaneInner {
         if state.is_open() || self.pane_for_win(win).is_some() {
             return;
         }
+        self.apply_zoom_event(ZoomEvent::DrawerOpen);
         let id = self.alloc_pane_id();
         state.bind(id);
         // Published BEFORE the rebuild, because `rebuild_pane_area` reads this field
@@ -1398,6 +1410,8 @@ impl PaneInner {
         if self.drawer.get().is_drawer(target) {
             return;
         }
+        // After the guards, so a split the drawer drops leaves the zoom alone.
+        self.apply_zoom_event(ZoomEvent::Split);
         let orient = match orientation {
             SplitOrientation::Vertical => Orientation::Vertical,
             SplitOrientation::Horizontal => Orientation::Horizontal,
@@ -1434,6 +1448,9 @@ impl PaneInner {
     /// therefore dropped before the core borrow below — this file's rule, and not
     /// optional here: `focus_win` is a core call.
     fn apply_focus(&self, dir: wolf_core::FocusDir, from: i64) {
+        if pane_zoom::freezes_focus(self.zoomed.get()) {
+            return;
+        }
         let width = f64::from(self.pane_area.width());
         let height = f64::from(self.pane_area.height());
         let Some(origin) = self.pane_for_win(from).or_else(|| self.active_pane.get()) else {
@@ -1515,12 +1532,44 @@ impl PaneInner {
                 panes.remove(id);
             }
         }
+        self.apply_zoom_event(ZoomEvent::PanesChanged);
         self.rebuild_pane_area();
 
         if self.active_pane.get().is_some_and(|a| closed.contains(&a)) {
             let first = self.tree.borrow().leaves().first().copied();
             self.set_active_pane(first);
         }
+    }
+
+    /// Applies `event` to [`Self::zoomed`] through [`pane_zoom::zoomed_after`], over the tree's
+    /// leaves plus the open drawer, and answers whether the zoom changed. Rebuilds nothing:
+    /// every caller rebuilds the pane area after it.
+    fn apply_zoom_event(&self, event: ZoomEvent) -> bool {
+        let mut panes = self.tree.borrow().leaves();
+        panes.extend(self.drawer.get().id());
+        let before = self.zoomed.get();
+        let after = pane_zoom::zoomed_after(event, before, self.active_pane.get(), &panes);
+        self.zoomed.set(after);
+        after != before
+    }
+
+    /// Zoom Pane: zooms the active pane over the whole pane area, or unzooms, and rebuilds the
+    /// pane area to match. A zoom moves Neovim's current window to the zoomed pane, so the
+    /// pane on screen is the one typing reaches.
+    fn toggle_zoom(&self) {
+        if !self.apply_zoom_event(ZoomEvent::Toggle) {
+            return;
+        }
+        if let Some(zoomed) = self.zoomed.get() {
+            let win = self.panes.borrow().get(&zoomed).map(|p| p.win);
+            if let Some(win) = win {
+                if let Some(core) = self.core.borrow().as_ref() {
+                    core.focus_win(win);
+                }
+            }
+        }
+        self.rebuild_pane_area();
+        self.queue_redraw();
     }
 
     /// Resolves any pane whose grid is still pending via `grid_for_win`, sizing the
@@ -1566,6 +1615,10 @@ impl PaneInner {
 
     /// Refreshes the active pane from `active_win` (fallback: the pane owning the
     /// cursor's grid).
+    ///
+    /// While zoomed, a window that resolves to another pane is sent back to the zoomed one
+    /// ([`pane_zoom::refocuses`]) and the active pane stays: Neovim left by a path no intent
+    /// reports, such as `<C-w>w`, and typing would otherwise reach a hidden pane.
     fn update_active_pane(&self) {
         let target = {
             let core_ref = self.core.borrow();
@@ -1584,6 +1637,16 @@ impl PaneInner {
                     .map(|(id, _)| *id)
             })
         };
+        let zoomed = self.zoomed.get();
+        if pane_zoom::refocuses(target, zoomed) {
+            let win = zoomed.and_then(|z| self.panes.borrow().get(&z).map(|p| p.win));
+            if let Some(win) = win {
+                if let Some(core) = self.core.borrow().as_ref() {
+                    core.focus_win(win);
+                }
+                return;
+            }
+        }
         if let Some(id) = target {
             if self.active_pane.get() != Some(id) {
                 self.set_active_pane(Some(id));
@@ -3617,36 +3680,46 @@ impl PaneInner {
             self.pane_area.remove(&child);
         }
         {
-            let layout = self.tree.borrow().layout();
             let panes = self.panes.borrow();
-            let ctx = BuildCtx {
-                panes: &panes,
-                tree: &self.tree,
-            };
-            let editor = build_layout_widget(&layout, &ctx, &[]);
-            if let Some(widget) = &editor {
-                widget.set_hexpand(true);
-                widget.set_vexpand(true);
-            }
-            // The one place the widget tree knows the drawer: the end child of a paned under the tree.
-            let host = self
-                .drawer
-                .get()
-                .id()
-                .and_then(|id| panes.get(&id))
-                .map(|p| p.host.clone().upcast::<gtk::Widget>());
-            let divider = match (editor, host) {
-                (Some(editor), Some(host)) => {
-                    let (paned, guard) = build_drawer_paned(&editor, &host, &self.drawer_share);
-                    self.pane_area.append(&paned);
-                    Some((paned, guard))
+            let bound: Vec<PaneId> = panes.keys().copied().collect();
+            let alone =
+                pane_zoom::shown_alone(self.zoomed.get(), &bound).and_then(|id| panes.get(&id));
+            let divider = if let Some(zoomed) = alone {
+                // No paned while zoomed: none can write a weight or the share, and the unzoom
+                // rebuild derives every position afresh from the tree and the share.
+                self.pane_area.append(&zoomed.host);
+                None
+            } else {
+                let layout = self.tree.borrow().layout();
+                let ctx = BuildCtx {
+                    panes: &panes,
+                    tree: &self.tree,
+                };
+                let editor = build_layout_widget(&layout, &ctx, &[]);
+                if let Some(widget) = &editor {
+                    widget.set_hexpand(true);
+                    widget.set_vexpand(true);
                 }
-                // A drawer host alone is the transient before the first editor pane.
-                (Some(widget), None) | (None, Some(widget)) => {
-                    self.pane_area.append(&widget);
-                    None
+                // The one place the widget tree knows the drawer: the end child of a paned under the tree.
+                let host = self
+                    .drawer
+                    .get()
+                    .id()
+                    .and_then(|id| panes.get(&id))
+                    .map(|p| p.host.clone().upcast::<gtk::Widget>());
+                match (editor, host) {
+                    (Some(editor), Some(host)) => {
+                        let (paned, guard) = build_drawer_paned(&editor, &host, &self.drawer_share);
+                        self.pane_area.append(&paned);
+                        Some((paned, guard))
+                    }
+                    // A drawer host alone is the transient before the first editor pane.
+                    (Some(widget), None) | (None, Some(widget)) => {
+                        self.pane_area.append(&widget);
+                        None
+                    }
+                    (None, None) => None,
                 }
-                (None, None) => None,
             };
             *self.drawer_divider.borrow_mut() = divider;
         }
@@ -3675,6 +3748,7 @@ impl PaneInner {
         // The drawer is not in `panes`, so only this drops its id, before the fresh grids arrive.
         // A stale id would block reopening it for the session.
         self.clear_drawer();
+        self.zoomed.set(None);
         // Tears everything down and builds nothing, through `rebuild_pane_area`'s own focus guard;
         // reusing it rather than open-coding teardown keeps the focus-wedge fix through a restart.
         self.rebuild_pane_area();
@@ -3876,6 +3950,20 @@ impl PaneHandle {
         self.inner.reset_after_restart();
     }
 
+    /// Zoom Pane: shows the active pane alone over this tab's pane area, or restores the
+    /// whole layout. A no-op with one pane and no drawer. The other panes stay bound and
+    /// live, and the tree's weights and the drawer's share are untouched.
+    pub fn toggle_zoom(&self) {
+        self.inner.toggle_zoom();
+    }
+
+    /// Whether Toggle Terminal may act on this tab: always unzoomed, and while zoomed only
+    /// when the drawer is the zoomed pane ([`pane_zoom::allows_toggle_terminal`]).
+    #[must_use]
+    pub fn allows_toggle_terminal(&self) -> bool {
+        pane_zoom::allows_toggle_terminal(self.inner.zoomed.get(), self.inner.drawer.get().id())
+    }
+
     /// Whether this tab's terminal drawer is open, which a restart captures before it
     /// drops every window.
     #[must_use]
@@ -3972,6 +4060,7 @@ pub fn build(
         drawer: Cell::new(DrawerState::new()),
         drawer_share: drawer_share.clone(),
         drawer_divider: RefCell::new(None),
+        zoomed: Cell::new(None),
         pending_layout: RefCell::new(None),
         preview_coalescer: RefCell::new(PreviewCoalescer::new()),
         terminal_sizers: RefCell::new(BTreeMap::new()),

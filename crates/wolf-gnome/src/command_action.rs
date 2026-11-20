@@ -67,6 +67,9 @@ pub enum UiAction {
     /// Split the focused pane into two side-by-side panes, as `:vsplit`; core makes the new
     /// pane of the focused pane's kind and refuses the drawer.
     SplitVertical,
+    /// Toggle the selected tab's active pane between zoomed and not. Front-end geometry:
+    /// Neovim's windows and the pane tree stay as they are.
+    ZoomPane,
     /// Open a new TAB in this window, over the window's EXISTING core, rooted at
     /// the window's own folder.
     ///
@@ -194,10 +197,7 @@ pub fn ui_action_for(command: Command) -> UiAction {
         Command::EditInOtherPane => UiAction::EditInOtherPane,
         Command::SplitHorizontal => UiAction::SplitHorizontal,
         Command::SplitVertical => UiAction::SplitVertical,
-        Command::ZoomPane => UiAction::Deferred(
-            "zooming a pane needs the GTK pane area to show one pane over the whole area while \
-             the others stay bound",
-        ),
+        Command::ZoomPane => UiAction::ZoomPane,
     }
 }
 
@@ -241,7 +241,7 @@ mod tests {
     /// The commands `wolf-gnome` DISPATCHES, by canonical `CommandSpec::id`,
     /// sorted. Ids (not variants) so the failure message names the registry row a
     /// reader can grep for.
-    const EXPECTED_DISPATCHED_IDS: [&str; 26] = [
+    const EXPECTED_DISPATCHED_IDS: [&str; 27] = [
         "buffer_picker",
         "close_pane",
         "close_window",
@@ -268,6 +268,7 @@ mod tests {
         "split_vertical",
         "terminal",
         "toggle_sidebar",
+        "zoom_pane",
     ];
 
     /// What a [`Case`] row expects [`ui_action_for`] to return.
@@ -455,9 +456,9 @@ mod tests {
             want: Want::Exact(UiAction::SplitVertical),
         },
         Case {
-            desc: "30 ZoomPane: deferred until the pane area can hide the other panes",
+            desc: "30 ZoomPane: toggles the zoom of the selected tab's active pane",
             command: Command::ZoomPane,
-            want: Want::Deferred,
+            want: Want::Exact(UiAction::ZoomPane),
         },
     ];
 
@@ -579,7 +580,7 @@ mod tests {
 
         assert_eq!(
             dispatched, expected,
-            "the set of DISPATCHED commands changed. wolf-gnome dispatches exactly twenty-six \
+            "the set of DISPATCHED commands changed. wolf-gnome dispatches exactly twenty-seven \
              commands; everything else must be Deferred(reason) or NoGnomeEquivalent(reason) so \
              the drain is never silent. If a command was genuinely implemented, tick its feat-list \
              row and update this list with it. A one-element diff naming \"new_window\" \
