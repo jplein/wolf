@@ -155,13 +155,14 @@ macos_application(
     bundle_name = "Wolf",
     infoplists = ["Info.plist"],
     minimum_os_version = "26.0",
-    # Each tree lands under Contents/Resources/; both font trees merge into one fonts/ dir.
+    # Each tree lands under Contents/Resources/; the font trees merge into one fonts/ dir.
     # See crates/wolf-macos/README.md#bundle-contents
     resources = [
         "//bazel/ghostty-vt:ghostty_terminfo",
         "//bazel/ia-writer-mono:ia_writer_mono_tree",
         "//bazel/jetbrains-mono:jetbrains_mono_tree",
         "//bazel/lighthouse:lighthouse_tree",
+        "//bazel/nerd-fonts-symbols:nerd_fonts_symbols_tree",
         "//bazel/nvim:nvim_tree",
         "//bazel/nvim-treesitter:nvim_treesitter_tree",
         "//bazel/nvim-treesitter-textobjects:nvim_treesitter_textobjects_tree",

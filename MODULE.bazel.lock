@@ -343,6 +343,34 @@
         ]
       }
     },
+    "//bazel/nerd-fonts-symbols:extensions.bzl%nerd_fonts_symbols": {
+      "general": {
+        "bzlTransitiveDigest": "w43lKaX0x9oEtASH/QdO+vJnJXtuT6YGmxCfEuW2EV0=",
+        "usagesDigest": "sw78uhr/7J1S6p5P/8cvHeRS6mjYBRlUc2SXCNjUVIw=",
+        "recordedFileInputs": {},
+        "recordedDirentsInputs": {},
+        "envVariables": {},
+        "generatedRepoSpecs": {
+          "nerd_fonts_symbols": {
+            "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_archive",
+            "attributes": {
+              "urls": [
+                "https://github.com/ryanoasis/nerd-fonts/releases/download/v3.5.1/NerdFontsSymbolsOnly.tar.xz"
+              ],
+              "sha256": "01172f37db8543edb102e5cb5c64101c9f4686630804d49b419aa07b23a69996",
+              "build_file_content": "load(\"@aspect_bazel_lib//lib:copy_to_directory.bzl\", \"copy_to_directory\")\n\npackage(default_visibility = [\"//visibility:public\"])\n\n# The Mono face, the MIT licence and the README whose icon-set table names each set's\n# licence. The proportional SymbolsNerdFont-Regular.ttf maps the same code points at\n# wider advances, and 10-nerd-font-symbols.conf's aliases prefer that proportional\n# family for every monospace family, so both stay out.\nfilegroup(\n    name = \"runtime_files\",\n    srcs = [\n        \"SymbolsNerdFontMono-Regular.ttf\",\n        \"LICENSE\",\n        \"README.md\",\n    ],\n)\n\n# The inner `fonts/` is shared with the other font trees: rules_apple strips the\n# TreeArtifact's own directory name, so the files land in Contents/Resources/fonts/.\ncopy_to_directory(\n    name = \"nerd_fonts_symbols_tree\",\n    srcs = [\":runtime_files\"],\n    out = \"nerd_fonts_symbols_tree\",\n    replace_prefixes = {\n        \"SymbolsNerdFontMono-Regular.ttf\": \"fonts/SymbolsNerdFontMono-Regular.ttf\",\n        \"LICENSE\": \"fonts/nerd-fonts-symbols-LICENSE\",\n        \"README.md\": \"fonts/nerd-fonts-symbols-README.md\",\n    },\n)\n"
+            }
+          }
+        },
+        "recordedRepoMappingEntries": [
+          [
+            "",
+            "bazel_tools",
+            "bazel_tools"
+          ]
+        ]
+      }
+    },
     "//bazel/nvim:extensions.bzl%nvim": {
       "general": {
         "bzlTransitiveDigest": "6ctFLGPyzArxXWqbtES3UR8ryPRLsLWcwUOx8egAY7E=",

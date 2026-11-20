@@ -874,7 +874,80 @@ fn the_packaged_output_carries_both_editor_font_families() {
 }
 
 // ---------------------------------------------------------------------------
-// Test 7: the compiled xterm-ghostty terminfo entry.
+// Test 7: the Symbols Nerd Font Mono icon face and its two notices.
+
+/// The icon face's file name, which the package installs beside the editor faces.
+const NERD_FONTS_FACE: &str = "SymbolsNerdFontMono-Regular.ttf";
+
+/// The two upstream notices the package ships for the icon face, relative to the store
+/// root: the Nerd Fonts MIT text and the README whose table names each icon set's licence.
+const NERD_FONTS_NOTICES_RELATIVE: [&str; 2] = [
+    "share/licenses/nerd-fonts-symbols-LICENSE",
+    "share/licenses/nerd-fonts-symbols-README.md",
+];
+
+/// The package carries Symbols Nerd Font Mono under `share/fonts`, where test 6's
+/// fontconfig `<dir>` already points, and ships both of its upstream notices.
+///
+/// ## Why the face is looked for under `share/fonts` and nowhere else
+///
+/// The generated `fonts.conf` names `share/fonts` and nothing narrower, so that tree is
+/// what fontconfig scans. A face installed anywhere else in `$out` exists and is never
+/// resolved, which is the defect assertion 1 names. The walk does not pin `truetype/`,
+/// for the reason [`file_names_under`] gives.
+///
+/// ## Why both notices
+///
+/// The MIT `LICENSE` names only the Nerd Fonts project. The glyphs come from icon sets
+/// under their own licences (CC BY 4.0, Apache 2.0, OFL 1.1 and others), and the
+/// archive's `README.md` is the file that names them, so either notice alone leaves part
+/// of the redistributed font unattributed.
+///
+/// ## Falsifiers
+///
+/// Delete the TTF install from `postInstall`; assertion 1 fires. Delete the `README.md`
+/// notice install; assertion 2 fires and names that path alone.
+#[test]
+#[ignore = "reads the installed Nix output; run through ./tools/wolf-package-smoke.sh"]
+fn the_packaged_output_carries_the_symbols_nerd_font_and_its_notices() {
+    const TEST: &str = "the_packaged_output_carries_the_symbols_nerd_font_and_its_notices";
+
+    let out = packaged_out(TEST);
+    let fonts_dir = out.join("share/fonts");
+    let names = file_names_under(&fonts_dir);
+
+    // --- Assertion 1: the Mono face, where fontconfig scans -------------------
+    assert!(
+        names.iter().any(|n| n == NERD_FONTS_FACE),
+        "{TEST}: {} carries no {NERD_FONTS_FACE:?}; it holds {names:?}. That directory is the \
+         one the generated fonts.conf names, so without the file there the packaged app has no \
+         face for Private Use Area icons and prompts, `ls` replacements and Neovim plugins draw \
+         tofu. If it holds `SymbolsNerdFont-Regular.ttf` instead, the proportional face was \
+         installed: its advances vary per glyph and overflow a grid cell. If the face is \
+         elsewhere in the package, `postInstall` copied it outside `share/fonts`.",
+        fonts_dir.display()
+    );
+
+    // --- Assertion 2: both notices, reported together -------------------------
+    let missing: Vec<String> = NERD_FONTS_NOTICES_RELATIVE
+        .iter()
+        .map(|relative| out.join(relative))
+        .filter(|path| !std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() > 0))
+        .map(|path| path.display().to_string())
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "{TEST}: these notices are missing, not regular files, or empty: {missing:?}. The package \
+         redistributes Symbols Nerd Font Mono, so it must carry both of the notices upstream ships \
+         beside it. `nerd-fonts-symbols-LICENSE` is the Nerd Fonts MIT text, and \
+         `nerd-fonts-symbols-README.md` carries the table naming each icon set's own licence. \
+         Without the first the project goes unattributed. Without the second the icon sets do, \
+         several of which require attribution."
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 8: the compiled xterm-ghostty terminfo entry.
 
 /// The entry inside the package, in ncurses' letter layout, which nixpkgs' `tic` writes. The
 /// directory is private to Wolf, so it cannot collide with Ghostty's `share/terminfo` in a

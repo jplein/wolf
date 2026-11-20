@@ -1,13 +1,16 @@
-//! Guards that the three vendored assets Wolf ships have ONE pin expressed in two
-//! files, not two pins that happen to agree today.
+//! Guards that every vendored asset Wolf ships has ONE pin expressed in two files,
+//! not two pins that happen to agree today.
 //!
-//! `flake.nix` fetches iA Writer Mono, orlando and lighthouse for the Linux
-//! package and devShell; `bazel/<asset>/extensions.bzl` fetches the same three
-//! tarballs for the macOS `.app`. Each side checks its own sha256 and neither reads
-//! the other's, so a ONE-SIDED bump is completely silent: both platforms build
-//! green, both tests pass, and Linux ships one revision of a plugin while macOS
-//! bundles another. Nothing anywhere fails. This file is the only thing that would
-//! notice.
+//! `flake.nix` fetches each asset in [`VENDORED_ASSETS`] for the Linux package and
+//! devShell; `bazel/<asset>/extensions.bzl` fetches the same archive for the macOS
+//! `.app`. Each side checks its own sha256 and neither reads the other's, so a
+//! ONE-SIDED bump is completely silent: both platforms build green, both tests pass,
+//! and Linux ships one revision of an asset while macOS bundles another. Nothing
+//! anywhere fails. This file is the only thing that would notice.
+//!
+//! An asset is pinned either to a git commit or to a release version, and its row in
+//! [`VENDORED_ASSETS`] says which; [`RevisionKind`] holds the key and the value shape
+//! each kind uses on both sides.
 //!
 //! ## The parser defines the contract
 //!
@@ -36,9 +39,9 @@
 //! ## What it does NOT check
 //!
 //! Nothing here fetches anything, so it cannot say that either sha256 is the hash of
-//! the tarball at that commit. It says only that the two sides name the same commit
-//! and the same hash. A pin that is wrong on both sides in the same way is caught by
-//! the fetch, on whichever platform builds first.
+//! the archive at that revision. It says only that the two sides name the same
+//! revision and the same hash. A pin that is wrong on both sides in the same way is
+//! caught by the fetch, on whichever platform builds first.
 //!
 //! NO BAZEL WIRING, and none is missing. `crates/wolf-gnome` has no `BUILD.bazel` at
 //! all — that absence is deliberate and load-bearing, see
@@ -48,18 +51,21 @@
 //!
 //! ## What it needs
 //!
-//! Nothing: no compositor, no nvim, no built binary, no network. It reads four
-//! files and runs in microseconds, on every `cargo test`.
+//! Nothing: no compositor, no nvim, no built binary, no network. It reads `flake.nix`
+//! and each asset's extension, and runs in microseconds, on every `cargo test`.
 
 use std::path::{Path, PathBuf};
 
 // ---------------------------------------------------------------------------
 // What is pinned, and where each side writes it down.
 
-/// The Starlark constant each `extensions.bzl` states its commit in.
+/// The Starlark constant a commit-pinned `extensions.bzl` states its commit in.
 const BZL_COMMIT_KEY: &str = "_COMMIT";
 
-/// The Starlark constant each `extensions.bzl` states its tarball sha256 in.
+/// The Starlark constant a version-pinned `extensions.bzl` states its release in.
+const BZL_VERSION_KEY: &str = "_VERSION";
+
+/// The Starlark constant each `extensions.bzl` states its archive sha256 in.
 const BZL_SHA256_KEY: &str = "_SHA256";
 
 /// The line that opens the Nix-side block, as its trimmed form.
@@ -70,26 +76,99 @@ const NIX_BLOCK_OPEN: &str = "wolfVendoredPins = {";
 /// rather than a silent truncation — see [`nix_pins`].
 const NIX_BLOCK_CLOSE: &str = "};";
 
-/// The Nix attribute inside one asset's entry that carries its commit.
+/// The Nix attribute inside a commit-pinned asset's entry that carries its commit.
 const NIX_COMMIT_KEY: &str = "commit";
 
-/// The Nix attribute inside one asset's entry that carries its tarball sha256.
+/// The Nix attribute inside a version-pinned asset's entry that carries its release.
+const NIX_VERSION_KEY: &str = "version";
+
+/// The Nix attribute inside one asset's entry that carries its archive sha256.
 const NIX_SHA256_KEY: &str = "sha256";
 
-/// The workspace file that carries the Nix side of all three pins.
+/// The workspace file that carries the Nix side of every pin.
 const FLAKE: &str = "flake.nix";
 
-/// Every vendored asset, as `(the name its Nix entry uses, its Bazel extension)`.
+/// How an asset is pinned. The row in [`VENDORED_ASSETS`] decides, and both sides
+/// must state the revision under the key that kind names.
+///
+/// Neither kind is a fallback for the other: an asset whose row says `Commit` and
+/// whose Nix entry says `version` is a defect, reported as a kind mismatch, because
+/// accepting either key for any asset would let a commit pin turn into a version
+/// string with nothing noticing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RevisionKind {
+    /// A git commit: 40 lowercase hex characters.
+    Commit,
+    /// A release version: dot-separated runs of ASCII digits, such as `3.5.1`.
+    Version,
+}
+
+impl RevisionKind {
+    /// The Nix attribute this kind's revision is stated under.
+    fn nix_key(self) -> &'static str {
+        match self {
+            RevisionKind::Commit => NIX_COMMIT_KEY,
+            RevisionKind::Version => NIX_VERSION_KEY,
+        }
+    }
+
+    /// The Starlark constant this kind's revision is stated in.
+    fn bzl_key(self) -> &'static str {
+        match self {
+            RevisionKind::Commit => BZL_COMMIT_KEY,
+            RevisionKind::Version => BZL_VERSION_KEY,
+        }
+    }
+
+    /// The value shape this kind requires, for failure messages.
+    fn shape(self) -> &'static str {
+        match self {
+            RevisionKind::Commit => "40 lowercase hex characters",
+            RevisionKind::Version => "dot-separated runs of ASCII digits, such as `3.5.1`",
+        }
+    }
+
+    /// Whether `value` has this kind's shape.
+    fn is_well_formed(self, value: &str) -> bool {
+        match self {
+            RevisionKind::Commit => is_lowercase_hex(value, COMMIT_HEX_LEN),
+            RevisionKind::Version => value
+                .split('.')
+                .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit())),
+        }
+    }
+}
+
+/// Every vendored asset, as `(the name its Nix entry uses, its Bazel extension, how
+/// it is pinned)`.
 ///
 /// The Nix names are re-typed here as LITERALS rather than read out of the block,
 /// which is the whole point of the arity and naming assertions in
-/// [`the_nix_side_pins_exactly_the_three_vendored_assets`]: reading the names out of
-/// the file and then checking the file against them would hold for any set of names
-/// at all, including a set with a fourth asset nobody vendored on the Bazel side.
-const VENDORED_ASSETS: [(&str, &str); 3] = [
-    ("ia-writer-mono", "bazel/ia-writer-mono/extensions.bzl"),
-    ("orlando", "bazel/orlando/extensions.bzl"),
-    ("lighthouse", "bazel/lighthouse/extensions.bzl"),
+/// [`the_nix_side_pins_exactly_the_vendored_assets`]: reading the names out of the
+/// file and then checking the file against them would hold for any set of names at
+/// all, including one with an asset nobody vendored on the Bazel side. The kind is a
+/// literal for the same reason.
+const VENDORED_ASSETS: [(&str, &str, RevisionKind); 4] = [
+    (
+        "ia-writer-mono",
+        "bazel/ia-writer-mono/extensions.bzl",
+        RevisionKind::Commit,
+    ),
+    (
+        "orlando",
+        "bazel/orlando/extensions.bzl",
+        RevisionKind::Commit,
+    ),
+    (
+        "lighthouse",
+        "bazel/lighthouse/extensions.bzl",
+        RevisionKind::Commit,
+    ),
+    (
+        "nerd-fonts-symbols",
+        "bazel/nerd-fonts-symbols/extensions.bzl",
+        RevisionKind::Version,
+    ),
 ];
 
 /// A git commit's length in hex characters.
@@ -107,8 +186,8 @@ const SHA256_HEX_LEN: usize = 64;
 /// This file lives in `wolf-gnome` for that file's reason: this crate has no
 /// `BUILD.bazel` to wire a test into, and neither `flake.nix` nor
 /// `bazel/*/extensions.bzl` is a Bazel runfile, so a `wolf-core` home would mean a
-/// `rust_test` plus `data` deps on three files outside its package and a Bazel-side
-/// check about a Nix-side fact.
+/// `rust_test` plus `data` deps on files outside its package and a Bazel-side check
+/// about a Nix-side fact.
 fn workspace_path(relative: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
@@ -122,7 +201,7 @@ fn read_workspace_file(guard: &str, relative: &str) -> (PathBuf, String) {
         panic!(
             "{guard}: could not read {}: {e}. That path is CARGO_MANIFEST_DIR joined with \
              `../../{relative}`, so an error here means this crate moved relative to the workspace \
-             root, or the file was renamed — NOT that a pin drifted.",
+             root, or the file was renamed or not yet written — NOT that a pin drifted.",
             path.display()
         )
     });
@@ -135,15 +214,16 @@ fn read_workspace_file(guard: &str, relative: &str) -> (PathBuf, String) {
 /// Every double-quoted value assigned to the Starlark constant `key` in `text`.
 ///
 /// STATED COUPLING with each `extensions.bzl`: a pin is written as `_COMMIT = "…"`
-/// on a line of its own, with the constant first. A line qualifies when its
-/// `trim_start()` begins with `key` and the remainder is `=` then a double-quoted
-/// string, with any amount of whitespace around the `=`.
+/// or `_VERSION = "…"`, and `_SHA256 = "…"`, each on a line of its own with the
+/// constant first. A line qualifies when its `trim_start()` begins with `key` and the
+/// remainder is `=` then a double-quoted string, with any amount of whitespace around
+/// the `=`.
 ///
-/// Prose mentions of the constants do not match, and that is checked rather than
-/// hoped: every reference in the three docstrings and comments is either backticked
-/// (`` `_COMMIT` ``) or embedded mid-sentence, so none of them begins a line with the
-/// bare identifier followed by `=` and a quote. `_ARCHIVE_ROOT = "orlando-" + _COMMIT`
-/// does not match either, because the line begins with a different identifier.
+/// Prose mentions of the constants do not match: a reference in a docstring or
+/// comment is backticked (`` `_COMMIT` ``) or embedded mid-sentence, so it does not
+/// begin a line with the bare identifier followed by `=` and a quote.
+/// `_ARCHIVE_ROOT = "orlando-" + _COMMIT` and `_URL = "…".format(v = _VERSION)` do not
+/// match either, because each line begins with a different identifier.
 ///
 /// A Vec rather than an Option, so the caller can tell ZERO matches (the file was
 /// reworded and this check has gone vacuous) from MORE THAN ONE (the file grew a
@@ -207,8 +287,10 @@ fn bzl_pin(guard: &str, path: &Path, text: &str, key: &str) -> String {
 struct NixPin {
     /// The attribute name, which must match a [`VENDORED_ASSETS`] row.
     name: String,
-    /// The value of `commit`.
-    commit: String,
+    /// Which key the entry stated its revision under.
+    kind: RevisionKind,
+    /// The value of `commit` or `version`.
+    revision: String,
     /// The value of `sha256`.
     sha256: String,
 }
@@ -231,12 +313,18 @@ fn quoted_attr<'a>(rest: &'a str, key: &str) -> Option<(String, &'a str)> {
 ///
 /// ```text
 /// <name> = { commit = "<40 hex>"; sha256 = "<64 hex>"; };
+/// <name> = { version = "<release>"; sha256 = "<64 hex>"; };
 /// ```
 ///
-/// One attribute set per line, `commit` before `sha256`, both values double-quoted,
-/// the closing `};` on the SAME line. The order is fixed rather than free because
-/// this is a scanner and not a parser, and a free order would mean either two passes
-/// or a state machine for no gain.
+/// One attribute set per line, the revision (`commit` or `version`) before `sha256`,
+/// both values double-quoted, the closing `};` on the SAME line. Any other first key
+/// leaves the line unreadable. The order is fixed rather than free because this is a
+/// scanner and not a parser, and a free order would mean either two passes or a state
+/// machine for no gain.
+///
+/// Accepting either revision key is not a loosening: the line records which key it
+/// used, and [`the_nix_side_pins_exactly_the_vendored_assets`] requires it to be the
+/// one the asset's row names.
 fn parse_pin_line(line: &str) -> Option<NixPin> {
     let (name, rest) = line.trim().split_once('=')?;
     let name = name.trim();
@@ -248,7 +336,11 @@ fn parse_pin_line(line: &str) -> Option<NixPin> {
         return None;
     }
     let rest = rest.trim_start().strip_prefix('{')?;
-    let (commit, rest) = quoted_attr(rest, NIX_COMMIT_KEY)?;
+    let (kind, revision, rest) = [RevisionKind::Commit, RevisionKind::Version]
+        .into_iter()
+        .find_map(|kind| {
+            quoted_attr(rest, kind.nix_key()).map(|(value, after)| (kind, value, after))
+        })?;
     let (sha256, rest) = quoted_attr(rest, NIX_SHA256_KEY)?;
     let rest = rest.trim_start().strip_prefix('}')?;
     let rest = rest.trim();
@@ -257,7 +349,8 @@ fn parse_pin_line(line: &str) -> Option<NixPin> {
     }
     Some(NixPin {
         name: name.to_string(),
-        commit,
+        kind,
+        revision,
         sha256,
     })
 }
@@ -301,10 +394,10 @@ fn require_nix_pins(guard: &str, path: &Path, text: &str) -> Vec<NixPin> {
     let Some((pins, unreadable)) = nix_pins(text) else {
         panic!(
             "{guard}: {} contains no line whose trimmed form is exactly `{NIX_BLOCK_OPEN}`, so the \
-             Nix side of all three pins could not be located and this check is comparing nothing. \
-             The binding was renamed or reformatted: fix `flake.nix` or this constant so the two \
-             agree again. Do NOT widen the scanner to search for something looser: a matcher that \
-             finds a block wherever one might be is a matcher that reports a stale one.",
+             Nix side of every pin could not be located and this check is comparing nothing. The \
+             binding was renamed or reformatted: fix `flake.nix` or this constant so the two agree \
+             again. Do NOT widen the scanner to search for something looser: a matcher that finds \
+             a block wherever one might be is a matcher that reports a stale one.",
             path.display()
         )
     };
@@ -314,9 +407,10 @@ fn require_nix_pins(guard: &str, path: &Path, text: &str) -> Vec<NixPin> {
          read: {unreadable:?}. Every such line is a pin that is NOT being compared against Bazel, \
          so it would drift in silence — which is the entire failure this file exists to catch. \
          The required shape is one asset per line, `<name> = {{ commit = \"…\"; sha256 = \"…\"; \
-         }};`, `commit` before `sha256`, both values double-quoted, the closing brace on the same \
-         line. Reformat the block; do not teach the scanner a second shape, because a scanner with \
-         two shapes has no contract to state in `flake.nix`'s comment.",
+         }};` or the same with `version` in place of `commit`: the revision key first, both \
+         values double-quoted, the closing brace on the same line. Reformat the block; do not \
+         teach the scanner another shape, because a scanner with open-ended shapes has no \
+         contract to state in `flake.nix`'s comment.",
         path.display(),
         unreadable.len()
     );
@@ -332,29 +426,33 @@ fn is_lowercase_hex(value: &str, len: usize) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// Test 1: the Nix block's arity, names and value shapes.
+// Test 1: the Nix block's arity, names, revision kinds and value shapes.
 
-/// Pins that `flake.nix` states exactly the three assets this file knows how to
-/// compare, under exactly the names [`VENDORED_ASSETS`] uses.
+/// Pins that `flake.nix` states exactly the assets this file knows how to compare,
+/// under exactly the names [`VENDORED_ASSETS`] uses, each under the revision key its
+/// row names.
 ///
 /// ## Why arity is a claim rather than a formality
 ///
-/// A FOURTH entry is not a harmless addition. Every entry in that block is an asset
+/// An EXTRA entry is not a harmless addition. Every entry in that block is an asset
 /// the Linux package ships, and an entry with no `VENDORED_ASSETS` row is an asset
 /// whose Bazel counterpart nothing checks — so the two platforms would be free to
 /// diverge on it from the day it was added, which is the drift this file exists for.
 /// A MISSING entry is the same defect from the other end: the loop below would have
-/// nothing to compare and would pass while one of the three went unguarded.
+/// nothing to compare and would pass while that asset went unguarded.
 ///
 /// ## Falsifiers
 ///
-/// Add a fourth entry to `wolfVendoredPins` — assertion 2 fires and names it. Rename
-/// one entry — assertion 3 fires and shows both sets. Truncate a sha256 by a
-/// character — assertion 4 fires, rather than the mismatch loop reporting it as a
-/// drift it is not.
+/// The Nix side cannot take a value edit that breaks its own fetch, because
+/// `nix develop` then fails before this test runs. So each recipe keeps the flake
+/// evaluating. Rename the `nerd-fonts-symbols` entry to `nerd-fonts`, and its
+/// reference in `wolfNerdFontsSymbols`; assertion 3 fires and shows both sets. Change
+/// that entry's key `version` to `commit`, and `pin.version` to `pin.commit`;
+/// assertion 4 fires naming the kind mismatch, rather than assertion 5 reporting
+/// `3.5.1` as a malformed commit.
 #[test]
-fn the_nix_side_pins_exactly_the_three_vendored_assets() {
-    const GUARD: &str = "the_nix_side_pins_exactly_the_three_vendored_assets";
+fn the_nix_side_pins_exactly_the_vendored_assets() {
+    const GUARD: &str = "the_nix_side_pins_exactly_the_vendored_assets";
 
     let (path, text) = read_workspace_file(GUARD, FLAKE);
     let pins = require_nix_pins(GUARD, &path, &text);
@@ -369,7 +467,7 @@ fn the_nix_side_pins_exactly_the_three_vendored_assets() {
         path.display()
     );
 
-    // --- Assertion 2: exactly three --------------------------------------------
+    // --- Assertion 2: exactly the table's arity --------------------------------
     let names: Vec<&str> = pins.iter().map(|p| p.name.as_str()).collect();
     assert!(
         pins.len() == VENDORED_ASSETS.len(),
@@ -381,11 +479,11 @@ fn the_nix_side_pins_exactly_the_three_vendored_assets() {
         path.display(),
         pins.len(),
         VENDORED_ASSETS.len(),
-        VENDORED_ASSETS.map(|(name, _)| name)
+        VENDORED_ASSETS.map(|(name, _, _)| name)
     );
 
-    // --- Assertion 3: the three names, exactly ---------------------------------
-    for (expected, bzl) in VENDORED_ASSETS {
+    // --- Assertion 3: the table's names, exactly -------------------------------
+    for (expected, bzl, _) in VENDORED_ASSETS {
         assert!(
             pins.iter().any(|p| p.name == expected),
             "{GUARD}: {}'s `{NIX_BLOCK_OPEN}` block has no entry named {expected:?}; it names \
@@ -396,18 +494,48 @@ fn the_nix_side_pins_exactly_the_three_vendored_assets() {
         );
     }
 
-    // --- Assertion 4: the value shapes -----------------------------------------
-    // Checked here, not in the mismatch loop, so a malformed hex string is not reported as drift.
     for pin in &pins {
+        let Some(&(_, bzl, kind)) = VENDORED_ASSETS
+            .iter()
+            .find(|(name, _, _)| *name == pin.name)
+        else {
+            panic!(
+                "{GUARD}: {}'s entry {:?} has no VENDORED_ASSETS row, though assertions 2 and 3 \
+                 passed, which together leave every entry exactly one row. The assertions above \
+                 were weakened; restore them rather than skipping this entry.",
+                path.display(),
+                pin.name
+            )
+        };
+
+        // --- Assertion 4: the revision key is the one the row names -----------
+        // Before the shape check, so a kind mismatch is not reported as a malformed value.
         assert!(
-            is_lowercase_hex(&pin.commit, COMMIT_HEX_LEN),
-            "{GUARD}: {}'s {:?} entry states commit {:?}, which is not {COMMIT_HEX_LEN} lowercase \
-             hex characters. `fetchurl` would fail on a bad commit, so this is caught eventually — \
-             but it is caught HERE, before the mismatch loop reports it as a drift against Bazel \
-             that it is not.",
+            pin.kind == kind,
+            "{GUARD}: {}'s {:?} entry states its revision under `{}`, but VENDORED_ASSETS pins that \
+             asset by `{}`, which `{bzl}` states as `{}`. The row decides the kind, so the two \
+             sides compare like with like; a commit-pinned asset written with `version`, or the \
+             reverse, is a different pin from the one Bazel fetches even when the strings agree. \
+             Restore the row's key in `flake.nix`, or change the row and the extension together.",
             path.display(),
             pin.name,
-            pin.commit
+            pin.kind.nix_key(),
+            kind.nix_key(),
+            kind.bzl_key()
+        );
+
+        // --- Assertion 5: the value shapes -------------------------------------
+        // Checked here, not in the mismatch loop, so a malformed value is not reported as drift.
+        assert!(
+            kind.is_well_formed(&pin.revision),
+            "{GUARD}: {}'s {:?} entry states {} {:?}, which is not {}. The fetch would fail on a \
+             bad revision, so this is caught eventually — but it is caught HERE, before the \
+             mismatch loop reports it as a drift against Bazel that it is not.",
+            path.display(),
+            pin.name,
+            kind.nix_key(),
+            pin.revision,
+            kind.shape()
         );
         assert!(
             is_lowercase_hex(&pin.sha256, SHA256_HEX_LEN),
@@ -425,8 +553,8 @@ fn the_nix_side_pins_exactly_the_three_vendored_assets() {
 // ---------------------------------------------------------------------------
 // Test 2: the Bazel side is readable at all.
 
-/// Pins that every `extensions.bzl` states exactly one commit and exactly one
-/// sha256 that [`bzl_values`] can read.
+/// Pins that every `extensions.bzl` states exactly one revision, under the constant
+/// its row's kind names, and exactly one sha256 that [`bzl_values`] can read.
 ///
 /// This is the non-vacuity half, and it is a test of its own rather than a line
 /// inside the comparison because its failure means something different: not that the
@@ -438,11 +566,11 @@ fn the_nix_side_pins_exactly_the_three_vendored_assets() {
 ///
 /// ## Falsifier
 ///
-/// RENAME the constant: `_COMMIT` → `_REV` in `bazel/lighthouse/extensions.bzl`, at
-/// its definition and both of its uses (`_ARCHIVE_ROOT` and the `urls` format), which
-/// leaves the file valid Starlark. The zero-match arm fires naming that file and the
-/// word VACUOUS, rather than the comparison passing. Moving the value onto a
-/// continuation line does the same, since this scanner reads one line at a time.
+/// RENAME the constant: `_VERSION` → `_REL` in `bazel/nerd-fonts-symbols/extensions.bzl`,
+/// at its definition and its use in `_URL`, which leaves the file valid Starlark. The
+/// zero-match arm fires naming that file and the word VACUOUS, rather than the
+/// comparison passing. Moving the value onto a continuation line does the same, since
+/// this scanner reads one line at a time.
 ///
 /// ## A recipe that does NOT falsify it, recorded so nobody spends the run twice
 ///
@@ -453,27 +581,28 @@ fn the_nix_side_pins_exactly_the_three_vendored_assets() {
 /// tightening the scanner to reject one would only turn a formatting change into a
 /// failure that names the wrong thing.
 #[test]
-fn every_bazel_extension_states_exactly_one_commit_and_one_sha256() {
-    const GUARD: &str = "every_bazel_extension_states_exactly_one_commit_and_one_sha256";
+fn every_bazel_extension_states_exactly_one_revision_and_one_sha256() {
+    const GUARD: &str = "every_bazel_extension_states_exactly_one_revision_and_one_sha256";
 
-    for (asset, relative) in VENDORED_ASSETS {
+    for (asset, relative, kind) in VENDORED_ASSETS {
         let (path, text) = read_workspace_file(GUARD, relative);
-        let commit = bzl_pin(GUARD, &path, &text, BZL_COMMIT_KEY);
+        let revision = bzl_pin(GUARD, &path, &text, kind.bzl_key());
         let sha256 = bzl_pin(GUARD, &path, &text, BZL_SHA256_KEY);
 
         assert!(
-            is_lowercase_hex(&commit, COMMIT_HEX_LEN),
-            "{GUARD}: {relative} states {BZL_COMMIT_KEY} = {commit:?} for {asset:?}, which is not \
-             {COMMIT_HEX_LEN} lowercase hex characters. The scanner read SOMETHING, so this is a \
-             malformed pin rather than an unreadable file."
+            kind.is_well_formed(&revision),
+            "{GUARD}: {relative} states {} = {revision:?} for {asset:?}, which is not {}. The \
+             scanner read SOMETHING, so this is a malformed pin rather than an unreadable file.",
+            kind.bzl_key(),
+            kind.shape()
         );
         assert!(
             is_lowercase_hex(&sha256, SHA256_HEX_LEN),
             "{GUARD}: {relative} states {BZL_SHA256_KEY} = {sha256:?} for {asset:?}, which is not \
              {SHA256_HEX_LEN} lowercase hex characters. Both sides write the hash as bare hex, \
              which is what makes the comparison in \
-             `the_nix_and_bazel_pins_name_the_same_commit_and_sha256_for_every_vendored_asset` a \
-             string equality at all."
+             `the_nix_and_bazel_pins_name_the_same_revision_and_sha256_for_every_vendored_asset` \
+             a string equality at all."
         );
     }
 }
@@ -485,7 +614,7 @@ fn every_bazel_extension_states_exactly_one_commit_and_one_sha256() {
 struct Mismatch {
     /// Which vendored asset.
     asset: &'static str,
-    /// `commit` or `sha256`.
+    /// `commit`, `version` or `sha256`.
     field: &'static str,
     /// What `flake.nix` says.
     nix: String,
@@ -495,8 +624,8 @@ struct Mismatch {
     bzl_file: &'static str,
 }
 
-/// The claim: for each of the three vendored assets, `flake.nix` and
-/// `bazel/<asset>/extensions.bzl` name the SAME commit and the SAME sha256.
+/// The claim: for every vendored asset, `flake.nix` and `bazel/<asset>/extensions.bzl`
+/// name the SAME revision and the SAME sha256.
 ///
 /// ## Why the mismatches are collected rather than asserted in a loop
 ///
@@ -509,16 +638,16 @@ struct Mismatch {
 ///
 /// ## Falsifiers
 ///
-/// Change one hex digit of `wolfVendoredPins.orlando.commit`; the report names
-/// orlando's commit and both files. Change one digit of
-/// `wolfVendoredPins.lighthouse.sha256`; it names lighthouse's sha256. Change
-/// `ia-writer-mono`'s commit; it names THAT asset, which is what proves all three are
-/// compared rather than the first. Change two assets at once; TWO mismatches are
-/// reported, not one.
+/// Each edits the Bazel side, because a Nix-side value edit breaks the flake's own
+/// fetch and `nix develop` with it. Change one hex digit of `_SHA256` in
+/// `bazel/nerd-fonts-symbols/extensions.bzl`; the report names nerd-fonts-symbols'
+/// sha256 and both files. Set `_VERSION = "3.5.0"` there; it names
+/// nerd-fonts-symbols' version. Change a digit of `_SHA256` in two extensions at
+/// once; TWO mismatches are reported, not one.
 #[test]
-fn the_nix_and_bazel_pins_name_the_same_commit_and_sha256_for_every_vendored_asset() {
+fn the_nix_and_bazel_pins_name_the_same_revision_and_sha256_for_every_vendored_asset() {
     const GUARD: &str =
-        "the_nix_and_bazel_pins_name_the_same_commit_and_sha256_for_every_vendored_asset";
+        "the_nix_and_bazel_pins_name_the_same_revision_and_sha256_for_every_vendored_asset";
 
     let (flake_path, flake_text) = read_workspace_file(GUARD, FLAKE);
     let pins = require_nix_pins(GUARD, &flake_path, &flake_text);
@@ -526,24 +655,24 @@ fn the_nix_and_bazel_pins_name_the_same_commit_and_sha256_for_every_vendored_ass
     let mut mismatches: Vec<Mismatch> = Vec::new();
     let mut compared = 0usize;
 
-    for (asset, relative) in VENDORED_ASSETS {
-        // A missing entry is `the_nix_side_pins_exactly_the_three_vendored_assets`'s finding;
+    for (asset, relative, kind) in VENDORED_ASSETS {
+        // A missing entry is `the_nix_side_pins_exactly_the_vendored_assets`'s finding;
         // skipping keeps the two failures distinct.
         let Some(pin) = pins.iter().find(|p| p.name == asset) else {
             continue;
         };
 
         let (bzl_path, bzl_text) = read_workspace_file(GUARD, relative);
-        let bzl_commit = bzl_pin(GUARD, &bzl_path, &bzl_text, BZL_COMMIT_KEY);
+        let bzl_revision = bzl_pin(GUARD, &bzl_path, &bzl_text, kind.bzl_key());
         let bzl_sha256 = bzl_pin(GUARD, &bzl_path, &bzl_text, BZL_SHA256_KEY);
         compared += 1;
 
-        if pin.commit != bzl_commit {
+        if pin.revision != bzl_revision {
             mismatches.push(Mismatch {
                 asset,
-                field: NIX_COMMIT_KEY,
-                nix: pin.commit.clone(),
-                bazel: bzl_commit,
+                field: kind.nix_key(),
+                nix: pin.revision.clone(),
+                bazel: bzl_revision,
                 bzl_file: relative,
             });
         }
@@ -558,14 +687,14 @@ fn the_nix_and_bazel_pins_name_the_same_commit_and_sha256_for_every_vendored_ass
         }
     }
 
-    // --- Assertion 1 (non-vacuity): all three were really compared ------------
+    // --- Assertion 1 (non-vacuity): every asset was really compared -----------
     // Without it, a block whose entries were all renamed compares nothing and passes.
     assert!(
         compared == VENDORED_ASSETS.len(),
         "{GUARD}: only {compared} of {} vendored assets were compared at all, so this check is \
          partly vacuous — the assets it skipped could carry any Bazel revision and nothing here \
          would report it. An asset is skipped when {}'s block has no entry under the name this \
-         file expects; `the_nix_side_pins_exactly_the_three_vendored_assets` names which.",
+         file expects; `the_nix_side_pins_exactly_the_vendored_assets` names which.",
         VENDORED_ASSETS.len(),
         flake_path.display()
     );
@@ -576,13 +705,13 @@ fn the_nix_and_bazel_pins_name_the_same_commit_and_sha256_for_every_vendored_ass
         "{GUARD}: {} vendored pin(s) differ between the Nix side and the Bazel side:{}\n\
          \n\
          A ONE-SIDED BUMP IS SILENT, which is why this test exists. Each side fetches its own \
-         tarball and verifies it against its OWN sha256, and neither side ever reads the other's — \
+         archive and verifies it against its OWN sha256, and neither side ever reads the other's — \
          so `nix build` succeeds, `bazel build` succeeds, every other test on both platforms stays \
-         green, and Linux ships one revision of a vendored plugin while the macOS `.app` bundles \
+         green, and Linux ships one revision of a vendored asset while the macOS `.app` bundles \
          another. Nothing else in this repository would notice.\n\
          \n\
-         The fix is to BUMP BOTH TOGETHER — set the same commit and the same sha256 in {} and in \
-         the named `bazel/<asset>/extensions.bzl`, then regenerate `MODULE.bazel.lock`. Do NOT \
+         The fix is to BUMP BOTH TOGETHER — set the same revision and the same sha256 in {} and \
+         in the named `bazel/<asset>/extensions.bzl`, then regenerate `MODULE.bazel.lock`. Do NOT \
          'fix' this by editing the expected value in this test: there is no expected value here, \
          only the two files' own words.",
         mismatches.len(),

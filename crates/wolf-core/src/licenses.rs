@@ -1,9 +1,9 @@
-//! The compiled-in licence registries: the verbatim licence texts of the four bundled
-//! fonts and of the linked libraries, each with the plain-text block built from it.
+//! The compiled-in licence registries: the verbatim licence texts of the bundled fonts
+//! and of the linked libraries, each with the plain-text block built from it.
 //!
-//! Two of the four fonts ship inside every rendered preview document as base64
-//! `@font-face` payloads ([`crate::markdown`]); the other two ship as editor faces
-//! in the same distribution. All four are redistributed, so all four owe
+//! The preview faces ship inside every rendered preview document as base64
+//! `@font-face` payloads ([`crate::markdown`]); the editor faces and the icon face ship
+//! in the same distribution. Every one is redistributed, so every one owes
 //! attribution, and the only way to discharge that from a self-contained binary is
 //! to compile the texts in. Every front-end and every rendered preview document
 //! carries [`FONT_LICENSE_NOTICES`].
@@ -61,14 +61,17 @@ const JETBRAINS_TEXT: &str = include_str!("licenses/jetbrains-mono-OFL.txt");
 /// iA Writer Mono S's licence text. The one file with **no trailing newline** —
 /// see the module docs.
 const IA_WRITER_TEXT: &str = include_str!("licenses/ia-writer-mono-LICENSE.txt");
+/// Symbols Nerd Font Mono's licence text: the project's MIT licence followed by the
+/// release README's table of the icon sets it bundles and each set's licence.
+const NERD_FONTS_TEXT: &str = include_str!("licenses/nerd-fonts-symbols-LICENSE.txt");
 
-/// The SIL Open Font License 1.1, which three of the four fonts ship under.
+/// The SIL Open Font License 1.1, which most of the fonts ship under.
 const OFL_1_1: &str = "SIL Open Font License 1.1";
 /// The GUST Font License, which Latin Modern Math ships under.
 const GUST_1_0: &str = "GUST Font License 1.0 (LPPL 1.3c)";
 
 /// Every bundled font's licence, in the order [`FONT_LICENSE_NOTICES`] renders
-/// them: the two preview faces first, then the two editor faces.
+/// them: the preview faces first, then the editor faces, then the icon face.
 pub const FONT_LICENSES: &[FontLicense] = &[
     FontLicense {
         font: "Inter",
@@ -105,6 +108,16 @@ pub const FONT_LICENSES: &[FontLicense] = &[
                      face derives from IBM Plex, so the text carries a second copyright line for \
                      IBM Corp",
         text: IA_WRITER_TEXT,
+    },
+    FontLicense {
+        font: "Symbols Nerd Font Mono",
+        license: "MIT License (icon sets under the licences listed)",
+        provenance: "LICENSE, then README.md's \"Icon sets\" section through its last table row, \
+                     joined by one empty line; both at the root of NerdFontsSymbolsOnly.tar.xz \
+                     v3.5.1, archive sha256 \
+                     01172f37db8543edb102e5cb5c64101c9f4686630804d49b419aa07b23a69996 — the pin \
+                     in bazel/nerd-fonts-symbols/extensions.bzl and flake.nix",
+        text: NERD_FONTS_TEXT,
     },
 ];
 
@@ -143,6 +156,11 @@ pub const FONT_LICENSE_NOTICES: &str = concat!(
     "iA Writer Mono S — SIL Open Font License 1.1\n",
     "================================================================\n",
     include_str!("licenses/ia-writer-mono-LICENSE.txt"),
+    "\n",
+    "================================================================\n",
+    "Symbols Nerd Font Mono — MIT License (icon sets under the licences listed)\n",
+    "================================================================\n",
+    include_str!("licenses/nerd-fonts-symbols-LICENSE.txt"),
     "\n",
 );
 
@@ -292,13 +310,13 @@ mod tests {
     /// `FONT_LICENSES.len()` compared against itself would accept any number,
     /// including zero — at which point every "for each row" check below passes
     /// vacuously while the shipped binary carries no attribution at all.
-    const EXPECT_FONT_COUNT: usize = 4;
+    const EXPECT_FONT_COUNT: usize = 5;
 
     /// The shortest a real licence text can plausibly be, in bytes.
     ///
-    /// The smallest of the four is Latin Modern Math's GUST licence at 1417 bytes.
-    /// The three OFL texts are several times that: 4380 (Inter), 4399 (JetBrains
-    /// Mono) and 4506 (iA Writer Mono S, the largest of the four). This floor
+    /// The smallest is Latin Modern Math's GUST licence at 1417 bytes, then Symbols
+    /// Nerd Font Mono's at 2937. The OFL texts are larger still: 4380 (Inter), 4399
+    /// (JetBrains Mono) and 4506 (iA Writer Mono S). This floor
     /// therefore clears every one of them by a wide margin while still failing an
     /// `include_str!` pointed at an empty or truncated file — which otherwise
     /// produces a row that satisfies every other check here.
@@ -308,18 +326,18 @@ mod tests {
     /// literals.
     ///
     /// Each is taken from its file's copyright line rather than from the shared
-    /// OFL boilerplate. Three of the four texts are the same OFL, so a phrase
+    /// OFL boilerplate. Several of the texts are the same OFL, so a phrase
     /// drawn from the boilerplate would be found in whichever text a mis-wired
     /// `include_str!` happened to load and this table would prove nothing. Each
-    /// phrase was verified to occur in exactly one of the four texts and zero times
-    /// in the other three, which is what
+    /// phrase was verified to occur in exactly one of the texts and in none of the
+    /// others, which is what
     /// [`each_licence_text_carries_its_distinctive_phrase`] re-checks from both
     /// sides.
     ///
     /// The iA Writer Mono S phrase deliberately omits the copyright glyph and the
     /// quoted reserved font name: a literal that has to match bytes exactly is
     /// safer with no non-ASCII character and no escaped quote in it. The Latin
-    /// Modern Math phrase is shaped unlike the other three because the GUST file
+    /// Modern Math phrase is shaped unlike the others because the GUST file
     /// carries no copyright line at all — line 2 is the only line naming the rights
     /// holder.
     const PHRASES: [(&str, &str); EXPECT_FONT_COUNT] = [
@@ -327,6 +345,7 @@ mod tests {
         ("Latin Modern Math", "GUST is the Polish TeX Users Group"),
         ("JetBrains Mono", "The JetBrains Mono Project Authors"),
         ("iA Writer Mono S", "Information Architects Inc."),
+        ("Symbols Nerd Font Mono", "Ryan L McIntyre"),
     ];
 
     /// Looks a registered row up by font name.
@@ -345,7 +364,8 @@ mod tests {
             })
     }
 
-    /// Every bundled font has a non-empty licence text, and there are four of them.
+    /// Every bundled font has a non-empty licence text, and there are
+    /// [`EXPECT_FONT_COUNT`] of them.
     ///
     /// The length floor is what catches the silent failure mode: an `include_str!`
     /// pointed at the wrong path, or at a file that was truncated to nothing by a
@@ -358,7 +378,8 @@ mod tests {
             EXPECT_FONT_COUNT,
             "FONT_LICENSES must carry exactly {EXPECT_FONT_COUNT} rows — one per bundled font \
              (Inter and Latin Modern Math ship inside every rendered preview document; JetBrains \
-             Mono and iA Writer Mono S ship as editor faces). Fewer means a font is distributed \
+             Mono and iA Writer Mono S ship as editor faces; Symbols Nerd Font Mono ships as the \
+             icon face). Fewer means a font is distributed \
              with no licence text compiled in beside it; more means a row was added without a \
              phrase in this file's table."
         );
@@ -396,8 +417,8 @@ mod tests {
     ///
     /// The failure this catches is silent and entirely plausible: two rows'
     /// `include_str!` paths swapped. Every field is still non-empty, the notices
-    /// block still contains all four texts, and the document still ships four
-    /// licences — attributed to the wrong fonts.
+    /// block still contains every text, and the document still ships every
+    /// licence — attributed to the wrong fonts.
     #[test]
     fn each_licence_text_carries_its_distinctive_phrase() {
         assert_eq!(
@@ -417,12 +438,12 @@ mod tests {
                 "the {font} row's licence text does not contain {phrase:?}, the phrase from that \
                  font's own copyright line. The row is populated (see \
                  `every_bundled_font_has_a_non_empty_licence_text`), so this says the text belongs \
-                 to a DIFFERENT font — two rows' `include_str!` paths swapped, which ships four \
-                 correct licences attributed to the wrong four fonts."
+                 to a DIFFERENT font — two rows' `include_str!` paths swapped, which ships \
+                 correct licences attributed to the wrong fonts."
             );
 
-            // A phrase from the shared OFL boilerplate is in three of the four texts, so it
-            // could not tell a swap from a correct wiring.
+            // A phrase from the shared OFL boilerplate is in several texts, so it could not
+            // tell a swap from a correct wiring.
             let carriers: Vec<&str> = FONT_LICENSES
                 .iter()
                 .filter(|candidate| candidate.text.contains(phrase))
@@ -468,8 +489,8 @@ mod tests {
             assert!(
                 FONT_LICENSE_NOTICES.contains(phrase),
                 "FONT_LICENSE_NOTICES does not contain {phrase:?}, so {font}'s licence BODY is \
-                 absent even if its name is present. A block that lists the four fonts and \
-                 includes three of the four texts is the shape this catches."
+                 absent even if its name is present. A block that lists every font but omits one \
+                 of their texts is the shape this catches."
             );
         }
     }
@@ -481,7 +502,7 @@ mod tests {
     /// therefore welds `…SOFTWARE.` straight onto the next row's header, producing
     /// a line that reads as neither. Every other test in this file passes through
     /// that defect untouched — the phrases are all still present, the fonts are all
-    /// still named, and the block still contains all four texts.
+    /// still named, and the block still contains every text.
     ///
     /// Both halves are needed. The ordering half proves the rows appear in registry
     /// order (so the assertion below is looking at the boundary it thinks it is),
@@ -550,8 +571,8 @@ mod tests {
                  welded onto the end of it. This is the `ia-writer-mono-LICENSE.txt` trap: that \
                  file carries NO trailing newline, so a `concat!` that abuts the rows produces \
                  `…SOFTWARE.<next header>` on one line. Put an EXPLICIT \"\\n\" separator between \
-                 every pair of rows rather than relying on the files — three of the four do end in \
-                 a newline, which is exactly what makes the fourth's omission invisible.",
+                 every pair of rows rather than relying on the files — most of them do end in a \
+                 newline, which is exactly what makes one's omission invisible.",
                 earlier.font,
                 later.font
             );

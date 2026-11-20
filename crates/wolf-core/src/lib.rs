@@ -29,7 +29,7 @@
 //! - [`markdown`]: pure, GUI-free Markdown -> themed-HTML rendering for the
 //!   preview pane (with forward-compatible per-line / per-100-column markers).
 //! - [`files`]: the async streaming file-list traversal and `FileSearch` session.
-//! - [`licenses`]: the compiled-in licence texts of the four bundled fonts and of the
+//! - [`licenses`]: the compiled-in licence texts of the bundled fonts and of the
 //!   linked libraries, plus the constant plain-text blocks the preview document's head
 //!   and the front-ends' About surfaces carry.
 //! - [`mru`]: the global, directory-filtered most-recently-used file cache

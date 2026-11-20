@@ -4,8 +4,9 @@ import CoreText
 import Foundation
 
 /// Registers the vendored fonts shipped at `Contents/Resources/fonts/*.ttf` so
-/// CoreText resolves their families — both bundled families, "iA Writer Mono S"
-/// (the default grid font) and "JetBrains Mono". Registration is PROCESS-scoped
+/// CoreText resolves their families — "iA Writer Mono S" (the default grid font),
+/// "JetBrains Mono", and "Symbols Nerd Font Mono", the face for Private Use Area
+/// icons, which is never a configured family. Registration is PROCESS-scoped
 /// (not installed system-wide) and
 /// LOG-NOT-FAIL: a missing fonts dir (developer/`swift run` paths) or an
 /// already-registered face is logged and skipped, never fatal.

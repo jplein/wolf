@@ -105,6 +105,10 @@ use_repo(jetbrains_mono, "jetbrains_mono")
 ia_writer_mono = use_extension("//bazel/ia-writer-mono:extensions.bzl", "ia_writer_mono")
 use_repo(ia_writer_mono, "ia_writer_mono")
 
+# --- Vendored Symbols Nerd Font Mono icon face (macOS bundle only): see its package README ---
+nerd_fonts_symbols = use_extension("//bazel/nerd-fonts-symbols:extensions.bzl", "nerd_fonts_symbols")
+use_repo(nerd_fonts_symbols, "nerd_fonts_symbols")
+
 # --- Vendored nvim-treesitter plugin (macOS bundle only) --------------------
 # Pinned to `main`, whose injections work on the pinned nvim; see bazel/nvim-treesitter/README.md.
 nvim_treesitter = use_extension("//bazel/nvim-treesitter:extensions.bzl", "nvim_treesitter")

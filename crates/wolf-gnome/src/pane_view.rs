@@ -4958,7 +4958,7 @@ mod tests {
     ///
     /// That the head contains no `<body` is a PREMISE about `wolf-core`, not a property
     /// of this function, and this is where it is measured rather than assumed: the head
-    /// embeds four font licences inside an HTML comment, and `wolf-core`'s
+    /// embeds the font licences inside an HTML comment, and `wolf-core`'s
     /// `the_notices_cannot_terminate_an_html_comment` checks those texts for `<!--`,
     /// `-->` and `--!>` and for nothing else. A licence bump that introduced the five
     /// characters `<body` reddens this test — see
@@ -5117,7 +5117,7 @@ mod tests {
     /// and the head guard cannot notice.
     ///
     /// This states what the function DOES rather than that it is safe, because it is
-    /// not: `wolf_core::markdown::render_html` embeds four font licences in an HTML
+    /// not: `wolf_core::markdown::render_html` embeds the font licences in an HTML
     /// comment in the head, and `wolf-core`'s
     /// `the_notices_cannot_terminate_an_html_comment` checks those texts for `<!--`,
     /// `-->` and `--!>` and for nothing else. A licence bump introducing the five

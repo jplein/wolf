@@ -15,7 +15,7 @@ use wolf_core::{FONT_LICENSES, FONT_LICENSE_NOTICES};
 use wolf_ffi::wolf_ffi_font_license_notices;
 
 /// The bridge returns the core constant byte for byte. A mismatch is reported as both
-/// lengths and the first differing byte offset, not as two ~14 KB dumps.
+/// lengths and the first differing byte offset, not as two dumps of the whole block.
 #[test]
 fn the_notices_cross_the_bridge_byte_for_byte() {
     let returned = wolf_ffi_font_license_notices();

@@ -209,4 +209,21 @@ TERMINFO_ENTRY="$RES/terminfo/78/xterm-ghostty"
 [ -s "$TERMINFO_ENTRY" ] || fail "the compiled xterm-ghostty entry $TERMINFO_ENTRY exists but is EMPTY (zero bytes)"
 echo "PASS check (v): $TERMINFO_ENTRY exists and is a non-empty regular file"
 
-echo "PASS: Wolf.app bundles nvim/bin/nvim (executable), the markdown parser, the runtime tree, init.lua, the vendored orlando plugin, the vendored lighthouse colorscheme, the vendored nvim-treesitter + textobjects plugins, the curated compiled treesitter parsers, the JetBrains Mono fonts (4 TTFs + OFL.txt), the iA Writer Mono S fonts (4 TTFs + LICENSE.md), rg/rg (executable), and terminfo/78/xterm-ghostty"
+# (w)-(y) Symbols Nerd Font Mono, the Private Use Area icon face, and its two upstream notices;
+# fonts/ is shared with the editor families.
+for entry in \
+  "w:SymbolsNerdFontMono-Regular.ttf:icon font" \
+  "x:nerd-fonts-symbols-LICENSE:icon font license (the Nerd Fonts MIT text)" \
+  "y:nerd-fonts-symbols-README.md:icon font notice (the icon-set licence table)"
+do
+  label="${entry%%:*}"
+  rest="${entry#*:}"
+  name="${rest%%:*}"
+  what="${rest#*:}"
+  FILE="$RES/fonts/$name"
+  [ -f "$FILE" ] || fail "expected bundled $what at $FILE, but it is missing"
+  [ -s "$FILE" ] || fail "bundled $what $FILE exists but is EMPTY (zero bytes)"
+  echo "PASS check ($label): $FILE exists and is non-empty"
+done
+
+echo "PASS: Wolf.app bundles nvim/bin/nvim (executable), the markdown parser, the runtime tree, init.lua, the vendored orlando plugin, the vendored lighthouse colorscheme, the vendored nvim-treesitter + textobjects plugins, the curated compiled treesitter parsers, the JetBrains Mono fonts (4 TTFs + OFL.txt), the iA Writer Mono S fonts (4 TTFs + LICENSE.md), Symbols Nerd Font Mono (TTF + LICENSE + README.md), rg/rg (executable), and terminfo/78/xterm-ghostty"

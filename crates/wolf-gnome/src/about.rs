@@ -116,16 +116,16 @@ mod tests {
     /// The distinctive phrase from Inter's licence, RE-TYPED here as a local
     /// literal.
     ///
-    /// None of the four phrases below may be imported from
+    /// None of the phrases below may be imported from
     /// `wolf_core::licenses` — importing them would make this file assert that a
     /// constant equals itself, and it would keep passing while the dialog carried
     /// no licence text at all. Each is taken from its file's copyright line rather
-    /// than from the shared OFL boilerplate, which three of the four texts have in
+    /// than from the shared OFL boilerplate, which several of the texts have in
     /// common and which therefore could not tell a mis-wired `include_str!` apart
     /// from a correct one.
     const INTER_PHRASE: &str = "The Inter Project Authors";
     /// The distinctive phrase from Latin Modern Math's licence. Shaped unlike the
-    /// other three because the GUST file carries no copyright line at all — line 2
+    /// others because the GUST file carries no copyright line at all — line 2
     /// is the only line naming the rights holder.
     const LATIN_MODERN_PHRASE: &str = "GUST is the Polish TeX Users Group";
     /// The distinctive phrase from JetBrains Mono's licence.
@@ -135,20 +135,24 @@ mod tests {
     /// to match bytes exactly is safer with no non-ASCII character and no escaped
     /// quote in it.
     const IA_WRITER_PHRASE: &str = "Information Architects Inc.";
+    /// The distinctive phrase from Symbols Nerd Font Mono's licence, from the Nerd Fonts
+    /// MIT copyright line.
+    const NERD_FONTS_PHRASE: &str = "Ryan L McIntyre";
 
     /// Every phrase, with the font it belongs to, for a failure message that names
     /// which licence went missing.
-    const PHRASES: [(&str, &str); 4] = [
+    const PHRASES: [(&str, &str); 5] = [
         ("Inter", INTER_PHRASE),
         ("Latin Modern Math", LATIN_MODERN_PHRASE),
         ("JetBrains Mono", JETBRAINS_PHRASE),
         ("iA Writer Mono S", IA_WRITER_PHRASE),
+        ("Symbols Nerd Font Mono", NERD_FONTS_PHRASE),
     ];
 
     /// The application name the heading must carry.
     const APP_NAME: &str = "Wolf";
 
-    /// The About text carries all four bundled fonts' licences.
+    /// The About text carries every bundled font's licence.
     ///
     /// [`about_text`] takes NO arguments and reads
     /// `wolf_core::licenses::FONT_LICENSE_NOTICES` itself, so this asserts
@@ -168,8 +172,8 @@ mod tests {
                 text.contains(phrase),
                 "the About text does not contain {phrase:?}, the distinctive phrase from {font}'s \
                  licence. Two things produce this and they need different fixes: \
-                 `FONT_LICENSE_NOTICES` was dropped from `about_text`'s composition (then all four \
-                 phrases are missing), or {font}'s row was dropped from `FONT_LICENSES` or its \
+                 `FONT_LICENSE_NOTICES` was dropped from `about_text`'s composition (then every \
+                 phrase is missing), or {font}'s row was dropped from `FONT_LICENSES` or its \
                  `include_str!` re-pointed (then only this one is). Either way the shipped dialog \
                  fails to carry the attribution the bundled font requires. Text was:\n{text}"
             );
@@ -185,7 +189,7 @@ mod tests {
     ///
     /// The version is additionally required to appear BEFORE the first licence
     /// phrase. Without that, a bare `contains` would be satisfied by a version-like
-    /// string occurring inside one of the ~14 KB of licence bodies, and deleting
+    /// string occurring inside one of the licence bodies, and deleting
     /// the heading outright would not redden this test.
     #[test]
     fn the_about_text_names_the_application_and_its_version() {

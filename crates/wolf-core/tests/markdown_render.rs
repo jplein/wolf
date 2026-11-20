@@ -2840,12 +2840,12 @@ fn nested_table_in_a_list_item_takes_no_inline_marker() {
 
 /// Inter's distinctive phrase, from its own copyright line.
 ///
-/// All four phrases below come from a copyright line rather than from the shared
-/// OFL boilerplate: three of the four texts are the same licence, so a boilerplate
-/// phrase would be present whichever texts were emitted and could not tell a
-/// complete block from a partial one.
+/// Every phrase below comes from a copyright line rather than from shared licence
+/// boilerplate: several of the texts are the same licence, so a boilerplate phrase
+/// would be present whichever texts were emitted and could not tell a complete block
+/// from a partial one.
 const LICENCE_PHRASE_INTER: &str = "The Inter Project Authors";
-/// Latin Modern Math's distinctive phrase. Shaped unlike the other three because
+/// Latin Modern Math's distinctive phrase. Shaped unlike the others because
 /// the GUST file carries no copyright line — this is the only line naming the
 /// rights holder.
 const LICENCE_PHRASE_LATIN_MODERN: &str = "GUST is the Polish TeX Users Group";
@@ -2855,27 +2855,31 @@ const LICENCE_PHRASE_JETBRAINS: &str = "The JetBrains Mono Project Authors";
 /// glyph and the quoted reserved font name: a literal that has to match bytes
 /// exactly is safer with no non-ASCII character and no escaped quote in it.
 const LICENCE_PHRASE_IA_WRITER: &str = "Information Architects Inc.";
+/// Symbols Nerd Font Mono's distinctive phrase, from the Nerd Fonts project's MIT
+/// copyright line.
+const LICENCE_PHRASE_NERD_FONTS: &str = "Ryan L McIntyre";
 
 /// Each bundled font paired with the phrase that identifies its licence text, so a
 /// failure message names which font lost its attribution.
-const LICENCE_PHRASES: [(&str, &str); 4] = [
+const LICENCE_PHRASES: [(&str, &str); 5] = [
     ("Inter", LICENCE_PHRASE_INTER),
     ("Latin Modern Math", LICENCE_PHRASE_LATIN_MODERN),
     ("JetBrains Mono", LICENCE_PHRASE_JETBRAINS),
     ("iA Writer Mono S", LICENCE_PHRASE_IA_WRITER),
+    ("Symbols Nerd Font Mono", LICENCE_PHRASE_NERD_FONTS),
 ];
 
 #[test]
 fn every_bundled_font_licence_ships_in_the_rendered_document() {
     // A licence-compliance obligation: two fonts embed as base64 `@font-face` payloads and the
-    // other two ship as editor faces in the same distribution.
+    // others ship as editor or icon faces in the same distribution.
     let html = render_html("# Hi\n\ntext", PreviewTheme::Default, WidthMode::Full);
 
     for (font, phrase) in LICENCE_PHRASES {
         assert!(
             html.contains(phrase),
             "the rendered document does not contain {phrase:?}, the distinctive phrase \
-             from {font}'s licence. All four missing means the `{{licenses}}` \
+             from {font}'s licence. Every phrase missing means the `{{licenses}}` \
              interpolation was dropped from `render_html_with_highlights`'s format \
              string; one missing means that font's row left `FONT_LICENSES` or its \
              `include_str!` was re-pointed. Either way a rendered preview — the \

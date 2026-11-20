@@ -95,15 +95,16 @@
         wolfNeovim = pkgs.neovim;
         wolfRipgrep = pkgs.ripgrep;
 
-        # Scanned by crates/wolf-gnome/tests/vendored_pins.rs: one asset per line, `commit` then `sha256`,
-        # double-quoted, `};` on the same line. Bump together with bazel/<asset>/extensions.bzl.
+        # Scanned by crates/wolf-gnome/tests/vendored_pins.rs: one asset per line, `commit` or `version`
+        # then `sha256`, double-quoted, `};` on the same line. Bump with bazel/<asset>/extensions.bzl.
         wolfVendoredPins = {
           ia-writer-mono = { commit = "f32c04c3058a75d7ce28919ce70fe8800817491b"; sha256 = "826767eaea4ce43ccb7ca71327a5c63ac31206b99df400699e6744df6104e1b5"; };
           orlando = { commit = "c960cf3e1c24fbdd2e6fb30ab9c8022cdc7b2bf9"; sha256 = "794911361108eb509ab00ec64ed03c229418be32f45ad7a385b6d2d6b057f3c5"; };
           lighthouse = { commit = "431d3f6c4034af4155a9b2a9a810faa28f92be70"; sha256 = "55a4c72e071a2dcab60a4d69b0b8a0051bb6176ac0001581f7866598081ed1d5"; };
+          nerd-fonts-symbols = { version = "3.5.1"; sha256 = "01172f37db8543edb102e5cb5c64101c9f4686630804d49b419aa07b23a69996"; };
         };
 
-        # The libghostty-vt release; outside wolfVendoredPins, whose test wants a commit per line.
+        # The libghostty-vt release; outside wolfVendoredPins, whose lines carry one sha256, not two.
         # Bump together with bazel/ghostty-vt/extensions.bzl.
         wolfGhosttyVtPin = {
           version = "1.0.0";
@@ -196,6 +197,35 @@
               # upstream LICENSE.md).
               install -Dm644 "iA Writer Mono/LICENSE.md" \
                 "$out/share/licenses/ia-writer-mono/LICENSE.md"
+              runHook postInstall
+            '';
+          };
+
+        # Symbols Nerd Font Mono and its two notices, from the archive bazel/nerd-fonts-symbols pins too.
+        # Linux-only: see notes/flake.nix.md#darwin-eval-laziness
+        wolfNerdFontsSymbols =
+          let
+            pin = wolfVendoredPins.nerd-fonts-symbols;
+          in
+          pkgs.stdenv.mkDerivation {
+            pname = "wolf-nerd-fonts-symbols";
+            version = pin.version;
+            src = pkgs.fetchurl {
+              url = "https://github.com/ryanoasis/nerd-fonts/releases/download/v${pin.version}/NerdFontsSymbolsOnly.tar.xz";
+              sha256 = pin.sha256;
+            };
+            # The archive is flat, with no top directory.
+            sourceRoot = ".";
+            dontConfigure = true;
+            dontBuild = true;
+
+            # Only the Mono face: the proportional face and the upstream .conf stay out, as on macOS.
+            installPhase = ''
+              runHook preInstall
+              install -Dm644 SymbolsNerdFontMono-Regular.ttf \
+                "$out/share/fonts/truetype/SymbolsNerdFontMono-Regular.ttf"
+              install -Dm644 LICENSE "$out/share/licenses/nerd-fonts-symbols/LICENSE"
+              install -Dm644 README.md "$out/share/licenses/nerd-fonts-symbols/README.md"
               runHook postInstall
             '';
           };
@@ -422,12 +452,13 @@
 
             export RUST_SRC_PATH="${rustToolchain}/lib/rustlib/src/rust/library"
 
-            # Golden renders pin fontconfig to the three pinned font trees, with no host font directory.
+            # Golden renders pin fontconfig to the pinned font trees, with no host font directory.
             __wolf_fonts_conf="$(mktemp -t wolf-fonts.XXXXXX.conf)"
             ${pkgs.gnused}/bin/sed \
               -e "s|@DEJAVU_FONTS@|${pkgs.dejavu_fonts}|g" \
               -e "s|@JETBRAINS_MONO@|${pkgs.jetbrains-mono}|g" \
               -e "s|@IA_WRITER_MONO@|${iaWriterMono}|g" \
+              -e "s|@NERD_FONTS_SYMBOLS@|${wolfNerdFontsSymbols}|g" \
               "$PWD/crates/wolf-gnome/testdata/fonts.conf" > "$__wolf_fonts_conf"
             export FONTCONFIG_FILE="$__wolf_fonts_conf"
 
@@ -577,7 +608,7 @@
                   "$out/share/icons/hicolor/scalable/apps/org.wolf.Wolf.svg"
 
                 # --- Editor fonts: `iA Writer Mono S` is `default_config()`'s family, JetBrains Mono the other
-                # The two file sets are disjoint, so one directory holds both.
+                # The icon face joins them; the file sets are disjoint, so one directory holds all three.
                 for f in ${iaWriterMono}/share/fonts/truetype/*.ttf; do
                   install -Dm644 "$f" "$out/share/fonts/truetype/$(basename "$f")"
                 done
@@ -586,6 +617,12 @@
                 done
                 install -Dm644 ${iaWriterMono}/share/licenses/ia-writer-mono/LICENSE.md \
                   "$out/share/licenses/ia-writer-mono-LICENSE.md"
+                install -Dm644 ${wolfNerdFontsSymbols}/share/fonts/truetype/SymbolsNerdFontMono-Regular.ttf \
+                  "$out/share/fonts/truetype/SymbolsNerdFontMono-Regular.ttf"
+                install -Dm644 ${wolfNerdFontsSymbols}/share/licenses/nerd-fonts-symbols/LICENSE \
+                  "$out/share/licenses/nerd-fonts-symbols-LICENSE"
+                install -Dm644 ${wolfNerdFontsSymbols}/share/licenses/nerd-fonts-symbols/README.md \
+                  "$out/share/licenses/nerd-fonts-symbols-README.md"
 
                 # --- Additive fontconfig: FONTCONFIG_FILE replaces the root config, so include the system's ---
                 # `<dir>` follows it so system fonts win ties; XDG_DATA_DIRS is never scanned, so no `--prefix`.

@@ -521,7 +521,7 @@ pub fn code_blocks(source: &str) -> Vec<CodeBlockInfo> {
 /// The rendered Markdown body is wrapped as
 /// `<!doctype html><html><head><meta charset="utf-8"><!--\n{FONT_LICENSE_NOTICES}\n--><style>{INTER_FONT_FACE}{MATH_FONT_FACE}{BASE_CSS}{MATH_CSS}{theme_css}{width_css}</style></head><body class="wolf-markdown">{body}</body></html>`
 /// so the front-end web view can load the string directly. The comment carries
-/// [`crate::licenses::FONT_LICENSE_NOTICES`], which is how the four bundled fonts'
+/// [`crate::licenses::FONT_LICENSE_NOTICES`], which is how the bundled fonts'
 /// attribution reaches a reader of the preview. See the module docs for the marker
 /// scheme and its DOM placement.
 ///

@@ -16,6 +16,7 @@
 //! not depend on exact glyph shapes, only on bg fills + presence of ink.
 
 use cairo::{Context, Format, ImageSurface};
+use pango::prelude::FontExt;
 
 use wolf_core::{Cell, DefaultColors, HlAttr, Rgb, Snapshot};
 use wolf_gnome::{paint, CellMetrics};
@@ -298,9 +299,9 @@ fn paint_draws_ink_for_glyph_cell() {
 
 /// A family fontconfig provably cannot resolve.
 ///
-/// The devShell's generated `FONTCONFIG_FILE` exposes exactly three pinned font
-/// trees (DejaVu, JetBrains Mono, iA Writer Mono S) and no host font directory, so
-/// no installed font can carry this name. The hex suffix is there so the string
+/// The devShell's generated `FONTCONFIG_FILE` exposes exactly four pinned font
+/// trees (DejaVu, JetBrains Mono, iA Writer Mono S, Symbols Nerd Font Mono) and no
+/// host font directory, so no installed font can carry this name. The hex suffix is there so the string
 /// cannot collide with a family someone adds later.
 const NO_SUCH_FAMILY: &str = "Wolf No Such Family 8f3a1c";
 
@@ -530,6 +531,111 @@ fn the_natural_line_height_clamps_a_face_whose_recommended_height_is_short() {
          instead and the degenerate floor caught its 0; any other value means the substituted face \
          or the 96 dpi conversion moved, and the literal is to be re-measured rather than adjusted.",
         m.cell_h
+    );
+}
+
+// --- The pinned stack's icon face ---------------------------------------------
+
+/// The icon face's family, as its TTF names it and as a painter will request it.
+const NERD_FONTS_FAMILY: &str = "Symbols Nerd Font Mono";
+
+/// A Private Use Area code point the Nerd Fonts map assigns: U+F015, Font Awesome's
+/// `home`, one of the glyphs a shell prompt or file listing prints.
+const NERD_FONTS_PROBE_CHAR: char = '\u{F015}';
+
+/// The devShell's pinned fontconfig resolves [`NERD_FONTS_FAMILY`] to the vendored
+/// face, and that face draws [`NERD_FONTS_PROBE_CHAR`].
+///
+/// A painter that falls back to the icon face asks Pango for it by name, so this pins
+/// the premise such a fallback rests on: the template's `<dir>` for the face is
+/// rewritten to a real store path and fontconfig scans the face there.
+///
+/// ## Premises
+///
+/// A family the pinned trees cannot answer does not fail to load. The template's
+/// last-resort rule appends `DejaVu Sans` to every pattern, so `load_font` returns a
+/// DejaVu face and only the family of what was loaded tells the two apart.
+///
+/// That in turn needs `describe()` on a loaded font to report the family of the face
+/// fontconfig matched rather than echo the requested one. The precondition measures
+/// it on the same context with [`NO_SUCH_FAMILY`], so assertion 1 cannot pass because
+/// Pango repeats whatever it was asked for.
+///
+/// ## Falsifier
+///
+/// Delete the `@NERD_FONTS_SYMBOLS@` sed expression from the flake's `shellHook`, so
+/// the template's `<dir>` resolves nowhere; assertion 1 fires naming DejaVu Sans.
+#[test]
+fn the_pinned_stack_resolves_symbols_nerd_font_mono() {
+    let probe = ImageSurface::create(Format::ARgb32, 1, 1).expect("probe surface");
+    let probe_cr = Context::new(&probe).expect("probe context");
+    let context = pangocairo::functions::create_context(&probe_cr);
+
+    let loaded_family = |family: &str| {
+        let mut desc = pango::FontDescription::new();
+        desc.set_family(family);
+        desc.set_size((SMOKE_PROBE_SIZE_PT * f64::from(pango::SCALE)) as i32);
+        let font = context.load_font(&desc).unwrap_or_else(|| {
+            panic!(
+                "Pango loaded no font at all for {family:?}. The pinned fontconfig's last-resort \
+                 rule substitutes DejaVu Sans for any family it lacks, so no font means \
+                 FONTCONFIG_FILE names no usable configuration: run this under `nix develop`."
+            )
+        });
+        (desc, font.describe().family())
+    };
+
+    // --- Precondition: a loaded font reports the face it matched --------------
+    let (_, substituted) = loaded_family(NO_SUCH_FAMILY);
+    assert_ne!(
+        substituted.as_deref(),
+        Some(NO_SUCH_FAMILY),
+        "loading the unresolvable {NO_SUCH_FAMILY:?} reports that same family back, so Pango's \
+         `describe()` echoes the request instead of naming the matched face, and assertion 1 \
+         below would pass whether or not the icon face is installed. Compare the family through \
+         fontconfig's own match instead."
+    );
+
+    // --- Assertion 1: the family resolves to itself ---------------------------
+    let (desc, resolved) = loaded_family(NERD_FONTS_FAMILY);
+    assert_eq!(
+        resolved.as_deref(),
+        Some(NERD_FONTS_FAMILY),
+        "requesting {NERD_FONTS_FAMILY:?} loaded a face of family {resolved:?}. {substituted:?} is \
+         what an unresolvable family gets on this stack, so seeing it here means the face is not \
+         on the pinned stack: the template has no `<dir>` for it, or the shellHook did not \
+         rewrite `@NERD_FONTS_SYMBOLS@` to a store path holding `share/fonts`. `Symbols Nerd \
+         Font` means the proportional face was installed in place of the Mono one. Any other \
+         family means the TTF names itself differently from what a painter will request."
+    );
+
+    // --- Assertion 2: the face draws a Private Use Area glyph -----------------
+    let layout = pango::Layout::new(&context);
+    layout.set_font_description(Some(&desc));
+    layout.set_text(&NERD_FONTS_PROBE_CHAR.to_string());
+    let unknown = layout.unknown_glyphs_count();
+    assert_eq!(
+        unknown,
+        0,
+        "a layout in {NERD_FONTS_FAMILY:?} holding U+{:04X} has {unknown} unknown glyph(s), so no \
+         face on the pinned stack maps that code point and it renders as a hex box. The family \
+         resolved (assertion 1), so the vendored file is not the Nerd Fonts symbols face it is \
+         named for, or the pinned release dropped this code point from its map.",
+        u32::from(NERD_FONTS_PROBE_CHAR)
+    );
+
+    // No unknown glyph says SOME face maps it; the run's font says it is the icon face.
+    let run_family = layout
+        .line_readonly(0)
+        .and_then(|line| line.runs().into_iter().next())
+        .map(|run| run.item().analysis().font().describe().family());
+    assert_eq!(
+        run_family.as_ref().map(|f| f.as_deref()),
+        Some(Some(NERD_FONTS_FAMILY)),
+        "U+{:04X} in a {NERD_FONTS_FAMILY:?} layout was shaped with a face of family {run_family:?} \
+         (None: the layout produced no run). Another family means Pango fell back past the icon \
+         face, so the vendored file lacks this code point and some other pinned face drew it.",
+        u32::from(NERD_FONTS_PROBE_CHAR)
     );
 }
 
