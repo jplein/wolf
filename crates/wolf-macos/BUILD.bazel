@@ -280,6 +280,7 @@ swift_test(
         "Tests/WolfMacOSTests/PreviewKeyEquivalentTests.swift",
         "Tests/WolfMacOSTests/PreviewViewFixture.swift",
         "Tests/WolfMacOSTests/SidebarToolbarTests.swift",
+        "Tests/WolfMacOSTests/SplitCommandTests.swift",
         "Tests/WolfMacOSTests/StatusbarStripColourTests.swift",
         "Tests/WolfMacOSTests/SymbolsFallbackTests.swift",
         "Tests/WolfMacOSTests/TerminalClosePaneTests.swift",

@@ -222,6 +222,10 @@ mod command_kind {
     /// Edit the active preview pane's source file in another pane (reuse or
     /// split, source lands left).
     pub const EDIT_IN_OTHER_PANE: u8 = 27;
+    /// Split the active pane into two stacked panes, as Vim's `:split`.
+    pub const SPLIT_HORIZONTAL: u8 = 28;
+    /// Split the active pane into two side-by-side panes, as Vim's `:vsplit`.
+    pub const SPLIT_VERTICAL: u8 = 29;
 }
 
 /// The palette-row-kind discriminants packed into [`FfiCommandRow::row_kind`].
@@ -610,6 +614,10 @@ mod ffi {
         // Closes the current split (the pane) via `InputEvent::ClosePane`
         // (`:close`).
         fn close_pane(&self);
+        // Splits the active pane, stacked (`:split`) or side by side (`:vsplit`), through
+        // `WolfCore::split_pane`; Neovim's current window decides the new pane's kind.
+        fn split_horizontal(&self);
+        fn split_vertical(&self);
         // Opens an empty buffer named the next free `Untitled N.md` (markdown-typed, never written)
         // via `InputEvent::NewBuffer` (the `wolf_new_untitled` Lua helper).
         fn new_buffer(&self);
@@ -1142,7 +1150,7 @@ mod ffi {
     extern "Rust" {
         type FfiCommand;
 
-        // The command kind (`command_kind::NEW_WINDOW` .. `EDIT_IN_OTHER_PANE`).
+        // The command kind (`command_kind::NEW_WINDOW` .. `SPLIT_VERTICAL`).
         fn kind(&self) -> u8;
     }
 
@@ -2699,6 +2707,22 @@ impl WolfCoreHandle {
         }
     }
 
+    /// Splits the active pane into two stacked panes, as `:split`, via
+    /// [`WolfCore::split_pane`]. A no-op once the core has been shut down.
+    pub fn split_horizontal(&self) {
+        if let Some(core) = self.core.borrow().as_ref() {
+            core.split_pane(SplitOrientation::Horizontal);
+        }
+    }
+
+    /// Splits the active pane into two side-by-side panes, as `:vsplit`, via
+    /// [`WolfCore::split_pane`]. A no-op once the core has been shut down.
+    pub fn split_vertical(&self) {
+        if let Some(core) = self.core.borrow().as_ref() {
+            core.split_pane(SplitOrientation::Vertical);
+        }
+    }
+
     /// Opens a new empty buffer in the current window and names it the next free
     /// `Untitled N.md` — `Untitled.md`, then `Untitled 2.md`, … (the first name
     /// colliding with neither an existing buffer nor a file on disk in cwd),
@@ -3511,7 +3535,7 @@ pub struct FfiCommand {
 }
 
 impl FfiCommand {
-    /// The command kind (`command_kind::NEW_WINDOW` .. `EDIT_IN_OTHER_PANE`).
+    /// The command kind (`command_kind::NEW_WINDOW` .. `SPLIT_VERTICAL`).
     #[must_use]
     pub fn kind(&self) -> u8 {
         self.kind
@@ -3550,6 +3574,8 @@ impl FfiCommand {
             Command::SearchInProject => command_kind::SEARCH_IN_PROJECT,
             Command::PreviewInOtherPane => command_kind::PREVIEW_IN_OTHER_PANE,
             Command::EditInOtherPane => command_kind::EDIT_IN_OTHER_PANE,
+            Command::SplitHorizontal => command_kind::SPLIT_HORIZONTAL,
+            Command::SplitVertical => command_kind::SPLIT_VERTICAL,
         };
         Self { kind }
     }

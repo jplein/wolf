@@ -80,6 +80,10 @@ enum CommandDispatcher {
       controller?.previewInOtherPane()
     case .editInOtherPane:
       controller?.editInOtherPane()
+    case .splitHorizontal:
+      controller?.splitPane(.horizontal)
+    case .splitVertical:
+      controller?.splitPane(.vertical)
     }
   }
 }

@@ -212,7 +212,7 @@ use std::time::Duration;
 use adw::prelude::*;
 use gtk::{gio, glib};
 
-use wolf_core::{Command, InputEvent, Liveness, TabFiles, TerminalId, WolfCore};
+use wolf_core::{Command, InputEvent, Liveness, SplitOrientation, TabFiles, TerminalId, WolfCore};
 
 use crate::about;
 use crate::actions::{self, BindingStatus};
@@ -1945,6 +1945,12 @@ impl AppShell {
             UiAction::NewTab => self.new_tab(),
             UiAction::NewWindow => self.new_window(),
             UiAction::ClosePane => self.send_input(InputEvent::ClosePane),
+            UiAction::SplitHorizontal => self.send_input(InputEvent::SplitPane {
+                orientation: SplitOrientation::Horizontal,
+            }),
+            UiAction::SplitVertical => self.send_input(InputEvent::SplitPane {
+                orientation: SplitOrientation::Vertical,
+            }),
             // Over the ordered input channel directly: `WolfCore::toggle_full_width` is a one-line
             // `send_input` onto it, and the neighbouring arms' shape wins.
             UiAction::ToggleFullWidth => self.send_input(InputEvent::ToggleFullWidth),

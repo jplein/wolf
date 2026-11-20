@@ -1080,6 +1080,33 @@ rust_test(
 )
 
 rust_test(
+    name = "split_commands",
+    srcs = [
+        "tests/common/mod.rs",
+        "tests/split_commands.rs",
+    ],
+    crate_root = "tests/split_commands.rs",
+    # Spawns a real nvim and real shells in ptys, which the macOS build sandbox does not allow.
+    # Medium: the drawer case waits out negative settles.
+    tags = ["no-sandbox"],
+    size = "medium",
+    edition = "2021",
+    data = [
+        "//bazel/nvim:nvim_tree",
+        "//runtime/nvim:init.lua",
+    ],
+    env = {
+        "WOLF_NVIM_BIN": "$(rootpath //bazel/nvim:nvim_tree)/nvim/bin/nvim",
+        "WOLF_TEST_INIT_LUA": "$(rootpath //runtime/nvim:init.lua)",
+        "WOLF_TEST_NVIM_DIR": "$(rootpath //bazel/nvim:nvim_tree)",
+    },
+    deps = [
+        ":wolf_core",
+        "//crates/wolf-test-support:wolf_test_support",
+    ] + all_crate_deps(normal = True, normal_dev = True),
+)
+
+rust_test(
     name = "terminal_lifecycle",
     srcs = [
         "tests/common/mod.rs",

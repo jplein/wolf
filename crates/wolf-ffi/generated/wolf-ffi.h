@@ -461,6 +461,8 @@ void __swift_bridge__$WolfCoreHandle$open(void* self, void* path);
 void __swift_bridge__$WolfCoreHandle$chdir(void* self, void* path);
 void __swift_bridge__$WolfCoreHandle$set_background(void* self, bool dark);
 void __swift_bridge__$WolfCoreHandle$close_pane(void* self);
+void __swift_bridge__$WolfCoreHandle$split_horizontal(void* self);
+void __swift_bridge__$WolfCoreHandle$split_vertical(void* self);
 void __swift_bridge__$WolfCoreHandle$new_buffer(void* self);
 void __swift_bridge__$WolfCoreHandle$toggle_terminal(void* self);
 void __swift_bridge__$WolfCoreHandle$toggle_full_width(void* self);

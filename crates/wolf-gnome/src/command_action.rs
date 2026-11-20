@@ -24,7 +24,7 @@
 //!
 //! ## The three classes
 //!
-//! - **Dispatched** — the twenty-one commands `wolf-gnome` performs today.
+//! - **Dispatched** — the commands `wolf-gnome` performs today.
 //! - [`UiAction::Deferred`] — planned on GTK; the string names the concrete
 //!   blocker so the deferral is auditable rather than a shrug.
 //! - [`UiAction::NoGnomeEquivalent`] — has no GNOME counterpart and will never be
@@ -61,6 +61,12 @@ pub enum UiAction {
     NewUntitledBuffer,
     /// Close the focused editor pane (Neovim performs the `:close`).
     ClosePane,
+    /// Split the focused pane into two stacked panes, as `:split`; core makes the new pane
+    /// of the focused pane's kind and refuses the drawer.
+    SplitHorizontal,
+    /// Split the focused pane into two side-by-side panes, as `:vsplit`; core makes the new
+    /// pane of the focused pane's kind and refuses the drawer.
+    SplitVertical,
     /// Open a new TAB in this window, over the window's EXISTING core, rooted at
     /// the window's own folder.
     ///
@@ -186,6 +192,8 @@ pub fn ui_action_for(command: Command) -> UiAction {
         Command::SearchInProject => UiAction::ShowSearchPanel,
         Command::PreviewInOtherPane => UiAction::PreviewInOtherPane,
         Command::EditInOtherPane => UiAction::EditInOtherPane,
+        Command::SplitHorizontal => UiAction::SplitHorizontal,
+        Command::SplitVertical => UiAction::SplitVertical,
     }
 }
 
@@ -229,7 +237,7 @@ mod tests {
     /// The commands `wolf-gnome` DISPATCHES, by canonical `CommandSpec::id`,
     /// sorted. Ids (not variants) so the failure message names the registry row a
     /// reader can grep for.
-    const EXPECTED_DISPATCHED_IDS: [&str; 24] = [
+    const EXPECTED_DISPATCHED_IDS: [&str; 26] = [
         "buffer_picker",
         "close_pane",
         "close_window",
@@ -252,6 +260,8 @@ mod tests {
         "quit_application",
         "search_in_project",
         "sidebar_show_project",
+        "split_horizontal",
+        "split_vertical",
         "terminal",
         "toggle_sidebar",
     ];
@@ -430,6 +440,16 @@ mod tests {
             command: Command::EditInOtherPane,
             want: Want::Exact(UiAction::EditInOtherPane),
         },
+        Case {
+            desc: "28 SplitHorizontal: splits the focused pane, stacked",
+            command: Command::SplitHorizontal,
+            want: Want::Exact(UiAction::SplitHorizontal),
+        },
+        Case {
+            desc: "29 SplitVertical: splits the focused pane, side by side",
+            command: Command::SplitVertical,
+            want: Want::Exact(UiAction::SplitVertical),
+        },
     ];
 
     /// Whether `got` satisfies the row's [`Want`].
@@ -550,7 +570,7 @@ mod tests {
 
         assert_eq!(
             dispatched, expected,
-            "the set of DISPATCHED commands changed. wolf-gnome dispatches exactly twenty-four \
+            "the set of DISPATCHED commands changed. wolf-gnome dispatches exactly twenty-six \
              commands; everything else must be Deferred(reason) or NoGnomeEquivalent(reason) so \
              the drain is never silent. If a command was genuinely implemented, tick its feat-list \
              row and update this list with it. A one-element diff naming \"new_window\" \

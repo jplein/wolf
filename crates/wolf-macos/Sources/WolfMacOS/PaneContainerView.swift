@@ -688,6 +688,21 @@ final class PaneContainerView: NSView {
     handle.close_pane()
   }
 
+  /// Split Horizontal or Split Vertical: splits the active pane. It focuses the active pane's
+  /// window first, as `closeActivePane()` does, so the split acts on this view's active pane
+  /// even while a focus move is still in flight. Core decides the new pane's kind from
+  /// Neovim's current window, and refuses the drawer.
+  func splitActivePane(_ orientation: Orientation) {
+    let win = activeWin
+    if win != 0 {
+      handle.focus_win(win)
+    }
+    switch orientation {
+    case .horizontal: handle.split_horizontal()
+    case .vertical: handle.split_vertical()
+    }
+  }
+
   /// The nvim WINDOW handle of the ACTIVE pane, or `0` when there is none (or it
   /// is not bound yet).
   ///

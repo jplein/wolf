@@ -172,6 +172,7 @@ mod scrub_lists;
 mod search_toggles;
 mod sidebar;
 mod sidebar_toggles;
+mod split_commands;
 mod symbols;
 mod terminal;
 mod terminal_colours;

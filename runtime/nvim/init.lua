@@ -707,6 +707,17 @@ function _G.wolf_setup_layout(chan)
 		})
 	end
 
+	-- The split commands' entry. A terminal pane's split is core's, because core starts the new
+	-- session; core's router also refuses the drawer's.
+	local function split_pane(orient)
+		local id = vim.b[vim.api.nvim_get_current_buf()].wolf_terminal_id
+		if id ~= nil then
+			vim.rpcnotify(chan, "wolf_terminal_split", id, orient)
+		else
+			do_split(orient)
+		end
+	end
+
 	-- No from/orientation: the front-end holds the drawer outside its PaneTree as a root-bottom pane.
 	local function emit_drawer(win)
 		vim.rpcnotify(chan, "wolf_layout", {
@@ -717,6 +728,7 @@ function _G.wolf_setup_layout(chan)
 
 	-- Globals so the cnoreabbrev overrides and wolf_toggle_terminal can reach this channel.
 	_G.wolf_do_split = do_split
+	_G.wolf_split_pane = split_pane
 	_G.wolf_do_close = do_close
 	_G.wolf_do_quit = do_quit
 	_G.wolf_do_focus = do_focus

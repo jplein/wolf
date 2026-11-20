@@ -422,6 +422,14 @@ extension WolfCoreHandleRef {
         __swift_bridge__$WolfCoreHandle$close_pane(ptr)
     }
 
+    public func split_horizontal() {
+        __swift_bridge__$WolfCoreHandle$split_horizontal(ptr)
+    }
+
+    public func split_vertical() {
+        __swift_bridge__$WolfCoreHandle$split_vertical(ptr)
+    }
+
     public func new_buffer() {
         __swift_bridge__$WolfCoreHandle$new_buffer(ptr)
     }

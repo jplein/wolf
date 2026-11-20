@@ -587,9 +587,18 @@ impl TerminalRegistry {
         });
     }
 
-    /// `<C-w>s` or `<C-w>v`: a new session running the origin's program again, in the
-    /// origin shell's directory, shown in a split of the origin's pane. Ignored in the
-    /// drawer, which the front-ends keep outside their pane trees.
+    /// A split command in session `id`'s pane, sent back by `wolf_split_pane` as the
+    /// `wolf_terminal_split` notification: the split [`router_split`](Self::router_split)
+    /// makes. An unknown session is ignored.
+    pub(crate) fn split_session(&self, id: TerminalId, orientation: SplitOrientation) {
+        if let Some(session) = self.get(id) {
+            self.router_split(session, orientation);
+        }
+    }
+
+    /// `<C-w>s`, `<C-w>v` or a split command: a new session running the origin's program
+    /// again, in the origin shell's directory, shown in a split of the origin's pane. Ignored
+    /// in the drawer, which the front-ends keep outside their pane trees.
     fn router_split(&self, origin: Arc<Session>, orientation: SplitOrientation) {
         if *self.drawer.lock() == Some(origin.id) {
             return;

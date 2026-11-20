@@ -19,7 +19,7 @@ use rmpv::Value;
 use tokio::process::ChildStdin;
 
 use crate::command::Command;
-use crate::layout::LayoutIntent;
+use crate::layout::{LayoutIntent, SplitOrientation};
 use crate::recent_dirs::RecentDirs;
 use crate::render::{
     Cell, Cmdline, CmdlineChunk, CursorShape, DefaultColors, HlAttr, MarkdownCursor, Message,
@@ -232,6 +232,13 @@ const TERMINAL_WIPED_EVENT: &str = "wolf_terminal_wiped";
 /// Which notifications wake is the condition in specs/architecture.md#the-corefront-end-contract
 const TERMINAL_OPEN_EVENT: &str = "wolf_terminal_open";
 
+/// Name of the out-of-band notification `_G.wolf_split_pane` in `runtime/nvim/init.lua` sends
+/// for a split command in a terminal pane, carrying the pane's session id and `"h"` or `"v"`.
+/// Routed into the terminal registry, which splits as `<C-w>s` / `<C-w>v` do there and refuses
+/// the drawer. It touches no snapshot state and fires no wake, for the reason
+/// [`TERMINAL_OPEN_EVENT`]'s gives: the binding's own `wolf_buffers` emit wakes the front-end.
+const TERMINAL_SPLIT_EVENT: &str = "wolf_terminal_split";
+
 /// Name of the one nvim→core request, sent by `_G.wolf_sync_buffers` in
 /// `runtime/nvim/init.lua` straight after a synchronous `wolf_buffers` emit. nvim-rs
 /// applies notifications inline in its handler loop but spawns a request only after every
@@ -378,6 +385,18 @@ impl Handler for RedrawHandler {
                 // runtime, and the bind's `wolf_buffers` emit wakes the front-end.
                 if let Some(win) = args.first().and_then(ext_handle) {
                     self.terminals.open_in_window(win);
+                }
+            }
+            TERMINAL_SPLIT_EVENT => {
+                // No snapshot lock, no `seq` bump, no wake, as for `TERMINAL_OPEN_EVENT`.
+                let id = args.first().and_then(Value::as_u64).filter(|id| *id > 0);
+                let orientation = match args.get(1).and_then(Value::as_str) {
+                    Some("h") => Some(SplitOrientation::Horizontal),
+                    Some("v") => Some(SplitOrientation::Vertical),
+                    _ => None,
+                };
+                if let (Some(id), Some(orientation)) = (id, orientation) {
+                    self.terminals.split_session(TerminalId(id), orientation);
                 }
             }
             PREVIEW_EVENT => {

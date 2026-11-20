@@ -285,6 +285,15 @@ pub enum InputEvent {
     },
     /// Close the current split, i.e. the pane (delegated to `:close`).
     ClosePane,
+    /// Split the current window (delegated to the init.lua `wolf_split_pane` helper). The
+    /// helper decides by the current window: a terminal placeholder asks core's terminal
+    /// router for a new session, and the drawer's is refused there; any other window takes
+    /// `wolf_do_split`, the `<C-w>s` / `<C-w>v` path.
+    SplitPane {
+        /// [`Horizontal`](SplitOrientation::Horizontal) stacks the panes, as `:split`;
+        /// [`Vertical`](SplitOrientation::Vertical) puts them side by side, as `:vsplit`.
+        orientation: SplitOrientation,
+    },
     /// Open a new empty buffer in the current window and name it the next free
     /// `Untitled N.md` (delegated to the init.lua `wolf_new_untitled` helper,
     /// which runs `:enew` then names + markdown-types the buffer).
@@ -398,6 +407,7 @@ impl InputEvent {
             | InputEvent::SetTabpage { .. }
             | InputEvent::CloseTabpage { .. }
             | InputEvent::ClosePane
+            | InputEvent::SplitPane { .. }
             | InputEvent::NewBuffer
             | InputEvent::SwitchBuffer { .. }
             | InputEvent::SetBackground { .. }
@@ -430,6 +440,7 @@ impl InputEvent {
             | InputEvent::SetTabpage { .. }
             | InputEvent::CloseTabpage { .. }
             | InputEvent::ClosePane
+            | InputEvent::SplitPane { .. }
             | InputEvent::NewBuffer
             | InputEvent::SwitchBuffer { .. }
             | InputEvent::SetBackground { .. }
@@ -593,6 +604,7 @@ pub(crate) async fn apply(nvim: &mut impl Rpc, event: &InputEvent) -> Result<(),
         InputEvent::SetTabpage { handle } => set_current_tabpage(nvim, *handle).await,
         InputEvent::CloseTabpage { handle } => close_tabpage(nvim, *handle).await,
         InputEvent::ClosePane => command(nvim, "close").await,
+        InputEvent::SplitPane { orientation } => split_pane(nvim, *orientation).await,
         InputEvent::NewBuffer => new_untitled(nvim).await,
         InputEvent::Paste { text } => nvim_paste(nvim, text).await,
         InputEvent::SwitchBuffer { win, bufnr } => switch_buffer(nvim, *win, *bufnr).await,
@@ -636,6 +648,29 @@ async fn close_tabpage(nvim: &mut impl Rpc, handle: i64) -> Result<(), Box<CallE
             vec![
                 Value::from("wolf_close_tabpage(...)"),
                 Value::Array(vec![Value::from(handle)]),
+            ],
+        )
+        .await?;
+    Ok(())
+}
+
+/// Splits the current window via the init.lua `wolf_split_pane` helper, invoked over
+/// `nvim_exec_lua` with `"h"` for [`SplitOrientation::Horizontal`] and `"v"` for
+/// [`SplitOrientation::Vertical`], the letters `wolf_do_split` takes.
+async fn split_pane(
+    nvim: &mut impl Rpc,
+    orientation: SplitOrientation,
+) -> Result<(), Box<CallError>> {
+    let orient = match orientation {
+        SplitOrientation::Horizontal => "h",
+        SplitOrientation::Vertical => "v",
+    };
+    let _ = nvim
+        .request(
+            "nvim_exec_lua",
+            vec![
+                Value::from("wolf_split_pane(...)"),
+                Value::Array(vec![Value::from(orient)]),
             ],
         )
         .await?;

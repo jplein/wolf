@@ -12,7 +12,8 @@ import Foundation
 /// `copy == 14`, `paste == 15`, `bufferPicker == 16`, `newTab == 17`,
 /// `preview == 18`, `edit == 19`, `terminal == 20`, `previewInBrowser == 21`,
 /// `fullWidth == 22`, `toggleSidebar == 23`, `sidebarShowProject == 24`,
-/// `searchInProject == 25`, `previewInOtherPane == 26`, `editInOtherPane == 27`.
+/// `searchInProject == 25`, `previewInOtherPane == 26`, `editInOtherPane == 27`,
+/// `splitHorizontal == 28`, `splitVertical == 29`.
 public enum CommandKind {
   /// Open a new editor window.
   case newWindow
@@ -73,9 +74,15 @@ public enum CommandKind {
   /// Edit the active preview pane's source file in another pane (reuse or
   /// split, source lands left).
   case editInOtherPane
+  /// Split the active pane into two stacked panes, as Vim's `:split`. The new pane is of
+  /// the active pane's kind; the terminal drawer refuses it.
+  case splitHorizontal
+  /// Split the active pane into two side-by-side panes, as Vim's `:vsplit`. The new pane
+  /// is of the active pane's kind; the terminal drawer refuses it.
+  case splitVertical
 
-  /// Maps an FFI command-kind discriminant (`0` → `.newWindow` .. `27` →
-  /// `.editInOtherPane`, else `nil`), guarding the contract shared with
+  /// Maps an FFI command-kind discriminant (`0` → `.newWindow` .. `29` →
+  /// `.splitVertical`, else `nil`), guarding the contract shared with
   /// `wolf-ffi`'s `mod command_kind`.
   public init?(ffi: UInt8) {
     switch ffi {
@@ -107,6 +114,8 @@ public enum CommandKind {
     case 25: self = .searchInProject
     case 26: self = .previewInOtherPane
     case 27: self = .editInOtherPane
+    case 28: self = .splitHorizontal
+    case 29: self = .splitVertical
     default: return nil
     }
   }

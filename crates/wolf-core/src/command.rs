@@ -30,7 +30,7 @@
 /// `BufferPicker`(16), `NewTab`(17), `Preview`(18), `Edit`(19), `Terminal`(20),
 /// `PreviewInBrowser`(21), `FullWidth`(22), `ToggleSidebar`(23),
 /// `SidebarShowProject`(24), `SearchInProject`(25), `PreviewInOtherPane`(26),
-/// `EditInOtherPane`(27).
+/// `EditInOtherPane`(27), `SplitHorizontal`(28), `SplitVertical`(29).
 /// Adding a command is additive
 /// (append a variant + a [`COMMAND_SPECS`] row); reordering is a breaking change.
 /// `CommandPalette` is the palette's own invoking command and is EXCLUDED from the
@@ -106,6 +106,16 @@ pub enum Command {
     /// existing other pane or split one to the left (only has an effect when the
     /// active pane is a preview pane).
     EditInOtherPane,
+    /// Split the active pane into two stacked top and bottom, as Vim's `:split`
+    /// (`<C-w>s`). The new pane is of the active pane's kind (an editor window on
+    /// the same buffer, a new terminal session, or a preview of the same source);
+    /// the terminal drawer refuses it.
+    SplitHorizontal,
+    /// Split the active pane into two side by side, as Vim's `:vsplit`
+    /// (`<C-w>v`). The new pane is of the active pane's kind (an editor window on
+    /// the same buffer, a new terminal session, or a preview of the same source);
+    /// the terminal drawer refuses it.
+    SplitVertical,
 }
 
 /// The menu group a command belongs to in a native menu bar.
@@ -352,6 +362,20 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
         title: "Edit in Another Pane",
         menu: MenuGroup::View,
     },
+    CommandSpec {
+        command: Command::SplitHorizontal,
+        id: "split_horizontal",
+        ex_command: "WolfSplitHorizontal",
+        title: "Split Horizontal (stacked)",
+        menu: MenuGroup::File,
+    },
+    CommandSpec {
+        command: Command::SplitVertical,
+        id: "split_vertical",
+        ex_command: "WolfSplitVertical",
+        title: "Split Vertical (side by side)",
+        menu: MenuGroup::File,
+    },
 ];
 
 impl Command {
@@ -385,11 +409,12 @@ mod tests {
     /// (19), `Command::Terminal` (20), `Command::PreviewInBrowser` (21),
     /// `Command::FullWidth` (22), `Command::ToggleSidebar` (23),
     /// `Command::SidebarShowProject` (24), `Command::SearchInProject` (25),
-    /// `Command::PreviewInOtherPane` (26), and `Command::EditInOtherPane`
-    /// (discriminant 27) past `Command::CommandPalette` (13).
+    /// `Command::PreviewInOtherPane` (26), `Command::EditInOtherPane` (27),
+    /// `Command::SplitHorizontal` (28), and `Command::SplitVertical`
+    /// (discriminant 29) past `Command::CommandPalette` (13).
     /// A named constant so the magic-number lint stays quiet and the count's
     /// meaning is explicit.
-    const EXPECTED_COMMAND_COUNT: usize = 28;
+    const EXPECTED_COMMAND_COUNT: usize = 30;
 
     /// The append-only slice index (== FFI discriminant == `command_kind`) of
     /// `Command::CommandPalette`.
@@ -460,9 +485,17 @@ mod tests {
     const PREVIEW_IN_OTHER_PANE_INDEX: usize = 26;
 
     /// The append-only slice index (== FFI discriminant == `command_kind`) of
-    /// `Command::EditInOtherPane`: the appended discriminant 27 and LAST row of
-    /// [`COMMAND_SPECS`].
+    /// `Command::EditInOtherPane`: the appended discriminant 27.
     const EDIT_IN_OTHER_PANE_INDEX: usize = 27;
+
+    /// The append-only slice index (== FFI discriminant == `command_kind`) of
+    /// `Command::SplitHorizontal`: the appended discriminant 28.
+    const SPLIT_HORIZONTAL_INDEX: usize = 28;
+
+    /// The append-only slice index (== FFI discriminant == `command_kind`) of
+    /// `Command::SplitVertical`: the appended discriminant 29 and LAST row of
+    /// [`COMMAND_SPECS`].
+    const SPLIT_VERTICAL_INDEX: usize = 29;
 
     /// `from_id` resolves the canonical `command_palette` id to the new variant.
     #[test]
@@ -487,8 +520,8 @@ mod tests {
 
     /// Appending Copy, Paste, BufferPicker, NewTab, Preview, Edit, Terminal,
     /// PreviewInBrowser, FullWidth, ToggleSidebar, SidebarShowProject,
-    /// SearchInProject, PreviewInOtherPane, and EditInOtherPane grows the
-    /// registry to exactly 28 rows.
+    /// SearchInProject, PreviewInOtherPane, EditInOtherPane, SplitHorizontal, and
+    /// SplitVertical grows the registry to exactly 30 rows.
     #[test]
     fn command_specs_has_expected_len() {
         assert_eq!(
@@ -497,8 +530,8 @@ mod tests {
             "COMMAND_SPECS must hold exactly {EXPECTED_COMMAND_COUNT} rows \
              after appending Copy, Paste, BufferPicker, NewTab, Preview, Edit, \
              Terminal, PreviewInBrowser, FullWidth, ToggleSidebar, \
-             SidebarShowProject, SearchInProject, PreviewInOtherPane, and \
-             EditInOtherPane"
+             SidebarShowProject, SearchInProject, PreviewInOtherPane, \
+             EditInOtherPane, SplitHorizontal, and SplitVertical"
         );
     }
 
@@ -967,20 +1000,87 @@ mod tests {
         assert_eq!(spec.menu, MenuGroup::View, "menu group");
     }
 
-    /// Append-discriminant guard: EditInOtherPane is the LAST row (index 27), so
-    /// the slice index equals its FFI discriminant. Reordering breaks this.
+    /// Append-discriminant guard: EditInOtherPane stays at fixed index 27, so
+    /// the slice index still equals its FFI discriminant. Reordering breaks this.
     #[test]
-    fn edit_in_other_pane_is_the_last_row() {
+    fn edit_in_other_pane_is_at_index_27() {
         assert_eq!(
             COMMAND_SPECS[EDIT_IN_OTHER_PANE_INDEX].command,
             Command::EditInOtherPane,
             "the row at index {EDIT_IN_OTHER_PANE_INDEX} must be \
              Command::EditInOtherPane"
         );
+    }
+
+    /// `from_id` resolves the canonical `split_horizontal` id to the new
+    /// variant.
+    #[test]
+    fn split_horizontal_id_round_trips() {
         assert_eq!(
-            EDIT_IN_OTHER_PANE_INDEX,
+            Command::from_id("split_horizontal"),
+            Some(Command::SplitHorizontal),
+            "\"split_horizontal\" must resolve to Command::SplitHorizontal"
+        );
+    }
+
+    /// The SplitHorizontal spec pins its id, ex-command, title, and File menu
+    /// group. The title says "stacked" so a Vim user reads `:split`, not the
+    /// opposite arrangement.
+    #[test]
+    fn split_horizontal_spec_fields() {
+        let spec = Command::SplitHorizontal.spec();
+        assert_eq!(spec.id, "split_horizontal", "id");
+        assert_eq!(spec.ex_command, "WolfSplitHorizontal", "ex_command");
+        assert_eq!(spec.title, "Split Horizontal (stacked)", "title");
+        assert_eq!(spec.menu, MenuGroup::File, "menu group");
+    }
+
+    /// Append-discriminant guard: SplitHorizontal is at index 28, so the slice
+    /// index equals its FFI discriminant. Reordering breaks this.
+    #[test]
+    fn split_horizontal_is_at_index_28() {
+        assert_eq!(
+            COMMAND_SPECS[SPLIT_HORIZONTAL_INDEX].command,
+            Command::SplitHorizontal,
+            "the row at index {SPLIT_HORIZONTAL_INDEX} must be \
+             Command::SplitHorizontal"
+        );
+    }
+
+    /// `from_id` resolves the canonical `split_vertical` id to the new variant.
+    #[test]
+    fn split_vertical_id_round_trips() {
+        assert_eq!(
+            Command::from_id("split_vertical"),
+            Some(Command::SplitVertical),
+            "\"split_vertical\" must resolve to Command::SplitVertical"
+        );
+    }
+
+    /// The SplitVertical spec pins its id, ex-command, title, and File menu
+    /// group. The title says "side by side" so a Vim user reads `:vsplit`.
+    #[test]
+    fn split_vertical_spec_fields() {
+        let spec = Command::SplitVertical.spec();
+        assert_eq!(spec.id, "split_vertical", "id");
+        assert_eq!(spec.ex_command, "WolfSplitVertical", "ex_command");
+        assert_eq!(spec.title, "Split Vertical (side by side)", "title");
+        assert_eq!(spec.menu, MenuGroup::File, "menu group");
+    }
+
+    /// Append-discriminant guard: SplitVertical is the LAST row (index 29), so
+    /// the slice index equals its FFI discriminant. Reordering breaks this.
+    #[test]
+    fn split_vertical_is_the_last_row() {
+        assert_eq!(
+            COMMAND_SPECS[SPLIT_VERTICAL_INDEX].command,
+            Command::SplitVertical,
+            "the row at index {SPLIT_VERTICAL_INDEX} must be Command::SplitVertical"
+        );
+        assert_eq!(
+            SPLIT_VERTICAL_INDEX,
             COMMAND_SPECS.len() - 1,
-            "EditInOtherPane must be the FINAL row of COMMAND_SPECS"
+            "SplitVertical must be the FINAL row of COMMAND_SPECS"
         );
     }
 

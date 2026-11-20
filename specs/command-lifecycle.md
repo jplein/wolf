@@ -113,7 +113,7 @@ The action lives entirely in AppKit; nvim is never touched.
 1. Add a `CommandDispatcher` arm mapping the command to its AppKit action.
 2. No `InputEvent`, no `input.rs` arm, no Lua helper.
 
-### (b) Editor-affecting (`NewBuffer`, `Terminal`)
+### (b) Editor-affecting (`NewBuffer`, `Terminal`, `SplitHorizontal`, `SplitVertical`)
 
 Everything in (a), plus the round trip of §7:
 

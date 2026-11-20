@@ -27,7 +27,7 @@ use crate::command::Command;
 use crate::command_mru::CommandMru;
 use crate::files::{self, FileSearch, FileSearchState};
 use crate::input::{InputEvent, MouseEvent, ScrollEvent};
-use crate::layout::LayoutIntent;
+use crate::layout::{LayoutIntent, SplitOrientation};
 use crate::liveness::{self, Liveness};
 use crate::mru::{FileEntry, MruStore};
 use crate::nav_history::{MenuRow, NavMove, NavTarget, MAX_MENU_ROWS};
@@ -1220,6 +1220,19 @@ impl WolfCore {
     #[must_use]
     pub fn drawer_terminal(&self) -> Option<TerminalId> {
         self.terminals.drawer()
+    }
+
+    /// Splits the active pane, as `:split` for [`Horizontal`](SplitOrientation::Horizontal)
+    /// and `:vsplit` for [`Vertical`](SplitOrientation::Vertical) (fire-and-forget via
+    /// [`InputEvent::SplitPane`]).
+    ///
+    /// Neovim decides the new pane's kind by its current window, behind any queued
+    /// [`FocusWin`](InputEvent::FocusWin): a terminal pane splits through the terminal router
+    /// into a new session, the drawer does not split, and anything else takes
+    /// `wolf_do_split`, the `<C-w>s` / `<C-w>v` path. The result reaches the front-end as an
+    /// ordinary [`LayoutIntent::Split`].
+    pub fn split_pane(&self, orientation: SplitOrientation) {
+        self.send_input(InputEvent::SplitPane { orientation });
     }
 
     /// Toggles the active buffer's content width between the ~90-char default and

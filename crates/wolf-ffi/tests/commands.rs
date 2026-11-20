@@ -20,11 +20,11 @@
 //! BUFFER_PICKER = 16, NEW_TAB = 17, PREVIEW = 18, EDIT = 19, TERMINAL = 20,
 //! PREVIEW_IN_BROWSER = 21, FULL_WIDTH = 22, TOGGLE_SIDEBAR = 23,
 //! SIDEBAR_SHOW_PROJECT = 24, SEARCH_IN_PROJECT = 25,
-//! PREVIEW_IN_OTHER_PANE = 26, EDIT_IN_OTHER_PANE = 27 (the
-//! `wolf_core::Command` variant order). These local consts MUST match
+//! PREVIEW_IN_OTHER_PANE = 26, EDIT_IN_OTHER_PANE = 27, SPLIT_HORIZONTAL = 28,
+//! SPLIT_VERTICAL = 29 (the `wolf_core::Command` variant order). These local consts MUST match
 //! `mod command_kind` in `wolf-ffi/src/lib.rs` and the Swift `CommandKind` port —
 //! exactly how `panes.rs` re-declares `INTENT_KIND_SPLIT` locally as a contract
-//! guard (the guard array below asserts contiguous 0..=27).
+//! guard (the guard array below asserts contiguous 0..=29).
 //!
 //! ## What this asserts
 //!
@@ -125,6 +125,12 @@ const CMD_KIND_PREVIEW_IN_OTHER_PANE: u8 = 26;
 /// `FfiCommand::kind()` for Edit in Another Pane (the appended discriminant 27,
 /// View menu; edits the active preview's source in another pane).
 const CMD_KIND_EDIT_IN_OTHER_PANE: u8 = 27;
+/// `FfiCommand::kind()` for Split Horizontal (the appended discriminant 28; Vim's
+/// `:split`, the new pane stacked below the active one).
+const CMD_KIND_SPLIT_HORIZONTAL: u8 = 28;
+/// `FfiCommand::kind()` for Split Vertical (the appended discriminant 29; Vim's
+/// `:vsplit`, the new pane beside the active one).
+const CMD_KIND_SPLIT_VERTICAL: u8 = 29;
 
 /// Builds a printable-character `FfiKeyEvent` (kind=Char) for `c`, all modifiers
 /// false (the already-resolved glyph rides in `ch`). Same as `panes.rs`.
@@ -171,15 +177,21 @@ fn send_ex_command(handle: &wolf_ffi::WolfCoreHandle, cmd: &str) {
 /// kind seen in any poll counts. `desc` describes the awaited command.
 fn poll_for_command_kind(handle: &wolf_ffi::WolfCoreHandle, kind: u8, desc: &str) {
     let deadline = Instant::now() + FLUSH_TIMEOUT;
+    let mut seen = Vec::new();
     while Instant::now() < deadline {
         for cmd in handle.drain_commands() {
             if cmd.kind() == kind {
                 return;
             }
+            seen.push(cmd.kind());
         }
         sleep(POLL_INTERVAL);
     }
-    panic!("timed out after {FLUSH_TIMEOUT:?} waiting for command kind {kind} ({desc})");
+    panic!(
+        "timed out after {FLUSH_TIMEOUT:?} waiting for command kind {kind} ({desc}); other kinds \
+         drained: {seen:?}. Another kind means the command maps to the wrong discriminant, none \
+         means the Ex command never reached the channel."
+    );
 }
 
 #[test]
@@ -223,12 +235,14 @@ fn commands_drain_close_and_minimize() {
             CMD_KIND_SEARCH_IN_PROJECT,
             CMD_KIND_PREVIEW_IN_OTHER_PANE,
             CMD_KIND_EDIT_IN_OTHER_PANE,
+            CMD_KIND_SPLIT_HORIZONTAL,
+            CMD_KIND_SPLIT_VERTICAL,
         ],
         [
             0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
-            24, 25, 26, 27
+            24, 25, 26, 27, 28, 29
         ],
-        "command_kind discriminants must be contiguous 0..=27 in Command variant order"
+        "command_kind discriminants must be contiguous 0..=29 in Command variant order"
     );
 
     let init_lua = common::init_lua_path();
@@ -359,6 +373,15 @@ fn commands_drain_close_and_minimize() {
     // The split-and-bind itself is covered by `other_pane.rs`.
     send_ex_command(&handle, ":WolfEditInOtherPane");
     poll_for_command_kind(&handle, CMD_KIND_EDIT_IN_OTHER_PANE, ":WolfEditInOtherPane");
+
+    // --- 3s. :WolfSplitHorizontal<CR> -> an FfiCommand with kind() == SPLIT_HORIZONTAL
+    // Nothing acts on the drain; the split itself is covered by wolf-core's `split_commands.rs`.
+    send_ex_command(&handle, ":WolfSplitHorizontal");
+    poll_for_command_kind(&handle, CMD_KIND_SPLIT_HORIZONTAL, ":WolfSplitHorizontal");
+
+    // --- 3t. :WolfSplitVertical<CR> -> an FfiCommand with kind() == SPLIT_VERTICAL
+    send_ex_command(&handle, ":WolfSplitVertical");
+    poll_for_command_kind(&handle, CMD_KIND_SPLIT_VERTICAL, ":WolfSplitVertical");
 
     // --- 4. Shutdown: clean teardown ----------------------------------------
     handle.shutdown();

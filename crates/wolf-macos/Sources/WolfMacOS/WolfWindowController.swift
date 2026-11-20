@@ -602,6 +602,11 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
     paneContainer?.closeActivePane()
   }
 
+  /// Splits this window's active pane through `PaneContainerView.splitActivePane(_:)`.
+  func splitPane(_ orientation: Orientation) {
+    paneContainer?.splitActivePane(orientation)
+  }
+
   /// Opens a new empty buffer in this window's current Neovim window (`:enew`).
   func newBuffer() {
     handle?.new_buffer()
