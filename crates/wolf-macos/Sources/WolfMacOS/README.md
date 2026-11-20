@@ -339,23 +339,23 @@ Purpose: The crash/stall overlay — a full-bleed opaque cover over a broken edi
 
 #### `PaneContainerView.swift`
 
-Purpose: The editor area: one flipped `NSView` painting every pane, owns `PaneTree`, hosts preview and terminal views and is first responder.
+Purpose: The editor area, one flipped first-responder `NSView` that paints every pane, owns `PaneTree` and hosts preview and terminal views.
 
 **Public API**
 
-- `markRefocusRebind()` arms a grid rebind after a tabpage switch, and `rebind(tabpageHandle:)` after a crash-restart.
+- `markRefocusRebind()` arms a grid rebind after a tabpage switch, `rebind(tabpageHandle:)` after a crash-restart.
 - `paneLayout`, `leafContents()`, `restoreFailed` — `SessionSeam`'s inputs; leaves by window, terminals included.
 - `capturedTerminals()`, `requestTerminalRestore(_:)` — a restart's capture and restore.
 - `activeTerminal`, `activeTerminalSelection` — `nil` off a terminal pane.
 - `activeWin` — per-view: the tabpage-shared `WolfCoreHandle.active_win()` would let a background tab enable Copy.
 - `activePreviewSourcePath` — `nil` in edit mode.
 - `otherPaneTarget(prefer:)` — `OtherPaneSeam.target`: `0` splits, `nil` is a no-op.
-- `canClosePane`, `closeActivePane()` — Close Pane's gate and action ([why](../../../../notes/wolf-macos-decisions.md#terminal-panes)).
+- `canClosePane`, `closeActivePane()`, `splitActivePane(_:)` — Close Pane's gate and action, and the splits' ([why](../../../../notes/wolf-macos-decisions.md#terminal-panes)).
 
 **Decisions**
 
 - The refocus rebind waits until `handle.active_tabpage()` is this view's, skipping close detection that pass: the vacated tabpage's grids would prune live panes.
-- One `geometry(_:fullWidth:)` call sets web-view frame, occlusion and statusbar span before `needsDisplay`, so no frame paints preview alignment without a web view.
+- One `geometry(_:fullWidth:)` call sets web-view frame, occlusion and statusbar span before `needsDisplay`: no frame paints preview alignment without a web view.
 - Grids are skipped only under an opaque, loaded preview web view; the flag survives reloads: WebKit shows the outgoing document.
 - Scroll follows `scrollingDeltaY`'s natural-scroll-aware sign; `isDirectionInvertedFromDevice` double-corrects.
 - The terminal drawer lives in the pane map, outside `tree`, so leaves, neighbours and splits exclude it; a top-edge drag sets the view's share ([why](../../../../notes/wolf-macos-decisions.md#terminal-panes)).

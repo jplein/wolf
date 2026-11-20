@@ -56,6 +56,8 @@ Rebinds Neovim's window chords and the `:split`/`:close`/`:quit` Ex-command fami
 
 It also notifies **`wolf_active_win`** with `nvim_get_current_win()` on `WinEnter`, and **`wolf_command`** with `close_window` when a quit reaches the last pane. Closing a pane emits no intent: the shell observes the `win_close` redraw event. Exposes `_G.wolf_do_split`, `wolf_do_close`, `wolf_do_quit`, `wolf_do_focus`, and `wolf_emit_drawer`, which the `cnoreabbrev` overrides invoke from the command line.
 
+`_G.wolf_split_pane(orient)` is the split commands' entry. In a terminal placeholder it notifies **`wolf_terminal_split`** with the session id and `orient`, because core starts the new session; anywhere else it is `wolf_do_split`.
+
 Bindings: normal-mode `<C-w>` with `s`/`v`/`c`/`q` and `h`/`j`/`k`/`l` plus arrows; `cnoreabbrev` for `split`, `sp`, `new`, `vsplit`, `vs`, `vnew`, `close`; and the quit families routed through the internal `:WolfQuit`, `:WolfWriteQuit`, `:WolfQuitAll`, and `:WolfWriteQuitAll` user commands.
 
 #### `wolf_setup_dir_tracking(chan)`

@@ -35,6 +35,7 @@ A packaged smoke launches the store binary under `cage` with every devShell expo
 | Feature                                                    | Branch or commit                                                              | macOS | Linux |
 | ---------------------------------------------------------- | ----------------------------------------------------------------------------- | ----- | ----- |
 | Split panes (`PaneTree`: split / close / focus)            | `feat/split-panes` / `feat/mac-panes`                                         | [x]   | [x]   |
+| Split Horizontal / Split Vertical palette commands         | `regina/task/pane-ui/3` (`ac34e5f`)                                           | [x]   | [x]   |
 | Divider drag-to-resize (persisted weights)                 | `feat/macos-pane-dividers` (`5f8becb`, `03a4647`) / `linux-feat/divider-drag` | [x]   | [x]   |
 | Mouse input (click to position, drag to select)            | `feat/mac-panes` (`9051f0f`) / `linux-feat/mouse-scroll`                      | [x]   | [x]   |
 | Scroll / trackpad input                                    | `feat/mac-panes` (`9051f0f`, `4b7fdc5`) / `linux-feat/mouse-scroll`           | [x]   | [x]   |

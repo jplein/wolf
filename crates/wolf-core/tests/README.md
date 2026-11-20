@@ -615,6 +615,14 @@ Real Neovim (staged runfiles, wired `WOLF_NVIM_BIN`, `no-sandbox`).
 
 **Gotchas** — Both tests mutate `WOLF_STATE_DIR` under the file-local `ENV_LOCK`, held for the whole body and never removed. Their cwds come from `short_tempdir()`, or under a deep `TMPDIR` the comma case finds no swap file. Each fixture's made-up token is its first word so the cursor already sits on it for a bare `zg`, and the buffer must be markdown so the `WolfSpell` autocmd has spell on — `zg` errors with spell off.
 
+#### `split_commands.rs`
+
+Real Neovim and real `/bin/sh` sessions in ptys (`//crates/wolf-core:split_commands`, as `terminal_input`).
+
+**Covers** — `WolfCore::split_pane` both ways from an editor window, a terminal pane and a preview pane: each yields a `Split` intent of that orientation from the active window, and the new window shows the same buffer, a second live session, or a preview of the same source. The horizontal terminal case also checks the new shell starts in the origin shell's directory. From the drawer, neither orientation changes the window count, the live sessions or the `Split` intents.
+
+**Gotchas** — The `Split` intent is sent from inside the split, ahead of the new window's notifications, so the editor and preview cases read the new window only after a blocking request and `SPLIT_SETTLE`. The drawer case's barrier is a `focus_win` queued behind both splits: its landing proves Neovim handled them, and the negative settle follows it.
+
 #### `state_layout.rs`
 
 Headless — driven entirely through `tempfile` dirs handed to `StateStore::open` / `load_state`, so its target needs no runfiles and no `no-sandbox` tag.

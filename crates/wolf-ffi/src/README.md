@@ -81,6 +81,7 @@ The four `extern "C"` wake registrations (`wolf_ffi_set_wake`, `wolf_ffi_set_fil
 - `active_win(&self) -> i64` — 0 until nvim reports one.
 - `focus_win(&self, win: i64)` — Click-to-focus and resolved focus-direction moves.
 - `close_pane(&self)` — `:close`, which closes the split rather than the buffer.
+- `split_horizontal(&self)`, `split_vertical(&self)` — Stacked (`:split`) and side-by-side (`:vsplit`) splits of Neovim's current window, through `WolfCore::split_pane`.
 - `rebuild_layout(&self, layout: &FfiPaneNode) -> Vec<i64>` — Realizes a saved split tree, the node `FfiTabState::layout` returned, in the current tabpage's lone window, returning the window handles in leaf order. Rust renders it with `wolf_core::state::rebuild_layout_spec`, so no front-end renders the spec. nvim supplies only count, topology, and per-window buffer; sizes come from the front-end's weights. When it returns, `win_buffer` and `previews` already report every returned window, so a state commit straight after it reads the restored files rather than the startup buffer. A terminal leaf's window already shows its new session.
 - `pane_status_for_grid(&self, grid: u64) -> FfiPaneStatus` — The statusbar strings for the window drawing into `grid`.
 - `win_buffer(&self, win: i64) -> FfiWinBuffer` — What window `win` shows, read from core's `win_buffers` by handle. That map spans every tabpage, so a background view's window is still reported, where `pane_status_for_grid` joins through the current-tabpage `windows` map and answers `[No Name]`. The front-end reads persisted leaf paths through it for that reason.
@@ -330,6 +331,8 @@ These `u8` values are the ABI: Swift decodes raw integers, so the numbers are co
 | 25    | `SEARCH_IN_PROJECT`     | Reveal and focus the sidebar's search panel; a native-only action.              |
 | 26    | `PREVIEW_IN_OTHER_PANE` | Preview the active pane's markdown file in another pane.                        |
 | 27    | `EDIT_IN_OTHER_PANE`    | Edit the active preview's source file in another pane.                          |
+| 28    | `SPLIT_HORIZONTAL`      | Split the active pane into two stacked panes, as `:split`.                      |
+| 29    | `SPLIT_VERTICAL`        | Split the active pane into two side-by-side panes, as `:vsplit`.                |
 
 #### `bin/gen_bindings.rs`
 

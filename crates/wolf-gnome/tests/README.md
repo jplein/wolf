@@ -282,6 +282,10 @@ The header bar's toggle-group smokes. One clicks the toggles through [Pointer in
 
 The click targets are derived from libadwaita 1.9.3's header metrics, not from a probe, which is safe only because a click that misses the group moves no sidebar and fails.
 
+#### `smoke_headless/split_commands.rs`
+
+The split-command smokes: from an editor, a terminal and a preview pane, the palette's Split Vertical and then, in the new pane, Split Horizontal must freeze a `state.json` layout of `vertical[leaf, horizontal[leaf, leaf]]` whose every leaf is of the first pane's kind. `state.json` carries no session id, so a new session is wolf-core's `split_commands.rs` question, and so is the drawer, whose split the front-end drops.
+
 #### `smoke_headless/symbols.rs`
 
 The symbols-face smoke: one launch at the smoke config shows `M` and the icons U+F07B, U+E0A0 and U+F401 in an editor buffer, set through `nr2char`, and in a `:terminal` whose shell prints them. In each `grim` capture, `M` must match DejaVu Sans Mono alone, every icon the symbols face alone and not the hex box, and U+F401 must differ from DejaVu Sans Mono alone. The references are painted in the test process through `wolf_gnome::paint`, on the surface kind each pane paints on, and the preconditions hold the grid origin and the cell to the values the pointer smokes use.

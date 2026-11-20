@@ -117,6 +117,16 @@ Purpose: The vendored Lighthouse's expected colours, for the tests that render u
 - `validateMenuItem` and `WolfWindowController`'s forwards reach no test here: AppKit routes no event offscreen, and [`PreviewKeyEquivalentTests.swift`](#previewkeyequivalenttestsswift) retargets the menu's items.
 - The lag test sends `focus_win` with no wake before the close, which recreates a focus move in flight.
 
+#### `SplitCommandTests.swift`
+
+**Covers** — Split Horizontal and Split Vertical through `PaneContainerView.splitActivePane(_:)` over a live core: from an editor pane, a terminal pane and a preview pane, the new leaf sits beside its origin under a split of the expected orientation and is of the origin's kind, a window on the same buffer, a terminal on a second live session, or a preview of the same source. From the focused drawer neither adds a pane or a session, and the split acts on the view's active pane while Neovim's current window lags it.
+
+**Gotchas**
+
+- The palette rows, `CommandDispatcher` and `WolfWindowController.splitPane(_:)` reach no test: AppKit routes no event offscreen.
+- The front-end drops a `Split` from the drawer anyway, so the drawer test's witness is the live session count, after a `focus_win` queued behind both splits has landed.
+- The lag test sends `focus_win` with no wake before the split, as [`TerminalClosePaneTests.swift`](#terminalclosepanetestsswift) does.
+
 #### `TerminalCursorFocusTests.swift`
 
 **Covers** — a terminal pane's cursor painting the frame's block while its pane is the key window's active pane, and a hollow block while `<C-w>h` focuses the editor beside it, while the window is not key, and in the drawer once `<C-w>k` leaves it; the block again once focus returns; and a focus change alone, with no wake, marking the view for display.

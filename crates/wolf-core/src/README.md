@@ -12,22 +12,22 @@ Crate root. Declares every module and flattens the public surface into root re-e
 
 #### `api.rs`
 
-`WolfCore`, the FFI-shaped surface both front-ends share, owning the tokio runtime, the captive Neovim and the snapshot.
+`WolfCore`, the FFI-shaped surface both front-ends share, owning the tokio runtime, captive Neovim and snapshot.
 
 **Public API**
 
 - `CoreConfig.cwd` is nvim's launch directory and the search/MRU root until nvim reports its own cwd (`live_cwd`).
-- `SnapshotReadGuard` owns an `Arc` clone of the lock, so it outlives `&self`. Hold it for one paint only.
-- The blocking queries (`list_buffers` and siblings) return an empty or zero fallback on any RPC error or timeout, indistinguishable from an empty answer. The rest is fire-and-forget on the ordered input channel.
+- `SnapshotReadGuard` owns an `Arc` of the lock, so it outlives `&self`. Hold it for one paint only.
+- The blocking queries (`list_buffers` and siblings) return an empty or zero fallback on any RPC error or timeout, indistinguishable from an empty answer. The rest is fire-and-forget on the ordered input channel: `split_pane` splits the window an earlier `focus_win` made current.
 - `restart_nvim` returns `Ok(false)` when no respawn happened (already `Alive` or in flight) and reopens nothing: capture `open_files_for_tabpage` first. After `Ok(true)` the snapshot, intents and history start over ([what carries](../../../notes/wolf-core-decisions.md#liveness-and-restart)). Typing sent before the swap never reaches the fresh nvim, so no half-typed Ex command lands as keys; state input still applies.
 - `start` ignores `SIGPIPE` process-wide ([why](../../../notes/wolf-core-decisions.md#liveness-and-restart)).
 - `recent_dirs` omits non-directories (a stat each, on the calling thread) and never prunes the store, so a returning folder reappears.
 
 **Decisions**
 
-- `block_on_rpc` detects stalls under `WOLF_RPC_TIMEOUT_MS` and detaches a timed-out call rather than dropping it: dropping an `nvim-rs` response receiver mid-flight kills the io loop, which reads as a crash.
+- `block_on_rpc` detaches a call that outlives `WOLF_RPC_TIMEOUT_MS` rather than dropping it: dropping an `nvim-rs` response receiver mid-flight kills the io loop, which reads as a crash.
 - `WolfCore` is `!Send` and keeps the process in a `RefCell`, so a restart can swap one in through `&self`. Never hold a borrow across an `.await`.
-- Stale typing is cut by the generation `send_input` stamps, not liveness: input sent while `Alive` can still be queued at the swap.
+- Stale typing is cut by `send_input`'s generation stamp, not liveness: input sent while `Alive` can still be queued at the swap.
 
 #### `pump.rs`
 
@@ -525,11 +525,11 @@ Purpose: the terminal sessions core owns, each a pty, a shell, a `wolf_vt::Termi
 - `TerminalId` counts from 1 per core and is never reused, so a stale id names no session rather than another one.
 - `terminfo_dir_from_env()` reads `WOLF_TERMINFO_DIR` for `CoreConfig.terminfo_dir`, which reaches a shell verbatim as `TERMINFO` and must be absolute ([why](../../../notes/wolf-core-decisions.md#terminal-sessions)).
 - `live_terminals` lists running sessions only, while an exited session's frame stays readable until its pane closes ([why](../../../notes/wolf-core-decisions.md#terminal-sessions)).
-- Mouse and scroll positions are pixels from the content area's top-left, turned into cells with the cell size of the last `resize_terminal`.
+- Mouse and scroll positions are pixels from the content area's top-left, turned into cells at the last `resize_terminal`'s cell size.
 - `WolfCore::pane_status` of a terminal pane reports the session's shell name, or `NO_NAME` once the session is gone, with empty paths.
 - The drawer, restart and restore methods, `toggle_terminal`, `drawer_terminal`, `queue_bind_terminal` and `terminal_cwd`, are specified in [Terminal panes](../../../specs/terminal-panes.md#the-drawer).
 
 **Decisions**
 
-- The registry reaches Neovim through free functions in `nvim.rs` over the pump's current handle, never a captured one, because a restart replaces the handle while the sessions live on.
-- A router chord acts on the window showing the session: the active window when it does, else one on the current tabpage, else any. With none, the chord is dropped.
+- The registry reaches Neovim through `nvim.rs` free functions over the pump's current handle, never a captured one: a restart replaces the handle while the sessions live on.
+- A router chord or a split command acts on the window showing the session: the active window when it does, else one on the current tabpage, else any, and with none it is dropped.
