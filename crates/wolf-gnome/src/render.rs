@@ -7,20 +7,26 @@
 //!
 //! ## Algorithm
 //!
-//! For every grid cell `(row, col)`:
+//! For every grid row, first for every cell `(row, col)` of it:
 //! 1. Resolve its highlight via [`wolf_core::HighlightTable::resolve`] (which has
 //!    already applied `reverse` and the editor defaults).
 //! 2. Pick fg/bg, falling back to the editor defaults and finally to
 //!    [`FALLBACK_FG`]/[`FALLBACK_BG`] if even those are unset.
 //! 3. Fill the cell's background rectangle (always — this keeps wide-trailing /
 //!    never-painted cells aligned).
-//! 4. If the cell text is empty (a wide-char trailing placeholder or a
-//!    never-painted cell) skip glyph rendering; otherwise lay the text out with
-//!    Pango — the style's bold and italic toggling the cloned
-//!    [`pango::FontDescription`], its underline, undercurl and strikethrough
-//!    arriving as the Pango attributes [`crate::glyph_style`] resolves — and draw
-//!    it in fg, offset down the cell by `baseline - ascent` so the glyph box sits
-//!    centred in a cell the configured line-height made taller than it.
+//!
+//! Then, once the whole row's backgrounds are down, for every cell whose text is
+//! not empty (an empty one is a wide-char trailing placeholder or a never-painted
+//! cell), left to right:
+//! 4. Lay the text out with Pango — the style's bold and italic toggling the
+//!    cloned [`pango::FontDescription`], its underline, undercurl and
+//!    strikethrough arriving as the Pango attributes [`crate::glyph_style`]
+//!    resolves — and draw it in fg, offset down the cell by `baseline - ascent` so
+//!    the glyph box sits centred in a cell the configured line-height made taller
+//!    than it.
+//!
+//! The backgrounds go first so that a glyph wider than its cell, a symbols-face
+//! icon or a wide character, is not cut off by the next cell's fill.
 
 use wolf_core::{Grid, HighlightTable, ResolvedStyle, Rgb};
 
@@ -54,6 +60,44 @@ pub(crate) const FALLBACK_FG: Rgb = Rgb {
 /// Fallback background when neither the highlight nor the editor defaults set one.
 pub(crate) const FALLBACK_BG: Rgb = Rgb { r: 0, g: 0, b: 0 };
 
+/// The family of the vendored symbols-only icon face, which [`family_list`] names after the
+/// configured family.
+pub const SYMBOLS_FAMILY: &str = "Symbols Nerd Font Mono";
+
+/// The family string every grid face paints with: `configured`, then `,` and [`SYMBOLS_FAMILY`].
+///
+/// `configured` comes back unchanged when one of its comma-separated members already names the
+/// symbols face, compared ignoring ASCII case and ASCII whitespace as fontconfig compares family
+/// names, so `"symbols nerd font mono"` and `"SymbolsNerdFontMono"` are not named twice.
+///
+/// Pango splits a description's family on `,` and hands fontconfig every member in order
+/// (`pango_fc_make_pattern`). fontconfig's sort ranks named families by that position, and Pango
+/// paints each character from the first font of the sorted set that has it. So a character the
+/// configured face carries paints from it, one it lacks and the symbols face carries paints from
+/// the symbols face, and anything else falls through to fontconfig's own substitutes. A host
+/// without the symbols face matches nothing for that member and renders as if it were absent.
+#[must_use]
+pub fn family_list(configured: &str) -> String {
+    let symbols = fontconfig_key(SYMBOLS_FAMILY);
+    if configured
+        .split(',')
+        .any(|member| fontconfig_key(member) == symbols)
+    {
+        return configured.to_owned();
+    }
+    format!("{configured},{SYMBOLS_FAMILY}")
+}
+
+/// `family` with ASCII whitespace removed and ASCII letters lowered, the form fontconfig compares
+/// family names in.
+fn fontconfig_key(family: &str) -> String {
+    family
+        .chars()
+        .filter(|c| !c.is_ascii_whitespace())
+        .map(|c| c.to_ascii_lowercase())
+        .collect()
+}
+
 /// Per-cell geometry plus the base font used to paint a [`Grid`].
 ///
 /// A monospace cell is `cell_w` wide and `cell_h` tall; `baseline` is the text
@@ -76,7 +120,9 @@ pub struct CellMetrics {
     /// its two lines from it (`statusbar_layout` is unit-agnostic and this crate
     /// calls it in device pixels).
     pub size_px: f64,
-    /// The base font description (cloned and toggled for bold/italic per cell).
+    /// The paint description, naming [`family_list`] of the configured family; cloned and
+    /// toggled for bold/italic per cell. The cell was measured without the list (see
+    /// [`CellMetrics::for_font`]).
     pub font: pango::FontDescription,
 }
 
@@ -93,11 +139,20 @@ impl CellMetrics {
     /// in the unit its caller uses — so `size_pt` is converted to DEVICE PIXELS
     /// here first, since device pixels are what Cairo paints in.
     ///
-    /// **No family fallback of this crate's own.** `set_family` accepts any
-    /// string and fontconfig substitutes per lookup, always yielding usable
-    /// metrics, so an unresolvable family measures fine and the description keeps
-    /// the name the caller asked for. A fallback could only override fontconfig's
-    /// better answer.
+    /// **The configured family, then the symbols face, then fontconfig.** The
+    /// paint description names [`family_list`]`(family)`, so a glyph `family`
+    /// carries paints from it, a Nerd Font icon it lacks paints from
+    /// [`SYMBOLS_FAMILY`], and fontconfig substitutes for the rest. The crate
+    /// substitutes nothing for `family` itself: `set_family` accepts any string and
+    /// fontconfig substitutes per lookup, always yielding usable metrics, so an
+    /// unresolvable family measures fine and stays first in the list. A substitute
+    /// of this crate's own could only override fontconfig's better answer. See
+    /// `notes/wolf-gnome-decisions.md#typography`.
+    ///
+    /// **The cell is measured from `family` alone**, from a description without
+    /// the symbols face. Pango measures from the first font of the fontset, which
+    /// for an unresolvable family would be the symbols face, and the cell and
+    /// every pointer smoke's target must not depend on that.
     #[must_use]
     pub fn for_font(
         cr: &cairo::Context,
@@ -105,14 +160,17 @@ impl CellMetrics {
         size_pt: f64,
         line_height_percent: f64,
     ) -> Self {
-        let mut font = pango::FontDescription::new();
-        font.set_family(family);
+        let mut measured = pango::FontDescription::new();
+        measured.set_family(family);
         // `set_size`, not `set_absolute_size`: the latter changes how the face rasterizes, and every OCR
         // assertion rides on the current rasterization.
-        font.set_size((size_pt * f64::from(pango::SCALE)) as i32);
+        measured.set_size((size_pt * f64::from(pango::SCALE)) as i32);
 
         let context = pangocairo::functions::create_context(cr);
-        let metrics = context.metrics(Some(&font), None);
+        let metrics = context.metrics(Some(&measured), None);
+
+        let mut font = measured;
+        font.set_family(&family_list(family));
 
         let scale = f64::from(pango::SCALE);
         let cell_w = f64::from(metrics.approximate_char_width()) / scale;
@@ -155,11 +213,18 @@ impl CellMetrics {
 ///
 /// Widget-free: `cr` may be backed by an offscreen `ImageSurface` (tests) or a
 /// `DrawingArea` (production). See the module docs for the per-cell algorithm.
+///
+/// Each row is painted in two passes, every background first and then every
+/// glyph, so a glyph wider than its cell keeps the part it draws over the next
+/// cell. A symbols-face icon is about one em wide, wider than a monospace cell,
+/// and a wide character's right half lies over its trailing placeholder.
 pub fn paint(cr: &cairo::Context, grid: &Grid, highlights: &HighlightTable, metrics: &CellMetrics) {
     // ONE layout for the whole grid, re-texted per cell. See `GlyphPainter` for
     // the measurement that put it here rather than inside the loop.
     let mut painter = GlyphPainter::new(cr);
+    let mut glyphs = Vec::new();
     for row in 0..grid.rows {
+        let y = row as f64 * metrics.cell_h;
         for col in 0..grid.cols {
             let Some(cell) = grid.cell(row, col) else {
                 continue;
@@ -169,7 +234,6 @@ pub fn paint(cr: &cairo::Context, grid: &Grid, highlights: &HighlightTable, metr
             let bg = style.bg.unwrap_or(FALLBACK_BG);
 
             let x = col as f64 * metrics.cell_w;
-            let y = row as f64 * metrics.cell_h;
 
             // Always fill the background rect; this keeps alignment for empty /
             // wide-trailing cells.
@@ -179,11 +243,12 @@ pub fn paint(cr: &cairo::Context, grid: &Grid, highlights: &HighlightTable, metr
 
             // Empty text => wide-char trailing placeholder or never-painted cell:
             // background only, no glyph.
-            if cell.text.is_empty() {
-                continue;
+            if !cell.text.is_empty() {
+                glyphs.push((x, cell.text.as_str(), fg, style));
             }
-
-            painter.draw(cr, metrics, x, y, &cell.text, fg, &style);
+        }
+        for (x, text, fg, style) in glyphs.drain(..) {
+            painter.draw(cr, metrics, x, y, text, fg, &style);
         }
     }
 }

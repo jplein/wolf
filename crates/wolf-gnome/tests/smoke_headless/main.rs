@@ -171,6 +171,7 @@ mod scrub_lists;
 mod search_toggles;
 mod sidebar;
 mod sidebar_toggles;
+mod symbols;
 mod terminal;
 mod terminal_colours;
 mod terminal_terminfo;

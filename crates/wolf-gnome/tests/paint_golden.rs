@@ -428,14 +428,15 @@ fn the_baseline_centres_the_glyph_box_in_the_cell() {
 fn an_unresolvable_family_still_measures_and_is_not_rewritten() {
     let missing = probe_metrics(NO_SUCH_FAMILY, SMOKE_PROBE_SIZE_PT, LINE_HEIGHT_PERCENT);
 
-    // (a) Pango substitutes rather than failing. The crate's no-fallback-of-our-own decision
-    // rests on that, so it is measured here.
+    // (a) Pango substitutes rather than failing. The crate's decision to make no substitution of
+    // its own for the configured family rests on that, so it is measured here.
     assert!(
         missing.cell_w > 0.0 && missing.cell_h > 0.0 && missing.baseline.is_finite(),
         "measuring the unresolvable family {NO_SUCH_FAMILY:?} produced cell_w = {}, cell_h = {}, \
          baseline = {}. Pango is expected to substitute a face from the pinned fontconfig and \
          always yield usable metrics; a zero or non-finite value here means it does not, and the \
-         crate would then need the explicit fallback it deliberately does not have.",
+         crate would then need the substitute for the configured family it deliberately does not \
+         have.",
         missing.cell_w,
         missing.cell_h,
         missing.baseline
@@ -454,17 +455,20 @@ fn an_unresolvable_family_still_measures_and_is_not_rewritten() {
         missing.cell_h, pinned.cell_h
     );
 
-    // (c) This crate performs no family substitution of its own: the description
-    // still carries exactly what the caller asked for.
+    // (c) This crate does not rewrite the configured family: it stays first, exactly as asked,
+    // and only the symbols face follows it.
     let requested = missing.font.family();
+    let expected = format!("{NO_SUCH_FAMILY},Symbols Nerd Font Mono");
     assert_eq!(
         requested.as_deref(),
-        Some(NO_SUCH_FAMILY),
-        "the measured font description reports family {requested:?}, not the requested \
-         {NO_SUCH_FAMILY:?}. Rewriting the family, a fallback to `DejaVu Sans Mono` or to \
-         `monospace`, is the change this crate refuses: Pango substitutes per lookup and always \
-         yields usable metrics, so a hand-rolled fallback is dead code that can only override \
-         fontconfig's better answer."
+        Some(expected.as_str()),
+        "the measured font description reports family {requested:?}, not {expected:?}. The \
+         requested {NO_SUCH_FAMILY:?} must stay first and unchanged: rewriting it, a fallback to \
+         `DejaVu Sans Mono` or to `monospace`, is the change this crate refuses, because Pango \
+         substitutes per lookup and always yields usable metrics, so a hand-rolled substitute can \
+         only override fontconfig's better answer. The symbols face must follow it, so an icon \
+         the substituted face lacks paints from the symbols face; the bare {NO_SUCH_FAMILY:?} \
+         means the paint description does not name the family list."
     );
 }
 
