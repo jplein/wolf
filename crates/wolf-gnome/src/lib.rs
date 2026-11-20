@@ -22,7 +22,8 @@
 //! - [`mod@init_lua`]: where the captive `runtime/nvim/init.lua` lives, as a function of values.
 //! - [`mod@appearance`]: the configured appearance resolved against the desktop's dark/light.
 //! - [`layout`] / [`tree`]: the pure pane tree and the hierarchical file-tree projection.
-//! - [`mod@drawer`]: the terminal drawer's split and its focus bridge to the editor panes.
+//! - [`mod@drawer`]: the terminal drawer's share of the pane area and its focus bridge to the
+//!   editor panes.
 //! - [`ui_action_for`]: the total [`wolf_core::Command`] → [`UiAction`] mapping
 //!   ([`command_action`]).
 //! - [`mod@palette`]: the command palette's rows, its Open Recent candidates and their actions.

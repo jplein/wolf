@@ -96,6 +96,7 @@ use gtk::glib;
 
 use wolf_core::{PaneNode, TabState, TerminalId, WolfCore};
 
+use crate::drawer::DrawerShare;
 use crate::pane_view::{self, PaneHandle};
 use crate::persistence::{self, StateHandle, StateParts};
 use crate::picker::FocusTarget;
@@ -333,6 +334,9 @@ struct TabsInner {
     core: Rc<RefCell<Option<WolfCore>>>,
     /// The cell metrics, handed to each new tab's pane view.
     metrics: Rc<CellMetrics>,
+    /// The window's terminal-drawer share, shared by every tab's pane view, so the
+    /// drawer's divider keeps one position across tabs and restarts.
+    drawer_share: Rc<Cell<DrawerShare>>,
     /// Every live tab, in INSERTION order — see [`TabsHandle::entries`], which is
     /// where the divergence from page order and its one affected consumer are stated.
     entries: RefCell<Vec<TabHandle>>,
@@ -388,7 +392,7 @@ impl TabsInner {
             return false;
         }
 
-        let panes = pane_view::build(&self.core, &self.metrics);
+        let panes = pane_view::build(&self.core, &self.metrics, &self.drawer_share);
         // Realized at the first wake with a window grid, with no arity guard (`window::build`'s reason).
         // Tab 0's route only: a restored tab realizes at once, and `realize_layout` drops this queued copy.
         if let Some(layout) = parts.layout.clone() {
@@ -706,6 +710,7 @@ pub fn build(parts: TabsParts<'_>) -> TabsHandle {
             bar,
             core: parts.core.clone(),
             metrics: parts.metrics.clone(),
+            drawer_share: Rc::new(Cell::new(DrawerShare::new())),
             entries: RefCell::new(Vec::new()),
             pending_restore: RefCell::new(None),
             restarting: Cell::new(false),

@@ -156,6 +156,7 @@ use wolf_gnome::{preview_coalescer::PREVIEW_TRAILING_DELAY, CellMetrics, WINDOW_
 
 mod compose;
 mod config;
+mod drawer_divider;
 mod editor;
 mod fixture_guards;
 mod frame_stats;

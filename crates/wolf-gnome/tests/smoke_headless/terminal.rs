@@ -133,7 +133,7 @@ const TERMINAL_SMOKE_SHELL: &str = "/bin/sh";
 /// where `/bin/sh` is bash, a non-interactive bash unsets an inherited `PS1` and never
 /// exports it, so the app's shells would get bash's default prompt.
 /// [`READINESS_PRELUDE`] exports it back as `PS1`.
-fn pin_terminal_smoke_shell(cmd: &mut Command) -> &mut Command {
+pub(crate) fn pin_terminal_smoke_shell(cmd: &mut Command) -> &mut Command {
     cmd.env("SHELL", TERMINAL_SMOKE_SHELL)
         .env("SMOKE_PS1", TERMINAL_SMOKE_PS1)
         .env_remove("ENV")
@@ -173,23 +173,25 @@ const DRAWER_BAND_STRIP_EXTRA_PX: f64 = 2.0;
 /// a production function, so the band follows the app rather than restating it:
 ///
 /// ```text
-/// pane_area_h = CAGE_OUTPUT_H - OVERLAY_ORIGIN_Y - (cell_h + STRIP_EXTRA)
-/// drawer_h    = drawer::drawer_split(pane_area_h, true, DRAWER_WEIGHT, min_h)
-/// strip_top   = CAGE_OUTPUT_H - (cell_h + STRIP_EXTRA) - drawer_h
-/// band        = [strip_top + statusbar_h, CAGE_OUTPUT_H - (cell_h + STRIP_EXTRA))
+/// span      = CAGE_OUTPUT_H - OVERLAY_ORIGIN_Y - (cell_h + STRIP_EXTRA)
+/// floor     = ceil(min_h)
+/// position  = DrawerShare::new().position(floor, span - DRAWER_HANDLE_PX - floor, span)
+/// handle_y  = OVERLAY_ORIGIN_Y + position
+/// strip_top = handle_y + DRAWER_HANDLE_PX
+/// band      = [strip_top + statusbar_h, CAGE_OUTPUT_H - (cell_h + STRIP_EXTRA))
 /// ```
 ///
 /// with `statusbar_h` from `statusbar_layout` at `CellMetrics::size_px` and `min_h`
-/// from `editor_inset::min_pane_size`, i.e. exactly what `apply_drawer_frame`
-/// passes.
+/// from `editor_inset::min_pane_size`, the content floor `make_pane_area` gives both of
+/// the drawer paned's children. `position` is a new window's: the drawer's paned with
+/// GTK's own `[min_position, max_position]` clamp, at the share a drawer opens at.
 ///
-/// **A DISCLOSED discrepancy.** A measured run put the band at `y 560..674` at
-/// [`SMOKE_FONT_PT`]; this derivation gives `y 557..674`, because it reads
-/// `statusbar_layout(...).height` (92 px there) where that measurement implies 95. The
-/// three pixels are the strip's own closing `STATUSBAR_VERTICAL_PADDING`, which
-/// carries no ink — so the extra rows are background either way. The derivation is
-/// kept rather than the recorded literal because it moves with the chrome; if the
-/// band ever reads statusbar text, THIS is the paragraph to start from.
+/// **A DISCLOSED discrepancy.** This derivation reads `statusbar_layout(...).height`
+/// (92 px at [`SMOKE_FONT_PT`]) where a measured run of the band implied 95. The three
+/// pixels are the strip's own closing `STATUSBAR_VERTICAL_PADDING`, which carries no
+/// ink — so the extra rows are background either way. The derivation is kept rather
+/// than a recorded literal because it moves with the chrome; if the band ever reads
+/// statusbar text, THIS is the paragraph to start from.
 ///
 /// ## Why x is restricted to the pane area
 ///
@@ -218,18 +220,25 @@ fn drawer_band_rect() -> SampleRect {
     }
 }
 
-/// The drawer strip's edges in output pixels, by [`drawer_band_rect`]'s derivation.
-struct DrawerStripEdges {
-    /// The strip's top edge: where the panes above it end.
-    strip_top: f64,
+/// Height, in output pixels, of the drawer paned's handle: the one-pixel separator Adwaita
+/// draws, as `pointer::BISECT_STEPS` records. GTK's grab area reaches several pixels either side.
+const DRAWER_HANDLE_PX: f64 = 1.0;
+
+/// The drawer strip's edges in output pixels, by [`drawer_band_rect`]'s derivation, for a
+/// drawer at the share a new window opens it at.
+pub(crate) struct DrawerStripEdges {
+    /// The top row of the drawer paned's handle, between the editor tree and the strip.
+    pub(crate) handle_y: f64,
+    /// The strip's top edge: the row below the handle.
+    pub(crate) strip_top: f64,
     /// The height of the drawer's own statusbar, at the top of the strip.
-    statusbar_h: f64,
+    pub(crate) statusbar_h: f64,
     /// The strip's bottom edge, the cmdline strip's top.
-    band_bottom: f64,
+    pub(crate) band_bottom: f64,
 }
 
 /// Derives [`DrawerStripEdges`]; [`drawer_band_rect`]'s doc gives the derivation.
-fn drawer_strip_edges() -> DrawerStripEdges {
+pub(crate) fn drawer_strip_edges() -> DrawerStripEdges {
     let cell = cell_metrics_for_smoke();
     let output_h = exact_f64(CAGE_OUTPUT_H_EXPECTED, "CAGE_OUTPUT_H_EXPECTED");
 
@@ -245,34 +254,43 @@ fn drawer_strip_edges() -> DrawerStripEdges {
     let cmdline_strip_h = cell.cell_h + DRAWER_BAND_STRIP_EXTRA_PX;
     let pane_area_h = output_h - OVERLAY_ORIGIN_Y_EXPECTED - cmdline_strip_h;
 
-    // The same floor `apply_drawer_frame` passes, from the same production function.
+    // The content floor `make_pane_area` gives every pane, from the same production function.
     let (_, min_h) = wolf_gnome::editor_inset::min_pane_size(
         cell.cell_w,
         cell.cell_h,
         statusbar.height,
         wolf_gnome::editor_inset::EDITOR_PADDING_PX,
     );
-    let split = wolf_gnome::drawer::drawer_split(
-        pane_area_h,
-        true,
-        wolf_gnome::drawer::DRAWER_WEIGHT,
-        min_h,
-    );
+    let span = paned_px(pane_area_h, "the drawer paned's span");
+    let floor = paned_px(min_h.ceil(), "the drawer paned's child floor");
+    let handle = paned_px(DRAWER_HANDLE_PX, "the drawer paned's handle");
+    let max = span - handle - floor;
     assert!(
-        split.drawer_height > 0.0,
-        "drawer_strip_edges: `drawer::drawer_split` gave the drawer {} px of a {pane_area_h} px \
-         pane area, so there is no strip to sample and the band below would be empty or inverted. \
-         A zero here means the derived pane-area height is non-positive or non-finite, which \
-         makes every number in this function meaningless — re-derive it from \
-         CAGE_OUTPUT_H_EXPECTED and OVERLAY_ORIGIN_Y_EXPECTED rather than adjusting the band.",
-        split.drawer_height
+        max > floor,
+        "drawer_strip_edges: a {span} px pane area leaves the drawer paned a position range of \
+         [{floor}, {max}], so the two {floor} px floors do not both fit and there is no strip to \
+         sample. Either the derived pane-area height is wrong — re-derive it from \
+         CAGE_OUTPUT_H_EXPECTED and OVERLAY_ORIGIN_Y_EXPECTED rather than adjusting the band — \
+         or the pane minimum grew past half the pane area."
     );
+    let position = wolf_gnome::drawer::DrawerShare::new().position(floor, max, span);
+    let handle_y = OVERLAY_ORIGIN_Y_EXPECTED + f64::from(position);
 
     DrawerStripEdges {
-        strip_top: output_h - cmdline_strip_h - split.drawer_height,
+        handle_y,
+        strip_top: handle_y + DRAWER_HANDLE_PX,
         statusbar_h: statusbar.height,
         band_bottom: output_h - cmdline_strip_h,
     }
+}
+
+/// Rounds a derived length to the whole pixels a `gtk::Paned` position is measured in,
+/// through [`pixel_target`]'s finite and range checks.
+fn paned_px(value: f64, what: &str) -> i32 {
+    let px = pixel_target(value, what);
+    i32::try_from(px).unwrap_or_else(|e| {
+        panic!("{what} = {px} px does not fit a paned position ({e}); the derivation is nonsense")
+    })
 }
 
 /// The pane area ABOVE the drawer strip, from the pane area's top-left to the strip's
@@ -569,13 +587,9 @@ exit 0
 /// | g | after `<C-w>s` in the drawer, its shell still answers and Neovim counts no new window | delete the drawer guard in `wolf_core::terminal::TerminalRegistry::router_split` | one window more than after the `:vsplit`, or exit 14 at leg g |
 /// | h | after the chord HIDES the drawer and another press re-opens it, `<C-w>k` out of the NEW drawer reaches an editor window | delete BOTH the `if let Some(drawer_id) = closed_drawer { … }` block and the loop's `.filter(…)` from `detect_closes` | exit 14 at leg f-vsplit: leg h's readbacks still appear, and the scenario stops at the `:vsplit`'s readback |
 ///
-/// Leg f does not cover where the drawer strip sits on screen after a rebuild. Two
-/// edits were measured green there and are not its falsifiers: dropping
-/// `rebuild_pane_area`'s host-unparent loop, because the drawer host is a direct
-/// child of `pane_area` and the `remove` loop detaches it anyway; and appending the
-/// drawer host only for a one-leaf layout, because focus reaches the drawer through
-/// `DrawerState` and `focus_win` wherever the strip is, and no capture follows the
-/// `:vsplit`.
+/// Leg f proves the drawer's binding survives the split's rebuild, not where the strip
+/// sits on screen afterwards: focus reaches the drawer through `DrawerState` and
+/// `focus_win` wherever the strip is, and no capture follows the `:vsplit`.
 ///
 /// Leg g's front-end second line, `apply_split`'s drawer guard, is not reachable
 /// from a key: core's router is what refuses the split, so the falsifier is core's.

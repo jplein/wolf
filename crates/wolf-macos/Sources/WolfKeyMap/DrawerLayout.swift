@@ -11,8 +11,7 @@ import Foundation
 /// the editor fills the whole pane area and `drawerRect(width:)` is `nil`.
 ///
 /// A non-finite `paneAreaHeight`, `weight` or `minPaneHeight`, or a non-positive
-/// `paneAreaHeight`, collapses both heights to zero, with or without a drawer, as
-/// wolf-gnome's `drawer_split` does.
+/// `paneAreaHeight`, collapses both heights to zero, with or without a drawer.
 public struct DrawerLayout {
   /// The share (fraction of the pane-area height) a drawer opens at: ~1/3, matching
   /// the `wolf_toggle_terminal` Lua helper's `botright <lines/3>split`. A drag on the

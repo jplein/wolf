@@ -1,6 +1,7 @@
-//! The terminal drawer's pure arithmetic: how the pane area splits between the
-//! editor tree and the full-width drawer strip below it, and which pane a
-//! `<C-w>h/j/k/l` intent should focus once the drawer is in the picture.
+//! The terminal drawer's pure arithmetic: the drawer's share of the pane area,
+//! which the divider between the editor tree and the full-width drawer strip holds,
+//! and which pane a `<C-w>h/j/k/l` intent should focus once the drawer is in the
+//! picture.
 //!
 //! GTK-, Pango- and Cairo-free, so the whole rulebook runs in the fast unit suite
 //! with no display server, no compositor and no Neovim — exactly as
@@ -9,102 +10,79 @@
 //! ## Why the drawer is not a [`PaneTree`] leaf
 //!
 //! It lives OUTSIDE the tree, which is what forces this module to exist at all. The
-//! durable reasons (a drawer kept out of `state.json`, a divider fraction
-//! with nowhere to live, every `neighbor` result left unperturbed) are in
-//! `notes/wolf-gnome/window-structure.md`. The price is paid here: a pane the tree cannot
-//! see needs its own height rule and its own focus bridge.
+//! durable reasons (a drawer kept out of `state.json`, every `neighbor` result left
+//! unperturbed) are in `notes/wolf-gnome/window-structure.md`. The price is paid
+//! here: a pane the tree cannot see needs its own share and its own focus bridge.
 //!
-//! ## One module for the height and the bridge
+//! ## One module for the share and the bridge
 //!
-//! The height split and the focus bridge share a module because [`focus_target`]
-//! needs both in one expression.
+//! Both are the drawer's answers to questions the tree answers for every other pane:
+//! how much of the pane area it takes, and where focus goes across its edge.
 
 use wolf_core::FocusDir;
 
+use crate::geometry;
 use crate::layout::{PaneId, PaneTree, Rect};
 
-/// The drawer's fixed share of the pane-area height.
+/// The share of the pane area a window's drawer opens at, until a drag replaces it
+/// through [`DrawerShare`].
 ///
 /// One third, matching `runtime/nvim/init.lua`'s `math.max(1, floor(lines / 3))`
 /// — the height the `wolf_toggle_terminal` Lua helper opens the split at. The two
 /// are independent expressions of one number: nvim divides ROWS, this divides
 /// PIXELS, and the front-end then drives its own `resize_grid` from the pixels.
-///
-/// There is no divider drag, so this is a constant rather than a stored weight. A
-/// draggable boundary would need somewhere to persist its position, and the drawer
-/// is deliberately absent from both the tree and `state.json`.
 pub const DRAWER_WEIGHT: f64 = 1.0 / 3.0;
 
-/// How the pane area divides between the editor tree and the drawer strip.
+/// The drawer's share of the pane area: the fraction of the drawer divider's
+/// `gtk::Paned` span that the drawer, its end child, takes.
 ///
-/// The editor tree occupies `[0, editor_height]` and the drawer the strip below it;
-/// the two always sum to the pane-area height (or to zero, for a degenerate input).
+/// One per window, held by `tab_view` and shared by every tab's pane view, so a drag
+/// in one tab reaches the others. It is a separate value from [`DrawerState`] so that
+/// [`DrawerState::clear`] (the drawer closing, a restart) leaves it alone. A new
+/// window starts at [`DRAWER_WEIGHT`].
+///
+/// It is never persisted, and needs no fraction floor: a tree weight keeps one
+/// because a zero survives `state.json`, while every use of the share is clamped into
+/// GTK's `[min_position, max_position]`.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct DrawerSplit {
-    /// The editor region's height, in device pixels.
-    pub editor_height: f64,
-    /// The drawer strip's height, in device pixels; `0.0` when no drawer is open.
-    pub drawer_height: f64,
+pub struct DrawerShare(f64);
+
+impl DrawerShare {
+    /// The share a new window's drawer opens at, [`DRAWER_WEIGHT`].
+    #[must_use]
+    pub const fn new() -> Self {
+        Self(DRAWER_WEIGHT)
+    }
+
+    /// The drawer's fraction of the span, in `[0, 1]`.
+    #[must_use]
+    pub const fn get(self) -> f64 {
+        self.0
+    }
+
+    /// The paned position this share puts the divider at: the editor tree's height.
+    ///
+    /// `min` and `max` are the paned's `min_position` and `max_position`, the clamp
+    /// that holds both children at their floors; `span` is the paned's height, which
+    /// the share is a proportion of. The arithmetic is
+    /// [`geometry::divider_position`]'s, at the editor's fraction `1 - share`.
+    #[must_use]
+    pub fn position(self, min: i32, max: i32, span: i32) -> i32 {
+        geometry::divider_position(min, max, span, 1.0 - self.0)
+    }
+
+    /// Records a drag that left the divider at `position` of a paned `span` high. A
+    /// non-positive `span`, before the first allocation, leaves the share unchanged.
+    pub fn drag_to(&mut self, position: i32, span: i32) {
+        if let Some(fraction) = geometry::divider_span_fraction(position, span) {
+            self.0 = 1.0 - fraction;
+        }
+    }
 }
 
-/// The all-zero split a degenerate input collapses to.
-const COLLAPSED: DrawerSplit = DrawerSplit {
-    editor_height: 0.0,
-    drawer_height: 0.0,
-};
-
-/// Splits `pane_area_height` into the editor region and the drawer strip.
-///
-/// With no drawer the editor takes the whole height. With one, the drawer takes
-/// `round(pane_area_height * weight)` clamped into
-/// `[min_drawer_height, pane_area_height]` and the editor takes the remainder, so
-/// the two always sum to the input.
-///
-/// **Two guards:**
-///
-/// - **The `min_drawer_height` floor.** Without it a short window yields a drawer
-///   thinner than one grid row — a strip that is allocated, painted and focusable
-///   while showing no text at all. The caller passes
-///   [`crate::editor_inset::min_pane_size`]'s height, which is the same floor every
-///   other pane already gets.
-/// - **The non-finite guard.** Any non-finite input collapses the WHOLE result to
-///   zeros, following [`crate::geometry`]'s whole-result-collapse convention; a
-///   non-positive height does the same. `weight` and `min_drawer_height` are
-///   included even though `has_drawer == false` would not read them, because a
-///   partial answer built from a poisoned term is worse than an obvious zero.
-///
-/// The lower bound is floored at `0.0` and then capped at `pane_area_height`. The
-/// cap is a PANIC GUARD rather than tidiness, exactly as
-/// [`crate::geometry::divider_position`]'s is: `f64::clamp` panics outright on an
-/// inverted range, and a pane area shorter than one whole pane's minimum is a real
-/// transient while a window allocation settles.
-#[must_use]
-pub fn drawer_split(
-    pane_area_height: f64,
-    has_drawer: bool,
-    weight: f64,
-    min_drawer_height: f64,
-) -> DrawerSplit {
-    if !pane_area_height.is_finite()
-        || !weight.is_finite()
-        || !min_drawer_height.is_finite()
-        || pane_area_height <= 0.0
-    {
-        return COLLAPSED;
-    }
-    if !has_drawer {
-        return DrawerSplit {
-            editor_height: pane_area_height,
-            drawer_height: 0.0,
-        };
-    }
-    let low = min_drawer_height.max(0.0).min(pane_area_height);
-    let drawer_height = (pane_area_height * weight)
-        .round()
-        .clamp(low, pane_area_height);
-    DrawerSplit {
-        editor_height: pane_area_height - drawer_height,
-        drawer_height,
+impl Default for DrawerShare {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -302,7 +280,7 @@ pub fn focus_target(
 
 #[cfg(test)]
 mod tests {
-    //! The drawer rulebook's four tables. Every one of them is arithmetic over
+    //! The drawer rulebook's three tables. Every one of them is arithmetic over
     //! plain numbers and pane ids, so none of it needs GTK, a display server or a
     //! Neovim — the whole module runs in the fast unit tier.
     //!
@@ -312,323 +290,6 @@ mod tests {
 
     use super::*;
     use crate::layout::Orientation;
-
-    // -- drawer_split -------------------------------------------------------
-
-    /// One third, re-typed here as a LITERAL rather than read from
-    /// [`DRAWER_WEIGHT`].
-    ///
-    /// A table that fed the production constant in and expected numbers derived
-    /// from it would hold for whatever value the constant took, including one that
-    /// no longer matches `init.lua`'s `floor(lines / 3)`. Stating the third
-    /// independently means a change to [`DRAWER_WEIGHT`] fails
-    /// [`drawer_split_table`]'s opening guard instead of moving silently with it.
-    const THIRD: f64 = 1.0 / 3.0;
-
-    /// A drawer floor typical of what [`crate::editor_inset::min_pane_size`]
-    /// produces at the smokes' cell size — the same 63 px
-    /// `geometry`'s divider table carries, and the value `pane_view` passes.
-    const MIN_DRAWER_PX: f64 = 63.0;
-
-    /// One [`drawer_split`] table row.
-    struct SplitCase {
-        desc: &'static str,
-        height: f64,
-        has_drawer: bool,
-        weight: f64,
-        min_drawer: f64,
-        expected_editor: f64,
-        expected_drawer: f64,
-        /// Whether this row's two expected heights must add up to its `height`.
-        ///
-        /// Checked BEFORE the call, so it guards the ROW rather than the function:
-        /// a row whose literals do not tile the pane area describes a split that
-        /// cannot exist, and would assert about nothing. `false` for the rows that
-        /// collapse the whole result, where zero is deliberately not the height.
-        sums_to_height: bool,
-    }
-
-    /// Pins [`drawer_split`]: a closed drawer reserves no height, an open one takes
-    /// `round(h * weight)` clamped into `[min_drawer_height, h]`, the two always
-    /// tile the pane area, and any degenerate or non-finite input collapses BOTH
-    /// fields to zero.
-    ///
-    /// FALSIFYING EDITS, each of which reddens a named row:
-    ///
-    /// - Delete the `has_drawer` short-circuit: the "a closed drawer reserves NO
-    ///   height" row reports `drawer_height` 200.0 where 0.0 was wanted, at
-    ///   `h = 600`.
-    /// - Drop the `low` bound from the clamp (`.clamp(0.0, h)`): the floor row
-    ///   reports 30.0 rather than 63.0 at `h = 90`. Without this row the
-    ///   `min_drawer_height` floor is documented and unasserted.
-    /// - Drop the `.min(pane_area_height)` cap on that lower bound: the predicted
-    ///   red is **a panic from inside the standard library**, not an assertion
-    ///   failure — `f64::clamp` refuses an inverted range with `min > max, or
-    ///   either was NaN. min = 63.0, max = 40.0`. The same shape
-    ///   `geometry::divider_position_table` already records, and the reason the cap
-    ///   is a panic guard rather than tidiness.
-    /// - Drop `.max(0.0)` from it: the negative-weight-and-negative-floor row hands
-    ///   the drawer a height of -50.0 and the editor 650.0 out of a 600 px area.
-    /// - Replace `.clamp(low, pane_area_height)` with `.max(low)`: the
-    ///   weight-past-one row gives the drawer 1200.0 and the editor -600.0.
-    /// - Replace `.round()` with `.floor()`: the 605 px row gives 201.0/404.0
-    ///   instead of 202.0/403.0.
-    /// - Drop `!weight.is_finite()` from the guard: the NaN-weight row comes back
-    ///   with BOTH fields `NaN`, because `round(h * NaN).clamp(63.0, 600.0)` is
-    ///   `NaN` and the editor is then `600 - NaN`. That is why the guard is
-    ///   deliberately broader than "a non-finite HEIGHT": a partial answer built
-    ///   from a poisoned term is worse than an obvious zero.
-    /// - Drop `!min_drawer_height.is_finite()`: `NaN.max(0.0)` is `0.0` (`f64::max`
-    ///   ignores NaN), so that row does NOT go `NaN` — it silently loses the floor
-    ///   and returns 200.0/400.0. The `+inf` row loses the whole editor instead,
-    ///   returning drawer 600.0.
-    /// - Move the non-finite guard AFTER the `has_drawer` short-circuit: the "even
-    ///   with NO drawer" row returns editor 600.0 rather than collapsing.
-    #[test]
-    fn drawer_split_table() {
-        // Guard on the fixture: init.lua opens the split at `floor(lines / 3)`, so a DRAWER_WEIGHT that
-        // is not a third means this table describes a drawer the app never opens.
-        assert_eq!(
-            DRAWER_WEIGHT, THIRD,
-            "DRAWER_WEIGHT is {DRAWER_WEIGHT}, not one third. The rows below are \
-             computed at a third because that is what `runtime/nvim/init.lua`'s \
-             `math.max(1, math.floor(vim.o.lines / 3))` divides the drawer's ROWS \
-             by; changing the pixel weight without that expression makes the GTK \
-             strip and the Neovim split different sizes."
-        );
-
-        let cases = [
-            // --- A degenerate pane area collapses the whole result (the `geometry` / `editor_inset`
-            // --- convention), before the `has_drawer` branch, so the closed row collapses too.
-            SplitCase {
-                desc: "a zero pane area collapses both fields",
-                height: 0.0,
-                has_drawer: true,
-                weight: THIRD,
-                min_drawer: MIN_DRAWER_PX,
-                expected_editor: 0.0,
-                expected_drawer: 0.0,
-                sums_to_height: true,
-            },
-            SplitCase {
-                desc: "a zero pane area collapses with NO drawer as well",
-                height: 0.0,
-                has_drawer: false,
-                weight: THIRD,
-                min_drawer: MIN_DRAWER_PX,
-                expected_editor: 0.0,
-                expected_drawer: 0.0,
-                sums_to_height: true,
-            },
-            SplitCase {
-                desc: "a negative pane area collapses both fields",
-                height: -10.0,
-                has_drawer: true,
-                weight: THIRD,
-                min_drawer: MIN_DRAWER_PX,
-                expected_editor: 0.0,
-                expected_drawer: 0.0,
-                sums_to_height: false,
-            },
-            SplitCase {
-                desc: "a NaN pane area collapses both fields",
-                height: f64::NAN,
-                has_drawer: true,
-                weight: THIRD,
-                min_drawer: MIN_DRAWER_PX,
-                expected_editor: 0.0,
-                expected_drawer: 0.0,
-                sums_to_height: false,
-            },
-            // --- The ordinary answers, at a pane area whose third is a whole number
-            // --- of pixels and comfortably above the floor.
-            SplitCase {
-                desc: "a closed drawer reserves NO height: the editor takes all of it",
-                height: 600.0,
-                has_drawer: false,
-                weight: THIRD,
-                min_drawer: MIN_DRAWER_PX,
-                expected_editor: 600.0,
-                expected_drawer: 0.0,
-                sums_to_height: true,
-            },
-            SplitCase {
-                // 600 * (1/3) = 199.999... -> 200.
-                desc: "an open drawer takes a third, and the two tile the pane area",
-                height: 600.0,
-                has_drawer: true,
-                weight: THIRD,
-                min_drawer: MIN_DRAWER_PX,
-                expected_editor: 400.0,
-                expected_drawer: 200.0,
-                sums_to_height: true,
-            },
-            SplitCase {
-                // 605 * (1/3) = 201.666... -> 202, which `.floor()` would call 201.
-                desc: "a fractional third ROUNDS rather than truncating",
-                height: 605.0,
-                has_drawer: true,
-                weight: THIRD,
-                min_drawer: MIN_DRAWER_PX,
-                expected_editor: 403.0,
-                expected_drawer: 202.0,
-                sums_to_height: true,
-            },
-            // --- The floor: a third of 90 px is under one pane's
-            // --- minimum, so the strip would be allocated and focusable but show no text.
-            SplitCase {
-                desc: "a short pane area floors the drawer at min_drawer_height",
-                height: 90.0,
-                has_drawer: true,
-                weight: THIRD,
-                min_drawer: MIN_DRAWER_PX,
-                expected_editor: 27.0,
-                expected_drawer: 63.0,
-                sums_to_height: true,
-            },
-            // --- The inverted range is a panic guard: `f64::clamp` panics when min > max, and a pane area
-            // --- under one pane's minimum is a real transient. The drawer takes it all, the one total answer.
-            SplitCase {
-                desc: "min_drawer_height above the pane area caps instead of panicking",
-                height: 40.0,
-                has_drawer: true,
-                weight: THIRD,
-                min_drawer: MIN_DRAWER_PX,
-                expected_editor: 0.0,
-                expected_drawer: 40.0,
-                sums_to_height: true,
-            },
-            // --- Both ends of the clamp, driven from the WEIGHT rather than from
-            // --- the floor, so a dropped bound shows up as a negative height.
-            SplitCase {
-                // round(600 * 2) = 1200, capped at the pane area.
-                desc: "a weight past 1 cannot give the editor a negative height",
-                height: 600.0,
-                has_drawer: true,
-                weight: 2.0,
-                min_drawer: MIN_DRAWER_PX,
-                expected_editor: 0.0,
-                expected_drawer: 600.0,
-                sums_to_height: true,
-            },
-            SplitCase {
-                // round(600 * -1) = -600, lifted to the floor.
-                desc: "a negative weight lifts to min_drawer_height",
-                height: 600.0,
-                has_drawer: true,
-                weight: -1.0,
-                min_drawer: MIN_DRAWER_PX,
-                expected_editor: 537.0,
-                expected_drawer: 63.0,
-                sums_to_height: true,
-            },
-            SplitCase {
-                // The `.max(0.0)` on the lower bound is what this row is for: with a negative floor and weight,
-                // nothing else keeps the drawer's height at or above zero.
-                desc: "a negative floor and a negative weight still cannot go below zero",
-                height: 600.0,
-                has_drawer: true,
-                weight: -1.0,
-                min_drawer: -50.0,
-                expected_editor: 600.0,
-                expected_drawer: 0.0,
-                sums_to_height: true,
-            },
-            // --- The guard covers `weight` and `min_drawer_height`
-            // --- too, though neither is read without a drawer; these five rows make narrowing it visible.
-            SplitCase {
-                desc: "a NaN weight collapses BOTH fields rather than poisoning one",
-                height: 600.0,
-                has_drawer: true,
-                weight: f64::NAN,
-                min_drawer: MIN_DRAWER_PX,
-                expected_editor: 0.0,
-                expected_drawer: 0.0,
-                sums_to_height: false,
-            },
-            SplitCase {
-                desc: "an infinite weight collapses BOTH fields",
-                height: 600.0,
-                has_drawer: true,
-                weight: f64::INFINITY,
-                min_drawer: MIN_DRAWER_PX,
-                expected_editor: 0.0,
-                expected_drawer: 0.0,
-                sums_to_height: false,
-            },
-            SplitCase {
-                desc: "a NaN min_drawer_height collapses BOTH fields",
-                height: 600.0,
-                has_drawer: true,
-                weight: THIRD,
-                min_drawer: f64::NAN,
-                expected_editor: 0.0,
-                expected_drawer: 0.0,
-                sums_to_height: false,
-            },
-            SplitCase {
-                desc: "an infinite min_drawer_height collapses BOTH fields",
-                height: 600.0,
-                has_drawer: true,
-                weight: THIRD,
-                min_drawer: f64::INFINITY,
-                expected_editor: 0.0,
-                expected_drawer: 0.0,
-                sums_to_height: false,
-            },
-            SplitCase {
-                // The guard runs before the `has_drawer` short-circuit, so a poisoned term collapses the
-                // result even on the branch that would never read it.
-                desc: "a NaN weight collapses even with NO drawer",
-                height: 600.0,
-                has_drawer: false,
-                weight: f64::NAN,
-                min_drawer: MIN_DRAWER_PX,
-                expected_editor: 0.0,
-                expected_drawer: 0.0,
-                sums_to_height: false,
-            },
-        ];
-
-        for case in &cases {
-            if case.sums_to_height {
-                assert_eq!(
-                    case.expected_editor + case.expected_drawer,
-                    case.height,
-                    "row {:?} is malformed, not the function: its expected editor \
-                     ({}) plus its expected drawer ({}) is {}, which is not the pane \
-                     area ({}) they are supposed to tile.",
-                    case.desc,
-                    case.expected_editor,
-                    case.expected_drawer,
-                    case.expected_editor + case.expected_drawer,
-                    case.height
-                );
-            }
-
-            let got = drawer_split(case.height, case.has_drawer, case.weight, case.min_drawer);
-
-            assert_eq!(
-                got.drawer_height, case.expected_drawer,
-                "case: {} (h {}, has_drawer {}, weight {}, min_drawer {}) — \
-                 drawer_height. `round(h * weight)` where 0.0 was wanted means the \
-                 `has_drawer` short-circuit or the non-finite collapse is gone; a NaN \
-                 means a poisoned term reached the arithmetic instead of collapsing \
-                 the whole result; an unclamped value means one of the clamp's two \
-                 bounds was dropped.",
-                case.desc, case.height, case.has_drawer, case.weight, case.min_drawer
-            );
-            assert_eq!(
-                got.editor_height, case.expected_editor,
-                "case: {} (h {}, has_drawer {}, weight {}, min_drawer {}) — \
-                 editor_height, which is the pane area LESS the drawer. A negative \
-                 value here means the drawer was allowed past the pane area, and a \
-                 NaN means the drawer height was NaN — in both cases read the \
-                 drawer_height assertion above first.",
-                case.desc, case.height, case.has_drawer, case.weight, case.min_drawer
-            );
-        }
-    }
 
     // -- bottom_most_leaf ---------------------------------------------------
 

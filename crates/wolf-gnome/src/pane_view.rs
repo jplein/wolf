@@ -191,7 +191,7 @@ use wolf_core::{
 };
 
 use crate::cmdline_ui::{self, PumView, ToastView};
-use crate::drawer::{self, DrawerState};
+use crate::drawer::{self, DrawerShare, DrawerState};
 use crate::editor_inset::{self, ColumnCap, GridRect, EDITOR_PADDING_PX};
 use crate::frame_metrics;
 use crate::frame_stats::Bucket;
@@ -597,6 +597,14 @@ struct PaneInner {
     /// entry, which is what gives it a statusbar, a column cap, a grid resize and a
     /// paint with no drawer branch anywhere on those paths.
     drawer: Cell<DrawerState>,
+    /// The window's drawer share, owned by `tab_view` and shared with every tab.
+    ///
+    /// Outside [`DrawerState`], so [`Self::clear_drawer`] leaves it. Shared by `Rc` for the reason
+    /// [`Self::tree`] is: the drawer divider's closures need it, and there is no cycle.
+    drawer_share: Rc<Cell<DrawerShare>>,
+    /// The drawer's divider and its guard, while both an editor widget and a drawer are bound;
+    /// set by [`Self::rebuild_pane_area`] and read by [`Self::apply_drawer_frame`].
+    drawer_divider: RefCell<Option<(gtk::Paned, Rc<DividerGuard>)>>,
     /// A saved pane tree awaiting realization, set ONCE at launch by
     /// [`PaneHandle::request_layout_rebuild`] and consumed by the first wake at
     /// which a window grid exists (see [`PaneInner::consume_pending_layout`]).
@@ -661,8 +669,8 @@ impl PaneInner {
         let prev_start = frame_metrics::begin();
         self.refresh_previews();
         frame_metrics::end(Bucket::PanePrev, prev_start);
-        // Before `sync_pane_grids`: re-stating the strip's height here is what lets a toplevel resize
-        // reach the drawer, since a height set on one frame is allocated on the next.
+        // Before `sync_pane_grids`: a drag in another tab moves the window's share with no
+        // `max-position` notify here, so each wake re-applies it to this tab's drawer divider.
         self.apply_drawer_frame();
         // After `refresh_pane_state`, which caches the flag the cap depends on; before
         // `update_active_pane`, so the order stays: read core state, then decide, then paint.
@@ -1612,71 +1620,29 @@ impl PaneInner {
     /// in-place restart ([`Self::reset_after_restart`]). A `Cell` cannot be mutated
     /// through a method, so the copy-out/copy-back lives here once rather than three
     /// times.
+    ///
+    /// The window's [`Self::drawer_share`] is deliberately untouched, so a drawer that
+    /// closes, or a restart, keeps the size the user dragged it to.
     fn clear_drawer(&self) {
         let mut state = self.drawer.get();
         state.clear();
         self.drawer.set(state);
     }
 
-    /// Sizes the drawer strip: no vertical expansion, and a content height of
-    /// [`drawer::drawer_split`]'s share of the CURRENT pane-area height.
+    /// Re-applies the window's [`DrawerShare`] to this tab's drawer divider, if one is
+    /// built. A no-op when no drawer is bound, which is the overwhelmingly common case.
     ///
-    /// A no-op when no drawer is bound, which is the overwhelmingly common case.
-    ///
-    /// ## Why a fixed height and not a `gtk::Paned`
-    ///
-    /// A paned would hand GTK the whole re-derivation for free, and it is still the
-    /// wrong control. Its handle is DRAGGABLE, and a drag of it has nowhere to go:
-    /// the drawer is not in the [`PaneTree`], so [`PaneTree::set_divider_fraction`]
-    /// — the sole path a dragged position takes to the tree, and from there to
-    /// `state.json` — cannot represent it. The position would also be re-applied
-    /// from the weights on the next `max-position` notify, so the handle would snap
-    /// back under the user's pointer. That is a control which visibly refuses input,
-    /// which is exactly the trade [`crate::scrollbar`] and
-    /// `notes/wolf-gnome/window-structure.md` already rule out.
-    ///
-    /// ## Two frames to converge on a resize
-    ///
-    /// The height is computed from `pane_area`'s allocation, and setting a content
-    /// height does not change an allocation — GTK does that on the next layout pass.
-    /// So a toplevel resize settles in two frames: this reads the OLD pane-area
-    /// height on the frame the resize lands, and the corrected one on the next wake.
-    /// **No test observes it**: nothing under `cage` can resize the toplevel, so the
-    /// convergence is an unproven row in `crates/wolf-gnome/tests/README.md` rather
-    /// than an asserted behaviour.
-    ///
-    /// A collapsed split — which only a pane area of zero or non-finite height
-    /// produces, i.e. before the first allocation — leaves the minimum content
-    /// height [`Self::make_pane_area`] set, so the strip is never REQUESTED at zero
-    /// pixels and recovers on the next wake.
+    /// The divider's own `max-position` handler covers an allocation change in this tab,
+    /// but the share is the window's: a drag in another tab moves it without changing
+    /// this tab's allocation, so no notify here would carry the change. Re-applying on
+    /// every wake is what keeps the tabs at one share.
     fn apply_drawer_frame(&self) {
-        let Some(id) = self.drawer.get().id() else {
+        // Its own statement: the borrow must be gone before `set_position` re-enters the handlers.
+        let divider = self.drawer_divider.borrow().clone();
+        let Some((paned, guard)) = divider else {
             return;
         };
-        let panes = self.panes.borrow();
-        let Some(p) = panes.get(&id) else {
-            return;
-        };
-        // The same floor every other pane gets, so a short window cannot allocate a
-        // strip too thin to show one row of its grid.
-        let (_, min_h) = editor_inset::min_pane_size(
-            self.metrics.cell_w,
-            self.metrics.cell_h,
-            self.statusbar.height,
-            EDITOR_PADDING_PX,
-        );
-        let split = drawer::drawer_split(
-            f64::from(self.pane_area.height()),
-            true,
-            drawer::DRAWER_WEIGHT,
-            min_h,
-        );
-        // The HOST is what `pane_area` parents, so the expansion flag belongs to it;
-        // the height request belongs to the `DrawingArea` the overlay measures.
-        p.host.set_vexpand(false);
-        if split.drawer_height > 0.0 {
-            p.area.set_content_height(px(split.drawer_height));
-        }
+        reapply_drawer_divider(&paned, &guard, self.drawer_share.get());
     }
 
     /// Allocates the next pane id.
@@ -3612,8 +3578,9 @@ impl PaneInner {
     /// Rebuilds `pane_area`'s child widget tree from the current [`PaneTree`],
     /// REUSING each pane's `DrawingArea` by id (so bound grids are preserved).
     ///
-    /// `pane_area`'s children end up as `[editor tree (expands)][drawer strip
-    /// (fixed height)]`. The unparent loop below needs no drawer case — the drawer
+    /// `pane_area`'s child is the editor tree alone or, while a drawer is bound, a
+    /// vertical `gtk::Paned` of the editor tree over the drawer strip
+    /// ([`build_drawer_paned`]). The unparent loop below needs no drawer case — the drawer
     /// is an ordinary `panes` entry, so its host is detached with every other — but
     /// the RE-parenting does, because [`build_layout_widget`] walks the tree and the
     /// drawer is deliberately not in it.
@@ -3632,6 +3599,9 @@ impl PaneInner {
         // Must be sampled BEFORE anything is unparented: once the focus widget is
         // gone the root reports no focus at all and there is nothing left to test.
         let had_focus = self.focus_inside_pane_area();
+        // Before the teardown: a `GtkPaned` disposed AFTER the re-parenting below unparents the
+        // children it still names, which would take the editor's host back out of `pane_area`.
+        *self.drawer_divider.borrow_mut() = None;
 
         // Detach every pane host for reinsertion. The host, not the area: unparenting the area leaves a
         // preview's web view on a host no longer in the tree.
@@ -3653,20 +3623,33 @@ impl PaneInner {
                 panes: &panes,
                 tree: &self.tree,
             };
-            if let Some(widget) = build_layout_widget(&layout, &ctx, &[]) {
+            let editor = build_layout_widget(&layout, &ctx, &[]);
+            if let Some(widget) = &editor {
                 widget.set_hexpand(true);
                 widget.set_vexpand(true);
-                self.pane_area.append(&widget);
             }
-            // The drawer strip, appended after the tree so it sits at the bottom: the one place the widget
-            // tree knows the drawer. `apply_drawer_frame` owns its height.
-            if let Some(p) = self.drawer.get().id().and_then(|id| panes.get(&id)) {
-                self.pane_area.append(&p.host);
-            }
+            // The one place the widget tree knows the drawer: the end child of a paned under the tree.
+            let host = self
+                .drawer
+                .get()
+                .id()
+                .and_then(|id| panes.get(&id))
+                .map(|p| p.host.clone().upcast::<gtk::Widget>());
+            let divider = match (editor, host) {
+                (Some(editor), Some(host)) => {
+                    let (paned, guard) = build_drawer_paned(&editor, &host, &self.drawer_share);
+                    self.pane_area.append(&paned);
+                    Some((paned, guard))
+                }
+                // A drawer host alone is the transient before the first editor pane.
+                (Some(widget), None) | (None, Some(widget)) => {
+                    self.pane_area.append(&widget);
+                    None
+                }
+                (None, None) => None,
+            };
+            *self.drawer_divider.borrow_mut() = divider;
         }
-        // The tree widget expands and the strip does not, so the strip's own height
-        // request is what divides them. See its "why not a `gtk::Paned`" note.
-        self.apply_drawer_frame();
 
         // AFTER the rebuild, so the strip is focused against the settled tree.
         if had_focus {
@@ -3910,8 +3893,15 @@ impl PaneHandle {
 
 /// Builds the pane view (container, pane area host, cmdline strip) and returns a
 /// [`PaneHandle`]. No panes exist until the first window grid appears on a wake.
+///
+/// `drawer_share` is the window's, shared by every tab, so the drawer's divider keeps
+/// one position across the window's tabs.
 #[must_use]
-pub fn build(core: &Rc<RefCell<Option<WolfCore>>>, metrics: &Rc<CellMetrics>) -> PaneHandle {
+pub fn build(
+    core: &Rc<RefCell<Option<WolfCore>>>,
+    metrics: &Rc<CellMetrics>,
+    drawer_share: &Rc<Cell<DrawerShare>>,
+) -> PaneHandle {
     let cmdline_area = gtk::DrawingArea::builder()
         .hexpand(true)
         .vexpand(false)
@@ -3980,6 +3970,8 @@ pub fn build(core: &Rc<RefCell<Option<WolfCore>>>, metrics: &Rc<CellMetrics>) ->
         core: core.clone(),
         active_pane: Cell::new(None),
         drawer: Cell::new(DrawerState::new()),
+        drawer_share: drawer_share.clone(),
+        drawer_divider: RefCell::new(None),
         pending_layout: RefCell::new(None),
         preview_coalescer: RefCell::new(PreviewCoalescer::new()),
         terminal_sizers: RefCell::new(BTreeMap::new()),
@@ -4208,6 +4200,45 @@ struct DividerGuard {
     last_span: Cell<i32>,
 }
 
+impl DividerGuard {
+    /// A guard that has applied nothing yet, so no `notify::position` reads as a drag.
+    fn new() -> Rc<Self> {
+        Rc::new(Self {
+            applying: Cell::new(false),
+            last_max: Cell::new(0),
+            last_span: Cell::new(0),
+        })
+    }
+
+    /// Sets `position` as this module's own write, arming the staleness gate at the
+    /// `max` and `span` it was derived against.
+    fn apply(&self, p: &gtk::Paned, max: i32, span: i32, position: i32) {
+        self.last_max.set(max);
+        self.last_span.set(span);
+        self.applying.set(true);
+        p.set_position(position);
+        self.applying.set(false);
+    }
+
+    /// The span a `notify::position` was a user drag against, or `None` for this
+    /// module's own write or a notify GTK produced mid-resize.
+    ///
+    /// The span joins `max` in the staleness gate because a position is read back as a
+    /// proportion of it: a notify mid-resize would store a fraction of an extent the
+    /// re-apply never used.
+    fn drag_span(&self, p: &gtk::Paned, axis: gtk::Orientation) -> Option<i32> {
+        if self.applying.get() {
+            return None;
+        }
+        let max = p.max_position();
+        let span = paned_span(p, axis);
+        if max <= 0 || max != self.last_max.get() || span != self.last_span.get() {
+            return None;
+        }
+        Some(span)
+    }
+}
+
 /// Ties one `gtk::Paned` to the divider `(path, boundary)` in `tree`, in both
 /// directions.
 ///
@@ -4246,11 +4277,7 @@ fn install_paned_position(
     path: Vec<usize>,
     boundary: usize,
 ) {
-    let guard = Rc::new(DividerGuard {
-        applying: Cell::new(false),
-        last_max: Cell::new(0),
-        last_span: Cell::new(0),
-    });
+    let guard = DividerGuard::new();
 
     {
         let tree = tree.clone();
@@ -4270,34 +4297,19 @@ fn install_paned_position(
             let Some(fraction) = fraction else {
                 return;
             };
-            guard.last_max.set(max);
-            guard.last_span.set(span);
-            guard.applying.set(true);
-            p.set_position(geometry::divider_position(
-                p.min_position(),
-                max,
-                span,
-                fraction,
-            ));
-            guard.applying.set(false);
+            let position = geometry::divider_position(p.min_position(), max, span, fraction);
+            guard.apply(p, max, span, position);
         });
     }
 
     {
         let tree = tree.clone();
         paned.connect_notify_local(Some("position"), move |p, _| {
-            // First, before any borrow: this notify can arrive synchronously from the re-apply's own
-            // `set_position`.
-            if guard.applying.get() {
+            // Before any borrow: this notify can arrive synchronously from the re-apply's own
+            // `set_position`, which `drag_span` refuses first.
+            let Some(span) = guard.drag_span(p, axis) else {
                 return;
-            }
-            let max = p.max_position();
-            let span = paned_span(p, axis);
-            // The span joins `max` in the staleness gate since the fraction is a proportion of it: a notify
-            // mid-resize would store a weight against an extent the re-apply never used.
-            if max <= 0 || max != guard.last_max.get() || span != guard.last_span.get() {
-                return;
-            }
+            };
             let Some(fraction) = geometry::divider_span_fraction(p.position(), span) else {
                 return;
             };
@@ -4305,6 +4317,72 @@ fn install_paned_position(
                 .set_divider_fraction(&path, boundary, fraction);
         });
     }
+}
+
+/// The drawer's divider: a vertical `gtk::Paned` with `editor` (the tree's widget) as
+/// its start child and `drawer` (the drawer's host) as its end child, its position tied
+/// to the window's `share` by [`install_drawer_divider`].
+///
+/// Neither child shrinks below its request, which is what holds both at
+/// [`PaneInner::make_pane_area`]'s pane floor: the drawer's limits are the tree
+/// dividers' own, through GTK's `[min_position, max_position]`.
+fn build_drawer_paned(
+    editor: &gtk::Widget,
+    drawer: &gtk::Widget,
+    share: &Rc<Cell<DrawerShare>>,
+) -> (gtk::Paned, Rc<DividerGuard>) {
+    let paned = gtk::Paned::new(gtk::Orientation::Vertical);
+    paned.set_hexpand(true);
+    paned.set_vexpand(true);
+    paned.set_shrink_start_child(false);
+    paned.set_shrink_end_child(false);
+    paned.set_start_child(Some(editor));
+    paned.set_end_child(Some(drawer));
+    let guard = install_drawer_divider(&paned, share);
+    (paned, guard)
+}
+
+/// Ties the drawer's paned to the window's [`DrawerShare`] in both directions, under
+/// the rules [`install_paned_position`] gives for a tree divider: the share takes the
+/// tree's place, and a drag writes it rather than a weight.
+///
+/// Every `max-position` notify re-derives the position from the share, so a resize
+/// keeps the drawer's share and a drag is never snapped back. A `notify::position` that
+/// [`DividerGuard::drag_span`] calls a drag is written into the share, and the
+/// write-back rebuilds nothing, as a tree divider's does not.
+fn install_drawer_divider(paned: &gtk::Paned, share: &Rc<Cell<DrawerShare>>) -> Rc<DividerGuard> {
+    let guard = DividerGuard::new();
+    {
+        let guard = guard.clone();
+        let share = share.clone();
+        paned.connect_notify_local(Some("max-position"), move |p, _| {
+            reapply_drawer_divider(p, &guard, share.get());
+        });
+    }
+    {
+        let guard = guard.clone();
+        let share = share.clone();
+        paned.connect_notify_local(Some("position"), move |p, _| {
+            let Some(span) = guard.drag_span(p, gtk::Orientation::Vertical) else {
+                return;
+            };
+            let mut next = share.get();
+            next.drag_to(p.position(), span);
+            share.set(next);
+        });
+    }
+    guard
+}
+
+/// Sets the drawer's paned to `share`'s position against its current limits and span.
+/// A no-op before the paned's first allocation, so it arms no staleness gate.
+fn reapply_drawer_divider(p: &gtk::Paned, guard: &DividerGuard, share: DrawerShare) {
+    let max = p.max_position();
+    let span = paned_span(p, gtk::Orientation::Vertical);
+    if max <= 0 || span <= 0 {
+        return;
+    }
+    guard.apply(p, max, span, share.position(p.min_position(), max, span));
 }
 
 /// The desktop UI FAMILY named by a GTK `gtk-font-name` string, or `None` when
