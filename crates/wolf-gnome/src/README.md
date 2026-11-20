@@ -590,21 +590,41 @@ Purpose: the GTK glue turning `layout`'s pane tree into nested `gtk::Paned`, one
 **Public API**
 
 - `build(core, metrics, drawer_share) -> PaneHandle` — panes appear with the first grid.
-- `cmdline_widget()` — the focus-return target for overlays and sidebar; plus `toast_widget()` and `pum_widget()`.
+- `cmdline_widget()`, the overlays' and sidebar's focus-return target; `toast_widget()`, `pum_widget()`.
 - `reset_after_restart()`, `drawer_is_open()`, `request_terminal_restore(steps)`, `request_layout_rebuild(saved)`, `realize_layout(saved)`, `layout_snapshot() -> LayoutGather`, `snapshot_readiness()`, `readiness()`.
 - `active_terminal()`, `sync_terminal_focus(focused)`, `request_terminal(command)`.
 - `other_pane_target(prefer)` — [`other_pane_seam.rs`](#other_pane_seamrs)'s window: `Some(0)` splits, `None` no-ops.
+- `toggle_zoom()`, `allows_toggle_terminal()` — [`pane_zoom.rs`](#pane_zoomrs)'s rules.
 
 **Decisions**
 
-- A dragged divider is written into the tree's weights, because a rebuild destroys the paned, and re-applies on every `max-position` notify, since nested allocation reports intermediate values.
+- A dragged divider writes the tree's weights, since a rebuild destroys the paned, and re-applies on each `max-position` notify, since nested allocation reports intermediate values.
 - `realize_layout` rebuilds into Neovim's current tabpage, so restore materialization is its only legal caller; `request_layout_rebuild` defers instead.
-- The preview's render half goes through [`preview_coalescer.rs`](#preview_coalescerrs), whose state sits on `PaneInner`, one per tab: a rebuild replaces `panes` wholesale.
+- [`preview_coalescer.rs`](#preview_coalescerrs)'s state is per tab, since a rebuild replaces `panes` wholesale.
 - Pointer input is one all-button `gtk::GestureDrag` ([why](../../../notes/crates/wolf-gnome/src/pane_view.rs.md#one-drag-gesture)), pinning target and button at press; editor panes take only the primary.
 - A terminal pane paints through its own [`TerminalCanvas`](terminal/README.md#canvasrs) ([why](../../../notes/wolf-gnome/terminal-panes.md)).
 - Each pane's status and `b:wolf_full_width` cache once per wake: a use-time read re-enters `draw_pane`'s guard, and paint, pointer and resize must agree in one frame.
-- One funnel produces every grid resize, against the size the pane last requested, not the lagging snapshot grid; it runs every wake, since a lifted cap re-divides a still allocation.
-- The drawer's paned exists only while one is bound, re-taking the window's share each wake ([why](../../../notes/wolf-gnome/window-structure.md)); `reset_after_restart` clears the drawer `detect_closes` misses.
+- One funnel sends every grid resize, against the size last requested, not the lagging snapshot grid; it runs each wake, as a lifted cap re-divides a still allocation.
+- The drawer's paned exists only while one is bound, re-taking the window's share each wake; a zoom shows its host alone, touching no weight or share ([why](../../../notes/wolf-gnome/window-structure.md)). `reset_after_restart` clears the drawer `detect_closes` misses.
+
+#### `pane_zoom.rs`
+
+Purpose: the pure, GTK-free Zoom Pane rules: which pane a toggle zooms, which events unzoom, and what a zoom freezes or redirects. [`pane_view.rs`](#pane_viewrs) holds only the zoomed pane's id and asks these.
+
+**Public API**
+
+- `zoomed_after(event, zoomed, active, panes) -> Option<PaneId>` — the zoomed pane after a `ZoomEvent`. `panes` must be the tree's leaves plus the open drawer, or the drawer cannot be zoomed and a lone leaf beside the drawer reads as nothing to hide.
+- `freezes_focus(zoomed)`, `allows_toggle_terminal(zoomed, drawer)`, `refocuses(resolved, zoomed)` — the focus move and Toggle Terminal a zoom makes inert, and whether Neovim's own move off the zoomed pane is sent back.
+- `other_pane_target(zoomed, drawer)` — read only while zoomed, in place of `other_pane_seam::target`.
+- `shown_alone(zoomed, bound) -> Option<PaneId>` — the host the pane area shows alone. A zoomed id with no host shows the whole layout, so a missed unzoom never blanks the pane area.
+
+**Decisions**
+
+- A port of [`PaneZoom.swift`](../../wolf-macos/Sources/WolfKeyMap/README.md#panezoomswift) with two divergences: `freezes_focus` covers focus moves only, since no divider exists while zoomed, and `shown_alone` takes the place of `visibleRects`, since GTK allocates the one host shown and needs no rects. [`tests/pane_zoom.rs`](../tests/README.md#pane_zoomrs) mirrors its tests case for case.
+
+**Gotchas**
+
+- `pane_view.rs` applies `PanesChanged` after close detection, and `Split` and `DrawerOpen` after the guards that drop a split of the drawer or a second drawer, so a dropped one keeps the zoom. A restart and a restored layout clear the zoom.
 
 #### `persistence.rs`
 

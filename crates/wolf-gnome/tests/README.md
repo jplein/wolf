@@ -8,7 +8,7 @@ nix develop --command cargo test -p wolf-gnome
 
 The devShell is not optional: it supplies GTK, exports `WOLF_NVIM_BIN` and `WOLF_RG_BIN`, and pins the font stack, which is what makes Pango measurement and Cairo rasterization reproducible enough to assert on pixels.
 
-Rules that are decidable from their arguments are pinned in each seam's own `#[cfg(test)] mod tests`, which is the point of the seam split in [wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md); the drawer share's, the key seam's, the terminal seams', the other-pane seam's, the sidebar toggles' and the titlebar seam's tables are files here instead, [`drawer_share.rs`](#drawer_sharers), [`gdk_key.rs`](#gdk_keyrs), [`terminal_seams.rs`](#terminal_seamsrs), [`other_pane_seam.rs`](#other_pane_seamrs), [`sidebar_toggles.rs`](#sidebar_togglesrs) and [`titlebar_background.rs`](#titlebar_backgroundrs).
+Rules that are decidable from their arguments are pinned in each seam's own `#[cfg(test)] mod tests`, which is the point of the seam split in [wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md); the drawer share's, the key seam's, the terminal seams', the other-pane seam's, the zoom rules', the sidebar toggles' and the titlebar seam's tables are files here instead, [`drawer_share.rs`](#drawer_sharers), [`gdk_key.rs`](#gdk_keyrs), [`terminal_seams.rs`](#terminal_seamsrs), [`other_pane_seam.rs`](#other_pane_seamrs), [`pane_zoom.rs`](#pane_zoomrs), [`sidebar_toggles.rs`](#sidebar_togglesrs) and [`titlebar_background.rs`](#titlebar_backgroundrs).
 
 The other files below cover what a seam cannot reach: a real Neovim, a real window, the built binary together with the manifest that shaped it, and the store output `nix build .#wolf-gnome` installs — a different artifact from the checkout build, making different claims.
 
@@ -133,6 +133,17 @@ The other files below cover what a seam cannot reach: a real Neovim, a real wind
 
 - Not a whole-image hash, which is too brittle across freetype/fontconfig versions. Pixel reads assume little-endian ARGB32, in-memory byte order `B, G, R, A`.
 - The PNG golden is a dev aid nothing asserts against; regenerate it with `cargo test -p wolf-gnome --test paint_golden -- --ignored regenerate_png_golden`, which needs the `png` feature on the `cairo` dependency.
+
+#### `pane_zoom.rs`
+
+**Covers**
+
+- `pane_zoom`'s rules, K1 to K10, in tests that mirror [`PaneZoomTests.swift`](../../wolf-macos/Tests/WolfKeyMapTests/README.md#panezoomtestsswift) case for case, with the same ids. K6 tests `freezes_focus` and K10 `shown_alone` over bound ids, the two divergences [`src/README.md`](../src/README.md#pane_zoomrs) states.
+
+**Gotchas**
+
+- Pure: no display, no Neovim and no compositor. What the pane area shows for an answer is [`smoke_headless/zoom_pane.rs`](#smoke_headlesszoom_paners)'s question.
+- A case added on either side belongs on both, or the two ports can drift silently.
 
 #### `release_profile.rs`
 
@@ -307,6 +318,12 @@ The terminfo smoke: the checkout binary, given `WOLF_TERMINFO_DIR` from the devS
 The titlebar smokes, one per Lighthouse background: the checkout binary over a staged Lighthouse, with `appearance` forced to that background while `ADW_DEBUG_COLOR_SCHEME` makes the desktop prefer the other. One launch opens a second tab and takes four captures: focused, after `:set background` to the other, after a runtime `WolfTitlebar`, and in backdrop with GTK's in-process save dialog up, so the smoke exports `GDK_DEBUG=no-portals`. The header bar and the tab bar must match the grid's `Normal`, then `WolfTitlebar`, and the title and the tabs' text must be drawn on the forced scheme's side. The bands derive from the geometry constants, and every run prints a table of expected and measured colours.
 
 The dialog is the route to backdrop: `cage` activates every toplevel it maps and deactivates one only when another takes focus, so no launch starts inactive. A toplevel with a parent is centred at its own size, so the main window and both bars stay visible beside it. A precondition proves the dimming: the title's contrast over `WolfTitlebar` must reach a floor while focused, and be at most a share of it in backdrop.
+
+#### `smoke_headless/zoom_pane.rs`
+
+The Zoom Pane smoke: one launch builds `vertical[A, horizontal[B, C]]` over the drawer, drags the tree divider and the drawer handle, then zooms B from the palette. B must fill the pane area while the others keep their size, and the unzoom must restore every pane, both drags included. A split, closing the zoomed pane and Preview in Another Pane must each unzoom; a focus move, Toggle Terminal and Neovim's own `<C-w>w` must not.
+
+Every observable is a Neovim readback of `winwidth` and `winheight` per recorded window id, the grid size the front-end drives; no assertion reads a pixel. The focus leg counts `WinEnter`: Neovim declines `<C-w>h` itself, so any entry is the front-end's `focus_win`, and a move the refocus would undo is still caught. The tree handle's x is modelled from `geometry::divider_position`, as `drawer_strip_edges` models the drawer handle's y, rather than found by bisection; a missed press fails the drag precondition.
 
 #### `state_isolation.rs`
 
@@ -637,6 +654,9 @@ Being scrupulous about this is the point of the section.
 - **A terminal pane's persistence in the live widget.** No smoke persists a terminal pane and relaunches, so `PaneInner::leaf_contents`' `WinContent::Terminal` arm reaches no assertion, and deleting it fails nothing. The terminal-leaf rows in [`terminal_seams.rs`](#terminal_seamsrs) and wolf-core's [`rebuild_layout.rs`](../../wolf-core/tests/README.md#rebuild_layoutrs) cover the layers below it.
 - **Damage in the live widget, and HiDPI.** [`terminal_paint.rs`](#terminal_paintrs) shows the canvas repaints only damaged rows, with no widget; the terminal-pane smoke reads final pixels, which a pane repainting every row on every wake paints too. Nothing runs at a device scale above 1.
 - **The other-pane no-op in the live widget.** No smoke presses Preview or Edit in Another Pane with the drawer focused, so the shell's mapping of `PaneHandle::other_pane_target`'s `None` to no RPC reaches no assertion. Only the `None` row in [`other_pane_seam.rs`](#other_pane_seamrs) pins the rule beneath it.
+- **A hidden preview across a zoom.** No smoke zooms with a Markdown preview hidden, so that its web view comes back without a reload and at its scroll position reaches no assertion.
+- **The `DrawerOpen` unzoom and the restart reset.** No user route opens the drawer while a tree pane is zoomed, since Toggle Terminal is refused, and no smoke restarts Neovim while zoomed. K4 in [`pane_zoom.rs`](#pane_zoomrs) pins the rule; the calls in `apply_drawer_open`, `reset_after_restart` and `apply_layout_rebuild` reach nothing.
+- **A window resize while zoomed.** Nothing resizes the toplevel under `cage`, so that the unzoom fits the restored layout to the new size is unobserved.
 
 ## Deliberate test gaps
 

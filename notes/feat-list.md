@@ -36,7 +36,7 @@ A packaged smoke launches the store binary under `cage` with every devShell expo
 | ---------------------------------------------------------- | ----------------------------------------------------------------------------- | ----- | ----- |
 | Split panes (`PaneTree`: split / close / focus)            | `feat/split-panes` / `feat/mac-panes`                                         | [x]   | [x]   |
 | Split Horizontal / Split Vertical palette commands         | `regina/task/pane-ui/3` (`ac34e5f`)                                           | [x]   | [x]   |
-| Zoom Pane palette command                                  | `regina/task/pane-ui/4`                                                       | [x]   | [ ]   |
+| Zoom Pane palette command                                  | `regina/task/pane-ui/4` / `regina/task/pane-ui/5`                             | [x]   | [x]   |
 | Divider drag-to-resize (persisted weights)                 | `feat/macos-pane-dividers` (`5f8becb`, `03a4647`) / `linux-feat/divider-drag` | [x]   | [x]   |
 | Mouse input (click to position, drag to select)            | `feat/mac-panes` (`9051f0f`) / `linux-feat/mouse-scroll`                      | [x]   | [x]   |
 | Scroll / trackpad input                                    | `feat/mac-panes` (`9051f0f`, `4b7fdc5`) / `linux-feat/mouse-scroll`           | [x]   | [x]   |
@@ -137,7 +137,7 @@ The GTK sidebar re-roots from one settle point, on the working directory Neovim 
 | `:q` / `:qa` mapped to close pane / window   | `feat/colon-q-remapping`                                  | [x]   | [x]   |
 | ⌘N opens a new untitled Markdown buffer      | `feat/colon-q-remapping` (`0266b96`)                      | [x]   | [x]   |
 
-`wolf-gnome` calls `WolfCore::drain_commands()` on every render wake, behind a total `Command` to `UiAction` mapping in `command_action.rs` with no catch-all arm, so a new core command fails to compile until it is classified. Of the 28 commands, 24 dispatch, 1 has no GNOME equivalent (`HideApplication`, since the shell owns window visibility), and 3 are deferred with a distinct printed reason.
+`wolf-gnome` calls `WolfCore::drain_commands()` on every render wake, behind a total `Command` to `UiAction` mapping in `command_action.rs` with no catch-all arm, so a new core command fails to compile until it is classified. Of the 31 commands, 27 dispatch, 1 has no GNOME equivalent (`HideApplication`, since the shell owns window visibility), and 3 are deferred with a distinct printed reason.
 
 The Linux multiple-windows box means N windows in one process: a coordinator owns the single state store, the one config read and the one cell measurement, while each window carries its own captive Neovim, its own wake and its own subtree of `state.json`. New Window opens a fresh empty window and inherits nothing from the window it was asked from — not the working directory, not the layout, not the size — which is macOS's behaviour for the same row.
 
