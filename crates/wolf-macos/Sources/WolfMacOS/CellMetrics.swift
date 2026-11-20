@@ -5,9 +5,11 @@ import CoreText
 import Foundation
 import WolfKeyMap
 
-/// Per-cell geometry plus the base font used to paint the grid. A monospace cell
+/// Per-cell geometry plus the faces used to paint the grid. A monospace cell
 /// is `cellWidth` wide and `cellHeight` tall; `baseline` is the text baseline
-/// measured from the cell's TOP edge (the view is flipped). The macOS analog of
+/// measured from the cell's TOP edge (the view is flipped). The geometry is measured
+/// from the configured face alone, and every face falls back to the bundled symbols
+/// face (`FontRegistration.symbolsFamily`) for icons it lacks. The macOS analog of
 /// wolf-gnome's `render::CellMetrics`.
 struct CellMetrics {
   /// Cell advance width, in points.
@@ -16,8 +18,9 @@ struct CellMetrics {
   let cellHeight: CGFloat
   /// Baseline offset from the cell top, in points.
   let baseline: CGFloat
-  /// The base (regular) CoreText font. Bold/italic/boldItalic variants are
-  /// derived from it and cached alongside; the renderer selects a face per cell
+  /// The base (regular) CoreText font, carrying the symbols cascade list.
+  /// Bold/italic/boldItalic variants are derived from its uncascaded face, each given
+  /// the same cascade, and cached alongside; the renderer selects a face per cell
   /// via `font(for:)`. Per-cell text attributes (bold/italic/underline/
   /// undercurl/strikethrough) resolved and packed by wolf-ffi ARE now consumed in
   /// painting: `GlyphStyleResolver` maps a cell's flags to a `GlyphFace` (drawn
@@ -54,7 +57,8 @@ struct CellMetrics {
   /// else `config.font_size`. The family is `config.font_family`, falling back to
   /// Menlo when CoreText cannot resolve it (compared case-insensitively). Cell
   /// height and baseline come from the pure `CellMetricsMath` seam using
-  /// `config.line_height` (a percentage of the point size).
+  /// `config.line_height` (a percentage of the point size). Every face carries the
+  /// symbols cascade, and the metrics come from the uncascaded regular face.
   static func measured(config: FfiConfig) -> CellMetrics {
     measured(config: config, pointSize: defaultPointSize(config: config))
   }
@@ -66,10 +70,30 @@ struct CellMetrics {
   /// Identical to [`measured(config:)`](measured(config:)) except the point size
   /// is passed in rather than resolved from `WOLF_FONT_PT` / `config.font_size`,
   /// so `WolfWindowController` can re-measure at a stepped size while keeping the
-  /// configured family + line-height.
+  /// configured family + line-height. Forwards to
+  /// `measured(family:pointSize:lineHeightPercent:symbolsFamily:)`, so the faces
+  /// carry the symbols cascade at every size.
   static func measured(config: FfiConfig, pointSize: CGFloat) -> CellMetrics {
+    measured(
+      family: config.font_family().toString(), pointSize: pointSize,
+      lineHeightPercent: config.line_height())
+  }
+
+  /// Measures monospace cell metrics for `family` (Menlo when CoreText cannot
+  /// resolve it) at `pointSize`, with a `lineHeightPercent` cell height and a
+  /// recentered baseline: the measure both config forms forward to.
+  ///
+  /// Every face carries a cascade list of the `symbolsFamily` face, then CoreText's
+  /// default list for that face, so a glyph the face lacks paints from the icon
+  /// font before the system fallback. The metrics come from the uncascaded regular
+  /// face. When `symbolsFamily` does not resolve (no bundle, or a test naming a
+  /// missing family), the faces stay uncascaded and a line is logged.
+  static func measured(
+    family: String, pointSize: CGFloat, lineHeightPercent: Double,
+    symbolsFamily: String = FontRegistration.symbolsFamily
+  ) -> CellMetrics {
     let size = pointSize
-    let font = makeFont(family: config.font_family().toString(), size: size)
+    let font = makeFont(family: family, size: size)
     let boldFont = makeVariant(base: font, size: size, addingTraits: .traitBold)
     let italicFont = makeVariant(base: font, size: size, addingTraits: .traitItalic)
     let boldItalicFont = makeVariant(
@@ -84,7 +108,7 @@ struct CellMetrics {
 
     let cellHeight = CellMetricsMath.cellHeight(
       fontSize: Double(size),
-      lineHeightPercent: config.line_height(),
+      lineHeightPercent: lineHeightPercent,
       ascent: Double(ascent),
       descent: Double(descent),
       leading: Double(leading)
@@ -95,15 +119,39 @@ struct CellMetrics {
       descent: Double(descent)
     )
 
+    let symbols = symbolsDescriptor(family: symbolsFamily, size: size)
     return CellMetrics(
       cellWidth: advance,
       cellHeight: CGFloat(cellHeight),
       baseline: CGFloat(baseline),
-      font: font,
-      boldFont: boldFont,
-      italicFont: italicFont,
-      boldItalicFont: boldItalicFont
+      font: cascading(font, behind: symbols),
+      boldFont: cascading(boldFont, behind: symbols),
+      italicFont: cascading(italicFont, behind: symbols),
+      boldItalicFont: cascading(boldItalicFont, behind: symbols)
     )
+  }
+
+  /// Returns the descriptor of the `family` face at `size`, or nil (logged) when
+  /// CoreText resolves a different family, as it does when the font is not registered.
+  private static func symbolsDescriptor(family: String, size: CGFloat) -> CTFontDescriptor? {
+    let probe = CTFontCreateWithName(family as CFString, size, nil)
+    let actual = CTFontCopyFamilyName(probe) as String
+    guard actual.caseInsensitiveCompare(family) == .orderedSame else {
+      NSLog("wolf: \(family) does not resolve; grid faces keep the system fallback only")
+      return nil
+    }
+    return CTFontCopyFontDescriptor(probe)
+  }
+
+  /// Returns a copy of `face` whose cascade list is `symbols`, then CoreText's default
+  /// list for `face`; `face` itself when `symbols` is nil.
+  private static func cascading(_ face: CTFont, behind symbols: CTFontDescriptor?) -> CTFont {
+    guard let symbols else { return face }
+    // Appended explicitly: a custom list may stand in for the system fallback, not precede it.
+    let system = CTFontCopyDefaultCascadeListForLanguages(face, nil) as? [CTFontDescriptor] ?? []
+    let attributes = [kCTFontCascadeListAttribute: [symbols] + system] as CFDictionary
+    let descriptor = CTFontDescriptorCreateWithAttributes(attributes)
+    return CTFontCreateCopyWithAttributes(face, 0, nil, descriptor)
   }
 
   /// Derives a variant of `base` with `addingTraits` (bold and/or italic)

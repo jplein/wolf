@@ -5,12 +5,17 @@ import Foundation
 
 /// Registers the vendored fonts shipped at `Contents/Resources/fonts/*.ttf` so
 /// CoreText resolves their families — "iA Writer Mono S" (the default grid font),
-/// "JetBrains Mono", and "Symbols Nerd Font Mono", the face for Private Use Area
-/// icons, which is never a configured family. Registration is PROCESS-scoped
-/// (not installed system-wide) and
+/// "JetBrains Mono", and `symbolsFamily`, the face for Private Use Area icons,
+/// which is never a configured family: `CellMetrics` cascades it behind every grid
+/// face. Registration is PROCESS-scoped (not installed system-wide) and
 /// LOG-NOT-FAIL: a missing fonts dir (developer/`swift run` paths) or an
 /// already-registered face is logged and skipped, never fatal.
 enum FontRegistration {
+  /// The family of the bundled icon face, "Symbols Nerd Font Mono", which
+  /// `CellMetrics` puts in every grid face's cascade list, behind the face itself
+  /// and ahead of CoreText's system fallback.
+  static let symbolsFamily = "Symbols Nerd Font Mono"
+
   /// Registers every `.ttf` under the bundle's `fonts/` resource directory with
   /// CoreText for this process. A no-op (with a log line) when the directory is
   /// absent or holds no TTFs.
@@ -19,8 +24,13 @@ enum FontRegistration {
       NSLog("wolf: no bundle resourcePath; skipping bundled font registration")
       return
     }
-    let fontsDir = URL(fileURLWithPath: resourcePath).appendingPathComponent("fonts")
+    registerFonts(in: URL(fileURLWithPath: resourcePath).appendingPathComponent("fonts"))
+  }
 
+  /// Registers every `.ttf` directly under `fontsDir` with CoreText for this
+  /// process, under the same log-not-fail rule as `registerBundledFonts()`. The
+  /// test binary calls it on the font trees Bazel stages.
+  static func registerFonts(in fontsDir: URL) {
     let manager = FileManager.default
     var isDir: ObjCBool = false
     guard manager.fileExists(atPath: fontsDir.path, isDirectory: &isDir), isDir.boolValue

@@ -10,6 +10,10 @@ import XCTest
 /// config read: `WOLF_NVIM_BIN` from the staged Neovim, fresh `WOLF_STATE_DIR` and
 /// `WOLF_CONFIG_DIR`, so no test reads or writes the user's state or preferences, and
 /// `SHELL=/bin/sh`, so a session started with no command runs a known shell.
+///
+/// It also registers the staged font trees the app bundles (iA Writer Mono S, JetBrains Mono
+/// and Symbols Nerd Font Mono) with CoreText, before any metrics are measured, so every test
+/// measures the families the app ships rather than the Menlo fallback.
 private struct LiveCoreEnvironment: Sendable {
   /// The staged `init.lua`, or `nil` with `problem` set.
   let initLua: String?
@@ -65,7 +69,37 @@ private struct LiveCoreEnvironment: Sendable {
         problem: "WOLF_TEST_INIT_LUA (\(env["WOLF_TEST_INIT_LUA"] ?? "unset")) resolves to no"
           + " staged init.lua: the target must stage //runtime/nvim:init.lua", scratch: scratch)
     }
+    if let problem = registerStagedFonts(env: env) {
+      return LiveCoreEnvironment(initLua: nil, problem: problem, scratch: scratch)
+    }
     return LiveCoreEnvironment(initLua: initLua, problem: nil, scratch: scratch)
+  }
+
+  /// The font trees the app bundles: each variable and the target that stages its tree.
+  private static let fontTrees = [
+    ("WOLF_TEST_IA_WRITER_MONO_DIR", "//bazel/ia-writer-mono:ia_writer_mono_tree"),
+    ("WOLF_TEST_JETBRAINS_MONO_DIR", "//bazel/jetbrains-mono:jetbrains_mono_tree"),
+    ("WOLF_TEST_NERD_FONTS_SYMBOLS_DIR", "//bazel/nerd-fonts-symbols:nerd_fonts_symbols_tree"),
+  ]
+
+  /// Registers every staged font tree's inner `fonts/` directory with CoreText, as the app
+  /// registers its bundle's; returns what went wrong, naming the variable, or `nil`.
+  private static func registerStagedFonts(env: [String: String]) -> String? {
+    for (key, target) in fontTrees {
+      guard let tree = resolveRunfile(key, env: env) else {
+        return "\(key) (\(env[key] ?? "unset")) resolves to no staged font tree: the"
+          + " WolfMacOSTests target must stage \(target)"
+      }
+      let fonts = URL(fileURLWithPath: tree).appendingPathComponent("fonts")
+      var isDir: ObjCBool = false
+      guard FileManager.default.fileExists(atPath: fonts.path, isDirectory: &isDir),
+        isDir.boolValue
+      else {
+        return "\(key) resolved to \(tree), which holds no fonts/ directory"
+      }
+      FontRegistration.registerFonts(in: fonts)
+    }
+    return nil
   }
 
   /// Resolves the runfiles-relative path in `key` against the bases Bazel may use, as
@@ -157,6 +191,18 @@ final class LiveCore {
       return nil
     }
     return initLua
+  }
+
+  /// Prepares the shared environment, which registers the staged fonts, for a test that
+  /// starts no core; `false`, with the calling test failed, when it could not be prepared.
+  @discardableResult
+  static func stageFonts(file: StaticString = #filePath, line: UInt = #line) -> Bool {
+    let env = LiveCoreEnvironment.shared
+    guard env.problem == nil else {
+      XCTFail("LiveCore: \(env.problem ?? "")", file: file, line: line)
+      return false
+    }
+    return true
   }
 
   /// Resolves the runfiles-relative path in the variable `key` to an existing path, after the

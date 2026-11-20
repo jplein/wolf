@@ -2798,10 +2798,12 @@ final class PaneContainerView: NSView {
   }
 
   /// Paints all cells of `frame` at grid-local coordinates (the caller has already
-  /// translated/clipped the context to the target rect).
+  /// translated/clipped the context to the target rect). Each row fills every cell's
+  /// background before it draws any glyph, so a glyph reaching past its cell (a
+  /// symbols-face icon is about one em wide) is not overpainted by the next cell's fill.
   ///
   /// Records two sub-buckets: `pane.vec` (the `frame.cells()` deep clone alone)
-  /// and `pane.glyphs` (the double loop alone). Both are nested INSIDE the
+  /// and `pane.glyphs` (the row loop, both passes). Both are nested INSIDE the
   /// caller's `pane.cells` bucket and do not account for all of it — the
   /// difference is the `RustVec<FfiCell>` teardown at ARC release.
   private func paintCells(_ frame: FfiFrame, ctx: CGContext) {
@@ -2813,17 +2815,19 @@ final class PaneContainerView: NSView {
     let cellW = metrics.cellWidth
     let cellH = metrics.cellHeight
     let glyphPainter = GlyphPainter(metrics: metrics)
+    var glyphs: [(text: String, x: CGFloat, fg: CGColor, style: GlyphStyle)] = []
 
     // Not a `defer`: one registered here fires at function exit and swallows part of the teardown
     // that `pane.cells` exists to separate out. No timer goes inside a loop body.
     let glyphLoopStart = FrameMetrics.begin()
     for row in 0..<rows {
+      let y = CGFloat(row) * cellH
+      glyphs.removeAll(keepingCapacity: true)
       for col in 0..<cols {
         let index = row * cols + col
         guard index < cells.len() else { continue }
         let cell = cells[index]
         let x = CGFloat(col) * cellW
-        let y = CGFloat(row) * cellH
 
         let bg = WolfColor.cgColor(cell.bg(), fallback: WolfColor.fallbackBg)
         ctx.setFillColor(bg)
@@ -2834,8 +2838,12 @@ final class PaneContainerView: NSView {
           let fg = WolfColor.cgColor(cell.fg(), fallback: WolfColor.fallbackFg)
           let style = GlyphStyleResolver.resolve(
             flags: cell.flags(), fg: cell.fg(), special: cell.special())
-          glyphPainter.drawGlyph(ctx, text: text, x: x, y: y, fg: fg, style: style)
+          glyphs.append((text, x, fg, style))
         }
+      }
+      for glyph in glyphs {
+        glyphPainter.drawGlyph(
+          ctx, text: glyph.text, x: glyph.x, y: y, fg: glyph.fg, style: glyph.style)
       }
     }
     FrameMetrics.end(.paneGlyphLoop, glyphLoopStart)

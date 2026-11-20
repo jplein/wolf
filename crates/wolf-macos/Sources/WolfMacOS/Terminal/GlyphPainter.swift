@@ -40,6 +40,11 @@ struct GlyphPainter {
   /// `CTLineDraw` paints decorations only in the foreground color, ignores AppKit
   /// decoration-color attributes and has no wavy underline style, so the special
   /// (underline) color and the wave must be stroked by hand.
+  ///
+  /// A glyph the face lacks draws from the face's cascade list (the symbols face
+  /// `CellMetrics` puts first, then the system list), unscaled at the face's point
+  /// size, so it may reach past its cell: a caller fills a whole row's backgrounds
+  /// before it draws the row's glyphs.
   func drawGlyph(
     _ ctx: CGContext, text: String, x: CGFloat, y: CGFloat, fg: CGColor,
     style: GlyphStyle
