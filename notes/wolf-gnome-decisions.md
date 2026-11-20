@@ -8,7 +8,7 @@ The durable constraints behind this crate. Read this before changing anything he
 
 This is the GTK 4 / libadwaita front-end: a runnable multi-window application that consumes [`wolf-core`](../crates/wolf-core/README.md) as an ordinary Rust crate dependency. It renders Neovim natively rather than embedding a terminal, so every pixel outside a preview comes from a Cairo/Pango paint of a core `Snapshot`, or of a session's `TerminalFrame` in a terminal pane. One process holds N windows and one captive Neovim per window; [The coordinator and its windows](wolf-gnome/the-coordinator-and-its-windows.md) owns that split.
 
-Split, close, and focus move are driven by core's layout-intent channel; a divider drag is the `gtk::Paned` handle's own gesture, landing in the pure tree's weights. Menu items, accelerators, and commands drained from Neovim all resolve through one `gio` action namespace.
+Split, close, and focus move are driven by core's layout-intent channel; a divider drag is the `gtk::Paned` handle's own gesture, landing in the pure tree's weights, or for the terminal drawer's divider in the window's drawer share. Menu items, accelerators, and commands drained from Neovim all resolve through one `gio` action namespace.
 
 Files reach Neovim two ways, and [`README.md`](../crates/wolf-gnome/README.md) states both. What is durable here is that `InputEvent::OpenAt`'s edit and cursor move happen inside one input-pump step, so no other event can interleave between them.
 

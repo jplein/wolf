@@ -1,6 +1,6 @@
 # Pane weights and dividers
 
-Last verified at commit `6298d01fb761da1bfdd64a0a25671a40b9d4e525`.
+Last verified at commit `2946f3346cade6765e37b865c419989246df0fa6`.
 
 **A weight is a proportion of width**, and it is that everywhere it appears: in the pure tree, in `pane_layout::encode`, in `state.json`, and on screen. `geometry::divider_position` therefore scales it by the paned's own span — its width for a horizontal paned, its height for a vertical one — so equal weights give equal widths, and `min_position` / `max_position` are the clamp and never the scale. Scaling by the travel instead spends the end child's minimum size at every fraction, so even a fresh, undragged split comes out lopsided by exactly that minimum.
 
@@ -13,6 +13,8 @@ An n-ary split renders as a right-leaning chain of binary `gtk::Paned`, so a div
 **A zero weight is dangerous because nothing rejects it.** `PaneTree::from_layout` checks that every weight is finite and non-negative and that the split's total is positive, and a lone zero among positives satisfies all three. It is durable rather than loud: `pane_rects` hands that child a zero-extent rectangle, `neighbor` never returns it because the cross-axis overlap test is strictly positive, and `layout()` copies the zero straight back out, so it survives the `state.json` round trip and comes back on every later launch.
 
 **There are two floors under a divider and neither subsumes the other.** `MIN_DIVIDER_FRACTION` is the arithmetic one: it keeps a dragged weight strictly positive in the tree, where a zero would survive every round trip. `divider_position`'s clamp into `min_position` / `max_position` is the pixel one: it keeps a position inside what GTK will accept for the two children's minimum sizes, which no fraction can know about. A weight can be well clear of the first and still be clamped by the second, and where the clamp binds — a span too small for both floors — equal widths are unreachable and the clamp is the right answer, since averaging through a floor reflows both panes to one column.
+
+**The terminal drawer's divider follows the same rules through `drawer::DrawerShare`**: the same span denominator and the same GTK clamp, but a drag writes the drawer's share, the complement of the position's fraction, rather than a tree weight. It needs no `MIN_DIVIDER_FRACTION`, which exists because a zero weight survives `state.json`: the share is never persisted, and every use of it goes through the pixel clamp.
 
 The renormalization at the end of `set_divider_fraction` is repair rather than tidiness: `from_layout` never checks that a saved vector sums to 1, and `state.json` carries `weights` as plain JSON through `pane_layout::decode` into it, so a denormalized split is a reachable input. A non-finite fraction is refused outright rather than clamped, because a NaN weight is the loud failure of the pair: `from_layout` rejects the whole tree at the next launch and the saved layout is gone.
 

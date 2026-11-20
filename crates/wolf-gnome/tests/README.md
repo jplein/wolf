@@ -8,7 +8,7 @@ nix develop --command cargo test -p wolf-gnome
 
 The devShell is not optional: it supplies GTK, exports `WOLF_NVIM_BIN` and `WOLF_RG_BIN`, and pins the font stack, which is what makes Pango measurement and Cairo rasterization reproducible enough to assert on pixels.
 
-Rules that are decidable from their arguments are pinned in each seam's own `#[cfg(test)] mod tests`, which is the point of the seam split in [wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md); the key seam's, the terminal seams', the other-pane seam's, the sidebar toggles' and the titlebar seam's tables are files here instead, [`gdk_key.rs`](#gdk_keyrs), [`terminal_seams.rs`](#terminal_seamsrs), [`other_pane_seam.rs`](#other_pane_seamrs), [`sidebar_toggles.rs`](#sidebar_togglesrs) and [`titlebar_background.rs`](#titlebar_backgroundrs).
+Rules that are decidable from their arguments are pinned in each seam's own `#[cfg(test)] mod tests`, which is the point of the seam split in [wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md); the drawer share's, the key seam's, the terminal seams', the other-pane seam's, the sidebar toggles' and the titlebar seam's tables are files here instead, [`drawer_share.rs`](#drawer_sharers), [`gdk_key.rs`](#gdk_keyrs), [`terminal_seams.rs`](#terminal_seamsrs), [`other_pane_seam.rs`](#other_pane_seamrs), [`sidebar_toggles.rs`](#sidebar_togglesrs) and [`titlebar_background.rs`](#titlebar_backgroundrs).
 
 The other files below cover what a seam cannot reach: a real Neovim, a real window, the built binary together with the manifest that shaped it, and the store output `nix build .#wolf-gnome` installs — a different artifact from the checkout build, making different claims.
 
@@ -23,6 +23,17 @@ The other files below cover what a seam cannot reach: a real Neovim, a real wind
 **Gotchas**
 
 - Pure: no display, no Neovim and no compositor.
+
+#### `drawer_share.rs`
+
+**Covers**
+
+- `drawer::DrawerShare`: a new share is `DRAWER_WEIGHT`, the third `init.lua` opens the drawer's split at, and `Default` is `new`; `position` against GTK's clamp at both floors; `drag_to`, a non-positive span leaving the share alone; a drag-then-position round trip at every pixel of three spans; and a dragged share keeping its proportion across pane-area resizes, clamped at the floors.
+
+**Gotchas**
+
+- Pure: no display, no Neovim and no compositor. The limits model the smokes' 176 px floor and one-pixel handle, and every expected position is written out by hand.
+- Whether the paned reads and writes the share is [`smoke_headless/drawer_divider.rs`](#smoke_headlessdrawer_dividerrs)'s question.
 
 #### `flake_exports.rs`
 
@@ -202,6 +213,10 @@ Input-method smokes: composed text reaching Neovim, and a control chord typed wh
 #### `smoke_headless/config.rs`
 
 Configuration smokes: `wolf-config.yaml`'s font size and appearance reaching the grid and Neovim, and the column cap with the full-width toggle.
+
+#### `smoke_headless/drawer_divider.rs`
+
+The drawer divider's smoke: one launch drags the handle between the editor tree and the drawer through [Pointer injection](#pointer-injection), reading back Neovim's window heights and the drawer shell's `stty size`. The drag must grow the drawer's window and its session, survive the drawer closing and reopening, give the editor back its launch height while the drawer is closed, stop at the editor's floor when released above the pane area, and carry into a second tab's drawer. The handle's y comes from `terminal.rs`'s `drawer_strip_edges`, and no assertion reads a pixel.
 
 #### `smoke_headless/editor.rs`
 
@@ -526,10 +541,12 @@ Being scrupulous about this is the point of the section.
 - **Restoring the window size.** `cage` forces the toplevel to the output size, so a restored size never takes visible effect and no screenshot can show one. The seam is table-tested and the window builder demonstrably reads it. Window position is a different matter and is not a gap: it is deliberately never persisted, per [Application state](../../../notes/wolf-gnome/application-state.md).
 - **A drag on a horizontal (stacked) divider.** Both drag smokes drag a vertical one. `set_divider_fraction` never reads a split's orientation, so what a stacked drag would add is the widget side: the orientation mapping into a vertical `gtk::Paned` and that paned's own span, which is its height rather than its width.
 - **The allocation guard on `notify::position`.** Nothing can resize the toplevel under `cage`, so the `max != last_max` arm — the one that tells a clamp GTK performed mid-allocation apart from a user drag — is never taken in a smoke.
-- **The drawer's height convergence over two frames.** Its height re-applies on every wake, so a toplevel resize settles on the second frame; nothing under `cage` can resize the toplevel, so no smoke observes either frame. Same limit as the entry above.
-- **The floor `apply_drawer_frame` passes.** `drawer_split`'s arithmetic is table-tested, but nothing pins that `pane_view` hands it `editor_inset::min_pane_size(..).1` rather than `0.0`: at every geometry the smokes run at, a third of the pane area sits comfortably above that floor, so the falsifier changes no pixel and no readback. Recorded rather than answered with an invented leg.
+- **A toplevel resize keeping the drawer's share.** Nothing resizes the toplevel under `cage`, so the drawer divider's `max-position` re-apply is never taken for a resize; `share_survives_a_pane_area_resize` pins the arithmetic. Same limit as the entry above.
+- **The drawer's own floor under a downward drag.** The divider smoke's limit drag goes up, against the editor's floor. `position_table` in [`drawer_share.rs`](#drawer_sharers) pins the clamp at the drawer's.
+- **A share dragged in one tab reaching a drawer already open in another.** The wake's re-apply in `apply_drawer_frame` exists for it, and no smoke drags with drawers open in two tabs: the divider smoke's second tab opens its drawer after the drag, which the new paned's own `max-position` notify covers.
+- **A dragged share surviving a restart.** No smoke restarts Neovim after a drag. Resetting the share in `clear_drawer`, the path a restart shares with a closing drawer, turns the divider smoke's A4 red; a reset elsewhere on the restart path would pass.
 - **That `set_active_pane` records the most-recently-used editor pane.** Measured: deleting the `record_active` call leaves every assertion green, because the MRU and `bottom_most_leaf` answers coincide wherever the drawer smoke issues a `<C-w>k` — one editor leaf before the `:vsplit`, and after it `:vsplit` focuses the new left window while `bottom_most_leaf` ties on the bottom edge to the smallest `x`, also the left. The failure mode is where `<C-w>k` lands, cosmetic rather than a trap, which is why it is recorded and not converted. The recipe is kept so a later unit can take it cheaply: after the `:vsplit`, `<C-w>l`, `<C-w>j`, `<C-w>k`, reading back `winnr()` — green answers the right pane, red the left.
-- **Where the drawer strip sits after a rebuild.** The drawer smoke's leg f proves the drawer's binding survives a split's rebuild, and `clear_drawer()` in `apply_split` turns it red. Two edits that move the strip stay green: dropping `rebuild_pane_area`'s host-unparent loop, because the drawer host is a direct child of `pane_area` and its `remove` loop detaches it anyway; and appending the drawer host only for a one-leaf layout, because focus reaches the drawer through `DrawerState` and `focus_win` wherever the strip is, and no capture follows the `:vsplit`. Appending the drawer host before the tree widget turns leg b red, not leg f.
+- **Where the drawer strip sits after a rebuild.** The drawer smoke's leg f proves only that the drawer's binding survives a split's rebuild, and `clear_drawer()` in `apply_split` turns it red. No capture follows the `:vsplit`, so where the rebuilt strip lands reaches no assertion.
 - **The drawer's own status bar reaches no assertion.** Its OCR band is sampled below the statusbar deliberately, the region measured byte-identical across runs, so nothing here reads the shell's name the statusbar shows; `wolf-ffi`'s [`pane_status.rs`](../../wolf-ffi/tests/README.md#pane_statusrs) asserts that string. The same shape as the per-pane status-bar entry above.
 - **The snapshot gate.** Its whole domain is table-tested, but no smoke arranges a wake in which Neovim is dead, or no pane is bound, and then checks that the layout saved before it survived. Inducing that race under a compositor would be timing-dependent rather than deterministic.
 - **The Switch to Window raise.** `Coordinator::raise` calls `present()`, which `cage` declines: it shows one toplevel at a time and keeps the newest on top, so no capture can show two windows and nothing can bring a backgrounded one forward. The palette's rows are proven as values by `palette.rs`'s tables and the raise is executed by no test at all. Closing the gap needs a `wlr-foreign-toplevel` client, which is a `tools/` deliverable of its own.

@@ -248,17 +248,17 @@ Purpose: pure, GTK-free cursor geometry and color logic — the pixel rectangle 
 
 #### `drawer.rs`
 
-Purpose: the terminal drawer's pure rulebook — how the pane area divides between the editor tree and the drawer strip below it, and which pane a `<C-w>h/j/k/l` intent focuses once a drawer exists. GTK-free, so it runs in the fast tier. Why the drawer sits outside the pane tree at all is in [Window structure](../../../notes/wolf-gnome/window-structure.md).
+Purpose: the terminal drawer's pure rulebook — the drawer's share of the pane area, and which pane a `<C-w>h/j/k/l` intent focuses once a drawer exists. GTK-free, so it runs in the fast tier. Why the drawer sits outside the pane tree at all is in [Window structure](../../../notes/wolf-gnome/window-structure.md).
 
 **Public API**
 
-- `DRAWER_WEIGHT`, and `drawer_split(pane_area_height, has_drawer, weight, min_drawer_height) -> DrawerSplit`, whose two heights always sum to the input.
+- `DRAWER_WEIGHT`, the share a window's drawer opens at, and `DrawerShare` — `new()`, `get()`, `position(min, max, span)`, `drag_to(position, span)` — the drawer's fraction of its divider's paned span, whose position is the editor tree's height.
 - `focus_target(tree, origin, dir, state, width, height)` — the whole editor-to-drawer bridge as one value. Neovim emits a focus move as a pure intent and declines to act on it, so with no answer here a user who opens the drawer cannot leave it. `bottom_most_leaf` and `drawer_up_target` are its `<C-w>k` half.
 - `DrawerState` — `Copy`, so [`pane_view.rs`](#pane_viewrs) holds it in a `Cell`; `clear()` empties both the bound drawer and the remembered editor pane, which is what a restart needs.
 
 **Decisions**
 
-- The height split and the focus bridge share one module because `focus_target` needs both in one expression.
+- `DrawerShare` is a value apart from `DrawerState`, so `clear()` — a drawer closing, a restart — keeps the size the user dragged to. There is one per window, held by [`tab_view.rs`](#tab_viewrs), and it is never persisted ([why no fraction floor](../../../notes/wolf-gnome/pane-weights-and-dividers.md)).
 - `focus_target` takes the raw pane-area size, not the editor height the [macOS front-end passes](../../wolf-macos/Sources/WolfMacOS/README.md#panecontainerviewswift), since `PaneTree::pane_rects` feeds only ordering and both its consumers are scale-invariant. A table pins it rather than only stating it.
 
 #### `editor_inset.rs`
@@ -585,11 +585,11 @@ Purpose: the pure codec between the live pane tree, whose leaves are pane ids, a
 
 #### `pane_view.rs`
 
-Purpose: the GTK glue turning `layout`'s pane tree into nested `gtk::Paned`, one `gtk::Overlay` host per window, plus the drawer strip.
+Purpose: the GTK glue turning `layout`'s pane tree into nested `gtk::Paned`, one `gtk::Overlay` host per window, plus the drawer.
 
 **Public API**
 
-- `build(core, metrics) -> PaneHandle` — panes appear with the first grid.
+- `build(core, metrics, drawer_share) -> PaneHandle` — panes appear with the first grid.
 - `cmdline_widget()` — the focus-return target for overlays and sidebar; plus `toast_widget()` and `pum_widget()`.
 - `reset_after_restart()`, `drawer_is_open()`, `request_terminal_restore(steps)`, `request_layout_rebuild(saved)`, `realize_layout(saved)`, `layout_snapshot() -> LayoutGather`, `snapshot_readiness()`, `readiness()`.
 - `active_terminal()`, `sync_terminal_focus(focused)`, `request_terminal(command)`.
@@ -604,7 +604,7 @@ Purpose: the GTK glue turning `layout`'s pane tree into nested `gtk::Paned`, one
 - A terminal pane paints through its own [`TerminalCanvas`](terminal/README.md#canvasrs) ([why](../../../notes/wolf-gnome/terminal-panes.md)).
 - Each pane's status and `b:wolf_full_width` cache once per wake: a use-time read re-enters `draw_pane`'s guard, and paint, pointer and resize must agree in one frame.
 - One funnel produces every grid resize, against the size the pane last requested, not the lagging snapshot grid; it runs every wake, since a lifted cap re-divides a still allocation.
-- The drawer strip's height re-applies every wake, so a toplevel resize converges over two frames; `reset_after_restart` clears the drawer `detect_closes` cannot reach.
+- The drawer's paned exists only while one is bound, re-taking the window's share each wake ([why](../../../notes/wolf-gnome/window-structure.md)); `reset_after_restart` clears the drawer `detect_closes` misses.
 
 #### `persistence.rs`
 
