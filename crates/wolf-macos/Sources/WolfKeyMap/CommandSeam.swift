@@ -13,7 +13,7 @@ import Foundation
 /// `preview == 18`, `edit == 19`, `terminal == 20`, `previewInBrowser == 21`,
 /// `fullWidth == 22`, `toggleSidebar == 23`, `sidebarShowProject == 24`,
 /// `searchInProject == 25`, `previewInOtherPane == 26`, `editInOtherPane == 27`,
-/// `splitHorizontal == 28`, `splitVertical == 29`.
+/// `splitHorizontal == 28`, `splitVertical == 29`, `zoomPane == 30`.
 public enum CommandKind {
   /// Open a new editor window.
   case newWindow
@@ -80,9 +80,12 @@ public enum CommandKind {
   /// Split the active pane into two side-by-side panes, as Vim's `:vsplit`. The new pane
   /// is of the active pane's kind; the terminal drawer refuses it.
   case splitVertical
+  /// Toggle the active pane, the drawer included, between zoomed over the whole pane area
+  /// and not; front-end geometry that never reaches Neovim.
+  case zoomPane
 
-  /// Maps an FFI command-kind discriminant (`0` → `.newWindow` .. `29` →
-  /// `.splitVertical`, else `nil`), guarding the contract shared with
+  /// Maps an FFI command-kind discriminant (`0` → `.newWindow` .. `30` →
+  /// `.zoomPane`, else `nil`), guarding the contract shared with
   /// `wolf-ffi`'s `mod command_kind`.
   public init?(ffi: UInt8) {
     switch ffi {
@@ -116,6 +119,7 @@ public enum CommandKind {
     case 27: self = .editInOtherPane
     case 28: self = .splitHorizontal
     case 29: self = .splitVertical
+    case 30: self = .zoomPane
     default: return nil
     }
   }

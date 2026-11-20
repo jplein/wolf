@@ -84,6 +84,8 @@ enum CommandDispatcher {
       controller?.splitPane(.horizontal)
     case .splitVertical:
       controller?.splitPane(.vertical)
+    case .zoomPane:
+      controller?.zoomPane()
     }
   }
 }

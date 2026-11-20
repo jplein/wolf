@@ -171,6 +171,11 @@ final class PaneContainerView: NSView {
   /// keep it, a new view starts at `DrawerLayout.defaultWeight`, and it is never
   /// persisted.
   private var drawerWeight: Double = DrawerLayout.defaultWeight
+  /// The pane Zoom Pane shows alone over the whole pane area, or `nil`. `PaneZoom` owns
+  /// every rule that sets it. Zoom is front-end geometry: it never touches `tree`, its
+  /// weights or `drawerWeight`, so an unzoom restores them exactly. It belongs to this
+  /// view, is never persisted, and a new view, a relaunch and a restart start unzoomed.
+  private var zoomedPane: PaneId?
 
   /// A saved pane-split layout awaiting rebuild once this view's first pane binds
   /// (consumed once in `onRenderWake`, gated like `pendingRefocusRebind`): Rust
@@ -537,7 +542,19 @@ final class PaneContainerView: NSView {
     (max(1, Int(width / metrics.cellWidth)), max(1, Int(height / metrics.cellHeight)))
   }
 
-  /// The current pane rectangles from the pure layout, in this view's (flipped)
+  /// The rectangles of the panes this view shows, in this view's (flipped) coordinates:
+  /// `layoutRects()`, or the zoomed pane alone over the whole pane area while zoomed
+  /// (`PaneZoom.visibleRects`). Painting, hit tests, grid and session sizing and the
+  /// hosted views all read this, so a pane hidden by zoom is neither shown nor resized.
+  private func paneRects() -> [(PaneId, CGRect)] {
+    let area = Rect(x: 0, y: 0, w: Double(bounds.width), h: Double(paneAreaHeight))
+    let layout = layoutRects().map { ($0.0, rect(from: $0.1)) }
+    return PaneZoom.visibleRects(zoomed: zoomedPane, rects: layout, bounds: area).map {
+      ($0.0, CGRect(x: $0.1.x, y: $0.1.y, width: $0.1.w, height: $0.1.h))
+    }
+  }
+
+  /// Every pane's rectangle in the unzoomed layout, in this view's (flipped)
   /// coordinates, spanning the FULL bounds (origin `(0, 0)`): the panes tile the
   /// whole `paneAreaHeight` (the full view height; the command line /
   /// toast are bottom overlays that composite over it). The per-pane 20pt inset is
@@ -548,7 +565,7 @@ final class PaneContainerView: NSView {
   /// `DrawerLayout.editorHeight` and the full-width drawer strip is appended below
   /// it (`DrawerLayout.drawerRect`). The drawer pane lives OUTSIDE `tree`, so it is
   /// appended here rather than produced by `tree.paneRects`.
-  private func paneRects() -> [(PaneId, CGRect)] {
+  private func layoutRects() -> [(PaneId, CGRect)] {
     let dl = drawerLayout
     var rects = tree.paneRects(width: Double(bounds.width), height: dl.editorHeight)
       .map {
@@ -561,16 +578,19 @@ final class PaneContainerView: NSView {
   }
 
   /// The editor tree's interior dividers, in this view's (flipped) coordinates,
-  /// over the SAME `DrawerLayout.editorHeight` as `paneRects()`. The drawer lives
+  /// over the SAME `DrawerLayout.editorHeight` as `layoutRects()`. The drawer lives
   /// outside `tree`, so its top edge is not here: `isOnDrawerEdge(_:)` hit-tests it.
+  /// None while zoomed, since the dividers are hidden.
   private func editorDividers() -> [PaneTree.Divider] {
+    guard !PaneZoom.freezesLayout(zoomed: zoomedPane) else { return [] }
     let dl = drawerLayout
     return tree.dividers(width: Double(bounds.width), height: dl.editorHeight)
   }
 
-  /// Whether `point` is within `dividerHitTolerance` of an open drawer's top edge.
+  /// Whether `point` is within `dividerHitTolerance` of an open drawer's top edge; never
+  /// while zoomed, since the edge is hidden.
   private func isOnDrawerEdge(_ point: CGPoint) -> Bool {
-    drawerPaneId != nil
+    !PaneZoom.freezesLayout(zoomed: zoomedPane) && drawerPaneId != nil
       && abs(Double(point.y) - drawerLayout.editorHeight) <= Double(Self.dividerHitTolerance)
   }
 
@@ -666,6 +686,48 @@ final class PaneContainerView: NSView {
   /// The number of live panes (`PaneTree` leaf count); 1 for a single unsplit
   /// window. The drawer is outside `tree` and never counted.
   var paneCount: Int { tree.leaves().count }
+
+  /// Every pane of this view, the tree's leaves plus the drawer when it is open: the
+  /// panes Zoom Pane considers.
+  private var viewPanes: [PaneId] {
+    tree.leaves() + (drawerPaneId.map { [$0] } ?? [])
+  }
+
+  /// Whether a pane is zoomed.
+  var isZoomed: Bool { zoomedPane != nil }
+
+  /// The frame of each pane this view shows, by its Neovim window handle: the zoomed
+  /// pane alone while zoomed.
+  var visiblePaneFrames: [Int64: CGRect] {
+    var frames: [Int64: CGRect] = [:]
+    for (id, rect) in paneRects() {
+      guard let win = panes[id]?.win else { continue }
+      frames[win] = rect
+    }
+    return frames
+  }
+
+  /// Zoom Pane: toggles the active pane between zoomed and not (`PaneZoom`); a lone pane
+  /// with no drawer stays unzoomed. Zooming focuses the pane's window, as
+  /// `closeActivePane()` does, so Neovim's current window is the pane the view shows.
+  /// Unzooming sizes the hidden panes to the restored layout. Persists nothing.
+  func toggleZoom() {
+    zoomedPane = PaneZoom.zoomed(
+      after: .toggle, zoomed: zoomedPane, active: activePane, panes: viewPanes)
+    if let zoomed = zoomedPane, let win = panes[zoomed]?.win, win != 0 {
+      handle.focus_win(win)
+    }
+    syncGridSizes()
+    syncPreviewWebViews()
+    needsDisplay = true
+  }
+
+  /// Toggle Terminal: opens or closes the drawer, or does nothing while a pane other
+  /// than the drawer is zoomed, by the user's choice (`PaneZoom.allowsToggleTerminal`).
+  func toggleTerminal() {
+    guard PaneZoom.allowsToggleTerminal(zoomed: zoomedPane, drawer: drawerPaneId) else { return }
+    handle.toggle_terminal()
+  }
 
   /// Whether Close Pane may close the active pane: true for the drawer, or when the tree has
   /// more than one leaf. The drawer is outside `tree` but is never its tabpage's last window;
@@ -1251,6 +1313,10 @@ final class PaneContainerView: NSView {
   /// to its current rectangle — but only when a size actually differs from what
   /// Neovim currently has, so this converges (no resize feedback loop). The
   /// authoritative sizes still come back via core's `grid_resize`.
+  ///
+  /// A pane hidden by zoom is not in `paneRects()` and keeps its last size: Neovim
+  /// re-divides only the grids the front-end has not sized, so the grid holds with no
+  /// request, and an unzoom needs no reflow.
   private func syncGridSizes() {
     guard bounds.width > 0, bounds.height > 0 else { return }
 
@@ -1293,6 +1359,9 @@ final class PaneContainerView: NSView {
   /// session's latest frame, and drops the view of a pane that closed or whose window
   /// no longer shows that session. Then sizes the sessions and reports focus.
   /// Idempotent, so every wake and resize runs it.
+  ///
+  /// The view of a pane hidden by zoom is kept with `isHidden` set, never removed: a
+  /// subview draws above the container's own paint, so a shown one covers the zoomed pane.
   private func syncTerminalViews() {
     terminalByPane.removeAll(keepingCapacity: true)
     for (id, binding) in panes {
@@ -1304,7 +1373,12 @@ final class PaneContainerView: NSView {
       terminalViews.removeValue(forKey: id)
     }
     let scale = window?.backingScaleFactor ?? 1
-    for (id, rect) in paneRects() {
+    let rects = paneRects()
+    let shown = Set(rects.map { $0.0 })
+    for (id, view) in terminalViews {
+      view.isHidden = !shown.contains(id)
+    }
+    for (id, rect) in rects {
       guard let session = terminalByPane[id], let win = panes[id]?.win else { continue }
       let view: TerminalPaneView
       if let existing = terminalViews[id] {
@@ -1381,7 +1455,7 @@ final class PaneContainerView: NSView {
   /// Registers a resize-cursor rect around each interior divider line so hovering
   /// a divider shows `.resizeLeftRight` (vertical divider) / `.resizeUpDown`
   /// (horizontal divider), and a `.resizeUpDown` one around an open drawer's top
-  /// edge. Invalidated on every layout mutation (via
+  /// edge; none while zoomed, which hides both. Invalidated on every layout mutation (via
   /// `invalidateCursorRects(for:)` in `syncGridSizes`).
   override func resetCursorRects() {
     let tol = Self.dividerHitTolerance
@@ -1403,7 +1477,7 @@ final class PaneContainerView: NSView {
       }
       addCursorRect(rect, cursor: cursor)
     }
-    if drawerPaneId != nil {
+    if drawerPaneId != nil, !PaneZoom.freezesLayout(zoomed: zoomedPane) {
       let edge = CGFloat(drawerLayout.editorHeight)
       addCursorRect(
         CGRect(x: 0, y: edge - tol, width: bounds.width, height: tol * 2),
@@ -1475,6 +1549,8 @@ final class PaneContainerView: NSView {
     runPendingTerminalRestore()
     applyIntents()
     detectCloses()
+    zoomedPane = PaneZoom.zoomed(
+      after: .panesChanged, zoomed: zoomedPane, active: activePane, panes: viewPanes)
     resolvePendingGrids()
     updateActivePane()
     syncGridSizes()
@@ -1515,7 +1591,8 @@ final class PaneContainerView: NSView {
   /// the drawer, a divider drag, and every preview web view and per-window
   /// preview map go. The core's restart empties its snapshot too, so the next
   /// render wake's `ensureInitialPane` binds the fresh window and nothing of the
-  /// dead nvim. `pendingLayoutRebuild` is kept, and so is `drawerWeight`, the drawer's
+  /// dead nvim. A zoom goes too, so a restart starts unzoomed.
+  /// `pendingLayoutRebuild` is kept, and so is `drawerWeight`, the drawer's
   /// share, which belongs to the window and not to Neovim. Only the restart path reaches
   /// this function: a tab switch uses `markRefocusRebind()`, where the panes survive.
   func rebind(tabpageHandle: Int64) {
@@ -1529,6 +1606,7 @@ final class PaneContainerView: NSView {
     lastEditorPane = nil
     drawerPaneId = nil
     pendingTerminalRestore = nil
+    zoomedPane = nil
     for win in Array(previewWebViews.keys) {
       removePreviewWebView(win)
     }
@@ -1649,6 +1727,11 @@ final class PaneContainerView: NSView {
   /// and `drawScrollbars` suppresses the synthetic scrollbar. Web views for
   /// windows that are no longer previews (or closed) are removed.
   ///
+  /// A preview whose pane zoom hides stays live: its web view is kept, or created,
+  /// with `isHidden` set, and it keeps reloading. A removed one would reload and lose
+  /// its scroll state on unzoom; a shown one would paint over the zoomed pane. Only
+  /// windows bound to no pane of this view reach the removal.
+  ///
   /// `web.frame` uses the capped+CENTERED `geometry(…, fullWidth: source_full_width())
   /// .gridRect` (the ~90-char default, or the full inset pane when the source is
   /// full-width), and this is what `paintStatusbar`'s `.preview` span AND the draw
@@ -1688,10 +1771,7 @@ final class PaneContainerView: NSView {
     // own iteration, copying scalars and strings out.
     for preview in handle.previews() {
       let win = preview.win()
-      guard
-        let entry = rects.first(where: { panes[$0.0]?.win == win }),
-        let grid = panes[entry.0]?.boundGrid
-      else { continue }
+      guard let pane = paneForWin(win), let grid = panes[pane]?.boundGrid else { continue }
       liveWins.insert(win)
       previewNamesByGrid[grid] = preview.source_name().toString()
       previewDisplayPathsByGrid[grid] = preview.source_display_path().toString()
@@ -1707,10 +1787,14 @@ final class PaneContainerView: NSView {
       currentCursors[win] = PreviewScrollSeam.CursorPos(
         line: preview.source_cursor_line(), col: preview.source_cursor_col())
 
+      let web = ensurePreviewWebView(for: win)
+      guard let paneRect = rects.first(where: { $0.0 == pane })?.1 else {
+        web.isHidden = true
+        continue
+      }
       // The web view frame, the occlusion test and the preview statusbar span all derive from this
       // same `geometry(…, fullWidth:)`, so they must change together.
-      let gRect = geometry(for: gridRect(ofPane: entry.1), fullWidth: sourceFullWidth).gridRect
-      let web = ensurePreviewWebView(for: win)
+      let gRect = geometry(for: gridRect(ofPane: paneRect), fullWidth: sourceFullWidth).gridRect
       web.frame = CGRect(
         x: gRect.x, y: gRect.y, width: gRect.w, height: gRect.h)
       web.isHidden = false
@@ -2462,13 +2546,16 @@ final class PaneContainerView: NSView {
 
   /// Applies a split intent: split the `from` pane (fallback: active pane), then
   /// bind a new pane to `win` (grid resolved now or pending). Idempotent if a pane
-  /// already exists for `win`.
+  /// already exists for `win`. A split this applies unzooms first, whatever made it, so
+  /// the new pane shows.
   private func applySplit(orientation: Orientation, from: Int64, win: Int64) {
     if paneForWin(win) != nil { return }
     guard let target = paneForWin(from) ?? activePane else { return }
     // A split fired from within the drawer is dropped front-end-side: the
     // drawer is not a tree leaf, so it cannot host an editor split.
     guard target != drawerPaneId else { return }
+    zoomedPane = PaneZoom.zoomed(
+      after: .split, zoomed: zoomedPane, active: activePane, panes: viewPanes)
     let newId = allocPaneId()
     tree.split(target, newId, orientation)
     let grid = handle.grid_for_win(win)
@@ -2479,9 +2566,12 @@ final class PaneContainerView: NSView {
   /// Applies a terminal-drawer open intent: bind a new pane to the drawer `win`
   /// and record it in `drawerPaneId` (NOT in `tree` — the drawer is rendered as a
   /// full-width, root-bottom pane outside the pure tree). Idempotent: a no-op once
-  /// a drawer is bound or a pane already follows `win`.
+  /// a drawer is bound or a pane already follows `win`. A pane joining the layout
+  /// unzooms, as a split does.
   private func applyDrawerOpen(win: Int64) {
     if drawerPaneId != nil || paneForWin(win) != nil { return }
+    zoomedPane = PaneZoom.zoomed(
+      after: .drawerOpen, zoomed: zoomedPane, active: activePane, panes: viewPanes)
     let id = allocPaneId()
     drawerPaneId = id
     let grid = handle.grid_for_win(win)
@@ -2499,9 +2589,13 @@ final class PaneContainerView: NSView {
   ///   `.down` into an open drawer, focus the drawer (bottom-edge bridge).
   ///
   /// Only `focus_win` is called — `updateActivePane` reconciles `activePane` on the
-  /// next wake. The neighbour geometry MUST match `paneRects()`, i.e. it resolves
+  /// next wake. The neighbour geometry MUST match `layoutRects()`, i.e. it resolves
   /// over `DrawerLayout.editorHeight`, not the raw pane-area height.
+  ///
+  /// While zoomed it does nothing, by the user's choice: no other pane is visible to
+  /// move to, and a focus move does not unzoom.
   private func applyFocus(dir: FocusDir, from: Int64) {
+    guard !PaneZoom.freezesLayout(zoomed: zoomedPane) else { return }
     guard let origin = paneForWin(from) ?? activePane else { return }
     let width = Double(bounds.width)
     let dl = drawerLayout
@@ -2536,15 +2630,20 @@ final class PaneContainerView: NSView {
   /// Returns `nil` when the command must no-op (no active pane, the active pane
   /// is not a tree leaf — the drawer — or the resolved pane has no bound window
   /// yet); `0` when core should split; the target pane's window handle
-  /// otherwise.
+  /// otherwise. While zoomed the zoomed pane is the only pane, so a tree pane gets
+  /// `0`, whose split unzooms, and the drawer `nil` (`PaneZoom.otherPaneTarget`).
   func otherPaneTarget(prefer: OtherPaneSeam.Side) -> Int64? {
     guard let active = activePane else { return nil }
     let dl = drawerLayout
-    guard
-      let target = OtherPaneSeam.target(
+    let resolved: OtherPaneSeam.Target?
+    if let zoomed = zoomedPane {
+      resolved = PaneZoom.otherPaneTarget(zoomed: zoomed, drawer: drawerPaneId)
+    } else {
+      resolved = OtherPaneSeam.target(
         active: active, prefer: prefer, tree: tree,
         width: Double(bounds.width), height: dl.editorHeight)
-    else { return nil }
+    }
+    guard let target = resolved else { return nil }
     switch target {
     case .split:
       return 0
@@ -2596,6 +2695,10 @@ final class PaneContainerView: NSView {
 
   /// Refreshes the active pane from `active_win` (fallback: the pane owning the
   /// cursor's grid).
+  ///
+  /// While zoomed, Neovim on a hidden pane left by a path the view does not intercept
+  /// (`<C-w>w`, `:wincmd`): that focus move is undone, with `focus_win` for the zoomed
+  /// pane, rather than activating a pane the user would type into blind.
   private func updateActivePane() {
     var target: PaneId?
     let active = handle.active_win()
@@ -2605,6 +2708,13 @@ final class PaneContainerView: NSView {
     if target == nil {
       let cursorGrid = handle.read_frame().cursor_grid()
       target = panes.first(where: { $0.value.boundGrid == cursorGrid })?.key
+    }
+    if PaneZoom.refocuses(resolved: target, zoomed: zoomedPane), let zoomed = zoomedPane {
+      if let win = panes[zoomed]?.win, win != 0 {
+        handle.focus_win(win)
+      }
+      setActivePane(zoomed)
+      return
     }
     if let id = target, activePane != id {
       setActivePane(id)

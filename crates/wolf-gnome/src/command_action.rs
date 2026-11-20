@@ -194,6 +194,10 @@ pub fn ui_action_for(command: Command) -> UiAction {
         Command::EditInOtherPane => UiAction::EditInOtherPane,
         Command::SplitHorizontal => UiAction::SplitHorizontal,
         Command::SplitVertical => UiAction::SplitVertical,
+        Command::ZoomPane => UiAction::Deferred(
+            "zooming a pane needs the GTK pane area to show one pane over the whole area while \
+             the others stay bound",
+        ),
     }
 }
 
@@ -449,6 +453,11 @@ mod tests {
             desc: "29 SplitVertical: splits the focused pane, side by side",
             command: Command::SplitVertical,
             want: Want::Exact(UiAction::SplitVertical),
+        },
+        Case {
+            desc: "30 ZoomPane: deferred until the pane area can hide the other panes",
+            command: Command::ZoomPane,
+            want: Want::Deferred,
         },
     ];
 

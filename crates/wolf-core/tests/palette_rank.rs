@@ -29,11 +29,12 @@ use wolf_core::{rank_palette, Command, PaletteRow, PaletteRowKind, PaletteWindow
 
 /// The number of STATIC rows the palette assembles: every `COMMAND_SPECS` row
 /// EXCEPT `Command::CommandPalette` (which is excluded from its own list). With
-/// 30 registered commands (Copy/Paste/BufferPicker/NewTab/Preview/Edit/Terminal/
+/// 31 registered commands (Copy/Paste/BufferPicker/NewTab/Preview/Edit/Terminal/
 /// PreviewInBrowser/FullWidth appended at 14/15/16/17/18/19/20/21/22, then
 /// ToggleSidebar/SidebarShowProject/SearchInProject at 23/24/25, then
 /// PreviewInOtherPane/EditInOtherPane at 26/27, then SplitHorizontal/SplitVertical
-/// at 28/29) that is 29 static rows: exactly `COMMAND_SPECS.len() - 1`.
+/// at 28/29, then ZoomPane at 30) that is 30 static rows: exactly
+/// `COMMAND_SPECS.len() - 1`.
 ///
 /// The `- 1` is NOT arithmetic coincidence — it holds because `rank_palette`
 /// (`src/palette.rs`) iterates `for spec in COMMAND_SPECS` with exactly ONE
@@ -44,11 +45,12 @@ use wolf_core::{rank_palette, Command, PaletteRow, PaletteRowKind, PaletteWindow
 ///
 /// Preview, Edit, Terminal, PreviewInBrowser, FullWidth, ToggleSidebar,
 /// SidebarShowProject, SearchInProject, PreviewInOtherPane, EditInOtherPane,
-/// SplitHorizontal and SplitVertical are all palette static rows (unlike the macOS menu items, which gate
+/// SplitHorizontal, SplitVertical and ZoomPane are all palette static rows (unlike
+/// the macOS menu items, which gate
 /// Preview/Edit/Preview in Browser/Use full width/sidebar/other-pane actions on
 /// the active buffer/pane, the palette does not gate any spec — it lists them
 /// all).
-const STATIC_COMMAND_COUNT: usize = 29;
+const STATIC_COMMAND_COUNT: usize = 30;
 
 /// A `max` large enough to never truncate the assembled candidate set in tests
 /// that assert on membership rather than truncation.

@@ -226,6 +226,8 @@ mod command_kind {
     pub const SPLIT_HORIZONTAL: u8 = 28;
     /// Split the active pane into two side-by-side panes, as Vim's `:vsplit`.
     pub const SPLIT_VERTICAL: u8 = 29;
+    /// Toggle the active pane between zoomed, over the whole pane area, and not.
+    pub const ZOOM_PANE: u8 = 30;
 }
 
 /// The palette-row-kind discriminants packed into [`FfiCommandRow::row_kind`].
@@ -1150,7 +1152,7 @@ mod ffi {
     extern "Rust" {
         type FfiCommand;
 
-        // The command kind (`command_kind::NEW_WINDOW` .. `SPLIT_VERTICAL`).
+        // The command kind (`command_kind::NEW_WINDOW` .. `ZOOM_PANE`).
         fn kind(&self) -> u8;
     }
 
@@ -3535,7 +3537,7 @@ pub struct FfiCommand {
 }
 
 impl FfiCommand {
-    /// The command kind (`command_kind::NEW_WINDOW` .. `SPLIT_VERTICAL`).
+    /// The command kind (`command_kind::NEW_WINDOW` .. `ZOOM_PANE`).
     #[must_use]
     pub fn kind(&self) -> u8 {
         self.kind
@@ -3576,6 +3578,7 @@ impl FfiCommand {
             Command::EditInOtherPane => command_kind::EDIT_IN_OTHER_PANE,
             Command::SplitHorizontal => command_kind::SPLIT_HORIZONTAL,
             Command::SplitVertical => command_kind::SPLIT_VERTICAL,
+            Command::ZoomPane => command_kind::ZOOM_PANE,
         };
         Self { kind }
     }

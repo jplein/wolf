@@ -30,7 +30,8 @@
 /// `BufferPicker`(16), `NewTab`(17), `Preview`(18), `Edit`(19), `Terminal`(20),
 /// `PreviewInBrowser`(21), `FullWidth`(22), `ToggleSidebar`(23),
 /// `SidebarShowProject`(24), `SearchInProject`(25), `PreviewInOtherPane`(26),
-/// `EditInOtherPane`(27), `SplitHorizontal`(28), `SplitVertical`(29).
+/// `EditInOtherPane`(27), `SplitHorizontal`(28), `SplitVertical`(29),
+/// `ZoomPane`(30).
 /// Adding a command is additive
 /// (append a variant + a [`COMMAND_SPECS`] row); reordering is a breaking change.
 /// `CommandPalette` is the palette's own invoking command and is EXCLUDED from the
@@ -116,6 +117,10 @@ pub enum Command {
     /// the same buffer, a new terminal session, or a preview of the same source);
     /// the terminal drawer refuses it.
     SplitVertical,
+    /// Toggle the active pane, the terminal drawer included, between zoomed
+    /// (filling the whole pane area, every other pane hidden) and not. A
+    /// front-end action: nothing of it reaches Neovim.
+    ZoomPane,
 }
 
 /// The menu group a command belongs to in a native menu bar.
@@ -376,6 +381,13 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
         title: "Split Vertical (side by side)",
         menu: MenuGroup::File,
     },
+    CommandSpec {
+        command: Command::ZoomPane,
+        id: "zoom_pane",
+        ex_command: "WolfZoomPane",
+        title: "Zoom Pane",
+        menu: MenuGroup::View,
+    },
 ];
 
 impl Command {
@@ -410,11 +422,11 @@ mod tests {
     /// `Command::FullWidth` (22), `Command::ToggleSidebar` (23),
     /// `Command::SidebarShowProject` (24), `Command::SearchInProject` (25),
     /// `Command::PreviewInOtherPane` (26), `Command::EditInOtherPane` (27),
-    /// `Command::SplitHorizontal` (28), and `Command::SplitVertical`
-    /// (discriminant 29) past `Command::CommandPalette` (13).
+    /// `Command::SplitHorizontal` (28), `Command::SplitVertical` (29), and
+    /// `Command::ZoomPane` (discriminant 30) past `Command::CommandPalette` (13).
     /// A named constant so the magic-number lint stays quiet and the count's
     /// meaning is explicit.
-    const EXPECTED_COMMAND_COUNT: usize = 30;
+    const EXPECTED_COMMAND_COUNT: usize = 31;
 
     /// The append-only slice index (== FFI discriminant == `command_kind`) of
     /// `Command::CommandPalette`.
@@ -493,9 +505,13 @@ mod tests {
     const SPLIT_HORIZONTAL_INDEX: usize = 28;
 
     /// The append-only slice index (== FFI discriminant == `command_kind`) of
-    /// `Command::SplitVertical`: the appended discriminant 29 and LAST row of
-    /// [`COMMAND_SPECS`].
+    /// `Command::SplitVertical`: the appended discriminant 29.
     const SPLIT_VERTICAL_INDEX: usize = 29;
+
+    /// The append-only slice index (== FFI discriminant == `command_kind`) of
+    /// `Command::ZoomPane`: the appended discriminant 30 and LAST row of
+    /// [`COMMAND_SPECS`].
+    const ZOOM_PANE_INDEX: usize = 30;
 
     /// `from_id` resolves the canonical `command_palette` id to the new variant.
     #[test]
@@ -520,8 +536,8 @@ mod tests {
 
     /// Appending Copy, Paste, BufferPicker, NewTab, Preview, Edit, Terminal,
     /// PreviewInBrowser, FullWidth, ToggleSidebar, SidebarShowProject,
-    /// SearchInProject, PreviewInOtherPane, EditInOtherPane, SplitHorizontal, and
-    /// SplitVertical grows the registry to exactly 30 rows.
+    /// SearchInProject, PreviewInOtherPane, EditInOtherPane, SplitHorizontal,
+    /// SplitVertical, and ZoomPane grows the registry to exactly 31 rows.
     #[test]
     fn command_specs_has_expected_len() {
         assert_eq!(
@@ -531,7 +547,7 @@ mod tests {
              after appending Copy, Paste, BufferPicker, NewTab, Preview, Edit, \
              Terminal, PreviewInBrowser, FullWidth, ToggleSidebar, \
              SidebarShowProject, SearchInProject, PreviewInOtherPane, \
-             EditInOtherPane, SplitHorizontal, and SplitVertical"
+             EditInOtherPane, SplitHorizontal, SplitVertical, and ZoomPane"
         );
     }
 
@@ -1068,19 +1084,50 @@ mod tests {
         assert_eq!(spec.menu, MenuGroup::File, "menu group");
     }
 
-    /// Append-discriminant guard: SplitVertical is the LAST row (index 29), so
-    /// the slice index equals its FFI discriminant. Reordering breaks this.
+    /// Append-discriminant guard: SplitVertical stays at fixed index 29, so the
+    /// slice index still equals its FFI discriminant. Reordering breaks this.
     #[test]
-    fn split_vertical_is_the_last_row() {
+    fn split_vertical_is_at_index_29() {
         assert_eq!(
             COMMAND_SPECS[SPLIT_VERTICAL_INDEX].command,
             Command::SplitVertical,
             "the row at index {SPLIT_VERTICAL_INDEX} must be Command::SplitVertical"
         );
+    }
+
+    /// `from_id` resolves the canonical `zoom_pane` id to the new variant.
+    #[test]
+    fn zoom_pane_id_round_trips() {
         assert_eq!(
-            SPLIT_VERTICAL_INDEX,
+            Command::from_id("zoom_pane"),
+            Some(Command::ZoomPane),
+            "\"zoom_pane\" must resolve to Command::ZoomPane"
+        );
+    }
+
+    /// The ZoomPane spec pins its id, ex-command, title, and View menu group.
+    #[test]
+    fn zoom_pane_spec_fields() {
+        let spec = Command::ZoomPane.spec();
+        assert_eq!(spec.id, "zoom_pane", "id");
+        assert_eq!(spec.ex_command, "WolfZoomPane", "ex_command");
+        assert_eq!(spec.title, "Zoom Pane", "title");
+        assert_eq!(spec.menu, MenuGroup::View, "menu group");
+    }
+
+    /// Append-discriminant guard: ZoomPane is the LAST row (index 30), so the
+    /// slice index equals its FFI discriminant. Reordering breaks this.
+    #[test]
+    fn zoom_pane_is_the_last_row() {
+        assert_eq!(
+            COMMAND_SPECS[ZOOM_PANE_INDEX].command,
+            Command::ZoomPane,
+            "the row at index {ZOOM_PANE_INDEX} must be Command::ZoomPane"
+        );
+        assert_eq!(
+            ZOOM_PANE_INDEX,
             COMMAND_SPECS.len() - 1,
-            "SplitVertical must be the FINAL row of COMMAND_SPECS"
+            "ZoomPane must be the FINAL row of COMMAND_SPECS"
         );
     }
 

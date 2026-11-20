@@ -612,9 +612,17 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
     handle?.new_buffer()
   }
 
-  /// Toggles this window's per-project terminal drawer (`:WolfTerminal`).
+  /// Toggles this window's per-project terminal drawer (`:WolfTerminal`) through
+  /// `PaneContainerView.toggleTerminal()`, which refuses it while a pane other than the
+  /// drawer is zoomed.
   func toggleTerminal() {
-    handle?.toggle_terminal()
+    paneContainer?.toggleTerminal()
+  }
+
+  /// Zoom Pane: toggles this window's active pane between zoomed and not, through
+  /// `PaneContainerView.toggleZoom()`.
+  func zoomPane() {
+    paneContainer?.toggleZoom()
   }
 
   /// Toggles the active buffer's content width between the ~90-char default and

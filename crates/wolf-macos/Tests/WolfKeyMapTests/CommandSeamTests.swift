@@ -57,14 +57,15 @@ final class CommandSeamTests: XCTestCase {
       CommandKind(ffi: 28), .splitHorizontal, "ffi 28 -> .splitHorizontal")
     XCTAssertEqual(
       CommandKind(ffi: 29), .splitVertical, "ffi 29 -> .splitVertical")
+    XCTAssertEqual(CommandKind(ffi: 30), .zoomPane, "ffi 30 -> .zoomPane")
   }
 
   // MARK: - out-of-range discriminants decode to nil
 
-  // One past the last case (`splitVertical` = 29): bump it whenever a command is appended, or
+  // One past the last case (`zoomPane` = 30): bump it whenever a command is appended, or
   // the new case's decode becomes a silently passing nil assertion.
   func testCommandKindOutOfRangeIsNil() {
-    XCTAssertNil(CommandKind(ffi: 30), "the first out-of-range discriminant -> nil")
+    XCTAssertNil(CommandKind(ffi: 31), "the first out-of-range discriminant -> nil")
     XCTAssertNil(CommandKind(ffi: 255), "a far out-of-range discriminant -> nil")
   }
 }

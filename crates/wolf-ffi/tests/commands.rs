@@ -21,10 +21,10 @@
 //! PREVIEW_IN_BROWSER = 21, FULL_WIDTH = 22, TOGGLE_SIDEBAR = 23,
 //! SIDEBAR_SHOW_PROJECT = 24, SEARCH_IN_PROJECT = 25,
 //! PREVIEW_IN_OTHER_PANE = 26, EDIT_IN_OTHER_PANE = 27, SPLIT_HORIZONTAL = 28,
-//! SPLIT_VERTICAL = 29 (the `wolf_core::Command` variant order). These local consts MUST match
-//! `mod command_kind` in `wolf-ffi/src/lib.rs` and the Swift `CommandKind` port —
-//! exactly how `panes.rs` re-declares `INTENT_KIND_SPLIT` locally as a contract
-//! guard (the guard array below asserts contiguous 0..=29).
+//! SPLIT_VERTICAL = 29, ZOOM_PANE = 30 (the `wolf_core::Command` variant order). These local
+//! consts MUST match `mod command_kind` in `wolf-ffi/src/lib.rs` and the Swift `CommandKind`
+//! port — exactly how `panes.rs` re-declares `INTENT_KIND_SPLIT` locally as a contract guard
+//! (the guard array below asserts contiguous 0..=30).
 //!
 //! ## What this asserts
 //!
@@ -131,6 +131,9 @@ const CMD_KIND_SPLIT_HORIZONTAL: u8 = 28;
 /// `FfiCommand::kind()` for Split Vertical (the appended discriminant 29; Vim's
 /// `:vsplit`, the new pane beside the active one).
 const CMD_KIND_SPLIT_VERTICAL: u8 = 29;
+/// `FfiCommand::kind()` for Zoom Pane (the appended discriminant 30; toggles the active pane
+/// between filling the whole pane area and not).
+const CMD_KIND_ZOOM_PANE: u8 = 30;
 
 /// Builds a printable-character `FfiKeyEvent` (kind=Char) for `c`, all modifiers
 /// false (the already-resolved glyph rides in `ch`). Same as `panes.rs`.
@@ -237,12 +240,13 @@ fn commands_drain_close_and_minimize() {
             CMD_KIND_EDIT_IN_OTHER_PANE,
             CMD_KIND_SPLIT_HORIZONTAL,
             CMD_KIND_SPLIT_VERTICAL,
+            CMD_KIND_ZOOM_PANE,
         ],
         [
             0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
-            24, 25, 26, 27, 28, 29
+            24, 25, 26, 27, 28, 29, 30
         ],
-        "command_kind discriminants must be contiguous 0..=29 in Command variant order"
+        "command_kind discriminants must be contiguous 0..=30 in Command variant order"
     );
 
     let init_lua = common::init_lua_path();
@@ -382,6 +386,11 @@ fn commands_drain_close_and_minimize() {
     // --- 3t. :WolfSplitVertical<CR> -> an FfiCommand with kind() == SPLIT_VERTICAL
     send_ex_command(&handle, ":WolfSplitVertical");
     poll_for_command_kind(&handle, CMD_KIND_SPLIT_VERTICAL, ":WolfSplitVertical");
+
+    // --- 3u. :WolfZoomPane<CR> -> an FfiCommand with kind() == ZOOM_PANE ----------
+    // Nothing acts on the drain; the zoom is front-end geometry, covered by ZoomPaneTests.swift.
+    send_ex_command(&handle, ":WolfZoomPane");
+    poll_for_command_kind(&handle, CMD_KIND_ZOOM_PANE, ":WolfZoomPane");
 
     // --- 4. Shutdown: clean teardown ----------------------------------------
     handle.shutdown();
