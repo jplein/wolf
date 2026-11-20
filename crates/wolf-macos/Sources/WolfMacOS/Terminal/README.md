@@ -19,6 +19,8 @@ Purpose: Draws one cell's glyph and its underline and strikethrough with CoreTex
 
 - Decorations are stroked by hand in `style`'s colours: `CTLineDraw` draws them only in the foreground colour and has no wavy underline.
 
+**Gotchas** — a glyph the face lacks draws from the face's [cascade list](../README.md#cellmetricsswift), unscaled at the face's point size. A symbols-face icon is about one em wide, wider than a text cell, so it reaches into the next cell, and both painters, `PaneContainerView` and `TerminalPaneView`, fill a whole row's backgrounds before they draw its glyphs. Under a per-cell fill-then-glyph order, the next cell's fill covers the icon's right part.
+
 #### `TerminalPaneView.swift`
 
 Purpose: A subview of `PaneContainerView` over one terminal pane's content area, painting its session's frame with CoreText.

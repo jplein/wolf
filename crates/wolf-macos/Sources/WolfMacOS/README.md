@@ -77,19 +77,22 @@ Purpose: The floating buffer picker — a search field plus a results list backe
 
 #### `CellMetrics.swift`
 
-Purpose: The monospace cell geometry (advance width, cell height, baseline) plus the four cached CoreText faces used to paint the grid, measured from the resolved user config. `baseline` is measured from the cell's top edge, since the grid view is flipped.
+Purpose: The monospace cell geometry (advance width, cell height, baseline) plus the four cached CoreText faces used to paint the grid, measured from the resolved user config. `baseline` is measured from the cell's top edge, since the grid view is flipped. Each face falls back to [`FontRegistration.symbolsFamily`](#fontregistrationswift) for a glyph it lacks ([why](../../../../notes/wolf-macos-decisions.md#nerd-font-icons)).
 
 **Public API**
 
-- `measured(config:)` / `measured(config:pointSize:)` — the default size, and an explicit size for the per-window font-size steps.
+- `measured(config:)` / `measured(config:pointSize:)` — the default size, and an explicit size for the per-window font-size steps. Both forward to `measured(family:pointSize:lineHeightPercent:symbolsFamily:)`, where a test names a missing `symbolsFamily`.
 - `defaultPointSize(config:)` — `WOLF_FONT_PT` when set to a positive number, else `config.font_size`. Also what a window's font-size reset targets, so both read one resolution.
 - `font(for:)` — the cached face for a `GlyphFace`.
 
 **Decisions**
 
-- `cellWidth` comes from the regular face's advance only, so every face paints into the same fixed-cell slot.
-- A derived bold or italic variant is accepted only when `CTFontGetSymbolicTraits` confirms the traits actually applied. A family with no such face yields a copy without them, so the check is what distinguishes "resolved" from "silently unchanged"; the fallback is the regular face, so the glyph paints rather than dropping.
-- An unresolvable configured family falls back to Menlo, compared case-insensitively so that e.g. "jetbrains mono" matches "JetBrains Mono".
+- The cell width, height and baseline come from the regular face before its cascade, so every face paints into the same fixed-cell slot and a fallback glyph never moves a row.
+- The cascade is the symbols face, then the face's `CTFontCopyDefaultCascadeListForLanguages`, appended because a custom list may replace the system fallback rather than precede it.
+- Each finished face is cascaded separately: nothing documents whether `CTFontCreateCopyWithSymbolicTraits` keeps the attribute.
+- A symbols family that does not resolve leaves the faces uncascaded, logged.
+- A derived bold or italic variant is accepted only when `CTFontGetSymbolicTraits` confirms its traits: a family with no such face yields an unchanged copy. The fallback is the regular face, so the glyph still paints.
+- An unresolvable configured family falls back to Menlo, compared case-insensitively.
 
 #### `CmdlineView.swift`
 
@@ -234,7 +237,12 @@ Purpose: The file-tree sidebar: an `NSOutlineView` driven by a long-lived `FfiFi
 
 #### `FontRegistration.swift`
 
-Purpose: Registers the TTFs bundled at `Contents/Resources/fonts/` with CoreText so the vendored families resolve — "iA Writer Mono S" (the default grid font), "JetBrains Mono", and "Symbols Nerd Font Mono", the Private Use Area icon face, which is never a configured family. `AppDelegate` calls `registerBundledFonts()` at launch, before the config is loaded and metrics are measured.
+Purpose: Registers the TTFs bundled at `Contents/Resources/fonts/` with CoreText so the vendored families resolve — "iA Writer Mono S" (the default grid font), "JetBrains Mono", and "Symbols Nerd Font Mono", the Private Use Area icon face, which is never a configured family and which [`CellMetrics`](#cellmetricsswift) cascades behind every grid face. `AppDelegate` calls `registerBundledFonts()` at launch, before the config is loaded and metrics are measured.
+
+**Public API**
+
+- `symbolsFamily` — the icon face's family name.
+- `registerFonts(in:)` — registers the TTFs directly under any directory, as `registerBundledFonts()` does the bundle's. The test binary registers its staged font trees through it.
 
 **Decisions**
 

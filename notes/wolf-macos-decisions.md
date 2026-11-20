@@ -149,6 +149,14 @@ Close Pane closes the drawer although the drawer is outside `tree`, and refuses 
 
 After a crash-restart, `Project.respawnNeovim` captures each view's terminal-pane sessions and drawer state before `handle.restart()`, and hands each view its own [`terminalRestore`](../crates/wolf-macos/Sources/WolfKeyMap/README.md#livenessseamswift) steps. A view runs them once, from a render wake after `ensureInitialPane` has bound its first pane, while its tabpage is current and no layout rebuild waits ([why](crates/wolf-macos/Sources/WolfMacOS/PaneContainerView.swift.md#terminal-restore)). `rebind(tabpageHandle:)` clears a request made before it.
 
+## Nerd Font icons
+
+Every grid face, in the Neovim grid and the terminal panes alike, falls back to the bundled Symbols Nerd Font Mono for a glyph it lacks, so the Private Use Area icons that prompts, `ls` replacements and Neovim plugins print render under any configured family, as in Ghostty. The cascade list is built in [`CellMetrics`](../crates/wolf-macos/Sources/WolfMacOS/README.md#cellmetricsswift).
+
+The symbols face sits behind the configured face, not ahead of it, so a family that carries its own icons keeps them: a patched Nerd Font the user configured, or JetBrains Mono's Powerline glyphs. It sits ahead of CoreText's system list because the system fallback does not reach the registered face for these code points, which `SymbolsFallbackTests` checks as a premise. The system list follows it, so emoji and other scripts still fall back to the system's faces.
+
+The Mono face is the one cascaded because it is drawn unscaled, and every Mono glyph advances one em, where the proportional face's advances vary and run wider ([measurements](../bazel/nerd-fonts-symbols/README.md#why-the-mono-face)). One em is still wider than a text cell, which is why both painters fill a row's backgrounds before its glyphs ([`GlyphPainter`](../crates/wolf-macos/Sources/WolfMacOS/Terminal/README.md#glyphpainterswift)).
+
 ## Present limitations
 
 - Only windows opened via the overridden split commands (`<C-w>s`/`v`, `:split`/`:vsplit`) become panes. Help, quickfix, preview, and `:diffsplit` windows do not, and floating or external windows are ignored.
@@ -156,6 +164,7 @@ After a crash-restart, `Project.respawnNeovim` captures each view's terminal-pan
 - The grid is capped at a hard-coded 90 columns and centered in a wider pane, with the margins painted in the grid's own background. Making the cap configurable is a possible enhancement.
 - Scrollbar thumbs are non-interactive; thumb-drag is deferred.
 - Markdown preview ships one theme. Cursor-follow anchors to the containing block's top inside a fenced code block, an HTML block or a table, and inside a paragraph hard-wrapped across several short source lines; an image's alt text collapses to a single anchor just after the image. The marker rules are in [the preview position-marker contract](wolf-core-decisions.md).
+- A symbols-face icon draws unscaled, about one em wide, over part of the cell after it, rather than fitted to its own cell as Ghostty fits it.
 - In a terminal pane, the cursor and blinking text draw steady, and double, dotted and dashed underlines draw as the single straight line.
 - Appearance flows one way only: colorscheme to app chrome works, OS theme to Neovim theming does not.
 - A Neovim crash restart reopens each view's open files into one pane, so its splits collapse, and the next commit records that. Restoring the pane topology across a restart would change the restart model.

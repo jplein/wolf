@@ -1,6 +1,6 @@
 # wolf-macos/Tests/WolfMacOSTests
 
-XCTest coverage of what [`WolfMacOS`](../../Sources/WolfMacOS/README.md) views draw. A test builds a production view in a window that is never shown, renders it offscreen and samples its pixels. [`PreviewKeyEquivalentTests.swift`](#previewkeyequivalenttestsswift) instead calls AppKit's responder and menu dispatch directly, and [`SidebarToolbarTests.swift`](#sidebartoolbartestsswift) sends a toolbar control its action and reads its selection:
+XCTest coverage of what [`WolfMacOS`](../../Sources/WolfMacOS/README.md) views draw. A test builds a production view in a window that is never shown, renders it offscreen and samples its pixels. [`PreviewKeyEquivalentTests.swift`](#previewkeyequivalenttestsswift) instead calls AppKit's responder and menu dispatch directly, [`SidebarToolbarTests.swift`](#sidebartoolbartestsswift) sends a toolbar control its action and reads its selection, and [`SymbolsFallbackTests.swift`](#symbolsfallbacktestsswift) draws single cells through `GlyphPainter` into a bitmap, with no view:
 
 ```sh
 bazel test //crates/wolf-macos:WolfMacOSTests
@@ -16,7 +16,7 @@ The macOS worker has no GUI session and no screen, so XCUITest, which needs a UI
 
 **Do not drop the target's `CFProcessPath` env.** rules_swift places the test binary at `WolfMacOSTests.xctest/Contents/MacOS/`, where AppKit treats it as a bundled app and aborts, with no message, when it cannot check in with LaunchServices, which Seatbelt denies. A flat process path needs no check-in.
 
-The target stages Neovim, `//bazel/nvim:nvim_tree` and `//runtime/nvim:init.lua` wired as `WOLF_TEST_NVIM_DIR` and `WOLF_TEST_INIT_LUA`, and the vendored Lighthouse, `//bazel/lighthouse:lighthouse_tree` as `WOLF_TEST_LIGHTHOUSE_DIR`. It carries `tags = ["no-sandbox"]`, because a test that starts a core spawns a child Neovim, which the macOS build sandbox does not allow. [`LiveCore.swift`](#livecoreswift) fences the state and config directories before any core or config read.
+The target stages Neovim, `//bazel/nvim:nvim_tree` and `//runtime/nvim:init.lua` wired as `WOLF_TEST_NVIM_DIR` and `WOLF_TEST_INIT_LUA`, the vendored Lighthouse, `//bazel/lighthouse:lighthouse_tree` as `WOLF_TEST_LIGHTHOUSE_DIR`, and the three font trees the app bundles: `//bazel/ia-writer-mono:ia_writer_mono_tree`, `//bazel/jetbrains-mono:jetbrains_mono_tree` and `//bazel/nerd-fonts-symbols:nerd_fonts_symbols_tree` as `WOLF_TEST_IA_WRITER_MONO_DIR`, `WOLF_TEST_JETBRAINS_MONO_DIR` and `WOLF_TEST_NERD_FONTS_SYMBOLS_DIR`. It carries `tags = ["no-sandbox"]`, because a test that starts a core spawns a child Neovim, which the macOS build sandbox does not allow. [`LiveCore.swift`](#livecoreswift) fences the state and config directories, and registers the fonts, before any core or config read.
 
 Captures are taken in Aqua at the host's backing scale, and the accent resolves through the window's appearance, so a test compares against `controlAccentColor` resolved at run time, never a literal. Only the worker's path, at backing scale 1 with a blue accent, gates; a desktop Mac with Retina, dark mode or another accent is untested.
 
@@ -51,6 +51,7 @@ Purpose: Starts a real core over the staged Neovim for the view tests that need 
 
 - `LiveCore.start(initLua:)` — a core at 80 × 24 in a fresh working directory, attached, with `metrics` measured from the loaded config; `nil` with the test failed otherwise. `initLua` replaces the staged `init.lua`, such as a copy beside a vendored tree it self-locates.
 - `stagedInitLua()` — the staged `init.lua`, to copy; `nil` with the test failed when it does not resolve.
+- `stageFonts()` — registers the fonts for a coreless test.
 - `runfile(_:)` — the existing path a runfiles-relative variable names, resolved as `LiveCore` resolves its own; `nil` when unset or missing.
 - `openTerminal(_:)` — a session in Neovim's current window, as the bridge's `open_terminal` runs a command.
 - `waitFor(timeout:_:)` — spins the main run loop, so wakes reach the main queue while the test waits.
@@ -58,8 +59,8 @@ Purpose: Starts a real core over the staged Neovim for the view tests that need 
 
 **Decisions**
 
-- The environment is prepared once per process, before any core or config read: `WOLF_NVIM_BIN` from the staged tree, fresh `WOLF_STATE_DIR` and `WOLF_CONFIG_DIR`, so no test touches the user's state or preferences, and `SHELL=/bin/sh`, so the drawer and a typed `:terminal` run a known shell. Once, because `setenv` races a concurrent `getenv`.
-- A staged tree that does not resolve fails the test, naming the variable, rather than skipping: this target always stages Neovim.
+- The environment is prepared once per process, before any core or config read: `WOLF_NVIM_BIN` from the staged tree, fresh `WOLF_STATE_DIR` and `WOLF_CONFIG_DIR`, so no test touches the user's state or preferences, `SHELL=/bin/sh`, so the drawer and a typed `:terminal` run a known shell, and the staged fonts registered. Once, because `setenv` races a concurrent `getenv`.
+- A staged tree that does not resolve fails the test, naming the variable, rather than skipping: this target always stages Neovim and the fonts.
 
 #### `TerminalViewFixture.swift`
 
@@ -273,3 +274,21 @@ Purpose: Checks that a sidebar row draws for its present state only, over the pr
 
 - Pixel checks sample unselected rows only: a selected row's fill covers its text.
 - The property checked is the label's drawn `attributedStringValue` foreground, not `textColor`, which reads `labelColor` even while the row draws in the accent.
+
+#### `SymbolsFallbackTests.swift`
+
+Purpose: Checks the symbols cascade [`CellMetrics`](../../Sources/WolfMacOS/README.md#cellmetricsswift) gives every grid face. A test draws one cell through the real `GlyphPainter` into a gray bitmap three cells square, and compares it with the cell a reference painter draws over the same geometry: one whose faces are the symbols face itself, or the plain configured faces with only the system cascade behind them.
+
+**Covers**
+
+- U+F07B and U+E0A0 drawing from the symbols face, unlike the system cascade alone: iA Writer Mono S regular at the launch size and its three styled faces at a stepped size, and U+F07B in JetBrains Mono regular and bold.
+- A Powerline glyph JetBrains Mono maps itself, and `a`, `g` and `M`, drawing from the configured face.
+- Cell width, height and baseline unchanged by the cascade.
+- Hangul 한, which neither the configured nor the symbols face maps, drawing as the system cascade draws it.
+- A symbols family that does not resolve leaving every face uncascaded.
+- In a live editor grid, an icon's overflow past its cell surviving the next cell's fill.
+
+**Gotchas**
+
+- A message starting `premise:` means the comparison cannot tell the outcomes apart or the staging is wrong, never that the cascade is.
+- The gray bitmaps draw at scale 2 whatever the host, so a 14 pt icon covers enough pixels to compare.
