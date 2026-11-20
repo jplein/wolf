@@ -20,7 +20,7 @@ The repo ships an `.envrc` that runs `use flake` on both Linux and macOS. Activa
 direnv allow
 ```
 
-The Linux shell supplies the pinned Rust toolchain (`rust-src`, `rust-analyzer`, `clippy`, `rustfmt`), a pinned hermetic Neovim exported as `WOLF_NVIM_BIN`, a pinned ripgrep exported as `WOLF_RG_BIN`, the GTK4, libadwaita and WebKitGTK stack `wolf-gnome` needs, and a generated `FONTCONFIG_FILE` that pins the font stack to three vendored families — DejaVu plus the two the shared `wolf-config.yaml` can name — with no host font directory, so the offscreen golden render is reproducible.
+The Linux shell supplies the pinned Rust toolchain (`rust-src`, `rust-analyzer`, `clippy`, `rustfmt`), a pinned hermetic Neovim exported as `WOLF_NVIM_BIN`, a pinned ripgrep exported as `WOLF_RG_BIN`, the GTK4, libadwaita and WebKitGTK stack `wolf-gnome` needs, and a generated `FONTCONFIG_FILE` that pins the font stack to vendored families — DejaVu, the two editor families the shared `wolf-config.yaml` can name, and the Symbols Nerd Font Mono icon face — with no host font directory, so the offscreen golden render is reproducible.
 
 The `shellHook` generates that file by substituting store paths into `$PWD/crates/wolf-gnome/testdata/fonts.conf`, a repo-relative template, so every `nix develop` command in this document is run from the repository root. Started anywhere else the substitution has no template to read, and the font pinning every golden render rests on is gone. Do not reach for a system `cargo`, `rustc`, `nvim` or `rg` — `flake.nix` pins all four, and builds and tests must run inside the shell.
 
@@ -114,16 +114,16 @@ nix build .#wolf-gnome --no-link --print-out-paths
 
 `--no-link` keeps a `result` symlink out of the working tree and prints the store path on stdout instead. Do not record that path as a fact: the derivation is input-addressed over everything under `crates/`, so editing a comment in a test file gives a different output. A cold build is a full release compile of the workspace with no `target/` reuse, so budget minutes rather than seconds.
 
-| Path                    | Contents                                                                |
-| ----------------------- | ----------------------------------------------------------------------- |
-| `bin/`                  | the wrapper and the binary it execs                                     |
-| `share/wolf/nvim/`      | the captive `init.lua`, with sibling `orlando/` and `lighthouse/` trees |
-| `share/wolf/fonts.conf` | the additive fontconfig fragment `FONTCONFIG_FILE` defaults to          |
-| `share/wolf/terminfo/`  | the compiled `xterm-ghostty` entry `WOLF_TERMINFO_DIR` defaults to      |
-| `share/applications/`   | `org.wolf.Wolf.desktop`                                                 |
-| `share/icons/hicolor/`  | `org.wolf.Wolf` at 48, 64, 128 and 256 px, plus a scalable SVG          |
-| `share/fonts/truetype/` | iA Writer Mono S and JetBrains Mono                                     |
-| `share/licenses/`       | iA Writer Mono S's licence                                              |
+| Path                    | Contents                                                                            |
+| ----------------------- | ----------------------------------------------------------------------------------- |
+| `bin/`                  | the wrapper and the binary it execs                                                 |
+| `share/wolf/nvim/`      | the captive `init.lua`, with sibling `orlando/` and `lighthouse/` trees             |
+| `share/wolf/fonts.conf` | the additive fontconfig fragment `FONTCONFIG_FILE` defaults to                      |
+| `share/wolf/terminfo/`  | the compiled `xterm-ghostty` entry `WOLF_TERMINFO_DIR` defaults to                  |
+| `share/applications/`   | `org.wolf.Wolf.desktop`                                                             |
+| `share/icons/hicolor/`  | `org.wolf.Wolf` at 48, 64, 128 and 256 px, plus a scalable SVG                      |
+| `share/fonts/truetype/` | iA Writer Mono S, JetBrains Mono and Symbols Nerd Font Mono                         |
+| `share/licenses/`       | iA Writer Mono S's licence, and Symbols Nerd Font Mono's licence and icon-set table |
 
 The wrapper sets `WOLF_NVIM_BIN`, `WOLF_RG_BIN`, `WOLF_NVIM_TREESITTER_DIR`, `WOLF_PARSERS_DIR`, `WOLF_TERMINFO_DIR` and `FONTCONFIG_FILE` as defaults, so an exported value of any of them still wins — the rule `Project.swift` follows on macOS with `setenv(…, 0)`, and what keeps the devShell's pinned font stack winning inside `nix develop`. It never sets `WOLF_INIT_LUA`, which would make the installed runtime unreachable and the development override useless on the packaged binary.
 
@@ -277,7 +277,7 @@ The output `.xcodeproj` is uncommitted and `.gitignore`d, and exists for LLDB an
 
 ### What the bundle ships
 
-The `.app` is self-contained, so a double-clicked bundle runs with no shell environment: it carries its own pinned Neovim and `init.lua`, ripgrep, the vendored Neovim plugins and colorscheme, the compiled treesitter parsers, the `xterm-ghostty` terminfo entry its terminal panes use, both font families, and the app icon. [`crates/wolf-macos/README.md`](crates/wolf-macos/README.md) has the inventory, with a link to the `//bazel` package behind each entry, and `bundle_layout_test` asserts it. Exported `WOLF_NVIM_BIN`, `WOLF_RG_BIN`, `WOLF_TERMINFO_DIR` and `WOLF_INIT_LUA` values override their bundled counterparts, so a development override still wins.
+The `.app` is self-contained, so a double-clicked bundle runs with no shell environment: it carries its own pinned Neovim and `init.lua`, ripgrep, the vendored Neovim plugins and colorscheme, the compiled treesitter parsers, the `xterm-ghostty` terminfo entry its terminal panes use, both editor font families, the Symbols Nerd Font Mono icon face, and the app icon. [`crates/wolf-macos/README.md`](crates/wolf-macos/README.md) has the inventory, with a link to the `//bazel` package behind each entry, and `bundle_layout_test` asserts it. Exported `WOLF_NVIM_BIN`, `WOLF_RG_BIN`, `WOLF_TERMINFO_DIR` and `WOLF_INIT_LUA` values override their bundled counterparts, so a development override still wins.
 
 ## Running the tests
 
@@ -324,6 +324,7 @@ Every third-party asset the app bundles or links, and the Zig that builds libgho
 | [`//bazel/treesitter-parsers`](bazel/treesitter-parsers/README.md)                   | The host-compiled grammars                       | `:parsers_tree_test`, `:queries_compile_test` |
 | [`//bazel/jetbrains-mono`](bazel/jetbrains-mono/README.md)                           | JetBrains Mono                                   | `:jetbrains_mono_tree_test`                   |
 | [`//bazel/ia-writer-mono`](bazel/ia-writer-mono/README.md)                           | iA Writer Mono S                                 | `:ia_writer_mono_tree_test`                   |
+| [`//bazel/nerd-fonts-symbols`](bazel/nerd-fonts-symbols/README.md)                   | Symbols Nerd Font Mono                           | `:nerd_fonts_symbols_tree_test`               |
 | [`//bazel/zig`](bazel/zig/README.md)                                                 | Zig, per-arch release tarball, a build tool only | `:zig_version_test`                           |
 | [`//bazel/ghostty-vt`](bazel/ghostty-vt/README.md)                                   | libghostty-vt, source and deps tarballs          | `//crates/wolf-vt:binding`                    |
 

@@ -262,7 +262,7 @@ Headless: no Neovim, no filesystem, no staged runfiles.
 
 **Covers**
 
-- The four bundled fonts' licence notices reaching every rendered document, each located by a locally re-typed phrase from its copyright line, and all landing before `<body>` — the head placement `base.css`'s margin resets depend on.
+- Every bundled font's licence notice reaching every rendered document, each located by a locally re-typed phrase from its copyright line, and all landing before `<body>` — the head placement `base.css`'s margin resets depend on.
 - The public preview render surface (`render_html`, `render_html_with_highlights`, `code_blocks`, `theme_css`, `PreviewTheme`, `WidthMode`): `wl-{L}-{C}` anchor placement in both tiers — column-zero markers collapsing onto a block's opening tag, column markers inside a paragraph and a list item — the code-block, table and image-alt exclusions and their nested cases, MathML with inlined fonts, the paired dark/light palettes, and a sweep asserting every vertical dimension in the shipped `base.css` lands on the baseline grid.
 - Two per-rule leading pins the grid sweep cannot make, `code` being outside it: inline `code` declares zero leading, so a line carrying it stays on grid, and `pre code` declares none of its own.
 

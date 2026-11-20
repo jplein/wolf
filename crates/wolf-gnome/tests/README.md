@@ -100,7 +100,7 @@ The other files below cover what a seam cannot reach: a real Neovim, a real wind
 **Covers**
 
 - The tree `nix build .#wolf-gnome` installs, read out of the store path `WOLF_PACKAGE_OUT` names. The captive `init.lua` is byte-identical to the checkout's and sits at `<out>/bin` joined with the resolver's own `INSTALLED_INIT_LUA_RELATIVE`; both vendored Lua trees are non-empty beside it, carrying what the Bazel filegroups keep and none of what they exclude.
-- The desktop entry's `Exec` as the absolute wrapped path, with no field code and no `MimeType`; each icon decoding to the pixel size its hicolor directory names; the wrapper naming every variable it must supply and never `WOLF_INIT_LUA`; both editor font families beside an additive `fonts.conf`; the compiled `xterm-ghostty` entry at `share/wolf/terminfo/x/xterm-ghostty`, in ncurses' compiled format, naming `xterm-ghostty` first and carrying the extended `setrgbf` that only `tic -x` keeps.
+- The desktop entry's `Exec` as the absolute wrapped path, with no field code and no `MimeType`; each icon decoding to the pixel size its hicolor directory names; the wrapper naming every variable it must supply and never `WOLF_INIT_LUA`; both editor font families beside an additive `fonts.conf`; the Symbols Nerd Font Mono icon face under the `share/fonts` that `fonts.conf` names, with both of its upstream notices under `share/licenses/`; the compiled `xterm-ghostty` entry at `share/wolf/terminfo/x/xterm-ghostty`, in ncurses' compiled format, naming `xterm-ghostty` first and carrying the extended `setrgbf` that only `tic -x` keeps.
 
 **Gotchas**
 
@@ -114,8 +114,9 @@ The other files below cover what a seam cannot reach: a real Neovim, a real wind
 
 - `paint` onto an offscreen ARGB32 `ImageSurface` from a hand-built 4x2 `Snapshot`: exact equality on known background fills, background-only interiors for a wide-trailing empty cell, and ink in a glyph cell.
 - The line-height argument to `CellMetrics::for_font` at the shipped 180 % default: a larger percentage gives a taller cell, the advance width does not move with it, and the baseline centres the glyph box. An unresolvable family still measures, matches a resolvable one's cell height, and keeps the name the caller asked for.
-- The three decorations, over a fixture of their own: undercurl draws ink below the glyph box, in `special` when set and in the foreground when not; undercurl and a plain underline draw different marks; strikethrough adds foreground ink and no `special` pixel.
-- The two values `render::GlyphPainter` keeps across the cells of one paint, over a third fixture: an undecorated cell painted after every decorated one carries no leaked underline, and bold and italic each restore the plain face for the cell after them. That trailing cell is required: the control column is painted before every decorated one, so a forward leak is invisible to it.
+- The three decorations: undercurl draws ink below the glyph box, in `special` when set and in the foreground when not; undercurl and a plain underline draw different marks; strikethrough adds foreground ink and no `special` pixel.
+- The pinned stack resolving "Symbols Nerd Font Mono", which shapes U+F015.
+- The two values `render::GlyphPainter` keeps across the cells of one paint: an undecorated cell painted after every decorated one carries no leaked underline, and bold and italic each restore the plain face for the cell after them. The trailing cell is required: the control column precedes every decorated one, so it cannot see a forward leak.
 
 **Gotchas**
 
@@ -350,15 +351,16 @@ The dialog is the route to backdrop: `cage` activates every toplevel it maps and
 
 **Covers**
 
-- That `flake.nix`'s `wolfVendoredPins` block and the three `bazel/<asset>/extensions.bzl` files name the same commit and the same sha256 for iA Writer Mono S, `orlando` and `lighthouse`. A one-sided bump is otherwise silent: each side verifies its own download against its own hash and neither reads the other's, so both platforms build green while shipping different revisions of a vendored plugin.
-- Both scanners' non-vacuity: exactly three Nix entries under exactly those names, exactly one `_COMMIT` and one `_SHA256` line per Bazel file, and every value forty or sixty-four lowercase hex characters.
+- That `flake.nix`'s `wolfVendoredPins` block and each asset's `bazel/<asset>/extensions.bzl` name the same revision and the same sha256 for iA Writer Mono S, `orlando`, `lighthouse` and Symbols Nerd Font Mono. A one-sided bump is otherwise silent: each side verifies its own download against its own hash and neither reads the other's, so both platforms build green while shipping different revisions of a vendored asset.
+- That both sides state each revision under its row's kind: `commit` and `_COMMIT`, forty lowercase hex characters, or `version` and `_VERSION`, dot-separated digit runs.
+- Both scanners' non-vacuity: one Nix entry per row under the row's name, exactly one revision line and one `_SHA256` line per Bazel file, and every sha256 sixty-four lowercase hex characters.
 
 **Gotchas**
 
-- Pure and not `#[ignore]`d — no environment, no subprocess, four file reads — so it runs on every `cargo test`. It lives here for [`release_profile.rs`](#release_profilers)'s reason: neither file it reads is a Bazel runfile.
+- Pure and not `#[ignore]`d — no environment, no subprocess, only `flake.nix` and the extensions read — so it runs on every `cargo test`. It lives here for [`release_profile.rs`](#release_profilers)'s reason: neither file it reads is a Bazel runfile.
 - Each side is a line scanner rather than a parser, so each imposes a formatting contract the file it reads carries a reciprocal comment about. Reformat the file; do not teach the scanner a second shape.
 - Mismatches are collected and reported together, since bumping two assets at once is the ordinary shape and a loop of assertions reports only the first.
-- It fetches nothing, so it cannot say either hash is the hash of the tarball at that commit — only that the two sides agree.
+- It fetches nothing, so it cannot say either hash is the hash of the archive at that revision — only that the two sides agree.
 
 #### `common/mod.rs`
 
@@ -372,7 +374,9 @@ The dialog is the route to backdrop: `cage` activates every toplevel it maps and
 
 #### `../testdata/fonts.conf`
 
-Template fontconfig that exposes three pinned font directories — DejaVu, JetBrains Mono and iA Writer Mono S — and deliberately omits every host font dir, so Pango measurement and Cairo rasterization are reproducible across machines. The two editor families are exposed because the shared `wolf-config.yaml` can name either. Every generic family the application can ask for is aliased to a pinned face, which is what keeps a generic request deterministic with three families visible: `monospace` to DejaVu Sans Mono for a grid request, and `sans-serif` and `sans` to DejaVu Sans for the pane statusbar strip, which asks for the desktop UI family.
+Template fontconfig that exposes only the pinned font directories — DejaVu, JetBrains Mono, iA Writer Mono S and Symbols Nerd Font Mono — and deliberately omits every host font dir, so Pango measurement and Cairo rasterization are reproducible across machines. The two editor families are exposed because the shared `wolf-config.yaml` can name either, and the icon face so a painter can resolve Private Use Area icons, which no editor family carries.
+
+Every generic family the application can ask for is aliased to a pinned face, which is what keeps a generic request deterministic with every pinned family visible: `monospace` to DejaVu Sans Mono for a grid request, and `sans-serif` and `sans` to DejaVu Sans for the pane statusbar strip, which asks for the desktop UI family.
 
 The aliases reach generic requests only, and `gtk-font-name` usually names a concrete family the pinned trees lack. A last-resort rule appends `DejaVu Sans` to every pattern at lowest priority: a resolvable request is untouched, an unresolvable one lands on that pinned face, so the strip's face is the same on every host rather than a function of the developer's desktop setting.
 
@@ -596,7 +600,7 @@ Being scrupulous about this is the point of the section.
 Behavior this front-end has that is deliberately not smoked, with what covers it instead.
 
 - **The primary menu popover.** The keystroke injector cannot click a header-bar menu button, and keyboard-navigating to it is too fragile to be worth the flake. The action namespace's own tests cover every item referencing a declared, implemented, non-reserved action and every label matching the command registry. Ten of the menu's items have their action activated end to end by the accelerator smokes, and the `:qa` smoke performs Close Window's action through the command drain rather than through the menu's own action. The two-window smoke reaches New Window's action through the palette and Quit's through Ctrl+Shift+Q, so the two `app.`-scoped rows are exercised by a route of their own.
-- **The About dialog.** Its widget layer is covered by nothing, and cannot be: the row is reachable only from the primary menu popover, itself a gap above. What covers it instead is where the weight is — the dialog's text is asserted from the compiled artifact, against the four fonts' licence phrases and, in [`about_notices.rs`](#about_noticesrs), the seven libraries', all re-typed locally rather than imported, so the assertion is about what ships; the row's status is pinned by `actions.rs`, and its `UiAction` by `command_action.rs`.
+- **The About dialog.** Its widget layer is covered by nothing, and cannot be: the row is reachable only from the primary menu popover, itself a gap above. What covers it instead is where the weight is — the dialog's text is asserted from the compiled artifact, against every bundled font's licence phrase and, in [`about_notices.rs`](#about_noticesrs), the seven libraries', all re-typed locally rather than imported, so the assertion is about what ships; the row's status is pinned by `actions.rs`, and its `UiAction` by `command_action.rs`.
 - **The header-bar buttons' click path**, all three: no pointer smoke clicks Back, Forward or Open. A header-bar button offers no probe click for Neovim to report back, so the honest alternatives are a theme-owned inset pinned as a second measured constant with nothing to cross-check it, or distorting the buttons to buy hit margin. What covers them instead: the two chord smokes drive the same `gio` actions end to end, and [`nav_ui.rs`](../src/README.md#nav_uirs)'s tables cover the sensitivity and per-pane rules.
 
   [`smoke_headless/sidebar_toggles.rs`](#smoke_headlesssidebar_togglesrs) does click the sidebar's toggle group from such an inset, because the group's state shows in its own pixels and its effect in the sidebar band, so a wrong target fails instead of passing.

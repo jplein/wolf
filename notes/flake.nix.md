@@ -14,7 +14,7 @@ The input must not lag the host. The GTK process dlopens the host's Mesa from `/
 
 ## Darwin eval laziness
 
-`rustToolchain`, `wolfPointerInject`, `iaWriterMono`, the three treesitter bindings, `wolfNeovim`, `wolfRipgrep`, `wolfOrlando`, `wolfLighthouse`, `wolfGhosttyVtDeps`, `wolfGhosttyVt`, `wolfGnomePackage` and the GTK and Neovim packages are forced only when `linuxShell` or the package output is evaluated. On Darwin `devShells.default` resolves to `darwinShell`, which references none of them, so laziness keeps them off the Darwin eval path. `wolfPointerInject` is a Wayland program that cannot build on Darwin at all; `iaWriterMono` is arch-independent data and the grammars are ordinary C, so for those the argument is the weaker "safer there than here", but the rule is the same.
+`rustToolchain`, `wolfPointerInject`, `iaWriterMono`, `wolfNerdFontsSymbols`, the three treesitter bindings, `wolfNeovim`, `wolfRipgrep`, `wolfOrlando`, `wolfLighthouse`, `wolfGhosttyVtDeps`, `wolfGhosttyVt`, `wolfGnomePackage` and the GTK and Neovim packages are forced only when `linuxShell` or the package output is evaluated. On Darwin `devShells.default` resolves to `darwinShell`, which references none of them, so laziness keeps them off the Darwin eval path. `wolfPointerInject` is a Wayland program that cannot build on Darwin at all; `iaWriterMono` and `wolfNerdFontsSymbols` are arch-independent data and the grammars are ordinary C, so for those the argument is the weaker "safer there than here", but the rule is the same.
 
 Do not add a top-level reference to any of them, and do not wrap any of them in a `lib.optional` guard, which would imply the laziness argument is unsound.
 

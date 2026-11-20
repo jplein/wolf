@@ -243,12 +243,12 @@ Pure Markdown to themed-HTML rendering for the preview pane: a `&str` to `String
 
 #### `licenses.rs`
 
-Two registries of verbatim licence texts, compiled in. The four bundled fonts ship as preview and editor faces, and the libraries are statically linked into Wolf's binaries, so all of them owe attribution.
+Two compiled-in registries of verbatim licence texts: every bundled font and statically linked library owes attribution.
 
 **Public API**
 
 - `FontLicense` — `font`, `license`, `provenance`, `text`. `provenance` names the archive, the path inside it and its pinned sha256, so a bumped text is re-derived rather than trusted.
-- `FONT_LICENSES` — one row per bundled font, preview faces first.
+- `FONT_LICENSES` — one row per bundled font.
 - `FONT_LICENSE_NOTICES` — those rows as one plain-text block, which [`markdown.rs`](#markdownrs)'s document head and both About surfaces carry.
 - `LibraryLicense` — `library`, `license`, `provenance` (as above), `text`. For a library offered under a choice, `license` names the licence Wolf takes.
 - `LIBRARY_LICENSES` — libghostty-vt, then the code its static archive compiles in.
@@ -258,6 +258,7 @@ Two registries of verbatim licence texts, compiled in. The four bundled fonts sh
 
 - The blocks are `concat!` `const`s, not functions, because the preview head must be byte-identical on every render.
 - Every row carries an explicit trailing newline: three texts end without one, which the others would hide.
+- Symbols Nerd Font Mono's text appends its release README's icon-set table, since its MIT `LICENSE` names no icon set's licence.
 - The Unicode Character Database row is there because uucode compiles its data in. uucode ships no copy of that licence, so the text is aro's.
 - The texts under `licenses/` are committed as `.txt`, so prettier's Markdown gate cannot reformat a third party's licence. This entry documents that directory, which has no README of its own.
 

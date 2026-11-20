@@ -6,7 +6,7 @@ This package downloads the pinned GitHub _source_ tarball for the iA Writer font
 
 `//crates/wolf-macos:Wolf` bundles the result at `Contents/Resources/fonts/`, where `FontRegistration.swift` registers the TTFs with CoreText (`CTFontManagerRegisterFontURLs`) so `"iA Writer Mono S"` resolves, and `CellMetrics.swift` measures it as the config-driven default font-family (`wolf_core::config::DEFAULT_FONT_FAMILY`).
 
-`Contents/Resources/fonts/` is shared with JetBrains Mono: both `//bazel/jetbrains-mono:jetbrains_mono_tree` and `//bazel/ia-writer-mono:ia_writer_mono_tree` are in the Wolf `resources` list and merge into the one `fonts/` directory. Their file sets are disjoint — `JetBrainsMono-*.ttf` plus `OFL.txt` against `iAWriterMonoS-*.ttf` plus `LICENSE.md` — so nothing collides.
+`Contents/Resources/fonts/` is shared with the other font trees; [the bundle inventory](../../crates/wolf-macos/README.md#bundle-contents) lists them.
 
 ## The pin
 
@@ -42,7 +42,7 @@ To de-risk the spaces, the `runtime_files` filegroup lists the five source files
 
    This flattens the spaced `iA Writer Mono/Static/` dir away (so the four TTFs land directly under `fonts/`) and moves the license to `fonts/LICENSE.md`.
 
-The inner `fonts/` directory is deliberate, and is the same inner directory JetBrains Mono uses: `rules_apple` strips the bundled TreeArtifact's _own_ top-level directory name when copying it into `Contents/Resources/`. By nesting everything under `fonts/`, the app reliably gets `Contents/Resources/fonts/...` (where `FontRegistration` looks and the bundle-layout test expects them), and because both font trees use `fonts/` they merge into the one bundled directory.
+The inner `fonts/` directory is deliberate, and is the same inner directory JetBrains Mono uses: `rules_apple` strips the bundled TreeArtifact's _own_ top-level directory name when copying it into `Contents/Resources/`. By nesting everything under `fonts/`, the app reliably gets `Contents/Resources/fonts/...` (where `FontRegistration` looks and the bundle-layout test expects them), and because every font tree uses `fonts/` they merge into the one bundled directory.
 
 `aspect_bazel_lib` is a build-time-only ruleset shared by the other vendoring packages; it never enters `wolf-core`'s dependency graph. `MODULE.bazel` wires the extension up:
 

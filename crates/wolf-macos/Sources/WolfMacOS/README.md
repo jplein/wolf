@@ -234,7 +234,7 @@ Purpose: The file-tree sidebar: an `NSOutlineView` driven by a long-lived `FfiFi
 
 #### `FontRegistration.swift`
 
-Purpose: Registers the TTFs bundled at `Contents/Resources/fonts/` with CoreText so both vendored families resolve — "iA Writer Mono S" (the default grid font) and "JetBrains Mono". `AppDelegate` calls `registerBundledFonts()` at launch, before the config is loaded and metrics are measured.
+Purpose: Registers the TTFs bundled at `Contents/Resources/fonts/` with CoreText so the vendored families resolve — "iA Writer Mono S" (the default grid font), "JetBrains Mono", and "Symbols Nerd Font Mono", the Private Use Area icon face, which is never a configured family. `AppDelegate` calls `registerBundledFonts()` at launch, before the config is loaded and metrics are measured.
 
 **Decisions**
 

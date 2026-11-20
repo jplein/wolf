@@ -37,7 +37,7 @@ Running needs a Wayland or X11 session, or the headless compositor the smoke tes
 
 ## Packaging
 
-`nix build .#wolf-gnome` produces the installed Linux application: the release binary, wrapped so it supplies its own Neovim, ripgrep, treesitter trees and font configuration, beside a captive `init.lua` with the vendored `orlando` and `lighthouse` trees as siblings, Wolf's compiled `xterm-ghostty` terminfo entry, a desktop entry, the hicolor icon set and both editor font families. The commands, the output's layout, how a NixOS configuration consumes the flake and the one script that produces evidence about the artifact are all [`build.md`](../../build.md)'s.
+`nix build .#wolf-gnome` produces the installed Linux application: the release binary, wrapped so it supplies its own Neovim, ripgrep, treesitter trees and font configuration, beside a captive `init.lua` with the vendored `orlando` and `lighthouse` trees as siblings, Wolf's compiled `xterm-ghostty` terminfo entry, a desktop entry, the hicolor icon set, both editor font families and the Symbols Nerd Font Mono icon face. The commands, the output's layout, how a NixOS configuration consumes the flake and the one script that produces evidence about the artifact are all [`build.md`](../../build.md)'s.
 
 ## Testing
 
