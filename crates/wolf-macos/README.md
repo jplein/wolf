@@ -44,7 +44,7 @@ bazel test //crates/wolf-macos:bundle_layout_test  # asserts the .app resource l
 
 Both Swift test targets list their sources explicitly rather than globbing, so a new Swift file that is not added to `srcs` never compiles into the test binary and never runs. There is no `cargo`-style fallback here.
 
-`WolfMacOSTests` checks pixels. It calls responder and menu dispatch directly for key equivalents over a preview, and sends the toolbar's sidebar control its action: key-window routing, event handling, menu validation, real clicks and real focus have no automated coverage. See the testing posture in [wolf-macos-decisions.md](../../notes/wolf-macos-decisions.md) for what covers them instead.
+`WolfMacOSTests` checks pixels. It calls responder and menu dispatch directly for key equivalents over a preview, sends the toolbar's sidebar control its action, and calls the pane container's mouse handlers for a drawer-edge drag: key-window routing, event handling, menu validation, real clicks and real focus have no automated coverage. See the testing posture in [wolf-macos-decisions.md](../../notes/wolf-macos-decisions.md) for what covers them instead.
 
 ## Formatting
 

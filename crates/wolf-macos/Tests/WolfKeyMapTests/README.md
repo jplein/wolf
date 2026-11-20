@@ -102,7 +102,8 @@ Note that the nearby `swift_format_srcs` glob feeds lint and format only, not te
 **Covers**
 
 - `DrawerLayout`: the pinned `defaultWeight`, the no-drawer case (editor fills the pane area, `drawerRect` is `nil`), the drawer as a full-width strip sitting directly below the editor, and the invariant that `editorHeight + drawerHeight` tile the pane area exactly.
-- The `minDrawerHeight` floor, the cap at the pane area when the floor or the weight exceeds it, and the collapse to `(0, 0)` on a non-finite weight, floor or pane-area height or a non-positive pane area.
+- The `minPaneHeight` floor on both sides, the cap at the pane area when the floor exceeds it, and the collapse to `(0, 0)` on a non-finite weight, floor or pane-area height or a non-positive pane area.
+- `draggedWeight`: the share below the pointer, held at the drawer's and the editor's minimum, `nil` in an area too short for both and on a non-finite input. A dragged share scales with a pane-area resize, and a shorter area clamps it at the editor's floor.
 
 **Gotchas**
 

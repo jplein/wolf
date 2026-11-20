@@ -153,25 +153,26 @@ Purpose: Picks the editor pane that `<C-w>k` from the terminal drawer should foc
 
 #### `DrawerLayout.swift`
 
-Purpose: Pure geometry for the terminal drawer, a full-width strip along the bottom of the pane area below the editor tree.
+Purpose: Pure geometry for the terminal drawer, the full-width strip below the editor tree.
 
 **Public API**
 
-- `init(paneAreaHeight:hasDrawer:weight:minDrawerHeight:)` — splits the pane-area height into `editorHeight` and `drawerHeight`. With no drawer the editor takes the whole area.
-- `drawerRect(width:) -> Rect?` — the full-width bottom strip, or `nil` when no drawer is present.
+- `init(paneAreaHeight:hasDrawer:weight:minPaneHeight:)` — sets `editorHeight` and `drawerHeight`; with no drawer the editor takes it all.
+- `draggedWeight(pointerY:paneAreaHeight:minPaneHeight:) -> Double?` — a top-edge drag as a share; `nil` keeps the current one.
+- `drawerRect(width:) -> Rect?` — the bottom strip, `nil` without a drawer.
 
 **Decisions**
 
-- The drawer is held outside the `PaneTree` so the tree keeps 1:1 parity with wolf-gnome, which is why this split is a seam of its own.
-- `defaultWeight` is the front-end's copy of the height `_G.wolf_toggle_terminal` gives its `botright` split; the two must agree or the drawer pane and its nvim window disagree about size.
-- The floor exists because a third of a short window is a focusable strip showing no text.
-- A non-finite input or a non-positive `paneAreaHeight` collapses both heights to zero, before the `hasDrawer` branch, as in [`drawer.rs`](../../../wolf-gnome/src/README.md#drawerrs). The checks are explicit: Swift's `min` and `max` keep or drop a NaN by argument order.
-- The cap applies after the floor, with no `ClosedRange`, so a floor above the pane area gives the drawer all of it, not a negative editor or a trap.
+- The drawer stays outside `PaneTree` for wolf-gnome parity, hence a seam of its own.
+- `defaultWeight` is the opening share, matching `_G.wolf_toggle_terminal`'s `botright` split. Each pane's `ResizeGrid` reconciles a dragged share with it, as for a tree divider.
+- One floor holds both sides: a third of a short window is a focusable strip showing no text. A too-short area caps the drawer's floor at the area, with no `ClosedRange`: no negative editor, no trap.
+- Where both do not fit, `draggedWeight` gives `nil`, not `DividerDragSeam`'s midpoint, so the share stays.
+- A non-finite input or a non-positive `paneAreaHeight` zeroes both heights before the `hasDrawer` branch, as [`drawer.rs`](../../../wolf-gnome/src/README.md#drawerrs) does. The checks are explicit: Swift's `min` and `max` keep or drop a NaN by argument order.
 
 **Gotchas**
 
-- The drawer is not a tree leaf, so it has no `PaneTree` divider — its top edge is not drag-resizable — and `PaneTree.neighbor` cannot resolve focus moves out of it. `DrawerFocusSeam` bridges that.
-- `PaneContainerView` passes as the floor one editor pane's minimum height.
+- Not a tree leaf, the drawer has no `PaneTree` divider, so `PaneContainerView` hit-tests its top edge at `editorHeight`, and no `PaneTree.neighbor`, which `DrawerFocusSeam` bridges.
+- `PaneContainerView` holds the share and passes one pane's minimum height as the floor.
 
 #### `EditorInset.swift`
 

@@ -1,6 +1,6 @@
 # wolf-macos/Tests/WolfMacOSTests
 
-XCTest coverage of what [`WolfMacOS`](../../Sources/WolfMacOS/README.md) views draw. A test builds a production view in a window that is never shown, renders it offscreen and samples its pixels. [`PreviewKeyEquivalentTests.swift`](#previewkeyequivalenttestsswift) instead calls AppKit's responder and menu dispatch directly, [`SidebarToolbarTests.swift`](#sidebartoolbartestsswift) sends a toolbar control its action and reads its selection, and [`SymbolsFallbackTests.swift`](#symbolsfallbacktestsswift) draws single cells through `GlyphPainter` into a bitmap, with no view:
+XCTest coverage of what [`WolfMacOS`](../../Sources/WolfMacOS/README.md) views draw. A test builds a production view in a window that is never shown, renders it offscreen and samples its pixels. [`PreviewKeyEquivalentTests.swift`](#previewkeyequivalenttestsswift) instead calls AppKit's responder and menu dispatch directly, [`SidebarToolbarTests.swift`](#sidebartoolbartestsswift) sends a toolbar control its action and reads its selection, [`TerminalDrawerResizeTests.swift`](#terminaldrawerresizetestsswift) calls the pane container's mouse handlers with synthesized events, and [`SymbolsFallbackTests.swift`](#symbolsfallbacktestsswift) draws single cells through `GlyphPainter` into a bitmap, with no view:
 
 ```sh
 bazel test //crates/wolf-macos:WolfMacOSTests
@@ -145,6 +145,16 @@ Purpose: The vendored Lighthouse's expected colours, for the tests that render u
 
 - Each test repeats `WolfWindowController`'s composition, target then bridge call then wake, over a [`TerminalViewFixture`](#terminalviewfixtureswift), because AppKit routes no event to an offscreen window; the controller itself reaches no test here. No page loads, and nothing waits on one.
 - A wait for an opened file checks the file the window shows: the startup buffer is the markdown-named `Untitled.md`, so a Markdown buffer being active proves nothing. `otherPaneTarget` resolves from the container's active pane, which follows Neovim only on a wake, so each read first waits for `container.activeWin` to match.
+
+#### `TerminalDrawerResizeTests.swift`
+
+**Covers** — a drag on the drawer's top edge over a live core: the drawer view moving and growing before any wake, then its session's rows, the shell's `stty size` and the editor grid above following. The dragged share survives closing and reopening the drawer, and a second container over a new tabpage opens its drawer at the default third.
+
+**Gotchas**
+
+- The tests call `PaneContainerView`'s `mouseDown`, `mouseDragged` and `mouseUp` with synthesized events, so AppKit's own hit-testing and the cursor rects reach no assertion.
+- The press point comes from `DrawerLayout.defaultWeight` at the fixture's `windowSize`, since the container's share is private, so each test drags once, from the opening share.
+- After a drag, compare `frame.minY` rather than call `isInDrawerStrip`: the dragged view may start above the midline.
 
 #### `TerminalDrawerTests.swift`
 

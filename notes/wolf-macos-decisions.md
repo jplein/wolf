@@ -33,7 +33,7 @@ Swift here is split in two, and the split is the single most important structura
 
 [`Sources/WolfKeyMap/`](../crates/wolf-macos/Sources/WolfKeyMap/README.md) is Foundation plus the generated FFI glue, with no AppKit. Every decision that can be expressed as a function of values lives there, so it can be unit-tested with no window server. [`Sources/WolfMacOS/`](../crates/wolf-macos/Sources/WolfMacOS/README.md) is the AppKit application, and holds only what genuinely needs a window. The process entry point sits apart, in the one-file [`Sources/WolfMain/`](../crates/wolf-macos/Sources/WolfMain/README.md).
 
-The consequence is the crate's testing posture. There is no window server under `bazel test`, but a view in a never-shown window still renders through `cacheDisplay`, so [`Tests/WolfMacOSTests/`](../crates/wolf-macos/Tests/WolfMacOSTests/README.md) checks what a `WolfMacOS` view draws. It also calls a responder-chain step and the main menu's key-equivalent matching directly, over a real `WKWebView` whose page never loads ([why](../crates/wolf-macos/Tests/WolfMacOSTests/README.md#what-renders-under-bazel-test)). **Key-window routing, event delivery such as `keyDown:`, menu validation and dispatch, WebKit's web-process step and real clicks are compile-verified and manual-smoke only**, and XCUITest is unavailable.
+The consequence is the crate's testing posture. There is no window server under `bazel test`, but a view in a never-shown window still renders through `cacheDisplay`, so [`Tests/WolfMacOSTests/`](../crates/wolf-macos/Tests/WolfMacOSTests/README.md) checks what a `WolfMacOS` view draws. It also calls a responder-chain step and the main menu's key-equivalent matching directly, over a real `WKWebView` whose page never loads ([why](../crates/wolf-macos/Tests/WolfMacOSTests/README.md#what-renders-under-bazel-test)), and `PaneContainerView`'s mouse handlers with synthesized events. **Key-window routing, event delivery such as `keyDown:`, menu validation and dispatch, WebKit's web-process step and real clicks are compile-verified and manual-smoke only**, and XCUITest is unavailable.
 
 Coverage comes from the pure seams via [`Tests/WolfKeyMapTests/`](../crates/wolf-macos/Tests/WolfKeyMapTests/README.md), the bridge surface via the real-nvim tests in `//crates/wolf-ffi`, and the core logic via `//crates/wolf-core`. When you add behavior here, put the decision in `WolfKeyMap` and test it there; leaving it in a view class means only what it draws can be tested.
 
@@ -77,7 +77,7 @@ Project identity is not persisted. Restore groups the saved tree by working dire
 
 ## One flat pane view, not nested split views
 
-`PaneContainerView` paints every pane itself, computing each pane's rectangle from the pure `PaneTree` port. It is deliberately not a tree of nested `NSSplitView`s. Divider drag is done by hit-testing the pure `dividers()` list inside the flat view.
+`PaneContainerView` paints every pane itself, computing each pane's rectangle from the pure `PaneTree` port. It is deliberately not a tree of nested `NSSplitView`s. Divider drag is done by hit-testing the pure `dividers()` list inside the flat view, and the terminal drawer's top edge beside it.
 
 Weight policy: a same-orientation split re-equalizes the row or column to equal shares, while removing a pane re-normalizes the survivors proportionally. That is what makes a user-resized layout survive an adjacent pane closing, a tab switch, and quit and relaunch.
 
@@ -148,6 +148,10 @@ The same call sets each `TerminalPaneView`'s `focused`, which picks the cursor's
 Close Pane closes the drawer although the drawer is outside `tree`, and refuses the tree's last leaf even beside the drawer: Neovim counts the drawer's window, so `:close` there would leave the drawer as the tabpage's only window, which the pane tree cannot hold. `closeActivePane()` sends `focus_win` for the active pane's window before `close_pane()`, both on core's ordered input channel, so `:close` closes the pane `canClosePane` read even while a focus move is in flight. `WolfWindowController.closePane()` goes through it, so a dispatched Close Pane is refused wherever the menu item is disabled.
 
 After a crash-restart, `Project.respawnNeovim` captures each view's terminal-pane sessions and drawer state before `handle.restart()`, and hands each view its own [`terminalRestore`](../crates/wolf-macos/Sources/WolfKeyMap/README.md#livenessseamswift) steps. A view runs them once, from a render wake after `ensureInitialPane` has bound its first pane, while its tabpage is current and no layout rebuild waits ([why](crates/wolf-macos/Sources/WolfMacOS/PaneContainerView.swift.md#terminal-restore)). `rebind(tabpageHandle:)` clears a request made before it.
+
+The drawer's top edge is no `PaneTree` divider, so the container hit-tests it at `DrawerLayout.editorHeight` itself, with the tree dividers' tolerance and cursor. A drag sets the share the drawer takes, which a `nil` from `draggedWeight` leaves as it is.
+
+That share is the container's, held outside `tree`, so it never reaches `paneLayout` or `state.json`, as [Session restore](../specs/terminal-panes.md#session-restore) requires, and a new view starts at `DrawerLayout.defaultWeight`. Closing the drawer and a Neovim restart keep it: `rebind(tabpageHandle:)` leaves it alone, because the share belongs to the window, not to Neovim. A drawer drag ends without `onLayoutChanged`, since nothing it changes is persisted.
 
 ## Nerd Font icons
 
