@@ -739,21 +739,22 @@ Purpose: the Cairo/Pango paint seam — one grid and its highlight table onto an
 
 **Public API**
 
-- `CellMetrics::for_font(cr, family, size_pt, line_height_percent)` — `cr` supplies a Pango context only; its surface size is irrelevant.
-- `paint(cr, grid, highlights, metrics)` — one grid rather than a `Snapshot`, since under `ext_multigrid` a front-end paints one grid per surface.
-- `draw_text_line(cr, font, x, y, text, fg)` — one line of free text, its top at `y`, for the statusbar strip.
+- `CellMetrics::for_font(cr, family, size_pt, line_height_percent)` — `cr` supplies a Pango context only. The cell is measured from `family` alone, and `font` names `family_list(family)`.
+- `family_list(configured)` — `configured`, then `SYMBOLS_FAMILY`, unless a member already names that face as fontconfig compares names.
+- `paint(cr, grid, highlights, metrics)` — one grid, not a `Snapshot`: under `ext_multigrid` a front-end paints one grid per surface.
 
 **Decisions**
 
-- `paint` builds one `GlyphPainter` and re-texts its layout per cell: `pangocairo::create_layout` builds a `PangoContext` and a font-map lookup behind every layout. One string per run is faster still and refused: Pango would then advance by the face's hinted advance, not `metrics.cell_w`, walking glyphs off the grid.
-- Both values the painter remembers must be undone: it clears the attribute list ahead of an undecorated cell and re-sets the face when `(bold, italic)` changes, or one cell's underline or weight runs on across the frame.
+- The face order, and why the cell ignores the symbols face: [Typography](../../../notes/wolf-gnome-decisions.md#typography).
+- `paint` re-texts one `GlyphPainter`'s layout per cell: each `pangocairo::create_layout` costs a `PangoContext` and a font-map lookup, and one string per run would advance by the face's hinted advance, not `metrics.cell_w`.
+- The painter clears the attribute list ahead of an undecorated cell and re-sets the face when `(bold, italic)` changes, or one cell's underline or weight runs on.
 - A glyph's move-to is `y + baseline - ascent`, not the cell top, where Pango would hang a taller cell's glyphs.
-- Every cell's background rectangle is filled, empty ones included, keeping wide-character trailing placeholders aligned.
+- A row's backgrounds all precede its glyphs, so no fill cuts off a symbols icon, about one em wide, or a wide character's right half.
 
 **Gotchas**
 
 - `GlyphPainter::new(cr)` and `draw(cr, …)` take the context twice with nothing binding them; every call site passes the same one.
-- `FALLBACK_FG`, `FALLBACK_BG`, `GlyphPainter`, `draw_glyph`, `draw_text_line` and `set_source` are `pub(crate)` for [`cursor.rs`](#cursorrs), [`pane_view.rs`](#pane_viewrs) and [`terminal/canvas.rs`](terminal/README.md#canvasrs); reimplementing one lets their colours or glyph placement drift from the grid paint.
+- The fallback colours, `GlyphPainter`, `draw_glyph`, `set_source` and `draw_text_line`, the statusbar strip's free text, are `pub(crate)` for [`cursor.rs`](#cursorrs), [`pane_view.rs`](#pane_viewrs) and [`terminal/canvas.rs`](terminal/README.md#canvasrs); a reimplementation drifts from the grid paint.
 
 #### `save_ui.rs`
 

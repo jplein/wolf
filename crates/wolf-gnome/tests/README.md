@@ -113,14 +113,14 @@ The other files below cover what a seam cannot reach: a real Neovim, a real wind
 **Covers**
 
 - `paint` onto an offscreen ARGB32 `ImageSurface` from a hand-built 4x2 `Snapshot`: exact equality on known background fills, background-only interiors for a wide-trailing empty cell, and ink in a glyph cell.
-- The line-height argument to `CellMetrics::for_font` at the shipped 180 % default: a larger percentage gives a taller cell, the advance width does not move with it, and the baseline centres the glyph box. An unresolvable family still measures, matches a resolvable one's cell height, and keeps the name the caller asked for.
+- The line-height argument to `CellMetrics::for_font` at the shipped 180 % default: a larger percentage gives a taller cell, the advance width does not move with it, and the baseline centres the glyph box. An unresolvable family still measures, matches a resolvable one's cell height, and stays first, unchanged, ahead of the symbols face.
 - The three decorations: undercurl draws ink below the glyph box, in `special` when set and in the foreground when not; undercurl and a plain underline draw different marks; strikethrough adds foreground ink and no `special` pixel.
 - The pinned stack resolving "Symbols Nerd Font Mono", which shapes U+F015.
 - The two values `render::GlyphPainter` keeps across the cells of one paint: an undecorated cell painted after every decorated one carries no leaked underline, and bold and italic each restore the plain face for the cell after them. The trailing cell is required: the control column precedes every decorated one, so it cannot see a forward leak.
 
 **Gotchas**
 
-- Deliberately not a whole-image hash, which is too brittle across freetype/fontconfig versions. Pixel reads assume little-endian ARGB32, in-memory byte order `B, G, R, A`.
+- Not a whole-image hash, which is too brittle across freetype/fontconfig versions. Pixel reads assume little-endian ARGB32, in-memory byte order `B, G, R, A`.
 - The PNG golden is a dev aid nothing asserts against; regenerate it with `cargo test -p wolf-gnome --test paint_golden -- --ignored regenerate_png_golden`, which needs the `png` feature on the `cairo` dependency.
 
 #### `release_profile.rs`
@@ -267,6 +267,10 @@ The header bar's toggle-group smokes. One clicks the toggles through [Pointer in
 
 The click targets are derived from libadwaita 1.9.3's header metrics, not from a probe, which is safe only because a click that misses the group moves no sidebar and fails.
 
+#### `smoke_headless/symbols.rs`
+
+The symbols-face smoke: one launch at the smoke config shows `M` and the icons U+F07B, U+E0A0 and U+F401 in an editor buffer, set through `nr2char`, and in a `:terminal` whose shell prints them. In each `grim` capture, `M` must match DejaVu Sans Mono alone, every icon the symbols face alone and not the hex box, and U+F401 must differ from DejaVu Sans Mono alone. The references are painted in the test process through `wolf_gnome::paint`, on the surface kind each pane paints on, and the preconditions hold the grid origin and the cell to the values the pointer smokes use.
+
 #### `smoke_headless/terminal.rs`
 
 Terminal smokes: the terminal drawer, terminals across a Neovim restart, terminal panes beside Neovim panes, typed keys reaching a pane's shell, Ctrl+` hiding a showing message toast as it opens the drawer, and Ctrl+Shift+W closing the drawer with its session kept and a terminal split with its session hung up.
@@ -300,6 +304,24 @@ The dialog is the route to backdrop: `cage` activates every toplevel it maps and
 
 - Requires `WOLF_NVIM_BIN`; unlike wolf-ffi's guard, the parent panics through `common::require_nvim_bin` rather than skipping.
 - Both payloads show as ignored and return at once without `WOLF_TEST_PLANTED_HOME`, so `--include-ignored` never runs one against the real `HOME`.
+
+#### `symbols_fallback.rs`
+
+**Covers**
+
+- `render::family_list`: the configured family, then the symbols face, with no duplicate when a member already names that face in any ASCII case or spacing.
+- `CellMetrics::for_font` measuring the configured family alone, at two sizes, and the pointer smokes' literal cell.
+- The grid, for iA Writer Mono S, DejaVu Sans Mono and an unresolvable family in each face at two sizes, and a `TerminalCanvas` over a real session: each icon matches the symbols face alone and differs from Pango's hex box, U+F401 differs from the configured family alone, and ASCII matches it. On the grid, an icon's overhang survives the next cell's fill, and a list naming a missing symbols family paints as the configured family alone.
+- JetBrains Mono's U+E0A0 and DejaVu Sans Mono's U+2665 keeping the configured face.
+
+**Decisions**
+
+- U+F401 is the discriminator: fontconfig's own sort already reaches the symbols face for U+F07B, but serves U+F401 from DejaVu Sans.
+- Each reference is the same content through the same painter with one family, so glyph placement is identical by construction. A match is the one-pixel-tolerant `ink_distance`, a difference the exact `ink_xor`.
+
+**Gotchas**
+
+- The terminal case requires `WOLF_NVIM_BIN` and `/bin/sh`. A failure beginning `premise:` means the pinned faces cannot tell the outcomes apart; it lists every failed premise with the distance table.
 
 #### `terminal_paint.rs`
 

@@ -19,7 +19,8 @@ Purpose: `TerminalCanvas`, one terminal pane's backing surface: its session's pa
 
 - Why the pane paints through a backing surface, and why the cursor is drawn over the blit, is in [Terminal panes](../../../../notes/wolf-gnome/terminal-panes.md).
 - A block cursor redraws its glyph without bold or italic, which cannot overflow the cell.
-- A row fills every cell's background before any glyph, so a spacer's background cannot cover the right half of a wide glyph. Fills are not antialiased, because adjacent antialiased fills leave a seam.
+- Glyphs paint in `CellMetrics::font` through [`render.rs`](../README.md#renderrs)'s painter, so a terminal pane falls back to the symbols face exactly as the grid does.
+- A row fills every cell's background before any glyph, so neither a spacer's background nor the next cell's can cover the right half of a wide glyph or a symbols icon's overhang. Fills are not antialiased, because adjacent antialiased fills leave a seam.
 - The surface is made at the target's device scale and blitted at a whole-pixel origin, so its pixels map 1:1.
 
 #### `damage.rs`

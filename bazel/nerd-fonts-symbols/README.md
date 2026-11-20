@@ -4,7 +4,9 @@ Hermetic, pinned **Symbols Nerd Font Mono** icon face for bundling into `Wolf.ap
 
 This package downloads the Nerd Fonts project's symbols-only release asset (sha256-pinned, fetched by Bazel — no system or `PATH` dependency), assembles its Mono face and the release's two notices into a `fonts/` directory artifact, and exposes it for bundling. The face carries the Private Use Area icons that shell prompts, `ls` replacements and Neovim plugins print, and no text, so it is never a configured family.
 
-`//crates/wolf-macos:Wolf` bundles the result at `Contents/Resources/fonts/`, where `FontRegistration.swift` registers it with CoreText; [the bundle inventory](../../crates/wolf-macos/README.md#bundle-contents) owns that shared directory. On Linux, `flake.nix`'s `wolfNerdFontsSymbols` fetches the same archive at the same pin, the package installs the face under `share/fonts/truetype/`, and the devShell's [test fontconfig](../../crates/wolf-gnome/tests/README.md#testdatafontsconf) exposes it. On macOS, `CellMetrics.swift` cascades the face behind every grid face ([why](../../notes/wolf-macos-decisions.md#nerd-font-icons)); the GNOME painters reach it only through fontconfig's fallback.
+`//crates/wolf-macos:Wolf` bundles the result at `Contents/Resources/fonts/`, where `FontRegistration.swift` registers it with CoreText; [the bundle inventory](../../crates/wolf-macos/README.md#bundle-contents) owns that shared directory. On Linux, `flake.nix`'s `wolfNerdFontsSymbols` fetches the same archive at the same pin, the package installs the face under `share/fonts/truetype/`, and the devShell's [test fontconfig](../../crates/wolf-gnome/tests/README.md#testdatafontsconf) exposes it.
+
+On macOS, `CellMetrics.swift` cascades the face behind every grid face ([why](../../notes/wolf-macos-decisions.md#nerd-font-icons)), and GNOME's [`render.rs`](../../crates/wolf-gnome/src/README.md#renderrs) names it after the configured family in every grid face's family list ([why](../../notes/wolf-gnome-decisions.md#typography)).
 
 ## The pin
 
@@ -23,7 +25,7 @@ Wolf's painters draw one glyph per cell, with no per-glyph scaling. Measured on 
 - Every Mono glyph advances 2048 units, one em. The proportional face has 852 distinct advances, up to 2729 units.
 - 850 Mono outlines reach outside their advance on one side or the other, 162 of them by more than 20 units. The widest, 123 units, are the Powerline separators from U+E0B0, which bleed on purpose so adjacent separators join.
 
-So one scale would fit the whole Mono face to a cell, since its cell is a square em, where the proportional face would need a scale per glyph. The macOS painter applies no scale at all, a [present limitation](../../notes/wolf-macos-decisions.md#present-limitations).
+So one scale would fit the whole Mono face to a cell, since its cell is a square em, where the proportional face would need a scale per glyph. Neither painter applies a scale at all, a present limitation on [macOS](../../notes/wolf-macos-decisions.md#present-limitations) and on [GNOME](../../notes/wolf-gnome/present-limitations.md).
 
 The overlay leaves out the proportional face and the upstream `10-nerd-font-symbols.conf`. With both faces present, fallback could pick the wider proportional face for the same code points, and the `.conf`'s aliases prefer the proportional family for every monospace family. `flake.nix` installs the Mono face alone for the same reasons.
 
