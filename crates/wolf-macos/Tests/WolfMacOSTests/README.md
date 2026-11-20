@@ -166,6 +166,17 @@ Purpose: The vendored Lighthouse's expected colours, for the tests that render u
 - The press point comes from `DrawerLayout.defaultWeight` at the fixture's `windowSize`, since the container's share is private, so each test drags once, from the opening share.
 - After a drag, compare `frame.minY` rather than call `isInDrawerStrip`: the dragged view may start above the midline.
 
+#### `ZoomPaneTests.swift`
+
+**Covers** — Zoom Pane through `PaneContainerView.toggleZoom()` over a live core and `/bin/sh`, from two editor panes and a terminal pane with the drawer open. A zoomed pane fills the area and its grid or session grows, while the others keep their windows, sessions and sizes, and unzoom restores every frame and weight after drags and a window resize while zoomed. A split, a close, the shell exiting and Toggle Terminal on a zoomed drawer each unzoom, while Toggle Terminal on another zoomed pane, `<C-w>l` and `:wincmd w` change nothing. A hidden preview keeps its web view, hidden, and shows it again on unzoom.
+
+**Gotchas**
+
+- The palette, `CommandDispatcher` and `WolfWindowController` reach no test, so `toggleZoom()` and `toggleTerminal()` are called directly.
+- A hidden pane's sizes are compared after a settle, because a wrong resize lands a round trip later.
+- The inert-action tests sample every wake: the view sends Neovim back to the zoomed pane within a round trip, which would hide a wrong focus move from a check made only at the end.
+- The drags while zoomed land in the zoomed pane and reach Neovim as clicks.
+
 #### `TerminalDrawerTests.swift`
 
 **Covers** — `toggle_terminal()` showing a terminal view in the drawer strip on the drawer window's session, painting a truecolour background the shell prints, hiding with the session kept, and showing the same session again on the next toggle.

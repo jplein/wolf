@@ -301,38 +301,39 @@ These `u8` values are the ABI: Swift decodes raw integers, so the numbers are co
 
 `mod command_kind` mirrors `wolf_core::Command` and is contiguous from 0.
 
-| Value | Constant                | Meaning                                                                         |
-| ----- | ----------------------- | ------------------------------------------------------------------------------- |
-| 0     | `NEW_WINDOW`            | Open a new editor window.                                                       |
-| 1     | `CLOSE_WINDOW`          | Close the focused window.                                                       |
-| 2     | `QUIT_APPLICATION`      | Quit the application.                                                           |
-| 3     | `HIDE_APPLICATION`      | Hide the application.                                                           |
-| 4     | `MINIMIZE_WINDOW`       | Minimize the focused window.                                                    |
-| 5     | `GO_TO_FILE`            | Open the file-picker overlay.                                                   |
-| 6     | `OPEN_FILE`             | Native open-file dialog.                                                        |
-| 7     | `OPEN_FOLDER`           | Native dialog to change the working directory.                                  |
-| 8     | `CLOSE_PANE`            | Close the current split, not the buffer.                                        |
-| 9     | `NEW_BUFFER`            | New empty buffer in the current window.                                         |
-| 10    | `RESET_FONT_SIZE`       | Back to the configured default size.                                            |
-| 11    | `INCREASE_FONT_SIZE`    | One point larger.                                                               |
-| 12    | `DECREASE_FONT_SIZE`    | One point smaller.                                                              |
-| 13    | `COMMAND_PALETTE`       | Open the palette; excluded from the palette's own rows.                         |
-| 14    | `COPY`                  | Visual selection to the system clipboard.                                       |
-| 15    | `PASTE`                 | System clipboard into the active document.                                      |
-| 16    | `BUFFER_PICKER`         | Open the buffer-picker overlay.                                                 |
-| 17    | `NEW_TAB`               | New tab in the current window.                                                  |
-| 18    | `PREVIEW`               | Render the active markdown buffer into a preview pane.                          |
-| 19    | `EDIT`                  | From a preview pane back to its source file.                                    |
-| 20    | `TERMINAL`              | Toggle the per-project terminal drawer.                                         |
-| 21    | `PREVIEW_IN_BROWSER`    | Render the active markdown buffer and open it in the system browser.            |
-| 22    | `FULL_WIDTH`            | Toggle the active buffer between the default content width and full pane width. |
-| 23    | `TOGGLE_SIDEBAR`        | Collapse or expand the sidebar; a native-only action.                           |
-| 24    | `SIDEBAR_SHOW_PROJECT`  | Reveal the sidebar's file tree; a native-only action.                           |
-| 25    | `SEARCH_IN_PROJECT`     | Reveal and focus the sidebar's search panel; a native-only action.              |
-| 26    | `PREVIEW_IN_OTHER_PANE` | Preview the active pane's markdown file in another pane.                        |
-| 27    | `EDIT_IN_OTHER_PANE`    | Edit the active preview's source file in another pane.                          |
-| 28    | `SPLIT_HORIZONTAL`      | Split the active pane into two stacked panes, as `:split`.                      |
-| 29    | `SPLIT_VERTICAL`        | Split the active pane into two side-by-side panes, as `:vsplit`.                |
+| Value | Constant                | Meaning                                                                                         |
+| ----- | ----------------------- | ----------------------------------------------------------------------------------------------- |
+| 0     | `NEW_WINDOW`            | Open a new editor window.                                                                       |
+| 1     | `CLOSE_WINDOW`          | Close the focused window.                                                                       |
+| 2     | `QUIT_APPLICATION`      | Quit the application.                                                                           |
+| 3     | `HIDE_APPLICATION`      | Hide the application.                                                                           |
+| 4     | `MINIMIZE_WINDOW`       | Minimize the focused window.                                                                    |
+| 5     | `GO_TO_FILE`            | Open the file-picker overlay.                                                                   |
+| 6     | `OPEN_FILE`             | Native open-file dialog.                                                                        |
+| 7     | `OPEN_FOLDER`           | Native dialog to change the working directory.                                                  |
+| 8     | `CLOSE_PANE`            | Close the current split, not the buffer.                                                        |
+| 9     | `NEW_BUFFER`            | New empty buffer in the current window.                                                         |
+| 10    | `RESET_FONT_SIZE`       | Back to the configured default size.                                                            |
+| 11    | `INCREASE_FONT_SIZE`    | One point larger.                                                                               |
+| 12    | `DECREASE_FONT_SIZE`    | One point smaller.                                                                              |
+| 13    | `COMMAND_PALETTE`       | Open the palette; excluded from the palette's own rows.                                         |
+| 14    | `COPY`                  | Visual selection to the system clipboard.                                                       |
+| 15    | `PASTE`                 | System clipboard into the active document.                                                      |
+| 16    | `BUFFER_PICKER`         | Open the buffer-picker overlay.                                                                 |
+| 17    | `NEW_TAB`               | New tab in the current window.                                                                  |
+| 18    | `PREVIEW`               | Render the active markdown buffer into a preview pane.                                          |
+| 19    | `EDIT`                  | From a preview pane back to its source file.                                                    |
+| 20    | `TERMINAL`              | Toggle the per-project terminal drawer.                                                         |
+| 21    | `PREVIEW_IN_BROWSER`    | Render the active markdown buffer and open it in the system browser.                            |
+| 22    | `FULL_WIDTH`            | Toggle the active buffer between the default content width and full pane width.                 |
+| 23    | `TOGGLE_SIDEBAR`        | Collapse or expand the sidebar; a native-only action.                                           |
+| 24    | `SIDEBAR_SHOW_PROJECT`  | Reveal the sidebar's file tree; a native-only action.                                           |
+| 25    | `SEARCH_IN_PROJECT`     | Reveal and focus the sidebar's search panel; a native-only action.                              |
+| 26    | `PREVIEW_IN_OTHER_PANE` | Preview the active pane's markdown file in another pane.                                        |
+| 27    | `EDIT_IN_OTHER_PANE`    | Edit the active preview's source file in another pane.                                          |
+| 28    | `SPLIT_HORIZONTAL`      | Split the active pane into two stacked panes, as `:split`.                                      |
+| 29    | `SPLIT_VERTICAL`        | Split the active pane into two side-by-side panes, as `:vsplit`.                                |
+| 30    | `ZOOM_PANE`             | Toggle the active pane between zoomed, over the whole pane area, and not; a native-only action. |
 
 #### `bin/gen_bindings.rs`
 

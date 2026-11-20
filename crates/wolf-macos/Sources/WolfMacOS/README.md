@@ -339,7 +339,7 @@ Purpose: The crash/stall overlay — a full-bleed opaque cover over a broken edi
 
 #### `PaneContainerView.swift`
 
-Purpose: The editor area, one flipped first-responder `NSView` that paints every pane, owns `PaneTree` and hosts preview and terminal views.
+Purpose: The editor area: one flipped first-responder `NSView` painting every pane, owning `PaneTree`, hosting preview and terminal views.
 
 **Public API**
 
@@ -347,20 +347,21 @@ Purpose: The editor area, one flipped first-responder `NSView` that paints every
 - `paneLayout`, `leafContents()`, `restoreFailed` — `SessionSeam`'s inputs; leaves by window, terminals included.
 - `capturedTerminals()`, `requestTerminalRestore(_:)` — a restart's capture and restore.
 - `activeTerminal`, `activeTerminalSelection` — `nil` off a terminal pane.
-- `activeWin` — per-view: the tabpage-shared `WolfCoreHandle.active_win()` would let a background tab enable Copy.
+- `activeWin` — per view: Neovim's tabpage-shared one would let a background tab enable Copy.
 - `activePreviewSourcePath` — `nil` in edit mode.
-- `otherPaneTarget(prefer:)` — `OtherPaneSeam.target`: `0` splits, `nil` is a no-op.
+- `otherPaneTarget(prefer:)` — `0` splits, `nil` is a no-op.
 - `canClosePane`, `closeActivePane()`, `splitActivePane(_:)` — Close Pane's gate and action, and the splits' ([why](../../../../notes/wolf-macos-decisions.md#terminal-panes)).
+- `toggleZoom()`, `toggleTerminal()`, `isZoomed`, `visiblePaneFrames` — Zoom Pane, and Toggle Terminal, refused by another pane's zoom; frames by window ([why](../../../../notes/wolf-macos-decisions.md#zoom-pane)).
 
 **Decisions**
 
-- The refocus rebind waits until `handle.active_tabpage()` is this view's, skipping close detection that pass: the vacated tabpage's grids would prune live panes.
-- One `geometry(_:fullWidth:)` call sets web-view frame, occlusion and statusbar span before `needsDisplay`: no frame paints preview alignment without a web view.
+- The refocus rebind waits for this view's tabpage, skipping close detection: the vacated tabpage's grids would prune live panes.
+- One `geometry(_:fullWidth:)` call sets web-view frame, occlusion and statusbar span: no frame paints preview alignment without its web view.
 - Grids are skipped only under an opaque, loaded preview web view; the flag survives reloads: WebKit shows the outgoing document.
 - Scroll follows `scrollingDeltaY`'s natural-scroll-aware sign; `isDirectionInvertedFromDevice` double-corrects.
-- The terminal drawer lives in the pane map, outside `tree`, so leaves, neighbours and splits exclude it; a top-edge drag sets the view's share ([why](../../../../notes/wolf-macos-decisions.md#terminal-panes)).
-- A restart drops every pane and hosted view: a fresh Neovim reuses window handles.
-- A terminal pane's input goes to its session, never Neovim, and only it gets `NSTextInputClient` ([why](../../../../notes/wolf-macos-decisions.md#terminal-panes)), whose `doCommand(by:)` [passes the rest on](../../../../notes/wolf-macos-decisions.md#key-equivalents-over-a-preview).
+- The terminal drawer is a pane outside `tree`, so leaves, neighbours and splits exclude it ([why](../../../../notes/wolf-macos-decisions.md#terminal-panes)).
+- A restart drops every pane and hosted view: a respawned Neovim reuses window handles.
+- Only a terminal pane gets `NSTextInputClient` ([why](../../../../notes/wolf-macos-decisions.md#terminal-panes)), its input going to its session; `doCommand(by:)` [passes the rest on](../../../../notes/wolf-macos-decisions.md#key-equivalents-over-a-preview).
 
 #### `PickerChrome.swift`
 

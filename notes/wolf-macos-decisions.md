@@ -155,6 +155,22 @@ The drawer's top edge is no `PaneTree` divider, so the container hit-tests it at
 
 That share is the container's, held outside `tree`, so it never reaches `paneLayout` or `state.json`, as [Session restore](../specs/terminal-panes.md#session-restore) requires, and a new view starts at `DrawerLayout.defaultWeight`. Closing the drawer and a Neovim restart keep it: `rebind(tabpageHandle:)` leaves it alone, because the share belongs to the window, not to Neovim. A drawer drag ends without `onLayoutChanged`, since nothing it changes is persisted.
 
+## Zoom Pane
+
+[The intents contract](../specs/architecture.md#output-intents-core--front-end) owns what Zoom Pane does. These are the macOS choices behind it. Every rule is [`PaneZoom`](../crates/wolf-macos/Sources/WolfKeyMap/README.md#panezoomswift)'s, so `PaneContainerView` holds one value, `zoomedPane`, and the panes the toggle considers are the tree's leaves plus the drawer, so the drawer can be zoomed.
+
+Zoom is front-end geometry, and Neovim is never told. `:only` would close the hidden windows, and `<C-w>_`, `<C-w>|` or `:resize` would size Neovim's frames, which are not the pane geometry: the front-end sizes each grid with `ResizeGrid`. The view never touches `tree`, its weights or `drawerWeight`, so an unzoom restores them exactly, and `paneLayout`, `leafContents()` and `capturedTerminals()` read the unzoomed tree that `state.json` records. Zoom Pane fires no `onLayoutChanged`, and a new view and `rebind(tabpageHandle:)` start unzoomed.
+
+A hidden pane keeps its last grid and session size. `paneRects()` returns the zoomed pane alone, and the grid and session sizing read it, so nothing is sent for a hidden pane; that rests on Neovim re-dividing only the grids the front-end has not sized, so a sized hidden grid holds with no request. Unzooming then needs no reflow: no hidden buffer rewraps and no hidden shell is resized twice. After a window resize while zoomed, the hidden panes are sized once, on unzoom, to the restored layout.
+
+Hidden terminal views and preview web views are kept with `isHidden` set, never removed. A removed web view reloads and loses its scroll state on unzoom, and one left shown paints over the zoomed pane, since a subview draws above the container's own paint. A hidden preview keeps its maps and its reloads, as a shown one does.
+
+The zoomed pane closing unzooms whatever closed it, Toggle Terminal on a zoomed drawer included, since the check runs right after `detectCloses()`. A `Split` intent the view applies unzooms first, whatever made it, a terminal split included, and so does a `DrawerOpen`, since a pane joining the layout must show. A hidden pane closing keeps the zoom, its siblings renormalizing as they do unzoomed, and so do a window resize, a tab switch and a focus move.
+
+What is inert while zoomed is the user's decision over unzooming, so do not "fix" it. `applyFocus` returns at once, so `<C-w>h/j/k/l`, the router's chords from a terminal and both drawer bridges do nothing, since no other pane is visible, and the tree dividers and the drawer's top edge get neither hit tests nor cursor rects. Toggle Terminal does nothing unless the drawer is the zoomed pane. The other-pane commands get `0` from a zoomed tree leaf, so they take their split path and unzoom, and `nil` from a zoomed drawer, as unzoomed.
+
+Neovim can still leave the zoomed pane by a path the view does not intercept, such as `<C-w>w`, `<C-w>p` or `:wincmd`. `updateActivePane()` undoes that focus move with `focus_win` for the zoomed pane and keeps it active, rather than activating a hidden pane the user would type into blind. Zooming sends `focus_win` for the zoomed pane's window too, as `closeActivePane()` does, so Neovim's current window is the pane the view shows even while a focus move is in flight.
+
 ## Nerd Font icons
 
 Every grid face, in the Neovim grid and the terminal panes alike, falls back to the bundled Symbols Nerd Font Mono for a glyph it lacks, so the Private Use Area icons that prompts, `ls` replacements and Neovim plugins print render under any configured family, as in Ghostty. The cascade list is built in [`CellMetrics`](../crates/wolf-macos/Sources/WolfMacOS/README.md#cellmetricsswift).

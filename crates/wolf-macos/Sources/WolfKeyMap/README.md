@@ -429,6 +429,26 @@ Purpose: The n-ary pane-layout tree behind the macOS split-panes UI, matching Ne
 
 - `setPairFraction` silently no-ops on a path or boundary that does not resolve, so re-read `dividers()` after any mutation rather than caching one.
 
+#### `PaneZoom.swift`
+
+Purpose: The rules of Zoom Pane: which pane a toggle zooms, which events unzoom, and what a zoom freezes or redirects. Foundation only, over `PaneId` and `Rect`.
+
+**Public API**
+
+- `zoomed(after:zoomed:active:panes:) -> PaneId?` — the zoomed pane after an `Event`. `panes` must be every pane of the view, the drawer included, or the drawer cannot be zoomed and a lone leaf beside the drawer reads as nothing to hide.
+- `freezesLayout(zoomed:)`, `allowsToggleTerminal(zoomed:drawer:)`, `refocuses(resolved:zoomed:)` — the inert actions and the focus move sent back.
+- `otherPaneTarget(zoomed:drawer:)` — read only while zoomed, in place of `OtherPaneSeam.target`.
+- `visibleRects(zoomed:rects:bounds:)` — the panes the view shows and where.
+
+**Decisions**
+
+- Every zoom rule is here, so the container holds only the zoomed pane's id and never touches the tree or its weights.
+- `visibleRects` shows every pane for a zoomed id absent from `rects`, so a missed unzoom never blanks the view.
+
+**Gotchas**
+
+- `PaneContainerView` applies `.panesChanged` right after close detection, `.split` and `.drawerOpen` in the intents that add a pane, and `.toggle` from Zoom Pane ([why](../../../../notes/wolf-macos-decisions.md#zoom-pane)).
+
 #### `PickerPanelSeam.swift`
 
 Purpose: The pure positioning arithmetic for a floating picker panel over its owning window's content.

@@ -232,6 +232,12 @@ It also pins the two policies that pull in opposite directions: a same-orientati
 - Since splits re-equalize, any unequal starting weights in a new case must come from a `setPairFraction` call.
 - The divider-span expectations come from `paneRects`, a separate recursion, and never from the formula `collectDividers` uses. wolf-gnome's divider round trip stayed green while both of its functions shared one wrong denominator, so agreement between two functions is not evidence that the quantity is right.
 
+#### `PaneZoomTests.swift`
+
+**Covers** — every `PaneZoom` rule, one decision per test: a toggle zooming the active pane, the drawer included, and unzooming when zoomed; a lone pane staying unzoomed; a split and a drawer open unzooming; only the zoomed pane's close unzooming; the frozen layout; Toggle Terminal acting unzoomed or on a zoomed drawer; the other-pane target; Neovim on a hidden pane being sent back; and `visibleRects` over two pane areas, unzoomed, and with a zoomed id that is gone.
+
+**Gotchas** — `visibleRects` results are compared as their id and rect arrays apart, since a tuple is not `Equatable`. The container's glue is [`ZoomPaneTests.swift`](../WolfMacOSTests/README.md#zoompanetestsswift)'s.
+
 #### `PickerPanelSeamTests.swift`
 
 **Covers**
