@@ -92,6 +92,8 @@ There is one drawer session per core: per window on GNOME and per project on mac
 
 Both front-ends keep the drawer outside their pane trees, as their existing decisions say. Core's router ignores split chords from the drawer's session, and `<C-w>c` or `<C-w>q` in the drawer closes it.
 
+The drawer opens at a third of the pane area. Dragging its top edge resizes it, and neither the drawer nor the editor tree goes below one pane's minimum height. The dragged share is remembered per window for the session: closing and reopening the drawer and a window resize keep it, while a new window and a relaunch start at a third. The share is never persisted.
+
 ## The render contract
 
 Each session publishes a lock-guarded `TerminalFrame` under [the snapshot-and-wake session pattern](../notes/wolf-core-decisions.md#the-snapshot-and-wake-session-pattern). `WolfCore::terminal_frame(id)` returns an owned read. The frame carries:

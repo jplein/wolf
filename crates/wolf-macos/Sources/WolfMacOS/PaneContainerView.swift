@@ -163,6 +163,14 @@ final class PaneContainerView: NSView {
   /// The interior divider a `mouseDown` grabbed, held across the drag so
   /// `mouseDragged` reweights the two adjacent panes; cleared on `mouseUp`.
   private var activeDivider: PaneTree.Divider?
+  /// Whether a `mouseDown` grabbed the drawer's top edge, held across the drag so
+  /// `mouseDragged` sets `drawerWeight`; cleared on `mouseUp`.
+  private var draggingDrawerEdge = false
+  /// The drawer's share of the pane area, set by a drag on its top edge. The view holds
+  /// it, outside `tree`, for this window's session: closing the drawer and a restart
+  /// keep it, a new view starts at `DrawerLayout.defaultWeight`, and it is never
+  /// persisted.
+  private var drawerWeight: Double = DrawerLayout.defaultWeight
 
   /// A saved pane-split layout awaiting rebuild once this view's first pane binds
   /// (consumed once in `onRenderWake`, gated like `pendingRefocusRebind`): Rust
@@ -506,20 +514,22 @@ final class PaneContainerView: NSView {
   private var paneAreaHeight: CGFloat { bounds.height }
 
   /// One pane's minimum height, in points: `minPaneRows` rows plus the statusbar
-  /// strip and both paddings, the floor a horizontal divider drag holds panes to.
+  /// strip and both paddings, the floor a horizontal divider drag holds panes to, and
+  /// the floor of both sides of the drawer's top edge.
   private var minPaneHeight: Double {
     Double(Self.minPaneRows) * Double(metrics.cellHeight) + Double(statusbarHeight)
       + 2 * EditorInset.padding
   }
 
-  /// The editor/drawer split of the pane area, with the drawer floored at
-  /// `minPaneHeight`. Every caller reads this one value, so their geometry agrees.
+  /// The editor/drawer split of the pane area at `drawerWeight`, with both sides
+  /// floored at `minPaneHeight`. Every caller reads this one value, so their geometry
+  /// agrees.
   private var drawerLayout: DrawerLayout {
     DrawerLayout(
       paneAreaHeight: Double(paneAreaHeight),
       hasDrawer: drawerPaneId != nil,
-      weight: DrawerLayout.defaultWeight,
-      minDrawerHeight: minPaneHeight)
+      weight: drawerWeight,
+      minPaneHeight: minPaneHeight)
   }
 
   /// Maps a pixel size to a grid `(cols, rows)`, each at least 1.
@@ -552,10 +562,16 @@ final class PaneContainerView: NSView {
 
   /// The editor tree's interior dividers, in this view's (flipped) coordinates,
   /// over the SAME `DrawerLayout.editorHeight` as `paneRects()`. The drawer lives
-  /// outside `tree`, so it has no divider here.
+  /// outside `tree`, so its top edge is not here: `isOnDrawerEdge(_:)` hit-tests it.
   private func editorDividers() -> [PaneTree.Divider] {
     let dl = drawerLayout
     return tree.dividers(width: Double(bounds.width), height: dl.editorHeight)
+  }
+
+  /// Whether `point` is within `dividerHitTolerance` of an open drawer's top edge.
+  private func isOnDrawerEdge(_ point: CGPoint) -> Bool {
+    drawerPaneId != nil
+      && abs(Double(point.y) - drawerLayout.editorHeight) <= Double(Self.dividerHitTolerance)
   }
 
   /// The per-pane GRID-RECT-inside-PANE-RECT geometry for `rect` (the pure seam
@@ -1007,6 +1023,11 @@ final class PaneContainerView: NSView {
       activeDivider = divider
       return
     }
+    // The drawer's top edge is not a tree divider, so it is hit-tested on its own.
+    if isOnDrawerEdge(point) {
+      draggingDrawerEdge = true
+      return
+    }
 
     for (id, rect) in paneRects() where rect.contains(point) {
       guard let binding = panes[id] else { return }
@@ -1063,6 +1084,20 @@ final class PaneContainerView: NSView {
       return
     }
 
+    // A drawer-edge drag sets the share; a `nil` weight keeps it.
+    if draggingDrawerEdge {
+      if drawerPaneId != nil,
+        let weight = DrawerLayout.draggedWeight(
+          pointerY: Double(point.y), paneAreaHeight: Double(paneAreaHeight),
+          minPaneHeight: minPaneHeight)
+      {
+        drawerWeight = weight
+        syncGridSizes()
+        needsDisplay = true
+      }
+      return
+    }
+
     if terminalMotion(event, button: Self.mouseButtonLeft) { return }
     guard let grid = mouseDragGrid, let rect = paneRect(forGrid: grid) else { return }
     let cell = geometry(for: gridRect(ofPane: rect), fullWidth: fullWidth(forGrid: grid))
@@ -1076,6 +1111,12 @@ final class PaneContainerView: NSView {
     if activeDivider != nil {
       activeDivider = nil
       onLayoutChanged?()
+      return
+    }
+    // No `onLayoutChanged`: the drawer's share is the view's for this session and is never
+    // persisted, and nothing else a drawer drag changes is.
+    if draggingDrawerEdge {
+      draggingDrawerEdge = false
       return
     }
 
@@ -1324,7 +1365,8 @@ final class PaneContainerView: NSView {
 
   /// Registers a resize-cursor rect around each interior divider line so hovering
   /// a divider shows `.resizeLeftRight` (vertical divider) / `.resizeUpDown`
-  /// (horizontal divider). Invalidated on every layout mutation (via
+  /// (horizontal divider), and a `.resizeUpDown` one around an open drawer's top
+  /// edge. Invalidated on every layout mutation (via
   /// `invalidateCursorRects(for:)` in `syncGridSizes`).
   override func resetCursorRects() {
     let tol = Self.dividerHitTolerance
@@ -1345,6 +1387,12 @@ final class PaneContainerView: NSView {
         cursor = .resizeUpDown
       }
       addCursorRect(rect, cursor: cursor)
+    }
+    if drawerPaneId != nil {
+      let edge = CGFloat(drawerLayout.editorHeight)
+      addCursorRect(
+        CGRect(x: 0, y: edge - tol, width: bounds.width, height: tol * 2),
+        cursor: .resizeUpDown)
     }
   }
 
@@ -1452,12 +1500,14 @@ final class PaneContainerView: NSView {
   /// the drawer, a divider drag, and every preview web view and per-window
   /// preview map go. The core's restart empties its snapshot too, so the next
   /// render wake's `ensureInitialPane` binds the fresh window and nothing of the
-  /// dead nvim. `pendingLayoutRebuild` is kept. Only the restart path reaches this function:
-  /// a tab switch uses `markRefocusRebind()`, where the panes survive.
+  /// dead nvim. `pendingLayoutRebuild` is kept, and so is `drawerWeight`, the drawer's
+  /// share, which belongs to the window and not to Neovim. Only the restart path reaches
+  /// this function: a tab switch uses `markRefocusRebind()`, where the panes survive.
   func rebind(tabpageHandle: Int64) {
     controllerTabpageHandle = tabpageHandle
     tree = PaneTree(root: Self.firstPaneId)
     activeDivider = nil
+    draggingDrawerEdge = false
     panes.removeAll()
     nextPaneId = Self.firstPaneId
     activePane = nil

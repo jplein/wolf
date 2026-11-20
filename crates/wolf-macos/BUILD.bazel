@@ -284,6 +284,7 @@ swift_test(
         "Tests/WolfMacOSTests/SymbolsFallbackTests.swift",
         "Tests/WolfMacOSTests/TerminalClosePaneTests.swift",
         "Tests/WolfMacOSTests/TerminalCursorFocusTests.swift",
+        "Tests/WolfMacOSTests/TerminalDrawerResizeTests.swift",
         "Tests/WolfMacOSTests/TerminalDrawerTests.swift",
         "Tests/WolfMacOSTests/TerminalLighthouseColourTests.swift",
         "Tests/WolfMacOSTests/TerminalNeighbourPaneTests.swift",
