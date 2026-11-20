@@ -1080,7 +1080,9 @@ impl WolfCore {
     ///
     /// When it returns, [`Snapshot::win_buffers`] and [`Snapshot::previews`] already
     /// report every returned window: the helper ends with a `wolf_buffers` emit and a
-    /// `wolf_barrier` request core answers only once that emit is applied.
+    /// `wolf_barrier` request core answers only once that emit is applied. When the document
+    /// marks a zoomed leaf, Neovim's current window and [`Snapshot::active_win`] are then the
+    /// first such leaf's window.
     ///
     /// `init.lua` opens nothing in a terminal leaf's window. Once the handles return, core
     /// starts a session of the user's shell for each terminal leaf, in the leaf's `path`

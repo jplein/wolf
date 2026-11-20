@@ -1,4 +1,4 @@
-// Pure Zoom Pane rules: which pane is zoomed, what unzooms, and what a zoom freezes.
+// Pure Zoom Pane rules: which pane is zoomed, what unzooms or re-zooms, and what a zoom freezes.
 
 import Foundation
 
@@ -6,7 +6,8 @@ import Foundation
 /// pane's id. A namespace (`enum` with only static members).
 ///
 /// Zoom is front-end geometry: nothing here reaches Neovim, the pane tree or its
-/// weights, which is what lets an unzoom restore the layout exactly.
+/// weights, which is what lets an unzoom restore the layout exactly. Only `state.json`
+/// records it, as a mark on the zoomed leaf.
 public enum PaneZoom {
   /// What happened to the view, for `zoomed(after:zoomed:active:panes:)`.
   public enum Event: Equatable {
@@ -18,6 +19,17 @@ public enum PaneZoom {
     case drawerOpen
     /// The view's panes changed, as after a close.
     case panesChanged
+    /// A focus move resolved, in the unzoomed layout, to `target`, or to `nil` when it
+    /// has none; Neovim's current window resolving to a pane is one too. A move to
+    /// another pane unzooms, so that pane shows; one with no target keeps the zoom.
+    case focusMove(target: PaneId?)
+    /// Toggle Terminal, with the drawer's id when it is open. It unzooms, so the drawer
+    /// toggles as it would unzoomed, unless the drawer is the zoomed pane: that zoom
+    /// lasts until `.panesChanged` sees the drawer close, so no hidden pane flashes first.
+    case toggleTerminal(drawer: PaneId?)
+    /// A launch restore rebuilt the pane `PaneId` from a leaf saved as zoomed. It zooms
+    /// that pane when it is among `panes` and they number more than one.
+    case restore(PaneId)
   }
 
   /// The zoomed pane after `event`, or `nil` for an unzoomed view.
@@ -39,21 +51,30 @@ public enum PaneZoom {
     case .panesChanged:
       guard let zoomed, panes.contains(zoomed) else { return nil }
       return zoomed
+    case .focusMove(let target):
+      guard let zoomed, target == nil || target == zoomed else { return nil }
+      return zoomed
+    case .toggleTerminal(let drawer):
+      guard let zoomed, let drawer, zoomed == drawer else { return nil }
+      return zoomed
+    case .restore(let pane):
+      guard panes.contains(pane), panes.count > 1 else { return nil }
+      return pane
     }
   }
 
-  /// Whether a zoom freezes the layout: focus moves do nothing, and the tree
-  /// dividers and the drawer's edge are neither hit-tested nor given a cursor.
-  /// The user chose this over unzooming, since no other pane is visible.
-  public static func freezesLayout(zoomed: PaneId?) -> Bool {
-    zoomed != nil
+  /// The pane a focus move starts from: the zoomed pane while zoomed, whatever pane
+  /// Neovim's window resolved to, else `from`. The move is resolved in the unzoomed
+  /// layout, as if made unzoomed from the pane the user sees.
+  public static func focusOrigin(zoomed: PaneId?, from: PaneId?) -> PaneId? {
+    zoomed ?? from
   }
 
-  /// Whether Toggle Terminal acts: always unzoomed, and while zoomed only when the
-  /// drawer is the zoomed pane, where closing it is closing the zoomed pane. The
-  /// user chose this over unzooming on a drawer toggle.
-  public static func allowsToggleTerminal(zoomed: PaneId?, drawer: PaneId?) -> Bool {
-    zoomed == nil || zoomed == drawer
+  /// Whether a zoom freezes the tree dividers and the drawer's edge, which are then
+  /// neither hit-tested nor given a cursor, since they are hidden. Focus moves are not
+  /// frozen: `.focusMove` unzooms on them.
+  public static func freezesLayout(zoomed: PaneId?) -> Bool {
+    zoomed != nil
   }
 
   /// The other-pane commands' target while zoomed: the zoomed pane is the only
@@ -61,13 +82,6 @@ public enum PaneZoom {
   /// gets `nil`, as it does unzoomed. Read only while zoomed.
   public static func otherPaneTarget(zoomed: PaneId, drawer: PaneId?) -> OtherPaneSeam.Target? {
     zoomed == drawer ? nil : .split
-  }
-
-  /// Whether Neovim's current window, resolved to `resolved`, must be sent back
-  /// to the zoomed pane: it left by a path the view does not intercept
-  /// (`<C-w>w`, `:wincmd`), and the user would otherwise type into a hidden pane.
-  public static func refocuses(resolved: PaneId?, zoomed: PaneId?) -> Bool {
-    zoomed != nil && resolved != nil && resolved != zoomed
   }
 
   /// The panes a view shows and where: the zoomed pane alone over `bounds`, or

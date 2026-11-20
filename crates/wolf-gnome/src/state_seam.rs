@@ -737,6 +737,7 @@ mod tests {
             path: path.to_string(),
             preview: false,
             terminal: false,
+            zoomed: false,
         }
     }
 
@@ -746,6 +747,7 @@ mod tests {
             path: path.to_string(),
             preview: true,
             terminal: false,
+            zoomed: false,
         }
     }
 
@@ -981,6 +983,7 @@ mod tests {
                             path: SAVED_FILE.to_string(),
                             preview: false,
                             terminal: false,
+                            zoomed: false,
                         }),
                     }],
                     window_size: Some(SAVED_SIZE),
@@ -1101,6 +1104,7 @@ mod tests {
                             path: SAVED_FILE.to_string(),
                             preview: false,
                             terminal: false,
+                            zoomed: false,
                         }),
                     }],
                     window_size: Some(SAVED_SIZE),

@@ -26,8 +26,8 @@ public func wolf_ffi_state_snapshot_add_window(_ x: Double, _ y: Double, _ width
 public func wolf_ffi_state_snapshot_add_tab<GenericIntoRustString: IntoRustString>(_ cwd: GenericIntoRustString, _ sidebar_visible: Bool) {
     __swift_bridge__$wolf_ffi_state_snapshot_add_tab({ let rustString = cwd.intoRustString(); rustString.isOwned = false; return rustString.ptr }(), sidebar_visible)
 }
-public func wolf_ffi_state_layout_push_leaf<GenericIntoRustString: IntoRustString>(_ path: GenericIntoRustString, _ preview: Bool, _ terminal: Bool, _ weight: Double) {
-    __swift_bridge__$wolf_ffi_state_layout_push_leaf({ let rustString = path.intoRustString(); rustString.isOwned = false; return rustString.ptr }(), preview, terminal, weight)
+public func wolf_ffi_state_layout_push_leaf<GenericIntoRustString: IntoRustString>(_ path: GenericIntoRustString, _ preview: Bool, _ terminal: Bool, _ zoomed: Bool, _ weight: Double) {
+    __swift_bridge__$wolf_ffi_state_layout_push_leaf({ let rustString = path.intoRustString(); rustString.isOwned = false; return rustString.ptr }(), preview, terminal, zoomed, weight)
 }
 public func wolf_ffi_state_layout_push_split(_ orientation: UInt8, _ child_count: UInt32, _ weight: Double) {
     __swift_bridge__$wolf_ffi_state_layout_push_split(orientation, child_count, weight)
@@ -2172,6 +2172,10 @@ extension FfiPaneNodeRef {
 
     public func is_terminal() -> Bool {
         __swift_bridge__$FfiPaneNode$is_terminal(ptr)
+    }
+
+    public func is_zoomed() -> Bool {
+        __swift_bridge__$FfiPaneNode$is_zoomed(ptr)
     }
 
     public func leaf_path() -> RustString {

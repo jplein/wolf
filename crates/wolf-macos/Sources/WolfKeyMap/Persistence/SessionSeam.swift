@@ -33,9 +33,11 @@ public enum SessionSeam {
   /// It refuses when `hasFolder` and `cwd` is empty, and when any leaf of `layout`
   /// is `.unreported` or missing from `content`. A view without a folder persists
   /// `cwd: ""`, whatever Neovim reports, and a lone empty leaf persists no layout.
+  /// The leaf whose id is `zoomed` is marked zoomed; the drawer is no leaf of `layout`, so
+  /// a zoomed drawer persists unzoomed.
   public static func gatherTab(
     hasFolder: Bool, cwd: String, sidebarVisible: Bool, layout: PaneLayout,
-    content: [PaneId: LeafContent]
+    content: [PaneId: LeafContent], zoomed: PaneId? = nil
   ) -> TabGather {
     if hasFolder && cwd.isEmpty { return .refuse }
     var paths: [PaneId: String] = [:]
@@ -56,7 +58,7 @@ public enum SessionSeam {
       }
     }
     let node = PaneLayoutCodec.encode(
-      layout, paths: paths, previews: previews, terminals: terminals)
+      layout, paths: paths, previews: previews, terminals: terminals, zoomed: zoomed)
     return .ready(
       RestoreSeam.SavedTab(
         cwd: hasFolder ? cwd : "", sidebarVisible: sidebarVisible,

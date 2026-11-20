@@ -678,19 +678,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         wolf_ffi_state_snapshot_add_tab(tab.cwd, tab.sidebarVisible)
         // An empty-state lone pane has no layout and pushes nothing.
         guard let layout = tab.layout else { continue }
-        for token in PaneLayoutCodec.postOrderTokens(layout) {
-          switch token {
-          case .leaf(let path, let preview, let terminal, let weight):
-            wolf_ffi_state_layout_push_leaf(path, preview, terminal, weight)
-          case .split(let orientation, let childCount, let weight):
-            let orient: UInt8 = orientation == .vertical ? 1 : 0
-            wolf_ffi_state_layout_push_split(orient, UInt32(childCount), weight)
-          }
-        }
-        wolf_ffi_state_layout_commit_to_tab()
+        Self.pushLayout(layout)
       }
     }
     wolf_ffi_state_snapshot_commit()
+  }
+
+  /// Pushes `layout` through the write-side layout builder, zoom marks included, and
+  /// commits it to the last tab added to the snapshot.
+  static func pushLayout(_ layout: SavedPaneNode) {
+    for token in PaneLayoutCodec.postOrderTokens(layout) {
+      switch token {
+      case .leaf(let path, let preview, let terminal, let zoomed, let weight):
+        wolf_ffi_state_layout_push_leaf(path, preview, terminal, zoomed, weight)
+      case .split(let orientation, let childCount, let weight):
+        let orient: UInt8 = orientation == .vertical ? 1 : 0
+        wolf_ffi_state_layout_push_split(orient, UInt32(childCount), weight)
+      }
+    }
+    wolf_ffi_state_layout_commit_to_tab()
   }
 
   /// Refreshes the tab-bar titles for `window`'s whole tab group from each tab's
@@ -930,12 +936,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
   }
 
   /// Recursively projects an opaque bridge `FfiPaneNode` into a plain
-  /// `SavedPaneNode` value (element refs must not outlive the bridge read).
-  private static func savedPaneNode(from node: FfiPaneNode) -> SavedPaneNode {
+  /// `SavedPaneNode` value, zoom marks included (element refs must not outlive the
+  /// bridge read).
+  static func savedPaneNode(from node: FfiPaneNode) -> SavedPaneNode {
     if node.is_leaf() {
       return .leaf(
         path: node.leaf_path().toString(), preview: node.is_preview(),
-        terminal: node.is_terminal())
+        terminal: node.is_terminal(), zoomed: node.is_zoomed())
     }
     let orientation: Orientation = node.orientation() == 1 ? .vertical : .horizontal
     var weights: [Double] = []

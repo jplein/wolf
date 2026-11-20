@@ -613,8 +613,7 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
   }
 
   /// Toggles this window's per-project terminal drawer (`:WolfTerminal`) through
-  /// `PaneContainerView.toggleTerminal()`, which refuses it while a pane other than the
-  /// drawer is zoomed.
+  /// `PaneContainerView.toggleTerminal()`, which unzooms first.
   func toggleTerminal() {
     paneContainer?.toggleTerminal()
   }
@@ -804,7 +803,7 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
     return SessionSeam.gatherTab(
       hasFolder: hasFolder, cwd: handle.cwd_for_tabpage(tabpageHandle).toString(),
       sidebarVisible: sidebarVisible, layout: paneContainer.paneLayout,
-      content: paneContainer.leafContents())
+      content: paneContainer.leafContents(), zoomed: paneContainer.zoomedPaneId)
   }
 
   /// Whether this window's active document is in Neovim visual mode

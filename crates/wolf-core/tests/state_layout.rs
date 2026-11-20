@@ -25,6 +25,10 @@
 //!   * TERMINAL: a leaf's `terminal: bool` round-trips; only a terminal leaf writes a
 //!     `terminal` key, so files without terminal panes stay byte-stable, and a leaf with
 //!     no `terminal` key loads as `terminal: false`.
+//!   * ZOOM: a leaf's `zoomed: bool` round-trips, only a zoomed leaf writes the key, and a leaf
+//!     with no `zoomed` key loads unzoomed. Load clears the zoom of an editor or preview leaf
+//!     whose file is gone, and keeps that of a leaf on an existing file, a terminal leaf and an
+//!     unnamed leaf, which all restore.
 //!
 //! Needs NO nvim and no network: everything is driven through explicit `tempfile`
 //! tempdirs passed to `StateStore::open` / `load_state`.
@@ -64,6 +68,7 @@ fn leaf(path: &str) -> PaneNode {
         path: path.to_string(),
         preview: false,
         terminal: false,
+        zoomed: false,
     }
 }
 
@@ -75,6 +80,7 @@ fn preview_leaf(path: &str) -> PaneNode {
         path: path.to_string(),
         preview: true,
         terminal: false,
+        zoomed: false,
     }
 }
 
@@ -84,6 +90,7 @@ fn terminal_leaf(dir: &str) -> PaneNode {
         path: dir.to_string(),
         preview: false,
         terminal: true,
+        zoomed: false,
     }
 }
 
@@ -478,6 +485,324 @@ fn terminal_leaf_round_trips_and_only_it_writes_the_key() {
     );
 }
 
+// === Zoom: the zoomed leaf is marked on the leaf, and load clears a mark restore cannot honour ===
+
+/// `node`, a leaf, marked as its tab's zoomed pane.
+fn zoomed(node: PaneNode) -> PaneNode {
+    match node {
+        PaneNode::Leaf {
+            path,
+            preview,
+            terminal,
+            ..
+        } => PaneNode::Leaf {
+            path,
+            preview,
+            terminal,
+            zoomed: true,
+        },
+        split => panic!("only a leaf can be zoomed, got {split:?}"),
+    }
+}
+
+/// The `zoomed` flag of every leaf of `node`, in DFS order.
+fn zoom_flags(node: &PaneNode) -> Vec<bool> {
+    match node {
+        PaneNode::Leaf { zoomed, .. } => vec![*zoomed],
+        PaneNode::Split { children, .. } => children.iter().flat_map(zoom_flags).collect(),
+    }
+}
+
+/// A temp dir holding three existing Markdown files, with their paths. Load keeps the zoom of
+/// a leaf on one of them, which the `/proj/…` paths of the other fixtures cannot carry.
+fn existing_files() -> (tempfile::TempDir, [String; 3]) {
+    let dir = tempdir().expect("create the temp dir for the existing files");
+    let paths = ["first.md", "second.md", "third.md"].map(|name| {
+        let path = dir.path().join(name);
+        write(&path, "# Existing\n");
+        path.to_str().expect("temp path is UTF-8").to_string()
+    });
+    (dir, paths)
+}
+
+/// One window holding `tabs`, at the fixture geometry.
+fn one_window(tabs: Vec<TabState>) -> WolfState {
+    WolfState {
+        windows: vec![WindowState {
+            x: WIN_X,
+            y: WIN_Y,
+            width: WIN_WIDTH,
+            height: WIN_HEIGHT,
+            tabs,
+        }],
+    }
+}
+
+/// Writes `tree` to `dir/state.json` through a `StateStore`, as the front-ends do.
+fn write_through_store(dir: &Path, tree: &WolfState) {
+    let store = StateStore::open(dir);
+    store.set_snapshot(tree.clone());
+    assert!(
+        store.flush(FLUSH_TIMEOUT),
+        "flush after set_snapshot should complete within {FLUSH_TIMEOUT:?}"
+    );
+}
+
+/// A vertical split of `children` with equal weights.
+fn vertical(children: Vec<PaneNode>) -> PaneNode {
+    let n = children.len();
+    PaneNode::Split {
+        orientation: PaneOrientation::Vertical,
+        weights: vec![1.0 / n as f64; n],
+        children,
+    }
+}
+
+#[test]
+fn zoomed_leaf_round_trips_through_store_and_load() {
+    let dir = tempdir().expect("create temp state dir");
+    let (_files, [first, second, _]) = existing_files();
+    let tree = one_window(vec![tab(
+        "/proj",
+        Some(vertical(vec![leaf(&first), zoomed(leaf(&second))])),
+    )]);
+
+    write_through_store(dir.path(), &tree);
+    let loaded = load_state(dir.path()).expect("load_state should parse the written file");
+    assert_eq!(
+        loaded.windows[0].tabs[0].layout.as_ref().map(zoom_flags),
+        Some(vec![false, true]),
+        "the second leaf, on an existing file, must load zoomed and the first unzoomed. [false, \
+         false] means the flag is not written or not read back, so a relaunch never re-zooms; \
+         any other mark means it landed on the wrong leaf"
+    );
+    assert_eq!(
+        loaded, tree,
+        "the whole tree must round-trip, the zoom mark with every path and weight"
+    );
+}
+
+#[test]
+fn v1_layout_leaf_without_zoomed_loads_unzoomed() {
+    let dir = tempdir().expect("create temp state dir");
+    let (_files, [first, second, _]) = existing_files();
+    let terminal_dir = dir.path().to_str().expect("temp path is UTF-8");
+
+    // Every leaf kind, none with a `zoomed` key. A terminal and an unnamed leaf keep a zoom at
+    // load, so their `false` can only come from the field's default.
+    let no_zoomed = serde_json::json!({
+        "version": 1,
+        "windows": [{
+            "x": WIN_X, "y": WIN_Y, "width": WIN_WIDTH, "height": WIN_HEIGHT,
+            "tabs": [{
+                "cwd": "/proj",
+                "sidebar_visible": true,
+                "layout": {
+                    "type": "split",
+                    "orientation": "vertical",
+                    "weights": [0.25, 0.25, 0.25, 0.25],
+                    "children": [
+                        { "type": "leaf", "path": first },
+                        { "type": "leaf", "path": second, "preview": true },
+                        { "type": "leaf", "path": terminal_dir, "terminal": true },
+                        { "type": "leaf", "path": "" }
+                    ]
+                }
+            }]
+        }]
+    });
+    write(&dir.path().join(STATE_FILE_NAME), &no_zoomed.to_string());
+
+    let loaded = load_state(dir.path()).expect(
+        "a v1 file whose leaves have no `zoomed` key must still load; None means `zoomed` is not \
+         `#[serde(default)]`, and every file written before the field is discarded at launch",
+    );
+    assert_eq!(
+        loaded.windows[0].tabs[0].layout.as_ref().map(zoom_flags),
+        Some(vec![false; 4]),
+        "every leaf without a `zoomed` key must load unzoomed: editor, preview, terminal and \
+         unnamed, in that order"
+    );
+}
+
+#[test]
+fn only_a_zoomed_leaf_writes_the_key() {
+    let dir = tempdir().expect("create temp state dir");
+    let (_files, [first, second, third]) = existing_files();
+    let tree = one_window(vec![tab(
+        "/proj",
+        Some(vertical(vec![
+            leaf(&first),
+            zoomed(leaf(&second)),
+            leaf(&third),
+        ])),
+    )]);
+
+    write_through_store(dir.path(), &tree);
+    let text = read(&dir.path().join(STATE_FILE_NAME));
+    let disk: Value = serde_json::from_str(&text)
+        .unwrap_or_else(|e| panic!("state.json is not valid JSON ({e}):\n{text}"));
+    let mut leaves = Vec::new();
+    disk_leaves(&disk["windows"][0]["tabs"][0]["layout"], &mut leaves);
+    assert_eq!(
+        leaves.len(),
+        3,
+        "the on-disk layout must hold three leaves:\n{text}"
+    );
+    assert_eq!(
+        leaves[1].get("zoomed"),
+        Some(&Value::Bool(true)),
+        "the zoomed leaf must write `\"zoomed\": true`; anything else loses the zoom at the next \
+         launch:\n{text}"
+    );
+    assert_eq!(
+        (leaves[0].get("zoomed"), leaves[2].get("zoomed")),
+        (None, None),
+        "an unzoomed leaf must write no `zoomed` key, so a file without a zoom stays \
+         byte-identical; a `false` key means the field is not `skip_serializing_if = \
+         Not::not`, a `true` one that the mark spread to its siblings:\n{text}"
+    );
+}
+
+#[test]
+fn a_zoomed_leaf_whose_file_is_gone_loads_unzoomed() {
+    let dir = tempdir().expect("create temp state dir");
+    let (files, [kept, _, _]) = existing_files();
+    let removed = files.path().join("removed.md");
+    let removed_source = files.path().join("removed-source.md");
+    for path in [&removed, &removed_source] {
+        write(path, "# Removed\n");
+        std::fs::remove_file(path).unwrap_or_else(|e| panic!("removing {}: {e}", path.display()));
+    }
+    let removed = removed.to_str().expect("temp path is UTF-8");
+    let removed_source = removed_source.to_str().expect("temp path is UTF-8");
+
+    // Tab 0 zooms an editor leaf whose file is gone, tab 1 a preview leaf whose source is gone.
+    let on_disk = serde_json::json!({
+        "version": 1,
+        "windows": [{
+            "x": WIN_X, "y": WIN_Y, "width": WIN_WIDTH, "height": WIN_HEIGHT,
+            "tabs": [
+                {
+                    "cwd": "/proj",
+                    "sidebar_visible": true,
+                    "layout": {
+                        "type": "split",
+                        "orientation": "vertical",
+                        "weights": [0.3, 0.7],
+                        "children": [
+                            { "type": "leaf", "path": removed, "preview": false, "zoomed": true },
+                            { "type": "leaf", "path": kept, "preview": false }
+                        ]
+                    }
+                },
+                {
+                    "cwd": "/proj",
+                    "sidebar_visible": true,
+                    "layout": {
+                        "type": "split",
+                        "orientation": "horizontal",
+                        "weights": [0.6, 0.4],
+                        "children": [
+                            { "type": "leaf", "path": kept, "preview": false },
+                            {
+                                "type": "leaf",
+                                "path": removed_source,
+                                "preview": true,
+                                "zoomed": true
+                            }
+                        ]
+                    }
+                }
+            ]
+        }]
+    })
+    .to_string();
+    let state_path = dir.path().join(STATE_FILE_NAME);
+    write(&state_path, &on_disk);
+
+    let loaded = load_state(dir.path()).expect("the file must load");
+    let tabs = &loaded.windows[0].tabs;
+    assert_eq!(
+        tabs[0].layout,
+        Some(PaneNode::Split {
+            orientation: PaneOrientation::Vertical,
+            weights: vec![0.3, 0.7],
+            children: vec![leaf(removed), leaf(&kept)],
+        }),
+        "an editor leaf whose file is gone must load unzoomed, with every path, weight and \
+         orientation unchanged. Still zoomed means load does not clear a zoom restore cannot \
+         honour, and the relaunch zooms a pane that does not come back"
+    );
+    assert_eq!(
+        tabs[1].layout,
+        Some(PaneNode::Split {
+            orientation: PaneOrientation::Horizontal,
+            weights: vec![0.6, 0.4],
+            children: vec![leaf(&kept), preview_leaf(removed_source)],
+        }),
+        "a preview leaf whose source is gone must load unzoomed, with every path, weight and \
+         orientation unchanged. Still zoomed, while tab 0's editor leaf loads unzoomed, means \
+         the clearing skips preview leaves"
+    );
+    assert_eq!(
+        read(&state_path),
+        on_disk,
+        "clearing a zoom at load must leave state.json byte-for-byte as it was"
+    );
+}
+
+#[test]
+fn a_restorable_zoomed_leaf_keeps_its_zoom() {
+    let dir = tempdir().expect("create temp state dir");
+    let (files, [first, second, _]) = existing_files();
+    let gone_dir = files.path().join("removed-dir");
+    assert!(
+        !gone_dir.exists(),
+        "precondition: the terminal leaf's directory must not exist"
+    );
+    let gone_dir = gone_dir.to_str().expect("temp path is UTF-8");
+
+    let tree = one_window(vec![
+        tab(
+            "/proj",
+            Some(vertical(vec![zoomed(leaf(&first)), leaf(&second)])),
+        ),
+        tab(
+            "/proj",
+            Some(vertical(vec![
+                leaf(&first),
+                zoomed(terminal_leaf(gone_dir)),
+            ])),
+        ),
+        tab(
+            "/proj",
+            Some(vertical(vec![zoomed(leaf("")), leaf(&second)])),
+        ),
+    ]);
+
+    write_through_store(dir.path(), &tree);
+    let loaded = load_state(dir.path()).expect("load_state should parse the written file");
+    let flags: Vec<Option<Vec<bool>>> = loaded.windows[0]
+        .tabs
+        .iter()
+        .map(|t| t.layout.as_ref().map(zoom_flags))
+        .collect();
+    assert_eq!(
+        flags,
+        vec![
+            Some(vec![true, false]),
+            Some(vec![false, true]),
+            Some(vec![true, false]),
+        ],
+        "each restorable zoomed leaf must keep its zoom at load. Tab 0 unzoomed means the \
+         existence check fails an existing file; tab 1 that a terminal leaf's directory is \
+         checked, though a terminal leaf restores without it; tab 2 that an unnamed leaf is \
+         checked, though `\"\"` restores as an empty buffer"
+    );
+    assert_eq!(loaded, tree, "nothing else about the three tabs may change");
+}
+
 // === `rebuild_layout_spec`: the wire shape `_G.wolf_rebuild_layout` decodes, not PaneNode's ===
 // Assertions parse it back and compare fields, since key order is not part of the contract.
 
@@ -561,6 +886,22 @@ fn rebuild_layout_spec_matches_the_lua_contract() {
         Some(&Value::Bool(false)),
         "`terminal` must be present and false for an editor leaf, beside `preview`; the Lua side \
          branches on it before the preview and path branches"
+    );
+
+    // --- the zoom mark ------------------------------------------------------
+    assert_eq!(
+        doc.get("zoomed"),
+        Some(&Value::Bool(false)),
+        "`zoomed` must be present and false for an unzoomed leaf; `init.lua` ends the rebuild on \
+         the first leaf whose `zoomed` is true"
+    );
+    let zoomed_doc = parse_spec(&zoomed(leaf("/proj/only.md")));
+    assert_eq!(
+        zoomed_doc.get("zoomed"),
+        Some(&Value::Bool(true)),
+        "a zoomed leaf must render `\"zoomed\": true`; without it the rebuild leaves Neovim's \
+         current window on the last rebuilt leaf, and the restored zoom is undone. Got: \
+         {zoomed_doc}"
     );
 
     // --- a terminal leaf ----------------------------------------------------

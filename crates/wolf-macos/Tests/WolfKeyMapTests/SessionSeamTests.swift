@@ -56,11 +56,11 @@ final class SessionSeamTests: XCTestCase {
 
   private func gather(
     hasFolder: Bool = true, cwd: String? = nil, sidebarVisible: Bool = true,
-    layout: PaneLayout, content: Content
+    layout: PaneLayout, content: Content, zoomed: PaneId? = nil
   ) -> SessionSeam.TabGather {
     SessionSeam.gatherTab(
       hasFolder: hasFolder, cwd: cwd ?? folder, sidebarVisible: sidebarVisible, layout: layout,
-      content: content)
+      content: content, zoomed: zoomed)
   }
 
   // MARK: - Closing a view (C2)
@@ -320,6 +320,36 @@ final class SessionSeamTests: XCTestCase {
           cwd: folder, sidebarVisible: true, layout: .leaf(path: fileA, preview: false))),
       "the same tab with its cwd reported must be ready; .refuse here means the refusal "
         + "above holds for every tab, not for a missing cwd")
+  }
+
+  func testGatherTabPersistsTheZoomedLeafButNotAZoomedDrawer() {
+    let content: Content = [
+      p1: .buffer(path: fileA), p2: .buffer(path: fileB), p3: .buffer(path: fileC),
+    ]
+    func expected(zoomingB: Bool) -> SessionSeam.TabGather {
+      .ready(
+        RestoreSeam.SavedTab(
+          cwd: folder, sidebarVisible: true,
+          layout: .split(
+            orientation: .vertical, weights: [0.6, 0.4],
+            children: [
+              .leaf(path: fileA, preview: false),
+              .split(
+                orientation: .horizontal, weights: [0.25, 0.75],
+                children: [
+                  .leaf(path: fileB, preview: false, zoomed: zoomingB),
+                  .leaf(path: fileC, preview: false),
+                ]),
+            ])))
+    }
+    XCTAssertEqual(
+      gather(layout: nested, content: content, zoomed: p2), expected(zoomingB: true),
+      "zoomed on pane 2, the saved layout must mark its leaf, beta.md, and no other. No mark"
+        + " means gatherTab drops the zoom from the saved state, so a relaunch restores unzoomed")
+    let drawer: PaneId = 9
+    XCTAssertEqual(
+      gather(layout: nested, content: content, zoomed: drawer), expected(zoomingB: false),
+      "zoomed on the drawer, which is not persisted, the saved layout must mark no leaf")
   }
 
   // MARK: - Contribution and its cache (C1, C5, C6, C7)

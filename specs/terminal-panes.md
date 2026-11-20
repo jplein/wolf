@@ -164,7 +164,7 @@ Core replaces the `TermLeave` trigger. When a terminal pane loses focus, through
 
 Shells never survive a quit, and the drawer is not persisted.
 
-A split terminal pane persists as `PaneNode::Leaf { path: <cwd>, preview: false, terminal: true }`. The `terminal` field is serde-defaulted to `false`, and `path` holds the directory to start in, chosen by the cwd rule under [Terminal panes in the pane tree](#terminal-panes-in-the-pane-tree). Its `abs_path` is `""`, so no file path is persisted for it.
+A split terminal pane persists as `PaneNode::Leaf { path: <cwd>, preview: false, terminal: true }`. The `terminal` field is serde-defaulted to `false`, and `path` holds the directory to start in, chosen by the cwd rule under [Terminal panes in the pane tree](#terminal-panes-in-the-pane-tree). Its `abs_path` is `""`, so no file path is persisted for it. A zoomed terminal leaf carries `zoomed: true` and keeps it at load whether or not its directory exists, since the leaf restores either way, while a zoomed drawer persists unzoomed.
 
 The rebuild-layout document gains `{ leaf = true, terminal = true }`, for which `init.lua` opens nothing in the window. Once `rebuild_layout` returns the window handles, core starts a session per terminal leaf and binds it into that window. The session starts in `path` when it is an existing directory, else in the window's tabpage cwd. A front-end reads the cwd it persists through `terminal_cwd(id)`.
 

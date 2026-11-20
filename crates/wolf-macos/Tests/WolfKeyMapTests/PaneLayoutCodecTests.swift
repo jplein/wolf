@@ -252,4 +252,85 @@ final class PaneLayoutCodecTests: XCTestCase {
     XCTAssertEqual(leafIds, [firstLeaf], "a single-leaf saved tree yields one leaf id")
     XCTAssertEqual(tree.leaves(), [firstLeaf], "the rebuilt single-leaf tree has just that leaf")
   }
+
+  // MARK: - The zoomed leaf (P1 to P3)
+
+  /// The drawer's id: never a layout leaf, as in the container.
+  private let drawerId: PaneId = 9
+
+  /// P1: `encode` marks the leaf whose id is `zoomed` and no other; a `zoomed` id that is not a
+  /// leaf of the layout, the drawer's, marks none.
+  func testEncodeMarksOnlyTheZoomedLeaf() {
+    let tree = PaneTree(root: p1)
+    tree.split(p1, p2, .vertical)
+    tree.split(p2, p3, .vertical)
+    let paths: [PaneId: String] = [p1: "/notes/a.md", p2: "/notes/b.md", p3: "/notes/c.md"]
+    let unmarked: [SavedPaneNode] = [
+      .leaf(path: "/notes/a.md", preview: false),
+      .leaf(path: "/notes/b.md", preview: false),
+      .leaf(path: "/notes/c.md", preview: false),
+    ]
+    guard case .split(_, _, let thirds) = tree.layout() else {
+      return XCTFail("premise: splitting 1 and then 2 vertically must give a split")
+    }
+
+    XCTAssertEqual(
+      PaneLayoutCodec.encode(tree.layout(), paths: paths, previews: [], zoomed: p2),
+      .split(
+        orientation: .vertical, weights: thirds,
+        children: [
+          unmarked[0], .leaf(path: "/notes/b.md", preview: false, zoomed: true), unmarked[2],
+        ]),
+      "zoomed on 2, only the middle leaf may carry zoomed: true. No mark means encode ignores"
+        + " `zoomed` and the zoom is never saved; a mark on 1 or 3 too means it marks every leaf")
+    XCTAssertEqual(
+      PaneLayoutCodec.encode(tree.layout(), paths: paths, previews: [], zoomed: drawerId),
+      .split(orientation: .vertical, weights: thirds, children: unmarked),
+      "zoomed on the drawer, which is not a layout leaf, no leaf may be marked: the drawer is"
+        + " not persisted, so a zoomed drawer persists unzoomed")
+  }
+
+  /// P2: `zoomedLeafIndex` is the depth-first index of the first marked leaf, which the restore
+  /// zips onto its rebuilt leaf ids.
+  func testZoomedLeafIndexIsTheDepthFirstIndex() {
+    func node(_ marked: Set<String>) -> SavedPaneNode {
+      func leaf(_ path: String) -> SavedPaneNode {
+        .leaf(path: path, preview: false, zoomed: marked.contains(path))
+      }
+      let inner: SavedPaneNode = .split(
+        orientation: .horizontal, weights: [0.5, 0.5], children: [leaf("/b.md"), leaf("/c.md")])
+      return .split(
+        orientation: .vertical, weights: [0.5, 0.5], children: [leaf("/a.md"), inner])
+    }
+    XCTAssertEqual(
+      node(["/b.md"]).zoomedLeafIndex, 1,
+      "b, the first leaf of the nested split, is depth-first leaf 1; 0 means the index counts"
+        + " within its split, nil that the mark is not found")
+    XCTAssertEqual(
+      node(["/c.md"]).zoomedLeafIndex, 2,
+      "c is depth-first leaf 2; 1 means the index is the top-level child's")
+    XCTAssertEqual(
+      node(["/b.md", "/c.md"]).zoomedLeafIndex, 1,
+      "with two marks, from a hand edit, the first in depth-first order wins, as init.lua's")
+    XCTAssertNil(node([]).zoomedLeafIndex, "an unmarked layout has no zoomed leaf")
+  }
+
+  /// P3: the zoom mark survives the post-order tokens the FFI push-builder replays.
+  func testTheZoomedFlagRoundTripsThroughTokens() {
+    let node: SavedPaneNode = .split(
+      orientation: .vertical, weights: [0.5, 0.5],
+      children: [
+        .leaf(path: "/a.md", preview: false),
+        .leaf(path: "/notes/sub", preview: false, terminal: true, zoomed: true),
+      ])
+    let tokens = PaneLayoutCodec.postOrderTokens(node)
+    XCTAssertEqual(
+      tokens[1],
+      .leaf(path: "/notes/sub", preview: false, terminal: true, zoomed: true, weight: 0.5),
+      "the zoomed leaf's token must carry zoomed: true; false loses the zoom on its way to the"
+        + " FFI push-builder")
+    XCTAssertEqual(
+      PaneLayoutCodec.decodeTokens(tokens), node,
+      "a zoomed leaf must round-trip through the tokens with its mark")
+  }
 }

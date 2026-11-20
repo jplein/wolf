@@ -841,9 +841,13 @@ function _G.wolf_rebuild_layout(spec_json)
 		return {}
 	end
 
+	local zoomed_win = nil
 	local function realize(node)
 		if node.leaf then
 			local win = vim.api.nvim_get_current_win()
+			if node.zoomed == true and zoomed_win == nil then
+				zoomed_win = win
+			end
 			if node.terminal then
 				-- Core starts the session and binds it here once the handles return; path is its cwd.
 				return { win }
@@ -882,6 +886,10 @@ function _G.wolf_rebuild_layout(spec_json)
 	end
 
 	local handles = realize(spec)
+	-- Its WinEnter reports the zoomed leaf ahead of the barrier, so no focus move is left in flight.
+	if zoomed_win ~= nil and vim.api.nvim_win_is_valid(zoomed_win) then
+		vim.api.nvim_set_current_win(zoomed_win)
+	end
 	-- Core reports every returned window before the RPC answers.
 	if _G.wolf_sync_buffers then
 		_G.wolf_sync_buffers()

@@ -21,7 +21,7 @@
 //!   * `FfiWindowState::x()/y()/width()/height() -> f64`, `tabs() -> Vec<FfiTabState>`
 //!   * `FfiTabState::cwd() -> String`, `sidebar_visible() -> bool`
 //!   * the layout's `FfiPaneNode`: `is_leaf()`, `is_preview()`, `is_terminal()`,
-//!     `leaf_path()`, `child_count()`, `child(i)`
+//!     `is_zoomed()`, `leaf_path()`, `child_count()`, `child(i)`
 //!
 //! The handle has no state setters and the core does not mirror cwd into the
 //! store, so this test needs NO nvim — it is a pure builder round-trip, driven
@@ -218,8 +218,14 @@ fn snapshot_builder_round_trips_the_whole_tree() {
     wolf_ffi_state_snapshot_add_tab(W1_TAB0_CWD.to_string(), false);
     // Post-order: leaves first, then the split pops the top two. Both are editor leaves; step 3c
     // covers a preview leaf.
-    wolf_ffi_state_layout_push_leaf(LEAF_LEFT_PATH.to_string(), false, false, HALF_WEIGHT);
-    wolf_ffi_state_layout_push_leaf(LEAF_RIGHT_PATH.to_string(), false, false, HALF_WEIGHT);
+    wolf_ffi_state_layout_push_leaf(LEAF_LEFT_PATH.to_string(), false, false, false, HALF_WEIGHT);
+    wolf_ffi_state_layout_push_leaf(
+        LEAF_RIGHT_PATH.to_string(),
+        false,
+        false,
+        false,
+        HALF_WEIGHT,
+    );
     wolf_ffi_state_layout_push_split(ORIENT_VERTICAL, TWO_CHILDREN, ROOT_WEIGHT);
     wolf_ffi_state_layout_commit_to_tab();
     wolf_ffi_state_snapshot_commit();
@@ -284,8 +290,20 @@ fn snapshot_builder_round_trips_the_whole_tree() {
     wolf_ffi_state_snapshot_add_tab(W1_TAB0_CWD.to_string(), false);
     // Post-order: preview leaf (preview=true), then editor sibling (preview=false),
     // then the split that pops the top two.
-    wolf_ffi_state_layout_push_leaf(PREVIEW_SOURCE_PATH.to_string(), true, false, HALF_WEIGHT);
-    wolf_ffi_state_layout_push_leaf(EDITOR_SIBLING_PATH.to_string(), false, false, HALF_WEIGHT);
+    wolf_ffi_state_layout_push_leaf(
+        PREVIEW_SOURCE_PATH.to_string(),
+        true,
+        false,
+        false,
+        HALF_WEIGHT,
+    );
+    wolf_ffi_state_layout_push_leaf(
+        EDITOR_SIBLING_PATH.to_string(),
+        false,
+        false,
+        false,
+        HALF_WEIGHT,
+    );
     wolf_ffi_state_layout_push_split(ORIENT_VERTICAL, TWO_CHILDREN, ROOT_WEIGHT);
     wolf_ffi_state_layout_commit_to_tab();
     wolf_ffi_state_snapshot_commit();
@@ -361,7 +379,7 @@ fn snapshot_builder_round_trips_the_whole_tree() {
     wolf_ffi_state_snapshot_add_tab(W1_TAB0_CWD.to_string(), false);
     // A single editor leaf with NO surrounding split: push the lone leaf, then
     // commit it directly to the tab as the layout's root.
-    wolf_ffi_state_layout_push_leaf(SOLO_PATH.to_string(), false, false, ROOT_WEIGHT);
+    wolf_ffi_state_layout_push_leaf(SOLO_PATH.to_string(), false, false, false, ROOT_WEIGHT);
     wolf_ffi_state_layout_commit_to_tab();
     wolf_ffi_state_snapshot_commit();
 
@@ -416,8 +434,16 @@ fn snapshot_builder_round_trips_the_whole_tree() {
     wolf_ffi_state_snapshot_add_tab(W0_TAB1_CWD.to_string(), false);
     wolf_ffi_state_snapshot_add_window(W1_X, W1_Y, W1_WIDTH, W1_HEIGHT);
     wolf_ffi_state_snapshot_add_tab(W1_TAB0_CWD.to_string(), false);
-    wolf_ffi_state_layout_push_leaf(TERMINAL_DIR.to_string(), false, true, HALF_WEIGHT);
-    wolf_ffi_state_layout_push_leaf(TERMINAL_SIBLING_PATH.to_string(), false, false, HALF_WEIGHT);
+    // The terminal leaf is the zoomed one: load keeps a terminal leaf's zoom whether or not its
+    // directory exists, and these `/proj/…` paths do not.
+    wolf_ffi_state_layout_push_leaf(TERMINAL_DIR.to_string(), false, true, true, HALF_WEIGHT);
+    wolf_ffi_state_layout_push_leaf(
+        TERMINAL_SIBLING_PATH.to_string(),
+        false,
+        false,
+        false,
+        HALF_WEIGHT,
+    );
     wolf_ffi_state_layout_push_split(ORIENT_VERTICAL, TWO_CHILDREN, ROOT_WEIGHT);
     wolf_ffi_state_layout_commit_to_tab();
     wolf_ffi_state_snapshot_commit();
@@ -471,6 +497,17 @@ fn snapshot_builder_round_trips_the_whole_tree() {
         (term_right.is_terminal(), term_right.leaf_path()),
         (false, TERMINAL_SIBLING_PATH.to_string()),
         "the editor sibling must read back is_terminal() == false with its own path"
+    );
+    assert_eq!(
+        (
+            term_left.is_zoomed(),
+            term_right.is_zoomed(),
+            term_root.is_zoomed()
+        ),
+        (true, false, false),
+        "is_zoomed() must read back (terminal leaf, editor sibling, split root) as (true, false, \
+         false). A false first means push_leaf drops the flag or the load side never reads it, so \
+         the zoom is lost from the saved state; a true second or third means the mark spread"
     );
 
     // --- 4. A flat file without `tabs` loads as zero windows. Overwritten after the flush, and no

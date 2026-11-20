@@ -160,10 +160,12 @@ fn rebuild_layout_realizes_a_loaded_two_leaf_split() {
         left.to_string_lossy().into_owned(),
         false,
         false,
+        false,
         HALF_WEIGHT,
     );
     wolf_ffi_state_layout_push_leaf(
         right.to_string_lossy().into_owned(),
+        false,
         false,
         false,
         HALF_WEIGHT,
@@ -263,12 +265,14 @@ fn rebuild_layout_realizes_a_loaded_two_leaf_split() {
         left.to_string_lossy().into_owned(),
         false,
         false,
+        false,
         HALF_WEIGHT,
     );
     wolf_ffi_state_layout_push_leaf(
         term_dir.to_string_lossy().into_owned(),
         false,
         true,
+        false,
         HALF_WEIGHT,
     );
     wolf_ffi_state_layout_push_split(ORIENT_VERTICAL, TWO_LEAVES, ROOT_WEIGHT);

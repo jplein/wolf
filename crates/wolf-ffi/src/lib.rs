@@ -1029,6 +1029,8 @@ mod ffi {
         // Whether this leaf is a terminal pane (its `leaf_path` is the directory its shell
         // starts in); false for a split.
         fn is_terminal(&self) -> bool;
+        // Whether this leaf is its tab's zoomed pane; false for a split.
+        fn is_zoomed(&self) -> bool;
         // For a leaf: the buffer path ("" for an unnamed buffer); "" for a split.
         fn leaf_path(&self) -> String;
         // For a split: the orientation discriminant (0 = horizontal, 1 = vertical);
@@ -1057,12 +1059,13 @@ mod ffi {
         // Pushes a tab (its cwd + sidebar visibility) onto the most recently
         // added window. A defensive no-op when no window has been added yet.
         fn wolf_ffi_state_snapshot_add_tab(cwd: String, sidebar_visible: bool);
-        // Pushes a leaf (`path`, a preview or terminal pane per its flag, `weight` in its parent):
-        // a post-order replay that carries one tab's split tree across the bridge.
+        // Pushes a leaf (`path`, a preview, terminal or zoomed pane per its flags, `weight` in its
+        // parent): a post-order replay that carries one tab's split tree across the bridge.
         fn wolf_ffi_state_layout_push_leaf(
             path: String,
             preview: bool,
             terminal: bool,
+            zoomed: bool,
             weight: f64,
         );
         // Pops `child_count` nodes, wraps them in a split (`orientation` 0 = horizontal, 1 =
@@ -1743,6 +1746,7 @@ impl FfiTabState {
                 path: String::new(),
                 preview: false,
                 terminal: false,
+                zoomed: false,
             }),
         }
     }
@@ -1788,6 +1792,16 @@ impl FfiPaneNode {
     pub fn is_terminal(&self) -> bool {
         match &self.node {
             PaneNode::Leaf { terminal, .. } => *terminal,
+            PaneNode::Split { .. } => false,
+        }
+    }
+
+    /// Whether this leaf is its tab's zoomed pane, which the restore re-zooms; `false` for a
+    /// split.
+    #[must_use]
+    pub fn is_zoomed(&self) -> bool {
+        match &self.node {
+            PaneNode::Leaf { zoomed, .. } => *zoomed,
             PaneNode::Split { .. } => false,
         }
     }
@@ -1845,6 +1859,7 @@ impl FfiPaneNode {
                 path: String::new(),
                 preview: false,
                 terminal: false,
+                zoomed: false,
             }),
         }
     }
@@ -1949,8 +1964,15 @@ fn layout_stack() -> &'static Mutex<Vec<(PaneNode, f64)>> {
 
 /// Pushes a LEAF node (buffer `path`, a Markdown preview of `path` when `preview`
 /// is true, a terminal pane starting in the directory `path` when `terminal` is true,
-/// weighing `weight` within its parent split) onto the layout push-builder stack.
-pub fn wolf_ffi_state_layout_push_leaf(path: String, preview: bool, terminal: bool, weight: f64) {
+/// its tab's zoomed pane when `zoomed` is true, weighing `weight` within its parent
+/// split) onto the layout push-builder stack.
+pub fn wolf_ffi_state_layout_push_leaf(
+    path: String,
+    preview: bool,
+    terminal: bool,
+    zoomed: bool,
+    weight: f64,
+) {
     layout_stack()
         .lock()
         .expect("layout stack mutex poisoned")
@@ -1959,6 +1981,7 @@ pub fn wolf_ffi_state_layout_push_leaf(path: String, preview: bool, terminal: bo
                 path,
                 preview,
                 terminal,
+                zoomed,
             },
             weight,
         ));

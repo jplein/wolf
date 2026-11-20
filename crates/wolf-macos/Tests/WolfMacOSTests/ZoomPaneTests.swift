@@ -16,9 +16,9 @@ import XCTest
 /// terminal pane and the drawer D open below, built by `buildLayout(_:)`.
 ///
 /// A hidden pane's sizes are compared only after a settle, because a wrong resize reaches the
-/// grid or the session a round trip later. The inert-action tests sample every wake, because the
-/// view sends Neovim back to the zoomed pane within a round trip, which would hide a wrong focus
-/// move from a check made only at the end.
+/// grid or the session a round trip later. A move that must change nothing is sampled at every
+/// wake, and so is a restored zoom, because Neovim reporting another pane a round trip later
+/// unzooms the view, which a check made only at the start would miss.
 ///
 /// A failure prefixed `premise:` is a setup step that did not happen.
 @MainActor
@@ -386,43 +386,56 @@ final class ZoomPaneTests: XCTestCase {
       "the drawer's session must outlive its toggle: \(Array(handle.live_terminals()))")
   }
 
-  // MARK: - Z7 to Z9: what is inert while zoomed
+  // MARK: - Z7 to Z9: Toggle Terminal and focus moves while zoomed
 
-  /// Toggle Terminal while a tree pane is zoomed does nothing.
-  func testToggleTerminalWhileAnotherPaneIsZoomedDoesNothing() {
+  /// Toggle Terminal while a tree pane is zoomed unzooms, then closes the open, hidden drawer
+  /// as it would unzoomed.
+  func testToggleTerminalWhileAPaneIsZoomedUnzoomsAndClosesTheOpenDrawer() {
     guard let fixture = TerminalViewFixture() else { return }
     defer { fixture.shutdown() }
     let handle = fixture.handle
     let container = fixture.container
     guard let l = buildLayout(fixture), zoom(fixture, on: l.wA) else { return }
-    let live = Array(handle.live_terminals())
 
     container.toggleTerminal()
-    var lost = 0
-    settle(fixture, 1.5) {
-      if !handle.windows().contains(where: { $0.win() == l.wD }) { lost += 1 }
+    XCTAssertFalse(
+      container.isZoomed,
+      "toggleTerminal() while A is zoomed must unzoom at once; zoomed means the toggle reaches"
+        + " a drawer the user cannot see, or does nothing")
+    let closed = fixture.wake {
+      !handle.windows().contains { $0.win() == l.wD } && container.visiblePaneFrames[l.wD] == nil
     }
+    XCTAssertTrue(
+      closed,
+      "toggleTerminal() while A is zoomed must close the open drawer, as unzoomed: windows"
+        + " \(handle.windows().map { $0.win() }), frames \(container.visiblePaneFrames)")
+    guard closed else { return }
+
+    let frames = container.visiblePaneFrames
     XCTAssertEqual(
-      lost, 0,
-      "Toggle Terminal while A is zoomed must leave the hidden drawer open; its window \(l.wD)"
-        + " was gone at \(lost) wake(s), so the toggle reached the drawer")
-    XCTAssertTrue(container.isZoomed, "Toggle Terminal while A is zoomed must keep the zoom")
+      Set(frames.keys), [l.wA, l.wB, l.wC],
+      "with the drawer closed, the three tree panes must show: \(frames). A alone means the"
+        + " view stayed zoomed, as closing a hidden pane keeps a zoom")
+    XCTAssertFalse(container.isZoomed, "the view must stay unzoomed once the drawer is closed")
     XCTAssertEqual(
-      container.visiblePaneFrames, [l.wA: container.bounds], "A must still be the only pane shown")
-    XCTAssertEqual(
-      Array(handle.live_terminals()), live,
-      "Toggle Terminal while A is zoomed must start or end no session")
+      frames.values.map { $0.maxY }.max() ?? 0, container.bounds.height, accuracy: accuracy,
+      "with the drawer closed, the tree must reach the bottom of the area: \(frames)")
+    XCTAssertTrue(
+      Array(handle.live_terminals()).contains(l.sD),
+      "the drawer's session must outlive its toggle: \(Array(handle.live_terminals()))")
   }
 
-  /// A focus move while zoomed changes nothing, in Neovim or in the view.
-  func testAFocusMoveWhileZoomedChangesNothing() {
+  /// A focus move with no target in the unzoomed layout changes nothing, in Neovim or in the
+  /// view, at any wake.
+  func testAFocusMoveWithNoTargetWhileZoomedChangesNothing() {
     guard let fixture = TerminalViewFixture() else { return }
     defer { fixture.shutdown() }
     let handle = fixture.handle
     let container = fixture.container
+    // A is the leftmost pane, so <C-w>h from it has no target.
     guard let l = buildLayout(fixture), zoom(fixture, on: l.wA) else { return }
 
-    fixture.neovimChord("l")
+    fixture.neovimChord("h")
     var moved: [String] = []
     settle(fixture, 1.5) {
       let frames = container.visiblePaneFrames
@@ -435,13 +448,15 @@ final class ZoomPaneTests: XCTestCase {
     }
     XCTAssertEqual(
       moved, [],
-      "<C-w>l while A (\(l.wA)) is zoomed must move no focus, in Neovim or the view, at any"
-        + " wake; it moved to a hidden pane at these wakes")
-    XCTAssertTrue(container.isZoomed, "a focus move while zoomed must keep the zoom")
+      "<C-w>h from the leftmost pane A (\(l.wA)) while zoomed has no target, so it must keep A"
+        + " zoomed and focused, in Neovim and the view, at every wake. These wakes differ:"
+        + " every pane in the frames means the move unzoomed without a target")
+    XCTAssertTrue(container.isZoomed, "a focus move with no target must keep the zoom")
   }
 
-  /// Neovim leaving the zoomed pane by a path the view does not intercept is sent back.
-  func testNeovimLeavingTheZoomedPaneIsSentBack() {
+  /// Neovim leaving the zoomed pane by a path the view does not intercept unzooms, and the
+  /// view follows Neovim to the pane it entered.
+  func testNeovimLeavingTheZoomedPaneUnzoomsAndIsFollowed() {
     guard let fixture = TerminalViewFixture() else { return }
     defer { fixture.shutdown() }
     let handle = fixture.handle
@@ -449,20 +464,19 @@ final class ZoomPaneTests: XCTestCase {
     guard let l = buildLayout(fixture), zoom(fixture, on: l.wA) else { return }
 
     fixture.typeEx("wincmd w")
-    var left: [String] = []
-    settle(fixture, 2) {
-      if container.activeWin != l.wA || !container.isZoomed {
-        left.append("view \(container.activeWin), zoomed \(container.isZoomed)")
-      }
+    let followed = fixture.wake {
+      !container.isZoomed && container.activeWin == handle.active_win()
+        && container.activeWin != l.wA && container.activeWin != 0
     }
+    XCTAssertTrue(
+      followed,
+      ":wincmd w while A (\(l.wA)) is zoomed must unzoom and leave the view on Neovim's new"
+        + " window: zoomed \(container.isZoomed), view \(container.activeWin), Neovim"
+        + " \(handle.active_win()). Still zoomed means the view ignores Neovim's move; the view"
+        + " still on A, that it sends Neovim back")
     XCTAssertEqual(
-      left, [],
-      ":wincmd w while A (\(l.wA)) is zoomed must leave A the view's active pane and the view"
-        + " zoomed at every wake; a hidden pane became active at these wakes")
-    XCTAssertEqual(
-      handle.active_win(), l.wA,
-      "Neovim must be sent back to the zoomed pane A; another window means the user types into"
-        + " a pane they cannot see")
+      Set(container.visiblePaneFrames.keys), [l.wA, l.wB, l.wC, l.wD],
+      "unzoomed, all four panes must show: \(container.visiblePaneFrames)")
   }
 
   // MARK: - Z10: a hidden preview
@@ -501,6 +515,199 @@ final class ZoomPaneTests: XCTestCase {
       web.superview === container,
       "after unzooming, the preview must show in the same web view")
     XCTAssertFalse(web.isHidden, "after unzooming, the preview's web view must show again")
+  }
+
+  // MARK: - Z11, Z12: a focus chord and Toggle Terminal unzoom
+
+  /// A focus chord while zoomed unzooms, restores every rectangle and weight, and focuses the
+  /// pane the same chord reaches unzoomed.
+  func testAFocusChordWhileZoomedUnzoomsRestoresTheLayoutAndFocusesTheNeighbour() {
+    guard let fixture = TerminalViewFixture() else { return }
+    defer { fixture.shutdown() }
+    let handle = fixture.handle
+    let container = fixture.container
+    guard let l = buildLayout(fixture) else { return }
+
+    // A dragged divider, so a restore to the default weights cannot pass.
+    guard let a = container.visiblePaneFrames[l.wA],
+      drag(
+        fixture, from: CGPoint(x: a.maxX, y: a.minY + a.height / 4),
+        by: CGVector(dx: -160, dy: 0))
+    else { return }
+    let movedA = (container.visiblePaneFrames[l.wA]?.width ?? a.width) <= a.width - 100
+    XCTAssertTrue(
+      movedA,
+      "premise: the drag must narrow A by 160 pt: from \(a) to"
+        + " \(String(describing: container.visiblePaneFrames[l.wA]))")
+    guard movedA, focus(fixture, l.wA) else { return }
+
+    fixture.neovimChord("l")
+    var target: Int64 = 0
+    let reached = fixture.wake {
+      target = handle.active_win()
+      return target != l.wA && target != 0 && container.activeWin == target
+    }
+    XCTAssertTrue(
+      reached,
+      "premise: <C-w>l from A unzoomed must focus a pane right of A: Neovim"
+        + " \(handle.active_win()), view \(container.activeWin)")
+    guard reached, focus(fixture, l.wA) else { return }
+    settle(fixture, 1)
+    let frames0 = container.visiblePaneFrames
+    let layout0 = container.paneLayout
+
+    guard zoom(fixture, on: l.wA) else { return }
+    fixture.neovimChord("l")
+    let unzoomed = fixture.wake {
+      !container.isZoomed && container.activeWin == target && handle.active_win() == target
+    }
+    XCTAssertTrue(
+      unzoomed,
+      "<C-w>l while A is zoomed must unzoom and focus \(target), the pane it reaches unzoomed:"
+        + " zoomed \(container.isZoomed), view \(container.activeWin), Neovim"
+        + " \(handle.active_win()). Still zoomed on A means a zoom swallows focus moves; another"
+        + " window means the move was resolved from elsewhere than A")
+    guard unzoomed else { return }
+
+    let frames = container.visiblePaneFrames
+    XCTAssertEqual(
+      Set(frames.keys), Set(frames0.keys), "every pane must show again: \(frames)")
+    for (win, rect) in frames0 {
+      assertRect(
+        frames[win], rect,
+        "pane \(win) must be where it was before the zoom; A at half the width means the unzoom"
+          + " reset the dragged weight")
+    }
+    XCTAssertEqual(
+      container.paneLayout, layout0,
+      "the tree and its weights must equal those before the zoom")
+  }
+
+  /// Toggle Terminal while zoomed with no drawer unzooms, then opens the drawer and focuses it,
+  /// as it would unzoomed.
+  func testToggleTerminalWhileZoomedUnzoomsAndOpensAndFocusesTheDrawer() {
+    guard let fixture = TerminalViewFixture() else { return }
+    defer { fixture.shutdown() }
+    let handle = fixture.handle
+    let container = fixture.container
+    let wA = container.activeWin
+    container.splitActivePane(.vertical)
+    let split = fixture.wake {
+      container.paneCount == 2 && ![0, wA].contains(container.activeWin)
+    }
+    XCTAssertTrue(split, "premise: a vertical split must add an active pane B")
+    guard split else { return }
+    let wB = container.activeWin
+    let live0 = Set(handle.live_terminals())
+    XCTAssertTrue(live0.isEmpty, "premise: no session may run before the toggle: \(live0)")
+    guard zoom(fixture, on: wA) else { return }
+
+    container.toggleTerminal()
+    XCTAssertFalse(
+      container.isZoomed,
+      "toggleTerminal() while A is zoomed must unzoom at once; zoomed means it is refused, or"
+        + " leaves the unzoom to the drawer's arrival")
+    var sD: UInt64 = 0
+    var wD: Int64 = 0
+    let opened = fixture.wake {
+      sD = Array(handle.live_terminals()).first { !live0.contains($0) } ?? 0
+      guard sD != 0, let view = fixture.view(showing: sD), fixture.isInDrawerStrip(view)
+      else { return false }
+      wD = fixture.window(showing: sD)
+      return wD != 0 && container.activeWin == wD && handle.active_win() == wD
+    }
+    XCTAssertTrue(
+      opened,
+      "toggleTerminal() while A is zoomed must open the drawer and focus it, in the view and in"
+        + " Neovim: session \(sD), window \(wD), view \(container.activeWin), Neovim"
+        + " \(handle.active_win()). No session means a tree pane's zoom refuses the toggle")
+    guard opened else { return }
+    XCTAssertFalse(container.isZoomed, "the view must stay unzoomed with the drawer open")
+    XCTAssertEqual(
+      Set(container.visiblePaneFrames.keys), [wA, wB, wD],
+      "A, B and the drawer must all show: \(container.visiblePaneFrames)")
+  }
+
+  // MARK: - Z13: a save and restore of the layout
+
+  /// A zoom survives the production save and restore: the zoomed leaf is gathered, pushed
+  /// through the bridge into state.json, read back, rebuilt in a second core and re-zoomed,
+  /// with Neovim's current window on it and the saved weights behind it.
+  func testZoomSurvivesASaveAndRestoreOfTheLayout() {
+    let base =
+      ProcessInfo.processInfo.environment["TEST_TMPDIR"].flatMap { $0.isEmpty ? nil : $0 }
+      ?? NSTemporaryDirectory()
+    let dir = URL(fileURLWithPath: base)
+      .appendingPathComponent("wolf-zoom-restore-\(UUID().uuidString)")
+    let file = dir.appendingPathComponent("second-leaf.md")
+    do {
+      try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+      try "# Second leaf\n".write(to: file, atomically: true, encoding: .utf8)
+    } catch {
+      XCTFail("premise: could not write the fixture file \(file.path): \(error)")
+      return
+    }
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let filePath = canonical(file.path)
+
+    guard let saved = saveWithBZoomed(editing: file.path, cwd: dir.path) else { return }
+
+    guard let fixture = TerminalViewFixture() else { return }
+    defer { fixture.shutdown() }
+    let handle = fixture.handle
+    let container = fixture.container
+    // Element refs must not outlive their vec, so `windows` and `tabs` stay bound.
+    let windows = wolf_ffi_load_state().windows()
+    guard windows.len() > 0, let window = windows.get(index: UInt(windows.len() - 1)) else {
+      XCTFail("the committed state must load back with a window")
+      return
+    }
+    let tabs = window.tabs()
+    guard tabs.len() > 0, let tab = tabs.get(index: UInt(tabs.len() - 1)), tab.has_layout() else {
+      XCTFail("the committed state must load back with a layout on its last tab")
+      return
+    }
+    let node = tab.layout()
+    container.requestLayoutRebuild(AppDelegate.savedPaneNode(from: node), node: node)
+    let rebuilt = fixture.wake { container.paneCount == 3 }
+    XCTAssertTrue(
+      rebuilt, "premise: the restore must rebuild three tree panes: \(container.paneCount)")
+    guard rebuilt else { return }
+
+    var unzoomedAt: [String] = []
+    settle(fixture, 1) {
+      if !container.isZoomed { unzoomedAt.append("frames \(container.visiblePaneFrames)") }
+    }
+    XCTAssertEqual(
+      unzoomedAt, [],
+      "the restored view must be zoomed at every wake. Unzoomed at all means the zoom is lost"
+        + " on the way through gatherTab, pushLayout, the load or rebuildLayout; unzoomed after"
+        + " a zoomed wake means Neovim reported another pane after the rebuild")
+    let frames = container.visiblePaneFrames
+    guard frames.count == 1, let zoomedFrame = frames.first else {
+      XCTFail("the restored view must show one pane alone, the zoomed B: \(frames)")
+      return
+    }
+    let win = zoomedFrame.key
+    assertRect(zoomedFrame.value, container.bounds, "the zoomed pane must cover the whole area")
+    let shown = canonical(handle.win_buffer(win).abs_path().toString())
+    XCTAssertEqual(
+      shown, filePath,
+      "the zoomed pane must be B, the leaf showing \(filePath); another buffer means the mark"
+        + " landed on another leaf")
+    XCTAssertEqual(
+      handle.active_win(), win,
+      "Neovim's current window must be the zoomed pane's; another means the rebuild ends"
+        + " elsewhere and the user types into a hidden pane")
+    XCTAssertEqual(container.activeWin, win, "the view's active pane must be the zoomed one")
+
+    container.toggleZoom()
+    XCTAssertEqual(
+      container.visiblePaneFrames.count, 3,
+      "unzoomed, all three restored panes must show: \(container.visiblePaneFrames)")
+    XCTAssertEqual(
+      PaneLayoutCodec.encode(container.paneLayout, paths: [:], previews: []), saved,
+      "unzoomed, the topology and weights must be those saved, the dragged divider included")
   }
 
   // MARK: - Helpers
@@ -603,6 +810,76 @@ final class ZoomPaneTests: XCTestCase {
       "premise: toggleZoom() must show \(win) alone over \(container.bounds): zoomed"
         + " \(container.isZoomed), frames \(container.visiblePaneFrames)", file: file, line: line)
     return zoomed
+  }
+
+  /// Builds `vertical[A, horizontal[B, C]]` in a first core, drags A's divider, edits `path`
+  /// into B and zooms it, then commits the tab through the production save path and flushes.
+  /// Returns the layout's topology and weights, with no paths, after shutting the core down;
+  /// `nil`, with the test failed, when a step does not happen.
+  private func saveWithBZoomed(
+    editing path: String, cwd: String, file: StaticString = #filePath, line: UInt = #line
+  ) -> SavedPaneNode? {
+    guard let fixture = TerminalViewFixture(file: file, line: line) else { return nil }
+    defer { fixture.shutdown() }
+    let handle = fixture.handle
+    let container = fixture.container
+    guard let l = buildLayout(fixture, file: file, line: line),
+      let a = container.visiblePaneFrames[l.wA],
+      drag(
+        fixture, from: CGPoint(x: a.maxX, y: a.minY + a.height / 4),
+        by: CGVector(dx: -160, dy: 0))
+    else { return nil }
+    let movedA = (container.visiblePaneFrames[l.wA]?.width ?? a.width) <= a.width - 100
+    XCTAssertTrue(
+      movedA,
+      "premise: the drag must narrow A by 160 pt, so the saved weights are not the defaults",
+      file: file, line: line)
+    guard movedA, focus(fixture, l.wB, file: file, line: line) else { return nil }
+
+    fixture.typeEx("edit \(path)")
+    let edited = fixture.wake {
+      canonical(handle.win_buffer(l.wB).abs_path().toString()) == canonical(path)
+    }
+    XCTAssertTrue(
+      edited,
+      "premise: :edit must show \(path) in B: \(handle.win_buffer(l.wB).abs_path().toString())",
+      file: file, line: line)
+    guard edited, zoom(fixture, on: l.wB, file: file, line: line) else { return nil }
+    let shape = PaneLayoutCodec.encode(container.paneLayout, paths: [:], previews: [])
+
+    var gathered: RestoreSeam.SavedTab?
+    fixture.wake {
+      if case .ready(let tab) = SessionSeam.gatherTab(
+        hasFolder: true, cwd: cwd, sidebarVisible: true, layout: container.paneLayout,
+        content: container.leafContents(), zoomed: container.zoomedPaneId)
+      {
+        gathered = tab
+      }
+      return gathered != nil
+    }
+    guard let tab = gathered, let layout = tab.layout else {
+      XCTFail("premise: the tab must gather with a layout", file: file, line: line)
+      return nil
+    }
+    XCTAssertEqual(
+      layout.zoomedLeafIndex, 1,
+      "the gathered layout must mark B, depth-first leaf 1; nil means the zoom is dropped from"
+        + " the saved state", file: file, line: line)
+
+    wolf_ffi_state_snapshot_begin()
+    wolf_ffi_state_snapshot_add_window(
+      0, 0, Double(TerminalViewFixture.windowSize.width),
+      Double(TerminalViewFixture.windowSize.height))
+    wolf_ffi_state_snapshot_add_tab(tab.cwd, tab.sidebarVisible)
+    AppDelegate.pushLayout(layout)
+    wolf_ffi_state_snapshot_commit()
+    XCTAssertTrue(wolf_ffi_state_flush(), "premise: state.json must flush", file: file, line: line)
+    return shape
+  }
+
+  /// `path` with symlinks resolved, so `/var` and `/private/var` compare equal.
+  private func canonical(_ path: String) -> String {
+    URL(fileURLWithPath: path).resolvingSymlinksInPath().path
   }
 
   /// The size of `win`'s grid, or zero cells when it has none.

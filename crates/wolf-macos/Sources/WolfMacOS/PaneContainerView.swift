@@ -174,7 +174,7 @@ final class PaneContainerView: NSView {
   /// The pane Zoom Pane shows alone over the whole pane area, or `nil`. `PaneZoom` owns
   /// every rule that sets it. Zoom is front-end geometry: it never touches `tree`, its
   /// weights or `drawerWeight`, so an unzoom restores them exactly. It belongs to this
-  /// view, is never persisted, and a new view, a relaunch and a restart start unzoomed.
+  /// view; `state.json` records it through `zoomedPaneId`, and a launch restore re-zooms it.
   private var zoomedPane: PaneId?
 
   /// A saved pane-split layout awaiting rebuild once this view's first pane binds
@@ -696,6 +696,10 @@ final class PaneContainerView: NSView {
   /// Whether a pane is zoomed.
   var isZoomed: Bool { zoomedPane != nil }
 
+  /// The zoomed pane's id, which `state.json` records as a mark on its leaf. A zoomed
+  /// drawer is no leaf of `paneLayout`, so it marks none and persists unzoomed.
+  var zoomedPaneId: PaneId? { zoomedPane }
+
   /// The frame of each pane this view shows, by its Neovim window handle: the zoomed
   /// pane alone while zoomed.
   var visiblePaneFrames: [Int64: CGRect] {
@@ -710,23 +714,41 @@ final class PaneContainerView: NSView {
   /// Zoom Pane: toggles the active pane between zoomed and not (`PaneZoom`); a lone pane
   /// with no drawer stays unzoomed. Zooming focuses the pane's window, as
   /// `closeActivePane()` does, so Neovim's current window is the pane the view shows.
-  /// Unzooming sizes the hidden panes to the restored layout. Persists nothing.
+  /// Unzooming sizes the hidden panes to the restored layout. It fires `onLayoutChanged`,
+  /// since `state.json` records the zoom and this is the change no render wake makes.
   func toggleZoom() {
     zoomedPane = PaneZoom.zoomed(
       after: .toggle, zoomed: zoomedPane, active: activePane, panes: viewPanes)
     if let zoomed = zoomedPane, let win = panes[zoomed]?.win, win != 0 {
       handle.focus_win(win)
     }
+    syncZoom()
+    onLayoutChanged?()
+  }
+
+  /// Toggle Terminal: unzooms first, unless the drawer is the zoomed pane
+  /// (`PaneZoom.Event.toggleTerminal`), then opens or closes the drawer as it would
+  /// unzoomed.
+  func toggleTerminal() {
+    applyZoom(.toggleTerminal(drawer: drawerPaneId))
+    handle.toggle_terminal()
+  }
+
+  /// Applies `event` to the zoom, re-syncing the panes as `toggleZoom()` does when the
+  /// zoomed pane changes.
+  private func applyZoom(_ event: PaneZoom.Event) {
+    let next = PaneZoom.zoomed(
+      after: event, zoomed: zoomedPane, active: activePane, panes: viewPanes)
+    guard next != zoomedPane else { return }
+    zoomedPane = next
+    syncZoom()
+  }
+
+  /// Sizes the panes and the preview web views to what the zoom shows, and redraws.
+  private func syncZoom() {
     syncGridSizes()
     syncPreviewWebViews()
     needsDisplay = true
-  }
-
-  /// Toggle Terminal: opens or closes the drawer, or does nothing while a pane other
-  /// than the drawer is zoomed, by the user's choice (`PaneZoom.allowsToggleTerminal`).
-  func toggleTerminal() {
-    guard PaneZoom.allowsToggleTerminal(zoomed: zoomedPane, drawer: drawerPaneId) else { return }
-    handle.toggle_terminal()
   }
 
   /// Whether Close Pane may close the active pane: true for the drawer, or when the tree has
@@ -2471,8 +2493,9 @@ final class PaneContainerView: NSView {
   /// Has Rust render and realize `node` in nvim (its window topology), then rebuilds
   /// the pane bindings from the returned DFS-ordered handles, taking the tree's
   /// weights from `PaneTree.rebuilt(from: saved)`, `saved` being the same tree
-  /// projected for Swift. On a handle-count mismatch it logs and falls back to the
-  /// single already-bound pane (leaving `tree` untouched).
+  /// projected for Swift. It then re-zooms the leaf `saved` marks zoomed, which it makes
+  /// active. On a handle-count mismatch it logs and falls back to the single
+  /// already-bound pane (leaving `tree` untouched), unzoomed.
   private func rebuildLayout(from saved: SavedPaneNode, node: FfiPaneNode) {
     let handles = Array(handle.rebuild_layout(node))
     guard handles.count == saved.leafCount else {
@@ -2491,7 +2514,12 @@ final class PaneContainerView: NSView {
     }
     panes = rebound
     drawerPaneId = nil
-    setActivePane(leafIds.first)
+    // The rebuild left Neovim's current window on the zoomed leaf, so no wake unzooms it.
+    if let index = saved.zoomedLeafIndex, index < leafIds.count {
+      zoomedPane = PaneZoom.zoomed(
+        after: .restore(leafIds[index]), zoomed: nil, active: nil, panes: viewPanes)
+    }
+    setActivePane(zoomedPane ?? leafIds.first)
     resolvePendingGrids()
     syncGridSizes()
     window?.invalidateCursorRects(for: self)
@@ -2592,31 +2620,17 @@ final class PaneContainerView: NSView {
   /// next wake. The neighbour geometry MUST match `layoutRects()`, i.e. it resolves
   /// over `DrawerLayout.editorHeight`, not the raw pane-area height.
   ///
-  /// While zoomed it does nothing, by the user's choice: no other pane is visible to
-  /// move to, and a focus move does not unzoom.
+  /// While zoomed the move starts from the zoomed pane and resolves in the unzoomed
+  /// layout (`PaneZoom.focusOrigin`): a target unzooms, and no target keeps the zoom.
   private func applyFocus(dir: FocusDir, from: Int64) {
-    guard !PaneZoom.freezesLayout(zoomed: zoomedPane) else { return }
-    guard let origin = paneForWin(from) ?? activePane else { return }
-    let width = Double(bounds.width)
-    let dl = drawerLayout
-
-    if origin == drawerPaneId {
-      guard dir == .up else { return }
-      let rects = tree.paneRects(width: width, height: dl.editorHeight)
-      guard
-        let target = DrawerFocusSeam.drawerUpTarget(
-          lastEditorPane: lastEditorPane, leaves: tree.leaves(), rects: rects),
-        let win = panes[target]?.win
-      else { return }
-      handle.focus_win(win)
-      return
-    }
-
-    if let target = tree.neighbor(origin, dir, width: width, height: dl.editorHeight),
-      let win = panes[target]?.win
-    {
-      handle.focus_win(win)
-    } else if dir == .down, let drawer = drawerPaneId, let win = panes[drawer]?.win {
+    guard
+      let origin = PaneZoom.focusOrigin(zoomed: zoomedPane, from: paneForWin(from) ?? activePane)
+    else { return }
+    let target = DrawerFocusSeam.focusTarget(
+      from: origin, dir: dir, tree: tree, drawer: drawerPaneId, lastEditorPane: lastEditorPane,
+      width: Double(bounds.width), editorHeight: drawerLayout.editorHeight)
+    applyZoom(.focusMove(target: target))
+    if let target, let win = panes[target]?.win {
       handle.focus_win(win)
     }
   }
@@ -2696,9 +2710,9 @@ final class PaneContainerView: NSView {
   /// Refreshes the active pane from `active_win` (fallback: the pane owning the
   /// cursor's grid).
   ///
-  /// While zoomed, Neovim on a hidden pane left by a path the view does not intercept
-  /// (`<C-w>w`, `:wincmd`): that focus move is undone, with `focus_win` for the zoomed
-  /// pane, rather than activating a pane the user would type into blind.
+  /// Neovim's current window is trusted: on another pane than the zoomed one, left by a
+  /// path the view does not intercept (`<C-w>w`, `:wincmd`), it is a focus move, which
+  /// unzooms (`PaneZoom.Event.focusMove`), and the view follows it.
   private func updateActivePane() {
     var target: PaneId?
     let active = handle.active_win()
@@ -2709,13 +2723,7 @@ final class PaneContainerView: NSView {
       let cursorGrid = handle.read_frame().cursor_grid()
       target = panes.first(where: { $0.value.boundGrid == cursorGrid })?.key
     }
-    if PaneZoom.refocuses(resolved: target, zoomed: zoomedPane), let zoomed = zoomedPane {
-      if let win = panes[zoomed]?.win, win != 0 {
-        handle.focus_win(win)
-      }
-      setActivePane(zoomed)
-      return
-    }
+    applyZoom(.focusMove(target: target))
     if let id = target, activePane != id {
       setActivePane(id)
     }

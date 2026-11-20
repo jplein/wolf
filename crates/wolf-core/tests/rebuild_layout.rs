@@ -25,7 +25,7 @@
 //! The spec JSON shape is the one `wolf_core::state::rebuild_layout_spec` renders,
 //! the document's only renderer:
 //!   * leaf:  `{ "leaf": true, "path": "<abs path or empty>", "preview": <bool>,
-//!     "terminal": <bool> }`
+//!     "terminal": <bool>, "zoomed": <bool> }`
 //!   * split: `{ "orientation": "h"|"v", "weights": [...], "children": [...] }`
 //!
 //! ## Preview leaves
@@ -46,6 +46,11 @@
 //! window's tabpage cwd, and binds it into the leaf's window. The shell is POSIX `sh`
 //! (`common::pin_default_shell`), and its cwd is read with `pwd -P`, since macOS temp dirs
 //! sit behind the `/var` → `/private/var` link.
+//!
+//! ## Zoomed leaves
+//!
+//! A leaf with `"zoomed": true` is the pane the front-end re-zooms. The rebuild returns with
+//! Neovim's current window, and the snapshot's `active_win`, on the first such leaf.
 
 mod common;
 
@@ -443,6 +448,7 @@ fn rebuild_reports_every_leaf_window_on_return() {
                     path: path.to_str().expect("fixture path is UTF-8").to_string(),
                     preview: false,
                     terminal: false,
+                    zoomed: false,
                 })
                 .collect(),
         });
@@ -589,11 +595,13 @@ fn a_terminal_leaf_starts_a_session_in_its_directory() {
                 path: file_a.to_str().expect("a.md path is UTF-8").to_string(),
                 preview: false,
                 terminal: false,
+                zoomed: false,
             },
             PaneNode::Leaf {
                 path: leaf.to_str().expect("leaf dir is UTF-8").to_string(),
                 preview: false,
                 terminal: true,
+                zoomed: false,
             },
         ],
     });
@@ -656,11 +664,13 @@ fn a_terminal_leaf_without_a_directory_starts_in_the_tabpage_cwd() {
                 path: String::new(),
                 preview: false,
                 terminal: true,
+                zoomed: false,
             },
             PaneNode::Leaf {
                 path: gone.to_str().expect("removed dir is UTF-8").to_string(),
                 preview: false,
                 terminal: true,
+                zoomed: false,
             },
         ],
     });
@@ -689,4 +699,69 @@ fn a_terminal_leaf_without_a_directory_starts_in_the_tabpage_cwd() {
     }
 
     core.shutdown().expect("shutdown should be Ok");
+}
+
+/// Rebuilds `vertical[a, b, c]` over three fresh files on a fresh core, with leaf `zoomed` (if
+/// any) marked, and returns the handles and the snapshot's `active_win` read at once on return.
+fn rebuild_three_and_read_active(zoomed: Option<usize>) -> (Vec<i64>, Option<i64>) {
+    let (core, _waiter) = common::start_core_sized(common::DEFAULT_COLS, common::DEFAULT_ROWS);
+    let files: Vec<tempfile::NamedTempFile> = (0..3).map(|_| common::temp_md(DOC)).collect();
+    let spec = rebuild_layout_spec(&PaneNode::Split {
+        orientation: PaneOrientation::Vertical,
+        weights: vec![1.0 / 3.0; files.len()],
+        children: files
+            .iter()
+            .enumerate()
+            .map(|(i, file)| PaneNode::Leaf {
+                path: file
+                    .path()
+                    .to_str()
+                    .expect("temp path is UTF-8")
+                    .to_string(),
+                preview: false,
+                terminal: false,
+                zoomed: zoomed == Some(i),
+            })
+            .collect(),
+    });
+
+    let handles = core.rebuild_layout(&spec);
+    // One read, straight after the return: what the front-end's restore sees.
+    let active = core.read_snapshot().active_win;
+    assert_eq!(
+        handles.len(),
+        3,
+        "a 3-leaf split must return 3 window handles; got {handles:?}"
+    );
+    assert_distinct_handles(&handles);
+    core.shutdown().expect("shutdown should be Ok");
+    (handles, active)
+}
+
+/// (j) When `rebuild_layout` returns, the snapshot's `active_win` is the zoomed leaf's window:
+/// read once, with no poll. The macOS restore re-zooms that leaf straight after the rebuild, and
+/// a view that sees Neovim on another pane unzooms, so the guarantee has to hold on return.
+///
+/// A control rebuild of the same layout with no zoom ends on the last leaf, so the zoomed run's
+/// `handles[1]` cannot come from where the rebuild happens to leave the cursor.
+#[test]
+fn rebuild_ends_on_the_zoomed_leaf() {
+    let (control, control_active) = rebuild_three_and_read_active(None);
+    assert_eq!(
+        control_active,
+        Some(control[2]),
+        "premise: an unzoomed rebuild of vertical[a, b, c] must end on its last leaf, the last \
+         window it splits off; handles {control:?}. Otherwise the zoomed run below cannot tell \
+         the zoom's doing from the rebuild's own order"
+    );
+
+    let (handles, active) = rebuild_three_and_read_active(Some(1));
+    assert_eq!(
+        active,
+        Some(handles[1]),
+        "with leaf b zoomed, active_win must be b's window when rebuild_layout returns; handles \
+         {handles:?}. The last handle means init.lua does not make the zoomed leaf's window \
+         current, or the spec does not mark it; None means no wolf_active_win reached core \
+         before the rebuild's barrier"
+    );
 }

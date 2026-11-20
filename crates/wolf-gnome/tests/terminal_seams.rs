@@ -1010,11 +1010,13 @@ fn a_terminal_pane_persists_as_a_terminal_leaf() {
                     path: "/proj/a.md".to_owned(),
                     preview: false,
                     terminal: false,
+                    zoomed: false,
                 },
                 PaneNode::Leaf {
                     path: "/proj/sub".to_owned(),
                     preview: false,
                     terminal: true,
+                    zoomed: false,
                 },
             ],
         },
@@ -1030,6 +1032,7 @@ fn a_terminal_pane_persists_as_a_terminal_leaf() {
             path: String::new(),
             preview: false,
             terminal: true,
+            zoomed: false,
         },
         "a lone terminal pane with no known cwd must encode as a terminal leaf with an empty path"
     );

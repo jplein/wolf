@@ -187,6 +187,7 @@ pub fn encode(layout: &PaneLayout, contents: &HashMap<PaneId, LeafContent>) -> P
                 path: content.path,
                 preview: content.preview,
                 terminal: content.terminal,
+                zoomed: false,
             }
         }
         PaneLayout::Split {
@@ -204,7 +205,7 @@ pub fn encode(layout: &PaneLayout, contents: &HashMap<PaneId, LeafContent>) -> P
 }
 
 /// The "suppress from persistence" CONTENT predicate: `true` **iff** `node` is
-/// `Leaf { path: "", preview: false, terminal: false }`.
+/// `Leaf { path: "", preview: false, terminal: false }`, whatever its `zoomed`.
 ///
 /// A preview leaf, a terminal leaf, a leaf with a non-empty path, and EVERY split — including a
 /// split of two empty leaves — are `false`. **This is NEVER an arity test**; see
@@ -216,6 +217,7 @@ pub fn is_empty_leaf(node: &PaneNode) -> bool {
             path,
             preview,
             terminal,
+            ..
         } => path.is_empty() && !preview && !terminal,
         PaneNode::Split { .. } => false,
     }
@@ -378,6 +380,7 @@ mod tests {
             path: path.to_string(),
             preview: false,
             terminal: false,
+            zoomed: false,
         }
     }
 
@@ -388,6 +391,7 @@ mod tests {
             path: path.to_string(),
             preview: true,
             terminal: false,
+            zoomed: false,
         }
     }
 

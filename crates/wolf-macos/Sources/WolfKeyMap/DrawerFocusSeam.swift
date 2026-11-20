@@ -1,9 +1,35 @@
-// Pure choice of the editor pane `<C-w>k` from the terminal drawer focuses.
+// Pure resolution of a focus move's target pane, bridging the tree and the terminal drawer.
 
 import Foundation
 
-/// Selects the editor pane `<C-w>k` (drawer -> up) should focus.
+/// Resolves the pane a `<C-w>` focus move reaches, across the tree and the drawer, which
+/// lives outside the tree, and the editor pane `<C-w>k` (drawer -> up) should focus.
 public enum DrawerFocusSeam {
+  /// The pane a focus move `dir` from `from` reaches, or `nil` when it has none.
+  ///
+  /// - From the `drawer`: only `.up` resolves, to `drawerUpTarget` over the tree's
+  ///   rectangles; the drawer is full-width, so the other directions have no target.
+  /// - From a tree pane: its `tree.neighbor`, else the open `drawer` for `.down`, the
+  ///   bottom-edge bridge.
+  ///
+  /// `width` and `editorHeight` must be those the view lays its tree out in, the
+  /// drawer-reduced editor height, so the neighbour matches what the user sees.
+  public static func focusTarget(
+    from: PaneId, dir: FocusDir, tree: PaneTree, drawer: PaneId?, lastEditorPane: PaneId?,
+    width: Double, editorHeight: Double
+  ) -> PaneId? {
+    if from == drawer {
+      guard dir == .up else { return nil }
+      return drawerUpTarget(
+        lastEditorPane: lastEditorPane, leaves: tree.leaves(),
+        rects: tree.paneRects(width: width, height: editorHeight))
+    }
+    if let neighbor = tree.neighbor(from, dir, width: width, height: editorHeight) {
+      return neighbor
+    }
+    return dir == .down ? drawer : nil
+  }
+
   /// The bottom-most editor leaf: the one with the greatest `y + h` (top-left
   /// origin, so a larger `y` is lower on screen). Ties on `y + h` break to the
   /// smallest `x` (left-most), then to the smallest `PaneId`. `nil` when `rects`

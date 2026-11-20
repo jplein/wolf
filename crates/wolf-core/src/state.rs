@@ -91,10 +91,12 @@ pub enum PaneOrientation {
 /// unnamed buffer; when `preview` is `true` the pane is a Markdown preview and
 /// `path` is the SOURCE Markdown file's ABS path (restored via `wolf_preview_file`,
 /// not `:edit`). When `terminal` is `true` the pane is a terminal pane and `path` is
-/// the directory its shell starts in (`""` for the tabpage cwd). `preview` and
-/// `terminal` are `#[serde(default)]` so an old v1 file without them loads with both
-/// `false`, and `terminal` is written only when `true`, so a file with no terminal leaf
-/// is byte-stable.
+/// the directory its shell starts in (`""` for the tabpage cwd). When `zoomed` is `true`
+/// the leaf is its tab's zoomed pane; several marks can only come from a hand edit, and
+/// every reader takes the first in DFS order. `preview`, `terminal` and `zoomed` are
+/// `#[serde(default)]` so a v1 file without them loads with all three `false`, and
+/// `terminal` and `zoomed` are written only when `true`, so a file with no terminal or
+/// zoomed leaf is byte-stable.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PaneNode {
@@ -110,6 +112,9 @@ pub enum PaneNode {
         /// Whether this leaf is a terminal pane whose shell starts in `path`.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         terminal: bool,
+        /// Whether this leaf is its tab's zoomed pane, which a relaunch re-zooms.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        zoomed: bool,
     },
     /// An n-ary split of `children` along `orientation`, with parallel per-child
     /// `weights`.
@@ -338,6 +343,11 @@ pub fn seed_runtime_user_dir(dir: &Path) -> std::io::Result<bool> {
 /// a `version` other than [`STATE_VERSION`] — logs a `tracing::warn!` and
 /// returns `None`, leaving the on-disk bytes untouched (all-or-nothing, never
 /// a partial parse). Unknown extra fields are tolerated.
+///
+/// A loaded leaf keeps its `zoomed` mark only when restore can rebuild it: an editor or
+/// preview leaf whose non-empty `path` does not exist loads unzoomed, so its tab restores
+/// unzoomed. A terminal leaf and an unnamed leaf always restore, and keep their mark. The
+/// clearing changes the loaded tree only, never the file.
 #[must_use]
 pub fn load_state(dir: &Path) -> Option<WolfState> {
     let path = dir.join(STATE_FILE_NAME);
@@ -373,9 +383,32 @@ pub fn load_state(dir: &Path) -> Option<WolfState> {
         );
         return None;
     }
-    Some(WolfState {
-        windows: file.windows,
-    })
+    let mut windows = file.windows;
+    for tab in windows.iter_mut().flat_map(|w| w.tabs.iter_mut()) {
+        if let Some(layout) = tab.layout.as_mut() {
+            clear_unrestorable_zoom(layout);
+        }
+    }
+    Some(WolfState { windows })
+}
+
+/// Clears the `zoomed` mark of every editor or preview leaf under `node` whose non-empty
+/// `path` does not exist, since restore cannot honour it. Drops no leaf.
+fn clear_unrestorable_zoom(node: &mut PaneNode) {
+    match node {
+        PaneNode::Leaf {
+            path,
+            terminal,
+            zoomed,
+            ..
+        } => {
+            // `Path::new("").exists()` is false, but an unnamed leaf restores as an empty buffer.
+            if *zoomed && !*terminal && !path.is_empty() && !Path::new(path.as_str()).exists() {
+                *zoomed = false;
+            }
+        }
+        PaneNode::Split { children, .. } => children.iter_mut().for_each(clear_unrestorable_zoom),
+    }
 }
 
 /// Renders `node` into the JSON string `runtime/nvim/init.lua`'s
@@ -387,8 +420,9 @@ pub fn load_state(dir: &Path) -> Option<WolfState> {
 /// terser document:
 ///
 /// - a leaf is `{ "leaf": true, "path": "<abs or empty>", "preview": true|false,
-///   "terminal": true|false }`; `init.lua` opens nothing in a terminal leaf's window,
-///   and [`crate::WolfCore::rebuild_layout`] starts its session
+///   "terminal": true|false, "zoomed": true|false }`; `init.lua` opens nothing in a
+///   terminal leaf's window, and [`crate::WolfCore::rebuild_layout`] starts its session.
+///   `init.lua` ends the rebuild with Neovim's current window on the first zoomed leaf
 /// - a split is `{ "orientation": "v"|"h", "weights": [...], "children": [...] }`,
 ///   where `"v"` is [`PaneOrientation::Vertical`] (side by side) and `"h"` is
 ///   [`PaneOrientation::Horizontal`] (stacked).
@@ -421,11 +455,13 @@ fn spec_value(node: &PaneNode) -> serde_json::Value {
             path,
             preview,
             terminal,
+            zoomed,
         } => serde_json::json!({
             "leaf": true,
             "path": path,
             "preview": preview,
             "terminal": terminal,
+            "zoomed": zoomed,
         }),
         PaneNode::Split {
             orientation,
