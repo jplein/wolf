@@ -248,7 +248,7 @@ The frame-time instrument's smoke: typing bursts with `WOLF_FRAME_STATS` armed, 
 
 #### `smoke_headless/header_bar.rs`
 
-The header bar's contents smoke: one keyboard-only launch, so no pointer hover reaches the capture, and one capture before any key. The header band's columns are read as ink against the bar's own background, the dominant colour of the span the titlebar smokes read as one flat fill. The run of ink holding the Search toggle's centre must exist, with nothing right of it, so the start ends at the toggle group as the macOS toolbar does. Then `Ctrl+Shift+O`, a query and Enter must open the fixture, read back as Neovim's buffer name.
+The header bar's contents smoke: one keyboard-only launch, so no pointer hover reaches the capture, and one capture before any key. The header band's columns are read as ink against the bar's own background, the dominant colour of the span the titlebar smokes read as one flat fill. The run of ink holding the Search toggle's centre must start where the group follows Back/Forward, within half an image button, and nothing may lie right of it, so the start holds Back/Forward and the group alone, as the macOS toolbar does. Then `Ctrl+Shift+O`, a query and Enter must open the fixture, read back as Neovim's buffer name.
 
 #### `smoke_headless/lighthouse.rs`
 
