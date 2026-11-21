@@ -1,6 +1,6 @@
 # `gates.sh`
 
-Last verified at commit `ce93069ef6cfb37ee498af5b00dcf3b8ee9aff21`.
+Last verified at commit `efd13269cafbd804019e8cff72bf9e70d121cb18`.
 
 ## Dev shell entry
 
@@ -22,7 +22,7 @@ On macOS `gates.sh` leaves `TMPDIR` alone, and `make_tmpdir` must stay Linux-onl
 
 ## Gate order
 
-Every gate runs even after one fails, so one run reports every failure, and they run fast to slow, so a formatting slip shows within seconds. The format and Markdown checks compile nothing, nor do the wolf-gnome wording check, its test, `rustfmt-files-test` and `dev-shell-test`. doc-lint is a small crate with no dependencies, so its gates come next. `wolf-core-deps` runs just before the first gate that compiles core's dependency graph, `clippy` on Linux and `lint` on macOS, so a forbidden dependency fails in seconds and the graph it fetches is the one that gate reuses. clippy precedes `rustdoc-links` and the build because it compiles the dependency graph both then reuse, and the tests run last because they dominate the wall clock.
+Every gate runs even after one fails, so one run reports every failure, and they run fast to slow, so a formatting slip shows within seconds. The format and Markdown checks compile nothing, nor do the wolf-gnome wording check, its test, `rustfmt-files-test`, `dev-shell-test` and `regina-run-clean-test`. doc-lint is a small crate with no dependencies, so its gates come next. `wolf-core-deps` runs just before the first gate that compiles core's dependency graph, `clippy` on Linux and `lint` on macOS, so a forbidden dependency fails in seconds and the graph it fetches is the one that gate reuses. clippy precedes `rustdoc-links` and the build because it compiles the dependency graph both then reuse, and the tests run last because they dominate the wall clock.
 
 Prettier's scope, on both platforms, is `**/*.md` minus `.prettierignore`. The glob is quoted so prettier expands it rather than the shell, whose `**` without `globstar` descends one directory only. Prettier 3.9.10 follows no symlinked directory while it expands that glob: with the ignore file disabled it reports nothing under `.direnv/` or the `bazel-*` links, whose Markdown it flags when named directly, and the check takes about a second on macOS.
 

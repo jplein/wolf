@@ -49,7 +49,7 @@ So a task that edits `.claude/skills/regina/` changes no agent of its own reques
 
 8. **Finish**: when no task is open, `.claude/skills/regina/regina-run.sh finish <branch> <label>`. It fast-forwards the integration branch, in its worktree, to what regina landed. Then run `./gates.sh` in `.worktrees/<branch>`, the first macOS build of the result outside a worker. Regina already judged Linux per task.
 
-9. **Report and stop.** Tell the user that the change is in `.worktrees/<branch>` on `<branch>`, which tasks landed and which did not, what the gates printed there, which reports the run wrote under `notes/retrospectives`, and the checks only a person can run: the GUI on a display, and `tools/wolf-package-smoke.sh`. Merging that branch anywhere is the user's decision.
+9. **Report and stop.** Tell the user that the change is in `.worktrees/<branch>` on `<branch>`, which tasks landed and which did not, what the gates printed there, which reports the run wrote under `notes/retrospectives`, and the checks only a person can run: the GUI on a display, and `tools/wolf-package-smoke.sh`. Merging that branch anywhere is the user's decision. Once the user has merged it into `main`, and only when they ask, `.claude/skills/regina/regina-run.sh clean <branch>` removes its worktree, its Bazel output base and the branch, keeping the run directory and the state root. Relay every `skipped`, `failed` and `kept` line it prints.
 
 ## The task files
 
@@ -64,7 +64,7 @@ A task file is a header and a body, in the format regina's `crates/regina-cli/RE
 
 ## Rules
 
-- You write only under `.workspace/<branch>`, besides the remote state root step 2 may create. Never edit the starting directory, the worktree, or a task's workspace under the state root.
+- You write only under `.workspace/<branch>`, besides the remote state root step 2 may create and the `clean` step 9 runs when the user asks. Never edit the starting directory, the worktree, or a task's workspace under the state root.
 - Do not change the starting directory while a run is open: no commit, no checkout, no edit to a tracked file. Keep notes of your own outside the checkout. The wrapper refuses every command but `status` once it has moved, and the way back is to check the starting commit out again.
 - Run one wolf run at a time on this Mac: they share `nixos.local`'s state root and its lock.
 - Every regina command for a run goes through `.workspace/<branch>/regina`. Any other `regina` is another build, with another flow and other definitions.

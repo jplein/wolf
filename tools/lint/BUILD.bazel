@@ -317,6 +317,18 @@ sh_test(
     tags = ["external"],
 )
 
+# ---- regina harness ----
+
+# git and python3 are the client PATH's, not Bazel inputs: `external` keeps a cached pass from
+# hiding a change to them.
+sh_test(
+    name = "regina_run_clean_test",
+    srcs = ["regina_run_clean_test.sh"],
+    data = ["//:.claude/skills/regina/regina-run.sh"],
+    env_inherit = ["PATH"],
+    tags = ["external"],
+)
+
 # ---- aggregates ----
 
 test_suite(
@@ -327,6 +339,7 @@ test_suite(
         ":dev_shell_test",
         ":markdown",
         ":markdown_check_test",
+        ":regina_run_clean_test",
         ":rustfmt_core",
         ":rustfmt_doc_lint",
         ":rustfmt_ffi",

@@ -1,6 +1,6 @@
 #!/bin/sh
-# Starts and finishes a regina run for the regina skill; SKILL.md says when to call it
-# and README.md why each refusal exists.
+# Starts and finishes a regina run, and cleans up merged worktrees, for the regina skill;
+# SKILL.md says when to call it.
 set -eu
 
 project=wolf
@@ -11,7 +11,7 @@ regina_floor=7b72b1ec575c2dcd20e21bb6c100dcd215c62d47
 state_max=60
 
 usage() {
-    echo "usage: regina-run.sh start BRANCH | regina-run.sh finish BRANCH LABEL" >&2
+    echo "usage: regina-run.sh start BRANCH | regina-run.sh finish BRANCH LABEL | regina-run.sh clean [BRANCH...]" >&2
     exit 2
 }
 
@@ -41,10 +41,16 @@ worktree_of() {
         $0 == want { print path }'
 }
 
-locate() {
-    branch=$1
-    git check-ref-format --branch "$branch" >/dev/null 2>&1 ||
-        refuse "$branch is not a branch name git accepts"
+# SHA-256 of stdin; Linux hosts may lack shasum, and both print the same hex digest.
+digest() {
+    if command -v shasum >/dev/null 2>&1; then
+        shasum -a 256
+    else
+        sha256sum
+    fi
+}
+
+find_main() {
     origin=$(git rev-parse --show-toplevel 2>/dev/null) ||
         refuse "run this from inside the repository"
     common=$(git -C "$origin" rev-parse --path-format=absolute --git-common-dir)
@@ -52,15 +58,26 @@ locate() {
         refuse "$common is not the .git directory of a checkout"
     # The main checkout, so a run started from a linked worktree is never nested in it.
     main=$(dirname "$common")
-    worktree=$main/.worktrees/$branch
-    run=$main/.workspace/$branch
     case ${HOME:-} in
         /*) ;;
         *) refuse "HOME is not an absolute path, and the state root is under it" ;;
     esac
+}
+
+branch_paths() {
+    worktree=$main/.worktrees/$1
+    run=$main/.workspace/$1
     # Short and fixed whatever the branch is called, and the same for start and finish.
-    key=$(printf '%s\n%s\n' "$main" "$branch" | shasum -a 256 | cut -c1-8)
+    key=$(printf '%s\n%s\n' "$main" "$1" | digest | cut -c1-8)
     state=$HOME/.local/state/wolf-regina/$key
+}
+
+locate() {
+    branch=$1
+    git check-ref-format --branch "$branch" >/dev/null 2>&1 ||
+        refuse "$branch is not a branch name git accepts"
+    find_main
+    branch_paths "$branch"
 }
 
 start() {
@@ -158,6 +175,8 @@ commit=$commit
 regina=$(quoted "$regina")
 config=$(quoted "$run/regina.conf")
 case \${1:-} in
+    # regina re-reads the flow and the agent definitions in origin at every command, so a moved
+    # or edited origin would change them; status reads neither, so it is exempt.
     status) ;;
     *)
         head=\$(git -C "\$origin" rev-parse HEAD)
@@ -210,6 +229,248 @@ finish() {
     echo "worktree  $worktree"
 }
 
+say() {
+    printf '%-10s%s\n' "$1" "$2"
+}
+
+# The physical path; for a missing directory, its parent's physical path plus its name.
+canon() {
+    if [ -d "$1" ]; then
+        (cd "$1" && pwd -P) || printf '%s\n' "$1"
+    elif [ -d "$(dirname "$1")" ]; then
+        printf '%s/%s\n' "$(cd "$(dirname "$1")" && pwd -P)" "$(basename "$1")"
+    else
+        printf '%s\n' "$1"
+    fi
+}
+
+# One line per worktree on stdin's `git worktree list --porcelain`: branch, flags, path,
+# split by \037 so an empty branch survives `read`; the path goes last as it may hold anything.
+worktree_records() {
+    awk '
+        function emit() { if (seen) printf "%s\037%s\037%s\n", branch, flags, path }
+        /^worktree / { emit(); seen = 1; path = substr($0, 10); branch = ""; flags = ","; next }
+        /^branch refs\/heads\// { branch = substr($0, 19); next }
+        $1 == "locked" || $1 == "prunable" { flags = flags $1 "," }
+        END { emit() }'
+}
+
+# 0 when nobody holds the regina.lock at $1, or it does not exist; 1 when held; 2 when unknown.
+lock_state() {
+    [ -e "$1" ] || return 0
+    rc=0
+    python3 -I -c '
+import errno, fcntl, sys
+f = open(sys.argv[1], "r")
+try:
+    fcntl.flock(f.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
+except OSError as e:
+    sys.exit(3 if e.errno in (errno.EAGAIN, errno.EWOULDBLOCK) else 4)
+' "$1" </dev/null >&2 || rc=$?
+    case $rc in
+        0) return 0 ;;
+        3) return 1 ;;
+        *) return 2 ;;
+    esac
+}
+
+skip() {
+    say skipped "$1: $2"
+    skipped=$((skipped + 1))
+}
+
+fail_one() {
+    say failed "$1: $2"
+    failed=$((failed + 1))
+}
+
+# Removes the worktree at $3 (physical $4) of branch $1 with flags $2 if every check passes.
+# Sets outcome to removed, skipped or failed; README.md has the reasons for the less obvious checks.
+clean_one() {
+    b=$1 flags=$2 path=$3 p=$4
+    outcome=skipped
+    if [ "$b" = main ]; then
+        skip "$b" "is main"
+        return
+    fi
+    if [ -z "$b" ]; then
+        skip "$path" "detached HEAD"
+        return
+    fi
+    if [ "$p" != "$wt_root/$b" ]; then
+        skip "$b" "checked out at $p, not at $wt_root/$b"
+        return
+    fi
+    case $flags in
+        *,prunable,*) prunable=1 ;;
+        *) prunable="" ;;
+    esac
+    if [ -n "$prunable" ] || [ ! -d "$p" ]; then
+        skip "$b" "directory missing"
+        return
+    fi
+    case $flags in
+        *,locked,*)
+            skip "$b" "locked"
+            return
+            ;;
+    esac
+    if [ "$p" = "$here" ]; then
+        skip "$b" "this command runs from it"
+        return
+    fi
+    if ! git -C "$main" merge-base --is-ancestor "refs/heads/$b" refs/heads/main 2>/dev/null; then
+        skip "$b" "not merged into main"
+        return
+    fi
+    rc=0
+    dirty=$(git -C "$p" status --porcelain </dev/null) || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        skip "$b" "git status --porcelain exited $rc"
+        return
+    fi
+    if [ -n "$dirty" ]; then
+        skip "$b" "uncommitted or untracked changes"
+        return
+    fi
+
+    # Last before anything destructive, and fail closed: a live run must keep its worktree.
+    branch_paths "$b"
+    rc=0
+    lock_state "$state/regina.lock" || rc=$?
+    case $rc in
+        0) ;;
+        1)
+            skip "$b" "a regina command holds $state/regina.lock"
+            return
+            ;;
+        *)
+            skip "$b" "cannot probe $state/regina.lock"
+            return
+            ;;
+    esac
+    if [ -e "$run/regina" ]; then
+        rc=0
+        open=$("$run/regina" status --open </dev/null) || rc=$?
+        if [ "$rc" -ne 0 ]; then
+            skip "$b" "$run/regina status --open exited $rc"
+            return
+        fi
+        first=$(printf '%s\n' "$open" | sed -n 1p)
+        if [ "$first" != "no open tasks" ]; then
+            skip "$b" "open tasks in $run"
+            return
+        fi
+    fi
+
+    bin=$(command -v bazelisk || command -v bazel || true)
+    if [ -z "$bin" ]; then
+        for link in "$p"/bazel-*; do
+            if [ -L "$link" ]; then
+                skip "$b" "Bazel output but no bazelisk or bazel on PATH"
+                return
+            fi
+        done
+    else
+        # The output base lives outside the worktree; once the worktree is gone nothing finds it.
+        rc=0
+        (cd "$p" && "$bin" --noblock_for_lock clean --expunge) </dev/null >&2 || rc=$?
+        if [ "$rc" -ne 0 ]; then
+            outcome=failed
+            fail_one "$b" "$(basename "$bin") clean --expunge exited $rc; worktree kept"
+            return
+        fi
+    fi
+
+    rc=0
+    git -C "$main" worktree remove "$path" </dev/null >&2 || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        outcome=failed
+        fail_one "$b" "git worktree remove exited $rc"
+        return
+    fi
+    gone="$gone$p
+"
+    # Never -D: -d refuses a branch its upstream, or else the main checkout's HEAD, lacks,
+    # and -D would delete it anyway.
+    if ! git -C "$main" branch -d "$b" </dev/null >/dev/null; then
+        outcome=failed
+        fail_one "$b" "worktree removed; git branch -d refused, branch kept"
+        return
+    fi
+    outcome=removed
+    removed=$((removed + 1))
+    say removed "$b"
+    # Kept: the run's task files and binary, and the state root's database and refs.
+    if [ -e "$run" ]; then
+        say kept "$run"
+    fi
+    if [ -e "$state" ]; then
+        say kept "$state"
+    fi
+}
+
+clean() {
+    [ -z "${REGINA_AGENT:-}" ] ||
+        refuse "REGINA_AGENT is set: this is a regina worker, which removes no worktree"
+    find_main
+    for name in "$@"; do
+        git check-ref-format --branch "$name" >/dev/null 2>&1 ||
+            refuse "$name is not a branch name git accepts"
+    done
+    git -C "$main" show-ref --verify --quiet refs/heads/main ||
+        refuse "$main has no local main branch"
+    listing=$(git -C "$main" worktree list --porcelain) ||
+        refuse "git worktree list in $main failed"
+    records=$(printf '%s\n' "$listing" | worktree_records)
+    wt_root=$(canon "$main/.worktrees")
+    here=$(canon "$origin")
+    us=$(printf '\037')
+    removed=0 skipped=0 failed=0 missed=0 gone=""
+
+    if [ "$#" -eq 0 ]; then
+        while IFS=$us read -r b flags path <&3; do
+            [ -n "$path" ] || continue
+            p=$(canon "$path")
+            # A sweep never looks at the main checkout or a worktree outside .worktrees.
+            case $p in
+                "$wt_root"/*) clean_one "$b" "$flags" "$path" "$p" ;;
+            esac
+        done 3<<EOF
+$records
+EOF
+    else
+        for name in "$@"; do
+            outcome=""
+            while IFS=$us read -r b flags path <&3; do
+                if [ "$b" = "$name" ]; then
+                    clean_one "$b" "$flags" "$path" "$(canon "$path")"
+                    break
+                fi
+            done 3<<EOF
+$records
+EOF
+            if [ -z "$outcome" ]; then
+                skip "$name" "not checked out in any worktree"
+            fi
+            [ "$outcome" = removed ] || missed=$((missed + 1))
+        done
+    fi
+
+    # Emptied parents of removed worktrees, up to but never including .worktrees itself.
+    while IFS= read -r p <&3; do
+        [ -n "$p" ] || continue
+        d=$(dirname "$p")
+        while [ "$d" != "$wt_root" ] && rmdir "$d" 2>/dev/null; do
+            d=$(dirname "$d")
+        done
+    done 3<<EOF
+$gone
+EOF
+    say summary "removed=$removed skipped=$skipped failed=$failed"
+    [ "$failed" -eq 0 ] && [ "$missed" -eq 0 ] || exit 1
+}
+
 case ${1:-} in
     start)
         [ "$#" -eq 2 ] || usage
@@ -218,6 +479,10 @@ case ${1:-} in
     finish)
         [ "$#" -eq 3 ] || usage
         finish "$2" "$3"
+        ;;
+    clean)
+        shift
+        clean "$@"
         ;;
     *) usage ;;
 esac

@@ -5,6 +5,12 @@ exports_files([
     "Cargo.lock",
 ])
 
+# The regina skill's run script, which //tools/lint:regina_run_clean_test stages as data.
+exports_files(
+    [".claude/skills/regina/regina-run.sh"],
+    visibility = ["//tools/lint:__pkg__"],
+)
+
 # Root files and package-less dirs; globs stop at packages, and `*` skips dotfiles (hence `.*.md`).
 # CLAUDE.md quotes the changelog words it bans, so it is out of the Markdown check's scope.
 filegroup(

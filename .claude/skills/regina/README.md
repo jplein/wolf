@@ -10,17 +10,20 @@ Purpose: the `regina` skill, the procedure an interactive session follows to car
 
 #### `regina-run.sh`
 
-Purpose: starts and finishes a run, keeping the binary, the flow and the definitions it uses the ones it started with.
+Purpose: starts and finishes a run with a tool fixed at its start, and removes the worktrees of merged branches.
 
-**Public API** — `regina-run.sh start BRANCH` creates or reuses `BRANCH` in `.worktrees/BRANCH`, writes `.workspace/BRANCH/{regina.conf,tasks/,regina,state}`, where `state` links to the run's state root, and registers the project. `regina-run.sh finish BRANCH LABEL` fast-forwards the branch to `regina/land/LABEL`. Every later command goes through the wrapper `.workspace/BRANCH/regina`.
+**Public API** — `start BRANCH` creates or reuses `.worktrees/BRANCH`, writes the run directory `.workspace/BRANCH`, whose wrapper `regina` every later command goes through, and registers the project. `finish BRANCH LABEL` fast-forwards the branch to `regina/land/LABEL` and leaves its worktree. `clean [BRANCH...]`, by default every worktree under `.worktrees/`, expunges each qualifying worktree's Bazel output base, then removes it and its branch. It exits 1 on a refusal, a `failed` line or a named branch it did not remove; a sweep's skips leave it 0.
 
 **Decisions**
 
-- Regina is built from its own checkout and pinned by the nix out-link `.workspace/BRANCH/result`; a dirty checkout is refused, since nix would build it as is. The commit is printed: `nixos.local`'s `regina serve` must speak the same protocol.
-- `REGINA_SOURCE`, by default `~/dev/jplein/regina`, must be the top of a regina checkout that contains 7b72b1e, the first with the Seatbelt grants wolf's macOS gate needs and the `host` profile's `/dev/shm` lift.
-- The state root is `~/.local/state/wolf-regina/KEY`, `KEY` hashing the main checkout and the branch. Bazel's `TEST_TMPDIR` nests under it, and `short_tempdir` (`crates/wolf-core/tests/common/mod.rs`) refuses one over `SHORT_TEMP_ROOT_MAX`, 222 bytes, which a run-directory state root nearly reaches. So `start` refuses a root over 60 bytes canonical, and `regina.conf` names the canonical path, never the link.
-- Remove a state root with `chmod -R u+w` first: Bazel's output roots in it are read-only.
-- The wrapper refuses all but `status` once the starting checkout moves or gets a tracked change: regina re-reads the flow and the definitions there at every command.
+- The state root, `~/.local/state/wolf-regina/KEY`, is outside the run directory: Bazel's `TEST_TMPDIR` nests under it, and `short_tempdir` (`crates/wolf-core/tests/common/mod.rs`) refuses one over `SHORT_TEMP_ROOT_MAX`. So `start` refuses a canonical root over `state_max` bytes, and `regina.conf` names the canonical path, never the `state` link.
+- `clean` compares physical paths, so a symlink under `.worktrees` cannot lead it outside.
+- Merged means an ancestor of local `main`, so a just-started branch that has not diverged from it qualifies. `git branch -d`, never `-D`, keeps git's own check, made against the branch's upstream or else the main checkout's `HEAD`, so a refusal can mean `HEAD` is off `main` or a stale upstream.
+- Untracked files count as changes; ignored ones such as `bazel-*` do not, or no built worktree would qualify.
+- Only a held `<state>/regina.lock` marks a live run, as the file outlives every command; a failing `status --open` skips. The probe takes a shared lock for an instant, so a regina command starting then fails with `state locked` and can be retried.
+- `clean` always expunges when `bazelisk` or `bazel` is on `PATH`, having no cheap test that a worktree never ran Bazel.
+- A worktree whose directory is missing is skipped and stays registered: `git worktree prune` would also drop records `clean` never chose.
+- The run directory and the state root stay for a later `start`; remove the state root after `chmod -R u+w`, as Bazel's output roots in it are read-only.
 
 #### `regina.conf.template`
 
