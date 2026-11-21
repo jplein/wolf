@@ -395,10 +395,11 @@ fn tree_handle_x() -> f64 {
 /// | — | precondition W: `g:zwnext` is A or C | none | n/a |
 /// | W2 | W: four windows, current `g:zwnext`; A, B, C and D equal P | in `update_active_pane`, delete the `FocusMove` application and its rebuild | W: B still at L's size |
 /// | H1 | H: three windows, current B, A at P's width and L's height, B at P's width | in `zoomed_after`, `ZoomEvent::ToggleTerminal { .. } => zoomed` | H: B still at L's size |
-/// | N1 | N: four windows, the last tagged `w:wolf_drawer`; A, B, C and D equal P | in `PaneInner::toggle_terminal`, return before `core.toggle_terminal()` while `self.zoomed.get().is_some() && self.drawer.get().id().is_none()` | N: three windows |
-/// | S1 | S: five windows; B halved in width at P's height; A, C and D equal P; the new pane current | delete the `ZoomEvent::Split` call in `apply_split` | S: B at L's width, or current back on B |
+/// | N1 | N: four windows, the last tagged `w:wolf_drawer`; A, B, C and D equal P | at the top of `PaneInner::toggle_terminal`, return while `self.zoomed.get().is_some() && self.drawer.get().id().is_none()` | N: three windows |
+/// | — | S: five windows; B halved in width at P's height; A, C and D equal P; the new pane current | none of its own; see below | n/a |
 /// | — | precondition C: three windows, the closed pane not current | none | n/a |
 /// | O1 | O: four windows, current is C's, halved in width at C's height | in `PaneInner::other_pane_target`, delete the zoomed branch | O: three windows |
+/// | S1 | O | delete the `ZoomEvent::Split` call in `apply_split` | O: four windows, the current at L's size |
 ///
 /// U1 is the falsifier that loses a dragged divider across zoom and unzoom. F2 is the one
 /// that leaves the pane zoomed after a focus move.
@@ -415,6 +416,11 @@ fn tree_handle_x() -> f64 {
 /// and `update_active_pane` reads that as a focus move, which unzooms. Deleting the
 /// `ZoomEvent::PanesChanged` call in `detect_closes` therefore turns nothing here red;
 /// `tests/pane_zoom.rs`'s K5 pins that rule.
+///
+/// S has no falsifier of its own. `<C-w>v` makes the new window Neovim's current one, and
+/// `update_active_pane` reads that as a focus move, which unzooms, so deleting the `Split`
+/// call in `apply_split` leaves S green. Preview in Another Pane leaves the current window
+/// on its source, so at O only the split unzooms, and O carries S1.
 ///
 /// ## Order
 ///
@@ -782,15 +788,14 @@ fn zoom_pane_hides_restores_and_unzooms_under_cage() {
         q.d
     );
 
-    // --- S (S1): a split while zoomed unzooms, then splits ------------------------
+    // --- S: a split while zoomed unzooms, then splits -----------------------------
     leg(&[read_s.as_path()], "S");
     let (s, s_extra) = read_geom(&read_s, 2, SMOKE);
     let new_pane = (s_extra[0], s_extra[1]);
     assert!(
         s.count == 5 && ![id_a, id_b, id_c].contains(&s.current),
         "{SMOKE}: after zooming B and `<C-w>v`, Neovim reports {} windows with current {}; want \
-         5, with the new window current rather than one of ({id_a}, {id_b}, {id_c}). Current \
-         back on B means the view stayed zoomed on B and sent Neovim back to it.",
+         5, with the new window current rather than one of ({id_a}, {id_b}, {id_c}).",
         s.count,
         s.current
     );
@@ -798,7 +803,8 @@ fn zoom_pane_hides_restores_and_unzooms_under_cage() {
         s.b.1 == p.b.1 && 2 * s.b.0 <= p.b.0 + 1 && new_pane.1 == p.b.1,
         "{SMOKE}: after zooming B and `<C-w>v`, B is {:?} and the new pane {new_pane:?}, against \
          B's unzoomed {:?}; want both at B's height with B no more than half its width. B at \
-         L's {lsize:?} means the split did not unzoom and the new pane is hidden behind B; a \
+         L's {lsize:?} means the view stayed zoomed through the split: neither the split nor \
+         the focus move to the new window unzoomed, and the new pane is hidden behind B; a \
          new pane at L's size means the zoom moved to it.",
         s.b,
         p.b
@@ -830,7 +836,7 @@ fn zoom_pane_hides_restores_and_unzooms_under_cage() {
         s.current
     );
 
-    // --- O (O1): an other-pane command while zoomed splits ------------------------
+    // --- O (O1, S1): an other-pane command while zoomed splits --------------------
     leg(&[read_o.as_path()], "O");
     let o = read_focus(&read_o, SMOKE);
     assert!(
