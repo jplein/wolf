@@ -175,9 +175,14 @@ pub fn resolve_leaves(leaves: &[(PaneId, WinContent)]) -> Option<HashMap<PaneId,
 /// path builds `contents` from [`resolve_leaves`], which answers one entry per leaf
 /// or refuses outright, so a missing id cannot reach here from it.
 ///
-/// Weights and orientation are copied VERBATIM.
+/// Weights and orientation are copied VERBATIM. The leaf whose id is `zoomed` is marked
+/// `zoomed`; a `zoomed` id that is no leaf, such as the drawer's, marks nothing.
 #[must_use]
-pub fn encode(layout: &PaneLayout, contents: &HashMap<PaneId, LeafContent>) -> PaneNode {
+pub fn encode(
+    layout: &PaneLayout,
+    contents: &HashMap<PaneId, LeafContent>,
+    zoomed: Option<PaneId>,
+) -> PaneNode {
     match layout {
         PaneLayout::Leaf(id) => {
             // `LeafContent::default()` IS the "no such pane" value, which is why a
@@ -187,7 +192,7 @@ pub fn encode(layout: &PaneLayout, contents: &HashMap<PaneId, LeafContent>) -> P
                 path: content.path,
                 preview: content.preview,
                 terminal: content.terminal,
-                zoomed: false,
+                zoomed: Some(*id) == zoomed,
             }
         }
         PaneLayout::Split {
@@ -196,7 +201,10 @@ pub fn encode(layout: &PaneLayout, contents: &HashMap<PaneId, LeafContent>) -> P
             weights,
         } => PaneNode::Split {
             orientation: to_core_orientation(*orientation),
-            children: children.iter().map(|c| encode(c, contents)).collect(),
+            children: children
+                .iter()
+                .map(|c| encode(c, contents, zoomed))
+                .collect(),
             // VERBATIM. Equalizing here would silently re-centre every dragged
             // divider on the next launch while the restore side looked correct.
             weights: weights.clone(),
@@ -234,6 +242,24 @@ pub fn leaf_count(node: &PaneNode) -> usize {
         PaneNode::Leaf { .. } => 1,
         PaneNode::Split { children, .. } => children.iter().map(leaf_count).sum(),
     }
+}
+
+/// The depth-first index of the first leaf under `node` marked `zoomed`: the index into
+/// [`decode`]'s leaf ids, and the leaf `wolf_rebuild_layout` leaves current. A hand edit's
+/// later marks are ignored.
+#[must_use]
+pub fn zoomed_leaf_index(node: &PaneNode) -> Option<usize> {
+    fn walk(node: &PaneNode, index: &mut usize) -> Option<usize> {
+        match node {
+            PaneNode::Leaf { zoomed, .. } => {
+                let here = *index;
+                *index += 1;
+                zoomed.then_some(here)
+            }
+            PaneNode::Split { children, .. } => children.iter().find_map(|c| walk(c, index)),
+        }
+    }
+    walk(node, &mut 0)
 }
 
 /// The leaf paths under `node` in DFS order — the order
@@ -516,7 +542,7 @@ mod tests {
         // since dropping it changes the topology and desynchronises the DFS zip.
         contents.insert(P2, preview_pane(PATH_C));
 
-        let got = encode(&asymmetric_layout(), &contents);
+        let got = encode(&asymmetric_layout(), &contents, None);
 
         // One whole-value comparison: editor, unmapped and preview ids, both orientations and both
         // weight vectors verbatim.
@@ -553,7 +579,7 @@ mod tests {
              the save path suppresses outright."
         );
         assert_eq!(
-            encode(&PaneLayout::Leaf(P1), &contents),
+            encode(&PaneLayout::Leaf(P1), &contents, None),
             leaf(""),
             "a leaf id with NO entry in `contents` must encode as `Leaf {{ path: \"\", \
              preview: false }}`. `LeafContent::default()` is that value, which is why the lookup \
@@ -1087,7 +1113,7 @@ mod tests {
         contents.insert(P0, editor_pane(PATH_A));
         contents.insert(P1, editor_pane(PATH_B));
 
-        let node = encode(&layout, &contents);
+        let node = encode(&layout, &contents, None);
         let Some((tree, leaf_ids)) = decode(&node, P0) else {
             panic!("decode rejected the encoding of a well-formed two-leaf tree: {node:?}");
         };
@@ -1124,7 +1150,7 @@ mod tests {
         tri_contents.insert(P0, editor_pane(PATH_A));
         tri_contents.insert(P1, editor_pane(PATH_B));
         tri_contents.insert(P2, editor_pane(PATH_C));
-        let tri_node = encode(&asymmetric_layout(), &tri_contents);
+        let tri_node = encode(&asymmetric_layout(), &tri_contents, None);
         assert_eq!(
             tri_node,
             asymmetric_tree(),
@@ -1349,7 +1375,7 @@ mod tests {
             "precondition: the dragged head weight should be {DRAGGED_HEAD_FRACTION}, got {live:?}"
         );
 
-        let node = encode(&tree.layout(), &dragged_contents());
+        let node = encode(&tree.layout(), &dragged_contents(), None);
 
         let PaneNode::Split {
             orientation,
@@ -1394,7 +1420,7 @@ mod tests {
     /// MEASURED: `the restored divider fraction is 0.5, not the dragged 0.7`.
     #[test]
     fn decode_restores_a_dragged_weight_vector() {
-        let node = encode(&dragged_two_leaf_tree().layout(), &dragged_contents());
+        let node = encode(&dragged_two_leaf_tree().layout(), &dragged_contents(), None);
 
         let Some((rebuilt, leaf_ids)) = decode(&node, P0) else {
             panic!("decode rejected the encoding of a dragged two-leaf split: {node:?}");

@@ -44,8 +44,8 @@
 //! - [`mod@liveness_ui`]: the crash and stall recovery rules.
 //! - [`mod@nav_ui`]: which pane a Back or Forward press acts on, and when it may.
 //! - [`mod@other_pane_seam`]: which pane Preview or Edit in Another Pane binds into, or a split.
-//! - [`mod@pane_zoom`]: the Zoom Pane rules: which pane is zoomed, what unzooms it, and what a
-//!   zoom freezes.
+//! - [`mod@pane_zoom`]: the Zoom Pane rules: which pane is zoomed, and which events unzoom it
+//!   or re-zoom it.
 //! - [`mod@clipboard_ui`]: the Copy and Paste guards and what crosses each way.
 //! - [`mod@preview_link`]: the URI arithmetic behind a link clicked inside the preview.
 //! - [`mod@preview_ui`]: the Markdown preview's guards, reloads and statusbar lines.

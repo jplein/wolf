@@ -4481,6 +4481,7 @@ struct LeafFields<'a> {
     path: &'a str,
     preview: bool,
     terminal: bool,
+    zoomed: bool,
 }
 
 /// A persisted leaf's [`LeafFields`] — `None` for a split.
@@ -4493,11 +4494,12 @@ fn leaf_fields(node: &PaneNode) -> Option<LeafFields<'_>> {
             path,
             preview,
             terminal,
-            ..
+            zoomed,
         } => Some(LeafFields {
             path,
             preview: *preview,
             terminal: *terminal,
+            zoomed: *zoomed,
         }),
         PaneNode::Split { .. } => None,
     }

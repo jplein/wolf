@@ -608,9 +608,10 @@ struct PaneInner {
     drawer_divider: RefCell<Option<(gtk::Paned, Rc<DividerGuard>)>>,
     /// The pane this tab shows alone over the pane area, or `None` for the whole layout.
     ///
-    /// Per tab and never persisted. A zoom touches neither [`Self::tree`], its weights,
-    /// [`Self::drawer_share`] nor [`Self::drawer`], so the layout a snapshot saves is the
-    /// unzoomed one and an unzoom rebuilds it exactly. The rules are [`crate::pane_zoom`]'s.
+    /// Per tab. A zoom touches neither [`Self::tree`], its weights, [`Self::drawer_share`]
+    /// nor [`Self::drawer`], so the layout a snapshot saves is the unzoomed one and an unzoom
+    /// rebuilds it exactly. `state.json` records it as the zoomed leaf's mark, which a launch
+    /// rebuild re-zooms. The rules are [`crate::pane_zoom`]'s.
     zoomed: Cell<Option<PaneId>>,
     /// A saved pane tree awaiting realization, set ONCE at launch by
     /// [`PaneHandle::request_layout_rebuild`] and consumed by the first wake at
@@ -953,7 +954,11 @@ impl PaneInner {
     ///    wedged nvim at launch marks the core `NotResponding`, and the crash
     ///    overlay presents it.
     /// 4. A handle count that does not match the decoded leaf count aborts,
-    ///    leaving the single already-bound pane intact.
+    ///    leaving the single already-bound pane intact, and the tab unzoomed.
+    ///
+    /// A leaf marked `zoomed` is re-zoomed through [`ZoomEvent::Restore`] and made the active
+    /// pane. The rebuild left Neovim's current window on that leaf, so no later wake reads a
+    /// focus move off it.
     fn apply_layout_rebuild(self: &Rc<Self>, saved: &PaneNode) {
         let first_id = self.next_pane_id.get();
         let Some((tree, leaf_ids)) = pane_layout::decode(saved, first_id) else {
@@ -998,11 +1003,17 @@ impl PaneInner {
         // drawer is never a restored leaf. Without it `DrawerState` could name a pane nothing holds.
         self.clear_drawer();
         self.zoomed.set(None);
+        // Before the rebuild, so the first build already shows the zoomed host alone.
+        let saved_zoom =
+            pane_layout::zoomed_leaf_index(saved).and_then(|i| leaf_ids.get(i).copied());
+        if let Some(id) = saved_zoom {
+            self.apply_zoom_event(ZoomEvent::Restore(id));
+        }
 
         // The guarded path: it samples focus before teardown, and its remove loop unparents the old
         // single pane's area, `pane_area`'s only child and no longer in `panes`.
         self.rebuild_pane_area();
-        self.set_active_pane(leaf_ids.first().copied());
+        self.set_active_pane(self.zoomed.get().or_else(|| leaf_ids.first().copied()));
         self.resolve_pending_grids();
         // Without this every restored pane paints `[No Name]` for one frame: this
         // path early-returns from the wake, so the normal refresh never runs.
@@ -1239,13 +1250,18 @@ impl PaneInner {
     /// `specs/terminal-panes.md` § Session restore keeps the drawer out of `state.json`,
     /// and a terminal leaf restores as a split pane, never as the drawer. Putting the
     /// drawer in the tree is what would break this, not editing this function.
+    ///
+    /// The zoomed pane's leaf is marked `zoomed`. A zoomed drawer marks no leaf, so the tab
+    /// persists unzoomed.
     fn layout_snapshot(&self) -> pane_layout::LayoutGather {
         let Some(contents) = self.leaf_contents() else {
             return pane_layout::LayoutGather::Refuse;
         };
         let layout = self.tree.borrow().layout();
         pane_layout::LayoutGather::Ready(state_seam::persistable_layout(pane_layout::encode(
-            &layout, &contents,
+            &layout,
+            &contents,
+            self.zoomed.get(),
         )))
     }
 
@@ -1281,14 +1297,21 @@ impl PaneInner {
     ///
     /// Each borrow is its own statement, and the core borrow is taken only after
     /// the pane-map borrow is released.
+    ///
+    /// While zoomed only the shown pane counts: a hidden pane is never allocated, so it never
+    /// requests a grid, and a launch that restores a zoom would otherwise never be ready.
     fn readiness(&self) -> ready_seam::PaneReadiness {
         let layout_pending = self.pending_layout.borrow().is_some();
-        let pairs: Vec<(u64, Option<(u16, u16)>)> = self
-            .panes
-            .borrow()
-            .values()
-            .filter_map(|p| p.grid.get().map(|grid| (grid, p.requested_grid.get())))
-            .collect();
+        let pairs: Vec<(u64, Option<(u16, u16)>)> = {
+            let panes = self.panes.borrow();
+            let bound_ids: Vec<PaneId> = panes.keys().copied().collect();
+            let alone = pane_zoom::shown_alone(self.zoomed.get(), &bound_ids);
+            panes
+                .iter()
+                .filter(|(id, _)| alone.is_none_or(|a| a == **id))
+                .filter_map(|(_, p)| p.grid.get().map(|grid| (grid, p.requested_grid.get())))
+                .collect()
+        };
         let sized = {
             let core_ref = self.core.borrow();
             core_ref.as_ref().map_or(0, |core| {
@@ -1437,6 +1460,10 @@ impl PaneInner {
     /// (fallback: active pane) in `dir` through [`drawer::focus_target`], then
     /// `focus_win` its window.
     ///
+    /// While zoomed the move starts from the zoomed pane ([`pane_zoom::focus_origin`]) and
+    /// resolves in the unzoomed tree, which a zoom never touches. A move with a target unzooms
+    /// and rebuilds the pane area before the focus; one with none keeps the zoom.
+    ///
     /// **The whole answer comes from the pure seam, including the editor <-> drawer
     /// bridge**, because Neovim emits `<C-w>h/j/k/l` as a PURE intent and declines to
     /// act on it: `<C-w>k` pressed inside the drawer leaves `active_win` where it
@@ -1448,12 +1475,10 @@ impl PaneInner {
     /// therefore dropped before the core borrow below — this file's rule, and not
     /// optional here: `focus_win` is a core call.
     fn apply_focus(&self, dir: wolf_core::FocusDir, from: i64) {
-        if pane_zoom::freezes_focus(self.zoomed.get()) {
-            return;
-        }
         let width = f64::from(self.pane_area.width());
         let height = f64::from(self.pane_area.height());
-        let Some(origin) = self.pane_for_win(from).or_else(|| self.active_pane.get()) else {
+        let from = self.pane_for_win(from).or_else(|| self.active_pane.get());
+        let Some(origin) = pane_zoom::focus_origin(self.zoomed.get(), from) else {
             return;
         };
         let target = drawer::focus_target(
@@ -1464,6 +1489,9 @@ impl PaneInner {
             width,
             height,
         );
+        if self.apply_zoom_event(ZoomEvent::FocusMove { target }) {
+            self.rebuild_pane_area();
+        }
         let Some(target) = target else {
             return;
         };
@@ -1543,7 +1571,7 @@ impl PaneInner {
 
     /// Applies `event` to [`Self::zoomed`] through [`pane_zoom::zoomed_after`], over the tree's
     /// leaves plus the open drawer, and answers whether the zoom changed. Rebuilds nothing:
-    /// every caller rebuilds the pane area after it.
+    /// a caller that gets `true` rebuilds the pane area.
     fn apply_zoom_event(&self, event: ZoomEvent) -> bool {
         let mut panes = self.tree.borrow().leaves();
         panes.extend(self.drawer.get().id());
@@ -1570,6 +1598,19 @@ impl PaneInner {
         }
         self.rebuild_pane_area();
         self.queue_redraw();
+    }
+
+    /// Toggle Terminal: unzooms first unless the drawer is the zoomed pane, then asks core to
+    /// open or hide the drawer, exactly as unzoomed.
+    fn toggle_terminal(&self) {
+        let drawer = self.drawer.get().id();
+        if self.apply_zoom_event(ZoomEvent::ToggleTerminal { drawer }) {
+            self.rebuild_pane_area();
+            self.queue_redraw();
+        }
+        if let Some(core) = self.core.borrow().as_ref() {
+            core.toggle_terminal();
+        }
     }
 
     /// Resolves any pane whose grid is still pending via `grid_for_win`, sizing the
@@ -1616,9 +1657,9 @@ impl PaneInner {
     /// Refreshes the active pane from `active_win` (fallback: the pane owning the
     /// cursor's grid).
     ///
-    /// While zoomed, a window that resolves to another pane is sent back to the zoomed one
-    /// ([`pane_zoom::refocuses`]) and the active pane stays: Neovim left by a path no intent
-    /// reports, such as `<C-w>w`, and typing would otherwise reach a hidden pane.
+    /// Neovim's own move to another pane (`<C-w>w`, `:wincmd`) is a focus move, which unzooms
+    /// and rebuilds the pane area. A window that resolves to no pane, as on another tab's
+    /// tabpage, keeps the zoom.
     fn update_active_pane(&self) {
         let target = {
             let core_ref = self.core.borrow();
@@ -1637,15 +1678,8 @@ impl PaneInner {
                     .map(|(id, _)| *id)
             })
         };
-        let zoomed = self.zoomed.get();
-        if pane_zoom::refocuses(target, zoomed) {
-            let win = zoomed.and_then(|z| self.panes.borrow().get(&z).map(|p| p.win));
-            if let Some(win) = win {
-                if let Some(core) = self.core.borrow().as_ref() {
-                    core.focus_win(win);
-                }
-                return;
-            }
+        if self.apply_zoom_event(ZoomEvent::FocusMove { target }) {
+            self.rebuild_pane_area();
         }
         if let Some(id) = target {
             if self.active_pane.get() != Some(id) {
@@ -3957,11 +3991,10 @@ impl PaneHandle {
         self.inner.toggle_zoom();
     }
 
-    /// Whether Toggle Terminal may act on this tab: always unzoomed, and while zoomed only
-    /// when the drawer is the zoomed pane ([`pane_zoom::allows_toggle_terminal`]).
-    #[must_use]
-    pub fn allows_toggle_terminal(&self) -> bool {
-        pane_zoom::allows_toggle_terminal(self.inner.zoomed.get(), self.inner.drawer.get().id())
+    /// Toggle Terminal on this tab: unzooms first unless the drawer is the zoomed pane, then
+    /// opens or hides the drawer through `WolfCore::toggle_terminal`.
+    pub fn toggle_terminal(&self) {
+        self.inner.toggle_terminal();
     }
 
     /// Whether this tab's terminal drawer is open, which a restart captures before it

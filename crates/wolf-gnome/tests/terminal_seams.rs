@@ -1001,7 +1001,7 @@ fn a_terminal_pane_persists_as_a_terminal_leaf() {
         weights: vec![0.25, 0.75],
     };
     assert_eq!(
-        encode(&layout, &contents),
+        encode(&layout, &contents, None),
         PaneNode::Split {
             orientation: PaneOrientation::Vertical,
             weights: vec![0.25, 0.75],
@@ -1025,7 +1025,7 @@ fn a_terminal_pane_persists_as_a_terminal_leaf() {
          resolves like a buffer"
     );
 
-    let lone_node = encode(&PaneLayout::Leaf(lone), &contents);
+    let lone_node = encode(&PaneLayout::Leaf(lone), &contents, None);
     assert_eq!(
         lone_node,
         PaneNode::Leaf {
@@ -1045,7 +1045,7 @@ fn a_terminal_pane_persists_as_a_terminal_leaf() {
         resolve_leaves(&[(lone, WinContent::Buffer(String::new()))])
             .expect("an unnamed buffer resolves");
     assert!(
-        is_empty_leaf(&encode(&PaneLayout::Leaf(lone), &empty_contents)),
+        is_empty_leaf(&encode(&PaneLayout::Leaf(lone), &empty_contents, None)),
         "control: a lone unnamed editor pane is still the empty leaf the predicate suppresses"
     );
 }

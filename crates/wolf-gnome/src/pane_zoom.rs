@@ -1,5 +1,5 @@
-//! The pure, GTK-free Zoom Pane rules: which pane is zoomed, what unzooms it, and what a
-//! zoom freezes or redirects.
+//! The pure, GTK-free Zoom Pane rules: which pane is zoomed, which events unzoom it or
+//! re-zoom it, and where a focus move or an other-pane command goes while zoomed.
 //!
 //! Zoom is front-end geometry. Nothing here reaches Neovim, the [`crate::layout::PaneTree`]
 //! or its weights, which is what lets an unzoom restore the layout exactly: the pane view
@@ -19,6 +19,13 @@ pub enum ZoomEvent {
     DrawerOpen,
     /// The view's panes changed, as after a close.
     PanesChanged,
+    /// A focus move, by chord or by Neovim's own window change, to `target`: the pane the move
+    /// names in the unzoomed layout, or `None` when it names none.
+    FocusMove { target: Option<PaneId> },
+    /// Toggle Terminal, with `drawer` the open drawer's pane, or `None` when it is closed.
+    ToggleTerminal { drawer: Option<PaneId> },
+    /// A launch rebuild re-zooms the pane restored from the saved zoomed leaf.
+    Restore(PaneId),
 }
 
 /// The zoomed pane after `event`, or `None` for an unzoomed view.
@@ -27,6 +34,10 @@ pub enum ZoomEvent {
 /// the drawer can be zoomed, and one pane with no drawer, which has nothing to hide, never
 /// is. Only the zoomed pane leaving `panes` unzooms on [`ZoomEvent::PanesChanged`]: a hidden
 /// pane closing keeps the zoom.
+///
+/// A focus move unzooms when it has a target other than the zoomed pane. Toggle Terminal
+/// unzooms unless the drawer is the zoomed pane, whose close then unzooms on
+/// [`ZoomEvent::PanesChanged`]. [`ZoomEvent::Restore`] ignores `zoomed` and `active`.
 #[must_use]
 pub fn zoomed_after(
     event: ZoomEvent,
@@ -43,24 +54,20 @@ pub fn zoomed_after(
         }
         ZoomEvent::Split | ZoomEvent::DrawerOpen => None,
         ZoomEvent::PanesChanged => zoomed.filter(|z| panes.contains(z)),
+        ZoomEvent::FocusMove { target } => match target {
+            Some(t) if Some(t) != zoomed => None,
+            _ => zoomed,
+        },
+        ZoomEvent::ToggleTerminal { drawer } => zoomed.filter(|z| Some(*z) == drawer),
+        ZoomEvent::Restore(p) => Some(p).filter(|p| panes.contains(p) && panes.len() > 1),
     }
 }
 
-/// Whether a zoom freezes focus moves: `<C-w>h/j/k/l` does nothing while zoomed, since no
-/// other pane is visible to move to. The user chose this over unzooming.
-///
-/// It covers focus moves only. No divider exists while zoomed, so there is none to freeze.
+/// The pane a focus move starts from: the zoomed pane while zoomed, whatever window the move
+/// was made in, else `from`.
 #[must_use]
-pub fn freezes_focus(zoomed: Option<PaneId>) -> bool {
-    zoomed.is_some()
-}
-
-/// Whether Toggle Terminal acts: always unzoomed, and while zoomed only when the drawer is
-/// the zoomed pane, where closing it is closing the zoomed pane. The user chose this over
-/// unzooming on a drawer toggle.
-#[must_use]
-pub fn allows_toggle_terminal(zoomed: Option<PaneId>, drawer: Option<PaneId>) -> bool {
-    zoomed.is_none() || zoomed == drawer
+pub fn focus_origin(zoomed: Option<PaneId>, from: Option<PaneId>) -> Option<PaneId> {
+    zoomed.or(from)
 }
 
 /// The other-pane commands' target while zoomed. The zoomed pane is the only pane shown, so
@@ -73,14 +80,6 @@ pub fn other_pane_target(zoomed: PaneId, drawer: Option<PaneId>) -> Option<Targe
     } else {
         Some(Target::Split)
     }
-}
-
-/// Whether Neovim's current window, resolved to pane `resolved`, must be sent back to the
-/// zoomed pane: it left by a path the view does not intercept (`<C-w>w`, `:wincmd`), and the
-/// user would otherwise type into a hidden pane.
-#[must_use]
-pub fn refocuses(resolved: Option<PaneId>, zoomed: Option<PaneId>) -> bool {
-    zoomed.is_some() && resolved.is_some() && resolved != zoomed
 }
 
 /// The pane the pane area shows alone, or `None` to show the whole layout.

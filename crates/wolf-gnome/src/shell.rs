@@ -2302,19 +2302,12 @@ impl AppShell {
     }
 
     /// Opens or hides the terminal drawer through [`WolfCore::toggle_terminal`], which
-    /// starts its session (a pty and a fork, no RPC) before it queues the toggle. Refused
-    /// while a pane other than the drawer is zoomed, since the drawer is hidden or would
-    /// open hidden.
+    /// starts its session (a pty and a fork, no RPC) before it queues the toggle. It unzooms
+    /// the selected tab first unless the drawer is the zoomed pane
+    /// ([`pane_view::PaneHandle::toggle_terminal`]).
     fn toggle_terminal(&self) {
-        let allowed = self
-            .inner
-            .tabs
-            .selected()
-            .is_none_or(|tab| tab.panes().allows_toggle_terminal());
-        if !allowed {
-            eprintln!(
-                "wolf-gnome: Toggle Terminal not performed: a pane other than the drawer is zoomed"
-            );
+        if let Some(tab) = self.inner.tabs.selected() {
+            tab.panes().toggle_terminal();
             return;
         }
         if let Some(core) = self.inner.core.borrow().as_ref() {
