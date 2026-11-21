@@ -59,9 +59,9 @@ use super::restore::{
     TWOWIN_SECOND_NAME, TWOWIN_SUBDIR,
 };
 use super::search_toggles::{
-    ST_CASE_LOWER_FILE, ST_CASE_UPPER_FILE, ST_OCR_CASE_LOWER, ST_OCR_CASE_UPPER,
-    ST_OCR_NO_MATCHES, ST_OCR_PAREN, ST_OCR_REGEX, ST_OCR_RG_EXITED, ST_OCR_STALE, ST_PAREN_FILE,
-    ST_REGEX_FILE,
+    ST_ALL_MD_FILE, ST_ALL_TXT_FILE, ST_CASE_LOWER_FILE, ST_CASE_UPPER_FILE, ST_OCR_ALL_MD,
+    ST_OCR_ALL_TXT, ST_OCR_CASE_LOWER, ST_OCR_CASE_UPPER, ST_OCR_NO_MATCHES, ST_OCR_PAREN,
+    ST_OCR_REGEX, ST_OCR_RG_EXITED, ST_OCR_STALE, ST_PAREN_FILE, ST_REGEX_FILE,
 };
 use super::sidebar::{
     search_target_fixture_body, CD_BASE_FILE, CD_OCR_ROOTED, CD_OCR_ROOT_NODE,
@@ -631,6 +631,16 @@ const ASSERTED_OCR_TERMS: &[(&str, &str, &str)] = &[
         "invalid_regex_fails_in_the_status_line_until_regex_is_off_under_cage",
     ),
     (
+        ST_OCR_ALL_MD,
+        "ST_OCR_ALL_MD",
+        "all_files_toggle_widens_a_markdown_only_search_under_cage",
+    ),
+    (
+        ST_OCR_ALL_TXT,
+        "ST_OCR_ALL_TXT",
+        "all_files_toggle_widens_a_markdown_only_search_under_cage",
+    ),
+    (
         CD_OCR_ROOTED,
         "CD_OCR_ROOTED",
         "typed_cd_reroots_the_sidebar_under_cage",
@@ -976,6 +986,16 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
         ST_PAREN_FILE,
         "ST_PAREN_FILE",
         "invalid_regex_fails_in_the_status_line_until_regex_is_off_under_cage",
+    ),
+    (
+        ST_ALL_MD_FILE,
+        "ST_ALL_MD_FILE",
+        "all_files_toggle_widens_a_markdown_only_search_under_cage",
+    ),
+    (
+        ST_ALL_TXT_FILE,
+        "ST_ALL_TXT_FILE",
+        "all_files_toggle_widens_a_markdown_only_search_under_cage",
     ),
     (
         STALL_FILE,
@@ -1538,7 +1558,8 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
 /// `zzlivekilo` ([`PREVIEW_OCR_LIVE`]) and `preview` ([`PREVIEW_OCR_STATUS`]), an
 /// ordinary English word and so one a filler could plausibly acquire by accident;
 /// `zzlemur` ([`ST_OCR_CASE_LOWER`]), `zzbison` ([`ST_OCR_CASE_UPPER`]), `zzheron`
-/// ([`ST_OCR_REGEX`]) and `zzwalrus` ([`ST_OCR_PAREN`]), with the search panel's
+/// ([`ST_OCR_REGEX`]), `zzwalrus` ([`ST_OCR_PAREN`]), `zzotter` ([`ST_OCR_ALL_MD`])
+/// and `zzbadger` ([`ST_OCR_ALL_TXT`]), with the search panel's
 /// status words `changed` ([`ST_OCR_STALE`]), `no matches` ([`ST_OCR_NO_MATCHES`])
 /// and `exited` ([`ST_OCR_RG_EXITED`]), ordinary words for the same reason;
 /// `zzunsavedromeo` ([`UNSAVED_OCR_MARKER`]) and
@@ -2693,8 +2714,8 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
          meaning \"this row is a search result\" to whoever reads a failing capture B."
     );
 
-    // The `all_files: true` premise: core's default search globs only Markdown, so a Markdown target
-    // would be found either way and the smoke would not discriminate that flag.
+    // The panel opens Markdown-only and the panel smokes turn `All` on, so a Markdown target would be
+    // found with `All` off as well and the smokes would stop discriminating the toggle.
     let target_extension = Path::new(PROJSEARCH_FILE_TARGET)
         .extension()
         .and_then(OsStr::to_str)
@@ -2704,9 +2725,9 @@ fn restore_fixture_names_cannot_satisfy_their_own_assertions() {
         "PROJSEARCH_FILE_TARGET = {PROJSEARCH_FILE_TARGET:?} has extension {target_extension:?}, \
          which must be present and must be neither `md` nor `markdown`. Core's DEFAULT \
          SearchOptions restricts the search to those two globs, so a Markdown target would be \
-         searched whatever `search_panel::search_options_for` set `all_files` to — and an \
-         `all_files: false` build, which leaves the panel empty and reddens both panel smokes' \
-         first sidebar assertion, would stop reddening anything."
+         searched whatever `search_panel::search_options_for` set `all_files` to — and a build \
+         whose `All` toggle never reaches `search_options_for`, which leaves the panel empty and \
+         reddens both panel smokes' first sidebar assertion, would stop reddening anything."
     );
 
     // The panel smokes' tree-row exemption: PROJSEARCH_FILE_START's NAME is the subject, so it is

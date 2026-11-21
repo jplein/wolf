@@ -1,5 +1,5 @@
-//! The search panel's case and regex toggles: they sit directly below the field and above the
-//! results, and each decides what the next Enter asks rg for.
+//! The search panel's case, regex and all-files toggles: they sit directly below the field and
+//! above the results, and each decides what the next Enter asks rg for.
 //!
 //! Every capture is taken after Escape has handed focus back to the editor, so neither the
 //! field's caret nor its focus ring is in the band. Where the toggles sit is read from the
@@ -8,8 +8,8 @@
 //!
 //! ## Click targets
 //!
-//! The toggles' centres are estimates from libadwaita 1.9.3's stylesheet and one measured label
-//! width, not read off the widgets, as the header bar's toggle-group smokes' are. That is safe
+//! The toggles' centres are estimates from libadwaita 1.9.3's stylesheet and measured label
+//! widths, not read off the widgets, as the header bar's toggle-group smokes' are. That is safe
 //! because a click that misses a toggle changes no option: the capture that should show the
 //! change does not, and the smoke fails there.
 //!
@@ -75,6 +75,29 @@ pub(crate) const ST_PAREN_LINE: &str = "foo(bar zzwalrus";
 /// Lowercased word only [`ST_PAREN_LINE`]'s result row draws: only a literal search finds it.
 pub(crate) const ST_OCR_PAREN: &str = "zzwalrus";
 
+/// The all-files smoke's query, which both of its files hold, so only the search's scope decides
+/// which of them is listed.
+pub(crate) const ST_ALL_QUERY: &str = "zzkumquat";
+
+/// The all-files smoke's Markdown file, which a search reaches with `All` off or on.
+pub(crate) const ST_ALL_MD_FILE: &str = "stscope.md";
+
+/// The whole of [`ST_ALL_MD_FILE`]: [`ST_ALL_QUERY`], then [`ST_OCR_ALL_MD`].
+pub(crate) const ST_ALL_MD_LINE: &str = "zzkumquat zzotter";
+
+/// Lowercased word only [`ST_ALL_MD_LINE`]'s result row draws: either scope finds it.
+pub(crate) const ST_OCR_ALL_MD: &str = "zzotter";
+
+/// The all-files smoke's other file, which only a search over every file reaches.
+pub(crate) const ST_ALL_TXT_FILE: &str = "stscope.txt";
+
+/// The whole of [`ST_ALL_TXT_FILE`]: [`ST_ALL_QUERY`], then [`ST_OCR_ALL_TXT`].
+pub(crate) const ST_ALL_TXT_LINE: &str = "zzkumquat zzbadger";
+
+/// Lowercased word only [`ST_ALL_TXT_LINE`]'s result row draws: only a search over every file
+/// finds it.
+pub(crate) const ST_OCR_ALL_TXT: &str = "zzbadger";
+
 /// Lowercased word of the status line a toggle changed since the live search ran draws,
 /// `Options changed: press Enter`.
 pub(crate) const ST_OCR_STALE: &str = "changed";
@@ -110,6 +133,10 @@ const ST_CASE_LABEL_PX: f64 = 21.0;
 /// min-width, so the min-width wins.
 const ST_REGEX_LABEL_PX: f64 = 16.0;
 
+/// The `All` label's width in bold Adwaita Sans 11, which resolves to DejaVu Sans Bold, measured
+/// at 21 px with the devShell's `pango-view` at 96 dpi, as [`ST_CASE_LABEL_PX`] was.
+const ST_ALL_LABEL_PX: f64 = 21.0;
+
 /// How far right of the panel's start margin the case toggle's leftmost changed column may lie
 /// and still count as left-aligned. A row centred or aligned to the end starts some 70 px or more
 /// further right.
@@ -131,12 +158,15 @@ const ST_REGEX_SHOT_PREFIX: &str = "wolf_gnome_st_regex_";
 /// Captures of the invalid-regex smoke; see [`ST_CASE_SHOT_PREFIX`].
 const ST_PAREN_SHOT_PREFIX: &str = "wolf_gnome_st_paren_";
 
-/// The row both toggles are clicked on: the header bar, the panel's top margin, the field, the
+/// Captures of the all-files smoke; see [`ST_CASE_SHOT_PREFIX`].
+const ST_ALL_SHOT_PREFIX: &str = "wolf_gnome_st_all_";
+
+/// The row every toggle is clicked on: the header bar, the panel's top margin, the field, the
 /// spacing under it and half a toggle, which is 110.
 ///
 /// Every term is an estimate rather than a measurement. The point sits 17 px inside a 34 px
 /// row, so it survives an error of that size in their sum.
-fn st_toggle_y() -> f64 {
+pub(crate) fn st_toggle_y() -> f64 {
     OVERLAY_ORIGIN_Y_EXPECTED
         + ST_PANEL_SPACING_PX
         + ST_ENTRY_HEIGHT_PX
@@ -164,12 +194,25 @@ fn st_regex_x() -> f64 {
         + st_toggle_width(ST_REGEX_LABEL_PX) / 2.0
 }
 
+/// Centre of the `All` toggle: the margin, the `Aa` toggle, the spacing, the `.*` toggle, the
+/// spacing and half the toggle, about 150, inside a toggle estimated at x 123 to 178.
+pub(crate) fn st_all_x() -> f64 {
+    ST_PANEL_SPACING_PX
+        + st_toggle_width(ST_CASE_LABEL_PX)
+        + ST_PANEL_SPACING_PX
+        + st_toggle_width(ST_REGEX_LABEL_PX)
+        + ST_PANEL_SPACING_PX
+        + st_toggle_width(ST_ALL_LABEL_PX) / 2.0
+}
+
 /// Shell helpers every body below starts with, appended to [`POINTER_PREAMBLE`], which has
 /// launched the app and parked the pointer at the probe point over the pane area.
 ///
 /// `st_click` ends with the pointer back over the pane, so no hover look or tooltip reaches a
-/// capture. `st_field` focuses the panel's field from wherever focus is. `st_enter` presses
-/// Enter in it and hands focus back to the editor before the capture.
+/// capture. `st_field` shows the Search page and focuses its field from wherever focus is. The
+/// sidebar opens on its Files page, so a body runs `st_field` before its first `st_click`, which
+/// would otherwise land on the file tree. `st_enter` presses Enter in the field and hands focus
+/// back to the editor before the capture.
 const ST_HELPERS: &str = r#"
 st_click() {
     hsend motion "$1" "$ST_TOGGLE_Y"
@@ -192,8 +235,8 @@ st_enter() {
 }
 "#;
 
-/// Body of [`case_toggle_sits_under_the_field_and_narrows_the_match_under_cage`]: five captures,
-/// `${ST_SHOT}0.png` to `${ST_SHOT}4.png`.
+/// Body of [`case_toggle_sits_under_the_field_and_narrows_the_match_under_cage`]: six captures,
+/// `${ST_SHOT}0.png` to `${ST_SHOT}5.png`.
 const ST_CASE_STEPS: &str = r#"
 # 0: the Search page, its field empty.
 st_field
@@ -213,17 +256,21 @@ grim "${ST_SHOT}1.png"
 st_click "$ST_CASE_X"
 grim "${ST_SHOT}2.png"
 
-# 3: Aa off again, then the query runs.
+# 3: Aa off again and All on, since the fixtures are .txt, with nothing run yet.
 st_click "$ST_CASE_X"
-st_field
-st_enter
+st_click "$ST_ALL_X"
 grim "${ST_SHOT}3.png"
 
-# 4: Aa on, then Enter on the unchanged query.
-st_click "$ST_CASE_X"
+# 4: the query runs.
 st_field
 st_enter
 grim "${ST_SHOT}4.png"
+
+# 5: Aa on, then Enter on the unchanged query.
+st_click "$ST_CASE_X"
+st_field
+st_enter
+grim "${ST_SHOT}5.png"
 
 hsend quit
 exit 0
@@ -232,7 +279,10 @@ exit 0
 /// Body of [`regex_toggle_switches_between_pattern_and_literal_under_cage`]: three captures,
 /// `${ST_SHOT}0.png` to `${ST_SHOT}2.png`.
 const ST_REGEX_STEPS: &str = r#"
-# 0: the query runs with the toggles as the panel opens.
+# 0: All on once the Search page shows, since the fixture is a .txt, then the query runs with
+# the other toggles as the panel opens.
+st_field
+st_click "$ST_ALL_X"
 st_field
 wtype -- "$ST_QUERY"
 sleep "$SETTLE"
@@ -255,7 +305,10 @@ exit 0
 /// Body of [`invalid_regex_fails_in_the_status_line_until_regex_is_off_under_cage`]: two
 /// captures, `${ST_SHOT}0.png` and `${ST_SHOT}1.png`.
 const ST_PAREN_STEPS: &str = r#"
-# 0: the query runs with the toggles as the panel opens.
+# 0: All on once the Search page shows, since the fixture is a .txt, then the query runs with
+# the other toggles as the panel opens.
+st_field
+st_click "$ST_ALL_X"
 st_field
 wtype -- "$ST_QUERY"
 sleep "$SETTLE"
@@ -267,6 +320,29 @@ st_field
 st_click "$ST_REGEX_X"
 st_enter
 grim "${ST_SHOT}1.png"
+
+hsend quit
+exit 0
+"#;
+
+/// Body of [`all_files_toggle_widens_a_markdown_only_search_under_cage`]: three captures,
+/// `${ST_SHOT}0.png` to `${ST_SHOT}2.png`.
+const ST_ALL_STEPS: &str = r#"
+# 0: the query runs with the toggles as the panel opens, All off.
+st_field
+wtype -- "$ST_QUERY"
+sleep "$SETTLE"
+st_enter
+grim "${ST_SHOT}0.png"
+
+# 1: All on, with focus in the editor.
+st_click "$ST_ALL_X"
+grim "${ST_SHOT}1.png"
+
+# 2: Enter on the unchanged query.
+st_field
+st_enter
+grim "${ST_SHOT}2.png"
 
 hsend quit
 exit 0
@@ -293,16 +369,23 @@ struct Shot {
 /// Each result word is on one fixture line, after that line's query, and in no file name or
 /// query; no status term is in any fixture or query; and each query matches what its smoke
 /// says it matches: [`ST_CASE_QUERY`] the lower line in its own case and the upper line only
-/// case-insensitively, [`ST_REGEX_QUERY`] [`ST_REGEX_MATCH`] only as a pattern, and
-/// [`ST_PAREN_QUERY`] its line only as a literal, being an invalid pattern.
+/// case-insensitively, [`ST_REGEX_QUERY`] [`ST_REGEX_MATCH`] only as a pattern,
+/// [`ST_PAREN_QUERY`] its line only as a literal, being an invalid pattern, and
+/// [`ST_ALL_QUERY`] both of its lines.
+///
+/// It also asserts the premise the all-files smoke's first capture rests on: [`ST_ALL_MD_FILE`]
+/// ends in one of core's Markdown-only globs, `*.md` and `*.markdown`, and [`ST_ALL_TXT_FILE`]
+/// in neither, so only the scope tells the two apart.
 fn assert_search_toggle_fixtures(smoke: &str) {
     let lines = [
         (ST_CASE_LOWER_FILE, ST_CASE_LOWER_LINE, ST_OCR_CASE_LOWER),
         (ST_CASE_UPPER_FILE, ST_CASE_UPPER_LINE, ST_OCR_CASE_UPPER),
         (ST_REGEX_FILE, ST_REGEX_LINE, ST_OCR_REGEX),
         (ST_PAREN_FILE, ST_PAREN_LINE, ST_OCR_PAREN),
+        (ST_ALL_MD_FILE, ST_ALL_MD_LINE, ST_OCR_ALL_MD),
+        (ST_ALL_TXT_FILE, ST_ALL_TXT_LINE, ST_OCR_ALL_TXT),
     ];
-    let queries = [ST_CASE_QUERY, ST_REGEX_QUERY, ST_PAREN_QUERY];
+    let queries = [ST_CASE_QUERY, ST_REGEX_QUERY, ST_PAREN_QUERY, ST_ALL_QUERY];
     let statuses = [ST_OCR_STALE, ST_OCR_NO_MATCHES, ST_OCR_RG_EXITED];
 
     for (file, line, word) in lines {
@@ -388,6 +471,30 @@ fn assert_search_toggle_fixtures(smoke: &str) {
          as a pattern with exit status 2, and ST_PAREN_LINE = {ST_PAREN_LINE:?} must hold it \
          verbatim, so the literal search finds it."
     );
+    assert!(
+        ST_ALL_MD_LINE.contains(ST_ALL_QUERY) && ST_ALL_TXT_LINE.contains(ST_ALL_QUERY),
+        "{smoke}: ST_ALL_QUERY = {ST_ALL_QUERY:?} must occur in both ST_ALL_MD_LINE = \
+         {ST_ALL_MD_LINE:?} and ST_ALL_TXT_LINE = {ST_ALL_TXT_LINE:?}. A line the query does not \
+         match is missing under either scope, so the all-files smoke would read the fixture \
+         rather than the toggle."
+    );
+    let extension = |file: &'static str| Path::new(file).extension().and_then(OsStr::to_str);
+    let md_extension = extension(ST_ALL_MD_FILE);
+    assert!(
+        matches!(md_extension, Some("md" | "markdown")),
+        "{smoke}: ST_ALL_MD_FILE = {ST_ALL_MD_FILE:?} has extension {md_extension:?}, which must \
+         be `md` or `markdown`, core's Markdown-only globs. Any other file goes unsearched with \
+         `All` off, so the all-files smoke's capture 0 would find nothing and could not show the \
+         panel opening Markdown-only."
+    );
+    let txt_extension = extension(ST_ALL_TXT_FILE).map(str::to_ascii_lowercase);
+    assert!(
+        matches!(txt_extension.as_deref(), Some(ext) if ext != "md" && ext != "markdown"),
+        "{smoke}: ST_ALL_TXT_FILE = {ST_ALL_TXT_FILE:?} has extension {txt_extension:?}, which \
+         must be present and neither `md` nor `markdown`. A Markdown file is searched with `All` \
+         off too, so the all-files smoke's capture 0 would hold its word whichever scope the \
+         panel opens with, and capture 2 could not show `All` widening the search."
+    );
 }
 
 /// The paths of `count` captures named `<prefix><index>.png` under `runtime`, each cleared
@@ -407,7 +514,7 @@ fn st_shots(runtime: &Path, prefix: &str, count: usize, smoke: &str) -> Vec<Shot
 }
 
 /// Writes `leg`'s fixtures into a fresh working directory, runs its steps under `cage` and
-/// asserts the scenario succeeded with both click targets inside the output. Returns its
+/// asserts the scenario succeeded with every click target inside the output. Returns its
 /// captures, which live in `runtime` and so only as long as it does.
 fn run_leg(leg: &Leg, runtime: &CageRuntime<'_>) -> Vec<Shot> {
     assert_search_toggle_fixtures(leg.smoke);
@@ -421,9 +528,11 @@ fn run_leg(leg: &Leg, runtime: &CageRuntime<'_>) -> Vec<Shot> {
 
     let case_x = pixel_target(st_case_x(), "the case toggle's x");
     let regex_x = pixel_target(st_regex_x(), "the regex toggle's x");
+    let all_x = pixel_target(st_all_x(), "the all-files toggle's x");
     let toggle_y = pixel_target(st_toggle_y(), "the toggles' y");
     let case_x_env = case_x.to_string();
     let regex_x_env = regex_x.to_string();
+    let all_x_env = all_x.to_string();
     let toggle_y_env = toggle_y.to_string();
     let body = format!("{ST_HELPERS}\n{}", leg.steps);
 
@@ -437,6 +546,7 @@ fn run_leg(leg: &Leg, runtime: &CageRuntime<'_>) -> Vec<Shot> {
             ("ST_QUERY", OsStr::new(leg.query)),
             ("ST_CASE_X", OsStr::new(&case_x_env)),
             ("ST_REGEX_X", OsStr::new(&regex_x_env)),
+            ("ST_ALL_X", OsStr::new(&all_x_env)),
             ("ST_TOGGLE_Y", OsStr::new(&toggle_y_env)),
         ],
     );
@@ -445,6 +555,12 @@ fn run_leg(leg: &Leg, runtime: &CageRuntime<'_>) -> Vec<Shot> {
     let extents = read_output_extents(&cwd, leg.smoke);
     assert_inside_extents(leg.smoke, "the case toggle", (case_x, toggle_y), extents);
     assert_inside_extents(leg.smoke, "the regex toggle", (regex_x, toggle_y), extents);
+    assert_inside_extents(
+        leg.smoke,
+        "the all-files toggle",
+        (all_x, toggle_y),
+        extents,
+    );
     shots
 }
 
@@ -532,10 +648,11 @@ fn assert_band_changed(
 /// The case toggle sits directly under the field, left-aligned, above the status line and the
 /// results, and turning it on narrows the next search to the query's own case.
 ///
-/// The query is typed and nothing runs; `Aa` is clicked on and off; the query runs; `Aa` is
-/// clicked on and Enter pressed on the unchanged query. Placement comes from three diffs of the
-/// sidebar band: the field's (captures 0 and 1), the toggle's (1 and 2) and the status line and
-/// rows' (1 and 3, the toggle drawn alike in both).
+/// The query is typed and nothing runs; `Aa` is clicked on and off, and `All` on, because the
+/// fixtures are `.txt` and the panel opens Markdown-only; the query runs; `Aa` is clicked on and
+/// Enter pressed on the unchanged query. Placement comes from four diffs of the sidebar band: the
+/// field's (captures 0 and 1), `Aa`'s (1 and 2), `All`'s (1 and 3, `Aa` drawn alike in both) and
+/// the status line and rows' (3 and 4, both toggles drawn alike in both).
 ///
 /// ## What each capture reads
 ///
@@ -544,20 +661,25 @@ fn assert_band_changed(
 /// | 0 | Ctrl+Shift+F, Escape | the empty field |
 /// | 1 | Ctrl+Shift+F, the query, Escape | the field holds the query |
 /// | 2 | click `Aa` | `Aa` on, nothing run |
-/// | 3 | click `Aa`, Ctrl+Shift+F, Enter, Escape | both result words |
-/// | 4 | click `Aa`, Ctrl+Shift+F, Enter, Escape | [`ST_OCR_CASE_LOWER`] only |
+/// | 3 | click `Aa`, click `All` | `Aa` off, `All` on, nothing run |
+/// | 4 | Ctrl+Shift+F, Enter, Escape | both result words |
+/// | 5 | click `Aa`, Ctrl+Shift+F, Enter, Escape | [`ST_OCR_CASE_LOWER`] only, no stale status |
 ///
 /// ## Assertions
 ///
 /// 1. Captures 0 and 1 differ: the field's rows.
-/// 2. Captures 1 and 2 differ: the click changed the toggle.
-/// 3. The toggle's top changed row lies below the field's bottom changed row.
-/// 4. Captures 1 and 3 differ, and their top changed row, the status line's, lies below the
-///    toggle's bottom changed row.
-/// 5. The toggle's leftmost changed column lies within [`ST_START_TOLERANCE_PX`] of the panel's
-///    start margin.
-/// 6. Capture 3 holds both result words: the panel starts case-insensitive.
-/// 7. Capture 4 holds [`ST_OCR_CASE_LOWER`], lacks [`ST_OCR_CASE_UPPER`] and lacks
+/// 2. Captures 1 and 2 differ: the click changed `Aa`.
+/// 3. `Aa`'s top changed row lies below the field's bottom changed row.
+/// 4. Captures 1 and 3 differ, and every changed column lies right of `Aa`'s rightmost changed
+///    column: a click at `All`'s estimated centre changed a toggle after `Aa`. The column clause
+///    is a precondition against `Aa` drawing differently after on and off, with no falsifier of
+///    its own.
+/// 5. Captures 3 and 4 differ, and their top changed row, the status line's, lies below both
+///    toggles' bottom changed rows.
+/// 6. `Aa`'s leftmost changed column lies within [`ST_START_TOLERANCE_PX`] of the panel's start
+///    margin.
+/// 7. Capture 4 holds both result words: `All` is on, and the panel starts case-insensitive.
+/// 8. Capture 5 holds [`ST_OCR_CASE_LOWER`], lacks [`ST_OCR_CASE_UPPER`] and lacks
 ///    [`ST_OCR_STALE`]: the Enter re-ran the unchanged query with the case toggle on.
 ///
 /// ## Falsifiers
@@ -569,8 +691,10 @@ fn assert_band_changed(
 /// | C6a | append the toggle row after the status label | 2: the click lands on the status line |
 /// | C6b | prepend the toggle row above the entry | 2: the click lands in the field, which changes nothing in the band |
 /// | C6c | toggle row `halign(gtk::Align::End)` | 2: the click lands left of both toggles |
-/// | C6d | `search_options_for` sets `case_sensitive: false` | 7 |
-/// | C6e | build the case toggle with `.active(true)` | 6 |
+/// | C6d | `search_options_for` sets `case_sensitive: false` | 8 |
+/// | C6e | build the case toggle with `.active(true)` | 7 |
+/// | C20a | delete `toggle_row.append(&all_toggle)` | 4: the click lands right of the row |
+/// | C20b | append `all_toggle` before `regex_toggle` | 7: the click at `st_all_x` turns `.*` off, `All` stays off, and no `.txt` is found |
 #[test]
 fn case_toggle_sits_under_the_field_and_narrows_the_match_under_cage() {
     const SMOKE: &str = "case_toggle_sits_under_the_field_and_narrows_the_match_under_cage";
@@ -586,7 +710,7 @@ fn case_toggle_sits_under_the_field_and_narrows_the_match_under_cage() {
                 (ST_CASE_UPPER_FILE, ST_CASE_UPPER_LINE),
             ],
             shot_prefix: ST_CASE_SHOT_PREFIX,
-            shots: 5,
+            shots: 6,
         },
         &runtime_dir,
     );
@@ -628,26 +752,52 @@ fn case_toggle_sits_under_the_field_and_narrows_the_match_under_cage() {
         shots[1].png.display(),
         shots[2].png.display()
     );
-    let results = assert_band_changed(
+    let all = assert_band_changed(
         SMOKE,
         &shots,
         &captures,
         (1, 3),
-        "Assertion 4: running the query changed nothing in the band, so the status line and the \
-         rows never updated: the Enter did not reach the field, or no search ran.",
+        "Assertion 4: `Aa` is off in both captures and nothing ran, so only the all-files toggle \
+         may differ, and a click at its estimated centre changed nothing in the band: no toggle \
+         is drawn there. In order: `All` is missing, it is not in the toggle row, or the \
+         estimate in `st_all_x` is off for this libadwaita. If the retained capture shows `All` \
+         after `.*` in the row, re-measure the estimate rather than moving the widget. An `All` \
+         packed before `.*` passes here, because the click turns `.*` instead, and fails \
+         assertion 7.",
     );
     assert!(
-        results.y_min > toggle.y_max,
-        "{SMOKE}: assertion 4: between captures 1 and 3 the band changes from y {}, not below the \
-         toggle's last changed row at y {}. Either the status line or the results sit above the \
-         toggles, or the case toggle is not drawn alike after being clicked on and off again, \
-         which happens when the second click does not turn it back off. Captures kept at {}, {} \
-         and {}.",
-        results.y_min,
-        toggle.y_max,
+        all.x_min > toggle.x_max,
+        "{SMOKE}: assertion 4: between captures 1 and 3 the band changes from x {}, not right of \
+         `Aa`'s last changed column at x {}. `Aa` is off in both, so it must be drawn alike in \
+         them: either the second click on `Aa` did not turn it back off, the click at `st_all_x` \
+         reached `Aa` or a toggle left of it, or the status line changed though nothing ran. \
+         Captures kept at {}, {} and {}.",
+        all.x_min,
+        toggle.x_max,
         shots[1].png.display(),
         shots[2].png.display(),
         shots[3].png.display()
+    );
+    let results = assert_band_changed(
+        SMOKE,
+        &shots,
+        &captures,
+        (3, 4),
+        "Assertion 5: running the query changed nothing in the band, so the status line and the \
+         rows never updated: the Enter did not reach the field, or no search ran.",
+    );
+    let toggles_bottom = toggle.y_max.max(all.y_max);
+    assert!(
+        results.y_min > toggles_bottom,
+        "{SMOKE}: assertion 5: between captures 3 and 4 the band changes from y {}, not below the \
+         toggles' last changed row at y {toggles_bottom}. Either the status line or the results \
+         sit above the toggles, or a toggle is drawn differently after the query ran, which \
+         happens when the Enter reached a toggle rather than the field. Captures kept at {}, {} \
+         and {}.",
+        results.y_min,
+        shots[2].png.display(),
+        shots[3].png.display(),
+        shots[4].png.display()
     );
     let start_limit = pixel_index(
         ST_PANEL_SPACING_PX + ST_START_TOLERANCE_PX,
@@ -655,7 +805,7 @@ fn case_toggle_sits_under_the_field_and_narrows_the_match_under_cage() {
     );
     assert!(
         toggle.x_min <= start_limit,
-        "{SMOKE}: assertion 5: the case toggle's leftmost changed column is x {}, right of x \
+        "{SMOKE}: assertion 6: the case toggle's leftmost changed column is x {}, right of x \
          {start_limit}, the panel's start margin plus ST_START_TOLERANCE_PX. The toggle row is \
          not left-aligned: it is centred, aligned to the end, or the case toggle is not its \
          first child. Captures kept at {} and {}.",
@@ -667,41 +817,45 @@ fn case_toggle_sits_under_the_field_and_narrows_the_match_under_cage() {
     assert_band_reads(
         SMOKE,
         &shots,
-        3,
-        "after `Aa` was clicked on and off and the query ran",
+        4,
+        "after `Aa` was clicked on and off, `All` on, and the query ran",
         &[
             Reading {
                 term: ST_OCR_CASE_LOWER,
                 held: true,
-                means: "Assertion 6: the search did not find the line holding the query in its \
-                        own case, so no search ran, or its rows never reached the panel.",
+                means: "Assertion 7: the search did not find the line holding the query in its \
+                        own case. No search ran, or its rows never reached the panel, or it ran \
+                        with `All` off, which leaves both `.txt` fixtures unsearched: the click \
+                        at `st_all_x` turned another toggle, as it turns `.*` when `All` is \
+                        packed before it, or the toggle does not reach `search_options_for`.",
             },
             Reading {
                 term: ST_OCR_CASE_UPPER,
                 held: true,
-                means: "Assertion 6: the search missed the upper-case line, so it ran \
-                        case-sensitively with the toggle back off: the toggle starts on, so two \
-                        clicks left it on, or `search_options_for` ignores it.",
+                means: "Assertion 7: the search missed the upper-case line. If it missed the \
+                        lower one too, `All` was not on: read that reading first. Otherwise it \
+                        ran case-sensitively with the toggle back off: the toggle starts on, so \
+                        two clicks left it on, or `search_options_for` ignores it.",
             },
         ],
     );
     assert_band_reads(
         SMOKE,
         &shots,
-        4,
+        5,
         "after `Aa` was clicked on and Enter pressed on the unchanged query",
         &[
             Reading {
                 term: ST_OCR_CASE_LOWER,
                 held: true,
-                means: "Assertion 7: a case-sensitive search must still find the line holding \
+                means: "Assertion 8: a case-sensitive search must still find the line holding \
                         the query in its own case. Its absence means the Enter opened a row or \
                         ran something else.",
             },
             Reading {
                 term: ST_OCR_CASE_UPPER,
                 held: false,
-                means: "Assertion 7: the upper-case line is still listed. Either the search ran \
+                means: "Assertion 8: the upper-case line is still listed. Either the search ran \
                         with `-i` though the case toggle is on, so `search_options_for` ignores \
                         it, or the Enter did not re-run: if the band also holds the stale \
                         status, `enter_action` compares the query alone and the Enter opened a \
@@ -710,7 +864,7 @@ fn case_toggle_sits_under_the_field_and_narrows_the_match_under_cage() {
             Reading {
                 term: ST_OCR_STALE,
                 held: false,
-                means: "Assertion 7: the status still says the options changed, so the Enter \
+                means: "Assertion 8: the status still says the options changed, so the Enter \
                         did not re-run the query with the toggles now shown, or the run did not \
                         record them.",
             },
@@ -721,11 +875,13 @@ fn case_toggle_sits_under_the_field_and_narrows_the_match_under_cage() {
 /// With regex on, as the panel opens, the query is a pattern; turning `.*` off marks the results
 /// stale, and the next Enter re-runs the query as a literal, which finds nothing.
 ///
+/// Step 0 turns `All` on, because the fixture is a `.txt` and the panel opens Markdown-only.
+///
 /// ## What each capture reads
 ///
 /// | capture | step | band |
 /// | --- | --- | --- |
-/// | 0 | Ctrl+Shift+F, the query, Enter, Escape | [`ST_OCR_REGEX`] |
+/// | 0 | Ctrl+Shift+F, click `All`, Ctrl+Shift+F, the query, Enter, Escape | [`ST_OCR_REGEX`] |
 /// | 1 | click `.*` | [`ST_OCR_STALE`] and still [`ST_OCR_REGEX`] |
 /// | 2 | Ctrl+Shift+F, Enter, Escape | [`ST_OCR_NO_MATCHES`], not [`ST_OCR_REGEX`] |
 ///
@@ -744,6 +900,7 @@ fn case_toggle_sits_under_the_field_and_narrows_the_match_under_cage() {
 /// | C7c | `enter_action`'s rule 2 compares the query alone | capture 2: Enter opens a row instead |
 /// | C7d | delete `search_status`'s stale arm | capture 1 |
 /// | C7e | delete both `connect_toggled` handlers | capture 1 |
+/// | C22a | `PanelInner::toggles` sets `all_files: SearchToggles::INITIAL.all_files` | capture 0 |
 #[test]
 fn regex_toggle_switches_between_pattern_and_literal_under_cage() {
     const SMOKE: &str = "regex_toggle_switches_between_pattern_and_literal_under_cage";
@@ -770,8 +927,11 @@ fn regex_toggle_switches_between_pattern_and_literal_under_cage() {
             term: ST_OCR_REGEX,
             held: true,
             means: "The pattern did not match `foooobar`: the regex toggle starts off, so the \
-                    query ran as a literal, or `search_options_for` ignores it. If the band \
-                    holds no status line either, no search ran.",
+                    query ran as a literal, or `search_options_for` ignores it. Or `All` was \
+                    not on, so the `.txt` fixture went unsearched: the first click missed it \
+                    (check `st_all_x` against the retained capture), or the toggle does not \
+                    reach `search_options_for`. If the band holds no status line either, no \
+                    search ran.",
         }],
     );
     assert_band_reads(
@@ -827,11 +987,15 @@ fn regex_toggle_switches_between_pattern_and_literal_under_cage() {
 /// search failed rather than that it found nothing; turning `.*` off while the field holds focus
 /// and pressing Enter searches the same text literally.
 ///
+/// Step 0 turns `All` on, because the fixture is a `.txt` and the panel opens Markdown-only, and
+/// presses Ctrl+Shift+F again before the query. A toggle that takes focus on click then fails
+/// capture 1, where C8b expects it, not capture 0.
+///
 /// ## What each capture reads
 ///
 /// | capture | step | band |
 /// | --- | --- | --- |
-/// | 0 | Ctrl+Shift+F, the query, Enter, Escape | [`ST_OCR_RG_EXITED`], not [`ST_OCR_NO_MATCHES`] or [`ST_OCR_PAREN`] |
+/// | 0 | Ctrl+Shift+F, click `All`, Ctrl+Shift+F, the query, Enter, Escape | [`ST_OCR_RG_EXITED`], not [`ST_OCR_NO_MATCHES`] or [`ST_OCR_PAREN`] |
 /// | 1 | Ctrl+Shift+F, click `.*`, Enter, Escape | [`ST_OCR_PAREN`], not [`ST_OCR_RG_EXITED`] |
 ///
 /// The click in step 1 comes with the field focused, so the Enter after it reaches the field only
@@ -846,6 +1010,7 @@ fn regex_toggle_switches_between_pattern_and_literal_under_cage() {
 /// | C8a | move `search_status`'s error arm below its `total_matches == 0` arm | capture 0 |
 /// | C8b | delete `.focus_on_click(false)` from `search_toggle` | capture 1: Enter flips the focused toggle back |
 /// | C8c | `enter_action`'s rule 2 compares the query alone | capture 1: Enter does nothing over no rows |
+/// | C23a | `PanelInner::toggles` sets `all_files: SearchToggles::INITIAL.all_files` | capture 1 |
 #[test]
 fn invalid_regex_fails_in_the_status_line_until_regex_is_off_under_cage() {
     const SMOKE: &str = "invalid_regex_fails_in_the_status_line_until_regex_is_off_under_cage";
@@ -908,13 +1073,147 @@ fn invalid_regex_fails_in_the_status_line_until_regex_is_off_under_cage() {
                         back on, so the toggle takes focus on click, or the click missed the \
                         toggle (check `st_regex_x` against the retained capture). If it says the \
                         options changed, the Enter did nothing: `enter_action` compares the \
-                        query alone.",
+                        query alone. If it says no matches, the literal search ran with `All` \
+                        off, so the `.txt` fixture went unsearched: the first click missed `All` \
+                        (check `st_all_x`), or the toggle does not reach `search_options_for`.",
             },
             Reading {
                 term: ST_OCR_RG_EXITED,
                 held: false,
                 means: "The status line still reports rg's error, so the search with regex off \
                         never replaced the failed one.",
+            },
+        ],
+    );
+}
+
+/// The panel opens Markdown-only, as its counterpart does; turning `All` on marks the results
+/// stale, and the next Enter re-runs the query over every file.
+///
+/// ## What each capture reads
+///
+/// | capture | step | band holds | band lacks |
+/// | --- | --- | --- | --- |
+/// | 0 | Ctrl+Shift+F, the query, Enter, Escape | [`ST_OCR_ALL_MD`] | [`ST_OCR_ALL_TXT`] |
+/// | 1 | click `All` | [`ST_OCR_STALE`], [`ST_OCR_ALL_MD`] | [`ST_OCR_ALL_TXT`] |
+/// | 2 | Ctrl+Shift+F, Enter, Escape | [`ST_OCR_ALL_MD`], [`ST_OCR_ALL_TXT`] | [`ST_OCR_STALE`] |
+///
+/// The query matches both files, so capture 0 shows the panel opening Markdown-only, and the
+/// Markdown word in it is what tells a search that ran from one that did not. Capture 1 shows a
+/// flip running nothing and only turning the status line stale; capture 2 shows Enter re-running
+/// over every file.
+///
+/// ## Falsifiers
+///
+/// Every edit is in `crates/wolf-gnome/src/search_panel.rs`.
+///
+/// | ID | edit | expected red |
+/// | --- | --- | --- |
+/// | C21a | `search_options_for` sets `all_files: true` | capture 0 holds [`ST_OCR_ALL_TXT`] |
+/// | C21b | `search_options_for` sets `all_files: false` | capture 2 lacks [`ST_OCR_ALL_TXT`] |
+/// | C21c | the `connect_toggled` loop runs over `[&case_toggle, &regex_toggle]` only | capture 1 lacks [`ST_OCR_STALE`] |
+/// | C21d | build the `All` toggle with `.active(true)` | capture 0 holds [`ST_OCR_ALL_TXT`] |
+#[test]
+fn all_files_toggle_widens_a_markdown_only_search_under_cage() {
+    const SMOKE: &str = "all_files_toggle_widens_a_markdown_only_search_under_cage";
+
+    let runtime_dir = require_smoke_env();
+    let shots = run_leg(
+        &Leg {
+            smoke: SMOKE,
+            steps: ST_ALL_STEPS,
+            query: ST_ALL_QUERY,
+            fixtures: &[
+                (ST_ALL_MD_FILE, ST_ALL_MD_LINE),
+                (ST_ALL_TXT_FILE, ST_ALL_TXT_LINE),
+            ],
+            shot_prefix: ST_ALL_SHOT_PREFIX,
+            shots: 3,
+        },
+        &runtime_dir,
+    );
+
+    assert_band_reads(
+        SMOKE,
+        &shots,
+        0,
+        "after the query ran with the toggles as the panel opens",
+        &[
+            Reading {
+                term: ST_OCR_ALL_MD,
+                held: true,
+                means: "The Markdown line was not found, though either scope finds it: no \
+                        search ran, or its rows never reached the panel. If the band holds no \
+                        status line either, the query never reached the field.",
+            },
+            Reading {
+                term: ST_OCR_ALL_TXT,
+                held: false,
+                means: "The `.txt` line was found with the toggles as the panel opens, so the \
+                        panel opens searching every file where its counterpart opens \
+                        Markdown-only: `SearchToggles::INITIAL` starts `all_files` on, the `All` \
+                        toggle is built active, or `search_options_for` ignores the toggle and \
+                        sets it on.",
+            },
+        ],
+    );
+    assert_band_reads(
+        SMOKE,
+        &shots,
+        1,
+        "after a click on `All`",
+        &[
+            Reading {
+                term: ST_OCR_STALE,
+                held: true,
+                means: "The status line does not say the options changed. The click missed the \
+                        all-files toggle (check `st_all_x` against the retained capture), the \
+                        toggle's `connect_toggled` handler does not refresh the status, or \
+                        `search_status` ignores `all_files`. If the status line is plainly in \
+                        the crop and OCR missed it, the dim label needs a reader that scales the \
+                        crop up, not a restyled label.",
+            },
+            Reading {
+                term: ST_OCR_ALL_MD,
+                held: true,
+                means: "The result row went away when the toggle changed. A toggle runs \
+                        nothing and must leave the rows drawn and clickable; only the status \
+                        line marks them stale.",
+            },
+            Reading {
+                term: ST_OCR_ALL_TXT,
+                held: false,
+                means: "The `.txt` line appeared on a click alone, so turning `All` on ran a \
+                        search. A toggle must run nothing until the next Enter.",
+            },
+        ],
+    );
+    assert_band_reads(
+        SMOKE,
+        &shots,
+        2,
+        "after Enter on the unchanged query with `All` on",
+        &[
+            Reading {
+                term: ST_OCR_ALL_MD,
+                held: true,
+                means: "The Markdown line is gone, though a search over every file still finds \
+                        it: the Enter opened a row or ran something other than the query.",
+            },
+            Reading {
+                term: ST_OCR_ALL_TXT,
+                held: true,
+                means: "The `.txt` line was not found after Enter with `All` on. If the band \
+                        still says the options changed, the Enter did not re-run: \
+                        `enter_action` ignores `all_files` and opened a row instead. Otherwise \
+                        the search ran Markdown-only again: `search_options_for` ignores the \
+                        toggle, or `PanelInner::toggles` does not read it.",
+            },
+            Reading {
+                term: ST_OCR_STALE,
+                held: false,
+                means: "The status still says the options changed, so the Enter did not re-run \
+                        the query with the toggles now shown, or the run did not record them.",
             },
         ],
     );

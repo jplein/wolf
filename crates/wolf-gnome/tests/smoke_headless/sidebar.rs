@@ -27,11 +27,12 @@ pub(crate) const TREE_OCR: &str = "treenode";
 /// Project-search smokes: the file a search result must OPEN — the one holding the
 /// sole line `PROJSEARCH_QUERY` matches.
 ///
-/// A `.txt`, and that is load-bearing rather than incidental. `wolf_core`'s default
-/// `SearchOptions` restricts the search to `--glob '*.md' --glob '*.markdown'`, so
-/// under that default this file would never be searched at all: the panel would
-/// stay empty, the second Enter would activate nothing, and the smokes would go red.
-/// That makes `search_panel::search_options_for`'s `all_files: true` an end-to-end
+/// A `.txt`, and that is load-bearing rather than incidental. The panel opens with
+/// its `All` toggle off, which keeps `wolf_core`'s `--glob '*.md' --glob
+/// '*.markdown'`, so this file is found only because the scenarios turn `All` on
+/// before they type the query. A toggle that never reaches
+/// `search_panel::search_options_for` leaves the panel empty, the second Enter
+/// activates nothing, and the smokes go red: the toggle is an end-to-end
 /// discriminator instead of a table-tested boolean.
 pub(crate) const PROJSEARCH_FILE_TARGET: &str = "psrzulu.txt";
 
@@ -64,10 +65,11 @@ pub(crate) const PROJSEARCH_FILE_START: &str = "psrxray.md";
 /// which sidebar page is on screen.
 ///
 /// Inside the sidebar band only the file tree can draw it. The panel draws the
-/// query, its toggles' labels `Aa` and `.*`, the status line and the ONE matched
-/// file, [`PROJSEARCH_FILE_TARGET`], and the start file never matches; the `:e` echo and the statusbar strip that also
-/// spell the name sit in the pane band. So in the sidebar band its absence means the
-/// Search page replaced the tree, and its presence means the Files page is back.
+/// query, its toggles' labels `Aa`, `.*` and `All`, the status line and the ONE
+/// matched file, [`PROJSEARCH_FILE_TARGET`], and the start file never matches; the
+/// `:e` echo and the statusbar strip that also spell the name sit in the pane band.
+/// So in the sidebar band its absence means the Search page replaced the tree, and
+/// its presence means the Files page is back.
 pub(crate) const PROJSEARCH_OCR_TREE_ROW: &str = "psrxray";
 
 /// Lowercased word that only a search RESULT can put on screen before the match is
@@ -355,7 +357,20 @@ wtype -M ctrl -M shift -k f -m shift -m ctrl
 # Let the stack switch pages and the entry take keyboard focus.
 sleep "$SETTLE"
 
-# --- Step 4: type the query. NO SEARCH RUNS YET -----------------------------
+# --- Step 4: turn the All toggle on -----------------------------------------
+#
+# The panel opens Markdown-only and the target is a `.txt`. From the field, Tab
+# reaches `Aa`, `.*` and then `All`, and Space turns `All` on; the chord hands focus
+# back to the field. A miss leaves the target unsearched, and assertion 2 fails.
+wtype -k Tab
+wtype -k Tab
+wtype -k Tab
+wtype -k space
+sleep "$SETTLE"
+wtype -M ctrl -M shift -k f -m shift -m ctrl
+sleep "$SETTLE"
+
+# --- Step 5: type the query. NO SEARCH RUNS YET -----------------------------
 #
 # The entry has no `connect_search_changed`, so typing cannot spawn rg however fast
 # or slow it arrives.
@@ -364,7 +379,7 @@ wtype -- "$PROJSEARCH_QUERY"
 # Let the last character land in the entry before Enter reads its text.
 sleep "$SETTLE"
 
-# --- Step 5: the FIRST Enter runs the search --------------------------------
+# --- Step 6: the FIRST Enter runs the search --------------------------------
 #
 # `enter_action` sees a query no search was started with, so it answers RunSearch.
 wtype -k Return
@@ -373,10 +388,10 @@ wtype -k Return
 # refresh rebuild its rows.
 sleep "$SETTLE"
 
-# --- Step 6: capture A, with the results in the panel -----------------------
+# --- Step 7: capture A, with the results in the panel -----------------------
 grim "$OUT_PNG_A"
 
-# --- Step 7: the SECOND Enter activates the selected row --------------------
+# --- Step 8: the SECOND Enter activates the selected row --------------------
 #
 # The entry is unchanged, so `enter_action` answers Activate. `row_activation`
 # resolves the line row to Open, `activation_route` answers OpenAt over an editor
@@ -388,9 +403,9 @@ wtype -k Return
 # strip redraw.
 sleep "$SETTLE"
 
-# --- Step 8: the cursor readback, BEFORE the cursor is parked ---------------
+# --- Step 9: the cursor readback, BEFORE the cursor is parked ---------------
 #
-# One printf, so the filename, the line and the column describe ONE instant. Step 9
+# One printf, so the filename, the line and the column describe ONE instant. Step 10
 # moves the cursor, so this cannot be deferred until after it.
 wtype -- ":call writefile([printf('%s %d %d', expand('%:t'), line('.'), col('.'))], '$PROJSEARCH_READBACK')"
 wtype -k Return
@@ -403,7 +418,7 @@ if ! wait_file "$PROJSEARCH_READBACK"; then
     exit 14
 fi
 
-# --- Step 9: park the cursor off every line carrying fixture text -----------
+# --- Step 10: park the cursor off every line carrying fixture text ----------
 #
 # The jump leaves it on the MATCH line, whose inverted block would sit atop the
 # query text; the asserted heading is on line 1 and is clear either way. In normal
@@ -415,7 +430,7 @@ wtype -k Escape
 # Let the redraw land before capturing.
 sleep "$SETTLE"
 
-# --- Step 10: capture B, with the target open -------------------------------
+# --- Step 11: capture B, with the target open -------------------------------
 grim "$OUT_PNG_B"
 
 # Best-effort teardown: the app may already be gone.
@@ -488,7 +503,17 @@ sleep "$SETTLE"
 wtype -M ctrl -M shift -k b -m shift -m ctrl
 sleep "$SETTLE"
 
-# --- Step 4: Ctrl+Shift+F, the query, and the one Enter ---------------------
+# --- Step 4: Ctrl+Shift+F, All on, the query, and the one Enter -------------
+#
+# All goes on as in PROJSEARCH_SCENARIO's step 4, and only after the chord: showing
+# the Search page before the hide would hide a chord that reveals without switching.
+wtype -M ctrl -M shift -k f -m shift -m ctrl
+sleep "$SETTLE"
+wtype -k Tab
+wtype -k Tab
+wtype -k Tab
+wtype -k space
+sleep "$SETTLE"
 wtype -M ctrl -M shift -k f -m shift -m ctrl
 sleep "$SETTLE"
 wtype -- "$PROJSEARCH_QUERY"
@@ -1304,7 +1329,7 @@ fn projsearch_pane_band() -> SampleRect {
 /// | # | assertion | kind | falsifier |
 /// | --- | --- | --- | --- |
 /// | 1 | the scenario reached capture A (exit 0, or 14 after it), and capture A exists | precondition | none |
-/// | 2 | the SIDEBAR band of capture A contains [`PROJSEARCH_OCR_RESULT`] | **discriminator** — the results streamed into the panel | route `shell::perform`'s `ShowSearchPanel` arm back to the overlay (the task's falsifier); or skip the row rebuild in the panel's refresh |
+/// | 2 | the SIDEBAR band of capture A contains [`PROJSEARCH_OCR_RESULT`] | **discriminator** — the results streamed into the panel | route `shell::perform`'s `ShowSearchPanel` arm back to the overlay (the task's falsifier); or skip the row rebuild in the panel's refresh; or make `PanelInner::toggles` ignore the `All` toggle (C24a) |
 /// | 3 | the SIDEBAR band of capture A lacks [`PROJSEARCH_OCR_TREE_ROW`] | corroboration — the Search page replaced the tree | none of its own: no edit in `src/` makes this fail first. The two pages share one `gtk::Stack`, which draws one child, so the panel's rows and the tree are never in the band together; leaving the stack on Files was measured to fail 2 first, since the Search page's refresh gate stays shut. Its anti-vacuity is the presence half of [`search_chord_reveals_the_sidebar_and_escape_returns_to_the_editor_under_cage`]'s assertion 4 |
 /// | 4 | the PANE band of capture A lacks [`PROJSEARCH_OCR_RESULT`] and contains [`PROJSEARCH_OCR_ABSENT`] | corroboration — no overlay drew the results; the heading is the band's proof that it was readable | none of its own: the task's overlay route was measured to fail 2 first, and an overlay drawn beside the panel would need both to take the typed query, which one keyboard focus cannot do |
 /// | 5 | exit 0, and the readback names [`PROJSEARCH_FILE_TARGET`], line [`PROJSEARCH_MATCH_LINE`] and column [`PROJSEARCH_EXPECTED_COL`] | **discriminator** — the right FILE, LINE and COLUMN | send `InputEvent::Open { path }` in the `OpenAt` arm (the line reads 1); make `row_activation` answer column 0 (the column reads 1) |
@@ -1375,7 +1400,8 @@ fn search_panel_streams_results_and_opens_the_match_under_cage() {
          then finds the word in the pane band, the chord opened a floating overlay instead. (b) \
          It shows the query and a status line but no result row: the search ran and the panel \
          never rebuilt its rows, or rg found nothing; a status of `No matches` with the target \
-         a `.txt` points at `search_options_for`'s `all_files`. (c) The word is there but \
+         a `.txt` means `All` was not on: the Tabs of step 4 missed it, or the toggle does not \
+         reach `search_options_for`. (c) The word is there but \
          misread, e.g. split across a wrapped line: read the crop, and see \
          PROJSEARCH_OCR_RESULT's doc for the width estimate behind it. Capture kept at {}, band \
          crop at {}.\n\nBand OCR was:\n{sidebar_text}",
@@ -1515,7 +1541,7 @@ fn search_panel_streams_results_and_opens_the_match_under_cage() {
 /// | # | assertion | kind | falsifier |
 /// | --- | --- | --- | --- |
 /// | 0 | the scenario reached capture A (exit 0, or 15 after it), and capture A exists | precondition | none |
-/// | 1 | the sidebar band of capture A contains [`PROJSEARCH_OCR_RESULT`] | **discriminator** — the chord revealed the hidden sidebar | make `ShowSearchPanel` skip `set_sidebar_preference(true)`; the task's overlay route |
+/// | 1 | the sidebar band of capture A contains [`PROJSEARCH_OCR_RESULT`] | **discriminator** — the chord revealed the hidden sidebar | make `ShowSearchPanel` skip `set_sidebar_preference(true)`; the task's overlay route; make `PanelInner::toggles` ignore the `All` toggle (C25a) |
 /// | 2 | exit 0, and the readback typed after Escape names [`PROJSEARCH_FILE_START`] | **discriminator** — Escape hands the keys to Neovim and opens nothing | delete the panel's Escape arm |
 /// | 3 | the sidebar band of capture A2 contains [`PROJSEARCH_OCR_RESULT`] | **discriminator** — Escape leaves the panel showing | make the panel's Escape arm also switch its ancestor `gtk::Stack` to the `files` page; the panel holds no sidebar handle |
 /// | 4 | the sidebar band of capture B contains [`PROJSEARCH_OCR_TREE_ROW`] and lacks [`PROJSEARCH_OCR_RESULT`] | **discriminator** — `:WolfSidebarShowProject` switches back to Files | map `Command::SidebarShowProject` back to `UiAction::Deferred` |
@@ -1589,7 +1615,9 @@ fn search_chord_reveals_the_sidebar_and_escape_returns_to_the_editor_under_cage(
          its search out of sight: `ShowSearchPanel` must call `set_sidebar_preference(true)` \
          before it switches the page. If it shows the file tree, the page never switched. If it \
          shows the panel with no result row, read the first project-search smoke, which checks \
-         the same rows with the sidebar never hidden. Capture kept at {}, band crop at {}.\n\n\
+         the same rows with the sidebar never hidden; `No matches` there means `All` was not on: \
+         the Tabs after the chord missed it, or the toggle does not reach \
+         `search_options_for`. Capture kept at {}, band crop at {}.\n\n\
          Band OCR was:\n{text_a}",
         png_a.display(),
         band_a.display()

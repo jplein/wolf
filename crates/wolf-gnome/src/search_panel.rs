@@ -16,7 +16,7 @@
 //! user presses Enter, so no keystroke can spawn `rg` and no debounce timer is
 //! needed. [`enter_action`] owns the rule. An empty or whitespace-only query
 //! CLEARS the panel and is never run, because core builds `rg -F -e ''`, which
-//! matches every line of every file under the search root.
+//! matches every line of every file in the search's scope.
 //!
 //! A toggle runs nothing either. It turns the status line stale while the rows stay
 //! drawn and clickable, and the next Enter re-runs, because [`enter_action`] compares
@@ -24,12 +24,12 @@
 //!
 //! ## The toggles
 //!
-//! Under the field, left-aligned and above the status line, sit `Aa` (match case)
-//! and `.*` (regular expression), the counterpart's labels, each with a tooltip
-//! saying so. [`SearchToggles::INITIAL`] gives their states on opening, and says
-//! why. Every file is still searched; see [`search_options_for`].
+//! Under the field, left-aligned and above the status line, sit `Aa` (match case),
+//! `.*` (regular expression) and `All` (every file rather than only Markdown), the
+//! counterpart's labels, each with a tooltip saying so. [`SearchToggles::INITIAL`]
+//! gives their states on opening, and says why.
 //!
-//! Neither toggle takes focus on click. A focused toggle takes Enter as its own
+//! No toggle takes focus on click. A focused toggle takes Enter as its own
 //! activation and flips itself back, so the Enter after a click must still reach the
 //! field.
 //!
@@ -95,9 +95,8 @@
 //!   Enter on an unchanged query and unchanged toggles opens it. There, Return always
 //!   re-runs and the outline is reached with Tab; here a streaming rebuild replaces
 //!   every row, so a focused row would be destroyed.
-//! - **No file-type toggle, and the case toggle starts off.** Every file is searched,
-//!   as [`search_options_for`] says, and the case toggle is not seeded from the
-//!   blocking `ignorecase()`.
+//! - **The case toggle starts off.** It is not seeded from the blocking
+//!   `ignorecase()`.
 //! - **A status line and a `SEARCH_MAX_ROWS` cap on line rows**, which the
 //!   counterpart does not have.
 //!
@@ -202,6 +201,12 @@ const REGEX_TOGGLE_LABEL: &str = ".*";
 /// The regex toggle's tooltip.
 const REGEX_TOGGLE_TOOLTIP: &str = "Use regular expression";
 
+/// The all-files toggle's label.
+const ALL_TOGGLE_LABEL: &str = "All";
+
+/// The all-files toggle's tooltip.
+const ALL_TOGGLE_TOOLTIP: &str = "Search all files";
+
 /// Whether the panel may be shown at all.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShowDecision {
@@ -235,39 +240,45 @@ pub fn show_decision(project_open: bool) -> ShowDecision {
     }
 }
 
-/// The states of the panel's two toggles, which decide how the next search treats
-/// its query.
+/// The states of the panel's three toggles, which decide how the next search treats
+/// its query and which files it reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SearchToggles {
     /// Match case (rg `-s`) rather than ignore it (rg `-i`).
     pub case_sensitive: bool,
     /// Treat the query as a regular expression rather than a literal (rg `-F`).
     pub use_regex: bool,
+    /// Search every file rather than only Markdown (core's `*.md` and `*.markdown`
+    /// globs).
+    pub all_files: bool,
 }
 
 impl SearchToggles {
-    /// The states the panel opens with: regex on and case off.
+    /// The states the panel opens with: regex on, case off and all files off.
     ///
-    /// Regex on matches the counterpart's default. The counterpart seeds case from
-    /// nvim's `ignorecase`, which is a blocking RPC this crate never calls, so case
-    /// starts off, the forgiving answer.
+    /// Regex on and all files off are the counterpart's defaults
+    /// (`SearchToggleSeam.defaultUseRegex` and `SearchToggleSeam.defaultAllFiles`), so
+    /// both platforms open with the same scope, Markdown only. The counterpart seeds
+    /// case from nvim's `ignorecase`, which is a blocking RPC this crate never calls,
+    /// so case starts off, the forgiving answer.
     pub const INITIAL: Self = Self {
         case_sensitive: false,
         use_regex: true,
+        all_files: false,
     };
 }
 
-/// The [`SearchOptions`] this front-end ships for `query` under `toggles`: the
-/// toggles decide `case_sensitive` and `use_regex`, over EVERY file.
+/// The [`SearchOptions`] this front-end ships for `query` under `toggles`: every
+/// flag is a toggle's.
 ///
 /// - `use_regex` and `case_sensitive` are the toggles'. An invalid pattern such as
 ///   `foo(bar` makes rg exit 2, which [`search_status`] reports as an error; turning
 ///   the regex toggle off and pressing Enter then searches it literally.
-/// - `all_files: true` — core's DEFAULT restricts to `--glob '*.md' --glob
-///   '*.markdown'`, while this front-end's file picker and tree sidebar list every
-///   file in the project. A "Search in project" that silently searched only
-///   Markdown, with no toggle to widen it, would be a search that lies about its
-///   own name.
+/// - `all_files` is the `All` toggle's. Off, core restricts rg to `--glob '*.md'
+///   --glob '*.markdown'`; on, every file is searched, as the file picker and the
+///   tree sidebar list them. A Markdown-only start is honest because the toggle that
+///   widens it sits beside the field: without it, a "Search in project" would skip
+///   every other file without saying so.
 ///
 /// The query is passed through VERBATIM — never trimmed, cased or escaped —
 /// because [`enter_action`] compares the RAW field text against the query the live
@@ -278,7 +289,7 @@ pub fn search_options_for(query: &str, toggles: SearchToggles) -> SearchOptions 
         query: query.to_string(),
         use_regex: toggles.use_regex,
         case_sensitive: toggles.case_sensitive,
-        all_files: true,
+        all_files: toggles.all_files,
     }
 }
 
@@ -477,7 +488,7 @@ pub enum EnterAction {
 /// The `Enter` decision. The rules, in order:
 ///
 /// 1. A query whose `trim()` is empty CLEARS, and is never run: core builds
-///    `rg -F -e ''`, which matches every line of every file under the search root.
+///    `rg -F -e ''`, which matches every line of every file in the search's scope.
 /// 2. A query or toggles the live session was not started with runs a fresh
 ///    search; `ran` is that session's query and toggles, or `None`. The query
 ///    comparison is RAW, so a trailing space is a different search, exactly as it
@@ -709,6 +720,8 @@ struct PanelInner {
     case_toggle: gtk::ToggleButton,
     /// The regular-expression toggle, the source of [`SearchToggles::use_regex`].
     regex_toggle: gtk::ToggleButton,
+    /// The all-files toggle, the source of [`SearchToggles::all_files`].
+    all_toggle: gtk::ToggleButton,
     /// The one-line status under the toggles, drawn from [`search_status`].
     status: gtk::Label,
     /// The scrolled window over [`PanelInner::list`].
@@ -816,6 +829,7 @@ impl PanelInner {
         SearchToggles {
             case_sensitive: self.case_toggle.is_active(),
             use_regex: self.regex_toggle.is_active(),
+            all_files: self.all_toggle.is_active(),
         }
     }
 
@@ -1176,6 +1190,11 @@ pub fn build(core: &Rc<RefCell<Option<WolfCore>>>, area: FocusTarget) -> SearchP
         REGEX_TOGGLE_TOOLTIP,
         SearchToggles::INITIAL.use_regex,
     );
+    let all_toggle = search_toggle(
+        ALL_TOGGLE_LABEL,
+        ALL_TOGGLE_TOOLTIP,
+        SearchToggles::INITIAL.all_files,
+    );
     let toggle_row = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(SEARCH_PANEL_SPACING)
@@ -1183,6 +1202,7 @@ pub fn build(core: &Rc<RefCell<Option<WolfCore>>>, area: FocusTarget) -> SearchP
         .build();
     toggle_row.append(&case_toggle);
     toggle_row.append(&regex_toggle);
+    toggle_row.append(&all_toggle);
 
     let status = gtk::Label::builder()
         .label(SEARCH_IDLE_STATUS)
@@ -1232,6 +1252,7 @@ pub fn build(core: &Rc<RefCell<Option<WolfCore>>>, area: FocusTarget) -> SearchP
         entry: entry.clone(),
         case_toggle: case_toggle.clone(),
         regex_toggle: regex_toggle.clone(),
+        all_toggle: all_toggle.clone(),
         status,
         scroller,
         list: list.clone(),
@@ -1265,7 +1286,7 @@ pub fn build(core: &Rc<RefCell<Option<WolfCore>>>, area: FocusTarget) -> SearchP
     }
 
     // A toggle runs nothing: it only redraws the status line, which turns stale until Enter re-runs.
-    for toggle in [&case_toggle, &regex_toggle] {
+    for toggle in [&case_toggle, &regex_toggle, &all_toggle] {
         let inner_weak = Rc::downgrade(&inner);
         toggle.connect_toggled(move |_toggle| {
             if let Some(inner) = inner_weak.upgrade() {

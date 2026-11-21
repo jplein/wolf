@@ -7,6 +7,7 @@
 //! is the header band's raw pixels, compared between captures of one run: two captures in one
 //! state must be identical there, and captures in different states must differ.
 
+use super::search_toggles::{st_all_x, st_toggle_y};
 use super::sidebar::{
     projsearch_sidebar_band, search_target_fixture_body, PROJSEARCH_FILE_TARGET,
     PROJSEARCH_OCR_RESULT, PROJSEARCH_QUERY,
@@ -42,8 +43,8 @@ pub(crate) const TG_HEADING: &str = "# HOLDFIR";
 /// heading of the file the editor holds.
 ///
 /// Neither page of the sidebar draws it. The tree draws file names, and the search panel draws
-/// the query, its toggles' labels `Aa` and `.*`, its status line and the one matching line,
-/// which [`TG_HEADING`] is not.
+/// the query, its toggles' labels `Aa`, `.*` and `All`, its status line and the one matching
+/// line, which [`TG_HEADING`] is not.
 pub(crate) const TG_OCR_KEEP: &str = "holdfir";
 
 /// libadwaita 1.9.3's padding of the header bar's box at its start edge.
@@ -123,11 +124,15 @@ const TG_CLICK_BODY: &str = r#"
 # The tree's FileSearch streams the cwd listing in; capture 0 reads a tree row.
 TREE_SETTLE=1.5
 
-tg_click() {
-    hsend motion "$1" "$TG_CLICK_Y"
+tg_click_at() {
+    hsend motion "$1" "$2"
     hsend press "$BTN_LEFT"
     hsend release "$BTN_LEFT"
     hsend motion "$PROBE_X" "$PROBE_Y"
+}
+
+tg_click() {
+    tg_click_at "$1" "$TG_CLICK_Y"
 }
 
 sleep "$TREE_SETTLE"
@@ -141,8 +146,11 @@ wtype -k Escape
 sleep "$SETTLE"
 grim "${TG_SHOT}0.png"
 
-# 1: Search, from Files, switches.
+# 1: Search, from Files, switches; All goes on, since the search target is a `.txt`. All takes
+# no focus on click, so step 3 still reads show_search_panel's own focus_entry.
 tg_click "$TG_SEARCH_X"
+sleep "$SETTLE"
+tg_click_at "$TG_ALL_X" "$TG_ALL_Y"
 sleep "$SETTLE"
 grim "${TG_SHOT}1.png"
 
@@ -220,7 +228,15 @@ wtype -M ctrl -M shift -k b -m shift -m ctrl
 sleep "$SETTLE"
 grim "${TG_SHOT}1.png"
 
-# 2: Ctrl+Shift+F shows Search, then the query runs.
+# 2: Ctrl+Shift+F shows Search; Tab reaches Aa, .* and All, Space turns All on, since the search
+# target is a `.txt`, and the chord hands focus back to the field; then the query runs.
+wtype -M ctrl -M shift -k f -m shift -m ctrl
+sleep "$SETTLE"
+wtype -k Tab
+wtype -k Tab
+wtype -k Tab
+wtype -k space
+sleep "$SETTLE"
 wtype -M ctrl -M shift -k f -m shift -m ctrl
 sleep "$SETTLE"
 wtype -- "$TG_QUERY"
@@ -567,7 +583,7 @@ impl<'a> GroupRun<'a> {
 /// | capture | step | sidebar band | group |
 /// | --- | --- | --- | --- |
 /// | 0 | launch | Files | Files |
-/// | 1 | click Search | Search, no result | Search |
+/// | 1 | click Search, click `All` | Search, no result | Search |
 /// | 2 | click Search | Hidden | none |
 /// | 3 | click Search, type the query, Enter | Search, with [`PROJSEARCH_OCR_RESULT`] | Search |
 /// | 4 | click Files | Files, no result | Files |
@@ -582,7 +598,8 @@ impl<'a> GroupRun<'a> {
 ///
 /// Step 3 is the one place where only `show_search_panel`'s own `focus_entry` can put the typed
 /// query in the field: the page was already Search when the sidebar hid, so no page switch
-/// focuses anything.
+/// focuses anything. `All` is clicked in step 1, because the search target is a `.txt` and the
+/// panel opens Markdown-only; it takes no focus on click, so it leaves step 3's reading alone.
 ///
 /// ## Falsifiers
 ///
@@ -593,6 +610,7 @@ impl<'a> GroupRun<'a> {
 /// | C10 | `on_sidebar_toggle_click`'s `Hide` arm does nothing | capture 2 reads Search |
 /// | C11 | delete `self.inner.search.focus_entry()` from `show_search_panel` | capture 3 lacks the result |
 /// | C12 | pack the toggle group before `nav_box` | capture 1 reads Files: the clicks land on Back and Forward |
+/// | C26a | `PanelInner::toggles` sets `all_files: SearchToggles::INITIAL.all_files` | capture 3 lacks the result |
 #[test]
 fn toggle_clicks_show_switch_and_hide_the_sidebar_under_cage() {
     const SMOKE: &str = "toggle_clicks_show_switch_and_hide_the_sidebar_under_cage";
@@ -610,9 +628,13 @@ fn toggle_clicks_show_switch_and_hide_the_sidebar_under_cage() {
     let files_x = pixel_target(tg_files_x(), "the Files toggle's x");
     let search_x = pixel_target(tg_search_x(), "the Search toggle's x");
     let click_y = pixel_target(tg_click_y(), "the toggles' y");
+    let all_x = pixel_target(st_all_x(), "the all-files toggle's x");
+    let all_y = pixel_target(st_toggle_y(), "the all-files toggle's y");
     let files_x_env = files_x.to_string();
     let search_x_env = search_x.to_string();
     let click_y_env = click_y.to_string();
+    let all_x_env = all_x.to_string();
+    let all_y_env = all_y.to_string();
 
     let status = run_pointer_scenario(
         TG_CLICK_BODY,
@@ -626,6 +648,8 @@ fn toggle_clicks_show_switch_and_hide_the_sidebar_under_cage() {
             ("TG_FILES_X", OsStr::new(&files_x_env)),
             ("TG_SEARCH_X", OsStr::new(&search_x_env)),
             ("TG_CLICK_Y", OsStr::new(&click_y_env)),
+            ("TG_ALL_X", OsStr::new(&all_x_env)),
+            ("TG_ALL_Y", OsStr::new(&all_y_env)),
         ],
     );
     assert_pointer_scenario_succeeded(SMOKE, status, &cwd, last);
@@ -633,6 +657,7 @@ fn toggle_clicks_show_switch_and_hide_the_sidebar_under_cage() {
     let extents = read_output_extents(&cwd, SMOKE);
     assert_inside_extents(SMOKE, "the Files toggle", (files_x, click_y), extents);
     assert_inside_extents(SMOKE, "the Search toggle", (search_x, click_y), extents);
+    assert_inside_extents(SMOKE, "the all-files toggle", (all_x, all_y), extents);
 
     assert_sidebar_steps(
         SMOKE,
@@ -649,7 +674,7 @@ fn toggle_clicks_show_switch_and_hide_the_sidebar_under_cage() {
             Expect {
                 sidebar: Sidebar::Search,
                 result: Some(false),
-                step: "after a click on Search from Files",
+                step: "after a click on Search from Files and one on `All`",
                 causes: "Files: the click did not reach the group's rule. If the group drew \
                          Search active, the toggle's own activation ran instead, because the \
                          press was not claimed; if nothing moved, the click landed outside the \
@@ -676,7 +701,10 @@ fn toggle_clicks_show_switch_and_hide_the_sidebar_under_cage() {
                 causes: "Hidden: a click on a hidden sidebar's toggle did not show it. Files: \
                          the click was read as Files. Search without the result: the typed \
                          query never reached the field, so `show_search_panel` did not focus it; \
-                         the page was already Search, so nothing else could have.",
+                         the page was already Search, so nothing else could have. Or, with the \
+                         query in the field and `No matches` under it, `All` was not on: step 1's \
+                         click missed it (check `st_all_x` against capture 1), or the toggle does \
+                         not reach `search_options_for`.",
             },
             Expect {
                 sidebar: Sidebar::Files,
@@ -750,7 +778,7 @@ fn toggle_clicks_show_switch_and_hide_the_sidebar_under_cage() {
 /// | --- | --- | --- | --- |
 /// | 0 | launch | Files | Files |
 /// | 1 | Ctrl+Shift+B | Hidden | none |
-/// | 2 | Ctrl+Shift+F, the query, Enter | Search, with [`PROJSEARCH_OCR_RESULT`] | Search |
+/// | 2 | Ctrl+Shift+F, Tab to `All` and Space, Ctrl+Shift+F, the query, Enter | Search, with [`PROJSEARCH_OCR_RESULT`] | Search |
 /// | 3 | Ctrl+Shift+B | Hidden | none |
 /// | 4 | Ctrl+Shift+B | Search, with the result | Search |
 /// | 5 | Escape, `:WolfSidebarShowProject` | Files, no result | Files |
@@ -767,6 +795,7 @@ fn toggle_clicks_show_switch_and_hide_the_sidebar_under_cage() {
 /// | C13 | in `SidebarInner::relay`, call `toggles.show_state` only while `self.shown` is true | capture 1 does not differ from capture 0 |
 /// | C14 | the stack's `visible-child-name` notify closure skips the group's sync | captures 2 and 4 differ: capture 2 still shows Files |
 /// | C15 | remove the `show_state` call from `relay` | capture 1 does not differ from capture 0 |
+/// | C27a | `PanelInner::toggles` sets `all_files: SearchToggles::INITIAL.all_files` | capture 2 lacks the result |
 #[test]
 fn sidebar_chords_move_the_toggle_group_under_cage() {
     const SMOKE: &str = "sidebar_chords_move_the_toggle_group_under_cage";
@@ -822,10 +851,12 @@ fn sidebar_chords_move_the_toggle_group_under_cage() {
             Expect {
                 sidebar: Sidebar::Search,
                 result: Some(true),
-                step: "after Ctrl+Shift+F, the query and Enter",
+                step: "after Ctrl+Shift+F, `All` turned on, the query and Enter",
                 causes: "Hidden: the chord did not reveal the sidebar. Files: it did not switch \
-                         the page. Search without the result: the query never ran; the \
-                         project-search smokes in sidebar.rs read the same chord.",
+                         the page. Search without the result: the query never ran, or it ran \
+                         with `All` off, which `No matches` says: the Tabs missed `All`, or the \
+                         toggle does not reach `search_options_for`. The project-search smokes \
+                         in sidebar.rs read the same chord and the same Tabs.",
             },
             Expect {
                 sidebar: Sidebar::Hidden,

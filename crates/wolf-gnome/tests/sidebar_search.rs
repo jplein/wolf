@@ -124,56 +124,63 @@ fn show_decision_needs_an_open_project() {
 }
 
 #[test]
-fn search_options_follow_the_toggles_over_all_files() {
+fn search_options_follow_the_toggles() {
     let query = " Zebra(cross ";
     for case_sensitive in [false, true] {
         for use_regex in [false, true] {
-            let toggles = SearchToggles {
-                case_sensitive,
-                use_regex,
-            };
-            let options = search_options_for(query, toggles);
-            assert_eq!(
-                options.query, query,
-                "with {toggles:?} the query must reach rg verbatim, surrounding spaces and case \
-                 included, because enter_action compares the raw entry text against the query a \
-                 search was started with"
-            );
-            assert_eq!(
-                options.use_regex, use_regex,
-                "with {toggles:?} use_regex must be the regex toggle's state. A constant here means \
-                 `.*` changes nothing rg is asked: with it stuck on, `foo(bar` stays an rg error \
-                 after the toggle is turned off; with it stuck off, `fo+bar` never matches \
-                 `foooobar`"
-            );
-            assert_eq!(
-                options.case_sensitive, case_sensitive,
-                "with {toggles:?} case_sensitive must be the case toggle's state. A constant here \
-                 means `Aa` changes nothing rg is asked: rg keeps `-i`, or keeps `-s`, whichever \
-                 way the toggle is set"
-            );
-            assert!(
-                options.all_files,
-                "with {toggles:?} all_files must be true: core's default searches only Markdown, \
-                 while the tree and the file picker list every file, so a .txt match would \
-                 silently never appear. No toggle widens it, so no toggle may narrow it either"
-            );
+            for all_files in [false, true] {
+                let toggles = SearchToggles {
+                    case_sensitive,
+                    use_regex,
+                    all_files,
+                };
+                let options = search_options_for(query, toggles);
+                assert_eq!(
+                    options.query, query,
+                    "with {toggles:?} the query must reach rg verbatim, surrounding spaces and \
+                     case included, because enter_action compares the raw entry text against the \
+                     query a search was started with"
+                );
+                assert_eq!(
+                    options.use_regex, use_regex,
+                    "with {toggles:?} use_regex must be the regex toggle's state. A constant here \
+                     means `.*` changes nothing rg is asked: with it stuck on, `foo(bar` stays an \
+                     rg error after the toggle is turned off; with it stuck off, `fo+bar` never \
+                     matches `foooobar`"
+                );
+                assert_eq!(
+                    options.case_sensitive, case_sensitive,
+                    "with {toggles:?} case_sensitive must be the case toggle's state. A constant \
+                     here means `Aa` changes nothing rg is asked: rg keeps `-i`, or keeps `-s`, \
+                     whichever way the toggle is set"
+                );
+                assert_eq!(
+                    options.all_files, all_files,
+                    "with {toggles:?} all_files must be the All toggle's state. A constant here \
+                     means `All` changes nothing rg is asked: stuck on, the panel searches every \
+                     file with `All` off; stuck off, core keeps its `*.md` and `*.markdown` globs \
+                     and turning `All` on never reaches a .txt"
+                );
+            }
         }
     }
 }
 
 #[test]
-fn initial_toggles_are_regex_on_and_case_off() {
+fn initial_toggles_are_regex_on_case_off_and_markdown_only() {
     assert_eq!(
         SearchToggles::INITIAL,
         SearchToggles {
             case_sensitive: false,
             use_regex: true,
+            all_files: false,
         },
-        "the panel must open with regex on and case off. Regex off departs from the \
-         counterpart's default, which is on. Case on makes a lowercase query miss every \
-         capitalised match; the counterpart seeds it from nvim's `ignorecase`, a blocking RPC \
-         this front-end never calls, so off is the forgiving answer"
+        "the panel must open with regex on, case off and All off. Regex off departs from the \
+         counterpart's default, which is on. All on departs from the counterpart's \
+         `SearchToggleSeam.defaultAllFiles`, which is off, so the two platforms would open with \
+         different scopes: one searching every file, the other only Markdown. Case on makes a \
+         lowercase query miss every capitalised match; the counterpart seeds it from nvim's \
+         `ignorecase`, a blocking RPC this front-end never calls, so off is the forgiving answer"
     );
 }
 
@@ -639,11 +646,16 @@ fn enter_action_reruns_an_unchanged_query_whose_toggles_changed() {
         use_regex: !initial.use_regex,
         ..initial
     };
-    // Both toggles away from their initial states, so a rule that compares against INITIAL
+    let all_flipped = SearchToggles {
+        all_files: !initial.all_files,
+        ..initial
+    };
+    // All three toggles away from their initial states, so a rule that compares against INITIAL
     // rather than against the current toggles answers differently here.
     let neither_initial = SearchToggles {
         case_sensitive: true,
         use_regex: false,
+        all_files: true,
     };
     assert_ne!(
         neither_initial, initial,
@@ -682,8 +694,16 @@ fn enter_action_reruns_an_unchanged_query_whose_toggles_changed() {
             initial,
             neither_initial,
             EnterAction::RunSearch,
-            "(d) both toggles were set back to their initial states since the run, so Enter \
+            "(d) every toggle was set back to its initial state since the run, so Enter \
              re-runs; Activate(3) means rule 2 compares the query alone",
+        ),
+        (
+            all_flipped,
+            initial,
+            EnterAction::RunSearch,
+            "(e) the All toggle changed since the run, so Enter re-runs; Activate(3) means rule 2 \
+             ignores all_files, and Enter after turning `All` on opens a row of the Markdown-only \
+             search instead of widening it to every file",
         ),
     ];
     for (now, ran, want, why) in cases {
@@ -851,6 +871,10 @@ fn search_status_says_when_the_toggles_changed_since_the_run() {
         use_regex: !ran.use_regex,
         ..ran
     };
+    let all_changed = SearchToggles {
+        all_files: !ran.all_files,
+        ..ran
+    };
 
     let stale = search_status(case_changed, Some(ran), 3, 3, true, None);
     let current = search_status(ran, Some(ran), 3, 3, true, None);
@@ -886,6 +910,13 @@ fn search_status_says_when_the_toggles_changed_since_the_run() {
         stale,
         "a changed regex toggle must turn the status stale as a changed case toggle does; a \
          different line means the comparison reads case_sensitive alone"
+    );
+    assert_eq!(
+        search_status(all_changed, Some(ran), 3, 3, true, None),
+        stale,
+        "a changed All toggle must turn the status stale as a changed case toggle does; the \
+         run's count here means the comparison ignores all_files, and the Markdown-only rows \
+         read as the answer to a search over every file"
     );
     assert_eq!(
         search_status(
