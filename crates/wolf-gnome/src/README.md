@@ -854,7 +854,7 @@ Purpose: the glue for the action namespace — `gio` actions, the primary menu, 
 **Public API**
 
 - `build_menu_model()`, `build_empty_state()`, `build(parts) -> AppShell`; `ShellParts` carries a `Weak` coordinator, the window id and [`TitlebarStyle`](#titlebar_backgroundrs).
-- `install_actions(app)` — the `win.` rows only, between building the window and `present()`, so the menu and header buttons resolve them.
+- `install_actions(app)` — the `win.` rows only, between building the window and `present()`, so the menu resolves them.
 - `set_empty_state(empty)`, `on_liveness_wake() -> bool`, `on_render_wake()`.
 
 **Decisions**
@@ -889,7 +889,7 @@ Purpose: the window's sidebar — a `gtk::Stack` with two pages, Files ([`tree_v
 
 #### `sidebar_toggles.rs`
 
-Purpose: the header bar's sidebar control, an `adw::ToggleGroup` of a Files and a Search toggle between Back/Forward and Open, which shows the sidebar's page, switches it and hides the sidebar. The counterpart of [`SidebarToolbarSeam.swift`](../../wolf-macos/Sources/WolfKeyMap/Sidebar/README.md#sidebartoolbarseamswift).
+Purpose: the header bar's sidebar control, an `adw::ToggleGroup` of a Files and a Search toggle after Back/Forward, the last item at the bar's start, which shows the sidebar's page, switches it and hides the sidebar. The counterpart of [`SidebarToolbarSeam.swift`](../../wolf-macos/Sources/WolfKeyMap/Sidebar/README.md#sidebartoolbarseamswift).
 
 **Public API**
 
