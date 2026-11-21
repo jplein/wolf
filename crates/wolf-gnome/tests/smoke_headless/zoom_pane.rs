@@ -2,12 +2,13 @@
 //! fills the pane area while the others stay live at their last size, and an unzoom restores
 //! every pane, both dragged dividers included. A focus move, by chord or by Neovim's own
 //! `<C-w>w`, Toggle Terminal with the drawer open or closed, a split and an other-pane
-//! command while zoomed each unzoom. A pane zoomed at quit is saved in `state.json` and
-//! zoomed again at the next launch.
+//! command while zoomed each unzoom. A window resize while zoomed fits the zoomed pane to the
+//! new size, and the unzoom then fits the restored layout to it. A pane zoomed at quit is
+//! saved in `state.json` and zoomed again at the next launch.
 
 use super::pointer::MIN_DRAG_CELLS;
 use super::preview::PREVIEW_OTHER_PANE_QUERY;
-use super::terminal::{drawer_strip_edges, pin_terminal_smoke_shell};
+use super::terminal::{drawer_paned_at, drawer_strip_edges, paned_px, pin_terminal_smoke_shell};
 use super::*;
 
 /// Typed into the palette to reach the Zoom Pane row: a subsequence of its title and of no
@@ -28,12 +29,13 @@ const ZOOM_SOURCE_BODY: &str = "# Layout source\n\nA paragraph to preview.\n";
 /// half cells at [`SMOKE_FONT_PT`], leaving A about 365 px wide, well above its floor.
 const TREE_DRAG_PX: i64 = 150;
 
-/// Pixels the drawer handle is dragged UP, as `drawer_divider.rs`'s first drag: the tree
-/// goes from about 418 px to 268 px, clear of both floors.
+/// Pixels the drawer handle is dragged UP, as `drawer_divider.rs`'s first drag. It asks for
+/// a 268 px tree, below the 353 px floor of the right column's two stacked panes and their
+/// handle, so GTK stops the tree at that floor, 65 px up from 418.
 const DRAWER_DRAG_PX: i64 = 150;
 
-/// The fewest rows the drawer's window must gain from [`DRAWER_DRAG_PX`]: three whole 44 px
-/// cells, less one for the sub-cell phase.
+/// The fewest rows the drawer's window must gain from [`DRAWER_DRAG_PX`]. The clamped drag
+/// adds 65 px, which takes the drawer from 208 px to 273 px and from one row to three.
 const MIN_DRAWER_DRAG_ROWS: i64 = 2;
 
 /// The tree paned's handle width, in output pixels: the one-pixel separator Adwaita draws,
@@ -47,40 +49,23 @@ const NEW_SPLIT_FRACTION: f64 = 0.5;
 /// and 40.
 const OWN_EXITS: std::ops::RangeInclusive<i32> = 82..=94;
 
-/// Body of [`zoom_pane_hides_restores_and_unzooms_under_cage`], appended to
-/// [`POINTER_PREAMBLE`].
-///
-/// Every readback is a Neovim one, typed into an editor pane. A readback typed where Neovim
-/// does not answer, into the drawer's shell or into a palette still open, never appears, and
-/// its exit code names the leg.
+/// The exit codes of [`ZOOM_LAYOUT`]'s readbacks, the first of [`OWN_EXITS`].
+const LAYOUT_EXITS: std::ops::RangeInclusive<i32> = 82..=85;
+
+/// The shell helpers and the layout both Zoom Pane pointer bodies build, placed after
+/// [`POINTER_PREAMBLE`] and before the body.
 ///
 /// `nvim_geom` writes ten integers: `winwidth` and `winheight` of `g:zwa`, `g:zwb`, `g:zwc`
 /// and `g:zwd`, the window count, and `win_getid()`. Its third and fourth arguments append
 /// to the format and the arguments. `nvim_focus` writes the window count, `win_getid()`,
 /// `winwidth(0)` and `winheight(0)`.
 ///
-/// ## Exit codes it adds to [`POINTER_PREAMBLE`]'s 11-15
-///
-/// | code | readback | meaning |
-/// | --- | --- | --- |
-/// | `82` | L | Neovim did not answer after `:e` at launch |
-/// | `83` | I | Neovim did not answer after `<C-w>k` out of the drawer |
-/// | `84` | Q | Neovim did not answer in C before the drags |
-/// | `85` | P | Neovim did not answer after the drags and `<C-w>k`: a press left focus off the editor |
-/// | `86` | Z | Neovim did not answer after the palette's `zoom`: no row matched and the palette kept the keys |
-/// | `87` | H | Neovim did not answer after Ctrl+` closed the drawer while B was zoomed |
-/// | `88` | F | Neovim did not answer after `<C-w>h` while zoomed |
-/// | `89` | W | Neovim did not answer after `<C-w>w`: focus stayed on a pane that is not Neovim's, such as the drawer |
-/// | `90` | U | Neovim did not answer after the unzoom |
-/// | `91` | S | Neovim did not answer after the zoom and `<C-w>v` |
-/// | `92` | C | Neovim did not answer after the zoom, `<C-w>c` and Ctrl+` |
-/// | `93` | O | Neovim did not answer after the zoom and Preview in Another Pane |
-/// | `94` | N | Neovim did not answer after Ctrl+` opened the drawer while B was zoomed and `<C-w>k` left it |
-const ZOOM_PANE_BODY: &str = r#"
+/// The layout is `vertical[A, horizontal[B, C]]` over the drawer D, with the tree divider
+/// and the drawer handle dragged, and Neovim on B. Its readbacks L, I, Q and P exit 82 to
+/// 85, which every body that uses it counts as its own.
+const ZOOM_LAYOUT: &str = r#"
 # The drawer chord's round trip; see DRAWER_SCENARIO in terminal.rs.
 DRAWER_SETTLE=2.0
-# Preview in Another Pane starts a WebKit view.
-PREVIEW_SETTLE=3.0
 
 GEOM_FMT='%d %d %d %d %d %d %d %d %d %d'
 GEOM_ARGS='winwidth(g:zwa), winheight(g:zwa), winwidth(g:zwb), winheight(g:zwb), winwidth(g:zwc), winheight(g:zwc), winwidth(g:zwd), winheight(g:zwd), len(nvim_tabpage_list_wins(0)), win_getid()'
@@ -164,6 +149,35 @@ drag_handle "$PROBE_X" "$DRAWER_Y" "$PROBE_X" "$DRAWER_DRAGGED_Y"
 grim "$OUT_PNG"
 chord_w k
 nvim_geom "$READ_P" 85
+"#;
+
+/// Body of [`zoom_pane_hides_restores_and_unzooms_under_cage`], appended to
+/// [`POINTER_PREAMBLE`] and [`ZOOM_LAYOUT`].
+///
+/// Every readback is a Neovim one, typed into an editor pane. A readback typed where Neovim
+/// does not answer, into the drawer's shell or into a palette still open, never appears, and
+/// its exit code names the leg.
+///
+/// ## Exit codes it adds to [`POINTER_PREAMBLE`]'s 11-15
+///
+/// | code | readback | meaning |
+/// | --- | --- | --- |
+/// | `82` | L | Neovim did not answer after `:e` at launch, in [`ZOOM_LAYOUT`] |
+/// | `83` | I | Neovim did not answer after `<C-w>k` out of the drawer, in [`ZOOM_LAYOUT`] |
+/// | `84` | Q | Neovim did not answer in C before the drags, in [`ZOOM_LAYOUT`] |
+/// | `85` | P | Neovim did not answer after the drags and `<C-w>k`, in [`ZOOM_LAYOUT`]: a press left focus off the editor |
+/// | `86` | Z | Neovim did not answer after the palette's `zoom`: no row matched and the palette kept the keys |
+/// | `87` | H | Neovim did not answer after Ctrl+` closed the drawer while B was zoomed |
+/// | `88` | F | Neovim did not answer after `<C-w>h` while zoomed |
+/// | `89` | W | Neovim did not answer after `<C-w>w`: focus stayed on a pane that is not Neovim's, such as the drawer |
+/// | `90` | U | Neovim did not answer after the unzoom |
+/// | `91` | S | Neovim did not answer after the zoom and `<C-w>v` |
+/// | `92` | C | Neovim did not answer after the zoom, `<C-w>c` and Ctrl+` |
+/// | `93` | O | Neovim did not answer after the zoom and Preview in Another Pane |
+/// | `94` | N | Neovim did not answer after Ctrl+` opened the drawer while B was zoomed and `<C-w>k` left it |
+const ZOOM_PANE_BODY: &str = r#"
+# Preview in Another Pane starts a WebKit view.
+PREVIEW_SETTLE=3.0
 
 # --- Z: Zoom Pane on B --------------------------------------------------------------
 palette "$ZOOM_QUERY"
@@ -295,14 +309,6 @@ fn assert_zoom_query_is_unique(smoke: &str) {
     );
 }
 
-/// Rounds a derived length to the whole pixels a `gtk::Paned` position is measured in.
-fn paned_px(value: f64, what: &str) -> i32 {
-    let px = pixel_target(value, what);
-    i32::try_from(px).unwrap_or_else(|e| {
-        panic!("{what} = {px} px does not fit a paned position ({e}); the derivation is nonsense")
-    })
-}
-
 /// The tree divider's x in output pixels, for a `vertical[A, …]` split at equal weights:
 /// the pane area's left edge plus the position `geometry::divider_position` gives the paned.
 ///
@@ -313,8 +319,31 @@ fn paned_px(value: f64, what: &str) -> i32 {
 /// smokes do: P's precondition reports a press that missed, and the retained capture shows
 /// where the handle was.
 fn tree_handle_x() -> f64 {
+    let paned = tree_paned_at(exact_f64(CAGE_OUTPUT_W_EXPECTED, "CAGE_OUTPUT_W_EXPECTED"));
+    let position = wolf_gnome::geometry::divider_position(
+        paned.floor,
+        paned.max,
+        paned.span,
+        NEW_SPLIT_FRACTION,
+    );
+    OVERLAY_ORIGIN_X_EXPECTED + f64::from(position)
+}
+
+/// The `vertical[A, …]` tree paned's geometry in whole pixels, by [`tree_handle_x`]'s
+/// derivation. Its position is A's width.
+struct TreePaned {
+    /// The paned's width: the pane area's.
+    span: i32,
+    /// The content floor `make_pane_area` gives one pane, which both columns share.
+    floor: i32,
+    /// `max_position`: the right column held at [`Self::floor`].
+    max: i32,
+}
+
+/// Derives [`TreePaned`] on an output `output_w` pixels wide, with the sidebar at its launch
+/// width, panicking when the two floors and the handle do not fit side by side.
+fn tree_paned_at(output_w: f64) -> TreePaned {
     let cell = cell_metrics_for_smoke();
-    let output_w = exact_f64(CAGE_OUTPUT_W_EXPECTED, "CAGE_OUTPUT_W_EXPECTED");
     let statusbar = wolf_gnome::statusbar_layout::statusbar_layout(
         cell.size_px,
         wolf_gnome::statusbar_layout::secondary_font_size(cell.size_px),
@@ -335,13 +364,206 @@ fn tree_handle_x() -> f64 {
     let max = span - TREE_HANDLE_PX - floor;
     assert!(
         max > floor,
-        "tree_handle_x: a {span} px pane area leaves the tree paned a position range of \
-         [{floor}, {max}], so two {floor} px floors do not fit side by side. Re-derive the \
-         span from CAGE_OUTPUT_W_EXPECTED and OVERLAY_ORIGIN_X_EXPECTED, or the pane minimum \
-         grew past half the pane area."
+        "tree_paned_at: a {output_w} px output leaves a {span} px pane area, and the tree paned \
+         a position range of [{floor}, {max}], so two {floor} px floors do not fit side by \
+         side. Re-derive the span from the output width and OVERLAY_ORIGIN_X_EXPECTED, or the \
+         pane minimum grew past half the pane area."
     );
-    let position = wolf_gnome::geometry::divider_position(floor, max, span, NEW_SPLIT_FRACTION);
-    OVERLAY_ORIGIN_X_EXPECTED + f64::from(position)
+    TreePaned { span, floor, max }
+}
+
+/// The handle presses and releases [`ZOOM_LAYOUT`]'s two drags use, in output pixels.
+#[derive(Clone, Copy)]
+struct LayoutTargets {
+    /// The y both tree-handle events share.
+    probe_y: i64,
+    /// The tree handle, where [`tree_handle_x`] models it.
+    tree_x: i64,
+    /// The tree drag's release, [`TREE_DRAG_PX`] left of the handle.
+    tree_dragged_x: i64,
+    /// The x both drawer-handle events share.
+    drawer_x: i64,
+    /// The drawer handle, where `drawer_strip_edges` puts it for a new window's share.
+    drawer_y: i64,
+    /// The drawer drag's release, [`DRAWER_DRAG_PX`] above the handle.
+    drawer_dragged_y: i64,
+}
+
+/// Derives [`LayoutTargets`] at the launch size.
+fn layout_targets() -> LayoutTargets {
+    let tree_x = pixel_target(tree_handle_x(), "the tree handle's x");
+    let drawer_y = pixel_target(drawer_strip_edges().handle_y, "the drawer handle's y");
+    LayoutTargets {
+        probe_y: i64::from(PROBE_Y),
+        tree_x,
+        tree_dragged_x: tree_x - TREE_DRAG_PX,
+        drawer_x: i64::from(PROBE_X),
+        drawer_y,
+        drawer_dragged_y: drawer_y - DRAWER_DRAG_PX,
+    }
+}
+
+impl LayoutTargets {
+    /// Sets the drag targets [`ZOOM_LAYOUT`] reads on `cmd`.
+    fn env<'c>(&self, cmd: &'c mut Command) -> &'c mut Command {
+        cmd.env("TREE_X", self.tree_x.to_string())
+            .env("TREE_DRAGGED_X", self.tree_dragged_x.to_string())
+            .env("DRAWER_Y", self.drawer_y.to_string())
+            .env("DRAWER_DRAGGED_Y", self.drawer_dragged_y.to_string())
+    }
+
+    /// Asserts every press and release lies inside the output's `extents`.
+    fn assert_inside_extents(&self, smoke: &str, extents: (i64, i64)) {
+        for (label, point) in [
+            ("the tree handle", (self.tree_x, self.probe_y)),
+            (
+                "the tree drag's release",
+                (self.tree_dragged_x, self.probe_y),
+            ),
+            ("the drawer handle", (self.drawer_x, self.drawer_y)),
+            (
+                "the drawer drag's release",
+                (self.drawer_x, self.drawer_dragged_y),
+            ),
+        ] {
+            assert_inside_extents(smoke, label, point, extents);
+        }
+    }
+}
+
+/// What [`assert_layout`] establishes about [`ZOOM_LAYOUT`]'s layout.
+struct Layout {
+    /// L's size: the launch pane alone, with the whole pane area.
+    lsize: (i64, i64),
+    /// A's recorded window id: the launch window.
+    id_a: i64,
+    /// B's, the right column's top pane, current after P.
+    id_b: i64,
+    /// C's, B's lower half.
+    id_c: i64,
+    /// D's, the drawer.
+    id_d: i64,
+    /// Q, before the drags.
+    q: Geom,
+    /// P, after the drags, with B current.
+    p: Geom,
+}
+
+/// Asserts [`ZOOM_LAYOUT`]'s preconditions L, I, Q and P, in that order, from the readbacks
+/// `[L, I, Q, P]`. `leg` ends the run when a leg's readback is missing.
+fn assert_layout(
+    smoke: &str,
+    leg: &dyn Fn(&[&Path], &str),
+    reads: [&Path; 4],
+    targets: &LayoutTargets,
+    out_png: &Path,
+) -> Layout {
+    let [read_l, read_i, read_q, read_p] = reads;
+    let LayoutTargets {
+        probe_y,
+        tree_x,
+        drawer_x,
+        drawer_y,
+        ..
+    } = *targets;
+
+    // --- Preconditions L, I, Q: the layout the legs describe ---------------------
+    leg(&[read_l, read_i, read_q], "L-I-Q");
+    let l = read_focus(read_l, smoke);
+    assert_eq!(
+        l.count, 1,
+        "{smoke}: Neovim reports {} windows at launch, want 1. L's size is the pane with the \
+         whole pane area only when it is the one window, and every zoomed leg compares against \
+         it.",
+        l.count
+    );
+    assert!(
+        l.size.0 > 0 && l.size.1 > 0,
+        "{smoke}: the launch pane reports a {}x{} grid, so the front-end never sized it and \
+         every comparison against L would be against a placeholder.",
+        l.size.0,
+        l.size.1
+    );
+    let lsize = l.size;
+
+    let ids = read_ints(read_i, 5, smoke);
+    let (id_a, id_b, id_c, id_d) = (ids[0], ids[1], ids[2], ids[3]);
+    let mut distinct = vec![id_a, id_b, id_c, id_d];
+    distinct.sort_unstable();
+    distinct.dedup();
+    assert!(
+        distinct.len() == 4 && id_a == l.current && ids[4] == 1,
+        "{smoke}: the recorded window ids are (A, B, C, D) = ({id_a}, {id_b}, {id_c}, {id_d}) \
+         with w:wolf_drawer {} on D, and the launch window was {}. Want four distinct ids, A \
+         the launch window and D's flag 1. A repeated id means a `<C-w>v`, `<C-w>s` or Ctrl+` \
+         made no window or did not focus it; a D without the flag means the drawer is not the \
+         last window or never opened.",
+        ids[4],
+        l.current
+    );
+
+    let (q, _) = read_geom(read_q, 0, smoke);
+    assert!(
+        q.count == 4 && q.current == id_c,
+        "{smoke}: before the drags Neovim reports {} windows with current {}, want 4 with C \
+         ({id_c}) current. The drags and the `<C-w>k` into B start from C.",
+        q.count,
+        q.current
+    );
+    for (name, (w, h)) in [("A", q.a), ("B", q.b), ("C", q.c), ("D", q.d)] {
+        assert!(
+            w > 0 && h > 0,
+            "{smoke}: {name} reports a {w}x{h} grid before the drags; a window the front-end \
+             never sized makes every comparison below meaningless. Q: {q:?}"
+        );
+    }
+
+    // --- Precondition P: both drags moved their divider --------------------------
+    leg(&[read_p], "P");
+    let (p, _) = read_geom(read_p, 0, smoke);
+    assert!(
+        p.a.0 <= q.a.0 - MIN_DRAG_CELLS,
+        "{smoke}: after dragging the tree divider {TREE_DRAG_PX} px left, A is {} columns wide, \
+         against {} before; want at least {MIN_DRAG_CELLS} fewer. Read this FIRST as the press \
+         missing the handle: it was pressed at ({tree_x}, {probe_y}), where `tree_handle_x` \
+         models a fresh split's divider, and the retained capture {} shows where it is. Without \
+         a moved divider U cannot tell a restored layout from a re-derived one.",
+        p.a.0,
+        q.a.0,
+        out_png.display()
+    );
+    assert!(
+        p.d.1 >= q.d.1 + MIN_DRAWER_DRAG_ROWS,
+        "{smoke}: after dragging the drawer handle {DRAWER_DRAG_PX} px up, D is {} rows tall, \
+         against {} before; want at least {MIN_DRAWER_DRAG_ROWS} more. Read this FIRST as the \
+         press missing the handle at ({drawer_x}, {drawer_y}), where `drawer_strip_edges` puts \
+         a new window's handle; the retained capture {} shows where it is. Without a moved \
+         share U cannot tell a restored drawer from a re-derived one.",
+        p.d.1,
+        q.d.1,
+        out_png.display()
+    );
+    assert!(
+        p.count == 4 && p.current == id_b && p.b != lsize && p.b.0 < lsize.0,
+        "{smoke}: after the drags and `<C-w>k`, Neovim reports {} windows with current {} and B \
+         at {:?}; want 4 windows, B ({id_b}) current, and B narrower than L's {lsize:?}. Another \
+         current means a press focused a pane or `<C-w>k` did not reach B; B at L's size or \
+         width means B already fills the pane area, and Z-b, F-b, W and H would hold without a \
+         zoom or an unzoom.",
+        p.count,
+        p.current,
+        p.b
+    );
+
+    Layout {
+        lsize,
+        id_a,
+        id_b,
+        id_c,
+        id_d,
+        q,
+        p,
+    }
 }
 
 /// **Zoom Pane from the palette zooms the active pane over the whole pane area, leaves the
@@ -371,8 +593,8 @@ fn tree_handle_x() -> f64 {
 ///
 /// The tree handle is pressed where [`tree_handle_x`] models it, at [`PROBE_Y`], and the
 /// drawer handle where [`drawer_strip_edges`] puts it for a new window's share, at
-/// [`PROBE_X`]. Both drags are 150 px, so a pane that kept its size across the zoom is told
-/// apart from one re-derived at the default weight or share by several cells.
+/// [`PROBE_X`]. Both drags ask for 150 px, so a pane that kept its size across the zoom is
+/// told apart from one re-derived at the default weight or share by at least two cells.
 ///
 /// L is the launch pane alone, which has the whole pane area. Z-b holds because a zoomed
 /// pane gets that same area, and H's A spans that same height once the drawer is gone.
@@ -463,22 +685,14 @@ fn zoom_pane_hides_restores_and_unzooms_under_cage() {
         clear_evidence(path, SMOKE);
     }
 
-    let probe_y = i64::from(PROBE_Y);
-    let tree_x = pixel_target(tree_handle_x(), "the tree handle's x");
-    let tree_dragged_x = tree_x - TREE_DRAG_PX;
-    let drawer_x = i64::from(PROBE_X);
-    let drawer_y = pixel_target(drawer_strip_edges().handle_y, "the drawer handle's y");
-    let drawer_dragged_y = drawer_y - DRAWER_DRAG_PX;
-
-    let mut cmd = pointer_command(ZOOM_PANE_BODY, &cwd, &runtime_dir, &out_png);
-    pin_terminal_smoke_shell(&mut cmd)
+    let targets = layout_targets();
+    let body = format!("{ZOOM_LAYOUT}\n{ZOOM_PANE_BODY}");
+    let mut cmd = pointer_command(&body, &cwd, &runtime_dir, &out_png);
+    targets
+        .env(pin_terminal_smoke_shell(&mut cmd))
         .env("ZOOM_SOURCE", ZOOM_SOURCE_FILE)
         .env("ZOOM_QUERY", ZOOM_QUERY)
         .env("PREVIEW_OTHER_PANE_QUERY", PREVIEW_OTHER_PANE_QUERY)
-        .env("TREE_X", tree_x.to_string())
-        .env("TREE_DRAGGED_X", tree_dragged_x.to_string())
-        .env("DRAWER_Y", drawer_y.to_string())
-        .env("DRAWER_DRAGGED_Y", drawer_dragged_y.to_string())
         .env("READ_L", &read_l)
         .env("READ_I", &read_i)
         .env("READ_Q", &read_q)
@@ -502,108 +716,32 @@ fn zoom_pane_hides_restores_and_unzooms_under_cage() {
     }
 
     // Extents next: a clamped injection lands elsewhere and misdirects every message below.
-    let extents = read_output_extents(&cwd, SMOKE);
-    for (label, point) in [
-        ("the tree handle", (tree_x, probe_y)),
-        ("the tree drag's release", (tree_dragged_x, probe_y)),
-        ("the drawer handle", (drawer_x, drawer_y)),
-        ("the drawer drag's release", (drawer_x, drawer_dragged_y)),
-    ] {
-        assert_inside_extents(SMOKE, label, point, extents);
-    }
+    targets.assert_inside_extents(SMOKE, read_output_extents(&cwd, SMOKE));
 
-    let leg = |paths: &[&Path], name: &str| require_leg(SMOKE, status, paths, name);
+    let leg =
+        |paths: &[&Path], name: &str| require_leg(SMOKE, status, paths, name, ZOOM_PANE_EXITS);
 
-    // --- Preconditions L, I, Q: the layout the legs describe ---------------------
-    leg(
-        &[read_l.as_path(), read_i.as_path(), read_q.as_path()],
-        "L-I-Q",
+    let layout = assert_layout(
+        SMOKE,
+        &leg,
+        [
+            read_l.as_path(),
+            read_i.as_path(),
+            read_q.as_path(),
+            read_p.as_path(),
+        ],
+        &targets,
+        &out_png,
     );
-    let l = read_focus(&read_l, SMOKE);
-    assert_eq!(
-        l.count, 1,
-        "{SMOKE}: Neovim reports {} windows at launch, want 1. L's size is the pane with the \
-         whole pane area only when it is the one window, and every zoomed leg compares against \
-         it.",
-        l.count
-    );
-    assert!(
-        l.size.0 > 0 && l.size.1 > 0,
-        "{SMOKE}: the launch pane reports a {}x{} grid, so the front-end never sized it and \
-         every comparison against L would be against a placeholder.",
-        l.size.0,
-        l.size.1
-    );
-    let lsize = l.size;
-
-    let ids = read_ints(&read_i, 5, SMOKE);
-    let (id_a, id_b, id_c, id_d) = (ids[0], ids[1], ids[2], ids[3]);
-    let mut distinct = vec![id_a, id_b, id_c, id_d];
-    distinct.sort_unstable();
-    distinct.dedup();
-    assert!(
-        distinct.len() == 4 && id_a == l.current && ids[4] == 1,
-        "{SMOKE}: the recorded window ids are (A, B, C, D) = ({id_a}, {id_b}, {id_c}, {id_d}) \
-         with w:wolf_drawer {} on D, and the launch window was {}. Want four distinct ids, A \
-         the launch window and D's flag 1. A repeated id means a `<C-w>v`, `<C-w>s` or Ctrl+` \
-         made no window or did not focus it; a D without the flag means the drawer is not the \
-         last window or never opened.",
-        ids[4],
-        l.current
-    );
-
-    let (q, _) = read_geom(&read_q, 0, SMOKE);
-    assert!(
-        q.count == 4 && q.current == id_c,
-        "{SMOKE}: before the drags Neovim reports {} windows with current {}, want 4 with C \
-         ({id_c}) current. The drags and the `<C-w>k` into B start from C.",
-        q.count,
-        q.current
-    );
-    for (name, (w, h)) in [("A", q.a), ("B", q.b), ("C", q.c), ("D", q.d)] {
-        assert!(
-            w > 0 && h > 0,
-            "{SMOKE}: {name} reports a {w}x{h} grid before the drags; a window the front-end \
-             never sized makes every comparison below meaningless. Q: {q:?}"
-        );
-    }
-
-    // --- Precondition P: both drags moved their divider --------------------------
-    leg(&[read_p.as_path()], "P");
-    let (p, _) = read_geom(&read_p, 0, SMOKE);
-    assert!(
-        p.a.0 <= q.a.0 - MIN_DRAG_CELLS,
-        "{SMOKE}: after dragging the tree divider {TREE_DRAG_PX} px left, A is {} columns wide, \
-         against {} before; want at least {MIN_DRAG_CELLS} fewer. Read this FIRST as the press \
-         missing the handle: it was pressed at ({tree_x}, {probe_y}), where `tree_handle_x` \
-         models a fresh split's divider, and the retained capture {} shows where it is. Without \
-         a moved divider U cannot tell a restored layout from a re-derived one.",
-        p.a.0,
-        q.a.0,
-        out_png.display()
-    );
-    assert!(
-        p.d.1 >= q.d.1 + MIN_DRAWER_DRAG_ROWS,
-        "{SMOKE}: after dragging the drawer handle {DRAWER_DRAG_PX} px up, D is {} rows tall, \
-         against {} before; want at least {MIN_DRAWER_DRAG_ROWS} more. Read this FIRST as the \
-         press missing the handle at ({drawer_x}, {drawer_y}), where `drawer_strip_edges` puts \
-         a new window's handle; the retained capture {} shows where it is. Without a moved \
-         share U cannot tell a restored drawer from a re-derived one.",
-        p.d.1,
-        q.d.1,
-        out_png.display()
-    );
-    assert!(
-        p.count == 4 && p.current == id_b && p.b != lsize && p.b.0 < lsize.0,
-        "{SMOKE}: after the drags and `<C-w>k`, Neovim reports {} windows with current {} and B \
-         at {:?}; want 4 windows, B ({id_b}) current, and B narrower than L's {lsize:?}. Another \
-         current means a press focused a pane or `<C-w>k` did not reach B; B at L's size or \
-         width means B already fills the pane area, and Z-b, F-b, W and H would hold without a \
-         zoom or an unzoom.",
-        p.count,
-        p.current,
-        p.b
-    );
+    let Layout {
+        lsize,
+        id_a,
+        id_b,
+        id_c,
+        id_d,
+        q,
+        p,
+    } = layout;
 
     // --- Z-a (Z2), Z-b (Z1a, Z1b): B fills the pane area, the rest live on hidden ---
     leg(&[read_z.as_path()], "Z");
@@ -857,9 +995,15 @@ fn zoom_pane_hides_restores_and_unzooms_under_cage() {
     );
 }
 
+/// [`ZOOM_PANE_BODY`]'s exit codes past [`ZOOM_LAYOUT`]'s, for [`require_leg`].
+const ZOOM_PANE_EXITS: &str = "86 Z (the palette has no Zoom Pane row), 87 H, 88 F, 89 W \
+     (Neovim was left on the drawer after `<C-w>w`), 90 U, 91 S, 92 C, 93 O, 94 N (`<C-w>k` out \
+     of the drawer reached no editor)";
+
 /// Ends the run on the scenario's exit status when any of `paths` is missing, so the leg
-/// that needs them is never asserted on a readback the scenario did not reach.
-fn require_leg(smoke: &str, status: ExitStatus, paths: &[&Path], leg: &str) {
+/// that needs them is never asserted on a readback the scenario did not reach. `codes`
+/// names the body's exit codes past [`ZOOM_LAYOUT`]'s.
+fn require_leg(smoke: &str, status: ExitStatus, paths: &[&Path], leg: &str, codes: &str) {
     let missing: Vec<String> = paths
         .iter()
         .filter(|path| !path.exists())
@@ -871,10 +1015,414 @@ fn require_leg(smoke: &str, status: ExitStatus, paths: &[&Path], leg: &str) {
          {status}. Every readback is a Neovim one, so a missing one means the keys went \
          elsewhere: into the drawer's shell, or into a palette that matched no row. 82 L, 83 I \
          (`<C-w>k` out of the drawer reached no editor), 84 Q, 85 P (a press took keyboard \
-         focus off the editor), 86 Z (the palette has no Zoom Pane row), 87 H, 88 F, 89 W \
-         (Neovim was left on the drawer after `<C-w>w`), 90 U, 91 S, 92 C, 93 O, 94 N (`<C-w>k` \
-         out of the drawer reached no editor). An exit 0 with a file missing means it was \
-         written somewhere else."
+         focus off the editor), {codes}. An exit 0 with a file missing means it was written \
+         somewhere else."
+    );
+}
+
+/// The output width [`ZOOM_RESIZE_BODY`] resizes to while B is zoomed.
+const RESIZED_OUTPUT_W: i64 = 1000;
+
+/// The output height [`ZOOM_RESIZE_BODY`] resizes to while B is zoomed.
+const RESIZED_OUTPUT_H: i64 = 660;
+
+// Smaller on both axes, or Z-R cannot tell a pane fitted to the new size from one left at the old.
+const _: () = assert!(
+    RESIZED_OUTPUT_W < CAGE_OUTPUT_W_EXPECTED && RESIZED_OUTPUT_H < CAGE_OUTPUT_H_EXPECTED,
+    "the zoom resize must shrink the output on both axes"
+);
+
+/// The exit codes [`ZOOM_RESIZE_BODY`] adds to [`POINTER_PREAMBLE`]'s 11-15 and 40, past
+/// [`ZOOM_LAYOUT`]'s 82-85; [`RESIZE_OUTPUT_FRAGMENT`]'s two are 108 and 109.
+const RESIZE_OWN_EXITS: std::ops::RangeInclusive<i32> = 102..=109;
+
+/// [`ZOOM_RESIZE_BODY`]'s exit codes past [`ZOOM_LAYOUT`]'s, for [`require_leg`].
+const ZOOM_RESIZE_EXITS: &str = "102 Z (the palette has no Zoom Pane row), 103 ZR, 104 U, \
+     105 UB, 106 RR, 107 Z2, 108 (`wlr-randr` listed no output or refused the mode; the cage \
+     log has its listing), 109 (the output never reported the mode as current)";
+
+/// Body of [`an_unzoom_after_a_window_resize_fits_the_new_size_under_cage`], appended to
+/// [`POINTER_PREAMBLE`], [`RESIZE_OUTPUT_FRAGMENT`] and [`ZOOM_LAYOUT`].
+///
+/// Every readback is a Neovim one, typed into B. Z, ZR and UB also write `&columns` and
+/// `&lines`, the outer grid, which follows the toplevel's size. No pointer event follows a
+/// resize.
+///
+/// ## Exit codes it adds to [`POINTER_PREAMBLE`]'s 11-15
+///
+/// | code | readback | meaning |
+/// | --- | --- | --- |
+/// | `82`-`85` | L, I, Q, P | as in [`ZOOM_PANE_BODY`]'s table, from [`ZOOM_LAYOUT`] |
+/// | `102` | Z | Neovim did not answer after the palette's `zoom`: no row matched and the palette kept the keys |
+/// | `103` | ZR | Neovim did not answer after the resize while zoomed |
+/// | `104` | U | Neovim did not answer after the unzoom |
+/// | `105` | UB | Neovim did not answer after the resize back to the launch size |
+/// | `106` | RR | Neovim did not answer after the plain resize of the unzoomed layout |
+/// | `107` | Z2 | Neovim did not answer after the second zoom |
+/// | `108` | ZR, UB or RR | `wlr-randr` listed no output or refused the mode |
+/// | `109` | ZR, UB or RR | the output never reported the mode as current |
+const ZOOM_RESIZE_BODY: &str = r#"
+# --- Z: Zoom Pane on B, at the launch size ---------------------------------------
+palette "$ZOOM_QUERY"
+nvim_geom "$READ_Z" 102 ' %d %d' ', &columns, &lines'
+
+# --- ZR: the window resized while B is zoomed --------------------------------------
+resize_output "$RESIZED_W" "$RESIZED_H" 108 109
+nvim_geom "$READ_ZR" 103 ' %d %d' ', &columns, &lines'
+
+# --- U: Zoom Pane again unzooms, at the new size ------------------------------------
+palette "$ZOOM_QUERY"
+nvim_geom "$READ_U" 104
+
+# --- UB: back to the launch size ------------------------------------------------------
+resize_output "$LAUNCH_W" "$LAUNCH_H" 108 109
+nvim_geom "$READ_UB" 105 ' %d %d' ', &columns, &lines'
+
+# --- RR: a plain resize of the unzoomed layout to the same new size --------------------
+resize_output "$RESIZED_W" "$RESIZED_H" 108 109
+nvim_geom "$READ_RR" 106
+
+# --- Z2: zoom B, still current, at the new size -----------------------------------------
+palette "$ZOOM_QUERY"
+nvim_geom "$READ_Z2" 107
+
+hsend quit
+exit 0
+"#;
+
+/// The size [`assert_resize_premises`] checks against [`ZOOM_LAYOUT`]'s two drags.
+///
+/// Every width is derived as if the sidebar kept its launch width at [`RESIZED_OUTPUT_W`],
+/// which is the narrowest pane area that width can give. The sidebar's `gtk::Paned` keeps
+/// GTK's default `resize-*-child`, so it rescales the sidebar in proportion and only widens
+/// the pane area; a premise that holds at the narrower area holds at the wider one.
+fn assert_resize_premises(smoke: &str, targets: &LayoutTargets) {
+    // The tree divider: the fraction the tree drag leaves, unclamped at both widths.
+    let tree0 = tree_paned_at(exact_f64(CAGE_OUTPUT_W_EXPECTED, "CAGE_OUTPUT_W_EXPECTED"));
+    let tree1 = tree_paned_at(exact_f64(RESIZED_OUTPUT_W, "RESIZED_OUTPUT_W"));
+    let dragged = paned_px(
+        exact_f64(targets.tree_dragged_x, "the tree drag's release x") - OVERLAY_ORIGIN_X_EXPECTED,
+        "the tree drag's position",
+    );
+    assert!(
+        tree0.floor < dragged && dragged < tree0.max,
+        "{smoke}: the tree drag asks for A {dragged} px wide, outside ({}, {}) at the launch \
+         size, so GTK clamps it and the fraction it leaves is not the drag's.",
+        tree0.floor,
+        tree0.max
+    );
+    let fraction = wolf_gnome::geometry::divider_span_fraction(dragged, tree0.span)
+        .expect("the tree paned's span is positive, as tree_paned_at asserts");
+    let fitted = wolf_gnome::geometry::divider_position(0, tree1.span, tree1.span, fraction);
+    assert!(
+        tree1.floor <= fitted && fitted <= tree1.max,
+        "{smoke}: at {RESIZED_OUTPUT_W} px the dragged tree fraction {fraction} puts A at {fitted} \
+         px, outside [{}, {}], so U and RR would clamp it and U-B could not tell a kept weight \
+         from a clamp taken for a drag. Widen RESIZED_OUTPUT_W.",
+        tree1.floor,
+        tree1.max
+    );
+
+    // The drawer divider: the editor tree's floor is the right column's two stacked pane floors and
+    // a vertical paned's handle, as the drawer's is.
+    let drawer0 = drawer_paned_at(exact_f64(CAGE_OUTPUT_H_EXPECTED, "CAGE_OUTPUT_H_EXPECTED"));
+    let drawer1 = drawer_paned_at(exact_f64(RESIZED_OUTPUT_H, "RESIZED_OUTPUT_H"));
+    let tree_floor = 2 * drawer0.floor + drawer0.handle;
+    assert!(
+        tree_floor <= drawer1.max,
+        "{smoke}: at {RESIZED_OUTPUT_H} px the drawer paned's span is {} px, which cannot hold the \
+         editor tree's {tree_floor} px floor, the handle and the drawer's {} px floor. Raise \
+         RESIZED_OUTPUT_H.",
+        drawer1.span,
+        drawer1.floor
+    );
+    let requested = paned_px(
+        exact_f64(targets.drawer_dragged_y, "the drawer drag's release y")
+            - OVERLAY_ORIGIN_Y_EXPECTED,
+        "the drawer drag's position",
+    );
+    let at_drag = requested.clamp(tree_floor, drawer0.max);
+    let mut kept = wolf_gnome::drawer::DrawerShare::new();
+    kept.drag_to(at_drag, drawer0.span);
+    let unclamped = kept.position(0, drawer1.span, drawer1.span);
+    assert!(
+        unclamped < tree_floor,
+        "{smoke}: at {RESIZED_OUTPUT_H} px the share P's drag leaves puts the editor tree at \
+         {unclamped} px, at or above its {tree_floor} px floor, so the resize clamps nothing and \
+         U-B holds whatever the guard does. Lower RESIZED_OUTPUT_H."
+    );
+    let mut clamped = kept;
+    clamped.drag_to(tree_floor, drawer1.span);
+    let drawer_rows = |share: wolf_gnome::drawer::DrawerShare| {
+        let position = share.position(tree_floor, drawer0.max, drawer0.span);
+        drawer0.rows(drawer0.span - drawer0.handle - position)
+    };
+    assert!(
+        drawer_rows(kept) != drawer_rows(clamped),
+        "{smoke}: at the launch size D has {} rows at the share P's drag leaves and {} at the \
+         share the {RESIZED_OUTPUT_H} px clamp would leave, so U-B cannot tell them apart. Lower \
+         RESIZED_OUTPUT_H.",
+        drawer_rows(kept),
+        drawer_rows(clamped)
+    );
+}
+
+/// **A resize while a pane is zoomed fits the zoomed pane to the new size and leaves the
+/// hidden panes at their last, and the unzoom then fits the restored layout to the new size
+/// exactly as a plain resize does, the dragged divider and the drawer's share included.**
+///
+/// ## The scenario
+///
+/// One launch through [`pointer_command`], with [`pin_terminal_smoke_shell`]'s shell for the
+/// drawer. [`ZOOM_LAYOUT`] builds `vertical[A, horizontal[B, C]]` over the drawer D and drags
+/// both dividers, as in [`zoom_pane_hides_restores_and_unzooms_under_cage`]. Then B is zoomed
+/// (Z), the window is resized to [`RESIZED_OUTPUT_W`]x[`RESIZED_OUTPUT_H`] (ZR), B is
+/// unzoomed (U), the window goes back to the launch size (UB) and to the new size again with
+/// nothing zoomed (RR), and B is zoomed once more (Z2). [`RESIZE_OUTPUT_FRAGMENT`] resizes
+/// the output, because cage maximizes its toplevel to it. Every observable is a Neovim
+/// readback.
+///
+/// [`assert_resize_premises`] derives the premises before launch: the tree's dragged fraction
+/// lands unclamped at both widths, and at the new height the drawer's kept share clamps the
+/// editor tree at its floor, at a share that gives D a different row count at the launch
+/// size. U-B also rests on one premise about GTK that nothing here derives: the sidebar's
+/// paned returns to its launch width when the window does.
+///
+/// ## The legs
+///
+/// | ID | assertion | falsifying edit | predicted red |
+/// | --- | --- | --- | --- |
+/// | — | preconditions L, I, Q and P, as [`zoom_pane_hides_restores_and_unzooms_under_cage`] has them | none | n/a |
+/// | — | precondition Z: four windows; B equals L and is current; A, C and D equal P | none | n/a |
+/// | C4 | Z-R: ZR's `&columns` and `&lines` are below Z's; four windows; A, C and D equal P; B narrower and shorter than Z's, and equal to Z2's | in `PaneInner::pending_resize`, after `size` is computed, add `if self.zoomed.get() == Some(pane_id) && p.requested_grid.get().is_some_and(\|r\| size.0 < r.0 \|\| size.1 < r.1) { return None; }` | Z-R: ZR's B equals Z's |
+/// | C5 | U: four windows with B current; B narrower and shorter than Z2's; A, B, C and D equal RR's | in `PaneInner::toggle_zoom`, immediately before `self.rebuild_pane_area();`, add `if self.zoomed.get().is_none() { return; }` | U: U's B equals Z2's |
+/// | C3 | U-B: UB's `&columns` and `&lines` are Z's; A, B, C and D equal P | in `DividerGuard::drag_span`, delete `if position == self.last_position.get() { return None; }` | U-B: D's `winheight` below P's |
+///
+/// Z-R's hidden panes equal P because a pane the zoom hides is never allocated, so the
+/// resize cannot reach its grid. U equals RR because both fit the same layout to the same
+/// size: the unzoom rebuilds every paned at the new span from the tree's weights and the
+/// window's share, as the resize re-applies them.
+///
+/// ## Order
+///
+/// The legs are asserted in the order above, each once its readbacks exist. A leg whose
+/// readback is missing ends the run on the scenario's exit code, so the earliest red is the
+/// one reported.
+#[test]
+fn an_unzoom_after_a_window_resize_fits_the_new_size_under_cage() {
+    const SMOKE: &str = "an_unzoom_after_a_window_resize_fits_the_new_size_under_cage";
+
+    assert_zoom_query_is_unique(SMOKE);
+    let targets = layout_targets();
+    assert_resize_premises(SMOKE, &targets);
+
+    let runtime_dir = require_smoke_env();
+    let cwd = make_temp_cwd();
+    let source = cwd.join(ZOOM_SOURCE_FILE);
+    std::fs::write(&source, ZOOM_SOURCE_BODY)
+        .unwrap_or_else(|e| panic!("{SMOKE}: failed to write {}: {e}", source.display()));
+
+    let read = |name: &str| runtime_dir.join(format!("wolf_gnome_zoom_resize_{name}.txt"));
+    let read_l = read("launch");
+    let read_i = read("ids");
+    let read_q = read("before_drags");
+    let read_p = read("after_drags");
+    let read_z = read("zoomed");
+    let read_zr = read("zoomed_resized");
+    let read_u = read("unzoomed");
+    let read_ub = read("back_to_launch");
+    let read_rr = read("resized_unzoomed");
+    let read_z2 = read("zoomed_again");
+    let out_png = runtime_dir.join("wolf_gnome_zoom_resize_smoke.png");
+    let evidence = [
+        &read_l, &read_i, &read_q, &read_p, &read_z, &read_zr, &read_u, &read_ub, &read_rr,
+        &read_z2, &out_png,
+    ];
+    for path in evidence {
+        clear_evidence(path, SMOKE);
+    }
+
+    let body = format!("{RESIZE_OUTPUT_FRAGMENT}\n{ZOOM_LAYOUT}\n{ZOOM_RESIZE_BODY}");
+    let mut cmd = pointer_command(&body, &cwd, &runtime_dir, &out_png);
+    targets
+        .env(pin_terminal_smoke_shell(&mut cmd))
+        .env("ZOOM_SOURCE", ZOOM_SOURCE_FILE)
+        .env("ZOOM_QUERY", ZOOM_QUERY)
+        .env("LAUNCH_W", CAGE_OUTPUT_W_EXPECTED.to_string())
+        .env("LAUNCH_H", CAGE_OUTPUT_H_EXPECTED.to_string())
+        .env("RESIZED_W", RESIZED_OUTPUT_W.to_string())
+        .env("RESIZED_H", RESIZED_OUTPUT_H.to_string())
+        .env("READ_L", &read_l)
+        .env("READ_I", &read_i)
+        .env("READ_Q", &read_q)
+        .env("READ_P", &read_p)
+        .env("READ_Z", &read_z)
+        .env("READ_ZR", &read_zr)
+        .env("READ_U", &read_u)
+        .env("READ_UB", &read_ub)
+        .env("READ_RR", &read_rr)
+        .env("READ_Z2", &read_z2);
+    let status = cmd
+        .status()
+        .expect("failed to spawn `cage` for the headless zoom-resize scenario");
+
+    // The harness's own failures first: after one, no readback is evidence of anything.
+    let own = |code: i32| LAYOUT_EXITS.contains(&code) || RESIZE_OWN_EXITS.contains(&code);
+    if !status.code().is_some_and(own) {
+        assert_pointer_scenario_succeeded(SMOKE, status, &cwd, &out_png);
+    }
+
+    // Extents next: a clamped injection lands elsewhere and misdirects every message below.
+    let extents = read_output_extents(&cwd, SMOKE);
+    assert_eq!(
+        extents,
+        (CAGE_OUTPUT_W_EXPECTED, CAGE_OUTPUT_H_EXPECTED),
+        "{SMOKE}: the helper reports output extents {extents:?} at launch, want \
+         ({CAGE_OUTPUT_W_EXPECTED}, {CAGE_OUTPUT_H_EXPECTED}). Every drag target and derived \
+         premise is for that size."
+    );
+    targets.assert_inside_extents(SMOKE, extents);
+
+    let leg =
+        |paths: &[&Path], name: &str| require_leg(SMOKE, status, paths, name, ZOOM_RESIZE_EXITS);
+
+    let Layout { lsize, id_b, p, .. } = assert_layout(
+        SMOKE,
+        &leg,
+        [
+            read_l.as_path(),
+            read_i.as_path(),
+            read_q.as_path(),
+            read_p.as_path(),
+        ],
+        &targets,
+        &out_png,
+    );
+
+    // --- Precondition Z: B fills the pane area at the launch size ---------------------
+    leg(&[read_z.as_path()], "Z");
+    let (z, z_outer) = read_geom(&read_z, 2, SMOKE);
+    assert!(
+        z.count == 4 && z.b == lsize && z.current == id_b && z.a == p.a && z.c == p.c && z.d == p.d,
+        "{SMOKE}: zoomed on B at the launch size, Neovim reports {} windows with current {} and \
+         (A, B, C, D) = ({:?}, {:?}, {:?}, {:?}); want 4, B ({id_b}) current at L's {lsize:?}, \
+         and A, C and D at P's ({:?}, {:?}, {:?}). Without the zoom Z-R says nothing about a \
+         zoomed pane; `zoom_pane_hides_restores_and_unzooms_under_cage` names the causes.",
+        z.count,
+        z.current,
+        z.a,
+        z.b,
+        z.c,
+        z.d,
+        p.a,
+        p.c,
+        p.d
+    );
+
+    // --- Z-R (C4): the zoomed pane fits the new size, the hidden ones keep their last ---
+    leg(&[read_zr.as_path()], "Z-R");
+    let (zr, zr_outer) = read_geom(&read_zr, 2, SMOKE);
+    assert!(
+        zr_outer[0] < z_outer[0] && zr_outer[1] < z_outer[1],
+        "{SMOKE}: after the resize to {RESIZED_OUTPUT_W}x{RESIZED_OUTPUT_H} Neovim reports \
+         (&columns, &lines) {zr_outer:?}, against {z_outer:?} at the launch size; want both \
+         smaller. Equal values mean the output changed size and the toplevel did not follow: \
+         cage did not reconfigure the view, or the front-end did not resize the outer grid."
+    );
+    assert!(
+        zr.count == 4 && zr.a == p.a && zr.c == p.c && zr.d == p.d,
+        "{SMOKE}: after the resize while zoomed Neovim reports {} windows with (A, C, D) = ({:?}, \
+         {:?}, {:?}), against P's ({:?}, {:?}, {:?}); want 4 and each unchanged. A changed size \
+         means a hidden pane was resized: it is still allocated behind the zoomed one.",
+        zr.count,
+        zr.a,
+        zr.c,
+        zr.d,
+        p.a,
+        p.c,
+        p.d
+    );
+    assert!(
+        zr.b.0 < z.b.0 && zr.b.1 < z.b.1,
+        "{SMOKE}: after the resize while zoomed B is {:?}, against {:?} zoomed at the launch \
+         size; want it narrower and shorter. B unchanged means the zoomed pane's grid was not \
+         resized with the window, so Neovim draws past its allocation.",
+        zr.b,
+        z.b
+    );
+    leg(&[read_z2.as_path()], "Z-R");
+    let (z2, _) = read_geom(&read_z2, 0, SMOKE);
+    assert!(
+        z2.count == 4 && z2.current == id_b && z2.b == zr.b,
+        "{SMOKE}: zoomed again at the new size, Neovim reports {} windows with current {} and B \
+         at {:?}; want 4, B ({id_b}) current, and B at ZR's {:?}. Another B means the zoom \
+         during the resize did not give B the whole pane area the new size has.",
+        z2.count,
+        z2.current,
+        z2.b,
+        zr.b
+    );
+
+    // --- U (C5): the unzoom at the new size fits the layout as a plain resize does -------
+    leg(&[read_u.as_path(), read_rr.as_path()], "U");
+    let (u, _) = read_geom(&read_u, 0, SMOKE);
+    let (rr, _) = read_geom(&read_rr, 0, SMOKE);
+    assert!(
+        u.count == 4 && u.current == id_b && u.b.0 < z2.b.0 && u.b.1 < z2.b.1,
+        "{SMOKE}: after the unzoom at the new size Neovim reports {} windows with current {} and \
+         B at {:?}; want 4, B ({id_b}) current, and B narrower and shorter than zoomed at the \
+         same size, {:?}. B at its zoomed size means the unzoom changed the state and not the \
+         pane area, which still shows B alone.",
+        u.count,
+        u.current,
+        u.b,
+        z2.b
+    );
+    assert!(
+        rr.count == 4 && u.a == rr.a && u.b == rr.b && u.c == rr.c && u.d == rr.d,
+        "{SMOKE}: unzoomed at the new size (A, B, C, D) is ({:?}, {:?}, {:?}, {:?}), and after a \
+         plain resize to the same size with nothing zoomed ({:?}, {:?}, {:?}, {:?}) in {} windows; \
+         want them equal. A difference means the unzoom rebuilt the layout against the size it \
+         had when the zoom began rather than fitting it to the window it has.",
+        u.a,
+        u.b,
+        u.c,
+        u.d,
+        rr.a,
+        rr.b,
+        rr.c,
+        rr.d,
+        rr.count
+    );
+
+    // --- U-B (C3): back at the launch size, the layout is P's ----------------------------
+    leg(&[read_ub.as_path()], "U-B");
+    let (ub, ub_outer) = read_geom(&read_ub, 2, SMOKE);
+    assert_eq!(
+        ub_outer, z_outer,
+        "{SMOKE}: back at the launch size Neovim reports (&columns, &lines) {ub_outer:?}, against \
+         {z_outer:?} at launch; want them equal. The toplevel did not return to the launch size, \
+         so its panes cannot be compared with P's."
+    );
+    assert_eq!(
+        ub.d, p.d,
+        "{SMOKE}: back at the launch size D is {:?}, against P's {:?}. A shorter D means the \
+         resize's clamp of the editor tree at its floor was written into the drawer's share as \
+         a drag, so the share the drag left is lost.",
+        ub.d, p.d
+    );
+    assert!(
+        ub.a == p.a && ub.b == p.b && ub.c == p.c,
+        "{SMOKE}: back at the launch size (A, B, C) is ({:?}, {:?}, {:?}), against P's ({:?}, \
+         {:?}, {:?}). A at another width means the tree's dragged weight moved across the \
+         resizes, or the sidebar's paned did not return to its launch width with the window; \
+         another height means the drawer's share moved.",
+        ub.a,
+        ub.b,
+        ub.c,
+        p.a,
+        p.b,
+        p.c
     );
 }
 

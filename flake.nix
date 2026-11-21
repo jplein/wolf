@@ -417,6 +417,9 @@
             pkgs.tesseract
             wolfPointerInject
 
+            # The window-resize smokes resize cage's headless output with it; cage sizes its toplevel to it.
+            pkgs.wlr-randr
+
             # prettier backs the gate's Markdown check, pinned so a host prettier of another version never
             # runs against `.prettierrc`.
             pkgs.prettier

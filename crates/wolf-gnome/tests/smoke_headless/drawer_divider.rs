@@ -1,8 +1,9 @@
-//! The terminal drawer's divider smoke: a pointer drag on the handle between the editor tree
+//! The terminal drawer's divider smokes: a pointer drag on the handle between the editor tree
 //! and the drawer resizes both, reaches the drawer's session, survives the drawer closing and
-//! reopening, stops at both floors, and carries into a second tab of the same window.
+//! reopening, stops at both floors, and carries into a second tab of the same window. A
+//! dragged share also survives a window shrink that clamps the editor and a grow back.
 
-use super::terminal::{drawer_strip_edges, pin_terminal_smoke_shell};
+use super::terminal::{drawer_paned_at, drawer_strip_edges, pin_terminal_smoke_shell};
 use super::*;
 
 /// Pixels the handle is dragged UP in the first drag: about three and a half cells at
@@ -23,7 +24,7 @@ const LIMIT_OVERSHOOT_PX: f64 = 20.0;
 const OWN_EXITS: std::ops::RangeInclusive<i32> = 71..=81;
 
 /// Body of [`drawer_divider_drag_resizes_and_is_remembered_under_cage`], appended to
-/// [`POINTER_PREAMBLE`].
+/// [`POINTER_PREAMBLE`] and [`DRAWER_DIVIDER_HELPERS`].
 ///
 /// Each readback is typed where focus should be: `nvim_*` into an editor pane, which
 /// Neovim answers, and `shell_size` into the drawer, whose shell answers with `stty size`.
@@ -45,8 +46,6 @@ const OWN_EXITS: std::ops::RangeInclusive<i32> = 71..=81;
 /// | `80` | tab | Neovim did not answer after Ctrl+Shift+T |
 /// | `81` | T | no shell answered after Ctrl+` in the second tab |
 const DRAWER_DIVIDER_BODY: &str = r#"
-# The drawer chord's round trip; see DRAWER_SCENARIO in terminal.rs.
-DRAWER_SETTLE=2.0
 # The adw::TabBar animates its height in over about a second; see POINTER_TABS_BODY.
 TABS_BAR_SETTLE=2.0
 
@@ -75,28 +74,6 @@ shell_size() {
     wtype -- "stty size > '$1'"
     wtype -k Return
     wait_file "$1" || exit "$2"
-}
-
-chord_w() {
-    wtype -M ctrl -k w -m ctrl
-    wtype -k "$1"
-    sleep "$SETTLE"
-}
-
-toggle_drawer() {
-    wtype -M ctrl -k grave -m ctrl
-    sleep "$DRAWER_SETTLE"
-}
-
-# $1 is the press y, on the handle, and $2 the release y. `hstep` for every event of the
-# gesture -- see `hstep` in POINTER_PREAMBLE.
-drag_handle() {
-    hstep motion "$HANDLE_X" "$1"
-    hstep press "$BTN_LEFT"
-    hstep motion "$HANDLE_X" "$(( ($1 + $2) / 2 ))"
-    hstep motion "$HANDLE_X" "$2"
-    hstep release "$BTN_LEFT"
-    sleep "$SETTLE"
 }
 
 # --- L: the editor alone, at launch -------------------------------------------
@@ -141,6 +118,35 @@ shell_size "$READ_T" 81
 
 hsend quit
 exit 0
+"#;
+
+/// The shell helpers both drawer-divider bodies use, placed after [`POINTER_PREAMBLE`] and
+/// before the body: the window chord, the drawer toggle and the handle drag.
+const DRAWER_DIVIDER_HELPERS: &str = r#"
+# The drawer chord's round trip; see DRAWER_SCENARIO in terminal.rs.
+DRAWER_SETTLE=2.0
+
+chord_w() {
+    wtype -M ctrl -k w -m ctrl
+    wtype -k "$1"
+    sleep "$SETTLE"
+}
+
+toggle_drawer() {
+    wtype -M ctrl -k grave -m ctrl
+    sleep "$DRAWER_SETTLE"
+}
+
+# $1 is the press y, on the handle, and $2 the release y. `hstep` for every event of the
+# gesture -- see `hstep` in POINTER_PREAMBLE.
+drag_handle() {
+    hstep motion "$HANDLE_X" "$1"
+    hstep press "$BTN_LEFT"
+    hstep motion "$HANDLE_X" "$(( ($1 + $2) / 2 ))"
+    hstep motion "$HANDLE_X" "$2"
+    hstep release "$BTN_LEFT"
+    sleep "$SETTLE"
+}
 "#;
 
 /// The drawer's divider is a draggable `gtk::Paned` handle whose position lives in the
@@ -225,7 +231,8 @@ fn drawer_divider_drag_resizes_and_is_remembered_under_cage() {
         "the limit drag's release y",
     );
 
-    let mut cmd = pointer_command(DRAWER_DIVIDER_BODY, &cwd, &runtime_dir, &out_png);
+    let body = format!("{DRAWER_DIVIDER_HELPERS}\n{DRAWER_DIVIDER_BODY}");
+    let mut cmd = pointer_command(&body, &cwd, &runtime_dir, &out_png);
     pin_terminal_smoke_shell(&mut cmd)
         .env("HANDLE_X", handle_x.to_string())
         .env("HANDLE_Y", handle_y.to_string())
@@ -437,5 +444,426 @@ fn require_leg(smoke: &str, status: ExitStatus, paths: &[&Path], leg: &str, hand
          {handle_y}, may have started a text drag in the editor), 80 the second tab, 81 T. An \
          exit 0 with a file missing means it was written somewhere else.",
         DRAWER_DRAG_PX
+    );
+}
+
+/// How far above the editor's floor, in output pixels, [`DRAWER_RESIZE_BODY`]'s drag leaves
+/// the handle at the launch size: close enough that a shrink clamps the editor at its floor,
+/// and far enough that the drag itself lands unclamped.
+const RESIZE_DRAG_ABOVE_FLOOR_PX: i32 = 10;
+
+/// The output height [`DRAWER_RESIZE_BODY`] shrinks to, at the launch width.
+const SHRUNK_OUTPUT_H: i64 = 500;
+
+/// The fewest rows by which the drawer's window at the kept share must differ, at the launch
+/// size, from the window at the share the shrink's clamp would leave. Two, so a drag landing
+/// a few pixels off its target still leaves a row between them.
+const MIN_CLAMP_ROW_GAP: i64 = 2;
+
+/// The inclusive band of exit codes [`DRAWER_RESIZE_BODY`] adds to [`POINTER_PREAMBLE`]'s
+/// 11-15 and 40, [`RESIZE_OUTPUT_FRAGMENT`]'s two included.
+const RESIZE_OWN_EXITS: std::ops::RangeInclusive<i32> = 95..=101;
+
+/// Body of [`a_dragged_share_survives_a_window_shrink_and_grow_under_cage`], appended to
+/// [`POINTER_PREAMBLE`], [`DRAWER_DIVIDER_HELPERS`] and [`RESIZE_OUTPUT_FRAGMENT`].
+///
+/// Every readback is a Neovim one, typed into the editor: `&columns`, `&lines`, the
+/// editor's and the last window's `winheight`, the last window's `w:wolf_drawer` and the
+/// window count. With one window the editor is the last window too.
+///
+/// ## Exit codes it adds to [`POINTER_PREAMBLE`]'s 11-15
+///
+/// | code | readback | meaning |
+/// | --- | --- | --- |
+/// | `95` | L | Neovim did not answer at launch |
+/// | `96` | O | Neovim did not answer after Ctrl+` and `<C-w>k` out of the drawer |
+/// | `97` | G | Neovim did not answer after the drag: keyboard focus left the editor |
+/// | `98` | S | Neovim did not answer after the shrink |
+/// | `99` | B | Neovim did not answer after the grow back |
+/// | `100` | S or B | `wlr-randr` listed no output or refused the mode |
+/// | `101` | S or B | the output never reported the mode as current |
+const DRAWER_RESIZE_BODY: &str = r#"
+# $1 is the readback file, $2 the exit code.
+nvim_sizes() {
+    wtype -- ":call writefile([printf('%d %d %d %d %d %d', &columns, &lines, winheight(1), winheight(winnr('\$')), getwinvar(winnr('\$'), 'wolf_drawer', 0), winnr('\$'))], '$1')"
+    wtype -k Return
+    wait_file "$1" || exit "$2"
+}
+
+# --- L: the editor alone, at launch -------------------------------------------
+nvim_sizes "$READ_L" 95
+
+# --- O: the drawer opens at a new window's share --------------------------------
+toggle_drawer
+chord_w k
+nvim_sizes "$READ_O" 96
+
+# --- G: drag the handle to just above the editor's floor -------------------------
+drag_handle "$HANDLE_Y" "$TARGET_Y"
+# Post-mortem only: no assertion reads a pixel here.
+grim "$OUT_PNG"
+nvim_sizes "$READ_G" 97
+
+# --- S: shrink the output; no pointer event follows ------------------------------
+resize_output "$LAUNCH_W" "$SHRUNK_H" 100 101
+grim "$SHRUNK_PNG"
+nvim_sizes "$READ_S" 98
+
+# --- B: grow it back to the launch size -----------------------------------------
+resize_output "$LAUNCH_W" "$LAUNCH_H" 100 101
+nvim_sizes "$READ_B" 99
+
+hsend quit
+exit 0
+"#;
+
+/// One `nvim_sizes` readback of [`DRAWER_RESIZE_BODY`].
+#[derive(Clone, Copy, Debug)]
+struct Sizes {
+    /// `(&columns, &lines)`: the outer grid, which follows the toplevel's size.
+    outer: (i64, i64),
+    /// `winheight(1)`, the editor.
+    editor: i64,
+    /// `winheight(winnr('$'))`, the drawer while it is open.
+    drawer: i64,
+    /// The last window's `w:wolf_drawer`.
+    tagged: i64,
+    /// `winnr('$')`.
+    count: i64,
+}
+
+/// Reads an `nvim_sizes` readback.
+fn read_sizes(path: &Path, smoke: &str) -> Sizes {
+    let v = read_ints(path, 6, smoke);
+    Sizes {
+        outer: (v[0], v[1]),
+        editor: v[2],
+        drawer: v[3],
+        tagged: v[4],
+        count: v[5],
+    }
+}
+
+/// The derived geometry [`a_dragged_share_survives_a_window_shrink_and_grow_under_cage`]
+/// rests on, checked before launch by [`resize_premises`].
+struct ResizePremises {
+    /// The editor tree's height the drag leaves at the launch size.
+    target: i32,
+    /// The editor's rows at its floor, on the shrunk output.
+    floor_rows: i64,
+    /// The drawer's rows at the launch size for the dragged share.
+    kept_drawer_rows: i64,
+    /// The drawer's rows at the launch size for the share the shrink's clamp would leave.
+    clamped_drawer_rows: i64,
+}
+
+/// Derives [`ResizePremises`] through `drawer_paned_at` and `DrawerShare`, panicking when a
+/// premise the scenario needs does not hold.
+fn resize_premises(smoke: &str) -> ResizePremises {
+    let launch = drawer_paned_at(exact_f64(CAGE_OUTPUT_H_EXPECTED, "CAGE_OUTPUT_H_EXPECTED"));
+    let shrunk = drawer_paned_at(exact_f64(SHRUNK_OUTPUT_H, "SHRUNK_OUTPUT_H"));
+    let target = launch.floor + RESIZE_DRAG_ABOVE_FLOOR_PX;
+    assert!(
+        launch.floor < target && target < launch.max,
+        "{smoke}: the drag target {target} px is outside ({}, {}), the editor's floor and the \
+         paned's max_position at the launch size, so GTK would clamp the drag itself and G would \
+         record a clamp rather than a drag. Lower RESIZE_DRAG_ABOVE_FLOOR_PX.",
+        launch.floor,
+        launch.max
+    );
+
+    let mut kept = wolf_gnome::drawer::DrawerShare::new();
+    kept.drag_to(target, launch.span);
+    let unclamped = kept.position(0, shrunk.span, shrunk.span);
+    let at_shrunk = kept.position(shrunk.floor, shrunk.max, shrunk.span);
+    assert!(
+        unclamped < shrunk.floor && at_shrunk == shrunk.floor,
+        "{smoke}: at a {SHRUNK_OUTPUT_H} px output the dragged share puts the editor at {unclamped} \
+         px before the clamp and {at_shrunk} px after it, against a {} px floor; want the clamp \
+         to hold it at the floor. Without that clamp the shrink takes nothing from the share, \
+         and A4 holds whatever the guard does. Lower SHRUNK_OUTPUT_H.",
+        shrunk.floor
+    );
+
+    let mut clamped = kept;
+    clamped.drag_to(shrunk.floor, shrunk.span);
+    let drawer_rows = |share: wolf_gnome::drawer::DrawerShare| {
+        let position = share.position(launch.floor, launch.max, launch.span);
+        launch.rows(launch.span - launch.handle - position)
+    };
+    let kept_drawer_rows = drawer_rows(kept);
+    let clamped_drawer_rows = drawer_rows(clamped);
+    assert!(
+        (kept_drawer_rows - clamped_drawer_rows).abs() >= MIN_CLAMP_ROW_GAP,
+        "{smoke}: at the launch size the drawer has {kept_drawer_rows} rows at the dragged share \
+         and {clamped_drawer_rows} at the share the {SHRUNK_OUTPUT_H} px shrink's clamp would \
+         leave; want at least {MIN_CLAMP_ROW_GAP} apart, or A4 cannot tell a kept share from a \
+         clamp taken for a drag. Shrink further or drag closer to the floor."
+    );
+
+    ResizePremises {
+        target,
+        floor_rows: shrunk.rows(shrunk.floor),
+        kept_drawer_rows,
+        clamped_drawer_rows,
+    }
+}
+
+/// The share a drag leaves in the drawer divider survives a window shrink that clamps the
+/// editor at its floor and a grow back: the shrink's clamp is not taken for a drag.
+///
+/// ## The scenario
+///
+/// One launch through [`pointer_command`], with [`pin_terminal_smoke_shell`]'s shell. The
+/// drawer opens, the handle is dragged from where [`drawer_strip_edges`] puts it to
+/// [`RESIZE_DRAG_ABOVE_FLOOR_PX`] above the editor's floor, and the window is shrunk to
+/// [`SHRUNK_OUTPUT_H`] and grown back by [`RESIZE_OUTPUT_FRAGMENT`], which resizes the
+/// output because cage maximizes its toplevel to it. Every observable is a Neovim readback;
+/// the shrunk capture is read for its size alone.
+///
+/// The premises are derived before launch through `drawer_paned_at`, `DrawerShare::drag_to`
+/// and `DrawerShare::position`: the drag lands unclamped, the shrink clamps the dragged
+/// share's position to the editor's floor, and the share that clamp would leave gives the
+/// drawer at least [`MIN_CLAMP_ROW_GAP`] rows fewer than the dragged one at the launch size.
+///
+/// The outer-grid reference for a readback with the drawer open is G, not L: L's `&lines` is
+/// read with the drawer closed, and need not match a readback with the drawer open at the
+/// same window size.
+///
+/// ## The legs
+///
+/// | ID | assertion | falsifying edit | predicted red |
+/// | --- | --- | --- | --- |
+/// | A1 | precondition: the output's extents are the launch size; L has one window, O two with the last tagged | none | n/a |
+/// | A2 | precondition: G's drawer is taller than O's and its editor shorter | none | n/a |
+/// | A3 | precondition: the capture is the shrunk size; S's `&lines` is below G's, its editor at the floor's rows, its drawer below G's, and it has two windows | none | n/a |
+/// | C1 | A4: B's `&columns` and `&lines` are G's, and its editor and drawer `winheight` are G's | in `DividerGuard::drag_span`, delete `if position == self.last_position.get() { return None; }` | A4: B's drawer at the clamp's share |
+/// | C2 | A4 | in `reapply_drawer_divider`, before `guard.apply(…)`, add `if guard.last_span.get() > 0 { return; }` | A4: B's drawer at GTK's proportional rescale of the clamped position |
+///
+/// C2 removes every re-apply of the share after a paned's first, the `max-position`
+/// notify's and the wake's: deleting the `max-position` re-apply alone leaves the wake's
+/// `apply_drawer_frame` to re-apply the share on a resize.
+///
+/// ## Order
+///
+/// The legs are asserted in the order above, each once its readbacks exist. A leg whose
+/// readback is missing ends the run on the scenario's exit code.
+#[test]
+fn a_dragged_share_survives_a_window_shrink_and_grow_under_cage() {
+    const SMOKE: &str = "a_dragged_share_survives_a_window_shrink_and_grow_under_cage";
+
+    let premises = resize_premises(SMOKE);
+
+    let runtime_dir = require_smoke_env();
+    let cwd = make_temp_cwd();
+
+    let read = |name: &str| runtime_dir.join(format!("wolf_gnome_drawer_resize_{name}.txt"));
+    let read_l = read("launch");
+    let read_o = read("open");
+    let read_g = read("dragged");
+    let read_s = read("shrunk");
+    let read_b = read("grown");
+    let out_png = runtime_dir.join("wolf_gnome_drawer_resize_smoke.png");
+    let shrunk_png = runtime_dir.join("wolf_gnome_drawer_resize_shrunk.png");
+    for path in [
+        &read_l,
+        &read_o,
+        &read_g,
+        &read_s,
+        &read_b,
+        &out_png,
+        &shrunk_png,
+    ] {
+        clear_evidence(path, SMOKE);
+    }
+
+    let handle_x = i64::from(PROBE_X);
+    let handle_y = pixel_target(drawer_strip_edges().handle_y, "the drawer handle's y");
+    let target_y = pixel_target(
+        OVERLAY_ORIGIN_Y_EXPECTED + f64::from(premises.target),
+        "the drag's release y",
+    );
+
+    let body = format!("{DRAWER_DIVIDER_HELPERS}\n{RESIZE_OUTPUT_FRAGMENT}\n{DRAWER_RESIZE_BODY}");
+    let mut cmd = pointer_command(&body, &cwd, &runtime_dir, &out_png);
+    pin_terminal_smoke_shell(&mut cmd)
+        .env("HANDLE_X", handle_x.to_string())
+        .env("HANDLE_Y", handle_y.to_string())
+        .env("TARGET_Y", target_y.to_string())
+        .env("LAUNCH_W", CAGE_OUTPUT_W_EXPECTED.to_string())
+        .env("LAUNCH_H", CAGE_OUTPUT_H_EXPECTED.to_string())
+        .env("SHRUNK_H", SHRUNK_OUTPUT_H.to_string())
+        .env("SHRUNK_PNG", &shrunk_png)
+        .env("READ_L", &read_l)
+        .env("READ_O", &read_o)
+        .env("READ_G", &read_g)
+        .env("READ_S", &read_s)
+        .env("READ_B", &read_b);
+    let status = cmd
+        .status()
+        .expect("failed to spawn `cage` for the headless drawer-resize scenario");
+
+    // The harness's own failures first: after one, no readback is evidence of anything.
+    if !status
+        .code()
+        .is_some_and(|code| RESIZE_OWN_EXITS.contains(&code))
+    {
+        assert_pointer_scenario_succeeded(SMOKE, status, &cwd, &out_png);
+    }
+
+    let leg = |paths: &[&Path], name: &str| require_resize_leg(SMOKE, status, paths, name);
+
+    // --- A1 (precondition): the launch size and the windows ----------------------
+    let extents = read_output_extents(&cwd, SMOKE);
+    assert_eq!(
+        extents,
+        (CAGE_OUTPUT_W_EXPECTED, CAGE_OUTPUT_H_EXPECTED),
+        "{SMOKE}: the helper reports output extents {extents:?} at launch, want \
+         ({CAGE_OUTPUT_W_EXPECTED}, {CAGE_OUTPUT_H_EXPECTED}). The handle's y and every derived \
+         premise are for that size, so the press may have missed and S and B resize from \
+         somewhere else."
+    );
+    for (label, y) in [("the handle", handle_y), ("the drag's release", target_y)] {
+        assert_inside_extents(SMOKE, label, (handle_x, y), extents);
+    }
+    leg(&[read_l.as_path(), read_o.as_path()], "A1");
+    let l = read_sizes(&read_l, SMOKE);
+    let o = read_sizes(&read_o, SMOKE);
+    assert_eq!(
+        l.count, 1,
+        "{SMOKE}: Neovim reports {} windows at launch, want 1. With one window, winheight(1) \
+         and winheight(winnr('$')) are the editor. A second window at launch means a split or a \
+         drawer came from elsewhere, and O's two-window check no longer shows that the chord \
+         opened the drawer.",
+        l.count
+    );
+    assert_eq!(
+        (o.tagged, o.count),
+        (1, 2),
+        "{SMOKE}: with the drawer open Neovim reports (w:wolf_drawer of the last window, window \
+         count) = ({}, {}), want (1, 2). A count of 1 means the chord opened no drawer; a last \
+         window without w:wolf_drawer means winheight(winnr('$')) measures some other window.",
+        o.tagged,
+        o.count
+    );
+
+    // --- A2 (precondition): the drag moved the divider --------------------------------
+    leg(&[read_g.as_path()], "A2");
+    let g = read_sizes(&read_g, SMOKE);
+    assert!(
+        g.drawer > o.drawer && g.editor < o.editor && g.count == 2,
+        "{SMOKE}: after dragging the handle from y {handle_y} to y {target_y}, Neovim reports \
+         (editor, drawer) winheight ({}, {}) in {} windows, against ({}, {}) before the drag; \
+         want the drawer taller and the editor shorter, in 2 windows. Read this FIRST as the \
+         press missing the handle: it was pressed at ({handle_x}, {handle_y}), where \
+         `drawer_strip_edges` puts a new window's handle, and the retained capture {} shows \
+         where it is. With no drag the share is a new window's, and A4 says nothing about a \
+         dragged one.",
+        g.editor,
+        g.drawer,
+        g.count,
+        o.editor,
+        o.drawer,
+        out_png.display()
+    );
+
+    // --- A3 (precondition): the shrink reached the toplevel and clamped ---------------
+    leg(&[read_s.as_path()], "A3");
+    let shrunk = png_size(&shrunk_png, SMOKE);
+    assert_eq!(
+        shrunk,
+        (CAGE_OUTPUT_W_EXPECTED, SHRUNK_OUTPUT_H),
+        "{SMOKE}: the capture after the shrink {} is {shrunk:?}, want \
+         ({CAGE_OUTPUT_W_EXPECTED}, {SHRUNK_OUTPUT_H}). `resize_output` saw the mode current, \
+         so another size means grim captured an output other than the one resized.",
+        shrunk_png.display()
+    );
+    let s = read_sizes(&read_s, SMOKE);
+    assert!(
+        s.outer.1 < g.outer.1 && s.count == 2,
+        "{SMOKE}: after the shrink to {SHRUNK_OUTPUT_H} px Neovim reports &lines {} in {} \
+         windows, against {} after the drag; want fewer lines, in 2 windows. Equal lines mean the \
+         output changed size and the toplevel did not follow it: cage did not reconfigure the \
+         view, or the front-end did not resize Neovim's outer grid.",
+        s.outer.1,
+        s.count,
+        g.outer.1
+    );
+    assert!(
+        s.editor == premises.floor_rows && s.drawer < g.drawer,
+        "{SMOKE}: after the shrink Neovim reports (editor, drawer) winheight ({}, {}), against \
+         ({}, {}) after the drag; want the editor at the {} rows of its floor and the drawer \
+         shorter. An editor above its floor means the derived clamp did not happen, so A4 \
+         cannot see the guard; a drawer as tall as G's means the paned was never resized.",
+        s.editor,
+        s.drawer,
+        g.editor,
+        g.drawer,
+        premises.floor_rows
+    );
+
+    // --- A4 (C1, C2): the grow back returns the dragged share ------------------------
+    leg(&[read_b.as_path()], "A4");
+    let b = read_sizes(&read_b, SMOKE);
+    assert_eq!(
+        b.outer, g.outer,
+        "{SMOKE}: after the grow back Neovim reports (&columns, &lines) {:?}, against {:?} in \
+         G, the drag's readback at the launch size with the drawer open; want them equal. The \
+         toplevel did not return to the launch size, so its heights below cannot be compared \
+         with G's.",
+        b.outer, g.outer
+    );
+    assert_eq!(
+        (b.editor, b.drawer),
+        (g.editor, g.drawer),
+        "{SMOKE}: after the shrink and the grow back Neovim reports (editor, drawer) winheight \
+         {:?}, against {:?} after the drag. The derived drawer is {} rows at the dragged share \
+         and {} at the share the shrink's clamp leaves. A drawer at the clamp's rows means the \
+         clamp was written into the share as a drag: `DividerGuard::drag_span` accepted GTK's \
+         `notify::position` after the `max-position` re-apply re-armed it. The same rows also \
+         follow when nothing re-applies the share on the grow and GTK rescales the clamped \
+         position. Any other height means the share was re-applied against another span.",
+        (b.editor, b.drawer),
+        (g.editor, g.drawer),
+        premises.kept_drawer_rows,
+        premises.clamped_drawer_rows
+    );
+}
+
+/// The `(width, height)` of the PNG at `path`, decoded through cairo as `decode_capture`
+/// decodes one, which pins the launch size and so cannot read a resized capture.
+fn png_size(path: &Path, smoke: &str) -> (i64, i64) {
+    let mut file = std::fs::File::open(path).unwrap_or_else(|e| {
+        panic!(
+            "{smoke}: could not open the capture {}: {e}. The scenario runs `grim` under `set \
+             -eu`, so a readback after it with no file here means grim wrote somewhere else.",
+            path.display()
+        )
+    });
+    let surface = ImageSurface::create_from_png(&mut file).unwrap_or_else(|e| {
+        panic!(
+            "{smoke}: cairo could not decode the capture {} as a PNG: {e}.",
+            path.display()
+        )
+    });
+    (i64::from(surface.width()), i64::from(surface.height()))
+}
+
+/// [`require_leg`] for [`DRAWER_RESIZE_BODY`]'s exit codes.
+fn require_resize_leg(smoke: &str, status: ExitStatus, paths: &[&Path], leg: &str) {
+    let missing: Vec<String> = paths
+        .iter()
+        .filter(|path| !path.exists())
+        .map(|path| path.display().to_string())
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "{smoke}: leg {leg}'s readbacks {missing:?} do not exist, and the scenario exited \
+         {status}. Every readback is a Neovim one, so a missing one means the keys went \
+         elsewhere, such as into the drawer's shell. 95 L, 96 O (`<C-w>k` out of the drawer \
+         reached no editor), 97 G (the drag left keyboard focus off the editor), 98 S, 99 B, \
+         100 (`wlr-randr` listed no output or refused the mode; the cage log has its listing), \
+         101 (the output never reported the mode as current). An exit 0 with a file missing \
+         means it was written somewhere else."
     );
 }

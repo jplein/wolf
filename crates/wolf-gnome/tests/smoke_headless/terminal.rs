@@ -239,8 +239,65 @@ pub(crate) struct DrawerStripEdges {
 
 /// Derives [`DrawerStripEdges`]; [`drawer_band_rect`]'s doc gives the derivation.
 pub(crate) fn drawer_strip_edges() -> DrawerStripEdges {
-    let cell = cell_metrics_for_smoke();
     let output_h = exact_f64(CAGE_OUTPUT_H_EXPECTED, "CAGE_OUTPUT_H_EXPECTED");
+    let paned = drawer_paned_at(output_h);
+    let position =
+        wolf_gnome::drawer::DrawerShare::new().position(paned.floor, paned.max, paned.span);
+    let handle_y = OVERLAY_ORIGIN_Y_EXPECTED + f64::from(position);
+
+    DrawerStripEdges {
+        handle_y,
+        strip_top: handle_y + DRAWER_HANDLE_PX,
+        statusbar_h: paned.statusbar_h,
+        band_bottom: output_h - paned.cmdline_strip_h,
+    }
+}
+
+/// The drawer paned's geometry in whole pixels, on an output `output_h` pixels high, by
+/// [`drawer_band_rect`]'s derivation. Its position is the editor tree's height.
+pub(crate) struct DrawerPaned {
+    /// The paned's height: the pane area's, from [`OVERLAY_ORIGIN_Y_EXPECTED`] to the
+    /// cmdline strip.
+    pub(crate) span: i32,
+    /// The content floor `make_pane_area` gives one pane, from `editor_inset::min_pane_size`.
+    pub(crate) floor: i32,
+    /// [`DRAWER_HANDLE_PX`], whole.
+    pub(crate) handle: i32,
+    /// `max_position`: the drawer held at one pane's [`Self::floor`].
+    pub(crate) max: i32,
+    /// The per-pane statusbar strip's height.
+    pub(crate) statusbar_h: f64,
+    /// The cmdline strip's allocated height, below the pane area.
+    pub(crate) cmdline_strip_h: f64,
+    /// The cell, from [`cell_metrics_for_smoke`].
+    cell: CellMetrics,
+}
+
+impl DrawerPaned {
+    /// The grid rows `editor_inset::grid_size_for_pane` gives a pane `pane_h` pixels high,
+    /// which is what `winheight` and `stty size` report for it.
+    pub(crate) fn rows(&self, pane_h: i32) -> i64 {
+        let output_w = exact_f64(CAGE_OUTPUT_W_EXPECTED, "CAGE_OUTPUT_W_EXPECTED");
+        let pane_w = paned_px(
+            output_w - OVERLAY_ORIGIN_X_EXPECTED,
+            "the pane area's width",
+        );
+        let (_, rows) = wolf_gnome::editor_inset::grid_size_for_pane(
+            pane_w,
+            pane_h,
+            self.statusbar_h,
+            wolf_gnome::editor_inset::EDITOR_PADDING_PX,
+            self.cell.cell_h,
+            wolf_gnome::editor_inset::ColumnCap::uncapped(self.cell.cell_w),
+        );
+        i64::from(rows)
+    }
+}
+
+/// Derives [`DrawerPaned`] on an output `output_h` pixels high, panicking when the two
+/// floors and the handle do not fit in its pane area.
+pub(crate) fn drawer_paned_at(output_h: f64) -> DrawerPaned {
+    let cell = cell_metrics_for_smoke();
 
     // The per-pane statusbar strip, measured the way `pane_view::build` measures it:
     // in DEVICE PIXELS, from `CellMetrics::size_px`.
@@ -267,26 +324,27 @@ pub(crate) fn drawer_strip_edges() -> DrawerStripEdges {
     let max = span - handle - floor;
     assert!(
         max > floor,
-        "drawer_strip_edges: a {span} px pane area leaves the drawer paned a position range of \
-         [{floor}, {max}], so the two {floor} px floors do not both fit and there is no strip to \
-         sample. Either the derived pane-area height is wrong — re-derive it from \
-         CAGE_OUTPUT_H_EXPECTED and OVERLAY_ORIGIN_Y_EXPECTED rather than adjusting the band — \
-         or the pane minimum grew past half the pane area."
+        "drawer_paned_at: a {output_h} px output leaves a {span} px pane area, and the drawer \
+         paned a position range of [{floor}, {max}], so the two {floor} px floors do not both \
+         fit and there is no strip to sample. Either the derived pane-area height is wrong — \
+         re-derive it from the output height and OVERLAY_ORIGIN_Y_EXPECTED rather than \
+         adjusting the band — or the pane minimum grew past half the pane area."
     );
-    let position = wolf_gnome::drawer::DrawerShare::new().position(floor, max, span);
-    let handle_y = OVERLAY_ORIGIN_Y_EXPECTED + f64::from(position);
 
-    DrawerStripEdges {
-        handle_y,
-        strip_top: handle_y + DRAWER_HANDLE_PX,
+    DrawerPaned {
+        span,
+        floor,
+        handle,
+        max,
         statusbar_h: statusbar.height,
-        band_bottom: output_h - cmdline_strip_h,
+        cmdline_strip_h,
+        cell,
     }
 }
 
 /// Rounds a derived length to the whole pixels a `gtk::Paned` position is measured in,
 /// through [`pixel_target`]'s finite and range checks.
-fn paned_px(value: f64, what: &str) -> i32 {
+pub(crate) fn paned_px(value: f64, what: &str) -> i32 {
     let px = pixel_target(value, what);
     i32::try_from(px).unwrap_or_else(|e| {
         panic!("{what} = {px} px does not fit a paned position ({e}); the derivation is nonsense")

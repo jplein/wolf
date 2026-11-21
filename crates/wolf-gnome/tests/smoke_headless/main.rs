@@ -111,11 +111,12 @@
 //! ## Requirements of the cage smokes (from the devShell's smoke toolchain)
 //!
 //! - `cage` (headless wlroots compositor), `dbus-run-session`, `wtype`, `grim`,
-//!   `tesseract` and `wolf-pointer-inject` on `PATH`. The last one is NOT an upstream package: it is
+//!   `tesseract`, `wlr-randr` and `wolf-pointer-inject` on `PATH`. The last one is NOT an upstream package: it is
 //!   built from this repo's own `tools/wolf-pointer-inject/` by `flake.nix`, so
 //!   `command -v wolf-pointer-inject` succeeding can only mean the flake provided
 //!   it. Only the pointer-driven smokes use it, but it is required
-//!   unconditionally — see [`REQUIRED_TOOLS`].
+//!   unconditionally — see [`REQUIRED_TOOLS`]. Only the window-resize smokes use
+//!   `wlr-randr`, through [`RESIZE_OUTPUT_FRAGMENT`], and it is required unconditionally too.
 //! - No D-Bus configuration from the host or the store: [`smoke_bus_config`] writes
 //!   each cage's own into its runtime directory.
 //! - `WOLF_NVIM_BIN` pointing at the pinned Neovim (same contract as the other
@@ -744,12 +745,16 @@ const POINTER_READY_NAME: &str = "wolf-pointer.ready";
 /// required unconditionally, not just by the pointer-driven smokes: a devShell missing
 /// it is an unprovisioned devShell, and the project policy is to fail loud rather
 /// than let the gate pass green while proving less than it claims.
-const REQUIRED_TOOLS: [&str; 6] = [
+///
+/// `wlr-randr` is required unconditionally for the same reason, though only the
+/// window-resize smokes run it, through [`RESIZE_OUTPUT_FRAGMENT`].
+const REQUIRED_TOOLS: [&str; 7] = [
     "cage",
     "dbus-run-session",
     "wtype",
     "grim",
     "tesseract",
+    "wlr-randr",
     "wolf-pointer-inject",
 ];
 
@@ -764,7 +769,7 @@ fn tool_on_path(tool: &str) -> bool {
 }
 
 /// Takes one of this process's [`CAGE_SLOTS`] (blocking until one is free), then
-/// panics with an actionable message unless every smoke precondition holds: the six
+/// panics with an actionable message unless every smoke precondition holds: the seven
 /// [`REQUIRED_TOOLS`] are on `PATH`, and `WOLF_NVIM_BIN` and `WOLF_RG_BIN`
 /// are set. Returns the smoke's [`CageRuntime`]: its slot plus a fresh private runtime
 /// directory, which every capture and readback path is joined onto and which
@@ -792,7 +797,7 @@ fn require_smoke_env() -> CageRuntime<'static> {
         missing.is_empty(),
         "wolf-gnome headless smoke test: missing required tool(s) {missing:?} on PATH. \
          These are provided by the flake devShell smoke toolchain (cage, dbus-run-session, \
-         wtype, grim, tesseract, wolf-pointer-inject). Run via `nix develop --command cargo test -p \
+         wtype, grim, tesseract, wlr-randr, wolf-pointer-inject). Run via `nix develop --command cargo test -p \
          wolf-gnome`. Note that `wolf-pointer-inject` is built from this repo's own \
          `tools/wolf-pointer-inject/` by flake.nix, NOT from nixpkgs — if it alone is \
          missing, the devShell is stale, so re-enter `nix develop`."
@@ -1116,6 +1121,63 @@ wait_ready "$app_pid" 11 "wolf-gnome pointer smoke"
 # other way to learn.
 hsend motion "$PROBE_X" "$PROBE_Y"
 sleep "$SETTLE"
+"#;
+
+/// The shell function a window-resize smoke resizes the window with, as one `sh` fragment
+/// placed before its body: `resize_output <w> <h> <no-output-code> <never-current-code>`.
+///
+/// It resizes the headless OUTPUT, not the window. cage's `view_position` maximizes every
+/// parentless toplevel to the output layout's box, on map and on every layout change, so
+/// nothing can give the toplevel a size of its own, and an output mode change is what
+/// reconfigures it. The function takes the output's name from the first line of
+/// `wlr-randr`'s listing rather than assuming `HEADLESS-1`, sets the custom mode, and polls
+/// the listing until the `<w>x<h> px` line says `current`. It then sleeps `RESIZE_SETTLE`,
+/// which covers the toplevel's configure, the grid resizes and Neovim's answer.
+///
+/// **No pointer event may follow a resize.** The pointer helper's extents and every pixel model
+/// here, [`PANE_ORIGIN_X_EXPECTED`], [`OVERLAY_ORIGIN_Y_EXPECTED`], `drawer_strip_edges`
+/// and `tree_handle_x`, hold at the launch size only, so a press after a resize lands on
+/// whatever is there instead. `hsend quit` is not a pointer event.
+///
+/// It reads `WAIT_INTERVAL` and `ACK_TRIES` from [`POINTER_PREAMBLE`], which runs first.
+///
+/// ## Exit codes
+///
+/// Each smoke passes two codes of its own band:
+///
+/// * the third argument: `wlr-randr` lists no output, or refused the mode;
+/// * the fourth: the listing never reported the mode as current.
+///
+/// Both echo `wlr-randr`'s listing.
+const RESIZE_OUTPUT_FRAGMENT: &str = r#"
+# Settles after the mode is current: the toplevel's configure, the grid resizes and Neovim's answer.
+RESIZE_SETTLE=2.0
+
+# $1 and $2 are the new width and height; $3 and $4 the exit codes in RESIZE_OUTPUT_FRAGMENT's doc.
+resize_output() {
+    out_name=$(wlr-randr | head -n 1 | cut -d ' ' -f 1)
+    if [ -z "$out_name" ]; then
+        echo "wolf-gnome resize smoke: wlr-randr lists no output to resize to ${1}x${2}." >&2
+        wlr-randr >&2 || true
+        exit "$3"
+    fi
+    if ! wlr-randr --output "$out_name" --custom-mode "${1}x${2}"; then
+        echo "wolf-gnome resize smoke: wlr-randr refused --custom-mode ${1}x${2} on $out_name." >&2
+        wlr-randr >&2 || true
+        exit "$3"
+    fi
+    t=0
+    until wlr-randr | grep -q "^ *${1}x${2} px.*current"; do
+        t=$((t + 1))
+        if [ "$t" -ge "$ACK_TRIES" ]; then
+            echo "wolf-gnome resize smoke: $out_name never reported ${1}x${2} as current." >&2
+            wlr-randr >&2 || true
+            exit "$4"
+        fi
+        sleep "$WAIT_INTERVAL"
+    done
+    sleep "$RESIZE_SETTLE"
+}
 "#;
 
 /// Concatenates [`POINTER_PREAMBLE`] with a per-smoke `body`. `Command::arg`

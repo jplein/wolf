@@ -4306,20 +4306,32 @@ fn child_path(path: &[usize], index: usize) -> Vec<usize> {
 }
 
 /// The per-paned state the two divider closures share.
+///
+/// On a resize GTK rescales and clamps the position and queues `position`, then
+/// `max-position`, in one notify freeze, and GLib dispatches a frozen queue in REVERSE.
+/// So the `max-position` re-apply runs first and re-arms `last_max` and `last_span` at
+/// the new values, and GTK's queued `position` notify then passes them. `last_position`
+/// is what refuses it: without it a clamp is written back as a drag, and a grow after a
+/// shrink that clamped no longer returns the share or weight the user left.
 struct DividerGuard {
     /// Set around this module's own `set_position` calls. `set_position` emits
     /// `notify::position` SYNCHRONOUSLY, so without it the re-apply would read its
     /// own write back as a user drag.
     applying: Cell<bool>,
     /// The `max-position` the last re-apply ran against. A `notify::position` whose
-    /// maximum has moved since is one GTK produced while re-allocating, and the
-    /// `max-position` handler is about to correct it.
+    /// maximum has moved since is one GTK produced while re-allocating, ahead of the
+    /// re-apply. It does not refuse the clamp of a resize, whose notify GLib
+    /// dispatches after the re-apply has re-armed it.
     last_max: Cell<i32>,
     /// The paned's SPAN at the last re-apply, alongside `last_max`. The span is what
     /// [`geometry::divider_position`] scales by, so a `notify::position` whose span
     /// has moved is one GTK produced mid-resize and would read back as a fraction of
     /// an extent the re-apply never used.
     last_span: Cell<i32>,
+    /// The position the share or weight accounts for: the last re-apply's, or the last
+    /// accepted drag's. A `notify::position` at it changes nothing a drag could have,
+    /// and it is the one GTK's queued notify reports after the re-apply.
+    last_position: Cell<i32>,
 }
 
 impl DividerGuard {
@@ -4329,21 +4341,25 @@ impl DividerGuard {
             applying: Cell::new(false),
             last_max: Cell::new(0),
             last_span: Cell::new(0),
+            last_position: Cell::new(0),
         })
     }
 
     /// Sets `position` as this module's own write, arming the staleness gate at the
-    /// `max` and `span` it was derived against.
+    /// `max` and `span` it was derived against and at the position GTK then holds.
     fn apply(&self, p: &gtk::Paned, max: i32, span: i32, position: i32) {
         self.last_max.set(max);
         self.last_span.set(span);
         self.applying.set(true);
         p.set_position(position);
         self.applying.set(false);
+        self.last_position.set(p.position());
     }
 
     /// The span a `notify::position` was a user drag against, or `None` for this
-    /// module's own write or a notify GTK produced mid-resize.
+    /// module's own write, a notify GTK produced mid-resize, or one at the position the
+    /// share or weight already accounts for. An accepted drag's position is recorded
+    /// before the caller writes it, so the caller writes nothing else first.
     ///
     /// The span joins `max` in the staleness gate because a position is read back as a
     /// proportion of it: a notify mid-resize would store a fraction of an extent the
@@ -4352,11 +4368,16 @@ impl DividerGuard {
         if self.applying.get() {
             return None;
         }
+        let position = p.position();
+        if position == self.last_position.get() {
+            return None;
+        }
         let max = p.max_position();
         let span = paned_span(p, axis);
         if max <= 0 || max != self.last_max.get() || span != self.last_span.get() {
             return None;
         }
+        self.last_position.set(position);
         Some(span)
     }
 }
@@ -4373,9 +4394,11 @@ impl DividerGuard {
 /// ratio captured when the widget was built) is what makes a user's drag survive
 /// that re-apply.
 ///
-/// **Widget to tree.** A `notify::position` that is not this module's own write, and
-/// whose `max-position` and SPAN have both held still, is a user drag, and is
-/// written into the tree through [`PaneTree::set_divider_fraction`]. That is what
+/// **Widget to tree.** A `notify::position` that is not this module's own write,
+/// whose `max-position` and SPAN have both held still, and whose position is not the
+/// one the tree already accounts for, is a user drag, and is written into the tree
+/// through [`PaneTree::set_divider_fraction`]. The last test refuses the clamp GTK
+/// queues on a resize (see [`DividerGuard`]), so a weight survives it. That is what
 /// puts a drag on the save path (see this module's "Layout persistence" section).
 /// The span is the quantity [`geometry::divider_position`] scales by, so it belongs
 /// in that staleness gate beside the maximum rather than being trusted to move with
@@ -4471,7 +4494,8 @@ fn build_drawer_paned(
 /// Every `max-position` notify re-derives the position from the share, so a resize
 /// keeps the drawer's share and a drag is never snapped back. A `notify::position` that
 /// [`DividerGuard::drag_span`] calls a drag is written into the share, and the
-/// write-back rebuilds nothing, as a tree divider's does not.
+/// write-back rebuilds nothing, as a tree divider's does not. `drag_span` refuses the
+/// clamp GTK queues on a shrink, so a grow back returns the share the user dragged to.
 fn install_drawer_divider(paned: &gtk::Paned, share: &Rc<Cell<DrawerShare>>) -> Rc<DividerGuard> {
     let guard = DividerGuard::new();
     {
