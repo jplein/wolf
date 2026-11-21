@@ -309,6 +309,21 @@ What each target covers belongs with the code it tests:
 | `//crates/wolf-macos:bundle_layout_test`                                                 | The built `.app`'s resource layout.                                          |
 | [`//bazel/...`](#repinning-a-vendored-asset)                                             | One test per vendored asset, asserting the assembled tree.                   |
 
+### The app-launch smoke
+
+```sh
+./tools/wolf-macos-app-smoke.sh                        # inside the dev shell
+nix develop --command ./tools/wolf-macos-app-smoke.sh  # outside it
+```
+
+It builds `//crates/wolf-macos:Wolf` and launches the real bundle twice, checking the drained Ex-command route and a zoom across quit and relaunch; [`tools/README.md`](tools/README.md) has what it covers. Run it after changing that route, Zoom Pane, state persistence or the launch restore.
+
+It is not a Bazel target and no gate runs it, because `bazel test //...` and a gate must never take over the desktop. It refuses with exit 2 outside this user's unlocked GUI session, and [`tools/README.md`](tools/README.md) lists every refusal. Running it inside tmux is fine.
+
+**It takes over the desktop for a few minutes.** It needs an unlocked screen, opens Wolf windows and drives them, so type nothing into them until it exits.
+
+It exits 0 when every check passes, 1 when a check or premise fails, 2 on a refusal, a setup error or a harness exception, and 128 plus the signal number on an interrupt. A failure prints `FAIL <ID>: <message>`, the last probe, Neovim's `:messages` and the tail of the app's log. A failed run keeps its `/tmp/wolf-app-smoke.*` directory, with `logs/`, `state/`, `config/`, `project/` and `client/`, and prints its path; a green run deletes it.
+
 ## Repinning a vendored asset
 
 Every third-party asset the app bundles or links, and the Zig that builds libghostty-vt, is downloaded by a bzlmod module extension under `bazel/`, sha256-pinned, with no system or `PATH` dependency. Each package owns its pin, its assembly, and its bump procedure:

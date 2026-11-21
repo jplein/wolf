@@ -40,11 +40,14 @@ Resolve the release `.app` path from `bazel cquery --output=files //crates/wolf-
 bazel test //crates/wolf-macos:WolfKeyMapTests     # the pure WolfKeyMap seams
 bazel test //crates/wolf-macos:WolfMacOSTests      # what WolfMacOS views draw, offscreen
 bazel test //crates/wolf-macos:bundle_layout_test  # asserts the .app resource layout
+./tools/wolf-macos-app-smoke.sh                    # on demand, in the GUI session
 ```
 
 Both Swift test targets list their sources explicitly rather than globbing, so a new Swift file that is not added to `srcs` never compiles into the test binary and never runs. There is no `cargo`-style fallback here.
 
 `WolfMacOSTests` checks pixels. It calls responder and menu dispatch directly for key equivalents over a preview, sends the toolbar's sidebar control its action, and calls the pane container's mouse handlers for a drawer-edge drag: key-window routing, event handling, menu validation, real clicks and real focus have no automated coverage. See the testing posture in [wolf-macos-decisions.md](../../notes/wolf-macos-decisions.md) for what covers them instead.
+
+The drained Ex-command route into `CommandDispatcher`, and a zoom surviving quit and relaunch, are covered against the built bundle by the app-launch smoke ([build.md](../../build.md#the-app-launch-smoke)), which no gate runs.
 
 ## Formatting
 

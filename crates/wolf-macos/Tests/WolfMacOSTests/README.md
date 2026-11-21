@@ -125,7 +125,7 @@ Purpose: The vendored Lighthouse's expected colours, for the tests that render u
 
 **Gotchas**
 
-- The palette rows, `CommandDispatcher` and `WolfWindowController.splitPane(_:)` reach no test: AppKit routes no event offscreen.
+- The palette rows, `CommandDispatcher` and `WolfWindowController.splitPane(_:)` reach no test here: AppKit routes no event offscreen. The [app-launch smoke](../../../../build.md#the-app-launch-smoke) drives `:WolfSplitVertical` through the last two.
 - The front-end drops a `Split` from the drawer anyway, so the drawer test's witness is the live session count, after a `focus_win` queued behind both splits has landed.
 - The lag test sends `focus_win` with no wake before the split, as [`TerminalClosePaneTests.swift`](#terminalclosepanetestsswift) does.
 
@@ -176,9 +176,9 @@ A split, a close and the shell exiting each unzoom, and so does Toggle Terminal,
 
 **Gotchas**
 
-- The palette, `CommandDispatcher` and `WolfWindowController` reach no test, so `toggleZoom()` and `toggleTerminal()` are called directly.
-- A hidden pane's sizes are compared after a settle, because a wrong resize lands a round trip later.
-- A move that must change nothing and a restored zoom are sampled at every wake, because Neovim reporting another pane a round trip later unzooms the view, which a check at the start or end would miss.
+- The palette, `CommandDispatcher` and `WolfWindowController` reach no test, so `toggleZoom()` and `toggleTerminal()` are called directly; the [app-launch smoke](../../../../build.md#the-app-launch-smoke) covers the last two.
+- A hidden pane's sizes are compared after a settle: a wrong resize lands a round trip later.
+- A move that must change nothing and a restored zoom are sampled at every wake: Neovim reporting another pane a round trip later unzooms the view.
 - The save and restore test writes the process-wide `WOLF_STATE_DIR` `LiveCore` sets, which no other test here touches.
 - The drags while zoomed land in the zoomed pane and reach Neovim as clicks.
 
