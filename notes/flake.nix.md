@@ -22,7 +22,9 @@ The `optionalAttrs` on the `packages` output is the one deliberate guard, and it
 
 ## Darwin shell
 
-`darwinShell` is `mkShellNoCC` because the C toolchain on macOS is Xcode, which apple_support drives through `DEVELOPER_DIR`; the shell needs only bazelisk, the `bazel` shim, git, starpls and prettier. Measured under `mkShell`: `cc`, `ld` and `strip` resolve to the Nix clang-wrapper 21, `xcrun` to xcbuild's, which prints `unhandled Platform key` warnings on `xcrun --find swift-format`, and `SDKROOT` to a Nix apple-sdk 14.4. Under `mkShellNoCC` all four tools resolve under `/usr/bin` and `SDKROOT` is unset.
+`darwinShell` is `mkShellNoCC` because the C toolchain on macOS is Xcode, which apple_support drives through `DEVELOPER_DIR`; the shell needs only bazelisk, the `bazel` shim, git, starpls, prettier and `python3`. Measured under `mkShell`: `cc`, `ld` and `strip` resolve to the Nix clang-wrapper 21, `xcrun` to xcbuild's, which prints `unhandled Platform key` warnings on `xcrun --find swift-format`, and `SDKROOT` to a Nix apple-sdk 14.4. Under `mkShellNoCC` all four tools resolve under `/usr/bin` and `SDKROOT` is unset.
+
+`python3` is the same `pkgs.python3` as `linuxShell`'s, a bare interpreter, so a script behaves alike on both workers and never runs the host's `/usr/bin/python3`, which is on `PATH` too. Do not swap either side for another attribute, such as `python3Minimal` or a `withPackages` set: the shells would run different interpreters, and `tools/lint/dev_shell_test.sh` would still pass on both.
 
 `.bazelrc`'s `--incompatible_strict_action_env` already keeps the shell's `PATH` out of build actions, so what the shell protects is the client environment: `bazel run` targets run there and call `xcrun`.
 
@@ -43,6 +45,8 @@ Every `export` in `linuxShell.shellHook` must be on one of the lists below, and 
 The packaged smokes launch the store binary under `cage`, so an export they inherit turns a claim about the store artifact into a claim about the devShell, and the smoke stays green either way. Classify a new export by asking whether the artifact must supply it, and never put one on the keep list to silence the guard. The GTK and font lists stand apart from `PACKAGED_SCRUB_ALWAYS` because some packaged smokes keep them, each for the reason its doc comment gives.
 
 `VENDORED_TREE_EXPORTS`, in the same test file, names the exports that must stay, `WOLF_TEST_ORLANDO_DIR` and `WOLF_TEST_LIGHTHOUSE_DIR`: without them the `wolf-ffi` tests that load the vendored Lua trees pass as no-ops.
+
+`pkgs.python3`'s setup hook exports `PYTHONPATH` (its own `site-packages`), `PYTHONHASHSEED=0`, `PYTHONNOUSERSITE=1` and `DETERMINISTIC_BUILD=1` into both shells. They are not `shellHook` exports, so the guard neither sees nor classifies them, and the packaged smokes do not scrub them, which is harmless while nothing they launch runs Python. Bazel actions never see them, under `--incompatible_strict_action_env`. `PYTHONNOUSERSITE=1` hides a developer's user `site-packages` inside a direnv-loaded shell.
 
 ## Treesitter grammar set
 

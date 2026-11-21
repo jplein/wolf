@@ -1,6 +1,6 @@
 # tools/lint
 
-Lint and format targets for the macOS Bazel host: clippy and rustfmt for Rust, swift-format for Swift, a markdown checker for the documentation rules in [CLAUDE.md](../../CLAUDE.md), a check that wolf-gnome's sources name macOS only at an accepted divergence, and the comment checks of [doc-lint](../doc-lint/README.md).
+Lint and format targets for the macOS Bazel host: clippy and rustfmt for Rust, swift-format for Swift, a markdown checker for the documentation rules in [CLAUDE.md](../../CLAUDE.md), a check that wolf-gnome's sources name macOS only at an accepted divergence, a check that the dev shell supplies its own `python3`, and the comment checks of [doc-lint](../doc-lint/README.md).
 
 Each tool has a check target (`bazel test`, reports and fails on violations) and, where a fixer exists, a fix target (`bazel run`, rewrites files in place under `$BUILD_WORKSPACE_DIRECTORY`).
 
@@ -41,6 +41,7 @@ Every check target runs under `bazel test //...`, and any finding fails it. clip
 | wolf-gnome wording check        | `:wolf_gnome_wording`            | `bazel test //tools/lint:wolf_gnome_wording`                       |
 | wolf-gnome wording checker test | `:wolf_gnome_wording_check_test` | `bazel test //tools/lint:wolf_gnome_wording_check_test`            |
 | comment check                   | `:comments`                      | `bazel test //tools/lint:comments`                                 |
+| dev shell check                 | `:dev_shell_test`                | `bazel test //tools/lint:dev_shell_test`                           |
 | all checks                      | `:check`                         | `bazel test //tools/lint:check`                                    |
 | all fixes                       | `:fix`                           | `bazel run //tools/lint:fix`                                       |
 
@@ -77,6 +78,7 @@ Internal targets: `:clippy_core`, `:clippy_ffi`, `:clippy_test_support`, `:clipp
 - `:wolf_gnome_wording` is an `sh_test` (`wolf_gnome_wording_check.sh`) over the root package's `//:wolf_gnome_srcs` filegroup, since wolf-gnome has no Bazel package, and `wolf_gnome_wording_allowlist.txt`. The rule is [below](#what-wolf_gnome_wording-checks). On Linux the same script runs as the `wolf-gnome-wording` gate, over the checkout.
 - `:wolf_gnome_wording_check_test` runs `wolf_gnome_wording_check_test.sh` over the fake checkouts in `testdata/wolf_gnome_wording/`, with the cases [below](#checker-cases). It is sandboxed and also the Linux gate step `wolf-gnome-wording-check-test`.
 - `:comments` is an `sh_test` (`doc_lint_check.sh`) that runs `doc-lint --files` over `:all_comment_srcs`. `:all_markdown_srcs` is staged as data too, so the doc paths written in comments resolve in the runfiles tree. The rules are in [doc-lint's README](../doc-lint/README.md#rules).
+- `:dev_shell_test` runs `dev_shell_test.sh`, which asserts that the `python3` on `PATH` is a `/nix/store` path and runs as Python 3. macOS has its own `/usr/bin/python3`, so the store prefix is what tells the dev shell's apart. The `PATH` is the client's, through `env_inherit`, and the interpreter is no Bazel input, so the target is `external` and fails by design when `bazel` runs outside the dev shell. It is also the Linux gate step `dev-shell-test`.
 - `:fix` is the custom `fix_all` rule: it stages the rust toolchain, the separate rules_rust rustfmt toolchain, `:swift_format.fix` and the libghostty-vt archive, then runs rustfmt over `wolf-core`, `wolf-ffi`, `wolf-test-support` and `wolf-vt`, then `cargo clippy --fix`, then that fixer with no arguments, which formats every wolf-macos source and test, all in place.
 
 ## Adding a package
@@ -186,6 +188,7 @@ The checker exits 1 on a finding and 2, with an `ERROR:` line, when there is no 
 - `wolf_gnome_wording_check_test.sh` — the `:wolf_gnome_wording_check_test` body, also a Linux gate step.
 - `rustfmt_files.sh` — `rustfmt_files.sh RUSTFMT [--check] FILE...`, the `:rustfmt_files.fix` body. It must run under macOS `/bin/bash` 3.2.
 - `rustfmt_files_test.sh` — the `:rustfmt_files_test` body, also a Linux gate step. It takes the rustfmt binary as its argument, or else the one on `PATH`.
+- `dev_shell_test.sh` — the `:dev_shell_test` body, also a Linux gate step. It must run under macOS `/bin/bash` 3.2.
 - `testdata/markdown/` — the fixtures for `markdown_check_test.sh`.
 - `testdata/rustfmt_files/` — `misformatted.rs`, holding an `async fn`, and `formatted.rs`, its rustfmt output under both toolchains. `//tools/lint:comments` lexes them, so they carry no comments.
 - `testdata/swift_format/` — the fixtures for both swift-format tests.

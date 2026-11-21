@@ -20,7 +20,7 @@ The repo ships an `.envrc` that runs `use flake` on both Linux and macOS. Activa
 direnv allow
 ```
 
-The Linux shell supplies the pinned Rust toolchain (`rust-src`, `rust-analyzer`, `clippy`, `rustfmt`), a pinned hermetic Neovim exported as `WOLF_NVIM_BIN`, a pinned ripgrep exported as `WOLF_RG_BIN`, the GTK4, libadwaita and WebKitGTK stack `wolf-gnome` needs, and a generated `FONTCONFIG_FILE` that pins the font stack to vendored families — DejaVu, the two editor families the shared `wolf-config.yaml` can name, and the Symbols Nerd Font Mono icon face — with no host font directory, so the offscreen golden render is reproducible.
+The Linux shell supplies the pinned Rust toolchain (`rust-src`, `rust-analyzer`, `clippy`, `rustfmt`), a pinned hermetic Neovim exported as `WOLF_NVIM_BIN`, a pinned ripgrep exported as `WOLF_RG_BIN`, a plain `python3`, the same as the Darwin shell's, the GTK4, libadwaita and WebKitGTK stack `wolf-gnome` needs, and a generated `FONTCONFIG_FILE` that pins the font stack to vendored families — DejaVu, the two editor families the shared `wolf-config.yaml` can name, and the Symbols Nerd Font Mono icon face — with no host font directory, so the offscreen golden render is reproducible.
 
 The `shellHook` generates that file by substituting store paths into `$PWD/crates/wolf-gnome/testdata/fonts.conf`, a repo-relative template, so every `nix develop` command in this document is run from the repository root. Started anywhere else the substitution has no template to read, and the font pinning every golden render rests on is gone. Do not reach for a system `cargo`, `rustc`, `nvim` or `rg` — `flake.nix` pins all four, and builds and tests must run inside the shell.
 
@@ -169,7 +169,7 @@ The same `.envrc` selects the Darwin shell:
 direnv allow
 ```
 
-The Darwin shell supplies bazelisk (exposed as both `bazelisk` and a `bazel` shim), git, starpls and prettier, and exports `DEVELOPER_DIR`. It deliberately carries no C toolchain, so `cc`, `strip`, `xcrun` and the SDK all resolve to Xcode ([why](notes/flake.nix.md#darwin-shell)), and no Rust toolchain and no GUI packages: `rules_rust` downloads a pinned rustc (1.85.0), and the Rust dependencies resolve from the workspace `Cargo.toml` and `Cargo.lock` through `crate_universe`. It carries no Zig either: Bazel downloads the pinned Zig and builds libghostty-vt with it in a build action, [`//bazel/ghostty-vt`](bazel/ghostty-vt/README.md). Every command below is written `bazel`, which is the bazelisk shim.
+The Darwin shell supplies bazelisk (exposed as both `bazelisk` and a `bazel` shim), git, starpls, prettier and `python3`, and exports `DEVELOPER_DIR`. It deliberately carries no C toolchain, so `cc`, `strip`, `xcrun` and the SDK all resolve to Xcode ([why](notes/flake.nix.md#darwin-shell)), and no Rust toolchain and no GUI packages: `rules_rust` downloads a pinned rustc (1.85.0), and the Rust dependencies resolve from the workspace `Cargo.toml` and `Cargo.lock` through `crate_universe`. It carries no Zig either: Bazel downloads the pinned Zig and builds libghostty-vt with it in a build action, [`//bazel/ghostty-vt`](bazel/ghostty-vt/README.md). Every command below is written `bazel`, which is the bazelisk shim.
 
 bazelisk reads the Bazel version from `.bazelversion` (8.7.0) and fetches it. `MODULE.bazel` (bzlmod) pins the rule sets and is authoritative for their versions; `MODULE.bazel.lock` and `Cargo.Bazel.lock` are committed, so a clean checkout builds without resolving anything.
 
@@ -437,7 +437,7 @@ doc-lint runs standalone too: `doc-lint --files <files>` checks comments in the 
 
 ## The verification gate
 
-`./gates.sh`, at the repository root, is the definition of green on both platforms. It detects the host and runs every deterministic gate for it: on Linux the format, Markdown, wolf-gnome wording, doc-lint, wolf-core dependency, clippy, rustdoc link, build and test commands, and on macOS prettier, doc-lint's checkout-wide rules, the wolf-core dependency check, a check that `.bazelignore` keeps the regina worktrees out of `//...`, and `bazel test //...`. What each list covers, and why it runs in that order, is in [its notes](notes/gates.sh.md).
+`./gates.sh`, at the repository root, is the definition of green on both platforms. It detects the host and runs every deterministic gate for it: on Linux the format, Markdown, wolf-gnome wording, dev shell, doc-lint, wolf-core dependency, clippy, rustdoc link, build and test commands, and on macOS prettier, doc-lint's checkout-wide rules, the wolf-core dependency check, a check that `.bazelignore` keeps the regina worktrees out of `//...`, and `bazel test //...`. What each list covers, and why it runs in that order, is in [its notes](notes/gates.sh.md).
 
 ```sh
 ./gates.sh                          # inside the dev shell, or outside it with nix on PATH
