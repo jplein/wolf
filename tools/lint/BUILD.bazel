@@ -306,6 +306,17 @@ sh_test(
     ],
 )
 
+# ---- dev shell ----
+
+# python3 is the dev shell's, read from the client PATH and not a Bazel input: `external` keeps a
+# cached pass from hiding a flake.nix change.
+sh_test(
+    name = "dev_shell_test",
+    srcs = ["dev_shell_test.sh"],
+    env_inherit = ["PATH"],
+    tags = ["external"],
+)
+
 # ---- aggregates ----
 
 test_suite(
@@ -313,6 +324,7 @@ test_suite(
     tests = [
         ":clippy",
         ":comments",
+        ":dev_shell_test",
         ":markdown",
         ":markdown_check_test",
         ":rustfmt_core",

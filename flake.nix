@@ -352,6 +352,10 @@
 
             # The gate's Markdown check, the same pinned prettier as linuxShell's.
             pkgs.prettier
+
+            # A plain interpreter for scripts, the same attribute as linuxShell's, so that a script
+            # never depends on the host's python3.
+            pkgs.python3
           ];
 
           # gates.sh reads WOLF_DEV_SHELL to skip entering the shell again.
@@ -419,6 +423,10 @@
 
             # `infocmp`, which the terminfo tests run in a pane's shell to look the entry up.
             pkgs.ncurses
+
+            # A plain interpreter for scripts, the same attribute as darwinShell's, so that a script
+            # never depends on the host's python3.
+            pkgs.python3
           ];
 
           # gates.sh reads WOLF_DEV_SHELL to skip entering the shell again.
