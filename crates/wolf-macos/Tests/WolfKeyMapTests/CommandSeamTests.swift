@@ -6,16 +6,26 @@ import XCTest
 
 final class CommandSeamTests: XCTestCase {
 
-  // MARK: - every registry discriminant decodes
+  // MARK: - every registry discriminant decodes to its own case
 
   func testEveryRegistryDiscriminantDecodes() {
     let count = wolf_ffi_command_count()
     XCTAssertGreaterThan(count, 0, "the registry read over the FFI is empty")
     for kind in 0..<count {
-      XCTAssertNotNil(
-        CommandKind(ffi: kind),
-        "core has a command at discriminant \(kind) that Swift cannot decode: "
-          + "CommandKind lacks its case or init?(ffi:) lacks its arm")
+      guard let decoded = CommandKind(ffi: kind) else {
+        XCTFail(
+          "core has a command at discriminant \(kind) that Swift cannot decode: "
+            + "CommandKind lacks its case or init?(ffi:) lacks its arm")
+        continue
+      }
+      let id = snakeCase(String(describing: decoded))
+      let back = wolf_ffi_command_kind(id)
+      XCTAssertEqual(
+        back, kind,
+        "discriminant \(kind) decodes to .\(decoded), id \(id), which Rust's command_kind "
+          + "gives discriminant \(back): an arm decodes this discriminant to another "
+          + "command's case, so core's command at \(kind) has no Swift case of its own. "
+          + "\(UInt8.max) means no core id matches the case's name")
     }
   }
 

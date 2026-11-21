@@ -31,7 +31,8 @@
 //! rather than relying on `:WolfFullWidth` to toggle — the Ex-command only enqueues
 //! an `FfiCommand` with no front-end dispatcher present to call the method back
 //! (exactly as `terminal.rs` drives `toggle_terminal()` directly). The command
-//! channel itself is proven separately below by draining `CMD_KIND_FULL_WIDTH`.
+//! channel itself is proven separately below by draining the kind `wolf_ffi_command_kind` gives
+//! `full_width`.
 //!
 //! ## SKIP-when-unset policy
 //!
@@ -44,7 +45,7 @@ mod common;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use wolf_ffi::{wolf_ffi_start, FfiKeyEvent, FfiPreview};
+use wolf_ffi::{wolf_ffi_command_kind, wolf_ffi_start, FfiKeyEvent, FfiPreview};
 
 /// Generous overall timeout for nvim `--embed` startup plus each async effect (the
 /// `toggle_full_width` notification round-trip, the out-of-band `wolf_full_width` /
@@ -73,9 +74,8 @@ const KIND_CHAR: u8 = 0;
 /// The Enter / Return key (executes the typed Ex command).
 const KIND_ENTER: u8 = 1;
 
-/// `FfiCommand::kind()` for Use Full Width — the appended discriminant 22 (mirrors
-/// `mod command_kind` in `wolf-ffi/src/lib.rs` and `commands.rs`'s local const).
-const CMD_KIND_FULL_WIDTH: u8 = 22;
+/// The registry `id` of Use Full Width, whose drained kind step 3 polls for.
+const FULL_WIDTH_ID: &str = "full_width";
 
 /// Builds a printable-character `FfiKeyEvent` (kind=Char) for `c`, all modifiers
 /// false. Same as the sibling tests.
@@ -134,7 +134,7 @@ fn wait_for_attach(handle: &wolf_ffi::WolfCoreHandle) {
 }
 
 /// Polls `handle.drain_commands()` until an `FfiCommand` with the given `kind`
-/// appears, or panics after [`FLUSH_TIMEOUT`]. Copy of `commands.rs`'s poll helper.
+/// appears, or panics after [`FLUSH_TIMEOUT`].
 fn poll_for_command_kind(handle: &wolf_ffi::WolfCoreHandle, kind: u8, desc: &str) {
     let deadline = Instant::now() + FLUSH_TIMEOUT;
     while Instant::now() < deadline {
@@ -320,7 +320,11 @@ fn full_width_toggles_active_buffer_and_routes_the_command() {
     // stays put. Drain startup noise first.
     let _ = handle.drain_commands();
     send_ex_command(&handle, ":WolfFullWidth");
-    poll_for_command_kind(&handle, CMD_KIND_FULL_WIDTH, ":WolfFullWidth");
+    poll_for_command_kind(
+        &handle,
+        wolf_ffi_command_kind(FULL_WIDTH_ID.to_string()),
+        ":WolfFullWidth",
+    );
     // The routed-but-undispatched command left the flag untouched.
     assert!(
         !handle.is_full_width_active(),
