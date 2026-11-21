@@ -83,6 +83,12 @@ const TG_CLICK_SHOTS: usize = 7;
 /// How many captures the chord smoke takes.
 const TG_CHORD_SHOTS: usize = 6;
 
+/// The toggle group's left edge, in absolute output pixels: the bar's padding, the Back/Forward
+/// pair and the spacing after it, about 81.
+pub(crate) fn tg_group_start_x() -> f64 {
+    TG_BAR_PADDING_PX + TG_NAV_PAIR_WIDTH_PX + TG_BAR_SPACING_PX
+}
+
 /// Centre of the Files toggle, in absolute output pixels: the bar's padding, the Back/Forward
 /// pair, the spacing after it, the group's padding and half a toggle, about 101.
 ///
@@ -91,11 +97,7 @@ const TG_CHORD_SHOTS: usize = 6;
 /// value fails loudly rather than passing by accident, because a click that misses the group
 /// moves no sidebar.
 fn tg_files_x() -> f64 {
-    TG_BAR_PADDING_PX
-        + TG_NAV_PAIR_WIDTH_PX
-        + TG_BAR_SPACING_PX
-        + TG_GROUP_PADDING_PX
-        + TG_TOGGLE_WIDTH_PX / 2.0
+    tg_group_start_x() + TG_GROUP_PADDING_PX + TG_TOGGLE_WIDTH_PX / 2.0
 }
 
 /// Centre of the Search toggle: one toggle and the gap right of [`tg_files_x`], about 136.

@@ -1,7 +1,8 @@
-//! The header bar's start ends at the sidebar's Files/Search toggle group, as the macOS toolbar
-//! does, and Ctrl+Shift+O opens the file picker with no header-bar button to reach it.
+//! The header bar's start holds Back/Forward and the sidebar's Files/Search toggle group with
+//! nothing before, between or after them, as the macOS toolbar does, and Ctrl+Shift+O opens the
+//! file picker with no header-bar button to reach it.
 
-use super::sidebar_toggles::{tg_header_band, tg_search_x, TG_BAR_SPACING_PX};
+use super::sidebar_toggles::{tg_group_start_x, tg_header_band, tg_search_x, TG_BAR_SPACING_PX};
 use super::titlebar::{TB_HEADER_BUTTON_CLEARANCE_PX, TB_MIN_EXACT_SHARE, TB_TITLE_HALF_WIDTH_PX};
 use super::*;
 
@@ -30,6 +31,19 @@ const HB_INK_MIN_PER_COLUMN: usize = 2;
 /// libadwaita 1.9.3's header-bar image button, about 34 px wide: the narrowest start child the
 /// band must have room to show after the group.
 const HB_IMAGE_BUTTON_WIDTH_PX: f64 = 34.0;
+
+/// How far right of [`tg_group_start_x`] the group's run of ink may start: half an image button.
+///
+/// [`tg_group_start_x`] is an estimate from libadwaita 1.9.3's sizes, and the diagnostic line
+/// records the measured start. Any child packed before the group moves it right by
+/// [`TG_BAR_SPACING_PX`] plus its own width, at least 40 px for an image button, so half a
+/// button tells the two apart.
+const HB_GROUP_START_SLACK_PX: f64 = HB_IMAGE_BUTTON_WIDTH_PX / 2.0;
+
+/// The name of the launch buffer, which `runtime/nvim/init.lua`'s `VimEnter` autocmd gives
+/// through `wolf_next_untitled` at index 1 in the smoke's fresh working directory. The
+/// production const's doc keeps it equal to that name.
+const HB_LAUNCH_BUFFER: &str = wolf_gnome::save_ui::UNTITLED_SAVE_NAME;
 
 /// The HEADER BAR scenario: one launch, one capture before any key, then the picker.
 ///
@@ -118,8 +132,9 @@ fn hb_column_ink(capture: &Capture, x: usize, band: SampleRect, bg: Rgb8) -> usi
         .count()
 }
 
-/// **The header bar's start holds the Back/Forward pair and the sidebar's toggle group and
-/// nothing after them, and Ctrl+Shift+O still opens the file picker.**
+/// **The header bar's start holds the Back/Forward pair and the sidebar's toggle group with
+/// nothing before, between or after them, as the macOS toolbar does, and Ctrl+Shift+O still
+/// opens the file picker.**
 ///
 /// One keyboard-only launch: no `wolf-pointer-inject`, so no pointer is on the seat and no
 /// hover look or tooltip reaches the capture.
@@ -131,15 +146,17 @@ fn hb_column_ink(capture: &Capture, x: usize, band: SampleRect, bg: Rgb8) -> usi
 /// as one flat fill: from [`TB_HEADER_BUTTON_CLEARANCE_PX`] to the title band, over the same
 /// rows. A column is ink when at least [`HB_INK_MIN_PER_COLUMN`] of its rows differ from it.
 ///
-/// The run of ink holding the Search toggle's centre, [`tg_search_x`], is the group's trough,
-/// and nothing right of it may be ink. Then the readback: Neovim's buffer name after
-/// Ctrl+Shift+O, [`HB_QUERY`] and Enter.
+/// The run of ink holding the Search toggle's centre, [`tg_search_x`], is the group's trough. It
+/// must start no later than [`tg_group_start_x`] plus [`HB_GROUP_START_SLACK_PX`], and nothing
+/// right of it may be ink. Then the readback: Neovim's buffer name after Ctrl+Shift+O,
+/// [`HB_QUERY`] and Enter.
 ///
 /// Its premises are libadwaita 1.9.3's, and the diagnostic line every run prints records what
 /// they came to. The Search centre lies inside the group, which the toggle-group click smoke
 /// relies on. The trough differs from the bar in every column it spans, so the group is one
 /// run, and [`TG_BAR_SPACING_PX`] of bare bar separates start children, so a child after the
-/// group is a run of its own.
+/// group is a run of its own. A child before the group pushes the run's start right by that
+/// spacing plus its own width.
 ///
 /// ## Assertions
 ///
@@ -148,8 +165,9 @@ fn hb_column_ink(capture: &Capture, x: usize, band: SampleRect, bg: Rgb8) -> usi
 /// | A0 | the scenario exits 0 | precondition |
 /// | A1 | the span past the start group is at least [`TB_MIN_EXACT_SHARE`] one colour | precondition |
 /// | A2 | the Search toggle's centre column is ink | discriminator |
-/// | A3 | no column right of the group's run is ink, with room in the band for a button there | discriminator |
-/// | A4 | the readback is [`HB_TARGET_FILE`] | discriminator |
+/// | A3 | the group's run starts no later than [`tg_group_start_x`] plus [`HB_GROUP_START_SLACK_PX`] | discriminator |
+/// | A4 | no column right of the group's run is ink, with room in the band for a button there | discriminator |
+/// | A5 | the readback is [`HB_TARGET_FILE`] | discriminator |
 ///
 /// ## Exit codes
 ///
@@ -163,10 +181,12 @@ fn hb_column_ink(capture: &Capture, x: usize, band: SampleRect, bg: Rgb8) -> usi
 ///
 /// | ID | edit | expected red |
 /// | --- | --- | --- |
-/// | H1 | in `window::build`, pack a `document-open-symbolic` button right after the toggle group | A3: ink past the group's run, near x 171..187 |
+/// | H1 | in `window::build`, pack a `document-open-symbolic` button right after the toggle group | A4: ink past the group's run, measured at x 171..186 |
 /// | H2 | delete `header.pack_start(&sidebar.toggles().widget());` | A2: the Search column is bare bar |
 /// | H3 | delete `header.pack_start(&nav_box);` | A2: the group sits about 74 px left, off the Search column |
-/// | H4 | `set_empty_state`'s `go_to_file` block calls `action.set_enabled(false)` | A4: the readback is empty |
+/// | H4 | `set_empty_state`'s `go_to_file` block calls `action.set_enabled(false)` | A5: the readback is [`HB_LAUNCH_BUFFER`], and the message names the fall-through cause |
+/// | H5 | pack the H1 button immediately before `header.pack_start(&nav_box);` | A3: the run starts near x 119, past the limit near 98 |
+/// | H6 | pack the H1 button between `nav_box` and the toggle group | A3: the run starts near x 119, past the limit near 98 |
 #[test]
 fn header_start_holds_nav_and_toggles_alone_under_cage() {
     const SMOKE: &str = "header_start_holds_nav_and_toggles_alone_under_cage";
@@ -280,25 +300,45 @@ fn header_start_holds_nav_and_toggles_alone_under_cage() {
         "{SMOKE}: the Search toggle's centre column x = {search} holds {search_ink} pixels other \
          than the bar's {bg:?} over the header band's rows {}..{}, under HB_INK_MIN_PER_COLUMN = \
          {HB_INK_MIN_PER_COLUMN}. No group is drawn there, so the header bar's start does not \
-         hold Back/Forward followed by the toggle group: either the group is not packed, or \
-         `nav_box` is not packed before it and the group sits about 74 px further left. The \
-         rightmost ink column is {rightmost:?}. Capture kept at {}.",
+         hold Back/Forward followed by the toggle group: the group is not packed; `nav_box` is \
+         not packed before it, so the group sits about 74 px further left; or other children \
+         packed before the group push it right, past the Search column. The rightmost ink \
+         column is {rightmost:?}. Capture kept at {}.",
         band.y0,
         band.y1,
         png.display()
     );
 
-    // --- A3: nothing after the group -----------------------------------------------
+    // --- A3: nothing before the group ----------------------------------------------
+    // One-sided on purpose: a group that starts early leaves the Search column bare, which A2 catches.
+    let (run_start, run_end) =
+        run.expect("A2 established that the Search column is ink, so the run exists");
+    let limit = pixel_index(
+        tg_group_start_x() + HB_GROUP_START_SLACK_PX,
+        "the latest column the group's run may start at",
+    );
+    let before: Vec<usize> = (band.x0..run_start).filter(|&x| is_ink(x)).collect();
+    assert!(
+        run_start <= limit,
+        "{SMOKE}: the toggle group's run of ink starts at x = {run_start}, past x = {limit}, \
+         tg_group_start_x plus HB_GROUP_START_SLACK_PX. Left of the run, the first ink column is \
+         {:?} and the last {:?}. Another child is packed at the header bar's start before the \
+         toggle group, either before Back/Forward or between it and the group, and the macOS \
+         toolbar has neither. Capture kept at {}.",
+        before.first(),
+        before.last(),
+        png.display()
+    );
+
+    // --- A4: nothing after the group -----------------------------------------------
     assert!(
         room <= band.x1,
         "{SMOKE}: the header band ends at x = {}, short of x = {room}, the Search column plus \
          TG_BAR_SPACING_PX and one HB_IMAGE_BUTTON_WIDTH_PX image button. A child packed after \
-         the group would then lie outside the band, and A3 could not see it. Widen the band \
+         the group would then lie outside the band, and A4 could not see it. Widen the band \
          through TB_HEADER_BUTTON_CLEARANCE_PX; do not drop this check.",
         band.x1
     );
-    let (run_start, run_end) =
-        run.expect("A2 established that the Search column is ink, so the run exists");
     if let (Some(&first), Some(&last)) = (past.first(), past.last()) {
         panic!(
             "{SMOKE}: past the toggle group's run of ink, x {run_start}..={run_end}, the header \
@@ -315,14 +355,18 @@ fn header_start_holds_nav_and_toggles_alone_under_cage() {
         );
     }
 
-    // --- A4: the chord still opens the picker --------------------------------------
+    // --- A5: the chord still opens the picker --------------------------------------
     let opened = read_readback(&read, SMOKE).trim().to_string();
+    let cause = if opened == HB_LAUNCH_BUFFER {
+        "That is the launch buffer, so no file was opened. Likely the chord reached Neovim as \
+         `<C-O>` and the query as normal-mode keys, so `win.go-to-file` is disabled or unbound \
+         from Ctrl+Shift+O; otherwise the picker opened but Enter opened nothing."
+    } else {
+        "A file other than the fixture was opened: the picker ranked another entry first."
+    };
     assert_eq!(
         opened, HB_TARGET_FILE,
         "{SMOKE}: after Ctrl+Shift+O, the query {HB_QUERY:?} and Enter, Neovim's buffer is \
-         {opened:?}, not {HB_TARGET_FILE:?}. Empty: no file was opened, so the chord reached \
-         Neovim as `<C-O>` and the query as normal-mode keys; `win.go-to-file` is disabled or \
-         unbound from Ctrl+Shift+O. Another name: the picker opened, but the query did not rank \
-         the fixture first or Enter did not open the selection."
+         {opened:?}, not {HB_TARGET_FILE:?}. {cause}"
     );
 }
