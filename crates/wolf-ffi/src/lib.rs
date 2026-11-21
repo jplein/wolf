@@ -157,9 +157,10 @@ mod intent_kind {
 
 /// The command-kind discriminants packed into [`FfiCommand::kind`].
 ///
-/// The single source of truth shared with the Swift `CommandKind` port and the
-/// `WolfKeyMapTests` / `tests/commands.rs` discriminant contract,
-/// mirroring the variant order of [`wolf_core::Command`].
+/// The Rust side's record of each [`wolf_core::Command`] discriminant, append-only: a
+/// value never moves once shipped. `tests/commands.rs` requires each
+/// [`wolf_core::COMMAND_SPECS`] row to drain as its index, and the Swift `CommandKind`
+/// port is checked against these values over the bridge.
 mod command_kind {
     /// Open a new editor window.
     pub const NEW_WINDOW: u8 = 0;
@@ -1155,8 +1156,17 @@ mod ffi {
     extern "Rust" {
         type FfiCommand;
 
-        // The command kind (`command_kind::NEW_WINDOW` .. `ZOOM_PANE`).
+        // The command kind, a `command_kind` constant.
         fn kind(&self) -> u8;
+    }
+
+    extern "Rust" {
+        // A free fn needing no live core: the number of registered commands,
+        // `wolf_core::COMMAND_SPECS.len()`, one past the highest `command_kind`.
+        fn wolf_ffi_command_count() -> u8;
+        // A free fn needing no live core: the `command_kind` of registry id `id`, or
+        // `u8::MAX` when no command has that id.
+        fn wolf_ffi_command_kind(id: String) -> u8;
     }
 
     extern "Rust" {
@@ -3560,15 +3570,15 @@ pub struct FfiCommand {
 }
 
 impl FfiCommand {
-    /// The command kind (`command_kind::NEW_WINDOW` .. `ZOOM_PANE`).
+    /// The command kind, a `command_kind` constant.
     #[must_use]
     pub fn kind(&self) -> u8 {
         self.kind
     }
 
     /// Packs a [`wolf_core::Command`] into the bridge-friendly discriminant from
-    /// the [`command_kind`] module. The exhaustive match makes a future variant
-    /// reorder/addition a compile error.
+    /// the [`command_kind`] module. The exhaustive match makes a new variant a compile
+    /// error until it has a constant; a reorder is not one, and fails `tests/commands.rs`.
     fn from_command(command: Command) -> Self {
         let kind = match command {
             Command::NewWindow => command_kind::NEW_WINDOW,
@@ -3605,6 +3615,31 @@ impl FfiCommand {
         };
         Self { kind }
     }
+}
+
+/// Returns the number of registered commands, [`wolf_core::COMMAND_SPECS`]'s length,
+/// which is one past the highest [`FfiCommand::kind`].
+///
+/// A free FFI fn (no live core required). Swift reads it to check that `CommandKind`
+/// decodes every command core can drain, and nothing past them.
+///
+/// # Panics
+///
+/// When the registry outgrows a `u8`, which the `command_kind` discriminants could not
+/// carry either.
+#[must_use]
+pub fn wolf_ffi_command_count() -> u8 {
+    u8::try_from(wolf_core::COMMAND_SPECS.len()).expect("COMMAND_SPECS outgrew a u8 discriminant")
+}
+
+/// Returns the [`FfiCommand::kind`] that the command with registry id `id` drains as,
+/// or `u8::MAX` when no registered command has that id.
+///
+/// A free FFI fn (no live core required), so a test can read Rust's discriminant for
+/// an id without starting Neovim.
+#[must_use]
+pub fn wolf_ffi_command_kind(id: String) -> u8 {
+    Command::from_id(&id).map_or(u8::MAX, |command| FfiCommand::from_command(command).kind())
 }
 
 // --- FfiCommandPalette / FfiCommandRow: the command-palette session (opaque to Swift) ---

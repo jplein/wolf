@@ -4,17 +4,11 @@ import Foundation
 
 /// A no-parameter, no-return user action, decoded from the FFI discriminant.
 ///
-/// The cases align with `wolf-ffi`'s `mod command_kind` and the `wolf_core::Command`
-/// variant order: `newWindow == 0`, `closeWindow == 1`, `quitApplication == 2`,
-/// `hideApplication == 3`, `minimizeWindow == 4`, `goToFile == 5`, `openFile == 6`,
-/// `openFolder == 7`, `closePane == 8`, `newBuffer == 9`, `resetFontSize == 10`,
-/// `increaseFontSize == 11`, `decreaseFontSize == 12`, `commandPalette == 13`,
-/// `copy == 14`, `paste == 15`, `bufferPicker == 16`, `newTab == 17`,
-/// `preview == 18`, `edit == 19`, `terminal == 20`, `previewInBrowser == 21`,
-/// `fullWidth == 22`, `toggleSidebar == 23`, `sidebarShowProject == 24`,
-/// `searchInProject == 25`, `previewInOtherPane == 26`, `editInOtherPane == 27`,
-/// `splitHorizontal == 28`, `splitVertical == 29`, `zoomPane == 30`.
-public enum CommandKind {
+/// Each case is one `wolf_core::Command`, named the lowerCamelCase of its registry id
+/// (`go_to_file` is `goToFile`). The arms of `init?(ffi:)` are the Swift side's record of
+/// each discriminant, which `CommandSeamTests` checks over the FFI against the registry's
+/// count and `wolf-ffi`'s `mod command_kind`.
+public enum CommandKind: CaseIterable {
   /// Open a new editor window.
   case newWindow
   /// Close the focused window.
@@ -84,9 +78,8 @@ public enum CommandKind {
   /// and not; front-end geometry that never reaches Neovim.
   case zoomPane
 
-  /// Maps an FFI command-kind discriminant (`0` → `.newWindow` .. `30` →
-  /// `.zoomPane`, else `nil`), guarding the contract shared with
-  /// `wolf-ffi`'s `mod command_kind`.
+  /// Maps an FFI command-kind discriminant to its case, or `nil` for any value no case
+  /// holds, guarding the contract shared with `wolf-ffi`'s `mod command_kind`.
   public init?(ffi: UInt8) {
     switch ffi {
     case 0: self = .newWindow

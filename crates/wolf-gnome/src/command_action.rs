@@ -241,7 +241,7 @@ mod tests {
     /// The commands `wolf-gnome` DISPATCHES, by canonical `CommandSpec::id`,
     /// sorted. Ids (not variants) so the failure message names the registry row a
     /// reader can grep for.
-    const EXPECTED_DISPATCHED_IDS: [&str; 27] = [
+    const EXPECTED_DISPATCHED_IDS: &[&str] = &[
         "buffer_picker",
         "close_pane",
         "close_window",
@@ -580,9 +580,9 @@ mod tests {
 
         assert_eq!(
             dispatched, expected,
-            "the set of DISPATCHED commands changed. wolf-gnome dispatches exactly twenty-seven \
-             commands; everything else must be Deferred(reason) or NoGnomeEquivalent(reason) so \
-             the drain is never silent. If a command was genuinely implemented, tick its feat-list \
+            "the set of DISPATCHED commands changed. wolf-gnome dispatches exactly the commands in \
+             EXPECTED_DISPATCHED_IDS; everything else must be Deferred(reason) or \
+             NoGnomeEquivalent(reason) so the drain is never silent. If a command was genuinely implemented, tick its feat-list \
              row and update this list with it. A one-element diff naming \"new_window\" \
              means New Window was demoted back to Deferred, in which case the coordinator's \
              `open_new_window` is unreachable from the primary menu's New Window item, from the \

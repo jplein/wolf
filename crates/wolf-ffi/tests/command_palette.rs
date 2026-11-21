@@ -37,7 +37,7 @@ use std::path::{Path, PathBuf};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use wolf_ffi::wolf_ffi_start;
+use wolf_ffi::{wolf_ffi_command_count, wolf_ffi_command_kind, wolf_ffi_start};
 
 /// Generous overall timeout for nvim `--embed` startup plus each async effect
 /// (the `chdir` notification round-trip and the fire-and-forget MRU write) to
@@ -47,8 +47,8 @@ const FLUSH_TIMEOUT: Duration = Duration::from_secs(10);
 /// Poll cadence while waiting for an effect to surface. Mirrors the siblings.
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
-/// A `max` large enough that the assembled candidate set is never truncated (13
-/// static rows + a handful of windows/recent dirs stays well under this).
+/// A `max` large enough that the assembled candidate set is never truncated (the
+/// static rows plus a handful of windows/recent dirs stay well under this).
 const RANKED_MAX: usize = 100;
 
 /// The window index handed to `add_window` (a distinctive value so the returned
@@ -68,16 +68,9 @@ const ROW_KIND_SWITCH_WINDOW: u8 = 1;
 /// `FfiCommandRow::row_kind()` for an "Open Recent Folder" row.
 const ROW_KIND_OPEN_RECENT: u8 = 2;
 
-// -- command_kind discriminants used in the static-row assertions ---------------
-/// The last valid command_kind: Command Palette (discriminant 13). It must NOT
-/// appear as a row (the palette excludes its own invoking command).
-const CMD_KIND_COMMAND_PALETTE: u8 = 13;
-/// The highest static command_kind that DOES appear (Decrease Font Size = 12);
-/// static rows for kinds `0..=12` must all be present.
-const CMD_KIND_LAST_PRESENT: u8 = 12;
-/// `command_kind()` for Minimize Window — the key recorded for the MRU round-trip.
-const CMD_KIND_MINIMIZE_WINDOW: u8 = 4;
-/// The registry `id` (== static mru_key) of Minimize Window.
+/// The registry `id` of the palette's own invoking command, which must not appear as a row.
+const COMMAND_PALETTE_ID: &str = "command_palette";
+/// The registry `id` (== static mru_key) of Minimize Window, recorded for the MRU round-trip.
 const MINIMIZE_MRU_KEY: &str = "minimize_window";
 
 /// Canonicalizes a path string, falling back to the raw path when it cannot be
@@ -179,17 +172,26 @@ fn command_palette_ranks_static_dynamic_and_mru_rows() {
     let session = handle.command_palette();
     let rows = session.ranked(String::new(), RANKED_MAX);
 
-    // Every static command_kind 0..=12 is present as a STATIC row.
-    for kind in 0..=CMD_KIND_LAST_PRESENT {
+    let command_count = wolf_ffi_command_count();
+    let palette_kind = wolf_ffi_command_kind(COMMAND_PALETTE_ID.to_string());
+    assert!(
+        palette_kind < command_count,
+        "wolf_ffi_command_kind({COMMAND_PALETTE_ID:?}) is {palette_kind}, not a registry kind \
+         below {command_count}: the id is unknown, so the exclusion check below would be vacuous"
+    );
+
+    // Every registry command_kind but the palette's own is present as a STATIC row.
+    for kind in (0..command_count).filter(|&k| k != palette_kind) {
         assert!(
             has_static_command(&rows, kind),
-            "ranked(\"\") must include a STATIC row for command_kind {kind}"
+            "ranked(\"\") must include a STATIC row for command_kind {kind}: without one, the \
+             palette filters a command other than its own"
         );
     }
-    // The palette's own invoking command (CommandPalette = 13) is EXCLUDED.
+    // The palette's own invoking command is EXCLUDED.
     assert!(
-        !has_static_command(&rows, CMD_KIND_COMMAND_PALETTE),
-        "ranked(\"\") must EXCLUDE the CommandPalette row (command_kind {CMD_KIND_COMMAND_PALETTE})"
+        !has_static_command(&rows, palette_kind),
+        "ranked(\"\") must EXCLUDE the CommandPalette row (command_kind {palette_kind})"
     );
 
     // --- 3. add_window -> a SWITCH_WINDOW row with the given index, empty path
@@ -251,10 +253,11 @@ fn command_palette_ranks_static_dynamic_and_mru_rows() {
         ROW_KIND_STATIC,
         "the recorded minimize_window row is a static row"
     );
+    let minimize_kind = wolf_ffi_command_kind(MINIMIZE_MRU_KEY.to_string());
     assert_eq!(
         first.command_kind(),
-        CMD_KIND_MINIMIZE_WINDOW,
-        "the recorded row is Minimize Window (command_kind {CMD_KIND_MINIMIZE_WINDOW})"
+        minimize_kind,
+        "the recorded row is Minimize Window (command_kind {minimize_kind})"
     );
 
     // --- 6. Shutdown: clean teardown ----------------------------------------

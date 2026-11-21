@@ -41,6 +41,12 @@ public func wolf_ffi_state_snapshot_commit() {
 public func wolf_ffi_state_flush() -> Bool {
     __swift_bridge__$wolf_ffi_state_flush()
 }
+public func wolf_ffi_command_count() -> UInt8 {
+    __swift_bridge__$wolf_ffi_command_count()
+}
+public func wolf_ffi_command_kind<GenericIntoRustString: IntoRustString>(_ id: GenericIntoRustString) -> UInt8 {
+    __swift_bridge__$wolf_ffi_command_kind({ let rustString = id.intoRustString(); rustString.isOwned = false; return rustString.ptr }())
+}
 public struct FfiColor {
     public var rgb: UInt32
     public var set: Bool

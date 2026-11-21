@@ -643,6 +643,8 @@ uint8_t __swift_bridge__$FfiLayoutIntent$dir(void* self);
 int64_t __swift_bridge__$FfiLayoutIntent$from(void* self);
 int64_t __swift_bridge__$FfiLayoutIntent$win(void* self);
 uint8_t __swift_bridge__$FfiCommand$kind(void* self);
+uint8_t __swift_bridge__$wolf_ffi_command_count(void);
+uint8_t __swift_bridge__$wolf_ffi_command_kind(void* id);
 void __swift_bridge__$FfiCommandPalette$add_window(void* self, uint16_t index, void* cwd);
 void* __swift_bridge__$FfiCommandPalette$ranked(void* self, void* query, uintptr_t max);
 void __swift_bridge__$FfiCommandPalette$record(void* self, void* key);

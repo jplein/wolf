@@ -297,6 +297,7 @@ rust_test(
     ] + all_crate_deps(normal_dev = True),
 )
 
+# Real nvim. wolf-core is a direct dep so the test can walk COMMAND_SPECS.
 rust_test(
     name = "commands",
     srcs = [
@@ -319,6 +320,7 @@ rust_test(
     },
     deps = [
         ":wolf_ffi",
+        "//crates/wolf-core:wolf_core",
         "//crates/wolf-test-support:wolf_test_support",
     ] + all_crate_deps(normal_dev = True),
 )

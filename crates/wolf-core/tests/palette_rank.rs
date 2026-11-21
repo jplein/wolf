@@ -28,29 +28,15 @@ use std::path::PathBuf;
 use wolf_core::{rank_palette, Command, PaletteRow, PaletteRowKind, PaletteWindow, COMMAND_SPECS};
 
 /// The number of STATIC rows the palette assembles: every `COMMAND_SPECS` row
-/// EXCEPT `Command::CommandPalette` (which is excluded from its own list). With
-/// 31 registered commands (Copy/Paste/BufferPicker/NewTab/Preview/Edit/Terminal/
-/// PreviewInBrowser/FullWidth appended at 14/15/16/17/18/19/20/21/22, then
-/// ToggleSidebar/SidebarShowProject/SearchInProject at 23/24/25, then
-/// PreviewInOtherPane/EditInOtherPane at 26/27, then SplitHorizontal/SplitVertical
-/// at 28/29, then ZoomPane at 30) that is 30 static rows: exactly
-/// `COMMAND_SPECS.len() - 1`.
+/// except `Command::CommandPalette`, which is excluded from its own list.
 ///
-/// The `- 1` is NOT arithmetic coincidence — it holds because `rank_palette`
-/// (`src/palette.rs`) iterates `for spec in COMMAND_SPECS` with exactly ONE
-/// `continue`, guarded by `spec.command == Command::CommandPalette`. There is no
-/// other filter: no `MenuGroup` gating, no "is a Markdown buffer active" check, no
-/// dedup. So every spec but the palette's own invoking command contributes one
-/// static row.
-///
-/// Preview, Edit, Terminal, PreviewInBrowser, FullWidth, ToggleSidebar,
-/// SidebarShowProject, SearchInProject, PreviewInOtherPane, EditInOtherPane,
-/// SplitHorizontal, SplitVertical and ZoomPane are all palette static rows (unlike
-/// the macOS menu items, which gate
-/// Preview/Edit/Preview in Browser/Use full width/sidebar/other-pane actions on
-/// the active buffer/pane, the palette does not gate any spec — it lists them
-/// all).
-const STATIC_COMMAND_COUNT: usize = 30;
+/// The `- 1` holds because `rank_palette` (`src/palette.rs`) iterates
+/// `for spec in COMMAND_SPECS` with exactly one `continue`, guarded by
+/// `spec.command == Command::CommandPalette`. There is no other filter: no
+/// `MenuGroup` gating, no "is a Markdown buffer active" check, no dedup. Unlike the
+/// macOS menu, which gates some items on the active buffer or pane, the palette
+/// lists every spec, so a second exclusion or a gate fails the tests that use this.
+const STATIC_COMMAND_COUNT: usize = COMMAND_SPECS.len() - 1;
 
 /// A `max` large enough to never truncate the assembled candidate set in tests
 /// that assert on membership rather than truncation.

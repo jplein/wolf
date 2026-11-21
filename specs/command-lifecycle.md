@@ -129,13 +129,10 @@ Everything in (a); the dispatcher arm opens a Swift overlay (`openCommandPalette
 
 ### Shared steps (every flavor)
 
-- **Append** the `Command` variant last, and never reorder: the discriminant contract is append-only.
-- Add the `COMMAND_SPECS` row: id, ex_command, title, menu group.
-- Bump `EXPECTED_COMMAND_COUNT` and add the index, round-trip, and spec-field tests in `command.rs`, mirroring the existing `search_in_project_*` tests, and turn the standing last-row guard into a fixed-index guard.
-- Add the `command_kind` constant and extend `FfiCommand::from_command`.
-- Extend the Swift `CommandKind` and its `init?(ffi:)`, plus `CommandSeamTests`.
-- Add the `wolf_gnome::command_action::ui_action_for` arm. That match has no catch-all, so a new variant fails to compile in `wolf-gnome` until it is classified as a dispatched action, deferred, or without a GNOME equivalent. A dispatched command also becomes a row in the GTK command palette; a deferred one, or one with no GNOME equivalent, does not. To reach it from the primary menu or an accelerator, add its row in `crates/wolf-gnome/src/actions.rs` — see [`wolf-gnome-decisions.md`](../notes/wolf-gnome-decisions.md), "The accelerator namespace", for the invariant that `parse_accel` enforces.
-- Extend the contiguous-`0..=N` guard array in `crates/wolf-ffi/tests/commands.rs` and add a `:Wolf<Pascal>` drain step.
+- **Append** the `Command` variant last, inside `declare_commands!`, and never reorder: the discriminant contract is append-only.
+- Append its `COMMAND_SPECS` row: id, ex_command, title, menu group. The table test in `command.rs` checks that every variant has one row at its discriminant and that its id round-trips, so nothing is bumped.
+- Add the `command_kind` constant, at the next value, and its `FfiCommand::from_command` arm. `//crates/wolf-ffi:commands` drains every row and requires the row's index, so a moved value fails it.
+- Add the Swift `CommandKind` case, named the lowerCamelCase of the id, and its `init?(ffi:)` arm. `CommandSeamTests` reads the registry's count and each id's `command_kind` over the FFI, so a missing case or a wrong arm fails it.
+- Add the `wolf_gnome::command_action::ui_action_for` arm. That match has no catch-all, so a new variant fails to compile in `wolf-gnome` until it is classified as a dispatched action, deferred, or without a GNOME equivalent. A dispatched command also joins `EXPECTED_DISPATCHED_IDS` in that file's tests, and becomes a row in the GTK command palette; a deferred one, or one with no GNOME equivalent, does neither. To reach it from the primary menu or an accelerator, add its row in `crates/wolf-gnome/src/actions.rs` — see [`wolf-gnome-decisions.md`](../notes/wolf-gnome-decisions.md), "The accelerator namespace", for the invariant that `parse_accel` enforces.
 - If the command needs a tagged menu item, add an `AppMenu` `Tag` value and the item itself, with any accelerator. To enable it only in some states, add a case to `AppDelegate.validateMenuItem` backed by a `Snapshot` predicate bridged onto `WolfCoreHandle` — the `is_visual_mode` / `is_markdown_active` / `is_preview_active` precedent. A case may also fold in view-local state the core cannot see, as Copy's does with a preview pane's cached selection. A command with no such case, `Terminal` among them, is always enabled.
-- Every command except `CommandPalette` becomes a palette candidate, so bump `STATIC_COMMAND_COUNT` in `crates/wolf-core/tests/palette_rank.rs`.
 - Update the affected directory READMEs and this document, then run `prettier --write` on every edited Markdown file.
