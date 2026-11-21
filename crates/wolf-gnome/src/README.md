@@ -824,7 +824,7 @@ Purpose: a Neovim window's `win_viewport` projected onto a pane-local thumb rect
 
 #### `search_panel.rs`
 
-Purpose: [`sidebar.rs`](#sidebarrs)'s Search page — a field and two toggles over streaming ripgrep matches grouped by file, whose line rows open locations, not files.
+Purpose: [`sidebar.rs`](#sidebarrs)'s Search page — a field and three toggles over streaming ripgrep matches grouped by file, whose line rows open locations, not files.
 
 **Public API**
 
@@ -837,11 +837,11 @@ Purpose: [`sidebar.rs`](#sidebarrs)'s Search page — a field and two toggles ov
 - Typing and toggling run nothing; a toggle stales the status line. Enter runs a changed query or toggles, activating on unchanged ones; an empty query clears, since `rg` would match every line.
 - The list never takes focus, since each batch replaces every row; Up and Down move the selection from the field.
 - `activation_route` reads liveness first, as nothing covers the rows on a crash, keeping the blocking `preview_file` on `Alive`; a declined repoint falls back to `open_at`.
-- Regex starts on and case off, unseeded: `ignorecase()` blocks. `search_options_for` says why every file is searched.
-- Toggles never take focus on click: a focused one would take Enter and flip back.
+- Regex on and `All` off (Markdown-only) match the counterpart; case starts off, unseeded: `ignorecase()` blocks.
+- A toggle never takes focus on click: it would take Enter and flip back.
 - `focus_entry` grabs synchronously: the palette closes before dispatching, so nothing retakes focus.
 - The list's `navigation-sidebar` class keeps the selection tint neutral, so OCR can read the preselected row.
-- Escape, focus, toggles and the status line diverge from the [macOS panel](../../wolf-macos/Sources/WolfMacOS/README.md#searchviewswift); the module doc says why.
+- Escape, focus, the case default and the status line diverge from the [macOS panel](../../wolf-macos/Sources/WolfMacOS/README.md#searchviewswift); the module doc says why.
 
 **Gotchas**
 
