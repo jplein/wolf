@@ -664,6 +664,7 @@ Being scrupulous about this is the point of the section.
 - **A window resize while zoomed.** Nothing resizes the toplevel under `cage`, so that the unzoom fits the restored layout to the new size is unobserved.
 - **A zoomed drawer.** No smoke zooms the drawer, so Toggle Terminal closing a zoomed drawer and unzooming, and the other-pane commands doing nothing from it, reach no assertion in the live widget. Only the rules are pinned, in [`pane_zoom.rs`](#pane_zoomrs): K1 zooms the drawer, K7 keeps the zoom on a Toggle Terminal from it, K5 unzooms at its close, K8 makes the other-pane commands do nothing from it, and P1 saves it as no zoomed leaf.
 - **Closing the zoomed pane.** Neovim moves its current window off a closed zoomed pane, and `update_active_pane` reads that as a focus move, which unzooms, so the live widget cannot tell it from the `PanesChanged` unzoom in `detect_closes`: deleting that call turns no smoke red. The call still matters for a zoomed pane that is not current, in an unselected tab, and K5 pins its rule.
+- **A split while zoomed.** `<C-w>v` makes the new window Neovim's current one, and `update_active_pane` reads that as a focus move, which unzooms. So the main zoom smoke's S leg cannot tell it from the `Split` unzoom in `apply_split`, and deleting that call leaves S green. O pins the rule live, since Preview in Another Pane leaves the current window on its source, and K4 in [`pane_zoom.rs`](#pane_zoomrs) pins it as a rule.
 
 ## Deliberate test gaps
 
