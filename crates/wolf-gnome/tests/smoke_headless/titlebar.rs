@@ -37,18 +37,18 @@ pub(crate) const TB_HEADER_ROW_INSET_PX: f64 = 3.0;
 pub(crate) const TB_HEADER_SHADE_PX: f64 = 1.0;
 
 /// How far in from each side of the output the two header spans start, past the start buttons
-/// (the Back/Forward pair, the sidebar's toggle group and Open) and the end ones (the primary
-/// menu and any window controls).
+/// (the Back/Forward pair and the sidebar's toggle group) and the end ones (the primary menu
+/// and any window controls).
 ///
 /// libadwaita 1.9.3 pads the bar's box by 7 px and spaces each group by 6 px, an image button
-/// is about 34 px wide and the toggle group about 75 px, so the start group ends near 196 px:
-/// 7 + 68 + 6 + 75 + 6 + 34. The rest is room for a window control more at the end.
+/// is about 34 px wide and the toggle group about 75 px, so the start group ends near 156 px:
+/// 7 + 68 + 6 + 75. The rest is room for a window control more at the end.
 pub(crate) const TB_HEADER_BUTTON_CLEARANCE_PX: f64 = 240.0;
 
 /// Half the width of the title band, centred on the output. It holds `~/project` in
 /// libadwaita's bold title with its 12 px side padding, about 100 px in all, and stops short of
 /// [`TB_HEADER_BUTTON_CLEARANCE_PX`], so the band holds the title and no icon.
-const TB_TITLE_HALF_WIDTH_PX: f64 = 120.0;
+pub(crate) const TB_TITLE_HALF_WIDTH_PX: f64 = 120.0;
 
 /// libadwaita 1.9.3's `tabbar tabbox { padding-top: 6px; padding-bottom: 6px }`. The bar's
 /// `.box` has `padding-top: 0`, so the bar's first 6 rows are its background with no tab in
@@ -70,7 +70,7 @@ const TB_TAB_X_INSET_PX: f64 = 8.0;
 ///
 /// Every band is clear of glyphs, icons and edges, so a correct fill gives 1.0, and the rest
 /// allows a stray antialiased pixel. A bar at another colour gives about 0.
-const TB_MIN_EXACT_SHARE: f64 = 0.98;
+pub(crate) const TB_MIN_EXACT_SHARE: f64 = 0.98;
 
 /// The luma difference from the expected background, on the configured scheme's side, at which
 /// a pixel counts as ink: lighter for `dark`, darker for `light`.

@@ -19,6 +19,7 @@ use super::editor::{
     PICKER_OCR, PUM_OCR_ITEM, PUM_OCR_ITEM2, SAVEAS_READBACK_NAMELESS_NAME, SAVEAS_TYPED_NAME,
     SAVE_FIXTURE_FILE, SAVE_READBACK_BEFORE_NAME,
 };
+use super::header_bar::{HB_READ_NAME, HB_TARGET_FILE};
 use super::panes::{
     CHORD_CLOSE_OCR_GONE, CHORD_CLOSE_OCR_KEEP, CLOSE_OCR_GONE, CLOSE_OCR_KEEP, FOCUS_OCR_LEFT,
     FOCUS_OCR_MARKER, FOCUS_OCR_RIGHT, HSPLIT_OCR_BOTTOM, HSPLIT_OCR_TOP, QUIT_OCR_GONE,
@@ -288,6 +289,10 @@ use super::*;
 /// * `header_bar_and_tab_bar_take_the_editor_background_dark_under_cage` and its light
 ///   twin capture four PNGs each and OCR none: their observables are exact-colour shares
 ///   and ink counts in bands derived from the geometry constants. Their readback is
+///   registered in [`RELAUNCH_FIXTURE_NAMES`] for the generic loop's sake.
+/// * `header_start_holds_nav_and_toggles_alone_under_cage` captures one PNG and OCRs it
+///   nowhere: its observables are ink columns in the header band, read against the bar's own
+///   background, and a Neovim readback of the buffer's name. Its fixture and readback are
 ///   registered in [`RELAUNCH_FIXTURE_NAMES`] for the generic loop's sake.
 /// * `frame_stats_report_covers_the_live_typing_path_under_cage` captures nothing
 ///   at all: its observable is the report file the running application appended to,
@@ -1470,6 +1475,18 @@ const RELAUNCH_FIXTURE_NAMES: &[(&str, &str, &str)] = &[
         TB_READ_NAME,
         "TB_READ_NAME",
         "header_bar_and_tab_bar_take_the_editor_background_dark_under_cage",
+    ),
+    // Registered for the generic loop; the header-bar smoke reads no OCR term. The fixture is the
+    // picker's target, and the readback's path is echoed in the cmdline.
+    (
+        HB_TARGET_FILE,
+        "HB_TARGET_FILE",
+        "header_start_holds_nav_and_toggles_alone_under_cage",
+    ),
+    (
+        HB_READ_NAME,
+        "HB_READ_NAME",
+        "header_start_holds_nav_and_toggles_alone_under_cage",
     ),
 ];
 

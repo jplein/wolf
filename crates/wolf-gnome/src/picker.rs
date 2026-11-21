@@ -1,7 +1,7 @@
 //! The GNOME file-picker UI for `wolf-gnome`.
 //!
 //! Trigger: the **`win.go-to-file`** action — bound to **Ctrl+Shift+O**, listed in
-//! the primary menu as "Go to File…", and wired to the header-bar Open button.
+//! the primary menu as "Go to File…".
 //! The picker has no trigger predicate of its own: the chord is resolved from
 //! [`crate::actions::ACTION_TABLE`] by a CAPTURE-phase controller
 //! ([`crate::shell`]), so it is guaranteed not to also be forwarded to Neovim (see

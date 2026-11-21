@@ -7,7 +7,6 @@
 //! is the header band's raw pixels, compared between captures of one run: two captures in one
 //! state must be identical there, and captures in different states must differ.
 
-use super::editor::SAVE_AS_GDK_DEBUG;
 use super::sidebar::{
     projsearch_sidebar_band, search_target_fixture_body, PROJSEARCH_FILE_TARGET,
     PROJSEARCH_OCR_RESULT, PROJSEARCH_QUERY,
@@ -54,7 +53,7 @@ const TG_BAR_PADDING_PX: f64 = 7.0;
 const TG_NAV_PAIR_WIDTH_PX: f64 = 68.0;
 
 /// libadwaita 1.9.3's spacing between the header bar's start children.
-const TG_BAR_SPACING_PX: f64 = 6.0;
+pub(crate) const TG_BAR_SPACING_PX: f64 = 6.0;
 
 /// libadwaita 1.9.3's padding of a toggle group around its toggles.
 const TG_GROUP_PADDING_PX: f64 = 3.0;
@@ -100,7 +99,7 @@ fn tg_files_x() -> f64 {
 }
 
 /// Centre of the Search toggle: one toggle and the gap right of [`tg_files_x`], about 136.
-fn tg_search_x() -> f64 {
+pub(crate) fn tg_search_x() -> f64 {
     tg_files_x() + TG_TOGGLE_WIDTH_PX + TG_TOGGLE_GAP_PX
 }
 
@@ -401,7 +400,7 @@ fn assert_sidebar_steps(smoke: &str, shots: &[Shot], expects: &[Expect]) {
 
 /// The header band the group's state is read from: the rows inside the header bar, clear of
 /// its top edge and its bottom shade, and the columns of the start buttons.
-fn tg_header_band() -> SampleRect {
+pub(crate) fn tg_header_band() -> SampleRect {
     let band = SampleRect {
         x0: 0,
         x1: pixel_index(
@@ -592,9 +591,6 @@ impl<'a> GroupRun<'a> {
 /// | C10 | `on_sidebar_toggle_click`'s `Hide` arm does nothing | capture 2 reads Search |
 /// | C11 | delete `self.inner.search.focus_entry()` from `show_search_panel` | capture 3 lacks the result |
 /// | C12 | pack the toggle group before `nav_box` | capture 1 reads Files: the clicks land on Back and Forward |
-///
-/// It exports `GDK_DEBUG=no-portals`: a click that misses the group can land on Open, whose
-/// folder dialog must not reach a portal.
 #[test]
 fn toggle_clicks_show_switch_and_hide_the_sidebar_under_cage() {
     const SMOKE: &str = "toggle_clicks_show_switch_and_hide_the_sidebar_under_cage";
@@ -628,7 +624,6 @@ fn toggle_clicks_show_switch_and_hide_the_sidebar_under_cage() {
             ("TG_FILES_X", OsStr::new(&files_x_env)),
             ("TG_SEARCH_X", OsStr::new(&search_x_env)),
             ("TG_CLICK_Y", OsStr::new(&click_y_env)),
-            ("GDK_DEBUG", OsStr::new(SAVE_AS_GDK_DEBUG)),
         ],
     );
     assert_pointer_scenario_succeeded(SMOKE, status, &cwd, last);
@@ -656,7 +651,8 @@ fn toggle_clicks_show_switch_and_hide_the_sidebar_under_cage() {
                 causes: "Files: the click did not reach the group's rule. If the group drew \
                          Search active, the toggle's own activation ran instead, because the \
                          press was not claimed; if nothing moved, the click landed outside the \
-                         group, on Back, Forward or Open, where TG_FILES_X and TG_SEARCH_X land \
+                         group, on Back, Forward or the bar beside them, where TG_FILES_X and \
+                         TG_SEARCH_X land \
                          without the group or with it packed elsewhere. Hidden: the click reached \
                          the rule as Files, the page already up, so the rule hid the sidebar; \
                          `connect_click` is not passing `toggle_at`'s answer. A result here means \

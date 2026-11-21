@@ -161,6 +161,7 @@ mod drawer_divider;
 mod editor;
 mod fixture_guards;
 mod frame_stats;
+mod header_bar;
 mod lighthouse;
 mod packaged;
 mod panes;

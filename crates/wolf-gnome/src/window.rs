@@ -203,9 +203,7 @@ use crate::palette::{self, PaletteHandle};
 use crate::picker::{self, PickerHandle};
 use crate::ready_seam;
 use crate::search_panel::{self, SearchPanelHandle};
-use crate::shell::{
-    self, ShellParts, GO_TO_FILE_ACTION, HISTORY_BACK_ACTION, HISTORY_FORWARD_ACTION,
-};
+use crate::shell::{self, ShellParts, HISTORY_BACK_ACTION, HISTORY_FORWARD_ACTION};
 use crate::sidebar;
 use crate::state_seam::{self, RestorePlan};
 use crate::tab_view::{self, RestoreTabs, TabParts, TabsHandle, TabsParts};
@@ -567,12 +565,6 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
     header.pack_start(&nav_box);
     header.pack_start(&sidebar.toggles().widget());
 
-    let open_button = gtk::Button::builder()
-        .icon_name("document-open-symbolic")
-        .tooltip_text("Open file (Ctrl+Shift+O)")
-        .build();
-    header.pack_start(&open_button);
-
     let menu_button = gtk::MenuButton::builder()
         .icon_name("open-menu-symbolic")
         .tooltip_text("Main menu")
@@ -622,7 +614,7 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
     }
 
     // The `win.*` actions, accelerators and command drain, installed before `present()` so the menu
-    // and header button resolve them; the `app.*` rows are the coordinator's.
+    // resolves them; the `app.*` rows are the coordinator's.
     let shell = shell::build(ShellParts {
         core: &core,
         window: &window,
@@ -633,7 +625,6 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
         tree: &tree,
         sidebar: &sidebar,
         paned: &paned,
-        open_button: &open_button,
         nav_back_button: &nav_back_button,
         nav_forward_button: &nav_forward_button,
         sidebar_shown: plan.sidebar_visible,
@@ -647,26 +638,13 @@ pub fn build(parts: WindowParts<'_>) -> Option<WindowHandle> {
     shell.install_actions(app);
     shell.set_empty_state(empty);
 
-    // Explicit activation rather than the `action-name` property: a widget naming a not-yet-installed
-    // action renders insensitive.
-    {
-        let window = window.clone();
-        open_button.connect_clicked(move |_button| {
-            // Qualified: `gtk::Widget::activate_action` takes the `win.`-prefixed name and reports failure;
-            // `gio::ActionGroup`'s takes a bare name and returns nothing.
-            if let Err(err) =
-                gtk::prelude::WidgetExt::activate_action(&window, GO_TO_FILE_ACTION, None)
-            {
-                eprintln!("wolf-gnome: failed to activate {GO_TO_FILE_ACTION}: {err}");
-            }
-        });
-    }
-
-    // The toolbar buttons activate their chords' actions in the Open button's shape. No smoke clicks
-    // them, so that shape is the coverage: crates/wolf-gnome/tests/README.md#deliberate-test-gaps
+    // Explicit activation, not `action-name`, which renders insensitive while its action is absent.
+    // No smoke clicks these: crates/wolf-gnome/tests/README.md#deliberate-test-gaps
     {
         let window = window.clone();
         nav_back_button.connect_clicked(move |_button| {
+            // Qualified: `gtk::Widget::activate_action` takes the `win.`-prefixed name and reports failure;
+            // `gio::ActionGroup`'s takes a bare name and returns nothing.
             if let Err(err) =
                 gtk::prelude::WidgetExt::activate_action(&window, HISTORY_BACK_ACTION, None)
             {

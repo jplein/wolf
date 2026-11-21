@@ -250,7 +250,6 @@ use crate::workspace;
 const OPEN_FOLDER_ACTION: &str = "win.open-folder";
 
 /// The action that opens the in-window file picker (disabled in the empty state).
-/// Also the header bar's Open button target.
 pub(crate) const GO_TO_FILE_ACTION: &str = "win.go-to-file";
 
 /// The action that shows the sidebar's project-search panel (disabled in the empty
@@ -375,8 +374,6 @@ pub struct ShellParts<'a> {
     pub sidebar: &'a SidebarHandle,
     /// The window's outer `gtk::Paned` (sidebar | editor).
     pub paned: &'a gtk::Paned,
-    /// The header bar's Open button, desensitized in the empty state.
-    pub open_button: &'a gtk::Button,
     /// The header bar's Back button, desensitized by
     /// [`crate::nav_ui::nav_buttons`] on every wake.
     pub nav_back_button: &'a gtk::Button,
@@ -429,8 +426,6 @@ struct ShellInner {
     sidebar: SidebarHandle,
     /// The outer `gtk::Paned` whose divider collapses in the empty state.
     paned: gtk::Paned,
-    /// The header bar's Open button; insensitive in the empty state.
-    open_button: gtk::Button,
     /// The header bar's Back button; its sensitivity is recomputed on every wake
     /// by [`AppShell::refresh_nav_buttons`].
     nav_back_button: gtk::Button,
@@ -604,7 +599,6 @@ pub fn build(parts: ShellParts<'_>) -> AppShell {
         tree: parts.tree.clone(),
         sidebar: parts.sidebar.clone(),
         paned: parts.paned.clone(),
-        open_button: parts.open_button.clone(),
         nav_back_button: parts.nav_back_button.clone(),
         nav_forward_button: parts.nav_forward_button.clone(),
         sidebar_shown: Cell::new(parts.sidebar_shown),
@@ -878,7 +872,6 @@ impl AppShell {
         // Never `sidebar.set_visible` directly: a toggle and the empty state are two inputs to one rule,
         // or the next `set_empty_state(false)` undoes the user's toggle.
         self.apply_sidebar_visibility();
-        self.inner.open_button.set_sensitive(!empty);
         self.inner.sidebar.toggles().set_sensitive(!empty);
         if let Some(action) = self.inner.go_to_file.borrow().as_ref() {
             action.set_enabled(!empty);

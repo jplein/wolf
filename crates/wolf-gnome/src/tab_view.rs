@@ -281,8 +281,8 @@ impl TabHandle {
     /// Shows or hides this tab's empty state and keeps its persisted `cwd` in step.
     ///
     /// The widget half is per tab because the empty state is opaque and full-bleed
-    /// over a tab's own panes; the sidebar, the header buttons and the `win.`
-    /// actions the empty state also drives are per window and stay in
+    /// over a tab's own panes; the sidebar, its header-bar toggle group and the
+    /// `win.` actions the empty state also drives are per window and stay in
     /// [`crate::shell::AppShell::set_empty_state`].
     pub fn set_empty(&self, empty: bool) {
         self.inner.empty_state.set_visible(empty);
