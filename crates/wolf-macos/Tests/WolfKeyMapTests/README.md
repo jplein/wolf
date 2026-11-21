@@ -49,7 +49,7 @@ Note that the nearby `swift_format_srcs` glob feeds lint and format only, not te
 
 **Covers**
 
-- Every discriminant below `wolf_ffi_command_count()` decodes to a case, so a core command with no Swift case fails.
+- Every discriminant below `wolf_ffi_command_count()` decodes to the case whose id `wolf_ffi_command_kind` maps back to that discriminant. So a core command with no Swift case fails, whether its arm is missing or decodes it to another command's case.
 - The count itself and `.max` decode to `nil`.
 - Each of `CommandKind.allCases` decodes from the `wolf_ffi_command_kind` of the id its name gives by the [naming rule](../../Sources/WolfKeyMap/README.md#commandseamswift), which catches a moved arm or a moved `command_kind` constant.
 
