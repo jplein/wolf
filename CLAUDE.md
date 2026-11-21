@@ -115,6 +115,8 @@ When a comment is over the limit, apply the two-question test to every sentence,
 
 A comment, doc comments included, says what the code does and why, never how many callers, routes or tests use it, as in "the one route to a terminal pane". Nothing checks such a count, and it goes false when the next one is added.
 
+A comment or doc never restates a registry's length, its last entry or a range of its discriminants, such as "`0` … `30`" or "`NEW_WINDOW` .. `ZOOM_PANE`"; it names or links the registry instead. Nothing keeps such a copy true, and appending an entry makes it false.
+
 A Markdown path written in a comment is root-relative, and when it starts with `notes/`, `specs/`, `crates/`, `tools/`, `runtime/`, `bazel/` or `resources/`, doc-lint checks that it exists and that its anchor matches a heading. There is no suppression comment. Never convert a comment to a doc comment to escape the limit.
 
 The limits are enforced by [doc-lint](tools/doc-lint/README.md), which gates on both platforms through [`gates.sh`](gates.sh): `//tools/lint:comments` under `bazel test //...` and the checkout-wide `doc-lint --root` on macOS, and every rule through Cargo on Linux.
