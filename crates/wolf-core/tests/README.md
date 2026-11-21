@@ -386,7 +386,7 @@ Headless: `rank_palette` is IO-free, so the target needs no nvim, no runfiles, a
 
 **Gotchas**
 
-- `STATIC_COMMAND_COUNT` is a hand-maintained mirror of `COMMAND_SPECS.len() - 1` (the palette excludes only its own invoking command, and gates nothing else). Registering a new command fails two assertions here until the constant is bumped.
+- `STATIC_COMMAND_COUNT` is `COMMAND_SPECS.len() - 1`, which holds because the palette excludes only its own invoking command and gates nothing else. A second exclusion or a gate fails the tests that use it, while a new command needs no edit here.
 
 #### `pane_buffers.rs`
 

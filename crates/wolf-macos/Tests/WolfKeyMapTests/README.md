@@ -49,11 +49,13 @@ Note that the nearby `swift_format_srcs` glob feeds lint and format only, not te
 
 **Covers**
 
-- `CommandKind(ffi:)` over the whole discriminant range, one assertion per case, keeping the Swift enum in lockstep with `mod command_kind` in `crates/wolf-ffi/src/lib.rs` and the `wolf_core::Command` variant order.
+- Every discriminant below `wolf_ffi_command_count()` decodes to a case, so a core command with no Swift case fails.
+- The count itself and `.max` decode to `nil`.
+- Each of `CommandKind.allCases` decodes from the `wolf_ffi_command_kind` of the id its name gives by the [naming rule](../../Sources/WolfKeyMap/README.md#commandseamswift), which catches a moved arm or a moved `command_kind` constant.
 
 **Gotchas**
 
-- The first out-of-range probe tracks the registry's high-water mark and must be bumped in lockstep whenever a command is appended. Leaving it stale turns the new case's decode into a silently passing nil assertion — the same trap as `AppearanceSeamTests`.
+- The file calls the bridge's free functions, so it reads the linked Rust registry and `command_kind`, and has no hand-typed count or probe to bump when a command is appended. A kind of `255` in a failure means no core id matches the case's name.
 
 #### `CwdTitleSeamTests.swift`
 

@@ -119,18 +119,18 @@ A `command_palette()` session: static registry rows, `add_window` and recent-fol
 
 - One `#[test]` per binary by design: the case points the process-global `WOLF_STATE_DIR` at a tempdir before `wolf_ffi_start`, and the MRU stores open under it exactly once at core start.
 - A session fixes its candidate rows and MRU order at construction, so observing a new window, recent dir or recorded key means opening a fresh `command_palette()`.
-- The palette excludes its own invoking command, so the highest static `command_kind` that appears as a row is one below `CommandPalette`.
+- The kinds come from `wolf_ffi_command_count` and `wolf_ffi_command_kind`: every kind below the count but `command_palette`'s must appear as a static row, so a new command needs no edit here.
 
 #### `commands.rs`
 
 **Covers**
 
-The command channel: typing each `:Wolf…` Ex command and draining an `FfiCommand` of the matching `kind()` from `drain_commands()`. Spawns a real Neovim: needs `WOLF_NVIM_BIN`, and the `:commands` target stages the nvim runfiles and is tagged `no-sandbox`.
+The command channel and the Rust side's discriminant record: for every `wolf_core::COMMAND_SPECS` row, typing its `:Wolf…` Ex command drains an `FfiCommand` whose `kind()` is the row's index, and `wolf_ffi_command_kind` of its id is that index too. A moved, reordered or inserted `command_kind` fails here, while an appended command passes with no edit to this file. Spawns a real Neovim: needs `WOLF_NVIM_BIN`, and the `:commands` target stages the nvim runfiles and is tagged `no-sandbox`.
 
 **Gotchas**
 
-- The drains are inert — no front-end is present to act on them, so nothing closes, quits or opens. Only add commands whose observable effect stays confined to the queue; the editor-affecting halves are covered in their own files.
-- The file re-declares every `command_kind` discriminant locally and asserts the set is contiguous from zero, as a drift guard. A new `wolf_core::Command` variant means adding the const, extending both sides of that guard, and appending a drain case.
+- Typing every command is safe only because each Ex face just `rpcnotify`s its id (`_G.wolf_setup_commands` in `runtime/nvim/init.lua`) and no front-end is present to act on a drain, so nothing closes, quits or splits. The editor-affecting halves are covered in their own files.
+- Each step takes the first command drained rather than waiting for the expected kind, so a wrong discriminant fails at once instead of after `FLUSH_TIMEOUT`.
 
 #### `config.rs`
 

@@ -192,6 +192,7 @@ The canonical, platform-agnostic registry of Wolf commands. A command is a no-pa
 **Decisions**
 
 - The `Command` variant order is a discriminant contract shared with `wolf-ffi`'s `command_kind` and the Swift `CommandKind` port, and the `COMMAND_SPECS` slice index equals that discriminant. Adding a command means appending a variant and a row; reordering or removing one breaks every consumer across the FFI.
+- `Command` is declared through `declare_commands!`, which re-emits it unchanged and gives the tests its variant count. Stable Rust cannot count variants, so a plain `enum` would hide a variant with no row from the table test.
 - The id-to-`ex_command` mapping is stored explicitly as data rather than computed by a snake-to-Pascal transform, so the registry remains the single source of truth.
 
 **Gotchas**

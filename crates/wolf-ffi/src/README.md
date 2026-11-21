@@ -155,6 +155,8 @@ One captive nvim is one project; each of its views binds to a distinct tabpage.
 
 - `drain_commands(&self) -> Vec<FfiCommand>` — User-triggered `:Wolf…` Ex-commands and `require('wolf')` Lua calls, in arrival order.
 - `FfiCommand::kind() -> u8` — `mod command_kind`. The packing match is exhaustive, so a new `wolf_core::Command` variant is a compile error here.
+- `wolf_ffi_command_count() -> u8` — A free function, no session needed: `wolf_core::COMMAND_SPECS.len()`, one past the highest `command_kind`. Panics should the registry outgrow a `u8`, which the discriminants could not carry either.
+- `wolf_ffi_command_kind(id: String) -> u8` — A free function, no session needed: the `command_kind` the command with registry id `id` drains as, or `u8::MAX` for an unknown id. The app calls neither function. They exist for the tests: `CommandSeamTests` checks Swift's decode against the registry through both, and the Rust tests read a kind by id rather than hand-typing it.
 - `command_palette(&self) -> FfiCommandPalette` — Seeded with the recent directories and the command MRU.
 - `FfiCommandPalette::add_window(&self, index: u16, cwd: String)` — One other open window; the caller excludes the current one. An empty `cwd` renders as "Untitled".
 - `FfiCommandPalette::ranked(&self, query: String, max: usize) -> Vec<FfiCommandRow>` — Assembles the static commands, the added windows, and the recent directories, ranked MRU-first. There is no wake: candidates are fixed when the palette opens, and this re-filters synchronously per keystroke.

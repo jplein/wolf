@@ -137,7 +137,7 @@ The GTK sidebar re-roots from one settle point, on the working directory Neovim 
 | `:q` / `:qa` mapped to close pane / window   | `feat/colon-q-remapping`                                  | [x]   | [x]   |
 | ⌘N opens a new untitled Markdown buffer      | `feat/colon-q-remapping` (`0266b96`)                      | [x]   | [x]   |
 
-`wolf-gnome` calls `WolfCore::drain_commands()` on every render wake, behind a total `Command` to `UiAction` mapping in `command_action.rs` with no catch-all arm, so a new core command fails to compile until it is classified. Of the 31 commands, 27 dispatch, 1 has no GNOME equivalent (`HideApplication`, since the shell owns window visibility), and 3 are deferred with a distinct printed reason.
+`wolf-gnome` calls `WolfCore::drain_commands()` on every render wake, behind a total `Command` to `UiAction` mapping in `command_action.rs` with no catch-all arm, so a new core command fails to compile until it is classified. Every command dispatches except `HideApplication`, which has no GNOME equivalent since the shell owns window visibility, and the font-size commands (`ResetFontSize`, `IncreaseFontSize`, `DecreaseFontSize`), which are deferred with a distinct printed reason.
 
 The Linux multiple-windows box means N windows in one process: a coordinator owns the single state store, the one config read and the one cell measurement, while each window carries its own captive Neovim, its own wake and its own subtree of `state.json`. New Window opens a fresh empty window and inherits nothing from the window it was asked from — not the working directory, not the layout, not the size — which is macOS's behaviour for the same row.
 

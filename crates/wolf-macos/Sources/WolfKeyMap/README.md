@@ -73,12 +73,13 @@ Purpose: `CommandKind`, the typed form of a no-parameter, no-return user action,
 
 **Public API**
 
-- `CommandKind` — one case per `wolf_core::Command` variant, each documented in place with the action it performs.
-- `init?(ffi: UInt8)` — `nil` for any discriminant outside the known range.
+- `CommandKind` — `CaseIterable`, one case per `wolf_core::Command` variant, each documented in place with the action it performs.
+- `init?(ffi: UInt8)` — `nil` for any discriminant no case holds.
 
 **Decisions**
 
-- Case order is the contract shared with `wolf-ffi`'s `mod command_kind` and `wolf_core::Command`. This is a plain enum rather than a `RawRepresentable` one, so the mapping is written out explicitly in `init?(ffi:)`; a new command needs a case, an arm there, and a matching constant in the Rust module.
+- The arms of `init?(ffi:)` are the Swift side's record of each discriminant, which [`CommandSeamTests`](../../Tests/WolfKeyMapTests/README.md#commandseamtestsswift) checks over the FFI against the registry and `wolf-ffi`'s `mod command_kind`. This is a plain enum rather than a `RawRepresentable` one, so a new command needs a case and an arm, besides its Rust constant.
+- Each case is named the lowerCamelCase of its registry id (`go_to_file` is `goToFile`). The test derives each case's id from its name to ask Rust for its discriminant, so a case named any other way fails there; `CaseIterable` is what lets it enumerate them.
 
 **Gotchas**
 

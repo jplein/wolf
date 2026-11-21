@@ -50,7 +50,6 @@ Per CLAUDE.md, a divergence between documentation and implementation is a bug. T
 | `crates/wolf-macos/Sources/WolfKeyMap/Sidebar/TreeRefreshGate.swift` | Header names `FileTreeView` as the only owner. `SearchView.swift` also constructs one and uses all four methods.                                              |
 | `crates/wolf-macos/Sources/WolfMacOS/WolfWindowController.swift`     | Says `EmptyStateView` is added first so the picker overlays sit above it. The pickers are `PickerPanelHost` child panels, so that ordering carries no weight. |
 | `bazel/nvim-treesitter/extensions.bzl`                               | Overlay comment calls the plugin highlighting-disabled. Its own `BUILD.bazel` and `init.lua` enable highlighting.                                             |
-| `crates/wolf-ffi/tests/commands.rs`                                  | Const docs carry `renumbered from 18 to 20` and `renamed from Close File`.                                                                                    |
 
 ## 4. Stale planning scaffolding in source files
 
@@ -81,7 +80,6 @@ This is the single largest cleanup available and it is almost entirely deletion.
 ## 6. Possible defects worth a look
 
 - **`ShortcutSeam.isNewWindowTrigger` cannot do its job.** Verified: it takes `charactersIgnoringModifiers` and `command` and never consults shift, so it returns true for both `⌘N` and `⇧⌘N`. Wiring it into `keyDown` as-is would make New and New Window indistinguishable.
-- **`STATIC_COMMAND_COUNT` is a hand-maintained mirror.** `STATIC_COMMAND_COUNT` in `crates/wolf-core/tests/palette_rank.rs` hardcodes the count, which matches `COMMAND_SPECS.len() - 1` (every spec but `CommandPalette`) — so this is a latent hazard, not a live failure. Adding a command breaks two assertions until someone bumps it. Deriving it from `COMMAND_SPECS.len() - 1` removes the trap.
 - **Sidebar search toggles may be seeded inconsistently.** Reported: `MainWindow.showSidebar(panel: .search)`, which `WolfWindowController` forwards to, focuses the field but never calls `seedToggles()`, which only the toolbar's search segment does. Worth confirming the intent.
 - **`DividerDragSeam` takes `leadingOverhead` and `trailingOverhead` separately**, but `PaneContainerView.mouseDragged` passes the same value to both. Reported. If the asymmetry is deliberate, it needs a comment; otherwise it reads as dead generality a future refactor would collapse.
 - **`crates/wolf-gnome/testdata/fonts.conf` is a template, not a usable config.** Reported: `flake.nix` substitutes `@DEJAVU_FONTS@` and points `FONTCONFIG_FILE` at a temporary copy, so editing the committed file has no effect until the next `nix develop`.
