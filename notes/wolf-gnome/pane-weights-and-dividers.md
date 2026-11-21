@@ -1,6 +1,6 @@
 # Pane weights and dividers
 
-Last verified at commit `2946f3346cade6765e37b865c419989246df0fa6`.
+Last verified at commit `a0c40c62bef91032e684f7cb711822fbbbeaf053`.
 
 **A weight is a proportion of width**, and it is that everywhere it appears: in the pure tree, in `pane_layout::encode`, in `state.json`, and on screen. `geometry::divider_position` therefore scales it by the paned's own span — its width for a horizontal paned, its height for a vertical one — so equal weights give equal widths, and `min_position` / `max_position` are the clamp and never the scale. Scaling by the travel instead spends the end child's minimum size at every fraction, so even a fresh, undragged split comes out lopsided by exactly that minimum.
 
@@ -15,6 +15,10 @@ An n-ary split renders as a right-leaning chain of binary `gtk::Paned`, so a div
 **There are two floors under a divider and neither subsumes the other.** `MIN_DIVIDER_FRACTION` is the arithmetic one: it keeps a dragged weight strictly positive in the tree, where a zero would survive every round trip. `divider_position`'s clamp into `min_position` / `max_position` is the pixel one: it keeps a position inside what GTK will accept for the two children's minimum sizes, which no fraction can know about. A weight can be well clear of the first and still be clamped by the second, and where the clamp binds — a span too small for both floors — equal widths are unreachable and the clamp is the right answer, since averaging through a floor reflows both panes to one column.
 
 **The terminal drawer's divider follows the same rules through `drawer::DrawerShare`**: the same span denominator and the same GTK clamp, but a drag writes the drawer's share, the complement of the position's fraction, rather than a tree weight. It needs no `MIN_DIVIDER_FRACTION`, which exists because a zero weight survives `state.json`: the share is never persisted, and every use of it goes through the pixel clamp.
+
+**A resize's clamp reaches the divider guard looking like a drag.** On a resize GTK rescales a set position in proportion, clamps it, and queues `position` and then `max-position` in one notify freeze, and GLib dispatches a frozen queue in reverse. So the `max-position` re-apply runs first and re-arms `DividerGuard`'s `last_max` and `last_span` at the new values, and GTK's queued `position` notify then passes both.
+
+`DividerGuard::drag_span` therefore refuses a notify at `last_position`, the position the last re-apply set or the last accepted drag left, which is what that queued notify reports. Without the refusal, a shrink that clamps writes the clamp into the weight or the share, and a grow back does not return what the user left. The `max` and `span` tests refuse only a notify GTK sends ahead of the re-apply, which [no smoke measures](../../crates/wolf-gnome/tests/README.md#what-is-still-unproven).
 
 The renormalization at the end of `set_divider_fraction` is repair rather than tidiness: `from_layout` never checks that a saved vector sums to 1, and `state.json` carries `weights` as plain JSON through `pane_layout::decode` into it, so a denormalized split is a reachable input. A non-finite fraction is refused outright rather than clamped, because a NaN weight is the loud failure of the pair: `from_layout` rejects the whole tree at the next launch and the saved layout is gone.
 

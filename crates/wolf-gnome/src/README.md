@@ -599,14 +599,14 @@ Purpose: the GTK glue turning `layout`'s pane tree into nested `gtk::Paned`, one
 
 **Decisions**
 
-- A dragged divider writes the tree's weights, since a rebuild destroys the paned, and re-applies on each `max-position` notify, since nested allocation reports intermediate values.
-- `realize_layout` rebuilds into Neovim's current tabpage, so restore materialization is its only legal caller; `request_layout_rebuild` defers instead.
+- A dragged divider writes the tree's weights, since rebuilds destroy paneds, and re-applies on each `max-position` notify, since nested allocation reports intermediate values; a resize's clamp is refused ([why](../../../notes/wolf-gnome/pane-weights-and-dividers.md)).
+- `realize_layout` rebuilds into Neovim's current tabpage, so only restore materialization calls it; `request_layout_rebuild` defers.
 - [`preview_coalescer.rs`](#preview_coalescerrs)'s state is per tab, since a rebuild replaces `panes` wholesale.
 - Pointer input is one all-button `gtk::GestureDrag` ([why](../../../notes/crates/wolf-gnome/src/pane_view.rs.md#one-drag-gesture)), pinning target and button at press; editor panes take only the primary.
 - A terminal pane paints through its own [`TerminalCanvas`](terminal/README.md#canvasrs) ([why](../../../notes/wolf-gnome/terminal-panes.md)).
-- Each pane's status and `b:wolf_full_width` cache once per wake: a use-time read re-enters `draw_pane`'s guard, and paint, pointer and resize must agree in one frame.
+- Each pane's status and `b:wolf_full_width` cache once per wake: a use-time read re-enters `draw_pane`'s guard, and paint, pointer and resize must agree per frame.
 - One funnel sends every grid resize, against the size last requested, not the lagging snapshot grid; it runs each wake, as a lifted cap re-divides a still allocation.
-- The drawer's paned exists only while one is bound, re-taking the window's share each wake; a zoom shows its host alone, touching no weight or share ([why](../../../notes/wolf-gnome/window-structure.md)). `reset_after_restart` clears the drawer `detect_closes` misses.
+- The drawer's paned exists only while one is bound, re-taking the share each wake; a zoom shows its host alone, touching no weight or share ([why](../../../notes/wolf-gnome/window-structure.md)). `reset_after_restart` clears the drawer `detect_closes` misses.
 
 #### `pane_zoom.rs`
 

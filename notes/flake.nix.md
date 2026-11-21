@@ -80,7 +80,7 @@ The helpers are found through an absolute path compiled into `libwebkitgtk-6.0.s
 
 ## No check phase
 
-The suite `cargo test -p wolf-gnome` runs is not a headless unit suite, and running it in the Nix build is impossible, not merely slow. Most tests launch `cage`, a wlroots compositor needing a writable `XDG_RUNTIME_DIR` at mode 0700, alongside `wtype`, `grim`, `tesseract` and `wolf-pointer-inject`; every real-nvim test needs `WOLF_NVIM_BIN`; and `wolf-core`'s swap-recovery test needs a writable `$HOME`. The sandbox has no `/run/user/<uid>`, no `/dev/dri` for GTK's GL renderer, and no session bus.
+The suite `cargo test -p wolf-gnome` runs is not a headless unit suite, and running it in the Nix build is impossible, not merely slow. Most tests launch `cage`, a wlroots compositor needing a writable `XDG_RUNTIME_DIR` at mode 0700, alongside `wtype`, `grim`, `tesseract`, `wlr-randr` and `wolf-pointer-inject`; every real-nvim test needs `WOLF_NVIM_BIN`; and `wolf-core`'s swap-recovery test needs a writable `$HOME`. The sandbox has no `/run/user/<uid>`, no `/dev/dri` for GTK's GL renderer, and no session bus.
 
 A curated subset would run only the pure seams the checkout's `cargo test` already covers and would say nothing about the artifact. Every piece of evidence about the artifact therefore comes from outside the sandbox, through `./tools/wolf-package-smoke.sh`: `crates/wolf-gnome/tests/packaged_layout.rs` and the ignored packaged smokes in `crates/wolf-gnome/tests/smoke_headless/packaged.rs`.
 

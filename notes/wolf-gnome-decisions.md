@@ -168,7 +168,7 @@ A dead Neovim is restarted automatically and a wedged one never is, no blocking 
 
 ## The headless smoke test
 
-The GTK glue is covered by end-to-end smokes that launch the real binary under `cage`, the headless wlroots compositor, drive it with `wtype` and [`wolf-pointer-inject`](../tools/wolf-pointer-inject/README.md), screenshot the live window with `grim`, and read it back with `tesseract`. They prove the stack actually draws a window a human could see. They are not opt-in: they run in the ordinary `cargo test` suite, which is most of why it is slow. See [`tests/README.md`](../crates/wolf-gnome/tests/README.md) for the full list.
+The GTK glue is covered by end-to-end smokes that launch the real binary under `cage`, the headless wlroots compositor, drive it with `wtype` and [`wolf-pointer-inject`](../tools/wolf-pointer-inject/README.md), screenshot the live window with `grim`, read it back with `tesseract`, and resize it by resizing the headless output with `wlr-randr`. They prove the stack actually draws a window a human could see. They are not opt-in: they run in the ordinary `cargo test` suite, which is most of why it is slow. See [`tests/README.md`](../crates/wolf-gnome/tests/README.md) for the full list.
 
 A missing precondition fails loud rather than skipping quietly, because absence means the smoke toolchain was not provisioned; the environment they need is [`build.md`](../build.md)'s.
 
