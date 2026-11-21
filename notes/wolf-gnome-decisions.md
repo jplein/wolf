@@ -196,7 +196,9 @@ Every smoke holds one of a bounded number of cage slots for its whole body, beca
 
 **`is_active` and `Seat::keyboard()` are both rejected readings.** Under `cage` the toplevel turns active only after a real key arrives, so waiting for it deadlocks. `Seat::keyboard()` answers GDK's logical "Core Keyboard", which exists on a seat with no keyboard at all, so testing it is vacuous. `seat.devices(KEYBOARD)` lists only non-logical devices, so it turns non-empty when the virtual keyboard appears and stays so after the `wtype` that created it exits.
 
-**The input window is the last mapped.** All windows share one Wayland connection, so the ordinal of each window's first frame-clock `after-paint` is its map order. Only that window must also have every bound pane's requested grid applied by Neovim, which is what makes pointer targets and `winwidth` readbacks mean what they say. An older, covered window may never be redrawn — inferred from wlroots' occlusion handling, not measured — so requiring it to be sized could hang.
+**The input window is the last mapped.** All windows share one Wayland connection, so the ordinal of each window's first frame-clock `after-paint` is its map order. Only that window must also have every shown pane's requested grid applied by Neovim, which is what makes pointer targets and `winwidth` readbacks mean what they say. An older, covered window may never be redrawn — inferred from wlroots' occlusion handling, not measured — so requiring it to be sized could hang.
+
+**While a tab is zoomed, only the zoomed pane counts.** A hidden pane is never allocated, so it never requests a grid, and counting it would leave a launch that restores a zoom never ready.
 
 **Every launch window must finish its restore.** A pending saved layout, or a restore queue that still owes pages, is consumed on a later wake with blocking RPCs that would interleave with typed keys. An abandoned restore issues no further RPC and counts as finished. Every window must also have a live core, a bound pane and a painted frame.
 

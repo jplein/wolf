@@ -570,10 +570,11 @@ Purpose: the pure codec between the live pane tree, whose leaves are pane ids, a
 
 **Public API**
 
-- `resolve_leaves(&[(PaneId, WinContent)]) -> Option<HashMap<PaneId, LeafContent>>` — the step ahead of `encode`. `WinContent` is `Preview(source)`, `Buffer(path)`, `Terminal(cwd)` or `Unknown`, the last for a window in neither snapshot map.
+- `resolve_leaves(&[(PaneId, WinContent)]) -> Option<HashMap<PaneId, LeafContent>>` — the step ahead of `encode`; `WinContent::Unknown` is a window in neither snapshot map.
 - `LayoutGather` — one tab's gather answer: `Ready(Option<PaneNode>)`, whose `None` is content suppression, or `Refuse`.
-- `encode(layout, contents) -> PaneNode` — `contents` maps each leaf id to its `LeafContent`, a raw path plus preview and terminal flags; a missing id becomes an empty leaf.
+- `encode(layout, contents, zoomed) -> PaneNode` — a leaf id missing from `contents` becomes an empty leaf. It marks the `zoomed` leaf; the drawer's id marks none.
 - `decode(node, first_leaf_id) -> Option<(PaneTree, Vec<PaneId>)>` — leaf `i` is the pane for handle `i`, ids allocated in depth-first order.
+- `zoomed_leaf_index(node)` — the first marked leaf's index into `decode`'s leaf ids.
 - `is_empty_leaf(node)`, `leaf_count(node)`, `leaf_paths_dfs(node)`, `MAX_RESTORE_LEAVES`, `MAX_RESTORE_DEPTH`.
 
 **Decisions**
@@ -594,7 +595,7 @@ Purpose: the GTK glue turning `layout`'s pane tree into nested `gtk::Paned`, one
 - `reset_after_restart()`, `drawer_is_open()`, `request_terminal_restore(steps)`, `request_layout_rebuild(saved)`, `realize_layout(saved)`, `layout_snapshot() -> LayoutGather`, `snapshot_readiness()`, `readiness()`.
 - `active_terminal()`, `sync_terminal_focus(focused)`, `request_terminal(command)`.
 - `other_pane_target(prefer)` — [`other_pane_seam.rs`](#other_pane_seamrs)'s window: `Some(0)` splits, `None` no-ops.
-- `toggle_zoom()`, `allows_toggle_terminal()` — [`pane_zoom.rs`](#pane_zoomrs)'s rules.
+- `toggle_zoom()`, `toggle_terminal()` — [`pane_zoom.rs`](#pane_zoomrs)'s rules.
 
 **Decisions**
 
@@ -609,22 +610,24 @@ Purpose: the GTK glue turning `layout`'s pane tree into nested `gtk::Paned`, one
 
 #### `pane_zoom.rs`
 
-Purpose: the pure, GTK-free Zoom Pane rules: which pane a toggle zooms, which events unzoom, and what a zoom freezes or redirects. [`pane_view.rs`](#pane_viewrs) holds only the zoomed pane's id and asks these.
+Purpose: the pure, GTK-free Zoom Pane rules: which pane each event leaves zoomed, and where focus moves and other-pane commands go while zoomed.
 
 **Public API**
 
 - `zoomed_after(event, zoomed, active, panes) -> Option<PaneId>` — the zoomed pane after a `ZoomEvent`. `panes` must be the tree's leaves plus the open drawer, or the drawer cannot be zoomed and a lone leaf beside the drawer reads as nothing to hide.
-- `freezes_focus(zoomed)`, `allows_toggle_terminal(zoomed, drawer)`, `refocuses(resolved, zoomed)` — the focus move and Toggle Terminal a zoom makes inert, and whether Neovim's own move off the zoomed pane is sent back.
+- `ZoomEvent::FocusMove { target }` unzooms for another pane, `ToggleTerminal { drawer }` unless the drawer is zoomed, and `Restore(id)` zooms a pane in `panes` that is not alone.
+- `focus_origin(zoomed, from)` — the zoomed pane while zoomed, which `drawer::focus_target` resolves from in the unzoomed tree.
 - `other_pane_target(zoomed, drawer)` — read only while zoomed, in place of `other_pane_seam::target`.
 - `shown_alone(zoomed, bound) -> Option<PaneId>` — the host the pane area shows alone. A zoomed id with no host shows the whole layout, so a missed unzoom never blanks the pane area.
 
 **Decisions**
 
-- Ported from [`PaneZoom.swift`](../../wolf-macos/Sources/WolfKeyMap/README.md#panezoomswift), but it keeps the inert focus move and Toggle Terminal and the send-back where the contract unzooms ([limitation](../../../notes/wolf-gnome/present-limitations.md)). No divider exists while zoomed, so nothing freezes one, and `shown_alone` takes the place of `visibleRects`, since GTK allocates the one host shown and needs no rects.
+- Ported from [`PaneZoom.swift`](../../wolf-macos/Sources/WolfKeyMap/README.md#panezoomswift). Nothing freezes a divider, since none exists while zoomed, and `shown_alone` replaces `visibleRects`, as GTK allocates only the host shown.
+- A zoomed drawer's Toggle Terminal keeps the zoom until the drawer closes, so no hidden pane shows first.
 
 **Gotchas**
 
-- `pane_view.rs` applies `PanesChanged` after close detection, and `Split` and `DrawerOpen` after the guards that drop a split of the drawer or a second drawer, so a dropped one keeps the zoom. A restart and a restored layout clear the zoom.
+- `pane_view.rs` applies `Split` and `DrawerOpen` after the guards that drop a split of the drawer or a second drawer, so a dropped one keeps the zoom. `FocusMove` comes from a chord and from Neovim's own window change. A restart unzooms; a launch rebuild re-zooms the marked leaf.
 
 #### `persistence.rs`
 
