@@ -1,7 +1,7 @@
 //! Real-nvim end-to-end test of the record-on-`:cd` path for the GLOBAL
 //! recent-directories MRU: a `:cd <dir>` typed into the embedded nvim must flow
 //! through `apply_cwd` and land `<dir>` at the TOP of the always-on recent-dirs
-//! store (`<state-dir>/folder-mru.sqlite`).
+//! store (the `folder_mru` table of `<state-dir>/wolf.sqlite`).
 //!
 //! This drives a REAL, hermetic Neovim process (no mocks) and requires
 //! `WOLF_NVIM_BIN` (the shared harness fails loudly if it is unset). Modeled on
@@ -12,7 +12,7 @@
 //! tempdir), the recent-dirs store is ALWAYS-ON and reads `state_dir()`. So this
 //! test sets `WOLF_STATE_DIR` to a fresh tempdir BEFORE starting the core (the
 //! set-if-absent hermetic default in `common/mod.rs` then leaves it alone), and
-//! inspects the physical `folder-mru.sqlite` under that dir.
+//! inspects the physical `wolf.sqlite` under that dir.
 
 mod common;
 
@@ -35,7 +35,7 @@ fn cd_records_directory_at_top_of_recent_dirs() {
     let _ = common::require_nvim_bin();
 
     // The recent-dirs store reads state_dir() eagerly: pin it to a fresh tempdir before the core
-    // starts, so folder-mru.sqlite is inspectable and never the user's. Keep the guard alive.
+    // starts, so wolf.sqlite is inspectable and never the user's. Keep the guard alive.
     let state_dir = tempfile::tempdir().expect("failed to create temp state dir");
     std::env::set_var("WOLF_STATE_DIR", state_dir.path());
 

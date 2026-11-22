@@ -20,7 +20,7 @@ The `gtk::FileDialog` the button opens has no portal backend under cage, so the 
 
 No query narrows the list to one row: `score_entry` matches a subsequence of the label and `New` is a prefix of `New Window`, and both commands are dispatched, so both rows stay. `rank_matches` sorts on `(mru_group, mru_rank, Reverse(score), match_start, span, len, display)`, and for `new` the rows separate at `len`, so New Buffer is preselected.
 
-A command MRU holding `new_window` inverts that order and Enter opens a second window. The smoke is safe only because its per-run `WOLF_STATE_DIR` leaves `command-mru.sqlite` empty. `palette::tests::palette_rows_query_new_ranks_the_new_buffer_row_first` pins both the ranking and the inversion, since a screenshot cannot count or order palette rows.
+A command MRU holding `new_window` inverts that order and Enter opens a second window. The smoke is safe only because its per-run `WOLF_STATE_DIR` leaves the command MRU empty. `palette::tests::palette_rows_query_new_ranks_the_new_buffer_row_first` pins both the ranking and the inversion, since a screenshot cannot count or order palette rows.
 
 ## Buffer picker fixtures
 

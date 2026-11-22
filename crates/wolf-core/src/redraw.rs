@@ -1057,7 +1057,7 @@ impl RedrawHandler {
     /// The (already-canonical) target is then recorded into the always-on
     /// global [`RecentDirs`] MRU, so every directory the user changes into — via
     /// the "open folder" command OR a typed `:cd` — is moved-or-added to the top of
-    /// `folder-mru.sqlite`. That record is fire-and-forget (a brief internal mutex,
+    /// the `folder_mru` table. That record is fire-and-forget (a brief internal mutex,
     /// self-healing on corruption) and never bumps `seq` or wakes the front-end.
     ///
     /// The one-shot INITIAL `wolf_cwd` emit (the startup/launch cwd, before any

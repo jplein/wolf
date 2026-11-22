@@ -410,7 +410,7 @@ fn mru_seed_is_synchronous_and_not_duplicated() {
     write_file(&cwd.join("other.md"), "o");
 
     // Record seeded.md before the core starts, via a direct MruStore on the same global
-    // file-mru.sqlite the core reads, scoped to `cwd`.
+    // wolf.sqlite the core reads, scoped to `cwd`.
     {
         let store = MruStore::open(&common::hermetic_state_dir());
         store.record(&cwd, &cwd.join("seeded.md"));
@@ -609,7 +609,7 @@ fn file_search_root_defaults_to_cfg_cwd_without_cd() {
 /// open the picker. The seed must come from the global MRU scoped to B and its
 /// `display` must be RELATIVE to B (not an absolute path, and not relative to A).
 /// A's MRU rows must NOT leak into B's seed (per-directory isolation), and the DB
-/// must physically live at `state_dir()/file-mru.sqlite`.
+/// must physically live at `state_dir()/wolf.sqlite`.
 ///
 /// Dirs A and B are built with `temp_cwd` (canonicalized), exactly like the other
 /// `:cd` test, so B's absolute path types cleanly as `:cd` keystrokes and the
@@ -699,11 +699,11 @@ fn mru_seed_follows_nvim_cd() {
         displays(&entries)
     );
 
-    // The MRU physically lives in the single global DB at state_dir()/file-mru.sqlite.
+    // The MRU physically lives in the single global DB at state_dir()/wolf.sqlite.
     let state = common::hermetic_state_dir();
     assert!(
-        state.join("file-mru.sqlite").exists(),
-        "the global MRU should live at <state_dir>/file-mru.sqlite"
+        state.join("wolf.sqlite").exists(),
+        "the global MRU should live at <state_dir>/wolf.sqlite"
     );
 
     // Directly confirm the global MRU, scoped to B, holds the B-relative entry and

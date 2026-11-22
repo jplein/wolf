@@ -298,7 +298,7 @@ struct PaletteInner {
     mru_recent: RefCell<Vec<String>>,
     /// The recent directories offered as Open Recent rows, snapshotted ONCE at
     /// [`PaletteInner::open`] through [`open_recent_candidates`], for the same
-    /// reason [`Self::mru_recent`] is. `folder-mru.sqlite` is a GLOBAL store: a
+    /// reason [`Self::mru_recent`] is. The folder MRU is a GLOBAL store: a
     /// second Wolf process can write it while the palette is up, and the list keeps
     /// showing the snapshot it opened with until the next open.
     recent_dirs: RefCell<Vec<PathBuf>>,
@@ -1795,7 +1795,7 @@ mod tests {
     ///
     /// The smoke is safe from it for a reason outside this crate, and the last block
     /// below is what keeps that reason stated rather than lucky: its `WOLF_STATE_DIR`
-    /// is a fresh per-run directory, so `command-mru.sqlite` starts empty, and
+    /// is a fresh per-run directory, so the command MRU starts empty, and
     /// nothing but a palette activation ever writes that store.
     ///
     /// ## The recent-directories premise
@@ -1803,7 +1803,7 @@ mod tests {
     /// Every assertion here holds GIVEN an empty recent-dirs slice, which is what
     /// this test passes. The smoke gets that from two independent facts, neither of
     /// which this test can check: the same fresh `WOLF_STATE_DIR` leaves
-    /// `folder-mru.sqlite` empty, and `wolf_core::redraw::apply_cwd` never records
+    /// the folder MRU empty, and `wolf_core::redraw::apply_cwd` never records
     /// the LAUNCH working directory (the initial `wolf_cwd` emit is flagged), so
     /// nothing is added before the chord fires. A recorded directory whose path
     /// happened to contain `n`, `e` and `w` in that order would otherwise rank
@@ -1910,7 +1910,7 @@ mod tests {
              match-quality key, and a state directory that had once opened a window from the \
              palette would make the smoke open another one instead of a buffer. The smoke is safe \
              from that only because `smoke_state_dir` is fresh per run and nothing but a palette \
-             activation writes `command-mru.sqlite`. If THIS assertion is what went red, the \
+             activation writes the command MRU. If THIS assertion is what went red, the \
              tie-break itself changed — re-derive `rank_matches`' key order before touching the \
              smoke, because the blocks above have stopped being statements about ranking. Rows \
              were: {:?}",
@@ -2681,7 +2681,7 @@ mod tests {
     /// row instead of the command row.
     ///
     /// `open_recent_palette_row_reroots_the_window_under_cage` seeds ONE directory
-    /// into `folder-mru.sqlite`, types that directory's basename, and presses Enter on
+    /// into the folder MRU, types that directory's basename, and presses Enter on
     /// whatever `restored_index` selected. If the query ever matched a second row the
     /// smoke would stop being deterministic — it would still pass or fail, but on
     /// whichever row won the ranking tie-breaks.
@@ -2770,7 +2770,7 @@ mod tests {
         assert_eq!(
             row.mru_key, want_key,
             "the sole row matching {SMOKE_RECENT_QUERY:?} records {:?} on activation, not \
-             {want_key:?}. The cage smoke reads `command-mru.sqlite` back and looks for exactly \
+             {want_key:?}. The cage smoke reads the command MRU back and looks for exactly \
              `open_recent:<canonical target>`; that format belongs to \
              `wolf_core::rank_palette`, so a mismatch here means core's key shape moved and the \
              smoke's literal must move with it — this assertion is the join between the two \

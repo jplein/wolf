@@ -3,7 +3,7 @@
 //!
 //! The captive nvim's one-shot startup `wolf_cwd` emit updates the tracked-cwd
 //! cell ONLY — it must NOT record the launch/initial directory into the
-//! recent-dirs MRU (`<state-dir>/folder-mru.sqlite`). A genuine later `:cd` (a
+//! recent-dirs MRU (`<state-dir>/wolf.sqlite`). A genuine later `:cd` (a
 //! real `DirChanged`) does record into the MRU. `wolf-core` does not persist cwd
 //! into a `StateStore`; the front-end reads it from each controller at snapshot
 //! time.
@@ -14,7 +14,7 @@
 //!
 //! The always-on recent-dirs store reads `state_dir()`, so this test sets
 //! `WOLF_STATE_DIR` to a fresh tempdir BEFORE starting the core and inspects the
-//! physical `folder-mru.sqlite` under that dir.
+//! physical `wolf.sqlite` under that dir.
 
 mod common;
 
@@ -37,7 +37,7 @@ fn launch_cwd_is_not_recorded_but_real_cd_is() {
     let _ = common::require_nvim_bin();
 
     // The recent-dirs store reads state_dir() eagerly: pin it to a fresh tempdir before the core
-    // starts, so folder-mru.sqlite is inspectable and never the user's. Keep the guard alive.
+    // starts, so wolf.sqlite is inspectable and never the user's. Keep the guard alive.
     let state_dir = tempfile::tempdir().expect("failed to create temp state dir");
     std::env::set_var("WOLF_STATE_DIR", state_dir.path());
 

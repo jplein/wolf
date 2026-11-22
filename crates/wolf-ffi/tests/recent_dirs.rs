@@ -7,7 +7,7 @@
 //!     `to_string_lossy().into_owned()`.
 //!
 //! The store records every cwd change but nvim's initial launch cwd (`apply_cwd`
-//! skips the flagged initial emit), writes to `<state_dir>/folder-mru.sqlite`, and
+//! skips the flagged initial emit), writes to `<state_dir>/wolf.sqlite`, and
 //! is GLOBAL, so the test asserts membership and order rather than length.
 //!
 //! `recent_dirs()` omits an entry that is not an existing directory when it is read,
@@ -34,7 +34,7 @@
 //!
 //! The whole flow lives in ONE `#[test]` because it mutates the process-global
 //! `WOLF_STATE_DIR` env var (the `state_dir()` determinism hook, where the store
-//! opens `folder-mru.sqlite` once at core start): with a single test in this
+//! opens `wolf.sqlite` once at core start): with a single test in this
 //! binary there is nothing to race, so no env lock is needed (the precedent is
 //! `tests/state.rs`).
 
@@ -93,7 +93,7 @@ fn recent_dirs_reports_chdir_targets_newest_first() {
 
     let init_lua = common::init_lua_path();
 
-    // Private state dir before start: `folder-mru.sqlite` opens under it once, in `WolfCore::start`.
+    // Private state dir before start: `wolf.sqlite` opens under it once, in `WolfCore::start`.
     // Safe to mutate because this binary has one test; keep the guard alive past `shutdown()`.
     let state_dir = tempfile::tempdir().expect("failed to create temp state dir");
     std::env::set_var("WOLF_STATE_DIR", state_dir.path());

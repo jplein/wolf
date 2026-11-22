@@ -313,6 +313,15 @@ rust_test(
 )
 
 rust_test(
+    name = "db",
+    srcs = ["tests/db.rs"],
+    crate_root = "tests/db.rs",
+    size = "small",
+    edition = "2021",
+    deps = [":wolf_core"] + all_crate_deps(normal = True, normal_dev = True),
+)
+
+rust_test(
     name = "palette_rank",
     srcs = ["tests/palette_rank.rs"],
     crate_root = "tests/palette_rank.rs",

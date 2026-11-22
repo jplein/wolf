@@ -35,7 +35,7 @@ pub fn unique_temp_dir(prefix: &str) -> PathBuf {
 /// The directory is intentionally not auto-deleted: [`config`] returns only a `CoreConfig`, so
 /// there is no guard to keep alive, and the dir must not vanish out from under a running core,
 /// whose nvim working dir and search root it is. The recent-files MRU lives in the global
-/// `state_dir()/file-mru.sqlite`, not under the cwd.
+/// `state_dir()/wolf.sqlite`, not under the cwd.
 pub fn fresh_cwd() -> PathBuf {
     unique_temp_dir("wolf-test-cwd")
 }
@@ -72,7 +72,7 @@ pub(crate) fn ensure_hermetic_state_dir() {
 /// Points `WOLF_STATE_DIR` at the process's throwaway dir if it is unset, as [`config_in`]
 /// does, and returns `wolf_core::state_dir()`.
 ///
-/// The recent-files MRU lives in one global DB at `state_dir()/file-mru.sqlite`
+/// The recent-files MRU lives in one global DB at `state_dir()/wolf.sqlite`
 /// (directory-filtered), so a real-nvim test that must pre-seed or inspect the MRU opens a
 /// `MruStore` against this dir, the same dir the core resolves.
 pub fn hermetic_state_dir() -> PathBuf {

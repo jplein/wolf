@@ -629,7 +629,7 @@ pub(crate) const OPENRECENT_START_FILE: &str = "orbase.md";
 /// feature does not do.
 const OPENRECENT_START_HEADING: &str = "# ZZORBASE";
 
-/// Basename of the directory seeded into `folder-mru.sqlite`, and — as
+/// Basename of the directory seeded into the folder MRU, and — as
 /// [`OPENRECENT_QUERY`] — the string typed into the palette. It is a sibling of the
 /// launch cwd and a child of the app's `HOME`, so after the chdir the header bar
 /// renders the constant `~/orzulu`.
@@ -662,13 +662,13 @@ const OPENRECENT_QUERY: &str = OPENRECENT_TARGET_DIR;
 /// working directory now exactly this path".
 pub(crate) const OPENRECENT_READBACK_NAME: &str = "orcwd.txt";
 
-/// The physical SQLite file `wolf_core::RecentDirs` creates under a state directory.
+/// The shared SQLite database under a state directory, whose tables hold
+/// `wolf_core::RecentDirs`, `wolf_core::CommandMru` and `wolf_core::MruStore`.
 ///
-/// Private in `wolf-core` (`recent_dirs.rs`'s `RECENT_DIRS_DB_NAME`), so it is
-/// duplicated here exactly as the palette smoke duplicates `command-mru.sqlite`. It
-/// is used only in failure messages and in assertion 0b's fingerprint of the
-/// DEVELOPER'S real store — this is the first smoke that touches that file at all.
-const RECENT_DIRS_DB_NAME: &str = "folder-mru.sqlite";
+/// Private in `wolf-core` (`db.rs`'s `DB_NAME`), so it is duplicated here exactly as
+/// the palette smokes duplicate it. It is used only in failure messages and in
+/// assertion 0b's fingerprint of the DEVELOPER'S real database.
+const STATE_DB_NAME: &str = "wolf.sqlite";
 
 /// The OPEN RECENT scenario, run as a single `sh -c` string inside `cage`.
 ///
@@ -1851,7 +1851,7 @@ fn window_title_shows_the_working_directory_under_cage() {
 ///
 /// Two facts make "exactly one candidate" true of the RUN rather than merely of the
 /// seed, and neither is asserted here either: `cage_command` hands the app a fresh
-/// per-run `WOLF_STATE_DIR`, so `folder-mru.sqlite` starts empty; and
+/// per-run `WOLF_STATE_DIR`, so the folder MRU starts empty; and
 /// `wolf_core::redraw::apply_cwd` never records the LAUNCH working directory (the
 /// initial `wolf_cwd` emit is flagged), so nothing is added before the chord fires.
 /// If either changed, the palette would hold a second folder row and this smoke would
@@ -1867,11 +1867,11 @@ fn window_title_shows_the_working_directory_under_cage() {
 /// | # | assertion | kind | revert | measured |
 /// | --- | --- | --- | --- | --- |
 /// | 0 | the seeded store reads the canonical target back | **precondition** — `RecentDirs::record` is fire-and-forget and swallows every error, so without this a failed seed surfaces as a mysterious empty palette hundreds of lines later | none; do not invent one | n/a |
-/// | 0b | the TEST process has no `WOLF_STATE_DIR`, and the developer's real `folder-mru.sqlite` is byte-identical across the run | **precondition** — the isolation proof, the same two checks `single_pane_file_survives_relaunch_under_cage` opens with, aimed at the first store this binary has ever touched | none; do not invent one | n/a |
+/// | 0b | the TEST process has no `WOLF_STATE_DIR`, and the developer's real `wolf.sqlite` is byte-identical across the run | **precondition** — the isolation proof, the same two checks `single_pane_file_survives_relaunch_under_cage` opens with, aimed at the database the stores share | none; do not invent one | n/a |
 /// | 1 | `status.success()` | precondition — the cage scenario ran to completion | none; do not invent one | n/a |
 /// | 2 | [`assert_png_present`] | precondition — grim produced an image | none; do not invent one | n/a |
 /// | 3 | the `getcwd()` readback canonicalizes to the seeded target | **discriminator** — Neovim's working directory really changed | in `shell::on_palette_activation`, replace `self.chdir_to(path)` with an `eprintln!` and no send. The chord still opens the palette, the row still ranks, Enter still closes it and records the MRU key — but nothing is sent to Neovim, so the readback is the launch cwd. | RED. `assertion `left == right` failed: open_recent_palette_row_reroots_the_window_under_cage: after the Open Recent activation the captive Neovim's working directory is /tmp/nix-shell.kFZSo6/wolf-gnome-smoke-2578175-1785817088670263436/project, not the seeded target /tmp/nix-shell.kFZSo6/wolf-gnome-smoke-2578175-1785817088670263436/orzulu.`, `left: ".../project"`, `right: ".../orzulu"`, then `test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 34 filtered out; finished in 8.00s`. The stubbed arm's own `eprintln!` printed the correct target path, so the row WAS activated and classified to `OpenRecentFolder` — what the readback reports is the launch cwd purely because nothing was sent. Restored, green. |
-/// | 4 | the command MRU holds `open_recent:<canonical target>` | **discriminator** — the row was ACTIVATED, it was an Open Recent row, and it carried core's key shape. Independent of the pixels entirely: nothing but a palette activation writes that store. | in `palette::activate_selection`, delete the `mru.record(&mru_key)` call → the key is absent and the store reads back empty. | RED. `open_recent_palette_row_reroots_the_window_under_cage: the command MRU at /tmp/nix-shell.HA9znD/wolf-gnome-smoke-2579118-1785817109092969527/project-state/command-mru.sqlite does not hold "open_recent:/tmp/nix-shell.HA9znD/wolf-gnome-smoke-2579118-1785817109092969527/orzulu"; it holds [].`, then `test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 34 filtered out; finished in 7.98s`. Isolated: the panic is at assertion 4, so assertion 3 was green — Neovim did chdir and only the MRU write is gone. Restored, green. |
+/// | 4 | the command MRU holds `open_recent:<canonical target>` | **discriminator** — the row was ACTIVATED, it was an Open Recent row, and it carried core's key shape. Independent of the pixels entirely: nothing but a palette activation writes that store. | in `palette::activate_selection`, delete the `mru.record(&mru_key)` call → the key is absent and the store reads back empty. | RED. `open_recent_palette_row_reroots_the_window_under_cage: the command MRU at /tmp/nix-shell.HA9znD/wolf-gnome-smoke-2579118-1785817109092969527/project-state/wolf.sqlite does not hold "open_recent:/tmp/nix-shell.HA9znD/wolf-gnome-smoke-2579118-1785817109092969527/orzulu"; it holds [].`, then `test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 34 filtered out; finished in 7.98s`. Isolated: the panic is at assertion 4, so assertion 3 was green — Neovim did chdir and only the MRU write is gone. Restored, green. |
 /// | 5 | OCR contains [`OPENRECENT_OCR_PRESENT`] | **discriminator** — the FRONT-END settled the re-root and restarted the sidebar traversal at the new root | In `shell::settle_reroot`, delete the `self.inner.tree.reroot(..)` call from the `Reroot` arm, keeping `set_empty_state` and the `rooted_cwd` write — see the note below for why it is this call and not `chdir_to`. Neither producer then re-roots the sidebar: `ortango` is absent, and assertions 3 and 4 stay GREEN. | RED. `open_recent_palette_row_reroots_the_window_under_cage: OCR did not contain "ortango" — the name of ortango.md, which lives inside the target directory and can therefore only be drawn once the tree sidebar re-rooted there.`, then `test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 37 filtered out; finished in 8.15s`. Isolated: the panic is at assertion 5, so assertions 3 and 4 were green, and the captured page carries `~/orzulu` in the header bar — the title followed the live cwd — while the sidebar still draws the launch root `project` with `orbase.md` under it. Restored, green. |
 ///
 /// ## Why assertion 5's revert deletes the `tree.reroot` call
@@ -1910,7 +1910,7 @@ fn open_recent_palette_row_reroots_the_window_under_cage() {
     assert!(
         std::env::var_os("WOLF_STATE_DIR").is_none(),
         "{SMOKE}: WOLF_STATE_DIR is set in the TEST process. `wolf_core::state_dir()` resolves \
-         that variable FIRST, so the \"developer's real folder-mru.sqlite\" this smoke proves is \
+         that variable FIRST, so the \"developer's real wolf.sqlite\" this smoke proves is \
          untouched would be resolved against the override instead of against $XDG_STATE_HOME/wolf \
          — the isolation assertion would then compare the smoke's own store with itself and pass \
          no matter what the app did. `cage_command` sets WOLF_STATE_DIR on the CHILD only, which \
@@ -1925,10 +1925,10 @@ fn open_recent_palette_row_reroots_the_window_under_cage() {
              so a None here means neither is resolvable — check $HOME."
         )
     });
-    let real_recent_file = real_state_dir.join(RECENT_DIRS_DB_NAME);
+    let real_state_db = real_state_dir.join(STATE_DB_NAME);
     // Bytes, not a fingerprint: `record` can rewrite one row without changing the size. `None` is a
     // real answer, since "absent before and after" is as strong as "unchanged".
-    let real_before = std::fs::read(&real_recent_file).ok();
+    let real_before = std::fs::read(&real_state_db).ok();
 
     let runtime_dir = require_smoke_env();
 
@@ -1988,7 +1988,7 @@ fn open_recent_palette_row_reroots_the_window_under_cage() {
          failed (an unwritable state dir, or a corrupt store the self-heal could not recreate) and \
          the app under cage would open a palette with NO folder rows at all. Nothing below is \
          about the feature until this is green.",
-        smoke_state.join(RECENT_DIRS_DB_NAME).display(),
+        smoke_state.join(STATE_DB_NAME).display(),
         target_canon.display()
     );
 
@@ -2065,7 +2065,7 @@ fn open_recent_palette_row_reroots_the_window_under_cage() {
          `palette_rows_query_orzulu_selects_exactly_the_recent_folder_row` pins that. A key with \
          the right prefix and a different path means a different recent directory was offered and \
          chosen.",
-        smoke_state.join("command-mru.sqlite").display()
+        smoke_state.join(STATE_DB_NAME).display()
     );
 
     // Assertion 5 (discriminator): the front-end re-rooted. `ortango.md` is outside the launch cwd, and
@@ -2093,24 +2093,25 @@ fn open_recent_palette_row_reroots_the_window_under_cage() {
 
     // Assertion 0b, second part: last, so it covers the whole run, and in bytes, since `record` can
     // rewrite a row without changing the size.
-    let real_after = std::fs::read(&real_recent_file).ok();
+    let real_after = std::fs::read(&real_state_db).ok();
     assert!(
         real_before == real_after,
-        "{SMOKE}: the developer's REAL recent-directories store {} changed across this smoke run \
+        "{SMOKE}: the developer's REAL state database {} changed across this smoke run \
          (before: {:?} byte(s), after: {:?} byte(s); `None` means the file did not exist, which is \
          the normal state on a machine that has never run Wolf interactively and must stay that \
-         way). This is a STATE-DIR ISOLATION FAILURE, and this smoke is the first one that can see \
-         it for THIS store: the app under cage resolved `wolf_core::state_dir()` to the real \
+         way). This is a STATE-DIR ISOLATION FAILURE: the app under cage resolved \
+         `wolf_core::state_dir()` to the real \
          directory instead of the smoke's own, so it offered the developer's real Open Recent \
          history in its palette and appended this run's throwaway temp directory to it. \
          `cage_command` is the single place WOLF_STATE_DIR is set, and \
          `cage_is_only_spawned_through_the_isolating_helper` is what keeps it single — start \
          there. The ONE benign cause: a real Wolf running concurrently in another terminal, which \
-         records into that store on every directory change; close it and re-run before concluding \
+         records into that database on every file open, directory change and palette command; \
+         close it and re-run before concluding \
          anything else. Note the `-wal` and `-shm` sidecars are NOT compared, so a leak that is \
          still uncommitted at this instant would escape — that is a gap in this check's \
          sensitivity, never a licence to relax it.",
-        real_recent_file.display(),
+        real_state_db.display(),
         real_before.as_ref().map(Vec::len),
         real_after.as_ref().map(Vec::len)
     );

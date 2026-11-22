@@ -11,7 +11,7 @@
 //!
 //! Surface exercised:
 //! - `wolf_core::CommandMru::open(dir: &Path) -> CommandMru` (infallible; eagerly
-//!   creates `dir/command-mru.sqlite`)
+//!   creates `dir/wolf.sqlite`, whose `command_mru` table holds the store)
 //! - `wolf_core::CommandMru::disabled() -> CommandMru` (all methods no-op)
 //! - `CommandMru::record(&self, key: &str)` (fire-and-forget move-or-add-to-top)
 //! - `CommandMru::recent(&self) -> Vec<String>` (newest-first, capped, empty on
@@ -24,10 +24,10 @@
 
 use wolf_core::{CommandMru, COMMAND_MRU_LIMIT};
 
-/// The physical DB file name created under the store's dir. Mirrored locally
-/// because it is a private implementation constant; the tests assert the file's
-/// existence, so they need the name.
-const DB_NAME: &str = "command-mru.sqlite";
+/// The shared database file the store's `command_mru` table lives in, under the store's
+/// dir. Mirrored locally because it is a private implementation constant of
+/// wolf-core's `db.rs`; the tests assert the file's existence, so they need the name.
+const DB_NAME: &str = "wolf.sqlite";
 
 /// How many distinct keys the cap test records — comfortably beyond the limit so
 /// the oldest few must be pruned.
@@ -202,8 +202,8 @@ fn wrong_schema_db_is_silently_recreated() {
     let dir = tempfile::tempdir().expect("failed to create tempdir");
     let db = dir.path().join(DB_NAME);
 
-    // A valid sqlite DB whose `command_mru` table lacks `seq`: the schema probe (`SELECT key, seq
-    // FROM command_mru LIMIT 0`) must detect this and recreate the DB rather than error.
+    // A valid DB with no `schema` table and a `command_mru` table lacking `seq`: a table with no
+    // `schema` row is at another version, so the open must drop and recreate it, not error.
     {
         let conn = rusqlite::Connection::open(&db).expect("failed to open sqlite for bad schema");
         conn.execute_batch("CREATE TABLE command_mru (key TEXT PRIMARY KEY);")

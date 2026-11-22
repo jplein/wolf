@@ -2,22 +2,21 @@
 //! (`wolf_core::MruStore`) against a REAL SQLite database on a REAL temporary
 //! filesystem. No mocks, no Neovim.
 //!
-//! The MRU now lives in a SINGLE global DB at `state_dir()/file-mru.sqlite`
-//! (mirroring the sibling `command-mru.sqlite` / `folder-mru.sqlite` stores). It
-//! is directory-SCOPED: every row carries the project `directory` it was recorded
-//! under, and `recent(directory)` filters to just that directory. There is no
-//! per-`cwd` `.wolf/mru.sqlite` anymore.
+//! The MRU is the `file_mru` table of the single global database
+//! `state_dir()/wolf.sqlite`, beside the command and folder MRUs' tables. It is
+//! directory-SCOPED: every row carries the project `directory` it was recorded
+//! under, and `recent(directory)` filters to just that directory.
 //!
 //! Like the `command_mru.rs` / `recent_dirs.rs` sibling tests, these do NOT touch
 //! `state_dir()` / `WOLF_STATE_DIR`: they construct `MruStore::open(<tempdir>)`
-//! directly, passing that tempdir AS the state dir that holds `file-mru.sqlite`,
+//! directly, passing that tempdir AS the state dir that holds `wolf.sqlite`,
 //! and pass explicit `directory` args to `record` / `recent`. So they need no
 //! env-lock and never race another binary's environment. The record-on-open path
 //! (driven through nvim) is covered separately in `tests/mru_open_records.rs`.
 //!
 //! Surface exercised:
 //! - `wolf_core::MruStore::open(dir: &Path) -> MruStore` (infallible; `dir` is the
-//!   state dir holding `file-mru.sqlite`, eagerly created)
+//!   state dir holding `wolf.sqlite`, eagerly created)
 //! - `MruStore::record(&self, directory: &Path, file: &Path)` (fire-and-forget
 //!   upsert; `directory` is canonicalized internally, `file` stored absolute)
 //! - `MruStore::recent(&self, directory: &Path) -> Vec<wolf_core::FileEntry>`
@@ -44,12 +43,13 @@
 //! NOTE (self-heal policy): the last FIVE tests pin the store's DATA-LOSS
 //! contract, which the rest of the file does not touch.
 //!
-//! - The store recreates `file-mru.sqlite` (deleting it plus its `-wal`/`-shm`
-//!   sidecars) only for a database that is genuinely CORRUPT or
-//!   schema-incompatible. A TRANSIENT failure — most importantly losing the lock
-//!   race that the rollback-journal -> WAL conversion needs when several handles
-//!   open the same not-yet-converted DB at once — must back off and degrade to an
-//!   empty result, NEVER delete.
+//! - The store deletes `wolf.sqlite` (plus its `-wal`/`-shm` sidecars) and
+//!   recreates it only for a file that is CORRUPT or not a database at all. A
+//!   `file_mru` table of the wrong shape is dropped and recreated alone, never the
+//!   file. A TRANSIENT failure — most importantly losing the lock race that the
+//!   rollback-journal -> WAL conversion needs when several handles open the same
+//!   not-yet-converted DB at once — must back off and degrade to an empty result,
+//!   NEVER delete.
 //! - Deleting the file unlinks it from under every other live connection in the
 //!   process, whose writes then land in an unreachable inode. That is the
 //!   production shape of "the user has two Wolf windows open": one window's open
@@ -61,12 +61,12 @@
 //!     [`concurrent_opens_preserve_rows`],
 //!     [`an_open_that_loses_the_lock_race_preserves_rows`]). Satisfying only these
 //!     would license never recreating at all.
-//!   * TWO prove an unusable file IS still healed
+//!   * TWO prove an unusable store IS still healed
 //!     ([`a_corrupt_database_is_still_healed`],
 //!     [`wrong_schema_db_is_silently_recreated`]), which is what stops the
-//!     over-correction. They cover the two DISTINCT rusqlite error SHAPES the heal
-//!     path must classify — see each test's doc comment; matching only one of them
-//!     silently disables half the recreation path.
+//!     over-correction. They cover the two DISTINCT heals: a file that is not a
+//!     database, which is deleted, and a table with no `schema` row, which is
+//!     dropped — see each test's doc comment.
 //!
 //! These use real threads, a real [`std::sync::Barrier`], and real second SQLite
 //! connections holding real locks against the real database — no mocks, no
@@ -80,10 +80,11 @@ use std::time::Duration;
 
 use wolf_core::{FileEntry, MruStore, MRU_LIMIT};
 
-/// The physical DB file name created under the store's state dir. Mirrored
-/// locally because it is a private implementation constant; the tests assert the
-/// file's existence, so they need the name.
-const MRU_DB_NAME: &str = "file-mru.sqlite";
+/// The shared database file the store's `file_mru` table lives in, under the
+/// store's state dir. Mirrored locally because it is a private implementation
+/// constant of wolf-core's `db.rs`; the tests assert the file's existence, so they
+/// need the name.
+const DB_NAME: &str = "wolf.sqlite";
 
 /// How many files the cap test records — comfortably beyond `MRU_LIMIT` so the
 /// oldest few must fall off.
@@ -147,7 +148,7 @@ fn canon_tempdir() -> (tempfile::TempDir, PathBuf) {
     (dir, path)
 }
 
-/// Creates a fresh tempdir to serve as the STATE dir that holds `file-mru.sqlite`.
+/// Creates a fresh tempdir to serve as the STATE dir that holds `wolf.sqlite`.
 /// Returned as a guard + path; the guard keeps the DB alive for the test.
 fn state_tempdir() -> tempfile::TempDir {
     tempfile::tempdir().expect("failed to create state tempdir")
@@ -158,7 +159,7 @@ fn open_creates_sqlite_and_recent_is_empty() {
     let state = state_tempdir();
     let store = MruStore::open(state.path());
 
-    let db = state.path().join(MRU_DB_NAME);
+    let db = state.path().join(DB_NAME);
     assert!(
         db.exists(),
         "open() should eagerly create the cache at {}",
@@ -336,14 +337,14 @@ fn deleted_file_is_omitted_and_pruned_from_cache() {
     assert!(ends_with(&recent2[0].path, "keep.md"));
 }
 
-/// (e) The DB lives at `<state_dir>/file-mru.sqlite`, and NO `.wolf` directory is
+/// (e) The DB lives at `<state_dir>/wolf.sqlite`, and NO `.wolf` directory is
 /// ever created under a project `directory` arg.
 #[test]
 fn db_lives_in_state_dir_and_no_wolf_dir_is_created() {
     let state = state_tempdir();
     let store = MruStore::open(state.path());
 
-    let db = state.path().join(MRU_DB_NAME);
+    let db = state.path().join(DB_NAME);
     assert!(
         db.exists(),
         "open() should create the cache at {}",
@@ -438,11 +439,12 @@ fn display_is_relative_to_directory_and_path_is_absolute() {
 ///
 /// This is the production hazard stated directly: a second Wolf window opens its
 /// own `MruStore` against the same global state dir, exactly as a second
-/// `WolfCore::start` does. The store self-heals by DELETING `file-mru.sqlite`
-/// (plus its `-wal`/`-shm` sidecars) and recreating the schema, so a heal fired
-/// for any reason OTHER than genuine corruption silently wipes the user's whole
-/// recent-files history — and unlinks the file from under the first, still-live
-/// connection, so that handle's later writes go nowhere either.
+/// `WolfCore::start` does. The store self-heals by DELETING `wolf.sqlite`
+/// (plus its `-wal`/`-shm` sidecars) and recreating it, so a heal fired for any
+/// reason OTHER than genuine corruption silently wipes the user's whole
+/// recent-files history, along with the other stores' tables — and unlinks the
+/// file from under the first, still-live connection, so that handle's later writes
+/// go nowhere either.
 ///
 /// Distinct from [`deleted_file_is_omitted_and_pruned_from_cache`], which also
 /// re-opens the same state dir but only AFTER the first store has been dropped.
@@ -472,7 +474,7 @@ fn a_second_store_open_does_not_destroy_existing_rows() {
         1,
         "opening a SECOND MruStore on a state dir that already holds rows must not \
          recreate the database: survivor.md is gone, so the second open deleted \
-         file-mru.sqlite. In production that is a second Wolf window silently wiping \
+         wolf.sqlite or dropped file_mru. In production that is a second Wolf window silently wiping \
          the user's recent files."
     );
     assert_eq!(
@@ -554,7 +556,7 @@ fn concurrent_opens_preserve_rows() {
         CONCURRENT_FILES,
         "the original handle must still see all {CONCURRENT_FILES} rows after \
          {CONCURRENT_OPENS} concurrent opens; a shortfall means another handle \
-         deleted file-mru.sqlite out from under this connection"
+         deleted wolf.sqlite out from under this connection"
     );
 }
 
@@ -565,24 +567,23 @@ fn concurrent_opens_preserve_rows() {
 /// manufactures contention by racing real threads, so it can only ever catch the
 /// bug probabilistically — on a fast machine every thread may win. This one holds
 /// the lock explicitly, from a second real SQLite connection, so the contended open
-/// is GUARANTEED to fail; it goes red the moment `warrants_recreate` starts
-/// classifying `SQLITE_BUSY` as corruption again.
+/// is GUARANTEED to fail; it goes red the moment `db.rs`'s `is_unusable_file`
+/// starts classifying `SQLITE_BUSY` as an unusable file.
 ///
 /// # Why the fixture converts the database BACK to rollback-journal mode
 ///
-/// This step is the whole test, not boilerplate. `BEGIN EXCLUSIVE` against a WAL
-/// database does nothing useful here: in WAL mode SQLite treats `EXCLUSIVE` as
-/// `IMMEDIATE`, readers are not blocked, and the store's
-/// `CREATE TABLE IF NOT EXISTS` is a no-op that takes no write lock — so the
-/// contended `open` would simply SUCCEED and this test would be green with OR
-/// without the fix. The one piece of work in the open path that genuinely needs an
-/// exclusive lock is the rollback-journal -> WAL CONVERSION, and it only runs on a
-/// database that is not already WAL. Hence the raw `PRAGMA journal_mode=DELETE;`
-/// before the blocker is taken. Do not "simplify" it away.
+/// `BEGIN EXCLUSIVE` against a WAL database blocks only writers: in WAL mode
+/// SQLite treats `EXCLUSIVE` as `IMMEDIATE`, and readers go on reading. The open
+/// would then fail only if its `schema` bookkeeping takes the write lock, so the
+/// test's verdict would depend on how that bookkeeping is written. In rollback-journal mode the
+/// EXCLUSIVE lock blocks readers too, so the open fails at its first statement
+/// that reads the file, `journal_mode=WAL`, whatever follows it. Hence the raw
+/// `PRAGMA journal_mode=DELETE;` before the blocker is taken. Do not "simplify" it
+/// away.
 ///
 /// # Why it is neither slow nor flaky
 ///
-/// `MRU_BUSY_TIMEOUT_MS` (2 s) is installed before `journal_mode`, so the very
+/// `db.rs`'s `BUSY_TIMEOUT_MS` (2 s) is installed before `journal_mode`, so the very
 /// worst case is one 2 s wait before the open gives up — comfortably inside a
 /// `size = "small"` target, and bounded rather than racy. Do NOT "fix" the runtime
 /// by removing or shortening that busy timeout: its ordering before `journal_mode`
@@ -591,16 +592,16 @@ fn concurrent_opens_preserve_rows() {
 /// # The contract
 ///
 /// The contended handle must back off with no connection, leave the file alone, and
-/// self-heal by lazily re-opening on its next use. Pre-fix, `warrants_recreate`
-/// matched everything, so the failed open DELETED `file-mru.sqlite` and recreated an
-/// empty one — the blocker's lock was left on the now-unlinked inode, so the retry
-/// succeeded and the wipe was silent. That is one Wolf window erasing another's (and
-/// the user's) entire recent-files history.
+/// self-heal by lazily re-opening on its next use. A classifier that accepts
+/// `SQLITE_BUSY` makes the failed open DELETE `wolf.sqlite` and recreate an empty
+/// one — the blocker's lock is left on the now-unlinked inode, so the retry succeeds
+/// and the wipe is silent. That is one Wolf window erasing another's (and the
+/// user's) entire recent-files history.
 #[test]
 fn an_open_that_loses_the_lock_race_preserves_rows() {
     let state = state_tempdir();
     let (_dir, dir_a) = canon_tempdir();
-    let db = state.path().join(MRU_DB_NAME);
+    let db = state.path().join(DB_NAME);
 
     let mut files = Vec::with_capacity(LOCKED_FILES);
     for i in 0..LOCKED_FILES {
@@ -645,10 +646,10 @@ fn an_open_that_loses_the_lock_race_preserves_rows() {
 
     assert!(
         db.exists(),
-        "an MruStore::open that lost the database lock must NOT delete {}. The pre-fix code \
-         classified a transient SQLITE_BUSY as corruption and removed file-mru.sqlite plus its \
-         -wal/-shm sidecars; in production that is one Wolf window wiping another window's — and \
-         the user's — entire recent-files history",
+        "an MruStore::open that lost the database lock must NOT delete {}. If it is gone, a \
+         transient SQLITE_BUSY was classified as an unusable file and wolf.sqlite was removed \
+         with its -wal/-shm sidecars; in production that is one Wolf window wiping another \
+         window's — and the user's — entire recent-files history",
         db.display()
     );
 
@@ -682,15 +683,15 @@ fn an_open_that_loses_the_lock_race_preserves_rows() {
 /// The counterweight to [`a_second_store_open_does_not_destroy_existing_rows`] and
 /// [`concurrent_opens_preserve_rows`]. Those pin that a transient failure must not
 /// delete the database, and the obvious over-correction is to stop recreating it
-/// at all — which would leave a user whose `file-mru.sqlite` was truncated by a
-/// crash, or written by an older schema, with a permanently dead cache. Garbage
+/// at all — which would leave a user whose `wolf.sqlite` was truncated by a
+/// crash with a permanently dead cache. Garbage
 /// bytes where the SQLite header belongs make the open fail with "file is not a
 /// database", which is exactly the case the recreation path exists for: `open`
 /// must swallow it, recreate the schema, and `record`/`recent` must then work.
 #[test]
 fn a_corrupt_database_is_still_healed() {
     let state = state_tempdir();
-    let db = state.path().join(MRU_DB_NAME);
+    let db = state.path().join(DB_NAME);
 
     fs::write(&db, vec![b'Z'; GARBAGE_LEN]).expect("failed to write garbage over the MRU DB");
 
@@ -705,7 +706,7 @@ fn a_corrupt_database_is_still_healed() {
     assert_eq!(
         recent.len(),
         1,
-        "a corrupt file-mru.sqlite must be RECREATED, not left unusable: the row \
+        "a corrupt wolf.sqlite must be RECREATED, not left unusable: the row \
          recorded after the heal did not read back"
     );
     assert!(
@@ -719,54 +720,43 @@ fn a_corrupt_database_is_still_healed() {
     );
 }
 
-/// A VALID SQLite file carrying the WRONG schema is silently recreated.
+/// A `file_mru` table of the WRONG shape is silently dropped and recreated.
 ///
 /// Deliberately shares its name with the identical guards in
 /// `crates/wolf-core/tests/command_mru.rs` and `crates/wolf-core/tests/recent_dirs.rs`
 /// so the three stores' wrong-schema coverage is greppable as one set.
 ///
+/// The fixture is a valid `wolf.sqlite` whose `file_mru` table has a single `path`
+/// column and which has no `schema` table at all. A table with no `schema` row is at
+/// another version than this build's, so the open must drop it and create it again
+/// with this build's columns. `CREATE TABLE IF NOT EXISTS` alone would keep the
+/// wrong shape, and every `record` and `recent` would then fail.
+///
 /// # Why this is NOT redundant with [`a_corrupt_database_is_still_healed`]
 ///
-/// They exercise two DIFFERENT `rusqlite::Error` VARIANTS, and the store's
-/// classifier has to match both:
-///
-/// * Garbage bytes make the open fail with `SQLITE_NOTADB`, which rusqlite surfaces
-///   as `Error::SqliteFailure`.
-/// * A valid file with the wrong schema survives `CREATE TABLE IF NOT EXISTS` and
-///   only fails at the schema probe's `prepare`, where SQLite can attribute the
-///   failure to a byte offset in the SQL text — so rusqlite converts the
-///   `ErrorCode::Unknown` into `Error::SqlInputError` instead
-///   (`rusqlite-0.31.0/src/error.rs:430-448`).
-///
-/// A classifier that matches only `SqliteFailure` passes the corrupt-file test and
-/// silently disables the wrong-schema recreation path entirely. That exact
-/// over-narrowing was found in `command_mru`; without this test the identical bug in
-/// `mru.rs` would have shipped undetected, leaving anyone whose `file-mru.sqlite`
-/// still holds the OLD single-`path` schema with a permanently dead cache.
-///
-/// The fixture is that historically real wrong schema (`mru.rs`'s own probe comment
-/// names it): a `mru` table with a single `path` column, missing every column the
-/// probe `SELECT directory, file, opened_at FROM mru LIMIT 0` reads.
+/// That test heals a file that is not a database, which is deleted. This one heals a
+/// table inside a valid database, which is dropped while the file stays: the two go
+/// through different paths, and either can break while the other holds.
 #[test]
 fn wrong_schema_db_is_silently_recreated() {
     let state = state_tempdir();
-    let db = state.path().join(MRU_DB_NAME);
+    let db = state.path().join(DB_NAME);
 
-    // A valid sqlite DB whose `mru` table has the old single-`path` schema: `CREATE TABLE IF NOT
-    // EXISTS` cannot repair it, so only the schema probe can surface it as an error the caller heals.
+    // A valid sqlite DB with a single-`path` `file_mru` table and no `schema` table, so no row
+    // says which version the table is at.
     {
         let conn = rusqlite::Connection::open(&db).expect("failed to open sqlite for bad schema");
-        conn.execute_batch("CREATE TABLE mru (path TEXT PRIMARY KEY);")
-            .expect("failed to create the wrong-schema mru table");
+        conn.execute_batch("CREATE TABLE file_mru (path TEXT PRIMARY KEY);")
+            .expect("failed to create the wrong-schema file_mru table");
     }
 
-    // Must not panic, and must read as empty: the file was recreated from scratch.
+    // Must not panic, and must read as empty: the table was recreated from scratch.
     let store = MruStore::open(state.path());
 
     let (_dir, dir_a) = canon_tempdir();
     assert!(
         store.recent(&dir_a).is_empty(),
-        "a store opened over a wrong-schema file-mru.sqlite must read as empty after the heal"
+        "a store opened over a wrong-shaped file_mru table must read as empty after the heal"
     );
 
     // And it must be usable afterwards, through the ordinary public API.
@@ -778,17 +768,17 @@ fn wrong_schema_db_is_silently_recreated() {
     assert_eq!(
         recent.len(),
         1,
-        "record must round-trip after the schema heal: a wrong-schema file-mru.sqlite must be \
-         RECREATED, not left permanently unusable"
+        "record must round-trip after the schema heal: a file_mru table with no schema row must \
+         be DROPPED and recreated, not kept with its wrong columns, which fail every query"
     );
     assert!(
         ends_with(&recent[0].path, "healed.md"),
-        "the recreated database should hold the row recorded after the heal"
+        "the recreated table should hold the row recorded after the heal"
     );
 
     assert!(
         db.exists(),
-        "the sqlite file must exist again after the schema heal, at {}",
+        "the sqlite file must exist after the schema heal, at {}",
         db.display()
     );
 }

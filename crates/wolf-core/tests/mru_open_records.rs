@@ -108,7 +108,7 @@ fn has_display(recent: &[wolf_core::FileEntry], display: &str) -> bool {
 
 /// The WRITE path follows nvim's live cwd: start the core in dir A, `:cd` nvim
 /// into dir B, then open a file under B via `InputEvent::Open`. The input pump
-/// must record that open into the single global MRU (`state_dir()/file-mru.sqlite`)
+/// must record that open into the single global MRU (`state_dir()/wolf.sqlite`)
 /// scoped to B's directory, B-relative — NOT scoped to A's directory.
 ///
 /// The pump records `InputEvent::Open` into the global MRU under `<nvim-cwd>` (the
@@ -158,7 +158,7 @@ fn open_after_cd_records_in_nvim_cwd_mru() {
         recent.iter().map(|e| e.display.clone()).collect::<Vec<_>>()
     );
 
-    // The row physically lives in the single global file-mru.sqlite (the state
+    // The row physically lives in the single global wolf.sqlite (the state
     // dir), directory-scoped: open it and inspect via recent(&cwd_b)/recent(&cwd_a).
     let store = MruStore::open(&common::hermetic_state_dir());
     assert!(

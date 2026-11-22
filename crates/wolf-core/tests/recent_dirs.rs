@@ -9,7 +9,7 @@
 //!
 //! Surface exercised:
 //! - `wolf_core::RecentDirs::open(dir: &Path) -> RecentDirs` (infallible; eagerly
-//!   creates `dir/folder-mru.sqlite`)
+//!   creates `dir/wolf.sqlite`, whose `folder_mru` table holds the store)
 //! - `wolf_core::RecentDirs::disabled() -> RecentDirs` (all methods no-op)
 //! - `RecentDirs::record(&self, path: &Path)` (fire-and-forget move-or-add-to-top)
 //! - `RecentDirs::recent(&self) -> Vec<PathBuf>` (newest-first, capped, empty on
@@ -24,10 +24,10 @@ use std::path::{Path, PathBuf};
 
 use wolf_core::{RecentDirs, RECENT_DIRS_LIMIT};
 
-/// The physical DB file name created under the store's dir. Mirrored locally
-/// because it is a private implementation constant; the tests assert the file's
-/// existence, so they need the name.
-const DB_NAME: &str = "folder-mru.sqlite";
+/// The shared database file the store's `folder_mru` table lives in, under the store's
+/// dir. Mirrored locally because it is a private implementation constant of
+/// wolf-core's `db.rs`; the tests assert the file's existence, so they need the name.
+const DB_NAME: &str = "wolf.sqlite";
 
 /// How many distinct dirs the cap test records — comfortably beyond the limit so
 /// the oldest few must be pruned.
@@ -228,11 +228,11 @@ fn wrong_schema_db_is_silently_recreated() {
     let dir = tempfile::tempdir().expect("failed to create tempdir");
     let db = dir.path().join(DB_NAME);
 
-    // A valid sqlite DB whose `recent_dirs` table lacks the `seq` column the store queries: its
-    // schema probe must detect this and recreate the DB rather than error.
+    // A valid DB with no `schema` table and a `folder_mru` table lacking `seq`: a table with no
+    // `schema` row is at another version, so the open must drop and recreate it, not error.
     {
         let conn = rusqlite::Connection::open(&db).expect("failed to open sqlite for bad schema");
-        conn.execute_batch("CREATE TABLE recent_dirs (path TEXT PRIMARY KEY);")
+        conn.execute_batch("CREATE TABLE folder_mru (path TEXT PRIMARY KEY);")
             .expect("failed to create wrong-schema table");
     }
 

@@ -270,7 +270,7 @@ fn isolated_payload() {
         tree,
         expected,
         "a test core wrote into the planted state dir {}; everything under it is listed \
-         (swap/, *-mru.sqlite, spell/ or parsers_user/ there means the core still used the \
+         (swap/, wolf.sqlite, spell/ or parsers_user/ there means the core still used the \
          default)",
         planted_root.display()
     );

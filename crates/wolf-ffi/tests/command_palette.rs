@@ -26,7 +26,7 @@
 //! ## SINGLE #[test]
 //!
 //! The whole flow lives in ONE `#[test]` because it mutates the process-global
-//! `WOLF_STATE_DIR` env var (the `command-mru.sqlite` + `folder-mru.sqlite` stores
+//! `WOLF_STATE_DIR` env var (the command and folder MRU stores in `wolf.sqlite`
 //! open at `state_dir()` once at core start): with a single test in this binary
 //! there is nothing to race, so no env lock is needed (the precedent is
 //! `tests/recent_dirs.rs`).

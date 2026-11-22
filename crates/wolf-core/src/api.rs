@@ -130,7 +130,7 @@ pub struct WolfCore {
     /// exceptions to the order. Each event carries the restart generation it was
     /// sent under, so the pump can drop typing that predates a restart.
     input_tx: UnboundedSender<QueuedInput>,
-    /// The always-on GLOBAL recent-files MRU (`<state_dir>/file-mru.sqlite`).
+    /// The always-on GLOBAL recent-files MRU (`file_mru` in `<state_dir>/wolf.sqlite`).
     /// Constructed once at [`WolfCore::start`] from [`state_dir`] (or
     /// [`MruStore::disabled`] when it cannot be resolved). Every row carries the
     /// project `directory` it was recorded under; both the picker seed (read) and
@@ -145,7 +145,7 @@ pub struct WolfCore {
     /// there — the pump runs on a tokio worker thread). `None` until nvim first
     /// reports its cwd; the pump then falls back to [`cwd`](Self::cwd).
     tracked_cwd: TrackedCwd,
-    /// The always-on GLOBAL recent-directories MRU (`<state_dir>/folder-mru.sqlite`).
+    /// The always-on GLOBAL recent-directories MRU (`folder_mru` in `<state_dir>/wolf.sqlite`).
     /// Constructed once at [`WolfCore::start`] from [`state_dir`] (or
     /// [`RecentDirs::disabled`] when it cannot be resolved) and cloned into the
     /// redraw handler, which records each `wolf_cwd` directory change into it. Read
@@ -163,7 +163,7 @@ pub struct WolfCore {
     /// (snapshot then nav) but has no `.await`/RPC in between, so there is no
     /// lock-order cycle.
     nav_history: NavHistoryCell,
-    /// The always-on GLOBAL command-palette MRU (`<state_dir>/command-mru.sqlite`).
+    /// The always-on GLOBAL command-palette MRU (`command_mru` in `<state_dir>/wolf.sqlite`).
     /// Constructed once at [`WolfCore::start`] from [`state_dir`] (or
     /// [`CommandMru::disabled`] when it cannot be resolved). Unlike
     /// [`recent_dirs`](Self::recent_dirs) it is NOT wired into the redraw handler —
@@ -1337,7 +1337,7 @@ impl WolfCore {
     ///
     /// These are the directories the captive Neovim has changed into (via the
     /// "open folder" command or a typed `:cd`), recorded from the `wolf_cwd`
-    /// notification into the always-on `<state_dir>/folder-mru.sqlite`. Returns an
+    /// notification into the always-on `folder_mru` table of `<state_dir>/wolf.sqlite`. Returns an
     /// empty `Vec` when the store is disabled or unreadable.
     ///
     /// An entry that is not an existing directory at read time is omitted, but its
@@ -1354,7 +1354,7 @@ impl WolfCore {
     }
 
     /// Returns a clone of the global command-palette MRU handle
-    /// (`<state_dir>/command-mru.sqlite`, or a disabled no-op store).
+    /// (the `command_mru` table of `<state_dir>/wolf.sqlite`, or a disabled no-op store).
     ///
     /// The clone is cheap (`Arc`-backed). The palette front-end reads
     /// [`CommandMru::recent`] to float recently-used commands to the top and calls

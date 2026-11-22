@@ -1191,7 +1191,7 @@ fn pointer_scenario(body: &str) -> String {
 /// directory. The app derives `CoreConfig.cwd` from `std::env::current_dir()`, so
 /// this is the directory the file-search traversal walks and the directory the
 /// captive nvim runs in (the recent-files MRU lives in the global
-/// `state_dir()/file-mru.sqlite`, not under the cwd).
+/// `state_dir()/wolf.sqlite`, not under the cwd).
 ///
 /// The cage smokes derive their working directory from this — the window
 /// title smoke and the typed-`:cd` smoke use the result as the base for the NESTED

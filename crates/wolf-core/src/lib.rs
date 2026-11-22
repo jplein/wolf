@@ -33,7 +33,7 @@
 //!   linked libraries, plus the constant plain-text blocks the preview document's head
 //!   and the front-ends' About surfaces carry.
 //! - [`mru`]: the global, directory-filtered most-recently-used file cache
-//!   (SQLite, `state_dir()/file-mru.sqlite`).
+//!   (the `file_mru` table of `state_dir()/wolf.sqlite`).
 //! - [`nav_history`]: the pure per-pane file navigation history (back/forward)
 //!   backing the History menu and the two toolbar buttons.
 //! - [`recent_dirs`]: the global recent-directories MRU cache (SQLite).
@@ -60,6 +60,7 @@ pub mod buffer_picker;
 pub mod command;
 pub mod command_mru;
 pub mod config;
+mod db;
 pub mod files;
 pub mod input;
 pub mod layout;

@@ -154,7 +154,7 @@ pub(crate) const PALETTE_OCR_PRESENT: &str = "zzpalrun";
 const PALETTE_QUERY: &str = "new";
 
 /// The canonical `CommandSpec::id` the activated row must record in the command MRU
-/// (`<state dir>/command-mru.sqlite`). Nothing but a palette activation writes that
+/// (`<state dir>/wolf.sqlite`). Nothing but a palette activation writes that
 /// store — `wolf_core::api`'s `command_mru()` doc states it outright — so a hit for
 /// this key can only have come from the palette running the row.
 const PALETTE_MRU_KEY: &str = "new_buffer";
@@ -1605,7 +1605,7 @@ fn new_untitled_buffer_replaces_open_file_under_cage() {
 /// | 2 | [`assert_png_present`] | precondition — grim produced an image | none; do not invent one | n/a |
 /// | 3 | OCR lacks [`PALETTE_OCR_ABSENT`] | **discriminator** — the palette DISPATCHED something | in `palette.rs`'s `activate_selection`, delete the call that invokes the `on_activate` handler, keeping the `record` and the `close`. The chord still opens the palette and Enter still closes it, but no command is dispatched, so `pbase.md`'s heading is still drawn. Nothing else reads that closure, so this isolates the smoke. | RED. `OCR unexpectedly contained "palcmdbase" (the base file's heading), so the pane still shows pbase.md and NO command was dispatched`. The capture held both `palcmdbase` and `zzpalrun#`, i.e. the marker was typed into the still-open base file — so assertion 4 stayed green and this row failed alone, exactly as designed. |
 /// | 4 | OCR contains [`PALETTE_OCR_PRESENT`] | **precondition** — the marker reached the editor after the palette closed | none. Deleting `self.area.grab_focus()` from `PaletteInner::close` was run as the candidate revert and did NOT go red. | GREEN across three consecutive runs with the `grab_focus` deleted. That is the measurement; the mechanism behind it was not established, and no explanation should be recorded here without one. This row is therefore reclassified from discriminator to precondition — it says the keystrokes after the activation landed somewhere, not that focus was returned. Do not substitute a different revert to manufacture a discriminator, and do not read this as licence to delete a focus return elsewhere: the ones in `picker::close`, `rebuild_pane_area` and `on_pane_clicked` redden a smoke when removed. |
-/// | 5 | the command MRU holds [`PALETTE_MRU_KEY`] | **discriminator** — activation recorded the row's opaque key, and it is the registry id | delete the `CommandMru::record` call in `activate_selection`. | RED, three times out of three: `the command MRU at …/project-state/command-mru.sqlite does not hold "new_buffer"; it holds []`. No flakiness observed — the store read back non-empty on every run with the `record` in place, so the WAL-recovery worry in `tests/README.md` did not materialize here. |
+/// | 5 | the command MRU holds [`PALETTE_MRU_KEY`] | **discriminator** — activation recorded the row's opaque key, and it is the registry id | delete the `CommandMru::record` call in `activate_selection`. | RED, three times out of three: `the command MRU at …/project-state/wolf.sqlite does not hold "new_buffer"; it holds []`. No flakiness observed — the store read back non-empty on every run with the `record` in place, so the WAL-recovery worry in `tests/README.md` did not materialize here. |
 ///
 /// Assertion 3 is what separates "the palette ran a command" from "nothing happened",
 /// and its soundness rests on the fixture-naming rule: nvim's `:e` toast and the
@@ -1718,7 +1718,7 @@ fn command_palette_chord_runs_the_selected_command_under_cage() {
          the unit test that pins the query to exactly one row. If this is the ONLY assertion that \
          fails, and it fails intermittently, suspect SQLite WAL recovery from the scenario's \
          `kill` rather than the palette — see tests/README.md, \"What is still unproven\".",
-        smoke_state.join("command-mru.sqlite").display()
+        smoke_state.join("wolf.sqlite").display()
     );
 }
 

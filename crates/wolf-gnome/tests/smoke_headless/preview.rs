@@ -1323,7 +1323,7 @@ fn preview_pane_renders_and_edit_source_returns_under_cage() {
              holding some OTHER id means a query matched a row it does not name, which \
              `palette::tests::palette_rows_for_the_preview_smoke_rank_the_named_command_first` \
              would also have caught in the fast suite.",
-            smoke_state.join("command-mru.sqlite").display()
+            smoke_state.join("wolf.sqlite").display()
         );
     }
 
@@ -4108,7 +4108,7 @@ fn preview_click_keeps_window_chords_under_cage() {
          window's capture-phase chord controller, which is the bug this smoke guards \
          against. A DIFFERENT key means the palette opened and Enter ran another row, \
          which assertion 1 should have prevented.",
-        smoke_state.join("command-mru.sqlite").display()
+        smoke_state.join("wolf.sqlite").display()
     );
 
     // --- Assertion 6 (discriminator, leg B): Ctrl+Shift+W closed the preview ---

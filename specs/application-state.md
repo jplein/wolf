@@ -27,7 +27,7 @@ Each table carries its own version in `schema`, so one table's schema change nev
 
 Only a database that is unusable as a file, `SQLITE_CORRUPT` or `SQLITE_NOTADB`, is deleted, together with its `-wal` and `-shm` sidecars, and recreated. A busy or locked database is never deleted: the read degrades to empty and the write is dropped, because deleting it would unlink the file from under every other live connection.
 
-The connection installs `busy_timeout` before setting `journal_mode=WAL`, for the reason the `command_mru.rs` `init` doc comment gives.
+The connection installs `busy_timeout` before setting `journal_mode=WAL`, for the reason the `db.rs` `connect` doc comment gives.
 
 ### Files Wolf removes
 
