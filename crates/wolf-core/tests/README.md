@@ -109,7 +109,7 @@ Headless (`//crates/wolf-core:command_mru`: real SQLite on a tempdir, no nvim, n
 
 **Covers**
 
-- `CommandMru::open`/`disabled`/`record`/`recent` and `COMMAND_MRU_LIMIT`: eager creation of `command-mru.sqlite`, newest-first order, re-record moving to the front without duplicating, the cap with rows physically pruned (proven across a re-open), and silent self-heal over a garbage or wrong-schema DB.
+- `CommandMru::open`/`disabled`/`record`/`recent` and `COMMAND_MRU_LIMIT`: eager creation of `wolf.sqlite`, newest-first order, re-record moving to the front without duplicating, the cap with rows physically pruned (proven across a re-open), and silent self-heal over a garbage file or a `command_mru` table with no `schema` row.
 
 **Gotchas**
 
@@ -149,13 +149,28 @@ Real Neovim (`//crates/wolf-core:current_file`: staged nvim runfiles, `WOLF_NVIM
 - The startup buffer is a named `Untitled.md`, so the unnamed case needs a raw typed `:enew`; `InputEvent::NewBuffer` routes through `wolf_new_untitled` and would name the buffer.
 - Both sides are canonicalized because `/tmp` entries are often symlinks.
 
+#### `db.rs`
+
+Headless (`//crates/wolf-core:db`: real SQLite files in tempdirs, no nvim, no `WOLF_STATE_DIR`).
+
+**Covers**
+
+- The cache half of [the storage rules](../../../specs/application-state.md#1-storage), through the three stores' public API plus raw `rusqlite` connections: one `wolf.sqlite` with a `schema` row per table; a cache table at a newer or older version recreated while the other tables keep their rows; a file that is not a database replaced; the legacy `*-mru.sqlite` files and their sidecars removed at open with nothing imported; and concurrent opens of all three stores losing no row.
+- The busy-database rule is in [`mru.rs`](#mrurs), and each store's table with no `schema` row is in its own file.
+
+**Gotchas**
+
+- The version a case tampers with is read from `schema` after a normal open, and the file and table names are literals from the spec, so a rename goes red.
+- The not-a-database fixture writes a garbage `-shm` and no `-wal`. A garbage `-wal` makes SQLite delete both sidecars itself when the failing connection closes, which hides whether the heal deleted them; the `-shm` is then checked by inode against a hard-linked witness, while the store's handle is alive.
+- The legacy fixtures are built at a neutral name and renamed into place, so nothing under `crates/` opens a database named `*-mru.sqlite`.
+
 #### `empty_state_cwd.rs`
 
 Real Neovim (`//crates/wolf-core:empty_state_cwd`: staged nvim runfiles, `WOLF_NVIM_BIN`, `no-sandbox`).
 
 **Covers**
 
-- Folder-MRU hygiene at launch: the one-shot startup `wolf_cwd` emit updates the tracked-cwd cell alone and never records the launch directory, while a genuine later `:cd` lands at rank 0 — asserted through both `WolfCore::recent_dirs()` and the physical `folder-mru.sqlite`.
+- Folder-MRU hygiene at launch: the one-shot startup `wolf_cwd` emit updates the tracked-cwd cell alone and never records the launch directory, while a genuine later `:cd` lands at rank 0 — asserted through both `WolfCore::recent_dirs()` and the physical `wolf.sqlite`.
 
 **Gotchas**
 
@@ -172,7 +187,7 @@ Real Neovim plus a real filesystem and the real `git` binary (`//crates/wolf-cor
 **Gotchas**
 
 - Every temp cwd is canonicalized (macOS `/tmp` is a symlink) so the traversal root, the MRU rows, and the relative `display` strings line up.
-- MRU cases go through `MruStore::open(&common::hermetic_state_dir())`, the single global `file-mru.sqlite`, not a per-project directory.
+- MRU cases go through `MruStore::open(&common::hermetic_state_dir())`, the single global `wolf.sqlite`, not a per-project directory.
 - Traversal-cap cases belong in the sibling `file_search_bounds.rs`, which owns a separate binary because it mutates the process-global `WOLF_SEARCH_*` env vars.
 
 #### `file_search_bounds.rs`
@@ -290,15 +305,15 @@ Headless: real SQLite on a real tempfs, no Neovim.
 
 **Covers**
 
-- `MruStore` directly — `open` creates `<state_dir>/file-mru.sqlite`; `record`/`recent` are directory-scoped and mutually isolated, most-recent-first with ascending `mru_rank`; re-recording upserts; a deleted file is pruned from the database, not merely filtered; `recent` caps at `MRU_LIMIT`.
-- The recreate policy in both directions: a second, concurrent, or lock-losing open leaves every existing row readable, while a garbage file or a wrong-schema `mru` table is still deleted and rebuilt.
+- `MruStore` directly — `open` creates `<state_dir>/wolf.sqlite`; `record`/`recent` are directory-scoped and mutually isolated, most-recent-first with ascending `mru_rank`; re-recording upserts; a deleted file is pruned from the database, not merely filtered; `recent` caps at `MRU_LIMIT`.
+- The recreate policy in both directions: a second, concurrent, or lock-losing open leaves every existing row readable, while a garbage file is still deleted and rebuilt, and a `file_mru` table with no `schema` row is dropped and rebuilt.
 
 **Gotchas**
 
 - The store canonicalizes its `directory` argument, so build directories with `canon_tempdir` or the relative `display` strings will not line up.
 - Ordering cases need distinct `opened_at` values; keep the `REC_GAP` sleep between records. A flake there means the timestamp resolution or tiebreak needs fixing, not the test.
-- The contention cases use real threads, a real barrier, and second `rusqlite` connections holding real locks rather than injected failures. The lock-losing one first converts the database back to rollback-journal mode, because `BEGIN EXCLUSIVE` does not contend a reader in `WAL` mode.
-- The two healing cases are deliberately distinct shapes: garbage bytes arrive as `rusqlite::Error::SqliteFailure` and a wrong schema as `SqlInputError`. Classifying one variant alone disables half the recreation path, and only one of the two cases catches that.
+- The contention cases use real threads, a real barrier, and second `rusqlite` connections holding real locks rather than injected failures. The lock-losing one first converts the database back to rollback-journal mode, because `BEGIN EXCLUSIVE` does not block a reader in `WAL` mode. Its open then fails at `journal_mode=WAL`, its first statement that reads the file, whatever bookkeeping follows.
+- The two healing cases take distinct paths: a file that is not a database is deleted, while a table with no `schema` row is dropped inside a file that stays. Either path can break while the other holds.
 
 #### `mru_open_records.rs`
 
@@ -471,7 +486,7 @@ Headless: builds `RecentDirs::open(<tempdir>)` directly against real SQLite, so 
 
 **Covers**
 
-- The `RecentDirs` store: eager DB creation, newest-first order, move-to-top on re-record, the `RECENT_DIRS_LIMIT` cap with physical pruning, silent self-heal over a garbage or wrong-schema DB, and the no-op `disabled()` store.
+- The `RecentDirs` store: eager creation of `wolf.sqlite`, newest-first order, move-to-top on re-record, the `RECENT_DIRS_LIMIT` cap with physical pruning, silent self-heal over a garbage file or a `folder_mru` table with no `schema` row, and the no-op `disabled()` store.
 
 **Gotchas**
 

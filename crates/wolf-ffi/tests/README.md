@@ -355,7 +355,7 @@ Also `preview_buffer(win, bufnr)` — markdown binds and returns the source bufn
 
 **Covers** — `WolfCoreHandle::recent_dirs()`, the global folder MRU read back newest-first after driving `:cd`; a deleted folder omitted while the other stays, then listed again in its old place once recreated, which proves the store kept its row. Real nvim; target `//crates/wolf-ffi:recent_dirs` (staged nvim runfiles or `WOLF_NVIM_BIN`, `tags = ["no-sandbox"]`).
 
-**Gotchas** — deliberately a single `#[test]`: it sets the process-global `WOLF_STATE_DIR` before start, and the store opens `folder-mru.sqlite` once at core start, so new cases belong inside that test. The MRU is global, so the test asserts membership and order rather than length. nvim's launch cwd is not in it: `apply_cwd` skips the flagged initial emit.
+**Gotchas** — deliberately a single `#[test]`: it sets the process-global `WOLF_STATE_DIR` before start, and the store opens `wolf.sqlite` once at core start, so new cases belong inside that test. The MRU is global, so the test asserts membership and order rather than length. nvim's launch cwd is not in it: `apply_cwd` skips the flagged initial emit.
 
 #### `search.rs`
 

@@ -359,9 +359,30 @@ Purpose: the pure, IO-free fuzzy match and ordering behind the file picker — g
 - The internal borrowed key adds the entry `index` as a final tie-break to make its order total; without it the bounded path's unstable sort could disagree with `rank_matches`.
 - Scoring folds ASCII case in place and allocates nothing per entry. Rewriting it around `to_lowercase()` costs an allocation per entry and switches matching to Unicode folding.
 
+#### `db.rs`
+
+Purpose: the crate-private open, versioning and recovery of the state database `wolf.sqlite`. Each store declares a `TableSpec` and reaches its table only through a `Table`; the policy is §1 of [the application-state spec](../../../specs/application-state.md#1-storage).
+
+**Public API** (crate-private)
+
+- `Table::open(dir, spec)` — infallible and eager, so the file exists once it returns. `Table::disabled(spec)` never connects.
+- `with_conn(f)` — `None` for a disabled handle and on any failure; a missing connection is reopened lazily.
+
+**Decisions**
+
+- `connect` installs `busy_timeout` before `journal_mode=WAL`. The conversion to `WAL` is the one statement that can need an exclusive lock, and with no back-off a handle opening a not-yet-converted file beside others fails it at once with `SQLITE_BUSY`.
+- `ensure_table` reads the stored version and recreates the table in one `BEGIN IMMEDIATE` transaction, or two handles opening at once would both see the mismatch and the later would drop the table the earlier had recreated and written to.
+- `TableSpec::version` is the only shape check, so bump it with `columns`. A table with no `schema` row counts as another version.
+- Only `SQLITE_CORRUPT` or `SQLITE_NOTADB` deletes the file and its sidecars: that destroys every table's rows, so a busy, locked or schema error must never reach it.
+- The legacy files are removed on every `Table::open`, which is idempotent and runs only at `WolfCore::start`.
+
+**Gotchas**
+
+- A heal unlinks `wolf.sqlite` from under the other live connections. They keep the unlinked file until they meet the fault themselves, and that heal then deletes the file the first one recreated.
+
 #### `mru.rs`
 
-Purpose: the recent-files cache — one global SQLite database under the state directory — letting the picker offer recent files synchronously and rank them first.
+Purpose: the recent-files cache — the global `file_mru` table of `wolf.sqlite`, opened through [`db.rs`](#dbrs) — letting the picker offer recent files synchronously and rank them first.
 
 **Public API**
 
@@ -371,14 +392,12 @@ Purpose: the recent-files cache — one global SQLite database under the state d
 
 **Decisions**
 
-- One global database with a `directory` column, not one per project: isolation is a `WHERE directory = ?` filter. `record` and `recent` must apply identical normalization (canonicalize, else as-given), or macOS resolving `/var` to `/private/var` on one side alone makes rows unfindable.
+- One global table with a `directory` column, not one per project: isolation is a `WHERE directory = ?` filter. `record` and `recent` must apply identical normalization (canonicalize, else as-given), or macOS resolving `/var` to `/private/var` on one side alone makes rows unfindable.
 - Every operation is fire-and-forget: nothing panics or propagates, because a cache hiccup must never block opening a file.
-- Deleting the database and its `-wal`/`-shm` sidecars is reserved for a file unusable as it stands — corrupt, not a database, or the wrong schema. A busy or locked one degrades to an empty result: deleting unlinks the file from under every other live connection, so recreating on contention lets one window destroy another's history.
-- `init` probes with a `SELECT` naming every column, because a wrong-shaped table survives `CREATE TABLE IF NOT EXISTS` and only such a query surfaces the mismatch. It installs `busy_timeout` before switching the journal to `WAL`, since that conversion is the one statement here needing an exclusive lock.
 
 #### `recent_dirs.rs`
 
-Purpose: the recent-directories cache — one global SQLite database under the state directory, recording every directory the captive Neovim changes into, whether through the open-folder command or a typed `:cd`/`:lcd`/`:tcd`.
+Purpose: the recent-directories cache — the global `folder_mru` table of `wolf.sqlite`, opened through [`db.rs`](#dbrs) — recording every directory the captive Neovim changes into, whether through the open-folder command or a typed `:cd`/`:lcd`/`:tcd`.
 
 **Public API**
 
@@ -389,7 +408,6 @@ Purpose: the recent-directories cache — one global SQLite database under the s
 - Ordering is a monotonic `seq` column (`MAX(seq)+1` per insert), not a timestamp, so move-to-top and the cap stay deterministic for inserts landing in the same millisecond. That is what lets the tests avoid sleeps.
 - `record` stores the path as given: it arrives already canonical from `apply_cwd`, so canonicalizing again would only add a filesystem hit.
 - `recent` neither prunes nor filters vanished directories, unlike `MruStore::recent`: [`WolfCore::recent_dirs`](#apirs) filters them on read, so the store keeps a returning folder's row.
-- `init`'s probe query is required for the same reason as in `mru.rs` — a table missing `seq` survives `CREATE TABLE IF NOT EXISTS`.
 
 ### Pickers, panes, and preview
 
@@ -431,11 +449,11 @@ Purpose: Pure candidate assembly and ranking for the command palette — static 
 
 #### `command_mru.rs`
 
-Purpose: The global most-recently-used cache of command palette activations — one SQLite database under `state::state_dir`, keyed on an opaque command key string so it holds static commands and dynamic window/folder rows alike.
+Purpose: The global most-recently-used cache of command palette activations — the `command_mru` table of `wolf.sqlite`, opened through [`db.rs`](#dbrs) — keyed on an opaque command key string so it holds static commands and dynamic window/folder rows alike.
 
 **Public API**
 
-- `CommandMru::open(dir)` — infallible. A failed open is silent, and is retried with a heal on the next call.
+- `CommandMru::open(dir)` — infallible. A failed open is silent, and is retried on the next call.
 - `CommandMru::disabled()` — every method a silent no-op; used when `state::state_dir` cannot be resolved.
 - `record(key)` — fire-and-forget move-or-add-to-top, pruned to `COMMAND_MRU_LIMIT`.
 - `recent()` — keys newest-first, empty on any failure.
@@ -443,8 +461,7 @@ Purpose: The global most-recently-used cache of command palette activations — 
 **Decisions**
 
 - Ordering is a monotonic `seq` column, not a timestamp, so move-to-top and the cap stay deterministic for same-millisecond inserts and tests need no sleeps.
-- Deletion and recreation are reserved for an unusable file, classified exactly as in [`mru.rs`](#mrurs); a busy or locked database is left alone. Nothing panics or propagates, and the only log is at `debug`: the store is disposable, and a palette activation must never be blocked or made noisy by it.
-- `init` probes with a query naming `seq` after the `CREATE TABLE IF NOT EXISTS`. A pre-existing table missing the `seq` column survives that create, so only such a query surfaces the wrong schema as an error the heal path can act on.
+- Nothing panics or propagates, and the only log is at `debug`: the store is disposable, and a palette activation must never be blocked or made noisy by it.
 
 **Gotchas**
 
