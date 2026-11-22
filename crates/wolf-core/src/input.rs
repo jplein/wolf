@@ -249,15 +249,14 @@ pub enum InputEvent {
         /// confirming caller that passes `false` loses the write silently.
         force: bool,
     },
-    /// Change the current view's working directory (delegated to `:tcd`, the
+    /// Change the current tabpage's working directory (delegated to `:tcd`, the
     /// tab-local cwd).
     ///
-    /// Under the project/tabpage-per-view model each view is bound to one nvim
-    /// TABPAGE and owns its own cwd, realized as that tabpage's `:tcd`. A global
-    /// `:cd` would move EVERY view of the shared nvim; `:tcd` scopes the change
-    /// to the current tabpage (the focused view). `:tcd` still fires
-    /// `DirChanged`, so the `wolf_cwd` tracking + `getcwd()`/MRU/picker rooting
-    /// remain correct for the focused view.
+    /// `:tcd` rather than `:cd` because a front-end whose tabs are tabpages of one
+    /// Neovim would see a global `:cd` move every tab. A Neovim that holds one
+    /// tabpage, as each macOS tab's does, sees the same effect from either. `:tcd`
+    /// still fires `DirChanged`, so the `wolf_cwd` tracking + `getcwd()`/MRU/picker
+    /// rooting follow the change.
     Chdir {
         /// The directory to change to.
         path: PathBuf,
@@ -265,9 +264,9 @@ pub enum InputEvent {
     /// Make a specific nvim TABPAGE current (delegated to
     /// `nvim_set_current_tabpage`).
     ///
-    /// The macOS front-end drives every tabpage switch when a view becomes key,
-    /// so nvim renders that view's tabpage. Enqueued on the ordered input channel
-    /// so it never races ahead of or behind pending input.
+    /// For a front-end whose tabs are tabpages of one Neovim, so nvim renders the
+    /// tab the user switched to. Enqueued on the ordered input channel so it never
+    /// races ahead of or behind pending input.
     SetTabpage {
         /// The target nvim tabpage handle.
         handle: i64,
@@ -276,9 +275,9 @@ pub enum InputEvent {
     /// `wolf_close_tabpage` helper, which resolves the stable handle to its
     /// current tabpage NUMBER and runs `<n>tabclose`).
     ///
-    /// Used when a non-last view closes; the shared nvim stays alive until its
-    /// final view closes (the front-end shuts the core down then instead). The
-    /// helper `pcall`s the close so a last-tabpage `E784` is swallowed.
+    /// For a front-end whose tabs are tabpages of one Neovim, when a tab other
+    /// than the last closes; the last one is closed by shutting the core down.
+    /// The helper `pcall`s the close so a last-tabpage `E784` is swallowed.
     CloseTabpage {
         /// The nvim tabpage handle to close.
         handle: i64,
@@ -351,10 +350,10 @@ pub enum InputEvent {
     /// app. `true` reports focus GAINED (→ nvim `FocusGained`, which the init.lua
     /// `WolfAutoRead` augroup rides to run `:checktime` and reload an
     /// externally-changed unmodified buffer); `false` reports focus LOST (→
-    /// `FocusLost`). nvim only fires `FocusGained` on an actual unfocused→focused
-    /// transition, so a front-end reports BOTH edges (resign → `false`, activate →
-    /// `true`) to keep each refocus a real transition. Enqueued on the ordered
-    /// input channel so it never races pending input.
+    /// `FocusLost`). nvim fires the autocmd on every call, with no de-duplication,
+    /// so a front-end sends each edge once: a loss when the tab loses focus and a
+    /// gain when it regains it. Enqueued on the ordered input channel so it never
+    /// races pending input.
     SetUiFocus {
         /// `true` = focus gained (`FocusGained`), `false` = focus lost (`FocusLost`).
         gained: bool,
@@ -639,7 +638,7 @@ async fn set_current_tabpage(nvim: &mut impl Rpc, handle: i64) -> Result<(), Box
 ///
 /// The helper resolves the STABLE handle to its (renumbering) tabpage NUMBER and
 /// runs `<n>tabclose` inside a `pcall`, so a last-tabpage `E784` is swallowed
-/// (the front-end never closes the last view — the Project shuts the core down
+/// (a front-end never closes the last tabpage — it shuts the core down
 /// instead).
 async fn close_tabpage(nvim: &mut impl Rpc, handle: i64) -> Result<(), Box<CallError>> {
     let _ = nvim

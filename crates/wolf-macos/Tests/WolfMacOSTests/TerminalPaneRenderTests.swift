@@ -49,8 +49,7 @@ final class TerminalPaneFixture {
       return nil
     }
     container = PaneContainerView(
-      handle: handle, metrics: live.metrics, tabpageHandle: handle.current_tabpage(),
-      optionAsAlt: false)
+      handle: handle, metrics: live.metrics, optionAsAlt: false)
     renderer = OffscreenRenderer(hosting: container, size: Self.windowSize)
     renderer.window.reportsKey = true
   }

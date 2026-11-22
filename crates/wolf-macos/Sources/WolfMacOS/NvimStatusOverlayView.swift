@@ -4,7 +4,7 @@ import AppKit
 
 /// The overlay's mode, mirroring the non-`Alive` `wolf_core::Liveness` states.
 enum NvimStatusMode {
-  /// The captive nvim process died. `retrying` is whether the project may still
+  /// The captive nvim process died. `retrying` is whether the tab's core may still
   /// make an automatic restart attempt (`LivenessSeam.Overlay.crashed`).
   case dead(retrying: Bool)
   /// The captive nvim stalled (the user drives a manual restart via the button).
@@ -31,7 +31,7 @@ final class NvimStatusOverlayView: NSView {
   private static let notRespondingMessage = "Neovim stopped responding"
 
   /// Invoked when the "Restart Neovim" button is clicked. The controller wires
-  /// this to `project.restartNeovim()`.
+  /// this to `tabCore.restartNeovim()`.
   var onRestart: (() -> Void)?
 
   private let messageLabel = NSTextField(labelWithString: "")
@@ -83,7 +83,7 @@ final class NvimStatusOverlayView: NSView {
 
   /// Reveals the overlay for `mode`, updating the status message. The restart
   /// button is always present (for `.dead(retrying: true)` it is a fallback while
-  /// the project auto-restarts; otherwise it is the primary action).
+  /// the tab's core auto-restarts; otherwise it is the primary action).
   func show(mode: NvimStatusMode) {
     switch mode {
     case .dead(retrying: true):
@@ -118,7 +118,7 @@ final class NvimStatusOverlayView: NSView {
     }
   }
 
-  /// The button action: forwards to the project's restart path.
+  /// The button action: forwards to the tab core's restart path.
   @objc private func handleRestart() {
     onRestart?()
   }

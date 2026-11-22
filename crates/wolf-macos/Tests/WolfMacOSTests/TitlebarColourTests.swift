@@ -37,8 +37,7 @@ private final class TitlebarFixture {
     _ = NSApplication.shared
     let handle = live.handle
     let container = PaneContainerView(
-      handle: handle, metrics: live.metrics, tabpageHandle: handle.current_tabpage(),
-      optionAsAlt: false)
+      handle: handle, metrics: live.metrics, optionAsAlt: false)
     self.container = container
     let sidebar = SidebarContainerView(
       tree: FileTreeView(handle: handle, paneContainer: container),

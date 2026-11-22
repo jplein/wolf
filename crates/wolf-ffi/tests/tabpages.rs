@@ -1,8 +1,8 @@
-//! Integration test for the `wolf-ffi` TABPAGE bridge surface:
-//! the per-project/tabpage-per-view handle methods the macOS front-end drives to
-//! bind a view to an nvim tabpage, switch the current view, read a non-current
-//! view's cwd, and close a view's tabpage (keeping the shared nvim alive until the
-//! last view closes).
+//! Integration test for the `wolf-ffi` TABPAGE bridge surface: the handle methods
+//! that pass core's tabpage API across the bridge, for a front-end whose tabs are
+//! tabpages of one Neovim. They bind a tab to an nvim tabpage, switch the current
+//! tabpage, read a non-current tabpage's cwd, and close a tabpage while the Neovim
+//! that holds the others stays alive.
 //!
 //! This drives the RUST half against a REAL, hermetic Neovim — NO mocks, per the
 //! project testing policy. It is the sibling of `panes.rs` / `close_pane.rs` (same
@@ -17,7 +17,7 @@
 //!   * `create_tabpage(&self, cwd: String) -> i64` — `tabnew` (+ `:tcd cwd` when
 //!     non-empty); the new tabpage handle (0 when the core is gone).
 //!   * `current_tabpage(&self) -> i64` — the current tabpage handle via a blocking
-//!     RPC (the first-view bind); 0 when gone.
+//!     RPC (a front-end's bind of its first tab); 0 when gone.
 //!   * `active_tabpage(&self) -> i64` — the CHEAP `Snapshot.current_tabpage` gate; 0
 //!     when gone.
 //!   * `cwd_for_tabpage(&self, tab: i64) -> String` — a tabpage's tab-local `:tcd`
@@ -165,7 +165,7 @@ fn tabpage_lifecycle_over_the_bridge() {
     )
     .expect("wolf_ffi_start should return a handle (is WOLF_NVIM_BIN a valid nvim?)");
 
-    // --- 1. Attach + first-view bind ----------------------------------------
+    // --- 1. Attach + first-tab bind -----------------------------------------
     poll("the core to attach (read_frame cols > 0)", || {
         handle.read_frame().cols() > 0
     });
@@ -176,7 +176,7 @@ fn tabpage_lifecycle_over_the_bridge() {
     let t1 = handle.current_tabpage();
     assert_ne!(
         t1, NEUTRAL,
-        "current_tabpage() should be a nonzero first-view bind"
+        "current_tabpage() should be a nonzero first-tab bind"
     );
     // active_tabpage() (the cheap snapshot gate) should also report T1 after attach.
     poll("active_tabpage() to report T1", || {

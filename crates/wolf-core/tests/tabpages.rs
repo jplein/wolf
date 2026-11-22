@@ -1,7 +1,6 @@
-//! Integration tests for `wolf-core`'s TABPAGE lifecycle surface: the
-//! project/tabpage-per-view model where one captive Neovim holds multiple
-//! nvim TABPAGES, one per front-end view. These drive a REAL, hermetic nvim (no
-//! mocks) via `WOLF_NVIM_BIN`; the common helpers panic loudly if it is unset.
+//! Integration tests for `wolf-core`'s TABPAGE lifecycle surface, for a front-end
+//! whose tabs are nvim TABPAGES of one captive Neovim. These drive a REAL, hermetic
+//! nvim (no mocks) via `WOLF_NVIM_BIN`; the common helpers panic loudly if it is unset.
 //!
 //! ## Surface under test
 //!
@@ -12,7 +11,7 @@
 //!     of band by the `wolf_tab_cwds` notification and wholesale-replaced on every
 //!     `DirChanged` / `TabNewEntered` / `TabClosed`. CANONICALIZED per-tabpage cwd;
 //!     `None` for a closed handle or one no notification has covered yet.
-//!     Authoritative for a NON-current view's cwd. `tabpage_cwd.rs` is the test
+//!     Authoritative for a NON-current tabpage's cwd. `tabpage_cwd.rs` is the test
 //!     that pins the no-RPC half, by resolving both a current and a non-current
 //!     tabpage while nvim is wedged. Because the map arrives asynchronously, a
 //!     test here POLLS for a value rather than reading once.
@@ -29,8 +28,9 @@
 //!     the same grid id AND the same window handle on the way back —
 //!     `win_hide_removes_window_but_keeps_grid_on_tabpage_switch` pins exactly that,
 //!     and a round trip was measured to return `grid_for_win(w1)` unchanged. Window
-//!     HANDLES being stable is the load-bearing assumption the refocus-rebind
-//!     design rests on (see `window_handles_survive_a_tabpage_switch`). We
+//!     HANDLES being stable is the load-bearing assumption of a front-end that
+//!     rebinds its panes when it returns to a tabpage (see
+//!     `window_handles_survive_a_tabpage_switch`). We
 //!     nevertheless assert on window-HANDLE membership + `grid_for_win`
 //!     round-trips and never on literal grid-id values or HashMap order, because
 //!     id REUSE is an observation about nvim rather than a contract this crate is
@@ -166,7 +166,7 @@ fn canon(p: &Path) -> PathBuf {
 }
 
 /// Waits for the initial single editor window to appear after attach, then returns
-/// the first tabpage handle (blocking) — the "first-view bind".
+/// the first tabpage handle (blocking) — a front-end's bind of its first tab.
 fn attach_and_first_tabpage(core: &WolfCore, waiter: &FlushWaiter) -> i64 {
     poll_until(
         waiter,
@@ -388,7 +388,8 @@ fn switch_back_makes_second_tabpage_grids_vanish() {
 ///    and both `grid_for_win` resolve to live grids. Grid ids are not asserted (see
 ///    the module docs).
 ///
-/// The refocus-rebind design rests on this. Assertions are deliberately explicit.
+/// A front-end that rebinds its panes on returning to a tabpage rests on this. Assertions
+/// are deliberately explicit.
 #[test]
 fn window_handles_survive_a_tabpage_switch() {
     let (core, waiter) = common::start_core_sized(common::DEFAULT_COLS, common::DEFAULT_ROWS);
@@ -434,9 +435,10 @@ fn window_handles_survive_a_tabpage_switch() {
     let after = window_handles(&core.read_snapshot());
     assert_eq!(
         after, split_handles,
-        "KEYSTONE FAILURE (refocus rebind): window handles did NOT survive the tabpage switch — \
-         before={split_handles:?}, after={after:?}. The refocus-rebind design depends \
-         on stable window handles; if this fails, that design is unsound."
+        "KEYSTONE FAILURE (tabpage return): window handles did NOT survive the tabpage switch \
+         — before={split_handles:?}, after={after:?}. A front-end that rebinds its panes on \
+         returning to a tabpage depends on stable window handles; if this fails, that \
+         rebind is unsound."
     );
 
     // And each surviving handle rebinds to a live grid via grid_for_win.
@@ -444,7 +446,7 @@ fn window_handles_survive_a_tabpage_switch() {
     for &win in &after {
         let grid = snap.grid_for_win(win).unwrap_or_else(|| {
             panic!(
-                "KEYSTONE FAILURE (refocus rebind): grid_for_win({win}) did not resolve after the \
+                "KEYSTONE FAILURE (tabpage return): grid_for_win({win}) did not resolve after the \
                  switch back to T1 (windows={after:?})"
             )
         });
@@ -664,8 +666,8 @@ fn stable_handle_survives_tabpage_renumber() {
 ///    `windows`/`grid_for_win` reflect ONLY the current tabpage) while KEEPING its
 ///    grid in `Snapshot.grids` (a rebound window must still resolve to a live grid).
 ///
-/// This DIRECTLY pins the window-removed / grid-kept contract that the whole
-/// refocus-rebind design leans on — the other tests exercise it only indirectly via
+/// This DIRECTLY pins the window-removed / grid-kept contract that a front-end rebinding
+/// its panes on a tabpage return leans on — the other tests exercise it only indirectly via
 /// the switch-back round-trip. Switch AWAY from T1 to a fresh T2 and assert, in one
 /// snapshot: T1's window W1 is GONE from `windows` and `grid_for_win(W1)` no longer
 /// resolves, BUT W1's original grid G1 is STILL a live entry in `grids`.

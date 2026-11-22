@@ -7,9 +7,10 @@ import XCTest
 @testable import WolfMacOS
 
 /// The process-wide environment a live core needs, prepared once before any core or
-/// config read: `WOLF_NVIM_BIN` from the staged Neovim, fresh `WOLF_STATE_DIR` and
-/// `WOLF_CONFIG_DIR`, so no test reads or writes the user's state or preferences, and
-/// `SHELL=/bin/sh`, so a session started with no command runs a known shell.
+/// config read: `WOLF_NVIM_BIN` from the staged Neovim, `WOLF_INIT_LUA` from the staged
+/// `init.lua`, so `TabCore.start` launches it through its production path, fresh
+/// `WOLF_STATE_DIR` and `WOLF_CONFIG_DIR`, so no test reads or writes the user's state or
+/// preferences, and `SHELL=/bin/sh`, so a session started with no command runs a known shell.
 ///
 /// It also registers the staged font trees the app bundles (iA Writer Mono S, JetBrains Mono
 /// and Symbols Nerd Font Mono) with CoreText, before any metrics are measured, so every test
@@ -69,6 +70,7 @@ private struct LiveCoreEnvironment: Sendable {
         problem: "WOLF_TEST_INIT_LUA (\(env["WOLF_TEST_INIT_LUA"] ?? "unset")) resolves to no"
           + " staged init.lua: the target must stage //runtime/nvim:init.lua", scratch: scratch)
     }
+    setenv("WOLF_INIT_LUA", initLua, 1)
     if let problem = registerStagedFonts(env: env) {
       return LiveCoreEnvironment(initLua: nil, problem: problem, scratch: scratch)
     }
@@ -221,12 +223,43 @@ final class LiveCore {
   /// and returns whether it held.
   @discardableResult
   func waitFor(timeout: TimeInterval, _ condition: () -> Bool) -> Bool {
+    Self.spin(timeout: timeout, until: condition)
+  }
+
+  /// `waitFor(timeout:_:)` for a test that holds no `LiveCore`, such as one whose cores
+  /// `TabCore.start` makes.
+  @discardableResult
+  static func spin(timeout: TimeInterval, until condition: () -> Bool) -> Bool {
     let deadline = Date().addingTimeInterval(timeout)
     while Date() < deadline {
       if condition() { return true }
-      RunLoop.main.run(until: Date().addingTimeInterval(Self.pollStep))
+      RunLoop.main.run(until: Date().addingTimeInterval(pollStep))
     }
     return condition()
+  }
+
+  /// Prepares the shared environment and makes a fresh directory in its scratch area,
+  /// returned canonical, as Neovim reports its cwd; `nil`, with the calling test failed,
+  /// when the environment or the directory cannot be made.
+  static func scratchDirectory(file: StaticString = #filePath, line: UInt = #line) -> String? {
+    let env = LiveCoreEnvironment.shared
+    guard env.problem == nil else {
+      XCTFail("LiveCore: \(env.problem ?? "")", file: file, line: line)
+      return nil
+    }
+    let dir = (env.scratch as NSString).appendingPathComponent("dir-\(UUID().uuidString)")
+    do {
+      try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+    } catch {
+      XCTFail("LiveCore: could not create \(dir): \(error)", file: file, line: line)
+      return nil
+    }
+    guard let resolved = realpath(dir, nil) else {
+      XCTFail("LiveCore: could not resolve \(dir)", file: file, line: line)
+      return nil
+    }
+    defer { free(resolved) }
+    return String(cString: resolved)
   }
 
   /// Shuts the core and its sessions down.

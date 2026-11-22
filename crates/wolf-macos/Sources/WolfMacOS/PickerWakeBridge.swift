@@ -1,13 +1,14 @@
-// Marshals the file-search wake onto the main thread and refreshes that window's picker.
+// Marshals the file-search wake onto the main thread and refreshes that tab's picker.
 
 import AppKit
 import WolfFFI
 
 /// Bridges wolf-core's file-search traversal wake to AppKit. Core invokes the
 /// registered `extern "C"` callback (see `wolf_ffi_set_filesearch_wake`) from its
-/// worker thread on each traversal batch with its per-window `token`; the thunk
-/// below hops onto the main thread, looks the token up in `WindowRegistry`, and
-/// asks that window's `PickerView` to re-rank/redraw. A late wake after the
+/// worker thread on each traversal batch with its `token`, which names one tab's
+/// core; the thunk below hops onto the main thread, looks the token up in
+/// `WindowRegistry`, and asks that tab's `PickerView`, through
+/// `TabCore.onPickerWake()`, to re-rank/redraw. A late wake after the
 /// picker has closed is harmless — `refresh()` is a no-op when closed. The wake
 /// asks for a COALESCED refresh (`scheduleRefresh()`) so a large load's many
 /// batch wakes collapse to at most one re-rank per frame; keystrokes still
@@ -20,7 +21,7 @@ enum PickerWakeBridge {
   static func install() {
     wolf_ffi_set_filesearch_wake({ token in
       DispatchQueue.main.async {
-        WindowRegistry.shared.project(for: token)?.onPickerWake()
+        WindowRegistry.shared.tabCore(for: token)?.onPickerWake()
       }
     })
   }

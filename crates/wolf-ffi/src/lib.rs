@@ -202,7 +202,7 @@ mod command_kind {
     pub const PREVIEW: u8 = 18;
     /// Navigate from a preview pane back to its source file (inverse of preview).
     pub const EDIT: u8 = 19;
-    /// Toggle the per-project terminal drawer (a bottom split on the core's drawer session).
+    /// Toggle the terminal drawer (a bottom split on the core's drawer session).
     pub const TERMINAL: u8 = 20;
     /// Render the active Markdown buffer and open it in the system web browser.
     pub const PREVIEW_IN_BROWSER: u8 = 21;
@@ -525,26 +525,24 @@ mod ffi {
         fn grid_for_win(&self, win: i64) -> u64;
         // The currently active Neovim window handle, or 0 if not yet known.
         fn active_win(&self) -> i64;
-        // Creates a tabpage (a new view of this project), `:tcd`'d to `cwd` unless empty, and returns
-        // its handle. Blocks briefly; 0 when the core is gone (the caller drops the view).
+        // Creates a tabpage, `:tcd`'d to `cwd` unless empty, and returns its handle. Blocks briefly;
+        // 0 when the core is gone (the caller drops the would-be tab).
         fn create_tabpage(&self, cwd: String) -> i64;
         // Renders a saved tree (as `FfiTabState::layout` returns it) via `rebuild_layout_spec` and
         // realizes it in the current tabpage's lone window; returns window handles in leaf order.
         fn rebuild_layout(&self, layout: &FfiPaneNode) -> Vec<i64>;
-        // The current tabpage's stable HANDLE via a blocking RPC (the first-view
-        // bind). 0 when the core is gone.
+        // The current tabpage's stable HANDLE via a blocking RPC. 0 when the core is gone.
         fn current_tabpage(&self) -> i64;
-        // The cheap refocus gate: `Snapshot.current_tabpage` (updated via `wolf_tabpage`), no RPC.
+        // `Snapshot.current_tabpage` (updated via `wolf_tabpage`), no RPC, so a dead core answers it.
         // 0 when the core is gone or not yet known.
         fn active_tabpage(&self) -> i64;
-        // A tabpage's canonicalized `:tcd` cwd, authoritative for a non-current view. Blocks briefly;
-        // empty when the core is gone or the handle is invalid (e.g. a closed tabpage).
+        // A tabpage's canonicalized `:tcd` cwd, current or not. Blocks briefly; empty when the core
+        // is gone or the handle is invalid (e.g. a closed tabpage).
         fn cwd_for_tabpage(&self, tab: i64) -> String;
-        // Makes tabpage `tab` current (the front-end drives every tabpage switch
-        // when a view becomes key). A no-op when the core is gone.
+        // Makes tabpage `tab` current. A no-op when the core is gone.
         fn set_current_tabpage(&self, tab: i64);
-        // Closes a non-last view's tabpage; the shared nvim lives until its last view closes, when
-        // the front-end shuts the core down instead.
+        // Closes tabpage `tab`; a last-tabpage close is swallowed, since the last one goes with the
+        // core's shutdown.
         fn close_tabpage(&self, tab: i64);
         // Focuses a specific Neovim window (click-to-focus / resolved FocusDir).
         fn focus_win(&self, win: i64);
@@ -557,8 +555,8 @@ mod ffi {
         // The Tier-1 open-file mirror for `tab`, a snapshot read with no RPC; capture it before a
         // `restart`. Empty-backed when the core is gone or the tab is unknown.
         fn open_files_for_tabpage(&self, tab: i64) -> FfiOpenFiles;
-        // `nvim_ui_set_focus`: true on activate (FocusGained -> WolfAutoRead `:checktime`), false on
-        // resign. Both edges are reported so each refocus is a real transition.
+        // `nvim_ui_set_focus`: true when the core's tab gains focus (FocusGained -> WolfAutoRead
+        // `:checktime`), false when it loses it. nvim fires the autocmd on every call.
         fn set_ui_focus(&self, gained: bool);
         fn shutdown(&self);
         // A streaming file search over the core's cwd, fed by the file-search wake. Infallible:
@@ -608,8 +606,8 @@ mod ffi {
         // Opens `path` (an absolute filesystem path) in Neovim via
         // `InputEvent::Open`; the core's input pump records the MRU.
         fn open(&self, path: String);
-        // Changes the current view's cwd to absolute `path` via `InputEvent::Chdir`, which is `:tcd`:
-        // each view (tabpage) owns its own working directory.
+        // Changes the current tabpage's cwd to absolute `path` via `InputEvent::Chdir`, which is
+        // `:tcd`; a core with one tabpage, as a macOS tab's is, moves as a whole.
         fn chdir(&self, path: String);
         // `:set background=dark|light` via `InputEvent::SetBackground`. The macOS front-end pushes
         // the resolved appearance at launch and live in `auto` mode. A no-op when the core is gone.
@@ -624,7 +622,7 @@ mod ffi {
         // Opens an empty buffer named the next free `Untitled N.md` (markdown-typed, never written)
         // via `InputEvent::NewBuffer` (the `wolf_new_untitled` Lua helper).
         fn new_buffer(&self);
-        // Toggles the per-project terminal drawer through `WolfCore::toggle_terminal`, which
+        // Toggles the terminal drawer through `WolfCore::toggle_terminal`, which
         // starts the drawer's session when none is live.
         fn toggle_terminal(&self);
         // Toggles content width between the ~90-char default and full pane width via the
@@ -1346,8 +1344,8 @@ mod ffi {
 // --- Wake registration (Swift-free; see the crate docs) ---
 
 /// The C ABI of the front-end wake callback. It carries the firing core's
-/// per-project wake token (one captive Neovim shared by N views) so a single
-/// process-global callback can route each wake to the right project WITHOUT clobbering.
+/// wake token, so a single process-global callback serving every core can route
+/// each wake to the tab that owns the core WITHOUT clobbering.
 type WakeCallback = extern "C" fn(u64);
 
 /// The next wake token to mint. Starts at 1 (0 is reserved as a "no core" /
@@ -1484,7 +1482,7 @@ static SEARCH_WAKE_FN: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 /// callback.
 ///
 /// Swift's `SearchWakeBridge` calls this once at startup with a thunk that does
-/// `DispatchQueue.main.async { … project.onSearchWake() … }`. A fourth registered
+/// `DispatchQueue.main.async { … tabCore.onSearchWake() … }`. A fourth registered
 /// `extern "C"` callback alongside [`wolf_ffi_set_wake`],
 /// [`wolf_ffi_set_filesearch_wake`], and [`wolf_ffi_set_tree_wake`], declared in
 /// the hand-written `generated/wolf_ffi_wake.h`, so a Rust-only build leaves no
@@ -2251,13 +2249,12 @@ impl WolfCoreHandle {
         core.read_snapshot().active_win.unwrap_or(0)
     }
 
-    /// Creates a new nvim TABPAGE (a new view of this PROJECT), optionally rooted
-    /// at `cwd` via `:tcd` (an empty string means no `:tcd` — the empty-state
-    /// view), and returns its stable HANDLE.
+    /// Creates a new nvim TABPAGE, optionally rooted at `cwd` via `:tcd` (an
+    /// empty string means no `:tcd`), and returns its stable HANDLE.
     ///
     /// Blocks briefly on the captive nvim (via [`WolfCore::create_tabpage`]).
     /// Returns 0 when the core has been shut down, so the caller drops the
-    /// would-be view.
+    /// would-be tab.
     #[must_use]
     pub fn create_tabpage(&self, cwd: String) -> i64 {
         let borrow = self.core.borrow();
@@ -2291,10 +2288,10 @@ impl WolfCoreHandle {
         core.rebuild_layout(&wolf_core::state::rebuild_layout_spec(&layout.node))
     }
 
-    /// The current tabpage's stable HANDLE via a blocking RPC (the first-view
-    /// bind). 0 when the core has been shut down.
+    /// The current tabpage's stable HANDLE via a blocking RPC. 0 when the core
+    /// has been shut down.
     ///
-    /// Contrast [`active_tabpage`](Self::active_tabpage), the cheap snapshot gate.
+    /// Contrast [`active_tabpage`](Self::active_tabpage), the cheap snapshot read.
     #[must_use]
     pub fn current_tabpage(&self) -> i64 {
         let borrow = self.core.borrow();
@@ -2304,14 +2301,14 @@ impl WolfCoreHandle {
         core.current_tabpage()
     }
 
-    /// The CHEAP `Snapshot.current_tabpage` refocus gate (updated out-of-band via
-    /// the `wolf_tabpage` notification), read from the snapshot with NO RPC. 0
-    /// when the core has been shut down or the tabpage is not yet known.
+    /// The CHEAP `Snapshot.current_tabpage` (updated out-of-band via the
+    /// `wolf_tabpage` notification), read from the snapshot with NO RPC. 0 when
+    /// the core has been shut down or the tabpage is not yet known.
     ///
-    /// Mirrors [`active_win`](Self::active_win): a cheap `read_snapshot()` read
-    /// the front-end polls to decide whether its tabpage is current (the refocus
-    /// rebind barrier), vs the authoritative bind-time
-    /// [`current_tabpage`](Self::current_tabpage) RPC.
+    /// Mirrors [`active_win`](Self::active_win). Because it needs no RPC, a dead
+    /// core still answers it, which is why the macOS restart capture keys
+    /// [`open_files_for_tabpage`](Self::open_files_for_tabpage) by it rather than
+    /// by the authoritative [`current_tabpage`](Self::current_tabpage) RPC.
     #[must_use]
     pub fn active_tabpage(&self) -> i64 {
         let borrow = self.core.borrow();
@@ -2322,7 +2319,7 @@ impl WolfCoreHandle {
     }
 
     /// A tabpage's tab-local `:tcd` cwd (canonicalized), AUTHORITATIVE for a
-    /// NON-current view's cwd. Blocks briefly on the captive nvim (via
+    /// tabpage that is not current. Blocks briefly on the captive nvim (via
     /// [`WolfCore::cwd_for_tabpage`]). Empty when the core has been shut down or
     /// the handle is invalid (e.g. a closed tabpage).
     #[must_use]
@@ -2335,17 +2332,16 @@ impl WolfCoreHandle {
             .map_or_else(String::new, |p| p.to_string_lossy().into_owned())
     }
 
-    /// Makes tabpage `tab` current (the front-end drives every tabpage switch when
-    /// a view becomes key). A no-op once the core has been shut down.
+    /// Makes tabpage `tab` current. A no-op once the core has been shut down.
     pub fn set_current_tabpage(&self, tab: i64) {
         if let Some(core) = self.core.borrow().as_ref() {
             core.set_current_tabpage(tab);
         }
     }
 
-    /// Closes tabpage `tab` (a non-last view close; the shared nvim stays alive
-    /// until its LAST view closes — the front-end shuts the core down then
-    /// instead). A no-op once the core has been shut down.
+    /// Closes tabpage `tab`. A last-tabpage close is swallowed: a front-end ends
+    /// the last tabpage by shutting the core down. A no-op once the core has been
+    /// shut down.
     pub fn close_tabpage(&self, tab: i64) {
         if let Some(core) = self.core.borrow().as_ref() {
             core.close_tabpage(tab);
@@ -2386,7 +2382,7 @@ impl WolfCoreHandle {
     /// undisturbed, or a concurrent restart in flight), when the respawn FAILED
     /// (logged; liveness is left `Dead`), or when the core is gone.
     ///
-    /// The front-end drives the reopen + rebind ONLY when this returns `true`, off
+    /// The front-end drives the reopen ONLY when this returns `true`, off
     /// the Tier-1 files it captured via
     /// [`open_files_for_tabpage`](Self::open_files_for_tabpage) BEFORE the restart
     /// (a respawn wipes the mirror). On `false` the front-end re-reads
@@ -2408,11 +2404,11 @@ impl WolfCoreHandle {
 
     /// The Tier-1 open-file mirror entry KEYED BY tabpage `tab`, a cheap snapshot
     /// read (no RPC). An empty-backed [`FfiOpenFiles`] when the core is gone or the
-    /// tab is unknown. The front-end captures this per view BEFORE a restart (a
-    /// respawn wipes the mirror) and reopens the files afterward.
+    /// tab is unknown. The front-end captures this BEFORE a restart (a respawn
+    /// wipes the mirror) and reopens the files afterward.
     ///
     /// Only `active_path` is per-tabpage; `files` is the whole instance's buflisted
-    /// set (see [`FfiOpenFiles`]), so a multi-view project over-reopens.
+    /// set (see [`FfiOpenFiles`]), so a core showing several tabpages over-reopens.
     #[must_use]
     pub fn open_files_for_tabpage(&self, tab: i64) -> FfiOpenFiles {
         let borrow = self.core.borrow();
@@ -2422,12 +2418,12 @@ impl WolfCoreHandle {
         FfiOpenFiles::from_tab_files(mirror)
     }
 
-    /// Forwards the OS window/app focus state to the captive Neovim UI via
-    /// `nvim_ui_set_focus`: `true` on app/window activation (fires `FocusGained`,
-    /// which the init.lua `WolfAutoRead` augroup rides to `:checktime` and reload an
-    /// externally-changed unmodified buffer), `false` on resign. Both edges are
-    /// reported so each refocus is a genuine transition. A no-op once the core has
-    /// been shut down.
+    /// Forwards the focus of the tab this core serves to the captive Neovim UI via
+    /// [`WolfCore::set_ui_focus`]: `true` when the tab gains focus, the app becoming
+    /// active included (fires `FocusGained`, which the init.lua `WolfAutoRead`
+    /// augroup rides to `:checktime` and reload an unmodified buffer changed on
+    /// disk), `false` when it loses it. nvim fires the autocmd on every call, so
+    /// the front-end sends each edge once. A no-op once the core has been shut down.
     pub fn set_ui_focus(&self, gained: bool) {
         if let Some(core) = self.core.borrow().as_ref() {
             core.set_ui_focus(gained);
@@ -2711,10 +2707,10 @@ impl WolfCoreHandle {
         }
     }
 
-    /// Changes the current VIEW's working directory to `path` (an absolute
-    /// filesystem path) via [`InputEvent::Chdir`] (`:tcd`, the tab-local cwd —
-    /// each view/tabpage owns its own working directory). A no-op once the core
-    /// has been shut down.
+    /// Changes the current tabpage's working directory to `path` (an absolute
+    /// filesystem path) via [`InputEvent::Chdir`] (`:tcd`, the tab-local cwd). A
+    /// macOS tab's core holds one tabpage, so the whole tab moves. A no-op once
+    /// the core has been shut down.
     pub fn chdir(&self, path: String) {
         if let Some(core) = self.core.borrow().as_ref() {
             core.send_input(InputEvent::Chdir {
@@ -2770,7 +2766,7 @@ impl WolfCoreHandle {
         }
     }
 
-    /// Toggles the per-project terminal drawer via [`WolfCore::toggle_terminal`], which
+    /// Toggles the terminal drawer via [`WolfCore::toggle_terminal`], which
     /// starts the drawer's session when none is live. A no-op once the core is gone.
     pub fn toggle_terminal(&self) {
         if let Some(core) = self.core.borrow().as_ref() {
@@ -3375,12 +3371,12 @@ impl WolfCoreHandle {
 /// Starts the core. `init_lua` and `cwd` are filesystem paths (mirroring
 /// [`CoreConfig`]). Returns `None` (after logging) on any startup error.
 ///
-/// The terminfo directory comes from `WOLF_TERMINFO_DIR`, which `Project.swift` defaults to
+/// The terminfo directory comes from `WOLF_TERMINFO_DIR`, which `TabCore.swift` defaults to
 /// the bundle's `Contents/Resources/terminfo`; see [`wolf_core::terminfo_dir_from_env`].
 ///
 /// A fresh wake token is minted (via `NEXT_WAKE_TOKEN`) and captured by the
-/// core's [`WakeFn`] so wakes route back to THIS window. State persistence is no
-/// longer wired per-core: the coordinator walks the whole window/tab tree and
+/// core's [`WakeFn`] so wakes route back to THIS tab. State persistence is not
+/// wired per-core: the coordinator walks the whole window/tab tree and
 /// commits it via the write-side snapshot builder free fns (see
 /// [`wolf_ffi_state_snapshot_begin`]).
 #[must_use]

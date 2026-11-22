@@ -1046,10 +1046,10 @@ impl WolfCore {
     /// [`block_on_rpc`](Self::block_on_rpc) (the same bounded pattern
     /// [`list_buffers`](Self::list_buffers) uses, bounded by
     /// [`rpc_timeout`](Self::rpc_timeout) — [`RPC_TIMEOUT_DEFAULT`],
-    /// `WOLF_RPC_TIMEOUT_MS`) to run the `wolf_create_tabpage` helper. The macOS
-    /// front-end calls this to add a view (a new tabpage) to a project's shared
-    /// nvim. An RPC error (including a [`NvimError::Timeout`] on a wedged nvim) is
-    /// logged and returns `0` so the caller can drop the would-be view.
+    /// `WOLF_RPC_TIMEOUT_MS`) to run the `wolf_create_tabpage` helper. For a
+    /// front-end whose tabs are tabpages of one Neovim, to add a tab. An RPC error
+    /// (including a [`NvimError::Timeout`] on a wedged nvim) is logged and returns
+    /// `0` so the caller can drop the would-be tab.
     #[must_use]
     pub fn create_tabpage(&self, cwd: Option<&Path>) -> i64 {
         let cwd = cwd
@@ -1137,8 +1137,8 @@ impl WolfCore {
     /// wholesale-replaces the map on every `DirChanged`/`TabNewEntered`/`TabClosed`
     /// (plus one initial emit), with each cwd already canonicalized in
     /// [`apply_tab_cwds`](crate::redraw::RedrawHandler::apply_tab_cwds). This is
-    /// AUTHORITATIVE even for a NON-current view's cwd — the gap that
-    /// [`live_cwd`](Self::live_cwd) (current view only) cannot cover — without the
+    /// AUTHORITATIVE even for a tabpage that is not current — the gap that
+    /// [`live_cwd`](Self::live_cwd) (current tabpage only) cannot cover — without the
     /// blocking round-trip the old `wolf_tab_cwd` RPC required. `None` until nvim
     /// first reports the tab (the same neutral fallback the old timeout failure
     /// produced), and after a `TabClosed` prunes the handle from the map.
@@ -1148,7 +1148,7 @@ impl WolfCore {
     }
 
     /// Returns the current tabpage's stable HANDLE (`0` on error) — the
-    /// authoritative first-view bind.
+    /// authoritative bind-time value.
     ///
     /// Blocks briefly on the captive nvim via
     /// [`block_on_rpc`](Self::block_on_rpc) (bounded by
@@ -1183,7 +1183,7 @@ impl WolfCore {
     /// Enqueued on the same ordered input channel as keystrokes so it never races
     /// ahead of or behind pending input; applied via the init.lua
     /// `wolf_close_tabpage` helper (`<n>tabclose` under `pcall`). Used for a
-    /// non-last view close; the front-end shuts the core down for the last view.
+    /// non-last tabpage; a front-end shuts the core down for the last one.
     pub fn close_tabpage(&self, handle: i64) {
         self.send_input(InputEvent::CloseTabpage { handle });
     }
@@ -1286,13 +1286,14 @@ impl WolfCore {
     /// Forwards the OS window/app focus state to the captive Neovim UI via
     /// `nvim_ui_set_focus`, so `FocusGained` / `FocusLost` fire in the running app.
     ///
-    /// A front-end reports focus GAINED (`true`) on app/window activation and focus
-    /// LOST (`false`) on resign. `FocusGained` drives the init.lua `WolfAutoRead`
-    /// augroup's `:checktime`, reloading an externally-changed unmodified buffer
-    /// when the user returns to Wolf (e.g. Dock reactivation). Both edges are
-    /// reported because nvim only fires `FocusGained` on a real unfocused→focused
-    /// transition. Enqueued on the same ordered input channel as keystrokes so it
-    /// never races pending input; applied via `nvim_ui_set_focus`.
+    /// This is the focus trigger of every front-end: it reports focus GAINED
+    /// (`true`) when the tab this core serves gains focus, the app becoming active
+    /// included, and focus LOST (`false`) when it loses it. `FocusGained` drives the
+    /// init.lua `WolfAutoRead` augroup's `:checktime`, reloading an unmodified
+    /// buffer that another tab's Neovim or an external tool changed on disk. nvim
+    /// fires the autocmd on every call, with no de-duplication, so a front-end sends
+    /// each edge once. Enqueued on the same ordered input channel as keystrokes so
+    /// it never races pending input; applied via `nvim_ui_set_focus`.
     pub fn set_ui_focus(&self, gained: bool) {
         self.send_input(InputEvent::SetUiFocus { gained });
     }
@@ -1803,12 +1804,13 @@ impl WolfCore {
     /// whole instance's `buflisted` file-backed buffer set — buffers are global in
     /// nvim and `wolf_setup_open_files` sweeps `getbufinfo({ buflisted = 1 })`
     /// (`runtime/nvim/init.lua`) — so every tabpage's entry carries the SAME list.
-    /// A project with several views therefore over-reopens after a restart.
+    /// A front-end that shows several tabpages of one core therefore over-reopens
+    /// after a restart.
     ///
     /// A cheap, lock-free SNAPSHOT READ with NO nvim RPC. [`Snapshot::open_files`]
     /// is maintained out-of-band by the `wolf_open_files` notification. The
-    /// front-end CAPTURES this per view BEFORE a restart (a respawn wipes the
-    /// mirror) and reopens the files afterward.
+    /// front-end CAPTURES this BEFORE a restart (a respawn wipes the mirror) and
+    /// reopens the files afterward.
     #[must_use]
     pub fn open_files_for_tabpage(&self, handle: i64) -> Option<TabFiles> {
         self.read_snapshot().open_files.get(&handle).cloned()
@@ -1832,7 +1834,7 @@ impl WolfCore {
     ///   The layout intents and the navigation history are emptied. A caller that
     ///   holds a [`read_snapshot`](Self::read_snapshot) guard across this call gets
     ///   the reset at the next write instead. Reopening the Tier-1 files +
-    ///   rebinding views is the FRONT-END's job (off the mirror captured before
+    ///   rebinding panes is the FRONT-END's job (off the mirror captured before
     ///   the restart) — this method reopens nothing.
     ///   Typing [`send_input`](Self::send_input) enqueued before the swap is dropped
     ///   rather than delivered to the fresh nvim, so a half-typed Ex command cannot

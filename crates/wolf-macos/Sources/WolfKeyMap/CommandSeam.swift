@@ -49,7 +49,7 @@ public enum CommandKind: CaseIterable {
   case preview
   /// Navigate from a preview pane back to its source file (inverse of preview).
   case edit
-  /// Toggle the per-project terminal drawer.
+  /// Toggle the terminal drawer.
   case terminal
   /// Render the active Markdown buffer and open it in the system web browser.
   case previewInBrowser

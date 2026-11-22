@@ -47,7 +47,7 @@ public enum LivenessSeam {
     public let overlay: Overlay
     /// Whether to schedule an automatic restart.
     public let autoRestart: Bool
-    /// Whether the current view runs its render wake. The opaque overlay hides
+    /// Whether the tab runs its render wake. The opaque overlay hides
     /// a frozen frame, so repainting it is waste.
     public let render: Bool
     /// Whether to drain the core's queued user commands: true in every state.
@@ -98,14 +98,14 @@ public enum LivenessSeam {
     }
   }
 
-  /// One view as captured before a restart. An empty `cwd` or `activePath` means
+  /// One tab as captured before a restart. An empty `cwd` or `activePath` means
   /// none.
   public struct CapturedView: Equatable {
-    /// The view's tab-local working directory.
+    /// The tab's working directory.
     public let cwd: String
     /// The open file-backed buffers, in captured order.
     public let files: [String]
-    /// The view's active file.
+    /// The tab's active file.
     public let activePath: String
 
     /// Builds a captured view from its three fields.
@@ -116,40 +116,28 @@ public enum LivenessSeam {
     }
   }
 
-  /// One step of restoring a view after a successful restart.
+  /// One step of restoring a tab after a successful restart.
   public enum RestoreStep: Equatable {
-    /// Bind the view to the fresh Neovim's own first tabpage.
-    case bindFirstTabpage
-    /// Bind the view to a new tabpage made in `cwd`.
-    case newTabpage(cwd: String)
-    /// Change the tabpage just made current to this directory.
+    /// Change the fresh Neovim's directory to this one.
     case chdir(String)
-    /// Open this file in the tabpage just made current.
+    /// Open this file.
     case open(String)
   }
 
-  /// The restore steps for each captured view, in view order.
+  /// The restore steps for a captured tab whose Neovim was launched at `launchCwd`.
   ///
-  /// View 0 binds the fresh Neovim's first tabpage, which starts in the
-  /// project's launch directory rather than the view's, so it is re-rooted with
-  /// `.chdir` before its files open; a window opened from the empty state reached
-  /// its folder only through a chdir. Each later view gets a tabpage made in its
-  /// own cwd and needs no `.chdir`. The opens follow wolf-gnome's `reopen_order`:
-  /// every file but the active one in captured order, then the active one, even
-  /// when `files` lacks it, so it is left focused.
-  public static func restoreSteps(for views: [CapturedView]) -> [[RestoreStep]] {
-    views.enumerated().map { index, view in
-      var steps: [RestoreStep]
-      if index == 0 {
-        steps = [.bindFirstTabpage]
-        if !view.cwd.isEmpty { steps.append(.chdir(view.cwd)) }
-      } else {
-        steps = [.newTabpage(cwd: view.cwd)]
-      }
-      steps += view.files.filter { $0 != view.activePath }.map { RestoreStep.open($0) }
-      if !view.activePath.isEmpty { steps.append(.open(view.activePath)) }
-      return steps
-    }
+  /// A restart respawns Neovim in its launch directory, so a tab whose cwd moved
+  /// since, such as a folder opened from the empty state, is re-rooted with
+  /// `.chdir` before its files open; a non-empty cwd equal to `launchCwd` needs
+  /// none. The opens follow wolf-gnome's `reopen_order`: every file but the active
+  /// one in captured order, then the active one, even when `files` lacks it, so
+  /// it is left focused.
+  public static func restoreSteps(for view: CapturedView, launchCwd: String) -> [RestoreStep] {
+    var steps: [RestoreStep] = []
+    if !view.cwd.isEmpty && view.cwd != launchCwd { steps.append(.chdir(view.cwd)) }
+    steps += view.files.filter { $0 != view.activePath }.map { RestoreStep.open($0) }
+    if !view.activePath.isEmpty { steps.append(.open(view.activePath)) }
+    return steps
   }
 
   /// One step that puts a live terminal session back after a restart.

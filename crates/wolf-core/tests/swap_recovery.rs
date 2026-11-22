@@ -3,26 +3,29 @@
 //! (resolved like `state_dir()` from the core's cwd), so a provocation must plant
 //! its swap there, not as a `.<name>.swp` next to the file.
 //!
-//! The recovery-aware `SwapExists` autocmd must NEVER raise a blocking prompt:
-//!   * c. DEAD owner  → `v:swapchoice = "r"` (silently RECOVER the unsaved edit);
-//!   * d. LIVE owner  → `v:swapchoice = "e"` (edit the clean on-disk copy anyway).
+//! `'shortmess'` holds `A`, which skips Neovim's ATTENTION block (and with it `SwapExists`)
+//! for an existing swap, so a swap never raises a blocking prompt:
+//!   * c. DEAD owner  → `init.lua`'s `BufNew` re-arm drops `A` for the one load that would
+//!     find a dead owner's swap, so `SwapExists` fires and sets `v:swapchoice = "r"`
+//!     (silently RECOVER the unsaved edit);
+//!   * d. LIVE owner  → `A` stays, so nothing is raised, neither the E325 prompt nor
+//!     Neovim's `W325` notice: nvim takes the next swap name and edits the clean on-disk
+//!     copy, as a second tab's Neovim on the same file does.
 //!
-//! And a fourth case that `SwapExists` CANNOT cover, guarded by name avoidance
-//! instead:
+//! And a fourth case that the re-arm CANNOT cover, guarded by name avoidance instead:
 //!   * e. STARTUP NAMING — a stale swap for `<cwd>/Untitled.md`, left behind by a
-//!     crashed nvim, must not block the next COLD start. `init.lua`'s `VimEnter`
-//!     naming calls `nvim_buf_set_name(buf, "<cwd>/Untitled.md")`, and Neovim
-//!     creates the buffer's swap file INSIDE that rename (`rename_buffer` →
-//!     `setfname` → `buf_name_changed` → `ml_setname` → `ml_open_file`, because
-//!     `'updatecount'` is 200 and the buffer is `'swapfile'`). On that code path
-//!     Neovim never arms the choice machinery (`swap_exists_action` stays
-//!     `SEA_NONE`), so `SwapExists` is NOT raised and a collision goes straight to
-//!     the blocking `do_dialog` ATTENTION/E325 prompt (`mode() == "r?"`) — which
-//!     silently swallows the user's next keystroke. See neovim/neovim#23145. The
-//!     defence is therefore to AVOID the colliding name:
-//!     `_G.wolf_untitled_swap_exists` makes the startup buffer take
-//!     `Untitled 2.md`, and the Tier-1 reopen of `<cwd>/Untitled.md` (case c
-//!     above) is what recovers the crashed edit. Pinned by
+//!     crashed nvim, must not shadow the crashed edit on the next COLD start.
+//!     `init.lua`'s `VimEnter` naming calls `nvim_buf_set_name(buf, "<cwd>/Untitled.md")`
+//!     on a buffer that already exists, so `BufNew` never sees the name and `A` stays;
+//!     Neovim creates the swap INSIDE that rename (`rename_buffer` → `setfname` →
+//!     `buf_name_changed` → `ml_setname` → `ml_open_file`), where it never arms
+//!     `SwapExists` either (neovim/neovim#23145). Under `A` that raises no dialog, but the
+//!     startup buffer would then hold `<cwd>/Untitled.md` unloaded from disk, and the
+//!     Tier-1 reopen of that name would switch to it instead of loading the file, so the
+//!     dead owner's swap would never be recovered. The defence is therefore to AVOID the
+//!     colliding name: `_G.wolf_untitled_swap_exists` makes the startup buffer take
+//!     `Untitled 2.md`, and the Tier-1 reopen of `<cwd>/Untitled.md` (case c above) is
+//!     what recovers the crashed edit. Pinned by
 //!     [`stale_untitled_swap_does_not_block_a_fresh_start`].
 //!
 //! Drives a REAL, hermetic Neovim (via `WOLF_NVIM_BIN`, resolved by
@@ -106,9 +109,9 @@ const UNTITLED_MARKER: &str = "UNTITLEDSWAPRECOVER";
 /// The marker [`stale_untitled_swap_does_not_block_a_fresh_start`] types into the
 /// COLD-restarted startup buffer.
 ///
-/// Character set is deliberate, because this marker is typed blind: when the
-/// product bug is present the leading `i` is eaten by the blocking dialog and the
-/// remaining characters are interpreted, so none of them may do something
+/// Character set is deliberate, because this marker is typed blind: should the
+/// blocking dialog return (a `'shortmess'` without `A`), the leading `i` is eaten by it
+/// and the remaining characters are interpreted, so none of them may do something
 /// destructive or modal.
 ///
 /// * No `Z` (`ZZ` writes and quits), no `q` (starts macro recording, which then
@@ -432,7 +435,8 @@ fn wait_for_file_containing(path: &Path, needle: &str) -> String {
 
 /// c. DEAD owner → silent recover: a fixture with an unsaved edit whose owning nvim
 /// has DIED comes back with the edit recovered (`v:swapchoice = "r"`) and NO
-/// pending confirm prompt (no block).
+/// pending confirm prompt (no block). Recovery runs only because `init.lua`'s `BufNew`
+/// re-arm drops `'shortmess'` `A` for this load, which lets `SwapExists` fire.
 #[test]
 fn dead_owner_recovers_silently() {
     let (_dir, cwd) = owned_cwd();
@@ -466,8 +470,8 @@ fn dead_owner_recovers_silently() {
         "nvim must be Alive after restart"
     );
 
-    // Reopen the fixture: the recovery-aware SwapExists sees a DEAD owner and
-    // silently recovers ("r"), so the buffer shows the unsaved edit.
+    // Reopen the fixture: BufNew re-arms SwapExists for the DEAD owner, which silently
+    // recovers ("r"), so the buffer shows the unsaved edit.
     open_fixture(&core, &waiter, &fixture);
     poll_until(
         &waiter,
@@ -498,8 +502,9 @@ fn dead_owner_recovers_silently() {
 }
 
 /// d. LIVE owner → edit anyway: while owner A (ALIVE) holds a swap for an unsaved
-/// edit, a second core B opening the SAME fixture sees a LIVE owner and edits the
-/// CLEAN on-disk copy (`v:swapchoice = "e"`, NOT "r"), with NO confirm prompt.
+/// edit, a second core B opening the SAME fixture edits the CLEAN on-disk copy, with NO
+/// confirm prompt. Under `'shortmess'` `A` the live owner's swap raises nothing: nvim
+/// takes the next swap name, and A's swap is never offered for recovery.
 #[test]
 fn live_owner_edits_anyway() {
     // ONE cwd shared by both cores, so they resolve the SAME durable swap dir.
@@ -515,8 +520,8 @@ fn live_owner_edits_anyway() {
     ex_command(&core_a, "preserve");
     sleep(PRESERVE_SETTLE);
 
-    // Core B: open the SAME fixture. Its SwapExists sees a LIVE owner (A) and
-    // chooses "e", so B shows the CLEAN on-disk content, NOT A's unsaved edit.
+    // Core B: open the SAME fixture. A's swap has a LIVE owner, so `A` skips it and B
+    // shows the CLEAN on-disk content, NOT A's unsaved edit.
     let (core_b, waiter_b) = start_core_in(&cwd);
     open_fixture(&core_b, &waiter_b, &fixture);
     poll_until(
@@ -540,8 +545,8 @@ fn live_owner_edits_anyway() {
     );
     assert!(
         !row0.contains("WOLFEDIT"),
-        "B must NOT recover the LIVE owner's unsaved edit (swapchoice 'e', not 'r'); \
-         got row0 = {row0:?}"
+        "B must NOT recover the LIVE owner's unsaved edit: a live owner's swap is skipped, \
+         never recovered; got row0 = {row0:?}"
     );
     assert!(
         !snap_b.toast.is_prompt(),
@@ -555,13 +560,130 @@ fn live_owner_edits_anyway() {
     core_a.shutdown().expect("core A shutdown should be Ok");
 }
 
+/// Every toast line in `core`'s snapshot, flattened to plain text.
+fn toast_text(core: &WolfCore) -> Vec<String> {
+    core.read_snapshot()
+        .toast
+        .lines()
+        .iter()
+        .map(|line| line.iter().map(|c| c.text.as_str()).collect())
+        .collect()
+}
+
+/// Two tabs on one folder, each with its own Neovim: a second core opening a file whose swap a
+/// LIVE first core holds shows neither a prompt nor a swap notice, and edits as usual.
+///
+/// Under `'shortmess'` `A` Neovim skips the ATTENTION block for a live owner's swap and takes
+/// the next swap name, so `SwapExists` never fires and Neovim's default `nvim.swapfile`
+/// handler never prints `W325: Ignoring swapfile from Nvim process …` (read in v0.12.6
+/// `memline.c` `findswapname` and `_core/defaults.lua`). Every toast line seen from the open
+/// to the end of a settle is collected, and checked before any key is typed: a key dismisses
+/// a toast in the input pump, which would hide the notice this test looks for.
+///
+/// FALSIFYING EDIT: delete `opt.shortmess:append("A")` from `runtime/nvim/init.lua`. RED: the
+/// toast carries `W325`.
+#[test]
+fn second_core_on_a_live_owners_file_shows_no_swap_notice() {
+    let (_dir, cwd) = owned_cwd();
+    let fixture = cwd.join("note.md");
+    std::fs::write(&fixture, CLEAN_DOC).expect("failed to write fixture");
+    let probe = cwd.join("probe.txt");
+
+    let (core_a, waiter_a) = start_core_in(&cwd);
+    open_fixture(&core_a, &waiter_a, &fixture);
+    let owner = current_swap_state(&core_a, &probe);
+    assert!(
+        owner.name.ends_with("note.md") && Path::new(&owner.swapname).is_file(),
+        "premise: A must hold a swap file for note.md on disk, or B meets no live owner's swap \
+         and this test proves nothing; A saw buffer {:?} with swap {:?}. Swap dir is {}",
+        owner.name,
+        owner.swapname,
+        swap_dir_report(&cwd)
+    );
+
+    let (core_b, waiter_b) = start_core_in(&cwd);
+    let mut seen: Vec<String> = Vec::new();
+    open_fixture(&core_b, &waiter_b, &fixture);
+    poll_until(
+        &waiter_b,
+        "B's buffer to render the clean on-disk heading",
+        || {
+            seen.extend(toast_text(&core_b));
+            core_b
+                .read_snapshot()
+                .active_grid()
+                .row_text(0)
+                .contains("# Swap Fixture")
+        },
+        |&ok| ok,
+    );
+    let deadline = Instant::now() + Duration::from_millis(500);
+    while Instant::now() < deadline {
+        seen.extend(toast_text(&core_b));
+        waiter_b.drain();
+        sleep(POLL_INTERVAL);
+    }
+    seen.extend(toast_text(&core_b));
+    let prompt = core_b.read_snapshot().toast.is_prompt();
+
+    let notices: Vec<&String> = seen
+        .iter()
+        .filter(|l| l.contains("W325") || l.contains("ATTENTION") || l.contains("E325"))
+        .collect();
+    assert!(
+        notices.is_empty(),
+        "B opening a file whose swap a live core holds must raise no swap notice; the toast \
+         showed {notices:?}. `W325: Ignoring swapfile` is Neovim's default SwapExists handler, \
+         so the ATTENTION block ran: 'shortmess' lacks `A`, or the BufNew re-arm dropped it \
+         for a live owner's swap. ATTENTION or E325 text is the swap dialog itself. Swap dir \
+         is {}",
+        swap_dir_report(&cwd)
+    );
+    assert!(
+        !prompt,
+        "B must not stop at a confirm prompt on a live owner's swap; toast lines were {seen:?}"
+    );
+
+    core_b.send_input(ch('i'));
+    type_str(&core_b, EDIT_MARKER);
+    core_b.send_input(key(Key::Esc));
+    poll_until(
+        &waiter_b,
+        "B's row 0 to show the typed marker; if it never does, a prompt swallowed the keys",
+        || {
+            core_b
+                .read_snapshot()
+                .active_grid()
+                .row_text(0)
+                .contains(EDIT_MARKER.trim())
+        },
+        |&ok| ok,
+    );
+
+    let own = current_swap_state(&core_b, &probe);
+    assert!(
+        own.swapfile == "1" && !own.swapname.is_empty() && own.swapname != owner.swapname,
+        "B must keep a swap file of its own beside A's {:?}, so its edits stay recoverable; it \
+         has swapfile={} and swap {:?}. No swap means the quiet open was bought by turning swap \
+         off; A's name means both cores write one file. Swap dir is {}",
+        owner.swapname,
+        own.swapfile,
+        own.swapname,
+        swap_dir_report(&cwd)
+    );
+
+    core_b.shutdown().expect("core B shutdown should be Ok");
+    core_a.shutdown().expect("core A shutdown should be Ok");
+}
+
 /// RESTART-SHADOW guard: an unsaved `Untitled.md` must
 /// survive a crash-restart via swap recovery. The `:preserve` + SIGKILL below leaves a
 /// stale swap for `<cwd>/Untitled.md`, so on restart the fresh nvim's `VimEnter` naming
 /// consults `_G.wolf_untitled_swap_exists`, sees that swap and names its OWN startup
 /// buffer `<cwd>/Untitled 2.md` — leaving `<cwd>/Untitled.md` unclaimed, so the
-/// subsequent Tier-1 reopen `:e <cwd>/Untitled.md` genuinely LOADS the file, `SwapExists`
-/// fires on a dead owner and silently recovers (`v:swapchoice = "r"`). Without that name
+/// subsequent Tier-1 reopen `:e <cwd>/Untitled.md` genuinely LOADS the file into a new
+/// buffer, whose `BufNew` re-arm drops `'shortmess'` `A` for the dead owner's swap, so
+/// `SwapExists` fires and silently recovers (`v:swapchoice = "r"`). Without that name
 /// avoidance the startup buffer would itself have taken `<cwd>/Untitled.md` WITHOUT
 /// loading it, the reopen would merely have switched to that already-named empty buffer,
 /// `SwapExists` would NOT have fired and the dead owner's unsaved edit would be lost
@@ -700,24 +822,29 @@ fn restart_recovers_unsaved_untitled_buffer() {
 }
 
 /// e. STARTUP NAMING — a stale swap for `<cwd>/Untitled.md` left by a crashed nvim
-/// must not block the next COLD start, and must not swallow the user's first
-/// keystroke.
+/// must not be claimed by the next COLD start's startup buffer, and must not swallow
+/// the user's first keystroke.
 ///
-/// This is the headless, deterministic guard for the bug the cage smoke only ever
+/// This is the headless, deterministic guard for a bug the cage smoke only ever
 /// caught by accident (by self-poisoning its own fixed cwd): open Wolf after a
 /// crash and the very first character you type vanishes.
 ///
 /// ## The mechanism being pinned
 ///
 /// `init.lua`'s `VimEnter` naming calls `nvim_buf_set_name(buf,
-/// "<cwd>/Untitled.md")`. Neovim creates the buffer's swap file INSIDE that rename
-/// (`ml_setname` → `ml_open_file`), on a path where it never arms the swap-choice
-/// machinery — so `SwapExists` does NOT fire and a pre-existing swap for that exact
-/// name goes straight to the blocking `do_dialog` ATTENTION/E325 prompt. The
-/// surrounding `pcall` gives zero protection: the dialog is not an error, it blocks
-/// and consumes input. The only defence is name avoidance —
-/// `_G.wolf_untitled_swap_exists` must see the stale swap so the startup buffer
-/// takes `Untitled 2.md` instead.
+/// "<cwd>/Untitled.md")` on a buffer that already exists, so the `BufNew` re-arm never
+/// sees the name and `'shortmess'` keeps `A`. Neovim creates the buffer's swap file INSIDE
+/// that rename (`ml_setname` → `ml_open_file`), where it never arms `SwapExists` either.
+/// Under `A` a stale swap there raises no dialog: nvim takes the next swap name. The
+/// startup buffer would then hold `<cwd>/Untitled.md` without loading it, and the Tier-1
+/// reopen of that name would switch to it instead of loading the file, so the crashed
+/// edit would never be recovered ([`restart_recovers_unsaved_untitled_buffer`]). Name
+/// avoidance is the defence: `_G.wolf_untitled_swap_exists` must see the stale swap so
+/// the startup buffer takes `Untitled 2.md` instead.
+///
+/// Assertion A pins that. Assertions B and C are nets for the blocking `do_dialog`
+/// ATTENTION/E325 prompt, which a `'shortmess'` without `A` raises on this path and which
+/// consumes the next keystroke; the `pcall` around the rename gives no protection from it.
 ///
 /// ## Shape
 ///
@@ -822,7 +949,7 @@ fn stale_untitled_swap_does_not_block_a_fresh_start() {
         &waiter_b,
         "B's Tier-1 mirror to carry `Untitled 2.md` (the startup naming must advance \
          past the stale swap for `Untitled.md`; a mirror that never lands at all is \
-         itself a symptom — nvim is blocked in the ATTENTION dialog)",
+         itself a symptom — nvim is blocked in the ATTENTION dialog, so 'shortmess' lacks `A`)",
         || {
             mirror_basenames(&core_b, tab_b)
                 .iter()
@@ -844,14 +971,14 @@ fn stale_untitled_swap_does_not_block_a_fresh_start() {
     assert!(
         !names_b.iter().any(|n| n == "Untitled.md"),
         "the fresh start must NOT name its startup buffer `Untitled.md` while a stale swap \
-         for `{}/Untitled.md` exists: `nvim_buf_set_name` creates the swap file inside the \
-         rename and raises a BLOCKING ATTENTION dialog there. Mirror carried {names_b:?}; \
-         swap dir is {}.",
+         for `{}/Untitled.md` exists: that unloaded buffer would shadow the Tier-1 reopen of \
+         the name, so the crashed edit is never recovered. Mirror carried {names_b:?}; swap \
+         dir is {}.",
         cwd.display(),
         swap_dir_report(&cwd)
     );
 
-    // 11. Assertion B, primary: type blind as a user would. If the leading `i` answers a dialog, at
+    // 11. Assertion B, a net: type blind as a user would. If the leading `i` answers a dialog, at
     //     most len-1 chars land, and `contains` demands the whole marker.
     core_b.send_input(ch('i'));
     type_str(&core_b, STARTUP_MARKER);
@@ -860,7 +987,8 @@ fn stale_untitled_swap_does_not_block_a_fresh_start() {
         &waiter_b,
         "B's row 0 to show the blind-typed startup marker — if it never appears the FIRST \
          keystroke was swallowed by a blocking `do_dialog` ATTENTION prompt raised by \
-         `nvim_buf_set_name` finding a stale swap (`mode() == \"r?\"`)",
+         `nvim_buf_set_name` finding a stale swap (`mode() == \"r?\"`) with 'shortmess' \
+         lacking `A`",
         || {
             core_b
                 .read_snapshot()
@@ -876,7 +1004,8 @@ fn stale_untitled_swap_does_not_block_a_fresh_start() {
         row0.contains(STARTUP_MARKER),
         "the FIRST keystroke was swallowed — nvim was in MODE_CONFIRM (`mode() == \"r?\"`), \
          a blocking `do_dialog` ATTENTION prompt raised by `nvim_buf_set_name` finding a \
-         stale swap; see `runtime/nvim/init.lua`'s anonymous-buffer naming section. The \
+         stale swap, which 'shortmess' `A` should skip; see `runtime/nvim/init.lua`'s swap \
+         settings and anonymous-buffer naming section. The \
          leading `i` answered the dialog instead of entering insert mode, so \
          {STARTUP_MARKER:?} ran as NORMAL-mode commands. got row0 = {row0:?}; swap dir is \
          {}.",
@@ -1136,18 +1265,20 @@ fn rename_from_long_to_short_path_restores_the_swap() {
 ///
 /// Turning `'swapfile'` back on opens a swap at once, and Neovim's own swap search then meets
 /// the stale `.swp` of the same file outside any file load, where `SwapExists` is not raised
-/// (module docs, case e). So the re-enable in init.lua's `sync_long_path_swap` is guarded by
-/// `_G.wolf_untitled_swap_exists`. [`rename_from_long_to_short_path_restores_the_swap`] is the
-/// positive half: with no stale swap the same rename does get its swap back.
+/// (module docs, case e). Under `'shortmess'` `A` it raises nothing and steps past the stale
+/// `.swp` to a `.swo`, which no later session offers for recovery. So the re-enable in
+/// init.lua's `sync_long_path_swap` is guarded by `_G.wolf_untitled_swap_exists`.
+/// [`rename_from_long_to_short_path_restores_the_swap`] is the positive half: with no stale
+/// swap the same rename does get its swap back.
 ///
-/// Premise, measured with the guard removed: enabling `'swapfile'` inside the rename makes
-/// Neovim deliver the ATTENTION text ("Found a swap file by the name …") as a `wmsg` toast,
-/// not a confirm prompt, and the save is never written. The prompt, `'swapfile'` and `.swo`
-/// assertions below stay as nets for the other outcomes a Neovim upgrade could produce.
+/// Premise, from Neovim's `findswapname` and not yet measured under `A`: with the guard
+/// removed the save is written and the buffer gets a `.swo`, so the `'swapfile'` and `.swo`
+/// assertions fail. Measured without `A`, the ATTENTION text ("Found a swap file by the name
+/// …") arrived as a `wmsg` toast and the save was never written; the write and prompt
+/// assertions stay as nets for that outcome.
 ///
 /// FALSIFYING EDIT: drop `not _G.wolf_untitled_swap_exists(...)` from init.lua's
-/// `sync_long_path_swap`. RED, measured: the write assertion, its message naming the
-/// ATTENTION toast.
+/// `sync_long_path_swap`. RED, expected: the `'swapfile'` assertion.
 #[test]
 fn rename_onto_a_short_path_with_a_stale_swap_keeps_swap_off() {
     let (_dir, cwd) = owned_cwd();
@@ -1320,18 +1451,22 @@ fn rename_onto_a_short_path_with_a_stale_swap_keeps_swap_off() {
 /// session reloading the file, even through `:bdelete` and a second `:edit`.
 ///
 /// Recovery of a cut-name swap cannot work (Neovim searches the uncut name and fails
-/// `E305`), and without the `SwapExists` guard the dead-owner branch has already scheduled
-/// the swap's deletion — the crashed edit is then gone for good. `:bdelete` resets the
-/// buffer's options to the global ones, so the second `:edit` loads with `'swapfile'` on
-/// again: the reload-time backstop must still leave the buffer swap-less.
+/// `E305`), so nothing may schedule the swap's deletion as the dead-owner branch of
+/// `SwapExists` does — the crashed edit would then be gone for good. `'shortmess'` `A` keeps
+/// `SwapExists` from firing on this reload, since `init.lua`'s `BufNew` re-arm skips a long
+/// path, and the long-path branch of `SwapExists` keeps the swap should it fire anyway.
+/// `:bdelete` resets the buffer's options to the global ones, so the second `:edit` loads
+/// with `'swapfile'` on again: the reload-time backstop must still leave the buffer
+/// swap-less.
 ///
 /// Premise, measured before this test was kept: after `:e F`, `:bdelete`, `:e F` with the
 /// `BufReadPost`/`BufNewFile` backstop removed, `&l:swapfile` is `1`. If Neovim stopped
 /// re-initializing options there, falsifier (ii) would no longer turn this test red.
 ///
-/// FALSIFYING EDITS: (i) drop the long-path branch of init.lua's `SwapExists` autocmd —
-/// RED, the stale swap is deleted. (ii) drop the backstop autocmd — RED, the reloaded
-/// buffer has a swap.
+/// FALSIFYING EDITS: (i) drop the long-path branch of init.lua's `SwapExists` autocmd and
+/// `opt.shortmess:append("A")` — RED, the stale swap is deleted; dropping the branch alone
+/// is expected to stay green, since `A` keeps `SwapExists` from firing. (ii) drop the
+/// backstop autocmd — RED, the reloaded buffer has a swap.
 #[test]
 fn stale_truncated_swap_survives_a_reload_after_bdelete() {
     let (_dir, cwd) = owned_cwd();

@@ -113,12 +113,11 @@ final class TerminalDrawerResizeTests: XCTestCase {
         + " the drawer reset the view's share")
   }
 
-  /// A share dragged in one view does not reach another: a second container over a new
-  /// tabpage opens its drawer at the opening third.
+  /// A share dragged in one view does not reach another: a second fixture, with its own core
+  /// and container as a new tab has, opens its drawer at the opening third.
   func testANewViewOpensItsDrawerAtTheDefaultShare() {
     guard let fixture = TerminalViewFixture() else { return }
     defer { fixture.shutdown() }
-    let handle = fixture.handle
     guard let opened = openDrawer(fixture) else { return }
     let session = opened.session
     let before = opened.view.frame
@@ -128,54 +127,18 @@ final class TerminalDrawerResizeTests: XCTestCase {
       premiseMoved(from: before.minY, to: dragged)
     else { return }
 
-    handle.toggle_terminal()
-    let hidden = fixture.wake { fixture.view(showing: session) == nil }
-    XCTAssertTrue(hidden, "premise: a second toggle must hide the first view's drawer")
-    guard hidden else { return }
-
-    let editorWin1 = handle.active_win()
-    let t2 = handle.create_tabpage("")
-    XCTAssertNotEqual(t2, 0, "premise: create_tabpage must make a second tabpage")
-    guard t2 != 0 else { return }
-    // Only the current tab's container is woken, as the app does, so this waits unwoken.
-    let entered = fixture.live.waitFor(timeout: TerminalViewFixture.timeout) {
-      let win = handle.active_win()
-      return handle.active_tabpage() == t2 && win != 0 && win != editorWin1
-        && handle.windows().contains { $0.win() == win }
-    }
-    XCTAssertTrue(
-      entered,
-      "premise: the snapshot must report the new tabpage \(t2) current with its own window:"
-        + " tabpage \(handle.active_tabpage()), window \(handle.active_win())")
-    guard entered else { return }
-
-    let (second, secondRenderer) = fixture.hostContainer(tabpage: t2)
-    defer { withExtendedLifetime(secondRenderer) {} }
-    let bound = fixture.wake(second) {
-      second.paneCount == 1 && second.activeWin == handle.active_win()
-    }
-    XCTAssertTrue(
-      bound,
-      "premise: the second container must bind its first pane to window"
-        + " \(handle.active_win()); it is on \(second.activeWin)")
-    guard bound else { return }
-
-    handle.toggle_terminal()
-    var minY: CGFloat?
-    let shown = fixture.wake(second) {
-      minY = fixture.terminalViews(in: second).first?.frame.minY
-      return minY != nil
-    }
-    XCTAssertTrue(
-      shown,
-      "premise: toggle_terminal() in the new tabpage must give the second container a drawer"
-        + " view; it hosts \(fixture.terminalViews(in: second).map { $0.frame })")
-    guard shown else { return }
+    guard let second = TerminalViewFixture() else { return }
+    defer { second.shutdown() }
+    XCTAssertNotEqual(
+      second.handle.wake_token(), fixture.handle.wake_token(),
+      "premise: the second fixture must run its own core, as a new tab does")
+    guard let secondOpened = openDrawer(second) else { return }
+    let minY = secondOpened.view.frame.minY
     XCTAssertEqual(
-      minY ?? .nan, before.minY, accuracy: 1,
+      minY, before.minY, accuracy: 1,
       "C3: a new view's drawer must open at the opening third's top \(before.minY), not the"
-        + " first view's dragged \(dragged); got \(String(describing: minY)). The dragged top"
-        + " means the share is shared between views rather than held by each")
+        + " first view's dragged \(dragged); got \(minY). The dragged top means the share is"
+        + " shared between views rather than held by each")
   }
 
   // MARK: - Helpers

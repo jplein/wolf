@@ -7,10 +7,10 @@ import WolfKeyMap
 
 /// The application delegate, a thin COORDINATOR over a collection of per-TAB
 /// `WolfWindowController`s (each its own OS window; several may share one native
-/// tab group). It performs the once-only launch setup, restores the saved
-/// window/tab tree group-by-group, opens new windows (⇧⌘N) and tabs (⌘T / the
-/// native "+"), owns the coalesced whole-tree state snapshot, and refreshes the
-/// tab-bar titles.
+/// tab group), each running its own captive Neovim. It performs the once-only
+/// launch setup, restores the saved window/tab tree, opens new windows (⇧⌘N) and
+/// tabs (⌘T / the native "+"), reports which tab is focused to the tabs' Neovims,
+/// owns the coalesced whole-tree state snapshot, and refreshes the tab-bar titles.
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSMenuDelegate {
   /// The once-measured shared cell metrics (nil until launch).
   private var metrics: CellMetrics?
@@ -20,7 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
   /// The resolved appearance as a boolean (`true` == dark), computed by
   /// `applyResolvedAppearance()` from the config's `appearance` mode. In `auto`
   /// mode this tracks the live OS appearance; in `dark`/`light` it is fixed.
-  /// Every project's nvim is driven to this via `setBackground`.
+  /// Every tab's nvim is driven to this via `setBackground`.
   private var resolvedDark: Bool = true
 
   /// The `NSApp.effectiveAppearance` KVO token, installed ONLY in `auto` mode so
@@ -28,15 +28,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
   /// `NSKeyValueObservation` invalidates itself when deallocated.
   private var appearanceObservation: NSKeyValueObservation?
 
-  /// The live per-VIEW controllers (each bound to one nvim tabpage of a shared
-  /// project). One OS window per controller; several controllers may belong to
-  /// one native tab group AND/OR one project.
+  /// The live per-TAB controllers, each owning its tab's `TabCore`. One OS window
+  /// per controller; several controllers may belong to one native tab group.
   private var controllers: [WolfWindowController] = []
 
-  /// The live PROJECTS (each a captive Neovim shared by N views). Strong-held so
-  /// a core outlives a view teardown while a sibling view still binds it; a
-  /// project removes itself (`removeProject`) when its last view closes.
-  private var projects: [Project] = []
+  /// The tab whose Neovim was last told it has focus (`refreshTabFocus()`), or `nil`.
+  private var focusedTabId: Int?
 
   /// The next monotonic tab id to mint (used only as an opaque Window-menu / raise
   /// key, never a `state.json` slot).
@@ -59,7 +56,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
   private var isTerminating = false
 
   /// The saved windows, or the saved tabs of a window, that no live view took at
-  /// launch (a failed core, tabpage or view build). Never retried, but carried into
+  /// launch (a failed core start). Never retried, but carried into
   /// every commit so the next launch can try them again.
   private var orphanWindows: [RestoredWindowGroup] = []
 
@@ -120,12 +117,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     self.config = config
     self.metrics = metrics
 
-    // Resolve the appearance before any project starts, so every project below gets the value;
-    // `auto` follows and observes the live OS appearance.
+    // Resolve the appearance before any core starts, so every core below gets the value; `auto`
+    // follows and observes the live OS appearance.
     applyResolvedAppearance()
 
     // Read saved state before any core starts. A fresh run restores nothing and opens one
-    // empty-state window with its own project.
+    // empty-state window.
     let restoredGroups = Self.restoredGroups(from: wolf_ffi_load_state())
 
     if restoredGroups.isEmpty {
@@ -135,18 +132,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         return
       }
       controllers.append(controller)
+      refreshTabFocus()
       rebuildWindowMenu()
       scheduleStateSnapshot()
       return
     }
 
-    // Group-by-cwd restore: plan projects from the saved tree, materialize projects and views,
-    // then assemble the OS windows and tab groups from the saved geometry.
+    // Plan one tab, with its own Neovim, per saved tab, materialize them, then assemble the OS
+    // windows and tab groups from the saved geometry.
     let plan = RestoreSeam.plan(
       windows: Self.savedWindows(from: restoredGroups),
       home: homeDir(),
       isDirectory: isDirectoryCheck())
-    let byGroup = materializeProjects(plan, groups: restoredGroups)
+    let byGroup = materializeTabs(plan, groups: restoredGroups)
     assembleWindows(byGroup, groups: restoredGroups)
     orphanWindows = Self.unmaterializedGroups(byGroup, groups: restoredGroups)
 
@@ -155,62 +153,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
       presentStartupFailureAndQuit()
       return
     }
+    refreshTabFocus()
     rebuildWindowMenu()
     scheduleStateSnapshot()
   }
 
-  /// PHASE A — materializes every planned project + its views WITHOUT anchoring
-  /// or tab-grouping them yet. Returns a map from the ORIGINAL saved group index
-  /// to the group's `(positionInGroup, controller)` members, so Phase B can drop
-  /// each view back into the right OS window/tab-group. A project whose core
-  /// fails to start (or whose every tab fails) is dropped; a failed tab is
-  /// skipped. `groups` is the read `plan` came from, which supplies each tab's
-  /// bridge layout node by the same `(groupIndex, positionInGroup)` lookup.
-  private func materializeProjects(
-    _ plan: RestoreSeam.RestorePlan, groups: [RestoredWindowGroup]
+  /// PHASE A — starts a core and builds a controller for every planned tab
+  /// WITHOUT anchoring or tab-grouping them yet. Returns a map from the ORIGINAL
+  /// saved group index to the group's `(positionInGroup, controller)` members, so
+  /// Phase B can drop each view back into the right OS window/tab-group. A tab
+  /// whose core fails to start is skipped and stays an orphan. `groups` is the read
+  /// `plan` came from, which supplies each tab's bridge layout node by the same
+  /// `(groupIndex, positionInGroup)` lookup.
+  private func materializeTabs(
+    _ plan: [RestoreSeam.PlannedTab], groups: [RestoredWindowGroup]
   ) -> [Int: [(pos: Int, controller: WolfWindowController)]] {
     var byGroup: [Int: [(pos: Int, controller: WolfWindowController)]] = [:]
-
-    for projectPlan in plan.projects {
-      guard let project = Project.start(launchCwd: projectPlan.launchCwd, coordinator: self)
-      else { continue }
-      // Push the resolved appearance to the fresh core so its first paint
-      // uses the right background (the config value is restart-only).
-      project.setBackground(dark: resolvedDark)
-
-      var built = 0
-      var boundFirst = false
-      for tab in projectPlan.tabs {
-        // The first tab binds the project's implicit tabpage 1; the rest
-        // create fresh tabpages rooted at the project's (uniform) cwd.
-        let tabpage: Int64
-        if !boundFirst {
-          tabpage = project.bindFirstTabpage()
-          boundFirst = true
-        } else {
-          tabpage = project.addTabpage(cwd: projectPlan.launchCwd)
-        }
-        guard tabpage != 0 else { continue }
-
-        let (_, hasFolder) = Self.dir(launchDecision(restoredCwd: tab.cwd))
-        let restoredTab = RestoredTabState(
-          cwd: tab.cwd, sidebarVisible: tab.sidebarVisible, layout: tab.layout,
-          layoutNode: groups[safe: tab.groupIndex]?.tabs[safe: tab.positionInGroup]?.layoutNode)
-        let controller = makeController(
-          tabId: mintTabId(), project: project, tabpageHandle: tabpage,
-          restoredTab: restoredTab, anchorFrame: nil, hasFolder: hasFolder)
-        guard controller.build() else { continue }
-        controllers.append(controller)
-        byGroup[tab.groupIndex, default: []].append((tab.positionInGroup, controller))
-        built += 1
-      }
-
-      if built == 0 {
-        // No view survived for this project: shut its idle core down.
-        project.shutdown()
-      } else {
-        projects.append(project)
-      }
+    for tab in plan {
+      guard let tabCore = startTabCore(launchCwd: tab.launchCwd) else { continue }
+      let restoredTab = RestoredTabState(
+        cwd: tab.cwd, sidebarVisible: tab.sidebarVisible, layout: tab.layout,
+        layoutNode: groups[safe: tab.groupIndex]?.tabs[safe: tab.positionInGroup]?.layoutNode)
+      let controller = makeController(
+        tabId: mintTabId(), tabCore: tabCore, restoredTab: restoredTab, anchorFrame: nil,
+        hasFolder: tab.hasFolder)
+      controller.build()
+      controllers.append(controller)
+      byGroup[tab.groupIndex, default: []].append((tab.positionInGroup, controller))
     }
     return byGroup
   }
@@ -267,26 +236,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
   }
 
-  /// Starts a fresh empty-state PROJECT (nvim at home) with a single view bound
-  /// to its implicit tabpage 1, and makes that view current. Returns the view, or
-  /// `nil` when the core fails to start. The caller shows/appends it.
+  /// Starts a tab's captive Neovim at `launchCwd` and pushes the resolved appearance
+  /// to it, so its first paint uses the right background (the config value is
+  /// restart-only). `nil` when the core fails to start.
+  private func startTabCore(launchCwd: String) -> TabCore? {
+    guard let tabCore = TabCore.start(launchCwd: launchCwd, coordinator: self) else {
+      return nil
+    }
+    tabCore.setBackground(dark: resolvedDark)
+    return tabCore
+  }
+
+  /// Starts a fresh empty-state tab (nvim at home) in a window of its own. Returns
+  /// the view, or `nil` when the core fails to start. The caller appends it.
   private func startEmptyStateWindow() -> WolfWindowController? {
-    guard let project = Project.start(launchCwd: homeDir(), coordinator: self) else {
-      return nil
-    }
-    // Push the resolved appearance to the fresh core so its first paint uses
-    // the right background (the config value is restart-only).
-    project.setBackground(dark: resolvedDark)
-    let tabpage = project.bindFirstTabpage()
+    guard let tabCore = startTabCore(launchCwd: homeDir()) else { return nil }
     let controller = makeController(
-      tabId: mintTabId(), project: project, tabpageHandle: tabpage, restoredTab: nil,
-      anchorFrame: nil, hasFolder: false)
-    guard controller.build() else {
-      project.shutdown()
-      return nil
-    }
-    projects.append(project)
-    project.setCurrent(controller)
+      tabId: mintTabId(), tabCore: tabCore, restoredTab: nil, anchorFrame: nil,
+      hasFolder: false)
+    controller.build()
     return controller
   }
 
@@ -305,7 +273,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
   }
 
   /// Resolves the configured appearance to `resolvedDark` and applies it to the
-  /// app chrome, then pushes it to every live project. It forces
+  /// app chrome, then pushes it to every live tab. It forces
   /// `NSApp.appearance` (the whole app, not just the grid) from the mode, and
   /// installs the OS-toggle observer only in `auto`, which follows the system.
   /// An unknown discriminant falls back to `auto`.
@@ -321,7 +289,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     } else {
       removeAppearanceObserver()
     }
-    pushAppearanceToAllProjects()
+    pushAppearanceToAllTabs()
   }
 
   /// Installs the `NSApp.effectiveAppearance` KVO observer (auto mode only), if
@@ -342,34 +310,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
   }
 
   /// The `auto`-mode observer callback: re-resolves the live OS appearance and,
-  /// when it actually changed, re-pushes it to every project. No debounce:
+  /// when it actually changed, re-pushes it to every tab. No debounce:
   /// the KVO fires once per real OS toggle and re-applying an unchanged background
   /// is a harmless no-op.
   private func systemAppearanceChanged() {
     let nowDark = NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
     guard nowDark != resolvedDark else { return }
     resolvedDark = nowDark
-    pushAppearanceToAllProjects()
+    pushAppearanceToAllTabs()
   }
 
-  /// Fans the resolved appearance out to every live project's nvim (`:set
-  /// background=…`). A no-op before any project exists (e.g. the launch call).
-  private func pushAppearanceToAllProjects() {
-    for project in projects {
-      project.setBackground(dark: resolvedDark)
+  /// Fans the resolved appearance out to every live tab's nvim (`:set
+  /// background=…`). A no-op before any tab exists (e.g. the launch call).
+  private func pushAppearanceToAllTabs() {
+    for controller in controllers where !controller.isTornDown {
+      controller.tabCore.setBackground(dark: resolvedDark)
     }
   }
 
-  /// Fans the OS app-focus state out to every live project's nvim
-  /// (`nvim_ui_set_focus`). A no-op before any project exists (e.g. the launch
-  /// activate). `gained: true` on activate fires `FocusGained` → the init.lua
-  /// `WolfAutoRead` augroup's `:checktime` reloads an externally-changed unmodified
-  /// buffer; `false` on resign fires `FocusLost` so the next activate is a genuine
-  /// unfocused→focused transition (nvim only fires `FocusGained` on a real edge).
-  private func pushUiFocusToAllProjects(gained: Bool) {
-    for project in projects {
-      project.setUiFocus(gained: gained)
+  /// Recomputes which tab is focused and reports the change to the tabs' Neovims
+  /// (`TabFocusSeam`): a tab is focused while the app is active and its window is
+  /// main, so a gain fires `FocusGained` and the `WolfAutoRead` `:checktime` reloads
+  /// a file another tab saved. Main rather than key, so a picker panel taking key
+  /// reports nothing.
+  func refreshTabFocus() {
+    let mainTab = controllers.first { !$0.isTornDown && $0.owns(NSApp.mainWindow) }?.tabId
+    let next = TabFocusSeam.focusedTab(appActive: NSApp.isActive, mainTab: mainTab)
+    for edge in TabFocusSeam.edges(from: focusedTabId, to: next) {
+      let tab = controllers.first { $0.tabId == edge.tab && !$0.isTornDown }
+      tab?.tabCore.setUiFocus(gained: edge.gained)
     }
+    focusedTabId = next
   }
 
   /// A FileManager-backed `isDirectory` check for `RestoreSeam`/`StateSeam`.
@@ -388,21 +359,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     return id
   }
 
-  /// The app regained OS focus (e.g. Dock reactivation, Cmd-Tab back). Report
-  /// focus GAINED to every project's nvim so `FocusGained` fires and the
-  /// `WolfAutoRead` augroup reloads any externally-changed unmodified buffer — the
-  /// exact "edit the file in another app, come back to Wolf" reload path. App-level
-  /// (not per-window) so switching between two windows of the SAME project — which
-  /// does not deactivate the app — sends nothing, avoiding spurious focus churn on
-  /// the shared nvim.
+  /// The app regained OS focus (e.g. Dock reactivation, Cmd-Tab back): its main
+  /// window's tab gains focus, so an edit made in another app reloads there.
   func applicationDidBecomeActive(_ notification: Notification) {
-    pushUiFocusToAllProjects(gained: true)
+    refreshTabFocus()
   }
 
-  /// The whole app lost OS focus. Report focus LOST so the next activate is a
-  /// genuine unfocused→focused transition (nvim de-dupes `FocusGained` otherwise).
-  func applicationWillResignActive(_ notification: Notification) {
-    pushUiFocusToAllProjects(gained: false)
+  /// The app lost OS focus: the focused tab loses it. `didResign` rather than
+  /// `willResign`, so `NSApp.isActive` already reads `false`.
+  func applicationDidResignActive(_ notification: Notification) {
+    refreshTabFocus()
   }
 
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -424,17 +390,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     snapshotNow()
     _ = wolf_ffi_state_flush()
 
-    // Backstop for views that skipped windowWillClose; the last view's detach shuts its core down,
-    // and any project left with no views is shut down below.
+    // Backstop for views that skipped windowWillClose; each teardown shuts its tab's core down.
     for controller in controllers {
       controller.teardown()
     }
-    // `shutdown()` calls `removeProject`, mutating `projects`; iterate a copy.
-    let remainingProjects = projects
-    for project in remainingProjects {
-      project.shutdown()
-    }
-    projects.removeAll()
   }
 
   /// The Cmd-N (⇧⌘N) entry point: opens a new STANDALONE window. Cmd-N ALWAYS
@@ -445,35 +404,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
   func makeNewWindow(originatingCwd _: String) {
     // Metrics/config are set at launch before any window opens; bail if not.
     guard metrics != nil, config != nil else { return }
-    // A new window is a NEW project (a fresh nvim) with one empty-state view.
+    // A new window is a new tab with its own fresh nvim, in the empty state.
     guard let controller = startEmptyStateWindow() else { return }
     controllers.append(controller)
+    // Its window became main before it joined `controllers`, so that refresh missed it.
+    refreshTabFocus()
     rebuildWindowMenu()
     scheduleStateSnapshot()
   }
 
   /// The ⌘T / `:WolfNewTab` entry point: opens a new TAB in `key`'s window
   /// group, inheriting `key`'s open folder (a new tab ≈ a new window in the same
-  /// directory). The new window is `addTabbedWindow`-ed into `key`'s group and
+  /// directory) in a Neovim of its own, launched there, or at home when `key` has
+  /// no folder. The new window is `addTabbedWindow`-ed into `key`'s group and
   /// selected. A no-op before launch or if the core fails to start.
   func makeNewTab(from key: WolfWindowController) {
     guard metrics != nil, config != nil else { return }
-    // A new tab is a new VIEW of the KEY window's SAME project (a new tabpage in
-    // that shared nvim), inheriting the key window's folder.
     let inheritedCwd = key.hasFolder ? key.currentCwd : ""
-    let tabpage = key.project.addTabpage(cwd: inheritedCwd)
-    guard tabpage != 0 else { return }
-    let (_, hasFolder) = Self.dir(launchDecision(restoredCwd: inheritedCwd))
+    let (launchCwd, hasFolder) = Self.dir(launchDecision(restoredCwd: inheritedCwd))
+    guard let tabCore = startTabCore(launchCwd: launchCwd) else { return }
     let controller = makeController(
-      tabId: mintTabId(), project: key.project, tabpageHandle: tabpage, restoredTab: nil,
-      anchorFrame: nil, hasFolder: hasFolder)
-    guard controller.build() else { return }
+      tabId: mintTabId(), tabCore: tabCore, restoredTab: nil, anchorFrame: nil,
+      hasFolder: hasFolder)
+    controller.build()
     if let keyWindow = key.nsWindow, let newWindow = controller.nsWindow {
       keyWindow.addTabbedWindow(newWindow, ordered: .above)
       newWindow.makeKeyAndOrderFront(nil)
     }
     controllers.append(controller)
-    key.project.setCurrent(controller)
+    // Its window became main before it joined `controllers`, so that refresh missed it.
+    refreshTabFocus()
     rebuildWindowMenu()
     scheduleStateSnapshot()
   }
@@ -505,12 +465,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
   func removeController(_ controller: WolfWindowController) {
     controllers.removeAll { $0 === controller }
     rebuildWindowMenu()
-  }
-
-  /// Drops `project` from the collection (called by the project when its last
-  /// view closes and it shuts its core down).
-  func removeProject(_ project: Project) {
-    projects.removeAll { $0 === project }
   }
 
   /// Rebuilds the dynamic Window-menu per-window list from the live controllers.
@@ -569,8 +523,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
   /// The first live controller whose PERSISTED cwd equals `path`, or `nil` when
   /// no open window is rooted there — used by the palette's "Open Recent Folder"
-  /// action to raise an existing window instead of re-chdiring. Uses the per-view
-  /// `persistedCwd` so a non-current view still matches.
+  /// action to raise an existing window instead of re-chdiring. Uses the per-tab
+  /// `persistedCwd`, which is `""` for an empty-state tab.
   func controllerForCwd(_ path: String) -> WolfWindowController? {
     controllers.first { $0.persistedCwd == path }
   }
@@ -855,18 +809,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
   }
 
-  /// Builds a VIEW controller bound to `project`'s shared core + `tabpageHandle`,
-  /// wired to this coordinator and the shared metrics/config.
+  /// Builds a tab's controller owning `tabCore`, wired to this coordinator and the
+  /// shared metrics/config.
   private func makeController(
-    tabId: Int, project: Project, tabpageHandle: Int64, restoredTab: RestoredTabState?,
-    anchorFrame: CGRect?, hasFolder: Bool
+    tabId: Int, tabCore: TabCore, restoredTab: RestoredTabState?, anchorFrame: CGRect?,
+    hasFolder: Bool
   ) -> WolfWindowController {
     // `metrics` / `config` are set in `applicationDidFinishLaunching` before
     // any controller is built.
     let controller = WolfWindowController(
       tabId: tabId,
-      project: project,
-      tabpageHandle: tabpageHandle,
+      tabCore: tabCore,
       restoredTab: restoredTab,
       anchorFrame: anchorFrame,
       hasFolder: hasFolder,
@@ -897,7 +850,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
   }
 
   /// Projects the restored window GROUPS into `RestoreSeam.SavedWindow`s (the
-  /// grouping seam's input), preserving window + tab order.
+  /// restore planner's input), preserving window + tab order.
   private static func savedWindows(from groups: [RestoredWindowGroup]) -> [RestoreSeam.SavedWindow]
   {
     groups.map { group in

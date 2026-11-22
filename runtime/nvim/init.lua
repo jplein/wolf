@@ -16,7 +16,13 @@ if swap_dir ~= nil and swap_dir ~= "" then
 	opt.directory = escape_option_path(swap_dir) .. "//"
 end
 
+-- Two Neovims often hold one file: a live owner's swap must raise no E325 prompt or W325 notice.
+opt.shortmess:append("A")
+
 local swap_group = vim.api.nvim_create_augroup("WolfSwap", { clear = true })
+
+-- Defined with the anonymous-buffer naming below.
+local untitled_swap_file
 
 -- Neovim's BASENAMELEN: a "//" swap name is cut to this many bytes, and recovery never finds it.
 -- See notes/runtime/nvim/init.lua.md#long-path-swaps
@@ -40,13 +46,64 @@ local function disable_long_path_swap(buf)
 	end
 end
 
+-- Whether the process that wrote a swap is gone, so its edits may be recovered.
+local function swap_owner_dead(swapname)
+	local uv = vim.uv or vim.loop
+	local info = vim.fn.swapinfo(swapname)
+	if type(info) ~= "table" or info.error ~= nil then
+		-- Unreadable / malformed swap: treat as a stale (dead) owner.
+		return true
+	elseif type(info.host) == "string" and info.host ~= "" and info.host ~= vim.fn.hostname() then
+		-- Written on another machine: we cannot probe that pid -> uncertain -> edit.
+		return false
+	elseif type(info.pid) == "number" and info.pid > 0 then
+		-- Existence probe: signal 0 succeeds iff the process is alive; ESRCH (or
+		-- any failure) means the owner is gone (dead).
+		local ok = uv.kill(info.pid, 0)
+		return not (ok == 0 or ok == true)
+	end
+	-- No usable owner pid: treat as dead.
+	return true
+end
+
+-- Set while the re-arm below has A out of 'shortmess', so only that drop is ever put back.
+local swap_exists_armed = false
+
+local function disarm_swap_exists()
+	if swap_exists_armed then
+		swap_exists_armed = false
+		opt.shortmess:append("A")
+	end
+end
+
+-- 'shortmess' A also skips SwapExists, so drop it for one load that meets a dead owner's swap.
+-- See notes/runtime/nvim/init.lua.md#dead-owner-re-arm
+local function rearm_swap_exists(name)
+	if name == "" or name:match("^%a[%w+.-]*://") then
+		return
+	end
+	local full = vim.fn.fnamemodify(name, ":p")
+	for _, path in ipairs({ full, vim.fn.resolve(full) }) do
+		local swapname = untitled_swap_file(path)
+		if swapname ~= nil and vim.fn.filereadable(swapname) == 1 and swap_owner_dead(swapname) then
+			opt.shortmess:remove("A")
+			swap_exists_armed = true
+			vim.schedule(disarm_swap_exists)
+			return
+		end
+	end
+end
+
 -- BufNew is the only per-buffer event before nvim names the swap at load.
 vim.api.nvim_create_autocmd("BufNew", {
 	group = swap_group,
 	pattern = "*",
 	callback = function(args)
-		if swap_name_truncates(vim.api.nvim_buf_get_name(args.buf)) then
+		local name = vim.api.nvim_buf_get_name(args.buf)
+		if swap_name_truncates(name) then
 			disable_long_path_swap(args.buf)
+		else
+			rearm_swap_exists(name)
 		end
 	end,
 })
@@ -62,9 +119,11 @@ vim.api.nvim_create_autocmd({ "BufReadPost", "BufNewFile" }, {
 	end,
 })
 
--- After a rename. A rename onto a short path restores swap, unless a stale swap there would raise
--- ATTENTION. Idempotent, so a direct call may also run the BufFilePost one.
+-- After a rename. A rename onto a short path restores swap, unless a stale swap there would push
+-- it onto a .swo. Idempotent, so a direct call may also run the BufFilePost one.
 local function sync_long_path_swap(buf)
+	-- A rename is no load: undo a BufNew re-arm for the new name, which :saveas fires first.
+	disarm_swap_exists()
 	local name = vim.api.nvim_buf_get_name(buf)
 	if swap_name_truncates(name) then
 		disable_long_path_swap(buf)
@@ -85,37 +144,19 @@ vim.api.nvim_create_autocmd("BufFilePost", {
 })
 
 -- Never let SwapExists raise E325: a dead owner gets "r" (recover, then delete the swap), else "e".
--- Fires only on the file-load path (neovim/neovim#23145); see Anonymous-buffer naming below.
+-- Fires only on the file-load path (neovim/neovim#23145), and only when the BufNew re-arm let it.
 vim.api.nvim_create_autocmd("SwapExists", {
 	group = swap_group,
 	pattern = "*",
 	callback = function(args)
+		disarm_swap_exists()
 		-- A cut-name swap can never be recovered; keep it on disk rather than schedule its delete.
 		if swap_name_truncates(args.match) then
 			vim.v.swapchoice = "e"
 			return
 		end
-		local uv = vim.uv or vim.loop
 		local swapname = vim.v.swapname
-		local info = vim.fn.swapinfo(swapname)
-		local dead
-		if type(info) ~= "table" or info.error ~= nil then
-			-- Unreadable / malformed swap: treat as a stale (dead) owner.
-			dead = true
-		elseif type(info.host) == "string" and info.host ~= "" and info.host ~= vim.fn.hostname() then
-			-- Written on another machine: we cannot probe that pid -> uncertain -> edit.
-			dead = false
-		elseif type(info.pid) == "number" and info.pid > 0 then
-			-- Existence probe: signal 0 succeeds iff the process is alive; ESRCH (or
-			-- any failure) means the owner is gone (dead).
-			local ok = uv.kill(info.pid, 0)
-			dead = not (ok == 0 or ok == true)
-		else
-			-- No usable owner pid: treat as dead.
-			dead = true
-		end
-
-		if dead then
+		if swap_owner_dead(swapname) then
 			vim.v.swapchoice = "r"
 			-- Delete the consumed swap AFTER recovery completes (post-SwapExists).
 			vim.schedule(function()
@@ -1383,7 +1424,7 @@ end
 
 -- The swap nvim itself picks: 'directory' ending in "//" selects %-mangled full-path names, and
 -- findswapname raises ATTENTION only for the first (.swp) candidate. nil without WOLF_SWAP_DIR.
-local function untitled_swap_file(abspath)
+untitled_swap_file = function(abspath)
 	local swap_dir = vim.env.WOLF_SWAP_DIR
 	if type(swap_dir) ~= "string" or swap_dir == "" then
 		return nil
@@ -1478,8 +1519,8 @@ function _G.wolf_next_untitled(cwd, exclude_buf, extra_collision)
 	return name, cwd .. "/" .. name
 end
 
--- pcall covers only E95: a stale swap's ATTENTION dialog is no error. Never setlocal noswapfile to
--- dodge the dialog; see notes/runtime/nvim/init.lua.md#swapfile-stays-on.
+-- pcall covers only E95. Never setlocal noswapfile to dodge a stale swap: it would lose recovery;
+-- see notes/runtime/nvim/init.lua.md#swapfile-stays-on.
 function _G.wolf_name_untitled(buf, extra_collision)
 	local cwd = vim.fn.getcwd()
 	for _ = 1, 8 do
@@ -1532,8 +1573,8 @@ function _G.wolf_name_untitled_current(extra_collision)
 	end
 end
 
--- Startup naming with one listed buffer. The swap check avoids the ATTENTION modal and shadowing
--- the Tier-1 reopen of a crashed Untitled.md; see runtime/nvim/README.md#decisions.
+-- Startup naming with one listed buffer. The swap check avoids shadowing the Tier-1 reopen of a
+-- crashed Untitled.md; see runtime/nvim/README.md#decisions.
 vim.api.nvim_create_autocmd("VimEnter", {
 	group = vim.api.nvim_create_augroup("WolfUntitled", { clear = true }),
 	callback = function()

@@ -3,9 +3,9 @@
 //!
 //! The read is keyed by window handle and global across tabpages, unlike
 //! `pane_status_for_grid`, which joins through the current-tabpage-only `windows` map
-//! and answers `[No Name]` for a window on a background tabpage. A view that is not
-//! its project's current view must still persist its files, so the test reads a
-//! window after its tabpage has gone to the background.
+//! and answers `[No Name]` for a window on a background tabpage. A front-end whose tabs
+//! are tabpages of one Neovim must still persist a background tab's files, so the test
+//! reads a window after its tabpage has gone to the background.
 //!
 //! It drives a REAL, hermetic Neovim, with no mocks, reusing `tests/common/mod.rs`.
 //!
@@ -125,7 +125,7 @@ fn win_buffer_reads_a_background_tabpage_window() {
     let t1 = handle.current_tabpage();
     assert_ne!(
         t1, NEUTRAL,
-        "current_tabpage() should be a nonzero first-view bind"
+        "current_tabpage() should be a nonzero first-tab bind"
     );
     let win1 = live_wins(&handle)[0];
 
@@ -163,7 +163,7 @@ fn win_buffer_reads_a_background_tabpage_window() {
     assert!(
         background.reported(),
         "win_buffer(win1) must report a window on a background tabpage: false means the read \
-         joins through the current-tabpage windows map, so a background view persists no files"
+         joins through the current-tabpage windows map, so a background tab persists no files"
     );
     assert_eq!(
         background.abs_path(),

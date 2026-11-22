@@ -122,18 +122,10 @@ final class PaneContainerView: NSView {
   /// persisted dead-key state). Used only in option-as-option mode.
   private let keyComposer = KeyComposer()
 
-  /// This view's bound nvim TABPAGE handle (the project/tabpage-per-view bind).
-  /// Under the shared-nvim model a wake fires per PROJECT, but this container
-  /// must only consume a refocus rebind once the snapshot reflects THIS view's
-  /// tabpage — the `handle.active_tabpage() == controllerTabpageHandle` gate.
-  /// A `var` because a crash-restart rebinds this view to a FRESH tabpage (see
-  /// `rebind(tabpageHandle:)`).
-  private var controllerTabpageHandle: Int64
-
   /// The crash/stall overlay ("Neovim crashed" / "Neovim stopped responding" +
   /// "Restart Neovim"). A subview of this container (mirroring the empty-state
-  /// overlay on the controller), shown via `showNvimOverlay(_:)` when the project
-  /// reads a non-`Alive` liveness and hidden via `hideNvimOverlay()`.
+  /// overlay on the controller), shown via `showNvimOverlay(_:)` when the tab's
+  /// core reads a non-`Alive` liveness and hidden via `hideNvimOverlay()`.
   private let nvimOverlay = NvimStatusOverlayView()
 
   /// The transient post-restart banner ("Neovim was restarted"). A SMALL top-center
@@ -143,17 +135,10 @@ final class PaneContainerView: NSView {
   private let restartBanner = NvimRestartedBannerView()
 
   /// Invoked when the overlay's "Restart Neovim" button is clicked. The controller
-  /// wires this to `project.restartNeovim()`.
+  /// wires this to `tabCore.restartNeovim()`.
   var onRestart: (() -> Void)? {
     didSet { nvimOverlay.onRestart = onRestart }
   }
-
-  /// Set by the window controller (`windowDidBecomeKey`) after it drives its
-  /// project's `set_current_tabpage`: the next wake whose snapshot reflects this
-  /// view's tabpage re-derives every pane's grid binding (nvim churns grid ids
-  /// across a tabpage switch while WINDOW handles stay stable), then clears
-  /// the flag. See `onRenderWake`.
-  private var pendingRefocusRebind = false
 
   /// The pure pane-layout tree (split/remove/neighbour/divider geometry). A `var`
   /// so `requestLayoutRebuild` can replace it wholesale on launch restore via
@@ -178,14 +163,13 @@ final class PaneContainerView: NSView {
   private var zoomedPane: PaneId?
 
   /// A saved pane-split layout awaiting rebuild once this view's first pane binds
-  /// (consumed once in `onRenderWake`, gated like `pendingRefocusRebind`): Rust
-  /// renders and realizes `node`, and `saved` is the same tree projected for the
-  /// Swift `PaneTree`.
+  /// (consumed once in `onRenderWake`): Rust renders and realizes `node`, and
+  /// `saved` is the same tree projected for the Swift `PaneTree`.
   private var pendingLayoutRebuild: (saved: SavedPaneNode, node: FfiPaneNode)?
 
   /// The terminal restore a crash-restart requested (`requestTerminalRestore`), run once
-  /// by `onRenderWake` after the first pane binds, while this view's tabpage is current
-  /// and no layout rebuild waits. See `runPendingTerminalRestore`.
+  /// by `onRenderWake` after the first pane binds and no layout rebuild waits. See
+  /// `runPendingTerminalRestore`.
   private var pendingTerminalRestore: [LivenessSeam.TerminalRestoreStep]?
 
   /// Invoked whenever the pane layout changes in a way that must be persisted (a
@@ -203,8 +187,8 @@ final class PaneContainerView: NSView {
   /// hit-tests / sizes via `paneRects()`) but deliberately NOT in `tree` — it is a
   /// full-width, root-bottom pane rendered OUTSIDE the pure `PaneTree` (preserving
   /// its 1:1 parity with wolf-gnome). Bound on a `DrawerOpen` intent; cleared when
-  /// its window closes, on a layout rebuild, and on a restart rebind
-  /// (`rebind(tabpageHandle:)`).
+  /// its window closes, on a layout rebuild, and on a restart reset
+  /// (`resetAfterRestart()`).
   private var drawerPaneId: PaneId?
   /// The most-recently-active EDITOR pane (a live tree leaf, never the drawer).
   /// The `<C-w>k` (drawer -> up) bridge targets this when it is still a leaf; it is
@@ -457,30 +441,23 @@ final class PaneContainerView: NSView {
   /// The message toast (`ext_messages`), pinned bottom-left.
   private let toastView: ToastView
 
-  /// Builds the container bound to a live core `handle`, measured `metrics`, and
-  /// the view's `tabpageHandle` (the project/tabpage-per-view bind used to gate
-  /// the refocus rebind). No panes exist until the first window grid appears on a
-  /// wake.
-  init(
-    handle: WolfCoreHandle, metrics: CellMetrics, tabpageHandle: Int64, optionAsAlt: Bool
-  ) {
+  /// Builds the container bound to its tab's live core `handle` and measured
+  /// `metrics`. No panes exist until the first window grid appears on a wake.
+  init(handle: WolfCoreHandle, metrics: CellMetrics, optionAsAlt: Bool) {
     self.handle = handle
     self.metrics = metrics
-    self.controllerTabpageHandle = tabpageHandle
     self.optionAsAlt = optionAsAlt
     self.cmdlineView = CmdlineView(metrics: metrics)
     self.completionPopupView = CompletionPopupView(metrics: metrics)
     self.toastView = ToastView(metrics: metrics)
     super.init(frame: .zero)
-    // Layer-back so a visible non-current window of the same project keeps its last-painted layer.
-    wantsLayer = true
     // The bottom overlays composite ON TOP of the flat pane painting; the
     // completion popup is added LAST so it sits above the command line.
     addSubview(toastView)
     addSubview(cmdlineView)
     addSubview(completionPopupView)
     // The crash/stall overlay composites ON TOP of everything (added last, starts
-    // hidden); it is revealed only when the project reads a non-Alive liveness.
+    // hidden); it is revealed only when the tab's core reads a non-Alive liveness.
     addSubview(nvimOverlay)
     // Added once: `flash()` only toggles `isHidden`, since re-adding duplicates its constraints.
     // `showNvimOverlay` re-raises the crash overlay above this banner on purpose.
@@ -792,8 +769,8 @@ final class PaneContainerView: NSView {
   ///
   /// `activePane` / `PaneBinding` are private, so this is the internal accessor the
   /// window controller reads to address the per-pane navigation history. Preferred
-  /// over `WolfCoreHandle.active_win()` because the handle is shared across a
-  /// project's tabpages, while `activePane` is per-VIEW — it is what the user sees.
+  /// over `WolfCoreHandle.active_win()` because `activePane` is the pane this view
+  /// shows as active, which the container reconciles on each wake.
   var activeWin: Int64 { activePane.flatMap { panes[$0]?.win } ?? 0 }
 
   /// Whether the ACTIVE pane is in PREVIEW mode: its window carries a preview in
@@ -832,12 +809,10 @@ final class PaneContainerView: NSView {
   /// the active pane is not a preview (no entry exists for a non-preview window) or
   /// its page reported no selection.
   ///
-  /// Identity is `activeWin` — the PER-VIEW active pane — and deliberately never
-  /// `handle.active_win()`. The handle is shared across a project's tabpages, so the
-  /// core's notion of the active window can name a preview in a BACKGROUND tab, whose
-  /// selection would then enable Edit > Copy in this window. Unlike
-  /// `WolfWindowController.historyWin` there is therefore NO `active_win()` fallback
-  /// here; a `0` (unbound) active pane simply has nothing to copy.
+  /// Identity is `activeWin`, the pane this view shows as active, and never
+  /// `handle.active_win()`. Unlike `WolfWindowController.historyWin` there is NO
+  /// `active_win()` fallback here; a `0` (unbound) active pane simply has nothing
+  /// to copy.
   var activePaneSelection: PreviewCopySeam.Selection? {
     let win = activeWin
     guard win != 0 else { return nil }
@@ -1423,10 +1398,9 @@ final class PaneContainerView: NSView {
 
   /// Sizes each session from the content area of the pane `TerminalGeometry.sizer` picks
   /// among this view's panes showing it, sending `resize_terminal` when that size or the
-  /// frame's differs from what was sent. Only the project's current view sizes, which
-  /// with the in-view choice makes the most recently focused pane the sizer.
+  /// frame's differs from what was sent, which makes the most recently focused pane the
+  /// sizer.
   private func syncTerminalSizes() {
-    guard handle.active_tabpage() == controllerTabpageHandle else { return }
     var showing: [UInt64: [PaneId]] = [:]
     for (pane, session) in terminalByPane {
       showing[session, default: []].append(pane)
@@ -1509,37 +1483,18 @@ final class PaneContainerView: NSView {
 
   // MARK: - Render-wake orchestration
 
-  /// Marks that this view just became the current view of its project (its
-  /// tabpage was made current). The next wake whose snapshot reflects THIS
-  /// view's tabpage consumes a one-shot grid rebind in `onRenderWake`.
-  func markRefocusRebind() {
-    pendingRefocusRebind = true
-  }
-
   /// Orchestrates a render wake (port of `PaneInner::on_render_wake`): ensure a
   /// first pane exists, apply layout intents, collapse closed panes, resolve
   /// pending grids, refresh the active pane, sync grid sizes, then redraw.
-  ///
-  /// REFOCUS REBIND: when this view just became its project's current view
-  /// (`markRefocusRebind`), nvim has switched to this view's tabpage — churning
-  /// grid ids while keeping WINDOW handles stable. The pane→grid bindings from
-  /// before the switch are stale. Consume the rebind ONLY once the snapshot
-  /// reflects this tabpage (`active_tabpage()` gate), then re-derive every pane's
-  /// grid via `grid_for_win` on the PRESERVED `PaneTree` (no geometry rebuild).
-  /// `detectCloses()` is SKIPPED on this pass — the just-vacated tabpage's grids
-  /// are gone from the snapshot and would wrongly prune live panes; the next
-  /// normal pass reconciles any real closes.
   func onRenderWake() {
     let frameStart = FrameMetrics.begin()
     defer { FrameMetrics.end(.containerWake, frameStart) }
     // Every path below ends here, the early returns included, so terminal views follow the wake.
     defer { syncTerminalViews() }
 
-    // One-shot launch restore: once this tabpage is current and its first pane bound, realize the
-    // saved split tree in nvim and rebind the panes. Gated like `pendingRefocusRebind`.
-    if let (saved, node) = pendingLayoutRebuild,
-      handle.active_tabpage() == controllerTabpageHandle
-    {
+    // One-shot launch restore: once the first pane is bound, realize the saved split tree in nvim
+    // and rebind the panes.
+    if let (saved, node) = pendingLayoutRebuild {
       ensureInitialPane()
       if panes.isEmpty { return }  // no window grid yet; retry on the next wake.
       pendingLayoutRebuild = nil
@@ -1547,23 +1502,6 @@ final class PaneContainerView: NSView {
       applyTitlebarTheme()
       syncPreviewWebViews()
       refreshOverlays()
-      return
-    }
-
-    if pendingRefocusRebind {
-      guard handle.active_tabpage() == controllerTabpageHandle else { return }
-      pendingRefocusRebind = false
-      // A view that was materialized but never yet current has no panes; make
-      // its first pane bind to the now-current tabpage's window.
-      ensureInitialPane()
-      runPendingTerminalRestore()
-      rebindStaleGrids()
-      updateActivePane()
-      syncGridSizes()
-      applyTitlebarTheme()
-      syncPreviewWebViews()
-      refreshOverlays()
-      needsDisplay = true
       return
     }
 
@@ -1602,9 +1540,7 @@ final class PaneContainerView: NSView {
     restartBanner.flash()
   }
 
-  /// Rebinds this container to a FRESH tabpage after a crash-restart, so the
-  /// refocus gate (`active_tabpage() == controllerTabpageHandle`) matches the new
-  /// nvim's tabpage, and resets the view to the state before its first pane, as
+  /// Resets the view to the state before its first pane after a crash-restart, as
   /// wolf-gnome's `reset_after_restart` does.
   ///
   /// No pane may keep its window handle: a fresh nvim numbers its windows from
@@ -1615,10 +1551,8 @@ final class PaneContainerView: NSView {
   /// render wake's `ensureInitialPane` binds the fresh window and nothing of the
   /// dead nvim. A zoom goes too, so a restart starts unzoomed.
   /// `pendingLayoutRebuild` is kept, and so is `drawerWeight`, the drawer's
-  /// share, which belongs to the window and not to Neovim. Only the restart path reaches
-  /// this function: a tab switch uses `markRefocusRebind()`, where the panes survive.
-  func rebind(tabpageHandle: Int64) {
-    controllerTabpageHandle = tabpageHandle
+  /// share, which belongs to the window and not to Neovim.
+  func resetAfterRestart() {
     tree = PaneTree(root: Self.firstPaneId)
     activeDivider = nil
     draggingDrawerEdge = false
@@ -1659,7 +1593,6 @@ final class PaneContainerView: NSView {
     sentTerminalSizes.removeAll()
     terminalDrag = nil
     syncTerminalFocus()
-    pendingRefocusRebind = true
     needsDisplay = true
   }
 
@@ -2389,16 +2322,6 @@ final class PaneContainerView: NSView {
     previewReloadCoalescer.request()
   }
 
-  /// Nulls EVERY pane's bound grid, then re-resolves each via `grid_for_win` on
-  /// its (stable) window handle. The `PaneTree` topology is untouched, so a
-  /// multi-pane layout restores by rebinding grids alone.
-  private func rebindStaleGrids() {
-    for id in panes.keys {
-      panes[id]?.boundGrid = nil
-    }
-    resolvePendingGrids()
-  }
-
   // MARK: - Layout persistence (save + restore)
 
   /// The tab's pane-split layout by leaf id (topology + per-child weights). The
@@ -2407,8 +2330,7 @@ final class PaneContainerView: NSView {
 
   /// What each editor leaf's window shows, read by window handle. A leaf whose
   /// window is a preview maps to its source file, and a terminal pane to its shell's
-  /// cwd; any other maps through `win_buffer`, which spans every tabpage, so a
-  /// background view still reads its files. A leaf with no window yet is omitted,
+  /// cwd; any other maps through `win_buffer`. A leaf with no window yet is omitted,
   /// which `SessionSeam.gatherTab` treats as unreported.
   func leafContents() -> [PaneId: SessionSeam.LeafContent] {
     // `previews()` yields borrowed refs valid only for this loop; snapshot the
@@ -2455,12 +2377,11 @@ final class PaneContainerView: NSView {
     pendingTerminalRestore = steps
   }
 
-  /// Runs a requested terminal restore once this view's first pane is bound, its tabpage
-  /// is current and no layout rebuild waits.
+  /// Runs a requested terminal restore once this view's first pane is bound and no layout
+  /// rebuild waits.
   /// See notes/crates/wolf-macos/Sources/WolfMacOS/PaneContainerView.swift.md#terminal-restore
   private func runPendingTerminalRestore() {
-    guard let steps = pendingTerminalRestore, !panes.isEmpty, pendingLayoutRebuild == nil,
-      handle.active_tabpage() == controllerTabpageHandle
+    guard let steps = pendingTerminalRestore, !panes.isEmpty, pendingLayoutRebuild == nil
     else { return }
     pendingTerminalRestore = nil
     for step in steps {
@@ -2477,8 +2398,8 @@ final class PaneContainerView: NSView {
   /// live layout is then not the saved one, so the saved tab keeps persisting.
   private(set) var restoreFailed = false
 
-  /// Requests that this view's pane layout be rebuilt once its first pane binds and
-  /// its tabpage is current (consumed once in `onRenderWake`). `node` is the bridge
+  /// Requests that this view's pane layout be rebuilt once its first pane binds
+  /// (consumed once in `onRenderWake`). `node` is the bridge
   /// node the launch read returned, which Rust renders and realizes; `saved` is the
   /// same tree projected for the Swift `PaneTree`.
   func requestLayoutRebuild(_ saved: SavedPaneNode, node: FfiPaneNode) {

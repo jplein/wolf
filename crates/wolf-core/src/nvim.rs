@@ -931,8 +931,8 @@ impl NvimProcess {
 
     /// Returns the current tabpage's stable HANDLE via `nvim_get_current_tabpage`.
     ///
-    /// The authoritative bind-time value (the first-view bind reads it right after
-    /// attach); decoded via [`crate::redraw::ext_handle`].
+    /// The authoritative bind-time value; decoded via
+    /// [`crate::redraw::ext_handle`].
     pub fn current_tabpage(
         &self,
     ) -> impl std::future::Future<Output = Result<i64, NvimError>> + Send + 'static {

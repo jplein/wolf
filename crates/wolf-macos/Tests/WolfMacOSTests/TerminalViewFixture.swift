@@ -41,16 +41,13 @@ final class TerminalViewFixture {
   private(set) var container: PaneContainerView
   private(set) var renderer: OffscreenRenderer
 
-  /// Starts a core, over `initLua` when given, and hosts a container over its current
-  /// tabpage, then wakes it until its first pane is bound; `nil`, with the test failed, when
-  /// any step does not happen.
+  /// Starts a core, over `initLua` when given, and hosts a container over it, then wakes it
+  /// until its first pane is bound; `nil`, with the test failed, when any step does not happen.
   init?(initLua: String? = nil, file: StaticString = #filePath, line: UInt = #line) {
     guard let live = LiveCore.start(initLua: initLua, file: file, line: line) else { return nil }
     self.live = live
     let handle = live.handle
-    container = PaneContainerView(
-      handle: handle, metrics: live.metrics, tabpageHandle: handle.current_tabpage(),
-      optionAsAlt: false)
+    container = PaneContainerView(handle: handle, metrics: live.metrics, optionAsAlt: false)
     renderer = OffscreenRenderer(hosting: container, size: Self.windowSize)
     let container = self.container
     guard
@@ -87,15 +84,6 @@ final class TerminalViewFixture {
   /// The terminal view of `host` showing `session`, if one is hosted.
   func view(showing session: UInt64, in host: PaneContainerView) -> TerminalPaneView? {
     terminalViews(in: host).first { $0.session == session }
-  }
-
-  /// A second container over `tabpage`, hosted in its own offscreen window at `windowSize`.
-  /// Wake it only while `tabpage` is current, as the app wakes only its current view.
-  func hostContainer(tabpage: Int64) -> (container: PaneContainerView, renderer: OffscreenRenderer)
-  {
-    let other = PaneContainerView(
-      handle: handle, metrics: live.metrics, tabpageHandle: tabpage, optionAsAlt: false)
-    return (other, OffscreenRenderer(hosting: other, size: Self.windowSize))
   }
 
   /// Whether `view` lies in the lower half of the container, where the drawer strip is:

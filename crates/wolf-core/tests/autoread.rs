@@ -12,21 +12,21 @@
 //!
 //! ## The trigger: `set_ui_focus` (the REAL production path)
 //!
-//! The real production path is `FocusGained`: the user leaves the app, an external
-//! tool (`prettier --write`, `git checkout`) rewrites the file, then the user
-//! reactivates Wolf. On macOS the front-end now forwards that OS focus transition
-//! to the captive nvim via `WolfCore::set_ui_focus(gained)`, which calls
-//! `nvim_ui_set_focus` → fires `FocusGained` → the existing `WolfAutoRead` autocmd
-//! runs `:checktime` → the unmodified buffer reloads. These tests drive exactly
-//! that method, so they exercise the true production trigger (not a proxy).
+//! The real production path is `FocusGained`: the file changes on disk while a tab is
+//! unfocused (an external tool such as `prettier --write` or `git checkout`, or another
+//! tab's Neovim saving it), then the tab regains focus. The front-end reports each tab's
+//! focus to that tab's captive nvim through `WolfCore::set_ui_focus(gained)`, which calls
+//! `nvim_ui_set_focus` → fires `FocusGained` → the `WolfAutoRead` autocmd runs
+//! `:checktime` → the unmodified buffer reloads. These tests drive exactly that method,
+//! so they exercise the true production trigger (not a proxy).
 //!
-//! Both tests send `set_ui_focus(false)` THEN `set_ui_focus(true)` to force a
-//! genuine unfocused→focused transition. nvim de-dupes `FocusGained` and only
-//! fires it on the unfocused→focused EDGE; a freshly-attached UI's initial focus
-//! state is uncertain, so a lone `set_ui_focus(true)` could be a no-op if nvim
-//! already considered the UI focused. Leading with `false` guarantees the edge.
-//! This mirrors the production resign→activate sequence (`applicationWillResign`
-//! then `applicationDidBecomeActive`).
+//! Every test sends `set_ui_focus(false)` THEN `set_ui_focus(true)`: a loss and then a
+//! gain, as a tab losing and regaining focus reports them. `nvim_ui_set_focus(true)`
+//! fires `FocusGained` on every call, so the gain alone is what runs `:checktime`.
+//!
+//! [`a_save_in_one_core_reloads_in_another_after_the_focus_trigger`] is the per-tab
+//! shape: two cores on one cwd, as two macOS tabs on one folder run, where one core's
+//! save is the external change the other must pick up.
 //!
 //! ## Load-bearing vs guard split (read before trusting green)
 //!
@@ -102,11 +102,9 @@ fn start_core_in(cwd: &Path) -> (WolfCore, common::FlushWaiter) {
     (core, waiter)
 }
 
-/// Forces a genuine unfocused→focused transition on the captive nvim UI, which
-/// fires `FocusGained` → the `WolfAutoRead` autocmd → `:checktime`. Sends `false`
-/// first because nvim de-dupes `FocusGained` (edge-triggered) and a freshly
-/// attached UI's initial focus state is uncertain, so a lone `true` could no-op.
-/// Mirrors the production resign→activate sequence.
+/// Reports a focus loss and then a gain to the captive nvim UI, as a tab losing and
+/// regaining focus does. The gain fires `FocusGained` → the `WolfAutoRead` autocmd →
+/// `:checktime`.
 fn refocus_ui(core: &WolfCore) {
     core.set_ui_focus(false);
     core.set_ui_focus(true);
@@ -170,8 +168,8 @@ fn external_change_reloads_unmodified_buffer() {
     std::thread::sleep(PRE_REWRITE_SLEEP);
     std::fs::write(&fixture, RELOADED_DOC).expect("failed to rewrite fixture externally");
 
-    // Flush stale wakes, then drive the REAL production trigger: an OS refocus
-    // forwarded to nvim (unfocused→focused) fires FocusGained → :checktime.
+    // Flush stale wakes, then drive the REAL production trigger: a focus loss and gain
+    // forwarded to nvim, whose gain fires FocusGained → :checktime.
     waiter.drain();
     refocus_ui(&core);
 
@@ -239,8 +237,8 @@ fn modified_buffer_is_not_reloaded_by_checktime() {
     std::thread::sleep(PRE_REWRITE_SLEEP);
     std::fs::write(&fixture, NEVER_APPLIED_DOC).expect("failed to rewrite fixture externally");
 
-    // Drive the same REAL refocus trigger as test 1 (unfocused→focused fires
-    // FocusGained → :checktime); the guard is that the modified buffer survives it.
+    // Drive the same REAL refocus trigger as test 1 (the gain fires FocusGained →
+    // :checktime); the guard is that the modified buffer survives it.
     waiter.drain();
     refocus_ui(&core);
 
@@ -291,4 +289,106 @@ fn modified_buffer_is_not_reloaded_by_checktime() {
     }
 
     core.shutdown().expect("shutdown should be Ok");
+}
+
+/// What core A types at the head of the shared file before saving it. Absent from
+/// [`ORIGINAL_DOC`], so B's row 0 can show it only by reading A's save from disk.
+const SAVED_BY_A: &str = "SAVEDBYA ";
+
+/// Two cores on one cwd, as two macOS tabs on one folder run, show one file. A saves an
+/// edit; B, unmodified, picks it up from disk on the focus trigger, and only then.
+///
+/// B's `'updatetime'` is raised so `CursorHold`, the other `WolfAutoRead` trigger, cannot
+/// reload it while the test waits, and B enters no buffer, so `BufEnter` cannot either. The
+/// premise that B still shows the old text after A's save is asserted before the trigger, so
+/// a reload with no trigger fails the test rather than passing it.
+///
+/// FALSIFYING EDITS: (a) make `WolfCore::set_ui_focus` send nothing; (b) set
+/// `opt.autoread = false` in `runtime/nvim/init.lua`. RED in both: B's row 0 never shows
+/// A's text.
+#[test]
+fn a_save_in_one_core_reloads_in_another_after_the_focus_trigger() {
+    let _ = common::require_nvim_bin();
+
+    let dir = tempfile::tempdir().expect("failed to create tempdir");
+    let cwd = std::fs::canonicalize(dir.path()).expect("failed to canonicalize temp cwd");
+    let fixture = cwd.join("note.md");
+    std::fs::write(&fixture, ORIGINAL_DOC).expect("failed to write fixture");
+    let probe = cwd.join("probe.txt");
+
+    let (core_a, waiter_a) = start_core_in(&cwd);
+    let (core_b, waiter_b) = start_core_in(&cwd);
+    for (core, waiter) in [(&core_a, &waiter_a), (&core_b, &waiter_b)] {
+        core.send_input(InputEvent::Open {
+            path: fixture.clone(),
+        });
+        waiter.wait_for_flush(core, FLUSH_TIMEOUT);
+        wait_for_row0_contains(core, waiter, "# Original");
+    }
+    common::send_ex(&core_b, "set updatetime=3600000");
+
+    // A coarse mtime clock must still see A's write; the new length trips the size check too.
+    std::thread::sleep(PRE_REWRITE_SLEEP);
+    core_a.send_input(ch('i'));
+    type_str(&core_a, SAVED_BY_A);
+    core_a.send_input(key(Key::Esc));
+    core_a.send_input(InputEvent::Save);
+    let deadline = Instant::now() + FLUSH_TIMEOUT;
+    let mut on_disk = String::new();
+    while Instant::now() < deadline {
+        on_disk = std::fs::read_to_string(&fixture).unwrap_or_default();
+        if on_disk.starts_with(SAVED_BY_A) {
+            break;
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
+    assert!(
+        on_disk.starts_with(SAVED_BY_A),
+        "premise: A's Save must write its edit to {}; the file holds {on_disk:?}",
+        fixture.display()
+    );
+
+    common::settle_for(&waiter_b, Duration::from_millis(500));
+    let before = core_b.read_snapshot().active_grid().row_text(0);
+    assert!(
+        before.contains("# Original") && !before.contains(SAVED_BY_A.trim()),
+        "premise: before any focus trigger B must still show the old text; got row0 = \
+         {before:?}. A's text here means something other than the focus trigger reloaded B \
+         (CursorHold, BufEnter), so the assertions below could not tell the trigger works"
+    );
+
+    waiter_b.drain();
+    refocus_ui(&core_b);
+    let deadline = Instant::now() + FLUSH_TIMEOUT;
+    let mut row0 = String::new();
+    while Instant::now() < deadline {
+        row0 = core_b.read_snapshot().active_grid().row_text(0);
+        if row0.contains(SAVED_BY_A.trim()) {
+            break;
+        }
+        waiter_b.drain();
+        std::thread::sleep(POLL_INTERVAL);
+    }
+    assert!(
+        row0.contains(SAVED_BY_A.trim()),
+        "after a focus loss and gain B must reload A's save from disk; row0 = {row0:?}. The \
+         old text means no :checktime ran (set_ui_focus sent nothing, or FocusGained runs no \
+         :checktime) or it ran without 'autoread' and asked instead of reloading"
+    );
+
+    let values = common::probe_values(&core_b, &["&modified", "expand('%:t')"], &probe);
+    assert_eq!(
+        values[1], "note.md",
+        "the probe saw B's buffer {:?}, not note.md, so &modified below is about another \
+         buffer",
+        values[1]
+    );
+    assert_eq!(
+        values[0], "0",
+        "B's reloaded buffer must be unmodified, a plain re-read of the file; `1` means B's \
+         copy differs from disk, as a merge or a recovered swap would leave it"
+    );
+
+    core_b.shutdown().expect("core B shutdown should be Ok");
+    core_a.shutdown().expect("core A shutdown should be Ok");
 }

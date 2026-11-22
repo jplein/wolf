@@ -1,7 +1,7 @@
 //! The lazily-started, loopback-only HTTP server behind
 //! [`crate::api::WolfCore::open_in_browser`].
 //!
-//! One server per [`crate::api::WolfCore`] (per project). It binds
+//! One server per [`crate::api::WolfCore`]. It binds
 //! `127.0.0.1:0` — a random OS-assigned port, LOOPBACK ONLY, never `0.0.0.0` (a
 //! hard security requirement) — and serves a tiny STATIC SITE rooted at the
 //! project root (`getcwd()`, falling back to the pinned file's parent directory),

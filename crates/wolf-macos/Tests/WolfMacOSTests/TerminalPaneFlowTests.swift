@@ -123,7 +123,7 @@ final class TerminalPaneFlowTests: XCTestCase {
     guard died else { return }
     XCTAssertTrue(handle.restart(), "restart() on a dead Neovim must respawn it")
 
-    container.rebind(tabpageHandle: handle.current_tabpage())
+    container.resetAfterRestart()
     container.requestTerminalRestore(
       LivenessSeam.terminalRestore(
         splits: captured.splits, drawerOpen: captured.drawerOpen,

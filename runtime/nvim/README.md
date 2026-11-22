@@ -10,7 +10,7 @@ nvim --embed --clean -u <init.lua> -i NONE
 
 with `NVIM_APPNAME=wolf`, the `XDG_*` dirs pinned under a private temp dir, `WOLF_SWAP_DIR` and `WOLF_SPELL_DIR` always exported, and `WOLF_RUNTIME_USER_DIR` / `WOLF_PARSERS_USER_DIR` exported when the platform state dir resolves (see [`state.rs`](../../crates/wolf-core/src/README.md#staters) for the resolvers).
 
-Which copy is loaded depends on the tree. The macOS app resolves a `WOLF_INIT_LUA` override first, then the bundled `Contents/Resources/init.lua` via `Bundle.main.path(forResource:ofType:)`, then the in-repo `runtime/nvim/init.lua` (see [`Project.swift`](../../crates/wolf-macos/Sources/WolfMacOS/Project.swift)'s `initLuaPath`). Bazel tests pass the staged copy through `WOLF_TEST_INIT_LUA`.
+Which copy is loaded depends on the tree. The macOS app resolves a `WOLF_INIT_LUA` override first, then the bundled `Contents/Resources/init.lua` via `Bundle.main.path(forResource:ofType:)`, then the in-repo `runtime/nvim/init.lua` (see [`TabCore.swift`](../../crates/wolf-macos/Sources/WolfMacOS/TabCore.swift)'s `initLuaPath`). Bazel tests pass the staged copy through `WOLF_TEST_INIT_LUA`.
 
 `init.lua` self-locates its own directory and conditionally loads sibling trees — `orlando/`, `lighthouse/`, `nvim-treesitter/`, `parsers/`, `nvim-treesitter-textobjects/` — which the `.app` bundle places alongside it under `Contents/Resources/`. The wolf-gnome package installs the `orlando/` and `lighthouse/` siblings beside it under `share/wolf/nvim/`. Those two blocks are strict no-ops wherever their sibling is absent, as in a checkout.
 

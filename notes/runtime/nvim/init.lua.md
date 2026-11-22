@@ -47,3 +47,13 @@ So a buffer whose full or resolved path exceeds `SWAP_NAME_MAX` gets `noswapfile
 `BufFilePost` turns swap back on after a rename onto a short path, unless `wolf_untitled_swap_exists` finds a swap there: setting `'swapfile'` opens the swap at once, on a path where `SwapExists` is not armed. `wolf_name_untitled` runs the same sync directly, because `rename_buffer` applies `BufFilePost` unforced and the startup rename happens inside the non-nested `VimEnter` callback.
 
 Rejected fixes: dropping `//` (basenames collide across directories), a per-buffer or hashed `'directory'` (the option is global), and shortening paths only in tests (users would keep losing edits).
+
+## Dead-owner re-arm
+
+In Neovim 0.12.6 `findswapname` runs its `ATTENTION` block only when `'shortmess'` lacks `A`, and that block is also where `SwapExists` fires. With `A` set for good, a dead owner's swap would be neither offered nor recovered, which ends the `v:swapchoice = "r"` recovery that `crates/wolf-core/tests/swap_recovery.rs` and `nvim_restart.rs` pin.
+
+So the `BufNew` callback removes `A` when the `.swp` nvim would pick for the buffer (`untitled_swap_file`, tried for the full and the resolved path) exists and its owner is dead, by the same `swap_owner_dead` test the `SwapExists` callback uses, and sets `swap_exists_armed`. `disarm_swap_exists` puts `A` back only while that flag is set, so a user's own `:set shortmess-=A` holds.
+
+`SwapExists` calls it first, `BufNew` schedules it as the backstop for a buffer that never loads, and `sync_long_path_swap` calls it because `:saveas` fires `BufNew` for the new name before the rename opens that name's swap outside any load, where a dead owner's swap would otherwise raise the `ATTENTION` text as a toast.
+
+A live owner's swap, which is another tab's Neovim, stays under `A` and raises nothing. A long-path buffer is skipped, since it gets `noswapfile`.

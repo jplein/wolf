@@ -11,7 +11,7 @@ bundled ``init.lua``, and the bundle's own ``nvim`` evaluates one expression per
 Every Wolf Ex command is an ``rpcnotify`` on core's channel, captured when core calls
 ``wolf_setup_commands`` after the init file loads, so one issued by a second RPC client takes
 the route a typed one does: ``wolf_command`` ->
-core's queue -> wake -> ``Project.onWake`` -> ``drainAndDispatchCommands`` ->
+core's queue -> wake -> ``TabCore.onWake`` -> ``drainAndDispatchCommands`` ->
 ``CommandDispatcher`` -> ``WolfWindowController``.
 
 Scenario
@@ -79,7 +79,7 @@ Each is measured by a green baseline run against the real components, not assume
   GNOME twin's ``Z1 == L1`` rests on. A red C1 or R2 on unchanged code means this is false here.
 - ``nvim --clean --headless --server S --remote-expr E`` prints E's value on stdout. If it does
   not, P0 fails with no answer from the socket.
-- ``Project.swift`` honours ``WOLF_INIT_LUA`` and core passes the ``WOLF_*`` environment through
+- ``TabCore.swift`` honours ``WOLF_INIT_LUA`` and core passes the ``WOLF_*`` environment through
   to Neovim, so the prelude finds its socket path and the bundled ``init.lua``.
 
 Refusals and leftovers

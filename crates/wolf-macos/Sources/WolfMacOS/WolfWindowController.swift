@@ -32,11 +32,11 @@ struct RestoredWindowGroup {
   let tabs: [RestoredTabState]
 }
 
-/// Owns and drives a single top-level window and its embedded Neovim. Created by
-/// the `AppDelegate` coordinator (once per window); `start()` builds and shows the
-/// window. Wake routing reaches this controller through `WindowRegistry` keyed on
-/// the core's `wakeToken`.
-final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating {
+/// Owns and drives a single top-level window (one tab) and its own captive Neovim.
+/// Created by the `AppDelegate` coordinator (once per tab); `build()` builds and
+/// shows the window. Wakes reach this controller through its `TabCore`, which
+/// `WindowRegistry` resolves from the core's `wakeToken`.
+final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating, TabCoreView {
   /// Initial grid width in columns.
   private static let initialCols = 80
   /// Initial grid height in rows.
@@ -47,17 +47,11 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
   /// from any `state.json` slot — persistence is now whole-tree, not per-index.
   let tabId: Int
 
-  /// The PROJECT this view belongs to: the shared captive Neovim (one core, one
-  /// buffer list) that this view's tabpage lives in. Held STRONG — the core must
-  /// outlive this view's teardown while a sibling view still binds it; the
-  /// project holds its views WEAK, so there is no cycle.
-  let project: Project
+  /// This tab's captive Neovim. Held STRONG and shut down in `teardown()`; the core
+  /// holds this view WEAK, so there is no cycle.
+  let tabCore: TabCore
 
-  /// This view's bound nvim TABPAGE handle (the first view binds the project's
-  /// implicit tabpage 1; a joining/restored view creates a fresh one).
-  private(set) var tabpageHandle: Int64
-
-  /// The saved facets to restore (cwd already applied to the project launch; the
+  /// The saved facets to restore (cwd already applied to the core's launch; the
   /// sidebar visibility is applied in `start()`), or `nil` for a fresh
   /// (Cmd-N / new-tab) window.
   private let restoredTab: RestoredTabState?
@@ -96,11 +90,8 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
   /// teardown. Weak so the collection owns the lifetime.
   weak var coordinator: AppDelegate?
 
-  /// A reference to the PROJECT's shared core handle (`nil` before `build()` /
-  /// after `teardown()`). NOT owned — the project owns the handle's lifetime; a
-  /// view only holds a reference and drops it at teardown (it NEVER shuts the
-  /// core down itself). Kept optional so the existing `handle?.…` call sites are
-  /// unchanged.
+  /// The tab core's handle (`nil` before `build()` / after `teardown()`), kept
+  /// optional so the `handle?.…` call sites go quiet once the tab is torn down.
   private(set) var handle: WolfCoreHandle?
 
   private var window: MainWindow?
@@ -162,8 +153,7 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
 
   init(
     tabId: Int,
-    project: Project,
-    tabpageHandle: Int64,
+    tabCore: TabCore,
     restoredTab: RestoredTabState?,
     anchorFrame: CGRect?,
     hasFolder: Bool,
@@ -171,8 +161,7 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
     config: FfiConfig
   ) {
     self.tabId = tabId
-    self.project = project
-    self.tabpageHandle = tabpageHandle
+    self.tabCore = tabCore
     self.restoredTab = restoredTab
     self.anchorFrame = anchorFrame
     self.hasFolder = hasFolder
@@ -189,20 +178,14 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
     super.init()
   }
 
-  /// Builds this view's stack (bound to its project's shared core + its own
-  /// tabpage) and shows the window. Returns `false` (having built nothing) when
-  /// the tabpage bind is invalid, so the coordinator can drop the would-be view.
-  /// The core itself is started once per PROJECT (`Project.start`), never here.
-  func build() -> Bool {
-    guard tabpageHandle != 0 else {
-      return false
-    }
-    let handle = project.handle
+  /// Builds this tab's stack on its core and shows the window. The coordinator
+  /// starts the core (`AppDelegate.startTabCore`), never this method.
+  func build() {
+    let handle = tabCore.handle
     self.handle = handle
 
     let paneContainer = PaneContainerView(
-      handle: handle, metrics: metrics, tabpageHandle: tabpageHandle,
-      optionAsAlt: config.macos_option_as_alt())
+      handle: handle, metrics: metrics, optionAsAlt: config.macos_option_as_alt())
     self.paneContainer = paneContainer
 
     // A divider drag (or a restore rebuild) persists the whole-tree snapshot.
@@ -245,9 +228,9 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
     emptyState.isHidden = hasFolder
     self.emptyState = emptyState
 
-    // The "Restart Neovim" button (on the crash/stall overlay) drives the
-    // project-wide restart (kill + respawn + reopen the Tier-1 files per view).
-    paneContainer.onRestart = { [weak self] in self?.project.restartNeovim() }
+    // The "Restart Neovim" button (on the crash/stall overlay) restarts this tab's Neovim (kill +
+    // respawn + reopen the Tier-1 files).
+    paneContainer.onRestart = { [weak self] in self?.tabCore.restartNeovim() }
 
     // Hosted in a child panel in front of this window, so it renders above the preview
     // `WKWebView`. The host is held strongly; resign-key dismisses through a weak capture.
@@ -325,15 +308,13 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
       tree.start()
     }
 
-    // Join the project's weak view list; once this view is current, the project routes wakes here.
-    project.attach(self)
-
-    return true
+    // From here the core routes its wakes to this view.
+    tabCore.view = self
   }
 
   /// Drives this window's render wake: apply layout intents + redraw every pane
   /// and the cmdline strip, then reveal/bold the current buffer in the sidebar.
-  /// Paints only: the project calls `drainAndDispatchCommands()` after it, in
+  /// Paints only: the tab core calls `drainAndDispatchCommands()` after it, in
   /// every liveness state.
   func onRenderWake() {
     let frameStart = FrameMetrics.begin()
@@ -376,7 +357,7 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
     }
   }
 
-  /// Shows this view's crash/stall overlay for `mode` (fanned by the project when
+  /// Shows this view's crash/stall overlay for `mode` (asked by the tab core when
   /// it reads a non-`Alive` liveness).
   func showNvimOverlay(_ mode: NvimStatusMode) {
     paneContainer?.showNvimOverlay(mode)
@@ -387,24 +368,34 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
     paneContainer?.hideNvimOverlay()
   }
 
-  /// Flashes this view's transient "Neovim was restarted" banner (fanned by the
-  /// project at the end of a successful restart; auto-dismisses on its own timer).
+  /// Flashes this view's transient "Neovim was restarted" banner (asked by the tab
+  /// core at the end of a successful restart; auto-dismisses on its own timer).
   func flashRestartNotice() {
     paneContainer?.flashRestartNotice()
   }
 
-  /// Rebinds this view to a FRESH tabpage after a crash-restart: updates the
-  /// stored `tabpageHandle` and resets the pane container to one fresh pane,
-  /// which the next render wake binds to the new nvim's window.
-  func rebind(toTabpage handle: Int64) {
-    tabpageHandle = handle
-    paneContainer?.rebind(tabpageHandle: handle)
+  /// Resets the pane container to one fresh pane after a crash-restart, which the
+  /// next render wake binds to the new nvim's window.
+  func resetAfterRestart() {
+    paneContainer?.resetAfterRestart()
   }
 
-  /// This view's bound nvim tabpage's Tier-1 open-file set (captured BEFORE a
-  /// restart wipes the mirror), or `nil` when the core is gone.
-  func capturedOpenFiles() -> FfiOpenFiles? {
-    handle?.open_files_for_tabpage(tabpageHandle)
+  /// Refreshes this tab's picker on a file-search wake (session-local, so a wake
+  /// while no picker is open is harmless).
+  func onPickerWake() {
+    picker?.scheduleRefresh()
+  }
+
+  /// Refreshes this tab's file-tree sidebar on a tree wake. `scheduleRefresh()` is
+  /// version-gated and coalesced, so a wake with no new data does no real work.
+  func onTreeWake() {
+    tree?.scheduleRefresh()
+  }
+
+  /// Refreshes this tab's sidebar search panel on a content-search wake, coalesced
+  /// and version-gated like `onTreeWake()`.
+  func onSearchWake() {
+    search?.scheduleRefresh()
   }
 
   /// This view's terminal panes' sessions and whether its drawer is open, captured
@@ -438,7 +429,7 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
   /// in window A acts on window A) — the SAME dispatcher the native menu path
   /// uses. An unknown command kind is skipped.
   ///
-  /// Separate from `onRenderWake()` so `Project.onWake` drains in every liveness state;
+  /// Separate from `onRenderWake()` so `TabCore.onWake` drains in every liveness state;
   /// see `crates/wolf-macos/Sources/WolfKeyMap/README.md#livenessseamswift`.
   func drainAndDispatchCommands() {
     guard let handle else { return }
@@ -612,7 +603,7 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
     handle?.new_buffer()
   }
 
-  /// Toggles this window's per-project terminal drawer (`:WolfTerminal`) through
+  /// Toggles this window's terminal drawer (`:WolfTerminal`) through
   /// `PaneContainerView.toggleTerminal()`, which unzooms first.
   func toggleTerminal() {
     paneContainer?.toggleTerminal()
@@ -758,13 +749,10 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
     window?.toggleSidebar()
   }
 
-  /// The tabpage-local `:tcd` cwd this view surfaces, in tab titles, the Window menu
-  /// and the palette. It is read from core's out-of-band `wolf_tab_cwds` map (no RPC),
-  /// so it is right even when this view is not current, unlike `handle.cwd()`, which
-  /// follows the current tabpage. An empty-state view answers `""`.
+  /// The cwd this view surfaces, in tab titles, the Window menu and the palette: its
+  /// own Neovim's live cwd. An empty-state view answers `""`.
   var persistedCwd: String {
-    guard hasFolder, let handle else { return "" }
-    return handle.cwd_for_tabpage(tabpageHandle).toString()
+    hasFolder ? currentCwd : ""
   }
 
   /// This tab's top-level NSWindow (for tab grouping + the snapshot walk), or
@@ -801,7 +789,7 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
   private func liveTab() -> SessionSeam.TabGather {
     guard let paneContainer, let handle else { return .refuse }
     return SessionSeam.gatherTab(
-      hasFolder: hasFolder, cwd: handle.cwd_for_tabpage(tabpageHandle).toString(),
+      hasFolder: hasFolder, cwd: handle.cwd().toString(),
       sidebarVisible: sidebarVisible, layout: paneContainer.paneLayout,
       content: paneContainer.leafContents(), zoomed: paneContainer.zoomedPaneId)
   }
@@ -846,9 +834,8 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
   /// toolbar buttons: this VIEW's active pane, falling back to core's global
   /// `active_win()` before the container has bound one. `0` when neither resolves.
   ///
-  /// The container's own `activeWin` is PREFERRED because the core handle is shared
-  /// across a project's tabpages while `activePane` is per-view — it is the pane the
-  /// user is looking at. The terminal drawer's pane IS in `panes`, but core never
+  /// The container's own `activeWin` is PREFERRED because `activePane` is the pane
+  /// the user is looking at. The terminal drawer's pane IS in `panes`, but core never
   /// gives it history, so `historyCanBack` correctly reports `false` when it is
   /// focused.
   var historyWin: Int64 {
@@ -1000,17 +987,15 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
     teardown()
   }
 
-  /// This view became key: make it its project's current view so nvim renders
-  /// THIS view's tabpage, and arm the pane container's one-shot refocus rebind
-  /// (nvim churns grid ids across the switch; the container re-derives its
-  /// grid bindings on the next wake reflecting this tabpage). Guarded so a
-  /// redundant key notification for the already-current view is a no-op. The active
-  /// terminal pane's focus report goes out first, on every key change.
+  /// This view became key: the active terminal pane's focus report goes out, on every key change.
   func windowDidBecomeKey(_ notification: Notification) {
     paneContainer?.syncTerminalFocus()
-    guard project.currentView !== self else { return }
-    project.setCurrent(self)
-    paneContainer?.markRefocusRebind()
+  }
+
+  /// This view's window became main, so its tab may have gained focus: the coordinator
+  /// recomputes which tab is focused and reports the edges to the tabs' Neovims.
+  func windowDidBecomeMain(_ notification: Notification) {
+    coordinator?.refreshTabFocus()
   }
 
   /// This view stopped being key, which app deactivation also causes: the active
@@ -1021,12 +1006,9 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
 
   /// Tears this VIEW down. It decides its close commit (`AppDelegate.closeCommit(for:)`)
   /// while it still counts as live, then drops the state writer, the sidebar's and
-  /// picker's file-search sessions and the palette session. It closes this view's
-  /// tabpage on the shared core (non-last close), detaches from the project (which
-  /// shuts the core down only when THIS was the last view), and asks the coordinator
-  /// to drop this controller. Idempotent (windowWillClose + terminate-time backstop).
-  /// This view NEVER calls `handle.shutdown()` itself: the project owns the core's
-  /// lifetime.
+  /// picker's file-search sessions and the palette session. It shuts this tab's
+  /// core down, and asks the coordinator to drop this controller. Idempotent
+  /// (windowWillClose + terminate-time backstop).
   func teardown() {
     guard !isTornDown else { return }
     // Decided while this view still counts as live, so the burst's read and the last-view
@@ -1061,10 +1043,7 @@ final class WolfWindowController: NSObject, NSWindowDelegate, HistoryNavigating 
     paletteHost = nil
     bufferPickerHost = nil
 
-    // Order matters: `closeTabpage` must see this view still attached to know whether it is the
-    // last one, in which case it no-ops and `detach` shuts the core down.
-    project.closeTabpage(for: self)
-    project.detach(self)
+    tabCore.shutdown()
     handle = nil
 
     // Remove on the next runloop turn: the coordinator holds the last strong ref, and removing now

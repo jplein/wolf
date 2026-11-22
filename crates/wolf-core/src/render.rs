@@ -749,8 +749,8 @@ pub struct Snapshot {
     /// notification, emitted by the `wolf_setup_tabs` `TabEnter`/`TabNewEntered`
     /// autocmds in `runtime/nvim/init.lua` (see [`crate::redraw`]). Because it is
     /// not a redraw frame, updating it does NOT bump `seq`. The macOS front-end
-    /// uses it as the cheap "is my tabpage current" refocus-rebind gate (mirrors
-    /// `active_win`); the authoritative bind-time value is
+    /// reads it as the tabpage of its restart capture, which a dead core still
+    /// answers; the authoritative bind-time value is
     /// [`crate::api::WolfCore::current_tabpage`].
     pub current_tabpage: i64,
     /// Absolute, canonicalized path of the buffer currently being edited in
@@ -851,8 +851,8 @@ pub struct Snapshot {
     /// handle, so the replacement is how they are pruned). Because it is not a
     /// redraw frame, updating it does NOT bump `seq`. Read by
     /// [`crate::api::WolfCore::cwd_for_tabpage`] as a cheap, lock-free snapshot
-    /// lookup (no RPC), authoritative even for a NON-current view. Defaults to
-    /// empty.
+    /// lookup (no RPC), authoritative even for a tabpage that is not current.
+    /// Defaults to empty.
     pub tab_cwds: HashMap<i64, PathBuf>,
     /// The Tier-1 open-file mirror, keyed by TABPAGE handle (an `i64`). Each entry
     /// is the instance's file-backed open buffers + that tabpage's active buffer,

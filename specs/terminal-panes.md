@@ -84,11 +84,11 @@ The front-end focuses a terminal pane like any other and sends `FocusWin` for it
 
 `<C-w>c` or `<C-w>q` in the pane, Close Pane, or `:close` from elsewhere closes the placeholder window, and the last window is refused as `wolf_do_close` refuses it. Core observes the close through `win_close`, and the buffer's wipe hangs up the session.
 
-Terminal panes default to full width, and the existing full-width command toggles it. The front-end sizes the session from the pane's framed content area. A session shown in more than one pane, which only the shared drawer can be (macOS keeps one drawer per project core), is sized by the most recently focused of its panes, and the others paint it clipped or padded.
+Terminal panes default to full width, and the existing full-width command toggles it. The front-end sizes the session from the pane's framed content area. A session shown in more than one pane, which only a drawer shared by several tabpages of one core can be, is sized by the most recently focused of its panes, and the others paint it clipped or padded.
 
 ## The drawer
 
-There is one drawer session per core: per window on GNOME and per project on macOS. `WolfCore::toggle_terminal()` starts a drawer session if none is live, in the current tabpage's cwd, before it queues `ToggleTerminal { id }`; starting one is a pty and a fork, never an RPC, and the event carries the id because the input pump has no registry. `drawer_terminal()` names the live drawer session. `wolf_toggle_terminal(id)` then opens or closes the drawer window in the current tabpage: a `botright` split a third of the height, tagged `w:wolf_drawer`, showing the drawer's placeholder, focused, and emitting the `drawer_open` intent. Closing the drawer window never ends the session.
+There is one drawer session per core: per window on GNOME and per tab on macOS. `WolfCore::toggle_terminal()` starts a drawer session if none is live, in the current tabpage's cwd, before it queues `ToggleTerminal { id }`; starting one is a pty and a fork, never an RPC, and the event carries the id because the input pump has no registry. `drawer_terminal()` names the live drawer session. `wolf_toggle_terminal(id)` then opens or closes the drawer window in the current tabpage: a `botright` split a third of the height, tagged `w:wolf_drawer`, showing the drawer's placeholder, focused, and emitting the `drawer_open` intent. Closing the drawer window never ends the session.
 
 Both front-ends keep the drawer outside their pane trees, as their existing decisions say. Core's router ignores split chords from the drawer's session, and `<C-w>c` or `<C-w>q` in the drawer closes it.
 
@@ -109,7 +109,7 @@ Each session publishes a lock-guarded `TerminalFrame` under [the snapshot-and-wa
 
 Damage comes from libghostty-vt's render-state dirty tracking, which feeds `row_versions`. A front-end repaints the rows newer than the version it last painted, so independent readers share no dirty bits.
 
-A publish fires the core's existing wake, routed by project token on macOS, and never bumps `Snapshot.seq`, which keeps the rule that only a redraw flush does. A front-end gates a terminal repaint on the frame's `version`. Publishing is coalesced to at most one per named interval per session, about 8 ms. Synchronized output (mode 2026, through `RENDER_HOLD`) defers it until released or until a named maximum passes.
+A publish fires the core's existing wake, routed by its core's token on macOS, and never bumps `Snapshot.seq`, which keeps the rule that only a redraw flush does. A front-end gates a terminal repaint on the frame's `version`. Publishing is coalesced to at most one per named interval per session, about 8 ms. Synchronized output (mode 2026, through `RENDER_HOLD`) defers it until released or until a named maximum passes.
 
 The default foreground and background come from the editor's highlight defaults. The 16 `ANSI` colours come from the colorscheme's `g:terminal_color_0` to `g:terminal_color_15`, which an extended `wolf_theme` carries. The cursor colour comes from `WolfCursor` when set. Core re-applies them on `ColorScheme`; palette entries 16 to 255 keep libghostty-vt's defaults.
 

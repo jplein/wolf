@@ -329,7 +329,7 @@ enum AppMenu {
       commandItem(
         title: "Edit in Another Pane", tag: Tag.editInOtherPane,
         keyEquivalent: "", target: target))
-    // View > Terminal: toggles the project's terminal drawer. Always enabled.
+    // View > Terminal: toggles the tab's terminal drawer. Always enabled.
     menu.addItem(
       commandItem(
         title: "Terminal", tag: Tag.terminal, keyEquivalent: "`",

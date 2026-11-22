@@ -30,8 +30,7 @@ private final class SidebarToolbarFixture {
     _ = NSApplication.shared
     let handle = live.handle
     let container = PaneContainerView(
-      handle: handle, metrics: live.metrics, tabpageHandle: handle.current_tabpage(),
-      optionAsAlt: false)
+      handle: handle, metrics: live.metrics, optionAsAlt: false)
     sidebar = SidebarContainerView(
       tree: FileTreeView(handle: handle, paneContainer: container),
       search: SearchView(handle: handle, paneContainer: container))
@@ -73,7 +72,7 @@ private final class SidebarToolbarFixture {
 /// Forward, its selection after each path that changes the sidebar, a click's effect, and the
 /// sidebar's content, which starts at the safe area's top with no header strip above it.
 ///
-/// `WolfWindowController` cannot be built offscreen: its `build()` needs a `Project` started
+/// `WolfWindowController` cannot be built offscreen: its `build()` needs a `TabCore` started
 /// against `AppDelegate` and orders its window front. So the command paths enter at the
 /// `MainWindow` members its `toggleSidebar()` and `showSidebar(panel:)` forward to, and the
 /// `CommandDispatcher` arms and those forwarders are checked only by the compiler.

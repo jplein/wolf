@@ -155,7 +155,7 @@ Two rules bind a consumer of those maps. The first is that each is replaced whol
 
 The second is that tabpage scope varies from map to map, and assuming it uniform is how a consumer reads a background tabpage wrongly. `windows`, `grid_for_win`, `active_win` and `cursor` describe the current tabpage alone; `win_buffers`, `buffers`, `full_width` and `previews` are global across every tabpage, because `runtime/nvim/init.lua` builds them by sweeping `nvim_list_wins()`. `open_files` is keyed per tabpage, but its `files` are the instance's whole `buflisted` set and only its `active` is per-tab.
 
-The consequence is worth stating outright: `pane_status` joins a grid to `windows`, so asking it about a background tabpage's grid answers `[No Name]` with an empty `abs_path` rather than failing. A non-current view's working directory comes from `tab_cwds` through `cwd_for_tabpage`.
+The consequence is worth stating outright: `pane_status` joins a grid to `windows`, so asking it about a background tabpage's grid answers `[No Name]` with an empty `abs_path` rather than failing. The working directory of a tabpage that is not current comes from `tab_cwds` through `cwd_for_tabpage`.
 
 Field-level detail — why `Grid::resize` preserves rather than clears, why `WinInfo.hidden` is inert, why a toast keeps its colors while the command line does not — is in [`render.rs`](../crates/wolf-core/src/README.md#renderrs).
 
@@ -228,7 +228,7 @@ The front-end pushes `InputEvent`s onto an ordered FIFO channel that a single co
 - Input proper — `Key`, `Mouse`, `Scroll`. A mouse or scroll event carries its target grid with grid-local row and column, because under `ext_multigrid` each pane has its own window grid.
 - Geometry — `Resize { cols, rows }` for the outer UI, `ResizeGrid { grid, cols, rows }` per pane, and `FocusWin { win }` for click-to-focus and resolved focus moves.
 - Documents — `Open { path }`, `OpenAt { path, line, col }`, `Save`, `SaveAs { path, force }`, `NewBuffer`, `Paste { text }`, `SwitchBuffer { win, bufnr }`, `ClosePane`.
-- Views — `Chdir { path }`, `SetTabpage { handle }`, `CloseTabpage { handle }`. Each view is one nvim tabpage owning its own working directory, so `Chdir` applies `:tcd`; a global `:cd` would move every view of the shared nvim.
+- Views — `Chdir { path }`, `SetTabpage { handle }`, `CloseTabpage { handle }`. `Chdir` applies `:tcd`, so in a Neovim that holds several tabpages it moves only the current one. On macOS every tab runs its own Neovim with one tabpage, so `:tcd` moves that tab alone.
 - Toggles — `SetBackground { dark }`, `ToggleTerminal { id }`, `ToggleFullWidth`, `SetUiFocus { gained }`.
 - Terminals — `BindTerminal { id, target }`, which shows a running session in a window behind the input queued before it.
 
@@ -246,7 +246,7 @@ Core owns a tokio runtime on its own threads and updates the render-state snapsh
 
 The wake is the one piece each front-end implements. The snapshot and the RPC are entirely in core. Core's locking discipline around that snapshot is in [`wolf-core-decisions.md`](../notes/wolf-core-decisions.md).
 
-On macOS the wake is routed rather than global, because one captive Neovim is shared by several windows. Each wake carries a per-project token that the front-end resolves to the owning project before fanning out. The mechanism, and why identity crosses the boundary as a plain scalar, is in [`wolf-ffi-decisions.md`](../notes/wolf-ffi-decisions.md); how a project fans a wake out to its views is in [`wolf-macos-decisions.md`](../notes/wolf-macos-decisions.md). `wolf-gnome` runs one core per window, so its wake closure belongs to that core alone, carries no token, and needs no routing at all.
+On macOS the wake is routed rather than global, because one process-global callback per channel serves every tab's core. Each wake carries its core's token, which the front-end resolves to the owning tab. The mechanism, and why identity crosses the boundary as a plain scalar, is in [`wolf-ffi-decisions.md`](../notes/wolf-ffi-decisions.md); how a tab's core hands a wake to its view is in [`wolf-macos-decisions.md`](../notes/wolf-macos-decisions.md). `wolf-gnome` runs one core per window, so its wake closure belongs to that core alone, carries no token, and needs no routing at all.
 
 ## Theming
 
@@ -288,4 +288,4 @@ These are scoped deliberately, and each has a clear direction.
 - **Only windows opened through the overridden split commands become panes.** Panes come from `Split` intents, which only the rebound chords and Ex-commands emit. A window created another way — `:help`, quickfix, a location list, `:pedit`, `:diffsplit` — still gets a grid and a `WinInfo` but no pane, so its content is not shown. The direction is to auto-pane any unbound window grid.
 - **Floating and external windows are ignored**, so they never appear as panes.
 
-A tabpage-per-view model adds two more, both detailed in [`wolf-macos-decisions.md`](../notes/wolf-macos-decisions.md). The lockout on Neovim-internal tabpage navigation is best-effort in either front-end, because it lives in the shared `runtime/nvim/init.lua`, so a determined user can still desync a view from its tabpage. The other is macOS-only: a visible non-current window of a project can blank during a live resize until refocused.
+The lockout on Neovim-internal tabpage navigation is best-effort, because it lives in `runtime/nvim/init.lua`, so a determined user can still move a Neovim to a tabpage its front-end does not show ([`runtime/nvim/README.md`](../runtime/nvim/README.md)).
