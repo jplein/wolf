@@ -54,6 +54,8 @@ In Neovim 0.12.6 `findswapname` runs its `ATTENTION` block only when `'shortmess
 
 So the `BufNew` callback removes `A` when the `.swp` nvim would pick for the buffer (`untitled_swap_file`, tried for the full and the resolved path) exists and its owner is dead, by the same `swap_owner_dead` test the `SwapExists` callback uses, and sets `swap_exists_armed`. `disarm_swap_exists` puts `A` back only while that flag is set, so a user's own `:set shortmess-=A` holds.
 
-`SwapExists` calls it first, `BufNew` schedules it as the backstop for a buffer that never loads, and `sync_long_path_swap` calls it because `:saveas` fires `BufNew` for the new name before the rename opens that name's swap outside any load, where a dead owner's swap would otherwise raise the `ATTENTION` text as a toast.
+`SwapExists` calls it first, and `BufNew` schedules it as the backstop for a buffer that never loads. `sync_long_path_swap`, which runs after each rename, calls it because `:saveas` fires `BufNew` for the new name and a swap opened after that is opened outside any load, where a dead owner's swap would raise the `ATTENTION` text as a toast. That covers the rename whose swap opens at `BufFilePost`: a long-path buffer turning swap back on.
+
+A buffer that already has a swap is renamed earlier, by `buf_name_changed` between `BufNew` and `BufFilePost`, with `A` still out. So `:saveas` of such a buffer onto a name where a dead owner's `.swp` sits still shows that swap's `ATTENTION` text as a toast. It is never a prompt, because `SwapExists` fires only on the file-load path.
 
 A live owner's swap, which is another tab's Neovim, stays under `A` and raises nothing. A long-path buffer is skipped, since it gets `noswapfile`.

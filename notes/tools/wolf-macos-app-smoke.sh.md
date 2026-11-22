@@ -1,16 +1,16 @@
 # `tools/wolf-macos-app-smoke.sh`
 
-Last verified at commit `a20c011d440d16db41fe785bb5adfb8e3d03db59`.
+Last verified at commit `6df123a70b42c315db9c8b07001d90aa437fe3db`.
 
 ## Why these refusals
 
-The smoke launches the real `Wolf.app` and needs its window to become key, so it runs only in this user's unlocked GUI session, by hand. Each of the script's refusals exits 2 before the build, so a run that cannot pass costs nothing.
+The smoke launches the real `Wolf.app` and needs this user's unlocked GUI session, so it runs only there, by hand. Each of the script's refusals exits 2 before the build, so a run that cannot pass costs nothing.
 
 - Not Darwin: it launches a macOS bundle.
 - `REGINA_AGENT` set: a regina worker runs under Seatbelt, which denies it the GUI session, and a worker must not take over the user's desktop unannounced.
 - `TEST_TMPDIR` set: Bazel sets it in every test action, and `bazel test //...` or a gate must never take over the desktop. A test tagged `no-sandbox` runs in this user's session, so the session checks alone would not stop it.
 - `/dev/console` not owned by `id -un`: another user, or the login window, holds the console, so this user has no session for the app to draw in.
-- The screen locked, which `ioreg -n Root -d1` reports as `"CGSSessionScreenIsLocked" = Yes` in `IOConsoleUsers` or as the Root-level `"IOConsoleLocked" = Yes`. A restored window never becomes key on a locked screen. A restored tab renders and drains on its own core's wakes, key or not, so no check is known to need key; the refusal stands because no run on a locked screen has been measured green, and the harness reads a lone unnamed window at P0 and P2 as one that never became key. The harness repeats this check before each launch, since the screen can lock during the build.
+- The screen locked, which `ioreg -n Root -d1` reports as `"CGSSessionScreenIsLocked" = Yes` in `IOConsoleUsers` or as the Root-level `"IOConsoleLocked" = Yes`. A restored window never becomes key on a locked screen. A restored tab renders and drains on its own core's wakes, key or not, so no check is known to need key; the refusal stands because no run on a locked screen has been measured green. The harness repeats this check before each launch, since the screen can lock during the build.
 - No `bazel` or `python3` on `PATH`: the message names the dev shell and the `nix develop --command` form.
 - Any argument: it takes none, so a mistyped flag fails rather than being ignored.
 

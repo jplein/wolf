@@ -361,3 +361,5 @@ Name avoidance is the defence. Yielding `Untitled 2.md` also keeps a fresh start
 - A Markdown LSP and a formatter are not wired.
 - `:checktime` on focus regain depends on the front-end reporting focus through `WolfCore::set_ui_focus`. The macOS front-end reports each tab's; the GNOME one does not, so there the reload is driven by buffer entry and idle.
 - Under `A`, two Neovims editing one file get no warning until the second saves ([One Neovim per tab](../../specs/application-state.md#8-one-neovim-per-tab)).
+- `:saveas` of a buffer that has a swap, onto a name where a crashed session left a swap, shows that swap's `ATTENTION` text as a toast. It is never a prompt ([why](../../notes/runtime/nvim/init.lua.md#dead-owner-re-arm)).
+- When two tabs hold unsaved edits to one file and both Neovims die, the relaunch never offers the second tab's `.swo`, since the dead-owner re-arm checks only the `.swp` name ([why](../../notes/runtime/nvim/init.lua.md#dead-owner-re-arm)).
