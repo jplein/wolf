@@ -53,10 +53,11 @@
 //! 5. only if `decided.observe_os`, connect the `dark` notify handler.
 //!
 //! Step 5 comes after step 3 on purpose: connecting first would let the scheme
-//! change made in step 3 fire the handler's own first run. The call site in
-//! [`crate::app`] is likewise placed after the core exists — so the push has
-//! somewhere to go — and before any widget is built, so the window is realized
-//! under the resolved scheme with no visible flash.
+//! change made in step 3 fire the handler's own first run. The call site,
+//! `TabsInner::open_tab` in [`crate::tab_view`], runs once per tab, after that
+//! tab's core exists — so the push has somewhere to go — and before its pane view
+//! is built. `window::build` opens its tabs before any other widget, so a window
+//! is realized under the resolved scheme with no visible flash.
 //!
 //! ## The notify handler pushes, and deliberately never re-sets the scheme
 //!
@@ -72,10 +73,12 @@
 //! `notes/wolf-gnome-decisions.md`, "Threading and the wake", records that
 //! nothing in this crate polls and that no timer re-arms while the application is
 //! idle. A `StyleManager` `dark` notification is a GObject property notification:
-//! armed once at launch, in `auto` mode only, and fired only when libadwaita's own
-//! property actually changes. It adds no third one-shot timer and nothing re-arms
-//! itself, so that property is intact — stated here so a later reader does not go
-//! looking for a timer that does not exist.
+//! armed once per tab as its core starts, in `auto` mode only, and fired only when
+//! libadwaita's own property actually changes. A closed tab's handler stays
+//! connected and returns at once, because its `Weak` fails to upgrade. It adds
+//! no third one-shot timer and nothing re-arms itself, so that property is intact
+//! — stated here so a later reader does not go looking for a timer that does not
+//! exist.
 
 use std::cell::RefCell;
 use std::rc::Rc;

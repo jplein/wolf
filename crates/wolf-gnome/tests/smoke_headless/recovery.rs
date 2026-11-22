@@ -694,7 +694,7 @@ pub(crate) fn with_nvim_pid_helper(scenario: &str) -> String {
 /// full is DROPPED — and `mark_dead` fires exactly once, after which a dead Neovim
 /// produces no further redraw wakes ever. Bursting first maximises the chance the
 /// death wake lands in a full channel. If this smoke ever flakes, the diagnosis is a
-/// wake-TRANSPORT bug (see `app.rs`'s `a_dropped_wake_implies_a_pending_wake`), NOT
+/// wake-TRANSPORT bug (see `tab_view.rs`'s `a_dropped_wake_implies_a_pending_wake`), NOT
 /// a timing knob that needs raising.
 ///
 /// ## Why step 5 exists: making swap recovery DETERMINISTIC rather than a race
@@ -1309,7 +1309,7 @@ fn assert_button_rect_fits(smoke: &str, rect: (f64, f64, f64, f64), overlay: (f6
 /// and a dead Neovim produces no further redraw wakes — so if coalescing were unsafe,
 /// the overlay and the restart would simply never happen and this smoke would flake.
 /// **If it ever does flake, the diagnosis is a wake-TRANSPORT bug, not a settle that
-/// needs raising.** The headless counterparts are `app.rs`'s
+/// needs raising.** The headless counterparts are `tab_view.rs`'s
 /// `a_dropped_wake_implies_a_pending_wake` and
 /// `consuming_a_wake_frees_the_slot_before_the_handler_runs`.
 ///
@@ -1369,11 +1369,11 @@ fn assert_button_rect_fits(smoke: &str, rect: (f64, f64, f64, f64), overlay: (f6
 ///
 /// | assertion | revert | expected red symptom | measured |
 /// | --- | --- | --- | --- |
-/// | recovery happened at all | delete `let paint = shell.on_liveness_wake();` from `app.rs`'s drain loop and call `panes`/`tree` unconditionally | scenario exit **19** | reproduced (`the cage crash scenario exited unsuccessfully (exit status: 19)`; scenario stderr `Neovim never came back with bfile.md as its current buffer within the poll budget`), restored, green |
+/// | recovery happened at all | delete `let paint = self.on_liveness_wake(tab);` from `AppShell::on_tab_wake`, and refresh the tab and the tree unconditionally | scenario exit **19** | reproduced (`the cage crash scenario exited unsuccessfully (exit status: 19)`; scenario stderr `Neovim never came back with bfile.md as its current buffer within the poll budget`), restored, green |
 /// | the auto-restart | in `liveness_ui`, change the `(Dead, true)` row to `auto_restart: false` | scenario exit **19**, identical | reproduced, identical (`exit status: 19`, same stderr), restored, green |
 /// | the reopen ORDER | in `reopen_order`, push `active` FIRST instead of last | recovery and banner both happen, but `bounceback` is ABSENT while `restarted` is present | red, but NOT by the predicted route: measured `exit status: 19`. The scenario's own recovery poll is order-sensitive (it waits for `bufname('%')` to name the fixture, and with the order reversed the focused buffer stays the recovered `Untitled.md`), so the run never reaches the OCR assertions. The `bounceback` term is therefore NOT what discriminates the order — the poll is. Restored, green |
 /// | the banner | make `CrashOverlay::flash_banner` a no-op | `restarted` absent, `bounceback` present | reproduced exactly (`after the restart, OCR did not contain "restarted"`, while the same OCR dump carries `% bounceback` and `... unsavedburst`), restored, green |
-/// | the pane-view reset | delete `self.inner.panes.reset_after_restart();` from `shell.rs`'s restart path | dims go `45 14` -> `80 24` (the config's initial cols/rows), because no `::resize` fires on an unchanged allocation. **This is the only assertion that discriminates the reset** — all three OCR terms survive it | reproduced exactly (`the pane grid changed across the restart — it was 45x14 before the crash and is 80x24 after`; all three OCR assertions passed first, as predicted), restored, green |
+/// | the pane-view reset | delete `tab.panes().reset_after_restart();` from `AppShell::restart_nvim`'s `Respawned` arm | dims go `45 14` -> `80 24` (the config's initial cols/rows), because no `::resize` fires on an unchanged allocation. **This is the only assertion that discriminates the reset** — all three OCR terms survive it | reproduced exactly (`the pane grid changed across the restart — it was 45x14 before the crash and is 80x24 after`; all three OCR assertions passed first, as predicted), restored, green |
 /// | the unsaved edit survived (`unsavedburst` present after, ABSENT in the control) | **no isolated revert of its own.** Reverting the restart (rows 1-2) makes it red along with everything else via scenario exit **19**; reverting the reopen ORDER (row 3) makes it absent alongside `bounceback`. It discriminates none of the five on its own | what it independently discriminates is that the reopened buffer is the SWAP-RECOVERED one rather than a clean re-read from disk: `bounceback` is on disk and renders under either, `unsavedburst` exists only in the dead Neovim's swap file. A future change that reopened into a fresh/per-process swap dir, or that answered `SwapExists` with `e` instead of `r`, would leave every other assertion here green | no isolated revert run, by design. Observed red alongside rows 1-3 via scenario exit 19, and green in every run in which `bounceback` was green |
 #[test]
 fn nvim_crash_recovers_and_reopens_the_file_under_cage() {
@@ -1639,9 +1639,9 @@ fn nvim_crash_recovers_and_reopens_the_file_under_cage() {
          initial cols/rows (80x24 for wolf-gnome) and NO `::resize` fires on a widget whose \
          allocation did not change — so without the reset the fresh Neovim keeps an 80x24 grid \
          inside a pane that is {w_before}x{h_before} cells and the editor renders at the wrong \
-         size for the rest of the session. An `80 24` reading here IS that defect. Check that the \
-         restart path still calls `self.inner.panes.reset_after_restart();` before the reopen. \
-         PNG kept at {}.",
+         size for the rest of the session. An `80 24` reading here IS that defect. Check that \
+         `AppShell::restart_nvim` still calls `tab.panes().reset_after_restart();` before the \
+         reopen. PNG kept at {}.",
         out_png.display()
     );
 }

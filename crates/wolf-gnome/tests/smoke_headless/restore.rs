@@ -449,7 +449,10 @@ pub(crate) const TABS_RESTORE_READBACK_NAME: &str = "tabs_run2.txt";
 /// quit in which tabs 1 and 2 were never selected, so what a whole launch-restore-quit
 /// round trip leaves behind is asserted on its own. Without the split, a save side
 /// that dropped tabs and a second run that lost them would produce the same one
-/// observable.
+/// observable. The Rust side also reads `$TABS_STATE_COPY_1` before this scenario's
+/// exit status, because a save that drops tabs leaves run 2 short of three Neovims as
+/// well and fails exit 24's count; the ordering and the frozen copy together keep the
+/// save side asserted on its own.
 ///
 /// **Run 2 selects nothing and types nothing but the quit.** Each tab runs a Neovim of
 /// its own, so the restore is read from the process table rather than from one
@@ -2327,14 +2330,27 @@ fn assert_frozen_tabs(smoke: &str, stage: &str, state_dir: &Path, diagnosis: &st
     );
     let window = &saved.windows[0];
 
+    // Read before the count, so a short tree still names its survivors: the name is the diagnosis.
+    let leaf_names: Vec<Option<&str>> = window
+        .tabs
+        .iter()
+        .map(|tab| {
+            tab.layout
+                .as_ref()
+                .and_then(leaf_fields)
+                .and_then(|leaf| Path::new(leaf.path).file_name())
+                .and_then(OsStr::to_str)
+        })
+        .collect();
     assert_eq!(
         window.tabs.len(),
         TABS_RESTORE_FILES.len(),
-        "{smoke}: {stage}'s persisted window carries {} tab(s), not {}. {diagnosis} A tab's open \
-         buffer paths have NO persistence channel of their own — they ride only inside \
-         `TabState::layout`'s leaves — so a dropped tab is a lost session rather than a cosmetic \
-         miscount, and because the next launch reads exactly this file the loss is permanent from \
-         here. File: {}",
+        "{smoke}: {stage}'s persisted window carries {} tab(s), not {}; their leaves' file names, \
+         in tab order, are {leaf_names:?} (`None` for a tab with no single named leaf). \
+         {diagnosis} A tab's open buffer paths have NO persistence channel of their own — they \
+         ride only inside `TabState::layout`'s leaves — so a dropped tab is a lost session rather \
+         than a cosmetic miscount, and because the next launch reads exactly this file the loss is \
+         permanent from here. File: {}",
         window.tabs.len(),
         TABS_RESTORE_FILES.len(),
         file.display()
@@ -2420,7 +2436,9 @@ fn assert_frozen_tabs(smoke: &str, stage: &str, state_dir: &Path, diagnosis: &st
 /// 1. **The SAVE side.** `$TABS_STATE_COPY_1` — run 1's file, frozen before run 2
 ///    could touch it — holds one window with THREE tabs whose layouts are single
 ///    non-preview leaves named `talfa.md` / `tbravo.md` / `tcharlie.md`, in that
-///    order.
+///    order. It runs before the scenario's exit code is read whenever run 1's copy
+///    exists, since a save that drops tabs also fails run 2's count at exit 24, and
+///    reading the code first would report every save break as a restore break.
 /// 2. **The RESTORE side.** The swap map has exactly three rows, each fixture held by
 ///    exactly one live Neovim, and the three pids distinct: three Neovims, each with
 ///    its own tab's file loaded.
@@ -2439,10 +2457,10 @@ fn assert_frozen_tabs(smoke: &str, stage: &str, state_dir: &Path, diagnosis: &st
 ///
 /// | # | edit | predicted red |
 /// | --- | --- | --- |
-/// | TR1a | in `WindowHandle::cached_subtree`, collect `tabs.selected()` alone | assertion 1: run 1's file holds one tab, `tcharlie.md` |
-/// | TR1b | in `state_seam::window_subtree`, truncate `tabs` to one | assertion 1: one tab, `talfa.md` |
-/// | TR2a | in `window::build`, open only `plan.tabs[0]` | scenario exit 24: run 2's count is 1 |
-/// | TR2b | in `window::build`, pass `layout: None` for every planned tab after the first | assertion 2: no `tbravo.md` or `tcharlie.md` row |
+/// | TR1a | in `WindowHandle::cached_subtree`, collect `tabs.selected()` alone | assertion 1, read before the exit status: run 1's window carries 1 tab, not 3, and the leaf list names `tcharlie.md` |
+/// | TR1b | in `state_seam::window_subtree`, truncate `tabs` to one | assertion 1: 1 tab, and the leaf list names `talfa.md` |
+/// | TR2a | in `window::build`, open only `plan.tabs[0]` | assertion 1 passes, then the status assertion fails with exit status 24 |
+/// | TR2b | in `window::build`, pass `layout: None` for every planned tab after the first | assertion 2: no `tbravo.md` row |
 ///
 /// ## What it does NOT prove
 ///
@@ -2516,6 +2534,22 @@ fn three_tabs_survive_a_relaunch_under_cage() {
     .env("TABS_STATE_COPY_2", &run2_state_file)
     .status()
     .expect("failed to spawn `cage` for the headless three-tab relaunch scenario");
+    // Assertion 1, the SAVE side, before the status: a save that drops tabs also exits 24.
+    // The copy exists only past exit 21 and run 1's clean quit; a green run without it fails below.
+    if status.success() || run1_state_file.exists() {
+        assert_frozen_tabs(
+            SMOKE,
+            "run 1",
+            &run1_state_dir,
+            "The scenario's exit-21 check already proved the window really held THREE tabs, one \
+             Neovim each, when it quit, so this is the SAVE side and nothing else. ONE tab is the \
+             red for two different defects, and the NAME the survivor carries tells them apart: \
+             talfa.md means `state_seam::window_subtree` truncated its tabs vec, since \
+             `truncate(1)` keeps the FIRST entry; tcharlie.md means `window::cached_subtree` \
+             gathered `tabs.selected()` alone instead of every entry, since that is the tab the \
+             user was on at the quit.",
+        );
+    }
     assert!(
         status.success(),
         "{SMOKE}: the cage three-tab relaunch scenario exited unsuccessfully ({status}). Read the \
@@ -2529,30 +2563,18 @@ fn three_tabs_survive_a_relaunch_under_cage() {
          Exit 17: run 2 exited NON-ZERO — it RESTORED tabs, so suspect `window::build` opening \
          the planned tabs.\n\
          Exit 21: run 1 never reached three live Neovims, so Ctrl+Shift+T failed and nothing \
-         here is about persistence. That is deliberately separated from the assertions below, \
-         because a one-tab state.json and a chord that never fired look identical in the file.\n\
+         here is about persistence. That is deliberately separated from the Rust side's \
+         assertions, because a one-tab state.json and a chord that never fired look identical in \
+         the file.\n\
          Exit 22: run 1 wrote NO state.json at all at {} — upstream of anything about tabs.\n\
-         Exit 23: run 2 wrote NO state.json at all, so assertion 3's evidence is missing (run 1's \
-         copy is already frozen, so assertion 1 is unaffected).\n\
-         Exit 24: run 2 did not restore three live Neovims: `window::build` did not open every \
-         planned tab, or a tab's `WolfCore::start` failed (its stderr line says so). Assertion 1 \
-         is unread on this exit, so check run 1's frozen file before blaming the restore.\n\
+         Exit 23: run 2 wrote NO state.json at all, so assertion 3's evidence is missing \
+         (assertion 1 has already passed on run 1's frozen copy).\n\
+         Exit 24: run 2 did not restore three live Neovims. Assertion 1 has already passed on run \
+         1's frozen copy, so run 1 saved all three tabs and this is the RESTORE alone: \
+         `window::build` did not open every planned tab, or a tab's `WolfCore::start` failed (its \
+         stderr line says so).\n\
          The scenario's own stderr names the candidate causes for each in order.",
         smoke_state_file.display()
-    );
-
-    // --- Assertion 1: the SAVE side, on RUN 1's frozen file --------------------
-    assert_frozen_tabs(
-        SMOKE,
-        "run 1",
-        &run1_state_dir,
-        "The scenario's exit-21 check already proved the window really held THREE tabs, one \
-         Neovim each, when it quit, so this is the SAVE side and nothing else. ONE tab is the \
-         red for two different defects, and the NAME the survivor carries tells them apart: \
-         talfa.md means `state_seam::window_subtree` truncated its tabs vec, since `truncate(1)` \
-         keeps the FIRST entry; tcharlie.md means `window::cached_subtree` gathered \
-         `tabs.selected()` alone instead of every entry, since that is the tab the user was on at \
-         the quit.",
     );
 
     // Assertion 2: the restore side, read from the process table rather than any one Neovim.

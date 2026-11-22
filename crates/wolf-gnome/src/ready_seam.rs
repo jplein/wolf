@@ -78,7 +78,7 @@ pub struct WindowReadiness {
 pub enum Blocker {
     /// The launch opened no window.
     NoLaunchWindow,
-    /// A launch window's core is missing, stalled or dead.
+    /// The selected tab's core of a launch window is missing, stalled or dead.
     CoreNotAlive,
     /// A launch window has no selected tab.
     NoSelectedTab,
