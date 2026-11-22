@@ -72,7 +72,7 @@ The preview's is the one to read carefully, because a burst can leave several of
 
 One asynchronous callback exists and it is not a timer. `gdk::Clipboard::read_text_async` resolves on the main thread some turns after the paste chord, and its closure holds a `Weak` to the shell and reads the core through the same `Option`, so a read landing after the close handler has taken the core out performs nothing rather than panicking.
 
-A `StyleManager` `dark` notification is neither a timer nor a poll either. It is a GObject property notification, armed once at launch and in `auto` mode alone, fired only when libadwaita's own property changes, so nothing re-arms while the application is idle and the property above is intact.
+A `StyleManager` `dark` notification is neither a timer nor a poll either. It is a GObject property notification, armed once per tab as its core starts and in `auto` mode alone, fired only when libadwaita's own property changes. A closed tab's handler stays connected and does nothing, because its `Weak` to the core fails to upgrade. So nothing re-arms while the application is idle and the property above is intact.
 
 The picker and the file tree each run a long-lived `FileSearch` on the same pattern, and the sidebar's search panel runs a transient `SearchSession` that is replaced on every run. Their drain tasks hold only a `Weak` reference, so dropping a handle ends the task instead of leaking a cycle, and closing any of them drops its search to cancel the work.
 
