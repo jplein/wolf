@@ -6,7 +6,7 @@ The durable constraints behind this crate. Read this before changing anything he
 
 ## Scope
 
-This is the GTK 4 / libadwaita front-end: a runnable multi-window application that consumes [`wolf-core`](../crates/wolf-core/README.md) as an ordinary Rust crate dependency. It renders Neovim natively rather than embedding a terminal, so every pixel outside a preview comes from a Cairo/Pango paint of a core `Snapshot`, or of a session's `TerminalFrame` in a terminal pane. One process holds N windows and one captive Neovim per window; [The coordinator and its windows](wolf-gnome/the-coordinator-and-its-windows.md) owns that split.
+This is the GTK 4 / libadwaita front-end: a runnable multi-window application that consumes [`wolf-core`](../crates/wolf-core/README.md) as an ordinary Rust crate dependency. It renders Neovim natively rather than embedding a terminal, so every pixel outside a preview comes from a Cairo/Pango paint of a core `Snapshot`, or of a session's `TerminalFrame` in a terminal pane. One process holds N windows of N tabs and one captive Neovim per tab; [The coordinator and its windows](wolf-gnome/the-coordinator-and-its-windows.md) owns that split.
 
 Split, close, and focus move are driven by core's layout-intent channel; a divider drag is the `gtk::Paned` handle's own gesture, landing in the pure tree's weights, or for the terminal drawer's divider in the window's drawer share. Menu items, accelerators, and commands drained from Neovim all resolve through one `gio` action namespace.
 
@@ -50,17 +50,19 @@ Several seams are deliberate ports of a macOS counterpart in [`WolfKeyMap`](../c
 
 ## Threading and the wake
 
-`WolfCore` runs Neovim on its own tokio runtime and fires a single wake closure when a frame is ready. The wake runs on a tokio worker and so cannot touch GTK: it only `try_send`s onto a `bounded(1)` `async-channel`, and a `glib::spawn_future_local` task drains that channel on the main thread.
+Each tab's `WolfCore` runs its Neovim on its own tokio runtime and fires its own wake closure when a frame is ready. The wake runs on a tokio worker and so cannot touch GTK: it only `try_send`s onto that tab's `bounded(1)` `async-channel`, and a `glib::spawn_future_local` task per tab drains it on the main thread, so a wake carries no token: the channel it arrives on names the tab. The channel exists before the core starts, so the startup flush's wake is queued rather than lost, and closing the tab closes it, which ends the drain.
 
 The single slot is deliberate. It coalesces a burst of flushes into one queued redraw, and a dropped send on a full channel is correct because a redraw is already pending. Sends ignore errors, so a late wake arriving after the channel closes is harmless.
 
-A terminal session's publish fires the same wake. It bumps no `Snapshot.seq`, so it redraws every pane of the current tab like any other wake, which is why a terminal pane paints through a backing surface ([Terminal panes](wolf-gnome/terminal-panes.md)).
+A terminal session's publish fires the same wake. It bumps no `Snapshot.seq`, so it redraws every pane of its tab like any other wake, which is why a terminal pane paints through a backing surface ([Terminal panes](wolf-gnome/terminal-panes.md)).
 
 Coalescing is safe even for a signal that fires exactly once, such as a death. `async-channel` reports the channel full only while an item is queued, and the receiver frees the slot before its future resolves, so a dropped send always implies a later full handler run — and liveness is a level-triggered atomic read rather than a message, so that later run observes the death.
 
-The drain order is fixed and every position is load-bearing. The liveness read runs first, before any handler that can early-return, and reports whether painting this wake is worth anything; the pane view and the sidebar run only if it said yes. The shell runs last and ungated: it settles a pending re-root, refreshes the title, the header bar's and tab bar's colour and the navigation buttons, contributes its window's application-state subtree, and only then drains commands, because a drained close tears the core down and a command queued in the instant before a crash must not be stranded behind an opaque overlay.
+The drain order is fixed and every position is load-bearing. The tab's liveness read runs first, before any handler that can early-return, and reports whether painting this wake is worth anything; the tab's pane view runs only if it said yes, and the sidebar only when the tab is also the selected one. The UI-focus sync follows, ungated. The shell runs last and ungated: for the selected tab it settles a pending re-root and refreshes the title, the header bar's and tab bar's colour and the navigation buttons, then it contributes its window's application-state subtree, and only then drains the selected tab's commands, because a drained close tears every core down and a command queued in the instant before a crash must not be stranded behind an opaque overlay.
 
-`WolfCore` is not `Send`. It lives only on the main thread in an `Rc<RefCell<Option<_>>>` shared by the widget closures, and the wake closure is the only thing that crosses a thread boundary. Every core borrow is taken and dropped in its own statement, because the close-request handler does `borrow_mut().take()` and an outstanding borrow on that path is a panic rather than a warning.
+Every tab refreshes on its own wakes, background tabs included, because each tab's Neovim holds one tabpage and its snapshot describes that tab alone. A background tab's panes are unallocated, so its wake sends no grid resize and moves no drawer divider. Commands drain from the selected tab alone, so every drained command acts on the tab whose Neovim queued it; a background tab's queue waits for its selection, and the switch wakes it.
+
+`WolfCore` is not `Send`. Each lives only on the main thread in its tab's `Rc<RefCell<Option<_>>>`, and the wake closure is the only thing that crosses a thread boundary. The window-level widgets, the header bar, the overlays and the sidebar, hold no cell: they resolve the selected tab's at call time, so a switch retargets them with no setter to forget. Every core borrow is taken and dropped in its own statement, because closing a tab takes its core out and the window's close-request handler takes every tab's, each with a `borrow_mut().take()`, and an outstanding borrow on either path is a panic rather than a warning.
 
 Nothing polls. No timer is periodic and no timer drives a read: neither a redraw, a liveness read, nor a state snapshot is scheduled by the clock. A periodic liveness poll in particular is rejected — it would let a lossy wake transport still raise the crash overlay eventually, buying insurance by destroying the evidence the crash smoke exists to gather. The frame-time instrument holds to the same property with its flag set, which is what shapes its cadence ([Frame-time instrumentation](wolf-gnome/frame-time-instrumentation.md)), and so does the [readiness probe](#the-readiness-file), which is checked on events the window already receives.
 
@@ -74,7 +76,7 @@ A `StyleManager` `dark` notification is neither a timer nor a poll either. It is
 
 The picker and the file tree each run a long-lived `FileSearch` on the same pattern, and the sidebar's search panel runs a transient `SearchSession` that is replaced on every run. Their drain tasks hold only a `Weak` reference, so dropping a handle ends the task instead of leaking a cycle, and closing any of them drops its search to cancel the work.
 
-Dropping a `SearchSession` kills its `rg` child, which is the whole of what makes a new run, an empty-query Enter or closing the window safe mid-search. It is also why the live session is taken and dropped in a statement of its own before the next one starts, rather than being overwritten in place.
+Dropping a `SearchSession` kills its `rg` child, which is the whole of what makes a new run, an empty-query Enter, closing the tab whose core runs it or closing the window safe mid-search. It is also why the live session is taken and dropped in a statement of its own before the next one starts, rather than being overwritten in place.
 
 ## The preview render's budget
 
@@ -86,12 +88,12 @@ The trailing edge is a timer rather than the next wake, and that is the sharp ha
 
 Sustained typing therefore renders on a period of `PREVIEW_MAX_STALENESS` plus the interval to the next request, never the cap alone: the cap render fires once the burst has been pending that long, recording it clears the pending burst, and the clock restarts only at the next keystroke — about 535 ms at a 35 ms inter-key interval. Measured directly, an uninterrupted 300-key burst over 10.343 s paid twenty renders — one leading edge, eighteen cap renders and one trailing fire — and a 60-key burst over 2.704 s paid six.
 
-`preview_ui::may_render` is read twice per render, alone among the nine gates [Crash and stall recovery](wolf-gnome/crash-and-stall-recovery.md) lists. The first read admits the request and touches no coalescer state; the second runs inside the pass itself, because a deferred blocking call can arrive at a Neovim that wedged after the arm. A refusal at fire time records no render, so the burst stays pending and the next due wake re-arms it at a zero delay.
+`preview_ui::may_render` is read twice per render, alone among the gates [Crash and stall recovery](wolf-gnome/crash-and-stall-recovery.md) lists. The first read admits the request and touches no coalescer state; the second runs inside the pass itself, because a deferred blocking call can arrive at a Neovim that wedged after the arm. A refusal at fire time records no render, so the burst stays pending and the next due wake re-arms it at a zero delay.
 
 The trailing edge is undroppable, and the cases that could drop it are answered rather than argued:
 
 - The fire re-derives the pane set, the liveness reading and the document from live state, so a pane closed mid-burst is simply not due and there is no stale content to withdraw.
-- A tab switched away mid-burst stops re-arming, and its already-armed fire still runs and bypasses the tab gate deliberately: the gate protects `pane_status`, which joins the current-tabpage-only `Snapshot::windows`, and the render path reads none of it. The cost is bounded to one deferred blocking render per held tab. The pane view gains no reference to the tab layer to consult that gate, which would couple the two backwards.
+- A tab switched away mid-burst keeps its armed fire, which renders against that tab's own Neovim, so the render cannot land in another tab's document.
 - A closing window is covered twice over: the armed closure holds a `Weak`, and the close handler's `core.borrow_mut().take()` leaves `may_render(None)` false — which is why that gate takes an `Option`.
 
 ## The coordinator and its windows
@@ -160,11 +162,11 @@ Every link clicked in a preview is cancelled and acted on out of band, and every
 
 ## Application state
 
-Every tab is gathered on every render wake behind a gate that prevents data loss, in page order, and neither window position nor the content-width toggle is persisted. [Application state](wolf-gnome/application-state.md) gives the reasons.
+Every tab is gathered from its own Neovim on every render wake behind a gate that prevents data loss, in page order, and neither window position nor the content-width toggle is persisted. [Application state](wolf-gnome/application-state.md) gives the reasons.
 
 ## Crash and stall recovery
 
-A dead Neovim is restarted automatically and a wedged one never is, no blocking RPC may run on the restart path, and every blocking call a running window issues is gated on `Alive`. [Crash and stall recovery](wolf-gnome/crash-and-stall-recovery.md) holds the inventory of those calls.
+A dead Neovim is restarted automatically and a wedged one never is, each restart touches its own tab alone, no blocking RPC may run on the restart path, and every blocking call a running window issues is gated on `Alive`. [Crash and stall recovery](wolf-gnome/crash-and-stall-recovery.md) holds the inventory of those calls.
 
 ## The headless smoke test
 
@@ -200,7 +202,7 @@ Every smoke holds one of a bounded number of cage slots for its whole body, beca
 
 **While a tab is zoomed, only the zoomed pane counts.** A hidden pane is never allocated, so it never requests a grid, and counting it would leave a launch that restores a zoom never ready.
 
-**Every launch window must finish its restore.** A pending saved layout, or a restore queue that still owes pages, is consumed on a later wake with blocking RPCs that would interleave with typed keys. An abandoned restore issues no further RPC and counts as finished. Every window must also have a live core, a bound pane and a painted frame.
+**Every launch window's selected tab must finish its restore.** A pending saved layout is consumed on a later wake with a blocking RPC that would interleave with typed keys. A background tab's rebuild runs on its own Neovim, so it can delay a typed key but never lands between two of them in the Neovim they reach. Every window must also have a selected tab with a live core and a bound pane, and a painted frame.
 
 **"Neovim is not at a prompt" is deliberately not a condition.** The file means keys are delivered, not that they are interpreted as intended, so a startup prompt stays visible as the bug it is.
 

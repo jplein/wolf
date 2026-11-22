@@ -48,7 +48,7 @@ Purpose: the entry point; the first activate builds the coordinator, installs it
 
 - `run() -> glib::ExitCode` — hands GTK an empty argv, so the process command line is never parsed or rejected.
 - `XFT_DPI_PINNED_PREFIX` — begins the stderr line the dpi pin prints only when it fires; [`smoke_headless/preview.rs`](../tests/README.md#smoke_headlesspreviewrs) matches its own copy, so retype a rename there.
-- Six `pub(crate)` helpers: [`coordinator.rs`](#coordinatorrs) calls `load_config`, `measure_metrics`, `open_state_store` and `ready_file_path` once each, and [`window.rs`](#windowrs) calls `init_lua_path` and `smoke_terminal_command` per window. [`init_lua.rs`](#init_luars), [`ready_seam.rs`](#ready_seamrs) and [`terminal.rs`](#terminalrs) own the rules behind `init_lua_path`, `ready_file_path` and `smoke_terminal_command`.
+- Six `pub(crate)` helpers: [`coordinator.rs`](#coordinatorrs) calls `load_config`, `measure_metrics`, `open_state_store` and `ready_file_path` once each, [`tab_view.rs`](#tab_viewrs) calls `init_lua_path` per tab, and [`window.rs`](#windowrs) calls `smoke_terminal_command` per window. [`init_lua.rs`](#init_luars), [`ready_seam.rs`](#ready_seamrs) and [`terminal.rs`](#terminalrs) own the rules behind `init_lua_path`, `ready_file_path` and `smoke_terminal_command`.
 
 **Decisions**
 
@@ -67,7 +67,7 @@ Purpose: the OS dark/light rulebook — what a configured `appearance` resolves 
 **Public API**
 
 - `appearance_decision(configured, os_dark) -> ResolvedAppearance` — total over `wolf_core::Appearance` with no `_` arm, so a fourth variant is a compile error here.
-- `apply_at_launch(config, core)` — makes the one `StyleManager::is_dark()` read and carries the decision out; its step order is load-bearing.
+- `apply_at_launch(config, core)` — called once per tab, as soon as its core exists; each call makes one `StyleManager::is_dark()` read and carries the decision out for that tab's Neovim. Its step order is load-bearing.
 
 **Decisions**
 
@@ -81,7 +81,7 @@ Purpose: the OS dark/light rulebook — what a configured `appearance` resolves 
 
 #### `buffer_picker.rs`
 
-Purpose: the buffer-picker overlay — a search entry over the captive Neovim's listed buffers, ranked by `wolf_core::rank_buffers`. Activating a row switches the active window to that buffer.
+Purpose: the buffer-picker overlay — a search entry over the selected tab's Neovim's listed buffers, ranked by `wolf_core::rank_buffers`. Activating a row switches the active window to that buffer.
 
 **Public API**
 
@@ -94,12 +94,12 @@ Purpose: the buffer-picker overlay — a search entry over the captive Neovim's 
 - Candidates are snapshotted once at open and re-ranked per keystroke. The snapshot is a blocking RPC on the GTK main thread, so [`picker.rs`](#pickerrs)'s wake bridge must not be added for symmetry: re-taking it puts a whole timeout budget of frozen main loop on the typing path.
 - `open_decision` refuses to open, and so refuses the RPC, for every liveness reading but `Alive`. It cannot prevent the first stall, and must not be strengthened into a guard that can never raise one.
 - A refusal returns before any widget is touched, and nothing is shown until the snapshot returns.
-- The first refresh preselects row 1, because row 0 is the buffer the user is already in and a bare Enter must switch. It is the one selection rule the other two overlays do not share.
+- The first refresh preselects row 1, because row 0 is the buffer the user is already in and a bare Enter must switch. No other overlay shares that rule.
 - `switch_target` refuses an active window of `0` as firmly as none at all, per `wolf-ffi`'s rule: `0` binds the switch into whichever window Neovim considers current.
 
 **Gotchas**
 
-- Closing does not clear the snapshot; the next open overwrites it.
+- Closing does not clear the snapshot; the next open overwrites it. A tab switch closes the picker, so its snapshot is always the selected tab's.
 
 #### `cell_metrics_math.rs`
 
@@ -209,7 +209,7 @@ Purpose: the process-scoped layer above the windows, and their ordered registry.
 
 #### `crash_overlay.rs`
 
-Purpose: the widgets for crash and stall recovery — the opaque overlay carrying the restart button, and the transient banner that confirms a restart. Every decision it acts on is made in [`liveness_ui.rs`](#liveness_uirs); this file builds widgets and toggles visibility.
+Purpose: the widgets for crash and stall recovery — the opaque overlay carrying the restart button, and the transient banner that confirms a restart. Every decision it acts on is made in [`liveness_ui.rs`](#liveness_uirs); this file builds widgets and toggles visibility. One per window, it shows the selected tab's liveness.
 
 **Public API**
 
@@ -558,7 +558,7 @@ Purpose: the command-palette overlay — registry commands, one Open Recent row 
 **Decisions**
 
 - One directory can yield both a Switch to Window row and an Open Recent row: the first raises that window, the second re-roots this one.
-- `open_recent_candidates` refuses three directories: the invoking window's own, where re-rooting changes nothing; a relative path, which `chdir_to` would canonicalize against the process cwd rather than Neovim's; and one `is_dir` rejects, since a failed `:tcd` is only a `tracing::warn!` in core. What the store keeps is [`WolfCore::recent_dirs`](../../wolf-core/src/README.md#apirs)'s concern; the seam rechecks because it takes any slice.
+- `open_recent_candidates` refuses three directories: the selected tab's own, where re-rooting changes nothing; a relative path, which `chdir_to` would canonicalize against the process cwd rather than Neovim's; and one `is_dir` rejects, since a failed `:tcd` is only a `tracing::warn!` in core. What the store keeps is [`WolfCore::recent_dirs`](../../wolf-core/src/README.md#apirs)'s concern; the seam rechecks because it takes any slice.
 - The window list is a closure taken fresh at each open over each window's cached subtree, so the open touches no other core and adds no RPC.
 - The label is `PaletteRow::display` unchanged: [`title.rs`](#titlers)'s home abbreviation would rank one string and show another, and a query matching the visible `~` would return nothing.
 - Ranking runs unbounded and `max` applies after the classification filter, since `rank_palette` truncates first and undispatched rows would otherwise eat the budget.
@@ -586,13 +586,13 @@ Purpose: the pure codec between the live pane tree, whose leaves are pane ids, a
 
 #### `pane_view.rs`
 
-Purpose: the GTK glue turning `layout`'s pane tree into nested `gtk::Paned`, one `gtk::Overlay` host per window, plus the drawer.
+Purpose: one tab's GTK glue turning `layout`'s pane tree into nested `gtk::Paned`, one `gtk::Overlay` host per window, plus the drawer.
 
 **Public API**
 
 - `build(core, metrics, drawer_share) -> PaneHandle` — panes appear with the first grid.
 - `cmdline_widget()`, the overlays' and sidebar's focus-return target; `toast_widget()`, `pum_widget()`.
-- `reset_after_restart()`, `drawer_is_open()`, `request_terminal_restore(steps)`, `request_layout_rebuild(saved)`, `realize_layout(saved)`, `layout_snapshot() -> LayoutGather`, `snapshot_readiness()`, `readiness()`.
+- `reset_after_restart()`, `drawer_is_open()`, `request_terminal_restore(steps)`, `request_layout_rebuild(saved)`, `layout_snapshot() -> LayoutGather`, `snapshot_readiness()`, `readiness()`.
 - `active_terminal()`, `sync_terminal_focus(focused)`, `request_terminal(command)`.
 - `other_pane_target(prefer)` — [`other_pane_seam.rs`](#other_pane_seamrs)'s window: `Some(0)` splits, `None` no-ops.
 - `toggle_zoom()`, `toggle_terminal()` — [`pane_zoom.rs`](#pane_zoomrs)'s rules.
@@ -600,7 +600,7 @@ Purpose: the GTK glue turning `layout`'s pane tree into nested `gtk::Paned`, one
 **Decisions**
 
 - A dragged divider writes the tree's weights, since rebuilds destroy paneds, and re-applies on each `max-position` notify, since nested allocation reports intermediate values; a resize's clamp is refused ([why](../../../notes/wolf-gnome/pane-weights-and-dividers.md)).
-- `realize_layout` rebuilds into Neovim's current tabpage, so only restore materialization calls it; `request_layout_rebuild` defers.
+- `request_layout_rebuild` defers to the first wake with a grid, since a rebuild needs a pane.
 - [`preview_coalescer.rs`](#preview_coalescerrs)'s state is per tab, since a rebuild replaces `panes` wholesale.
 - Pointer input is one all-button `gtk::GestureDrag` ([why](../../../notes/crates/wolf-gnome/src/pane_view.rs.md#one-drag-gesture)), pinning target and button at press; editor panes take only the primary.
 - A terminal pane paints through its own [`TerminalCanvas`](terminal/README.md#canvasrs) ([why](../../../notes/wolf-gnome/terminal-panes.md)).
@@ -647,7 +647,8 @@ Purpose: the glue that gathers one tab's contribution to `state.json`, one insta
 
 **Gotchas**
 
-- `refresh_tab` runs inside the close handler, which goes on to take the core out, so every core borrow is taken and dropped in its own statement.
+- `refresh_tab` runs inside the window's close handler, which goes on to take every tab's core out, so every core borrow is taken and dropped in its own statement.
+- Each instance gathers from its own tab's Neovim, so a background tab is gathered live, as the selected one is.
 
 #### `picker.rs`
 
@@ -662,13 +663,14 @@ Purpose: the file-picker overlay — a search entry over a ranked results list. 
 
 - The picker has no trigger predicate of its own: it opens from the `win.go-to-file` action; see [`actions.rs`](#actionsrs).
 - The key controller runs in the capture phase, so Escape and the arrows are seen before the `SearchEntry` consumes them, and the arrows move the list selection while focus stays in the entry.
-- The selection is preserved across a streaming rebuild unless the query changed, so an arriving batch does not yank the user back to the top row.
-- No shared overlay widget is extracted, and that is a judgement: the three overlays already share the three seams below, and the widget construction left over is covered only by the cage smokes, so a common type would risk three working overlays to remove boilerplate.
+- The selection is preserved across a streaming rebuild unless the query changed, so an arriving batch does not yank the user to the top row.
+- No shared overlay widget is extracted, by judgement: the three overlays already share the three seams below, and the widget construction left over is covered only by the cage smokes, so a common type would risk three working overlays to remove boilerplate.
 
 **Gotchas**
 
 - `next_selection`, `restored_index` and `activation_index` are `pub(crate)` and shared with [`palette.rs`](#paletters) and [`buffer_picker.rs`](#buffer_pickerrs), so all three overlays navigate and activate identically. `next_selection` also moves [`search_panel.rs`](#search_panelrs)'s selection.
 - `FocusTarget` is `pub(crate)` and shared by the three overlays, the tree and the search panel; [Window structure](../../../notes/wolf-gnome/window-structure.md) owns why it is a closure rather than a captured widget.
+- A tab switch closes it, so one open never spans two tabs.
 
 #### `preview_coalescer.rs`
 
@@ -723,13 +725,13 @@ Purpose: the pure, GTK-free rulebook for the Markdown preview pane — its gates
 
 #### `ready_seam.rs`
 
-Purpose: the pure predicate behind the test-only readiness file — whether a launch's windows accept keystrokes, as a function of per-window readings. [wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md#the-readiness-file) owns why each condition is there.
+Purpose: the pure predicate behind the test-only readiness file — whether a launch's windows accept keystrokes, as a function of per-window readings, each taken from that window's selected tab. [wolf-gnome-decisions.md](../../../notes/wolf-gnome-decisions.md#the-readiness-file) owns why each condition is there.
 
 **Public API**
 
 - `launch_readiness(&[WindowReadiness]) -> Result<(), Blocker>` — `Ok`, or the first unmet condition in a fixed order: every window's settle conditions in slice order, then the input conditions of the window with the greatest `first_paint`.
 - `PaneReadiness`, `WindowReadiness`, and `Blocker` with `ALL` and `label()`, the text of the `wolf-ready: waiting on <label>` stderr line.
-- `grid_settled`, `restore_owed`, `ready_file_path`, `ready_file_contents`, and `next_step` over `ReadyStep`.
+- `grid_settled`, `ready_file_path`, `ready_file_contents`, and `next_step` over `ReadyStep`.
 - `READY_FILE_ENV` and `LINE_PREFIX`, the contract with the smoke harness's `wait_ready`.
 
 **Decisions**
@@ -829,8 +831,8 @@ Purpose: [`sidebar.rs`](#sidebarrs)'s Search page — a field and three toggles 
 **Public API**
 
 - `build(core, area) -> SearchPanelHandle` — gate shut until the sidebar relays it shown; `area` is a [`picker.rs`](#pickerrs) `FocusTarget`.
-- `SearchPanelHandle::widget`, `focus_entry`, `owns_keyboard`, `set_sidebar_visible`, and `close`, which cancels `rg`.
-- Pure seams, among them `SearchToggles` (`INITIAL`), `search_options_for`, `enter_action`, `activation_route` and `search_status`; the module doc lists them all.
+- `SearchPanelHandle::widget`, `focus_entry`, `owns_keyboard`, `set_sidebar_visible`, `close`, which cancels `rg`, and `release_core`.
+- Pure seams, among them `SearchToggles` (`INITIAL`), `search_options_for`, `enter_action`, `activation_route` and `search_status`, all in the module doc.
 
 **Decisions**
 
@@ -849,13 +851,13 @@ Purpose: [`sidebar.rs`](#sidebarrs)'s Search page — a field and three toggles 
 
 #### `shell.rs`
 
-Purpose: the glue for the action namespace — `gio` actions, the primary menu, the chord controller, the empty state, the command drain, and crash-recovery orchestration.
+Purpose: the glue for the action namespace — `gio` actions, the primary menu, the chord controller, the empty state, the command drain, and crash-recovery orchestration per tab.
 
 **Public API**
 
-- `build_menu_model()`, `build_empty_state()`, `build(parts) -> AppShell`; `ShellParts` carries a `Weak` coordinator, the window id and [`TitlebarStyle`](#titlebar_backgroundrs).
+- `build_menu_model()`, `build_empty_state()`, `build(parts) -> AppShell`; `ShellParts` carries a `Weak` coordinator and [`TitlebarStyle`](#titlebar_backgroundrs).
 - `install_actions(app)` — the `win.` rows only, between building the window and `present()`, so the menu resolves them.
-- `set_empty_state(empty)`, `on_liveness_wake() -> bool`, `on_render_wake()`.
+- `set_empty_state(empty)`, `on_tab_wake(tab)`, `on_liveness_wake(tab) -> bool`, `on_render_wake(tab)`.
 
 **Decisions**
 
@@ -864,8 +866,8 @@ Purpose: the glue for the action namespace — `gio` actions, the primary menu, 
 - One settle point moves the sidebar's root, over [`workspace.rs`](#workspacers)'s `reroot_decision`, so `chdir_to` and a typed `:cd` cannot diverge.
 - Each Markdown-preview press reads one `preview_shape` pass, since two reads would describe no window that existed, and is a blocking RPC gated by [`preview_ui.rs`](#preview_uirs).
 - Save and Save As read one `save_shape` pass each for the same reason and issue no blocking call; the dialog carries out [`save_ui.rs`](#save_uirs)'s proposal, `force` included.
-- `sidebar.set_visible` has one caller, over [`state_seam.rs`](#state_seamrs)'s `sidebar_is_shown`, or `set_empty_state(false)` would undo a user toggle. The search chord and a [toggle click](#sidebar_togglesrs), taking the chords' arms, reveal it through that preference.
-- The per-tab fan-outs go through [`tab_view.rs`](#tab_viewrs), New Tab is gated by [`tabs_ui.rs`](#tabs_uirs)'s `new_tab_press`, and [Window structure](../../../notes/wolf-gnome/window-structure.md) owns the boundary.
+- `sidebar.set_visible` has one caller, over [`state_seam.rs`](#state_seamrs)'s `sidebar_is_shown`, or `set_empty_state(false)` would undo a user toggle. The search chord and a [toggle click](#sidebar_togglesrs) reveal it through that preference.
+- Actions resolve the selected tab's core per use, and commands drain from it alone, the tab that queued them; [Window structure](../../../notes/wolf-gnome/window-structure.md) owns the boundary.
 
 #### `sidebar.rs`
 
@@ -912,8 +914,8 @@ Purpose: the pure application-state seam — what to restore at launch, and what
 
 **Public API**
 
-- `restore_plans(saved, process_cwd, home, is_dir) -> Vec<RestorePlan>` — one plan per saved window in saved order, capped at `MAX_RESTORE_WINDOWS`, each carrying one `TabPlan` per saved tab, capped at `MAX_RESTORE_TABS` and never empty.
-- `tab_subtree`, `window_subtree`, `seeded_tab_state`, `pending_tab_states`, `ordered_tab_states`, `window_contribution` — the write side, one tab's `TabState` up to a window's whole contribution.
+- `restore_plans(saved, process_cwd, home, is_dir) -> Vec<RestorePlan>` — one plan per saved window in saved order, each carrying one `TabPlan` per saved tab, capped at `MAX_RESTORE_TABS` per window and `MAX_RESTORE_NEOVIMS` across the session, and never empty.
+- `tab_subtree`, `window_subtree`, `seeded_tab_state`, `ordered_tab_states` — the write side, one tab's `TabState` up to a window's whole subtree.
 - `snapshot_state(windows) -> Option<WolfState>`, `close_commit(shutting_down, other_live_windows) -> CloseCommit`.
 - `restored_window_size`, `persistable_layout`, `sidebar_is_shown`, `snapshot_cwd`, `may_snapshot`.
 
@@ -921,7 +923,8 @@ Purpose: the pure application-state seam — what to restore at launch, and what
 
 - A saved layout attaches only to the directory it saved from, and the process cwd is offered to the first saved window alone: offering it further merges every window onto one project and drops every layout.
 - Four answers mean "commit nothing" rather than "commit an empty thing": `seeded_tab_state` with no layout, `window_subtree` with no tabs, `snapshot_state` with no windows, and `restored_window_size` on any unusable dimension. `restore_plans` is the inverse and never answers an empty vec.
-- `window_contribution` puts live tabs' caches before queued tabs' seeds, which is the order they materialize in and restore replays. `ordered_tab_states` stably sorts the live half into page order first, because the user can rearrange the bar.
+- `MAX_RESTORE_NEOVIMS` bounds processes, one per restored tab, against a corrupt `state.json`; `MAX_RESTORE_TABS` bounds one window's launch cost.
+- `ordered_tab_states` stably sorts tabs into page order, because the user can rearrange the bar.
 - The empty state persists an empty cwd always, or every launcher start would become a project at home.
 - `sidebar_visible` is per window and reaches the seeds alone; a live tab's cache passes through verbatim.
 
@@ -948,43 +951,44 @@ Purpose: the per-pane statusbar's rulebook, decidable from values.
 
 #### `tab_view.rs`
 
-Purpose: the GTK glue for native tabs — an `adw::TabBar` over an `adw::TabView`, one [`pane_view.rs`](#pane_viewrs) and one [`persistence.rs`](#persistencers) handle per tab. Every decision it acts on is [`tabs_ui.rs`](#tabs_uirs)'s.
+Purpose: the GTK glue for native tabs — an `adw::TabBar` over an `adw::TabView`, where every tab owns its `WolfCore`, wake drain, restart state, [`pane_view.rs`](#pane_viewrs) and [`persistence.rs`](#persistencers) handle. Every decision it acts on is [`tabs_ui.rs`](#tabs_uirs)'s.
 
 **Public API**
 
 - `build(TabsParts) -> TabsHandle` — no page exists until `open_tab`.
-- `TabsHandle::open_tab(TabParts) -> bool`, `view_widget`, `bar_widget`, `selected`, `entries`, `len`, `on_render_wake`, `reset_after_restart`, `focus_target`, `connect_selected`, plus `TabHandle`'s per-tab relays.
-- `active_terminal()` and `sync_terminal_focus(window_active)` ([how](../../../notes/wolf-gnome/terminal-panes.md)).
-- `queue_restore(RestoreTabs)`, `pending_restore()` and `set_pending_sidebar_shown(shown)` — the tabs a launch still owes a page, which [`window.rs`](#windowrs) seeds.
+- `TabsHandle::open_tab(TabParts) -> Option<TabHandle>` — starts the tab's core and selects it; `None` after one message.
+- `select`, `selected`, `selected_core`, `core_source`, `entries`, `len`, `focus_target`, `shutdown_all`, `view_widget`, `bar_widget`.
+- `connect_selected`, `connect_wake`, every drain's body, and `connect_closing`, run before a closing tab's shutdown.
+- `sync_ui_focus(window_active)`, the `:checktime` trigger; `active_terminal()` and `sync_terminal_focus(window_active)` ([how](../../../notes/wolf-gnome/terminal-panes.md)).
+- `TabHandle`'s `core`, `liveness`, `restart`, `wake`, `refresh` and `shutdown`; `CoreSource` and `with_core`.
 
 **Decisions**
 
-- `TabParts::tabpage` is `0` for tab 0 and `create_tabpage`'s answer for every later one: `Snapshot::current_tabpage` lags, so a page left to adopt binds to the tab it was opened from.
-- The restore materialization realizes each queued tab's layout before leaving its tabpage, because `rebuild_layout` acts on whichever tabpage is current. An abort retains the layouts it never reached as a seed source with creation disabled, so those tabs keep their place in `state.json`.
-- `close-page` is a veto: every arm must answer `close_page_finish` and return `Propagation::Stop`, or the page stays on screen forever with no error. Closing the last page closes the window ([Present limitations](../../../notes/wolf-gnome/present-limitations.md)). Both handlers hold a `Weak`; a strong reference from a handler the view owns leaks every tab's pane view.
+- A tab's wake channel exists before its core starts, so the startup flush's wake is queued, not lost.
+- Window-level widgets take a `CoreSource`, never a cell, which goes stale at the first switch.
+- `close-page` is a veto: every arm must answer `close_page_finish` and return `Propagation::Stop`, or the page stays on screen forever with no error. Closing the last page closes the window ([Present limitations](../../../notes/wolf-gnome/present-limitations.md)).
+- Both handlers and every drain hold only `Weak`s: a strong reference from one the view or the main loop owns leaks every tab's pane view.
 
 **Gotchas**
 
-- `selected` answers the focus, overlay and empty state; persistence reads every tab, through `entries`.
-- `entries` is insertion order, not page order — nothing reconciles it with the `adw::TabView`. The one caller that needs the user's arrangement pairs each entry with `TabHandle::page_position`.
+- `selected` answers the focus, the overlays and the core window-level widgets act on; persistence reads every tab, through `entries`.
+- `entries` is insertion order, not page order. The one caller that needs the user's arrangement pairs each entry with `TabHandle::page_position`.
 
 #### `tabs_ui.rs`
 
-Purpose: the pure, GTK-free rulebook for the N tabs one window's captive Neovim serves: which tab a render wake may touch, whether a New Tab press or a queued restore may issue its blocking RPC, what closing one does, and what a new tab inherits. [`tab_view.rs`](#tab_viewrs) carries the answers out.
+Purpose: the pure, GTK-free rulebook for a window's native tabs: what closing one does, the directory a new tab's Neovim starts in, the string a tab draws, and which tab's Neovim holds the UI focus. [`tab_view.rs`](#tab_viewrs) carries the answers out.
 
 **Public API**
 
-- `tab_wake(current_tabpage, my_tabpage, selected) -> TabWake` — `Adopt(handle)`, `Refresh` or `Hold`, total over its inputs.
-- `restore_press(first_tabpage, liveness, pending, may_create) -> RestorePress` — `Create`, `Wait` or `Idle`, total.
-- `switch_target`, `close_outcome`, `new_tab_press`, `new_tab_cwd`, `tab_title` and `TAB_TITLE_FALLBACK`.
+- `close_outcome(live_pages) -> TabClose` — `CloseTab` or `CloseWindow`; `live_pages` counts the page being closed.
+- `new_tab_cwd`, `tab_title` and `TAB_TITLE_FALLBACK`.
+- `TabId`, `FocusEdge`, `focused_tab(window_active, selected)` and `focus_edges(previous, next)` — the focus trigger.
 
 **Decisions**
 
-- `Hold` does nothing, and that is the whole gate: what it protects is a background tab's statusbar text, title and grid resize, each of which reads `pane_status`. Persistence is safe by another route, [`pane_layout.rs`](#pane_layoutrs)'s window-keyed leaf resolution.
-- The authority is Neovim, not GTK's selection: a tab Neovim considers current refreshes while the widget lags, and a selected one holds until Neovim catches up.
-- `restore_press` refuses until tab 0 has adopted and the core reads `Alive`. A refusal answers `Wait`, not `Idle`: a queued tab has no page and no cache, so declaring the queue empty is tabs that never open. `Idle` is the abandoned queue.
-- `switch_target` and `close_outcome` refuse the two inputs that fail silently: Neovim reads a handle of `0` as "the current tabpage", and `close_tabpage` on the last tabpage does nothing.
-- `new_tab_cwd` answers `None` in the empty state always, so a new tab is never `:tcd`'d into `$HOME`; it must agree with [`state_seam.rs`](#state_seamrs)'s `snapshot_cwd`.
+- `close_outcome` routes the last tab's close into the window's: a window with no tab holds a tab bar and no editor, with no way to reach one.
+- `focus_edges` is computed against the last focus sent, because Neovim fires `FocusGained` on every `set_ui_focus` with no de-duplication. An unchanged focus sends nothing, and a switch sends the loss before the gain, so two Neovims never both hold it.
+- `new_tab_cwd` answers `None` in the empty state always, so a new tab never takes `$HOME` for a project; it must agree with [`state_seam.rs`](#state_seamrs)'s `snapshot_cwd`.
 
 #### `terminal.rs`
 
@@ -1021,11 +1025,11 @@ Purpose: the background of the header bar and the tab bar, by the rule [Theming]
 
 - `titlebar_background(titlebar, normal) -> TitlebarBackground` — `normal` is the resolved default background before the grid's fallback colour, so an unknown `Normal` keeps libadwaita's colour rather than painting the fallback.
 - `titlebar_css(class, background)`, `""` for `Libadwaita`, and `stylesheet_update(applied, wanted, class)`, `None` when the two are equal, so a wake that changes nothing does no CSS work.
-- `TitlebarStyle::install(id, header, tab_bar)`, `apply(wanted)` and `uninstall()` — [`shell.rs`](#shellrs) applies on every render wake and [`window.rs`](#windowrs)'s close handler uninstalls.
+- `TitlebarStyle::install(id, header, tab_bar)`, `apply(wanted)` and `uninstall()` — [`shell.rs`](#shellrs) applies the selected tab's colour on that tab's render wakes, and [`window.rs`](#windowrs)'s close handler uninstalls.
 
 **Decisions**
 
-- One provider per window, since each window may run its own colorscheme, scoped by a class on the header bar and the tab bar themselves. A descendant selector under the window would also match a header bar that a child widget brings.
+- One provider per window, following the selected tab, since each tab's Neovim may run its own colorscheme, scoped by a class on the header bar and the tab bar themselves. A descendant selector under the window would also match a header bar that a child widget brings.
 - `uninstall` at close is required: a closed window's id is minted again, and its provider would restyle the new window.
 - The rule declares `background-color` alone, at application priority and with no state selector ([why](../../../notes/wolf-gnome/window-structure.md)).
 - The tab bar's node is its `box.box`, the one libadwaita colours; the `tabbar` node paints nothing.
@@ -1060,6 +1064,7 @@ Purpose: the GTK glue for the file-tree sidebar — a `gtk::ListView` over a `gt
 
 - `build(core, area, start, root_label) -> TreeHandle` — `area` is a [`picker.rs`](#pickerrs) `FocusTarget`; `start` is false in the empty state, where nothing is walked.
 - `widget()` — [`sidebar.rs`](#sidebarrs)'s Files page.
+- `release_core(core)`, for a closing tab's core.
 - `on_render_wake()`, `close()`, `set_sidebar_visible(shown)`, relayed through `sidebar.rs` and true only while a shown sidebar is on Files, and `reroot(root_label)`, from [`shell.rs`](#shellrs)'s one settle point; this module reads no cwd.
 
 **Decisions**
@@ -1075,21 +1080,20 @@ Purpose: the GTK glue for the file-tree sidebar — a `gtk::ListView` over a `gt
 
 #### `window.rs`
 
-Purpose: one window and everything scoped to it — an `adw::ApplicationWindow` over a live `WolfCore`, with its own wake channel, tab layer, overlays and state subtree. Its widget structure and overlay stacking are [Window structure](../../../notes/wolf-gnome/window-structure.md)'s.
+Purpose: one window and everything scoped to it — an `adw::ApplicationWindow` over its tabs, each with its own `WolfCore` ([`tab_view.rs`](#tab_viewrs)), with the window's own overlays and state subtree. Its widget structure and overlay stacking are [Window structure](../../../notes/wolf-gnome/window-structure.md)'s.
 
 **Public API**
 
-- `build(parts) -> Option<WindowHandle>` — `None` when the core fails to start; a launch whose only window fails exits.
+- `build(parts) -> Option<WindowHandle>` — `None` when no planned tab's core starts; a launch whose only window fails exits.
 - `WindowParts` — the construction inputs as a struct, under `clippy::too_many_arguments`.
-- `WindowHandle::id`, `present`, `refresh_subtree`, `cached_subtree`, `display_cwd` and `readiness`.
+- `WindowHandle::id`, `present`, `refresh_subtree`, `cached_subtree`, `display_cwd` and `readiness`, of the selected tab.
 
 **Decisions**
 
-- The close handler's statement order is load-bearing at both ends. Telling the coordinator comes first, or the gathered subtree sees nothing and the session is silently lost; focusing the input method out and clearing its client widget comes last, after the core is taken, so a focus-out commit finds no core and the context releases the window's widget tree.
-- The window registers with the coordinator before its first command drain, or the drain reaches a coordinator unaware of it.
+- The close handler's statement order is load-bearing at both ends. Telling the coordinator comes first, or the gathered subtree sees nothing and the session is silently lost; focusing the input method out and clearing its client widget comes last, after every core is shut down, so a focus-out commit finds no core and the context releases the window's widget tree.
+- Each tab's first drain is a wake queued after the window registers and installs its close handler: an earlier drain could reach a coordinator unaware of it, or close and orphan every tab's Neovim.
 - `display_cwd` reads the cached subtree, so the palette and `state.json` cannot disagree about where a window is.
-- `WindowInner` does not hold the shell, which the wake-drain future owns for exactly the window's lifetime.
-- Keys, commits and focus reach a terminal pane per [Terminal panes](../../../notes/wolf-gnome/terminal-panes.md).
+- Keys, commits and focus reach the selected tab, a terminal pane per [Terminal panes](../../../notes/wolf-gnome/terminal-panes.md).
 
 **Gotchas**
 

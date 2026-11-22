@@ -1,6 +1,6 @@
 # The coordinator and its windows
 
-Last verified at commit `6298d01fb761da1bfdd64a0a25671a40b9d4e525`.
+Last verified at commit `63cb77c2575e673a9cc14565b296da20f028f908`.
 
 A process-scoped coordinator sits above the window-scoped shell, and exactly six things live up there, each because a second copy of it would be wrong rather than merely wasteful: the one `StateStore`, the one config read, the one `CellMetrics` measurement, the `app.`-namespace actions, the session's launch plans, and the test-only [readiness probe](../wolf-gnome-decisions.md#the-readiness-file), whose condition spans every window a launch restores. Everything else is per-window and stays there.
 
@@ -22,10 +22,10 @@ A close arriving during a quit commits nothing at all. The quit path has already
 
 What holds `tree_view`'s call where it is, is evidence: the class reaches no pixel, and [`tests/README.md`](../../crates/wolf-gnome/tests/README.md) records that for the bold, so moving it would be an unverifiable edit to a startup path. That argument bears on where a call lives, not on whether it is guarded — which is the distinction that lets `overlay_style` carry a flag while `tree_view` carries none.
 
-New Window opens a fresh, empty window at `$HOME` with its own core, inheriting nothing from the window it was asked from: not the working directory, not the layout, not the size. That is what macOS's `makeNewWindow` does and parity is the row's whole subject; inheriting a project is a new tab's behaviour.
+New Window opens a fresh, empty window at `$HOME` with one tab and that tab's own Neovim, inheriting nothing from the window it was asked from: not the working directory, not the layout, not the size. That is what macOS's `makeNewWindow` does and parity is the row's whole subject; inheriting a project is a new tab's behaviour.
 
-**Restore is positional, never grouped by working directory.** macOS groups restored windows by directory because several of its views share one project's Neovim; here one window owns one core, so there is nothing to group, and inventing a grouping would merge two windows the user opened deliberately. A saved tree holding two windows on one directory restores both, and `MAX_RESTORE_WINDOWS` caps a corrupt or hand-edited file — it is a restore policy against forking dozens of Neovim processes before the first frame, not a limit on the schema.
+**Restore is positional, never grouped by working directory.** Every tab runs its own Neovim, so no two windows or tabs share anything a grouping could save, and inventing one would merge two windows the user opened deliberately. A saved tree holding two windows on one directory restores both, and `MAX_RESTORE_NEOVIMS` caps the tabs a corrupt or hand-edited file restores across every window: it is a restore policy against forking dozens of Neovim processes before the first frame, not a limit on the schema.
 
 **Raising a window is best-effort on Wayland**, and that is the platform rather than this call: a client cannot raise itself, so `present()` is a request the compositor may decline. Measured under `cage`: two toplevels exist and the newest stays on top, and presenting the backgrounded one raises nothing. A session compositor normally carries it through xdg-activation. Nothing may assert on it here.
 
-Two windows on one project collide on the durable swap directory, and that is left alone deliberately. The swap directory outlives the process on purpose — that is what makes swap recovery work — so scoping it per core would break a shipped feature to silence a warning, and Neovim's own `W325` toast is the honest report. Windows are not deduped by working directory for the same reason restore is not grouped.
+Two tabs on one file share the durable swap directory, and that is left alone deliberately. The swap directory outlives the process on purpose — that is what makes swap recovery work — so scoping it per core would break a shipped feature. `shortmess+=A` keeps a live owner's swap quiet instead ([One Neovim per tab](../../specs/application-state.md#8-one-neovim-per-tab)). Windows are not deduped by working directory for the same reason restore is not grouped.
